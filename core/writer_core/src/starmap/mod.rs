@@ -6,7 +6,7 @@
 //!
 //! ## 主要功能
 //! - **星图元数据管理**：创建、读取、更新、删除星图的基本信息
-//! - **星图索引管理**：维护工作区中所有星图的索引，支持快速查询
+//! - **星图索引管理**：维护数据根中所有星图的索引，支持快速查询
 //! - **项目关联**：将星图绑定到特定项目，支持设置项目主星图
 //! - **布局算法**：grid / radial 自动布局（Core 层，跨端共享）
 //! - **命中测试**：节点 AABB / 边线段距离（Core 层，跨端共享）
@@ -120,7 +120,10 @@ fn save_starmap_meta(app_data_root: &Path, meta: &StarMapMeta) -> Result<()> {
     let dir = starmaps_dir(app_data_root);
     fs::create_dir_all(&dir)?;
     let content = serde_json::to_string_pretty(meta)?;
-    crate::storage::atomic_write_string(&starmap_meta_path(app_data_root, &meta.starmap_id), &content)
+    crate::storage::atomic_write_string(
+        &starmap_meta_path(app_data_root, &meta.starmap_id),
+        &content,
+    )
 }
 
 fn load_starmap_meta(app_data_root: &Path, starmap_id: &str) -> Result<StarMapMeta> {
@@ -145,7 +148,9 @@ fn delete_starmap_meta(app_data_root: &Path, starmap_id: &str) -> Result<()> {
 }
 
 pub fn starmap_graph_path(app_data_root: &Path, starmap_id: &str) -> std::path::PathBuf {
-    starmaps_dir(app_data_root).join(starmap_id).join("graph.json")
+    starmaps_dir(app_data_root)
+        .join(starmap_id)
+        .join("graph.json")
 }
 
 pub fn list_starmaps(app_data_root: &Path) -> Result<Vec<StarMapMeta>> {
@@ -153,7 +158,10 @@ pub fn list_starmaps(app_data_root: &Path) -> Result<Vec<StarMapMeta>> {
     Ok(idx.starmaps)
 }
 
-pub fn list_starmaps_for_project(app_data_root: &Path, project_id: &str) -> Result<Vec<StarMapMeta>> {
+pub fn list_starmaps_for_project(
+    app_data_root: &Path,
+    project_id: &str,
+) -> Result<Vec<StarMapMeta>> {
     list_starmaps_bound_to_project(app_data_root, project_id)
 }
 
@@ -242,7 +250,11 @@ pub fn create_child_starmap(
     Ok(meta)
 }
 
-pub fn rename_starmap(app_data_root: &Path, starmap_id: &str, new_title: &str) -> Result<StarMapMeta> {
+pub fn rename_starmap(
+    app_data_root: &Path,
+    starmap_id: &str,
+    new_title: &str,
+) -> Result<StarMapMeta> {
     let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
     meta.title = new_title.to_string();
     meta.updated_at = now_epoch();
@@ -305,7 +317,11 @@ pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn bind_starmap_to_project(app_data_root: &Path, starmap_id: &str, project_id: &str) -> Result<()> {
+pub fn bind_starmap_to_project(
+    app_data_root: &Path,
+    starmap_id: &str,
+    project_id: &str,
+) -> Result<()> {
     let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
     meta.project_id = Some(project_id.to_string());
     meta.updated_at = now_epoch();

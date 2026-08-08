@@ -1,8 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::recent_edits::{
-        flush_recent_edits, get_recent_edits, record_recent_edit, RecentEdit,
-        RECENT_EDITS_CACHE,
+        flush_recent_edits, get_recent_edits, record_recent_edit, RecentEdit, RECENT_EDITS_CACHE,
     };
     use std::fs;
     use tempfile::tempdir;

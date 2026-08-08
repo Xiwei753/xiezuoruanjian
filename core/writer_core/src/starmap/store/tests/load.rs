@@ -1115,10 +1115,7 @@ fn list_links_with_diagnostics_returns_corrupt_for_bad_file() {
     store.enqueue_save(SaveQueueEntry::GraphMeta);
     store.flush().unwrap();
 
-    let starmap_dir = dir
-        .path()
-        .join("starmaps")
-        .join(&meta.starmap_id);
+    let starmap_dir = dir.path().join("starmaps").join(&meta.starmap_id);
     let bucket = package_storage::bucket_for_id("l1");
     let link_bucket = starmap_dir.join("links").join(bucket).join("l1.json");
     let link_flat = starmap_dir.join("links").join("l1.json");

@@ -41,7 +41,7 @@
 //! | `writing_stats` | 写作统计（事件记录、聚合、查询） | 按设备/项目/章节统计 |
 //! | `error` | 统一错误类型 | 所有模块共享 |
 //! | `storage` | 原子替换文件写入（写临时文件 + fsync 临时文件 + rename） | 防止半写入；耐久性受文件系统语义影响 |
-//! | `delete_guard` | 删除安全守卫（验证 ID、防止误删工作区根） | 所有删除操作必须经过此模块 |
+//! | `delete_guard` | 删除安全守卫（验证 ID、防止误删数据根） | 所有删除操作必须经过此模块 |
 //!
 //! ## 调用链路示例
 //!
@@ -70,6 +70,7 @@ pub mod platform_interaction;
 pub mod ffi;
 pub mod layout_policy;
 pub mod project;
+pub mod recent_edits;
 pub mod screen_policy;
 pub mod search;
 pub mod settings;
@@ -79,7 +80,6 @@ pub mod storage;
 pub mod sync;
 pub mod trash;
 pub mod volume;
-pub mod recent_edits;
 pub mod writing_stats;
 
 pub use api::*;
@@ -97,6 +97,8 @@ pub mod fixture_tests;
 #[cfg(test)]
 pub mod project_tests;
 #[cfg(test)]
+pub mod recent_edits_tests;
+#[cfg(test)]
 pub mod settings_tests;
 #[cfg(test)]
 pub mod sync_api_tests;
@@ -105,10 +107,7 @@ pub mod trash_tests;
 #[cfg(test)]
 pub mod volume_tests;
 #[cfg(test)]
-pub mod recent_edits_tests;
-#[cfg(test)]
 pub mod writing_stats_tests;
-
 
 pub fn open_app_service(
     app_data_root: String,

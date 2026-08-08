@@ -1,7 +1,7 @@
 # 设置 Schema 定义
 
 Status: active
-Last verified: 2026-07-31
+Last verified: 2026-08-08
 Truth source: product decision / code
 Supersedes: None
 
@@ -17,7 +17,7 @@ Supersedes: None
 6. 诊断与日志
 7. 关于/高级
 
-### `app-meta/settings/settings.local.json`
+### `<app_data_root>/settings.local.json`（平台数据根，非 app-meta）
 存储设备特定的配置，**不应**在设备间同步。
 包括：
 - `themeMode`（字符串，如 "system"、"dark"、"light"）[DEPRECATED — 使用 appearanceMode]
@@ -46,7 +46,7 @@ Supersedes: None
 - `diagnosticsEnabled`（布尔值，本地诊断日志开关，默认 true，不进入同步、不含敏感数据）
 - `diagnosticsVerbose`（布尔值，本地诊断详细模式，默认 true，不进入同步、不含敏感数据）
 
-### `app-meta/settings/settings.sync.json`
+### `<app_data_root>/settings.sync.json`
 存储**应该**在所有设备间同步的用户偏好。
 包括：
 - AI API 密钥（以明文保存，由用户设计明确接受）
@@ -55,7 +55,7 @@ Supersedes: None
 - `monetColor`（字符串）[DEPRECATED — 使用调色板目录]
 - `themePaletteJson`（字符串）[DEPRECATED — 使用调色板目录]
 
-### `app-meta/themes/palettes/<device_id>/<fingerprint>.json`
+### `<app_data_root>/themes/palettes/<device_id>/<fingerprint>.json`
 不可变调色板记录目录。每个文件是一份完整的 Material 3 主题快照。
 包括：
 - `schemaVersion`（整数，当前 1）
@@ -69,7 +69,7 @@ Supersedes: None
 - `variant`（字符串，无法可靠识别时为 "system_selected"）
 - `lightScheme` / `darkScheme`（ThemeColorScheme，完整 Material 3 语义角色）
 
-### `app-meta/sync/sync_config.json`
+### `<app_data_root>/sync/sync_config.json`
 存储同步配置。包括：
 - `enabled`（布尔值，是否启用同步）
 - `backend_type`（字符串，当前为 `github_api`，`git` 为预留）
@@ -82,5 +82,5 @@ Supersedes: None
 - `has_network_permission`（布尔值）
 - `has_network_state_permission`（布尔值）
 
-### `app-meta/sync/sync_secrets.local.json`
+### `<app_data_root>/sync/sync_secrets.local.json`
 存储敏感信息，如 GitHub 令牌、SSH 私钥。此文件保存在本地，**绝不**应被同步。

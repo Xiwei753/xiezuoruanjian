@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-        use std::path::Path;
+    use std::path::Path;
 
     #[test]
     fn test_fixture_projects_dir_is_valid() {

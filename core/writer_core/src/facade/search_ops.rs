@@ -17,8 +17,11 @@ impl super::WriterCore {
     }
 
     pub fn rebuild_search_index(&self, project_id: Option<&str>) -> Result<SearchIndexStatus> {
-        let entries =
-            super::super::search::rebuild::rebuild_index(&self.app_data_root, &self.projects_root, project_id)?;
+        let entries = super::super::search::rebuild::rebuild_index(
+            &self.app_data_root,
+            &self.projects_root,
+            project_id,
+        )?;
         let mut service = self
             .search_service
             .lock()

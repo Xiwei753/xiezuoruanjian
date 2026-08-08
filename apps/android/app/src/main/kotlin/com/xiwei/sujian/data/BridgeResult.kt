@@ -95,7 +95,6 @@ data class ResultEnvelope<out T>(
                 "SYNC_DOCUMENT_CONFLICT" -> "error.sync_document_conflict"
                 "SYNC_INCOMPLETE_TRANSACTION" -> "error.sync_incomplete_transaction"
                 "SYNC_CHECKOUT_CONFLICT" -> "error.sync_checkout_conflict"
-                "SYNC_SETTINGS_CONFLICT" -> "error.sync_settings_conflict"
                 "SYNC_CONFLICT_DETECTED" -> "error.sync_conflict_detected"
                 "SYNC_NON_FAST_FORWARD" -> "error.sync_non_fast_forward"
                 "SYNC_UNRELATED_HISTORIES" -> "error.sync_unrelated_histories"

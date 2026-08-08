@@ -274,10 +274,7 @@ fn delete_also_removes_flat_path() {
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
-    let starmap_dir = dir
-        .path()
-        .join("starmaps")
-        .join(&meta.starmap_id);
+    let starmap_dir = dir.path().join("starmaps").join(&meta.starmap_id);
     let nodes_dir = starmap_dir.join("nodes");
     std::fs::create_dir_all(&nodes_dir).unwrap();
 

@@ -6,10 +6,7 @@ impl super::WriterCore {
         crate::sync::SyncService::scan_for_sync(&self.project_root(project_id))
     }
 
-    pub fn build_sync_plan(
-        &self,
-        project_id: &str,
-    ) -> crate::error::Result<crate::sync::SyncPlan> {
+    pub fn build_sync_plan(&self, project_id: &str) -> crate::error::Result<crate::sync::SyncPlan> {
         crate::sync::SyncService::build_sync_plan(&self.project_root(project_id))
     }
 
@@ -65,10 +62,7 @@ impl super::WriterCore {
         crate::sync::SyncService::resolve_conflict_mark_merged(&self.project_root(project_id), path)
     }
 
-    pub fn get_sync_ignored_paths(
-        &self,
-        project_id: &str,
-    ) -> crate::error::Result<Vec<String>> {
+    pub fn get_sync_ignored_paths(&self, project_id: &str) -> crate::error::Result<Vec<String>> {
         crate::sync::SyncService::get_sync_ignored_paths(&self.project_root(project_id))
     }
 
@@ -165,9 +159,7 @@ impl super::WriterCore {
             if let Some(token) = &file_secrets.token {
                 if !token.is_empty() {
                     let _ = storage.set_secret("sync_token", token.as_bytes());
-                    let secrets_path = self
-                        .app_data_root
-                        .join("sync/sync_secrets.local.json");
+                    let secrets_path = self.app_data_root.join("sync/sync_secrets.local.json");
                     let _ = std::fs::remove_file(&secrets_path);
                 }
             }
@@ -207,10 +199,9 @@ impl super::WriterCore {
             return Ok(());
         }
         // 无 secure storage（测试/桌面直连）：按 generation 落文件，与 live 槽同构。
-        let secrets_path = self.app_data_root.join(format!(
-            "sync/sync_secrets_g{}.local.json",
-            generation
-        ));
+        let secrets_path = self
+            .app_data_root
+            .join(format!("sync/sync_secrets_g{}.local.json", generation));
         if let Some(parent) = secrets_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -251,10 +242,9 @@ impl super::WriterCore {
             }
             return Ok(None);
         }
-        let secrets_path = self.app_data_root.join(format!(
-            "sync/sync_secrets_g{}.local.json",
-            generation
-        ));
+        let secrets_path = self
+            .app_data_root
+            .join(format!("sync/sync_secrets_g{}.local.json", generation));
         if !secrets_path.exists() {
             return Ok(None);
         }
@@ -276,10 +266,9 @@ impl super::WriterCore {
             return Ok(());
         }
         // 无 secure storage（测试/桌面直连）：删除按 generation 落的文件。
-        let secrets_path = self.app_data_root.join(format!(
-            "sync/sync_secrets_g{}.local.json",
-            generation
-        ));
+        let secrets_path = self
+            .app_data_root
+            .join(format!("sync/sync_secrets_g{}.local.json", generation));
         if secrets_path.exists() {
             std::fs::remove_file(&secrets_path)?;
         }
@@ -287,9 +276,7 @@ impl super::WriterCore {
     }
 
     fn load_sync_secrets_from_file(&self) -> crate::error::Result<crate::sync::SyncSecrets> {
-        let secrets_path = self
-            .app_data_root
-            .join("sync/sync_secrets.local.json");
+        let secrets_path = self.app_data_root.join("sync/sync_secrets.local.json");
         if !secrets_path.exists() {
             return Ok(crate::sync::SyncSecrets::default());
         }
@@ -322,9 +309,7 @@ impl super::WriterCore {
         &self,
         secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<()> {
-        let secrets_path = self
-            .app_data_root
-            .join("sync/sync_secrets.local.json");
+        let secrets_path = self.app_data_root.join("sync/sync_secrets.local.json");
         if let Some(parent) = secrets_path.parent() {
             std::fs::create_dir_all(parent)?;
         }

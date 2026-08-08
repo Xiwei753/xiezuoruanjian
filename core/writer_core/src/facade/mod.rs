@@ -26,12 +26,12 @@
 
 mod action_ops;
 mod project_ops;
+mod recent_edits_ops;
 mod search_ops;
 mod service_ops;
 mod settings_ops;
 mod starmap_ops;
 mod sync_ops;
-mod recent_edits_ops;
 mod writing_stats_ops;
 
 use std::collections::HashMap;
@@ -119,7 +119,6 @@ mod tests {
         let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
 
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
-        
 
         let project = core.create_project("My Project").unwrap();
         let projects = core.list_projects().unwrap();

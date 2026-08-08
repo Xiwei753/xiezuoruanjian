@@ -11,6 +11,11 @@ class AutoSyncWorker(
     workerParams: WorkerParameters,
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
+        // 没有外部存储权限时（例如首次启动尚未授权）不得触碰 appContainer /
+        // BridgeProvider / WriterAppServiceHolder，避免提前初始化 Rust Core（Issue #600）。
+        if (!com.xiwei.sujian.platform.AndroidDataRoot.hasStorageAccess()) {
+            return Result.success()
+        }
         val deps =
             (applicationContext as? com.xiwei.sujian.runtime.SujianAppDependenciesProvider)
                 ?.dependencies

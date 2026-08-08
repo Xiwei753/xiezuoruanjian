@@ -56,13 +56,11 @@ pub struct WorkspaceBackend {
     create_workspace_with_path: qt_method!(fn(&mut self, path: QString) -> QJsonObject),
     open_workspace_with_path: qt_method!(fn(&mut self, path: QString) -> QJsonObject),
     close_workspace: qt_method!(fn(&mut self)),
-    clear_last_workspace: qt_method!(fn(&mut self)),
     switch_workspace: qt_method!(fn(&mut self)),
     init_workspace_from_github: qt_method!(fn(&mut self)),
     execute_github_init: qt_method!(
         fn(&mut self, path: QString, remote_url: QString, branch: QString, token: QString)
     ),
-    get_workspace_diagnostics: qt_method!(fn(&self) -> QString),
     open_workspace_dir: qt_method!(fn(&mut self)),
     save_last_navigation_state: qt_method!(
         fn(
@@ -184,10 +182,6 @@ impl WorkspaceBackend {
             self.emit_workspace_changed();
         }
     }
-    fn clear_last_workspace(&mut self) {
-        // last_workspace_path 已从 AppConfig 删除；此方法保留为 QML UI 命名，不再有副作用。
-        self.workspace_state_changed();
-    }
     fn switch_workspace(&mut self) {
         if self.with_app_mut(|app| app.switch_workspace()).is_ok() {
             self.emit_workspace_changed();
@@ -225,16 +219,6 @@ impl WorkspaceBackend {
             self.emit_workspace_changed();
             self.pending_github_init_path_changed();
         }
-    }
-    fn get_workspace_diagnostics(&self) -> QString {
-        // Core 已删除 get_workspace_diagnostics API。
-        // 保留 QML 方法签名以避免破坏 QML；返回空诊断信封。
-        crate::backend::json_utils::envelope_ok_json(serde_json::json!({
-            "hasWorkspace": self.snap().has_workspace,
-            "treeCount": 0u64,
-            "issues": []
-        }))
-        .into()
     }
     fn open_workspace_dir(&mut self) {
         if self.with_app_mut(|app| app.open_workspace_dir()).is_err() {

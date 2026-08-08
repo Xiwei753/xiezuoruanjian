@@ -310,7 +310,6 @@ internal fun SyncResultDto.toModel() =
         ignoredFiles = ignoredFiles,
         conflicts = conflicts.map { it.toModel() },
         conflictSummary = null,
-        settingsConflicts = null,
         commitHash = commitHash,
         error = error,
         errorCategory = errorCategory,

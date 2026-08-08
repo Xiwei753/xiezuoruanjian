@@ -727,11 +727,7 @@ fn phased_snapshot_save_failure_preserves_memory_state() {
     store.upsert_node(make_test_node("n1", "A"));
     flush_store(&mut store);
 
-    let graph_json = dir
-        .path()
-        .join("starmaps")
-        .join(&sid)
-        .join("graph.json");
+    let graph_json = dir.path().join("starmaps").join(&sid).join("graph.json");
     let readonly_dir = graph_json.parent().unwrap();
     let meta_content = std::fs::read_to_string(&graph_json).unwrap();
 

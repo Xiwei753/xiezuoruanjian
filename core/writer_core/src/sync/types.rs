@@ -278,17 +278,6 @@ pub enum SyncStatus {
     LatestWinsApplied,
 }
 
-/// 设置键冲突详情 — 逐键语义合并时双方都修改了同一 key。
-///
-/// `local_value`/`remote_value` 为 JSON 值，一方删除时对应 `Value::Null`。
-/// UI 展示冲突时使用此结构，用户选择 keep local / take remote / mark merged。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SettingConflictDetail {
-    pub key: String,
-    pub local_value: serde_json::Value,
-    pub remote_value: serde_json::Value,
-}
-
 /// 同步文件操作分类。
 ///
 /// - Upload：本地较新或仅本地存在，需上传。
@@ -431,7 +420,6 @@ pub struct SyncResult {
     pub message_key: Option<String>,
     pub conflict_summary: Option<SyncConflictSummary>,
     pub first_sync_mode: FirstSyncMode,
-    pub settings_conflicts: Option<Vec<SettingConflictDetail>>,
     #[serde(default)]
     pub local_deletes: Vec<String>,
     #[serde(default)]
@@ -457,7 +445,6 @@ impl SyncResult {
             message_key: None,
             conflict_summary: None,
             first_sync_mode: FirstSyncMode::NotAttempted,
-            settings_conflicts: None,
             local_deletes: Vec::new(),
             remote_deletes: Vec::new(),
             overwritten_files: Vec::new(),
@@ -487,7 +474,6 @@ impl SyncResult {
             message_key,
             conflict_summary: None,
             first_sync_mode,
-            settings_conflicts: None,
             local_deletes: Vec::new(),
             remote_deletes: Vec::new(),
             overwritten_files: Vec::new(),
@@ -515,7 +501,6 @@ impl SyncResult {
                 .map(sync_error_category_to_message_key),
             conflict_summary: None,
             first_sync_mode: FirstSyncMode::NotAttempted,
-            settings_conflicts: None,
             local_deletes: Vec::new(),
             remote_deletes: Vec::new(),
             overwritten_files: Vec::new(),

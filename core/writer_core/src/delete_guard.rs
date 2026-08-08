@@ -51,9 +51,9 @@ pub fn validate_delete_target(
     expected_marker_file: &str,
 ) -> Result<PathBuf> {
     // Canonicalize root path to prevent .. escaping
-    let root_canon = root_path.canonicalize().map_err(|e| {
-        Error::InvalidDeleteTarget(format!("Failed to canonicalize root: {}", e))
-    })?;
+    let root_canon = root_path
+        .canonicalize()
+        .map_err(|e| Error::InvalidDeleteTarget(format!("Failed to canonicalize root: {}", e)))?;
 
     // Prevent deleting if the target itself is a symlink
     if let Ok(meta) = std::fs::symlink_metadata(target_path) {

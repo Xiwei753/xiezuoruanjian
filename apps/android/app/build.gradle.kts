@@ -94,7 +94,9 @@ android {
 
     defaultConfig {
         applicationId = "com.xiwei.sujian"
-        minSdk = 24
+        // Issue #600：真实共享目录 + 普通文件路径（Rust std::fs / Git）路线要求
+        // MANAGE_EXTERNAL_STORAGE（API 30 才有），基线直接设为 API 30。
+        minSdk = 30
         targetSdk = 36
         versionCode = appVersionCode
         versionName = appVersionName

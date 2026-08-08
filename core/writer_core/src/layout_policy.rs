@@ -134,7 +134,7 @@ pub enum NavigationPresentation {
     PermanentDrawer,
 }
 
-/// 工作区面板模式 — 决定项目列表/章节树/编辑器的组合方式。
+/// 作品面板模式 — 决定项目列表/章节树/编辑器的组合方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkspacePaneMode {
     SinglePane,

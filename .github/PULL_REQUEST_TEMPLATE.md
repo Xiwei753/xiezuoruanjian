@@ -32,7 +32,7 @@
 - [ ] Rust 核心变更已运行 `cargo test`
 - [ ] 未在客户端中引入业务逻辑
 - [ ] 正文保存仍为纯文本（未引入 HTML 保存路径）
-- [ ] 未修改 `docs/workspace_format.md`
+- [ ] 未修改 `docs/data_directory_format.md`
 - [ ] 提交信息用中文，聚焦一个明确目标
 - [ ] 未提交构建产物、密钥或临时文件
 

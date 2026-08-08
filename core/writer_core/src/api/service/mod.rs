@@ -138,9 +138,9 @@ impl WriterCoreApi {
 mod action_ops;
 mod editor_ops;
 mod project_ops;
+mod recent_edits_ops;
 mod search_ops;
 mod starmap_ops;
-mod recent_edits_ops;
 mod writing_stats_ops;
 
 #[cfg(test)]

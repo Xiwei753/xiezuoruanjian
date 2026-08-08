@@ -1,7 +1,7 @@
 # 同步规则
 
 Status: active
-Last verified: 2026-06-11
+Last verified: 2026-08-08
 Truth source: product decision / protocol / code
 Supersedes: None
 
@@ -15,8 +15,16 @@ Supersedes: None
 - 详见 `.github/workflows/` 目录。
 
 ## 同步规则
-- 数据同步遵循工作区中定义的严格白名单/黑名单配置。
-- `app-meta/settings/settings.local.json` 和 `app-meta/sync/sync_secrets.local.json` 被列入黑名单，仅保留在本地。
+- 数据同步以**单个作品目录**为根（Issue #600）：每个作品目录自身就是 Git 仓库，同步只覆盖该作品的内容与它自己的同步元数据。
+- 同步遵循作品目录内定义的严格白名单/黑名单。
+- 应用级数据（设置、同步凭证、统计、最近编辑、设备信息、星图、日志、回收站）位于 `app_data_root`，不在任何作品仓库内，不参与作品同步。
+
+## 作品同步白名单/黑名单
+
+同步根 = 作品目录（`project_root`），路径相对作品目录：
+
+- **白名单（参与同步）**：`project.json`、`volumes/**/volume.json`、`volumes/**/chapters/**/chapter.md`、`volumes/**/chapters/**/chapter.meta.json`、`characters/**`、`app-meta/sync/manifest.sync.json`。
+- **黑名单（绝不参与）**：`app-meta/sync/state.local.json`（及旧格式 `sync_state.json`）、`.git/`、`.tmp`/`.lock` 后缀、`app-meta/logs`、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
 
 ## 内容分类（ContentClass）
 
@@ -25,8 +33,8 @@ Supersedes: None
 | 分类 | 匹配规则 | 同步策略 |
 |------|---------|---------|
 | `UserTextDocument` | `/chapters/*.md`、`note.md`、`outline.md`、`scene.md`、`character_notes.md`、`timeline_notes.md`、`draft.md` | 三路合并，绝不 LWW |
-| `Metadata` | `project.json`、`volume.json`、`chapter.meta.json`、`settings.sync.json`、`starmap.json`、`writing_stats.json` | LWW 或语义合并 |
-| `LocalOnly` | `app-meta/*`（旧工作区残留 `backups/` 也不同步） | 不同步 |
+| `Metadata` | `project.json`、`volume.json`、`chapter.meta.json`、`starmap.json`、`writing_stats.json` | LWW |
+| `LocalOnly` | `app-meta/*`（回收站/备份等本地内容） | 不同步 |
 | `GeneratedCache` | 其他所有文件 | LWW |
 
 判断函数：`lww::classify_content_path(path)` → `ContentClass`
@@ -69,13 +77,15 @@ Supersedes: None
 
 ### 非正文文件
 
-配置文件、元数据文件（`project.json`、`settings.sync.json`、`volume.json` 等）继续使用 LWW（Last Writer Wins）策略，按时间戳比较。
+配置文件、元数据文件（`project.json`、`volume.json` 等）继续使用 LWW（Last Writer Wins）策略，按时间戳比较。
+
+> 说明：旧模型中的设置文件语义合并（`settings.sync.json` 逐键三路合并）已随 workspace 概念删除（Issue #600）。设置是应用级数据，位于 `app_data_root`，不进入作品仓库。
 
 ### 冲突状态
 
 | 状态 | 含义 |
 |------|------|
-| `Conflict` | Git 合并冲突（设置文件等） |
+| `Conflict` | Git 合并冲突 |
 | `PartialConflict` | 正文文件双端修改冲突，部分同步完成 |
 | `LatestWinsApplied` | LWW 策略已应用 |
 | `NoChanges` | 无变更 |
@@ -90,7 +100,7 @@ Supersedes: None
 ### 设计原则
 
 - **保存 ≠ 同步**：章节保存只写本地磁盘，不触发网络同步
-- **自动同步仅在特定时机**：工作区打开、应用回到前台
+- **自动同步仅在特定时机**：数据根打开、应用回到前台
 - **Core 层防抖**：`perform_lww_sync` 内置最小间隔检查（`sync_interval_seconds`，最小 60 秒）
 
 ### 防抖层级

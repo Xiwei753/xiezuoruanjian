@@ -12,12 +12,7 @@ impl super::WriterCore {
         volume_id: &str,
         chapter_id: &str,
     ) -> Result<()> {
-        recent_edits::record_recent_edit(
-            &self.app_data_root,
-            project_id,
-            volume_id,
-            chapter_id,
-        )
+        recent_edits::record_recent_edit(&self.app_data_root, project_id, volume_id, chapter_id)
     }
 
     pub fn flush_recent_edits(&self) -> Result<()> {

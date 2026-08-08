@@ -112,7 +112,6 @@
     <string name="error_sync_document_conflict">文档同步冲突，请手动解决</string>
     <string name="error_sync_incomplete_transaction">同步事务未完成，请重试</string>
     <string name="error_sync_checkout_conflict">同步检出冲突，请手动解决</string>
-    <string name="error_sync_settings_conflict">同步设置冲突，请检查本地与远端配置</string>
     <string name="error_sync_conflict_detected">检测到同步冲突</string>
     <string name="error_sync_non_fast_forward">远端有更新，请先拉取</string>
     <string name="error_sync_unrelated_histories">本地与远端历史不相关</string>

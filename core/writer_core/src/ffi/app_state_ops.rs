@@ -232,10 +232,7 @@ pub unsafe extern "C" fn writer_core_resolve_volume_location(
     match with_core(|core| {
         let projects = core.list_projects().map_err(|e| format!("{}", e))?;
         for p in &projects {
-            let target_vol_dir = core
-                .project_root(&p.id)
-                .join("volumes")
-                .join(&vid);
+            let target_vol_dir = core.project_root(&p.id).join("volumes").join(&vid);
             if target_vol_dir.exists() {
                 return Ok(serde_json::json!({
                     "projectId": p.id,

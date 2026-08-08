@@ -12,7 +12,8 @@ mod tests {
         projects_root: &std::path::Path,
         project_id: Option<&str>,
     ) -> crate::error::Result<SearchIndexStatus> {
-        let entries = crate::search::rebuild::rebuild_index(app_data_root, projects_root, project_id)?;
+        let entries =
+            crate::search::rebuild::rebuild_index(app_data_root, projects_root, project_id)?;
         let mut service = SearchIndexService::new();
         service.rebuild_from_entries(entries);
         Ok(service.status())

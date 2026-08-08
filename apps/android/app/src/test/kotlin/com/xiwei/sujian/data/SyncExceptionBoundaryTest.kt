@@ -47,7 +47,6 @@ class SyncExceptionBoundaryTest {
                 "SYNC_CONFLICT",
                 "SYNC_DOCUMENT_CONFLICT",
                 "SYNC_CHECKOUT_CONFLICT",
-                "SYNC_SETTINGS_CONFLICT",
                 "SYNC_CONFLICT_DETECTED",
             )
         conflictCodes.forEach { code ->

@@ -32,9 +32,10 @@ class SujianApp : Application(), DefaultLifecycleObserver, com.xiwei.sujian.runt
 
     override fun onCreate() {
         super<Application>.onCreate()
-        ProcessLifecycleOwner.get().lifecycle.addObserver(this)
-        initDiagnostics()
+        // 崩溃处理器放在第一项：无论是否持有存储权限，crash 都要落到日志目录。
         installCrashHandler()
+        initDiagnostics()
+        ProcessLifecycleOwner.get().lifecycle.addObserver(this)
     }
 
     private fun initDiagnostics() {
@@ -78,6 +79,10 @@ class SujianApp : Application(), DefaultLifecycleObserver, com.xiwei.sujian.runt
     }
 
     override fun onStart(owner: LifecycleOwner) {
+        // 没有外部存储权限时（例如首次启动跳转授权页）不得触碰
+        // appContainer / BridgeProvider / WriterAppServiceHolder，
+        // 避免在授权前提前初始化 Rust Core（Issue #600）。
+        if (!AndroidDataRoot.hasStorageAccess()) return
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.appLifecycle("start")
         if (autoSyncScheduler == null) {
             autoSyncScheduler = AutoSyncScheduler(this, appContainer.settingsRepository)
@@ -86,6 +91,8 @@ class SujianApp : Application(), DefaultLifecycleObserver, com.xiwei.sujian.runt
     }
 
     override fun onStop(owner: LifecycleOwner) {
+        // 同 onStart：授权前进入后台（跳转系统授权页）不能拉起 Core。
+        if (!AndroidDataRoot.hasStorageAccess()) return
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.appLifecycle("stop")
         autoSyncScheduler?.stop()
         val result = BridgeProvider.getStarmapBridge(this).flushAllStarmapStores()

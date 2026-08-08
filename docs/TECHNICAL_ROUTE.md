@@ -62,7 +62,7 @@ writer_core 通用业务核心
 
 Core 负责：
 
-- 工作区、作品、卷、章节和星图数据；
+- 作品、卷、章节和星图数据；
 - 文件读取、写入、迁移和删除安全；
 - 设置 Schema 与同步属性；
 - 同步计划、冲突语义和错误分类；
@@ -131,7 +131,7 @@ Core 不负责：
 
 ## 数据与同步
 
-- [workspace_format.md](workspace_format.md) 是工作区磁盘格式的权威定义。
+- [data_directory_format.md](data_directory_format.md) 是数据目录格式（数据根目录与作品仓库布局）的权威定义。
 - [settings_schema.md](settings_schema.md) 定义设置的类型、默认值和同步属性。
 - [sync_rules.md](sync_rules.md) 定义同步、删除和冲突语义。
 - [starmap_semantics.md](starmap_semantics.md) 定义星图对象与引用语义。

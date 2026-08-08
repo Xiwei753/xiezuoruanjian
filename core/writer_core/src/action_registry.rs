@@ -499,7 +499,7 @@ impl ActionRegistry {
             input_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "冲突文件的工作区相对路径" }
+                    "path": { "type": "string", "description": "冲突文件的作品目录相对路径" }
                 },
                 "required": ["path"]
             })),
@@ -521,7 +521,7 @@ impl ActionRegistry {
             input_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "冲突文件的工作区相对路径" }
+                    "path": { "type": "string", "description": "冲突文件的作品目录相对路径" }
                 },
                 "required": ["path"]
             })),
@@ -543,7 +543,7 @@ impl ActionRegistry {
             input_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "冲突文件的工作区相对路径" }
+                    "path": { "type": "string", "description": "冲突文件的作品目录相对路径" }
                 },
                 "required": ["path"]
             })),

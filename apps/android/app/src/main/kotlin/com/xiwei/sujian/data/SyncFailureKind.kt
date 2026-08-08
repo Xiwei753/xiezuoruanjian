@@ -136,7 +136,7 @@ enum class SyncFailureKind {
                 "NATIVE_NOT_LOADED" -> NativeUnavailable
                 "SYNC_AUTH_FAILED" -> Authentication
                 "SYNC_CONFLICT", "SYNC_DOCUMENT_CONFLICT", "SYNC_CHECKOUT_CONFLICT",
-                "SYNC_SETTINGS_CONFLICT", "SYNC_CONFLICT_DETECTED",
+                "SYNC_CONFLICT_DETECTED",
                 -> Conflict
                 "SYNC_NON_FAST_FORWARD", "SYNC_UNRELATED_HISTORIES",
                 "SYNC_INCOMPLETE_TRANSACTION",

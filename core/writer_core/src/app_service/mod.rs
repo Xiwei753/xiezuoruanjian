@@ -44,7 +44,7 @@ struct EditorSession {
 /// - `network_state`：网络状态（联网、代理、计费），由平台端注入系统网络信息
 /// - `sync_transport_factory`：同步传输工厂，由平台端注入 HTTP 客户端实现
 ///
-/// 同步操作优先使用 `SecureStorage` 获取 token，不再将凭据作为普通 JSON 存在工作区。
+/// 同步操作优先使用 `SecureStorage` 获取 token，不再将凭据作为普通 JSON 存盘。
 pub struct WriterAppService {
     api: WriterCoreApi,
     editor_session: Mutex<EditorSession>,
@@ -267,7 +267,10 @@ mod tests {
     #[test]
     fn editor_kernel_load_text_rejects_invalid_offset() {
         let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string(), dir.path().join("projects").to_string_lossy().to_string());
+        let svc = WriterAppService::new(
+            dir.path().to_string_lossy().to_string(),
+            dir.path().join("projects").to_string_lossy().to_string(),
+        );
         let result = svc.editor_kernel_load_text("你好".to_string(), 4);
         assert_eq!(
             result.outcome,
@@ -278,7 +281,10 @@ mod tests {
     #[test]
     fn editor_kernel_load_text_accepts_valid_offset() {
         let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string(), dir.path().join("projects").to_string_lossy().to_string());
+        let svc = WriterAppService::new(
+            dir.path().to_string_lossy().to_string(),
+            dir.path().join("projects").to_string_lossy().to_string(),
+        );
         let result = svc.editor_kernel_load_text("你好".to_string(), 3);
         assert_eq!(result.outcome, crate::api::EditorEditOutcomeDto::Applied);
     }
@@ -286,7 +292,10 @@ mod tests {
     #[test]
     fn text_edit_session_load_text_rejects_invalid_offset() {
         let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string(), dir.path().join("projects").to_string_lossy().to_string());
+        let svc = WriterAppService::new(
+            dir.path().to_string_lossy().to_string(),
+            dir.path().join("projects").to_string_lossy().to_string(),
+        );
         let session_id = svc
             .text_edit_session_create("test".to_string(), String::new(), 0, 0)
             .unwrap();
@@ -300,7 +309,10 @@ mod tests {
     #[test]
     fn text_edit_session_reset_rejects_invalid_offset() {
         let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string(), dir.path().join("projects").to_string_lossy().to_string());
+        let svc = WriterAppService::new(
+            dir.path().to_string_lossy().to_string(),
+            dir.path().join("projects").to_string_lossy().to_string(),
+        );
         let session_id = svc
             .text_edit_session_create("test".to_string(), String::new(), 0, 0)
             .unwrap();
@@ -311,7 +323,10 @@ mod tests {
     #[test]
     fn editor_kernel_update_composition_accepts_preedit_utf16_cursor_offset() {
         let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string(), dir.path().join("projects").to_string_lossy().to_string());
+        let svc = WriterAppService::new(
+            dir.path().to_string_lossy().to_string(),
+            dir.path().join("projects").to_string_lossy().to_string(),
+        );
         let load = svc.editor_kernel_load_text(String::new(), 0);
         assert_eq!(load.outcome, crate::api::EditorEditOutcomeDto::Applied);
         let begin = svc.editor_kernel_begin_composition(0, 0, load.new_revision);
@@ -329,7 +344,10 @@ mod tests {
     #[test]
     fn editor_kernel_update_composition_rejects_cursor_beyond_preedit() {
         let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string(), dir.path().join("projects").to_string_lossy().to_string());
+        let svc = WriterAppService::new(
+            dir.path().to_string_lossy().to_string(),
+            dir.path().join("projects").to_string_lossy().to_string(),
+        );
         let load = svc.editor_kernel_load_text(String::new(), 0);
         assert_eq!(load.outcome, crate::api::EditorEditOutcomeDto::Applied);
         let begin = svc.editor_kernel_begin_composition(0, 0, load.new_revision);
@@ -399,7 +417,10 @@ mod tests {
         // #595 十：set → has_override=true；clear → has_override=false。
         // 清除后 refresh_secrets_override 才会从磁盘重新填充，陈旧凭据不会泄漏。
         let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string(), dir.path().join("projects").to_string_lossy().to_string());
+        let svc = WriterAppService::new(
+            dir.path().to_string_lossy().to_string(),
+            dir.path().join("projects").to_string_lossy().to_string(),
+        );
         let secrets = crate::api::SyncSecretsDto {
             token: Some("token-a".to_string()),
         };

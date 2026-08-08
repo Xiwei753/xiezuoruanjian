@@ -4,11 +4,11 @@
 //!
 //! 1. **LocalSettings（本地设置）**：仅存储在本地，不同步
 //!    - 窗口大小、自动保存开关、字号、行距、自动缩进、动画开关等
-//!    - 文件路径：`app-meta/settings/settings.local.json`
+//!    - 文件路径：`<app_data_root>/settings.local.json`
 //!
-//! 2. **SyncableSettings（可同步设置）**：会随工作区同步到其他设备
+//! 2. **SyncableSettings（可同步设置）**：跨设备同步候选
 //!    - 字号、主题模式、Monet 颜色
-//!    - 文件路径：`app-meta/settings/settings.sync.json`
+//!    - 文件路径：`<app_data_root>/settings.sync.json`（应用级，不随作品仓库同步）
 //!
 //! ## 职责边界
 //!
@@ -724,11 +724,7 @@ pub fn list_palette_records(config_dir: &Path) -> Result<Vec<ThemePaletteRecord>
 }
 
 /// Delete a specific palette record.
-pub fn delete_palette_record(
-    config_dir: &Path,
-    device_id: &str,
-    fingerprint: &str,
-) -> Result<()> {
+pub fn delete_palette_record(config_dir: &Path, device_id: &str, fingerprint: &str) -> Result<()> {
     let path = palettes_base_dir(config_dir)
         .join(device_id)
         .join(format!("{}.json", fingerprint));

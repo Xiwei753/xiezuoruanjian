@@ -112,7 +112,10 @@ fn layout_nodes_shard_path(dir: &Path, bucket: &str) -> PathBuf {
 }
 
 fn session_dir(app_data_root: &Path, starmap_id: &str) -> PathBuf {
-    app_data_root.join("session").join("starmaps").join(starmap_id)
+    app_data_root
+        .join("session")
+        .join("starmaps")
+        .join(starmap_id)
 }
 
 fn viewport_path(app_data_root: &Path, starmap_id: &str) -> PathBuf {
@@ -214,7 +217,11 @@ pub fn save_hyperlink(app_data_root: &Path, starmap_id: &str, hl: &StarMapHyperl
     Ok(())
 }
 
-pub fn delete_hyperlink_file(app_data_root: &Path, starmap_id: &str, hyperlink_id: &str) -> Result<()> {
+pub fn delete_hyperlink_file(
+    app_data_root: &Path,
+    starmap_id: &str,
+    hyperlink_id: &str,
+) -> Result<()> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
     let path = hyperlink_path(&dir, hyperlink_id);
     if path.exists() {
@@ -310,7 +317,11 @@ pub(crate) fn load_legacy_layout(dir: &Path) -> Option<StarMapLayout> {
     serde_json::from_str(&content).ok()
 }
 
-pub fn save_viewport(app_data_root: &Path, starmap_id: &str, viewport: &StarMapViewport) -> Result<()> {
+pub fn save_viewport(
+    app_data_root: &Path,
+    starmap_id: &str,
+    viewport: &StarMapViewport,
+) -> Result<()> {
     let dir = session_dir(app_data_root, starmap_id);
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(viewport)?;
@@ -331,7 +342,7 @@ pub fn load_viewport(app_data_root: &Path, starmap_id: &str) -> Option<StarMapVi
 mod tests {
     use super::*;
     use crate::starmap::create_starmap;
-        use tempfile::tempdir;
+    use tempfile::tempdir;
 
     fn setup_project_root() -> tempfile::TempDir {
         let dir = tempdir().unwrap();

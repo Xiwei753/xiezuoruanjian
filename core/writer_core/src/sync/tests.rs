@@ -158,7 +158,7 @@ mod tests {
     fn test_sync_manifest_deserializes_with_deleted_at_ms() {
         let raw = r#"{
             "files": [{
-                "path": "projects/p1/project.json",
+                "path": "project.json",
                 "content_hash": "abc",
                 "updated_at_ms": 1000,
                 "deleted_at_ms": 2000,
@@ -178,7 +178,7 @@ mod tests {
     fn test_sync_manifest_serializes_with_deleted_at_ms() {
         let manifest = SyncManifest {
             files: vec![crate::sync::types::ManifestFileRecord {
-                path: "projects/p1/project.json".to_string(),
+                path: "project.json".to_string(),
                 content_hash: "abc".to_string(),
                 updated_at_ms: 1000,
                 deleted_at_ms: Some(2000),
@@ -199,7 +199,7 @@ mod tests {
     fn test_sync_manifest_deserializes_without_deleted_at_ms() {
         let raw = r#"{
             "files": [{
-                "path": "projects/p1/project.json",
+                "path": "project.json",
                 "content_hash": "abc",
                 "updated_at_ms": 1000,
                 "device_id": "device_a",
@@ -214,38 +214,36 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_secrets_local_json_blacklisted() {
+    fn test_sync_state_files_blacklisted() {
+        // 同步根是单个作品目录：作品仓库内的本地同步状态不得上传。
         assert!(SyncService::is_blacklisted_path(
-            "app-meta/sync/sync_secrets.local.json"
+            "app-meta/sync/state.local.json"
         ));
         assert!(SyncService::is_blacklisted_path(
-            "app-meta/sync/sync_secrets.local.json.tmp"
+            "app-meta/sync/state.local.json.tmp"
         ));
         assert!(SyncService::is_blacklisted_path(
             "app-meta/sync/sync_state.json"
         ));
-        assert!(SyncService::is_blacklisted_path(
-            "app-meta/sync/state.local.json"
-        ));
         assert!(SyncService::is_blacklisted_path("app-meta/logs/sync.log"));
         assert!(SyncService::is_blacklisted_path("tmp/runtime.tmp"));
+        assert!(SyncService::is_blacklisted_path("cache/build.bin"));
+        assert!(SyncService::is_blacklisted_path("backups/vol1.zip"));
     }
 
     #[test]
-    fn test_ai_paths_blacklisted() {
-        assert!(SyncService::is_blacklisted_path(
+    fn test_app_level_paths_outside_repo_not_blacklisted() {
+        // 应用级数据位于 app_data_root，不在作品仓库内（Issue #600），
+        // 黑名单只管作品仓库内的路径。
+        assert!(!SyncService::is_blacklisted_path(
             "app-meta/ai/secrets.local.json"
         ));
-        assert!(SyncService::is_blacklisted_path(
-            "app-meta/ai/config.local.json"
+        assert!(!SyncService::is_blacklisted_path(
+            "app-meta/stats/events.local/2024-01-01.events.jsonl"
         ));
-        assert!(SyncService::is_blacklisted_path(
-            "app-meta/ai/conversations.local/chat.json"
+        assert!(!SyncService::is_blacklisted_path(
+            "app-meta/settings/settings.local.json"
         ));
-        assert!(SyncService::is_blacklisted_path(
-            "app-meta/ai/cache/model_cache.bin"
-        ));
-        assert!(SyncService::is_blacklisted_path("app-meta/ai/"));
     }
 
     #[test]
@@ -412,9 +410,14 @@ mod tests {
 
     #[test]
     fn test_perform_sync_auto_commits_whitelist() {
-        // Just mock test to ensure successful pass of logic
+        // 同步根是单个作品目录：作品自身内容必须进入白名单。
+        assert!(SyncService::is_whitelisted_path("project.json"));
+        assert!(SyncService::is_whitelisted_path("volumes/v1/volume.json"));
         assert!(SyncService::is_whitelisted_path(
-            "app-meta/settings/settings.sync.json"
+            "volumes/v1/chapters/c1/chapter.md"
+        ));
+        assert!(SyncService::is_whitelisted_path(
+            "volumes/v1/chapters/c1/chapter.meta.json"
         ));
     }
 
@@ -473,39 +476,49 @@ mod tests {
     }
 
     #[test]
-    fn test_whitelist_includes_sync_json() {
+    fn test_whitelist_project_content_and_sync_metadata() {
+        // 作品自身内容：project.json / volumes / characters
+        assert!(SyncService::is_whitelisted_path("project.json"));
+        assert!(SyncService::is_whitelisted_path("volumes/v1/volume.json"));
         assert!(SyncService::is_whitelisted_path(
+            "volumes/v1/chapters/c1/chapter.md"
+        ));
+        assert!(SyncService::is_whitelisted_path(
+            "volumes/v1/chapters/c1/chapter.meta.json"
+        ));
+        assert!(SyncService::is_whitelisted_path("characters/role1.json"));
+        // 作品自己的同步元数据
+        assert!(SyncService::is_whitelisted_path(
+            "app-meta/sync/manifest.sync.json"
+        ));
+
+        // 非白名单：作品外的应用级路径（旧 workspace 布局）与无关文件
+        assert!(!SyncService::is_whitelisted_path(
             "app-meta/settings/settings.sync.json"
         ));
         assert!(!SyncService::is_whitelisted_path(
             "app-meta/settings/settings.local.json"
         ));
-    }
-
-    #[test]
-    fn test_stats_daily_whitelisted() {
-        assert!(SyncService::is_whitelisted_path(
+        assert!(!SyncService::is_whitelisted_path(
             "app-meta/stats/daily/2024-01-01.stats.json"
         ));
-    }
-
-    #[test]
-    fn test_recent_whitelisted() {
-        assert!(SyncService::is_whitelisted_path(
+        assert!(!SyncService::is_whitelisted_path(
             "app-meta/recent/recent_edits.json"
         ));
-    }
-
-    #[test]
-    fn test_device_info_whitelisted() {
-        assert!(SyncService::is_whitelisted_path(
+        assert!(!SyncService::is_whitelisted_path(
             "app-meta/device/current_device.json"
         ));
+        assert!(!SyncService::is_whitelisted_path(
+            "projects/p1/project.json"
+        ));
+        assert!(!SyncService::is_whitelisted_path("readme.txt"));
     }
 
     #[test]
     fn test_stats_events_local_blacklisted() {
-        assert!(SyncService::is_blacklisted_path(
+        // 作品仓库内的缓存/临时路径保持黑名单；app-meta 统计路径位于
+        // app_data_root，不在作品仓库内。
+        assert!(!SyncService::is_blacklisted_path(
             "app-meta/stats/events.local/2024-01-01.events.jsonl"
         ));
     }
@@ -526,14 +539,25 @@ mod tests {
 
     #[test]
     fn test_blacklist_ignores_local_json() {
+        // 作品仓库内的本地同步状态不得上传；
+        // 应用级 settings.local.json 位于 app_data_root，不在作品仓库内。
         assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/state.local.json"
+        ));
+        assert!(!SyncService::is_blacklisted_path(
             "app-meta/settings/settings.local.json"
         ));
     }
 
     #[test]
     fn test_sync_secrets_blacklisted() {
+        // 同步凭证（旧 workspace 布局 app-meta/sync/sync_secrets.local.json）
+        // 在 per-project 模型下位于 app_data_root/sync/，不在作品仓库内；
+        // 作品仓库内的本地状态文件仍被黑名单排除。
         assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/state.local.json"
+        ));
+        assert!(!SyncService::is_blacklisted_path(
             "app-meta/sync/sync_secrets.local.json"
         ));
     }
@@ -562,10 +586,10 @@ mod tests {
     #[test]
     fn test_blacklist_ignores_tmp_and_lock_files() {
         assert!(SyncService::is_blacklisted_path(
-            "projects/v1/chapters/c1.tmp"
+            "volumes/v1/chapters/c1/chapter.md.tmp"
         ));
         assert!(SyncService::is_blacklisted_path(
-            "app-meta/settings/settings.sync.json.lock"
+            "app-meta/sync/state.local.json.lock"
         ));
         assert!(SyncService::is_blacklisted_path("app-meta/logs/sync.log"));
     }
@@ -632,21 +656,26 @@ mod tests {
         // Initialize git repo manually or use SyncService
         let repo = git2::Repository::init(dir.path()).unwrap();
 
-        let file_path = dir.path().join("app-meta/sync/sync_secrets.local.json");
+        // 作品仓库内的本地同步状态不得被 stage（黑名单）；
+        // 同时验证白名单外的文件（如作品外的应用级路径）也不会被 stage。
+        let file_path = dir.path().join("app-meta/sync/state.local.json");
         std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
-        std::fs::write(&file_path, "secret_content").unwrap();
+        std::fs::write(&file_path, "state_content").unwrap();
+        let outside_path = dir.path().join("projects/p1/project.json");
+        std::fs::create_dir_all(outside_path.parent().unwrap()).unwrap();
+        std::fs::write(&outside_path, "{}").unwrap();
 
         let backend = Git2Backend;
-        let paths = vec!["app-meta/sync/sync_secrets.local.json"];
+        let paths = vec!["app-meta/sync/state.local.json", "projects/p1/project.json"];
         backend.stage_paths(dir.path(), &paths).unwrap();
 
-        // Ensure it's not staged
+        // Ensure neither is staged
         let index = repo.index().unwrap();
         assert!(index
-            .get_path(
-                std::path::Path::new("app-meta/sync/sync_secrets.local.json"),
-                0
-            )
+            .get_path(std::path::Path::new("app-meta/sync/state.local.json"), 0)
+            .is_none());
+        assert!(index
+            .get_path(std::path::Path::new("projects/p1/project.json"), 0)
             .is_none());
     }
 
@@ -687,19 +716,21 @@ mod tests {
             has_network_state_permission: true,
         };
 
-        // Create some whitelisted and blacklisted files
-        let settings_path = dir.path().join("app-meta/settings");
-        std::fs::create_dir_all(&settings_path).unwrap();
-        std::fs::write(settings_path.join("settings.sync.json"), "{}").unwrap();
-        std::fs::write(settings_path.join("settings.local.json"), "{}").unwrap();
+        // Create some whitelisted and blacklisted files（per-project：同步根是作品目录）
+        let project_dir = dir.path();
+        std::fs::write(project_dir.join("project.json"), "{}").unwrap();
+        std::fs::create_dir_all(project_dir.join("volumes/v1")).unwrap();
+        std::fs::write(project_dir.join("volumes/v1/volume.json"), "{}").unwrap();
+        std::fs::write(project_dir.join("volumes/v1/volume.json.tmp"), "{}").unwrap();
 
         let plan = SyncService::perform_sync_dry_run(dir.path(), &config).unwrap();
+        assert!(plan.files_to_upload.contains(&"project.json".to_string()));
         assert!(plan
             .files_to_upload
-            .contains(&"app-meta/settings/settings.sync.json".to_string()));
+            .contains(&"volumes/v1/volume.json".to_string()));
         assert!(plan
             .ignored_files
-            .contains(&"app-meta/settings/settings.local.json".to_string()));
+            .contains(&"volumes/v1/volume.json.tmp".to_string()));
     }
 
     #[test]
@@ -1094,7 +1125,11 @@ mod tests {
 
         // Also write some valid file to sync
         std::fs::create_dir_all(dir.path().join("app-meta/settings")).unwrap();
-        std::fs::write(dir.path().join("app-meta/settings/settings.sync.json"), "{}").unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/settings/settings.sync.json"),
+            "{}",
+        )
+        .unwrap();
 
         let plan = SyncService::build_sync_plan(dir.path()).unwrap();
 
@@ -1121,7 +1156,11 @@ mod tests {
     fn test_first_sync_empty_remote_branch_not_found() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("app-meta/settings")).unwrap();
-        std::fs::write(dir.path().join("app-meta/settings/settings.sync.json"), "{}").unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/settings/settings.sync.json"),
+            "{}",
+        )
+        .unwrap();
 
         let config = SyncConfig {
             enabled: true,
@@ -1166,7 +1205,7 @@ mod tests {
                 Ok(None)
             }
             fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
-                Ok(vec!["app-meta/settings/settings.sync.json".to_string()])
+                Ok(vec!["project.json".to_string()])
             }
             fn init_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
@@ -1242,122 +1281,6 @@ mod tests {
         let _res = backend.push(dir.path(), "main", None);
         // Verify branch ref has been reconstructed!
         assert!(repo.find_reference("refs/heads/main").is_ok());
-    }
-
-    #[test]
-    #[cfg(feature = "github-api")]
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn test_settings_semantic_merge_conflict_recovery() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = git2::Repository::init(dir.path()).unwrap();
-
-        // Set up local repository with a commit containing base settings.sync.json
-        let signature = git2::Signature::now("Test User", "test@test.com").unwrap();
-        let mut index = repo.index().unwrap();
-        let file_path = dir.path().join("app-meta/settings/settings.sync.json");
-        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
-
-        let base_content = r#"{"font_size": 12, "theme": "dark"}"#;
-        std::fs::write(&file_path, base_content).unwrap();
-        index
-            .add_path(Path::new("app-meta/settings/settings.sync.json"))
-            .unwrap();
-        index.write().unwrap();
-        let oid = index.write_tree().unwrap();
-        let tree = repo.find_tree(oid).unwrap();
-        let base_commit_oid = repo
-            .commit(
-                Some("refs/heads/main"),
-                &signature,
-                &signature,
-                "Base commit",
-                &tree,
-                &[],
-            )
-            .unwrap();
-        repo.set_head("refs/heads/main").unwrap();
-
-        // Clone local repo to remote right after base commit (so remote shares base commit OID and history)
-        let remote_dir = tempfile::tempdir().unwrap();
-        let remote_repo =
-            git2::Repository::clone(dir.path().to_str().unwrap(), remote_dir.path()).unwrap();
-
-        // Now modify local settings.sync.json and commit it in local repo (local divergent change)
-        let local_content = r#"{"font_size": 16, "theme": "dark"}"#;
-        std::fs::write(&file_path, local_content).unwrap();
-        index
-            .add_path(Path::new("app-meta/settings/settings.sync.json"))
-            .unwrap();
-        index.write().unwrap();
-        let oid = index.write_tree().unwrap();
-        let tree = repo.find_tree(oid).unwrap();
-        let local_commit_oid = repo
-            .commit(
-                Some("refs/heads/main"),
-                &signature,
-                &signature,
-                "Local commit",
-                &tree,
-                &[&repo.find_commit(base_commit_oid).unwrap()],
-            )
-            .unwrap();
-
-        // In remote repo, modify settings.sync.json to a conflicting value and commit (remote divergent change)
-        let remote_file_path = remote_dir
-            .path()
-            .join("app-meta/settings/settings.sync.json");
-        let remote_content = r#"{"font_size": 20, "theme": "dark"}"#;
-        std::fs::write(&remote_file_path, remote_content).unwrap();
-        let mut remote_index = remote_repo.index().unwrap();
-        remote_index
-            .add_path(Path::new("app-meta/settings/settings.sync.json"))
-            .unwrap();
-        remote_index.write().unwrap();
-        let remote_oid = remote_index.write_tree().unwrap();
-        let remote_tree = remote_repo.find_tree(remote_oid).unwrap();
-        let remote_base_commit = remote_repo.find_commit(base_commit_oid).unwrap();
-        let _remote_commit_oid = remote_repo
-            .commit(
-                Some("refs/heads/main"),
-                &signature,
-                &signature,
-                "Remote commit",
-                &remote_tree,
-                &[&remote_base_commit],
-            )
-            .unwrap();
-
-        // Add remote to local repo
-        let mut remote = repo
-            .remote("origin", remote_dir.path().to_str().unwrap())
-            .unwrap();
-        remote.fetch(&["main"], None, None).unwrap();
-
-        // Verify pull/merge fails with SyncSettingsConflict
-        let backend = Git2Backend;
-        let res = backend.pull(dir.path(), "main", None);
-        assert!(res.is_err());
-        match res.unwrap_err() {
-            crate::Error::SyncSettingsConflict { details_json } => {
-                assert!(
-                    details_json.contains("font_size"),
-                    "Conflict must include font_size key, got: {}",
-                    details_json
-                );
-            }
-            other => panic!("Expected SyncSettingsConflict, got: {:?}", other),
-        }
-
-        // Verify that after transactional rollback:
-        // 1. Index has no conflicts
-        let index = repo.index().unwrap();
-        assert!(!index.has_conflicts());
-        // 2. HEAD points back to original local_commit_oid
-        let head = repo.head().unwrap();
-        assert_eq!(head.target().unwrap(), local_commit_oid);
-        // 3. Local settings file is intact and not corrupted with remote change
-        let content_after = std::fs::read_to_string(&file_path).unwrap();
-        assert_eq!(content_after, local_content);
     }
 
     #[cfg(feature = "github-api")]
@@ -1650,14 +1573,11 @@ mod tests {
     fn test_perform_lww_sync_first_download() {
         let dir = tempdir().unwrap();
         let mut initial_files = std::collections::HashMap::new();
-        initial_files.insert(
-            "projects/p1/project.json".to_string(),
-            "remote content".to_string(),
-        );
+        initial_files.insert("project.json".to_string(), "remote content".to_string());
 
         let initial_manifest = SyncManifest {
             files: vec![ManifestFileRecord {
-                path: "projects/p1/project.json".to_string(),
+                path: "project.json".to_string(),
                 content_hash: format!("{:x}", md5::compute("remote content".as_bytes())),
                 updated_at_ms: 1000,
                 deleted_at_ms: None,
@@ -1690,9 +1610,7 @@ mod tests {
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
-        assert!(res
-            .downloaded_files
-            .contains(&"projects/p1/project.json".to_string()));
+        assert!(res.downloaded_files.contains(&"project.json".to_string()));
         assert!(!res
             .downloaded_files
             .contains(&"app-meta/sync/manifest.sync.json".to_string()));
@@ -1701,7 +1619,7 @@ mod tests {
         assert!(res.remote_deletes.is_empty());
         assert!(res.overwritten_files.is_empty());
 
-        let local_file_path = dir.path().join("projects/p1/project.json");
+        let local_file_path = dir.path().join("project.json");
         assert!(local_file_path.exists());
         let local_content = std::fs::read_to_string(local_file_path).unwrap();
         assert_eq!(local_content, "remote content");
@@ -1719,23 +1637,19 @@ mod tests {
 
         let mut state = SyncState::default();
         state.device_id = "device_local".to_string();
-        state.known_files.insert(
-            "projects/p1/project.json".to_string(),
-            "old_hash".to_string(),
-        );
+        state
+            .known_files
+            .insert("project.json".to_string(), "old_hash".to_string());
         state
             .known_files_updated_at
-            .insert("projects/p1/project.json".to_string(), 1000);
+            .insert("project.json".to_string(), 1000);
         SyncService::save_sync_state(dir.path(), &state).unwrap();
 
         let mut initial_files = std::collections::HashMap::new();
-        initial_files.insert(
-            "projects/p1/project.json".to_string(),
-            "remote content".to_string(),
-        );
+        initial_files.insert("project.json".to_string(), "remote content".to_string());
         let initial_manifest = SyncManifest {
             files: vec![ManifestFileRecord {
-                path: "projects/p1/project.json".to_string(),
+                path: "project.json".to_string(),
                 content_hash: format!("{:x}", md5::compute("remote content".as_bytes())),
                 updated_at_ms: 900,
                 deleted_at_ms: None,
@@ -1767,16 +1681,14 @@ mod tests {
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
-        assert!(res
-            .local_deletes
-            .contains(&"projects/p1/project.json".to_string()));
+        assert!(res.local_deletes.contains(&"project.json".to_string()));
 
         let final_m: SyncManifest =
             serde_json::from_str(&manifest_str.lock().unwrap().clone()).unwrap();
         let rec = final_m
             .files
             .iter()
-            .find(|f| f.path == "projects/p1/project.json")
+            .find(|f| f.path == "project.json")
             .unwrap();
         assert_eq!(rec.op, "delete");
 
@@ -1789,24 +1701,24 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_perform_lww_sync_remote_delete_removes_local_file() {
         let dir = tempdir().unwrap();
-        let local_path = dir.path().join("projects/p1/project.json");
+        let local_path = dir.path().join("project.json");
         std::fs::create_dir_all(local_path.parent().unwrap()).unwrap();
         std::fs::write(&local_path, "local content").unwrap();
 
         let mut state = SyncState::default();
         state.device_id = "device_local".to_string();
         state.known_files.insert(
-            "projects/p1/project.json".to_string(),
+            "project.json".to_string(),
             format!("{:x}", md5::compute("local content".as_bytes())),
         );
         state
             .known_files_updated_at
-            .insert("projects/p1/project.json".to_string(), 1000);
+            .insert("project.json".to_string(), 1000);
         SyncService::save_sync_state(dir.path(), &state).unwrap();
 
         let initial_manifest = SyncManifest {
             files: vec![ManifestFileRecord {
-                path: "projects/p1/project.json".to_string(),
+                path: "project.json".to_string(),
                 content_hash: String::new(),
                 updated_at_ms: 3000,
                 deleted_at_ms: Some(3000),
@@ -1838,9 +1750,7 @@ mod tests {
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
-        assert!(res
-            .remote_deletes
-            .contains(&"projects/p1/project.json".to_string()));
+        assert!(res.remote_deletes.contains(&"project.json".to_string()));
         assert!(!local_path.exists());
 
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1853,46 +1763,46 @@ mod tests {
     fn test_perform_lww_sync_timestamp_wins() {
         let dir = tempdir().unwrap();
 
-        let local_p1 = dir.path().join("projects/p1/project.json");
+        let local_p1 = dir.path().join("project.json");
         std::fs::create_dir_all(local_p1.parent().unwrap()).unwrap();
         std::fs::write(&local_p1, "local newer content").unwrap();
 
-        let local_p2 = dir.path().join("projects/p2/project.json");
+        let local_p2 = dir.path().join("volumes/p2/volume.json");
         std::fs::create_dir_all(local_p2.parent().unwrap()).unwrap();
         std::fs::write(&local_p2, "local older content").unwrap();
 
         let mut state = SyncState::default();
         state.device_id = "device_local".to_string();
         state.known_files.insert(
-            "projects/p1/project.json".to_string(),
+            "project.json".to_string(),
             format!("{:x}", md5::compute("local base".as_bytes())),
         );
         state
             .known_files_updated_at
-            .insert("projects/p1/project.json".to_string(), 1000);
+            .insert("project.json".to_string(), 1000);
         state.known_files.insert(
-            "projects/p2/project.json".to_string(),
+            "volumes/p2/volume.json".to_string(),
             format!("{:x}", md5::compute("local older content".as_bytes())),
         );
         state
             .known_files_updated_at
-            .insert("projects/p2/project.json".to_string(), 1000);
+            .insert("volumes/p2/volume.json".to_string(), 1000);
         SyncService::save_sync_state(dir.path(), &state).unwrap();
 
         let mut initial_files = std::collections::HashMap::new();
         initial_files.insert(
-            "projects/p1/project.json".to_string(),
+            "project.json".to_string(),
             "remote older content".to_string(),
         );
         initial_files.insert(
-            "projects/p2/project.json".to_string(),
+            "volumes/p2/volume.json".to_string(),
             "remote newer content".to_string(),
         );
 
         let initial_manifest = SyncManifest {
             files: vec![
                 ManifestFileRecord {
-                    path: "projects/p1/project.json".to_string(),
+                    path: "project.json".to_string(),
                     content_hash: format!("{:x}", md5::compute("remote older content".as_bytes())),
                     updated_at_ms: 2000,
                     deleted_at_ms: None,
@@ -1901,7 +1811,7 @@ mod tests {
                     schema_version: 1,
                 },
                 ManifestFileRecord {
-                    path: "projects/p2/project.json".to_string(),
+                    path: "volumes/p2/volume.json".to_string(),
                     content_hash: format!("{:x}", md5::compute("remote newer content".as_bytes())),
                     updated_at_ms: 4000,
                     deleted_at_ms: None,
@@ -1936,12 +1846,10 @@ mod tests {
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
 
-        assert!(res
-            .uploaded_files
-            .contains(&"projects/p1/project.json".to_string()));
+        assert!(res.uploaded_files.contains(&"project.json".to_string()));
         assert!(res
             .downloaded_files
-            .contains(&"projects/p2/project.json".to_string()));
+            .contains(&"volumes/p2/volume.json".to_string()));
 
         let content_p2 = std::fs::read_to_string(&local_p2).unwrap();
         assert_eq!(content_p2, "remote newer content");
@@ -1952,7 +1860,7 @@ mod tests {
         let p1_rec = final_m
             .files
             .iter()
-            .find(|f| f.path == "projects/p1/project.json")
+            .find(|f| f.path == "project.json")
             .unwrap();
         assert_eq!(p1_rec.device_id, "device_local");
         assert_eq!(p1_rec.op, "upsert");
@@ -2019,33 +1927,27 @@ mod tests {
     fn test_is_document_content_path() {
         use crate::sync::lww::is_document_content_path;
         assert!(is_document_content_path(
-            "projects/p1/volumes/v1/chapters/c1/chapter.md"
+            "volumes/v1/chapters/c1/chapter.md"
         ));
         assert!(is_document_content_path(
-            "projects/abc/volumes/001/chapters/xyz/chapter.md"
+            "volumes/001/chapters/xyz/chapter.md"
         ));
-        assert!(!is_document_content_path("projects/p1/project.json"));
+        assert!(!is_document_content_path("project.json"));
         assert!(!is_document_content_path(
-            "projects/p1/volumes/v1/chapters/c1/chapter.meta.json"
+            "volumes/v1/chapters/c1/chapter.meta.json"
         ));
         assert!(!is_document_content_path(
             "app-meta/settings/settings.sync.json"
         ));
-        assert!(!is_document_content_path(
-            "projects/p1/volumes/v1/volume.json"
-        ));
+        assert!(!is_document_content_path("volumes/v1/volume.json"));
 
         // P1-3: expanded user text document paths
-        assert!(is_document_content_path("projects/p1/note.md"));
-        assert!(is_document_content_path(
-            "projects/p1/volumes/v1/outline.md"
-        ));
-        assert!(is_document_content_path(
-            "projects/p1/volumes/v1/chapters/c1/scene.md"
-        ));
-        assert!(is_document_content_path("projects/p1/character_notes.md"));
-        assert!(is_document_content_path("projects/p1/timeline_notes.md"));
-        assert!(is_document_content_path("projects/p1/draft.md"));
+        assert!(is_document_content_path("note.md"));
+        assert!(is_document_content_path("volumes/v1/outline.md"));
+        assert!(is_document_content_path("volumes/v1/chapters/c1/scene.md"));
+        assert!(is_document_content_path("character_notes.md"));
+        assert!(is_document_content_path("timeline_notes.md"));
+        assert!(is_document_content_path("draft.md"));
         // backups and app-meta are local-only, not user text
         assert!(!is_document_content_path("backups/chapters/c1_backup.md"));
         assert!(!is_document_content_path(
@@ -2058,7 +1960,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_lww_document_conflict_no_overwrite() {
         let dir = tempdir().unwrap();
-        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
         let chapter_abs = dir.path().join(chapter_rel);
         std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
 
@@ -2151,7 +2053,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_lww_document_conflict_manifest_not_polluted() {
         let dir = tempdir().unwrap();
-        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
         let chapter_abs = dir.path().join(chapter_rel);
         std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
 
@@ -2251,7 +2153,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_lww_document_only_local_changed_allows_upload() {
         let dir = tempdir().unwrap();
-        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
         let chapter_abs = dir.path().join(chapter_rel);
         std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
 
@@ -2323,7 +2225,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_lww_document_only_remote_changed_downloads() {
         let dir = tempdir().unwrap();
-        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
         let chapter_abs = dir.path().join(chapter_rel);
         std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
 
@@ -2398,7 +2300,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_lww_document_remote_delete_local_modified_is_conflict() {
         let dir = tempdir().unwrap();
-        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
         let chapter_abs = dir.path().join(chapter_rel);
         std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
 
@@ -2476,7 +2378,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_lww_conflict_persists_across_syncs() {
         let dir = tempdir().unwrap();
-        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
         let chapter_abs = dir.path().join(chapter_rel);
         std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
 
@@ -2622,33 +2524,13 @@ mod tests {
         let _ = server_thread2.join();
     }
 
-    #[test]
-    #[cfg(feature = "git-https")]
-    fn test_semantic_merge_json_basic() {
-        let mut base = serde_json::Map::new();
-        base.insert("a".to_string(), serde_json::json!(1));
-        base.insert("b".to_string(), serde_json::json!(2));
-
-        let mut local = serde_json::Map::new();
-        local.insert("a".to_string(), serde_json::json!(10));
-        local.insert("b".to_string(), serde_json::json!(2));
-
-        let mut remote = serde_json::Map::new();
-        remote.insert("a".to_string(), serde_json::json!(1));
-        remote.insert("b".to_string(), serde_json::json!(20));
-
-        let merged = SyncService::semantic_merge_json(&base, &local, &remote).unwrap();
-        assert_eq!(merged.get("a"), Some(&serde_json::json!(10)));
-        assert_eq!(merged.get("b"), Some(&serde_json::json!(20)));
-    }
-
     /// P0-1: Test that resolve_conflict_keep_local properly clears the conflict
     /// and sets known_files to the remote hash so the next sync uploads local.
     #[test]
     #[cfg(feature = "github-api")]
     fn test_resolve_conflict_keep_local() {
         let dir = tempdir().unwrap();
-        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
         let chapter_abs = dir.path().join(chapter_rel);
         std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
 
@@ -2702,7 +2584,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_resolve_conflict_take_remote() {
         let dir = tempdir().unwrap();
-        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
 
         let base_hash = "hash_base_A".to_string();
         let remote_hash = "hash_remote_C".to_string();
@@ -2754,7 +2636,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_resolve_conflict_mark_merged() {
         let dir = tempdir().unwrap();
-        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
         let chapter_abs = dir.path().join(chapter_rel);
         std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
 
@@ -2809,7 +2691,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_resolve_conflict_then_sync_recovers() {
         let dir = tempdir().unwrap();
-        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
         let chapter_abs = dir.path().join(chapter_rel);
         std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
 
@@ -2991,7 +2873,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_resolve_conflict_take_remote_then_sync() {
         let dir = tempdir().unwrap();
-        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
         let chapter_abs = dir.path().join(chapter_rel);
         std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
 
@@ -3171,7 +3053,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_pending_take_remote_remote_missing_no_upload() {
         let dir = tempdir().unwrap();
-        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
         let chapter_abs = dir.path().join(chapter_rel);
         std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
 
@@ -3282,7 +3164,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_pending_take_remote_remote_exists_downloads_and_clears() {
         let dir = tempdir().unwrap();
-        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
         let chapter_abs = dir.path().join(chapter_rel);
         std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
 

@@ -90,9 +90,6 @@ pub enum Error {
     /// Git checkout 冲突（本地有未提交变更阻止 pull）。不可恢复，需用户处理。
     #[error("Sync checkout conflict: {summary_json}")]
     SyncCheckoutConflict { summary_json: String },
-    /// 设置键冲突（逐键语义合并时双方修改了同一 key）。不可恢复，需用户决策。
-    #[error("Sync settings conflict: {details_json}")]
-    SyncSettingsConflict { details_json: String },
     /// 同步冲突已检测到（通用标记）。
     #[error("Sync conflict detected")]
     SyncConflictDetected,
@@ -156,7 +153,6 @@ impl Error {
             Error::SyncDocumentConflict { .. } => "SYNC_DOCUMENT_CONFLICT",
             Error::SyncIncompleteTransaction { .. } => "SYNC_INCOMPLETE_TRANSACTION",
             Error::SyncCheckoutConflict { .. } => "SYNC_CHECKOUT_CONFLICT",
-            Error::SyncSettingsConflict { .. } => "SYNC_SETTINGS_CONFLICT",
             Error::SyncConflictDetected => "SYNC_CONFLICT_DETECTED",
             Error::SyncNonFastForward { .. } => "SYNC_NON_FAST_FORWARD",
             Error::SyncUnrelatedHistories { .. } => "SYNC_UNRELATED_HISTORIES",
@@ -189,7 +185,6 @@ impl Error {
             Error::SyncDocumentConflict { .. } => false,
             Error::SyncIncompleteTransaction { .. } => true,
             Error::SyncCheckoutConflict { .. } => false,
-            Error::SyncSettingsConflict { .. } => false,
             Error::SyncConflictDetected => false,
             Error::SyncNonFastForward { .. } => false,
             Error::SyncUnrelatedHistories { .. } => false,
@@ -246,9 +241,6 @@ impl Error {
             }
             Error::SyncCheckoutConflict { summary_json } => {
                 m.insert("summary_json".into(), summary_json.clone());
-            }
-            Error::SyncSettingsConflict { details_json } => {
-                m.insert("details_json".into(), details_json.clone());
             }
             Error::SyncNonFastForward { detail } => {
                 m.insert("detail".into(), detail.clone());
@@ -312,7 +304,6 @@ impl Error {
             Error::SyncDocumentConflict { .. } => "conflict",
             Error::SyncIncompleteTransaction { .. } => "local_io_error",
             Error::SyncCheckoutConflict { .. } => "checkout_conflict",
-            Error::SyncSettingsConflict { .. } => "conflict",
             Error::SyncConflictDetected => "conflict",
             Error::SyncNonFastForward { .. } => "non_fast_forward",
             Error::SyncUnrelatedHistories { .. } => "unrelated_histories",

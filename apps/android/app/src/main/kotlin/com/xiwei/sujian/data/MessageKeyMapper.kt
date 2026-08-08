@@ -37,7 +37,6 @@ object MessageKeyMapper {
             "error.sync_document_conflict" -> context.getString(R.string.error_sync_document_conflict)
             "error.sync_incomplete_transaction" -> context.getString(R.string.error_sync_incomplete_transaction)
             "error.sync_checkout_conflict" -> context.getString(R.string.error_sync_checkout_conflict)
-            "error.sync_settings_conflict" -> context.getString(R.string.error_sync_settings_conflict)
             "error.sync_conflict_detected" -> context.getString(R.string.error_sync_conflict_detected)
             "error.sync_non_fast_forward" -> context.getString(R.string.error_sync_non_fast_forward)
             "error.sync_unrelated_histories" -> context.getString(R.string.error_sync_unrelated_histories)

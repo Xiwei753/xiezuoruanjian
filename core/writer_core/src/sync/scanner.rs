@@ -1,10 +1,10 @@
 //! # 同步扫描与计划构建
 //!
-//! 扫描工作区文件系统，构建上传/删除计划。与 `SyncService` 配合使用。
+//! 扫描作品目录文件系统，构建上传/删除计划。与 `SyncService` 配合使用。
 //!
 //! ## 扫描逻辑
 //!
-//! - 遍历工作区所有文件（跳过 `.git/`）
+//! - 遍历作品目录所有文件（跳过 `.git/`）
 //! - 白名单路径标记为 `Upload`，其余为 `Ignore`
 //! - 黑名单路径直接忽略（不进入上传计划）
 //!
@@ -20,7 +20,7 @@ use crate::sync::SyncService;
 use std::path::Path;
 
 #[allow(clippy::cast_possible_wrap)]
-/// 扫描工作区所有文件，生成 `SyncFileEntry` 列表。
+/// 扫描作品目录所有文件，生成 `SyncFileEntry` 列表。
 ///
 /// `.git/` 目录被排除。`modified_time` 使用 Unix epoch 秒；
 /// 文件 hash 为空字符串表示计算失败（扫描不因单个文件失败而中断）。

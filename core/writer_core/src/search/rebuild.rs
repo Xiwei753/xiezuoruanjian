@@ -11,8 +11,14 @@ pub fn rebuild_index(
 ) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
 
-    entries.extend(extractor::extract_chapter_entries(projects_root, project_id)?);
-    entries.extend(extractor::extract_starmap_entries(app_data_root, project_id)?);
+    entries.extend(extractor::extract_chapter_entries(
+        projects_root,
+        project_id,
+    )?);
+    entries.extend(extractor::extract_starmap_entries(
+        app_data_root,
+        project_id,
+    )?);
     entries.extend(extractor::extract_setting_entries(app_data_root)?);
 
     Ok(entries)

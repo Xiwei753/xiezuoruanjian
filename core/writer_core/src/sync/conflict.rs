@@ -9,20 +9,15 @@
 //! - `resolve_conflict_keep_local`：保留本地版本，丢弃远端变更
 //! - `resolve_conflict_take_remote`：接受远端版本，丢弃本地变更
 //! - `resolve_conflict_mark_merged`：标记为已合并（用户手动解决后调用）
-//!
-//! `semantic_merge_json` 对设置文件执行逐键三路合并，自动解决单方修改的 key，
-//! 仅双方修改同一 key 且值不同时才报告冲突。
 
 #[cfg(feature = "git-https")]
 use crate::sync::service::SyncService;
-#[cfg(feature = "git-https")]
-use crate::sync::types::SettingConflictDetail;
 use crate::sync::types::SyncConflict;
 #[cfg(feature = "git-https")]
 use crate::sync::types::SyncConflictSummary;
 use std::path::Path;
 
-/// 扫描工作区 Git 状态，返回 (是否有脏文件, 脏文件路径列表)。
+/// 扫描作品目录 Git 状态，返回 (是否有脏文件, 脏文件路径列表)。
 /// 仅统计白名单内且非黑名单的路径——黑名单路径（如 app-meta 内部文件）
 /// 不影响同步决策。
 #[cfg(feature = "git-https")]
@@ -106,7 +101,7 @@ pub(crate) fn collect_index_conflicts(repo: &git2::Repository) -> Vec<String> {
 /// 构建同步冲突摘要——诊断当前同步状态并收集冲突文件列表。
 ///
 /// 冲突文件来源有两个：
-/// 1. **dry-run checkout**：模拟 `git checkout` 检测远端与本地的工作区冲突
+/// 1. **dry-run checkout**：模拟 `git checkout` 检测远端与本地的作品目录冲突
 /// 2. **index conflicts**：`git merge` 后留在 index 中的未解决冲突
 ///
 /// 两者合并去重后过滤掉黑名单路径和非白名单路径。
@@ -185,113 +180,10 @@ pub(crate) fn build_conflict_summary(
         conflicted_files,
         blocked_reason: blocked_reason.to_string(),
         safe_next_steps: vec![
-            "备份当前工作区。".to_string(),
+            "备份当前作品目录。".to_string(),
             "运行诊断确认网络/认证没问题。".to_string(),
             "手动处理冲突后重新同步。".to_string(),
         ],
-    }
-}
-
-#[cfg(feature = "git-https")]
-impl crate::sync::SyncService {
-    /// 逐键三路合并 JSON 设置对象。
-    ///
-    /// 以 base 为双方上次同步后的共识版本，对每个 key 独立判断：
-    /// - local == remote：取任一方
-    /// - 仅一方修改：取修改方
-    /// - 双方都修改且值不同：记录冲突
-    /// - 一方删除、另一方未修改 base：跟随删除
-    /// - 一方删除、另一方修改了 base：记录冲突（删除 vs 修改）
-    ///
-    /// 返回合并后的 Map；若有任何 key 冲突则返回冲突列表。
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cognitive_complexity,
-        clippy::excessive_nesting,
-        clippy::too_many_arguments,
-        clippy::type_complexity
-    )]
-    pub(crate) fn semantic_merge_json(
-        base: &serde_json::Map<String, serde_json::Value>,
-        local: &serde_json::Map<String, serde_json::Value>,
-        remote: &serde_json::Map<String, serde_json::Value>,
-    ) -> Result<serde_json::Map<String, serde_json::Value>, Vec<SettingConflictDetail>> {
-        let mut merged = serde_json::Map::new();
-        let mut conflicts = Vec::new();
-
-        // Collect all keys from all three maps
-        let mut keys: std::collections::HashSet<&String> = base.keys().collect();
-        keys.extend(local.keys());
-        keys.extend(remote.keys());
-
-        for key in keys {
-            let base_val = base.get(key);
-            let local_val = local.get(key);
-            let remote_val = remote.get(key);
-
-            match (base_val, local_val, remote_val) {
-                (None, None, None) => {}
-                // 本地有值、远端已删除：若本地值与 base 相同则跟随删除，否则报告冲突（删除 vs 修改）
-                (_, Some(l), None) => {
-                    if base_val == Some(l) {
-                        // Deleted in remote, unmodified in local
-                    } else {
-                        conflicts.push(SettingConflictDetail {
-                            key: key.clone(),
-                            local_value: l.clone(),
-                            remote_value: serde_json::Value::Null,
-                        });
-                    }
-                }
-                // 远端有值、本地已删除：若远端值与 base 相同则跟随删除，否则报告冲突（删除 vs 修改）
-                (_, None, Some(r)) => {
-                    if base_val == Some(r) {
-                        // Deleted in local, unmodified in remote
-                    } else {
-                        conflicts.push(SettingConflictDetail {
-                            key: key.clone(),
-                            local_value: serde_json::Value::Null,
-                            remote_value: r.clone(),
-                        });
-                    }
-                }
-                (Some(b), Some(l), Some(r)) => {
-                    if l == r {
-                        merged.insert(key.clone(), l.clone());
-                    } else if l == b {
-                        merged.insert(key.clone(), r.clone());
-                    } else if r == b {
-                        merged.insert(key.clone(), l.clone());
-                    } else {
-                        conflicts.push(SettingConflictDetail {
-                            key: key.clone(),
-                            local_value: l.clone(),
-                            remote_value: r.clone(),
-                        });
-                    }
-                }
-                // base 无值、双方都新增：值相同则取任一方，值不同则报告冲突
-                (None, Some(l), Some(r)) => {
-                    if l == r {
-                        merged.insert(key.clone(), l.clone());
-                    } else {
-                        conflicts.push(SettingConflictDetail {
-                            key: key.clone(),
-                            local_value: l.clone(),
-                            remote_value: r.clone(),
-                        });
-                    }
-                }
-                // base 有值、双方都删除：无冲突，跟随删除
-                (Some(_b), None, None) => {}
-            }
-        }
-
-        if !conflicts.is_empty() {
-            Err(conflicts)
-        } else {
-            Ok(merged)
-        }
     }
 }
 

@@ -229,12 +229,6 @@ data class SyncConflictSummary(
     val safeNextSteps: List<String> = emptyList(),
 )
 
-data class SettingConflictDetail(
-    val key: String,
-    val localValue: String,
-    val remoteValue: String,
-)
-
 data class SyncConflict(
     val localPath: String,
     val remotePath: String,
@@ -275,7 +269,6 @@ data class SyncResult(
     val ignoredFiles: List<String> = emptyList(),
     val conflicts: List<SyncConflict> = emptyList(),
     val conflictSummary: SyncConflictSummary? = null,
-    val settingsConflicts: List<SettingConflictDetail>? = null,
     val commitHash: String? = null,
     val error: String? = null,
     val errorCategory: String? = null,

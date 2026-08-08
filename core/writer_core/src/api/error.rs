@@ -241,9 +241,6 @@ impl From<crate::error::Error> for WriterError {
             Error::SyncCheckoutConflict { summary_json } => {
                 WriterError::Conflict(format!("checkout_conflict: {}", summary_json))
             }
-            Error::SyncSettingsConflict { details_json } => {
-                WriterError::Conflict(format!("settings_conflict: {}", details_json))
-            }
             Error::SyncConflictDetected => {
                 WriterError::Conflict("SyncConflict_Detected".to_string())
             }

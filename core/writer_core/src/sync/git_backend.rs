@@ -256,7 +256,7 @@ impl GitBackend for Git2Backend {
                                 blocked_reason: "本地 Git 暂存区存在未解决的冲突，请先解决冲突。"
                                     .to_string(),
                                 safe_next_steps: vec![
-                                    "备份当前工作区。".to_string(),
+                                    "备份当前作品目录。".to_string(),
                                     "运行诊断确认网络/认证没问题。".to_string(),
                                     "手动处理冲突后重新同步。".to_string(),
                                 ],
@@ -281,11 +281,11 @@ impl GitBackend for Git2Backend {
                     remote_changed: true,
                     conflicted_files: blocking_files.clone(),
                     blocked_reason: format!(
-                        "本地工作区有 {} 个未跟踪文件会阻止远端 checkout。",
+                        "本地作品目录有 {} 个未跟踪文件会阻止远端 checkout。",
                         blocking_files.len()
                     ),
                     safe_next_steps: vec![
-                        "备份当前工作区。".to_string(),
+                        "备份当前作品目录。".to_string(),
                         "运行诊断确认网络/认证没问题。".to_string(),
                         "手动处理冲突后重新同步。".to_string(),
                     ],
@@ -338,7 +338,7 @@ impl GitBackend for Git2Backend {
                         blocked_reason: "本地未提交的改动与远端更新冲突，Git 无法安全检出。"
                             .to_string(),
                         safe_next_steps: vec![
-                            "备份当前工作区。".to_string(),
+                            "备份当前作品目录。".to_string(),
                             "运行诊断确认网络/认证没问题。".to_string(),
                             "手动处理冲突后重新同步。".to_string(),
                         ],
@@ -413,124 +413,9 @@ impl GitBackend for Git2Backend {
                 }
             };
 
-            // Settings semantic merge conflict resolution
-            let mut settings_conflict_details = None;
-            let mut resolved_settings = false;
-            if index.has_conflicts() {
-                if let Ok(mut conflicts) = index.conflicts() {
-                    let mut settings_conflict = None;
-                    for c in conflicts.by_ref().flatten() {
-                        let path_opt = c
-                            .our
-                            .as_ref()
-                            .map(|o| String::from_utf8_lossy(&o.path).to_string())
-                            .or_else(|| {
-                                c.their
-                                    .as_ref()
-                                    .map(|t| String::from_utf8_lossy(&t.path).to_string())
-                            })
-                            .or_else(|| {
-                                c.ancestor
-                                    .as_ref()
-                                    .map(|a| String::from_utf8_lossy(&a.path).to_string())
-                            });
-                        if let Some(p) = path_opt {
-                            if p == "app-meta/settings/settings.sync.json" {
-                                settings_conflict = Some(c);
-                                break;
-                            }
-                        }
-                    }
-
-                    if let Some(c) = settings_conflict {
-                        let base_json = c
-                            .ancestor
-                            .as_ref()
-                            .and_then(|entry| repo.find_blob(entry.id).ok())
-                            .and_then(|blob| {
-                                let s = std::str::from_utf8(blob.content()).ok()?;
-                                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
-                                    s,
-                                )
-                                .ok()
-                            })
-                            .unwrap_or_default();
-
-                        let local_json = c
-                            .our
-                            .as_ref()
-                            .and_then(|entry| repo.find_blob(entry.id).ok())
-                            .and_then(|blob| {
-                                let s = std::str::from_utf8(blob.content()).ok()?;
-                                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
-                                    s,
-                                )
-                                .ok()
-                            })
-                            .unwrap_or_default();
-
-                        let remote_json = c
-                            .their
-                            .as_ref()
-                            .and_then(|entry| repo.find_blob(entry.id).ok())
-                            .and_then(|blob| {
-                                let s = std::str::from_utf8(blob.content()).ok()?;
-                                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
-                                    s,
-                                )
-                                .ok()
-                            })
-                            .unwrap_or_default();
-
-                        match SyncService::semantic_merge_json(
-                            &base_json,
-                            &local_json,
-                            &remote_json,
-                        ) {
-                            Ok(merged_map) => {
-                                let merged_value = serde_json::Value::Object(merged_map);
-                                let merged_str =
-                                    serde_json::to_string_pretty(&merged_value).unwrap_or_default();
-
-                                let settings_path =
-                                    local_repo_path.join("app-meta/settings/settings.sync.json");
-                                if let Some(parent) = settings_path.parent() {
-                                    std::fs::create_dir_all(parent).ok();
-                                }
-                                let _ = std::fs::write(&settings_path, &merged_str);
-
-                                if let Ok(mut mut_index) = repo.index() {
-                                    if mut_index
-                                        .add_path(Path::new("app-meta/settings/settings.sync.json"))
-                                        .is_ok()
-                                    {
-                                        let _ = mut_index.write();
-                                        resolved_settings = true;
-                                    }
-                                }
-                            }
-                            Err(key_conflicts) => {
-                                settings_conflict_details = Some(key_conflicts);
-                            }
-                        }
-                    }
-                }
-            }
-
-            if resolved_settings {
-                if let Ok(reloaded) = repo.index() {
-                    index = reloaded;
-                }
-            }
-
-            if let Some(details) = settings_conflict_details {
-                rollback(&repo);
-                let payload = serde_json::to_string(&details).unwrap_or_default();
-                return Err(crate::Error::SyncSettingsConflict {
-                    details_json: payload,
-                });
-            }
-
+            // 设置文件不再参与作品仓库同步（应用级配置位于 app_data_root，
+            // 不在作品仓库内，Issue #600），因此这里不做 settings 语义合并，
+            // 任何索引冲突统一走通用冲突处理。
             if index.has_conflicts() {
                 rollback(&repo);
                 return Err(crate::Error::SyncConflictDetected);

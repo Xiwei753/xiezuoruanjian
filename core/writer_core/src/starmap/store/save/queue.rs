@@ -44,8 +44,12 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_nodes.iter().cloned().collect();
                     for node_id in &ids {
                         if let Some(node) = self.nodes.get(node_id) {
-                            if package_storage::save_node(&self.app_data_root, &self.starmap_id, node)
-                                .is_err()
+                            if package_storage::save_node(
+                                &self.app_data_root,
+                                &self.starmap_id,
+                                node,
+                            )
+                            .is_err()
                             {
                                 succeeded = false;
                                 break;
@@ -58,8 +62,12 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_edges.iter().cloned().collect();
                     for edge_id in &ids {
                         if let Some(edge) = self.edges.get(edge_id) {
-                            if package_storage::save_edge(&self.app_data_root, &self.starmap_id, edge)
-                                .is_err()
+                            if package_storage::save_edge(
+                                &self.app_data_root,
+                                &self.starmap_id,
+                                edge,
+                            )
+                            .is_err()
                             {
                                 succeeded = false;
                                 break;
@@ -72,8 +80,12 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_embeds.iter().cloned().collect();
                     for instance_id in &ids {
                         if let Some(embed) = self.embeds.get(instance_id) {
-                            if package_storage::save_embed(&self.app_data_root, &self.starmap_id, embed)
-                                .is_err()
+                            if package_storage::save_embed(
+                                &self.app_data_root,
+                                &self.starmap_id,
+                                embed,
+                            )
+                            .is_err()
                             {
                                 succeeded = false;
                                 break;
@@ -86,8 +98,12 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_links.iter().cloned().collect();
                     for link_id in &ids {
                         if let Some(link) = self.links.get(link_id) {
-                            if package_storage::save_link(&self.app_data_root, &self.starmap_id, link)
-                                .is_err()
+                            if package_storage::save_link(
+                                &self.app_data_root,
+                                &self.starmap_id,
+                                link,
+                            )
+                            .is_err()
                             {
                                 succeeded = false;
                                 break;
@@ -362,7 +378,8 @@ impl StarMapStore {
 
         let node_ids_to_delete: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
         for node_id in &node_ids_to_delete {
-            match package_storage::delete_node_file(&self.app_data_root, &self.starmap_id, node_id) {
+            match package_storage::delete_node_file(&self.app_data_root, &self.starmap_id, node_id)
+            {
                 Ok(()) => {
                     self.deleted_node_ids.remove(node_id);
                 }
@@ -376,7 +393,8 @@ impl StarMapStore {
 
         let edge_ids_to_delete: Vec<String> = self.deleted_edge_ids.iter().cloned().collect();
         for edge_id in &edge_ids_to_delete {
-            match package_storage::delete_edge_file(&self.app_data_root, &self.starmap_id, edge_id) {
+            match package_storage::delete_edge_file(&self.app_data_root, &self.starmap_id, edge_id)
+            {
                 Ok(()) => {
                     self.deleted_edge_ids.remove(edge_id);
                 }
@@ -390,8 +408,11 @@ impl StarMapStore {
 
         let embed_ids_to_delete: Vec<String> = self.deleted_embed_ids.iter().cloned().collect();
         for instance_id in &embed_ids_to_delete {
-            match package_storage::delete_embed_file(&self.app_data_root, &self.starmap_id, instance_id)
-            {
+            match package_storage::delete_embed_file(
+                &self.app_data_root,
+                &self.starmap_id,
+                instance_id,
+            ) {
                 Ok(()) => {
                     self.deleted_embed_ids.remove(instance_id);
                 }
@@ -405,7 +426,8 @@ impl StarMapStore {
 
         let link_ids_to_delete: Vec<String> = self.deleted_link_ids.iter().cloned().collect();
         for link_id in &link_ids_to_delete {
-            match package_storage::delete_link_file(&self.app_data_root, &self.starmap_id, link_id) {
+            match package_storage::delete_link_file(&self.app_data_root, &self.starmap_id, link_id)
+            {
                 Ok(()) => {
                     self.deleted_link_ids.remove(link_id);
                 }
@@ -419,7 +441,11 @@ impl StarMapStore {
 
         let hl_ids_to_delete: Vec<String> = self.deleted_hyperlink_ids.iter().cloned().collect();
         for hl_id in &hl_ids_to_delete {
-            match package_storage::delete_hyperlink_file(&self.app_data_root, &self.starmap_id, hl_id) {
+            match package_storage::delete_hyperlink_file(
+                &self.app_data_root,
+                &self.starmap_id,
+                hl_id,
+            ) {
                 Ok(()) => {
                     self.deleted_hyperlink_ids.remove(hl_id);
                 }

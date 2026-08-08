@@ -1,6 +1,5 @@
 package com.xiwei.sujian.platform
 
-import android.os.Build
 import android.os.Environment
 import java.io.File
 
@@ -54,14 +53,11 @@ object AndroidDataRoot {
 
     /**
      * 是否拥有共享存储访问权限。
-     * - Android 11+（API 30+）：[Environment.isExternalStorageManager]。
-     * - Android 10 及以下：始终返回 true（旧版使用经典运行时权限，由系统保证）。
+     *
+     * 基线为 API 30（minSdk=30）：共享存储的普通文件路径语义只由
+     * [Environment.isExternalStorageManager] 保证，低版本不再伪装兼容
+     * （旧存储权限无法在 targetSdk=36 下提供 `/storage/emulated/0` 的
+     * 普通文件路径语义，见 Issue #600）。
      */
-    fun hasStorageAccess(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Environment.isExternalStorageManager()
-        } else {
-            true
-        }
-    }
+    fun hasStorageAccess(): Boolean = Environment.isExternalStorageManager()
 }

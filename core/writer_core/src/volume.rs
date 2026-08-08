@@ -111,9 +111,7 @@ pub fn create_volume(project_root: &Path, title: &str) -> Result<Volume> {
         order,
     };
 
-    let volume_dir = project_root
-        .join("volumes")
-        .join(&id);
+    let volume_dir = project_root.join("volumes").join(&id);
     fs::create_dir_all(&volume_dir)?;
     fs::create_dir_all(volume_dir.join("chapters"))?;
 
@@ -124,14 +122,8 @@ pub fn create_volume(project_root: &Path, title: &str) -> Result<Volume> {
     Ok(volume)
 }
 
-pub fn rename_volume(
-    project_root: &Path,
-    volume_id: &str,
-    new_title: &str,
-) -> Result<()> {
-    let volume_dir = project_root
-        .join("volumes")
-        .join(volume_id);
+pub fn rename_volume(project_root: &Path, volume_id: &str, new_title: &str) -> Result<()> {
+    let volume_dir = project_root.join("volumes").join(volume_id);
     let meta_path = volume_dir.join("volume.json");
 
     if !meta_path.exists() {
@@ -157,9 +149,7 @@ pub fn rename_volume(
 /// 同时生成 tombstone 记录供同步使用。
 pub fn delete_volume(project_root: &Path, volume_id: &str, app_data_root: &Path) -> Result<()> {
     let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
-    let volume_dir = project_root
-        .join("volumes")
-        .join(volume_id);
+    let volume_dir = project_root.join("volumes").join(volume_id);
     let target_canon =
         crate::delete_guard::validate_delete_target(project_root, &volume_dir, "volume.json")?;
 
@@ -194,10 +184,7 @@ pub fn delete_volume(project_root: &Path, volume_id: &str, app_data_root: &Path)
 /// `ordered_ids` 必须是当前项目所有卷 ID 的精确排列（集合完全一致，无遗漏无多余），
 /// 否则返回错误。每个卷的 `order` 字段被设置为该 ID 在列表中的索引。
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-pub fn reorder_volumes(
-    project_root: &Path,
-    ordered_ids: &[String],
-) -> Result<()> {
+pub fn reorder_volumes(project_root: &Path, ordered_ids: &[String]) -> Result<()> {
     let volumes = list_volumes(project_root)?;
     let existing_ids: std::collections::HashSet<_> = volumes.iter().map(|v| v.id.clone()).collect();
     let new_ids: std::collections::HashSet<_> = ordered_ids.iter().cloned().collect();
@@ -212,9 +199,7 @@ pub fn reorder_volumes(
     }
 
     for (index, id) in ordered_ids.iter().enumerate() {
-        let volume_dir = project_root
-            .join("volumes")
-            .join(id);
+        let volume_dir = project_root.join("volumes").join(id);
         let meta_path = volume_dir.join("volume.json");
 
         if meta_path.exists() {

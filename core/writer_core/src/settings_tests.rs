@@ -3,7 +3,7 @@ mod tests {
     use crate::settings::{
         load_local_settings, load_syncable_settings, save_local_settings, save_syncable_settings,
     };
-        use tempfile::tempdir;
+    use tempfile::tempdir;
 
     #[test]
     fn test_settings() {

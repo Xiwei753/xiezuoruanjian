@@ -23,8 +23,6 @@ use crate::sync::lww;
 use crate::sync::scanner;
 #[cfg(feature = "git-https")]
 use crate::sync::types::FirstSyncMode;
-#[cfg(feature = "git-https")]
-use crate::sync::types::SettingConflictDetail;
 use crate::sync::types::SyncConfig;
 #[cfg(feature = "git-https")]
 use crate::sync::types::SyncConflict;
@@ -74,7 +72,6 @@ fn classify_error(e: &crate::Error) -> SyncStatus {
         }
         crate::Error::SyncNetworkUnavailable { .. } => SyncStatus::RecoverableError(e.to_string()),
         crate::Error::SyncCheckoutConflict { .. }
-        | crate::Error::SyncSettingsConflict { .. }
         | crate::Error::SyncConflictDetected
         | crate::Error::SyncDocumentConflict { .. } => SyncStatus::Conflict,
         crate::Error::SyncNonFastForward { .. } => SyncStatus::RecoverableError(e.to_string()),
@@ -172,10 +169,7 @@ impl SyncService {
 
 impl SyncService {
     /// 干运行——构建同步计划但不执行文件传输。config.enabled=false 时返回空计划。
-    pub fn perform_sync_dry_run(
-        sync_root: &Path,
-        config: &SyncConfig,
-    ) -> crate::Result<SyncPlan> {
+    pub fn perform_sync_dry_run(sync_root: &Path, config: &SyncConfig) -> crate::Result<SyncPlan> {
         if !config.enabled {
             return Ok(SyncPlan::new());
         }
@@ -218,31 +212,6 @@ fn handle_pull_error(
     first_sync_mode: FirstSyncMode,
 ) -> PullOutcome {
     match &e {
-        crate::Error::SyncSettingsConflict { details_json } => {
-            let details: Option<Vec<SettingConflictDetail>> =
-                serde_json::from_str(details_json).ok();
-            let mut res = SyncResult::error(
-                SyncStatus::Conflict,
-                first_sync_mode,
-                "Settings semantic merge conflict".to_string(),
-                Some("conflict".to_string()),
-            );
-            res.settings_conflicts = details;
-            let summary = SyncConflictSummary {
-                status: "conflict".to_string(),
-                local_dirty: true,
-                remote_changed: true,
-                conflicted_files: vec!["app-meta/settings/settings.sync.json".to_string()],
-                blocked_reason: "本地和远端都修改了设置文件 settings.sync.json 且产生了冲突。"
-                    .to_string(),
-                safe_next_steps: vec![
-                    "手动检查本地与远端设置。".to_string(),
-                    "重新保存设置以覆盖或重新同步。".to_string(),
-                ],
-            };
-            res.conflict_summary = Some(summary);
-            PullOutcome::Return(res)
-        }
         crate::Error::SyncCheckoutConflict { summary_json } => {
             let summary: Option<SyncConflictSummary> = serde_json::from_str(summary_json).ok();
             let mut res = SyncResult::error(
@@ -448,7 +417,7 @@ fn handle_merge_conflict(
         conflicted_files,
         blocked_reason: "自动合并失败，本地和远端都修改了同一批同步文件。".to_string(),
         safe_next_steps: vec![
-            "备份当前工作区。".to_string(),
+            "备份当前作品目录。".to_string(),
             "运行诊断确认网络/认证没问题。".to_string(),
             "手动处理冲突后重新同步。".to_string(),
         ],
@@ -846,14 +815,14 @@ impl SyncService {
         }
     }
 
-    /// 扫描工作区中所有可同步文件。
+    /// 扫描作品目录中所有可同步文件。
     pub fn scan_for_sync(
         sync_root: &Path,
     ) -> crate::Result<Vec<crate::sync::types::SyncFileEntry>> {
         scanner::scan_for_sync(sync_root)
     }
 
-    /// 从工作区构建同步计划（上传/下载/删除/冲突文件列表）。
+    /// 从作品目录构建同步计划（上传/下载/删除/冲突文件列表）。
     pub fn build_sync_plan(sync_root: &Path) -> crate::Result<SyncPlan> {
         scanner::build_sync_plan(sync_root)
     }

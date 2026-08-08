@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::project::{create_project, list_projects};
-        use tempfile::tempdir;
+    use tempfile::tempdir;
 
     #[test]
     fn test_create_and_list_project() {
@@ -19,9 +19,64 @@ mod tests {
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].title, "Test Project");
 
-        let volumes = crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
+        let volumes =
+            crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         assert_eq!(volumes.len(), 1);
         assert_eq!(volumes[0].title, "第一卷");
+    }
+
+    #[test]
+    fn test_create_project_initializes_git_repo() {
+        let dir = tempdir().unwrap();
+        let data_root = dir.path();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
+
+        let project = create_project(&data_root.join("projects"), "Test Git Repo").unwrap();
+        let project_dir = data_root.join("projects").join(&project.id);
+
+        // 新建作品必须自带 .git/，Git 是作品存储基础（Issue #600），
+        // 不能等第一次同步才初始化。
+        assert!(project_dir.join(".git").exists());
+        assert!(
+            git2::Repository::open(&project_dir).is_ok(),
+            "project dir must be an openable Git repository"
+        );
+
+        // 重复初始化幂等：再次 ensure 不应报错。
+        crate::storage::project_git::ensure_project_repo(&project_dir).unwrap();
+    }
+
+    #[test]
+    fn test_list_projects_migrates_legacy_project_to_git_repo() {
+        let dir = tempdir().unwrap();
+        let data_root = dir.path();
+        let projects_root = data_root.join("projects");
+        std::fs::create_dir_all(&projects_root).unwrap();
+
+        // 手工构造旧版作品：只有 project.json，没有 .git/。
+        let legacy_id = "legacy-project-without-git";
+        let legacy_dir = projects_root.join(legacy_id);
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        let legacy = crate::project::Project {
+            id: legacy_id.to_string(),
+            title: "Legacy".to_string(),
+            created_at: "2026-01-01T00:00:00+00:00".to_string(),
+            updated_at: "2026-01-01T00:00:00+00:00".to_string(),
+            order: 0,
+        };
+        std::fs::write(
+            legacy_dir.join("project.json"),
+            serde_json::to_string_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+        assert!(!legacy_dir.join(".git").exists());
+
+        // 读取到有效 project.json 后应把旧作品永久迁移为 Git 仓库。
+        let projects = list_projects(&projects_root).unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].id, legacy_id);
+        assert!(legacy_dir.join(".git").exists());
+        assert!(git2::Repository::open(&legacy_dir).is_ok());
     }
 
     #[test]
@@ -33,7 +88,8 @@ mod tests {
         let _project1 = create_project(&data_root.join("projects"), "Project A").unwrap();
         let project2 = create_project(&data_root.join("projects"), "Project B").unwrap();
 
-        let result = crate::project::rename_project(&data_root.join("projects"), &project2.id, "Project A");
+        let result =
+            crate::project::rename_project(&data_root.join("projects"), &project2.id, "Project A");
         assert!(result.is_err());
         if let Err(crate::error::Error::Other(msg)) = result {
             assert_eq!(msg, "Project title already exists");
@@ -50,7 +106,9 @@ mod tests {
 
         let project = create_project(&data_root.join("projects"), "Test Stats Empty").unwrap();
 
-        let stats = crate::project::get_project_stats(&data_root.join("projects").join(&project.id)).unwrap();
+        let stats =
+            crate::project::get_project_stats(&data_root.join("projects").join(&project.id))
+                .unwrap();
         assert_eq!(stats.volume_count, 1); // create_project automatically generates a default volume
         assert_eq!(stats.chapter_count, 0);
         assert_eq!(stats.total_word_count, 0);
@@ -65,37 +123,69 @@ mod tests {
         let project = create_project(&data_root.join("projects"), "Test Stats Data").unwrap();
 
         // project already has 1 default volume "第一卷"
-        let volumes = crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
+        let volumes =
+            crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         assert_eq!(volumes.len(), 1);
         let vol1_id = &volumes[0].id;
 
         // Add second volume
-        let vol2 = crate::volume::create_volume(&data_root.join("projects").join(&project.id), "第二卷").unwrap();
+        let vol2 =
+            crate::volume::create_volume(&data_root.join("projects").join(&project.id), "第二卷")
+                .unwrap();
 
         // Add chapters
-        let c1 = crate::chapter::create_chapter(&data_root.join("projects").join(&project.id), vol1_id, "Chapter 1")
-            .unwrap();
-        let c2 = crate::chapter::create_chapter(&data_root.join("projects").join(&project.id), vol1_id, "Chapter 2")
-            .unwrap();
-        let c3 = crate::chapter::create_chapter(&data_root.join("projects").join(&project.id), &vol2.id, "Chapter 3")
-            .unwrap();
+        let c1 = crate::chapter::create_chapter(
+            &data_root.join("projects").join(&project.id),
+            vol1_id,
+            "Chapter 1",
+        )
+        .unwrap();
+        let c2 = crate::chapter::create_chapter(
+            &data_root.join("projects").join(&project.id),
+            vol1_id,
+            "Chapter 2",
+        )
+        .unwrap();
+        let c3 = crate::chapter::create_chapter(
+            &data_root.join("projects").join(&project.id),
+            &vol2.id,
+            "Chapter 3",
+        )
+        .unwrap();
 
         // Write content
         let content1 = "This is a test content.";
-        crate::chapter::save_chapter(&data_root.join("projects").join(&project.id), vol1_id, &c1.id, content1)
-            .unwrap();
+        crate::chapter::save_chapter(
+            &data_root.join("projects").join(&project.id),
+            vol1_id,
+            &c1.id,
+            content1,
+        )
+        .unwrap();
 
         let content2 = "More content.";
-        crate::chapter::save_chapter(&data_root.join("projects").join(&project.id), vol1_id, &c2.id, content2)
-            .unwrap();
+        crate::chapter::save_chapter(
+            &data_root.join("projects").join(&project.id),
+            vol1_id,
+            &c2.id,
+            content2,
+        )
+        .unwrap();
 
         let content3 = "Even more testing content.";
-        crate::chapter::save_chapter(&data_root.join("projects").join(&project.id), &vol2.id, &c3.id, content3)
-            .unwrap();
+        crate::chapter::save_chapter(
+            &data_root.join("projects").join(&project.id),
+            &vol2.id,
+            &c3.id,
+            content3,
+        )
+        .unwrap();
 
         // Calculate exact word counts using the core function for robust testing
 
-        let stats = crate::project::get_project_stats(&data_root.join("projects").join(&project.id)).unwrap();
+        let stats =
+            crate::project::get_project_stats(&data_root.join("projects").join(&project.id))
+                .unwrap();
         assert_eq!(stats.volume_count, 2);
         assert_eq!(stats.chapter_count, 3);
 
@@ -112,7 +202,9 @@ mod tests {
         let data_root = dir.path();
         std::fs::create_dir_all(data_root.join("projects")).unwrap();
 
-        let stats = crate::project::get_project_stats(&data_root.join("projects").join("non-existent-id")).unwrap();
+        let stats =
+            crate::project::get_project_stats(&data_root.join("projects").join("non-existent-id"))
+                .unwrap();
         assert_eq!(stats.volume_count, 0);
         assert_eq!(stats.chapter_count, 0);
         assert_eq!(stats.total_word_count, 0);

@@ -15,7 +15,11 @@ use std::path::Path;
 /// 将章节移动到回收站。
 ///
 /// 委托给 `chapter::delete_chapter`，将章节目录移动到 `app-meta/sync/trash/`。
-pub fn move_chapter_to_trash(projects_root: &Path, chapter_id: &str, app_data_root: &Path) -> Result<()> {
+pub fn move_chapter_to_trash(
+    projects_root: &Path,
+    chapter_id: &str,
+    app_data_root: &Path,
+) -> Result<()> {
     // 查找 chapter 所属的 project_id 和 volume_id
     // 遍历 projects 目录查找包含该 chapter 的 volume
     if !projects_root.exists() {
@@ -56,7 +60,7 @@ pub fn move_chapter_to_trash(projects_root: &Path, chapter_id: &str, app_data_ro
 /// 生成由于删除产生的墓碑记录。
 ///
 /// 遍历 trash 目录下所有文件，为每个文件生成一条 `Tombstone`：
-/// - `original_path`：文件在工作区中的原始相对路径（正斜杠，Git/远端约定）
+/// - `original_path`：文件在作品目录中的原始相对路径（正斜杠，Git/远端约定）
 /// - `trash_path`：文件在 trash 目录中的相对路径
 /// - `purge_after`：30 天后可清理（`scanner::build_sync_plan` 据此清理）
 /// - `original_hash`：从 `known_files` 中查找，缺失则为空字符串

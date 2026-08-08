@@ -5,7 +5,7 @@ mod tests {
         create_volume, delete_volume, list_volumes, normalize_rel_path, rename_volume,
         reorder_volumes,
     };
-        use tempfile::tempdir;
+    use tempfile::tempdir;
 
     #[test]
     fn test_create_and_list_volume() {
@@ -18,7 +18,8 @@ mod tests {
         let volumes = list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         assert_eq!(volumes.len(), 1);
 
-        let volume = create_volume(&data_root.join("projects").join(&project.id), "Test Volume").unwrap();
+        let volume =
+            create_volume(&data_root.join("projects").join(&project.id), "Test Volume").unwrap();
         assert_eq!(volume.title, "Test Volume");
 
         let volumes = list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
@@ -32,9 +33,15 @@ mod tests {
         std::fs::create_dir_all(data_root.join("projects")).unwrap();
 
         let project = create_project(&data_root.join("projects"), "Test Project").unwrap();
-        let volume = create_volume(&data_root.join("projects").join(&project.id), "Old Title").unwrap();
+        let volume =
+            create_volume(&data_root.join("projects").join(&project.id), "Old Title").unwrap();
 
-        rename_volume(&data_root.join("projects").join(&project.id), &volume.id, "New Title").unwrap();
+        rename_volume(
+            &data_root.join("projects").join(&project.id),
+            &volume.id,
+            "New Title",
+        )
+        .unwrap();
 
         let volumes = list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         let updated_volume = volumes.iter().find(|v| v.id == volume.id).unwrap();
@@ -49,7 +56,8 @@ mod tests {
 
         let project = create_project(&data_root.join("projects"), "Test Project").unwrap();
 
-        let result = rename_volume(&data_root.join("projects").join(&project.id),
+        let result = rename_volume(
+            &data_root.join("projects").join(&project.id),
             "non-existent-volume-id",
             "New Title",
         );
@@ -67,8 +75,10 @@ mod tests {
 
         let project = create_project(&data_root.join("projects"), "Test Project").unwrap();
 
-        let volume1 = create_volume(&data_root.join("projects").join(&project.id), "Volume 1").unwrap();
-        let _volume2 = create_volume(&data_root.join("projects").join(&project.id), "Volume 2").unwrap();
+        let volume1 =
+            create_volume(&data_root.join("projects").join(&project.id), "Volume 1").unwrap();
+        let _volume2 =
+            create_volume(&data_root.join("projects").join(&project.id), "Volume 2").unwrap();
 
         let volumes = list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         assert!(volumes.len() >= 2);
@@ -101,8 +111,10 @@ mod tests {
 
         let project = create_project(&data_root.join("projects"), "Test Project").unwrap();
 
-        let _volume1 = create_volume(&data_root.join("projects").join(&project.id), "Volume 1").unwrap();
-        let _volume2 = create_volume(&data_root.join("projects").join(&project.id), "Volume 2").unwrap();
+        let _volume1 =
+            create_volume(&data_root.join("projects").join(&project.id), "Volume 1").unwrap();
+        let _volume2 =
+            create_volume(&data_root.join("projects").join(&project.id), "Volume 2").unwrap();
 
         let volumes = list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         let mut ordered_ids = volumes.iter().map(|v| v.id.clone()).collect::<Vec<_>>();
@@ -128,12 +140,18 @@ mod tests {
         std::fs::create_dir_all(data_root.join("projects")).unwrap();
 
         let project = create_project(&data_root.join("projects"), "Test Project").unwrap();
-        let volume = create_volume(&data_root.join("projects").join(&project.id), "Test Volume").unwrap();
+        let volume =
+            create_volume(&data_root.join("projects").join(&project.id), "Test Volume").unwrap();
 
         let volumes_before = list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         let count_before = volumes_before.len();
 
-        delete_volume(&data_root.join("projects").join(&project.id), &volume.id, data_root).unwrap();
+        delete_volume(
+            &data_root.join("projects").join(&project.id),
+            &volume.id,
+            data_root,
+        )
+        .unwrap();
 
         let volumes_after = list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         assert_eq!(volumes_after.len(), count_before - 1);

@@ -14,8 +14,7 @@ fn test_starmap_graph_path() {
 
     let path = starmap_graph_path(app_data_root, starmap_id);
 
-    let expected =
-        std::path::PathBuf::from("/dummy/app_data/starmaps/test_starmap_id/graph.json");
+    let expected = std::path::PathBuf::from("/dummy/app_data/starmaps/test_starmap_id/graph.json");
     assert_eq!(path, expected);
 }
 

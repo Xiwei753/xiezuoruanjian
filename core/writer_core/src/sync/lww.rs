@@ -460,7 +460,7 @@ pub(crate) fn perform_lww_sync(
 ///
 /// 整体流程：
 /// 1. 拉取远端 Git tree 和 manifest，诊断 404（空仓库 vs 权限不足 vs 分支不存在）
-/// 2. 扫描本地工作区，构建 local_records（含 upsert 和 delete 墓碑）
+/// 2. 扫描本地作品目录，构建 local_records（含 upsert 和 delete 墓碑）
 /// 3. 处理 pending_take_remote：强制下载远端内容覆盖本地，不进入三路比较
 /// 4. 逐路径三路/LWW 比较：
 ///    - UserTextDocument 走三路比较，BothChanged 时记录冲突

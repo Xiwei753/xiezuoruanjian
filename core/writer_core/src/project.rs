@@ -13,6 +13,7 @@
 //! ```text
 //! projects/
 //!   {project_id}/
+//!     .git/                 # 作品自己的 Git 仓库（同步与版本管理）
 //!     project.json          # 项目元数据（id、title、order、时间戳）
 //!     volumes/              # 所有卷
 //!     characters/           # 角色数据（预留）
@@ -59,6 +60,9 @@ pub fn list_projects(projects_root: &Path) -> Result<Vec<Project>> {
             match fs::read_to_string(&meta_path) {
                 Ok(content) => {
                     if let Ok(project) = serde_json::from_str::<Project>(&content) {
+                        // 旧作品（无 .git/）在读取到有效 project.json 后永久迁移为 Git 仓库，
+                        // 不等到第一次同步才初始化（Issue #600）。
+                        crate::storage::project_git::ensure_project_repo(&entry.path())?;
                         projects.push(project);
                     }
                 }
@@ -169,6 +173,8 @@ pub fn create_project(projects_root: &Path, title: &str) -> Result<Project> {
 
     let project_dir = projects_root.join(&id);
     fs::create_dir_all(&project_dir)?;
+    // 每个作品目录自身就是 Git 仓库（Issue #600）：先初始化仓库，再写 project.json。
+    crate::storage::project_git::ensure_project_repo(&project_dir)?;
     fs::create_dir_all(project_dir.join("volumes"))?;
     fs::create_dir_all(project_dir.join("characters"))?;
 
@@ -184,7 +190,7 @@ pub fn create_project(projects_root: &Path, title: &str) -> Result<Project> {
 
 /// 重命名项目。
 ///
-/// 同一工作区内不允许重名（title 唯一性检查）。
+/// 同一作品根下不允许重名（title 唯一性检查）。
 /// 如果新标题已被其他项目使用，返回 `Error::Other`。
 pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -> Result<()> {
     let projects = list_projects(projects_root)?;
@@ -260,10 +266,7 @@ pub fn delete_project(projects_root: &Path, project_id: &str, app_data_root: &Pa
 ///
 /// 遍历该 volume 下所有 chapter.meta.json，取最大的 updated_at。
 /// 如果没有子章节，返回 volume.json 的 created_at 作为 fallback。
-pub fn get_volume_updated_at_aggregated(
-    project_root: &Path,
-    volume_id: &str,
-) -> Result<String> {
+pub fn get_volume_updated_at_aggregated(project_root: &Path, volume_id: &str) -> Result<String> {
     let chapters = crate::chapter::list_chapters(project_root, volume_id)?;
 
     if let Some(max_updated) = chapters.iter().map(|c| c.updated_at.as_str()).max() {
@@ -271,9 +274,7 @@ pub fn get_volume_updated_at_aggregated(
     }
 
     // Fallback: no chapters, use volume.json created_at
-    let volume_dir = project_root
-        .join("volumes")
-        .join(volume_id);
+    let volume_dir = project_root.join("volumes").join(volume_id);
     let meta_path = volume_dir.join("volume.json");
     if meta_path.exists() {
         let raw = fs::read_to_string(&meta_path)?;
@@ -289,9 +290,7 @@ pub fn get_volume_updated_at_aggregated(
 ///
 /// 遍历该 project 下所有 volume 下所有 chapter.meta.json，取最大的 updated_at。
 /// 如果没有子章节，返回 project.json 的 created_at 作为 fallback。
-pub fn get_project_updated_at_aggregated(
-    project_root: &Path,
-) -> Result<String> {
+pub fn get_project_updated_at_aggregated(project_root: &Path) -> Result<String> {
     let volumes = crate::volume::list_volumes(project_root)?;
 
     let mut max_updated: Option<String> = None;
@@ -379,18 +378,29 @@ mod tests {
         let data_root = temp_dir.path();
 
         std::fs::create_dir_all(data_root.join("projects")).unwrap();
-        let project = crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
+        let project =
+            crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
+        let volumes =
+            crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
         // Create two chapters
-        let ch1 =
-            crate::chapter::create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "Ch1").unwrap();
-        let _ch2 =
-            crate::chapter::create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "Ch2").unwrap();
+        let ch1 = crate::chapter::create_chapter(
+            &data_root.join("projects").join(&project.id),
+            &volume.id,
+            "Ch1",
+        )
+        .unwrap();
+        let _ch2 = crate::chapter::create_chapter(
+            &data_root.join("projects").join(&project.id),
+            &volume.id,
+            "Ch2",
+        )
+        .unwrap();
 
         // Save ch1 with content (updates its updated_at)
-        crate::chapter::save_chapter_verified(&data_root.join("projects").join(&project.id),
+        crate::chapter::save_chapter_verified(
+            &data_root.join("projects").join(&project.id),
             &volume.id,
             &ch1.id,
             "Some content",
@@ -398,16 +408,22 @@ mod tests {
         .unwrap();
 
         // The aggregated updated_at should be the max of all chapter updated_at values
-        let aggregated =
-            get_volume_updated_at_aggregated(&data_root.join("projects").join(&project.id), &volume.id).unwrap();
+        let aggregated = get_volume_updated_at_aggregated(
+            &data_root.join("projects").join(&project.id),
+            &volume.id,
+        )
+        .unwrap();
         assert!(
             !aggregated.is_empty(),
             "aggregated updated_at should not be empty"
         );
 
         // Verify it matches the latest chapter's updated_at
-        let chapters =
-            crate::chapter::list_chapters(&data_root.join("projects").join(&project.id), &volume.id).unwrap();
+        let chapters = crate::chapter::list_chapters(
+            &data_root.join("projects").join(&project.id),
+            &volume.id,
+        )
+        .unwrap();
         let max_updated = chapters
             .iter()
             .map(|c| c.updated_at.as_str())
@@ -423,13 +439,18 @@ mod tests {
         let data_root = temp_dir.path();
 
         std::fs::create_dir_all(data_root.join("projects")).unwrap();
-        let project = crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
+        let project =
+            crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
+        let volumes =
+            crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
         // No chapters created — should fallback to volume's created_at
-        let aggregated =
-            get_volume_updated_at_aggregated(&data_root.join("projects").join(&project.id), &volume.id).unwrap();
+        let aggregated = get_volume_updated_at_aggregated(
+            &data_root.join("projects").join(&project.id),
+            &volume.id,
+        )
+        .unwrap();
         assert_eq!(aggregated, volume.created_at);
     }
 
@@ -440,25 +461,37 @@ mod tests {
         let data_root = temp_dir.path();
 
         std::fs::create_dir_all(data_root.join("projects")).unwrap();
-        let project = crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
+        let project =
+            crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
+        let volumes =
+            crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
-        let ch1 =
-            crate::chapter::create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "Ch1").unwrap();
-        crate::chapter::save_chapter_verified(&data_root.join("projects").join(&project.id),
+        let ch1 = crate::chapter::create_chapter(
+            &data_root.join("projects").join(&project.id),
+            &volume.id,
+            "Ch1",
+        )
+        .unwrap();
+        crate::chapter::save_chapter_verified(
+            &data_root.join("projects").join(&project.id),
             &volume.id,
             &ch1.id,
             "Project level content",
         )
         .unwrap();
 
-        let aggregated = get_project_updated_at_aggregated(&data_root.join("projects").join(&project.id)).unwrap();
+        let aggregated =
+            get_project_updated_at_aggregated(&data_root.join("projects").join(&project.id))
+                .unwrap();
         assert!(!aggregated.is_empty());
 
         // Verify it matches the latest chapter's updated_at across all volumes
-        let chapters =
-            crate::chapter::list_chapters(&data_root.join("projects").join(&project.id), &volume.id).unwrap();
+        let chapters = crate::chapter::list_chapters(
+            &data_root.join("projects").join(&project.id),
+            &volume.id,
+        )
+        .unwrap();
         let max_updated = chapters
             .iter()
             .map(|c| c.updated_at.as_str())
@@ -474,10 +507,13 @@ mod tests {
         let data_root = temp_dir.path();
 
         std::fs::create_dir_all(data_root.join("projects")).unwrap();
-        let project = crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
+        let project =
+            crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
 
         // No chapters — should fallback to project's created_at
-        let aggregated = get_project_updated_at_aggregated(&data_root.join("projects").join(&project.id)).unwrap();
+        let aggregated =
+            get_project_updated_at_aggregated(&data_root.join("projects").join(&project.id))
+                .unwrap();
         assert_eq!(aggregated, project.created_at);
     }
 
@@ -488,7 +524,8 @@ mod tests {
 
         std::fs::create_dir_all(data_root.join("projects")).unwrap();
         let project =
-            crate::project::create_project(&data_root.join("projects"), "TestProjectToDelete").unwrap();
+            crate::project::create_project(&data_root.join("projects"), "TestProjectToDelete")
+                .unwrap();
 
         let project_dir = data_root.join("projects").join(&project.id);
         assert!(project_dir.exists());

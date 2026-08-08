@@ -5,7 +5,7 @@
 ## 活动文档
 
 - [TECHNICAL_ROUTE.md](TECHNICAL_ROUTE.md)：全局技术路线与平台边界。
-- [workspace_format.md](workspace_format.md)：工作区磁盘格式。
+- [data_directory_format.md](data_directory_format.md)：数据目录格式（各平台数据根目录与作品仓库布局）。
 - [settings_schema.md](settings_schema.md)：设置项及同步属性。
 - [sync_rules.md](sync_rules.md)：同步与冲突规则。
 - [starmap_semantics.md](starmap_semantics.md)：星图对象、引用和语义约束。
