@@ -33,9 +33,9 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var workspace = await _core.OpenWorkspaceAsync(null);
+            var projects = await _core.OpenDataRootAsync(null);
             _projects.Clear();
-            _projects.AddRange(workspace.Projects);
+            _projects.AddRange(projects);
             RefreshNav();
 
             if (_projects.Count > 0)
@@ -60,7 +60,7 @@ public sealed partial class MainWindow : Window
         }
         catch (WriterCoreException ex)
         {
-            ShowError($"打开工作区失败: {ex.Message}");
+            ShowError($"打开数据目录失败: {ex.Message}");
         }
     }
 
@@ -100,9 +100,9 @@ public sealed partial class MainWindow : Window
             try
             {
                 await _core.CreateProjectAsync(tb.Text.Trim());
-                var workspace = await _core.OpenWorkspaceAsync(null);
+                var projects = await _core.OpenDataRootAsync(null);
                 _projects.Clear();
-                _projects.AddRange(workspace.Projects);
+                _projects.AddRange(projects);
                 RefreshNav();
             }
             catch (WriterCoreException ex)

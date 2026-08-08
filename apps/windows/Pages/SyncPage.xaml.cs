@@ -35,7 +35,6 @@ public sealed partial class SyncPage : Page
                 : "同步失败，请检查网络和配置",
             "error.io" => "读写错误，请检查磁盘空间",
             "error.json" => "数据格式错误",
-            "error.invalid_workspace" => "工作区无效或不存在",
             "error.project_not_found" => "项目未找到",
             "error.volume_not_found" => "卷未找到",
             "error.chapter_not_found" => "章节未找到",

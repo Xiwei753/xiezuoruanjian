@@ -3,7 +3,6 @@ using System.Text.Json;
 
 namespace Sujian.Windows.Bridge;
 
-public sealed record WorkspaceSummary(IReadOnlyList<ProjectSummary> Projects);
 public sealed record ProjectSummary(string Id, string Name);
 public sealed record VolumeSummary(string Id, string Name);
 public sealed record ChapterSummary(string Id, string Title);
@@ -181,7 +180,7 @@ public sealed class WriterCoreBridge
                 env.UserMessage ?? env.RawError ?? "Unknown error");
     }
 
-    public int InitWorkspace(string path)
+    public int InitDataRoot(string path)
     {
         var pathPtr = ToUtf8(path);
         try
@@ -194,7 +193,7 @@ public sealed class WriterCoreBridge
         }
     }
 
-    public Task<WorkspaceSummary> OpenWorkspaceAsync(string? path)
+    public Task<IReadOnlyList<ProjectSummary>> OpenDataRootAsync(string? path)
     {
         var pathPtr = ToUtf8(path);
         try
@@ -215,7 +214,7 @@ public sealed class WriterCoreBridge
                     ));
                 }
             }
-            return Task.FromResult(new WorkspaceSummary(projects));
+            return Task.FromResult<IReadOnlyList<ProjectSummary>>(projects);
         }
         finally
         {
