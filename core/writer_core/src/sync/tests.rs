@@ -317,11 +317,9 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "github-api")]
-    #[ignore]
     fn test_record_sync_conflict_error_handling() {
         // Provide an invalid path to force an IO error
-        let conflict = SyncConflict {
+        let conflict = crate::sync::types::SyncConflict {
             local_path: "chapter.md".to_string(),
             remote_path: "chapter.md".to_string(),
             local_hash: "aaa".to_string(),
@@ -333,7 +331,7 @@ mod tests {
 
         // Pass a non-existent parent directory to force an error
         let res = SyncService::record_sync_conflict(
-            Path::new("/non/existent/path/that/will/fail"),
+            std::path::Path::new("/non/existent/path/that/will/fail"),
             conflict,
             None,
         );
@@ -1758,7 +1756,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     #[cfg(feature = "github-api")]
     fn test_perform_lww_sync_timestamp_wins() {
         let dir = tempdir().unwrap();
