@@ -245,6 +245,46 @@ internal fun SyncSecretsDto.toModel() = SyncSecrets(token, null)
 
 internal fun SyncSecrets.toDto() = SyncSecretsDto(token)
 
+internal fun SyncStatus.toWire(): String =
+    when (this) {
+        SyncStatus.Idle -> "idle"
+        SyncStatus.Syncing -> "syncing"
+        SyncStatus.Success -> "success"
+        SyncStatus.ConfiguredNotTested -> "configured_not_tested"
+        SyncStatus.Conflict -> "conflict"
+        SyncStatus.PartialConflict -> "partial_conflict"
+        SyncStatus.RecoverableError -> "recoverable_error"
+        SyncStatus.FatalError -> "fatal_error"
+        SyncStatus.DirtyRepoBlocked -> "dirty_repo_blocked"
+        SyncStatus.BranchMissingRecovered -> "branch_missing_recovered"
+        SyncStatus.NoChanges -> "no_changes"
+        SyncStatus.LatestWinsApplied -> "latest_wins_applied"
+        SyncStatus.Error -> "error"
+    }
+
+internal fun SyncConflict.toDto() =
+    SyncConflictDto(
+        localPath = localPath,
+        remotePath = remotePath,
+        localHash = localHash,
+        remoteHash = remoteHash,
+        baseHash = baseHash,
+        createdAt = createdAt,
+        description = description,
+    )
+
+internal fun SyncState.toDto() =
+    SyncStateDto(
+        status = status.toWire(),
+        remoteUrl = remoteUrl,
+        backendType = backendType,
+        transport = transport,
+        lastSyncedCommit = lastSyncedCommit,
+        lastSyncTime = lastSyncTime,
+        lastError = lastError,
+        conflicts = conflicts?.map { it.toDto() },
+    )
+
 internal fun SyncStateDto.toModel() =
     SyncState(
         status = status.toSyncStatus(),

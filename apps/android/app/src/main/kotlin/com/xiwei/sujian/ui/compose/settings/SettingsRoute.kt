@@ -44,10 +44,8 @@ import com.xiwei.sujian.designsystem.layout.SujianListDetailScaffoldWithNavigato
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.model.LocalSettings
-import com.xiwei.sujian.model.SyncTrigger
 import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.ui.compose.navigation.SettingsSection
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,7 +53,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.parcelize.Parcelize
 
 class SettingsViewModel(
@@ -187,15 +184,7 @@ class SettingsViewModel(
             is SettingsIntent.UpdateProjectSyncSecrets -> updateProjectSyncSecrets(intent.secrets)
             is SettingsIntent.UpdateAppSyncConfig -> updateAppSyncConfig(intent.config)
             is SettingsIntent.UpdateAppSyncSecrets -> updateAppSyncSecrets(intent.secrets)
-            is SettingsIntent.Refresh -> mergeRefresh()
-            is SettingsIntent.CaptureDynamicColor -> refreshPaletteRecords()
-            is SettingsIntent.DeletePalette -> deletePaletteRecord(intent.deviceId, intent.fingerprint)
-            is SettingsIntent.DryRun -> enqueueDryRun()
-            is SettingsIntent.TestConnection -> enqueueTestConnection()
-            is SettingsIntent.PerformSync -> enqueuePerformSync()
-            is SettingsIntent.AppDryRun -> enqueueAppDryRun()
-            is SettingsIntent.AppTestConnection -> enqueueAppTestConnection()
-            is SettingsIntent.AppPerformSync -> enqueueAppPerformSync()
+            else -> handleActionIntent(intent)
         }
     }
 
@@ -207,134 +196,6 @@ class SettingsViewModel(
     private fun updateFontSize(fontSize: Float) {
         _uiState.update { it.copy(fontSize = fontSize) }
         saveChannel.trySend(QueueItem.Save(SettingsSaveCommand.FontSize(fontSize, ++fontSizeRevision)))
-    }
-
-    private fun updateProjectSyncConfig(config: com.xiwei.sujian.model.SyncConfig) {
-        _uiState.update { it.copy(projectSyncConfig = config) }
-        saveChannel.trySend(
-            QueueItem.Save(SettingsSaveCommand.ProjectSyncConfig(config, ++projectSyncConfigRevision)),
-        )
-    }
-
-    private fun updateProjectSyncSecrets(secrets: com.xiwei.sujian.model.SyncSecrets) {
-        _uiState.update { it.copy(projectSyncSecrets = secrets) }
-        saveChannel.trySend(
-            QueueItem.Save(SettingsSaveCommand.ProjectSyncSecrets(secrets, ++projectSyncSecretsRevision)),
-        )
-    }
-
-    private fun updateAppSyncConfig(config: com.xiwei.sujian.model.SyncConfig) {
-        _uiState.update { it.copy(appSyncConfig = config) }
-        saveChannel.trySend(
-            QueueItem.Save(SettingsSaveCommand.AppSyncConfig(config, ++appSyncConfigRevision)),
-        )
-    }
-
-    private fun updateAppSyncSecrets(secrets: com.xiwei.sujian.model.SyncSecrets) {
-        _uiState.update { it.copy(appSyncSecrets = secrets) }
-        saveChannel.trySend(
-            QueueItem.Save(SettingsSaveCommand.AppSyncSecrets(secrets, ++appSyncSecretsRevision)),
-        )
-    }
-
-    private fun refreshPaletteRecords() {
-        val repo = settingsRepo
-        viewModelScope.launch {
-            val records = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
-            _uiState.update { it.copy(paletteRecords = records) }
-        }
-    }
-
-    private fun deletePaletteRecord(
-        deviceId: String,
-        fingerprint: String,
-    ) {
-        val repo = settingsRepo
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) { repo.deletePaletteRecord(deviceId, fingerprint) }
-            val records = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
-            _uiState.update { it.copy(paletteRecords = records) }
-        }
-    }
-
-    private fun enqueueDryRun() {
-        saveChannel.trySend(
-            QueueItem.Transaction(
-                SettingsTransactionCommand.SaveAndRunDryRun(
-                    config = _uiState.value.projectSyncConfig,
-                    configRevision = projectSyncConfigRevision,
-                    secrets = _uiState.value.projectSyncSecrets,
-                    secretsRevision = projectSyncSecretsRevision,
-                ),
-            ),
-        )
-    }
-
-    private fun enqueueTestConnection() {
-        saveChannel.trySend(
-            QueueItem.Transaction(
-                SettingsTransactionCommand.SaveAndRunDiagnostics(
-                    config = _uiState.value.projectSyncConfig,
-                    configRevision = projectSyncConfigRevision,
-                    secrets = _uiState.value.projectSyncSecrets,
-                    secretsRevision = projectSyncSecretsRevision,
-                ),
-            ),
-        )
-    }
-
-    private fun enqueuePerformSync() {
-        saveChannel.trySend(
-            QueueItem.Transaction(
-                SettingsTransactionCommand.SaveAndRunSync(
-                    config = _uiState.value.projectSyncConfig,
-                    configRevision = projectSyncConfigRevision,
-                    secrets = _uiState.value.projectSyncSecrets,
-                    secretsRevision = projectSyncSecretsRevision,
-                    trigger = SyncTrigger.SettingsPage,
-                ),
-            ),
-        )
-    }
-
-    private fun enqueueAppDryRun() {
-        saveChannel.trySend(
-            QueueItem.Transaction(
-                SettingsTransactionCommand.SaveAndRunAppDryRun(
-                    config = _uiState.value.appSyncConfig,
-                    configRevision = appSyncConfigRevision,
-                    secrets = _uiState.value.appSyncSecrets,
-                    secretsRevision = appSyncSecretsRevision,
-                ),
-            ),
-        )
-    }
-
-    private fun enqueueAppTestConnection() {
-        saveChannel.trySend(
-            QueueItem.Transaction(
-                SettingsTransactionCommand.SaveAndRunAppDiagnostics(
-                    config = _uiState.value.appSyncConfig,
-                    configRevision = appSyncConfigRevision,
-                    secrets = _uiState.value.appSyncSecrets,
-                    secretsRevision = appSyncSecretsRevision,
-                ),
-            ),
-        )
-    }
-
-    private fun enqueueAppPerformSync() {
-        saveChannel.trySend(
-            QueueItem.Transaction(
-                SettingsTransactionCommand.SaveAndRunAppSync(
-                    config = _uiState.value.appSyncConfig,
-                    configRevision = appSyncConfigRevision,
-                    secrets = _uiState.value.appSyncSecrets,
-                    secretsRevision = appSyncSecretsRevision,
-                    trigger = SyncTrigger.SettingsPage,
-                ),
-            ),
-        )
     }
 }
 

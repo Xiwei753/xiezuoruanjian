@@ -13,24 +13,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * 是否存在任意待保存命令 — 拆分复杂条件，避免 ComplexCondition。
- */
-private fun hasAnySaveCommand(
-    local: SettingsSaveCommand.Local?,
-    fontSize: SettingsSaveCommand.FontSize?,
-    projectSyncConfig: SettingsSaveCommand.ProjectSyncConfig?,
-    projectSyncSecrets: SettingsSaveCommand.ProjectSyncSecrets?,
-    appSyncConfig: SettingsSaveCommand.AppSyncConfig?,
-    appSyncSecrets: SettingsSaveCommand.AppSyncSecrets?,
-): Boolean =
-    local != null ||
-        fontSize != null ||
-        projectSyncConfig != null ||
-        projectSyncSecrets != null ||
-        appSyncConfig != null ||
-        appSyncSecrets != null
-
 fun SettingsViewModel.loadInitial() {
     val repo = settingsRepo
     editorScope.launch { loadInitialSnapshot(repo) }
@@ -39,7 +21,7 @@ fun SettingsViewModel.loadInitial() {
 /**
  * #600 评论 #3 问题二：按活动作品读取 committed profile — 无活动作品时返回 Failed。
  */
-private suspend fun SettingsViewModel.loadCommittedProfileForProject(
+internal suspend fun SettingsViewModel.loadCommittedProfileForProject(
     repo: SettingsRepository,
     projectId: String?,
 ): com.xiwei.sujian.data.SyncProfileReadResult =
@@ -55,7 +37,7 @@ private suspend fun SettingsViewModel.loadCommittedProfileForProject(
 /**
  * #600 评论 #3 问题二：按活动作品读取 sync capability — 无活动作品时返回默认。
  */
-private suspend fun SettingsViewModel.loadSyncCapabilityForProject(
+internal suspend fun SettingsViewModel.loadSyncCapabilityForProject(
     repo: SettingsRepository,
     projectId: String?,
 ): com.xiwei.sujian.model.SyncCapabilityData =
@@ -68,105 +50,126 @@ private suspend fun SettingsViewModel.loadSyncCapabilityForProject(
 /**
  * 加载初始快照 — 从 loadInitial 拆分以降低认知复杂度。
  * 读取活动 generation 的完整 snapshot（#595 八），不再读 live legacy 槽。
+ * #6003 detekt：profile 读取拆分到 loadInitialProjectSyncProfile / loadInitialAppSyncProfile，
+ * if 分支收敛到 buildInitialUiState，降低 CognitiveComplexity。
  */
 private suspend fun SettingsViewModel.loadInitialSnapshot(repo: SettingsRepository) {
-    val snapshotLocalRev = localRevision
-    val snapshotFontSizeRev = fontSizeRevision
-    val snapshotProjectSyncConfigRev = projectSyncConfigRevision
-    val snapshotProjectSyncSecretsRev = projectSyncSecretsRevision
-    val snapshotAppSyncConfigRev = appSyncConfigRevision
-    val snapshotAppSyncSecretsRev = appSyncSecretsRevision
-
+    val snapshotRevisions =
+        InitialSnapshotRevisions(
+            local = localRevision,
+            fontSize = fontSizeRevision,
+            projectSyncConfig = projectSyncConfigRevision,
+            projectSyncSecrets = projectSyncSecretsRevision,
+            appSyncConfig = appSyncConfigRevision,
+            appSyncSecrets = appSyncSecretsRevision,
+        )
     val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
     val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
-    // #600 评论 #3 问题二：profile/capability 按当前活动作品路由 — 提取为 helper 降低认知复杂度。
-    val activeProjectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
-    val committedProfile = loadCommittedProfileForProject(repo, activeProjectId)
-    // #595 四：类型化加载状态 — Failed 时保留当前字段值，页面显示真实错误。
-    val projectSyncProfileLoadState = committedProfile.toSyncProfileLoadState()
-    val projectSyncCapability = loadSyncCapabilityForProject(repo, activeProjectId)
-    // 应用级 profile
-    val committedAppProfile = withContext(Dispatchers.IO) { repo.loadCommittedAppSyncProfile() }
-    val appSyncProfileLoadState = committedAppProfile.toAppSyncProfileLoadState()
-    val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
-    val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
-    val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
-    val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
-    val dataRootPath = withContext(Dispatchers.IO) { repo.dataRootDir() }
-
-    _uiState.update { current ->
-        SettingsUiState(
-            settings = if (localRevision == snapshotLocalRev) settings else current.settings,
-            fontSize = if (fontSizeRevision == snapshotFontSizeRev) fontSize else current.fontSize,
-            projectSyncConfig =
-                if (projectSyncConfigRevision == snapshotProjectSyncConfigRev) {
-                    projectSyncProfileLoadState.confirmedConfig ?: current.projectSyncConfig
-                } else {
-                    current.projectSyncConfig
-                },
-            projectSyncSecrets =
-                if (projectSyncSecretsRevision == snapshotProjectSyncSecretsRev) {
-                    projectSyncProfileLoadState.confirmedSecrets ?: current.projectSyncSecrets
-                } else {
-                    current.projectSyncSecrets
-                },
-            projectSyncCapability = projectSyncCapability,
+    val (projectSyncProfileLoadState, projectSyncCapability) = loadInitialProjectSyncProfile(repo)
+    val appSyncProfileLoadState = loadInitialAppSyncProfile(repo)
+    val loaded =
+        InitialLoadedValues(
+            settings = settings,
+            fontSize = fontSize,
             projectSyncProfileLoadState = projectSyncProfileLoadState,
-            appSyncConfig =
-                if (appSyncConfigRevision == snapshotAppSyncConfigRev) {
-                    appSyncProfileLoadState.confirmedConfig ?: current.appSyncConfig
-                } else {
-                    current.appSyncConfig
-                },
-            appSyncSecrets =
-                if (appSyncSecretsRevision == snapshotAppSyncSecretsRev) {
-                    appSyncProfileLoadState.confirmedSecrets ?: current.appSyncSecrets
-                } else {
-                    current.appSyncSecrets
-                },
+            projectSyncCapability = projectSyncCapability,
             appSyncProfileLoadState = appSyncProfileLoadState,
-            secureStorageWarning = secureStorageWarning,
-            builtinThemes = builtinThemes,
-            paletteRecords = paletteRecords,
-            aiAvailable = aiAvailable,
-            dataRootPath = dataRootPath,
+            secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() },
+            builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() },
+            paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() },
+            aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() },
+            dataRootPath = withContext(Dispatchers.IO) { repo.dataRootDir() },
         )
-    }
+    _uiState.update { current -> buildInitialUiState(current, loaded, snapshotRevisions) }
 }
+
+/** 组装初始 UiState — 从 loadInitialSnapshot 拆分，把 if 分支收敛到此 helper 降低认知复杂度。 */
+private fun SettingsViewModel.buildInitialUiState(
+    current: SettingsUiState,
+    loaded: InitialLoadedValues,
+    snapshotRevisions: InitialSnapshotRevisions,
+): SettingsUiState =
+    SettingsUiState(
+        settings = if (localRevision == snapshotRevisions.local) loaded.settings else current.settings,
+        fontSize = if (fontSizeRevision == snapshotRevisions.fontSize) loaded.fontSize else current.fontSize,
+        projectSyncConfig =
+            if (projectSyncConfigRevision == snapshotRevisions.projectSyncConfig) {
+                loaded.projectSyncProfileLoadState.confirmedConfig ?: current.projectSyncConfig
+            } else {
+                current.projectSyncConfig
+            },
+        projectSyncSecrets =
+            if (projectSyncSecretsRevision == snapshotRevisions.projectSyncSecrets) {
+                loaded.projectSyncProfileLoadState.confirmedSecrets ?: current.projectSyncSecrets
+            } else {
+                current.projectSyncSecrets
+            },
+        projectSyncCapability = loaded.projectSyncCapability,
+        projectSyncProfileLoadState = loaded.projectSyncProfileLoadState,
+        appSyncConfig =
+            if (appSyncConfigRevision == snapshotRevisions.appSyncConfig) {
+                loaded.appSyncProfileLoadState.confirmedConfig ?: current.appSyncConfig
+            } else {
+                current.appSyncConfig
+            },
+        appSyncSecrets =
+            if (appSyncSecretsRevision == snapshotRevisions.appSyncSecrets) {
+                loaded.appSyncProfileLoadState.confirmedSecrets ?: current.appSyncSecrets
+            } else {
+                current.appSyncSecrets
+            },
+        appSyncProfileLoadState = loaded.appSyncProfileLoadState,
+        secureStorageWarning = loaded.secureStorageWarning,
+        builtinThemes = loaded.builtinThemes,
+        paletteRecords = loaded.paletteRecords,
+        aiAvailable = loaded.aiAvailable,
+        dataRootPath = loaded.dataRootPath,
+    )
+
+/** 初始加载读取的值 — 打包避免 buildInitialUiState LongParameterList。 */
+private data class InitialLoadedValues(
+    val settings: LocalSettings,
+    val fontSize: Float,
+    val projectSyncProfileLoadState: SyncProfileLoadState,
+    val projectSyncCapability: com.xiwei.sujian.model.SyncCapabilityData,
+    val appSyncProfileLoadState: SyncProfileLoadState,
+    val secureStorageWarning: String?,
+    val builtinThemes: List<com.xiwei.sujian.model.BuiltinTheme>,
+    val paletteRecords: List<com.xiwei.sujian.model.ThemePaletteRecord>,
+    val aiAvailable: Boolean,
+    val dataRootPath: String,
+)
+
+/** 初始加载开始时各字段的 revision 快照 — 打包避免 buildInitialUiState LongParameterList。 */
+private data class InitialSnapshotRevisions(
+    val local: Long,
+    val fontSize: Long,
+    val projectSyncConfig: Long,
+    val projectSyncSecrets: Long,
+    val appSyncConfig: Long,
+    val appSyncSecrets: Long,
+)
 
 suspend fun SettingsViewModel.flushPending() {
     val repo = settingsRepo
     val cmds = pendingCommands
     if (cmds.isEmpty()) return
     pendingCommands = PendingCommands()
-    executeSave(
-        repo,
-        cmds.local,
-        cmds.fontSize,
-        cmds.projectSyncConfig,
-        cmds.projectSyncSecrets,
-        cmds.appSyncConfig,
-        cmds.appSyncSecrets,
-    )
+    executeSave(repo, cmds)
 }
 
-suspend fun SettingsViewModel.executeSave(
+internal suspend fun SettingsViewModel.executeSave(
     repo: SettingsRepository,
-    local: SettingsSaveCommand.Local?,
-    fontSize: SettingsSaveCommand.FontSize?,
-    projectSyncConfig: SettingsSaveCommand.ProjectSyncConfig?,
-    projectSyncSecrets: SettingsSaveCommand.ProjectSyncSecrets?,
-    appSyncConfig: SettingsSaveCommand.AppSyncConfig?,
-    appSyncSecrets: SettingsSaveCommand.AppSyncSecrets?,
+    commands: PendingCommands,
 ) {
     val failures = mutableListOf<SaveFailure>()
 
-    saveLocalField(repo, local, failures)
-    saveFontSizeField(repo, fontSize, failures)
+    saveLocalField(repo, commands.local, failures)
+    saveFontSizeField(repo, commands.fontSize, failures)
     val (projConfigSaved, projSecretsSaved) =
-        saveSyncProfileField(repo, projectSyncConfig, projectSyncSecrets, failures)
+        saveSyncProfileField(repo, commands.projectSyncConfig, commands.projectSyncSecrets, failures)
     val (appConfigSaved, appSecretsSaved) =
-        saveAppSyncProfileField(repo, appSyncConfig, appSyncSecrets, failures)
+        saveAppSyncProfileField(repo, commands.appSyncConfig, commands.appSyncSecrets, failures)
 
     if (projConfigSaved || projSecretsSaved) {
         // #595 五：成功提交后一次性更新作品级 config/secrets/loadState/capability/warning。
@@ -177,16 +180,7 @@ suspend fun SettingsViewModel.executeSave(
         refreshAppSyncProfileState()
     }
 
-    handleSaveOutcome(
-        repo,
-        failures,
-        local,
-        fontSize,
-        projectSyncConfig,
-        projectSyncSecrets,
-        appSyncConfig,
-        appSyncSecrets,
-    )
+    handleSaveOutcome(repo, failures, commands)
 }
 
 /** 保存 local settings 字段 — 从 executeSave 拆分。 */
@@ -320,61 +314,42 @@ private fun SettingsViewModel.collectSyncProfileFailures(
     syncSecrets: SettingsSaveCommand?,
     failures: MutableList<SaveFailure>,
 ) {
-    val syncConfigRev =
-        when (syncConfig) {
-            is SettingsSaveCommand.ProjectSyncConfig -> syncConfig.revision
-            is SettingsSaveCommand.AppSyncConfig -> syncConfig.revision
-            else -> null
-        }
-    val syncSecretsRev =
-        when (syncSecrets) {
-            is SettingsSaveCommand.ProjectSyncSecrets -> syncSecrets.revision
-            is SettingsSaveCommand.AppSyncSecrets -> syncSecrets.revision
-            else -> null
-        }
-    for (failure in commitFailures) {
-        when (failure.field) {
-            SaveField.SYNC_CONFIG -> {
-                if (syncConfigRev != null && syncConfigRev == currentSyncConfigRevision(syncConfig)) {
-                    failures.add(failure)
-                }
-            }
-            SaveField.SYNC_SECRETS -> {
-                if (syncSecretsRev != null && syncSecretsRev == currentSyncSecretsRevision(syncSecrets)) {
-                    failures.add(failure)
-                }
-            }
-            else -> { }
-        }
+    val syncConfigRev = saveCommandRevision(syncConfig)
+    val syncSecretsRev = saveCommandRevision(syncSecrets)
+    commitFailures.forEach { failure ->
+        collectFailureIfRevisionMatches(failure, syncConfig, syncSecrets, syncConfigRev, syncSecretsRev, failures)
     }
 }
 
-/** 返回当前作品级或应用级 config revision — 由 SaveCommand 类型决定。 */
-private fun SettingsViewModel.currentSyncConfigRevision(command: SettingsSaveCommand?): Long =
-    when (command) {
-        is SettingsSaveCommand.ProjectSyncConfig -> projectSyncConfigRevision
-        is SettingsSaveCommand.AppSyncConfig -> appSyncConfigRevision
-        else -> 0L
+/** 判断单条提交失败是否匹配当前 revision，匹配则收集 — 从 collectSyncProfileFailures 拆分降低圈复杂度。 */
+private fun SettingsViewModel.collectFailureIfRevisionMatches(
+    failure: SaveFailure,
+    syncConfig: SettingsSaveCommand?,
+    syncSecrets: SettingsSaveCommand?,
+    syncConfigRev: Long?,
+    syncSecretsRev: Long?,
+    failures: MutableList<SaveFailure>,
+) {
+    when (failure.field) {
+        SaveField.SYNC_CONFIG -> {
+            if (syncConfigRev != null && syncConfigRev == currentSyncConfigRevision(syncConfig)) {
+                failures.add(failure)
+            }
+        }
+        SaveField.SYNC_SECRETS -> {
+            if (syncSecretsRev != null && syncSecretsRev == currentSyncSecretsRevision(syncSecrets)) {
+                failures.add(failure)
+            }
+        }
+        else -> { }
     }
-
-/** 返回当前作品级或应用级 secrets revision — 由 SaveCommand 类型决定。 */
-private fun SettingsViewModel.currentSyncSecretsRevision(command: SettingsSaveCommand?): Long =
-    when (command) {
-        is SettingsSaveCommand.ProjectSyncSecrets -> projectSyncSecretsRevision
-        is SettingsSaveCommand.AppSyncSecrets -> appSyncSecretsRevision
-        else -> 0L
-    }
+}
 
 /** 处理保存结果：失败回滚+报错 或 成功清错 — 从 executeSave 拆分。 */
 private suspend fun SettingsViewModel.handleSaveOutcome(
     repo: SettingsRepository,
     failures: List<SaveFailure>,
-    local: SettingsSaveCommand.Local?,
-    fontSize: SettingsSaveCommand.FontSize?,
-    projectSyncConfig: SettingsSaveCommand.ProjectSyncConfig?,
-    projectSyncSecrets: SettingsSaveCommand.ProjectSyncSecrets?,
-    appSyncConfig: SettingsSaveCommand.AppSyncConfig?,
-    appSyncSecrets: SettingsSaveCommand.AppSyncSecrets?,
+    commands: PendingCommands,
 ) {
     if (failures.isNotEmpty()) {
         rollbackFailures(repo, failures)
@@ -387,16 +362,7 @@ private suspend fun SettingsViewModel.handleSaveOutcome(
             }
         _uiState.update { it.copy(saveErrorResId = errorResId) }
         _saveFailureEvents.send(errorResId)
-    } else if (
-        hasAnySaveCommand(
-            local,
-            fontSize,
-            projectSyncConfig,
-            projectSyncSecrets,
-            appSyncConfig,
-            appSyncSecrets,
-        )
-    ) {
+    } else if (!commands.isEmpty()) {
         _uiState.update { it.copy(saveErrorResId = null) }
     }
 }
@@ -496,110 +462,3 @@ private suspend fun SettingsViewModel.rollbackSyncSecrets(
         )
     }
 }
-
-// #597 刷新合并需一次性读取全部字段并按未保存状态合并，与 loadInitial 结构对称。
-fun SettingsViewModel.mergeRefresh() {
-    val repo = settingsRepo
-    editorScope.launch {
-        val current = _uiState.value
-        val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
-        val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
-        // #595 八：刷新读取活动 generation 的完整 snapshot，不再读 live legacy 槽。
-        // #600 评论 #3 问题二：按当前活动作品路由。
-        val mergeProjectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
-        val committedProfile =
-            if (mergeProjectId != null) {
-                withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(mergeProjectId) }
-            } else {
-                com.xiwei.sujian.data.SyncProfileReadResult.Failed(
-                    com.xiwei.sujian.data.SyncFailureKind.Fatal,
-                    MSG_NO_ACTIVE_PROJECT,
-                )
-            }
-        // #595 四：类型化加载状态 — Failed 时保留字段值，页面显示真实错误。
-        val projectSyncProfileLoadState = committedProfile.toSyncProfileLoadState()
-        val projectSyncCapability =
-            if (mergeProjectId != null) {
-                withContext(Dispatchers.IO) { repo.getSyncCapability(mergeProjectId) }
-            } else {
-                com.xiwei.sujian.model.SyncCapabilityData()
-            }
-        // #600 评论 #5：刷新应用级 profile。
-        val committedAppProfile = withContext(Dispatchers.IO) { repo.loadCommittedAppSyncProfile() }
-        val appSyncProfileLoadState = committedAppProfile.toAppSyncProfileLoadState()
-        val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
-        val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
-        val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
-        val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
-        val dataRootPath = withContext(Dispatchers.IO) { repo.dataRootDir() }
-        _uiState.update {
-            SettingsUiState(
-                settings = mergeLoadedLocal(current.settings, settings),
-                fontSize = mergeLoadedFontSize(current.fontSize, fontSize),
-                projectSyncConfig =
-                    mergeLoadedProjectSyncConfig(
-                        current.projectSyncConfig,
-                        projectSyncProfileLoadState,
-                    ),
-                projectSyncSecrets =
-                    mergeLoadedProjectSyncSecrets(
-                        current.projectSyncSecrets,
-                        projectSyncProfileLoadState,
-                    ),
-                projectSyncCapability = projectSyncCapability,
-                projectSyncProfileLoadState = projectSyncProfileLoadState,
-                projectDryRunState = current.projectDryRunState,
-                projectTestConnectionState = current.projectTestConnectionState,
-                projectPerformSyncState = current.projectPerformSyncState,
-                projectSyncResult = current.projectSyncResult,
-                appSyncConfig = mergeLoadedAppSyncConfig(current.appSyncConfig, appSyncProfileLoadState),
-                appSyncSecrets = mergeLoadedAppSyncSecrets(current.appSyncSecrets, appSyncProfileLoadState),
-                appSyncProfileLoadState = appSyncProfileLoadState,
-                appDryRunState = current.appDryRunState,
-                appTestConnectionState = current.appTestConnectionState,
-                appPerformSyncState = current.appPerformSyncState,
-                appSyncResult = current.appSyncResult,
-                secureStorageWarning = secureStorageWarning,
-                builtinThemes = builtinThemes,
-                paletteRecords = paletteRecords,
-                aiAvailable = aiAvailable,
-                dataRootPath = dataRootPath,
-                lastCommandType = current.lastCommandType,
-            )
-        }
-    }
-}
-
-// #597：未保存字段合并 — 刷新加载值只在用户没有未保存编辑时覆盖当前值。
-private fun SettingsViewModel.mergeLoadedLocal(
-    current: LocalSettings,
-    loaded: LocalSettings,
-): LocalSettings = if (!hasUnsavedLocal()) loaded else current
-
-private fun SettingsViewModel.mergeLoadedFontSize(
-    current: Float,
-    loaded: Float,
-): Float = if (!hasUnsavedFontSize()) loaded else current
-
-private fun SettingsViewModel.mergeLoadedProjectSyncConfig(
-    current: com.xiwei.sujian.model.SyncConfig,
-    loadState: SyncProfileLoadState,
-): com.xiwei.sujian.model.SyncConfig =
-    if (!hasUnsavedProjectSyncConfig()) loadState.confirmedConfig ?: current else current
-
-private fun SettingsViewModel.mergeLoadedProjectSyncSecrets(
-    current: com.xiwei.sujian.model.SyncSecrets,
-    loadState: SyncProfileLoadState,
-): com.xiwei.sujian.model.SyncSecrets =
-    if (!hasUnsavedProjectSyncSecrets()) loadState.confirmedSecrets ?: current else current
-
-private fun SettingsViewModel.mergeLoadedAppSyncConfig(
-    current: com.xiwei.sujian.model.SyncConfig,
-    loadState: SyncProfileLoadState,
-): com.xiwei.sujian.model.SyncConfig = if (!hasUnsavedAppSyncConfig()) loadState.confirmedConfig ?: current else current
-
-private fun SettingsViewModel.mergeLoadedAppSyncSecrets(
-    current: com.xiwei.sujian.model.SyncSecrets,
-    loadState: SyncProfileLoadState,
-): com.xiwei.sujian.model.SyncSecrets =
-    if (!hasUnsavedAppSyncSecrets()) loadState.confirmedSecrets ?: current else current
