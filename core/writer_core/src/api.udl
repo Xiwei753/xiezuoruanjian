@@ -1037,16 +1037,16 @@ interface WriterAppService {
     boolean save_syncable_settings(SyncableSettingsDto settings);
 
     [Throws=WriterError]
-    SyncConfigDto load_sync_config();
+    SyncConfigDto load_sync_config(string project_id);
 
     [Throws=WriterError]
-    boolean save_sync_config(SyncConfigDto config);
+    boolean save_sync_config(string project_id, SyncConfigDto config);
 
     [Throws=WriterError]
-    SyncSecretsDto load_sync_secrets();
+    SyncSecretsDto load_sync_secrets(string project_id);
 
     [Throws=WriterError]
-    boolean save_sync_secrets(SyncSecretsDto secrets);
+    boolean save_sync_secrets(string project_id, SyncSecretsDto secrets);
 
     [Throws=WriterError]
     void set_sync_secrets_override(SyncSecretsDto secrets);
@@ -1055,28 +1055,50 @@ interface WriterAppService {
     void clear_sync_secrets_override();
 
     [Throws=WriterError]
-    boolean save_sync_secrets_for_generation(u64 generation, SyncSecretsDto secrets);
+    boolean save_sync_secrets_for_generation(string project_id, u64 generation, SyncSecretsDto secrets);
 
     [Throws=WriterError]
-    SyncSecretsDto? load_sync_secrets_for_generation(u64 generation);
+    SyncSecretsDto? load_sync_secrets_for_generation(string project_id, u64 generation);
 
     [Throws=WriterError]
-    void delete_sync_secrets_for_generation(u64 generation);
+    void delete_sync_secrets_for_generation(string project_id, u64 generation);
 
     [Throws=WriterError]
     SyncStateDto load_sync_state(string project_id);
 
     [Throws=WriterError]
-    SyncCapabilityDto get_sync_capability();
+    SyncCapabilityDto get_sync_capability(string project_id);
 
     [Throws=WriterError]
-    SyncDiagnosticsResultDto perform_sync_diagnostics(SyncConfigDto config);
+    SyncDiagnosticsResultDto perform_sync_diagnostics(string project_id, SyncConfigDto config);
 
     [Throws=WriterError]
     SyncPlanDto perform_sync_dry_run(string project_id, SyncConfigDto config);
 
     [Throws=WriterError]
     SyncResultDto perform_sync(string project_id, SyncConfigDto config, boolean force_sync);
+
+    // 应用级同步通道（Issue #600 评论 #3 问题四）
+    [Throws=WriterError]
+    SyncConfigDto load_app_sync_config();
+    [Throws=WriterError]
+    boolean save_app_sync_config(SyncConfigDto config);
+    [Throws=WriterError]
+    SyncSecretsDto load_app_sync_secrets();
+    [Throws=WriterError]
+    boolean save_app_sync_secrets(SyncSecretsDto secrets);
+    [Throws=WriterError]
+    boolean save_app_sync_secrets_for_generation(u64 generation, SyncSecretsDto secrets);
+    [Throws=WriterError]
+    SyncSecretsDto? load_app_sync_secrets_for_generation(u64 generation);
+    [Throws=WriterError]
+    void delete_app_sync_secrets_for_generation(u64 generation);
+    [Throws=WriterError]
+    SyncDiagnosticsResultDto perform_app_sync_diagnostics(SyncConfigDto config);
+    [Throws=WriterError]
+    SyncPlanDto perform_app_sync_dry_run(SyncConfigDto config);
+    [Throws=WriterError]
+    SyncResultDto perform_app_sync(SyncConfigDto config, boolean force_sync);
 
     [Throws=WriterError]
     boolean resolve_conflict_keep_local(string project_id, string path);

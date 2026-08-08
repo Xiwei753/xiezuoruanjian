@@ -84,10 +84,16 @@ impl AppBackend {
         });
 
         let op_id_capture = op_id.clone();
+        // 从作品目录路径推断 project_id（目录名即作品 ID）。
+        let project_id_str = std::path::Path::new(&path_str)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
         thread::spawn(move || {
             let result = Self::do_github_init(
                 &op_id_capture,
                 &path_str,
+                &project_id_str,
                 &remote_url_str,
                 &branch_str,
                 &token_str,
@@ -99,6 +105,7 @@ impl AppBackend {
     pub(crate) fn do_github_init(
         operation_id: &str,
         path: &str,
+        project_id: &str,
         remote_url: &str,
         branch: &str,
         token: &str,
@@ -140,6 +147,7 @@ impl AppBackend {
             username: parsed.extracted_username.clone().unwrap_or_default(),
             has_network_permission: net.is_connected,
             has_network_state_permission: true,
+            scope: writer_core::sync::types::SyncScope::Project,
         };
 
         let secrets = SyncSecrets {
@@ -193,7 +201,7 @@ impl AppBackend {
                             _ => false,
                         };
                         if save_first {
-                            let save_outcome = save_sync_configs(path, cfg_ref, sec_ref).err();
+                            let save_outcome = save_sync_configs(path, project_id, cfg_ref, sec_ref).err();
                             match push_result {
                                 Ok(push_res) => {
                                     let category = push_res.error_category.clone();
@@ -223,7 +231,7 @@ impl AppBackend {
                                 }
                             }
                         }
-                        match save_sync_configs(path, cfg_ref, sec_ref) {
+                        match save_sync_configs(path, project_id, cfg_ref, sec_ref) {
                             Ok(()) => SyncTaskOutcome {
                                 operation_id: operation_id.to_string(),
                                 sync_status: "success".to_string(),
@@ -315,7 +323,7 @@ impl AppBackend {
             match backend.sync(path_obj, &config, &secrets, true) {
                 Ok(result) => {
                     if result.status == writer_core::sync::SyncStatus::Success {
-                        match save_sync_configs(path, cfg_ref, sec_ref) {
+                        match save_sync_configs(path, project_id, cfg_ref, sec_ref) {
                             Ok(()) => SyncTaskOutcome {
                                 operation_id: operation_id.to_string(),
                                 sync_status: "success".to_string(),

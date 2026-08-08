@@ -12,14 +12,14 @@ import kotlinx.coroutines.flow.first
 private val Context.syncProfileDataStore by preferencesDataStore(name = "sync_profile")
 
 /**
- * #592 五：同步配置版本化提交的 DataStore 侧实现。
+ * #592 五 / #600 评论 #3 问题二：同步配置版本化提交的 DataStore 侧实现（per-project）。
  *
- * 单一 DataStore 文件保存：
- * - active_generation：当前完整提交的版本号（唯一 commit marker）
- * - committed_config_json：与 active_generation 在同一 updateData 中原子写入的
+ * 单一 DataStore 文件保存所有作品的提交标记与恢复载荷，按 projectId 前缀区分 key：
+ * - `<projectId>.active_generation`：当前完整提交的版本号（唯一 commit marker）
+ * - `<projectId>.committed_config_json`：与 active_generation 在同一 updateData 中原子写入的
  *   已提交配置载荷 — 它永远只属于 activeGeneration，读取者据此读取完整版本
- * - staged_config_generation / staged_config_json：stagedConfig(N) 的标记与载荷
- * - staged_secrets_generation：stagedSecrets(N) 的标记（凭据本体在安全存储，按 generation 保存）
+ * - `<projectId>.staged_config_generation` / `<projectId>.staged_config_json`：stagedConfig(N) 的标记与载荷
+ * - `<projectId>.staged_secrets_generation`：stagedSecrets(N) 的标记（凭据本体在安全存储，按 generation 保存）
  *
  * commit（[commitGeneration]）通过单次 `updateData` 原子更新 active_generation 与
  * committed_config_json，失败时旧 generation 继续有效；读取者只读取
@@ -45,20 +45,21 @@ class SyncProfileStore(context: Context) {
             get() = activeGeneration > 0L && committedConfigJson.isNotEmpty()
     }
 
-    suspend fun readState(): ProfileCommitState {
+    /** #600 评论 #3 问题二：所有读写按 projectId 隔离 — key 前缀 `<projectId>.`。 */
+    suspend fun readState(projectId: String): ProfileCommitState {
         val prefs = dataStore.data.first()
         return ProfileCommitState(
-            activeGeneration = prefs[PREF_ACTIVE] ?: 0L,
-            committedConfigJson = prefs[PREF_COMMITTED_CONFIG_JSON] ?: "",
-            stagedConfigGeneration = prefs[PREF_STAGED_CONFIG_GEN] ?: -1L,
-            stagedConfigJson = prefs[PREF_STAGED_CONFIG_JSON] ?: "",
-            stagedSecretsGeneration = prefs[PREF_STAGED_SECRETS_GEN] ?: -1L,
+            activeGeneration = prefs[prefActive(projectId)] ?: 0L,
+            committedConfigJson = prefs[prefCommittedConfigJson(projectId)] ?: "",
+            stagedConfigGeneration = prefs[prefStagedConfigGen(projectId)] ?: -1L,
+            stagedConfigJson = prefs[prefStagedConfigJson(projectId)] ?: "",
+            stagedSecretsGeneration = prefs[prefStagedSecretsGen(projectId)] ?: -1L,
         )
     }
 
     /** 下一个待提交 generation = max(active, staged)+1。 */
-    suspend fun nextGeneration(): Long {
-        val state = readState()
+    suspend fun nextGeneration(projectId: String): Long {
+        val state = readState(projectId)
         return maxOf(
             state.activeGeneration,
             state.stagedConfigGeneration,
@@ -68,19 +69,23 @@ class SyncProfileStore(context: Context) {
 
     /** 写 stagedConfig(generation=N) 标记与载荷（config 内容已写入 Core 配置存储）。 */
     suspend fun stageConfig(
+        projectId: String,
         generation: Long,
         configJson: String,
     ) {
         dataStore.edit { prefs ->
-            prefs[PREF_STAGED_CONFIG_GEN] = generation
-            prefs[PREF_STAGED_CONFIG_JSON] = configJson
+            prefs[prefStagedConfigGen(projectId)] = generation
+            prefs[prefStagedConfigJson(projectId)] = configJson
         }
     }
 
     /** 写 stagedSecrets(generation=N) 标记（凭据已按 generation 写入安全存储）。 */
-    suspend fun stageSecrets(generation: Long) {
+    suspend fun stageSecrets(
+        projectId: String,
+        generation: Long,
+    ) {
         dataStore.edit { prefs ->
-            prefs[PREF_STAGED_SECRETS_GEN] = generation
+            prefs[prefStagedSecretsGen(projectId)] = generation
         }
     }
 
@@ -89,40 +94,44 @@ class SyncProfileStore(context: Context) {
      * 失败时旧 generation 继续有效（staged 标记停留在 N，读取者仍读旧 committed 版本）。
      */
     suspend fun commitGeneration(
+        projectId: String,
         generation: Long,
         committedConfigJson: String,
     ) {
         dataStore.edit { prefs ->
-            prefs[PREF_ACTIVE] = generation
-            prefs[PREF_COMMITTED_CONFIG_JSON] = committedConfigJson
+            prefs[prefActive(projectId)] = generation
+            prefs[prefCommittedConfigJson(projectId)] = committedConfigJson
         }
     }
 
     /**
      * #595 五：清理崩溃遗留的未提交 staged 标记 — staged 标记不是
-     * [activeGeneration] 时清除（staged 但从未提交的 generation 在下次
-     * 提交时会被覆盖，这里主动清理避免 DataStore 残留）。
+     * [ProfileCommitState.activeGeneration] 时清除（staged 但从未提交的 generation 在下次
+     * 提交时会被覆盖，这里主动清理避免 DataStore 拗留）。
      */
-    suspend fun clearStaleStagedMarkers(activeGeneration: Long) {
+    suspend fun clearStaleStagedMarkers(
+        projectId: String,
+        activeGeneration: Long,
+    ) {
         dataStore.edit { prefs ->
-            if ((prefs[PREF_STAGED_CONFIG_GEN] ?: -1L) != activeGeneration) {
-                prefs.remove(PREF_STAGED_CONFIG_GEN)
-                prefs.remove(PREF_STAGED_CONFIG_JSON)
+            if ((prefs[prefStagedConfigGen(projectId)] ?: -1L) != activeGeneration) {
+                prefs.remove(prefStagedConfigGen(projectId))
+                prefs.remove(prefStagedConfigJson(projectId))
             }
-            if ((prefs[PREF_STAGED_SECRETS_GEN] ?: -1L) != activeGeneration) {
-                prefs.remove(PREF_STAGED_SECRETS_GEN)
+            if ((prefs[prefStagedSecretsGen(projectId)] ?: -1L) != activeGeneration) {
+                prefs.remove(prefStagedSecretsGen(projectId))
             }
         }
     }
 
-    /** 测试隔离：清空全部提交状态。 */
-    suspend fun clear() {
+    /** 测试隔离：清空指定作品的全部提交状态。 */
+    suspend fun clear(projectId: String) {
         dataStore.edit { prefs ->
-            prefs.remove(PREF_ACTIVE)
-            prefs.remove(PREF_COMMITTED_CONFIG_JSON)
-            prefs.remove(PREF_STAGED_CONFIG_GEN)
-            prefs.remove(PREF_STAGED_CONFIG_JSON)
-            prefs.remove(PREF_STAGED_SECRETS_GEN)
+            prefs.remove(prefActive(projectId))
+            prefs.remove(prefCommittedConfigJson(projectId))
+            prefs.remove(prefStagedConfigGen(projectId))
+            prefs.remove(prefStagedConfigJson(projectId))
+            prefs.remove(prefStagedSecretsGen(projectId))
         }
     }
 
@@ -133,11 +142,19 @@ class SyncProfileStore(context: Context) {
         private const val KEY_STAGED_CONFIG_JSON = "staged_config_json"
         private const val KEY_STAGED_SECRETS_GENERATION = "staged_secrets_generation"
 
-        private val PREF_ACTIVE = longPreferencesKey(KEY_ACTIVE_GENERATION)
-        private val PREF_COMMITTED_CONFIG_JSON = stringPreferencesKey(KEY_COMMITTED_CONFIG_JSON)
-        private val PREF_STAGED_CONFIG_GEN = longPreferencesKey(KEY_STAGED_CONFIG_GENERATION)
-        private val PREF_STAGED_CONFIG_JSON = stringPreferencesKey(KEY_STAGED_CONFIG_JSON)
-        private val PREF_STAGED_SECRETS_GEN = longPreferencesKey(KEY_STAGED_SECRETS_GENERATION)
+        /** #600 评论 #3 问题二：按 projectId 前缀生成 key，不同作品的标记互不干扰。 */
+        private fun prefActive(projectId: String) = longPreferencesKey("$projectId.$KEY_ACTIVE_GENERATION")
+
+        private fun prefCommittedConfigJson(projectId: String) =
+            stringPreferencesKey("$projectId.$KEY_COMMITTED_CONFIG_JSON")
+
+        private fun prefStagedConfigGen(projectId: String) =
+            longPreferencesKey("$projectId.$KEY_STAGED_CONFIG_GENERATION")
+
+        private fun prefStagedConfigJson(projectId: String) = stringPreferencesKey("$projectId.$KEY_STAGED_CONFIG_JSON")
+
+        private fun prefStagedSecretsGen(projectId: String) =
+            longPreferencesKey("$projectId.$KEY_STAGED_SECRETS_GENERATION")
     }
 }
 

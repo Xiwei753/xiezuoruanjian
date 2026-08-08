@@ -15,16 +15,26 @@ Supersedes: None
 - 详见 `.github/workflows/` 目录。
 
 ## 同步规则
-- 数据同步以**单个作品目录**为根（Issue #600）：每个作品目录自身就是 Git 仓库，同步只覆盖该作品的内容与它自己的同步元数据。
-- 同步遵循作品目录内定义的严格白名单/黑名单。
-- 应用级数据（设置、同步凭证、统计、最近编辑、设备信息、星图、日志、回收站）位于 `app_data_root`，不在任何作品仓库内，不参与作品同步。
+- 系统存在两种明确的同步目标（Issue #600 评论 #3 问题四）：
+  - **应用级 Git**：同步根 = `app_data_root`，同步设置、全局星图、主题调色板。
+  - **作品级 Git**：同步根 = `project_root`（`projects_root/<project_id>`），同步单部作品正文、元数据、作品自己的同步状态。
+- 两种目标各自独立的 Git 仓库、白名单/黑名单和同步配置，在 API/数据模型里明确区分为 `AppSyncProfile` 与 `ProjectSyncProfile(projectId)`，不混成同一个 `SyncProfile`。
+- 冲突存储为单独的冲突文件，绝不自动覆盖本地数据。
+- 保存 ≠ 同步。连续保存不会产生连续网络请求。
 
-## 作品同步白名单/黑名单
+## 应用级同步白名单/黑名单
+
+同步根 = `app_data_root`，路径相对应用数据根：
+
+- **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、`themes/palettes/**`。
+- **黑名单（绝不参与）**：`作品/`（projects_root）、`日志/`（log_dir）、`导出/`、`备份/`、`settings.local.json`、`recent_edits.json`、含 `secret` 的路径（`app-meta/sync/*secret*`）、`device/`、`app-meta/stats/`、`app-meta/transactions/`、`.git/`、`.tmp`/`.lock` 后缀、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
+
+## 作品级同步白名单/黑名单
 
 同步根 = 作品目录（`project_root`），路径相对作品目录：
 
 - **白名单（参与同步）**：`project.json`、`volumes/**/volume.json`、`volumes/**/chapters/**/chapter.md`、`volumes/**/chapters/**/chapter.meta.json`、`characters/**`、`app-meta/sync/manifest.sync.json`。
-- **黑名单（绝不参与）**：`app-meta/sync/state.local.json`（及旧格式 `sync_state.json`）、`.git/`、`.tmp`/`.lock` 后缀、`app-meta/logs`、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
+- **黑名单（绝不参与）**：`app-meta/sync/config.local.json`、`app-meta/sync/state.local.json`（及旧格式 `sync_state.json`）、`app-meta/sync/conflicts.json`、含 `secret` 的路径、`.git/`、`.tmp`/`.lock` 后缀、`app-meta/logs`、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
 
 ## 内容分类（ContentClass）
 
@@ -110,4 +120,6 @@ Supersedes: None
 | Core | `perform_lww_sync` 入口检查 `last_sync_time` | `max(sync_interval_seconds, 60)` |
 | Linux_qt Rust | `can_start_auto_sync(reason, 60)` | 同 reason 60 秒 |
 | Linux_qt QML | `workspaceOpenAutoSyncTimer` / `foregroundAutoSyncTimer` | 1.5s / 1.2s 延迟 |
-| Android | `AutoSyncWorker` elapsed check + WorkManager 周期 | `syncIntervalSeconds`（默认 300s） |
+| Android | `AutoSyncWorker` 遍历所有作品，每个作品独立检查 interval/elapsed + WorkManager 周期 | 每作品 `syncIntervalSeconds`（默认 300s） |
+
+`AutoSyncWorker` 遍历 `ProjectRepository.getProjects()`，逐个读取该作品的 `snapshotSyncProfile(projectId)`，只处理 `enabled && autoSync` 的作品，分别调用 `runSync(..., projectId, snapshot)`，每个作品独立检查 interval/elapsed，不再依赖单一 `ActiveProjectGate`。

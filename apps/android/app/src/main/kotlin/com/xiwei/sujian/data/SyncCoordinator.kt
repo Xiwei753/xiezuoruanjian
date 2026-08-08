@@ -67,7 +67,7 @@ class SyncCoordinator(
                 snapshot ?: run {
                     val result =
                         withContext(Dispatchers.IO) {
-                            SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
+                            SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile(projectId) }
                         }
                     when (result) {
                         is SyncProfileReadResult.Found -> result.snapshot
@@ -84,7 +84,7 @@ class SyncCoordinator(
                 syncStatusRepository.notifyUnconfigured()
                 return SyncOutcome.Unconfigured
             }
-            val capability = withContext(Dispatchers.IO) { settingsRepository.getSyncCapability() }
+            val capability = withContext(Dispatchers.IO) { settingsRepository.getSyncCapability(projectId) }
             if (!capability.canRun) {
                 syncStatusRepository.notifyUnconfigured()
                 return SyncOutcome.Disabled

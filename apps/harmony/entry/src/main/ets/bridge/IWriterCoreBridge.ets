@@ -87,14 +87,19 @@ export interface IWriterCoreBridge {
   deletePaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<boolean>>
   listBuiltinThemes(): Promise<ResultEnvelope<BuiltinThemeDto[]>>
 
-  // Sync
-  // loadSyncConfig/saveSyncConfig/syncDiagnostics are global (not per-project).
-  // syncDryRun/performSync are per-project: projectId selects the sync root.
-  loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>>
-  saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>>
+  // Sync（作品级，per-project: projectId selects the sync root）
+  loadSyncConfig(projectId: string): Promise<ResultEnvelope<SyncConfig>>
+  saveSyncConfig(projectId: string, config: SyncConfig): Promise<ResultEnvelope<boolean>>
   syncDryRun(projectId: string): Promise<ResultEnvelope<SyncResult>>
   performSync(projectId: string): Promise<ResultEnvelope<SyncResult>>
-  syncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>>
+  syncDiagnostics(projectId: string): Promise<ResultEnvelope<SyncDiagnosticsResult>>
+
+  // 应用级同步通道（Issue #600 评论 #3 问题四）
+  // 应用级 Git 仓库根 = app_data_root，同步设置/全局星图/主题调色板。
+  loadAppSyncConfig(): Promise<ResultEnvelope<SyncConfig>>
+  saveAppSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>>
+  performAppSync(): Promise<ResultEnvelope<SyncResult>>
+  appSyncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>>
 
   // Stats
   getWritingStats(): Promise<ResultEnvelope<WritingStats>>

@@ -1,31 +1,44 @@
 // ── Sync NAPI handlers ──
 // Included by napi_init.cpp — expects ReturnJsonString and writer_core_bridge.h to be available.
 // All handlers return ResultEnvelope JSON via ReturnJsonString (which frees the core-allocated char*).
-// NativeSaveSyncConfig takes a SyncConfigDto JSON as its first argument.
-// NativeSyncDryRun / NativePerformSync take a project_id string as first argument (per-project sync).
-// NativeLoadSyncConfig / NativeSaveSyncConfig / NativeSyncDiagnostics are global (no project_id).
+// All sync handlers are per-project: project_id is the first argument (Issue #600 评论 #3).
+// NativeSaveSyncConfig takes project_id + SyncConfigDto JSON as arguments.
 
 static napi_value NativeLoadSyncConfig(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_load_sync_config());
-}
-
-static napi_value NativeSaveSyncConfig(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
+    char project_id[256] = {0};
+    if (argc >= 1) {
+        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
+    }
+
+    return ReturnJsonString(env, writer_core_load_sync_config(project_id));
+}
+
+static napi_value NativeSaveSyncConfig(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char project_id[256] = {0};
+    if (argc >= 1) {
+        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
+    }
+
     size_t json_len = 0;
     char* json = nullptr;
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
+    if (argc >= 2) {
+        napi_get_value_string_utf8(env, args[1], nullptr, 0, &json_len);
         json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[0], json, json_len + 1, &json_len);
+        napi_get_value_string_utf8(env, args[1], json, json_len + 1, &json_len);
     } else {
         json = new char[1];
         json[0] = '\0';
     }
 
-    napi_value result = ReturnJsonString(env, writer_core_save_sync_config(json));
+    napi_value result = ReturnJsonString(env, writer_core_save_sync_config(project_id, json));
     delete[] json;
     return result;
 }
@@ -44,7 +57,16 @@ static napi_value NativeSyncDryRun(napi_env env, napi_callback_info info) {
 }
 
 static napi_value NativeSyncDiagnostics(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_sync_diagnostics());
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char project_id[256] = {0};
+    if (argc >= 1) {
+        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
+    }
+
+    return ReturnJsonString(env, writer_core_sync_diagnostics(project_id));
 }
 
 static napi_value NativePerformSync(napi_env env, napi_callback_info info) {

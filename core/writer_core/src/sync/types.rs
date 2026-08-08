@@ -194,13 +194,32 @@ pub enum FirstSyncMode {
     UnrelatedHistories,
 }
 
-/// 同步配置 — 持久化为 `app-meta/sync/config.json`，UI 层读写。
+/// 同步范围 — 区分作品级与应用级两个独立同步通道（Issue #600 评论 #3）。
+///
+/// - `Project`：同步根为单个作品目录，白名单为作品正文/元数据。
+/// - `App`：同步根为 `app_data_root`，白名单为设置/全局星图/主题调色板。
+///
+/// 该字段不暴露到 `SyncConfigDto`（DTO 转换时默认 `Project`），
+/// 应用级同步由 facade 层 `perform_app_sync` 等入口显式设置 `scope = App`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncScope {
+    /// 作品级同步：单部作品正文、元数据、作品自己的同步状态。
+    #[default]
+    Project,
+    /// 应用级同步：设置、全局星图、主题调色板。
+    App,
+}
+
+/// 同步配置 — 持久化为 `<sync_root>/app-meta/sync/config.local.json`，UI 层读写。
 ///
 /// 非线程安全：只在主线程读写，同步引擎在同步期间持有快照。
 /// `sync_interval_seconds` 最小有效值为 60（引擎侧 clamp），0 表示仅手动同步。
 ///
 /// 敏感字段（token、ssh_private_key）不在 SyncConfig 中，
 /// 由 SyncSecrets 单独管理，平台端安全存储注入。
+///
+/// `scope` 字段区分作品级与应用级同步，默认 `Project`（向后兼容）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
     /// 是否启用同步
@@ -235,6 +254,10 @@ pub struct SyncConfig {
         alias = "android_has_access_network_state_permission"
     )]
     pub has_network_state_permission: bool,
+    /// 同步范围（作品级 / 应用级），默认 `Project`。
+    /// 不暴露到 DTO，由 facade 层应用级入口显式设置。
+    #[serde(default)]
+    pub scope: SyncScope,
 }
 
 pub(crate) fn default_true() -> bool {

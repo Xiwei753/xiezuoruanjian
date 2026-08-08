@@ -3,9 +3,17 @@ package com.xiwei.sujian.data
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.xiwei.sujian.diagnostics.DiagnosticsEvents
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.SyncTrigger
 
+/**
+ * #600 评论 #3 问题三：自动同步不再依赖 ActiveProjectGate（进程重启后 null）。
+ *
+ * doWork 遍历 ProjectRepository.getProjects()，逐个读取 snapshotSyncProfile(projectId)，
+ * 只处理 enabled && autoSync 的作品，分别调用 runSync(..., projectId, snapshot)。
+ * 一个 WorkManager 周期任务负责所有已配置作品，不需要给每个作品造一套 Worker。
+ */
 class AutoSyncWorker(
     appContext: Context,
     workerParams: WorkerParameters,
@@ -20,45 +28,115 @@ class AutoSyncWorker(
             (applicationContext as? com.xiwei.sujian.runtime.SujianAppDependenciesProvider)
                 ?.dependencies
                 ?: return Result.failure()
+
+        // #600 评论 #3 问题三：遍历所有作品，逐个尝试自动同步。
+        // 不再依赖 ActiveProjectGate.currentProjectId()（进程重启后 null）。
+        val projects =
+            try {
+                deps.projectRepository.getProjects()
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "Unable to list projects for auto sync", e)
+                return Result.retry()
+            }
+
+        var anyTransientFailure = false
+        var anyTerminalFailure = false
+        for (project in projects) {
+            val outcome = syncOneProject(deps, project.id)
+            when (outcome) {
+                ProjectSyncOutcome.TransientFailure -> anyTransientFailure = true
+                ProjectSyncOutcome.TerminalFailure -> anyTerminalFailure = true
+                else -> { }
+            }
+        }
+
+        // 任一作品出现确定性失败时整体 failure（让 WorkManager 退避停止该周期）；
+        // 仅临时故障时 retry；全部成功/跳过时 success。
+        return when {
+            anyTerminalFailure -> Result.failure()
+            anyTransientFailure -> Result.retry()
+            else -> Result.success()
+        }
+    }
+
+    /**
+     * 单个作品的自动同步 — 提取为独立方法降低 doWork 长度。
+     * 返回该作品的同步结果分类（成功/跳过/临时失败/确定性失败）。
+     */
+    private suspend fun syncOneProject(
+        deps: com.xiwei.sujian.runtime.SujianAppDependencies,
+        projectId: String,
+    ): ProjectSyncOutcome {
         val settingsRepository = deps.settingsRepository
-        // #592 六：一次只读取一份完整不可变快照（generation + config + secrets），
-        // 后续整个操作（shouldSync 判定 + runSync）只使用这份 snapshot。
+        // #592 六：一次只读取一份完整不可变快照（generation + config + secrets）。
         val snapshotResult =
             try {
-                SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
+                SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile(projectId) }
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "Unable to load sync profile snapshot", e)
-                return Result.retry()
+                DiagnosticsLogger.w(TAG, "Unable to load sync profile snapshot for project $projectId", e)
+                return ProjectSyncOutcome.TransientFailure
             }
         val snapshot =
             when (snapshotResult) {
                 is SyncProfileReadResult.Found -> snapshotResult.snapshot
                 is SyncProfileReadResult.NotConfigured -> snapshotResult.snapshot
                 is SyncProfileReadResult.Failed -> {
-                    DiagnosticsLogger.w(TAG, "Sync profile snapshot failed: ${snapshotResult.message}")
-                    // #595 四：按失败类型映射 — 临时网络/IO/原生库故障交给 WorkManager
-                    // 退避重试；Fatal/协议/配置损坏是确定性失败，重试没有意义。
+                    DiagnosticsLogger.w(
+                        TAG,
+                        "Sync profile snapshot failed for project $projectId: ${snapshotResult.message}",
+                    )
+                    // #595 四：临时故障交给 WorkManager 退避重试；确定性失败跳过该作品。
                     return if (snapshotResult.kind.isTransientReadFailure()) {
-                        Result.retry()
+                        ProjectSyncOutcome.TransientFailure
                     } else {
-                        Result.failure()
+                        ProjectSyncOutcome.Skipped
                     }
                 }
             }
-        if (!AutoSyncScheduler.shouldSync(snapshot.config, snapshot.secrets)) return Result.success()
+        if (!AutoSyncScheduler.shouldSync(snapshot.config, snapshot.secrets)) return ProjectSyncOutcome.Skipped
 
-        // #600：sync 已改为 per-project — 后台自动同步针对当前活动作品。
-        // 无活动作品时无需同步（用户未打开任何作品）。
-        val projectId = ActiveProjectGate.currentProjectId() ?: return Result.success()
+        if (!shouldSyncNow(settingsRepository, projectId, snapshot)) return ProjectSyncOutcome.Skipped
 
+        val outcome = deps.syncCoordinator.runSync(SyncTrigger.Auto, projectId, snapshot)
+        return when (outcome) {
+            is SyncOutcome.Completed -> {
+                DiagnosticsEvents.syncEvent("autosync", "completed")
+                ProjectSyncOutcome.Success
+            }
+            is SyncOutcome.Unconfigured,
+            is SyncOutcome.Disabled,
+            -> {
+                DiagnosticsEvents.syncEvent("autosync", "unconfigured")
+                ProjectSyncOutcome.Skipped
+            }
+            is SyncOutcome.Busy -> {
+                DiagnosticsEvents.syncEvent("autosync", "busy")
+                ProjectSyncOutcome.TransientFailure
+            }
+            is SyncOutcome.RetryableFailure -> {
+                DiagnosticsEvents.syncEvent("autosync", "retryable_failure")
+                ProjectSyncOutcome.TransientFailure
+            }
+            is SyncOutcome.TerminalFailure -> {
+                DiagnosticsEvents.syncEvent("autosync", "terminal_failure")
+                ProjectSyncOutcome.TerminalFailure
+            }
+        }
+    }
+
+    /** 判定该作品是否到同步时间点（interval/elapsed 检查）。 */
+    private suspend fun shouldSyncNow(
+        settingsRepository: SettingsRepository,
+        projectId: String,
+        snapshot: SyncProfileSnapshot,
+    ): Boolean {
         val state =
             try {
                 settingsRepository.loadSyncState(projectId)
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "Unable to load sync state", e)
-                return Result.retry()
+                DiagnosticsLogger.w(TAG, "Unable to load sync state for project $projectId", e)
+                return false
             }
-
         val interval =
             when {
                 snapshot.config.syncIntervalSeconds != null && snapshot.config.syncIntervalSeconds > 0 ->
@@ -71,33 +149,15 @@ class AutoSyncWorker(
             } else {
                 null
             }
-        if (elapsed != null && elapsed < interval) return Result.success()
+        return elapsed == null || elapsed >= interval
+    }
 
-        val outcome = deps.syncCoordinator.runSync(SyncTrigger.Auto, projectId, snapshot)
-        return when (outcome) {
-            is com.xiwei.sujian.data.SyncOutcome.Completed -> {
-                com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "completed")
-                Result.success()
-            }
-            is com.xiwei.sujian.data.SyncOutcome.Unconfigured,
-            is com.xiwei.sujian.data.SyncOutcome.Disabled,
-            -> {
-                com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "unconfigured")
-                Result.success()
-            }
-            is com.xiwei.sujian.data.SyncOutcome.Busy -> {
-                com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "busy")
-                Result.retry()
-            }
-            is com.xiwei.sujian.data.SyncOutcome.RetryableFailure -> {
-                com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "retryable_failure")
-                Result.retry()
-            }
-            is com.xiwei.sujian.data.SyncOutcome.TerminalFailure -> {
-                com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "terminal_failure")
-                Result.failure()
-            }
-        }
+    /** 单个作品同步结果分类。 */
+    private enum class ProjectSyncOutcome {
+        Success,
+        Skipped,
+        TransientFailure,
+        TerminalFailure,
     }
 
     companion object {

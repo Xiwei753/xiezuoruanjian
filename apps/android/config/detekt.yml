@@ -144,6 +144,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/data/SettingsRepository.kt"
       # --- FFI 门面：121 个向后兼容委托函数，签名由 Core 契约决定 ---
       - "**/kotlin/com/xiwei/sujian/data/AppServiceBridge.kt"
+      - "**/kotlin/com/xiwei/sujian/data/SyncBridge.kt"
       # --- 编辑器窗口宿主：窗口生命周期/绑定/输入汇聚，按阶段拆分函数 ---
       - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorWindowHost.kt"
       # --- 编辑器：宿主/管线/规划器大类 ---
@@ -168,6 +169,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/designsystem/component/SujianButton.kt"
       # --- 数据层桥接：FFI桥接函数参数由Core契约决定 ---
       - "**/kotlin/com/xiwei/sujian/data/AppServiceBridge.kt"
+      - "**/kotlin/com/xiwei/sujian/data/SyncBridge.kt"
       - "**/kotlin/com/xiwei/sujian/data/StatsBridge.kt"
       - "**/kotlin/com/xiwei/sujian/data/ProjectRepository.kt"
       - "**/kotlin/com/xiwei/sujian/data/WriterAppServiceHolder.kt"
@@ -223,6 +225,7 @@ complexity:
     excludes:
       # --- 数据层桥接：FFI桥接函数由Core契约决定 ---
       - "**/kotlin/com/xiwei/sujian/data/AppServiceBridge.kt"
+      - "**/kotlin/com/xiwei/sujian/data/SyncBridge.kt"
       - "**/kotlin/com/xiwei/sujian/data/BridgeMappers.kt"
       - "**/kotlin/com/xiwei/sujian/data/LayoutPolicyBridge.kt"
       - "**/kotlin/com/xiwei/sujian/data/SettingsRepository.kt"

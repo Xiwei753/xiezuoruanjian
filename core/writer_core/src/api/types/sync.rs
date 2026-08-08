@@ -68,6 +68,7 @@ impl From<SyncConfigDto> for crate::sync::SyncConfig {
             username: c.username,
             has_network_state_permission: c.has_network_state_permission,
             has_network_permission: c.has_network_permission,
+            scope: crate::sync::SyncScope::default(),
         }
     }
 }

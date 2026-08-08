@@ -173,7 +173,7 @@ impl SyncService {
         if !config.enabled {
             return Ok(SyncPlan::new());
         }
-        scanner::build_sync_plan(sync_root)
+        scanner::build_sync_plan(sync_root, config.scope)
     }
 }
 
@@ -355,9 +355,13 @@ fn handle_merge_conflict(
                 }
             }
 
-            if !SyncService::is_blacklisted_path(&sync_conflict.local_path)
-                && SyncService::is_whitelisted_path(&sync_conflict.local_path)
-            {
+            if !SyncService::is_blacklisted_path(
+                &sync_conflict.local_path,
+                crate::sync::types::SyncScope::Project,
+            ) && SyncService::is_whitelisted_path(
+                &sync_conflict.local_path,
+                crate::sync::types::SyncScope::Project,
+            ) {
                 if let Err(e) = SyncService::record_sync_conflict(
                     sync_root,
                     sync_conflict.clone(),
@@ -388,7 +392,8 @@ fn handle_merge_conflict(
         };
     }
 
-    let (local_dirty, _) = collect_git_status_summary(&repo);
+    let (local_dirty, _) =
+        collect_git_status_summary(&repo, crate::sync::types::SyncScope::Project);
     let fetch_commit_id = repo
         .find_reference("FETCH_HEAD")
         .ok()
@@ -575,7 +580,9 @@ impl SyncService {
         if let Ok(status_list) = backend.status(sync_root) {
             let mut dirty_non_whitelisted = Vec::new();
             for p in &status_list {
-                if !SyncService::is_blacklisted_path(p) && !SyncService::is_whitelisted_path(p) {
+                if !SyncService::is_blacklisted_path(p, config.scope)
+                    && !SyncService::is_whitelisted_path(p, config.scope)
+                {
                     dirty_non_whitelisted.push(p.clone());
                 }
             }
@@ -592,7 +599,9 @@ impl SyncService {
         if let Ok(status_list) = backend.status(sync_root) {
             let mut paths_to_stage = Vec::new();
             for p in &status_list {
-                if SyncService::is_whitelisted_path(p) && !SyncService::is_blacklisted_path(p) {
+                if SyncService::is_whitelisted_path(p, config.scope)
+                    && !SyncService::is_blacklisted_path(p, config.scope)
+                {
                     paths_to_stage.push(p.as_str());
                 }
             }
@@ -712,7 +721,7 @@ impl SyncService {
             let _ = Self::save_sync_state(sync_root, &state_for_pending);
         }
 
-        let plan = match scanner::build_sync_plan(sync_root) {
+        let plan = match scanner::build_sync_plan(sync_root, config.scope) {
             Ok(p) => p,
             Err(e) => {
                 return Ok(SyncResult::error(
@@ -818,13 +827,17 @@ impl SyncService {
     /// 扫描作品目录中所有可同步文件。
     pub fn scan_for_sync(
         sync_root: &Path,
+        scope: crate::sync::types::SyncScope,
     ) -> crate::Result<Vec<crate::sync::types::SyncFileEntry>> {
-        scanner::scan_for_sync(sync_root)
+        scanner::scan_for_sync(sync_root, scope)
     }
 
     /// 从作品目录构建同步计划（上传/下载/删除/冲突文件列表）。
-    pub fn build_sync_plan(sync_root: &Path) -> crate::Result<SyncPlan> {
-        scanner::build_sync_plan(sync_root)
+    pub fn build_sync_plan(
+        sync_root: &Path,
+        scope: crate::sync::types::SyncScope,
+    ) -> crate::Result<SyncPlan> {
+        scanner::build_sync_plan(sync_root, scope)
     }
 
     /// 占位同步方法——当前返回 NotImplemented，实际同步通过 perform_lww_sync 执行。

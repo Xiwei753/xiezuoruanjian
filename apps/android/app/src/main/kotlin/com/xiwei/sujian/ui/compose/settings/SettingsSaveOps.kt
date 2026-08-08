@@ -29,6 +29,35 @@ fun SettingsViewModel.loadInitial() {
 }
 
 /**
+ * #600 评论 #3 问题二：按活动作品读取 committed profile — 无活动作品时返回 Failed。
+ */
+private suspend fun SettingsViewModel.loadCommittedProfileForProject(
+    repo: SettingsRepository,
+    projectId: String?,
+): com.xiwei.sujian.data.SyncProfileReadResult =
+    if (projectId != null) {
+        withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(projectId) }
+    } else {
+        com.xiwei.sujian.data.SyncProfileReadResult.Failed(
+            com.xiwei.sujian.data.SyncFailureKind.Fatal,
+            MSG_NO_ACTIVE_PROJECT,
+        )
+    }
+
+/**
+ * #600 评论 #3 问题二：按活动作品读取 sync capability — 无活动作品时返回默认。
+ */
+private suspend fun SettingsViewModel.loadSyncCapabilityForProject(
+    repo: SettingsRepository,
+    projectId: String?,
+): com.xiwei.sujian.model.SyncCapabilityData =
+    if (projectId != null) {
+        withContext(Dispatchers.IO) { repo.getSyncCapability(projectId) }
+    } else {
+        com.xiwei.sujian.model.SyncCapabilityData()
+    }
+
+/**
  * 加载初始快照 — 从 loadInitial 拆分以降低认知复杂度。
  * 读取活动 generation 的完整 snapshot（#595 八），不再读 live legacy 槽。
  */
@@ -40,10 +69,12 @@ private suspend fun SettingsViewModel.loadInitialSnapshot(repo: SettingsReposito
 
     val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
     val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
-    val committedProfile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
+    // #600 评论 #3 问题二：profile/capability 按当前活动作品路由 — 提取为 helper 降低认知复杂度。
+    val activeProjectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
+    val committedProfile = loadCommittedProfileForProject(repo, activeProjectId)
     // #595 四：类型化加载状态 — Failed 时保留当前字段值，页面显示真实错误。
     val syncProfileLoadState = committedProfile.toSyncProfileLoadState()
-    val syncCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
+    val syncCapability = loadSyncCapabilityForProject(repo, activeProjectId)
     val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
     val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
     val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
@@ -160,11 +191,18 @@ private suspend fun SettingsViewModel.saveSyncProfileField(
     failures: MutableList<SaveFailure>,
 ): Pair<Boolean, Boolean> {
     if (syncConfig == null && syncSecrets == null) return false to false
+    // #600 评论 #3 问题二：commitSyncProfile 按当前活动作品路由 —
+    // 无活动作品时直接失败，不写入任何作品。
+    val projectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
+    if (projectId == null) {
+        failures.add(SaveFailure(SaveField.SYNC_CONFIG, syncConfig?.revision ?: 0L))
+        return false to false
+    }
     val draftConfig = syncConfig?.config ?: _uiState.value.syncConfig
     val draftSecrets = syncSecrets?.secrets ?: _uiState.value.syncSecrets
     val commitResult =
         withContext(Dispatchers.IO) {
-            repo.commitSyncProfile(draftConfig, draftSecrets)
+            repo.commitSyncProfile(projectId, draftConfig, draftSecrets)
         }
     var syncConfigSaved = false
     var syncSecretsSaved = false
@@ -288,7 +326,17 @@ private suspend fun SettingsViewModel.rollbackSyncConfig(
     if (syncConfigRevision != expectedRevision) return
     // #595 八/五：回滚读取活动 generation 的完整 snapshot，不再读 live 槽；
     // 类型化处理 — Failed 保留当前 UI 值（不静默退化为默认值/null）。
-    val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
+    // #600 评论 #3 问题二：按当前活动作品路由。
+    val rollbackProjectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
+    val profile =
+        if (rollbackProjectId != null) {
+            withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(rollbackProjectId) }
+        } else {
+            com.xiwei.sujian.data.SyncProfileReadResult.Failed(
+                com.xiwei.sujian.data.SyncFailureKind.Fatal,
+                MSG_NO_ACTIVE_PROJECT,
+            )
+        }
     if (syncConfigRevision != expectedRevision) return
     syncConfigRevision = syncConfigPersistedRevision
     _uiState.update { it.copy(syncConfig = profile.toSyncProfileLoadState().confirmedConfig ?: it.syncConfig) }
@@ -299,7 +347,17 @@ private suspend fun SettingsViewModel.rollbackSyncSecrets(
     expectedRevision: Long,
 ) {
     if (syncSecretsRevision != expectedRevision) return
-    val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
+    // #600 评论 #3 问题二：按当前活动作品路由。
+    val rollbackSecretsProjectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
+    val profile =
+        if (rollbackSecretsProjectId != null) {
+            withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(rollbackSecretsProjectId) }
+        } else {
+            com.xiwei.sujian.data.SyncProfileReadResult.Failed(
+                com.xiwei.sujian.data.SyncFailureKind.Fatal,
+                MSG_NO_ACTIVE_PROJECT,
+            )
+        }
     if (syncSecretsRevision != expectedRevision) return
     syncSecretsRevision = syncSecretsPersistedRevision
     _uiState.update {
@@ -317,10 +375,25 @@ fun SettingsViewModel.mergeRefresh() {
         val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
         val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
         // #595 八：刷新读取活动 generation 的完整 snapshot，不再读 live legacy 槽。
-        val committedProfile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
+        // #600 评论 #3 问题二：按当前活动作品路由。
+        val mergeProjectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
+        val committedProfile =
+            if (mergeProjectId != null) {
+                withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(mergeProjectId) }
+            } else {
+                com.xiwei.sujian.data.SyncProfileReadResult.Failed(
+                    com.xiwei.sujian.data.SyncFailureKind.Fatal,
+                    MSG_NO_ACTIVE_PROJECT,
+                )
+            }
         // #595 四：类型化加载状态 — Failed 时保留字段值，页面显示真实错误。
         val syncProfileLoadState = committedProfile.toSyncProfileLoadState()
-        val syncCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
+        val syncCapability =
+            if (mergeProjectId != null) {
+                withContext(Dispatchers.IO) { repo.getSyncCapability(mergeProjectId) }
+            } else {
+                com.xiwei.sujian.model.SyncCapabilityData()
+            }
         val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
         val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
         val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }

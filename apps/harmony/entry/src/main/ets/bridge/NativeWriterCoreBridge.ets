@@ -273,14 +273,14 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.settingsBridge.listBuiltinThemes()
   }
 
-  // ── Sync ──
+  // ── Sync（作品级，per-project:<projectId>） ──
 
-  async loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
-    return this.syncBridge.loadSyncConfig()
+  async loadSyncConfig(projectId: string): Promise<ResultEnvelope<SyncConfig>> {
+    return this.syncBridge.loadSyncConfig(projectId)
   }
 
-  async saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
-    return this.syncBridge.saveSyncConfig(config)
+  async saveSyncConfig(projectId: string, config: SyncConfig): Promise<ResultEnvelope<boolean>> {
+    return this.syncBridge.saveSyncConfig(projectId, config)
   }
 
   async syncDryRun(projectId: string): Promise<ResultEnvelope<SyncResult>> {
@@ -291,8 +291,28 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.syncBridge.performSync(projectId)
   }
 
-  async syncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
-    return this.syncBridge.syncDiagnostics()
+  async syncDiagnostics(projectId: string): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
+    return this.syncBridge.syncDiagnostics(projectId)
+  }
+
+  // ── 应用级同步通道（Issue #600 评论 #3 问题四） ──
+  // 应用级 Git 仓库根 = app_data_root，同步设置/全局星图/主题调色板。
+  // AppSyncProfile 与 ProjectSyncProfile(projectId) 在 API/数据模型里明确区分。
+
+  async loadAppSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
+    return this.syncBridge.loadAppSyncConfig()
+  }
+
+  async saveAppSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
+    return this.syncBridge.saveAppSyncConfig(config)
+  }
+
+  async performAppSync(): Promise<ResultEnvelope<SyncResult>> {
+    return this.syncBridge.performAppSync()
+  }
+
+  async appSyncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
+    return this.syncBridge.appSyncDiagnostics()
   }
 
   // ── Stats ──

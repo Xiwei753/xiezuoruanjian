@@ -238,16 +238,19 @@ pub fn determine_diagnostics_status(result: &SyncDiagnosticsResultDto) -> String
 
 pub fn save_sync_configs(
     path: &str,
+    project_id: &str,
     config: &SyncConfig,
     secrets: &SyncSecrets,
 ) -> Result<(), String> {
-    // path 同时作为 app_data_root；projects_root 为 path/projects
-    let projects_root = std::path::Path::new(path)
-        .join("projects")
-        .to_string_lossy()
-        .to_string();
+    // path 是作品目录绝对路径；projects_root 为其父目录，project_id 为目录名。
+    // 这样 project_root(project_id) = projects_root/project_id = path。
+    let path_obj = std::path::Path::new(path);
+    let projects_root = path_obj
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| ".".to_string());
     let api = crate::backend::app_backend::create_core_api(path, &projects_root);
-    let config_result = api.save_sync_config(config.clone().into());
+    let config_result = api.save_sync_config(project_id, config.clone().into());
     let config_envelope = match config_result {
         Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
             data,
@@ -268,7 +271,7 @@ pub fn save_sync_configs(
         return Err(format!("{} ({})", raw_error, error_code));
     }
 
-    let secrets_result = api.save_sync_secrets(secrets.clone().into());
+    let secrets_result = api.save_sync_secrets(project_id, secrets.clone().into());
     let secrets_envelope = match secrets_result {
         Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
             data,

@@ -238,8 +238,10 @@ pub fn delete_project(projects_root: &Path, project_id: &str, app_data_root: &Pa
     ));
     fs::rename(&target_canon, &trash_path)?;
 
-    // Also update tombstone
-    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(app_data_root) {
+    // Also update tombstone — load/save sync state from trash_path (where the
+    // project now lives after the rename), not from project_dir (which no longer
+    // exists; save_sync_state would recreate it, breaking the delete).
+    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(&trash_path) {
         let rel_project_dir = project_dir
             .strip_prefix(projects_root)
             .unwrap_or(&project_dir)
@@ -257,7 +259,7 @@ pub fn delete_project(projects_root: &Path, project_id: &str, app_data_root: &Pa
             &rel_project_dir,
             &rel_trash_path,
         );
-        let _ = crate::sync::SyncService::save_sync_state(app_data_root, &state);
+        let _ = crate::sync::SyncService::save_sync_state(&trash_path, &state);
     }
     Ok(())
 }

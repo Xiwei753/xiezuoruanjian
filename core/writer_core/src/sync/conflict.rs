@@ -28,7 +28,10 @@ use std::path::Path;
     clippy::too_many_arguments,
     clippy::type_complexity
 )]
-pub(crate) fn collect_git_status_summary(repo: &git2::Repository) -> (bool, Vec<String>) {
+pub(crate) fn collect_git_status_summary(
+    repo: &git2::Repository,
+    scope: crate::sync::types::SyncScope,
+) -> (bool, Vec<String>) {
     let mut opts = git2::StatusOptions::new();
     opts.include_untracked(true);
     let mut local_dirty = false;
@@ -36,7 +39,8 @@ pub(crate) fn collect_git_status_summary(repo: &git2::Repository) -> (bool, Vec<
     if let Ok(statuses) = repo.statuses(Some(&mut opts)) {
         for entry in statuses.iter() {
             if let Some(path) = entry.path() {
-                if SyncService::is_blacklisted_path(path) || !SyncService::is_whitelisted_path(path)
+                if SyncService::is_blacklisted_path(path, scope)
+                    || !SyncService::is_whitelisted_path(path, scope)
                 {
                     continue;
                 }
@@ -68,7 +72,10 @@ pub(crate) fn collect_git_status_summary(repo: &git2::Repository) -> (bool, Vec<
     clippy::too_many_arguments,
     clippy::type_complexity
 )]
-pub(crate) fn collect_index_conflicts(repo: &git2::Repository) -> Vec<String> {
+pub(crate) fn collect_index_conflicts(
+    repo: &git2::Repository,
+    scope: crate::sync::types::SyncScope,
+) -> Vec<String> {
     let mut conflicted = Vec::new();
     if let Ok(index) = repo.index() {
         if index.has_conflicts() {
@@ -83,8 +90,8 @@ pub(crate) fn collect_index_conflicts(repo: &git2::Repository) -> Vec<String> {
                         best_path = Some(String::from_utf8_lossy(&ancestor.path).to_string());
                     }
                     if let Some(path) = best_path {
-                        if !SyncService::is_blacklisted_path(&path)
-                            && SyncService::is_whitelisted_path(&path)
+                        if !SyncService::is_blacklisted_path(&path, scope)
+                            && SyncService::is_whitelisted_path(&path, scope)
                         {
                             conflicted.push(path);
                         }
@@ -119,8 +126,9 @@ pub(crate) fn build_conflict_summary(
     repo: &git2::Repository,
     fetch_commit_id: Option<git2::Oid>,
     blocked_reason: &str,
+    scope: crate::sync::types::SyncScope,
 ) -> SyncConflictSummary {
-    let (local_dirty, dirty_files) = collect_git_status_summary(repo);
+    let (local_dirty, dirty_files) = collect_git_status_summary(repo, scope);
 
     let mut remote_changed = false;
     if let Some(remote_oid) = fetch_commit_id {
@@ -160,11 +168,12 @@ pub(crate) fn build_conflict_summary(
         }
     }
 
-    let index_conflicts = collect_index_conflicts(repo);
+    let index_conflicts = collect_index_conflicts(repo, scope);
     conflicted_files.extend(index_conflicts);
 
     conflicted_files.retain(|path| {
-        !SyncService::is_blacklisted_path(path) && SyncService::is_whitelisted_path(path)
+        !SyncService::is_blacklisted_path(path, scope)
+            && SyncService::is_whitelisted_path(path, scope)
     });
     conflicted_files.sort();
     conflicted_files.dedup();

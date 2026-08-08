@@ -38,8 +38,8 @@ class SyncStatusRepository(
         val indicatorState =
             try {
                 withContext(Dispatchers.IO) {
-                    val config = settingsRepository.loadSyncConfig()
-                    val capability = settingsRepository.getSyncCapability()
+                    val config = settingsRepository.loadSyncConfig(projectId)
+                    val capability = settingsRepository.getSyncCapability(projectId)
                     when {
                         config.enabled != true -> SyncIndicatorState.Unconfigured
                         !capability.canRun -> SyncIndicatorState.Unconfigured

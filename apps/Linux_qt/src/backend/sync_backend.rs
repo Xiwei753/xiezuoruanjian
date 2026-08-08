@@ -419,8 +419,14 @@ impl AppBackend {
             return "sync.block.no_workspace".into();
         }
 
+        // per-project sync：需要选中作品才能判断同步能力。
+        let project_id = match self.selected_project_id.as_deref() {
+            Some(id) if !id.is_empty() => id,
+            _ => return "sync.block.no_project_selected".into(),
+        };
+
         if let Some(api) = self.core_api() {
-            if let Ok(cap) = api.get_sync_capability() {
+            if let Ok(cap) = api.get_sync_capability(project_id) {
                 if !cap.can_run {
                     return cap
                         .block_message_key
@@ -453,6 +459,31 @@ impl AppBackend {
         let op_id = uuid::Uuid::new_v4().to_string();
         self.current_sync_operation_id = op_id.clone();
         self.current_sync_operation_kind = "diagnose".to_string();
+
+        // per-project sync：每个作品目录是独立 Git 仓库，必须指定作品。
+        let project_id = match self.selected_project_id.clone() {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                let state = writer_core::api::SyncOperationStateDto {
+                    operation_id: op_id.clone(),
+                    operation_kind: "diagnose".to_string(),
+                    status_code: "error".to_string(),
+                    phase_key: None,
+                    summary_key: Some("sync.block.no_project_selected".to_string()),
+                    summary_args: std::collections::HashMap::new(),
+                    counts: writer_core::api::SyncOperationCountsDto::default(),
+                    raw_error: None,
+                };
+                self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
+                self.sync_action_completed();
+                self.debug_error(
+                    "sync",
+                    "perform_sync_diagnostics_failed",
+                    "no_project_selected",
+                );
+                return op_id.into();
+            }
+        };
 
         if data_root.is_empty() {
             let state = writer_core::api::SyncOperationStateDto {
@@ -495,6 +526,7 @@ impl AppBackend {
         });
 
         let op_id_capture = op_id.clone();
+        let project_id_capture = project_id.clone();
         thread::spawn(move || {
             // SAFETY: catch_unwind requires the closure to be UnwindSafe. The closure only captures
             // owned String data (data_root, projects_root, op_id_capture, project_id_capture) which
@@ -502,7 +534,7 @@ impl AppBackend {
             // closure is UnwindSafe by auto-impl without needing AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
                 let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
-                let mut config = match api.load_sync_config() {
+                let mut config = match api.load_sync_config(&project_id_capture) {
                     Ok(c) => c,
                     Err(e) => {
                         let err_str = e.to_string();
@@ -527,7 +559,7 @@ impl AppBackend {
                 config.has_network_permission = net.is_connected;
                 config.has_network_state_permission = true;
 
-                match api.perform_sync_diagnostics(config) {
+                match api.perform_sync_diagnostics(&project_id_capture, config) {
                     Ok(result) => {
                         let status = determine_diagnostics_status(&result);
 
@@ -610,9 +642,24 @@ impl AppBackend {
     // AppBackend::load_sync_config
     pub(crate) fn load_sync_config(&mut self) {
         self.debug_log("sync", "load_sync_config_start", "");
+        // per-project sync：需要选中作品才能加载该作品的同步配置。
+        let project_id = match self.selected_project_id.clone() {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                self.current_sync_enabled = false;
+                self.current_sync_remote_url = "".to_string();
+                self.current_sync_branch = "main".to_string();
+                self.current_sync_token = "".to_string();
+                self.current_sync_status = "no_workspace".to_string();
+                self.sync_status_changed();
+                self.sync_config_changed();
+                self.debug_warn("sync", "load_sync_config_skipped", "no_project_selected");
+                return;
+            }
+        };
         if let Some(api) = self.core_api() {
-            let config_opt = api.load_sync_config().ok();
-            let token_opt = api.load_sync_secrets().ok().and_then(|s| s.token);
+            let config_opt = api.load_sync_config(&project_id).ok();
+            let token_opt = api.load_sync_secrets(&project_id).ok().and_then(|s| s.token);
             if let Some(config) = config_opt {
                 self.current_sync_enabled = config.enabled;
                 self.current_sync_backend_type = config.backend_type.clone();
@@ -661,10 +708,38 @@ impl AppBackend {
     pub(crate) fn save_sync_config(&mut self) -> bool {
         self.debug_log("sync", "save_sync_config_start", "");
         let mut error_state: Option<writer_core::api::SyncOperationStateDto> = None;
+        // per-project sync：需要选中作品才能保存该作品的同步配置。
+        let project_id = match self.selected_project_id.clone() {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                error_state = Some(writer_core::api::SyncOperationStateDto {
+                    operation_id: String::new(),
+                    operation_kind: "save_config".to_string(),
+                    status_code: "error".to_string(),
+                    phase_key: None,
+                    summary_key: Some("sync.block.no_project_selected".to_string()),
+                    summary_args: std::collections::HashMap::new(),
+                    counts: writer_core::api::SyncOperationCountsDto::default(),
+                    raw_error: None,
+                });
+                if let Some(state) = error_state {
+                    let msg = format!(
+                        "{}: {}",
+                        state.summary_key.as_deref().unwrap_or("error.other"),
+                        state.raw_error.as_deref().unwrap_or("")
+                    );
+                    self.set_error(&msg);
+                    self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
+                    self.sync_action_completed();
+                    self.debug_error("sync", "save_sync_config_failed", "no_project_selected");
+                }
+                return false;
+            }
+        };
         if let Some(api) = self.core_api() {
             let net = crate::backend::app_backend::current_network_state();
             let mut c = api
-                .load_sync_config()
+                .load_sync_config(&project_id)
                 .unwrap_or(writer_core::api::types::SyncConfigDto {
                     enabled: false,
                     backend_type: "github_api".to_string(),
@@ -705,7 +780,7 @@ impl AppBackend {
             }
 
             let mut s = api
-                .load_sync_secrets()
+                .load_sync_secrets(&project_id)
                 .unwrap_or(writer_core::api::types::SyncSecretsDto { token: None });
             if let Some(ref extracted_token) = parsed.extracted_token {
                 s.token = Some(extracted_token.clone());
@@ -715,7 +790,7 @@ impl AppBackend {
                 s.token = Some(self.current_sync_token.clone());
             }
 
-            let config_result = api.save_sync_config(c);
+            let config_result = api.save_sync_config(&project_id, c);
             let config_envelope = match config_result {
                 Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
                     data,
@@ -746,7 +821,7 @@ impl AppBackend {
                     raw_error: Some(format!("{} ({})", resolved_key, error_code)),
                 });
             } else {
-                let secrets_result = api.save_sync_secrets(s);
+                let secrets_result = api.save_sync_secrets(&project_id, s);
                 let secrets_envelope = match secrets_result {
                     Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
                         data,

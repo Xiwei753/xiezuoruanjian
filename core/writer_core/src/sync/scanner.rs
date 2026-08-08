@@ -15,7 +15,7 @@
 //! - **远端删除**：本地已不存在但远端仍有的文件
 //! - **墓碑清理**：超过 `purge_after` 时间的本地 trash 文件
 
-use crate::sync::types::{SyncFileEntry, SyncKind, SyncPlan};
+use crate::sync::types::{SyncFileEntry, SyncKind, SyncPlan, SyncScope};
 use crate::sync::SyncService;
 use std::path::Path;
 
@@ -24,7 +24,10 @@ use std::path::Path;
 ///
 /// `.git/` 目录被排除。`modified_time` 使用 Unix epoch 秒；
 /// 文件 hash 为空字符串表示计算失败（扫描不因单个文件失败而中断）。
-pub(crate) fn scan_for_sync(sync_root: &Path) -> crate::Result<Vec<SyncFileEntry>> {
+pub(crate) fn scan_for_sync(
+    sync_root: &Path,
+    scope: SyncScope,
+) -> crate::Result<Vec<SyncFileEntry>> {
     let mut entries = Vec::new();
 
     for entry in walkdir::WalkDir::new(sync_root)
@@ -55,7 +58,7 @@ pub(crate) fn scan_for_sync(sync_root: &Path) -> crate::Result<Vec<SyncFileEntry
 
         let file_hash = SyncService::compute_file_hash(&absolute_path).unwrap_or_default();
 
-        let sync_kind = if SyncService::is_whitelisted_path(&rel_path) {
+        let sync_kind = if SyncService::is_whitelisted_path(&rel_path, scope) {
             SyncKind::Upload
         } else {
             SyncKind::Ignore
@@ -85,17 +88,20 @@ pub(crate) fn scan_for_sync(sync_root: &Path) -> crate::Result<Vec<SyncFileEntry
     clippy::too_many_arguments,
     clippy::type_complexity
 )]
-pub(crate) fn build_sync_plan(sync_root: &Path) -> crate::Result<SyncPlan> {
+pub(crate) fn build_sync_plan(
+    sync_root: &Path,
+    scope: SyncScope,
+) -> crate::Result<SyncPlan> {
     let mut plan = SyncPlan::new();
 
-    let entries = scan_for_sync(sync_root)?;
+    let entries = scan_for_sync(sync_root, scope)?;
     let state = SyncService::load_sync_state(sync_root).unwrap_or_default();
     let is_first_sync = state.known_files.is_empty();
 
     let mut local_files = std::collections::HashSet::new();
 
     for entry in entries {
-        if SyncService::is_blacklisted_path(&entry.relative_path) {
+        if SyncService::is_blacklisted_path(&entry.relative_path, scope) {
             plan.ignored_files.push(entry.relative_path.clone());
             continue;
         }

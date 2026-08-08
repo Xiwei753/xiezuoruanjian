@@ -6,13 +6,15 @@ fn test_get_sync_capability_scenarios() {
     let temp_dir = tempdir().unwrap();
     std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
     let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
+    let project = api.create_project("Cap Test").unwrap();
+    let pid = &project.id;
 
     // 场景 1: 同步未启用
-    let mut config = api.load_sync_config().unwrap();
+    let mut config = api.load_sync_config(pid).unwrap();
     config.enabled = false;
-    api.save_sync_config(config).unwrap();
+    api.save_sync_config(pid, config).unwrap();
 
-    let cap = api.get_sync_capability().unwrap();
+    let cap = api.get_sync_capability(pid).unwrap();
     assert!(!cap.can_run);
     assert_eq!(cap.block_reason_code.as_deref(), Some("DISABLED"));
     assert_eq!(
@@ -21,12 +23,12 @@ fn test_get_sync_capability_scenarios() {
     );
 
     // 场景 2: 启用但安全存储不可用（WriterCoreApi::new 无 secure_storage）
-    let mut config = api.load_sync_config().unwrap();
+    let mut config = api.load_sync_config(pid).unwrap();
     config.enabled = true;
     config.remote_url = "https://github.com/test/repo".to_string();
-    api.save_sync_config(config).unwrap();
+    api.save_sync_config(pid, config).unwrap();
 
-    let cap = api.get_sync_capability().unwrap();
+    let cap = api.get_sync_capability(pid).unwrap();
     assert!(!cap.can_run);
     assert_eq!(
         cap.block_reason_code.as_deref(),
@@ -38,16 +40,16 @@ fn test_get_sync_capability_scenarios() {
     );
 
     // 场景 3: 有 URL 但未配置 Token
-    let mut config = api.load_sync_config().unwrap();
+    let mut config = api.load_sync_config(pid).unwrap();
     config.enabled = true;
     config.remote_url = "https://github.com/test/repo".to_string();
-    api.save_sync_config(config).unwrap();
+    api.save_sync_config(pid, config).unwrap();
 
-    let mut secrets = api.load_sync_secrets().unwrap();
+    let mut secrets = api.load_sync_secrets(pid).unwrap();
     secrets.token = None;
-    api.save_sync_secrets(secrets).unwrap();
+    api.save_sync_secrets(pid, secrets).unwrap();
 
-    let cap = api.get_sync_capability().unwrap();
+    let cap = api.get_sync_capability(pid).unwrap();
     assert!(!cap.can_run);
     assert_eq!(
         cap.block_reason_code.as_deref(),
@@ -68,13 +70,15 @@ fn test_get_sync_capability_remote_url_missing() {
     let temp_dir = tempdir().unwrap();
     std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
     let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
+    let project = api.create_project("URL Test").unwrap();
+    let pid = &project.id;
 
-    let mut config = api.load_sync_config().unwrap();
+    let mut config = api.load_sync_config(pid).unwrap();
     config.enabled = true;
     config.remote_url = "".to_string();
-    api.save_sync_config(config).unwrap();
+    api.save_sync_config(pid, config).unwrap();
 
-    let cap = api.get_sync_capability().unwrap();
+    let cap = api.get_sync_capability(pid).unwrap();
     assert!(!cap.can_run);
     assert_eq!(
         cap.block_reason_code.as_deref(),

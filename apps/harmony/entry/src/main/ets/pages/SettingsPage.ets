@@ -9,7 +9,8 @@ import {
   ThemeMode,
   ThemePaletteRecordDto,
   BuiltinThemeDto,
-  ResultEnvelope
+  ResultEnvelope,
+  ChangedEntity
 } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl, ColorSource } from '../system/HarmonyThemeAdapter'
 import { DesignTokens } from '../system/DesignTokens'
@@ -110,7 +111,10 @@ struct SettingsPage {
 
     try {
       const settingsResult = await this.bridge.getLocalSettings()
-      const syncConfigResult = await this.bridge.loadSyncConfig()
+      // per-project sync：需要选中作品才能加载该作品的同步配置。
+      const syncConfigResult = this.projectId.length > 0
+        ? await this.bridge.loadSyncConfig(this.projectId)
+        : { success: false, errorCode: 'NO_PROJECT', messageKey: 'sync.block.no_project_selected', messageArgs: {} as Record<string, string>, rawError: 'no project selected', warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] } as ResultEnvelope<SyncConfig>
 
       try {
         const paletteResult = await this.bridge.listPaletteRecords()
@@ -235,7 +239,9 @@ struct SettingsPage {
     this.syncDiagnostics = null
 
     try {
-      const result = await this.bridge.syncDiagnostics()
+      const result = this.projectId.length > 0
+        ? await this.bridge.syncDiagnostics(this.projectId)
+        : { success: false, errorCode: 'NO_PROJECT', messageKey: 'sync.block.no_project_selected', messageArgs: {} as Record<string, string>, rawError: 'no project selected', warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] } as ResultEnvelope<SyncDiagnosticsResult>
       if (result.success && result.data) {
         this.syncDiagnostics = result.data
       } else {

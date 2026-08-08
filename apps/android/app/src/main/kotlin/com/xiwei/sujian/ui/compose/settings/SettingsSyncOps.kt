@@ -22,6 +22,9 @@ private const val SYNC_STATUS_ERROR = "error"
 private const val MSG_SAVE_CONFIG_OR_SECRETS_FAILED = "save_config_or_secrets_failed"
 private const val MSG_UNEXPECTED_ERROR = "unexpected_error"
 
+// #600 评论 #3 问题二：无活动作品时的统一错误码 — 提取为常量避免 StringLiteralDuplication。
+internal const val MSG_NO_ACTIVE_PROJECT = "sync_no_active_project"
+
 suspend fun SettingsViewModel.executeTransaction(command: SettingsTransactionCommand) {
     when (command) {
         is SettingsTransactionCommand.SaveAndRunSync -> executeSyncTransaction(command)
@@ -36,7 +39,11 @@ suspend fun SettingsViewModel.saveTransactionConfigAndSecrets(
     secrets: SyncSecrets,
     secretsRevision: Long,
 ): Boolean {
-    val commitResult = withContext(Dispatchers.IO) { settingsRepo.commitSyncProfile(config, secrets) }
+    // #600 评论 #3 问题二：先拿当前作品 ID，再保存该作品 profile —
+    // 无活动作品时不发布任何写入，避免把配置写到错误的作品或全局槽。
+    val projectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
+    if (projectId == null) return false
+    val commitResult = withContext(Dispatchers.IO) { settingsRepo.commitSyncProfile(projectId, config, secrets) }
     if (commitResult is SettingsSaveResult.Failed) return false
     if (syncConfigRevision == configRevision) {
         syncConfigPersistedRevision = configRevision
@@ -95,6 +102,33 @@ private suspend fun SettingsViewModel.runCommandTransaction(
 }
 
 /**
+ * #600 评论 #3 问题二：提取 capability 检查为独立 helper — 降低 runExclusiveSyncIo 认知复杂度。
+ * 返回 null 表示 capability 检查通过；非 null 表示应提前返回该结果。
+ */
+private fun SettingsViewModel.checkSyncCapabilityForCurrentProject(): SyncCommandIoResult? {
+    val projectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
+    if (projectId == null) {
+        return SyncCommandIoResult(
+            true,
+            true,
+            StructuredSyncResult(statusCode = SYNC_STATUS_ERROR, messageKey = MSG_NO_ACTIVE_PROJECT),
+        )
+    }
+    val capability = settingsRepo.getSyncCapability(projectId)
+    if (!capability.canRun) {
+        return SyncCommandIoResult(
+            true,
+            true,
+            StructuredSyncResult(
+                statusCode = "blocked",
+                messageKey = capability.blockMessageKey ?: "sync_not_ready",
+            ),
+        )
+    }
+    return null
+}
+
+/**
  * #595 三/十：在排他锁内执行同步 IO 操作 — 启动前先 flush 活动正文，
  * 锁内设置操作作用域凭据（失败立即终止），结束后清除；不得使用上次
  * 正式同步留下的旧 token。
@@ -114,17 +148,9 @@ private suspend fun SettingsViewModel.runExclusiveSyncIo(
             )
         }
         withContext(Dispatchers.IO) {
-            val capability = settingsRepo.getSyncCapability()
-            if (!capability.canRun) {
-                return@withContext SyncCommandIoResult(
-                    true,
-                    true,
-                    StructuredSyncResult(
-                        statusCode = "blocked",
-                        messageKey = capability.blockMessageKey ?: "sync_not_ready",
-                    ),
-                )
-            }
+            // #600 评论 #3 问题二：capability 按 projectId 路由 — 提取为 helper 降低认知复杂度。
+            val capabilityCheck = checkSyncCapabilityForCurrentProject()
+            if (capabilityCheck != null) return@withContext capabilityCheck
             val overrideOk = settingsRepo.setSyncSecretsOverrideStrict(secrets)
             if (!overrideOk) {
                 return@withContext SyncCommandIoResult(
@@ -196,7 +222,7 @@ suspend fun SettingsViewModel.executeSyncTransaction(command: SettingsTransactio
             SyncCommandIoResult(
                 true,
                 true,
-                StructuredSyncResult(statusCode = SYNC_STATUS_ERROR, messageKey = "sync_no_active_project"),
+                StructuredSyncResult(statusCode = SYNC_STATUS_ERROR, messageKey = MSG_NO_ACTIVE_PROJECT),
             )
         }
     }
@@ -239,7 +265,7 @@ suspend fun SettingsViewModel.executeDryRunTransaction(command: SettingsTransact
             SyncCommandIoResult(
                 true,
                 true,
-                StructuredSyncResult(statusCode = SYNC_STATUS_ERROR, messageKey = "sync_no_active_project"),
+                StructuredSyncResult(statusCode = SYNC_STATUS_ERROR, messageKey = MSG_NO_ACTIVE_PROJECT),
             )
         }
     }
@@ -278,21 +304,51 @@ suspend fun SettingsViewModel.executeDiagnosticsTransaction(
             }
         },
     ) { config, secrets ->
-        runExclusiveSyncIo(config, secrets) { settingsRepo.performSyncDiagnosticsTyped(it).toIoResult() }.toIoResult()
+        // #600 评论 #3 问题二：连接诊断针对当前活动作品。
+        val diagProjectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
+        if (diagProjectId != null) {
+            runExclusiveSyncIo(config, secrets) {
+                settingsRepo.performSyncDiagnosticsTyped(diagProjectId, it).toIoResult()
+            }.toIoResult()
+        } else {
+            SyncCommandIoResult(
+                true,
+                true,
+                StructuredSyncResult(statusCode = SYNC_STATUS_ERROR, messageKey = MSG_NO_ACTIVE_PROJECT),
+            )
+        }
     }
     try {
-        val refreshedCapability = withContext(Dispatchers.IO) { settingsRepo.getSyncCapability() }
-        val refreshedWarning = withContext(Dispatchers.IO) { settingsRepo.getSecureStorageWarning() }
-        _uiState.update { it.copy(syncCapability = refreshedCapability, secureStorageWarning = refreshedWarning) }
+        val refreshedCapabilityProjectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
+        if (refreshedCapabilityProjectId != null) {
+            val refreshedCapability =
+                withContext(Dispatchers.IO) { settingsRepo.getSyncCapability(refreshedCapabilityProjectId) }
+            val refreshedWarning = withContext(Dispatchers.IO) { settingsRepo.getSecureStorageWarning() }
+            _uiState.update { it.copy(syncCapability = refreshedCapability, secureStorageWarning = refreshedWarning) }
+        }
     } catch (_: Exception) {
     }
 }
 
 suspend fun SettingsViewModel.refreshSyncProfileState() {
     val repo = settingsRepo
-    val current = _uiState.value
-    val committedProfile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
-    val refreshedCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
+    // #600 评论 #3 问题二：profile/capability 按 projectId 路由 —
+    // 无活动作品时显示"未选择作品"状态，不读取任何作品数据。
+    val projectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
+    if (projectId == null) {
+        _uiState.update {
+            it.copy(
+                syncProfileLoadState =
+                    com.xiwei.sujian.ui.compose.settings.SyncProfileLoadState.Failed(
+                        com.xiwei.sujian.data.SyncFailureKind.Fatal,
+                        MSG_NO_ACTIVE_PROJECT,
+                    ),
+            )
+        }
+        return
+    }
+    val committedProfile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(projectId) }
+    val refreshedCapability = withContext(Dispatchers.IO) { repo.getSyncCapability(projectId) }
     val refreshedWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
     _uiState.update {
         it.copy(

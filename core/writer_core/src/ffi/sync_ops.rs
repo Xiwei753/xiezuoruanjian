@@ -23,9 +23,18 @@ use super::{c_str_to_rust, err_json, ok_json, with_core};
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-pub unsafe extern "C" fn writer_core_load_sync_config() -> *mut c_char {
+pub unsafe extern "C" fn writer_core_load_sync_config(project_id: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid project_id: error {}", e),
+            )
+        }
+    };
     match with_core(|core| {
-        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+        let config = core.load_sync_config(&pid).map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "enabled": config.enabled,
             "provider": format!("{:?}", config.backend_type).to_lowercase(),
@@ -44,7 +53,19 @@ pub unsafe extern "C" fn writer_core_load_sync_config() -> *mut c_char {
 /// `config_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn writer_core_save_sync_config(
+    project_id: *const c_char,
+    config_json: *const c_char,
+) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid project_id: error {}", e),
+            )
+        }
+    };
     let json_str = match c_str_to_rust(config_json) {
         Ok(s) => s,
         Err(e) => {
@@ -55,7 +76,7 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
         }
     };
     match with_core(|core| {
-        let mut config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+        let mut config = core.load_sync_config(&pid).map_err(|e| format!("{}", e))?;
         let val: serde_json::Value =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
         if let Some(v) = val.get("enabled").and_then(|v| v.as_bool()) {
@@ -70,7 +91,7 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
         if let Some(v) = val.get("autoSync").and_then(|v| v.as_bool()) {
             config.auto_sync = v;
         }
-        core.save_sync_config(&config)
+        core.save_sync_config(&pid, &config)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -94,7 +115,7 @@ pub unsafe extern "C" fn writer_core_sync_dry_run(project_id: *const c_char) -> 
         }
     };
     match with_core(|core| {
-        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+        let config = core.load_sync_config(&pid).map_err(|e| format!("{}", e))?;
         let plan = core
             .perform_sync_dry_run(&pid, &config)
             .map_err(|e| format!("{}", e))?;
@@ -108,11 +129,20 @@ pub unsafe extern "C" fn writer_core_sync_dry_run(project_id: *const c_char) -> 
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-pub unsafe extern "C" fn writer_core_sync_diagnostics() -> *mut c_char {
+pub unsafe extern "C" fn writer_core_sync_diagnostics(project_id: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid project_id: error {}", e),
+            )
+        }
+    };
     match with_core(|core| {
-        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+        let config = core.load_sync_config(&pid).map_err(|e| format!("{}", e))?;
         let diag = core
-            .perform_sync_diagnostics(&config)
+            .perform_sync_diagnostics(&pid, &config)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&diag).unwrap_or_default())
     }) {
@@ -136,7 +166,7 @@ pub unsafe extern "C" fn writer_core_perform_sync(project_id: *const c_char) -> 
         }
     };
     match with_core(|core| {
-        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+        let config = core.load_sync_config(&pid).map_err(|e| format!("{}", e))?;
         let result = core
             .perform_sync(&pid, &config, false)
             .map_err(|e| format!("{}", e))?;

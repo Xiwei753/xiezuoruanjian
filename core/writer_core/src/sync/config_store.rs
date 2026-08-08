@@ -18,7 +18,7 @@
 //! 同步状态存储在 `app-meta/sync/state.local.json`，使用 atomic write（写临时文件后 rename）
 //! 防止写入中断导致文件损坏。旧格式 `sync_state.json` 在首次加载时自动迁移并删除。
 
-use crate::sync::types::SyncState;
+use crate::sync::types::{SyncScope, SyncState};
 use std::path::Path;
 
 /// Normalize a relative path to use forward slashes.
@@ -47,8 +47,25 @@ impl crate::sync::SyncService {
     /// 同步根是单个作品目录（Issue #600）：设置、凭证、统计、最近编辑、
     /// 设备信息、星图、日志等应用级数据位于 `app_data_root`，不在任何作品
     /// 仓库内，因此不需要（也不可能）出现在黑名单中。
-    pub fn is_blacklisted_path(rel_path: &str) -> bool {
+    pub fn is_blacklisted_path(rel_path: &str, scope: SyncScope) -> bool {
         let rel_path = normalize_rel_path(rel_path);
+
+        // 通用排除：.git / .tmp / .lock
+        if rel_path == ".git" || rel_path.starts_with(".git/") {
+            return true;
+        }
+        if rel_path.ends_with(".tmp") || rel_path.ends_with(".lock") {
+            return true;
+        }
+
+        match scope {
+            SyncScope::Project => Self::is_project_blacklisted_path(&rel_path),
+            SyncScope::App => Self::is_app_blacklisted_path(&rel_path),
+        }
+    }
+
+    /// 作品级黑名单：排除作品仓库内的本地状态/临时文件。
+    fn is_project_blacklisted_path(rel_path: &str) -> bool {
         let ignored_patterns = [
             "app-meta/sync/state.local.json",
             "app-meta/sync/sync_state.json",
@@ -58,15 +75,7 @@ impl crate::sync::SyncService {
             "backups",
         ];
 
-        if rel_path.ends_with(".tmp") || rel_path.ends_with(".lock") {
-            return true;
-        }
-
         if rel_path.starts_with("app-meta/logs") || rel_path.contains("/logs/") {
-            return true;
-        }
-
-        if rel_path == ".git" || rel_path.starts_with(".git/") {
             return true;
         }
 
@@ -74,6 +83,90 @@ impl crate::sync::SyncService {
             if rel_path.contains(pattern) {
                 return true;
             }
+        }
+
+        false
+    }
+
+    /// 应用级黑名单：排除不应跨设备同步的本地状态/作品/临时数据。
+    /// 作品目录（`作品/`、`projects/`）整体忽略——每个作品是独立 Git 仓库。
+    fn is_app_blacklisted_path(rel_path: &str) -> bool {
+        // 作品目录整体忽略（每个作品是独立 Git 仓库）
+        if rel_path == "作品" || rel_path.starts_with("作品/") {
+            return true;
+        }
+        if rel_path == "projects" || rel_path.starts_with("projects/") {
+            return true;
+        }
+
+        // 日志/导出/备份
+        if rel_path.starts_with("日志/") || rel_path.contains("/日志/") {
+            return true;
+        }
+        if rel_path.starts_with("log/") || rel_path.contains("/log/") {
+            return true;
+        }
+        if rel_path.starts_with("导出/") || rel_path.contains("/导出/") {
+            return true;
+        }
+        if rel_path.starts_with("exports/") || rel_path.contains("/exports/") {
+            return true;
+        }
+        if rel_path.starts_with("备份/") || rel_path.contains("/备份/") {
+            return true;
+        }
+        if rel_path.starts_with("backups/") || rel_path.contains("/backups/") {
+            return true;
+        }
+
+        // 本地设置/最近编辑（设备专属）
+        if rel_path == "settings.local.json" || rel_path.ends_with("/settings.local.json") {
+            return true;
+        }
+        if rel_path == "recent_edits.json" || rel_path.ends_with("/recent_edits.json") {
+            return true;
+        }
+
+        // 含 secret 的路径
+        if rel_path.contains("secret") {
+            return true;
+        }
+
+        // 设备信息
+        if rel_path.starts_with("device/") || rel_path.contains("/device/") {
+            return true;
+        }
+
+        // 统计本地状态
+        if rel_path.starts_with("app-meta/stats/") || rel_path.contains("/app-meta/stats/") {
+            return true;
+        }
+        if rel_path.starts_with("app-meta/transactions/")
+            || rel_path.contains("/app-meta/transactions/")
+        {
+            return true;
+        }
+
+        // 应用级同步自身的本地状态
+        if rel_path == "app-meta/sync/state.local.json"
+            || rel_path == "app-meta/sync/sync_state.json"
+            || rel_path.starts_with("app-meta/sync/secrets")
+        {
+            return true;
+        }
+
+        // 日志目录
+        if rel_path.starts_with("app-meta/logs") || rel_path.contains("/logs/") {
+            return true;
+        }
+
+        // 缓存/临时
+        if rel_path.contains("sqlite_cache")
+            || rel_path.contains("cache")
+            || rel_path == "tmp"
+            || rel_path.contains("/tmp")
+        {
+            return true;
         }
 
         false
@@ -94,12 +187,20 @@ impl crate::sync::SyncService {
     ///
     /// 应用级数据（设置、同步配置与凭证、统计、最近编辑、设备信息、星图、
     /// 日志、回收站）位于 `app_data_root`，不在任何作品仓库内，不参与作品同步。
-    pub fn is_whitelisted_path(rel_path: &str) -> bool {
+    pub fn is_whitelisted_path(rel_path: &str, scope: SyncScope) -> bool {
         let rel_path = normalize_rel_path(rel_path);
-        if Self::is_blacklisted_path(&rel_path) {
+        if Self::is_blacklisted_path(&rel_path, scope) {
             return false;
         }
 
+        match scope {
+            SyncScope::Project => Self::is_project_whitelisted_path(&rel_path),
+            SyncScope::App => Self::is_app_whitelisted_path(&rel_path),
+        }
+    }
+
+    /// 作品级白名单：作品正文/元数据/角色/同步清单。
+    fn is_project_whitelisted_path(rel_path: &str) -> bool {
         // 作品自身内容
         if rel_path == "project.json" {
             return true;
@@ -118,6 +219,31 @@ impl crate::sync::SyncService {
         }
 
         // 作品自己的同步元数据
+        if rel_path == "app-meta/sync/manifest.sync.json" {
+            return true;
+        }
+
+        false
+    }
+
+    /// 应用级白名单：设置/全局星图/主题调色板/应用级同步清单。
+    fn is_app_whitelisted_path(rel_path: &str) -> bool {
+        // 可同步设置
+        if rel_path == "settings.sync.json" {
+            return true;
+        }
+
+        // 全局星图
+        if rel_path.starts_with("starmaps/") {
+            return true;
+        }
+
+        // 主题调色板
+        if rel_path.starts_with("themes/palettes/") {
+            return true;
+        }
+
+        // 应用级同步清单
         if rel_path == "app-meta/sync/manifest.sync.json" {
             return true;
         }
@@ -218,8 +344,11 @@ impl crate::sync::SyncService {
 }
 
 impl crate::sync::SyncService {
-    pub fn get_sync_ignored_paths(sync_root: &Path) -> crate::Result<Vec<String>> {
-        let plan = Self::build_sync_plan(sync_root)?;
+    pub fn get_sync_ignored_paths(
+        sync_root: &Path,
+        scope: crate::sync::types::SyncScope,
+    ) -> crate::Result<Vec<String>> {
+        let plan = Self::build_sync_plan(sync_root, scope)?;
         Ok(plan.ignored_files)
     }
 }

@@ -44,16 +44,17 @@ class CommitSyncProfileMigrationTest {
         field.isAccessible = true
         @Suppress("UNCHECKED_CAST")
         val lazy = field.get(repo) as kotlin.Lazy<SyncProfileStore>
-        return lazy.value.readState()
+        return lazy.value.readState("migration-project-id")
     }
 
     @Test
     fun firstCommitFailsWithoutNative_butNeverWritesLiveOrMarker() =
         runTest {
             val repo = createRepo("migration_contract_1")
-            storeOf(repo).clear()
+            storeOf(repo).clear("migration-project-id")
             val result =
                 repo.commitSyncProfile(
+                    "migration-project-id",
                     com.xiwei.sujian.model.SyncConfig(enabled = true),
                     com.xiwei.sujian.model.SyncSecrets(token = "token-new"),
                 )
@@ -78,9 +79,9 @@ class CommitSyncProfileMigrationTest {
         runTest {
             val repo = createRepo("migration_contract_2")
             val store = storeOf(repo)
-            store.clear()
-            store.commitGeneration(1L, "{\"enabled\":true}")
-            val result = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile() }
+            store.clear("migration-project-id")
+            store.commitGeneration("migration-project-id", 1L, "{\"enabled\":true}")
+            val result = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile("migration-project-id") }
             assertTrue(
                 "Secrets read failure must return Failed, not NotConfigured or null",
                 result is SyncProfileReadResult.Failed,
@@ -97,9 +98,9 @@ class CommitSyncProfileMigrationTest {
         runTest {
             val repo = createRepo("migration_contract_3")
             val store = storeOf(repo)
-            store.clear()
-            store.commitGeneration(5L, "{\"enabled\":true}")
-            val state = store.readState()
+            store.clear("migration-project-id")
+            store.commitGeneration("migration-project-id", 5L, "{\"enabled\":true}")
+            val state = store.readState("migration-project-id")
             assertEquals(5L, state.activeGeneration)
             assertEquals("{\"enabled\":true}", state.committedConfigJson)
             assertTrue(state.hasCommittedProfile)
@@ -110,9 +111,13 @@ class CommitSyncProfileMigrationTest {
         runTest {
             val repo = createRepo("migration_contract_4")
             val store = storeOf(repo)
-            store.clear()
-            store.commitGeneration(2L, "{\"enabled\":true,\"remoteUrl\":\"https://example.com/r.git\"}")
-            val result = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile() }
+            store.clear("migration-project-id")
+            store.commitGeneration(
+                "migration-project-id",
+                2L,
+                "{\"enabled\":true,\"remoteUrl\":\"https://example.com/r.git\"}",
+            )
+            val result = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile("migration-project-id") }
             assertTrue(
                 "Result must be Failed (secrets read fails without native)",
                 result is SyncProfileReadResult.Failed,

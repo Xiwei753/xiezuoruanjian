@@ -243,7 +243,7 @@ impl AppBackend {
             // closure is UnwindSafe by auto-impl without needing AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
                 let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
-                let mut config = match api.load_sync_config() {
+                let mut config = match api.load_sync_config(&project_id_capture) {
                     Ok(c) => c,
                     Err(e) => {
                         let err_str = e.to_string();
@@ -554,7 +554,7 @@ impl AppBackend {
             // closure is UnwindSafe by auto-impl without needing AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
                 let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
-                let mut config = match api.load_sync_config() {
+                let mut config = match api.load_sync_config(&project_id_capture) {
                     Ok(c) => c,
                     Err(e) => {
                         let err_str = e.to_string();

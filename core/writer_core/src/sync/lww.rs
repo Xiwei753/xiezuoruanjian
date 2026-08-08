@@ -650,7 +650,7 @@ fn execute_lww_sync_attempt(
     }
 
     log::debug!("[sync] github_api step=正在比较本地和远端");
-    let local_entries = scan_for_sync(sync_root)?;
+    let local_entries = scan_for_sync(sync_root, config.scope)?;
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut local_records = std::collections::HashMap::new();
 
@@ -722,7 +722,9 @@ fn execute_lww_sync_attempt(
     // 否则使用当前时间。content_hash 为空，因为文件已不存在。
     for path in state.known_files.keys() {
         if !local_records.contains_key(path) {
-            if !SyncService::is_whitelisted_path(path) || SyncService::is_blacklisted_path(path) {
+            if !SyncService::is_whitelisted_path(path, config.scope)
+                || SyncService::is_blacklisted_path(path, config.scope)
+            {
                 continue;
             }
             if !sync_root.join(path).exists() {
@@ -760,7 +762,9 @@ fn execute_lww_sync_attempt(
     // device_id 设为 "remote" 以避免与本地 device_id 冲突。
     for (path, sha) in &remote_tree_files {
         if path != SYNC_MANIFEST_PATH && !remote_records.contains_key(path) {
-            if !SyncService::is_whitelisted_path(path) || SyncService::is_blacklisted_path(path) {
+            if !SyncService::is_whitelisted_path(path, config.scope)
+                || SyncService::is_blacklisted_path(path, config.scope)
+            {
                 continue;
             }
             remote_records.insert(
@@ -1246,7 +1250,7 @@ fn execute_lww_sync_attempt(
     state.last_synced_commit = None;
     state.last_error = None;
 
-    let post_local_entries = scan_for_sync(sync_root)?;
+    let post_local_entries = scan_for_sync(sync_root, config.scope)?;
 
     // ── 同步后重建 known_files ──
     // 同步完成后重新扫描本地文件，用当前文件哈希更新 known_files。

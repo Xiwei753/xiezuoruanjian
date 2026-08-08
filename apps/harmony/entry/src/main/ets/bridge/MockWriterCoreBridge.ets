@@ -655,7 +655,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   }
 
   // Sync methods
-  async loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
+  async loadSyncConfig(_projectId: string): Promise<ResultEnvelope<SyncConfig>> {
     await this.delay(100)
     const copy: SyncConfig = {
       enabled: this.mockSyncConfig.enabled,
@@ -672,7 +672,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(copy)
   }
 
-  async saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
+  async saveSyncConfig(_projectId: string, config: SyncConfig): Promise<ResultEnvelope<boolean>> {
     await this.delay(200)
     this.mockSyncConfig = {
       enabled: config.enabled,
@@ -689,7 +689,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(true)
   }
 
-  async syncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
+  async syncDiagnostics(_projectId: string): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
     await this.delay(500)
     const result: SyncDiagnosticsResult = {
       success: true,
@@ -720,6 +720,27 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       networkProbeSummary: undefined
     }
     return this.success(result)
+  }
+
+  // ── 应用级同步通道（Issue #600 评论 #3 问题四，mock 占位） ──
+  async loadAppSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
+    await this.delay(100)
+    return this.loadSyncConfig('app')
+  }
+
+  async saveAppSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
+    await this.delay(200)
+    return this.saveSyncConfig('app', config)
+  }
+
+  async performAppSync(): Promise<ResultEnvelope<SyncResult>> {
+    await this.delay(300)
+    return this.performSync('app')
+  }
+
+  async appSyncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
+    await this.delay(500)
+    return this.syncDiagnostics('app')
   }
 
   // per-project sync: projectId selects the sync root (mock ignores it).

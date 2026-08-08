@@ -6,19 +6,28 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.PeriodicWorkRequest
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import com.xiwei.sujian.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.diagnostics.DiagnosticsEvents
 import com.xiwei.sujian.model.SyncConfig
 import com.xiwei.sujian.model.SyncSecrets
 import java.util.concurrent.TimeUnit
 
+/**
+ * #600 评论 #3 问题三：AutoSyncScheduler 适配 per-project 自动同步。
+ *
+ * 保持单一周期任务（AutoSyncWorker 内部遍历所有作品），scheduleFromSettings
+ * 不再读取某个作品的 snapshot 来决定调度 — 改为始终以默认间隔（15 分钟）
+ * 调度周期任务，由 Worker 内部按各作品自己的 syncIntervalSeconds 判定是否到点。
+ *
+ * 这样避免了"读哪个作品的 snapshot 来决定全局调度间隔"的歧义，也让
+ * 不同作品的不同间隔都能在 Worker 内被尊重（Worker 逐个作品检查 elapsed < interval）。
+ */
 class AutoSyncScheduler(context: Context, private val settingsRepository: SettingsRepository? = null) {
     private val appContext = context.applicationContext
 
     fun start() {
-        com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("scheduler", "start")
+        DiagnosticsEvents.syncEvent("scheduler", "start")
         val repo = settingsRepository
         if (repo != null) {
             kotlinx.coroutines.runBlocking { scheduleFromSettings(appContext, repo) }
@@ -27,7 +36,7 @@ class AutoSyncScheduler(context: Context, private val settingsRepository: Settin
     }
 
     fun stop() {
-        com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("scheduler", "stop")
+        DiagnosticsEvents.syncEvent("scheduler", "stop")
         // Cancel the immediate foreground check when entering background to stop/downgrade sync.
         val workManager = WorkManager.getInstance(appContext)
         workManager.cancelUniqueWork(UNIQUE_FOREGROUND_WORK)
@@ -40,44 +49,23 @@ class AutoSyncScheduler(context: Context, private val settingsRepository: Settin
         private const val DEFAULT_INTERVAL_SECONDS = 300L
 
         /**
-         * #592 六：只在 activeGeneration 提交成功后由 [SettingsRepository.commitSyncProfile]
-         * 调用；直接使用应用容器中的仓库实例，不再新建 SettingsRepository 读取半成品。
+         * #592 六 / #600 评论 #3 问题三：调度单一周期任务，Worker 内部遍历所有作品。
+         *
+         * 不再读取某个作品的 snapshot 来决定调度间隔 — 不同作品可有不同间隔，
+         * Worker 逐个作品检查 elapsed < interval。这里用默认间隔（15 分钟，
+         * WorkManager 最小周期）调度周期任务，保证 Worker 被定期唤醒。
+         *
+         * 调用方（SettingsRepository.commitSyncProfile）在 commitExclusive 释放后调用。
          */
+        @Suppress("UNUSED_PARAMETER")
         suspend fun scheduleFromSettings(
             context: Context,
             settingsRepository: SettingsRepository,
         ) {
             val appContext = context.applicationContext
-            // #592 六：调度器的 snapshot 读取与配置提交/同步启动共用同一把进程级
-            // Mutex 串行管理。调用方（SettingsRepository.commitSyncProfile）必须在
-            // commitExclusive 释放后才调用本函数（scheduleFromSettings 会获取
-            // snapshotExclusive，同一把锁内重入会自死锁）。
-            val snapshotResult = SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
-            val snapshot =
-                when (snapshotResult) {
-                    is SyncProfileReadResult.Found -> snapshotResult.snapshot
-                    is SyncProfileReadResult.NotConfigured -> snapshotResult.snapshot
-                    is SyncProfileReadResult.Failed -> {
-                        DiagnosticsLogger.w(TAG, "Sync profile snapshot failed: ${snapshotResult.message}")
-                        // #595 四：读取失败（临时 IO/原生库/安全存储）不取消现有周期任务 —
-                        // 保留任务交给 Worker 的失败类型映射和退避策略处理；
-                        // 只有明确 NotConfigured/关闭自动同步/配置禁用才取消。
-                        return
-                    }
-                }
-            val config = snapshot.config
-            val secrets = snapshot.secrets
-
-            if (!shouldSync(config, secrets)) {
-                com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("scheduler", "skipped_no_config")
-                cancel(appContext)
-                return
-            }
-
-            val intervalMinutes =
-                ((config.syncIntervalSeconds ?: DEFAULT_INTERVAL_SECONDS).toLong())
-                    .coerceAtLeast(PeriodicWorkRequest.MIN_PERIODIC_INTERVAL_MILLIS / 1000)
-                    .let { TimeUnit.SECONDS.toMinutes(it).coerceAtLeast(15L) }
+            // 始终调度周期任务 — Worker 内部遍历作品，无配置作品时 Worker 直接 success。
+            // settingsRepository 参数保留以维持调用方契约（commitSyncProfile 传入应用容器仓库）。
+            val intervalMinutes = 15L
             val request =
                 PeriodicWorkRequestBuilder<AutoSyncWorker>(intervalMinutes, TimeUnit.MINUTES)
                     .setConstraints(networkConstraints())

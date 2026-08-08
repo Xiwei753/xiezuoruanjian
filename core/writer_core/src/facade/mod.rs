@@ -237,24 +237,27 @@ mod tests {
         let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
-        let config = core.load_sync_config().unwrap();
+        let project = core.create_project("Sync Test").unwrap();
+        let pid = &project.id;
+
+        let config = core.load_sync_config(pid).unwrap();
         assert!(!config.enabled);
         assert_eq!(config.backend_type, crate::sync::BackendType::GithubApi);
 
         let mut new_config = config.clone();
         new_config.enabled = true;
         new_config.remote_url = "https://example.com/repo.git".to_string();
-        core.save_sync_config(&new_config).unwrap();
+        core.save_sync_config(pid, &new_config).unwrap();
 
-        let loaded = core.load_sync_config().unwrap();
+        let loaded = core.load_sync_config(pid).unwrap();
         assert!(loaded.enabled);
         assert_eq!(loaded.remote_url, "https://example.com/repo.git");
 
-        let mut secrets = core.load_sync_secrets().unwrap();
+        let mut secrets = core.load_sync_secrets(pid).unwrap();
         secrets.token = Some("my_super_secret_token".to_string());
-        core.save_sync_secrets(&secrets).unwrap();
+        core.save_sync_secrets(pid, &secrets).unwrap();
 
-        let loaded_secrets = core.load_sync_secrets().unwrap();
+        let loaded_secrets = core.load_sync_secrets(pid).unwrap();
         assert_eq!(
             loaded_secrets.token.as_ref().unwrap(),
             "my_super_secret_token"
@@ -274,30 +277,35 @@ mod tests {
         let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
+        let project = core.create_project("Gen Test").unwrap();
+        let pid = &project.id;
+
         let secrets = crate::sync::SyncSecrets {
             token: Some("generation_token_7".to_string()),
             ssh_private_key: None,
         };
-        core.save_sync_secrets_for_generation(7, &secrets).unwrap();
+        core.save_sync_secrets_for_generation(pid, 7, &secrets)
+            .unwrap();
 
         let loaded = core
-            .load_sync_secrets_for_generation(7)
+            .load_sync_secrets_for_generation(pid, 7)
             .unwrap()
             .expect("generation 7 secrets must exist after save");
         assert_eq!(loaded.token.as_ref().unwrap(), "generation_token_7");
 
         // 未保存的 generation 读取为 None。
-        assert!(core.load_sync_secrets_for_generation(99).unwrap().is_none());
+        assert!(core.load_sync_secrets_for_generation(pid, 99).unwrap().is_none());
 
         // 删除后读取为 None；重复删除是幂等成功。
-        core.delete_sync_secrets_for_generation(7).unwrap();
-        assert!(core.load_sync_secrets_for_generation(7).unwrap().is_none());
-        core.delete_sync_secrets_for_generation(7).unwrap();
+        core.delete_sync_secrets_for_generation(pid, 7).unwrap();
+        assert!(core.load_sync_secrets_for_generation(pid, 7).unwrap().is_none());
+        core.delete_sync_secrets_for_generation(pid, 7).unwrap();
 
         // 删除不影响其他 generation。
-        core.save_sync_secrets_for_generation(8, &secrets).unwrap();
-        core.delete_sync_secrets_for_generation(7).unwrap();
-        assert!(core.load_sync_secrets_for_generation(8).unwrap().is_some());
+        core.save_sync_secrets_for_generation(pid, 8, &secrets)
+            .unwrap();
+        core.delete_sync_secrets_for_generation(pid, 7).unwrap();
+        assert!(core.load_sync_secrets_for_generation(pid, 8).unwrap().is_some());
     }
 
     #[test]
@@ -306,7 +314,14 @@ mod tests {
         let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
-        let config_path = temp_dir.path().join("app-meta/sync/sync_config.json");
+        let project = core.create_project("Migrate Test").unwrap();
+        let pid = &project.id;
+
+        let config_path = temp_dir
+            .path()
+            .join("projects")
+            .join(pid)
+            .join("app-meta/sync/config.local.json");
         std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
         std::fs::write(
             &config_path,
@@ -323,10 +338,10 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = core.load_sync_config().unwrap();
+        let loaded = core.load_sync_config(pid).unwrap();
         assert_eq!(loaded.backend_type, crate::sync::BackendType::GithubApi);
 
-        let persisted = core.load_sync_config().unwrap();
+        let persisted = core.load_sync_config(pid).unwrap();
         assert_eq!(persisted.backend_type, crate::sync::BackendType::GithubApi);
     }
 
@@ -337,7 +352,7 @@ mod tests {
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let project = core.create_project("Test Project").unwrap();
-        let config = core.load_sync_config().unwrap();
+        let config = core.load_sync_config(&project.id).unwrap();
         let plan = core.perform_sync_dry_run(&project.id, &config).unwrap();
         assert!(plan.files_to_upload.is_empty());
     }
@@ -395,5 +410,220 @@ mod tests {
             .unwrap();
         assert!(result_valid.success);
         assert_eq!(result_valid.message.unwrap(), "Font size updated");
+    }
+
+    /// Issue #600 评论 #3 问题一：不同作品的同步配置互不干扰。
+    /// project_a 的 sync config 修改不影响 project_b。
+    #[test]
+    fn test_sync_config_isolated_per_project() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+
+        let project_a = core.create_project("Project A").unwrap();
+        let project_b = core.create_project("Project B").unwrap();
+        let pid_a = &project_a.id;
+        let pid_b = &project_b.id;
+
+        // 两个作品初始都加载默认配置
+        let config_a0 = core.load_sync_config(pid_a).unwrap();
+        let config_b0 = core.load_sync_config(pid_b).unwrap();
+        assert!(!config_a0.enabled);
+        assert!(!config_b0.enabled);
+
+        // 修改 A 的配置
+        let mut config_a = config_a0.clone();
+        config_a.enabled = true;
+        config_a.remote_url = "https://example.com/a.git".to_string();
+        core.save_sync_config(pid_a, &config_a).unwrap();
+
+        // B 的配置不受影响
+        let config_b1 = core.load_sync_config(pid_b).unwrap();
+        assert!(!config_b1.enabled, "project B config must not be affected by A");
+        assert_eq!(
+            config_b1.remote_url, "",
+            "project B remote_url must remain empty"
+        );
+
+        // 修改 B 的配置
+        let mut config_b = config_b1.clone();
+        config_b.enabled = true;
+        config_b.remote_url = "https://example.com/b.git".to_string();
+        core.save_sync_config(pid_b, &config_b).unwrap();
+
+        // A 的配置不受影响
+        let config_a1 = core.load_sync_config(pid_a).unwrap();
+        assert!(config_a1.enabled);
+        assert_eq!(config_a1.remote_url, "https://example.com/a.git");
+
+        // B 的配置正确保存
+        let config_b2 = core.load_sync_config(pid_b).unwrap();
+        assert!(config_b2.enabled);
+        assert_eq!(config_b2.remote_url, "https://example.com/b.git");
+    }
+
+    /// Issue #600 评论 #3 问题一：不同作品的同步凭据互不干扰。
+    #[test]
+    fn test_sync_secrets_isolated_per_project() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+
+        let project_a = core.create_project("Project A").unwrap();
+        let project_b = core.create_project("Project B").unwrap();
+        let pid_a = &project_a.id;
+        let pid_b = &project_b.id;
+
+        // 保存 A 的凭据
+        let secrets_a = crate::sync::SyncSecrets {
+            token: Some("token_a_123".to_string()),
+            ssh_private_key: None,
+        };
+        core.save_sync_secrets(pid_a, &secrets_a).unwrap();
+
+        // 保存 B 的凭据
+        let secrets_b = crate::sync::SyncSecrets {
+            token: Some("token_b_456".to_string()),
+            ssh_private_key: None,
+        };
+        core.save_sync_secrets(pid_b, &secrets_b).unwrap();
+
+        // 验证 A 的凭据独立
+        let loaded_a = core.load_sync_secrets(pid_a).unwrap();
+        assert_eq!(loaded_a.token.as_deref(), Some("token_a_123"));
+
+        // 验证 B 的凭据独立
+        let loaded_b = core.load_sync_secrets(pid_b).unwrap();
+        assert_eq!(loaded_b.token.as_deref(), Some("token_b_456"));
+
+        // generation 凭据也独立
+        let gen_secrets_a = crate::sync::SyncSecrets {
+            token: Some("gen_token_a".to_string()),
+            ssh_private_key: None,
+        };
+        core.save_sync_secrets_for_generation(pid_a, 1, &gen_secrets_a)
+            .unwrap();
+
+        let gen_secrets_b = crate::sync::SyncSecrets {
+            token: Some("gen_token_b".to_string()),
+            ssh_private_key: None,
+        };
+        core.save_sync_secrets_for_generation(pid_b, 1, &gen_secrets_b)
+            .unwrap();
+
+        let loaded_gen_a = core.load_sync_secrets_for_generation(pid_a, 1).unwrap();
+        let loaded_gen_b = core.load_sync_secrets_for_generation(pid_b, 1).unwrap();
+        assert_eq!(
+            loaded_gen_a.unwrap().token.as_deref(),
+            Some("gen_token_a")
+        );
+        assert_eq!(
+            loaded_gen_b.unwrap().token.as_deref(),
+            Some("gen_token_b")
+        );
+    }
+
+    /// Issue #600 评论 #3 问题四：应用级白名单/黑名单正确过滤路径。
+    /// 应用级同步根 = app_data_root，白名单 settings.sync.json/starmaps/themes，
+    /// 黑名单 作品目录/日志/导出/备份/settings.local.json/sync secrets/device/缓存统计。
+    #[test]
+    fn test_app_level_whitelist_blacklist() {
+        use crate::sync::SyncScope;
+        use crate::sync::SyncService;
+
+        // ── 应用级白名单 ──
+        assert!(SyncService::is_whitelisted_path(
+            "settings.sync.json",
+            SyncScope::App
+        ));
+        assert!(SyncService::is_whitelisted_path(
+            "starmaps/global.json",
+            SyncScope::App
+        ));
+        assert!(SyncService::is_whitelisted_path(
+            "starmaps/constellations/orion.json",
+            SyncScope::App
+        ));
+        assert!(SyncService::is_whitelisted_path(
+            "themes/palettes/dark.json",
+            SyncScope::App
+        ));
+
+        // 作品正文不在应用级白名单
+        assert!(!SyncService::is_whitelisted_path(
+            "project.json",
+            SyncScope::App
+        ));
+        assert!(!SyncService::is_whitelisted_path(
+            "volumes/v1/chapters/c1.txt",
+            SyncScope::App
+        ));
+
+        // ── 应用级黑名单 ──
+        // settings.local.json 被黑名单
+        assert!(SyncService::is_blacklisted_path(
+            "settings.local.json",
+            SyncScope::App
+        ));
+        // recent_edits.json 被黑名单
+        assert!(SyncService::is_blacklisted_path(
+            "recent_edits.json",
+            SyncScope::App
+        ));
+        // sync secrets 被黑名单
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/secrets.local.json",
+            SyncScope::App
+        ));
+        // device 目录被黑名单
+        assert!(SyncService::is_blacklisted_path(
+            "device/id.local.json",
+            SyncScope::App
+        ));
+
+        // ── 作品级白名单/黑名单不受应用级影响 ──
+        // 作品正文在作品级白名单
+        assert!(SyncService::is_whitelisted_path(
+            "project.json",
+            SyncScope::Project
+        ));
+        // settings.sync.json 不在作品级白名单
+        assert!(!SyncService::is_whitelisted_path(
+            "settings.sync.json",
+            SyncScope::Project
+        ));
+    }
+
+    /// Issue #600 评论 #3 问题四：应用级同步配置独立于作品级。
+    #[test]
+    fn test_app_sync_config_independent_from_project() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+
+        let project = core.create_project("Test Project").unwrap();
+        let pid = &project.id;
+
+        // 保存作品级配置
+        let mut project_config = core.load_sync_config(pid).unwrap();
+        project_config.enabled = true;
+        project_config.remote_url = "https://example.com/project.git".to_string();
+        core.save_sync_config(pid, &project_config).unwrap();
+
+        // 保存应用级配置
+        let mut app_config = core.load_app_sync_config().unwrap();
+        app_config.enabled = true;
+        app_config.remote_url = "https://example.com/app.git".to_string();
+        core.save_app_sync_config(&app_config).unwrap();
+
+        // 验证互不干扰
+        let loaded_project = core.load_sync_config(pid).unwrap();
+        let loaded_app = core.load_app_sync_config().unwrap();
+        assert_eq!(
+            loaded_project.remote_url,
+            "https://example.com/project.git"
+        );
+        assert_eq!(loaded_app.remote_url, "https://example.com/app.git");
+        assert_ne!(loaded_project.remote_url, loaded_app.remote_url);
     }
 }

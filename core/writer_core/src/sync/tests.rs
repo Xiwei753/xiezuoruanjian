@@ -18,6 +18,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     use crate::sync::types::ManifestFileRecord;
     use crate::sync::types::SyncConfig;
+    use crate::sync::types::SyncScope;
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncConflict;
     #[cfg(feature = "github-api")]
@@ -142,6 +143,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: None,
@@ -217,18 +219,21 @@ mod tests {
     fn test_sync_state_files_blacklisted() {
         // 同步根是单个作品目录：作品仓库内的本地同步状态不得上传。
         assert!(SyncService::is_blacklisted_path(
-            "app-meta/sync/state.local.json"
+            "app-meta/sync/state.local.json",
+            crate::sync::types::SyncScope::Project
         ));
         assert!(SyncService::is_blacklisted_path(
-            "app-meta/sync/state.local.json.tmp"
+            "app-meta/sync/state.local.json.tmp",
+            crate::sync::types::SyncScope::Project
         ));
         assert!(SyncService::is_blacklisted_path(
-            "app-meta/sync/sync_state.json"
+            "app-meta/sync/sync_state.json",
+            crate::sync::types::SyncScope::Project
         ));
-        assert!(SyncService::is_blacklisted_path("app-meta/logs/sync.log"));
-        assert!(SyncService::is_blacklisted_path("tmp/runtime.tmp"));
-        assert!(SyncService::is_blacklisted_path("cache/build.bin"));
-        assert!(SyncService::is_blacklisted_path("backups/vol1.zip"));
+        assert!(SyncService::is_blacklisted_path("app-meta/logs/sync.log", crate::sync::SyncScope::Project));
+        assert!(SyncService::is_blacklisted_path("tmp/runtime.tmp", crate::sync::SyncScope::Project));
+        assert!(SyncService::is_blacklisted_path("cache/build.bin", crate::sync::SyncScope::Project));
+        assert!(SyncService::is_blacklisted_path("backups/vol1.zip", crate::sync::SyncScope::Project));
     }
 
     #[test]
@@ -236,13 +241,16 @@ mod tests {
         // 应用级数据位于 app_data_root，不在作品仓库内（Issue #600），
         // 黑名单只管作品仓库内的路径。
         assert!(!SyncService::is_blacklisted_path(
-            "app-meta/ai/secrets.local.json"
+            "app-meta/ai/secrets.local.json",
+        crate::sync::SyncScope::Project
         ));
         assert!(!SyncService::is_blacklisted_path(
-            "app-meta/stats/events.local/2024-01-01.events.jsonl"
+            "app-meta/stats/events.local/2024-01-01.events.jsonl",
+        crate::sync::SyncScope::Project
         ));
         assert!(!SyncService::is_blacklisted_path(
-            "app-meta/settings/settings.local.json"
+            "app-meta/settings/settings.local.json",
+        crate::sync::SyncScope::Project
         ));
     }
 
@@ -304,6 +312,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -356,6 +365,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -409,13 +419,15 @@ mod tests {
     #[test]
     fn test_perform_sync_auto_commits_whitelist() {
         // 同步根是单个作品目录：作品自身内容必须进入白名单。
-        assert!(SyncService::is_whitelisted_path("project.json"));
-        assert!(SyncService::is_whitelisted_path("volumes/v1/volume.json"));
+        assert!(SyncService::is_whitelisted_path("project.json", crate::sync::SyncScope::Project));
+        assert!(SyncService::is_whitelisted_path("volumes/v1/volume.json", crate::sync::SyncScope::Project));
         assert!(SyncService::is_whitelisted_path(
-            "volumes/v1/chapters/c1/chapter.md"
+            "volumes/v1/chapters/c1/chapter.md",
+        crate::sync::SyncScope::Project
         ));
         assert!(SyncService::is_whitelisted_path(
-            "volumes/v1/chapters/c1/chapter.meta.json"
+            "volumes/v1/chapters/c1/chapter.meta.json",
+        crate::sync::SyncScope::Project
         ));
     }
 
@@ -449,6 +461,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let state = SyncState {
             remote_url: Some("url".to_string()),
@@ -476,40 +489,49 @@ mod tests {
     #[test]
     fn test_whitelist_project_content_and_sync_metadata() {
         // 作品自身内容：project.json / volumes / characters
-        assert!(SyncService::is_whitelisted_path("project.json"));
-        assert!(SyncService::is_whitelisted_path("volumes/v1/volume.json"));
+        assert!(SyncService::is_whitelisted_path("project.json", crate::sync::SyncScope::Project));
+        assert!(SyncService::is_whitelisted_path("volumes/v1/volume.json", crate::sync::SyncScope::Project));
         assert!(SyncService::is_whitelisted_path(
-            "volumes/v1/chapters/c1/chapter.md"
+            "volumes/v1/chapters/c1/chapter.md",
+        crate::sync::SyncScope::Project
         ));
         assert!(SyncService::is_whitelisted_path(
-            "volumes/v1/chapters/c1/chapter.meta.json"
+            "volumes/v1/chapters/c1/chapter.meta.json",
+        crate::sync::SyncScope::Project
         ));
-        assert!(SyncService::is_whitelisted_path("characters/role1.json"));
+        assert!(SyncService::is_whitelisted_path("characters/role1.json", crate::sync::SyncScope::Project));
         // 作品自己的同步元数据
         assert!(SyncService::is_whitelisted_path(
-            "app-meta/sync/manifest.sync.json"
+            "app-meta/sync/manifest.sync.json",
+        crate::sync::SyncScope::Project
         ));
 
         // 非白名单：作品外的应用级路径（旧 workspace 布局）与无关文件
         assert!(!SyncService::is_whitelisted_path(
-            "app-meta/settings/settings.sync.json"
+            "app-meta/settings/settings.sync.json",
+        crate::sync::SyncScope::Project
         ));
         assert!(!SyncService::is_whitelisted_path(
-            "app-meta/settings/settings.local.json"
+            "app-meta/settings/settings.local.json",
+        crate::sync::SyncScope::Project
         ));
         assert!(!SyncService::is_whitelisted_path(
-            "app-meta/stats/daily/2024-01-01.stats.json"
+            "app-meta/stats/daily/2024-01-01.stats.json",
+        crate::sync::SyncScope::Project
         ));
         assert!(!SyncService::is_whitelisted_path(
-            "app-meta/recent/recent_edits.json"
+            "app-meta/recent/recent_edits.json",
+        crate::sync::SyncScope::Project
         ));
         assert!(!SyncService::is_whitelisted_path(
-            "app-meta/device/current_device.json"
+            "app-meta/device/current_device.json",
+        crate::sync::SyncScope::Project
         ));
         assert!(!SyncService::is_whitelisted_path(
-            "projects/p1/project.json"
+            "projects/p1/project.json",
+        crate::sync::SyncScope::Project
         ));
-        assert!(!SyncService::is_whitelisted_path("readme.txt"));
+        assert!(!SyncService::is_whitelisted_path("readme.txt", crate::sync::SyncScope::Project));
     }
 
     #[test]
@@ -517,21 +539,24 @@ mod tests {
         // 作品仓库内的缓存/临时路径保持黑名单；app-meta 统计路径位于
         // app_data_root，不在作品仓库内。
         assert!(!SyncService::is_blacklisted_path(
-            "app-meta/stats/events.local/2024-01-01.events.jsonl"
+            "app-meta/stats/events.local/2024-01-01.events.jsonl",
+        crate::sync::SyncScope::Project
         ));
     }
 
     #[test]
     fn test_device_info_not_blacklisted() {
         assert!(!SyncService::is_blacklisted_path(
-            "app-meta/device/current_device.json"
+            "app-meta/device/current_device.json",
+        crate::sync::SyncScope::Project
         ));
     }
 
     #[test]
     fn test_recent_not_blacklisted() {
         assert!(!SyncService::is_blacklisted_path(
-            "app-meta/recent/recent_edits.json"
+            "app-meta/recent/recent_edits.json",
+        crate::sync::SyncScope::Project
         ));
     }
 
@@ -540,10 +565,12 @@ mod tests {
         // 作品仓库内的本地同步状态不得上传；
         // 应用级 settings.local.json 位于 app_data_root，不在作品仓库内。
         assert!(SyncService::is_blacklisted_path(
-            "app-meta/sync/state.local.json"
+            "app-meta/sync/state.local.json",
+            crate::sync::types::SyncScope::Project
         ));
         assert!(!SyncService::is_blacklisted_path(
-            "app-meta/settings/settings.local.json"
+            "app-meta/settings/settings.local.json",
+        crate::sync::SyncScope::Project
         ));
     }
 
@@ -553,10 +580,12 @@ mod tests {
         // 在 per-project 模型下位于 app_data_root/sync/，不在作品仓库内；
         // 作品仓库内的本地状态文件仍被黑名单排除。
         assert!(SyncService::is_blacklisted_path(
-            "app-meta/sync/state.local.json"
+            "app-meta/sync/state.local.json",
+            crate::sync::types::SyncScope::Project
         ));
         assert!(!SyncService::is_blacklisted_path(
-            "app-meta/sync/sync_secrets.local.json"
+            "app-meta/sync/sync_secrets.local.json",
+        crate::sync::SyncScope::Project
         ));
     }
 
@@ -573,6 +602,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let content = serde_json::to_string(&config).unwrap();
         // token might be there if some other struct is serialized, but we want to ensure
@@ -584,12 +614,14 @@ mod tests {
     #[test]
     fn test_blacklist_ignores_tmp_and_lock_files() {
         assert!(SyncService::is_blacklisted_path(
-            "volumes/v1/chapters/c1/chapter.md.tmp"
+            "volumes/v1/chapters/c1/chapter.md.tmp",
+        crate::sync::SyncScope::Project
         ));
         assert!(SyncService::is_blacklisted_path(
-            "app-meta/sync/state.local.json.lock"
+            "app-meta/sync/state.local.json.lock",
+        crate::sync::SyncScope::Project
         ));
-        assert!(SyncService::is_blacklisted_path("app-meta/logs/sync.log"));
+        assert!(SyncService::is_blacklisted_path("app-meta/logs/sync.log", crate::sync::SyncScope::Project));
     }
 
     #[test]
@@ -691,6 +723,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
 
         let plan = SyncService::perform_sync_dry_run(dir.path(), &config).unwrap();
@@ -712,6 +745,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
 
         // Create some whitelisted and blacklisted files（per-project：同步根是作品目录）
@@ -746,6 +780,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
 
         let secrets = SyncSecrets {
@@ -777,6 +812,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -851,6 +887,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -920,6 +957,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -986,6 +1024,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -1052,6 +1091,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -1129,7 +1169,7 @@ mod tests {
         )
         .unwrap();
 
-        let plan = SyncService::build_sync_plan(dir.path()).unwrap();
+        let plan = SyncService::build_sync_plan(dir.path(), crate::sync::SyncScope::Project).unwrap();
 
         // Ensure plan does not include the blacklisted items
         for file in plan.files_to_upload {
@@ -1171,6 +1211,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -1600,6 +1641,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
 
         let secrets = SyncSecrets {
@@ -1672,6 +1714,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -1741,6 +1784,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -1834,6 +1878,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
 
         let secrets = SyncSecrets {
@@ -1906,6 +1951,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2011,6 +2057,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2103,6 +2150,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2200,6 +2248,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2272,6 +2321,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2346,6 +2396,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2429,6 +2480,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2482,6 +2534,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
 
         let res2 = lww_sync(dir.path(), &config2, &secrets, false).unwrap();
@@ -2742,6 +2795,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2776,6 +2830,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
 
         let res2 = lww_sync(dir.path(), &config2, &secrets, false).unwrap();
@@ -2830,6 +2885,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
 
         let res3 = lww_sync(dir.path(), &config3, &secrets, false).unwrap();
@@ -2923,6 +2979,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2964,6 +3021,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
 
         let res3 = lww_sync(dir.path(), &config3, &secrets, false).unwrap();
@@ -3018,6 +3076,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
 
         let res4 = lww_sync(dir.path(), &config4, &secrets, false).unwrap();
@@ -3103,6 +3162,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -3215,6 +3275,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -3318,6 +3379,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("test_token".to_string()),
@@ -3361,6 +3423,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("test_token".to_string()),
@@ -3398,6 +3461,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("test_token".to_string()),
@@ -3446,6 +3510,7 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
+            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("test_token".to_string()),

@@ -92,13 +92,12 @@ char*  writer_core_rename_starmap(const char* starmap_id, const char* new_title)
 
 // ── Sync ──
 // All sync functions use JSON-in/JSON-out via ResultEnvelope.
-// writer_core_save_sync_config: Input is SyncConfigDto JSON.
-// load/save config & diagnostics are global (not per-project).
-// sync_dry_run & perform_sync are per-project: project_id selects the sync root.
-char*  writer_core_load_sync_config(void);
-char*  writer_core_save_sync_config(const char* config_json);
+// All sync functions are per-project: project_id selects the sync root (Issue #600 评论 #3).
+// writer_core_save_sync_config: project_id + SyncConfigDto JSON input.
+char*  writer_core_load_sync_config(const char* project_id);
+char*  writer_core_save_sync_config(const char* project_id, const char* config_json);
 char*  writer_core_sync_dry_run(const char* project_id);
-char*  writer_core_sync_diagnostics(void);
+char*  writer_core_sync_diagnostics(const char* project_id);
 char*  writer_core_perform_sync(const char* project_id);
 
 // ── Writing Stats ──

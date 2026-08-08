@@ -23,29 +23,36 @@ impl super::WriterAppService {
         self.api.save_syncable_settings(settings)
     }
 
-    pub fn load_sync_config(&self) -> Result<SyncConfigDto, WriterError> {
-        self.api.load_sync_config()
+    pub fn load_sync_config(&self, project_id: String) -> Result<SyncConfigDto, WriterError> {
+        self.api.load_sync_config(&project_id)
     }
 
-    pub fn save_sync_config(&self, config: SyncConfigDto) -> Result<bool, WriterError> {
-        self.api.save_sync_config(config)
+    pub fn save_sync_config(
+        &self,
+        project_id: String,
+        config: SyncConfigDto,
+    ) -> Result<bool, WriterError> {
+        self.api.save_sync_config(&project_id, config)
     }
 
-    pub fn load_sync_secrets(&self) -> Result<SyncSecretsDto, WriterError> {
-        self.api.load_sync_secrets()
+    pub fn load_sync_secrets(&self, project_id: String) -> Result<SyncSecretsDto, WriterError> {
+        self.api.load_sync_secrets(&project_id)
     }
 
-    pub fn save_sync_secrets(&self, secrets: SyncSecretsDto) -> Result<bool, WriterError> {
-        self.api.save_sync_secrets(secrets)
+    pub fn save_sync_secrets(&self, project_id: String, secrets: SyncSecretsDto) -> Result<bool, WriterError> {
+        self.api.save_sync_secrets(&project_id, secrets)
     }
 
     pub fn load_sync_state(&self, project_id: String) -> Result<SyncStateDto, WriterError> {
         self.api.load_sync_state(&project_id)
     }
 
-    pub fn get_sync_capability(&self) -> Result<SyncCapabilityDto, WriterError> {
-        let config = self.api.load_sync_config()?;
-        let secrets = self.load_sync_secrets()?;
+    pub fn get_sync_capability(
+        &self,
+        project_id: String,
+    ) -> Result<SyncCapabilityDto, WriterError> {
+        let config = self.api.load_sync_config(&project_id)?;
+        let secrets = self.load_sync_secrets(project_id.clone())?;
 
         let mut block_reason_code = None;
         let mut block_message_key = None;

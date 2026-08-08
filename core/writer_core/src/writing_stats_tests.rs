@@ -641,10 +641,12 @@ fn test_sync_stats_paths_outside_repo_not_blacklisted() {
     // 统计事件/缓存位于 app_data_root/app-meta/stats，不在作品仓库内（Issue #600）。
     // events.local 不再被黑名单特判；cache/ 仍被通用 cache 模式覆盖（防御性）。
     assert!(!crate::sync::SyncService::is_blacklisted_path(
-        "app-meta/stats/events.local/2025-01-15.events.jsonl"
+        "app-meta/stats/events.local/2025-01-15.events.jsonl",
+        crate::sync::SyncScope::Project
     ));
     assert!(crate::sync::SyncService::is_blacklisted_path(
-        "app-meta/stats/cache/something.json"
+        "app-meta/stats/cache/something.json",
+        crate::sync::SyncScope::Project
     ));
 }
 
@@ -652,7 +654,8 @@ fn test_sync_stats_paths_outside_repo_not_blacklisted() {
 fn test_sync_daily_stats_not_whitelisted_in_project() {
     // 统计日报位于 app_data_root，不参与作品同步。
     assert!(!crate::sync::SyncService::is_whitelisted_path(
-        "app-meta/stats/daily/2025-01-15.stats.json"
+        "app-meta/stats/daily/2025-01-15.stats.json",
+        crate::sync::SyncScope::Project
     ));
 }
 
