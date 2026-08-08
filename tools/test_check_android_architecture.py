@@ -29,7 +29,7 @@ def make_tree(root: Path, files: dict[str, str]) -> None:
 
 
 APP_PREFIX = "src/main/kotlin/com/xiwei/sujian"
-DS_PREFIX = "src/main/kotlin/com/xiwei/sujian/designsystem"
+DS_PREFIX = "src/main/kotlin/com/xiwei/sujian/core/designsystem"
 
 
 class DetectorPrimitivesTest(unittest.TestCase):
@@ -107,7 +107,7 @@ class DetectorPrimitivesTest(unittest.TestCase):
                     f"{APP_PREFIX}/ui/Clean.kt": (
                         "package com.xiwei.sujian.ui\n\n"
                         "import androidx.compose.runtime.Composable\n"
-                        "import com.xiwei.sujian.data.SettingsRepository\n"
+                        "import com.xiwei.sujian.core.interop.settings.SettingsRepository\n"
                         "class CleanViewModel(val repo: SettingsRepository)\n"
                     )
                 },
@@ -135,9 +135,9 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "ui-no-uniffi-jna-bridge",
             {
-                f"{APP_PREFIX}/ui/compose/StatsScreen.kt": (
-                    "package com.xiwei.sujian.ui.compose\n\n"
-                    "import com.xiwei.sujian.data.BridgeProvider\n"
+                f"{APP_PREFIX}/app/theme/StatsScreen.kt": (
+                    "package com.xiwei.sujian.app.theme\n\n"
+                    "import com.xiwei.sujian.core.interop.app.BridgeProvider\n"
                     "class Bad { val b = BridgeProvider }\n"
                 )
             },
@@ -148,9 +148,9 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "ui-no-uniffi-jna-bridge",
             {
-                f"{APP_PREFIX}/ui/compose/StatsScreen.kt": (
-                    "package com.xiwei.sujian.ui.compose\n\n"
-                    "import com.xiwei.sujian.data.SettingsRepository\n"
+                f"{APP_PREFIX}/app/theme/StatsScreen.kt": (
+                    "package com.xiwei.sujian.app.theme\n\n"
+                    "import com.xiwei.sujian.core.interop.settings.SettingsRepository\n"
                     "class Good(val repo: SettingsRepository)\n"
                 )
             },
@@ -161,8 +161,8 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "data-no-ui-framework",
             {
-                f"{APP_PREFIX}/data/BadBridge.kt": (
-                    "package com.xiwei.sujian.data\n\n"
+                f"{APP_PREFIX}/core/interop/common/BadBridge.kt": (
+                    "package com.xiwei.sujian.core.interop.common\n\n"
                     "import androidx.compose.runtime.Composable\n"
                     "class Bad { @Composable fun render() {} }\n"
                 )
@@ -174,9 +174,9 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "input-layer-pure",
             {
-                f"{APP_PREFIX}/editor/v2/input/BadInput.kt": (
-                    "package com.xiwei.sujian.editor.v2.input\n\n"
-                    "import com.xiwei.sujian.data.WorkspaceRepository\n"
+                f"{APP_PREFIX}/feature/editor/input/BadInput.kt": (
+                    "package com.xiwei.sujian.feature.editor.input\n\n"
+                    "import com.xiwei.sujian.core.interop.project.WorkspaceRepository\n"
                     "class Bad(val repo: WorkspaceRepository)\n"
                 )
             },
@@ -187,8 +187,8 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "input-layer-pure",
             {
-                f"{APP_PREFIX}/editor/v2/input/GoodInput.kt": (
-                    "package com.xiwei.sujian.editor.v2.input\n\n"
+                f"{APP_PREFIX}/feature/editor/input/GoodInput.kt": (
+                    "package com.xiwei.sujian.feature.editor.input\n\n"
                     "import uniffi.writer_core.EditorTransactionCauseDto\n"
                     "class Good(val cause: EditorTransactionCauseDto)\n"
                 )
@@ -200,9 +200,9 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "visual-motion-pure",
             {
-                f"{APP_PREFIX}/editor/v2/motion/BadMotion.kt": (
-                    "package com.xiwei.sujian.editor.v2.motion\n\n"
-                    "import com.xiwei.sujian.data.SettingsRepository\n"
+                f"{APP_PREFIX}/feature/editor/motion/BadMotion.kt": (
+                    "package com.xiwei.sujian.feature.editor.motion\n\n"
+                    "import com.xiwei.sujian.core.interop.settings.SettingsRepository\n"
                     "class Bad(val repo: SettingsRepository)\n"
                 )
             },
@@ -213,8 +213,8 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "session-layer-no-platform-state",
             {
-                f"{APP_PREFIX}/editor/v2/coordinator/EditorSessionCoordinator.kt": (
-                    "package com.xiwei.sujian.editor.v2.coordinator\n\n"
+                f"{APP_PREFIX}/feature/editor/coordinator/EditorSessionCoordinator.kt": (
+                    "package com.xiwei.sujian.feature.editor.coordinator\n\n"
                     "import androidx.compose.runtime.mutableStateOf\n"
                     "class EditorSessionCoordinator {\n"
                     "    val bad by mutableStateOf(0)\n"
@@ -232,8 +232,8 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "session-layer-no-platform-state",
             {
-                f"{APP_PREFIX}/editor/v2/coordinator/EditorSessionCoordinator.kt": (
-                    "package com.xiwei.sujian.editor.v2.coordinator\n\n"
+                f"{APP_PREFIX}/feature/editor/coordinator/EditorSessionCoordinator.kt": (
+                    "package com.xiwei.sujian.feature.editor.coordinator\n\n"
                     "class EditorSessionCoordinator {\n"
                     "    fun getActiveTargetIdFlow() {}\n"
                     "    val sessionStateFlow = 1\n"
@@ -250,8 +250,8 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "frame-clock-window-owned",
             {
-                f"{APP_PREFIX}/editor/v2/coordinator/EditorSessionCoordinator.kt": (
-                    "package com.xiwei.sujian.editor.v2.coordinator\n\n"
+                f"{APP_PREFIX}/feature/editor/coordinator/EditorSessionCoordinator.kt": (
+                    "package com.xiwei.sujian.feature.editor.coordinator\n\n"
                     "class EditorSessionCoordinator {\n"
                     "    val clock: WindowDisplayFrameClock? = null\n"
                     "    val sessionStateFlow = 1\n"
@@ -268,8 +268,8 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "update-session-state-transform-purity",
             {
-                f"{APP_PREFIX}/editor/v2/coordinator/EditorSessionEditOps.kt": (
-                    "package com.xiwei.sujian.editor.v2.coordinator\n\n"
+                f"{APP_PREFIX}/feature/editor/coordinator/EditorSessionEditOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.coordinator\n\n"
                     "fun bad() {\n"
                     "    updateSessionState { previous ->\n"
                     "        store.put(previous)\n"
@@ -286,8 +286,8 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "update-session-state-transform-purity",
             {
-                f"{APP_PREFIX}/editor/v2/coordinator/EditorSessionEditOps.kt": (
-                    "package com.xiwei.sujian.editor.v2.coordinator\n\n"
+                f"{APP_PREFIX}/feature/editor/coordinator/EditorSessionEditOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.coordinator\n\n"
                     "fun good() {\n"
                     "    var pendingRecord: Any? = null\n"
                     "    updateSessionState { previous -> previous.copy() }\n"
@@ -303,8 +303,8 @@ class LayerRuleTests(unittest.TestCase):
             "designsystem-independence",
             {
                 f"{DS_PREFIX}/component/Bad.kt": (
-                    "package com.xiwei.sujian.designsystem.component\n\n"
-                    "import com.xiwei.sujian.ui.compose.SujianAppState\n"
+                    "package com.xiwei.sujian.core.designsystem.component\n\n"
+                    "import com.xiwei.sujian.app.SujianAppState\n"
                     "class Bad(val state: SujianAppState)\n"
                 )
             },
@@ -316,7 +316,7 @@ class LayerRuleTests(unittest.TestCase):
             "designsystem-independence",
             {
                 f"{DS_PREFIX}/component/Good.kt": (
-                    "package com.xiwei.sujian.designsystem.component\n\n"
+                    "package com.xiwei.sujian.core.designsystem.component\n\n"
                     "import androidx.compose.material3.Text\n"
                     "class Good { fun render() = Text }\n"
                 )
@@ -328,8 +328,8 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "deleted-types-stay-deleted",
             {
-                f"{APP_PREFIX}/editor/v2/coordinator/EditorAnimationSettings.kt": (
-                    "package com.xiwei.sujian.editor.v2.coordinator\n\n"
+                f"{APP_PREFIX}/feature/editor/coordinator/EditorAnimationSettings.kt": (
+                    "package com.xiwei.sujian.feature.editor.coordinator\n\n"
                     "class EditorAnimationSettings\n"
                 )
             },
@@ -340,11 +340,11 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "source-contracts",
             {
-                f"{APP_PREFIX}/data/SettingsRepository.kt": (
-                    "package com.xiwei.sujian.data\n\nclass SettingsRepository\n"
+                f"{APP_PREFIX}/core/interop/settings/SettingsRepository.kt": (
+                    "package com.xiwei.sujian.core.interop.settings\n\nclass SettingsRepository\n"
                 ),
-                f"{APP_PREFIX}/data/SyncProfileGate.kt": (
-                    "package com.xiwei.sujian.data\n\nclass SyncProfileGate\n"
+                f"{APP_PREFIX}/core/interop/sync/SyncProfileGate.kt": (
+                    "package com.xiwei.sujian.core.interop.sync\n\nclass SyncProfileGate\n"
                 ),
             },
         )

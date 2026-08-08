@@ -51,3 +51,6 @@ pub use github_backend::*;
 pub use service::*;
 pub use types::*;
 pub use url::*;
+
+#[cfg(test)]
+mod api_tests;

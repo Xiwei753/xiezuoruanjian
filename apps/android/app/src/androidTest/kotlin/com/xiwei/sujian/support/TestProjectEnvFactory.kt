@@ -1,7 +1,7 @@
 package com.xiwei.sujian.support
 
 import android.content.Context
-import com.xiwei.sujian.data.WriterAppServiceHolder
+import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import java.io.File
 import java.util.UUID
 

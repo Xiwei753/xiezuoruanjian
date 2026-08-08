@@ -14,5 +14,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "Sujian"
 include(":app")
-include(":core-designsystem")
-include(":core-platform")
+include(":core:designsystem")
+include(":core:platform")

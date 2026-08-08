@@ -148,7 +148,7 @@ pub struct DateRange {
 }
 
 #[cfg(test)]
-mod tests {
+mod inline_tests {
     use super::*;
 
     #[test]
@@ -290,3 +290,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -369,7 +369,7 @@ pub fn reorder_projects(projects_root: &Path, ordered_ids: &[String]) -> Result<
 }
 
 #[cfg(test)]
-mod tests {
+mod inline_tests {
     use super::*;
     use tempfile::tempdir;
 
@@ -563,3 +563,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

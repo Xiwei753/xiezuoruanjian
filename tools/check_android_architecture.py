@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Android 分层架构源码扫描器（#597 六）。
 
-直接扫描 `apps/android/app/src/main/kotlin` 与 `core-designsystem` 源码，
+直接扫描 `apps/android/app/src/main/kotlin` 与 `core/designsystem` 源码，
 不编译 Android App（不再通过 JUnit/Gradle 单元测试任务运行架构检查）。
 
 保留的规则（对应原 `src/testArch` 静态规则，issue 正文第六节）：
 
-1.  UI 层（ui/）不能直接依赖具体 Bridge 类、UniFFI 绑定或 JNA；
-2.  UI 层不能直接依赖 editor/v2/input 基础设施；
-3.  data 层（Bridge/Repository）不能依赖 Compose/Activity/View/UI 与
-    editor 显示/动画状态；
-4.  editor/v2/input 只产生输入操作：不依赖 Repository/data、Compose UI、
+1.  UI 层（app/feature）不能直接依赖具体 Bridge 类、UniFFI 绑定或 JNA；
+2.  UI 层不能直接依赖 feature/editor/input 基础设施；
+3.  core/interop 层（Bridge/Repository）不能依赖 Compose/Activity/View/UI 与
+    feature/editor 显示/动画状态；
+4.  feature/editor/input 只产生输入操作：不依赖 Repository/core/interop、Compose UI、
     Activity；UniFFI 只允许 EditorTransactionCauseDto 契约类型；
-5.  editor/v2/visual 与 motion 只处理显示和动画状态：不写正文持久状态
-    （data/workspace）、不依赖 Activity/View/input、不依赖 Compose UI 框架、
+5.  feature/editor/visual 与 motion 只处理显示和动画状态：不写正文持久状态
+    （core/interop/workspace）、不依赖 Activity/View/input、不依赖 Compose UI 框架、
     UniFFI 只允许 DTO 契约类型；
 6.  editor session 层（EditorSessionCoordinator*）不能依赖 Compose 可变状态、
     View/Activity；派生 stateIn flow 与 reduceScope 已删除；唯一状态出口是
@@ -23,7 +23,7 @@
 8.  updateSessionState transform 是纯函数：transform 体内不得调用
     store.put/store.update/store.remove，store 写入只能在 transform 外
     通过 pendingRecord?.let { store.put(it) } 执行；
-9.  core-designsystem 不能反向依赖 app 模块（源码与 build.gradle.kts 均不得）；
+9.  core/designsystem 不能反向依赖 app 模块（源码与 build.gradle.kts 均不得）；
 10. 已删除类型/入口不得复活：EditorAnimationSettings、派生 flow getter、
     SettingsRepository 旧的 1 参 setSyncSecretsOverride；
 11. 结构契约：session/窗口层状态出口、FrameClock 生命周期、motion policy、
@@ -57,16 +57,18 @@ DEFAULT_DS_SRC = (
     PROJECT_ROOT
     / "apps"
     / "android"
-    / "core-designsystem"
+    / "core"
+    / "designsystem"
     / "src"
     / "main"
     / "kotlin"
     / "com"
     / "xiwei"
     / "sujian"
+    / "core"
     / "designsystem"
 )
-DEFAULT_DS_MODULE = PROJECT_ROOT / "apps" / "android" / "core-designsystem"
+DEFAULT_DS_MODULE = PROJECT_ROOT / "apps" / "android" / "core" / "designsystem"
 APP_MODULE = PROJECT_ROOT / "apps" / "android" / "app"
 
 APP_SRC = DEFAULT_APP_SRC
@@ -164,20 +166,19 @@ def scan_prefix_with_allowed(
 # ---------------------------------------------------------------------------
 
 CONCRETE_BRIDGES = [
-    "com.xiwei.sujian.data.BridgeProvider",
-    "com.xiwei.sujian.data.BridgeMappers",
-    "com.xiwei.sujian.data.WorkspaceBridge",
-    "com.xiwei.sujian.data.ChapterBridge",
-    "com.xiwei.sujian.data.ProjectBridge",
-    "com.xiwei.sujian.data.SettingsBridge",
-    "com.xiwei.sujian.data.StatsBridge",
-    "com.xiwei.sujian.data.SyncBridge",
-    "com.xiwei.sujian.data.WritingBridge",
-    "com.xiwei.sujian.data.ActionBridge",
-    "com.xiwei.sujian.data.AppServiceBridge",
-    "com.xiwei.sujian.data.StarMapBridge",
-    "com.xiwei.sujian.data.LayoutPolicyBridge",
-    "com.xiwei.sujian.data.ScreenPolicyBridge",
+    "com.xiwei.sujian.core.interop.app.BridgeProvider",
+    "com.xiwei.sujian.core.interop.common.BridgeMappers",
+    "com.xiwei.sujian.core.interop.project.ChapterBridge",
+    "com.xiwei.sujian.core.interop.project.ProjectBridge",
+    "com.xiwei.sujian.core.interop.settings.SettingsBridge",
+    "com.xiwei.sujian.core.interop.stats.StatsBridge",
+    "com.xiwei.sujian.core.interop.sync.SyncBridge",
+    "com.xiwei.sujian.core.interop.project.WritingBridge",
+    "com.xiwei.sujian.core.interop.common.ActionBridge",
+    "com.xiwei.sujian.core.interop.app.AppServiceBridge",
+    "com.xiwei.sujian.core.interop.starmap.StarMapBridge",
+    "com.xiwei.sujian.core.interop.common.LayoutPolicyBridge",
+    "com.xiwei.sujian.core.interop.common.ScreenPolicyBridge",
 ]
 
 COMPOSE_UI_FRAMEWORK = [
@@ -221,32 +222,59 @@ SESSION_STATE_CONTRACT = {
 
 
 def rule_ui_no_uniffi_jna_bridge() -> list[Finding]:
-    findings = scan_forbidden(APP_SRC, "/ui/", ["uniffi.writer_core", "com.sun.jna"])
-    findings += scan_forbidden(APP_SRC, "/ui/", CONCRETE_BRIDGES)
+    ui_filters = [
+        "/sujian/app/theme/",
+        "/sujian/app/navigation/",
+        "/sujian/app/diagnostics/",
+        "/sujian/app/labs/",
+        "/feature/editor/ui/",
+        "/feature/home/ui/",
+        "/feature/settings/ui/",
+        "/feature/starmap/ui/",
+        "/feature/stats/ui/",
+    ]
+    findings = []
+    for f in ui_filters:
+        findings += scan_forbidden(APP_SRC, f, ["uniffi.writer_core", "com.sun.jna"])
+        findings += scan_forbidden(APP_SRC, f, CONCRETE_BRIDGES)
     return findings
 
 
 def rule_ui_no_editor_input() -> list[Finding]:
-    return scan_forbidden(APP_SRC, "/ui/", ["com.xiwei.sujian.editor.v2.input"])
+    ui_filters = [
+        "/sujian/app/theme/",
+        "/sujian/app/navigation/",
+        "/sujian/app/diagnostics/",
+        "/sujian/app/labs/",
+        "/feature/editor/ui/",
+        "/feature/home/ui/",
+        "/feature/settings/ui/",
+        "/feature/starmap/ui/",
+        "/feature/stats/ui/",
+    ]
+    findings = []
+    for f in ui_filters:
+        findings += scan_forbidden(APP_SRC, f, ["com.xiwei.sujian.feature.editor.input"])
+    return findings
 
 
 def rule_data_no_ui_framework() -> list[Finding]:
     return scan_forbidden(
         APP_SRC,
-        "/data/",
-        ["androidx.compose", "androidx.activity", "android.view", "com.xiwei.sujian.ui"],
+        "/core/interop/",
+        ["androidx.compose", "androidx.activity", "android.view"],
     )
 
 
 def rule_data_no_editor_display() -> list[Finding]:
     return scan_forbidden(
         APP_SRC,
-        "/data/",
+        "/core/interop/",
         [
-            "com.xiwei.sujian.editor.v2.visual",
-            "com.xiwei.sujian.editor.v2.motion",
-            "com.xiwei.sujian.editor.v2.compose",
-            "com.xiwei.sujian.editor.v2.render",
+            "com.xiwei.sujian.feature.editor.visual",
+            "com.xiwei.sujian.feature.editor.motion",
+            "com.xiwei.sujian.feature.editor.compose",
+            "com.xiwei.sujian.feature.editor.render",
         ],
     )
 
@@ -254,17 +282,17 @@ def rule_data_no_editor_display() -> list[Finding]:
 def rule_input_layer_pure() -> list[Finding]:
     findings = scan_forbidden(
         APP_SRC,
-        "/editor/v2/input/",
-        ["com.xiwei.sujian.data", "com.xiwei.sujian.workspace"],
+        "/feature/editor/input/",
+        ["com.xiwei.sujian.core.interop", "com.xiwei.sujian.feature.home"],
     )
     findings += scan_forbidden(
         APP_SRC,
-        "/editor/v2/input/",
+        "/feature/editor/input/",
         ["androidx.compose.ui", "androidx.compose.material3", "androidx.compose.foundation", "androidx.activity"],
     )
     findings += scan_prefix_with_allowed(
         APP_SRC,
-        "/editor/v2/input/",
+        "/feature/editor/input/",
         "uniffi.writer_core",
         ["uniffi.writer_core.EditorTransactionCauseDto"],
     )
@@ -273,19 +301,19 @@ def rule_input_layer_pure() -> list[Finding]:
 
 def rule_visual_motion_pure() -> list[Finding]:
     findings: list[Finding] = []
-    for sub in ("/editor/v2/visual/", "/editor/v2/motion/"):
+    for sub in ("/feature/editor/visual/", "/feature/editor/motion/"):
         findings += scan_forbidden(
             APP_SRC,
             sub,
-            ["com.xiwei.sujian.data", "com.xiwei.sujian.workspace"],
+            ["com.xiwei.sujian.core.interop", "com.xiwei.sujian.feature.home"],
         )
         findings += scan_forbidden(
             APP_SRC,
             sub,
-            ["androidx.activity", "android.view", "com.xiwei.sujian.editor.v2.input"],
+            ["androidx.activity", "android.view", "com.xiwei.sujian.feature.editor.input"],
         )
         findings += scan_forbidden(APP_SRC, sub, COMPOSE_UI_FRAMEWORK)
-        if sub == "/editor/v2/motion/":
+        if sub == "/feature/editor/motion/":
             findings += scan_forbidden(APP_SRC, sub, ["uniffi.writer_core"])
         else:
             findings += scan_prefix_with_allowed(
@@ -301,7 +329,7 @@ def rule_visual_motion_pure() -> list[Finding]:
 
 
 def _session_layer_files() -> list[Path]:
-    coordinator = APP_SRC / "editor" / "v2" / "coordinator"
+    coordinator = APP_SRC / "feature" / "editor" / "coordinator"
     if not coordinator.exists():
         return []
     return [
@@ -328,7 +356,7 @@ def rule_session_layer_no_platform_state() -> list[Finding]:
                         message=f"session 层禁止依赖 Compose 可变状态/View/Activity: {hit}",
                     )
                 )
-    coordinator = APP_SRC / "editor" / "v2" / "coordinator"
+    coordinator = APP_SRC / "feature" / "editor" / "coordinator"
     if coordinator.exists():
         for name in ("EditorSessionCoordinator.kt", "EditorWindowHost.kt"):
             path = coordinator / name
@@ -340,7 +368,7 @@ def rule_session_layer_no_platform_state() -> list[Finding]:
                 if getter in effective:
                     findings.append(
                         Finding(
-                            path=f"editor/v2/coordinator/{name}",
+                            path=f"feature/editor/coordinator/{name}",
                             line=0,
                             message=f"派生 stateIn flow {getter} 必须保持删除（#595 三）",
                         )
@@ -348,7 +376,7 @@ def rule_session_layer_no_platform_state() -> list[Finding]:
             if "reduceScope" in effective:
                 findings.append(
                     Finding(
-                        path=f"editor/v2/coordinator/{name}",
+                        path=f"feature/editor/coordinator/{name}",
                         line=0,
                         message="reduceScope 必须保持删除（#595 三）",
                     )
@@ -362,7 +390,7 @@ def rule_session_layer_no_platform_state() -> list[Finding]:
                 if symbol not in effective:
                     findings.append(
                         Finding(
-                            path="editor/v2/coordinator/EditorSessionCoordinator.kt",
+                            path="feature/editor/coordinator/EditorSessionCoordinator.kt",
                             line=0,
                             message=f"缺少 {desc}: {symbol}",
                         )
@@ -372,7 +400,7 @@ def rule_session_layer_no_platform_state() -> list[Finding]:
 
 def rule_frame_clock_window_owned() -> list[Finding]:
     findings: list[Finding] = []
-    coordinator = APP_SRC / "editor" / "v2" / "coordinator"
+    coordinator = APP_SRC / "feature" / "editor" / "coordinator"
     if not coordinator.exists():
         return findings
     for path in _session_layer_files():
@@ -395,7 +423,7 @@ def rule_frame_clock_window_owned() -> list[Finding]:
         if "val windowFrameClock: WindowDisplayFrameClock" not in effective:
             findings.append(
                 Finding(
-                    path="editor/v2/coordinator/EditorWindowHost.kt",
+                    path="feature/editor/coordinator/EditorWindowHost.kt",
                     line=0,
                     message="窗口层必须持有唯一 windowFrameClock: WindowDisplayFrameClock 字段",
                 )
@@ -406,7 +434,7 @@ def rule_frame_clock_window_owned() -> list[Finding]:
 def rule_transform_purity() -> list[Finding]:
     """updateSessionState { ... } transform 体内不得调用 store.put/update/remove。"""
     findings: list[Finding] = []
-    coordinator = APP_SRC / "editor" / "v2" / "coordinator"
+    coordinator = APP_SRC / "feature" / "editor" / "coordinator"
     if not coordinator.exists():
         return findings
     sources = "\n".join(
@@ -429,7 +457,7 @@ def rule_transform_purity() -> list[Finding]:
     if not bodies:
         findings.append(
             Finding(
-                path="editor/v2/coordinator",
+                path="feature/editor/coordinator",
                 line=0,
                 message="必须存在 updateSessionState transform（找不到任何调用）",
             )
@@ -439,7 +467,7 @@ def rule_transform_purity() -> list[Finding]:
             if store_call in body:
                 findings.append(
                     Finding(
-                        path="editor/v2/coordinator",
+                        path="feature/editor/coordinator",
                         line=0,
                         message=(
                             f"第 {idx} 个 updateSessionState transform 体内调用 {store_call} — "
@@ -451,7 +479,7 @@ def rule_transform_purity() -> list[Finding]:
     if "pendingRecord?.let { store.put(it) }" not in sources:
         findings.append(
             Finding(
-                path="editor/v2/coordinator",
+                path="feature/editor/coordinator",
                 line=0,
                 message="store 写入必须使用 pendingRecord?.let { store.put(it) } 模式（transform 外）",
             )
@@ -461,20 +489,14 @@ def rule_transform_purity() -> list[Finding]:
 
 def rule_designsystem_independent() -> list[Finding]:
     forbidden_app_packages = [
-        "com.xiwei.sujian.ui",
-        "com.xiwei.sujian.data",
-        "com.xiwei.sujian.editor",
-        "com.xiwei.sujian.workspace",
-        "com.xiwei.sujian.runtime",
-        "com.xiwei.sujian.platform",
-        "com.xiwei.sujian.model",
-        "com.xiwei.sujian.labs",
-        "com.xiwei.sujian.diagnostics",
-        "com.xiwei.sujian.settings",
-        "com.xiwei.sujian.support",
+        "com.xiwei.sujian.app",
+        "com.xiwei.sujian.feature",
+        "com.xiwei.sujian.core.interop",
+        "com.xiwei.sujian.core.model",
+        "com.xiwei.sujian.core.platform",
     ]
     findings = scan_forbidden(DS_SRC, None, forbidden_app_packages)
-    findings += scan_forbidden(DS_SRC, None, ["uniffi.writer_core", "com.sun.jna", "com.xiwei.sujian.data.Bridge"])
+    findings += scan_forbidden(DS_SRC, None, ["uniffi.writer_core", "com.sun.jna", "com.xiwei.sujian.core.interop"])
     build_script = DS_MODULE / "build.gradle.kts"
     if build_script.exists():
         effective = "\n".join(
@@ -484,9 +506,9 @@ def rule_designsystem_independent() -> list[Finding]:
         if ":app" in effective or 'project("app")' in effective:
             findings.append(
                 Finding(
-                    path="core-designsystem/build.gradle.kts",
+                    path="core/designsystem/build.gradle.kts",
                     line=0,
-                    message="core-designsystem 的 build.gradle.kts 不得声明对 :app 项目的依赖",
+                    message="core/designsystem 的 build.gradle.kts 不得声明对 :app 项目的依赖",
                 )
             )
     return findings
@@ -494,7 +516,7 @@ def rule_designsystem_independent() -> list[Finding]:
 
 def rule_deleted_types_stay_deleted() -> list[Finding]:
     findings: list[Finding] = []
-    for path in collect_kt_files(APP_SRC, "/editor/v2/"):
+    for path in collect_kt_files(APP_SRC, "/feature/editor/"):
         for lineno, raw in enumerate(
             effective_lines(path.read_text(encoding="utf-8")), 1
         ):
@@ -506,13 +528,13 @@ def rule_deleted_types_stay_deleted() -> list[Finding]:
                         message="EditorAnimationSettings 必须保持删除（#595 十：EditorMotionPolicy 是唯一可写动画状态源）",
                     )
                 )
-    settings_repo = APP_SRC / "data" / "SettingsRepository.kt"
+    settings_repo = APP_SRC / "core" / "interop" / "settings" / "SettingsRepository.kt"
     if settings_repo.exists():
         effective = "\n".join(effective_lines(settings_repo.read_text(encoding="utf-8")))
         if re.search(r"fun\s+setSyncSecretsOverride\s*\(", effective):
             findings.append(
                 Finding(
-                    path="data/SettingsRepository.kt",
+                    path="core/interop/settings/SettingsRepository.kt",
                     line=0,
                     message="旧 swallow-failure setSyncSecretsOverride 必须保持删除（#595 十）",
                 )
@@ -551,7 +573,7 @@ def rule_source_contracts() -> list[Finding]:
                 Finding(str(path.relative_to(APP_SRC)), 0, f"禁止出现 {desc}（模式 {pattern}）")
             )
 
-    coordinator = APP_SRC / "editor" / "v2" / "coordinator"
+    coordinator = APP_SRC / "feature" / "editor" / "coordinator"
     host = coordinator / "EditorWindowHost.kt"
     require(host, r"fun\s+beginEdit\s*\(", "EditorWindowHost.beginEdit（活动编辑生命周期入口）")
     require(host, r"fun\s+releaseWindow\s*\(", "EditorWindowHost.releaseWindow（释放 FrameClock 连接）")
@@ -559,10 +581,10 @@ def rule_source_contracts() -> list[Finding]:
     require(host, r"fun\s+applyMotionPolicy\s*\(", "EditorWindowHost.applyMotionPolicy(EditorMotionPolicy)")
     require(host, r"\bmotionPolicyFlow\b", "EditorWindowHost.motionPolicyFlow 委托")
 
-    motion = APP_SRC / "editor" / "v2" / "motion" / "EditorMotionPolicy.kt"
+    motion = APP_SRC / "feature" / "editor" / "motion" / "EditorMotionPolicy.kt"
     require(motion, r"val\s+reduceMotion\b", "EditorMotionPolicy.reduceMotion 字段")
 
-    repo = APP_SRC / "data" / "SettingsRepository.kt"
+    repo = APP_SRC / "core" / "interop" / "settings" / "SettingsRepository.kt"
     require(repo, r"fun\s+commitSyncProfile\s*\(", "SettingsRepository.commitSyncProfile(SyncConfig, SyncSecrets)")
     require(repo, r"fun\s+loadCommittedSyncProfile\s*\(", "SettingsRepository.loadCommittedSyncProfile")
     require(repo, r"fun\s+loadSyncSecretsForGeneration\s*\(", "SettingsRepository.loadSyncSecretsForGeneration")
@@ -573,23 +595,23 @@ def rule_source_contracts() -> list[Finding]:
     require(repo, r"fun\s+setSyncSecretsOverrideStrict\s*\(", "SettingsRepository.setSyncSecretsOverrideStrict")
     require(repo, r"fun\s+clearSyncSecretsOverride\s*\(", "SettingsRepository.clearSyncSecretsOverride")
 
-    gate = APP_SRC / "data" / "SyncProfileGate.kt"
+    gate = APP_SRC / "core" / "interop" / "sync" / "SyncProfileGate.kt"
     require(gate, r"\bcommitExclusive\s*\(", "SyncProfileGate.commitExclusive")
     require(gate, r"\bsnapshotExclusive\s*\(", "SyncProfileGate.snapshotExclusive")
 
-    sync_bridge = APP_SRC / "data" / "SyncBridge.kt"
+    sync_bridge = APP_SRC / "core" / "interop" / "sync" / "SyncBridge.kt"
     require(sync_bridge, r"fun\s+clearSyncSecretsOverride\s*\(", "SyncBridge.clearSyncSecretsOverride")
 
-    engine = APP_SRC / "editor" / "v2" / "visual" / "AndroidTextAnimationEngine.kt"
+    engine = APP_SRC / "feature" / "editor" / "visual" / "AndroidTextAnimationEngine.kt"
     require(engine, r"fun\s+submitCursorOnlyTransaction\s*\(", "AndroidTextAnimationEngine.submitCursorOnlyTransaction")
 
-    view = APP_SRC / "editor" / "v2" / "host" / "SujianEditorView.kt"
+    view = APP_SRC / "feature" / "editor" / "host" / "SujianEditorView.kt"
     require(view, r"fun\s+setKernelAnimationEnabled\s*\(", "SujianEditorView.setKernelAnimationEnabled(Boolean)")
 
-    frame_input = APP_SRC / "editor" / "v2" / "pipeline" / "FrameRenderInput.kt"
+    frame_input = APP_SRC / "feature" / "editor" / "pipeline" / "FrameRenderInput.kt"
     require(frame_input, r"cursorTransition\b", "FrameRenderInput.cursorTransition 字段（与文字事务解耦）")
 
-    preview = APP_SRC / "editor" / "v2" / "projection" / "ChapterPreviewState.kt"
+    preview = APP_SRC / "feature" / "editor" / "projection" / "ChapterPreviewState.kt"
     if preview.exists():
         for lineno, raw in enumerate(effective_lines(preview.read_text(encoding="utf-8")), 1):
             lowered = raw.lower()
@@ -615,7 +637,7 @@ RULES: list[tuple[str, str, object]] = [
     ),
     (
         "ui-no-editor-input",
-        "UI 层不能直接依赖 editor/v2/input 基础设施",
+        "UI 层不能直接依赖 feature/editor/input 基础设施",
         rule_ui_no_editor_input,
     ),
     (
@@ -630,7 +652,7 @@ RULES: list[tuple[str, str, object]] = [
     ),
     (
         "input-layer-pure",
-        "editor/v2/input 只产生输入操作，不依赖 Repository/UI/UniFFI（DTO 契约除外）",
+        "feature/editor/input 只产生输入操作，不依赖 Repository/UI/UniFFI（DTO 契约除外）",
         rule_input_layer_pure,
     ),
     (
@@ -655,7 +677,7 @@ RULES: list[tuple[str, str, object]] = [
     ),
     (
         "designsystem-independence",
-        "core-designsystem 不能反向依赖 app 模块",
+        "core/designsystem 不能反向依赖 app 模块",
         rule_designsystem_independent,
     ),
     (
@@ -711,13 +733,13 @@ def main() -> int:
         "--designsystem-src",
         type=Path,
         default=DEFAULT_DS_SRC,
-        help="core-designsystem 主源码根目录（默认 %(default)s）",
+        help="core/designsystem 主源码根目录（默认 %(default)s）",
     )
     parser.add_argument(
         "--designsystem-module",
         type=Path,
         default=DEFAULT_DS_MODULE,
-        help="core-designsystem 模块根目录（默认 %(default)s）",
+        help="core/designsystem 模块根目录（默认 %(default)s）",
     )
     args = parser.parse_args()
 
@@ -725,7 +747,7 @@ def main() -> int:
         print(f"错误: app 主源码根目录不存在: {args.app_src}", file=sys.stderr)
         return 1
     if not args.designsystem_src.exists():
-        print(f"错误: core-designsystem 主源码根目录不存在: {args.designsystem_src}", file=sys.stderr)
+        print(f"错误: core/designsystem 主源码根目录不存在: {args.designsystem_src}", file=sys.stderr)
         return 1
 
     configure(args.app_src, args.designsystem_src, args.designsystem_module)

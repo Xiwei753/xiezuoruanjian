@@ -565,7 +565,7 @@ pub fn reorder_chapters(
 }
 
 #[cfg(test)]
-mod tests {
+mod inline_tests {
     use super::*;
     use tempfile::tempdir;
 
@@ -848,3 +848,6 @@ mod tests {
         assert_eq!(chapter4.title, "第4章");
     }
 }
+
+#[cfg(test)]
+mod tests;

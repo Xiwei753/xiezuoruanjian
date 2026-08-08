@@ -1,0 +1,155 @@
+package com.xiwei.sujian.feature.settings.ui
+
+import com.xiwei.sujian.core.model.LocalSettings
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class SettingsViewModelTest {
+    private fun createVm(): SettingsViewModel {
+        val context = org.robolectric.RuntimeEnvironment.getApplication()
+        val repo = com.xiwei.sujian.core.interop.settings.SettingsRepository(context)
+        val syncStatusRepo = com.xiwei.sujian.core.interop.sync.SyncStatusRepository(repo)
+        val coordinator = com.xiwei.sujian.core.interop.sync.SyncCoordinator(repo, syncStatusRepo)
+        return SettingsViewModel(repo, coordinator)
+    }
+
+    @Test
+    fun `handleIntent UpdateLocal updates uiState settings`() {
+        val vm = createVm()
+        vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(editorFontSize = 18f) })
+        assertEquals(18f, vm.uiState.value.settings.editorFontSize, 0.01f)
+    }
+
+    @Test
+    fun `handleIntent UpdateFontSize updates uiState fontSize`() {
+        val vm = createVm()
+        vm.handleIntent(SettingsIntent.UpdateFontSize(20f))
+        assertEquals(20f, vm.uiState.value.fontSize, 0.01f)
+    }
+
+    @Test
+    fun `handleIntent UpdateProjectSyncConfig updates uiState projectSyncConfig`() {
+        val vm = createVm()
+        val config = com.xiwei.sujian.core.model.SyncConfig(autoSync = true)
+        vm.handleIntent(SettingsIntent.UpdateProjectSyncConfig(config))
+        assertEquals(true, vm.uiState.value.projectSyncConfig.autoSync)
+    }
+
+    @Test
+    fun `handleIntent UpdateProjectSyncSecrets updates uiState projectSyncSecrets`() {
+        val vm = createVm()
+        val secrets = com.xiwei.sujian.core.model.SyncSecrets(token = "test-token")
+        vm.handleIntent(SettingsIntent.UpdateProjectSyncSecrets(secrets))
+        assertEquals("test-token", vm.uiState.value.projectSyncSecrets.token)
+    }
+
+    @Test
+    fun `handleIntent Refresh keeps uiState at defaults when no repo injected`() {
+        val vm = createVm()
+        vm.handleIntent(SettingsIntent.Refresh)
+        assertEquals(16f, vm.uiState.value.fontSize, 0.01f)
+    }
+
+    @Test
+    fun `consumeSaveError clears saveErrorResId`() {
+        val vm = createVm()
+        vm.handleIntent(SettingsIntent.UpdateFontSize(20f))
+        vm.consumeSaveError()
+        assertNull(vm.uiState.value.saveErrorResId)
+    }
+
+    @Test
+    fun `SettingsSaveCommand Local carries settings and revision`() {
+        val settings = LocalSettings(editorFontSize = 18f)
+        val cmd = SettingsSaveCommand.Local(settings, 1L)
+        assertEquals(18f, cmd.settings.editorFontSize, 0.01f)
+        assertEquals(1L, cmd.revision)
+    }
+
+    @Test
+    fun `SettingsSaveCommand FontSize carries fontSize and revision`() {
+        val cmd = SettingsSaveCommand.FontSize(20f, 2L)
+        assertEquals(20f, cmd.fontSize, 0.01f)
+        assertEquals(2L, cmd.revision)
+    }
+
+    @Test
+    fun `SettingsSaveCommand ProjectSyncConfig carries config and revision`() {
+        val config = com.xiwei.sujian.core.model.SyncConfig(autoSync = true)
+        val cmd = SettingsSaveCommand.ProjectSyncConfig(config, 3L)
+        assertEquals(true, cmd.config.autoSync)
+        assertEquals(3L, cmd.revision)
+    }
+
+    @Test
+    fun `SettingsSaveCommand ProjectSyncSecrets carries secrets and revision`() {
+        val secrets = com.xiwei.sujian.core.model.SyncSecrets(token = "secret")
+        val cmd = SettingsSaveCommand.ProjectSyncSecrets(secrets, 4L)
+        assertEquals("secret", cmd.secrets.token)
+        assertEquals(4L, cmd.revision)
+    }
+
+    @Test
+    fun `handleIntent PerformSync ends in terminal failure via serial transaction`() {
+        val vm = createVm()
+        val config =
+            com.xiwei.sujian.core.model.SyncConfig(
+                enabled = false,
+                autoSync = false,
+                remoteUrl = "https://unit.example/repo.git",
+            )
+        vm.handleIntent(SettingsIntent.UpdateProjectSyncConfig(config))
+        // 保存并同步必须走 SaveAndRunSync 串行事务（保存队列屏障），并结束在明确终态：
+        // 未配置 → 失败；不允许绕过保存队列或停留在 RUNNING/IDLE（#592）。
+        vm.handleIntent(SettingsIntent.PerformSync)
+        awaitUntil(
+            predicate = { vm.uiState.value.projectPerformSyncState == SyncCommandState.FAILURE },
+            message = "PerformSync must end in terminal FAILURE state via SaveAndRunSync transaction",
+        )
+        assertEquals(SyncCommandState.FAILURE, vm.uiState.value.projectPerformSyncState)
+    }
+
+    @Test
+    fun `sync profile load failure surfaces Failed state instead of silent defaults`() {
+        val vm = createVm()
+        // 测试环境无 native 库：config/凭据读取全部失败。
+        // #595 四：设置页必须显示 Failed（真实错误），不得通过 toConfigSecretsOrNull()
+        // 把失败静默转成默认空 token（那会伪装成“尚未配置”）。
+        awaitUntil(
+            predicate = { vm.uiState.value.projectSyncProfileLoadState !is SyncProfileLoadState.Loading },
+            message = "initial sync profile load must settle",
+        )
+        assertTrue(
+            "读取失败必须显示为 SyncProfileLoadState.Failed，实际: ${vm.uiState.value.projectSyncProfileLoadState}",
+            vm.uiState.value.projectSyncProfileLoadState is SyncProfileLoadState.Failed,
+        )
+        assertTrue(
+            "Failed 不是 Unconfigured",
+            vm.uiState.value.projectSyncProfileLoadState !is SyncProfileLoadState.Unconfigured,
+        )
+        // 失败时字段保留已确认值（初始默认），不因失败清空。
+        assertEquals(16f, vm.uiState.value.fontSize, 0.01f)
+    }
+
+    private fun awaitUntil(
+        predicate: () -> Boolean,
+        message: String,
+        timeoutMs: Long = 15_000,
+    ) {
+        val shadow = org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper())
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            shadow.idle()
+            if (predicate()) return
+            Thread.sleep(10)
+        }
+        org.junit.Assert.fail("$message (within ${timeoutMs}ms)")
+    }
+}

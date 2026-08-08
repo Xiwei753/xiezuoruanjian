@@ -39,8 +39,8 @@ class Finding:
 GENERATED_PATH_PREFIXES: tuple[str, ...] = (
     "apps/android/app/build/generated/",
     "apps/android/app/build/",
-    "apps/android/core-designsystem/build/",
-    "apps/android/core-platform/build/",
+    "apps/android/core/designsystem/build/",
+    "apps/android/core/platform/build/",
     "bindings/",
     "target/",
 )
@@ -88,18 +88,22 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
     # --- god-file: 既有大型核心文件，共享不可分割的上下文 ---
     # 以下三项为 Android 平台桥接/管线聚合根：ktlint 1.0.1 全量格式整改后
     # 行数跨过 800 上限（职责未变）；按平台边界拆分为独立任务，不在 #597 范围。
-    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/data/AppServiceBridge.kt"), "god-file"):
+    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/core/interop/app/AppServiceBridge.kt"), "god-file"):
         "FFI 门面类：121 个向后兼容委托函数聚合在唯一 holder 上，签名由 Core 契约决定；"
         "已按领域拆分为 ProjectBridge/ChapterBridge/SettingsBridge 等子桥，门面只保留委托；"
         "TODO(#597) 后续把门面委托按领域迁移到扩展函数文件",
-    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/editor/v2/host/SujianEditorView.kt"), "god-file"):
+    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/feature/editor/host/SujianEditorView.kt"), "god-file"):
         "编辑器平台宿主：View 生命周期/InputConnection/渲染回调/窗口绑定共享同一视图上下文，"
         "拆分会破坏平台绑定状态机；已按阶段拆分内部函数；"
         "TODO(#597) 后续按回调族提取子对象",
-    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/editor/v2/pipeline/AndroidEditorPipeline.kt"), "god-file"):
+    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/feature/editor/pipeline/AndroidEditorPipeline.kt"), "god-file"):
         "编辑器管线聚合：输入/排版/渲染/提交共享同一帧上下文与运行时状态，"
         "拆分会破坏帧原子性；已按阶段拆分内部函数；"
         "TODO(#597) 后续按阶段提取子管线",
+    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/core/interop/settings/SettingsRepository.kt"), "god-file"):
+        "设置仓储聚合根：设置/同步凭据/主题调色板共享同一 SharedPreferences 上下文与事务边界，"
+        "拆分会破坏设置原子性；已按子域拆分内部函数；"
+        "TODO(#597) 后续按子域提取独立 Repository",
 
     (Path("apps/Linux_qt/src/editor/layout.rs"), "god-file"):
         "Qt 编辑器排版核心：行盒/字距/换行/光标命中共享同一排版上下文，"
@@ -122,6 +126,10 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
     (Path("core/writer_core/src/sync/lww.rs"), "god-file"):
         "LWW 同合算法实现：元素/字段/集合三层数据结构共享同一时钟比较内核，"
         "拆分会破坏算法不变量",
+    (Path("core/writer_core/src/sync/service.rs"), "god-file"):
+        "同步服务编排层：Git/LWW 双策略/诊断/路径过滤共享同一 SyncService 入口与配置上下文，"
+        "拆分会破坏同步原子性；已按策略拆分内部函数；"
+        "TODO(#597) 后续按策略提取子服务",
     (Path("core/writer_core/src/writing_stats/store.rs"), "god-file"):
         "写作统计存储：聚合/持久化/查询共享同一时间窗口索引，"
         "已按读写路径拆分内部函数",
@@ -137,6 +145,14 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
     (Path("apps/Linux_qt/src/backend/project_operations.rs"), "god-file"):
         "Qt 项目操作后端：创建/打开/保存/导出共享同一项目上下文，"
         "已按操作类型拆分函数",
+    (Path("apps/Linux_qt/src/backend/sync_backend.rs"), "god-file"):
+        "Qt 同步后端：密钥存取/网络同步配置/手动同步/诊断共享同一 SyncBackend QObject 与 operation_id 锁，"
+        "拆分会破坏异步流输出竞态守卫；已按操作类型拆分内部函数；"
+        "TODO(#597) 后续按操作族提取子后端",
+    (Path("apps/Linux_qt/src/backend/app_backend.rs"), "god-file"):
+        "Qt 应用后端：全局状态/桥接注册/日志收集共享同一 AppBackend QObject 上下文，"
+        "拆分会破坏 QML 元对象注册一致性；已按子域拆分内部函数；"
+        "TODO(#597) 后续按子域提取子后端",
     (Path("core/writer_core/src/editor/kernel/apply.rs"), "god-file"):
         "编辑器内核命令分派：所有 EditorCommand 分支共享同一匹配上下文与修订校验，"
         "按命令类型拆分会破坏匹配完备性；TODO(#597) 后续按命令族提取子模块",
@@ -155,28 +171,20 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "既有 FFI 契约测试，验证跨语言边界；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/delete_guard.rs"), "production-test-bloat"):
         "既有删除守卫单元测试，验证引用计数不变量；待拆分到独立 _tests.rs",
-    (Path("core/writer_core/src/project.rs"), "production-test-bloat"):
-        "既有项目领域模型测试，验证聚合根不变量；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/action_registry.rs"), "production-test-bloat"):
         "既有动作注册表测试，验证分发契约；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/app_config.rs"), "production-test-bloat"):
         "既有应用配置测试，验证加载/迁移契约；待拆分到独立 _tests.rs",
-    (Path("core/writer_core/src/chapter.rs"), "production-test-bloat"):
-        "既有章节领域模型测试，验证内容/元数据不变量；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/layout_policy.rs"), "production-test-bloat"):
         "既有布局策略测试，验证断点/方向切换；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/screen_policy.rs"), "production-test-bloat"):
         "既有屏幕策略测试，验证分类/适配规则；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/editor/strong_types.rs"), "production-test-bloat"):
         "既有强类型测试，验证 newtype 不变量与边界检查；待拆分到独立 _tests.rs",
-    (Path("core/writer_core/src/settings/mod.rs"), "production-test-bloat"):
-        "既有设置模块测试，验证 schema/迁移/序列化；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/sync/github_api_client.rs"), "production-test-bloat"):
         "既有 GitHub API 客户端测试，验证请求/响应映射；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/writing_stats/aggregate.rs"), "production-test-bloat"):
         "既有写作统计聚合测试，验证时间窗口计算；待拆分到独立 _tests.rs",
-    (Path("core/writer_core/src/writing_stats/mod.rs"), "production-test-bloat"):
-        "既有写作统计模块测试，验证聚合/查询路径；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/writing_stats/store.rs"), "production-test-bloat"):
         "既有写作统计存储测试，验证持久化/索引；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/starmap/semantic.rs"), "production-test-bloat"):

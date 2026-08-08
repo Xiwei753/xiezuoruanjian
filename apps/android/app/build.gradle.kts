@@ -297,8 +297,8 @@ android.applicationVariants.all {
 }
 
 dependencies {
-    implementation(project(":core-designsystem"))
-    implementation(project(":core-platform"))
+    implementation(project(":core:designsystem"))
+    implementation(project(":core:platform"))
 
     implementation(libs.androidx.core.ktx)
 

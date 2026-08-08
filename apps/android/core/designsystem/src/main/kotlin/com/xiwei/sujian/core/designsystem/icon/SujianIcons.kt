@@ -1,0 +1,81 @@
+package com.xiwei.sujian.core.designsystem.icon
+
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoStories
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.ListAlt
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.CloudCircle
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.CloudQueue
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.UnfoldLess
+import androidx.compose.material.icons.filled.Widgets
+import androidx.compose.material.icons.outlined.AutoStories
+import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.Hub
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Settings
+
+object SujianIcons {
+    val ArrowBack = Icons.AutoMirrored.Filled.ArrowBack
+    val Add = Icons.Filled.Add
+    val AutoStories = Icons.Filled.AutoStories
+    val AutoStoriesOutlined = Icons.Outlined.AutoStories
+    val BarChart = Icons.Filled.BarChart
+    val BarChartOutlined = Icons.Outlined.BarChart
+    val BugReport = Icons.Filled.BugReport
+    val CloudSync = Icons.Filled.CloudSync
+    val Delete = Icons.Filled.Delete
+    val Edit = Icons.Filled.Edit
+    val Hub = Icons.Filled.Hub
+    val HubOutlined = Icons.Outlined.Hub
+    val Info = Icons.Filled.Info
+    val KeyboardArrowDown = Icons.Filled.KeyboardArrowDown
+    val KeyboardArrowRight = Icons.AutoMirrored.Filled.KeyboardArrowRight
+    val KeyboardArrowUp = Icons.Filled.KeyboardArrowUp
+    val MoreVert = Icons.Filled.MoreVert
+    val Palette = Icons.Filled.Palette
+    val Save = Icons.Filled.Save
+    val Science = Icons.Filled.Science
+    val Settings = Icons.Filled.Settings
+    val SettingsOutlined = Icons.Outlined.Settings
+    val Close = Icons.Filled.Close
+    val MenuBook = Icons.Filled.MenuBook
+    val OpenInNew = Icons.Filled.OpenInNew
+    val CloudDone = Icons.Filled.CloudDone
+    val CloudError = Icons.Filled.CloudQueue
+    val CloudOff = Icons.Filled.CloudOff
+    val ExpandLess = Icons.Filled.ExpandLess
+    val ExpandMore = Icons.Filled.ExpandMore
+    val Search = Icons.Filled.Search
+    val SmartToy = Icons.Filled.SmartToy
+    val UnfoldLess = Icons.Filled.UnfoldLess
+    val Widgets = Icons.Filled.Widgets
+    val ListAlt = Icons.Filled.ListAlt
+    val Person = Icons.Filled.Person
+    val PersonOutline = Icons.Outlined.Person
+}

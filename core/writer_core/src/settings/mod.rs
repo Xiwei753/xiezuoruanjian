@@ -1026,7 +1026,7 @@ pub fn list_builtin_themes() -> Vec<BuiltinTheme> {
 }
 
 #[cfg(test)]
-mod tests {
+mod inline_tests {
     use super::*;
     use tempfile::tempdir;
 
@@ -1694,3 +1694,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod tests;

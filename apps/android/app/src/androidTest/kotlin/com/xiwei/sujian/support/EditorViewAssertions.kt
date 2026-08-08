@@ -4,7 +4,7 @@ import android.os.Build
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.espresso.ViewAssertion
-import com.xiwei.sujian.editor.v2.host.SujianEditorView
+import com.xiwei.sujian.feature.editor.host.SujianEditorView
 import org.junit.Assert
 
 object EditorViewAssertions {

@@ -390,9 +390,9 @@ fn mixed() {
         """Issue #597 要求拆分的 Kotlin 文件可重新加入 god-file 白名单，
         但原因必须包含具体技术理由和拆分/重构计划关键词。"""
         removed_paths = {
-            Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/ui/EditorViewModel.kt"),
-            Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/ui/compose/settings/SettingsRoute.kt"),
-            Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorSessionCoordinator.kt"),
+            Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/feature/editor/EditorViewModel.kt"),
+            Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/feature/settings/ui/settings/SettingsRoute.kt"),
+            Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/feature/editor/coordinator/EditorSessionCoordinator.kt"),
         }
         required_keywords = ("拆分", "重构")
         for (path, rule), reason in MODULE.ALLOWED_EXCEPTIONS.items():

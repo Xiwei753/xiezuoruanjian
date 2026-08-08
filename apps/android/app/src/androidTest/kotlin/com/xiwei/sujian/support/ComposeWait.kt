@@ -33,7 +33,7 @@ object ComposeWait {
             val nodes =
                 rule.onAllNodes(
                     androidx.compose.ui.test.hasTestTag(
-                        com.xiwei.sujian.designsystem.testing.SujianSemanticIds.EditorSaveStatus,
+                        com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds.EditorSaveStatus,
                     ),
                 )
             val fetched = nodes.fetchSemanticsNodes()

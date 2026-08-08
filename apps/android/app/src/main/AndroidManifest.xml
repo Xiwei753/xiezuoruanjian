@@ -15,7 +15,7 @@
          以后若要备份，必须通过 dataExtractionRules / backup_rules 仅允许非敏感设置，
          排除正文仓库、同步 token、日志、crash 文件。 -->
     <application
-        android:name=".SujianApp"
+        android:name=".app.SujianApplication"
         android:allowBackup="false"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -24,7 +24,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Sujian">
-        <activity android:name=".ui.MainActivity"
+        <activity android:name=".app.MainActivity"
             android:exported="true"
             android:enableOnBackInvokedCallback="true"
             tools:targetApi="33">

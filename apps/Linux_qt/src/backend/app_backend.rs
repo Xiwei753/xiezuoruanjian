@@ -889,8 +889,8 @@ mod tests {
 
         // After sync success with pending path, internal_open_data_root is called.
         // The data root is opened successfully; pending path is cleared.
-        // load_sync_config sets status to "not_configured" (no sync config present).
-        assert_eq!(backend.current_sync_status, "not_configured");
+        // load_sync_config sets status to "no_workspace" (per-project sync: no selected project).
+        assert_eq!(backend.current_sync_status, "no_workspace");
         assert_eq!(backend.current_pending_github_init_path, "");
         assert!(backend.current_has_data_root);
     }
