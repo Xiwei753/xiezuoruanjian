@@ -2,6 +2,7 @@ package com.xiwei.sujian.settings
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.xiwei.sujian.data.ActiveProjectGate
 import com.xiwei.sujian.model.SyncConfig
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.ui.compose.settings.SettingsIntent
@@ -23,6 +24,9 @@ import org.junit.runner.RunWith
  * - 所有路径都必须结束在明确终态（未配置 → 失败），不允许停留在 RUNNING/IDLE。
  *
  * 使用真实 Core 工作区（TestDependenciesRule），config 经 Core 持久化往返。
+ *
+ * #600 评论 #3：同步配置已改为 per-project，测试需创建作品并设为活动作品，
+ * 用 projectId 调用 loadSyncConfig。
  */
 @RunWith(AndroidJUnit4::class)
 class SyncSaveAndRunTransactionTest {
@@ -34,6 +38,12 @@ class SyncSaveAndRunTransactionTest {
         val session = AndroidTestEnvironment.requireCurrentSession()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val repo = session.deps.settingsRepository
+        val projectData =
+            AndroidTestEnvironment.ensureTestProjectAndVolume(
+                instrumentation.targetContext,
+                session,
+            )
+        ActiveProjectGate.setCurrentProjectId(projectData.projectId)
 
         val configA = SyncConfig(enabled = false, autoSync = false, remoteUrl = "https://a.example/repo.git")
         val configB = SyncConfig(enabled = false, autoSync = false, remoteUrl = "https://b.example/repo.git")
@@ -57,7 +67,7 @@ class SyncSaveAndRunTransactionTest {
             SyncCommandState.FAILURE,
             vm!!.uiState.value.performSyncState,
         )
-        val persisted = repo.loadSyncConfig()
+        val persisted = repo.loadSyncConfig(projectData.projectId)
         assertEquals(
             "事务不得用捕获的旧值反向覆盖排队中的更新版本（#592）",
             "https://b.example/repo.git",
@@ -70,6 +80,12 @@ class SyncSaveAndRunTransactionTest {
         val session = AndroidTestEnvironment.requireCurrentSession()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val repo = session.deps.settingsRepository
+        val projectData =
+            AndroidTestEnvironment.ensureTestProjectAndVolume(
+                instrumentation.targetContext,
+                session,
+            )
+        ActiveProjectGate.setCurrentProjectId(projectData.projectId)
 
         val config = SyncConfig(enabled = false, autoSync = false, remoteUrl = "https://c.example/repo.git")
 
@@ -88,7 +104,7 @@ class SyncSaveAndRunTransactionTest {
         assertEquals(
             "无并发新编辑时事务必须保存捕获 revision 对应的配置",
             "https://c.example/repo.git",
-            repo.loadSyncConfig().remoteUrl,
+            repo.loadSyncConfig(projectData.projectId).remoteUrl,
         )
     }
 
