@@ -23,8 +23,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
-import com.xiwei.sujian.app.LocalSujianAppDependencies
 import com.xiwei.sujian.app.SujianAppState
+import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.feature.editor.ChapterSwitchResult
 import com.xiwei.sujian.feature.editor.EditorViewModel
 import com.xiwei.sujian.feature.editor.compose.LocalEditorWindowHost
@@ -111,13 +111,13 @@ fun ProjectWorkspaceScreen(
             is WorkspaceLocation.ProjectList -> {
                 if (appState.currentProjectId != null) {
                     appState.clearProjectSelection()
-                    com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.workspaceBack("project_list")
+                    com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceBack("project_list")
                 }
             }
             is WorkspaceLocation.ChapterTree -> {
                 if (appState.currentChapterId != null) {
                     appState.clearChapterSelection()
-                    com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.workspaceBack("chapter_tree")
+                    com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceBack("chapter_tree")
                 }
             }
             is WorkspaceLocation.Editor -> { }

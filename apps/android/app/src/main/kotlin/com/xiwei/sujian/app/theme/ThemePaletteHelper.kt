@@ -2,8 +2,8 @@ package com.xiwei.sujian.app.theme
 
 import android.content.Context
 import android.os.Build
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.app.theme.model.ThemeColorScheme
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 
 object ThemePaletteHelper {
     private const val TAG = "ThemePaletteHelper"

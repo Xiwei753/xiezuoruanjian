@@ -1,7 +1,7 @@
 package com.xiwei.sujian.feature.sync.data
 import android.content.Context
 import com.xiwei.sujian.app.di.AppServiceProvider
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.settings.SaveFailure

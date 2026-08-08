@@ -1,11 +1,11 @@
 package com.xiwei.sujian.core.interop.common
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.app.layout.model.ShellMode
 import com.xiwei.sujian.app.navigation.model.ActionPlacement
 import com.xiwei.sujian.app.navigation.model.ActionRole
 import com.xiwei.sujian.app.navigation.model.ActionSlot
 import com.xiwei.sujian.app.navigation.model.ScreenPolicy
 import com.xiwei.sujian.app.navigation.model.ScreenRole
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 
 class ScreenPolicyBridge(private val appServiceBridge: AppServiceBridge) {

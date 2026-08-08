@@ -58,15 +58,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.R
-import com.xiwei.sujian.app.SujianAppDependencies
+import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.core.interop.project.ActiveDocumentGate
 import com.xiwei.sujian.core.interop.project.DocumentSaveReceiptTracker
-import com.xiwei.sujian.core.interop.project.ProjectRepository
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
 import com.xiwei.sujian.core.interop.stats.StatsRepository
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.TargetDocumentFact
 import com.xiwei.sujian.feature.project.data.ChapterRepository
+import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
 import com.xiwei.sujian.feature.sync.data.SyncRepository
 import kotlinx.coroutines.CoroutineScope

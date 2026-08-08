@@ -2,8 +2,8 @@ package com.xiwei.sujian.core.interop.sync
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import com.xiwei.sujian.app.diagnostics.DiagnosticsEvents
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.feature.sync.data.SyncRepository
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 
@@ -25,7 +25,7 @@ class AutoSyncWorker(
             return Result.success()
         }
         val deps =
-            (applicationContext as? com.xiwei.sujian.app.SujianAppDependenciesProvider)
+            (applicationContext as? com.xiwei.sujian.app.di.SujianAppDependenciesProvider)
                 ?.dependencies
                 ?: return Result.failure()
 
@@ -77,7 +77,7 @@ class AutoSyncWorker(
      *
      * 返回与作品级相同的 [ProjectSyncOutcome] 分类，纳入 doWork 整体 outcome 聚合。
      */
-    private suspend fun syncApp(deps: com.xiwei.sujian.app.SujianAppDependencies): ProjectSyncOutcome {
+    private suspend fun syncApp(deps: com.xiwei.sujian.app.di.SujianAppDependencies): ProjectSyncOutcome {
         val settingsRepository = deps.syncRepository
         val snapshotResult =
             try {
@@ -137,7 +137,7 @@ class AutoSyncWorker(
      * 返回该作品的同步结果分类（成功/跳过/临时失败/确定性失败）。
      */
     private suspend fun syncOneProject(
-        deps: com.xiwei.sujian.app.SujianAppDependencies,
+        deps: com.xiwei.sujian.app.di.SujianAppDependencies,
         projectId: String,
     ): ProjectSyncOutcome {
         val settingsRepository = deps.syncRepository

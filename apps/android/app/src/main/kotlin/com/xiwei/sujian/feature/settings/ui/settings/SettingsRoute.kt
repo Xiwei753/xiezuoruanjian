@@ -36,7 +36,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
-import com.xiwei.sujian.app.LocalSujianAppDependencies
+import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.navigation.SettingsSection
 import com.xiwei.sujian.app.theme.ThemeRepository
 import com.xiwei.sujian.core.designsystem.component.SujianListItem

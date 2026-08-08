@@ -1,4 +1,4 @@
-package com.xiwei.sujian.app.diagnostics
+package com.xiwei.sujian.feature.editor.diagnostics
 
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean

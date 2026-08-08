@@ -2,11 +2,11 @@ package com.xiwei.sujian.feature.editor
 
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
-import com.xiwei.sujian.core.interop.project.ProjectRepository
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
 import com.xiwei.sujian.core.interop.stats.StatsRepository
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.project.data.ChapterRepository
+import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
 import com.xiwei.sujian.feature.sync.data.SyncRepository
 import kotlinx.coroutines.Dispatchers
@@ -64,7 +64,7 @@ class EditorViewModelInjectionTest {
         val app = RuntimeEnvironment.getApplication()
         val bridge = createBridge()
         val deps =
-            object : com.xiwei.sujian.app.SujianAppDependencies {
+            object : com.xiwei.sujian.app.di.SujianAppDependencies {
                 override val appServiceBridge: AppServiceBridge = bridge
                 override val projectRepository: ProjectRepository = ProjectRepository(app, bridge)
                 override val chapterRepository: ChapterRepository = ChapterRepository(app, bridge)

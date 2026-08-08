@@ -111,3 +111,6 @@ pub(crate) fn generate_tombstones(
         state.tombstones.push(tombstone);
     }
 }
+
+#[cfg(test)]
+mod tests;

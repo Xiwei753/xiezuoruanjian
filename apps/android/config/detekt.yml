@@ -172,12 +172,12 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/core/interop/app/AppServiceBridge.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/sync/SyncBridge.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/stats/StatsBridge.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/project/ProjectRepository.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/project/data/ProjectRepository.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/app/WriterAppServiceHolder.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/project/WritingBridge.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/stats/StatsRepository.kt"
       # --- 诊断事件：多字段事件数据类 ---
-      - "**/kotlin/com/xiwei/sujian/app/diagnostics/DiagnosticsEvents.kt"
+      - "**/kotlin/com/xiwei/sujian/core/diagnostics/DiagnosticsEvents.kt"
       # --- 编辑器：Compose动画/管线/视觉，参数由渲染协议决定 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/compose/AnimatedInlineText.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/compose/AnimatedTextArea.kt"
@@ -233,12 +233,12 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/core/interop/common/LayoutPolicyBridge.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/settings/SettingsRepository.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/starmap/StarMapBridge.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/project/ProjectRepository.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/project/data/ProjectRepository.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/starmap/starmap/StarMapBridgeOps.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/starmap/starmap/StarMapRepository.kt"
       - "**/kotlin/com/xiwei/sujian/feature/sync/data/SyncRepository.kt"
       # --- 诊断事件：多字段事件枚举 ---
-      - "**/kotlin/com/xiwei/sujian/app/diagnostics/DiagnosticsEvents.kt"
+      - "**/kotlin/com/xiwei/sujian/core/diagnostics/DiagnosticsEvents.kt"
       - "**/kotlin/com/xiwei/sujian/app/diagnostics/DiagnosticsTest.kt"
       # --- 编辑器：管线/协调器/输入法，函数由协议决定 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/coordinator/EditorSessionCoordinator.kt"
@@ -272,14 +272,14 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/core/interop/project/DocumentSaveReceiptTrackerTest.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/settings/SettingsRepository.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/sync/SyncCoordinator.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/project/ProjectRepository.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/project/data/ProjectRepository.kt"
       # --- 星图：桥接/缓存/测试，协议键重复 ---
       - "**/kotlin/com/xiwei/sujian/core/interop/starmap/starmap/StarMapRepository.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/starmap/starmap/StarMapSnapshotCache.kt"
       # --- 诊断：日志/导出，格式字符串重复 ---
-      - "**/kotlin/com/xiwei/sujian/app/diagnostics/DiagnosticsEvents.kt"
-      - "**/kotlin/com/xiwei/sujian/app/diagnostics/DiagnosticsExporter.kt"
-      - "**/kotlin/com/xiwei/sujian/app/diagnostics/DiagnosticsLogger.kt"
+      - "**/kotlin/com/xiwei/sujian/core/diagnostics/DiagnosticsEvents.kt"
+      - "**/kotlin/com/xiwei/sujian/core/diagnostics/DiagnosticsExporter.kt"
+      - "**/kotlin/com/xiwei/sujian/core/diagnostics/DiagnosticsLogger.kt"
       - "**/kotlin/com/xiwei/sujian/app/diagnostics/DiagnosticsTest.kt"
       # --- 编辑器：契约测试断言字符串重复 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/compose/AnimatedTextSemanticsTest.kt"

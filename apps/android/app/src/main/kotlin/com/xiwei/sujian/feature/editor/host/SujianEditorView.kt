@@ -481,7 +481,7 @@ class SujianEditorView
 
         override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): InputConnection? {
             val ic = inputAdapter.onCreateInputConnection(outAttrs)
-            com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.inputConnection(
+            com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.inputConnection(
                 created = ic != null,
                 sessionBound = isSessionBound,
             )
@@ -677,7 +677,7 @@ class SujianEditorView
          */
         override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
             super.onWindowFocusChanged(hasWindowFocus)
-            com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.editorFocus(hasWindowFocus)
+            com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.editorFocus(hasWindowFocus)
             val frameTimeMs = timeSource.nowNanos() / 1_000_000
             if (!hasWindowFocus) {
                 pipeline.pauseAnimation(frameTimeMs)

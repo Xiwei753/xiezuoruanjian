@@ -168,3 +168,6 @@ pub fn flush_recent_edits(app_data_root: &Path) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

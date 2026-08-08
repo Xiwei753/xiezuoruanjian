@@ -1,5 +1,7 @@
 package com.xiwei.sujian.app.diagnostics
 
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

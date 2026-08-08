@@ -3,7 +3,7 @@ package com.xiwei.sujian.app
 import android.content.Context
 import android.widget.Toast
 import com.xiwei.sujian.R
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.RepositoryException
 
 /**

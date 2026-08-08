@@ -1,8 +1,7 @@
 package com.xiwei.sujian.app.di
 
 import android.content.Context
-import com.xiwei.sujian.app.SujianAppDependencies
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.LayoutPolicyBridge

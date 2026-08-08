@@ -1,5 +1,6 @@
 package com.xiwei.sujian.core.interop.project
 
+import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
 import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.RecentEdit

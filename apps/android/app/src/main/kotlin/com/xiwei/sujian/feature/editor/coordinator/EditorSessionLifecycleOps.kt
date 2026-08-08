@@ -107,7 +107,7 @@ fun EditorSessionCoordinator.commitPreparedSession(
         )
     }
     pendingRecord?.let { store.put(it) }
-    com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.sessionLifecycle(
+    com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
         handle.sessionId.toString(),
         "commit_prepared",
     )
@@ -119,7 +119,7 @@ fun EditorSessionCoordinator.releasePreparedTarget(handle: PreparedSessionHandle
     if (handle.newlyCreated) {
         closeSession(handle.sessionId)
         if (handle.sessionId != 0UL) {
-            com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.sessionLifecycle(
+            com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
                 handle.sessionId.toString(),
                 "release_prepared_new",
             )
@@ -136,7 +136,7 @@ fun EditorSessionCoordinator.releasePreparedTarget(handle: PreparedSessionHandle
             store.put(previous)
         }
         if (handle.sessionId != 0UL) {
-            com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.sessionLifecycle(
+            com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
                 handle.sessionId.toString(),
                 "release_prepared_borrowed",
             )
@@ -180,7 +180,7 @@ fun EditorSessionCoordinator.detachWindowBinding(
             )
         }
     }
-    com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.sessionLifecycle(
+    com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
         sessionId.toString(),
         "window_detached",
     )
@@ -227,7 +227,7 @@ fun EditorSessionCoordinator.closeTarget(
     val sessionId = record?.sessionId
     if (sessionId != null && sessionId != 0UL) {
         closeSession(sessionId)
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.sessionLifecycle(
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
             sessionId.toString(),
             "close_target:${reason.name.lowercase()}",
         )

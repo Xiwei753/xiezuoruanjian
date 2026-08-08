@@ -1,17 +1,16 @@
-package com.xiwei.sujian.app
+package com.xiwei.sujian.app.di
 
 import android.content.Context
 import androidx.compose.runtime.compositionLocalOf
-import com.xiwei.sujian.app.di.AppServiceProvider
 import com.xiwei.sujian.app.theme.ThemeRepository
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
-import com.xiwei.sujian.core.interop.project.ProjectRepository
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
 import com.xiwei.sujian.core.interop.stats.StatsRepository
 import com.xiwei.sujian.core.interop.sync.AppSyncDataBarrier
 import com.xiwei.sujian.core.interop.sync.SyncCoordinator
 import com.xiwei.sujian.core.interop.sync.SyncStatusRepository
 import com.xiwei.sujian.feature.project.data.ChapterRepository
+import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
 import com.xiwei.sujian.feature.sync.data.SyncRepository
 

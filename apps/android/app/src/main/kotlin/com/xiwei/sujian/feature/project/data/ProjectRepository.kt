@@ -1,4 +1,4 @@
-package com.xiwei.sujian.core.interop.project
+package com.xiwei.sujian.feature.project.data
 import android.content.Context
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.AppServiceProvider

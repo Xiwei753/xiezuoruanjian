@@ -38,7 +38,7 @@ class SujianAppDependenciesSingletonTest {
     @Test
     fun appContainer_concurrentFirstAccess_createsSingleInstance() {
         val app = app()
-        val seen = java.util.Collections.synchronizedList(mutableListOf<com.xiwei.sujian.app.AppServiceContainer>())
+        val seen = java.util.Collections.synchronizedList(mutableListOf<com.xiwei.sujian.app.di.AppServiceContainer>())
         val threads =
             (1..8).map {
                 Thread { seen.add(app.appContainer) }

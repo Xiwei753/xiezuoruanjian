@@ -1,5 +1,4 @@
 package com.xiwei.sujian.core.interop.common
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.app.layout.model.AvoidRegion
 import com.xiwei.sujian.app.layout.model.EditorMode
 import com.xiwei.sujian.app.layout.model.FoldFeatureInfo
@@ -18,6 +17,7 @@ import com.xiwei.sujian.app.layout.model.VisiblePaneRoles
 import com.xiwei.sujian.app.layout.model.WidthClass
 import com.xiwei.sujian.app.layout.model.WindowMetrics
 import com.xiwei.sujian.app.layout.model.WorkspacePaneMode
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import uniffi.writer_core.AvoidRegionDto
 import uniffi.writer_core.EditorModeDto

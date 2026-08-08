@@ -1,4 +1,4 @@
-package com.xiwei.sujian.app.diagnostics
+package com.xiwei.sujian.core.diagnostics
 
 import android.content.Context
 import android.content.Intent
@@ -7,6 +7,7 @@ import androidx.core.content.FileProvider
 import com.google.gson.GsonBuilder
 import com.xiwei.sujian.R
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
+import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.feature.sync.data.SyncRepository
 import java.io.File
 import java.io.FileInputStream

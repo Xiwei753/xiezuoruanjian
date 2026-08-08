@@ -7,7 +7,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import com.xiwei.sujian.app.diagnostics.DiagnosticsEvents
+import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 import com.xiwei.sujian.feature.sync.data.SyncRepository
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets

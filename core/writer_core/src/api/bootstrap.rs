@@ -15,7 +15,7 @@ use writer_platform_api::{
     PlatformServices, SecureStorage,
 };
 
-use super::secure_storage::{wrap_secure_storage, SecureStorageProvider};
+use super::secure_storage_bridge::{wrap_secure_storage, SecureStorageProvider};
 use crate::api::types::PlatformInitDto;
 use crate::api::error::WriterError;
 use crate::app_service::WriterAppService;

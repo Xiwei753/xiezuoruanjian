@@ -82,7 +82,7 @@ fun rememberThemeController(
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
-    val deps = com.xiwei.sujian.app.LocalSujianAppDependencies.current
+    val deps = com.xiwei.sujian.app.di.LocalSujianAppDependencies.current
     DisposableEffect(lifecycleOwner) {
         val observer =
             LifecycleEventObserver { _, event ->

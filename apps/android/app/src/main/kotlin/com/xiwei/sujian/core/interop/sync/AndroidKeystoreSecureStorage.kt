@@ -3,7 +3,7 @@ package com.xiwei.sujian.core.interop.sync
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import uniffi.writer_core.SecureStorageException
 import uniffi.writer_core.SecureStorageProvider
 import java.io.File

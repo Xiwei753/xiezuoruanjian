@@ -11,13 +11,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
-import com.xiwei.sujian.app.diagnostics.DiagnosticsExporter
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
-import com.xiwei.sujian.app.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.core.designsystem.component.SujianOutlinedButton
 import com.xiwei.sujian.core.designsystem.component.SujianSection
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
+import com.xiwei.sujian.core.diagnostics.DiagnosticsExporter
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 
 @Composable
 fun DiagnosticsSettings(

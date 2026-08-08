@@ -5,16 +5,17 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.xiwei.sujian.app.di.AppServiceProvider
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
-import com.xiwei.sujian.app.diagnostics.EditorEventRingBuffer
+import com.xiwei.sujian.app.di.SujianAppDependenciesProvider
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.sync.AutoSyncScheduler
 import com.xiwei.sujian.core.platform.AndroidDataRoot
+import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter
 
-class SujianApplication : Application(), DefaultLifecycleObserver, com.xiwei.sujian.app.SujianAppDependenciesProvider {
+class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDependenciesProvider {
     private var autoSyncScheduler: AutoSyncScheduler? = null
 
     /**
@@ -22,13 +23,13 @@ class SujianApplication : Application(), DefaultLifecycleObserver, com.xiwei.suj
      * 后台线程首次并发访问也只构造一个实例，避免出现两份
      * SyncStatusRepository StateFlow / SyncCoordinator 互相覆盖。
      */
-    private val appContainerDelegate: Lazy<com.xiwei.sujian.app.AppServiceContainer> =
-        lazy { com.xiwei.sujian.app.DefaultAppServiceContainer(this) }
-    val appContainer: com.xiwei.sujian.app.AppServiceContainer
+    private val appContainerDelegate: Lazy<com.xiwei.sujian.app.di.AppServiceContainer> =
+        lazy { com.xiwei.sujian.app.di.DefaultAppServiceContainer(this) }
+    val appContainer: com.xiwei.sujian.app.di.AppServiceContainer
         get() = appContainerDelegate.value
 
-    override val dependencies: com.xiwei.sujian.app.SujianAppDependencies
-        get() = com.xiwei.sujian.app.DefaultSujianAppDependencies(appContainer)
+    override val dependencies: com.xiwei.sujian.app.di.SujianAppDependencies
+        get() = com.xiwei.sujian.app.di.DefaultSujianAppDependencies(appContainer)
 
     override fun onCreate() {
         super<Application>.onCreate()
@@ -83,7 +84,7 @@ class SujianApplication : Application(), DefaultLifecycleObserver, com.xiwei.suj
         // appContainer / AppServiceProvider / WriterAppServiceHolder，
         // 避免在授权前提前初始化 Rust Core（Issue #600）。
         if (!AndroidDataRoot.hasStorageAccess()) return
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.appLifecycle("start")
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.appLifecycle("start")
         if (autoSyncScheduler == null) {
             autoSyncScheduler = AutoSyncScheduler(this, appContainer.syncRepository)
         }
@@ -93,7 +94,7 @@ class SujianApplication : Application(), DefaultLifecycleObserver, com.xiwei.suj
     override fun onStop(owner: LifecycleOwner) {
         // 同 onStart：授权前进入后台（跳转系统授权页）不能拉起 Core。
         if (!AndroidDataRoot.hasStorageAccess()) return
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.appLifecycle("stop")
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.appLifecycle("stop")
         autoSyncScheduler?.stop()
         val result = AppServiceProvider.getStarmapBridge(this).flushAllStarmapStores()
         when (result) {

@@ -1,6 +1,6 @@
 package com.xiwei.sujian.core.interop.sync
-import com.xiwei.sujian.app.diagnostics.DiagnosticsEvents
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.RepositoryException
 import com.xiwei.sujian.core.interop.common.ResultEnvelope

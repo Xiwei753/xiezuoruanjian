@@ -1,5 +1,5 @@
 package com.xiwei.sujian.core.interop.sync
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.starmap.StarMapBridge
 import com.xiwei.sujian.feature.sync.data.model.SyncResult

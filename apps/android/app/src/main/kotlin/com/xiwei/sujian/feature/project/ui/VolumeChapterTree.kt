@@ -61,7 +61,7 @@ sealed class VolumeChapterListItem {
 @Composable
 fun ChapterTreeContent(
     projectId: String,
-    projectRepository: com.xiwei.sujian.core.interop.project.ProjectRepository,
+    projectRepository: com.xiwei.sujian.feature.project.data.ProjectRepository,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
     modifier: Modifier = Modifier,
     showHeader: Boolean = true,
@@ -301,7 +301,7 @@ fun ChapterTreeContent(
 @Composable
 fun VolumeChapterTree(
     projectId: String,
-    projectRepository: com.xiwei.sujian.core.interop.project.ProjectRepository,
+    projectRepository: com.xiwei.sujian.feature.project.data.ProjectRepository,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
     modifier: Modifier = Modifier,
     onBackToProjects: () -> Unit = {},

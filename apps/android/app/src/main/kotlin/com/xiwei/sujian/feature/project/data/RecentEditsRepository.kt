@@ -2,7 +2,7 @@ package com.xiwei.sujian.feature.project.data
 import android.content.Context
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.AppServiceProvider
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.MessageKeyMapper
@@ -11,7 +11,7 @@ import com.xiwei.sujian.feature.project.data.model.RecentEdit
 /**
  * RecentEditsRepository — 最近编辑记录仓库层。
  *
- * 从 [com.xiwei.sujian.core.interop.project.ProjectRepository] 拆出，
+ * 从 [com.xiwei.sujian.feature.project.data.ProjectRepository] 拆出，
  * 专门负责最近编辑记录的查询、记录与刷盘。
  */
 class RecentEditsRepository(private val context: Context, bridge: AppServiceBridge? = null) {

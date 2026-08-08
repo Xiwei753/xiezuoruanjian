@@ -110,7 +110,7 @@ class SujianAppViewModel(
     private var appContext: android.content.Context? = null
 
     fun initialize(
-        projectRepo: com.xiwei.sujian.core.interop.project.ProjectRepository,
+        projectRepo: com.xiwei.sujian.feature.project.data.ProjectRepository,
         projectUC: ProjectUseCase,
         settingsRepo: SettingsRepository,
         context: android.content.Context,
@@ -133,14 +133,14 @@ class SujianAppViewModel(
         savedStateHandle["currentProjectId"] = projectId
         savedStateHandle["currentProjectTitle"] = projectTitle
         com.xiwei.sujian.core.interop.project.ActiveProjectGate.setCurrentProjectId(projectId)
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.workspaceSelection("project", projectId)
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceSelection("project", projectId)
     }
 
     fun selectProject(projectId: String) {
         currentProjectId = projectId
         savedStateHandle["currentProjectId"] = projectId
         com.xiwei.sujian.core.interop.project.ActiveProjectGate.setCurrentProjectId(projectId)
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.workspaceSelection("project", projectId)
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceSelection("project", projectId)
         val cachedProject = projects.find { it.id == projectId }
         if (cachedProject != null) {
             currentProjectTitle = cachedProject.title
@@ -172,7 +172,7 @@ class SujianAppViewModel(
         savedStateHandle["currentVolumeId"] = volumeId
         savedStateHandle["currentChapterId"] = chapterId
         savedStateHandle["currentChapterTitle"] = chapterTitle
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.workspaceSelection("chapter", chapterId)
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceSelection("chapter", chapterId)
     }
 
     fun selectChapter(
@@ -183,7 +183,7 @@ class SujianAppViewModel(
         currentChapterId = chapterId
         savedStateHandle["currentVolumeId"] = volumeId
         savedStateHandle["currentChapterId"] = chapterId
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.workspaceSelection("chapter", chapterId)
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceSelection("chapter", chapterId)
         viewModelScope.launch {
             val title =
                 withContext(Dispatchers.IO) {
@@ -205,7 +205,7 @@ class SujianAppViewModel(
         savedStateHandle.remove<String>("currentVolumeId")
         savedStateHandle.remove<String>("currentChapterId")
         savedStateHandle["currentChapterTitle"] = ""
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.workspaceClear("chapter")
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceClear("chapter")
     }
 
     fun clearProjectSelection() {
@@ -220,7 +220,7 @@ class SujianAppViewModel(
         savedStateHandle.remove<String>("currentChapterId")
         savedStateHandle["currentChapterTitle"] = ""
         com.xiwei.sujian.core.interop.project.ActiveProjectGate.setCurrentProjectId(null)
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.workspaceClear("project")
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceClear("project")
     }
 
     fun updateFoldFeature(info: FoldFeatureInfo) {

@@ -27,7 +27,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
-import com.xiwei.sujian.app.LocalSujianAppDependencies
+import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.feature.editor.EditorSettingsState
@@ -268,7 +268,7 @@ private fun WritingPaneEditorAttach(
 @Composable
 private fun rememberWritingPaneViewModel(
     context: android.content.Context,
-    deps: com.xiwei.sujian.app.SujianAppDependencies,
+    deps: com.xiwei.sujian.app.di.SujianAppDependencies,
     coordinator: com.xiwei.sujian.feature.editor.session.EditorWindowHost,
 ): EditorViewModel {
     val viewModel: EditorViewModel =

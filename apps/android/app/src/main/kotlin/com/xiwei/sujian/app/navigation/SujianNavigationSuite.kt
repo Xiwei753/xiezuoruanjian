@@ -56,9 +56,9 @@ import androidx.navigation3.scene.Scene
 import androidx.navigation3.ui.NavDisplay
 import androidx.window.core.layout.WindowSizeClass
 import com.xiwei.sujian.R
-import com.xiwei.sujian.app.LocalSujianAppDependencies
-import com.xiwei.sujian.app.SujianAppDependencies
 import com.xiwei.sujian.app.SujianAppState
+import com.xiwei.sujian.app.di.LocalSujianAppDependencies
+import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
 import com.xiwei.sujian.core.designsystem.component.SujianSnackbar
 import com.xiwei.sujian.core.designsystem.component.SujianTopAppBar
@@ -262,7 +262,7 @@ private fun SujianNavDisplayContent(
             if (handled) {
                 backStack.removeLastOrNull()
             }
-            com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.navBack(handled)
+            com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navBack(handled)
             handled
         },
         transitionSpec = navForwardTransition,
@@ -501,7 +501,7 @@ private fun SujianRouteEffects(
     onSettingsDetailSectionChange: (SettingsSection?) -> Unit,
 ) {
     LaunchedEffect(currentRoute) {
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.navigation(currentTopDestination.name)
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navigation(currentTopDestination.name)
         if (currentRoute !is SujianRoute.Settings) {
             onSettingsDetailSectionChange(null)
         }

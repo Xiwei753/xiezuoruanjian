@@ -3,10 +3,10 @@ package com.xiwei.sujian.feature.editor
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
-import com.xiwei.sujian.core.interop.project.ProjectRepository
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
 import com.xiwei.sujian.core.interop.stats.StatsRepository
 import com.xiwei.sujian.feature.project.data.ChapterRepository
+import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
 import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
 import kotlinx.coroutines.Dispatchers

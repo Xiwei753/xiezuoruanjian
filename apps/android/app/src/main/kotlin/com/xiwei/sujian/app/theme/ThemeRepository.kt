@@ -2,11 +2,11 @@ package com.xiwei.sujian.app.theme
 
 import android.content.Context
 import com.xiwei.sujian.app.di.AppServiceProvider
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.app.theme.model.BuiltinTheme
 import com.xiwei.sujian.app.theme.model.DeviceInfo
 import com.xiwei.sujian.app.theme.model.ThemeColorScheme
 import com.xiwei.sujian.app.theme.model.ThemePaletteRecord
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.ThemeDtoMapper

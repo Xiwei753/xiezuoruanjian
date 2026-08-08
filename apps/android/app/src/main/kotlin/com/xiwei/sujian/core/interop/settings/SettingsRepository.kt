@@ -2,7 +2,7 @@ package com.xiwei.sujian.core.interop.settings
 import android.content.Context
 import androidx.core.content.edit
 import com.xiwei.sujian.app.di.AppServiceProvider
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
@@ -83,7 +83,7 @@ class SettingsRepository(
             )
         return when (val result = settingsBridge.saveLocalSettings(coreSettings)) {
             is BridgeResult.Success -> {
-                com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "ok")
+                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "ok")
                 val effectiveVerbose = if (settings.diagnosticsEnabled) settings.diagnosticsVerbose else false
                 diagPrefs.edit {
                     putBoolean("diagnostics_enabled", settings.diagnosticsEnabled)
@@ -96,11 +96,11 @@ class SettingsRepository(
             }
             is BridgeResult.Error -> {
                 warn("Failed to save local settings: ${result.fullEnvelope}")
-                com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "error")
+                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "error")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.LOCAL_SETTINGS, 0L)))
             }
             BridgeResult.NotLoaded -> {
-                com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "not_loaded")
+                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "not_loaded")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.LOCAL_SETTINGS, 0L)))
             }
         }
@@ -122,16 +122,16 @@ class SettingsRepository(
         return when (val result = settingsBridge.saveSyncableSettings(settings)) {
             is BridgeResult.Success -> {
                 CoreSettingsEvents.record(result.envelope)
-                com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.settingsSaved("font_size", "ok")
+                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("font_size", "ok")
                 SettingsSaveResult.Success
             }
             is BridgeResult.Error -> {
                 warn("Failed to save syncable settings: ${result.fullEnvelope}")
-                com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.settingsSaved("font_size", "error")
+                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("font_size", "error")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.FONT_SIZE, 0L)))
             }
             BridgeResult.NotLoaded -> {
-                com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.settingsSaved("font_size", "not_loaded")
+                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("font_size", "not_loaded")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.FONT_SIZE, 0L)))
             }
         }

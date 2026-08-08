@@ -92,12 +92,6 @@ pub mod dto_contract_tests;
 pub mod facade;
 #[cfg(test)]
 pub mod fixture_tests;
-#[cfg(test)]
-pub mod recent_edits_tests;
-#[cfg(test)]
-pub mod trash_tests;
-#[cfg(test)]
-pub mod volume_tests;
 
 uniffi::include_scaffolding!("api");
 pub mod app_service;

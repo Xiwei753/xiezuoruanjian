@@ -234,7 +234,7 @@ class AndroidInputAdapter(
         replaceStart: Int,
         replaceEndExclusive: Int,
     ): Boolean {
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.compositionBegin(replaceStart, replaceEndExclusive)
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.compositionBegin(replaceStart, replaceEndExclusive)
         val dto = commandPort.beginComposition(replaceStart, replaceEndExclusive) ?: return false
         val result = EditResult.fromDto(dto)
         if (result.isApplied()) {
@@ -255,7 +255,7 @@ class AndroidInputAdapter(
     ): Boolean {
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return false
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.compositionUpdate(
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.compositionUpdate(
             newPreeditText.toByteArray(Charsets.UTF_8).size,
             newPreeditCursorOffset,
         )
@@ -276,7 +276,7 @@ class AndroidInputAdapter(
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return
         val preeditAtFinish = currentCompositionText
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.compositionCommit(
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.compositionCommit(
             compositionReplaceStartUtf8,
             compositionReplaceStartUtf8 + preeditAtFinish.toByteArray(Charsets.UTF_8).size,
             preeditAtFinish.toByteArray(Charsets.UTF_8).size,
@@ -298,7 +298,7 @@ class AndroidInputAdapter(
     fun sendCancelCompositionToKernel(): Boolean {
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return false
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.compositionCancel(
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.compositionCancel(
             compositionReplaceStartUtf8,
             compositionReplaceStartUtf8 + currentCompositionText.toByteArray(Charsets.UTF_8).size,
             currentCompositionText.toByteArray(Charsets.UTF_8).size,

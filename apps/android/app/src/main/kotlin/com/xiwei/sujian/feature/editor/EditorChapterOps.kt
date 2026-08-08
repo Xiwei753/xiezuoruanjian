@@ -558,7 +558,7 @@ suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
         val content = result.first
         val meta = result.second
 
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.chapterLoad(
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.chapterLoad(
             session.projectId,
             session.chapterId,
             content.toByteArray(Charsets.UTF_8).size,
@@ -607,7 +607,7 @@ suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
         isLoadingChapter = false
         true
     } catch (e: Throwable) {
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.chapterLoad(
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.chapterLoad(
             session.projectId,
             session.chapterId,
             0,

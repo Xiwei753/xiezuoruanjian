@@ -1,6 +1,6 @@
 package com.xiwei.sujian.core.interop.app
 import android.content.Context
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.ResultEnvelope
 import com.xiwei.sujian.core.interop.common.toSyncFailureKind

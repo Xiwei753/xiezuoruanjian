@@ -243,7 +243,7 @@ class AndroidTextAnimationEngine(
             timeline?.complete()
             cursorTimeline?.complete()
             // 连续输入重基：新事务在旧事务完成前接管，旧快照所有权转移给新事务。
-            com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.animationRebase(
+            com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.animationRebase(
                 oldTransaction.transactionId,
                 preparedAnimation.transactionId,
             )
@@ -265,7 +265,7 @@ class AndroidTextAnimationEngine(
             } else {
                 null
             }
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.animationStart(
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.animationStart(
             preparedAnimation.transactionId,
             preparedAnimation.operationKind.name,
             preparedAnimation.durationMs,
@@ -467,7 +467,7 @@ class AndroidTextAnimationEngine(
 
     fun cancel() {
         val transaction = activeTransaction ?: return
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.animationCancel(transaction.transactionId)
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.animationCancel(transaction.transactionId)
         cancelTransaction(transaction)
         activeTransaction = null
         timeline = null
@@ -491,7 +491,7 @@ class AndroidTextAnimationEngine(
 
     fun setAnimationPolicy(policy: TextAnimationPolicy) {
         animationPolicy = policy
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.animationPolicy(policy.name)
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.animationPolicy(policy.name)
     }
 
     fun getAnimationPolicy(): TextAnimationPolicy = animationPolicy
@@ -572,7 +572,7 @@ class AndroidTextAnimationEngine(
         val textFinished = tl.isCompleted(frameTimeMs)
         val cursorFinished = isCursorTimelineCompleted(frameTimeMs)
         if (textFinished && cursorFinished) {
-            com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.animationComplete(
+            com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.animationComplete(
                 transaction.transactionId,
                 (frameTimeMs - (tl.getFirstVisibleFrameTimeMs() ?: frameTimeMs)).coerceAtLeast(0L),
             )

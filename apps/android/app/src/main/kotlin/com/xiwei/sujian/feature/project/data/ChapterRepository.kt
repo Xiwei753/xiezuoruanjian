@@ -15,7 +15,7 @@ import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
 /**
  * ChapterRepository — 章节内容仓库层。
  *
- * 从 [com.xiwei.sujian.core.interop.project.ProjectRepository] 拆出，
+ * 从 [com.xiwei.sujian.feature.project.data.ProjectRepository] 拆出，
  * 专门负责章节正文的读取、保存、清空、备注更新与字数计算。
  * 实现 [ChapterContentSavePort] — EditorViewModel 的保存流程只依赖此端口。
  */

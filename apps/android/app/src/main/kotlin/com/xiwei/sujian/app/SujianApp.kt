@@ -22,6 +22,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.xiwei.sujian.app.di.LocalSujianAppDependencies
+import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.app.layout.model.Orientation
 import com.xiwei.sujian.app.layout.model.WindowMetrics
 import com.xiwei.sujian.app.navigation.SujianNavigationSuite
@@ -102,9 +104,9 @@ private fun SujianAppActivityLifecycleEvents(activityRef: androidx.activity.Comp
             androidx.lifecycle.LifecycleEventObserver { _, event ->
                 when (event) {
                     androidx.lifecycle.Lifecycle.Event.ON_PAUSE ->
-                        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.activityLifecycle("pause")
+                        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.activityLifecycle("pause")
                     androidx.lifecycle.Lifecycle.Event.ON_DESTROY -> {
-                        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.activityLifecycle("destroy")
+                        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.activityLifecycle("destroy")
                     }
                     else -> {}
                 }

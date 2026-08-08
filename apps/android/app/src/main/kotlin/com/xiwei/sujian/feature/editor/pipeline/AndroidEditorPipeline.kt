@@ -409,7 +409,7 @@ class AndroidEditorPipeline private constructor(
     private fun recordEditTransaction(result: EditResult) {
         val oldAffected = result.visualIntent.oldAffectedByteRanges
         val newAffected = result.visualIntent.newAffectedByteRanges
-        com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.editTransaction(
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.editTransaction(
             operationKind = result.visualIntent.operationKind.name,
             oldStart = oldAffected.firstOrNull()?.first ?: 0,
             oldEndExclusive = oldAffected.firstOrNull()?.second ?: 0,

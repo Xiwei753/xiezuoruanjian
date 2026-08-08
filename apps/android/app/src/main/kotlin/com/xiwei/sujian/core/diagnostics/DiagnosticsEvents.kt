@@ -1,4 +1,6 @@
-package com.xiwei.sujian.app.diagnostics
+package com.xiwei.sujian.core.diagnostics
+
+import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 
 /**
  * 统一脱敏诊断事件来源（生产路径持续写入）。

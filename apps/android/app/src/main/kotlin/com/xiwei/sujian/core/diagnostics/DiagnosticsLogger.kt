@@ -1,4 +1,4 @@
-package com.xiwei.sujian.app.diagnostics
+package com.xiwei.sujian.core.diagnostics
 
 import android.content.Context
 import android.util.Log

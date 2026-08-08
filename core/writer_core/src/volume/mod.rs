@@ -215,3 +215,6 @@ pub fn reorder_volumes(project_root: &Path, ordered_ids: &[String]) -> Result<()
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
