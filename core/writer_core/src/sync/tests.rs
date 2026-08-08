@@ -4010,4 +4010,122 @@ mod tests {
             result.remote_deletes
         );
     }
+
+    // ── Issue #600 评论 #9: 首次同步边界（CloneIntoEmptyProject / unborn repo）──
+
+    #[test]
+    #[cfg(all(not(windows), feature = "git-https"))]
+    fn test_clone_into_empty_downloaded_files() {
+        // 正面：空目录 clone 远端，clone 下来的 whitelisted 文件应进 downloaded_files。
+        let remote_dir = tempfile::tempdir().unwrap();
+        let _bare_repo = git2::Repository::init_bare(remote_dir.path()).unwrap();
+        let remote_url = format!("file://{}", remote_dir.path().to_string_lossy());
+
+        // 先用一个临时 repo 往远端 push 内容
+        let seed_dir = tempfile::tempdir().unwrap();
+        let seed_repo = git2::Repository::init(seed_dir.path()).unwrap();
+        commit_file_to_repo(&seed_repo, "project.json", r#"{"version":1}"#, "initial");
+        seed_repo.remote("origin", &remote_url).unwrap();
+        let backend = Git2Backend;
+        backend.push(seed_dir.path(), "main", None).unwrap();
+
+        // 本地是空目录，perform_sync 会走 CloneIntoEmptyProject
+        let local_dir = tempfile::tempdir().unwrap();
+        let config = make_sync_config(&remote_url);
+        let secrets = make_sync_secrets();
+        let result =
+            SyncService::perform_sync(local_dir.path(), &config, &secrets, &backend).unwrap();
+
+        assert_eq!(result.status, SyncStatus::Success);
+        assert_eq!(
+            result.first_sync_mode,
+            FirstSyncMode::CloneIntoEmptyProject
+        );
+        assert!(
+            result
+                .downloaded_files
+                .contains(&"project.json".to_string()),
+            "downloaded_files should contain project.json after clone, got: {:?}",
+            result.downloaded_files
+        );
+    }
+
+    #[test]
+    #[cfg(all(not(windows), feature = "git-https"))]
+    fn test_clone_into_empty_blacklisted_not_in_downloaded() {
+        // 反面：clone 下来的黑名单文件不应进 downloaded_files。
+        let remote_dir = tempfile::tempdir().unwrap();
+        let _bare_repo = git2::Repository::init_bare(remote_dir.path()).unwrap();
+        let remote_url = format!("file://{}", remote_dir.path().to_string_lossy());
+
+        let seed_dir = tempfile::tempdir().unwrap();
+        let seed_repo = git2::Repository::init(seed_dir.path()).unwrap();
+        commit_file_to_repo(&seed_repo, "project.json", r#"{"version":1}"#, "whitelisted");
+        commit_file_to_repo(
+            &seed_repo,
+            "app-meta/sync/config.local.json",
+            r#"{"key":"val"}"#,
+            "blacklisted",
+        );
+        seed_repo.remote("origin", &remote_url).unwrap();
+        let backend = Git2Backend;
+        backend.push(seed_dir.path(), "main", None).unwrap();
+
+        let local_dir = tempfile::tempdir().unwrap();
+        let config = make_sync_config(&remote_url);
+        let secrets = make_sync_secrets();
+        let result =
+            SyncService::perform_sync(local_dir.path(), &config, &secrets, &backend).unwrap();
+
+        assert_eq!(result.status, SyncStatus::Success);
+        assert!(
+            !result
+                .downloaded_files
+                .contains(&"app-meta/sync/config.local.json".to_string()),
+            "downloaded_files should NOT contain blacklisted file, got: {:?}",
+            result.downloaded_files
+        );
+        assert!(
+            result
+                .downloaded_files
+                .contains(&"project.json".to_string()),
+            "downloaded_files should still contain whitelisted file, got: {:?}",
+            result.downloaded_files
+        );
+    }
+
+    #[test]
+    #[cfg(all(not(windows), feature = "git-https"))]
+    fn test_unborn_repo_pull_downloaded_files() {
+        // 正面：本地 init 但无 commit（HEAD unborn），pull 远端后远端文件应进 downloaded_files。
+        let remote_dir = tempfile::tempdir().unwrap();
+        let _bare_repo = git2::Repository::init_bare(remote_dir.path()).unwrap();
+        let remote_url = format!("file://{}", remote_dir.path().to_string_lossy());
+
+        let seed_dir = tempfile::tempdir().unwrap();
+        let seed_repo = git2::Repository::init(seed_dir.path()).unwrap();
+        commit_file_to_repo(&seed_repo, "project.json", r#"{"version":1}"#, "initial");
+        seed_repo.remote("origin", &remote_url).unwrap();
+        let backend = Git2Backend;
+        backend.push(seed_dir.path(), "main", None).unwrap();
+
+        // 本地 init 但不 commit，设置 remote → HEAD unborn
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_repo = git2::Repository::init(local_dir.path()).unwrap();
+        local_repo.remote("origin", &remote_url).unwrap();
+
+        let config = make_sync_config(&remote_url);
+        let secrets = make_sync_secrets();
+        let result =
+            SyncService::perform_sync(local_dir.path(), &config, &secrets, &backend).unwrap();
+
+        assert_eq!(result.status, SyncStatus::Success);
+        assert!(
+            result
+                .downloaded_files
+                .contains(&"project.json".to_string()),
+            "downloaded_files should contain project.json after unborn pull, got: {:?}",
+            result.downloaded_files
+        );
+    }
 }

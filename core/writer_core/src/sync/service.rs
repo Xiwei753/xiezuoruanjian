@@ -207,6 +207,44 @@ enum PullOutcome {
 }
 
 #[cfg(feature = "git-https")]
+/// 统计 Git pull/clone 实际应用到本地的远端变化。
+///
+/// `old_tree = None` 表示空树（首次同步 / unborn repo），`git2::diff_tree_to_tree`
+/// 原生支持空树语义。Added/Modified → `downloaded_files`，Deleted → `remote_deletes`。
+/// 仅记录 `is_whitelisted_path && !is_blacklisted_path` 的路径。
+fn collect_applied_git_changes(
+    repo: &git2::Repository,
+    old_tree: Option<&git2::Tree<'_>>,
+    new_tree: &git2::Tree<'_>,
+    scope: SyncScope,
+    result: &mut SyncResult,
+) {
+    let Ok(diff) = repo.diff_tree_to_tree(old_tree, Some(new_tree), None) else {
+        return;
+    };
+    for delta in diff.deltas() {
+        let Some(p) = delta.new_file().path().or_else(|| delta.old_file().path()) else {
+            continue;
+        };
+        let path_str = p.to_string_lossy().to_string();
+        if !SyncService::is_whitelisted_path(&path_str, scope)
+            || SyncService::is_blacklisted_path(&path_str, scope)
+        {
+            continue;
+        }
+        match delta.status() {
+            git2::Delta::Added | git2::Delta::Modified => {
+                result.downloaded_files.push(path_str);
+            }
+            git2::Delta::Deleted => {
+                result.remote_deletes.push(path_str);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(feature = "git-https")]
 fn handle_pull_error(
     e: crate::Error,
     sync_root: &Path,
@@ -624,11 +662,17 @@ impl SyncService {
             }
         }
 
-        let old_head_oid = if let Ok(repo) = git2::Repository::open(sync_root) {
-            repo.head().ok().and_then(|r| r.target())
-        } else {
-            None
-        };
+        // 对于 CloneIntoEmptyProject，clone 在 stage/commit 之前执行，
+        // clone 前 HEAD 不存在，baseline = None（空树语义）。
+        // 对于其他模式，baseline = stage/commit 后的 HEAD（可能 None 如果 unborn）。
+        let baseline_head_oid =
+            if result.first_sync_mode == FirstSyncMode::CloneIntoEmptyProject {
+                None
+            } else if let Ok(repo) = git2::Repository::open(sync_root) {
+                repo.head().ok().and_then(|r| r.target())
+            } else {
+                None
+            };
 
         let pull_failed = backend
             .pull(sync_root, &config.branch, auth.as_ref(), config.scope)
@@ -649,53 +693,24 @@ impl SyncService {
         }
 
         if pull_succeeded {
-            if let Some(old_oid) = old_head_oid {
-                if let Ok(repo) = git2::Repository::open(sync_root) {
-                    if let (Ok(old_commit), Ok(new_head)) =
-                        (repo.find_commit(old_oid), repo.head())
-                    {
-                        if let Ok(new_commit) = new_head.peel_to_commit() {
-                            let old_tree = old_commit.tree().ok();
-                            let new_tree = new_commit.tree().ok();
-                            if let (Some(old_t), Some(new_t)) = (old_tree, new_tree) {
-                                if let Ok(diff) = repo
-                                    .diff_tree_to_tree(Some(&old_t), Some(&new_t), None)
-                                {
-                                    for delta in diff.deltas() {
-                                        let path = delta
-                                            .new_file()
-                                            .path()
-                                            .or_else(|| delta.old_file().path());
-                                        if let Some(p) = path {
-                                            let path_str =
-                                                p.to_string_lossy().to_string();
-                                            if SyncService::is_whitelisted_path(
-                                                &path_str,
-                                                config.scope,
-                                            ) && !SyncService::is_blacklisted_path(
-                                                &path_str,
-                                                config.scope,
-                                            )
-                                            {
-                                                match delta.status() {
-                                                    git2::Delta::Added
-                                                    | git2::Delta::Modified => {
-                                                        result
-                                                            .downloaded_files
-                                                            .push(path_str);
-                                                    }
-                                                    git2::Delta::Deleted => {
-                                                        result
-                                                            .remote_deletes
-                                                            .push(path_str);
-                                                    }
-                                                    _ => {}
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+            if let Ok(repo) = git2::Repository::open(sync_root) {
+                if let Ok(new_head) = repo.head() {
+                    if let Ok(new_commit) = new_head.peel_to_commit() {
+                        if let Ok(new_tree) = new_commit.tree() {
+                            let old_tree = if let Some(old_oid) = baseline_head_oid {
+                                repo.find_commit(old_oid)
+                                    .ok()
+                                    .and_then(|c| c.tree().ok())
+                            } else {
+                                None
+                            };
+                            collect_applied_git_changes(
+                                &repo,
+                                old_tree.as_ref(),
+                                &new_tree,
+                                config.scope,
+                                &mut result,
+                            );
                         }
                     }
                 }
