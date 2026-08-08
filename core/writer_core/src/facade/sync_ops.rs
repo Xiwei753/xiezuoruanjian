@@ -206,11 +206,14 @@ impl super::WriterCore {
             }
             return Ok(());
         }
-        let secrets_path = self.project_root(project_id).join(format!(
-            "app-meta/sync/secrets_g{}.local.json",
-            generation
-        ));
-        write_secrets_atomic(&secrets_path, secrets, &format!("secrets_g{}.local.json", generation))
+        let secrets_path = self
+            .project_root(project_id)
+            .join(format!("app-meta/sync/secrets_g{}.local.json", generation));
+        write_secrets_atomic(
+            &secrets_path,
+            secrets,
+            &format!("secrets_g{}.local.json", generation),
+        )
     }
 
     /// #592 五：读取指定 generation 的安全存储凭据；缺失返回 None。
@@ -240,10 +243,9 @@ impl super::WriterCore {
             }
             return Ok(None);
         }
-        let secrets_path = self.project_root(project_id).join(format!(
-            "app-meta/sync/secrets_g{}.local.json",
-            generation
-        ));
+        let secrets_path = self
+            .project_root(project_id)
+            .join(format!("app-meta/sync/secrets_g{}.local.json", generation));
         if !secrets_path.exists() {
             return Ok(None);
         }
@@ -266,10 +268,9 @@ impl super::WriterCore {
                 .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
             return Ok(());
         }
-        let secrets_path = self.project_root(project_id).join(format!(
-            "app-meta/sync/secrets_g{}.local.json",
-            generation
-        ));
+        let secrets_path = self
+            .project_root(project_id)
+            .join(format!("app-meta/sync/secrets_g{}.local.json", generation));
         if secrets_path.exists() {
             std::fs::remove_file(&secrets_path)?;
         }
@@ -442,9 +443,7 @@ impl super::WriterCore {
             if let Some(token) = &file_secrets.token {
                 if !token.is_empty() {
                     let _ = storage.set_secret(APP_KEY, token.as_bytes());
-                    let secrets_path = self
-                        .app_data_root
-                        .join("app-meta/sync/secrets.local.json");
+                    let secrets_path = self.app_data_root.join("app-meta/sync/secrets.local.json");
                     let _ = std::fs::remove_file(&secrets_path);
                 }
             }
@@ -471,16 +470,12 @@ impl super::WriterCore {
             }
             return Ok(());
         }
-        let secrets_path = self
-            .app_data_root
-            .join("app-meta/sync/secrets.local.json");
+        let secrets_path = self.app_data_root.join("app-meta/sync/secrets.local.json");
         write_secrets_atomic(&secrets_path, secrets, "sync_secrets")
     }
 
     fn load_app_sync_secrets_from_file(&self) -> crate::error::Result<crate::sync::SyncSecrets> {
-        let secrets_path = self
-            .app_data_root
-            .join("app-meta/sync/secrets.local.json");
+        let secrets_path = self.app_data_root.join("app-meta/sync/secrets.local.json");
         if !secrets_path.exists() {
             return Ok(crate::sync::SyncSecrets::default());
         }
@@ -512,7 +507,11 @@ impl super::WriterCore {
         let secrets_path = self
             .app_data_root
             .join(format!("app-meta/sync/secrets_g{}.local.json", generation));
-        write_secrets_atomic(&secrets_path, secrets, &format!("secrets_g{}.local.json", generation))
+        write_secrets_atomic(
+            &secrets_path,
+            secrets,
+            &format!("secrets_g{}.local.json", generation),
+        )
     }
 
     /// 应用级：读取指定 generation 的凭据；缺失返回 None。

@@ -33,6 +33,8 @@ use crate::sync::types::SyncPlan;
 use crate::sync::types::SyncProtocol;
 #[cfg(any(feature = "git-https", feature = "github-api"))]
 use crate::sync::types::SyncResult;
+#[cfg(feature = "git-https")]
+use crate::sync::types::SyncScope;
 #[cfg(any(feature = "git-https", feature = "github-api"))]
 use crate::sync::types::SyncSecrets;
 use crate::sync::types::SyncStatus;
@@ -210,6 +212,7 @@ fn handle_pull_error(
     sync_root: &Path,
     result: &SyncResult,
     first_sync_mode: FirstSyncMode,
+    scope: SyncScope,
 ) -> PullOutcome {
     match &e {
         crate::Error::SyncCheckoutConflict { summary_json } => {
@@ -224,7 +227,7 @@ fn handle_pull_error(
             PullOutcome::Return(res)
         }
         crate::Error::SyncConflictDetected => {
-            handle_merge_conflict(sync_root, result, first_sync_mode)
+            handle_merge_conflict(sync_root, result, first_sync_mode, scope)
         }
         crate::Error::SyncUnrelatedHistories { .. } => PullOutcome::Return(SyncResult::error(
             classify_error(&e),
@@ -266,6 +269,7 @@ fn handle_merge_conflict(
     sync_root: &Path,
     result: &SyncResult,
     _first_sync_mode: FirstSyncMode,
+    scope: SyncScope,
 ) -> PullOutcome {
     let mut result = result.clone();
     result.status = SyncStatus::Conflict;
@@ -355,13 +359,9 @@ fn handle_merge_conflict(
                 }
             }
 
-            if !SyncService::is_blacklisted_path(
-                &sync_conflict.local_path,
-                crate::sync::types::SyncScope::Project,
-            ) && SyncService::is_whitelisted_path(
-                &sync_conflict.local_path,
-                crate::sync::types::SyncScope::Project,
-            ) {
+            if !SyncService::is_blacklisted_path(&sync_conflict.local_path, scope)
+                && SyncService::is_whitelisted_path(&sync_conflict.local_path, scope)
+            {
                 if let Err(e) = SyncService::record_sync_conflict(
                     sync_root,
                     sync_conflict.clone(),
@@ -392,8 +392,7 @@ fn handle_merge_conflict(
         };
     }
 
-    let (local_dirty, _) =
-        collect_git_status_summary(&repo, crate::sync::types::SyncScope::Project);
+    let (local_dirty, _) = collect_git_status_summary(&repo, scope);
     let fetch_commit_id = repo
         .find_reference("FETCH_HEAD")
         .ok()
@@ -577,7 +576,7 @@ impl SyncService {
             }
         }
 
-        if let Ok(status_list) = backend.status(sync_root) {
+        if let Ok(status_list) = backend.status(sync_root, config.scope) {
             let mut dirty_non_whitelisted = Vec::new();
             for p in &status_list {
                 if !SyncService::is_blacklisted_path(p, config.scope)
@@ -596,7 +595,7 @@ impl SyncService {
             }
         }
 
-        if let Ok(status_list) = backend.status(sync_root) {
+        if let Ok(status_list) = backend.status(sync_root, config.scope) {
             let mut paths_to_stage = Vec::new();
             for p in &status_list {
                 if SyncService::is_whitelisted_path(p, config.scope)
@@ -606,7 +605,7 @@ impl SyncService {
                 }
             }
             if !paths_to_stage.is_empty() {
-                if let Err(e) = backend.stage_paths(sync_root, &paths_to_stage) {
+                if let Err(e) = backend.stage_paths(sync_root, &paths_to_stage, config.scope) {
                     return Ok(SyncResult::error(
                         classify_error(&e),
                         result.first_sync_mode,
@@ -626,11 +625,17 @@ impl SyncService {
         }
 
         let pull_failed = backend
-            .pull(sync_root, &config.branch, auth.as_ref())
+            .pull(sync_root, &config.branch, auth.as_ref(), config.scope)
             .map_err(map_git_error)
             .err();
         if let Some(e) = pull_failed {
-            match handle_pull_error(e, sync_root, &result, result.first_sync_mode.clone()) {
+            match handle_pull_error(
+                e,
+                sync_root,
+                &result,
+                result.first_sync_mode.clone(),
+                config.scope,
+            ) {
                 PullOutcome::Continue => {}
                 PullOutcome::Return(res) => return Ok(res),
             }
@@ -737,7 +742,7 @@ impl SyncService {
 
         let paths_to_stage: Vec<&str> = plan.files_to_upload.iter().map(|s| s.as_str()).collect();
         if !paths_to_stage.is_empty() {
-            if let Err(e) = backend.stage_paths(sync_root, &paths_to_stage) {
+            if let Err(e) = backend.stage_paths(sync_root, &paths_to_stage, config.scope) {
                 return Ok(SyncResult::error(
                     classify_error(&e),
                     result.first_sync_mode,
@@ -747,7 +752,7 @@ impl SyncService {
             }
         }
 
-        let changed_files = backend.status(sync_root).unwrap_or_default();
+        let changed_files = backend.status(sync_root, config.scope).unwrap_or_default();
         let mut actual_staged = Vec::new();
         for file in changed_files {
             if paths_to_stage.contains(&file.as_str()) {

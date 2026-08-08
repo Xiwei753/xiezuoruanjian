@@ -29,6 +29,10 @@ class AutoSyncWorker(
                 ?.dependencies
                 ?: return Result.failure()
 
+        // #600 评论 #4 问题三：先执行应用级同步（设置/全局星图/主题调色板），
+        // 再遍历所有作品逐个同步。应用级同步目标唯一，不依赖 ActiveProjectGate。
+        val appOutcome = syncApp(deps)
+
         // #600 评论 #3 问题三：遍历所有作品，逐个尝试自动同步。
         // 不再依赖 ActiveProjectGate.currentProjectId()（进程重启后 null）。
         val projects =
@@ -41,6 +45,12 @@ class AutoSyncWorker(
 
         var anyTransientFailure = false
         var anyTerminalFailure = false
+        // 应用级同步结果纳入整体 outcome 聚合。
+        when (appOutcome) {
+            ProjectSyncOutcome.TransientFailure -> anyTransientFailure = true
+            ProjectSyncOutcome.TerminalFailure -> anyTerminalFailure = true
+            else -> { }
+        }
         for (project in projects) {
             val outcome = syncOneProject(deps, project.id)
             when (outcome) {
@@ -50,12 +60,75 @@ class AutoSyncWorker(
             }
         }
 
-        // 任一作品出现确定性失败时整体 failure（让 WorkManager 退避停止该周期）；
+        // 任一目标（应用级或作品级）出现确定性失败时整体 failure；
         // 仅临时故障时 retry；全部成功/跳过时 success。
         return when {
             anyTerminalFailure -> Result.failure()
             anyTransientFailure -> Result.retry()
             else -> Result.success()
+        }
+    }
+
+    /**
+     * #600 评论 #4 问题三：应用级自动同步 — 设置/全局星图/主题调色板。
+     *
+     * 读 [SettingsRepository.snapshotAppSyncProfile]，若 enabled && autoSync 则调用
+     * [SyncCoordinator.runAppSync]。应用级无 sync state / interval 检查
+     * （Core 侧 `perform_app_sync` 内置防抖间隔兜底），每次 Worker 唤醒都尝试。
+     *
+     * 返回与作品级相同的 [ProjectSyncOutcome] 分类，纳入 doWork 整体 outcome 聚合。
+     */
+    private suspend fun syncApp(deps: com.xiwei.sujian.runtime.SujianAppDependencies): ProjectSyncOutcome {
+        val settingsRepository = deps.settingsRepository
+        val snapshotResult =
+            try {
+                SyncProfileGate.snapshotExclusive { settingsRepository.snapshotAppSyncProfile() }
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "Unable to load app sync profile snapshot", e)
+                return ProjectSyncOutcome.TransientFailure
+            }
+        val snapshot =
+            when (snapshotResult) {
+                is AppSyncProfileReadResult.Found -> snapshotResult.snapshot
+                is AppSyncProfileReadResult.NotConfigured -> snapshotResult.snapshot
+                is AppSyncProfileReadResult.Failed -> {
+                    DiagnosticsLogger.w(
+                        TAG,
+                        "App sync profile snapshot failed: ${snapshotResult.message}",
+                    )
+                    return if (snapshotResult.kind.isTransientReadFailure()) {
+                        ProjectSyncOutcome.TransientFailure
+                    } else {
+                        ProjectSyncOutcome.Skipped
+                    }
+                }
+            }
+        if (!AutoSyncScheduler.shouldSync(snapshot.config, snapshot.secrets)) return ProjectSyncOutcome.Skipped
+
+        val outcome = deps.syncCoordinator.runAppSync(SyncTrigger.Auto, snapshot)
+        return when (outcome) {
+            is SyncOutcome.Completed -> {
+                DiagnosticsEvents.syncEvent("autosync_app", "completed")
+                ProjectSyncOutcome.Success
+            }
+            is SyncOutcome.Unconfigured,
+            is SyncOutcome.Disabled,
+            -> {
+                DiagnosticsEvents.syncEvent("autosync_app", "unconfigured")
+                ProjectSyncOutcome.Skipped
+            }
+            is SyncOutcome.Busy -> {
+                DiagnosticsEvents.syncEvent("autosync_app", "busy")
+                ProjectSyncOutcome.TransientFailure
+            }
+            is SyncOutcome.RetryableFailure -> {
+                DiagnosticsEvents.syncEvent("autosync_app", "retryable_failure")
+                ProjectSyncOutcome.TransientFailure
+            }
+            is SyncOutcome.TerminalFailure -> {
+                DiagnosticsEvents.syncEvent("autosync_app", "terminal_failure")
+                ProjectSyncOutcome.TerminalFailure
+            }
         }
     }
 
@@ -128,7 +201,7 @@ class AutoSyncWorker(
     private suspend fun shouldSyncNow(
         settingsRepository: SettingsRepository,
         projectId: String,
-        snapshot: SyncProfileSnapshot,
+        snapshot: ProjectSyncProfileSnapshot,
     ): Boolean {
         val state =
             try {

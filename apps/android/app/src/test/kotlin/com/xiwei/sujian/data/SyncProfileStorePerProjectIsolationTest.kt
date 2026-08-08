@@ -14,16 +14,16 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * #600 评论 #3 问题二：SyncProfileStore per-project 隔离契约测试。
+ * #600 评论 #3 问题二：ProjectSyncProfileStore per-project 隔离契约测试。
  *
- * 验证两个不同 projectId 的 SyncProfileStore 互不干扰：
+ * 验证两个不同 projectId 的 ProjectSyncProfileStore 互不干扰：
  * - 作品 A 的 commit/staged 标记不影响作品 B 的 readState；
  * - key 前缀 `<projectId>.` 保证不同作品的标记在同一个 DataStore 文件中独立。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SyncProfileStorePerProjectIsolationTest {
-    private lateinit var store: SyncProfileStore
+    private lateinit var store: ProjectSyncProfileStore
     private val projectA = "project-uuid-a"
     private val projectB = "project-uuid-b"
     private val configEnabledTrue = "{\"enabled\":true}"
@@ -33,7 +33,7 @@ class SyncProfileStorePerProjectIsolationTest {
     @Before
     fun setup() {
         val context: Context = ApplicationProvider.getApplicationContext()
-        store = SyncProfileStore(context)
+        store = ProjectSyncProfileStore(context)
         kotlinx.coroutines.runBlocking {
             store.clear(projectA)
             store.clear(projectB)

@@ -294,18 +294,27 @@ mod tests {
         assert_eq!(loaded.token.as_ref().unwrap(), "generation_token_7");
 
         // 未保存的 generation 读取为 None。
-        assert!(core.load_sync_secrets_for_generation(pid, 99).unwrap().is_none());
+        assert!(core
+            .load_sync_secrets_for_generation(pid, 99)
+            .unwrap()
+            .is_none());
 
         // 删除后读取为 None；重复删除是幂等成功。
         core.delete_sync_secrets_for_generation(pid, 7).unwrap();
-        assert!(core.load_sync_secrets_for_generation(pid, 7).unwrap().is_none());
+        assert!(core
+            .load_sync_secrets_for_generation(pid, 7)
+            .unwrap()
+            .is_none());
         core.delete_sync_secrets_for_generation(pid, 7).unwrap();
 
         // 删除不影响其他 generation。
         core.save_sync_secrets_for_generation(pid, 8, &secrets)
             .unwrap();
         core.delete_sync_secrets_for_generation(pid, 7).unwrap();
-        assert!(core.load_sync_secrets_for_generation(pid, 8).unwrap().is_some());
+        assert!(core
+            .load_sync_secrets_for_generation(pid, 8)
+            .unwrap()
+            .is_some());
     }
 
     #[test]
@@ -439,7 +448,10 @@ mod tests {
 
         // B 的配置不受影响
         let config_b1 = core.load_sync_config(pid_b).unwrap();
-        assert!(!config_b1.enabled, "project B config must not be affected by A");
+        assert!(
+            !config_b1.enabled,
+            "project B config must not be affected by A"
+        );
         assert_eq!(
             config_b1.remote_url, "",
             "project B remote_url must remain empty"
@@ -513,14 +525,8 @@ mod tests {
 
         let loaded_gen_a = core.load_sync_secrets_for_generation(pid_a, 1).unwrap();
         let loaded_gen_b = core.load_sync_secrets_for_generation(pid_b, 1).unwrap();
-        assert_eq!(
-            loaded_gen_a.unwrap().token.as_deref(),
-            Some("gen_token_a")
-        );
-        assert_eq!(
-            loaded_gen_b.unwrap().token.as_deref(),
-            Some("gen_token_b")
-        );
+        assert_eq!(loaded_gen_a.unwrap().token.as_deref(), Some("gen_token_a"));
+        assert_eq!(loaded_gen_b.unwrap().token.as_deref(), Some("gen_token_b"));
     }
 
     /// Issue #600 评论 #3 问题四：应用级白名单/黑名单正确过滤路径。
@@ -619,10 +625,7 @@ mod tests {
         // 验证互不干扰
         let loaded_project = core.load_sync_config(pid).unwrap();
         let loaded_app = core.load_app_sync_config().unwrap();
-        assert_eq!(
-            loaded_project.remote_url,
-            "https://example.com/project.git"
-        );
+        assert_eq!(loaded_project.remote_url, "https://example.com/project.git");
         assert_eq!(loaded_app.remote_url, "https://example.com/app.git");
         assert_ne!(loaded_project.remote_url, loaded_app.remote_url);
     }

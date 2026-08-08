@@ -8,13 +8,13 @@ import org.junit.Test
  *
  * 结构契约（方法存在性）已移入
  * [com.xiwei.sujian.arch.CommitSyncProfileRollbackArchitectureTest]；本文件只保留运行时行为：
- * - SyncProfileSnapshot 携带 generation/config/secrets。
+ * - ProjectSyncProfileSnapshot 携带 generation/config/secrets。
  */
 class CommitSyncProfileRollbackTest {
     @Test
     fun syncProfileSnapshot_carriesGenerationConfigSecrets() {
         val snapshot =
-            SyncProfileSnapshot(
+            ProjectSyncProfileSnapshot(
                 generation = 3L,
                 config = com.xiwei.sujian.model.SyncConfig(enabled = true),
                 secrets = com.xiwei.sujian.model.SyncSecrets(token = "t"),

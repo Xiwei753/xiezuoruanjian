@@ -10,9 +10,10 @@ import com.xiwei.sujian.model.SyncSecrets
 import kotlinx.coroutines.flow.first
 
 private val Context.syncProfileDataStore by preferencesDataStore(name = "sync_profile")
+private val Context.appSyncProfileDataStore by preferencesDataStore(name = "app_sync_profile")
 
 /**
- * #592 五 / #600 评论 #3 问题二：同步配置版本化提交的 DataStore 侧实现（per-project）。
+ * #592 五 / #600 评论 #3 问题二：作品级同步配置版本化提交的 DataStore 侧实现（per-project）。
  *
  * 单一 DataStore 文件保存所有作品的提交标记与恢复载荷，按 projectId 前缀区分 key：
  * - `<projectId>.active_generation`：当前完整提交的版本号（唯一 commit marker）
@@ -28,8 +29,12 @@ private val Context.syncProfileDataStore by preferencesDataStore(name = "sync_pr
  *
  * 本仓库只保存提交标记与恢复载荷，不复制 Core 的同步状态机；
  * 业务真相（config/secrets 内容）仍由 Rust Core 唯一持有。
+ *
+ * #600 评论 #4 问题三：原 `SyncProfileStore` 重命名为 `ProjectSyncProfileStore`，
+ * 与应用级 [AppSyncProfileStore] 区分 — 两者结构对称但语义独立（作品级按 projectId 隔离，
+ * 应用级单一全局槽）。
  */
-class SyncProfileStore(context: Context) {
+class ProjectSyncProfileStore(context: Context) {
     private val dataStore = context.applicationContext.syncProfileDataStore
 
     /** 当前提交状态 — 从 DataStore 单次读取。 */
@@ -159,6 +164,110 @@ class SyncProfileStore(context: Context) {
 }
 
 /**
+ * #600 评论 #4 问题三：应用级同步配置版本化提交的 DataStore 侧实现。
+ *
+ * 与 [ProjectSyncProfileStore] 结构对称，但**不带 projectId** —
+ * 应用级同步目标唯一（设置/全局星图/主题调色板），使用独立 DataStore 文件
+ * (`app_sync_profile`)，key 不带前缀。提交语义与作品级一致：
+ * stagedConfig(N) → stagedSecrets(N) → 原子 commitGeneration(N)，
+ * 读取者只读取 activeGeneration 对应的完整版本。
+ *
+ * 业务真相（config/secrets 内容）仍由 Rust Core 唯一持有；
+ * 本仓库只保存提交标记与恢复载荷，不复制 Core 的同步状态机。
+ */
+class AppSyncProfileStore(context: Context) {
+    private val dataStore = context.applicationContext.appSyncProfileDataStore
+
+    /** 当前提交状态 — 从 DataStore 单次读取。复用 [ProjectSyncProfileStore.ProfileCommitState] 结构。 */
+    suspend fun readState(): ProjectSyncProfileStore.ProfileCommitState {
+        val prefs = dataStore.data.first()
+        return ProjectSyncProfileStore.ProfileCommitState(
+            activeGeneration = prefs[KEY_ACTIVE_GENERATION] ?: 0L,
+            committedConfigJson = prefs[KEY_COMMITTED_CONFIG_JSON] ?: "",
+            stagedConfigGeneration = prefs[KEY_STAGED_CONFIG_GENERATION] ?: -1L,
+            stagedConfigJson = prefs[KEY_STAGED_CONFIG_JSON] ?: "",
+            stagedSecretsGeneration = prefs[KEY_STAGED_SECRETS_GENERATION] ?: -1L,
+        )
+    }
+
+    /** 下一个待提交 generation = max(active, staged)+1。 */
+    suspend fun nextGeneration(): Long {
+        val state = readState()
+        return maxOf(
+            state.activeGeneration,
+            state.stagedConfigGeneration,
+            state.stagedSecretsGeneration,
+        ) + 1
+    }
+
+    /** 写 stagedConfig(generation=N) 标记与载荷（config 内容已写入 Core 应用级配置存储）。 */
+    suspend fun stageConfig(
+        generation: Long,
+        configJson: String,
+    ) {
+        dataStore.edit { prefs ->
+            prefs[KEY_STAGED_CONFIG_GENERATION] = generation
+            prefs[KEY_STAGED_CONFIG_JSON] = configJson
+        }
+    }
+
+    /** 写 stagedSecrets(generation=N) 标记（凭据已按 generation 写入安全存储）。 */
+    suspend fun stageSecrets(generation: Long) {
+        dataStore.edit { prefs ->
+            prefs[KEY_STAGED_SECRETS_GENERATION] = generation
+        }
+    }
+
+    /**
+     * 原子提交：单次 updateData 同时推进 activeGeneration 与 committedConfigJson。
+     * 失败时旧 generation 继续有效。
+     */
+    suspend fun commitGeneration(
+        generation: Long,
+        committedConfigJson: String,
+    ) {
+        dataStore.edit { prefs ->
+            prefs[KEY_ACTIVE_GENERATION] = generation
+            prefs[KEY_COMMITTED_CONFIG_JSON] = committedConfigJson
+        }
+    }
+
+    /**
+     * 清理崩溃遗留的未提交 staged 标记 — staged 标记不是 activeGeneration 时清除。
+     */
+    suspend fun clearStaleStagedMarkers(activeGeneration: Long) {
+        dataStore.edit { prefs ->
+            if ((prefs[KEY_STAGED_CONFIG_GENERATION] ?: -1L) != activeGeneration) {
+                prefs.remove(KEY_STAGED_CONFIG_GENERATION)
+                prefs.remove(KEY_STAGED_CONFIG_JSON)
+            }
+            if ((prefs[KEY_STAGED_SECRETS_GENERATION] ?: -1L) != activeGeneration) {
+                prefs.remove(KEY_STAGED_SECRETS_GENERATION)
+            }
+        }
+    }
+
+    /** 测试隔离：清空全部应用级提交状态。 */
+    suspend fun clear() {
+        dataStore.edit { prefs ->
+            prefs.remove(KEY_ACTIVE_GENERATION)
+            prefs.remove(KEY_COMMITTED_CONFIG_JSON)
+            prefs.remove(KEY_STAGED_CONFIG_GENERATION)
+            prefs.remove(KEY_STAGED_CONFIG_JSON)
+            prefs.remove(KEY_STAGED_SECRETS_GENERATION)
+        }
+    }
+
+    companion object {
+        private val KEY_ACTIVE_GENERATION = longPreferencesKey("active_generation")
+        private val KEY_COMMITTED_CONFIG_JSON = stringPreferencesKey("committed_config_json")
+        private val KEY_STAGED_CONFIG_GENERATION = longPreferencesKey("staged_config_generation")
+        private val KEY_STAGED_CONFIG_JSON = stringPreferencesKey("staged_config_json")
+        private val KEY_STAGED_SECRETS_GENERATION = longPreferencesKey("staged_secrets_generation")
+    }
+}
+
+/**
  * #595 五：旧 generation 凭据清理范围 — 保留 current + previous 一个可回滚版本，
  * 删除更旧（< current - 1）generation 的凭据。
  *
@@ -178,12 +287,27 @@ internal fun generationCleanupRange(current: Long): LongRange? {
 }
 
 /**
- * #592 六：一次同步操作使用的完整不可变配置快照。
+ * #592 六：作品级一次同步操作使用的完整不可变配置快照。
  *
  * 正式同步、自动同步、试运行和连接诊断都先从统一仓库取得一次完整 snapshot，
  * 随后整个操作只使用这份 snapshot，不再从磁盘二次读取 config/secrets。
+ *
+ * #600 评论 #4 问题三：原 `SyncProfileSnapshot` 重命名为 `ProjectSyncProfileSnapshot`，
+ * 与应用级 [AppSyncProfileSnapshot] 区分。
  */
-data class SyncProfileSnapshot(
+data class ProjectSyncProfileSnapshot(
+    val generation: Long,
+    val config: SyncConfig,
+    val secrets: SyncSecrets,
+)
+
+/**
+ * #600 评论 #4 问题三：应用级一次同步操作使用的完整不可变配置快照。
+ *
+ * 与 [ProjectSyncProfileSnapshot] 结构对称，但 generation 来自 [AppSyncProfileStore]，
+ * config/secrets 来自应用级 Core API（`loadAppSyncConfig` / 应用级 generation 凭据）。
+ */
+data class AppSyncProfileSnapshot(
     val generation: Long,
     val config: SyncConfig,
     val secrets: SyncSecrets,
@@ -206,18 +330,38 @@ sealed interface GenerationSecretsReadResult {
 }
 
 /**
- * #595 五：同步配置完整快照读取的类型化结果。
+ * #595 五：作品级同步配置完整快照读取的类型化结果。
  *
  * - [Found]：config + secrets 均成功读取，凭据非空。
  * - [NotConfigured]：config 读取成功，但凭据为空（用户未配置 token）。
  *   snapshot 仍携带 config 和空 secrets，调用方可据此显示"未配置"而非"错误"。
  * - [Failed]：config 解析失败或凭据读取失败 — 向设置页和同步状态返回类型化错误，
  *   不得转换成 [SyncSecrets] 或 null。
+ *
+ * #600 评论 #4 问题三：`Found/NotConfigured` 持有 [ProjectSyncProfileSnapshot]。
  */
 sealed interface SyncProfileReadResult {
-    data class Found(val snapshot: SyncProfileSnapshot) : SyncProfileReadResult
+    data class Found(val snapshot: ProjectSyncProfileSnapshot) : SyncProfileReadResult
 
-    data class NotConfigured(val snapshot: SyncProfileSnapshot) : SyncProfileReadResult
+    data class NotConfigured(val snapshot: ProjectSyncProfileSnapshot) : SyncProfileReadResult
 
     data class Failed(val kind: SyncFailureKind, val message: String?) : SyncProfileReadResult
+}
+
+/**
+ * #600 评论 #4 问题三：应用级同步配置完整快照读取的类型化结果。
+ *
+ * 与 [SyncProfileReadResult] 结构对称，但持有 [AppSyncProfileSnapshot]。
+ * 独立 sealed interface 避免泛型化扩散到所有调用方。
+ *
+ * - [Found]：config + secrets 均成功读取，凭据非空。
+ * - [NotConfigured]：config 读取成功，但凭据为空（用户未配置 token）。
+ * - [Failed]：config 解析失败或凭据读取失败 — 类型化错误，不得转成 null。
+ */
+sealed interface AppSyncProfileReadResult {
+    data class Found(val snapshot: AppSyncProfileSnapshot) : AppSyncProfileReadResult
+
+    data class NotConfigured(val snapshot: AppSyncProfileSnapshot) : AppSyncProfileReadResult
+
+    data class Failed(val kind: SyncFailureKind, val message: String?) : AppSyncProfileReadResult
 }

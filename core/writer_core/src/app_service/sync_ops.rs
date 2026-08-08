@@ -49,7 +49,8 @@ impl super::WriterAppService {
         project_id: String,
         generation: u64,
     ) -> Result<Option<SyncSecretsDto>, WriterError> {
-        self.api.load_sync_secrets_for_generation(&project_id, generation)
+        self.api
+            .load_sync_secrets_for_generation(&project_id, generation)
     }
 
     /** #595 五：删除指定 generation 的安全存储凭据（旧版本清理）。 */
@@ -58,7 +59,8 @@ impl super::WriterAppService {
         project_id: String,
         generation: u64,
     ) -> Result<(), WriterError> {
-        self.api.delete_sync_secrets_for_generation(&project_id, generation)
+        self.api
+            .delete_sync_secrets_for_generation(&project_id, generation)
     }
 
     pub fn perform_sync_diagnostics(
@@ -144,9 +146,7 @@ impl super::WriterAppService {
     ) -> Result<(), WriterError> {
         let key = format!("sync_token_{}", project_id);
         if let Some(storage) = &self.api.secure_storage {
-            storage
-                .delete_secret(&key)
-                .map_err(WriterError::Other)?;
+            storage.delete_secret(&key).map_err(WriterError::Other)?;
         }
         Ok(())
     }
@@ -210,7 +210,8 @@ impl super::WriterAppService {
         generation: u64,
         secrets: SyncSecretsDto,
     ) -> Result<bool, WriterError> {
-        self.api.save_app_sync_secrets_for_generation(generation, secrets)
+        self.api
+            .save_app_sync_secrets_for_generation(generation, secrets)
     }
 
     pub fn load_app_sync_secrets_for_generation(

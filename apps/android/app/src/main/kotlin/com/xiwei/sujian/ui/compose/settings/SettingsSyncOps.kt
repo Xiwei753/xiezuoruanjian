@@ -30,6 +30,10 @@ suspend fun SettingsViewModel.executeTransaction(command: SettingsTransactionCom
         is SettingsTransactionCommand.SaveAndRunSync -> executeSyncTransaction(command)
         is SettingsTransactionCommand.SaveAndRunDryRun -> executeDryRunTransaction(command)
         is SettingsTransactionCommand.SaveAndRunDiagnostics -> executeDiagnosticsTransaction(command)
+        // #600 评论 #4 问题三：应用级同步事务路由。
+        is SettingsTransactionCommand.SaveAndRunAppSync -> executeAppSyncTransaction(command)
+        is SettingsTransactionCommand.SaveAndRunAppDryRun -> executeAppDryRunTransaction(command)
+        is SettingsTransactionCommand.SaveAndRunAppDiagnostics -> executeAppDiagnosticsTransaction(command)
     }
 }
 
@@ -330,6 +334,379 @@ suspend fun SettingsViewModel.executeDiagnosticsTransaction(
     }
 }
 
+// ── #600 评论 #4 问题三：应用级同步事务（设置/全局星图/主题调色板）──
+// 与作品级事务对称，但提交到应用级 profile（commitAppSyncProfile），
+// 执行应用级同步 API（runAppSync / performAppSyncDryRun / performAppSyncDiagnostics）。
+// 不依赖 ActiveProjectGate — 应用级同步目标唯一。
+
+/**
+ * 应用级事务保存配置与凭据 — 提交到应用级 profile（不带 projectId）。
+ * 返回 false 表示提交失败，调用方应终止事务并显示错误。
+ */
+private suspend fun SettingsViewModel.saveAppTransactionConfigAndSecrets(
+    config: SyncConfig,
+    configRevision: Long,
+    secrets: SyncSecrets,
+    secretsRevision: Long,
+): Boolean {
+    val commitResult = withContext(Dispatchers.IO) { settingsRepo.commitAppSyncProfile(config, secrets) }
+    if (commitResult is SettingsSaveResult.Failed) return false
+    if (syncConfigRevision == configRevision) {
+        syncConfigPersistedRevision = configRevision
+    }
+    if (syncSecretsRevision == secretsRevision) {
+        syncSecretsPersistedRevision = secretsRevision
+    }
+    return true
+}
+
+/**
+ * 应用级事务共用骨架 — 镜像 [runCommandTransaction] 但用应用级保存与状态字段。
+ */
+private suspend fun SettingsViewModel.runAppCommandTransaction(
+    command: SettingsTransactionCommand,
+    setState: (SyncCommandState, StructuredSyncResult?) -> Unit,
+    applyResult: (SyncCommandIoResult) -> Unit,
+    operation: suspend (SyncConfig, SyncSecrets) -> SyncCommandIoResult,
+) {
+    setState(SyncCommandState.RUNNING, null)
+    try {
+        val saveOk =
+            saveAppTransactionConfigAndSecrets(
+                command.config,
+                command.configRevision,
+                command.secrets,
+                command.secretsRevision,
+            )
+        if (!saveOk) {
+            setState(
+                SyncCommandState.FAILURE,
+                StructuredSyncResult(statusCode = SYNC_STATUS_ERROR, messageKey = MSG_SAVE_CONFIG_OR_SECRETS_FAILED),
+            )
+            return
+        }
+        applyResult(operation(command.config, command.secrets))
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        setState(
+            SyncCommandState.FAILURE,
+            StructuredSyncResult(
+                statusCode = SYNC_STATUS_ERROR,
+                messageKey = MSG_UNEXPECTED_ERROR,
+                sanitizedDiagnostic = e.message,
+            ),
+        )
+    }
+    try {
+        refreshAppSyncProfileState()
+    } catch (_: Exception) {
+    }
+}
+
+/**
+ * 应用级排他锁内执行同步 IO — 镜像 [runExclusiveSyncIo] 但不检查当前作品 capability
+ * （应用级无 projectId 路由的 capability）。
+ */
+private suspend fun SettingsViewModel.runExclusiveAppSyncIo(
+    config: SyncConfig,
+    secrets: SyncSecrets,
+    perform: suspend (SyncConfig) -> SyncCommandIoResult,
+): ExclusiveResult<SyncCommandIoResult> =
+    SyncSession.runExclusive { _ ->
+        val flushOk = ActiveDocumentGate.flushActiveDocument()
+        if (!flushOk) {
+            return@runExclusive SyncCommandIoResult(
+                true,
+                true,
+                StructuredSyncResult(statusCode = SYNC_STATUS_ERROR, messageKey = "sync_document_save_failed"),
+            )
+        }
+        withContext(Dispatchers.IO) {
+            val overrideOk = settingsRepo.setSyncSecretsOverrideStrict(secrets)
+            if (!overrideOk) {
+                return@withContext SyncCommandIoResult(
+                    true,
+                    true,
+                    StructuredSyncResult(
+                        statusCode = SYNC_STATUS_ERROR,
+                        messageKey = "sync_credentials_override_failed",
+                    ),
+                )
+            }
+            try {
+                perform(config)
+            } finally {
+                settingsRepo.clearSyncSecretsOverride()
+            }
+        }
+    }
+
+/** 应用级 performAppSync 的 UI 层类型化封装。 */
+private fun com.xiwei.sujian.model.SyncResult.toAppSyncIoResult(): SyncCommandIoResult {
+    val sr = this
+    return SyncCommandIoResult(
+        true,
+        true,
+        StructuredSyncResult(
+            statusCode = if (sr.error == null) "ok" else SYNC_STATUS_ERROR,
+            messageKey = "sync_perform_result",
+            counts =
+                SyncCounts(
+                    uploaded = sr.uploadedFiles.size,
+                    downloaded = sr.downloadedFiles.size,
+                    deletedRemote = sr.remoteDeletes.size,
+                    deletedLocal = sr.localDeletes.size,
+                    conflicts = sr.conflicts.size,
+                    overwritten = sr.overwrittenFiles.size,
+                    ignored = sr.ignoredFiles.size,
+                ),
+            sanitizedDiagnostic = if (sr.error != null) "sync_failed" else null,
+        ),
+    )
+}
+
+/** 应用级 performAppSyncDryRun 的 UI 层类型化封装。 */
+private fun com.xiwei.sujian.data.SyncDryRunOutcome.toAppIoResult(): SyncCommandIoResult =
+    when (this) {
+        is com.xiwei.sujian.data.SyncDryRunOutcome.Success -> {
+            val plan = plan
+            SyncCommandIoResult(
+                true,
+                true,
+                StructuredSyncResult(
+                    statusCode = "ok",
+                    messageKey = "sync_dry_run_result",
+                    counts =
+                        SyncCounts(
+                            uploaded = plan.filesToUpload.size,
+                            downloaded = plan.filesToDownload.size,
+                            deletedRemote = plan.filesToDeleteRemote.size,
+                            deletedLocal = plan.filesToDeleteLocal.size,
+                            conflicts = plan.conflicts.size,
+                            ignored = plan.ignoredFiles.size,
+                        ),
+                ),
+            )
+        }
+        is com.xiwei.sujian.data.SyncDryRunOutcome.Error ->
+            SyncCommandIoResult(
+                true,
+                true,
+                StructuredSyncResult(
+                    statusCode = SYNC_STATUS_ERROR,
+                    messageKey = syncFailureKind.messageKey(),
+                    sanitizedDiagnostic = message,
+                ),
+            )
+        com.xiwei.sujian.data.SyncDryRunOutcome.NotLoaded ->
+            SyncCommandIoResult(
+                true,
+                true,
+                StructuredSyncResult(
+                    statusCode = SYNC_STATUS_ERROR,
+                    messageKey = SyncFailureKind.NativeUnavailable.messageKey(),
+                    sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name,
+                ),
+            )
+    }
+
+/** 应用级 performAppSyncDiagnostics 成功分支的 UI 层封装 — 提取为独立 helper 降低认知复杂度。 */
+private fun SyncDiagnosticsOutcome.Success.appDiagnosticsSuccessToAppIoResult(): SyncCommandIoResult {
+    val diag = result
+    return SyncCommandIoResult(
+        true,
+        true,
+        StructuredSyncResult(
+            statusCode = if (diag.success) "ok" else "fail",
+            messageKey = "sync_test_connection_result",
+            messageArgs =
+                mapOf(
+                    "network" to if (diag.networkOk) "ok" else "fail",
+                    "auth" to if (diag.authOk) "ok" else "fail",
+                    "repo" to if (diag.repoOk) "ok" else "fail",
+                    "branch" to if (diag.branchOk) "ok" else "fail",
+                ),
+            sanitizedDiagnostic = if (!diag.success) "connection_failed" else null,
+        ),
+    )
+}
+
+/** 应用级 performAppSyncDiagnostics 的 UI 层类型化封装。 */
+private fun com.xiwei.sujian.data.SyncDiagnosticsOutcome.toAppIoResult(): SyncCommandIoResult =
+    when (this) {
+        is com.xiwei.sujian.data.SyncDiagnosticsOutcome.Success -> appDiagnosticsSuccessToAppIoResult()
+        is com.xiwei.sujian.data.SyncDiagnosticsOutcome.Error ->
+            SyncCommandIoResult(
+                true,
+                true,
+                StructuredSyncResult(
+                    statusCode = SYNC_STATUS_ERROR,
+                    messageKey = syncFailureKind.messageKey(),
+                    sanitizedDiagnostic = message,
+                ),
+            )
+        com.xiwei.sujian.data.SyncDiagnosticsOutcome.NotLoaded ->
+            SyncCommandIoResult(
+                true,
+                true,
+                StructuredSyncResult(
+                    statusCode = SYNC_STATUS_ERROR,
+                    messageKey = SyncFailureKind.NativeUnavailable.messageKey(),
+                    sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name,
+                ),
+            )
+    }
+
+suspend fun SettingsViewModel.executeAppSyncTransaction(command: SettingsTransactionCommand.SaveAndRunAppSync) {
+    runAppCommandTransaction(
+        command = command,
+        setState = { state, result ->
+            _uiState.update {
+                it.copy(
+                    appPerformSyncState = state,
+                    structuredSyncResult = result,
+                    lastCommandType = SyncCommandType.PERFORM_APP_SYNC,
+                )
+            }
+        },
+        applyResult = { ioResult ->
+            _uiState.update { current ->
+                if (ioResult.isSuccess) {
+                    current.copy(
+                        appPerformSyncState = SyncCommandState.SUCCESS,
+                        structuredSyncResult = ioResult.structuredResult,
+                        lastCommandType = SyncCommandType.PERFORM_APP_SYNC,
+                    )
+                } else {
+                    current.copy(
+                        appPerformSyncState = SyncCommandState.FAILURE,
+                        structuredSyncResult = ioResult.structuredResult,
+                        lastCommandType = SyncCommandType.PERFORM_APP_SYNC,
+                    )
+                }
+            }
+        },
+    ) { _, _ ->
+        // 应用级同步通过 SyncCoordinator.runAppSync 执行（含排他锁、secrets override、flush）。
+        syncCoordinator.runAppSync(command.trigger).toIoResult()
+    }
+}
+
+suspend fun SettingsViewModel.executeAppDryRunTransaction(command: SettingsTransactionCommand.SaveAndRunAppDryRun) {
+    runAppCommandTransaction(
+        command = command,
+        setState = { state, result ->
+            _uiState.update {
+                it.copy(
+                    appDryRunState = state,
+                    structuredSyncResult = result,
+                    lastCommandType = SyncCommandType.DRY_RUN_APP,
+                )
+            }
+        },
+        applyResult = { ioResult ->
+            _uiState.update { current ->
+                if (ioResult.isSuccess) {
+                    current.copy(
+                        appDryRunState = SyncCommandState.SUCCESS,
+                        structuredSyncResult = ioResult.structuredResult,
+                        lastCommandType = SyncCommandType.DRY_RUN_APP,
+                    )
+                } else {
+                    current.copy(
+                        appDryRunState = SyncCommandState.FAILURE,
+                        structuredSyncResult = ioResult.structuredResult,
+                        lastCommandType = SyncCommandType.DRY_RUN_APP,
+                    )
+                }
+            }
+        },
+    ) { config, secrets ->
+        runExclusiveAppSyncIo(config, secrets) {
+            settingsRepo.performAppSyncDryRunTyped(it).toAppIoResult()
+        }.toIoResult()
+    }
+}
+
+suspend fun SettingsViewModel.executeAppDiagnosticsTransaction(
+    command: SettingsTransactionCommand.SaveAndRunAppDiagnostics,
+) {
+    runAppCommandTransaction(
+        command = command,
+        setState = { state, result ->
+            _uiState.update {
+                it.copy(
+                    appTestConnectionState = state,
+                    structuredSyncResult = result,
+                    lastCommandType = SyncCommandType.TEST_CONNECTION_APP,
+                )
+            }
+        },
+        applyResult = { ioResult ->
+            _uiState.update { current ->
+                if (ioResult.isSuccess) {
+                    current.copy(
+                        appTestConnectionState = SyncCommandState.SUCCESS,
+                        structuredSyncResult = ioResult.structuredResult,
+                        lastCommandType = SyncCommandType.TEST_CONNECTION_APP,
+                    )
+                } else {
+                    current.copy(
+                        appTestConnectionState = SyncCommandState.FAILURE,
+                        structuredSyncResult = ioResult.structuredResult,
+                        lastCommandType = SyncCommandType.TEST_CONNECTION_APP,
+                    )
+                }
+            }
+        },
+    ) { config, secrets ->
+        runExclusiveAppSyncIo(config, secrets) {
+            settingsRepo.performAppSyncDiagnosticsTyped(it).toAppIoResult()
+        }.toIoResult()
+    }
+}
+
+/**
+ * #600 评论 #4 问题三：刷新应用级同步 profile 状态 — 读取应用级 committed profile，
+ * 更新 syncConfig/syncSecrets（应用级与作品级共用同一 UI 字段，因为设置页只有一个同步配置区域；
+ * 应用级 profile 是设置页"应用级同步"开关的真相来源）。
+ *
+ * 注意：此处不覆盖作品级 profile 加载状态（syncProfileLoadState 仍由作品级
+ * [refreshSyncProfileState] 维护）。应用级事务结束后只刷新 config/secrets 的已确认值。
+ */
+suspend fun SettingsViewModel.refreshAppSyncProfileState() {
+    val repo = settingsRepo
+    val committedAppProfile = withContext(Dispatchers.IO) { repo.loadCommittedAppSyncProfile() }
+    _uiState.update {
+        it.copy(
+            syncConfig =
+                if (!hasUnsavedSyncConfig()) {
+                    committedAppProfile.toAppSyncProfileLoadState().confirmedConfig ?: it.syncConfig
+                } else {
+                    it.syncConfig
+                },
+            syncSecrets =
+                if (!hasUnsavedSyncSecrets()) {
+                    committedAppProfile.toAppSyncProfileLoadState().confirmedSecrets ?: it.syncSecrets
+                } else {
+                    it.syncSecrets
+                },
+        )
+    }
+}
+
+/** AppSyncProfileReadResult → 设置页加载状态（与作品级 toSyncProfileLoadState 对称）。 */
+internal fun com.xiwei.sujian.data.AppSyncProfileReadResult.toAppSyncProfileLoadState(): SyncProfileLoadState =
+    when (this) {
+        is com.xiwei.sujian.data.AppSyncProfileReadResult.Found ->
+            SyncProfileLoadState.Ready(snapshot.config, snapshot.secrets)
+        is com.xiwei.sujian.data.AppSyncProfileReadResult.NotConfigured ->
+            SyncProfileLoadState.Unconfigured(snapshot.config, snapshot.secrets)
+        is com.xiwei.sujian.data.AppSyncProfileReadResult.Failed ->
+            SyncProfileLoadState.Failed(kind, message)
+    }
+
 suspend fun SettingsViewModel.refreshSyncProfileState() {
     val repo = settingsRepo
     // #600 评论 #3 问题二：profile/capability 按 projectId 路由 —
@@ -379,7 +756,7 @@ private fun SyncOutcome.Completed.completedToIoResult(): SyncCommandIoResult {
         true,
         true,
         StructuredSyncResult(
-            statusCode = if (sr.error == null) "ok" else "error",
+            statusCode = if (sr.error == null) "ok" else SYNC_STATUS_ERROR,
             messageKey = "sync_perform_result",
             counts =
                 SyncCounts(

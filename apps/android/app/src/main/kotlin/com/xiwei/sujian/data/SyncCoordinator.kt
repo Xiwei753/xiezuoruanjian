@@ -40,7 +40,7 @@ class SyncCoordinator(
     /**
      * #592 四：统一异常边界 — 每条路径必须结束在明确终态。
      *
-     * #592 六：一次同步操作只使用同一份不可变 SyncProfileSnapshot
+     * #592 六：一次同步操作只使用同一份不可变 ProjectSyncProfileSnapshot
      * （generation + config + secrets）。调用方（AutoSyncWorker 等）可传入
      * 预先取得的 snapshot，避免二次读取；未传入时在锁内取一次完整快照。
      * snapshot 的 secrets 通过进程级 override 注入 Rust，整个操作不再从磁盘
@@ -59,11 +59,11 @@ class SyncCoordinator(
     suspend fun runSync(
         trigger: SyncTrigger,
         projectId: String,
-        snapshot: SyncProfileSnapshot? = null,
+        snapshot: ProjectSyncProfileSnapshot? = null,
     ): SyncOutcome {
         DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "start")
         try {
-            val profile: SyncProfileSnapshot =
+            val profile: ProjectSyncProfileSnapshot =
                 snapshot ?: run {
                     val result =
                         withContext(Dispatchers.IO) {
@@ -194,6 +194,128 @@ class SyncCoordinator(
             return e.kind.toOutcome()
         } catch (e: Exception) {
             DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "exception: " + e.message)
+            syncStatusRepository.notifySyncFailed()
+            return SyncFailureKind.Fatal.toOutcome()
+        }
+    }
+
+    /**
+     * #600 评论 #4 问题三：应用级同步执行入口 — 设置/全局星图/主题调色板。
+     *
+     * 镜像 [runSync] 的结构（snapshot → enabled → capability → runExclusive →
+     * flush + secrets override + performAppSync → 分类结果），但**不依赖 projectId** —
+     * 应用级同步目标唯一，不经过 ActiveProjectGate。
+     *
+     * - snapshot 未传入时在锁内取 [SettingsRepository.snapshotAppSyncProfile]；
+     * - secrets override 是进程级（与作品级共用同一 override 机制），由
+     *   [SyncSession.runExclusive] 保证同一时刻只有一个同步在执行，不会串用 token；
+     * - 应用级同步不签发文档身份 lease（应用级同步目标不含活动正文，无需文档身份校验）；
+     * - 失败分类复用 [classifyFailure] / [mapToOutcome]，与作品级一致。
+     */
+    suspend fun runAppSync(
+        trigger: SyncTrigger,
+        appSnapshot: AppSyncProfileSnapshot? = null,
+    ): SyncOutcome {
+        DiagnosticsEvents.syncEvent("app_${trigger.name.lowercase()}", "start")
+        try {
+            val profile: AppSyncProfileSnapshot =
+                appSnapshot ?: run {
+                    val result =
+                        withContext(Dispatchers.IO) {
+                            SyncProfileGate.snapshotExclusive { settingsRepository.snapshotAppSyncProfile() }
+                        }
+                    when (result) {
+                        is AppSyncProfileReadResult.Found -> result.snapshot
+                        is AppSyncProfileReadResult.NotConfigured -> result.snapshot
+                        is AppSyncProfileReadResult.Failed -> {
+                            DiagnosticsLogger.w(
+                                "SyncCoordinator",
+                                "App sync profile snapshot failed: ${result.message}",
+                            )
+                            syncStatusRepository.notifySyncFailed()
+                            return result.kind.toOutcome()
+                        }
+                    }
+                }
+            val config = profile.config
+            if (config.enabled != true) {
+                syncStatusRepository.notifyUnconfigured()
+                return SyncOutcome.Unconfigured
+            }
+            // 应用级 capability：config.enabled + remoteUrl 非空即可（应用级无 projectId 路由的 capability）。
+            // 复用 shouldSync 的前置判定逻辑 — 此处只检查 enabled，远程 URL 在 Core perform_app_sync 内校验。
+
+            val exclusiveResult =
+                SyncSession.runExclusive { _ ->
+                    val flushOk = ActiveDocumentGate.flushActiveDocument()
+                    if (!flushOk) {
+                        DiagnosticsLogger.w(
+                            "SyncCoordinator",
+                            "Active document flush failed before app sync — aborting (typed DocumentSaveFailed)",
+                        )
+                        syncStatusRepository.notifySyncFailed()
+                        return@runExclusive BridgeResult.Error(
+                            ResultEnvelope.errorOf(
+                                "DOCUMENT_FLUSH_FAILED",
+                                "Active document could not be persisted before app sync",
+                            ),
+                            SyncFailureKind.DocumentSaveFailed,
+                        )
+                    }
+                    syncStatusRepository.notifySyncStarted()
+                    val overrideOk =
+                        withContext(Dispatchers.IO) {
+                            settingsRepository.setSyncSecretsOverrideStrict(profile.secrets)
+                        }
+                    if (!overrideOk) {
+                        val error =
+                            BridgeResult.Error(
+                                ResultEnvelope.errorOf(
+                                    "SYNC_CREDENTIALS_OVERRIDE_FAILED",
+                                    "Failed to set app sync credentials override",
+                                ),
+                                SyncFailureKind.Fatal,
+                            )
+                        resolveAndPublish(error)
+                        return@runExclusive error
+                    }
+                    try {
+                        val bridgeResult =
+                            withContext(Dispatchers.IO) { settingsRepository.performAppSync(config) }
+                        resolveAndPublish(bridgeResult)
+                        bridgeResult
+                    } finally {
+                        withContext(Dispatchers.IO) { settingsRepository.clearSyncSecretsOverride() }
+                    }
+                }
+
+            return when (exclusiveResult) {
+                is ExclusiveResult.Busy -> {
+                    SyncOutcome.Busy
+                }
+                is ExclusiveResult.Success -> {
+                    when (val br = exclusiveResult.value) {
+                        is BridgeResult.Success -> mapToOutcome(br.data)
+                        is BridgeResult.Error -> classifyFailure(br).toOutcome()
+                        BridgeResult.NotLoaded -> {
+                            DiagnosticsLogger.w("SyncCoordinator", "Native library not loaded — NativeUnavailable")
+                            SyncFailureKind.NativeUnavailable.toOutcome()
+                        }
+                    }
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            DiagnosticsEvents.syncEvent("app_${trigger.name.lowercase()}", "io_exception: " + e.message)
+            syncStatusRepository.notifySyncFailed()
+            return SyncFailureKind.RetryableIo.toOutcome()
+        } catch (e: RepositoryException) {
+            DiagnosticsEvents.syncEvent("app_${trigger.name.lowercase()}", "repository_exception: " + e.message)
+            syncStatusRepository.notifySyncFailed()
+            return e.kind.toOutcome()
+        } catch (e: Exception) {
+            DiagnosticsEvents.syncEvent("app_${trigger.name.lowercase()}", "exception: " + e.message)
             syncStatusRepository.notifySyncFailed()
             return SyncFailureKind.Fatal.toOutcome()
         }

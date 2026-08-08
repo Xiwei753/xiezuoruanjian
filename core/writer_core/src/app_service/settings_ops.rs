@@ -39,7 +39,11 @@ impl super::WriterAppService {
         self.api.load_sync_secrets(&project_id)
     }
 
-    pub fn save_sync_secrets(&self, project_id: String, secrets: SyncSecretsDto) -> Result<bool, WriterError> {
+    pub fn save_sync_secrets(
+        &self,
+        project_id: String,
+        secrets: SyncSecretsDto,
+    ) -> Result<bool, WriterError> {
         self.api.save_sync_secrets(&project_id, secrets)
     }
 

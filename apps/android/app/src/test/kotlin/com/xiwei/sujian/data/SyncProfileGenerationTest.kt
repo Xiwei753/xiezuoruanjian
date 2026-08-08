@@ -22,14 +22,14 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SyncProfileGenerationTest {
-    private lateinit var store: SyncProfileStore
+    private lateinit var store: ProjectSyncProfileStore
 
     private val projectId = "test-project-alpha"
 
     @Before
     fun setup() {
         val context: Context = ApplicationProvider.getApplicationContext()
-        store = SyncProfileStore(context)
+        store = ProjectSyncProfileStore(context)
         // DataStore 在同进程测试间持久化，每个测试前清空以保证独立。
         kotlinx.coroutines.runBlocking {
             store.clear(projectId)

@@ -39,6 +39,8 @@ impl crate::sync::SyncService {
     ///
     /// 黑名单排除设备专属或临时性文件，这些文件不应参与跨设备同步：
     /// - `state.local.json` / `sync_state.json`：本地同步状态（设备专属）
+    /// - `config.local.json` / `conflicts.json`：本地同步配置与冲突记录（设备专属）
+    /// - `secrets*`：同步凭证（设备专属）
     /// - `.git/`：Git 内部目录
     /// - `.tmp` / `.lock` 后缀：临时和锁文件
     /// - `app-meta/logs`：日志（设备专属）
@@ -69,6 +71,8 @@ impl crate::sync::SyncService {
         let ignored_patterns = [
             "app-meta/sync/state.local.json",
             "app-meta/sync/sync_state.json",
+            "app-meta/sync/config.local.json",
+            "app-meta/sync/conflicts.json",
             "sqlite_cache",
             "tmp",
             "cache",
@@ -76,6 +80,13 @@ impl crate::sync::SyncService {
         ];
 
         if rel_path.starts_with("app-meta/logs") || rel_path.contains("/logs/") {
+            return true;
+        }
+
+        // 同步凭证前缀排除：覆盖 secrets.local.json、secrets_g1.local.json 等。
+        // 用 starts_with 而非 contains：sync_secrets.local.json 不以此前缀开头，
+        // 保持与 test_sync_secrets_blacklisted 断言一致（该路径不被黑名单）。
+        if rel_path.starts_with("app-meta/sync/secrets") {
             return true;
         }
 
@@ -147,9 +158,11 @@ impl crate::sync::SyncService {
             return true;
         }
 
-        // 应用级同步自身的本地状态
+        // 应用级同步自身的本地状态、配置与冲突记录
         if rel_path == "app-meta/sync/state.local.json"
             || rel_path == "app-meta/sync/sync_state.json"
+            || rel_path == "app-meta/sync/config.local.json"
+            || rel_path == "app-meta/sync/conflicts.json"
             || rel_path.starts_with("app-meta/sync/secrets")
         {
             return true;

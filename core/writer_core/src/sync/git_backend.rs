@@ -26,8 +26,14 @@ pub trait GitBackend {
         local_repo_path: &Path,
         branch: &str,
         auth: Option<&GitAuth>,
+        scope: crate::sync::types::SyncScope,
     ) -> crate::Result<()>;
-    fn stage_paths(&self, local_repo_path: &Path, paths: &[&str]) -> crate::Result<()>;
+    fn stage_paths(
+        &self,
+        local_repo_path: &Path,
+        paths: &[&str],
+        scope: crate::sync::types::SyncScope,
+    ) -> crate::Result<()>;
     fn commit(&self, local_repo_path: &Path, message: &str) -> crate::Result<Option<String>>;
     fn push(
         &self,
@@ -36,7 +42,11 @@ pub trait GitBackend {
         auth: Option<&GitAuth>,
     ) -> crate::Result<()>;
     fn current_head(&self, local_repo_path: &Path) -> crate::Result<Option<String>>;
-    fn status(&self, local_repo_path: &Path) -> crate::Result<Vec<String>>; // Returns changed files
+    fn status(
+        &self,
+        local_repo_path: &Path,
+        scope: crate::sync::types::SyncScope,
+    ) -> crate::Result<Vec<String>>; // Returns changed files
 }
 
 pub struct Git2Backend;
@@ -137,6 +147,7 @@ impl GitBackend for Git2Backend {
         local_repo_path: &Path,
         branch: &str,
         auth: Option<&GitAuth>,
+        scope: crate::sync::types::SyncScope,
     ) -> crate::Result<()> {
         let repo = git2::Repository::open(local_repo_path)
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
@@ -236,10 +247,7 @@ impl GitBackend for Git2Backend {
             let mut blocking_files = Vec::new();
             for entry in statuses.iter() {
                 if let Some(path) = entry.path() {
-                    if SyncService::is_blacklisted_path(
-                        path,
-                        crate::sync::types::SyncScope::Project,
-                    ) {
+                    if SyncService::is_blacklisted_path(path, scope) {
                         continue;
                     }
                     let status = entry.status();
@@ -250,10 +258,7 @@ impl GitBackend for Git2Backend {
                         // Index has conflicts or unmerged entries
                         if status.is_conflicted() {
                             rollback(&repo);
-                            let conflicts = collect_index_conflicts(
-                                &repo,
-                                crate::sync::types::SyncScope::Project,
-                            );
+                            let conflicts = collect_index_conflicts(&repo, scope);
                             let summary = SyncConflictSummary {
                                 status: "conflict".to_string(),
                                 local_dirty: true,
@@ -274,12 +279,7 @@ impl GitBackend for Git2Backend {
                         }
                     }
                     // Check for untracked files that would be overwritten
-                    if status.is_wt_new()
-                        && SyncService::is_whitelisted_path(
-                            path,
-                            crate::sync::types::SyncScope::Project,
-                        )
-                    {
+                    if status.is_wt_new() && SyncService::is_whitelisted_path(path, scope) {
                         blocking_files.push(path.to_string());
                     }
                 }
@@ -407,7 +407,7 @@ impl GitBackend for Git2Backend {
                         &repo,
                         Some(fetch_commit.id()),
                         "本地未提交的改动或冲突阻止了合并操作。",
-                        crate::sync::types::SyncScope::Project,
+                        scope,
                     );
                     let payload = serde_json::to_string(&summary).unwrap_or_default();
                     return Err(crate::Error::SyncCheckoutConflict {
@@ -500,15 +500,20 @@ impl GitBackend for Git2Backend {
         Ok(())
     }
 
-    fn stage_paths(&self, local_repo_path: &Path, paths: &[&str]) -> crate::Result<()> {
+    fn stage_paths(
+        &self,
+        local_repo_path: &Path,
+        paths: &[&str],
+        scope: crate::sync::types::SyncScope,
+    ) -> crate::Result<()> {
         let repo = git2::Repository::open(local_repo_path)
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         let mut index = repo
             .index()
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         for p in paths {
-            if SyncService::is_blacklisted_path(p, crate::sync::types::SyncScope::Project)
-                || !SyncService::is_whitelisted_path(p, crate::sync::types::SyncScope::Project)
+            if SyncService::is_blacklisted_path(p, scope)
+                || !SyncService::is_whitelisted_path(p, scope)
             {
                 continue;
             }
@@ -655,7 +660,11 @@ impl GitBackend for Git2Backend {
         clippy::too_many_arguments,
         clippy::type_complexity
     )]
-    fn status(&self, local_repo_path: &Path) -> crate::Result<Vec<String>> {
+    fn status(
+        &self,
+        local_repo_path: &Path,
+        scope: crate::sync::types::SyncScope,
+    ) -> crate::Result<Vec<String>> {
         let repo = git2::Repository::open(local_repo_path)
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         let mut opts = git2::StatusOptions::new();
@@ -666,11 +675,8 @@ impl GitBackend for Git2Backend {
         let mut res = Vec::new();
         for entry in statuses.iter() {
             if let Some(path) = entry.path() {
-                if !SyncService::is_blacklisted_path(path, crate::sync::types::SyncScope::Project)
-                    && SyncService::is_whitelisted_path(
-                        path,
-                        crate::sync::types::SyncScope::Project,
-                    )
+                if !SyncService::is_blacklisted_path(path, scope)
+                    && SyncService::is_whitelisted_path(path, scope)
                 {
                     res.push(path.to_string());
                 }

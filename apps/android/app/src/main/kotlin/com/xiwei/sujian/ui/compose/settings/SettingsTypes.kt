@@ -80,6 +80,10 @@ data class SettingsUiState(
     val dryRunState: SyncCommandState = SyncCommandState.IDLE,
     val testConnectionState: SyncCommandState = SyncCommandState.IDLE,
     val performSyncState: SyncCommandState = SyncCommandState.IDLE,
+    // #600 评论 #4 问题三：应用级同步（设置/全局星图/主题调色板）独立状态字段。
+    val appPerformSyncState: SyncCommandState = SyncCommandState.IDLE,
+    val appDryRunState: SyncCommandState = SyncCommandState.IDLE,
+    val appTestConnectionState: SyncCommandState = SyncCommandState.IDLE,
     val structuredSyncResult: StructuredSyncResult? = null,
     val lastCommandType: SyncCommandType? = null,
 /** #595 四：同步 profile 加载状态 — Failed 时保留字段值并显示真实错误。 */
@@ -106,6 +110,13 @@ sealed interface SettingsIntent {
     data object TestConnection : SettingsIntent
 
     data object PerformSync : SettingsIntent
+
+    // #600 评论 #4 问题三：应用级同步 Intent — 设置/全局星图/主题调色板。
+    data object AppDryRun : SettingsIntent
+
+    data object AppTestConnection : SettingsIntent
+
+    data object AppPerformSync : SettingsIntent
 }
 
 sealed interface SettingsSaveCommand {
@@ -157,6 +168,31 @@ sealed interface SettingsTransactionCommand {
         override val secrets: com.xiwei.sujian.model.SyncSecrets,
         override val secretsRevision: Long,
     ) : SettingsTransactionCommand
+
+    // #600 评论 #4 问题三：应用级同步事务命令 — 设置/全局星图/主题调色板。
+    // 与作品级事务对称，但提交到应用级 profile（commitAppSyncProfile），
+    // 执行应用级同步 API（runAppSync / performAppSyncDryRun / performAppSyncDiagnostics）。
+    data class SaveAndRunAppSync(
+        override val config: com.xiwei.sujian.model.SyncConfig,
+        override val configRevision: Long,
+        override val secrets: com.xiwei.sujian.model.SyncSecrets,
+        override val secretsRevision: Long,
+        val trigger: SyncTrigger,
+    ) : SettingsTransactionCommand
+
+    data class SaveAndRunAppDryRun(
+        override val config: com.xiwei.sujian.model.SyncConfig,
+        override val configRevision: Long,
+        override val secrets: com.xiwei.sujian.model.SyncSecrets,
+        override val secretsRevision: Long,
+    ) : SettingsTransactionCommand
+
+    data class SaveAndRunAppDiagnostics(
+        override val config: com.xiwei.sujian.model.SyncConfig,
+        override val configRevision: Long,
+        override val secrets: com.xiwei.sujian.model.SyncSecrets,
+        override val secretsRevision: Long,
+    ) : SettingsTransactionCommand
 }
 
 internal data class PendingCommands(
@@ -169,7 +205,14 @@ internal data class PendingCommands(
     fun isEmpty(): Boolean = local == null && fontSize == null && syncConfig == null && syncSecrets == null
 }
 
-enum class SyncCommandType { DRY_RUN, TEST_CONNECTION, PERFORM_SYNC }
+enum class SyncCommandType {
+    DRY_RUN,
+    TEST_CONNECTION,
+    PERFORM_SYNC,
+    DRY_RUN_APP,
+    TEST_CONNECTION_APP,
+    PERFORM_APP_SYNC,
+}
 
 internal data class SyncCommandIoResult(
     val configSaved: Boolean,

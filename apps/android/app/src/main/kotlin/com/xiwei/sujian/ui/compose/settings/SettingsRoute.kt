@@ -169,6 +169,10 @@ class SettingsViewModel(
             is SettingsIntent.DryRun -> enqueueDryRun()
             is SettingsIntent.TestConnection -> enqueueTestConnection()
             is SettingsIntent.PerformSync -> enqueuePerformSync()
+            // #600 评论 #4 问题三：应用级同步 Intent 路由。
+            is SettingsIntent.AppDryRun -> enqueueAppDryRun()
+            is SettingsIntent.AppTestConnection -> enqueueAppTestConnection()
+            is SettingsIntent.AppPerformSync -> enqueueAppPerformSync()
         }
     }
 
@@ -242,6 +246,47 @@ class SettingsViewModel(
         saveChannel.trySend(
             QueueItem.Transaction(
                 SettingsTransactionCommand.SaveAndRunSync(
+                    config = _uiState.value.syncConfig,
+                    configRevision = syncConfigRevision,
+                    secrets = _uiState.value.syncSecrets,
+                    secretsRevision = syncSecretsRevision,
+                    trigger = SyncTrigger.SettingsPage,
+                ),
+            ),
+        )
+    }
+
+    // #600 评论 #4 问题三：应用级同步 enqueue — 设置/全局星图/主题调色板。
+    private fun enqueueAppDryRun() {
+        saveChannel.trySend(
+            QueueItem.Transaction(
+                SettingsTransactionCommand.SaveAndRunAppDryRun(
+                    config = _uiState.value.syncConfig,
+                    configRevision = syncConfigRevision,
+                    secrets = _uiState.value.syncSecrets,
+                    secretsRevision = syncSecretsRevision,
+                ),
+            ),
+        )
+    }
+
+    private fun enqueueAppTestConnection() {
+        saveChannel.trySend(
+            QueueItem.Transaction(
+                SettingsTransactionCommand.SaveAndRunAppDiagnostics(
+                    config = _uiState.value.syncConfig,
+                    configRevision = syncConfigRevision,
+                    secrets = _uiState.value.syncSecrets,
+                    secretsRevision = syncSecretsRevision,
+                ),
+            ),
+        )
+    }
+
+    private fun enqueueAppPerformSync() {
+        saveChannel.trySend(
+            QueueItem.Transaction(
+                SettingsTransactionCommand.SaveAndRunAppSync(
                     config = _uiState.value.syncConfig,
                     configRevision = syncConfigRevision,
                     secrets = _uiState.value.syncSecrets,

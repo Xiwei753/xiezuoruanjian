@@ -88,10 +88,7 @@ pub(crate) fn scan_for_sync(
     clippy::too_many_arguments,
     clippy::type_complexity
 )]
-pub(crate) fn build_sync_plan(
-    sync_root: &Path,
-    scope: SyncScope,
-) -> crate::Result<SyncPlan> {
+pub(crate) fn build_sync_plan(sync_root: &Path, scope: SyncScope) -> crate::Result<SyncPlan> {
     let mut plan = SyncPlan::new();
 
     let entries = scan_for_sync(sync_root, scope)?;

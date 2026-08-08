@@ -50,7 +50,8 @@ class SettingsRepository(
             if (preferencesSuffix.isNotEmpty()) "sujian_diagnostics_$preferencesSuffix" else "sujian_diagnostics",
             android.content.Context.MODE_PRIVATE,
         )
-    private val profileStore by lazy { SyncProfileStore(appContext) }
+    private val profileStore by lazy { ProjectSyncProfileStore(appContext) }
+    private val appProfileStore by lazy { AppSyncProfileStore(appContext) }
     private val configJson = com.google.gson.Gson()
 
     @Volatile
@@ -288,7 +289,7 @@ class SettingsRepository(
                     return SyncProfileReadResult.Failed(generationSecrets.kind, generationSecrets.message)
                 }
             }
-        val snapshot = SyncProfileSnapshot(state.activeGeneration, config, secrets)
+        val snapshot = ProjectSyncProfileSnapshot(state.activeGeneration, config, secrets)
         return if (secrets.token?.isNotEmpty() == true) {
             SyncProfileReadResult.Found(snapshot)
         } else {
@@ -921,6 +922,321 @@ class SettingsRepository(
 
     fun performAppSyncDiagnostics(config: SyncConfig): BridgeResult<SyncDiagnosticsResult> {
         return syncBridge.performAppSyncDiagnostics(config)
+    }
+
+    /**
+     * #600 评论 #4 问题三：UI 层安全的应用级试运行方法 — 返回 [SyncDryRunOutcome] 而非 BridgeResult。
+     * 镜像 [performSyncDryRunTyped] 的语义。
+     */
+    fun performAppSyncDryRunTyped(config: SyncConfig): SyncDryRunOutcome {
+        return when (val result = performAppSyncDryRun(config)) {
+            is BridgeResult.Success -> SyncDryRunOutcome.Success(result.data)
+            is BridgeResult.Error ->
+                SyncDryRunOutcome.Error(
+                    syncFailureKind = result.syncFailureKind ?: SyncFailureKind.Fatal,
+                    message = result.message,
+                )
+            BridgeResult.NotLoaded -> SyncDryRunOutcome.NotLoaded
+        }
+    }
+
+    /**
+     * #600 评论 #4 问题三：UI 层安全的应用级连接诊断方法 — 返回 [SyncDiagnosticsOutcome] 而非 BridgeResult。
+     * 镜像 [performSyncDiagnosticsTyped] 的语义。
+     */
+    fun performAppSyncDiagnosticsTyped(config: SyncConfig): SyncDiagnosticsOutcome {
+        return when (val result = performAppSyncDiagnostics(config)) {
+            is BridgeResult.Success -> SyncDiagnosticsOutcome.Success(result.data)
+            is BridgeResult.Error ->
+                SyncDiagnosticsOutcome.Error(
+                    syncFailureKind = result.syncFailureKind ?: SyncFailureKind.Fatal,
+                    message = result.message,
+                )
+            BridgeResult.NotLoaded -> SyncDiagnosticsOutcome.NotLoaded
+        }
+    }
+
+    // ── #600 评论 #4 问题三：应用级 profile 快照与版本化提交 ──
+    // 与作品级 profile 对称：generation 化的 config 提交 + generation 化的 secrets 安全存储，
+    // 保证应用级同步配置的崩溃原子性。应用级不依赖 projectId，使用独立 AppSyncProfileStore。
+
+    /**
+     * #600 评论 #4 问题三：严格读取应用级同步配置 — Bridge 失败时返回 null 而非默认配置。
+     * 镜像 [loadSyncConfigStrict] 的语义，用于应用级 profile 提交协议。
+     */
+    fun loadAppSyncConfigStrict(): SyncConfig? {
+        return when (val result = syncBridge.loadAppSyncConfig()) {
+            is BridgeResult.Success -> result.data?.normalize()
+            is BridgeResult.Error -> {
+                warn("Strict load app sync config failed: ${result.fullEnvelope}")
+                null
+            }
+            BridgeResult.NotLoaded -> null
+        }
+    }
+
+    /**
+     * #600 评论 #4 问题三：应用级 legacy 槽凭据读取的类型化结果。
+     * 镜像 [loadLegacySyncSecretsTyped] 的语义。
+     */
+    fun loadLegacyAppSyncSecretsTyped(): GenerationSecretsReadResult {
+        return when (val result = syncBridge.loadAppSyncSecrets()) {
+            is BridgeResult.Success -> {
+                val secrets = result.data
+                if (secrets != null && secrets.token?.isNotEmpty() == true) {
+                    GenerationSecretsReadResult.Found(secrets)
+                } else {
+                    GenerationSecretsReadResult.NotConfigured
+                }
+            }
+            is BridgeResult.Error -> {
+                val kind = result.syncFailureKind ?: SyncFailureKind.Fatal
+                warn("Legacy app sync secrets read failed: ${result.fullEnvelope}")
+                GenerationSecretsReadResult.Failed(kind, result.fullEnvelope)
+            }
+            BridgeResult.NotLoaded ->
+                GenerationSecretsReadResult.Failed(
+                    SyncFailureKind.NativeUnavailable,
+                    "Native library not loaded",
+                )
+        }
+    }
+
+    /** #600 评论 #4 问题三：按 generation 保存应用级凭据到安全存储。 */
+    fun saveAppSyncSecretsForGeneration(
+        generation: Long,
+        secrets: SyncSecrets,
+    ): SettingsSaveResult {
+        return when (val result = appBridge.saveAppSyncSecretsForGeneration(generation.toULong(), secrets)) {
+            is BridgeResult.Success -> SettingsSaveResult.Success
+            is BridgeResult.Error -> {
+                warn("Failed to save staged app sync secrets for generation $generation: ${result.fullEnvelope}")
+                SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, generation)))
+            }
+            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, generation)))
+        }
+    }
+
+    /** #600 评论 #4 问题三：删除指定 generation 的应用级安全存储凭据。 */
+    fun deleteAppSyncSecretsForGeneration(generation: Long): BridgeResult<Unit> {
+        return appBridge.deleteAppSyncSecretsForGeneration(generation.toULong())
+    }
+
+    /**
+     * #600 评论 #4 问题三：读取指定 generation 的应用级安全存储凭据 — 类型化结果。
+     */
+    fun loadAppSyncSecretsForGeneration(generation: Long): GenerationSecretsReadResult {
+        return when (val result = appBridge.loadAppSyncSecretsForGeneration(generation.toULong())) {
+            is BridgeResult.Success -> {
+                val secrets = result.data
+                if (secrets != null && secrets.token?.isNotEmpty() == true) {
+                    GenerationSecretsReadResult.Found(secrets)
+                } else {
+                    GenerationSecretsReadResult.NotConfigured
+                }
+            }
+            is BridgeResult.Error -> {
+                val kind = result.syncFailureKind ?: SyncFailureKind.Fatal
+                warn("Failed to load staged app sync secrets for generation $generation: ${result.fullEnvelope}")
+                GenerationSecretsReadResult.Failed(kind, result.fullEnvelope)
+            }
+            BridgeResult.NotLoaded ->
+                GenerationSecretsReadResult.Failed(
+                    SyncFailureKind.NativeUnavailable,
+                    "Native library not loaded",
+                )
+        }
+    }
+
+    /**
+     * #600 评论 #4 问题三：应用级统一仓库读取一次完整不可变快照（generation + config + secrets）。
+     * 必须在 SyncProfileGate.snapshotExclusive 内调用，保证与提交互斥。
+     *
+     * 镜像 [snapshotSyncProfile] 的语义，但不带 projectId — 使用 [appProfileStore] 与
+     * 应用级 Core API（[loadAppSyncConfigStrict] / 应用级 generation 凭据）。
+     */
+    suspend fun snapshotAppSyncProfile(): AppSyncProfileReadResult {
+        val state = appProfileStore.readState()
+        val config =
+            if (state.hasCommittedProfile) {
+                runCatching { configJson.fromJson(state.committedConfigJson, SyncConfig::class.java) }
+                    .getOrNull()
+                    ?.normalize()
+                    ?: return AppSyncProfileReadResult.Failed(
+                        SyncFailureKind.Fatal, "Committed app config JSON parse failed",
+                    )
+            } else {
+                loadAppSyncConfigStrict() ?: return AppSyncProfileReadResult.Failed(
+                    SyncFailureKind.Fatal, "App sync config load failed",
+                )
+            }
+        val generationSecrets = loadAppSyncSecretsForGeneration(state.activeGeneration)
+        val secrets: SyncSecrets =
+            when (generationSecrets) {
+                is GenerationSecretsReadResult.Found -> generationSecrets.secrets
+                is GenerationSecretsReadResult.NotConfigured -> {
+                    if (state.hasCommittedProfile) {
+                        SyncSecrets()
+                    } else {
+                        when (val legacy = loadLegacyAppSyncSecretsTyped()) {
+                            is GenerationSecretsReadResult.Found -> legacy.secrets
+                            is GenerationSecretsReadResult.NotConfigured -> SyncSecrets()
+                            is GenerationSecretsReadResult.Failed -> {
+                                return AppSyncProfileReadResult.Failed(legacy.kind, legacy.message)
+                            }
+                        }
+                    }
+                }
+                is GenerationSecretsReadResult.Failed -> {
+                    return AppSyncProfileReadResult.Failed(generationSecrets.kind, generationSecrets.message)
+                }
+            }
+        val snapshot = AppSyncProfileSnapshot(state.activeGeneration, config, secrets)
+        return if (secrets.token?.isNotEmpty() == true) {
+            AppSyncProfileReadResult.Found(snapshot)
+        } else {
+            AppSyncProfileReadResult.NotConfigured(snapshot)
+        }
+    }
+
+    /**
+     * #600 评论 #4 问题三：UI 初始化和刷新读取应用级活动 generation 的完整 snapshot。
+     */
+    suspend fun loadCommittedAppSyncProfile(): AppSyncProfileReadResult {
+        return SyncProfileGate.snapshotExclusive { snapshotAppSyncProfile() }
+    }
+
+    /**
+     * #600 评论 #4 问题三：应用级 legacy → generation 迁移。
+     * 镜像 [migrateLegacyProfileIfNeeded] 的语义，使用应用级 API。
+     * 返回非 null 表示迁移失败（调用方必须中止提交）。
+     */
+    private suspend fun migrateLegacyAppProfileIfNeeded(): SettingsSaveResult? {
+        val initialState = appProfileStore.readState()
+        if (initialState.hasCommittedProfile) return null
+        val legacyConfig = loadAppSyncConfigStrict()
+        if (legacyConfig == null) {
+            warn("commitAppSyncProfile: strict read of legacy app config failed — aborting migration before any write")
+            return SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
+        }
+        val legacySecrets = loadLegacyAppSyncSecretsTyped()
+        if (legacySecrets is GenerationSecretsReadResult.Failed) {
+            warn("commitAppSyncProfile: legacy app secrets read failed — aborting migration before any write")
+            return SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, 0L)))
+        }
+        val migrationSecrets =
+            if (legacySecrets is GenerationSecretsReadResult.Found) {
+                legacySecrets.secrets
+            } else {
+                SyncSecrets()
+            }
+        val migrationGeneration = appProfileStore.nextGeneration()
+        val migrationResult = saveAppSyncSecretsForGeneration(migrationGeneration, migrationSecrets)
+        if (migrationResult is SettingsSaveResult.Failed) {
+            warn(
+                "commitAppSyncProfile: legacy app secrets migration to generation " +
+                    "$migrationGeneration failed — aborting",
+            )
+            return migrationResult
+        }
+        appProfileStore.stageConfig(migrationGeneration, configJson.toJson(legacyConfig.normalize()))
+        appProfileStore.stageSecrets(migrationGeneration)
+        appProfileStore.commitGeneration(migrationGeneration, configJson.toJson(legacyConfig.normalize()))
+        return null
+    }
+
+    /**
+     * #600 评论 #4 问题三：应用级提交成功后的安全清理 — 保留 current + previous 一个可回滚版本，
+     * 删除更旧 generation 的应用级安全存储凭据；清理崩溃遗留的未提交 staged 标记。
+     */
+    private suspend fun cleanupStaleAppGenerationCredentials(current: Long): SettingsSaveResult {
+        val failures = mutableListOf<SaveFailure>()
+        val range = generationCleanupRange(current)
+        if (range != null) {
+            for (gen in range) {
+                when (appBridge.deleteAppSyncSecretsForGeneration(gen.toULong())) {
+                    is BridgeResult.Success -> { }
+                    is BridgeResult.Error -> {
+                        failures.add(SaveFailure(SaveField.SYNC_SECRETS, gen))
+                    }
+                    BridgeResult.NotLoaded -> {
+                        failures.add(SaveFailure(SaveField.SYNC_SECRETS, gen))
+                    }
+                }
+            }
+        }
+        try {
+            appProfileStore.clearStaleStagedMarkers(current)
+        } catch (e: Exception) {
+            warn("cleanupStaleAppGenerationCredentials: failed to clear stale staged markers: ${e.message}")
+        }
+        return if (failures.isEmpty()) {
+            SettingsSaveResult.Success
+        } else {
+            SettingsSaveResult.Failed(failures)
+        }
+    }
+
+    /**
+     * #600 评论 #4 问题三：应用级版本化提交同步配置与凭据。
+     *
+     * 镜像 [commitSyncProfile] 的提交协议（stagedConfig → stagedSecrets → 原子 commitGeneration），
+     * 但不带 projectId — 使用 [appProfileStore] 与应用级 Core API。提交成功后调度
+     * AutoSyncScheduler.scheduleFromSettings（与作品级共用同一周期任务，Worker 内部先执行应用级再遍历作品）。
+     */
+    suspend fun commitAppSyncProfile(
+        config: SyncConfig,
+        secrets: SyncSecrets,
+    ): SettingsSaveResult {
+        val committed =
+            SyncProfileGate.commitExclusive {
+                migrateLegacyAppProfileIfNeeded()?.let { return@commitExclusive it }
+
+                val generation = appProfileStore.nextGeneration()
+                val normalized = config.normalize()
+
+                appProfileStore.stageConfig(generation, configJson.toJson(normalized))
+
+                val secretsResult = saveAppSyncSecretsForGeneration(generation, secrets)
+                if (secretsResult is SettingsSaveResult.Failed) {
+                    warn(
+                        "commitAppSyncProfile: staged app secrets save failed for generation $generation — " +
+                            "active generation unchanged, readers keep using the committed version",
+                    )
+                    return@commitExclusive secretsResult
+                }
+                appProfileStore.stageSecrets(generation)
+
+                appProfileStore.commitGeneration(generation, configJson.toJson(normalized))
+
+                val cleanupResult = cleanupStaleAppGenerationCredentials(generation)
+                if (cleanupResult is SettingsSaveResult.Failed) {
+                    warn(
+                        "commitAppSyncProfile: app generation cleanup reported typed failures: " +
+                            cleanupResult.failures.joinToString { "gen=${it.revision} field=${it.field}" },
+                    )
+                }
+
+                val liveConfigResult = saveAppSyncConfig(normalized)
+                if (liveConfigResult is SettingsSaveResult.Failed) {
+                    warn(
+                        "commitAppSyncProfile: live app config mirror update failed for generation $generation — " +
+                            "generation store remains authoritative",
+                    )
+                }
+                val liveSecretsResult = saveAppSyncSecrets(secrets)
+                if (liveSecretsResult is SettingsSaveResult.Failed) {
+                    warn(
+                        "commitAppSyncProfile: live app secrets mirror update failed for generation $generation — " +
+                            "generation-staged secrets remain valid for readers",
+                    )
+                }
+                SettingsSaveResult.Success
+            }
+        if (committed is SettingsSaveResult.Success) {
+            AutoSyncScheduler.scheduleFromSettings(appContext, this)
+        }
+        return committed
     }
 }
 

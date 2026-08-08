@@ -18,12 +18,12 @@ mod tests {
     #[cfg(feature = "github-api")]
     use crate::sync::types::ManifestFileRecord;
     use crate::sync::types::SyncConfig;
-    use crate::sync::types::SyncScope;
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncConflict;
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncManifest;
     use crate::sync::types::SyncProtocol;
+    use crate::sync::types::SyncScope;
     #[cfg(any(feature = "github-api", feature = "git-https"))]
     use crate::sync::types::SyncSecrets;
     #[cfg(feature = "github-api")]
@@ -230,10 +230,22 @@ mod tests {
             "app-meta/sync/sync_state.json",
             crate::sync::types::SyncScope::Project
         ));
-        assert!(SyncService::is_blacklisted_path("app-meta/logs/sync.log", crate::sync::SyncScope::Project));
-        assert!(SyncService::is_blacklisted_path("tmp/runtime.tmp", crate::sync::SyncScope::Project));
-        assert!(SyncService::is_blacklisted_path("cache/build.bin", crate::sync::SyncScope::Project));
-        assert!(SyncService::is_blacklisted_path("backups/vol1.zip", crate::sync::SyncScope::Project));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/logs/sync.log",
+            crate::sync::SyncScope::Project
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "tmp/runtime.tmp",
+            crate::sync::SyncScope::Project
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "cache/build.bin",
+            crate::sync::SyncScope::Project
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "backups/vol1.zip",
+            crate::sync::SyncScope::Project
+        ));
     }
 
     #[test]
@@ -242,15 +254,15 @@ mod tests {
         // 黑名单只管作品仓库内的路径。
         assert!(!SyncService::is_blacklisted_path(
             "app-meta/ai/secrets.local.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
         assert!(!SyncService::is_blacklisted_path(
             "app-meta/stats/events.local/2024-01-01.events.jsonl",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
         assert!(!SyncService::is_blacklisted_path(
             "app-meta/settings/settings.local.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
     }
 
@@ -278,7 +290,13 @@ mod tests {
             fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Err(crate::Error::SyncUnrelatedHistories {
                     detail: "refusing to merge unrelated histories".to_string(),
                 })
@@ -286,7 +304,12 @@ mod tests {
             fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
-            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+            fn stage_paths(
+                &self,
+                _: &Path,
+                _: &[&str],
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
@@ -295,7 +318,11 @@ mod tests {
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
                 Ok(Some("hash".to_string()))
             }
-            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+            fn status(
+                &self,
+                _: &Path,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<Vec<String>> {
                 Ok(vec![])
             }
         }
@@ -380,10 +407,21 @@ mod tests {
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Ok(())
             }
-            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+            fn stage_paths(
+                &self,
+                _: &Path,
+                _: &[&str],
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
@@ -395,7 +433,11 @@ mod tests {
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+            fn status(
+                &self,
+                _: &Path,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<Vec<String>> {
                 Ok(vec![])
             }
             fn init_repo(&self, _: &Path) -> crate::Result<()> {
@@ -419,15 +461,21 @@ mod tests {
     #[test]
     fn test_perform_sync_auto_commits_whitelist() {
         // 同步根是单个作品目录：作品自身内容必须进入白名单。
-        assert!(SyncService::is_whitelisted_path("project.json", crate::sync::SyncScope::Project));
-        assert!(SyncService::is_whitelisted_path("volumes/v1/volume.json", crate::sync::SyncScope::Project));
+        assert!(SyncService::is_whitelisted_path(
+            "project.json",
+            crate::sync::SyncScope::Project
+        ));
+        assert!(SyncService::is_whitelisted_path(
+            "volumes/v1/volume.json",
+            crate::sync::SyncScope::Project
+        ));
         assert!(SyncService::is_whitelisted_path(
             "volumes/v1/chapters/c1/chapter.md",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
         assert!(SyncService::is_whitelisted_path(
             "volumes/v1/chapters/c1/chapter.meta.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
     }
 
@@ -489,49 +537,61 @@ mod tests {
     #[test]
     fn test_whitelist_project_content_and_sync_metadata() {
         // 作品自身内容：project.json / volumes / characters
-        assert!(SyncService::is_whitelisted_path("project.json", crate::sync::SyncScope::Project));
-        assert!(SyncService::is_whitelisted_path("volumes/v1/volume.json", crate::sync::SyncScope::Project));
+        assert!(SyncService::is_whitelisted_path(
+            "project.json",
+            crate::sync::SyncScope::Project
+        ));
+        assert!(SyncService::is_whitelisted_path(
+            "volumes/v1/volume.json",
+            crate::sync::SyncScope::Project
+        ));
         assert!(SyncService::is_whitelisted_path(
             "volumes/v1/chapters/c1/chapter.md",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
         assert!(SyncService::is_whitelisted_path(
             "volumes/v1/chapters/c1/chapter.meta.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
-        assert!(SyncService::is_whitelisted_path("characters/role1.json", crate::sync::SyncScope::Project));
+        assert!(SyncService::is_whitelisted_path(
+            "characters/role1.json",
+            crate::sync::SyncScope::Project
+        ));
         // 作品自己的同步元数据
         assert!(SyncService::is_whitelisted_path(
             "app-meta/sync/manifest.sync.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
 
         // 非白名单：作品外的应用级路径（旧 workspace 布局）与无关文件
         assert!(!SyncService::is_whitelisted_path(
             "app-meta/settings/settings.sync.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
         assert!(!SyncService::is_whitelisted_path(
             "app-meta/settings/settings.local.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
         assert!(!SyncService::is_whitelisted_path(
             "app-meta/stats/daily/2024-01-01.stats.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
         assert!(!SyncService::is_whitelisted_path(
             "app-meta/recent/recent_edits.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
         assert!(!SyncService::is_whitelisted_path(
             "app-meta/device/current_device.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
         assert!(!SyncService::is_whitelisted_path(
             "projects/p1/project.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
-        assert!(!SyncService::is_whitelisted_path("readme.txt", crate::sync::SyncScope::Project));
+        assert!(!SyncService::is_whitelisted_path(
+            "readme.txt",
+            crate::sync::SyncScope::Project
+        ));
     }
 
     #[test]
@@ -540,7 +600,7 @@ mod tests {
         // app_data_root，不在作品仓库内。
         assert!(!SyncService::is_blacklisted_path(
             "app-meta/stats/events.local/2024-01-01.events.jsonl",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
     }
 
@@ -548,7 +608,7 @@ mod tests {
     fn test_device_info_not_blacklisted() {
         assert!(!SyncService::is_blacklisted_path(
             "app-meta/device/current_device.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
     }
 
@@ -556,7 +616,7 @@ mod tests {
     fn test_recent_not_blacklisted() {
         assert!(!SyncService::is_blacklisted_path(
             "app-meta/recent/recent_edits.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
     }
 
@@ -570,7 +630,7 @@ mod tests {
         ));
         assert!(!SyncService::is_blacklisted_path(
             "app-meta/settings/settings.local.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
     }
 
@@ -585,7 +645,94 @@ mod tests {
         ));
         assert!(!SyncService::is_blacklisted_path(
             "app-meta/sync/sync_secrets.local.json",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
+        ));
+    }
+
+    #[test]
+    fn test_sync_local_config_blacklisted_project() {
+        // 作品级：本地同步配置、冲突记录、凭证必须被黑名单，
+        // 否则 perform_sync 跑 backend.status() 时这些文件既不在黑名单也不在白名单，
+        // 返回 DirtyRepoBlocked，同步被自己的配置文件拦死（Issue #600 评论 #4 问题 1）。
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/config.local.json",
+            crate::sync::types::SyncScope::Project
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/conflicts.json",
+            crate::sync::types::SyncScope::Project
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/secrets.local.json",
+            crate::sync::types::SyncScope::Project
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/secrets_g1.local.json",
+            crate::sync::types::SyncScope::Project
+        ));
+    }
+
+    #[test]
+    fn test_sync_local_config_blacklisted_app() {
+        // 应用级：同样路径必须被黑名单。
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/config.local.json",
+            crate::sync::types::SyncScope::App
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/conflicts.json",
+            crate::sync::types::SyncScope::App
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/secrets.local.json",
+            crate::sync::types::SyncScope::App
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/secrets_g1.local.json",
+            crate::sync::types::SyncScope::App
+        ));
+    }
+
+    #[test]
+    fn test_manifest_still_whitelisted() {
+        // 黑名单扩展不能误伤 manifest.sync.json（作品级与应用级均需保持白名单）。
+        assert!(SyncService::is_whitelisted_path(
+            "app-meta/sync/manifest.sync.json",
+            crate::sync::types::SyncScope::Project
+        ));
+        assert!(SyncService::is_whitelisted_path(
+            "app-meta/sync/manifest.sync.json",
+            crate::sync::types::SyncScope::App
+        ));
+    }
+
+    #[test]
+    fn test_project_content_still_whitelisted() {
+        // 黑名单扩展不能误伤作品内容。
+        assert!(SyncService::is_whitelisted_path(
+            "project.json",
+            crate::sync::types::SyncScope::Project
+        ));
+        assert!(SyncService::is_whitelisted_path(
+            "volumes/v1/chapters/c1/chapter.md",
+            crate::sync::types::SyncScope::Project
+        ));
+    }
+
+    #[test]
+    fn test_app_content_still_whitelisted() {
+        // 黑名单扩展不能误伤应用级可同步内容。
+        assert!(SyncService::is_whitelisted_path(
+            "settings.sync.json",
+            crate::sync::types::SyncScope::App
+        ));
+        assert!(SyncService::is_whitelisted_path(
+            "starmaps/x.json",
+            crate::sync::types::SyncScope::App
+        ));
+        assert!(SyncService::is_whitelisted_path(
+            "themes/palettes/dark.json",
+            crate::sync::types::SyncScope::App
         ));
     }
 
@@ -615,13 +762,16 @@ mod tests {
     fn test_blacklist_ignores_tmp_and_lock_files() {
         assert!(SyncService::is_blacklisted_path(
             "volumes/v1/chapters/c1/chapter.md.tmp",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
         assert!(SyncService::is_blacklisted_path(
             "app-meta/sync/state.local.json.lock",
-        crate::sync::SyncScope::Project
+            crate::sync::SyncScope::Project
         ));
-        assert!(SyncService::is_blacklisted_path("app-meta/logs/sync.log", crate::sync::SyncScope::Project));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/logs/sync.log",
+            crate::sync::SyncScope::Project
+        ));
     }
 
     #[test]
@@ -697,7 +847,9 @@ mod tests {
 
         let backend = Git2Backend;
         let paths = vec!["app-meta/sync/state.local.json", "projects/p1/project.json"];
-        backend.stage_paths(dir.path(), &paths).unwrap();
+        backend
+            .stage_paths(dir.path(), &paths, crate::sync::types::SyncScope::Project)
+            .unwrap();
 
         // Ensure neither is staged
         let index = repo.index().unwrap();
@@ -827,12 +979,23 @@ mod tests {
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Err(crate::Error::SyncUnrelatedHistories {
                     detail: "unable to merge unrelated histories".to_string(),
                 })
             }
-            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+            fn stage_paths(
+                &self,
+                _: &Path,
+                _: &[&str],
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
@@ -844,7 +1007,11 @@ mod tests {
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+            fn status(
+                &self,
+                _: &Path,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<Vec<String>> {
                 Ok(vec![])
             }
             fn init_repo(&self, _: &Path) -> crate::Result<()> {
@@ -902,10 +1069,21 @@ mod tests {
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Ok(())
             }
-            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+            fn stage_paths(
+                &self,
+                _: &Path,
+                _: &[&str],
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
@@ -917,7 +1095,11 @@ mod tests {
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+            fn status(
+                &self,
+                _: &Path,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<Vec<String>> {
                 Ok(vec![])
             }
             fn init_repo(&self, _: &Path) -> crate::Result<()> {
@@ -972,10 +1154,21 @@ mod tests {
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Ok(())
             }
-            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+            fn stage_paths(
+                &self,
+                _: &Path,
+                _: &[&str],
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
@@ -987,7 +1180,11 @@ mod tests {
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+            fn status(
+                &self,
+                _: &Path,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<Vec<String>> {
                 Ok(vec![])
             }
             fn init_repo(&self, _: &Path) -> crate::Result<()> {
@@ -1039,10 +1236,21 @@ mod tests {
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Ok(())
             }
-            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+            fn stage_paths(
+                &self,
+                _: &Path,
+                _: &[&str],
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
@@ -1054,7 +1262,11 @@ mod tests {
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+            fn status(
+                &self,
+                _: &Path,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<Vec<String>> {
                 Ok(vec![])
             }
             fn init_repo(&self, _: &Path) -> crate::Result<()> {
@@ -1106,10 +1318,21 @@ mod tests {
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Ok(())
             }
-            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+            fn stage_paths(
+                &self,
+                _: &Path,
+                _: &[&str],
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
@@ -1121,7 +1344,11 @@ mod tests {
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+            fn status(
+                &self,
+                _: &Path,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<Vec<String>> {
                 Ok(vec![])
             }
             fn init_repo(&self, _: &Path) -> crate::Result<()> {
@@ -1169,7 +1396,8 @@ mod tests {
         )
         .unwrap();
 
-        let plan = SyncService::build_sync_plan(dir.path(), crate::sync::SyncScope::Project).unwrap();
+        let plan =
+            SyncService::build_sync_plan(dir.path(), crate::sync::SyncScope::Project).unwrap();
 
         // Ensure plan does not include the blacklisted items
         for file in plan.files_to_upload {
@@ -1226,12 +1454,23 @@ mod tests {
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Err(crate::Error::SyncRemoteBranchNotFound {
                     detail: "ref not found: refs/heads/main".to_string(),
                 })
             }
-            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+            fn stage_paths(
+                &self,
+                _: &Path,
+                _: &[&str],
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
@@ -1243,7 +1482,11 @@ mod tests {
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+            fn status(
+                &self,
+                _: &Path,
+                _: crate::sync::types::SyncScope,
+            ) -> crate::Result<Vec<String>> {
                 Ok(vec!["project.json".to_string()])
             }
             fn init_repo(&self, _: &Path) -> crate::Result<()> {

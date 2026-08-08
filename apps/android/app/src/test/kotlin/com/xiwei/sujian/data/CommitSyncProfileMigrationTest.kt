@@ -31,19 +31,19 @@ class CommitSyncProfileMigrationTest {
         )
     }
 
-    private fun storeOf(repo: SettingsRepository): SyncProfileStore {
+    private fun storeOf(repo: SettingsRepository): ProjectSyncProfileStore {
         val field = SettingsRepository::class.java.getDeclaredField("profileStore\$delegate")
         field.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val lazy = field.get(repo) as kotlin.Lazy<SyncProfileStore>
+        val lazy = field.get(repo) as kotlin.Lazy<ProjectSyncProfileStore>
         return lazy.value
     }
 
-    private suspend fun readStoreState(repo: SettingsRepository): SyncProfileStore.ProfileCommitState {
+    private suspend fun readStoreState(repo: SettingsRepository): ProjectSyncProfileStore.ProfileCommitState {
         val field = SettingsRepository::class.java.getDeclaredField("profileStore\$delegate")
         field.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val lazy = field.get(repo) as kotlin.Lazy<SyncProfileStore>
+        val lazy = field.get(repo) as kotlin.Lazy<ProjectSyncProfileStore>
         return lazy.value.readState("migration-project-id")
     }
 

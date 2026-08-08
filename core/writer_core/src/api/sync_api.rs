@@ -268,10 +268,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    pub fn perform_app_sync_dry_run(
-        &self,
-        config: SyncConfigDto,
-    ) -> ApiResult<SyncPlanDto> {
+    pub fn perform_app_sync_dry_run(&self, config: SyncConfigDto) -> ApiResult<SyncPlanDto> {
         self.core()
             .perform_app_sync_dry_run(&config.into())
             .map(Into::into)
