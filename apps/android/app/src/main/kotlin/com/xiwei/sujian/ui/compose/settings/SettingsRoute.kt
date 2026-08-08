@@ -113,6 +113,12 @@ class SettingsViewModel(
 
     init {
         loadInitial()
+        // #600 评论 #7: 外部同步拉取设置后, 重新从 Core 加载设置状态
+        viewModelScope.launch {
+            com.xiwei.sujian.data.CoreSettingsEvents.settingsChanged.collect {
+                reloadFromExternalSync()
+            }
+        }
         viewModelScope.launch {
             var nextItem: QueueItem? = null
             while (true) {

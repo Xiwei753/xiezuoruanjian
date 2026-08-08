@@ -624,10 +624,17 @@ impl SyncService {
             }
         }
 
+        let old_head_oid = if let Ok(repo) = git2::Repository::open(sync_root) {
+            repo.head().ok().and_then(|r| r.target())
+        } else {
+            None
+        };
+
         let pull_failed = backend
             .pull(sync_root, &config.branch, auth.as_ref(), config.scope)
             .map_err(map_git_error)
             .err();
+        let pull_succeeded = pull_failed.is_none();
         if let Some(e) = pull_failed {
             match handle_pull_error(
                 e,
@@ -638,6 +645,60 @@ impl SyncService {
             ) {
                 PullOutcome::Continue => {}
                 PullOutcome::Return(res) => return Ok(res),
+            }
+        }
+
+        if pull_succeeded {
+            if let Some(old_oid) = old_head_oid {
+                if let Ok(repo) = git2::Repository::open(sync_root) {
+                    if let (Ok(old_commit), Ok(new_head)) =
+                        (repo.find_commit(old_oid), repo.head())
+                    {
+                        if let Ok(new_commit) = new_head.peel_to_commit() {
+                            let old_tree = old_commit.tree().ok();
+                            let new_tree = new_commit.tree().ok();
+                            if let (Some(old_t), Some(new_t)) = (old_tree, new_tree) {
+                                if let Ok(diff) = repo
+                                    .diff_tree_to_tree(Some(&old_t), Some(&new_t), None)
+                                {
+                                    for delta in diff.deltas() {
+                                        let path = delta
+                                            .new_file()
+                                            .path()
+                                            .or_else(|| delta.old_file().path());
+                                        if let Some(p) = path {
+                                            let path_str =
+                                                p.to_string_lossy().to_string();
+                                            if SyncService::is_whitelisted_path(
+                                                &path_str,
+                                                config.scope,
+                                            ) && !SyncService::is_blacklisted_path(
+                                                &path_str,
+                                                config.scope,
+                                            )
+                                            {
+                                                match delta.status() {
+                                                    git2::Delta::Added
+                                                    | git2::Delta::Modified => {
+                                                        result
+                                                            .downloaded_files
+                                                            .push(path_str);
+                                                    }
+                                                    git2::Delta::Deleted => {
+                                                        result
+                                                            .remote_deletes
+                                                            .push(path_str);
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 

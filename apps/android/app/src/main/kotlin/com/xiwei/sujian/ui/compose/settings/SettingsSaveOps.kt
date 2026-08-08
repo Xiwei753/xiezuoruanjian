@@ -19,6 +19,25 @@ fun SettingsViewModel.loadInitial() {
 }
 
 /**
+ * #600 评论 #7: 外部同步拉取设置/主题后, 重新从 Core 加载设置状态.
+ * 监听 CoreSettingsEvents.settingsChanged 触发, 复用 loadInitial 的字段集,
+ * 不新建第二套事件系统.
+ */
+suspend fun SettingsViewModel.reloadFromExternalSync() {
+    val repo = settingsRepo
+    val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
+    val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
+    val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
+    _uiState.update {
+        it.copy(
+            settings = settings,
+            fontSize = fontSize,
+            paletteRecords = paletteRecords,
+        )
+    }
+}
+
+/**
  * #600 评论 #3 问题二：按活动作品读取 committed profile — 无活动作品时返回 Failed。
  */
 internal suspend fun SettingsViewModel.loadCommittedProfileForProject(

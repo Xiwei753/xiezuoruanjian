@@ -3778,4 +3778,236 @@ mod tests {
             "pending_take_remote should bypass debounce"
         );
     }
+    // ── Issue #600 评论 #7: tree diff 填充 downloaded_files/remote_deletes 的测试 ──
+
+    #[cfg(all(not(windows), feature = "git-https"))]
+    fn git_test_signature() -> git2::Signature<'static> {
+        git2::Signature::now("Test User", "test@test.com").unwrap()
+    }
+
+    #[cfg(all(not(windows), feature = "git-https"))]
+    fn commit_file_to_repo(repo: &git2::Repository, path: &str, content: &str, msg: &str) {
+        let full_path = repo.workdir().unwrap().join(path);
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&full_path, content).unwrap();
+
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new(path)).unwrap();
+        index.write().unwrap();
+        let oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(oid).unwrap();
+
+        let sig = git_test_signature();
+        let parents: Vec<git2::Commit> = match repo.head() {
+            Ok(head) => head
+                .peel_to_commit()
+                .ok()
+                .map(|c| vec![c])
+                .unwrap_or_default(),
+            Err(_) => vec![],
+        };
+        let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+
+        repo.commit(
+            Some("refs/heads/main"),
+            &sig,
+            &sig,
+            msg,
+            &tree,
+            &parent_refs,
+        )
+        .unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+    }
+
+    #[cfg(all(not(windows), feature = "git-https"))]
+    fn delete_file_from_repo(repo: &git2::Repository, path: &str, msg: &str) {
+        let full_path = repo.workdir().unwrap().join(path);
+        std::fs::remove_file(&full_path).unwrap();
+
+        let mut index = repo.index().unwrap();
+        index.remove_path(std::path::Path::new(path)).unwrap();
+        index.write().unwrap();
+        let oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(oid).unwrap();
+
+        let sig = git_test_signature();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+
+        repo.commit(
+            Some("refs/heads/main"),
+            &sig,
+            &sig,
+            msg,
+            &tree,
+            &[&head],
+        )
+        .unwrap();
+    }
+
+    #[cfg(all(not(windows), feature = "git-https"))]
+    fn make_sync_config(remote_url: &str) -> SyncConfig {
+        SyncConfig {
+            enabled: true,
+            remote_url: remote_url.to_string(),
+            transport: SyncProtocol::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            backend_type: BackendType::Git,
+            username: String::new(),
+            has_network_permission: true,
+            has_network_state_permission: true,
+            scope: SyncScope::Project,
+        }
+    }
+
+    #[cfg(all(not(windows), feature = "git-https"))]
+    fn make_sync_secrets() -> SyncSecrets {
+        SyncSecrets {
+            token: Some("dummy".to_string()),
+            ssh_private_key: None,
+        }
+    }
+
+    #[cfg(all(not(windows), feature = "git-https"))]
+    fn hard_reset_to(repo: &git2::Repository, oid: git2::Oid) {
+        let obj = repo.find_object(oid, None).unwrap();
+        let mut cb = git2::build::CheckoutBuilder::default();
+        cb.force();
+        repo.reset(&obj, git2::ResetType::Hard, Some(&mut cb))
+            .unwrap();
+        let mut ref_main = repo.find_reference("refs/heads/main").unwrap();
+        ref_main.set_target(oid, "reset").unwrap();
+    }
+
+    #[test]
+    #[cfg(all(not(windows), feature = "git-https"))]
+    fn test_pull_tree_diff_downloaded_files() {
+        // 正面测试：远端修改 whitelisted 文件，pull 后 downloaded_files 应包含该文件。
+        let remote_dir = tempfile::tempdir().unwrap();
+        let _bare_repo = git2::Repository::init_bare(remote_dir.path()).unwrap();
+        let remote_url = format!("file://{}", remote_dir.path().to_string_lossy());
+
+        let local_dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(local_dir.path()).unwrap();
+
+        // 本地创建初始 commit A 并 push 到远端
+        commit_file_to_repo(&repo, "project.json", r#"{"version":1}"#, "initial");
+        repo.remote("origin", &remote_url).unwrap();
+        let backend = Git2Backend;
+        backend.push(local_dir.path(), "main", None).unwrap();
+
+        // 在本地创建新 commit B 修改 project.json，push 到远端
+        let oid_a = repo.head().unwrap().target().unwrap();
+        commit_file_to_repo(&repo, "project.json", r#"{"version":2}"#, "modify");
+        backend.push(local_dir.path(), "main", None).unwrap();
+
+        // 重置本地 repo 到 commit A（模拟本地落后于远端）
+        hard_reset_to(&repo, oid_a);
+
+        // 调用 perform_sync
+        let config = make_sync_config(&remote_url);
+        let secrets = make_sync_secrets();
+        let result =
+            SyncService::perform_sync(local_dir.path(), &config, &secrets, &backend).unwrap();
+
+        assert_eq!(result.status, SyncStatus::Success);
+        assert!(
+            result
+                .downloaded_files
+                .contains(&"project.json".to_string()),
+            "downloaded_files should contain project.json, got: {:?}",
+            result.downloaded_files
+        );
+    }
+
+    #[test]
+    #[cfg(all(not(windows), feature = "git-https"))]
+    fn test_pull_tree_diff_blacklisted_not_in_downloaded() {
+        // 反面测试：远端修改黑名单文件，pull 后 downloaded_files 不应包含该文件。
+        let remote_dir = tempfile::tempdir().unwrap();
+        let _bare_repo = git2::Repository::init_bare(remote_dir.path()).unwrap();
+        let remote_url = format!("file://{}", remote_dir.path().to_string_lossy());
+
+        let local_dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(local_dir.path()).unwrap();
+
+        // 本地创建初始 commit A（包含 whitelisted 文件）并 push 到远端
+        commit_file_to_repo(&repo, "project.json", r#"{"version":1}"#, "initial");
+        repo.remote("origin", &remote_url).unwrap();
+        let backend = Git2Backend;
+        backend.push(local_dir.path(), "main", None).unwrap();
+
+        // 在本地创建新 commit B 添加黑名单文件，push 到远端
+        let oid_a = repo.head().unwrap().target().unwrap();
+        commit_file_to_repo(
+            &repo,
+            "app-meta/sync/config.local.json",
+            r#"{"key":"val"}"#,
+            "add blacklisted",
+        );
+        backend.push(local_dir.path(), "main", None).unwrap();
+
+        // 重置本地 repo 到 commit A（模拟本地落后于远端）
+        hard_reset_to(&repo, oid_a);
+
+        // 调用 perform_sync
+        let config = make_sync_config(&remote_url);
+        let secrets = make_sync_secrets();
+        let result =
+            SyncService::perform_sync(local_dir.path(), &config, &secrets, &backend).unwrap();
+
+        assert_eq!(result.status, SyncStatus::Success);
+        assert!(
+            !result
+                .downloaded_files
+                .contains(&"app-meta/sync/config.local.json".to_string()),
+            "downloaded_files should NOT contain blacklisted file, got: {:?}",
+            result.downloaded_files
+        );
+    }
+
+    #[test]
+    #[cfg(all(not(windows), feature = "git-https"))]
+    fn test_pull_tree_diff_remote_deletes() {
+        // 删除测试：远端删除 whitelisted 文件，pull 后 remote_deletes 应包含该文件。
+        let remote_dir = tempfile::tempdir().unwrap();
+        let _bare_repo = git2::Repository::init_bare(remote_dir.path()).unwrap();
+        let remote_url = format!("file://{}", remote_dir.path().to_string_lossy());
+
+        let local_dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(local_dir.path()).unwrap();
+
+        // 本地创建初始 commit A（包含 whitelisted 文件）并 push 到远端
+        commit_file_to_repo(&repo, "project.json", r#"{"version":1}"#, "initial");
+        repo.remote("origin", &remote_url).unwrap();
+        let backend = Git2Backend;
+        backend.push(local_dir.path(), "main", None).unwrap();
+
+        // 在本地创建新 commit B 删除 project.json，push 到远端
+        let oid_a = repo.head().unwrap().target().unwrap();
+        delete_file_from_repo(&repo, "project.json", "delete project.json");
+        backend.push(local_dir.path(), "main", None).unwrap();
+
+        // 重置本地 repo 到 commit A（模拟本地落后于远端）
+        hard_reset_to(&repo, oid_a);
+
+        // 调用 perform_sync
+        let config = make_sync_config(&remote_url);
+        let secrets = make_sync_secrets();
+        let result =
+            SyncService::perform_sync(local_dir.path(), &config, &secrets, &backend).unwrap();
+
+        assert_eq!(result.status, SyncStatus::Success);
+        assert!(
+            result
+                .remote_deletes
+                .contains(&"project.json".to_string()),
+            "remote_deletes should contain project.json, got: {:?}",
+            result.remote_deletes
+        );
+    }
 }

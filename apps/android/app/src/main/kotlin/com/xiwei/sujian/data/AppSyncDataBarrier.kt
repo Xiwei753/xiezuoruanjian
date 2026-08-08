@@ -39,26 +39,32 @@ class AppSyncDataBarrier(
     }
 
     /**
-     * 同步后根据下载文件列表失效对应缓存. 每个分支独立 try-catch,
+     * 同步后根据下载/删除文件列表失效对应缓存. 每个分支独立 try-catch,
      * 单个缓存重载失败不影响其他缓存.
+     *
+     * #600 评论 #7: 除 downloadedFiles 外也检查 localDeletes/remoteDeletes —
+     * Git pull 可能删除文件（远端删除），删除一个 starmap 或 palette 文件
+     * 同样必须清缓存。
      */
     suspend fun reloadAfterSync(result: SyncResult) {
         val downloaded = result.downloadedFiles
-        if (downloaded.any { it.startsWith("starmaps/") }) {
+        val deleted = result.localDeletes + result.remoteDeletes
+        val allChanged = downloaded + deleted
+        if (allChanged.any { it.startsWith("starmaps/") }) {
             try {
                 invalidateStarmapCache()
             } catch (e: Exception) {
                 DiagnosticsLogger.w(TAG, "invalidate starmap cache failed", e)
             }
         }
-        if (downloaded.any { it == "settings.sync.json" }) {
+        if (allChanged.any { it == "settings.sync.json" }) {
             try {
                 reloadSettings()
             } catch (e: Exception) {
                 DiagnosticsLogger.w(TAG, "reload settings failed", e)
             }
         }
-        if (downloaded.any { it.startsWith("themes/palettes/") }) {
+        if (allChanged.any { it.startsWith("themes/palettes/") }) {
             try {
                 reloadThemes()
             } catch (e: Exception) {

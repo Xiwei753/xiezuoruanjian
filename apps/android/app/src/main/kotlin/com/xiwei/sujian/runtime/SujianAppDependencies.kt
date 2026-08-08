@@ -48,8 +48,8 @@ class DefaultAppServiceContainer(context: Context) : AppServiceContainer {
     private val appSyncDataBarrier: AppSyncDataBarrier =
         AppSyncDataBarrier(
             starmapBridge = BridgeProvider.getStarmapBridge(appContext),
-            reloadSettings = { },
-            reloadThemes = { },
+            reloadSettings = { settingsRepository.notifySyncableSettingsChangedExternally() },
+            reloadThemes = { settingsRepository.notifyPaletteCatalogChangedExternally() },
             invalidateStarmapCache = { starmapRepository.invalidateCache() },
         )
     override val syncCoordinator: SyncCoordinator =

@@ -168,6 +168,22 @@ class SettingsRepository(
         return saveSyncableSettings(syncable.copy(fontSize = fontSize.toDouble()))
     }
 
+    /**
+     * #600 评论 #7: 外部同步拉取后通知设置已变化 — 复用 CoreSettingsEvents 事件总线,
+     * 让 SettingsViewModel / ThemeController 等监听方重新从 Core 读取最新设置。
+     */
+    fun notifySyncableSettingsChangedExternally() {
+        CoreSettingsEvents.markEditorChanged()
+    }
+
+    /**
+     * #600 评论 #7: 外部同步拉取后通知主题调色板已变化 — 复用 CoreSettingsEvents 事件总线,
+     * 让 ThemeController 重新加载 palette catalog。
+     */
+    fun notifyPaletteCatalogChangedExternally() {
+        CoreSettingsEvents.markEditorChanged()
+    }
+
     fun loadSyncState(projectId: String): SyncState {
         return when (val result = syncBridge.loadSyncState(projectId)) {
             is BridgeResult.Success -> result.data
