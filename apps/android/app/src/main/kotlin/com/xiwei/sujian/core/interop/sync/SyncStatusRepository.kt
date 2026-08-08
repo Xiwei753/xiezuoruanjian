@@ -1,7 +1,7 @@
 package com.xiwei.sujian.core.interop.sync
-import com.xiwei.sujian.core.interop.settings.SettingsRepository
-import com.xiwei.sujian.core.model.SyncStatus
-import com.xiwei.sujian.feature.sync.model.SyncIndicatorState
+import com.xiwei.sujian.feature.sync.data.SyncRepository
+import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
+import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 
 class SyncStatusRepository(
-    private val settingsRepository: SettingsRepository,
+    private val settingsRepository: SyncRepository,
 ) {
     private val _state = MutableStateFlow(SyncIndicatorState.Unconfigured)
     val state: StateFlow<SyncIndicatorState> = _state.asStateFlow()

@@ -47,52 +47,60 @@ enum class SyncFailureKind {
         when (this) {
             RetryableNetwork ->
                 SyncOutcome.RetryableFailure(
-                    com.xiwei.sujian.core.model.SyncStatus.RecoverableError,
+                    com.xiwei.sujian.feature.sync.data.model.SyncStatus.RecoverableError,
                     RetryableNetwork,
                 )
             RetryableIo ->
                 SyncOutcome.RetryableFailure(
-                    com.xiwei.sujian.core.model.SyncStatus.RecoverableError,
+                    com.xiwei.sujian.feature.sync.data.model.SyncStatus.RecoverableError,
                     RetryableIo,
                 )
             Authentication ->
                 SyncOutcome.TerminalFailure(
-                    com.xiwei.sujian.core.model.SyncStatus.FatalError,
+                    com.xiwei.sujian.feature.sync.data.model.SyncStatus.FatalError,
                     Authentication,
                 )
-            Conflict -> SyncOutcome.TerminalFailure(com.xiwei.sujian.core.model.SyncStatus.Conflict, Conflict)
+            Conflict ->
+                SyncOutcome.TerminalFailure(
+                    com.xiwei.sujian.feature.sync.data.model.SyncStatus.Conflict,
+                    Conflict,
+                )
             DirtyRepository ->
                 SyncOutcome.TerminalFailure(
-                    com.xiwei.sujian.core.model.SyncStatus.DirtyRepoBlocked,
+                    com.xiwei.sujian.feature.sync.data.model.SyncStatus.DirtyRepoBlocked,
                     DirtyRepository,
                 )
-            Protocol -> SyncOutcome.TerminalFailure(com.xiwei.sujian.core.model.SyncStatus.FatalError, Protocol)
+            Protocol ->
+                SyncOutcome.TerminalFailure(
+                    com.xiwei.sujian.feature.sync.data.model.SyncStatus.FatalError,
+                    Protocol,
+                )
             NativeUnavailable ->
                 SyncOutcome.TerminalFailure(
-                    com.xiwei.sujian.core.model.SyncStatus.FatalError,
+                    com.xiwei.sujian.feature.sync.data.model.SyncStatus.FatalError,
                     NativeUnavailable,
                 )
             DocumentSaveFailed ->
                 SyncOutcome.TerminalFailure(
-                    com.xiwei.sujian.core.model.SyncStatus.FatalError,
+                    com.xiwei.sujian.feature.sync.data.model.SyncStatus.FatalError,
                     DocumentSaveFailed,
                 )
             DocumentRevisionChanged ->
                 SyncOutcome.TerminalFailure(
-                    com.xiwei.sujian.core.model.SyncStatus.FatalError,
+                    com.xiwei.sujian.feature.sync.data.model.SyncStatus.FatalError,
                     DocumentRevisionChanged,
                 )
             DocumentConflict ->
                 SyncOutcome.TerminalFailure(
-                    com.xiwei.sujian.core.model.SyncStatus.Conflict,
+                    com.xiwei.sujian.feature.sync.data.model.SyncStatus.Conflict,
                     DocumentConflict,
                 )
             DocumentUnavailable ->
                 SyncOutcome.TerminalFailure(
-                    com.xiwei.sujian.core.model.SyncStatus.FatalError,
+                    com.xiwei.sujian.feature.sync.data.model.SyncStatus.FatalError,
                     DocumentUnavailable,
                 )
-            Fatal -> SyncOutcome.TerminalFailure(com.xiwei.sujian.core.model.SyncStatus.FatalError, Fatal)
+            Fatal -> SyncOutcome.TerminalFailure(com.xiwei.sujian.feature.sync.data.model.SyncStatus.FatalError, Fatal)
         }
 
     /**
@@ -113,15 +121,15 @@ enum class SyncFailureKind {
          * #592 三：Core 返回的 SyncResult.status 到失败类型的映射。
          * 用于正式同步成功路径中 Core 报告的失败状态，与 Bridge 错误码路径共用同一类型。
          */
-        fun fromSyncStatus(status: com.xiwei.sujian.core.model.SyncStatus): SyncFailureKind =
+        fun fromSyncStatus(status: com.xiwei.sujian.feature.sync.data.model.SyncStatus): SyncFailureKind =
             when (status) {
-                com.xiwei.sujian.core.model.SyncStatus.RecoverableError -> RetryableNetwork
-                com.xiwei.sujian.core.model.SyncStatus.Error -> Fatal
-                com.xiwei.sujian.core.model.SyncStatus.Conflict,
-                com.xiwei.sujian.core.model.SyncStatus.PartialConflict,
+                com.xiwei.sujian.feature.sync.data.model.SyncStatus.RecoverableError -> RetryableNetwork
+                com.xiwei.sujian.feature.sync.data.model.SyncStatus.Error -> Fatal
+                com.xiwei.sujian.feature.sync.data.model.SyncStatus.Conflict,
+                com.xiwei.sujian.feature.sync.data.model.SyncStatus.PartialConflict,
                 -> Conflict
-                com.xiwei.sujian.core.model.SyncStatus.DirtyRepoBlocked -> DirtyRepository
-                com.xiwei.sujian.core.model.SyncStatus.FatalError -> Fatal
+                com.xiwei.sujian.feature.sync.data.model.SyncStatus.DirtyRepoBlocked -> DirtyRepository
+                com.xiwei.sujian.feature.sync.data.model.SyncStatus.FatalError -> Fatal
                 else -> Fatal
             }
 

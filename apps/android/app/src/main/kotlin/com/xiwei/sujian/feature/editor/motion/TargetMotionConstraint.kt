@@ -1,6 +1,6 @@
 package com.xiwei.sujian.feature.editor.motion
 
-import com.xiwei.sujian.core.model.Immutable
+import androidx.compose.runtime.Immutable
 
 /**
  * #595 四：target 级动画约束 — 不是第二个动画状态写入者，只是约束条件。

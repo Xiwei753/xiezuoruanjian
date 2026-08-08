@@ -4,7 +4,11 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.project.ProjectRepository
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
+import com.xiwei.sujian.core.interop.stats.StatsRepository
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
+import com.xiwei.sujian.feature.project.data.ChapterRepository
+import com.xiwei.sujian.feature.project.data.RecentEditsRepository
+import com.xiwei.sujian.feature.sync.data.SyncRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -63,13 +67,19 @@ class EditorViewModelInjectionTest {
             object : com.xiwei.sujian.app.SujianAppDependencies {
                 override val appServiceBridge: AppServiceBridge = bridge
                 override val projectRepository: ProjectRepository = ProjectRepository(app, bridge)
+                override val chapterRepository: ChapterRepository = ChapterRepository(app, bridge)
+                override val recentEditsRepository: RecentEditsRepository = RecentEditsRepository(app, bridge)
+                override val statsRepository: StatsRepository = StatsRepository(bridge.statsBridge)
                 override val settingsRepository: SettingsRepository = SettingsRepository(app, bridge)
+                override val themeRepository: com.xiwei.sujian.app.theme.ThemeRepository =
+                    com.xiwei.sujian.app.theme.ThemeRepository(app, bridge)
+                override val syncRepository: SyncRepository = SyncRepository(app, bridge)
                 override val syncStatusRepository: com.xiwei.sujian.core.interop.sync.SyncStatusRepository =
-                    com.xiwei.sujian.core.interop.sync.SyncStatusRepository(settingsRepository)
+                    com.xiwei.sujian.core.interop.sync.SyncStatusRepository(syncRepository)
                 override val syncCoordinator: com.xiwei.sujian.core.interop.sync.SyncCoordinator =
-                    com.xiwei.sujian.core.interop.sync.SyncCoordinator(settingsRepository, syncStatusRepository)
+                    com.xiwei.sujian.core.interop.sync.SyncCoordinator(syncRepository, syncStatusRepository)
                 override val starmapRepository: com.xiwei.sujian.core.interop.starmap.StarMapRepository =
-                    com.xiwei.sujian.core.interop.app.BridgeProvider.getStarmapBridge(app).repository
+                    com.xiwei.sujian.app.di.AppServiceProvider.getStarmapBridge(app).repository
             }
         val coordinator = EditorSessionCoordinator(bridge)
 
@@ -114,6 +124,10 @@ class EditorViewModelInjectionTest {
         vm.initialize(
             ProjectRepository(app, bridge),
             SettingsRepository(app, bridge),
+            syncRepo = SyncRepository(app, bridge),
+            chapterRepo = ChapterRepository(app, bridge),
+            recentEditsRepo = RecentEditsRepository(app, bridge),
+            statsRepo = StatsRepository(bridge.statsBridge),
         )
         vm.initChapter("p", "v", "a", "A")
         // 等待 initChapter 的加载落定（无 native 时必失败 → loading=false）。
@@ -136,7 +150,14 @@ class EditorViewModelInjectionTest {
         val app = RuntimeEnvironment.getApplication()
         val bridge = createBridge()
         val vm = EditorViewModel(app)
-        vm.initialize(ProjectRepository(app, bridge), SettingsRepository(app, bridge))
+        vm.initialize(
+            ProjectRepository(app, bridge),
+            SettingsRepository(app, bridge),
+            syncRepo = SyncRepository(app, bridge),
+            chapterRepo = ChapterRepository(app, bridge),
+            recentEditsRepo = RecentEditsRepository(app, bridge),
+            statsRepo = StatsRepository(bridge.statsBridge),
+        )
         vm.initChapter("p", "v", "a", "A")
         assertTrue(vm.isCurrentChapter("p", "v", "a"))
         assertFalse(vm.isCurrentChapter("p", "v", "b"))

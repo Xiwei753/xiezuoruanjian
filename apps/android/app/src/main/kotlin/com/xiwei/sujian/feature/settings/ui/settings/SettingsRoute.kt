@@ -38,6 +38,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.LocalSujianAppDependencies
 import com.xiwei.sujian.app.navigation.SettingsSection
+import com.xiwei.sujian.app.theme.ThemeRepository
 import com.xiwei.sujian.core.designsystem.component.SujianListItem
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.layout.SujianListDetailScaffoldWithNavigator
@@ -45,7 +46,8 @@ import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
 import com.xiwei.sujian.core.interop.sync.SyncCoordinator
-import com.xiwei.sujian.core.model.LocalSettings
+import com.xiwei.sujian.feature.settings.data.model.LocalSettings
+import com.xiwei.sujian.feature.sync.data.SyncRepository
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -57,6 +59,8 @@ import kotlinx.parcelize.Parcelize
 
 class SettingsViewModel(
     internal val settingsRepo: SettingsRepository,
+    internal val themeRepo: ThemeRepository,
+    internal val syncRepo: SyncRepository,
     internal val syncCoordinator: com.xiwei.sujian.core.interop.sync.SyncCoordinator,
 ) : ViewModel() {
     /** internal 暴露 viewModelScope 供 extension functions 使用。 */
@@ -165,10 +169,12 @@ class SettingsViewModel(
 
     class Factory(
         internal val repo: SettingsRepository,
+        internal val themeRepo: ThemeRepository,
+        internal val syncRepo: SyncRepository,
         internal val coordinator: com.xiwei.sujian.core.interop.sync.SyncCoordinator,
     ) : androidx.lifecycle.ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return modelClass.cast(SettingsViewModel(repo, coordinator)) as T
+            return modelClass.cast(SettingsViewModel(repo, themeRepo, syncRepo, coordinator)) as T
         }
     }
 
@@ -292,7 +298,15 @@ fun SettingsRoute(
 ) {
     val deps = LocalSujianAppDependencies.current
     val vm: SettingsViewModel =
-        viewModel(factory = SettingsViewModel.Factory(deps.settingsRepository, deps.syncCoordinator))
+        viewModel(
+            factory =
+                SettingsViewModel.Factory(
+                    deps.settingsRepository,
+                    deps.themeRepository,
+                    deps.syncRepository,
+                    deps.syncCoordinator,
+                ),
+        )
     val uiState by vm.uiState.collectAsState()
     val snackbarHostState = rememberSettingsSnackbarHost(vm)
     // 列表—详情窗格与返回/可预见返回必须共享同一个 navigator 实例：

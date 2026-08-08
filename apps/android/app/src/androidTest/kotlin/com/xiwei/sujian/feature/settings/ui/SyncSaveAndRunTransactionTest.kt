@@ -3,7 +3,7 @@ package com.xiwei.sujian.feature.settings.ui
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.xiwei.sujian.core.interop.project.ActiveProjectGate
-import com.xiwei.sujian.core.model.SyncConfig
+import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import org.junit.Assert.assertEquals
 import org.junit.Assert.fail
@@ -47,7 +47,13 @@ class SyncSaveAndRunTransactionTest {
 
         var vm: SettingsViewModel? = null
         instrumentation.runOnMainSync {
-            vm = SettingsViewModel(repo, session.deps.syncCoordinator)
+            vm =
+                SettingsViewModel(
+                    repo,
+                    session.deps.themeRepository,
+                    session.deps.syncRepository,
+                    session.deps.syncCoordinator,
+                )
         }
 
         // 同一批次进入保存队列：旧配置编辑 → 保存并同步（捕获旧值）→ 更新为新配置。
@@ -64,7 +70,7 @@ class SyncSaveAndRunTransactionTest {
             SyncCommandState.FAILURE,
             vm!!.uiState.value.projectPerformSyncState,
         )
-        val persisted = repo.loadSyncConfig(projectData.projectId)
+        val persisted = session.deps.syncRepository.loadSyncConfig(projectData.projectId)
         assertEquals(
             "事务不得用捕获的旧值反向覆盖排队中的更新版本（#592）",
             "https://b.example/repo.git",
@@ -88,7 +94,13 @@ class SyncSaveAndRunTransactionTest {
 
         var vm: SettingsViewModel? = null
         instrumentation.runOnMainSync {
-            vm = SettingsViewModel(repo, session.deps.syncCoordinator)
+            vm =
+                SettingsViewModel(
+                    repo,
+                    session.deps.themeRepository,
+                    session.deps.syncRepository,
+                    session.deps.syncCoordinator,
+                )
         }
         instrumentation.runOnMainSync {
             vm!!.handleIntent(SettingsIntent.UpdateProjectSyncConfig(config))
@@ -101,7 +113,7 @@ class SyncSaveAndRunTransactionTest {
         assertEquals(
             "无并发新编辑时事务必须保存捕获 revision 对应的配置",
             "https://c.example/repo.git",
-            repo.loadSyncConfig(projectData.projectId).remoteUrl,
+            session.deps.syncRepository.loadSyncConfig(projectData.projectId).remoteUrl,
         )
     }
 

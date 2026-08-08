@@ -1,8 +1,8 @@
 package com.xiwei.sujian.core.interop.project
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
-import com.xiwei.sujian.core.model.ChapterContent
-import com.xiwei.sujian.core.model.ChapterSaveReceipt
+import com.xiwei.sujian.feature.project.data.model.ChapterContent
+import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
 
 class WritingBridge(private val appService: AppServiceBridge) {
     fun openChapter(

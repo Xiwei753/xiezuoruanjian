@@ -1,7 +1,7 @@
 package com.xiwei.sujian.core.interop.sync
 import com.xiwei.sujian.core.interop.common.BridgeResult
-import com.xiwei.sujian.core.model.SyncStatus
 import com.xiwei.sujian.feature.settings.ui.SettingsTransactionCommand
+import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -34,13 +34,15 @@ class SyncCoordinatorTest {
         val outcomes: List<SyncOutcome> =
             listOf(
                 SyncOutcome.Completed(
-                    com.xiwei.sujian.core.model.SyncResult(status = com.xiwei.sujian.core.model.SyncStatus.Success),
+                    com.xiwei.sujian.feature.sync.data.model.SyncResult(
+                        status = com.xiwei.sujian.feature.sync.data.model.SyncStatus.Success,
+                    ),
                 ),
                 SyncOutcome.Disabled,
                 SyncOutcome.Unconfigured,
                 SyncOutcome.Busy,
-                SyncOutcome.RetryableFailure(com.xiwei.sujian.core.model.SyncStatus.RecoverableError),
-                SyncOutcome.TerminalFailure(com.xiwei.sujian.core.model.SyncStatus.Conflict),
+                SyncOutcome.RetryableFailure(com.xiwei.sujian.feature.sync.data.model.SyncStatus.RecoverableError),
+                SyncOutcome.TerminalFailure(com.xiwei.sujian.feature.sync.data.model.SyncStatus.Conflict),
             )
         assertEquals(6, outcomes.distinctBy { it::class }.size)
     }
@@ -140,22 +142,22 @@ class SyncCoordinatorTest {
         val commands: List<SettingsTransactionCommand> =
             listOf(
                 SettingsTransactionCommand.SaveAndRunSync(
-                    config = com.xiwei.sujian.core.model.SyncConfig(),
+                    config = com.xiwei.sujian.feature.sync.data.model.SyncConfig(),
                     configRevision = 1L,
-                    secrets = com.xiwei.sujian.core.model.SyncSecrets(),
+                    secrets = com.xiwei.sujian.feature.sync.data.model.SyncSecrets(),
                     secretsRevision = 1L,
-                    trigger = com.xiwei.sujian.feature.sync.model.SyncTrigger.Manual,
+                    trigger = com.xiwei.sujian.feature.sync.data.model.SyncTrigger.Manual,
                 ),
                 SettingsTransactionCommand.SaveAndRunDryRun(
-                    config = com.xiwei.sujian.core.model.SyncConfig(),
+                    config = com.xiwei.sujian.feature.sync.data.model.SyncConfig(),
                     configRevision = 1L,
-                    secrets = com.xiwei.sujian.core.model.SyncSecrets(),
+                    secrets = com.xiwei.sujian.feature.sync.data.model.SyncSecrets(),
                     secretsRevision = 1L,
                 ),
                 SettingsTransactionCommand.SaveAndRunDiagnostics(
-                    config = com.xiwei.sujian.core.model.SyncConfig(),
+                    config = com.xiwei.sujian.feature.sync.data.model.SyncConfig(),
                     configRevision = 1L,
-                    secrets = com.xiwei.sujian.core.model.SyncSecrets(),
+                    secrets = com.xiwei.sujian.feature.sync.data.model.SyncSecrets(),
                     secretsRevision = 1L,
                 ),
             )

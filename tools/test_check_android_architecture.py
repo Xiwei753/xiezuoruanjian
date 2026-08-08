@@ -137,12 +137,27 @@ class LayerRuleTests(unittest.TestCase):
             {
                 f"{APP_PREFIX}/app/theme/StatsScreen.kt": (
                     "package com.xiwei.sujian.app.theme\n\n"
-                    "import com.xiwei.sujian.core.interop.app.BridgeProvider\n"
-                    "class Bad { val b = BridgeProvider }\n"
+                    "import com.xiwei.sujian.core.interop.app.AppServiceBridge\n"
+                    "class Bad { val b: AppServiceBridge? = null }\n"
                 )
             },
         )
-        self.assertTrue(findings, "UI 层直接引用 BridgeProvider 必须被报告")
+        self.assertTrue(findings, "UI 层直接引用 AppServiceBridge 必须被报告")
+
+    def test_ui_bridge_rule_exempts_theme_repository(self):
+        """ThemeRepository 承担 Repository 职责，豁免引用 Bridge/UniFFI（#602 Phase 7）。"""
+        findings = self.run_rule(
+            "ui-no-uniffi-jna-bridge",
+            {
+                f"{APP_PREFIX}/app/theme/ThemeRepository.kt": (
+                    "package com.xiwei.sujian.app.theme\n\n"
+                    "import com.xiwei.sujian.core.interop.app.AppServiceBridge\n"
+                    "import uniffi.writer_core.WriterCoreFfi\n"
+                    "class ThemeRepository(val bridge: AppServiceBridge)\n"
+                )
+            },
+        )
+        self.assertEqual([], findings, "ThemeRepository 引用 Bridge/UniFFI 应被豁免")
 
     def test_ui_bridge_rule_passes_repository_usage(self):
         findings = self.run_rule(
@@ -340,8 +355,9 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "source-contracts",
             {
-                f"{APP_PREFIX}/core/interop/settings/SettingsRepository.kt": (
-                    "package com.xiwei.sujian.core.interop.settings\n\nclass SettingsRepository\n"
+                # 同步函数契约检查 SyncRepository（#602 Phase 7 从 SettingsRepository 拆分）
+                f"{APP_PREFIX}/feature/sync/data/SyncRepository.kt": (
+                    "package com.xiwei.sujian.feature.sync.data\n\nclass SyncRepository\n"
                 ),
                 f"{APP_PREFIX}/core/interop/sync/SyncProfileGate.kt": (
                     "package com.xiwei.sujian.core.interop.sync\n\nclass SyncProfileGate\n"

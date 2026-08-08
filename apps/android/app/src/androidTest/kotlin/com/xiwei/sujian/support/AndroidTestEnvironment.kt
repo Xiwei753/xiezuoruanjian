@@ -203,18 +203,28 @@ class TestSujianAppDependencies(
         )
     override val appServiceBridge: AppServiceBridge = AppServiceBridge(testHolder)
     override val projectRepository: ProjectRepository = ProjectRepository(appContext, appServiceBridge)
+    override val chapterRepository: com.xiwei.sujian.feature.project.data.ChapterRepository =
+        com.xiwei.sujian.feature.project.data.ChapterRepository(appContext, appServiceBridge)
+    override val recentEditsRepository: com.xiwei.sujian.feature.project.data.RecentEditsRepository =
+        com.xiwei.sujian.feature.project.data.RecentEditsRepository(appContext, appServiceBridge)
+    override val statsRepository: com.xiwei.sujian.core.interop.stats.StatsRepository =
+        com.xiwei.sujian.core.interop.stats.StatsRepository(appServiceBridge.statsBridge)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge, prefsSuffix)
+    override val themeRepository: com.xiwei.sujian.app.theme.ThemeRepository =
+        com.xiwei.sujian.app.theme.ThemeRepository(appContext, appServiceBridge)
+    override val syncRepository: com.xiwei.sujian.feature.sync.data.SyncRepository =
+        com.xiwei.sujian.feature.sync.data.SyncRepository(appContext, appServiceBridge, prefsSuffix)
     override val syncStatusRepository: com.xiwei.sujian.core.interop.sync.SyncStatusRepository =
         com.xiwei.sujian.core.interop.sync.SyncStatusRepository(
-            settingsRepository,
+            syncRepository,
         )
     override val syncCoordinator: com.xiwei.sujian.core.interop.sync.SyncCoordinator =
         com.xiwei.sujian.core.interop.sync.SyncCoordinator(
-            settingsRepository,
+            syncRepository,
             syncStatusRepository,
         )
     override val starmapRepository: com.xiwei.sujian.core.interop.starmap.StarMapRepository =
-        com.xiwei.sujian.core.interop.app.BridgeProvider.getStarmapBridge(appContext).repository
+        com.xiwei.sujian.app.di.AppServiceProvider.getStarmapBridge(appContext).repository
     private val _sessionCoordinator = lazy { EditorSessionCoordinator(appServiceBridge) }
     val sessionCoordinator: EditorSessionCoordinator get() = _sessionCoordinator.value
     private val _coordinator =

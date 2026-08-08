@@ -1,11 +1,15 @@
 package com.xiwei.sujian.core.interop.project
 
-import com.xiwei.sujian.core.model.Project
-import com.xiwei.sujian.core.model.RecentEdit
+import com.xiwei.sujian.feature.project.data.RecentEditsRepository
+import com.xiwei.sujian.feature.project.data.model.Project
+import com.xiwei.sujian.feature.project.data.model.RecentEdit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class ProjectUseCase(private val repository: ProjectRepository) {
+class ProjectUseCase(
+    private val repository: ProjectRepository,
+    private val recentEditsRepository: RecentEditsRepository,
+) {
     suspend fun getProjects(): List<Project> =
         withContext(Dispatchers.IO) {
             repository.getProjects()
@@ -13,7 +17,7 @@ class ProjectUseCase(private val repository: ProjectRepository) {
 
     suspend fun getRecentEdits(limit: Int): List<RecentEdit> =
         withContext(Dispatchers.IO) {
-            repository.getRecentEdits().take(limit)
+            recentEditsRepository.getRecentEdits().take(limit)
         }
 
     suspend fun createProject(title: String) =

@@ -6,6 +6,9 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.project.ChapterContentSavePort
 import com.xiwei.sujian.core.interop.project.ProjectRepository
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
+import com.xiwei.sujian.core.interop.stats.StatsRepository
+import com.xiwei.sujian.feature.project.data.ChapterRepository
+import com.xiwei.sujian.feature.project.data.RecentEditsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestDispatcher
@@ -65,7 +68,13 @@ class EditorViewModelStaleLoadTest {
             )
         val repo = ProjectRepository(app, bridge)
         val vm = EditorViewModel(app)
-        vm.initialize(repo, SettingsRepository(app, bridge))
+        vm.initialize(
+            repo,
+            SettingsRepository(app, bridge),
+            chapterRepo = ChapterRepository(app, bridge),
+            recentEditsRepo = RecentEditsRepository(app, bridge),
+            statsRepo = StatsRepository(bridge.statsBridge),
+        )
         return vm
     }
 
@@ -82,7 +91,7 @@ class EditorViewModelStaleLoadTest {
                         volumeId: String,
                         chapterId: String,
                         content: String,
-                    ): BridgeResult<com.xiwei.sujian.core.model.ChapterSaveReceipt> =
+                    ): BridgeResult<com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt> =
                         BridgeResult.Error(
                             com.xiwei.sujian.core.interop.common.ResultEnvelope.errorOf(
                                 "DETERMINISTIC_SAVE_FAILURE",

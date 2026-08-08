@@ -4,8 +4,8 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.xiwei.sujian.app.diagnostics.DiagnosticsEvents
 import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
-import com.xiwei.sujian.core.interop.settings.SettingsRepository
-import com.xiwei.sujian.feature.sync.model.SyncTrigger
+import com.xiwei.sujian.feature.sync.data.SyncRepository
+import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 
 /**
  * #600 评论 #3 问题三：自动同步不再依赖 ActiveProjectGate（进程重启后 null）。
@@ -20,7 +20,7 @@ class AutoSyncWorker(
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
         // 没有外部存储权限时（例如首次启动尚未授权）不得触碰 appContainer /
-        // BridgeProvider / WriterAppServiceHolder，避免提前初始化 Rust Core（Issue #600）。
+        // AppServiceProvider / WriterAppServiceHolder，避免提前初始化 Rust Core（Issue #600）。
         if (!com.xiwei.sujian.core.platform.AndroidDataRoot.hasStorageAccess()) {
             return Result.success()
         }
@@ -72,13 +72,13 @@ class AutoSyncWorker(
     /**
      * #600 评论 #4/#5：应用级自动同步 — 设置/全局星图/主题调色板。
      *
-     * 读 [SettingsRepository.snapshotAppSyncProfile]，若 enabled && autoSync 则按
+     * 读 [SyncRepository.snapshotAppSyncProfile]，若 enabled && autoSync 则按
      * [shouldAppSyncNow] 判断是否到同步时间点，到点后调用 [SyncCoordinator.runAppSync]。
      *
      * 返回与作品级相同的 [ProjectSyncOutcome] 分类，纳入 doWork 整体 outcome 聚合。
      */
     private suspend fun syncApp(deps: com.xiwei.sujian.app.SujianAppDependencies): ProjectSyncOutcome {
-        val settingsRepository = deps.settingsRepository
+        val settingsRepository = deps.syncRepository
         val snapshotResult =
             try {
                 SyncProfileGate.snapshotExclusive { settingsRepository.snapshotAppSyncProfile() }
@@ -140,7 +140,7 @@ class AutoSyncWorker(
         deps: com.xiwei.sujian.app.SujianAppDependencies,
         projectId: String,
     ): ProjectSyncOutcome {
-        val settingsRepository = deps.settingsRepository
+        val settingsRepository = deps.syncRepository
         // #592 六：一次只读取一份完整不可变快照（generation + config + secrets）。
         val snapshotResult =
             try {
@@ -199,7 +199,7 @@ class AutoSyncWorker(
 
     /** 判定该作品是否到同步时间点（interval/elapsed 检查）。 */
     private suspend fun shouldSyncNow(
-        settingsRepository: SettingsRepository,
+        settingsRepository: SyncRepository,
         projectId: String,
         snapshot: ProjectSyncProfileSnapshot,
     ): Boolean {
@@ -230,7 +230,7 @@ class AutoSyncWorker(
      * 镜像 [shouldSyncNow] 但使用应用级 sync state（<app_data_root>/app-meta/sync/state.local.json）。
      */
     private suspend fun shouldAppSyncNow(
-        settingsRepository: SettingsRepository,
+        settingsRepository: SyncRepository,
         snapshot: AppSyncProfileSnapshot,
     ): Boolean {
         val state =

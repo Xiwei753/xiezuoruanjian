@@ -14,9 +14,11 @@ class SettingsViewModelInjectionTest {
     fun factory_createsViewModelWithNonNullDeps() {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
         val repo = com.xiwei.sujian.core.interop.settings.SettingsRepository(context)
-        val syncStatusRepo = com.xiwei.sujian.core.interop.sync.SyncStatusRepository(repo)
-        val coordinator = com.xiwei.sujian.core.interop.sync.SyncCoordinator(repo, syncStatusRepo)
-        val factory = SettingsViewModel.Factory(repo, coordinator)
+        val themeRepo = com.xiwei.sujian.app.theme.ThemeRepository(context)
+        val syncRepo = com.xiwei.sujian.feature.sync.data.SyncRepository(context)
+        val syncStatusRepo = com.xiwei.sujian.core.interop.sync.SyncStatusRepository(syncRepo)
+        val coordinator = com.xiwei.sujian.core.interop.sync.SyncCoordinator(syncRepo, syncStatusRepo)
+        val factory = SettingsViewModel.Factory(repo, themeRepo, syncRepo, coordinator)
         val vm = factory.create(SettingsViewModel::class.java)
         assertNotNull(vm)
     }
@@ -25,9 +27,11 @@ class SettingsViewModelInjectionTest {
     fun constructorInjectedDeps_noInitializeNeeded() {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
         val repo = com.xiwei.sujian.core.interop.settings.SettingsRepository(context)
-        val syncStatusRepo = com.xiwei.sujian.core.interop.sync.SyncStatusRepository(repo)
-        val coordinator = com.xiwei.sujian.core.interop.sync.SyncCoordinator(repo, syncStatusRepo)
-        val vm = SettingsViewModel(repo, coordinator)
+        val themeRepo = com.xiwei.sujian.app.theme.ThemeRepository(context)
+        val syncRepo = com.xiwei.sujian.feature.sync.data.SyncRepository(context)
+        val syncStatusRepo = com.xiwei.sujian.core.interop.sync.SyncStatusRepository(syncRepo)
+        val coordinator = com.xiwei.sujian.core.interop.sync.SyncCoordinator(syncRepo, syncStatusRepo)
+        val vm = SettingsViewModel(repo, themeRepo, syncRepo, coordinator)
         assertEquals(16f, vm.uiState.value.fontSize, 0.01f)
     }
 
@@ -35,9 +39,11 @@ class SettingsViewModelInjectionTest {
     fun factory_producesDistinctInstances() {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
         val repo = com.xiwei.sujian.core.interop.settings.SettingsRepository(context)
-        val syncStatusRepo = com.xiwei.sujian.core.interop.sync.SyncStatusRepository(repo)
-        val coordinator = com.xiwei.sujian.core.interop.sync.SyncCoordinator(repo, syncStatusRepo)
-        val factory = SettingsViewModel.Factory(repo, coordinator)
+        val themeRepo = com.xiwei.sujian.app.theme.ThemeRepository(context)
+        val syncRepo = com.xiwei.sujian.feature.sync.data.SyncRepository(context)
+        val syncStatusRepo = com.xiwei.sujian.core.interop.sync.SyncStatusRepository(syncRepo)
+        val coordinator = com.xiwei.sujian.core.interop.sync.SyncCoordinator(syncRepo, syncStatusRepo)
+        val factory = SettingsViewModel.Factory(repo, themeRepo, syncRepo, coordinator)
         val vm1 = factory.create(SettingsViewModel::class.java)
         val vm2 = factory.create(SettingsViewModel::class.java)
         assertNotNull(vm1)

@@ -1,9 +1,9 @@
 package com.xiwei.sujian.feature.settings.ui
 
 import com.xiwei.sujian.core.interop.sync.SyncFailureKind
-import com.xiwei.sujian.core.model.LocalSettings
-import com.xiwei.sujian.core.model.SyncCapabilityData
-import com.xiwei.sujian.feature.sync.model.SyncTrigger
+import com.xiwei.sujian.feature.settings.data.model.LocalSettings
+import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
+import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 
 // ! # 设置页类型声明（从 SettingsRoute 拆分）
 
@@ -22,20 +22,20 @@ sealed interface SyncProfileLoadState {
     data object Loading : SyncProfileLoadState
 
     data class Ready(
-        val config: com.xiwei.sujian.core.model.SyncConfig,
-        val secrets: com.xiwei.sujian.core.model.SyncSecrets,
+        val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
+        val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
     ) : SyncProfileLoadState
 
     data class Unconfigured(
-        val config: com.xiwei.sujian.core.model.SyncConfig,
-        val secrets: com.xiwei.sujian.core.model.SyncSecrets,
+        val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
+        val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
     ) : SyncProfileLoadState
 
     data class Failed(val kind: SyncFailureKind, val message: String?) : SyncProfileLoadState
 }
 
 /** 已确认（非失败）状态下可用的 config — Failed/Loading 返回 null，保留当前 UI 值。 */
-internal val SyncProfileLoadState.confirmedConfig: com.xiwei.sujian.core.model.SyncConfig?
+internal val SyncProfileLoadState.confirmedConfig: com.xiwei.sujian.feature.sync.data.model.SyncConfig?
     get() =
         when (this) {
             is SyncProfileLoadState.Ready -> config
@@ -45,7 +45,7 @@ internal val SyncProfileLoadState.confirmedConfig: com.xiwei.sujian.core.model.S
         }
 
 /** 已确认（非失败）状态下可用的 secrets — Failed/Loading 返回 null，保留当前 UI 值。 */
-internal val SyncProfileLoadState.confirmedSecrets: com.xiwei.sujian.core.model.SyncSecrets?
+internal val SyncProfileLoadState.confirmedSecrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets?
     get() =
         when (this) {
             is SyncProfileLoadState.Ready -> secrets
@@ -69,8 +69,10 @@ data class SettingsUiState(
     val settings: LocalSettings = LocalSettings(),
     val fontSize: Float = 16f,
     // 作品级同步
-    val projectSyncConfig: com.xiwei.sujian.core.model.SyncConfig = com.xiwei.sujian.core.model.SyncConfig(),
-    val projectSyncSecrets: com.xiwei.sujian.core.model.SyncSecrets = com.xiwei.sujian.core.model.SyncSecrets(),
+    val projectSyncConfig: com.xiwei.sujian.feature.sync.data.model.SyncConfig =
+        com.xiwei.sujian.feature.sync.data.model.SyncConfig(),
+    val projectSyncSecrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets =
+        com.xiwei.sujian.feature.sync.data.model.SyncSecrets(),
     val projectSyncCapability: SyncCapabilityData = SyncCapabilityData(),
     val projectSyncProfileLoadState: SyncProfileLoadState = SyncProfileLoadState.Loading,
     val projectDryRunState: SyncCommandState = SyncCommandState.IDLE,
@@ -78,8 +80,10 @@ data class SettingsUiState(
     val projectPerformSyncState: SyncCommandState = SyncCommandState.IDLE,
     val projectSyncResult: StructuredSyncResult? = null,
     // 应用级同步
-    val appSyncConfig: com.xiwei.sujian.core.model.SyncConfig = com.xiwei.sujian.core.model.SyncConfig(),
-    val appSyncSecrets: com.xiwei.sujian.core.model.SyncSecrets = com.xiwei.sujian.core.model.SyncSecrets(),
+    val appSyncConfig: com.xiwei.sujian.feature.sync.data.model.SyncConfig =
+        com.xiwei.sujian.feature.sync.data.model.SyncConfig(),
+    val appSyncSecrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets =
+        com.xiwei.sujian.feature.sync.data.model.SyncSecrets(),
     val appSyncProfileLoadState: SyncProfileLoadState = SyncProfileLoadState.Loading,
     val appDryRunState: SyncCommandState = SyncCommandState.IDLE,
     val appTestConnectionState: SyncCommandState = SyncCommandState.IDLE,
@@ -102,14 +106,16 @@ sealed interface SettingsIntent {
     data class UpdateFontSize(val fontSize: Float) : SettingsIntent
 
     // 作品级同步
-    data class UpdateProjectSyncConfig(val config: com.xiwei.sujian.core.model.SyncConfig) : SettingsIntent
+    data class UpdateProjectSyncConfig(val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig) : SettingsIntent
 
-    data class UpdateProjectSyncSecrets(val secrets: com.xiwei.sujian.core.model.SyncSecrets) : SettingsIntent
+    data class UpdateProjectSyncSecrets(
+        val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
+    ) : SettingsIntent
 
     // 应用级同步
-    data class UpdateAppSyncConfig(val config: com.xiwei.sujian.core.model.SyncConfig) : SettingsIntent
+    data class UpdateAppSyncConfig(val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig) : SettingsIntent
 
-    data class UpdateAppSyncSecrets(val secrets: com.xiwei.sujian.core.model.SyncSecrets) : SettingsIntent
+    data class UpdateAppSyncSecrets(val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets) : SettingsIntent
 
     data object Refresh : SettingsIntent
 
@@ -144,51 +150,51 @@ sealed interface SettingsSaveCommand {
     ) : SettingsSaveCommand
 
     data class ProjectSyncConfig(
-        val config: com.xiwei.sujian.core.model.SyncConfig,
+        val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
         val revision: Long,
     ) : SettingsSaveCommand
 
     data class ProjectSyncSecrets(
-        val secrets: com.xiwei.sujian.core.model.SyncSecrets,
+        val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
         val revision: Long,
     ) : SettingsSaveCommand
 
     data class AppSyncConfig(
-        val config: com.xiwei.sujian.core.model.SyncConfig,
+        val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
         val revision: Long,
     ) : SettingsSaveCommand
 
     data class AppSyncSecrets(
-        val secrets: com.xiwei.sujian.core.model.SyncSecrets,
+        val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
         val revision: Long,
     ) : SettingsSaveCommand
 }
 
 sealed interface SettingsTransactionCommand {
-    val config: com.xiwei.sujian.core.model.SyncConfig
+    val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig
     val configRevision: Long
-    val secrets: com.xiwei.sujian.core.model.SyncSecrets
+    val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets
     val secretsRevision: Long
 
     data class SaveAndRunSync(
-        override val config: com.xiwei.sujian.core.model.SyncConfig,
+        override val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
         override val configRevision: Long,
-        override val secrets: com.xiwei.sujian.core.model.SyncSecrets,
+        override val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
         override val secretsRevision: Long,
         val trigger: SyncTrigger,
     ) : SettingsTransactionCommand
 
     data class SaveAndRunDryRun(
-        override val config: com.xiwei.sujian.core.model.SyncConfig,
+        override val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
         override val configRevision: Long,
-        override val secrets: com.xiwei.sujian.core.model.SyncSecrets,
+        override val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
         override val secretsRevision: Long,
     ) : SettingsTransactionCommand
 
     data class SaveAndRunDiagnostics(
-        override val config: com.xiwei.sujian.core.model.SyncConfig,
+        override val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
         override val configRevision: Long,
-        override val secrets: com.xiwei.sujian.core.model.SyncSecrets,
+        override val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
         override val secretsRevision: Long,
     ) : SettingsTransactionCommand
 
@@ -196,24 +202,24 @@ sealed interface SettingsTransactionCommand {
     // 与作品级事务对称，但提交到应用级 profile（commitAppSyncProfile），
     // 执行应用级同步 API（runAppSync / performAppSyncDryRun / performAppSyncDiagnostics）。
     data class SaveAndRunAppSync(
-        override val config: com.xiwei.sujian.core.model.SyncConfig,
+        override val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
         override val configRevision: Long,
-        override val secrets: com.xiwei.sujian.core.model.SyncSecrets,
+        override val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
         override val secretsRevision: Long,
         val trigger: SyncTrigger,
     ) : SettingsTransactionCommand
 
     data class SaveAndRunAppDryRun(
-        override val config: com.xiwei.sujian.core.model.SyncConfig,
+        override val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
         override val configRevision: Long,
-        override val secrets: com.xiwei.sujian.core.model.SyncSecrets,
+        override val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
         override val secretsRevision: Long,
     ) : SettingsTransactionCommand
 
     data class SaveAndRunAppDiagnostics(
-        override val config: com.xiwei.sujian.core.model.SyncConfig,
+        override val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
         override val configRevision: Long,
-        override val secrets: com.xiwei.sujian.core.model.SyncSecrets,
+        override val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
         override val secretsRevision: Long,
     ) : SettingsTransactionCommand
 }

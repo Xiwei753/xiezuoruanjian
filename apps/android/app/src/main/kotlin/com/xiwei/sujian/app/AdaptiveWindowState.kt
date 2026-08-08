@@ -7,9 +7,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import com.xiwei.sujian.core.model.AvoidRegionKind
-import com.xiwei.sujian.core.model.LayoutPlan
-import com.xiwei.sujian.core.model.WorkspacePaneMode
+import com.xiwei.sujian.app.layout.model.AvoidRegionKind
+import com.xiwei.sujian.app.layout.model.LayoutPlan
+import com.xiwei.sujian.app.layout.model.WorkspacePaneMode
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable

@@ -2,7 +2,7 @@ package com.xiwei.sujian.core.interop.sync
 import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.starmap.StarMapBridge
-import com.xiwei.sujian.core.model.SyncResult
+import com.xiwei.sujian.feature.sync.data.model.SyncResult
 
 /**
  * #600 评论 #5: 应用级同步数据屏障 - 在应用级同步前后保护本地缓存一致性.

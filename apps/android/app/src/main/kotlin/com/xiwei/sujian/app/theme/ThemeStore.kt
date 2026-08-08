@@ -4,7 +4,7 @@ import android.content.Context
 import com.xiwei.sujian.app.theme.model.BuiltinTheme
 import com.xiwei.sujian.app.theme.model.ThemePaletteRecord
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
-import com.xiwei.sujian.core.model.LocalSettings
+import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,9 +19,14 @@ object ThemeStore {
     private var _foldDeviceClass: String? = null
     private var _systemIsDark: Boolean = false
 
+    private var _themeRepository: ThemeRepository? = null
     private var _settingsRepository: SettingsRepository? = null
 
-    fun initialize(settingsRepository: SettingsRepository) {
+    fun initialize(
+        themeRepository: ThemeRepository,
+        settingsRepository: SettingsRepository,
+    ) {
+        _themeRepository = themeRepository
         _settingsRepository = settingsRepository
     }
 
@@ -30,10 +35,11 @@ object ThemeStore {
     }
 
     fun reload() {
-        val repo = _settingsRepository ?: return
-        val settings = repo.getLocalSettings()
-        val builtinTheme = resolveBuiltinTheme(repo, settings)
-        val paletteRecord = resolvePaletteRecord(repo, settings)
+        val settingsRepo = _settingsRepository ?: return
+        val themeRepo = _themeRepository ?: return
+        val settings = settingsRepo.getLocalSettings()
+        val builtinTheme = resolveBuiltinTheme(themeRepo, settings)
+        val paletteRecord = resolvePaletteRecord(themeRepo, settings)
         val sysDark = _systemIsDark
         _uiState.value =
             ThemeUiState(
@@ -50,18 +56,17 @@ object ThemeStore {
     }
 
     fun refreshPaletteRecords() {
-        val repo = _settingsRepository ?: return
+        val themeRepo = _themeRepository ?: return
         try {
-            _paletteRecords.value = repo.listPaletteRecords()
+            _paletteRecords.value = themeRepo.listPaletteRecords()
         } catch (_: Exception) {
             _paletteRecords.value = emptyList()
         }
         val current = _uiState.value
         if (current.colorSource == "saved_palette" && current.selectedPaletteId.isNotEmpty()) {
-            val repo2 = _settingsRepository ?: return
             val parts = current.selectedPaletteId.split(":")
             if (parts.size == 2) {
-                val record = repo2.loadPaletteRecord(parts[0], parts[1])
+                val record = themeRepo.loadPaletteRecord(parts[0], parts[1])
                 if (record != null) {
                     _uiState.value = current.copy(selectedPaletteRecord = record)
                 }
@@ -70,17 +75,18 @@ object ThemeStore {
     }
 
     fun captureDynamicColorAndSave(context: Context) {
-        val repo = _settingsRepository ?: return
-        val settings = repo.getLocalSettings()
+        val settingsRepo = _settingsRepository ?: return
+        val themeRepo = _themeRepository ?: return
+        val settings = settingsRepo.getLocalSettings()
         if (!settings.dynamicColorEnabled) return
         val result = ThemePaletteHelper.extractDynamicColorSchemes(context) ?: return
         val deviceClass =
             _foldDeviceClass
-                ?: repo.detectDeviceClassFromFoldFeature(
+                ?: themeRepo.detectDeviceClassFromFoldFeature(
                     false,
                     context.resources?.configuration?.smallestScreenWidthDp ?: 0,
                 )
-        repo.saveDynamicColorPaletteToCatalog(
+        themeRepo.saveDynamicColorPaletteToCatalog(
             lightScheme = result.lightScheme,
             darkScheme = result.darkScheme,
             deviceClass = deviceClass,
@@ -135,9 +141,10 @@ object ThemeStore {
         deviceId: String,
         fingerprint: String,
     ) {
-        val repo = _settingsRepository ?: return
-        repo.deletePaletteRecord(deviceId, fingerprint)
-        val settings = repo.getLocalSettings()
+        val settingsRepo = _settingsRepository ?: return
+        val themeRepo = _themeRepository ?: return
+        themeRepo.deletePaletteRecord(deviceId, fingerprint)
+        val settings = settingsRepo.getLocalSettings()
         val parts = settings.selectedPaletteId.split(":")
         if (parts.size == 2 && parts[0] == deviceId && parts[1] == fingerprint) {
             val newSettings =
@@ -145,7 +152,7 @@ object ThemeStore {
                     selectedPaletteId = "",
                     colorSource = "built_in",
                 )
-            repo.saveLocalSettings(newSettings)
+            settingsRepo.saveLocalSettings(newSettings)
         }
         refreshPaletteRecords()
         reload()
@@ -164,26 +171,26 @@ object ThemeStore {
     }
 
     private fun resolveBuiltinTheme(
-        repo: SettingsRepository,
+        themeRepo: ThemeRepository,
         settings: LocalSettings,
     ): BuiltinTheme? {
         if (settings.selectedBuiltinThemeId.isEmpty()) return null
         return try {
-            repo.listBuiltinThemes().find { it.themeId == settings.selectedBuiltinThemeId }
+            themeRepo.listBuiltinThemes().find { it.themeId == settings.selectedBuiltinThemeId }
         } catch (_: Exception) {
             null
         }
     }
 
     private fun resolvePaletteRecord(
-        repo: SettingsRepository,
+        themeRepo: ThemeRepository,
         settings: LocalSettings,
     ): ThemePaletteRecord? {
         if (settings.selectedPaletteId.isEmpty()) return null
         return try {
             val parts = settings.selectedPaletteId.split(":")
             if (parts.size == 2) {
-                repo.loadPaletteRecord(parts[0], parts[1])
+                themeRepo.loadPaletteRecord(parts[0], parts[1])
             } else {
                 null
             }

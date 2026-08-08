@@ -12,7 +12,10 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
 import kotlinx.coroutines.flow.StateFlow
 
-class ThemeController(private val settingsRepository: SettingsRepository) {
+class ThemeController(
+    private val settingsRepository: SettingsRepository,
+    private val themeRepository: ThemeRepository,
+) {
     private val store: ThemeStore = ThemeStore
 
     val uiState: StateFlow<ThemeUiState>
@@ -69,11 +72,12 @@ class ThemeController(private val settingsRepository: SettingsRepository) {
 fun rememberThemeController(
     context: Context,
     settingsRepository: SettingsRepository,
+    themeRepository: ThemeRepository,
 ): ThemeController {
-    val controller = remember { ThemeController(settingsRepository) }
+    val controller = remember { ThemeController(settingsRepository, themeRepository) }
 
     DisposableEffect(Unit) {
-        ThemeStore.initialize(settingsRepository)
+        ThemeStore.initialize(themeRepository, settingsRepository)
         onDispose { }
     }
 
@@ -84,7 +88,7 @@ fun rememberThemeController(
             LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_RESUME) {
                     val syncState = deps.syncStatusRepository.state.value
-                    if (syncState == com.xiwei.sujian.feature.sync.model.SyncIndicatorState.Synced) {
+                    if (syncState == com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState.Synced) {
                         ThemeStore.onSyncCompleted()
                     }
                     controller.reload()

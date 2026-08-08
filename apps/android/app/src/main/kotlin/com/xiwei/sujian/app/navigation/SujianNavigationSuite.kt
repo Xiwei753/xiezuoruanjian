@@ -64,15 +64,15 @@ import com.xiwei.sujian.core.designsystem.component.SujianSnackbar
 import com.xiwei.sujian.core.designsystem.component.SujianTopAppBar
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
-import com.xiwei.sujian.feature.home.ui.ProjectWorkspaceScreen
-import com.xiwei.sujian.feature.home.ui.WorkspaceNavigationState
-import com.xiwei.sujian.feature.home.ui.buildInitialHistory
-import com.xiwei.sujian.feature.home.ui.deriveRestoreDestination
+import com.xiwei.sujian.feature.project.ui.ProjectNavigationState
+import com.xiwei.sujian.feature.project.ui.ProjectWorkspaceScreen
+import com.xiwei.sujian.feature.project.ui.buildInitialHistory
+import com.xiwei.sujian.feature.project.ui.deriveRestoreDestination
 import com.xiwei.sujian.feature.settings.ui.SettingsRoute
 import com.xiwei.sujian.feature.starmap.ui.StarMapPlaceholderScreen
 import com.xiwei.sujian.feature.stats.ui.StatsScreen
-import com.xiwei.sujian.feature.sync.model.SyncIndicatorState
-import com.xiwei.sujian.feature.sync.model.SyncTrigger
+import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
+import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -157,13 +157,13 @@ private fun rememberSujianTopBarTitle(
     }
 
 /** 顶栏返回逻辑 — 先生成唯一的返回动作，再决定是否显示图标（#597 评论问题三）。
- * 工作区内的返回（正文→章节树→作品列表）统一走 [WorkspaceNavigationState.back]，
+ * 工作区内的返回（正文→章节树→作品列表）统一走 [ProjectNavigationState.back]，
  * 与系统返回、页面返回共用同一个工作区 navigator 历史（返回历史始终同一份）。 */
 @Composable
 private fun rememberSujianTopBarNavigation(
     currentRoute: SujianRoute,
     env: SujianTopBarEnv,
-    workspaceNavState: WorkspaceNavigationState,
+    workspaceNavState: ProjectNavigationState,
 ): Pair<ImageVector?, (() -> Unit)?> {
     val onNavigationClick: (() -> Unit)? =
         when (currentRoute) {
@@ -252,7 +252,7 @@ private fun SujianNavDisplayContent(
     backStack: NavBackStack<NavKey>,
     appState: SujianAppState,
     settingsDetailSection: SettingsSection?,
-    workspaceNavState: WorkspaceNavigationState,
+    workspaceNavState: ProjectNavigationState,
     onSettingsDetailSectionChange: (SettingsSection?) -> Unit,
 ) {
     NavDisplay(
@@ -452,7 +452,7 @@ private fun SujianWideNavScaffold(
 /** 工作区 navigator — 在导航套件层创建的唯一实例（#597：返回历史始终同一份）。 */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
-private fun rememberSujianWorkspaceNavState(appState: SujianAppState): WorkspaceNavigationState {
+private fun rememberSujianWorkspaceNavState(appState: SujianAppState): ProjectNavigationState {
     val initialDestination =
         remember(
             appState.currentProjectId,
@@ -467,7 +467,7 @@ private fun rememberSujianWorkspaceNavState(appState: SujianAppState): Workspace
         }
     val initialHistory = remember(initialDestination) { buildInitialHistory(initialDestination) }
     val navigator = rememberListDetailPaneScaffoldNavigator(initialDestinationHistory = initialHistory)
-    return remember { WorkspaceNavigationState(navigator) }
+    return remember { ProjectNavigationState(navigator) }
 }
 
 /** 工作区返回处理 — 系统返回/预测返回（正文→章节树→作品列表）。
@@ -476,7 +476,7 @@ private fun rememberSujianWorkspaceNavState(appState: SujianAppState): Workspace
 @Composable
 private fun SujianWorkspaceBackEffects(
     currentRoute: SujianRoute,
-    workspaceNavState: WorkspaceNavigationState,
+    workspaceNavState: ProjectNavigationState,
     coroutineScope: CoroutineScope,
 ) {
     if (currentRoute is SujianRoute.Works) {
@@ -518,7 +518,7 @@ private fun rememberSujianTopBarInfo(
     appState: SujianAppState,
     chrome: SujianChromeSpec,
     env: SujianTopBarEnv,
-    workspaceNavState: WorkspaceNavigationState,
+    workspaceNavState: ProjectNavigationState,
 ): SujianTopBarInfo {
     val topBarNavigation =
         rememberSujianTopBarNavigation(currentRoute, env, workspaceNavState)

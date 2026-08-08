@@ -16,8 +16,8 @@ class CommitSyncProfileRollbackTest {
         val snapshot =
             ProjectSyncProfileSnapshot(
                 generation = 3L,
-                config = com.xiwei.sujian.core.model.SyncConfig(enabled = true),
-                secrets = com.xiwei.sujian.core.model.SyncSecrets(token = "t"),
+                config = com.xiwei.sujian.feature.sync.data.model.SyncConfig(enabled = true),
+                secrets = com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "t"),
             )
         assertTrue(snapshot.generation == 3L)
         assertTrue(snapshot.config.enabled == true)

@@ -5,10 +5,10 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.RepositoryException
 import com.xiwei.sujian.core.interop.common.ResultEnvelope
 import com.xiwei.sujian.core.interop.project.ActiveDocumentGate
-import com.xiwei.sujian.core.interop.settings.SettingsRepository
-import com.xiwei.sujian.core.model.SyncResult
-import com.xiwei.sujian.core.model.SyncStatus
-import com.xiwei.sujian.feature.sync.model.SyncTrigger
+import com.xiwei.sujian.feature.sync.data.SyncRepository
+import com.xiwei.sujian.feature.sync.data.model.SyncResult
+import com.xiwei.sujian.feature.sync.data.model.SyncStatus
+import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -38,7 +38,7 @@ sealed class SyncOutcome {
 }
 
 class SyncCoordinator(
-    private val settingsRepository: SettingsRepository,
+    private val settingsRepository: SyncRepository,
     private val syncStatusRepository: SyncStatusRepository,
     private val appSyncDataBarrier: AppSyncDataBarrier? = null,
 ) {
@@ -211,7 +211,7 @@ class SyncCoordinator(
      * flush + secrets override + performAppSync → 分类结果），但**不依赖 projectId** —
      * 应用级同步目标唯一，不经过 ActiveProjectGate。
      *
-     * - snapshot 未传入时在锁内取 [SettingsRepository.snapshotAppSyncProfile]；
+     * - snapshot 未传入时在锁内取 [SyncRepository.snapshotAppSyncProfile]；
      * - secrets override 是进程级（与作品级共用同一 override 机制），由
      *   [SyncSession.runExclusive] 保证同一时刻只有一个同步在执行，不会串用 token；
      * - 应用级同步不签发文档身份 lease（应用级同步目标不含活动正文，无需文档身份校验）；

@@ -1,5 +1,5 @@
 package com.xiwei.sujian.core.interop.sync
-import com.xiwei.sujian.core.interop.settings.SettingsRepository
+import com.xiwei.sujian.feature.sync.data.SyncRepository
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -17,9 +17,9 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class LegacySecretsTypedReadTest {
-    private fun createRepo(): SettingsRepository {
+    private fun createRepo(): SyncRepository {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
-        return SettingsRepository(context)
+        return SyncRepository(context)
     }
 
     @Test

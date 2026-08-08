@@ -17,16 +17,22 @@ class AppSyncSettingsViewModelTest {
     private fun createVm(): SettingsViewModel {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
         val repo = com.xiwei.sujian.core.interop.settings.SettingsRepository(context)
-        val syncStatusRepo = com.xiwei.sujian.core.interop.sync.SyncStatusRepository(repo)
-        val coordinator = com.xiwei.sujian.core.interop.sync.SyncCoordinator(repo, syncStatusRepo)
-        return SettingsViewModel(repo, coordinator)
+        val themeRepo = com.xiwei.sujian.app.theme.ThemeRepository(context)
+        val syncRepo = com.xiwei.sujian.feature.sync.data.SyncRepository(context)
+        val syncStatusRepo = com.xiwei.sujian.core.interop.sync.SyncStatusRepository(syncRepo)
+        val coordinator = com.xiwei.sujian.core.interop.sync.SyncCoordinator(syncRepo, syncStatusRepo)
+        return SettingsViewModel(repo, themeRepo, syncRepo, coordinator)
     }
 
     @Test
     fun `project and app sync config are independent`() {
         val vm = createVm()
-        val projectConfig = com.xiwei.sujian.core.model.SyncConfig(enabled = true, remoteUrl = PROJECT_REMOTE_URL)
-        val appConfig = com.xiwei.sujian.core.model.SyncConfig(enabled = false, remoteUrl = APP_REMOTE_URL)
+        val projectConfig =
+            com.xiwei.sujian.feature.sync.data.model.SyncConfig(
+                enabled = true,
+                remoteUrl = PROJECT_REMOTE_URL,
+            )
+        val appConfig = com.xiwei.sujian.feature.sync.data.model.SyncConfig(enabled = false, remoteUrl = APP_REMOTE_URL)
         vm.handleIntent(SettingsIntent.UpdateProjectSyncConfig(projectConfig))
         vm.handleIntent(SettingsIntent.UpdateAppSyncConfig(appConfig))
         // project config 不受 app config 影响
@@ -40,8 +46,8 @@ class AppSyncSettingsViewModelTest {
     @Test
     fun `project and app sync secrets are independent`() {
         val vm = createVm()
-        val projectSecrets = com.xiwei.sujian.core.model.SyncSecrets(token = "project-token")
-        val appSecrets = com.xiwei.sujian.core.model.SyncSecrets(token = "app-token")
+        val projectSecrets = com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "project-token")
+        val appSecrets = com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "app-token")
         vm.handleIntent(SettingsIntent.UpdateProjectSyncSecrets(projectSecrets))
         vm.handleIntent(SettingsIntent.UpdateAppSyncSecrets(appSecrets))
         assertEquals("project-token", vm.uiState.value.projectSyncSecrets.token)
@@ -51,9 +57,13 @@ class AppSyncSettingsViewModelTest {
     @Test
     fun `UpdateAppSyncConfig does not touch projectSyncConfig`() {
         val vm = createVm()
-        val projectConfig = com.xiwei.sujian.core.model.SyncConfig(enabled = true, remoteUrl = PROJECT_REMOTE_URL)
+        val projectConfig =
+            com.xiwei.sujian.feature.sync.data.model.SyncConfig(
+                enabled = true,
+                remoteUrl = PROJECT_REMOTE_URL,
+            )
         vm.handleIntent(SettingsIntent.UpdateProjectSyncConfig(projectConfig))
-        val appConfig = com.xiwei.sujian.core.model.SyncConfig(enabled = false, remoteUrl = APP_REMOTE_URL)
+        val appConfig = com.xiwei.sujian.feature.sync.data.model.SyncConfig(enabled = false, remoteUrl = APP_REMOTE_URL)
         vm.handleIntent(SettingsIntent.UpdateAppSyncConfig(appConfig))
         // project config 保持不变
         assertEquals(true, vm.uiState.value.projectSyncConfig.enabled)
@@ -63,9 +73,13 @@ class AppSyncSettingsViewModelTest {
     @Test
     fun `UpdateProjectSyncConfig does not touch appSyncConfig`() {
         val vm = createVm()
-        val appConfig = com.xiwei.sujian.core.model.SyncConfig(enabled = true, remoteUrl = APP_REMOTE_URL)
+        val appConfig = com.xiwei.sujian.feature.sync.data.model.SyncConfig(enabled = true, remoteUrl = APP_REMOTE_URL)
         vm.handleIntent(SettingsIntent.UpdateAppSyncConfig(appConfig))
-        val projectConfig = com.xiwei.sujian.core.model.SyncConfig(enabled = false, remoteUrl = PROJECT_REMOTE_URL)
+        val projectConfig =
+            com.xiwei.sujian.feature.sync.data.model.SyncConfig(
+                enabled = false,
+                remoteUrl = PROJECT_REMOTE_URL,
+            )
         vm.handleIntent(SettingsIntent.UpdateProjectSyncConfig(projectConfig))
         // app config 保持不变
         assertEquals(true, vm.uiState.value.appSyncConfig.enabled)
@@ -74,7 +88,7 @@ class AppSyncSettingsViewModelTest {
 
     @Test
     fun `SettingsSaveCommand AppSyncConfig carries config and revision`() {
-        val config = com.xiwei.sujian.core.model.SyncConfig(autoSync = true)
+        val config = com.xiwei.sujian.feature.sync.data.model.SyncConfig(autoSync = true)
         val cmd = SettingsSaveCommand.AppSyncConfig(config, 5L)
         assertEquals(true, cmd.config.autoSync)
         assertEquals(5L, cmd.revision)
@@ -82,7 +96,7 @@ class AppSyncSettingsViewModelTest {
 
     @Test
     fun `SettingsSaveCommand AppSyncSecrets carries secrets and revision`() {
-        val secrets = com.xiwei.sujian.core.model.SyncSecrets(token = "app-secret")
+        val secrets = com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "app-secret")
         val cmd = SettingsSaveCommand.AppSyncSecrets(secrets, 6L)
         assertEquals("app-secret", cmd.secrets.token)
         assertEquals(6L, cmd.revision)

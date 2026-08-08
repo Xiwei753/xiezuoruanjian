@@ -1,8 +1,8 @@
 package com.xiwei.sujian.core.interop.sync
 
-import com.xiwei.sujian.core.model.SyncResult
-import com.xiwei.sujian.core.model.SyncStatus
-import com.xiwei.sujian.feature.sync.model.SyncIndicatorState
+import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
+import com.xiwei.sujian.feature.sync.data.model.SyncResult
+import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

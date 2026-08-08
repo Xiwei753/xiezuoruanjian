@@ -1,26 +1,27 @@
 package com.xiwei.sujian.core.interop.project
 import android.content.Context
 import com.xiwei.sujian.R
-import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.app.di.AppServiceProvider
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
-import com.xiwei.sujian.core.interop.app.BridgeProvider
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.MessageKeyMapper
 import com.xiwei.sujian.core.interop.common.RepositoryException
 import com.xiwei.sujian.core.interop.sync.SyncFailureKind
-import com.xiwei.sujian.core.model.ChapterMeta
-import com.xiwei.sujian.core.model.ChapterSaveReceipt
-import com.xiwei.sujian.core.model.Project
-import com.xiwei.sujian.core.model.ProjectStats
-import com.xiwei.sujian.core.model.RecentEdit
-import com.xiwei.sujian.core.model.Volume
+import com.xiwei.sujian.feature.project.data.model.ChapterMeta
+import com.xiwei.sujian.feature.project.data.model.Project
+import com.xiwei.sujian.feature.project.data.model.ProjectStats
+import com.xiwei.sujian.feature.project.data.model.Volume
 
-class ProjectRepository(private val context: Context, bridge: AppServiceBridge? = null) : ChapterContentSavePort {
-    private val appBridge = bridge ?: BridgeProvider.getAppServiceBridge(context)
+/**
+ * ProjectRepository — 项目树 CRUD 仓库层。
+ *
+ * #602 Phase 5：章节内容函数移到 ChapterRepository，最近编辑函数移到 RecentEditsRepository，
+ * 统计函数移到 StatsRepository。本类只保留项目树 CRUD 与 getProjectStats。
+ */
+class ProjectRepository(private val context: Context, bridge: AppServiceBridge? = null) {
+    private val appBridge = bridge ?: AppServiceProvider.getAppServiceBridge(context)
     private val projectBridge = appBridge.projectBridge
     private val chapterBridge = appBridge.chapterBridge
-    private val recentEditsBridge = appBridge.recentEditsBridge
-    private val writingBridge = WritingBridge(appBridge)
     private val statsBridge = appBridge.statsBridge
 
     private fun BridgeResult.Error.localizedMessage(): String {
@@ -32,67 +33,6 @@ class ProjectRepository(private val context: Context, bridge: AppServiceBridge? 
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> throw RepositoryException(
                 context.getString(R.string.repo_get_projects_failed, result.localizedMessage()),
-            )
-            BridgeResult.NotLoaded -> throw RepositoryException(
-                context.getString(R.string.repo_native_not_loaded),
-                SyncFailureKind.NativeUnavailable,
-            )
-        }
-    }
-
-    fun getRecentEdits(): List<RecentEdit> {
-        return when (val result = recentEditsBridge.getRecentEdits()) {
-            is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> {
-                DiagnosticsLogger.w(
-                    "ProjectRepository",
-                    context.getString(R.string.repo_get_recent_edits_failed, result.localizedMessage()),
-                )
-                emptyList()
-            }
-            BridgeResult.NotLoaded -> emptyList()
-        }
-    }
-
-    fun recordRecentEdit(
-        projectId: String,
-        volumeId: String,
-        chapterId: String,
-    ) {
-        recentEditsBridge.recordRecentEdit(projectId, volumeId, chapterId)
-    }
-
-    fun flushRecentEdits() {
-        recentEditsBridge.flushRecentEdits()
-    }
-
-    fun getChapterContentWithMeta(
-        projectId: String,
-        volumeId: String,
-        chapterId: String,
-    ): Pair<String, ChapterMeta> {
-        return when (val result = writingBridge.openChapter(projectId, volumeId, chapterId)) {
-            is BridgeResult.Success -> Pair(result.data.content, result.data.meta)
-            is BridgeResult.Error -> throw RepositoryException(
-                context.getString(R.string.repo_get_chapter_content_failed, result.localizedMessage()),
-            )
-            BridgeResult.NotLoaded -> throw RepositoryException(
-                context.getString(R.string.repo_native_not_loaded),
-                SyncFailureKind.NativeUnavailable,
-            )
-        }
-    }
-
-    fun updateChapterNote(
-        projectId: String,
-        volumeId: String,
-        chapterId: String,
-        note: String,
-    ): Boolean {
-        return when (val result = writingBridge.updateChapterNote(projectId, volumeId, chapterId, note)) {
-            is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException(
-                context.getString(R.string.repo_update_chapter_note_failed, result.localizedMessage()),
             )
             BridgeResult.NotLoaded -> throw RepositoryException(
                 context.getString(R.string.repo_native_not_loaded),
@@ -128,63 +68,6 @@ class ProjectRepository(private val context: Context, bridge: AppServiceBridge? 
                 SyncFailureKind.NativeUnavailable,
             )
         }
-    }
-
-    fun getChapterContent(
-        projectId: String,
-        volumeId: String,
-        chapterId: String,
-    ): String {
-        return when (val result = writingBridge.openChapter(projectId, volumeId, chapterId)) {
-            is BridgeResult.Success -> result.data.content
-            is BridgeResult.Error -> throw RepositoryException(
-                context.getString(R.string.repo_get_chapter_content_failed, result.localizedMessage()),
-            )
-            BridgeResult.NotLoaded -> throw RepositoryException(
-                context.getString(R.string.repo_native_not_loaded),
-                SyncFailureKind.NativeUnavailable,
-            )
-        }
-    }
-
-    override suspend fun saveChapterContent(
-        projectId: String,
-        volumeId: String,
-        chapterId: String,
-        content: String,
-    ): BridgeResult<ChapterSaveReceipt> {
-        return writingBridge.saveChapterContent(projectId, volumeId, chapterId, content)
-    }
-
-    fun clearChapterContent(
-        projectId: String,
-        volumeId: String,
-        chapterId: String,
-    ): BridgeResult<ChapterSaveReceipt> {
-        return writingBridge.clearChapterContent(projectId, volumeId, chapterId)
-    }
-
-    fun recordWritingEvent(
-        deviceId: String,
-        projectId: String,
-        volumeId: String,
-        chapterId: String,
-        source: String,
-        insertedChars: Int,
-        deletedChars: Int,
-        pastedChars: Int,
-        aiInsertedChars: Int,
-        durationSeconds: Int,
-        sessionId: String,
-    ): BridgeResult<Boolean> {
-        return writingBridge.recordWritingEvent(
-            deviceId, projectId, volumeId, chapterId,
-            source, insertedChars, deletedChars, pastedChars, aiInsertedChars, durationSeconds, sessionId,
-        )
-    }
-
-    fun flushWritingStats() {
-        statsBridge.flushWritingStats()
     }
 
     fun getProjectStats(projectId: String): ProjectStats {
@@ -387,26 +270,5 @@ class ProjectRepository(private val context: Context, bridge: AppServiceBridge? 
                 SyncFailureKind.NativeUnavailable,
             )
         }
-    }
-
-    fun calculateWordCount(text: String): Int {
-        return writingBridge.calculateWordCount(text)
-    }
-
-    fun processWritingEvent(
-        deviceId: String,
-        platform: String,
-        projectId: String,
-        volumeId: String,
-        chapterId: String,
-        oldText: String,
-        newText: String,
-        durationSeconds: UInt,
-        sessionId: String,
-    ): BridgeResult<Boolean> {
-        return writingBridge.processWritingEvent(
-            deviceId, platform, projectId, volumeId, chapterId, oldText, newText,
-            durationSeconds, sessionId,
-        )
     }
 }

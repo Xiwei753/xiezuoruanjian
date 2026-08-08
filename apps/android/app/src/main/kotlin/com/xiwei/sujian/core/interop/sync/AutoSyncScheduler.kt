@@ -8,9 +8,9 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.xiwei.sujian.app.diagnostics.DiagnosticsEvents
-import com.xiwei.sujian.core.interop.settings.SettingsRepository
-import com.xiwei.sujian.core.model.SyncConfig
-import com.xiwei.sujian.core.model.SyncSecrets
+import com.xiwei.sujian.feature.sync.data.SyncRepository
+import com.xiwei.sujian.feature.sync.data.model.SyncConfig
+import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import java.util.concurrent.TimeUnit
 
 /**
@@ -23,12 +23,12 @@ import java.util.concurrent.TimeUnit
  * 这样避免了"读哪个作品的 snapshot 来决定全局调度间隔"的歧义，也让
  * 不同作品的不同间隔都能在 Worker 内被尊重（Worker 逐个作品检查 elapsed < interval）。
  */
-class AutoSyncScheduler(context: Context, private val settingsRepository: SettingsRepository? = null) {
+class AutoSyncScheduler(context: Context, private val syncRepository: SyncRepository? = null) {
     private val appContext = context.applicationContext
 
     fun start() {
         DiagnosticsEvents.syncEvent("scheduler", "start")
-        val repo = settingsRepository
+        val repo = syncRepository
         if (repo != null) {
             kotlinx.coroutines.runBlocking { scheduleFromSettings(appContext, repo) }
         }
@@ -55,16 +55,16 @@ class AutoSyncScheduler(context: Context, private val settingsRepository: Settin
          * Worker 逐个作品检查 elapsed < interval。这里用默认间隔（15 分钟，
          * WorkManager 最小周期）调度周期任务，保证 Worker 被定期唤醒。
          *
-         * 调用方（SettingsRepository.commitSyncProfile）在 commitExclusive 释放后调用。
+         * 调用方（SyncRepository.commitSyncProfile）在 commitExclusive 释放后调用。
          */
         @Suppress("UNUSED_PARAMETER")
         suspend fun scheduleFromSettings(
             context: Context,
-            settingsRepository: SettingsRepository,
+            syncRepository: SyncRepository,
         ) {
             val appContext = context.applicationContext
             // 始终调度周期任务 — Worker 内部遍历作品，无配置作品时 Worker 直接 success。
-            // settingsRepository 参数保留以维持调用方契约（commitSyncProfile 传入应用容器仓库）。
+            // syncRepository 参数保留以维持调用方契约（commitSyncProfile 传入应用容器仓库）。
             val intervalMinutes = 15L
             val request =
                 PeriodicWorkRequestBuilder<AutoSyncWorker>(intervalMinutes, TimeUnit.MINUTES)

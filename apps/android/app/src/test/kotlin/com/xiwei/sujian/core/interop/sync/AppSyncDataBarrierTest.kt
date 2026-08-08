@@ -1,8 +1,8 @@
 package com.xiwei.sujian.core.interop.sync
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.starmap.StarMapBridge
-import com.xiwei.sujian.core.model.SyncResult
-import com.xiwei.sujian.core.model.SyncStatus
+import com.xiwei.sujian.feature.sync.data.model.SyncResult
+import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test

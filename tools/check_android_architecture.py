@@ -166,7 +166,7 @@ def scan_prefix_with_allowed(
 # ---------------------------------------------------------------------------
 
 CONCRETE_BRIDGES = [
-    "com.xiwei.sujian.core.interop.app.BridgeProvider",
+    # BridgeProvider / ActionBridge 已删除（#602 Phase 8），不再列入禁止引用清单。
     "com.xiwei.sujian.core.interop.common.BridgeMappers",
     "com.xiwei.sujian.core.interop.project.ChapterBridge",
     "com.xiwei.sujian.core.interop.project.ProjectBridge",
@@ -174,7 +174,6 @@ CONCRETE_BRIDGES = [
     "com.xiwei.sujian.core.interop.stats.StatsBridge",
     "com.xiwei.sujian.core.interop.sync.SyncBridge",
     "com.xiwei.sujian.core.interop.project.WritingBridge",
-    "com.xiwei.sujian.core.interop.common.ActionBridge",
     "com.xiwei.sujian.core.interop.app.AppServiceBridge",
     "com.xiwei.sujian.core.interop.starmap.StarMapBridge",
     "com.xiwei.sujian.core.interop.common.LayoutPolicyBridge",
@@ -221,6 +220,14 @@ SESSION_STATE_CONTRACT = {
 }
 
 
+# UI 层目录中承担 Repository 职责的文件豁免：这些文件虽位于 app/ 等目录，
+# 但承担数据层 Repository 角色（#602 Phase 7 拆分），需要直接访问 Bridge/UniFFI。
+# 豁免只针对 ui-no-uniffi-jna-bridge 规则，其他 UI 纯显示文件仍受约束。
+UI_LAYER_REPOSITORY_EXEMPTIONS = {
+    "app/theme/ThemeRepository.kt",
+}
+
+
 def rule_ui_no_uniffi_jna_bridge() -> list[Finding]:
     ui_filters = [
         "/sujian/app/theme/",
@@ -237,6 +244,8 @@ def rule_ui_no_uniffi_jna_bridge() -> list[Finding]:
     for f in ui_filters:
         findings += scan_forbidden(APP_SRC, f, ["uniffi.writer_core", "com.sun.jna"])
         findings += scan_forbidden(APP_SRC, f, CONCRETE_BRIDGES)
+    # 豁免承担 Repository 职责的文件（数据层，非纯 UI）
+    findings = [f for f in findings if f.path not in UI_LAYER_REPOSITORY_EXEMPTIONS]
     return findings
 
 
@@ -584,16 +593,18 @@ def rule_source_contracts() -> list[Finding]:
     motion = APP_SRC / "feature" / "editor" / "motion" / "EditorMotionPolicy.kt"
     require(motion, r"val\s+reduceMotion\b", "EditorMotionPolicy.reduceMotion 字段")
 
-    repo = APP_SRC / "core" / "interop" / "settings" / "SettingsRepository.kt"
-    require(repo, r"fun\s+commitSyncProfile\s*\(", "SettingsRepository.commitSyncProfile(SyncConfig, SyncSecrets)")
-    require(repo, r"fun\s+loadCommittedSyncProfile\s*\(", "SettingsRepository.loadCommittedSyncProfile")
-    require(repo, r"fun\s+loadSyncSecretsForGeneration\s*\(", "SettingsRepository.loadSyncSecretsForGeneration")
-    require(repo, r"fun\s+snapshotSyncProfile\s*\(", "SettingsRepository.snapshotSyncProfile")
-    require(repo, r"fun\s+loadSyncConfigStrict\s*\(", "SettingsRepository.loadSyncConfigStrict")
-    require(repo, r"fun\s+loadLegacySyncSecretsTyped\s*\(", "SettingsRepository.loadLegacySyncSecretsTyped")
-    require(repo, r"fun\s+deleteSyncSecretsForGeneration\s*\(", "SettingsRepository.deleteSyncSecretsForGeneration")
-    require(repo, r"fun\s+setSyncSecretsOverrideStrict\s*\(", "SettingsRepository.setSyncSecretsOverrideStrict")
-    require(repo, r"fun\s+clearSyncSecretsOverride\s*\(", "SettingsRepository.clearSyncSecretsOverride")
+    # 同步函数已从 SettingsRepository 迁移到 SyncRepository（#602 Phase 7 拆分）。
+    # SyncRepository 位于 feature/sync/data/，承担同步数据访问职责。
+    sync_repo = APP_SRC / "feature" / "sync" / "data" / "SyncRepository.kt"
+    require(sync_repo, r"fun\s+commitSyncProfile\s*\(", "SyncRepository.commitSyncProfile(SyncConfig, SyncSecrets)")
+    require(sync_repo, r"fun\s+loadCommittedSyncProfile\s*\(", "SyncRepository.loadCommittedSyncProfile")
+    require(sync_repo, r"fun\s+loadSyncSecretsForGeneration\s*\(", "SyncRepository.loadSyncSecretsForGeneration")
+    require(sync_repo, r"fun\s+snapshotSyncProfile\s*\(", "SyncRepository.snapshotSyncProfile")
+    require(sync_repo, r"fun\s+loadSyncConfigStrict\s*\(", "SyncRepository.loadSyncConfigStrict")
+    require(sync_repo, r"fun\s+loadLegacySyncSecretsTyped\s*\(", "SyncRepository.loadLegacySyncSecretsTyped")
+    require(sync_repo, r"fun\s+deleteSyncSecretsForGeneration\s*\(", "SyncRepository.deleteSyncSecretsForGeneration")
+    require(sync_repo, r"fun\s+setSyncSecretsOverrideStrict\s*\(", "SyncRepository.setSyncSecretsOverrideStrict")
+    require(sync_repo, r"fun\s+clearSyncSecretsOverride\s*\(", "SyncRepository.clearSyncSecretsOverride")
 
     gate = APP_SRC / "core" / "interop" / "sync" / "SyncProfileGate.kt"
     require(gate, r"\bcommitExclusive\s*\(", "SyncProfileGate.commitExclusive")

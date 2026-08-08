@@ -1,7 +1,7 @@
 package com.xiwei.sujian.core.interop.sync
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
-import com.xiwei.sujian.core.interop.settings.SettingsRepository
+import com.xiwei.sujian.feature.sync.data.SyncRepository
 import org.junit.Assert.assertFalse
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,7 +21,7 @@ class SyncSecretsOverrideScopedTest {
     @Test
     fun setSyncSecretsOverrideStrict_failsWhenNativeMissing() {
         val repo =
-            SettingsRepository(
+            SyncRepository(
                 androidx.test.core.app.ApplicationProvider.getApplicationContext(),
                 AppServiceBridge(
                     WriterAppServiceHolder("/tmp/sujian_test_workspace_595", "/tmp/sujian_test_workspace_595"),
@@ -29,7 +29,7 @@ class SyncSecretsOverrideScopedTest {
             )
         assertFalse(
             "Strict override set must fail (not silently succeed) when native is unavailable",
-            repo.setSyncSecretsOverrideStrict(com.xiwei.sujian.core.model.SyncSecrets(token = "token-a")),
+            repo.setSyncSecretsOverrideStrict(com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "token-a")),
         )
     }
 }

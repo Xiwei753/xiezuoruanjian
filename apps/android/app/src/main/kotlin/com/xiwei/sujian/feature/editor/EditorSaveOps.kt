@@ -179,7 +179,7 @@ suspend fun EditorViewModel.clearChapterContentInternal(
 ): Boolean {
     return saveMutex.withLock {
         try {
-            val result = projectRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
+            val result = chapterRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
             when (result) {
                 is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> {
                     val savedHash = result.data?.contentHash ?: ""
@@ -291,7 +291,9 @@ private suspend fun EditorViewModel.saveChapterAttempt(
 }
 
 private fun EditorViewModel.handleSaveSuccess(
-    result: com.xiwei.sujian.core.interop.common.BridgeResult.Success<com.xiwei.sujian.core.model.ChapterSaveReceipt>,
+    result: com.xiwei.sujian.core.interop.common.BridgeResult.Success<
+        com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt,
+        >,
     contentToSave: String,
     session: EditorSession,
     currentRevision: Long,

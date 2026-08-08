@@ -284,6 +284,7 @@ private fun rememberWritingPaneViewModel(
         viewModel.initialize(
             deps.projectRepository,
             deps.settingsRepository,
+            deps.syncRepository,
             deps.syncStatusRepository,
             coordinator.sessionCoordinator,
         )

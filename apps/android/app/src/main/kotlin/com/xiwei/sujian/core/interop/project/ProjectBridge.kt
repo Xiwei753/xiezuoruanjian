@@ -2,9 +2,9 @@ package com.xiwei.sujian.core.interop.project
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.toModel
-import com.xiwei.sujian.core.model.Project
-import com.xiwei.sujian.core.model.ProjectStats
-import com.xiwei.sujian.core.model.Volume
+import com.xiwei.sujian.feature.project.data.model.Project
+import com.xiwei.sujian.feature.project.data.model.ProjectStats
+import com.xiwei.sujian.feature.project.data.model.Volume
 
 /**
  * 项目/卷 领域 Bridge。

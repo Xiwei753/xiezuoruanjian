@@ -17,7 +17,7 @@ class GenerationSecretsReadResultTest {
     fun generationSecretsReadResult_hasFoundNotConfiguredFailedSubtypes() {
         val found: GenerationSecretsReadResult =
             GenerationSecretsReadResult.Found(
-                com.xiwei.sujian.core.model.SyncSecrets(token = "t"),
+                com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "t"),
             )
         val notConfigured: GenerationSecretsReadResult = GenerationSecretsReadResult.NotConfigured
         val failed: GenerationSecretsReadResult =
@@ -38,8 +38,8 @@ class GenerationSecretsReadResultTest {
         val snapshot =
             ProjectSyncProfileSnapshot(
                 1L,
-                com.xiwei.sujian.core.model.SyncConfig(),
-                com.xiwei.sujian.core.model.SyncSecrets(),
+                com.xiwei.sujian.feature.sync.data.model.SyncConfig(),
+                com.xiwei.sujian.feature.sync.data.model.SyncSecrets(),
             )
         val found: SyncProfileReadResult = SyncProfileReadResult.Found(snapshot)
         val notConfigured: SyncProfileReadResult = SyncProfileReadResult.NotConfigured(snapshot)
@@ -61,8 +61,8 @@ class GenerationSecretsReadResultTest {
         val snapshot =
             ProjectSyncProfileSnapshot(
                 1L,
-                com.xiwei.sujian.core.model.SyncConfig(),
-                com.xiwei.sujian.core.model.SyncSecrets(),
+                com.xiwei.sujian.feature.sync.data.model.SyncConfig(),
+                com.xiwei.sujian.feature.sync.data.model.SyncSecrets(),
             )
         val found = SyncProfileReadResult.Found(snapshot)
         val notConfigured = SyncProfileReadResult.NotConfigured(snapshot)

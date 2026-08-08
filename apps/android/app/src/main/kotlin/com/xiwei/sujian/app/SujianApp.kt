@@ -22,13 +22,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.xiwei.sujian.app.layout.model.Orientation
+import com.xiwei.sujian.app.layout.model.WindowMetrics
 import com.xiwei.sujian.app.navigation.SujianNavigationSuite
 import com.xiwei.sujian.app.theme.SujianTheme
 import com.xiwei.sujian.app.theme.ThemeStore
 import com.xiwei.sujian.app.theme.rememberThemeController
 import com.xiwei.sujian.core.interop.project.ProjectUseCase
-import com.xiwei.sujian.core.model.Orientation
-import com.xiwei.sujian.core.model.WindowMetrics
 import com.xiwei.sujian.core.platform.aosp.AospCapabilityProvider
 import com.xiwei.sujian.core.platform.aosp.VendorAdapterSetup
 import com.xiwei.sujian.core.platform.api.AndroidCapabilities
@@ -123,7 +123,7 @@ private fun SujianAppInitialization(
     context: android.content.Context,
 ) {
     LaunchedEffect(Unit) {
-        val projectUC = ProjectUseCase(deps.projectRepository)
+        val projectUC = ProjectUseCase(deps.projectRepository, deps.recentEditsRepository)
         vm.initialize(deps.projectRepository, projectUC, deps.settingsRepository, context)
     }
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
@@ -172,7 +172,7 @@ private fun SujianAppAdaptiveWindowSync(
         vm.updateFoldFeaturesFromAdaptive(foldingFeatures, density)
         val hasFoldFeature = foldingFeatures.isNotEmpty()
         val deviceClass =
-            deps.settingsRepository.detectDeviceClassFromFoldFeature(
+            deps.themeRepository.detectDeviceClassFromFoldFeature(
                 hasFoldFeature,
                 configuration.smallestScreenWidthDp,
             )
@@ -202,10 +202,10 @@ private fun SujianAppLayoutResolution(
                     },
                 pointer =
                     when (capabilities.activePointerKind) {
-                        PointerKind.Mouse -> com.xiwei.sujian.core.model.PointerKind.Mouse
-                        PointerKind.Trackpad -> com.xiwei.sujian.core.model.PointerKind.Trackpad
-                        PointerKind.Stylus -> com.xiwei.sujian.core.model.PointerKind.Stylus
-                        else -> com.xiwei.sujian.core.model.PointerKind.Touch
+                        PointerKind.Mouse -> com.xiwei.sujian.app.layout.model.PointerKind.Mouse
+                        PointerKind.Trackpad -> com.xiwei.sujian.app.layout.model.PointerKind.Trackpad
+                        PointerKind.Stylus -> com.xiwei.sujian.app.layout.model.PointerKind.Stylus
+                        else -> com.xiwei.sujian.app.layout.model.PointerKind.Touch
                     },
             )
         vm.resolveLayout(metrics)
@@ -227,7 +227,7 @@ fun SujianApp(initialDestination: String? = null) {
             deps.appServiceBridge,
         )
     val windowCoordinator = rememberSujianWindowHost(context, deps, sessionCoordinator)
-    val themeController = rememberThemeController(context, deps.settingsRepository)
+    val themeController = rememberThemeController(context, deps.settingsRepository, deps.themeRepository)
     remember { VendorAdapterRegistry().also { VendorAdapterSetup.ensureInitialized(it) } }
 
     val capabilityProvider = remember { AospCapabilityProvider(context.applicationContext) }

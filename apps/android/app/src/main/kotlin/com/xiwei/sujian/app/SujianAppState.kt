@@ -8,28 +8,28 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.window.layout.FoldingFeature
+import com.xiwei.sujian.app.layout.model.FoldFeatureInfo
+import com.xiwei.sujian.app.layout.model.FoldOcclusion
+import com.xiwei.sujian.app.layout.model.FoldOrientation
+import com.xiwei.sujian.app.layout.model.FoldState
+import com.xiwei.sujian.app.layout.model.LayoutPlan
+import com.xiwei.sujian.app.layout.model.WindowMetrics
 import com.xiwei.sujian.core.interop.common.LayoutPolicyRepositoryProvider
 import com.xiwei.sujian.core.interop.project.ProjectUseCase
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
-import com.xiwei.sujian.core.model.FoldFeatureInfo
-import com.xiwei.sujian.core.model.FoldOcclusion
-import com.xiwei.sujian.core.model.FoldOrientation
-import com.xiwei.sujian.core.model.FoldState
-import com.xiwei.sujian.core.model.LayoutPlan
-import com.xiwei.sujian.core.model.Project
-import com.xiwei.sujian.core.model.RecentEdit
-import com.xiwei.sujian.core.model.WindowMetrics
 import com.xiwei.sujian.core.platform.api.FoldPosture
 import com.xiwei.sujian.core.platform.api.OcclusionType
 import com.xiwei.sujian.core.platform.window.WindowFoldFeatureCollector
+import com.xiwei.sujian.feature.project.data.model.Project
+import com.xiwei.sujian.feature.project.data.model.RecentEdit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.xiwei.sujian.core.platform.api.FoldOrientation as PlatformFoldOrientation
 
 interface WorkspaceAppState {
-    val projects: List<com.xiwei.sujian.core.model.Project>
-    val recentEdits: List<com.xiwei.sujian.core.model.RecentEdit>
+    val projects: List<com.xiwei.sujian.feature.project.data.model.Project>
+    val recentEdits: List<com.xiwei.sujian.feature.project.data.model.RecentEdit>
     val currentProjectId: String?
     val currentProjectTitle: String
     val currentVolumeId: String?

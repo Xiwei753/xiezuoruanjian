@@ -1,6 +1,6 @@
 package com.xiwei.sujian.feature.settings.ui
 
-import com.xiwei.sujian.core.model.LocalSettings
+import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -15,9 +15,11 @@ class SettingsViewModelTest {
     private fun createVm(): SettingsViewModel {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
         val repo = com.xiwei.sujian.core.interop.settings.SettingsRepository(context)
-        val syncStatusRepo = com.xiwei.sujian.core.interop.sync.SyncStatusRepository(repo)
-        val coordinator = com.xiwei.sujian.core.interop.sync.SyncCoordinator(repo, syncStatusRepo)
-        return SettingsViewModel(repo, coordinator)
+        val themeRepo = com.xiwei.sujian.app.theme.ThemeRepository(context)
+        val syncRepo = com.xiwei.sujian.feature.sync.data.SyncRepository(context)
+        val syncStatusRepo = com.xiwei.sujian.core.interop.sync.SyncStatusRepository(syncRepo)
+        val coordinator = com.xiwei.sujian.core.interop.sync.SyncCoordinator(syncRepo, syncStatusRepo)
+        return SettingsViewModel(repo, themeRepo, syncRepo, coordinator)
     }
 
     @Test
@@ -37,7 +39,7 @@ class SettingsViewModelTest {
     @Test
     fun `handleIntent UpdateProjectSyncConfig updates uiState projectSyncConfig`() {
         val vm = createVm()
-        val config = com.xiwei.sujian.core.model.SyncConfig(autoSync = true)
+        val config = com.xiwei.sujian.feature.sync.data.model.SyncConfig(autoSync = true)
         vm.handleIntent(SettingsIntent.UpdateProjectSyncConfig(config))
         assertEquals(true, vm.uiState.value.projectSyncConfig.autoSync)
     }
@@ -45,7 +47,7 @@ class SettingsViewModelTest {
     @Test
     fun `handleIntent UpdateProjectSyncSecrets updates uiState projectSyncSecrets`() {
         val vm = createVm()
-        val secrets = com.xiwei.sujian.core.model.SyncSecrets(token = "test-token")
+        val secrets = com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "test-token")
         vm.handleIntent(SettingsIntent.UpdateProjectSyncSecrets(secrets))
         assertEquals("test-token", vm.uiState.value.projectSyncSecrets.token)
     }
@@ -82,7 +84,7 @@ class SettingsViewModelTest {
 
     @Test
     fun `SettingsSaveCommand ProjectSyncConfig carries config and revision`() {
-        val config = com.xiwei.sujian.core.model.SyncConfig(autoSync = true)
+        val config = com.xiwei.sujian.feature.sync.data.model.SyncConfig(autoSync = true)
         val cmd = SettingsSaveCommand.ProjectSyncConfig(config, 3L)
         assertEquals(true, cmd.config.autoSync)
         assertEquals(3L, cmd.revision)
@@ -90,7 +92,7 @@ class SettingsViewModelTest {
 
     @Test
     fun `SettingsSaveCommand ProjectSyncSecrets carries secrets and revision`() {
-        val secrets = com.xiwei.sujian.core.model.SyncSecrets(token = "secret")
+        val secrets = com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "secret")
         val cmd = SettingsSaveCommand.ProjectSyncSecrets(secrets, 4L)
         assertEquals("secret", cmd.secrets.token)
         assertEquals(4L, cmd.revision)
@@ -100,7 +102,7 @@ class SettingsViewModelTest {
     fun `handleIntent PerformSync ends in terminal failure via serial transaction`() {
         val vm = createVm()
         val config =
-            com.xiwei.sujian.core.model.SyncConfig(
+            com.xiwei.sujian.feature.sync.data.model.SyncConfig(
                 enabled = false,
                 autoSync = false,
                 remoteUrl = "https://unit.example/repo.git",

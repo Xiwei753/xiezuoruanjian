@@ -4,9 +4,9 @@ import android.app.Application
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.xiwei.sujian.app.di.AppServiceProvider
 import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.app.diagnostics.EditorEventRingBuffer
-import com.xiwei.sujian.core.interop.app.BridgeProvider
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.sync.AutoSyncScheduler
 import com.xiwei.sujian.core.platform.AndroidDataRoot
@@ -80,12 +80,12 @@ class SujianApplication : Application(), DefaultLifecycleObserver, com.xiwei.suj
 
     override fun onStart(owner: LifecycleOwner) {
         // 没有外部存储权限时（例如首次启动跳转授权页）不得触碰
-        // appContainer / BridgeProvider / WriterAppServiceHolder，
+        // appContainer / AppServiceProvider / WriterAppServiceHolder，
         // 避免在授权前提前初始化 Rust Core（Issue #600）。
         if (!AndroidDataRoot.hasStorageAccess()) return
         com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.appLifecycle("start")
         if (autoSyncScheduler == null) {
-            autoSyncScheduler = AutoSyncScheduler(this, appContainer.settingsRepository)
+            autoSyncScheduler = AutoSyncScheduler(this, appContainer.syncRepository)
         }
         autoSyncScheduler?.start()
     }
@@ -95,7 +95,7 @@ class SujianApplication : Application(), DefaultLifecycleObserver, com.xiwei.suj
         if (!AndroidDataRoot.hasStorageAccess()) return
         com.xiwei.sujian.app.diagnostics.DiagnosticsEvents.appLifecycle("stop")
         autoSyncScheduler?.stop()
-        val result = BridgeProvider.getStarmapBridge(this).flushAllStarmapStores()
+        val result = AppServiceProvider.getStarmapBridge(this).flushAllStarmapStores()
         when (result) {
             is BridgeResult.Error ->
                 DiagnosticsLogger.e(

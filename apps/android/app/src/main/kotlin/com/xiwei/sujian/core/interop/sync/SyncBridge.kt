@@ -3,13 +3,13 @@ import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.toDto
 import com.xiwei.sujian.core.interop.common.toModel
-import com.xiwei.sujian.core.model.SyncCapabilityData
-import com.xiwei.sujian.core.model.SyncConfig
-import com.xiwei.sujian.core.model.SyncDiagnosticsResult
-import com.xiwei.sujian.core.model.SyncPlan
-import com.xiwei.sujian.core.model.SyncResult
-import com.xiwei.sujian.core.model.SyncSecrets
-import com.xiwei.sujian.core.model.SyncState
+import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
+import com.xiwei.sujian.feature.sync.data.model.SyncConfig
+import com.xiwei.sujian.feature.sync.data.model.SyncDiagnosticsResult
+import com.xiwei.sujian.feature.sync.data.model.SyncPlan
+import com.xiwei.sujian.feature.sync.data.model.SyncResult
+import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
+import com.xiwei.sujian.feature.sync.data.model.SyncState
 
 /**
  * Android 端同步功能桥接层 — 委托 Core `WriterAppService` 的同步方法。

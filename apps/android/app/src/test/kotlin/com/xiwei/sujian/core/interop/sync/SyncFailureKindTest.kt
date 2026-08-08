@@ -98,27 +98,27 @@ class SyncFailureKindTest {
     fun fromSyncStatus_mapsCoreStatusesToCorrectKinds() {
         assertEquals(
             SyncFailureKind.RetryableNetwork,
-            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.core.model.SyncStatus.RecoverableError),
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.feature.sync.data.model.SyncStatus.RecoverableError),
         )
         assertEquals(
             SyncFailureKind.Fatal,
-            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.core.model.SyncStatus.Error),
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.feature.sync.data.model.SyncStatus.Error),
         )
         assertEquals(
             SyncFailureKind.Conflict,
-            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.core.model.SyncStatus.Conflict),
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.feature.sync.data.model.SyncStatus.Conflict),
         )
         assertEquals(
             SyncFailureKind.Conflict,
-            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.core.model.SyncStatus.PartialConflict),
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.feature.sync.data.model.SyncStatus.PartialConflict),
         )
         assertEquals(
             SyncFailureKind.DirtyRepository,
-            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.core.model.SyncStatus.DirtyRepoBlocked),
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.feature.sync.data.model.SyncStatus.DirtyRepoBlocked),
         )
         assertEquals(
             SyncFailureKind.Fatal,
-            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.core.model.SyncStatus.FatalError),
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.feature.sync.data.model.SyncStatus.FatalError),
         )
     }
 

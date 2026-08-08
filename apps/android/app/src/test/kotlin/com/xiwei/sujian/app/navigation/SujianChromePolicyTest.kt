@@ -1,6 +1,6 @@
 package com.xiwei.sujian.app.navigation
 
-import com.xiwei.sujian.feature.home.ui.WorkspaceLocation
+import com.xiwei.sujian.feature.project.ui.WorkspaceLocation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

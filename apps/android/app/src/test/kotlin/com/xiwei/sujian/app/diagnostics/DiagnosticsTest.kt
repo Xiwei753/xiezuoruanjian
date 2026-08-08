@@ -1,6 +1,6 @@
 package com.xiwei.sujian.app.diagnostics
 
-import com.xiwei.sujian.core.model.LocalSettings
+import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

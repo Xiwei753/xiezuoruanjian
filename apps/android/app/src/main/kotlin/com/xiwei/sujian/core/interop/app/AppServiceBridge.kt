@@ -8,13 +8,11 @@ import com.xiwei.sujian.core.interop.settings.SettingsBridge
 import com.xiwei.sujian.core.interop.starmap.StarMapBridge
 import com.xiwei.sujian.core.interop.stats.StatsBridge
 import com.xiwei.sujian.core.interop.sync.SyncBridge
-import com.xiwei.sujian.core.model.LocalSettings
-import com.xiwei.sujian.core.model.SyncConfig
-import com.xiwei.sujian.core.model.SyncSecrets
-import com.xiwei.sujian.core.model.SyncState
-import com.xiwei.sujian.core.model.SyncableSettings
-import uniffi.writer_core.ActionDescriptorDto
-import uniffi.writer_core.ActionResultDto
+import com.xiwei.sujian.feature.settings.data.model.LocalSettings
+import com.xiwei.sujian.feature.settings.data.model.SyncableSettings
+import com.xiwei.sujian.feature.sync.data.model.SyncConfig
+import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
+import com.xiwei.sujian.feature.sync.data.model.SyncState
 import uniffi.writer_core.ScreenRoleDto
 import uniffi.writer_core.ShellModeDto
 
@@ -491,20 +489,6 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
     fun findStarmapReferences(targetStarmapId: String) = starMapBridge.findStarmapReferences(targetStarmapId)
 
     fun getStarMapMotionPolicy() = starMapBridge.getStarMapMotionPolicy()
-
-    fun listRegisteredActions(): BridgeResult<List<ActionDescriptorDto>> =
-        holder.wrapResult {
-            holder.service.listRegisteredActions()
-        }
-
-    fun executeAction(
-        actionId: String,
-        argsJson: String,
-        contextJson: String,
-    ): BridgeResult<ActionResultDto> =
-        holder.wrapResult {
-            holder.service.executeAction(actionId, argsJson, contextJson)
-        }
 
     fun aiAvailable(): Boolean =
         try {

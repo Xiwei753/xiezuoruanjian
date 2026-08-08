@@ -51,7 +51,7 @@ fun EditorViewModel.restartSyncObserver() {
             val repo = _syncStatusRepository ?: return@launch
             var lastSynced = false
             repo.state.collect { state ->
-                val isSynced = state == com.xiwei.sujian.feature.sync.model.SyncIndicatorState.Synced
+                val isSynced = state == com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState.Synced
                 if (isSynced && !lastSynced) {
                     checkSyncMergedChapter()
                 }
@@ -66,7 +66,7 @@ suspend fun EditorViewModel.checkSyncMergedChapter() {
     try {
         val (content, meta) =
             withContext(Dispatchers.IO) {
-                projectRepository.getChapterContentWithMeta(
+                chapterRepository.getChapterContentWithMeta(
                     session.projectId,
                     session.volumeId,
                     session.chapterId,
@@ -76,7 +76,7 @@ suspend fun EditorViewModel.checkSyncMergedChapter() {
         if (isSyncMergeApplicable(meta.hash, currentHash, content, _uiState.value.content)) {
             val syncState =
                 try {
-                    settingsRepository.loadSyncState(session.projectId)
+                    syncRepository.loadSyncState(session.projectId)
                 } catch (_: Exception) {
                     null
                 }
@@ -202,7 +202,7 @@ private suspend fun EditorViewModel.clearChapterContentForSwitch(
         try {
             when (
                 val result =
-                    projectRepository.clearChapterContent(
+                    chapterRepository.clearChapterContent(
                         session.projectId,
                         session.volumeId,
                         session.chapterId,
@@ -387,7 +387,7 @@ private suspend fun EditorViewModel.switchCommit(
     editorScope.launch {
         try {
             withContext(Dispatchers.IO) {
-                projectRepository.recordRecentEdit(ctx.projectId, ctx.volumeId, ctx.chapterId)
+                recentEditsRepository.recordRecentEdit(ctx.projectId, ctx.volumeId, ctx.chapterId)
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -553,7 +553,7 @@ suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
     return try {
         val result =
             withContext(kotlinx.coroutines.Dispatchers.IO) {
-                projectRepository.getChapterContentWithMeta(session.projectId, session.volumeId, session.chapterId)
+                chapterRepository.getChapterContentWithMeta(session.projectId, session.volumeId, session.chapterId)
             }
         val content = result.first
         val meta = result.second

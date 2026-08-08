@@ -1,7 +1,7 @@
 package com.xiwei.sujian.core.interop.sync
 
-import com.xiwei.sujian.core.model.SyncConfig
-import com.xiwei.sujian.core.model.SyncSecrets
+import com.xiwei.sujian.feature.sync.data.model.SyncConfig
+import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test

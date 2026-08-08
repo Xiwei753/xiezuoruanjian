@@ -1,6 +1,6 @@
 package com.xiwei.sujian.core.interop.sync
 
-import com.xiwei.sujian.core.model.SyncStatus
+import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -8,7 +8,7 @@ import org.junit.Test
 class SyncCoordinatorInitTest {
     @Test
     fun syncOutcome_completedHoldsResult() {
-        val result = com.xiwei.sujian.core.model.SyncResult(status = SyncStatus.Success)
+        val result = com.xiwei.sujian.feature.sync.data.model.SyncResult(status = SyncStatus.Success)
         val outcome = SyncOutcome.Completed(result)
         assertTrue(outcome is SyncOutcome.Completed)
         assertEquals(SyncStatus.Success, (outcome as SyncOutcome.Completed).result.status)
@@ -59,7 +59,7 @@ class SyncCoordinatorInitTest {
             )
 
         completedStatuses.forEach { status ->
-            val result = com.xiwei.sujian.core.model.SyncResult(status = status)
+            val result = com.xiwei.sujian.feature.sync.data.model.SyncResult(status = status)
             val outcome = SyncOutcome.Completed(result)
             assertTrue("Expected Completed for $status", outcome is SyncOutcome.Completed)
         }

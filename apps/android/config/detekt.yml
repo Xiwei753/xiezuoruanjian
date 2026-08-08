@@ -58,8 +58,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/stats/ui/stats/StatsScreen.kt"
       - "**/kotlin/com/xiwei/sujian/app/theme/SujianTheme.kt"
       - "**/kotlin/com/xiwei/sujian/app/theme/ThemeController.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/home/ui/workspace/ProjectWorkspaceScreen.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/home/ui/workspace/VolumeChapterTree.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectWorkspaceScreen.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/project/ui/VolumeChapterTree.kt"
       # --- 手机端：多条件布局 ---
       # --- 设计系统组件：多参数组合 ---
       - "**/kotlin/com/xiwei/sujian/core/designsystem/component/SujianListItem.kt"
@@ -99,8 +99,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/stats/ui/stats/StatsScreen.kt"
       - "**/kotlin/com/xiwei/sujian/app/theme/SujianTheme.kt"
       # --- 工作区/手机端 ---
-      - "**/kotlin/com/xiwei/sujian/feature/home/ui/workspace/ProjectWorkspaceScreen.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/home/ui/workspace/VolumeChapterTree.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectWorkspaceScreen.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/project/ui/VolumeChapterTree.kt"
   LongMethod:
     active: true
     threshold: 80
@@ -133,15 +133,16 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/settings/ui/settings/SyncSettings.kt"
       # --- 统计/工作台/工作区 ---
       - "**/kotlin/com/xiwei/sujian/feature/stats/ui/stats/StatsScreen.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/home/ui/workspace/ProjectListScreen.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/home/ui/workspace/ProjectWorkspaceScreen.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/home/ui/workspace/VolumeChapterTree.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectListScreen.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectWorkspaceScreen.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/project/ui/VolumeChapterTree.kt"
   LargeClass:
     active: true
     threshold: 500
     excludes:
       # --- 数据层：设置仓储大类 ---
       - "**/kotlin/com/xiwei/sujian/core/interop/settings/SettingsRepository.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/sync/data/SyncRepository.kt"
       # --- FFI 门面：121 个向后兼容委托函数，签名由 Core 契约决定 ---
       - "**/kotlin/com/xiwei/sujian/core/interop/app/AppServiceBridge.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/sync/SyncBridge.kt"
@@ -174,6 +175,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/core/interop/project/ProjectRepository.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/app/WriterAppServiceHolder.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/project/WritingBridge.kt"
+      - "**/kotlin/com/xiwei/sujian/core/interop/stats/StatsRepository.kt"
       # --- 诊断事件：多字段事件数据类 ---
       - "**/kotlin/com/xiwei/sujian/app/diagnostics/DiagnosticsEvents.kt"
       # --- 编辑器：Compose动画/管线/视觉，参数由渲染协议决定 ---
@@ -190,8 +192,9 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/AndroidVisualPlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/InsertDeletePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/MoveCrossfadePlanner.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/EditorViewModel.kt"
       # --- 工作台组件：多面板布局参数 ---
-      - "**/kotlin/com/xiwei/sujian/feature/home/ui/workspace/ProjectWorkspaceScreen.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectWorkspaceScreen.kt"
       # --- 手机端 ---
   NestedBlockDepth:
     active: true
@@ -216,7 +219,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/host/SujianEditorView.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/input/FakeInputCommandPort.kt"
       # --- 工作台Reducer/工作区：多状态组合条件 ---
-      - "**/kotlin/com/xiwei/sujian/feature/home/ui/workspace/ProjectWorkspaceScreen.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectWorkspaceScreen.kt"
   TooManyFunctions:
     active: true
     thresholdInFiles: 30
@@ -233,6 +236,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/core/interop/project/ProjectRepository.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/starmap/starmap/StarMapBridgeOps.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/starmap/starmap/StarMapRepository.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/sync/data/SyncRepository.kt"
       # --- 诊断事件：多字段事件枚举 ---
       - "**/kotlin/com/xiwei/sujian/app/diagnostics/DiagnosticsEvents.kt"
       - "**/kotlin/com/xiwei/sujian/app/diagnostics/DiagnosticsTest.kt"
@@ -302,8 +306,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/settings/ui/settings/AppearanceSettings.kt"
       - "**/kotlin/com/xiwei/sujian/feature/settings/ui/StructuredSyncResultTest.kt"
       - "**/kotlin/com/xiwei/sujian/app/theme/ThemeUiState.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/home/ui/workspace/ProjectWorkspaceScreen.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/home/ui/workspace/WorkspaceViewModel.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectWorkspaceScreen.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectViewModel.kt"
       # --- 编辑器协调器测试：断言字符串重复 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/DocumentOperationLeaseTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/PreparedSessionTransactionTest.kt"

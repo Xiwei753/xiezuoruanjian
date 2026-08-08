@@ -1,6 +1,6 @@
 package com.xiwei.sujian.core.interop.project
 import com.xiwei.sujian.core.interop.common.BridgeResult
-import com.xiwei.sujian.core.model.ChapterSaveReceipt
+import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
 
 /**
  * 章节正文保存端口 — EditorViewModel 的保存流程只依赖此端口，

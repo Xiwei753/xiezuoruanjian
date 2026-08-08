@@ -1,6 +1,6 @@
 package com.xiwei.sujian.feature.editor.motion
 
-import com.xiwei.sujian.core.model.Immutable
+import androidx.compose.runtime.Immutable
 
 /**
  * #595 三：不可变动画策略 — 文字、光标、协同、时长和 reduce-motion 的唯一事实源。

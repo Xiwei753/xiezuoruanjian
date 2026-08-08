@@ -6,7 +6,7 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.project.ChapterContentSavePort
 import com.xiwei.sujian.core.interop.project.ProjectRepository
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
-import com.xiwei.sujian.core.model.ChapterSaveReceipt
+import com.xiwei.sujian.core.interop.stats.StatsRepository
 import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
@@ -14,6 +14,9 @@ import com.xiwei.sujian.feature.editor.session.TargetSnapshot
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
+import com.xiwei.sujian.feature.project.data.ChapterRepository
+import com.xiwei.sujian.feature.project.data.RecentEditsRepository
+import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -95,7 +98,14 @@ class EditorSaveFlowTest {
         val app = RuntimeEnvironment.getApplication()
         val repo = ProjectRepository(app, bridge)
         vm = EditorViewModel(app)
-        vm.initialize(repo, SettingsRepository(app, bridge), sessionCoordinator = coordinator)
+        vm.initialize(
+            repo,
+            SettingsRepository(app, bridge),
+            sessionCoordinator = coordinator,
+            chapterRepo = ChapterRepository(app, bridge),
+            recentEditsRepo = RecentEditsRepository(app, bridge),
+            statsRepo = StatsRepository(bridge.statsBridge),
+        )
         savePort = ControllableSavePort()
         vm.chapterSavePort = savePort
     }

@@ -6,8 +6,8 @@ import com.xiwei.sujian.core.interop.sync.AppSyncProfileReadResult
 import com.xiwei.sujian.core.interop.sync.ExclusiveResult
 import com.xiwei.sujian.core.interop.sync.SyncFailureKind
 import com.xiwei.sujian.core.interop.sync.SyncSession
-import com.xiwei.sujian.core.model.SyncConfig
-import com.xiwei.sujian.core.model.SyncSecrets
+import com.xiwei.sujian.feature.sync.data.model.SyncConfig
+import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
@@ -45,7 +45,7 @@ suspend fun SettingsViewModel.saveTransactionConfigAndSecrets(
     // 无活动作品时不发布任何写入，避免把配置写到错误的作品或全局槽。
     val projectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
     if (projectId == null) return false
-    val commitResult = withContext(Dispatchers.IO) { settingsRepo.commitSyncProfile(projectId, config, secrets) }
+    val commitResult = withContext(Dispatchers.IO) { syncRepo.commitSyncProfile(projectId, config, secrets) }
     if (commitResult is SettingsSaveResult.Failed) return false
     if (projectSyncConfigRevision == configRevision) {
         projectSyncConfigPersistedRevision = configRevision
@@ -116,7 +116,7 @@ private fun SettingsViewModel.checkSyncCapabilityForCurrentProject(): SyncComman
             StructuredSyncResult(statusCode = SYNC_STATUS_ERROR, messageKey = MSG_NO_ACTIVE_PROJECT),
         )
     }
-    val capability = settingsRepo.getSyncCapability(projectId)
+    val capability = syncRepo.getSyncCapability(projectId)
     if (!capability.canRun) {
         return SyncCommandIoResult(
             true,
@@ -153,7 +153,7 @@ private suspend fun SettingsViewModel.runExclusiveSyncIo(
             // #600 评论 #3 问题二：capability 按 projectId 路由 — 提取为 helper 降低认知复杂度。
             val capabilityCheck = checkSyncCapabilityForCurrentProject()
             if (capabilityCheck != null) return@withContext capabilityCheck
-            val overrideOk = settingsRepo.setSyncSecretsOverrideStrict(secrets)
+            val overrideOk = syncRepo.setSyncSecretsOverrideStrict(secrets)
             if (!overrideOk) {
                 return@withContext SyncCommandIoResult(
                     true,
@@ -167,7 +167,7 @@ private suspend fun SettingsViewModel.runExclusiveSyncIo(
             try {
                 perform(config)
             } finally {
-                settingsRepo.clearSyncSecretsOverride()
+                syncRepo.clearSyncSecretsOverride()
             }
         }
     }
@@ -252,7 +252,7 @@ suspend fun SettingsViewModel.executeDryRunTransaction(command: SettingsTransact
         val projectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
         if (projectId != null) {
             runExclusiveSyncIo(config, secrets) {
-                settingsRepo.performSyncDryRunTyped(projectId, it).toIoResult()
+                syncRepo.performSyncDryRunTyped(projectId, it).toIoResult()
             }.toIoResult()
         } else {
             SyncCommandIoResult(
@@ -301,7 +301,7 @@ suspend fun SettingsViewModel.executeDiagnosticsTransaction(
         val diagProjectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
         if (diagProjectId != null) {
             runExclusiveSyncIo(config, secrets) {
-                settingsRepo.performSyncDiagnosticsTyped(diagProjectId, it).toIoResult()
+                syncRepo.performSyncDiagnosticsTyped(diagProjectId, it).toIoResult()
             }.toIoResult()
         } else {
             SyncCommandIoResult(
@@ -315,7 +315,7 @@ suspend fun SettingsViewModel.executeDiagnosticsTransaction(
         val refreshedCapabilityProjectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
         if (refreshedCapabilityProjectId != null) {
             val refreshedCapability =
-                withContext(Dispatchers.IO) { settingsRepo.getSyncCapability(refreshedCapabilityProjectId) }
+                withContext(Dispatchers.IO) { syncRepo.getSyncCapability(refreshedCapabilityProjectId) }
             val refreshedWarning = withContext(Dispatchers.IO) { settingsRepo.getSecureStorageWarning() }
             _uiState.update {
                 it.copy(
@@ -343,7 +343,7 @@ private suspend fun SettingsViewModel.saveAppTransactionConfigAndSecrets(
     secrets: SyncSecrets,
     secretsRevision: Long,
 ): Boolean {
-    val commitResult = withContext(Dispatchers.IO) { settingsRepo.commitAppSyncProfile(config, secrets) }
+    val commitResult = withContext(Dispatchers.IO) { syncRepo.commitAppSyncProfile(config, secrets) }
     if (commitResult is SettingsSaveResult.Failed) return false
     if (appSyncConfigRevision == configRevision) {
         appSyncConfigPersistedRevision = configRevision
@@ -417,7 +417,7 @@ private suspend fun SettingsViewModel.runExclusiveAppSyncIo(
             )
         }
         withContext(Dispatchers.IO) {
-            val overrideOk = settingsRepo.setSyncSecretsOverrideStrict(secrets)
+            val overrideOk = syncRepo.setSyncSecretsOverrideStrict(secrets)
             if (!overrideOk) {
                 return@withContext SyncCommandIoResult(
                     true,
@@ -431,7 +431,7 @@ private suspend fun SettingsViewModel.runExclusiveAppSyncIo(
             try {
                 perform(config)
             } finally {
-                settingsRepo.clearSyncSecretsOverride()
+                syncRepo.clearSyncSecretsOverride()
             }
         }
     }
@@ -502,7 +502,7 @@ suspend fun SettingsViewModel.executeAppDryRunTransaction(command: SettingsTrans
         },
     ) { config, secrets ->
         runExclusiveAppSyncIo(config, secrets) {
-            settingsRepo.performAppSyncDryRunTyped(it).toAppIoResult()
+            syncRepo.performAppSyncDryRunTyped(it).toAppIoResult()
         }.toIoResult()
     }
 }
@@ -540,7 +540,7 @@ suspend fun SettingsViewModel.executeAppDiagnosticsTransaction(
         },
     ) { config, secrets ->
         runExclusiveAppSyncIo(config, secrets) {
-            settingsRepo.performAppSyncDiagnosticsTyped(it).toAppIoResult()
+            syncRepo.performAppSyncDiagnosticsTyped(it).toAppIoResult()
         }.toIoResult()
     }
 }
@@ -554,7 +554,7 @@ suspend fun SettingsViewModel.executeAppDiagnosticsTransaction(
  * [refreshSyncProfileState] 维护）。应用级事务结束后只刷新 config/secrets 的已确认值。
  */
 suspend fun SettingsViewModel.refreshAppSyncProfileState() {
-    val repo = settingsRepo
+    val repo = syncRepo
     val committedAppProfile = withContext(Dispatchers.IO) { repo.loadCommittedAppSyncProfile() }
     val appLoadState = committedAppProfile.toAppSyncProfileLoadState()
     _uiState.update {
@@ -588,7 +588,8 @@ internal fun AppSyncProfileReadResult.toAppSyncProfileLoadState(): SyncProfileLo
     }
 
 suspend fun SettingsViewModel.refreshSyncProfileState() {
-    val repo = settingsRepo
+    val repo = syncRepo
+    val settingsRepoLocal = settingsRepo
     // #600 评论 #3 问题二：profile/capability 按 projectId 路由 —
     // 无活动作品时显示"未选择作品"状态，不读取任何作品数据。
     val projectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
@@ -606,7 +607,7 @@ suspend fun SettingsViewModel.refreshSyncProfileState() {
     }
     val committedProfile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(projectId) }
     val refreshedCapability = withContext(Dispatchers.IO) { repo.getSyncCapability(projectId) }
-    val refreshedWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
+    val refreshedWarning = withContext(Dispatchers.IO) { settingsRepoLocal.getSecureStorageWarning() }
     _uiState.update {
         it.copy(
             projectSyncConfig =

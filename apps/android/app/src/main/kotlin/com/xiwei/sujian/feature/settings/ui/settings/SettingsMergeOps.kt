@@ -2,7 +2,7 @@ package com.xiwei.sujian.feature.settings.ui
 
 // ! # 设置刷新合并操作（从 SettingsSaveOps 拆分）— 降低 TooManyFunctions
 
-import com.xiwei.sujian.core.model.LocalSettings
+import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -11,6 +11,7 @@ import kotlinx.coroutines.withContext
 // #597 刷新合并需一次性读取全部字段并按未保存状态合并，与 loadInitial 结构对称。
 fun SettingsViewModel.mergeRefresh() {
     val repo = settingsRepo
+    val syncRepoLocal = syncRepo
     editorScope.launch {
         val current = _uiState.value
         val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
@@ -20,7 +21,7 @@ fun SettingsViewModel.mergeRefresh() {
         val mergeProjectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
         val committedProfile =
             if (mergeProjectId != null) {
-                withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(mergeProjectId) }
+                withContext(Dispatchers.IO) { syncRepoLocal.loadCommittedSyncProfile(mergeProjectId) }
             } else {
                 com.xiwei.sujian.core.interop.sync.SyncProfileReadResult.Failed(
                     com.xiwei.sujian.core.interop.sync.SyncFailureKind.Fatal,
@@ -31,18 +32,19 @@ fun SettingsViewModel.mergeRefresh() {
         val projectSyncProfileLoadState = committedProfile.toSyncProfileLoadState()
         val projectSyncCapability =
             if (mergeProjectId != null) {
-                withContext(Dispatchers.IO) { repo.getSyncCapability(mergeProjectId) }
+                withContext(Dispatchers.IO) { syncRepoLocal.getSyncCapability(mergeProjectId) }
             } else {
-                com.xiwei.sujian.core.model.SyncCapabilityData()
+                com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData()
             }
         // #600 评论 #5：刷新应用级 profile。
-        val committedAppProfile = withContext(Dispatchers.IO) { repo.loadCommittedAppSyncProfile() }
+        val committedAppProfile = withContext(Dispatchers.IO) { syncRepoLocal.loadCommittedAppSyncProfile() }
         val appSyncProfileLoadState = committedAppProfile.toAppSyncProfileLoadState()
         val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
-        val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
-        val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
+        val builtinThemes = withContext(Dispatchers.IO) { themeRepo.listBuiltinThemes() }
+        val paletteRecords = withContext(Dispatchers.IO) { themeRepo.listPaletteRecords() }
         val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
-        val dataRootPath = withContext(Dispatchers.IO) { repo.dataRootDir() }
+        val dataRootPath =
+            withContext(Dispatchers.IO) { com.xiwei.sujian.core.platform.AndroidDataRoot.rootDir().absolutePath }
         _uiState.update {
             SettingsUiState(
                 settings = mergeLoadedLocal(current.settings, settings),
@@ -93,25 +95,25 @@ private fun SettingsViewModel.mergeLoadedFontSize(
 ): Float = if (!hasUnsavedFontSize()) loaded else current
 
 private fun SettingsViewModel.mergeLoadedProjectSyncConfig(
-    current: com.xiwei.sujian.core.model.SyncConfig,
+    current: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
     loadState: SyncProfileLoadState,
-): com.xiwei.sujian.core.model.SyncConfig =
+): com.xiwei.sujian.feature.sync.data.model.SyncConfig =
     if (!hasUnsavedProjectSyncConfig()) loadState.confirmedConfig ?: current else current
 
 private fun SettingsViewModel.mergeLoadedProjectSyncSecrets(
-    current: com.xiwei.sujian.core.model.SyncSecrets,
+    current: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
     loadState: SyncProfileLoadState,
-): com.xiwei.sujian.core.model.SyncSecrets =
+): com.xiwei.sujian.feature.sync.data.model.SyncSecrets =
     if (!hasUnsavedProjectSyncSecrets()) loadState.confirmedSecrets ?: current else current
 
 private fun SettingsViewModel.mergeLoadedAppSyncConfig(
-    current: com.xiwei.sujian.core.model.SyncConfig,
+    current: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
     loadState: SyncProfileLoadState,
-): com.xiwei.sujian.core.model.SyncConfig =
+): com.xiwei.sujian.feature.sync.data.model.SyncConfig =
     if (!hasUnsavedAppSyncConfig()) loadState.confirmedConfig ?: current else current
 
 private fun SettingsViewModel.mergeLoadedAppSyncSecrets(
-    current: com.xiwei.sujian.core.model.SyncSecrets,
+    current: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
     loadState: SyncProfileLoadState,
-): com.xiwei.sujian.core.model.SyncSecrets =
+): com.xiwei.sujian.feature.sync.data.model.SyncSecrets =
     if (!hasUnsavedAppSyncSecrets()) loadState.confirmedSecrets ?: current else current

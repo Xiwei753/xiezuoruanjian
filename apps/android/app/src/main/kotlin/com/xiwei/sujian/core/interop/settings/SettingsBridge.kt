@@ -5,8 +5,8 @@ import com.xiwei.sujian.core.interop.common.ChangedEntity
 import com.xiwei.sujian.core.interop.common.ResultEnvelope
 import com.xiwei.sujian.core.interop.common.toDto
 import com.xiwei.sujian.core.interop.common.toModel
-import com.xiwei.sujian.core.model.LocalSettings
-import com.xiwei.sujian.core.model.SyncableSettings
+import com.xiwei.sujian.feature.settings.data.model.LocalSettings
+import com.xiwei.sujian.feature.settings.data.model.SyncableSettings
 
 /**
  * 设置 领域 Bridge。
@@ -68,10 +68,10 @@ class SettingsBridge internal constructor(private val holder: WriterAppServiceHo
             holder.service.ensureDeviceInfo(platform, deviceClass)
         }
 
-    fun loadDeviceInfo(): BridgeResult<com.xiwei.sujian.core.model.DeviceInfo> =
+    fun loadDeviceInfo(): BridgeResult<com.xiwei.sujian.app.theme.model.DeviceInfo> =
         holder.wrapResult {
             val dto = holder.service.loadDeviceInfo()
-            com.xiwei.sujian.core.model.DeviceInfo(
+            com.xiwei.sujian.app.theme.model.DeviceInfo(
                 deviceId = dto.deviceId,
                 deviceClass = dto.deviceClass,
                 platform = dto.platform,

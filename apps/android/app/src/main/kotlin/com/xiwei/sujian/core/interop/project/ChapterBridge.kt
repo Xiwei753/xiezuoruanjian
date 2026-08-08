@@ -3,9 +3,9 @@ import com.xiwei.sujian.app.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.toModel
-import com.xiwei.sujian.core.model.ChapterMeta
-import com.xiwei.sujian.core.model.ChapterOpenResult
-import com.xiwei.sujian.core.model.ChapterSaveReceipt
+import com.xiwei.sujian.feature.project.data.model.ChapterMeta
+import com.xiwei.sujian.feature.project.data.model.ChapterOpenResult
+import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
 
 /**
  * 章节 领域 Bridge。

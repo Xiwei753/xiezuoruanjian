@@ -29,8 +29,8 @@ import com.xiwei.sujian.core.designsystem.component.SujianCard
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.stats.StatsRepositoryProvider
-import com.xiwei.sujian.core.model.ProjectWritingStatsItem
-import com.xiwei.sujian.core.model.WritingStatsSummary
+import com.xiwei.sujian.feature.stats.data.model.ProjectWritingStatsItem
+import com.xiwei.sujian.feature.stats.data.model.WritingStatsSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.LocalDate

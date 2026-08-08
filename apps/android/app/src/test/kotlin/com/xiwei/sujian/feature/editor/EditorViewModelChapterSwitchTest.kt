@@ -5,7 +5,10 @@ import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.project.ProjectRepository
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
-import com.xiwei.sujian.core.model.ChapterSaveReceipt
+import com.xiwei.sujian.core.interop.stats.StatsRepository
+import com.xiwei.sujian.feature.project.data.ChapterRepository
+import com.xiwei.sujian.feature.project.data.RecentEditsRepository
+import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -64,7 +67,13 @@ class EditorViewModelChapterSwitchTest {
             AppServiceBridge(WriterAppServiceHolder("/tmp/sujian_test_workspace_595", "/tmp/sujian_test_workspace_595"))
         val repo = ProjectRepository(app, bridge)
         val vm = EditorViewModel(app)
-        vm.initialize(repo, SettingsRepository(app, bridge))
+        vm.initialize(
+            repo,
+            SettingsRepository(app, bridge),
+            chapterRepo = ChapterRepository(app, bridge),
+            recentEditsRepo = RecentEditsRepository(app, bridge),
+            statsRepo = StatsRepository(bridge.statsBridge),
+        )
         return vm
     }
 

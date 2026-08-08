@@ -7,7 +7,8 @@ import com.xiwei.sujian.core.interop.settings.SaveFailure
 import com.xiwei.sujian.core.interop.settings.SaveField
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
 import com.xiwei.sujian.core.interop.settings.SettingsSaveResult
-import com.xiwei.sujian.core.model.LocalSettings
+import com.xiwei.sujian.feature.settings.data.model.LocalSettings
+import com.xiwei.sujian.feature.sync.data.SyncRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -27,7 +28,7 @@ suspend fun SettingsViewModel.reloadFromExternalSync() {
     val repo = settingsRepo
     val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
     val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
-    val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
+    val paletteRecords = withContext(Dispatchers.IO) { themeRepo.listPaletteRecords() }
     _uiState.update {
         it.copy(
             settings = settings,
@@ -41,7 +42,7 @@ suspend fun SettingsViewModel.reloadFromExternalSync() {
  * #600 评论 #3 问题二：按活动作品读取 committed profile — 无活动作品时返回 Failed。
  */
 internal suspend fun SettingsViewModel.loadCommittedProfileForProject(
-    repo: SettingsRepository,
+    repo: SyncRepository,
     projectId: String?,
 ): com.xiwei.sujian.core.interop.sync.SyncProfileReadResult =
     if (projectId != null) {
@@ -57,13 +58,13 @@ internal suspend fun SettingsViewModel.loadCommittedProfileForProject(
  * #600 评论 #3 问题二：按活动作品读取 sync capability — 无活动作品时返回默认。
  */
 internal suspend fun SettingsViewModel.loadSyncCapabilityForProject(
-    repo: SettingsRepository,
+    repo: SyncRepository,
     projectId: String?,
-): com.xiwei.sujian.core.model.SyncCapabilityData =
+): com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData =
     if (projectId != null) {
         withContext(Dispatchers.IO) { repo.getSyncCapability(projectId) }
     } else {
-        com.xiwei.sujian.core.model.SyncCapabilityData()
+        com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData()
     }
 
 /**
@@ -84,8 +85,8 @@ private suspend fun SettingsViewModel.loadInitialSnapshot(repo: SettingsReposito
         )
     val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
     val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
-    val (projectSyncProfileLoadState, projectSyncCapability) = loadInitialProjectSyncProfile(repo)
-    val appSyncProfileLoadState = loadInitialAppSyncProfile(repo)
+    val (projectSyncProfileLoadState, projectSyncCapability) = loadInitialProjectSyncProfile(syncRepo)
+    val appSyncProfileLoadState = loadInitialAppSyncProfile(syncRepo)
     val loaded =
         InitialLoadedValues(
             settings = settings,
@@ -94,10 +95,13 @@ private suspend fun SettingsViewModel.loadInitialSnapshot(repo: SettingsReposito
             projectSyncCapability = projectSyncCapability,
             appSyncProfileLoadState = appSyncProfileLoadState,
             secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() },
-            builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() },
-            paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() },
+            builtinThemes = withContext(Dispatchers.IO) { themeRepo.listBuiltinThemes() },
+            paletteRecords = withContext(Dispatchers.IO) { themeRepo.listPaletteRecords() },
             aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() },
-            dataRootPath = withContext(Dispatchers.IO) { repo.dataRootDir() },
+            dataRootPath =
+                withContext(
+                    Dispatchers.IO,
+                ) { com.xiwei.sujian.core.platform.AndroidDataRoot.rootDir().absolutePath },
         )
     _uiState.update { current -> buildInitialUiState(current, loaded, snapshotRevisions) }
 }
@@ -150,7 +154,7 @@ private data class InitialLoadedValues(
     val settings: LocalSettings,
     val fontSize: Float,
     val projectSyncProfileLoadState: SyncProfileLoadState,
-    val projectSyncCapability: com.xiwei.sujian.core.model.SyncCapabilityData,
+    val projectSyncCapability: com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData,
     val appSyncProfileLoadState: SyncProfileLoadState,
     val secureStorageWarning: String?,
     val builtinThemes: List<com.xiwei.sujian.app.theme.model.BuiltinTheme>,
@@ -186,9 +190,9 @@ internal suspend fun SettingsViewModel.executeSave(
     saveLocalField(repo, commands.local, failures)
     saveFontSizeField(repo, commands.fontSize, failures)
     val (projConfigSaved, projSecretsSaved) =
-        saveSyncProfileField(repo, commands.projectSyncConfig, commands.projectSyncSecrets, failures)
+        saveSyncProfileField(syncRepo, commands.projectSyncConfig, commands.projectSyncSecrets, failures)
     val (appConfigSaved, appSecretsSaved) =
-        saveAppSyncProfileField(repo, commands.appSyncConfig, commands.appSyncSecrets, failures)
+        saveAppSyncProfileField(syncRepo, commands.appSyncConfig, commands.appSyncSecrets, failures)
 
     if (projConfigSaved || projSecretsSaved) {
         // #595 五：成功提交后一次性更新作品级 config/secrets/loadState/capability/warning。
@@ -250,7 +254,7 @@ private suspend fun SettingsViewModel.saveFontSizeField(
  * 返回 (configSaved, secretsSaved)。
  */
 private suspend fun SettingsViewModel.saveSyncProfileField(
-    repo: SettingsRepository,
+    repo: SyncRepository,
     syncConfig: SettingsSaveCommand.ProjectSyncConfig?,
     syncSecrets: SettingsSaveCommand.ProjectSyncSecrets?,
     failures: MutableList<SaveFailure>,
@@ -294,7 +298,7 @@ private suspend fun SettingsViewModel.saveSyncProfileField(
  * 返回 (configSaved, secretsSaved)。
  */
 private suspend fun SettingsViewModel.saveAppSyncProfileField(
-    repo: SettingsRepository,
+    repo: SyncRepository,
     syncConfig: SettingsSaveCommand.AppSyncConfig?,
     syncSecrets: SettingsSaveCommand.AppSyncSecrets?,
     failures: MutableList<SaveFailure>,
@@ -405,8 +409,8 @@ suspend fun SettingsViewModel.rollbackIfRevisionMatches(
     when (failure.field) {
         SaveField.LOCAL_SETTINGS -> rollbackLocalSettings(repo, failure.revision)
         SaveField.FONT_SIZE -> rollbackFontSize(repo, failure.revision)
-        SaveField.SYNC_CONFIG -> rollbackSyncConfig(repo, failure.revision)
-        SaveField.SYNC_SECRETS -> rollbackSyncSecrets(repo, failure.revision)
+        SaveField.SYNC_CONFIG -> rollbackSyncConfig(syncRepo, failure.revision)
+        SaveField.SYNC_SECRETS -> rollbackSyncSecrets(syncRepo, failure.revision)
     }
 }
 
@@ -433,7 +437,7 @@ private suspend fun SettingsViewModel.rollbackFontSize(
 }
 
 private suspend fun SettingsViewModel.rollbackSyncConfig(
-    repo: SettingsRepository,
+    repo: SyncRepository,
     expectedRevision: Long,
 ) {
     if (projectSyncConfigRevision != expectedRevision) return
@@ -458,7 +462,7 @@ private suspend fun SettingsViewModel.rollbackSyncConfig(
 }
 
 private suspend fun SettingsViewModel.rollbackSyncSecrets(
-    repo: SettingsRepository,
+    repo: SyncRepository,
     expectedRevision: Long,
 ) {
     if (projectSyncSecretsRevision != expectedRevision) return

@@ -1,6 +1,6 @@
 package com.xiwei.sujian.core.interop.sync
 
-import com.xiwei.sujian.core.model.SyncStatus
+import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -111,7 +111,7 @@ class SyncExceptionBoundaryTest {
         // #592 三：所有路径必须结束在明确终态
         val definiteOutcomes =
             listOf(
-                SyncOutcome.Completed(com.xiwei.sujian.core.model.SyncResult(status = SyncStatus.Success)),
+                SyncOutcome.Completed(com.xiwei.sujian.feature.sync.data.model.SyncResult(status = SyncStatus.Success)),
                 SyncOutcome.Disabled,
                 SyncOutcome.Unconfigured,
                 SyncOutcome.RetryableFailure(SyncStatus.RecoverableError),

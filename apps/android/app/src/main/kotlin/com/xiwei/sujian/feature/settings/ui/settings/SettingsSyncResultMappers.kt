@@ -2,11 +2,11 @@ package com.xiwei.sujian.feature.settings.ui
 
 // ! # 同步结果映射（从 SettingsSyncOps 拆分）— 降低 TooManyFunctions
 
-import com.xiwei.sujian.core.interop.settings.SyncDiagnosticsOutcome
-import com.xiwei.sujian.core.interop.settings.SyncDryRunOutcome
 import com.xiwei.sujian.core.interop.sync.ExclusiveResult
 import com.xiwei.sujian.core.interop.sync.SyncFailureKind
 import com.xiwei.sujian.core.interop.sync.SyncOutcome
+import com.xiwei.sujian.feature.sync.data.SyncDiagnosticsOutcome
+import com.xiwei.sujian.feature.sync.data.SyncDryRunOutcome
 
 // #597 同步事务协议字符串 — 提取为常量避免 StringLiteralDuplication
 internal const val SYNC_STATUS_ERROR = "error"
@@ -25,9 +25,9 @@ internal fun ExclusiveResult<SyncCommandIoResult>.toIoResult(): SyncCommandIoRes
     }
 
 /** 应用级 performAppSyncDryRun 的 UI 层类型化封装。 */
-internal fun com.xiwei.sujian.core.interop.settings.SyncDryRunOutcome.toAppIoResult(): SyncCommandIoResult =
+internal fun com.xiwei.sujian.feature.sync.data.SyncDryRunOutcome.toAppIoResult(): SyncCommandIoResult =
     when (this) {
-        is com.xiwei.sujian.core.interop.settings.SyncDryRunOutcome.Success -> {
+        is com.xiwei.sujian.feature.sync.data.SyncDryRunOutcome.Success -> {
             val plan = plan
             SyncCommandIoResult(
                 true,
@@ -47,7 +47,7 @@ internal fun com.xiwei.sujian.core.interop.settings.SyncDryRunOutcome.toAppIoRes
                 ),
             )
         }
-        is com.xiwei.sujian.core.interop.settings.SyncDryRunOutcome.Error ->
+        is com.xiwei.sujian.feature.sync.data.SyncDryRunOutcome.Error ->
             SyncCommandIoResult(
                 true,
                 true,
@@ -57,7 +57,7 @@ internal fun com.xiwei.sujian.core.interop.settings.SyncDryRunOutcome.toAppIoRes
                     sanitizedDiagnostic = message,
                 ),
             )
-        com.xiwei.sujian.core.interop.settings.SyncDryRunOutcome.NotLoaded ->
+        com.xiwei.sujian.feature.sync.data.SyncDryRunOutcome.NotLoaded ->
             SyncCommandIoResult(
                 true,
                 true,
@@ -91,10 +91,10 @@ internal fun SyncDiagnosticsOutcome.Success.appDiagnosticsSuccessToAppIoResult()
 }
 
 /** 应用级 performAppSyncDiagnostics 的 UI 层类型化封装。 */
-internal fun com.xiwei.sujian.core.interop.settings.SyncDiagnosticsOutcome.toAppIoResult(): SyncCommandIoResult =
+internal fun com.xiwei.sujian.feature.sync.data.SyncDiagnosticsOutcome.toAppIoResult(): SyncCommandIoResult =
     when (this) {
-        is com.xiwei.sujian.core.interop.settings.SyncDiagnosticsOutcome.Success -> appDiagnosticsSuccessToAppIoResult()
-        is com.xiwei.sujian.core.interop.settings.SyncDiagnosticsOutcome.Error ->
+        is com.xiwei.sujian.feature.sync.data.SyncDiagnosticsOutcome.Success -> appDiagnosticsSuccessToAppIoResult()
+        is com.xiwei.sujian.feature.sync.data.SyncDiagnosticsOutcome.Error ->
             SyncCommandIoResult(
                 true,
                 true,
@@ -104,7 +104,7 @@ internal fun com.xiwei.sujian.core.interop.settings.SyncDiagnosticsOutcome.toApp
                     sanitizedDiagnostic = message,
                 ),
             )
-        com.xiwei.sujian.core.interop.settings.SyncDiagnosticsOutcome.NotLoaded ->
+        com.xiwei.sujian.feature.sync.data.SyncDiagnosticsOutcome.NotLoaded ->
             SyncCommandIoResult(
                 true,
                 true,

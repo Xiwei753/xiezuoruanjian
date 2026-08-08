@@ -63,8 +63,12 @@ import com.xiwei.sujian.core.interop.project.ActiveDocumentGate
 import com.xiwei.sujian.core.interop.project.DocumentSaveReceiptTracker
 import com.xiwei.sujian.core.interop.project.ProjectRepository
 import com.xiwei.sujian.core.interop.settings.SettingsRepository
+import com.xiwei.sujian.core.interop.stats.StatsRepository
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.TargetDocumentFact
+import com.xiwei.sujian.feature.project.data.ChapterRepository
+import com.xiwei.sujian.feature.project.data.RecentEditsRepository
+import com.xiwei.sujian.feature.sync.data.SyncRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -83,26 +87,50 @@ class EditorViewModel(
     // （旧实现会为首次打开章节创建独立 Repository，绕过进程级依赖容器）。
     internal var _projectRepository: ProjectRepository? = null
     internal var _settingsRepository: SettingsRepository? = null
+    internal var _syncRepository: SyncRepository? = null
     internal var _syncStatusRepository: com.xiwei.sujian.core.interop.sync.SyncStatusRepository? = null
     internal var _sessionCoordinator: EditorSessionCoordinator? = null
+    internal var _chapterRepository: ChapterRepository? = null
+    internal var _recentEditsRepository: RecentEditsRepository? = null
+    internal var _statsRepository: StatsRepository? = null
 
     internal val projectRepository: ProjectRepository
         get() =
             _projectRepository
                 ?: error("EditorViewModel 未注入 ProjectRepository — 必须通过 Factory(SujianAppDependencies) 创建")
 
+    internal val chapterRepository: ChapterRepository
+        get() =
+            _chapterRepository
+                ?: error("EditorViewModel 未注入 ChapterRepository — 必须通过 Factory(SujianAppDependencies) 创建")
+
+    internal val recentEditsRepository: RecentEditsRepository
+        get() =
+            _recentEditsRepository
+                ?: error("EditorViewModel 未注入 RecentEditsRepository — 必须通过 Factory(SujianAppDependencies) 创建")
+
+    internal val statsRepository: StatsRepository
+        get() =
+            _statsRepository
+                ?: error("EditorViewModel 未注入 StatsRepository — 必须通过 Factory(SujianAppDependencies) 创建")
+
     /**
-     * #597：章节正文保存端口 — 默认走进程级容器注入的 [projectRepository]；
+     * #597：章节正文保存端口 — 默认走进程级容器注入的 [chapterRepository]；
      * 测试可替换为可控假实现以驱动真实保存流程（保存期间继续输入不被晚到回执覆盖）。
      */
     internal var chapterSavePort: com.xiwei.sujian.core.interop.project.ChapterContentSavePort? = null
 
     internal val effectiveChapterSavePort: com.xiwei.sujian.core.interop.project.ChapterContentSavePort
-        get() = chapterSavePort ?: projectRepository
+        get() = chapterSavePort ?: chapterRepository
     internal val settingsRepository: SettingsRepository
         get() =
             _settingsRepository
                 ?: error("EditorViewModel 未注入 SettingsRepository — 必须通过 Factory(SujianAppDependencies) 创建")
+
+    internal val syncRepository: SyncRepository
+        get() =
+            _syncRepository
+                ?: error("EditorViewModel 未注入 SyncRepository — 必须通过 Factory(SujianAppDependencies) 创建")
 
     // #595 五：同步观察使用 viewModelScope（随 ViewModel 自动取消），
     // 不再创建独立未管理 CoroutineScope。
@@ -117,11 +145,19 @@ class EditorViewModel(
     fun initialize(
         projectRepo: ProjectRepository,
         settingsRepo: SettingsRepository,
+        syncRepo: SyncRepository? = null,
         syncStatusRepo: com.xiwei.sujian.core.interop.sync.SyncStatusRepository? = null,
         sessionCoordinator: EditorSessionCoordinator? = null,
+        chapterRepo: ChapterRepository? = null,
+        recentEditsRepo: RecentEditsRepository? = null,
+        statsRepo: StatsRepository? = null,
     ) {
         if (_projectRepository == null) _projectRepository = projectRepo
         if (_settingsRepository == null) _settingsRepository = settingsRepo
+        if (syncRepo != null && _syncRepository == null) _syncRepository = syncRepo
+        if (chapterRepo != null) _chapterRepository = chapterRepo
+        if (recentEditsRepo != null) _recentEditsRepository = recentEditsRepo
+        if (statsRepo != null) _statsRepository = statsRepo
         if (syncStatusRepo != null && _syncStatusRepository !== syncStatusRepo) {
             _syncStatusRepository = syncStatusRepo
             restartSyncObserver()
@@ -130,19 +166,23 @@ class EditorViewModel(
             _sessionCoordinator = sessionCoordinator
         }
         // #595 三/四：同步前统一 flush 活动正文（ActiveDocumentGate）。
-        // 注册携带 owner token（本 VM 实例）：旧实例 onCleared 只能关闭自己的
-        // 注册，不能清掉新实例的 flusher（Activity 重建/生命周期交错防护）。
-        if (gateRegistration == null) {
-            gateRegistration =
-                ActiveDocumentGate.register(
-                    this,
-                    flush = { requestSave().await() },
-                    documentIdentity = {
-                        val lease = _sessionCoordinator?.currentInputLease()
-                        if (lease != null) "${lease.targetId}:${lease.sessionId}:${lease.epoch}" else null
-                    },
-                )
-        }
+        registerActiveDocumentGateIfNeeded()
+    }
+
+    // #595 三/四：同步前统一 flush 活动正文（ActiveDocumentGate）。
+    // 注册携带 owner token（本 VM 实例）：旧实例 onCleared 只能关闭自己的
+    // 注册，不能清掉新实例的 flusher（Activity 重建/生命周期交错防护）。
+    private fun registerActiveDocumentGateIfNeeded() {
+        if (gateRegistration != null) return
+        gateRegistration =
+            ActiveDocumentGate.register(
+                this,
+                flush = { requestSave().await() },
+                documentIdentity = {
+                    val lease = _sessionCoordinator?.currentInputLease()
+                    if (lease != null) "${lease.targetId}:${lease.sessionId}:${lease.epoch}" else null
+                },
+            )
     }
 
     /**
@@ -314,7 +354,7 @@ class EditorViewModel(
 
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                projectRepository.updateChapterNote(session.projectId, session.volumeId, session.chapterId, newNote)
+                chapterRepository.updateChapterNote(session.projectId, session.volumeId, session.chapterId, newNote)
                 launch(kotlinx.coroutines.Dispatchers.Main) {
                     _uiState.value = _uiState.value.copy(chapterNote = newNote)
                 }
@@ -348,25 +388,25 @@ class EditorViewModel(
                 // 生命周期语义（不延迟进程退出，不依赖仍会被取消的 viewModelScope）。
                 kotlinx.coroutines.runBlocking {
                     if (content.isNotEmpty()) {
-                        projectRepository.saveChapterContent(
+                        chapterRepository.saveChapterContent(
                             session.projectId,
                             session.volumeId,
                             session.chapterId,
                             content,
                         )
                     } else if (contentExplicitlyCleared) {
-                        projectRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
+                        chapterRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
                     }
                 }
             }
         } catch (_: Exception) {
         }
         try {
-            projectRepository.flushWritingStats()
+            statsRepository.flushWritingStats()
         } catch (_: Exception) {
         }
         try {
-            projectRepository.flushRecentEdits()
+            recentEditsRepository.flushRecentEdits()
         } catch (_: Exception) {
         }
     }
@@ -399,8 +439,12 @@ class EditorViewModel(
             vm.initialize(
                 deps.projectRepository,
                 deps.settingsRepository,
+                deps.syncRepository,
                 deps.syncStatusRepository,
                 sessionCoordinator,
+                deps.chapterRepository,
+                deps.recentEditsRepository,
+                deps.statsRepository,
             )
             return vm as T
         }

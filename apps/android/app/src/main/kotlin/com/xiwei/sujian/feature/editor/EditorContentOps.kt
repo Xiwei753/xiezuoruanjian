@@ -57,7 +57,7 @@ fun EditorViewModel.reportWritingEvent(
         }
     statsLastEventMs = nowMs
 
-    projectRepository.processWritingEvent(
+    statsRepository.processWritingEvent(
         statsDeviceId, "android", session.projectId, session.volumeId, session.chapterId,
         oldText, newText, durationSeconds, statsSessionId,
     )
@@ -89,5 +89,5 @@ fun EditorViewModel.updateStats(content: String) {
 }
 
 fun EditorViewModel.calculateWordCount(text: String): Int {
-    return projectRepository.calculateWordCount(text)
+    return chapterRepository.calculateWordCount(text)
 }

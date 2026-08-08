@@ -1,6 +1,6 @@
 package com.xiwei.sujian.app.navigation
 
-import com.xiwei.sujian.feature.home.ui.WorkspaceLocation
+import com.xiwei.sujian.feature.project.ui.WorkspaceLocation
 
 /**
  * 顶栏/底栏外观策略 — 手机 UI 结构的唯一事实来源（纯函数，可单测）。

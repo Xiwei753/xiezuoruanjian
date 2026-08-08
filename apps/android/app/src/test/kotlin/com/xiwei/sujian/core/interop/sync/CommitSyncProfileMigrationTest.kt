@@ -1,8 +1,8 @@
 package com.xiwei.sujian.core.interop.sync
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
-import com.xiwei.sujian.core.interop.settings.SettingsRepository
 import com.xiwei.sujian.core.interop.settings.SettingsSaveResult
+import com.xiwei.sujian.feature.sync.data.SyncRepository
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -24,8 +24,8 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class CommitSyncProfileMigrationTest {
-    private fun createRepo(preferencesSuffix: String): SettingsRepository {
-        return SettingsRepository(
+    private fun createRepo(preferencesSuffix: String): SyncRepository {
+        return SyncRepository(
             androidx.test.core.app.ApplicationProvider.getApplicationContext(),
             AppServiceBridge(
                 WriterAppServiceHolder("/tmp/sujian_test_workspace_595", "/tmp/sujian_test_workspace_595"),
@@ -34,16 +34,16 @@ class CommitSyncProfileMigrationTest {
         )
     }
 
-    private fun storeOf(repo: SettingsRepository): ProjectSyncProfileStore {
-        val field = SettingsRepository::class.java.getDeclaredField("profileStore\$delegate")
+    private fun storeOf(repo: SyncRepository): ProjectSyncProfileStore {
+        val field = SyncRepository::class.java.getDeclaredField("profileStore\$delegate")
         field.isAccessible = true
         @Suppress("UNCHECKED_CAST")
         val lazy = field.get(repo) as kotlin.Lazy<ProjectSyncProfileStore>
         return lazy.value
     }
 
-    private suspend fun readStoreState(repo: SettingsRepository): ProjectSyncProfileStore.ProfileCommitState {
-        val field = SettingsRepository::class.java.getDeclaredField("profileStore\$delegate")
+    private suspend fun readStoreState(repo: SyncRepository): ProjectSyncProfileStore.ProfileCommitState {
+        val field = SyncRepository::class.java.getDeclaredField("profileStore\$delegate")
         field.isAccessible = true
         @Suppress("UNCHECKED_CAST")
         val lazy = field.get(repo) as kotlin.Lazy<ProjectSyncProfileStore>
@@ -58,8 +58,8 @@ class CommitSyncProfileMigrationTest {
             val result =
                 repo.commitSyncProfile(
                     "migration-project-id",
-                    com.xiwei.sujian.core.model.SyncConfig(enabled = true),
-                    com.xiwei.sujian.core.model.SyncSecrets(token = "token-new"),
+                    com.xiwei.sujian.feature.sync.data.model.SyncConfig(enabled = true),
+                    com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "token-new"),
                 )
             assertTrue(
                 "Commit must fail without native (strict reads abort before any write)",

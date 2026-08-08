@@ -2,12 +2,12 @@ package com.xiwei.sujian.core.interop.stats
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.toModel
-import com.xiwei.sujian.core.model.ChapterWritingStatsSummary
-import com.xiwei.sujian.core.model.DeviceWritingStatsSummary
-import com.xiwei.sujian.core.model.ProjectStats
-import com.xiwei.sujian.core.model.ProjectWritingStatsSummary
-import com.xiwei.sujian.core.model.WritingSpeedCurve
-import com.xiwei.sujian.core.model.WritingStatsSummary
+import com.xiwei.sujian.feature.project.data.model.ProjectStats
+import com.xiwei.sujian.feature.stats.data.model.ChapterWritingStatsSummary
+import com.xiwei.sujian.feature.stats.data.model.DeviceWritingStatsSummary
+import com.xiwei.sujian.feature.stats.data.model.ProjectWritingStatsSummary
+import com.xiwei.sujian.feature.stats.data.model.WritingSpeedCurve
+import com.xiwei.sujian.feature.stats.data.model.WritingStatsSummary
 
 /**
  * 统计 领域 Bridge。

@@ -19,8 +19,8 @@ class AppSyncProfileReadResultTest {
         val snapshot =
             AppSyncProfileSnapshot(
                 1L,
-                com.xiwei.sujian.core.model.SyncConfig(),
-                com.xiwei.sujian.core.model.SyncSecrets(),
+                com.xiwei.sujian.feature.sync.data.model.SyncConfig(),
+                com.xiwei.sujian.feature.sync.data.model.SyncSecrets(),
             )
         val found: AppSyncProfileReadResult = AppSyncProfileReadResult.Found(snapshot)
         val notConfigured: AppSyncProfileReadResult = AppSyncProfileReadResult.NotConfigured(snapshot)
@@ -45,8 +45,8 @@ class AppSyncProfileReadResultTest {
         val snapshot =
             AppSyncProfileSnapshot(
                 2L,
-                com.xiwei.sujian.core.model.SyncConfig(enabled = true),
-                com.xiwei.sujian.core.model.SyncSecrets(token = "t"),
+                com.xiwei.sujian.feature.sync.data.model.SyncConfig(enabled = true),
+                com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "t"),
             )
         val found = AppSyncProfileReadResult.Found(snapshot)
         val notConfigured = AppSyncProfileReadResult.NotConfigured(snapshot)
@@ -61,8 +61,8 @@ class AppSyncProfileReadResultTest {
         val snapshot =
             AppSyncProfileSnapshot(
                 generation = 5L,
-                config = com.xiwei.sujian.core.model.SyncConfig(enabled = true),
-                secrets = com.xiwei.sujian.core.model.SyncSecrets(token = "app-token"),
+                config = com.xiwei.sujian.feature.sync.data.model.SyncConfig(enabled = true),
+                secrets = com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "app-token"),
             )
         assertTrue(snapshot.generation == 5L)
         assertTrue(snapshot.config.enabled == true)
@@ -76,14 +76,14 @@ class AppSyncProfileReadResultTest {
         val appSnapshot =
             AppSyncProfileSnapshot(
                 1L,
-                com.xiwei.sujian.core.model.SyncConfig(),
-                com.xiwei.sujian.core.model.SyncSecrets(),
+                com.xiwei.sujian.feature.sync.data.model.SyncConfig(),
+                com.xiwei.sujian.feature.sync.data.model.SyncSecrets(),
             )
         val projectSnapshot =
             ProjectSyncProfileSnapshot(
                 1L,
-                com.xiwei.sujian.core.model.SyncConfig(),
-                com.xiwei.sujian.core.model.SyncSecrets(),
+                com.xiwei.sujian.feature.sync.data.model.SyncConfig(),
+                com.xiwei.sujian.feature.sync.data.model.SyncSecrets(),
             )
         val appFound = AppSyncProfileReadResult.Found(appSnapshot)
         val projectFound = SyncProfileReadResult.Found(projectSnapshot)
