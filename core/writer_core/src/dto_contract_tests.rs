@@ -829,3 +829,70 @@ fn test_settings_auto_indent_contract() {
     assert_eq!(json["autoIndentEnabled"], true);
     assert_eq!(json["autoIndentWidth"], 4.0);
 }
+
+#[test]
+fn test_layout_plan_dto_contract() {
+    use crate::api::types::{
+        LayoutPlanDto, WidthClassDto, HeightClassDto, ShellModeDto, EditorModeDto,
+        NavigationModeDto, NavigationPresentationDto, WorkspacePaneModeDto,
+        VisiblePaneRolesDto, PaneWidthConstraintDto
+    };
+
+    let dto = LayoutPlanDto {
+        width_class: WidthClassDto::Medium,
+        height_class: HeightClassDto::Medium,
+        shell_mode: ShellModeDto::TwoPane,
+        editor_mode: EditorModeDto::FullWidth,
+        navigation_mode: NavigationModeDto::Stack,
+        navigation_presentation: NavigationPresentationDto::BottomBar,
+        workspace_pane_mode: WorkspacePaneModeDto::SinglePane,
+        visible_pane_roles: VisiblePaneRolesDto::default(),
+        content_max_width_dp: 800.0,
+        page_padding_dp: 16.0,
+        grid_columns: 12,
+        show_bottom_bar: true,
+        list_pane_width: PaneWidthConstraintDto::default(),
+        editor_content_max_width_dp: 600.0,
+        primary_pane_min_dp: 300.0,
+        primary_pane_preferred_dp: 400.0,
+        primary_pane_max_dp: 500.0,
+        supporting_pane_mode: None,
+        avoid_regions: vec![],
+    };
+
+    let json_val: serde_json::Value = serde_json::to_value(&dto).unwrap();
+
+    assert!(json_val.get("widthClass").is_some(), "camelCase key widthClass must exist");
+    assert!(json_val.get("contentMaxWidthDp").is_some(), "camelCase key contentMaxWidthDp must exist");
+    assert!(json_val.get("visiblePaneRoles").is_some(), "camelCase key visiblePaneRoles must exist");
+
+    assert!(json_val.get("width_class").is_none(), "snake_case key width_class must NOT exist");
+    assert!(json_val.get("content_max_width_dp").is_none(), "snake_case key content_max_width_dp must NOT exist");
+}
+
+#[test]
+fn test_sync_config_dto_contract() {
+    use crate::api::types::SyncConfigDto;
+
+    let dto = SyncConfigDto {
+        enabled: true,
+        backend_type: "git".to_string(),
+        remote_url: "https://example.com/repo.git".to_string(),
+        transport: "https".to_string(),
+        branch: "main".to_string(),
+        auto_sync: true,
+        sync_interval_seconds: 300,
+        username: "jules".to_string(),
+        has_network_permission: true,
+        has_network_state_permission: true,
+    };
+
+    let json_val: serde_json::Value = serde_json::to_value(&dto).unwrap();
+
+    assert!(json_val.get("backend_type").is_some(), "snake_case key backend_type must exist");
+    assert!(json_val.get("remote_url").is_some(), "snake_case key remote_url must exist");
+    assert!(json_val.get("sync_interval_seconds").is_some(), "snake_case key sync_interval_seconds must exist");
+
+    assert!(json_val.get("backendType").is_none(), "camelCase key backendType must NOT exist");
+    assert!(json_val.get("remoteUrl").is_none(), "camelCase key remoteUrl must NOT exist");
+}
