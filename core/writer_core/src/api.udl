@@ -1099,6 +1099,10 @@ interface WriterAppService {
     SyncPlanDto perform_app_sync_dry_run(SyncConfigDto config);
     [Throws=WriterError]
     SyncResultDto perform_app_sync(SyncConfigDto config, boolean force_sync);
+    [Throws=WriterError]
+    SyncStateDto load_app_sync_state();
+    [Throws=WriterError]
+    void save_app_sync_state(SyncStateDto state);
 
     [Throws=WriterError]
     boolean resolve_conflict_keep_local(string project_id, string path);

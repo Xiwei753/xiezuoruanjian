@@ -70,11 +70,10 @@ class AutoSyncWorker(
     }
 
     /**
-     * #600 评论 #4 问题三：应用级自动同步 — 设置/全局星图/主题调色板。
+     * #600 评论 #4/#5：应用级自动同步 — 设置/全局星图/主题调色板。
      *
-     * 读 [SettingsRepository.snapshotAppSyncProfile]，若 enabled && autoSync 则调用
-     * [SyncCoordinator.runAppSync]。应用级无 sync state / interval 检查
-     * （Core 侧 `perform_app_sync` 内置防抖间隔兜底），每次 Worker 唤醒都尝试。
+     * 读 [SettingsRepository.snapshotAppSyncProfile]，若 enabled && autoSync 则按
+     * [shouldAppSyncNow] 判断是否到同步时间点，到点后调用 [SyncCoordinator.runAppSync]。
      *
      * 返回与作品级相同的 [ProjectSyncOutcome] 分类，纳入 doWork 整体 outcome 聚合。
      */
@@ -104,6 +103,7 @@ class AutoSyncWorker(
                 }
             }
         if (!AutoSyncScheduler.shouldSync(snapshot.config, snapshot.secrets)) return ProjectSyncOutcome.Skipped
+        if (!shouldAppSyncNow(settingsRepository, snapshot)) return ProjectSyncOutcome.Skipped
 
         val outcome = deps.syncCoordinator.runAppSync(SyncTrigger.Auto, snapshot)
         return when (outcome) {
@@ -223,6 +223,28 @@ class AutoSyncWorker(
                 null
             }
         return elapsed == null || elapsed >= interval
+    }
+
+    /**
+     * #600 评论 #5：判定应用级同步是否到时间点（interval/elapsed 检查）。
+     * 镜像 [shouldSyncNow] 但使用应用级 sync state（<app_data_root>/app-meta/sync/state.local.json）。
+     */
+    private suspend fun shouldAppSyncNow(
+        settingsRepository: SettingsRepository,
+        snapshot: AppSyncProfileSnapshot,
+    ): Boolean {
+        val state =
+            try {
+                settingsRepository.loadAppSyncState()
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "Unable to load app sync state", e)
+                return false
+            }
+        return AutoSyncScheduler.shouldSyncByInterval(
+            intervalSeconds = snapshot.config.syncIntervalSeconds?.toLong(),
+            lastSyncTime = state.lastSyncTime,
+            nowEpochSeconds = System.currentTimeMillis() / 1000,
+        )
     }
 
     /** 单个作品同步结果分类。 */

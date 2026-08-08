@@ -285,6 +285,21 @@ impl WriterCoreApi {
             .map(Into::into)
             .map_err(Into::into)
     }
+
+    /// 加载应用级同步状态。路径：`<app_data_root>/app-meta/sync/state.local.json`。
+    pub fn load_app_sync_state(&self) -> ApiResult<SyncStateDto> {
+        self.core()
+            .load_app_sync_state()
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+
+    /// 保存应用级同步状态。路径：`<app_data_root>/app-meta/sync/state.local.json`。
+    pub fn save_app_sync_state(&self, state: SyncStateDto) -> ApiResult<()> {
+        self.core()
+            .save_app_sync_state(&state.into())
+            .map_err(Into::into)
+    }
 }
 
 #[cfg(test)]

@@ -55,9 +55,9 @@ class SyncSaveAndRunTransactionTest {
 
         // 同一批次进入保存队列：旧配置编辑 → 保存并同步（捕获旧值）→ 更新为新配置。
         instrumentation.runOnMainSync {
-            vm!!.handleIntent(SettingsIntent.UpdateSyncConfig(configA))
+            vm!!.handleIntent(SettingsIntent.UpdateProjectSyncConfig(configA))
             vm!!.handleIntent(SettingsIntent.PerformSync)
-            vm!!.handleIntent(SettingsIntent.UpdateSyncConfig(configB))
+            vm!!.handleIntent(SettingsIntent.UpdateProjectSyncConfig(configB))
         }
 
         awaitTerminalState(instrumentation, vm!!)
@@ -65,7 +65,7 @@ class SyncSaveAndRunTransactionTest {
         assertEquals(
             "未配置同步时事务必须以失败终态结束，不允许停留在 RUNNING/IDLE",
             SyncCommandState.FAILURE,
-            vm!!.uiState.value.performSyncState,
+            vm!!.uiState.value.projectPerformSyncState,
         )
         val persisted = repo.loadSyncConfig(projectData.projectId)
         assertEquals(
@@ -94,13 +94,13 @@ class SyncSaveAndRunTransactionTest {
             vm = SettingsViewModel(repo, session.deps.syncCoordinator)
         }
         instrumentation.runOnMainSync {
-            vm!!.handleIntent(SettingsIntent.UpdateSyncConfig(config))
+            vm!!.handleIntent(SettingsIntent.UpdateProjectSyncConfig(config))
             vm!!.handleIntent(SettingsIntent.PerformSync)
         }
 
         awaitTerminalState(instrumentation, vm!!)
 
-        assertEquals(SyncCommandState.FAILURE, vm!!.uiState.value.performSyncState)
+        assertEquals(SyncCommandState.FAILURE, vm!!.uiState.value.projectPerformSyncState)
         assertEquals(
             "无并发新编辑时事务必须保存捕获 revision 对应的配置",
             "https://c.example/repo.git",
@@ -116,13 +116,13 @@ class SyncSaveAndRunTransactionTest {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             instrumentation.waitForIdleSync()
-            val state = vm.uiState.value.performSyncState
+            val state = vm.uiState.value.projectPerformSyncState
             if (state == SyncCommandState.SUCCESS || state == SyncCommandState.FAILURE) return
             Thread.sleep(50)
         }
         fail(
             "SaveAndRunSync transaction did not reach terminal state within ${timeoutMs}ms; " +
-                "state=${vm.uiState.value.performSyncState}",
+                "state=${vm.uiState.value.projectPerformSyncState}",
         )
     }
 }

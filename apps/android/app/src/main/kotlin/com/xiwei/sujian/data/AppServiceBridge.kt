@@ -3,6 +3,7 @@ package com.xiwei.sujian.data
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.model.SyncConfig
 import com.xiwei.sujian.model.SyncSecrets
+import com.xiwei.sujian.model.SyncState
 import com.xiwei.sujian.model.SyncableSettings
 import uniffi.writer_core.ActionDescriptorDto
 import uniffi.writer_core.ActionResultDto
@@ -285,6 +286,10 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
         config: SyncConfig,
         forceSync: Boolean = false,
     ) = syncBridge.performAppSync(config, forceSync)
+
+    fun loadAppSyncState() = syncBridge.loadAppSyncState()
+
+    fun saveAppSyncState(state: SyncState) = syncBridge.saveAppSyncState(state)
 
     fun getWritingStatsSummary(
         startDate: String,

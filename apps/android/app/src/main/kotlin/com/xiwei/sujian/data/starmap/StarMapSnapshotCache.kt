@@ -90,6 +90,14 @@ internal class StarMapSnapshotCache {
 
     fun getOrPut(starmapId: String): StarMapRawCache = rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }
 
+    /**
+     * #600 评论 #5：清空所有星图内存缓存 — 应用级同步后本地星图文件可能被远端覆盖，
+     * 内存缓存不再有效，必须失效以使下次读取从磁盘重新加载。
+     */
+    fun clear() {
+        rawCacheByStarmapId.clear()
+    }
+
     fun put(
         starmapId: String,
         cache: StarMapRawCache,

@@ -46,7 +46,7 @@ class AutoSyncScheduler(context: Context, private val settingsRepository: Settin
         private const val TAG = "AutoSyncScheduler"
         private const val UNIQUE_PERIODIC_WORK = "writer_auto_sync_periodic"
         private const val UNIQUE_FOREGROUND_WORK = "writer_auto_sync_foreground"
-        private const val DEFAULT_INTERVAL_SECONDS = 300L
+        internal const val DEFAULT_INTERVAL_SECONDS = 300L
 
         /**
          * #592 六 / #600 评论 #3 问题三：调度单一周期任务，Worker 内部遍历所有作品。
@@ -113,6 +113,33 @@ class AutoSyncScheduler(context: Context, private val settingsRepository: Settin
             if (config.remoteUrl.isNullOrEmpty()) return false
             if (secrets.token.isNullOrEmpty()) return false
             return true
+        }
+
+        /**
+         * #600 评论 #5：应用级同步 interval/elapsed 纯函数判定。
+         *
+         * - intervalSeconds 为 null 或 <= 0 时使用 [DEFAULT_INTERVAL_SECONDS]；
+         * - lastSyncTime 为 null 或 <= 0 时视为从未同步，返回 true；
+         * - 否则返回 (now - lastSyncTime) >= interval。
+         */
+        internal fun shouldSyncByInterval(
+            intervalSeconds: Long?,
+            lastSyncTime: Long?,
+            nowEpochSeconds: Long,
+        ): Boolean {
+            val interval =
+                if (intervalSeconds != null && intervalSeconds > 0) {
+                    intervalSeconds
+                } else {
+                    DEFAULT_INTERVAL_SECONDS
+                }
+            val elapsed =
+                if (lastSyncTime != null && lastSyncTime > 0) {
+                    nowEpochSeconds - lastSyncTime
+                } else {
+                    null
+                }
+            return elapsed == null || elapsed >= interval
         }
     }
 }

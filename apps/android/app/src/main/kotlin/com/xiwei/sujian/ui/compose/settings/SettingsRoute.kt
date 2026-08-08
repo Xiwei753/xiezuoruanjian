@@ -80,13 +80,25 @@ class SettingsViewModel(
 
     internal var localRevision = 0L
     internal var fontSizeRevision = 0L
-    internal var syncConfigRevision = 0L
-    internal var syncSecretsRevision = 0L
+
+    // 作品级同步 revision
+    internal var projectSyncConfigRevision = 0L
+    internal var projectSyncSecretsRevision = 0L
+
+    // 应用级同步 revision
+    internal var appSyncConfigRevision = 0L
+    internal var appSyncSecretsRevision = 0L
 
     internal var localPersistedRevision = 0L
     internal var fontSizePersistedRevision = 0L
-    internal var syncConfigPersistedRevision = 0L
-    internal var syncSecretsPersistedRevision = 0L
+
+    // 作品级同步 persisted revision
+    internal var projectSyncConfigPersistedRevision = 0L
+    internal var projectSyncSecretsPersistedRevision = 0L
+
+    // 应用级同步 persisted revision
+    internal var appSyncConfigPersistedRevision = 0L
+    internal var appSyncSecretsPersistedRevision = 0L
 
     internal var pendingCommands = PendingCommands()
 
@@ -94,9 +106,13 @@ class SettingsViewModel(
 
     internal fun hasUnsavedFontSize() = fontSizeRevision != fontSizePersistedRevision
 
-    internal fun hasUnsavedSyncConfig() = syncConfigRevision != syncConfigPersistedRevision
+    internal fun hasUnsavedProjectSyncConfig() = projectSyncConfigRevision != projectSyncConfigPersistedRevision
 
-    internal fun hasUnsavedSyncSecrets() = syncSecretsRevision != syncSecretsPersistedRevision
+    internal fun hasUnsavedProjectSyncSecrets() = projectSyncSecretsRevision != projectSyncSecretsPersistedRevision
+
+    internal fun hasUnsavedAppSyncConfig() = appSyncConfigRevision != appSyncConfigPersistedRevision
+
+    internal fun hasUnsavedAppSyncSecrets() = appSyncSecretsRevision != appSyncSecretsPersistedRevision
 
     init {
         loadInitial()
@@ -133,8 +149,14 @@ class SettingsViewModel(
             when (command) {
                 is SettingsSaveCommand.Local -> pendingCommands.copy(local = command)
                 is SettingsSaveCommand.FontSize -> pendingCommands.copy(fontSize = command)
-                is SettingsSaveCommand.SyncConfig -> pendingCommands.copy(syncConfig = command)
-                is SettingsSaveCommand.SyncSecrets -> pendingCommands.copy(syncSecrets = command)
+                is SettingsSaveCommand.ProjectSyncConfig ->
+                    pendingCommands.copy(projectSyncConfig = command)
+                is SettingsSaveCommand.ProjectSyncSecrets ->
+                    pendingCommands.copy(projectSyncSecrets = command)
+                is SettingsSaveCommand.AppSyncConfig ->
+                    pendingCommands.copy(appSyncConfig = command)
+                is SettingsSaveCommand.AppSyncSecrets ->
+                    pendingCommands.copy(appSyncSecrets = command)
             }
     }
 
@@ -161,15 +183,16 @@ class SettingsViewModel(
         when (intent) {
             is SettingsIntent.UpdateLocal -> updateLocalSettings(intent.transform(_uiState.value.settings))
             is SettingsIntent.UpdateFontSize -> updateFontSize(intent.fontSize)
-            is SettingsIntent.UpdateSyncConfig -> updateSyncConfig(intent.config)
-            is SettingsIntent.UpdateSyncSecrets -> updateSyncSecrets(intent.secrets)
+            is SettingsIntent.UpdateProjectSyncConfig -> updateProjectSyncConfig(intent.config)
+            is SettingsIntent.UpdateProjectSyncSecrets -> updateProjectSyncSecrets(intent.secrets)
+            is SettingsIntent.UpdateAppSyncConfig -> updateAppSyncConfig(intent.config)
+            is SettingsIntent.UpdateAppSyncSecrets -> updateAppSyncSecrets(intent.secrets)
             is SettingsIntent.Refresh -> mergeRefresh()
             is SettingsIntent.CaptureDynamicColor -> refreshPaletteRecords()
             is SettingsIntent.DeletePalette -> deletePaletteRecord(intent.deviceId, intent.fingerprint)
             is SettingsIntent.DryRun -> enqueueDryRun()
             is SettingsIntent.TestConnection -> enqueueTestConnection()
             is SettingsIntent.PerformSync -> enqueuePerformSync()
-            // #600 评论 #4 问题三：应用级同步 Intent 路由。
             is SettingsIntent.AppDryRun -> enqueueAppDryRun()
             is SettingsIntent.AppTestConnection -> enqueueAppTestConnection()
             is SettingsIntent.AppPerformSync -> enqueueAppPerformSync()
@@ -186,14 +209,32 @@ class SettingsViewModel(
         saveChannel.trySend(QueueItem.Save(SettingsSaveCommand.FontSize(fontSize, ++fontSizeRevision)))
     }
 
-    private fun updateSyncConfig(config: com.xiwei.sujian.model.SyncConfig) {
-        _uiState.update { it.copy(syncConfig = config) }
-        saveChannel.trySend(QueueItem.Save(SettingsSaveCommand.SyncConfig(config, ++syncConfigRevision)))
+    private fun updateProjectSyncConfig(config: com.xiwei.sujian.model.SyncConfig) {
+        _uiState.update { it.copy(projectSyncConfig = config) }
+        saveChannel.trySend(
+            QueueItem.Save(SettingsSaveCommand.ProjectSyncConfig(config, ++projectSyncConfigRevision)),
+        )
     }
 
-    private fun updateSyncSecrets(secrets: com.xiwei.sujian.model.SyncSecrets) {
-        _uiState.update { it.copy(syncSecrets = secrets) }
-        saveChannel.trySend(QueueItem.Save(SettingsSaveCommand.SyncSecrets(secrets, ++syncSecretsRevision)))
+    private fun updateProjectSyncSecrets(secrets: com.xiwei.sujian.model.SyncSecrets) {
+        _uiState.update { it.copy(projectSyncSecrets = secrets) }
+        saveChannel.trySend(
+            QueueItem.Save(SettingsSaveCommand.ProjectSyncSecrets(secrets, ++projectSyncSecretsRevision)),
+        )
+    }
+
+    private fun updateAppSyncConfig(config: com.xiwei.sujian.model.SyncConfig) {
+        _uiState.update { it.copy(appSyncConfig = config) }
+        saveChannel.trySend(
+            QueueItem.Save(SettingsSaveCommand.AppSyncConfig(config, ++appSyncConfigRevision)),
+        )
+    }
+
+    private fun updateAppSyncSecrets(secrets: com.xiwei.sujian.model.SyncSecrets) {
+        _uiState.update { it.copy(appSyncSecrets = secrets) }
+        saveChannel.trySend(
+            QueueItem.Save(SettingsSaveCommand.AppSyncSecrets(secrets, ++appSyncSecretsRevision)),
+        )
     }
 
     private fun refreshPaletteRecords() {
@@ -220,10 +261,10 @@ class SettingsViewModel(
         saveChannel.trySend(
             QueueItem.Transaction(
                 SettingsTransactionCommand.SaveAndRunDryRun(
-                    config = _uiState.value.syncConfig,
-                    configRevision = syncConfigRevision,
-                    secrets = _uiState.value.syncSecrets,
-                    secretsRevision = syncSecretsRevision,
+                    config = _uiState.value.projectSyncConfig,
+                    configRevision = projectSyncConfigRevision,
+                    secrets = _uiState.value.projectSyncSecrets,
+                    secretsRevision = projectSyncSecretsRevision,
                 ),
             ),
         )
@@ -233,10 +274,10 @@ class SettingsViewModel(
         saveChannel.trySend(
             QueueItem.Transaction(
                 SettingsTransactionCommand.SaveAndRunDiagnostics(
-                    config = _uiState.value.syncConfig,
-                    configRevision = syncConfigRevision,
-                    secrets = _uiState.value.syncSecrets,
-                    secretsRevision = syncSecretsRevision,
+                    config = _uiState.value.projectSyncConfig,
+                    configRevision = projectSyncConfigRevision,
+                    secrets = _uiState.value.projectSyncSecrets,
+                    secretsRevision = projectSyncSecretsRevision,
                 ),
             ),
         )
@@ -246,25 +287,24 @@ class SettingsViewModel(
         saveChannel.trySend(
             QueueItem.Transaction(
                 SettingsTransactionCommand.SaveAndRunSync(
-                    config = _uiState.value.syncConfig,
-                    configRevision = syncConfigRevision,
-                    secrets = _uiState.value.syncSecrets,
-                    secretsRevision = syncSecretsRevision,
+                    config = _uiState.value.projectSyncConfig,
+                    configRevision = projectSyncConfigRevision,
+                    secrets = _uiState.value.projectSyncSecrets,
+                    secretsRevision = projectSyncSecretsRevision,
                     trigger = SyncTrigger.SettingsPage,
                 ),
             ),
         )
     }
 
-    // #600 评论 #4 问题三：应用级同步 enqueue — 设置/全局星图/主题调色板。
     private fun enqueueAppDryRun() {
         saveChannel.trySend(
             QueueItem.Transaction(
                 SettingsTransactionCommand.SaveAndRunAppDryRun(
-                    config = _uiState.value.syncConfig,
-                    configRevision = syncConfigRevision,
-                    secrets = _uiState.value.syncSecrets,
-                    secretsRevision = syncSecretsRevision,
+                    config = _uiState.value.appSyncConfig,
+                    configRevision = appSyncConfigRevision,
+                    secrets = _uiState.value.appSyncSecrets,
+                    secretsRevision = appSyncSecretsRevision,
                 ),
             ),
         )
@@ -274,10 +314,10 @@ class SettingsViewModel(
         saveChannel.trySend(
             QueueItem.Transaction(
                 SettingsTransactionCommand.SaveAndRunAppDiagnostics(
-                    config = _uiState.value.syncConfig,
-                    configRevision = syncConfigRevision,
-                    secrets = _uiState.value.syncSecrets,
-                    secretsRevision = syncSecretsRevision,
+                    config = _uiState.value.appSyncConfig,
+                    configRevision = appSyncConfigRevision,
+                    secrets = _uiState.value.appSyncSecrets,
+                    secretsRevision = appSyncSecretsRevision,
                 ),
             ),
         )
@@ -287,10 +327,10 @@ class SettingsViewModel(
         saveChannel.trySend(
             QueueItem.Transaction(
                 SettingsTransactionCommand.SaveAndRunAppSync(
-                    config = _uiState.value.syncConfig,
-                    configRevision = syncConfigRevision,
-                    secrets = _uiState.value.syncSecrets,
-                    secretsRevision = syncSecretsRevision,
+                    config = _uiState.value.appSyncConfig,
+                    configRevision = appSyncConfigRevision,
+                    secrets = _uiState.value.appSyncSecrets,
+                    secretsRevision = appSyncSecretsRevision,
                     trigger = SyncTrigger.SettingsPage,
                 ),
             ),
@@ -599,7 +639,7 @@ internal fun settingsCategoryValue(
         SettingsSection.Appearance -> appearanceModeValue(state.settings.appearanceMode)
         SettingsSection.Editor -> fontSizeValue(state.fontSize)
         SettingsSection.Save -> toggleValue(state.settings.autoSaveEnabled)
-        SettingsSection.Sync -> toggleValue(state.syncConfig.enabled == true)
+        SettingsSection.Sync -> toggleValue(state.projectSyncConfig.enabled == true)
         SettingsSection.Ai -> toggleValue(state.settings.aiEnabled)
         SettingsSection.Diagnostics -> toggleValue(state.settings.diagnosticsEnabled)
         SettingsSection.Laboratory,

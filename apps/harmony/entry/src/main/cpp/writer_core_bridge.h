@@ -106,6 +106,8 @@ char*  writer_core_save_app_sync_config(const char* config_json);
 char*  writer_core_app_sync_dry_run(void);
 char*  writer_core_app_sync_diagnostics(void);
 char*  writer_core_perform_app_sync(void);
+char*  writer_core_load_app_sync_state(void);
+char*  writer_core_save_app_sync_state(const char* state_json);
 
 // ── Writing Stats ──
 char*  writer_core_get_writing_stats(void);

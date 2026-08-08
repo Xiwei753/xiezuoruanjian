@@ -188,4 +188,17 @@ class SyncBridge internal constructor(private val holder: WriterAppServiceHolder
         holder.wrapResult {
             holder.service.performAppSync(config.toDto(), forceSync).toModel()
         }
+
+    // ── 应用级同步状态（Issue #600 评论 #5） ──
+    // 路径：<app_data_root>/app-meta/sync/state.local.json
+
+    fun loadAppSyncState(): BridgeResult<SyncState> =
+        holder.wrapResult {
+            holder.service.loadAppSyncState().toModel()
+        }
+
+    fun saveAppSyncState(state: SyncState): BridgeResult<Unit> =
+        holder.wrapResult {
+            holder.service.saveAppSyncState(state.toDto())
+        }
 }

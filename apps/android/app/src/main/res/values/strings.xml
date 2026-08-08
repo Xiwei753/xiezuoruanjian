@@ -46,6 +46,7 @@
 
     <!-- Sync Settings -->
     <string name="pref_category_sync">同步设置 (仅支持 GitHub API 上传同步)</string>
+    <string name="pref_category_app_sync">应用数据同步</string>
     <string name="pref_category_ai">AI</string>
 
     <!-- 设置列表分组 -->

@@ -49,11 +49,11 @@ suspend fun SettingsViewModel.saveTransactionConfigAndSecrets(
     if (projectId == null) return false
     val commitResult = withContext(Dispatchers.IO) { settingsRepo.commitSyncProfile(projectId, config, secrets) }
     if (commitResult is SettingsSaveResult.Failed) return false
-    if (syncConfigRevision == configRevision) {
-        syncConfigPersistedRevision = configRevision
+    if (projectSyncConfigRevision == configRevision) {
+        projectSyncConfigPersistedRevision = configRevision
     }
-    if (syncSecretsRevision == secretsRevision) {
-        syncSecretsPersistedRevision = secretsRevision
+    if (projectSyncSecretsRevision == secretsRevision) {
+        projectSyncSecretsPersistedRevision = secretsRevision
     }
     return true
 }
@@ -194,8 +194,8 @@ suspend fun SettingsViewModel.executeSyncTransaction(command: SettingsTransactio
         setState = { state, result ->
             _uiState.update {
                 it.copy(
-                    performSyncState = state,
-                    structuredSyncResult = result,
+                    projectPerformSyncState = state,
+                    projectSyncResult = result,
                     lastCommandType = SyncCommandType.PERFORM_SYNC,
                 )
             }
@@ -204,14 +204,14 @@ suspend fun SettingsViewModel.executeSyncTransaction(command: SettingsTransactio
             _uiState.update { current ->
                 if (ioResult.isSuccess) {
                     current.copy(
-                        performSyncState = SyncCommandState.SUCCESS,
-                        structuredSyncResult = ioResult.structuredResult,
+                        projectPerformSyncState = SyncCommandState.SUCCESS,
+                        projectSyncResult = ioResult.structuredResult,
                         lastCommandType = SyncCommandType.PERFORM_SYNC,
                     )
                 } else {
                     current.copy(
-                        performSyncState = SyncCommandState.FAILURE,
-                        structuredSyncResult = ioResult.structuredResult,
+                        projectPerformSyncState = SyncCommandState.FAILURE,
+                        projectSyncResult = ioResult.structuredResult,
                         lastCommandType = SyncCommandType.PERFORM_SYNC,
                     )
                 }
@@ -238,21 +238,25 @@ suspend fun SettingsViewModel.executeDryRunTransaction(command: SettingsTransact
         lastCommandType = SyncCommandType.DRY_RUN,
         setState = { state, result ->
             _uiState.update {
-                it.copy(dryRunState = state, structuredSyncResult = result, lastCommandType = SyncCommandType.DRY_RUN)
+                it.copy(
+                    projectDryRunState = state,
+                    projectSyncResult = result,
+                    lastCommandType = SyncCommandType.DRY_RUN,
+                )
             }
         },
         applyResult = { ioResult ->
             _uiState.update { current ->
                 if (ioResult.isSuccess) {
                     current.copy(
-                        dryRunState = SyncCommandState.SUCCESS,
-                        structuredSyncResult = ioResult.structuredResult,
+                        projectDryRunState = SyncCommandState.SUCCESS,
+                        projectSyncResult = ioResult.structuredResult,
                         lastCommandType = SyncCommandType.DRY_RUN,
                     )
                 } else {
                     current.copy(
-                        dryRunState = SyncCommandState.FAILURE,
-                        structuredSyncResult = ioResult.structuredResult,
+                        projectDryRunState = SyncCommandState.FAILURE,
+                        projectSyncResult = ioResult.structuredResult,
                         lastCommandType = SyncCommandType.DRY_RUN,
                     )
                 }
@@ -284,8 +288,8 @@ suspend fun SettingsViewModel.executeDiagnosticsTransaction(
         setState = { state, result ->
             _uiState.update {
                 it.copy(
-                    testConnectionState = state,
-                    structuredSyncResult = result,
+                    projectTestConnectionState = state,
+                    projectSyncResult = result,
                     lastCommandType = SyncCommandType.TEST_CONNECTION,
                 )
             }
@@ -294,14 +298,14 @@ suspend fun SettingsViewModel.executeDiagnosticsTransaction(
             _uiState.update { current ->
                 if (ioResult.isSuccess) {
                     current.copy(
-                        testConnectionState = SyncCommandState.SUCCESS,
-                        structuredSyncResult = ioResult.structuredResult,
+                        projectTestConnectionState = SyncCommandState.SUCCESS,
+                        projectSyncResult = ioResult.structuredResult,
                         lastCommandType = SyncCommandType.TEST_CONNECTION,
                     )
                 } else {
                     current.copy(
-                        testConnectionState = SyncCommandState.FAILURE,
-                        structuredSyncResult = ioResult.structuredResult,
+                        projectTestConnectionState = SyncCommandState.FAILURE,
+                        projectSyncResult = ioResult.structuredResult,
                         lastCommandType = SyncCommandType.TEST_CONNECTION,
                     )
                 }
@@ -328,7 +332,12 @@ suspend fun SettingsViewModel.executeDiagnosticsTransaction(
             val refreshedCapability =
                 withContext(Dispatchers.IO) { settingsRepo.getSyncCapability(refreshedCapabilityProjectId) }
             val refreshedWarning = withContext(Dispatchers.IO) { settingsRepo.getSecureStorageWarning() }
-            _uiState.update { it.copy(syncCapability = refreshedCapability, secureStorageWarning = refreshedWarning) }
+            _uiState.update {
+                it.copy(
+                    projectSyncCapability = refreshedCapability,
+                    secureStorageWarning = refreshedWarning,
+                )
+            }
         }
     } catch (_: Exception) {
     }
@@ -351,11 +360,11 @@ private suspend fun SettingsViewModel.saveAppTransactionConfigAndSecrets(
 ): Boolean {
     val commitResult = withContext(Dispatchers.IO) { settingsRepo.commitAppSyncProfile(config, secrets) }
     if (commitResult is SettingsSaveResult.Failed) return false
-    if (syncConfigRevision == configRevision) {
-        syncConfigPersistedRevision = configRevision
+    if (appSyncConfigRevision == configRevision) {
+        appSyncConfigPersistedRevision = configRevision
     }
-    if (syncSecretsRevision == secretsRevision) {
-        syncSecretsPersistedRevision = secretsRevision
+    if (appSyncSecretsRevision == secretsRevision) {
+        appSyncSecretsPersistedRevision = secretsRevision
     }
     return true
 }
@@ -565,7 +574,7 @@ suspend fun SettingsViewModel.executeAppSyncTransaction(command: SettingsTransac
             _uiState.update {
                 it.copy(
                     appPerformSyncState = state,
-                    structuredSyncResult = result,
+                    appSyncResult = result,
                     lastCommandType = SyncCommandType.PERFORM_APP_SYNC,
                 )
             }
@@ -575,13 +584,13 @@ suspend fun SettingsViewModel.executeAppSyncTransaction(command: SettingsTransac
                 if (ioResult.isSuccess) {
                     current.copy(
                         appPerformSyncState = SyncCommandState.SUCCESS,
-                        structuredSyncResult = ioResult.structuredResult,
+                        appSyncResult = ioResult.structuredResult,
                         lastCommandType = SyncCommandType.PERFORM_APP_SYNC,
                     )
                 } else {
                     current.copy(
                         appPerformSyncState = SyncCommandState.FAILURE,
-                        structuredSyncResult = ioResult.structuredResult,
+                        appSyncResult = ioResult.structuredResult,
                         lastCommandType = SyncCommandType.PERFORM_APP_SYNC,
                     )
                 }
@@ -600,7 +609,7 @@ suspend fun SettingsViewModel.executeAppDryRunTransaction(command: SettingsTrans
             _uiState.update {
                 it.copy(
                     appDryRunState = state,
-                    structuredSyncResult = result,
+                    appSyncResult = result,
                     lastCommandType = SyncCommandType.DRY_RUN_APP,
                 )
             }
@@ -610,13 +619,13 @@ suspend fun SettingsViewModel.executeAppDryRunTransaction(command: SettingsTrans
                 if (ioResult.isSuccess) {
                     current.copy(
                         appDryRunState = SyncCommandState.SUCCESS,
-                        structuredSyncResult = ioResult.structuredResult,
+                        appSyncResult = ioResult.structuredResult,
                         lastCommandType = SyncCommandType.DRY_RUN_APP,
                     )
                 } else {
                     current.copy(
                         appDryRunState = SyncCommandState.FAILURE,
-                        structuredSyncResult = ioResult.structuredResult,
+                        appSyncResult = ioResult.structuredResult,
                         lastCommandType = SyncCommandType.DRY_RUN_APP,
                     )
                 }
@@ -638,7 +647,7 @@ suspend fun SettingsViewModel.executeAppDiagnosticsTransaction(
             _uiState.update {
                 it.copy(
                     appTestConnectionState = state,
-                    structuredSyncResult = result,
+                    appSyncResult = result,
                     lastCommandType = SyncCommandType.TEST_CONNECTION_APP,
                 )
             }
@@ -648,13 +657,13 @@ suspend fun SettingsViewModel.executeAppDiagnosticsTransaction(
                 if (ioResult.isSuccess) {
                     current.copy(
                         appTestConnectionState = SyncCommandState.SUCCESS,
-                        structuredSyncResult = ioResult.structuredResult,
+                        appSyncResult = ioResult.structuredResult,
                         lastCommandType = SyncCommandType.TEST_CONNECTION_APP,
                     )
                 } else {
                     current.copy(
                         appTestConnectionState = SyncCommandState.FAILURE,
-                        structuredSyncResult = ioResult.structuredResult,
+                        appSyncResult = ioResult.structuredResult,
                         lastCommandType = SyncCommandType.TEST_CONNECTION_APP,
                     )
                 }
@@ -678,20 +687,22 @@ suspend fun SettingsViewModel.executeAppDiagnosticsTransaction(
 suspend fun SettingsViewModel.refreshAppSyncProfileState() {
     val repo = settingsRepo
     val committedAppProfile = withContext(Dispatchers.IO) { repo.loadCommittedAppSyncProfile() }
+    val appLoadState = committedAppProfile.toAppSyncProfileLoadState()
     _uiState.update {
         it.copy(
-            syncConfig =
-                if (!hasUnsavedSyncConfig()) {
-                    committedAppProfile.toAppSyncProfileLoadState().confirmedConfig ?: it.syncConfig
+            appSyncConfig =
+                if (!hasUnsavedAppSyncConfig()) {
+                    appLoadState.confirmedConfig ?: it.appSyncConfig
                 } else {
-                    it.syncConfig
+                    it.appSyncConfig
                 },
-            syncSecrets =
-                if (!hasUnsavedSyncSecrets()) {
-                    committedAppProfile.toAppSyncProfileLoadState().confirmedSecrets ?: it.syncSecrets
+            appSyncSecrets =
+                if (!hasUnsavedAppSyncSecrets()) {
+                    appLoadState.confirmedSecrets ?: it.appSyncSecrets
                 } else {
-                    it.syncSecrets
+                    it.appSyncSecrets
                 },
+            appSyncProfileLoadState = appLoadState,
         )
     }
 }
@@ -715,7 +726,7 @@ suspend fun SettingsViewModel.refreshSyncProfileState() {
     if (projectId == null) {
         _uiState.update {
             it.copy(
-                syncProfileLoadState =
+                projectSyncProfileLoadState =
                     com.xiwei.sujian.ui.compose.settings.SyncProfileLoadState.Failed(
                         com.xiwei.sujian.data.SyncFailureKind.Fatal,
                         MSG_NO_ACTIVE_PROJECT,
@@ -729,20 +740,20 @@ suspend fun SettingsViewModel.refreshSyncProfileState() {
     val refreshedWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
     _uiState.update {
         it.copy(
-            syncConfig =
-                if (!hasUnsavedSyncConfig()) {
-                    committedProfile.toSyncProfileLoadState().confirmedConfig ?: it.syncConfig
+            projectSyncConfig =
+                if (!hasUnsavedProjectSyncConfig()) {
+                    committedProfile.toSyncProfileLoadState().confirmedConfig ?: it.projectSyncConfig
                 } else {
-                    it.syncConfig
+                    it.projectSyncConfig
                 },
-            syncSecrets =
-                if (!hasUnsavedSyncSecrets()) {
-                    committedProfile.toSyncProfileLoadState().confirmedSecrets ?: it.syncSecrets
+            projectSyncSecrets =
+                if (!hasUnsavedProjectSyncSecrets()) {
+                    committedProfile.toSyncProfileLoadState().confirmedSecrets ?: it.projectSyncSecrets
                 } else {
-                    it.syncSecrets
+                    it.projectSyncSecrets
                 },
-            syncProfileLoadState = committedProfile.toSyncProfileLoadState(),
-            syncCapability = refreshedCapability,
+            projectSyncProfileLoadState = committedProfile.toSyncProfileLoadState(),
+            projectSyncCapability = refreshedCapability,
             secureStorageWarning = refreshedWarning,
         )
     }

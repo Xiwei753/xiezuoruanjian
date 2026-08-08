@@ -415,6 +415,16 @@ impl super::WriterCore {
         save_config_atomic(&config_path, config)
     }
 
+    /// 加载应用级同步状态。路径：`<app_data_root>/app-meta/sync/state.local.json`。
+    pub fn load_app_sync_state(&self) -> crate::error::Result<crate::sync::SyncState> {
+        crate::sync::SyncService::load_sync_state(&self.app_data_root)
+    }
+
+    /// 保存应用级同步状态。路径：`<app_data_root>/app-meta/sync/state.local.json`。
+    pub fn save_app_sync_state(&self, state: &crate::sync::SyncState) -> crate::error::Result<()> {
+        crate::sync::SyncService::save_sync_state(&self.app_data_root, state)
+    }
+
     /// 加载应用级同步凭据。安全存储 key = `sync_token_app`。
     #[allow(
         clippy::too_many_lines,

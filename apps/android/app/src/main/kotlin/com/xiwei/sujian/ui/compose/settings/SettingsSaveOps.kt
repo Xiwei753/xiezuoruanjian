@@ -19,9 +19,17 @@ import kotlinx.coroutines.withContext
 private fun hasAnySaveCommand(
     local: SettingsSaveCommand.Local?,
     fontSize: SettingsSaveCommand.FontSize?,
-    syncConfig: SettingsSaveCommand.SyncConfig?,
-    syncSecrets: SettingsSaveCommand.SyncSecrets?,
-): Boolean = local != null || fontSize != null || syncConfig != null || syncSecrets != null
+    projectSyncConfig: SettingsSaveCommand.ProjectSyncConfig?,
+    projectSyncSecrets: SettingsSaveCommand.ProjectSyncSecrets?,
+    appSyncConfig: SettingsSaveCommand.AppSyncConfig?,
+    appSyncSecrets: SettingsSaveCommand.AppSyncSecrets?,
+): Boolean =
+    local != null ||
+        fontSize != null ||
+        projectSyncConfig != null ||
+        projectSyncSecrets != null ||
+        appSyncConfig != null ||
+        appSyncSecrets != null
 
 fun SettingsViewModel.loadInitial() {
     val repo = settingsRepo
@@ -64,8 +72,10 @@ private suspend fun SettingsViewModel.loadSyncCapabilityForProject(
 private suspend fun SettingsViewModel.loadInitialSnapshot(repo: SettingsRepository) {
     val snapshotLocalRev = localRevision
     val snapshotFontSizeRev = fontSizeRevision
-    val snapshotSyncConfigRev = syncConfigRevision
-    val snapshotSyncSecretsRev = syncSecretsRevision
+    val snapshotProjectSyncConfigRev = projectSyncConfigRevision
+    val snapshotProjectSyncSecretsRev = projectSyncSecretsRevision
+    val snapshotAppSyncConfigRev = appSyncConfigRevision
+    val snapshotAppSyncSecretsRev = appSyncSecretsRevision
 
     val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
     val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
@@ -73,8 +83,11 @@ private suspend fun SettingsViewModel.loadInitialSnapshot(repo: SettingsReposito
     val activeProjectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
     val committedProfile = loadCommittedProfileForProject(repo, activeProjectId)
     // #595 四：类型化加载状态 — Failed 时保留当前字段值，页面显示真实错误。
-    val syncProfileLoadState = committedProfile.toSyncProfileLoadState()
-    val syncCapability = loadSyncCapabilityForProject(repo, activeProjectId)
+    val projectSyncProfileLoadState = committedProfile.toSyncProfileLoadState()
+    val projectSyncCapability = loadSyncCapabilityForProject(repo, activeProjectId)
+    // 应用级 profile
+    val committedAppProfile = withContext(Dispatchers.IO) { repo.loadCommittedAppSyncProfile() }
+    val appSyncProfileLoadState = committedAppProfile.toAppSyncProfileLoadState()
     val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
     val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
     val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
@@ -85,25 +98,38 @@ private suspend fun SettingsViewModel.loadInitialSnapshot(repo: SettingsReposito
         SettingsUiState(
             settings = if (localRevision == snapshotLocalRev) settings else current.settings,
             fontSize = if (fontSizeRevision == snapshotFontSizeRev) fontSize else current.fontSize,
-            syncConfig =
-                if (syncConfigRevision == snapshotSyncConfigRev) {
-                    syncProfileLoadState.confirmedConfig ?: current.syncConfig
+            projectSyncConfig =
+                if (projectSyncConfigRevision == snapshotProjectSyncConfigRev) {
+                    projectSyncProfileLoadState.confirmedConfig ?: current.projectSyncConfig
                 } else {
-                    current.syncConfig
+                    current.projectSyncConfig
                 },
-            syncSecrets =
-                if (syncSecretsRevision == snapshotSyncSecretsRev) {
-                    syncProfileLoadState.confirmedSecrets ?: current.syncSecrets
+            projectSyncSecrets =
+                if (projectSyncSecretsRevision == snapshotProjectSyncSecretsRev) {
+                    projectSyncProfileLoadState.confirmedSecrets ?: current.projectSyncSecrets
                 } else {
-                    current.syncSecrets
+                    current.projectSyncSecrets
                 },
-            syncCapability = syncCapability,
+            projectSyncCapability = projectSyncCapability,
+            projectSyncProfileLoadState = projectSyncProfileLoadState,
+            appSyncConfig =
+                if (appSyncConfigRevision == snapshotAppSyncConfigRev) {
+                    appSyncProfileLoadState.confirmedConfig ?: current.appSyncConfig
+                } else {
+                    current.appSyncConfig
+                },
+            appSyncSecrets =
+                if (appSyncSecretsRevision == snapshotAppSyncSecretsRev) {
+                    appSyncProfileLoadState.confirmedSecrets ?: current.appSyncSecrets
+                } else {
+                    current.appSyncSecrets
+                },
+            appSyncProfileLoadState = appSyncProfileLoadState,
             secureStorageWarning = secureStorageWarning,
             builtinThemes = builtinThemes,
             paletteRecords = paletteRecords,
             aiAvailable = aiAvailable,
             dataRootPath = dataRootPath,
-            syncProfileLoadState = syncProfileLoadState,
         )
     }
 }
@@ -113,28 +139,54 @@ suspend fun SettingsViewModel.flushPending() {
     val cmds = pendingCommands
     if (cmds.isEmpty()) return
     pendingCommands = PendingCommands()
-    executeSave(repo, cmds.local, cmds.fontSize, cmds.syncConfig, cmds.syncSecrets)
+    executeSave(
+        repo,
+        cmds.local,
+        cmds.fontSize,
+        cmds.projectSyncConfig,
+        cmds.projectSyncSecrets,
+        cmds.appSyncConfig,
+        cmds.appSyncSecrets,
+    )
 }
 
 suspend fun SettingsViewModel.executeSave(
     repo: SettingsRepository,
     local: SettingsSaveCommand.Local?,
     fontSize: SettingsSaveCommand.FontSize?,
-    syncConfig: SettingsSaveCommand.SyncConfig?,
-    syncSecrets: SettingsSaveCommand.SyncSecrets?,
+    projectSyncConfig: SettingsSaveCommand.ProjectSyncConfig?,
+    projectSyncSecrets: SettingsSaveCommand.ProjectSyncSecrets?,
+    appSyncConfig: SettingsSaveCommand.AppSyncConfig?,
+    appSyncSecrets: SettingsSaveCommand.AppSyncSecrets?,
 ) {
     val failures = mutableListOf<SaveFailure>()
 
     saveLocalField(repo, local, failures)
     saveFontSizeField(repo, fontSize, failures)
-    val (syncConfigSaved, syncSecretsSaved) = saveSyncProfileField(repo, syncConfig, syncSecrets, failures)
+    val (projConfigSaved, projSecretsSaved) =
+        saveSyncProfileField(repo, projectSyncConfig, projectSyncSecrets, failures)
+    val (appConfigSaved, appSecretsSaved) =
+        saveAppSyncProfileField(repo, appSyncConfig, appSyncSecrets, failures)
 
-    if (syncConfigSaved || syncSecretsSaved) {
-        // #595 五：成功提交后一次性更新 config/secrets/loadState/capability/warning。
+    if (projConfigSaved || projSecretsSaved) {
+        // #595 五：成功提交后一次性更新作品级 config/secrets/loadState/capability/warning。
         refreshSyncProfileState()
     }
+    if (appConfigSaved || appSecretsSaved) {
+        // #600 评论 #5：成功提交后一次性更新应用级 config/secrets/loadState。
+        refreshAppSyncProfileState()
+    }
 
-    handleSaveOutcome(repo, failures, local, fontSize, syncConfig, syncSecrets)
+    handleSaveOutcome(
+        repo,
+        failures,
+        local,
+        fontSize,
+        projectSyncConfig,
+        projectSyncSecrets,
+        appSyncConfig,
+        appSyncSecrets,
+    )
 }
 
 /** 保存 local settings 字段 — 从 executeSave 拆分。 */
@@ -186,8 +238,8 @@ private suspend fun SettingsViewModel.saveFontSizeField(
  */
 private suspend fun SettingsViewModel.saveSyncProfileField(
     repo: SettingsRepository,
-    syncConfig: SettingsSaveCommand.SyncConfig?,
-    syncSecrets: SettingsSaveCommand.SyncSecrets?,
+    syncConfig: SettingsSaveCommand.ProjectSyncConfig?,
+    syncSecrets: SettingsSaveCommand.ProjectSyncSecrets?,
     failures: MutableList<SaveFailure>,
 ): Pair<Boolean, Boolean> {
     if (syncConfig == null && syncSecrets == null) return false to false
@@ -198,8 +250,8 @@ private suspend fun SettingsViewModel.saveSyncProfileField(
         failures.add(SaveFailure(SaveField.SYNC_CONFIG, syncConfig?.revision ?: 0L))
         return false to false
     }
-    val draftConfig = syncConfig?.config ?: _uiState.value.syncConfig
-    val draftSecrets = syncSecrets?.secrets ?: _uiState.value.syncSecrets
+    val draftConfig = syncConfig?.config ?: _uiState.value.projectSyncConfig
+    val draftSecrets = syncSecrets?.secrets ?: _uiState.value.projectSyncSecrets
     val commitResult =
         withContext(Dispatchers.IO) {
             repo.commitSyncProfile(projectId, draftConfig, draftSecrets)
@@ -208,12 +260,49 @@ private suspend fun SettingsViewModel.saveSyncProfileField(
     var syncSecretsSaved = false
     when (commitResult) {
         is SettingsSaveResult.Success -> {
-            if (syncConfig != null && syncConfigRevision == syncConfig.revision) {
-                syncConfigPersistedRevision = syncConfig.revision
+            if (syncConfig != null && projectSyncConfigRevision == syncConfig.revision) {
+                projectSyncConfigPersistedRevision = syncConfig.revision
                 syncConfigSaved = true
             }
-            if (syncSecrets != null && syncSecretsRevision == syncSecrets.revision) {
-                syncSecretsPersistedRevision = syncSecrets.revision
+            if (syncSecrets != null && projectSyncSecretsRevision == syncSecrets.revision) {
+                projectSyncSecretsPersistedRevision = syncSecrets.revision
+                syncSecretsSaved = true
+            }
+        }
+        is SettingsSaveResult.Failed -> {
+            collectSyncProfileFailures(commitResult.failures, syncConfig, syncSecrets, failures)
+        }
+    }
+    return syncConfigSaved to syncSecretsSaved
+}
+
+/**
+ * #600 评论 #5：原子提交应用级同步配置/凭据 — 提交到应用级 profile（不带 projectId）。
+ * 返回 (configSaved, secretsSaved)。
+ */
+private suspend fun SettingsViewModel.saveAppSyncProfileField(
+    repo: SettingsRepository,
+    syncConfig: SettingsSaveCommand.AppSyncConfig?,
+    syncSecrets: SettingsSaveCommand.AppSyncSecrets?,
+    failures: MutableList<SaveFailure>,
+): Pair<Boolean, Boolean> {
+    if (syncConfig == null && syncSecrets == null) return false to false
+    val draftConfig = syncConfig?.config ?: _uiState.value.appSyncConfig
+    val draftSecrets = syncSecrets?.secrets ?: _uiState.value.appSyncSecrets
+    val commitResult =
+        withContext(Dispatchers.IO) {
+            repo.commitAppSyncProfile(draftConfig, draftSecrets)
+        }
+    var syncConfigSaved = false
+    var syncSecretsSaved = false
+    when (commitResult) {
+        is SettingsSaveResult.Success -> {
+            if (syncConfig != null && appSyncConfigRevision == syncConfig.revision) {
+                appSyncConfigPersistedRevision = syncConfig.revision
+                syncConfigSaved = true
+            }
+            if (syncSecrets != null && appSyncSecretsRevision == syncSecrets.revision) {
+                appSyncSecretsPersistedRevision = syncSecrets.revision
                 syncSecretsSaved = true
             }
         }
@@ -227,19 +316,31 @@ private suspend fun SettingsViewModel.saveSyncProfileField(
 /** 收集同步配置提交失败 — 从 saveSyncProfileField 拆分。 */
 private fun SettingsViewModel.collectSyncProfileFailures(
     commitFailures: List<SaveFailure>,
-    syncConfig: SettingsSaveCommand.SyncConfig?,
-    syncSecrets: SettingsSaveCommand.SyncSecrets?,
+    syncConfig: SettingsSaveCommand?,
+    syncSecrets: SettingsSaveCommand?,
     failures: MutableList<SaveFailure>,
 ) {
+    val syncConfigRev =
+        when (syncConfig) {
+            is SettingsSaveCommand.ProjectSyncConfig -> syncConfig.revision
+            is SettingsSaveCommand.AppSyncConfig -> syncConfig.revision
+            else -> null
+        }
+    val syncSecretsRev =
+        when (syncSecrets) {
+            is SettingsSaveCommand.ProjectSyncSecrets -> syncSecrets.revision
+            is SettingsSaveCommand.AppSyncSecrets -> syncSecrets.revision
+            else -> null
+        }
     for (failure in commitFailures) {
         when (failure.field) {
             SaveField.SYNC_CONFIG -> {
-                if (syncConfig != null && syncConfigRevision == syncConfig.revision) {
+                if (syncConfigRev != null && syncConfigRev == currentSyncConfigRevision(syncConfig)) {
                     failures.add(failure)
                 }
             }
             SaveField.SYNC_SECRETS -> {
-                if (syncSecrets != null && syncSecretsRevision == syncSecrets.revision) {
+                if (syncSecretsRev != null && syncSecretsRev == currentSyncSecretsRevision(syncSecrets)) {
                     failures.add(failure)
                 }
             }
@@ -248,14 +349,32 @@ private fun SettingsViewModel.collectSyncProfileFailures(
     }
 }
 
+/** 返回当前作品级或应用级 config revision — 由 SaveCommand 类型决定。 */
+private fun SettingsViewModel.currentSyncConfigRevision(command: SettingsSaveCommand?): Long =
+    when (command) {
+        is SettingsSaveCommand.ProjectSyncConfig -> projectSyncConfigRevision
+        is SettingsSaveCommand.AppSyncConfig -> appSyncConfigRevision
+        else -> 0L
+    }
+
+/** 返回当前作品级或应用级 secrets revision — 由 SaveCommand 类型决定。 */
+private fun SettingsViewModel.currentSyncSecretsRevision(command: SettingsSaveCommand?): Long =
+    when (command) {
+        is SettingsSaveCommand.ProjectSyncSecrets -> projectSyncSecretsRevision
+        is SettingsSaveCommand.AppSyncSecrets -> appSyncSecretsRevision
+        else -> 0L
+    }
+
 /** 处理保存结果：失败回滚+报错 或 成功清错 — 从 executeSave 拆分。 */
 private suspend fun SettingsViewModel.handleSaveOutcome(
     repo: SettingsRepository,
     failures: List<SaveFailure>,
     local: SettingsSaveCommand.Local?,
     fontSize: SettingsSaveCommand.FontSize?,
-    syncConfig: SettingsSaveCommand.SyncConfig?,
-    syncSecrets: SettingsSaveCommand.SyncSecrets?,
+    projectSyncConfig: SettingsSaveCommand.ProjectSyncConfig?,
+    projectSyncSecrets: SettingsSaveCommand.ProjectSyncSecrets?,
+    appSyncConfig: SettingsSaveCommand.AppSyncConfig?,
+    appSyncSecrets: SettingsSaveCommand.AppSyncSecrets?,
 ) {
     if (failures.isNotEmpty()) {
         rollbackFailures(repo, failures)
@@ -268,7 +387,16 @@ private suspend fun SettingsViewModel.handleSaveOutcome(
             }
         _uiState.update { it.copy(saveErrorResId = errorResId) }
         _saveFailureEvents.send(errorResId)
-    } else if (hasAnySaveCommand(local, fontSize, syncConfig, syncSecrets)) {
+    } else if (
+        hasAnySaveCommand(
+            local,
+            fontSize,
+            projectSyncConfig,
+            projectSyncSecrets,
+            appSyncConfig,
+            appSyncSecrets,
+        )
+    ) {
         _uiState.update { it.copy(saveErrorResId = null) }
     }
 }
@@ -323,7 +451,7 @@ private suspend fun SettingsViewModel.rollbackSyncConfig(
     repo: SettingsRepository,
     expectedRevision: Long,
 ) {
-    if (syncConfigRevision != expectedRevision) return
+    if (projectSyncConfigRevision != expectedRevision) return
     // #595 八/五：回滚读取活动 generation 的完整 snapshot，不再读 live 槽；
     // 类型化处理 — Failed 保留当前 UI 值（不静默退化为默认值/null）。
     // #600 评论 #3 问题二：按当前活动作品路由。
@@ -337,16 +465,18 @@ private suspend fun SettingsViewModel.rollbackSyncConfig(
                 MSG_NO_ACTIVE_PROJECT,
             )
         }
-    if (syncConfigRevision != expectedRevision) return
-    syncConfigRevision = syncConfigPersistedRevision
-    _uiState.update { it.copy(syncConfig = profile.toSyncProfileLoadState().confirmedConfig ?: it.syncConfig) }
+    if (projectSyncConfigRevision != expectedRevision) return
+    projectSyncConfigRevision = projectSyncConfigPersistedRevision
+    _uiState.update {
+        it.copy(projectSyncConfig = profile.toSyncProfileLoadState().confirmedConfig ?: it.projectSyncConfig)
+    }
 }
 
 private suspend fun SettingsViewModel.rollbackSyncSecrets(
     repo: SettingsRepository,
     expectedRevision: Long,
 ) {
-    if (syncSecretsRevision != expectedRevision) return
+    if (projectSyncSecretsRevision != expectedRevision) return
     // #600 评论 #3 问题二：按当前活动作品路由。
     val rollbackSecretsProjectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
     val profile =
@@ -358,11 +488,11 @@ private suspend fun SettingsViewModel.rollbackSyncSecrets(
                 MSG_NO_ACTIVE_PROJECT,
             )
         }
-    if (syncSecretsRevision != expectedRevision) return
-    syncSecretsRevision = syncSecretsPersistedRevision
+    if (projectSyncSecretsRevision != expectedRevision) return
+    projectSyncSecretsRevision = projectSyncSecretsPersistedRevision
     _uiState.update {
         it.copy(
-            syncSecrets = profile.toSyncProfileLoadState().confirmedSecrets ?: it.syncSecrets,
+            projectSyncSecrets = profile.toSyncProfileLoadState().confirmedSecrets ?: it.projectSyncSecrets,
         )
     }
 }
@@ -387,13 +517,16 @@ fun SettingsViewModel.mergeRefresh() {
                 )
             }
         // #595 四：类型化加载状态 — Failed 时保留字段值，页面显示真实错误。
-        val syncProfileLoadState = committedProfile.toSyncProfileLoadState()
-        val syncCapability =
+        val projectSyncProfileLoadState = committedProfile.toSyncProfileLoadState()
+        val projectSyncCapability =
             if (mergeProjectId != null) {
                 withContext(Dispatchers.IO) { repo.getSyncCapability(mergeProjectId) }
             } else {
                 com.xiwei.sujian.model.SyncCapabilityData()
             }
+        // #600 评论 #5：刷新应用级 profile。
+        val committedAppProfile = withContext(Dispatchers.IO) { repo.loadCommittedAppSyncProfile() }
+        val appSyncProfileLoadState = committedAppProfile.toAppSyncProfileLoadState()
         val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
         val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
         val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
@@ -403,20 +536,35 @@ fun SettingsViewModel.mergeRefresh() {
             SettingsUiState(
                 settings = mergeLoadedLocal(current.settings, settings),
                 fontSize = mergeLoadedFontSize(current.fontSize, fontSize),
-                syncConfig = mergeLoadedSyncConfig(current.syncConfig, syncProfileLoadState),
-                syncSecrets = mergeLoadedSyncSecrets(current.syncSecrets, syncProfileLoadState),
-                syncCapability = syncCapability,
+                projectSyncConfig =
+                    mergeLoadedProjectSyncConfig(
+                        current.projectSyncConfig,
+                        projectSyncProfileLoadState,
+                    ),
+                projectSyncSecrets =
+                    mergeLoadedProjectSyncSecrets(
+                        current.projectSyncSecrets,
+                        projectSyncProfileLoadState,
+                    ),
+                projectSyncCapability = projectSyncCapability,
+                projectSyncProfileLoadState = projectSyncProfileLoadState,
+                projectDryRunState = current.projectDryRunState,
+                projectTestConnectionState = current.projectTestConnectionState,
+                projectPerformSyncState = current.projectPerformSyncState,
+                projectSyncResult = current.projectSyncResult,
+                appSyncConfig = mergeLoadedAppSyncConfig(current.appSyncConfig, appSyncProfileLoadState),
+                appSyncSecrets = mergeLoadedAppSyncSecrets(current.appSyncSecrets, appSyncProfileLoadState),
+                appSyncProfileLoadState = appSyncProfileLoadState,
+                appDryRunState = current.appDryRunState,
+                appTestConnectionState = current.appTestConnectionState,
+                appPerformSyncState = current.appPerformSyncState,
+                appSyncResult = current.appSyncResult,
                 secureStorageWarning = secureStorageWarning,
                 builtinThemes = builtinThemes,
                 paletteRecords = paletteRecords,
                 aiAvailable = aiAvailable,
                 dataRootPath = dataRootPath,
-                dryRunState = current.dryRunState,
-                testConnectionState = current.testConnectionState,
-                performSyncState = current.performSyncState,
-                structuredSyncResult = current.structuredSyncResult,
                 lastCommandType = current.lastCommandType,
-                syncProfileLoadState = syncProfileLoadState,
             )
         }
     }
@@ -433,12 +581,25 @@ private fun SettingsViewModel.mergeLoadedFontSize(
     loaded: Float,
 ): Float = if (!hasUnsavedFontSize()) loaded else current
 
-private fun SettingsViewModel.mergeLoadedSyncConfig(
+private fun SettingsViewModel.mergeLoadedProjectSyncConfig(
     current: com.xiwei.sujian.model.SyncConfig,
     loadState: SyncProfileLoadState,
-): com.xiwei.sujian.model.SyncConfig = if (!hasUnsavedSyncConfig()) loadState.confirmedConfig ?: current else current
+): com.xiwei.sujian.model.SyncConfig =
+    if (!hasUnsavedProjectSyncConfig()) loadState.confirmedConfig ?: current else current
 
-private fun SettingsViewModel.mergeLoadedSyncSecrets(
+private fun SettingsViewModel.mergeLoadedProjectSyncSecrets(
     current: com.xiwei.sujian.model.SyncSecrets,
     loadState: SyncProfileLoadState,
-): com.xiwei.sujian.model.SyncSecrets = if (!hasUnsavedSyncSecrets()) loadState.confirmedSecrets ?: current else current
+): com.xiwei.sujian.model.SyncSecrets =
+    if (!hasUnsavedProjectSyncSecrets()) loadState.confirmedSecrets ?: current else current
+
+private fun SettingsViewModel.mergeLoadedAppSyncConfig(
+    current: com.xiwei.sujian.model.SyncConfig,
+    loadState: SyncProfileLoadState,
+): com.xiwei.sujian.model.SyncConfig = if (!hasUnsavedAppSyncConfig()) loadState.confirmedConfig ?: current else current
+
+private fun SettingsViewModel.mergeLoadedAppSyncSecrets(
+    current: com.xiwei.sujian.model.SyncSecrets,
+    loadState: SyncProfileLoadState,
+): com.xiwei.sujian.model.SyncSecrets =
+    if (!hasUnsavedAppSyncSecrets()) loadState.confirmedSecrets ?: current else current

@@ -46,6 +46,7 @@
 
     <!-- Sync Settings -->
     <string name="pref_category_sync">Sync Settings (GitHub API upload only)</string>
+    <string name="pref_category_app_sync">App Data Sync</string>
     <string name="pref_category_ai">AI</string>
     <string name="pref_ai_enabled">Enable AI</string>
     <string name="pref_enable_sync">Enable Sync</string>

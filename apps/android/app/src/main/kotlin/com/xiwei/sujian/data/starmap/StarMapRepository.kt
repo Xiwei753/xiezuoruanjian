@@ -443,4 +443,11 @@ class StarMapRepository internal constructor(
     fun closeStarmapStore(starmapId: String): BridgeResult<Boolean> = bridge.closeStarmapStore(starmapId)
 
     fun flushAllStarmapStores(): BridgeResult<Boolean> = bridge.flushAllStarmapStores()
+
+    /**
+     * #600 评论 #5：失效所有星图内存缓存 — 应用级同步后调用，使下次读取从磁盘重新加载。
+     */
+    fun invalidateCache() {
+        cache.clear()
+    }
 }

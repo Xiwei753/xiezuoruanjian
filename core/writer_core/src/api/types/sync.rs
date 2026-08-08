@@ -145,6 +145,39 @@ impl From<crate::sync::SyncState> for SyncStateDto {
     }
 }
 
+impl From<SyncConflictDto> for crate::sync::SyncConflict {
+    fn from(c: SyncConflictDto) -> Self {
+        crate::sync::SyncConflict {
+            local_path: c.local_path,
+            remote_path: c.remote_path,
+            local_hash: c.local_hash,
+            remote_hash: c.remote_hash,
+            base_hash: c.base_hash,
+            created_at: c.created_at,
+            description: c.description,
+        }
+    }
+}
+
+impl From<SyncStateDto> for crate::sync::SyncState {
+    fn from(s: SyncStateDto) -> Self {
+        crate::sync::SyncState {
+            remote_url: s.remote_url,
+            transport: s.transport.map(sync_transport_from_wire_owned),
+            last_synced_commit: s.last_synced_commit,
+            last_sync_time: s.last_sync_time,
+            last_error: s.last_error,
+            conflicts: s
+                .conflicts
+                .unwrap_or_default()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncDiagnosticsResultDto {
     pub success: bool,
@@ -302,6 +335,17 @@ fn sync_transport_to_wire(transport: crate::sync::SyncProtocol) -> String {
         crate::sync::SyncProtocol::HttpsToken => "https_token".to_string(),
         crate::sync::SyncProtocol::SshDeployKey => "ssh_deploy_key".to_string(),
     }
+}
+
+fn sync_transport_from_wire(s: &str) -> crate::sync::SyncProtocol {
+    match s {
+        "ssh" | "ssh_deploy_key" => crate::sync::SyncProtocol::SshDeployKey,
+        _ => crate::sync::SyncProtocol::HttpsToken,
+    }
+}
+
+fn sync_transport_from_wire_owned(s: String) -> crate::sync::SyncProtocol {
+    sync_transport_from_wire(&s)
 }
 
 /// 将 `SyncStatus` 枚举转换为线格式字符串。

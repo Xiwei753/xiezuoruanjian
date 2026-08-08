@@ -3,6 +3,7 @@ package com.xiwei.sujian.runtime
 import android.content.Context
 import androidx.compose.runtime.compositionLocalOf
 import com.xiwei.sujian.data.AppServiceBridge
+import com.xiwei.sujian.data.AppSyncDataBarrier
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.ProjectRepository
 import com.xiwei.sujian.data.SettingsRepository
@@ -42,9 +43,17 @@ class DefaultAppServiceContainer(context: Context) : AppServiceContainer {
     override val projectRepository: ProjectRepository = ProjectRepository(appContext, appServiceBridge)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge)
     override val syncStatusRepository: SyncStatusRepository = SyncStatusRepository(settingsRepository)
-    override val syncCoordinator: SyncCoordinator = SyncCoordinator(settingsRepository, syncStatusRepository)
     override val starmapRepository: com.xiwei.sujian.data.starmap.StarMapRepository =
         BridgeProvider.getStarmapBridge(appContext).repository
+    private val appSyncDataBarrier: AppSyncDataBarrier =
+        AppSyncDataBarrier(
+            starmapBridge = BridgeProvider.getStarmapBridge(appContext),
+            reloadSettings = { },
+            reloadThemes = { },
+            invalidateStarmapCache = { starmapRepository.invalidateCache() },
+        )
+    override val syncCoordinator: SyncCoordinator =
+        SyncCoordinator(settingsRepository, syncStatusRepository, appSyncDataBarrier)
 }
 
 class DefaultSujianAppDependencies(

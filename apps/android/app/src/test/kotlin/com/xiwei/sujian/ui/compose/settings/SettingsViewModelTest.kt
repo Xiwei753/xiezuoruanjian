@@ -35,19 +35,19 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `handleIntent UpdateSyncConfig updates uiState syncConfig`() {
+    fun `handleIntent UpdateProjectSyncConfig updates uiState projectSyncConfig`() {
         val vm = createVm()
         val config = com.xiwei.sujian.model.SyncConfig(autoSync = true)
-        vm.handleIntent(SettingsIntent.UpdateSyncConfig(config))
-        assertEquals(true, vm.uiState.value.syncConfig.autoSync)
+        vm.handleIntent(SettingsIntent.UpdateProjectSyncConfig(config))
+        assertEquals(true, vm.uiState.value.projectSyncConfig.autoSync)
     }
 
     @Test
-    fun `handleIntent UpdateSyncSecrets updates uiState syncSecrets`() {
+    fun `handleIntent UpdateProjectSyncSecrets updates uiState projectSyncSecrets`() {
         val vm = createVm()
         val secrets = com.xiwei.sujian.model.SyncSecrets(token = "test-token")
-        vm.handleIntent(SettingsIntent.UpdateSyncSecrets(secrets))
-        assertEquals("test-token", vm.uiState.value.syncSecrets.token)
+        vm.handleIntent(SettingsIntent.UpdateProjectSyncSecrets(secrets))
+        assertEquals("test-token", vm.uiState.value.projectSyncSecrets.token)
     }
 
     @Test
@@ -81,17 +81,17 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `SettingsSaveCommand SyncConfig carries config and revision`() {
+    fun `SettingsSaveCommand ProjectSyncConfig carries config and revision`() {
         val config = com.xiwei.sujian.model.SyncConfig(autoSync = true)
-        val cmd = SettingsSaveCommand.SyncConfig(config, 3L)
+        val cmd = SettingsSaveCommand.ProjectSyncConfig(config, 3L)
         assertEquals(true, cmd.config.autoSync)
         assertEquals(3L, cmd.revision)
     }
 
     @Test
-    fun `SettingsSaveCommand SyncSecrets carries secrets and revision`() {
+    fun `SettingsSaveCommand ProjectSyncSecrets carries secrets and revision`() {
         val secrets = com.xiwei.sujian.model.SyncSecrets(token = "secret")
-        val cmd = SettingsSaveCommand.SyncSecrets(secrets, 4L)
+        val cmd = SettingsSaveCommand.ProjectSyncSecrets(secrets, 4L)
         assertEquals("secret", cmd.secrets.token)
         assertEquals(4L, cmd.revision)
     }
@@ -105,15 +105,15 @@ class SettingsViewModelTest {
                 autoSync = false,
                 remoteUrl = "https://unit.example/repo.git",
             )
-        vm.handleIntent(SettingsIntent.UpdateSyncConfig(config))
+        vm.handleIntent(SettingsIntent.UpdateProjectSyncConfig(config))
         // 保存并同步必须走 SaveAndRunSync 串行事务（保存队列屏障），并结束在明确终态：
         // 未配置 → 失败；不允许绕过保存队列或停留在 RUNNING/IDLE（#592）。
         vm.handleIntent(SettingsIntent.PerformSync)
         awaitUntil(
-            predicate = { vm.uiState.value.performSyncState == SyncCommandState.FAILURE },
+            predicate = { vm.uiState.value.projectPerformSyncState == SyncCommandState.FAILURE },
             message = "PerformSync must end in terminal FAILURE state via SaveAndRunSync transaction",
         )
-        assertEquals(SyncCommandState.FAILURE, vm.uiState.value.performSyncState)
+        assertEquals(SyncCommandState.FAILURE, vm.uiState.value.projectPerformSyncState)
     }
 
     @Test
@@ -123,19 +123,85 @@ class SettingsViewModelTest {
         // #595 四：设置页必须显示 Failed（真实错误），不得通过 toConfigSecretsOrNull()
         // 把失败静默转成默认空 token（那会伪装成“尚未配置”）。
         awaitUntil(
-            predicate = { vm.uiState.value.syncProfileLoadState !is SyncProfileLoadState.Loading },
+            predicate = { vm.uiState.value.projectSyncProfileLoadState !is SyncProfileLoadState.Loading },
             message = "initial sync profile load must settle",
         )
         assertTrue(
-            "读取失败必须显示为 SyncProfileLoadState.Failed，实际: ${vm.uiState.value.syncProfileLoadState}",
-            vm.uiState.value.syncProfileLoadState is SyncProfileLoadState.Failed,
+            "读取失败必须显示为 SyncProfileLoadState.Failed，实际: ${vm.uiState.value.projectSyncProfileLoadState}",
+            vm.uiState.value.projectSyncProfileLoadState is SyncProfileLoadState.Failed,
         )
         assertTrue(
             "Failed 不是 Unconfigured",
-            vm.uiState.value.syncProfileLoadState !is SyncProfileLoadState.Unconfigured,
+            vm.uiState.value.projectSyncProfileLoadState !is SyncProfileLoadState.Unconfigured,
         )
         // 失败时字段保留已确认值（初始默认），不因失败清空。
         assertEquals(16f, vm.uiState.value.fontSize, 0.01f)
+    }
+
+    @Test
+    fun `project and app sync config are independent`() {
+        val vm = createVm()
+        val projectConfig = com.xiwei.sujian.model.SyncConfig(enabled = true, remoteUrl = "https://project.git")
+        val appConfig = com.xiwei.sujian.model.SyncConfig(enabled = false, remoteUrl = "https://app.git")
+        vm.handleIntent(SettingsIntent.UpdateProjectSyncConfig(projectConfig))
+        vm.handleIntent(SettingsIntent.UpdateAppSyncConfig(appConfig))
+        // project config 不受 app config 影响
+        assertEquals(true, vm.uiState.value.projectSyncConfig.enabled)
+        assertEquals("https://project.git", vm.uiState.value.projectSyncConfig.remoteUrl)
+        // app config 不受 project config 影响
+        assertEquals(false, vm.uiState.value.appSyncConfig.enabled)
+        assertEquals("https://app.git", vm.uiState.value.appSyncConfig.remoteUrl)
+    }
+
+    @Test
+    fun `project and app sync secrets are independent`() {
+        val vm = createVm()
+        val projectSecrets = com.xiwei.sujian.model.SyncSecrets(token = "project-token")
+        val appSecrets = com.xiwei.sujian.model.SyncSecrets(token = "app-token")
+        vm.handleIntent(SettingsIntent.UpdateProjectSyncSecrets(projectSecrets))
+        vm.handleIntent(SettingsIntent.UpdateAppSyncSecrets(appSecrets))
+        assertEquals("project-token", vm.uiState.value.projectSyncSecrets.token)
+        assertEquals("app-token", vm.uiState.value.appSyncSecrets.token)
+    }
+
+    @Test
+    fun `UpdateAppSyncConfig does not touch projectSyncConfig`() {
+        val vm = createVm()
+        val projectConfig = com.xiwei.sujian.model.SyncConfig(enabled = true, remoteUrl = "https://project.git")
+        vm.handleIntent(SettingsIntent.UpdateProjectSyncConfig(projectConfig))
+        val appConfig = com.xiwei.sujian.model.SyncConfig(enabled = false, remoteUrl = "https://app.git")
+        vm.handleIntent(SettingsIntent.UpdateAppSyncConfig(appConfig))
+        // project config 保持不变
+        assertEquals(true, vm.uiState.value.projectSyncConfig.enabled)
+        assertEquals("https://project.git", vm.uiState.value.projectSyncConfig.remoteUrl)
+    }
+
+    @Test
+    fun `UpdateProjectSyncConfig does not touch appSyncConfig`() {
+        val vm = createVm()
+        val appConfig = com.xiwei.sujian.model.SyncConfig(enabled = true, remoteUrl = "https://app.git")
+        vm.handleIntent(SettingsIntent.UpdateAppSyncConfig(appConfig))
+        val projectConfig = com.xiwei.sujian.model.SyncConfig(enabled = false, remoteUrl = "https://project.git")
+        vm.handleIntent(SettingsIntent.UpdateProjectSyncConfig(projectConfig))
+        // app config 保持不变
+        assertEquals(true, vm.uiState.value.appSyncConfig.enabled)
+        assertEquals("https://app.git", vm.uiState.value.appSyncConfig.remoteUrl)
+    }
+
+    @Test
+    fun `SettingsSaveCommand AppSyncConfig carries config and revision`() {
+        val config = com.xiwei.sujian.model.SyncConfig(autoSync = true)
+        val cmd = SettingsSaveCommand.AppSyncConfig(config, 5L)
+        assertEquals(true, cmd.config.autoSync)
+        assertEquals(5L, cmd.revision)
+    }
+
+    @Test
+    fun `SettingsSaveCommand AppSyncSecrets carries secrets and revision`() {
+        val secrets = com.xiwei.sujian.model.SyncSecrets(token = "app-secret")
+        val cmd = SettingsSaveCommand.AppSyncSecrets(secrets, 6L)
+        assertEquals("app-secret", cmd.secrets.token)
+        assertEquals(6L, cmd.revision)
     }
 
     private fun awaitUntil(

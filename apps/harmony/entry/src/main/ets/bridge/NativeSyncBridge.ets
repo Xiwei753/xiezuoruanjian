@@ -1,4 +1,4 @@
-import { ChangedEntity, ResultEnvelope, SyncConfig, SyncResult, SyncDiagnosticsResult } from '../model/CoreDtos'
+import { ChangedEntity, ResultEnvelope, SyncConfig, SyncResult, SyncDiagnosticsResult, SyncState } from '../model/CoreDtos'
 import { NativeCoreModule } from './NativeCoreModule'
 
 function nativeError<T>(e: unknown): ResultEnvelope<T> {
@@ -78,5 +78,22 @@ export class NativeSyncBridge {
       const jsonStr: string = this.core.getNativeModule().nativeAppSyncDiagnostics()
       return this.core.parseEnvelope<SyncDiagnosticsResult>(jsonStr)
     } catch (e) { return nativeError<SyncDiagnosticsResult>(e) }
+  }
+
+  // ── 应用级同步状态（Issue #600 评论 #5） ──
+  // 路径：<app_data_root>/app-meta/sync/state.local.json
+
+  async loadAppSyncState(): Promise<ResultEnvelope<SyncState>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeLoadAppSyncState()
+      return this.core.parseEnvelope<SyncState>(jsonStr)
+    } catch (e) { return nativeError<SyncState>(e) }
+  }
+
+  async saveAppSyncState(state: SyncState): Promise<ResultEnvelope<boolean>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeSaveAppSyncState(JSON.stringify(state))
+      return this.core.parseEnvelope<boolean>(jsonStr)
+    } catch (e) { return nativeError<boolean>(e) }
   }
 }

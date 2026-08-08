@@ -292,6 +292,50 @@ pub unsafe extern "C" fn writer_core_perform_app_sync() -> *mut c_char {
     }
 }
 
+/// 加载应用级同步状态。返回 JSON 形式的 `SyncState`。
+///
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_load_app_sync_state() -> *mut c_char {
+    match with_core(|core| {
+        let state = core.load_app_sync_state().map_err(|e| format!("{}", e))?;
+        Ok(serde_json::to_value(&state).unwrap_or_default())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SYNC_STATE_ERROR", &e),
+    }
+}
+
+/// 保存应用级同步状态。`state_json` 为 JSON 形式的 `SyncState`。
+///
+/// # Safety
+/// `state_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_save_app_sync_state(
+    state_json: *const c_char,
+) -> *mut c_char {
+    let json_str = match c_str_to_rust(state_json) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid state_json: error {}", e),
+            )
+        }
+    };
+    match with_core(|core| {
+        let state: crate::sync::SyncState = serde_json::from_str(&json_str)
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+        core.save_app_sync_state(&state).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SYNC_STATE_ERROR", &e),
+    }
+}
+
 /// # Safety
 /// `platform` and `device_class` must be valid null-terminated UTF-8 C strings.
 #[no_mangle]

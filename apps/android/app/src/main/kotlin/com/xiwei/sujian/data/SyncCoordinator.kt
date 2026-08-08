@@ -36,6 +36,7 @@ sealed class SyncOutcome {
 class SyncCoordinator(
     private val settingsRepository: SettingsRepository,
     private val syncStatusRepository: SyncStatusRepository,
+    private val appSyncDataBarrier: AppSyncDataBarrier? = null,
 ) {
     /**
      * #592 四：统一异常边界 — 每条路径必须结束在明确终态。
@@ -247,6 +248,24 @@ class SyncCoordinator(
 
             val exclusiveResult =
                 SyncSession.runExclusive { _ ->
+                    // #600 评论 #5：应用级同步数据屏障 — flush 星图 store 落盘，确保同步引擎读到完整本地数据。
+                    if (appSyncDataBarrier != null) {
+                        val barrierFlushOk = appSyncDataBarrier.flushBeforeSync()
+                        if (!barrierFlushOk) {
+                            DiagnosticsLogger.w(
+                                "SyncCoordinator",
+                                "App sync data barrier flush failed — aborting (typed Fatal)",
+                            )
+                            syncStatusRepository.notifySyncFailed()
+                            return@runExclusive BridgeResult.Error(
+                                ResultEnvelope.errorOf(
+                                    "APP_SYNC_BARRIER_FLUSH_FAILED",
+                                    "App sync data barrier flush failed before sync",
+                                ),
+                                SyncFailureKind.Fatal,
+                            )
+                        }
+                    }
                     val flushOk = ActiveDocumentGate.flushActiveDocument()
                     if (!flushOk) {
                         DiagnosticsLogger.w(
@@ -282,6 +301,10 @@ class SyncCoordinator(
                     try {
                         val bridgeResult =
                             withContext(Dispatchers.IO) { settingsRepository.performAppSync(config) }
+                        // #600 评论 #5：同步成功后失效星图/设置/主题缓存，使后续读取拿到同步后的最新数据。
+                        if (appSyncDataBarrier != null && bridgeResult is BridgeResult.Success) {
+                            appSyncDataBarrier.reloadAfterSync(bridgeResult.data)
+                        }
                         resolveAndPublish(bridgeResult)
                         bridgeResult
                     } finally {

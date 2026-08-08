@@ -1,6 +1,6 @@
 use crate::api::{
     SyncConfigDto, SyncDiagnosticsResultDto, SyncPlanDto, SyncResultDto, SyncSecretsDto,
-    WriterError,
+    SyncStateDto, WriterError,
 };
 use crate::sync::{SyncConfig, SyncSecrets};
 
@@ -248,5 +248,13 @@ impl super::WriterAppService {
         force_sync: bool,
     ) -> Result<SyncResultDto, WriterError> {
         self.api.perform_app_sync(config, force_sync)
+    }
+
+    pub fn load_app_sync_state(&self) -> Result<SyncStateDto, WriterError> {
+        self.api.load_app_sync_state()
+    }
+
+    pub fn save_app_sync_state(&self, state: SyncStateDto) -> Result<(), WriterError> {
+        self.api.save_app_sync_state(state)
     }
 }

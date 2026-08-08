@@ -956,6 +956,30 @@ class SettingsRepository(
         }
     }
 
+    // ── #600 评论 #5：应用级同步状态（<app_data_root>/app-meta/sync/state.local.json） ──
+
+    fun loadAppSyncState(): SyncState {
+        return when (val result = syncBridge.loadAppSyncState()) {
+            is BridgeResult.Success -> result.data
+            is BridgeResult.Error -> {
+                warn("Failed to load app sync state: ${result.fullEnvelope}")
+                SyncState()
+            }
+            BridgeResult.NotLoaded -> SyncState()
+        }
+    }
+
+    fun saveAppSyncState(state: SyncState): Boolean {
+        return when (syncBridge.saveAppSyncState(state)) {
+            is BridgeResult.Success -> true
+            is BridgeResult.Error -> {
+                warn("Failed to save app sync state")
+                false
+            }
+            BridgeResult.NotLoaded -> false
+        }
+    }
+
     // ── #600 评论 #4 问题三：应用级 profile 快照与版本化提交 ──
     // 与作品级 profile 对称：generation 化的 config 提交 + generation 化的 secrets 安全存储，
     // 保证应用级同步配置的崩溃原子性。应用级不依赖 projectId，使用独立 AppSyncProfileStore。
