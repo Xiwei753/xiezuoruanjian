@@ -89,7 +89,6 @@ fn test_get_sync_capability_remote_url_missing() {
 
 #[test]
 fn test_load_save_app_sync_state_roundtrip() {
-    use crate::api::SyncStateDto;
     use std::path::Path;
 
     let temp_dir = tempdir().unwrap();
@@ -147,7 +146,6 @@ fn test_load_save_app_sync_state_roundtrip() {
 
 #[test]
 fn test_app_sync_state_independent_from_project_sync_state() {
-    use crate::api::SyncStateDto;
 
     let temp_dir = tempdir().unwrap();
     std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
