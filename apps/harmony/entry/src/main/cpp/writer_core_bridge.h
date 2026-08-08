@@ -100,6 +100,13 @@ char*  writer_core_sync_dry_run(const char* project_id);
 char*  writer_core_sync_diagnostics(const char* project_id);
 char*  writer_core_perform_sync(const char* project_id);
 
+// ── App-level sync (Issue #600 评论 #3/#4) — sync root = app_data_root ──
+char*  writer_core_load_app_sync_config(void);
+char*  writer_core_save_app_sync_config(const char* config_json);
+char*  writer_core_app_sync_dry_run(void);
+char*  writer_core_app_sync_diagnostics(void);
+char*  writer_core_perform_app_sync(void);
+
 // ── Writing Stats ──
 char*  writer_core_get_writing_stats(void);
 char*  writer_core_process_writing_event(const char* event_json);

@@ -177,6 +177,121 @@ pub unsafe extern "C" fn writer_core_perform_sync(project_id: *const c_char) -> 
     }
 }
 
+// ── 应用级同步 C ABI（Issue #600 评论 #3 问题四 / 评论 #4 问题三） ──
+// 同步根 = app_data_root，同步设置/全局星图/主题调色板。
+// 与作品级 C ABI 对称，但不接收 project_id — 应用级同步目标唯一。
+// Core Rust/UDL 层已有完整应用级同步 API，Android 通过 UniFFI(UDL) 接入；
+// 此 C ABI 导出供 Harmony(NAPI) 接入，消除平台契约偏差。
+
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_load_app_sync_config() -> *mut c_char {
+    match with_core(|core| {
+        let config = core.load_app_sync_config().map_err(|e| format!("{}", e))?;
+        Ok(serde_json::json!({
+            "enabled": config.enabled,
+            "provider": format!("{:?}", config.backend_type).to_lowercase(),
+            "remoteUrl": config.remote_url,
+            "branch": config.branch,
+            "autoSync": config.auto_sync,
+            "conflictStrategy": "manual"
+        }))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SETTINGS_NOT_FOUND", &e),
+    }
+}
+
+/// # Safety
+/// `config_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_save_app_sync_config(
+    config_json: *const c_char,
+) -> *mut c_char {
+    let json_str = match c_str_to_rust(config_json) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid config_json: error {}", e),
+            )
+        }
+    };
+    match with_core(|core| {
+        let mut config = core.load_app_sync_config().map_err(|e| format!("{}", e))?;
+        let val: serde_json::Value =
+            serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
+        if let Some(v) = val.get("enabled").and_then(|v| v.as_bool()) {
+            config.enabled = v;
+        }
+        if let Some(v) = val.get("remoteUrl").and_then(|v| v.as_str()) {
+            config.remote_url = v.to_string();
+        }
+        if let Some(v) = val.get("branch").and_then(|v| v.as_str()) {
+            config.branch = v.to_string();
+        }
+        if let Some(v) = val.get("autoSync").and_then(|v| v.as_bool()) {
+            config.auto_sync = v;
+        }
+        core.save_app_sync_config(&config)
+            .map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SETTINGS_INVALID", &e),
+    }
+}
+
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_app_sync_dry_run() -> *mut c_char {
+    match with_core(|core| {
+        let config = core.load_app_sync_config().map_err(|e| format!("{}", e))?;
+        let plan = core
+            .perform_app_sync_dry_run(&config)
+            .map_err(|e| format!("{}", e))?;
+        Ok(serde_json::to_value(&plan).unwrap_or_default())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
+    }
+}
+
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_app_sync_diagnostics() -> *mut c_char {
+    match with_core(|core| {
+        let config = core.load_app_sync_config().map_err(|e| format!("{}", e))?;
+        let diag = core
+            .perform_app_sync_diagnostics(&config)
+            .map_err(|e| format!("{}", e))?;
+        Ok(serde_json::to_value(&diag).unwrap_or_default())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
+    }
+}
+
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_perform_app_sync() -> *mut c_char {
+    match with_core(|core| {
+        let config = core.load_app_sync_config().map_err(|e| format!("{}", e))?;
+        let result = core
+            .perform_app_sync(&config, false)
+            .map_err(|e| format!("{}", e))?;
+        Ok(serde_json::to_value(&result).unwrap_or_default())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
+    }
+}
+
 /// # Safety
 /// `platform` and `device_class` must be valid null-terminated UTF-8 C strings.
 #[no_mangle]

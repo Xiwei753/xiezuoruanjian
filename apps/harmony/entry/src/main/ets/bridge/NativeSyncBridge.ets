@@ -5,10 +5,6 @@ function nativeError<T>(e: unknown): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
 }
 
-function notImplemented<T>(feature: string): ResultEnvelope<T> {
-  return { success: false, errorCode: 'NOT_IMPLEMENTED', messageKey: 'error.not_implemented', messageArgs: { 'feature': feature } as Record<string, string>, rawError: `${feature} not implemented`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-}
-
 export class NativeSyncBridge {
   constructor(private core: NativeCoreModule) {}
 
@@ -53,22 +49,34 @@ export class NativeSyncBridge {
 
   // ── 应用级同步通道（Issue #600 评论 #3 问题四） ──
   // 应用级同步根 = app_data_root，同步设置/全局星图/主题调色板。
-  // Core FFI 层尚未导出应用级 sync C ABI，这些入口暂返回 NOT_IMPLEMENTED，
-  // 等 Core FFI 补充后替换为真实 native 调用。
+  // Core FFI 已导出应用级 sync C ABI，Harmony(NAPI) 通过这些入口接入，
+  // 与作品级通道对称，但不接收 projectId — 应用级同步目标唯一。
 
   async loadAppSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
-    return notImplemented<SyncConfig>('load_app_sync_config')
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeLoadAppSyncConfig()
+      return this.core.parseEnvelope<SyncConfig>(jsonStr)
+    } catch (e) { return nativeError<SyncConfig>(e) }
   }
 
   async saveAppSyncConfig(_config: SyncConfig): Promise<ResultEnvelope<boolean>> {
-    return notImplemented<boolean>('save_app_sync_config')
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeSaveAppSyncConfig(JSON.stringify(_config))
+      return this.core.parseEnvelope<boolean>(jsonStr)
+    } catch (e) { return nativeError<boolean>(e) }
   }
 
   async performAppSync(): Promise<ResultEnvelope<SyncResult>> {
-    return notImplemented<SyncResult>('perform_app_sync')
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativePerformAppSync()
+      return this.core.parseEnvelope<SyncResult>(jsonStr)
+    } catch (e) { return nativeError<SyncResult>(e) }
   }
 
   async appSyncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
-    return notImplemented<SyncDiagnosticsResult>('app_sync_diagnostics')
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeAppSyncDiagnostics()
+      return this.core.parseEnvelope<SyncDiagnosticsResult>(jsonStr)
+    } catch (e) { return nativeError<SyncDiagnosticsResult>(e) }
   }
 }
