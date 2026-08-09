@@ -183,7 +183,6 @@ class AndroidInputAdapter(
         cause: EditorTransactionCauseDto,
     ) {
         val (sessionId, baseRev, generation) = compositionSessionInfo()
-        val preeditAtCommit = currentCompositionText
         val dto =
             commandPort.commitComposition(
                 byteStart, byteEndExclusive, replacementText,
@@ -194,7 +193,7 @@ class AndroidInputAdapter(
         val result = dto?.let { EditResult.fromDto(it) }
         if (result != null && result.isApplied()) {
             clearCompositionState()
-            val output = commandPort.applyCompositionCommit(dto, preeditAtCommit)
+            val output = commandPort.applyCompositionCommit(dto)
             onPipelineOutput?.invoke(output)
             return
         }
@@ -286,7 +285,7 @@ class AndroidInputAdapter(
             val result = EditResult.fromDto(dto)
             if (result.isApplied()) {
                 clearCompositionState()
-                val output = commandPort.applyCompositionCommit(dto, preeditAtFinish)
+                val output = commandPort.applyCompositionCommit(dto)
                 onPipelineOutput?.invoke(output)
                 return
             }
@@ -402,12 +401,7 @@ class AndroidInputAdapter(
             return
         }
 
-        commandPort.applyCompositionUpdateAnimated(
-            compositionReplaceStartUtf8,
-            compositionReplaceEndUtf8,
-            preeditText,
-            previousCompositionText,
-        ) {
+        commandPort.applyCompositionUpdateAnimated {
             mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
         }
         onCompositionVisualUpdate?.invoke()
@@ -431,7 +425,6 @@ class AndroidInputAdapter(
             )
 
         val (sessionId, baseRev, generation) = compositionSessionInfo()
-        val preeditAtCommit = currentCompositionText
         val dto =
             commandPort.commitComposition(
                 replaceStart, replaceEnd, finalText,
@@ -443,7 +436,7 @@ class AndroidInputAdapter(
             val result = EditResult.fromDto(dto)
             if (result.isApplied()) {
                 clearCompositionState()
-                val output = commandPort.applyCompositionCommit(dto, preeditAtCommit)
+                val output = commandPort.applyCompositionCommit(dto)
                 onPipelineOutput?.invoke(output)
                 return
             }
@@ -500,11 +493,8 @@ class AndroidInputAdapter(
         if (!isComposing) return
 
         val cancelOk = sendCancelCompositionToKernel()
-        val oldPreeditText = currentCompositionText
-        val replaceStart = compositionReplaceStartUtf8
-        val replaceEnd = compositionReplaceEndUtf8
 
-        commandPort.applyCompositionCancelAnimated(replaceStart, replaceEnd, oldPreeditText) {
+        commandPort.applyCompositionCancelAnimated {
             mirror.clearComposition()
         }
         clearCompositionState()

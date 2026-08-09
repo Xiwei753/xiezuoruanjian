@@ -348,11 +348,8 @@ class SujianEditorView
             }
         }
 
-        fun applyCompositionCommit(
-            dto: uniffi.writer_core.EditorEditResultDto,
-            preeditText: String = "",
-        ) {
-            val output = pipeline.applyCompositionCommit(dto, preeditText)
+        fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto) {
+            val output = pipeline.applyCompositionCommit(dto)
             handlePipelineOutput(output)
         }
 

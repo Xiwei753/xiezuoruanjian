@@ -250,13 +250,9 @@ class AndroidEditorPipeline private constructor(
      * — it just applies the edit result and feeds Core's visualIntent into the animation
      * pipeline.
      *
-     * The [preeditText] parameter is retained for the InputConnection adapter API but is
-     * no longer used to override Core's visual classification.
+     * The Core dto is the single source of truth for visual semantics.
      */
-    override fun applyCompositionCommit(
-        dto: uniffi.writer_core.EditorEditResultDto,
-        @Suppress("UNUSED_PARAMETER") preeditText: String,
-    ): PipelineOutput {
+    override fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto): PipelineOutput {
         val result = EditResult.fromDto(dto)
         pendingCompositionVisualIntent = null
         return applyEditResultWithIntent(result, result.visualIntent)
@@ -370,17 +366,10 @@ class AndroidEditorPipeline private constructor(
      * a VisualIntent from old/new preedit text — it feeds Core's result into the
      * animation pipeline.
      *
-     * The [replaceStartUtf8]/[replaceEndUtf8]/[newPreeditText]/[oldPreeditText] parameters
-     * are retained for the InputCommandPort API contract but are no longer used to
-     * construct a local VisualIntent.
+     * The Core dto is the single source of truth for visual semantics; the platform
+     * holds no preedit-text parameters.
      */
-    override fun applyCompositionUpdateAnimated(
-        @Suppress("UNUSED_PARAMETER") replaceStartUtf8: Int,
-        @Suppress("UNUSED_PARAMETER") replaceEndUtf8: Int,
-        @Suppress("UNUSED_PARAMETER") newPreeditText: String,
-        @Suppress("UNUSED_PARAMETER") oldPreeditText: String,
-        mirrorUpdate: (() -> Unit)?,
-    ) {
+    override fun applyCompositionUpdateAnimated(mirrorUpdate: (() -> Unit)?) {
         val visualIntent = pendingCompositionVisualIntent
         if (visualIntent != null) {
             visualRuntime.prepareAndSubmit(
@@ -405,16 +394,10 @@ class AndroidEditorPipeline private constructor(
      * The platform no longer constructs a VisualIntent locally — it feeds Core's result
      * into the animation pipeline.
      *
-     * The [replaceStartUtf8]/[replaceEndUtf8]/[oldPreeditText] parameters are retained
-     * for the InputCommandPort API contract but are no longer used to construct a local
-     * VisualIntent.
+     * The Core dto is the single source of truth for visual semantics; the platform
+     * holds no preedit-text parameters.
      */
-    override fun applyCompositionCancelAnimated(
-        @Suppress("UNUSED_PARAMETER") replaceStartUtf8: Int,
-        @Suppress("UNUSED_PARAMETER") replaceEndUtf8: Int,
-        @Suppress("UNUSED_PARAMETER") oldPreeditText: String,
-        mirrorUpdate: (() -> Unit)?,
-    ) {
+    override fun applyCompositionCancelAnimated(mirrorUpdate: (() -> Unit)?) {
         val visualIntent = pendingCompositionVisualIntent
         if (visualIntent != null) {
             visualRuntime.prepareAndSubmit(

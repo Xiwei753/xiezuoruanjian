@@ -787,31 +787,17 @@ class FakeInputCommandPort(
         return PipelineOutput.Edited(result, source)
     }
 
-    override fun applyCompositionCommit(
-        dto: EditorEditResultDto,
-        preeditText: String,
-    ): PipelineOutput {
+    override fun applyCompositionCommit(dto: EditorEditResultDto): PipelineOutput {
         val result = EditResult.fromDto(dto)
         mirror.applyEditResult(result)
         return PipelineOutput.Edited(result)
     }
 
-    override fun applyCompositionUpdateAnimated(
-        replaceStartUtf8: Int,
-        replaceEndUtf8: Int,
-        newPreeditText: String,
-        oldPreeditText: String,
-        mirrorUpdate: (() -> Unit)?,
-    ) {
+    override fun applyCompositionUpdateAnimated(mirrorUpdate: (() -> Unit)?) {
         mirrorUpdate?.invoke()
     }
 
-    override fun applyCompositionCancelAnimated(
-        replaceStartUtf8: Int,
-        replaceEndUtf8: Int,
-        oldPreeditText: String,
-        mirrorUpdate: (() -> Unit)?,
-    ) {
+    override fun applyCompositionCancelAnimated(mirrorUpdate: (() -> Unit)?) {
         mirrorUpdate?.invoke()
     }
 

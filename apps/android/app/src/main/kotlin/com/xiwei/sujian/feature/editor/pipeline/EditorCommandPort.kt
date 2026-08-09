@@ -42,25 +42,11 @@ interface InputCommandPort {
         source: EditorEditSource,
     ): PipelineOutput
 
-    fun applyCompositionCommit(
-        dto: EditorEditResultDto,
-        preeditText: String,
-    ): PipelineOutput
+    fun applyCompositionCommit(dto: EditorEditResultDto): PipelineOutput
 
-    fun applyCompositionUpdateAnimated(
-        replaceStartUtf8: Int,
-        replaceEndUtf8: Int,
-        newPreeditText: String,
-        oldPreeditText: String,
-        mirrorUpdate: (() -> Unit)?,
-    )
+    fun applyCompositionUpdateAnimated(mirrorUpdate: (() -> Unit)?)
 
-    fun applyCompositionCancelAnimated(
-        replaceStartUtf8: Int,
-        replaceEndUtf8: Int,
-        oldPreeditText: String,
-        mirrorUpdate: (() -> Unit)?,
-    )
+    fun applyCompositionCancelAnimated(mirrorUpdate: (() -> Unit)?)
 
     fun onCompositionUpdated()
 
@@ -152,25 +138,11 @@ interface EditorCommandPort {
         source: EditorEditSource = EditorEditSource.NORMAL,
     ): PipelineOutput
 
-    fun applyCompositionCommit(
-        dto: EditorEditResultDto,
-        preeditText: String,
-    ): PipelineOutput
+    fun applyCompositionCommit(dto: EditorEditResultDto): PipelineOutput
 
-    fun applyCompositionUpdateAnimated(
-        replaceStartUtf8: Int,
-        replaceEndUtf8: Int,
-        newPreeditText: String,
-        oldPreeditText: String,
-        mirrorUpdate: (() -> Unit)? = null,
-    )
+    fun applyCompositionUpdateAnimated(mirrorUpdate: (() -> Unit)? = null)
 
-    fun applyCompositionCancelAnimated(
-        replaceStartUtf8: Int,
-        replaceEndUtf8: Int,
-        oldPreeditText: String,
-        mirrorUpdate: (() -> Unit)? = null,
-    )
+    fun applyCompositionCancelAnimated(mirrorUpdate: (() -> Unit)? = null)
 
     fun onCompositionUpdated()
 

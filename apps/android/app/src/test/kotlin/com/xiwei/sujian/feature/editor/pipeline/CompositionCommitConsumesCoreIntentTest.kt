@@ -28,7 +28,8 @@ import uniffi.writer_core.EditorVisualIntentDto
  * isVisualSame, animationMode, and operationKind on the platform side.
  *
  * Positive: the visualIntent fed to the animation engine is exactly Core's visualIntent.
- * Negative: the platform does NOT override animationMode/operationKind based on preeditText.
+ * Negative: the platform has no preeditText parameter — visual semantics come solely
+ * from the Core dto (compile-time guarantee, stronger than a runtime check).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -69,7 +70,7 @@ class CompositionCommitConsumesCoreIntentTest {
             )
         val dto = buildEditResultDto(coreIntent)
 
-        val output = pipeline.applyCompositionCommit(dto, preeditText = "abc")
+        val output = pipeline.applyCompositionCommit(dto)
 
         assertNotNull(output)
         assertTrue(output is PipelineOutput.Edited)
@@ -111,7 +112,7 @@ class CompositionCommitConsumesCoreIntentTest {
             )
         val dto = buildEditResultDto(coreIntent)
 
-        val output = pipeline.applyCompositionCommit(dto, preeditText = "abc")
+        val output = pipeline.applyCompositionCommit(dto)
 
         assertNotNull(output)
         val edited = output as PipelineOutput.Edited
@@ -145,7 +146,7 @@ class CompositionCommitConsumesCoreIntentTest {
             )
         val dto = buildEditResultDto(coreIntent)
 
-        val output = pipeline.applyCompositionCommit(dto, preeditText = "ab")
+        val output = pipeline.applyCompositionCommit(dto)
 
         val edited = output as PipelineOutput.Edited
         assertEquals(
