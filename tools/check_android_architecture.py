@@ -13,7 +13,7 @@
 4.  feature/editor/input 只产生输入操作：不依赖 Repository/core/interop、Compose UI、
     Activity；UniFFI 只允许 EditorTransactionCauseDto 契约类型；
 5.  feature/editor/visual 与 motion 只处理显示和动画状态：不写正文持久状态
-    （core/interop/workspace）、不依赖 Activity/View/input、不依赖 Compose UI 框架、
+    （feature/*/data）、不依赖 Activity/View/input、不依赖 Compose UI 框架、
     UniFFI 只允许 DTO 契约类型；
 6.  editor session 层（EditorSessionCoordinator*）不能依赖 Compose 可变状态、
     View/Activity；派生 stateIn flow 与 reduceScope 已删除；唯一状态出口是
