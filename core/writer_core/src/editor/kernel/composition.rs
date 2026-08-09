@@ -6,9 +6,8 @@ use crate::editor::strong_types::{
     EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
 };
 use crate::editor::transaction::{
-    classify_composition_visual, AnimationMode, CompositionCommitOrCancelTransaction,
-    CompositionOperationKind, CompositionUpdateTransaction, CompositionVisualRevision,
-    EditorTransactionCause, OffsetMap,
+    classify_composition_visual, AnimationMode, CompositionOperationKind, EditorTransactionCause,
+    OffsetMap,
 };
 
 impl EditorKernel {
@@ -391,41 +390,5 @@ impl EditorKernel {
                 s.generation.value(),
             )
         })
-    }
-
-    pub fn composition_update(
-        &mut self,
-        composition_replace_range: Option<(usize, usize)>,
-        old_preedit_text: &str,
-        new_preedit_text: &str,
-    ) -> CompositionUpdateTransaction {
-        let mut engine = super::super::transaction::EditorEngine::with_animation_limits(
-            self.max_animated_chars,
-            self.animation_duration_ms,
-        );
-        engine.composition_update_transaction(
-            &self.text,
-            composition_replace_range,
-            old_preedit_text,
-            new_preedit_text,
-        )
-    }
-
-    pub fn composition_commit_or_cancel(
-        &mut self,
-        composition_revision: CompositionVisualRevision,
-        committed_text_after: &str,
-        is_commit: bool,
-    ) -> CompositionCommitOrCancelTransaction {
-        let mut engine = super::super::transaction::EditorEngine::with_animation_limits(
-            self.max_animated_chars,
-            self.animation_duration_ms,
-        );
-        engine.composition_commit_or_cancel_transaction(
-            &self.text,
-            committed_text_after,
-            composition_revision,
-            is_commit,
-        )
     }
 }

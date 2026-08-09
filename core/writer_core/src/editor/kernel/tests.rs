@@ -414,15 +414,6 @@ mod tests {
     }
 
     #[test]
-    fn composition_update_does_not_modify_text() {
-        let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
-        let tx = kernel.composition_update(None, "", "nihao");
-        assert_eq!(kernel.text(), "你好");
-        assert_eq!(kernel.cursor(), 6);
-        assert_eq!(tx.new_revision.preedit_text, "nihao");
-    }
-
-    #[test]
     fn composition_commit_modifies_text_via_replace() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
         let result = kernel
