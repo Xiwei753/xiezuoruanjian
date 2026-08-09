@@ -281,8 +281,10 @@ class InsertDeletePlanner {
         val allNewAffectedClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
 
         for (lineIndex in affectedOldLineIndices) {
-            val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex) ?: continue
+            oldRev.lineRanges.getOrNull(lineIndex) ?: continue
             val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, false) ?: continue
+            // #605 评论3: clusters 为空时不生成 alpha fallback slice —
+            // 无 cluster caret 几何时无法做 clip reveal，直接静态切换。
             if (oldSnapshot.clusters.isNotEmpty()) {
                 for (cluster in oldSnapshot.clusters) {
                     val inOldRange =
@@ -293,29 +295,14 @@ class InsertDeletePlanner {
                         allOldAffectedClusters.add(Pair(cluster, oldSnapshot))
                     }
                 }
-            } else {
-                animatedSlices.add(
-                    PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Delete,
-                        snapshot = oldSnapshot,
-                        sourceRect = oldSnapshot.sourceRect,
-                        destinationRect =
-                            android.graphics.RectF(
-                                oldLineRange.left,
-                                oldLineRange.top,
-                                oldLineRange.right,
-                                oldLineRange.bottom,
-                            ),
-                        startAlpha = 1f,
-                        endAlpha = 0f,
-                    ),
-                )
             }
         }
 
         for (lineIndex in affectedNewLineIndices) {
-            val newLineRange = newRev.lineRanges.getOrNull(lineIndex) ?: continue
+            newRev.lineRanges.getOrNull(lineIndex) ?: continue
             val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, true) ?: continue
+            // #605 评论3: clusters 为空时不生成 alpha fallback slice —
+            // 无 cluster caret 几何时无法做 clip reveal，直接静态切换。
             if (newSnapshot.clusters.isNotEmpty()) {
                 for (cluster in newSnapshot.clusters) {
                     val inNewRange =
@@ -326,23 +313,6 @@ class InsertDeletePlanner {
                         allNewAffectedClusters.add(Pair(cluster, newSnapshot))
                     }
                 }
-            } else {
-                animatedSlices.add(
-                    PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Insert,
-                        snapshot = newSnapshot,
-                        sourceRect = newSnapshot.sourceRect,
-                        destinationRect =
-                            android.graphics.RectF(
-                                newLineRange.left,
-                                newLineRange.top,
-                                newLineRange.right,
-                                newLineRange.bottom,
-                            ),
-                        startAlpha = 0f,
-                        endAlpha = 1f,
-                    ),
-                )
             }
         }
 
