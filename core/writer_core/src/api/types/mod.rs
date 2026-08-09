@@ -17,6 +17,10 @@ mod starmap;
 mod stats;
 mod sync;
 mod volume;
+#[cfg(test)]
+mod settings_tests;
+#[cfg(test)]
+mod sync_tests;
 
 #[cfg(test)]
 mod action_tests;

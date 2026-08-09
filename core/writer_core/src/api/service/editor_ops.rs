@@ -1,6 +1,7 @@
 use crate::api::service::{ApiResult, WriterCoreApi};
 use crate::api::types::*;
 use crate::platform_interaction::PlatformCapabilitiesExt;
+use crate::api::types::PlatformKindDto;
 
 impl WriterCoreApi {
     pub fn get_platform_capabilities(

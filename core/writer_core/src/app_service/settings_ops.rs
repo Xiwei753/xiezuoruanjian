@@ -75,7 +75,7 @@ impl super::WriterAppService {
             can_run = false;
             block_reason_code = Some("REMOTE_URL_MISSING".to_string());
             block_message_key = Some("sync.block.remote_url_missing".to_string());
-        } else if secrets.token.as_ref().is_none_or(|t| t.is_empty()) {
+        } else if secrets.token.as_ref().is_none_or(|t: &String| t.is_empty()) {
             can_run = false;
             block_reason_code = Some("TOKEN_MISSING".to_string());
             block_message_key = Some("sync.block.token_missing".to_string());
