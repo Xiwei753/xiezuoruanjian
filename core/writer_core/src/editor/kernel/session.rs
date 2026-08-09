@@ -3,7 +3,7 @@ use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorV
 use super::EditorKernel;
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
-use crate::editor::transaction::{AnimationMode, EditorChange, EditorTransactionCause};
+use crate::editor::transaction::{AnimationMode, EditorChange, EditorTransactionCause, OffsetMap};
 
 impl EditorKernel {
     pub fn load_text(&mut self, text: String, cursor: usize) -> EditorEditOutcome {
@@ -59,6 +59,7 @@ impl EditorKernel {
                 new_offset: Utf8ByteOffset::unchecked(resolved_cursor),
                 should_animate: false,
             },
+            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
         };
 
         let result = EditorEditResult {
@@ -100,6 +101,7 @@ impl EditorKernel {
                     new_offset: self.cursor,
                     should_animate: false,
                 },
+                offset_map: None,
             },
         }
     }
@@ -129,6 +131,7 @@ impl EditorKernel {
                     new_offset: old_cursor,
                     should_animate: false,
                 },
+                offset_map: None,
             },
         }
     }

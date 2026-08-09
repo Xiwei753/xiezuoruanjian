@@ -651,43 +651,29 @@ class AndroidEditorPipeline private constructor(
      * #606: Returns the byte length of the grapheme cluster immediately before [offset].
      *
      * Used by Backspace/Delete key handlers ([SujianEditorView.onKeyDown] KEYCODE_DEL) to
-     * determine which grapheme cluster to delete — a body-edit semantic. Ideally this
-     * boundary calculation would call Core's Unicode cluster logic (Core uses
-     * `unicode_segmentation` internally for `count_grapheme_clusters`), but Core does not
-     * yet expose a grapheme-boundary method via UDL. Android ICU `BreakIterator` implements
-     * the same UAX #29 grapheme cluster boundary algorithm as Rust's `unicode_segmentation`,
-     * so the results are consistent. When Core exposes a grapheme-boundary FFI method, this
-     * should be replaced with a call to Core to ensure a single source of truth.
+     * determine which grapheme cluster to delete — a body-edit semantic. Calls Core's
+     * Unicode cluster logic (unicode_segmentation) via [EditorKernelBridge] — single
+     * source of truth for grapheme boundary semantics. The platform no longer uses ICU
+     * BreakIterator for this calculation.
      */
     fun previousGraphemeByteLen(offset: Int): Int {
-        val projection = layoutRuntime.getCurrentProjection()
-        val realUtf16 = projection.realUtf8ToRealUtf16(offset)
-        if (realUtf16 <= 0) return 0
-        val iter = android.icu.text.BreakIterator.getCharacterInstance()
-        iter.setText(mirror.getText())
-        val prev = iter.preceding(realUtf16)
-        if (prev == android.icu.text.BreakIterator.DONE) return 0
-        val prevUtf8 = projection.realUtf16ToRealUtf8(prev)
-        return offset - prevUtf8
+        val bridge = kernelBridge ?: return 0
+        val boundary = bridge.previousGraphemeBoundary(offset)
+        return offset - boundary
     }
 
     /**
      * #606: Returns the byte length of the grapheme cluster immediately after [offset].
      *
      * Used by Forward-Delete key handlers ([SujianEditorView.onKeyDown] KEYCODE_FORWARD_DEL)
-     * to determine which grapheme cluster to delete — a body-edit semantic. See
-     * [previousGraphemeByteLen] for the relationship to Core's Unicode cluster logic.
+     * to determine which grapheme cluster to delete — a body-edit semantic. Calls Core's
+     * Unicode cluster logic (unicode_segmentation) via [EditorKernelBridge] — single
+     * source of truth for grapheme boundary semantics.
      */
     fun nextGraphemeByteLen(offset: Int): Int {
-        val projection = layoutRuntime.getCurrentProjection()
-        val realUtf16 = projection.realUtf8ToRealUtf16(offset)
-        if (realUtf16 >= mirror.getLengthUtf16()) return 0
-        val iter = android.icu.text.BreakIterator.getCharacterInstance()
-        iter.setText(mirror.getText())
-        val next = iter.following(realUtf16)
-        if (next == android.icu.text.BreakIterator.DONE) return 0
-        val nextUtf8 = projection.realUtf16ToRealUtf8(next)
-        return nextUtf8 - offset
+        val bridge = kernelBridge ?: return 0
+        val boundary = bridge.nextGraphemeBoundary(offset)
+        return boundary - offset
     }
 
     fun getLayoutMaxScrollY(viewHeight: Int): Float {

@@ -6,7 +6,7 @@ use super::{EditorKernel, UndoEntry};
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
 use crate::editor::transaction::{
     choose_animation_mode, count_grapheme_clusters, text_contains_complex_grapheme, AnimationMode,
-    EditorTransactionCause,
+    EditorTransactionCause, OffsetMap,
 };
 
 impl EditorKernel {
@@ -256,6 +256,7 @@ impl EditorKernel {
 
         self.composition_session = None;
 
+        let old_text = self.text.clone();
         self.text.insert_str(byte_offset, text);
         self.revision = self.revision.next();
         let new_cursor_val = byte_offset + text.len();
@@ -318,6 +319,7 @@ impl EditorKernel {
                     && !is_loading
                     && !is_format,
             },
+            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -432,6 +434,7 @@ impl EditorKernel {
                     && !is_loading
                     && !is_format,
             },
+            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -565,6 +568,7 @@ impl EditorKernel {
                     && !is_loading
                     && !is_format,
             },
+            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -613,6 +617,7 @@ impl EditorKernel {
 
         self.composition_session = None;
 
+        let old_text = self.text.clone();
         self.text.insert_str(byte_offset, &text);
         self.revision = self.revision.next();
         let new_cursor_val = byte_offset + text.len();
@@ -669,6 +674,7 @@ impl EditorKernel {
                 new_offset: Utf8ByteOffset::unchecked(new_cursor_val),
                 should_animate: self.animation_enabled && old_cursor.value() != new_cursor_val,
             },
+            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -872,6 +878,7 @@ impl EditorKernel {
                 new_offset: Utf8ByteOffset::unchecked(sel_head),
                 should_animate: self.animation_enabled && old_cursor.value() != sel_head,
             },
+            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
         };
 
         let edit_result = EditorEditResult {
@@ -1051,6 +1058,7 @@ impl EditorKernel {
                 new_offset: Utf8ByteOffset::unchecked(new_sel_head),
                 should_animate: false,
             },
+            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
         };
 
         EditorEditOutcome::Applied(EditorEditResult {

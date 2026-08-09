@@ -72,6 +72,7 @@ class SelectionOnlySessionCallbackTest {
                                 newByteOffset = head.toUInt(),
                                 shouldAnimate = false,
                             ),
+                        offsetMap = null,
                     ),
                 compositionSession = null,
             )
@@ -185,6 +186,11 @@ class SelectionOnlySessionCallbackTest {
         ): EditorEditResultDto? = null
 
         override fun sessionSnapshot(): uniffi.writer_core.EditorSessionSnapshotDto? = null
+
+        // #606: grapheme 边界 stub — 测试不验证 grapheme 语义
+        override fun previousGraphemeBoundary(byteOffset: Int): Int = byteOffset
+
+        override fun nextGraphemeBoundary(byteOffset: Int): Int = byteOffset
     }
 
     @Test

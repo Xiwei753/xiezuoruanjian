@@ -30,6 +30,7 @@ class VisualIntentRenderRoleTest {
                         newByteOffset = 0u,
                         shouldAnimate = false,
                     ),
+                offsetMap = null,
             ),
         )
 

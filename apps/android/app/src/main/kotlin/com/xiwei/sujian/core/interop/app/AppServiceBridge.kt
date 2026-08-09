@@ -938,6 +938,23 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
             holder.service.textEditSessionSetAnimationDurationMs(sessionId, durationMs)
         }
 
+    // #606: session-scoped grapheme 边界由 Core 唯一计算（unicode_segmentation）。
+    fun textEditSessionPreviousGraphemeBoundary(
+        sessionId: ULong,
+        byteOffset: UInt,
+    ): BridgeResult<UInt> =
+        holder.wrapResult {
+            holder.service.textEditSessionPreviousGraphemeBoundary(sessionId, byteOffset)
+        }
+
+    fun textEditSessionNextGraphemeBoundary(
+        sessionId: ULong,
+        byteOffset: UInt,
+    ): BridgeResult<UInt> =
+        holder.wrapResult {
+            holder.service.textEditSessionNextGraphemeBoundary(sessionId, byteOffset)
+        }
+
     fun textEditSessionGetText(sessionId: ULong): BridgeResult<String> =
         holder.wrapResult {
             holder.service.textEditSessionGetText(sessionId)

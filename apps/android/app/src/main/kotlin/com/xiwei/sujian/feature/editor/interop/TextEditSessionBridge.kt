@@ -322,4 +322,31 @@ class TextEditSessionBridge(
             else -> null
         }
     }
+
+    // #606: grapheme 边界由 Core 的 unicode_segmentation 唯一计算。
+    override fun previousGraphemeBoundary(byteOffset: Int): Int {
+        return when (
+            val result =
+                appServiceBridge.textEditSessionPreviousGraphemeBoundary(
+                    sessionId,
+                    byteOffset.toUInt(),
+                )
+        ) {
+            is BridgeResult.Success -> result.data.toInt()
+            else -> byteOffset
+        }
+    }
+
+    override fun nextGraphemeBoundary(byteOffset: Int): Int {
+        return when (
+            val result =
+                appServiceBridge.textEditSessionNextGraphemeBoundary(
+                    sessionId,
+                    byteOffset.toUInt(),
+                )
+        ) {
+            is BridgeResult.Success -> result.data.toInt()
+            else -> byteOffset
+        }
+    }
 }

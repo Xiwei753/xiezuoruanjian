@@ -239,6 +239,7 @@ class AffectedLayoutPlanner {
             val editParagraphId = oldRev.lineRanges.getOrNull(oldEditLine)?.paragraphId ?: 0
 
             val offsetMapper = buildOffsetMapper(visualIntent, oldRev, newRev)
+            val reverseMapper = buildReverseOffsetMapper(visualIntent, oldRev, newRev)
 
             val oldParagraphs = buildParagraphRanges(oldRev)
             val newParagraphs = buildParagraphRanges(newRev)
@@ -270,7 +271,7 @@ class AffectedLayoutPlanner {
             }
             for (newPara in newParagraphs) {
                 if (newPara.paragraphId in structurallyAffectedNewParaIds) continue
-                val reverseMappedStart = reverseMapOffset(newPara.startUtf8, visualIntent, oldRev, newRev)
+                val reverseMappedStart = reverseMapper(newPara.startUtf8)
                 if (reverseMappedStart == null) {
                     structurallyAffectedNewParaIds.add(newPara.paragraphId)
                     for (oldPara in oldParagraphs) {
@@ -393,158 +394,78 @@ class AffectedLayoutPlanner {
         )
     }
 
+    /**
+     * #606: Build an old→new offset mapper.
+     *
+     * If [VisualIntent.offsetMap] is non-null (Core provided an explicit offset map),
+     * consume it directly — single source of truth for offset translation semantics.
+     * Each [OffsetMapEntry] maps old offsets [oldByteOffset, oldByteOffset+length) to
+     * new offsets [newByteOffset, newByteOffset+length) linearly. Offsets not covered
+     * by any entry are in the changed region and return null.
+     *
+     * If [VisualIntent.offsetMap] is null (cursor-only operations, or Core did not
+     * provide a map), fall back to identity mapping.
+     */
     internal fun buildOffsetMapper(
         visualIntent: VisualIntent,
-        oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision,
+        @Suppress("UNUSED_PARAMETER") oldRev: AndroidLayoutRevision,
+        @Suppress("UNUSED_PARAMETER") newRev: AndroidLayoutRevision,
     ): (Int) -> Int? {
-        val oldRanges = visualIntent.oldAffectedByteRanges
-        val newRanges = visualIntent.newAffectedByteRanges
-
-        if (oldRanges.isEmpty() && newRanges.isNotEmpty()) {
-            val insertStart = newRanges.first().first
-            val insertLen = newRanges.sumOf { (s, e) -> e - s }
-            return { offset ->
-                if (offset < insertStart) offset else offset + insertLen
-            }
-        }
-
-        if (newRanges.isEmpty() && oldRanges.isNotEmpty()) {
-            val deleteStart = oldRanges.first().first
-            val deleteEnd = oldRanges.last().second
-            val deleteLen = oldRanges.sumOf { (s, e) -> e - s }
-            return { offset ->
-                when {
-                    offset < deleteStart -> offset
-                    offset < deleteEnd -> null
-                    else -> offset - deleteLen
-                }
-            }
-        }
-
-        if (oldRanges.isEmpty() || newRanges.isEmpty()) {
+        val offsetMap = visualIntent.offsetMap
+        if (offsetMap == null || offsetMap.entries.isEmpty()) {
             return { offset -> offset }
         }
-
-        val oldAffectedStart = oldRanges.first().first
-        val oldAffectedEnd = oldRanges.last().second
-        val newAffectedEnd = newRanges.last().second
-        val shift = newAffectedEnd - oldAffectedEnd
-
-        return { offset ->
-            when {
-                offset < oldAffectedStart -> offset
-                offset >= oldAffectedEnd -> offset + shift
-                else -> {
-                    val mapped = mapThroughRanges(offset, oldRanges, newRanges)
-                    if (mapped >= 0) mapped else null
+        return { offset: Int ->
+            val entry =
+                offsetMap.entries.firstOrNull { e ->
+                    offset >= e.oldByteOffset && offset < e.oldByteOffset + e.length
                 }
-            }
+            entry?.let { it.newByteOffset + (offset - it.oldByteOffset) }
         }
     }
 
-    internal fun mapThroughRanges(
-        offset: Int,
-        oldRanges: List<Pair<Int, Int>>,
-        newRanges: List<Pair<Int, Int>>,
-    ): Int {
-        for (i in oldRanges.indices) {
-            val (oldStart, oldEnd) = oldRanges[i]
-            if (offset >= oldStart && offset < oldEnd) {
-                val newRange = newRanges.getOrNull(i) ?: continue
-                val ratio = if (oldEnd == oldStart) 0f else (offset - oldStart).toFloat() / (oldEnd - oldStart)
-                return newRange.first + (ratio * (newRange.second - newRange.first)).toInt()
-            }
-        }
-        return -1
-    }
-
-    internal fun reverseMapOffset(
-        newOffset: Int,
-        visualIntent: VisualIntent,
-        oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision,
-    ): Int? {
-        val oldRanges = visualIntent.oldAffectedByteRanges
-        val newRanges = visualIntent.newAffectedByteRanges
-        if (oldRanges.isEmpty() && newRanges.isEmpty()) return newOffset
-        if (oldRanges.isEmpty()) {
-            val insertStart = newRanges.first().first
-            val insertLen = newRanges.sumOf { (s, e) -> e - s }
-            return if (newOffset < insertStart) {
-                newOffset
-            } else if (newOffset < insertStart + insertLen) {
-                null
-            } else {
-                newOffset - insertLen
-            }
-        }
-        if (newRanges.isEmpty()) {
-            val deleteStart = oldRanges.first().first
-            val deleteLen = oldRanges.sumOf { (s, e) -> e - s }
-            return if (newOffset < deleteStart) {
-                newOffset
-            } else {
-                newOffset + deleteLen
-            }
-        }
-        val newAffectedStart = newRanges.first().first
-        val newAffectedEnd = newRanges.last().second
-        if (newOffset < newAffectedStart) return newOffset
-        if (newOffset >= newAffectedEnd) {
-            val shift = newRanges.sumOf { (s, e) -> e - s } - oldRanges.sumOf { (s, e) -> e - s }
-            return newOffset - shift
-        }
-        return null
-    }
-
+    /**
+     * #606: Build a new→old (reverse) offset mapper.
+     *
+     * If [VisualIntent.offsetMap] is non-null, consume it directly — traverse entries
+     * to find the one containing the new byte offset and map back to old coordinates.
+     * If [VisualIntent.offsetMap] is null, fall back to identity mapping.
+     */
     internal fun buildReverseOffsetMapper(
         visualIntent: VisualIntent,
-        oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision,
+        @Suppress("UNUSED_PARAMETER") oldRev: AndroidLayoutRevision,
+        @Suppress("UNUSED_PARAMETER") newRev: AndroidLayoutRevision,
     ): (Int) -> Int? {
-        return { newOffset: Int -> reverseMapOffset(newOffset, visualIntent, oldRev, newRev) }
+        val offsetMap = visualIntent.offsetMap
+        if (offsetMap == null || offsetMap.entries.isEmpty()) {
+            return { newOffset -> newOffset }
+        }
+        return { newOffset: Int ->
+            val entry =
+                offsetMap.entries.firstOrNull { e ->
+                    newOffset >= e.newByteOffset && newOffset < e.newByteOffset + e.length
+                }
+            entry?.let { it.oldByteOffset + (newOffset - it.newByteOffset) }
+        }
     }
 
+    /**
+     * #606: Build a standalone new→old (reverse) offset mapper.
+     *
+     * Same semantics as [buildReverseOffsetMapper] but does not require layout revisions.
+     * Used by [computeStructurallyAffectedOldLineIndices] which only has the old revision.
+     */
     internal fun buildStandaloneReverseOffsetMapper(visualIntent: VisualIntent): (Int) -> Int? {
-        val oldRanges = visualIntent.oldAffectedByteRanges
-        val newRanges = visualIntent.newAffectedByteRanges
-        if (oldRanges.isEmpty() && newRanges.isEmpty()) return { newOffset -> newOffset }
-        if (oldRanges.isEmpty()) {
-            val insertStart = newRanges.first().first
-            val insertLen = newRanges.sumOf { (s, e) -> e - s }
-            return { newOffset ->
-                if (newOffset < insertStart) {
-                    newOffset
-                } else if (newOffset < insertStart + insertLen) {
-                    null
-                } else {
-                    newOffset - insertLen
-                }
-            }
+        val offsetMap = visualIntent.offsetMap
+        if (offsetMap == null || offsetMap.entries.isEmpty()) {
+            return { newOffset -> newOffset }
         }
-        if (newRanges.isEmpty()) {
-            val deleteStart = oldRanges.first().first
-            val deleteLen = oldRanges.sumOf { (s, e) -> e - s }
-            return { newOffset ->
-                if (newOffset < deleteStart) {
-                    newOffset
-                } else {
-                    newOffset + deleteLen
+        return { newOffset: Int ->
+            val entry =
+                offsetMap.entries.firstOrNull { e ->
+                    newOffset >= e.newByteOffset && newOffset < e.newByteOffset + e.length
                 }
-            }
-        }
-        val newAffectedStart = newRanges.first().first
-        val newAffectedEnd = newRanges.last().second
-        return { newOffset ->
-            if (newOffset < newAffectedStart) {
-                newOffset
-            } else if (newOffset >= newAffectedEnd) {
-                val shift = newRanges.sumOf { (s, e) -> e - s } - oldRanges.sumOf { (s, e) -> e - s }
-                newOffset - shift
-            } else {
-                null
-            }
+            entry?.let { it.oldByteOffset + (newOffset - it.newByteOffset) }
         }
     }
 

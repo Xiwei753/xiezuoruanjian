@@ -240,6 +240,13 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/starmap/data/StarMapRepository.kt"
       - "**/kotlin/com/xiwei/sujian/feature/sync/data/SyncRepository.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/interop/EditorKernelBridge.kt"
+      # --- #606: TextEditSessionBridge 及测试 mock 实现 EditorKernelBridge 接口，函数由 Core 契约决定 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/interop/TextEditSessionBridge.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/pipeline/GraphemeBoundaryCallsCoreTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/pipeline/AttachSnapshotTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/pipeline/CompositionCommitConsumesCoreIntentTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/pipeline/InsertLineBreakAutoIndentPolicyTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/interop/SelectionOnlySessionCallbackTest.kt"
       # --- 诊断事件：多字段事件枚举 ---
       - "**/kotlin/com/xiwei/sujian/core/diagnostics/DiagnosticsEvents.kt"
       - "**/kotlin/com/xiwei/sujian/app/diagnostics/DiagnosticsTest.kt"

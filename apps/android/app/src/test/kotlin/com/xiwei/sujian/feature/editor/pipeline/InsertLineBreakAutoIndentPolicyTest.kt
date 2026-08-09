@@ -209,11 +209,17 @@ class InsertLineBreakAutoIndentPolicyTest {
                         durationMs = 0uL,
                         coordinatedCursor =
                             CoordinatedCursorDto(0u, 1u, false),
+                        offsetMap = null,
                     ),
                 compositionSession = null,
             )
         }
 
         override fun sessionSnapshot(): EditorSessionSnapshotDto? = null
+
+        // #606: grapheme 边界 stub — 测试不验证 grapheme 语义
+        override fun previousGraphemeBoundary(byteOffset: Int): Int = byteOffset
+
+        override fun nextGraphemeBoundary(byteOffset: Int): Int = byteOffset
     }
 }

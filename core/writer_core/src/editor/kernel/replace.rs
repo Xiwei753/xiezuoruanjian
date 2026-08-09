@@ -3,7 +3,9 @@ use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorV
 use super::{EditorKernel, UndoEntry};
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
-use crate::editor::transaction::{diff_plain_text, AnimationMode, EditorTransactionCause};
+use crate::editor::transaction::{
+    diff_plain_text, AnimationMode, EditorTransactionCause, OffsetMap,
+};
 
 impl EditorKernel {
     pub(crate) fn apply_replace_all(
@@ -68,6 +70,7 @@ impl EditorKernel {
                 new_offset: Utf8ByteOffset::unchecked(new_cursor_val),
                 should_animate: false,
             },
+            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
         };
 
         EditorEditOutcome::Applied(EditorEditResult {

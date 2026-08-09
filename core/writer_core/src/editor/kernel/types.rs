@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::editor::strong_types::{
     EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
 };
-use crate::editor::transaction::{AnimationMode, EditorTransactionCause};
+use crate::editor::transaction::{AnimationMode, EditorTransactionCause, OffsetMap};
 
 pub enum EditorCommand {
     Insert {
@@ -107,6 +107,12 @@ pub struct EditorVisualIntent {
     pub animation_mode: AnimationMode,
     pub duration_ms: u64,
     pub coordinated_cursor: CoordinatedCursor,
+    /// #606: Core 计算的 old/new 正文偏移映射。
+    ///
+    /// 正文变更时由 `OffsetMap::build(&old_text, &new_text)` 填充；
+    /// 纯选区/光标操作（不修改正文）为 `None`。平台端 AffectedLayoutPlanner
+    /// 直接消费此字段，不再在 Kotlin 中独立推导 offset mapping。
+    pub offset_map: Option<OffsetMap>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

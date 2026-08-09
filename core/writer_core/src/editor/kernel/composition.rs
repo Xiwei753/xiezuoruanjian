@@ -8,7 +8,7 @@ use crate::editor::strong_types::{
 use crate::editor::transaction::{
     classify_composition_visual, AnimationMode, CompositionCommitOrCancelTransaction,
     CompositionOperationKind, CompositionUpdateTransaction, CompositionVisualRevision,
-    EditorTransactionCause,
+    EditorTransactionCause, OffsetMap,
 };
 
 impl EditorKernel {
@@ -86,6 +86,7 @@ impl EditorKernel {
                     new_offset: self.cursor,
                     should_animate: false,
                 },
+                offset_map: None,
             },
         })
     }
@@ -149,6 +150,7 @@ impl EditorKernel {
                     new_offset: self.cursor,
                     should_animate: self.animation_enabled && old_cursor != self.cursor,
                 },
+                offset_map: None,
             },
         })
     }
@@ -202,6 +204,7 @@ impl EditorKernel {
                         new_offset: self.cursor,
                         should_animate: false,
                     },
+                    offset_map: None,
                 },
             });
         }
@@ -299,6 +302,7 @@ impl EditorKernel {
                     should_animate: self.animation_enabled
                         && old_cursor.value() != resulting_cursor,
                 },
+                offset_map: Some(OffsetMap::build(&old_text, &self.text)),
             },
         };
 
@@ -374,6 +378,7 @@ impl EditorKernel {
                     new_offset: self.cursor,
                     should_animate: self.animation_enabled && old_cursor != self.cursor,
                 },
+                offset_map: None,
             },
         })
     }

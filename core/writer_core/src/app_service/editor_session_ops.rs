@@ -437,6 +437,22 @@ impl super::WriterAppService {
         })
     }
 
+    /// #606: 返回严格在 `byte_offset` 之前的最近 grapheme cluster 边界（UTF-8 byte offset）。
+    ///
+    /// 平台端 Backspace/Delete 的 grapheme 边界计算由 Core 唯一决定，
+    /// 不再依赖 ICU BreakIterator。
+    pub fn editor_kernel_previous_grapheme_boundary(&self, byte_offset: u32) -> u32 {
+        self.with_session(|s| s.kernel.previous_grapheme_boundary(byte_offset))
+    }
+
+    /// #606: 返回严格在 `byte_offset` 之后的最近 grapheme cluster 边界（UTF-8 byte offset）。
+    ///
+    /// 平台端 Backspace/Delete 的 grapheme 边界计算由 Core 唯一决定，
+    /// 不再依赖 ICU BreakIterator。
+    pub fn editor_kernel_next_grapheme_boundary(&self, byte_offset: u32) -> u32 {
+        self.with_session(|s| s.kernel.next_grapheme_boundary(byte_offset))
+    }
+
     pub fn editor_kernel_replace_all(
         &self,
         search: String,

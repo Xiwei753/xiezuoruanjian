@@ -1077,3 +1077,77 @@ fn classify_composition_visual_complex_grapheme() {
         AnimationMode::ClusterAnimation
     );
 }
+
+// ── #606: composition 的 offset_map 通过 kernel visual intent 暴露 ──
+
+#[test]
+fn composition_finish_exposes_offset_map_via_visual_intent() {
+    use crate::editor::EditorCommand;
+    use crate::editor::EditorKernel;
+    use crate::editor::OffsetMapKind;
+
+    // 初始正文 "hello"，在末尾 begin composition，update preedit 为 " world"，finish
+    let mut kernel = EditorKernel::with_text("hello".to_string(), 5).unwrap();
+    let _ = kernel.apply(EditorCommand::BeginComposition {
+        replace_range: Utf8ByteRange::point(5),
+        expected_revision: EditorRevision::new(0),
+    });
+    let (session_id, _, generation) = kernel.composition_session_info().unwrap();
+    let _ = kernel.apply(EditorCommand::UpdateComposition {
+        composition_session_id: EditorSessionId::new(session_id),
+        composition_generation: EditorSessionGeneration::new(generation),
+        new_preedit_text: " world".to_string(),
+        new_preedit_cursor_offset: Utf8ByteOffset::unchecked(6),
+        expected_revision: EditorRevision::new(0),
+    });
+    let (_, _, gen2) = kernel.composition_session_info().unwrap();
+    let result = kernel
+        .apply(EditorCommand::FinishComposition {
+            composition_session_id: EditorSessionId::new(session_id),
+            composition_generation: EditorSessionGeneration::new(gen2),
+            expected_revision: EditorRevision::new(0),
+        })
+        .into_result();
+
+    // finish composition 修改了正文（hello -> hello world），应产生 offset_map
+    let map = result
+        .visual_intent
+        .offset_map
+        .expect("composition finish 应产生 offset_map");
+    // old="hello", new="hello world"：前缀 "hello" identity (0->0, len=5)
+    assert_eq!(map.entries.len(), 1);
+    assert_eq!(map.entries[0].old_byte_offset.value(), 0);
+    assert_eq!(map.entries[0].new_byte_offset.value(), 0);
+    assert_eq!(map.entries[0].length, 5);
+    assert_eq!(map.entries[0].kind, OffsetMapKind::Identity);
+    // 验证映射：old offset 0..5 映射到 new offset 0..5
+    assert_eq!(map.map_old_to_new(0), Some(0));
+    assert_eq!(map.map_old_to_new(4), Some(4));
+}
+
+#[test]
+fn composition_update_does_not_produce_offset_map() {
+    use crate::editor::EditorCommand;
+    use crate::editor::EditorKernel;
+
+    // composition update 不修改正文，offset_map 应为 None
+    let mut kernel = EditorKernel::with_text("hello".to_string(), 5).unwrap();
+    let _ = kernel.apply(EditorCommand::BeginComposition {
+        replace_range: Utf8ByteRange::point(5),
+        expected_revision: EditorRevision::new(0),
+    });
+    let (session_id, _, generation) = kernel.composition_session_info().unwrap();
+    let result = kernel
+        .apply(EditorCommand::UpdateComposition {
+            composition_session_id: EditorSessionId::new(session_id),
+            composition_generation: EditorSessionGeneration::new(generation),
+            new_preedit_text: " world".to_string(),
+            new_preedit_cursor_offset: Utf8ByteOffset::unchecked(6),
+            expected_revision: EditorRevision::new(0),
+        })
+        .into_result();
+    assert!(
+        result.visual_intent.offset_map.is_none(),
+        "composition update 不修改正文，offset_map 应为 None"
+    );
+}

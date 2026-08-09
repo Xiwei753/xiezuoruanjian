@@ -575,4 +575,34 @@ impl super::WriterAppService {
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
+
+    /// #606: 返回严格在 `byte_offset` 之前的最近 grapheme cluster 边界（UTF-8 byte offset）。
+    ///
+    /// session-scoped 版本，与 [editor_kernel_previous_grapheme_boundary] 语义一致，
+    /// 但作用于指定 session 的 EditorKernel。平台端 TextEditSessionBridge 通过此方法
+    /// 调用 Core 的 unicode_segmentation，不再依赖 ICU BreakIterator。
+    pub fn text_edit_session_previous_grapheme_boundary(
+        &self,
+        session_id: u64,
+        byte_offset: u32,
+    ) -> u32 {
+        self.with_session_in_registry(session_id, |s| {
+            s.kernel.previous_grapheme_boundary(byte_offset)
+        })
+        .unwrap_or(byte_offset)
+    }
+
+    /// #606: 返回严格在 `byte_offset` 之后的最近 grapheme cluster 边界（UTF-8 byte offset）。
+    ///
+    /// session-scoped 版本，与 [editor_kernel_next_grapheme_boundary] 语义一致，
+    /// 但作用于指定 session 的 EditorKernel。平台端 TextEditSessionBridge 通过此方法
+    /// 调用 Core 的 unicode_segmentation，不再依赖 ICU BreakIterator。
+    pub fn text_edit_session_next_grapheme_boundary(
+        &self,
+        session_id: u64,
+        byte_offset: u32,
+    ) -> u32 {
+        self.with_session_in_registry(session_id, |s| s.kernel.next_grapheme_boundary(byte_offset))
+            .unwrap_or(byte_offset)
+    }
 }

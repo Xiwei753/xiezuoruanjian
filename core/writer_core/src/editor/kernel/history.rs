@@ -3,7 +3,9 @@ use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorV
 use super::EditorKernel;
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
-use crate::editor::transaction::{diff_plain_text, AnimationMode, EditorTransactionCause};
+use crate::editor::transaction::{
+    diff_plain_text, AnimationMode, EditorTransactionCause, OffsetMap,
+};
 
 impl EditorKernel {
     pub(crate) fn apply_undo(
@@ -73,6 +75,7 @@ impl EditorKernel {
                 new_offset: new_cursor_val,
                 should_animate: self.animation_enabled && old_cursor != new_cursor_val,
             },
+            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -153,6 +156,7 @@ impl EditorKernel {
                 new_offset: new_cursor_val,
                 should_animate: self.animation_enabled && old_cursor != new_cursor_val,
             },
+            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
         };
 
         EditorEditOutcome::Applied(EditorEditResult {

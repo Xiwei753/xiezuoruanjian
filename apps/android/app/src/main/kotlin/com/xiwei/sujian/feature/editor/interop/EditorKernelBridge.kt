@@ -116,4 +116,20 @@ interface EditorKernelBridge {
     ): uniffi.writer_core.EditorEditResultDto?
 
     fun sessionSnapshot(): uniffi.writer_core.EditorSessionSnapshotDto?
+
+    /**
+     * #606: Returns the UTF-8 byte offset of the grapheme cluster boundary strictly before [byteOffset].
+     *
+     * Calls Core's Unicode cluster logic (unicode_segmentation) — single source of truth
+     * for grapheme boundary semantics. Used by Backspace/Delete key handlers.
+     */
+    fun previousGraphemeBoundary(byteOffset: Int): Int
+
+    /**
+     * #606: Returns the UTF-8 byte offset of the grapheme cluster boundary strictly after [byteOffset].
+     *
+     * Calls Core's Unicode cluster logic (unicode_segmentation) — single source of truth
+     * for grapheme boundary semantics. Used by Forward-Delete key handlers.
+     */
+    fun nextGraphemeBoundary(byteOffset: Int): Int
 }

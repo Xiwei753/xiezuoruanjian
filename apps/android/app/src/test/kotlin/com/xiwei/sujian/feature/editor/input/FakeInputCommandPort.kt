@@ -185,6 +185,7 @@ class FakeInputCommandPort(
                             newByteOffset = selHead.toUInt(),
                             shouldAnimate = false,
                         ),
+                    offsetMap = null,
                 ),
             compositionSession = null,
         )
@@ -220,6 +221,7 @@ class FakeInputCommandPort(
                             newByteOffset = selectionHeadUtf8.toUInt(),
                             shouldAnimate = false,
                         ),
+                    offsetMap = null,
                 ),
             compositionSession = null,
         )
@@ -296,6 +298,7 @@ class FakeInputCommandPort(
                             newByteOffset = selectionHeadUtf8.toUInt(),
                             shouldAnimate = false,
                         ),
+                    offsetMap = null,
                 ),
             compositionSession =
                 CompositionSessionDto(
@@ -362,6 +365,7 @@ class FakeInputCommandPort(
                             newByteOffset = selectionHeadUtf8.toUInt(),
                             shouldAnimate = false,
                         ),
+                    offsetMap = null,
                 ),
             compositionSession = null,
         )
@@ -548,6 +552,7 @@ class FakeInputCommandPort(
                             newByteOffset = selectionHeadUtf8.toUInt(),
                             shouldAnimate = false,
                         ),
+                    offsetMap = null,
                 ),
             compositionSession = null,
         )
@@ -670,6 +675,7 @@ class FakeInputCommandPort(
                                 newByteOffset = headByteOffset.toUInt(),
                                 shouldAnimate = false,
                             ),
+                        offsetMap = null,
                     ),
                 compositionSession = null,
             )
@@ -765,6 +771,7 @@ class FakeInputCommandPort(
                             newByteOffset = cursor.toUInt(),
                             shouldAnimate = false,
                         ),
+                    offsetMap = null,
                 ),
             compositionSession = null,
         )

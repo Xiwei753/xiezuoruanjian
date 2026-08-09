@@ -1316,6 +1316,9 @@ interface WriterAppService {
     u32 editor_kernel_get_cursor();
     u32 editor_kernel_get_selection_anchor();
     EditorSessionSnapshotDto editor_kernel_session_snapshot();
+    // #606: grapheme cluster 边界由 Core 唯一计算，平台端不再依赖 ICU BreakIterator
+    u32 editor_kernel_previous_grapheme_boundary(u32 byte_offset);
+    u32 editor_kernel_next_grapheme_boundary(u32 byte_offset);
     EditorEditResultDto editor_kernel_replace_all(string search, string replacement, u64 expected_revision);
     EditorEditResultDto editor_kernel_insert_line_break(u32 byte_offset, u8 auto_indent_enabled, EditorTransactionCauseDto cause, u64 expected_revision);
 
@@ -1339,6 +1342,11 @@ interface WriterAppService {
     EditorEditResultDto text_edit_session_cancel_composition(u64 session_id, u64 composition_session_id, u64 composition_generation, u64 expected_revision);
     void text_edit_session_set_animation_enabled(u64 session_id, u8 enabled);
     void text_edit_session_set_animation_duration_ms(u64 session_id, u64 duration_ms);
+    // #606: grapheme cluster 边界由 Core 唯一计算（session-scoped 版本）。
+    // 平台端 TextEditSessionBridge 通过这两个方法调用 Core 的 unicode_segmentation，
+    // 不再依赖 ICU BreakIterator。
+    u32 text_edit_session_previous_grapheme_boundary(u64 session_id, u32 byte_offset);
+    u32 text_edit_session_next_grapheme_boundary(u64 session_id, u32 byte_offset);
     string text_edit_session_get_text(u64 session_id);
     u64 text_edit_session_get_revision(u64 session_id);
     EditorSessionSnapshotDto text_edit_session_snapshot(u64 session_id);
@@ -1611,6 +1619,22 @@ dictionary CoordinatedCursorDto {
     boolean should_animate;
 };
 
+dictionary OffsetMapEntryDto {
+    u32 old_byte_offset;
+    u32 new_byte_offset;
+    u32 length;
+    OffsetMapKindDto kind;
+};
+
+enum OffsetMapKindDto {
+    "Identity",
+    "Shifted",
+};
+
+dictionary OffsetMapDto {
+    sequence<OffsetMapEntryDto> entries;
+};
+
 dictionary EditorVisualIntentDto {
     EditorTransactionCauseDto cause;
     EditorOperationKindDto operation_kind;
@@ -1619,6 +1643,8 @@ dictionary EditorVisualIntentDto {
     AnimationModeDto animation_mode;
     u64 duration_ms;
     CoordinatedCursorDto coordinated_cursor;
+    // #606: Core 计算的 old/new 正文偏移映射，平台端 AffectedLayoutPlanner 不再独立推导
+    OffsetMapDto? offset_map;
 };
 
 dictionary EditorByteRangeDto {

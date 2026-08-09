@@ -1588,4 +1588,194 @@ mod tests {
         );
         assert_eq!(kernel.text(), "hello world");
     }
+
+    // ── #606: grapheme 边界 API 测试 ──
+
+    #[test]
+    fn grapheme_boundary_previous_ascii() {
+        // 纯 ASCII：每个字节都是一个 grapheme cluster
+        let kernel = EditorKernel::with_text("hello".to_string(), 5).unwrap();
+        // offset=5 -> previous boundary=4
+        assert_eq!(kernel.previous_grapheme_boundary(5), 4);
+        // offset=3 -> previous boundary=2
+        assert_eq!(kernel.previous_grapheme_boundary(3), 2);
+        // offset=1 -> previous boundary=0
+        assert_eq!(kernel.previous_grapheme_boundary(1), 0);
+    }
+
+    #[test]
+    fn grapheme_boundary_previous_emoji() {
+        // "a😀b"：😀 是 4 字节，grapheme 边界在 0, 1, 5, 6
+        let text = "a😀b";
+        let kernel = EditorKernel::with_text(text.to_string(), text.len()).unwrap();
+        // offset=6 (末尾) -> previous=5
+        assert_eq!(kernel.previous_grapheme_boundary(6), 5);
+        // offset=5 (😀 之后) -> previous=1
+        assert_eq!(kernel.previous_grapheme_boundary(5), 1);
+        // offset=1 (a 之后) -> previous=0
+        assert_eq!(kernel.previous_grapheme_boundary(1), 0);
+    }
+
+    #[test]
+    fn grapheme_boundary_previous_combining_mark() {
+        // "e\u{0301}" 是一个 grapheme cluster（e + 组合重音），边界在 0 和 3
+        let text = "e\u{0301}";
+        let kernel = EditorKernel::with_text(text.to_string(), text.len()).unwrap();
+        // offset=3 (末尾) -> previous=0（整个 cluster 是一个 grapheme）
+        assert_eq!(kernel.previous_grapheme_boundary(3), 0);
+        // offset=1 (e 之后，但仍在 cluster 内) -> previous=0
+        assert_eq!(kernel.previous_grapheme_boundary(1), 0);
+    }
+
+    #[test]
+    fn grapheme_boundary_next_ascii() {
+        let kernel = EditorKernel::with_text("hello".to_string(), 0).unwrap();
+        // offset=0 -> next=1
+        assert_eq!(kernel.next_grapheme_boundary(0), 1);
+        // offset=3 -> next=4
+        assert_eq!(kernel.next_grapheme_boundary(3), 4);
+        // offset=4 -> next=5
+        assert_eq!(kernel.next_grapheme_boundary(4), 5);
+    }
+
+    #[test]
+    fn grapheme_boundary_next_emoji() {
+        // "a😀b"：grapheme 边界在 0, 1, 5, 6
+        let text = "a😀b";
+        let kernel = EditorKernel::with_text(text.to_string(), 0).unwrap();
+        // offset=0 -> next=1
+        assert_eq!(kernel.next_grapheme_boundary(0), 1);
+        // offset=1 -> next=5（跳过整个 emoji）
+        assert_eq!(kernel.next_grapheme_boundary(1), 5);
+        // offset=5 -> next=6
+        assert_eq!(kernel.next_grapheme_boundary(5), 6);
+    }
+
+    #[test]
+    fn grapheme_boundary_edge_cases() {
+        let text = "abc";
+        let kernel = EditorKernel::with_text(text.to_string(), 0).unwrap();
+        // offset=0 -> previous=0（没有更早的边界）
+        assert_eq!(kernel.previous_grapheme_boundary(0), 0);
+        // offset=0 -> next=1
+        assert_eq!(kernel.next_grapheme_boundary(0), 1);
+        // offset=text.len() -> previous=len-1
+        assert_eq!(kernel.previous_grapheme_boundary(3), 2);
+        // offset=text.len() -> next=len（没有更晚的边界，返回 len）
+        assert_eq!(kernel.next_grapheme_boundary(3), 3);
+        // offset > text.len() -> previous 返回 len
+        assert_eq!(kernel.previous_grapheme_boundary(100), 3);
+        // offset > text.len() -> next 返回 len
+        assert_eq!(kernel.next_grapheme_boundary(100), 3);
+    }
+
+    // ── #606: EditorVisualIntent.offset_map 测试 ──
+
+    #[test]
+    fn visual_intent_offset_map_insert() {
+        // 插入 "X" 到 "ab" 的 offset=1，得到 "aXb"
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
+        let result = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(1),
+                text: "X".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        let map = result
+            .visual_intent
+            .offset_map
+            .expect("insert 应产生 offset_map");
+        // old="ab", new="aXb"：前缀 "a" identity (0->0, len=1)，后缀 "b" shifted (1->2, len=1)
+        assert_eq!(map.entries.len(), 2);
+        // 前缀 identity
+        assert_eq!(map.entries[0].old_byte_offset.value(), 0);
+        assert_eq!(map.entries[0].new_byte_offset.value(), 0);
+        assert_eq!(map.entries[0].length, 1);
+        assert_eq!(map.entries[0].kind, crate::editor::OffsetMapKind::Identity);
+        // 后缀 shifted
+        assert_eq!(map.entries[1].old_byte_offset.value(), 1);
+        assert_eq!(map.entries[1].new_byte_offset.value(), 2);
+        assert_eq!(map.entries[1].length, 1);
+        assert_eq!(map.entries[1].kind, crate::editor::OffsetMapKind::Shifted);
+        // 验证映射函数
+        assert_eq!(map.map_old_to_new(0), Some(0));
+        assert_eq!(map.map_old_to_new(1), Some(2));
+    }
+
+    #[test]
+    fn visual_intent_offset_map_delete() {
+        // 从 "aXb" 删除 "X"（offset 1..2），得到 "ab"
+        let mut kernel = EditorKernel::with_text("aXb".to_string(), 3).unwrap();
+        let result = kernel
+            .apply(EditorCommand::Delete {
+                byte_range: Utf8ByteRange::from_ordered(1, 2),
+                deleted_text: "X".to_string(),
+                cause: EditorTransactionCause::Delete,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        let map = result
+            .visual_intent
+            .offset_map
+            .expect("delete 应产生 offset_map");
+        // old="aXb", new="ab"：前缀 "a" identity (0->0, len=1)，后缀 "b" shifted (2->1, len=1)
+        assert_eq!(map.entries.len(), 2);
+        assert_eq!(map.entries[0].old_byte_offset.value(), 0);
+        assert_eq!(map.entries[0].new_byte_offset.value(), 0);
+        assert_eq!(map.entries[0].kind, crate::editor::OffsetMapKind::Identity);
+        assert_eq!(map.entries[1].old_byte_offset.value(), 2);
+        assert_eq!(map.entries[1].new_byte_offset.value(), 1);
+        assert_eq!(map.entries[1].kind, crate::editor::OffsetMapKind::Shifted);
+        // 验证映射
+        assert_eq!(map.map_old_to_new(0), Some(0));
+        assert_eq!(map.map_old_to_new(2), Some(1));
+    }
+
+    #[test]
+    fn visual_intent_offset_map_replace() {
+        // 从 "hello" 替换 "ll"（offset 2..4）为 "LL"，得到 "heLLo"
+        let mut kernel = EditorKernel::with_text("hello".to_string(), 5).unwrap();
+        let result = kernel
+            .apply(EditorCommand::Replace {
+                byte_range: Utf8ByteRange::from_ordered(2, 4),
+                replacement_text: "LL".to_string(),
+                original_text: "ll".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        let map = result
+            .visual_intent
+            .offset_map
+            .expect("replace 应产生 offset_map");
+        // old="hello", new="heLLo"：前缀 "he" identity (0->0, len=2)，后缀 "o" shifted (4->4, len=1)
+        assert_eq!(map.entries.len(), 2);
+        assert_eq!(map.entries[0].old_byte_offset.value(), 0);
+        assert_eq!(map.entries[0].new_byte_offset.value(), 0);
+        assert_eq!(map.entries[0].length, 2);
+        assert_eq!(map.entries[0].kind, crate::editor::OffsetMapKind::Identity);
+        assert_eq!(map.entries[1].old_byte_offset.value(), 4);
+        assert_eq!(map.entries[1].new_byte_offset.value(), 4);
+        assert_eq!(map.entries[1].length, 1);
+        assert_eq!(map.entries[1].kind, crate::editor::OffsetMapKind::Shifted);
+    }
+
+    #[test]
+    fn visual_intent_offset_map_cursor_only() {
+        // 选区操作不修改正文，offset_map 应为 None
+        let mut kernel = EditorKernel::with_text("hello".to_string(), 5).unwrap();
+        let result = kernel
+            .apply(EditorCommand::SetSelection {
+                anchor: Utf8ByteOffset::unchecked(0),
+                head: Utf8ByteOffset::unchecked(3),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert!(
+            result.visual_intent.offset_map.is_none(),
+            "选区操作 offset_map 应为 None"
+        );
+    }
 }

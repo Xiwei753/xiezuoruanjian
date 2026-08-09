@@ -10,6 +10,9 @@ import uniffi.writer_core.EditorEditResultDto
 import uniffi.writer_core.EditorOperationKindDto
 import uniffi.writer_core.EditorTransactionCauseDto
 import uniffi.writer_core.EditorVisualIntentDto
+import uniffi.writer_core.OffsetMapDto
+import uniffi.writer_core.OffsetMapEntryDto
+import uniffi.writer_core.OffsetMapKindDto
 
 /**
  * A single incremental text patch from the Rust kernel.
@@ -61,6 +64,16 @@ data class VisualIntent(
     val animationMode: AnimationModeDto,
     val durationMs: Long,
     val coordinatedCursor: CoordinatedCursor,
+    /**
+     * #606: Core-returned old→new byte offset map for this edit.
+     *
+     * When non-null, [AffectedLayoutPlanner] consumes this map directly instead of
+     * reconstructing offset mappings from old/new affected ranges. When null (e.g.
+     * cursor-only operations, or Core determines the edit has no structural mapping),
+     * the planner falls back to identity mapping. This is the single source of truth
+     * for old→new offset translation semantics.
+     */
+    val offsetMap: OffsetMap? = null,
 ) {
     companion object {
         fun fromDto(dto: EditorVisualIntentDto): VisualIntent =
@@ -84,6 +97,7 @@ data class VisualIntent(
                 animationMode = dto.animationMode,
                 durationMs = dto.durationMs.toLong(),
                 coordinatedCursor = CoordinatedCursor.fromDto(dto.coordinatedCursor),
+                offsetMap = dto.offsetMap?.let { OffsetMap.fromDto(it) },
             )
     }
 
@@ -124,6 +138,56 @@ data class VisualIntent(
     fun isDeleteOrReplaceRenderRole(): Boolean =
         isDelete() || isReplace() || isCompositionCancel() || isCompositionCommit() ||
             isCompositionUpdate()
+}
+
+/**
+ * #606: Core-returned old→new byte offset map.
+ *
+ * Each [OffsetMapEntry] covers a contiguous range of old byte offsets [oldByteOffset,
+ * oldByteOffset + length) that maps to new byte offsets [newByteOffset, newByteOffset +
+ * length). Offsets within an entry map linearly: old → newByteOffset + (old - oldByteOffset).
+ * Offsets not covered by any entry are in the changed region and have no mapping (null).
+ */
+data class OffsetMap(
+    val entries: List<OffsetMapEntry>,
+) {
+    companion object {
+        fun fromDto(dto: OffsetMapDto): OffsetMap =
+            OffsetMap(
+                entries = dto.entries.map { OffsetMapEntry.fromDto(it) },
+            )
+    }
+}
+
+data class OffsetMapEntry(
+    val oldByteOffset: Int,
+    val newByteOffset: Int,
+    val length: Int,
+    val kind: OffsetMapKind,
+) {
+    companion object {
+        fun fromDto(dto: OffsetMapEntryDto): OffsetMapEntry =
+            OffsetMapEntry(
+                oldByteOffset = dto.oldByteOffset.toInt(),
+                newByteOffset = dto.newByteOffset.toInt(),
+                length = dto.length.toInt(),
+                kind = OffsetMapKind.fromDto(dto.kind),
+            )
+    }
+}
+
+enum class OffsetMapKind {
+    IDENTITY,
+    SHIFTED,
+    ;
+
+    companion object {
+        fun fromDto(dto: OffsetMapKindDto): OffsetMapKind =
+            when (dto) {
+                OffsetMapKindDto.IDENTITY -> IDENTITY
+                OffsetMapKindDto.SHIFTED -> SHIFTED
+            }
+    }
 }
 
 data class CoordinatedCursor(

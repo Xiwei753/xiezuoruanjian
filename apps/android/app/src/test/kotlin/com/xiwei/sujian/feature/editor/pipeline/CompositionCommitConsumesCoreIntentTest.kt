@@ -65,6 +65,7 @@ class CompositionCommitConsumesCoreIntentTest {
                 durationMs = 200uL,
                 coordinatedCursor =
                     CoordinatedCursorDto(0u, 5u, true),
+                offsetMap = null,
             )
         val dto = buildEditResultDto(coreIntent)
 
@@ -106,6 +107,7 @@ class CompositionCommitConsumesCoreIntentTest {
                 durationMs = 0uL,
                 coordinatedCursor =
                     CoordinatedCursorDto(0u, 5u, false),
+                offsetMap = null,
             )
         val dto = buildEditResultDto(coreIntent)
 
@@ -139,6 +141,7 @@ class CompositionCommitConsumesCoreIntentTest {
                 durationMs = 300uL,
                 coordinatedCursor =
                     CoordinatedCursorDto(0u, 4u, true),
+                offsetMap = null,
             )
         val dto = buildEditResultDto(coreIntent)
 
@@ -286,5 +289,10 @@ class CompositionCommitConsumesCoreIntentTest {
         ): EditorEditResultDto? = null
 
         override fun sessionSnapshot(): EditorSessionSnapshotDto? = null
+
+        // #606: grapheme 边界 stub — 测试不验证 grapheme 语义
+        override fun previousGraphemeBoundary(byteOffset: Int): Int = byteOffset
+
+        override fun nextGraphemeBoundary(byteOffset: Int): Int = byteOffset
     }
 }

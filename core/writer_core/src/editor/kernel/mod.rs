@@ -124,4 +124,50 @@ impl EditorKernel {
     pub fn selection(&self) -> (usize, usize) {
         (self.selection_anchor.value(), self.cursor.value())
     }
+
+    /// #606: 返回严格在 `byte_offset` 之前的最近 grapheme cluster 边界（UTF-8 byte offset）。
+    ///
+    /// 平台端 Backspace/Delete 的 grapheme 边界计算由 Core 唯一决定，
+    /// 不再依赖 ICU BreakIterator。
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn previous_grapheme_boundary(&self, byte_offset: u32) -> u32 {
+        use unicode_segmentation::UnicodeSegmentation;
+        let text = self.text();
+        let offset = byte_offset as usize;
+        if offset == 0 {
+            return 0;
+        }
+        if offset > text.len() {
+            return text.len() as u32;
+        }
+        let mut prev: usize = 0;
+        for (start, _) in text.grapheme_indices(true) {
+            if start >= offset {
+                break;
+            }
+            prev = start;
+        }
+        prev as u32
+    }
+
+    /// #606: 返回严格在 `byte_offset` 之后的最近 grapheme cluster 边界（UTF-8 byte offset）。
+    ///
+    /// 平台端 Backspace/Delete 的 grapheme 边界计算由 Core 唯一决定，
+    /// 不再依赖 ICU BreakIterator。
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn next_grapheme_boundary(&self, byte_offset: u32) -> u32 {
+        use unicode_segmentation::UnicodeSegmentation;
+        let text = self.text();
+        let offset = byte_offset as usize;
+        if offset >= text.len() {
+            return text.len() as u32;
+        }
+        for (start, g) in text.grapheme_indices(true) {
+            let end = start + g.len();
+            if end > offset {
+                return end as u32;
+            }
+        }
+        text.len() as u32
+    }
 }

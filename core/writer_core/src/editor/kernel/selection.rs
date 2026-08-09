@@ -51,6 +51,8 @@ impl EditorKernel {
                 new_offset: Utf8ByteOffset::unchecked(head),
                 should_animate: self.animation_enabled && old_cursor.value() != head,
             },
+            // 选区操作不变更正文，无 offset_map
+            offset_map: None,
         };
 
         EditorEditOutcome::NoChange(EditorEditResult {

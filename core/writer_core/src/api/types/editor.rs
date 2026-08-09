@@ -553,6 +553,69 @@ impl From<crate::editor::strong_types::Utf8ByteRange> for EditorByteRangeDto {
     }
 }
 
+/// #606: 偏移映射类型 DTO — 与 Core `OffsetMapKind` 一一对应。
+///
+/// 平台端 AffectedLayoutPlanner 直接消费此字段决定 cluster 身份映射策略，
+/// 不再在 Kotlin 中独立推导 offset mapping。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OffsetMapKindDto {
+    Identity,
+    Shifted,
+}
+
+impl From<crate::editor::OffsetMapKind> for OffsetMapKindDto {
+    fn from(k: crate::editor::OffsetMapKind) -> Self {
+        match k {
+            crate::editor::OffsetMapKind::Identity => Self::Identity,
+            crate::editor::OffsetMapKind::Shifted => Self::Shifted,
+        }
+    }
+}
+
+/// #606: 单个偏移映射条目 DTO — 与 Core `OffsetMapEntry` 一一对应。
+///
+/// `old_byte_offset` / `new_byte_offset` 均为 UTF-8 byte offset。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OffsetMapEntryDto {
+    pub old_byte_offset: u32,
+    pub new_byte_offset: u32,
+    pub length: u32,
+    pub kind: OffsetMapKindDto,
+}
+
+// SAFETY: UTF-8 byte offset 截断安全（正文长度受 u32 范围约束）
+#[allow(clippy::cast_possible_truncation)]
+impl From<crate::editor::OffsetMapEntry> for OffsetMapEntryDto {
+    fn from(e: crate::editor::OffsetMapEntry) -> Self {
+        Self {
+            old_byte_offset: e.old_byte_offset.value() as u32,
+            new_byte_offset: e.new_byte_offset.value() as u32,
+            length: e.length as u32,
+            kind: e.kind.into(),
+        }
+    }
+}
+
+/// #606: 偏移映射 DTO — 与 Core `OffsetMap` 一一对应。
+///
+/// 记录 old 正文 → new 正文的字符身份映射，用于后续正文 cluster 保持身份
+/// 并生成 Move 动画，而不是全部 Crossfade/Insert。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OffsetMapDto {
+    pub entries: Vec<OffsetMapEntryDto>,
+}
+
+impl From<crate::editor::OffsetMap> for OffsetMapDto {
+    fn from(m: crate::editor::OffsetMap) -> Self {
+        Self {
+            entries: m.entries.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 /// 视觉意图 DTO — Core 告诉平台层应该做什么动画。
 ///
 /// Core 裁判动画语义（模式、时长、受影响范围）；
@@ -570,6 +633,12 @@ pub struct EditorVisualIntentDto {
     pub animation_mode: AnimationModeDto,
     pub duration_ms: u64,
     pub coordinated_cursor: CoordinatedCursorDto,
+    /// #606: Core 计算的 old/new 正文偏移映射。
+    ///
+    /// 正文变更时由 Core 填充；纯选区/光标操作为 `None`。
+    /// 平台端 AffectedLayoutPlanner 直接消费此字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_map: Option<OffsetMapDto>,
 }
 
 impl EditorVisualIntentDto {
@@ -586,6 +655,7 @@ impl EditorVisualIntentDto {
                 new_byte_offset: 0,
                 should_animate: false,
             },
+            offset_map: None,
         }
     }
 }
@@ -625,6 +695,7 @@ impl From<crate::editor::EditorVisualIntent> for EditorVisualIntentDto {
             animation_mode: vi.animation_mode.into(),
             duration_ms: vi.duration_ms,
             coordinated_cursor: vi.coordinated_cursor.into(),
+            offset_map: vi.offset_map.map(Into::into),
         }
     }
 }
@@ -1452,12 +1523,14 @@ mod tests {
                     .unwrap(),
                 should_animate: true,
             },
+            offset_map: None,
         };
         let dto: EditorVisualIntentDto = intent.into();
         assert_eq!(dto.operation_kind, EditorOperationKindDto::Insert);
         assert_eq!(dto.duration_ms, 160);
         assert!(dto.coordinated_cursor.should_animate);
         assert_eq!(dto.new_affected_byte_ranges.len(), 1);
+        assert!(dto.offset_map.is_none());
     }
 
     #[test]
