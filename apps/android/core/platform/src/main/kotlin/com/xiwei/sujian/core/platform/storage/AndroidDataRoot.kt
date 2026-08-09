@@ -1,4 +1,4 @@
-package com.xiwei.sujian.core.platform
+package com.xiwei.sujian.core.platform.storage
 
 import android.os.Environment
 import java.io.File

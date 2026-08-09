@@ -6,7 +6,7 @@ import com.xiwei.sujian.core.interop.common.ResultEnvelope
 import com.xiwei.sujian.core.interop.common.toSyncFailureKind
 import com.xiwei.sujian.core.interop.common.toWireErrorCode
 import com.xiwei.sujian.core.interop.security.AndroidKeystoreSecureStorage
-import com.xiwei.sujian.core.platform.AndroidDataRoot
+import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
 import uniffi.writer_core.PlatformDto
 import uniffi.writer_core.PlatformInitDto
 import uniffi.writer_core.WriterAppService

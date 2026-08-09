@@ -9,7 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import com.xiwei.sujian.core.platform.AndroidDataRoot
+import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
 
 class MainActivity : ComponentActivity() {
     private lateinit var storageAccessLauncher: ActivityResultLauncher<Intent>

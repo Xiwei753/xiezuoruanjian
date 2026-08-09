@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.settings.ui
 
 // ! # 设置刷新合并操作（从 SettingsSaveOps 拆分）— 降低 TooManyFunctions
 
+import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
@@ -44,7 +45,7 @@ fun SettingsViewModel.mergeRefresh() {
         val paletteRecords = withContext(Dispatchers.IO) { themeRepo.listPaletteRecords() }
         val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
         val dataRootPath =
-            withContext(Dispatchers.IO) { com.xiwei.sujian.core.platform.AndroidDataRoot.rootDir().absolutePath }
+            withContext(Dispatchers.IO) { AndroidDataRoot.rootDir().absolutePath }
         _uiState.update {
             SettingsUiState(
                 settings = mergeLoadedLocal(current.settings, settings),

@@ -101,7 +101,7 @@ private suspend fun SettingsViewModel.loadInitialSnapshot(repo: SettingsReposito
             dataRootPath =
                 withContext(
                     Dispatchers.IO,
-                ) { com.xiwei.sujian.core.platform.AndroidDataRoot.rootDir().absolutePath },
+                ) { com.xiwei.sujian.core.platform.storage.AndroidDataRoot.rootDir().absolutePath },
         )
     _uiState.update { current -> buildInitialUiState(current, loaded, snapshotRevisions) }
 }

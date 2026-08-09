@@ -3,7 +3,7 @@ package com.xiwei.sujian.core.diagnostics
 import android.content.Context
 import android.util.Log
 import com.xiwei.sujian.BuildConfig
-import com.xiwei.sujian.core.platform.AndroidDataRoot
+import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter
