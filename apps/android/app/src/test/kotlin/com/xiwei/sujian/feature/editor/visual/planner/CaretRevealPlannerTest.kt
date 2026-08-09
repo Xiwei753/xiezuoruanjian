@@ -238,4 +238,97 @@ class CaretRevealPlannerTest {
         assertTrue("swallow plan0 cluster must be c2 (far from caret)", swallowPlans[0].cluster === c2)
         assertTrue("swallow plan1 cluster must be c1 (near caret)", swallowPlans[1].cluster === c1)
     }
+
+    /**
+     * #605 评论5 问题2: planRevealSpecs 内部按 documentByteStart 升序排序，
+     * 不依赖调用方传入顺序。故意乱序传入 (byte 2, 0, 1)，断言输出 0, 1, 2 且
+     * progress window 连续，cluster 引用是原对象（排序只重排引用不复制）。
+     */
+    @Test
+    fun revealSpecsSortByDocumentByteStartRegardlessOfInputOrder() {
+        val c0 = makeCluster(0f, 50f, 0, 1)
+        val c1 = makeCluster(50f, 100f, 1, 2)
+        val c2 = makeCluster(100f, 150f, 2, 3)
+        // 故意乱序传入 (byte 2, 0, 1)
+        val plans = planner.planRevealSpecs(listOf(c2, c0, c1))
+        assertEquals(3, plans.size)
+        // 输出按 byte 升序
+        assertEquals(0, plans[0].cluster.documentByteStart)
+        assertEquals(1, plans[1].cluster.documentByteStart)
+        assertEquals(2, plans[2].cluster.documentByteStart)
+        // 引用是原对象（排序只重排引用不复制）
+        assertTrue("plan0 cluster must be c0 by reference", plans[0].cluster === c0)
+        assertTrue("plan1 cluster must be c1 by reference", plans[1].cluster === c1)
+        assertTrue("plan2 cluster must be c2 by reference", plans[2].cluster === c2)
+        // progress window 连续
+        assertEquals(0f, plans[0].spec.progressStart, 0.001f)
+        assertEquals(1f, plans[2].spec.progressEnd, 0.001f)
+        assertEquals(plans[0].spec.progressEnd, plans[1].spec.progressStart, 0.001f)
+        assertEquals(plans[1].spec.progressEnd, plans[2].spec.progressStart, 0.001f)
+    }
+
+    /**
+     * #605 评论5 问题2: 排序只看文档逻辑 byte 位置，不看几何/行位置。
+     * 跨行场景：a byte0 在行1（caret 200-250, top=20），b byte1 在行0（caret 0-50, top=0），
+     * c byte2 在行1（caret 250-300, top=20）。按行顺序传入 (b, a, c)，
+     * 断言输出按 byte 升序 (a, b, c)，不按几何/行顺序。
+     */
+    @Test
+    fun revealSpecsSortByByteNotByGeometryAcrossLines() {
+        // 手动构造跨行 cluster（visualRectInDocument.top 不同模拟不同行）
+        val a =
+            LineClusterSnapshot(
+                clusterId = 0L,
+                documentByteStart = 0,
+                documentByteEndExclusive = 1,
+                documentUtf16Start = 0,
+                documentUtf16EndExclusive = 1,
+                sourceRectInLineImage = Rect(0, 0, 50, 20),
+                visualRectInDocument = RectF(200f, 20f, 250f, 40f),
+                shapingFingerprint = "fp_a",
+                shapingIdentityConfident = true,
+                caretStartX = 200f,
+                caretEndX = 250f,
+            )
+        val b =
+            LineClusterSnapshot(
+                clusterId = 1L,
+                documentByteStart = 1,
+                documentByteEndExclusive = 2,
+                documentUtf16Start = 1,
+                documentUtf16EndExclusive = 2,
+                sourceRectInLineImage = Rect(0, 0, 50, 20),
+                visualRectInDocument = RectF(0f, 0f, 50f, 20f),
+                shapingFingerprint = "fp_b",
+                shapingIdentityConfident = true,
+                caretStartX = 0f,
+                caretEndX = 50f,
+            )
+        val c =
+            LineClusterSnapshot(
+                clusterId = 2L,
+                documentByteStart = 2,
+                documentByteEndExclusive = 3,
+                documentUtf16Start = 2,
+                documentUtf16EndExclusive = 3,
+                sourceRectInLineImage = Rect(0, 0, 50, 20),
+                visualRectInDocument = RectF(250f, 20f, 300f, 40f),
+                shapingFingerprint = "fp_c",
+                shapingIdentityConfident = true,
+                caretStartX = 250f,
+                caretEndX = 300f,
+            )
+        // 故意按行顺序传入 (b 在行0先传, a/c 在行1)
+        val plans = planner.planRevealSpecs(listOf(b, a, c))
+        assertEquals(3, plans.size)
+        // 输出按 byte 升序，不按几何/行顺序
+        assertTrue("plan0 must be a (byte0)", plans[0].cluster === a)
+        assertTrue("plan1 must be b (byte1)", plans[1].cluster === b)
+        assertTrue("plan2 must be c (byte2)", plans[2].cluster === c)
+        // progress window 连续
+        assertEquals(0f, plans[0].spec.progressStart, 0.001f)
+        assertEquals(1f, plans[2].spec.progressEnd, 0.001f)
+        assertEquals(plans[0].spec.progressEnd, plans[1].spec.progressStart, 0.001f)
+        assertEquals(plans[1].spec.progressEnd, plans[2].spec.progressStart, 0.001f)
+    }
 }

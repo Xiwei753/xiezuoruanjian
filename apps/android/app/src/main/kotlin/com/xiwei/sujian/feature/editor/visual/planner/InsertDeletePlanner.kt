@@ -223,11 +223,15 @@ class InsertDeletePlanner {
         affectedRanges: List<Pair<Int, Int>>,
     ): List<LineClusterSnapshot> {
         if (clusters.isEmpty()) return emptyList()
+        // #605 评论5 问题1: 在合并前就排除 hard-break cluster，避免 abc\n 整个 run
+        // 被标成 hard break 导致 abc 失去吐字/吞字动画。换行造成的排版变化继续交给
+        // 现有 Move/BlockShift。
         val affected =
             clusters.filter { cluster ->
-                affectedRanges.any { (start, end) ->
-                    cluster.documentByteStart < end && cluster.documentByteEndExclusive > start
-                }
+                !cluster.isHardBreak &&
+                    affectedRanges.any { (start, end) ->
+                        cluster.documentByteStart < end && cluster.documentByteEndExclusive > start
+                    }
             }
         if (affected.isEmpty()) return emptyList()
         if (affected.size == 1) return affected
@@ -281,7 +285,7 @@ class InsertDeletePlanner {
                             shapingIdentityConfident = allConfident,
                             caretStartX = first.caretStartX,
                             caretEndX = last.caretEndX,
-                            isHardBreak = runClusters.any { it.isHardBreak },
+                            isHardBreak = false,
                         ),
                     )
                 }

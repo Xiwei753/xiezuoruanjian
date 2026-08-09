@@ -49,7 +49,16 @@ class CaretRevealPlanner {
      * Hard-break clusters are excluded — they have no glyph to reveal.
      */
     fun planRevealSpecs(clusters: List<LineClusterSnapshot>): List<CaretRevealPlan> {
-        val visible = clusters.filter { !it.isHardBreak }
+        // #605 评论5 问题2: Insert 按 documentByteStart 升序由 Planner 自己保证，
+        // 不依赖调用方/affected-line/snapshot 收集顺序。跨行粘贴、跨段 replace/IME
+        // 时上游集合顺序不保证 byte 升序，必须在此显式排序。
+        // Delete 已在 planSwallowSpecs 用 sortedByDescending，Insert 对称用 sortedBy。
+        val visible =
+            clusters
+                .asSequence()
+                .filter { !it.isHardBreak }
+                .sortedBy { it.documentByteStart }
+                .toList()
         if (visible.isEmpty()) return emptyList()
         return buildSpecs(visible, TextRevealMode.REVEAL)
     }
