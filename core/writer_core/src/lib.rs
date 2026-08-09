@@ -85,13 +85,9 @@ pub mod writing_stats;
 pub use api::*;
 pub use error::{Error, Result};
 
-#[cfg(test)]
-pub mod action_ops_tests;
-#[cfg(test)]
-pub mod dto_contract_tests;
 pub mod facade;
 #[cfg(test)]
-pub mod fixture_tests;
+mod tests;
 
 uniffi::include_scaffolding!("api");
 pub mod app_service;
