@@ -91,7 +91,8 @@ apps/android/
       ├─ settings/{ui,data}/
       ├─ sync/{ui,data,work}/
       ├─ stats/{ui,data}/
-      └─ starmap/{ui,data}/
+      ├─ starmap/{ui,data}/
+      └─ search/{ui,data}/
 
 :core:designsystem
 └─ com.xiwei.sujian.core.designsystem/

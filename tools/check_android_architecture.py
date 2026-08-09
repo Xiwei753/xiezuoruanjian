@@ -8,8 +8,8 @@
 
 1.  UI 层（app/feature）不能直接依赖具体 Bridge 类、UniFFI 绑定或 JNA；
 2.  UI 层不能直接依赖 feature/editor/input 基础设施；
-3.  core/interop 层（Bridge/Repository）不能依赖 Compose/Activity/View/UI 与
-    feature/editor 显示/动画状态；
+3.  数据/Bridge 层（core/interop、feature/*/data、app/layout/data）不能依赖
+    Compose/Activity/View/UI 与 feature/editor 显示/动画状态；
 4.  feature/editor/input 只产生输入操作：不依赖 Repository/core/interop、Compose UI、
     Activity；UniFFI 只允许 EditorTransactionCauseDto 契约类型；
 5.  feature/editor/visual 与 motion 只处理显示和动画状态：不写正文持久状态
@@ -69,16 +69,19 @@ DEFAULT_DS_SRC = (
     / "designsystem"
 )
 DEFAULT_DS_MODULE = PROJECT_ROOT / "apps" / "android" / "core" / "designsystem"
-APP_MODULE = PROJECT_ROOT / "apps" / "android" / "app"
+DEFAULT_PLATFORM_MODULE = PROJECT_ROOT / "apps" / "android" / "core" / "platform"
+DEFAULT_APP_MODULE = PROJECT_ROOT / "apps" / "android" / "app"
+APP_MODULE = DEFAULT_APP_MODULE
 
 # package-dir 一致性检查覆盖的源集（#602 评论#8 项8.2）。
 # 不能只扫 src/main：debug/release/test/androidTest/testAi/androidTestAi 各源集
 # 的 package 声明也必须与物理目录结构一致，否则重构会留下隐性错位。
-# 源集根由 app_src 推导，configure(--app-src) 时同步更新（#602 评论#9 项9.3）。
+# 源集根由 module 根动态发现，configure(--app-src) 时同步更新
+# （#602 评论#9 项9.3、评论#10 项1）。
 
 
 def package_source_roots_from_app_src(app_src: Path) -> tuple[Path, ...]:
-    """从 app 主源码根推导全部 Kotlin 源集根。
+    """从 app 主源码根推导全部 Kotlin 源集根（向后兼容保留）。
 
     app_src 形态：<app>/src/main/kotlin/com/xiwei/sujian
     app_module = app_src.parents[5]（即 <app>）。
@@ -98,11 +101,31 @@ def package_source_roots_from_app_src(app_src: Path) -> tuple[Path, ...]:
     )
 
 
-PACKAGE_SOURCE_ROOTS = package_source_roots_from_app_src(DEFAULT_APP_SRC)
+def package_source_roots_from_modules(module_roots: tuple[Path, ...]) -> tuple[Path, ...]:
+    """从 Gradle module 根动态发现所有 Kotlin 源集根（#602 评论#10 项1）。
+
+    对每个 module 遍历 src/*/kotlin（glob 动态发现，不硬编码 source set 名单），
+    这样以后新增 testFoo、androidTestFoo 等源集也不用再改名单。
+    """
+    roots: list[Path] = []
+    for module in module_roots:
+        src_dir = module / "src"
+        if not src_dir.is_dir():
+            continue
+        for kotlin_root in sorted(src_dir.glob("*/kotlin")):
+            if kotlin_root.is_dir():
+                roots.append(kotlin_root)
+    return tuple(roots)
+
+
+PACKAGE_SOURCE_ROOTS = package_source_roots_from_modules(
+    (DEFAULT_APP_MODULE, DEFAULT_DS_MODULE, DEFAULT_PLATFORM_MODULE)
+)
 
 APP_SRC = DEFAULT_APP_SRC
 DS_SRC = DEFAULT_DS_SRC
 DS_MODULE = DEFAULT_DS_MODULE
+PLATFORM_MODULE = DEFAULT_PLATFORM_MODULE
 
 
 @dataclass(frozen=True)
@@ -879,14 +902,20 @@ def configure(
     app_src: Path,
     designsystem_src: Path,
     designsystem_module: Path | None = None,
+    platform_module: Path | None = None,
 ) -> None:
     """设置扫描根目录（默认指向真实仓库，测试可指向临时夹具树）。"""
-    global APP_SRC, DS_SRC, DS_MODULE, PACKAGE_SOURCE_ROOTS
+    global APP_SRC, DS_SRC, DS_MODULE, PLATFORM_MODULE, PACKAGE_SOURCE_ROOTS
     APP_SRC = app_src
-    PACKAGE_SOURCE_ROOTS = package_source_roots_from_app_src(app_src)
     DS_SRC = designsystem_src
     if designsystem_module is not None:
         DS_MODULE = designsystem_module
+    if platform_module is not None:
+        PLATFORM_MODULE = platform_module
+    app_module = app_src.parents[5]
+    PACKAGE_SOURCE_ROOTS = package_source_roots_from_modules(
+        (app_module, DS_MODULE, PLATFORM_MODULE)
+    )
 
 
 def run_checks() -> tuple[list[Finding], dict[str, list[Finding]]]:
@@ -924,6 +953,12 @@ def main() -> int:
         default=DEFAULT_DS_MODULE,
         help="core/designsystem 模块根目录（默认 %(default)s）",
     )
+    parser.add_argument(
+        "--platform-module",
+        type=Path,
+        default=DEFAULT_PLATFORM_MODULE,
+        help="core/platform 模块根目录（默认 %(default)s）",
+    )
     args = parser.parse_args()
 
     if not args.app_src.exists():
@@ -933,7 +968,12 @@ def main() -> int:
         print(f"错误: core/designsystem 主源码根目录不存在: {args.designsystem_src}", file=sys.stderr)
         return 1
 
-    configure(args.app_src, args.designsystem_src, args.designsystem_module)
+    configure(
+        args.app_src,
+        args.designsystem_src,
+        args.designsystem_module,
+        args.platform_module,
+    )
     all_findings, by_rule = run_checks()
     if not all_findings:
         print("\n全部架构规则通过。")

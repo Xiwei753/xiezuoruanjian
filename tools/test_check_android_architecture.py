@@ -127,6 +127,7 @@ class LayerRuleTests(unittest.TestCase):
                 app_src=root / APP_PREFIX,
                 designsystem_src=root / DS_PREFIX,
                 designsystem_module=root,
+                platform_module=root,
             )
             _, by_rule = arch.run_checks()
             return by_rule[rule_id]
@@ -466,6 +467,7 @@ class PackageSourceRootsFollowAppSrcTest(unittest.TestCase):
             app_src=arch.DEFAULT_APP_SRC,
             designsystem_src=arch.DEFAULT_DS_SRC,
             designsystem_module=arch.DEFAULT_DS_MODULE,
+            platform_module=arch.DEFAULT_PLATFORM_MODULE,
         )
 
     def test_configure_updates_package_source_roots_inconsistent(self):
@@ -485,6 +487,7 @@ class PackageSourceRootsFollowAppSrcTest(unittest.TestCase):
                 app_src=root / APP_PREFIX,
                 designsystem_src=root / DS_PREFIX,
                 designsystem_module=root,
+                platform_module=root,
             )
             findings = arch.rule_package_dir_consistent()
             self.assertTrue(
@@ -510,11 +513,73 @@ class PackageSourceRootsFollowAppSrcTest(unittest.TestCase):
                 app_src=root / APP_PREFIX,
                 designsystem_src=root / DS_PREFIX,
                 designsystem_module=root,
+                platform_module=root,
             )
             findings = arch.rule_package_dir_consistent()
             self.assertEqual(
                 [], findings,
                 "configure 后一致的 package 声明不应被报告",
+            )
+
+    def test_platform_module_package_dir_inconsistent(self):
+        """:core:platform 文件 package 与目录不一致必须被报告（#602 评论#10 项1）。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            platform_module = root / "core/platform"
+            make_tree(
+                platform_module,
+                {
+                    "src/main/kotlin/com/xiwei/sujian/core/platform/window/Bad.kt": (
+                        "package com.xiwei.sujian.core.platform.api\n\n"
+                        "class Bad\n"
+                    )
+                },
+            )
+            arch.configure(
+                app_src=root / APP_PREFIX,
+                designsystem_src=root / DS_PREFIX,
+                designsystem_module=root,
+                platform_module=platform_module,
+            )
+            findings = arch.rule_package_dir_consistent()
+            self.assertTrue(
+                findings,
+                ":core:platform package 与目录不一致必须被报告",
+            )
+
+    def test_three_modules_consistent_no_findings(self):
+        """三个 Gradle 模块 package 都与目录一致时不报错（#602 评论#10 项1）。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            platform_module = root / "core/platform"
+            make_tree(
+                root,
+                {
+                    f"{APP_PREFIX}/feature/sample/Aligned.kt": (
+                        "package com.xiwei.sujian.feature.sample\n\n"
+                        "class Aligned\n"
+                    ),
+                },
+            )
+            make_tree(
+                platform_module,
+                {
+                    "src/main/kotlin/com/xiwei/sujian/core/platform/api/Good.kt": (
+                        "package com.xiwei.sujian.core.platform.api\n\n"
+                        "class Good\n"
+                    )
+                },
+            )
+            arch.configure(
+                app_src=root / APP_PREFIX,
+                designsystem_src=root / DS_PREFIX,
+                designsystem_module=root,
+                platform_module=platform_module,
+            )
+            findings = arch.rule_package_dir_consistent()
+            self.assertEqual(
+                [], findings,
+                "三模块 package 都与目录一致不应被报告",
             )
 
 
@@ -525,6 +590,7 @@ class RealRepoTest(unittest.TestCase):
             app_src=arch.DEFAULT_APP_SRC,
             designsystem_src=arch.DEFAULT_DS_SRC,
             designsystem_module=arch.DEFAULT_DS_MODULE,
+            platform_module=arch.DEFAULT_PLATFORM_MODULE,
         )
         all_findings, _ = arch.run_checks()
         self.assertEqual(
