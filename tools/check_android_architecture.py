@@ -71,6 +71,19 @@ DEFAULT_DS_SRC = (
 DEFAULT_DS_MODULE = PROJECT_ROOT / "apps" / "android" / "core" / "designsystem"
 APP_MODULE = PROJECT_ROOT / "apps" / "android" / "app"
 
+# package-dir 一致性检查覆盖的源集（#602 评论#8 项8.2）。
+# 不能只扫 src/main：debug/release/test/androidTest/testAi/androidTestAi 各源集
+# 的 package 声明也必须与物理目录结构一致，否则重构会留下隐性错位。
+PACKAGE_SOURCE_ROOTS = (
+    APP_MODULE / "src/main/kotlin",
+    APP_MODULE / "src/debug/kotlin",
+    APP_MODULE / "src/release/kotlin",
+    APP_MODULE / "src/test/kotlin",
+    APP_MODULE / "src/androidTest/kotlin",
+    APP_MODULE / "src/testAi/kotlin",
+    APP_MODULE / "src/androidTestAi/kotlin",
+)
+
 APP_SRC = DEFAULT_APP_SRC
 DS_SRC = DEFAULT_DS_SRC
 DS_MODULE = DEFAULT_DS_MODULE
@@ -187,6 +200,29 @@ COMPOSE_UI_FRAMEWORK = [
     "androidx.compose.animation",
 ]
 
+# 各 feature 模块的 data 子包（Repository/Bridge 所在层，#602 评论#8 项8.3）。
+# input/visual/motion 纯净层不得直接依赖这些 data 层。
+FEATURE_DATA_PACKAGES = [
+    "com.xiwei.sujian.feature.project.data",
+    "com.xiwei.sujian.feature.settings.data",
+    "com.xiwei.sujian.feature.sync.data",
+    "com.xiwei.sujian.feature.stats.data",
+    "com.xiwei.sujian.feature.starmap.data",
+]
+
+# editor 显示/平台/动画层包（#602 评论#8 项8.3）。
+# data 层不得反向依赖这些显示层。注意：不禁止整个 feature.editor，
+# 因为 ChapterRepository 合法实现 feature.editor.session.ChapterContentSavePort。
+EDITOR_DISPLAY_PACKAGES = [
+    "com.xiwei.sujian.feature.editor.ui",
+    "com.xiwei.sujian.feature.editor.visual",
+    "com.xiwei.sujian.feature.editor.motion",
+    "com.xiwei.sujian.feature.editor.render",
+    "com.xiwei.sujian.feature.editor.platform",
+    "com.xiwei.sujian.feature.editor.window",
+    "com.xiwei.sujian.feature.editor.projection",
+]
+
 SESSION_LAYER_FILES = {
     "EditorSessionCoordinator.kt",
     "EditorSessionCoordinatorTypes.kt",
@@ -276,31 +312,56 @@ def rule_ui_no_editor_input() -> list[Finding]:
 
 
 def rule_data_no_ui_framework() -> list[Finding]:
-    return scan_forbidden(
-        APP_SRC,
+    # #602 评论#8 项8.3：data 边界不止 core/interop，还包括各 feature/*/data 与
+    # app/layout/data。这些 Repository/Bridge 层都不得依赖 Compose/Activity/View。
+    data_filters = [
         "/core/interop/",
-        ["androidx.compose", "androidx.activity", "android.view"],
-    )
+        "/feature/project/data/",
+        "/feature/settings/data/",
+        "/feature/sync/data/",
+        "/feature/stats/data/",
+        "/feature/starmap/data/",
+        "/app/layout/data/",
+    ]
+    forbidden = ["androidx.compose", "androidx.activity", "android.view"]
+    findings: list[Finding] = []
+    for f in data_filters:
+        findings += scan_forbidden(APP_SRC, f, forbidden)
+    return findings
 
 
 def rule_data_no_editor_display() -> list[Finding]:
-    return scan_forbidden(
-        APP_SRC,
+    # #602 评论#8 项8.3：data 层（core/interop + feature/*/data + app/layout/data）
+    # 不得反向依赖 editor 显示/平台/动画层。禁止 EDITOR_DISPLAY_PACKAGES（精确列出
+    # ui/visual/motion/render/platform/window/projection），不一刀禁止整个 feature.editor，
+    # 因为 ChapterRepository 合法实现 feature.editor.session.ChapterContentSavePort。
+    data_filters = [
         "/core/interop/",
-        [
-            "com.xiwei.sujian.feature.editor.visual",
-            "com.xiwei.sujian.feature.editor.motion",
-            "com.xiwei.sujian.feature.editor.compose",
-            "com.xiwei.sujian.feature.editor.render",
-        ],
-    )
+        "/feature/project/data/",
+        "/feature/settings/data/",
+        "/feature/sync/data/",
+        "/feature/stats/data/",
+        "/feature/starmap/data/",
+        "/app/layout/data/",
+    ]
+    findings: list[Finding] = []
+    for f in data_filters:
+        findings += scan_forbidden(APP_SRC, f, EDITOR_DISPLAY_PACKAGES)
+    return findings
 
 
 def rule_input_layer_pure() -> list[Finding]:
+    # #602 评论#8 项8.3：input 层不得直接依赖各 feature data 层与 ThemeRepository；
+    # feature.home 已删除，从禁止清单移除。
+    input_forbidden = (
+        ["com.xiwei.sujian.core.interop"]
+        + FEATURE_DATA_PACKAGES
+        + ["com.xiwei.sujian.app.theme.ThemeRepository"]
+    )
     findings = scan_forbidden(
         APP_SRC,
         "/feature/editor/input/",
-        ["com.xiwei.sujian.core.interop", "com.xiwei.sujian.feature.home"],
+        input_forbidden,
     )
     findings += scan_forbidden(
         APP_SRC,
@@ -319,10 +380,17 @@ def rule_input_layer_pure() -> list[Finding]:
 def rule_visual_motion_pure() -> list[Finding]:
     findings: list[Finding] = []
     for sub in ("/feature/editor/visual/", "/feature/editor/motion/"):
+        # #602 评论#8 项8.3：visual/motion 不得直接依赖各 feature data 层与
+        # ThemeRepository；feature.home 已删除，从禁止清单移除。
+        visual_motion_forbidden = (
+            ["com.xiwei.sujian.core.interop"]
+            + FEATURE_DATA_PACKAGES
+            + ["com.xiwei.sujian.app.theme.ThemeRepository"]
+        )
         findings += scan_forbidden(
             APP_SRC,
             sub,
-            ["com.xiwei.sujian.core.interop", "com.xiwei.sujian.feature.home"],
+            visual_motion_forbidden,
         )
         findings += scan_forbidden(
             APP_SRC,
@@ -668,47 +736,57 @@ def is_kotlin_file(path: Path) -> bool:
     return path.suffix == ".kt"
 
 
-def rule_package_dir_consistent() -> list[Finding]:
-    """package 声明必须与物理目录结构一致（#602 评论#7 项13）。
+def rule_package_dir_consistent(
+    source_roots: tuple[Path, ...] | None = None,
+) -> list[Finding]:
+    """package 声明必须与物理目录结构一致（#602 评论#7 项13、评论#8 项8.2）。
 
-    遍历 APP_SRC 下所有生产 .kt 文件，解析首条 package 声明，
-    将包名 com.xiwei.sujian.xxx.yyy 转为目录 xxx/yyy，与文件相对
-    APP_SRC 的父目录比较，不一致则报错。
+    遍历所有 source root（main/debug/release/test/androidTest/testAi/androidTestAi）
+    下 com/xiwei/sujian 基目录中的 .kt 文件（排除 build/generated），解析首条
+    package 声明，将包名 com.xiwei.sujian.xxx.yyy 转为目录 xxx/yyy，与文件相对
+    该基目录的父目录比较，不一致则报错。
+
+    不同 source root 的基包前缀都是 com/xiwei/sujian，因此相对目录比较统一算到
+    这一层。不存在的 source root 跳过。可选参数 source_roots 供测试注入临时根，
+    默认使用模块级 PACKAGE_SOURCE_ROOTS（不破坏现有 configure 机制）。
     """
     findings: list[Finding] = []
-    if not APP_SRC.exists():
-        return findings
+    roots = source_roots if source_roots is not None else PACKAGE_SOURCE_ROOTS
     prefix = "com.xiwei.sujian"
-    for path in sorted(APP_SRC.rglob("*.kt")):
-        if not is_kotlin_file(path) or not path.is_file():
+    base_subpath = Path("com") / "xiwei" / "sujian"
+    for source_root in roots:
+        if not source_root.exists():
             continue
-        str_path = str(path)
-        if "/build/" in str_path or "/generated/" in str_path:
+        base_dir = source_root / base_subpath
+        if not base_dir.exists():
             continue
-        # 排除测试目录（APP_SRC 已在 src/main 下，此处防御性排除）
-        if "/src/test/" in str_path or "/src/androidTest/" in str_path:
-            continue
-        content = path.read_text(encoding="utf-8")
-        match = PACKAGE_RE.search(content)
-        if not match:
-            continue
-        pkg = match.group(1)
-        if pkg == prefix:
-            pkg_subpath = ""
-        else:
-            pkg_subpath = pkg[len(prefix) + 1 :].replace(".", "/")
-        rel_dir = path.parent.relative_to(APP_SRC)
-        rel_dir_str = str(rel_dir).replace("\\", "/")
-        if rel_dir_str == ".":
-            rel_dir_str = ""
-        if pkg_subpath != rel_dir_str:
-            findings.append(
-                Finding(
-                    path=str(path.relative_to(APP_SRC)),
-                    line=0,
-                    message=f"package '{pkg}' 与目录 '{rel_dir_str}' 不一致",
+        for path in sorted(base_dir.rglob("*.kt")):
+            if not is_kotlin_file(path) or not path.is_file():
+                continue
+            str_path = str(path)
+            if "/build/" in str_path or "/generated/" in str_path:
+                continue
+            content = path.read_text(encoding="utf-8")
+            match = PACKAGE_RE.search(content)
+            if not match:
+                continue
+            pkg = match.group(1)
+            if pkg == prefix:
+                pkg_subpath = ""
+            else:
+                pkg_subpath = pkg[len(prefix) + 1 :].replace(".", "/")
+            rel_dir = path.parent.relative_to(base_dir)
+            rel_dir_str = str(rel_dir).replace("\\", "/")
+            if rel_dir_str == ".":
+                rel_dir_str = ""
+            if pkg_subpath != rel_dir_str:
+                findings.append(
+                    Finding(
+                        path=str(path.relative_to(source_root)),
+                        line=0,
+                        message=f"package '{pkg}' 与目录 '{rel_dir_str}' 不一致",
+                    )
                 )
-            )
     return findings
 
 

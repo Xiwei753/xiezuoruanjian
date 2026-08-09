@@ -1,4 +1,4 @@
-package com.xiwei.sujian.ui
+package com.xiwei.sujian.app.debug
 
 import androidx.activity.ComponentActivity
 

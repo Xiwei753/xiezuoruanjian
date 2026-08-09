@@ -369,29 +369,93 @@ class LayerRuleTests(unittest.TestCase):
 
     def test_package_dir_inconsistent_must_fail(self):
         """package 声明与物理目录不一致必须被报告（#602 评论#7 项13）。"""
-        findings = self.run_rule(
-            "package-dir-consistent",
-            {
-                f"{APP_PREFIX}/feature/sample/Inconsistent.kt": (
-                    "package com.xiwei.sujian.feature.other\n\n"
-                    "class Inconsistent\n"
-                )
-            },
-        )
-        self.assertTrue(findings, "package 声明与目录不一致必须被报告")
+        # 直接调 rule_package_dir_consistent 并注入临时 source_roots，
+        # 因为模块级 PACKAGE_SOURCE_ROOTS 基于真实仓库 APP_MODULE，configure 不影响它。
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            make_tree(
+                root,
+                {
+                    f"{APP_PREFIX}/feature/sample/Inconsistent.kt": (
+                        "package com.xiwei.sujian.feature.other\n\n"
+                        "class Inconsistent\n"
+                    )
+                },
+            )
+            findings = arch.rule_package_dir_consistent(
+                source_roots=(root / "src/main/kotlin",)
+            )
+            self.assertTrue(findings, "package 声明与目录不一致必须被报告")
 
     def test_package_dir_consistent_must_pass(self):
         """package 声明与物理目录一致不应被报告（#602 评论#7 项13）。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            make_tree(
+                root,
+                {
+                    f"{APP_PREFIX}/feature/sample/Consistent.kt": (
+                        "package com.xiwei.sujian.feature.sample\n\n"
+                        "class Consistent\n"
+                    )
+                },
+            )
+            findings = arch.rule_package_dir_consistent(
+                source_roots=(root / "src/main/kotlin",)
+            )
+            self.assertEqual([], findings, "package 声明与目录一致不应被报告")
+
+    def test_package_dir_debug_source_set_inconsistent(self):
+        """debug 源集 package 与目录不一致必须被报告（#602 评论#8 项8.2）。
+
+        rule_package_dir_consistent 必须覆盖 debug 源集，不能只扫 src/main。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            make_tree(
+                root,
+                {
+                    "src/debug/kotlin/com/xiwei/sujian/ui/Foo.kt": (
+                        "package com.xiwei.sujian.app.debug\n\n"
+                        "class Foo\n"
+                    )
+                },
+            )
+            findings = arch.rule_package_dir_consistent(
+                source_roots=(root / "src/debug/kotlin",)
+            )
+            self.assertTrue(
+                findings,
+                "debug 源集 package com.xiwei.sujian.app.debug 位于 ui/ 目录必须被报告",
+            )
+
+    def test_input_rule_flags_feature_data_repository(self):
+        """input 层直接依赖 feature data Repository 必须被报告（#602 评论#8 项8.3）。"""
         findings = self.run_rule(
-            "package-dir-consistent",
+            "input-layer-pure",
             {
-                f"{APP_PREFIX}/feature/sample/Consistent.kt": (
-                    "package com.xiwei.sujian.feature.sample\n\n"
-                    "class Consistent\n"
+                f"{APP_PREFIX}/feature/editor/input/BadInput.kt": (
+                    "package com.xiwei.sujian.feature.editor.input\n\n"
+                    "import com.xiwei.sujian.feature.project.data.ProjectRepository\n"
+                    "class Bad(val repo: ProjectRepository)\n"
                 )
             },
         )
-        self.assertEqual([], findings, "package 声明与目录一致不应被报告")
+        self.assertTrue(findings, "input 层依赖 feature.project.data 必须被报告")
+
+    def test_data_no_editor_display_flags_settings_data(self):
+        """feature/settings/data 反向依赖 editor.ui 必须被报告（#602 评论#8 项8.3）。"""
+        findings = self.run_rule(
+            "data-no-editor-display",
+            {
+                f"{APP_PREFIX}/feature/settings/data/BadRepo.kt": (
+                    "package com.xiwei.sujian.feature.settings.data\n\n"
+                    "import com.xiwei.sujian.feature.editor.ui.Bar\n"
+                    "class Bad(val bar: Bar)\n"
+                )
+            },
+        )
+        self.assertTrue(findings, "settings/data 依赖 editor.ui 必须被报告")
 
 
 class RealRepoTest(unittest.TestCase):

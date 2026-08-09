@@ -7,7 +7,7 @@ import com.xiwei.sujian.app.theme.model.ThemePaletteRecord
 /**
  * UniFFI 主题 DTO → app 层主题 DTO 映射器。
  *
- * 所有映射逻辑集中在此对象，UI 层只使用 [com.xiwei.sujian.model] 下的类型。
+ * 所有映射逻辑集中在此对象，UI 层只使用 com.xiwei.sujian.app.theme.model 下的主题模型。
  * Repository/Store 层调用这些方法完成转换，UI 层不直接接触 UniFFI 绑定。
  */
 object ThemeDtoMapper {
