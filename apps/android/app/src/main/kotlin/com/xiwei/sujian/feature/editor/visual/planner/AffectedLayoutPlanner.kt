@@ -238,8 +238,8 @@ class AffectedLayoutPlanner {
 
             val editParagraphId = oldRev.lineRanges.getOrNull(oldEditLine)?.paragraphId ?: 0
 
-            val offsetMapper = buildOffsetMapper(visualIntent, oldRev, newRev)
-            val reverseMapper = buildReverseOffsetMapper(visualIntent, oldRev, newRev)
+            val offsetMapper = buildOffsetMapper(visualIntent)
+            val reverseMapper = buildReverseOffsetMapper(visualIntent)
 
             val oldParagraphs = buildParagraphRanges(oldRev)
             val newParagraphs = buildParagraphRanges(newRev)
@@ -406,11 +406,7 @@ class AffectedLayoutPlanner {
      * If [VisualIntent.offsetMap] is null (cursor-only operations, or Core did not
      * provide a map), fall back to identity mapping.
      */
-    internal fun buildOffsetMapper(
-        visualIntent: VisualIntent,
-        @Suppress("UNUSED_PARAMETER") oldRev: AndroidLayoutRevision,
-        @Suppress("UNUSED_PARAMETER") newRev: AndroidLayoutRevision,
-    ): (Int) -> Int? {
+    internal fun buildOffsetMapper(visualIntent: VisualIntent): (Int) -> Int? {
         val offsetMap = visualIntent.offsetMap
         if (offsetMap == null || offsetMap.entries.isEmpty()) {
             return { offset -> offset }
@@ -431,11 +427,7 @@ class AffectedLayoutPlanner {
      * to find the one containing the new byte offset and map back to old coordinates.
      * If [VisualIntent.offsetMap] is null, fall back to identity mapping.
      */
-    internal fun buildReverseOffsetMapper(
-        visualIntent: VisualIntent,
-        @Suppress("UNUSED_PARAMETER") oldRev: AndroidLayoutRevision,
-        @Suppress("UNUSED_PARAMETER") newRev: AndroidLayoutRevision,
-    ): (Int) -> Int? {
+    internal fun buildReverseOffsetMapper(visualIntent: VisualIntent): (Int) -> Int? {
         val offsetMap = visualIntent.offsetMap
         if (offsetMap == null || offsetMap.entries.isEmpty()) {
             return { newOffset -> newOffset }
