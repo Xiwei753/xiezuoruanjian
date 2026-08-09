@@ -1,9 +1,9 @@
 package com.xiwei.sujian.feature.sync.data
 
+import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 
 /**
  * #600 评论 #5：应用级同步 interval/elapsed 纯函数契约测试。

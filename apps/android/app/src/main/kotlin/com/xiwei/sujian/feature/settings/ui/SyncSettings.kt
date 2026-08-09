@@ -23,8 +23,8 @@ import com.xiwei.sujian.core.designsystem.component.SujianSection
 import com.xiwei.sujian.core.designsystem.component.SujianSlider
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
-import com.xiwei.sujian.feature.editor.ui.AnimatedTextField
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
+import com.xiwei.sujian.feature.editor.ui.AnimatedTextField
 
 /**
  * #600 评论 #5：设置页同步区域拆成两组完全独立的 UI：

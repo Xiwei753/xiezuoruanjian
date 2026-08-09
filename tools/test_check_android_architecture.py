@@ -367,6 +367,32 @@ class LayerRuleTests(unittest.TestCase):
         messages = " | ".join(f.message for f in findings)
         self.assertIn("commitSyncProfile", messages, "缺少 commitSyncProfile 必须被报告")
 
+    def test_package_dir_inconsistent_must_fail(self):
+        """package 声明与物理目录不一致必须被报告（#602 评论#7 项13）。"""
+        findings = self.run_rule(
+            "package-dir-consistent",
+            {
+                f"{APP_PREFIX}/feature/sample/Inconsistent.kt": (
+                    "package com.xiwei.sujian.feature.other\n\n"
+                    "class Inconsistent\n"
+                )
+            },
+        )
+        self.assertTrue(findings, "package 声明与目录不一致必须被报告")
+
+    def test_package_dir_consistent_must_pass(self):
+        """package 声明与物理目录一致不应被报告（#602 评论#7 项13）。"""
+        findings = self.run_rule(
+            "package-dir-consistent",
+            {
+                f"{APP_PREFIX}/feature/sample/Consistent.kt": (
+                    "package com.xiwei.sujian.feature.sample\n\n"
+                    "class Consistent\n"
+                )
+            },
+        )
+        self.assertEqual([], findings, "package 声明与目录一致不应被报告")
+
 
 class RealRepoTest(unittest.TestCase):
     def test_real_repo_scan_passes(self):

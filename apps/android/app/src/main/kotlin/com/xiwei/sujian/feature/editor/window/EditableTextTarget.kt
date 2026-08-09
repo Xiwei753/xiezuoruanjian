@@ -6,7 +6,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.xiwei.sujian.feature.editor.session.CommitPolicy
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
-import com.xiwei.sujian.feature.editor.session.releaseHost
 
 /**
  * Registration descriptor for an editable text region within the window.

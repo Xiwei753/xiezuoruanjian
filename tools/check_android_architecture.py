@@ -242,10 +242,8 @@ def rule_ui_no_uniffi_jna_bridge() -> list[Finding]:
     ui_filters = [
         "/sujian/app/theme/",
         "/sujian/app/navigation/",
-        "/sujian/app/diagnostics/",
         "/sujian/app/labs/",
         "/feature/editor/ui/",
-        "/feature/home/ui/",
         "/feature/settings/ui/",
         "/feature/starmap/ui/",
         "/feature/stats/ui/",
@@ -265,10 +263,8 @@ def rule_ui_no_editor_input() -> list[Finding]:
     ui_filters = [
         "/sujian/app/theme/",
         "/sujian/app/navigation/",
-        "/sujian/app/diagnostics/",
         "/sujian/app/labs/",
         "/feature/editor/ui/",
-        "/feature/home/ui/",
         "/feature/settings/ui/",
         "/feature/starmap/ui/",
         "/feature/stats/ui/",
@@ -665,6 +661,57 @@ def rule_source_contracts() -> list[Finding]:
     return findings
 
 
+PACKAGE_RE = re.compile(r"^\s*package\s+(com\.xiwei\.sujian(?:\.[A-Za-z0-9_]+)*)\s*$", re.M)
+
+
+def is_kotlin_file(path: Path) -> bool:
+    return path.suffix == ".kt"
+
+
+def rule_package_dir_consistent() -> list[Finding]:
+    """package 声明必须与物理目录结构一致（#602 评论#7 项13）。
+
+    遍历 APP_SRC 下所有生产 .kt 文件，解析首条 package 声明，
+    将包名 com.xiwei.sujian.xxx.yyy 转为目录 xxx/yyy，与文件相对
+    APP_SRC 的父目录比较，不一致则报错。
+    """
+    findings: list[Finding] = []
+    if not APP_SRC.exists():
+        return findings
+    prefix = "com.xiwei.sujian"
+    for path in sorted(APP_SRC.rglob("*.kt")):
+        if not is_kotlin_file(path) or not path.is_file():
+            continue
+        str_path = str(path)
+        if "/build/" in str_path or "/generated/" in str_path:
+            continue
+        # 排除测试目录（APP_SRC 已在 src/main 下，此处防御性排除）
+        if "/src/test/" in str_path or "/src/androidTest/" in str_path:
+            continue
+        content = path.read_text(encoding="utf-8")
+        match = PACKAGE_RE.search(content)
+        if not match:
+            continue
+        pkg = match.group(1)
+        if pkg == prefix:
+            pkg_subpath = ""
+        else:
+            pkg_subpath = pkg[len(prefix) + 1 :].replace(".", "/")
+        rel_dir = path.parent.relative_to(APP_SRC)
+        rel_dir_str = str(rel_dir).replace("\\", "/")
+        if rel_dir_str == ".":
+            rel_dir_str = ""
+        if pkg_subpath != rel_dir_str:
+            findings.append(
+                Finding(
+                    path=str(path.relative_to(APP_SRC)),
+                    line=0,
+                    message=f"package '{pkg}' 与目录 '{rel_dir_str}' 不一致",
+                )
+            )
+    return findings
+
+
 RULES: list[tuple[str, str, object]] = [
     (
         "ui-no-uniffi-jna-bridge",
@@ -725,6 +772,11 @@ RULES: list[tuple[str, str, object]] = [
         "source-contracts",
         "关键结构契约（session 状态出口/FrameClock/motion policy/同步事务/凭据/预览纯净）",
         rule_source_contracts,
+    ),
+    (
+        "package-dir-consistent",
+        "package 声明必须与物理目录结构一致",
+        rule_package_dir_consistent,
     ),
 ]
 

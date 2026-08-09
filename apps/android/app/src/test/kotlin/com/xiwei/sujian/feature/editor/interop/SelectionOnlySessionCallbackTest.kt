@@ -1,5 +1,6 @@
 package com.xiwei.sujian.feature.editor.interop
 
+import com.xiwei.sujian.feature.editor.platform.SujianEditorView
 import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import org.junit.Assert.assertEquals
@@ -16,7 +17,6 @@ import uniffi.writer_core.EditorEditResultDto
 import uniffi.writer_core.EditorOperationKindDto
 import uniffi.writer_core.EditorTransactionCauseDto
 import uniffi.writer_core.EditorVisualIntentDto
-import com.xiwei.sujian.feature.editor.platform.SujianEditorView
 
 /**
  * #595 五：selection-only 操作必须更新会话层 SessionState 契约测试。

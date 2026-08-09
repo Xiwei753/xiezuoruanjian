@@ -2,6 +2,7 @@
 
 package com.xiwei.sujian.feature.editor.session
 
+import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -9,7 +10,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 
 /**
  * #595 五/六：文档版本因果顺序与保存提交契约测试。

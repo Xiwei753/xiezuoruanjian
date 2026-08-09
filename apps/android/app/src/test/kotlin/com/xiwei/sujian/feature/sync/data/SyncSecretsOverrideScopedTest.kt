@@ -1,13 +1,12 @@
 package com.xiwei.sujian.feature.sync.data
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
-import com.xiwei.sujian.feature.sync.data.SyncRepository
+import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import org.junit.Assert.assertFalse
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 
 /**
  * #595 十：secrets override 操作作用域行为测试。

@@ -1,8 +1,8 @@
 package com.xiwei.sujian.feature.stats.data
 import com.xiwei.sujian.core.interop.common.BridgeResult
+import com.xiwei.sujian.feature.stats.data.interop.StatsBridge
 import com.xiwei.sujian.feature.stats.data.model.ProjectWritingStatsSummary
 import com.xiwei.sujian.feature.stats.data.model.WritingStatsSummary
-import com.xiwei.sujian.feature.stats.data.interop.StatsBridge
 
 /**
  * WritingStatsRepository — 统计仓库层

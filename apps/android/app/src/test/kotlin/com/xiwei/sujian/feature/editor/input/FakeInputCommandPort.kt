@@ -1,9 +1,9 @@
 package com.xiwei.sujian.feature.editor.input
 
-import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
-import com.xiwei.sujian.feature.editor.projection.EditResult
 import com.xiwei.sujian.feature.editor.pipeline.InputCommandPort
 import com.xiwei.sujian.feature.editor.pipeline.PipelineOutput
+import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
+import com.xiwei.sujian.feature.editor.projection.EditResult
 import uniffi.writer_core.AnimationModeDto
 import uniffi.writer_core.CompositionSessionDto
 import uniffi.writer_core.CoordinatedCursorDto

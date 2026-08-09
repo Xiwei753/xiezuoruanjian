@@ -1,7 +1,9 @@
 package com.xiwei.sujian.feature.starmap.data
 
+import com.xiwei.sujian.feature.starmap.data.interop.toGraphEdge
+import com.xiwei.sujian.feature.starmap.data.interop.toGraphNode
+import com.xiwei.sujian.feature.starmap.data.interop.toModel
 import com.xiwei.sujian.feature.starmap.model.StarMapData
-import com.xiwei.sujian.feature.starmap.data.interop.*
 import com.xiwei.sujian.feature.starmap.model.StarMapGraphData
 import com.xiwei.sujian.feature.starmap.model.StarMapLayoutData
 import com.xiwei.sujian.feature.starmap.model.StarMapLayoutKind

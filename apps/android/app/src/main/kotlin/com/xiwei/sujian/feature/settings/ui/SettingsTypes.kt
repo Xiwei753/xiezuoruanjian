@@ -1,8 +1,8 @@
 package com.xiwei.sujian.feature.settings.ui
 
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 
 // ! # 设置页类型声明（从 SettingsRoute 拆分）

@@ -27,18 +27,15 @@ android {
 
 dependencies {
     val composeBom = platform(libs.compose.bom)
-    implementation(composeBom)
+    api(composeBom)
+    api(libs.compose.ui)
     api(libs.compose.material3)
-    api(libs.compose.material3.windowsizeclass)
     api(libs.compose.material3.adaptive)
     api(libs.compose.material3.adaptive.layout)
     api(libs.compose.material3.adaptive.navigation)
 
-    implementation(libs.compose.ui)
     implementation(libs.compose.foundation)
     implementation(libs.compose.material.icons.extended)
-
-    implementation(libs.androidx.window)
 }
 
 detekt {

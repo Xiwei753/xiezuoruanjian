@@ -5,13 +5,12 @@ import android.graphics.Rect
 import android.util.Log
 import com.xiwei.sujian.app.theme.EditorThemeAdapter
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
-import com.xiwei.sujian.feature.editor.platform.SujianEditorView
 import com.xiwei.sujian.feature.editor.interop.TextEditSessionBridge
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import com.xiwei.sujian.feature.editor.motion.TargetMotionConstraint
+import com.xiwei.sujian.feature.editor.platform.SujianEditorView
 import com.xiwei.sujian.feature.editor.projection.ChapterPreviewState
 import com.xiwei.sujian.feature.editor.projection.TextRange
-import kotlinx.coroutines.flow.StateFlow
 import com.xiwei.sujian.feature.editor.session.AnimationPolicy
 import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorInputLease
@@ -41,6 +40,7 @@ import com.xiwei.sujian.feature.editor.session.detachWindowBinding
 import com.xiwei.sujian.feature.editor.session.prepareSessionForEdit
 import com.xiwei.sujian.feature.editor.session.releaseHost
 import com.xiwei.sujian.feature.editor.session.resetPersistentSession
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * #592 一/四：窗口层宿主 — 每个 Activity/窗口创建一份，持有全部窗口/渲染对象：

@@ -1,5 +1,4 @@
 package com.xiwei.sujian.core.interop.common
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.ChapterOpenResult
 import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
@@ -24,6 +23,7 @@ import com.xiwei.sujian.feature.sync.data.model.FirstSyncMode
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncConflict
 import com.xiwei.sujian.feature.sync.data.model.SyncDiagnosticsResult
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.model.SyncPlan
 import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets

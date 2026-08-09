@@ -1,10 +1,10 @@
 package com.xiwei.sujian.feature.editor.input
 
 import android.view.View
-import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
-import com.xiwei.sujian.feature.editor.projection.EditResult
 import com.xiwei.sujian.feature.editor.pipeline.InputCommandPort
 import com.xiwei.sujian.feature.editor.pipeline.PipelineOutput
+import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
+import com.xiwei.sujian.feature.editor.projection.EditResult
 import com.xiwei.sujian.feature.editor.session.AutocorrectPolicy
 import com.xiwei.sujian.feature.editor.session.CapitalizationPolicy
 import com.xiwei.sujian.feature.editor.session.ImeAction

@@ -31,10 +31,10 @@ import androidx.compose.ui.semantics.textSelectionRange
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.Dp
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
+import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 import com.xiwei.sujian.feature.editor.window.EditingState
 import com.xiwei.sujian.feature.editor.window.EditorWindowHost
-import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

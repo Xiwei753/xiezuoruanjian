@@ -9,13 +9,13 @@ import com.xiwei.sujian.app.MainActivity
 import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
-import com.xiwei.sujian.core.interop.settings.SettingsRepository
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
-import com.xiwei.sujian.feature.editor.session.EditorWindowHost
 import com.xiwei.sujian.feature.editor.visual.AnimationTimeSource
 import com.xiwei.sujian.feature.editor.visual.ChoreographerAnimationTimeSource
 import com.xiwei.sujian.feature.editor.visual.TransactionIdSource
+import com.xiwei.sujian.feature.editor.window.EditorWindowHost
 import com.xiwei.sujian.feature.project.data.ProjectRepository
+import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import org.junit.Assert
 import org.junit.rules.TestRule
 import org.junit.runner.Description
@@ -207,23 +207,23 @@ class TestSujianAppDependencies(
         com.xiwei.sujian.feature.project.data.ChapterRepository(appContext, appServiceBridge)
     override val recentEditsRepository: com.xiwei.sujian.feature.project.data.RecentEditsRepository =
         com.xiwei.sujian.feature.project.data.RecentEditsRepository(appContext, appServiceBridge)
-    override val statsRepository: com.xiwei.sujian.core.interop.stats.StatsRepository =
-        com.xiwei.sujian.core.interop.stats.StatsRepository(appServiceBridge.statsBridge)
+    override val statsRepository: com.xiwei.sujian.feature.stats.data.WritingStatsRepository =
+        com.xiwei.sujian.feature.stats.data.WritingStatsRepository(appServiceBridge.statsBridge)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge, prefsSuffix)
     override val themeRepository: com.xiwei.sujian.app.theme.ThemeRepository =
         com.xiwei.sujian.app.theme.ThemeRepository(appContext, appServiceBridge)
     override val syncRepository: com.xiwei.sujian.feature.sync.data.SyncRepository =
         com.xiwei.sujian.feature.sync.data.SyncRepository(appContext, appServiceBridge, prefsSuffix)
-    override val syncStatusRepository: com.xiwei.sujian.core.interop.sync.SyncStatusRepository =
-        com.xiwei.sujian.core.interop.sync.SyncStatusRepository(
+    override val syncStatusRepository: com.xiwei.sujian.feature.sync.data.SyncStatusRepository =
+        com.xiwei.sujian.feature.sync.data.SyncStatusRepository(
             syncRepository,
         )
-    override val syncCoordinator: com.xiwei.sujian.core.interop.sync.SyncCoordinator =
-        com.xiwei.sujian.core.interop.sync.SyncCoordinator(
+    override val syncCoordinator: com.xiwei.sujian.feature.sync.data.SyncCoordinator =
+        com.xiwei.sujian.feature.sync.data.SyncCoordinator(
             syncRepository,
             syncStatusRepository,
         )
-    override val starmapRepository: com.xiwei.sujian.core.interop.starmap.StarMapRepository =
+    override val starmapRepository: com.xiwei.sujian.feature.starmap.data.StarMapRepository =
         com.xiwei.sujian.app.di.AppServiceProvider.getStarmapBridge(appContext).repository
     private val _sessionCoordinator = lazy { EditorSessionCoordinator(appServiceBridge) }
     val sessionCoordinator: EditorSessionCoordinator get() = _sessionCoordinator.value
@@ -448,7 +448,7 @@ object AndroidTestEnvironment {
                         testFailed = t
                     } finally {
                         SujianAppDependencies.setTestProvider(null)
-                        com.xiwei.sujian.core.interop.project.ActiveProjectGate.setCurrentProjectId(null)
+                        com.xiwei.sujian.app.state.ActiveProjectGate.setCurrentProjectId(null)
                         try {
                             releaseSession()
                         } catch (cleanup: Throwable) {

@@ -5,13 +5,13 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.editor.interop.TextEditSessionBridge
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
+import com.xiwei.sujian.feature.editor.window.EditableTextTarget
+import com.xiwei.sujian.feature.editor.window.EditingState
+import com.xiwei.sujian.feature.editor.window.EditorWindowHost
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import com.xiwei.sujian.feature.editor.window.EditableTextTarget
-import com.xiwei.sujian.feature.editor.window.EditingState
-import com.xiwei.sujian.feature.editor.window.EditorWindowHost
 
 /**
  * #592 四：窗口绑定状态机 — 会话层唯一的窗口生命周期事实。

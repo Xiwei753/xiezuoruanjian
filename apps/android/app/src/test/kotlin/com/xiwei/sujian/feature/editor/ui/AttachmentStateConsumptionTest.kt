@@ -1,6 +1,5 @@
 package com.xiwei.sujian.feature.editor.ui
 
-import com.xiwei.sujian.feature.editor.ui.shouldShowEditor
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

@@ -1,10 +1,10 @@
 package com.xiwei.sujian.feature.editor.session
 
 import android.view.Choreographer
+import com.xiwei.sujian.feature.editor.window.WindowDisplayFrameClock
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import com.xiwei.sujian.feature.editor.window.WindowDisplayFrameClock
 
 /**
  * #595 七：单一 VSync 帧驱动行为测试 — 用假 [WindowDisplayFrameClock.FrameCallbackPoster]

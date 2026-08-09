@@ -2,7 +2,7 @@ package com.xiwei.sujian.feature.settings.ui
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.xiwei.sujian.core.interop.project.ActiveProjectGate
+import com.xiwei.sujian.app.state.ActiveProjectGate
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import org.junit.Assert.assertEquals

@@ -26,10 +26,10 @@ import androidx.compose.ui.semantics.setSelection
 import androidx.compose.ui.semantics.setText
 import androidx.compose.ui.semantics.textSelectionRange
 import androidx.compose.ui.text.TextRange
+import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 import com.xiwei.sujian.feature.editor.window.EditingState
 import com.xiwei.sujian.feature.editor.window.EditorWindowHost
-import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 
 @Composable
 fun AnimatedInlineText(

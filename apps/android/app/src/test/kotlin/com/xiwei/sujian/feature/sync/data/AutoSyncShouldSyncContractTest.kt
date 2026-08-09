@@ -2,10 +2,10 @@ package com.xiwei.sujian.feature.sync.data
 
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
+import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 
 /**
  * #600 评论 #3 问题三：AutoSyncWorker 遍历作品时用 shouldSync 决定哪些作品需要同步。

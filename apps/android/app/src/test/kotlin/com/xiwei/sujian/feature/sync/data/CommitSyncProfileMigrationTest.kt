@@ -2,7 +2,9 @@ package com.xiwei.sujian.feature.sync.data
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.feature.settings.data.SettingsSaveResult
-import com.xiwei.sujian.feature.sync.data.SyncRepository
+import com.xiwei.sujian.feature.sync.data.model.SyncConfig
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
+import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -10,9 +12,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import com.xiwei.sujian.feature.sync.data.model.SyncConfig
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
-import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 
 /**
  * #595 九：首次 generation 提交必须原子（legacy → generation 迁移）行为测试。

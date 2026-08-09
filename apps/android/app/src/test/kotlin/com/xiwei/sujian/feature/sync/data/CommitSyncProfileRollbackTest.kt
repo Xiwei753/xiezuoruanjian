@@ -1,9 +1,9 @@
 package com.xiwei.sujian.feature.sync.data
 
-import org.junit.Assert.assertTrue
-import org.junit.Test
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
 /**
  * #592 五/六：版本化提交与完整快照行为测试。

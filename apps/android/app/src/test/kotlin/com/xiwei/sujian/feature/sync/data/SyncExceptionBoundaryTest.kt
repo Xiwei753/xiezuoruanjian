@@ -1,11 +1,11 @@
 package com.xiwei.sujian.feature.sync.data
 
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
+import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
-import com.xiwei.sujian.feature.sync.data.model.SyncResult
 
 /**
  * #592 三：同步异常边界分类契约测试。

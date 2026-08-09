@@ -7,21 +7,20 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.window.layout.FoldingFeature
+import com.xiwei.sujian.app.layout.data.LayoutPolicyRepositoryProvider
 import com.xiwei.sujian.app.layout.model.FoldFeatureInfo
 import com.xiwei.sujian.app.layout.model.FoldOcclusion
 import com.xiwei.sujian.app.layout.model.FoldOrientation
 import com.xiwei.sujian.app.layout.model.FoldState
 import com.xiwei.sujian.app.layout.model.LayoutPlan
 import com.xiwei.sujian.app.layout.model.WindowMetrics
-import com.xiwei.sujian.app.layout.data.LayoutPolicyRepositoryProvider
-import com.xiwei.sujian.feature.project.domain.ProjectUseCase
-import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import com.xiwei.sujian.core.platform.api.FoldPosture
 import com.xiwei.sujian.core.platform.api.OcclusionType
-import com.xiwei.sujian.core.platform.window.WindowFoldFeatureCollector
+import com.xiwei.sujian.core.platform.window.AospFoldFeatureInfo
 import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
+import com.xiwei.sujian.feature.project.domain.ProjectUseCase
+import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -228,13 +227,12 @@ class SujianAppViewModel(
     }
 
     fun updateFoldFeaturesFromAdaptive(
-        features: List<FoldingFeature>,
+        features: List<AospFoldFeatureInfo>,
         density: Float = 1f,
     ) {
         val coreFoldInfo =
             if (features.isNotEmpty()) {
-                val feature = features.first()
-                val info = WindowFoldFeatureCollector.toFoldFeatureInfo(feature)
+                val info = features.first()
                 FoldFeatureInfo(
                     state =
                         when (info.state) {
@@ -384,7 +382,7 @@ class SujianAppState(
     override fun clearProjectSelection() = viewModel.clearProjectSelection()
 
     fun updateFoldFeaturesFromAdaptive(
-        features: List<FoldingFeature>,
+        features: List<AospFoldFeatureInfo>,
         density: Float = 1f,
     ) = viewModel.updateFoldFeaturesFromAdaptive(
         features,

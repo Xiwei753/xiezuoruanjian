@@ -8,9 +8,9 @@ import com.xiwei.sujian.app.di.AppServiceProvider
 import com.xiwei.sujian.app.di.SujianAppDependenciesProvider
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
-import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 import com.xiwei.sujian.core.platform.AndroidDataRoot
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
+import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter

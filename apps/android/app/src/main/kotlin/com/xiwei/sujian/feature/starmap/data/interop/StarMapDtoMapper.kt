@@ -1,8 +1,8 @@
 package com.xiwei.sujian.feature.starmap.data.interop
 
 import com.google.gson.Gson
-import com.xiwei.sujian.feature.starmap.model.StarMapData
 import com.xiwei.sujian.feature.starmap.data.StarMapRawCache
+import com.xiwei.sujian.feature.starmap.model.StarMapData
 import com.xiwei.sujian.feature.starmap.model.StarMapDeepTargetData
 import com.xiwei.sujian.feature.starmap.model.StarMapDisplayPolicyData
 import com.xiwei.sujian.feature.starmap.model.StarMapEdgeRenderData

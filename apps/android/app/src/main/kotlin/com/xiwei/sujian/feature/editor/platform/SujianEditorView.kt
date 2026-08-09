@@ -14,15 +14,15 @@ import android.view.inputmethod.InputMethodManager
 import androidx.core.graphics.withTranslation
 import com.xiwei.sujian.R
 import com.xiwei.sujian.feature.editor.input.AndroidInputAdapter
+import com.xiwei.sujian.feature.editor.interop.EditorKernelBridge
 import com.xiwei.sujian.feature.editor.pipeline.AndroidEditorPipeline
 import com.xiwei.sujian.feature.editor.pipeline.EditorCommandPort
 import com.xiwei.sujian.feature.editor.pipeline.PipelineOutput
 import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import com.xiwei.sujian.feature.editor.session.NewlinePolicy
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
-import com.xiwei.sujian.feature.editor.interop.EditorKernelBridge
-import com.xiwei.sujian.feature.editor.window.WindowDisplayFrameClock
 import com.xiwei.sujian.feature.editor.session.toEditorOperationKind
+import com.xiwei.sujian.feature.editor.window.WindowDisplayFrameClock
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class SujianEditorView

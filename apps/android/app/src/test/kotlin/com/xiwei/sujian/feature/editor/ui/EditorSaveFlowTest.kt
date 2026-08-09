@@ -4,8 +4,6 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.editor.session.ChapterContentSavePort
-import com.xiwei.sujian.feature.settings.data.SettingsRepository
-import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
 import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
@@ -17,6 +15,8 @@ import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
 import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
+import com.xiwei.sujian.feature.settings.data.SettingsRepository
+import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async

@@ -9,8 +9,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.app.theme.EditorThemeAdapter
-import com.xiwei.sujian.feature.editor.window.EditorWindowHost
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
+import com.xiwei.sujian.feature.editor.window.EditorWindowHost
 
 /**
  * #595 一：正文编辑器宿主 — 在 [WritingPane] 的正文 Box 内直接持有

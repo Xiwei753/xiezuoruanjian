@@ -1,12 +1,12 @@
 package com.xiwei.sujian.feature.starmap.data.interop
 
+import com.xiwei.sujian.feature.starmap.data.StarMapRawCache
 import com.xiwei.sujian.feature.starmap.model.StarMapLayoutData
 import com.xiwei.sujian.feature.starmap.model.StarMapLayoutKind
 import com.xiwei.sujian.feature.starmap.model.StarMapLayoutNodeData
 import uniffi.writer_core.StarMapLayoutDto
 import uniffi.writer_core.StarMapLayoutKindDto
 import uniffi.writer_core.StarMapLayoutNodeDto
-import com.xiwei.sujian.feature.starmap.data.StarMapRawCache
 
 internal fun StarMapLayoutData.toDto(cache: StarMapRawCache?): StarMapLayoutDto =
     StarMapLayoutDto(

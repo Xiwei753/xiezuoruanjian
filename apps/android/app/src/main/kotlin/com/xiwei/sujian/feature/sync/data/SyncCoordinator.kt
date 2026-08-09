@@ -1,18 +1,17 @@
 package com.xiwei.sujian.feature.sync.data
+import com.xiwei.sujian.app.state.ActiveDocumentGate
 import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.RepositoryException
 import com.xiwei.sujian.core.interop.common.ResultEnvelope
-import com.xiwei.sujian.app.state.ActiveDocumentGate
-import com.xiwei.sujian.feature.sync.data.SyncRepository
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 
 sealed class SyncOutcome {
     data class Completed(val result: SyncResult) : SyncOutcome()

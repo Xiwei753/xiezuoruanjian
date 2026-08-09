@@ -2,6 +2,13 @@ package com.xiwei.sujian.feature.starmap.data
 
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.ResultEnvelope
+import com.xiwei.sujian.feature.starmap.data.interop.StarMapBridgeOps
+import com.xiwei.sujian.feature.starmap.data.interop.toDto
+import com.xiwei.sujian.feature.starmap.data.interop.toGraphEdge
+import com.xiwei.sujian.feature.starmap.data.interop.toGraphNode
+import com.xiwei.sujian.feature.starmap.data.interop.toModel
+import com.xiwei.sujian.feature.starmap.data.interop.toRawCache
+import com.xiwei.sujian.feature.starmap.data.interop.toSnapshotResult
 import com.xiwei.sujian.feature.starmap.model.StarMapData
 import com.xiwei.sujian.feature.starmap.model.StarMapEdgeKind
 import com.xiwei.sujian.feature.starmap.model.StarMapEdgeRenderData
@@ -20,9 +27,6 @@ import uniffi.writer_core.PhasedSnapshotRequestDto
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgePatchInputDto
 import uniffi.writer_core.StarMapNodePatchInputDto
-import com.xiwei.sujian.feature.starmap.data.interop.StarMapBridge
-import com.xiwei.sujian.feature.starmap.data.interop.*
-import com.xiwei.sujian.feature.starmap.data.interop.StarMapBridgeOps
 
 class StarMapRepository internal constructor(
     private val bridge: StarMapBridgeOps,

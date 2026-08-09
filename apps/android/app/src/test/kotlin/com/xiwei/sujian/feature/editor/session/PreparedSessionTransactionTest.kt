@@ -1,5 +1,6 @@
 package com.xiwei.sujian.feature.editor.session
 
+import com.xiwei.sujian.feature.editor.window.EditingState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -9,7 +10,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import com.xiwei.sujian.feature.editor.window.EditingState
 
 /**
  * #595 一：无副作用章节预准备行为测试。

@@ -4,15 +4,14 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
-import com.xiwei.sujian.feature.sync.data.SyncRepository
-import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.AppSyncProfileReadResult
 import com.xiwei.sujian.feature.sync.data.AppSyncProfileSnapshot
 import com.xiwei.sujian.feature.sync.data.ProjectSyncProfileSnapshot
 import com.xiwei.sujian.feature.sync.data.SyncOutcome
 import com.xiwei.sujian.feature.sync.data.SyncProfileGate
 import com.xiwei.sujian.feature.sync.data.SyncProfileReadResult
+import com.xiwei.sujian.feature.sync.data.SyncRepository
+import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 
 /**
  * #600 评论 #3 问题三：自动同步不再依赖 ActiveProjectGate（进程重启后 null）。

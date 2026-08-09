@@ -2,10 +2,10 @@ package com.xiwei.sujian.feature.editor.input
 
 import android.view.View
 import android.view.inputmethod.BaseInputConnection
-import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
-import com.xiwei.sujian.feature.editor.projection.EditResult
 import com.xiwei.sujian.feature.editor.pipeline.InputCommandPort
+import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import com.xiwei.sujian.feature.editor.projection.DisplayTextProjection
+import com.xiwei.sujian.feature.editor.projection.EditResult
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class AndroidInputConnection(

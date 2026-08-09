@@ -4,15 +4,15 @@ import android.content.Context
 import androidx.compose.runtime.compositionLocalOf
 import com.xiwei.sujian.app.theme.ThemeRepository
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
+import com.xiwei.sujian.feature.project.data.ChapterRepository
+import com.xiwei.sujian.feature.project.data.ProjectRepository
+import com.xiwei.sujian.feature.project.data.RecentEditsRepository
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
 import com.xiwei.sujian.feature.sync.data.AppSyncDataBarrier
 import com.xiwei.sujian.feature.sync.data.SyncCoordinator
-import com.xiwei.sujian.feature.sync.data.SyncStatusRepository
-import com.xiwei.sujian.feature.project.data.ChapterRepository
-import com.xiwei.sujian.feature.project.data.ProjectRepository
-import com.xiwei.sujian.feature.project.data.RecentEditsRepository
 import com.xiwei.sujian.feature.sync.data.SyncRepository
+import com.xiwei.sujian.feature.sync.data.SyncStatusRepository
 
 interface AppServiceContainer {
     val appServiceBridge: AppServiceBridge

@@ -1,11 +1,10 @@
 package com.xiwei.sujian.feature.sync.data
-import com.xiwei.sujian.feature.sync.data.SyncRepository
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 
 /**
  * #595 四：legacy 槽凭据读取的类型化行为测试。

@@ -1,5 +1,4 @@
 package com.xiwei.sujian.feature.sync.data
-import com.xiwei.sujian.feature.sync.data.SyncRepository
 import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
 import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import kotlinx.coroutines.Dispatchers

@@ -8,6 +8,7 @@ import android.hardware.input.InputManager
 import android.os.Build
 import android.view.InputDevice
 import android.view.WindowManager
+import com.xiwei.sujian.core.platform.window.AospFoldFeatureInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,7 +33,7 @@ open class CapabilityProvider(private val context: Context) {
         )
     }
 
-    fun updateFromFoldFeatures(features: List<androidx.window.layout.DisplayFeature>) {
+    fun updateFromFoldFeatures(features: List<AospFoldFeatureInfo>) {
         val current = _capabilities.value
         val foldPosture = features.toFoldPosture()
         val sawFoldable = foldPosture != FoldPosture.None ||
@@ -178,13 +179,8 @@ open class CapabilityProvider(private val context: Context) {
         }
     }
 
-    private fun List<androidx.window.layout.DisplayFeature>.toFoldPosture(): FoldPosture {
-        val foldingFeature = filterIsInstance<androidx.window.layout.FoldingFeature>().firstOrNull()
-            ?: return FoldPosture.None
-        return when (foldingFeature.state) {
-            androidx.window.layout.FoldingFeature.State.FLAT -> FoldPosture.Flat
-            androidx.window.layout.FoldingFeature.State.HALF_OPENED -> FoldPosture.HalfOpened
-            else -> FoldPosture.None
-        }
+    private fun List<AospFoldFeatureInfo>.toFoldPosture(): FoldPosture {
+        val info = firstOrNull() ?: return FoldPosture.None
+        return info.state
     }
 }

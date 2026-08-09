@@ -30,23 +30,13 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
-import com.xiwei.sujian.feature.editor.ui.EditorSettingsState
-import com.xiwei.sujian.feature.editor.ui.EditorViewModel
-import com.xiwei.sujian.feature.editor.ui.SaveStatus
-import com.xiwei.sujian.feature.editor.ui.applyExternalContentToUi
-import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
-import com.xiwei.sujian.feature.editor.ui.confirmEditorAttached
-import com.xiwei.sujian.feature.editor.ui.isCurrentChapter
-import com.xiwei.sujian.feature.editor.ui.notifySyncMergeConflict
-import com.xiwei.sujian.feature.editor.ui.onContentChanged
-import com.xiwei.sujian.feature.editor.ui.reloadSettings
-import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 import com.xiwei.sujian.feature.editor.session.ExternalContentDecision
 import com.xiwei.sujian.feature.editor.session.SessionResetSource
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.session.applyExternalContentFact
 import com.xiwei.sujian.feature.editor.session.shouldApplyExternalContent
+import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 
 /**
  * 正文编辑窗格 — 「正文」一级内容。

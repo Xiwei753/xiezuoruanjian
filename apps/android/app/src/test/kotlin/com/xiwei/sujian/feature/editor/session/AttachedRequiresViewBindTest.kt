@@ -2,6 +2,8 @@
 
 package com.xiwei.sujian.feature.editor.session
 
+import com.xiwei.sujian.feature.editor.ui.shouldShowEditor
+import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -10,8 +12,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import com.xiwei.sujian.feature.editor.window.EditableTextTarget
-import com.xiwei.sujian.feature.editor.ui.shouldShowEditor
 
 /**
  * #595 三：Attached 必须表示真实 View 已绑定 — 状态机守卫契约测试。

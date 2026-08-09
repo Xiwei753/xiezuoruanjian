@@ -1,11 +1,11 @@
 package com.xiwei.sujian.feature.sync.data
 
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
+import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
-import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 
 /**
  * #592 四：SyncFailureKind 契约测试 — 验证统一用户提示映射和异常边界分类。

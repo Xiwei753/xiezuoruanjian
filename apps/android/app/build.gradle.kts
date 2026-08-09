@@ -313,7 +313,6 @@ dependencies {
     val composeBom = platform(libs.compose.bom)
     implementation(composeBom)
     implementation(libs.compose.material3)
-    implementation(libs.compose.material3.windowsizeclass)
     implementation(libs.compose.material3.adaptive)
     implementation(libs.compose.material3.adaptive.layout)
     implementation(libs.compose.material3.adaptive.navigation)
@@ -330,7 +329,6 @@ dependencies {
     implementation(libs.navigation3.ui)
     implementation(libs.kotlinx.serialization.core)
 
-    implementation(libs.androidx.window)
     implementation(libs.androidx.window.core)
     implementation(libs.androidx.datastore.preferences)
 

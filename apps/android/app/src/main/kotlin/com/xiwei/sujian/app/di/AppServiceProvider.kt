@@ -1,15 +1,15 @@
 package com.xiwei.sujian.app.di
 
 import android.content.Context
+import com.xiwei.sujian.app.layout.interop.LayoutPolicyBridge
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
-import com.xiwei.sujian.app.layout.interop.LayoutPolicyBridge
-import com.xiwei.sujian.feature.starmap.data.interop.StarMapBridge
-import com.xiwei.sujian.feature.stats.data.interop.StatsBridge
 import com.xiwei.sujian.core.platform.app.AndroidAppVersionProvider
 import com.xiwei.sujian.core.platform.device.AndroidDeviceIdentity
 import com.xiwei.sujian.core.platform.network.AndroidNetworkMonitor
+import com.xiwei.sujian.feature.starmap.data.interop.StarMapBridge
+import com.xiwei.sujian.feature.stats.data.interop.StatsBridge
 import java.util.Locale
 import java.util.TimeZone
 

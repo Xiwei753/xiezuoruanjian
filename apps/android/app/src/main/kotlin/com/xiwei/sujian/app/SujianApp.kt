@@ -30,15 +30,16 @@ import com.xiwei.sujian.app.navigation.SujianNavigationSuite
 import com.xiwei.sujian.app.theme.SujianTheme
 import com.xiwei.sujian.app.theme.ThemeStore
 import com.xiwei.sujian.app.theme.rememberThemeController
-import com.xiwei.sujian.feature.project.domain.ProjectUseCase
 import com.xiwei.sujian.core.platform.aosp.AospCapabilityProvider
 import com.xiwei.sujian.core.platform.aosp.VendorAdapterSetup
 import com.xiwei.sujian.core.platform.api.AndroidCapabilities
 import com.xiwei.sujian.core.platform.api.PointerKind
 import com.xiwei.sujian.core.platform.vendor.VendorAdapterRegistry
+import com.xiwei.sujian.core.platform.window.AospFoldFeatureInfo
 import com.xiwei.sujian.core.platform.window.WindowFoldFeatureCollector
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.editor.window.EditorWindowHost
+import com.xiwei.sujian.feature.project.domain.ProjectUseCase
 
 val LocalAndroidCapabilities =
     androidx.compose.runtime.compositionLocalOf<AndroidCapabilities> {
@@ -139,10 +140,8 @@ private fun SujianAppInitialization(
 }
 
 @Composable
-private fun rememberFoldFeatureCollection(
-    activity: androidx.activity.ComponentActivity?,
-): List<androidx.window.layout.FoldingFeature> {
-    var foldingFeatures by remember { mutableStateOf<List<androidx.window.layout.FoldingFeature>>(emptyList()) }
+private fun rememberFoldFeatureCollection(activity: androidx.activity.ComponentActivity?): List<AospFoldFeatureInfo> {
+    var foldingFeatures by remember { mutableStateOf<List<AospFoldFeatureInfo>>(emptyList()) }
     if (activity != null) {
         val foldCollector = remember { WindowFoldFeatureCollector(activity) }
         DisposableEffect(foldCollector) {
@@ -162,7 +161,7 @@ private fun rememberFoldFeatureCollection(
 @Composable
 private fun SujianAppAdaptiveWindowSync(
     capabilityProvider: AospCapabilityProvider,
-    foldingFeatures: List<androidx.window.layout.FoldingFeature>,
+    foldingFeatures: List<AospFoldFeatureInfo>,
     vm: SujianAppViewModel,
     deps: SujianAppDependencies,
 ) {

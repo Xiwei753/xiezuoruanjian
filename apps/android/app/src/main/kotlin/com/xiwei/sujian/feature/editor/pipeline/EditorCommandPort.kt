@@ -1,7 +1,7 @@
 package com.xiwei.sujian.feature.editor.pipeline
 
-import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import com.xiwei.sujian.feature.editor.interop.EditorKernelBridge
+import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import com.xiwei.sujian.feature.editor.projection.EditResult
 import uniffi.writer_core.EditorEditResultDto

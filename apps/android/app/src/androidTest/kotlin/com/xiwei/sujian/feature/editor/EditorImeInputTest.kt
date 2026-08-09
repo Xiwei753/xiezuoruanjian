@@ -17,7 +17,7 @@ import androidx.test.espresso.matcher.ViewMatchers
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
-import com.xiwei.sujian.feature.editor.host.SujianEditorView
+import com.xiwei.sujian.feature.editor.platform.SujianEditorView
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.EditorViewAssertions
@@ -312,7 +312,7 @@ class EditorImeInputTest {
     private fun waitForMirrorCondition(
         description: String,
         timeoutMs: Long,
-        check: (com.xiwei.sujian.feature.editor.mirror.DisplayTextMirror) -> Boolean,
+        check: (com.xiwei.sujian.feature.editor.projection.DisplayTextMirror) -> Boolean,
     ) {
         var lastObserved = "not polled yet"
         ComposeWait.waitUntil(composeTestRule, {

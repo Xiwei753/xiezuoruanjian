@@ -45,8 +45,8 @@ import com.xiwei.sujian.core.designsystem.layout.SujianListDetailScaffoldWithNav
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
-import com.xiwei.sujian.feature.sync.data.SyncCoordinator
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
+import com.xiwei.sujian.feature.sync.data.SyncCoordinator
 import com.xiwei.sujian.feature.sync.data.SyncRepository
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow

@@ -3,10 +3,10 @@ package com.xiwei.sujian.feature.settings.ui
 // ! # 同步结果映射（从 SettingsSyncOps 拆分）— 降低 TooManyFunctions
 
 import com.xiwei.sujian.feature.sync.data.ExclusiveResult
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
-import com.xiwei.sujian.feature.sync.data.SyncOutcome
 import com.xiwei.sujian.feature.sync.data.SyncDiagnosticsOutcome
 import com.xiwei.sujian.feature.sync.data.SyncDryRunOutcome
+import com.xiwei.sujian.feature.sync.data.SyncOutcome
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 
 // #597 同步事务协议字符串 — 提取为常量避免 StringLiteralDuplication
 internal const val SYNC_STATUS_ERROR = "error"

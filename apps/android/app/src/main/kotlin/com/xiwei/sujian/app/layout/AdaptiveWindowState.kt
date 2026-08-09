@@ -1,4 +1,4 @@
-package com.xiwei.sujian.app
+package com.xiwei.sujian.app.layout
 
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.layout.PaneScaffoldDirective

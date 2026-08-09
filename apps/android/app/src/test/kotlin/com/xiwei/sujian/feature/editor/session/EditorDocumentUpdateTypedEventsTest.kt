@@ -2,13 +2,13 @@
 
 package com.xiwei.sujian.feature.editor.session
 
+import com.xiwei.sujian.feature.editor.platform.EditorEditSource
+import com.xiwei.sujian.feature.editor.platform.SujianEditorView
+import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import com.xiwei.sujian.feature.editor.platform.EditorEditSource
-import com.xiwei.sujian.feature.editor.platform.SujianEditorView
-import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 
 /**
  * #595 二/四：EditorDocumentUpdate 类型化事件与文档版本比较契约测试。

@@ -7,24 +7,15 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.settings.data.SaveFailure
 import com.xiwei.sujian.feature.settings.data.SaveField
 import com.xiwei.sujian.feature.settings.data.SettingsSaveResult
-import com.xiwei.sujian.feature.sync.data.AppSyncProfileReadResult
-import com.xiwei.sujian.feature.sync.data.AppSyncProfileSnapshot
-import com.xiwei.sujian.feature.sync.data.AppSyncProfileStore
-import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
-import com.xiwei.sujian.feature.sync.data.GenerationSecretsReadResult
-import com.xiwei.sujian.feature.sync.data.ProjectSyncProfileSnapshot
-import com.xiwei.sujian.feature.sync.data.ProjectSyncProfileStore
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
-import com.xiwei.sujian.feature.sync.data.SyncProfileGate
-import com.xiwei.sujian.feature.sync.data.SyncProfileReadResult
-import com.xiwei.sujian.feature.sync.data.generationCleanupRange
 import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncDiagnosticsResult
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.model.SyncPlan
 import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import com.xiwei.sujian.feature.sync.data.model.SyncState
+import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 
 class SyncRepository(
     context: Context,

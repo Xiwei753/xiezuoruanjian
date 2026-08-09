@@ -61,13 +61,13 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.app.state.ActiveDocumentGate
 import com.xiwei.sujian.feature.editor.session.DocumentSaveReceiptTracker
-import com.xiwei.sujian.feature.settings.data.SettingsRepository
-import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.TargetDocumentFact
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
+import com.xiwei.sujian.feature.settings.data.SettingsRepository
+import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
 import com.xiwei.sujian.feature.sync.data.SyncRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

@@ -6,11 +6,11 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.MessageKeyMapper
 import com.xiwei.sujian.core.interop.common.RepositoryException
-import com.xiwei.sujian.feature.editor.session.ChapterContentSavePort
 import com.xiwei.sujian.core.interop.project.WritingBridge
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
+import com.xiwei.sujian.feature.editor.session.ChapterContentSavePort
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 
 /**
  * ChapterRepository — 章节内容仓库层。

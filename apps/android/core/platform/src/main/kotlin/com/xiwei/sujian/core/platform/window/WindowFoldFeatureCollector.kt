@@ -28,13 +28,14 @@ class WindowFoldFeatureCollector(
 
     private var collectJob: Job? = null
 
-    fun startCollecting(onFoldFeaturesChanged: (List<FoldingFeature>) -> Unit) {
+    fun startCollecting(onFoldFeaturesChanged: (List<AospFoldFeatureInfo>) -> Unit) {
         stopCollecting()
         collectJob = activity.lifecycleScope.launch {
             windowInfoTracker.windowLayoutInfo(activity)
                 .collect { info ->
                     val features = info.displayFeatures
                         .filterIsInstance<FoldingFeature>()
+                        .map(::toFoldFeatureInfo)
                     onFoldFeaturesChanged(features)
                 }
         }

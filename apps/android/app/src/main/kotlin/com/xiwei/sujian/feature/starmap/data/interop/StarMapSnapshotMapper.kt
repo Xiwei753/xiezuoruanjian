@@ -1,5 +1,6 @@
 package com.xiwei.sujian.feature.starmap.data.interop
 
+import com.xiwei.sujian.feature.starmap.data.StarMapRawCache
 import com.xiwei.sujian.feature.starmap.model.StarMapData
 import com.xiwei.sujian.feature.starmap.model.StarMapGraphData
 import com.xiwei.sujian.feature.starmap.model.StarMapLayoutData
@@ -8,7 +9,6 @@ import com.xiwei.sujian.feature.starmap.model.StarMapPhasedSnapshotResult
 import uniffi.writer_core.PhasedSnapshotRequestDto
 import uniffi.writer_core.StarMapGraphDto
 import uniffi.writer_core.StarMapPhasedSnapshotDto
-import com.xiwei.sujian.feature.starmap.data.StarMapRawCache
 
 internal fun PhasedSnapshotRequestDto.Companion.create(
     targetPhase: String = "PrefetchNearbyObjects",
