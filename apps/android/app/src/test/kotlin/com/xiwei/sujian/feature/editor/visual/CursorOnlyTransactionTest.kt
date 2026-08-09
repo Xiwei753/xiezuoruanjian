@@ -132,6 +132,91 @@ class CursorOnlyTransactionTest {
         assertEquals(0.5f, cursorProgress!!, 0.01f)
     }
 
+    /**
+     * #605 WEAK: CURSOR_ONLY 来源 — 点击（tap）：光标从 A 点移动到 B 点。
+     *
+     * 断言 cursorRect 是 fromX/fromY → toX/toY 直线插值，且 sliceVisualStates 为空
+     * （不经过 TextRevealSpec）。
+     */
+    @Test
+    fun cursorOnlyFromTapMovesCursorLinearly() {
+        val engine = createEngine()
+        engine.setSmoothCursor(true, 100L)
+        engine.setCoordinatedAnimationEnabled(true)
+        // 点击屏幕左侧，光标从右侧 200 移到左侧 50
+        val tx =
+            cursorOnlyTransaction(
+                transactionId = 1L,
+                durationMs = 100L,
+                fromX = 200f,
+                toX = 50f,
+            )
+        engine.submit(tx, submittedAtMs = 0L)
+        val frame = engine.captureFrame(50L)
+        assertNotNull("Frame must be captured for tap source", frame)
+        // CURSOR_ONLY 事务不经过 TextRevealSpec
+        assertTrue("No slices in tap cursor-only transaction", frame!!.sliceVisualStates.isEmpty())
+        val cursorRect = frame.cursorRect
+        assertNotNull("Cursor rect must exist for tap source", cursorRect)
+        // 直线插值 at 50ms (progress=0.5): x = 200 + (50-200)*0.5 = 125
+        assertEquals("tap cursor x must be linearly interpolated", 125f, cursorRect!!.left, 0.01f)
+        assertEquals("tap cursor y must be linearly interpolated", 5f, cursorRect.top, 0.01f)
+    }
+
+    /**
+     * #605 WEAK: CURSOR_ONLY 来源 — 点按长选（long press select）：光标移动到选区边界。
+     */
+    @Test
+    fun cursorOnlyFromLongPressSelectMovesCursorToSelectionBoundary() {
+        val engine = createEngine()
+        engine.setSmoothCursor(true, 100L)
+        engine.setCoordinatedAnimationEnabled(true)
+        // 长选选区边界在 270，光标从 30 移到 270
+        val tx =
+            cursorOnlyTransaction(
+                transactionId = 1L,
+                durationMs = 100L,
+                fromX = 30f,
+                toX = 270f,
+            )
+        engine.submit(tx, submittedAtMs = 0L)
+        val frame = engine.captureFrame(50L)
+        assertNotNull("Frame must be captured for long-press source", frame)
+        assertTrue("No slices in long-press cursor-only transaction", frame!!.sliceVisualStates.isEmpty())
+        val cursorRect = frame.cursorRect
+        assertNotNull("Cursor rect must exist for long-press source", cursorRect)
+        // 直线插值 at 50ms (progress=0.5): x = 30 + (270-30)*0.5 = 150
+        assertEquals("long-press cursor x must be linearly interpolated", 150f, cursorRect!!.left, 0.01f)
+        assertEquals("long-press cursor y must be linearly interpolated", 5f, cursorRect.top, 0.01f)
+    }
+
+    /**
+     * #605 WEAK: CURSOR_ONLY 来源 — selection-only（方向键移动选区）：光标移动一个字符。
+     */
+    @Test
+    fun cursorOnlyFromSelectionOnlyMovesCursorByOneChar() {
+        val engine = createEngine()
+        engine.setSmoothCursor(true, 100L)
+        engine.setCoordinatedAnimationEnabled(true)
+        // 方向键右移一个字符（宽 12px），光标从 100 移到 112
+        val tx =
+            cursorOnlyTransaction(
+                transactionId = 1L,
+                durationMs = 100L,
+                fromX = 100f,
+                toX = 112f,
+            )
+        engine.submit(tx, submittedAtMs = 0L)
+        val frame = engine.captureFrame(50L)
+        assertNotNull("Frame must be captured for selection-only source", frame)
+        assertTrue("No slices in selection-only cursor-only transaction", frame!!.sliceVisualStates.isEmpty())
+        val cursorRect = frame.cursorRect
+        assertNotNull("Cursor rect must exist for selection-only source", cursorRect)
+        // 直线插值 at 50ms (progress=0.5): x = 100 + (112-100)*0.5 = 106
+        assertEquals("selection-only cursor x must be linearly interpolated", 106f, cursorRect!!.left, 0.01f)
+        assertEquals("selection-only cursor y must be linearly interpolated", 5f, cursorRect.top, 0.01f)
+    }
+
     private fun cursorOnlyTransaction(
         transactionId: Long,
         durationMs: Long,

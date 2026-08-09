@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.editor.visual
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -86,6 +87,34 @@ class CoordinatedAnimationTest {
         // 在 50ms 时，主 timeline progress = 0.5
         val cursorProgress = engine.getCursorProgress(50L)
         assertEquals(0.5f, cursorProgress!!, 0.01f)
+    }
+
+    /**
+     * #605 WEAK: 协同模式 + 有文字事务时，显式锁住 textProgress == cursorProgress
+     * 同一 timeline 契约 — 不只断言 cursorProgress=0.5，还断言 captureFrame().progress
+     * 与 cursorProgress 相等，且都等于 0.5。
+     */
+    @Test
+    fun coordinatedModeTextProgressEqualsCursorProgress() {
+        val engine = createEngine()
+        engine.setSmoothCursor(true, 80L)
+        engine.setCoordinatedAnimationEnabled(true)
+        engine.submit(textMotionTransaction(transactionId = 1L, durationMs = 100L), submittedAtMs = 0L)
+        // 在 50ms 时，主 timeline progress = 0.5
+        val frame = engine.captureFrame(50L)
+        val cursorProgress = engine.getCursorProgress(50L)
+        assertNotNull("Frame must be captured in coordinated mode", frame)
+        assertNotNull("Cursor progress must exist in coordinated mode", cursorProgress)
+        // 显式锁住同一 timeline 契约：text progress == cursor progress
+        assertEquals(
+            "text progress must equal cursor progress in coordinated mode",
+            frame!!.progress,
+            cursorProgress!!,
+            0.01f,
+        )
+        // 锁住具体值，而非仅相等 — 防止两者同时漂移到错误值
+        assertEquals("text progress must be 0.5 at 50ms", 0.5f, frame.progress, 0.01f)
+        assertEquals("cursor progress must be 0.5 at 50ms", 0.5f, cursorProgress, 0.01f)
     }
 
     /**

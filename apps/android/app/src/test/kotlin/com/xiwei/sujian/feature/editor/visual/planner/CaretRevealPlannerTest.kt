@@ -5,6 +5,8 @@ import android.graphics.RectF
 import com.xiwei.sujian.feature.editor.layout.LineClusterSnapshot
 import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -86,6 +88,47 @@ class CaretRevealPlannerTest {
         // Second cluster: progress 0.5 to 1
         assertEquals(0.5f, specs[1].progressStart, 0.001f)
         assertEquals(1f, specs[1].progressEnd, 0.001f)
+    }
+
+    /**
+     * #605 WEAK: CaretRevealPlanner 生成的多 cluster specs 在中间 progress 不会同时全显。
+     *
+     * 两个 cluster（窗口 [0,0.5] 和 [0.5,1]），除 progress=1 外不存在所有 spec
+     * 同时 fraction=1 的点 — 锁住 planner 输出的 "逐个揭示" 契约，而非仅检查
+     * progress window 连续性。
+     */
+    @Test
+    fun multiClusterNotAllFullyRevealedSimultaneously() {
+        val c1 = makeCluster(0f, 50f, 0, 1)
+        val c2 = makeCluster(50f, 100f, 1, 2)
+        val specs = planner.planRevealSpecs(listOf(c1, c2))
+        assertEquals(2, specs.size)
+        // 确认 progress window 与 multiClusterProgressWindowsAreContiguous 一致
+        assertEquals(0f, specs[0].progressStart, 0.001f)
+        assertEquals(0.5f, specs[0].progressEnd, 0.001f)
+        assertEquals(0.5f, specs[1].progressStart, 0.001f)
+        assertEquals(1f, specs[1].progressEnd, 0.001f)
+
+        // 在 0.25: spec0 部分可见 (0.5), spec1 不可见 (0)
+        val f0At25 = specs[0].fraction(0.25f)
+        val f1At25 = specs[1].fraction(0.25f)
+        assertTrue("spec0 at 0.25 should be partial", f0At25 > 0f && f0At25 < 1f)
+        assertEquals("spec1 at 0.25 should be invisible", 0f, f1At25, 0.001f)
+
+        // 在 0.5: spec0 完整 (1), spec1 刚开始 (0)
+        assertEquals(1f, specs[0].fraction(0.5f), 0.001f)
+        assertEquals(0f, specs[1].fraction(0.5f), 0.001f)
+
+        // 在 0.75: spec0 完整 (1), spec1 部分可见 (0.5)
+        assertEquals(1f, specs[0].fraction(0.75f), 0.001f)
+        val f1At75 = specs[1].fraction(0.75f)
+        assertTrue("spec1 at 0.75 should be partial", f1At75 > 0f && f1At75 < 1f)
+
+        // 关键契约：除 progress=1 外，不存在所有 spec 同时 fraction=1 的点
+        for (p in listOf(0f, 0.25f, 0.5f, 0.75f)) {
+            val allFull = specs[0].fraction(p) >= 1f && specs[1].fraction(p) >= 1f
+            assertFalse("at progress=$p not all specs should be fully revealed", allFull)
+        }
     }
 
     @Test
