@@ -22,6 +22,14 @@ data class LineClusterSnapshot(
      *  when either old or new cluster lacks confidence, the pair must use Crossfade instead
      *  of Move to avoid visual glitches from false fingerprint matches. */
     val shapingIdentityConfident: Boolean = false,
+    /** Grapheme cluster logical start caret X from Android Layout.getPrimaryHorizontal.
+     *  This is the caret position at the cluster's logical start, NOT visualRect.left.
+     *  For RTL clusters this can be greater than caretEndX. */
+    val caretStartX: Float = 0f,
+    /** Grapheme cluster logical end caret X from Android Layout.getPrimaryHorizontal.
+     *  At line end, uses getLineLeft/getLineRight based on RTL direction to avoid
+     *  writing the logical endpoint to the wrong side. */
+    val caretEndX: Float = 0f,
 )
 
 data class AndroidLineSnapshot(

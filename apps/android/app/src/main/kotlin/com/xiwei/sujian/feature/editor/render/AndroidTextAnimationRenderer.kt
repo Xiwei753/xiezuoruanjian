@@ -4,6 +4,8 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
+import com.xiwei.sujian.feature.editor.visual.TextRevealMode
+import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
 
 class AndroidTextAnimationRenderer {
     private val slicePaint =
@@ -19,8 +21,6 @@ class AndroidTextAnimationRenderer {
         for (slice in transaction.animatedSlices) {
             val snapshot = slice.snapshot ?: continue
             val bitmap = snapshot.bitmap ?: continue
-            val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * progress
-            slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
 
             when (slice.role) {
                 SliceRole.Move -> {
@@ -41,6 +41,8 @@ class AndroidTextAnimationRenderer {
                     //     throughout the animation) because the text content is unchanged — only
                     //     its position transitions. Alpha variation would imply content change,
                     //     which contradicts the Move invariant (same shaping identity).
+                    val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * progress
+                    slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
                     val fromRect = slice.fromDestinationRect ?: slice.destinationRect
                     val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * progress
                     val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * progress
@@ -49,12 +51,86 @@ class AndroidTextAnimationRenderer {
                     val currentDest = android.graphics.RectF(currentLeft, currentTop, currentRight, currentBottom)
                     canvas.drawBitmap(bitmap, slice.sourceRect, currentDest, slicePaint)
                 }
-                // Insert/Delete/CrossfadeOld/CrossfadeNew: position does not change during
+                SliceRole.Insert, SliceRole.Delete -> {
+                    drawRevealSlice(canvas, bitmap, slice, progress)
+                }
+                // CrossfadeOld/CrossfadeNew/Static: position does not change during
                 // animation — only alpha varies. The bitmap is drawn at its final destination
                 // with interpolated alpha; no positional interpolation is needed.
-                else -> {
+                SliceRole.CrossfadeOld, SliceRole.CrossfadeNew, SliceRole.Static -> {
+                    val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * progress
+                    slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
                     canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, slicePaint)
                 }
+            }
+        }
+    }
+
+    /**
+     * Draw an Insert/Delete slice using clip-rect reveal/swallow animation.
+     * Falls back to alpha-based drawing when [slice.revealSpec] is null
+     * (e.g. whole-line fallback without cluster caret geometry).
+     */
+    private fun drawRevealSlice(
+        canvas: Canvas,
+        bitmap: android.graphics.Bitmap,
+        slice: PreparedVisualTransaction.AnimatedSlice,
+        progress: Float,
+    ) {
+        val spec = slice.revealSpec
+        if (spec != null) {
+            val clipRect = computeRevealClipRect(slice.destinationRect, spec, progress) ?: return
+            val save = canvas.save()
+            canvas.clipRect(clipRect)
+            slicePaint.alpha = 255
+            canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, slicePaint)
+            canvas.restoreToCount(save)
+        } else {
+            val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * progress
+            slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
+            canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, slicePaint)
+        }
+    }
+
+    /**
+     * Compute the clip rect for reveal/swallow animation at [globalProgress].
+     *
+     * REVEAL: fraction=0 -> null (not visible), fraction=1 -> full destination.
+     * SWALLOW: fraction=0 -> full destination, fraction=1 -> null (not visible).
+     *
+     * The clip rect is the intersection of [destination] with the region between
+     * [spec.anchorX] and the interpolated boundary position. This ensures only
+     * the visible portion of the glyph is drawn, while overhang at fraction=1
+     * is fully shown (returns complete destination, not clipped to caret X).
+     */
+    fun computeRevealClipRect(
+        destination: android.graphics.RectF,
+        spec: TextRevealSpec,
+        globalProgress: Float,
+    ): android.graphics.RectF? {
+        val fraction = spec.fraction(globalProgress)
+        return when (spec.mode) {
+            TextRevealMode.REVEAL -> {
+                if (fraction <= 0f) return null
+                if (fraction >= 1f) return android.graphics.RectF(destination)
+                val boundary = spec.boundaryFromX + (spec.boundaryToX - spec.boundaryFromX) * fraction
+                val left = kotlin.math.min(spec.anchorX, boundary)
+                val right = kotlin.math.max(spec.anchorX, boundary)
+                val clipLeft = kotlin.math.max(left, destination.left)
+                val clipRight = kotlin.math.min(right, destination.right)
+                if (clipRight <= clipLeft) return null
+                android.graphics.RectF(clipLeft, destination.top, clipRight, destination.bottom)
+            }
+            TextRevealMode.SWALLOW -> {
+                if (fraction >= 1f) return null
+                if (fraction <= 0f) return android.graphics.RectF(destination)
+                val boundary = spec.boundaryFromX + (spec.boundaryToX - spec.boundaryFromX) * fraction
+                val left = kotlin.math.min(spec.anchorX, boundary)
+                val right = kotlin.math.max(spec.anchorX, boundary)
+                val clipLeft = kotlin.math.max(left, destination.left)
+                val clipRight = kotlin.math.min(right, destination.right)
+                if (clipRight <= clipLeft) return null
+                android.graphics.RectF(clipLeft, destination.top, clipRight, destination.bottom)
             }
         }
     }

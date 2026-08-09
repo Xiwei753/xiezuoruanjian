@@ -12,10 +12,14 @@ import androidx.compose.runtime.Immutable
  * 初始值与 Core 默认一致（typingAnimationEnabled=true, smoothCursorEnabled=true,
  * coordinated=true），不让 Kotlin UI 状态临时默认为 false。
  *
- * - [coordinated]=true 时，文字和光标使用同一视觉事务、同一首帧、同一 rebase snapshot。
- * - [coordinated]=false 时，光标可使用独立时长，但仍由同一个 View、同一个 renderer、
- *   同一个 VSync 时间源驱动。
- * - [reduceMotion]=true 时，所有动画降级为静态更新（等价于 textEnabled=false 且
+ * 时长语义（#605 收口）：
+ * - coordinated=true: textDurationMillis 控制整条编辑视觉事务；
+ *   cursorDurationMillis 不参与 Insert/Delete/Replace/Composition；
+ *   光标 progress = 主 timeline progress。
+ * - coordinated=false: textDurationMillis / cursorDurationMillis 各自生效；
+ *   光标使用独立 cursorTimeline。
+ * - CURSOR_ONLY: 使用 cursorDurationMillis。
+ * - reduceMotion=true: 所有动画降级为静态更新（等价于 textEnabled=false 且
  *   cursorEnabled=false），但编辑器仍正常工作。
  */
 @Immutable

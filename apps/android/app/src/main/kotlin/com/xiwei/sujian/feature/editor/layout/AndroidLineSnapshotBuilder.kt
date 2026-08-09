@@ -186,7 +186,13 @@ class AndroidLineSnapshotBuilder {
                 if (clusterEndDisplayUtf16 < layout.getLineEnd(lineIndex)) {
                     layout.getPrimaryHorizontal(clusterEndDisplayUtf16)
                 } else {
-                    layout.getLineRight(lineIndex)
+                    // 行尾：结合 RTL 选择 getLineLeft/getLineRight，避免 RTL 行尾把逻辑终点写到错误一侧
+                    val lineStart = layout.getLineStart(lineIndex)
+                    if (lineStart < layout.getLineEnd(lineIndex) && layout.isRtlCharAt(lineStart)) {
+                        layout.getLineLeft(lineIndex)
+                    } else {
+                        layout.getLineRight(lineIndex)
+                    }
                 }
 
             // RTL normalization: getPrimaryHorizontal(clusterEndUtf16) can be less than
@@ -253,6 +259,8 @@ class AndroidLineSnapshotBuilder {
                     visualRectInDocument = android.graphics.RectF(visualLeft, top, visualRight, bottom),
                     shapingFingerprint = shapingResult.first,
                     shapingIdentityConfident = shapingResult.second,
+                    caretStartX = x0,
+                    caretEndX = x1,
                 ),
             )
         }

@@ -8,6 +8,8 @@ import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 
 class InsertDeletePlanner {
+    private val caretRevealPlanner = CaretRevealPlanner()
+
     fun planClusterLevelAnimation(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
@@ -40,6 +42,7 @@ class InsertDeletePlanner {
         }
 
         if (isInsert) {
+            val insertClusterSnapshots = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
             for (lineIndex in affectedNewLineIndices) {
                 val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, true) ?: continue
                 val insertClusters =
@@ -49,21 +52,28 @@ class InsertDeletePlanner {
                         }
                     }
                 for (cluster in insertClusters) {
-                    animatedSlices.add(
-                        PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.Insert,
-                            snapshot = newSnapshot,
-                            sourceRect = cluster.sourceRectInLineImage,
-                            destinationRect = cluster.visualRectInDocument,
-                            startAlpha = 0f,
-                            endAlpha = 1f,
-                            clusterByteStart = cluster.documentByteStart,
-                            clusterByteEndExclusive = cluster.documentByteEndExclusive,
-                        ),
-                    )
+                    insertClusterSnapshots.add(Pair(cluster, newSnapshot))
                 }
             }
+            val revealSpecs = caretRevealPlanner.planRevealSpecs(insertClusterSnapshots.map { it.first })
+            for ((i, pair) in insertClusterSnapshots.withIndex()) {
+                val (cluster, snapshot) = pair
+                animatedSlices.add(
+                    PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Insert,
+                        snapshot = snapshot,
+                        sourceRect = cluster.sourceRectInLineImage,
+                        destinationRect = cluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 1f,
+                        clusterByteStart = cluster.documentByteStart,
+                        clusterByteEndExclusive = cluster.documentByteEndExclusive,
+                        revealSpec = revealSpecs.getOrNull(i),
+                    ),
+                )
+            }
         } else if (isDelete) {
+            val deleteClusterSnapshots = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
             for (lineIndex in affectedOldLineIndices) {
                 val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, false) ?: continue
                 val deleteClusters =
@@ -73,19 +83,25 @@ class InsertDeletePlanner {
                         }
                     }
                 for (cluster in deleteClusters) {
-                    animatedSlices.add(
-                        PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.Delete,
-                            snapshot = oldSnapshot,
-                            sourceRect = cluster.sourceRectInLineImage,
-                            destinationRect = cluster.visualRectInDocument,
-                            startAlpha = 1f,
-                            endAlpha = 0f,
-                            clusterByteStart = cluster.documentByteStart,
-                            clusterByteEndExclusive = cluster.documentByteEndExclusive,
-                        ),
-                    )
+                    deleteClusterSnapshots.add(Pair(cluster, oldSnapshot))
                 }
+            }
+            val swallowSpecs = caretRevealPlanner.planSwallowSpecs(deleteClusterSnapshots.map { it.first })
+            for ((i, pair) in deleteClusterSnapshots.withIndex()) {
+                val (cluster, snapshot) = pair
+                animatedSlices.add(
+                    PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Delete,
+                        snapshot = snapshot,
+                        sourceRect = cluster.sourceRectInLineImage,
+                        destinationRect = cluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 1f,
+                        clusterByteStart = cluster.documentByteStart,
+                        clusterByteEndExclusive = cluster.documentByteEndExclusive,
+                        revealSpec = swallowSpecs.getOrNull(i),
+                    ),
+                )
             }
         }
     }
@@ -122,42 +138,56 @@ class InsertDeletePlanner {
         }
 
         if (isInsert) {
+            val insertClusterSnapshots = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
             for (lineIndex in affectedNewLineIndices) {
                 val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, true) ?: continue
                 val insertClusters = groupClustersIntoRuns(newSnapshot.clusters, visualIntent.newAffectedByteRanges)
                 for (cluster in insertClusters) {
-                    animatedSlices.add(
-                        PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.Insert,
-                            snapshot = newSnapshot,
-                            sourceRect = cluster.sourceRectInLineImage,
-                            destinationRect = cluster.visualRectInDocument,
-                            startAlpha = 0f,
-                            endAlpha = 1f,
-                            clusterByteStart = cluster.documentByteStart,
-                            clusterByteEndExclusive = cluster.documentByteEndExclusive,
-                        ),
-                    )
+                    insertClusterSnapshots.add(Pair(cluster, newSnapshot))
                 }
             }
+            val revealSpecs = caretRevealPlanner.planRevealSpecs(insertClusterSnapshots.map { it.first })
+            for ((i, pair) in insertClusterSnapshots.withIndex()) {
+                val (cluster, snapshot) = pair
+                animatedSlices.add(
+                    PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Insert,
+                        snapshot = snapshot,
+                        sourceRect = cluster.sourceRectInLineImage,
+                        destinationRect = cluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 1f,
+                        clusterByteStart = cluster.documentByteStart,
+                        clusterByteEndExclusive = cluster.documentByteEndExclusive,
+                        revealSpec = revealSpecs.getOrNull(i),
+                    ),
+                )
+            }
         } else if (isDelete) {
+            val deleteClusterSnapshots = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
             for (lineIndex in affectedOldLineIndices) {
                 val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, false) ?: continue
                 val deleteClusters = groupClustersIntoRuns(oldSnapshot.clusters, visualIntent.oldAffectedByteRanges)
                 for (cluster in deleteClusters) {
-                    animatedSlices.add(
-                        PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.Delete,
-                            snapshot = oldSnapshot,
-                            sourceRect = cluster.sourceRectInLineImage,
-                            destinationRect = cluster.visualRectInDocument,
-                            startAlpha = 1f,
-                            endAlpha = 0f,
-                            clusterByteStart = cluster.documentByteStart,
-                            clusterByteEndExclusive = cluster.documentByteEndExclusive,
-                        ),
-                    )
+                    deleteClusterSnapshots.add(Pair(cluster, oldSnapshot))
                 }
+            }
+            val swallowSpecs = caretRevealPlanner.planSwallowSpecs(deleteClusterSnapshots.map { it.first })
+            for ((i, pair) in deleteClusterSnapshots.withIndex()) {
+                val (cluster, snapshot) = pair
+                animatedSlices.add(
+                    PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Delete,
+                        snapshot = snapshot,
+                        sourceRect = cluster.sourceRectInLineImage,
+                        destinationRect = cluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 1f,
+                        clusterByteStart = cluster.documentByteStart,
+                        clusterByteEndExclusive = cluster.documentByteEndExclusive,
+                        revealSpec = swallowSpecs.getOrNull(i),
+                    ),
+                )
             }
         }
     }
@@ -223,6 +253,8 @@ class InsertDeletePlanner {
                             visualRectInDocument = mergedVisualRect,
                             shapingFingerprint = mergedFingerprint,
                             shapingIdentityConfident = allConfident,
+                            caretStartX = first.caretStartX,
+                            caretEndX = last.caretEndX,
                         ),
                     )
                 }
@@ -399,6 +431,7 @@ class InsertDeletePlanner {
                     )
                 }
             } else {
+                val swallowSpec = caretRevealPlanner.planSwallowSpecs(listOf(oldCluster)).firstOrNull()
                 animatedSlices.add(
                     PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Delete,
@@ -406,9 +439,10 @@ class InsertDeletePlanner {
                         sourceRect = oldCluster.sourceRectInLineImage,
                         destinationRect = oldCluster.visualRectInDocument,
                         startAlpha = 1f,
-                        endAlpha = 0f,
+                        endAlpha = 1f,
                         clusterByteStart = oldCluster.documentByteStart,
                         clusterByteEndExclusive = oldCluster.documentByteEndExclusive,
+                        revealSpec = swallowSpec,
                     ),
                 )
             }
@@ -417,16 +451,18 @@ class InsertDeletePlanner {
         for ((i, pair) in allNewAffectedClusters.withIndex()) {
             if (i in newMatched) continue
             val (newCluster, newSnapshot) = pair
+            val revealSpec = caretRevealPlanner.planRevealSpecs(listOf(newCluster)).firstOrNull()
             animatedSlices.add(
                 PreparedVisualTransaction.AnimatedSlice(
                     role = SliceRole.Insert,
                     snapshot = newSnapshot,
                     sourceRect = newCluster.sourceRectInLineImage,
                     destinationRect = newCluster.visualRectInDocument,
-                    startAlpha = 0f,
+                    startAlpha = 1f,
                     endAlpha = 1f,
                     clusterByteStart = newCluster.documentByteStart,
                     clusterByteEndExclusive = newCluster.documentByteEndExclusive,
+                    revealSpec = revealSpec,
                 ),
             )
         }
@@ -558,6 +594,7 @@ class InsertDeletePlanner {
                     )
                 }
             } else {
+                val swallowSpec = caretRevealPlanner.planSwallowSpecs(listOf(oldCluster)).firstOrNull()
                 animatedSlices.add(
                     PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Delete,
@@ -565,9 +602,10 @@ class InsertDeletePlanner {
                         sourceRect = oldCluster.sourceRectInLineImage,
                         destinationRect = oldCluster.visualRectInDocument,
                         startAlpha = 1f,
-                        endAlpha = 0f,
+                        endAlpha = 1f,
                         clusterByteStart = oldCluster.documentByteStart,
                         clusterByteEndExclusive = oldCluster.documentByteEndExclusive,
+                        revealSpec = swallowSpec,
                     ),
                 )
             }
@@ -576,16 +614,18 @@ class InsertDeletePlanner {
         for ((i, pair) in allNewAffectedClusters.withIndex()) {
             if (i in newMatched) continue
             val (newCluster, newSnapshot) = pair
+            val revealSpec = caretRevealPlanner.planRevealSpecs(listOf(newCluster)).firstOrNull()
             animatedSlices.add(
                 PreparedVisualTransaction.AnimatedSlice(
                     role = SliceRole.Insert,
                     snapshot = newSnapshot,
                     sourceRect = newCluster.sourceRectInLineImage,
                     destinationRect = newCluster.visualRectInDocument,
-                    startAlpha = 0f,
+                    startAlpha = 1f,
                     endAlpha = 1f,
                     clusterByteStart = newCluster.documentByteStart,
                     clusterByteEndExclusive = newCluster.documentByteEndExclusive,
+                    revealSpec = revealSpec,
                 ),
             )
         }

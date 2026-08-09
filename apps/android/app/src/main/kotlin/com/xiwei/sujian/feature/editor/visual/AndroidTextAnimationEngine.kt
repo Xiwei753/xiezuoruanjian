@@ -253,15 +253,15 @@ class AndroidTextAnimationEngine(
         }
 
         timeline = AnimationTimeline(preparedAnimation.durationMs, submittedAtMs)
+        val hasTextMotion = preparedAnimation.animatedSlices.isNotEmpty() || preparedAnimation.blockShifts.isNotEmpty()
         cursorTimeline =
             if (effectiveCursorTransition?.shouldAnimate == true && preparedAnimation.durationMs > 0L) {
-                val cursorDuration =
-                    if (coordinatedEnabled) {
-                        minOf(smoothCursorDurationMs.coerceAtLeast(1L), preparedAnimation.durationMs)
-                    } else {
-                        smoothCursorDurationMs.coerceAtLeast(1L)
-                    }
-                AnimationTimeline(cursorDuration, submittedAtMs)
+                if (coordinatedEnabled && hasTextMotion) {
+                    null // 协同模式：光标跟随主 timeline，不创建独立 cursorTimeline
+                } else {
+                    val cursorDuration = smoothCursorDurationMs.coerceAtLeast(1L)
+                    AnimationTimeline(cursorDuration, submittedAtMs)
+                }
             } else {
                 null
             }
@@ -434,7 +434,7 @@ class AndroidTextAnimationEngine(
             )
         }
         val p = tl.progress(frameTimeMs)
-        val cursorProgress = getCursorTimelineProgress(frameTimeMs) ?: p
+        val cursorProgress = getCursorProgress(frameTimeMs) ?: p
         val sliceStates = computeSliceVisualStates(transaction, p)
         val cursorRect = computeCurrentCursorRect(transaction, cursorProgress)
         val blockStates = computeBlockShiftVisualStates(transaction, p)
@@ -458,6 +458,12 @@ class AndroidTextAnimationEngine(
         if (activeTransaction == null) return false
         val tl = timeline
         if (tl != null && tl.getState() != TransactionState.Completed) return true
+        // 协同模式下有文字事务时不检查独立 cursorTimeline（它不存在）
+        val tx = activeTransaction
+        if (tx != null) {
+            val hasTextMotion = tx.animatedSlices.isNotEmpty() || tx.blockShifts.isNotEmpty()
+            if (coordinatedEnabled && hasTextMotion) return false
+        }
         val ctl = cursorTimeline
         if (ctl != null && ctl.getState() != TransactionState.Completed) return true
         return false
@@ -520,6 +526,23 @@ class AndroidTextAnimationEngine(
         }
     }
 
+    /**
+     * 统一光标进度入口 — 协同模式下光标跟随主 timeline，非协同模式使用独立 cursorTimeline。
+     *
+     * 协同模式 + 有文字视觉事务：cursorProgress = timeline.progress(frameTimeMs)
+     * 非协同模式 或 无文字事务：cursorProgress = cursorTimeline?.progress(frameTimeMs)
+     * CURSOR_ONLY：cursorTimeline 独立存在
+     */
+    fun getCursorProgress(frameTimeMs: Long): Float? {
+        val tx = activeTransaction ?: return null
+        val hasTextMotion = tx.animatedSlices.isNotEmpty() || tx.blockShifts.isNotEmpty()
+        return if (coordinatedEnabled && hasTextMotion) {
+            timeline?.progress(frameTimeMs)
+        } else {
+            getCursorTimelineProgress(frameTimeMs)
+        }
+    }
+
     fun isTimelineCompleted(frameTimeMs: Long): Boolean {
         val tl = timeline ?: return true
         return tl.isCompleted(frameTimeMs)
@@ -530,6 +553,14 @@ class AndroidTextAnimationEngine(
      * 非协同模式下光标时长可长于文字时长，文字完成后光标仍可继续。
      */
     fun isCursorTimelineCompleted(frameTimeMs: Long): Boolean {
+        val tx = activeTransaction
+        if (tx != null) {
+            val hasTextMotion = tx.animatedSlices.isNotEmpty() || tx.blockShifts.isNotEmpty()
+            if (coordinatedEnabled && hasTextMotion) {
+                // 协同模式：光标跟随主 timeline
+                return isTimelineCompleted(frameTimeMs)
+            }
+        }
         val ctl = cursorTimeline ?: return true
         return ctl.isCompleted(frameTimeMs)
     }
@@ -611,6 +642,7 @@ class AndroidTextAnimationEngine(
             val currentRight = fromRect.right + (slice.destinationRect.right - fromRect.right) * progress
             val currentBottom = fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * progress
             val currentAlpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * progress
+            val revealFraction = slice.revealSpec?.fraction(progress)
             SliceVisualState(
                 snapshotId = slice.snapshot?.snapshotId ?: -1L,
                 role = slice.role,
@@ -628,6 +660,7 @@ class AndroidTextAnimationEngine(
                 destinationTop = slice.destinationRect.top,
                 destinationRight = slice.destinationRect.right,
                 destinationBottom = slice.destinationRect.bottom,
+                revealFraction = revealFraction,
             )
         }
     }

@@ -4,11 +4,16 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * #595 三/四/九：协同动画契约测试 — 验证 coordinated 设置和 reduceMotion 设置
  * 真正进入 AndroidTextAnimationEngine，不再只是死开关。
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class CoordinatedAnimationTest {
     private fun createEngine(): AndroidTextAnimationEngine {
         return AndroidTextAnimationEngine(
@@ -65,5 +70,135 @@ class CoordinatedAnimationTest {
         val engine = createEngine()
         engine.pause(100L)
         assertFalse("No active transaction means not paused", engine.isPaused())
+    }
+
+    /**
+     * #605: 协同模式 + 有文字事务时，光标 progress 跟随主 timeline，
+     * 不创建独立 cursorTimeline。
+     */
+    @Test
+    fun coordinatedModeWithTextMotionCursorProgressFollowsMainTimeline() {
+        val engine = createEngine()
+        engine.setSmoothCursor(true, 80L)
+        engine.setCoordinatedAnimationEnabled(true)
+        engine.submit(textMotionTransaction(transactionId = 1L, durationMs = 100L), submittedAtMs = 0L)
+        // 协同模式 + 有文字事务：cursorProgress = 主 timeline progress
+        // 在 50ms 时，主 timeline progress = 0.5
+        val cursorProgress = engine.getCursorProgress(50L)
+        assertEquals(0.5f, cursorProgress!!, 0.01f)
+    }
+
+    /**
+     * #605: 非协同模式 + 有文字事务时，光标使用独立 cursorTimeline。
+     */
+    @Test
+    fun nonCoordinatedModeWithTextMotionCursorProgressUsesIndependentTimeline() {
+        val engine = createEngine()
+        engine.setSmoothCursor(true, 80L)
+        engine.setCoordinatedAnimationEnabled(false)
+        engine.submit(textMotionTransaction(transactionId = 1L, durationMs = 100L), submittedAtMs = 0L)
+        // 非协同模式：cursorProgress = 独立 cursorTimeline progress
+        // cursorTimeline 时长 = 80ms，在 40ms 时 progress = 0.5
+        val cursorProgress = engine.getCursorProgress(40L)
+        assertEquals(0.5f, cursorProgress!!, 0.01f)
+    }
+
+    /**
+     * #605: 协同模式 + CURSOR_ONLY 事务（无文字切片和 blockShifts）时，
+     * 光标仍使用独立 cursorTimeline。
+     */
+    @Test
+    fun coordinatedModeCursorOnlyUsesIndependentTimeline() {
+        val engine = createEngine()
+        engine.setSmoothCursor(true, 80L)
+        engine.setCoordinatedAnimationEnabled(true)
+        engine.submit(cursorOnlyTransaction(transactionId = 1L, durationMs = 80L), submittedAtMs = 0L)
+        // CURSOR_ONLY：使用独立 cursorTimeline
+        // 在 40ms 时，cursorTimeline progress = 0.5
+        val cursorProgress = engine.getCursorProgress(40L)
+        assertEquals(0.5f, cursorProgress!!, 0.01f)
+    }
+
+    /**
+     * #605: 协同模式 + 有文字事务时，isCursorTimelineCompleted 跟随主 timeline。
+     */
+    @Test
+    fun coordinatedModeWithTextMotionCursorCompletedFollowsMainTimeline() {
+        val engine = createEngine()
+        engine.setSmoothCursor(true, 80L)
+        engine.setCoordinatedAnimationEnabled(true)
+        engine.submit(textMotionTransaction(transactionId = 1L, durationMs = 100L), submittedAtMs = 0L)
+        // 主 timeline 100ms，在 50ms 时未完成
+        assertFalse("Cursor not completed when main timeline not finished", engine.isCursorTimelineCompleted(50L))
+        // 在 100ms 时完成
+        assertTrue("Cursor completed when main timeline finished", engine.isCursorTimelineCompleted(100L))
+    }
+
+    private fun textMotionTransaction(
+        transactionId: Long,
+        durationMs: Long,
+    ): PreparedVisualTransaction {
+        return PreparedVisualTransaction(
+            transactionId = transactionId,
+            oldRevision = null,
+            newRevision = null,
+            staticPatches = emptyList(),
+            animatedSlices = emptyList(),
+            ownedSnapshotIds = emptySet(),
+            referencedSnapshotIds = emptySet(),
+            selectionDecoration = null,
+            preeditDecoration = null,
+            cursorTransition =
+                PreparedVisualTransaction.CursorTransition(
+                    fromX = 0f,
+                    fromY = 0f,
+                    fromHeight = 20f,
+                    toX = 100f,
+                    toY = 0f,
+                    toHeight = 20f,
+                    shouldAnimate = true,
+                ),
+            durationMs = durationMs,
+            blockShifts =
+                listOf(
+                    PreparedVisualTransaction.BlockShift(
+                        startLineIndex = 1,
+                        endLineIndexExclusive = 3,
+                        top = 40f,
+                        bottom = 80f,
+                        left = 0f,
+                        right = 200f,
+                        deltaY = 20f,
+                    ),
+                ),
+        )
+    }
+
+    private fun cursorOnlyTransaction(
+        transactionId: Long,
+        durationMs: Long,
+    ): PreparedVisualTransaction {
+        return PreparedVisualTransaction(
+            transactionId = transactionId,
+            oldRevision = null,
+            newRevision = null,
+            staticPatches = emptyList(),
+            animatedSlices = emptyList(),
+            ownedSnapshotIds = emptySet(),
+            referencedSnapshotIds = emptySet(),
+            selectionDecoration = null,
+            preeditDecoration = null,
+            cursorTransition =
+                PreparedVisualTransaction.CursorTransition(
+                    fromX = 0f,
+                    fromY = 0f,
+                    fromHeight = 20f,
+                    toX = 100f,
+                    toY = 0f,
+                    toHeight = 20f,
+                    shouldAnimate = true,
+                ),
+            durationMs = durationMs,
+        )
     }
 }

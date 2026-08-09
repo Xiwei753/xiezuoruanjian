@@ -55,6 +55,9 @@ data class PreparedVisualTransaction(
         val fromDestinationRect: android.graphics.RectF? = null,
         val clusterByteStart: Int = -1,
         val clusterByteEndExclusive: Int = -1,
+        /** Reveal/swallow spec for Insert/Delete slices. null for Move/Crossfade/Static.
+         *  When non-null, the renderer uses clip-rect drawing instead of alpha. */
+        val revealSpec: TextRevealSpec? = null,
     )
 
     data class SelectionDecoration(
@@ -130,9 +133,12 @@ data class PreparedVisualTransaction(
     )
 }
 
-/** Animation slice roles. Insert: fade in (0→1). Delete: fade out (1→0).
- *  Move: same shaping, position shift (alpha stays 1).
- *  CrossfadeOld/New: shaping changed, paired fade-out + fade-in. */
+/** Animation slice roles.
+ *  Insert = caret reveal (clip from anchor toward boundary).
+ *  Delete = caret swallow (clip from boundary toward anchor).
+ *  Move = geometric position shift (alpha stays 1).
+ *  CrossfadeOld/New = shaping changed, paired fade-out + fade-in.
+ *  Static = no animation. */
 enum class SliceRole {
     Insert,
     Delete,

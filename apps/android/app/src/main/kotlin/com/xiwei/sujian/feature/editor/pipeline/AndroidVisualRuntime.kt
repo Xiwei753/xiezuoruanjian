@@ -131,7 +131,7 @@ class AndroidVisualRuntime(
         if (layout == null) return null
         val transaction = animationEngine.getActiveTransaction()
         val progress = animationEngine.getTimelineProgress(frameTimeMs)
-        val cursorProgress = animationEngine.getCursorTimelineProgress(frameTimeMs)
+        val cursorProgress = animationEngine.getCursorProgress(frameTimeMs)
         animationEngine.markFirstVisibleFrame(frameTimeMs)
         // #595 五：文字轨和光标轨分别判断终态。
         // 文字完成后用静态新布局继续绘制，但光标仍在同一个 View 和 FrameClock 中
@@ -184,7 +184,7 @@ class AndroidVisualRuntime(
             renderTextTransaction = if (textFinished) null else transaction,
             renderCursorTransition = !cursorFinished,
             textProgress = animationEngine.getTimelineProgress(frameTimeMs),
-            cursorProgress = animationEngine.getCursorTimelineProgress(frameTimeMs),
+            cursorProgress = animationEngine.getCursorProgress(frameTimeMs),
             textFinished = textFinished,
             cursorFinished = cursorFinished,
             transactionComplete = transactionComplete,

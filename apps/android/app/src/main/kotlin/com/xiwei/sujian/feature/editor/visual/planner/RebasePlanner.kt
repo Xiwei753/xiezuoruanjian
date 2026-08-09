@@ -38,6 +38,12 @@ class RebasePlanner {
         for ((stateIdx, state) in rebaseSnapshot.sliceVisualStates.withIndex()) {
             if (stateIdx in usedRebaseIndices) continue
             val isFadingOut = state.role == SliceRole.Delete || state.role == SliceRole.CrossfadeOld
+            val shouldContinue =
+                if (state.revealFraction != null) {
+                    state.revealFraction < 0.99f
+                } else {
+                    state.currentAlpha > 0.01f
+                }
             val snapshot = snapshotLookup[state.snapshotId]
             val sourceRect =
                 if (snapshot != null) {
@@ -50,7 +56,7 @@ class RebasePlanner {
                 } else {
                     android.graphics.Rect(0, 0, 0, 0)
                 }
-            if (isFadingOut && state.currentAlpha > 0.01f) {
+            if (isFadingOut && shouldContinue) {
                 result.add(
                     PreparedVisualTransaction.AnimatedSlice(
                         role = state.role,
@@ -235,18 +241,26 @@ class RebasePlanner {
                 )
             }
             SliceRole.Insert -> {
+                val updatedSpec = slice.revealSpec?.copy(initialFraction = rebaseState.revealFraction ?: 0f)
                 if (rebaseState.role == SliceRole.Move) {
                     slice.copy(
                         snapshot = snapshot,
                         startAlpha = rebaseState.currentAlpha,
                         fromDestinationRect = fromRect,
+                        revealSpec = updatedSpec,
                     )
                 } else {
-                    slice.copy(snapshot = snapshot, startAlpha = rebaseState.currentAlpha)
+                    slice.copy(snapshot = snapshot, startAlpha = rebaseState.currentAlpha, revealSpec = updatedSpec)
                 }
             }
             SliceRole.Delete -> {
-                slice.copy(snapshot = snapshot, startAlpha = rebaseState.currentAlpha, endAlpha = 0f)
+                val updatedSpec = slice.revealSpec?.copy(initialFraction = rebaseState.revealFraction ?: 0f)
+                slice.copy(
+                    snapshot = snapshot,
+                    startAlpha = rebaseState.currentAlpha,
+                    endAlpha = 0f,
+                    revealSpec = updatedSpec,
+                )
             }
             SliceRole.CrossfadeOld -> {
                 slice.copy(snapshot = snapshot, startAlpha = rebaseState.currentAlpha, endAlpha = 0f)

@@ -195,4 +195,9 @@ data class SliceVisualState(
     val destinationTop: Float = currentTop,
     val destinationRight: Float = currentRight,
     val destinationBottom: Float = currentBottom,
+    /** Current reveal fraction for Insert/Delete slices with revealSpec.
+     *  null for Move/Crossfade/Static slices or slices without revealSpec.
+     *  Used by rebase to set the next transaction's revealSpec.initialFraction
+     *  so the animation continues from the on-screen position. */
+    val revealFraction: Float? = null,
 )
