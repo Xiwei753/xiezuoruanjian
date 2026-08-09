@@ -58,6 +58,49 @@ writer_core 通用业务核心
 
 不同平台可以有不同的排版、输入法和渲染实现，但功能语义、设置键、数据格式和同步规则必须一致。
 
+## Android 模块结构
+
+Android 工程固定为三个 Gradle 模块：
+
+```text
+apps/android/
+├─ app/                    # 应用壳：Application、MainActivity、DI、主题、布局、导航
+├─ core/
+│  ├─ designsystem/        # 主题 token 与可复用 Compose 组件
+│  └─ platform/            # Android 系统能力（窗口、折叠、输入设备、存储根）
+```
+
+`:app` 内按拥有者组织 Kotlin package，package 与磁盘目录一致：
+
+```text
+com.xiwei.sujian
+├─ app/                    # 应用壳
+│  ├─ di/                  # Application 级依赖装配
+│  ├─ state/               # 跨 feature 的活动状态门
+│  ├─ theme/               # 应用主题/动态色
+│  ├─ layout/              # 应用窗口布局策略
+│  ├─ navigation/          # 根导航与屏幕策略
+│  └─ debug/               # debug 源集专属
+├─ core/
+│  ├─ interop/             # Kotlin ↔ Rust/UniFFI 公共边界
+│  ├─ diagnostics/         # 跨功能诊断
+│  └─ platform/            # Android 平台能力（:core:platform 模块源码根）
+└─ feature/                # 功能特性
+   ├─ project/{ui,data,domain}/
+   ├─ editor/{ui,session,window,input,layout,pipeline,visual/{,planner/},motion,render,projection,platform,interop,diagnostics}/
+   ├─ settings/{ui,data}/
+   ├─ sync/{ui,data,work}/
+   ├─ stats/{ui,data}/
+   └─ starmap/{ui,data}/
+```
+
+边界约束：
+
+- `:core:designsystem` 只放主题 token 和可复用 Compose 组件，不反向依赖 `:app`，不持有 Window/FoldingFeature。
+- `:core:platform` 只放 Android 系统能力（窗口折叠、输入设备、存储根目录），不依赖 Compose、Navigation3、WorkManager、UniFFI 生成绑定或 `writer_core` Kotlin binding。
+- `feature/*/data` 不依赖 Compose/Activity/View；`feature/editor/input` 不依赖 Repository。
+- 编辑器只保留一套目录（`feature/editor/`），不再有 `editor/v2` 或全局 `ui/Editor*` 入口。
+
 ## Core 边界
 
 Core 负责：
