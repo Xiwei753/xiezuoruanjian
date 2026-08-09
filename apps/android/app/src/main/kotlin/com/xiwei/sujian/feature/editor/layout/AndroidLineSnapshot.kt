@@ -30,6 +30,11 @@ data class LineClusterSnapshot(
      *  At line end, uses getLineLeft/getLineRight based on RTL direction to avoid
      *  writing the logical endpoint to the wrong side. */
     val caretEndX: Float = 0f,
+    /** True if this cluster is a hard line break ("\n", "\r", or "\r\n").
+     *  Hard breaks carry no visible glyph but would otherwise consume reveal progress
+     *  via coerceAtLeast(1f) in [CaretRevealPlanner]. The planner filters hard breaks
+     *  out so the remaining visible clusters share the full [0,1] progress window. */
+    val isHardBreak: Boolean = false,
 )
 
 data class AndroidLineSnapshot(

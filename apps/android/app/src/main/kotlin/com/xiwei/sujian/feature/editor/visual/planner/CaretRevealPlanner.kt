@@ -5,6 +5,23 @@ import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
 
 /**
+ * An immutable binding between a [LineClusterSnapshot] and the [TextRevealSpec] the
+ * planner built for it.
+ *
+ * #605 评论4 问题1: previously [CaretRevealPlanner.planSwallowSpecs] returned a bare
+ * `List<TextRevealSpec>` whose element order followed an internal descending sort,
+ * while callers in [InsertDeletePlanner] still indexed the original unsorted cluster
+ * list with the same index. Multi-cluster deletes could pair cluster A's Bitmap with
+ * cluster C's caret geometry. Binding cluster+spec in one object removes the index
+ * coupling entirely — callers iterate plans and read `plan.cluster` / `plan.spec`
+ * from the same object.
+ */
+data class CaretRevealPlan(
+    val cluster: LineClusterSnapshot,
+    val spec: TextRevealSpec,
+)
+
+/**
  * Build [TextRevealSpec]s for Insert/Delete slices from cluster caret geometry.
  *
  * #605: Insert becomes caret-bounded REVEAL (clip from anchor toward boundary),
@@ -18,20 +35,27 @@ import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
  * Weighting uses caret advance (not byte length) so wide glyphs (e.g. CJK) get a
  * proportionally larger time window, keeping the visual reveal speed approximately
  * constant in pixels per millisecond across scripts.
+ *
+ * #605 评论4 问题3: hard line breaks ("\n", "\r", "\r\n") have no visible glyph but
+ * would still consume progress via coerceAtLeast(1f). They are filtered out before
+ * planning so the visible clusters share the full [0,1] window.
  */
 class CaretRevealPlanner {
     /**
-     * Build reveal specs for inserted clusters (REVEAL mode).
+     * Build reveal plans for inserted clusters (REVEAL mode).
      * Clusters are ordered by logical byte position; progress windows advance
      * along text order so the reveal boundary moves continuously.
+     *
+     * Hard-break clusters are excluded — they have no glyph to reveal.
      */
-    fun planRevealSpecs(clusters: List<LineClusterSnapshot>): List<TextRevealSpec> {
-        if (clusters.isEmpty()) return emptyList()
-        return buildSpecs(clusters, TextRevealMode.REVEAL)
+    fun planRevealSpecs(clusters: List<LineClusterSnapshot>): List<CaretRevealPlan> {
+        val visible = clusters.filter { !it.isHardBreak }
+        if (visible.isEmpty()) return emptyList()
+        return buildSpecs(visible, TextRevealMode.REVEAL)
     }
 
     /**
-     * Build swallow specs for deleted clusters (SWALLOW mode).
+     * Build swallow plans for deleted clusters (SWALLOW mode).
      *
      * #605: Clusters are ordered by distance from the final caret (far to near),
      * so deleting a range visually contracts toward the caret position.
@@ -44,23 +68,26 @@ class CaretRevealPlanner {
      *
      * This is NOT sorted by cluster advance width — a wide cluster near the caret
      * must swallow last, not first, otherwise the text expands before contracting.
+     *
+     * Hard-break clusters are excluded — they have no glyph to swallow.
      */
-    fun planSwallowSpecs(clusters: List<LineClusterSnapshot>): List<TextRevealSpec> {
-        if (clusters.isEmpty()) return emptyList()
-        val sorted = clusters.sortedByDescending { it.documentByteStart }
+    fun planSwallowSpecs(clusters: List<LineClusterSnapshot>): List<CaretRevealPlan> {
+        val visible = clusters.filter { !it.isHardBreak }
+        if (visible.isEmpty()) return emptyList()
+        val sorted = visible.sortedByDescending { it.documentByteStart }
         return buildSpecs(sorted, TextRevealMode.SWALLOW)
     }
 
     private fun buildSpecs(
         clusters: List<LineClusterSnapshot>,
         mode: TextRevealMode,
-    ): List<TextRevealSpec> {
+    ): List<CaretRevealPlan> {
         val totalWeight =
             clusters.sumOf { cluster ->
                 kotlin.math.abs(cluster.caretEndX - cluster.caretStartX).coerceAtLeast(1f).toDouble()
             }.toFloat().coerceAtLeast(0.0001f)
 
-        val specs = mutableListOf<TextRevealSpec>()
+        val plans = mutableListOf<CaretRevealPlan>()
         var accumulatedWeight = 0f
         for (cluster in clusters) {
             val weight = kotlin.math.abs(cluster.caretEndX - cluster.caretStartX).coerceAtLeast(1f)
@@ -88,8 +115,8 @@ class CaretRevealPlanner {
                         progressEnd = progressEnd,
                     )
                 }
-            specs.add(spec)
+            plans.add(CaretRevealPlan(cluster, spec))
         }
-        return specs
+        return plans
     }
 }

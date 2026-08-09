@@ -55,9 +55,15 @@ class InsertDeletePlanner {
                     insertClusterSnapshots.add(Pair(cluster, newSnapshot))
                 }
             }
-            val revealSpecs = caretRevealPlanner.planRevealSpecs(insertClusterSnapshots.map { it.first })
-            for ((i, pair) in insertClusterSnapshots.withIndex()) {
-                val (cluster, snapshot) = pair
+            // #605 评论4 问题1: 用 CaretRevealPlan 绑定 cluster+spec，按 cluster 引用找回 snapshot。
+            // 不再靠列表下标对齐 — planSwallowSpecs 内部排序后下标会与原列表错位。
+            val revealSnapshotByCluster = java.util.IdentityHashMap<LineClusterSnapshot, AndroidLineSnapshot>()
+            for ((cluster, snapshot) in insertClusterSnapshots) {
+                revealSnapshotByCluster[cluster] = snapshot
+            }
+            for (plan in caretRevealPlanner.planRevealSpecs(insertClusterSnapshots.map { it.first })) {
+                val cluster = plan.cluster
+                val snapshot = revealSnapshotByCluster[cluster] ?: continue
                 animatedSlices.add(
                     PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
@@ -68,7 +74,7 @@ class InsertDeletePlanner {
                         endAlpha = 1f,
                         clusterByteStart = cluster.documentByteStart,
                         clusterByteEndExclusive = cluster.documentByteEndExclusive,
-                        revealSpec = revealSpecs.getOrNull(i),
+                        revealSpec = plan.spec,
                     ),
                 )
             }
@@ -86,9 +92,16 @@ class InsertDeletePlanner {
                     deleteClusterSnapshots.add(Pair(cluster, oldSnapshot))
                 }
             }
-            val swallowSpecs = caretRevealPlanner.planSwallowSpecs(deleteClusterSnapshots.map { it.first })
-            for ((i, pair) in deleteClusterSnapshots.withIndex()) {
-                val (cluster, snapshot) = pair
+            // #605 评论4 问题1: 用 CaretRevealPlan 绑定 cluster+spec，按 cluster 引用找回 snapshot。
+            // planSwallowSpecs 内部按 documentByteStart 降序排序，下标与原列表错位，
+            // 必须用 plan.cluster 引用匹配而非 specs[i]。
+            val swallowSnapshotByCluster = java.util.IdentityHashMap<LineClusterSnapshot, AndroidLineSnapshot>()
+            for ((cluster, snapshot) in deleteClusterSnapshots) {
+                swallowSnapshotByCluster[cluster] = snapshot
+            }
+            for (plan in caretRevealPlanner.planSwallowSpecs(deleteClusterSnapshots.map { it.first })) {
+                val cluster = plan.cluster
+                val snapshot = swallowSnapshotByCluster[cluster] ?: continue
                 animatedSlices.add(
                     PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Delete,
@@ -99,7 +112,7 @@ class InsertDeletePlanner {
                         endAlpha = 1f,
                         clusterByteStart = cluster.documentByteStart,
                         clusterByteEndExclusive = cluster.documentByteEndExclusive,
-                        revealSpec = swallowSpecs.getOrNull(i),
+                        revealSpec = plan.spec,
                     ),
                 )
             }
@@ -146,9 +159,15 @@ class InsertDeletePlanner {
                     insertClusterSnapshots.add(Pair(cluster, newSnapshot))
                 }
             }
-            val revealSpecs = caretRevealPlanner.planRevealSpecs(insertClusterSnapshots.map { it.first })
-            for ((i, pair) in insertClusterSnapshots.withIndex()) {
-                val (cluster, snapshot) = pair
+            // #605 评论4 问题1: 用 CaretRevealPlan 绑定 cluster+spec，按 cluster 引用找回 snapshot。
+            // 不再靠列表下标对齐 — planSwallowSpecs 内部排序后下标会与原列表错位。
+            val revealSnapshotByCluster = java.util.IdentityHashMap<LineClusterSnapshot, AndroidLineSnapshot>()
+            for ((cluster, snapshot) in insertClusterSnapshots) {
+                revealSnapshotByCluster[cluster] = snapshot
+            }
+            for (plan in caretRevealPlanner.planRevealSpecs(insertClusterSnapshots.map { it.first })) {
+                val cluster = plan.cluster
+                val snapshot = revealSnapshotByCluster[cluster] ?: continue
                 animatedSlices.add(
                     PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
@@ -159,7 +178,7 @@ class InsertDeletePlanner {
                         endAlpha = 1f,
                         clusterByteStart = cluster.documentByteStart,
                         clusterByteEndExclusive = cluster.documentByteEndExclusive,
-                        revealSpec = revealSpecs.getOrNull(i),
+                        revealSpec = plan.spec,
                     ),
                 )
             }
@@ -172,9 +191,16 @@ class InsertDeletePlanner {
                     deleteClusterSnapshots.add(Pair(cluster, oldSnapshot))
                 }
             }
-            val swallowSpecs = caretRevealPlanner.planSwallowSpecs(deleteClusterSnapshots.map { it.first })
-            for ((i, pair) in deleteClusterSnapshots.withIndex()) {
-                val (cluster, snapshot) = pair
+            // #605 评论4 问题1: 用 CaretRevealPlan 绑定 cluster+spec，按 cluster 引用找回 snapshot。
+            // planSwallowSpecs 内部按 documentByteStart 降序排序，下标与原列表错位，
+            // 必须用 plan.cluster 引用匹配而非 specs[i]。
+            val swallowSnapshotByCluster = java.util.IdentityHashMap<LineClusterSnapshot, AndroidLineSnapshot>()
+            for ((cluster, snapshot) in deleteClusterSnapshots) {
+                swallowSnapshotByCluster[cluster] = snapshot
+            }
+            for (plan in caretRevealPlanner.planSwallowSpecs(deleteClusterSnapshots.map { it.first })) {
+                val cluster = plan.cluster
+                val snapshot = swallowSnapshotByCluster[cluster] ?: continue
                 animatedSlices.add(
                     PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Delete,
@@ -185,7 +211,7 @@ class InsertDeletePlanner {
                         endAlpha = 1f,
                         clusterByteStart = cluster.documentByteStart,
                         clusterByteEndExclusive = cluster.documentByteEndExclusive,
-                        revealSpec = swallowSpecs.getOrNull(i),
+                        revealSpec = plan.spec,
                     ),
                 )
             }
@@ -255,6 +281,7 @@ class InsertDeletePlanner {
                             shapingIdentityConfident = allConfident,
                             caretStartX = first.caretStartX,
                             caretEndX = last.caretEndX,
+                            isHardBreak = runClusters.any { it.isHardBreak },
                         ),
                     )
                 }
@@ -316,6 +343,10 @@ class InsertDeletePlanner {
             }
         }
 
+        // #605 评论4 问题2: 收集未匹配 old/new cluster，循环结束后一次性规划，
+        // 让多个 cluster 共享 [0,1] progress 窗口。逐个 planXxxSpecs(listOf(...)) 会让
+        // 每个 cluster 独占完整窗口，多字替换时同时 0→1，丢失序列感。
+        val unmatchedOld = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
         val newMatched = mutableSetOf<Int>()
         var lastMatchedNewStart = 0
         for ((oldCluster, oldSnapshot) in allOldAffectedClusters) {
@@ -401,38 +432,57 @@ class InsertDeletePlanner {
                     )
                 }
             } else {
-                val swallowSpec = caretRevealPlanner.planSwallowSpecs(listOf(oldCluster)).firstOrNull()
-                animatedSlices.add(
-                    PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Delete,
-                        snapshot = oldSnapshot,
-                        sourceRect = oldCluster.sourceRectInLineImage,
-                        destinationRect = oldCluster.visualRectInDocument,
-                        startAlpha = 1f,
-                        endAlpha = 1f,
-                        clusterByteStart = oldCluster.documentByteStart,
-                        clusterByteEndExclusive = oldCluster.documentByteEndExclusive,
-                        revealSpec = swallowSpec,
-                    ),
-                )
+                unmatchedOld.add(Pair(oldCluster, oldSnapshot))
             }
         }
 
+        val unmatchedNew = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
         for ((i, pair) in allNewAffectedClusters.withIndex()) {
             if (i in newMatched) continue
-            val (newCluster, newSnapshot) = pair
-            val revealSpec = caretRevealPlanner.planRevealSpecs(listOf(newCluster)).firstOrNull()
+            unmatchedNew.add(pair)
+        }
+
+        // #605 评论4 问题1+2: 一次性规划 swallow/reveal，多字替换时 cluster 按距离/顺序分享 [0,1] 窗口；
+        // 用 CaretRevealPlan 绑定 cluster+spec，按 cluster 引用找回 snapshot，不靠下标对齐。
+        val swallowSnapshotByCluster = java.util.IdentityHashMap<LineClusterSnapshot, AndroidLineSnapshot>()
+        for ((cluster, snapshot) in unmatchedOld) {
+            swallowSnapshotByCluster[cluster] = snapshot
+        }
+        for (plan in caretRevealPlanner.planSwallowSpecs(unmatchedOld.map { it.first })) {
+            val cluster = plan.cluster
+            val snapshot = swallowSnapshotByCluster[cluster] ?: continue
+            animatedSlices.add(
+                PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Delete,
+                    snapshot = snapshot,
+                    sourceRect = cluster.sourceRectInLineImage,
+                    destinationRect = cluster.visualRectInDocument,
+                    startAlpha = 1f,
+                    endAlpha = 1f,
+                    clusterByteStart = cluster.documentByteStart,
+                    clusterByteEndExclusive = cluster.documentByteEndExclusive,
+                    revealSpec = plan.spec,
+                ),
+            )
+        }
+        val revealSnapshotByCluster = java.util.IdentityHashMap<LineClusterSnapshot, AndroidLineSnapshot>()
+        for ((cluster, snapshot) in unmatchedNew) {
+            revealSnapshotByCluster[cluster] = snapshot
+        }
+        for (plan in caretRevealPlanner.planRevealSpecs(unmatchedNew.map { it.first })) {
+            val cluster = plan.cluster
+            val snapshot = revealSnapshotByCluster[cluster] ?: continue
             animatedSlices.add(
                 PreparedVisualTransaction.AnimatedSlice(
                     role = SliceRole.Insert,
-                    snapshot = newSnapshot,
-                    sourceRect = newCluster.sourceRectInLineImage,
-                    destinationRect = newCluster.visualRectInDocument,
+                    snapshot = snapshot,
+                    sourceRect = cluster.sourceRectInLineImage,
+                    destinationRect = cluster.visualRectInDocument,
                     startAlpha = 1f,
                     endAlpha = 1f,
-                    clusterByteStart = newCluster.documentByteStart,
-                    clusterByteEndExclusive = newCluster.documentByteEndExclusive,
-                    revealSpec = revealSpec,
+                    clusterByteStart = cluster.documentByteStart,
+                    clusterByteEndExclusive = cluster.documentByteEndExclusive,
+                    revealSpec = plan.spec,
                 ),
             )
         }
@@ -476,6 +526,10 @@ class InsertDeletePlanner {
             }
         }
 
+        // #605 评论4 问题2: 收集未匹配 old/new cluster，循环结束后一次性规划，
+        // 让多个 cluster 共享 [0,1] progress 窗口。逐个 planXxxSpecs(listOf(...)) 会让
+        // 每个 cluster 独占完整窗口，多字替换时同时 0→1，丢失序列感。
+        val unmatchedOld = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
         val newMatched = mutableSetOf<Int>()
         var lastMatchedNewStart = 0
         for ((oldCluster, oldSnapshot) in allOldAffectedClusters) {
@@ -564,38 +618,57 @@ class InsertDeletePlanner {
                     )
                 }
             } else {
-                val swallowSpec = caretRevealPlanner.planSwallowSpecs(listOf(oldCluster)).firstOrNull()
-                animatedSlices.add(
-                    PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Delete,
-                        snapshot = oldSnapshot,
-                        sourceRect = oldCluster.sourceRectInLineImage,
-                        destinationRect = oldCluster.visualRectInDocument,
-                        startAlpha = 1f,
-                        endAlpha = 1f,
-                        clusterByteStart = oldCluster.documentByteStart,
-                        clusterByteEndExclusive = oldCluster.documentByteEndExclusive,
-                        revealSpec = swallowSpec,
-                    ),
-                )
+                unmatchedOld.add(Pair(oldCluster, oldSnapshot))
             }
         }
 
+        val unmatchedNew = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
         for ((i, pair) in allNewAffectedClusters.withIndex()) {
             if (i in newMatched) continue
-            val (newCluster, newSnapshot) = pair
-            val revealSpec = caretRevealPlanner.planRevealSpecs(listOf(newCluster)).firstOrNull()
+            unmatchedNew.add(pair)
+        }
+
+        // #605 评论4 问题1+2: 一次性规划 swallow/reveal，多字替换时 cluster 按距离/顺序分享 [0,1] 窗口；
+        // 用 CaretRevealPlan 绑定 cluster+spec，按 cluster 引用找回 snapshot，不靠下标对齐。
+        val swallowSnapshotByCluster = java.util.IdentityHashMap<LineClusterSnapshot, AndroidLineSnapshot>()
+        for ((cluster, snapshot) in unmatchedOld) {
+            swallowSnapshotByCluster[cluster] = snapshot
+        }
+        for (plan in caretRevealPlanner.planSwallowSpecs(unmatchedOld.map { it.first })) {
+            val cluster = plan.cluster
+            val snapshot = swallowSnapshotByCluster[cluster] ?: continue
+            animatedSlices.add(
+                PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Delete,
+                    snapshot = snapshot,
+                    sourceRect = cluster.sourceRectInLineImage,
+                    destinationRect = cluster.visualRectInDocument,
+                    startAlpha = 1f,
+                    endAlpha = 1f,
+                    clusterByteStart = cluster.documentByteStart,
+                    clusterByteEndExclusive = cluster.documentByteEndExclusive,
+                    revealSpec = plan.spec,
+                ),
+            )
+        }
+        val revealSnapshotByCluster = java.util.IdentityHashMap<LineClusterSnapshot, AndroidLineSnapshot>()
+        for ((cluster, snapshot) in unmatchedNew) {
+            revealSnapshotByCluster[cluster] = snapshot
+        }
+        for (plan in caretRevealPlanner.planRevealSpecs(unmatchedNew.map { it.first })) {
+            val cluster = plan.cluster
+            val snapshot = revealSnapshotByCluster[cluster] ?: continue
             animatedSlices.add(
                 PreparedVisualTransaction.AnimatedSlice(
                     role = SliceRole.Insert,
-                    snapshot = newSnapshot,
-                    sourceRect = newCluster.sourceRectInLineImage,
-                    destinationRect = newCluster.visualRectInDocument,
+                    snapshot = snapshot,
+                    sourceRect = cluster.sourceRectInLineImage,
+                    destinationRect = cluster.visualRectInDocument,
                     startAlpha = 1f,
                     endAlpha = 1f,
-                    clusterByteStart = newCluster.documentByteStart,
-                    clusterByteEndExclusive = newCluster.documentByteEndExclusive,
-                    revealSpec = revealSpec,
+                    clusterByteStart = cluster.documentByteStart,
+                    clusterByteEndExclusive = cluster.documentByteEndExclusive,
+                    revealSpec = plan.spec,
                 ),
             )
         }

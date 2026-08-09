@@ -186,9 +186,14 @@ class AndroidLineSnapshotBuilder {
                 if (clusterEndDisplayUtf16 < layout.getLineEnd(lineIndex)) {
                     layout.getPrimaryHorizontal(clusterEndDisplayUtf16)
                 } else {
-                    // 行尾：结合 RTL 选择 getLineLeft/getLineRight，避免 RTL 行尾把逻辑终点写到错误一侧
-                    val lineStart = layout.getLineStart(lineIndex)
-                    if (lineStart < layout.getLineEnd(lineIndex) && layout.isRtlCharAt(lineStart)) {
+                    // 行尾：用当前 cluster 自身方向决定 getLineLeft/getLineRight。
+                    // #605 评论4 问题4: 不能看 lineStart — 混排（LTR 开头 RTL 结尾）会判错整行方向。
+                    // probe 指向本 cluster 内最后一个 UTF-16 单元，isRtlCharAt(probe) 反映该 cluster
+                    // 的 bidi 方向。layout.text 理论上非空（已进入 cluster 构建），用安全访问兜底。
+                    val probe = (clusterEndDisplayUtf16 - 1).coerceAtLeast(clusterStartDisplayUtf16)
+                    val textLen = layout.text?.length ?: 0
+                    val clusterIsRtl = probe >= 0 && probe < textLen && layout.isRtlCharAt(probe)
+                    if (clusterIsRtl) {
                         layout.getLineLeft(lineIndex)
                     } else {
                         layout.getLineRight(lineIndex)
@@ -261,6 +266,7 @@ class AndroidLineSnapshotBuilder {
                     shapingIdentityConfident = shapingResult.second,
                     caretStartX = x0,
                     caretEndX = x1,
+                    isHardBreak = clusterText == "\n" || clusterText == "\r" || clusterText == "\r\n",
                 ),
             )
         }
