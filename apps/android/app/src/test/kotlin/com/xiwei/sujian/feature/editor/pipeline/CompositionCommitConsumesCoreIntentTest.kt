@@ -23,7 +23,7 @@ import uniffi.writer_core.EditorTransactionCauseDto
 import uniffi.writer_core.EditorVisualIntentDto
 
 /**
- * #606: Ver! Verifies that [AndroidEditorPipeline.applyCompositionCommit] consumes the
+ * #606: Verifies that [AndroidEditorPipeline.applyCompositionCommit] consumes the
  * Core-returned [VisualIntent] directly instead of re-computing oldAffected/newAffected,
  * isVisualSame, animationMode, and operationKind on the platform side.
  *
