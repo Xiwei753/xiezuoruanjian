@@ -58,7 +58,7 @@ class AutoSyncScheduler(context: Context, private val syncRepository: SyncReposi
          * 调用方（SyncRepository.commitSyncProfile）在 commitExclusive 释放后调用。
          */
         @Suppress("UNUSED_PARAMETER")
-        suspend fun scheduleFromSettings(
+        fun scheduleFromSettings(
             context: Context,
             syncRepository: SyncRepository,
         ) {

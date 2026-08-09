@@ -204,7 +204,7 @@ class AutoSyncWorker(
     }
 
     /** 判定该作品是否到同步时间点（interval/elapsed 检查）。 */
-    private suspend fun shouldSyncNow(
+    private fun shouldSyncNow(
         settingsRepository: SyncRepository,
         projectId: String,
         snapshot: ProjectSyncProfileSnapshot,
@@ -235,7 +235,7 @@ class AutoSyncWorker(
      * #600 评论 #5：判定应用级同步是否到时间点（interval/elapsed 检查）。
      * 镜像 [shouldSyncNow] 但使用应用级 sync state（<app_data_root>/app-meta/sync/state.local.json）。
      */
-    private suspend fun shouldAppSyncNow(
+    private fun shouldAppSyncNow(
         settingsRepository: SyncRepository,
         snapshot: AppSyncProfileSnapshot,
     ): Boolean {

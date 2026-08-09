@@ -28,7 +28,7 @@ class AppSyncDataBarrier(
      * NotLoaded (原生库未加载) 视为成功 - 同步本身也会以 NotLoaded 失败,
      * 此处不提前阻断.
      */
-    suspend fun flushBeforeSync(): Boolean {
+    fun flushBeforeSync(): Boolean {
         return when (val result = starmapBridge.flushAllStarmapStores()) {
             is BridgeResult.Success -> true
             is BridgeResult.Error -> {
