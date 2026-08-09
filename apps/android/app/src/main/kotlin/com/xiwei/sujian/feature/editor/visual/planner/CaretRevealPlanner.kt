@@ -32,16 +32,22 @@ class CaretRevealPlanner {
 
     /**
      * Build swallow specs for deleted clusters (SWALLOW mode).
-     * Clusters are ordered by distance from the final caret (far to near),
+     *
+     * #605: Clusters are ordered by distance from the final caret (far to near),
      * so deleting a range visually contracts toward the caret position.
+     *
+     * Sort by [LineClusterSnapshot.documentByteStart] descending: clusters with
+     * larger byte positions are farther from the final caret (which sits at the
+     * deletion start), so they swallow first. In LTR, larger byte = farther right
+     * = farther from caret at left. In RTL, larger byte = farther left = farther
+     * from caret at right. Both produce the correct "contract toward caret" visual.
+     *
+     * This is NOT sorted by cluster advance width — a wide cluster near the caret
+     * must swallow last, not first, otherwise the text expands before contracting.
      */
     fun planSwallowSpecs(clusters: List<LineClusterSnapshot>): List<TextRevealSpec> {
         if (clusters.isEmpty()) return emptyList()
-        // Sort by distance from final caret: far clusters swallow first.
-        val sorted =
-            clusters.sortedByDescending { cluster ->
-                kotlin.math.abs(cluster.caretEndX - cluster.caretStartX)
-            }
+        val sorted = clusters.sortedByDescending { it.documentByteStart }
         return buildSpecs(sorted, TextRevealMode.SWALLOW)
     }
 
