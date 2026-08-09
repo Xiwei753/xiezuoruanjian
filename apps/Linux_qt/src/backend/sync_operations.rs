@@ -161,11 +161,7 @@ impl AppBackend {
                     serde_json::to_string(&state).unwrap_or_default();
                 self.sync_status_changed();
                 self.sync_action_completed();
-                self.debug_error(
-                    "sync",
-                    "perform_sync_dry_run_failed",
-                    "no_project_selected",
-                );
+                self.debug_error("sync", "perform_sync_dry_run_failed", "no_project_selected");
                 return op_id.into();
             }
         };

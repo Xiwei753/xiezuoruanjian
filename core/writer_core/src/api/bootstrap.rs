@@ -16,8 +16,8 @@ use writer_platform_api::{
 };
 
 use super::secure_storage_bridge::{wrap_secure_storage, SecureStorageProvider};
-use crate::api::types::PlatformInitDto;
 use crate::api::error::WriterError;
+use crate::api::types::PlatformInitDto;
 use crate::app_service::WriterAppService;
 
 /// 仅凭根目录打开服务，不注入平台能力。
@@ -45,9 +45,8 @@ pub fn open_app_service_with_init(
         resolver.resolve(&platform_init, &network_state)
     } else {
         let config_dir = platform_init.app_data_dir.join("config");
-        let config_store: Option<Box<dyn ConfigStore>> = Some(Box::new(FileConfigStore::new(
-            config_dir,
-        )));
+        let config_store: Option<Box<dyn ConfigStore>> =
+            Some(Box::new(FileConfigStore::new(config_dir)));
 
         PlatformServices {
             init: platform_init,
@@ -80,13 +79,12 @@ pub fn open_app_service_with_secure_storage(
     let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
 
-    let secure_storage_impl: Option<Box<dyn SecureStorage>> = secure_storage
-        .map(wrap_secure_storage);
+    let secure_storage_impl: Option<Box<dyn SecureStorage>> =
+        secure_storage.map(wrap_secure_storage);
 
     let config_dir = platform_init.app_data_dir.join("config");
-    let config_store: Option<Box<dyn ConfigStore>> = Some(Box::new(FileConfigStore::new(
-        config_dir,
-    )));
+    let config_store: Option<Box<dyn ConfigStore>> =
+        Some(Box::new(FileConfigStore::new(config_dir)));
 
     let services = if let Some(resolver) = get_platform_services_resolver() {
         let mut resolved = resolver.resolve(&platform_init, &network_state);

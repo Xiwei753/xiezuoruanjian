@@ -983,7 +983,10 @@ mod workspace_flow_tests {
 
         // projects subdirectory must be created
         let projects_path = dir.path().join("projects");
-        assert!(projects_path.exists(), "projects subdirectory must be created");
+        assert!(
+            projects_path.exists(),
+            "projects subdirectory must be created"
+        );
 
         // Close workspace
         app.close_workspace();

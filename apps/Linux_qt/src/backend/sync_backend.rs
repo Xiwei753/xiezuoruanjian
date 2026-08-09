@@ -474,7 +474,8 @@ impl AppBackend {
                     counts: writer_core::api::SyncOperationCountsDto::default(),
                     raw_error: None,
                 };
-                self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
+                self.current_sync_operation_state =
+                    serde_json::to_string(&state).unwrap_or_default();
                 self.sync_action_completed();
                 self.debug_error(
                     "sync",
@@ -659,7 +660,10 @@ impl AppBackend {
         };
         if let Some(api) = self.core_api() {
             let config_opt = api.load_sync_config(&project_id).ok();
-            let token_opt = api.load_sync_secrets(&project_id).ok().and_then(|s| s.token);
+            let token_opt = api
+                .load_sync_secrets(&project_id)
+                .ok()
+                .and_then(|s| s.token);
             if let Some(config) = config_opt {
                 self.current_sync_enabled = config.enabled;
                 self.current_sync_backend_type = config.backend_type.clone();
@@ -729,7 +733,8 @@ impl AppBackend {
                         state.raw_error.as_deref().unwrap_or("")
                     );
                     self.set_error(&msg);
-                    self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
+                    self.current_sync_operation_state =
+                        serde_json::to_string(&state).unwrap_or_default();
                     self.sync_action_completed();
                     self.debug_error("sync", "save_sync_config_failed", "no_project_selected");
                 }
@@ -738,9 +743,8 @@ impl AppBackend {
         };
         if let Some(api) = self.core_api() {
             let net = crate::backend::app_backend::current_network_state();
-            let mut c = api
-                .load_sync_config(&project_id)
-                .unwrap_or(writer_core::api::types::SyncConfigDto {
+            let mut c = api.load_sync_config(&project_id).unwrap_or(
+                writer_core::api::types::SyncConfigDto {
                     enabled: false,
                     backend_type: "github_api".to_string(),
                     remote_url: "".to_string(),
@@ -751,7 +755,8 @@ impl AppBackend {
                     username: "".to_string(),
                     has_network_permission: net.is_connected,
                     has_network_state_permission: true,
-                });
+                },
+            );
 
             let raw_url = self.current_sync_remote_url.clone();
             let parsed = writer_core::sync::sanitize_remote_url(&raw_url);

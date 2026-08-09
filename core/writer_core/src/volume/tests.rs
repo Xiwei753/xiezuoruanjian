@@ -1,7 +1,6 @@
 use crate::project::create_project;
 use crate::volume::{
-    create_volume, delete_volume, list_volumes, normalize_rel_path, rename_volume,
-    reorder_volumes,
+    create_volume, delete_volume, list_volumes, normalize_rel_path, rename_volume, reorder_volumes,
 };
 use tempfile::tempdir;
 
@@ -31,8 +30,7 @@ fn test_rename_volume_success() {
     std::fs::create_dir_all(data_root.join("projects")).unwrap();
 
     let project = create_project(&data_root.join("projects"), "Test Project").unwrap();
-    let volume =
-        create_volume(&data_root.join("projects").join(&project.id), "Old Title").unwrap();
+    let volume = create_volume(&data_root.join("projects").join(&project.id), "Old Title").unwrap();
 
     rename_volume(
         &data_root.join("projects").join(&project.id),
@@ -73,8 +71,7 @@ fn test_reorder_volumes_mismatch_error() {
 
     let project = create_project(&data_root.join("projects"), "Test Project").unwrap();
 
-    let volume1 =
-        create_volume(&data_root.join("projects").join(&project.id), "Volume 1").unwrap();
+    let volume1 = create_volume(&data_root.join("projects").join(&project.id), "Volume 1").unwrap();
     let _volume2 =
         create_volume(&data_root.join("projects").join(&project.id), "Volume 2").unwrap();
 

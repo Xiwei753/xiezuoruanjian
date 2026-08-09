@@ -78,9 +78,9 @@ impl AppBackend {
                 .into(),
             };
         }
-        writer_core::api::ResultEnvelope::<()>::error(
-            writer_core::api::WriterError::Other("core api not available".to_string()),
-        )
+        writer_core::api::ResultEnvelope::<()>::error(writer_core::api::WriterError::Other(
+            "core api not available".to_string(),
+        ))
         .to_json_string()
         .into()
     }
@@ -124,11 +124,7 @@ impl AppBackend {
             }
         }
 
-        bridge_error_object(
-            "error.core_error",
-            "CORE_ERROR",
-            "Core not initialized",
-        )
+        bridge_error_object("error.core_error", "CORE_ERROR", "Core not initialized")
     }
 
     pub(crate) fn save_chapter(
@@ -217,11 +213,7 @@ impl AppBackend {
         } else {
             self.debug_error("chapter", "save_chapter_failed", "core_not_initialized");
             self.current_save_status = "保存失败".to_string();
-            bridge_error_object(
-                "error.core_error",
-                "CORE_ERROR",
-                "Core not initialized",
-            )
+            bridge_error_object("error.core_error", "CORE_ERROR", "Core not initialized")
         };
 
         self.save_status_changed();
@@ -290,11 +282,7 @@ impl AppBackend {
             self.current_save_status = "清空失败".to_string();
             self.save_status_changed();
             self.set_error("error.core_error");
-            bridge_error_object(
-                "error.core_error",
-                "CORE_ERROR",
-                "Core not initialized",
-            )
+            bridge_error_object("error.core_error", "CORE_ERROR", "Core not initialized")
         }
     }
 }

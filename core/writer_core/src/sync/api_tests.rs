@@ -86,7 +86,6 @@ fn test_get_sync_capability_remote_url_missing() {
     );
 }
 
-
 #[test]
 fn test_load_save_app_sync_state_roundtrip() {
     use std::path::Path;
@@ -109,10 +108,19 @@ fn test_load_save_app_sync_state_roundtrip() {
 
     // 验证写入了正确路径：<app_data_root>/app-meta/sync/state.local.json
     let state_path = temp_dir.path().join("app-meta/sync/state.local.json");
-    assert!(state_path.exists(), "app sync state file should exist at <app_data_root>/app-meta/sync/state.local.json");
+    assert!(
+        state_path.exists(),
+        "app sync state file should exist at <app_data_root>/app-meta/sync/state.local.json"
+    );
     let content = std::fs::read_to_string(&state_path).unwrap();
-    assert!(content.contains("1700000000"), "saved state should contain last_sync_time");
-    assert!(content.contains("abc123"), "saved state should contain last_synced_commit");
+    assert!(
+        content.contains("1700000000"),
+        "saved state should contain last_sync_time"
+    );
+    assert!(
+        content.contains("abc123"),
+        "saved state should contain last_synced_commit"
+    );
 
     // 读回验证 roundtrip。
     let loaded = api.load_app_sync_state().unwrap();
@@ -136,7 +144,10 @@ fn test_load_save_app_sync_state_roundtrip() {
     );
     let _project_initial = api.load_sync_state(&project.id).unwrap();
     assert!(
-        !Path::exists(&project_state_path) || !std::fs::read_to_string(&project_state_path).unwrap().contains("1700000000"),
+        !Path::exists(&project_state_path)
+            || !std::fs::read_to_string(&project_state_path)
+                .unwrap()
+                .contains("1700000000"),
         "project state must not contain app-level last_sync_time"
     );
 
@@ -146,7 +157,6 @@ fn test_load_save_app_sync_state_roundtrip() {
 
 #[test]
 fn test_app_sync_state_independent_from_project_sync_state() {
-
     let temp_dir = tempdir().unwrap();
     std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
     let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
@@ -158,7 +168,9 @@ fn test_app_sync_state_independent_from_project_sync_state() {
     proj_state.last_sync_time = Some(1_111_111_111);
     proj_state.last_synced_commit = Some("proj-commit".to_string());
     // load_sync_state 返回 DTO，但 save 不在 API 层暴露——通过 core 直接保存。
-    api.core().save_sync_state(pid, &proj_state.clone().into()).unwrap();
+    api.core()
+        .save_sync_state(pid, &proj_state.clone().into())
+        .unwrap();
 
     // 写入应用级 state。
     let mut app_state = api.load_app_sync_state().unwrap();
@@ -171,6 +183,9 @@ fn test_app_sync_state_independent_from_project_sync_state() {
     let app_loaded = api.load_app_sync_state().unwrap();
     assert_eq!(proj_loaded.last_sync_time, Some(1_111_111_111));
     assert_eq!(app_loaded.last_sync_time, Some(2_222_222_222));
-    assert_eq!(proj_loaded.last_synced_commit.as_deref(), Some("proj-commit"));
+    assert_eq!(
+        proj_loaded.last_synced_commit.as_deref(),
+        Some("proj-commit")
+    );
     assert_eq!(app_loaded.last_synced_commit.as_deref(), Some("app-commit"));
 }

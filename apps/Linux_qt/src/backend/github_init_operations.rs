@@ -184,8 +184,7 @@ impl AppBackend {
                                         )]
                                         .into_iter()
                                         .collect(),
-                                        counts:
-                                            writer_core::api::SyncOperationCountsDto::default(),
+                                        counts: writer_core::api::SyncOperationCountsDto::default(),
                                         raw_error: Some(mask_sync_error(&e.to_string())),
                                     },
                                 )
@@ -201,7 +200,8 @@ impl AppBackend {
                             _ => false,
                         };
                         if save_first {
-                            let save_outcome = save_sync_configs(path, project_id, cfg_ref, sec_ref).err();
+                            let save_outcome =
+                                save_sync_configs(path, project_id, cfg_ref, sec_ref).err();
                             match push_result {
                                 Ok(push_res) => {
                                     let category = push_res.error_category.clone();

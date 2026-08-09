@@ -1,7 +1,6 @@
 use crate::chapter::{
     calculate_word_count, clear_chapter_content, create_chapter, delete_chapter, list_chapters,
-    read_chapter, save_chapter_verified, save_chapter_verified_with_allow_empty_overwrite,
-    Chapter,
+    read_chapter, save_chapter_verified, save_chapter_verified_with_allow_empty_overwrite, Chapter,
 };
 use crate::error::Error;
 use crate::project::{create_project, Project};
@@ -282,8 +281,7 @@ fn end_to_end_write_save_reopen_verify_hash_and_word_count() {
     std::fs::create_dir_all(data_root.join("projects")).unwrap();
 
     let project = create_project(&data_root.join("projects"), "My Novel").unwrap();
-    let volume =
-        create_volume(&data_root.join("projects").join(&project.id), "Volume 1").unwrap();
+    let volume = create_volume(&data_root.join("projects").join(&project.id), "Volume 1").unwrap();
     let chapter = create_chapter(
         &data_root.join("projects").join(&project.id),
         &volume.id,

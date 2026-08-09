@@ -700,9 +700,9 @@ impl AppBackend {
                 .into(),
             }
         } else {
-            writer_core::api::ResultEnvelope::<()>::error(
-                writer_core::api::WriterError::Other("core api not available".to_string()),
-            )
+            writer_core::api::ResultEnvelope::<()>::error(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
             .to_json_string()
             .into()
         }

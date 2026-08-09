@@ -665,14 +665,13 @@ impl SyncService {
         // 对于 CloneIntoEmptyProject，clone 在 stage/commit 之前执行，
         // clone 前 HEAD 不存在，baseline = None（空树语义）。
         // 对于其他模式，baseline = stage/commit 后的 HEAD（可能 None 如果 unborn）。
-        let baseline_head_oid =
-            if result.first_sync_mode == FirstSyncMode::CloneIntoEmptyProject {
-                None
-            } else if let Ok(repo) = git2::Repository::open(sync_root) {
-                repo.head().ok().and_then(|r| r.target())
-            } else {
-                None
-            };
+        let baseline_head_oid = if result.first_sync_mode == FirstSyncMode::CloneIntoEmptyProject {
+            None
+        } else if let Ok(repo) = git2::Repository::open(sync_root) {
+            repo.head().ok().and_then(|r| r.target())
+        } else {
+            None
+        };
 
         let pull_failed = backend
             .pull(sync_root, &config.branch, auth.as_ref(), config.scope)
@@ -698,9 +697,7 @@ impl SyncService {
                     if let Ok(new_commit) = new_head.peel_to_commit() {
                         if let Ok(new_tree) = new_commit.tree() {
                             let old_tree = if let Some(old_oid) = baseline_head_oid {
-                                repo.find_commit(old_oid)
-                                    .ok()
-                                    .and_then(|c| c.tree().ok())
+                                repo.find_commit(old_oid).ok().and_then(|c| c.tree().ok())
                             } else {
                                 None
                             };

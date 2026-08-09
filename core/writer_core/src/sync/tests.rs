@@ -3836,15 +3836,8 @@ mod tests {
         let sig = git_test_signature();
         let head = repo.head().unwrap().peel_to_commit().unwrap();
 
-        repo.commit(
-            Some("refs/heads/main"),
-            &sig,
-            &sig,
-            msg,
-            &tree,
-            &[&head],
-        )
-        .unwrap();
+        repo.commit(Some("refs/heads/main"), &sig, &sig, msg, &tree, &[&head])
+            .unwrap();
     }
 
     #[cfg(all(not(windows), feature = "git-https"))]
@@ -4003,9 +3996,7 @@ mod tests {
 
         assert_eq!(result.status, SyncStatus::Success);
         assert!(
-            result
-                .remote_deletes
-                .contains(&"project.json".to_string()),
+            result.remote_deletes.contains(&"project.json".to_string()),
             "remote_deletes should contain project.json, got: {:?}",
             result.remote_deletes
         );
@@ -4037,10 +4028,7 @@ mod tests {
             SyncService::perform_sync(local_dir.path(), &config, &secrets, &backend).unwrap();
 
         assert_eq!(result.status, SyncStatus::Success);
-        assert_eq!(
-            result.first_sync_mode,
-            FirstSyncMode::CloneIntoEmptyProject
-        );
+        assert_eq!(result.first_sync_mode, FirstSyncMode::CloneIntoEmptyProject);
         assert!(
             result
                 .downloaded_files
@@ -4060,7 +4048,12 @@ mod tests {
 
         let seed_dir = tempfile::tempdir().unwrap();
         let seed_repo = git2::Repository::init(seed_dir.path()).unwrap();
-        commit_file_to_repo(&seed_repo, "project.json", r#"{"version":1}"#, "whitelisted");
+        commit_file_to_repo(
+            &seed_repo,
+            "project.json",
+            r#"{"version":1}"#,
+            "whitelisted",
+        );
         commit_file_to_repo(
             &seed_repo,
             "app-meta/sync/config.local.json",

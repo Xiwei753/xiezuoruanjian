@@ -105,8 +105,7 @@ fn test_get_project_stats_empty() {
     let project = create_project(&data_root.join("projects"), "Test Stats Empty").unwrap();
 
     let stats =
-        crate::project::get_project_stats(&data_root.join("projects").join(&project.id))
-            .unwrap();
+        crate::project::get_project_stats(&data_root.join("projects").join(&project.id)).unwrap();
     assert_eq!(stats.volume_count, 1); // create_project automatically generates a default volume
     assert_eq!(stats.chapter_count, 0);
     assert_eq!(stats.total_word_count, 0);
@@ -182,8 +181,7 @@ fn test_get_project_stats_with_data() {
     // Calculate exact word counts using the core function for robust testing
 
     let stats =
-        crate::project::get_project_stats(&data_root.join("projects").join(&project.id))
-            .unwrap();
+        crate::project::get_project_stats(&data_root.join("projects").join(&project.id)).unwrap();
     assert_eq!(stats.volume_count, 2);
     assert_eq!(stats.chapter_count, 3);
 

@@ -313,9 +313,7 @@ pub unsafe extern "C" fn writer_core_load_app_sync_state() -> *mut c_char {
 /// `state_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-pub unsafe extern "C" fn writer_core_save_app_sync_state(
-    state_json: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn writer_core_save_app_sync_state(state_json: *const c_char) -> *mut c_char {
     let json_str = match c_str_to_rust(state_json) {
         Ok(s) => s,
         Err(e) => {
@@ -326,9 +324,10 @@ pub unsafe extern "C" fn writer_core_save_app_sync_state(
         }
     };
     match with_core(|core| {
-        let state: crate::sync::SyncState = serde_json::from_str(&json_str)
-            .map_err(|e| format!("JSON parse error: {}", e))?;
-        core.save_app_sync_state(&state).map_err(|e| format!("{}", e))?;
+        let state: crate::sync::SyncState =
+            serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
+        core.save_app_sync_state(&state)
+            .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
         Ok(data) => ok_json(data),
