@@ -370,7 +370,7 @@ class LayerRuleTests(unittest.TestCase):
     def test_package_dir_inconsistent_must_fail(self):
         """package 声明与物理目录不一致必须被报告（#602 评论#7 项13）。"""
         # 直接调 rule_package_dir_consistent 并注入临时 source_roots，
-        # 因为模块级 PACKAGE_SOURCE_ROOTS 基于真实仓库 APP_MODULE，configure 不影响它。
+        # 显式 source_roots 优先于模块级 PACKAGE_SOURCE_ROOTS（#602 评论#9 项9.3）。
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             make_tree(
@@ -456,6 +456,66 @@ class LayerRuleTests(unittest.TestCase):
             },
         )
         self.assertTrue(findings, "settings/data 依赖 editor.ui 必须被报告")
+
+
+class PackageSourceRootsFollowAppSrcTest(unittest.TestCase):
+    """configure(--app-src) 后 PACKAGE_SOURCE_ROOTS 必须跟随（#602 评论#9 项9.3）。"""
+
+    def tearDown(self) -> None:
+        arch.configure(
+            app_src=arch.DEFAULT_APP_SRC,
+            designsystem_src=arch.DEFAULT_DS_SRC,
+            designsystem_module=arch.DEFAULT_DS_MODULE,
+        )
+
+    def test_configure_updates_package_source_roots_inconsistent(self):
+        """configure 后 rule_package_dir_consistent 不传 source_roots 时扫描新根。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            make_tree(
+                root,
+                {
+                    f"{APP_PREFIX}/feature/sample/Misplaced.kt": (
+                        "package com.xiwei.sujian.feature.other\n\n"
+                        "class Misplaced\n"
+                    )
+                },
+            )
+            arch.configure(
+                app_src=root / APP_PREFIX,
+                designsystem_src=root / DS_PREFIX,
+                designsystem_module=root,
+            )
+            findings = arch.rule_package_dir_consistent()
+            self.assertTrue(
+                findings,
+                "configure 后 PACKAGE_SOURCE_ROOTS 必须跟随 app_src，"
+                "不一致的 package 声明必须被报告",
+            )
+
+    def test_configure_updates_package_source_roots_consistent(self):
+        """configure 后一致目录不报错。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            make_tree(
+                root,
+                {
+                    f"{APP_PREFIX}/feature/sample/Aligned.kt": (
+                        "package com.xiwei.sujian.feature.sample\n\n"
+                        "class Aligned\n"
+                    )
+                },
+            )
+            arch.configure(
+                app_src=root / APP_PREFIX,
+                designsystem_src=root / DS_PREFIX,
+                designsystem_module=root,
+            )
+            findings = arch.rule_package_dir_consistent()
+            self.assertEqual(
+                [], findings,
+                "configure 后一致的 package 声明不应被报告",
+            )
 
 
 class RealRepoTest(unittest.TestCase):

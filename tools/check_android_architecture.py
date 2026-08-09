@@ -74,15 +74,31 @@ APP_MODULE = PROJECT_ROOT / "apps" / "android" / "app"
 # package-dir 一致性检查覆盖的源集（#602 评论#8 项8.2）。
 # 不能只扫 src/main：debug/release/test/androidTest/testAi/androidTestAi 各源集
 # 的 package 声明也必须与物理目录结构一致，否则重构会留下隐性错位。
-PACKAGE_SOURCE_ROOTS = (
-    APP_MODULE / "src/main/kotlin",
-    APP_MODULE / "src/debug/kotlin",
-    APP_MODULE / "src/release/kotlin",
-    APP_MODULE / "src/test/kotlin",
-    APP_MODULE / "src/androidTest/kotlin",
-    APP_MODULE / "src/testAi/kotlin",
-    APP_MODULE / "src/androidTestAi/kotlin",
-)
+# 源集根由 app_src 推导，configure(--app-src) 时同步更新（#602 评论#9 项9.3）。
+
+
+def package_source_roots_from_app_src(app_src: Path) -> tuple[Path, ...]:
+    """从 app 主源码根推导全部 Kotlin 源集根。
+
+    app_src 形态：<app>/src/main/kotlin/com/xiwei/sujian
+    app_module = app_src.parents[5]（即 <app>）。
+    """
+    app_module = app_src.parents[5]
+    return tuple(
+        app_module / "src" / source_set / "kotlin"
+        for source_set in (
+            "main",
+            "debug",
+            "release",
+            "test",
+            "androidTest",
+            "testAi",
+            "androidTestAi",
+        )
+    )
+
+
+PACKAGE_SOURCE_ROOTS = package_source_roots_from_app_src(DEFAULT_APP_SRC)
 
 APP_SRC = DEFAULT_APP_SRC
 DS_SRC = DEFAULT_DS_SRC
@@ -865,8 +881,9 @@ def configure(
     designsystem_module: Path | None = None,
 ) -> None:
     """设置扫描根目录（默认指向真实仓库，测试可指向临时夹具树）。"""
-    global APP_SRC, DS_SRC, DS_MODULE
+    global APP_SRC, DS_SRC, DS_MODULE, PACKAGE_SOURCE_ROOTS
     APP_SRC = app_src
+    PACKAGE_SOURCE_ROOTS = package_source_roots_from_app_src(app_src)
     DS_SRC = designsystem_src
     if designsystem_module is not None:
         DS_MODULE = designsystem_module

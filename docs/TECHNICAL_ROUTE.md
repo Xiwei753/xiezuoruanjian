@@ -16,11 +16,11 @@
 core/
   writer_core/            # 通用业务核心（rlib）
   writer_platform_api/    # 平台能力契约与初始化参数
-  writer_uniffi/          # UniFFI 对外入口与 cdylib 组装
+  writer_uniffi/          # UniFFI 稳定导出门面（rlib + uniffi-bindgen）
 
 platform/rust/
-  android/                # Android Rust 适配与最终 cdylib
-  linux/                  # Linux Rust 适配与最终库
+  android/                # Android 平台实现 + 最终 cdylib 组装
+  linux/                  # Linux 平台实现 + 最终 cdylib 组装
   harmony/                # HarmonyOS Rust 适配（预留）
   windows/                # Windows Rust 适配（预留）
   apple/                  # Apple Rust 适配（预留）
@@ -70,28 +70,34 @@ apps/android/
 │  └─ platform/            # Android 系统能力（窗口、折叠、输入设备、存储根）
 ```
 
-`:app` 内按拥有者组织 Kotlin package，package 与磁盘目录一致：
+三个 Gradle 模块各自拥有独立 Kotlin 源码根，package 与磁盘目录一致：
 
 ```text
-com.xiwei.sujian
-├─ app/                    # 应用壳
-│  ├─ di/                  # Application 级依赖装配
-│  ├─ state/               # 跨 feature 的活动状态门
-│  ├─ theme/               # 应用主题/动态色
-│  ├─ layout/              # 应用窗口布局策略
-│  ├─ navigation/          # 根导航与屏幕策略
-│  └─ debug/               # debug 源集专属
-├─ core/
-│  ├─ interop/             # Kotlin ↔ Rust/UniFFI 公共边界
-│  ├─ diagnostics/         # 跨功能诊断
-│  └─ platform/            # Android 平台能力（:core:platform 模块源码根）
-└─ feature/                # 功能特性
-   ├─ project/{ui,data,domain}/
-   ├─ editor/{ui,session,window,input,layout,pipeline,visual/{,planner/},motion,render,projection,platform,interop,diagnostics}/
-   ├─ settings/{ui,data}/
-   ├─ sync/{ui,data,work}/
-   ├─ stats/{ui,data}/
-   └─ starmap/{ui,data}/
+:app
+└─ com.xiwei.sujian/
+   ├─ app/                    # 应用壳
+   │  ├─ di/                  # Application 级依赖装配
+   │  ├─ state/               # 跨 feature 的活动状态门
+   │  ├─ theme/               # 应用主题/动态色
+   │  ├─ layout/              # 应用窗口布局策略
+   │  ├─ navigation/          # 根导航与屏幕策略
+   │  └─ debug/               # debug 源集专属
+   ├─ core/
+   │  ├─ interop/             # Kotlin ↔ Rust/UniFFI 公共边界
+   │  └─ diagnostics/         # 跨功能诊断
+   └─ feature/                # 功能特性
+      ├─ project/{ui,data,domain}/
+      ├─ editor/{ui,session,window,input,layout,pipeline,visual/{,planner/},motion,render,projection,platform,interop,diagnostics}/
+      ├─ settings/{ui,data}/
+      ├─ sync/{ui,data,work}/
+      ├─ stats/{ui,data}/
+      └─ starmap/{ui,data}/
+
+:core:designsystem
+└─ com.xiwei.sujian.core.designsystem/
+
+:core:platform
+└─ com.xiwei.sujian.core.platform/
 ```
 
 边界约束：
