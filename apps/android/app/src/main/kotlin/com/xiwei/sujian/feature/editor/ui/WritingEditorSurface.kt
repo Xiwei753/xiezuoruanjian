@@ -8,8 +8,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.xiwei.sujian.app.theme.EditorThemeAdapter
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
+import com.xiwei.sujian.feature.editor.ui.theme.EditorThemeAdapter
 import com.xiwei.sujian.feature.editor.window.EditorWindowHost
 
 /**

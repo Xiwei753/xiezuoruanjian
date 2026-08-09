@@ -817,7 +817,7 @@ class SujianEditorView
 
         fun isReduceMotionEnabled(): Boolean = reduceMotionEnabled
 
-        fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.app.theme.EditorThemeColors) {
+        fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.feature.editor.ui.theme.EditorThemeColors) {
             _themeBackgroundColor = colors.background
             textPaint.color = colors.text
             pipeline.setRendererThemeColors(

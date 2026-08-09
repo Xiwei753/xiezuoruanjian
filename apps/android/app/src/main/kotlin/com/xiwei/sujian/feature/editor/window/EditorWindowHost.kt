@@ -3,7 +3,6 @@ package com.xiwei.sujian.feature.editor.window
 import android.content.Context
 import android.graphics.Rect
 import android.util.Log
-import com.xiwei.sujian.app.theme.EditorThemeAdapter
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.feature.editor.interop.TextEditSessionBridge
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
@@ -40,6 +39,7 @@ import com.xiwei.sujian.feature.editor.session.detachWindowBinding
 import com.xiwei.sujian.feature.editor.session.prepareSessionForEdit
 import com.xiwei.sujian.feature.editor.session.releaseHost
 import com.xiwei.sujian.feature.editor.session.resetPersistentSession
+import com.xiwei.sujian.feature.editor.ui.theme.EditorThemeAdapter
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -669,7 +669,7 @@ class EditorWindowHost(
      */
     fun updateView(
         view: SujianEditorView,
-        themeColors: com.xiwei.sujian.app.theme.EditorThemeColors,
+        themeColors: com.xiwei.sujian.feature.editor.ui.theme.EditorThemeColors,
     ) {
         EditorThemeAdapter.applyToView(view, themeColors)
         view.visibility = android.view.View.VISIBLE
