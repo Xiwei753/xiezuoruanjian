@@ -1,11 +1,11 @@
 package com.xiwei.sujian.feature.starmap.data.interop
 
 import com.xiwei.sujian.feature.starmap.data.StarMapRawCache
-import com.xiwei.sujian.feature.starmap.model.StarMapData
-import com.xiwei.sujian.feature.starmap.model.StarMapGraphData
-import com.xiwei.sujian.feature.starmap.model.StarMapLayoutData
-import com.xiwei.sujian.feature.starmap.model.StarMapLayoutKind
-import com.xiwei.sujian.feature.starmap.model.StarMapPhasedSnapshotResult
+import com.xiwei.sujian.feature.starmap.data.model.StarMapData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapLayoutData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapLayoutKind
+import com.xiwei.sujian.feature.starmap.data.model.StarMapPhasedSnapshotResult
 import uniffi.writer_core.PhasedSnapshotRequestDto
 import uniffi.writer_core.StarMapGraphDto
 import uniffi.writer_core.StarMapPhasedSnapshotDto
@@ -75,7 +75,7 @@ internal fun StarMapPhasedSnapshotDto.toSnapshotResult(): StarMapPhasedSnapshotR
                     updatedAt = 0L,
                 ),
             layout = layoutData,
-            viewport = viewport?.toModel() ?: com.xiwei.sujian.feature.starmap.model.StarMapViewportData(),
+            viewport = viewport?.toModel() ?: com.xiwei.sujian.feature.starmap.data.model.StarMapViewportData(),
             embeds = embeds.map { it.toModel() },
             links = links.map { it.toModel() },
             hyperlinks = hyperlinks.map { it.toModel() },

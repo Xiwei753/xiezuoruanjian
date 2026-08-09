@@ -1,13 +1,13 @@
 package com.xiwei.sujian.feature.starmap.data.interop
 
-import com.xiwei.sujian.feature.starmap.model.StarMapAnchorData
-import com.xiwei.sujian.feature.starmap.model.StarMapDeepTargetData
-import com.xiwei.sujian.feature.starmap.model.StarMapDisplayPolicyData
-import com.xiwei.sujian.feature.starmap.model.StarMapGraphNode
-import com.xiwei.sujian.feature.starmap.model.StarMapPathSegmentData
-import com.xiwei.sujian.feature.starmap.model.StarMapPortalData
-import com.xiwei.sujian.feature.starmap.model.StarMapProvenanceData
-import com.xiwei.sujian.feature.starmap.model.StarMapTargetDetailData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapAnchorData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapDeepTargetData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapDisplayPolicyData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphNode
+import com.xiwei.sujian.feature.starmap.data.model.StarMapPathSegmentData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapPortalData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapProvenanceData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapTargetDetailData
 import uniffi.writer_core.StarMapAnchorDto
 import uniffi.writer_core.StarMapAnchorRoleDto
 import uniffi.writer_core.StarMapAnchorTargetDto

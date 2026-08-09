@@ -1,9 +1,9 @@
 package com.xiwei.sujian.feature.starmap.data.interop
 
 import com.xiwei.sujian.feature.starmap.data.StarMapRawCache
-import com.xiwei.sujian.feature.starmap.model.StarMapLayoutData
-import com.xiwei.sujian.feature.starmap.model.StarMapLayoutKind
-import com.xiwei.sujian.feature.starmap.model.StarMapLayoutNodeData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapLayoutData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapLayoutKind
+import com.xiwei.sujian.feature.starmap.data.model.StarMapLayoutNodeData
 import uniffi.writer_core.StarMapLayoutDto
 import uniffi.writer_core.StarMapLayoutKindDto
 import uniffi.writer_core.StarMapLayoutNodeDto

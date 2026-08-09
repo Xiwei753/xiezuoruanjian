@@ -1,9 +1,9 @@
 package com.xiwei.sujian.feature.starmap.data.interop
 
-import com.xiwei.sujian.feature.starmap.model.StarMapEdgeEndpointData
-import com.xiwei.sujian.feature.starmap.model.StarMapEndpointPathData
-import com.xiwei.sujian.feature.starmap.model.StarMapEndpointPathSegmentData
-import com.xiwei.sujian.feature.starmap.model.StarMapGraphEdge
+import com.xiwei.sujian.feature.starmap.data.model.StarMapEdgeEndpointData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapEndpointPathData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapEndpointPathSegmentData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphEdge
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgeEndpointDto
 import uniffi.writer_core.StarMapEndpointPathDto

@@ -1,4 +1,4 @@
-package com.xiwei.sujian.feature.starmap.model
+package com.xiwei.sujian.feature.starmap.data.model
 
 /**
  * StarMapModels — 星图数据模型

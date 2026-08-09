@@ -3,12 +3,12 @@ package com.xiwei.sujian.feature.starmap.data
 import com.xiwei.sujian.feature.starmap.data.interop.toGraphEdge
 import com.xiwei.sujian.feature.starmap.data.interop.toGraphNode
 import com.xiwei.sujian.feature.starmap.data.interop.toModel
-import com.xiwei.sujian.feature.starmap.model.StarMapData
-import com.xiwei.sujian.feature.starmap.model.StarMapGraphData
-import com.xiwei.sujian.feature.starmap.model.StarMapLayoutData
-import com.xiwei.sujian.feature.starmap.model.StarMapLayoutKind
-import com.xiwei.sujian.feature.starmap.model.StarMapPhasedSnapshotResult
-import com.xiwei.sujian.feature.starmap.model.StarMapViewportData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapLayoutData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapLayoutKind
+import com.xiwei.sujian.feature.starmap.data.model.StarMapPhasedSnapshotResult
+import com.xiwei.sujian.feature.starmap.data.model.StarMapViewportData
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapGraphDto
@@ -33,7 +33,7 @@ internal data class StarMapRawCache(
     var sinceRevision: ULong = 0u,
     var complete: Boolean = false,
     var viewport: StarMapViewportDto? = null,
-    var diagnostics: List<com.xiwei.sujian.feature.starmap.model.StarMapLoadDiagnostic> = emptyList(),
+    var diagnostics: List<com.xiwei.sujian.feature.starmap.data.model.StarMapLoadDiagnostic> = emptyList(),
     val deletedNodeIds: MutableSet<String> = mutableSetOf(),
     val deletedEdgeIds: MutableSet<String> = mutableSetOf(),
     val deletedEmbedIds: MutableSet<String> = mutableSetOf(),

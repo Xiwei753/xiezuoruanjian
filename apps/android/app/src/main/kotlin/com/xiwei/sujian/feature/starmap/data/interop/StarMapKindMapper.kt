@@ -1,7 +1,7 @@
 package com.xiwei.sujian.feature.starmap.data.interop
 
-import com.xiwei.sujian.feature.starmap.model.StarMapEdgeKind
-import com.xiwei.sujian.feature.starmap.model.StarMapNodeKind
+import com.xiwei.sujian.feature.starmap.data.model.StarMapEdgeKind
+import com.xiwei.sujian.feature.starmap.data.model.StarMapNodeKind
 import uniffi.writer_core.StarMapEdgeKindDto
 import uniffi.writer_core.StarMapNodeKindDto
 
