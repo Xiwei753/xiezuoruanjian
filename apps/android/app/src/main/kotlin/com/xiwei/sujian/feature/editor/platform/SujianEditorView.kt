@@ -271,19 +271,6 @@ class SujianEditorView
             }
         }
 
-        fun applyCompositionUpdate(
-            visualIntent: com.xiwei.sujian.feature.editor.projection.VisualIntent,
-            mirrorUpdate: (() -> Unit)? = null,
-        ) {
-            pipeline.applyCompositionUpdate(visualIntent, mirrorUpdate)
-            updateMaxScroll()
-            scrollY = scrollY.coerceIn(0f, maxScrollY)
-            invalidate()
-            if (pipeline.hasActiveAnimation()) {
-                requestAnimationFrame()
-            }
-        }
-
         fun getText(): String = pipeline.getText()
 
         fun setFontSize(sizeSp: Float) {

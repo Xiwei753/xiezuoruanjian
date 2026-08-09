@@ -362,29 +362,6 @@ class AndroidEditorPipeline private constructor(
     }
 
     /**
-     * Apply a composition update using a caller-constructed [VisualIntent].
-     *
-     * This is the low-level entry point used when the caller (typically the input adapter)
-     * has already constructed the appropriate [VisualIntent] — e.g. when Rust provides the
-     * visual intent directly. For the common case where the platform constructs its own
-     * [VisualIntent] based on old/new preedit text, use [applyCompositionUpdateAnimated]
-     * instead, which handles visual-same suppression and animation mode selection.
-     */
-    fun applyCompositionUpdate(
-        visualIntent: VisualIntent,
-        mirrorUpdate: (() -> Unit)? = null,
-    ) {
-        visualRuntime.prepareAndSubmit(
-            visualIntent = visualIntent,
-            layoutEngine = layoutRuntime.layoutEngine,
-            mirrorUpdate = {
-                mirrorUpdate?.invoke()
-                layoutRuntime.rebuildDisplayProjection()
-            },
-        )
-    }
-
-    /**
      * Apply a composition update by consuming the Core-returned [VisualIntent] directly.
      *
      * #606: Core's `classify_composition_visual` now determines visual-same suppression,
