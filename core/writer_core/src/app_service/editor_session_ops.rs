@@ -1,6 +1,5 @@
 use crate::api::{
     EditorEditOutcomeDto, EditorEditResultDto, EditorSessionSnapshotDto, EditorTransactionCauseDto,
-    EditorVisualIntentDto,
 };
 
 use super::EditorSession;
@@ -169,37 +168,6 @@ impl super::WriterAppService {
             s.generation = s.generation.saturating_add(1);
             let result = s.kernel.load_text(text, offset.value());
             result.into_result().into()
-        })
-    }
-
-    pub fn editor_kernel_composition_update_visual_intent(
-        &self,
-        composition_replace_start: u32,
-        composition_replace_end_exclusive: u32,
-        old_preedit_text: String,
-        new_preedit_text: String,
-    ) -> EditorVisualIntentDto {
-        use crate::editor::strong_types::Utf8ByteRange;
-        self.with_session(|s| {
-            let current_text = s.kernel.text();
-            let replace_range = if composition_replace_start < composition_replace_end_exclusive {
-                match Utf8ByteRange::try_new(
-                    current_text,
-                    composition_replace_start as usize,
-                    composition_replace_end_exclusive as usize,
-                ) {
-                    Ok(r) => Some((r.start().value(), r.end().value())),
-                    Err(_) => None,
-                }
-            } else {
-                None
-            };
-            let intent = s.kernel.composition_update_visual_intent(
-                replace_range,
-                &old_preedit_text,
-                &new_preedit_text,
-            );
-            intent.into()
         })
     }
 
@@ -490,7 +458,7 @@ impl super::WriterAppService {
     pub fn editor_kernel_insert_line_break(
         &self,
         byte_offset: u32,
-        auto_indent_prefix: String,
+        auto_indent_enabled: u8,
         cause: EditorTransactionCauseDto,
         expected_revision: u64,
     ) -> EditorEditResultDto {
@@ -505,7 +473,7 @@ impl super::WriterAppService {
             };
             let result = s.kernel.apply(EditorCommand::InsertLineBreak {
                 byte_offset: offset,
-                auto_indent_prefix,
+                auto_indent_enabled: auto_indent_enabled != 0,
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
             });

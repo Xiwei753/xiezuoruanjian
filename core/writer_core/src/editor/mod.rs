@@ -30,14 +30,15 @@ pub use strong_types::{
 pub use text_edit_session::{TextEditSession, TextEditSessionId, TextEditSessionRegistry};
 
 pub use transaction::{
-    build_virtual_text, choose_animation_mode, classify_visual_diff, compute_rebase,
-    count_grapheme_clusters, diff_plain_text, is_cjk_code_point, is_combining_code_point,
-    is_complex_grapheme_code_point, split_text_into_clusters, split_text_into_runs,
-    text_contains_complex_grapheme, transactions_overlap, AnimatedSliceRole, AnimationMode,
-    CaretAffinity, ClusterRect, ClusterRun, CompositionCommitOrCancelTransaction,
-    CompositionSession, CompositionUpdateTransaction, CompositionVisualRevision, CursorPath,
-    CursorRect, DecorationSlice, DecorationSliceKind, EditorAnimationKind, EditorChange,
-    EditorCursor, EditorEngine, EditorSelection, EditorTransaction, EditorTransactionCause,
+    build_virtual_text, choose_animation_mode, classify_composition_visual, classify_visual_diff,
+    compute_rebase, count_grapheme_clusters, diff_plain_text, is_cjk_code_point,
+    is_combining_code_point, is_complex_grapheme_code_point, split_text_into_clusters,
+    split_text_into_runs, text_contains_complex_grapheme, transactions_overlap, AnimatedSliceRole,
+    AnimationMode, CaretAffinity, ClusterRect, ClusterRun, CompositionCommitOrCancelTransaction,
+    CompositionOperationKind, CompositionSession, CompositionUpdateTransaction,
+    CompositionVisualClassification, CompositionVisualRevision, CursorPath, CursorRect,
+    DecorationSlice, DecorationSliceKind, EditorAnimationKind, EditorChange, EditorCursor,
+    EditorEngine, EditorSelection, EditorTransaction, EditorTransactionCause,
     EditorVisualTransaction, GlyphRect, HiddenVisualRange, OffsetMap, OffsetMapEntry,
     OffsetMapKind, PlatformVisualTransaction, PlatformVisualTransactionState, PreeditTextFormat,
     PreeditVisualTransaction, RebaseFrameSnapshot, Rect, ReflowGlyphRect, SnapshotOwner,

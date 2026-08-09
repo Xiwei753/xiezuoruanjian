@@ -100,6 +100,11 @@ class EditPipelineTest {
 
     @Test
     fun insertLineBreakReturnsNullWithoutBridge() {
-        assertNull(pipeline.insertLineBreak(0, ""))
+        assertNull(pipeline.insertLineBreak(0, false))
+    }
+
+    @Test
+    fun insertLineBreakWithAutoIndentEnabledReturnsNullWithoutBridge() {
+        assertNull(pipeline.insertLineBreak(0, true))
     }
 }

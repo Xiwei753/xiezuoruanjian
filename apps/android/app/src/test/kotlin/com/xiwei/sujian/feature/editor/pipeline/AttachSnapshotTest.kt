@@ -11,7 +11,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import uniffi.writer_core.EditorEditResultDto
 import uniffi.writer_core.EditorTransactionCauseDto
-import uniffi.writer_core.EditorVisualIntentDto
 
 /**
  * #592 一：attachSnapshot 契约测试。
@@ -120,13 +119,6 @@ class AttachSnapshotTest {
             expectedRevision: Long,
         ): EditorEditResultDto? = null
 
-        override fun compositionUpdateVisualIntent(
-            compositionReplaceStart: UInt,
-            compositionReplaceEndExclusive: UInt,
-            oldPreeditText: String,
-            newPreeditText: String,
-        ): EditorVisualIntentDto? = null
-
         override fun setAnimationEnabled(enabled: Boolean) { }
 
         override fun setAnimationDurationMs(durationMs: Long) { }
@@ -139,7 +131,7 @@ class AttachSnapshotTest {
 
         override fun insertLineBreak(
             byteOffset: Int,
-            autoIndentPrefix: String,
+            autoIndentEnabled: Boolean,
             cause: EditorTransactionCauseDto,
             expectedRevision: Long,
         ): EditorEditResultDto? = null

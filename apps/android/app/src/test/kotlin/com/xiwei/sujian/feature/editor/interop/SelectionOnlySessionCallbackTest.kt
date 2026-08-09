@@ -167,13 +167,6 @@ class SelectionOnlySessionCallbackTest {
             expectedRevision: Long,
         ): EditorEditResultDto? = null
 
-        override fun compositionUpdateVisualIntent(
-            compositionReplaceStart: UInt,
-            compositionReplaceEndExclusive: UInt,
-            oldPreeditText: String,
-            newPreeditText: String,
-        ): EditorVisualIntentDto? = null
-
         override fun setAnimationEnabled(enabled: Boolean) { }
 
         override fun setAnimationDurationMs(durationMs: Long) { }
@@ -186,7 +179,7 @@ class SelectionOnlySessionCallbackTest {
 
         override fun insertLineBreak(
             byteOffset: Int,
-            autoIndentPrefix: String,
+            autoIndentEnabled: Boolean,
             cause: EditorTransactionCauseDto,
             expectedRevision: Long,
         ): EditorEditResultDto? = null

@@ -1303,7 +1303,6 @@ interface WriterAppService {
     EditorEditResultDto editor_kernel_undo(u64 expected_revision);
     EditorEditResultDto editor_kernel_redo(u64 expected_revision);
     EditorEditResultDto editor_kernel_load_text(string text, u32 cursor_byte_offset);
-     EditorVisualIntentDto editor_kernel_composition_update_visual_intent(u32 composition_replace_start, u32 composition_replace_end_exclusive, string old_preedit_text, string new_preedit_text);
      EditorEditResultDto editor_kernel_commit_text(u32 byte_start, u32 byte_end_exclusive, string replacement_text, u32 resulting_selection_anchor, u32 resulting_selection_head, u64 composition_session_id, u64 composition_base_revision, u64 composition_generation, EditorTransactionCauseDto cause, u64 expected_revision);
     EditorEditResultDto editor_kernel_delete_surrounding(u32 before_byte_start, u32 before_byte_end_exclusive, u32 after_byte_start, u32 after_byte_end_exclusive, EditorTransactionCauseDto cause, u64 expected_revision);
     EditorEditResultDto editor_kernel_begin_composition(u32 replace_start, u32 replace_end_exclusive, u64 expected_revision);
@@ -1318,7 +1317,7 @@ interface WriterAppService {
     u32 editor_kernel_get_selection_anchor();
     EditorSessionSnapshotDto editor_kernel_session_snapshot();
     EditorEditResultDto editor_kernel_replace_all(string search, string replacement, u64 expected_revision);
-    EditorEditResultDto editor_kernel_insert_line_break(u32 byte_offset, string auto_indent_prefix, EditorTransactionCauseDto cause, u64 expected_revision);
+    EditorEditResultDto editor_kernel_insert_line_break(u32 byte_offset, u8 auto_indent_enabled, EditorTransactionCauseDto cause, u64 expected_revision);
 
     // ── #541: Text Edit Session API ──
 
@@ -1332,7 +1331,6 @@ interface WriterAppService {
     EditorEditResultDto text_edit_session_undo(u64 session_id, u64 expected_revision);
     EditorEditResultDto text_edit_session_redo(u64 session_id, u64 expected_revision);
     EditorEditResultDto text_edit_session_load_text(u64 session_id, string text, u32 cursor_byte_offset);
-    EditorVisualIntentDto text_edit_session_composition_update_visual_intent(u64 session_id, u32 composition_replace_start, u32 composition_replace_end_exclusive, string old_preedit_text, string new_preedit_text);
     EditorEditResultDto text_edit_session_commit_text(u64 session_id, u32 byte_start, u32 byte_end_exclusive, string replacement_text, u32 resulting_selection_anchor, u32 resulting_selection_head, u64 composition_session_id, u64 composition_base_revision, u64 composition_generation, EditorTransactionCauseDto cause, u64 expected_revision);
     EditorEditResultDto text_edit_session_delete_surrounding(u64 session_id, u32 before_byte_start, u32 before_byte_end_exclusive, u32 after_byte_start, u32 after_byte_end_exclusive, EditorTransactionCauseDto cause, u64 expected_revision);
     EditorEditResultDto text_edit_session_begin_composition(u64 session_id, u32 replace_start, u32 replace_end_exclusive, u64 expected_revision);
@@ -1345,7 +1343,7 @@ interface WriterAppService {
     u64 text_edit_session_get_revision(u64 session_id);
     EditorSessionSnapshotDto text_edit_session_snapshot(u64 session_id);
     EditorEditResultDto text_edit_session_replace_all(u64 session_id, string search, string replacement, u64 expected_revision);
-    EditorEditResultDto text_edit_session_insert_line_break(u64 session_id, u32 byte_offset, string auto_indent_prefix, EditorTransactionCauseDto cause, u64 expected_revision);
+    EditorEditResultDto text_edit_session_insert_line_break(u64 session_id, u32 byte_offset, u8 auto_indent_enabled, EditorTransactionCauseDto cause, u64 expected_revision);
 
     // ── Search Index ──
 

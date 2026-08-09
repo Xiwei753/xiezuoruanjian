@@ -32,8 +32,9 @@ pub use rebase::{RebaseFrameSnapshot, SnapshotOwner, TransactionCancelReason, Tr
 pub use platform::PlatformVisualTransaction;
 
 pub use engine::{
-    choose_animation_mode, classify_visual_diff, compute_rebase, count_grapheme_clusters,
-    diff_plain_text, is_cjk_code_point, is_combining_code_point, is_complex_grapheme_code_point,
-    split_text_into_clusters, split_text_into_runs, text_contains_complex_grapheme,
-    transactions_overlap, EditorEngine,
+    choose_animation_mode, classify_composition_visual, classify_visual_diff, compute_rebase,
+    count_grapheme_clusters, diff_plain_text, is_cjk_code_point, is_combining_code_point,
+    is_complex_grapheme_code_point, split_text_into_clusters, split_text_into_runs,
+    text_contains_complex_grapheme, transactions_overlap, CompositionOperationKind,
+    CompositionVisualClassification, EditorEngine,
 };

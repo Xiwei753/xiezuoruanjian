@@ -100,6 +100,30 @@ data class VisualIntent(
     fun isCompositionCancel(): Boolean = operationKind == EditorOperationKindDto.COMPOSITION_CANCEL
 
     fun isCursorOnly(): Boolean = operationKind == EditorOperationKindDto.CURSOR_ONLY
+
+    /**
+     * #606: Rendering-role helpers — dispatch the planner into the correct slice-generation
+     * path based on Core's [operationKind]. These are NOT local re-classification; they
+     * consume Core's classification to select the Android rendering path:
+     * - INSERT → insert slice path (reveal new clusters)
+     * - DELETE, COMPOSITION_CANCEL → delete slice path (swallow old clusters)
+     * - REPLACE, COMPOSITION_COMMIT, COMPOSITION_UPDATE → replace slice path (match old↔new)
+     */
+    fun isInsertRenderRole(): Boolean = isInsert()
+
+    fun isDeleteRenderRole(): Boolean = isDelete() || isCompositionCancel()
+
+    fun isReplaceRenderRole(): Boolean = isReplace() || isCompositionCommit() || isCompositionUpdate()
+
+    /**
+     * Whether this edit removes or replaces existing text (vs pure insert/cursor-only).
+     * Used by [AffectedLayoutPlanner] to include the next paragraph in affected lines
+     * (delete/replace can cause the next paragraph to shift up). Consumes Core's
+     * [operationKind] — not a local re-classification.
+     */
+    fun isDeleteOrReplaceRenderRole(): Boolean =
+        isDelete() || isReplace() || isCompositionCancel() || isCompositionCommit() ||
+            isCompositionUpdate()
 }
 
 data class CoordinatedCursor(

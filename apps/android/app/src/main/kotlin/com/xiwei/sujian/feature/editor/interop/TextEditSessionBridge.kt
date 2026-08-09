@@ -5,7 +5,6 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
 import uniffi.writer_core.EditorEditResultDto
 import uniffi.writer_core.EditorSessionSnapshotDto
 import uniffi.writer_core.EditorTransactionCauseDto
-import uniffi.writer_core.EditorVisualIntentDto
 
 /**
  * Session-scoped [EditorKernelBridge] that routes all commands through
@@ -277,29 +276,6 @@ class TextEditSessionBridge(
         appServiceBridge.textEditSessionSetAnimationDurationMs(sessionId, durationMs.toULong())
     }
 
-    override fun compositionUpdateVisualIntent(
-        // UInt parameters (not Int like other methods) because these byte offsets go
-        // directly to the FFI boundary without signed arithmetic on the Kotlin side.
-        compositionReplaceStart: UInt,
-        compositionReplaceEndExclusive: UInt,
-        oldPreeditText: String,
-        newPreeditText: String,
-    ): EditorVisualIntentDto? {
-        return when (
-            val result =
-                appServiceBridge.textEditSessionCompositionUpdateVisualIntent(
-                    sessionId,
-                    compositionReplaceStart,
-                    compositionReplaceEndExclusive,
-                    oldPreeditText,
-                    newPreeditText,
-                )
-        ) {
-            is BridgeResult.Success -> result.data
-            else -> null
-        }
-    }
-
     override fun sessionSnapshot(): EditorSessionSnapshotDto? {
         return when (val result = appServiceBridge.textEditSessionSnapshot(sessionId)) {
             is BridgeResult.Success -> result.data
@@ -328,7 +304,7 @@ class TextEditSessionBridge(
 
     override fun insertLineBreak(
         byteOffset: Int,
-        autoIndentPrefix: String,
+        autoIndentEnabled: Boolean,
         cause: EditorTransactionCauseDto,
         expectedRevision: Long,
     ): EditorEditResultDto? {
@@ -337,7 +313,7 @@ class TextEditSessionBridge(
                 appServiceBridge.textEditSessionInsertLineBreak(
                     sessionId,
                     byteOffset.toUInt(),
-                    autoIndentPrefix,
+                    if (autoIndentEnabled) 1u else 0u,
                     cause,
                     expectedRevision.toULong(),
                 )

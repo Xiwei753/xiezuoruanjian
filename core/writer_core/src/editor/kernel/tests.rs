@@ -653,39 +653,6 @@ mod tests {
     }
 
     #[test]
-    fn composition_update_visual_intent_returns_correct_intent() {
-        let kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
-        let intent = kernel.composition_update_visual_intent(None, "", "nihao");
-        assert_eq!(intent.cause, EditorTransactionCause::ImeComposition);
-        assert_eq!(
-            intent.operation_kind,
-            EditorOperationKind::CompositionUpdate
-        );
-        assert_eq!(intent.animation_mode, AnimationMode::GlyphAnimation);
-        assert_eq!(intent.duration_ms, 80);
-        assert!(intent.coordinated_cursor.should_animate);
-        assert!(!intent.new_affected_byte_ranges.is_empty());
-    }
-
-    #[test]
-    fn composition_update_visual_intent_with_replace_range() {
-        let kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
-        let intent = kernel.composition_update_visual_intent(Some((6, 12)), "世界", "朋友");
-        assert_eq!(
-            intent.operation_kind,
-            EditorOperationKind::CompositionUpdate
-        );
-        assert_eq!(
-            intent.old_affected_byte_ranges,
-            vec![Utf8ByteRange::from_ordered(6, 12)]
-        );
-        assert_eq!(
-            intent.new_affected_byte_ranges,
-            vec![Utf8ByteRange::from_ordered(6, 12)]
-        );
-    }
-
-    #[test]
     fn compute_single_patch_cjk_replace() {
         let (range, inserted) = EditorKernel::compute_single_patch("你好", "你坏");
         assert_eq!(range.start().value(), 3);
@@ -1368,5 +1335,257 @@ mod tests {
             EditorOperationKind::Replace
         );
         assert_eq!(kernel.text(), "AXYE");
+    }
+
+    // #606: auto-indent 测试
+
+    #[test]
+    fn insert_line_break_with_auto_indent_copies_leading_whitespace() {
+        let mut kernel = EditorKernel::with_text("    hello".to_string(), 9).unwrap();
+        let result = kernel
+            .apply(EditorCommand::InsertLineBreak {
+                byte_offset: Utf8ByteOffset::unchecked(9),
+                auto_indent_enabled: true,
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(kernel.text(), "    hello\n    ");
+        assert_eq!(kernel.cursor(), 14);
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::Insert
+        );
+    }
+
+    #[test]
+    fn insert_line_break_with_auto_indent_copies_tab_indent() {
+        let mut kernel = EditorKernel::with_text("\t\thello".to_string(), 7).unwrap();
+        let _result = kernel
+            .apply(EditorCommand::InsertLineBreak {
+                byte_offset: Utf8ByteOffset::unchecked(7),
+                auto_indent_enabled: true,
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(kernel.text(), "\t\thello\n\t\t");
+    }
+
+    #[test]
+    fn insert_line_break_without_auto_indent_inserts_only_newline() {
+        let mut kernel = EditorKernel::with_text("    hello".to_string(), 9).unwrap();
+        let _result = kernel
+            .apply(EditorCommand::InsertLineBreak {
+                byte_offset: Utf8ByteOffset::unchecked(9),
+                auto_indent_enabled: false,
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(kernel.text(), "    hello\n");
+    }
+
+    #[test]
+    fn insert_line_break_auto_indent_no_leading_whitespace() {
+        let mut kernel = EditorKernel::with_text("hello".to_string(), 5).unwrap();
+        let _result = kernel
+            .apply(EditorCommand::InsertLineBreak {
+                byte_offset: Utf8ByteOffset::unchecked(5),
+                auto_indent_enabled: true,
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(kernel.text(), "hello\n");
+    }
+
+    #[test]
+    fn insert_line_break_auto_indent_mid_line() {
+        let mut kernel = EditorKernel::with_text("  hello world".to_string(), 7).unwrap();
+        let _result = kernel
+            .apply(EditorCommand::InsertLineBreak {
+                byte_offset: Utf8ByteOffset::unchecked(7),
+                auto_indent_enabled: true,
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(kernel.text(), "  hello\n   world");
+    }
+
+    #[test]
+    fn insert_line_break_auto_indent_multiline() {
+        let text = "first\n    second".to_string();
+        let cursor = text.len();
+        let mut kernel = EditorKernel::with_text(text, cursor).unwrap();
+        let _result = kernel
+            .apply(EditorCommand::InsertLineBreak {
+                byte_offset: Utf8ByteOffset::unchecked(cursor),
+                auto_indent_enabled: true,
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(kernel.text(), "first\n    second\n    ");
+    }
+
+    #[test]
+    fn insert_line_break_auto_indent_utf8_safe() {
+        let text = "  你好世界".to_string();
+        let cursor = text.len();
+        let mut kernel = EditorKernel::with_text(text, cursor).unwrap();
+        let _result = kernel
+            .apply(EditorCommand::InsertLineBreak {
+                byte_offset: Utf8ByteOffset::unchecked(cursor),
+                auto_indent_enabled: true,
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(kernel.text(), "  你好世界\n  ");
+    }
+
+    #[test]
+    fn insert_line_break_auto_indent_utf8_no_indent_after_cjk() {
+        let text = "你好  world".to_string();
+        let cursor = text.len();
+        let mut kernel = EditorKernel::with_text(text, cursor).unwrap();
+        let _result = kernel
+            .apply(EditorCommand::InsertLineBreak {
+                byte_offset: Utf8ByteOffset::unchecked(cursor),
+                auto_indent_enabled: true,
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(kernel.text(), "你好  world\n");
+    }
+
+    #[test]
+    fn insert_line_break_auto_indent_mixed_space_and_tab() {
+        let text = "  \t  hello".to_string();
+        let cursor = text.len();
+        let mut kernel = EditorKernel::with_text(text, cursor).unwrap();
+        let _result = kernel
+            .apply(EditorCommand::InsertLineBreak {
+                byte_offset: Utf8ByteOffset::unchecked(cursor),
+                auto_indent_enabled: true,
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(kernel.text(), "  \t  hello\n  \t  ");
+    }
+
+    #[test]
+    fn insert_line_break_auto_indent_undo_restores_text() {
+        let mut kernel = EditorKernel::with_text("    hello".to_string(), 9).unwrap();
+        let _ = kernel
+            .apply(EditorCommand::InsertLineBreak {
+                byte_offset: Utf8ByteOffset::unchecked(9),
+                auto_indent_enabled: true,
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(kernel.text(), "    hello\n    ");
+        let _ = kernel
+            .apply(EditorCommand::Undo {
+                expected_revision: EditorRevision::new(1),
+            })
+            .into_result();
+        assert_eq!(kernel.text(), "    hello");
+    }
+
+    // #606: composition 视觉分类通过共享逻辑确定
+
+    #[test]
+    fn composition_update_visual_intent_uses_shared_classification() {
+        let mut kernel = EditorKernel::with_text("hello".to_string(), 5).unwrap();
+        let _ = kernel.apply(EditorCommand::BeginComposition {
+            replace_range: Utf8ByteRange::point(5),
+            expected_revision: EditorRevision::new(0),
+        });
+        let (session_id, _, generation) = kernel.composition_session_info().unwrap();
+        let result = kernel
+            .apply(EditorCommand::UpdateComposition {
+                composition_session_id: EditorSessionId::new(session_id),
+                composition_generation: EditorSessionGeneration::new(generation),
+                new_preedit_text: "n".to_string(),
+                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(1),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::CompositionUpdate
+        );
+        assert_eq!(
+            result.visual_intent.animation_mode,
+            AnimationMode::GlyphAnimation
+        );
+        assert!(!result.visual_intent.new_affected_byte_ranges.is_empty());
+    }
+
+    #[test]
+    fn composition_cancel_visual_intent_uses_shared_classification() {
+        let mut kernel = EditorKernel::with_text("hello".to_string(), 5).unwrap();
+        let _ = kernel.apply(EditorCommand::BeginComposition {
+            replace_range: Utf8ByteRange::point(5),
+            expected_revision: EditorRevision::new(0),
+        });
+        let (session_id, _, generation) = kernel.composition_session_info().unwrap();
+        let _ = kernel.apply(EditorCommand::UpdateComposition {
+            composition_session_id: EditorSessionId::new(session_id),
+            composition_generation: EditorSessionGeneration::new(generation),
+            new_preedit_text: "nihao".to_string(),
+            new_preedit_cursor_offset: Utf8ByteOffset::unchecked(5),
+            expected_revision: EditorRevision::new(0),
+        });
+        let (_, _, gen2) = kernel.composition_session_info().unwrap();
+        let result = kernel
+            .apply(EditorCommand::CancelComposition {
+                composition_session_id: EditorSessionId::new(session_id),
+                composition_generation: EditorSessionGeneration::new(gen2),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::CompositionCancel
+        );
+        assert!(!result.visual_intent.old_affected_byte_ranges.is_empty());
+        assert!(result.visual_intent.new_affected_byte_ranges.is_empty());
+    }
+
+    #[test]
+    fn composition_finish_visual_intent_uses_shared_classification() {
+        let mut kernel = EditorKernel::with_text("hello".to_string(), 5).unwrap();
+        let _ = kernel.apply(EditorCommand::BeginComposition {
+            replace_range: Utf8ByteRange::point(5),
+            expected_revision: EditorRevision::new(0),
+        });
+        let (session_id, _, generation) = kernel.composition_session_info().unwrap();
+        let _ = kernel.apply(EditorCommand::UpdateComposition {
+            composition_session_id: EditorSessionId::new(session_id),
+            composition_generation: EditorSessionGeneration::new(generation),
+            new_preedit_text: " world".to_string(),
+            new_preedit_cursor_offset: Utf8ByteOffset::unchecked(6),
+            expected_revision: EditorRevision::new(0),
+        });
+        let (_, _, gen2) = kernel.composition_session_info().unwrap();
+        let result = kernel
+            .apply(EditorCommand::FinishComposition {
+                composition_session_id: EditorSessionId::new(session_id),
+                composition_generation: EditorSessionGeneration::new(gen2),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::CompositionCommit
+        );
+        assert_eq!(kernel.text(), "hello world");
     }
 }

@@ -98,13 +98,6 @@ interface EditorKernelBridge {
         expectedRevision: Long,
     ): uniffi.writer_core.EditorEditResultDto?
 
-    fun compositionUpdateVisualIntent(
-        compositionReplaceStart: UInt,
-        compositionReplaceEndExclusive: UInt,
-        oldPreeditText: String,
-        newPreeditText: String,
-    ): uniffi.writer_core.EditorVisualIntentDto?
-
     fun setAnimationEnabled(enabled: Boolean)
 
     fun setAnimationDurationMs(durationMs: Long)
@@ -117,7 +110,7 @@ interface EditorKernelBridge {
 
     fun insertLineBreak(
         byteOffset: Int,
-        autoIndentPrefix: String,
+        autoIndentEnabled: Boolean,
         cause: uniffi.writer_core.EditorTransactionCauseDto,
         expectedRevision: Long,
     ): uniffi.writer_core.EditorEditResultDto?

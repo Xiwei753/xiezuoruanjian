@@ -1,6 +1,5 @@
 use crate::api::{
     EditorEditOutcomeDto, EditorEditResultDto, EditorSessionSnapshotDto, EditorTransactionCauseDto,
-    EditorVisualIntentDto,
 };
 
 impl super::WriterAppService {
@@ -487,33 +486,6 @@ impl super::WriterAppService {
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
 
-    pub fn text_edit_session_composition_update_visual_intent(
-        &self,
-        session_id: u64,
-        composition_replace_start: u32,
-        composition_replace_end_exclusive: u32,
-        old_preedit_text: String,
-        new_preedit_text: String,
-    ) -> EditorVisualIntentDto {
-        self.with_session_in_registry(session_id, |s| {
-            let replace_range = if composition_replace_start < composition_replace_end_exclusive {
-                Some((
-                    composition_replace_start as usize,
-                    composition_replace_end_exclusive as usize,
-                ))
-            } else {
-                None
-            };
-            let intent = s.kernel.composition_update_visual_intent(
-                replace_range,
-                &old_preedit_text,
-                &new_preedit_text,
-            );
-            intent.into()
-        })
-        .unwrap_or_else(EditorVisualIntentDto::default_fallback)
-    }
-
     pub fn text_edit_session_set_animation_enabled(&self, session_id: u64, enabled: u8) {
         self.with_session_in_registry(session_id, |s| {
             s.kernel.set_animation_enabled(enabled != 0);
@@ -580,7 +552,7 @@ impl super::WriterAppService {
         &self,
         session_id: u64,
         byte_offset: u32,
-        auto_indent_prefix: String,
+        auto_indent_enabled: u8,
         cause: EditorTransactionCauseDto,
         expected_revision: u64,
     ) -> EditorEditResultDto {
@@ -595,7 +567,7 @@ impl super::WriterAppService {
             };
             let result = s.kernel.apply(EditorCommand::InsertLineBreak {
                 byte_offset: offset,
-                auto_indent_prefix,
+                auto_indent_enabled: auto_indent_enabled != 0,
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
             });

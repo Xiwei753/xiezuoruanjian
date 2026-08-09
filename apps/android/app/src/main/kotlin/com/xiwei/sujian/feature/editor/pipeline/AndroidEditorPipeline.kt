@@ -5,7 +5,6 @@ import android.text.TextPaint
 import com.xiwei.sujian.feature.editor.interop.EditorKernelBridge
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutEngine
 import com.xiwei.sujian.feature.editor.platform.EditorEditSource
-import com.xiwei.sujian.feature.editor.projection.CoordinatedCursor
 import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import com.xiwei.sujian.feature.editor.projection.DisplayTextProjection
 import com.xiwei.sujian.feature.editor.projection.EditResult
@@ -89,6 +88,15 @@ class AndroidEditorPipeline private constructor(
     private var typingAnimationDurationMs: Long = 200L
 
     /**
+     * #606: Core-returned visual intent for the most recent composition update/finish/cancel.
+     * Set by [updateComposition]/[finishComposition]/[cancelComposition] and consumed by
+     * [applyCompositionUpdateAnimated]/[applyCompositionCancelAnimated]. This is the single
+     * source of truth for composition visual semantics — the platform no longer reconstructs
+     * a VisualIntent from preedit text.
+     */
+    private var pendingCompositionVisualIntent: VisualIntent? = null
+
+    /**
      * 打字动画时长（生产路径：设置 → Editor Host → 输入事务）。
      * 平台侧构造的 composition 事务（update/commit/cancel）使用该时长，
      * 与 Rust kernel 的 setAnimationDurationMs 保持一致。
@@ -160,10 +168,9 @@ class AndroidEditorPipeline private constructor(
         text: String,
         cause: EditorTransactionCauseDto,
     ): PipelineOutput {
-        if (autoIndentEnabled && text == "\n") {
-            val indentPrefix = computeAutoIndentPrefix()
+        if (text == "\n") {
             val result =
-                editPipeline.insertLineBreak(byteOffset, indentPrefix, cause)
+                editPipeline.insertLineBreak(byteOffset, autoIndentEnabled, cause)
                     ?: return PipelineOutput.StaleOrInvalid
             return applyEditResult(result)
         }
@@ -235,130 +242,24 @@ class AndroidEditorPipeline private constructor(
     }
 
     /**
-     * Apply a composition commit with platform-side VisualIntent override.
+     * Apply a composition commit by consuming the Core-returned [VisualIntent] directly.
      *
-     * The Rust kernel returns a VisualIntent tailored for the raw edit, but the platform
-     * must adjust it for two reasons:
+     * #606: Core now classifies composition operations (visual-same suppression, animation
+     * mode selection, operationKind, old/new affected ranges) via its shared
+     * `classify_composition_visual` function. The platform no longer re-computes these
+     * — it just applies the edit result and feeds Core's visualIntent into the animation
+     * pipeline.
      *
-     * 1. **Visual-same suppression**: when the committed text is identical to the old
-     *    preedit (e.g. IME confirms the same candidate), the visual text has not changed,
-     *    so all text animation is suppressed (SYSTEM_SUPPRESSED) — only the cursor animates.
-     *    This avoids a spurious fade-out + fade-in of unchanged text.
-     *
-     * 2. **Animation mode re-evaluation**: when Rust returns SYSTEM_SUPPRESSED but the
-     *    platform detects actual byte-level changes, the animation mode is re-selected
-     *    based on byte count (glyph/cluster/run) so the commit still animates properly.
-     *    The operationKind is overridden to COMPOSITION_COMMIT to route into the replace
-     *    animation path (which supports old→new matching via fingerprint).
-     *
-     * All byte ranges use half-open intervals [start, end).
+     * The [preeditText] parameter is retained for the InputConnection adapter API but is
+     * no longer used to override Core's visual classification.
      */
     override fun applyCompositionCommit(
         dto: uniffi.writer_core.EditorEditResultDto,
-        preeditText: String,
+        @Suppress("UNUSED_PARAMETER") preeditText: String,
     ): PipelineOutput {
         val result = EditResult.fromDto(dto)
-        val rustOldAffected = result.visualIntent.oldAffectedByteRanges
-        val rustNewAffected = result.visualIntent.newAffectedByteRanges
-
-        val committedText = result.displayPatches.firstOrNull()?.insertedText ?: ""
-        val replaceStart =
-            rustOldAffected.firstOrNull()?.first
-                ?: rustNewAffected.firstOrNull()?.first
-                ?: 0
-
-        val preeditByteLen = preeditText.toByteArray(Charsets.UTF_8).size
-        val committedByteLen = committedText.toByteArray(Charsets.UTF_8).size
-
-        val oldAffected =
-            if (preeditByteLen > 0) {
-                listOf(Pair(replaceStart, replaceStart + preeditByteLen))
-            } else {
-                rustOldAffected
-            }
-        val newAffected =
-            if (committedByteLen > 0) {
-                listOf(Pair(replaceStart, replaceStart + committedByteLen))
-            } else {
-                rustNewAffected
-            }
-
-        val isVisualSame = preeditText.isNotEmpty() && preeditText == committedText
-        if (isVisualSame) {
-            val suppressedIntent =
-                VisualIntent(
-                    cause = result.visualIntent.cause,
-                    operationKind = result.visualIntent.operationKind,
-                    oldAffectedByteRanges = oldAffected,
-                    newAffectedByteRanges = newAffected,
-                    animationMode = uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED,
-                    durationMs = 0L,
-                    coordinatedCursor =
-                        CoordinatedCursor(
-                            result.visualIntent.coordinatedCursor.oldByteOffset,
-                            result.visualIntent.coordinatedCursor.newByteOffset,
-                            false,
-                        ),
-                )
-            return applyEditResultWithIntent(result, suppressedIntent)
-        }
-        if (result.visualIntent.animationMode == uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED &&
-            (oldAffected.isNotEmpty() || newAffected.isNotEmpty())
-        ) {
-            val byteCount =
-                maxOf(
-                    newAffected.sumOf { it.second - it.first },
-                    oldAffected.sumOf { it.second - it.first },
-                )
-            // Animation mode selection for composition: uses grapheme cluster count (not byte
-            // count like Rust's generic heuristic) because the platform knows the exact preedit
-            // text and can account for grapheme characteristics. Newlines force LineReflow
-            // (multi-line preedit); complex graphemes (combining marks, surrogates) force
-            // ClusterAnimation for correct visual matching; short preedit uses GlyphAnimation
-            // for per-character fade-in/out; longer preedit uses RunAnimation for efficiency.
-            val animationMode =
-                when {
-                    byteCount == 0 -> uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED
-                    byteCount <= 24 -> uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION
-                    byteCount <= 96 -> uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION
-                    else -> uniffi.writer_core.AnimationModeDto.RUN_ANIMATION
-                }
-            if (animationMode != uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED) {
-                val animatedIntent =
-                    VisualIntent(
-                        cause = result.visualIntent.cause,
-                        operationKind =
-                            if (preeditText.isEmpty()) {
-                                result.visualIntent.operationKind
-                            } else {
-                                uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT
-                            },
-                        oldAffectedByteRanges = oldAffected,
-                        newAffectedByteRanges = newAffected,
-                        animationMode = animationMode,
-                        durationMs = typingAnimationDurationMs,
-                        coordinatedCursor = CoordinatedCursor(0, 0, true),
-                    )
-                return applyEditResultWithIntent(result, animatedIntent)
-            }
-        }
-        return applyEditResultWithIntent(
-            result,
-            VisualIntent(
-                cause = result.visualIntent.cause,
-                operationKind =
-                    if (preeditText.isEmpty()) {
-                        result.visualIntent.operationKind
-                    } else {
-                        uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT
-                    },
-                oldAffectedByteRanges = oldAffected,
-                newAffectedByteRanges = newAffected,
-                animationMode = result.visualIntent.animationMode,
-                durationMs = result.visualIntent.durationMs,
-                coordinatedCursor = result.visualIntent.coordinatedCursor,
-            ),
-        )
+        pendingCompositionVisualIntent = null
+        return applyEditResultWithIntent(result, result.visualIntent)
     }
 
     /**
@@ -484,144 +385,73 @@ class AndroidEditorPipeline private constructor(
     }
 
     /**
-     * Apply a composition update with platform-constructed VisualIntent.
+     * Apply a composition update by consuming the Core-returned [VisualIntent] directly.
      *
-     * The platform constructs its own VisualIntent rather than using Rust's because:
-     * - The platform knows the exact old/new preedit text and can detect visual-same
-     *   (old preedit == new preedit) to suppress unnecessary animation.
-     * - Animation mode is selected by grapheme cluster count and content characteristics
-     *   (newlines → LineReflow, complex graphemes → Cluster, etc.), not by Rust's
-     *   generic byte-count heuristic.
-     * - oldAffected/newAffected are computed from the preedit byte ranges, ensuring
-     *   only the changed preedit region animates.
+     * #606: Core's `classify_composition_visual` now determines visual-same suppression,
+     * animation mode (based on grapheme cluster count, newlines, complex graphemes),
+     * old/new affected ranges, and operationKind. The platform no longer reconstructs
+     * a VisualIntent from old/new preedit text — it feeds Core's result into the
+     * animation pipeline.
      *
-     * When [isVisualSame] is true, animation is suppressed (SYSTEM_SUPPRESSED) and only
-     * the cursor animates — the preedit text has not visually changed. However, the
-     * [mirrorUpdate] lambda is still invoked (via [AndroidTextAnimationEngine.prepareAndSubmit])
-     * to keep the mirror's composition overlay in sync with the IME state, even when
-     * no text animation runs.
+     * The [replaceStartUtf8]/[replaceEndUtf8]/[newPreeditText]/[oldPreeditText] parameters
+     * are retained for the InputCommandPort API contract but are no longer used to
+     * construct a local VisualIntent.
      */
     override fun applyCompositionUpdateAnimated(
-        replaceStartUtf8: Int,
-        replaceEndUtf8: Int,
-        newPreeditText: String,
-        oldPreeditText: String,
+        @Suppress("UNUSED_PARAMETER") replaceStartUtf8: Int,
+        @Suppress("UNUSED_PARAMETER") replaceEndUtf8: Int,
+        @Suppress("UNUSED_PARAMETER") newPreeditText: String,
+        @Suppress("UNUSED_PARAMETER") oldPreeditText: String,
         mirrorUpdate: (() -> Unit)?,
     ) {
-        val oldPreeditByteLen = oldPreeditText.toByteArray(Charsets.UTF_8).size
-        val newPreeditByteLen = newPreeditText.toByteArray(Charsets.UTF_8).size
-        val isVisualSame = oldPreeditText.isNotEmpty() && oldPreeditText == newPreeditText
-        val oldAffected =
-            buildList {
-                if (oldPreeditByteLen > 0 && !isVisualSame) {
-                    add(Pair(replaceStartUtf8, replaceStartUtf8 + oldPreeditByteLen))
-                } else if (oldPreeditByteLen == 0 && replaceStartUtf8 < replaceEndUtf8) {
-                    add(Pair(replaceStartUtf8, replaceEndUtf8))
-                }
-            }
-        val newAffected =
-            if (newPreeditText.isEmpty() || isVisualSame) {
-                emptyList()
-            } else {
-                listOf(
-                    Pair(replaceStartUtf8, replaceStartUtf8 + newPreeditByteLen),
-                )
-            }
-        val combinedText = oldPreeditText + newPreeditText
-        // Both old and new preedit text are checked for newline/complex grapheme
-        // characteristics because either version could contain them — e.g. an IME
-        // candidate that introduces a newline or combining mark. Checking only the
-        // new text would miss cases where the old preedit had a newline that is now
-        // being removed (which still requires LineReflow for correct reflow animation).
-        val clusterCount =
-            maxOf(
-                newPreeditText.codePointCount(0, newPreeditText.length),
-                oldPreeditText.codePointCount(0, oldPreeditText.length),
+        val visualIntent = pendingCompositionVisualIntent
+        if (visualIntent != null) {
+            visualRuntime.prepareAndSubmit(
+                visualIntent = visualIntent,
+                layoutEngine = layoutRuntime.layoutEngine,
+                mirrorUpdate = {
+                    mirrorUpdate?.invoke()
+                    layoutRuntime.rebuildDisplayProjection()
+                },
             )
-        val containsNewline = combinedText.any { it == '\n' || it == '\r' }
-        val containsComplexGrapheme =
-            combinedText.any { char ->
-                val type = Character.getType(char.code)
-                type == Character.SURROGATE.toInt() ||
-                    type == Character.NON_SPACING_MARK.toInt() ||
-                    type == Character.COMBINING_SPACING_MARK.toInt() ||
-                    Character.isHighSurrogate(char) || Character.isLowSurrogate(char)
-            }
-        val animationMode =
-            when {
-                isVisualSame || clusterCount == 0 -> uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED
-                containsNewline -> uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION
-                containsComplexGrapheme -> uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION
-                clusterCount <= 8 -> uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION
-                else -> uniffi.writer_core.AnimationModeDto.RUN_ANIMATION
-            }
-        val visualIntent =
-            VisualIntent(
-                cause = uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION,
-                operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_UPDATE,
-                oldAffectedByteRanges = oldAffected,
-                newAffectedByteRanges = newAffected,
-                animationMode = animationMode,
-                durationMs = typingAnimationDurationMs,
-                coordinatedCursor = CoordinatedCursor(0, 0, true),
-            )
-        visualRuntime.prepareAndSubmit(
-            visualIntent = visualIntent,
-            layoutEngine = layoutRuntime.layoutEngine,
-            mirrorUpdate = {
-                mirrorUpdate?.invoke()
-                layoutRuntime.rebuildDisplayProjection()
-            },
-        )
+        } else {
+            mirrorUpdate?.invoke()
+            layoutRuntime.rebuildDisplayProjection()
+        }
     }
 
     /**
-     * Apply a composition cancel with platform-constructed VisualIntent.
+     * Apply a composition cancel by consuming the Core-returned [VisualIntent] directly.
      *
-     * CompositionCancel is semantically a delete: the preedit text is removed and the
-     * cursor returns to the pre-edit position. The VisualIntent uses empty
-     * [newAffectedByteRanges] (no new text inserted) and [oldAffectedByteRanges] covering
-     * the preedit span, which routes through the planner's Delete path to produce
-     * CrossfadeOld/fade-out slices for the cancelled preedit. Retained text after the
-     * preedit gets Move slices via [addMoveSlicesForShiftedClustersCrossLine].
+     * #606: Core's `classify_composition_visual` now determines the cancel visual
+     * semantics (oldAffected ranges, animation mode, operationKind = COMPOSITION_CANCEL).
+     * The platform no longer constructs a VisualIntent locally — it feeds Core's result
+     * into the animation pipeline.
      *
-     * Animation mode is fixed at CLUSTER_ANIMATION (not glyph or run) because composition
-     * cancel typically involves short preedit spans where per-cluster fade-out provides
-     * the best visual granularity without the overhead of per-glypheme slices.
+     * The [replaceStartUtf8]/[replaceEndUtf8]/[oldPreeditText] parameters are retained
+     * for the InputCommandPort API contract but are no longer used to construct a local
+     * VisualIntent.
      */
     override fun applyCompositionCancelAnimated(
-        replaceStartUtf8: Int,
-        replaceEndUtf8: Int,
-        oldPreeditText: String,
+        @Suppress("UNUSED_PARAMETER") replaceStartUtf8: Int,
+        @Suppress("UNUSED_PARAMETER") replaceEndUtf8: Int,
+        @Suppress("UNUSED_PARAMETER") oldPreeditText: String,
         mirrorUpdate: (() -> Unit)?,
     ) {
-        val preeditByteLen = oldPreeditText.toByteArray(Charsets.UTF_8).size
-        val oldAffected =
-            if (preeditByteLen == 0 && replaceStartUtf8 == replaceEndUtf8) {
-                emptyList()
-            } else if (preeditByteLen > 0) {
-                listOf(Pair(replaceStartUtf8, replaceStartUtf8 + preeditByteLen))
-            } else {
-                listOf(Pair(replaceStartUtf8, replaceEndUtf8))
-            }
-        val visualIntent =
-            VisualIntent(
-                cause = uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION,
-                operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_CANCEL,
-                oldAffectedByteRanges = oldAffected,
-                newAffectedByteRanges = emptyList(),
-                animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
-                durationMs = typingAnimationDurationMs,
-                coordinatedCursor = CoordinatedCursor(0, 0, true),
+        val visualIntent = pendingCompositionVisualIntent
+        if (visualIntent != null) {
+            visualRuntime.prepareAndSubmit(
+                visualIntent = visualIntent,
+                layoutEngine = layoutRuntime.layoutEngine,
+                mirrorUpdate = {
+                    mirrorUpdate?.invoke()
+                    layoutRuntime.rebuildDisplayProjection()
+                },
             )
-        visualRuntime.prepareAndSubmit(
-            visualIntent = visualIntent,
-            layoutEngine = layoutRuntime.layoutEngine,
-            mirrorUpdate = {
-                mirrorUpdate?.invoke()
-                layoutRuntime.rebuildDisplayProjection()
-            },
-        )
+        } else {
+            mirrorUpdate?.invoke()
+            layoutRuntime.rebuildDisplayProjection()
+        }
     }
 
     /**
@@ -763,6 +593,7 @@ class AndroidEditorPipeline private constructor(
      *  where no future rendering will occur. */
     fun resetAfterLoad() {
         visualRuntime.cancel()
+        pendingCompositionVisualIntent = null
     }
 
     override fun reloadFromKernel(): Boolean {
@@ -816,19 +647,18 @@ class AndroidEditorPipeline private constructor(
 
     fun getAutoIndentWidthSp(): Float = autoIndentWidthSp
 
-    private fun computeAutoIndentPrefix(): String {
-        if (!autoIndentEnabled) return ""
-        val projection = layoutRuntime.getCurrentProjection()
-        val cursorUtf8 = mirror.getCursorUtf8()
-        val cursorRealUtf16 = projection.realUtf8ToRealUtf16(cursorUtf8)
-        val text = mirror.getText()
-        val safeCursorUtf16 = cursorRealUtf16.coerceIn(0, text.length)
-        val lineStartUtf16 = if (safeCursorUtf16 > 0) text.lastIndexOf('\n', safeCursorUtf16 - 1) + 1 else 0
-        val linePrefix = text.substring(lineStartUtf16, safeCursorUtf16)
-        val indent = linePrefix.takeWhile { it == ' ' || it == '\t' }
-        return indent
-    }
-
+    /**
+     * #606: Returns the byte length of the grapheme cluster immediately before [offset].
+     *
+     * Used by Backspace/Delete key handlers ([SujianEditorView.onKeyDown] KEYCODE_DEL) to
+     * determine which grapheme cluster to delete — a body-edit semantic. Ideally this
+     * boundary calculation would call Core's Unicode cluster logic (Core uses
+     * `unicode_segmentation` internally for `count_grapheme_clusters`), but Core does not
+     * yet expose a grapheme-boundary method via UDL. Android ICU `BreakIterator` implements
+     * the same UAX #29 grapheme cluster boundary algorithm as Rust's `unicode_segmentation`,
+     * so the results are consistent. When Core exposes a grapheme-boundary FFI method, this
+     * should be replaced with a call to Core to ensure a single source of truth.
+     */
     fun previousGraphemeByteLen(offset: Int): Int {
         val projection = layoutRuntime.getCurrentProjection()
         val realUtf16 = projection.realUtf8ToRealUtf16(offset)
@@ -841,6 +671,13 @@ class AndroidEditorPipeline private constructor(
         return offset - prevUtf8
     }
 
+    /**
+     * #606: Returns the byte length of the grapheme cluster immediately after [offset].
+     *
+     * Used by Forward-Delete key handlers ([SujianEditorView.onKeyDown] KEYCODE_FORWARD_DEL)
+     * to determine which grapheme cluster to delete — a body-edit semantic. See
+     * [previousGraphemeByteLen] for the relationship to Core's Unicode cluster logic.
+     */
     fun nextGraphemeByteLen(offset: Int): Int {
         val projection = layoutRuntime.getCurrentProjection()
         val realUtf16 = projection.realUtf8ToRealUtf16(offset)
@@ -950,6 +787,7 @@ class AndroidEditorPipeline private constructor(
      */
     fun resetForReuse() {
         visualRuntime.cancel()
+        pendingCompositionVisualIntent = null
         editPipeline.loadFromSnapshot("", 0, 0, 0, 0)
         layoutRuntime.rebuildDisplayProjection()
     }
@@ -1008,13 +846,16 @@ class AndroidEditorPipeline private constructor(
         newPreeditCursorOffset: Int,
     ): uniffi.writer_core.EditorEditResultDto? {
         val bridge = kernelBridge ?: return null
-        return bridge.updateComposition(
-            compositionSessionId,
-            compositionGeneration,
-            newPreeditText,
-            newPreeditCursorOffset,
-            mirror.getRevision(),
-        )
+        val dto =
+            bridge.updateComposition(
+                compositionSessionId,
+                compositionGeneration,
+                newPreeditText,
+                newPreeditCursorOffset,
+                mirror.getRevision(),
+            ) ?: return null
+        pendingCompositionVisualIntent = EditResult.fromDto(dto).visualIntent
+        return dto
     }
 
     override fun finishComposition(
@@ -1022,7 +863,11 @@ class AndroidEditorPipeline private constructor(
         compositionGeneration: Long,
     ): uniffi.writer_core.EditorEditResultDto? {
         val bridge = kernelBridge ?: return null
-        return bridge.finishComposition(compositionSessionId, compositionGeneration, mirror.getRevision())
+        val dto = bridge.finishComposition(compositionSessionId, compositionGeneration, mirror.getRevision())
+        if (dto != null) {
+            pendingCompositionVisualIntent = EditResult.fromDto(dto).visualIntent
+        }
+        return dto
     }
 
     override fun cancelComposition(
@@ -1030,7 +875,11 @@ class AndroidEditorPipeline private constructor(
         compositionGeneration: Long,
     ): uniffi.writer_core.EditorEditResultDto? {
         val bridge = kernelBridge ?: return null
-        return bridge.cancelComposition(compositionSessionId, compositionGeneration, mirror.getRevision())
+        val dto = bridge.cancelComposition(compositionSessionId, compositionGeneration, mirror.getRevision())
+        if (dto != null) {
+            pendingCompositionVisualIntent = EditResult.fromDto(dto).visualIntent
+        }
+        return dto
     }
 
     private var cursorVisible: Boolean = true

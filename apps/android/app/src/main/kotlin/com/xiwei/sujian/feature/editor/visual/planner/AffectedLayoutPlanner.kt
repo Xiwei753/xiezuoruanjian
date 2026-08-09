@@ -56,11 +56,7 @@ class AffectedLayoutPlanner {
                 if (revision.lineRanges.getOrNull(i)?.paragraphId != editParagraphId) break
                 affectedLines.add(i)
             }
-            val isDeleteOrReplace =
-                visualIntent.isDelete() || visualIntent.isReplace() ||
-                    visualIntent.isCompositionCancel() || visualIntent.isCompositionCommit() ||
-                    visualIntent.isCompositionUpdate()
-            if (isDeleteOrReplace) {
+            if (visualIntent.isDeleteOrReplaceRenderRole()) {
                 val lastEditLine = affectedLines.maxOrNull() ?: editLine
                 val nextParaStartLine = findNextParagraphStartLine(revision, lastEditLine)
                 if (nextParaStartLine != null) {
@@ -133,11 +129,7 @@ class AffectedLayoutPlanner {
             }
         }
 
-        val isDeleteOrReplace =
-            visualIntent.isDelete() || visualIntent.isReplace() ||
-                visualIntent.isCompositionCancel() || visualIntent.isCompositionCommit() ||
-                visualIntent.isCompositionUpdate()
-        if (isDeleteOrReplace) {
+        if (visualIntent.isDeleteOrReplaceRenderRole()) {
             val extraParaIds = mutableSetOf<Int>()
             for (pid in affectedParaIds) {
                 val firstLineOfPara =

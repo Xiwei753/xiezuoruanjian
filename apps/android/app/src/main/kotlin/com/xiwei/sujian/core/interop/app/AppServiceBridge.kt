@@ -598,21 +598,6 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
             holder.service.editorKernelGetCursor()
         }
 
-    fun editorKernelCompositionUpdateVisualIntent(
-        compositionReplaceStart: UInt,
-        compositionReplaceEndExclusive: UInt,
-        oldPreeditText: String,
-        newPreeditText: String,
-    ): BridgeResult<uniffi.writer_core.EditorVisualIntentDto> =
-        holder.wrapResult {
-            holder.service.editorKernelCompositionUpdateVisualIntent(
-                compositionReplaceStart,
-                compositionReplaceEndExclusive,
-                oldPreeditText,
-                newPreeditText,
-            )
-        }
-
     fun editorKernelSessionSnapshot(): BridgeResult<uniffi.writer_core.EditorSessionSnapshotDto> =
         holder.wrapResult {
             holder.service.editorKernelSessionSnapshot()
@@ -629,12 +614,12 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
 
     fun editorKernelInsertLineBreak(
         byteOffset: UInt,
-        autoIndentPrefix: String,
+        autoIndentEnabled: UByte,
         cause: uniffi.writer_core.EditorTransactionCauseDto,
         expectedRevision: ULong,
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> =
         holder.wrapResult {
-            holder.service.editorKernelInsertLineBreak(byteOffset, autoIndentPrefix, cause, expectedRevision)
+            holder.service.editorKernelInsertLineBreak(byteOffset, autoIndentEnabled, cause, expectedRevision)
         }
 
     fun editorKernelCommitText(
@@ -830,23 +815,6 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
             holder.service.textEditSessionLoadText(sessionId, text, cursorByteOffset)
         }
 
-    fun textEditSessionCompositionUpdateVisualIntent(
-        sessionId: ULong,
-        compositionReplaceStart: UInt,
-        compositionReplaceEndExclusive: UInt,
-        oldPreeditText: String,
-        newPreeditText: String,
-    ): BridgeResult<uniffi.writer_core.EditorVisualIntentDto> =
-        holder.wrapResult {
-            holder.service.textEditSessionCompositionUpdateVisualIntent(
-                sessionId,
-                compositionReplaceStart,
-                compositionReplaceEndExclusive,
-                oldPreeditText,
-                newPreeditText,
-            )
-        }
-
     fun textEditSessionCommitText(
         sessionId: ULong,
         byteStart: UInt,
@@ -998,7 +966,7 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
     fun textEditSessionInsertLineBreak(
         sessionId: ULong,
         byteOffset: UInt,
-        autoIndentPrefix: String,
+        autoIndentEnabled: UByte,
         cause: uniffi.writer_core.EditorTransactionCauseDto,
         expectedRevision: ULong,
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> =
@@ -1006,7 +974,7 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
             holder.service.textEditSessionInsertLineBreak(
                 sessionId,
                 byteOffset,
-                autoIndentPrefix,
+                autoIndentEnabled,
                 cause,
                 expectedRevision,
             )

@@ -133,12 +133,12 @@ impl EditorKernel {
             ),
             EditorCommand::InsertLineBreak {
                 byte_offset,
-                auto_indent_prefix,
+                auto_indent_enabled,
                 cause,
                 ..
             } => self.apply_insert_line_break(
                 byte_offset.value(),
-                auto_indent_prefix,
+                auto_indent_enabled,
                 cause,
                 base_revision,
                 old_cursor,
@@ -581,7 +581,7 @@ impl EditorKernel {
     fn apply_insert_line_break(
         &mut self,
         byte_offset: usize,
-        auto_indent_prefix: String,
+        auto_indent_enabled: bool,
         cause: EditorTransactionCause,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
@@ -601,7 +601,15 @@ impl EditorKernel {
                 old_selection,
             ));
         }
-        let text = format!("\n{}", auto_indent_prefix);
+        // #606: Core 端 auto-indent — 从正文按 UTF-8 安全边界找到当前逻辑行开头，
+        // 读取已有前导空白（空格/Tab），构造插入文本为 \n + prefix。
+        // auto_indent_enabled 为 false 时只插入 \n。
+        let text = if auto_indent_enabled {
+            let prefix = Self::compute_auto_indent_prefix(&self.text, byte_offset);
+            format!("\n{}", prefix)
+        } else {
+            "\n".to_string()
+        };
 
         self.composition_session = None;
 
@@ -672,6 +680,34 @@ impl EditorKernel {
             new_selection_byte_range: new_selection,
             visual_intent,
         })
+    }
+
+    /// #606: Core 端 auto-indent 前导空白计算。
+    ///
+    /// 从正文按 UTF-8 安全边界找到  所在逻辑行的开头，
+    /// 读取该行已有的前导空白（空格和 Tab），返回前导空白字符串。
+    ///
+    /// 规则：
+    /// - 找到  之前最后一个换行符的位置，下一字节即为行首
+    /// - 从行首开始逐字节检查，只收集连续的空格和 Tab
+    /// - 遇到其他字符（包括多字节字符的首字节）立即停止
+    /// - UTF-8 安全：空格和 Tab 都是单字节 ASCII，不会出现在多字节字符的续字节中
+    ///
+    /// 返回的前导空白会被追加到新行之后，实现自动缩进。
+    fn compute_auto_indent_prefix(text: &str, byte_offset: usize) -> String {
+        // 找到 byte_offset 所在行的行首
+        let line_start = text[..byte_offset].rfind('\n').map_or(0, |pos| pos + 1);
+
+        // 从行首开始收集前导空白（空格和 Tab）
+        let mut prefix = String::new();
+        for &byte in &text.as_bytes()[line_start..] {
+            if byte == b' ' || byte == b'\t' {
+                prefix.push(byte as char);
+            } else {
+                break;
+            }
+        }
+        prefix
     }
 
     #[allow(clippy::too_many_arguments)]

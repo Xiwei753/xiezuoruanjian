@@ -23,14 +23,7 @@ class InsertDeletePlanner {
         createSnapshotFromRevision: (AndroidLayoutRevision, Int, Boolean) -> AndroidLineSnapshot?,
         offsetMapper: (Int) -> Int?,
     ) {
-        val isInsert = visualIntent.isInsert()
-        val isDelete = visualIntent.isDelete() || visualIntent.isCompositionCancel()
-        val isReplace =
-            visualIntent.isReplace() ||
-                visualIntent.isCompositionCommit() ||
-                visualIntent.isCompositionUpdate()
-
-        if (isReplace) {
+        if (visualIntent.isReplaceRenderRole()) {
             planClusterReplaceAnimation(
                 visualIntent, oldRev, newRev,
                 affectedOldLineIndices, affectedNewLineIndices,
@@ -41,7 +34,7 @@ class InsertDeletePlanner {
             return
         }
 
-        if (isInsert) {
+        if (visualIntent.isInsertRenderRole()) {
             val insertClusterSnapshots = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
             for (lineIndex in affectedNewLineIndices) {
                 val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, true) ?: continue
@@ -78,7 +71,7 @@ class InsertDeletePlanner {
                     ),
                 )
             }
-        } else if (isDelete) {
+        } else if (visualIntent.isDeleteRenderRole()) {
             val deleteClusterSnapshots = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
             for (lineIndex in affectedOldLineIndices) {
                 val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, false) ?: continue
@@ -132,14 +125,7 @@ class InsertDeletePlanner {
         createSnapshotFromRevision: (AndroidLayoutRevision, Int, Boolean) -> AndroidLineSnapshot?,
         offsetMapper: (Int) -> Int?,
     ) {
-        val isInsert = visualIntent.isInsert()
-        val isDelete = visualIntent.isDelete() || visualIntent.isCompositionCancel()
-        val isReplace =
-            visualIntent.isReplace() ||
-                visualIntent.isCompositionCommit() ||
-                visualIntent.isCompositionUpdate()
-
-        if (isReplace) {
+        if (visualIntent.isReplaceRenderRole()) {
             planRunReplaceAnimation(
                 visualIntent, oldRev, newRev,
                 affectedOldLineIndices, affectedNewLineIndices,
@@ -150,7 +136,7 @@ class InsertDeletePlanner {
             return
         }
 
-        if (isInsert) {
+        if (visualIntent.isInsertRenderRole()) {
             val insertClusterSnapshots = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
             for (lineIndex in affectedNewLineIndices) {
                 val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, true) ?: continue
@@ -182,7 +168,7 @@ class InsertDeletePlanner {
                     ),
                 )
             }
-        } else if (isDelete) {
+        } else if (visualIntent.isDeleteRenderRole()) {
             val deleteClusterSnapshots = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
             for (lineIndex in affectedOldLineIndices) {
                 val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, false) ?: continue

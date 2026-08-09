@@ -955,3 +955,125 @@ fn composition_session_emoji_boundary() {
     session.update_preedit("abc".to_string(), 0);
     assert_eq!(session.virtual_text(), "👨‍👩‍👧‍👦abchello");
 }
+
+// #606: classify_composition_visual 共享视觉分类测试
+
+#[test]
+fn classify_composition_visual_update_insert() {
+    let classification =
+        classify_composition_visual("", "n", 5, 5, CompositionOperationKind::Update, true);
+    assert!(!classification.is_visual_same);
+    assert!(classification
+        .visual_class_kinds
+        .contains(&VisualClassKind::Insert));
+    assert!(classification.old_affected_byte_ranges.is_empty());
+    assert_eq!(
+        classification.new_affected_byte_ranges,
+        vec![Utf8ByteRange::from_start_len(5, 1)]
+    );
+}
+
+#[test]
+fn classify_composition_visual_update_replace() {
+    let classification =
+        classify_composition_visual("old", "new", 5, 5, CompositionOperationKind::Update, true);
+    assert!(!classification.is_visual_same);
+    assert!(!classification.old_affected_byte_ranges.is_empty());
+    assert!(!classification.new_affected_byte_ranges.is_empty());
+}
+
+#[test]
+fn classify_composition_visual_update_same_text() {
+    let classification =
+        classify_composition_visual("n", "n", 5, 5, CompositionOperationKind::Update, true);
+    assert!(classification.is_visual_same);
+    assert!(classification.visual_class_kinds.is_empty());
+}
+
+#[test]
+fn classify_composition_visual_commit() {
+    let classification = classify_composition_visual(
+        "committed",
+        "committed",
+        0,
+        0,
+        CompositionOperationKind::Commit,
+        true,
+    );
+    assert!(classification.is_visual_same);
+    assert_eq!(
+        classification.old_affected_byte_ranges,
+        classification.new_affected_byte_ranges
+    );
+}
+
+#[test]
+fn classify_composition_visual_cancel_with_preedit() {
+    let classification =
+        classify_composition_visual("preedit", "", 5, 5, CompositionOperationKind::Cancel, true);
+    assert!(!classification.old_affected_byte_ranges.is_empty());
+    assert!(classification.new_affected_byte_ranges.is_empty());
+    assert_eq!(
+        classification.old_affected_byte_ranges,
+        vec![Utf8ByteRange::from_start_len(5, 7)]
+    );
+}
+
+#[test]
+fn classify_composition_visual_cancel_empty_preedit_with_range() {
+    let classification =
+        classify_composition_visual("", "", 5, 10, CompositionOperationKind::Cancel, true);
+    assert!(!classification.old_affected_byte_ranges.is_empty());
+    assert_eq!(
+        classification.old_affected_byte_ranges,
+        vec![Utf8ByteRange::from_ordered(5, 10)]
+    );
+}
+
+#[test]
+fn classify_composition_visual_cancel_empty_no_range() {
+    let classification =
+        classify_composition_visual("", "", 5, 5, CompositionOperationKind::Cancel, true);
+    assert!(classification.old_affected_byte_ranges.is_empty());
+    assert!(classification.new_affected_byte_ranges.is_empty());
+    assert_eq!(
+        classification.animation_mode,
+        AnimationMode::SystemSuppressed
+    );
+}
+
+#[test]
+fn classify_composition_visual_animation_disabled() {
+    let classification =
+        classify_composition_visual("", "hello", 0, 0, CompositionOperationKind::Update, false);
+    assert_eq!(
+        classification.animation_mode,
+        AnimationMode::SystemSuppressed
+    );
+}
+
+#[test]
+fn classify_composition_visual_newline_triggers_reflow() {
+    let classification = classify_composition_visual(
+        "",
+        "hello\nworld",
+        0,
+        0,
+        CompositionOperationKind::Update,
+        true,
+    );
+    assert_eq!(
+        classification.animation_mode,
+        AnimationMode::LineReflowAnimation
+    );
+}
+
+#[test]
+fn classify_composition_visual_complex_grapheme() {
+    let classification =
+        classify_composition_visual("", "😀", 0, 0, CompositionOperationKind::Update, true);
+    assert_eq!(
+        classification.animation_mode,
+        AnimationMode::ClusterAnimation
+    );
+}

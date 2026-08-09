@@ -50,11 +50,11 @@ class EditPipeline(
 
     fun insertLineBreak(
         byteOffset: Int,
-        indentPrefix: String,
+        autoIndentEnabled: Boolean,
         cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING,
     ): EditResult? {
         val bridge = kernelBridge ?: return null
-        val dto = bridge.insertLineBreak(byteOffset, indentPrefix, cause, mirror.getRevision()) ?: return null
+        val dto = bridge.insertLineBreak(byteOffset, autoIndentEnabled, cause, mirror.getRevision()) ?: return null
         return EditResult.fromDto(dto)
     }
 

@@ -43,7 +43,7 @@ pub enum EditorCommand {
     },
     InsertLineBreak {
         byte_offset: Utf8ByteOffset,
-        auto_indent_prefix: String,
+        auto_indent_enabled: bool,
         cause: EditorTransactionCause,
         expected_revision: EditorRevision,
     },

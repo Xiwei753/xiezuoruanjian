@@ -399,6 +399,168 @@ impl EditorEngine {
     }
 }
 
+/// #606: Composition 操作类型 — 三种 composition 操作共用同一视觉分类入口。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompositionOperationKind {
+    /// setComposingText 触发的预输入更新
+    Update,
+    /// commitText 触发的预输入提交
+    Commit,
+    /// 取消预输入
+    Cancel,
+}
+
+/// #606: Composition 视觉分类结果 — 平台无关的视觉事务语义。
+///
+/// 由 `classify_composition_visual` 计算，三种 composition 操作（update/commit/cancel）
+/// 共用此结果，不再各自手写另一套视觉分类。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompositionVisualClassification {
+    pub old_affected_byte_ranges: Vec<Utf8ByteRange>,
+    pub new_affected_byte_ranges: Vec<Utf8ByteRange>,
+    pub animation_mode: AnimationMode,
+    pub is_visual_same: bool,
+    pub visual_class_kinds: Vec<VisualClassKind>,
+}
+
+/// #606: 统一的 composition 视觉分类入口 — 三种 composition 操作共用。
+///
+/// 把 `apply_update_composition`、`apply_finish_composition`、`apply_cancel_composition`
+/// 中各自手写的视觉分类逻辑统一收到此函数，通过 `classify_visual_diff` 和
+/// `choose_animation_mode` 确定，不再各自手写另一套分类。
+#[allow(clippy::too_many_arguments)]
+pub fn classify_composition_visual(
+    old_visual_text: &str,
+    new_visual_text: &str,
+    replace_start: usize,
+    replace_end_exclusive: usize,
+    operation_kind: CompositionOperationKind,
+    animation_enabled: bool,
+) -> CompositionVisualClassification {
+    let visual_class_kinds = classify_visual_diff(old_visual_text, new_visual_text);
+    let is_visual_same = visual_class_kinds.is_empty();
+
+    let (old_affected, new_affected) = compute_composition_affected_ranges(
+        old_visual_text,
+        new_visual_text,
+        replace_start,
+        replace_end_exclusive,
+        operation_kind,
+    );
+
+    let animation_mode = compute_composition_animation_mode(
+        old_visual_text,
+        new_visual_text,
+        operation_kind,
+        animation_enabled,
+        &old_affected,
+    );
+
+    CompositionVisualClassification {
+        old_affected_byte_ranges: old_affected,
+        new_affected_byte_ranges: new_affected,
+        animation_mode,
+        is_visual_same,
+        visual_class_kinds,
+    }
+}
+
+/// #606: 计算 composition 操作的受影响 byte ranges。
+fn compute_composition_affected_ranges(
+    old_visual_text: &str,
+    new_visual_text: &str,
+    replace_start: usize,
+    replace_end_exclusive: usize,
+    operation_kind: CompositionOperationKind,
+) -> (Vec<Utf8ByteRange>, Vec<Utf8ByteRange>) {
+    match operation_kind {
+        CompositionOperationKind::Update => {
+            let old_affected = if old_visual_text.is_empty() {
+                Vec::new()
+            } else {
+                vec![Utf8ByteRange::from_start_len(
+                    replace_start,
+                    old_visual_text.len(),
+                )]
+            };
+            let new_affected = if new_visual_text.is_empty() {
+                Vec::new()
+            } else {
+                vec![Utf8ByteRange::from_start_len(
+                    replace_start,
+                    new_visual_text.len(),
+                )]
+            };
+            (old_affected, new_affected)
+        }
+        CompositionOperationKind::Commit => {
+            let range = if new_visual_text.is_empty() {
+                Vec::new()
+            } else {
+                vec![Utf8ByteRange::from_start_len(
+                    replace_start,
+                    new_visual_text.len(),
+                )]
+            };
+            (range.clone(), range)
+        }
+        CompositionOperationKind::Cancel => {
+            let old_affected = if !old_visual_text.is_empty() {
+                vec![Utf8ByteRange::from_start_len(
+                    replace_start,
+                    old_visual_text.len(),
+                )]
+            } else if replace_start != replace_end_exclusive {
+                vec![Utf8ByteRange::from_ordered(
+                    replace_start,
+                    replace_end_exclusive,
+                )]
+            } else {
+                Vec::new()
+            };
+            (old_affected, Vec::new())
+        }
+    }
+}
+
+/// #606: 统一计算 composition 操作的动画模式。
+fn compute_composition_animation_mode(
+    old_visual_text: &str,
+    new_visual_text: &str,
+    operation_kind: CompositionOperationKind,
+    animation_enabled: bool,
+    old_affected: &[Utf8ByteRange],
+) -> AnimationMode {
+    if !animation_enabled {
+        return AnimationMode::SystemSuppressed;
+    }
+
+    if operation_kind == CompositionOperationKind::Cancel && old_affected.is_empty() {
+        return AnimationMode::SystemSuppressed;
+    }
+
+    let changed_text = if new_visual_text.len() >= old_visual_text.len() {
+        new_visual_text
+    } else {
+        old_visual_text
+    };
+
+    let cluster_count = count_grapheme_clusters(changed_text);
+    let contains_newline = changed_text.contains("\n");
+    let contains_complex = text_contains_complex_grapheme(changed_text);
+
+    choose_animation_mode(
+        cluster_count,
+        contains_newline,
+        contains_complex,
+        false,
+        false,
+        false,
+        false,
+        animation_enabled,
+    )
+}
+
 /// #516: 视觉对象分类器 — 通过 old/new 文本差异分类。
 ///
 /// 所有 old/new revision 比较都通过此函数分类，不按场景写特例。
