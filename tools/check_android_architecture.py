@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Android 分层架构源码扫描器（#597 六）。
 
-直接扫描 `apps/android/app/src/main/kotlin` 与 `core/designsystem` 源码，
+业务分层规则直接扫描 `:app` 主源码（apps/android/app/src/main/kotlin），
 不编译 Android App（不再通过 JUnit/Gradle 单元测试任务运行架构检查）。
+`package-dir-consistent` 规则动态扫描 `:app`、`:core:designsystem`、`:core:platform`
+三个 Gradle 模块的所有 `src/*/kotlin` 源集（glob 发现，不硬编码源集名单）。
 
 保留的规则（对应原 `src/testArch` 静态规则，issue 正文第六节）：
 
@@ -31,7 +33,7 @@
     （原反射测试改为源码级检查）。
 
 用法:
-    python3 tools/check_android_architecture.py [--app-src DIR] [--designsystem-src DIR]
+    python3 tools/check_android_architecture.py [--app-src DIR] [--designsystem-src DIR] [--designsystem-module DIR] [--platform-module DIR]
 
 返回码:
     0 = 全部规则通过
@@ -71,34 +73,12 @@ DEFAULT_DS_SRC = (
 DEFAULT_DS_MODULE = PROJECT_ROOT / "apps" / "android" / "core" / "designsystem"
 DEFAULT_PLATFORM_MODULE = PROJECT_ROOT / "apps" / "android" / "core" / "platform"
 DEFAULT_APP_MODULE = PROJECT_ROOT / "apps" / "android" / "app"
-APP_MODULE = DEFAULT_APP_MODULE
 
 # package-dir 一致性检查覆盖的源集（#602 评论#8 项8.2）。
 # 不能只扫 src/main：debug/release/test/androidTest/testAi/androidTestAi 各源集
 # 的 package 声明也必须与物理目录结构一致，否则重构会留下隐性错位。
 # 源集根由 module 根动态发现，configure(--app-src) 时同步更新
 # （#602 评论#9 项9.3、评论#10 项1）。
-
-
-def package_source_roots_from_app_src(app_src: Path) -> tuple[Path, ...]:
-    """从 app 主源码根推导全部 Kotlin 源集根（向后兼容保留）。
-
-    app_src 形态：<app>/src/main/kotlin/com/xiwei/sujian
-    app_module = app_src.parents[5]（即 <app>）。
-    """
-    app_module = app_src.parents[5]
-    return tuple(
-        app_module / "src" / source_set / "kotlin"
-        for source_set in (
-            "main",
-            "debug",
-            "release",
-            "test",
-            "androidTest",
-            "testAi",
-            "androidTestAi",
-        )
-    )
 
 
 def package_source_roots_from_modules(module_roots: tuple[Path, ...]) -> tuple[Path, ...]:
