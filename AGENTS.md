@@ -1,62 +1,48 @@
-# AI 开发守则
+# 素笺 Agent 指南
 
-本文件只记录长期有效的项目红线。具体类名、文件名、某次修复步骤和历史迁移过程不得写入本文件。
+这份文件只放全仓库都适用的规则。进入具体目录后继续读取该目录的 `AGENTS.md`。
 
-## 业务边界
+## 仓库地图
 
-- `core/writer_core` 是工作区、作品、卷、章节、设置、同步、统计和数据格式的唯一事实来源。
-- 平台客户端只负责 UI、导航、输入法、排版、渲染、动画和系统能力接入。
-- 平台端不得自行拼接工作区路径、实现保存规则、复制同步状态机或维护第二份业务真相。
-- 正文始终是纯文本。缩进、选区、预输入、动画和高亮只能是显示状态。
-- 自动生成的 UniFFI、JNI、NAPI 绑定不得手工修改；生成结果有问题时修上游契约。
+- `core/writer_core/`：业务核心。作品、卷、章节、正文、设置、同步、统计、星图和数据格式的唯一事实来源。
+- `core/writer_platform_api/`：Core 所需的平台能力契约。
+- `core/writer_uniffi/`：稳定的 UniFFI 导出门面。
+- `platform/rust/<target>/`：各平台 Rust 适配与最终动态库组装。
+- `apps/android/`：Android 原生 Kotlin/Compose 客户端。
+- `apps/Linux_qt/`：Linux Qt 客户端。
+- `docs/`：长期架构、数据格式和跨平台契约。
 
-## 跨平台边界
+Rust workspace 以根目录 `Cargo.toml` 为准，不要自行猜 crate 关系。
 
-- 各平台共享 Core API、强类型 DTO、设置键、磁盘格式和同步协议。
-- 各平台不共享 UI、输入法、光标、窗口、渲染、动画和打包实现。
-- Rust 内部保持强类型，JSON 只允许存在于必须使用文本协议的跨语言边界。
-- 错误必须使用错误枚举或错误码表达，不得依赖错误文案包含关系作为主判断。
+## 全局边界
 
-## Rust 安全红线
+- Core 保存业务真相；平台端负责 UI、导航、输入法、排版、渲染、动画和系统能力。
+- 平台端不得复制作品、章节、设置、同步、统计等业务状态机。
+- Core 不依赖 Android、Qt、Compose、QML、Activity、View、Window 等平台类型。
+- 正文持久化始终是纯文本。预输入、选区、缩进显示、动画、高亮都不是正文格式。
+- 跨语言接口优先强类型 DTO、枚举和错误类型；不要在 Rust 内部把结构体转 JSON 再解析回来。
+- 自动生成的 UniFFI/JNI/NAPI 绑定不手工修改；生成结果错误时修生成契约或上游接口。
+- 被新实现替代的旧入口直接删除，不再增加 fallback、兼容旁路或第二套状态机。
 
-- 禁止为了通过编译手写 `unsafe impl Send/Sync`。线程安全必须由真实字段和所有权自动推导。
-- Qt、Android 和其他 GUI 对象只能在所属线程使用。后台线程只能发送强类型命令。
-- 禁止把共享引用强转为可变裸指针，禁止从裸指针伪造 `&mut`。
-- 禁止使用 `Box::leak`、`mem::forget` 解决生命周期或资源托管问题。
-- `unsafe` 只能存在于必要的 FFI/平台边界，紧邻位置必须使用 `SAFETY:` 说明生命周期、别名、线程和所有权前提。
-- 禁止 crate/module 级 `allow(warnings)`、`allow(deprecated)`、`allow(dead_code)`。确有宏误报时只标注最小成员。
-- 外部输入、锁、磁盘和网络路径不得使用 `unwrap`/`expect` 代替错误处理。
-- UTF-8 byte offset、范围、revision 和 session generation 必须先验证再进入编辑内核。
-- 禁止使用 `0`、空字符串或魔法值绕过版本、会话、权限和状态校验。
-- 禁止使用 `AssertUnwindSafe` 掩盖未建立的 panic 或借用边界。
+## 修改位置
 
-运行仓库级检查：
+改业务规则、数据格式、同步语义、编辑事务：先看 `core/writer_core/AGENTS.md`。
+
+改 Android UI、输入、动画、窗口、系统能力、Gradle：先看 `apps/android/AGENTS.md`。
+
+长期架构以 `docs/TECHNICAL_ROUTE.md` 为准；数据目录、设置、同步、星图语义分别看对应文档。一次性迁移步骤和文件级改法写 Issue，不写进长期文档。
+
+## Rust 安全边界
+
+- 不为通过编译手写 `unsafe impl Send/Sync`。
+- 不从共享引用伪造 `&mut`，不靠裸指针、`Box::leak`、`mem::forget` 解决生命周期问题。
+- `unsafe` 只放必要的 FFI/平台边界，并紧邻写明 `SAFETY:` 前提。
+- 外部输入、锁、磁盘、网络路径不用 `unwrap`/`expect` 代替错误处理。
+- 不用 crate/module 级宽范围 `allow` 掩盖 warning。
+
+仓库级 Rust 守卫：
 
 ```bash
-python3 tools/check_rust_safety_patterns.py
+python3 tools/check_rust_safety_patterns.py .
 python3 tools/test_check_rust_safety_patterns.py
 ```
-
-## 文档规则
-
-仓库文档只保存：
-
-- 全局技术路线与架构边界；
-- 跨平台、Bridge、Core、Backend 契约；
-- 工作区格式、设置 Schema、同步规则和星图语义。
-
-以下内容写入 GitHub Issue，不写入长期文档：
-
-- 某次修复步骤；
-- 具体类、函数和文件改法；
-- 临时迁移计划；
-- 已淘汰平台和旧架构历史；
-- 阶段性能力矩阵、审计快照和实现流水账。
-
-## 修改原则
-
-- 从根因修改，不新增并行 fallback、兼容旁路或第二套状态机。
-- 删除被替代的旧入口，不保留无调用的“以后可能用”代码。
-- 修改行为时补对应测试；测试验证契约和不变量，不绑定内部实现细节。
-- 任务范围外的功能不顺手改动。
-- 无法确认安全前提时，让编译器继续报错，不得用 `unsafe`、`allow` 或泄漏绕过。
