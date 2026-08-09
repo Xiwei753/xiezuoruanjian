@@ -1,5 +1,4 @@
 package com.xiwei.sujian.feature.sync.data
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith

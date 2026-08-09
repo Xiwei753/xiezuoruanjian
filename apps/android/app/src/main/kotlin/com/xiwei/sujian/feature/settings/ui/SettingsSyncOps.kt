@@ -4,9 +4,9 @@ import com.xiwei.sujian.app.state.ActiveDocumentGate
 import com.xiwei.sujian.feature.settings.data.SettingsSaveResult
 import com.xiwei.sujian.feature.sync.data.AppSyncProfileReadResult
 import com.xiwei.sujian.feature.sync.data.ExclusiveResult
+import com.xiwei.sujian.feature.sync.data.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.SyncSession
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -598,7 +598,7 @@ suspend fun SettingsViewModel.refreshSyncProfileState() {
             it.copy(
                 projectSyncProfileLoadState =
                     com.xiwei.sujian.feature.settings.ui.SyncProfileLoadState.Failed(
-                        com.xiwei.sujian.feature.sync.data.model.SyncFailureKind.Fatal,
+                        com.xiwei.sujian.feature.sync.data.SyncFailureKind.Fatal,
                         MSG_NO_ACTIVE_PROJECT,
                     ),
             )

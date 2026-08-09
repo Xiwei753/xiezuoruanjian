@@ -10,7 +10,7 @@ import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.ProjectStats
 import com.xiwei.sujian.feature.project.data.model.Volume
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
+import com.xiwei.sujian.feature.sync.data.SyncFailureKind
 
 /**
  * ProjectRepository — 项目树 CRUD 仓库层。

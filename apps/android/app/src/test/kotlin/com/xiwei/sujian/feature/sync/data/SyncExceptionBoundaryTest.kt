@@ -1,6 +1,5 @@
 package com.xiwei.sujian.feature.sync.data
 
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import org.junit.Assert.assertEquals

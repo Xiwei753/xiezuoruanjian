@@ -49,7 +49,7 @@ internal suspend fun SettingsViewModel.loadCommittedProfileForProject(
         withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(projectId) }
     } else {
         com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.Failed(
-            com.xiwei.sujian.feature.sync.data.model.SyncFailureKind.Fatal,
+            com.xiwei.sujian.feature.sync.data.SyncFailureKind.Fatal,
             MSG_NO_ACTIVE_PROJECT,
         )
     }
@@ -450,7 +450,7 @@ private suspend fun SettingsViewModel.rollbackSyncConfig(
             withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(rollbackProjectId) }
         } else {
             com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.Failed(
-                com.xiwei.sujian.feature.sync.data.model.SyncFailureKind.Fatal,
+                com.xiwei.sujian.feature.sync.data.SyncFailureKind.Fatal,
                 MSG_NO_ACTIVE_PROJECT,
             )
         }
@@ -473,7 +473,7 @@ private suspend fun SettingsViewModel.rollbackSyncSecrets(
             withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(rollbackSecretsProjectId) }
         } else {
             com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.Failed(
-                com.xiwei.sujian.feature.sync.data.model.SyncFailureKind.Fatal,
+                com.xiwei.sujian.feature.sync.data.SyncFailureKind.Fatal,
                 MSG_NO_ACTIVE_PROJECT,
             )
         }

@@ -3,7 +3,6 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.feature.settings.data.SettingsSaveResult
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals

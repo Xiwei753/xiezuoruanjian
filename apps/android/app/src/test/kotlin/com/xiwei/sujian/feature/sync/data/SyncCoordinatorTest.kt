@@ -2,7 +2,6 @@ package com.xiwei.sujian.feature.sync.data
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.settings.ui.SettingsTransactionCommand
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import com.xiwei.sujian.feature.sync.data.model.SyncStatus

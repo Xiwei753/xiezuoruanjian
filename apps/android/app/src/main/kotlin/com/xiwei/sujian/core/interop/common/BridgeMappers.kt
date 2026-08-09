@@ -18,12 +18,12 @@ import com.xiwei.sujian.feature.stats.data.model.WritingSpeedBucket
 import com.xiwei.sujian.feature.stats.data.model.WritingSpeedCurve
 import com.xiwei.sujian.feature.stats.data.model.WritingStatsRange
 import com.xiwei.sujian.feature.stats.data.model.WritingStatsSummary
+import com.xiwei.sujian.feature.sync.data.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.model.BackendType
 import com.xiwei.sujian.feature.sync.data.model.FirstSyncMode
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncConflict
 import com.xiwei.sujian.feature.sync.data.model.SyncDiagnosticsResult
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.model.SyncPlan
 import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets

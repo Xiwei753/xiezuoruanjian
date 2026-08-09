@@ -25,7 +25,7 @@ fun SettingsViewModel.mergeRefresh() {
                 withContext(Dispatchers.IO) { syncRepoLocal.loadCommittedSyncProfile(mergeProjectId) }
             } else {
                 com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.Failed(
-                    com.xiwei.sujian.feature.sync.data.model.SyncFailureKind.Fatal,
+                    com.xiwei.sujian.feature.sync.data.SyncFailureKind.Fatal,
                     MSG_NO_ACTIVE_PROJECT,
                 )
             }

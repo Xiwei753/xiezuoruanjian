@@ -10,7 +10,6 @@ import com.xiwei.sujian.feature.settings.data.SettingsSaveResult
 import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncDiagnosticsResult
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.model.SyncPlan
 import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets

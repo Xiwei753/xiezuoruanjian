@@ -1,5 +1,5 @@
 package com.xiwei.sujian.core.interop.common
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
+import com.xiwei.sujian.feature.sync.data.SyncFailureKind
 
 /**
  * RepositoryException — 仓库层异常类

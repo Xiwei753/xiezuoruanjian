@@ -5,7 +5,6 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.RepositoryException
 import com.xiwei.sujian.core.interop.common.ResultEnvelope
-import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
