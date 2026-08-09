@@ -2,6 +2,8 @@ package com.xiwei.sujian.feature.editor.visual.planner
 
 import android.graphics.Rect
 import android.graphics.RectF
+import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
+import com.xiwei.sujian.feature.editor.layout.LineClusterSnapshot
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 import com.xiwei.sujian.feature.editor.visual.SliceVisualState
@@ -264,5 +266,110 @@ class RebasePlannerTest {
             "无 revealFraction 且 currentAlpha=0.005 的未匹配 Delete 应按旧 alpha 契约停止",
             result.isEmpty(),
         )
+    }
+
+    /**
+     * #605 评论3: 未匹配的 Delete slice 在有 cluster snapshot 时必须继续用 clip swallow
+     * （携带 SWALLOW revealSpec，initialFraction = old revealFraction，alpha 固定 1f），
+     * 不退回 alpha 淡出。
+     */
+    @Test
+    fun unmatchedDeleteWithRevealFractionContinuesAsClipSwallow() {
+        val cluster =
+            LineClusterSnapshot(
+                clusterId = 0L,
+                documentByteStart = 0,
+                documentByteEndExclusive = 1,
+                documentUtf16Start = 0,
+                documentUtf16EndExclusive = 1,
+                sourceRectInLineImage = Rect(0, 0, 10, 20),
+                visualRectInDocument = RectF(0f, 0f, 100f, 20f),
+                shapingFingerprint = "fp",
+                shapingIdentityConfident = true,
+                caretStartX = 0f,
+                caretEndX = 100f,
+            )
+        val snapshot =
+            AndroidLineSnapshot(
+                snapshotId = 1L,
+                bitmap = null,
+                lineIndex = 0,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = RectF(0f, 0f, 100f, 20f),
+                clusters = listOf(cluster),
+                documentByteStart = 0,
+                documentByteEndExclusive = 10,
+                documentUtf16Start = 0,
+                documentUtf16EndExclusive = 10,
+                baseline = 16f,
+                lineHeight = 20f,
+            )
+        val deleteState =
+            makeSliceVisualState(
+                role = SliceRole.Delete,
+                revealFraction = 0.5f,
+                currentAlpha = 1f,
+            )
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 0.5f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(deleteState),
+            )
+
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = mapOf(1L to snapshot),
+            )
+
+        assertEquals("延续的 Delete slice 应存在", 1, result.size)
+        val continued = result[0]
+        assertEquals("角色应保持 Delete", SliceRole.Delete, continued.role)
+        assertNotNull("延续 slice 必须携带 revealSpec（clip swallow，不退回 alpha）", continued.revealSpec)
+        assertEquals("revealSpec 模式应为 SWALLOW", TextRevealMode.SWALLOW, continued.revealSpec!!.mode)
+        assertEquals(
+            "initialFraction 应取自旧帧 revealFraction",
+            0.5f,
+            continued.revealSpec!!.initialFraction,
+            0.0001f,
+        )
+        assertEquals("anchorX 应为 cluster caretStartX（收缩终点）", 0f, continued.revealSpec!!.anchorX, 0.001f)
+        assertEquals("boundaryFromX 应为 cluster caretEndX（起始边界）", 100f, continued.revealSpec!!.boundaryFromX, 0.001f)
+        assertEquals("boundaryToX 应为 cluster caretStartX（终止边界）", 0f, continued.revealSpec!!.boundaryToX, 0.001f)
+        assertEquals("clip 绘制时 startAlpha 固定 1f", 1f, continued.startAlpha, 0.001f)
+        assertEquals("clip 绘制时 endAlpha 固定 1f", 1f, continued.endAlpha, 0.001f)
+    }
+
+    /**
+     * #605 评论3 反向: 无 cluster snapshot 时回退 alpha（向后兼容）。
+     */
+    @Test
+    fun unmatchedDeleteWithRevealFractionButNoClusterFallsBackToAlpha() {
+        val deleteState =
+            makeSliceVisualState(
+                role = SliceRole.Delete,
+                revealFraction = 0.5f,
+                currentAlpha = 0.5f,
+            )
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 0.5f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(deleteState),
+            )
+
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = emptyMap(),
+            )
+
+        assertEquals("无 cluster 时仍应延续", 1, result.size)
+        val continued = result[0]
+        assertEquals("角色应保持 Delete", SliceRole.Delete, continued.role)
+        assertTrue("无 cluster 时 revealSpec 应为 null（alpha 回退）", continued.revealSpec == null)
     }
 }

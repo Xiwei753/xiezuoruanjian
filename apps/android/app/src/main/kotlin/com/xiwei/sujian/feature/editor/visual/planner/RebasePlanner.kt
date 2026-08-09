@@ -4,6 +4,8 @@ import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 import com.xiwei.sujian.feature.editor.visual.SliceVisualState
+import com.xiwei.sujian.feature.editor.visual.TextRevealMode
+import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
 import com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot
 
 class RebasePlanner {
@@ -45,18 +47,37 @@ class RebasePlanner {
                     state.currentAlpha > 0.01f
                 }
             val snapshot = snapshotLookup[state.snapshotId]
-            val sourceRect =
+            val matchedCluster =
                 if (snapshot != null) {
-                    val cluster =
-                        snapshot.clusters.firstOrNull {
-                            it.documentByteStart == state.clusterByteStart &&
-                                it.documentByteEndExclusive == state.clusterByteEndExclusive
-                        }
-                    cluster?.sourceRectInLineImage ?: snapshot.sourceRect
+                    snapshot.clusters.firstOrNull {
+                        it.documentByteStart == state.clusterByteStart &&
+                            it.documentByteEndExclusive == state.clusterByteEndExclusive
+                    }
                 } else {
-                    android.graphics.Rect(0, 0, 0, 0)
+                    null
                 }
+            val sourceRect =
+                matchedCluster?.sourceRectInLineImage
+                    ?: snapshot?.sourceRect
+                    ?: android.graphics.Rect(0, 0, 0, 0)
             if (isFadingOut && shouldContinue) {
+                // #605 评论3: 正在 SWALLOW 中的未匹配 Delete slice 必须继续用 clip swallow 吞完，
+                // 不能退回 alpha 淡出（那正是 #605 要消除的视觉语义）。只有当无法从 snapshot
+                // 重建 cluster caret 几何时才回退 alpha（向后兼容无 cluster 数据的旧快照）。
+                val continueRevealSpec =
+                    if (state.role == SliceRole.Delete && state.revealFraction != null && matchedCluster != null) {
+                        TextRevealSpec(
+                            mode = TextRevealMode.SWALLOW,
+                            anchorX = matchedCluster.caretStartX,
+                            boundaryFromX = matchedCluster.caretEndX,
+                            boundaryToX = matchedCluster.caretStartX,
+                            progressStart = 0f,
+                            progressEnd = 1f,
+                            initialFraction = state.revealFraction,
+                        )
+                    } else {
+                        null
+                    }
                 result.add(
                     PreparedVisualTransaction.AnimatedSlice(
                         role = state.role,
@@ -69,10 +90,11 @@ class RebasePlanner {
                                 state.currentRight,
                                 state.currentBottom,
                             ),
-                        startAlpha = state.currentAlpha,
-                        endAlpha = 0f,
+                        startAlpha = if (continueRevealSpec != null) 1f else state.currentAlpha,
+                        endAlpha = if (continueRevealSpec != null) 1f else 0f,
                         clusterByteStart = state.clusterByteStart,
                         clusterByteEndExclusive = state.clusterByteEndExclusive,
+                        revealSpec = continueRevealSpec,
                     ),
                 )
             } else if (state.role == SliceRole.Move) {
