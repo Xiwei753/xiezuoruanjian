@@ -10,6 +10,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import com.xiwei.sujian.feature.editor.window.EditableTextTarget
+import com.xiwei.sujian.feature.editor.ui.shouldShowEditor
 
 /**
  * #595 三：Attached 必须表示真实 View 已绑定 — 状态机守卫契约测试。
@@ -88,23 +90,23 @@ class AttachedRequiresViewBindTest {
         // Idle/Detaching/Detached 一律显示预览。
         val targetId = "t1"
         assertTrue(
-            com.xiwei.sujian.feature.editor.compose.shouldShowEditor(
+            com.xiwei.sujian.feature.editor.ui.shouldShowEditor(
                 WindowBindingState.Attaching("w", targetId, 1UL),
                 targetId,
             ),
         )
         assertTrue(
-            com.xiwei.sujian.feature.editor.compose.shouldShowEditor(
+            com.xiwei.sujian.feature.editor.ui.shouldShowEditor(
                 WindowBindingState.Attached("w", targetId, 1UL),
                 targetId,
             ),
         )
-        assertFalse(com.xiwei.sujian.feature.editor.compose.shouldShowEditor(WindowBindingState.Idle, targetId))
+        assertFalse(com.xiwei.sujian.feature.editor.ui.shouldShowEditor(WindowBindingState.Idle, targetId))
         assertFalse(
-            com.xiwei.sujian.feature.editor.compose.shouldShowEditor(WindowBindingState.Detaching(null), targetId),
+            com.xiwei.sujian.feature.editor.ui.shouldShowEditor(WindowBindingState.Detaching(null), targetId),
         )
         assertFalse(
-            com.xiwei.sujian.feature.editor.compose.shouldShowEditor(
+            com.xiwei.sujian.feature.editor.ui.shouldShowEditor(
                 WindowBindingState.Detached(targetId, 1UL, null),
                 targetId,
             ),

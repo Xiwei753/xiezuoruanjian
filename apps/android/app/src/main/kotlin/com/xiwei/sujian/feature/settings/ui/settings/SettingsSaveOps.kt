@@ -3,10 +3,10 @@ package com.xiwei.sujian.feature.settings.ui
 // ! # 设置保存操作（从 SettingsRoute 拆分）
 
 import com.xiwei.sujian.R
-import com.xiwei.sujian.core.interop.settings.SaveFailure
-import com.xiwei.sujian.core.interop.settings.SaveField
-import com.xiwei.sujian.core.interop.settings.SettingsRepository
-import com.xiwei.sujian.core.interop.settings.SettingsSaveResult
+import com.xiwei.sujian.feature.settings.data.SaveFailure
+import com.xiwei.sujian.feature.settings.data.SaveField
+import com.xiwei.sujian.feature.settings.data.SettingsRepository
+import com.xiwei.sujian.feature.settings.data.SettingsSaveResult
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import com.xiwei.sujian.feature.sync.data.SyncRepository
 import kotlinx.coroutines.Dispatchers
@@ -44,12 +44,12 @@ suspend fun SettingsViewModel.reloadFromExternalSync() {
 internal suspend fun SettingsViewModel.loadCommittedProfileForProject(
     repo: SyncRepository,
     projectId: String?,
-): com.xiwei.sujian.core.interop.sync.SyncProfileReadResult =
+): com.xiwei.sujian.feature.sync.data.SyncProfileReadResult =
     if (projectId != null) {
         withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(projectId) }
     } else {
-        com.xiwei.sujian.core.interop.sync.SyncProfileReadResult.Failed(
-            com.xiwei.sujian.core.interop.sync.SyncFailureKind.Fatal,
+        com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.Failed(
+            com.xiwei.sujian.feature.sync.data.model.SyncFailureKind.Fatal,
             MSG_NO_ACTIVE_PROJECT,
         )
     }
@@ -262,7 +262,7 @@ private suspend fun SettingsViewModel.saveSyncProfileField(
     if (syncConfig == null && syncSecrets == null) return false to false
     // #600 评论 #3 问题二：commitSyncProfile 按当前活动作品路由 —
     // 无活动作品时直接失败，不写入任何作品。
-    val projectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
+    val projectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
     if (projectId == null) {
         failures.add(SaveFailure(SaveField.SYNC_CONFIG, syncConfig?.revision ?: 0L))
         return false to false
@@ -444,13 +444,13 @@ private suspend fun SettingsViewModel.rollbackSyncConfig(
     // #595 八/五：回滚读取活动 generation 的完整 snapshot，不再读 live 槽；
     // 类型化处理 — Failed 保留当前 UI 值（不静默退化为默认值/null）。
     // #600 评论 #3 问题二：按当前活动作品路由。
-    val rollbackProjectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
+    val rollbackProjectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
     val profile =
         if (rollbackProjectId != null) {
             withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(rollbackProjectId) }
         } else {
-            com.xiwei.sujian.core.interop.sync.SyncProfileReadResult.Failed(
-                com.xiwei.sujian.core.interop.sync.SyncFailureKind.Fatal,
+            com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.Failed(
+                com.xiwei.sujian.feature.sync.data.model.SyncFailureKind.Fatal,
                 MSG_NO_ACTIVE_PROJECT,
             )
         }
@@ -467,13 +467,13 @@ private suspend fun SettingsViewModel.rollbackSyncSecrets(
 ) {
     if (projectSyncSecretsRevision != expectedRevision) return
     // #600 评论 #3 问题二：按当前活动作品路由。
-    val rollbackSecretsProjectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
+    val rollbackSecretsProjectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
     val profile =
         if (rollbackSecretsProjectId != null) {
             withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(rollbackSecretsProjectId) }
         } else {
-            com.xiwei.sujian.core.interop.sync.SyncProfileReadResult.Failed(
-                com.xiwei.sujian.core.interop.sync.SyncFailureKind.Fatal,
+            com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.Failed(
+                com.xiwei.sujian.feature.sync.data.model.SyncFailureKind.Fatal,
                 MSG_NO_ACTIVE_PROJECT,
             )
         }

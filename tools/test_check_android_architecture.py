@@ -228,8 +228,8 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "session-layer-no-platform-state",
             {
-                f"{APP_PREFIX}/feature/editor/coordinator/EditorSessionCoordinator.kt": (
-                    "package com.xiwei.sujian.feature.editor.coordinator\n\n"
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionCoordinator.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
                     "import androidx.compose.runtime.mutableStateOf\n"
                     "class EditorSessionCoordinator {\n"
                     "    val bad by mutableStateOf(0)\n"
@@ -247,8 +247,8 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "session-layer-no-platform-state",
             {
-                f"{APP_PREFIX}/feature/editor/coordinator/EditorSessionCoordinator.kt": (
-                    "package com.xiwei.sujian.feature.editor.coordinator\n\n"
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionCoordinator.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
                     "class EditorSessionCoordinator {\n"
                     "    fun getActiveTargetIdFlow() {}\n"
                     "    val sessionStateFlow = 1\n"
@@ -265,8 +265,8 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "frame-clock-window-owned",
             {
-                f"{APP_PREFIX}/feature/editor/coordinator/EditorSessionCoordinator.kt": (
-                    "package com.xiwei.sujian.feature.editor.coordinator\n\n"
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionCoordinator.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
                     "class EditorSessionCoordinator {\n"
                     "    val clock: WindowDisplayFrameClock? = null\n"
                     "    val sessionStateFlow = 1\n"
@@ -283,8 +283,8 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "update-session-state-transform-purity",
             {
-                f"{APP_PREFIX}/feature/editor/coordinator/EditorSessionEditOps.kt": (
-                    "package com.xiwei.sujian.feature.editor.coordinator\n\n"
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionEditOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
                     "fun bad() {\n"
                     "    updateSessionState { previous ->\n"
                     "        store.put(previous)\n"
@@ -301,8 +301,8 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "update-session-state-transform-purity",
             {
-                f"{APP_PREFIX}/feature/editor/coordinator/EditorSessionEditOps.kt": (
-                    "package com.xiwei.sujian.feature.editor.coordinator\n\n"
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionEditOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
                     "fun good() {\n"
                     "    var pendingRecord: Any? = null\n"
                     "    updateSessionState { previous -> previous.copy() }\n"
@@ -343,8 +343,8 @@ class LayerRuleTests(unittest.TestCase):
         findings = self.run_rule(
             "deleted-types-stay-deleted",
             {
-                f"{APP_PREFIX}/feature/editor/coordinator/EditorAnimationSettings.kt": (
-                    "package com.xiwei.sujian.feature.editor.coordinator\n\n"
+                f"{APP_PREFIX}/feature/editor/session/EditorAnimationSettings.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
                     "class EditorAnimationSettings\n"
                 )
             },

@@ -1,8 +1,8 @@
 package com.xiwei.sujian.feature.editor.pipeline
 
 import android.text.TextPaint
-import com.xiwei.sujian.feature.editor.host.EditorKernelBridge
-import com.xiwei.sujian.feature.editor.mirror.DisplayTextMirror
+import com.xiwei.sujian.feature.editor.interop.EditorKernelBridge
+import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

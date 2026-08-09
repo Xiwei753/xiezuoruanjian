@@ -4,7 +4,7 @@ import android.graphics.Canvas
 import android.icu.text.BreakIterator
 import android.text.Layout
 import androidx.core.graphics.createBitmap
-import com.xiwei.sujian.feature.editor.mirror.DisplayTextMirror
+import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import com.xiwei.sujian.feature.editor.projection.DisplayTextProjection
 
 class AndroidLineSnapshotBuilder {

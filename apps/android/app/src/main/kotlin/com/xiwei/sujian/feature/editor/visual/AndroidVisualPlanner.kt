@@ -2,7 +2,7 @@ package com.xiwei.sujian.feature.editor.visual
 
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
 import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
-import com.xiwei.sujian.feature.editor.mirror.VisualIntent
+import com.xiwei.sujian.feature.editor.projection.VisualIntent
 import com.xiwei.sujian.feature.editor.visual.planner.AffectedLayoutPlanner
 import com.xiwei.sujian.feature.editor.visual.planner.BlockShiftPlanner
 import com.xiwei.sujian.feature.editor.visual.planner.InsertDeletePlanner

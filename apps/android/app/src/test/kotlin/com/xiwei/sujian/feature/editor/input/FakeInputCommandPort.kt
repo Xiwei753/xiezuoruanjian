@@ -1,7 +1,7 @@
 package com.xiwei.sujian.feature.editor.input
 
-import com.xiwei.sujian.feature.editor.mirror.DisplayTextMirror
-import com.xiwei.sujian.feature.editor.mirror.EditResult
+import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
+import com.xiwei.sujian.feature.editor.projection.EditResult
 import com.xiwei.sujian.feature.editor.pipeline.InputCommandPort
 import com.xiwei.sujian.feature.editor.pipeline.PipelineOutput
 import uniffi.writer_core.AnimationModeDto
@@ -607,7 +607,7 @@ class FakeInputCommandPort(
         originalText: String,
         cause: EditorTransactionCauseDto,
         beforePatch: (() -> Unit)?,
-        source: com.xiwei.sujian.feature.editor.host.EditorEditSource,
+        source: com.xiwei.sujian.feature.editor.platform.EditorEditSource,
     ): PipelineOutput {
         if (byteStart > byteEndExclusive || byteEndExclusive > textBytes.size ||
             !isCharBoundary(byteStart) || !isCharBoundary(byteEndExclusive)
@@ -638,7 +638,7 @@ class FakeInputCommandPort(
     override fun setSelectionTyped(
         anchorByteOffset: Int,
         headByteOffset: Int,
-        source: com.xiwei.sujian.feature.editor.host.EditorEditSource,
+        source: com.xiwei.sujian.feature.editor.platform.EditorEditSource,
     ): PipelineOutput {
         if (anchorByteOffset > textBytes.size || headByteOffset > textBytes.size ||
             !isCharBoundary(anchorByteOffset) || !isCharBoundary(headByteOffset)
@@ -773,7 +773,7 @@ class FakeInputCommandPort(
     override fun applyEditResult(
         result: EditResult,
         beforePatch: (() -> Unit)?,
-        source: com.xiwei.sujian.feature.editor.host.EditorEditSource,
+        source: com.xiwei.sujian.feature.editor.platform.EditorEditSource,
     ): PipelineOutput {
         beforePatch?.invoke()
         mirror.applyEditResult(result)

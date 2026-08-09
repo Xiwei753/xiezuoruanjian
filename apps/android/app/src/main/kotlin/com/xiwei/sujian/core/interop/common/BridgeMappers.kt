@@ -1,5 +1,5 @@
 package com.xiwei.sujian.core.interop.common
-import com.xiwei.sujian.core.interop.sync.SyncFailureKind
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.ChapterOpenResult
 import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt

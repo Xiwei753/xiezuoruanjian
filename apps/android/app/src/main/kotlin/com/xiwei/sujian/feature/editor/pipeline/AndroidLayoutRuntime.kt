@@ -4,7 +4,7 @@ import android.text.Layout
 import android.text.TextPaint
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutEngine
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
-import com.xiwei.sujian.feature.editor.mirror.DisplayTextMirror
+import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import com.xiwei.sujian.feature.editor.projection.DisplayTextProjection
 
 class AndroidLayoutRuntime(

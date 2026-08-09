@@ -1,8 +1,8 @@
 package com.xiwei.sujian.feature.editor.input
 
 import android.view.View
-import com.xiwei.sujian.feature.editor.mirror.DisplayTextMirror
-import com.xiwei.sujian.feature.editor.mirror.EditResult
+import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
+import com.xiwei.sujian.feature.editor.projection.EditResult
 import com.xiwei.sujian.feature.editor.pipeline.InputCommandPort
 import com.xiwei.sujian.feature.editor.pipeline.PipelineOutput
 import com.xiwei.sujian.feature.editor.session.AutocorrectPolicy
@@ -155,7 +155,7 @@ class AndroidInputAdapter(
                 originalText,
                 cause,
                 null,
-                com.xiwei.sujian.feature.editor.host.EditorEditSource.NORMAL,
+                com.xiwei.sujian.feature.editor.platform.EditorEditSource.NORMAL,
             )
         onPipelineOutput?.invoke(output)
     }
@@ -168,7 +168,7 @@ class AndroidInputAdapter(
             commandPort.setSelectionTyped(
                 anchorByteOffset,
                 headByteOffset,
-                com.xiwei.sujian.feature.editor.host.EditorEditSource.NORMAL,
+                com.xiwei.sujian.feature.editor.platform.EditorEditSource.NORMAL,
             )
         onPipelineOutput?.invoke(output)
     }
@@ -225,7 +225,7 @@ class AndroidInputAdapter(
             commandPort.applyEditResult(
                 result,
                 null,
-                com.xiwei.sujian.feature.editor.host.EditorEditSource.NORMAL,
+                com.xiwei.sujian.feature.editor.platform.EditorEditSource.NORMAL,
             )
         onPipelineOutput?.invoke(output)
     }

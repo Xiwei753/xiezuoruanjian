@@ -1,11 +1,11 @@
 package com.xiwei.sujian.feature.settings.ui
 
-import com.xiwei.sujian.core.interop.project.ActiveDocumentGate
-import com.xiwei.sujian.core.interop.settings.SettingsSaveResult
-import com.xiwei.sujian.core.interop.sync.AppSyncProfileReadResult
-import com.xiwei.sujian.core.interop.sync.ExclusiveResult
-import com.xiwei.sujian.core.interop.sync.SyncFailureKind
-import com.xiwei.sujian.core.interop.sync.SyncSession
+import com.xiwei.sujian.app.state.ActiveDocumentGate
+import com.xiwei.sujian.feature.settings.data.SettingsSaveResult
+import com.xiwei.sujian.feature.sync.data.AppSyncProfileReadResult
+import com.xiwei.sujian.feature.sync.data.ExclusiveResult
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
+import com.xiwei.sujian.feature.sync.data.SyncSession
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import kotlinx.coroutines.CancellationException
@@ -43,7 +43,7 @@ suspend fun SettingsViewModel.saveTransactionConfigAndSecrets(
 ): Boolean {
     // #600 评论 #3 问题二：先拿当前作品 ID，再保存该作品 profile —
     // 无活动作品时不发布任何写入，避免把配置写到错误的作品或全局槽。
-    val projectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
+    val projectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
     if (projectId == null) return false
     val commitResult = withContext(Dispatchers.IO) { syncRepo.commitSyncProfile(projectId, config, secrets) }
     if (commitResult is SettingsSaveResult.Failed) return false
@@ -108,7 +108,7 @@ private suspend fun SettingsViewModel.runCommandTransaction(
  * 返回 null 表示 capability 检查通过；非 null 表示应提前返回该结果。
  */
 private fun SettingsViewModel.checkSyncCapabilityForCurrentProject(): SyncCommandIoResult? {
-    val projectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
+    val projectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
     if (projectId == null) {
         return SyncCommandIoResult(
             true,
@@ -204,7 +204,7 @@ suspend fun SettingsViewModel.executeSyncTransaction(command: SettingsTransactio
         },
     ) { _, _ ->
         // #600：sync 已改为 per-project — 设置页同步针对当前活动作品。
-        val projectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
+        val projectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
         if (projectId != null) {
             syncCoordinator.runSync(command.trigger, projectId).toIoResult()
         } else {
@@ -249,7 +249,7 @@ suspend fun SettingsViewModel.executeDryRunTransaction(command: SettingsTransact
         },
     ) { config, secrets ->
         // #600：sync 已改为 per-project — 试运行针对当前活动作品。
-        val projectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
+        val projectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
         if (projectId != null) {
             runExclusiveSyncIo(config, secrets) {
                 syncRepo.performSyncDryRunTyped(projectId, it).toIoResult()
@@ -298,7 +298,7 @@ suspend fun SettingsViewModel.executeDiagnosticsTransaction(
         },
     ) { config, secrets ->
         // #600 评论 #3 问题二：连接诊断针对当前活动作品。
-        val diagProjectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
+        val diagProjectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
         if (diagProjectId != null) {
             runExclusiveSyncIo(config, secrets) {
                 syncRepo.performSyncDiagnosticsTyped(diagProjectId, it).toIoResult()
@@ -312,7 +312,7 @@ suspend fun SettingsViewModel.executeDiagnosticsTransaction(
         }
     }
     try {
-        val refreshedCapabilityProjectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
+        val refreshedCapabilityProjectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
         if (refreshedCapabilityProjectId != null) {
             val refreshedCapability =
                 withContext(Dispatchers.IO) { syncRepo.getSyncCapability(refreshedCapabilityProjectId) }
@@ -592,13 +592,13 @@ suspend fun SettingsViewModel.refreshSyncProfileState() {
     val settingsRepoLocal = settingsRepo
     // #600 评论 #3 问题二：profile/capability 按 projectId 路由 —
     // 无活动作品时显示"未选择作品"状态，不读取任何作品数据。
-    val projectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
+    val projectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
     if (projectId == null) {
         _uiState.update {
             it.copy(
                 projectSyncProfileLoadState =
                     com.xiwei.sujian.feature.settings.ui.SyncProfileLoadState.Failed(
-                        com.xiwei.sujian.core.interop.sync.SyncFailureKind.Fatal,
+                        com.xiwei.sujian.feature.sync.data.model.SyncFailureKind.Fatal,
                         MSG_NO_ACTIVE_PROJECT,
                     ),
             )

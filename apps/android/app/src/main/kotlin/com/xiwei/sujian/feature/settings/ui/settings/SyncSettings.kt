@@ -23,7 +23,7 @@ import com.xiwei.sujian.core.designsystem.component.SujianSection
 import com.xiwei.sujian.core.designsystem.component.SujianSlider
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
-import com.xiwei.sujian.feature.editor.compose.AnimatedTextField
+import com.xiwei.sujian.feature.editor.ui.AnimatedTextField
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 
 /**

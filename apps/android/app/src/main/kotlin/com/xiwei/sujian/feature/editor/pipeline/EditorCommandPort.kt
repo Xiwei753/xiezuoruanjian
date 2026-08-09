@@ -1,9 +1,9 @@
 package com.xiwei.sujian.feature.editor.pipeline
 
-import com.xiwei.sujian.feature.editor.host.EditorEditSource
-import com.xiwei.sujian.feature.editor.host.EditorKernelBridge
-import com.xiwei.sujian.feature.editor.mirror.DisplayTextMirror
-import com.xiwei.sujian.feature.editor.mirror.EditResult
+import com.xiwei.sujian.feature.editor.platform.EditorEditSource
+import com.xiwei.sujian.feature.editor.interop.EditorKernelBridge
+import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
+import com.xiwei.sujian.feature.editor.projection.EditResult
 import uniffi.writer_core.EditorEditResultDto
 import uniffi.writer_core.EditorTransactionCauseDto
 

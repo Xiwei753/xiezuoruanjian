@@ -2,9 +2,9 @@ package com.xiwei.sujian.feature.settings.ui
 
 // ! # 同步结果映射（从 SettingsSyncOps 拆分）— 降低 TooManyFunctions
 
-import com.xiwei.sujian.core.interop.sync.ExclusiveResult
-import com.xiwei.sujian.core.interop.sync.SyncFailureKind
-import com.xiwei.sujian.core.interop.sync.SyncOutcome
+import com.xiwei.sujian.feature.sync.data.ExclusiveResult
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
+import com.xiwei.sujian.feature.sync.data.SyncOutcome
 import com.xiwei.sujian.feature.sync.data.SyncDiagnosticsOutcome
 import com.xiwei.sujian.feature.sync.data.SyncDryRunOutcome
 

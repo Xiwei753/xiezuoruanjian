@@ -8,6 +8,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.xiwei.sujian.feature.editor.window.EditingState
 
 /**
  * #595 四：EditorSessionStore 契约测试。

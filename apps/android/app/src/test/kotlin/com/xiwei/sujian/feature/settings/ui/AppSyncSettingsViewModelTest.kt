@@ -16,11 +16,11 @@ import org.robolectric.annotation.Config
 class AppSyncSettingsViewModelTest {
     private fun createVm(): SettingsViewModel {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
-        val repo = com.xiwei.sujian.core.interop.settings.SettingsRepository(context)
+        val repo = com.xiwei.sujian.feature.settings.data.SettingsRepository(context)
         val themeRepo = com.xiwei.sujian.app.theme.ThemeRepository(context)
         val syncRepo = com.xiwei.sujian.feature.sync.data.SyncRepository(context)
-        val syncStatusRepo = com.xiwei.sujian.core.interop.sync.SyncStatusRepository(syncRepo)
-        val coordinator = com.xiwei.sujian.core.interop.sync.SyncCoordinator(syncRepo, syncStatusRepo)
+        val syncStatusRepo = com.xiwei.sujian.feature.sync.data.SyncStatusRepository(syncRepo)
+        val coordinator = com.xiwei.sujian.feature.sync.data.SyncCoordinator(syncRepo, syncStatusRepo)
         return SettingsViewModel(repo, themeRepo, syncRepo, coordinator)
     }
 

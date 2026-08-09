@@ -3,7 +3,7 @@ package com.xiwei.sujian.feature.editor.visual.planner
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
 import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
 import com.xiwei.sujian.feature.editor.layout.LineClusterSnapshot
-import com.xiwei.sujian.feature.editor.mirror.VisualIntent
+import com.xiwei.sujian.feature.editor.projection.VisualIntent
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 

@@ -2,13 +2,13 @@ package com.xiwei.sujian.feature.editor.pipeline
 
 import android.graphics.Color
 import android.text.TextPaint
-import com.xiwei.sujian.feature.editor.host.EditorEditSource
-import com.xiwei.sujian.feature.editor.host.EditorKernelBridge
+import com.xiwei.sujian.feature.editor.platform.EditorEditSource
+import com.xiwei.sujian.feature.editor.interop.EditorKernelBridge
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutEngine
-import com.xiwei.sujian.feature.editor.mirror.CoordinatedCursor
-import com.xiwei.sujian.feature.editor.mirror.DisplayTextMirror
-import com.xiwei.sujian.feature.editor.mirror.EditResult
-import com.xiwei.sujian.feature.editor.mirror.VisualIntent
+import com.xiwei.sujian.feature.editor.projection.CoordinatedCursor
+import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
+import com.xiwei.sujian.feature.editor.projection.EditResult
+import com.xiwei.sujian.feature.editor.projection.VisualIntent
 import com.xiwei.sujian.feature.editor.projection.DisplayTextProjection
 import uniffi.writer_core.EditorTransactionCauseDto
 

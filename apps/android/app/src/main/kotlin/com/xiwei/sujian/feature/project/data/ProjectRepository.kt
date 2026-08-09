@@ -6,7 +6,7 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.MessageKeyMapper
 import com.xiwei.sujian.core.interop.common.RepositoryException
-import com.xiwei.sujian.core.interop.sync.SyncFailureKind
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.ProjectStats
@@ -16,7 +16,7 @@ import com.xiwei.sujian.feature.project.data.model.Volume
  * ProjectRepository — 项目树 CRUD 仓库层。
  *
  * #602 Phase 5：章节内容函数移到 ChapterRepository，最近编辑函数移到 RecentEditsRepository，
- * 统计函数移到 StatsRepository。本类只保留项目树 CRUD 与 getProjectStats。
+ * 统计函数移到 WritingStatsRepository。本类只保留项目树 CRUD 与 getProjectStats。
  */
 class ProjectRepository(private val context: Context, bridge: AppServiceBridge? = null) {
     private val appBridge = bridge ?: AppServiceProvider.getAppServiceBridge(context)

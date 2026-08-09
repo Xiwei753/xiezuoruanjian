@@ -30,15 +30,15 @@ import com.xiwei.sujian.app.navigation.SujianNavigationSuite
 import com.xiwei.sujian.app.theme.SujianTheme
 import com.xiwei.sujian.app.theme.ThemeStore
 import com.xiwei.sujian.app.theme.rememberThemeController
-import com.xiwei.sujian.core.interop.project.ProjectUseCase
+import com.xiwei.sujian.feature.project.domain.ProjectUseCase
 import com.xiwei.sujian.core.platform.aosp.AospCapabilityProvider
 import com.xiwei.sujian.core.platform.aosp.VendorAdapterSetup
 import com.xiwei.sujian.core.platform.api.AndroidCapabilities
 import com.xiwei.sujian.core.platform.api.PointerKind
 import com.xiwei.sujian.core.platform.vendor.VendorAdapterRegistry
 import com.xiwei.sujian.core.platform.window.WindowFoldFeatureCollector
-import com.xiwei.sujian.feature.editor.compose.LocalEditorWindowHost
-import com.xiwei.sujian.feature.editor.session.EditorWindowHost
+import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
+import com.xiwei.sujian.feature.editor.window.EditorWindowHost
 
 val LocalAndroidCapabilities =
     androidx.compose.runtime.compositionLocalOf<AndroidCapabilities> {

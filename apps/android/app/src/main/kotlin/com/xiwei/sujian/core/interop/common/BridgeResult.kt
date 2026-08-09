@@ -1,5 +1,5 @@
 package com.xiwei.sujian.core.interop.common
-import com.xiwei.sujian.core.interop.sync.SyncFailureKind
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 
 /**
  * Android 端 Bridge 调用结果密封类。

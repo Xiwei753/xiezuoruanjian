@@ -6,6 +6,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.xiwei.sujian.feature.editor.platform.EditorEditSource
+import com.xiwei.sujian.feature.editor.platform.SujianEditorView
+import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 
 /**
  * #595 二/四：EditorDocumentUpdate 类型化事件与文档版本比较契约测试。
@@ -301,25 +304,25 @@ class EditorDocumentUpdateTypedEventsTest {
 
     @Test
     fun editorEditSource_hasAllFourValues() {
-        assertEquals(4, com.xiwei.sujian.feature.editor.host.EditorEditSource.values().size)
+        assertEquals(4, com.xiwei.sujian.feature.editor.platform.EditorEditSource.values().size)
         assertTrue(
-            com.xiwei.sujian.feature.editor.host.EditorEditSource.values().contains(
-                com.xiwei.sujian.feature.editor.host.EditorEditSource.NORMAL,
+            com.xiwei.sujian.feature.editor.platform.EditorEditSource.values().contains(
+                com.xiwei.sujian.feature.editor.platform.EditorEditSource.NORMAL,
             ),
         )
         assertTrue(
-            com.xiwei.sujian.feature.editor.host.EditorEditSource.values().contains(
-                com.xiwei.sujian.feature.editor.host.EditorEditSource.UNDO,
+            com.xiwei.sujian.feature.editor.platform.EditorEditSource.values().contains(
+                com.xiwei.sujian.feature.editor.platform.EditorEditSource.UNDO,
             ),
         )
         assertTrue(
-            com.xiwei.sujian.feature.editor.host.EditorEditSource.values().contains(
-                com.xiwei.sujian.feature.editor.host.EditorEditSource.REDO,
+            com.xiwei.sujian.feature.editor.platform.EditorEditSource.values().contains(
+                com.xiwei.sujian.feature.editor.platform.EditorEditSource.REDO,
             ),
         )
         assertTrue(
-            com.xiwei.sujian.feature.editor.host.EditorEditSource.values().contains(
-                com.xiwei.sujian.feature.editor.host.EditorEditSource.PROGRAMMATIC,
+            com.xiwei.sujian.feature.editor.platform.EditorEditSource.values().contains(
+                com.xiwei.sujian.feature.editor.platform.EditorEditSource.PROGRAMMATIC,
             ),
         )
     }
@@ -330,7 +333,7 @@ class EditorDocumentUpdateTypedEventsTest {
         // 不再通过 View 可变侧信道标记。
         val editedFields = com.xiwei.sujian.feature.editor.pipeline.PipelineOutput.Edited::class.java.declaredFields
         assertTrue(editedFields.any { it.name == "source" })
-        val viewFields = com.xiwei.sujian.feature.editor.host.SujianEditorView::class.java.declaredFields
+        val viewFields = com.xiwei.sujian.feature.editor.platform.SujianEditorView::class.java.declaredFields
         assertFalse(viewFields.any { it.name == "pendingEditSource" })
     }
 

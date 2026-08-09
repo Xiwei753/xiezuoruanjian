@@ -44,8 +44,8 @@ import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.layout.SujianListDetailScaffoldWithNavigator
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
-import com.xiwei.sujian.core.interop.settings.SettingsRepository
-import com.xiwei.sujian.core.interop.sync.SyncCoordinator
+import com.xiwei.sujian.feature.settings.data.SettingsRepository
+import com.xiwei.sujian.feature.sync.data.SyncCoordinator
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import com.xiwei.sujian.feature.sync.data.SyncRepository
 import kotlinx.coroutines.channels.Channel
@@ -61,7 +61,7 @@ class SettingsViewModel(
     internal val settingsRepo: SettingsRepository,
     internal val themeRepo: ThemeRepository,
     internal val syncRepo: SyncRepository,
-    internal val syncCoordinator: com.xiwei.sujian.core.interop.sync.SyncCoordinator,
+    internal val syncCoordinator: com.xiwei.sujian.feature.sync.data.SyncCoordinator,
 ) : ViewModel() {
     /** internal 暴露 viewModelScope 供 extension functions 使用。 */
     internal val editorScope: kotlinx.coroutines.CoroutineScope get() = viewModelScope
@@ -119,7 +119,7 @@ class SettingsViewModel(
         loadInitial()
         // #600 评论 #7: 外部同步拉取设置后, 重新从 Core 加载设置状态
         viewModelScope.launch {
-            com.xiwei.sujian.core.interop.settings.CoreSettingsEvents.settingsChanged.collect {
+            com.xiwei.sujian.feature.settings.data.CoreSettingsEvents.settingsChanged.collect {
                 reloadFromExternalSync()
             }
         }
@@ -171,7 +171,7 @@ class SettingsViewModel(
         internal val repo: SettingsRepository,
         internal val themeRepo: ThemeRepository,
         internal val syncRepo: SyncRepository,
-        internal val coordinator: com.xiwei.sujian.core.interop.sync.SyncCoordinator,
+        internal val coordinator: com.xiwei.sujian.feature.sync.data.SyncCoordinator,
     ) : androidx.lifecycle.ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             return modelClass.cast(SettingsViewModel(repo, themeRepo, syncRepo, coordinator)) as T

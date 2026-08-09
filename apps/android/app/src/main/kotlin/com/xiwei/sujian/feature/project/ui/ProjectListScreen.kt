@@ -32,7 +32,7 @@ import com.xiwei.sujian.core.designsystem.component.SujianListItem
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
-import com.xiwei.sujian.feature.editor.compose.AnimatedTextField
+import com.xiwei.sujian.feature.editor.ui.AnimatedTextField
 import com.xiwei.sujian.feature.project.data.model.Project
 
 @Composable

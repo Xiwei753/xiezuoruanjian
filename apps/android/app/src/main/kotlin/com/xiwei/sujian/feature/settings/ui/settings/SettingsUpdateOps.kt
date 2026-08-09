@@ -161,7 +161,7 @@ internal suspend fun SettingsViewModel.loadInitialProjectSyncProfile(
     repo: SyncRepository,
 ): Pair<SyncProfileLoadState, com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData> {
     // #600 评论 #3 问题二：profile/capability 按当前活动作品路由。
-    val activeProjectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
+    val activeProjectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
     val committedProfile = loadCommittedProfileForProject(repo, activeProjectId)
     // #595 四：类型化加载状态 — Failed 时保留当前字段值，页面显示真实错误。
     val projectSyncProfileLoadState = committedProfile.toSyncProfileLoadState()

@@ -18,13 +18,13 @@ fun SettingsViewModel.mergeRefresh() {
         val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
         // #595 八：刷新读取活动 generation 的完整 snapshot，不再读 live legacy 槽。
         // #600 评论 #3 问题二：按当前活动作品路由。
-        val mergeProjectId = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
+        val mergeProjectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
         val committedProfile =
             if (mergeProjectId != null) {
                 withContext(Dispatchers.IO) { syncRepoLocal.loadCommittedSyncProfile(mergeProjectId) }
             } else {
-                com.xiwei.sujian.core.interop.sync.SyncProfileReadResult.Failed(
-                    com.xiwei.sujian.core.interop.sync.SyncFailureKind.Fatal,
+                com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.Failed(
+                    com.xiwei.sujian.feature.sync.data.model.SyncFailureKind.Fatal,
                     MSG_NO_ACTIVE_PROJECT,
                 )
             }

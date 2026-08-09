@@ -5,7 +5,7 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.ResultEnvelope
 import com.xiwei.sujian.core.interop.common.toSyncFailureKind
 import com.xiwei.sujian.core.interop.common.toWireErrorCode
-import com.xiwei.sujian.core.interop.sync.AndroidKeystoreSecureStorage
+import com.xiwei.sujian.core.interop.security.AndroidKeystoreSecureStorage
 import com.xiwei.sujian.core.platform.AndroidDataRoot
 import uniffi.writer_core.PlatformDto
 import uniffi.writer_core.PlatformInitDto
@@ -20,7 +20,7 @@ class WriterAppServiceHolder(
     platformInit: PlatformInitDto? = null,
     secureStorageProvider: uniffi.writer_core.SecureStorageProvider? = null,
     val secureStorageError: String? = null,
-    private val keystoreStorage: com.xiwei.sujian.core.interop.sync.AndroidKeystoreSecureStorage? = null,
+    private val keystoreStorage: com.xiwei.sujian.core.interop.security.AndroidKeystoreSecureStorage? = null,
 ) {
     @Volatile
     private var _initError: WriterException? = null

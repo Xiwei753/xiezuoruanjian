@@ -1,6 +1,6 @@
 package com.xiwei.sujian.feature.settings.ui
 
-import com.xiwei.sujian.core.interop.sync.SyncFailureKind
+import com.xiwei.sujian.feature.sync.data.model.SyncFailureKind
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
@@ -55,13 +55,13 @@ internal val SyncProfileLoadState.confirmedSecrets: com.xiwei.sujian.feature.syn
         }
 
 /** #595 四：SyncProfileReadResult → 设置页加载状态 — Failed 不再被静默转成 null。 */
-internal fun com.xiwei.sujian.core.interop.sync.SyncProfileReadResult.toSyncProfileLoadState(): SyncProfileLoadState =
+internal fun com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.toSyncProfileLoadState(): SyncProfileLoadState =
     when (this) {
-        is com.xiwei.sujian.core.interop.sync.SyncProfileReadResult.Found ->
+        is com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.Found ->
             SyncProfileLoadState.Ready(snapshot.config, snapshot.secrets)
-        is com.xiwei.sujian.core.interop.sync.SyncProfileReadResult.NotConfigured ->
+        is com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.NotConfigured ->
             SyncProfileLoadState.Unconfigured(snapshot.config, snapshot.secrets)
-        is com.xiwei.sujian.core.interop.sync.SyncProfileReadResult.Failed ->
+        is com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.Failed ->
             SyncProfileLoadState.Failed(kind, message)
     }
 

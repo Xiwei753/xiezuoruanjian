@@ -28,11 +28,11 @@ complexity:
     threshold: 15
     excludes:
       # --- 数据层：同步/设置逻辑，条件分支密集，待拆分状态机 ---
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/AutoSyncWorker.kt"              # 同步Worker，多分支错误处理
-      - "**/kotlin/com/xiwei/sujian/core/interop/settings/SettingsRepository.kt"          # 设置仓储，多条件映射
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/SyncCoordinator.kt"            # 同步协调器，多阶段状态判断
+      - "**/kotlin/com/xiwei/sujian/feature/sync/work/AutoSyncWorker.kt"              # 同步Worker，多分支错误处理
+      - "**/kotlin/com/xiwei/sujian/feature/settings/data/SettingsRepository.kt"          # 设置仓储，多条件映射
+      - "**/kotlin/com/xiwei/sujian/feature/sync/data/SyncCoordinator.kt"            # 同步协调器，多阶段状态判断
       # --- 星图缓存：多条件缓存失效与重建 ---
-      - "**/kotlin/com/xiwei/sujian/core/interop/starmap/starmap/StarMapSnapshotCache.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/starmap/data/StarMapSnapshotCache.kt"
       # --- 编辑器：Compose动画/平台桥接/输入法协议，分支天然密集 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/compose/AnimatedTextField.kt"       # Compose动画状态组合
       - "**/kotlin/com/xiwei/sujian/feature/editor/host/SujianEditorView.kt"          # 平台桥接层条件分支
@@ -49,7 +49,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/MoveCrossfadePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlanner.kt"
       # --- 平台安全：Android Keystore API条件分支多 ---
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/AndroidKeystoreSecureStorage.kt"
+      - "**/kotlin/com/xiwei/sujian/core/interop/security/AndroidKeystoreSecureStorage.kt"
       # --- 设置界面：多设置项组合条件 ---
       - "**/kotlin/com/xiwei/sujian/feature/settings/ui/settings/AppearanceSettings.kt"   # 外观设置多条件
       - "**/kotlin/com/xiwei/sujian/feature/settings/ui/settings/SyncSettings.kt"         # 同步设置多条件
@@ -70,13 +70,13 @@ complexity:
     threshold: 15
     excludes:
       # --- 数据层：桥接映射/同步逻辑，多分支错误处理 ---
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/AutoSyncWorker.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/sync/work/AutoSyncWorker.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/common/BridgeMappers.kt"               # 桥接映射多分支
       - "**/kotlin/com/xiwei/sujian/core/interop/common/BridgeResult.kt"                # 桥接结果多分支
       - "**/kotlin/com/xiwei/sujian/core/interop/common/MessageKeyMapper.kt"            # 消息键映射多分支
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/SyncCoordinator.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/sync/data/SyncCoordinator.kt"
       # --- 星图缓存 ---
-      - "**/kotlin/com/xiwei/sujian/core/interop/starmap/starmap/StarMapSnapshotCache.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/starmap/data/StarMapSnapshotCache.kt"
       # --- 编辑器：输入法/管线/视觉规划，分支密集 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/input/AndroidInputAdapter.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/input/AndroidInputConnection.kt"
@@ -91,7 +91,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/MoveCrossfadePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlanner.kt"
       # --- 平台安全 ---
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/AndroidKeystoreSecureStorage.kt"
+      - "**/kotlin/com/xiwei/sujian/core/interop/security/AndroidKeystoreSecureStorage.kt"
       # --- 设置界面 ---
       - "**/kotlin/com/xiwei/sujian/feature/settings/ui/settings/AppearanceSettings.kt"
       - "**/kotlin/com/xiwei/sujian/feature/settings/ui/settings/SyncSettings.kt"
@@ -106,11 +106,11 @@ complexity:
     threshold: 80
     excludes:
       # --- 数据层：同步逻辑长方法 ---
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/SyncCoordinator.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/sync/data/SyncCoordinator.kt"
       # --- 编辑器测试替身：模拟完整 IME 协议（既有实现）---
       - "**/kotlin/com/xiwei/sujian/feature/editor/input/FakeInputCommandPort.kt"
       # --- 星图缓存 ---
-      - "**/kotlin/com/xiwei/sujian/core/interop/starmap/starmap/StarMapSnapshotCache.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/starmap/data/StarMapSnapshotCache.kt"
       # --- 编辑器：Compose动画/布局/管线/视觉规划，长方法 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/compose/AnimatedInlineText.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/compose/AnimatedTextArea.kt"
@@ -124,7 +124,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/MoveCrossfadePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlanner.kt"
       # --- 平台安全 ---
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/AndroidKeystoreSecureStorage.kt"
+      - "**/kotlin/com/xiwei/sujian/core/interop/security/AndroidKeystoreSecureStorage.kt"
       # --- UI测试 ---
       - "**/kotlin/com/xiwei/sujian/app/theme/ThemePaletteHelperTest.kt"
       # --- 设置界面长Composable ---
@@ -141,11 +141,11 @@ complexity:
     threshold: 500
     excludes:
       # --- 数据层：设置仓储大类 ---
-      - "**/kotlin/com/xiwei/sujian/core/interop/settings/SettingsRepository.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/settings/data/SettingsRepository.kt"
       - "**/kotlin/com/xiwei/sujian/feature/sync/data/SyncRepository.kt"
       # --- FFI 门面：121 个向后兼容委托函数，签名由 Core 契约决定 ---
       - "**/kotlin/com/xiwei/sujian/core/interop/app/AppServiceBridge.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/SyncBridge.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/sync/data/interop/SyncBridge.kt"
       # --- 编辑器窗口宿主：窗口生命周期/绑定/输入汇聚，按阶段拆分函数 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/coordinator/EditorWindowHost.kt"
       # --- 编辑器：宿主/管线/规划器大类 ---
@@ -170,12 +170,12 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/core/designsystem/component/SujianButton.kt"
       # --- 数据层桥接：FFI桥接函数参数由Core契约决定 ---
       - "**/kotlin/com/xiwei/sujian/core/interop/app/AppServiceBridge.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/SyncBridge.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/stats/StatsBridge.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/sync/data/interop/SyncBridge.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/stats/data/interop/StatsBridge.kt"
       - "**/kotlin/com/xiwei/sujian/feature/project/data/ProjectRepository.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/app/WriterAppServiceHolder.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/project/WritingBridge.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/stats/StatsRepository.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/stats/data/WritingStatsRepository.kt"
       # --- 诊断事件：多字段事件数据类 ---
       - "**/kotlin/com/xiwei/sujian/core/diagnostics/DiagnosticsEvents.kt"
       # --- 编辑器：Compose动画/管线/视觉，参数由渲染协议决定 ---
@@ -210,7 +210,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/InsertDeletePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/MoveCrossfadePlanner.kt"
       # --- 平台安全 ---
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/AndroidKeystoreSecureStorage.kt"
+      - "**/kotlin/com/xiwei/sujian/core/interop/security/AndroidKeystoreSecureStorage.kt"
   ComplexCondition:
     active: true
     threshold: 4
@@ -228,14 +228,14 @@ complexity:
     excludes:
       # --- 数据层桥接：FFI桥接函数由Core契约决定 ---
       - "**/kotlin/com/xiwei/sujian/core/interop/app/AppServiceBridge.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/SyncBridge.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/sync/data/interop/SyncBridge.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/common/BridgeMappers.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/common/LayoutPolicyBridge.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/settings/SettingsRepository.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/settings/data/SettingsRepository.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/starmap/StarMapBridge.kt"
       - "**/kotlin/com/xiwei/sujian/feature/project/data/ProjectRepository.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/starmap/starmap/StarMapBridgeOps.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/starmap/starmap/StarMapRepository.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/starmap/data/interop/StarMapBridgeOps.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/starmap/data/StarMapRepository.kt"
       - "**/kotlin/com/xiwei/sujian/feature/sync/data/SyncRepository.kt"
       # --- 诊断事件：多字段事件枚举 ---
       - "**/kotlin/com/xiwei/sujian/core/diagnostics/DiagnosticsEvents.kt"
@@ -264,18 +264,18 @@ complexity:
     excludes:
       # --- 数据层：桥接/同步/仓储，协议字符串天然重复 ---
       - "**/kotlin/com/xiwei/sujian/app/SujianApplication.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/AutoSyncScheduler.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/AutoSyncWorker.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/sync/work/AutoSyncScheduler.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/sync/work/AutoSyncWorker.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/common/BridgeMapperTest.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/CommitSyncProfileMigrationTest.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/SyncProfileGenerationTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/sync/data/CommitSyncProfileMigrationTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/sync/data/SyncProfileGenerationTest.kt"
       - "**/kotlin/com/xiwei/sujian/core/interop/project/DocumentSaveReceiptTrackerTest.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/settings/SettingsRepository.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/SyncCoordinator.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/settings/data/SettingsRepository.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/sync/data/SyncCoordinator.kt"
       - "**/kotlin/com/xiwei/sujian/feature/project/data/ProjectRepository.kt"
       # --- 星图：桥接/缓存/测试，协议键重复 ---
-      - "**/kotlin/com/xiwei/sujian/core/interop/starmap/starmap/StarMapRepository.kt"
-      - "**/kotlin/com/xiwei/sujian/core/interop/starmap/starmap/StarMapSnapshotCache.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/starmap/data/StarMapRepository.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/starmap/data/StarMapSnapshotCache.kt"
       # --- 诊断：日志/导出，格式字符串重复 ---
       - "**/kotlin/com/xiwei/sujian/core/diagnostics/DiagnosticsEvents.kt"
       - "**/kotlin/com/xiwei/sujian/core/diagnostics/DiagnosticsExporter.kt"
@@ -293,7 +293,7 @@ complexity:
       # --- 实验设置 ---
       - "**/kotlin/com/xiwei/sujian/app/labs/ExperimentalSettingsRepository.kt"
       # --- 平台安全 ---
-      - "**/kotlin/com/xiwei/sujian/core/interop/sync/AndroidKeystoreSecureStorage.kt"
+      - "**/kotlin/com/xiwei/sujian/core/interop/security/AndroidKeystoreSecureStorage.kt"
       # --- UI测试/工具 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/ChapterSwitchGateTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/EditorViewModelChapterSwitchTest.kt"

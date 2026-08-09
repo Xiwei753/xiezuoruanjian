@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 
 /**
  * #595 二：Reducer 文档版本守卫契约测试。

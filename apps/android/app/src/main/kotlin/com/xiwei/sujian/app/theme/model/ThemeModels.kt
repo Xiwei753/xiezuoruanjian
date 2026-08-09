@@ -4,7 +4,7 @@ package com.xiwei.sujian.app.theme.model
  * App 层主题 DTO — UI 层通过这些类型间接访问 UniFFI 绑定。
  *
  * 这些类型是 `uniffi.writer_core.*Dto` 的 app 层镜像，UI 层不得直接引用 UniFFI 绑定。
- * 映射在 [com.xiwei.sujian.core.interop.common.ThemeDtoMapper] 中完成，Repository/Store 层负责转换。
+ * 映射在 [com.xiwei.sujian.app.theme.interop.ThemeDtoMapper] 中完成，Repository/Store 层负责转换。
  *
  *
  * 主题配色方案 — 所有颜色字段为 hex 字符串（如 "#FF0000"）。

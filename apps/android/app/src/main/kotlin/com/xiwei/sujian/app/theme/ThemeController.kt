@@ -9,7 +9,7 @@ import androidx.compose.runtime.remember
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.xiwei.sujian.core.interop.settings.SettingsRepository
+import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import kotlinx.coroutines.flow.StateFlow
 
 class ThemeController(
@@ -105,7 +105,7 @@ fun rememberThemeController(
     }
 
     LaunchedEffect(Unit) {
-        com.xiwei.sujian.core.interop.settings.CoreSettingsEvents.settingsChanged.collect {
+        com.xiwei.sujian.feature.settings.data.CoreSettingsEvents.settingsChanged.collect {
             ThemeStore.onSyncCompleted()
             controller.reload()
         }

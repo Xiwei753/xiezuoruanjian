@@ -1,6 +1,6 @@
 package com.xiwei.sujian.feature.editor.input
 
-import com.xiwei.sujian.feature.editor.mirror.DisplayTextMirror
+import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 
 /**
  * Bidirectional UTF-8 ↔ UTF-16 offset mapping for a fixed text snapshot.

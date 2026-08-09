@@ -9,6 +9,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import com.xiwei.sujian.feature.editor.window.EditingState
 
 /**
  * #595 二/三：会话层状态行为测试 — 订阅 sessionStateFlow 后输入和章节切换的真实状态变化。

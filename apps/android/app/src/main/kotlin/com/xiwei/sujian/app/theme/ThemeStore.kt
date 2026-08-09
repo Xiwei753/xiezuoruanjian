@@ -3,7 +3,7 @@ package com.xiwei.sujian.app.theme
 import android.content.Context
 import com.xiwei.sujian.app.theme.model.BuiltinTheme
 import com.xiwei.sujian.app.theme.model.ThemePaletteRecord
-import com.xiwei.sujian.core.interop.settings.SettingsRepository
+import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

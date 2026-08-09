@@ -92,7 +92,7 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "FFI 门面类：121 个向后兼容委托函数聚合在唯一 holder 上，签名由 Core 契约决定；"
         "已按领域拆分为 ProjectBridge/ChapterBridge/SettingsBridge 等子桥，门面只保留委托；"
         "TODO(#597) 后续把门面委托按领域迁移到扩展函数文件",
-    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/feature/editor/host/SujianEditorView.kt"), "god-file"):
+    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/feature/editor/platform/SujianEditorView.kt"), "god-file"):
         "编辑器平台宿主：View 生命周期/InputConnection/渲染回调/窗口绑定共享同一视图上下文，"
         "拆分会破坏平台绑定状态机；已按阶段拆分内部函数；"
         "TODO(#597) 后续按回调族提取子对象",
@@ -100,11 +100,6 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "编辑器管线聚合：输入/排版/渲染/提交共享同一帧上下文与运行时状态，"
         "拆分会破坏帧原子性；已按阶段拆分内部函数；"
         "TODO(#597) 后续按阶段提取子管线",
-    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/core/interop/settings/SettingsRepository.kt"), "god-file"):
-        "设置仓储聚合根：设置/同步凭据/主题调色板共享同一 SharedPreferences 上下文与事务边界，"
-        "拆分会破坏设置原子性；已按子域拆分内部函数；"
-        "TODO(#597) 后续按子域提取独立 Repository",
-
     (Path("apps/Linux_qt/src/editor/layout.rs"), "god-file"):
         "Qt 编辑器排版核心：行盒/字距/换行/光标命中共享同一排版上下文，"
         "拆分会引入循环依赖；已按渲染阶段切分函数",

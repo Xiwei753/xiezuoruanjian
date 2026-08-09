@@ -1,7 +1,7 @@
 package com.xiwei.sujian.feature.editor.motion
 
 import com.xiwei.sujian.feature.editor.session.AnimationPolicy
-import com.xiwei.sujian.feature.editor.session.EditorWindowHost
+import com.xiwei.sujian.feature.editor.window.EditorWindowHost
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

@@ -28,7 +28,7 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.component.SujianCard
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.core.interop.common.BridgeResult
-import com.xiwei.sujian.core.interop.stats.StatsRepositoryProvider
+import com.xiwei.sujian.feature.stats.data.WritingStatsRepositoryProvider
 import com.xiwei.sujian.feature.stats.data.model.ProjectWritingStatsItem
 import com.xiwei.sujian.feature.stats.data.model.WritingStatsSummary
 import kotlinx.coroutines.Dispatchers
@@ -51,7 +51,7 @@ fun StatsScreen(modifier: Modifier = Modifier) {
 
         withContext(Dispatchers.IO) {
             try {
-                val bridge = StatsRepositoryProvider.getStatsBridge(context)
+                val bridge = WritingStatsRepositoryProvider.getStatsBridge(context)
                 when (val result = bridge.getWritingStatsSummary(startDate, endDate)) {
                     is BridgeResult.Success -> summary = result.data
                     else -> {}

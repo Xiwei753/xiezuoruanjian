@@ -3,7 +3,7 @@ package com.xiwei.sujian.feature.editor.visual
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutEngine
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
 import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
-import com.xiwei.sujian.feature.editor.mirror.VisualIntent
+import com.xiwei.sujian.feature.editor.projection.VisualIntent
 
 /**
  * Unified owner of the Android text animation runtime.

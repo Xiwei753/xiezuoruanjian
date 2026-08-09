@@ -5,7 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.toArgb
-import com.xiwei.sujian.feature.editor.host.SujianEditorView
+import com.xiwei.sujian.feature.editor.platform.SujianEditorView
 
 data class EditorThemeColors(
     val text: Int,

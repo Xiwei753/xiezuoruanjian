@@ -2,7 +2,7 @@ package com.xiwei.sujian.feature.editor.pipeline
 
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutEngine
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
-import com.xiwei.sujian.feature.editor.mirror.VisualIntent
+import com.xiwei.sujian.feature.editor.projection.VisualIntent
 import com.xiwei.sujian.feature.editor.visual.AndroidTextAnimationEngine
 import com.xiwei.sujian.feature.editor.visual.AndroidVisualPlanner
 import com.xiwei.sujian.feature.editor.visual.TextAnimationPolicy

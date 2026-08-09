@@ -3,7 +3,7 @@ package com.xiwei.sujian.feature.editor.input
 import android.content.Context
 import android.view.View
 import androidx.test.core.app.ApplicationProvider
-import com.xiwei.sujian.feature.editor.mirror.DisplayTextMirror
+import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 
 /**
  * Builds the production input stack ([DisplayTextMirror] + [FakeInputCommandPort] +

@@ -109,9 +109,9 @@ class SecretProjectionAtomicityTest {
     @Test
     fun pipelineApplyEditResultIncludesSecretInMirrorUpdate() {
         val pipelineClazz = Class.forName("com.xiwei.sujian.feature.editor.pipeline.AndroidEditorPipeline")
-        val editResultClazz = Class.forName("com.xiwei.sujian.feature.editor.mirror.EditResult")
+        val editResultClazz = Class.forName("com.xiwei.sujian.feature.editor.projection.EditResult")
         val functionType = kotlin.jvm.functions.Function0::class.java
-        val sourceType = com.xiwei.sujian.feature.editor.host.EditorEditSource::class.java
+        val sourceType = com.xiwei.sujian.feature.editor.platform.EditorEditSource::class.java
         // #595 四：applyEditResult(result, beforePatch, source) — 来源随命令传递。
         val applyMethod =
             pipelineClazz.getDeclaredMethod(
@@ -142,7 +142,7 @@ class SecretProjectionAtomicityTest {
     @Test
     fun layoutRuntimeRebuildSecretProjectionUsesComposition() {
         val clazz = Class.forName("com.xiwei.sujian.feature.editor.pipeline.AndroidLayoutRuntime")
-        val mirrorClazz = Class.forName("com.xiwei.sujian.feature.editor.mirror.DisplayTextMirror")
+        val mirrorClazz = Class.forName("com.xiwei.sujian.feature.editor.projection.DisplayTextMirror")
         val constructor = clazz.getDeclaredConstructor(mirrorClazz, android.text.TextPaint::class.java)
         assertNotNull(constructor)
     }

@@ -14,9 +14,9 @@ import com.xiwei.sujian.app.layout.model.FoldOrientation
 import com.xiwei.sujian.app.layout.model.FoldState
 import com.xiwei.sujian.app.layout.model.LayoutPlan
 import com.xiwei.sujian.app.layout.model.WindowMetrics
-import com.xiwei.sujian.core.interop.common.LayoutPolicyRepositoryProvider
-import com.xiwei.sujian.core.interop.project.ProjectUseCase
-import com.xiwei.sujian.core.interop.settings.SettingsRepository
+import com.xiwei.sujian.app.layout.data.LayoutPolicyRepositoryProvider
+import com.xiwei.sujian.feature.project.domain.ProjectUseCase
+import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import com.xiwei.sujian.core.platform.api.FoldPosture
 import com.xiwei.sujian.core.platform.api.OcclusionType
 import com.xiwei.sujian.core.platform.window.WindowFoldFeatureCollector
@@ -119,7 +119,7 @@ class SujianAppViewModel(
         settingsRepository = settingsRepo
         appContext = context.applicationContext
         // #600：从 SavedState 恢复当前作品 id 到进程级 gate（进程重启后同步层仍能读到）。
-        com.xiwei.sujian.core.interop.project.ActiveProjectGate.setCurrentProjectId(currentProjectId)
+        com.xiwei.sujian.app.state.ActiveProjectGate.setCurrentProjectId(currentProjectId)
         refreshProjects()
         refreshRecentEdits()
     }
@@ -132,14 +132,14 @@ class SujianAppViewModel(
         currentProjectTitle = projectTitle
         savedStateHandle["currentProjectId"] = projectId
         savedStateHandle["currentProjectTitle"] = projectTitle
-        com.xiwei.sujian.core.interop.project.ActiveProjectGate.setCurrentProjectId(projectId)
+        com.xiwei.sujian.app.state.ActiveProjectGate.setCurrentProjectId(projectId)
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceSelection("project", projectId)
     }
 
     fun selectProject(projectId: String) {
         currentProjectId = projectId
         savedStateHandle["currentProjectId"] = projectId
-        com.xiwei.sujian.core.interop.project.ActiveProjectGate.setCurrentProjectId(projectId)
+        com.xiwei.sujian.app.state.ActiveProjectGate.setCurrentProjectId(projectId)
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceSelection("project", projectId)
         val cachedProject = projects.find { it.id == projectId }
         if (cachedProject != null) {
@@ -219,7 +219,7 @@ class SujianAppViewModel(
         savedStateHandle.remove<String>("currentVolumeId")
         savedStateHandle.remove<String>("currentChapterId")
         savedStateHandle["currentChapterTitle"] = ""
-        com.xiwei.sujian.core.interop.project.ActiveProjectGate.setCurrentProjectId(null)
+        com.xiwei.sujian.app.state.ActiveProjectGate.setCurrentProjectId(null)
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceClear("project")
     }
 

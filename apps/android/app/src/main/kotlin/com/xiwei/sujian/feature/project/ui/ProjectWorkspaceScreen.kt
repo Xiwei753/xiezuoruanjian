@@ -25,10 +25,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
-import com.xiwei.sujian.feature.editor.ChapterSwitchResult
-import com.xiwei.sujian.feature.editor.EditorViewModel
-import com.xiwei.sujian.feature.editor.compose.LocalEditorWindowHost
-import com.xiwei.sujian.feature.editor.requestOpenChapter
+import com.xiwei.sujian.feature.editor.ui.ChapterSwitchResult
+import com.xiwei.sujian.feature.editor.ui.EditorViewModel
+import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
+import com.xiwei.sujian.feature.editor.ui.requestOpenChapter
 import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
 import kotlinx.coroutines.launch
 

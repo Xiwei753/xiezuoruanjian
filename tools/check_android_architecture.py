@@ -171,13 +171,13 @@ CONCRETE_BRIDGES = [
     "com.xiwei.sujian.core.interop.project.ChapterBridge",
     "com.xiwei.sujian.core.interop.project.ProjectBridge",
     "com.xiwei.sujian.core.interop.settings.SettingsBridge",
-    "com.xiwei.sujian.core.interop.stats.StatsBridge",
-    "com.xiwei.sujian.core.interop.sync.SyncBridge",
+    "com.xiwei.sujian.feature.stats.data.interop.StatsBridge",
+    "com.xiwei.sujian.feature.sync.data.interop.SyncBridge",
     "com.xiwei.sujian.core.interop.project.WritingBridge",
     "com.xiwei.sujian.core.interop.app.AppServiceBridge",
-    "com.xiwei.sujian.core.interop.starmap.StarMapBridge",
-    "com.xiwei.sujian.core.interop.common.LayoutPolicyBridge",
-    "com.xiwei.sujian.core.interop.common.ScreenPolicyBridge",
+    "com.xiwei.sujian.feature.starmap.data.interop.StarMapBridge",
+    "com.xiwei.sujian.app.layout.interop.LayoutPolicyBridge",
+    "com.xiwei.sujian.app.navigation.interop.ScreenPolicyBridge",
 ]
 
 COMPOSE_UI_FRAMEWORK = [
@@ -227,6 +227,16 @@ UI_LAYER_REPOSITORY_EXEMPTIONS = {
     "app/theme/ThemeRepository.kt",
 }
 
+# #602 目录重构：app/<module>/interop/ 下的文件是 UniFFI/JNA 边界 Bridge，
+# 合法引用 uniffi.writer_core 与具体 Bridge 类（与 core/interop/ 边界同理）。
+# 仅精确匹配 app/<module>/interop/ 路径段，不弱化其他 UI 纯显示文件的约束。
+_APP_INTEROP_BOUNDARY_RE = re.compile(r"^app/[^/]+/interop/")
+
+
+def _is_app_interop_boundary(path: str) -> bool:
+    """判断相对路径是否属于 app/<module>/interop/ UniFFI 边界目录。"""
+    return bool(_APP_INTEROP_BOUNDARY_RE.match(path))
+
 
 def rule_ui_no_uniffi_jna_bridge() -> list[Finding]:
     ui_filters = [
@@ -246,6 +256,8 @@ def rule_ui_no_uniffi_jna_bridge() -> list[Finding]:
         findings += scan_forbidden(APP_SRC, f, CONCRETE_BRIDGES)
     # 豁免承担 Repository 职责的文件（数据层，非纯 UI）
     findings = [f for f in findings if f.path not in UI_LAYER_REPOSITORY_EXEMPTIONS]
+    # 豁免 app/<module>/interop/ UniFFI 边界 Bridge（#602 重构后的合法边界）
+    findings = [f for f in findings if not _is_app_interop_boundary(f.path)]
     return findings
 
 
@@ -338,12 +350,14 @@ def rule_visual_motion_pure() -> list[Finding]:
 
 
 def _session_layer_files() -> list[Path]:
-    coordinator = APP_SRC / "feature" / "editor" / "coordinator"
-    if not coordinator.exists():
+    # #602 目录重构：session 层文件从 feature/editor/coordinator 迁移到
+    # feature/editor/session。
+    session = APP_SRC / "feature" / "editor" / "session"
+    if not session.exists():
         return []
     return [
         p
-        for p in sorted(coordinator.glob("*.kt"))
+        for p in sorted(session.glob("*.kt"))
         if p.name in SESSION_LAYER_FILES
     ]
 
@@ -365,52 +379,58 @@ def rule_session_layer_no_platform_state() -> list[Finding]:
                         message=f"session 层禁止依赖 Compose 可变状态/View/Activity: {hit}",
                     )
                 )
-    coordinator = APP_SRC / "feature" / "editor" / "coordinator"
-    if coordinator.exists():
-        for name in ("EditorSessionCoordinator.kt", "EditorWindowHost.kt"):
-            path = coordinator / name
-            if not path.exists():
-                continue
-            content = path.read_text(encoding="utf-8")
-            effective = "\n".join(effective_lines(content))
-            for getter in DERIVED_FLOW_GETTERS:
-                if getter in effective:
-                    findings.append(
-                        Finding(
-                            path=f"feature/editor/coordinator/{name}",
-                            line=0,
-                            message=f"派生 stateIn flow {getter} 必须保持删除（#595 三）",
-                        )
-                    )
-            if "reduceScope" in effective:
+    # #602 目录重构：EditorSessionCoordinator 在 session/，EditorWindowHost 在 window/。
+    session_dir = APP_SRC / "feature" / "editor" / "session"
+    window_dir = APP_SRC / "feature" / "editor" / "window"
+    layer_dirs = {
+        "EditorSessionCoordinator.kt": (session_dir, "feature/editor/session"),
+        "EditorWindowHost.kt": (window_dir, "feature/editor/window"),
+    }
+    for name, (base_dir, rel_prefix) in layer_dirs.items():
+        path = base_dir / name
+        if not path.exists():
+            continue
+        content = path.read_text(encoding="utf-8")
+        effective = "\n".join(effective_lines(content))
+        for getter in DERIVED_FLOW_GETTERS:
+            if getter in effective:
                 findings.append(
                     Finding(
-                        path=f"feature/editor/coordinator/{name}",
+                        path=f"{rel_prefix}/{name}",
                         line=0,
-                        message="reduceScope 必须保持删除（#595 三）",
+                        message=f"派生 stateIn flow {getter} 必须保持删除（#595 三）",
                     )
                 )
-        coordinator_source_path = coordinator / "EditorSessionCoordinator.kt"
-        if coordinator_source_path.exists():
-            effective = "\n".join(
-                effective_lines(coordinator_source_path.read_text(encoding="utf-8"))
+        if "reduceScope" in effective:
+            findings.append(
+                Finding(
+                    path=f"{rel_prefix}/{name}",
+                    line=0,
+                    message="reduceScope 必须保持删除（#595 三）",
+                )
             )
-            for symbol, desc in SESSION_STATE_CONTRACT.items():
-                if symbol not in effective:
-                    findings.append(
-                        Finding(
-                            path="feature/editor/coordinator/EditorSessionCoordinator.kt",
-                            line=0,
-                            message=f"缺少 {desc}: {symbol}",
-                        )
+    coordinator_source_path = session_dir / "EditorSessionCoordinator.kt"
+    if coordinator_source_path.exists():
+        effective = "\n".join(
+            effective_lines(coordinator_source_path.read_text(encoding="utf-8"))
+        )
+        for symbol, desc in SESSION_STATE_CONTRACT.items():
+            if symbol not in effective:
+                findings.append(
+                    Finding(
+                        path="feature/editor/session/EditorSessionCoordinator.kt",
+                        line=0,
+                        message=f"缺少 {desc}: {symbol}",
                     )
+                )
     return findings
 
 
 def rule_frame_clock_window_owned() -> list[Finding]:
     findings: list[Finding] = []
-    coordinator = APP_SRC / "feature" / "editor" / "coordinator"
-    if not coordinator.exists():
+    # #602 目录重构：session 层文件在 feature/editor/session。
+    session_dir = APP_SRC / "feature" / "editor" / "session"
+    if not session_dir.exists():
         return findings
     for path in _session_layer_files():
         for lineno, raw in enumerate(
@@ -424,7 +444,8 @@ def rule_frame_clock_window_owned() -> list[Finding]:
                         message="FrameClock 只能由窗口/显示层持有，session 层不得引用 WindowDisplayFrameClock",
                     )
                 )
-    window_host = coordinator / "EditorWindowHost.kt"
+    # #602 目录重构：EditorWindowHost 迁移到 feature/editor/window。
+    window_host = APP_SRC / "feature" / "editor" / "window" / "EditorWindowHost.kt"
     if window_host.exists():
         effective = "\n".join(
             effective_lines(window_host.read_text(encoding="utf-8"))
@@ -432,7 +453,7 @@ def rule_frame_clock_window_owned() -> list[Finding]:
         if "val windowFrameClock: WindowDisplayFrameClock" not in effective:
             findings.append(
                 Finding(
-                    path="feature/editor/coordinator/EditorWindowHost.kt",
+                    path="feature/editor/window/EditorWindowHost.kt",
                     line=0,
                     message="窗口层必须持有唯一 windowFrameClock: WindowDisplayFrameClock 字段",
                 )
@@ -443,12 +464,13 @@ def rule_frame_clock_window_owned() -> list[Finding]:
 def rule_transform_purity() -> list[Finding]:
     """updateSessionState { ... } transform 体内不得调用 store.put/update/remove。"""
     findings: list[Finding] = []
-    coordinator = APP_SRC / "feature" / "editor" / "coordinator"
-    if not coordinator.exists():
+    # #602 目录重构：transform 纯函数检查针对 feature/editor/session。
+    session_dir = APP_SRC / "feature" / "editor" / "session"
+    if not session_dir.exists():
         return findings
     sources = "\n".join(
         p.read_text(encoding="utf-8")
-        for p in sorted(coordinator.glob("*.kt"))
+        for p in sorted(session_dir.glob("*.kt"))
     )
     pattern = re.compile(r"updateSessionState\s*\{")
     bodies: list[str] = []
@@ -466,7 +488,7 @@ def rule_transform_purity() -> list[Finding]:
     if not bodies:
         findings.append(
             Finding(
-                path="feature/editor/coordinator",
+                path="feature/editor/session",
                 line=0,
                 message="必须存在 updateSessionState transform（找不到任何调用）",
             )
@@ -476,7 +498,7 @@ def rule_transform_purity() -> list[Finding]:
             if store_call in body:
                 findings.append(
                     Finding(
-                        path="feature/editor/coordinator",
+                        path="feature/editor/session",
                         line=0,
                         message=(
                             f"第 {idx} 个 updateSessionState transform 体内调用 {store_call} — "
@@ -488,7 +510,7 @@ def rule_transform_purity() -> list[Finding]:
     if "pendingRecord?.let { store.put(it) }" not in sources:
         findings.append(
             Finding(
-                path="feature/editor/coordinator",
+                path="feature/editor/session",
                 line=0,
                 message="store 写入必须使用 pendingRecord?.let { store.put(it) } 模式（transform 外）",
             )
@@ -537,13 +559,14 @@ def rule_deleted_types_stay_deleted() -> list[Finding]:
                         message="EditorAnimationSettings 必须保持删除（#595 十：EditorMotionPolicy 是唯一可写动画状态源）",
                     )
                 )
-    settings_repo = APP_SRC / "core" / "interop" / "settings" / "SettingsRepository.kt"
+    # #602 目录重构：SettingsRepository 迁移到 feature/settings/data。
+    settings_repo = APP_SRC / "feature" / "settings" / "data" / "SettingsRepository.kt"
     if settings_repo.exists():
         effective = "\n".join(effective_lines(settings_repo.read_text(encoding="utf-8")))
         if re.search(r"fun\s+setSyncSecretsOverride\s*\(", effective):
             findings.append(
                 Finding(
-                    path="core/interop/settings/SettingsRepository.kt",
+                    path="feature/settings/data/SettingsRepository.kt",
                     line=0,
                     message="旧 swallow-failure setSyncSecretsOverride 必须保持删除（#595 十）",
                 )
@@ -582,8 +605,9 @@ def rule_source_contracts() -> list[Finding]:
                 Finding(str(path.relative_to(APP_SRC)), 0, f"禁止出现 {desc}（模式 {pattern}）")
             )
 
-    coordinator = APP_SRC / "feature" / "editor" / "coordinator"
-    host = coordinator / "EditorWindowHost.kt"
+    # #602 目录重构：EditorWindowHost 在 feature/editor/window。
+    window_dir = APP_SRC / "feature" / "editor" / "window"
+    host = window_dir / "EditorWindowHost.kt"
     require(host, r"fun\s+beginEdit\s*\(", "EditorWindowHost.beginEdit（活动编辑生命周期入口）")
     require(host, r"fun\s+releaseWindow\s*\(", "EditorWindowHost.releaseWindow（释放 FrameClock 连接）")
     require(host, r"fun\s+getChapterPreviewState\s*\(", "EditorWindowHost.getChapterPreviewState(String)")
@@ -606,17 +630,18 @@ def rule_source_contracts() -> list[Finding]:
     require(sync_repo, r"fun\s+setSyncSecretsOverrideStrict\s*\(", "SyncRepository.setSyncSecretsOverrideStrict")
     require(sync_repo, r"fun\s+clearSyncSecretsOverride\s*\(", "SyncRepository.clearSyncSecretsOverride")
 
-    gate = APP_SRC / "core" / "interop" / "sync" / "SyncProfileGate.kt"
+    gate = APP_SRC / "feature" / "sync" / "data" / "SyncProfileGate.kt"
     require(gate, r"\bcommitExclusive\s*\(", "SyncProfileGate.commitExclusive")
     require(gate, r"\bsnapshotExclusive\s*\(", "SyncProfileGate.snapshotExclusive")
 
-    sync_bridge = APP_SRC / "core" / "interop" / "sync" / "SyncBridge.kt"
+    sync_bridge = APP_SRC / "feature" / "sync" / "data" / "interop" / "SyncBridge.kt"
     require(sync_bridge, r"fun\s+clearSyncSecretsOverride\s*\(", "SyncBridge.clearSyncSecretsOverride")
 
     engine = APP_SRC / "feature" / "editor" / "visual" / "AndroidTextAnimationEngine.kt"
     require(engine, r"fun\s+submitCursorOnlyTransaction\s*\(", "AndroidTextAnimationEngine.submitCursorOnlyTransaction")
 
-    view = APP_SRC / "feature" / "editor" / "host" / "SujianEditorView.kt"
+    # #602 目录重构：SujianEditorView 在 feature/editor/platform。
+    view = APP_SRC / "feature" / "editor" / "platform" / "SujianEditorView.kt"
     require(view, r"fun\s+setKernelAnimationEnabled\s*\(", "SujianEditorView.setKernelAnimationEnabled(Boolean)")
 
     frame_input = APP_SRC / "feature" / "editor" / "pipeline" / "FrameRenderInput.kt"

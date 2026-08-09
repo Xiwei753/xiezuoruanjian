@@ -239,7 +239,7 @@ private fun rememberSujianManualSyncOnClick(env: SujianTopBarEnv): () -> Unit =
     {
         env.coroutineScope.launch {
             // sync 已改为 per-project — 手动同步针对当前活动作品。
-            val pid = com.xiwei.sujian.core.interop.project.ActiveProjectGate.currentProjectId()
+            val pid = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
             if (pid != null) {
                 env.deps.syncCoordinator.runSync(SyncTrigger.Manual, pid)
             }

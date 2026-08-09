@@ -1,6 +1,6 @@
 package com.xiwei.sujian.feature.editor.pipeline
 
-import com.xiwei.sujian.feature.editor.mirror.DisplayTextMirror
+import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
