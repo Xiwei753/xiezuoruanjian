@@ -65,7 +65,7 @@ fun DiagnosticsSettings(
             SujianOutlinedButton(
                 text = stringResource(id = R.string.btn_export_diagnostics),
                 onClick = {
-                    DiagnosticsLogger.flush()
+                    DiagnosticsLogger.flushBlocking()
                     val zipFile = DiagnosticsExporter.export(context)
                     if (zipFile != null) {
                         DiagnosticsExporter.shareZip(context, zipFile)

@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import com.xiwei.sujian.core.diagnostics.JankStatsController
 import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
 
 class MainActivity : ComponentActivity() {
@@ -43,6 +44,18 @@ class MainActivity : ComponentActivity() {
         setContent {
             SujianApp(initialDestination = initialDestination)
         }
+        // Issue #612 四：JankStats 跟踪当前窗口帧；onResume 开启，onPause 关闭。
+        JankStatsController.track(window)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        JankStatsController.enable()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        JankStatsController.disable()
     }
 
     private fun requestStorageAccess() {

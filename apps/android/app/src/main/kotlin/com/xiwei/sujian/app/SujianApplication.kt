@@ -51,23 +51,22 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
-                val crashFile = File(AndroidDataRoot.logsDir(), "last_crash.txt")
-                crashFile.parentFile?.mkdirs()
-                val writer = PrintWriter(FileWriter(crashFile, false))
-                writer.println(
-                    "Crash at ${java.text.SimpleDateFormat(
+                val redactedTrace = DiagnosticsLogger.redactStackTrace(throwable)
+                val timestamp =
+                    java.text.SimpleDateFormat(
                         "yyyy-MM-dd HH:mm:ss",
                         java.util.Locale.US,
-                    ).format(java.util.Date())}",
-                )
-                writer.println("Thread: ${thread.name}")
-                writer.println()
-                val redactedTrace = DiagnosticsLogger.redactStackTrace(throwable)
-                writer.println(redactedTrace)
-                writer.flush()
-                writer.close()
+                    ).format(java.util.Date())
+                val header = "Crash at $timestamp\nThread: ${thread.name}\n\n"
+                val externalWritten =
+                    writeCrashFile(File(AndroidDataRoot.logsDir(), "last_crash.txt"), header, redactedTrace)
+                if (!externalWritten) {
+                    val fallbackDir = File(filesDir, "diagnostics")
+                    fallbackDir.mkdirs()
+                    writeCrashFile(File(fallbackDir, "last_crash.txt"), header, redactedTrace)
+                }
                 DiagnosticsLogger.e("SujianApp", "Uncaught exception", throwable)
-                DiagnosticsLogger.flush()
+                DiagnosticsLogger.flushBlocking()
             } catch (_: Exception) {
             }
             if (defaultHandler != null) {
@@ -76,6 +75,25 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
                 android.os.Process.killProcess(android.os.Process.myPid())
                 kotlin.system.exitProcess(10)
             }
+        }
+    }
+
+    /** 把 crash 头部 + 脱敏栈写入 [file]，返回是否成功。 */
+    private fun writeCrashFile(
+        file: File,
+        header: String,
+        redactedTrace: String,
+    ): Boolean {
+        return try {
+            file.parentFile?.mkdirs()
+            PrintWriter(FileWriter(file, false)).use { writer ->
+                writer.print(header)
+                writer.println(redactedTrace)
+                writer.flush()
+            }
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -110,5 +128,8 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
                 )
             is BridgeResult.Success -> {}
         }
+        // 生命周期收尾：把已入队的应用日志落盘。正常日志本来就应该由 writer 持续写，
+        // 这里只是收尾，不依赖它解决日志缺失。
+        DiagnosticsLogger.flushBlocking()
     }
 }

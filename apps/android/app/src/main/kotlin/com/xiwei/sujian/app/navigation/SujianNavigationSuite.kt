@@ -587,12 +587,15 @@ fun SujianNavigationSuite(
     val topBarInfo = rememberSujianTopBarInfo(currentRoute, appState, chrome, env, workspaceNavState)
 
     val onTopLevelSelected: (SujianDestination) -> Unit = { destination ->
+        recordTopLevelSwitchDiagnostics(context, currentTopDestination, destination, appState)
         topLevelBackStack.saveCurrent(backStack.toList())
         topLevelBackStack.addTopLevel(destination)
         val restored = topLevelBackStack.currentBackStack()
         backStack.clear()
         restored.forEach { backStack.add(it) }
     }
+
+    SujianJankInteractionClearEffect(currentTopDestination)
 
     val navDisplayContent: @Composable () -> Unit = {
         SujianNavDisplayContent(
@@ -647,6 +650,32 @@ private fun Modifier.navItemModifier(destination: SujianDestination): Modifier {
             SujianDestination.Stats -> SujianSemanticIds.NavigationStats
         }
     return if (semanticTag != null) this.testTag(semanticTag) else this
+}
+
+/** Issue #612 四/五：一级切换诊断事件 + JankStats UI 上下文 + 进程状态摘要。 */
+private fun recordTopLevelSwitchDiagnostics(
+    context: android.content.Context,
+    from: SujianDestination,
+    to: SujianDestination,
+    appState: SujianAppState,
+) {
+    com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navTopLevelSwitch(from.name, to.name)
+    com.xiwei.sujian.core.diagnostics.JankStatsController.setState(to.name, "top_level_switch")
+    com.xiwei.sujian.core.diagnostics.ProcessStateSummary.update(
+        context,
+        to.name,
+        appState.currentProjectId ?: "",
+        "idle",
+    )
+}
+
+/** Issue #612 四：一级切换动画（~300ms）结束后清除 interaction 上下文。 */
+@Composable
+private fun SujianJankInteractionClearEffect(currentTopDestination: SujianDestination) {
+    LaunchedEffect(currentTopDestination) {
+        kotlinx.coroutines.delay(350)
+        com.xiwei.sujian.core.diagnostics.JankStatsController.clearInteraction()
+    }
 }
 
 private val navForwardTransition: AnimatedContentTransitionScope<Scene<NavKey>>.() -> ContentTransform = {

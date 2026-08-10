@@ -5,32 +5,26 @@ import android.util.Log
 import com.xiwei.sujian.BuildConfig
 import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
 import java.io.File
-import java.io.FileWriter
-import java.io.PrintWriter
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
+/**
+ * 统一日志入口（Issue #612 重做）。
+ *
+ * 每条 d/i/w/e 固定走同一条链：
+ *   调用方 → redact() → android.util.Log（实时进入 logd / adb logcat）
+ *         → PersistentLogWriter.enqueue()（应用自己持久保存）
+ *
+ * 本对象只负责级别、tag、脱敏、把同一条脱敏日志同时送到 Android Log 和持久 writer。
+ * 不再做阈值刷盘、不持有内存 buffer、不直接做文件 I/O —— 所有持久化由
+ * [PersistentLogWriter] 的常驻后台线程独占完成。
+ */
 object DiagnosticsLogger {
     private const val TAG = "SujianDiag"
-    private const val LOG_PREFIX = "sujian-current"
-    private const val MAX_FILE_SIZE = 1024 * 1024L
-    private const val MAX_LOG_FILES = 5
-    private const val FLUSH_THRESHOLD = 50
 
     private val enabled = AtomicBoolean(false)
     private val verbose = AtomicBoolean(false)
     private val contextRef = AtomicReference<Context>(null)
-    private val buffer = ConcurrentLinkedQueue<String>()
-    private val bufferCount = AtomicInteger(0)
-    private val lock = Any()
-
-    private val timestampFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
-
     private val REDACT_RULES: List<Pair<Regex, (MatchResult) -> String>> =
         listOf(
             Pair(
@@ -132,10 +126,13 @@ object DiagnosticsLogger {
         contextRef.set(context.applicationContext)
         enabled.set(isEnabled)
         verbose.set(isVerbose)
+        PersistentLogWriter.init(context.applicationContext)
+        PersistentLogWriter.setEnabled(isEnabled)
     }
 
     fun setEnabled(isEnabled: Boolean) {
         enabled.set(isEnabled)
+        PersistentLogWriter.setEnabled(isEnabled)
     }
 
     fun setVerbose(isVerbose: Boolean) {
@@ -213,81 +210,53 @@ object DiagnosticsLogger {
         tag: String,
         message: String,
     ) {
-        val ts = timestampFormat.format(Date())
-        val line = "$ts $level/$tag: $message"
-        buffer.add(line)
-        if (bufferCount.incrementAndGet() >= FLUSH_THRESHOLD) {
-            flush()
-        }
+        PersistentLogWriter.enqueue(
+            LogRequest(
+                level = level,
+                tag = tag,
+                message = message,
+                timestampMs = System.currentTimeMillis(),
+                threadName = Thread.currentThread().name,
+            ),
+        )
     }
 
+    /**
+     * 兼容入口：等价于 [flushBlocking]。保留是因为现有代码多处调用 flush()。
+     * 内部不再做任何文件 I/O。
+     */
     fun flush() {
-        synchronized(lock) {
-            contextRef.get() ?: return
-            val logDir = AndroidDataRoot.logsDir()
-            if (!logDir.exists()) logDir.mkdirs()
-            val currentFile = File(logDir, "$LOG_PREFIX.log")
-            try {
-                rotateIfNeeded(currentFile)
-                val writer = PrintWriter(FileWriter(currentFile, true))
-                while (true) {
-                    val line = buffer.poll() ?: break
-                    writer.println(line)
-                }
-                writer.flush()
-                writer.close()
-                bufferCount.set(0)
-            } catch (_: Exception) {
-                while (buffer.poll() != null) {
-                    bufferCount.decrementAndGet()
-                }
-            }
-        }
+        flushBlocking()
     }
 
-    private fun rotateIfNeeded(file: File) {
-        if (!file.exists() || file.length() < MAX_FILE_SIZE) return
-        val logDir = file.parentFile ?: return
-        val rotated = File(logDir, "$LOG_PREFIX-${System.currentTimeMillis()}.log")
-        file.renameTo(rotated)
-        pruneOldLogs(logDir)
+    /**
+     * 阻塞直到调用前所有已入队的日志都被 writer 线程写完落盘。
+     */
+    fun flushBlocking() {
+        PersistentLogWriter.flushBlocking()
     }
 
-    private fun pruneOldLogs(logDir: File) {
-        val logs =
-            logDir.listFiles { _, name -> name.startsWith(LOG_PREFIX) && name.endsWith(".log") }
-                ?.sortedByDescending { it.lastModified() }
-                ?: return
-        for (i in (MAX_LOG_FILES - 1) until logs.size) {
-            logs[i].delete()
-        }
-    }
-
-    fun getLogFiles(): List<File> {
-        contextRef.get() ?: return emptyList()
-        val logDir = AndroidDataRoot.logsDir()
-        if (!logDir.exists()) return emptyList()
-        return logDir.listFiles { _, name -> name.startsWith(LOG_PREFIX) && name.endsWith(".log") }
-            ?.toList() ?: emptyList()
-    }
+    fun getLogFiles(): List<File> = PersistentLogWriter.getLogFiles()
 
     fun clearLogs() {
-        synchronized(lock) {
-            contextRef.get() ?: return
-            val logDir = AndroidDataRoot.logsDir()
-            if (logDir.exists()) {
-                logDir.listFiles()?.forEach { it.delete() }
-            }
-            buffer.clear()
-            bufferCount.set(0)
-            val crashFile = File(AndroidDataRoot.logsDir(), "last_crash.txt")
-            if (crashFile.exists()) crashFile.delete()
+        PersistentLogWriter.clearLogs()
+        // PersistentLogWriter.clearLogs 已删 logsDir 下所有文件（含 last_crash.txt）。
+        // 另外清理 filesDir/diagnostics/ 回退位置的 last_crash.txt。
+        val ctx = contextRef.get()
+        if (ctx != null) {
+            val fallbackCrash = File(File(ctx.filesDir, "diagnostics"), "last_crash.txt")
+            if (fallbackCrash.exists()) fallbackCrash.delete()
         }
     }
 
+    /**
+     * 返回 last_crash.txt。优先返回外部 logsDir 下的，回退到 filesDir/diagnostics/。
+     */
     fun getCrashFile(): File? {
-        contextRef.get() ?: return null
-        val f = File(AndroidDataRoot.logsDir(), "last_crash.txt")
-        return if (f.exists()) f else null
+        val primary = File(AndroidDataRoot.logsDir(), "last_crash.txt")
+        if (primary.exists()) return primary
+        val ctx = contextRef.get() ?: return null
+        val fallback = File(File(ctx.filesDir, "diagnostics"), "last_crash.txt")
+        return if (fallback.exists()) fallback else null
     }
 }

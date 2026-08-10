@@ -189,6 +189,67 @@ object DiagnosticsEvents {
         result: String,
     ) = record("settings.save", "field" to field, "result" to result)
 
+    /**
+     * 设置页分组展开/收起（Issue #612 五）。只记录分类标识与展开状态，
+     * 不记录分类下的具体设置值。
+     */
+    fun settingsSection(
+        section: String,
+        expanded: Boolean,
+    ) = record("settings.section", "section" to section, "expanded" to expanded)
+
+    // ── 主题解析（Issue #612 五）─────────────────────────────────
+
+    /**
+     * 主题解析结果。只记录模式、来源、是否暗色、选中的内置主题/调色板标识与 SDK，
+     * 不记录颜色具体数值。
+     */
+    fun themeResolve(
+        appearanceMode: String,
+        colorSource: String,
+        isDark: Boolean,
+        selectedBuiltin: String?,
+        selectedPalette: String?,
+        sdk: Int,
+    ) = record(
+        "theme.resolve",
+        "appearanceMode" to appearanceMode,
+        "colorSource" to colorSource,
+        "isDark" to isDark,
+        "selectedBuiltin" to selectedBuiltin,
+        "selectedPalette" to selectedPalette,
+        "sdk" to sdk,
+    )
+
+    // ── 字段焦点 / 提交（Issue #612 五）──────────────────────────
+
+    /**
+     * 字段获得/失去焦点。只记录字段类型与焦点状态，不记录字段值。
+     */
+    fun fieldFocus(
+        fieldType: String,
+        focused: Boolean,
+    ) = record("field.focus", "fieldType" to fieldType, "focused" to focused)
+
+    /**
+     * 字段提交结果。只记录字段类型、字符数与结果状态，不记录字段实际内容。
+     */
+    fun fieldCommit(
+        fieldType: String,
+        charCount: Int,
+        result: String,
+    ) = record("field.commit", "fieldType" to fieldType, "charCount" to charCount, "result" to result)
+
+    // ── 一级导航切换（Issue #612 五）─────────────────────────────
+
+    /**
+     * 一级导航切换。记录 from/to 标识，不记录导航参数或作品标题。
+     */
+    fun navTopLevelSwitch(
+        from: String,
+        to: String,
+    ) = record("nav.top_level_switch", "from" to from, "to" to to)
+
     // ── 同步 ─────────────────────────────────────────────────────
 
     fun syncEvent(

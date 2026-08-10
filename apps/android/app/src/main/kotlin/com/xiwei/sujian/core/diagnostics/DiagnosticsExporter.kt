@@ -35,10 +35,14 @@ object DiagnosticsExporter {
 
             writeLogs(context, tempDir)
             writeCrashFile(context, tempDir)
+            writeLogcat(tempDir)
+            writeProcessExits(context, tempDir)
+            writeThreadDump(tempDir)
             writeDeviceInfo(context, tempDir)
             writeAppSettingsSanitized(context, tempDir)
             writeSyncStateSanitized(context, tempDir)
             writeEditorSnapshot(tempDir)
+            writeJankSummary(tempDir)
 
             zipDirectory(tempDir, zipFile)
             tempDir.deleteRecursively()
@@ -87,7 +91,7 @@ object DiagnosticsExporter {
     ) {
         val logsDir = File(destDir, "logs")
         logsDir.mkdirs()
-        DiagnosticsLogger.flush()
+        DiagnosticsLogger.flushBlocking()
         DiagnosticsLogger.getLogFiles().forEach { logFile ->
             try {
                 val content = logFile.readText()
@@ -108,6 +112,46 @@ object DiagnosticsExporter {
             val redacted = DiagnosticsLogger.redact(content)
             File(destDir, "last_crash.txt").writeText(redacted)
         } catch (_: Exception) {
+        }
+    }
+
+    private fun writeLogcat(destDir: File) {
+        try {
+            LogcatSnapshotCollector.collect(destDir)
+        } catch (e: Exception) {
+            DiagnosticsLogger.w("DiagnosticsExporter", "Logcat capture failed", e)
+        }
+    }
+
+    private fun writeProcessExits(
+        context: Context,
+        destDir: File,
+    ) {
+        try {
+            ProcessExitCollector.collect(context, destDir)
+        } catch (e: Exception) {
+            DiagnosticsLogger.w("DiagnosticsExporter", "Process exit capture failed", e)
+        }
+    }
+
+    private fun writeThreadDump(destDir: File) {
+        try {
+            ThreadDumpCollector.collect(destDir)
+        } catch (e: Exception) {
+            DiagnosticsLogger.w("DiagnosticsExporter", "Thread dump failed", e)
+        }
+    }
+
+    private fun writeJankSummary(destDir: File) {
+        try {
+            val summary = JankStatsController.getSummary()
+            val gson = GsonBuilder().setPrettyPrinting().create()
+            val json = DiagnosticsLogger.redact(gson.toJson(summary))
+            File(destDir, "jank_summary.json").writeText(json)
+        } catch (e: Exception) {
+            val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
+            val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
+            File(destDir, "jank_summary.json").writeText(errorJson)
         }
     }
 

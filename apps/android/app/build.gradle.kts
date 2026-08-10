@@ -331,6 +331,7 @@ dependencies {
 
     implementation(libs.androidx.window.core)
     implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.metrics.performance)
 
     coreLibraryDesugaring(libs.desugar)
 

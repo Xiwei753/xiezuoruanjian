@@ -16,6 +16,7 @@ window = "1.5.0"
 datastore = "1.1.4"
 desugar = "2.1.4"
 jna = "5.14.0"
+metricsPerformance = "1.0.0"
 junit = "4.13.2"
 robolectric = "4.14.1"
 testExtJunit = "1.2.1"
@@ -62,6 +63,7 @@ androidx-window-core = { group = "androidx.window", name = "window-core", versio
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 
 desugar = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugar" }
+androidx-metrics-performance = { group = "androidx.metrics", name = "metrics-performance", version.ref = "metricsPerformance" }
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 kotlinx-serialization-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-core", version.ref = "kotlinxSerialization" }
 
