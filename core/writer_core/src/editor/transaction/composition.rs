@@ -294,6 +294,29 @@ impl OffsetMap {
         }
         None
     }
+
+    /// #606: 映射旧正文中的半开 byte range [old_start, old_end) 到新正文坐标。
+    ///
+    /// 仅当整个 range 落在同一个映射条目内时返回 `Some`（range 跨越映射/未映射
+    /// 区域边界时返回 `None` — 那不指向同一逻辑对象）。range 端点恰为条目末端
+    /// （`old_end == entry_old + length`）仍视为完全位于条目内（半开区间语义）。
+    pub fn map_old_range_to_new(&self, old_start: usize, old_end: usize) -> Option<(usize, usize)> {
+        if old_end < old_start {
+            return None;
+        }
+        let entry = self.entries.iter().find(|entry| {
+            let entry_old = entry.old_byte_offset.value();
+            old_start >= entry_old && old_start < entry_old + entry.length
+        })?;
+        let entry_old = entry.old_byte_offset.value();
+        if old_end > entry_old + entry.length {
+            return None;
+        }
+        Some((
+            entry.new_byte_offset.value() + (old_start - entry_old),
+            entry.new_byte_offset.value() + (old_end - entry_old),
+        ))
+    }
 }
 
 /// #517: 预输入会话 — 跨平台 composition 状态模型。

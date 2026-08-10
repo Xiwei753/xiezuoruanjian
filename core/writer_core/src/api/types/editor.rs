@@ -573,6 +573,15 @@ impl From<crate::editor::OffsetMapKind> for OffsetMapKindDto {
     }
 }
 
+impl From<OffsetMapKindDto> for crate::editor::OffsetMapKind {
+    fn from(k: OffsetMapKindDto) -> Self {
+        match k {
+            OffsetMapKindDto::Identity => Self::Identity,
+            OffsetMapKindDto::Shifted => Self::Shifted,
+        }
+    }
+}
+
 /// #606: 单个偏移映射条目 DTO — 与 Core `OffsetMapEntry` 一一对应。
 ///
 /// `old_byte_offset` / `new_byte_offset` 均为 UTF-8 byte offset。
@@ -598,6 +607,23 @@ impl From<crate::editor::OffsetMapEntry> for OffsetMapEntryDto {
     }
 }
 
+// SAFETY: UTF-8 byte offset 截断安全（正文长度受 u32 范围约束）
+#[allow(clippy::cast_possible_truncation)]
+impl From<OffsetMapEntryDto> for crate::editor::OffsetMapEntry {
+    fn from(e: OffsetMapEntryDto) -> Self {
+        Self {
+            old_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(
+                e.old_byte_offset as usize,
+            ),
+            new_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(
+                e.new_byte_offset as usize,
+            ),
+            length: e.length as usize,
+            kind: e.kind.into(),
+        }
+    }
+}
+
 /// #606: 偏移映射 DTO — 与 Core `OffsetMap` 一一对应。
 ///
 /// 记录 old 正文 → new 正文的字符身份映射，用于后续正文 cluster 保持身份
@@ -610,6 +636,14 @@ pub struct OffsetMapDto {
 
 impl From<crate::editor::OffsetMap> for OffsetMapDto {
     fn from(m: crate::editor::OffsetMap) -> Self {
+        Self {
+            entries: m.entries.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<OffsetMapDto> for crate::editor::OffsetMap {
+    fn from(m: OffsetMapDto) -> Self {
         Self {
             entries: m.entries.into_iter().map(Into::into).collect(),
         }

@@ -31,6 +31,14 @@ class AndroidVisualPlanner(
     internal val rebasePlanner: RebasePlanner = RebasePlanner(),
     internal val blockShiftPlanner: BlockShiftPlanner = BlockShiftPlanner(),
     internal val snapshotPlanner: SnapshotPlanner = SnapshotPlanner(),
+    /**
+     * #606: 旧→新逻辑 slice 对应关系的唯一来源 — 由 Core 计算。
+     *
+     * 生产路径由 [AndroidEditorPipeline] 注入（经 EditorKernelBridge 调用 Core
+     * `compute_rebase_slice_mappings`）。为 null 时（如纯 planner 单元测试）
+     * 视为无映射（所有旧 slice 按 Core 无对应关系处理，走平台侧继续/结束逻辑）。
+     */
+    internal val rebaseMappingProvider: RebaseMappingProvider? = null,
 ) {
     fun computeAffectedLineIndices(
         visualIntent: VisualIntent,
@@ -252,7 +260,37 @@ class AndroidVisualPlanner(
 
         val finalSlices =
             if (rebaseSnapshot != null && rebaseSnapshot.sliceVisualStates.isNotEmpty()) {
-                rebasePlanner.applyRebaseToSlices(animatedSlices, rebaseSnapshot, snapshotLookup)
+                // #606: 旧→新逻辑 slice 对应关系由 Core 唯一计算。Android 只提供
+                // 平台侧的输入（旧帧 slice 角色/range、新事务 slice 角色/range）和
+                // 本次事务的 OffsetMap，不再本地实现任何匹配逻辑。
+                val oldSlices =
+                    rebaseSnapshot.sliceVisualStates.map { state ->
+                        SliceRoleAndByteRange(
+                            role = state.role,
+                            byteStart = state.clusterByteStart,
+                            byteEndExclusive = state.clusterByteEndExclusive,
+                        )
+                    }
+                val newSlicesForMapping =
+                    animatedSlices.map { slice ->
+                        SliceRoleAndByteRange(
+                            role = slice.role,
+                            byteStart = slice.clusterByteStart,
+                            byteEndExclusive = slice.clusterByteEndExclusive,
+                        )
+                    }
+                val mappings =
+                    rebaseMappingProvider?.compute(
+                        oldSlices,
+                        newSlicesForMapping,
+                        visualIntent.offsetMap,
+                    ) ?: emptyList()
+                rebasePlanner.applyRebaseToSlices(
+                    animatedSlices,
+                    rebaseSnapshot,
+                    snapshotLookup,
+                    mappings,
+                )
             } else {
                 animatedSlices
             }

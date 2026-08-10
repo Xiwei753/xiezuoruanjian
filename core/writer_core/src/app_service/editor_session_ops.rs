@@ -1,6 +1,6 @@
 use crate::api::{
     AnimatedSliceRoleDto, EditorByteRangeDto, EditorEditOutcomeDto, EditorEditResultDto,
-    EditorSessionSnapshotDto, EditorTransactionCauseDto, RebaseSliceMappingDto,
+    EditorSessionSnapshotDto, EditorTransactionCauseDto, OffsetMapDto, RebaseSliceMappingDto,
 };
 
 use super::EditorSession;
@@ -459,12 +459,15 @@ impl super::WriterAppService {
     /// 平台无关的唯一事实来源 — Android `RebasePlanner` 不再自己匹配，
     /// 直接消费此结果。方法本身不依赖 editor session 状态（无 `with_session`），
     /// 但放在 `WriterAppService` 上以保持 UniFFI 接口聚合。
+    /// `offset_map` 为本次事务的旧正文 → 新正文偏移映射（`EditorVisualIntentDto.offset_map`），
+    /// 用于旧/新 slice range 坐标不同的情况（`OffsetMapMatched`）。
     pub fn editor_kernel_compute_rebase_slice_mappings(
         &self,
         old_slice_roles: Vec<AnimatedSliceRoleDto>,
         old_slice_byte_ranges: Vec<EditorByteRangeDto>,
         new_slice_roles: Vec<AnimatedSliceRoleDto>,
         new_slice_byte_ranges: Vec<EditorByteRangeDto>,
+        offset_map: Option<OffsetMapDto>,
     ) -> Vec<RebaseSliceMappingDto> {
         let old_roles: Vec<crate::editor::AnimatedSliceRole> =
             old_slice_roles.into_iter().map(Into::into).collect();
@@ -478,11 +481,13 @@ impl super::WriterAppService {
             .into_iter()
             .map(|r| (r.start as usize, r.end_exclusive as usize))
             .collect();
+        let core_offset_map: Option<crate::editor::OffsetMap> = offset_map.map(Into::into);
         let mappings = crate::editor::compute_rebase_slice_mappings(
             &old_roles,
             &old_ranges,
             &new_roles,
             &new_ranges,
+            core_offset_map.as_ref(),
         );
         mappings.into_iter().map(Into::into).collect()
     }

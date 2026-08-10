@@ -1,3 +1,4 @@
+use crate::editor::transaction::composition::OffsetMap;
 use crate::editor::transaction::engine::*;
 use crate::editor::transaction::rebase::*;
 use crate::editor::transaction::visual::*;
@@ -79,6 +80,7 @@ fn compute_rebase_creates_transaction_rebase() {
         &[(0, 3)],
         &[AnimatedSliceRole::Insert],
         &[(0, 3)],
+        None,
     );
     assert_eq!(rebase.cancelled_transaction_id, 42);
     assert!((rebase.old_progress - 0.6).abs() < f64::EPSILON);
@@ -147,7 +149,7 @@ fn rebase_covers_all_transaction_kinds() {
 
 #[test]
 fn compute_rebase_slice_mappings_empty_inputs() {
-    let mappings = compute_rebase_slice_mappings(&[], &[], &[], &[]);
+    let mappings = compute_rebase_slice_mappings(&[], &[], &[], &[], None);
     assert!(mappings.is_empty());
 }
 
@@ -158,7 +160,8 @@ fn compute_rebase_slice_mappings_same_byte_range_compatible_roles() {
     let old_ranges = [(0, 3), (5, 8)];
     let new_roles = [AnimatedSliceRole::Insert, AnimatedSliceRole::Delete];
     let new_ranges = [(0, 3), (5, 8)];
-    let mappings = compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges);
+    let mappings =
+        compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges, None);
     assert_eq!(mappings.len(), 2);
     assert_eq!(mappings[0].old_slice_index, 0);
     assert_eq!(mappings[0].new_slice_index, 0);
@@ -175,7 +178,8 @@ fn compute_rebase_slice_mappings_move_compatible_with_insert() {
     let old_ranges = [(0, 3)];
     let new_roles = [AnimatedSliceRole::Move];
     let new_ranges = [(0, 3)];
-    let mappings = compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges);
+    let mappings =
+        compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges, None);
     assert_eq!(mappings.len(), 1);
     assert_eq!(mappings[0].continuation, RebaseContinuation::Continue);
 }
@@ -190,7 +194,8 @@ fn compute_rebase_slice_mappings_crossfade_pair_compatible() {
     let old_ranges = [(0, 3), (3, 6)];
     let new_roles = [AnimatedSliceRole::Delete, AnimatedSliceRole::Insert];
     let new_ranges = [(0, 3), (3, 6)];
-    let mappings = compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges);
+    let mappings =
+        compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges, None);
     assert_eq!(mappings.len(), 2);
 }
 
@@ -201,7 +206,8 @@ fn compute_rebase_slice_mappings_incompatible_roles_no_mapping() {
     let old_ranges = [(0, 3)];
     let new_roles = [AnimatedSliceRole::Delete];
     let new_ranges = [(0, 3)];
-    let mappings = compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges);
+    let mappings =
+        compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges, None);
     // 不兼容 → 无映射（平台端按 End 处理）
     assert!(mappings.is_empty());
 }
@@ -213,7 +219,164 @@ fn compute_rebase_slice_mappings_different_byte_range_no_mapping() {
     let old_ranges = [(0, 3)];
     let new_roles = [AnimatedSliceRole::Insert];
     let new_ranges = [(5, 8)];
-    let mappings = compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges);
+    let mappings =
+        compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges, None);
+    assert!(mappings.is_empty());
+}
+
+#[test]
+fn compute_rebase_slice_mappings_offset_map_matched() {
+    // 正: 旧 slice range [5,8) 经 OffsetMap 映射（旧 [5,8) → 新 [7,10)）后与
+    // 新 slice range [7,10) 相等 + 角色兼容 → OffsetMapMatched + Continue。
+    let old_roles = [AnimatedSliceRole::Move];
+    let old_ranges = [(5, 8)];
+    let new_roles = [AnimatedSliceRole::Move];
+    let new_ranges = [(7, 10)];
+    let offset_map = OffsetMap {
+        entries: vec![crate::editor::OffsetMapEntry {
+            old_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(5),
+            new_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(7),
+            length: 3,
+            kind: crate::editor::OffsetMapKind::Shifted,
+        }],
+    };
+    let mappings = compute_rebase_slice_mappings(
+        &old_roles,
+        &old_ranges,
+        &new_roles,
+        &new_ranges,
+        Some(&offset_map),
+    );
+    assert_eq!(mappings.len(), 1);
+    assert_eq!(mappings[0].old_slice_index, 0);
+    assert_eq!(mappings[0].new_slice_index, 0);
+    assert_eq!(mappings[0].continuation, RebaseContinuation::Continue);
+    assert_eq!(mappings[0].reason, RebaseReason::OffsetMapMatched);
+}
+
+#[test]
+fn compute_rebase_slice_mappings_offset_map_unmapped_range_no_mapping() {
+    // 反: 旧 slice range [5,8) 不在 OffsetMap 覆盖范围内 → 无映射。
+    let old_roles = [AnimatedSliceRole::Move];
+    let old_ranges = [(5, 8)];
+    let new_roles = [AnimatedSliceRole::Move];
+    let new_ranges = [(7, 10)];
+    let offset_map = OffsetMap {
+        entries: vec![crate::editor::OffsetMapEntry {
+            old_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(0),
+            new_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(0),
+            length: 3,
+            kind: crate::editor::OffsetMapKind::Identity,
+        }],
+    };
+    let mappings = compute_rebase_slice_mappings(
+        &old_roles,
+        &old_ranges,
+        &new_roles,
+        &new_ranges,
+        Some(&offset_map),
+    );
+    assert!(mappings.is_empty());
+}
+
+#[test]
+fn compute_rebase_slice_mappings_offset_map_wrong_destination_no_mapping() {
+    // 反: OffsetMap 映射后的 range 与新 slice range 不等 → 无映射。
+    let old_roles = [AnimatedSliceRole::Move];
+    let old_ranges = [(5, 8)];
+    let new_roles = [AnimatedSliceRole::Move];
+    let new_ranges = [(8, 11)];
+    let offset_map = OffsetMap {
+        entries: vec![crate::editor::OffsetMapEntry {
+            old_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(5),
+            new_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(7),
+            length: 3,
+            kind: crate::editor::OffsetMapKind::Shifted,
+        }],
+    };
+    let mappings = compute_rebase_slice_mappings(
+        &old_roles,
+        &old_ranges,
+        &new_roles,
+        &new_ranges,
+        Some(&offset_map),
+    );
+    assert!(mappings.is_empty());
+}
+
+#[test]
+fn compute_rebase_slice_mappings_offset_map_incompatible_roles_no_mapping() {
+    // 反: OffsetMap 映射后 range 相等但角色不兼容（Move 与 Delete 不能接续）→ 无映射。
+    let old_roles = [AnimatedSliceRole::Delete];
+    let old_ranges = [(5, 8)];
+    let new_roles = [AnimatedSliceRole::Move];
+    let new_ranges = [(7, 10)];
+    let offset_map = OffsetMap {
+        entries: vec![crate::editor::OffsetMapEntry {
+            old_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(5),
+            new_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(7),
+            length: 3,
+            kind: crate::editor::OffsetMapKind::Shifted,
+        }],
+    };
+    let mappings = compute_rebase_slice_mappings(
+        &old_roles,
+        &old_ranges,
+        &new_roles,
+        &new_ranges,
+        Some(&offset_map),
+    );
+    assert!(mappings.is_empty());
+}
+
+#[test]
+fn compute_rebase_slice_mappings_offset_map_does_not_override_same_byte_range() {
+    // 优先级: byte range 完全相同 → SameByteRange，不降级为 OffsetMapMatched。
+    let old_roles = [AnimatedSliceRole::Move];
+    let old_ranges = [(0, 3)];
+    let new_roles = [AnimatedSliceRole::Move];
+    let new_ranges = [(0, 3)];
+    let offset_map = OffsetMap {
+        entries: vec![crate::editor::OffsetMapEntry {
+            old_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(0),
+            new_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(7),
+            length: 3,
+            kind: crate::editor::OffsetMapKind::Shifted,
+        }],
+    };
+    let mappings = compute_rebase_slice_mappings(
+        &old_roles,
+        &old_ranges,
+        &new_roles,
+        &new_ranges,
+        Some(&offset_map),
+    );
+    assert_eq!(mappings.len(), 1);
+    assert_eq!(mappings[0].reason, RebaseReason::SameByteRange);
+}
+
+#[test]
+fn compute_rebase_slice_mappings_offset_map_range_spanning_entry_no_mapping() {
+    // 反: range 跨越映射条目边界 → 不指向同一逻辑对象 → 无映射。
+    let old_roles = [AnimatedSliceRole::Move];
+    let old_ranges = [(2, 6)];
+    let new_roles = [AnimatedSliceRole::Move];
+    let new_ranges = [(4, 8)];
+    let offset_map = OffsetMap {
+        entries: vec![crate::editor::OffsetMapEntry {
+            old_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(0),
+            new_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(2),
+            length: 3,
+            kind: crate::editor::OffsetMapKind::Shifted,
+        }],
+    };
+    let mappings = compute_rebase_slice_mappings(
+        &old_roles,
+        &old_ranges,
+        &new_roles,
+        &new_ranges,
+        Some(&offset_map),
+    );
     assert!(mappings.is_empty());
 }
 
@@ -224,7 +387,8 @@ fn compute_rebase_slice_mappings_each_new_slice_matched_at_most_once() {
     let old_ranges = [(0, 3), (0, 3)];
     let new_roles = [AnimatedSliceRole::Insert];
     let new_ranges = [(0, 3)];
-    let mappings = compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges);
+    let mappings =
+        compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges, None);
     // 只有第一个旧 slice 匹配到新 slice 0；第二个旧 slice 无可用新 slice
     assert_eq!(mappings.len(), 1);
     assert_eq!(mappings[0].old_slice_index, 0);
@@ -242,7 +406,8 @@ fn compute_rebase_slice_mappings_partial_match() {
     let old_ranges = [(0, 3), (5, 8), (10, 12)];
     let new_roles = [AnimatedSliceRole::Move, AnimatedSliceRole::Delete];
     let new_ranges = [(10, 12), (15, 18)];
-    let mappings = compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges);
+    let mappings =
+        compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges, None);
     // 旧 slice 2 (Move @ [10,12)) 匹配新 slice 0 (Move @ [10,12))
     // 旧 slice 1 (Delete @ [5,8)) 不匹配新 slice 1 (Delete @ [15,18)) — byte range 不同
     // 旧 slice 0 (Insert @ [0,3)) 无匹配
@@ -262,6 +427,7 @@ fn compute_rebase_includes_slice_mappings() {
         &[(0, 3), (5, 8)],
         &[AnimatedSliceRole::Insert, AnimatedSliceRole::Delete],
         &[(0, 3), (5, 8)],
+        None,
     );
     assert_eq!(rebase.cancelled_transaction_id, 100);
     assert_eq!(rebase.slice_mappings.len(), 2);

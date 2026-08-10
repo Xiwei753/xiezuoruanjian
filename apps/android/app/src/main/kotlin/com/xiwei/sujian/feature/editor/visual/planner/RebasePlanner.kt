@@ -2,11 +2,8 @@ package com.xiwei.sujian.feature.editor.visual.planner
 
 import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
-import com.xiwei.sujian.feature.editor.visual.RebaseContinuation
-import com.xiwei.sujian.feature.editor.visual.RebaseReason
 import com.xiwei.sujian.feature.editor.visual.RebaseSliceMapping
 import com.xiwei.sujian.feature.editor.visual.SliceRole
-import com.xiwei.sujian.feature.editor.visual.SliceRoleAndByteRange
 import com.xiwei.sujian.feature.editor.visual.SliceVisualState
 import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
@@ -14,118 +11,26 @@ import com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot
 
 class RebasePlanner {
     /**
-     * #606: 计算旧事务逻辑 slice → 新事务逻辑 slice 的对应关系。
+     * #606: 将 Core 计算的旧→新逻辑 slice 对应关系应用到新事务的 animated slices。
      *
-     * 与 Core `compute_rebase_slice_mappings` 逻辑完全一致 — 平台无关的
-     * 唯一事实来源。Android 不再使用 compatibleRebaseRoles/findRebaseIndexByClusterByteRange/
-     * findRebaseIndexByLineAndRole/findRebaseIndexClosestByPosition 做启发式匹配，
-     * 只按 byte range 精确匹配 + 角色兼容判定。
-     *
-     * 匹配规则（按优先级）：
-     * 1. 旧/新 slice 的 byte range 完全相同 + 角色兼容 → SameByteRange + Continue
-     * 2. 其余旧 slice 不生成映射（平台端按 End 处理）
-     *
-     * 每个新 slice 至多被一个旧 slice 匹配（usedNew 去重），
-     * 避免多旧 slice 接续同一新 slice 造成 progress 抢占。
-     */
-    fun computeRebaseSliceMappings(
-        oldSlices: List<SliceRoleAndByteRange>,
-        newSlices: List<SliceRoleAndByteRange>,
-    ): List<RebaseSliceMapping> {
-        val mappings = mutableListOf<RebaseSliceMapping>()
-        val usedNew = mutableSetOf<Int>()
-        for ((oldIdx, oldSlice) in oldSlices.withIndex()) {
-            for ((newIdx, newSlice) in newSlices.withIndex()) {
-                if (newIdx in usedNew) continue
-                if (
-                    compatibleRebaseRolesInternal(newSlice.role, oldSlice.role) &&
-                    oldSlice.byteStart == newSlice.byteStart &&
-                    oldSlice.byteEndExclusive == newSlice.byteEndExclusive
-                ) {
-                    mappings.add(
-                        RebaseSliceMapping(
-                            oldSliceIndex = oldIdx,
-                            newSliceIndex = newIdx,
-                            continuation = RebaseContinuation.Continue,
-                            reason = RebaseReason.SameByteRange,
-                        ),
-                    )
-                    usedNew.add(newIdx)
-                    break
-                }
-            }
-        }
-        return mappings
-    }
-
-    /**
-     * #606: 角色兼容判定 — 与 Core `compatible_rebase_roles` 完全一致。
-     *
-     * Move/Insert/CrossfadeNew 互相兼容（都是"新出现的文字"动画）；
-     * Delete/CrossfadeOld 互相兼容（都是"消失的文字"动画）；
-     * 其余组合不兼容（Insert 与 Delete 不能接续，Move 与 CrossfadeOld 不能接续）。
-     * Static 不参与 rebase。
-     */
-    private fun compatibleRebaseRolesInternal(
-        newRole: SliceRole,
-        oldRole: SliceRole,
-    ): Boolean {
-        return when (Pair(newRole, oldRole)) {
-            Pair(SliceRole.Move, SliceRole.Move),
-            Pair(SliceRole.Move, SliceRole.Insert),
-            Pair(SliceRole.Move, SliceRole.CrossfadeNew),
-            Pair(SliceRole.Insert, SliceRole.Move),
-            Pair(SliceRole.Insert, SliceRole.Insert),
-            Pair(SliceRole.Insert, SliceRole.CrossfadeNew),
-            Pair(SliceRole.CrossfadeNew, SliceRole.CrossfadeNew),
-            Pair(SliceRole.CrossfadeNew, SliceRole.Move),
-            Pair(SliceRole.CrossfadeNew, SliceRole.Insert),
-            Pair(SliceRole.Delete, SliceRole.Delete),
-            Pair(SliceRole.Delete, SliceRole.CrossfadeOld),
-            Pair(SliceRole.CrossfadeOld, SliceRole.CrossfadeOld),
-            Pair(SliceRole.CrossfadeOld, SliceRole.Delete),
-            -> true
-            else -> false
-        }
-    }
-
-    /**
-     * #606: 将 rebase snapshot 的旧帧视觉状态应用到新事务的 animated slices。
-     *
-     * 旧→新 slice 的逻辑对应关系由 [computeRebaseSliceMappings] 唯一决定，
-     * 平台端不再使用启发式匹配（compatibleRebaseRoles public 版本 /
-     * findRebaseIndexByClusterByteRange / findRebaseIndexByLineAndRole /
-     * findRebaseIndexClosestByPosition 已删除）。
-     *
-     * 签名保持不变 — 调用方无需修改。
+     * 旧→新 slice 的逻辑对应关系由 Core（`compute_rebase_slice_mappings`）
+     * 唯一计算并作为 [mappings] 传入 — 平台端不再使用任何本地匹配逻辑
+     * （compatibleRebaseRoles / findRebaseIndexByClusterByteRange /
+     * findRebaseIndexByLineAndRole / findRebaseIndexClosestByPosition 已删除）。
+     * 本方法只负责：
+     * 1. 对映射到的旧 slice，把旧帧当前 `RectF/alpha/revealFraction/Bitmap`
+     *    填入新 slice 的 `fromDestinationRect/initialFraction/startAlpha`；
+     * 2. 对 Core 无映射的旧 slice，按 Core 的继续/结束语义处理（仍在进行中的
+     *    Delete/CrossfadeOld 继续吞完/淡出，Move/Insert/CrossfadeNew 继续原动画），
+     *    这是旧帧动画状态的平台侧延续，不重新猜测逻辑对应。
      */
     fun applyRebaseToSlices(
         newSlices: List<PreparedVisualTransaction.AnimatedSlice>,
         rebaseSnapshot: VisualFrameSnapshot,
         snapshotLookup: Map<Long, AndroidLineSnapshot> = emptyMap(),
+        mappings: List<RebaseSliceMapping> = emptyList(),
     ): List<PreparedVisualTransaction.AnimatedSlice> {
         if (rebaseSnapshot.sliceVisualStates.isEmpty()) return newSlices
-
-        // #606: 用 computeRebaseSliceMappings 计算旧→新对应关系，
-        // 替代旧的 findRebaseIndexByClusterByteRange/findRebaseIndexByLineAndRole/
-        // findRebaseIndexClosestByPosition 启发式匹配。
-        val oldSlices =
-            rebaseSnapshot.sliceVisualStates.map { state ->
-                SliceRoleAndByteRange(
-                    role = state.role,
-                    byteStart = state.clusterByteStart,
-                    byteEndExclusive = state.clusterByteEndExclusive,
-                )
-            }
-        val newSlicesForMapping =
-            newSlices.map { slice ->
-                SliceRoleAndByteRange(
-                    role = slice.role,
-                    byteStart = slice.clusterByteStart,
-                    byteEndExclusive = slice.clusterByteEndExclusive,
-                )
-            }
-        val mappings = computeRebaseSliceMappings(oldSlices, newSlicesForMapping)
 
         val usedRebaseIndices = mutableSetOf<Int>()
         val result = mutableListOf<PreparedVisualTransaction.AnimatedSlice>()

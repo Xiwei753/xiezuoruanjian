@@ -5,8 +5,8 @@ import android.graphics.RectF
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.RebaseContinuation
 import com.xiwei.sujian.feature.editor.visual.RebaseReason
+import com.xiwei.sujian.feature.editor.visual.RebaseSliceMapping
 import com.xiwei.sujian.feature.editor.visual.SliceRole
-import com.xiwei.sujian.feature.editor.visual.SliceRoleAndByteRange
 import com.xiwei.sujian.feature.editor.visual.SliceVisualState
 import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
@@ -21,8 +21,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * #606: computeRebaseSliceMappings 正反测试 — 从 RebasePlannerTest 拆出以控制 detekt
- * LargeClass / TooManyFunctions / StringLiteralDuplication 阈值。
+ * #606: RebasePlanner 只消费 Core 计算的映射 — 本地匹配逻辑已删除。
+ *
+ * 这些测试验证 `applyRebaseToSlices` 把 Core 给的映射（oldSliceIndex → newSliceIndex）
+ * 翻译为旧帧视觉状态（RectF/alpha/revealFraction）填入新 slice，以及无映射旧 slice
+ * 的继续/结束处理。映射本身由 Core 计算（Rust 侧测试覆盖），Android 不再生成。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -87,239 +90,12 @@ class RebaseSliceMappingTest {
         )
     }
 
-    // ── #606: computeRebaseSliceMappings 正反测试 ──
-
     /**
-     * #606 正: 旧/新 slice byte range 相同 + 角色兼容 → 生成 SameByteRange + Continue 映射。
+     * #606 正: applyRebaseToSlices 消费 Core 给的映射 —
+     * 旧帧 revealFraction/alpha 被填入新 slice。
      */
     @Test
-    fun computeRebaseSliceMappingsSameByteRangeCompatibleRolesProducesMapping() {
-        val oldSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Insert, 0, 10),
-                SliceRoleAndByteRange(SliceRole.Delete, 10, 20),
-            )
-        val newSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Insert, 0, 10),
-                SliceRoleAndByteRange(SliceRole.Delete, 10, 20),
-            )
-
-        val mappings = planner.computeRebaseSliceMappings(oldSlices, newSlices)
-
-        assertEquals("应生成 2 条映射", 2, mappings.size)
-        assertEquals("第 0 条 oldSliceIndex=0", 0, mappings[0].oldSliceIndex)
-        assertEquals("第 0 条 newSliceIndex=0", 0, mappings[0].newSliceIndex)
-        assertEquals("第 0 条 continuation=Continue", RebaseContinuation.Continue, mappings[0].continuation)
-        assertEquals("第 0 条 reason=SameByteRange", RebaseReason.SameByteRange, mappings[0].reason)
-        assertEquals("第 1 条 oldSliceIndex=1", 1, mappings[1].oldSliceIndex)
-        assertEquals("第 1 条 newSliceIndex=1", 1, mappings[1].newSliceIndex)
-    }
-
-    /**
-     * #606 正: Move 与 Insert 角色兼容（都是"新出现的文字"动画）。
-     */
-    @Test
-    fun computeRebaseSliceMappingsMoveCompatibleWithInsert() {
-        val oldSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Insert, 0, 10),
-            )
-        val newSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Move, 0, 10),
-            )
-
-        val mappings = planner.computeRebaseSliceMappings(oldSlices, newSlices)
-
-        assertEquals("Move 与 Insert 兼容应生成映射", 1, mappings.size)
-        assertEquals(RebaseReason.SameByteRange, mappings[0].reason)
-    }
-
-    /**
-     * #606 正: CrossfadeOld 与 Delete 兼容（都是"消失的文字"动画）。
-     */
-    @Test
-    fun computeRebaseSliceMappingsCrossfadeOldCompatibleWithDelete() {
-        val oldSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.CrossfadeOld, 5, 15),
-            )
-        val newSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Delete, 5, 15),
-            )
-
-        val mappings = planner.computeRebaseSliceMappings(oldSlices, newSlices)
-
-        assertEquals("CrossfadeOld 与 Delete 兼容应生成映射", 1, mappings.size)
-    }
-
-    /**
-     * #606 反: 不同 byte range → 不生成映射。
-     */
-    @Test
-    fun computeRebaseSliceMappingsDifferentByteRangeNoMapping() {
-        val oldSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Insert, 0, 10),
-            )
-        val newSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Insert, 0, 20),
-            )
-
-        val mappings = planner.computeRebaseSliceMappings(oldSlices, newSlices)
-
-        assertTrue("byte range 不同不应生成映射", mappings.isEmpty())
-    }
-
-    /**
-     * #606 反: 角色不兼容（Insert 与 Delete）→ 不生成映射。
-     */
-    @Test
-    fun computeRebaseSliceMappingsIncompatibleRolesNoMapping() {
-        val oldSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Insert, 0, 10),
-            )
-        val newSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Delete, 0, 10),
-            )
-
-        val mappings = planner.computeRebaseSliceMappings(oldSlices, newSlices)
-
-        assertTrue("Insert 与 Delete 不兼容不应生成映射", mappings.isEmpty())
-    }
-
-    /**
-     * #606 反: Move 与 CrossfadeOld 不兼容 → 不生成映射。
-     */
-    @Test
-    fun computeRebaseSliceMappingsMoveIncompatibleWithCrossfadeOld() {
-        val oldSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.CrossfadeOld, 0, 10),
-            )
-        val newSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Move, 0, 10),
-            )
-
-        val mappings = planner.computeRebaseSliceMappings(oldSlices, newSlices)
-
-        assertTrue("Move 与 CrossfadeOld 不兼容不应生成映射", mappings.isEmpty())
-    }
-
-    /**
-     * #606 反: 每个新 slice 至多被一个旧 slice 匹配。
-     */
-    @Test
-    fun computeRebaseSliceMappingsEachNewSliceMatchedAtMostOnce() {
-        val oldSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Insert, 0, 10),
-                SliceRoleAndByteRange(SliceRole.Insert, 0, 10),
-            )
-        val newSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Insert, 0, 10),
-            )
-
-        val mappings = planner.computeRebaseSliceMappings(oldSlices, newSlices)
-
-        assertEquals("两个旧 slice 竞争同一新 slice，只应匹配一次", 1, mappings.size)
-        assertEquals("第一个旧 slice 优先匹配", 0, mappings[0].oldSliceIndex)
-        assertEquals("新 slice index=0", 0, mappings[0].newSliceIndex)
-    }
-
-    /**
-     * #606 反: 空输入 → 空映射。
-     */
-    @Test
-    fun computeRebaseSliceMappingsEmptyInputsProducesEmptyMappings() {
-        val mappings = planner.computeRebaseSliceMappings(emptyList(), emptyList())
-        assertTrue("空输入应返回空映射", mappings.isEmpty())
-    }
-
-    /**
-     * #606 反: 旧 slice 为空 → 空映射。
-     */
-    @Test
-    fun computeRebaseSliceMappingsEmptyOldSlicesProducesEmptyMappings() {
-        val newSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Insert, 0, 10),
-            )
-        val mappings = planner.computeRebaseSliceMappings(emptyList(), newSlices)
-        assertTrue("旧 slice 为空应返回空映射", mappings.isEmpty())
-    }
-
-    /**
-     * #606 反: 新 slice 为空 → 空映射。
-     */
-    @Test
-    fun computeRebaseSliceMappingsEmptyNewSlicesProducesEmptyMappings() {
-        val oldSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Insert, 0, 10),
-            )
-        val mappings = planner.computeRebaseSliceMappings(oldSlices, emptyList())
-        assertTrue("新 slice 为空应返回空映射", mappings.isEmpty())
-    }
-
-    /**
-     * #606 正: 部分匹配 — 3 旧 slice 中 2 个匹配新 slice。
-     */
-    @Test
-    fun computeRebaseSliceMappingsPartialMatch() {
-        val oldSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Insert, 0, 10),
-                SliceRoleAndByteRange(SliceRole.Delete, 10, 20),
-                SliceRoleAndByteRange(SliceRole.Move, 30, 40),
-            )
-        val newSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Move, 0, 10),
-                SliceRoleAndByteRange(SliceRole.Delete, 10, 20),
-            )
-
-        val mappings = planner.computeRebaseSliceMappings(oldSlices, newSlices)
-
-        assertEquals("应生成 2 条映射（第 0 旧→第 0 新，第 1 旧→第 1 新）", 2, mappings.size)
-        assertEquals(0, mappings[0].oldSliceIndex)
-        assertEquals(0, mappings[0].newSliceIndex)
-        assertEquals(1, mappings[1].oldSliceIndex)
-        assertEquals(1, mappings[1].newSliceIndex)
-    }
-
-    /**
-     * #606 正: Static 角色不参与 rebase（与任何角色都不兼容）。
-     */
-    @Test
-    fun computeRebaseSliceMappingsStaticRoleNeverMatches() {
-        val oldSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Static, 0, 10),
-            )
-        val newSlices =
-            listOf(
-                SliceRoleAndByteRange(SliceRole.Static, 0, 10),
-            )
-
-        val mappings = planner.computeRebaseSliceMappings(oldSlices, newSlices)
-
-        assertTrue("Static 角色不应参与 rebase 匹配", mappings.isEmpty())
-    }
-
-    /**
-     * #606 正: applyRebaseToSlices 用 computeRebaseSliceMappings 做精确匹配 —
-     * byte range 相同 + 角色兼容的旧 slice 视觉状态被应用到新 slice。
-     */
-    @Test
-    fun applyRebaseToSlicesUsesComputeRebaseSliceMappingsForExactMatch() {
+    fun applyRebaseToSlicesConsumesCoreMappingForExactMatch() {
         val newSlice = makeAnimatedSlice(SliceRole.Insert, initialFraction = 0f)
         val rebaseState =
             makeSliceVisualState(
@@ -333,12 +109,22 @@ class RebaseSliceMappingTest {
                 state = TransactionState.Rendering,
                 sliceVisualStates = listOf(rebaseState),
             )
+        val coreMappings =
+            listOf(
+                RebaseSliceMapping(
+                    oldSliceIndex = 0,
+                    newSliceIndex = 0,
+                    continuation = RebaseContinuation.Continue,
+                    reason = RebaseReason.SameByteRange,
+                ),
+            )
 
         val result =
             planner.applyRebaseToSlices(
                 newSlices = listOf(newSlice),
                 rebaseSnapshot = rebaseSnapshot,
                 snapshotLookup = emptyMap(),
+                mappings = coreMappings,
             )
 
         assertEquals("应生成 1 个 rebased slice", 1, result.size)
@@ -349,13 +135,67 @@ class RebaseSliceMappingTest {
             result[0].revealSpec!!.initialFraction,
             0.0001f,
         )
+        assertEquals(
+            "rebase 应将旧帧 currentAlpha=0.7 写入新 slice 的 startAlpha",
+            0.7f,
+            result[0].startAlpha,
+            0.0001f,
+        )
     }
 
     /**
-     * #606 反: applyRebaseToSlices — byte range 不同时不做匹配，新 slice 保持原样。
+     * #606 正: OffsetMapMatched 映射（Core 判定旧/新 range 经偏移映射指向同一逻辑对象）
+     * 与 SameByteRange 一样被消费。
      */
     @Test
-    fun applyRebaseToSlicesNoMatchWhenByteRangeDiffers() {
+    fun applyRebaseToSlicesConsumesOffsetMapMatchedMapping() {
+        val newSlice = makeAnimatedSlice(SliceRole.Move, initialFraction = 0f)
+        val rebaseState =
+            makeSliceVisualState(
+                role = SliceRole.Insert,
+                revealFraction = 0.5f,
+                currentAlpha = 0.5f,
+            )
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 0.5f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(rebaseState),
+            )
+        val coreMappings =
+            listOf(
+                RebaseSliceMapping(
+                    oldSliceIndex = 0,
+                    newSliceIndex = 0,
+                    continuation = RebaseContinuation.Continue,
+                    reason = RebaseReason.OffsetMapMatched,
+                ),
+            )
+
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = listOf(newSlice),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = emptyMap(),
+                mappings = coreMappings,
+            )
+
+        assertEquals("应生成 1 个 rebased slice", 1, result.size)
+        assertEquals(
+            "OffsetMapMatched 映射同样把旧帧 alpha 带入新 slice",
+            0.5f,
+            result[0].startAlpha,
+            0.0001f,
+        )
+        assertNotNull(result[0].fromDestinationRect)
+    }
+
+    /**
+     * #606 反: Core 未给出映射（空列表）时，新 slice 保持原样，
+     * 旧 slice 按无对应关系处理（仍在进行中的动画继续）。
+     */
+    @Test
+    fun applyRebaseToSlicesNoMappingKeepsNewSliceAndContinuesOld() {
         val newSlice =
             PreparedVisualTransaction.AnimatedSlice(
                 role = SliceRole.Insert,
@@ -385,11 +225,47 @@ class RebaseSliceMappingTest {
                 newSlices = listOf(newSlice),
                 rebaseSnapshot = rebaseSnapshot,
                 snapshotLookup = emptyMap(),
+                mappings = emptyList(),
             )
 
-        // 新 slice byte range (50,60) 与旧 slice byte range (0,1) 不同 → 不匹配
-        // 新 slice 保持原样 (startAlpha=1f)，旧 slice 作为未匹配 fade-out 处理
-        assertEquals("应生成 2 个 slice（新 slice 原样 + 旧 slice fade-out）", 2, result.size)
+        // Core 无映射 → 新 slice 原样 (startAlpha=1f)，旧 slice 作为未匹配 slice 继续动画
+        assertEquals("应生成 2 个 slice（新 slice 原样 + 旧 slice 继续）", 2, result.size)
         assertEquals("第 0 个是新 slice，startAlpha 应保持 1f", 1f, result[0].startAlpha, 0.0001f)
+        assertEquals("第 1 个是旧 slice 继续动画", SliceRole.Insert, result[1].role)
+        assertEquals("旧 slice 继续动画应带旧帧 alpha", 0.7f, result[1].startAlpha, 0.0001f)
+    }
+
+    /**
+     * #606 反: 映射指向的旧 slice 索引越界时安全降级（新 slice 保持原样）。
+     */
+    @Test
+    fun applyRebaseToSlicesOutOfRangeMappingDegradesGracefully() {
+        val newSlice = makeAnimatedSlice(SliceRole.Insert, initialFraction = 0f)
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 0.7f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(makeSliceVisualState(SliceRole.Insert)),
+            )
+        val coreMappings =
+            listOf(
+                RebaseSliceMapping(
+                    oldSliceIndex = 5,
+                    newSliceIndex = 0,
+                    continuation = RebaseContinuation.Continue,
+                    reason = RebaseReason.SameByteRange,
+                ),
+            )
+
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = listOf(newSlice),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = emptyMap(),
+                mappings = coreMappings,
+            )
+
+        assertTrue("越界映射不应崩溃", result.isNotEmpty())
+        assertEquals("越界映射的新 slice 保持原样", 1f, result[0].startAlpha, 0.0001f)
     }
 }

@@ -295,5 +295,14 @@ class CompositionCommitConsumesCoreIntentTest {
         override fun previousGraphemeBoundary(byteOffset: Int): Int = byteOffset
 
         override fun nextGraphemeBoundary(byteOffset: Int): Int = byteOffset
+
+        // #606: 测试不覆盖 rebase 映射 — 返回 null（平台端按无映射处理）。
+        override fun computeRebaseSliceMappings(
+            oldSliceRoles: List<uniffi.writer_core.AnimatedSliceRoleDto>,
+            oldSliceByteRanges: List<uniffi.writer_core.EditorByteRangeDto>,
+            newSliceRoles: List<uniffi.writer_core.AnimatedSliceRoleDto>,
+            newSliceByteRanges: List<uniffi.writer_core.EditorByteRangeDto>,
+            offsetMap: uniffi.writer_core.OffsetMapDto?,
+        ): List<uniffi.writer_core.RebaseSliceMappingDto>? = null
     }
 }

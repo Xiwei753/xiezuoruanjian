@@ -1320,11 +1320,14 @@ interface WriterAppService {
     u32 editor_kernel_previous_grapheme_boundary(u32 byte_offset);
     u32 editor_kernel_next_grapheme_boundary(u32 byte_offset);
     // #606: rebase slice 逻辑对应关系由 Core 唯一计算，平台端不再自己匹配。
+    // offset_map 为本次事务的旧正文 → 新正文偏移映射（EditorVisualIntentDto.offset_map），
+    // 用于旧/新 slice range 坐标不同时的 OffsetMapMatched 匹配。
     sequence<RebaseSliceMappingDto> editor_kernel_compute_rebase_slice_mappings(
         sequence<AnimatedSliceRoleDto> old_slice_roles,
         sequence<EditorByteRangeDto> old_slice_byte_ranges,
         sequence<AnimatedSliceRoleDto> new_slice_roles,
-        sequence<EditorByteRangeDto> new_slice_byte_ranges
+        sequence<EditorByteRangeDto> new_slice_byte_ranges,
+        OffsetMapDto? offset_map
     );
     EditorEditResultDto editor_kernel_replace_all(string search, string replacement, u64 expected_revision);
     EditorEditResultDto editor_kernel_insert_line_break(u32 byte_offset, u8 auto_indent_enabled, EditorTransactionCauseDto cause, u64 expected_revision);
@@ -1354,6 +1357,17 @@ interface WriterAppService {
     // 不再依赖 ICU BreakIterator。
     u32 text_edit_session_previous_grapheme_boundary(u64 session_id, u32 byte_offset);
     u32 text_edit_session_next_grapheme_boundary(u64 session_id, u32 byte_offset);
+    // #606: rebase slice 逻辑对应关系由 Core 唯一计算（session-scoped 版本）。
+    // offset_map 为本次事务的旧正文 → 新正文偏移映射（EditorVisualIntentDto.offset_map），
+    // 用于旧/新 slice range 坐标不同时的 OffsetMapMatched 匹配。
+    sequence<RebaseSliceMappingDto> text_edit_session_compute_rebase_slice_mappings(
+        u64 session_id,
+        sequence<AnimatedSliceRoleDto> old_slice_roles,
+        sequence<EditorByteRangeDto> old_slice_byte_ranges,
+        sequence<AnimatedSliceRoleDto> new_slice_roles,
+        sequence<EditorByteRangeDto> new_slice_byte_ranges,
+        OffsetMapDto? offset_map
+    );
     string text_edit_session_get_text(u64 session_id);
     u64 text_edit_session_get_revision(u64 session_id);
     EditorSessionSnapshotDto text_edit_session_snapshot(u64 session_id);

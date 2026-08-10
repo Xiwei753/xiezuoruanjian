@@ -8,8 +8,24 @@ import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import com.xiwei.sujian.feature.editor.projection.DisplayTextProjection
 import com.xiwei.sujian.feature.editor.projection.EditResult
+import com.xiwei.sujian.feature.editor.projection.OffsetMap
+import com.xiwei.sujian.feature.editor.projection.OffsetMapEntry
+import com.xiwei.sujian.feature.editor.projection.OffsetMapKind
 import com.xiwei.sujian.feature.editor.projection.VisualIntent
+import com.xiwei.sujian.feature.editor.visual.AndroidVisualPlanner
+import com.xiwei.sujian.feature.editor.visual.RebaseMappingProvider
+import com.xiwei.sujian.feature.editor.visual.RebaseReason
+import com.xiwei.sujian.feature.editor.visual.RebaseSliceMapping
+import com.xiwei.sujian.feature.editor.visual.SliceRole
+import com.xiwei.sujian.feature.editor.visual.SliceRoleAndByteRange
+import uniffi.writer_core.AnimatedSliceRoleDto
 import uniffi.writer_core.EditorTransactionCauseDto
+import uniffi.writer_core.OffsetMapDto
+import uniffi.writer_core.OffsetMapEntryDto
+import uniffi.writer_core.OffsetMapKindDto
+import uniffi.writer_core.RebaseContinuationDto
+import uniffi.writer_core.RebaseReasonDto
+import uniffi.writer_core.RebaseSliceMappingDto
 
 /**
  * Visual pipeline for the Android editing runtime.
@@ -66,6 +82,108 @@ class AndroidEditorPipeline private constructor(
         }
 
     companion object {
+        /** #606: 平台 SliceRole → Core AnimatedSliceRoleDto（纯数据映射，无逻辑）。 */
+        private fun SliceRole.toAnimatedSliceRoleDto(): AnimatedSliceRoleDto? =
+            when (this) {
+                SliceRole.Insert -> AnimatedSliceRoleDto.INSERT
+                SliceRole.Delete -> AnimatedSliceRoleDto.DELETE
+                SliceRole.Move -> AnimatedSliceRoleDto.MOVE
+                SliceRole.CrossfadeOld -> AnimatedSliceRoleDto.CROSSFADE_OLD
+                SliceRole.CrossfadeNew -> AnimatedSliceRoleDto.CROSSFADE_NEW
+                SliceRole.Static -> null
+            }
+
+        /** #606: 投影层 OffsetMap → UniFFI DTO（纯数据映射，无逻辑）。 */
+        private fun OffsetMap.toDto(): OffsetMapDto = OffsetMapDto(entries.map { it.toDto() })
+
+        /** #606: 投影层 OffsetMapEntry → UniFFI DTO（纯数据映射，无逻辑）。 */
+        private fun OffsetMapEntry.toDto(): OffsetMapEntryDto =
+            OffsetMapEntryDto(
+                oldByteOffset = oldByteOffset.toUInt(),
+                newByteOffset = newByteOffset.toUInt(),
+                length = length.toUInt(),
+                kind =
+                    when (kind) {
+                        OffsetMapKind.IDENTITY -> OffsetMapKindDto.IDENTITY
+                        OffsetMapKind.SHIFTED -> OffsetMapKindDto.SHIFTED
+                    },
+            )
+
+        /** #606: Core RebaseSliceMappingDto → 平台类型（纯数据映射，无逻辑）。 */
+        private fun RebaseSliceMappingDto.toPlatform(): RebaseSliceMapping =
+            RebaseSliceMapping(
+                oldSliceIndex = oldSliceIndex.toInt(),
+                newSliceIndex = newSliceIndex.toInt(),
+                continuation =
+                    when (continuation) {
+                        RebaseContinuationDto.CONTINUE ->
+                            com.xiwei.sujian.feature.editor.visual.RebaseContinuation.Continue
+                        RebaseContinuationDto.END ->
+                            com.xiwei.sujian.feature.editor.visual.RebaseContinuation.End
+                    },
+                reason =
+                    when (reason) {
+                        RebaseReasonDto.SAME_BYTE_RANGE -> RebaseReason.SameByteRange
+                        RebaseReasonDto.OFFSET_MAP_MATCHED -> RebaseReason.OffsetMapMatched
+                        RebaseReasonDto.NO_MAPPING -> RebaseReason.NoMapping
+                    },
+            )
+
+        /**
+         * #606: 旧→新逻辑 slice 对应关系由 Core 唯一计算。
+         *
+         * 平台端只提供输入（旧/新 slice 角色与 byte range、本次事务的 OffsetMap）
+         * 并把 Core 返回的 DTO 转回平台类型；Static 角色不在 Core 动画角色集合中
+         * （不参与 rebase 匹配），先过滤再调用，返回后把 Core 索引（过滤后列表的
+         * 索引）翻译回完整列表索引 — 纯数据管道，无任何匹配逻辑。
+         * bridge 为 null 或调用失败时返回空映射（平台端按无对应关系处理）。
+         */
+        fun computeRebaseSliceMappings(
+            bridge: EditorKernelBridge?,
+            oldSlices: List<SliceRoleAndByteRange>,
+            newSlices: List<SliceRoleAndByteRange>,
+            offsetMap: OffsetMap?,
+        ): List<RebaseSliceMapping> {
+            if (bridge == null) return emptyList()
+            val oldNonStaticIndices =
+                oldSlices.mapIndexedNotNull { index, s ->
+                    if (s.role.toAnimatedSliceRoleDto() == null) null else index
+                }
+            val newNonStaticIndices =
+                newSlices.mapIndexedNotNull { index, s ->
+                    if (s.role.toAnimatedSliceRoleDto() == null) null else index
+                }
+            val coreMappings =
+                bridge.computeRebaseSliceMappings(
+                    oldSliceRoles = oldNonStaticIndices.map { oldSlices[it].role.toAnimatedSliceRoleDto()!! },
+                    oldSliceByteRanges =
+                        oldNonStaticIndices.map {
+                            uniffi.writer_core.EditorByteRangeDto(
+                                start = oldSlices[it].byteStart.toUInt(),
+                                endExclusive = oldSlices[it].byteEndExclusive.toUInt(),
+                            )
+                        },
+                    newSliceRoles = newNonStaticIndices.map { newSlices[it].role.toAnimatedSliceRoleDto()!! },
+                    newSliceByteRanges =
+                        newNonStaticIndices.map {
+                            uniffi.writer_core.EditorByteRangeDto(
+                                start = newSlices[it].byteStart.toUInt(),
+                                endExclusive = newSlices[it].byteEndExclusive.toUInt(),
+                            )
+                        },
+                    offsetMap = offsetMap?.toDto(),
+                )
+            return coreMappings
+                ?.map { dto ->
+                    dto.toPlatform().let {
+                        it.copy(
+                            oldSliceIndex = oldNonStaticIndices[it.oldSliceIndex],
+                            newSliceIndex = newNonStaticIndices[it.newSliceIndex],
+                        )
+                    }
+                } ?: emptyList()
+        }
+
         fun create(
             mirror: DisplayTextMirror,
             textPaint: TextPaint,
@@ -76,7 +194,21 @@ class AndroidEditorPipeline private constructor(
         ): AndroidEditorPipeline {
             val editPipeline = EditPipeline(mirror)
             val layoutRuntime = AndroidLayoutRuntime(mirror, textPaint)
-            val visualRuntime = AndroidVisualRuntime(timeSource, transactionIdSource)
+            val rebaseMappingProvider =
+                RebaseMappingProvider { oldSlices, newSlices, offsetMap ->
+                    computeRebaseSliceMappings(
+                        editPipeline.kernelBridge,
+                        oldSlices,
+                        newSlices,
+                        offsetMap,
+                    )
+                }
+            val visualRuntime =
+                AndroidVisualRuntime(
+                    visualPlanner = AndroidVisualPlanner(rebaseMappingProvider = rebaseMappingProvider),
+                    timeSource = timeSource,
+                    transactionIdSource = transactionIdSource,
+                )
             val renderRuntime = AndroidRenderRuntime()
             return AndroidEditorPipeline(editPipeline, renderRuntime, layoutRuntime, visualRuntime)
         }

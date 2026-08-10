@@ -1,5 +1,6 @@
 use crate::api::{
-    EditorEditOutcomeDto, EditorEditResultDto, EditorSessionSnapshotDto, EditorTransactionCauseDto,
+    AnimatedSliceRoleDto, EditorByteRangeDto, EditorEditOutcomeDto, EditorEditResultDto,
+    EditorSessionSnapshotDto, EditorTransactionCauseDto, OffsetMapDto, RebaseSliceMappingDto,
 };
 
 impl super::WriterAppService {
@@ -604,5 +605,47 @@ impl super::WriterAppService {
     ) -> u32 {
         self.with_session_in_registry(session_id, |s| s.kernel.next_grapheme_boundary(byte_offset))
             .unwrap_or(byte_offset)
+    }
+
+    /// #606: 计算旧事务逻辑 slice → 新事务逻辑 slice 的对应关系。
+    ///
+    /// session-scoped 版本，与 [editor_kernel_compute_rebase_slice_mappings] 语义一致，
+    /// 但绑定到指定 session。匹配依据只用 byte range/OffsetMap/角色兼容，
+    /// 不使用像素坐标 — 平台端 RebasePlanner 不再自己匹配。
+    pub fn text_edit_session_compute_rebase_slice_mappings(
+        &self,
+        session_id: u64,
+        old_slice_roles: Vec<AnimatedSliceRoleDto>,
+        old_slice_byte_ranges: Vec<EditorByteRangeDto>,
+        new_slice_roles: Vec<AnimatedSliceRoleDto>,
+        new_slice_byte_ranges: Vec<EditorByteRangeDto>,
+        offset_map: Option<OffsetMapDto>,
+    ) -> Vec<RebaseSliceMappingDto> {
+        // 校验 session 存在（映射本身不依赖 session 状态，但保持 session-scoped 契约：
+        // 不存在的 session 返回空映射，平台端按 End 处理）。
+        if self.with_session_in_registry(session_id, |_| ()).is_none() {
+            return Vec::new();
+        }
+        let old_roles: Vec<crate::editor::AnimatedSliceRole> =
+            old_slice_roles.into_iter().map(Into::into).collect();
+        let new_roles: Vec<crate::editor::AnimatedSliceRole> =
+            new_slice_roles.into_iter().map(Into::into).collect();
+        let old_ranges: Vec<(usize, usize)> = old_slice_byte_ranges
+            .into_iter()
+            .map(|r| (r.start as usize, r.end_exclusive as usize))
+            .collect();
+        let new_ranges: Vec<(usize, usize)> = new_slice_byte_ranges
+            .into_iter()
+            .map(|r| (r.start as usize, r.end_exclusive as usize))
+            .collect();
+        let core_offset_map: Option<crate::editor::OffsetMap> = offset_map.map(Into::into);
+        let mappings = crate::editor::compute_rebase_slice_mappings(
+            &old_roles,
+            &old_ranges,
+            &new_roles,
+            &new_ranges,
+            core_offset_map.as_ref(),
+        );
+        mappings.into_iter().map(Into::into).collect()
     }
 }

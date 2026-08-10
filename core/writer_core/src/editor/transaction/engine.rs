@@ -1,3 +1,4 @@
+use super::composition::OffsetMap;
 use super::rebase::{
     RebaseContinuation, RebaseFrameSnapshot, RebaseReason, RebaseSliceMapping, TransactionRebase,
 };
@@ -567,15 +568,20 @@ fn compatible_rebase_roles(new_role: AnimatedSliceRole, old_role: AnimatedSliceR
 ///
 /// 匹配规则（按优先级）：
 /// 1. 旧/新 slice 的 byte range 完全相同 + 角色兼容 → `SameByteRange` + `Continue`
-/// 2. 其余旧 slice 不生成映射（平台端按 `End` 处理）
+/// 2. 旧 slice range 经 `offset_map`（旧正文 → 新正文）映射后与新 slice range
+///    相等 + 角色兼容 → `OffsetMapMatched` + `Continue`（旧/新事务正文坐标不同但
+///    指向同一逻辑对象，例如前一个事务的 Move slice 在新事务正文中整体移位）
+/// 3. 其余旧 slice 不生成映射（平台端按 `End` 处理）
 ///
 /// 每个新 slice 至多被一个旧 slice 匹配（`used_new` 去重），
 /// 避免多旧 slice 接续同一新 slice 造成 progress 抢占。
+/// 匹配依据只使用 byte range/OffsetMap/角色兼容（平台无关），不使用像素坐标。
 pub fn compute_rebase_slice_mappings(
     old_slice_roles: &[AnimatedSliceRole],
     old_slice_byte_ranges: &[(usize, usize)],
     new_slice_roles: &[AnimatedSliceRole],
     new_slice_byte_ranges: &[(usize, usize)],
+    offset_map: Option<&OffsetMap>,
 ) -> Vec<RebaseSliceMapping> {
     let mut mappings = Vec::new();
     let mut used_new = std::collections::HashSet::new();
@@ -592,10 +598,10 @@ pub fn compute_rebase_slice_mappings(
             if used_new.contains(&new_idx) {
                 continue;
             }
-            if compatible_rebase_roles(*new_role, *old_role)
-                && old_start == new_start
-                && old_end == new_end
-            {
+            if !compatible_rebase_roles(*new_role, *old_role) {
+                continue;
+            }
+            if old_start == new_start && old_end == new_end {
                 mappings.push(RebaseSliceMapping {
                     old_slice_index: old_idx,
                     new_slice_index: new_idx,
@@ -604,6 +610,23 @@ pub fn compute_rebase_slice_mappings(
                 });
                 used_new.insert(new_idx);
                 break;
+            }
+            // #606: 旧正文坐标与新正文坐标不同但 OffsetMap 可映射 → 同一逻辑对象。
+            if let Some(map) = offset_map {
+                if let Some((mapped_start, mapped_end)) =
+                    map.map_old_range_to_new(old_start, old_end)
+                {
+                    if mapped_start == new_start && mapped_end == new_end {
+                        mappings.push(RebaseSliceMapping {
+                            old_slice_index: old_idx,
+                            new_slice_index: new_idx,
+                            continuation: RebaseContinuation::Continue,
+                            reason: RebaseReason::OffsetMapMatched,
+                        });
+                        used_new.insert(new_idx);
+                        break;
+                    }
+                }
             }
         }
     }
@@ -632,12 +655,14 @@ pub fn compute_rebase(
     old_slice_byte_ranges: &[(usize, usize)],
     new_slice_roles: &[AnimatedSliceRole],
     new_slice_byte_ranges: &[(usize, usize)],
+    offset_map: Option<&OffsetMap>,
 ) -> TransactionRebase {
     let slice_mappings = compute_rebase_slice_mappings(
         old_slice_roles,
         old_slice_byte_ranges,
         new_slice_roles,
         new_slice_byte_ranges,
+        offset_map,
     );
     TransactionRebase {
         cancelled_transaction_id,

@@ -955,6 +955,29 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
             holder.service.textEditSessionNextGraphemeBoundary(sessionId, byteOffset)
         }
 
+    /**
+     * #606: 旧→新逻辑 slice 对应关系由 Core 唯一计算（session-scoped）。
+     * 平台端 RebasePlanner 不再自己匹配，直接消费此结果。
+     */
+    fun textEditSessionComputeRebaseSliceMappings(
+        sessionId: ULong,
+        oldSliceRoles: List<uniffi.writer_core.AnimatedSliceRoleDto>,
+        oldSliceByteRanges: List<uniffi.writer_core.EditorByteRangeDto>,
+        newSliceRoles: List<uniffi.writer_core.AnimatedSliceRoleDto>,
+        newSliceByteRanges: List<uniffi.writer_core.EditorByteRangeDto>,
+        offsetMap: uniffi.writer_core.OffsetMapDto?,
+    ): BridgeResult<List<uniffi.writer_core.RebaseSliceMappingDto>> =
+        holder.wrapResult {
+            holder.service.textEditSessionComputeRebaseSliceMappings(
+                sessionId,
+                oldSliceRoles,
+                oldSliceByteRanges,
+                newSliceRoles,
+                newSliceByteRanges,
+                offsetMap,
+            )
+        }
+
     fun textEditSessionGetText(sessionId: ULong): BridgeResult<String> =
         holder.wrapResult {
             holder.service.textEditSessionGetText(sessionId)

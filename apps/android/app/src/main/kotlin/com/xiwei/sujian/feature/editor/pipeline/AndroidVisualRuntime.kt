@@ -31,6 +31,21 @@ class AndroidVisualRuntime(
         resourceStore,
     )
 
+    /**
+     * #606: 以自定义 visualPlanner（含 Core rebase mapping provider）构造。
+     * 生产路径由 [AndroidEditorPipeline.create] 注入 Core 计算结果。
+     */
+    constructor(
+        visualPlanner: AndroidVisualPlanner,
+        timeSource: com.xiwei.sujian.feature.editor.visual.AnimationTimeSource,
+        transactionIdSource: com.xiwei.sujian.feature.editor.visual.TransactionIdSource,
+    ) : this(
+        visualPlanner,
+        VisualResourceStore(),
+        timeSource,
+        transactionIdSource,
+    )
+
     constructor(
         visualPlanner: AndroidVisualPlanner,
         resourceStore: VisualResourceStore,

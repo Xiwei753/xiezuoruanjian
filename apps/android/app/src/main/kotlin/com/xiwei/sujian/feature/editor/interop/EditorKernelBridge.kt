@@ -132,4 +132,18 @@ interface EditorKernelBridge {
      * for grapheme boundary semantics. Used by Forward-Delete key handlers.
      */
     fun nextGraphemeBoundary(byteOffset: Int): Int
+
+    /**
+     * #606: 旧事务逻辑 slice → 新事务逻辑 slice 对应关系 — 由 Core 唯一计算。
+     *
+     * 平台端不再实现任何本地匹配逻辑；[offsetMap] 为本次事务的旧正文 → 新正文
+     * 偏移映射（VisualIntent.offsetMap）。返回 null 表示桥接失败（平台端按无映射处理）。
+     */
+    fun computeRebaseSliceMappings(
+        oldSliceRoles: List<uniffi.writer_core.AnimatedSliceRoleDto>,
+        oldSliceByteRanges: List<uniffi.writer_core.EditorByteRangeDto>,
+        newSliceRoles: List<uniffi.writer_core.AnimatedSliceRoleDto>,
+        newSliceByteRanges: List<uniffi.writer_core.EditorByteRangeDto>,
+        offsetMap: uniffi.writer_core.OffsetMapDto?,
+    ): List<uniffi.writer_core.RebaseSliceMappingDto>?
 }
