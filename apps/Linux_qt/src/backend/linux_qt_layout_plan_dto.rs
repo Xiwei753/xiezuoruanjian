@@ -10,9 +10,7 @@
 //!   Material 断点与 dp/vp 值属于 Qt 平台决策，不出现在 Core。
 
 use serde::Serialize;
-use writer_core::presentation::layout_contract::{
-    LayoutContract, ShellMode, WorkspacePaneMode,
-};
+use writer_core::presentation::layout_contract::{LayoutContract, ShellMode, WorkspacePaneMode};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

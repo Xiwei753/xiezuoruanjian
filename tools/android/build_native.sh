@@ -60,6 +60,13 @@ if [ -z "$VARIANT" ] || [ -z "$ABIS" ] || [ -z "$OUTPUT_DIR" ]; then
     usage
 fi
 
+# 必须使用绝对路径：脚本后续会 cd 到 platform/rust/android，
+# 相对路径会让 cargo-ndk 把产物静默放到错误位置（验证还会误报通过）。
+case "$OUTPUT_DIR" in
+    /*) : ;;
+    *) OUTPUT_DIR="$(cd "$(dirname "$OUTPUT_DIR")" && pwd)/$(basename "$OUTPUT_DIR")" ;;
+esac
+
 IFS=',' read -ra ABI_ARRAY <<< "$ABIS"
 
 for abi in "${ABI_ARRAY[@]}"; do

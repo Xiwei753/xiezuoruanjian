@@ -356,14 +356,11 @@ pub struct AppBackend {
 
     // ── Layout Contract（#610：Qt 侧先按本平台窗口系统算能力，再套 Core 契约） ──
     #[allow(dead_code)]
-    resolve_layout: qt_method!(
-        fn(&self, width_vp: f64, height_vp: f64) -> QJsonObject
-    ),
+    resolve_layout: qt_method!(fn(&self, width_vp: f64, height_vp: f64) -> QJsonObject),
 
     // ── Screen Contract ──
     #[allow(dead_code)]
-    resolve_screen_policy:
-        qt_method!(fn(&self, screen_role: QString) -> QJsonObject),
+    resolve_screen_policy: qt_method!(fn(&self, screen_role: QString) -> QJsonObject),
 }
 
 impl AppBackend {

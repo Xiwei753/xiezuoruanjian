@@ -369,6 +369,10 @@
         <translation>拒绝删除工作区根目录</translation>
     </message>
     <message>
+        <source>拒绝删除根目录</source>
+        <translation>拒绝删除根目录</translation>
+    </message>
+    <message>
         <source>操作失败</source>
         <translation>操作失败</translation>
     </message>

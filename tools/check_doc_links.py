@@ -24,6 +24,7 @@ WHITELIST_FILENAMES = {
     'note.md', 'outline.md', 'scene.md', 'character_notes.md', 'timeline_notes.md', 'draft.md',
     'settings.sync.json', 'settings.local.json', 'sync_secrets.local.json', 'state.local.json',
     'conflicts.json', 'manifest.sync.json', 'sync_config.json',
+    'config.local.json', 'recent_edits.json', 'sync_state.json',
     'chapter.remote-conflict-YYYYMMDD-HHMMSS.md',
     'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs',
     'writer_core.kt',
