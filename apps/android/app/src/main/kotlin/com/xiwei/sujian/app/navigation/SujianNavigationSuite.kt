@@ -596,6 +596,7 @@ fun SujianNavigationSuite(
     }
 
     SujianJankInteractionClearEffect(currentTopDestination)
+    SujianProcessStateSyncEffect(currentTopDestination, syncState, appState)
 
     val navDisplayContent: @Composable () -> Unit = {
         SujianNavDisplayContent(
@@ -675,6 +676,34 @@ private fun SujianJankInteractionClearEffect(currentTopDestination: SujianDestin
     LaunchedEffect(currentTopDestination) {
         kotlinx.coroutines.delay(350)
         com.xiwei.sujian.core.diagnostics.JankStatsController.clearInteraction()
+    }
+}
+
+/**
+ * Issue #612 三、3.2：同步状态变化时更新进程状态摘要，
+ * 让下次冷启动读取 ApplicationExitInfo 时知道进程死前的同步状态。
+ */
+@Composable
+private fun SujianProcessStateSyncEffect(
+    currentTopDestination: SujianDestination,
+    syncState: com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState,
+    appState: SujianAppState,
+) {
+    val context = LocalContext.current
+    LaunchedEffect(syncState) {
+        val syncSummary =
+            when (syncState) {
+                com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState.Syncing -> "syncing"
+                com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState.Synced -> "synced"
+                com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState.Failed -> "failed"
+                com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState.Unconfigured -> "unconfigured"
+            }
+        com.xiwei.sujian.core.diagnostics.ProcessStateSummary.update(
+            context,
+            currentTopDestination.name,
+            if (appState.currentChapterId != null) "1" else "0",
+            syncSummary,
+        )
     }
 }
 

@@ -28,6 +28,14 @@ class ProcessStateSummaryTest {
     }
 
     @Test
+    fun buildSummaryWithEditorActiveFlag() {
+        val active = ProcessStateSummary.buildSummary("Works", "1", "idle")
+        assertEquals("screen=Works;editor=1;sync=idle", active)
+        val inactive = ProcessStateSummary.buildSummary("Works", "0", "syncing")
+        assertEquals("screen=Works;editor=0;sync=syncing", inactive)
+    }
+
+    @Test
     fun buildSummaryWithEmptyValues() {
         val summary = ProcessStateSummary.buildSummary("", "", "")
         assertEquals("screen=;editor=;sync=", summary)
