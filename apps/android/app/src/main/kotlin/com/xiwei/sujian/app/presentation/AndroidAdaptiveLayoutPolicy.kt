@@ -35,7 +35,7 @@ import uniffi.writer_core.WorkspacePaneModeDto
  * 分层（#610）：
  * - Core 不再包含 Material 断点 / dp / NavigationPresentation；
  * - 断点与 dp 是 Android 平台决策，在本文件计算；
- * - 产品壳层语义（ShellMode/WorkspacePaneMode/VisiblePaneRoles）来自 Core。
+ * - 产品壳层语义（ShellMode/WorkspacePaneMode）来自 Core。
  */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable

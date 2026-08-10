@@ -291,16 +291,26 @@ def _is_app_interop_boundary(path: str) -> bool:
     return bool(_APP_INTEROP_BOUNDARY_RE.match(path))
 
 
+def _feature_ui_filters() -> list[str]:
+    """动态发现所有 feature/*/ui 目录（#610 评论六第5点）。
+
+    不再手写一个漏一个；新增 feature 模块时自动覆盖。
+    """
+    filters: list[str] = []
+    feature_dir = APP_SRC / "feature"
+    if feature_dir.is_dir():
+        for sub in sorted(feature_dir.iterdir()):
+            if sub.is_dir() and (sub / "ui").is_dir():
+                filters.append(f"/feature/{sub.name}/ui/")
+    return filters
+
+
 def rule_ui_no_uniffi_jna_bridge() -> list[Finding]:
     ui_filters = [
         "/sujian/app/theme/",
         "/sujian/app/navigation/",
         "/sujian/app/labs/",
-        "/feature/editor/ui/",
-        "/feature/settings/ui/",
-        "/feature/starmap/ui/",
-        "/feature/stats/ui/",
-    ]
+    ] + _feature_ui_filters()
     findings = []
     for f in ui_filters:
         findings += scan_forbidden(APP_SRC, f, ["uniffi.writer_core", "com.sun.jna"])
@@ -317,11 +327,7 @@ def rule_ui_no_editor_input() -> list[Finding]:
         "/sujian/app/theme/",
         "/sujian/app/navigation/",
         "/sujian/app/labs/",
-        "/feature/editor/ui/",
-        "/feature/settings/ui/",
-        "/feature/starmap/ui/",
-        "/feature/stats/ui/",
-    ]
+    ] + _feature_ui_filters()
     findings = []
     for f in ui_filters:
         findings += scan_forbidden(APP_SRC, f, ["com.xiwei.sujian.feature.editor.input"])

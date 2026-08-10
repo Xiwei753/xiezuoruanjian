@@ -1404,13 +1404,6 @@ enum WorkspacePaneModeDto {
     "ThreePane",
 };
 
-dictionary VisiblePaneRolesDto {
-    boolean show_project_list;
-    boolean show_chapter_tree;
-    boolean show_editor;
-    boolean show_supporting;
-};
-
 enum PointerClassDto {
     "Unknown",
     "Touch",
@@ -1428,7 +1421,6 @@ dictionary WindowCapabilitiesDto {
 dictionary LayoutContractDto {
     ShellModeDto shell_mode;
     WorkspacePaneModeDto workspace_pane_mode;
-    VisiblePaneRolesDto visible_pane_roles;
     boolean show_primary_navigation;
 };
 

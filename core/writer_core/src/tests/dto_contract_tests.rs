@@ -140,10 +140,6 @@ fn layout_contract_dto_fields_match_harmony() {
         json.get("workspace_pane_mode").is_some(),
         "Core internal LayoutContract uses snake_case 'workspace_pane_mode'"
     );
-    assert!(
-        json.get("visible_pane_roles").is_some(),
-        "Core internal LayoutContract uses snake_case 'visible_pane_roles'"
-    );
     // #610：Core 不再输出 Material 断点 / dp / 导航呈现等平台值。
     assert!(
         json.get("content_max_width_dp").is_none()
@@ -156,15 +152,9 @@ fn layout_contract_dto_fields_match_harmony() {
     let ffi_json = json!({
         "shellMode": "SinglePane",
         "workspacePaneMode": "SinglePane",
-        "visiblePaneRoles": {"showProjectList":true,"showChapterTree":true,"showEditor":true,"showSupporting":false},
         "showPrimaryNavigation": true
     });
-    let expected_keys = vec![
-        "shellMode",
-        "showPrimaryNavigation",
-        "visiblePaneRoles",
-        "workspacePaneMode",
-    ];
+    let expected_keys = vec!["shellMode", "showPrimaryNavigation", "workspacePaneMode"];
     let actual_keys = sorted_keys(&ffi_json);
     assert_eq!(
         actual_keys, expected_keys,

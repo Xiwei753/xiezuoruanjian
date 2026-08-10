@@ -13,8 +13,8 @@
 //! 本模块只回答"事情是什么"：
 //!
 //! - [`layout_contract`]：产品壳层语义。输入是平台端已经测量好的窗口能力
-//!   （可用栏数、折叠、指针、键盘），输出 `ShellMode / WorkspacePaneMode /
-//!   VisiblePaneRoles`。Material 断点、dp 宽度、导航控件呈现
+//!   （可用栏数、折叠、指针、键盘），输出 `ShellMode / WorkspacePaneMode`。
+//!   Material 断点、dp 宽度、导航控件呈现
 //!   （BottomBar/NavigationRail/Drawer）不属于产品事务语义，各平台自己算。
 //! - [`screen_contract`]：产品页面动作语义。`ScreenRole / PaneRole /
 //!   ActionRole / ActionTarget / ActionSlot`，“设置/搜索/同步位于页头右侧以及它们的顺序”

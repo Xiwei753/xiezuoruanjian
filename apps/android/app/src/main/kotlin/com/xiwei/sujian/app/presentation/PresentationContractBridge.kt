@@ -34,7 +34,7 @@ import uniffi.writer_core.WindowCapabilitiesDto
 internal object PresentationContractBridge {
     private const val TAG = "PresentationContractBridge"
 
-    /** Core 布局契约：窗口能力 → ShellMode/WorkspacePaneMode/VisiblePaneRoles。 */
+    /** Core 布局契约：窗口能力 → ShellMode/WorkspacePaneMode。 */
     fun resolveLayoutContract(
         context: Context,
         capabilities: WindowCapabilitiesDto,

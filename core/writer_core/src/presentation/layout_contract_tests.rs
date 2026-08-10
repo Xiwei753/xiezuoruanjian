@@ -1,6 +1,6 @@
 //! #610：布局契约纯函数测试（从 layout_contract.rs 拆出，避免生产文件测试膨胀）。
 //!
-//! 覆盖：窗口能力 → 壳层/面板模式/可见角色/一级导航 的全部决策规则，
+//! 覆盖：窗口能力 → 壳层/面板模式/一级导航 的全部决策规则，
 //! 以及分隔式折叠降级、键盘/触控隐藏一级导航等特殊规则。
 //! 纯函数测试，不触碰 UI / 平台 API / 文件系统。
 
@@ -16,10 +16,6 @@ fn test_single_pane_capabilities() {
     let contract = resolve_layout(&caps);
     assert_eq!(contract.shell_mode, ShellMode::SinglePane);
     assert_eq!(contract.workspace_pane_mode, WorkspacePaneMode::SinglePane);
-    assert!(contract.visible_pane_roles.show_project_list);
-    assert!(contract.visible_pane_roles.show_chapter_tree);
-    assert!(contract.visible_pane_roles.show_editor);
-    assert!(!contract.visible_pane_roles.show_supporting);
     assert!(contract.show_primary_navigation);
 }
 
@@ -32,9 +28,6 @@ fn test_two_pane_capabilities() {
     let contract = resolve_layout(&caps);
     assert_eq!(contract.shell_mode, ShellMode::TwoPane);
     assert_eq!(contract.workspace_pane_mode, WorkspacePaneMode::ListDetail);
-    assert!(!contract.visible_pane_roles.show_project_list);
-    assert!(contract.visible_pane_roles.show_chapter_tree);
-    assert!(contract.visible_pane_roles.show_editor);
     assert!(contract.show_primary_navigation);
 }
 
@@ -47,21 +40,6 @@ fn test_three_pane_capabilities() {
     let contract = resolve_layout(&caps);
     assert_eq!(contract.shell_mode, ShellMode::ThreePane);
     assert_eq!(contract.workspace_pane_mode, WorkspacePaneMode::ThreePane);
-    assert!(contract.visible_pane_roles.show_project_list);
-    assert!(contract.visible_pane_roles.show_chapter_tree);
-    assert!(contract.visible_pane_roles.show_editor);
-    assert!(!contract.visible_pane_roles.show_supporting);
-}
-
-#[test]
-fn test_four_pane_capabilities_shows_supporting() {
-    let caps = WindowCapabilities {
-        available_pane_count: 4,
-        ..default_capabilities()
-    };
-    let contract = resolve_layout(&caps);
-    assert_eq!(contract.shell_mode, ShellMode::ThreePane);
-    assert!(contract.visible_pane_roles.show_supporting);
 }
 
 #[test]

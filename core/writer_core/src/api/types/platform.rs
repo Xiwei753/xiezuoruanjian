@@ -139,48 +139,6 @@ impl From<WorkspacePaneModeDto> for crate::presentation::layout_contract::Worksp
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct VisiblePaneRolesDto {
-    pub show_project_list: bool,
-    pub show_chapter_tree: bool,
-    pub show_editor: bool,
-    pub show_supporting: bool,
-}
-
-impl Default for VisiblePaneRolesDto {
-    fn default() -> Self {
-        Self {
-            show_project_list: true,
-            show_chapter_tree: true,
-            show_editor: true,
-            show_supporting: false,
-        }
-    }
-}
-
-impl From<crate::presentation::layout_contract::VisiblePaneRoles> for VisiblePaneRolesDto {
-    fn from(v: crate::presentation::layout_contract::VisiblePaneRoles) -> Self {
-        Self {
-            show_project_list: v.show_project_list,
-            show_chapter_tree: v.show_chapter_tree,
-            show_editor: v.show_editor,
-            show_supporting: v.show_supporting,
-        }
-    }
-}
-
-impl From<VisiblePaneRolesDto> for crate::presentation::layout_contract::VisiblePaneRoles {
-    fn from(dto: VisiblePaneRolesDto) -> Self {
-        Self {
-            show_project_list: dto.show_project_list,
-            show_chapter_tree: dto.show_chapter_tree,
-            show_editor: dto.show_editor,
-            show_supporting: dto.show_supporting,
-        }
-    }
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
 pub enum PointerClassDto {
     #[default]
@@ -248,7 +206,6 @@ impl From<WindowCapabilitiesDto> for crate::presentation::layout_contract::Windo
 pub struct LayoutContractDto {
     pub shell_mode: ShellModeDto,
     pub workspace_pane_mode: WorkspacePaneModeDto,
-    pub visible_pane_roles: VisiblePaneRolesDto,
     pub show_primary_navigation: bool,
 }
 
@@ -257,7 +214,6 @@ impl From<crate::presentation::layout_contract::LayoutContract> for LayoutContra
         Self {
             shell_mode: c.shell_mode.into(),
             workspace_pane_mode: c.workspace_pane_mode.into(),
-            visible_pane_roles: c.visible_pane_roles.into(),
             show_primary_navigation: c.show_primary_navigation,
         }
     }
@@ -268,7 +224,6 @@ impl From<LayoutContractDto> for crate::presentation::layout_contract::LayoutCon
         Self {
             shell_mode: dto.shell_mode.into(),
             workspace_pane_mode: dto.workspace_pane_mode.into(),
-            visible_pane_roles: dto.visible_pane_roles.into(),
             show_primary_navigation: dto.show_primary_navigation,
         }
     }
@@ -331,22 +286,12 @@ mod tests {
             shell_mode: crate::presentation::layout_contract::ShellMode::TwoPane,
             workspace_pane_mode:
                 crate::presentation::layout_contract::WorkspacePaneMode::ListDetail,
-            visible_pane_roles: crate::presentation::layout_contract::VisiblePaneRoles {
-                show_project_list: false,
-                show_chapter_tree: true,
-                show_editor: true,
-                show_supporting: false,
-            },
             show_primary_navigation: true,
         };
         let dto: LayoutContractDto = contract.clone().into();
         let back: crate::presentation::layout_contract::LayoutContract = dto.into();
         assert_eq!(back.shell_mode, contract.shell_mode);
         assert_eq!(back.workspace_pane_mode, contract.workspace_pane_mode);
-        assert_eq!(
-            back.visible_pane_roles.show_project_list,
-            contract.visible_pane_roles.show_project_list
-        );
         assert_eq!(
             back.show_primary_navigation,
             contract.show_primary_navigation

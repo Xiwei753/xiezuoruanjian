@@ -543,13 +543,6 @@ export enum WorkspacePaneMode {
   ThreePane = 'ThreePane'
 }
 
-export interface VisiblePaneRoles {
-  showProjectList: boolean
-  showChapterTree: boolean
-  showEditor: boolean
-  showSupporting: boolean
-}
-
 export enum PointerClass {
   Unknown = 'Unknown',
   Touch = 'Touch',
@@ -569,7 +562,6 @@ export interface WindowCapabilities {
 export interface LayoutContract {
   shellMode: ShellMode
   workspacePaneMode: WorkspacePaneMode
-  visiblePaneRoles: VisiblePaneRoles
   showPrimaryNavigation: boolean
 }
 
@@ -577,7 +569,6 @@ export interface LayoutContract {
 export interface LayoutPlan {
   shellMode: ShellMode
   workspacePaneMode: WorkspacePaneMode
-  visiblePaneRoles: VisiblePaneRoles
   showPrimaryNavigation: boolean
   contentMaxWidthVp: number
   pagePaddingVp: number

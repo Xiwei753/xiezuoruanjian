@@ -273,7 +273,6 @@ export class AdaptiveContext {
     const defaultPlan: LayoutPlan = {
       shellMode: ShellMode.SinglePane,
       workspacePaneMode: WorkspacePaneMode.SinglePane,
-      visiblePaneRoles: { showProjectList: true, showChapterTree: true, showEditor: true, showSupporting: false },
       showPrimaryNavigation: true,
       contentMaxWidthVp: 0,
       pagePaddingVp: 16,

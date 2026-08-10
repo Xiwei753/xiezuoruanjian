@@ -5,7 +5,7 @@
 //!
 //! 分层（#610）：
 //! - Core `presentation::layout_contract::resolve_layout(WindowCapabilities)`
-//!   产出产品壳层契约（ShellMode / WorkspacePaneMode / VisiblePaneRoles）；
+//!   产出产品壳层契约（ShellMode / WorkspacePaneMode）；
 //! - 本文件把契约 + Qt 窗口宽高换算成 QML 实际使用的字段。
 //!   Material 断点与 dp/vp 值属于 Qt 平台决策，不出现在 Core。
 
@@ -17,10 +17,6 @@ use writer_core::presentation::layout_contract::{LayoutContract, ShellMode, Work
 pub struct LinuxQtLayoutPlanDto {
     pub shell_mode: String,
     pub workspace_pane_mode: String,
-    pub show_chapter_tree: bool,
-    pub show_editor: bool,
-    pub show_project_list: bool,
-    pub show_supporting: bool,
     pub show_primary_navigation: bool,
     /// 编辑纸面最大宽度（vp）。0 表示不限制（QML 自行回退）。
     pub content_max_width_vp: f32,
@@ -57,10 +53,6 @@ impl LinuxQtLayoutPlanDto {
                 WorkspacePaneMode::ListDetail => "ListDetail".to_string(),
                 WorkspacePaneMode::ThreePane => "ThreePane".to_string(),
             },
-            show_chapter_tree: contract.visible_pane_roles.show_chapter_tree,
-            show_editor: contract.visible_pane_roles.show_editor,
-            show_project_list: contract.visible_pane_roles.show_project_list,
-            show_supporting: contract.visible_pane_roles.show_supporting,
             show_primary_navigation: contract.show_primary_navigation,
             content_max_width_vp: paper_max_width_vp,
             content_padding_vp: Self::content_padding_vp(contract),
@@ -156,15 +148,5 @@ mod tests {
         let wide = LinuxQtLayoutPlanDto::from_contract(&contract_for(3), 1600.0);
         assert_eq!(wide.content_max_width_vp, 840.0);
         assert_eq!(wide.content_padding_vp, 32.0);
-        assert!(wide.show_project_list);
-    }
-
-    #[test]
-    fn test_visible_roles_follow_contract() {
-        let dto = LinuxQtLayoutPlanDto::from_contract(&contract_for(2), 700.0);
-        assert!(!dto.show_project_list);
-        assert!(dto.show_chapter_tree);
-        assert!(dto.show_editor);
-        assert!(!dto.show_supporting);
     }
 }

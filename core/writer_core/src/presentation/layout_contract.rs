@@ -19,7 +19,7 @@
 //!
 //! ## 输出：产品壳层契约
 //!
-//! [`LayoutContract`] 只含产品角色：壳层模式、作品面板模式、各面板可见性、
+//! [`LayoutContract`] 只含产品角色：壳层模式、作品面板模式、
 //! 是否显示一级导航。平台端把这份契约套到自己算好的具体尺寸上渲染。
 
 use serde::{Deserialize, Serialize};
@@ -41,15 +41,6 @@ pub enum WorkspacePaneMode {
     SinglePane,
     ListDetail,
     ThreePane,
-}
-
-/// 各面板可见性 — 平台端据此决定哪些 UI 组件需要渲染。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VisiblePaneRoles {
-    pub show_project_list: bool,
-    pub show_chapter_tree: bool,
-    pub show_editor: bool,
-    pub show_supporting: bool,
 }
 
 // ========== 输入枚举 ==========
@@ -97,7 +88,6 @@ impl Default for WindowCapabilities {
 pub struct LayoutContract {
     pub shell_mode: ShellMode,
     pub workspace_pane_mode: WorkspacePaneMode,
-    pub visible_pane_roles: VisiblePaneRoles,
     /// 是否显示一级导航（平台端决定具体呈现为底栏/侧栏/抽屉）。
     pub show_primary_navigation: bool,
 }
@@ -115,39 +105,11 @@ pub struct LayoutContract {
 /// 2. 分隔式折叠铰链 → 壳层降级为 SupportingPane（铰链两侧都是可用区）。
 /// 3. 触摸类输入且软键盘可见、壳层为单栏时隐藏一级导航（避免底栏遮挡输入）。
 pub fn resolve_layout(capabilities: &WindowCapabilities) -> LayoutContract {
-    let (shell_mode, workspace_pane_mode, visible_pane_roles) =
-        match capabilities.available_pane_count {
-            0 | 1 => (
-                ShellMode::SinglePane,
-                WorkspacePaneMode::SinglePane,
-                VisiblePaneRoles {
-                    show_project_list: true,
-                    show_chapter_tree: true,
-                    show_editor: true,
-                    show_supporting: false,
-                },
-            ),
-            2 => (
-                ShellMode::TwoPane,
-                WorkspacePaneMode::ListDetail,
-                VisiblePaneRoles {
-                    show_project_list: false,
-                    show_chapter_tree: true,
-                    show_editor: true,
-                    show_supporting: false,
-                },
-            ),
-            n => (
-                ShellMode::ThreePane,
-                WorkspacePaneMode::ThreePane,
-                VisiblePaneRoles {
-                    show_project_list: true,
-                    show_chapter_tree: true,
-                    show_editor: true,
-                    show_supporting: n >= 4,
-                },
-            ),
-        };
+    let (shell_mode, workspace_pane_mode) = match capabilities.available_pane_count {
+        0 | 1 => (ShellMode::SinglePane, WorkspacePaneMode::SinglePane),
+        2 => (ShellMode::TwoPane, WorkspacePaneMode::ListDetail),
+        _ => (ShellMode::ThreePane, WorkspacePaneMode::ThreePane),
+    };
 
     let shell_mode = if capabilities.has_separating_fold {
         ShellMode::SupportingPane
@@ -169,7 +131,6 @@ pub fn resolve_layout(capabilities: &WindowCapabilities) -> LayoutContract {
     LayoutContract {
         shell_mode,
         workspace_pane_mode,
-        visible_pane_roles,
         show_primary_navigation,
     }
 }

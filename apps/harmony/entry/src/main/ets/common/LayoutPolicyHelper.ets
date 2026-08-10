@@ -26,33 +26,17 @@ import {
 export function resolveLayoutFromCapabilities(capabilities: WindowCapabilities): LayoutContract {
   let shellMode: ShellMode
   let workspacePaneMode: WorkspacePaneMode
-  let showProjectList: boolean
-  let showChapterTree: boolean
-  let showEditor: boolean
-  let showSupporting: boolean
 
   const paneCount = capabilities.availablePaneCount
   if (paneCount <= 1) {
     shellMode = ShellMode.SinglePane
     workspacePaneMode = WorkspacePaneMode.SinglePane
-    showProjectList = true
-    showChapterTree = true
-    showEditor = true
-    showSupporting = false
   } else if (paneCount === 2) {
     shellMode = ShellMode.TwoPane
     workspacePaneMode = WorkspacePaneMode.ListDetail
-    showProjectList = false
-    showChapterTree = true
-    showEditor = true
-    showSupporting = false
   } else {
     shellMode = ShellMode.ThreePane
     workspacePaneMode = WorkspacePaneMode.ThreePane
-    showProjectList = true
-    showChapterTree = true
-    showEditor = true
-    showSupporting = paneCount >= 4
   }
 
   if (capabilities.hasSeparatingFold) {
@@ -68,12 +52,6 @@ export function resolveLayoutFromCapabilities(capabilities: WindowCapabilities):
   return {
     shellMode: shellMode,
     workspacePaneMode: workspacePaneMode,
-    visiblePaneRoles: {
-      showProjectList: showProjectList,
-      showChapterTree: showChapterTree,
-      showEditor: showEditor,
-      showSupporting: showSupporting
-    },
     showPrimaryNavigation: showPrimaryNavigation
   }
 }
@@ -119,7 +97,6 @@ export function buildHarmonyLayoutPlan(contract: LayoutContract, widthVp: number
   return {
     shellMode: contract.shellMode,
     workspacePaneMode: contract.workspacePaneMode,
-    visiblePaneRoles: contract.visiblePaneRoles,
     showPrimaryNavigation: contract.showPrimaryNavigation,
     contentMaxWidthVp: contentMaxWidthVp,
     pagePaddingVp: pagePaddingVp,

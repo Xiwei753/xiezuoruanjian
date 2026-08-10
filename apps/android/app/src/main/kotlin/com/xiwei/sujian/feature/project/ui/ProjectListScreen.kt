@@ -1,4 +1,5 @@
 package com.xiwei.sujian.feature.project.ui
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,7 +26,9 @@ import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.WorkspaceAppState
 import com.xiwei.sujian.app.presentation.AndroidWorkspaceActionSpec
+import com.xiwei.sujian.app.presentation.WorkspaceActionKind
 import com.xiwei.sujian.app.presentation.WorkspaceActionSpec
+import com.xiwei.sujian.app.presentation.WorkspaceActionTarget
 import com.xiwei.sujian.core.designsystem.component.SujianCard
 import com.xiwei.sujian.core.designsystem.component.SujianDialog
 import com.xiwei.sujian.core.designsystem.component.SujianFab
@@ -36,8 +39,6 @@ import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.feature.editor.ui.AnimatedTextField
 import com.xiwei.sujian.feature.project.data.model.Project
-import uniffi.writer_core.ActionRoleDto
-import uniffi.writer_core.ActionTargetDto
 
 @Composable
 internal fun ProjectListContent(
@@ -55,8 +56,8 @@ internal fun ProjectListContent(
     // - 新建作品是 PrimaryAction（Android compact 画成 FAB）；
     // - 作品菜单只按 Context(Project) spec 渲染，顺序来自 Core order。
     val createProjectAction =
-        workspaceActions.primaryActions.firstOrNull { it.role == ActionRoleDto.CREATE_PROJECT }
-    val projectMenuActions = workspaceActions.contextActions(ActionTargetDto.PROJECT)
+        workspaceActions.primaryActions.firstOrNull { it.kind == WorkspaceActionKind.CreateProject }
+    val projectMenuActions = workspaceActions.contextActions(WorkspaceActionTarget.Project)
 
     Box(modifier = modifier.fillMaxSize()) {
         if (appState.projects.isEmpty()) {
@@ -270,13 +271,13 @@ private fun ProjectMenuDialog(
                     // #610 评论四：菜单项按 Core Context(Project) spec 渲染，
                     // 顺序来自 Core order；Composable 不再自行决定出现哪些动作、排第几个。
                     actions.forEach { action ->
-                        when (action.role) {
-                            ActionRoleDto.RENAME ->
+                        when (action.kind) {
+                            WorkspaceActionKind.Rename ->
                                 SujianListItem(
                                     headline = stringResource(id = R.string.action_rename),
                                     onClick = { showRename = true },
                                 )
-                            ActionRoleDto.DELETE ->
+                            WorkspaceActionKind.Delete ->
                                 SujianListItem(
                                     headline = stringResource(id = R.string.action_delete),
                                     onClick = { onDelete(action) },

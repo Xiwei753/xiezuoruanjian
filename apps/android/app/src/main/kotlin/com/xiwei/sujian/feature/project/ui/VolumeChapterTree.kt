@@ -25,14 +25,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.presentation.AndroidWorkspaceActionSpec
+import com.xiwei.sujian.app.presentation.WorkspaceActionKind
 import com.xiwei.sujian.app.presentation.WorkspaceActionSpec
+import com.xiwei.sujian.app.presentation.WorkspaceActionTarget
 import com.xiwei.sujian.core.designsystem.component.SujianDialog
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
 import com.xiwei.sujian.core.designsystem.component.SujianListItem
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
-import uniffi.writer_core.ActionRoleDto
-import uniffi.writer_core.ActionTargetDto
 
 sealed class WorkspaceDialogState {
     data object None : WorkspaceDialogState()
@@ -97,7 +97,7 @@ internal fun ChapterTreeContent(
     Column(modifier = modifier) {
         // #610 评论四：新建卷按钮按 Core ListHeader 契约存在与否渲染。
         val hasCreateVolume =
-            workspaceActions.listHeaderActions.any { it.role == ActionRoleDto.CREATE_VOLUME }
+            workspaceActions.listHeaderActions.any { it.kind == WorkspaceActionKind.CreateVolume }
         Row(
             modifier =
                 Modifier
@@ -192,8 +192,8 @@ internal fun ChapterTreeContent(
                             EmptyChapterHint(
                                 volumeId = item.volumeId,
                                 hasCreateChapter =
-                                    workspaceActions.emptyStateActions(ActionTargetDto.VOLUME)
-                                        .any { it.role == ActionRoleDto.CREATE_CHAPTER },
+                                    workspaceActions.emptyStateActions(WorkspaceActionTarget.Volume)
+                                        .any { it.kind == WorkspaceActionKind.CreateChapter },
                                 onCreateChapter = {
                                     val volume = uiState.volumes.find { it.id == item.volumeId }
                                     dialogState =
@@ -236,23 +236,23 @@ internal fun ChapterTreeContent(
             // Delete 需要确认（契约 requiresConfirmation=true），先进入确认弹窗。
             VolumeActionsDialog(
                 volume = state.volume,
-                actions = workspaceActions.contextActions(ActionTargetDto.VOLUME),
+                actions = workspaceActions.contextActions(WorkspaceActionTarget.Volume),
                 onAction = { action ->
-                    when (action.role) {
-                        ActionRoleDto.RENAME ->
+                    when (action.kind) {
+                        WorkspaceActionKind.Rename ->
                             dialogState = WorkspaceDialogState.RenameVolume(state.volume)
-                        ActionRoleDto.DELETE ->
+                        WorkspaceActionKind.Delete ->
                             if (action.requiresConfirmation) {
                                 dialogState = WorkspaceDialogState.DeleteVolume(state.volume)
                             } else {
                                 viewModel.deleteVolume(state.volume.id)
                                 dialogState = WorkspaceDialogState.None
                             }
-                        ActionRoleDto.MOVE_EARLIER -> {
+                        WorkspaceActionKind.MoveEarlier -> {
                             viewModel.moveVolumeUp(state.volume.id)
                             dialogState = WorkspaceDialogState.None
                         }
-                        ActionRoleDto.MOVE_LATER -> {
+                        WorkspaceActionKind.MoveLater -> {
                             viewModel.moveVolumeDown(state.volume.id)
                             dialogState = WorkspaceDialogState.None
                         }
@@ -277,23 +277,23 @@ internal fun ChapterTreeContent(
             // #610 评论四：菜单项按 Core Context(Chapter) spec 渲染，顺序来自 Core order。
             ChapterActionsDialog(
                 chapter = state.chapter,
-                actions = workspaceActions.contextActions(ActionTargetDto.CHAPTER),
+                actions = workspaceActions.contextActions(WorkspaceActionTarget.Chapter),
                 onAction = { action ->
-                    when (action.role) {
-                        ActionRoleDto.RENAME ->
+                    when (action.kind) {
+                        WorkspaceActionKind.Rename ->
                             dialogState = WorkspaceDialogState.RenameChapter(state.volumeId, state.chapter)
-                        ActionRoleDto.DELETE ->
+                        WorkspaceActionKind.Delete ->
                             if (action.requiresConfirmation) {
                                 dialogState = WorkspaceDialogState.DeleteChapter(state.volumeId, state.chapter)
                             } else {
                                 viewModel.deleteChapter(state.volumeId, state.chapter.id)
                                 dialogState = WorkspaceDialogState.None
                             }
-                        ActionRoleDto.MOVE_EARLIER -> {
+                        WorkspaceActionKind.MoveEarlier -> {
                             viewModel.moveChapterUp(state.volumeId, state.chapter.id)
                             dialogState = WorkspaceDialogState.None
                         }
-                        ActionRoleDto.MOVE_LATER -> {
+                        WorkspaceActionKind.MoveLater -> {
                             viewModel.moveChapterDown(state.volumeId, state.chapter.id)
                             dialogState = WorkspaceDialogState.None
                         }
@@ -350,9 +350,9 @@ internal fun VolumeRow(
     // - CreateChapter + Volume + ItemTrailing → 新建章节图标；
     // - Context(Volume) 非空 → 更多菜单图标。
     val hasCreateChapter =
-        workspaceActions.itemTrailingActions(ActionTargetDto.VOLUME)
-            .any { it.role == ActionRoleDto.CREATE_CHAPTER }
-    val hasContextActions = workspaceActions.contextActions(ActionTargetDto.VOLUME).isNotEmpty()
+        workspaceActions.itemTrailingActions(WorkspaceActionTarget.Volume)
+            .any { it.kind == WorkspaceActionKind.CreateChapter }
+    val hasContextActions = workspaceActions.contextActions(WorkspaceActionTarget.Volume).isNotEmpty()
     SujianListItem(
         headline = volume.title,
         leadingIcon = if (volume.isExpanded) SujianIcons.KeyboardArrowDown else SujianIcons.KeyboardArrowRight,
@@ -397,7 +397,7 @@ internal fun ChapterRow(
     volumeId: String = "",
 ) {
     // #610 评论四：更多菜单按钮按 Core Context(Chapter) 契约存在与否渲染。
-    val hasContextActions = actions.workspaceActions.contextActions(ActionTargetDto.CHAPTER).isNotEmpty()
+    val hasContextActions = actions.workspaceActions.contextActions(WorkspaceActionTarget.Chapter).isNotEmpty()
     SujianListItem(
         headline = chapter.title,
         supportingText =
@@ -546,11 +546,11 @@ private fun VolumeActionsDialog(
                 // 角色→业务回调由调用方绑定（本层只做角色→菜单项渲染）。
                 actions.forEach { action ->
                     val labelRes =
-                        when (action.role) {
-                            ActionRoleDto.RENAME -> R.string.action_rename
-                            ActionRoleDto.MOVE_EARLIER -> R.string.action_move_up
-                            ActionRoleDto.MOVE_LATER -> R.string.action_move_down
-                            ActionRoleDto.DELETE -> R.string.action_delete
+                        when (action.kind) {
+                            WorkspaceActionKind.Rename -> R.string.action_rename
+                            WorkspaceActionKind.MoveEarlier -> R.string.action_move_up
+                            WorkspaceActionKind.MoveLater -> R.string.action_move_down
+                            WorkspaceActionKind.Delete -> R.string.action_delete
                             else -> null
                         }
                     if (labelRes != null) {
@@ -583,11 +583,11 @@ private fun ChapterActionsDialog(
                 // 角色→业务回调由调用方绑定（本层只做角色→菜单项渲染）。
                 actions.forEach { action ->
                     val labelRes =
-                        when (action.role) {
-                            ActionRoleDto.RENAME -> R.string.action_rename
-                            ActionRoleDto.MOVE_EARLIER -> R.string.action_move_up
-                            ActionRoleDto.MOVE_LATER -> R.string.action_move_down
-                            ActionRoleDto.DELETE -> R.string.action_delete
+                        when (action.kind) {
+                            WorkspaceActionKind.Rename -> R.string.action_rename
+                            WorkspaceActionKind.MoveEarlier -> R.string.action_move_up
+                            WorkspaceActionKind.MoveLater -> R.string.action_move_down
+                            WorkspaceActionKind.Delete -> R.string.action_delete
                             else -> null
                         }
                     if (labelRes != null) {
