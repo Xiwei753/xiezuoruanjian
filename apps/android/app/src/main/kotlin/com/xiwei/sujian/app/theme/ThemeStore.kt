@@ -10,6 +10,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 object ThemeStore {
+    private const val COLOR_SOURCE_BUILT_IN = "built_in"
+    private const val COLOR_SOURCE_ANDROID_DYNAMIC = "android_dynamic"
+
     private val _uiState = MutableStateFlow(ThemeUiState())
     val uiState: StateFlow<ThemeUiState> = _uiState.asStateFlow()
 
@@ -37,7 +40,18 @@ object ThemeStore {
     fun reload() {
         val settingsRepo = _settingsRepository ?: return
         val themeRepo = _themeRepository ?: return
-        val settings = settingsRepo.getLocalSettings()
+        var settings = settingsRepo.getLocalSettings()
+
+        // 规范化旧异常组合：Android 12+ 上，历史默认 built_in 且未选任何主题/调色板 → 迁移到 android_dynamic
+        if (shouldMigrateToDynamicColor(settings)) {
+            settings =
+                settings.copy(
+                    colorSource = COLOR_SOURCE_ANDROID_DYNAMIC,
+                    dynamicColorEnabled = true,
+                )
+            settingsRepo.saveLocalSettings(settings)
+        }
+
         val builtinTheme = resolveBuiltinTheme(themeRepo, settings)
         val paletteRecord = resolvePaletteRecord(themeRepo, settings)
         val sysDark = _systemIsDark
@@ -78,7 +92,7 @@ object ThemeStore {
         val settingsRepo = _settingsRepository ?: return
         val themeRepo = _themeRepository ?: return
         val settings = settingsRepo.getLocalSettings()
-        if (!settings.dynamicColorEnabled) return
+        if (settings.colorSource != COLOR_SOURCE_ANDROID_DYNAMIC) return
         val result = ThemePaletteHelper.extractDynamicColorSchemes(context) ?: return
         val deviceClass =
             _foldDeviceClass
@@ -119,7 +133,7 @@ object ThemeStore {
         val newSettings =
             settings.copy(
                 selectedBuiltinThemeId = themeId,
-                colorSource = "built_in",
+                colorSource = COLOR_SOURCE_BUILT_IN,
             )
         repo.saveLocalSettings(newSettings)
         reload()
@@ -150,7 +164,7 @@ object ThemeStore {
             val newSettings =
                 settings.copy(
                     selectedPaletteId = "",
-                    colorSource = "built_in",
+                    colorSource = COLOR_SOURCE_BUILT_IN,
                 )
             settingsRepo.saveLocalSettings(newSettings)
         }
@@ -169,6 +183,12 @@ object ThemeStore {
             _uiState.value = current.copy(systemIsDark = isDark)
         }
     }
+
+    private fun shouldMigrateToDynamicColor(settings: LocalSettings): Boolean =
+        settings.colorSource == COLOR_SOURCE_BUILT_IN &&
+            settings.selectedBuiltinThemeId.isEmpty() &&
+            settings.selectedPaletteId.isEmpty() &&
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
 
     private fun resolveBuiltinTheme(
         themeRepo: ThemeRepository,

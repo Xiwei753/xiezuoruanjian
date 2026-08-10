@@ -34,7 +34,6 @@ complexity:
       # --- 星图缓存：多条件缓存失效与重建 ---
       - "**/kotlin/com/xiwei/sujian/feature/starmap/data/StarMapSnapshotCache.kt"
       # --- 编辑器：Compose动画/平台桥接/输入法协议，分支天然密集 ---
-      - "**/kotlin/com/xiwei/sujian/feature/editor/ui/AnimatedTextField.kt"       # Compose动画状态组合
       - "**/kotlin/com/xiwei/sujian/feature/editor/platform/SujianEditorView.kt"          # 平台桥接层条件分支
       - "**/kotlin/com/xiwei/sujian/feature/editor/input/AndroidInputAdapter.kt"       # InputConnection协议分支
       - "**/kotlin/com/xiwei/sujian/feature/editor/input/AndroidInputConnection.kt"    # InputConnection协议分支
@@ -114,7 +113,6 @@ complexity:
       # --- 编辑器：Compose动画/布局/管线/视觉规划，长方法 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/ui/AnimatedInlineText.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/ui/AnimatedTextArea.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/editor/ui/AnimatedTextField.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/layout/AndroidLayoutEngine.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/pipeline/AndroidEditorPipeline.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/projection/DisplayTextProjection.kt"
@@ -183,7 +181,6 @@ complexity:
       # --- 编辑器：Compose动画/管线/视觉，参数由渲染协议决定 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/ui/AnimatedInlineText.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/ui/AnimatedTextArea.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/editor/ui/AnimatedTextField.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/platform/SujianEditorView.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/input/AndroidInputAdapter.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/input/FakeInputCommandPort.kt"

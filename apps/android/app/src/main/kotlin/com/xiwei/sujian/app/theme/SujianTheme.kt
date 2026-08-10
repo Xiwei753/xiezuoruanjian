@@ -147,7 +147,7 @@ fun SujianTheme(
         remember(uiState, isDark) {
             when (uiState.resolvedColorSource) {
                 ColorSource.ANDROID_DYNAMIC -> {
-                    if (uiState.dynamicColorEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         if (isDark) {
                             androidx.compose.material3.dynamicDarkColorScheme(context)
                         } else {

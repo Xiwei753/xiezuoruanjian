@@ -19,12 +19,12 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.component.SujianOutlinedButton
+import com.xiwei.sujian.core.designsystem.component.SujianSecretTextField
 import com.xiwei.sujian.core.designsystem.component.SujianSection
 import com.xiwei.sujian.core.designsystem.component.SujianSlider
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
+import com.xiwei.sujian.core.designsystem.component.SujianTextField
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
-import com.xiwei.sujian.feature.editor.session.TextEditorProfile
-import com.xiwei.sujian.feature.editor.ui.AnimatedTextField
 
 /**
  * #600 评论 #5：设置页同步区域拆成两组完全独立的 UI：
@@ -127,41 +127,32 @@ private fun ProjectSyncSection(
     }
 
     SujianSection(title = stringResource(id = R.string.pref_category_sync)) {
-        AnimatedTextField(
-            targetId = "sync_remote_url",
+        SujianTextField(
             value = remoteUrl,
-            onValueChange = { remoteUrl = it },
-            onCommit = { text ->
-                remoteUrl = text
-                onIntent(SettingsIntent.UpdateProjectSyncConfig(syncConfig.copy(remoteUrl = text)))
+            onValueChange = {
+                remoteUrl = it
+                onIntent(SettingsIntent.UpdateProjectSyncConfig(syncConfig.copy(remoteUrl = it)))
             },
-            profile = TextEditorProfile.RepositoryUrl,
             label = { Text(stringResource(id = R.string.pref_github_repo)) },
             enabled = syncConfig.enabled ?: false,
         )
         Spacer(modifier = Modifier.height(dims.space8))
-        AnimatedTextField(
-            targetId = "sync_branch",
+        SujianTextField(
             value = branch,
-            onValueChange = { branch = it },
-            onCommit = { text ->
-                branch = text
-                onIntent(SettingsIntent.UpdateProjectSyncConfig(syncConfig.copy(branch = text)))
+            onValueChange = {
+                branch = it
+                onIntent(SettingsIntent.UpdateProjectSyncConfig(syncConfig.copy(branch = it)))
             },
-            profile = TextEditorProfile.BranchName,
             label = { Text(stringResource(id = R.string.pref_branch)) },
             enabled = syncConfig.enabled ?: false,
         )
         Spacer(modifier = Modifier.height(dims.space8))
-        AnimatedTextField(
-            targetId = "sync_token",
+        SujianSecretTextField(
             value = token,
-            onValueChange = { token = it },
-            onCommit = { text ->
-                token = text
-                onIntent(SettingsIntent.UpdateProjectSyncSecrets(syncSecrets.copy(token = text.ifBlank { null })))
+            onValueChange = {
+                token = it
+                onIntent(SettingsIntent.UpdateProjectSyncSecrets(syncSecrets.copy(token = it.ifBlank { null })))
             },
-            profile = TextEditorProfile.SecretToken,
             label = { Text(stringResource(id = R.string.pref_https_token)) },
             enabled = syncConfig.enabled ?: false,
         )
@@ -282,41 +273,32 @@ private fun AppSyncSection(
     }
 
     SujianSection(title = stringResource(id = R.string.pref_category_app_sync)) {
-        AnimatedTextField(
-            targetId = "app_sync_remote_url",
+        SujianTextField(
             value = remoteUrl,
-            onValueChange = { remoteUrl = it },
-            onCommit = { text ->
-                remoteUrl = text
-                onIntent(SettingsIntent.UpdateAppSyncConfig(syncConfig.copy(remoteUrl = text)))
+            onValueChange = {
+                remoteUrl = it
+                onIntent(SettingsIntent.UpdateAppSyncConfig(syncConfig.copy(remoteUrl = it)))
             },
-            profile = TextEditorProfile.RepositoryUrl,
             label = { Text(stringResource(id = R.string.pref_github_repo)) },
             enabled = syncConfig.enabled ?: false,
         )
         Spacer(modifier = Modifier.height(dims.space8))
-        AnimatedTextField(
-            targetId = "app_sync_branch",
+        SujianTextField(
             value = branch,
-            onValueChange = { branch = it },
-            onCommit = { text ->
-                branch = text
-                onIntent(SettingsIntent.UpdateAppSyncConfig(syncConfig.copy(branch = text)))
+            onValueChange = {
+                branch = it
+                onIntent(SettingsIntent.UpdateAppSyncConfig(syncConfig.copy(branch = it)))
             },
-            profile = TextEditorProfile.BranchName,
             label = { Text(stringResource(id = R.string.pref_branch)) },
             enabled = syncConfig.enabled ?: false,
         )
         Spacer(modifier = Modifier.height(dims.space8))
-        AnimatedTextField(
-            targetId = "app_sync_token",
+        SujianSecretTextField(
             value = token,
-            onValueChange = { token = it },
-            onCommit = { text ->
-                token = text
-                onIntent(SettingsIntent.UpdateAppSyncSecrets(syncSecrets.copy(token = text.ifBlank { null })))
+            onValueChange = {
+                token = it
+                onIntent(SettingsIntent.UpdateAppSyncSecrets(syncSecrets.copy(token = it.ifBlank { null })))
             },
-            profile = TextEditorProfile.SecretToken,
             label = { Text(stringResource(id = R.string.pref_https_token)) },
             enabled = syncConfig.enabled ?: false,
         )

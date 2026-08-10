@@ -7,6 +7,10 @@ import com.xiwei.sujian.core.designsystem.theme.ColorSource
 data class ThemeUiState(
     val appearanceMode: String = "system",
     val colorSource: String = "built_in",
+    /**
+     * 旧数据兼容字段。Android 渲染不再以此作为第二事实；
+     * 写入时始终由 [colorSource] 派生（android_dynamic → true，其余 → false）。
+     */
     val dynamicColorEnabled: Boolean = false,
     val selectedBuiltinThemeId: String = "",
     val selectedPaletteId: String = "",

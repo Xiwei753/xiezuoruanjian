@@ -11,13 +11,11 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.component.SujianDropdownMenu
 import com.xiwei.sujian.core.designsystem.component.SujianSection
 import com.xiwei.sujian.core.designsystem.component.SujianSlider
-import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 
@@ -33,7 +31,6 @@ fun AppearanceSettings(
     var lineSpacing by rememberSaveable(settings.editorLineSpacingMultiplier) {
         mutableFloatStateOf(settings.editorLineSpacingMultiplier)
     }
-    val context = LocalContext.current
     var autoSaveDelay by rememberSaveable(settings.autoSaveDelayMs / 1000f) {
         mutableFloatStateOf(settings.autoSaveDelayMs / 1000f)
     }
@@ -90,25 +87,27 @@ fun AppearanceSettings(
                             2 -> "saved_palette"
                             else -> "built_in"
                         }
-                    onIntent(SettingsIntent.UpdateLocal { it.copy(colorSource = source) })
                     if (source == "android_dynamic") {
-                        com.xiwei.sujian.app.theme.ThemeStore.captureDynamicColorAndSave(context)
-                        onIntent(SettingsIntent.CaptureDynamicColor)
+                        onIntent(
+                            SettingsIntent.UpdateLocal {
+                                it.copy(
+                                    colorSource = "android_dynamic",
+                                    dynamicColorEnabled = true,
+                                )
+                            },
+                        )
+                    } else {
+                        onIntent(
+                            SettingsIntent.UpdateLocal {
+                                it.copy(
+                                    colorSource = source,
+                                    dynamicColorEnabled = false,
+                                )
+                            },
+                        )
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(modifier = Modifier.height(dims.space8))
-            SujianSwitchRow(
-                title = stringResource(id = R.string.pref_use_dynamic_color),
-                checked = settings.dynamicColorEnabled,
-                onCheckedChange = { checked ->
-                    onIntent(SettingsIntent.UpdateLocal { it.copy(dynamicColorEnabled = checked) })
-                    if (checked) {
-                        com.xiwei.sujian.app.theme.ThemeStore.captureDynamicColorAndSave(context)
-                        onIntent(SettingsIntent.CaptureDynamicColor)
-                    }
-                },
             )
         }
 

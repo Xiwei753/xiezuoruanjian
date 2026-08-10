@@ -37,7 +37,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -115,7 +114,7 @@ private fun SujianRoute.toTopDestination(): SujianDestination =
         is SujianRoute.Settings -> SujianDestination.Works
     }
 
-private fun SujianDestination.toRoute(): SujianRoute =
+internal fun SujianDestination.toRoute(): SujianRoute =
     when (this) {
         SujianDestination.Works -> SujianRoute.Works
         SujianDestination.StarMap -> SujianRoute.StarMap
@@ -260,10 +259,8 @@ private fun rememberSujianManualSyncOnClick(env: SujianTopBarEnv): () -> Unit =
 private fun SujianNavDisplayContent(
     backStack: NavBackStack<NavKey>,
     appState: SujianAppState,
-    settingsDetailSection: SettingsSection?,
     workspaceNavState: ProjectNavigationState,
     workspaceActions: AndroidWorkspaceActionSpec,
-    onSettingsDetailSectionChange: (SettingsSection?) -> Unit,
 ) {
     NavDisplay(
         backStack = backStack,
@@ -294,11 +291,7 @@ private fun SujianNavDisplayContent(
                                     modifier = Modifier.testTag(SujianSemanticIds.StarMapScreen),
                                 )
                             is SujianRoute.Stats -> StatsScreen()
-                            is SujianRoute.Settings ->
-                                SettingsRoute(
-                                    detailSection = settingsDetailSection,
-                                    onDetailSectionChange = onSettingsDetailSectionChange,
-                                )
+                            is SujianRoute.Settings -> SettingsRoute()
                         }
                     }
                 else -> NavEntry(key) {}
@@ -311,7 +304,7 @@ private fun SujianNavDisplayContent(
 @Composable
 private fun SujianCompactBottomBar(
     currentTopDestination: SujianDestination,
-    backStack: NavBackStack<NavKey>,
+    onTopLevelSelected: (SujianDestination) -> Unit,
 ) {
     NavigationBar(
         windowInsets = WindowInsets(0.dp),
@@ -320,7 +313,7 @@ private fun SujianCompactBottomBar(
         SujianDestination.entries.forEach { destination ->
             NavigationBarItem(
                 selected = currentTopDestination == destination,
-                onClick = { navigateToTopDestination(backStack, destination) },
+                onClick = { onTopLevelSelected(destination) },
                 icon = {
                     Icon(
                         imageVector =
@@ -384,7 +377,7 @@ private fun SujianCompactNavScaffold(
 @Composable
 private fun SujianWideRail(
     currentTopDestination: SujianDestination,
-    backStack: NavBackStack<NavKey>,
+    onTopLevelSelected: (SujianDestination) -> Unit,
 ) {
     NavigationRail(
         modifier = Modifier.fillMaxHeight().testTag(SujianSemanticIds.NavigationRail),
@@ -393,7 +386,7 @@ private fun SujianWideRail(
         SujianDestination.entries.forEach { destination ->
             NavigationRailItem(
                 selected = currentTopDestination == destination,
-                onClick = { navigateToTopDestination(backStack, destination) },
+                onClick = { onTopLevelSelected(destination) },
                 icon = {
                     Icon(
                         imageVector =
@@ -511,22 +504,14 @@ private fun SujianWorkspaceBackEffects(
     }
 }
 
-/** 路由副作用 — 导航诊断、设置详情默认分类。 */
+/** 路由副作用 — 导航诊断事件上报。 */
 @Composable
 private fun SujianRouteEffects(
     currentRoute: SujianRoute,
     currentTopDestination: SujianDestination,
-    settingsDetailSection: SettingsSection?,
-    onSettingsDetailSectionChange: (SettingsSection?) -> Unit,
 ) {
     LaunchedEffect(currentRoute) {
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navigation(currentTopDestination.name)
-        if (currentRoute !is SujianRoute.Settings) {
-            onSettingsDetailSectionChange(null)
-        }
-        if (currentRoute is SujianRoute.Settings && settingsDetailSection == null) {
-            onSettingsDetailSectionChange(SettingsSection.Appearance)
-        }
     }
 }
 
@@ -574,7 +559,7 @@ fun SujianNavigationSuite(
     val currentRoute = backStack.lastOrNull() as? SujianRoute ?: SujianRoute.Works
     val currentTopDestination = currentRoute.toTopDestination()
     val snackbarHostState = remember { SnackbarHostState() }
-    var settingsDetailSection by remember { mutableStateOf<SettingsSection?>(null) }
+    val topLevelBackStack = rememberSujianTopLevelBackStack()
 
     val context = LocalContext.current
     val deps = LocalSujianAppDependencies.current
@@ -596,23 +581,26 @@ fun SujianNavigationSuite(
         )
 
     SujianWorkspaceBackEffects(currentRoute, workspaceNavState, coroutineScope)
-    SujianRouteEffects(
-        currentRoute,
-        currentTopDestination,
-        settingsDetailSection,
-    ) { settingsDetailSection = it }
+    SujianRouteEffects(currentRoute, currentTopDestination)
 
     val env = SujianTopBarEnv(syncState, coroutineScope, deps, backStack)
     val topBarInfo = rememberSujianTopBarInfo(currentRoute, appState, chrome, env, workspaceNavState)
+
+    val onTopLevelSelected: (SujianDestination) -> Unit = { destination ->
+        topLevelBackStack.saveCurrent(backStack.toList())
+        topLevelBackStack.addTopLevel(destination)
+        val restored = topLevelBackStack.currentBackStack()
+        backStack.clear()
+        restored.forEach { backStack.add(it) }
+    }
 
     val navDisplayContent: @Composable () -> Unit = {
         SujianNavDisplayContent(
             backStack,
             appState,
-            settingsDetailSection,
             workspaceNavState,
             workspaceActions,
-        ) { settingsDetailSection = it }
+        )
     }
 
     if (layoutSpec.navigationPresentation == AndroidNavigationPresentation.BottomBar) {
@@ -625,7 +613,7 @@ fun SujianNavigationSuite(
             bottomBar =
                 if (chrome.showPrimaryNavigation) {
                     {
-                        SujianCompactBottomBar(currentTopDestination, backStack)
+                        SujianCompactBottomBar(currentTopDestination, onTopLevelSelected)
                     }
                 } else {
                     {}
@@ -641,7 +629,7 @@ fun SujianNavigationSuite(
             rail =
                 if (chrome.showPrimaryNavigation) {
                     {
-                        SujianWideRail(currentTopDestination, backStack)
+                        SujianWideRail(currentTopDestination, onTopLevelSelected)
                     }
                 } else {
                     null
@@ -661,37 +649,12 @@ private fun Modifier.navItemModifier(destination: SujianDestination): Modifier {
     return if (semanticTag != null) this.testTag(semanticTag) else this
 }
 
-private fun navigateToTopDestination(
-    backStack: NavBackStack<NavKey>,
-    destination: SujianDestination,
-) {
-    val target = destination.toRoute()
-    if (backStack.isEmpty()) {
-        backStack.add(SujianRoute.Works)
-    }
-    if (backStack.first() != SujianRoute.Works) {
-        backStack.clear()
-        backStack.add(SujianRoute.Works)
-    }
-    while (backStack.size > 1 && backStack.last() != target) {
-        backStack.removeLastOrNull()
-    }
-    if (backStack.last() == target) return
-    backStack.add(target)
-}
-
 private val navForwardTransition: AnimatedContentTransitionScope<Scene<NavKey>>.() -> ContentTransform = {
-    val slideIn = slideInHorizontally(animationSpec = tween(220)) { fullWidth -> fullWidth / 8 }
-    val slideOut = slideOutHorizontally(animationSpec = tween(220)) { fullWidth -> -fullWidth / 8 }
-    (fadeIn(animationSpec = tween(180)) + slideIn) togetherWith
-        (fadeOut(animationSpec = tween(150)) + slideOut)
+    fadeIn(animationSpec = tween(180)) togetherWith fadeOut(animationSpec = tween(150))
 }
 
 private val navPopTransition: AnimatedContentTransitionScope<Scene<NavKey>>.() -> ContentTransform = {
-    val slideIn = slideInHorizontally(animationSpec = tween(220)) { fullWidth -> -fullWidth / 8 }
-    val slideOut = slideOutHorizontally(animationSpec = tween(220)) { fullWidth -> fullWidth / 8 }
-    (fadeIn(animationSpec = tween(150)) + slideIn) togetherWith
-        (fadeOut(animationSpec = tween(180)) + slideOut)
+    fadeIn(animationSpec = tween(150)) togetherWith fadeOut(animationSpec = tween(180))
 }
 
 private val navPredictivePopTransition:

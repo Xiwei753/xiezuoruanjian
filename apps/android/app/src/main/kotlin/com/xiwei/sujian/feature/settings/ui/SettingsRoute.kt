@@ -1,30 +1,23 @@
 package com.xiwei.sujian.feature.settings.ui
 
 import android.annotation.SuppressLint
-import android.os.Parcelable
-import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
-import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
-import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
-import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldPredictiveBackHandler
-import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,9 +32,7 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.navigation.SettingsSection
 import com.xiwei.sujian.app.theme.ThemeRepository
-import com.xiwei.sujian.core.designsystem.component.SujianListItem
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
-import com.xiwei.sujian.core.designsystem.layout.SujianListDetailScaffoldWithNavigator
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
@@ -55,7 +46,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.parcelize.Parcelize
 
 class SettingsViewModel(
     internal val settingsRepo: SettingsRepository,
@@ -212,7 +202,7 @@ class SettingsViewModel(
 }
 
 /**
- * 设置列表分组（手机列表按组呈现，组内每一项显示标题、说明或当前值与尾箭头）。
+ * 设置列表分组（手机列表按组呈现，组内每一项显示标题、说明或当前值与展开箭头）。
  */
 enum class SettingsGroup(val titleResId: Int) {
     Appearance(R.string.pref_group_appearance),
@@ -271,31 +261,19 @@ val settingsCategories =
         SettingsCategory(SettingsSection.About, R.string.pref_category_about, SujianIcons.Info, SettingsGroup.About),
     )
 
-@Parcelize
-private data class SettingsSelection(val section: SettingsSection) : Parcelable
-
 /**
- * 设置一级 destination 的唯一内容。
+ * 设置一级 destination 的唯一内容 — 同页折叠面板。
  *
- * 设置列表与设置详情共享同一个壳（Material3 Adaptive 列表—详情）：
- * - 手机：列表与详情在同一壳内切换，详情返回先回列表，再离开设置一级入口；
- * - 平板/大屏：左侧分类、右侧详情并排；
- * - 窗口尺寸变化只改变窗格呈现方式，不建立第二套设置状态。
+ * 每个分类是一个 [SettingsExpandableSection]：点击标题行切换展开/折叠，
+ * 展开内容在行内用 [AnimatedVisibility] 呈现，不导航到子页面，
+ * 不建立第二套页面导航状态。展开状态用 [rememberSaveable] 跨配置变更保留。
  *
- * [detailSection] / [onDetailSectionChange] 由根壳提升持有，供一级 TopAppBar
- * 显示当前分类标题与返回按钮；详情→列表的可预见返回由
- * [ThreePaneScaffoldPredictiveBackHandler] 处理；列表→离开设置一级入口的返回
- * 由全局 NavDisplay 统一驱动（Works 常驻栈底，pop 带真实手势进度）。
+ * context.getString 在协程 collect 回调中解析错误文案，无法用 stringResource，
+ * 因此本文件带单规则 SuppressLint。
  */
-@OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
-// context.getString 在 LaunchedEffect 协程中显示 snackbar，无法用 stringResource（非 Composable 上下文）。
 @SuppressLint("LocalContextGetResourceValueCall")
 @Composable
-fun SettingsRoute(
-    modifier: Modifier = Modifier,
-    detailSection: SettingsSection? = null,
-    onDetailSectionChange: ((SettingsSection?) -> Unit)? = null,
-) {
+fun SettingsRoute(modifier: Modifier = Modifier) {
     val deps = LocalSujianAppDependencies.current
     val vm: SettingsViewModel =
         viewModel(
@@ -309,35 +287,56 @@ fun SettingsRoute(
         )
     val uiState by vm.uiState.collectAsState()
     val snackbarHostState = rememberSettingsSnackbarHost(vm)
-    // 列表—详情窗格与返回/可预见返回必须共享同一个 navigator 实例：
-    // 窗格由 navigator.currentDestination 驱动，返回层级（详情→列表→离开设置）
-    // 与根壳状态同步都依赖同一份导航历史。
-    val navigator = rememberSettingsNavigator(detailSection, onDetailSectionChange)
+    val dims = LocalSujianDimensions.current
+
+    var expanded by rememberSaveable(
+        saver =
+            listSaver(
+                save = { state -> state.value.map { e -> e.name } },
+                restore = { restored ->
+                    mutableStateOf(
+                        restored.mapNotNull { name ->
+                            runCatching { SettingsSection.valueOf(name) }.getOrNull()
+                        }.toSet(),
+                    )
+                },
+            ),
+    ) { mutableStateOf(setOf<SettingsSection>()) }
 
     Box(modifier = modifier.fillMaxSize()) {
-        SujianListDetailScaffoldWithNavigator(
-            navigator = navigator,
-            modifier = Modifier.fillMaxSize(),
-            listPane = {
-                SettingsListPane(
-                    onNavigateToDetail = { section ->
-                        onDetailSectionChange?.invoke(section)
-                    },
-                    selectedSection = navigator.currentDestination?.contentKey?.section ?: detailSection,
-                    state = uiState,
-                )
-            },
-            detailPane = {
-                val selection = navigator.currentDestination?.contentKey
-                if (selection != null) {
-                    SettingsDetailPane(
-                        section = selection.section,
-                        state = uiState,
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().testTag(SujianSemanticIds.SettingsScreen),
+            contentPadding = PaddingValues(vertical = dims.space8),
+        ) {
+            SettingsGroup.entries.forEach { group ->
+                val categories = settingsCategories.filter { it.group == group }
+                if (categories.isEmpty()) return@forEach
+                item(key = "settings_group_${group.name}") {
+                    Text(
+                        text = stringResource(id = group.titleResId),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = dims.space16, vertical = dims.space8),
+                    )
+                }
+                items(categories, key = { it.section.name }) { category ->
+                    SettingsCategoryItem(
+                        category = category,
+                        uiState = uiState,
+                        expanded = category.section in expanded,
+                        onExpandedChange = { isExpanded ->
+                            expanded =
+                                if (isExpanded) {
+                                    expanded + category.section
+                                } else {
+                                    expanded - category.section
+                                }
+                        },
                         onIntent = vm::handleIntent,
                     )
                 }
-            },
-        )
+            }
+        }
         androidx.compose.material3.SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier.align(Alignment.BottomCenter),
@@ -346,9 +345,38 @@ fun SettingsRoute(
 }
 
 /**
- * 设置列表：按“外观 / 写作 / 数据与同步 / 高级 / 关于”分组，每一项显示标题、
- * 说明或当前值，尾部带进入详情的箭头；与详情共享根设置壳与 TopAppBar。
- *
+ * 单个设置分类的折叠面板项 — 从 [SettingsRoute] 中提取以控制函数长度与认知复杂度。
+ */
+@Composable
+private fun SettingsCategoryItem(
+    category: SettingsCategory,
+    uiState: SettingsUiState,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onIntent: (SettingsIntent) -> Unit,
+) {
+    SettingsExpandableSection(
+        title = stringResource(id = category.titleResId),
+        summary = settingsCategorySummary(category),
+        value = settingsCategoryValue(category, uiState),
+        expanded = expanded,
+        onExpandedChange = onExpandedChange,
+        content = {
+            when (category.section) {
+                SettingsSection.Appearance -> AppearanceSettings(state = uiState, onIntent = onIntent)
+                SettingsSection.Editor -> EditorSettings(state = uiState, onIntent = onIntent)
+                SettingsSection.Save -> SaveSettings(state = uiState, onIntent = onIntent)
+                SettingsSection.Sync -> SyncSettings(state = uiState, onIntent = onIntent)
+                SettingsSection.Ai -> AiSettings(state = uiState, onIntent = onIntent)
+                SettingsSection.Diagnostics -> DiagnosticsSettings(state = uiState, onIntent = onIntent)
+                SettingsSection.Laboratory -> LaboratorySettings(state = uiState, onIntent = onIntent)
+                SettingsSection.About -> AboutSettings(state = uiState, onIntent = onIntent)
+            }
+        },
+    )
+}
+
+/**
  * 收集设置保存失败事件并在底部 snackbar 展示（协程上下文用
  * context.getString，非 Composable 上下文无法用 stringResource）。
  *
@@ -366,128 +394,6 @@ private fun rememberSettingsSnackbarHost(vm: SettingsViewModel): androidx.compos
         }
     }
     return snackbarHostState
-}
-
-/**
- * 列表—详情 navigator + 根壳状态双向同步：navigator 内部变化（预测性返回）
- * 回写根壳；根壳状态变化（分类点击/顶栏返回）驱动窗格；详情→列表返回由
- * 本 navigator 处理，列表→离开设置交给全局 NavDisplay。
- */
-@OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
-@Composable
-private fun rememberSettingsNavigator(
-    detailSection: SettingsSection?,
-    onDetailSectionChange: ((SettingsSection?) -> Unit)?,
-) = run {
-    val navigator = rememberListDetailPaneScaffoldNavigator<SettingsSelection>()
-    SettingsNavigatorEffects(navigator, detailSection, onDetailSectionChange)
-    navigator
-}
-
-@OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
-@Composable
-private fun SettingsNavigatorEffects(
-    navigator: androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldNavigator<SettingsSelection>,
-    detailSection: SettingsSection?,
-    onDetailSectionChange: ((SettingsSection?) -> Unit)?,
-) {
-    ThreePaneScaffoldPredictiveBackHandler(
-        navigator = navigator,
-        backBehavior = BackNavigationBehavior.PopUntilScaffoldValueChange,
-    )
-
-    // 详情状态同步：navigator 内部变化（如预测性返回完成）回写根壳状态。
-    // 首次组合跳过（初始 contentKey 恒为 null，回写 null 会覆盖平板进入时根壳
-    // 注入的默认 Appearance，导致右侧详情空白）；后续变化才回写。
-    var syncedOnce by remember { mutableStateOf(false) }
-    LaunchedEffect(navigator.currentDestination?.contentKey) {
-        if (!syncedOnce) {
-            syncedOnce = true
-            return@LaunchedEffect
-        }
-        onDetailSectionChange?.invoke(navigator.currentDestination?.contentKey?.section)
-    }
-
-    // 根壳状态变化（分类点击 / 顶栏返回）驱动 navigator 窗格。
-    LaunchedEffect(detailSection) {
-        if (detailSection == null) {
-            if (navigator.canNavigateBack()) {
-                navigator.navigateBack(BackNavigationBehavior.PopUntilScaffoldValueChange)
-            }
-        } else {
-            val key = SettingsSelection(detailSection)
-            if (navigator.currentDestination?.contentKey != key) {
-                navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, key)
-            }
-        }
-    }
-
-    val coroutineScope = rememberCoroutineScope()
-
-    // 返回层级：详情 → 列表由列表-详情 navigator 处理；
-    // 列表 → 离开设置一级入口交给全局 NavDisplay（Works 常驻栈底，
-    // predictivePopTransitionSpec 带真实手势进度），不再在本壳内拦截。
-    BackHandler(enabled = navigator.canNavigateBack()) {
-        coroutineScope.launch {
-            navigator.navigateBack(BackNavigationBehavior.PopUntilScaffoldValueChange)
-        }
-    }
-}
-
-@Composable
-fun SettingsListPane(
-    onNavigateToDetail: (SettingsSection) -> Unit,
-    modifier: Modifier = Modifier,
-    selectedSection: SettingsSection? = null,
-    state: SettingsUiState = SettingsUiState(),
-) {
-    val dims = LocalSujianDimensions.current
-    LazyColumn(
-        modifier = modifier.fillMaxSize().testTag(SujianSemanticIds.SettingsScreen),
-        contentPadding = PaddingValues(vertical = dims.space8),
-    ) {
-        SettingsGroup.entries.forEach { group ->
-            val categories = settingsCategories.filter { it.group == group }
-            if (categories.isEmpty()) return@forEach
-            item(key = "settings_group_${group.name}") {
-                Text(
-                    text = stringResource(id = group.titleResId),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(horizontal = dims.space16, vertical = dims.space8),
-                )
-            }
-            items(categories, key = { it.section.name }) { category ->
-                SujianListItem(
-                    headline = stringResource(id = category.titleResId),
-                    supportingText = settingsCategorySummary(category),
-                    valueText = settingsCategoryValue(category, state),
-                    leadingIcon = category.icon,
-                    selected = selectedSection == category.section,
-                    onClick = { onNavigateToDetail(category.section) },
-                    semanticId =
-                        when (category.section) {
-                            SettingsSection.Appearance -> SujianSemanticIds.SettingsNavAppearance
-                            SettingsSection.Editor -> SujianSemanticIds.SettingsNavEditor
-                            SettingsSection.Save -> SujianSemanticIds.SettingsNavSave
-                            SettingsSection.Sync -> SujianSemanticIds.SettingsNavSync
-                            SettingsSection.Ai -> SujianSemanticIds.SettingsNavAi
-                            SettingsSection.Diagnostics -> SujianSemanticIds.SettingsNavDiagnostics
-                            SettingsSection.Laboratory -> SujianSemanticIds.SettingsNavLaboratory
-                            SettingsSection.About -> SujianSemanticIds.SettingsNavAbout
-                        },
-                    trailingContent = {
-                        Icon(
-                            imageVector = SujianIcons.KeyboardArrowRight,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        }
-    }
 }
 
 /**

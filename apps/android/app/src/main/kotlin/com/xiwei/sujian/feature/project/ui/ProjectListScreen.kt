@@ -34,10 +34,10 @@ import com.xiwei.sujian.core.designsystem.component.SujianDialog
 import com.xiwei.sujian.core.designsystem.component.SujianFab
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
 import com.xiwei.sujian.core.designsystem.component.SujianListItem
+import com.xiwei.sujian.core.designsystem.component.SujianTextField
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
-import com.xiwei.sujian.feature.editor.ui.AnimatedTextField
 import com.xiwei.sujian.feature.project.data.model.Project
 
 @Composable
@@ -149,11 +149,9 @@ internal fun ProjectListContent(
             dismissText = stringResource(id = R.string.action_cancel),
             onDismiss = { showCreateDialog = false },
             body = {
-                AnimatedTextField(
-                    targetId = "project-title:new",
+                SujianTextField(
                     value = title,
                     onValueChange = { title = it },
-                    onCommit = { },
                     label = { Text(stringResource(id = R.string.hint_project_title_new)) },
                     singleLine = true,
                 )
@@ -250,11 +248,9 @@ private fun ProjectMenuDialog(
             dismissText = stringResource(id = R.string.action_cancel),
             onDismiss = { showRename = false },
             body = {
-                AnimatedTextField(
-                    targetId = "project-title:rename:${project.id}",
+                SujianTextField(
                     value = newTitle,
                     onValueChange = { newTitle = it },
-                    onCommit = { },
                     label = { Text(stringResource(id = R.string.hint_new_title)) },
                     singleLine = true,
                 )
