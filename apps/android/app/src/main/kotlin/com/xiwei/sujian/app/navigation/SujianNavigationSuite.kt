@@ -665,7 +665,7 @@ private fun recordTopLevelSwitchDiagnostics(
     com.xiwei.sujian.core.diagnostics.ProcessStateSummary.update(
         context,
         to.name,
-        appState.currentProjectId ?: "",
+        if (appState.currentChapterId != null) "1" else "0",
         "idle",
     )
 }
