@@ -4,7 +4,11 @@ package com.xiwei.sujian.app.diagnostics
 
 import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 import com.xiwei.sujian.core.diagnostics.JankStatsController
+import com.xiwei.sujian.core.diagnostics.LogRequest
+import com.xiwei.sujian.core.diagnostics.LogcatSnapshotCollector
+import com.xiwei.sujian.core.diagnostics.PersistentLogWriter
 import com.xiwei.sujian.core.diagnostics.ProcessStateSummary
+import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -13,6 +17,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.io.File
 
 /**
  * Issue #612 八：ProcessStateSummary 摘要构造与 ≤128 bytes 截断测试。
@@ -378,5 +383,249 @@ class ThemeResolveIntegrationTest {
         val snapshot = com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer.getSnapshot()
         val themeEvent = snapshot.find { it["event"] == "theme.resolve" }
         org.junit.Assert.assertNull("未调用 reload() 不应产生 theme.resolve 事件", themeEvent)
+    }
+}
+
+/**
+ * Issue #612 收尾：LogcatSnapshotCollector.truncate UTF-8 安全截断测试。
+ *
+ * 纯 JVM 测试，不需要 Robolectric：truncate 是纯字符串操作。
+ * 验证截断不产生 U+FFFD（截断处是完整 UTF-8 字符边界），与旧实现的字节截断形成正反对比。
+ */
+class LogcatSnapshotCollectorTruncateTest {
+    @Test
+    fun truncateKeepsShortTextUnchanged() {
+        val text = "short logcat content"
+        assertEquals(text, LogcatSnapshotCollector.truncate(text))
+    }
+
+    @Test
+    fun truncateLimitsLongTextToMaxSnapshotBytes() {
+        val text = "x".repeat(3 * 1024 * 1024) // 3 MiB > 2 MiB
+        val truncated = LogcatSnapshotCollector.truncate(text)
+        val byteLen = truncated.toByteArray(Charsets.UTF_8).size
+        assertTrue("truncated bytes should be <= 2 MiB, got $byteLen", byteLen <= 2 * 1024 * 1024)
+        assertTrue("truncated should be non-empty", truncated.isNotEmpty())
+    }
+
+    @Test
+    fun truncateHandlesMultibyteUtf8OnCharBoundary() {
+        // 中文字符 3 bytes/char，800000 个中文 = 2.4 MiB > 2 MiB
+        val text = "素".repeat(800000)
+        val truncated = LogcatSnapshotCollector.truncate(text)
+        val byteLen = truncated.toByteArray(Charsets.UTF_8).size
+        assertTrue("truncated bytes should be <= 2 MiB, got $byteLen", byteLen <= 2 * 1024 * 1024)
+        assertTrue("truncated should be non-empty", truncated.isNotEmpty())
+        // 关键正反对比：旧字节截断会在多字节字符中间切断产生 U+FFFD；
+        // 新按字符回退实现必须保证截断处是完整字符边界，不含 U+FFFD。
+        assertTrue("truncated must not contain U+FFFD (char-boundary safe)", !truncated.contains('\uFFFD'))
+    }
+
+    @Test
+    fun truncateEmptyStringStaysEmpty() {
+        assertEquals("", LogcatSnapshotCollector.truncate(""))
+    }
+
+    @Test
+    fun truncateAsciiAtExactBoundaryUnchanged() {
+        // 恰好 2 MiB 的 ASCII 文本不截断
+        val text = "a".repeat(2 * 1024 * 1024)
+        val truncated = LogcatSnapshotCollector.truncate(text)
+        assertEquals(text, truncated)
+    }
+}
+
+/**
+ * Issue #612 收尾：PersistentLogWriter 真实正反单测。
+ *
+ * 覆盖 flushBlocking 语义、setEnabled 开关、多线程线程安全、
+ * 1 MiB / 5 文件轮转、clearLogs 清空、getLogFiles 返回。
+ * Robolectric 提供 Context 与 Environment.getExternalStorageDirectory()。
+ *
+ * PersistentLogWriter 是 internal object 单例，writer 线程在 init 后常驻；
+ * 每个测试前先 flushBlocking 让 writer 空闲，再 clearLogs 清空队列与文件，
+ * 避免与 writer 线程的 writeBatch 产生竞态。
+ */
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [34])
+class PersistentLogWriterTest {
+    private lateinit var context: android.content.Context
+
+    @Before
+    fun setUp() {
+        context = androidx.test.core.app.ApplicationProvider.getApplicationContext()
+        PersistentLogWriter.init(context)
+        PersistentLogWriter.setEnabled(true)
+        // 先等待之前可能残留的写完成（writer 空闲），再清空队列与文件，
+        // 确保 clearLogs 不会与 writer 的 writeBatch 并发清空 swap。
+        PersistentLogWriter.flushBlocking()
+        PersistentLogWriter.clearLogs()
+    }
+
+    @After
+    fun tearDown() {
+        PersistentLogWriter.flushBlocking()
+        PersistentLogWriter.clearLogs()
+        PersistentLogWriter.setEnabled(false)
+    }
+
+    private fun req(
+        message: String,
+        ts: Long = 1_000L,
+    ) = LogRequest(
+        level = "I",
+        tag = "test",
+        message = message,
+        timestampMs = ts,
+        threadName = "main",
+    )
+
+    private fun currentLogFile(): File = File(AndroidDataRoot.logsDir(), "sujian-current.log")
+
+    @Test
+    fun flushBlockingWritesAllEnqueuedMessagesToFile() {
+        PersistentLogWriter.enqueue(req("msg-alpha", 1000L))
+        PersistentLogWriter.enqueue(req("msg-beta", 2000L))
+        PersistentLogWriter.enqueue(req("msg-gamma", 3000L))
+        PersistentLogWriter.flushBlocking()
+
+        val file = currentLogFile()
+        assertTrue("log file should exist", file.exists())
+        val content = file.readText()
+        assertTrue("should contain msg-alpha", content.contains("msg-alpha"))
+        assertTrue("should contain msg-beta", content.contains("msg-beta"))
+        assertTrue("should contain msg-gamma", content.contains("msg-gamma"))
+    }
+
+    @Test
+    fun flushBlockingOnEmptyQueueReturnsImmediately() {
+        // 未 enqueue 直接 flushBlocking，不应阻塞/死锁
+        PersistentLogWriter.flushBlocking()
+        // 到达此处即说明未死锁
+        assertTrue(true)
+    }
+
+    @Test
+    fun setEnabledFalseStopsNewEnqueuesFromPersisting() {
+        PersistentLogWriter.setEnabled(false)
+        PersistentLogWriter.enqueue(req("should-not-persist"))
+        PersistentLogWriter.flushBlocking()
+
+        val file = currentLogFile()
+        val content = if (file.exists()) file.readText() else ""
+        assertTrue(
+            "disabled enqueue must not be persisted",
+            !content.contains("should-not-persist"),
+        )
+    }
+
+    @Test
+    fun setEnabledTrueResumesPersistingAfterReEnable() {
+        PersistentLogWriter.setEnabled(false)
+        PersistentLogWriter.enqueue(req("dropped"))
+        PersistentLogWriter.flushBlocking()
+        PersistentLogWriter.setEnabled(true)
+        PersistentLogWriter.enqueue(req("kept"))
+        PersistentLogWriter.flushBlocking()
+
+        val content = currentLogFile().readText()
+        assertTrue("kept should be persisted after re-enable", content.contains("kept"))
+        assertTrue("dropped should not be persisted", !content.contains("dropped"))
+    }
+
+    @Test
+    fun concurrentEnqueueIsThreadSafe() {
+        val threads = 8
+        val perThread = 50
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(threads)
+        val latch = java.util.concurrent.CountDownLatch(threads)
+        try {
+            for (t in 0 until threads) {
+                pool.submit {
+                    for (i in 0 until perThread) {
+                        PersistentLogWriter.enqueue(req("t$t-i$i"))
+                    }
+                    latch.countDown()
+                }
+            }
+            assertTrue(
+                "all enqueuers should finish within timeout",
+                latch.await(10, java.util.concurrent.TimeUnit.SECONDS),
+            )
+            PersistentLogWriter.flushBlocking()
+        } finally {
+            pool.shutdown()
+        }
+
+        val file = currentLogFile()
+        assertTrue("log file should exist after concurrent writes", file.exists())
+        val lines = file.readLines()
+        assertEquals(
+            "all ${threads * perThread} messages should be persisted, got ${lines.size}",
+            threads * perThread,
+            lines.size,
+        )
+    }
+
+    @Test
+    fun rotationCreatesRotatedFileAndKeepsAtMostFiveFiles() {
+        // 每条 200 KB message，6 条约 1.2 MiB > 1 MiB 触发轮转
+        val bigMessage = "A".repeat(200 * 1024)
+        // 先写 6 条使当前文件超过 1 MiB
+        repeat(6) { PersistentLogWriter.enqueue(req(bigMessage, it.toLong())) }
+        PersistentLogWriter.flushBlocking()
+        // 再分 6 轮：每轮先 enqueue 1 条触发 rotateIfNeeded（文件已 > 1 MiB），
+        // 再 enqueue 6 条让当前文件再次超过 1 MiB，为下一轮轮转做准备。
+        repeat(6) { round ->
+            PersistentLogWriter.enqueue(req(bigMessage, (10 + round).toLong()))
+            PersistentLogWriter.flushBlocking()
+            repeat(6) { j -> PersistentLogWriter.enqueue(req(bigMessage, (100 + round * 10 + j).toLong())) }
+            PersistentLogWriter.flushBlocking()
+        }
+
+        val files = PersistentLogWriter.getLogFiles()
+        assertTrue("should have rotated files, got ${files.size}", files.size >= 2)
+        assertTrue("should keep at most 5 files, got ${files.size}", files.size <= 5)
+        // 当前文件应存在
+        assertTrue(
+            "current log sujian-current.log should exist",
+            files.any { it.name == "sujian-current.log" },
+        )
+    }
+
+    @Test
+    fun clearLogsRemovesFilesAndClearsPendingQueue() {
+        PersistentLogWriter.enqueue(req("to-be-cleared"))
+        PersistentLogWriter.flushBlocking()
+        val file = currentLogFile()
+        assertTrue("file should exist before clearLogs", file.exists())
+
+        PersistentLogWriter.clearLogs()
+        assertTrue("file should be deleted after clearLogs", !file.exists())
+
+        // 队列清空后新 enqueue 只写新消息，不残留旧消息
+        PersistentLogWriter.enqueue(req("after-clear"))
+        PersistentLogWriter.flushBlocking()
+        assertTrue("current file should exist again after new enqueue", file.exists())
+        val content = file.readText()
+        assertTrue("after-clear should be persisted", content.contains("after-clear"))
+        assertTrue("to-be-cleared should be gone after clearLogs", !content.contains("to-be-cleared"))
+    }
+
+    @Test
+    fun getLogFilesReturnsCurrentLogFiles() {
+        PersistentLogWriter.enqueue(req("file-list-test"))
+        PersistentLogWriter.flushBlocking()
+
+        val files = PersistentLogWriter.getLogFiles()
+        assertTrue("getLogFiles should not be empty", files.isNotEmpty())
+        assertTrue(
+            "should contain sujian-current.log",
+            files.any { it.name == "sujian-current.log" },
+        )
+        assertTrue(
+            "all returned files should match sujian-current*.log",
+            files.all { it.name.startsWith("sujian-current") && it.name.endsWith(".log") },
+        )
     }
 }

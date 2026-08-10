@@ -40,9 +40,16 @@ internal object LogcatSnapshotCollector {
         }
     }
 
-    private fun truncate(text: String): String {
+    internal fun truncate(text: String): String {
         val bytes = text.toByteArray(Charsets.UTF_8)
         if (bytes.size <= MAX_SNAPSHOT_BYTES) return text
-        return String(bytes, 0, MAX_SNAPSHOT_BYTES.toInt(), Charsets.UTF_8)
+        // 在 MAX_SNAPSHOT_BYTES 附近往前找 UTF-8 字符边界（非续字节）。
+        // 续字节匹配 10xxxxxx 即 (byte and 0xC0) == 0x80；首字节不匹配。
+        // UTF-8 字符最多 4 字节，最多回退 3 次，O(1)。
+        var end = MAX_SNAPSHOT_BYTES.toInt()
+        while (end > 0 && (bytes[end].toInt() and 0xC0) == 0x80) {
+            end--
+        }
+        return String(bytes, 0, end, Charsets.UTF_8)
     }
 }
