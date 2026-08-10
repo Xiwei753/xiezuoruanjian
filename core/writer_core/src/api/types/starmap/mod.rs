@@ -19,3 +19,5 @@ pub use meta::*;
 pub use motion_policy::*;
 pub use node::*;
 pub use semantic::*;
+#[cfg(test)]
+mod node_tests;
