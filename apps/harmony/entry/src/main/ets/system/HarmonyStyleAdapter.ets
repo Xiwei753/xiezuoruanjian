@@ -46,6 +46,8 @@ export function mapActionSlot(slot: ActionSlot): ArkControl {
       break
     case ActionRole.Delete:
     case ActionRole.Rename:
+    case ActionRole.MoveEarlier:
+    case ActionRole.MoveLater:
       type = ArkControlType.ContextMenuItem
       break
     case ActionRole.Settings:
@@ -73,6 +75,7 @@ export function mapActionSlot(slot: ActionSlot): ArkControl {
 export enum ArkLayoutPosition {
   TopBarLeading,    // HeaderLeading
   TopBarTrailing,   // HeaderTrailing
+  PrimaryAction,    // PrimaryAction（#610 评论四：页面主操作，如新建作品）
   ListHeader,       // ListHeader
   ItemTrailing,     // ItemTrailing
   ContextualMenu,   // Context
@@ -85,6 +88,8 @@ export function mapRegion(region: ActionRegion): ArkLayoutPosition {
       return ArkLayoutPosition.TopBarLeading
     case ActionRegion.HeaderTrailing:
       return ArkLayoutPosition.TopBarTrailing
+    case ActionRegion.PrimaryAction:
+      return ArkLayoutPosition.PrimaryAction
     case ActionRegion.ListHeader:
       return ArkLayoutPosition.ListHeader
     case ActionRegion.ItemTrailing:

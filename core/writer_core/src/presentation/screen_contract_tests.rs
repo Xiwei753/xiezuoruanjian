@@ -38,6 +38,7 @@ fn test_pane_role_variants() {
 fn test_action_role_variants() {
     // #610 评论二：Save（自动保存）/Sort（未实现）已从共享契约删除，
     // Core 不再声明平台上不存在于当前 UI 的动作。
+    // #610 评论四：上移/下移是真实功能，以 MoveEarlier/MoveLater 进入契约。
     let variants = vec![
         ActionRole::Back,
         ActionRole::CreateProject,
@@ -45,11 +46,13 @@ fn test_action_role_variants() {
         ActionRole::CreateChapter,
         ActionRole::Delete,
         ActionRole::Rename,
+        ActionRole::MoveEarlier,
+        ActionRole::MoveLater,
         ActionRole::Settings,
         ActionRole::Sync,
         ActionRole::Search,
     ];
-    assert_eq!(variants.len(), 9);
+    assert_eq!(variants.len(), 11);
 }
 
 #[test]
@@ -69,12 +72,13 @@ fn test_action_region_variants() {
     let variants = [
         ActionRegion::HeaderLeading,
         ActionRegion::HeaderTrailing,
+        ActionRegion::PrimaryAction,
         ActionRegion::ListHeader,
         ActionRegion::ItemTrailing,
         ActionRegion::Context,
         ActionRegion::EmptyState,
     ];
-    assert_eq!(variants.len(), 6);
+    assert_eq!(variants.len(), 7);
 }
 
 #[test]
@@ -153,12 +157,13 @@ fn test_workspace_header_actions_product_order() {
 #[test]
 fn test_workspace_context_actions_have_business_targets() {
     // #610 评论二：Delete/Rename 靠 ActionTarget 区分"删卷/删章节"、"重命名卷/重命名章节"。
+    // #610 评论四：MoveEarlier/MoveLater 同样按目标区分卷/章节的顺序动作。
     let slots = resolve_screen_policy(ScreenRole::ProjectWorkspace);
     let context: Vec<_> = slots
         .iter()
         .filter(|s| s.region == ActionRegion::Context)
         .collect();
-    assert_eq!(context.len(), 4);
+    assert_eq!(context.len(), 8);
     assert_eq!(context[0].role, ActionRole::Delete);
     assert_eq!(context[0].target, ActionTarget::Volume);
     assert_eq!(context[1].role, ActionRole::Delete);
@@ -167,9 +172,49 @@ fn test_workspace_context_actions_have_business_targets() {
     assert_eq!(context[2].target, ActionTarget::Volume);
     assert_eq!(context[3].role, ActionRole::Rename);
     assert_eq!(context[3].target, ActionTarget::Chapter);
+    assert_eq!(context[4].role, ActionRole::MoveEarlier);
+    assert_eq!(context[4].target, ActionTarget::Volume);
+    assert_eq!(context[5].role, ActionRole::MoveLater);
+    assert_eq!(context[5].target, ActionTarget::Volume);
+    assert_eq!(context[6].role, ActionRole::MoveEarlier);
+    assert_eq!(context[6].target, ActionTarget::Chapter);
+    assert_eq!(context[7].role, ActionRole::MoveLater);
+    assert_eq!(context[7].target, ActionTarget::Chapter);
     // 同一 role 的不同业务目标必须可区分（身份不能靠顺序猜）。
     assert_ne!(context[0].target, context[1].target);
     assert_ne!(context[2].target, context[3].target);
+    assert_ne!(context[4].target, context[6].target);
+    assert_ne!(context[5].target, context[7].target);
+    // Context 区域槽位按 order 升序排列（产品顺序）。
+    assert!(context.windows(2).all(|w| w[0].order < w[1].order));
+}
+
+#[test]
+fn test_move_actions_are_real_sequence_actions() {
+    // #610 评论四：MoveEarlier/MoveLater 是真实存在的顺序动作，不是笼统的 Sort。
+    let slots = resolve_screen_policy(ScreenRole::ProjectWorkspace);
+    let moves: Vec<_> = slots
+        .iter()
+        .filter(|s| matches!(s.role, ActionRole::MoveEarlier | ActionRole::MoveLater))
+        .collect();
+    assert_eq!(moves.len(), 4);
+    // 顺序动作不需要确认，位于 Context 区域。
+    assert!(moves.iter().all(|s| !s.requires_confirmation));
+    assert!(moves.iter().all(|s| s.region == ActionRegion::Context));
+}
+
+#[test]
+fn test_create_project_is_primary_action() {
+    // #610 评论四：新建作品是页面主操作（PrimaryAction），
+    // 不再一边声明 HeaderTrailing、一边实际画在右下角 FAB。
+    let slots = resolve_screen_policy(ScreenRole::ProjectList);
+    let create = slots
+        .iter()
+        .find(|s| s.role == ActionRole::CreateProject)
+        .unwrap();
+    assert_eq!(create.region, ActionRegion::PrimaryAction);
+    assert_eq!(create.target, ActionTarget::Project);
+    assert_eq!(create.order, 10);
 }
 
 #[test]
@@ -314,6 +359,7 @@ fn test_slot_order_is_product_level_not_shell_dependent() {
         .iter()
         .find(|s| s.role == ActionRole::CreateProject)
         .unwrap();
-    assert_eq!(create.region, ActionRegion::HeaderTrailing);
+    // #610 评论四：新建作品位于页面主操作区域（Android compact 画成 FAB）。
+    assert_eq!(create.region, ActionRegion::PrimaryAction);
     assert_eq!(create.order, 10);
 }

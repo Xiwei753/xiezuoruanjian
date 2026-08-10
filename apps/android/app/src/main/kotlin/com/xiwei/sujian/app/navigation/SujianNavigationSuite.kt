@@ -61,10 +61,12 @@ import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.app.presentation.AndroidChromePolicy
 import com.xiwei.sujian.app.presentation.AndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.AndroidNavigationPresentation
+import com.xiwei.sujian.app.presentation.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.PresentationContractBridge
 import com.xiwei.sujian.app.presentation.SujianChromeAction
 import com.xiwei.sujian.app.presentation.SujianChromeSpec
 import com.xiwei.sujian.app.presentation.rememberAndroidLayoutSpec
+import com.xiwei.sujian.app.presentation.rememberWorkspaceActions
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
 import com.xiwei.sujian.core.designsystem.component.SujianSnackbar
 import com.xiwei.sujian.core.designsystem.component.SujianTopAppBar
@@ -260,6 +262,7 @@ private fun SujianNavDisplayContent(
     appState: SujianAppState,
     settingsDetailSection: SettingsSection?,
     workspaceNavState: ProjectNavigationState,
+    workspaceActions: AndroidWorkspaceActionSpec,
     onSettingsDetailSectionChange: (SettingsSection?) -> Unit,
 ) {
     NavDisplay(
@@ -284,6 +287,7 @@ private fun SujianNavDisplayContent(
                                 ProjectWorkspaceScreen(
                                     appState = appState,
                                     workspaceNavState = workspaceNavState,
+                                    workspaceActions = workspaceActions,
                                 )
                             is SujianRoute.StarMap ->
                                 StarMapPlaceholderScreen(
@@ -564,8 +568,6 @@ fun SujianNavigationSuite(
     initialDestination: String? = null,
     foldingFeatures: List<AospFoldFeatureInfo> = emptyList(),
 ) {
-    // #610：Android 窗口变化直接进入 AndroidAdaptiveLayoutPolicy，
-    // 再和 Core presentation contract 合成最终 Android UI spec。
     val layoutSpec: AndroidLayoutSpec = rememberAndroidLayoutSpec(foldingFeatures)
     val initialStack = rememberInitialNavStack(initialDestination)
     val backStack = rememberNavBackStack(*initialStack.toTypedArray())
@@ -581,11 +583,9 @@ fun SujianNavigationSuite(
 
     val workspaceNavState = rememberSujianWorkspaceNavState(appState, layoutSpec.scaffoldDirective)
 
-    // #610：页面角色与动作槽位来自 Core screen contract（唯一事实来源），
-    // AndroidChromePolicy 只负责把 Core ActionSlot 映射成 Android 控件决策。
-    val screenRole =
-        AndroidChromePolicy.screenRoleFor(currentRoute, workspaceNavState.currentLocation)
+    val screenRole = AndroidChromePolicy.screenRoleFor(currentRoute, workspaceNavState.currentLocation)
     val screenPolicy = remember(screenRole) { PresentationContractBridge.resolveScreenPolicy(context, screenRole) }
+    val workspaceActions = rememberWorkspaceActions(screenPolicy)
     val chrome =
         AndroidChromePolicy.resolve(
             screenRole = screenRole,
@@ -596,7 +596,6 @@ fun SujianNavigationSuite(
         )
 
     SujianWorkspaceBackEffects(currentRoute, workspaceNavState, coroutineScope)
-
     SujianRouteEffects(
         currentRoute,
         currentTopDestination,
@@ -604,14 +603,7 @@ fun SujianNavigationSuite(
     ) { settingsDetailSection = it }
 
     val env = SujianTopBarEnv(syncState, coroutineScope, deps, backStack)
-    val topBarInfo =
-        rememberSujianTopBarInfo(
-            currentRoute,
-            appState,
-            chrome,
-            env,
-            workspaceNavState,
-        )
+    val topBarInfo = rememberSujianTopBarInfo(currentRoute, appState, chrome, env, workspaceNavState)
 
     val navDisplayContent: @Composable () -> Unit = {
         SujianNavDisplayContent(
@@ -619,6 +611,7 @@ fun SujianNavigationSuite(
             appState,
             settingsDetailSection,
             workspaceNavState,
+            workspaceActions,
         ) { settingsDetailSection = it }
     }
 

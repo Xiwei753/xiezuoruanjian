@@ -24,6 +24,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.WorkspaceAppState
+import com.xiwei.sujian.app.presentation.AndroidWorkspaceActionSpec
+import com.xiwei.sujian.app.presentation.WorkspaceActionSpec
 import com.xiwei.sujian.core.designsystem.component.SujianCard
 import com.xiwei.sujian.core.designsystem.component.SujianDialog
 import com.xiwei.sujian.core.designsystem.component.SujianFab
@@ -34,17 +36,27 @@ import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.feature.editor.ui.AnimatedTextField
 import com.xiwei.sujian.feature.project.data.model.Project
+import uniffi.writer_core.ActionRoleDto
+import uniffi.writer_core.ActionTargetDto
 
 @Composable
-fun ProjectListContent(
+internal fun ProjectListContent(
     appState: WorkspaceAppState,
+    workspaceActions: AndroidWorkspaceActionSpec,
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     modifier: Modifier = Modifier,
-    showFab: Boolean = true,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var showMenuForProject by remember { mutableStateOf<Project?>(null) }
+    var confirmDeleteProject by remember { mutableStateOf<Project?>(null) }
     val dims = LocalSujianDimensions.current
+
+    // #610 评论四：动作存在性与位置来自 Core 契约，不再由 Composable 自己决定：
+    // - 新建作品是 PrimaryAction（Android compact 画成 FAB）；
+    // - 作品菜单只按 Context(Project) spec 渲染，顺序来自 Core order。
+    val createProjectAction =
+        workspaceActions.primaryActions.firstOrNull { it.role == ActionRoleDto.CREATE_PROJECT }
+    val projectMenuActions = workspaceActions.contextActions(ActionTargetDto.PROJECT)
 
     Box(modifier = modifier.fillMaxSize()) {
         if (appState.projects.isEmpty()) {
@@ -101,6 +113,7 @@ fun ProjectListContent(
                     ProjectCard(
                         project = project,
                         onSelect = { onSelectProject(project.id, project.title) },
+                        hasMenuActions = projectMenuActions.isNotEmpty(),
                         onMoreActions = { showMenuForProject = project },
                         modifier = Modifier.testTag(SujianSemanticIds.project(project.id)),
                     )
@@ -108,7 +121,9 @@ fun ProjectListContent(
             }
         }
 
-        if (showFab) {
+        // #610 评论四：Core PrimaryAction → Android compact 呈现为 FAB。
+        // 契约里有该槽位才画；契约没有（或桥失败）则不画。
+        if (createProjectAction != null) {
             SujianFab(
                 onClick = { showCreateDialog = true },
                 icon = SujianIcons.Add,
@@ -148,37 +163,38 @@ fun ProjectListContent(
     showMenuForProject?.let { project ->
         ProjectMenuDialog(
             project = project,
+            actions = projectMenuActions,
             onRename = { newTitle ->
                 appState.renameProject(project.id, newTitle)
                 showMenuForProject = null
             },
+            // #610 评论四：Delete 需要确认（契约 requiresConfirmation=true），
+            // 先进入确认弹窗，确认后才真正删除。
             onDelete = {
-                appState.deleteProject(project.id)
+                confirmDeleteProject = project
                 showMenuForProject = null
             },
             onDismiss = { showMenuForProject = null },
         )
     }
-}
 
-@Composable
-fun ProjectListScreen(
-    appState: WorkspaceAppState,
-    onSelectProject: (projectId: String, projectTitle: String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    ProjectListContent(
-        appState = appState,
-        onSelectProject = onSelectProject,
-        showFab = true,
-        modifier = modifier,
-    )
+    confirmDeleteProject?.let { project ->
+        ConfirmDeleteProjectDialog(
+            name = project.title,
+            onConfirm = {
+                appState.deleteProject(project.id)
+                confirmDeleteProject = null
+            },
+            onDismiss = { confirmDeleteProject = null },
+        )
+    }
 }
 
 @Composable
 private fun ProjectCard(
     project: Project,
     onSelect: () -> Unit,
+    hasMenuActions: Boolean,
     onMoreActions: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -196,11 +212,14 @@ private fun ProjectCard(
                 Text(project.title, style = MaterialTheme.typography.titleMedium)
                 Text(project.updatedAt.substringBefore("T"), style = MaterialTheme.typography.bodySmall)
             }
-            SujianIconButton(
-                onClick = onMoreActions,
-                icon = SujianIcons.MoreVert,
-                contentDescription = stringResource(id = R.string.action_more),
-            )
+            // #610 评论四：菜单按钮只按 Core Context(Project) 契约存在与否渲染。
+            if (hasMenuActions) {
+                SujianIconButton(
+                    onClick = onMoreActions,
+                    icon = SujianIcons.MoreVert,
+                    contentDescription = stringResource(id = R.string.action_more),
+                )
+            }
         }
     }
 }
@@ -208,6 +227,7 @@ private fun ProjectCard(
 @Composable
 private fun ProjectMenuDialog(
     project: Project,
+    actions: List<WorkspaceActionSpec>,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
@@ -247,16 +267,47 @@ private fun ProjectMenuDialog(
             onConfirm = {},
             body = {
                 Column {
-                    SujianListItem(
-                        headline = stringResource(id = R.string.action_rename),
-                        onClick = { showRename = true },
-                    )
-                    SujianListItem(
-                        headline = stringResource(id = R.string.action_delete),
-                        onClick = onDelete,
-                    )
+                    // #610 评论四：菜单项按 Core Context(Project) spec 渲染，
+                    // 顺序来自 Core order；Composable 不再自行决定出现哪些动作、排第几个。
+                    actions.forEach { action ->
+                        when (action.role) {
+                            ActionRoleDto.RENAME ->
+                                SujianListItem(
+                                    headline = stringResource(id = R.string.action_rename),
+                                    onClick = { showRename = true },
+                                )
+                            ActionRoleDto.DELETE ->
+                                SujianListItem(
+                                    headline = stringResource(id = R.string.action_delete),
+                                    onClick = onDelete,
+                                )
+                            else -> {
+                                // 其它角色不属于作品 Context 契约，不渲染。
+                            }
+                        }
+                    }
                 }
             },
         )
     }
+}
+
+@Composable
+private fun ConfirmDeleteProjectDialog(
+    name: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    SujianDialog(
+        onDismissRequest = onDismiss,
+        title = stringResource(id = R.string.confirm_delete),
+        confirmText = stringResource(id = R.string.action_delete),
+        onConfirm = onConfirm,
+        dismissText = stringResource(id = R.string.action_cancel),
+        onDismiss = onDismiss,
+        dangerous = true,
+        body = {
+            Text(stringResource(R.string.confirm_delete_message, name))
+        },
+    )
 }

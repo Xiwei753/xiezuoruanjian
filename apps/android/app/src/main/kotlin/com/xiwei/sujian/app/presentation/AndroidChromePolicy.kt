@@ -48,8 +48,11 @@ internal object AndroidChromePolicy {
     /**
      * 路由 + 工作区位置 → Core ScreenRole（产品页面角色）。
      *
-     * - Works 非正文 → ProjectWorkspace（作品页顶栏：同步/搜索/设置）
-     * - Works 正文 → Writing（写作区只保留同步/设置，搜索不进入写作区，#597）
+     * #610 评论四：Works 内部分三个页面角色，Core 的 ProjectList 契约
+     * 在 Android 必须有真实消费点：
+     * - 作品列表 → ProjectList（新建作品主操作/作品菜单）
+     * - 章节树 → ProjectWorkspace（同步/搜索/设置 + 卷章动作）
+     * - 正文 → Writing（写作区只保留同步/设置，搜索不进入写作区，#597）
      * - Settings/StarMap/Stats → 对应角色
      */
     fun screenRoleFor(
@@ -61,10 +64,10 @@ internal object AndroidChromePolicy {
             com.xiwei.sujian.app.navigation.SujianRoute.StarMap -> ScreenRoleDto.STAR_MAP
             com.xiwei.sujian.app.navigation.SujianRoute.Stats -> ScreenRoleDto.STATS
             com.xiwei.sujian.app.navigation.SujianRoute.Works ->
-                if (workspaceLocation is WorkspaceLocation.Editor) {
-                    ScreenRoleDto.WRITING
-                } else {
-                    ScreenRoleDto.PROJECT_WORKSPACE
+                when (workspaceLocation) {
+                    is WorkspaceLocation.ProjectList -> ScreenRoleDto.PROJECT_LIST
+                    is WorkspaceLocation.ChapterTree -> ScreenRoleDto.PROJECT_WORKSPACE
+                    is WorkspaceLocation.Editor -> ScreenRoleDto.WRITING
                 }
         }
 
@@ -84,14 +87,17 @@ internal object AndroidChromePolicy {
                 ActionRoleDto.SEARCH -> SujianChromeAction.Search
                 ActionRoleDto.SETTINGS -> SujianChromeAction.Settings
                 // 这些角色在 Core 契约里不属于 HeaderTrailing（Back 在 HeaderLeading，
-                // 新建/删除/重命名在 ListHeader/ItemTrailing/EmptyState/Context），
-                // Android 把它们呈现为对应区域的控件（FAB/列表按钮/菜单项）。
+                // 新建/删除/重命名/上移/下移在 PrimaryAction/ListHeader/ItemTrailing/
+                // EmptyState/Context），Android 把它们呈现为对应区域的控件
+                // （FAB/列表按钮/菜单项）。
                 ActionRoleDto.BACK,
                 ActionRoleDto.CREATE_PROJECT,
                 ActionRoleDto.CREATE_VOLUME,
                 ActionRoleDto.CREATE_CHAPTER,
                 ActionRoleDto.DELETE,
                 ActionRoleDto.RENAME,
+                ActionRoleDto.MOVE_EARLIER,
+                ActionRoleDto.MOVE_LATER,
                 -> null
             }
         }

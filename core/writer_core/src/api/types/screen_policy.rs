@@ -90,6 +90,10 @@ pub enum ActionRoleDto {
     CreateChapter,
     Delete,
     Rename,
+    /// #610 评论四：真实存在的顺序动作（上移）。
+    MoveEarlier,
+    /// #610 评论四：真实存在的顺序动作（下移）。
+    MoveLater,
     Settings,
     Sync,
     #[default]
@@ -105,6 +109,8 @@ impl From<crate::presentation::screen_contract::ActionRole> for ActionRoleDto {
             crate::presentation::screen_contract::ActionRole::CreateChapter => Self::CreateChapter,
             crate::presentation::screen_contract::ActionRole::Delete => Self::Delete,
             crate::presentation::screen_contract::ActionRole::Rename => Self::Rename,
+            crate::presentation::screen_contract::ActionRole::MoveEarlier => Self::MoveEarlier,
+            crate::presentation::screen_contract::ActionRole::MoveLater => Self::MoveLater,
             crate::presentation::screen_contract::ActionRole::Settings => Self::Settings,
             crate::presentation::screen_contract::ActionRole::Sync => Self::Sync,
             crate::presentation::screen_contract::ActionRole::Search => Self::Search,
@@ -121,6 +127,8 @@ impl From<ActionRoleDto> for crate::presentation::screen_contract::ActionRole {
             ActionRoleDto::CreateChapter => Self::CreateChapter,
             ActionRoleDto::Delete => Self::Delete,
             ActionRoleDto::Rename => Self::Rename,
+            ActionRoleDto::MoveEarlier => Self::MoveEarlier,
+            ActionRoleDto::MoveLater => Self::MoveLater,
             ActionRoleDto::Settings => Self::Settings,
             ActionRoleDto::Sync => Self::Sync,
             ActionRoleDto::Search => Self::Search,
@@ -165,6 +173,8 @@ pub enum ActionRegionDto {
     #[default]
     HeaderLeading,
     HeaderTrailing,
+    /// #610 评论四：页面主操作区域（新建作品等）。
+    PrimaryAction,
     ListHeader,
     ItemTrailing,
     Context,
@@ -180,6 +190,9 @@ impl From<crate::presentation::screen_contract::ActionRegion> for ActionRegionDt
             crate::presentation::screen_contract::ActionRegion::HeaderTrailing => {
                 Self::HeaderTrailing
             }
+            crate::presentation::screen_contract::ActionRegion::PrimaryAction => {
+                Self::PrimaryAction
+            }
             crate::presentation::screen_contract::ActionRegion::ListHeader => Self::ListHeader,
             crate::presentation::screen_contract::ActionRegion::ItemTrailing => Self::ItemTrailing,
             crate::presentation::screen_contract::ActionRegion::Context => Self::Context,
@@ -193,6 +206,7 @@ impl From<ActionRegionDto> for crate::presentation::screen_contract::ActionRegio
         match dto {
             ActionRegionDto::HeaderLeading => Self::HeaderLeading,
             ActionRegionDto::HeaderTrailing => Self::HeaderTrailing,
+            ActionRegionDto::PrimaryAction => Self::PrimaryAction,
             ActionRegionDto::ListHeader => Self::ListHeader,
             ActionRegionDto::ItemTrailing => Self::ItemTrailing,
             ActionRegionDto::Context => Self::Context,
@@ -276,6 +290,8 @@ mod tests {
             crate::presentation::screen_contract::ActionRole::CreateChapter,
             crate::presentation::screen_contract::ActionRole::Delete,
             crate::presentation::screen_contract::ActionRole::Rename,
+            crate::presentation::screen_contract::ActionRole::MoveEarlier,
+            crate::presentation::screen_contract::ActionRole::MoveLater,
             crate::presentation::screen_contract::ActionRole::Settings,
             crate::presentation::screen_contract::ActionRole::Sync,
             crate::presentation::screen_contract::ActionRole::Search,
@@ -308,6 +324,7 @@ mod tests {
         let regions = vec![
             crate::presentation::screen_contract::ActionRegion::HeaderLeading,
             crate::presentation::screen_contract::ActionRegion::HeaderTrailing,
+            crate::presentation::screen_contract::ActionRegion::PrimaryAction,
             crate::presentation::screen_contract::ActionRegion::ListHeader,
             crate::presentation::screen_contract::ActionRegion::ItemTrailing,
             crate::presentation::screen_contract::ActionRegion::Context,

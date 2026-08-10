@@ -817,6 +817,7 @@ PRESENTATION_CONTRACT_DTO_WHITELIST = [
     "uniffi.writer_core.ScreenRoleDto",
     "uniffi.writer_core.ActionSlotDto",
     "uniffi.writer_core.ActionRoleDto",
+    "uniffi.writer_core.ActionTargetDto",
     "uniffi.writer_core.ActionRegionDto",
     "uniffi.writer_core.PointerClassDto",
     "uniffi.writer_core.WorkspacePaneModeDto",

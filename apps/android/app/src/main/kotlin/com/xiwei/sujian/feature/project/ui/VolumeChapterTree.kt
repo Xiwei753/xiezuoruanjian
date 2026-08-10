@@ -24,11 +24,15 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
+import com.xiwei.sujian.app.presentation.AndroidWorkspaceActionSpec
+import com.xiwei.sujian.app.presentation.WorkspaceActionSpec
 import com.xiwei.sujian.core.designsystem.component.SujianDialog
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
 import com.xiwei.sujian.core.designsystem.component.SujianListItem
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
+import uniffi.writer_core.ActionRoleDto
+import uniffi.writer_core.ActionTargetDto
 
 sealed class WorkspaceDialogState {
     data object None : WorkspaceDialogState()
@@ -59,12 +63,12 @@ sealed class VolumeChapterListItem {
 }
 
 @Composable
-fun ChapterTreeContent(
+internal fun ChapterTreeContent(
     projectId: String,
     projectRepository: com.xiwei.sujian.feature.project.data.ProjectRepository,
+    workspaceActions: AndroidWorkspaceActionSpec,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
     modifier: Modifier = Modifier,
-    showHeader: Boolean = true,
     onBackToProjects: () -> Unit = {},
 ) {
     val viewModel: ProjectViewModel = viewModel()
@@ -92,26 +96,29 @@ fun ChapterTreeContent(
         }
 
     Column(modifier = modifier) {
-        if (showHeader) {
-            Row(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    SujianIconButton(
-                        onClick = onBackToProjects,
-                        icon = SujianIcons.ArrowBack,
-                        contentDescription = stringResource(id = R.string.back_to_project_list),
-                    )
-                    Text(
-                        stringResource(id = R.string.volume_chapter_title),
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                }
+        // #610 评论四：新建卷按钮按 Core ListHeader 契约存在与否渲染。
+        val hasCreateVolume =
+            workspaceActions.listHeaderActions.any { it.role == ActionRoleDto.CREATE_VOLUME }
+        Row(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SujianIconButton(
+                    onClick = onBackToProjects,
+                    icon = SujianIcons.ArrowBack,
+                    contentDescription = stringResource(id = R.string.back_to_project_list),
+                )
+                Text(
+                    stringResource(id = R.string.volume_chapter_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
+            if (hasCreateVolume) {
                 SujianIconButton(
                     onClick = {
                         dialogState = WorkspaceDialogState.CreateVolume()
@@ -158,6 +165,7 @@ fun ChapterTreeContent(
                         is VolumeChapterListItem.VolumeItem -> {
                             VolumeRow(
                                 volume = item.volume,
+                                workspaceActions = workspaceActions,
                                 onToggleExpand = { viewModel.toggleVolumeExpand(item.volume.id) },
                                 onCreateChapter = {
                                     dialogState = WorkspaceDialogState.CreateChapter(item.volume.id, item.volume.title)
@@ -171,21 +179,37 @@ fun ChapterTreeContent(
                             ChapterRow(
                                 chapter = item.chapter,
                                 isSelected = item.chapter.id == uiState.selectedChapterId,
-                                onSelect = {
-                                    viewModel.selectChapter(item.chapter.id)
-                                    onSelectChapter(item.volumeId, item.chapter.id, item.chapter.title)
-                                },
-                                onMoreActions = {
-                                    dialogState = WorkspaceDialogState.ChapterActions(item.volumeId, item.chapter)
-                                },
+                                actions =
+                                    ChapterRowActions(
+                                        workspaceActions = workspaceActions,
+                                        onSelect = {
+                                            viewModel.selectChapter(item.chapter.id)
+                                            onSelectChapter(item.volumeId, item.chapter.id, item.chapter.title)
+                                        },
+                                        onMoreActions = {
+                                            dialogState =
+                                                WorkspaceDialogState.ChapterActions(item.volumeId, item.chapter)
+                                        },
+                                    ),
                                 volumeId = item.volumeId,
                             )
                         }
                         is VolumeChapterListItem.EmptyChapterHint -> {
-                            Text(
-                                stringResource(id = R.string.chapter_list_empty),
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(start = 48.dp, top = 4.dp, bottom = 4.dp),
+                            // #610 评论四：空态必须真正消费 CreateChapter + Volume + EmptyState 槽位，
+                            // 不能只有"没有章节"的文字而契约声明了动作。
+                            EmptyChapterHint(
+                                volumeId = item.volumeId,
+                                hasCreateChapter =
+                                    workspaceActions.emptyStateActions(ActionTargetDto.VOLUME)
+                                        .any { it.role == ActionRoleDto.CREATE_CHAPTER },
+                                onCreateChapter = {
+                                    val volume = uiState.volumes.find { it.id == item.volumeId }
+                                    dialogState =
+                                        WorkspaceDialogState.CreateChapter(
+                                            item.volumeId,
+                                            volume?.title.orEmpty(),
+                                        )
+                                },
                             )
                         }
                     }
@@ -216,20 +240,27 @@ fun ChapterTreeContent(
             )
         }
         is WorkspaceDialogState.VolumeActions -> {
+            // #610 评论四：菜单项按 Core Context(Volume) spec 渲染，顺序来自 Core order；
+            // Delete 需要确认（契约 requiresConfirmation=true），先进入确认弹窗。
             VolumeActionsDialog(
                 volume = state.volume,
-                onRename = { dialogState = WorkspaceDialogState.RenameVolume(state.volume) },
-                onDelete = {
-                    viewModel.deleteVolume(state.volume.id)
-                    dialogState = WorkspaceDialogState.None
-                },
-                onMoveUp = {
-                    viewModel.moveVolumeUp(state.volume.id)
-                    dialogState = WorkspaceDialogState.None
-                },
-                onMoveDown = {
-                    viewModel.moveVolumeDown(state.volume.id)
-                    dialogState = WorkspaceDialogState.None
+                actions = workspaceActions.contextActions(ActionTargetDto.VOLUME),
+                onAction = { action ->
+                    when (action.role) {
+                        ActionRoleDto.RENAME ->
+                            dialogState = WorkspaceDialogState.RenameVolume(state.volume)
+                        ActionRoleDto.DELETE ->
+                            dialogState = WorkspaceDialogState.DeleteVolume(state.volume)
+                        ActionRoleDto.MOVE_EARLIER -> {
+                            viewModel.moveVolumeUp(state.volume.id)
+                            dialogState = WorkspaceDialogState.None
+                        }
+                        ActionRoleDto.MOVE_LATER -> {
+                            viewModel.moveVolumeDown(state.volume.id)
+                            dialogState = WorkspaceDialogState.None
+                        }
+                        else -> {}
+                    }
                 },
                 onDismiss = { dialogState = WorkspaceDialogState.None },
             )
@@ -246,20 +277,26 @@ fun ChapterTreeContent(
             )
         }
         is WorkspaceDialogState.ChapterActions -> {
+            // #610 评论四：菜单项按 Core Context(Chapter) spec 渲染，顺序来自 Core order。
             ChapterActionsDialog(
                 chapter = state.chapter,
-                onRename = { dialogState = WorkspaceDialogState.RenameChapter(state.volumeId, state.chapter) },
-                onDelete = {
-                    viewModel.deleteChapter(state.volumeId, state.chapter.id)
-                    dialogState = WorkspaceDialogState.None
-                },
-                onMoveUp = {
-                    viewModel.moveChapterUp(state.volumeId, state.chapter.id)
-                    dialogState = WorkspaceDialogState.None
-                },
-                onMoveDown = {
-                    viewModel.moveChapterDown(state.volumeId, state.chapter.id)
-                    dialogState = WorkspaceDialogState.None
+                actions = workspaceActions.contextActions(ActionTargetDto.CHAPTER),
+                onAction = { action ->
+                    when (action.role) {
+                        ActionRoleDto.RENAME ->
+                            dialogState = WorkspaceDialogState.RenameChapter(state.volumeId, state.chapter)
+                        ActionRoleDto.DELETE ->
+                            dialogState = WorkspaceDialogState.DeleteChapter(state.volumeId, state.chapter)
+                        ActionRoleDto.MOVE_EARLIER -> {
+                            viewModel.moveChapterUp(state.volumeId, state.chapter.id)
+                            dialogState = WorkspaceDialogState.None
+                        }
+                        ActionRoleDto.MOVE_LATER -> {
+                            viewModel.moveChapterDown(state.volumeId, state.chapter.id)
+                            dialogState = WorkspaceDialogState.None
+                        }
+                        else -> {}
+                    }
                 },
                 onDismiss = { dialogState = WorkspaceDialogState.None },
             )
@@ -299,21 +336,125 @@ fun ChapterTreeContent(
 }
 
 @Composable
-fun VolumeChapterTree(
-    projectId: String,
-    projectRepository: com.xiwei.sujian.feature.project.data.ProjectRepository,
-    onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
+internal fun VolumeRow(
+    volume: VolumeUiModel,
+    workspaceActions: AndroidWorkspaceActionSpec,
+    onToggleExpand: () -> Unit,
+    onCreateChapter: () -> Unit,
+    onMoreActions: () -> Unit,
     modifier: Modifier = Modifier,
-    onBackToProjects: () -> Unit = {},
 ) {
-    ChapterTreeContent(
-        projectId = projectId,
-        projectRepository = projectRepository,
-        onSelectChapter = onSelectChapter,
-        showHeader = true,
-        onBackToProjects = onBackToProjects,
+    // #610 评论四：行内按钮只按 Core 契约渲染：
+    // - CreateChapter + Volume + ItemTrailing → 新建章节图标；
+    // - Context(Volume) 非空 → 更多菜单图标。
+    val hasCreateChapter =
+        workspaceActions.itemTrailingActions(ActionTargetDto.VOLUME)
+            .any { it.role == ActionRoleDto.CREATE_CHAPTER }
+    val hasContextActions = workspaceActions.contextActions(ActionTargetDto.VOLUME).isNotEmpty()
+    SujianListItem(
+        headline = volume.title,
+        leadingIcon = if (volume.isExpanded) SujianIcons.KeyboardArrowDown else SujianIcons.KeyboardArrowRight,
+        onClick = onToggleExpand,
+        semanticId = SujianSemanticIds.volume(volume.id),
+        trailingContent = {
+            Row {
+                if (hasCreateChapter) {
+                    SujianIconButton(
+                        onClick = onCreateChapter,
+                        icon = SujianIcons.Add,
+                        contentDescription = stringResource(id = R.string.action_new_chapter),
+                        semanticId = SujianSemanticIds.createChapter(volume.id),
+                    )
+                }
+                if (hasContextActions) {
+                    SujianIconButton(
+                        onClick = onMoreActions,
+                        icon = SujianIcons.MoreVert,
+                        contentDescription = stringResource(id = R.string.action_more),
+                    )
+                }
+            }
+        },
         modifier = modifier,
     )
+}
+
+/** ChapterRow 的 spec 与行内回调 — 打包传递，避免函数参数超出门禁阈值。 */
+internal class ChapterRowActions(
+    val workspaceActions: AndroidWorkspaceActionSpec,
+    val onSelect: () -> Unit,
+    val onMoreActions: () -> Unit,
+)
+
+@Composable
+internal fun ChapterRow(
+    chapter: ChapterUiModel,
+    isSelected: Boolean,
+    actions: ChapterRowActions,
+    modifier: Modifier = Modifier,
+    volumeId: String = "",
+) {
+    // #610 评论四：更多菜单按钮按 Core Context(Chapter) 契约存在与否渲染。
+    val hasContextActions = actions.workspaceActions.contextActions(ActionTargetDto.CHAPTER).isNotEmpty()
+    SujianListItem(
+        headline = chapter.title,
+        supportingText =
+            if (chapter.wordCount > 0) {
+                stringResource(
+                    R.string.word_count_format,
+                    chapter.wordCount,
+                )
+            } else {
+                null
+            },
+        selected = isSelected,
+        onClick = actions.onSelect,
+        semanticId = if (volumeId.isNotEmpty()) SujianSemanticIds.chapter(volumeId, chapter.id) else null,
+        trailingContent = {
+            if (hasContextActions) {
+                SujianIconButton(
+                    onClick = actions.onMoreActions,
+                    icon = SujianIcons.MoreVert,
+                    contentDescription = stringResource(id = R.string.action_more),
+                )
+            }
+        },
+        modifier = modifier,
+    )
+}
+
+/**
+ * 空卷提示行（#610 评论四）：真实消费 CreateChapter + Volume + EmptyState 槽位 —
+ * 契约声明了"空态新建章节"动作，这里就必须画出来，不能只有文字。
+ */
+@Composable
+private fun EmptyChapterHint(
+    volumeId: String,
+    hasCreateChapter: Boolean,
+    onCreateChapter: () -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 48.dp, top = 4.dp, bottom = 4.dp, end = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            stringResource(id = R.string.chapter_list_empty),
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
+        )
+        if (hasCreateChapter) {
+            SujianIconButton(
+                onClick = onCreateChapter,
+                icon = SujianIcons.Add,
+                contentDescription = stringResource(id = R.string.action_new_chapter),
+                semanticId = SujianSemanticIds.createChapterInEmpty(volumeId),
+            )
+        }
+    }
 }
 
 @Composable
@@ -388,10 +529,8 @@ private fun CreateChapterDialog(
 @Composable
 private fun VolumeActionsDialog(
     volume: VolumeUiModel,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
+    actions: List<WorkspaceActionSpec>,
+    onAction: (WorkspaceActionSpec) -> Unit,
     onDismiss: () -> Unit,
 ) {
     SujianDialog(
@@ -401,22 +540,24 @@ private fun VolumeActionsDialog(
         onConfirm = {},
         body = {
             Column {
-                SujianListItem(
-                    headline = stringResource(id = R.string.action_rename),
-                    onClick = onRename,
-                )
-                SujianListItem(
-                    headline = stringResource(id = R.string.action_move_up),
-                    onClick = onMoveUp,
-                )
-                SujianListItem(
-                    headline = stringResource(id = R.string.action_move_down),
-                    onClick = onMoveDown,
-                )
-                SujianListItem(
-                    headline = stringResource(id = R.string.action_delete),
-                    onClick = onDelete,
-                )
+                // #610 评论四：只按 Core Context(Volume) spec 渲染菜单项，顺序来自 Core order；
+                // 角色→业务回调由调用方绑定（本层只做角色→菜单项渲染）。
+                actions.forEach { action ->
+                    val labelRes =
+                        when (action.role) {
+                            ActionRoleDto.RENAME -> R.string.action_rename
+                            ActionRoleDto.MOVE_EARLIER -> R.string.action_move_up
+                            ActionRoleDto.MOVE_LATER -> R.string.action_move_down
+                            ActionRoleDto.DELETE -> R.string.action_delete
+                            else -> null
+                        }
+                    if (labelRes != null) {
+                        SujianListItem(
+                            headline = stringResource(id = labelRes),
+                            onClick = { onAction(action) },
+                        )
+                    }
+                }
             }
         },
     )
@@ -425,10 +566,8 @@ private fun VolumeActionsDialog(
 @Composable
 private fun ChapterActionsDialog(
     chapter: ChapterUiModel,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
+    actions: List<WorkspaceActionSpec>,
+    onAction: (WorkspaceActionSpec) -> Unit,
     onDismiss: () -> Unit,
 ) {
     SujianDialog(
@@ -438,22 +577,24 @@ private fun ChapterActionsDialog(
         onConfirm = {},
         body = {
             Column {
-                SujianListItem(
-                    headline = stringResource(id = R.string.action_rename),
-                    onClick = onRename,
-                )
-                SujianListItem(
-                    headline = stringResource(id = R.string.action_move_up),
-                    onClick = onMoveUp,
-                )
-                SujianListItem(
-                    headline = stringResource(id = R.string.action_move_down),
-                    onClick = onMoveDown,
-                )
-                SujianListItem(
-                    headline = stringResource(id = R.string.action_delete),
-                    onClick = onDelete,
-                )
+                // #610 评论四：只按 Core Context(Chapter) spec 渲染菜单项，顺序来自 Core order；
+                // 角色→业务回调由调用方绑定（本层只做角色→菜单项渲染）。
+                actions.forEach { action ->
+                    val labelRes =
+                        when (action.role) {
+                            ActionRoleDto.RENAME -> R.string.action_rename
+                            ActionRoleDto.MOVE_EARLIER -> R.string.action_move_up
+                            ActionRoleDto.MOVE_LATER -> R.string.action_move_down
+                            ActionRoleDto.DELETE -> R.string.action_delete
+                            else -> null
+                        }
+                    if (labelRes != null) {
+                        SujianListItem(
+                            headline = stringResource(id = labelRes),
+                            onClick = { onAction(action) },
+                        )
+                    }
+                }
             }
         },
     )
@@ -509,71 +650,5 @@ private fun ConfirmDeleteDialog(
         body = {
             Text(stringResource(R.string.confirm_delete_message, name))
         },
-    )
-}
-
-@Composable
-fun VolumeRow(
-    volume: VolumeUiModel,
-    onToggleExpand: () -> Unit,
-    onCreateChapter: () -> Unit,
-    onMoreActions: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    SujianListItem(
-        headline = volume.title,
-        leadingIcon = if (volume.isExpanded) SujianIcons.KeyboardArrowDown else SujianIcons.KeyboardArrowRight,
-        onClick = onToggleExpand,
-        semanticId = SujianSemanticIds.volume(volume.id),
-        trailingContent = {
-            Row {
-                SujianIconButton(
-                    onClick = onCreateChapter,
-                    icon = SujianIcons.Add,
-                    contentDescription = stringResource(id = R.string.action_new_chapter),
-                    semanticId = SujianSemanticIds.createChapter(volume.id),
-                )
-                SujianIconButton(
-                    onClick = onMoreActions,
-                    icon = SujianIcons.MoreVert,
-                    contentDescription = stringResource(id = R.string.action_more),
-                )
-            }
-        },
-        modifier = modifier,
-    )
-}
-
-@Composable
-fun ChapterRow(
-    chapter: ChapterUiModel,
-    isSelected: Boolean,
-    onSelect: () -> Unit,
-    onMoreActions: () -> Unit,
-    modifier: Modifier = Modifier,
-    volumeId: String = "",
-) {
-    SujianListItem(
-        headline = chapter.title,
-        supportingText =
-            if (chapter.wordCount > 0) {
-                stringResource(
-                    R.string.word_count_format,
-                    chapter.wordCount,
-                )
-            } else {
-                null
-            },
-        selected = isSelected,
-        onClick = onSelect,
-        semanticId = if (volumeId.isNotEmpty()) SujianSemanticIds.chapter(volumeId, chapter.id) else null,
-        trailingContent = {
-            SujianIconButton(
-                onClick = onMoreActions,
-                icon = SujianIcons.MoreVert,
-                contentDescription = stringResource(id = R.string.action_more),
-            )
-        },
-        modifier = modifier,
     )
 }

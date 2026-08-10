@@ -94,8 +94,9 @@ class AndroidChromePolicyTest {
 
     @Test
     fun `route to screen role mapping`() {
+        // #610 评论四：Works 内部分三个页面角色，Core ProjectList 契约必须有真实消费点。
         assertEquals(
-            ScreenRoleDto.PROJECT_WORKSPACE,
+            ScreenRoleDto.PROJECT_LIST,
             AndroidChromePolicy.screenRoleFor(SujianRoute.Works, WorkspaceLocation.ProjectList),
         )
         assertEquals(
@@ -248,7 +249,7 @@ class AndroidChromePolicyTest {
 
     @Test
     fun `non header roles never render as top bar icons`() {
-        // 即使契约里混入非 HeaderTrailing 角色（Back/新建/删除/重命名），
+        // 即使契约里混入非 HeaderTrailing 角色（Back/新建/删除/重命名/上移/下移），
         // 它们也只映射到各自区域的控件，绝不进顶栏——这是控件映射不是过滤。
         val policy =
             policy(
@@ -257,6 +258,8 @@ class AndroidChromePolicyTest {
                     slot(ActionRoleDto.BACK, ActionRegionDto.HEADER_LEADING, 10),
                     slot(ActionRoleDto.DELETE, ActionRegionDto.CONTEXT, 10, requiresConfirmation = true),
                     slot(ActionRoleDto.RENAME, ActionRegionDto.CONTEXT, 20),
+                    slot(ActionRoleDto.MOVE_EARLIER, ActionRegionDto.CONTEXT, 30),
+                    slot(ActionRoleDto.MOVE_LATER, ActionRegionDto.CONTEXT, 40),
                     slot(ActionRoleDto.CREATE_VOLUME, ActionRegionDto.LIST_HEADER, 10),
                     slot(ActionRoleDto.CREATE_CHAPTER, ActionRegionDto.ITEM_TRAILING, 10),
                     slot(ActionRoleDto.SYNC, ActionRegionDto.HEADER_TRAILING, 10),

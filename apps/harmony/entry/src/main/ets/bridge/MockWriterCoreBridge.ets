@@ -840,7 +840,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
         ]
       case ScreenRole.ProjectList:
         return [
-          { role: ActionRole.CreateProject, target: ActionTarget.Project, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
+          // #610 评论四：新建作品是页面主操作（PrimaryAction）。
+          { role: ActionRole.CreateProject, target: ActionTarget.Project, region: ActionRegion.PrimaryAction, order: 10, requiresConfirmation: false },
           { role: ActionRole.Delete, target: ActionTarget.Project, region: ActionRegion.Context, order: 10, requiresConfirmation: true },
           { role: ActionRole.Rename, target: ActionTarget.Project, region: ActionRegion.Context, order: 20, requiresConfirmation: false }
         ]
@@ -855,7 +856,12 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
           { role: ActionRole.Delete, target: ActionTarget.Volume, region: ActionRegion.Context, order: 10, requiresConfirmation: true },
           { role: ActionRole.Delete, target: ActionTarget.Chapter, region: ActionRegion.Context, order: 20, requiresConfirmation: true },
           { role: ActionRole.Rename, target: ActionTarget.Volume, region: ActionRegion.Context, order: 30, requiresConfirmation: false },
-          { role: ActionRole.Rename, target: ActionTarget.Chapter, region: ActionRegion.Context, order: 40, requiresConfirmation: false }
+          { role: ActionRole.Rename, target: ActionTarget.Chapter, region: ActionRegion.Context, order: 40, requiresConfirmation: false },
+          // #610 评论四：卷/章节的真实顺序动作（上移/下移）。
+          { role: ActionRole.MoveEarlier, target: ActionTarget.Volume, region: ActionRegion.Context, order: 50, requiresConfirmation: false },
+          { role: ActionRole.MoveLater, target: ActionTarget.Volume, region: ActionRegion.Context, order: 60, requiresConfirmation: false },
+          { role: ActionRole.MoveEarlier, target: ActionTarget.Chapter, region: ActionRegion.Context, order: 70, requiresConfirmation: false },
+          { role: ActionRole.MoveLater, target: ActionTarget.Chapter, region: ActionRegion.Context, order: 80, requiresConfirmation: false }
         ]
       case ScreenRole.Writing:
         return [

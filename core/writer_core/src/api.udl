@@ -1461,6 +1461,8 @@ enum ActionRoleDto {
     "CreateChapter",
     "Delete",
     "Rename",
+    "MoveEarlier",
+    "MoveLater",
     "Settings",
     "Sync",
     "Search"
@@ -1477,6 +1479,7 @@ enum ActionTargetDto {
 enum ActionRegionDto {
     "HeaderLeading",
     "HeaderTrailing",
+    "PrimaryAction",
     "ListHeader",
     "ItemTrailing",
     "Context",

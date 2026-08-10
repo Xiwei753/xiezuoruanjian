@@ -39,6 +39,8 @@ object SujianSemanticIds {
     const val WorkspaceCreateVolume = "workspace.volume.create"
     const val WorkspaceCreateChapter = "workspace.chapter.create"
     fun createChapter(volumeId: String) = "workspace.chapter.create.$volumeId"
+    /** 空态新建章节（#610 评论四：EmptyState 槽位的真实消费点，与行尾 ItemTrailing 区分）。 */
+    fun createChapterInEmpty(volumeId: String) = "workspace.chapter.create.empty.$volumeId"
     const val ChapterTitleInput = "workspace.chapter.title.input"
     const val DialogConfirm = "dialog.confirm"
     const val DialogCancel = "dialog.cancel"

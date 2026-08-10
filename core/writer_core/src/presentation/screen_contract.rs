@@ -44,6 +44,8 @@ pub enum PaneRole {
 ///
 /// 只保留当前产品真实存在的动作（#610 评论二：`Save` 因正文自动保存、
 /// `Sort` 因未实现而不再声明，避免 Core 与平台层出现"动作是否存在"的第二真相）。
+/// #610 评论四：卷/章节的上移/下移是真实功能，用平台无关的
+/// `MoveEarlier / MoveLater` 表达（不恢复笼统的 `Sort`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActionRole {
     Back,
@@ -52,6 +54,10 @@ pub enum ActionRole {
     CreateChapter,
     Delete,
     Rename,
+    /// 顺序动作：排到更前（Android 显示文字仍可为"上移"）。
+    MoveEarlier,
+    /// 顺序动作：排到更后（Android 显示文字仍可为"下移"）。
+    MoveLater,
     Settings,
     Sync,
     Search,
@@ -80,6 +86,10 @@ pub enum ActionRegion {
     HeaderLeading,
     /// 页头右侧（设置/搜索/同步等，顺序由 `ActionSlot.order` 表达）。
     HeaderTrailing,
+    /// 页面主操作区域（#610 评论四）：新建作品等主导航动作。
+    /// Android compact 可画成 FAB，宽窗口按平台 M3 映射成合适的主操作控件；
+    /// Core 不出现 `FloatingActionButton` 这类平台名。
+    PrimaryAction,
     /// 列表头部区域（新建卷等）。
     ListHeader,
     /// 列表项尾部（新建章节等）。
@@ -131,10 +141,12 @@ pub fn resolve_screen_policy(screen_role: ScreenRole) -> Vec<ActionSlot> {
             },
         ],
         ScreenRole::ProjectList => vec![
+            // #610 评论四：新建作品是页面主操作（PrimaryAction），
+            // 不再声明为 HeaderTrailing 而实际画在右下角。
             ActionSlot {
                 role: ActionRole::CreateProject,
                 target: ActionTarget::Project,
-                region: ActionRegion::HeaderTrailing,
+                region: ActionRegion::PrimaryAction,
                 order: 10,
                 requires_confirmation: false,
             },
@@ -158,6 +170,8 @@ pub fn resolve_screen_policy(screen_role: ScreenRole) -> Vec<ActionSlot> {
         // Material3 actions 按代码顺序从左往右摆，因此 order 升序为 同步 → 搜索 → 设置。
         // #610 评论二：Sort 未实现，不再在共享契约中声明；
         // Delete/Rename 各自通过 ActionTarget 区分卷与章节。
+        // #610 评论四：卷/章节的上移/下移是真实功能，以 MoveEarlier/MoveLater
+        // 进入 Context 区域（不恢复笼统的 Sort）。
         ScreenRole::ProjectWorkspace => vec![
             ActionSlot {
                 role: ActionRole::Sync,
@@ -227,6 +241,35 @@ pub fn resolve_screen_policy(screen_role: ScreenRole) -> Vec<ActionSlot> {
                 target: ActionTarget::Chapter,
                 region: ActionRegion::Context,
                 order: 40,
+                requires_confirmation: false,
+            },
+            // #610 评论四：卷/章节的真实顺序动作（跨端语义 MoveEarlier/MoveLater）。
+            ActionSlot {
+                role: ActionRole::MoveEarlier,
+                target: ActionTarget::Volume,
+                region: ActionRegion::Context,
+                order: 50,
+                requires_confirmation: false,
+            },
+            ActionSlot {
+                role: ActionRole::MoveLater,
+                target: ActionTarget::Volume,
+                region: ActionRegion::Context,
+                order: 60,
+                requires_confirmation: false,
+            },
+            ActionSlot {
+                role: ActionRole::MoveEarlier,
+                target: ActionTarget::Chapter,
+                region: ActionRegion::Context,
+                order: 70,
+                requires_confirmation: false,
+            },
+            ActionSlot {
+                role: ActionRole::MoveLater,
+                target: ActionTarget::Chapter,
+                region: ActionRegion::Context,
+                order: 80,
                 requires_confirmation: false,
             },
         ],

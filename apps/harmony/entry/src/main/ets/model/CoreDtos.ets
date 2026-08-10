@@ -613,6 +613,10 @@ export enum ActionRole {
   CreateChapter = 'CreateChapter',
   Delete = 'Delete',
   Rename = 'Rename',
+  // #610 评论四：真实存在的顺序动作（上移）。
+  MoveEarlier = 'MoveEarlier',
+  // #610 评论四：真实存在的顺序动作（下移）。
+  MoveLater = 'MoveLater',
   Settings = 'Settings',
   Sync = 'Sync',
   Search = 'Search'
@@ -629,6 +633,8 @@ export enum ActionTarget {
 export enum ActionRegion {
   HeaderLeading = 'HeaderLeading',
   HeaderTrailing = 'HeaderTrailing',
+  // #610 评论四：页面主操作区域（新建作品等）。
+  PrimaryAction = 'PrimaryAction',
   ListHeader = 'ListHeader',
   ItemTrailing = 'ItemTrailing',
   Context = 'Context',

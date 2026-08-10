@@ -25,6 +25,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
+import com.xiwei.sujian.app.presentation.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.feature.editor.ui.ChapterSwitchResult
 import com.xiwei.sujian.feature.editor.ui.EditorViewModel
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
@@ -50,9 +51,10 @@ import kotlinx.coroutines.launch
  */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
-fun ProjectWorkspaceScreen(
+internal fun ProjectWorkspaceScreen(
     appState: SujianAppState,
     workspaceNavState: ProjectNavigationState,
+    workspaceActions: AndroidWorkspaceActionSpec,
     modifier: Modifier = Modifier,
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -139,6 +141,7 @@ fun ProjectWorkspaceScreen(
             AnimatedPane {
                 ProjectListContent(
                     appState = appState,
+                    workspaceActions = workspaceActions,
                     onSelectProject = { projectId, projectTitle ->
                         appState.selectProject(projectId, projectTitle)
                         coroutineScope.launch {
@@ -154,6 +157,7 @@ fun ProjectWorkspaceScreen(
                     ChapterTreeContent(
                         projectId = currentProjectId,
                         projectRepository = projectRepository,
+                        workspaceActions = workspaceActions,
                         onSelectChapter = { volumeId, chapterId, chapterTitle ->
                             // #595 一：事务成功后才提交业务选择和 Navigator —
                             // 保存/加载失败时 Navigator 完全不变化，不再"先导航再回滚"。
