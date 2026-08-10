@@ -69,7 +69,6 @@ internal fun ChapterTreeContent(
     workspaceActions: AndroidWorkspaceActionSpec,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
     modifier: Modifier = Modifier,
-    onBackToProjects: () -> Unit = {},
 ) {
     val viewModel: ProjectViewModel = viewModel()
     viewModel.initialize(projectId, projectRepository)
@@ -107,17 +106,10 @@ internal fun ChapterTreeContent(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SujianIconButton(
-                    onClick = onBackToProjects,
-                    icon = SujianIcons.ArrowBack,
-                    contentDescription = stringResource(id = R.string.back_to_project_list),
-                )
-                Text(
-                    stringResource(id = R.string.volume_chapter_title),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-            }
+            Text(
+                stringResource(id = R.string.volume_chapter_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
             if (hasCreateVolume) {
                 SujianIconButton(
                     onClick = {
@@ -250,7 +242,12 @@ internal fun ChapterTreeContent(
                         ActionRoleDto.RENAME ->
                             dialogState = WorkspaceDialogState.RenameVolume(state.volume)
                         ActionRoleDto.DELETE ->
-                            dialogState = WorkspaceDialogState.DeleteVolume(state.volume)
+                            if (action.requiresConfirmation) {
+                                dialogState = WorkspaceDialogState.DeleteVolume(state.volume)
+                            } else {
+                                viewModel.deleteVolume(state.volume.id)
+                                dialogState = WorkspaceDialogState.None
+                            }
                         ActionRoleDto.MOVE_EARLIER -> {
                             viewModel.moveVolumeUp(state.volume.id)
                             dialogState = WorkspaceDialogState.None
@@ -286,7 +283,12 @@ internal fun ChapterTreeContent(
                         ActionRoleDto.RENAME ->
                             dialogState = WorkspaceDialogState.RenameChapter(state.volumeId, state.chapter)
                         ActionRoleDto.DELETE ->
-                            dialogState = WorkspaceDialogState.DeleteChapter(state.volumeId, state.chapter)
+                            if (action.requiresConfirmation) {
+                                dialogState = WorkspaceDialogState.DeleteChapter(state.volumeId, state.chapter)
+                            } else {
+                                viewModel.deleteChapter(state.volumeId, state.chapter.id)
+                                dialogState = WorkspaceDialogState.None
+                            }
                         ActionRoleDto.MOVE_EARLIER -> {
                             viewModel.moveChapterUp(state.volumeId, state.chapter.id)
                             dialogState = WorkspaceDialogState.None

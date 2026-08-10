@@ -840,6 +840,11 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
         ]
       case ScreenRole.ProjectList:
         return [
+          // #610 评论五：作品列表顶栏右侧与 ProjectWorkspace 一致，
+          // 同步 / 搜索 / 设置（order 升序）。
+          { role: ActionRole.Sync, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
+          { role: ActionRole.Search, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
+          { role: ActionRole.Settings, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false },
           // #610 评论四：新建作品是页面主操作（PrimaryAction）。
           { role: ActionRole.CreateProject, target: ActionTarget.Project, region: ActionRegion.PrimaryAction, order: 10, requiresConfirmation: false },
           { role: ActionRole.Delete, target: ActionTarget.Project, region: ActionRegion.Context, order: 10, requiresConfirmation: true },
@@ -847,6 +852,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
         ]
       case ScreenRole.ProjectWorkspace:
         return [
+          // #610 评论五：作品工作区顶栏左侧返回动作。
+          { role: ActionRole.Back, target: ActionTarget.App, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false },
           { role: ActionRole.Sync, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
           { role: ActionRole.Search, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
           { role: ActionRole.Settings, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false },

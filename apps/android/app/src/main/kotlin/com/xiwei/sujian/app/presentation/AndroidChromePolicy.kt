@@ -125,8 +125,10 @@ internal object AndroidChromePolicy {
                     // 设置页返回来自 Core 的 Back 槽位（HeaderLeading）。
                     PresentationContractBridge.hasRoleAtLeading(screenPolicy, ActionRoleDto.BACK)
                 ScreenRoleDto.PROJECT_WORKSPACE, ScreenRoleDto.WRITING ->
-                    // 工作区返回是导航历史状态（Android 动态），由唯一 navigator 决定。
-                    canWorkspaceNavigateBack
+                    // #610 评论五：Core 决定"这个页面允许出现返回动作"（HeaderLeading 有 Back 槽位），
+                    // navigator 决定"当前是否真的有历史可返回"。两者同时满足才显示返回。
+                    PresentationContractBridge.hasRoleAtLeading(screenPolicy, ActionRoleDto.BACK) &&
+                        canWorkspaceNavigateBack
                 else -> false
             }
         val showPrimaryNavigation =

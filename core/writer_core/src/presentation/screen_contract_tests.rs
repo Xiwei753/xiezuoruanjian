@@ -260,6 +260,7 @@ fn test_app_actions_have_app_target() {
     // #610 评论二：Settings/Search/Sync/Back 这类没有业务对象的动作使用 App。
     for role in [
         ScreenRole::Home,
+        ScreenRole::ProjectList,
         ScreenRole::ProjectWorkspace,
         ScreenRole::Writing,
         ScreenRole::Sync,
@@ -362,4 +363,38 @@ fn test_slot_order_is_product_level_not_shell_dependent() {
     // #610 评论四：新建作品位于页面主操作区域（Android compact 画成 FAB）。
     assert_eq!(create.region, ActionRegion::PrimaryAction);
     assert_eq!(create.order, 10);
+}
+
+#[test]
+fn test_project_list_has_header_actions() {
+    // #610 评论五：作品列表顶栏右侧与 ProjectWorkspace 一致。
+    let slots = resolve_screen_policy(ScreenRole::ProjectList);
+    let header: Vec<_> = slots
+        .iter()
+        .filter(|s| s.region == ActionRegion::HeaderTrailing)
+        .collect();
+    assert_eq!(header.len(), 3);
+    assert_eq!(header[0].role, ActionRole::Sync);
+    assert_eq!(header[0].order, 10);
+    assert_eq!(header[1].role, ActionRole::Search);
+    assert_eq!(header[1].order, 20);
+    assert_eq!(header[2].role, ActionRole::Settings);
+    assert_eq!(header[2].order, 30);
+    assert!(header.windows(2).all(|w| w[0].order < w[1].order));
+}
+
+#[test]
+fn test_project_list_full_slot_count() {
+    // #610 评论五：ProjectList 总槽位 = 3 顶栏 + CreateProject + Delete + Rename。
+    let slots = resolve_screen_policy(ScreenRole::ProjectList);
+    assert_eq!(slots.len(), 6);
+}
+
+#[test]
+fn test_workspace_has_back_leading() {
+    // #610 评论五：作品工作区顶栏左侧返回动作。
+    let slots = resolve_screen_policy(ScreenRole::ProjectWorkspace);
+    let back = slots.iter().find(|s| s.role == ActionRole::Back).unwrap();
+    assert_eq!(back.region, ActionRegion::HeaderLeading);
+    assert_eq!(back.target, ActionTarget::App);
 }

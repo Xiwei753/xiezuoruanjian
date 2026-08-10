@@ -141,6 +141,29 @@ pub fn resolve_screen_policy(screen_role: ScreenRole) -> Vec<ActionSlot> {
             },
         ],
         ScreenRole::ProjectList => vec![
+            // #610 评论五：作品列表顶栏右侧与 ProjectWorkspace 一致，
+            // 同步 / 搜索 / 设置（order 升序）。
+            ActionSlot {
+                role: ActionRole::Sync,
+                target: ActionTarget::App,
+                region: ActionRegion::HeaderTrailing,
+                order: 10,
+                requires_confirmation: false,
+            },
+            ActionSlot {
+                role: ActionRole::Search,
+                target: ActionTarget::App,
+                region: ActionRegion::HeaderTrailing,
+                order: 20,
+                requires_confirmation: false,
+            },
+            ActionSlot {
+                role: ActionRole::Settings,
+                target: ActionTarget::App,
+                region: ActionRegion::HeaderTrailing,
+                order: 30,
+                requires_confirmation: false,
+            },
             // #610 评论四：新建作品是页面主操作（PrimaryAction），
             // 不再声明为 HeaderTrailing 而实际画在右下角。
             ActionSlot {
@@ -173,6 +196,14 @@ pub fn resolve_screen_policy(screen_role: ScreenRole) -> Vec<ActionSlot> {
         // #610 评论四：卷/章节的上移/下移是真实功能，以 MoveEarlier/MoveLater
         // 进入 Context 区域（不恢复笼统的 Sort）。
         ScreenRole::ProjectWorkspace => vec![
+            // #610 评论五：作品工作区顶栏左侧返回动作。
+            ActionSlot {
+                role: ActionRole::Back,
+                target: ActionTarget::App,
+                region: ActionRegion::HeaderLeading,
+                order: 10,
+                requires_confirmation: false,
+            },
             ActionSlot {
                 role: ActionRole::Sync,
                 target: ActionTarget::App,

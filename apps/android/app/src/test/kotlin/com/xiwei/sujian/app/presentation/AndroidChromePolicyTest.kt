@@ -47,11 +47,15 @@ class AndroidChromePolicyTest {
         slots: List<ActionSlotDto>,
     ): ScreenPolicyDto = ScreenPolicyDto(screenRole = screenRole, actionSlots = slots)
 
-    /** 作品页契约：HeaderTrailing = 同步(10)/搜索(20)/设置(30)，无 Sort（#610 评论二）。 */
+    /**
+     * 作品页契约（#610 评论五 / 任务 1 后）：HeaderLeading=Back，HeaderTrailing = 同步(10)/搜索(20)/设置(30)。
+     * Back 槽位由 Core 决定，是否真的显示返回还需 Android navigator 历史可回退。
+     */
     private fun projectWorkspacePolicy(): ScreenPolicyDto =
         policy(
             ScreenRoleDto.PROJECT_WORKSPACE,
             listOf(
+                slot(ActionRoleDto.BACK, ActionRegionDto.HEADER_LEADING, 10),
                 slot(ActionRoleDto.SETTINGS, ActionRegionDto.HEADER_TRAILING, 30),
                 slot(ActionRoleDto.SEARCH, ActionRegionDto.HEADER_TRAILING, 20),
                 slot(ActionRoleDto.SYNC, ActionRegionDto.HEADER_TRAILING, 10),
@@ -198,7 +202,8 @@ class AndroidChromePolicyTest {
     // ---- 返回箭头与动作同源（评论问题三） ----
 
     @Test
-    fun `works chapter tree shows back when workspace can navigate back`() {
+    fun `works chapter tree shows back when Core has back and workspace can navigate back`() {
+        // #610 评论五：showBack = Core HeaderLeading 有 Back && canWorkspaceNavigateBack。
         val spec =
             resolve(
                 ScreenRoleDto.PROJECT_WORKSPACE,
@@ -209,6 +214,60 @@ class AndroidChromePolicyTest {
         assertTrue(spec.showBack)
         assertTrue(spec.showPrimaryNavigation)
         assertFalse(spec.appBarTransparent)
+    }
+
+    @Test
+    fun `show back requires both core back slot and navigation history`() {
+        // #610 评论五：showBack = Core HeaderLeading 有 Back && canWorkspaceNavigateBack。
+        // 四个反例合并测试，覆盖 ProjectWorkspace / Writing × Core无Back / navigator无历史。
+        // ProjectWorkspace：Core 有 Back 但 navigator 无历史 → 不显示。
+        assertFalse(
+            resolve(
+                ScreenRoleDto.PROJECT_WORKSPACE,
+                projectWorkspacePolicy(),
+                location = WorkspaceLocation.ChapterTree("p1"),
+                canBack = false,
+            ).showBack,
+        )
+        // ProjectWorkspace：navigator 可回退但 Core 无 Back → 不显示。
+        assertFalse(
+            resolve(
+                ScreenRoleDto.PROJECT_WORKSPACE,
+                policy(
+                    ScreenRoleDto.PROJECT_WORKSPACE,
+                    listOf(
+                        slot(ActionRoleDto.SYNC, ActionRegionDto.HEADER_TRAILING, 10),
+                        slot(ActionRoleDto.SETTINGS, ActionRegionDto.HEADER_TRAILING, 30),
+                    ),
+                ),
+                location = WorkspaceLocation.ChapterTree("p1"),
+                canBack = true,
+            ).showBack,
+        )
+        // Writing：Core 有 Back 但 navigator 无历史 → 不显示。
+        assertFalse(
+            resolve(
+                ScreenRoleDto.WRITING,
+                writingPolicy(),
+                location = WorkspaceLocation.Editor("p1", "v1", "c1"),
+                canBack = false,
+            ).showBack,
+        )
+        // Writing：navigator 可回退但 Core 无 Back → 不显示。
+        assertFalse(
+            resolve(
+                ScreenRoleDto.WRITING,
+                policy(
+                    ScreenRoleDto.WRITING,
+                    listOf(
+                        slot(ActionRoleDto.SYNC, ActionRegionDto.HEADER_TRAILING, 20),
+                        slot(ActionRoleDto.SETTINGS, ActionRegionDto.HEADER_TRAILING, 30),
+                    ),
+                ),
+                location = WorkspaceLocation.Editor("p1", "v1", "c1"),
+                canBack = true,
+            ).showBack,
+        )
     }
 
     @Test

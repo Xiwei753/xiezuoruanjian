@@ -186,11 +186,6 @@ internal fun ProjectWorkspaceScreen(
                                 }
                             }
                         },
-                        onBackToProjects = {
-                            coroutineScope.launch {
-                                workspaceNavState.back()
-                            }
-                        },
                     )
                 }
             }

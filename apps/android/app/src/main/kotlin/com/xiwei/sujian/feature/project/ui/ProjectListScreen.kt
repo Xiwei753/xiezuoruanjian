@@ -168,10 +168,10 @@ internal fun ProjectListContent(
                 appState.renameProject(project.id, newTitle)
                 showMenuForProject = null
             },
-            // #610 评论四：Delete 需要确认（契约 requiresConfirmation=true），
-            // 先进入确认弹窗，确认后才真正删除。
-            onDelete = {
-                confirmDeleteProject = project
+            // #610 评论五：Delete 是否需要确认由 Core 契约 requiresConfirmation 决定，
+            // 不再写死进入确认弹窗。
+            onDelete = { action ->
+                handleProjectDeleteAction(action, project, appState) { confirmDeleteProject = project }
                 showMenuForProject = null
             },
             onDismiss = { showMenuForProject = null },
@@ -229,7 +229,7 @@ private fun ProjectMenuDialog(
     project: Project,
     actions: List<WorkspaceActionSpec>,
     onRename: (String) -> Unit,
-    onDelete: () -> Unit,
+    onDelete: (WorkspaceActionSpec) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var showRename by remember { mutableStateOf(false) }
@@ -279,7 +279,7 @@ private fun ProjectMenuDialog(
                             ActionRoleDto.DELETE ->
                                 SujianListItem(
                                     headline = stringResource(id = R.string.action_delete),
-                                    onClick = onDelete,
+                                    onClick = { onDelete(action) },
                                 )
                             else -> {
                                 // 其它角色不属于作品 Context 契约，不渲染。
@@ -310,4 +310,21 @@ private fun ConfirmDeleteProjectDialog(
             Text(stringResource(R.string.confirm_delete_message, name))
         },
     )
+}
+
+/**
+ * #610 评论五：Delete 是否需要确认由 Core 契约 [WorkspaceActionSpec.requiresConfirmation] 决定。
+ * 提取为顶层函数以控制 [ProjectListContent] 的认知复杂度。
+ */
+private fun handleProjectDeleteAction(
+    action: WorkspaceActionSpec,
+    project: Project,
+    appState: WorkspaceAppState,
+    onRequestConfirmDelete: () -> Unit,
+) {
+    if (action.requiresConfirmation) {
+        onRequestConfirmDelete()
+    } else {
+        appState.deleteProject(project.id)
+    }
 }
