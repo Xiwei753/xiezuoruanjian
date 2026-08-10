@@ -225,6 +225,34 @@ class LayerRuleTests(unittest.TestCase):
         )
         self.assertTrue(findings, "motion 层写正文持久状态必须被报告")
 
+    def test_visual_rule_allows_core_rebase_mapping_dto(self):
+        # #606 评论5: visual 层直接消费 Core 的 RebaseSliceMappingDto（只读、不重算）。
+        findings = self.run_rule(
+            "visual-motion-pure",
+            {
+                f"{APP_PREFIX}/feature/editor/visual/GoodRebase.kt": (
+                    "package com.xiwei.sujian.feature.editor.visual\n\n"
+                    "import uniffi.writer_core.RebaseSliceMappingDto\n"
+                    "fun consume(m: RebaseSliceMappingDto) = m\n"
+                )
+            },
+        )
+        self.assertEqual([], findings, "visual 层消费 Core rebase mapping DTO 必须被允许")
+
+    def test_visual_rule_flags_other_uniffi_dto(self):
+        # visual 层仍不得直接引用白名单外的 uniffi DTO（只允许消费已收口的契约类型）。
+        findings = self.run_rule(
+            "visual-motion-pure",
+            {
+                f"{APP_PREFIX}/feature/editor/visual/BadUniffi.kt": (
+                    "package com.xiwei.sujian.feature.editor.visual\n\n"
+                    "import uniffi.writer_core.EditorEditResultDto\n"
+                    "fun consume(d: EditorEditResultDto) = d\n"
+                )
+            },
+        )
+        self.assertTrue(findings, "visual 层引用白名单外 uniffi DTO 必须被报告")
+
     def test_session_rule_flags_mutable_state(self):
         findings = self.run_rule(
             "session-layer-no-platform-state",

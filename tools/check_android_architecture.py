@@ -427,6 +427,10 @@ def rule_visual_motion_pure() -> list[Finding]:
                 [
                     "uniffi.writer_core.EditorOperationKindDto",
                     "uniffi.writer_core.AnimationModeDto",
+                    # #606 评论5: visual 层直接消费 Core 计算的旧→新逻辑 slice 对应关系
+                    # （RebasePlanner.applyRebaseToSlices / RebaseMappingProvider），
+                    # 只读消费、不重新推导；其余 uniffi DTO 仍禁止进入 visual/motion。
+                    "uniffi.writer_core.RebaseSliceMappingDto",
                 ],
             )
     return findings
