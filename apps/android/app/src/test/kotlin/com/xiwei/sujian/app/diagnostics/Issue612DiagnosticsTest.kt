@@ -7,6 +7,7 @@ import com.xiwei.sujian.core.diagnostics.JankStatsController
 import com.xiwei.sujian.core.diagnostics.LogRequest
 import com.xiwei.sujian.core.diagnostics.LogcatSnapshotCollector
 import com.xiwei.sujian.core.diagnostics.PersistentLogWriter
+import com.xiwei.sujian.core.diagnostics.ProcessExitCollector
 import com.xiwei.sujian.core.diagnostics.ProcessStateSummary
 import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
@@ -627,5 +628,67 @@ class PersistentLogWriterTest {
             "all returned files should match sujian-current*.log",
             files.all { it.name.startsWith("sujian-current") && it.name.endsWith(".log") },
         )
+    }
+}
+
+/**
+ * Issue #612 收口：ProcessExitCollector API 守卫正反测试。
+ *
+ * getHistoricalProcessExitReasons 自 API 30 起可用（minSdk=30），不应被 API 31 守卫跳过；
+ * processStateSummary 字段自 API 31 起可用，API 30 访问会抛 NoSuchMethodError。
+ * shouldReadProcessStateSummary 提取为 internal 纯函数，可在纯 JVM 测试中验证守卫逻辑。
+ */
+class ProcessExitCollectorApiGuardTest {
+    @Test
+    fun shouldReadProcessStateSummaryReturnsFalseBelowApi31() {
+        org.junit.Assert.assertFalse(
+            "API 30 must not read processStateSummary (NoSuchMethodError risk)",
+            ProcessExitCollector.shouldReadProcessStateSummary(30),
+        )
+    }
+
+    @Test
+    fun shouldReadProcessStateSummaryReturnsTrueAtApi31() {
+        org.junit.Assert.assertTrue(
+            "API 31 should read processStateSummary",
+            ProcessExitCollector.shouldReadProcessStateSummary(31),
+        )
+    }
+
+    @Test
+    fun shouldReadProcessStateSummaryReturnsTrueAtApi34() {
+        org.junit.Assert.assertTrue(
+            "API 34 should read processStateSummary",
+            ProcessExitCollector.shouldReadProcessStateSummary(34),
+        )
+    }
+}
+
+/**
+ * Issue #612 收口：ProcessExitCollector 在 API 30 上不再写 "requires API 31+" 占位文件。
+ *
+ * 正测试：API 30 调用 collect 后 process_exits.json 不含 "requires API 31+" 占位
+ * （getHistoricalProcessExitReasons 自 API 30 起可用，minSdk=30）。
+ * 修复前（反）：旧代码在 API 30 写 "requires API 31+" 占位并 return，新代码继续采集。
+ */
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [30])
+class ProcessExitCollectorApi30Test {
+    @Test
+    fun collectOnApi30DoesNotWriteRequiresApi31Placeholder() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val dir = java.nio.file.Files.createTempDirectory("sujian_proc_exit_30_").toFile()
+        try {
+            ProcessExitCollector.collect(context, dir)
+            val outputFile = java.io.File(dir, "process_exits.json")
+            assertTrue("process_exits.json should exist", outputFile.exists())
+            val content = outputFile.readText()
+            assertTrue(
+                "API 30 must not write 'requires API 31+' placeholder (getHistoricalProcessExitReasons is API 30+), got: $content",
+                !content.contains("requires API 31+"),
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 }

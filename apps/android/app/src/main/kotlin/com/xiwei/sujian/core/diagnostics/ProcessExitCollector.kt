@@ -39,10 +39,9 @@ internal object ProcessExitCollector {
         context: Context,
         destDir: File,
     ) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            File(destDir, OUTPUT_NAME).writeText("{\"error\":\"process_exits requires API 31+\"}\n")
-            return
-        }
+        // getHistoricalProcessExitReasons 与 ApplicationExitInfo 基础字段自 API 30 起可用；
+        // minSdk=30 保证可直接调用，不再用 API 31 守卫跳过整段采集。
+        // 仅 processStateSummary 字段需 API 31+（见 [shouldReadProcessStateSummary]）。
         try {
             val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
             if (am == null) {
@@ -99,9 +98,14 @@ internal object ProcessExitCollector {
         )
     }
 
-    /** ProcessStateSummary 是 ≤128 bytes 的 byte[]，转成 hex 字符串脱敏后记录。 */
+    /**
+     * ProcessStateSummary 是 ≤128 bytes 的 byte[]，转成 hex 字符串脱敏后记录。
+     * processStateSummary 字段自 API 31 起可用；API 30 设备上访问会抛 NoSuchMethodError
+     * （Error，不被 catch(Exception) 捕获），故先按 [shouldReadProcessStateSummary] 守卫。
+     */
     private fun encodeProcessStateSummary(reason: ApplicationExitInfo): String? {
         return try {
+            if (!shouldReadProcessStateSummary(Build.VERSION.SDK_INT)) return null
             val summary: ByteArray = reason.processStateSummary ?: return null
             if (summary.isEmpty()) return null
             val hex = summary.joinToString("") { byte -> "%02x".format(byte) }
@@ -110,6 +114,12 @@ internal object ProcessExitCollector {
             null
         }
     }
+
+    /**
+     * processStateSummary 字段自 API 31（S）起可用。提取为 internal 纯函数便于单测：
+     * API 30 设备不能调用 ApplicationExitInfo.getProcessStateSummary()，否则抛 NoSuchMethodError。
+     */
+    internal fun shouldReadProcessStateSummary(sdkInt: Int): Boolean = sdkInt >= Build.VERSION_CODES.S
 
     private fun saveTraceIfPresent(
         reason: ApplicationExitInfo,
