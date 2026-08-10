@@ -120,7 +120,7 @@ class AndroidVisualPlanner(
                                 isNewRevision = isNew,
                             )
                         },
-                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev),
+                        affectedLayoutPlanner.buildOffsetMapper(visualIntent),
                     )
                     moveCrossfadePlanner.addMoveSlicesForShiftedClustersCrossLine(
                         preCapturedOldSnapshots, preCapturedNewSnapshots,
@@ -128,7 +128,7 @@ class AndroidVisualPlanner(
                         snapshotPlanner.collectExcludedNewByteRanges(animatedSlices),
                         snapshotPlanner.collectExcludedOldByteRanges(animatedSlices),
                         animatedSlices,
-                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev),
+                        affectedLayoutPlanner.buildOffsetMapper(visualIntent),
                     )
                 }
                 AnimationMode.RunAnimation -> {
@@ -149,7 +149,7 @@ class AndroidVisualPlanner(
                                 isNewRevision = isNew,
                             )
                         },
-                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev),
+                        affectedLayoutPlanner.buildOffsetMapper(visualIntent),
                     )
                     moveCrossfadePlanner.addMoveSlicesForShiftedClustersCrossLine(
                         preCapturedOldSnapshots, preCapturedNewSnapshots,
@@ -157,7 +157,7 @@ class AndroidVisualPlanner(
                         snapshotPlanner.collectExcludedNewByteRanges(animatedSlices),
                         snapshotPlanner.collectExcludedOldByteRanges(animatedSlices),
                         animatedSlices,
-                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev),
+                        affectedLayoutPlanner.buildOffsetMapper(visualIntent),
                     )
                 }
                 AnimationMode.LineReflowAnimation -> {
@@ -178,7 +178,7 @@ class AndroidVisualPlanner(
                                 isNewRevision = isNew,
                             )
                         },
-                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev),
+                        affectedLayoutPlanner.buildOffsetMapper(visualIntent),
                     )
                 }
                 AnimationMode.SnapshotAnimation -> {
@@ -199,7 +199,7 @@ class AndroidVisualPlanner(
                                 isNewRevision = isNew,
                             )
                         },
-                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev),
+                        affectedLayoutPlanner.buildOffsetMapper(visualIntent),
                     )
                 }
                 AnimationMode.SystemSuppressed -> {
@@ -259,14 +259,14 @@ class AndroidVisualPlanner(
 
         val offsetMapperForRebase =
             if (oldRev != null && newRev != null) {
-                affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev)
+                affectedLayoutPlanner.buildOffsetMapper(visualIntent)
             } else {
                 null
             }
 
         val reverseMapperForRebase =
             if (oldRev != null && newRev != null) {
-                affectedLayoutPlanner.buildReverseOffsetMapper(visualIntent, oldRev, newRev)
+                affectedLayoutPlanner.buildReverseOffsetMapper(visualIntent)
             } else {
                 null
             }

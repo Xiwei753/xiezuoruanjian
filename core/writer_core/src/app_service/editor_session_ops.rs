@@ -1,5 +1,6 @@
 use crate::api::{
-    EditorEditOutcomeDto, EditorEditResultDto, EditorSessionSnapshotDto, EditorTransactionCauseDto,
+    AnimatedSliceRoleDto, EditorByteRangeDto, EditorEditOutcomeDto, EditorEditResultDto,
+    EditorSessionSnapshotDto, EditorTransactionCauseDto, RebaseSliceMappingDto,
 };
 
 use super::EditorSession;
@@ -451,6 +452,39 @@ impl super::WriterAppService {
     /// 不再依赖 ICU BreakIterator。
     pub fn editor_kernel_next_grapheme_boundary(&self, byte_offset: u32) -> u32 {
         self.with_session(|s| s.kernel.next_grapheme_boundary(byte_offset))
+    }
+
+    /// #606: 计算旧事务逻辑 slice → 新事务逻辑 slice 的对应关系。
+    ///
+    /// 平台无关的唯一事实来源 — Android `RebasePlanner` 不再自己匹配，
+    /// 直接消费此结果。方法本身不依赖 editor session 状态（无 `with_session`），
+    /// 但放在 `WriterAppService` 上以保持 UniFFI 接口聚合。
+    pub fn editor_kernel_compute_rebase_slice_mappings(
+        &self,
+        old_slice_roles: Vec<AnimatedSliceRoleDto>,
+        old_slice_byte_ranges: Vec<EditorByteRangeDto>,
+        new_slice_roles: Vec<AnimatedSliceRoleDto>,
+        new_slice_byte_ranges: Vec<EditorByteRangeDto>,
+    ) -> Vec<RebaseSliceMappingDto> {
+        let old_roles: Vec<crate::editor::AnimatedSliceRole> =
+            old_slice_roles.into_iter().map(Into::into).collect();
+        let new_roles: Vec<crate::editor::AnimatedSliceRole> =
+            new_slice_roles.into_iter().map(Into::into).collect();
+        let old_ranges: Vec<(usize, usize)> = old_slice_byte_ranges
+            .into_iter()
+            .map(|r| (r.start as usize, r.end_exclusive as usize))
+            .collect();
+        let new_ranges: Vec<(usize, usize)> = new_slice_byte_ranges
+            .into_iter()
+            .map(|r| (r.start as usize, r.end_exclusive as usize))
+            .collect();
+        let mappings = crate::editor::compute_rebase_slice_mappings(
+            &old_roles,
+            &old_ranges,
+            &new_roles,
+            &new_ranges,
+        );
+        mappings.into_iter().map(Into::into).collect()
     }
 
     pub fn editor_kernel_replace_all(

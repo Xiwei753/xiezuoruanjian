@@ -23,18 +23,20 @@ pub use visual::{
 };
 
 pub use composition::{
-    CompositionCommitOrCancelTransaction, CompositionSession, CompositionUpdateTransaction,
-    CompositionVisualRevision, OffsetMap, OffsetMapEntry, OffsetMapKind,
+    CompositionSession, CompositionVisualRevision, OffsetMap, OffsetMapEntry, OffsetMapKind,
 };
 
-pub use rebase::{RebaseFrameSnapshot, SnapshotOwner, TransactionCancelReason, TransactionRebase};
+pub use rebase::{
+    RebaseContinuation, RebaseFrameSnapshot, RebaseReason, RebaseSliceMapping, SnapshotOwner,
+    TransactionCancelReason, TransactionRebase,
+};
 
 pub use platform::PlatformVisualTransaction;
 
 pub use engine::{
     choose_animation_mode, classify_composition_visual, classify_visual_diff, compute_rebase,
-    count_grapheme_clusters, diff_plain_text, is_cjk_code_point, is_combining_code_point,
-    is_complex_grapheme_code_point, split_text_into_clusters, split_text_into_runs,
-    text_contains_complex_grapheme, transactions_overlap, CompositionOperationKind,
-    CompositionVisualClassification, EditorEngine,
+    compute_rebase_slice_mappings, count_grapheme_clusters, diff_plain_text, is_cjk_code_point,
+    is_combining_code_point, is_complex_grapheme_code_point, split_text_into_clusters,
+    split_text_into_runs, text_contains_complex_grapheme, transactions_overlap,
+    CompositionOperationKind, CompositionVisualClassification, EditorEngine,
 };

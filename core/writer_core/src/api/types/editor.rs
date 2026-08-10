@@ -616,6 +616,126 @@ impl From<crate::editor::OffsetMap> for OffsetMapDto {
     }
 }
 
+/// #606: 动画切片角色 DTO — 与 Core `AnimatedSliceRole` 一一对应。
+///
+/// 平台端通过 UniFFI 接收此枚举，用于 `editor_kernel_compute_rebase_slice_mappings`
+/// 的入参，不再在 Kotlin 中独立维护一套角色定义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AnimatedSliceRoleDto {
+    Insert,
+    Delete,
+    Move,
+    CrossfadeOld,
+    CrossfadeNew,
+}
+
+impl From<crate::editor::AnimatedSliceRole> for AnimatedSliceRoleDto {
+    fn from(r: crate::editor::AnimatedSliceRole) -> Self {
+        use crate::editor::AnimatedSliceRole as R;
+        match r {
+            R::Insert => Self::Insert,
+            R::Delete => Self::Delete,
+            R::Move => Self::Move,
+            R::CrossfadeOld => Self::CrossfadeOld,
+            R::CrossfadeNew => Self::CrossfadeNew,
+        }
+    }
+}
+
+impl From<AnimatedSliceRoleDto> for crate::editor::AnimatedSliceRole {
+    fn from(r: AnimatedSliceRoleDto) -> Self {
+        use crate::editor::AnimatedSliceRole as R;
+        match r {
+            AnimatedSliceRoleDto::Insert => R::Insert,
+            AnimatedSliceRoleDto::Delete => R::Delete,
+            AnimatedSliceRoleDto::Move => R::Move,
+            AnimatedSliceRoleDto::CrossfadeOld => R::CrossfadeOld,
+            AnimatedSliceRoleDto::CrossfadeNew => R::CrossfadeNew,
+        }
+    }
+}
+
+/// #606: Rebase slice 继续/结束语义 DTO — 与 Core `RebaseContinuation` 一一对应。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RebaseContinuationDto {
+    Continue,
+    End,
+}
+
+impl From<crate::editor::RebaseContinuation> for RebaseContinuationDto {
+    fn from(c: crate::editor::RebaseContinuation) -> Self {
+        match c {
+            crate::editor::RebaseContinuation::Continue => Self::Continue,
+            crate::editor::RebaseContinuation::End => Self::End,
+        }
+    }
+}
+
+impl From<RebaseContinuationDto> for crate::editor::RebaseContinuation {
+    fn from(c: RebaseContinuationDto) -> Self {
+        match c {
+            RebaseContinuationDto::Continue => Self::Continue,
+            RebaseContinuationDto::End => Self::End,
+        }
+    }
+}
+
+/// #606: Rebase 匹配依据 DTO — 与 Core `RebaseReason` 一一对应。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RebaseReasonDto {
+    SameByteRange,
+    OffsetMapMatched,
+    NoMapping,
+}
+
+impl From<crate::editor::RebaseReason> for RebaseReasonDto {
+    fn from(r: crate::editor::RebaseReason) -> Self {
+        match r {
+            crate::editor::RebaseReason::SameByteRange => Self::SameByteRange,
+            crate::editor::RebaseReason::OffsetMapMatched => Self::OffsetMapMatched,
+            crate::editor::RebaseReason::NoMapping => Self::NoMapping,
+        }
+    }
+}
+
+impl From<RebaseReasonDto> for crate::editor::RebaseReason {
+    fn from(r: RebaseReasonDto) -> Self {
+        match r {
+            RebaseReasonDto::SameByteRange => Self::SameByteRange,
+            RebaseReasonDto::OffsetMapMatched => Self::OffsetMapMatched,
+            RebaseReasonDto::NoMapping => Self::NoMapping,
+        }
+    }
+}
+
+/// #606: 旧→新逻辑 slice 对应关系 DTO — 与 Core `RebaseSliceMapping` 一一对应。
+///
+/// `old_slice_index` / `new_slice_index` 为对应事务 slice 列表中的索引。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebaseSliceMappingDto {
+    pub old_slice_index: u32,
+    pub new_slice_index: u32,
+    pub continuation: RebaseContinuationDto,
+    pub reason: RebaseReasonDto,
+}
+
+// SAFETY: slice 索引截断安全（slice 数量受 u32 范围约束）
+#[allow(clippy::cast_possible_truncation)]
+impl From<crate::editor::RebaseSliceMapping> for RebaseSliceMappingDto {
+    fn from(m: crate::editor::RebaseSliceMapping) -> Self {
+        Self {
+            old_slice_index: m.old_slice_index as u32,
+            new_slice_index: m.new_slice_index as u32,
+            continuation: m.continuation.into(),
+            reason: m.reason.into(),
+        }
+    }
+}
+
 /// 视觉意图 DTO — Core 告诉平台层应该做什么动画。
 ///
 /// Core 裁判动画语义（模式、时长、受影响范围）；
@@ -989,36 +1109,6 @@ impl From<crate::editor::TransactionCancelReason> for TransactionCancelReasonDto
             crate::editor::TransactionCancelReason::CompositionCancelled => {
                 Self::CompositionCancelled
             }
-        }
-    }
-}
-
-// ── #516: CompositionCommitOrCancelTransaction DTO ──
-
-/// 预输入提交/取消事务 DTO。
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CompositionCommitOrCancelTransactionDto {
-    pub id: u64,
-    pub is_commit: bool,
-    pub is_visual_same: bool,
-    pub duration_ms: u64,
-    pub unified_kind: UnifiedTransactionKindDto,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub visual_class_kinds: Vec<VisualClassKindDto>,
-}
-
-impl From<crate::editor::CompositionCommitOrCancelTransaction>
-    for CompositionCommitOrCancelTransactionDto
-{
-    fn from(t: crate::editor::CompositionCommitOrCancelTransaction) -> Self {
-        Self {
-            id: t.id,
-            is_commit: t.is_commit,
-            is_visual_same: t.is_visual_same,
-            duration_ms: t.duration_ms,
-            unified_kind: UnifiedTransactionKindDto::CompositionCommitOrCancel,
-            visual_class_kinds: t.visual_class_kinds.into_iter().map(Into::into).collect(),
         }
     }
 }

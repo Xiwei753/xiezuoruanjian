@@ -2,13 +2,103 @@ package com.xiwei.sujian.feature.editor.visual.planner
 
 import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
+import com.xiwei.sujian.feature.editor.visual.RebaseContinuation
+import com.xiwei.sujian.feature.editor.visual.RebaseReason
+import com.xiwei.sujian.feature.editor.visual.RebaseSliceMapping
 import com.xiwei.sujian.feature.editor.visual.SliceRole
+import com.xiwei.sujian.feature.editor.visual.SliceRoleAndByteRange
 import com.xiwei.sujian.feature.editor.visual.SliceVisualState
 import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
 import com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot
 
 class RebasePlanner {
+    /**
+     * #606: 计算旧事务逻辑 slice → 新事务逻辑 slice 的对应关系。
+     *
+     * 与 Core `compute_rebase_slice_mappings` 逻辑完全一致 — 平台无关的
+     * 唯一事实来源。Android 不再使用 compatibleRebaseRoles/findRebaseIndexByClusterByteRange/
+     * findRebaseIndexByLineAndRole/findRebaseIndexClosestByPosition 做启发式匹配，
+     * 只按 byte range 精确匹配 + 角色兼容判定。
+     *
+     * 匹配规则（按优先级）：
+     * 1. 旧/新 slice 的 byte range 完全相同 + 角色兼容 → SameByteRange + Continue
+     * 2. 其余旧 slice 不生成映射（平台端按 End 处理）
+     *
+     * 每个新 slice 至多被一个旧 slice 匹配（usedNew 去重），
+     * 避免多旧 slice 接续同一新 slice 造成 progress 抢占。
+     */
+    fun computeRebaseSliceMappings(
+        oldSlices: List<SliceRoleAndByteRange>,
+        newSlices: List<SliceRoleAndByteRange>,
+    ): List<RebaseSliceMapping> {
+        val mappings = mutableListOf<RebaseSliceMapping>()
+        val usedNew = mutableSetOf<Int>()
+        for ((oldIdx, oldSlice) in oldSlices.withIndex()) {
+            for ((newIdx, newSlice) in newSlices.withIndex()) {
+                if (newIdx in usedNew) continue
+                if (
+                    compatibleRebaseRolesInternal(newSlice.role, oldSlice.role) &&
+                    oldSlice.byteStart == newSlice.byteStart &&
+                    oldSlice.byteEndExclusive == newSlice.byteEndExclusive
+                ) {
+                    mappings.add(
+                        RebaseSliceMapping(
+                            oldSliceIndex = oldIdx,
+                            newSliceIndex = newIdx,
+                            continuation = RebaseContinuation.Continue,
+                            reason = RebaseReason.SameByteRange,
+                        ),
+                    )
+                    usedNew.add(newIdx)
+                    break
+                }
+            }
+        }
+        return mappings
+    }
+
+    /**
+     * #606: 角色兼容判定 — 与 Core `compatible_rebase_roles` 完全一致。
+     *
+     * Move/Insert/CrossfadeNew 互相兼容（都是"新出现的文字"动画）；
+     * Delete/CrossfadeOld 互相兼容（都是"消失的文字"动画）；
+     * 其余组合不兼容（Insert 与 Delete 不能接续，Move 与 CrossfadeOld 不能接续）。
+     * Static 不参与 rebase。
+     */
+    private fun compatibleRebaseRolesInternal(
+        newRole: SliceRole,
+        oldRole: SliceRole,
+    ): Boolean {
+        return when (Pair(newRole, oldRole)) {
+            Pair(SliceRole.Move, SliceRole.Move),
+            Pair(SliceRole.Move, SliceRole.Insert),
+            Pair(SliceRole.Move, SliceRole.CrossfadeNew),
+            Pair(SliceRole.Insert, SliceRole.Move),
+            Pair(SliceRole.Insert, SliceRole.Insert),
+            Pair(SliceRole.Insert, SliceRole.CrossfadeNew),
+            Pair(SliceRole.CrossfadeNew, SliceRole.CrossfadeNew),
+            Pair(SliceRole.CrossfadeNew, SliceRole.Move),
+            Pair(SliceRole.CrossfadeNew, SliceRole.Insert),
+            Pair(SliceRole.Delete, SliceRole.Delete),
+            Pair(SliceRole.Delete, SliceRole.CrossfadeOld),
+            Pair(SliceRole.CrossfadeOld, SliceRole.CrossfadeOld),
+            Pair(SliceRole.CrossfadeOld, SliceRole.Delete),
+            -> true
+            else -> false
+        }
+    }
+
+    /**
+     * #606: 将 rebase snapshot 的旧帧视觉状态应用到新事务的 animated slices。
+     *
+     * 旧→新 slice 的逻辑对应关系由 [computeRebaseSliceMappings] 唯一决定，
+     * 平台端不再使用启发式匹配（compatibleRebaseRoles public 版本 /
+     * findRebaseIndexByClusterByteRange / findRebaseIndexByLineAndRole /
+     * findRebaseIndexClosestByPosition 已删除）。
+     *
+     * 签名保持不变 — 调用方无需修改。
+     */
     fun applyRebaseToSlices(
         newSlices: List<PreparedVisualTransaction.AnimatedSlice>,
         rebaseSnapshot: VisualFrameSnapshot,
@@ -16,19 +106,34 @@ class RebasePlanner {
     ): List<PreparedVisualTransaction.AnimatedSlice> {
         if (rebaseSnapshot.sliceVisualStates.isEmpty()) return newSlices
 
+        // #606: 用 computeRebaseSliceMappings 计算旧→新对应关系，
+        // 替代旧的 findRebaseIndexByClusterByteRange/findRebaseIndexByLineAndRole/
+        // findRebaseIndexClosestByPosition 启发式匹配。
+        val oldSlices =
+            rebaseSnapshot.sliceVisualStates.map { state ->
+                SliceRoleAndByteRange(
+                    role = state.role,
+                    byteStart = state.clusterByteStart,
+                    byteEndExclusive = state.clusterByteEndExclusive,
+                )
+            }
+        val newSlicesForMapping =
+            newSlices.map { slice ->
+                SliceRoleAndByteRange(
+                    role = slice.role,
+                    byteStart = slice.clusterByteStart,
+                    byteEndExclusive = slice.clusterByteEndExclusive,
+                )
+            }
+        val mappings = computeRebaseSliceMappings(oldSlices, newSlicesForMapping)
+
         val usedRebaseIndices = mutableSetOf<Int>()
         val result = mutableListOf<PreparedVisualTransaction.AnimatedSlice>()
 
-        for (slice in newSlices) {
-            var rebaseIdx = findRebaseIndexByClusterByteRange(slice, rebaseSnapshot, usedRebaseIndices)
-            if (rebaseIdx == null) {
-                rebaseIdx = findRebaseIndexByLineAndRole(slice, rebaseSnapshot, usedRebaseIndices)
-            }
-            if (rebaseIdx == null) {
-                rebaseIdx = findRebaseIndexClosestByPosition(slice, rebaseSnapshot, usedRebaseIndices)
-            }
-
-            if (rebaseIdx != null) {
+        for ((newIdx, slice) in newSlices.withIndex()) {
+            val mapping = mappings.firstOrNull { it.newSliceIndex == newIdx }
+            val rebaseIdx = mapping?.oldSliceIndex
+            if (rebaseIdx != null && rebaseIdx >= 0 && rebaseIdx < rebaseSnapshot.sliceVisualStates.size) {
                 usedRebaseIndices.add(rebaseIdx)
                 val rebaseState = rebaseSnapshot.sliceVisualStates[rebaseIdx]
                 result.add(applyRebaseState(slice, rebaseState, snapshotLookup))
@@ -164,81 +269,6 @@ class RebasePlanner {
         }
 
         return result
-    }
-
-    private fun findRebaseIndexByClusterByteRange(
-        slice: PreparedVisualTransaction.AnimatedSlice,
-        rebaseSnapshot: VisualFrameSnapshot,
-        usedRebaseIndices: Set<Int>,
-    ): Int? {
-        val sliceStart = slice.clusterByteStart
-        val sliceEnd = slice.clusterByteEndExclusive
-        if (sliceStart < 0 || sliceEnd < 0) return null
-
-        return rebaseSnapshot.sliceVisualStates.indices.firstOrNull { i ->
-            i !in usedRebaseIndices &&
-                compatibleRebaseRoles(
-                    slice.role, rebaseSnapshot.sliceVisualStates[i].role,
-                ) && rebaseSnapshot.sliceVisualStates[i].clusterByteStart == sliceStart &&
-                rebaseSnapshot.sliceVisualStates[i].clusterByteEndExclusive == sliceEnd
-        }
-    }
-
-    fun compatibleRebaseRoles(role: SliceRole): Set<SliceRole> {
-        return when (role) {
-            SliceRole.Move -> setOf(SliceRole.Move, SliceRole.Insert, SliceRole.CrossfadeNew)
-            SliceRole.Insert -> setOf(SliceRole.Insert, SliceRole.Move, SliceRole.CrossfadeNew)
-            SliceRole.CrossfadeNew -> setOf(SliceRole.CrossfadeNew, SliceRole.Move, SliceRole.Insert)
-            SliceRole.Delete -> setOf(SliceRole.Delete, SliceRole.CrossfadeOld)
-            SliceRole.CrossfadeOld -> setOf(SliceRole.CrossfadeOld, SliceRole.Delete)
-            SliceRole.Static -> setOf(SliceRole.Static)
-        }
-    }
-
-    private fun compatibleRebaseRoles(
-        newRole: SliceRole,
-        rebaseRole: SliceRole,
-    ): Boolean {
-        return rebaseRole in compatibleRebaseRoles(newRole)
-    }
-
-    private fun findRebaseIndexByLineAndRole(
-        slice: PreparedVisualTransaction.AnimatedSlice,
-        rebaseSnapshot: VisualFrameSnapshot,
-        usedRebaseIndices: Set<Int>,
-    ): Int? {
-        val sliceLine = slice.snapshot?.lineIndex ?: return null
-        val sliceStart = slice.clusterByteStart
-
-        return rebaseSnapshot.sliceVisualStates.indices
-            .filter { i ->
-                i !in usedRebaseIndices &&
-                    compatibleRebaseRoles(slice.role, rebaseSnapshot.sliceVisualStates[i].role) &&
-                    rebaseSnapshot.sliceVisualStates[i].lineIndex == sliceLine
-            }
-            .minByOrNull { i ->
-                val rebaseStart = rebaseSnapshot.sliceVisualStates[i].clusterByteStart
-                if (sliceStart >= 0 && rebaseStart >= 0) kotlin.math.abs(rebaseStart - sliceStart) else Int.MAX_VALUE
-            }
-    }
-
-    private fun findRebaseIndexClosestByPosition(
-        slice: PreparedVisualTransaction.AnimatedSlice,
-        rebaseSnapshot: VisualFrameSnapshot,
-        usedRebaseIndices: Set<Int>,
-    ): Int? {
-        val destRect = slice.destinationRect
-        return rebaseSnapshot.sliceVisualStates.indices
-            .filter { i ->
-                i !in usedRebaseIndices &&
-                    compatibleRebaseRoles(slice.role, rebaseSnapshot.sliceVisualStates[i].role)
-            }
-            .minByOrNull { i ->
-                val state = rebaseSnapshot.sliceVisualStates[i]
-                val dx = kotlin.math.abs(state.destinationLeft - destRect.left)
-                val dy = kotlin.math.abs(state.destinationTop - destRect.top)
-                dx + dy
-            }
     }
 
     fun applyRebaseState(

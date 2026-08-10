@@ -1,7 +1,6 @@
 use crate::editor::strong_types::{
     EditorRevision, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange,
 };
-use crate::editor::transaction::composition::*;
 use crate::editor::transaction::engine::*;
 use crate::editor::transaction::platform::*;
 use crate::editor::transaction::rebase::*;
@@ -1179,41 +1178,6 @@ fn timeline_cursor_only_no_text_slice_still_executes() {
     assert_eq!(vt.old_text, vt.new_text);
     assert!(vt.inserted_range.is_none());
     assert!(vt.deleted_range.is_none());
-}
-
-#[test]
-fn candidate_conversion_generates_crossfade_or_move() {
-    let mut engine = EditorEngine::new();
-    // 预输入 "ni" → 候选转换 commit "你"
-    let comp_rev = CompositionVisualRevision::new(
-        "hello ".to_string(),
-        Utf8ByteRange::from_values(6, 8),
-        "ni".to_string(),
-        Utf8ByteRange::from_ordered(0, 8),
-    );
-    let tx = engine.composition_commit_or_cancel_transaction("hello ", "hello 你", comp_rev, true);
-    assert!(
-        !tx.is_visual_same,
-        "Candidate conversion changes visual text"
-    );
-    // 应该有 Crossfade 或 Delete/Insert 分类
-    assert!(!tx.visual_class_kinds.is_empty());
-}
-
-#[test]
-fn cancel_generates_delete_classification() {
-    let mut engine = EditorEngine::new();
-    let comp_rev = CompositionVisualRevision::new(
-        "hello".to_string(),
-        None,
-        " world".to_string(),
-        Utf8ByteRange::from_ordered(0, 5),
-    );
-    let tx = engine.composition_commit_or_cancel_transaction("hello", "hello", comp_rev, false);
-    assert!(!tx.is_commit);
-    // 取消时 virtual_text("hello world") → committed_text("hello")
-    // 预输入部分应该产生 Delete 分类
-    assert!(tx.visual_class_kinds.contains(&VisualClassKind::Delete));
 }
 
 #[test]

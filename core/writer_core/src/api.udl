@@ -1319,6 +1319,13 @@ interface WriterAppService {
     // #606: grapheme cluster 边界由 Core 唯一计算，平台端不再依赖 ICU BreakIterator
     u32 editor_kernel_previous_grapheme_boundary(u32 byte_offset);
     u32 editor_kernel_next_grapheme_boundary(u32 byte_offset);
+    // #606: rebase slice 逻辑对应关系由 Core 唯一计算，平台端不再自己匹配。
+    sequence<RebaseSliceMappingDto> editor_kernel_compute_rebase_slice_mappings(
+        sequence<AnimatedSliceRoleDto> old_slice_roles,
+        sequence<EditorByteRangeDto> old_slice_byte_ranges,
+        sequence<AnimatedSliceRoleDto> new_slice_roles,
+        sequence<EditorByteRangeDto> new_slice_byte_ranges
+    );
     EditorEditResultDto editor_kernel_replace_all(string search, string replacement, u64 expected_revision);
     EditorEditResultDto editor_kernel_insert_line_break(u32 byte_offset, u8 auto_indent_enabled, EditorTransactionCauseDto cause, u64 expected_revision);
 
@@ -1650,6 +1657,36 @@ dictionary EditorVisualIntentDto {
 dictionary EditorByteRangeDto {
     u32 start;
     u32 end_exclusive;
+};
+
+// #606: 动画切片角色 — 与 Core `AnimatedSliceRole` 一一对应。
+enum AnimatedSliceRoleDto {
+    "Insert",
+    "Delete",
+    "Move",
+    "CrossfadeOld",
+    "CrossfadeNew"
+};
+
+// #606: Rebase slice 继续/结束语义 — 与 Core `RebaseContinuation` 一一对应。
+enum RebaseContinuationDto {
+    "Continue",
+    "End"
+};
+
+// #606: Rebase 匹配依据 — 与 Core `RebaseReason` 一一对应。
+enum RebaseReasonDto {
+    "SameByteRange",
+    "OffsetMapMatched",
+    "NoMapping"
+};
+
+// #606: 旧→新逻辑 slice 对应关系 — 与 Core `RebaseSliceMapping` 一一对应。
+dictionary RebaseSliceMappingDto {
+    u32 old_slice_index;
+    u32 new_slice_index;
+    RebaseContinuationDto continuation;
+    RebaseReasonDto reason;
 };
 
 dictionary DisplayPatchDto {

@@ -17,6 +17,52 @@ pub enum SnapshotOwner {
     Released,
 }
 
+/// #606: Rebase slice 对应关系的继续/结束语义。
+///
+/// 旧事务的某个逻辑 slice 在 rebase 后是否对应到新事务中的 slice。
+/// 平台端据此决定旧 slice 动画是接续到新 slice 还是直接结束。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RebaseContinuation {
+    /// 旧 slice 动画继续到新事务（同一逻辑对象，progress 接续）
+    Continue,
+    /// 旧 slice 动画结束（不再对应新事务中的对象）
+    End,
+}
+
+/// #606: Rebase 匹配依据 — 为什么旧 slice 对应到新 slice。
+///
+/// 平台端可据此调整动画接续策略（例如 OffsetMapMatched 时需要按映射偏移
+/// 调整起止坐标，SameByteRange 时直接复用旧坐标）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RebaseReason {
+    /// 相同 UTF-8 byte range + compatible role
+    SameByteRange,
+    /// OffsetMap 映射的 range
+    OffsetMapMatched,
+    /// 无对应关系（Core 未给出映射）
+    NoMapping,
+}
+
+/// #606: 旧事务逻辑 slice → 新事务逻辑 slice 的对应关系。
+///
+/// Core 在 `compute_rebase` 时唯一计算，平台端不再自己匹配。
+/// 不在此结构中复述 byte range/role — 平台端持有旧/新事务的 slice 列表，
+/// 通过 `old_slice_index` / `new_slice_index` 索引即可。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebaseSliceMapping {
+    /// 旧事务中的 slice 索引
+    pub old_slice_index: usize,
+    /// 新事务中的 slice 索引
+    pub new_slice_index: usize,
+    /// 继续/结束关系
+    pub continuation: RebaseContinuation,
+    /// 匹配依据
+    pub reason: RebaseReason,
+}
+
 /// 连续事务 rebase — 新事务与旧事务冲突时。
 ///
 /// 预输入开始、更新、提交、取消以及连续正文输入都不得调用 pauseAll 叠加另一条事务。
@@ -36,6 +82,12 @@ pub struct TransactionRebase {
     /// 旧事务当前帧的视觉状态快照（由平台层填充）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_frame_snapshot: Option<RebaseFrameSnapshot>,
+    /// #606: 旧→新逻辑 slice 对应关系（平台无关，Android 不再自己匹配）。
+    ///
+    /// 仅包含 `RebaseContinuation::Continue` 的映射；未出现的旧 slice
+    /// 视为 `End`，由平台端按 Core 无映射处理。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slice_mappings: Vec<RebaseSliceMapping>,
 }
 
 /// Rebase 瞬间的帧快照 — 将当前 frame rect/alpha/scale 作为新事务 old state。

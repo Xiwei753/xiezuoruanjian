@@ -1,7 +1,6 @@
-use super::composition::{
-    CompositionCommitOrCancelTransaction, CompositionUpdateTransaction, CompositionVisualRevision,
+use super::rebase::{
+    RebaseContinuation, RebaseFrameSnapshot, RebaseReason, RebaseSliceMapping, TransactionRebase,
 };
-use super::rebase::{RebaseFrameSnapshot, TransactionRebase};
 use super::types::{
     AnimationMode, EditorAnimationKind, EditorChange, EditorSelection, EditorTransaction,
     EditorTransactionCause,
@@ -9,8 +8,8 @@ use super::types::{
 #[cfg(test)]
 use super::visual::EditorAnimationEvent;
 use super::visual::{
-    ClusterRect, ClusterRun, EditorVisualTransaction, HiddenVisualRange, UnifiedTransactionKind,
-    VisualClassKind, VisualCoordinateMode,
+    AnimatedSliceRole, ClusterRect, ClusterRun, EditorVisualTransaction, HiddenVisualRange,
+    UnifiedTransactionKind, VisualClassKind, VisualCoordinateMode,
 };
 use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange};
 
@@ -292,111 +291,6 @@ impl EditorEngine {
             coordinate_mode: VisualCoordinateMode::Baseline,
         })
     }
-
-    /// #516/#517: 创建 CompositionUpdate 事务 — 预输入更新。
-    ///
-    /// 每次 setComposingText 触发。预输入文字必须真实推动后续正文、
-    /// 触发换行和 reflow，不能在原正文上盖一段文字。
-    ///
-    /// composing 更新不会修改 committed text、Undo、保存和同步状态。
-    ///
-    /// #517: 支持从 previous visual revision 接续。
-    /// 如果提供了 previous_revision，新 revision 从 previous 接续，
-    /// 自动计算 OffsetMap，后续正文 cluster 保持身份并生成 Move。
-    /// 如果没有提供，则从 committed 状态开始（首次预输入）。
-    pub fn composition_update_transaction(
-        &mut self,
-        committed_text: &str,
-        composition_replace_range: Option<(usize, usize)>,
-        old_preedit_text: &str,
-        new_preedit_text: &str,
-    ) -> CompositionUpdateTransaction {
-        let range = composition_replace_range.and_then(|(s, e)| Utf8ByteRange::from_values(s, e));
-        let old_revision = CompositionVisualRevision::new(
-            committed_text.to_string(),
-            range,
-            old_preedit_text.to_string(),
-            Utf8ByteRange::from_start_len(0, committed_text.len()),
-        );
-        let new_revision = CompositionVisualRevision::new(
-            committed_text.to_string(),
-            range,
-            new_preedit_text.to_string(),
-            Utf8ByteRange::from_start_len(0, committed_text.len()),
-        );
-        let visual_class_kinds =
-            classify_visual_diff(&old_revision.virtual_text, &new_revision.virtual_text);
-        CompositionUpdateTransaction {
-            id: self.take_animation_id(),
-            old_revision,
-            new_revision,
-            visual_class_kinds,
-            duration_ms: self.animation_duration_ms,
-        }
-    }
-
-    /// #517: 从 previous visual revision 创建 CompositionUpdate 事务。
-    ///
-    /// 更新链必须是：previous visual revision -> new visual revision，
-    /// 而不是：committed revision -> 每一次新的 preedit。
-    ///
-    /// 此方法使用 CompositionVisualRevision::from_previous 自动计算 OffsetMap，
-    /// 后续正文 cluster 通过 OffsetMap 保持身份并生成 Move。
-    pub fn composition_update_from_previous(
-        &mut self,
-        previous_revision: &CompositionVisualRevision,
-        new_preedit_text: &str,
-        new_preedit_cursor_offset: usize,
-    ) -> CompositionUpdateTransaction {
-        let new_revision = CompositionVisualRevision::from_previous(
-            previous_revision,
-            new_preedit_text.to_string(),
-            new_preedit_cursor_offset,
-            previous_revision.affected_paragraph_range,
-        );
-        let visual_class_kinds =
-            classify_visual_diff(&previous_revision.virtual_text, &new_revision.virtual_text);
-        CompositionUpdateTransaction {
-            id: self.take_animation_id(),
-            old_revision: previous_revision.clone(),
-            new_revision,
-            visual_class_kinds,
-            duration_ms: self.animation_duration_ms,
-        }
-    }
-
-    /// #516: 创建 CompositionCommitOrCancel 事务 — 预输入提交或取消。
-    ///
-    /// commitText: current CompositionVisualRevision → new committed VisualRevision
-    /// cancel: current CompositionVisualRevision → original committed VisualRevision
-    ///
-    /// 视觉文字完全相同时，不重复播放吐字，只移除 underline、segment style
-    /// 和 composing cursor，并完成 revision 所有权转移。
-    /// 候选转换导致文字变化时，旧 preedit 执行 Delete/Crossfade，
-    /// 新 committed 文字执行 Insert/Crossfade，后续正文执行 Move/Crossfade。
-    pub fn composition_commit_or_cancel_transaction(
-        &mut self,
-        committed_text_before: &str,
-        committed_text_after: &str,
-        composition_revision: CompositionVisualRevision,
-        is_commit: bool,
-    ) -> CompositionCommitOrCancelTransaction {
-        let visual_class_kinds = if is_commit {
-            classify_visual_diff(&composition_revision.virtual_text, committed_text_after)
-        } else {
-            classify_visual_diff(&composition_revision.virtual_text, committed_text_before)
-        };
-        let is_visual_same = composition_revision.virtual_text == committed_text_after;
-        CompositionCommitOrCancelTransaction {
-            id: self.take_animation_id(),
-            is_commit,
-            is_visual_same,
-            composition_revision,
-            committed_text_after: committed_text_after.to_string(),
-            visual_class_kinds,
-            duration_ms: self.animation_duration_ms,
-        }
-    }
 }
 
 /// #606: Composition 操作类型 — 三种 composition 操作共用同一视觉分类入口。
@@ -640,15 +534,116 @@ pub fn classify_visual_diff(old_text: &str, new_text: &str) -> Vec<VisualClassKi
 ///
 /// 冲突判断不能只看 AnimatedSlice：CursorOnly、纯 Decoration、
 /// 视觉文字相同的 CompositionCommit 也必须能通过 revision/affected range 参与替换。
+///
+/// #606: rebase slice 角色兼容性 — 与 Android `RebasePlanner.compatibleRebaseRoles` 对齐。
+///
+/// Move/Insert/CrossfadeNew 互相兼容（都是"新出现的文字"动画）；
+/// Delete/CrossfadeOld 互相兼容（都是"消失的文字"动画）；
+/// 其余组合不兼容（Insert 与 Delete 不能接续，Move 与 CrossfadeOld 不能接续）。
+fn compatible_rebase_roles(new_role: AnimatedSliceRole, old_role: AnimatedSliceRole) -> bool {
+    use AnimatedSliceRole::*;
+    matches!(
+        (new_role, old_role),
+        (Move, Move)
+            | (Move, Insert)
+            | (Move, CrossfadeNew)
+            | (Insert, Move)
+            | (Insert, Insert)
+            | (Insert, CrossfadeNew)
+            | (CrossfadeNew, CrossfadeNew)
+            | (CrossfadeNew, Move)
+            | (CrossfadeNew, Insert)
+            | (Delete, Delete)
+            | (Delete, CrossfadeOld)
+            | (CrossfadeOld, CrossfadeOld)
+            | (CrossfadeOld, Delete)
+    )
+}
+
+/// #606: 计算旧事务逻辑 slice → 新事务逻辑 slice 的对应关系。
+///
+/// 平台无关的唯一事实来源 — Android `RebasePlanner` 不再自己匹配，
+/// 直接消费此结果。
+///
+/// 匹配规则（按优先级）：
+/// 1. 旧/新 slice 的 byte range 完全相同 + 角色兼容 → `SameByteRange` + `Continue`
+/// 2. 其余旧 slice 不生成映射（平台端按 `End` 处理）
+///
+/// 每个新 slice 至多被一个旧 slice 匹配（`used_new` 去重），
+/// 避免多旧 slice 接续同一新 slice 造成 progress 抢占。
+pub fn compute_rebase_slice_mappings(
+    old_slice_roles: &[AnimatedSliceRole],
+    old_slice_byte_ranges: &[(usize, usize)],
+    new_slice_roles: &[AnimatedSliceRole],
+    new_slice_byte_ranges: &[(usize, usize)],
+) -> Vec<RebaseSliceMapping> {
+    let mut mappings = Vec::new();
+    let mut used_new = std::collections::HashSet::new();
+    for (old_idx, (old_role, &(old_start, old_end))) in old_slice_roles
+        .iter()
+        .zip(old_slice_byte_ranges.iter())
+        .enumerate()
+    {
+        for (new_idx, (new_role, &(new_start, new_end))) in new_slice_roles
+            .iter()
+            .zip(new_slice_byte_ranges.iter())
+            .enumerate()
+        {
+            if used_new.contains(&new_idx) {
+                continue;
+            }
+            if compatible_rebase_roles(*new_role, *old_role)
+                && old_start == new_start
+                && old_end == new_end
+            {
+                mappings.push(RebaseSliceMapping {
+                    old_slice_index: old_idx,
+                    new_slice_index: new_idx,
+                    continuation: RebaseContinuation::Continue,
+                    reason: RebaseReason::SameByteRange,
+                });
+                used_new.insert(new_idx);
+                break;
+            }
+        }
+    }
+    mappings
+}
+
+/// #516/#606: 统一 rebase — 新事务与旧事务冲突时的处理。
+///
+/// rebase 必须覆盖四种事务（BodyEdit、CompositionUpdate、
+/// CompositionCommitOrCancel、CursorOnly），不只覆盖 Insert。
+///
+/// 新事务入队前：
+/// 1. 根据视觉区域、revision 和 byte/UTF-16 映射查找冲突事务
+/// 2. 读取旧事务当前 progress
+/// 3. 将当前帧作为新事务 old state
+/// 4. 取消旧事务，但不能提前释放已转移资源
+/// 5. 启动新事务
+///
+/// #606: 同时计算旧→新逻辑 slice 对应关系（`slice_mappings`），
+/// 平台端不再自己匹配。
 pub fn compute_rebase(
     cancelled_transaction_id: u64,
     old_progress: f64,
     old_frame_snapshot: Option<RebaseFrameSnapshot>,
+    old_slice_roles: &[AnimatedSliceRole],
+    old_slice_byte_ranges: &[(usize, usize)],
+    new_slice_roles: &[AnimatedSliceRole],
+    new_slice_byte_ranges: &[(usize, usize)],
 ) -> TransactionRebase {
+    let slice_mappings = compute_rebase_slice_mappings(
+        old_slice_roles,
+        old_slice_byte_ranges,
+        new_slice_roles,
+        new_slice_byte_ranges,
+    );
     TransactionRebase {
         cancelled_transaction_id,
         old_progress,
         old_frame_snapshot,
+        slice_mappings,
     }
 }
 
