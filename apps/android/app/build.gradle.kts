@@ -344,6 +344,11 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.kotlinx.coroutines.test)
+    // JVM 单元测试中的 Compose 组合回归测试（#609 一）：
+    // ui-test-manifest 注册测试 Activity 到 debug 清单，Robolectric 读取合并后的清单。
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.espresso)
 }

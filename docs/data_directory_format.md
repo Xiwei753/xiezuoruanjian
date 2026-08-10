@@ -25,12 +25,15 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 ## Android 示例
 
 ```text
-/storage/emulated/0/素笺/          ← app_data_root
-├── 作品/                          ← projects_root
-├── 日志/                          ← log_dir
-├── 导出/
-└── 备份/
+/storage/emulated/0/Sujian/      ← app_data_root（稳定 ASCII 磁盘名，Issue #609）
+├── projects/                    ← projects_root
+├── logs/                        ← log_dir
+├── exports/
+└── backups/
 ```
+
+界面显示名（“素笺 / 作品 / 日志 / 导出 / 备份”）走 Android `strings.xml`，
+不参与磁盘路径契约；旧版 `/素笺/` 中文目录由 Android 平台在启动时一次性迁移。
 
 ## 作品目录（作品级 Git 仓库根）
 
@@ -86,9 +89,9 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 同步根 = `app_data_root`，路径相对应用数据根：
 
 - **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、`themes/palettes/**`。
-- **黑名单（绝不参与）**：`作品/`（projects_root）、`日志/`（log_dir）、`导出/`、`备份/`、`settings.local.json`、`recent_edits.json`、含 `secret` 的路径（`app-meta/sync/*secret*`）、`device/`、`app-meta/stats/`、`app-meta/transactions/`、`.git/`、`.tmp`/`.lock` 后缀、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
+- **黑名单（绝不参与）**：`projects/`（projects_root）、`logs/`（log_dir）、`exports/`、`backups/`、`settings.local.json`、`recent_edits.json`、含 `secret` 的路径（`app-meta/sync/*secret*`）、`device/`、`app-meta/stats/`、`app-meta/transactions/`、`.git/`、`.tmp`/`.lock` 后缀、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
 
-`log_dir` 由平台提供，与 `app_data_root` 相互独立（Android 为 `素笺/日志/`），不位于数据根目录下。
+`log_dir` 由平台提供，与 `app_data_root` 相互独立（Android 为 `Sujian/logs/`），不位于数据根目录下。
 
 ## 两种同步目标
 

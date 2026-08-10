@@ -35,6 +35,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun proceedWithUi() {
+        // #609 二：取得存储权限后、初始化 Core 前，先迁移旧版中文数据目录
+        // （/素笺/ → /Sujian/），再建立新目录；迁移幂等且不覆盖新数据。
+        AndroidDataRoot.migrateLegacyChineseDataRoot()
         AndroidDataRoot.ensureDirectories()
         val initialDestination = intent?.getStringExtra("navigateTo")
         setContent {

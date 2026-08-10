@@ -228,7 +228,15 @@ fun SujianApp(initialDestination: String? = null) {
             deps.appServiceBridge,
         )
     val windowCoordinator = rememberSujianWindowHost(context, deps, sessionCoordinator)
-    val themeController = rememberThemeController(context, deps.settingsRepository, deps.themeRepository)
+    // #609 一：主题控制器在 CompositionLocalProvider 建立之前初始化，
+    // 必须显式注入依赖（含 syncStatusRepository），不得反向读取 CompositionLocal。
+    val themeController =
+        rememberThemeController(
+            context = context,
+            settingsRepository = deps.settingsRepository,
+            themeRepository = deps.themeRepository,
+            syncStatusRepository = deps.syncStatusRepository,
+        )
     remember { VendorAdapterRegistry().also { VendorAdapterSetup.ensureInitialized(it) } }
 
     val capabilityProvider = remember { AospCapabilityProvider(context.applicationContext) }
