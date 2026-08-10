@@ -33,7 +33,10 @@ fun SettingsExpandableSection(
             headline = title,
             supportingText = summary,
             valueText = value,
-            onClick = { onExpandedChange(!expanded) },
+            onClick = {
+                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSection(title, !expanded)
+                onExpandedChange(!expanded)
+            },
             trailingContent = {
                 Icon(
                     imageVector =

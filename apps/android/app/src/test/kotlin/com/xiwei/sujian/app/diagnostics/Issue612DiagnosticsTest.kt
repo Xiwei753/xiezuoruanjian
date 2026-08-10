@@ -325,3 +325,58 @@ class DiagnosticsEventsNewEventsTest {
         assertTrue(EditorEventRingBuffer.getSnapshot().isEmpty())
     }
 }
+
+/**
+ * Issue #612 五：ThemeStore.reload() 真实触发 theme.resolve 事件集成测试。
+ *
+ * 正测试：reload() 后 EditorEventRingBuffer 包含 theme.resolve 事件且字段正确。
+ * 反测试：未调用 reload() 时不产生 theme.resolve 事件。
+ */
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [34])
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+class ThemeResolveIntegrationTest {
+    private lateinit var context: android.content.Context
+    private lateinit var settingsRepository: com.xiwei.sujian.feature.settings.data.SettingsRepository
+    private lateinit var themeRepository: com.xiwei.sujian.app.theme.ThemeRepository
+
+    @org.junit.Before
+    fun setUp() {
+        context = androidx.test.core.app.ApplicationProvider.getApplicationContext()
+        val dir = java.nio.file.Files.createTempDirectory("sujian_theme_resolve_test_").toString()
+        val bridge =
+            com.xiwei.sujian.core.interop.app.AppServiceBridge(
+                com.xiwei.sujian.core.interop.app.WriterAppServiceHolder(dir, dir),
+            )
+        settingsRepository = com.xiwei.sujian.feature.settings.data.SettingsRepository(context, bridge)
+        themeRepository = com.xiwei.sujian.app.theme.ThemeRepository(context, bridge)
+        com.xiwei.sujian.app.theme.ThemeStore.initialize(themeRepository, settingsRepository)
+        com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer.setEnabled(true)
+        com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer.clear()
+    }
+
+    @org.junit.After
+    fun tearDown() {
+        com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer.clear()
+        com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer.setEnabled(false)
+    }
+
+    @org.junit.Test
+    fun reloadEmitsThemeResolveEvent() {
+        com.xiwei.sujian.app.theme.ThemeStore.reload()
+        val snapshot = com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer.getSnapshot()
+        val themeEvent = snapshot.find { it["event"] == "theme.resolve" }
+        org.junit.Assert.assertNotNull("reload() 必须产生 theme.resolve 事件", themeEvent)
+        org.junit.Assert.assertNotNull("theme.resolve 必须包含 appearanceMode", themeEvent!!["appearanceMode"])
+        org.junit.Assert.assertNotNull("theme.resolve 必须包含 colorSource", themeEvent["colorSource"])
+        org.junit.Assert.assertNotNull("theme.resolve 必须包含 isDark", themeEvent["isDark"])
+        org.junit.Assert.assertNotNull("theme.resolve 必须包含 sdk", themeEvent["sdk"])
+    }
+
+    @org.junit.Test
+    fun noThemeResolveEventWithoutReload() {
+        val snapshot = com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer.getSnapshot()
+        val themeEvent = snapshot.find { it["event"] == "theme.resolve" }
+        org.junit.Assert.assertNull("未调用 reload() 不应产生 theme.resolve 事件", themeEvent)
+    }
+}

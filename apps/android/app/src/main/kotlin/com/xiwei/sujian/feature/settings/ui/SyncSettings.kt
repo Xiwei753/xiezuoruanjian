@@ -12,9 +12,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
@@ -25,6 +27,7 @@ import com.xiwei.sujian.core.designsystem.component.SujianSlider
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.designsystem.component.SujianTextField
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
+import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 
 /**
  * #600 评论 #5：设置页同步区域拆成两组完全独立的 UI：
@@ -134,6 +137,7 @@ private fun ProjectSyncSection(
                 onIntent(SettingsIntent.UpdateProjectSyncConfig(syncConfig.copy(remoteUrl = it)))
             },
             label = { Text(stringResource(id = R.string.pref_github_repo)) },
+            modifier = rememberFieldFocusModifier("project_remote_url") { remoteUrl },
             enabled = syncConfig.enabled ?: false,
         )
         Spacer(modifier = Modifier.height(dims.space8))
@@ -144,6 +148,7 @@ private fun ProjectSyncSection(
                 onIntent(SettingsIntent.UpdateProjectSyncConfig(syncConfig.copy(branch = it)))
             },
             label = { Text(stringResource(id = R.string.pref_branch)) },
+            modifier = rememberFieldFocusModifier("project_branch") { branch },
             enabled = syncConfig.enabled ?: false,
         )
         Spacer(modifier = Modifier.height(dims.space8))
@@ -154,6 +159,7 @@ private fun ProjectSyncSection(
                 onIntent(SettingsIntent.UpdateProjectSyncSecrets(syncSecrets.copy(token = it.ifBlank { null })))
             },
             label = { Text(stringResource(id = R.string.pref_https_token)) },
+            modifier = rememberFieldFocusModifier("project_token") { token },
             enabled = syncConfig.enabled ?: false,
         )
         Spacer(modifier = Modifier.height(dims.space16))
@@ -280,6 +286,7 @@ private fun AppSyncSection(
                 onIntent(SettingsIntent.UpdateAppSyncConfig(syncConfig.copy(remoteUrl = it)))
             },
             label = { Text(stringResource(id = R.string.pref_github_repo)) },
+            modifier = rememberFieldFocusModifier("app_remote_url") { remoteUrl },
             enabled = syncConfig.enabled ?: false,
         )
         Spacer(modifier = Modifier.height(dims.space8))
@@ -290,6 +297,7 @@ private fun AppSyncSection(
                 onIntent(SettingsIntent.UpdateAppSyncConfig(syncConfig.copy(branch = it)))
             },
             label = { Text(stringResource(id = R.string.pref_branch)) },
+            modifier = rememberFieldFocusModifier("app_branch") { branch },
             enabled = syncConfig.enabled ?: false,
         )
         Spacer(modifier = Modifier.height(dims.space8))
@@ -300,6 +308,7 @@ private fun AppSyncSection(
                 onIntent(SettingsIntent.UpdateAppSyncSecrets(syncSecrets.copy(token = it.ifBlank { null })))
             },
             label = { Text(stringResource(id = R.string.pref_https_token)) },
+            modifier = rememberFieldFocusModifier("app_token") { token },
             enabled = syncConfig.enabled ?: false,
         )
         Spacer(modifier = Modifier.height(dims.space16))
@@ -460,5 +469,27 @@ private fun translateStatusComponent(value: String): String {
         "ok" -> stringResource(id = R.string.sync_diag_ok)
         "fail" -> stringResource(id = R.string.sync_diag_fail)
         else -> value
+    }
+}
+
+/**
+ * Issue #612 五：设置字段焦点/提交诊断事件。
+ * 获得焦点记录 fieldFocus(true)，失去焦点记录 fieldFocus(false) + fieldCommit(字符数, "blur")。
+ * 用 wasFocused 防止初始组合（isFocused=false）产生噪声事件。
+ */
+@Composable
+private fun rememberFieldFocusModifier(
+    fieldType: String,
+    value: () -> String,
+): Modifier {
+    var wasFocused by remember { mutableStateOf(false) }
+    return Modifier.onFocusChanged { state ->
+        val isFocused = state.isFocused
+        if (isFocused == wasFocused) return@onFocusChanged
+        wasFocused = isFocused
+        DiagnosticsEvents.fieldFocus(fieldType, isFocused)
+        if (!isFocused) {
+            DiagnosticsEvents.fieldCommit(fieldType, value().length, "blur")
+        }
     }
 }

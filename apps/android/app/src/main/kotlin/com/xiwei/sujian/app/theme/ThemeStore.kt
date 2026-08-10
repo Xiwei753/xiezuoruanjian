@@ -3,6 +3,7 @@ package com.xiwei.sujian.app.theme
 import android.content.Context
 import com.xiwei.sujian.app.theme.model.BuiltinTheme
 import com.xiwei.sujian.app.theme.model.ThemePaletteRecord
+import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -67,6 +68,14 @@ object ThemeStore {
                 systemIsDark = sysDark,
             )
         refreshPaletteRecords()
+        DiagnosticsEvents.themeResolve(
+            appearanceMode = settings.appearanceMode,
+            colorSource = settings.colorSource,
+            isDark = _uiState.value.isDark,
+            selectedBuiltin = settings.selectedBuiltinThemeId.ifEmpty { null },
+            selectedPalette = settings.selectedPaletteId.ifEmpty { null },
+            sdk = android.os.Build.VERSION.SDK_INT,
+        )
     }
 
     fun refreshPaletteRecords() {
