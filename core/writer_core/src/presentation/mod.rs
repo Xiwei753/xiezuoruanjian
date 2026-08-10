@@ -17,8 +17,9 @@
 //!   VisiblePaneRoles`。Material 断点、dp 宽度、导航控件呈现
 //!   （BottomBar/NavigationRail/Drawer）不属于产品事务语义，各平台自己算。
 //! - [`screen_contract`]：产品页面动作语义。`ScreenRole / PaneRole /
-//!   ActionRole / ActionSlot`，"设置/搜索/同步位于页头右侧以及它们的顺序"
-//!   是素笺自己的设计语言，跨端统一；控件长什么样由各平台决定。
+//!   ActionRole / ActionTarget / ActionSlot`，“设置/搜索/同步位于页头右侧以及它们的顺序”
+//!   是素笺自己的设计语言，跨端统一；动作的业务目标身份（Delete+Volume vs
+//!   Delete+Chapter）由 `ActionTarget` 表达；控件长什么样由各平台决定。
 
 pub mod layout_contract;
 pub mod screen_contract;

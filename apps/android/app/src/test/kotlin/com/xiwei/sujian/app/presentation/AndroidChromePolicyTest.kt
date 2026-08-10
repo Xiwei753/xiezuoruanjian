@@ -9,19 +9,21 @@ import org.junit.Test
 import uniffi.writer_core.ActionRegionDto
 import uniffi.writer_core.ActionRoleDto
 import uniffi.writer_core.ActionSlotDto
+import uniffi.writer_core.ActionTargetDto
 import uniffi.writer_core.ScreenPolicyDto
 import uniffi.writer_core.ScreenRoleDto
 
 /**
- * #610：AndroidChromePolicy 只消费 Core screen contract（ActionSlot 区域/顺序），
- * 不再自建第二份"同步→搜索→设置"或"哪些页面显示顶栏/底栏"的规则。
+ * #610：AndroidChromePolicy 只消费 Core screen contract（ActionSlot 区域/顺序/业务目标），
+ * 不再自建第二份“同步→搜索→设置”或“哪些页面显示顶栏/底栏”的规则。
  *
- * 行为对齐 #597 正文一/三/四：
+ * 行为对齐 #597 正文一/三/四 + #610 评论二：
  * - 一级导航只保留 作品/星图/统计；设置从顶栏进入，不是一级入口；
  * - 作品页顶栏右侧产品顺序（从右往左）为 设置/搜索/同步状态，
  *   代码顺序（Core order 升序）为 同步 → 搜索 → 设置；
  * - 进入设置后顶栏只保留左上返回，一级导航（底栏/侧栏）消失；
- * - 进入正文后一级导航消失；写作区顶栏透明、不显示标题、只保留同步/设置；
+ * - 进入正文后一级导航消失；写作区顶栏透明、不显示标题、只保留同步/设置
+ *   （Save 已从 Core 契约删除，Android 不再过滤任何动作）；
  * - 星图/统计根页没有返回动作。
  */
 class AndroidChromePolicyTest {
@@ -30,9 +32,11 @@ class AndroidChromePolicyTest {
         region: ActionRegionDto,
         order: Int,
         requiresConfirmation: Boolean = false,
+        target: ActionTargetDto = ActionTargetDto.APP,
     ): ActionSlotDto =
         ActionSlotDto(
             role = role,
+            target = target,
             region = region,
             order = order.toUShort(),
             requiresConfirmation = requiresConfirmation,
@@ -43,25 +47,23 @@ class AndroidChromePolicyTest {
         slots: List<ActionSlotDto>,
     ): ScreenPolicyDto = ScreenPolicyDto(screenRole = screenRole, actionSlots = slots)
 
-    /** 作品页契约：HeaderTrailing = 同步(10)/搜索(20)/设置(30)/排序(40)。 */
+    /** 作品页契约：HeaderTrailing = 同步(10)/搜索(20)/设置(30)，无 Sort（#610 评论二）。 */
     private fun projectWorkspacePolicy(): ScreenPolicyDto =
         policy(
             ScreenRoleDto.PROJECT_WORKSPACE,
             listOf(
                 slot(ActionRoleDto.SETTINGS, ActionRegionDto.HEADER_TRAILING, 30),
-                slot(ActionRoleDto.SORT, ActionRegionDto.HEADER_TRAILING, 40),
                 slot(ActionRoleDto.SEARCH, ActionRegionDto.HEADER_TRAILING, 20),
                 slot(ActionRoleDto.SYNC, ActionRegionDto.HEADER_TRAILING, 10),
             ),
         )
 
-    /** 写作页契约：HeaderLeading=Back，HeaderTrailing = 保存(10)/同步(20)/设置(30)。 */
+    /** 写作页契约：HeaderLeading=Back，HeaderTrailing = 同步(20)/设置(30)，无 Save。 */
     private fun writingPolicy(): ScreenPolicyDto =
         policy(
             ScreenRoleDto.WRITING,
             listOf(
                 slot(ActionRoleDto.BACK, ActionRegionDto.HEADER_LEADING, 10),
-                slot(ActionRoleDto.SAVE, ActionRegionDto.HEADER_TRAILING, 10),
                 slot(ActionRoleDto.SYNC, ActionRegionDto.HEADER_TRAILING, 20),
                 slot(ActionRoleDto.SETTINGS, ActionRegionDto.HEADER_TRAILING, 30),
             ),
@@ -134,7 +136,7 @@ class AndroidChromePolicyTest {
         assertTrue(spec.showTitle)
         assertFalse(spec.showBack)
         // #610：顺序来自 Core order（升序 = 代码顺序 同步 → 搜索 → 设置）；
-        // Sort 无 Android 控件，由呈现层过滤。
+        // Sort 已从 Core 契约删除（#610 评论二），Android 不需要过滤任何动作。
         assertEquals(
             listOf(SujianChromeAction.Sync, SujianChromeAction.Search, SujianChromeAction.Settings),
             spec.actions,
@@ -185,7 +187,7 @@ class AndroidChromePolicyTest {
         assertTrue("写作区顶栏透明背景", spec.appBarTransparent)
         assertFalse("写作区顶栏不显示标题", spec.showTitle)
         assertTrue(spec.showBack)
-        // 写作区只保留需要的图标层：同步、设置；Save（自动保存）/Search（未实现）不渲染。
+        // 写作区只保留需要的图标层：同步、设置（Save 已从 Core 契约删除，#610 评论二）。
         assertEquals(
             listOf(SujianChromeAction.Sync, SujianChromeAction.Settings),
             spec.actions,
@@ -240,5 +242,42 @@ class AndroidChromePolicyTest {
         val withoutBack =
             resolve(ScreenRoleDto.SETTINGS, policy(ScreenRoleDto.SETTINGS, emptyList()))
         assertFalse("Core 无 Back 槽位时不得显示返回箭头", withoutBack.showBack)
+    }
+
+    // ---- #610 评论二：headerActions 只做角色→控件映射，不做动作存在性过滤 ----
+
+    @Test
+    fun `non header roles never render as top bar icons`() {
+        // 即使契约里混入非 HeaderTrailing 角色（Back/新建/删除/重命名），
+        // 它们也只映射到各自区域的控件，绝不进顶栏——这是控件映射不是过滤。
+        val policy =
+            policy(
+                ScreenRoleDto.PROJECT_WORKSPACE,
+                listOf(
+                    slot(ActionRoleDto.BACK, ActionRegionDto.HEADER_LEADING, 10),
+                    slot(ActionRoleDto.DELETE, ActionRegionDto.CONTEXT, 10, requiresConfirmation = true),
+                    slot(ActionRoleDto.RENAME, ActionRegionDto.CONTEXT, 20),
+                    slot(ActionRoleDto.CREATE_VOLUME, ActionRegionDto.LIST_HEADER, 10),
+                    slot(ActionRoleDto.CREATE_CHAPTER, ActionRegionDto.ITEM_TRAILING, 10),
+                    slot(ActionRoleDto.SYNC, ActionRegionDto.HEADER_TRAILING, 10),
+                ),
+            )
+        assertEquals(listOf(SujianChromeAction.Sync), AndroidChromePolicy.headerActions(policy))
+    }
+
+    @Test
+    fun `writing contract without save renders only sync and settings`() {
+        // #610 评论二：正文自动保存，Core 契约不再声明 Save；
+        // Android 呈现的就是契约里真实存在的动作，没有第二个真相。
+        val spec =
+            resolve(
+                ScreenRoleDto.WRITING,
+                writingPolicy(),
+                location = WorkspaceLocation.Editor("p1", "v1", "c1"),
+            )
+        assertEquals(
+            listOf(SujianChromeAction.Sync, SujianChromeAction.Settings),
+            spec.actions,
+        )
     }
 }

@@ -42,6 +42,7 @@ import {
   ScreenRole,
   ActionRole,
   ActionRegion,
+  ActionTarget,
   EditorVisualTransaction,
   EditorTransactionCause
 } from '../model/CoreDtos'
@@ -834,47 +835,45 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     switch (screenRole) {
       case ScreenRole.Home:
         return [
-          { role: ActionRole.Search, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
-          { role: ActionRole.Settings, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false }
+          { role: ActionRole.Search, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
+          { role: ActionRole.Settings, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false }
         ]
       case ScreenRole.ProjectList:
         return [
-          { role: ActionRole.CreateProject, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Delete, region: ActionRegion.Context, order: 10, requiresConfirmation: true },
-          { role: ActionRole.Rename, region: ActionRegion.Context, order: 20, requiresConfirmation: false }
+          { role: ActionRole.CreateProject, target: ActionTarget.Project, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
+          { role: ActionRole.Delete, target: ActionTarget.Project, region: ActionRegion.Context, order: 10, requiresConfirmation: true },
+          { role: ActionRole.Rename, target: ActionTarget.Project, region: ActionRegion.Context, order: 20, requiresConfirmation: false }
         ]
       case ScreenRole.ProjectWorkspace:
         return [
-          { role: ActionRole.Sync, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Search, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
-          { role: ActionRole.Settings, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false },
-          { role: ActionRole.Sort, region: ActionRegion.HeaderTrailing, order: 40, requiresConfirmation: false },
-          { role: ActionRole.CreateVolume, region: ActionRegion.ListHeader, order: 10, requiresConfirmation: false },
-          { role: ActionRole.CreateChapter, region: ActionRegion.ItemTrailing, order: 10, requiresConfirmation: false },
-          { role: ActionRole.CreateChapter, region: ActionRegion.EmptyState, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Delete, region: ActionRegion.Context, order: 10, requiresConfirmation: true },
-          { role: ActionRole.Delete, region: ActionRegion.Context, order: 20, requiresConfirmation: true },
-          { role: ActionRole.Rename, region: ActionRegion.Context, order: 30, requiresConfirmation: false },
-          { role: ActionRole.Rename, region: ActionRegion.Context, order: 40, requiresConfirmation: false }
+          { role: ActionRole.Sync, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
+          { role: ActionRole.Search, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
+          { role: ActionRole.Settings, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false },
+          { role: ActionRole.CreateVolume, target: ActionTarget.Project, region: ActionRegion.ListHeader, order: 10, requiresConfirmation: false },
+          { role: ActionRole.CreateChapter, target: ActionTarget.Volume, region: ActionRegion.ItemTrailing, order: 10, requiresConfirmation: false },
+          { role: ActionRole.CreateChapter, target: ActionTarget.Volume, region: ActionRegion.EmptyState, order: 10, requiresConfirmation: false },
+          { role: ActionRole.Delete, target: ActionTarget.Volume, region: ActionRegion.Context, order: 10, requiresConfirmation: true },
+          { role: ActionRole.Delete, target: ActionTarget.Chapter, region: ActionRegion.Context, order: 20, requiresConfirmation: true },
+          { role: ActionRole.Rename, target: ActionTarget.Volume, region: ActionRegion.Context, order: 30, requiresConfirmation: false },
+          { role: ActionRole.Rename, target: ActionTarget.Chapter, region: ActionRegion.Context, order: 40, requiresConfirmation: false }
         ]
       case ScreenRole.Writing:
         return [
-          { role: ActionRole.Back, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Save, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Sync, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
-          { role: ActionRole.Settings, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false }
+          { role: ActionRole.Back, target: ActionTarget.App, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false },
+          { role: ActionRole.Sync, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
+          { role: ActionRole.Settings, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false }
         ]
       case ScreenRole.StarMap:
       case ScreenRole.Stats:
         return []
       case ScreenRole.Settings:
         return [
-          { role: ActionRole.Back, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false }
+          { role: ActionRole.Back, target: ActionTarget.App, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false }
         ]
       case ScreenRole.Sync:
         return [
-          { role: ActionRole.Back, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Sync, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false }
+          { role: ActionRole.Back, target: ActionTarget.App, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false },
+          { role: ActionRole.Sync, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false }
         ]
       default:
         return []

@@ -71,8 +71,11 @@ internal object AndroidChromePolicy {
     /**
      * Core ActionSlot（HeaderTrailing，按 order 升序）→ Android 顶栏动作。
      *
-     * 只映射 Android 当前有控件的角色；Save（自动保存）/Sort（未实现）等
-     * 不渲染为顶栏图标——这是 Android 呈现决策，不是产品规则。
+     * 只做 ActionRole → Android 控件映射（#610 评论二）：动作是否存在、在哪个产品区域
+     * 已由 Core 契约决定（Save/Sort 等死动作已从契约删除），本函数不再承担
+     * “过滤掉 Core 里其实不存在于当前 UI 的动作”的职责。
+     * 非 HeaderTrailing 角色即使出现，也由 Android 画成各自区域的控件
+     * （FAB/列表按钮/菜单项），不是顶栏图标——这是控件映射，不是动作存在性判断。
      */
     fun headerActions(screenPolicy: ScreenPolicyDto?): List<SujianChromeAction> =
         PresentationContractBridge.headerTrailingSlots(screenPolicy).mapNotNull { slot ->
@@ -80,7 +83,16 @@ internal object AndroidChromePolicy {
                 ActionRoleDto.SYNC -> SujianChromeAction.Sync
                 ActionRoleDto.SEARCH -> SujianChromeAction.Search
                 ActionRoleDto.SETTINGS -> SujianChromeAction.Settings
-                else -> null
+                // 这些角色在 Core 契约里不属于 HeaderTrailing（Back 在 HeaderLeading，
+                // 新建/删除/重命名在 ListHeader/ItemTrailing/EmptyState/Context），
+                // Android 把它们呈现为对应区域的控件（FAB/列表按钮/菜单项）。
+                ActionRoleDto.BACK,
+                ActionRoleDto.CREATE_PROJECT,
+                ActionRoleDto.CREATE_VOLUME,
+                ActionRoleDto.CREATE_CHAPTER,
+                ActionRoleDto.DELETE,
+                ActionRoleDto.RENAME,
+                -> null
             }
         }
 

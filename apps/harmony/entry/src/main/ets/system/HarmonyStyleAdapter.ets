@@ -1,5 +1,5 @@
 import {
-  ActionRole, ActionRegion, ActionSlot, PaneRole
+  ActionRole, ActionRegion, ActionSlot, ActionTarget, PaneRole
 } from '../model/CoreDtos'
 
 /**
@@ -16,7 +16,7 @@ import {
 
 export enum ArkControlType {
   NavigationButton,    // Back
-  ProminentButton,     // Save, CreateProject, CreateChapter, Sync
+  ProminentButton,     // CreateVolume, CreateChapter, Sync
   ProminentLarge,      // CreateProject (large)
   ContextMenuItem,     // Delete, Rename
   IconButton,          // Settings, Search
@@ -25,6 +25,8 @@ export enum ArkControlType {
 
 export interface ArkControl {
   type: ArkControlType
+  // #610 评论二：业务目标身份透传到控件，Delete+Volume 与 Delete+Chapter 可区分绑定。
+  target: ActionTarget
   isDestructive: boolean
   requiresConfirmation: boolean
 }
@@ -34,9 +36,6 @@ export function mapActionSlot(slot: ActionSlot): ArkControl {
   switch (slot.role) {
     case ActionRole.Back:
       type = ArkControlType.NavigationButton
-      break
-    case ActionRole.Save:
-      type = ArkControlType.ProminentButton
       break
     case ActionRole.CreateProject:
       type = ArkControlType.ProminentLarge
@@ -51,7 +50,6 @@ export function mapActionSlot(slot: ActionSlot): ArkControl {
       break
     case ActionRole.Settings:
     case ActionRole.Search:
-    case ActionRole.Sort:
       type = ArkControlType.IconButton
       break
     case ActionRole.Sync:
@@ -64,6 +62,7 @@ export function mapActionSlot(slot: ActionSlot): ArkControl {
 
   return {
     type: type,
+    target: slot.target,
     isDestructive: slot.role === ActionRole.Delete,
     requiresConfirmation: slot.requiresConfirmation
   }

@@ -1,7 +1,7 @@
 import hilog from '@ohos.hilog'
 import { getBridge } from './AppContext'
 import {
-  ScreenRole, ActionRole, ActionRegion,
+  ScreenRole, ActionRole, ActionRegion, ActionTarget,
   ActionSlot, ScreenPolicy
 } from '../model/CoreDtos'
 
@@ -46,6 +46,8 @@ export class ScreenPolicyBridge {
       const rawOrder = (slot['order'] ?? 0) as number
       return {
         role: this.parseActionRole((slot['role'] ?? '') as string),
+        // #610 评论二：业务目标身份（Delete+Volume vs Delete+Chapter 等）。
+        target: this.parseActionTarget((slot['target'] ?? 'App') as string),
         region: this.parseActionRegion((slot['region'] ?? '') as string),
         order: Number(rawOrder),
         requiresConfirmation: (slot['requiresConfirmation'] ?? slot['requires_confirmation'] ?? false) as boolean
@@ -81,6 +83,14 @@ export class ScreenPolicyBridge {
       if (v === value) return v as ActionRegion
     }
     return ActionRegion.HeaderTrailing
+  }
+
+  private parseActionTarget(value: string): ActionTarget {
+    const entries = Object.entries(ActionTarget)
+    for (const [, v] of entries) {
+      if (v === value) return v as ActionTarget
+    }
+    return ActionTarget.App
   }
 }
 

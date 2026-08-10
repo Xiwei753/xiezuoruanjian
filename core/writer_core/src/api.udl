@@ -1456,7 +1456,6 @@ enum PaneRoleDto {
 
 enum ActionRoleDto {
     "Back",
-    "Save",
     "CreateProject",
     "CreateVolume",
     "CreateChapter",
@@ -1464,8 +1463,15 @@ enum ActionRoleDto {
     "Rename",
     "Settings",
     "Sync",
-    "Search",
-    "Sort"
+    "Search"
+};
+
+// #610 评论二：平台无关的业务目标身份。
+enum ActionTargetDto {
+    "App",
+    "Project",
+    "Volume",
+    "Chapter"
 };
 
 enum ActionRegionDto {
@@ -1479,6 +1485,7 @@ enum ActionRegionDto {
 
 dictionary ActionSlotDto {
     ActionRoleDto role;
+    ActionTargetDto target;
     ActionRegionDto region;
     u16 order;
     boolean requires_confirmation;

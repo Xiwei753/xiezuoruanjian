@@ -41,10 +41,12 @@ pub enum PaneRole {
 }
 
 /// 动作角色
+///
+/// 只保留当前产品真实存在的动作（#610 评论二：`Save` 因正文自动保存、
+/// `Sort` 因未实现而不再声明，避免 Core 与平台层出现"动作是否存在"的第二真相）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActionRole {
     Back,
-    Save,
     CreateProject,
     CreateVolume,
     CreateChapter,
@@ -53,7 +55,22 @@ pub enum ActionRole {
     Settings,
     Sync,
     Search,
-    Sort,
+}
+
+/// 动作的业务目标 — 平台无关的身份（#610 评论二）。
+///
+/// 平台层据此把动作可靠绑定到对应业务操作（例如 Delete + Volume 绑定"删卷"、
+/// Delete + Chapter 绑定"删章节"），不依赖区域/顺序猜身份。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ActionTarget {
+    /// 没有业务对象的动作（设置/搜索/同步/返回等）。
+    App,
+    /// 作用于作品（作品列表的删除/重命名、新建作品等）。
+    Project,
+    /// 作用于卷（删卷/重命名卷、在卷内新建章节等）。
+    Volume,
+    /// 作用于章节（删章节/重命名章节）。
+    Chapter,
 }
 
 /// 动作所属的产品区域 — 平台控件无关。
@@ -75,10 +92,12 @@ pub enum ActionRegion {
 
 // ========== 结构体定义 ==========
 
-/// 动作槽位 — 描述产品区域和顺序（#610 评论"怎么改"第 2 节）。
+/// 动作槽位 — 描述产品区域、顺序与业务目标（#610 评论"怎么改"第 2 节 + 评论二）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionSlot {
     pub role: ActionRole,
+    /// 平台无关的业务目标身份：Delete/Rename 等动作靠它区分"删卷/删章节"。
+    pub target: ActionTarget,
     pub region: ActionRegion,
     /// 同一区域内从左到右（或从主到次）的显示顺序。
     pub order: u16,
@@ -98,12 +117,14 @@ pub fn resolve_screen_policy(screen_role: ScreenRole) -> Vec<ActionSlot> {
         ScreenRole::Home => vec![
             ActionSlot {
                 role: ActionRole::Search,
+                target: ActionTarget::App,
                 region: ActionRegion::HeaderTrailing,
                 order: 20,
                 requires_confirmation: false,
             },
             ActionSlot {
                 role: ActionRole::Settings,
+                target: ActionTarget::App,
                 region: ActionRegion::HeaderTrailing,
                 order: 30,
                 requires_confirmation: false,
@@ -112,18 +133,22 @@ pub fn resolve_screen_policy(screen_role: ScreenRole) -> Vec<ActionSlot> {
         ScreenRole::ProjectList => vec![
             ActionSlot {
                 role: ActionRole::CreateProject,
+                target: ActionTarget::Project,
                 region: ActionRegion::HeaderTrailing,
                 order: 10,
                 requires_confirmation: false,
             },
+            // #610 评论二：删除/重命名目标就是 Project。
             ActionSlot {
                 role: ActionRole::Delete,
+                target: ActionTarget::Project,
                 region: ActionRegion::Context,
                 order: 10,
                 requires_confirmation: true,
             },
             ActionSlot {
                 role: ActionRole::Rename,
+                target: ActionTarget::Project,
                 region: ActionRegion::Context,
                 order: 20,
                 requires_confirmation: false,
@@ -131,97 +156,101 @@ pub fn resolve_screen_policy(screen_role: ScreenRole) -> Vec<ActionSlot> {
         ],
         // #597 正文：作品页顶栏右侧产品顺序（从右往左）为 设置 / 搜索 / 同步状态，
         // Material3 actions 按代码顺序从左往右摆，因此 order 升序为 同步 → 搜索 → 设置。
+        // #610 评论二：Sort 未实现，不再在共享契约中声明；
+        // Delete/Rename 各自通过 ActionTarget 区分卷与章节。
         ScreenRole::ProjectWorkspace => vec![
             ActionSlot {
                 role: ActionRole::Sync,
+                target: ActionTarget::App,
                 region: ActionRegion::HeaderTrailing,
                 order: 10,
                 requires_confirmation: false,
             },
             ActionSlot {
                 role: ActionRole::Search,
+                target: ActionTarget::App,
                 region: ActionRegion::HeaderTrailing,
                 order: 20,
                 requires_confirmation: false,
             },
             ActionSlot {
                 role: ActionRole::Settings,
+                target: ActionTarget::App,
                 region: ActionRegion::HeaderTrailing,
                 order: 30,
                 requires_confirmation: false,
             },
             ActionSlot {
-                role: ActionRole::Sort,
-                region: ActionRegion::HeaderTrailing,
-                order: 40,
-                requires_confirmation: false,
-            },
-            ActionSlot {
                 role: ActionRole::CreateVolume,
+                target: ActionTarget::Project,
                 region: ActionRegion::ListHeader,
                 order: 10,
                 requires_confirmation: false,
             },
             ActionSlot {
                 role: ActionRole::CreateChapter,
+                target: ActionTarget::Volume,
                 region: ActionRegion::ItemTrailing,
                 order: 10,
                 requires_confirmation: false,
             },
             ActionSlot {
                 role: ActionRole::CreateChapter,
+                target: ActionTarget::Volume,
                 region: ActionRegion::EmptyState,
                 order: 10,
                 requires_confirmation: false,
             },
             ActionSlot {
                 role: ActionRole::Delete,
+                target: ActionTarget::Volume,
                 region: ActionRegion::Context,
                 order: 10,
                 requires_confirmation: true,
             },
             ActionSlot {
                 role: ActionRole::Delete,
+                target: ActionTarget::Chapter,
                 region: ActionRegion::Context,
                 order: 20,
                 requires_confirmation: true,
             },
             ActionSlot {
                 role: ActionRole::Rename,
+                target: ActionTarget::Volume,
                 region: ActionRegion::Context,
                 order: 30,
                 requires_confirmation: false,
             },
             ActionSlot {
                 role: ActionRole::Rename,
+                target: ActionTarget::Chapter,
                 region: ActionRegion::Context,
                 order: 40,
                 requires_confirmation: false,
             },
         ],
         // #597 正文：写作区只保留需要的图标层 — 同步、设置（搜索未实现不进入写作区）；
+        // #610 评论二：正文自动保存，Save 不再是真实存在的动作，不再声明。
         // 返回箭头是否出现由平台端按工作区导航状态动态决定，不在静态契约里。
         ScreenRole::Writing => vec![
             ActionSlot {
                 role: ActionRole::Back,
+                target: ActionTarget::App,
                 region: ActionRegion::HeaderLeading,
                 order: 10,
                 requires_confirmation: false,
             },
             ActionSlot {
-                role: ActionRole::Save,
-                region: ActionRegion::HeaderTrailing,
-                order: 10,
-                requires_confirmation: false,
-            },
-            ActionSlot {
                 role: ActionRole::Sync,
+                target: ActionTarget::App,
                 region: ActionRegion::HeaderTrailing,
                 order: 20,
                 requires_confirmation: false,
             },
             ActionSlot {
                 role: ActionRole::Settings,
+                target: ActionTarget::App,
                 region: ActionRegion::HeaderTrailing,
                 order: 30,
                 requires_confirmation: false,
@@ -233,6 +262,7 @@ pub fn resolve_screen_policy(screen_role: ScreenRole) -> Vec<ActionSlot> {
         ScreenRole::Stats => Vec::new(),
         ScreenRole::Settings => vec![ActionSlot {
             role: ActionRole::Back,
+            target: ActionTarget::App,
             region: ActionRegion::HeaderLeading,
             order: 10,
             requires_confirmation: false,
@@ -240,12 +270,14 @@ pub fn resolve_screen_policy(screen_role: ScreenRole) -> Vec<ActionSlot> {
         ScreenRole::Sync => vec![
             ActionSlot {
                 role: ActionRole::Back,
+                target: ActionTarget::App,
                 region: ActionRegion::HeaderLeading,
                 order: 10,
                 requires_confirmation: false,
             },
             ActionSlot {
                 role: ActionRole::Sync,
+                target: ActionTarget::App,
                 region: ActionRegion::HeaderTrailing,
                 order: 10,
                 requires_confirmation: false,

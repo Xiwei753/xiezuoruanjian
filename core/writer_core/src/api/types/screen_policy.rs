@@ -85,7 +85,6 @@ impl From<PaneRoleDto> for crate::presentation::screen_contract::PaneRole {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
 pub enum ActionRoleDto {
     Back,
-    Save,
     CreateProject,
     CreateVolume,
     CreateChapter,
@@ -95,14 +94,12 @@ pub enum ActionRoleDto {
     Sync,
     #[default]
     Search,
-    Sort,
 }
 
 impl From<crate::presentation::screen_contract::ActionRole> for ActionRoleDto {
     fn from(r: crate::presentation::screen_contract::ActionRole) -> Self {
         match r {
             crate::presentation::screen_contract::ActionRole::Back => Self::Back,
-            crate::presentation::screen_contract::ActionRole::Save => Self::Save,
             crate::presentation::screen_contract::ActionRole::CreateProject => Self::CreateProject,
             crate::presentation::screen_contract::ActionRole::CreateVolume => Self::CreateVolume,
             crate::presentation::screen_contract::ActionRole::CreateChapter => Self::CreateChapter,
@@ -111,7 +108,6 @@ impl From<crate::presentation::screen_contract::ActionRole> for ActionRoleDto {
             crate::presentation::screen_contract::ActionRole::Settings => Self::Settings,
             crate::presentation::screen_contract::ActionRole::Sync => Self::Sync,
             crate::presentation::screen_contract::ActionRole::Search => Self::Search,
-            crate::presentation::screen_contract::ActionRole::Sort => Self::Sort,
         }
     }
 }
@@ -120,7 +116,6 @@ impl From<ActionRoleDto> for crate::presentation::screen_contract::ActionRole {
     fn from(dto: ActionRoleDto) -> Self {
         match dto {
             ActionRoleDto::Back => Self::Back,
-            ActionRoleDto::Save => Self::Save,
             ActionRoleDto::CreateProject => Self::CreateProject,
             ActionRoleDto::CreateVolume => Self::CreateVolume,
             ActionRoleDto::CreateChapter => Self::CreateChapter,
@@ -129,7 +124,38 @@ impl From<ActionRoleDto> for crate::presentation::screen_contract::ActionRole {
             ActionRoleDto::Settings => Self::Settings,
             ActionRoleDto::Sync => Self::Sync,
             ActionRoleDto::Search => Self::Search,
-            ActionRoleDto::Sort => Self::Sort,
+        }
+    }
+}
+
+/// 动作的业务目标（#610 评论二）：平台层据此绑定业务操作，不靠区域/顺序猜身份。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+pub enum ActionTargetDto {
+    #[default]
+    App,
+    Project,
+    Volume,
+    Chapter,
+}
+
+impl From<crate::presentation::screen_contract::ActionTarget> for ActionTargetDto {
+    fn from(t: crate::presentation::screen_contract::ActionTarget) -> Self {
+        match t {
+            crate::presentation::screen_contract::ActionTarget::App => Self::App,
+            crate::presentation::screen_contract::ActionTarget::Project => Self::Project,
+            crate::presentation::screen_contract::ActionTarget::Volume => Self::Volume,
+            crate::presentation::screen_contract::ActionTarget::Chapter => Self::Chapter,
+        }
+    }
+}
+
+impl From<ActionTargetDto> for crate::presentation::screen_contract::ActionTarget {
+    fn from(dto: ActionTargetDto) -> Self {
+        match dto {
+            ActionTargetDto::App => Self::App,
+            ActionTargetDto::Project => Self::Project,
+            ActionTargetDto::Volume => Self::Volume,
+            ActionTargetDto::Chapter => Self::Chapter,
         }
     }
 }
@@ -179,6 +205,7 @@ impl From<ActionRegionDto> for crate::presentation::screen_contract::ActionRegio
 #[serde(rename_all = "camelCase")]
 pub struct ActionSlotDto {
     pub role: ActionRoleDto,
+    pub target: ActionTargetDto,
     pub region: ActionRegionDto,
     pub order: u16,
     pub requires_confirmation: bool,
@@ -188,6 +215,7 @@ impl From<crate::presentation::screen_contract::ActionSlot> for ActionSlotDto {
     fn from(s: crate::presentation::screen_contract::ActionSlot) -> Self {
         Self {
             role: s.role.into(),
+            target: s.target.into(),
             region: s.region.into(),
             order: s.order,
             requires_confirmation: s.requires_confirmation,
@@ -199,6 +227,7 @@ impl From<ActionSlotDto> for crate::presentation::screen_contract::ActionSlot {
     fn from(dto: ActionSlotDto) -> Self {
         Self {
             role: dto.role.into(),
+            target: dto.target.into(),
             region: dto.region.into(),
             order: dto.order,
             requires_confirmation: dto.requires_confirmation,
@@ -242,7 +271,6 @@ mod tests {
     fn test_action_role_dto_roundtrip() {
         let roles = vec![
             crate::presentation::screen_contract::ActionRole::Back,
-            crate::presentation::screen_contract::ActionRole::Save,
             crate::presentation::screen_contract::ActionRole::CreateProject,
             crate::presentation::screen_contract::ActionRole::CreateVolume,
             crate::presentation::screen_contract::ActionRole::CreateChapter,
@@ -251,12 +279,27 @@ mod tests {
             crate::presentation::screen_contract::ActionRole::Settings,
             crate::presentation::screen_contract::ActionRole::Sync,
             crate::presentation::screen_contract::ActionRole::Search,
-            crate::presentation::screen_contract::ActionRole::Sort,
         ];
         for role in roles {
             let dto: ActionRoleDto = role.into();
             let back: crate::presentation::screen_contract::ActionRole = dto.into();
             assert_eq!(back, role);
+        }
+    }
+
+    #[test]
+    fn test_action_target_dto_roundtrip() {
+        // #610 评论二：业务目标身份必须穿过 DTO 往返。
+        let targets = vec![
+            crate::presentation::screen_contract::ActionTarget::App,
+            crate::presentation::screen_contract::ActionTarget::Project,
+            crate::presentation::screen_contract::ActionTarget::Volume,
+            crate::presentation::screen_contract::ActionTarget::Chapter,
+        ];
+        for t in targets {
+            let dto: ActionTargetDto = t.into();
+            let back: crate::presentation::screen_contract::ActionTarget = dto.into();
+            assert_eq!(back, t);
         }
     }
 
@@ -280,14 +323,16 @@ mod tests {
     #[test]
     fn test_action_slot_dto_roundtrip() {
         let slot = crate::presentation::screen_contract::ActionSlot {
-            role: crate::presentation::screen_contract::ActionRole::Save,
-            region: crate::presentation::screen_contract::ActionRegion::HeaderTrailing,
-            order: 10,
-            requires_confirmation: false,
+            role: crate::presentation::screen_contract::ActionRole::Delete,
+            target: crate::presentation::screen_contract::ActionTarget::Chapter,
+            region: crate::presentation::screen_contract::ActionRegion::Context,
+            order: 20,
+            requires_confirmation: true,
         };
         let dto: ActionSlotDto = slot.clone().into();
         let back: crate::presentation::screen_contract::ActionSlot = dto.into();
         assert_eq!(back.role, slot.role);
+        assert_eq!(back.target, slot.target);
         assert_eq!(back.region, slot.region);
         assert_eq!(back.order, slot.order);
         assert_eq!(back.requires_confirmation, slot.requires_confirmation);
@@ -299,6 +344,7 @@ mod tests {
             screen_role: ScreenRoleDto::Writing,
             action_slots: vec![ActionSlotDto {
                 role: ActionRoleDto::Back,
+                target: ActionTargetDto::App,
                 region: ActionRegionDto::HeaderLeading,
                 order: 10,
                 requires_confirmation: false,
@@ -308,6 +354,7 @@ mod tests {
         assert!(json.contains("\"screenRole\""));
         assert!(json.contains("\"actionSlots\""));
         assert!(json.contains("\"requiresConfirmation\""));
+        assert!(json.contains("\"target\":\"App\""));
         assert!(json.contains("\"order\":10"));
 
         let deserialized: ScreenPolicyDto = serde_json::from_str(&json).unwrap();
@@ -317,12 +364,14 @@ mod tests {
             deserialized.action_slots[0].region,
             ActionRegionDto::HeaderLeading
         );
+        assert_eq!(deserialized.action_slots[0].target, ActionTargetDto::App);
     }
 
     #[test]
     fn test_action_slot_dto_has_no_platform_fields() {
         let json = serde_json::to_string(&ActionSlotDto {
             role: ActionRoleDto::CreateProject,
+            target: ActionTargetDto::Project,
             region: ActionRegionDto::HeaderTrailing,
             order: 10,
             requires_confirmation: false,
@@ -334,5 +383,7 @@ mod tests {
                 "ActionSlotDto 不得包含平台字段 {platform_field}"
             );
         }
+        // 业务目标身份是产品语义，必须出现在序列化里。
+        assert!(json.contains("\"target\""));
     }
 }

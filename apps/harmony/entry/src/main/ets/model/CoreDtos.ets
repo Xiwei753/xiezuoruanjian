@@ -608,7 +608,6 @@ export enum PaneRole {
 
 export enum ActionRole {
   Back = 'Back',
-  Save = 'Save',
   CreateProject = 'CreateProject',
   CreateVolume = 'CreateVolume',
   CreateChapter = 'CreateChapter',
@@ -616,8 +615,15 @@ export enum ActionRole {
   Rename = 'Rename',
   Settings = 'Settings',
   Sync = 'Sync',
-  Search = 'Search',
-  Sort = 'Sort'
+  Search = 'Search'
+}
+
+// #610 评论二：平台无关的业务目标身份。
+export enum ActionTarget {
+  App = 'App',
+  Project = 'Project',
+  Volume = 'Volume',
+  Chapter = 'Chapter'
 }
 
 export enum ActionRegion {
@@ -631,6 +637,7 @@ export enum ActionRegion {
 
 export interface ActionSlot {
   role: ActionRole
+  target: ActionTarget
   region: ActionRegion
   order: number
   requiresConfirmation: boolean

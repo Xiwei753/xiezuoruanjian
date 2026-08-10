@@ -26,6 +26,10 @@ import uniffi.writer_core.WindowCapabilitiesDto
  *
  * 旧的 ScreenPolicyBridge / LayoutPolicyBridge / ScreenPolicyModels /
  * LayoutPolicyModels 已删除，这里只有一个入口。
+ *
+ * #610 评论二：ActionSlotDto 携带平台无关的业务目标身份（target），
+ * Delete/Rename 等动作可区分“删卷/删章节/重命名卷/重命名章节”，
+ * Android 消费端直接读 DTO 字段即可绑定业务操作，不靠区域/顺序猜身份。
  */
 internal object PresentationContractBridge {
     private const val TAG = "PresentationContractBridge"
