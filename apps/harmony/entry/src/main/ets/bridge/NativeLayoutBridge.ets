@@ -1,4 +1,4 @@
-import { ChangedEntity, ResultEnvelope, WindowMetrics, LayoutPlan, ScreenPolicy, ScreenRole, ShellMode } from '../model/CoreDtos'
+import { ChangedEntity, ResultEnvelope, WindowCapabilities, LayoutContract, ScreenPolicy, ScreenRole } from '../model/CoreDtos'
 import { NativeCoreModule } from './NativeCoreModule'
 
 function nativeError<T>(e: unknown): ResultEnvelope<T> {
@@ -8,18 +8,17 @@ function nativeError<T>(e: unknown): ResultEnvelope<T> {
 export class NativeLayoutBridge {
   constructor(private core: NativeCoreModule) {}
 
-  async resolveLayout(metrics: WindowMetrics): Promise<ResultEnvelope<LayoutPlan>> {
+  async resolveLayout(capabilities: WindowCapabilities): Promise<ResultEnvelope<LayoutContract>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeResolveLayout(JSON.stringify(metrics))
-      return this.core.parseEnvelope<LayoutPlan>(jsonStr)
-    } catch (e) { return nativeError<LayoutPlan>(e) }
+      const jsonStr: string = this.core.getNativeModule().nativeResolveLayout(JSON.stringify(capabilities))
+      return this.core.parseEnvelope<LayoutContract>(jsonStr)
+    } catch (e) { return nativeError<LayoutContract>(e) }
   }
 
-  async resolveScreenPolicy(screenRole: ScreenRole, shellMode: ShellMode): Promise<ResultEnvelope<ScreenPolicy>> {
+  async resolveScreenPolicy(screenRole: ScreenRole): Promise<ResultEnvelope<ScreenPolicy>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeResolveScreenPolicy(
-        JSON.stringify(screenRole),
-        JSON.stringify(shellMode)
+        JSON.stringify(screenRole)
       )
       return this.core.parseEnvelope<ScreenPolicy>(jsonStr)
     } catch (e) { return nativeError<ScreenPolicy>(e) }

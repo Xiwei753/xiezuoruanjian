@@ -21,11 +21,8 @@ import {
   SyncResult,
   SyncDiagnosticsResult,
   RecentEdit,
-  WindowMetrics,
-  LayoutPlan,
   ScreenPolicy,
   ScreenRole,
-  ShellMode,
   EditorVisualTransaction,
   EditorTransactionCause
 } from '../model/CoreDtos'
@@ -108,11 +105,11 @@ export interface IWriterCoreBridge {
     chapterId: string, oldText: string, newText: string, durationSeconds: number, sessionId: string): Promise<ResultEnvelope<boolean>>
   getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>>
 
-  // Layout Policy
-  resolveLayout(metrics: WindowMetrics): Promise<ResultEnvelope<LayoutPlan>>
+  // Layout Contract（#610：输入为平台已判断好的窗口能力）
+  resolveLayout(capabilities: WindowCapabilities): Promise<ResultEnvelope<LayoutContract>>
 
-  // Screen Policy
-  resolveScreenPolicy(screenRole: ScreenRole, shellMode: ShellMode): Promise<ResultEnvelope<ScreenPolicy>>
+  // Screen Contract（#610：动作区域/顺序是产品语义，不随壳层变化）
+  resolveScreenPolicy(screenRole: ScreenRole): Promise<ResultEnvelope<ScreenPolicy>>
 
   // Native Status
   getNativeLoadStatus(): Promise<ResultEnvelope<string>>

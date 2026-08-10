@@ -172,7 +172,6 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/SmoothWheelScroller.qml" as "SmoothWheelScroller.qml",
     "qml/TopWritingToolbar.qml" as "TopWritingToolbar.qml",
     "qml/EditorContextMenu.qml" as "EditorContextMenu.qml",
-    "qml/ScreenPolicyAdapter.qml" as "ScreenPolicyAdapter.qml",
     "qml/RightDrawer.qml" as "RightDrawer.qml",
     "qml/SettingsDialog.qml" as "SettingsDialog.qml",
     "qml/SettingsSection.qml" as "SettingsSection.qml",

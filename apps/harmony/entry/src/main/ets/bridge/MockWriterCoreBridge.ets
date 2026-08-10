@@ -35,18 +35,17 @@ import {
   SyncConflict,
   ChangedEntity,
   ErrorCode,
-  WindowMetrics,
-  LayoutPlan,
+  WindowCapabilities,
+  LayoutContract,
   ScreenPolicy,
   ActionSlot,
   ScreenRole,
   ActionRole,
-  ActionPlacement,
-  ShellMode,
+  ActionRegion,
   EditorVisualTransaction,
   EditorTransactionCause
 } from '../model/CoreDtos'
-import { resolveLayoutFromMetrics } from '../common/LayoutPolicyHelper'
+import { resolveLayoutFromCapabilities } from '../common/LayoutPolicyHelper'
 
 export class MockWriterCoreBridge implements IWriterCoreBridge {
   private mockProjects: Project[] = []
@@ -806,30 +805,28 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success([] as RecentEdit[])
   }
 
-  // Layout Policy methods — 委托给 LayoutPolicyHelper 纯函数
-  resolveLayout(metrics: WindowMetrics): Promise<ResultEnvelope<LayoutPlan>> {
-    const plan = resolveLayoutFromMetrics(metrics)
+  // Layout Contract methods — 委托给 LayoutPolicyHelper 纯函数（与 Core 完全一致）
+  resolveLayout(capabilities: WindowCapabilities): Promise<ResultEnvelope<LayoutContract>> {
+    const contract = resolveLayoutFromCapabilities(capabilities)
     return Promise.resolve({
       success: true,
-      data: plan,
+      data: contract,
       warnings: [] as string[],
       changedPaths: [] as string[],
       changedEntities: [] as ChangedEntity[]
-    } as ResultEnvelope<LayoutPlan>)
+    } as ResultEnvelope<LayoutContract>)
   }
 
-  // Screen Policy methods — mock 返回与 Core 一致的策略
-  resolveScreenPolicy(screenRole: ScreenRole, shellMode: ShellMode): Promise<ResultEnvelope<ScreenPolicy>> {
-    const policy = this.mockResolveScreenPolicy(screenRole, shellMode)
+  // Screen Policy methods — mock 返回与 Core 一致的策略（#610：区域/顺序是产品语义）
+  resolveScreenPolicy(screenRole: ScreenRole): Promise<ResultEnvelope<ScreenPolicy>> {
+    const policy = this.mockResolveScreenPolicy(screenRole)
     return Promise.resolve(this.success(policy))
   }
 
-  private mockResolveScreenPolicy(screenRole: ScreenRole, shellMode: ShellMode): ScreenPolicy {
-    const allSlots = this.mockBaseSlots(screenRole)
-    const filtered = allSlots.filter((slot: ActionSlot) => slot.visibleIn.includes(shellMode))
+  private mockResolveScreenPolicy(screenRole: ScreenRole): ScreenPolicy {
     return {
       screenRole: screenRole,
-      actionSlots: filtered
+      actionSlots: this.mockBaseSlots(screenRole)
     }
   }
 
@@ -837,29 +834,47 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     switch (screenRole) {
       case ScreenRole.Home:
         return [
-          { actionId: 'settings', role: ActionRole.Settings, placement: ActionPlacement.TopTrailing, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false },
-          { actionId: 'search', role: ActionRole.Search, placement: ActionPlacement.TopTrailing, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false }
+          { role: ActionRole.Search, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
+          { role: ActionRole.Settings, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false }
         ]
-      case ScreenRole.Workspace:
+      case ScreenRole.ProjectList:
         return [
-          { actionId: 'create_project', role: ActionRole.CreateProject, placement: ActionPlacement.Floating, visibleIn: [ShellMode.SinglePane], requiresConfirmation: false },
-          { actionId: 'create_project', role: ActionRole.CreateProject, placement: ActionPlacement.TopTrailing, visibleIn: [ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false },
-          { actionId: 'delete', role: ActionRole.Delete, placement: ActionPlacement.ContextMenu, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: true },
-          { actionId: 'rename', role: ActionRole.Rename, placement: ActionPlacement.ContextMenu, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false }
+          { role: ActionRole.CreateProject, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
+          { role: ActionRole.Delete, region: ActionRegion.Context, order: 10, requiresConfirmation: true },
+          { role: ActionRole.Rename, region: ActionRegion.Context, order: 20, requiresConfirmation: false }
+        ]
+      case ScreenRole.ProjectWorkspace:
+        return [
+          { role: ActionRole.Sync, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
+          { role: ActionRole.Search, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
+          { role: ActionRole.Settings, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false },
+          { role: ActionRole.Sort, region: ActionRegion.HeaderTrailing, order: 40, requiresConfirmation: false },
+          { role: ActionRole.CreateVolume, region: ActionRegion.ListHeader, order: 10, requiresConfirmation: false },
+          { role: ActionRole.CreateChapter, region: ActionRegion.ItemTrailing, order: 10, requiresConfirmation: false },
+          { role: ActionRole.CreateChapter, region: ActionRegion.EmptyState, order: 10, requiresConfirmation: false },
+          { role: ActionRole.Delete, region: ActionRegion.Context, order: 10, requiresConfirmation: true },
+          { role: ActionRole.Delete, region: ActionRegion.Context, order: 20, requiresConfirmation: true },
+          { role: ActionRole.Rename, region: ActionRegion.Context, order: 30, requiresConfirmation: false },
+          { role: ActionRole.Rename, region: ActionRegion.Context, order: 40, requiresConfirmation: false }
         ]
       case ScreenRole.Writing:
         return [
-          { actionId: 'back', role: ActionRole.Back, placement: ActionPlacement.TopLeading, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false },
-          { actionId: 'save', role: ActionRole.Save, placement: ActionPlacement.TopTrailing, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false }
+          { role: ActionRole.Back, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false },
+          { role: ActionRole.Save, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
+          { role: ActionRole.Sync, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
+          { role: ActionRole.Settings, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false }
         ]
+      case ScreenRole.StarMap:
+      case ScreenRole.Stats:
+        return []
       case ScreenRole.Settings:
         return [
-          { actionId: 'back', role: ActionRole.Back, placement: ActionPlacement.TopLeading, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false }
+          { role: ActionRole.Back, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false }
         ]
       case ScreenRole.Sync:
         return [
-          { actionId: 'back', role: ActionRole.Back, placement: ActionPlacement.TopLeading, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false },
-          { actionId: 'sync', role: ActionRole.Sync, placement: ActionPlacement.Floating, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false }
+          { role: ActionRole.Back, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false },
+          { role: ActionRole.Sync, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false }
         ]
       default:
         return []

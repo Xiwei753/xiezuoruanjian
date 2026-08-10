@@ -170,10 +170,6 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "既有动作注册表测试，验证分发契约；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/app_config.rs"), "production-test-bloat"):
         "既有应用配置测试，验证加载/迁移契约；待拆分到独立 _tests.rs",
-    (Path("core/writer_core/src/layout_policy.rs"), "production-test-bloat"):
-        "既有布局策略测试，验证断点/方向切换；待拆分到独立 _tests.rs",
-    (Path("core/writer_core/src/screen_policy.rs"), "production-test-bloat"):
-        "既有屏幕策略测试，验证分类/适配规则；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/editor/strong_types.rs"), "production-test-bloat"):
         "既有强类型测试，验证 newtype 不变量与边界检查；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/sync/github_api_client.rs"), "production-test-bloat"):

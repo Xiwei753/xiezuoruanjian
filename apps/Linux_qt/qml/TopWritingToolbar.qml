@@ -18,7 +18,6 @@ Rectangle {
     id: root
     property var dt: null
     property var backendRef: null
-    property string shellMode: "SinglePane"
     property real currentFontSize: 16
     property real currentLineSpacing: 1.5
     property bool firstLineIndent: false
@@ -26,14 +25,6 @@ Rectangle {
     property string currentProjectId: ""
     readonly property int minFontSize: 10
     readonly property int maxFontSize: 72
-
-    // ── ScreenPolicyAdapter：从 Core 获取按钮位置语义 ──
-    ScreenPolicyAdapter {
-        id: screenPolicy
-        backendRef: root.backendRef
-        screenRole: "Writing"
-        shellMode: root.shellMode
-    }
 
     signal fontSizeChanged(real size)
     signal lineSpacingChanged(real spacing)

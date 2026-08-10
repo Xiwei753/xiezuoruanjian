@@ -7,16 +7,6 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.xiwei.sujian.app.layout.data.LayoutPolicyRepositoryProvider
-import com.xiwei.sujian.app.layout.model.FoldFeatureInfo
-import com.xiwei.sujian.app.layout.model.FoldOcclusion
-import com.xiwei.sujian.app.layout.model.FoldOrientation
-import com.xiwei.sujian.app.layout.model.FoldState
-import com.xiwei.sujian.app.layout.model.LayoutPlan
-import com.xiwei.sujian.app.layout.model.WindowMetrics
-import com.xiwei.sujian.core.platform.api.FoldPosture
-import com.xiwei.sujian.core.platform.api.OcclusionType
-import com.xiwei.sujian.core.platform.window.AospFoldFeatureInfo
 import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
 import com.xiwei.sujian.feature.project.domain.ProjectUseCase
@@ -24,7 +14,6 @@ import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import com.xiwei.sujian.core.platform.api.FoldOrientation as PlatformFoldOrientation
 
 interface WorkspaceAppState {
     val projects: List<com.xiwei.sujian.feature.project.data.model.Project>
@@ -93,12 +82,6 @@ class SujianAppViewModel(
         private set
 
     var currentChapterTitle by androidx.compose.runtime.mutableStateOf(savedStateHandle["currentChapterTitle"] ?: "")
-        private set
-
-    var currentLayoutPlan by androidx.compose.runtime.mutableStateOf<LayoutPlan?>(null)
-        private set
-
-    var foldFeatureInfo by androidx.compose.runtime.mutableStateOf<FoldFeatureInfo>(FoldFeatureInfo())
         private set
 
     var isLoading by androidx.compose.runtime.mutableStateOf(false)
@@ -222,55 +205,6 @@ class SujianAppViewModel(
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceClear("project")
     }
 
-    fun updateFoldFeature(info: FoldFeatureInfo) {
-        foldFeatureInfo = info
-    }
-
-    fun updateFoldFeaturesFromAdaptive(
-        features: List<AospFoldFeatureInfo>,
-        density: Float = 1f,
-    ) {
-        val coreFoldInfo =
-            if (features.isNotEmpty()) {
-                val info = features.first()
-                FoldFeatureInfo(
-                    state =
-                        when (info.state) {
-                            FoldPosture.Flat -> FoldState.Flat
-                            FoldPosture.HalfOpened -> FoldState.HalfOpened
-                            else -> FoldState.None
-                        },
-                    orientation =
-                        if (info.orientation == PlatformFoldOrientation.Horizontal) {
-                            FoldOrientation.Horizontal
-                        } else {
-                            FoldOrientation.Vertical
-                        },
-                    isSeparating = info.isSeparating,
-                    occlusion =
-                        when (info.occlusionType) {
-                            OcclusionType.Full -> FoldOcclusion.Full
-                            else -> FoldOcclusion.None
-                        },
-                    boundsLeftVp = info.boundsLeft.toFloat() / density,
-                    boundsTopVp = info.boundsTop.toFloat() / density,
-                    boundsRightVp = info.boundsRight.toFloat() / density,
-                    boundsBottomVp = info.boundsBottom.toFloat() / density,
-                )
-            } else {
-                FoldFeatureInfo()
-            }
-        foldFeatureInfo = coreFoldInfo
-    }
-
-    fun resolveLayout(metrics: WindowMetrics): LayoutPlan? {
-        val ctx = appContext ?: return null
-        val bridge = LayoutPolicyRepositoryProvider.getLayoutPolicyBridge(ctx)
-        val plan = bridge.resolveLayout(metrics)
-        currentLayoutPlan = plan
-        return plan
-    }
-
     fun refreshProjects() {
         viewModelScope.launch {
             projects =
@@ -348,8 +282,6 @@ class SujianAppState(
     override val currentVolumeId: String? get() = viewModel.currentVolumeId
     override val currentChapterId: String? get() = viewModel.currentChapterId
     override val currentChapterTitle: String get() = viewModel.currentChapterTitle
-    val currentLayoutPlan: LayoutPlan? get() = viewModel.currentLayoutPlan
-    val foldFeatureInfo: FoldFeatureInfo get() = viewModel.foldFeatureInfo
     val isLoading: Boolean get() = viewModel.isLoading
 
     override fun selectProject(
@@ -380,16 +312,6 @@ class SujianAppState(
     override fun clearChapterSelection() = viewModel.clearChapterSelection()
 
     override fun clearProjectSelection() = viewModel.clearProjectSelection()
-
-    fun updateFoldFeaturesFromAdaptive(
-        features: List<AospFoldFeatureInfo>,
-        density: Float = 1f,
-    ) = viewModel.updateFoldFeaturesFromAdaptive(
-        features,
-        density,
-    )
-
-    fun resolveLayout(metrics: WindowMetrics): LayoutPlan? = viewModel.resolveLayout(metrics)
 
     override fun refreshProjects() = viewModel.refreshProjects()
 

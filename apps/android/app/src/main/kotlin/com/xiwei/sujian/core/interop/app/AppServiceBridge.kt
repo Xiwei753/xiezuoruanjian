@@ -1,5 +1,4 @@
 package com.xiwei.sujian.core.interop.app
-import com.xiwei.sujian.app.layout.interop.LayoutPolicyBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.project.ChapterBridge
 import com.xiwei.sujian.core.interop.project.ProjectBridge
@@ -14,7 +13,6 @@ import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import com.xiwei.sujian.feature.sync.data.model.SyncState
 import uniffi.writer_core.ScreenRoleDto
-import uniffi.writer_core.ShellModeDto
 
 /**
  * AppServiceBridge — 门面类（向后兼容）。
@@ -33,7 +31,6 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
     val syncBridge: SyncBridge by lazy { SyncBridge(holder) }
     val statsBridge: StatsBridge by lazy { StatsBridge(holder) }
     val starMapBridge: StarMapBridge by lazy { StarMapBridge(holder) }
-    val layoutPolicyBridge: LayoutPolicyBridge by lazy { LayoutPolicyBridge(holder) }
     val secureStorageWarning: String? get() = holder.secureStorageWarning
 
     companion object {
@@ -497,15 +494,17 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
             false
         }
 
-    fun resolveLayout(metrics: uniffi.writer_core.WindowMetricsDto) = layoutPolicyBridge.resolveLayout(metrics)
+    fun resolveLayout(
+        capabilities: uniffi.writer_core.WindowCapabilitiesDto,
+    ): BridgeResult<uniffi.writer_core.LayoutContractDto> =
+        holder.wrapResult {
+            holder.service.resolveLayout(capabilities)
+        }
 
-    fun resolveScreenPolicy(
-        screenRole: ScreenRoleDto,
-        shellMode: ShellModeDto,
-    ) = layoutPolicyBridge.resolveScreenPolicy(
-        screenRole,
-        shellMode,
-    )
+    fun resolveScreenPolicy(screenRole: ScreenRoleDto): BridgeResult<uniffi.writer_core.ScreenPolicyDto> =
+        holder.wrapResult {
+            holder.service.resolveScreenPolicy(screenRole)
+        }
 
     fun editorKernelInsert(
         byteOffset: UInt,

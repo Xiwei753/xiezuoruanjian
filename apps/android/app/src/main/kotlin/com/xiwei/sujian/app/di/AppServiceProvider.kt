@@ -1,7 +1,6 @@
 package com.xiwei.sujian.app.di
 
 import android.content.Context
-import com.xiwei.sujian.app.layout.interop.LayoutPolicyBridge
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
@@ -14,9 +13,9 @@ import java.util.Locale
 import java.util.TimeZone
 
 /**
- * AppServiceProvider — 应用级服务桥接提供者（原 BridgeProvider）。
+ * AppServiceProvider — 应用级服务桥接提供者。
  *
- * 只保留四个桥接获取入口：AppService / Stats / StarMap / LayoutPolicy。
+ * 只保留三个桥接获取入口：AppService / Stats / StarMap。
  * 平台相关逻辑已下沉到 :core:platform：
  * - 网络状态检测与回调注册 → AndroidNetworkMonitor
  * - 设备 ID 持久化 → AndroidDeviceIdentity
@@ -63,8 +62,6 @@ object AppServiceProvider {
     fun getStatsBridge(context: Context): StatsBridge = getAppServiceBridge(context).statsBridge
 
     fun getStarmapBridge(context: Context): StarMapBridge = getAppServiceBridge(context).starMapBridge
-
-    fun getLayoutPolicyBridge(context: Context): LayoutPolicyBridge = getAppServiceBridge(context).layoutPolicyBridge
 
     private fun refreshNetworkState(
         context: Context,

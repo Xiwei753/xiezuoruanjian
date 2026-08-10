@@ -1286,13 +1286,13 @@ interface WriterAppService {
 
     sequence<BuiltinThemeDto> list_builtin_themes();
 
-    // ── Layout Policy ──
+    // ── Layout Contract（#610：输入为平台已判断好的窗口能力） ──
 
-    LayoutPlanDto resolve_layout(WindowMetricsDto metrics);
+    LayoutContractDto resolve_layout(WindowCapabilitiesDto capabilities);
 
-    // ── Screen Policy ──
+    // ── Screen Contract（#610：动作区域/顺序是产品语义，不随壳层变化） ──
 
-    ScreenPolicyDto resolve_screen_policy(ScreenRoleDto screen_role, ShellModeDto shell_mode);
+    ScreenPolicyDto resolve_screen_policy(ScreenRoleDto screen_role);
 
     // ── #535: Editor V2 Kernel ──
 
@@ -1389,83 +1389,13 @@ interface WriterAppService {
     boolean enqueue_search_update(string action, string object_id, string scope, string title, string body);
 };
 
-// ── Layout Policy DTOs ──
-
-enum FoldStateDto {
-    "None",
-    "Flat",
-    "HalfOpened",
-};
-
-enum FoldOrientationDto {
-    "Horizontal",
-    "Vertical",
-};
-
-enum FoldOcclusionDto {
-    "None",
-    "Full",
-};
-
-dictionary FoldFeatureInfoDto {
-    FoldStateDto state;
-    FoldOrientationDto orientation;
-    boolean is_separating;
-    FoldOcclusionDto occlusion;
-    float bounds_left_vp;
-    float bounds_top_vp;
-    float bounds_right_vp;
-    float bounds_bottom_vp;
-};
-
-enum OrientationDto {
-    "Unknown",
-    "Portrait",
-    "Landscape",
-};
-
-enum PointerKindDto {
-    "Unknown",
-    "Touch",
-    "Stylus",
-    "Mouse",
-};
-
-enum WidthClassDto {
-    "Compact",
-    "Medium",
-    "Expanded",
-    "Large",
-    "ExtraLarge",
-};
-
-enum HeightClassDto {
-    "Compact",
-    "Medium",
-    "Expanded",
-};
+// ── Layout Contract DTOs（#610） ──
 
 enum ShellModeDto {
     "SinglePane",
     "SupportingPane",
     "TwoPane",
     "ThreePane",
-};
-
-enum EditorModeDto {
-    "FullWidth",
-    "CenteredPaper",
-};
-
-enum NavigationModeDto {
-    "Stack",
-    "ListDetail",
-};
-
-enum NavigationPresentationDto {
-    "BottomBar",
-    "NavigationRail",
-    "PermanentDrawer",
 };
 
 enum WorkspacePaneModeDto {
@@ -1481,60 +1411,28 @@ dictionary VisiblePaneRolesDto {
     boolean show_supporting;
 };
 
-dictionary PaneWidthConstraintDto {
-    float min_dp;
-    float preferred_dp;
-    float max_dp;
+enum PointerClassDto {
+    "Unknown",
+    "Touch",
+    "Stylus",
+    "Mouse",
 };
 
-enum AvoidRegionKindDto {
-    "WindowInset",
-    "VerticalHinge",
-    "HorizontalHinge"
-};
-
-dictionary AvoidRegionDto {
-    float left_dp;
-    float top_dp;
-    float right_dp;
-    float bottom_dp;
-    AvoidRegionKindDto kind;
-};
-
-dictionary WindowMetricsDto {
-    float width_dp;
-    float height_dp;
-    float safe_top_dp;
-    float safe_bottom_dp;
+dictionary WindowCapabilitiesDto {
+    u8 available_pane_count;
+    boolean has_separating_fold;
+    PointerClassDto pointer_class;
     boolean keyboard_visible;
-    FoldFeatureInfoDto fold_feature;
-    OrientationDto orientation;
-    PointerKindDto pointer;
 };
 
-dictionary LayoutPlanDto {
-    WidthClassDto width_class;
-    HeightClassDto height_class;
+dictionary LayoutContractDto {
     ShellModeDto shell_mode;
-    EditorModeDto editor_mode;
-    NavigationModeDto navigation_mode;
-    NavigationPresentationDto navigation_presentation;
     WorkspacePaneModeDto workspace_pane_mode;
     VisiblePaneRolesDto visible_pane_roles;
-    float content_max_width_dp;
-    float page_padding_dp;
-    u8 grid_columns;
-    boolean show_bottom_bar;
-    PaneWidthConstraintDto list_pane_width;
-    float editor_content_max_width_dp;
-    float primary_pane_min_dp;
-    float primary_pane_preferred_dp;
-    float primary_pane_max_dp;
-    WorkspacePaneModeDto? supporting_pane_mode;
-    sequence<AvoidRegionDto> avoid_regions;
+    boolean show_primary_navigation;
 };
 
-// ── Screen Policy DTOs ──
+// ── Screen Contract DTOs ──
 
 enum ScreenRoleDto {
     "Home",
@@ -1570,24 +1468,19 @@ enum ActionRoleDto {
     "Sort"
 };
 
-enum ActionPlacementDto {
-    "TopLeading",
-    "TopTrailing",
-    "Floating",
-    "BottomBar",
-    "ContextMenu",
-    "SidePanel",
-    "Navigation",
+enum ActionRegionDto {
+    "HeaderLeading",
+    "HeaderTrailing",
     "ListHeader",
     "ItemTrailing",
+    "Context",
     "EmptyState"
 };
 
 dictionary ActionSlotDto {
-    string action_id;
     ActionRoleDto role;
-    ActionPlacementDto placement;
-    sequence<ShellModeDto> visible_in;
+    ActionRegionDto region;
+    u16 order;
     boolean requires_confirmation;
 };
 

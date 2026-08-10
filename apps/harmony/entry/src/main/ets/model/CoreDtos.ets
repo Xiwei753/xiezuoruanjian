@@ -513,8 +513,9 @@ export interface EditorVisualTransaction {
   coordinateMode: VisualCoordinateMode
 }
 
-// ========== 布局策略类型（Core layout_policy） ==========
+// ========== 布局契约类型（Core presentation layout_contract，#610） ==========
 
+// Harmony 平台自身的折叠姿态类型（平台输入，不在 Core 契约）。
 export enum FoldPosture {
   Unknown = 'Unknown',
   FullyOpened = 'FullyOpened',
@@ -522,26 +523,8 @@ export enum FoldPosture {
   Closed = 'Closed'
 }
 
-export enum Orientation {
-  Unknown = 'Unknown',
-  Portrait = 'Portrait',
-  Landscape = 'Landscape'
-}
-
-export enum PointerKind {
-  Unknown = 'Unknown',
-  Touch = 'Touch',
-  Stylus = 'Stylus',
-  Mouse = 'Mouse'
-}
-
+// Harmony 平台自身的大小分类（平台决策，不在 Core 契约）。
 export enum WidthClass {
-  Compact = 'Compact',
-  Medium = 'Medium',
-  Expanded = 'Expanded'
-}
-
-export enum HeightClass {
   Compact = 'Compact',
   Medium = 'Medium',
   Expanded = 'Expanded'
@@ -550,52 +533,66 @@ export enum HeightClass {
 export enum ShellMode {
   SinglePane = 'SinglePane',
   SupportingPane = 'SupportingPane',
-  TwoPane = 'TwoPane'
+  TwoPane = 'TwoPane',
+  ThreePane = 'ThreePane'
 }
 
-export enum EditorMode {
-  FullWidth = 'FullWidth',
-  CenteredPaper = 'CenteredPaper'
+export enum WorkspacePaneMode {
+  SinglePane = 'SinglePane',
+  ListDetail = 'ListDetail',
+  ThreePane = 'ThreePane'
 }
 
-export enum NavigationMode {
-  Stack = 'Stack',
-  ListDetail = 'ListDetail'
+export interface VisiblePaneRoles {
+  showProjectList: boolean
+  showChapterTree: boolean
+  showEditor: boolean
+  showSupporting: boolean
 }
 
-export interface WindowMetrics {
-  widthVp: number
-  heightVp: number
-  safeTopVp: number
-  safeBottomVp: number
+export enum PointerClass {
+  Unknown = 'Unknown',
+  Touch = 'Touch',
+  Stylus = 'Stylus',
+  Mouse = 'Mouse'
+}
+
+// 窗口能力 — 平台端已经根据本平台窗口系统判断好的输入（#610）。
+export interface WindowCapabilities {
+  availablePaneCount: number
+  hasSeparatingFold: boolean
+  pointerClass: PointerClass
   keyboardVisible: boolean
-  foldPosture: FoldPosture
-  orientation: Orientation
-  pointer: PointerKind
 }
 
-export interface LayoutPlan {
-  widthClass: WidthClass
-  heightClass: HeightClass
+// 布局契约 — Core resolve_layout 输出（不含 Material 断点 / dp / 导航控件名）。
+export interface LayoutContract {
   shellMode: ShellMode
-  editorMode: EditorMode
-  navigationMode: NavigationMode
+  workspacePaneMode: WorkspacePaneMode
+  visiblePaneRoles: VisiblePaneRoles
+  showPrimaryNavigation: boolean
+}
+
+// Harmony 平台在 Core 契约之上叠加自己的平台值后供页面消费。
+export interface LayoutPlan {
+  shellMode: ShellMode
+  workspacePaneMode: WorkspacePaneMode
+  visiblePaneRoles: VisiblePaneRoles
+  showPrimaryNavigation: boolean
   contentMaxWidthVp: number
   pagePaddingVp: number
   gridColumns: number
-  showSidePanel: boolean
-  showBottomBar: boolean
-  sidePanelWidthVp: number
-  primaryPaneWeight: number
-  detailPanelMaxWidthVp: number
 }
 
-// ========== 页面策略类型（Core screen_policy） ==========
+// ========== 页面策略类型（Core presentation screen_contract，#610） ==========
 
 export enum ScreenRole {
   Home = 'Home',
-  Workspace = 'Workspace',
+  ProjectList = 'ProjectList',
+  ProjectWorkspace = 'ProjectWorkspace',
   Writing = 'Writing',
+  StarMap = 'StarMap',
+  Stats = 'Stats',
   Settings = 'Settings',
   Sync = 'Sync'
 }
@@ -605,7 +602,8 @@ export enum PaneRole {
   Detail = 'Detail',
   Editor = 'Editor',
   Inspector = 'Inspector',
-  Drawer = 'Drawer'
+  Drawer = 'Drawer',
+  Supporting = 'Supporting'
 }
 
 export enum ActionRole {
@@ -618,23 +616,23 @@ export enum ActionRole {
   Rename = 'Rename',
   Settings = 'Settings',
   Sync = 'Sync',
-  Search = 'Search'
+  Search = 'Search',
+  Sort = 'Sort'
 }
 
-export enum ActionPlacement {
-  TopLeading = 'TopLeading',
-  TopTrailing = 'TopTrailing',
-  Floating = 'Floating',
-  BottomBar = 'BottomBar',
-  ContextMenu = 'ContextMenu',
-  SidePanel = 'SidePanel'
+export enum ActionRegion {
+  HeaderLeading = 'HeaderLeading',
+  HeaderTrailing = 'HeaderTrailing',
+  ListHeader = 'ListHeader',
+  ItemTrailing = 'ItemTrailing',
+  Context = 'Context',
+  EmptyState = 'EmptyState'
 }
 
 export interface ActionSlot {
-  actionId: string
   role: ActionRole
-  placement: ActionPlacement
-  visibleIn: ShellMode[]
+  region: ActionRegion
+  order: number
   requiresConfirmation: boolean
 }
 

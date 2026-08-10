@@ -10,7 +10,7 @@
 
 1.  UI 层（app/feature）不能直接依赖具体 Bridge 类、UniFFI 绑定或 JNA；
 2.  UI 层不能直接依赖 feature/editor/input 基础设施；
-3.  数据/Bridge 层（core/interop、feature/*/data、app/layout/data）不能依赖
+3.  数据/Bridge 层（core/interop、feature/*/data）不能依赖
     Compose/Activity/View/UI 与 feature/editor 显示/动画状态；
 4.  feature/editor/input 只产生输入操作：不依赖 Repository/core/interop、Compose UI、
     Activity；UniFFI 只允许 EditorTransactionCauseDto 契约类型；
@@ -208,8 +208,6 @@ CONCRETE_BRIDGES = [
     "com.xiwei.sujian.core.interop.project.WritingBridge",
     "com.xiwei.sujian.core.interop.app.AppServiceBridge",
     "com.xiwei.sujian.feature.starmap.data.interop.StarMapBridge",
-    "com.xiwei.sujian.app.layout.interop.LayoutPolicyBridge",
-    "com.xiwei.sujian.app.navigation.interop.ScreenPolicyBridge",
 ]
 
 COMPOSE_UI_FRAMEWORK = [
@@ -332,7 +330,7 @@ def rule_ui_no_editor_input() -> list[Finding]:
 
 def rule_data_no_ui_framework() -> list[Finding]:
     # #602 评论#8 项8.3：data 边界不止 core/interop，还包括各 feature/*/data 与
-    # app/layout/data。这些 Repository/Bridge 层都不得依赖 Compose/Activity/View。
+    # 这些 Repository/Bridge 层都不得依赖 Compose/Activity/View。
     data_filters = [
         "/core/interop/",
         "/feature/project/data/",
@@ -340,7 +338,6 @@ def rule_data_no_ui_framework() -> list[Finding]:
         "/feature/sync/data/",
         "/feature/stats/data/",
         "/feature/starmap/data/",
-        "/app/layout/data/",
     ]
     forbidden = ["androidx.compose", "androidx.activity", "android.view"]
     findings: list[Finding] = []
@@ -350,7 +347,7 @@ def rule_data_no_ui_framework() -> list[Finding]:
 
 
 def rule_data_no_editor_display() -> list[Finding]:
-    # #602 评论#8 项8.3：data 层（core/interop + feature/*/data + app/layout/data）
+    # #602 评论#8 项8.3：data 层（core/interop + feature/*/data）
     # 不得反向依赖 editor 显示/平台/动画层。禁止 EDITOR_DISPLAY_PACKAGES（精确列出
     # ui/visual/motion/render/platform/window/projection），不一刀禁止整个 feature.editor，
     # 因为 ChapterRepository 合法实现 feature.editor.session.ChapterContentSavePort。
@@ -361,7 +358,6 @@ def rule_data_no_editor_display() -> list[Finding]:
         "/feature/sync/data/",
         "/feature/stats/data/",
         "/feature/starmap/data/",
-        "/app/layout/data/",
     ]
     findings: list[Finding] = []
     for f in data_filters:
@@ -813,6 +809,74 @@ def rule_package_dir_consistent(
     return findings
 
 
+
+PRESENTATION_CONTRACT_DTO_WHITELIST = [
+    "uniffi.writer_core.WindowCapabilitiesDto",
+    "uniffi.writer_core.LayoutContractDto",
+    "uniffi.writer_core.ScreenPolicyDto",
+    "uniffi.writer_core.ScreenRoleDto",
+    "uniffi.writer_core.ActionSlotDto",
+    "uniffi.writer_core.ActionRoleDto",
+    "uniffi.writer_core.ActionRegionDto",
+    "uniffi.writer_core.PointerClassDto",
+    "uniffi.writer_core.WorkspacePaneModeDto",
+]
+
+
+def rule_presentation_contract_layer() -> list[Finding]:
+    """#610：app/presentation 是 Core presentation contract 的 Android 映射层。
+
+    - 只允许引用白名单内的 uniffi contract DTO（平台控件/编辑器 DTO 不得进入）；
+    - AppServiceBridge/AppServiceProvider 只允许出现在 PresentationContractBridge.kt
+      （唯一入口）；AndroidChromePolicy / AndroidAdaptiveLayoutPolicy 不得直接依赖 Bridge；
+    - 旧的 ScreenPolicyModels/LayoutPolicyModels/双份 UI policy 已删除，不得复活。
+    """
+    findings: list[Finding] = []
+    for path in collect_kt_files(APP_SRC, "/sujian/app/presentation/"):
+        for lineno, raw in enumerate(
+            effective_lines(path.read_text(encoding="utf-8")), 1
+        ):
+            # uniffi.writer_core 只允许白名单 DTO
+            if "uniffi.writer_core" in raw and not any(
+                allowed in raw for allowed in PRESENTATION_CONTRACT_DTO_WHITELIST
+            ):
+                findings.append(
+                    Finding(
+                        path=str(path.relative_to(APP_SRC)),
+                        line=lineno,
+                        message=f"presentation 层引用非契约 DTO: {raw.strip()}",
+                    )
+                )
+            # Bridge 依赖只允许出现在唯一入口 PresentationContractBridge.kt
+            if any(
+                b in raw
+                for b in [
+                    "com.xiwei.sujian.app.di.AppServiceProvider",
+                    "com.xiwei.sujian.core.interop.app.AppServiceBridge",
+                ]
+            ) and not path.name == "PresentationContractBridge.kt":
+                findings.append(
+                    Finding(
+                        path=str(path.relative_to(APP_SRC)),
+                        line=lineno,
+                        message="presentation 层只有 PresentationContractBridge.kt 可以依赖 Bridge",
+                    )
+                )
+    # 旧的双份 UI policy 不得复活
+    for path in collect_kt_files(APP_SRC, None):
+        for lineno, raw in enumerate(
+            effective_lines(path.read_text(encoding="utf-8")), 1
+        ):
+            if re.search(r"\bSujianChromePolicy\b", raw):
+                findings.append(
+                    Finding(
+                        path=str(path.relative_to(APP_SRC)),
+                        line=lineno,
+                        message="SujianChromePolicy 必须保持删除（#610：AndroidChromePolicy 消费 Core ActionSlot）",
+                    )
+                )
+    return findings
+
 RULES: list[tuple[str, str, object]] = [
     (
         "ui-no-uniffi-jna-bridge",
@@ -878,6 +942,11 @@ RULES: list[tuple[str, str, object]] = [
         "package-dir-consistent",
         "package 声明必须与物理目录结构一致",
         rule_package_dir_consistent,
+    ),
+    (
+        "presentation-contract-layer",
+        "app/presentation 只消费 Core presentation contract DTO（#610）",
+        rule_presentation_contract_layer,
     ),
 ]
 

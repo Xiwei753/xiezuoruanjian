@@ -1,5 +1,5 @@
 import {
-  ActionRole, ActionPlacement, ActionSlot, PaneRole
+  ActionRole, ActionRegion, ActionSlot, PaneRole
 } from '../model/CoreDtos'
 
 /**
@@ -8,7 +8,8 @@ import {
  * Core 说"这里是 primaryAction"，Harmony 画成 ArkUI Button。
  * Core 说"这里是 destructiveAction"，Harmony 画成 AlertDialog 确认弹窗。
  *
- * 各端不允许自行发明动作位置，所有位置必须来自 Core 的 ActionPlacement。
+ * #610：动作区域（region）与顺序（order）是产品语义，来自 Core；
+ * 各端不允许自行发明动作位置。控件呈现（ArkUI 控件/布局位置）在本层决定。
  */
 
 // ── ActionRole → ArkUI 控件类型 ──
@@ -50,6 +51,7 @@ export function mapActionSlot(slot: ActionSlot): ArkControl {
       break
     case ActionRole.Settings:
     case ActionRole.Search:
+    case ActionRole.Sort:
       type = ArkControlType.IconButton
       break
     case ActionRole.Sync:
@@ -67,31 +69,31 @@ export function mapActionSlot(slot: ActionSlot): ArkControl {
   }
 }
 
-// ── ActionPlacement → 布局位置 ──
+// ── ActionRegion → ArkUI 布局位置 ──
 
 export enum ArkLayoutPosition {
-  TopBarLeading,    // Row 首位
-  TopBarTrailing,   // Row 末位
-  FloatingBottom,   // 悬浮 Button
-  BottomToolbar,    // 底部 Row toolbar
-  ContextualMenu,   // BindContextMenu
-  SidePanel         // 侧边 Panel
+  TopBarLeading,    // HeaderLeading
+  TopBarTrailing,   // HeaderTrailing
+  ListHeader,       // ListHeader
+  ItemTrailing,     // ItemTrailing
+  ContextualMenu,   // Context
+  EmptyState        // EmptyState
 }
 
-export function mapPlacement(placement: ActionPlacement): ArkLayoutPosition {
-  switch (placement) {
-    case ActionPlacement.TopLeading:
+export function mapRegion(region: ActionRegion): ArkLayoutPosition {
+  switch (region) {
+    case ActionRegion.HeaderLeading:
       return ArkLayoutPosition.TopBarLeading
-    case ActionPlacement.TopTrailing:
+    case ActionRegion.HeaderTrailing:
       return ArkLayoutPosition.TopBarTrailing
-    case ActionPlacement.Floating:
-      return ArkLayoutPosition.FloatingBottom
-    case ActionPlacement.BottomBar:
-      return ArkLayoutPosition.BottomToolbar
-    case ActionPlacement.ContextMenu:
+    case ActionRegion.ListHeader:
+      return ArkLayoutPosition.ListHeader
+    case ActionRegion.ItemTrailing:
+      return ArkLayoutPosition.ItemTrailing
+    case ActionRegion.Context:
       return ArkLayoutPosition.ContextualMenu
-    case ActionPlacement.SidePanel:
-      return ArkLayoutPosition.SidePanel
+    case ActionRegion.EmptyState:
+      return ArkLayoutPosition.EmptyState
     default:
       return ArkLayoutPosition.TopBarTrailing
   }

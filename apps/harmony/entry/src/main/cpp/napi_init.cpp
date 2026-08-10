@@ -173,11 +173,11 @@ static napi_value NativeResolveLayout(napi_env env, napi_callback_info info) {
     return result;
 }
 
-// ── Screen Policy ──
-// NativeResolveScreenPolicy: Takes screen_role + shell_mode JSON, returns ResultEnvelope<ScreenPolicyDto> JSON.
+// ── Screen Contract（#610：动作区域/顺序是产品语义，不随壳层变化） ──
+// NativeResolveScreenPolicy: Takes screen_role JSON, returns ResultEnvelope<ScreenPolicyDto> JSON.
 static napi_value NativeResolveScreenPolicy(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value args[2];
+    size_t argc = 1;
+    napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
     size_t json_len = 0;
@@ -191,19 +191,8 @@ static napi_value NativeResolveScreenPolicy(napi_env env, napi_callback_info inf
         json1[0] = '\0';
     }
 
-    char* json2 = nullptr;
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], nullptr, 0, &json_len);
-        json2 = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[1], json2, json_len + 1, &json_len);
-    } else {
-        json2 = new char[1];
-        json2[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_resolve_screen_policy(json1, json2));
+    napi_value result = ReturnJsonString(env, writer_core_resolve_screen_policy(json1));
     delete[] json1;
-    delete[] json2;
     return result;
 }
 

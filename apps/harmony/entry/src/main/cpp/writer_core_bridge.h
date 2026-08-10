@@ -19,13 +19,14 @@ int32_t writer_core_calculate_word_count(const char* text);
 //   Passing null is safe (no-op). Must not be called twice on the same pointer.
 void    writer_core_free_string(char* ptr);
 
-// ── Layout Policy ──
-// writer_core_resolve_layout: Input/output are JSON strings (ResultEnvelope<LayoutPolicyDto>).
-char*  writer_core_resolve_layout(const char* metrics_json);
+// ── Layout Contract（#610） ──
+// writer_core_resolve_layout: Input/output are JSON strings (ResultEnvelope<LayoutContract>).
+// Input is WindowCapabilities: { availablePaneCount, hasSeparatingFold, pointerClass, keyboardVisible }.
+char*  writer_core_resolve_layout(const char* capabilities_json);
 
-// ── Screen Policy ──
+// ── Screen Contract（#610：动作区域/顺序是产品语义，不随壳层变化） ──
 // writer_core_resolve_screen_policy: Input/output are JSON strings (ResultEnvelope<ScreenPolicyDto>).
-char*  writer_core_resolve_screen_policy(const char* screen_role_json, const char* shell_mode_json);
+char*  writer_core_resolve_screen_policy(const char* screen_role_json);
 
 // ── App State 查询 ──
 // 新 Core API 边界：平台通过 writer_core_init 注入 app_data_root 与 projects_root，

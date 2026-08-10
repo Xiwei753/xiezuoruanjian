@@ -23,11 +23,10 @@ import {
   SyncDiagnosticsResult,
   RecentEdit,
   ChangedEntity,
-  WindowMetrics,
-  LayoutPlan,
+  WindowCapabilities,
+  LayoutContract,
   ScreenPolicy,
   ScreenRole,
-  ShellMode,
   EditorVisualTransaction,
   EditorTransactionCause
 } from '../model/CoreDtos'
@@ -368,16 +367,16 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     }
   }
 
-  // ── Layout Policy ──
+  // ── Layout Contract（#610） ──
 
-  async resolveLayout(metrics: WindowMetrics): Promise<ResultEnvelope<LayoutPlan>> {
-    return this.layoutBridge.resolveLayout(metrics)
+  async resolveLayout(capabilities: WindowCapabilities): Promise<ResultEnvelope<LayoutContract>> {
+    return this.layoutBridge.resolveLayout(capabilities)
   }
 
-  // ── Screen Policy ──
+  // ── Screen Contract（#610：不随壳层变化） ──
 
-  async resolveScreenPolicy(screenRole: ScreenRole, shellMode: ShellMode): Promise<ResultEnvelope<ScreenPolicy>> {
-    return this.layoutBridge.resolveScreenPolicy(screenRole, shellMode)
+  async resolveScreenPolicy(screenRole: ScreenRole): Promise<ResultEnvelope<ScreenPolicy>> {
+    return this.layoutBridge.resolveScreenPolicy(screenRole)
   }
 
   // ── Editor Animation ──

@@ -333,7 +333,7 @@ def check_napi_vs_arkts(harmony_root: str) -> List[Tuple[bool, str]]:
     # 6a: 提取所有 napi_*.cpp 中注册的函数名
     napi_files = [
         "napi_init.cpp",
-        "napi_workspace.cpp",
+        "napi_app_state.cpp",
         "napi_project.cpp",
         "napi_chapter.cpp",
         "napi_settings.cpp",

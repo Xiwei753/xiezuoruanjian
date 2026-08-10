@@ -1,7 +1,7 @@
 import hilog from '@ohos.hilog'
 import { getBridge } from './AppContext'
 import {
-  ScreenRole, ActionRole, ActionPlacement, ShellMode,
+  ScreenRole, ActionRole, ActionRegion,
   ActionSlot, ScreenPolicy
 } from '../model/CoreDtos'
 
@@ -9,10 +9,10 @@ const TAG = 'ScreenPolicyBridge'
 const DOMAIN = 0x0000
 
 /**
- * Screen Policy Bridge — 通过 Core resolve_screen_policy 获取跨端统一动作位置语义。
+ * Screen Policy Bridge — 通过 Core resolve_screen_policy 获取跨端统一动作区域语义。
  *
- * Harmony 端传入 ScreenRole + ShellMode，调用 Core NAPI 获取 ActionSlot 列表。
- * 不允许 Harmony 端自行决定动作位置，所有位置必须来自 Core 的 ActionPlacement。
+ * #610：Harmony 端只传入 ScreenRole，动作区域（region）与顺序（order）是产品语义，
+ * 不随壳层模式变化；控件呈现由 HarmonyStyleAdapter 决定。
  */
 export class ScreenPolicyBridge {
   private static instance: ScreenPolicyBridge
@@ -26,10 +26,10 @@ export class ScreenPolicyBridge {
     return ScreenPolicyBridge.instance
   }
 
-  async resolveScreenPolicy(screenRole: ScreenRole, shellMode: ShellMode): Promise<ScreenPolicy | null> {
+  async resolveScreenPolicy(screenRole: ScreenRole): Promise<ScreenPolicy | null> {
     try {
       const bridge = getBridge()
-      const result = await bridge.resolveScreenPolicy(screenRole, shellMode)
+      const result = await bridge.resolveScreenPolicy(screenRole)
       if (result.success && result.data) {
         return this.parseScreenPolicy(result.data)
       }
@@ -43,15 +43,15 @@ export class ScreenPolicyBridge {
   private parseScreenPolicy(data: Record<string, Object>): ScreenPolicy {
     const rawSlots = (data['actionSlots'] ?? data['action_slots'] ?? []) as Array<Record<string, Object>>
     const actionSlots: ActionSlot[] = rawSlots.map((slot: Record<string, Object>) => {
-      const rawVisibleIn = (slot['visibleIn'] ?? slot['visible_in'] ?? []) as string[]
+      const rawOrder = (slot['order'] ?? 0) as number
       return {
-        actionId: (slot['actionId'] ?? slot['action_id'] ?? '') as string,
         role: this.parseActionRole((slot['role'] ?? '') as string),
-        placement: this.parseActionPlacement((slot['placement'] ?? '') as string),
-        visibleIn: rawVisibleIn.map((s: string) => this.parseShellMode(s)),
+        region: this.parseActionRegion((slot['region'] ?? '') as string),
+        order: Number(rawOrder),
         requiresConfirmation: (slot['requiresConfirmation'] ?? slot['requires_confirmation'] ?? false) as boolean
       }
     })
+    actionSlots.sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
 
     return {
       screenRole: this.parseScreenRole((data['screenRole'] ?? data['screen_role'] ?? 'Home') as string),
@@ -75,21 +75,12 @@ export class ScreenPolicyBridge {
     return ActionRole.Back
   }
 
-  private parseActionPlacement(value: string): ActionPlacement {
-    const entries = Object.entries(ActionPlacement)
+  private parseActionRegion(value: string): ActionRegion {
+    const entries = Object.entries(ActionRegion)
     for (const [, v] of entries) {
-      if (v === value) return v as ActionPlacement
+      if (v === value) return v as ActionRegion
     }
-    return ActionPlacement.TopTrailing
-  }
-
-  private parseShellMode(value: string): ShellMode {
-    switch (value) {
-      case 'SinglePane': return ShellMode.SinglePane
-      case 'SupportingPane': return ShellMode.SupportingPane
-      case 'TwoPane': return ShellMode.TwoPane
-      default: return ShellMode.SinglePane
-    }
+    return ActionRegion.HeaderTrailing
   }
 }
 

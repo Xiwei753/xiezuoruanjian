@@ -18,14 +18,11 @@ import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.di.SujianAppDependencies
-import com.xiwei.sujian.app.layout.model.Orientation
-import com.xiwei.sujian.app.layout.model.WindowMetrics
 import com.xiwei.sujian.app.navigation.SujianNavigationSuite
 import com.xiwei.sujian.app.theme.SujianTheme
 import com.xiwei.sujian.app.theme.ThemeStore
@@ -162,15 +159,12 @@ private fun rememberFoldFeatureCollection(activity: androidx.activity.ComponentA
 private fun SujianAppAdaptiveWindowSync(
     capabilityProvider: AospCapabilityProvider,
     foldingFeatures: List<AospFoldFeatureInfo>,
-    vm: SujianAppViewModel,
     deps: SujianAppDependencies,
 ) {
     val configuration = LocalConfiguration.current
-    val density = LocalDensity.current.density
     LaunchedEffect(foldingFeatures, configuration.screenWidthDp, configuration.screenHeightDp) {
         capabilityProvider.updateFromFoldFeatures(foldingFeatures)
         capabilityProvider.updateFromConfiguration(configuration)
-        vm.updateFoldFeaturesFromAdaptive(foldingFeatures, density)
         val hasFoldFeature = foldingFeatures.isNotEmpty()
         val deviceClass =
             deps.themeRepository.detectDeviceClassFromFoldFeature(
@@ -178,38 +172,6 @@ private fun SujianAppAdaptiveWindowSync(
                 configuration.smallestScreenWidthDp,
             )
         ThemeStore.setFoldDeviceClass(deviceClass)
-    }
-}
-
-// LocalConfiguration.smallestScreenWidthDp 无 Compose API 替代，需用 Configuration 检测设备类型。
-@SuppressLint("ConfigurationScreenWidthHeight")
-@Composable
-private fun SujianAppLayoutResolution(
-    capabilities: AndroidCapabilities,
-    vm: SujianAppViewModel,
-) {
-    val configuration = LocalConfiguration.current
-    LaunchedEffect(capabilities) {
-        val metrics =
-            WindowMetrics(
-                widthDp = configuration.screenWidthDp.toFloat(),
-                heightDp = configuration.screenHeightDp.toFloat(),
-                foldFeature = vm.foldFeatureInfo,
-                orientation =
-                    if (configuration.screenWidthDp > configuration.screenHeightDp) {
-                        Orientation.Landscape
-                    } else {
-                        Orientation.Portrait
-                    },
-                pointer =
-                    when (capabilities.activePointerKind) {
-                        PointerKind.Mouse -> com.xiwei.sujian.app.layout.model.PointerKind.Mouse
-                        PointerKind.Trackpad -> com.xiwei.sujian.app.layout.model.PointerKind.Trackpad
-                        PointerKind.Stylus -> com.xiwei.sujian.app.layout.model.PointerKind.Stylus
-                        else -> com.xiwei.sujian.app.layout.model.PointerKind.Touch
-                    },
-            )
-        vm.resolveLayout(metrics)
     }
 }
 
@@ -247,8 +209,7 @@ fun SujianApp(initialDestination: String? = null) {
     SujianAppInitialization(deps, vm, context)
 
     val foldingFeatures = rememberFoldFeatureCollection(activityRef)
-    SujianAppAdaptiveWindowSync(capabilityProvider, foldingFeatures, vm, deps)
-    SujianAppLayoutResolution(capabilities, vm)
+    SujianAppAdaptiveWindowSync(capabilityProvider, foldingFeatures, deps)
 
     val uiState by themeController.uiState.collectAsState()
 
@@ -262,6 +223,7 @@ fun SujianApp(initialDestination: String? = null) {
                 capabilityProvider = capabilityProvider,
                 appState = appState,
                 initialDestination = initialDestination,
+                foldingFeatures = foldingFeatures,
             )
         }
     }
@@ -275,6 +237,7 @@ private fun SujianAppContent(
     capabilityProvider: AospCapabilityProvider,
     appState: SujianAppState,
     initialDestination: String?,
+    foldingFeatures: List<AospFoldFeatureInfo>,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -304,6 +267,7 @@ private fun SujianAppContent(
         SujianNavigationSuite(
             appState = appState,
             initialDestination = initialDestination,
+            foldingFeatures = foldingFeatures,
             modifier = Modifier.fillMaxSize(),
         )
     }

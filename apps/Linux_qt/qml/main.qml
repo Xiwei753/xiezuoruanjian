@@ -116,32 +116,14 @@ ApplicationWindow {
 
     property string previousEditorText: ""
 
-    // ── LayoutPlan 驱动：通过 Core resolve_layout 获取布局方案 ──
+    // ── 布局契约驱动（#610）：Qt 侧按本平台窗口系统算能力，再套 Core 契约 ──
     property var layoutPlan: null
 
     function applyLayoutPlan() {
         if (appBackend === null) return;
         var w = window.width;
         var h = window.height;
-        var safeTop = 0;
-        var safeBottom = 0;
-        var keyboardVisible = false;
-        var foldState = "None";
-        var foldOrientation = "Vertical";
-        var foldIsSeparating = false;
-        var foldOcclusion = "None";
-        var foldBoundsLeft = 0;
-        var foldBoundsTop = 0;
-        var foldBoundsRight = 0;
-        var foldBoundsBottom = 0;
-        var orientation = w > h ? "Landscape" : "Portrait";
-        var pointer = "Mouse";
-        var plan = appBackend.resolve_layout(
-            w, h, safeTop, safeBottom, keyboardVisible,
-            foldState, foldOrientation, foldIsSeparating, foldOcclusion,
-            foldBoundsLeft, foldBoundsTop, foldBoundsRight, foldBoundsBottom,
-            orientation, pointer
-        );
+        var plan = appBackend.resolve_layout(w, h);
         if (plan) {
             window.layoutPlan = plan;
         }

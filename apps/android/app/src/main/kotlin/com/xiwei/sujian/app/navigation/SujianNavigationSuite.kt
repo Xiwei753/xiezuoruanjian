@@ -29,7 +29,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
-import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
 import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldPredictiveBackHandler
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
@@ -45,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -54,16 +54,23 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.scene.Scene
 import androidx.navigation3.ui.NavDisplay
-import androidx.window.core.layout.WindowSizeClass
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.di.SujianAppDependencies
+import com.xiwei.sujian.app.presentation.AndroidChromePolicy
+import com.xiwei.sujian.app.presentation.AndroidLayoutSpec
+import com.xiwei.sujian.app.presentation.AndroidNavigationPresentation
+import com.xiwei.sujian.app.presentation.PresentationContractBridge
+import com.xiwei.sujian.app.presentation.SujianChromeAction
+import com.xiwei.sujian.app.presentation.SujianChromeSpec
+import com.xiwei.sujian.app.presentation.rememberAndroidLayoutSpec
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
 import com.xiwei.sujian.core.designsystem.component.SujianSnackbar
 import com.xiwei.sujian.core.designsystem.component.SujianTopAppBar
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
+import com.xiwei.sujian.core.platform.window.AospFoldFeatureInfo
 import com.xiwei.sujian.feature.project.ui.ProjectNavigationState
 import com.xiwei.sujian.feature.project.ui.ProjectWorkspaceScreen
 import com.xiwei.sujian.feature.project.ui.buildInitialHistory
@@ -188,7 +195,7 @@ private fun rememberSujianTopBarNavigation(
     return navigationIcon to onNavigationClick
 }
 
-/** 顶栏右侧操作 — 顺序由 [SujianChromePolicy] 决定：
+/** 顶栏右侧操作 — 顺序由 Core screen contract 的 HeaderTrailing order 决定（#610）：
  * 作品页依次提供 同步状态、搜索、设置（视觉从右往左为 设置/搜索/同步）；
  * 写作区只保留需要的图标层（同步、设置）。 */
 
@@ -449,10 +456,14 @@ private fun SujianWideNavScaffold(
     }
 }
 
-/** 工作区 navigator — 在导航套件层创建的唯一实例（#597：返回历史始终同一份）。 */
+/** 工作区 navigator — 在导航套件层创建的唯一实例（#597：返回历史始终同一份）。
+ * 布局指令（含折叠铰链 excludedBounds / pane 宽度）来自 AndroidAdaptiveLayoutPolicy（#610）。 */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
-private fun rememberSujianWorkspaceNavState(appState: SujianAppState): ProjectNavigationState {
+private fun rememberSujianWorkspaceNavState(
+    appState: SujianAppState,
+    scaffoldDirective: androidx.compose.material3.adaptive.layout.PaneScaffoldDirective,
+): ProjectNavigationState {
     val initialDestination =
         remember(
             appState.currentProjectId,
@@ -466,7 +477,11 @@ private fun rememberSujianWorkspaceNavState(appState: SujianAppState): ProjectNa
             )
         }
     val initialHistory = remember(initialDestination) { buildInitialHistory(initialDestination) }
-    val navigator = rememberListDetailPaneScaffoldNavigator(initialDestinationHistory = initialHistory)
+    val navigator =
+        rememberListDetailPaneScaffoldNavigator(
+            scaffoldDirective = scaffoldDirective,
+            initialDestinationHistory = initialHistory,
+        )
     return remember { ProjectNavigationState(navigator) }
 }
 
@@ -547,12 +562,11 @@ fun SujianNavigationSuite(
     appState: SujianAppState,
     modifier: Modifier = Modifier,
     initialDestination: String? = null,
+    foldingFeatures: List<AospFoldFeatureInfo> = emptyList(),
 ) {
-    val windowSizeClass = currentWindowAdaptiveInfo().windowSizeClass
-    val isCompact =
-        !windowSizeClass.isWidthAtLeastBreakpoint(
-            WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND,
-        )
+    // #610：Android 窗口变化直接进入 AndroidAdaptiveLayoutPolicy，
+    // 再和 Core presentation contract 合成最终 Android UI spec。
+    val layoutSpec: AndroidLayoutSpec = rememberAndroidLayoutSpec(foldingFeatures)
     val initialStack = rememberInitialNavStack(initialDestination)
     val backStack = rememberNavBackStack(*initialStack.toTypedArray())
     val currentRoute = backStack.lastOrNull() as? SujianRoute ?: SujianRoute.Works
@@ -560,19 +574,25 @@ fun SujianNavigationSuite(
     val snackbarHostState = remember { SnackbarHostState() }
     var settingsDetailSection by remember { mutableStateOf<SettingsSection?>(null) }
 
+    val context = LocalContext.current
     val deps = LocalSujianAppDependencies.current
     val syncState by deps.syncStatusRepository.state.collectAsState()
     val coroutineScope = rememberCoroutineScope()
 
-    val workspaceNavState = rememberSujianWorkspaceNavState(appState)
+    val workspaceNavState = rememberSujianWorkspaceNavState(appState, layoutSpec.scaffoldDirective)
 
-    // #597 正文一：写作区隐藏一级导航（底栏/侧栏）、顶栏透明且不显示标题；
-    // 正文三：返回箭头与唯一返回动作来自同一个决策。
+    // #610：页面角色与动作槽位来自 Core screen contract（唯一事实来源），
+    // AndroidChromePolicy 只负责把 Core ActionSlot 映射成 Android 控件决策。
+    val screenRole =
+        AndroidChromePolicy.screenRoleFor(currentRoute, workspaceNavState.currentLocation)
+    val screenPolicy = remember(screenRole) { PresentationContractBridge.resolveScreenPolicy(context, screenRole) }
     val chrome =
-        SujianChromePolicy.resolve(
-            route = currentRoute,
+        AndroidChromePolicy.resolve(
+            screenRole = screenRole,
+            screenPolicy = screenPolicy,
             workspaceLocation = workspaceNavState.currentLocation,
             canWorkspaceNavigateBack = workspaceNavState.canNavigateBack,
+            contractShowsPrimaryNavigation = layoutSpec.contract?.showPrimaryNavigation ?: true,
         )
 
     SujianWorkspaceBackEffects(currentRoute, workspaceNavState, coroutineScope)
@@ -602,12 +622,13 @@ fun SujianNavigationSuite(
         ) { settingsDetailSection = it }
     }
 
-    if (isCompact) {
+    if (layoutSpec.navigationPresentation == AndroidNavigationPresentation.BottomBar) {
         SujianCompactNavScaffold(
             modifier = modifier,
             topBarInfo = topBarInfo,
             snackbarHostState = snackbarHostState,
             // #597 正文一：进入正文后隐藏底栏；设置页从顶栏进入，也不再显示底栏。
+            // #610：一级导航可见性由 Core 布局契约（键盘/触控单栏时隐藏）决定。
             bottomBar =
                 if (chrome.showPrimaryNavigation) {
                     {

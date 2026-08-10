@@ -1,7 +1,6 @@
-// ── Screen Policy DTOs ──
+// ── Screen Contract DTOs ──
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-
 pub enum ScreenRoleDto {
     Home,
     ProjectList,
@@ -14,22 +13,24 @@ pub enum ScreenRoleDto {
     Sync,
 }
 
-impl From<crate::screen_policy::ScreenRole> for ScreenRoleDto {
-    fn from(r: crate::screen_policy::ScreenRole) -> Self {
+impl From<crate::presentation::screen_contract::ScreenRole> for ScreenRoleDto {
+    fn from(r: crate::presentation::screen_contract::ScreenRole) -> Self {
         match r {
-            crate::screen_policy::ScreenRole::Home => Self::Home,
-            crate::screen_policy::ScreenRole::ProjectList => Self::ProjectList,
-            crate::screen_policy::ScreenRole::ProjectWorkspace => Self::ProjectWorkspace,
-            crate::screen_policy::ScreenRole::Writing => Self::Writing,
-            crate::screen_policy::ScreenRole::StarMap => Self::StarMap,
-            crate::screen_policy::ScreenRole::Stats => Self::Stats,
-            crate::screen_policy::ScreenRole::Settings => Self::Settings,
-            crate::screen_policy::ScreenRole::Sync => Self::Sync,
+            crate::presentation::screen_contract::ScreenRole::Home => Self::Home,
+            crate::presentation::screen_contract::ScreenRole::ProjectList => Self::ProjectList,
+            crate::presentation::screen_contract::ScreenRole::ProjectWorkspace => {
+                Self::ProjectWorkspace
+            }
+            crate::presentation::screen_contract::ScreenRole::Writing => Self::Writing,
+            crate::presentation::screen_contract::ScreenRole::StarMap => Self::StarMap,
+            crate::presentation::screen_contract::ScreenRole::Stats => Self::Stats,
+            crate::presentation::screen_contract::ScreenRole::Settings => Self::Settings,
+            crate::presentation::screen_contract::ScreenRole::Sync => Self::Sync,
         }
     }
 }
 
-impl From<ScreenRoleDto> for crate::screen_policy::ScreenRole {
+impl From<ScreenRoleDto> for crate::presentation::screen_contract::ScreenRole {
     fn from(dto: ScreenRoleDto) -> Self {
         match dto {
             ScreenRoleDto::Home => Self::Home,
@@ -45,7 +46,6 @@ impl From<ScreenRoleDto> for crate::screen_policy::ScreenRole {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-
 pub enum PaneRoleDto {
     #[default]
     PrimaryList,
@@ -56,20 +56,20 @@ pub enum PaneRoleDto {
     Supporting,
 }
 
-impl From<crate::screen_policy::PaneRole> for PaneRoleDto {
-    fn from(r: crate::screen_policy::PaneRole) -> Self {
+impl From<crate::presentation::screen_contract::PaneRole> for PaneRoleDto {
+    fn from(r: crate::presentation::screen_contract::PaneRole) -> Self {
         match r {
-            crate::screen_policy::PaneRole::PrimaryList => Self::PrimaryList,
-            crate::screen_policy::PaneRole::Detail => Self::Detail,
-            crate::screen_policy::PaneRole::Editor => Self::Editor,
-            crate::screen_policy::PaneRole::Inspector => Self::Inspector,
-            crate::screen_policy::PaneRole::Drawer => Self::Drawer,
-            crate::screen_policy::PaneRole::Supporting => Self::Supporting,
+            crate::presentation::screen_contract::PaneRole::PrimaryList => Self::PrimaryList,
+            crate::presentation::screen_contract::PaneRole::Detail => Self::Detail,
+            crate::presentation::screen_contract::PaneRole::Editor => Self::Editor,
+            crate::presentation::screen_contract::PaneRole::Inspector => Self::Inspector,
+            crate::presentation::screen_contract::PaneRole::Drawer => Self::Drawer,
+            crate::presentation::screen_contract::PaneRole::Supporting => Self::Supporting,
         }
     }
 }
 
-impl From<PaneRoleDto> for crate::screen_policy::PaneRole {
+impl From<PaneRoleDto> for crate::presentation::screen_contract::PaneRole {
     fn from(dto: PaneRoleDto) -> Self {
         match dto {
             PaneRoleDto::PrimaryList => Self::PrimaryList,
@@ -83,7 +83,6 @@ impl From<PaneRoleDto> for crate::screen_policy::PaneRole {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-
 pub enum ActionRoleDto {
     Back,
     Save,
@@ -99,25 +98,25 @@ pub enum ActionRoleDto {
     Sort,
 }
 
-impl From<crate::screen_policy::ActionRole> for ActionRoleDto {
-    fn from(r: crate::screen_policy::ActionRole) -> Self {
+impl From<crate::presentation::screen_contract::ActionRole> for ActionRoleDto {
+    fn from(r: crate::presentation::screen_contract::ActionRole) -> Self {
         match r {
-            crate::screen_policy::ActionRole::Back => Self::Back,
-            crate::screen_policy::ActionRole::Save => Self::Save,
-            crate::screen_policy::ActionRole::CreateProject => Self::CreateProject,
-            crate::screen_policy::ActionRole::CreateVolume => Self::CreateVolume,
-            crate::screen_policy::ActionRole::CreateChapter => Self::CreateChapter,
-            crate::screen_policy::ActionRole::Delete => Self::Delete,
-            crate::screen_policy::ActionRole::Rename => Self::Rename,
-            crate::screen_policy::ActionRole::Settings => Self::Settings,
-            crate::screen_policy::ActionRole::Sync => Self::Sync,
-            crate::screen_policy::ActionRole::Search => Self::Search,
-            crate::screen_policy::ActionRole::Sort => Self::Sort,
+            crate::presentation::screen_contract::ActionRole::Back => Self::Back,
+            crate::presentation::screen_contract::ActionRole::Save => Self::Save,
+            crate::presentation::screen_contract::ActionRole::CreateProject => Self::CreateProject,
+            crate::presentation::screen_contract::ActionRole::CreateVolume => Self::CreateVolume,
+            crate::presentation::screen_contract::ActionRole::CreateChapter => Self::CreateChapter,
+            crate::presentation::screen_contract::ActionRole::Delete => Self::Delete,
+            crate::presentation::screen_contract::ActionRole::Rename => Self::Rename,
+            crate::presentation::screen_contract::ActionRole::Settings => Self::Settings,
+            crate::presentation::screen_contract::ActionRole::Sync => Self::Sync,
+            crate::presentation::screen_contract::ActionRole::Search => Self::Search,
+            crate::presentation::screen_contract::ActionRole::Sort => Self::Sort,
         }
     }
 }
 
-impl From<ActionRoleDto> for crate::screen_policy::ActionRole {
+impl From<ActionRoleDto> for crate::presentation::screen_contract::ActionRole {
     fn from(dto: ActionRoleDto) -> Self {
         match dto {
             ActionRoleDto::Back => Self::Back,
@@ -136,51 +135,42 @@ impl From<ActionRoleDto> for crate::screen_policy::ActionRole {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-
-pub enum ActionPlacementDto {
+pub enum ActionRegionDto {
     #[default]
-    TopLeading,
-    TopTrailing,
-    Floating,
-    BottomBar,
-    ContextMenu,
-    SidePanel,
-    Navigation,
+    HeaderLeading,
+    HeaderTrailing,
     ListHeader,
     ItemTrailing,
+    Context,
     EmptyState,
 }
 
-impl From<crate::screen_policy::ActionPlacement> for ActionPlacementDto {
-    fn from(p: crate::screen_policy::ActionPlacement) -> Self {
-        match p {
-            crate::screen_policy::ActionPlacement::TopLeading => Self::TopLeading,
-            crate::screen_policy::ActionPlacement::TopTrailing => Self::TopTrailing,
-            crate::screen_policy::ActionPlacement::Floating => Self::Floating,
-            crate::screen_policy::ActionPlacement::BottomBar => Self::BottomBar,
-            crate::screen_policy::ActionPlacement::ContextMenu => Self::ContextMenu,
-            crate::screen_policy::ActionPlacement::SidePanel => Self::SidePanel,
-            crate::screen_policy::ActionPlacement::Navigation => Self::Navigation,
-            crate::screen_policy::ActionPlacement::ListHeader => Self::ListHeader,
-            crate::screen_policy::ActionPlacement::ItemTrailing => Self::ItemTrailing,
-            crate::screen_policy::ActionPlacement::EmptyState => Self::EmptyState,
+impl From<crate::presentation::screen_contract::ActionRegion> for ActionRegionDto {
+    fn from(r: crate::presentation::screen_contract::ActionRegion) -> Self {
+        match r {
+            crate::presentation::screen_contract::ActionRegion::HeaderLeading => {
+                Self::HeaderLeading
+            }
+            crate::presentation::screen_contract::ActionRegion::HeaderTrailing => {
+                Self::HeaderTrailing
+            }
+            crate::presentation::screen_contract::ActionRegion::ListHeader => Self::ListHeader,
+            crate::presentation::screen_contract::ActionRegion::ItemTrailing => Self::ItemTrailing,
+            crate::presentation::screen_contract::ActionRegion::Context => Self::Context,
+            crate::presentation::screen_contract::ActionRegion::EmptyState => Self::EmptyState,
         }
     }
 }
 
-impl From<ActionPlacementDto> for crate::screen_policy::ActionPlacement {
-    fn from(dto: ActionPlacementDto) -> Self {
+impl From<ActionRegionDto> for crate::presentation::screen_contract::ActionRegion {
+    fn from(dto: ActionRegionDto) -> Self {
         match dto {
-            ActionPlacementDto::TopLeading => Self::TopLeading,
-            ActionPlacementDto::TopTrailing => Self::TopTrailing,
-            ActionPlacementDto::Floating => Self::Floating,
-            ActionPlacementDto::BottomBar => Self::BottomBar,
-            ActionPlacementDto::ContextMenu => Self::ContextMenu,
-            ActionPlacementDto::SidePanel => Self::SidePanel,
-            ActionPlacementDto::Navigation => Self::Navigation,
-            ActionPlacementDto::ListHeader => Self::ListHeader,
-            ActionPlacementDto::ItemTrailing => Self::ItemTrailing,
-            ActionPlacementDto::EmptyState => Self::EmptyState,
+            ActionRegionDto::HeaderLeading => Self::HeaderLeading,
+            ActionRegionDto::HeaderTrailing => Self::HeaderTrailing,
+            ActionRegionDto::ListHeader => Self::ListHeader,
+            ActionRegionDto::ItemTrailing => Self::ItemTrailing,
+            ActionRegionDto::Context => Self::Context,
+            ActionRegionDto::EmptyState => Self::EmptyState,
         }
     }
 }
@@ -188,32 +178,29 @@ impl From<ActionPlacementDto> for crate::screen_policy::ActionPlacement {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionSlotDto {
-    pub action_id: String,
     pub role: ActionRoleDto,
-    pub placement: ActionPlacementDto,
-    pub visible_in: Vec<super::platform::ShellModeDto>,
+    pub region: ActionRegionDto,
+    pub order: u16,
     pub requires_confirmation: bool,
 }
 
-impl From<crate::screen_policy::ActionSlot> for ActionSlotDto {
-    fn from(s: crate::screen_policy::ActionSlot) -> Self {
+impl From<crate::presentation::screen_contract::ActionSlot> for ActionSlotDto {
+    fn from(s: crate::presentation::screen_contract::ActionSlot) -> Self {
         Self {
-            action_id: s.action_id,
             role: s.role.into(),
-            placement: s.placement.into(),
-            visible_in: s.visible_in.into_iter().map(Into::into).collect(),
+            region: s.region.into(),
+            order: s.order,
             requires_confirmation: s.requires_confirmation,
         }
     }
 }
 
-impl From<ActionSlotDto> for crate::screen_policy::ActionSlot {
+impl From<ActionSlotDto> for crate::presentation::screen_contract::ActionSlot {
     fn from(dto: ActionSlotDto) -> Self {
         Self {
-            action_id: dto.action_id,
             role: dto.role.into(),
-            placement: dto.placement.into(),
-            visible_in: dto.visible_in.into_iter().map(Into::into).collect(),
+            region: dto.region.into(),
+            order: dto.order,
             requires_confirmation: dto.requires_confirmation,
         }
     }
@@ -235,18 +222,18 @@ mod tests {
     #[test]
     fn test_screen_role_dto_roundtrip() {
         let roles = vec![
-            crate::screen_policy::ScreenRole::Home,
-            crate::screen_policy::ScreenRole::ProjectList,
-            crate::screen_policy::ScreenRole::ProjectWorkspace,
-            crate::screen_policy::ScreenRole::Writing,
-            crate::screen_policy::ScreenRole::StarMap,
-            crate::screen_policy::ScreenRole::Stats,
-            crate::screen_policy::ScreenRole::Settings,
-            crate::screen_policy::ScreenRole::Sync,
+            crate::presentation::screen_contract::ScreenRole::Home,
+            crate::presentation::screen_contract::ScreenRole::ProjectList,
+            crate::presentation::screen_contract::ScreenRole::ProjectWorkspace,
+            crate::presentation::screen_contract::ScreenRole::Writing,
+            crate::presentation::screen_contract::ScreenRole::StarMap,
+            crate::presentation::screen_contract::ScreenRole::Stats,
+            crate::presentation::screen_contract::ScreenRole::Settings,
+            crate::presentation::screen_contract::ScreenRole::Sync,
         ];
         for role in roles {
             let dto: ScreenRoleDto = role.into();
-            let back: crate::screen_policy::ScreenRole = dto.into();
+            let back: crate::presentation::screen_contract::ScreenRole = dto.into();
             assert_eq!(back, role);
         }
     }
@@ -254,61 +241,55 @@ mod tests {
     #[test]
     fn test_action_role_dto_roundtrip() {
         let roles = vec![
-            crate::screen_policy::ActionRole::Back,
-            crate::screen_policy::ActionRole::Save,
-            crate::screen_policy::ActionRole::CreateProject,
-            crate::screen_policy::ActionRole::CreateVolume,
-            crate::screen_policy::ActionRole::CreateChapter,
-            crate::screen_policy::ActionRole::Delete,
-            crate::screen_policy::ActionRole::Rename,
-            crate::screen_policy::ActionRole::Settings,
-            crate::screen_policy::ActionRole::Sync,
-            crate::screen_policy::ActionRole::Search,
-            crate::screen_policy::ActionRole::Sort,
+            crate::presentation::screen_contract::ActionRole::Back,
+            crate::presentation::screen_contract::ActionRole::Save,
+            crate::presentation::screen_contract::ActionRole::CreateProject,
+            crate::presentation::screen_contract::ActionRole::CreateVolume,
+            crate::presentation::screen_contract::ActionRole::CreateChapter,
+            crate::presentation::screen_contract::ActionRole::Delete,
+            crate::presentation::screen_contract::ActionRole::Rename,
+            crate::presentation::screen_contract::ActionRole::Settings,
+            crate::presentation::screen_contract::ActionRole::Sync,
+            crate::presentation::screen_contract::ActionRole::Search,
+            crate::presentation::screen_contract::ActionRole::Sort,
         ];
         for role in roles {
             let dto: ActionRoleDto = role.into();
-            let back: crate::screen_policy::ActionRole = dto.into();
+            let back: crate::presentation::screen_contract::ActionRole = dto.into();
             assert_eq!(back, role);
         }
     }
 
     #[test]
-    fn test_action_placement_dto_roundtrip() {
-        let placements = vec![
-            crate::screen_policy::ActionPlacement::TopLeading,
-            crate::screen_policy::ActionPlacement::TopTrailing,
-            crate::screen_policy::ActionPlacement::Floating,
-            crate::screen_policy::ActionPlacement::BottomBar,
-            crate::screen_policy::ActionPlacement::ContextMenu,
-            crate::screen_policy::ActionPlacement::SidePanel,
-            crate::screen_policy::ActionPlacement::Navigation,
-            crate::screen_policy::ActionPlacement::ListHeader,
-            crate::screen_policy::ActionPlacement::ItemTrailing,
-            crate::screen_policy::ActionPlacement::EmptyState,
+    fn test_action_region_dto_roundtrip() {
+        let regions = vec![
+            crate::presentation::screen_contract::ActionRegion::HeaderLeading,
+            crate::presentation::screen_contract::ActionRegion::HeaderTrailing,
+            crate::presentation::screen_contract::ActionRegion::ListHeader,
+            crate::presentation::screen_contract::ActionRegion::ItemTrailing,
+            crate::presentation::screen_contract::ActionRegion::Context,
+            crate::presentation::screen_contract::ActionRegion::EmptyState,
         ];
-        for p in placements {
-            let dto: ActionPlacementDto = p.into();
-            let back: crate::screen_policy::ActionPlacement = dto.into();
-            assert_eq!(back, p);
+        for r in regions {
+            let dto: ActionRegionDto = r.into();
+            let back: crate::presentation::screen_contract::ActionRegion = dto.into();
+            assert_eq!(back, r);
         }
     }
 
     #[test]
     fn test_action_slot_dto_roundtrip() {
-        let slot = crate::screen_policy::ActionSlot {
-            action_id: "save".to_string(),
-            role: crate::screen_policy::ActionRole::Save,
-            placement: crate::screen_policy::ActionPlacement::TopTrailing,
-            visible_in: vec![crate::layout_policy::ShellMode::SinglePane],
+        let slot = crate::presentation::screen_contract::ActionSlot {
+            role: crate::presentation::screen_contract::ActionRole::Save,
+            region: crate::presentation::screen_contract::ActionRegion::HeaderTrailing,
+            order: 10,
             requires_confirmation: false,
         };
         let dto: ActionSlotDto = slot.clone().into();
-        let back: crate::screen_policy::ActionSlot = dto.into();
-        assert_eq!(back.action_id, slot.action_id);
+        let back: crate::presentation::screen_contract::ActionSlot = dto.into();
         assert_eq!(back.role, slot.role);
-        assert_eq!(back.placement, slot.placement);
-        assert_eq!(back.visible_in, slot.visible_in);
+        assert_eq!(back.region, slot.region);
+        assert_eq!(back.order, slot.order);
         assert_eq!(back.requires_confirmation, slot.requires_confirmation);
     }
 
@@ -317,22 +298,41 @@ mod tests {
         let dto = ScreenPolicyDto {
             screen_role: ScreenRoleDto::Writing,
             action_slots: vec![ActionSlotDto {
-                action_id: "back".to_string(),
                 role: ActionRoleDto::Back,
-                placement: ActionPlacementDto::TopLeading,
-                visible_in: vec![super::super::platform::ShellModeDto::SinglePane],
+                region: ActionRegionDto::HeaderLeading,
+                order: 10,
                 requires_confirmation: false,
             }],
         };
         let json = serde_json::to_string(&dto).unwrap();
         assert!(json.contains("\"screenRole\""));
         assert!(json.contains("\"actionSlots\""));
-        assert!(json.contains("\"actionId\""));
         assert!(json.contains("\"requiresConfirmation\""));
-        assert!(json.contains("\"visibleIn\""));
+        assert!(json.contains("\"order\":10"));
 
         let deserialized: ScreenPolicyDto = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.screen_role, ScreenRoleDto::Writing);
         assert_eq!(deserialized.action_slots.len(), 1);
+        assert_eq!(
+            deserialized.action_slots[0].region,
+            ActionRegionDto::HeaderLeading
+        );
+    }
+
+    #[test]
+    fn test_action_slot_dto_has_no_platform_fields() {
+        let json = serde_json::to_string(&ActionSlotDto {
+            role: ActionRoleDto::CreateProject,
+            region: ActionRegionDto::HeaderTrailing,
+            order: 10,
+            requires_confirmation: false,
+        })
+        .unwrap();
+        for platform_field in ["actionId", "visibleIn", "placement"] {
+            assert!(
+                !json.contains(platform_field),
+                "ActionSlotDto 不得包含平台字段 {platform_field}"
+            );
+        }
     }
 }

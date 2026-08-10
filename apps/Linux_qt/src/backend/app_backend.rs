@@ -354,33 +354,16 @@ pub struct AppBackend {
     pub(crate) current_setting_diagnostics_enabled: bool,
     pub(crate) current_setting_diagnostics_verbose: bool,
 
-    // ── Layout Policy ──
+    // ── Layout Contract（#610：Qt 侧先按本平台窗口系统算能力，再套 Core 契约） ──
     #[allow(dead_code)]
     resolve_layout: qt_method!(
-        fn(
-            &self,
-            width_dp: f64,
-            height_dp: f64,
-            safe_top_dp: f64,
-            safe_bottom_dp: f64,
-            keyboard_visible: bool,
-            fold_state: QString,
-            fold_orientation: QString,
-            fold_is_separating: bool,
-            fold_occlusion: QString,
-            fold_bounds_left: f64,
-            fold_bounds_top: f64,
-            fold_bounds_right: f64,
-            fold_bounds_bottom: f64,
-            orientation: QString,
-            pointer: QString,
-        ) -> QJsonObject
+        fn(&self, width_vp: f64, height_vp: f64) -> QJsonObject
     ),
 
-    // ── Screen Policy ──
+    // ── Screen Contract ──
     #[allow(dead_code)]
     resolve_screen_policy:
-        qt_method!(fn(&self, screen_role: QString, shell_mode: QString) -> QJsonObject),
+        qt_method!(fn(&self, screen_role: QString) -> QJsonObject),
 }
 
 impl AppBackend {
@@ -619,107 +602,53 @@ impl AppBackend {
         self.ai_enabled_changed();
     }
 
-    // ── Layout Policy ──
+    // ── Layout Contract ──
     //
-    // ⚠️ LayoutPlan 边界约束 ⚠️
+    // ⚠️ 边界约束（#610）⚠️
     //
-    // resolve_layout() 产出的 LayoutPlan 只决定壳层布局：
-    //   - shellMode（导航模式：compact/medium/expanded）
-    //   - contentMaxWidthVp（内容区域最大宽度）
+    // resolve_layout() 产出的布局 DTO 只决定壳层布局：
+    //   - shellMode（单栏/双栏/三栏）
+    //   - contentMaxWidthVp（编辑纸面最大宽度）
     //   - contentPaddingVp（页面内边距）
-    //   - sidebarVisible / sidebarWidth
+    //   - showPrimaryNavigation / visible pane roles
     //
-    // LayoutPlan 绝对不干预编辑器底层渲染：
+    // 布局 DTO 绝对不干预编辑器底层渲染：
     //   - 不传递到 SujianEditorItem 的 QSG 渲染线程
     //   - 不影响光标位置、IME 输入、动画帧率
     //   - 不改变 QTextLayout 的排版计算
     //   - 不驱动 EditorAnimationOverlay 的动画属性
     //
     // 编辑器渲染由 EditorController + SujianEditorItem 独立管理，
-    // 遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。
+    // 遵守 Qt QSG 线程边界，不受布局 DTO 影响。
+    //
+    // Qt 是桌面端：鼠标为主、无软键盘、无折叠屏，因此只把窗口宽高换算成
+    // 可用栏数（Qt 平台断点），再调 Core 解析产品壳层契约。
 
-    fn resolve_layout(
-        &self,
-        width_dp: f64,
-        height_dp: f64,
-        safe_top_dp: f64,
-        safe_bottom_dp: f64,
-        keyboard_visible: bool,
-        fold_state: QString,
-        fold_orientation: QString,
-        fold_is_separating: bool,
-        fold_occlusion: QString,
-        fold_bounds_left: f64,
-        fold_bounds_top: f64,
-        fold_bounds_right: f64,
-        fold_bounds_bottom: f64,
-        orientation: QString,
-        pointer: QString,
-    ) -> QJsonObject {
-        use writer_core::layout_policy::{
-            resolve_layout, FoldFeatureInfo, FoldOcclusion, FoldOrientation, FoldState,
-            Orientation, PointerKind, WindowMetrics,
+    fn resolve_layout(&self, width_vp: f64, height_vp: f64) -> QJsonObject {
+        use writer_core::presentation::layout_contract::{
+            resolve_layout, PointerClass, WindowCapabilities,
         };
 
-        let fs = match fold_state.to_string().as_str() {
-            "Flat" => FoldState::Flat,
-            "HalfOpened" => FoldState::HalfOpened,
-            _ => FoldState::None,
-        };
-        let fo = match fold_orientation.to_string().as_str() {
-            "Horizontal" => FoldOrientation::Horizontal,
-            _ => FoldOrientation::Vertical,
-        };
-        let foc = match fold_occlusion.to_string().as_str() {
-            "Full" => FoldOcclusion::Full,
-            _ => FoldOcclusion::None,
-        };
-        let fold_feature = FoldFeatureInfo {
-            state: fs,
-            orientation: fo,
-            is_separating: fold_is_separating,
-            occlusion: foc,
-            bounds_left_vp: fold_bounds_left as f32,
-            bounds_top_vp: fold_bounds_top as f32,
-            bounds_right_vp: fold_bounds_right as f32,
-            bounds_bottom_vp: fold_bounds_bottom as f32,
-        };
-        let orient = match orientation.to_string().as_str() {
-            "Portrait" => Orientation::Portrait,
-            "Landscape" => Orientation::Landscape,
-            _ => Orientation::Unknown,
-        };
-        let ptr = match pointer.to_string().as_str() {
-            "Touch" => PointerKind::Touch,
-            "Stylus" => PointerKind::Stylus,
-            "Mouse" => PointerKind::Mouse,
-            _ => PointerKind::Unknown,
+        let pane_count = super::linux_qt_layout_plan_dto::qt_available_pane_count(width_vp as f32);
+        let capabilities = WindowCapabilities {
+            available_pane_count: pane_count,
+            has_separating_fold: false,
+            pointer_class: PointerClass::Mouse,
+            keyboard_visible: false,
         };
 
-        let metrics = WindowMetrics {
-            width_dp: width_dp as f32,
-            height_dp: height_dp as f32,
-            safe_top_dp: safe_top_dp as f32,
-            safe_bottom_dp: safe_bottom_dp as f32,
-            keyboard_visible,
-            fold_feature,
-            orientation: orient,
-            pointer: ptr,
-        };
-
-        let plan = resolve_layout(&metrics);
-        let dto = LinuxQtLayoutPlanDto::from_layout_plan(&plan);
+        let contract = resolve_layout(&capabilities);
+        let dto = LinuxQtLayoutPlanDto::from_contract(&contract, width_vp as f32);
         let json = serde_json::to_string(&dto).unwrap_or_else(|_| "{}".to_string());
         qjson_object_from_json(&json)
     }
 
-    /// 根据页面角色和壳层模式解析动作槽位列表
+    /// 根据页面角色解析动作槽位列表（#610：动作区域/顺序是产品语义，不随壳层变化）
     ///
-    /// QML 调用：backend.resolve_screen_policy("Writing", "SinglePane")
+    /// QML 调用：backend.resolve_screen_policy("Writing")
     /// 返回：{ screenRole: "Writing", actionSlots: [...] }
-    fn resolve_screen_policy(&self, screen_role: QString, shell_mode: QString) -> QJsonObject {
-        use writer_core::layout_policy::ShellMode;
-        use writer_core::screen_policy::{resolve_screen_policy, ScreenRole};
+    fn resolve_screen_policy(&self, screen_role: QString) -> QJsonObject {
+        use writer_core::presentation::screen_contract::{resolve_screen_policy, ScreenRole};
 
         let role = match screen_role.to_string().as_str() {
             "Home" => ScreenRole::Home,
@@ -732,15 +661,8 @@ impl AppBackend {
             "Sync" => ScreenRole::Sync,
             _ => ScreenRole::Home,
         };
-        let mode = match shell_mode.to_string().as_str() {
-            "SinglePane" => ShellMode::SinglePane,
-            "SupportingPane" => ShellMode::SupportingPane,
-            "TwoPane" => ShellMode::TwoPane,
-            "ThreePane" => ShellMode::ThreePane,
-            _ => ShellMode::SinglePane,
-        };
 
-        let action_slots = resolve_screen_policy(role, mode);
+        let action_slots = resolve_screen_policy(role);
 
         use writer_core::api::types::screen_policy::*;
         let dto = ScreenPolicyDto {

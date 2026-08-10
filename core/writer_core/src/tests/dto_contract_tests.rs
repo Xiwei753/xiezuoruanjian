@@ -105,100 +105,70 @@ fn ffi_project_maps_title_to_title() {
 }
 
 #[test]
-fn window_metrics_dto_fields_match_harmony() {
-    let metrics = crate::layout_policy::WindowMetrics::default();
-    let _json = serde_json::to_value(&metrics).unwrap();
+fn window_capabilities_dto_fields_match_harmony() {
+    let capabilities = crate::presentation::layout_contract::WindowCapabilities::default();
+    let _json = serde_json::to_value(&capabilities).unwrap();
     let ffi_json = json!({
-        "widthDp": metrics.width_dp,
-        "heightDp": metrics.height_dp,
-        "safeTopDp": metrics.safe_top_dp,
-        "safeBottomDp": metrics.safe_bottom_dp,
-        "keyboardVisible": metrics.keyboard_visible,
-        "foldFeature": {"state":"None","orientation":"Vertical","isSeparating":false,"occlusion":"None","boundsLeftVp":0.0,"boundsTopVp":0.0,"boundsRightVp":0.0,"boundsBottomVp":0.0},
-        "orientation": "Portrait",
-        "pointer": "Touch"
+        "availablePaneCount": capabilities.available_pane_count,
+        "hasSeparatingFold": capabilities.has_separating_fold,
+        "pointerClass": "Touch",
+        "keyboardVisible": capabilities.keyboard_visible
     });
     let expected_keys = vec![
-        "foldFeature",
-        "heightDp",
+        "availablePaneCount",
+        "hasSeparatingFold",
         "keyboardVisible",
-        "orientation",
-        "pointer",
-        "safeBottomDp",
-        "safeTopDp",
-        "widthDp",
+        "pointerClass",
     ];
     let actual_keys = sorted_keys(&ffi_json);
     assert_eq!(
         actual_keys, expected_keys,
-        "WindowMetrics DTO field names must match Harmony CoreDtos.ets"
+        "WindowCapabilities DTO field names must match Harmony CoreDtos.ets"
     );
 }
 
 #[test]
-fn layout_plan_dto_fields_match_harmony() {
-    let metrics = crate::layout_policy::WindowMetrics::default();
-    let plan = crate::layout_policy::resolve_layout(&metrics);
-    let json = serde_json::to_value(&plan).unwrap();
-    assert!(
-        json.get("width_class").is_some(),
-        "Core internal LayoutPlan uses snake_case 'width_class'"
-    );
+fn layout_contract_dto_fields_match_harmony() {
+    let capabilities = crate::presentation::layout_contract::WindowCapabilities::default();
+    let contract = crate::presentation::layout_contract::resolve_layout(&capabilities);
+    let json = serde_json::to_value(&contract).unwrap();
     assert!(
         json.get("shell_mode").is_some(),
-        "Core internal LayoutPlan uses snake_case 'shell_mode'"
+        "Core internal LayoutContract uses snake_case 'shell_mode'"
     );
     assert!(
-        json.get("content_max_width_dp").is_some(),
-        "Core internal LayoutPlan uses snake_case 'content_max_width_dp'"
+        json.get("workspace_pane_mode").is_some(),
+        "Core internal LayoutContract uses snake_case 'workspace_pane_mode'"
+    );
+    assert!(
+        json.get("visible_pane_roles").is_some(),
+        "Core internal LayoutContract uses snake_case 'visible_pane_roles'"
+    );
+    // #610：Core 不再输出 Material 断点 / dp / 导航呈现等平台值。
+    assert!(
+        json.get("content_max_width_dp").is_none()
+            && json.get("page_padding_dp").is_none()
+            && json.get("navigation_presentation").is_none()
+            && json.get("width_class").is_none(),
+        "LayoutContract 不得包含 Material 断点/dp/导航呈现等平台值"
     );
 
     let ffi_json = json!({
-        "widthClass": "Compact",
-        "heightClass": "Compact",
         "shellMode": "SinglePane",
-        "editorMode": "FullWidth",
-        "navigationMode": "Stack",
-        "navigationPresentation": "BottomBar",
         "workspacePaneMode": "SinglePane",
         "visiblePaneRoles": {"showProjectList":true,"showChapterTree":true,"showEditor":true,"showSupporting":false},
-        "contentMaxWidthDp": 0.0,
-        "pagePaddingDp": 16.0,
-        "gridColumns": 2,
-        "showBottomBar": true,
-        "listPaneWidth": {"minDp":0.0,"preferredDp":0.0,"maxDp":0.0},
-        "editorContentMaxWidthDp": 0.0,
-        "primaryPaneMinDp": 0.0,
-        "primaryPanePreferredDp": 0.0,
-        "primaryPaneMaxDp": 0.0,
-        "supportingPaneMode": null,
-        "avoidRegions": []
+        "showPrimaryNavigation": true
     });
     let expected_keys = vec![
-        "avoidRegions",
-        "contentMaxWidthDp",
-        "editorContentMaxWidthDp",
-        "editorMode",
-        "gridColumns",
-        "heightClass",
-        "listPaneWidth",
-        "navigationMode",
-        "navigationPresentation",
-        "pagePaddingDp",
-        "primaryPaneMaxDp",
-        "primaryPaneMinDp",
-        "primaryPanePreferredDp",
         "shellMode",
-        "showBottomBar",
-        "supportingPaneMode",
+        "showPrimaryNavigation",
         "visiblePaneRoles",
-        "widthClass",
         "workspacePaneMode",
     ];
     let actual_keys = sorted_keys(&ffi_json);
     assert_eq!(
         actual_keys, expected_keys,
-        "LayoutPlan DTO field names must match Harmony CoreDtos.ets"
+        "LayoutContract DTO field names must match Harmony CoreDtos.ets"
     );
 }
 

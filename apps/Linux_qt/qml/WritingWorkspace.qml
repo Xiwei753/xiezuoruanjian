@@ -604,7 +604,6 @@ Rectangle {
                 Layout.fillWidth: true
                 dt: root.dt
                 backendRef: root.backendRef
-                shellMode: root.layoutPlan ? root.layoutPlan.shellMode : "SinglePane"
                 currentFontSize: settingsBackend ? settingsBackend.setting_font_size : 16
                 currentLineSpacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
                 firstLineIndent: settingsBackend ? settingsBackend.setting_auto_indent_enabled : false
