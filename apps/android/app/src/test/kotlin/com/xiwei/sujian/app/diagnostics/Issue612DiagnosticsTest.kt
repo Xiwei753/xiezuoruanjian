@@ -684,7 +684,7 @@ class ProcessExitCollectorApi30Test {
             assertTrue("process_exits.json should exist", outputFile.exists())
             val content = outputFile.readText()
             assertTrue(
-                "API 30 must not write 'requires API 31+' placeholder (getHistoricalProcessExitReasons is API 30+), got: $content",
+                "API 30 must not write 'requires API 31+' placeholder; got: $content",
                 !content.contains("requires API 31+"),
             )
         } finally {
