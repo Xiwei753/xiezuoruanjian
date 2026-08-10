@@ -3,9 +3,6 @@ package com.xiwei.sujian.feature.editor.visual.planner
 import android.graphics.Rect
 import android.graphics.RectF
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
-import com.xiwei.sujian.feature.editor.visual.RebaseContinuation
-import com.xiwei.sujian.feature.editor.visual.RebaseReason
-import com.xiwei.sujian.feature.editor.visual.RebaseSliceMapping
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 import com.xiwei.sujian.feature.editor.visual.SliceVisualState
 import com.xiwei.sujian.feature.editor.visual.TextRevealMode
@@ -19,6 +16,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import uniffi.writer_core.RebaseContinuationDto
+import uniffi.writer_core.RebaseReasonDto
+import uniffi.writer_core.RebaseSliceMappingDto
 
 /**
  * #606: RebasePlanner 只消费 Core 计算的映射 — 本地匹配逻辑已删除。
@@ -111,11 +111,11 @@ class RebaseSliceMappingTest {
             )
         val coreMappings =
             listOf(
-                RebaseSliceMapping(
-                    oldSliceIndex = 0,
-                    newSliceIndex = 0,
-                    continuation = RebaseContinuation.Continue,
-                    reason = RebaseReason.SameByteRange,
+                RebaseSliceMappingDto(
+                    oldSliceIndex = 0u,
+                    newSliceIndex = 0u,
+                    continuation = RebaseContinuationDto.CONTINUE,
+                    reason = RebaseReasonDto.SAME_BYTE_RANGE,
                 ),
             )
 
@@ -164,11 +164,11 @@ class RebaseSliceMappingTest {
             )
         val coreMappings =
             listOf(
-                RebaseSliceMapping(
-                    oldSliceIndex = 0,
-                    newSliceIndex = 0,
-                    continuation = RebaseContinuation.Continue,
-                    reason = RebaseReason.OffsetMapMatched,
+                RebaseSliceMappingDto(
+                    oldSliceIndex = 0u,
+                    newSliceIndex = 0u,
+                    continuation = RebaseContinuationDto.CONTINUE,
+                    reason = RebaseReasonDto.OFFSET_MAP_MATCHED,
                 ),
             )
 
@@ -249,11 +249,11 @@ class RebaseSliceMappingTest {
             )
         val coreMappings =
             listOf(
-                RebaseSliceMapping(
-                    oldSliceIndex = 5,
-                    newSliceIndex = 0,
-                    continuation = RebaseContinuation.Continue,
-                    reason = RebaseReason.SameByteRange,
+                RebaseSliceMappingDto(
+                    oldSliceIndex = 5u,
+                    newSliceIndex = 0u,
+                    continuation = RebaseContinuationDto.CONTINUE,
+                    reason = RebaseReasonDto.SAME_BYTE_RANGE,
                 ),
             )
 

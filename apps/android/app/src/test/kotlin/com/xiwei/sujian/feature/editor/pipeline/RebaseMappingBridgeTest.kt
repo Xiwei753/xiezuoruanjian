@@ -4,8 +4,6 @@ import com.xiwei.sujian.feature.editor.interop.EditorKernelBridge
 import com.xiwei.sujian.feature.editor.projection.OffsetMap
 import com.xiwei.sujian.feature.editor.projection.OffsetMapEntry
 import com.xiwei.sujian.feature.editor.projection.OffsetMapKind
-import com.xiwei.sujian.feature.editor.visual.RebaseContinuation
-import com.xiwei.sujian.feature.editor.visual.RebaseReason
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 import com.xiwei.sujian.feature.editor.visual.SliceRoleAndByteRange
 import org.junit.Assert.assertEquals
@@ -17,6 +15,8 @@ import org.robolectric.annotation.Config
 import uniffi.writer_core.AnimatedSliceRoleDto
 import uniffi.writer_core.EditorByteRangeDto
 import uniffi.writer_core.OffsetMapDto
+import uniffi.writer_core.RebaseContinuationDto
+import uniffi.writer_core.RebaseReasonDto
 import uniffi.writer_core.RebaseSliceMappingDto
 
 /**
@@ -256,10 +256,10 @@ class RebaseMappingBridgeTest {
 
         assertEquals(1, mappings.size)
         // Core 索引 0 → 完整列表索引 1（Static 被过滤掉）
-        assertEquals("Core old 索引 0 应翻译为完整列表索引 1", 1, mappings[0].oldSliceIndex)
-        assertEquals("Core new 索引 1 应翻译为完整列表索引 1", 1, mappings[0].newSliceIndex)
-        assertEquals(RebaseContinuation.Continue, mappings[0].continuation)
-        assertEquals(RebaseReason.SameByteRange, mappings[0].reason)
+        assertEquals("Core old 索引 0 应翻译为完整列表索引 1", 1u, mappings[0].oldSliceIndex)
+        assertEquals("Core new 索引 1 应翻译为完整列表索引 1", 1u, mappings[0].newSliceIndex)
+        assertEquals(RebaseContinuationDto.CONTINUE, mappings[0].continuation)
+        assertEquals(RebaseReasonDto.SAME_BYTE_RANGE, mappings[0].reason)
     }
 
     /**

@@ -639,13 +639,14 @@ impl super::WriterAppService {
             .map(|r| (r.start as usize, r.end_exclusive as usize))
             .collect();
         let core_offset_map: Option<crate::editor::OffsetMap> = offset_map.map(Into::into);
-        let mappings = crate::editor::compute_rebase_slice_mappings(
-            &old_roles,
-            &old_ranges,
-            &new_roles,
-            &new_ranges,
-            core_offset_map.as_ref(),
-        );
+        let mappings =
+            crate::editor::compute_rebase_slice_mappings(crate::editor::SliceMatchInput {
+                old_slice_roles: &old_roles,
+                old_slice_byte_ranges: &old_ranges,
+                new_slice_roles: &new_roles,
+                new_slice_byte_ranges: &new_ranges,
+                offset_map: core_offset_map.as_ref(),
+            });
         mappings.into_iter().map(Into::into).collect()
     }
 }

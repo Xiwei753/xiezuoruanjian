@@ -14,8 +14,6 @@ import com.xiwei.sujian.feature.editor.projection.OffsetMapKind
 import com.xiwei.sujian.feature.editor.projection.VisualIntent
 import com.xiwei.sujian.feature.editor.visual.AndroidVisualPlanner
 import com.xiwei.sujian.feature.editor.visual.RebaseMappingProvider
-import com.xiwei.sujian.feature.editor.visual.RebaseReason
-import com.xiwei.sujian.feature.editor.visual.RebaseSliceMapping
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 import com.xiwei.sujian.feature.editor.visual.SliceRoleAndByteRange
 import uniffi.writer_core.AnimatedSliceRoleDto
@@ -23,8 +21,6 @@ import uniffi.writer_core.EditorTransactionCauseDto
 import uniffi.writer_core.OffsetMapDto
 import uniffi.writer_core.OffsetMapEntryDto
 import uniffi.writer_core.OffsetMapKindDto
-import uniffi.writer_core.RebaseContinuationDto
-import uniffi.writer_core.RebaseReasonDto
 import uniffi.writer_core.RebaseSliceMappingDto
 
 /**
@@ -109,33 +105,14 @@ class AndroidEditorPipeline private constructor(
                     },
             )
 
-        /** #606: Core RebaseSliceMappingDto → 平台类型（纯数据映射，无逻辑）。 */
-        private fun RebaseSliceMappingDto.toPlatform(): RebaseSliceMapping =
-            RebaseSliceMapping(
-                oldSliceIndex = oldSliceIndex.toInt(),
-                newSliceIndex = newSliceIndex.toInt(),
-                continuation =
-                    when (continuation) {
-                        RebaseContinuationDto.CONTINUE ->
-                            com.xiwei.sujian.feature.editor.visual.RebaseContinuation.Continue
-                        RebaseContinuationDto.END ->
-                            com.xiwei.sujian.feature.editor.visual.RebaseContinuation.End
-                    },
-                reason =
-                    when (reason) {
-                        RebaseReasonDto.SAME_BYTE_RANGE -> RebaseReason.SameByteRange
-                        RebaseReasonDto.OFFSET_MAP_MATCHED -> RebaseReason.OffsetMapMatched
-                        RebaseReasonDto.NO_MAPPING -> RebaseReason.NoMapping
-                    },
-            )
-
         /**
          * #606: 旧→新逻辑 slice 对应关系由 Core 唯一计算。
          *
-         * 平台端只提供输入（旧/新 slice 角色与 byte range、本次事务的 OffsetMap）
-         * 并把 Core 返回的 DTO 转回平台类型；Static 角色不在 Core 动画角色集合中
-         * （不参与 rebase 匹配），先过滤再调用，返回后把 Core 索引（过滤后列表的
-         * 索引）翻译回完整列表索引 — 纯数据管道，无任何匹配逻辑。
+         * 平台端只提供输入（旧/新 slice 角色与 byte range、本次事务的 OffsetMap），
+         * 返回 Core 的 `RebaseSliceMappingDto` 原样消费 — 平台不再维护任何本地副本。
+         * Static 角色不在 Core 动画角色集合中（不参与 rebase 匹配），先过滤再调用，
+         * 返回后把 Core 索引（过滤后列表的索引）翻译回完整列表索引 — 纯数据管道，
+         * 无任何匹配逻辑。
          * bridge 为 null 或调用失败时返回空映射（平台端按无对应关系处理）。
          */
         fun computeRebaseSliceMappings(
@@ -143,7 +120,7 @@ class AndroidEditorPipeline private constructor(
             oldSlices: List<SliceRoleAndByteRange>,
             newSlices: List<SliceRoleAndByteRange>,
             offsetMap: OffsetMap?,
-        ): List<RebaseSliceMapping> {
+        ): List<RebaseSliceMappingDto> {
             if (bridge == null) return emptyList()
             val oldNonStaticIndices =
                 oldSlices.mapIndexedNotNull { index, s ->
@@ -175,12 +152,10 @@ class AndroidEditorPipeline private constructor(
                 )
             return coreMappings
                 ?.map { dto ->
-                    dto.toPlatform().let {
-                        it.copy(
-                            oldSliceIndex = oldNonStaticIndices[it.oldSliceIndex],
-                            newSliceIndex = newNonStaticIndices[it.newSliceIndex],
-                        )
-                    }
+                    dto.copy(
+                        oldSliceIndex = oldNonStaticIndices[dto.oldSliceIndex.toInt()].toUInt(),
+                        newSliceIndex = newNonStaticIndices[dto.newSliceIndex.toInt()].toUInt(),
+                    )
                 } ?: emptyList()
         }
 

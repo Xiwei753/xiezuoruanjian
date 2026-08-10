@@ -42,7 +42,7 @@ pub use transaction::{
     HiddenVisualRange, OffsetMap, OffsetMapEntry, OffsetMapKind, PlatformVisualTransaction,
     PlatformVisualTransactionState, PreeditTextFormat, PreeditVisualTransaction,
     RebaseContinuation, RebaseFrameSnapshot, RebaseReason, RebaseSliceMapping, Rect,
-    ReflowGlyphRect, SnapshotOwner, StaticLinePatch, Timeline, TransactionCancelReason,
-    TransactionRebase, UnifiedTransactionKind, VisualClassKind, VisualCoordinateMode,
-    VisualLayoutRevision, VisualRevision,
+    ReflowGlyphRect, SliceMatchInput, SnapshotOwner, StaticLinePatch, Timeline,
+    TransactionCancelReason, TransactionRebase, UnifiedTransactionKind, VisualClassKind,
+    VisualCoordinateMode, VisualLayoutRevision, VisualRevision,
 };

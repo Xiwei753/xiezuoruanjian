@@ -2,19 +2,20 @@ package com.xiwei.sujian.feature.editor.visual.planner
 
 import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
-import com.xiwei.sujian.feature.editor.visual.RebaseSliceMapping
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 import com.xiwei.sujian.feature.editor.visual.SliceVisualState
 import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
 import com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot
+import uniffi.writer_core.RebaseSliceMappingDto
 
 class RebasePlanner {
     /**
      * #606: 将 Core 计算的旧→新逻辑 slice 对应关系应用到新事务的 animated slices。
      *
      * 旧→新 slice 的逻辑对应关系由 Core（`compute_rebase_slice_mappings`）
-     * 唯一计算并作为 [mappings] 传入 — 平台端不再使用任何本地匹配逻辑
+     * 唯一计算并作为 [mappings] 传入（直接消费 `RebaseSliceMappingDto`，
+     * 平台端不再维护本地副本）— 平台端不再使用任何本地匹配逻辑
      * （compatibleRebaseRoles / findRebaseIndexByClusterByteRange /
      * findRebaseIndexByLineAndRole / findRebaseIndexClosestByPosition 已删除）。
      * 本方法只负责：
@@ -28,7 +29,7 @@ class RebasePlanner {
         newSlices: List<PreparedVisualTransaction.AnimatedSlice>,
         rebaseSnapshot: VisualFrameSnapshot,
         snapshotLookup: Map<Long, AndroidLineSnapshot> = emptyMap(),
-        mappings: List<RebaseSliceMapping> = emptyList(),
+        mappings: List<RebaseSliceMappingDto> = emptyList(),
     ): List<PreparedVisualTransaction.AnimatedSlice> {
         if (rebaseSnapshot.sliceVisualStates.isEmpty()) return newSlices
 
@@ -36,8 +37,8 @@ class RebasePlanner {
         val result = mutableListOf<PreparedVisualTransaction.AnimatedSlice>()
 
         for ((newIdx, slice) in newSlices.withIndex()) {
-            val mapping = mappings.firstOrNull { it.newSliceIndex == newIdx }
-            val rebaseIdx = mapping?.oldSliceIndex
+            val mapping = mappings.firstOrNull { it.newSliceIndex.toInt() == newIdx }
+            val rebaseIdx = mapping?.oldSliceIndex?.toInt()
             if (rebaseIdx != null && rebaseIdx >= 0 && rebaseIdx < rebaseSnapshot.sliceVisualStates.size) {
                 usedRebaseIndices.add(rebaseIdx)
                 val rebaseState = rebaseSnapshot.sliceVisualStates[rebaseIdx]

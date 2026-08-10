@@ -76,11 +76,13 @@ fn compute_rebase_creates_transaction_rebase() {
             cursor_rect: None,
         }),
         // #606: 旧事务 1 个 Insert slice @ [0,3)，新事务 1 个 Insert slice @ [0,3)
-        &[AnimatedSliceRole::Insert],
-        &[(0, 3)],
-        &[AnimatedSliceRole::Insert],
-        &[(0, 3)],
-        None,
+        SliceMatchInput {
+            old_slice_roles: &[AnimatedSliceRole::Insert],
+            old_slice_byte_ranges: &[(0, 3)],
+            new_slice_roles: &[AnimatedSliceRole::Insert],
+            new_slice_byte_ranges: &[(0, 3)],
+            offset_map: None,
+        },
     );
     assert_eq!(rebase.cancelled_transaction_id, 42);
     assert!((rebase.old_progress - 0.6).abs() < f64::EPSILON);
@@ -149,7 +151,13 @@ fn rebase_covers_all_transaction_kinds() {
 
 #[test]
 fn compute_rebase_slice_mappings_empty_inputs() {
-    let mappings = compute_rebase_slice_mappings(&[], &[], &[], &[], None);
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &[],
+        old_slice_byte_ranges: &[],
+        new_slice_roles: &[],
+        new_slice_byte_ranges: &[],
+        offset_map: None,
+    });
     assert!(mappings.is_empty());
 }
 
@@ -160,8 +168,13 @@ fn compute_rebase_slice_mappings_same_byte_range_compatible_roles() {
     let old_ranges = [(0, 3), (5, 8)];
     let new_roles = [AnimatedSliceRole::Insert, AnimatedSliceRole::Delete];
     let new_ranges = [(0, 3), (5, 8)];
-    let mappings =
-        compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges, None);
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: None,
+    });
     assert_eq!(mappings.len(), 2);
     assert_eq!(mappings[0].old_slice_index, 0);
     assert_eq!(mappings[0].new_slice_index, 0);
@@ -178,8 +191,13 @@ fn compute_rebase_slice_mappings_move_compatible_with_insert() {
     let old_ranges = [(0, 3)];
     let new_roles = [AnimatedSliceRole::Move];
     let new_ranges = [(0, 3)];
-    let mappings =
-        compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges, None);
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: None,
+    });
     assert_eq!(mappings.len(), 1);
     assert_eq!(mappings[0].continuation, RebaseContinuation::Continue);
 }
@@ -194,8 +212,13 @@ fn compute_rebase_slice_mappings_crossfade_pair_compatible() {
     let old_ranges = [(0, 3), (3, 6)];
     let new_roles = [AnimatedSliceRole::Delete, AnimatedSliceRole::Insert];
     let new_ranges = [(0, 3), (3, 6)];
-    let mappings =
-        compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges, None);
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: None,
+    });
     assert_eq!(mappings.len(), 2);
 }
 
@@ -206,8 +229,13 @@ fn compute_rebase_slice_mappings_incompatible_roles_no_mapping() {
     let old_ranges = [(0, 3)];
     let new_roles = [AnimatedSliceRole::Delete];
     let new_ranges = [(0, 3)];
-    let mappings =
-        compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges, None);
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: None,
+    });
     // 不兼容 → 无映射（平台端按 End 处理）
     assert!(mappings.is_empty());
 }
@@ -219,8 +247,13 @@ fn compute_rebase_slice_mappings_different_byte_range_no_mapping() {
     let old_ranges = [(0, 3)];
     let new_roles = [AnimatedSliceRole::Insert];
     let new_ranges = [(5, 8)];
-    let mappings =
-        compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges, None);
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: None,
+    });
     assert!(mappings.is_empty());
 }
 
@@ -240,13 +273,13 @@ fn compute_rebase_slice_mappings_offset_map_matched() {
             kind: crate::editor::OffsetMapKind::Shifted,
         }],
     };
-    let mappings = compute_rebase_slice_mappings(
-        &old_roles,
-        &old_ranges,
-        &new_roles,
-        &new_ranges,
-        Some(&offset_map),
-    );
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: Some(&offset_map),
+    });
     assert_eq!(mappings.len(), 1);
     assert_eq!(mappings[0].old_slice_index, 0);
     assert_eq!(mappings[0].new_slice_index, 0);
@@ -269,13 +302,13 @@ fn compute_rebase_slice_mappings_offset_map_unmapped_range_no_mapping() {
             kind: crate::editor::OffsetMapKind::Identity,
         }],
     };
-    let mappings = compute_rebase_slice_mappings(
-        &old_roles,
-        &old_ranges,
-        &new_roles,
-        &new_ranges,
-        Some(&offset_map),
-    );
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: Some(&offset_map),
+    });
     assert!(mappings.is_empty());
 }
 
@@ -294,13 +327,13 @@ fn compute_rebase_slice_mappings_offset_map_wrong_destination_no_mapping() {
             kind: crate::editor::OffsetMapKind::Shifted,
         }],
     };
-    let mappings = compute_rebase_slice_mappings(
-        &old_roles,
-        &old_ranges,
-        &new_roles,
-        &new_ranges,
-        Some(&offset_map),
-    );
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: Some(&offset_map),
+    });
     assert!(mappings.is_empty());
 }
 
@@ -319,13 +352,13 @@ fn compute_rebase_slice_mappings_offset_map_incompatible_roles_no_mapping() {
             kind: crate::editor::OffsetMapKind::Shifted,
         }],
     };
-    let mappings = compute_rebase_slice_mappings(
-        &old_roles,
-        &old_ranges,
-        &new_roles,
-        &new_ranges,
-        Some(&offset_map),
-    );
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: Some(&offset_map),
+    });
     assert!(mappings.is_empty());
 }
 
@@ -344,13 +377,13 @@ fn compute_rebase_slice_mappings_offset_map_does_not_override_same_byte_range() 
             kind: crate::editor::OffsetMapKind::Shifted,
         }],
     };
-    let mappings = compute_rebase_slice_mappings(
-        &old_roles,
-        &old_ranges,
-        &new_roles,
-        &new_ranges,
-        Some(&offset_map),
-    );
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: Some(&offset_map),
+    });
     assert_eq!(mappings.len(), 1);
     assert_eq!(mappings[0].reason, RebaseReason::SameByteRange);
 }
@@ -370,13 +403,13 @@ fn compute_rebase_slice_mappings_offset_map_range_spanning_entry_no_mapping() {
             kind: crate::editor::OffsetMapKind::Shifted,
         }],
     };
-    let mappings = compute_rebase_slice_mappings(
-        &old_roles,
-        &old_ranges,
-        &new_roles,
-        &new_ranges,
-        Some(&offset_map),
-    );
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: Some(&offset_map),
+    });
     assert!(mappings.is_empty());
 }
 
@@ -387,8 +420,13 @@ fn compute_rebase_slice_mappings_each_new_slice_matched_at_most_once() {
     let old_ranges = [(0, 3), (0, 3)];
     let new_roles = [AnimatedSliceRole::Insert];
     let new_ranges = [(0, 3)];
-    let mappings =
-        compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges, None);
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: None,
+    });
     // 只有第一个旧 slice 匹配到新 slice 0；第二个旧 slice 无可用新 slice
     assert_eq!(mappings.len(), 1);
     assert_eq!(mappings[0].old_slice_index, 0);
@@ -406,8 +444,13 @@ fn compute_rebase_slice_mappings_partial_match() {
     let old_ranges = [(0, 3), (5, 8), (10, 12)];
     let new_roles = [AnimatedSliceRole::Move, AnimatedSliceRole::Delete];
     let new_ranges = [(10, 12), (15, 18)];
-    let mappings =
-        compute_rebase_slice_mappings(&old_roles, &old_ranges, &new_roles, &new_ranges, None);
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: None,
+    });
     // 旧 slice 2 (Move @ [10,12)) 匹配新 slice 0 (Move @ [10,12))
     // 旧 slice 1 (Delete @ [5,8)) 不匹配新 slice 1 (Delete @ [15,18)) — byte range 不同
     // 旧 slice 0 (Insert @ [0,3)) 无匹配
@@ -423,11 +466,13 @@ fn compute_rebase_includes_slice_mappings() {
         100,
         0.5,
         None,
-        &[AnimatedSliceRole::Insert, AnimatedSliceRole::Delete],
-        &[(0, 3), (5, 8)],
-        &[AnimatedSliceRole::Insert, AnimatedSliceRole::Delete],
-        &[(0, 3), (5, 8)],
-        None,
+        SliceMatchInput {
+            old_slice_roles: &[AnimatedSliceRole::Insert, AnimatedSliceRole::Delete],
+            old_slice_byte_ranges: &[(0, 3), (5, 8)],
+            new_slice_roles: &[AnimatedSliceRole::Insert, AnimatedSliceRole::Delete],
+            new_slice_byte_ranges: &[(0, 3), (5, 8)],
+            offset_map: None,
+        },
     );
     assert_eq!(rebase.cancelled_transaction_id, 100);
     assert_eq!(rebase.slice_mappings.len(), 2);

@@ -38,5 +38,5 @@ pub use engine::{
     compute_rebase_slice_mappings, count_grapheme_clusters, diff_plain_text, is_cjk_code_point,
     is_combining_code_point, is_complex_grapheme_code_point, split_text_into_clusters,
     split_text_into_runs, text_contains_complex_grapheme, transactions_overlap,
-    CompositionOperationKind, CompositionVisualClassification, EditorEngine,
+    CompositionOperationKind, CompositionVisualClassification, EditorEngine, SliceMatchInput,
 };

@@ -536,10 +536,10 @@ pub fn classify_visual_diff(old_text: &str, new_text: &str) -> Vec<VisualClassKi
 /// 冲突判断不能只看 AnimatedSlice：CursorOnly、纯 Decoration、
 /// 视觉文字相同的 CompositionCommit 也必须能通过 revision/affected range 参与替换。
 ///
-/// #606: rebase slice 角色兼容性 — 与 Android `RebasePlanner.compatibleRebaseRoles` 对齐。
+/// #606: rebase slice 角色兼容性 — 平台无关的唯一事实来源，平台端不再自己判断。
 ///
-/// Move/Insert/CrossfadeNew 互相兼容（都是"新出现的文字"动画）；
-/// Delete/CrossfadeOld 互相兼容（都是"消失的文字"动画）；
+/// Move/Insert/CrossfadeNew 互相兼容（都是“新出现的文字”动画）；
+/// Delete/CrossfadeOld 互相兼容（都是“消失的文字”动画）；
 /// 其余组合不兼容（Insert 与 Delete 不能接续，Move 与 CrossfadeOld 不能接续）。
 fn compatible_rebase_roles(new_role: AnimatedSliceRole, old_role: AnimatedSliceRole) -> bool {
     use AnimatedSliceRole::*;
@@ -561,73 +561,99 @@ fn compatible_rebase_roles(new_role: AnimatedSliceRole, old_role: AnimatedSliceR
     )
 }
 
+/// #606: rebase slice 匹配输入 — 旧/新事务 slice 的角色与 UTF-8 byte range。
+///
+/// 平台无关的唯一事实来源，Android `RebasePlanner` 不再自己匹配，
+/// 直接消费 `compute_rebase_slice_mappings` 的结果。
+#[derive(Debug, Clone, Copy)]
+pub struct SliceMatchInput<'a> {
+    /// 旧事务各 slice 的角色
+    pub old_slice_roles: &'a [AnimatedSliceRole],
+    /// 旧事务各 slice 的 UTF-8 byte range
+    pub old_slice_byte_ranges: &'a [(usize, usize)],
+    /// 新事务各 slice 的角色
+    pub new_slice_roles: &'a [AnimatedSliceRole],
+    /// 新事务各 slice 的 UTF-8 byte range
+    pub new_slice_byte_ranges: &'a [(usize, usize)],
+    /// 旧正文 → 新正文偏移映射（可能为 None）
+    pub offset_map: Option<&'a OffsetMap>,
+}
+
+/// 尝试为单个旧 slice 找到匹配的新 slice。
+///
+/// 返回 `(new_slice_index, reason)`；无匹配返回 `None`。
+/// 匹配规则（按优先级）：
+/// 1. 旧/新 slice 的 byte range 完全相同 + 角色兼容 → `SameByteRange`
+/// 2. 旧 slice range 经 `offset_map`（旧正文 → 新正文）映射后与新 slice range
+///    相等 + 角色兼容 → `OffsetMapMatched`（旧/新事务正文坐标不同但指向同一
+///    逻辑对象，例如前一个事务的 Move slice 在新事务正文中整体移位）
+///
+/// 匹配依据只使用 byte range/OffsetMap/角色兼容（平台无关），不使用像素坐标。
+fn try_match_slice(
+    old_role: AnimatedSliceRole,
+    (old_start, old_end): (usize, usize),
+    new_slice_roles: &[AnimatedSliceRole],
+    new_slice_byte_ranges: &[(usize, usize)],
+    used_new: &std::collections::HashSet<usize>,
+    offset_map: Option<&OffsetMap>,
+) -> Option<(usize, RebaseReason)> {
+    for (new_idx, (new_role, &(new_start, new_end))) in new_slice_roles
+        .iter()
+        .zip(new_slice_byte_ranges.iter())
+        .enumerate()
+    {
+        if used_new.contains(&new_idx) || !compatible_rebase_roles(*new_role, old_role) {
+            continue;
+        }
+        if old_start == new_start && old_end == new_end {
+            return Some((new_idx, RebaseReason::SameByteRange));
+        }
+        // #606: 旧正文坐标与新正文坐标不同但 OffsetMap 可映射 → 同一逻辑对象。
+        let Some(map) = offset_map else {
+            continue;
+        };
+        if let Some((mapped_start, mapped_end)) = map.map_old_range_to_new(old_start, old_end) {
+            if mapped_start == new_start && mapped_end == new_end {
+                return Some((new_idx, RebaseReason::OffsetMapMatched));
+            }
+        }
+    }
+    None
+}
+
 /// #606: 计算旧事务逻辑 slice → 新事务逻辑 slice 的对应关系。
 ///
 /// 平台无关的唯一事实来源 — Android `RebasePlanner` 不再自己匹配，
 /// 直接消费此结果。
 ///
-/// 匹配规则（按优先级）：
-/// 1. 旧/新 slice 的 byte range 完全相同 + 角色兼容 → `SameByteRange` + `Continue`
-/// 2. 旧 slice range 经 `offset_map`（旧正文 → 新正文）映射后与新 slice range
-///    相等 + 角色兼容 → `OffsetMapMatched` + `Continue`（旧/新事务正文坐标不同但
-///    指向同一逻辑对象，例如前一个事务的 Move slice 在新事务正文中整体移位）
-/// 3. 其余旧 slice 不生成映射（平台端按 `End` 处理）
-///
+/// 匹配规则见 [try_match_slice]（SameByteRange → OffsetMapMatched 优先级）。
 /// 每个新 slice 至多被一个旧 slice 匹配（`used_new` 去重），
 /// 避免多旧 slice 接续同一新 slice 造成 progress 抢占。
 /// 匹配依据只使用 byte range/OffsetMap/角色兼容（平台无关），不使用像素坐标。
-pub fn compute_rebase_slice_mappings(
-    old_slice_roles: &[AnimatedSliceRole],
-    old_slice_byte_ranges: &[(usize, usize)],
-    new_slice_roles: &[AnimatedSliceRole],
-    new_slice_byte_ranges: &[(usize, usize)],
-    offset_map: Option<&OffsetMap>,
-) -> Vec<RebaseSliceMapping> {
+pub fn compute_rebase_slice_mappings(input: SliceMatchInput) -> Vec<RebaseSliceMapping> {
     let mut mappings = Vec::new();
     let mut used_new = std::collections::HashSet::new();
-    for (old_idx, (old_role, &(old_start, old_end))) in old_slice_roles
+    for (old_idx, (old_role, &(old_start, old_end))) in input
+        .old_slice_roles
         .iter()
-        .zip(old_slice_byte_ranges.iter())
+        .zip(input.old_slice_byte_ranges.iter())
         .enumerate()
     {
-        for (new_idx, (new_role, &(new_start, new_end))) in new_slice_roles
-            .iter()
-            .zip(new_slice_byte_ranges.iter())
-            .enumerate()
-        {
-            if used_new.contains(&new_idx) {
-                continue;
-            }
-            if !compatible_rebase_roles(*new_role, *old_role) {
-                continue;
-            }
-            if old_start == new_start && old_end == new_end {
-                mappings.push(RebaseSliceMapping {
-                    old_slice_index: old_idx,
-                    new_slice_index: new_idx,
-                    continuation: RebaseContinuation::Continue,
-                    reason: RebaseReason::SameByteRange,
-                });
-                used_new.insert(new_idx);
-                break;
-            }
-            // #606: 旧正文坐标与新正文坐标不同但 OffsetMap 可映射 → 同一逻辑对象。
-            if let Some(map) = offset_map {
-                if let Some((mapped_start, mapped_end)) =
-                    map.map_old_range_to_new(old_start, old_end)
-                {
-                    if mapped_start == new_start && mapped_end == new_end {
-                        mappings.push(RebaseSliceMapping {
-                            old_slice_index: old_idx,
-                            new_slice_index: new_idx,
-                            continuation: RebaseContinuation::Continue,
-                            reason: RebaseReason::OffsetMapMatched,
-                        });
-                        used_new.insert(new_idx);
-                        break;
-                    }
-                }
-            }
+        if let Some((new_idx, reason)) = try_match_slice(
+            *old_role,
+            (old_start, old_end),
+            input.new_slice_roles,
+            input.new_slice_byte_ranges,
+            &used_new,
+            input.offset_map,
+        ) {
+            mappings.push(RebaseSliceMapping {
+                old_slice_index: old_idx,
+                new_slice_index: new_idx,
+                continuation: RebaseContinuation::Continue,
+                reason,
+            });
+            used_new.insert(new_idx);
         }
     }
     mappings
@@ -651,19 +677,9 @@ pub fn compute_rebase(
     cancelled_transaction_id: u64,
     old_progress: f64,
     old_frame_snapshot: Option<RebaseFrameSnapshot>,
-    old_slice_roles: &[AnimatedSliceRole],
-    old_slice_byte_ranges: &[(usize, usize)],
-    new_slice_roles: &[AnimatedSliceRole],
-    new_slice_byte_ranges: &[(usize, usize)],
-    offset_map: Option<&OffsetMap>,
+    input: SliceMatchInput,
 ) -> TransactionRebase {
-    let slice_mappings = compute_rebase_slice_mappings(
-        old_slice_roles,
-        old_slice_byte_ranges,
-        new_slice_roles,
-        new_slice_byte_ranges,
-        offset_map,
-    );
+    let slice_mappings = compute_rebase_slice_mappings(input);
     TransactionRebase {
         cancelled_transaction_id,
         old_progress,
