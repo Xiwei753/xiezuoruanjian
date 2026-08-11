@@ -23,6 +23,12 @@ object DiagnosticsExporter {
 
     fun export(context: Context): File? {
         return try {
+            // Issue #612 评论 3.4：flush 失败（writer 死亡超时/调用线程中断）直接返回
+            // 导出失败，不要继续打一个可能缺日志的 zip。
+            if (!DiagnosticsLogger.flushBlocking()) {
+                DiagnosticsLogger.e("DiagnosticsExporter", "flushBlocking failed; aborting export")
+                return null
+            }
             val cacheDir = File(context.cacheDir, DIAGNOSTICS_DIR)
             if (!cacheDir.exists()) cacheDir.mkdirs()
             cacheDir.listFiles()?.forEach { it.delete() }
@@ -33,7 +39,7 @@ object DiagnosticsExporter {
             val tempDir = File(cacheDir, "temp_$timestamp")
             tempDir.mkdirs()
 
-            writeLogs(context, tempDir)
+            writeLogs(tempDir)
             writeCrashFile(context, tempDir)
             writeLogcat(tempDir)
             writeProcessExits(context, tempDir)
@@ -85,13 +91,11 @@ object DiagnosticsExporter {
         return DiagnosticsLogger.redact(gson.toJson(info))
     }
 
-    private fun writeLogs(
-        context: Context,
-        destDir: File,
-    ) {
+    private fun writeLogs(destDir: File) {
         val logsDir = File(destDir, "logs")
         logsDir.mkdirs()
-        DiagnosticsLogger.flushBlocking()
+        // 落盘保证由 export() 入口的 flushBlocking() 统一完成（导出顺序第一步）；
+        // 此处只复制 writer 已落盘的滚动日志文件。
         DiagnosticsLogger.getLogFiles().forEach { logFile ->
             try {
                 val content = logFile.readText()

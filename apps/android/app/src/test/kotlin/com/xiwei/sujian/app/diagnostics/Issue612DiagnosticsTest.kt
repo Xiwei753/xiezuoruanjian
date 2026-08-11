@@ -711,6 +711,57 @@ class PersistentLogWriterTest {
             files.all { it.name.startsWith("sujian-current") && it.name.endsWith(".log") },
         )
     }
+
+    @Test
+    fun flushBlockingReturnsTrueWhenCompletedBeforeTimeout() {
+        // 正（评论 3.4 新契约）：正常落盘完成时 flushBlocking 返回 true，且日志已写盘。
+        PersistentLogWriter.enqueue(req("returns-true"))
+        val ok = PersistentLogWriter.flushBlocking()
+        assertTrue("flushBlocking must return true on success", ok)
+        assertTrue(
+            "flushed message must be on disk",
+            currentLogFile().readText().contains("returns-true"),
+        )
+    }
+
+    @Test
+    fun flushBlockingReturnsFalseWhenCallerInterrupted() {
+        // 反（评论 3.4 新契约）：调用线程被中断时 latch 等待被打断，必须返回 false
+        // 而不是静默假装成功（旧实现返回 Unit，调用方无从感知）。
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            // 显式 <Boolean> 强制 submit(Callable) 重载：submit(Runnable) 的
+            // Future<?>.get() 恒返回 null，拿不到 lambda 的 Boolean 返回值。
+            val future =
+                executor.submit<Boolean> {
+                    Thread.currentThread().interrupt()
+                    PersistentLogWriter.flushBlocking()
+                }
+            val result = future.get(10, java.util.concurrent.TimeUnit.SECONDS)
+            assertEquals("interrupted flushBlocking must return false", false, result)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun clearLogsReturnsFalseWhenCallerInterrupted() {
+        // 反（评论 3.4 新契约）：调用线程被中断时 clearLogs 必须返回 false，
+        // 设置页据此显示失败而不是假装已经清空。
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            // 显式 <Boolean> 强制 submit(Callable) 重载，否则返回 null（Runnable 版）。
+            val future =
+                executor.submit<Boolean> {
+                    Thread.currentThread().interrupt()
+                    PersistentLogWriter.clearLogs()
+                }
+            val result = future.get(10, java.util.concurrent.TimeUnit.SECONDS)
+            assertEquals("interrupted clearLogs must return false", false, result)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
 }
 
 /**

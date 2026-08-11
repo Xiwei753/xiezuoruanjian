@@ -124,6 +124,26 @@ class DiagnosticsExportPackageTest {
         assertNull("export must return null on failure", zipFile)
     }
 
+    /**
+     * 反（评论 3.4）：flushBlocking 失败（调用线程被中断）时 export 必须直接返回
+     * null 表示导出失败，不得继续打一个可能缺日志的 zip。
+     */
+    @Test
+    fun exportReturnsNullWhenFlushFails() {
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val future =
+                executor.submit<File?> {
+                    Thread.currentThread().interrupt()
+                    DiagnosticsExporter.export(context)
+                }
+            val zipFile = future.get(60, TimeUnit.SECONDS)
+            assertNull("export must return null when flush fails", zipFile)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
     /** 正：导出不把脱敏字段原样带出（token 落盘前已被 redact 清除）。 */
     @Test
     fun exportedLogsAreRedacted() {

@@ -223,15 +223,23 @@ object DiagnosticsLogger {
 
     /**
      * 阻塞直到调用前所有已入队的日志都被 writer 线程写完落盘。
+     *
+     * @return 落盘在超时前完成返回 true；writer 死亡超时或调用线程中断返回 false
+     * （Issue #612 评论 3.4：导出等关键路径必须把失败传导给用户，不得假装成功）。
      */
-    fun flushBlocking() {
-        PersistentLogWriter.flushBlocking()
-    }
+    fun flushBlocking(): Boolean = PersistentLogWriter.flushBlocking()
 
     fun getLogFiles(): List<File> = PersistentLogWriter.getLogFiles()
 
-    fun clearLogs() {
-        PersistentLogWriter.clearLogs()
+    /**
+     * 清空持久日志。
+     *
+     * @return 清空在超时前完成返回 true；超时/中断返回 false（此时不删除回退位置
+     * 的 crash 文件，也不得在 UI 上假装已清空，见 Issue #612 评论 3.4）。
+     */
+    fun clearLogs(): Boolean {
+        val ok = PersistentLogWriter.clearLogs()
+        if (!ok) return false
         // PersistentLogWriter.clearLogs 已删 logsDir 下所有文件（含 last_crash.txt）。
         // 另外清理 filesDir/diagnostics/ 回退位置的 last_crash.txt。
         val ctx = contextRef.get()
@@ -239,6 +247,7 @@ object DiagnosticsLogger {
             val fallbackCrash = File(File(ctx.filesDir, "diagnostics"), "last_crash.txt")
             if (fallbackCrash.exists()) fallbackCrash.delete()
         }
+        return true
     }
 
     /**

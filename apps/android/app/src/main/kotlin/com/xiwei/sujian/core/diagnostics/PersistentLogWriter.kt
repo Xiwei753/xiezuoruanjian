@@ -57,6 +57,13 @@ internal sealed interface LogWriterCommand {
  * 后于 barrier 处理——天然保证 flushBlocking 等到前序日志落盘、clearLogs 在 writer
  * 空闲后删除文件且后续 Append 不会写回旧日志。
  *
+ * 失败语义（Issue #612 评论 3）：writerLoop 不整批吞异常。命令逐条处理，
+ * FlushBarrier/ClearBarrier 的 latch 在 try/finally 中必定 countDown——单条命令抛
+ * 出 VM 级 Error（writeBatch/deleteLogFiles 只捕获可恢复的 Exception）会终止 writer
+ * 线程，但同批后续 barrier 的等待者不会因 latch 丢失而永久挂起，只能等超时拿到
+ * false。[flushBlocking]/[clearLogs] 返回 Boolean：latch 在超时前完成返回 true，
+ * 超时/中断返回 false，调用方不得把失败伪装成成功。
+ *
  * 中断语义：writer 是常驻 daemon 线程，[InterruptedException] 只当作一次虚假唤醒
  * ——不恢复中断位、继续等待，线程绝不退出（否则持久日志永久停写）。
  */
@@ -94,8 +101,8 @@ internal object PersistentLogWriter {
             thread.isDaemon = true
             thread.start()
         }
-        // 触发日志目录创建（在 lock 外，避免持有 lock 做 I/O）。
-        ensureLogsDir()
+        // 目录创建推迟到 writer 线程第一次 writeBatch()（Issue #612 评论 3.5）：
+        // init() 的调用线程不做任何文件 I/O，日志目录只由 sujian-logger 线程创建。
     }
 
     fun setEnabled(enabled: Boolean) {
@@ -122,20 +129,23 @@ internal object PersistentLogWriter {
      * 实现：入队 FlushBarrier，writer 处理到此屏障时已写完前序所有 Append，
      * 然后 countDown 唤醒本等待。最多等待 [FLUSH_TIMEOUT_MS]：writer 若因不可控
      * Error 死亡（磁盘/内存极端故障），调用方（崩溃处理器、导出）不能永久挂起。
-     * 未初始化时直接返回。
+     *
+     * @return latch 在超时前完成返回 true；超时或调用线程被中断返回 false
+     * （中断时恢复中断位）。未初始化时没有可 flush 的日志，返回 true。
      */
-    fun flushBlocking() {
+    fun flushBlocking(): Boolean {
         val latch = CountDownLatch(1)
         synchronized(lock) {
-            if (!initialized) return
+            if (!initialized) return true
             queue.addLast(LogWriterCommand.FlushBarrier(latch))
             lock.notifyAll()
         }
-        try {
+        return try {
             latch.await(FLUSH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         } catch (_: InterruptedException) {
-            // 调用方线程被中断：恢复中断位并返回，不做落盘保证。
+            // 调用方线程被中断：恢复中断位并返回 false，不做落盘保证。
             Thread.currentThread().interrupt()
+            false
         }
     }
 
@@ -155,20 +165,24 @@ internal object PersistentLogWriter {
      * 并发产生「文件已删、writer 随后 FileWriter(append) 重建并写回旧日志」的复活竞态：
      * ClearBarrier 在队列中按序处理，其后的 Append 一定在删除之后才写盘。
      * 最多等待 [FLUSH_TIMEOUT_MS]：writer 若因不可控 Error 死亡，清空不能永久挂起。
-     * 未初始化时直接返回。
+     *
+     * @return latch 在超时前完成返回 true；超时或调用线程被中断返回 false
+     * （中断时恢复中断位，writer 仍会按序处理 ClearBarrier 删除文件）。
+     * 未初始化时没有可清的日志，返回 true。
      */
-    fun clearLogs() {
+    fun clearLogs(): Boolean {
         val latch = CountDownLatch(1)
         synchronized(lock) {
-            if (!initialized) return
+            if (!initialized) return true
             queue.addLast(LogWriterCommand.ClearBarrier(latch))
             lock.notifyAll()
         }
-        try {
+        return try {
             latch.await(FLUSH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         } catch (_: InterruptedException) {
-            // 调用方线程被中断：恢复中断位并返回。writer 仍会按序处理 ClearBarrier 删除文件。
+            // 调用方线程被中断：恢复中断位并返回 false。
             Thread.currentThread().interrupt()
+            false
         }
     }
 
@@ -190,20 +204,18 @@ internal object PersistentLogWriter {
                 commands = queue.toList()
                 queue.clear()
             }
-            try {
-                processCommands(commands)
-            } catch (_: Throwable) {
-                // 最终防线：writeBatch 已内层捕获，但命令处理中仍可能出现不可控
-                // Error（如 OOM、SecurityException 等）。此时丢弃本批命令并继续
-                // 循环，writer 线程绝不退出——否则持久日志永久停写、后续
-                // flushBlocking/clearLogs 只能等超时，诊断系统自身瘫痪。
-            }
+            // 不整批吞异常（Issue #612 评论 3.1）：命令逐条处理，barrier 的 latch
+            // 在 try/finally 中必定释放；writeBatch/deleteLogFiles 只捕获可恢复的
+            // Exception，VM 级 Error 会终止 writer 线程——调用方通过 flushBlocking/
+            // clearLogs 的 Boolean 返回值感知失败，而不是被 latch 永久挂起或假装成功。
+            processCommands(commands)
         }
     }
 
     /**
-     * 在 lock 外按入队顺序处理命令。连续 Append 收集为 batch 写盘；
-     * 遇到 FlushBarrier/ClearBarrier 先写完当前 batch 再执行屏障语义。
+     * 在 lock 外按入队顺序处理命令。连续 Append 仍收集为 batch 写盘（不改命令
+     * 队列顺序）；FlushBarrier/ClearBarrier 的 latch 用 try/finally 保证必定释放：
+     * 即使 flushBatch/deleteLogFiles 抛出 VM 级 Error，等待者也不会丢失 latch。
      */
     private fun processCommands(commands: List<LogWriterCommand>) {
         val batch = ArrayList<LogRequest>()
@@ -213,34 +225,44 @@ internal object PersistentLogWriter {
                     batch.add(cmd.request)
                 }
                 is LogWriterCommand.FlushBarrier -> {
-                    if (batch.isNotEmpty()) {
-                        writeBatch(batch)
-                        batch.clear()
+                    try {
+                        flushBatch(batch)
+                    } finally {
+                        cmd.latch.countDown()
                     }
-                    cmd.latch.countDown()
                 }
                 is LogWriterCommand.ClearBarrier -> {
-                    if (batch.isNotEmpty()) {
-                        writeBatch(batch)
-                        batch.clear()
+                    try {
+                        flushBatch(batch)
+                        // 文件删除在 writer 线程执行，与 writeBatch 串行，无并发竞态。
+                        deleteLogFiles()
+                    } finally {
+                        cmd.latch.countDown()
                     }
-                    // 文件删除在 writer 线程执行，与 writeBatch 串行，无并发竞态。
-                    deleteLogFiles()
-                    cmd.latch.countDown()
                 }
             }
         }
         // 尾部连续 Append 写盘。
-        if (batch.isNotEmpty()) {
-            writeBatch(batch)
-        }
+        flushBatch(batch)
+    }
+
+    /** 把当前累积的 Append batch 写盘并清空（仅由 writer 线程调用）。 */
+    private fun flushBatch(batch: MutableList<LogRequest>) {
+        if (batch.isEmpty()) return
+        writeBatch(batch)
+        batch.clear()
     }
 
     /** 删除日志目录下所有文件（仅由 writer 线程调用）。 */
     private fun deleteLogFiles() {
-        val logDir = AndroidDataRoot.logsDir()
-        if (logDir.exists()) {
-            logDir.listFiles()?.forEach { it.delete() }
+        try {
+            val logDir = AndroidDataRoot.logsDir()
+            if (logDir.exists()) {
+                logDir.listFiles()?.forEach { it.delete() }
+            }
+        } catch (_: Exception) {
+            // 删除失败是可恢复 I/O 故障：latch 由 ClearBarrier 的 finally 释放，
+            // writer 线程继续存活，不因一次删除失败而死亡（Issue #612 评论 3）。
         }
     }
 
@@ -258,10 +280,11 @@ internal object PersistentLogWriter {
                 }
                 writer.flush()
             }
-        } catch (_: Throwable) {
-            // 捕获 Throwable 而非 Exception：OutOfMemoryError 等 Error 逃逸会杀死
-            // writer 线程，导致持久日志永久停写、flushBlocking 永久等待（诊断系统
-            // 自身崩溃）。I/O 失败：丢弃本批次，writer 线程继续存活处理后续日志。
+        } catch (_: Exception) {
+            // 只捕获可恢复的 I/O 异常（Issue #612 评论 3.3）：OutOfMemoryError、
+            // ThreadDeath 这类 VM 级 Error 不是日志线程应该吞掉后假装继续工作的
+            // 普通 I/O 故障——它们向上传播终止 writer 线程，调用方经 Boolean 返回值
+            // 感知失败。I/O 失败：丢弃本批次，writer 线程继续存活处理后续日志。
         }
     }
 

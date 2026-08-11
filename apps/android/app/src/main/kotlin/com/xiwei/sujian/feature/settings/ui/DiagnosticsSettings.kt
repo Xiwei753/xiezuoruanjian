@@ -37,6 +37,7 @@ fun DiagnosticsSettings(
     val settings = state.settings
     val dims = LocalSujianDimensions.current
     val clearedText = stringResource(id = R.string.diagnostics_cleared)
+    val clearFailedText = stringResource(id = R.string.diagnostics_clear_failed)
     val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
 
     androidx.compose.foundation.layout.Column(
@@ -74,9 +75,14 @@ fun DiagnosticsSettings(
             SujianOutlinedButton(
                 text = stringResource(id = R.string.btn_clear_logs),
                 onClick = {
-                    DiagnosticsLogger.clearLogs()
-                    EditorEventRingBuffer.clear()
-                    Toast.makeText(context, clearedText, Toast.LENGTH_SHORT).show()
+                    // Issue #612 评论 3.4：清空失败（writer 超时/中断）必须显示失败，
+                    // 不得假装已清空；成功才同时清内存 ring buffer 并提示成功。
+                    if (DiagnosticsLogger.clearLogs()) {
+                        EditorEventRingBuffer.clear()
+                        Toast.makeText(context, clearedText, Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, clearFailedText, Toast.LENGTH_SHORT).show()
+                    }
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -102,9 +108,10 @@ fun DiagnosticsSettings(
 /**
  * Issue #612 收口：导出按钮。
  *
- * 导出（flushBlocking + 多来源采集 + zip）是数 MB 级 I/O，必须在后台线程执行，
+ * 导出（flush 屏障 + 多来源采集 + zip）是数 MB 级 I/O，必须在后台线程执行，
  * 避免阻塞 UI 线程触发 ANR；isExporting 防止重复点击并发导出，完成后回主线程
- * 分享或提示失败。
+ * 分享或提示失败。flushBlocking 的失败语义由 DiagnosticsExporter.export() 内部
+ * 统一处理（失败直接返回 null，不打缺日志的 zip）。
  */
 @Composable
 private fun ExportDiagnosticsButton(
@@ -124,7 +131,6 @@ private fun ExportDiagnosticsButton(
             exportScope.launch {
                 val zipFile =
                     withContext(Dispatchers.IO) {
-                        DiagnosticsLogger.flushBlocking()
                         DiagnosticsExporter.export(context.applicationContext)
                     }
                 if (zipFile != null) {

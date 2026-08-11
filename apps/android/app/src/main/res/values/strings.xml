@@ -217,6 +217,7 @@
     <string name="share_diagnostics_title">分享诊断包</string>
     <string name="diagnostics_export_failed">导出诊断包失败</string>
     <string name="diagnostics_cleared">日志已清空</string>
+    <string name="diagnostics_clear_failed">日志清空失败，请稍后重试</string>
     <string name="diagnostics_device_info_copied">设备信息已复制</string>
 
     <!-- About -->
