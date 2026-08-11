@@ -31,15 +31,24 @@ internal data class LogRequest(
  *   batch 写完即 flush()。
  * - 1 MiB / 5 文件轮转，轮转、打开、append、flush 全部只在 writer 线程执行。
  *
- * 线程安全模型：[lock] 守护 [pending]、[swap] 与两个计数器；文件 I/O 在
- * lock 外只由 writer 线程执行，故 enqueue 与 flushBlocking 不会阻塞 I/O。
+ * 线程安全模型：[lock] 守护 [pending]、[swap] 与计数器；文件 I/O 在 lock 外
+ * 只由 writer 线程执行，故 enqueue 与 flushBlocking 不会阻塞 I/O。
  * 所有通知均用 notifyAll：enqueue 的通知不能只唤醒 flushBlocking 而漏掉
  * writer，否则 writer 永远不被唤醒处理 pending。
+ *
+ * 中断语义：writer 是常驻 daemon 线程，[InterruptedException] 只当作一次
+ * 虚假唤醒——不恢复中断位、继续等待，线程绝不退出（否则持久日志永久停写）。
  */
 internal object PersistentLogWriter {
     private const val LOG_PREFIX = "sujian-current"
     private const val MAX_FILE_SIZE = 1024 * 1024L // 1 MiB
     private const val MAX_LOG_FILES = 5
+
+    /**
+     * flushBlocking / clearLogs 的等待上限：writer 因不可控 Error 死亡时，
+     * 崩溃处理器与导出流程不能永久挂起（Issue #612 收口）。
+     */
+    private const val FLUSH_TIMEOUT_MS = 5_000L
 
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
@@ -56,6 +65,15 @@ internal object PersistentLogWriter {
     // flushBlocking 快照目标 enqueuedCount 后等到 processedCount 追上。
     private var enqueuedCount = 0L
     private var processedCount = 0L
+
+    // 在途 batch 大小：writer 在 lock 内交换 batch 时置为 batchSize，
+    // 写盘完成回到 lock 时清零。clearLogs 依赖它等待 writer 真正空闲，
+    // 避免「文件已删、writer 随后 FileWriter(append) 重建并写回旧日志」竞态。
+    private var inFlight = 0L
+
+    // 清空代际：clearLogs 递增；flushBlocking 若发现代际变化立即返回——
+    // 被清空丢弃的条目已不存在，等待它们落盘没有意义。
+    private var clearGeneration = 0L
 
     /**
      * 初始化并启动 writer 线程。幂等：重复调用无副作用。
@@ -97,15 +115,28 @@ internal object PersistentLogWriter {
     /**
      * 阻塞直到调用前所有已 enqueue 的请求都被 writer 写完落盘。
      * 语义：等待 pending queue 为空 + 当前正在写的 batch 完成。
+     *
+     * 若等待期间发生 [clearLogs]，被清空丢弃的条目永远无法落盘，此时按
+     * 代际变化解除等待立即返回——那些日志已不存在，等待没有意义。
+     * 最多等待 [FLUSH_TIMEOUT_MS]：writer 若因不可控 Error 死亡（磁盘/内存
+     * 极端故障），调用方（崩溃处理器、导出）不能永久挂起。
      */
     fun flushBlocking() {
         synchronized(lock) {
             if (!initialized) return
             val target = enqueuedCount
-            while (processedCount < target) {
-                // writer 完成每个 batch 后 notifyAll 唤醒本等待；
-                // enqueue 的 notifyAll 保证 writer 不会漏掉 pending。
-                lock.wait()
+            val generation = clearGeneration
+            val deadline = System.nanoTime() + FLUSH_TIMEOUT_MS * 1_000_000L
+            while (processedCount < target && clearGeneration == generation) {
+                val remaining = deadline - System.nanoTime()
+                if (remaining <= 0) return
+                try {
+                    lock.wait(remaining / 1_000_000L, (remaining % 1_000_000L).toInt())
+                } catch (_: InterruptedException) {
+                    // 调用方线程被中断：恢复中断位并返回，不做落盘保证。
+                    Thread.currentThread().interrupt()
+                    return
+                }
             }
         }
     }
@@ -120,15 +151,33 @@ internal object PersistentLogWriter {
 
     /**
      * 清空 pending/swap 队列并删除日志目录下所有文件。
-     * 正在 writer 线程执行的 batch 不会被中断（已交换出 lock），写完后
-     * 文件句柄关闭，Linux 内核回收已删除 inode。
+     *
+     * 与 writer 并发安全：清空队列后先在 lock 内等待 [inFlight] 归零
+     * （writer 完成正在写的 batch 回到 lock 时清零并 notifyAll），保证文件
+     * 删除时 writer 已空闲，不会出现「文件已删、writer 随后重建文件并写回
+     * 旧 batch」的复活竞态。
      */
     fun clearLogs() {
         synchronized(lock) {
             pending.clear()
             swap.clear()
-            // 让可能正在等待的 flushBlocking 立即返回：清空后不会再有新进度。
+            // 让可能正在等待的 flushBlocking 立即返回：清空后不再有可等待的进度。
+            clearGeneration++
             enqueuedCount = processedCount
+            // 等待 writer 完成正在写的 batch（写盘在 lock 外执行，完成后回到
+            // lock 清零 inFlight 并 notifyAll 唤醒本等待）。最多等待
+            // [FLUSH_TIMEOUT_MS]：writer 若因不可控 Error 死亡，清空不能永久挂起。
+            val deadline = System.nanoTime() + FLUSH_TIMEOUT_MS * 1_000_000L
+            while (inFlight > 0) {
+                val remaining = deadline - System.nanoTime()
+                if (remaining <= 0) break
+                try {
+                    lock.wait(remaining / 1_000_000L, (remaining % 1_000_000L).toInt())
+                } catch (_: InterruptedException) {
+                    // 清空语义要求文件删除前 writer 空闲；忽略中断继续等待，
+                    // 不恢复中断位（否则 wait 会因中断位立即再抛，形成忙循环）。
+                }
+            }
             val logDir = AndroidDataRoot.logsDir()
             if (logDir.exists()) {
                 logDir.listFiles()?.forEach { it.delete() }
@@ -144,7 +193,12 @@ internal object PersistentLogWriter {
             val batchSize: Int
             synchronized(lock) {
                 while (pending.isEmpty()) {
-                    lock.wait()
+                    try {
+                        lock.wait()
+                    } catch (_: InterruptedException) {
+                        // 常驻 daemon 线程：中断只当作虚假唤醒，不恢复中断位，
+                        // 线程绝不退出。
+                    }
                 }
                 // 交换 pending 与 swap：writer 接手 swap（原 pending），
                 // enqueue 后续写入新的 pending（原 swap）。
@@ -152,11 +206,13 @@ internal object PersistentLogWriter {
                 pending = swap
                 swap = batch
                 batchSize = batch.size
+                inFlight = batchSize.toLong()
             }
             writeBatch(batch)
             synchronized(lock) {
                 batch.clear()
                 processedCount += batchSize
+                inFlight = 0L
                 lock.notifyAll()
             }
         }
@@ -176,9 +232,10 @@ internal object PersistentLogWriter {
                 }
                 writer.flush()
             }
-        } catch (_: Exception) {
-            // I/O 失败：丢弃本批次，避免 writer 线程被磁盘异常反复阻塞。
-            // 不向上抛：writer 线程不能死。
+        } catch (_: Throwable) {
+            // 捕获 Throwable 而非 Exception：OutOfMemoryError 等 Error 逃逸会杀死
+            // writer 线程，导致持久日志永久停写、flushBlocking 永久等待（诊断系统
+            // 自身崩溃）。I/O 失败：丢弃本批次，writer 线程继续存活处理后续日志。
         }
     }
 

@@ -599,6 +599,84 @@ class PersistentLogWriterTest {
     }
 
     @Test
+    fun clearLogsConcurrentWithWriterNeverResurrectsOldBatch() {
+        // 反（缺陷守护）：clearLogs 与 writer 写盘并发时，旧 batch 不得写回重建的文件。
+        // 缺陷根因：旧实现 clearLogs 只清队列不等待 writer——writer 已交换 batch 但
+        // 尚未打开文件时，clearLogs 删除文件，writer 随后 FileWriter(currentFile, true)
+        // 重建文件并写回旧日志（复活）。新实现先等 inFlight 归零（writer 空闲）再删除。
+        // 并发时序无法从黑盒稳定命中，这里用多轮大消息竞争守护最终不变量：
+        // 任何一轮清空前的消息都不得出现在清空后的文件中。
+        repeat(20) { round ->
+            PersistentLogWriter.enqueue(req("old-round-$round-" + "Z".repeat(64 * 1024)))
+            PersistentLogWriter.clearLogs()
+            PersistentLogWriter.flushBlocking()
+        }
+        val file = currentLogFile()
+        val content = if (file.exists()) file.readText() else ""
+        for (round in 0 until 20) {
+            assertTrue(
+                "round $round must not resurrect after clearLogs",
+                !content.contains("old-round-$round-"),
+            )
+        }
+    }
+
+    @Test
+    fun clearLogsWaitsForInFlightBatchBeforeDeletingFiles() {
+        // 正（新语义）：clearLogs 必须等待 writer 完成正在写的 batch 后才删除文件。
+        // 间接验证：enqueue 大消息让 writer 必然忙于写盘，clearLogs 返回后立即
+        // enqueue + flushBlocking 的新消息必须落入全新文件，且旧消息不存在——
+        // 若 clearLogs 不等待（旧实现），writer 可能在删除后重建文件并写回旧 batch。
+        val big = "Q".repeat(512 * 1024)
+        PersistentLogWriter.enqueue(req("in-flight-" + big))
+        // 给 writer 时间交换 batch 并开始写盘（MIN_PRIORITY，大消息写盘耗时明显）。
+        Thread.sleep(100)
+        PersistentLogWriter.clearLogs()
+        PersistentLogWriter.enqueue(req("after-clear-log"))
+        PersistentLogWriter.flushBlocking()
+        val file = currentLogFile()
+        assertTrue("new file must exist after clear + enqueue", file.exists())
+        val content = file.readText()
+        assertTrue(
+            "new message must be persisted after clear",
+            content.contains("after-clear-log"),
+        )
+        assertTrue(
+            "in-flight old batch must not be resurrected",
+            !content.contains("in-flight-"),
+        )
+    }
+
+    @Test
+    fun writerThreadSurvivesInterruptAndKeepsWriting() {
+        // 反（缺陷复现）：writer 被 interrupt 后必须继续处理后续日志，
+        // 旧实现 wait() 抛 InterruptedException 直接杀死 writer 线程。
+        // flushBlocking 用带超时的 future 包装：若 writer 已死会超时失败而非挂死套件。
+        PersistentLogWriter.flushBlocking()
+        val writerThread =
+            Thread.getAllStackTraces().keys.firstOrNull { it.name == "sujian-logger" }
+        assertNotNull("sujian-logger writer thread must exist", writerThread)
+        writerThread!!.interrupt()
+        // 等待 writer 处理中断并回到 wait（若线程已死则等待必然超时）。
+        Thread.sleep(200)
+        PersistentLogWriter.enqueue(req("after-interrupt"))
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val future = executor.submit { PersistentLogWriter.flushBlocking() }
+            future.get(10, java.util.concurrent.TimeUnit.SECONDS)
+        } finally {
+            executor.shutdownNow()
+        }
+        val file = currentLogFile()
+        assertTrue("log file should exist after writer interrupt", file.exists())
+        val content = file.readText()
+        assertTrue(
+            "writer must survive interrupt and persist later logs",
+            content.contains("after-interrupt"),
+        )
+    }
+
+    @Test
     fun clearLogsRemovesFilesAndClearsPendingQueue() {
         PersistentLogWriter.enqueue(req("to-be-cleared"))
         PersistentLogWriter.flushBlocking()
