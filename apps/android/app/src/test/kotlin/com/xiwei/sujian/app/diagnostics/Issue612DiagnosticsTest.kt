@@ -2,6 +2,8 @@
 
 package com.xiwei.sujian.app.diagnostics
 
+import com.xiwei.sujian.app.navigation.SujianDestination
+import com.xiwei.sujian.app.navigation.resolveTopLevelSwitchInteraction
 import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 import com.xiwei.sujian.core.diagnostics.JankStatsController
 import com.xiwei.sujian.core.diagnostics.LogRequest
@@ -688,5 +690,59 @@ class ProcessExitCollectorApi30Test {
         } finally {
             dir.deleteRecursively()
         }
+    }
+}
+
+/**
+ * Issue #612 收口：一级切换 interaction 上下文判定正反测试。
+ *
+ * 修复前（反）：SujianJankInteractionClearEffect 在首次组合（应用启动、未发生任何切换）
+ * 也写 interaction=top_level_switch，启动期帧被误标为“一级切换”；
+ * 修复后（正）：首次组合只写 screen，不写 interaction。
+ */
+class ResolveTopLevelSwitchInteractionTest {
+    @Test
+    fun firstCompositionIsNotTopLevelSwitch() {
+        // 正：应用启动首次组合（previous=null）不是一级切换，不写 interaction。
+        assertEquals(
+            null,
+            resolveTopLevelSwitchInteraction(null, SujianDestination.Works),
+        )
+    }
+
+    @Test
+    fun actualSwitchWritesTopLevelSwitchInteraction() {
+        // 正：Works → StarMap 是一级切换，写 interaction=top_level_switch。
+        assertEquals(
+            "top_level_switch",
+            resolveTopLevelSwitchInteraction(SujianDestination.Works, SujianDestination.StarMap),
+        )
+    }
+
+    @Test
+    fun switchBackAlsoWritesTopLevelSwitchInteraction() {
+        // 正：StarMap → Works 同样是切换。
+        assertEquals(
+            "top_level_switch",
+            resolveTopLevelSwitchInteraction(SujianDestination.StarMap, SujianDestination.Works),
+        )
+    }
+
+    @Test
+    fun reselectingSameDestinationIsNotTopLevelSwitch() {
+        // 反：原地重复选择当前 tab 不产生切换动画，不应标 interaction。
+        assertEquals(
+            null,
+            resolveTopLevelSwitchInteraction(SujianDestination.Works, SujianDestination.Works),
+        )
+    }
+
+    @Test
+    fun statsToWorksIsTopLevelSwitch() {
+        // 正：Stats → Works 同样是一级切换。
+        assertEquals(
+            "top_level_switch",
+            resolveTopLevelSwitchInteraction(SujianDestination.Stats, SujianDestination.Works),
+        )
     }
 }

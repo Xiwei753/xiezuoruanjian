@@ -37,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -650,7 +651,8 @@ private fun Modifier.navItemModifier(destination: SujianDestination): Modifier {
             SujianDestination.StarMap -> SujianSemanticIds.NavigationStarMap
             SujianDestination.Stats -> SujianSemanticIds.NavigationStats
         }
-    return if (semanticTag != null) this.testTag(semanticTag) else this
+    // 枚举覆盖全部分支，semanticTag 恒非空；testTag 需要非空 tag。
+    return this.testTag(semanticTag)
 }
 
 /** Issue #612 四/五：一级切换诊断事件 + JankStats UI 上下文 + 进程状态摘要。 */
@@ -669,15 +671,36 @@ private fun recordTopLevelSwitchDiagnostics(
     )
 }
 
+/**
+ * Issue #612 四：判断本次 top-level destination 变化是否属于“一级切换”。
+ * 首次组合（[previousTopDestination] 为 null，应用启动）与原地重复选择（前后相同）
+ * 都不算一级切换，返回 null 表示不写 interaction 上下文，避免把启动期帧误标为
+ * top_level_switch（诊断保真度）。提取为 internal 便于单测正反验证。
+ */
+internal fun resolveTopLevelSwitchInteraction(
+    previousTopDestination: SujianDestination?,
+    currentTopDestination: SujianDestination,
+): String? =
+    if (previousTopDestination == null || previousTopDestination == currentTopDestination) {
+        null
+    } else {
+        "top_level_switch"
+    }
+
 /** Issue #612 四：用 PerformanceMetricsState 写 screen/interaction 上下文；切换动画结束后移除 interaction。 */
 @Composable
 private fun SujianJankInteractionClearEffect(currentTopDestination: SujianDestination) {
     val view = androidx.compose.ui.platform.LocalView.current
+    var previousTopDestination by remember { mutableStateOf<SujianDestination?>(null) }
     LaunchedEffect(currentTopDestination) {
         val holder = androidx.metrics.performance.PerformanceMetricsState.getHolderForHierarchy(view)
         val state = holder?.state
         state?.putState("screen", currentTopDestination.name)
-        state?.putState("interaction", "top_level_switch")
+        val interaction =
+            resolveTopLevelSwitchInteraction(previousTopDestination, currentTopDestination)
+        previousTopDestination = currentTopDestination
+        if (interaction == null) return@LaunchedEffect
+        state?.putState("interaction", interaction)
         kotlinx.coroutines.delay(350)
         state?.removeState("interaction")
     }
