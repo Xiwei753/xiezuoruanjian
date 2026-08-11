@@ -516,6 +516,22 @@ private fun SujianRouteEffects(
     LaunchedEffect(currentRoute) {
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navigation(currentTopDestination.name)
     }
+    // #614: nav.top_level_switch 改由目的地变化的 LaunchedEffect 异步记录，
+    // 不在 onTopLevelSelected 交互回调里同步做诊断格式化/落队列。
+    // 首次组合（previous 为 null）与原地重复选择（前后相同）都不记录，
+    // 与 resolveTopLevelSwitchInteraction 的保真度语义一致。
+    var previousTopDestination by remember { mutableStateOf<SujianDestination?>(null) }
+    LaunchedEffect(currentTopDestination) {
+        val previous = previousTopDestination
+        previousTopDestination = currentTopDestination
+        if (previous == null || previous == currentTopDestination) return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navTopLevelSwitch(
+                previous.name,
+                currentTopDestination.name,
+            )
+        }
+    }
 }
 
 /** 顶栏信息 — 标题/返回/操作/透明背景 全部由同一份 [SujianChromeSpec] 决策驱动。 */
