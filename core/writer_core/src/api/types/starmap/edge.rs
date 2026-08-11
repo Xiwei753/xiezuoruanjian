@@ -117,3 +117,33 @@ impl From<StarMapEdgePatchInputDto> for StarMapEdgePatchDto {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_starmap_edge_kind_dto_roundtrip() {
+        let kinds = vec![
+            crate::starmap::types::StarMapEdgeKind::Contains,
+            crate::starmap::types::StarMapEdgeKind::References,
+            crate::starmap::types::StarMapEdgeKind::AppearsIn,
+            crate::starmap::types::StarMapEdgeKind::Causes,
+            crate::starmap::types::StarMapEdgeKind::RelatedTo,
+            crate::starmap::types::StarMapEdgeKind::LocatedAt,
+            crate::starmap::types::StarMapEdgeKind::CharacterRelation,
+            crate::starmap::types::StarMapEdgeKind::Timeline,
+            crate::starmap::types::StarMapEdgeKind::Foreshadows,
+            crate::starmap::types::StarMapEdgeKind::Resolves,
+            crate::starmap::types::StarMapEdgeKind::DependsOn,
+            crate::starmap::types::StarMapEdgeKind::ConflictsWith,
+            crate::starmap::types::StarMapEdgeKind::Custom,
+        ];
+
+        for kind in kinds {
+            let dto: StarMapEdgeKindDto = kind.clone().into();
+            let back: crate::starmap::types::StarMapEdgeKind = dto.into();
+            assert_eq!(kind, back);
+        }
+    }
+}

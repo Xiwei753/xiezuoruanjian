@@ -283,3 +283,33 @@ impl From<StarMapNodePatchInputDto> for StarMapNodePatchDto {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_starmap_node_kind_dto_roundtrip() {
+        let kinds = vec![
+            crate::starmap::types::StarMapNodeKind::Character,
+            crate::starmap::types::StarMapNodeKind::Event,
+            crate::starmap::types::StarMapNodeKind::Location,
+            crate::starmap::types::StarMapNodeKind::Item,
+            crate::starmap::types::StarMapNodeKind::Concept,
+            crate::starmap::types::StarMapNodeKind::Theme,
+            crate::starmap::types::StarMapNodeKind::Note,
+            crate::starmap::types::StarMapNodeKind::Organization,
+            crate::starmap::types::StarMapNodeKind::Timeline,
+            crate::starmap::types::StarMapNodeKind::Plot,
+            crate::starmap::types::StarMapNodeKind::Foreshadowing,
+            crate::starmap::types::StarMapNodeKind::Chapter,
+            crate::starmap::types::StarMapNodeKind::Custom,
+        ];
+
+        for kind in kinds {
+            let dto: StarMapNodeKindDto = kind.clone().into();
+            let back: crate::starmap::types::StarMapNodeKind = dto.into();
+            assert_eq!(kind, back);
+        }
+    }
+}
