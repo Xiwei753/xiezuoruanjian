@@ -105,6 +105,46 @@ class ProcessStateSummaryTest {
         val truncated = ProcessStateSummary.truncateToBytes(summary, 128)
         assertTrue(truncated.toByteArray(Charsets.UTF_8).size <= 128)
     }
+
+    // ── #614: sanitizeSummaryValue 字符白名单 ──────────────────────
+
+    /** 应用内部枚举值与安全符号原样保留。 */
+    @Test
+    fun sanitizeSummaryValueKeepsAlphanumericAndSafeSymbols() {
+        assertEquals("Works", ProcessStateSummary.sanitizeSummaryValue("Works"))
+        assertEquals("0", ProcessStateSummary.sanitizeSummaryValue("0"))
+        assertEquals("idle", ProcessStateSummary.sanitizeSummaryValue("idle"))
+        assertEquals("syncing", ProcessStateSummary.sanitizeSummaryValue("syncing"))
+        assertEquals("a-b_c=d;e", ProcessStateSummary.sanitizeSummaryValue("a-b_c=d;e"))
+    }
+
+    /** 含空格的值替换为 _，破坏 shell/SQL 注入语义。 */
+    @Test
+    fun sanitizeSummaryValueReplacesSpacesToBreakInjection() {
+        val sanitized = ProcessStateSummary.sanitizeSummaryValue("Works; rm -rf /")
+        assertFalse("空格应被替换", sanitized.contains(" "))
+        assertTrue(sanitized.contains("Works"))
+        assertTrue(sanitized.contains("rm"))
+        assertTrue(sanitized.contains("-rf"))
+    }
+
+    /** 引号、尖括号、反斜杠替换为 _，防止 HTML/转义注入。 */
+    @Test
+    fun sanitizeSummaryValueReplacesQuotesAndAngleBrackets() {
+        val sanitized = ProcessStateSummary.sanitizeSummaryValue("""<script>"x"</script>""")
+        assertFalse(sanitized.contains("<"))
+        assertFalse(sanitized.contains(">"))
+        assertFalse(sanitized.contains("\""))
+    }
+
+    /** buildSummary 对每个 value 单独 sanitize，含特殊字符的 value 不破坏整体格式。 */
+    @Test
+    fun buildSummarySanitizesEachValue() {
+        val summary = ProcessStateSummary.buildSummary("Works; rm -rf", "0", "idle")
+        assertFalse(summary.contains(" rm"))
+        assertTrue(summary.startsWith("screen=Works"))
+        assertTrue(summary.contains(";editor=0;sync=idle"))
+    }
 }
 
 /**

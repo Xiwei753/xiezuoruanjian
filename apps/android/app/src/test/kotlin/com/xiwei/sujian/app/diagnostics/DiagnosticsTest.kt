@@ -327,6 +327,31 @@ class DiagnosticsRedactionTest {
         assertTrue(result.contains("[REDACTED]"))
         assertFalse(result.contains("Chapter body"))
     }
+
+    // ── #614: 结构事件走 mayContainSensitiveData 快速路径，原样返回不跑全部 Regex ──
+
+    /** nav.destination 结构事件不含敏感字段标记，redact 原样返回。 */
+    @Test
+    fun redactNavDestinationStructureEventUnchanged() {
+        val input = "nav.destination destination=Works"
+        assertEquals(input, DiagnosticsLogger.redact(input))
+    }
+
+    /** nav.top_level_switch 结构事件不含敏感字段标记，redact 原样返回。 */
+    @Test
+    fun redactNavTopLevelSwitchStructureEventUnchanged() {
+        val input = "nav.top_level_switch from=Works to=StarMap"
+        assertEquals(input, DiagnosticsLogger.redact(input))
+    }
+
+    /** theme.resolve 结构事件不含敏感字段标记，redact 原样返回。 */
+    @Test
+    fun redactThemeResolveStructureEventUnchanged() {
+        val input =
+            "theme.resolve appearanceMode=dark colorSource=builtin isDark=true " +
+                "selectedBuiltin=ink selectedPalette=null sdk=34"
+        assertEquals(input, DiagnosticsLogger.redact(input))
+    }
 }
 
 class LocalSettingsDiagnosticsDefaultTest {
