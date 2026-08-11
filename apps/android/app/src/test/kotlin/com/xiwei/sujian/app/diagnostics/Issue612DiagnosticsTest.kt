@@ -124,17 +124,17 @@ class JankStatsControllerAggregationTest {
 
     @Test
     fun onFrameCountsTotalFrames() {
-        JankStatsController.onFrame(1L, 16_000_000L, false, emptyList())
-        JankStatsController.onFrame(2L, 20_000_000L, false, emptyList())
+        JankStatsController.onFrame(1L, 16_000_000L, false, emptyList<Pair<String, String>>())
+        JankStatsController.onFrame(2L, 20_000_000L, false, emptyList<Pair<String, String>>())
         val summary = JankStatsController.getSummary()
         assertEquals(2L, summary["totalFrames"])
     }
 
     @Test
     fun onFrameCountsOnlyJankFramesAsJank() {
-        JankStatsController.onFrame(1L, 16_000_000L, false, emptyList())
-        JankStatsController.onFrame(2L, 40_000_000L, true, emptyList())
-        JankStatsController.onFrame(3L, 50_000_000L, true, emptyList())
+        JankStatsController.onFrame(1L, 16_000_000L, false, emptyList<Pair<String, String>>())
+        JankStatsController.onFrame(2L, 40_000_000L, true, emptyList<Pair<String, String>>())
+        JankStatsController.onFrame(3L, 50_000_000L, true, emptyList<Pair<String, String>>())
         val summary = JankStatsController.getSummary()
         assertEquals(3L, summary["totalFrames"])
         assertEquals(2L, summary["jankFrames"])
@@ -142,21 +142,20 @@ class JankStatsControllerAggregationTest {
 
     @Test
     fun onFrameTracksMaxFrameDurationUiNanos() {
-        JankStatsController.onFrame(1L, 16_000_000L, false, emptyList())
-        JankStatsController.onFrame(2L, 50_000_000L, true, emptyList())
-        JankStatsController.onFrame(3L, 30_000_000L, false, emptyList())
+        JankStatsController.onFrame(1L, 16_000_000L, false, emptyList<Pair<String, String>>())
+        JankStatsController.onFrame(2L, 50_000_000L, true, emptyList<Pair<String, String>>())
+        JankStatsController.onFrame(3L, 30_000_000L, false, emptyList<Pair<String, String>>())
         val summary = JankStatsController.getSummary()
         assertEquals(50_000_000L, summary["maxFrameDurationUiNanos"])
     }
 
     @Test
     fun onFrameGroupsJankByScreenAndInteraction() {
-        JankStatsController.setState("Works", "top_level_switch")
-        JankStatsController.onFrame(1L, 40_000_000L, true, emptyList())
-        JankStatsController.onFrame(2L, 40_000_000L, true, emptyList())
-        JankStatsController.clearInteraction()
-        JankStatsController.setState("StarMap", null)
-        JankStatsController.onFrame(3L, 40_000_000L, true, emptyList())
+        val worksSwitching = listOf("screen" to "Works", "interaction" to "top_level_switch")
+        val starMapOnly = listOf("screen" to "StarMap")
+        JankStatsController.onFrame(1L, 40_000_000L, true, worksSwitching)
+        JankStatsController.onFrame(2L, 40_000_000L, true, worksSwitching)
+        JankStatsController.onFrame(3L, 40_000_000L, true, starMapOnly)
         val summary = JankStatsController.getSummary()
 
         @Suppress("UNCHECKED_CAST")
@@ -189,7 +188,7 @@ class JankStatsControllerAggregationTest {
 
     @Test
     fun resetClearsAllAggregates() {
-        JankStatsController.onFrame(1L, 40_000_000L, true, emptyList())
+        JankStatsController.onFrame(1L, 40_000_000L, true, emptyList<Pair<String, String>>())
         JankStatsController.reset()
         val summary = JankStatsController.getSummary()
         assertEquals(0L, summary["totalFrames"])
@@ -203,8 +202,7 @@ class JankStatsControllerAggregationTest {
 
     @Test
     fun nonJankFrameDoesNotIncrementJankByGroup() {
-        JankStatsController.setState("Works", null)
-        JankStatsController.onFrame(1L, 16_000_000L, false, emptyList())
+        JankStatsController.onFrame(1L, 16_000_000L, false, listOf("screen" to "Works"))
         val summary = JankStatsController.getSummary()
 
         @Suppress("UNCHECKED_CAST")

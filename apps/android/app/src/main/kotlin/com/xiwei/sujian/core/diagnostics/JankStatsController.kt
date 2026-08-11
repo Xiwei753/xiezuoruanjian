@@ -14,7 +14,8 @@ import java.util.concurrent.atomic.AtomicLong
  * - 单例 [JankStatsController] 管理聚合统计（totalFrames / jankFrames /
  *   maxFrameDurationUiNanos / 按 screen+interaction 分组的 jank 数），
  *   per-window 的 JankStats listener 把数据报到单例。
- * - [setState] 设置当前 UI 上下文（screen / interaction），用于分组归类。
+ * - UI 上下文（screen / interaction）由调用方通过 [androidx.metrics.performance.PerformanceMetricsState]
+ *   写入帧状态，JankStats listener 直接从 FrameData.states 读取，不再依赖本对象维护的上下文。
  * - 导出器直接调 [getSummary] 拿聚合数据写 jank_summary.json。
  *
  * 线程安全：聚合计数用 AtomicLong，分组 map 用 synchronized。
@@ -36,11 +37,6 @@ internal object JankStatsController {
     private val jankByGroup = mutableMapOf<String, Long>()
     private val groupLock = Any()
 
-    /** 当前 UI 上下文，由 [setState] 更新，listener 读取以分组。 */
-    @Volatile private var currentScreen: String = "unknown"
-
-    @Volatile private var currentInteraction: String? = null
-
     private var jankStats: JankStats? = null
 
     @Volatile private var trackingEnabled = false
@@ -58,7 +54,7 @@ internal object JankStatsController {
                         frameStartNanos = frame.frameStartNanos,
                         frameDurationUiNanos = frame.frameDurationUiNanos,
                         isJank = frame.isJank,
-                        states = frame.states.map { state -> state.key },
+                        states = frame.states.map { state -> state.key to state.value },
                     )
                 }
         } catch (e: Exception) {
@@ -82,23 +78,6 @@ internal object JankStatsController {
             jankStats?.isTrackingEnabled = false
         } catch (_: Exception) {
         }
-    }
-
-    /**
-     * 设置当前 UI 上下文。一级切换时 interaction="top_level_switch"，
-     * 切换结束后调 [clearInteraction]。
-     */
-    fun setState(
-        screen: String,
-        interaction: String?,
-    ) {
-        currentScreen = screen
-        currentInteraction = interaction
-    }
-
-    /** 清除 interaction（切换结束后调用）。 */
-    fun clearInteraction() {
-        currentInteraction = null
     }
 
     /**
@@ -131,13 +110,17 @@ internal object JankStatsController {
      * Frame listener 回调（主线程）。只更新聚合统计 + 对 jank 帧调
      * [DiagnosticsLogger.i]，不做文件 I/O。
      *
+     * [states] 是 FrameData.states 的 key-value 对列表，由调用方通过
+     * [androidx.metrics.performance.PerformanceMetricsState.putState] 写入的持续状态
+     * （如 "screen"=当前页面名、"interaction"=当前交互名）。
+     *
      * 提取为 internal 可见函数便于单测验证聚合逻辑。
      */
     internal fun onFrame(
         frameStartNanos: Long,
         frameDurationUiNanos: Long,
         isJank: Boolean,
-        states: List<String>,
+        states: List<Pair<String, String>>,
     ) {
         totalFrames.incrementAndGet()
         if (frameDurationUiNanos > maxFrameDurationUiNanos.get()) {
@@ -145,7 +128,9 @@ internal object JankStatsController {
         }
         if (!isJank) return
         jankFrames.incrementAndGet()
-        val group = buildGroup(currentScreen, currentInteraction)
+        val screen = states.firstOrNull { it.first == "screen" }?.second ?: "unknown"
+        val interaction = states.firstOrNull { it.first == "interaction" }?.second
+        val group = buildGroup(screen, interaction)
         synchronized(groupLock) {
             jankByGroup[group] = (jankByGroup[group] ?: 0L) + 1L
         }
@@ -161,7 +146,7 @@ internal object JankStatsController {
     private fun logJankFrame(
         frameStartNanos: Long,
         frameDurationUiNanos: Long,
-        states: List<String>,
+        states: List<Pair<String, String>>,
         group: String,
     ) {
         val msg =
@@ -172,7 +157,7 @@ internal object JankStatsController {
                 append(frameDurationUiNanos)
                 append(" isJank=true")
                 append(" states=")
-                append(states.joinToString(","))
+                append(states.joinToString(",") { (key, value) -> "$key=$value" })
                 append(" group=")
                 append(group)
             }

@@ -661,7 +661,6 @@ private fun recordTopLevelSwitchDiagnostics(
     appState: SujianAppState,
 ) {
     com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navTopLevelSwitch(from.name, to.name)
-    com.xiwei.sujian.core.diagnostics.JankStatsController.setState(to.name, "top_level_switch")
     com.xiwei.sujian.core.diagnostics.ProcessStateSummary.update(
         context,
         to.name,
@@ -670,12 +669,17 @@ private fun recordTopLevelSwitchDiagnostics(
     )
 }
 
-/** Issue #612 四：一级切换动画（~300ms）结束后清除 interaction 上下文。 */
+/** Issue #612 四：用 PerformanceMetricsState 写 screen/interaction 上下文；切换动画结束后移除 interaction。 */
 @Composable
 private fun SujianJankInteractionClearEffect(currentTopDestination: SujianDestination) {
+    val view = androidx.compose.ui.platform.LocalView.current
     LaunchedEffect(currentTopDestination) {
+        val holder = androidx.metrics.performance.PerformanceMetricsState.getHolderForHierarchy(view)
+        val state = holder?.state
+        state?.putState("screen", currentTopDestination.name)
+        state?.putState("interaction", "top_level_switch")
         kotlinx.coroutines.delay(350)
-        com.xiwei.sujian.core.diagnostics.JankStatsController.clearInteraction()
+        state?.removeState("interaction")
     }
 }
 

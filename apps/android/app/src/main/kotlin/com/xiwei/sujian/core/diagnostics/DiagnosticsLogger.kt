@@ -222,14 +222,6 @@ object DiagnosticsLogger {
     }
 
     /**
-     * 兼容入口：等价于 [flushBlocking]。保留是因为现有代码多处调用 flush()。
-     * 内部不再做任何文件 I/O。
-     */
-    fun flush() {
-        flushBlocking()
-    }
-
-    /**
      * 阻塞直到调用前所有已入队的日志都被 writer 线程写完落盘。
      */
     fun flushBlocking() {
