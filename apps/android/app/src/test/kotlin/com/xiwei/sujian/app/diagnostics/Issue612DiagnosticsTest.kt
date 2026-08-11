@@ -1327,3 +1327,113 @@ class ProcessExitCollectorUniqueTraceFileTest {
         }
     }
 }
+
+/**
+ * Issue #612 评论 5 收口真实正反测试。
+ *
+ * 5.1：PersistentLogWriter.writeBatch 改用 BufferedWriter（PrintWriter 会吞 IOException，
+ *     使 flushBlocking 在写盘失败时仍返回 true）。反：源码不得再 import PrintWriter/FileWriter
+ *     （回归守卫），且必须使用 FileOutputStream+bufferedWriter 真实抛 IOException。
+ * 5.2：LogcatSnapshotCollector 单一 deadline + finally 回收。正：echo 成功路径写出脱敏内容；
+ *     反：sleep 30 必须在 ~5s deadline 内返回占位文件而非等 30s；命令不存在时写占位。
+ */
+class Issue612Comment5DiagnosticsTest {
+    private fun logcatDir(): File =
+        File(System.getProperty("java.io.tmpdir"), "issue612-c5-logcat-${System.nanoTime()}").apply { mkdirs() }
+
+    @After
+    fun tearDown() {
+        // collectCommand 不依赖 PersistentLogWriter 单例，无需清理。
+    }
+
+    @Test
+    fun logcatCollectCommandEchoSuccessWritesRedactedContent() {
+        // 正（5.2 成功路径）：echo 立即输出并退出，collectCommand 写出脱敏后的内容。
+        val dir = logcatDir()
+        try {
+            LogcatSnapshotCollector.collectCommand(dir, listOf("echo", "hello-logcat-line"))
+            val out = File(dir, "logcat.txt")
+            assertTrue("logcat.txt should be written on success", out.exists())
+            val content = out.readText()
+            assertTrue(
+                "success path should contain echo output, got: $content",
+                content.contains("hello-logcat-line"),
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun logcatCollectCommandSleepHangsReturnsWithinDeadline() {
+        // 反（5.2 单一 deadline）：sleep 30 既不输出也不退出，reader 阻塞在 read()。
+        // 旧实现 future.get(5s) + waitFor(5s) 最坏 ~10s，且异常路径不回收子进程；
+        // 新实现单一 5s deadline → TimeoutException → finally destroyForcibly 回收。
+        // 断言总耗时明显小于 30s（应在 ~5s），且写占位文件。
+        val dir = logcatDir()
+        val start = System.nanoTime()
+        try {
+            LogcatSnapshotCollector.collectCommand(dir, listOf("sleep", "30"))
+            val elapsed = (System.nanoTime() - start) / 1_000_000_000.0
+            assertTrue(
+                "collectCommand must respect single ~5s deadline, elapsed=${elapsed}s",
+                elapsed < 20.0,
+            )
+            val out = File(dir, "logcat.txt")
+            assertTrue("placeholder should be written on timeout", out.exists())
+            val content = out.readText()
+            assertTrue(
+                "placeholder should indicate failure, got: $content",
+                content.startsWith("logcat capture failed"),
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun logcatCollectCommandMissingBinaryWritesPlaceholder() {
+        // 反（5.2 命令不存在）：ProcessBuilder.start() 抛 IOException → 外层 catch 写占位，
+        // finally 处理 null process，不抛异常。
+        val dir = logcatDir()
+        try {
+            LogcatSnapshotCollector.collectCommand(dir, listOf("this-binary-does-not-exist-612"))
+            val out = File(dir, "logcat.txt")
+            assertTrue("placeholder should be written when binary missing", out.exists())
+            assertTrue(
+                "placeholder should indicate failure",
+                out.readText().startsWith("logcat capture failed"),
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun persistentLogWriterSourceDoesNotImportPrintWriter() {
+        // 反（5.1 回归守卫）：writeBatch 不得再用 PrintWriter/FileWriter——
+        // PrintWriter 吞 IOException 会使 flushBlocking 在写盘失败时仍返回 true。
+        val candidates =
+            listOf(
+                "src/main/kotlin/com/xiwei/sujian/core/diagnostics/PersistentLogWriter.kt",
+                "app/src/main/kotlin/com/xiwei/sujian/core/diagnostics/PersistentLogWriter.kt",
+                "apps/android/app/src/main/kotlin/com/xiwei/sujian/core/diagnostics/PersistentLogWriter.kt",
+            )
+        val sourceFile =
+            candidates.map { File(it) }.firstOrNull { it.exists() }
+                ?: error("PersistentLogWriter.kt not found from any candidate path")
+        val source = sourceFile.readText()
+        assertTrue(
+            "PersistentLogWriter must not import PrintWriter (swallows IOException, Issue #612 评论 5.1)",
+            !source.contains("import java.io.PrintWriter"),
+        )
+        assertTrue(
+            "PersistentLogWriter must not import FileWriter (replaced by FileOutputStream+bufferedWriter)",
+            !source.contains("import java.io.FileWriter"),
+        )
+        assertTrue(
+            "PersistentLogWriter must use BufferedWriter/FileOutputStream to surface IOException",
+            source.contains("FileOutputStream") && source.contains("bufferedWriter"),
+        )
+    }
+}

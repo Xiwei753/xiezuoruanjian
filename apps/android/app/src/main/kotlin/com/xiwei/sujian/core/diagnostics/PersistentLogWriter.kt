@@ -3,8 +3,8 @@ package com.xiwei.sujian.core.diagnostics
 import android.content.Context
 import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
 import java.io.File
-import java.io.FileWriter
-import java.io.PrintWriter
+import java.io.FileOutputStream
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -361,26 +361,38 @@ internal object PersistentLogWriter {
     /**
      * 把一整批请求 append 到当前日志文件，每个 batch 写完即 flush。
      *
+     * 改用 `FileOutputStream.bufferedWriter(UTF_8)` + `write`/`newLine` 落盘
+     * （Issue #612 评论 5.1）：旧实现用 `PrintWriter(FileWriter(...))`，PrintWriter
+     * 的写入方法会吞掉底层 IOException（只设内部 error flag，不抛），磁盘在打开文件
+     * 后写失败/flush 失败时外层 catch 根本收不到——writeBatch 返回 true，
+     * [persistenceHealthy] 被绕过，[flushBlocking] 返回 true 但日志没落盘，导出会
+     * 打包一个缺日志的 zip。BufferedWriter 的 write/newLine/flush 真实抛 IOException，
+     * catch 精确到 [IOException] 与 [SecurityException]（可恢复的 I/O / 权限故障）；
+     * 其它 RuntimeException（编程错误）向上传播终止 writer 线程，调用方经 Boolean
+     * 返回值感知失败。
+     *
      * @return 写盘成功返回 true；写盘失败返回 false（Issue #612 评论 3.1）。
-     * 只捕获可恢复的 I/O 异常：OutOfMemoryError、ThreadDeath 这类 VM 级 Error
-     * 不是日志线程应该吞掉后假装继续工作的普通 I/O 故障——它们向上传播终止 writer
-     * 线程，调用方经 Boolean 返回值感知失败。I/O 失败：丢弃本批次，writer 线程
-     * 继续存活处理后续日志。
+     * I/O 失败：丢弃本批次，writer 线程继续存活处理后续日志。
      */
     private fun writeBatch(batch: List<LogRequest>): Boolean =
         try {
             ensureLogsDirOrThrow()
             val currentFile = File(AndroidDataRoot.logsDir(), "$LOG_PREFIX.log")
             rotateIfNeeded(currentFile)
-            PrintWriter(FileWriter(currentFile, true)).use { writer ->
-                for (req in batch) {
-                    val ts = timestampFormat.format(Date(req.timestampMs))
-                    writer.println("$ts ${req.level}/${req.tag}: ${req.message}")
+            FileOutputStream(currentFile, true)
+                .bufferedWriter(Charsets.UTF_8)
+                .use { writer ->
+                    for (req in batch) {
+                        val ts = timestampFormat.format(Date(req.timestampMs))
+                        writer.write("$ts ${req.level}/${req.tag}: ${req.message}")
+                        writer.newLine()
+                    }
+                    writer.flush()
                 }
-                writer.flush()
-            }
             true
-        } catch (_: Exception) {
+        } catch (_: IOException) {
+            false
+        } catch (_: SecurityException) {
             false
         }
 
