@@ -7,6 +7,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -18,6 +23,9 @@ import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.core.diagnostics.DiagnosticsExporter
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun DiagnosticsSettings(
@@ -28,7 +36,6 @@ fun DiagnosticsSettings(
     val context = LocalContext.current
     val settings = state.settings
     val dims = LocalSujianDimensions.current
-    val exportFailedText = stringResource(id = R.string.diagnostics_export_failed)
     val clearedText = stringResource(id = R.string.diagnostics_cleared)
     val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
 
@@ -62,19 +69,7 @@ fun DiagnosticsSettings(
                 enabled = settings.diagnosticsEnabled,
             )
             Spacer(modifier = Modifier.height(dims.space8))
-            SujianOutlinedButton(
-                text = stringResource(id = R.string.btn_export_diagnostics),
-                onClick = {
-                    DiagnosticsLogger.flushBlocking()
-                    val zipFile = DiagnosticsExporter.export(context)
-                    if (zipFile != null) {
-                        DiagnosticsExporter.shareZip(context, zipFile)
-                    } else {
-                        Toast.makeText(context, exportFailedText, Toast.LENGTH_SHORT).show()
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
+            ExportDiagnosticsButton(context = context, modifier = Modifier.fillMaxWidth())
             Spacer(modifier = Modifier.height(dims.space8))
             SujianOutlinedButton(
                 text = stringResource(id = R.string.btn_clear_logs),
@@ -102,4 +97,45 @@ fun DiagnosticsSettings(
             )
         }
     }
+}
+
+/**
+ * Issue #612 收口：导出按钮。
+ *
+ * 导出（flushBlocking + 多来源采集 + zip）是数 MB 级 I/O，必须在后台线程执行，
+ * 避免阻塞 UI 线程触发 ANR；isExporting 防止重复点击并发导出，完成后回主线程
+ * 分享或提示失败。
+ */
+@Composable
+private fun ExportDiagnosticsButton(
+    context: android.content.Context,
+    modifier: Modifier = Modifier,
+) {
+    val exportFailedText = stringResource(id = R.string.diagnostics_export_failed)
+    val exportingText = stringResource(id = R.string.diagnostics_exporting)
+    var isExporting by remember { mutableStateOf(false) }
+    val exportScope = rememberCoroutineScope()
+    SujianOutlinedButton(
+        text = if (isExporting) exportingText else stringResource(id = R.string.btn_export_diagnostics),
+        enabled = !isExporting,
+        onClick = {
+            if (isExporting) return@SujianOutlinedButton
+            isExporting = true
+            exportScope.launch {
+                val zipFile =
+                    withContext(Dispatchers.IO) {
+                        DiagnosticsLogger.flushBlocking()
+                        DiagnosticsExporter.export(context.applicationContext)
+                    }
+                if (zipFile != null) {
+                    // shareZip 需要 Activity context 启动分享，回主线程执行。
+                    DiagnosticsExporter.shareZip(context, zipFile)
+                } else {
+                    Toast.makeText(context, exportFailedText, Toast.LENGTH_SHORT).show()
+                }
+                isExporting = false
+            }
+        },
+        modifier = modifier,
+    )
 }

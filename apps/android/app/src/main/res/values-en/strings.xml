@@ -153,6 +153,7 @@
     <string name="pref_diagnostics_enabled">Enable diagnostic logs</string>
     <string name="pref_diagnostics_verbose">Verbose logs</string>
     <string name="btn_export_diagnostics">Export diagnostics package</string>
+    <string name="diagnostics_exporting">Exporting…</string>
     <string name="btn_clear_logs">Clear logs</string>
     <string name="btn_copy_device_info">Copy device info</string>
     <string name="share_diagnostics_title">Share diagnostics package</string>
