@@ -271,7 +271,7 @@ private fun SujianNavDisplayContent(
     // #614 评论三：SaveableStateHolderNavEntryDecorator 保留各 top-level 页面级 saveable 状态，
     // 切 tab 时离开的 tab 状态不丢失（滚动位置、表单输入等），切回时恢复。
     val saveableStateHolder = rememberSaveableStateHolder()
-    val saveableStateDecorator = rememberSaveableStateHolderNavEntryDecorator(saveableStateHolder)
+    val saveableStateDecorator = rememberSaveableStateHolderNavEntryDecorator<NavKey>(saveableStateHolder)
 
     NavDisplay(
         backStack = topLevelBackStack.backStack,
@@ -280,7 +280,7 @@ private fun SujianNavDisplayContent(
             com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navBack(handled)
             handled
         },
-        decorators = listOf(saveableStateDecorator),
+        entryDecorators = listOf(saveableStateDecorator),
         transitionSpec = navForwardTransition,
         popTransitionSpec = navPopTransition,
         predictivePopTransitionSpec = navPredictivePopTransition,
