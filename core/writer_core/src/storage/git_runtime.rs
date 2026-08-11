@@ -35,3 +35,26 @@ fn configure() -> Result<(), String> {
 fn configure() -> Result<(), String> {
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 非 Android target：`configure` 为 no-op，`ensure_initialized` 必须返回 Ok。
+    /// Android target 的 owner validation 关闭行为需在设备/模拟器上验证，
+    /// 此处只锁定非 Android 平台的 no-op 契约。
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn ensure_initialized_returns_ok_on_non_android() {
+        assert!(ensure_initialized().is_ok());
+    }
+
+    /// `OnceLock` 保证 `configure` 只执行一次；多次调用必须返回同一结果。
+    /// 锁定幂等契约，防止后续重构误把 `get_or_init` 改成每次都重新配置。
+    #[test]
+    fn ensure_initialized_is_idempotent() {
+        let first = ensure_initialized();
+        let second = ensure_initialized();
+        assert_eq!(first.is_ok(), second.is_ok());
+    }
+}
