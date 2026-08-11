@@ -2,7 +2,6 @@ package com.xiwei.sujian.core.diagnostics
 
 import android.app.ActivityManager
 import android.content.Context
-import android.os.Build
 
 /**
  * 进程状态摘要写入器（Issue #612 三、3.2）。
@@ -13,7 +12,7 @@ import android.os.Build
  *
  * - 只在关键状态变化时调用（导航切换、编辑器开关、同步状态变化），不每帧调用。
  * - 摘要 ≤128 bytes，超出截断。
- * - API 31+ 才有 setProcessStateSummary；低于则 no-op。
+ * - API 30+ 才有 setProcessStateSummary；minSdk=30 保证可直接调用。
  * - 失败不抛异常。
  */
 internal object ProcessStateSummary {
@@ -29,7 +28,6 @@ internal object ProcessStateSummary {
         editor: String,
         sync: String,
     ) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
         try {
             val summary = buildSummary(screen, editor, sync)
             val truncated = truncateToBytes(summary, MAX_BYTES)

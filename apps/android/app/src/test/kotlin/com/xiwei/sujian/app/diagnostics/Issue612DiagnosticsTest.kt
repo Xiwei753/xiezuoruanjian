@@ -462,7 +462,7 @@ class PersistentLogWriterTest {
         PersistentLogWriter.init(context)
         PersistentLogWriter.setEnabled(true)
         // 先等待之前可能残留的写完成（writer 空闲），再清空队列与文件，
-        // 确保 clearLogs 不会与 writer 的 writeBatch 并发清空 swap。
+        // 确保 clearLogs 不会与 writer 的 writeBatch 并发产生竞态。
         PersistentLogWriter.flushBlocking()
         PersistentLogWriter.clearLogs()
     }
@@ -603,7 +603,7 @@ class PersistentLogWriterTest {
         // 反（缺陷守护）：clearLogs 与 writer 写盘并发时，旧 batch 不得写回重建的文件。
         // 缺陷根因：旧实现 clearLogs 只清队列不等待 writer——writer 已交换 batch 但
         // 尚未打开文件时，clearLogs 删除文件，writer 随后 FileWriter(currentFile, true)
-        // 重建文件并写回旧日志（复活）。新实现先等 inFlight 归零（writer 空闲）再删除。
+        // 重建文件并写回旧日志（复活）。新实现用 ClearBarrier 命令：writer 处理到屏障时先写完前序 batch 再删除文件，后续 Append 一定在删除之后才写盘。
         // 并发时序无法从黑盒稳定命中，这里用多轮大消息竞争守护最终不变量：
         // 任何一轮清空前的消息都不得出现在清空后的文件中。
         repeat(20) { round ->
@@ -626,10 +626,10 @@ class PersistentLogWriterTest {
         // 正（新语义）：clearLogs 必须等待 writer 完成正在写的 batch 后才删除文件。
         // 间接验证：enqueue 大消息让 writer 必然忙于写盘，clearLogs 返回后立即
         // enqueue + flushBlocking 的新消息必须落入全新文件，且旧消息不存在——
-        // 若 clearLogs 不等待（旧实现），writer 可能在删除后重建文件并写回旧 batch。
+        // 命令队列保证 ClearBarrier 按序处理，其后的 Append 一定在文件删除之后才写盘。
         val big = "Q".repeat(512 * 1024)
         PersistentLogWriter.enqueue(req("in-flight-" + big))
-        // 给 writer 时间交换 batch 并开始写盘（MIN_PRIORITY，大消息写盘耗时明显）。
+        // 给 writer 时间取出命令并开始写盘（MIN_PRIORITY，大消息写盘耗时明显）。
         Thread.sleep(100)
         PersistentLogWriter.clearLogs()
         PersistentLogWriter.enqueue(req("after-clear-log"))
@@ -714,35 +714,46 @@ class PersistentLogWriterTest {
 }
 
 /**
- * Issue #612 收口：ProcessExitCollector API 守卫正反测试。
+ * Issue #612 评论 2 收口：ProcessExitCollector.processStateSummary 解码正反测试。
  *
- * getHistoricalProcessExitReasons 自 API 30 起可用（minSdk=30），不应被 API 31 守卫跳过；
- * processStateSummary 字段自 API 31 起可用，API 30 访问会抛 NoSuchMethodError。
- * shouldReadProcessStateSummary 提取为 internal 纯函数，可在纯 JVM 测试中验证守卫逻辑。
+ * processStateSummary 自 API 30 起可用（minSdk=30），不应被 API 31（S）守卫跳过。
+ * decodeProcessStateSummary 提取为 internal 纯函数，把 byte[] 按 UTF-8 解码后脱敏，
+ * 可在纯 JVM 测试中直接验证解码逻辑，不需要 ApplicationExitInfo / Robolectric。
  */
-class ProcessExitCollectorApiGuardTest {
+class ProcessExitCollectorProcessStateSummaryTest {
     @Test
-    fun shouldReadProcessStateSummaryReturnsFalseBelowApi31() {
-        org.junit.Assert.assertFalse(
-            "API 30 must not read processStateSummary (NoSuchMethodError risk)",
-            ProcessExitCollector.shouldReadProcessStateSummary(30),
-        )
+    fun decodeUtf8BytesReturnsReadableText() {
+        // 正：UTF-8 字节解码后为可读文本（旧实现输出 hex 不可读）。
+        val raw = "screen=Works;editor=0;sync=idle"
+        val bytes = raw.toByteArray(Charsets.UTF_8)
+        val decoded = ProcessExitCollector.decodeProcessStateSummary(bytes)
+        assertEquals(raw, decoded)
     }
 
     @Test
-    fun shouldReadProcessStateSummaryReturnsTrueAtApi31() {
-        org.junit.Assert.assertTrue(
-            "API 31 should read processStateSummary",
-            ProcessExitCollector.shouldReadProcessStateSummary(31),
-        )
+    fun decodeEmptyBytesReturnsNull() {
+        // 正：空 byte 数组返回 null。
+        assertNull(ProcessExitCollector.decodeProcessStateSummary(ByteArray(0)))
     }
 
     @Test
-    fun shouldReadProcessStateSummaryReturnsTrueAtApi34() {
-        org.junit.Assert.assertTrue(
-            "API 34 should read processStateSummary",
-            ProcessExitCollector.shouldReadProcessStateSummary(34),
-        )
+    fun decodeMultibyteUtf8ChinesePreserved() {
+        // 正：含中文的 UTF-8 字节正确解码（每个中文 3 bytes）。
+        val raw = "屏幕=工作;编辑器=0;同步=空闲"
+        val bytes = raw.toByteArray(Charsets.UTF_8)
+        val decoded = ProcessExitCollector.decodeProcessStateSummary(bytes)
+        assertEquals(raw, decoded)
+    }
+
+    @Test
+    fun decodeDoesNotOutputHexLikeOldImplementation() {
+        // 反：新实现输出可读文本，不再是旧实现的 hex 编码。
+        // 旧实现会把 "screen" 编码为 "73637265656e..."；新实现直接返回 "screen"。
+        val bytes = "screen".toByteArray(Charsets.UTF_8)
+        val decoded = ProcessExitCollector.decodeProcessStateSummary(bytes)
+        assertEquals("screen", decoded)
+        // 确认不是 hex：hex 编码的 "screen" 应为纯小写 hex 字符且更长。
+        assertTrue("decoded should be readable text not hex", decoded!!.length < bytes.size * 2)
     }
 }
 

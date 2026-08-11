@@ -8,10 +8,12 @@ import java.io.PrintWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
- * 单条日志写入请求。调用方在任意线程构造并 [enqueue]，所有文件 I/O
- * 只发生在常驻后台 writer 线程。
+ * 单条日志写入请求。调用方在任意线程构造并 [PersistentLogWriter.enqueue]，
+ * 所有文件 I/O 只发生在常驻后台 writer 线程。
  */
 internal data class LogRequest(
     val level: String,
@@ -22,22 +24,41 @@ internal data class LogRequest(
 )
 
 /**
+ * writer 线程处理的命令（Issue #612 评论 2）。单一有序队列保证：
+ * 旧日志 → flush/clear barrier → 新日志 的全局顺序，无需计数器同步。
+ */
+internal sealed interface LogWriterCommand {
+    /** 追加一条日志请求。 */
+    data class Append(val request: LogRequest) : LogWriterCommand
+
+    /** flush 屏障：writer 处理到此命令时先写完前序 Append，再 countDown 唤醒等待者。 */
+    data class FlushBarrier(val latch: CountDownLatch) : LogWriterCommand
+
+    /** clear 屏障：writer 处理到此命令时先写完前序 Append，删除日志目录所有文件，再 countDown。 */
+    data class ClearBarrier(val latch: CountDownLatch) : LogWriterCommand
+}
+
+/**
  * 常驻后台线程持久日志写入器（Signal Android PersistentLogger 路线）。
  *
  * - 单一 writer 线程 sujian-logger（[Thread.MIN_PRIORITY]）独占文件 I/O。
- * - 调用方 [enqueue] 只把 [LogRequest] 放进 pending 队列并 notifyAll()。
- * - writer 线程被唤醒后交换 pending/swap 双 buffer，把当前积累的全部请求
- *   一次性 append 到 AndroidDataRoot.logsDir()/sujian-current.log，每个
- *   batch 写完即 flush()。
- * - 1 MiB / 5 文件轮转，轮转、打开、append、flush 全部只在 writer 线程执行。
+ * - 调用方 [enqueue] 只把 [LogWriterCommand.Append] 入队并 notifyAll()。
+ * - [flushBlocking] 入队 [LogWriterCommand.FlushBarrier] 并等待 latch；
+ *   [clearLogs] 入队 [LogWriterCommand.ClearBarrier] 并等待 latch。
+ * - writer 线程被唤醒后 drain 整个命令队列到本地列表，按入队顺序处理：
+ *   连续 Append 收集为 batch 写盘，遇到屏障先写完 batch 再执行屏障语义。
+ * - 1 MiB / 5 文件轮转，轮转、打开、append、flush、delete 全部只在 writer 线程执行。
  *
- * 线程安全模型：[lock] 守护 [pending]、[swap] 与计数器；文件 I/O 在 lock 外
- * 只由 writer 线程执行，故 enqueue 与 flushBlocking 不会阻塞 I/O。
- * 所有通知均用 notifyAll：enqueue 的通知不能只唤醒 flushBlocking 而漏掉
- * writer，否则 writer 永远不被唤醒处理 pending。
+ * 线程安全模型：[lock] 守护 [queue]；文件 I/O 在 lock 外只由 writer 线程执行，
+ * 故 enqueue 与 flushBlocking 不会阻塞 I/O。所有通知均用 notifyAll：
+ * enqueue 的通知不能只唤醒 flushBlocking 而漏掉 writer，否则 writer 永远不被唤醒。
  *
- * 中断语义：writer 是常驻 daemon 线程，[InterruptedException] 只当作一次
- * 虚假唤醒——不恢复中断位、继续等待，线程绝不退出（否则持久日志永久停写）。
+ * 顺序不变量：barrier 入队前的所有 Append 先于 barrier 处理，barrier 后的 Append
+ * 后于 barrier 处理——天然保证 flushBlocking 等到前序日志落盘、clearLogs 在 writer
+ * 空闲后删除文件且后续 Append 不会写回旧日志。
+ *
+ * 中断语义：writer 是常驻 daemon 线程，[InterruptedException] 只当作一次虚假唤醒
+ * ——不恢复中断位、继续等待，线程绝不退出（否则持久日志永久停写）。
  */
 internal object PersistentLogWriter {
     private const val LOG_PREFIX = "sujian-current"
@@ -53,27 +74,11 @@ internal object PersistentLogWriter {
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
     private val lock = java.lang.Object()
-    private var pending = ArrayDeque<LogRequest>()
-    private var swap = ArrayDeque<LogRequest>()
+    private val queue = ArrayDeque<LogWriterCommand>()
 
     @Volatile private var initialized = false
 
     @Volatile private var enabled = false
-
-    // flushBlocking 同步信号：enqueuedCount 在 enqueue 时递增，
-    // processedCount 在 writer 完成一个 batch 后按该 batch 大小递增。
-    // flushBlocking 快照目标 enqueuedCount 后等到 processedCount 追上。
-    private var enqueuedCount = 0L
-    private var processedCount = 0L
-
-    // 在途 batch 大小：writer 在 lock 内交换 batch 时置为 batchSize，
-    // 写盘完成回到 lock 时清零。clearLogs 依赖它等待 writer 真正空闲，
-    // 避免「文件已删、writer 随后 FileWriter(append) 重建并写回旧日志」竞态。
-    private var inFlight = 0L
-
-    // 清空代际：clearLogs 递增；flushBlocking 若发现代际变化立即返回——
-    // 被清空丢弃的条目已不存在，等待它们落盘没有意义。
-    private var clearGeneration = 0L
 
     /**
      * 初始化并启动 writer 线程。幂等：重复调用无副作用。
@@ -100,44 +105,37 @@ internal object PersistentLogWriter {
     }
 
     /**
-     * 把 [request] 放入 pending 队列。非阻塞：只 addLast + notifyAll。
-     * 未初始化或被禁用时直接丢弃，不递增 enqueuedCount。
+     * 把 [request] 入队为 Append 命令。非阻塞：只 addLast + notifyAll。
+     * 未初始化或被禁用时直接丢弃。
      */
     fun enqueue(request: LogRequest) {
         synchronized(lock) {
             if (!initialized || !enabled) return
-            pending.addLast(request)
-            enqueuedCount++
+            queue.addLast(LogWriterCommand.Append(request))
             lock.notifyAll()
         }
     }
 
     /**
      * 阻塞直到调用前所有已 enqueue 的请求都被 writer 写完落盘。
-     * 语义：等待 pending queue 为空 + 当前正在写的 batch 完成。
      *
-     * 若等待期间发生 [clearLogs]，被清空丢弃的条目永远无法落盘，此时按
-     * 代际变化解除等待立即返回——那些日志已不存在，等待没有意义。
-     * 最多等待 [FLUSH_TIMEOUT_MS]：writer 若因不可控 Error 死亡（磁盘/内存
-     * 极端故障），调用方（崩溃处理器、导出）不能永久挂起。
+     * 实现：入队 FlushBarrier，writer 处理到此屏障时已写完前序所有 Append，
+     * 然后 countDown 唤醒本等待。最多等待 [FLUSH_TIMEOUT_MS]：writer 若因不可控
+     * Error 死亡（磁盘/内存极端故障），调用方（崩溃处理器、导出）不能永久挂起。
+     * 未初始化时直接返回。
      */
     fun flushBlocking() {
+        val latch = CountDownLatch(1)
         synchronized(lock) {
             if (!initialized) return
-            val target = enqueuedCount
-            val generation = clearGeneration
-            val deadline = System.nanoTime() + FLUSH_TIMEOUT_MS * 1_000_000L
-            while (processedCount < target && clearGeneration == generation) {
-                val remaining = deadline - System.nanoTime()
-                if (remaining <= 0) return
-                try {
-                    lock.wait(remaining / 1_000_000L, (remaining % 1_000_000L).toInt())
-                } catch (_: InterruptedException) {
-                    // 调用方线程被中断：恢复中断位并返回，不做落盘保证。
-                    Thread.currentThread().interrupt()
-                    return
-                }
-            }
+            queue.addLast(LogWriterCommand.FlushBarrier(latch))
+            lock.notifyAll()
+        }
+        try {
+            latch.await(FLUSH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            // 调用方线程被中断：恢复中断位并返回，不做落盘保证。
+            Thread.currentThread().interrupt()
         }
     }
 
@@ -150,76 +148,97 @@ internal object PersistentLogWriter {
     }
 
     /**
-     * 清空 pending/swap 队列并删除日志目录下所有文件。
+     * 清空日志：入队 ClearBarrier，writer 处理到此命令时先写完前序 Append，
+     * 再由 writer 线程删除日志目录下所有文件，最后 countDown 唤醒本等待。
      *
-     * 与 writer 并发安全：清空队列后先在 lock 内等待 [inFlight] 归零
-     * （writer 完成正在写的 batch 回到 lock 时清零并 notifyAll），保证文件
-     * 删除时 writer 已空闲，不会出现「文件已删、writer 随后重建文件并写回
-     * 旧 batch」的复活竞态。
+     * 文件删除在 writer 线程执行（不在调用线程），保证不会与 writer 的 writeBatch
+     * 并发产生「文件已删、writer 随后 FileWriter(append) 重建并写回旧日志」的复活竞态：
+     * ClearBarrier 在队列中按序处理，其后的 Append 一定在删除之后才写盘。
+     * 最多等待 [FLUSH_TIMEOUT_MS]：writer 若因不可控 Error 死亡，清空不能永久挂起。
+     * 未初始化时直接返回。
      */
     fun clearLogs() {
+        val latch = CountDownLatch(1)
         synchronized(lock) {
-            pending.clear()
-            swap.clear()
-            // 让可能正在等待的 flushBlocking 立即返回：清空后不再有可等待的进度。
-            clearGeneration++
-            enqueuedCount = processedCount
-            // 等待 writer 完成正在写的 batch（写盘在 lock 外执行，完成后回到
-            // lock 清零 inFlight 并 notifyAll 唤醒本等待）。最多等待
-            // [FLUSH_TIMEOUT_MS]：writer 若因不可控 Error 死亡，清空不能永久挂起。
-            val deadline = System.nanoTime() + FLUSH_TIMEOUT_MS * 1_000_000L
-            while (inFlight > 0) {
-                val remaining = deadline - System.nanoTime()
-                if (remaining <= 0) break
-                try {
-                    lock.wait(remaining / 1_000_000L, (remaining % 1_000_000L).toInt())
-                } catch (_: InterruptedException) {
-                    // 清空语义要求文件删除前 writer 空闲；忽略中断继续等待，
-                    // 不恢复中断位（否则 wait 会因中断位立即再抛，形成忙循环）。
-                }
-            }
-            val logDir = AndroidDataRoot.logsDir()
-            if (logDir.exists()) {
-                logDir.listFiles()?.forEach { it.delete() }
-            }
+            if (!initialized) return
+            queue.addLast(LogWriterCommand.ClearBarrier(latch))
             lock.notifyAll()
+        }
+        try {
+            latch.await(FLUSH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            // 调用方线程被中断：恢复中断位并返回。writer 仍会按序处理 ClearBarrier 删除文件。
+            Thread.currentThread().interrupt()
         }
     }
 
-    /** writer 线程主循环：wait → 交换双 buffer → 写盘 → 通知等待者。 */
+    /**
+     * writer 线程主循环：wait → drain 整个命令队列 → 按序处理命令 → 写盘/删文件。
+     */
     private fun writerLoop() {
         while (true) {
-            val batch: ArrayDeque<LogRequest>
-            val batchSize: Int
+            val commands: List<LogWriterCommand>
             synchronized(lock) {
-                while (pending.isEmpty()) {
+                while (queue.isEmpty()) {
                     try {
                         lock.wait()
                     } catch (_: InterruptedException) {
-                        // 常驻 daemon 线程：中断只当作虚假唤醒，不恢复中断位，
-                        // 线程绝不退出。
+                        // 常驻 daemon 线程：中断只当作虚假唤醒，不恢复中断位，线程绝不退出。
                     }
                 }
-                // 交换 pending 与 swap：writer 接手 swap（原 pending），
-                // enqueue 后续写入新的 pending（原 swap）。
-                batch = pending
-                pending = swap
-                swap = batch
-                batchSize = batch.size
-                inFlight = batchSize.toLong()
+                // drain 整个队列到本地列表，队列清空供后续 enqueue 使用。
+                commands = queue.toList()
+                queue.clear()
             }
+            processCommands(commands)
+        }
+    }
+
+    /**
+     * 在 lock 外按入队顺序处理命令。连续 Append 收集为 batch 写盘；
+     * 遇到 FlushBarrier/ClearBarrier 先写完当前 batch 再执行屏障语义。
+     */
+    private fun processCommands(commands: List<LogWriterCommand>) {
+        val batch = ArrayList<LogRequest>()
+        for (cmd in commands) {
+            when (cmd) {
+                is LogWriterCommand.Append -> {
+                    batch.add(cmd.request)
+                }
+                is LogWriterCommand.FlushBarrier -> {
+                    if (batch.isNotEmpty()) {
+                        writeBatch(batch)
+                        batch.clear()
+                    }
+                    cmd.latch.countDown()
+                }
+                is LogWriterCommand.ClearBarrier -> {
+                    if (batch.isNotEmpty()) {
+                        writeBatch(batch)
+                        batch.clear()
+                    }
+                    // 文件删除在 writer 线程执行，与 writeBatch 串行，无并发竞态。
+                    deleteLogFiles()
+                    cmd.latch.countDown()
+                }
+            }
+        }
+        // 尾部连续 Append 写盘。
+        if (batch.isNotEmpty()) {
             writeBatch(batch)
-            synchronized(lock) {
-                batch.clear()
-                processedCount += batchSize
-                inFlight = 0L
-                lock.notifyAll()
-            }
+        }
+    }
+
+    /** 删除日志目录下所有文件（仅由 writer 线程调用）。 */
+    private fun deleteLogFiles() {
+        val logDir = AndroidDataRoot.logsDir()
+        if (logDir.exists()) {
+            logDir.listFiles()?.forEach { it.delete() }
         }
     }
 
     /** 把一整批请求 append 到当前日志文件，每个 batch 写完即 flush。 */
-    private fun writeBatch(batch: ArrayDeque<LogRequest>) {
+    private fun writeBatch(batch: List<LogRequest>) {
         if (batch.isEmpty()) return
         try {
             ensureLogsDir()

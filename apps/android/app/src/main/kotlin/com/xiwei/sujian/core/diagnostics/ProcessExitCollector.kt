@@ -3,7 +3,6 @@ package com.xiwei.sujian.core.diagnostics
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
 import android.content.Context
-import android.os.Build
 import com.google.gson.GsonBuilder
 import java.io.File
 import java.io.FileOutputStream
@@ -16,7 +15,7 @@ import java.util.Locale
  *
  * 在导出诊断包时调用 [collect]，通过
  * ActivityManager.getHistoricalProcessExitReasons 获取本进程最近的异常退出原因
- * （崩溃 / ANR / 系统杀进程等，API 31+），脱敏后写入 [destDir]/process_exits.json，
+ * （崩溃 / ANR / 系统杀进程等，API 30+），脱敏后写入 [destDir]/process_exits.json，
  * 每条记录的原始 trace（getTraceInputStream）原样保存到 [destDir]/exit_traces/。
  *
  * - 只在导出时按需调用，不常驻后台抓取。
@@ -39,9 +38,8 @@ internal object ProcessExitCollector {
         context: Context,
         destDir: File,
     ) {
-        // getHistoricalProcessExitReasons 与 ApplicationExitInfo 基础字段自 API 30 起可用；
-        // minSdk=30 保证可直接调用，不再用 API 31 守卫跳过整段采集。
-        // 仅 processStateSummary 字段需 API 31+（见 [shouldReadProcessStateSummary]）。
+        // getHistoricalProcessExitReasons、ApplicationExitInfo 基础字段与 processStateSummary
+        // 均自 API 30 起可用；minSdk=30 保证可直接调用，不再用 API 31 守卫跳过整段采集。
         try {
             val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
             if (am == null) {
@@ -99,27 +97,28 @@ internal object ProcessExitCollector {
     }
 
     /**
-     * ProcessStateSummary 是 ≤128 bytes 的 byte[]，转成 hex 字符串脱敏后记录。
-     * processStateSummary 字段自 API 31 起可用；API 30 设备上访问会抛 NoSuchMethodError
-     * （Error，不被 catch(Exception) 捕获），故先按 [shouldReadProcessStateSummary] 守卫。
+     * ProcessStateSummary 是 ≤128 bytes 的 byte[]，自 API 30 起可用（minSdk=30 保证
+     * 可直接读取）。按 UTF-8 解码为可读文本后脱敏记录，便于诊断包直接阅读。
      */
     private fun encodeProcessStateSummary(reason: ApplicationExitInfo): String? {
         return try {
-            if (!shouldReadProcessStateSummary(Build.VERSION.SDK_INT)) return null
             val summary: ByteArray = reason.processStateSummary ?: return null
-            if (summary.isEmpty()) return null
-            val hex = summary.joinToString("") { byte -> "%02x".format(byte) }
-            DiagnosticsLogger.redact(hex)
+            decodeProcessStateSummary(summary)
         } catch (_: Exception) {
             null
         }
     }
 
     /**
-     * processStateSummary 字段自 API 31（S）起可用。提取为 internal 纯函数便于单测：
-     * API 30 设备不能调用 ApplicationExitInfo.getProcessStateSummary()，否则抛 NoSuchMethodError。
+     * 把 processStateSummary 的 byte[] 按 UTF-8 解码为字符串并脱敏。
+     * 提取为 internal 纯函数便于单测验证解码与脱敏逻辑，不需要 ApplicationExitInfo。
+     * 空数组返回 null；非空则 UTF-8 解码后经 [DiagnosticsLogger.redact] 脱敏。
      */
-    internal fun shouldReadProcessStateSummary(sdkInt: Int): Boolean = sdkInt >= Build.VERSION_CODES.S
+    internal fun decodeProcessStateSummary(bytes: ByteArray): String? {
+        if (bytes.isEmpty()) return null
+        val text = String(bytes, Charsets.UTF_8)
+        return DiagnosticsLogger.redact(text)
+    }
 
     private fun saveTraceIfPresent(
         reason: ApplicationExitInfo,
