@@ -32,8 +32,20 @@ internal sealed interface LogWriterCommand {
     /** 追加一条日志请求。 */
     data class Append(val request: LogRequest) : LogWriterCommand
 
-    /** flush 屏障：writer 处理到此命令时先写完前序 Append，再 countDown 唤醒等待者。 */
-    data class FlushBarrier(val latch: CountDownLatch) : LogWriterCommand
+    /**
+     * flush 屏障：writer 处理到此命令时先写完前序 Append，再 countDown 唤醒等待者。
+     *
+     * [persisted] 是 writer 线程 → 调用方线程的结果位（Issue #612 评论 3.1）：
+     * writer 处理屏障时把当前 [PersistentLogWriter.persistenceHealthy] 写入。
+     * 调用方在 latch countDown 后读取，据此判断“前序日志确实落盘”还是
+     * “屏障完成但写盘失败/此前已失败”——不得把缺日志的导出伪装成完整导出。
+     * 失败状态不在普通 flush 后清掉（前面的日志已经丢了，后续导出不能再声称完整）；
+     * 只有成功的 ClearBarrier 明确把旧日志清空后才会重置为 true。
+     */
+    data class FlushBarrier(
+        val latch: CountDownLatch,
+        val persisted: AtomicBoolean,
+    ) : LogWriterCommand
 
     /**
      * clear 屏障：writer 处理到此命令时先写完前序 Append，再删除日志目录所有文件，
@@ -72,6 +84,13 @@ internal sealed interface LogWriterCommand {
  * false。[flushBlocking]/[clearLogs] 返回 Boolean：latch 在超时前完成返回 true，
  * 超时/中断返回 false，调用方不得把失败伪装成成功。
  *
+ * 落盘健康位（Issue #612 评论 3.1）：[persistenceHealthy] 只由 writer 线程读写，
+ * 记录“自上次成功 ClearBarrier 起所有写盘是否全部成功”。写盘失败后置 false，
+ * FlushBarrier 把它写入 [LogWriterCommand.FlushBarrier.persisted] 传回调用方——
+ * flushBlocking 返回 completed && persisted.get()，导出据此停止“缺日志仍打包完整 zip”。
+ * 失败状态不在普通 flush 后清掉（前面的日志已经丢了）；只有成功的 ClearBarrier
+ * 明确把旧日志清空后才重置为 true。
+ *
  * 中断语义：writer 是常驻 daemon 线程，[InterruptedException] 只当作一次虚假唤醒
  * ——不恢复中断位、继续等待，线程绝不退出（否则持久日志永久停写）。
  */
@@ -94,6 +113,13 @@ internal object PersistentLogWriter {
     @Volatile private var initialized = false
 
     @Volatile private var enabled = false
+
+    /**
+     * writer 线程私有落盘健康位（Issue #612 评论 3.1）。只在 writer 线程访问，
+     * 无需 volatile/atomic。写盘失败后置 false，FlushBarrier 据此告知调用方
+     * “前序日志未完整落盘”；只有成功的 ClearBarrier 重置为 true。
+     */
+    private var persistenceHealthy = true
 
     /**
      * 初始化并启动 writer 线程。幂等：重复调用无副作用。
@@ -138,23 +164,31 @@ internal object PersistentLogWriter {
      * 然后 countDown 唤醒本等待。最多等待 [FLUSH_TIMEOUT_MS]：writer 若因不可控
      * Error 死亡（磁盘/内存极端故障），调用方（崩溃处理器、导出）不能永久挂起。
      *
-     * @return latch 在超时前完成返回 true；超时或调用线程被中断返回 false
-     * （中断时恢复中断位）。未初始化时没有可 flush 的日志，返回 true。
+     * 落盘结果位（Issue #612 评论 3.1）：writer 处理屏障时把 [persistenceHealthy]
+     * 写入 [LogWriterCommand.FlushBarrier.persisted]。只有 latch 在超时前完成
+     * **且** persisted 为 true 才返回 true——写盘失败/此前已失败时返回 false，
+     * 导出据此不得把缺日志的 zip 伪装成完整导出。
+     *
+     * @return latch 在超时前完成且前序日志确实落盘返回 true；超时、调用线程被中断
+     * （恢复中断位）或写盘失败返回 false。未初始化时没有可 flush 的日志，返回 true。
      */
     fun flushBlocking(): Boolean {
         val latch = CountDownLatch(1)
+        val persisted = AtomicBoolean(false)
         synchronized(lock) {
             if (!initialized) return true
-            queue.addLast(LogWriterCommand.FlushBarrier(latch))
+            queue.addLast(LogWriterCommand.FlushBarrier(latch, persisted))
             lock.notifyAll()
         }
-        return try {
-            latch.await(FLUSH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        } catch (_: InterruptedException) {
-            // 调用方线程被中断：恢复中断位并返回 false，不做落盘保证。
-            Thread.currentThread().interrupt()
-            false
-        }
+        val completed =
+            try {
+                latch.await(FLUSH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                // 调用方线程被中断：恢复中断位并返回 false，不做落盘保证。
+                Thread.currentThread().interrupt()
+                false
+            }
+        return completed && persisted.get()
     }
 
     /** 返回当前日志目录下所有 sujian-current*.log 文件。 */
@@ -233,37 +267,68 @@ internal object PersistentLogWriter {
         val batch = ArrayList<LogRequest>()
         for (cmd in commands) {
             when (cmd) {
-                is LogWriterCommand.Append -> {
-                    batch.add(cmd.request)
-                }
-                is LogWriterCommand.FlushBarrier -> {
-                    try {
-                        flushBatch(batch)
-                    } finally {
-                        cmd.latch.countDown()
-                    }
-                }
-                is LogWriterCommand.ClearBarrier -> {
-                    try {
-                        flushBatch(batch)
-                        // 文件删除在 writer 线程执行，与 writeBatch 串行，无并发竞态；
-                        // 删除结果经 cmd.deleted 传回调用方（不得把失败伪装成成功）。
-                        cmd.deleted.set(deleteLogFiles(AndroidDataRoot.logsDir()))
-                    } finally {
-                        cmd.latch.countDown()
-                    }
-                }
+                is LogWriterCommand.Append -> batch.add(cmd.request)
+                is LogWriterCommand.FlushBarrier -> handleFlushBarrier(cmd, batch)
+                is LogWriterCommand.ClearBarrier -> handleClearBarrier(cmd, batch)
             }
         }
-        // 尾部连续 Append 写盘。
-        flushBatch(batch)
+        // 尾部连续 Append 写盘：尾部 batch 写失败要更新 persistenceHealthy。
+        val tailOk = flushBatch(batch)
+        if (!tailOk) {
+            persistenceHealthy = false
+        }
     }
 
-    /** 把当前累积的 Append batch 写盘并清空（仅由 writer 线程调用）。 */
-    private fun flushBatch(batch: MutableList<LogRequest>) {
-        if (batch.isEmpty()) return
-        writeBatch(batch)
+    /** 处理 FlushBarrier：写完前序 batch，把 persistenceHealthy 写入结果位（Issue #612 评论 3.1）。 */
+    private fun handleFlushBarrier(
+        cmd: LogWriterCommand.FlushBarrier,
+        batch: MutableList<LogRequest>,
+    ) {
+        try {
+            val batchOk = flushBatch(batch)
+            persistenceHealthy = persistenceHealthy && batchOk
+            cmd.persisted.set(persistenceHealthy)
+        } finally {
+            cmd.latch.countDown()
+        }
+    }
+
+    /**
+     * 处理 ClearBarrier：写完前序 batch，再删除日志文件（Issue #612 评论 3.1）。
+     * 只有删除成功才把 persistenceHealthy 重置为 true。
+     */
+    private fun handleClearBarrier(
+        cmd: LogWriterCommand.ClearBarrier,
+        batch: MutableList<LogRequest>,
+    ) {
+        try {
+            flushBatch(batch)
+            // 文件删除在 writer 线程执行，与 writeBatch 串行，无并发竞态；
+            // 删除结果经 cmd.deleted 传回调用方（不得把失败伪装成成功）。
+            val deleted = deleteLogFiles(AndroidDataRoot.logsDir())
+            // 只有删除成功才把 persistenceHealthy 重置为 true（Issue #612 评论 3.1）：
+            // 旧日志已清空，后续可重新声称完整。删除失败时保留原健康位，
+            // 调用方通过 deleted 感知清空失败。
+            if (deleted) {
+                persistenceHealthy = true
+            }
+            cmd.deleted.set(deleted)
+        } finally {
+            cmd.latch.countDown()
+        }
+    }
+
+    /**
+     * 把当前累积的 Append batch 写盘并清空（仅由 writer 线程调用）。
+     *
+     * @return 写盘成功返回 true；空 batch 返回 true；写盘失败返回 false
+     * （调用方据此更新 [persistenceHealthy]）。
+     */
+    private fun flushBatch(batch: MutableList<LogRequest>): Boolean {
+        if (batch.isEmpty()) return true
+        val ok = writeBatch(batch)
         batch.clear()
+        return ok
     }
 
     /**
@@ -293,11 +358,18 @@ internal object PersistentLogWriter {
         }
     }
 
-    /** 把一整批请求 append 到当前日志文件，每个 batch 写完即 flush。 */
-    private fun writeBatch(batch: List<LogRequest>) {
-        if (batch.isEmpty()) return
+    /**
+     * 把一整批请求 append 到当前日志文件，每个 batch 写完即 flush。
+     *
+     * @return 写盘成功返回 true；写盘失败返回 false（Issue #612 评论 3.1）。
+     * 只捕获可恢复的 I/O 异常：OutOfMemoryError、ThreadDeath 这类 VM 级 Error
+     * 不是日志线程应该吞掉后假装继续工作的普通 I/O 故障——它们向上传播终止 writer
+     * 线程，调用方经 Boolean 返回值感知失败。I/O 失败：丢弃本批次，writer 线程
+     * 继续存活处理后续日志。
+     */
+    private fun writeBatch(batch: List<LogRequest>): Boolean =
         try {
-            ensureLogsDir()
+            ensureLogsDirOrThrow()
             val currentFile = File(AndroidDataRoot.logsDir(), "$LOG_PREFIX.log")
             rotateIfNeeded(currentFile)
             PrintWriter(FileWriter(currentFile, true)).use { writer ->
@@ -307,13 +379,10 @@ internal object PersistentLogWriter {
                 }
                 writer.flush()
             }
+            true
         } catch (_: Exception) {
-            // 只捕获可恢复的 I/O 异常（Issue #612 评论 3.3）：OutOfMemoryError、
-            // ThreadDeath 这类 VM 级 Error 不是日志线程应该吞掉后假装继续工作的
-            // 普通 I/O 故障——它们向上传播终止 writer 线程，调用方经 Boolean 返回值
-            // 感知失败。I/O 失败：丢弃本批次，writer 线程继续存活处理后续日志。
+            false
         }
-    }
 
     /** 当前文件超过 1 MiB 时重命名为带时间戳的轮转文件，并裁剪到 5 个。 */
     private fun rotateIfNeeded(file: File) {
@@ -335,11 +404,12 @@ internal object PersistentLogWriter {
         }
     }
 
-    private fun ensureLogsDir() {
-        try {
-            AndroidDataRoot.logsDir().mkdirs()
-        } catch (_: Exception) {
-            // 目录创建失败不阻断流程，writer 下次写入时重试。
-        }
+    /**
+     * 确保日志目录存在（仅由 writer 线程调用）。不内部吞异常（Issue #612 评论 3.1）：
+     * mkdirs() 失败会抛 SecurityException/IOException，由 [writeBatch] 的
+     * catch(Exception) 统一捕获返回 false——调用方据此感知写盘失败。
+     */
+    private fun ensureLogsDirOrThrow() {
+        AndroidDataRoot.logsDir().mkdirs()
     }
 }

@@ -132,17 +132,17 @@ class JankStatsControllerAggregationTest {
 
     @Test
     fun onFrameCountsTotalFrames() {
-        JankStatsController.onFrame(1L, 16_000_000L, false, emptyList<Pair<String, String>>())
-        JankStatsController.onFrame(2L, 20_000_000L, false, emptyList<Pair<String, String>>())
+        JankStatsController.onFrame(1L, 16_000_000L, false, "unknown", null)
+        JankStatsController.onFrame(2L, 20_000_000L, false, "unknown", null)
         val summary = JankStatsController.getSummary()
         assertEquals(2L, summary["totalFrames"])
     }
 
     @Test
     fun onFrameCountsOnlyJankFramesAsJank() {
-        JankStatsController.onFrame(1L, 16_000_000L, false, emptyList<Pair<String, String>>())
-        JankStatsController.onFrame(2L, 40_000_000L, true, emptyList<Pair<String, String>>())
-        JankStatsController.onFrame(3L, 50_000_000L, true, emptyList<Pair<String, String>>())
+        JankStatsController.onFrame(1L, 16_000_000L, false, "unknown", null)
+        JankStatsController.onFrame(2L, 40_000_000L, true, "unknown", null)
+        JankStatsController.onFrame(3L, 50_000_000L, true, "unknown", null)
         val summary = JankStatsController.getSummary()
         assertEquals(3L, summary["totalFrames"])
         assertEquals(2L, summary["jankFrames"])
@@ -150,20 +150,18 @@ class JankStatsControllerAggregationTest {
 
     @Test
     fun onFrameTracksMaxFrameDurationUiNanos() {
-        JankStatsController.onFrame(1L, 16_000_000L, false, emptyList<Pair<String, String>>())
-        JankStatsController.onFrame(2L, 50_000_000L, true, emptyList<Pair<String, String>>())
-        JankStatsController.onFrame(3L, 30_000_000L, false, emptyList<Pair<String, String>>())
+        JankStatsController.onFrame(1L, 16_000_000L, false, "unknown", null)
+        JankStatsController.onFrame(2L, 50_000_000L, true, "unknown", null)
+        JankStatsController.onFrame(3L, 30_000_000L, false, "unknown", null)
         val summary = JankStatsController.getSummary()
         assertEquals(50_000_000L, summary["maxFrameDurationUiNanos"])
     }
 
     @Test
     fun onFrameGroupsJankByScreenAndInteraction() {
-        val worksSwitching = listOf("screen" to "Works", "interaction" to "top_level_switch")
-        val starMapOnly = listOf("screen" to "StarMap")
-        JankStatsController.onFrame(1L, 40_000_000L, true, worksSwitching)
-        JankStatsController.onFrame(2L, 40_000_000L, true, worksSwitching)
-        JankStatsController.onFrame(3L, 40_000_000L, true, starMapOnly)
+        JankStatsController.onFrame(1L, 40_000_000L, true, "Works", "top_level_switch")
+        JankStatsController.onFrame(2L, 40_000_000L, true, "Works", "top_level_switch")
+        JankStatsController.onFrame(3L, 40_000_000L, true, "StarMap", null)
         val summary = JankStatsController.getSummary()
 
         @Suppress("UNCHECKED_CAST")
@@ -192,11 +190,12 @@ class JankStatsControllerAggregationTest {
         assertNotNull(summary["maxFrameDurationUiNanos"])
         assertNotNull(summary["jankByGroup"])
         assertNotNull(summary["trackingEnabled"])
+        assertNotNull(summary["recentJankFrames"])
     }
 
     @Test
     fun resetClearsAllAggregates() {
-        JankStatsController.onFrame(1L, 40_000_000L, true, emptyList<Pair<String, String>>())
+        JankStatsController.onFrame(1L, 40_000_000L, true, "unknown", null)
         JankStatsController.reset()
         val summary = JankStatsController.getSummary()
         assertEquals(0L, summary["totalFrames"])
@@ -210,12 +209,64 @@ class JankStatsControllerAggregationTest {
 
     @Test
     fun nonJankFrameDoesNotIncrementJankByGroup() {
-        JankStatsController.onFrame(1L, 16_000_000L, false, listOf("screen" to "Works"))
+        JankStatsController.onFrame(1L, 16_000_000L, false, "Works", null)
         val summary = JankStatsController.getSummary()
 
         @Suppress("UNCHECKED_CAST")
         val jankByGroup = summary["jankByGroup"] as Map<String, Long>
         assertTrue(jankByGroup.isEmpty())
+    }
+
+    @Test
+    fun recentJankFramesCollectedAndCappedAt128() {
+        // 正（评论 3.3）：jank 帧进入 recentJankFrames 环形缓冲，超过 128 条时丢弃最旧的
+        repeat(150) { i ->
+            JankStatsController.onFrame(i.toLong(), 40_000_000L, true, "Works", null)
+        }
+        val summary = JankStatsController.getSummary()
+
+        @Suppress("UNCHECKED_CAST")
+        val recent = summary["recentJankFrames"] as List<Map<String, Any?>>
+        assertEquals(128, recent.size)
+        // 最旧的 22 条被丢弃，保留 [22..149]
+        assertEquals(22L, recent[0]["frameStartNanos"])
+        assertEquals(149L, recent[127]["frameStartNanos"])
+    }
+
+    @Test
+    fun nonJankFramesNotAddedToRecentJankFrames() {
+        // 反（评论 3.3）：非 jank 帧不进入 recentJankFrames
+        JankStatsController.onFrame(1L, 16_000_000L, false, "Works", null)
+        val summary = JankStatsController.getSummary()
+
+        @Suppress("UNCHECKED_CAST")
+        val recent = summary["recentJankFrames"] as List<Map<String, Any?>>
+        assertTrue(recent.isEmpty())
+    }
+
+    @Test
+    fun recentJankFramesPreserveScreenAndInteraction() {
+        // 正（评论 3.3）：recentJankFrames 保留 screen/interaction 上下文
+        JankStatsController.onFrame(1L, 40_000_000L, true, "StarMap", "top_level_switch")
+        val summary = JankStatsController.getSummary()
+
+        @Suppress("UNCHECKED_CAST")
+        val recent = summary["recentJankFrames"] as List<Map<String, Any?>>
+        assertEquals(1, recent.size)
+        assertEquals("StarMap", recent[0]["screen"])
+        assertEquals("top_level_switch", recent[0]["interaction"])
+    }
+
+    @Test
+    fun resetClearsRecentJankFrames() {
+        // 正（评论 3.3）：reset 清空 recentJankFrames 环形缓冲
+        JankStatsController.onFrame(1L, 40_000_000L, true, "Works", null)
+        JankStatsController.reset()
+        val summary = JankStatsController.getSummary()
+
+        @Suppress("UNCHECKED_CAST")
+        val recent = summary["recentJankFrames"] as List<Map<String, Any?>>
+        assertTrue(recent.isEmpty())
     }
 }
 
@@ -804,6 +855,30 @@ class PersistentLogWriterTest {
         } finally {
             executor.shutdownNow()
         }
+    }
+
+    @Test
+    fun flushBlockingReturnsFalseWhenWriteFails() {
+        // 反（评论 3.1 新契约）：文件系统不可写时 writeBatch 返回 false，
+        // persistenceHealthy 变 false，flushBlocking 返回 false 而非假装成功。
+        // 把 logsDir 路径占为普通文件（目录状态异常）使 writeBatch 无法创建文件。
+        PersistentLogWriter.flushBlocking()
+        val logsDir = AndroidDataRoot.logsDir()
+        if (logsDir.exists()) logsDir.deleteRecursively()
+        val parent = logsDir.parentFile
+        parent.mkdirs()
+        logsDir.writeText("occupied by a file")
+        try {
+            PersistentLogWriter.enqueue(req("should-fail-to-persist"))
+            val ok = PersistentLogWriter.flushBlocking()
+            assertFalse("flushBlocking must return false when write fails", ok)
+        } finally {
+            logsDir.delete()
+        }
+        // 恢复后 clearLogs 重置 persistenceHealthy，后续 flushBlocking 恢复 true
+        PersistentLogWriter.clearLogs()
+        PersistentLogWriter.enqueue(req("after-recover"))
+        assertTrue("flushBlocking must recover after clearLogs", PersistentLogWriter.flushBlocking())
     }
 }
 

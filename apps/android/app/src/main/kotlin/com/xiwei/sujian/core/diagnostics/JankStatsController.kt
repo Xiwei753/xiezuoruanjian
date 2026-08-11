@@ -7,8 +7,8 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * 卡顿统计控制器（Issue #612 四）。
  *
- * 用 Android 官方 [JankStats] 跟踪窗口帧，只把 `isJank == true` 的帧数据丢给
- * [DiagnosticsLogger] 持久日志线程；listener 里不做文件 I/O。
+ * 用 Android 官方 [JankStats] 跟踪窗口帧，聚合 jank 统计 + 环形缓冲最近慢帧样本；
+ * listener 里不做文件 I/O，不调 [DiagnosticsLogger.i]（Issue #612 评论 3.3）。
  *
  * 设计：
  * - 单例 [JankStatsController] 管理聚合统计（totalFrames / jankFrames /
@@ -21,11 +21,17 @@ import java.util.concurrent.atomic.AtomicLong
  * 线程安全：聚合计数用 AtomicLong，分组 map 用 synchronized。
  * listener 由 JankStats 在主线程回调，不阻塞。
  *
+ * callback 最小复制（Issue #612 评论 3.3）：FrameData listener 只做最小字段复制
+ * （screen/interaction），不每帧 states.map 创建 List/Pair，不在 callback 里调
+ * DiagnosticsLogger.i（避免 Regex 脱敏 + Log.i 增加帧线程负担）。jank 帧放入
+ * [recentJankSamples] 环形缓冲（128 容量）保留最近慢帧证据，getSummary 一次性导出。
+ *
  * JankStats 1.0.0 API 要点：
  * - FrameData 是顶级类，字段 frameStartNanos/frameDurationUiNanos/isJank/states。
  * - StateInfo 是顶级类，字段 key/value（不是 name/offset）。
  * - 开关用 `isTrackingEnabled = true/false` 属性（没有 enable/disable 方法）。
  */
+
 internal object JankStatsController {
     private const val TAG = "SujianJank"
 
@@ -41,6 +47,18 @@ internal object JankStatsController {
 
     @Volatile private var trackingEnabled = false
 
+    /** 环形缓冲容量：保留最近 128 个 jank 帧样本（Issue #612 评论 3.3）。 */
+    private const val RECENT_JANK_CAPACITY = 128
+
+    /**
+     * 最近 jank 帧环形缓冲（Issue #612 评论 3.3）。ArrayBlockingQueue 的 offer/poll
+     * 组合实现“满了丢最旧”：callback 只 offer，getSummary 一次性 toList 导出。
+     * 线程安全由 ArrayBlockingQueue 自身保证（JankStats listener 在主线程，getSummary
+     * 在导出线程，两者并发安全）。
+     */
+    private val recentJankSamples =
+        java.util.concurrent.ArrayBlockingQueue<JankSample>(RECENT_JANK_CAPACITY)
+
     /**
      * 为 [window] 创建 JankStats 跟踪并注册 frame listener。
      * 幂等：重复调用先关闭旧实例再创建新的。
@@ -50,11 +68,23 @@ internal object JankStatsController {
             jankStats?.isTrackingEnabled = false
             jankStats =
                 JankStats.createAndTrack(window) { frame ->
+                    // callback 只做最小复制（Issue #612 评论 3.3）：不每帧 map 创建
+                    // List/Pair，不在 callback 里调 DiagnosticsLogger.i（避免 Regex 脱敏
+                    // + Log.i 增加帧线程负担）。
+                    var screen = "unknown"
+                    var interaction: String? = null
+                    for (state in frame.states) {
+                        when (state.key) {
+                            "screen" -> screen = state.value
+                            "interaction" -> interaction = state.value
+                        }
+                    }
                     onFrame(
                         frameStartNanos = frame.frameStartNanos,
                         frameDurationUiNanos = frame.frameDurationUiNanos,
                         isJank = frame.isJank,
-                        states = frame.states.map { state -> state.key to state.value },
+                        screen = screen,
+                        interaction = interaction,
                     )
                 }
         } catch (e: Exception) {
@@ -91,6 +121,15 @@ internal object JankStatsController {
                 "jankFrames" to jankFrames.get(),
                 "maxFrameDurationUiNanos" to maxFrameDurationUiNanos.get(),
                 "jankByGroup" to jankByGroup.toMap(),
+                "recentJankFrames" to
+                    recentJankSamples.toList().map { sample ->
+                        linkedMapOf<String, Any?>(
+                            "frameStartNanos" to sample.frameStartNanos,
+                            "frameDurationUiNanos" to sample.frameDurationUiNanos,
+                            "screen" to sample.screen,
+                            "interaction" to sample.interaction,
+                        )
+                    },
                 "trackingEnabled" to trackingEnabled,
             )
         }
@@ -104,15 +143,15 @@ internal object JankStatsController {
         synchronized(groupLock) {
             jankByGroup.clear()
         }
+        recentJankSamples.clear()
     }
 
     /**
-     * Frame listener 回调（主线程）。只更新聚合统计 + 对 jank 帧调
-     * [DiagnosticsLogger.i]，不做文件 I/O。
+     * Frame listener 回调（主线程）。只更新聚合统计 + jank 帧放入环形缓冲，
+     * 不做文件 I/O，不调 [DiagnosticsLogger.i]（Issue #612 评论 3.3）。
      *
-     * [states] 是 FrameData.states 的 key-value 对列表，由调用方通过
-     * [androidx.metrics.performance.PerformanceMetricsState.putState] 写入的持续状态
-     * （如 "screen"=当前页面名、"interaction"=当前交互名）。
+     * [screen] / [interaction] 由 track() 的 callback 从 FrameData.states 做最小复制
+     * 传入（不在此处做 states.map），避免每帧创建 List/Pair 增加帧线程负担。
      *
      * 提取为 internal 可见函数便于单测验证聚合逻辑。
      */
@@ -120,21 +159,27 @@ internal object JankStatsController {
         frameStartNanos: Long,
         frameDurationUiNanos: Long,
         isJank: Boolean,
-        states: List<Pair<String, String>>,
+        screen: String,
+        interaction: String?,
     ) {
         totalFrames.incrementAndGet()
-        if (frameDurationUiNanos > maxFrameDurationUiNanos.get()) {
-            maxFrameDurationUiNanos.set(frameDurationUiNanos)
+        var prev = maxFrameDurationUiNanos.get()
+        while (frameDurationUiNanos > prev) {
+            if (maxFrameDurationUiNanos.compareAndSet(prev, frameDurationUiNanos)) break
+            prev = maxFrameDurationUiNanos.get()
         }
         if (!isJank) return
         jankFrames.incrementAndGet()
-        val screen = states.firstOrNull { it.first == "screen" }?.second ?: "unknown"
-        val interaction = states.firstOrNull { it.first == "interaction" }?.second
         val group = buildGroup(screen, interaction)
         synchronized(groupLock) {
             jankByGroup[group] = (jankByGroup[group] ?: 0L) + 1L
         }
-        logJankFrame(frameStartNanos, frameDurationUiNanos, states, group)
+        // 环形缓冲最近慢帧：满了就丢弃最旧的
+        val sample = JankSample(frameStartNanos, frameDurationUiNanos, screen, interaction)
+        if (!recentJankSamples.offer(sample)) {
+            recentJankSamples.poll()
+            recentJankSamples.offer(sample)
+        }
     }
 
     /** 构造分组 key。提取为 internal 便于单测。 */
@@ -142,25 +187,15 @@ internal object JankStatsController {
         screen: String,
         interaction: String?,
     ): String = if (interaction != null) "screen=$screen,interaction=$interaction" else "screen=$screen"
-
-    private fun logJankFrame(
-        frameStartNanos: Long,
-        frameDurationUiNanos: Long,
-        states: List<Pair<String, String>>,
-        group: String,
-    ) {
-        val msg =
-            buildString {
-                append("jank frameStartNanos=")
-                append(frameStartNanos)
-                append(" frameDurationUiNanos=")
-                append(frameDurationUiNanos)
-                append(" isJank=true")
-                append(" states=")
-                append(states.joinToString(",") { (key, value) -> "$key=$value" })
-                append(" group=")
-                append(group)
-            }
-        DiagnosticsLogger.i(TAG, msg)
-    }
 }
+
+/**
+ * 单个 jank 帧样本（Issue #612 评论 3.3）。环形缓冲 [JankStatsController.recentJankSamples]
+ * 保留最近慢帧证据，供导出诊断包分析；callback 只做最小复制构造此对象，不做 Regex 脱敏/Log.i。
+ */
+internal data class JankSample(
+    val frameStartNanos: Long,
+    val frameDurationUiNanos: Long,
+    val screen: String,
+    val interaction: String?,
+)

@@ -2,8 +2,11 @@ package com.xiwei.sujian.core.diagnostics
 
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.io.InputStream
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * Logcat 快照采集器（Issue #612 三、3.1）。
@@ -15,6 +18,11 @@ import java.util.concurrent.TimeUnit
  * - 读取即受限：[readBounded] 最多读入 2 MiB + 一个 chunk 的余量就停止并销毁
  *   logcat 子进程，不会把整台设备 logcat 缓冲区（可能数十 MB）全部读进内存
  *   再截断（Issue #612 三、3.1 “限制最大体积”是对读取本身的约束）。
+ * - 超时作用在整个采集过程（Issue #612 评论 3.2）：stdout 读取在独立 reader task
+ *   执行，future.get(timeout) 同时约束读取阶段；logcat 子进程异常挂住（既不退出
+ *   也不继续输出）时 InputStream.read() 永久阻塞，旧实现顺序 readBounded → waitFor
+ *   的 5s 超时根本执行不到——新实现超时后 destroyForcibly 杀子进程、cancel(true)
+ *   中断 reader task、shutdownNow 清理线程池。
  * - 截断按 UTF-8 字符边界进行，不会产生半个字符。
  * - 通过 [DiagnosticsLogger.redact] 脱敏后再落盘。
  * - 失败时写一个包含错误信息的占位文件，不抛异常。
@@ -28,12 +36,21 @@ internal object LogcatSnapshotCollector {
 
     private const val OUTPUT_NAME = "logcat.txt"
 
-    /** logcat -d 正常应立刻退出；等不到就强杀，导出不能被子进程挂住。 */
+    /**
+     * logcat -d 正常应立刻退出；超时作用在整个采集过程（读取 + 等待退出），
+     * 等不到就强杀，导出不能被子进程挂住（Issue #612 评论 3.2）。
+     */
     private const val WAIT_FOR_EXIT_SECONDS = 5L
 
     /**
      * 执行 logcat -d 抓取快照，脱敏后写入 [destDir]/logcat.txt。
      * 失败时写占位文件，不抛异常。
+     *
+     * 超时作用在整个采集过程（Issue #612 评论 3.2）：stdout 读取在独立 reader task
+     * 执行，future.get(timeout) 同时约束读取阶段。logcat 子进程异常挂住（既不退出
+     * 也不继续输出）时 InputStream.read() 永久阻塞，旧实现顺序 readBounded → waitFor
+     * 的 5s 超时根本执行不到；新实现超时后 destroyForcibly 杀子进程、cancel(true)
+     * 中断 reader task、shutdownNow 清理线程池。
      */
     fun collect(destDir: File) {
         try {
@@ -41,12 +58,25 @@ internal object LogcatSnapshotCollector {
                 ProcessBuilder("logcat", "-d", "-v", "threadtime")
                     .redirectErrorStream(true)
                     .start()
-            val (bytes, capped) = readBounded(process.inputStream)
+            val executor = Executors.newSingleThreadExecutor()
+            val future =
+                executor.submit<Pair<ByteArray, Boolean>> {
+                    process.inputStream.use { readBounded(it) }
+                }
+            val (bytes, capped) =
+                try {
+                    future.get(WAIT_FOR_EXIT_SECONDS, TimeUnit.SECONDS)
+                } catch (_: TimeoutException) {
+                    process.destroyForcibly()
+                    future.cancel(true)
+                    throw IOException("logcat capture timed out")
+                } finally {
+                    executor.shutdownNow()
+                }
             if (capped) {
                 // 超过体积上限：停止读取并终止 logcat，避免继续读入数十 MB 撑爆导出内存。
                 process.destroy()
             }
-            process.inputStream.close()
             if (!process.waitFor(WAIT_FOR_EXIT_SECONDS, TimeUnit.SECONDS)) {
                 process.destroyForcibly()
             }
