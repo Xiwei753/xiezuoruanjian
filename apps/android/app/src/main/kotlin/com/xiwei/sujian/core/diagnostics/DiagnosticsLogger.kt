@@ -234,20 +234,21 @@ object DiagnosticsLogger {
     /**
      * 清空持久日志。
      *
-     * @return 清空在超时前完成返回 true；超时/中断返回 false（此时不删除回退位置
-     * 的 crash 文件，也不得在 UI 上假装已清空，见 Issue #612 评论 3.4）。
+     * @return 只有“writer 已按序删除滚动日志文件”且“回退位置的 crash 文件也删除
+     * 成功”才返回 true；超时/中断/任一删除失败返回 false（不得在 UI 上假装已清空，
+     * 见 Issue #612 评论 3.4）。未初始化时返回 true。
      */
     fun clearLogs(): Boolean {
         val ok = PersistentLogWriter.clearLogs()
         if (!ok) return false
         // PersistentLogWriter.clearLogs 已删 logsDir 下所有文件（含 last_crash.txt）。
-        // 另外清理 filesDir/diagnostics/ 回退位置的 last_crash.txt。
+        // 另外清理 filesDir/diagnostics/ 回退位置的 last_crash.txt；删除失败同样
+        // 不能伪装成清空成功。
         val ctx = contextRef.get()
-        if (ctx != null) {
-            val fallbackCrash = File(File(ctx.filesDir, "diagnostics"), "last_crash.txt")
-            if (fallbackCrash.exists()) fallbackCrash.delete()
-        }
-        return true
+        if (ctx == null) return true
+        val fallbackCrash = File(File(ctx.filesDir, "diagnostics"), "last_crash.txt")
+        if (!fallbackCrash.exists()) return true
+        return fallbackCrash.delete()
     }
 
     /**

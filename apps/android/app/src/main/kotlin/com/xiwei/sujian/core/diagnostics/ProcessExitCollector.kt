@@ -130,7 +130,9 @@ internal object ProcessExitCollector {
         try {
             val traceStream = reason.getTraceInputStream() ?: return
             val safeReason = sanitizeReasonForFileName(reasonStr)
-            val traceFile = File(traceDir, "$ts-$safeReason.trace")
+            // 同一毫秒内同一 reason 的多条退出记录（多进程包：主进程与 provider 进程
+            // 同时被系统杀死）会撞文件名；后者不覆盖前者，追加 -1/-2 序号保留全部 trace。
+            val traceFile = uniqueTraceFile(traceDir, "$ts-$safeReason")
             traceStream.use { input ->
                 FileOutputStream(traceFile).use { output ->
                     input.copyTo(output)
@@ -148,6 +150,24 @@ internal object ProcessExitCollector {
         } catch (_: Exception) {
             // 单条 trace 保存失败不影响其他记录。
         }
+    }
+
+    /**
+     * 在 [traceDir] 内为 [baseName] 取一个不冲突的文件名：优先 `baseName.trace`，
+     * 已存在则依次尝试 `baseName-1.trace`、`baseName-2.trace`……
+     * 提取为 internal 纯函数便于单测验证冲突不覆盖（Issue #612 三、3.2）。
+     */
+    internal fun uniqueTraceFile(
+        traceDir: File,
+        baseName: String,
+    ): File {
+        var file = File(traceDir, "$baseName.trace")
+        var index = 1
+        while (file.exists()) {
+            file = File(traceDir, "$baseName-$index.trace")
+            index++
+        }
+        return file
     }
 
     private fun sanitizeReasonForFileName(reason: Int): String =

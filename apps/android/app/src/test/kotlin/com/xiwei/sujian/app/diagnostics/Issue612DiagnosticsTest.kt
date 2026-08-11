@@ -19,11 +19,13 @@ import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.io.ByteArrayInputStream
 import java.io.File
 
 /**
@@ -392,51 +394,92 @@ class ThemeResolveIntegrationTest {
 }
 
 /**
- * Issue #612 收尾：LogcatSnapshotCollector.truncate UTF-8 安全截断测试。
+ * Issue #612 三、3.1 收口：LogcatSnapshotCollector 读取体积上限与 UTF-8 安全截断测试。
  *
- * 纯 JVM 测试，不需要 Robolectric：truncate 是纯字符串操作。
- * 验证截断不产生 U+FFFD（截断处是完整 UTF-8 字符边界），与旧实现的字节截断形成正反对比。
+ * 纯 JVM 测试，不需要 Robolectric：readBounded / truncateBytes 是纯字节操作。
+ * 验证：读取即受限（不会把整个 logcat 缓冲区读进内存再截断）、截断不产生 U+FFFD
+ * （截断处是完整 UTF-8 字符边界），与旧实现的“先全量读入再截断”形成正反对比。
  */
-class LogcatSnapshotCollectorTruncateTest {
+class LogcatSnapshotCollectorBoundedReadTest {
     @Test
-    fun truncateKeepsShortTextUnchanged() {
+    fun truncateBytesKeepsShortTextUnchanged() {
         val text = "short logcat content"
-        assertEquals(text, LogcatSnapshotCollector.truncate(text))
+        val result = LogcatSnapshotCollector.truncateBytes(text.toByteArray(Charsets.UTF_8))
+        assertEquals(text, String(result, Charsets.UTF_8))
     }
 
     @Test
-    fun truncateLimitsLongTextToMaxSnapshotBytes() {
+    fun truncateBytesLimitsLongTextToMaxSnapshotBytes() {
         val text = "x".repeat(3 * 1024 * 1024) // 3 MiB > 2 MiB
-        val truncated = LogcatSnapshotCollector.truncate(text)
-        val byteLen = truncated.toByteArray(Charsets.UTF_8).size
-        assertTrue("truncated bytes should be <= 2 MiB, got $byteLen", byteLen <= 2 * 1024 * 1024)
+        val truncated = LogcatSnapshotCollector.truncateBytes(text.toByteArray(Charsets.UTF_8))
+        assertTrue(
+            "truncated bytes should be <= 2 MiB, got ${truncated.size}",
+            truncated.size <= LogcatSnapshotCollector.MAX_SNAPSHOT_BYTES,
+        )
         assertTrue("truncated should be non-empty", truncated.isNotEmpty())
     }
 
     @Test
-    fun truncateHandlesMultibyteUtf8OnCharBoundary() {
+    fun truncateBytesHandlesMultibyteUtf8OnCharBoundary() {
         // 中文字符 3 bytes/char，800000 个中文 = 2.4 MiB > 2 MiB
         val text = "素".repeat(800000)
-        val truncated = LogcatSnapshotCollector.truncate(text)
-        val byteLen = truncated.toByteArray(Charsets.UTF_8).size
-        assertTrue("truncated bytes should be <= 2 MiB, got $byteLen", byteLen <= 2 * 1024 * 1024)
+        val truncated = LogcatSnapshotCollector.truncateBytes(text.toByteArray(Charsets.UTF_8))
+        assertTrue(
+            "truncated bytes should be <= 2 MiB, got ${truncated.size}",
+            truncated.size <= LogcatSnapshotCollector.MAX_SNAPSHOT_BYTES,
+        )
         assertTrue("truncated should be non-empty", truncated.isNotEmpty())
         // 关键正反对比：旧字节截断会在多字节字符中间切断产生 U+FFFD；
         // 新按字符回退实现必须保证截断处是完整字符边界，不含 U+FFFD。
-        assertTrue("truncated must not contain U+FFFD (char-boundary safe)", !truncated.contains('\uFFFD'))
+        val decoded = String(truncated, Charsets.UTF_8)
+        assertTrue("truncated must not contain U+FFFD (char-boundary safe)", !decoded.contains('\uFFFD'))
     }
 
     @Test
-    fun truncateEmptyStringStaysEmpty() {
-        assertEquals("", LogcatSnapshotCollector.truncate(""))
+    fun truncateBytesEmptyStaysEmpty() {
+        assertTrue(LogcatSnapshotCollector.truncateBytes(ByteArray(0)).isEmpty())
     }
 
     @Test
-    fun truncateAsciiAtExactBoundaryUnchanged() {
+    fun truncateBytesAsciiAtExactBoundaryUnchanged() {
         // 恰好 2 MiB 的 ASCII 文本不截断
-        val text = "a".repeat(2 * 1024 * 1024)
-        val truncated = LogcatSnapshotCollector.truncate(text)
-        assertEquals(text, truncated)
+        val text = "a".repeat(LogcatSnapshotCollector.MAX_SNAPSHOT_BYTES.toInt())
+        val truncated = LogcatSnapshotCollector.truncateBytes(text.toByteArray(Charsets.UTF_8))
+        assertEquals(text, String(truncated, Charsets.UTF_8))
+    }
+
+    @Test
+    fun readBoundedSmallInputReadsAllAndNotCapped() {
+        val text = "normal logcat line\nsecond line\n"
+        val (bytes, capped) =
+            LogcatSnapshotCollector.readBounded(ByteArrayInputStream(text.toByteArray(Charsets.UTF_8)))
+        assertFalse("small input must not be capped", capped)
+        assertEquals(text, String(bytes, Charsets.UTF_8))
+    }
+
+    @Test
+    fun readBoundedEmptyStreamReturnsEmptyAndNotCapped() {
+        val (bytes, capped) = LogcatSnapshotCollector.readBounded(ByteArrayInputStream(ByteArray(0)))
+        assertFalse("empty stream must not be capped", capped)
+        assertTrue(bytes.isEmpty())
+    }
+
+    @Test
+    fun readBoundedHugeInputStopsAtCapAndFlagsCapped() {
+        // 反（缺陷守护）：超过 2 MiB 的 logcat 输出不得全部读进内存——
+        // 旧实现 readText() 读完整条输出后才截断，大缓冲区设备会撑爆导出内存。
+        val huge = ByteArray(64 * 1024 * 1024) { 'x'.code.toByte() } // 64 MiB
+        val (bytes, capped) =
+            LogcatSnapshotCollector.readBounded(ByteArrayInputStream(huge))
+        assertTrue("huge input must be capped", capped)
+        assertTrue(
+            "read bytes must stay near cap (<= max + chunk), got ${bytes.size}",
+            bytes.size <= LogcatSnapshotCollector.MAX_SNAPSHOT_BYTES + LogcatSnapshotCollector.READ_CHUNK_BYTES,
+        )
+        assertTrue(
+            "read bytes must cover at least the max bound, got ${bytes.size}",
+            bytes.size >= LogcatSnapshotCollector.MAX_SNAPSHOT_BYTES,
+        )
     }
 }
 
@@ -1064,6 +1107,148 @@ class CrashFileLocationsTest {
             assertNull(DiagnosticsLogger.getFallbackCrashFile())
         } finally {
             fallback.delete()
+        }
+    }
+}
+
+/**
+ * Issue #612 评论 3.4 收口：deleteLogFiles 删除语义正反测试（纯 JVM，临时目录）。
+ *
+ * - 只删除文件；子目录及其内容属于未知数据，绝不触碰（仓库安全边界）。
+ * - 目录不存在视为无可删内容（true）；路径存在但不是目录返回 false（目录状态异常，
+ *   调用方不得把“无法确认已清空”伪装成成功）。
+ */
+class PersistentLogWriterDeleteLogFilesTest {
+    @Test
+    fun deleteLogFilesDeletesFilesAndLeavesSubdirectoriesUntouched() {
+        val dir = createTempDir()
+        try {
+            File(dir, "sujian-current.log").writeText("log1")
+            File(dir, "sujian-current-1.log").writeText("log2")
+            val subDir = File(dir, "stray-dir")
+            subDir.mkdirs()
+            val unknownFile = File(subDir, "unknown-user-data.txt")
+            unknownFile.writeText("must survive")
+
+            val ok = PersistentLogWriter.deleteLogFiles(dir)
+            assertTrue("all log files must be deleted", ok)
+            assertTrue("sujian-current.log must be gone", !File(dir, "sujian-current.log").exists())
+            assertTrue("sujian-current-1.log must be gone", !File(dir, "sujian-current-1.log").exists())
+            // 正：未知子目录及其内容必须原样保留，不得触碰。
+            assertTrue("subdir must survive", subDir.exists())
+            assertTrue("unknown user data must survive", unknownFile.exists())
+            assertEquals("unknown data content intact", "must survive", unknownFile.readText())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun deleteLogFilesMissingDirReturnsTrue() {
+        val dir = File(createTempDir(), "nested/not/exists")
+        assertTrue("missing dir is vacuously clear", PersistentLogWriter.deleteLogFiles(dir))
+    }
+
+    @Test
+    fun deleteLogFilesReturnsFalseWhenPathIsNotDirectory() {
+        // 反：路径是普通文件（目录状态异常）时不得返回 true 假装已清空。
+        val file = File.createTempFile("logs-as-file", ".tmp")
+        try {
+            assertFalse(
+                "file at dir path must report clear failure",
+                PersistentLogWriter.deleteLogFiles(file),
+            )
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun deleteLogFilesEmptyDirReturnsTrue() {
+        val dir = createTempDir()
+        try {
+            assertTrue(PersistentLogWriter.deleteLogFiles(dir))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+}
+
+/**
+ * Issue #612 评论 3.4 收口：clearLogs 删除失败必须返回 false（不假装已清空）。
+ * Robolectric 集成：把 logsDir 路径占为普通文件（目录状态异常）时，
+ * ClearBarrier 删除阶段必须返回失败，调用方拿到 false。
+ */
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [34])
+class ClearLogsFailurePropagationTest {
+    @Test
+    fun clearLogsReturnsFalseWhenLogsDirIsNotDirectory() {
+        PersistentLogWriter.flushBlocking()
+        val logsDir = AndroidDataRoot.logsDir()
+        // 把目录路径占为普通文件（不存在的父目录先建好；沙箱内残留目录先清掉）。
+        if (logsDir.exists()) logsDir.deleteRecursively()
+        val parent = logsDir.parentFile
+        parent.mkdirs()
+        logsDir.writeText("occupied by a file")
+        try {
+            val ok = PersistentLogWriter.clearLogs()
+            assertFalse("clearLogs must report failure when deletion cannot complete", ok)
+            assertEquals("blocking file must survive", "occupied by a file", logsDir.readText())
+        } finally {
+            logsDir.delete()
+        }
+        // 恢复后清空恢复正常。
+        assertTrue(PersistentLogWriter.clearLogs())
+    }
+}
+
+/**
+ * Issue #612 三、3.2 收口：exit_traces 文件名冲突不覆盖。
+ * 同一毫秒内同一 reason 的多条退出记录（多进程包）必须各自落盘，不得互相覆盖。
+ */
+class ProcessExitCollectorUniqueTraceFileTest {
+    @Test
+    fun firstTraceGetsCanonicalName() {
+        val dir = createTempDir()
+        try {
+            val file = ProcessExitCollector.uniqueTraceFile(dir, "1720000000000-CRASH")
+            assertEquals("1720000000000-CRASH.trace", file.name)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun collidingTraceGetsIndexedSuffix() {
+        // 反（缺陷守护）：同 ts+reason 的旧实现直接覆盖前者，丢失一条 trace。
+        val dir = createTempDir()
+        try {
+            File(dir, "1720000000000-CRASH.trace").writeText("first process trace")
+            val second = ProcessExitCollector.uniqueTraceFile(dir, "1720000000000-CRASH")
+            assertEquals("1720000000000-CRASH-1.trace", second.name)
+            second.writeText("second process trace")
+
+            val third = ProcessExitCollector.uniqueTraceFile(dir, "1720000000000-CRASH")
+            assertEquals("1720000000000-CRASH-2.trace", third.name)
+
+            // 两条 trace 内容都保留，无覆盖。
+            assertEquals("first process trace", File(dir, "1720000000000-CRASH.trace").readText())
+            assertEquals("second process trace", File(dir, "1720000000000-CRASH-1.trace").readText())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun differentReasonsDoNotCollide() {
+        val dir = createTempDir()
+        try {
+            File(dir, "1720000000000-ANR.trace").writeText("anr")
+            val file = ProcessExitCollector.uniqueTraceFile(dir, "1720000000000-CRASH")
+            assertEquals("1720000000000-CRASH.trace", file.name)
+        } finally {
+            dir.deleteRecursively()
         }
     }
 }

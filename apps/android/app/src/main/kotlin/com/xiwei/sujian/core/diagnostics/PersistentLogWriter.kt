@@ -10,6 +10,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 单条日志写入请求。调用方在任意线程构造并 [PersistentLogWriter.enqueue]，
@@ -34,8 +35,15 @@ internal sealed interface LogWriterCommand {
     /** flush 屏障：writer 处理到此命令时先写完前序 Append，再 countDown 唤醒等待者。 */
     data class FlushBarrier(val latch: CountDownLatch) : LogWriterCommand
 
-    /** clear 屏障：writer 处理到此命令时先写完前序 Append，删除日志目录所有文件，再 countDown。 */
-    data class ClearBarrier(val latch: CountDownLatch) : LogWriterCommand
+    /**
+     * clear 屏障：writer 处理到此命令时先写完前序 Append，再删除日志目录所有文件，
+     * 最后 countDown 唤醒等待者。删除结果写入 [deleted]（writer 线程 → 调用方线程），
+     * 调用方据此区分“屏障完成但删除失败”（不得伪装成清空成功）。
+     */
+    data class ClearBarrier(
+        val latch: CountDownLatch,
+        val deleted: AtomicBoolean,
+    ) : LogWriterCommand
 }
 
 /**
@@ -166,24 +174,28 @@ internal object PersistentLogWriter {
      * ClearBarrier 在队列中按序处理，其后的 Append 一定在删除之后才写盘。
      * 最多等待 [FLUSH_TIMEOUT_MS]：writer 若因不可控 Error 死亡，清空不能永久挂起。
      *
-     * @return latch 在超时前完成返回 true；超时或调用线程被中断返回 false
-     * （中断时恢复中断位，writer 仍会按序处理 ClearBarrier 删除文件）。
-     * 未初始化时没有可清的日志，返回 true。
+     * @return 只有“latch 在超时前完成”且“文件确实全部删除成功”才返回 true；
+     * 超时、调用线程被中断（恢复中断位，writer 仍会按序处理 ClearBarrier 删除文件）、
+     * 或删除失败（目录状态异常/文件删除失败）都返回 false——调用方不得把删除失败
+     * 伪装成清空成功（Issue #612 评论 3.4）。未初始化时没有可清的日志，返回 true。
      */
     fun clearLogs(): Boolean {
         val latch = CountDownLatch(1)
+        val deleted = AtomicBoolean(false)
         synchronized(lock) {
             if (!initialized) return true
-            queue.addLast(LogWriterCommand.ClearBarrier(latch))
+            queue.addLast(LogWriterCommand.ClearBarrier(latch, deleted))
             lock.notifyAll()
         }
-        return try {
-            latch.await(FLUSH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        } catch (_: InterruptedException) {
-            // 调用方线程被中断：恢复中断位并返回 false。
-            Thread.currentThread().interrupt()
-            false
-        }
+        val completed =
+            try {
+                latch.await(FLUSH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                // 调用方线程被中断：恢复中断位并返回 false。
+                Thread.currentThread().interrupt()
+                false
+            }
+        return completed && deleted.get()
     }
 
     /**
@@ -234,8 +246,9 @@ internal object PersistentLogWriter {
                 is LogWriterCommand.ClearBarrier -> {
                     try {
                         flushBatch(batch)
-                        // 文件删除在 writer 线程执行，与 writeBatch 串行，无并发竞态。
-                        deleteLogFiles()
+                        // 文件删除在 writer 线程执行，与 writeBatch 串行，无并发竞态；
+                        // 删除结果经 cmd.deleted 传回调用方（不得把失败伪装成成功）。
+                        cmd.deleted.set(deleteLogFiles(AndroidDataRoot.logsDir()))
                     } finally {
                         cmd.latch.countDown()
                     }
@@ -253,16 +266,30 @@ internal object PersistentLogWriter {
         batch.clear()
     }
 
-    /** 删除日志目录下所有文件（仅由 writer 线程调用）。 */
-    private fun deleteLogFiles() {
-        try {
-            val logDir = AndroidDataRoot.logsDir()
-            if (logDir.exists()) {
-                logDir.listFiles()?.forEach { it.delete() }
+    /**
+     * 删除日志目录下的所有文件（仅由 writer 线程调用）。
+     *
+     * - 只删除文件；子目录及其内容属于未知数据，绝不触碰（仓库安全边界）。
+     * - 目录不存在视为无可删内容，返回 true；路径存在但不是目录、listFiles 失败、
+     *   任一文件删除失败都返回 false——ClearBarrier 把结果传回 clearLogs，
+     *   调用方据此显示“清空失败”而不是假装已经清空（Issue #612 评论 3.4）。
+     * - 删除失败是可恢复 I/O 故障：latch 由 ClearBarrier 的 finally 释放，
+     *   writer 线程继续存活，不因一次删除失败而死亡（Issue #612 评论 3）。
+     */
+    internal fun deleteLogFiles(logDir: File): Boolean {
+        return try {
+            if (!logDir.exists()) return true
+            if (!logDir.isDirectory) return false
+            val files = logDir.listFiles() ?: return false
+            var allDeleted = true
+            for (file in files) {
+                if (file.isFile && !file.delete()) {
+                    allDeleted = false
+                }
             }
+            allDeleted
         } catch (_: Exception) {
-            // 删除失败是可恢复 I/O 故障：latch 由 ClearBarrier 的 finally 释放，
-            // writer 线程继续存活，不因一次删除失败而死亡（Issue #612 评论 3）。
+            false
         }
     }
 
