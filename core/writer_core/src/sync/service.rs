@@ -476,6 +476,17 @@ fn handle_merge_conflict(
 }
 
 impl SyncService {
+    /// #614：打开 git2 repo 前先确保 libgit2 运行时已按平台配置（Android 关闭
+    /// owner validation）。OnceLock 幂等，调用方已 ensure 也无额外开销。
+    /// 让 service.rs 内每个 libgit2 入口自文档化，不依赖"调用方已 ensure"隐式前提，
+    /// 与评论 #614 一·2"不再直接裸调 git2::Repository::open"要求一致。
+    #[cfg(feature = "git-https")]
+    fn open_git_repo(path: &Path) -> crate::Result<git2::Repository> {
+        crate::storage::git_runtime::ensure_initialized()?;
+        git2::Repository::open(path)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))
+    }
+
     #[cfg(feature = "git-https")]
     #[allow(
         clippy::too_many_lines,
@@ -608,7 +619,7 @@ impl SyncService {
         }
 
         let mut branch_recovered = false;
-        if let Ok(repo) = git2::Repository::open(sync_root) {
+        if let Ok(repo) = Self::open_git_repo(sync_root) {
             let branch_ref_name = format!("refs/heads/{}", config.branch);
             let branch_exists = repo.find_reference(&branch_ref_name).is_ok();
             let head_commit = repo.head().ok().and_then(|r| r.peel_to_commit().ok());
@@ -679,7 +690,7 @@ impl SyncService {
         // 对于其他模式，baseline = stage/commit 后的 HEAD（可能 None 如果 unborn）。
         let baseline_head_oid = if result.first_sync_mode == FirstSyncMode::CloneIntoEmptyProject {
             None
-        } else if let Ok(repo) = git2::Repository::open(sync_root) {
+        } else if let Ok(repo) = Self::open_git_repo(sync_root) {
             repo.head().ok().and_then(|r| r.target())
         } else {
             None
@@ -704,7 +715,7 @@ impl SyncService {
         }
 
         if pull_succeeded {
-            if let Ok(repo) = git2::Repository::open(sync_root) {
+            if let Ok(repo) = Self::open_git_repo(sync_root) {
                 if let Ok(new_head) = repo.head() {
                     if let Ok(new_commit) = new_head.peel_to_commit() {
                         if let Ok(new_tree) = new_commit.tree() {
@@ -736,7 +747,7 @@ impl SyncService {
                 state_for_pending.pending_take_remote.len()
             );
             let mut succeeded: std::collections::HashSet<String> = std::collections::HashSet::new();
-            if let Ok(repo) = git2::Repository::open(sync_root) {
+            if let Ok(repo) = Self::open_git_repo(sync_root) {
                 let remote_branch_ref = format!("refs/remotes/origin/{}", config.branch);
                 if let Ok(remote_commit) = repo
                     .find_reference(&remote_branch_ref)
