@@ -158,7 +158,16 @@ internal object ProcessExitCollector {
             "reason$reason"
         }
 
-    private val reasonNames: Map<Int, String> by lazy {
+    private val reasonNames: Map<Int, String> by lazy { buildReasonNames() }
+
+    /**
+     * REASON_* 全是 public static final int 编译期常量，Kotlin 编译时直接内联数值，
+     * 运行期不读字段，API 30 设备不会抛 NoSuchFieldError。
+     * 其中 FREEZER(API 33)、PACKAGE_STATE_CHANGE/PACKAGE_UPDATED(API 34) 高于 minSdk=30，
+     * lint 的 InlinedApi 仍会标记，这里精确抑制（仅限内联常量场景，非宽放）。
+     */
+    @android.annotation.SuppressLint("InlinedApi")
+    private fun buildReasonNames(): Map<Int, String> =
         mapOf(
             ApplicationExitInfo.REASON_ANR to "ANR",
             ApplicationExitInfo.REASON_CRASH to "CRASH",
@@ -178,7 +187,6 @@ internal object ProcessExitCollector {
             ApplicationExitInfo.REASON_FREEZER to "FREEZER",
             ApplicationExitInfo.REASON_UNKNOWN to "UNKNOWN",
         )
-    }
 
     private fun reasonName(reason: Int): String = reasonNames[reason] ?: "UNKNOWN_$reason"
 
