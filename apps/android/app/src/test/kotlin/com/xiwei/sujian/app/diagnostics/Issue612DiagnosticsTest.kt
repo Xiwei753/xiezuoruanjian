@@ -4,6 +4,7 @@ package com.xiwei.sujian.app.diagnostics
 
 import com.xiwei.sujian.app.navigation.SujianDestination
 import com.xiwei.sujian.app.navigation.resolveTopLevelSwitchInteraction
+import com.xiwei.sujian.app.navigation.syncIndicatorSummary
 import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 import com.xiwei.sujian.core.diagnostics.DiagnosticsExporter
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
@@ -15,6 +16,7 @@ import com.xiwei.sujian.core.diagnostics.ProcessExitCollector
 import com.xiwei.sujian.core.diagnostics.ProcessStateSummary
 import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
+import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -746,6 +748,36 @@ class ResolveTopLevelSwitchInteractionTest {
             "top_level_switch",
             resolveTopLevelSwitchInteraction(SujianDestination.Stats, SujianDestination.Works),
         )
+    }
+}
+
+/**
+ * Issue #612 三、3.2 收口：进程状态摘要同步字段正反测试。
+ *
+ * 修复前（反）：recordTopLevelSwitchDiagnostics 硬编码 sync="idle"，切页会把
+ * 卡住的 syncing/failed 覆盖掉，而同步状态未变时摘要不再纠正；
+ * 修复后（正）：syncIndicatorSummary 把真实同步状态映射为摘要字符串，
+ * SujianProcessStateEffect 监听 (目的地, 章节, 同步状态) 三键统一写入。
+ */
+class SyncIndicatorSummaryTest {
+    @Test
+    fun syncingMapsToSyncing() {
+        assertEquals("syncing", syncIndicatorSummary(SyncIndicatorState.Syncing))
+    }
+
+    @Test
+    fun syncedMapsToSynced() {
+        assertEquals("synced", syncIndicatorSummary(SyncIndicatorState.Synced))
+    }
+
+    @Test
+    fun failedMapsToFailed() {
+        assertEquals("failed", syncIndicatorSummary(SyncIndicatorState.Failed))
+    }
+
+    @Test
+    fun unconfiguredMapsToUnconfigured() {
+        assertEquals("unconfigured", syncIndicatorSummary(SyncIndicatorState.Unconfigured))
     }
 }
 

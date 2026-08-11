@@ -588,7 +588,7 @@ fun SujianNavigationSuite(
     val topBarInfo = rememberSujianTopBarInfo(currentRoute, appState, chrome, env, workspaceNavState)
 
     val onTopLevelSelected: (SujianDestination) -> Unit = { destination ->
-        recordTopLevelSwitchDiagnostics(context, currentTopDestination, destination, appState)
+        recordTopLevelSwitchDiagnostics(currentTopDestination, destination)
         topLevelBackStack.saveCurrent(backStack.toList())
         topLevelBackStack.addTopLevel(destination)
         val restored = topLevelBackStack.currentBackStack()
@@ -597,7 +597,7 @@ fun SujianNavigationSuite(
     }
 
     SujianJankInteractionClearEffect(currentTopDestination)
-    SujianProcessStateSyncEffect(currentTopDestination, syncState, appState)
+    SujianProcessStateEffect(currentTopDestination, appState, syncState)
 
     val navDisplayContent: @Composable () -> Unit = {
         SujianNavDisplayContent(
@@ -655,20 +655,12 @@ private fun Modifier.navItemModifier(destination: SujianDestination): Modifier {
     return this.testTag(semanticTag)
 }
 
-/** Issue #612 四/五：一级切换诊断事件 + JankStats UI 上下文 + 进程状态摘要。 */
+/** Issue #612 四/五：一级切换诊断事件（进程状态摘要由 [SujianProcessStateEffect] 统一写入）。 */
 private fun recordTopLevelSwitchDiagnostics(
-    context: android.content.Context,
     from: SujianDestination,
     to: SujianDestination,
-    appState: SujianAppState,
 ) {
     com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navTopLevelSwitch(from.name, to.name)
-    com.xiwei.sujian.core.diagnostics.ProcessStateSummary.update(
-        context,
-        to.name,
-        if (appState.currentChapterId != null) "1" else "0",
-        "idle",
-    )
 }
 
 /**
@@ -707,32 +699,40 @@ private fun SujianJankInteractionClearEffect(currentTopDestination: SujianDestin
 }
 
 /**
- * Issue #612 三、3.2：同步状态变化时更新进程状态摘要，
- * 让下次冷启动读取 ApplicationExitInfo 时知道进程死前的同步状态。
+ * Issue #612 三、3.2：进程状态摘要唯一写入点。
+ *
+ * 在“顶级页面切换 / 进入退出正文 / 同步状态变化”三种关键状态变化时更新
+ * screen=…;editor=…;sync=…，让下次冷启动读取 ApplicationExitInfo 时知道进程
+ * 死前停在哪个状态。三个 key 一起监听，保证任意一次变化后摘要都收敛到真实状态
+ * （不会出现切页后把 sync 覆盖成占位值、而同步状态未变导致不再纠正的陈旧问题）。
  */
 @Composable
-private fun SujianProcessStateSyncEffect(
+private fun SujianProcessStateEffect(
     currentTopDestination: SujianDestination,
-    syncState: com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState,
     appState: SujianAppState,
+    syncState: com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState,
 ) {
     val context = LocalContext.current
-    LaunchedEffect(syncState) {
-        val syncSummary =
-            when (syncState) {
-                com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState.Syncing -> "syncing"
-                com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState.Synced -> "synced"
-                com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState.Failed -> "failed"
-                com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState.Unconfigured -> "unconfigured"
-            }
+    LaunchedEffect(currentTopDestination, appState.currentChapterId, syncState) {
         com.xiwei.sujian.core.diagnostics.ProcessStateSummary.update(
             context,
             currentTopDestination.name,
             if (appState.currentChapterId != null) "1" else "0",
-            syncSummary,
+            syncIndicatorSummary(syncState),
         )
     }
 }
+
+/**
+ * Issue #612 三、3.2：同步状态摘要字符串。提取为 internal 便于单测正反验证。
+ */
+internal fun syncIndicatorSummary(syncState: SyncIndicatorState): String =
+    when (syncState) {
+        SyncIndicatorState.Syncing -> "syncing"
+        SyncIndicatorState.Synced -> "synced"
+        SyncIndicatorState.Failed -> "failed"
+        SyncIndicatorState.Unconfigured -> "unconfigured"
+    }
 
 private val navForwardTransition: AnimatedContentTransitionScope<Scene<NavKey>>.() -> ContentTransform = {
     fadeIn(animationSpec = tween(180)) togetherWith fadeOut(animationSpec = tween(150))

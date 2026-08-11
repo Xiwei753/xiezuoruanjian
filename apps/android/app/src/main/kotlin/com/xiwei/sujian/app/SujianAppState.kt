@@ -155,7 +155,6 @@ class SujianAppViewModel(
         savedStateHandle["currentChapterId"] = chapterId
         savedStateHandle["currentChapterTitle"] = chapterTitle
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceSelection("chapter", chapterId)
-        updateProcessStateSummaryForEditor(true)
     }
 
     fun selectChapter(
@@ -167,7 +166,6 @@ class SujianAppViewModel(
         savedStateHandle["currentVolumeId"] = volumeId
         savedStateHandle["currentChapterId"] = chapterId
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceSelection("chapter", chapterId)
-        updateProcessStateSummaryForEditor(true)
         viewModelScope.launch {
             val title =
                 withContext(Dispatchers.IO) {
@@ -190,7 +188,6 @@ class SujianAppViewModel(
         savedStateHandle.remove<String>("currentChapterId")
         savedStateHandle["currentChapterTitle"] = ""
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceClear("chapter")
-        updateProcessStateSummaryForEditor(false)
     }
 
     fun clearProjectSelection() {
@@ -206,7 +203,6 @@ class SujianAppViewModel(
         savedStateHandle["currentChapterTitle"] = ""
         com.xiwei.sujian.app.state.ActiveProjectGate.setCurrentProjectId(null)
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceClear("project")
-        updateProcessStateSummaryForEditor(false)
     }
 
     fun refreshProjects() {
@@ -272,20 +268,6 @@ class SujianAppViewModel(
             }
             refreshProjects()
         }
-    }
-
-    /**
-     * Issue #612 三、3.2：进入/退出正文时更新进程状态摘要，
-     * 让下次冷启动读取 ApplicationExitInfo 时知道进程死前是否在编辑正文。
-     */
-    private fun updateProcessStateSummaryForEditor(editorActive: Boolean) {
-        val ctx = appContext ?: return
-        com.xiwei.sujian.core.diagnostics.ProcessStateSummary.update(
-            ctx,
-            "Works",
-            if (editorActive) "1" else "0",
-            "idle",
-        )
     }
 }
 
