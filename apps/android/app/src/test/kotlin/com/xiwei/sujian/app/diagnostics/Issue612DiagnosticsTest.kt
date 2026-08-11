@@ -5,6 +5,8 @@ package com.xiwei.sujian.app.diagnostics
 import com.xiwei.sujian.app.navigation.SujianDestination
 import com.xiwei.sujian.app.navigation.resolveTopLevelSwitchInteraction
 import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
+import com.xiwei.sujian.core.diagnostics.DiagnosticsExporter
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.diagnostics.JankStatsController
 import com.xiwei.sujian.core.diagnostics.LogRequest
 import com.xiwei.sujian.core.diagnostics.LogcatSnapshotCollector
@@ -744,5 +746,152 @@ class ResolveTopLevelSwitchInteractionTest {
             "top_level_switch",
             resolveTopLevelSwitchInteraction(SujianDestination.Stats, SujianDestination.Works),
         )
+    }
+}
+
+/**
+ * Issue #612 评论二.4 收口：崩溃文件“导出时两处都收集”正反测试。
+ *
+ * 修复前（反）：DiagnosticsExporter 只取 getCrashFile() 一处（优先外部 logsDir），
+ * 当外部与 filesDir/diagnostics/ 两处都有 last_crash.txt 时，较新的回退份被漏掉。
+ * 修复后（正）：planCrashFileCopies 把主位置导出为 last_crash.txt，
+ * 两处都有时回退位置额外导出为 last_crash_fallback.txt。
+ */
+class PlanCrashFileCopiesTest {
+    @Test
+    fun bothLocationsYieldTwoCopies() {
+        // 正：两处都有 crash 文件时，主位置 + 回退位置都导出。
+        val primary = java.nio.file.Files.createTempFile("crash_primary_", ".txt").toFile()
+        val fallback = java.nio.file.Files.createTempFile("crash_fallback_", ".txt").toFile()
+        try {
+            val copies = DiagnosticsExporter.planCrashFileCopies(primary, fallback)
+            assertEquals(2, copies.size)
+            assertEquals("last_crash.txt", copies[0].first)
+            assertEquals(primary, copies[0].second)
+            assertEquals("last_crash_fallback.txt", copies[1].first)
+            assertEquals(fallback, copies[1].second)
+        } finally {
+            primary.delete()
+            fallback.delete()
+        }
+    }
+
+    @Test
+    fun onlyPrimaryYieldsSingleCanonicalCopy() {
+        // 正：只有主位置有文件时，导出为 last_crash.txt，无回退副本。
+        val primary = java.nio.file.Files.createTempFile("crash_primary_", ".txt").toFile()
+        val missingFallback = java.io.File(primary.parentFile, "missing_crash.txt")
+        try {
+            val copies = DiagnosticsExporter.planCrashFileCopies(primary, missingFallback)
+            assertEquals(1, copies.size)
+            assertEquals("last_crash.txt", copies[0].first)
+            assertEquals(primary, copies[0].second)
+        } finally {
+            primary.delete()
+        }
+    }
+
+    @Test
+    fun neitherLocationYieldsNoCopies() {
+        // 反：两处都没有文件时不做任何拷贝。
+        val dir = java.nio.file.Files.createTempDirectory("crash_none_").toFile()
+        try {
+            val copies =
+                DiagnosticsExporter.planCrashFileCopies(
+                    java.io.File(dir, "missing_a.txt"),
+                    java.io.File(dir, "missing_b.txt"),
+                )
+            assertTrue("no copies expected", copies.isEmpty())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun sameFileTwiceDoesNotDuplicate() {
+        // 反：主/回退指向同一文件时不产生重复副本。
+        val same = java.nio.file.Files.createTempFile("crash_same_", ".txt").toFile()
+        try {
+            val copies = DiagnosticsExporter.planCrashFileCopies(same, same)
+            assertEquals(1, copies.size)
+            assertEquals("last_crash.txt", copies[0].first)
+        } finally {
+            same.delete()
+        }
+    }
+}
+
+/**
+ * Issue #612 评论二.4 收口：getCrashFile / getFallbackCrashFile 两位置采集正反测试。
+ *
+ * 正：两处都有 last_crash.txt 时，getFallbackCrashFile 返回回退份（导出补上）；
+ * 反：只有主位置或只有回退位置时，getFallbackCrashFile 返回 null（避免同一文件
+ * 被导出两份）。
+ */
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [34])
+class CrashFileLocationsTest {
+    private lateinit var context: android.content.Context
+
+    @Before
+    fun setUp() {
+        context = androidx.test.core.app.ApplicationProvider.getApplicationContext()
+        DiagnosticsLogger.init(context, isEnabled = true, isVerbose = true)
+        DiagnosticsLogger.clearLogs()
+    }
+
+    @After
+    fun tearDown() {
+        DiagnosticsLogger.clearLogs()
+    }
+
+    @Test
+    fun bothLocationsReturnFallbackForSecondCopy() {
+        // 正：两处都有时，主位置 + 回退位置都可取到。
+        val primaryDir = AndroidDataRoot.logsDir()
+        primaryDir.mkdirs()
+        val primary = java.io.File(primaryDir, "last_crash.txt")
+        primary.writeText("crash in external logsDir")
+        val fallbackDir = java.io.File(context.filesDir, "diagnostics")
+        fallbackDir.mkdirs()
+        val fallback = java.io.File(fallbackDir, "last_crash.txt")
+        fallback.writeText("crash in filesDir fallback")
+        try {
+            assertEquals(primary, DiagnosticsLogger.getCrashFile())
+            assertEquals(fallback, DiagnosticsLogger.getFallbackCrashFile())
+        } finally {
+            primary.delete()
+            fallback.delete()
+        }
+    }
+
+    @Test
+    fun onlyPrimaryReturnsNullFallback() {
+        // 反：只有主位置有文件时，回退位置不应返回（否则同一内容导出两份）。
+        val primaryDir = AndroidDataRoot.logsDir()
+        primaryDir.mkdirs()
+        val primary = java.io.File(primaryDir, "last_crash.txt")
+        primary.writeText("crash in external logsDir")
+        try {
+            assertEquals(primary, DiagnosticsLogger.getCrashFile())
+            assertNull(DiagnosticsLogger.getFallbackCrashFile())
+        } finally {
+            primary.delete()
+        }
+    }
+
+    @Test
+    fun onlyFallbackIsReturnedAsPrimarySource() {
+        // 正：只有回退位置有文件时，getCrashFile 回退返回它（以主文件名导出）。
+        val fallbackDir = java.io.File(context.filesDir, "diagnostics")
+        fallbackDir.mkdirs()
+        val fallback = java.io.File(fallbackDir, "last_crash.txt")
+        fallback.writeText("crash in filesDir fallback")
+        try {
+            assertEquals(fallback, DiagnosticsLogger.getCrashFile())
+            assertNull(DiagnosticsLogger.getFallbackCrashFile())
+        } finally {
+            fallback.delete()
+        }
     }
 }

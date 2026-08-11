@@ -106,13 +106,34 @@ object DiagnosticsExporter {
         context: Context,
         destDir: File,
     ) {
-        val crashFile = DiagnosticsLogger.getCrashFile() ?: return
-        try {
-            val content = crashFile.readText()
-            val redacted = DiagnosticsLogger.redact(content)
-            File(destDir, "last_crash.txt").writeText(redacted)
-        } catch (_: Exception) {
+        val primary = DiagnosticsLogger.getCrashFile() ?: return
+        val fallback = DiagnosticsLogger.getFallbackCrashFile() ?: primary
+        for ((name, file) in planCrashFileCopies(primary, fallback)) {
+            try {
+                val content = file.readText()
+                val redacted = DiagnosticsLogger.redact(content)
+                File(destDir, name).writeText(redacted)
+            } catch (_: Exception) {
+            }
         }
+    }
+
+    /**
+     * 决定 crash 文件导出副本：主位置（外部 logsDir，或仅有的回退位置）始终
+     * 以 last_crash.txt 导出；当两处都有文件时，回退位置额外以
+     * last_crash_fallback.txt 导出（Issue #612 评论二.4 “导出时两处都收集”）。
+     * 提取为 internal 纯函数便于单测正反验证。
+     */
+    internal fun planCrashFileCopies(
+        primary: File,
+        fallback: File,
+    ): List<Pair<String, File>> {
+        val copies = mutableListOf<Pair<String, File>>()
+        if (primary.exists()) copies.add("last_crash.txt" to primary)
+        if (fallback.exists() && fallback != primary) {
+            copies.add("last_crash_fallback.txt" to fallback)
+        }
+        return copies
     }
 
     private fun writeLogcat(destDir: File) {

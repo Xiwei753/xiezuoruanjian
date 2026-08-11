@@ -251,4 +251,17 @@ object DiagnosticsLogger {
         val fallback = File(File(ctx.filesDir, "diagnostics"), "last_crash.txt")
         return if (fallback.exists()) fallback else null
     }
+
+    /**
+     * 仅在外部 logsDir 与 filesDir/diagnostics/ 两处都存在 last_crash.txt 时返回
+     * 回退位置的那份（导出时两处都收集，见 Issue #612 评论二.4）。
+     * 只有回退位置有文件时返回 null —— 那份由 [getCrashFile] 以主文件名导出。
+     */
+    fun getFallbackCrashFile(): File? {
+        val ctx = contextRef.get() ?: return null
+        val primary = File(AndroidDataRoot.logsDir(), "last_crash.txt")
+        if (!primary.exists()) return null
+        val fallback = File(File(ctx.filesDir, "diagnostics"), "last_crash.txt")
+        return if (fallback.exists()) fallback else null
+    }
 }
