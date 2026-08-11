@@ -1,76 +1,99 @@
 package com.xiwei.sujian.app.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.rememberNavBackStack
 
 /**
- * 一级导航 TopLevelBackStack — 持有并暴露唯一 [NavBackStack] 供 NavDisplay 观察。
+ * 一级导航 TopLevelBackStack — Navigation 3 多栈可恢复模型。
  *
- * 每个 top-level destination（Works/StarMap/Stats）保留独立栈；底栏点击只调
- * [addTopLevel]，由本类在同一份 [backStack] 上做内容切换，调用方不再 clear/rebuild。
+ * 每个 top-level destination（Works/StarMap/Stats）持有自己的 [NavBackStack]，
+ * 由 [rememberNavBackStack] 跨配置变化/进程恢复保存导航状态。
+ * [currentTopLevel] 由 [rememberSaveable] 保存。
+ * [backStack] 派生为当前 top-level 的栈引用；切换 tab 只切引用，不 clear/rebuild。
  * Settings 仍是 Works 子栈，通过 [add] 进入。
  *
- * 参考：https://developer.android.com/guide/navigation/navigation-3/recipes/common-ui
+ * 参考：https://developer.android.com/guide/navigation/navigation-3/recipes/multiple-backstacks
  */
 @Stable
 class SujianTopLevelBackStack(
-    initialTopLevel: SujianDestination = SujianDestination.Works,
-    initialStack: List<NavKey> = listOf(initialTopLevel.toRoute()),
+    val worksStack: NavBackStack<NavKey>,
+    val starMapStack: NavBackStack<NavKey>,
+    val statsStack: NavBackStack<NavKey>,
+    private val currentTopLevelState: MutableState<SujianDestination>,
 ) {
-    private val stacks: MutableMap<SujianDestination, MutableList<NavKey>> = mutableMapOf()
-
-    var currentTopLevel: SujianDestination by mutableStateOf(initialTopLevel)
-        private set
-
-    /** 交给 NavDisplay 的唯一可观察栈。切换 tab 时在此对象上做内容切换。 */
-    val backStack: NavBackStack<NavKey> = NavBackStack(*initialStack.toTypedArray())
-
-    init {
-        stacks[initialTopLevel] = initialStack.toMutableList()
-        SujianDestination.entries.forEach { dest ->
-            if (dest != initialTopLevel) stacks[dest] = mutableListOf(dest.toRoute())
+    var currentTopLevel: SujianDestination
+        get() = currentTopLevelState.value
+        private set(value) {
+            currentTopLevelState.value = value
         }
-    }
 
-    /** 切换一级 tab；相同 tab 时无操作（最外层早退）。 */
+    private val stacks: Map<SujianDestination, NavBackStack<NavKey>> =
+        mapOf(
+            SujianDestination.Works to worksStack,
+            SujianDestination.StarMap to starMapStack,
+            SujianDestination.Stats to statsStack,
+        )
+
+    /** 交给 NavDisplay 的当前活跃栈。切 tab 只切引用，不 clear/rebuild。 */
+    val backStack: NavBackStack<NavKey> get() = stacks.getValue(currentTopLevel)
+
+    /** 切换一级 tab；相同 tab 时无操作。 */
     fun addTopLevel(destination: SujianDestination) {
         if (destination == currentTopLevel) return
-        // 保存当前 tab 栈快照
-        stacks[currentTopLevel] = backStack.toList().toMutableList()
         currentTopLevel = destination
-        // 在同一份 backStack 上切换内容
-        backStack.clear()
-        backStack.addAll(stacks[destination] ?: mutableListOf(destination.toRoute()))
     }
 
-    /** 向当前 tab 栈 push（如进入 Settings）。 */
+    /** 向当前 tab 栈 push（如进入 Settings，只应在 Works 时调用）。 */
     fun add(key: NavKey) {
         backStack.add(key)
     }
 
     /** 弹出当前栈末尾；返回是否弹出。 */
     fun removeLastOrNull(): Boolean {
-        if (backStack.size <= 1) return false
-        backStack.removeAt(backStack.size - 1)
+        val s = backStack
+        if (s.size <= 1) return false
+        s.removeAt(s.size - 1)
         return true
     }
 
     /** 把当前 tab 栈重置为根 route。 */
     fun resetCurrentToRoot() {
-        stacks[currentTopLevel] = mutableListOf(currentTopLevel.toRoute())
-        backStack.clear()
-        backStack.add(currentTopLevel.toRoute())
+        val s = backStack
+        s.clear()
+        s.add(currentTopLevel.toRoute())
     }
 }
 
+/**
+ * 构造可跨配置变化/进程恢复的 [SujianTopLevelBackStack]。
+ *
+ * - 每个 top-level 栈用 [rememberNavBackStack] 单独保存；
+ * - [currentTopLevel] 用 [rememberSaveable] 保存（enum 默认 Serializable，走 autoSaver）；
+ * - [initialStack] 只在对应 top-level 上生效，其余 top-level 用各自根 route 初始化。
+ */
 @Composable
 fun rememberSujianTopLevelBackStack(
     initialTopLevel: SujianDestination = SujianDestination.Works,
-    initialStack: List<NavKey> = listOf(SujianDestination.Works.toRoute()),
-): SujianTopLevelBackStack = remember { SujianTopLevelBackStack(initialTopLevel, initialStack) }
+    initialStack: List<SujianRoute> = listOf(SujianDestination.Works.toRoute()),
+): SujianTopLevelBackStack {
+    val worksInitial: List<SujianRoute> =
+        if (initialTopLevel == SujianDestination.Works) initialStack else listOf(SujianRoute.Works)
+    val starMapInitial: List<SujianRoute> =
+        if (initialTopLevel == SujianDestination.StarMap) initialStack else listOf(SujianRoute.StarMap)
+    val statsInitial: List<SujianRoute> =
+        if (initialTopLevel == SujianDestination.Stats) initialStack else listOf(SujianRoute.Stats)
+    val worksStack = rememberNavBackStack(*worksInitial.toTypedArray())
+    val starMapStack = rememberNavBackStack(*starMapInitial.toTypedArray())
+    val statsStack = rememberNavBackStack(*statsInitial.toTypedArray())
+    val currentTopLevel = rememberSaveable(initialTopLevel) { mutableStateOf(initialTopLevel) }
+    return remember(worksStack, starMapStack, statsStack, currentTopLevel) {
+        SujianTopLevelBackStack(worksStack, starMapStack, statsStack, currentTopLevel)
+    }
+}

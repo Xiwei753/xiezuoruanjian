@@ -214,6 +214,35 @@ class SujianAppViewModelErrorEventTest {
             error.message.contains("刷新失败"),
         )
     }
+
+    @Test
+    fun createProject_emitsErrorEventWhenNotInitialized() {
+        val vm = SujianAppViewModel(SavedStateHandle())
+        // 不调 setProjectUseCaseForTesting — projectUseCase 为 null
+        val collector = ErrorCollector(vm)
+        vm.createProject("x")
+        val error = collector.await()
+        collector.close()
+        assertTrue(
+            "未初始化时必须发 Error 事件而非静默成功，实际: ${error.message}",
+            error.message.isNotEmpty(),
+        )
+    }
+
+    @Test
+    fun refreshProjects_setsLoadErrorWhenNotInitialized() {
+        val vm = SujianAppViewModel(SavedStateHandle())
+        val collector = ErrorCollector(vm)
+        vm.refreshProjects()
+        awaitCondition { vm.loadError != null }
+        val error = collector.await()
+        collector.close()
+        assertNotNull("未初始化时必须设 loadError", vm.loadError)
+        assertTrue(
+            "未初始化时必须发 Error 事件，实际: ${error.message}",
+            error.message.isNotEmpty(),
+        )
+    }
 }
 
 /**

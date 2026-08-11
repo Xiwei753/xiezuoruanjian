@@ -114,6 +114,12 @@ class SujianAppViewModel(
     private var appContext: android.content.Context? = null
 
     /**
+     * #614 评论二：未初始化时显式抛异常，避免 safe-call 静默返回 null 被当成 Success(null)。
+     * 抛出的 IllegalStateException 由各调用方的 runCatching/try-catch 捕获，走 errorMessage → WorkspaceUiEvent.Error。
+     */
+    private fun requireProjectUseCase(): ProjectUseCasePort = checkNotNull(projectUseCase) { "ProjectUseCase 尚未初始化" }
+
+    /**
      * #614：仅用于单元测试注入 fake [ProjectUseCasePort]，绕过 [initialize] 的真实 Repository 构造。
      */
     @androidx.annotation.VisibleForTesting
@@ -162,7 +168,7 @@ class SujianAppViewModel(
                 val title =
                     withContext(Dispatchers.IO) {
                         try {
-                            projectUseCase?.getProjectTitle(projectId) ?: ""
+                            requireProjectUseCase().getProjectTitle(projectId)
                         } catch (_: Exception) {
                             ""
                         }
@@ -200,7 +206,7 @@ class SujianAppViewModel(
             val title =
                 withContext(Dispatchers.IO) {
                     try {
-                        projectUseCase?.getChapterTitle(chapterId) ?: ""
+                        requireProjectUseCase().getChapterTitle(chapterId)
                     } catch (_: Exception) {
                         ""
                     }
@@ -239,10 +245,10 @@ class SujianAppViewModel(
         viewModelScope.launch {
             val result =
                 withContext(Dispatchers.IO) {
-                    runCatching { projectUseCase?.getProjects() }
+                    runCatching { requireProjectUseCase().getProjects() }
                 }
             result.onSuccess { list ->
-                projects = list ?: emptyList()
+                projects = list
                 loadError = null
             }.onFailure { e ->
                 // #614：保留上一份 projects，不覆盖为空；仅首次加载失败设 loadError。
@@ -258,9 +264,9 @@ class SujianAppViewModel(
         viewModelScope.launch {
             val result =
                 withContext(Dispatchers.IO) {
-                    runCatching { projectUseCase?.getRecentEdits(5) }
+                    runCatching { requireProjectUseCase().getRecentEdits(5) }
                 }
-            result.onSuccess { list -> recentEdits = list ?: emptyList() }
+            result.onSuccess { list -> recentEdits = list }
                 .onFailure { _uiEvents.tryEmit(WorkspaceUiEvent.Error(errorMessage(it))) }
         }
     }
@@ -269,7 +275,7 @@ class SujianAppViewModel(
         viewModelScope.launch {
             val result =
                 withContext(Dispatchers.IO) {
-                    runCatching { projectUseCase?.createProject(title) }
+                    runCatching { requireProjectUseCase().createProject(title) }
                 }
             result.onFailure { _uiEvents.tryEmit(WorkspaceUiEvent.Error(errorMessage(it))) }
             refreshProjects()
@@ -280,7 +286,7 @@ class SujianAppViewModel(
         viewModelScope.launch {
             val result =
                 withContext(Dispatchers.IO) {
-                    runCatching { projectUseCase?.deleteProject(projectId) }
+                    runCatching { requireProjectUseCase().deleteProject(projectId) }
                 }
             result.onFailure { _uiEvents.tryEmit(WorkspaceUiEvent.Error(errorMessage(it))) }
             refreshProjects()
@@ -294,7 +300,7 @@ class SujianAppViewModel(
         viewModelScope.launch {
             val result =
                 withContext(Dispatchers.IO) {
-                    runCatching { projectUseCase?.renameProject(projectId, newTitle) }
+                    runCatching { requireProjectUseCase().renameProject(projectId, newTitle) }
                 }
             result.onFailure { _uiEvents.tryEmit(WorkspaceUiEvent.Error(errorMessage(it))) }
             refreshProjects()

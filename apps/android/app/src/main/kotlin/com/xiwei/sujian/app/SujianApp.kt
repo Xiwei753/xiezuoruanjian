@@ -122,12 +122,12 @@ private fun SujianAppInitialization(
     vm: SujianAppViewModel,
     context: android.content.Context,
 ) {
-    LaunchedEffect(Unit) {
+    // #614 评论二：单条 LaunchedEffect 链保证 initialize 先于 repeatOnLifecycle refresh，
+    // 避免两个独立 LaunchedEffect 无顺序保证、refresh 可能在 initialize 前执行。
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner, deps, vm) {
         val projectUC = ProjectUseCase(deps.projectRepository, deps.recentEditsRepository)
         vm.initialize(deps.projectRepository, projectUC, deps.settingsRepository, context)
-    }
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             deps.syncStatusRepository.refreshState(vm.currentProjectId)
             vm.refreshProjects()
