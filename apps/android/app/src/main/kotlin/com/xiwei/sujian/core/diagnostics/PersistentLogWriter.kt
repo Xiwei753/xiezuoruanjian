@@ -190,7 +190,14 @@ internal object PersistentLogWriter {
                 commands = queue.toList()
                 queue.clear()
             }
-            processCommands(commands)
+            try {
+                processCommands(commands)
+            } catch (_: Throwable) {
+                // 最终防线：writeBatch 已内层捕获，但命令处理中仍可能出现不可控
+                // Error（如 OOM、SecurityException 等）。此时丢弃本批命令并继续
+                // 循环，writer 线程绝不退出——否则持久日志永久停写、后续
+                // flushBlocking/clearLogs 只能等超时，诊断系统自身瘫痪。
+            }
         }
     }
 
