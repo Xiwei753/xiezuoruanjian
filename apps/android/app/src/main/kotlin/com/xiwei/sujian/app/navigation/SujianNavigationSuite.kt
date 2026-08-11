@@ -3,6 +3,8 @@ package com.xiwei.sujian.app.navigation
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -48,14 +50,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
-import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.scene.Scene
 import androidx.navigation3.ui.NavDisplay
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.SujianAppState
+import com.xiwei.sujian.app.WorkspaceUiEvent
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.app.presentation.AndroidChromePolicy
@@ -138,15 +139,15 @@ private data class SujianTopBarEnv(
     val syncState: SyncIndicatorState,
     val coroutineScope: CoroutineScope,
     val deps: SujianAppDependencies,
-    val backStack: NavBackStack<NavKey>,
+    val topLevelBackStack: SujianTopLevelBackStack,
 )
 
-private fun rememberInitialNavStack(initialDestination: String?): List<SujianRoute> =
+private fun rememberInitialNavStack(initialDestination: String?): Pair<SujianDestination, List<SujianRoute>> =
     when (initialDestination) {
-        "settings" -> listOf(SujianRoute.Works, SujianRoute.Settings)
-        "starmap" -> listOf(SujianRoute.Works, SujianRoute.StarMap)
-        "stats" -> listOf(SujianRoute.Works, SujianRoute.Stats)
-        else -> listOf(SujianRoute.Works)
+        "settings" -> SujianDestination.Works to listOf(SujianRoute.Works, SujianRoute.Settings)
+        "starmap" -> SujianDestination.StarMap to listOf(SujianRoute.StarMap)
+        "stats" -> SujianDestination.Stats to listOf(SujianRoute.Stats)
+        else -> SujianDestination.Works to listOf(SujianRoute.Works)
     }
 
 @Composable
@@ -179,7 +180,7 @@ private fun rememberSujianTopBarNavigation(
     val onNavigationClick: (() -> Unit)? =
         when (currentRoute) {
             is SujianRoute.Settings -> {
-                { env.backStack.removeLastOrNull() }
+                { env.topLevelBackStack.removeLastOrNull() }
             }
             is SujianRoute.Works -> {
                 if (workspaceNavState.canNavigateBack) {
@@ -214,7 +215,7 @@ private fun rememberSujianTopBarActions(
                 when (action) {
                     SujianChromeAction.Settings ->
                         SujianIconButton(
-                            onClick = { env.backStack.add(SujianRoute.Settings) },
+                            onClick = { env.topLevelBackStack.add(SujianRoute.Settings) },
                             icon = SujianIcons.Settings,
                             contentDescription = stringResource(id = R.string.action_settings),
                             semanticId = SujianSemanticIds.NavigationSettings,
@@ -260,18 +261,15 @@ private fun rememberSujianManualSyncOnClick(env: SujianTopBarEnv): () -> Unit =
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 private fun SujianNavDisplayContent(
-    backStack: NavBackStack<NavKey>,
+    topLevelBackStack: SujianTopLevelBackStack,
     appState: SujianAppState,
     workspaceNavState: ProjectNavigationState,
     workspaceActions: AndroidWorkspaceActionSpec,
 ) {
     NavDisplay(
-        backStack = backStack,
+        backStack = topLevelBackStack.backStack,
         onBack = {
-            val handled = backStack.size > 1
-            if (handled) {
-                backStack.removeLastOrNull()
-            }
+            val handled = topLevelBackStack.removeLastOrNull()
             com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navBack(handled)
             handled
         },
@@ -281,21 +279,30 @@ private fun SujianNavDisplayContent(
         entryProvider = { key: NavKey ->
             when (key) {
                 is SujianRoute ->
-                    NavEntry(key) { route ->
-                        when (route) {
-                            is SujianRoute.Works ->
+                    when (key) {
+                        is SujianRoute.Works ->
+                            NavEntry(key, metadata = noPageTransitionMetadata) { route ->
                                 ProjectWorkspaceScreen(
                                     appState = appState,
                                     workspaceNavState = workspaceNavState,
                                     workspaceActions = workspaceActions,
                                 )
-                            is SujianRoute.StarMap ->
+                            }
+                        is SujianRoute.StarMap ->
+                            NavEntry(key, metadata = noPageTransitionMetadata) { route ->
                                 StarMapPlaceholderScreen(
                                     modifier = Modifier.testTag(SujianSemanticIds.StarMapScreen),
                                 )
-                            is SujianRoute.Stats -> StatsScreen()
-                            is SujianRoute.Settings -> SettingsRoute()
-                        }
+                            }
+                        is SujianRoute.Stats ->
+                            NavEntry(key, metadata = noPageTransitionMetadata) { route ->
+                                StatsScreen()
+                            }
+                        // Settings 保留全局 fade，不附加无动画 metadata
+                        is SujianRoute.Settings ->
+                            NavEntry(key) { route ->
+                                SettingsRoute()
+                            }
                     }
                 else -> NavEntry(key) {}
             }
@@ -573,12 +580,15 @@ fun SujianNavigationSuite(
     foldingFeatures: List<AospFoldFeatureInfo> = emptyList(),
 ) {
     val layoutSpec: AndroidLayoutSpec = rememberAndroidLayoutSpec(foldingFeatures)
-    val initialStack = rememberInitialNavStack(initialDestination)
-    val backStack = rememberNavBackStack(*initialStack.toTypedArray())
+    val (initialTopLevel, initialStackRoutes) = rememberInitialNavStack(initialDestination)
+    val topLevelBackStack = rememberSujianTopLevelBackStack(initialTopLevel, initialStackRoutes)
+    val backStack = topLevelBackStack.backStack
     val currentRoute = backStack.lastOrNull() as? SujianRoute ?: SujianRoute.Works
     val currentTopDestination = currentRoute.toTopDestination()
     val snackbarHostState = remember { SnackbarHostState() }
-    val topLevelBackStack = rememberSujianTopLevelBackStack()
+
+    // #614：收集 ViewModel 抛出的 UI 事件，错误走 Snackbar 展示。
+    SujianUiEventEffect(appState, snackbarHostState)
 
     val context = LocalContext.current
     val deps = LocalSujianAppDependencies.current
@@ -602,17 +612,13 @@ fun SujianNavigationSuite(
     SujianWorkspaceBackEffects(currentRoute, workspaceNavState, coroutineScope)
     SujianRouteEffects(currentRoute, currentTopDestination)
 
-    val env = SujianTopBarEnv(syncState, coroutineScope, deps, backStack)
+    val env = SujianTopBarEnv(syncState, coroutineScope, deps, topLevelBackStack)
     val topBarInfo = rememberSujianTopBarInfo(currentRoute, appState, chrome, env, workspaceNavState)
 
+    // 底栏点击只调 addTopLevel；同一已选中项由 addTopLevel 内部早退。
+    // nav.top_level_switch 诊断由目的地变化的 LaunchedEffect 异步记录。
     val onTopLevelSelected: (SujianDestination) -> Unit = { destination ->
-        // 先完成 top-level 状态切换；nav.top_level_switch 诊断由目的地变化的
-        // LaunchedEffect 异步记录，交互回调本身只改导航状态。
-        topLevelBackStack.saveCurrent(backStack.toList())
         topLevelBackStack.addTopLevel(destination)
-        val restored = topLevelBackStack.currentBackStack()
-        backStack.clear()
-        restored.forEach { backStack.add(it) }
     }
 
     SujianJankInteractionClearEffect(currentTopDestination)
@@ -620,7 +626,7 @@ fun SujianNavigationSuite(
 
     val navDisplayContent: @Composable () -> Unit = {
         SujianNavDisplayContent(
-            backStack,
+            topLevelBackStack,
             appState,
             workspaceNavState,
             workspaceActions,
@@ -663,6 +669,21 @@ fun SujianNavigationSuite(
     }
 }
 
+/** #614：收集 ViewModel 抛出的 UI 事件，错误走 Snackbar 展示。 */
+@Composable
+private fun SujianUiEventEffect(
+    appState: SujianAppState,
+    snackbarHostState: SnackbarHostState,
+) {
+    LaunchedEffect(appState) {
+        appState.uiEvents.collect { event ->
+            when (event) {
+                is WorkspaceUiEvent.Error -> snackbarHostState.showSnackbar(event.message)
+            }
+        }
+    }
+}
+
 private fun Modifier.navItemModifier(destination: SujianDestination): Modifier {
     val semanticTag =
         when (destination) {
@@ -690,7 +711,8 @@ internal fun resolveTopLevelSwitchInteraction(
         "top_level_switch"
     }
 
-/** Issue #612 四：用 PerformanceMetricsState 写 screen/interaction 上下文；切换动画结束后移除 interaction。 */
+/** Issue #612 四 / #614：用 PerformanceMetricsState 写 screen/interaction 上下文。
+ * 一级 tab 无整页动画，interaction 只标记当前切换帧（putSingleFrameState），不再 delay+remove。 */
 @Composable
 private fun SujianJankInteractionClearEffect(currentTopDestination: SujianDestination) {
     val view = androidx.compose.ui.platform.LocalView.current
@@ -703,9 +725,8 @@ private fun SujianJankInteractionClearEffect(currentTopDestination: SujianDestin
             resolveTopLevelSwitchInteraction(previousTopDestination, currentTopDestination)
         previousTopDestination = currentTopDestination
         if (interaction == null) return@LaunchedEffect
-        state?.putState("interaction", interaction)
-        kotlinx.coroutines.delay(350)
-        state?.removeState("interaction")
+        // 一级 tab 无整页动画，只标记当前切换帧
+        state?.putSingleFrameState("interaction", interaction)
     }
 }
 
@@ -746,6 +767,15 @@ internal fun syncIndicatorSummary(syncState: SyncIndicatorState): String =
         SyncIndicatorState.Failed -> "failed"
         SyncIndicatorState.Unconfigured -> "unconfigured"
     }
+
+// #614：Works/StarMap/Stats 一级入口无整页动画 — NavEntry metadata 覆盖全局 transitionSpec。
+private val noPageTransitionMetadata: Map<String, Any> =
+    androidx.navigation3.ui.NavDisplay.transitionSpec {
+        EnterTransition.None togetherWith ExitTransition.None
+    } +
+        androidx.navigation3.ui.NavDisplay.popTransitionSpec {
+            EnterTransition.None togetherWith ExitTransition.None
+        }
 
 private val navForwardTransition: AnimatedContentTransitionScope<Scene<NavKey>>.() -> ContentTransform = {
     fadeIn(animationSpec = tween(180)) togetherWith fadeOut(animationSpec = tween(150))

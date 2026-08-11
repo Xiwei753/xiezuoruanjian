@@ -9,11 +9,22 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
-import com.xiwei.sujian.feature.project.domain.ProjectUseCase
+import com.xiwei.sujian.feature.project.domain.ProjectUseCasePort
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * #614：app 层 UI 事件流。ViewModel 抛出，[SujianNavigationSuite] 收集并展示。
+ * 放在 app 层（不进 core/designsystem），避免 feature 各 data 层依赖 Compose。
+ */
+sealed interface WorkspaceUiEvent {
+    data class Error(val message: String) : WorkspaceUiEvent
+}
 
 interface WorkspaceAppState {
     val projects: List<com.xiwei.sujian.feature.project.data.model.Project>
@@ -23,6 +34,9 @@ interface WorkspaceAppState {
     val currentVolumeId: String?
     val currentChapterId: String?
     val currentChapterTitle: String
+
+    /** #614：首次加载失败时的错误文本，非 null 时列表显示错误态。 */
+    val loadError: String?
 
     fun selectProject(
         projectId: String,
@@ -87,13 +101,29 @@ class SujianAppViewModel(
     var isLoading by androidx.compose.runtime.mutableStateOf(false)
         private set
 
-    private var projectUseCase: ProjectUseCase? = null
+    /** #614：UI 事件流 — 错误等不吞异常，发事件由 Snackbar 展示。 */
+    private val _uiEvents = MutableSharedFlow<WorkspaceUiEvent>(extraBufferCapacity = 16)
+    val uiEvents: SharedFlow<WorkspaceUiEvent> = _uiEvents.asSharedFlow()
+
+    /** #614：首次加载失败时的错误文本；后续刷新失败保留上一份 projects，不覆盖。 */
+    var loadError by androidx.compose.runtime.mutableStateOf<String?>(null)
+        private set
+
+    private var projectUseCase: ProjectUseCasePort? = null
     private var settingsRepository: SettingsRepository? = null
     private var appContext: android.content.Context? = null
 
+    /**
+     * #614：仅用于单元测试注入 fake [ProjectUseCasePort]，绕过 [initialize] 的真实 Repository 构造。
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun setProjectUseCaseForTesting(useCase: ProjectUseCasePort?) {
+        projectUseCase = useCase
+    }
+
     fun initialize(
         projectRepo: com.xiwei.sujian.feature.project.data.ProjectRepository,
-        projectUC: ProjectUseCase,
+        projectUC: ProjectUseCasePort,
         settingsRepo: SettingsRepository,
         context: android.content.Context,
     ) {
@@ -207,50 +237,52 @@ class SujianAppViewModel(
 
     fun refreshProjects() {
         viewModelScope.launch {
-            projects =
+            val result =
                 withContext(Dispatchers.IO) {
-                    try {
-                        projectUseCase?.getProjects() ?: emptyList()
-                    } catch (_: Exception) {
-                        emptyList()
-                    }
+                    runCatching { projectUseCase?.getProjects() }
                 }
+            result.onSuccess { list ->
+                projects = list ?: emptyList()
+                loadError = null
+            }.onFailure { e ->
+                // #614：保留上一份 projects，不覆盖为空；仅首次加载失败设 loadError。
+                if (projects.isEmpty()) {
+                    loadError = errorMessage(e)
+                }
+                _uiEvents.tryEmit(WorkspaceUiEvent.Error(errorMessage(e)))
+            }
         }
     }
 
     fun refreshRecentEdits() {
         viewModelScope.launch {
-            recentEdits =
+            val result =
                 withContext(Dispatchers.IO) {
-                    try {
-                        projectUseCase?.getRecentEdits(5) ?: emptyList()
-                    } catch (_: Exception) {
-                        emptyList()
-                    }
+                    runCatching { projectUseCase?.getRecentEdits(5) }
                 }
+            result.onSuccess { list -> recentEdits = list ?: emptyList() }
+                .onFailure { _uiEvents.tryEmit(WorkspaceUiEvent.Error(errorMessage(it))) }
         }
     }
 
     fun createProject(title: String) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                try {
-                    projectUseCase?.createProject(title)
-                } catch (_: Exception) {
+            val result =
+                withContext(Dispatchers.IO) {
+                    runCatching { projectUseCase?.createProject(title) }
                 }
-            }
+            result.onFailure { _uiEvents.tryEmit(WorkspaceUiEvent.Error(errorMessage(it))) }
             refreshProjects()
         }
     }
 
     fun deleteProject(projectId: String) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                try {
-                    projectUseCase?.deleteProject(projectId)
-                } catch (_: Exception) {
+            val result =
+                withContext(Dispatchers.IO) {
+                    runCatching { projectUseCase?.deleteProject(projectId) }
                 }
-            }
+            result.onFailure { _uiEvents.tryEmit(WorkspaceUiEvent.Error(errorMessage(it))) }
             refreshProjects()
         }
     }
@@ -260,15 +292,22 @@ class SujianAppViewModel(
         newTitle: String,
     ) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                try {
-                    projectUseCase?.renameProject(projectId, newTitle)
-                } catch (_: Exception) {
+            val result =
+                withContext(Dispatchers.IO) {
+                    runCatching { projectUseCase?.renameProject(projectId, newTitle) }
                 }
-            }
+            result.onFailure { _uiEvents.tryEmit(WorkspaceUiEvent.Error(errorMessage(it))) }
             refreshProjects()
         }
     }
+
+    /** #614：异常 → 本地化错误文本。RepositoryException.message 已是 context.getString 本地化串。 */
+    private fun errorMessage(e: Throwable): String =
+        when (e) {
+            is com.xiwei.sujian.core.interop.common.RepositoryException ->
+                e.message ?: (appContext?.getString(com.xiwei.sujian.R.string.error_internal) ?: "操作失败")
+            else -> appContext?.getString(com.xiwei.sujian.R.string.error_internal) ?: "操作失败"
+        }
 }
 
 @Stable
@@ -282,7 +321,9 @@ class SujianAppState(
     override val currentVolumeId: String? get() = viewModel.currentVolumeId
     override val currentChapterId: String? get() = viewModel.currentChapterId
     override val currentChapterTitle: String get() = viewModel.currentChapterTitle
+    override val loadError: String? get() = viewModel.loadError
     val isLoading: Boolean get() = viewModel.isLoading
+    val uiEvents: SharedFlow<WorkspaceUiEvent> get() = viewModel.uiEvents
 
     override fun selectProject(
         projectId: String,

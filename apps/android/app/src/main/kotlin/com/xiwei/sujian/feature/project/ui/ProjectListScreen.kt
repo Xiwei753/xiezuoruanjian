@@ -38,6 +38,7 @@ import com.xiwei.sujian.core.designsystem.component.SujianTextField
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
+import com.xiwei.sujian.core.designsystem.theme.SujianDimensions
 import com.xiwei.sujian.feature.project.data.model.Project
 
 @Composable
@@ -61,15 +62,12 @@ internal fun ProjectListContent(
 
     Box(modifier = modifier.fillMaxSize()) {
         if (appState.projects.isEmpty()) {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(dims.space32),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(stringResource(id = R.string.project_list_empty), style = MaterialTheme.typography.titleMedium)
-                Spacer(modifier = Modifier.height(dims.space8))
-                Text(stringResource(id = R.string.project_list_empty_hint), style = MaterialTheme.typography.bodyMedium)
-            }
+            // #614：首次加载失败显示错误态（loadError 文本 + 同样 hint）；否则显示原"暂无作品"空状态。
+            ProjectListEmptyState(
+                loadError = appState.loadError,
+                dims = dims,
+                modifier = Modifier.fillMaxSize(),
+            )
         } else {
             LazyColumn(
                 contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
@@ -186,6 +184,31 @@ internal fun ProjectListContent(
             },
             onDismiss = { confirmDeleteProject = null },
         )
+    }
+}
+
+/**
+ * #614：作品列表空状态。loadError 非空时显示错误文本，否则显示"暂无作品"。
+ * 提取为独立 Composable 以控制 [ProjectListContent] 的认知复杂度。
+ */
+@Composable
+private fun ProjectListEmptyState(
+    loadError: String?,
+    dims: SujianDimensions,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.padding(dims.space32),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (loadError != null) {
+            Text(loadError, style = MaterialTheme.typography.titleMedium)
+        } else {
+            Text(stringResource(id = R.string.project_list_empty), style = MaterialTheme.typography.titleMedium)
+        }
+        Spacer(modifier = Modifier.height(dims.space8))
+        Text(stringResource(id = R.string.project_list_empty_hint), style = MaterialTheme.typography.bodyMedium)
     }
 }
 

@@ -1,125 +1,123 @@
 package com.xiwei.sujian.app.navigation
 
-import androidx.navigation3.runtime.NavKey
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * #611 一：SujianTopLevelBackStack 多栈管理正反测试。
+ * #614 评论一：SujianTopLevelBackStack 持有并暴露唯一 [androidx.navigation3.runtime.NavBackStack]。
  *
- * 每个 top-level destination（Works/StarMap/Stats）持有独立 back stack；
- * 切 tab 只切 currentTopLevel，不做整页 push/pop 横移动画。
- *
- * 正测试验证多栈隔离与恢复；反测试验证切相同 tab 与切 tab 不破坏栈内容。
+ * 验证真正交给 NavDisplay 的栈（[SujianTopLevelBackStack.backStack]），
+ * 不再验证旁边 MutableMap。关键：底栏点击只调 addTopLevel，由本类在同一份
+ * backStack 上做内容切换，调用方不再 clear/rebuild。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SujianTopLevelBackStackTest {
     @Test
-    fun init_eachDestinationHasOwnBackStack() {
-        val backStack = SujianTopLevelBackStack(initialTopLevel = SujianDestination.Works)
-
-        // 初始 currentBackStack 返回 Works 根 route
-        assertEquals(listOf<SujianRoute>(SujianRoute.Works), backStack.currentBackStack())
-
-        // 切到 StarMap 后返回 StarMap 根 route（独立栈，不是 Works 栈）
-        backStack.addTopLevel(SujianDestination.StarMap)
-        assertEquals(listOf<SujianRoute>(SujianRoute.StarMap), backStack.currentBackStack())
-
-        // 切到 Stats 后返回 Stats 根 route
-        backStack.addTopLevel(SujianDestination.Stats)
-        assertEquals(listOf<SujianRoute>(SujianRoute.Stats), backStack.currentBackStack())
+    fun init_backStackContentEqualsInitialStack() {
+        val stack =
+            SujianTopLevelBackStack(
+                initialTopLevel = SujianDestination.Works,
+                initialStack = listOf(SujianRoute.Works, SujianRoute.Settings),
+            )
+        assertEquals(
+            listOf<SujianRoute>(SujianRoute.Works, SujianRoute.Settings),
+            stack.backStack.toList(),
+        )
     }
 
     @Test
-    fun addTopLevel_switchesCurrentDestination() {
-        val backStack = SujianTopLevelBackStack(initialTopLevel = SujianDestination.Works)
+    fun addTopLevel_switchesBackStackToTargetRootRoute() {
+        val stack = SujianTopLevelBackStack(initialTopLevel = SujianDestination.Works)
 
-        backStack.addTopLevel(SujianDestination.StarMap)
+        stack.addTopLevel(SujianDestination.StarMap)
+        assertEquals(listOf<SujianRoute>(SujianRoute.StarMap), stack.backStack.toList())
 
-        assertEquals(SujianDestination.StarMap, backStack.currentTopLevel)
+        stack.addTopLevel(SujianDestination.Stats)
+        assertEquals(listOf<SujianRoute>(SujianRoute.Stats), stack.backStack.toList())
     }
 
     @Test
-    fun addTopLevel_sameDestination_isNoOp() {
-        val backStack = SujianTopLevelBackStack(initialTopLevel = SujianDestination.Works)
-        // 给 Works 栈写入非根内容，验证切相同 tab 既不改 currentTopLevel 也不清栈
-        val worksStack: List<NavKey> = listOf(SujianRoute.Works, SujianRoute.Settings)
-        backStack.saveCurrent(worksStack)
+    fun addTopLevel_sameDestination_isNoOp_referenceAndContentUnchanged() {
+        val stack = SujianTopLevelBackStack(initialTopLevel = SujianDestination.Works)
+        val refBefore = stack.backStack
 
-        backStack.addTopLevel(SujianDestination.Works)
+        stack.addTopLevel(SujianDestination.Works)
 
-        assertEquals(SujianDestination.Works, backStack.currentTopLevel)
-        assertEquals(worksStack, backStack.currentBackStack())
+        assertSame("backStack 引用必须不变", refBefore, stack.backStack)
+        assertEquals(listOf<SujianRoute>(SujianRoute.Works), stack.backStack.toList())
     }
 
     @Test
-    fun saveCurrent_andRestore_preservesStack() {
-        val backStack = SujianTopLevelBackStack(initialTopLevel = SujianDestination.Works)
-        val worksStack: List<NavKey> = listOf(SujianRoute.Works, SujianRoute.Settings)
-        backStack.saveCurrent(worksStack)
+    fun addTopLevel_preservesStackAcrossSwitch_pushSettingsThenSwitchAndBack() {
+        val stack = SujianTopLevelBackStack(initialTopLevel = SujianDestination.Works)
+        stack.add(SujianRoute.Settings) // [Works, Settings]
 
-        // 切到其他 tab 再切回，Works 栈必须原样恢复
-        backStack.addTopLevel(SujianDestination.StarMap)
-        backStack.addTopLevel(SujianDestination.Works)
+        stack.addTopLevel(SujianDestination.StarMap)
+        stack.addTopLevel(SujianDestination.Works)
 
-        assertEquals(worksStack, backStack.currentBackStack())
+        assertEquals(
+            "切走再切回必须恢复 [Works, Settings]",
+            listOf<SujianRoute>(SujianRoute.Works, SujianRoute.Settings),
+            stack.backStack.toList(),
+        )
     }
 
     @Test
-    fun saveCurrent_isolatedBetweenTabs() {
-        val backStack = SujianTopLevelBackStack(initialTopLevel = SujianDestination.Works)
-        val worksStack: List<NavKey> = listOf(SujianRoute.Works, SujianRoute.Settings)
-        backStack.saveCurrent(worksStack)
+    fun addTopLevel_doesNotFlattenStack_sizeAndFirstElementStable() {
+        val stack = SujianTopLevelBackStack(initialTopLevel = SujianDestination.Works)
+        stack.add(SujianRoute.Settings) // [Works, Settings]
+        val sizeBeforeSwitch = stack.backStack.size
 
-        backStack.addTopLevel(SujianDestination.StarMap)
-        val starMapStack: List<NavKey> = listOf(SujianRoute.StarMap)
-        backStack.saveCurrent(starMapStack)
+        stack.addTopLevel(SujianDestination.StarMap)
+        stack.addTopLevel(SujianDestination.Works)
 
-        backStack.addTopLevel(SujianDestination.Stats)
-        val statsStack: List<NavKey> = listOf(SujianRoute.Stats)
-        backStack.saveCurrent(statsStack)
-
-        // 三个 tab 栈互不影响
-        backStack.addTopLevel(SujianDestination.Works)
-        assertEquals(worksStack, backStack.currentBackStack())
-        backStack.addTopLevel(SujianDestination.StarMap)
-        assertEquals(starMapStack, backStack.currentBackStack())
-        backStack.addTopLevel(SujianDestination.Stats)
-        assertEquals(statsStack, backStack.currentBackStack())
-    }
-
-    @Test
-    fun resetCurrentToRoot_resetsToSingleRoute() {
-        val backStack = SujianTopLevelBackStack(initialTopLevel = SujianDestination.Works)
-        backStack.saveCurrent(listOf(SujianRoute.Works, SujianRoute.Settings))
-
-        backStack.resetCurrentToRoot()
-
-        assertEquals(listOf<SujianRoute>(SujianRoute.Works), backStack.currentBackStack())
-    }
-
-    @Test
-    fun addTopLevel_doesNotDoPagePushPopAnimation() {
-        val backStack = SujianTopLevelBackStack(initialTopLevel = SujianDestination.Works)
-        // Works 栈有 2 个 entry；切 tab 不应扁平成 1 个 entry（即不做 push/pop）
-        val worksStack: List<NavKey> = listOf(SujianRoute.Works, SujianRoute.Settings)
-        backStack.saveCurrent(worksStack)
-        val sizeBeforeSwitch = backStack.currentBackStack().size
-
-        backStack.addTopLevel(SujianDestination.StarMap)
-        backStack.addTopLevel(SujianDestination.Works)
-
-        val restored = backStack.currentBackStack()
-        assertEquals("栈内容必须原样保留，不被 push/pop 扁平切换", worksStack, restored)
-        assertEquals("栈大小必须保留，不得被 while/remove/add 改写", sizeBeforeSwitch, restored.size)
+        val restored = stack.backStack.toList()
+        assertEquals("栈大小必须保留，不得被 push/pop 扁平化", sizeBeforeSwitch, restored.size)
+        assertEquals(2, restored.size)
         assertSame("根 route 引用必须保持稳定", SujianRoute.Works, restored.first())
-        // 反向断言：栈确实是非平凡多元素，否则本测试无法证明“未扁平化”
-        assertNotEquals(1, restored.size)
+    }
+
+    @Test
+    fun backStack_referenceStableAcrossTopLevelSwitches() {
+        val stack = SujianTopLevelBackStack(initialTopLevel = SujianDestination.Works)
+        val ref = stack.backStack
+
+        stack.addTopLevel(SujianDestination.StarMap)
+        assertSame(ref, stack.backStack)
+        stack.addTopLevel(SujianDestination.Works)
+        assertSame(ref, stack.backStack)
+        stack.addTopLevel(SujianDestination.Stats)
+        assertSame(ref, stack.backStack)
+    }
+
+    @Test
+    fun removeLastOrNull_popsWhenSizeGreaterThanOne_returnsFalseWhenSingle() {
+        val stack = SujianTopLevelBackStack(initialTopLevel = SujianDestination.Works)
+        stack.add(SujianRoute.Settings) // [Works, Settings]
+
+        val popped = stack.removeLastOrNull()
+        assertTrue(popped)
+        assertEquals(listOf<SujianRoute>(SujianRoute.Works), stack.backStack.toList())
+
+        val poppedAgain = stack.removeLastOrNull()
+        assertFalse("size==1 时不再弹出", poppedAgain)
+        assertEquals(listOf<SujianRoute>(SujianRoute.Works), stack.backStack.toList())
+    }
+
+    @Test
+    fun resetCurrentToRoot_resetsBackStackToSingleRoot() {
+        val stack = SujianTopLevelBackStack(initialTopLevel = SujianDestination.Works)
+        stack.add(SujianRoute.Settings) // [Works, Settings]
+
+        stack.resetCurrentToRoot()
+
+        assertEquals(listOf<SujianRoute>(SujianRoute.Works), stack.backStack.toList())
     }
 }

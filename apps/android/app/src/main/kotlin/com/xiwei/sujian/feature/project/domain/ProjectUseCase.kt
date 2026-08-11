@@ -7,43 +7,68 @@ import com.xiwei.sujian.feature.project.data.model.RecentEdit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+/**
+ * #614：ProjectUseCase 对外契约。app 层 [com.xiwei.sujian.app.SujianAppViewModel] 只依赖此端口，
+ * 便于在 Robolectric 单元测试里注入 fake（无需构造真实 Repository/Bridge）。
+ */
+interface ProjectUseCasePort {
+    suspend fun getProjects(): List<Project>
+
+    suspend fun getRecentEdits(limit: Int): List<RecentEdit>
+
+    suspend fun createProject(title: String): Project
+
+    suspend fun renameProject(
+        projectId: String,
+        newTitle: String,
+    )
+
+    suspend fun deleteProject(projectId: String)
+
+    suspend fun reorderProjects(orderedProjectIds: List<String>)
+
+    suspend fun getProjectTitle(projectId: String): String
+
+    suspend fun getChapterTitle(chapterId: String): String
+}
+
 class ProjectUseCase(
     private val repository: ProjectRepository,
     private val recentEditsRepository: RecentEditsRepository,
-) {
-    suspend fun getProjects(): List<Project> =
+) : ProjectUseCasePort {
+    override suspend fun getProjects(): List<Project> =
         withContext(Dispatchers.IO) {
             repository.getProjects()
         }
 
-    suspend fun getRecentEdits(limit: Int): List<RecentEdit> =
+    override suspend fun getRecentEdits(limit: Int): List<RecentEdit> =
         withContext(Dispatchers.IO) {
             recentEditsRepository.getRecentEdits().take(limit)
         }
 
-    suspend fun createProject(title: String) =
+    override suspend fun createProject(title: String) =
         withContext(Dispatchers.IO) {
             repository.createProject(title)
         }
 
-    suspend fun renameProject(
+    override suspend fun renameProject(
         projectId: String,
         newTitle: String,
     ) = withContext(Dispatchers.IO) {
         repository.renameProject(projectId, newTitle)
     }
 
-    suspend fun deleteProject(projectId: String) =
+    override suspend fun deleteProject(projectId: String) =
         withContext(Dispatchers.IO) {
             repository.deleteProject(projectId)
         }
 
-    suspend fun reorderProjects(orderedProjectIds: List<String>) =
+    override suspend fun reorderProjects(orderedProjectIds: List<String>) =
         withContext(Dispatchers.IO) {
             repository.reorderProjects(orderedProjectIds)
         }
 
-    suspend fun getProjectTitle(projectId: String): String =
+    override suspend fun getProjectTitle(projectId: String): String =
         withContext(Dispatchers.IO) {
             try {
                 repository.getProjects().find { it.id == projectId }?.title ?: ""
@@ -52,7 +77,7 @@ class ProjectUseCase(
             }
         }
 
-    suspend fun getChapterTitle(chapterId: String): String =
+    override suspend fun getChapterTitle(chapterId: String): String =
         withContext(Dispatchers.IO) {
             try {
                 val projects = repository.getProjects()
