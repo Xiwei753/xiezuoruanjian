@@ -54,11 +54,13 @@ internal object ProcessStateSummary {
         return "screen=$safeScreen;editor=$safeEditor;sync=$safeSync"
     }
 
-    /** 安全摘要字符白名单（字母/数字由 isLetterOrDigit 覆盖，此处只列符号）。 */
-    private val SAFE_SUMMARY_SYMBOLS = setOf('_', '-', '=', ';')
+    /** 安全摘要字符白名单（字母/数字由 isLetterOrDigit 覆盖，此处只列符号）。
+     *  结构分隔符 `=` / `;` 不在 value 白名单内，防止 value 注入破坏
+     *  `screen=…;editor=…;sync=…` 的解析语义（#614）。 */
+    private val SAFE_SUMMARY_SYMBOLS = setOf('_', '-')
 
     /**
-     * 轻量摘要值脱敏 — 只保留安全摘要字符（字母、数字、下划线、连字符、等号、分号），
+     * 轻量摘要值脱敏 — 只保留安全摘要字符（字母、数字、下划线、连字符），
      * 其余替换为 `_`。用于进程状态摘要的 screen/editor/sync 枚举映射值，
      * 不走 [DiagnosticsLogger.redact] 的完整 Regex（这些值是应用内部枚举，不含 token/正文）。
      */

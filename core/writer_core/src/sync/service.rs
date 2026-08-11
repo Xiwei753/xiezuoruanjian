@@ -313,6 +313,13 @@ fn handle_merge_conflict(
     result.status = SyncStatus::Conflict;
     result.error = Some("Sync Conflict: automatic merge failed".to_string());
 
+    // #614：直接进入 libgit2 的入口先确保运行时已按平台配置。
+    if let Err(e) = crate::storage::git_runtime::ensure_initialized() {
+        result.status = classify_error(&e);
+        result.error = Some(e.to_string());
+        return PullOutcome::Return(result);
+    }
+
     let repo = match git2::Repository::open(sync_root) {
         Ok(r) => r,
         Err(e) => {
@@ -483,6 +490,11 @@ impl SyncService {
         secrets: &SyncSecrets,
         backend: &dyn GitBackend,
     ) -> crate::Result<SyncResult> {
+        // #614：所有直接进入 libgit2 的入口先确保运行时已按平台配置（Android 关闭
+        // owner validation）。OnceLock 幂等，后续 backend 调用与本函数内的
+        // git2::Repository::open 都在此之后。
+        crate::storage::git_runtime::ensure_initialized()?;
+
         let mut result = SyncResult::success();
         result.status = SyncStatus::Idle;
 

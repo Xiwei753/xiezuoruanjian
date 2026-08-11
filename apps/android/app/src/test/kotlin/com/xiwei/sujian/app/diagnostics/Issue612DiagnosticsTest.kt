@@ -115,7 +115,7 @@ class ProcessStateSummaryTest {
         assertEquals("0", ProcessStateSummary.sanitizeSummaryValue("0"))
         assertEquals("idle", ProcessStateSummary.sanitizeSummaryValue("idle"))
         assertEquals("syncing", ProcessStateSummary.sanitizeSummaryValue("syncing"))
-        assertEquals("a-b_c=d;e", ProcessStateSummary.sanitizeSummaryValue("a-b_c=d;e"))
+        assertEquals("a-b_c_d_e", ProcessStateSummary.sanitizeSummaryValue("a-b_c=d;e"))
     }
 
     /** 含空格的值替换为 _，破坏 shell/SQL 注入语义。 */
@@ -135,6 +135,18 @@ class ProcessStateSummaryTest {
         assertFalse(sanitized.contains("<"))
         assertFalse(sanitized.contains(">"))
         assertFalse(sanitized.contains("\""))
+    }
+
+    /** #614: 结构分隔符 = 和 ; 在 value 中替换为 _，防止注入破坏 screen=…;editor=…;sync=… 解析语义。 */
+    @Test
+    fun sanitizeSummaryValueReplacesStructureDelimitersToPreventInjection() {
+        // '=' 是 key=value 分隔符，value 内出现会制造歧义键值对
+        assertEquals("a_b", ProcessStateSummary.sanitizeSummaryValue("a=b"))
+        // ';' 是字段分隔符，value 内出现会注入额外字段段
+        assertEquals("a_b", ProcessStateSummary.sanitizeSummaryValue("a;b"))
+        // 组合：screen 值含 "=;" 时全部替换，buildSummary 结构分隔符不受影响
+        val summary = ProcessStateSummary.buildSummary("x=y;z", "0", "idle")
+        assertEquals("screen=x_y_z;editor=0;sync=idle", summary)
     }
 
     /** buildSummary 对每个 value 单独 sanitize，含特殊字符的 value 不破坏整体格式。 */
