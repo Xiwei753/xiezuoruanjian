@@ -138,8 +138,8 @@ class SujianAppViewModel(
         appContext = context.applicationContext
         // #600：从 SavedState 恢复当前作品 id 到进程级 gate（进程重启后同步层仍能读到）。
         com.xiwei.sujian.app.state.ActiveProjectGate.setCurrentProjectId(currentProjectId)
-        refreshProjects()
-        refreshRecentEdits()
+        // #614 评论三：refresh 只由 SujianAppInitialization 的 repeatOnLifecycle(RESUMED) 驱动，
+        // 不在 initialize 里重复调用，避免启动时 refreshProjects/refreshRecentEdits 各执行两次。
     }
 
     fun selectProject(
