@@ -1,12 +1,12 @@
 package com.xiwei.sujian.feature.editor.diagnostics
 
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 
 object EditorEventRingBuffer {
     private const val MAX_EVENTS = 1000
     private val enabled = AtomicBoolean(false)
-    private val events = ConcurrentLinkedQueue<Map<String, Any?>>()
+    private val events = ArrayBlockingQueue<Map<String, Any?>>(MAX_EVENTS)
 
     private val SENSITIVE_KEYS =
         setOf(
@@ -30,9 +30,9 @@ object EditorEventRingBuffer {
         for (key in SENSITIVE_KEYS) {
             redacted.remove(key)
         }
-        events.add(redacted)
-        while (events.size > MAX_EVENTS) {
+        if (!events.offer(redacted)) {
             events.poll()
+            events.offer(redacted)
         }
     }
 

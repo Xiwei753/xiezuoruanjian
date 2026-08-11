@@ -9,6 +9,7 @@
 //! 这样可避免写入过程中断导致目标文件半写入。不同文件系统 and 挂载参数下，
 //! 目录项持久化仍取决于平台语义，本模块不宣称跨设备断电的绝对耐久性。
 
+pub mod git_runtime;
 pub mod project_git;
 pub mod transaction;
 

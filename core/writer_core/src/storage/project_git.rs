@@ -13,6 +13,7 @@ use std::path::Path;
 ///
 /// 本地仓库能力是 Core 基础依赖，不依赖 `git-https` feature。
 pub fn ensure_project_repo(project_root: &Path) -> crate::Result<()> {
+    crate::storage::git_runtime::ensure_initialized()?;
     if git2::Repository::open(project_root).is_ok() {
         return Ok(());
     }

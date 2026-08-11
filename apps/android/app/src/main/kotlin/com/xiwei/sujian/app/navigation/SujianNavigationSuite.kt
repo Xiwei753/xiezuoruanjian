@@ -83,7 +83,9 @@ import com.xiwei.sujian.feature.stats.ui.StatsScreen
 import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class SujianDestination(
     val labelResId: Int,
@@ -588,7 +590,8 @@ fun SujianNavigationSuite(
     val topBarInfo = rememberSujianTopBarInfo(currentRoute, appState, chrome, env, workspaceNavState)
 
     val onTopLevelSelected: (SujianDestination) -> Unit = { destination ->
-        recordTopLevelSwitchDiagnostics(currentTopDestination, destination)
+        // 先完成 top-level 状态切换；nav.top_level_switch 诊断由目的地变化的
+        // LaunchedEffect 异步记录，交互回调本身只改导航状态。
         topLevelBackStack.saveCurrent(backStack.toList())
         topLevelBackStack.addTopLevel(destination)
         val restored = topLevelBackStack.currentBackStack()
@@ -655,14 +658,6 @@ private fun Modifier.navItemModifier(destination: SujianDestination): Modifier {
     return this.testTag(semanticTag)
 }
 
-/** Issue #612 四/五：一级切换诊断事件（进程状态摘要由 [SujianProcessStateEffect] 统一写入）。 */
-private fun recordTopLevelSwitchDiagnostics(
-    from: SujianDestination,
-    to: SujianDestination,
-) {
-    com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navTopLevelSwitch(from.name, to.name)
-}
-
 /**
  * Issue #612 四：判断本次 top-level destination 变化是否属于“一级切换”。
  * 首次组合（[previousTopDestination] 为 null，应用启动）与原地重复选择（前后相同）
@@ -714,12 +709,14 @@ private fun SujianProcessStateEffect(
 ) {
     val context = LocalContext.current
     LaunchedEffect(currentTopDestination, appState.currentChapterId, syncState) {
-        com.xiwei.sujian.core.diagnostics.ProcessStateSummary.update(
-            context,
-            currentTopDestination.name,
-            if (appState.currentChapterId != null) "1" else "0",
-            syncIndicatorSummary(syncState),
-        )
+        withContext(Dispatchers.IO) {
+            com.xiwei.sujian.core.diagnostics.ProcessStateSummary.update(
+                context,
+                currentTopDestination.name,
+                if (appState.currentChapterId != null) "1" else "0",
+                syncIndicatorSummary(syncState),
+            )
+        }
     }
 }
 

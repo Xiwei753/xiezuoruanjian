@@ -7,6 +7,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -139,7 +140,7 @@ fun SujianIconButton(
 ) {
     val dimensions = LocalSujianDimensions.current
     val tagModifier = modifier.then(if (semanticId != null) Modifier.testTag(semanticId) else Modifier)
-    val tint = iconTint ?: Color.Unspecified
+    val tint = iconTint ?: LocalContentColor.current
     when {
         outlined -> androidx.compose.material3.OutlinedIconButton(
             onClick = onClick,

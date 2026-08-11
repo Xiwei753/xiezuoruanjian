@@ -106,12 +106,36 @@ object DiagnosticsLogger {
         )
 
     fun redact(message: String): String {
+        // 廉价前置判断：没有任何敏感字段标记时直接返回，避免结构事件每条都跑全部 Regex。
+        if (!mayContainSensitiveData(message)) return message
         var result = message
         for ((pattern, replacement) in REDACT_RULES) {
             result = result.replace(pattern, replacement)
         }
         return result
     }
+
+    /**
+     * 敏感字段名标记（大小写不敏感）— 与 REDACT_RULES 中的 key 保持一致。
+     */
+    private val SENSITIVE_MARKERS_CI =
+        listOf(
+            "token", "password", "passwd", "secret", "authorization",
+            "private_key", "ssh_private_key", "access_token", "refresh_token",
+            "Bearer", "ghp_", "gho_", "github_pat_",
+            "content", "chapter", "text", "body",
+        )
+
+    /** PEM 私钥结束标记（大小写敏感）。 */
+    private const val PEM_END_MARKER = "PRIVATE KEY-----"
+
+    /**
+     * 廉价判断消息是否可能包含需要脱敏的敏感字段。
+     * 只做子串/字符检查，不跑 Regex；结构事件（nav.destination 等）快速返回 false。
+     */
+    private fun mayContainSensitiveData(message: String): Boolean =
+        SENSITIVE_MARKERS_CI.any { message.contains(it, ignoreCase = true) } ||
+            message.contains(PEM_END_MARKER)
 
     fun redactStackTrace(throwable: Throwable): String {
         val raw = Log.getStackTraceString(throwable)

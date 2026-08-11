@@ -50,6 +50,8 @@ fun SujianTopAppBar(
             containerColor = containerColor,
             scrolledContainerColor = containerColor,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
+            navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
+            actionIconContentColor = MaterialTheme.colorScheme.onSurface,
         ),
     )
 }

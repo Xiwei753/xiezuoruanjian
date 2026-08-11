@@ -52,6 +52,10 @@ pub trait GitBackend {
 pub struct Git2Backend;
 
 impl Git2Backend {
+    fn ensure_runtime() -> crate::Result<()> {
+        crate::storage::git_runtime::ensure_initialized()
+    }
+
     fn build_callbacks<'a>(
         auth: Option<&'a GitAuth>,
         username_override: Option<&'a str>,
@@ -74,12 +78,14 @@ impl Git2Backend {
 
 impl GitBackend for Git2Backend {
     fn init_repo(&self, local_repo_path: &Path) -> crate::Result<()> {
+        Self::ensure_runtime()?;
         git2::Repository::init(local_repo_path)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         Ok(())
     }
 
     fn ensure_remote(&self, local_repo_path: &Path, remote_url: &str) -> crate::Result<()> {
+        Self::ensure_runtime()?;
         let repo = git2::Repository::open(local_repo_path)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         if repo.find_remote("origin").is_err() {
@@ -93,6 +99,9 @@ impl GitBackend for Git2Backend {
     }
 
     fn has_repo(&self, local_repo_path: &Path) -> bool {
+        if Self::ensure_runtime().is_err() {
+            return false;
+        }
         git2::Repository::open(local_repo_path).is_ok()
     }
 
@@ -116,6 +125,7 @@ impl GitBackend for Git2Backend {
         local_repo_path: &Path,
         auth: Option<&GitAuth>,
     ) -> crate::Result<()> {
+        Self::ensure_runtime()?;
         let mut fetch_options = git2::FetchOptions::new();
         let callbacks = Self::build_callbacks(auth, None);
         fetch_options.remote_callbacks(callbacks);
@@ -130,6 +140,7 @@ impl GitBackend for Git2Backend {
     }
 
     fn open_repo(&self, local_repo_path: &Path) -> crate::Result<()> {
+        Self::ensure_runtime()?;
         git2::Repository::open(local_repo_path)
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         Ok(())
@@ -149,6 +160,7 @@ impl GitBackend for Git2Backend {
         auth: Option<&GitAuth>,
         scope: crate::sync::types::SyncScope,
     ) -> crate::Result<()> {
+        Self::ensure_runtime()?;
         let repo = git2::Repository::open(local_repo_path)
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
@@ -506,6 +518,7 @@ impl GitBackend for Git2Backend {
         paths: &[&str],
         scope: crate::sync::types::SyncScope,
     ) -> crate::Result<()> {
+        Self::ensure_runtime()?;
         let repo = git2::Repository::open(local_repo_path)
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         let mut index = repo
@@ -528,6 +541,7 @@ impl GitBackend for Git2Backend {
     }
 
     fn commit(&self, local_repo_path: &Path, message: &str) -> crate::Result<Option<String>> {
+        Self::ensure_runtime()?;
         let repo = git2::Repository::open(local_repo_path)
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         let mut index = repo
@@ -587,6 +601,7 @@ impl GitBackend for Git2Backend {
         branch: &str,
         auth: Option<&GitAuth>,
     ) -> crate::Result<()> {
+        Self::ensure_runtime()?;
         let repo = git2::Repository::open(local_repo_path)
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
@@ -643,6 +658,7 @@ impl GitBackend for Git2Backend {
     }
 
     fn current_head(&self, local_repo_path: &Path) -> crate::Result<Option<String>> {
+        Self::ensure_runtime()?;
         let repo = git2::Repository::open(local_repo_path)
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         if let Ok(head) = repo.head() {
@@ -665,6 +681,7 @@ impl GitBackend for Git2Backend {
         local_repo_path: &Path,
         scope: crate::sync::types::SyncScope,
     ) -> crate::Result<Vec<String>> {
+        Self::ensure_runtime()?;
         let repo = git2::Repository::open(local_repo_path)
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         let mut opts = git2::StatusOptions::new();

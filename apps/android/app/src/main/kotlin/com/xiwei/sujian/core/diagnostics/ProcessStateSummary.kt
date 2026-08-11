@@ -41,18 +41,35 @@ internal object ProcessStateSummary {
 
     /**
      * 构造摘要字符串。提取为 internal 可见函数便于单测验证格式与截断。
-     * 输入先经 [DiagnosticsLogger.redact] 脱敏，避免把作品标题等敏感内容写进系统摘要。
+     * 输入先经 [sanitizeSummaryValue] 轻量脱敏，避免把作品标题等敏感内容写进系统摘要。
      */
     internal fun buildSummary(
         screen: String,
         editor: String,
         sync: String,
     ): String {
-        val safeScreen = DiagnosticsLogger.redact(screen)
-        val safeEditor = DiagnosticsLogger.redact(editor)
-        val safeSync = DiagnosticsLogger.redact(sync)
+        val safeScreen = sanitizeSummaryValue(screen)
+        val safeEditor = sanitizeSummaryValue(editor)
+        val safeSync = sanitizeSummaryValue(sync)
         return "screen=$safeScreen;editor=$safeEditor;sync=$safeSync"
     }
+
+    /** 安全摘要字符白名单（字母/数字由 isLetterOrDigit 覆盖，此处只列符号）。 */
+    private val SAFE_SUMMARY_SYMBOLS = setOf('_', '-', '=', ';')
+
+    /**
+     * 轻量摘要值脱敏 — 只保留安全摘要字符（字母、数字、下划线、连字符、等号、分号），
+     * 其余替换为 `_`。用于进程状态摘要的 screen/editor/sync 枚举映射值，
+     * 不走 [DiagnosticsLogger.redact] 的完整 Regex（这些值是应用内部枚举，不含 token/正文）。
+     */
+    internal fun sanitizeSummaryValue(value: String): String =
+        value.map { ch ->
+            if (ch.isLetterOrDigit() || ch in SAFE_SUMMARY_SYMBOLS) {
+                ch
+            } else {
+                '_'
+            }
+        }.joinToString("")
 
     /**
      * 把 [text] 按 UTF-8 截断到 ≤[maxBytes] bytes。

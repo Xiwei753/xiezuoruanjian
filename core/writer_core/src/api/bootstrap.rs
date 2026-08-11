@@ -25,6 +25,7 @@ pub fn open_app_service(
     app_data_root: String,
     projects_root: String,
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
+    crate::storage::git_runtime::ensure_initialized()?;
     let service = Arc::new(WriterAppService::new(app_data_root, projects_root));
     if let Err(e) = service.rebuild_search_index(None) {
         log::warn!("Failed to rebuild search index on open_app_service: {e}");
@@ -38,6 +39,7 @@ pub fn open_app_service_with_init(
     projects_root: String,
     init: PlatformInitDto,
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
+    crate::storage::git_runtime::ensure_initialized()?;
     let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
 
@@ -76,6 +78,7 @@ pub fn open_app_service_with_secure_storage(
     init: PlatformInitDto,
     secure_storage: Option<Box<dyn SecureStorageProvider>>,
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
+    crate::storage::git_runtime::ensure_initialized()?;
     let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
 
