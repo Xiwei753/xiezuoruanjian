@@ -72,18 +72,10 @@ fun DiagnosticsSettings(
             Spacer(modifier = Modifier.height(dims.space8))
             ExportDiagnosticsButton(context = context, modifier = Modifier.fillMaxWidth())
             Spacer(modifier = Modifier.height(dims.space8))
-            SujianOutlinedButton(
-                text = stringResource(id = R.string.btn_clear_logs),
-                onClick = {
-                    // Issue #612 评论 3.4：清空失败（writer 超时/中断）必须显示失败，
-                    // 不得假装已清空；成功才同时清内存 ring buffer 并提示成功。
-                    if (DiagnosticsLogger.clearLogs()) {
-                        EditorEventRingBuffer.clear()
-                        Toast.makeText(context, clearedText, Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, clearFailedText, Toast.LENGTH_SHORT).show()
-                    }
-                },
+            ClearLogsButton(
+                context = context,
+                clearedText = clearedText,
+                clearFailedText = clearFailedText,
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(modifier = Modifier.height(dims.space8))
@@ -103,6 +95,48 @@ fun DiagnosticsSettings(
             )
         }
     }
+}
+
+/**
+ * Issue #612 收口：清空日志按钮。
+ *
+ * clearLogs 要等 writer 线程处理 ClearBarrier（最坏 [PersistentLogWriter] 5s 超时），
+ * 必须在后台线程执行，避免阻塞主线程触发 ANR（与导出按钮同模式，见 f87672b9）；
+ * isClearing 防止重复点击。失败（超时/中断/删除失败）如实显示失败，不得假装已清空
+ * （Issue #612 评论 3.4）；成功才同时清内存 ring buffer 并提示成功。
+ */
+@Composable
+private fun ClearLogsButton(
+    context: android.content.Context,
+    clearedText: String,
+    clearFailedText: String,
+    modifier: Modifier = Modifier,
+) {
+    val clearingText = stringResource(id = R.string.diagnostics_clearing)
+    var isClearing by remember { mutableStateOf(false) }
+    val clearScope = rememberCoroutineScope()
+    SujianOutlinedButton(
+        text = if (isClearing) clearingText else stringResource(id = R.string.btn_clear_logs),
+        enabled = !isClearing,
+        onClick = {
+            if (isClearing) return@SujianOutlinedButton
+            isClearing = true
+            clearScope.launch {
+                val cleared =
+                    withContext(Dispatchers.IO) {
+                        DiagnosticsLogger.clearLogs()
+                    }
+                if (cleared) {
+                    EditorEventRingBuffer.clear()
+                    Toast.makeText(context, clearedText, Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, clearFailedText, Toast.LENGTH_SHORT).show()
+                }
+                isClearing = false
+            }
+        },
+        modifier = modifier,
+    )
 }
 
 /**

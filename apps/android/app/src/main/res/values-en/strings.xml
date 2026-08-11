@@ -158,6 +158,7 @@
     <string name="btn_copy_device_info">Copy device info</string>
     <string name="share_diagnostics_title">Share diagnostics package</string>
     <string name="diagnostics_export_failed">Failed to export diagnostics package</string>
+    <string name="diagnostics_clearing">Clearing…</string>
     <string name="diagnostics_cleared">Logs cleared</string>
     <string name="diagnostics_clear_failed">Failed to clear logs, please try again</string>
     <string name="diagnostics_device_info_copied">Device info copied</string>
