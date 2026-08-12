@@ -209,6 +209,24 @@ tasks.register("buildWriterNative") {
 
 android.applicationVariants.all {
     val variant = this
+    val flavorName = variant.productFlavors.firstOrNull()?.name ?: "noAi"
+
+    // #618 二 收口：原生库与绑定任务只按 flavor 的 debug 变体注册。
+    // 同 flavor 的 debug/release 变体产物完全一致（Rust features 由 flavor 决定，
+    // 与 buildType 无关），且 flavor 级 sourceSets 固定消费 debug 变体目录
+    // （jniLibs -> writer-native/<flavor>Debug、kotlin -> writer-uniffi/<flavor>/kotlin）。
+    // 旧实现为每个变体各注册一套任务：同 flavor 两个 generate 任务声明同一输出目录
+    // （重叠输出：互相删除对方产物，--parallel 并发下互踩），release 变体的 native
+    // 任务还构建一个没有任何 sourceSet 消费的 writer-native/<release> 目录。
+    if (variant.buildType.name != "debug") {
+        val flavorCapitalized = flavorName.replaceFirstChar { it.uppercase() }
+        // release 变体：preBuild 依赖本 flavor debug 变体的 native（.so 进 jniLibs）
+        // 与 uniffi 生成任务（Kotlin 绑定来源），不再注册自己的任务。
+        tasks.named("pre${variant.name.replaceFirstChar { it.uppercase() }}Build").configure {
+            dependsOn("build${flavorCapitalized}DebugWriterNative", "generate${flavorCapitalized}DebugWriterUniffi")
+        }
+        return@all
+    }
     val variantCapitalized = variant.name.replaceFirstChar { it.uppercase() }
     val buildNativeTaskName = "build${variantCapitalized}WriterNative"
     val generateUniffiTaskName = "generate${variantCapitalized}WriterUniffi"
@@ -229,7 +247,6 @@ android.applicationVariants.all {
     // UniFFI 绑定从 .so 提取契约：优先 arm64-v8a，否则取请求的第一个 ABI。
     val uniffiSoAbi =
         if ("arm64-v8a" in requestedAndroidAbis) "arm64-v8a" else requestedAndroidAbis.first()
-    val flavorName = variant.productFlavors.firstOrNull()?.name ?: "noAi"
     val uniffiOutDir =
         layout.buildDirectory.dir("generated/writer-uniffi/$flavorName/kotlin").get().asFile
 
