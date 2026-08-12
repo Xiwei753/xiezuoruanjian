@@ -73,6 +73,29 @@ class StatsViewModelTest {
     }
 
     @Test
+    fun `revision bump triggers requery and advances loadedRevision`() {
+        val repo = createRepo()
+        val vm = StatsViewModel(repo)
+        vm.refreshIfNeeded()
+        awaitUntil(
+            predicate = { !vm.uiState.value.loading },
+            message = "first refresh must settle",
+        )
+        // 失败路径契约：查询结束后已推进到当时的 revision，再次 refresh 命中缓存。
+        val settled = vm.loadedRevision
+        vm.refreshIfNeeded()
+        assertEquals(settled, vm.loadedRevision)
+        // 统计数据变化（revision 递增）：下次 refresh 必须重新查询并推进 loadedRevision。
+        repo.invalidate()
+        vm.refreshIfNeeded()
+        awaitUntil(
+            predicate = { vm.loadedRevision == repo.revision.value },
+            message = "revision bump must trigger a requery that settles on the new revision",
+        )
+        assertEquals(settled + 1L, vm.loadedRevision)
+    }
+
+    @Test
     fun `revision bumps only on successful stats write`() {
         val repo = createRepo()
         val before = repo.revision.value

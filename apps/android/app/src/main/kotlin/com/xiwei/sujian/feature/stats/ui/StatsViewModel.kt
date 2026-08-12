@@ -39,20 +39,33 @@ class StatsViewModel(
     private val _uiState = MutableStateFlow(StatsUiState())
     val uiState: StateFlow<StatsUiState> = _uiState.asStateFlow()
 
-    private var loadedRevision = -1L
+    /**
+     * 已加载数据对应的 revision。成功只推进到查询开始时的 revision；
+     * 失败推进到当前 revision（避免反复重查）。internal 供单测校验契约
+     * （与 SettingsViewModel 的 revision 字段同一约定）。
+     */
+    internal var loadedRevision = -1L
+
+    private var queryInFlight = false
 
     /**
      * 只在数据确实变化时重新查询：revision 与已加载 revision 相同且非加载中则直接复用。
+     *
+     * 成功时只推进到查询开始时的 [startRevision]：查询期间新写入的事件留待下次进入页面
+     * 重新读取，不把“可能未包含最新事件”的数据冒充最新（#618 六 复审）。
      * 查询失败（BridgeResult 非 Success / 未加载原生库）如实显示空数据，不伪装成功；
-     * 仍推进 loadedRevision，避免切回一次就重查一次的死循环。
+     * 失败时推进到当前 revision，避免切回一次就重查一次的死循环。
+     * 查询在途时直接复用（底栏快速切换不叠加并发重复查询，收口 #618 的统计重查热路径）。
      */
     fun refreshIfNeeded() {
-        val revision = repository.revision.value
-        if (loadedRevision == revision && !_uiState.value.loading) return
+        if (queryInFlight) return
+        val startRevision = repository.revision.value
+        if (loadedRevision == startRevision && !_uiState.value.loading) return
 
+        queryInFlight = true
         viewModelScope.launch {
-            val result =
-                try {
+            try {
+                val result =
                     withContext(Dispatchers.IO) {
                         val today = LocalDate.now()
                         val start = today.minusDays(30).format(DateTimeFormatter.ISO_LOCAL_DATE)
@@ -60,11 +73,14 @@ class StatsViewModel(
                         repository.getWritingStatsSummary(start, end) to
                             repository.getWritingStatsByProject(start, end)?.projects.orEmpty()
                     }
-                } catch (e: Exception) {
-                    null to emptyList<ProjectWritingStatsItem>()
-                }
-            loadedRevision = repository.revision.value
-            _uiState.value = StatsUiState(result.first, result.second, false)
+                loadedRevision = startRevision
+                _uiState.value = StatsUiState(result.first, result.second, false)
+            } catch (e: Exception) {
+                loadedRevision = repository.revision.value
+                _uiState.value = StatsUiState(null, emptyList(), false)
+            } finally {
+                queryInFlight = false
+            }
         }
     }
 

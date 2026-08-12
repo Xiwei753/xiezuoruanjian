@@ -23,16 +23,34 @@ fun SettingsViewModel.loadInitial() {
  * #600 评论 #7 / #618 三: 外部同步拉取设置/主题后, 重新从 Core 加载设置状态.
  * 只监听 externalSettingsChanged（外部同步拉取）触发, 复用 loadInitial 的字段集,
  * 不新建第二套事件系统。本机保存不再回环触发本函数。
+ *
+ * #618 三 复审：外部重载不能覆盖用户尚未保存的编辑。先快照窗口期前的
+ * 未保存/已保存 revision，读回 Core 后再校验：窗口期内本地没有任何编辑、
+ * 没有任何保存完成，且当前没有 pending 编辑时，才应用外部同步值；否则保留
+ * UI 草稿（pending 编辑 flush 后用户值写回 Core，用户编辑胜出；窗口期内已
+ * flush 的保存同样代表用户值，草稿与 Core 一致），UI 与 Core 始终一致。
  */
 suspend fun SettingsViewModel.reloadFromExternalSync() {
     val repo = settingsRepo
+    val localRevSnapshot = localRevision
+    val localPersistedSnapshot = localPersistedRevision
+    val fontSizeRevSnapshot = fontSizeRevision
+    val fontSizePersistedSnapshot = fontSizePersistedRevision
     val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
     val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
     val paletteRecords = withContext(Dispatchers.IO) { themeRepo.listPaletteRecords() }
     _uiState.update {
+        val localStable =
+            localRevSnapshot == localRevision &&
+                localPersistedSnapshot == localPersistedRevision &&
+                localRevision == localPersistedRevision
+        val fontSizeStable =
+            fontSizeRevSnapshot == fontSizeRevision &&
+                fontSizePersistedSnapshot == fontSizePersistedRevision &&
+                fontSizeRevision == fontSizePersistedRevision
         it.copy(
-            settings = settings,
-            fontSize = fontSize,
+            settings = if (localStable) settings else it.settings,
+            fontSize = if (fontSizeStable) fontSize else it.fontSize,
             paletteRecords = paletteRecords,
         )
     }
