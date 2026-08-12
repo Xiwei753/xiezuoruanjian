@@ -181,10 +181,6 @@ object ThemeStore {
         reload()
     }
 
-    fun onSyncCompleted() {
-        reload()
-    }
-
     fun onSystemDarkModeChanged(isDark: Boolean) {
         _systemIsDark = isDark
         val current = _uiState.value

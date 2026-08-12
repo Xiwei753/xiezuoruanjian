@@ -192,13 +192,14 @@ fun SujianApp(initialDestination: String? = null) {
         )
     val windowCoordinator = rememberSujianWindowHost(context, deps, sessionCoordinator)
     // #609 一：主题控制器在 CompositionLocalProvider 建立之前初始化，
-    // 必须显式注入依赖（含 syncStatusRepository），不得反向读取 CompositionLocal。
+    // 必须显式注入依赖，不得反向读取 CompositionLocal。
+    // #618 三：同步状态不再参与主题刷新（旧代码的 Synced 分支与无条件 reload
+    // 动作完全相同，是重复解析），控制器只依赖 settings/theme 两个仓库。
     val themeController =
         rememberThemeController(
             context = context,
             settingsRepository = deps.settingsRepository,
             themeRepository = deps.themeRepository,
-            syncStatusRepository = deps.syncStatusRepository,
         )
     remember { VendorAdapterRegistry().also { VendorAdapterSetup.ensureInitialized(it) } }
 

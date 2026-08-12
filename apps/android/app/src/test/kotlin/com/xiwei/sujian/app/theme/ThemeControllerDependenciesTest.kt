@@ -7,9 +7,6 @@ import androidx.test.core.app.ApplicationProvider
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
-import com.xiwei.sujian.feature.sync.data.SyncRepository
-import com.xiwei.sujian.feature.sync.data.SyncStatusRepository
-import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.fail
@@ -27,10 +24,14 @@ import org.robolectric.annotation.GraphicsMode
  * 旧实现里 `rememberThemeController` 在 `LocalSujianAppDependencies` 建立
  * CompositionLocalProvider 之前读取 `.current`，首次进入 UI 必抛
  * `No SujianAppDependencies provided`。修复后主题控制器只消费显式注入的
- * 依赖（含 syncStatusRepository），不再反向依赖 CompositionLocal。
+ * 依赖（settings/theme 两个仓库），不再反向依赖 CompositionLocal。
  *
  * 正：不提供 LocalSujianAppDependencies 也能完成组合并返回控制器；
  * 反：若实现重新引入 CompositionLocal 读取，本测试直接抛异常失败。
+ *
+ * #618 三：同步状态不再参与主题刷新（旧代码的 Synced 分支与无条件 reload
+ * 动作相同，是重复解析；`onSyncCompleted` 别名与 `syncStatusRepository`
+ * 注入一并删除），ON_RESUME 只触发一次从注入仓库的完整主题解析。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -41,7 +42,6 @@ class ThemeControllerDependenciesTest {
 
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var themeRepository: ThemeRepository
-    private lateinit var syncStatusRepository: SyncStatusRepository
 
     @Before
     fun setUp() {
@@ -50,7 +50,6 @@ class ThemeControllerDependenciesTest {
         val bridge = AppServiceBridge(WriterAppServiceHolder(dir, dir))
         settingsRepository = SettingsRepository(context, bridge)
         themeRepository = ThemeRepository(context, bridge)
-        syncStatusRepository = SyncStatusRepository(SyncRepository(context, bridge))
     }
 
     @Test
@@ -64,7 +63,6 @@ class ThemeControllerDependenciesTest {
                         context = LocalContext.current,
                         settingsRepository = settingsRepository,
                         themeRepository = themeRepository,
-                        syncStatusRepository = syncStatusRepository,
                     )
             }
             composeRule.waitForIdle()
@@ -78,18 +76,14 @@ class ThemeControllerDependenciesTest {
     }
 
     @Test
-    fun onResume_refreshesThemeFromInjectedSyncStatusRepository() {
-        // 注入的仓库置为 Synced：Activity 进入 RESUMED 时 ON_RESUME 观察者
-        // 必须通过注入的 syncStatusRepository 读到 Synced 并触发 ThemeStore 刷新。
-        syncStatusRepository.notifySyncSuccess()
-        assertEquals(SyncIndicatorState.Synced, syncStatusRepository.state.value)
-
+    fun onResume_refreshesThemeFromInjectedSettingsRepository() {
+        // Activity 进入 RESUMED 时 ON_RESUME 观察者通过注入的 settingsRepository
+        // 触发一次完整主题刷新（#618 三：不再依赖同步状态，也不做重复解析）。
         composeRule.setContent {
             rememberThemeController(
                 context = LocalContext.current,
                 settingsRepository = settingsRepository,
                 themeRepository = themeRepository,
-                syncStatusRepository = syncStatusRepository,
             )
         }
         composeRule.waitForIdle()
