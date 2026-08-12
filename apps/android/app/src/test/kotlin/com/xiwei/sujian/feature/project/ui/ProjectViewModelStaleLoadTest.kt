@@ -30,6 +30,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -66,11 +67,24 @@ class ProjectViewModelStaleLoadTest {
     private class GatedProjectRepository(
         context: android.content.Context,
         private val volumes: Map<String, List<Volume>>,
-        private val stats: Map<String, ProjectStats>,
+        stats: Map<String, ProjectStats>,
         private val volumeGates: Map<String, CountDownLatch> = emptyMap(),
         private val chapterGates: Map<String, CountDownLatch> = emptyMap(),
         private val statsGates: Map<String, CountDownLatch> = emptyMap(),
     ) : ProjectRepository(context) {
+        private val statsMap = stats.toMutableMap()
+
+        /** 变更测试用：模拟 Core 侧数据变化（创建/删除卷章节后统计变化）。 */
+        fun setStats(
+            projectId: String,
+            newStats: ProjectStats,
+        ) {
+            statsMap[projectId] = newStats
+        }
+
+        /** getVolumes("A", …) 已进入（真实 IO 侧已开始执行，尚未放行）。 */
+        val volumeAEntered = AtomicBoolean(false)
+
         /** getChapters("A", …) 已进入（挂在章节栅栏上）。 */
         val chapterAEntered = AtomicBoolean(false)
 
@@ -85,6 +99,7 @@ class ProjectViewModelStaleLoadTest {
         }
 
         override fun getVolumes(projectId: String): List<Volume> {
+            if (projectId == "A") volumeAEntered.set(true)
             await(volumeGates[projectId])
             return volumes[projectId].orEmpty()
         }
@@ -102,7 +117,7 @@ class ProjectViewModelStaleLoadTest {
         override fun getProjectStats(projectId: String): ProjectStats {
             await(statsGates[projectId])
             if (projectId == "A") statsAReturned.set(true)
-            return stats[projectId] ?: ProjectStats(0, 0, 0)
+            return statsMap[projectId] ?: ProjectStats(0, 0, 0)
         }
     }
 
@@ -145,8 +160,11 @@ class ProjectViewModelStaleLoadTest {
             val vm = ProjectViewModel(SavedStateHandle())
 
             // 1. 进入作品 A：卷/章节/统计三处读取都挂在栅栏上（真实 IO 挂起）。
+            //    必须先等到 A 的 IO 块真实开始执行（进入 getVolumes），
+            //    否则切 B 时取消会使 withContext 根本不启动 A 的 IO 块。
             vm.initialize("A", repo)
             runCurrent()
+            settleUntil { repo.volumeAEntered.get() }
 
             // 2. 切到作品 B：B 无栅栏，加载立即完成并写回。
             vm.initialize("B", repo)
@@ -160,17 +178,19 @@ class ProjectViewModelStaleLoadTest {
             volumeGateA.countDown()
             settleUntil { repo.chapterAEntered.get() }
 
-            // 4. 放行 A 的统计栅栏：迟到的 A 统计先落定 — 必须被纪元拒绝。
+            // 4. 放行 A 的统计栅栏。刷新链内读取顺序为 卷 → 章节 → 统计，
+            //    统计读取发生在章节放行之后，先放行统计栅栏确保它到达时已开放。
             statsGateA.countDown()
-            settleUntil { repo.statsAReturned.get() }
+
+            // 5. 放行 A 的章节栅栏：A 的 IO 链跑完（含统计读取），迟到写回进入主队列 —
+            //    观察窗口内必须被丢弃。
+            chapterGateA.countDown()
+            settleUntil { repo.chapterAReturned.get() && repo.statsAReturned.get() }
             assertEquals(
                 "迟到的 A 统计不得覆盖 B 的统计",
                 200,
                 vm.uiState.value.projectStats?.totalWordCount,
             )
-
-            // 5. 放行 A 的章节栅栏：迟到写回进入主队列 — 观察窗口内必须被丢弃。
-            chapterGateA.countDown()
             var attempts = 0
             var staleLanded = false
             while (attempts < 400 && !staleLanded) {
@@ -204,6 +224,7 @@ class ProjectViewModelStaleLoadTest {
 
             vm.initialize("A", repo)
             runCurrent()
+            settleUntil { repo.volumeAEntered.get() }
             vm.initialize("B", repo)
             settleUntil {
                 vm.uiState.value.volumes.map { it.id } == listOf("vB") &&
@@ -222,5 +243,91 @@ class ProjectViewModelStaleLoadTest {
                     vm.uiState.value.projectStats?.totalWordCount == 100 &&
                     !vm.uiState.value.isLoading
             }
+        }
+
+    @Test
+    fun projectSwitch_clearsStaleUiStateAndKeepsExpansionPerProject() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val app = RuntimeEnvironment.getApplication()
+            val volumeGateB = CountDownLatch(1)
+            val repo =
+                GatedProjectRepository(
+                    context = app,
+                    volumes = mapOf("A" to volumesA, "B" to volumesB),
+                    stats = mapOf("A" to ProjectStats(100, 1, 1), "B" to ProjectStats(200, 2, 2)),
+                    volumeGates = mapOf("B" to volumeGateB),
+                )
+            val vm = ProjectViewModel(SavedStateHandle())
+
+            vm.initialize("A", repo)
+            settleUntil {
+                vm.uiState.value.volumes.map { it.id } == listOf("vA") &&
+                    !vm.uiState.value.isLoading
+            }
+            vm.toggleVolumeExpand("vA")
+            vm.selectChapter("chA")
+            assertEquals(setOf("vA"), vm.uiState.value.expandedVolumeIds)
+
+            // 切到 B，B 的加载挂在栅栏上 — 旧 A 的卷/选中章节/统计必须立即清掉。
+            vm.initialize("B", repo)
+            runCurrent()
+            assertTrue("切作品后必须进入加载态", vm.uiState.value.isLoading)
+            assertTrue("旧作品的卷列表不得残留", vm.uiState.value.volumes.isEmpty())
+            assertNull("旧作品的选中章节不得残留", vm.uiState.value.selectedChapterId)
+            assertNull("旧作品的统计不得残留", vm.uiState.value.projectStats)
+            assertTrue("A 的展开状态不得混入 B", vm.uiState.value.expandedVolumeIds.isEmpty())
+
+            volumeGateB.countDown()
+            settleUntil {
+                vm.uiState.value.volumes.map { it.id } == listOf("vB") &&
+                    !vm.uiState.value.isLoading
+            }
+            vm.toggleVolumeExpand("vB")
+            assertEquals(setOf("vB"), vm.uiState.value.expandedVolumeIds)
+
+            // 切回 A：展开状态按 projectId 独立恢复，B 的展开不得混入。
+            vm.initialize("A", repo)
+            settleUntil {
+                vm.uiState.value.volumes.map { it.id } == listOf("vA") &&
+                    !vm.uiState.value.isLoading
+            }
+            assertEquals(
+                "A 的展开状态必须按 projectId 恢复",
+                setOf("vA"),
+                vm.uiState.value.expandedVolumeIds,
+            )
+            assertNull("切换后选中章节重置", vm.uiState.value.selectedChapterId)
+        }
+
+    @Test
+    fun mutationRefresh_reloadsStatsAndKeepsCurrentProject() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val app = RuntimeEnvironment.getApplication()
+            val repo =
+                GatedProjectRepository(
+                    context = app,
+                    volumes = mapOf("A" to volumesA),
+                    stats = mapOf("A" to ProjectStats(100, 1, 1)),
+                )
+            val vm = ProjectViewModel(SavedStateHandle())
+
+            vm.initialize("A", repo)
+            settleUntil {
+                vm.uiState.value.volumes.map { it.id } == listOf("vA") &&
+                    vm.uiState.value.projectStats?.totalWordCount == 100 &&
+                    !vm.uiState.value.isLoading
+            }
+
+            // 模拟 Core 侧数据变化（创建/删除卷章节后统计变化），再触发一次变更刷新。
+            repo.setStats("A", ProjectStats(300, 3, 3))
+            vm.createVolume("新卷")
+            settleUntil {
+                vm.uiState.value.projectStats?.totalWordCount == 300 &&
+                    !vm.uiState.value.isLoading
+            }
+            // 测试环境 native 未加载：createVolume 失败被吞掉，卷列表保持原状，
+            // 但变更刷新必须重读统计（#617 评论七：变更后不能只刷卷列表）。
+            assertEquals("卷列表不得因失败的 create 变化", listOf("vA"), vm.uiState.value.volumes.map { it.id })
+            assertEquals(300, vm.uiState.value.projectStats?.totalWordCount)
         }
 }

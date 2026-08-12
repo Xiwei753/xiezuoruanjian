@@ -38,8 +38,6 @@ import com.xiwei.sujian.core.platform.window.WindowFoldFeatureCollector
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.editor.window.EditorWindowHost
 import com.xiwei.sujian.feature.project.domain.ProjectUseCase
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 val LocalAndroidCapabilities =
     androidx.compose.runtime.compositionLocalOf<AndroidCapabilities> {
@@ -214,17 +212,13 @@ fun SujianApp(initialDestination: String? = null) {
     val foldingFeatures = rememberFoldFeatureCollection(activityRef)
     SujianAppAdaptiveWindowSync(capabilityProvider, foldingFeatures, deps)
 
-    // #617 评论四：本地设置可观察状态 — 沉浸式全屏开关的单一真相；
-    // 启动时先真实加载一次（含诊断/实验 prefs 合并），再交给窗口执行层。
-    val localSettings by deps.settingsRepository.localSettingsState.collectAsState()
-    LaunchedEffect(deps.settingsRepository) {
-        withContext(Dispatchers.IO) {
-            deps.settingsRepository.getLocalSettings()
-        }
-    }
+    // #617 评论六：只收集沉浸式全屏这一位 — 由 SettingsRepository 构造时从
+    // SharedPreferences 初始化、保存成功后同步；其它本地设置变化不再触碰应用根。
+    val immersiveFullscreenEnabled by
+        deps.settingsRepository.immersiveFullscreenEnabled.collectAsState()
     ImmersiveSystemBarsEffect(
         activity = activityRef,
-        enabled = localSettings.experimentalFullscreenMode,
+        enabled = immersiveFullscreenEnabled,
     )
 
     val uiState by themeController.uiState.collectAsState()

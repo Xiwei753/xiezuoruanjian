@@ -43,10 +43,14 @@ class SettingsRepository(
             android.content.Context.MODE_PRIVATE,
         )
 
-    // #617 评论四：本地设置的可观察状态 — 系统栏执行层（ImmersiveSystemBarsEffect）
-    // 只认这一份状态，实验设置写入后立即反映到窗口能力。
-    private val _localSettingsState = MutableStateFlow(LocalSettings())
-    val localSettingsState: StateFlow<LocalSettings> = _localSettingsState.asStateFlow()
+    // #617 评论六：沉浸式全屏开关的专用可观察状态 — 窗口执行层只认这一位。
+    // 构造时直接从 SharedPreferences 取真实值：冷启动第一帧就是正确状态，
+    // 不会先 show(systemBars()) 再 hide 造成系统栏闪现；只在保存成功后同步，
+    // 其它本地设置字段的保存/读取不会触碰应用根。
+    private val _immersiveFullscreenEnabled =
+        MutableStateFlow(diagPrefs.getBoolean("experimental_fullscreen_mode", false))
+    val immersiveFullscreenEnabled: StateFlow<Boolean> =
+        _immersiveFullscreenEnabled.asStateFlow()
 
     @Volatile
     var lastWarning: String? = null
@@ -80,7 +84,8 @@ class SettingsRepository(
                 useSelfRenderEditorOnAndroid = diagPrefs.getBoolean("use_self_render_editor_on_android", true),
                 experimentalFullscreenMode = diagPrefs.getBoolean("experimental_fullscreen_mode", false),
             )
-        _localSettingsState.value = resolved
+        // 注意：不发布到 immersiveFullscreenEnabled — 该位只在构造时从 prefs 初始化、
+        // 保存成功后同步，getLocalSettings 只负责返回完整设置，不扰动窗口状态。
         return resolved
     }
 
@@ -96,15 +101,14 @@ class SettingsRepository(
             is BridgeResult.Success -> {
                 com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "ok")
                 val effectiveVerbose = if (settings.diagnosticsEnabled) settings.diagnosticsVerbose else false
-                val resolved = settings.copy(diagnosticsVerbose = effectiveVerbose)
                 diagPrefs.edit {
                     putBoolean("diagnostics_enabled", settings.diagnosticsEnabled)
                     putBoolean("diagnostics_verbose", effectiveVerbose)
                     putBoolean("use_self_render_editor_on_android", settings.useSelfRenderEditorOnAndroid)
                     putBoolean("experimental_fullscreen_mode", settings.experimentalFullscreenMode)
                 }
-                // #617 评论四：保存成功后同步可观察状态，实验开关立即驱动窗口能力。
-                _localSettingsState.value = resolved
+                // #617 评论六：保存成功后只同步全屏这一位，实验开关立即驱动窗口能力。
+                _immersiveFullscreenEnabled.value = settings.experimentalFullscreenMode
                 CoreSettingsEvents.record(result.envelope)
                 SettingsSaveResult.Success
             }

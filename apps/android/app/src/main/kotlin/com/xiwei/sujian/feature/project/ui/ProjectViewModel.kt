@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,6 +20,12 @@ data class VolumeChapterUiState(
     val isLoading: Boolean = false,
 )
 
+/** #617 评论七：一次 refresh 读取的完整快照 — 卷列表与统计原子提交，避免分两次写回。 */
+private data class ProjectSnapshot(
+    val volumes: List<VolumeUiModel>,
+    val projectStats: ProjectStatsUiModel?,
+)
+
 // #617 评论一：ProjectViewModel 不依赖 Application — Navigation 3 的 NavEntry 级
 // ViewModelStoreOwner 的 CreationExtras 只保证提供 SavedStateHandle（由
 // SaveableStateHolderNavEntryDecorator + ViewModelStoreNavEntryDecorator 提供），
@@ -26,23 +33,32 @@ data class VolumeChapterUiState(
 class ProjectViewModel(
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
+    private var currentProjectId: String? = savedStateHandle["currentProjectId"]
+
     private val _uiState =
         MutableStateFlow(
             VolumeChapterUiState(
-                expandedVolumeIds = savedStateHandle.get<Set<String>>("expandedVolumeIds") ?: emptySet(),
+                // #617 评论七：展开状态按 projectId 分 key 保存，进程重建后也只恢复本作品的展开。
+                expandedVolumeIds =
+                    savedStateHandle[expandedVolumeKey(currentProjectId ?: "")] ?: emptySet(),
             ),
         )
     val uiState: StateFlow<VolumeChapterUiState> = _uiState.asStateFlow()
 
-    private var currentProjectId: String? = savedStateHandle["currentProjectId"]
     private var projectRepository: ProjectRepository? = null
     private var isInitialized: Boolean = false
 
-    // #617 复审：加载纪元 — 作品切换或任何重新加载都会递增对应纪元；
-    // 迟到的旧纪元结果（跨作品或跨变更的陈旧数据）在写回前被丢弃，
-    // 防止慢设备上旧作品的卷/统计覆盖新作品的章节树。
-    private var volumesLoadEpoch = 0L
-    private var statsLoadEpoch = 0L
+    // #617 评论七：作品读取收成一条可取消的刷新链 — 作品切换/变更刷新都会取消在途
+    // refresh job 并递增纪元；迟到的旧纪元/旧作品结果在写回前被丢弃，防止慢设备上
+    // 旧作品的卷/统计覆盖新作品的章节树。纪元在作品切换时递增，同作品变更刷新
+    // 靠 refreshJob.cancel() + 写回前校验（generation/pid）双保险。
+    private var projectGeneration = 0L
+    private var refreshJob: Job? = null
+
+    /** 当前 _uiState 数据所属的作品；用于区分“作品切换”与“同作品变更刷新”。 */
+    private var loadedProjectId: String? = null
+
+    private fun expandedVolumeKey(projectId: String) = "expandedVolumeIds:$projectId"
 
     fun initialize(
         projectId: String,
@@ -60,55 +76,106 @@ class ProjectViewModel(
 
         if (needsReload) {
             isInitialized = true
-            loadVolumes()
-            loadProjectStats(projectId)
+            projectGeneration++
+            refreshProject()
         }
     }
 
-    fun loadVolumes() {
+    /** 取消在途刷新并重新读取当前作品的卷/章节/统计 — 数据刷新的唯一入口。 */
+    private fun refreshProject() {
         val pid = currentProjectId ?: return
         val repo = projectRepository ?: return
-        val epoch = ++volumesLoadEpoch
-        _uiState.value = _uiState.value.copy(isLoading = true)
-        viewModelScope.launch {
-            val volumes =
-                withContext(Dispatchers.IO) {
-                    try {
-                        repo.getVolumes(pid)
-                    } catch (_: Exception) {
-                        emptyList()
-                    }
+        val generation = projectGeneration
+
+        refreshJob?.cancel()
+        refreshJob =
+            viewModelScope.launch {
+                if (loadedProjectId != pid) {
+                    enterProject(pid)
+                } else {
+                    _uiState.value = _uiState.value.copy(isLoading = true)
                 }
-            val uiModels =
-                volumes.map { vol ->
-                    val chapters =
-                        withContext(Dispatchers.IO) {
-                            try {
-                                repo.getChapters(pid, vol.id)
-                            } catch (_: Exception) {
-                                emptyList()
-                            }
-                        }
-                    VolumeUiModel(
-                        id = vol.id,
-                        title = vol.title,
-                        chapters =
-                            chapters.map { ch ->
-                                ChapterUiModel(
-                                    id = ch.id,
-                                    title = ch.title,
-                                    wordCount = ch.wordCount,
-                                )
-                            },
-                        isExpanded = _uiState.value.expandedVolumeIds.contains(vol.id),
+
+                val snapshot = loadProjectSnapshot(repo, pid)
+
+                if (generation != projectGeneration || pid != currentProjectId) return@launch
+                loadedProjectId = pid
+                _uiState.value =
+                    _uiState.value.copy(
+                        volumes = snapshot.volumes,
+                        projectStats = snapshot.projectStats,
+                        isLoading = false,
                     )
-                }
-            if (epoch != volumesLoadEpoch) return@launch
-            _uiState.value = _uiState.value.copy(volumes = uiModels, isLoading = false)
-        }
+            }
     }
 
+    /** 作品切换：立即清掉只属于旧作品的 UI 状态（卷/选中章节/统计），展开按 projectId 恢复。 */
+    private fun enterProject(pid: String) {
+        loadedProjectId = pid
+        _uiState.value =
+            VolumeChapterUiState(
+                expandedVolumeIds = savedStateHandle[expandedVolumeKey(pid)] ?: emptySet(),
+                isLoading = true,
+            )
+    }
+
+    /** 在 IO 线程读取当前作品快照（卷 + 章节 + 统计），失败时降级为空快照。 */
+    private suspend fun loadProjectSnapshot(
+        repo: ProjectRepository,
+        projectId: String,
+    ): ProjectSnapshot =
+        withContext(Dispatchers.IO) {
+            val volumes =
+                try {
+                    repo.getVolumes(projectId).map { vol ->
+                        VolumeUiModel(
+                            id = vol.id,
+                            title = vol.title,
+                            chapters = loadChapters(repo, projectId, vol.id),
+                            isExpanded = _uiState.value.expandedVolumeIds.contains(vol.id),
+                        )
+                    }
+                } catch (_: Exception) {
+                    emptyList()
+                }
+            ProjectSnapshot(volumes, loadStats(repo, projectId))
+        }
+
+    private fun loadChapters(
+        repo: ProjectRepository,
+        projectId: String,
+        volumeId: String,
+    ): List<ChapterUiModel> =
+        try {
+            repo.getChapters(projectId, volumeId).map { ch ->
+                ChapterUiModel(
+                    id = ch.id,
+                    title = ch.title,
+                    wordCount = ch.wordCount,
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+    private fun loadStats(
+        repo: ProjectRepository,
+        projectId: String,
+    ): ProjectStatsUiModel? =
+        try {
+            repo.getProjectStats(projectId)?.let {
+                ProjectStatsUiModel(
+                    totalWordCount = it.totalWordCount,
+                    volumeCount = it.volumeCount,
+                    chapterCount = it.chapterCount,
+                )
+            }
+        } catch (_: Exception) {
+            null
+        }
+
     fun toggleVolumeExpand(volumeId: String) {
+        val pid = currentProjectId ?: return
         val current = _uiState.value.expandedVolumeIds
         val newExpanded =
             if (current.contains(volumeId)) {
@@ -116,7 +183,8 @@ class ProjectViewModel(
             } else {
                 current + volumeId
             }
-        savedStateHandle["expandedVolumeIds"] = newExpanded
+        // #617 评论七：展开状态按 projectId 分 key 保存，不跨作品混用。
+        savedStateHandle[expandedVolumeKey(pid)] = newExpanded
         _uiState.value =
             _uiState.value.copy(
                 expandedVolumeIds = newExpanded,
@@ -141,7 +209,8 @@ class ProjectViewModel(
                 } catch (_: Exception) {
                 }
             }
-            loadVolumes()
+            // 变更成功（或失败）后统一走刷新链；期间若已切换作品，不刷新别人。
+            if (currentProjectId == pid) refreshProject()
         }
     }
 
@@ -158,10 +227,12 @@ class ProjectViewModel(
                 } catch (_: Exception) {
                 }
             }
-            val expanded = _uiState.value.expandedVolumeIds + volumeId
-            savedStateHandle["expandedVolumeIds"] = expanded
-            _uiState.value = _uiState.value.copy(expandedVolumeIds = expanded)
-            loadVolumes()
+            if (currentProjectId == pid) {
+                val expanded = _uiState.value.expandedVolumeIds + volumeId
+                savedStateHandle[expandedVolumeKey(pid)] = expanded
+                _uiState.value = _uiState.value.copy(expandedVolumeIds = expanded)
+                refreshProject()
+            }
         }
     }
 
@@ -178,7 +249,7 @@ class ProjectViewModel(
                 } catch (_: Exception) {
                 }
             }
-            loadVolumes()
+            if (currentProjectId == pid) refreshProject()
         }
     }
 
@@ -192,7 +263,7 @@ class ProjectViewModel(
                 } catch (_: Exception) {
                 }
             }
-            loadVolumes()
+            if (currentProjectId == pid) refreshProject()
         }
     }
 
@@ -210,7 +281,7 @@ class ProjectViewModel(
                 } catch (_: Exception) {
                 }
             }
-            loadVolumes()
+            if (currentProjectId == pid) refreshProject()
         }
     }
 
@@ -227,7 +298,7 @@ class ProjectViewModel(
                 } catch (_: Exception) {
                 }
             }
-            loadVolumes()
+            if (currentProjectId == pid) refreshProject()
         }
     }
 
@@ -247,7 +318,7 @@ class ProjectViewModel(
                 } catch (_: Exception) {
                 }
             }
-            loadVolumes()
+            if (currentProjectId == pid) refreshProject()
         }
     }
 
@@ -267,7 +338,7 @@ class ProjectViewModel(
                 } catch (_: Exception) {
                 }
             }
-            loadVolumes()
+            if (currentProjectId == pid) refreshProject()
         }
     }
 
@@ -290,7 +361,7 @@ class ProjectViewModel(
                 } catch (_: Exception) {
                 }
             }
-            loadVolumes()
+            if (currentProjectId == pid) refreshProject()
         }
     }
 
@@ -313,34 +384,7 @@ class ProjectViewModel(
                 } catch (_: Exception) {
                 }
             }
-            loadVolumes()
-        }
-    }
-
-    private fun loadProjectStats(projectId: String) {
-        val repo = projectRepository ?: return
-        val epoch = ++statsLoadEpoch
-        viewModelScope.launch {
-            val stats =
-                withContext(Dispatchers.IO) {
-                    try {
-                        repo.getProjectStats(projectId)
-                    } catch (_: Exception) {
-                        null
-                    }
-                }
-            if (epoch != statsLoadEpoch) return@launch
-            stats?.let {
-                _uiState.value =
-                    _uiState.value.copy(
-                        projectStats =
-                            ProjectStatsUiModel(
-                                totalWordCount = it.totalWordCount,
-                                volumeCount = it.volumeCount,
-                                chapterCount = it.chapterCount,
-                            ),
-                    )
-            }
+            if (currentProjectId == pid) refreshProject()
         }
     }
 }

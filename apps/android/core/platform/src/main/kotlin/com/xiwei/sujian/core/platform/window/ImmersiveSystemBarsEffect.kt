@@ -2,7 +2,7 @@ package com.xiwei.sujian.core.platform.window
 
 // #617 评论四：沉浸式全屏的窗口执行层 — 系统栏控制唯一入口。
 // 只封装 Android 系统能力（WindowInsetsControllerCompat），不读业务状态；
-// 开关值由调用方（SujianApp）从 SettingsRepository.localSettingsState 收集后传入。
+// 开关值由调用方（SujianApp）从 SettingsRepository.immersiveFullscreenEnabled 收集后传入。
 
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.Composable
