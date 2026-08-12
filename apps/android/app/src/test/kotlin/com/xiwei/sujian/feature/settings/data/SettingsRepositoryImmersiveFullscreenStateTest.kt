@@ -50,16 +50,17 @@ class SettingsRepositoryImmersiveFullscreenStateTest {
 
     @Test
     fun `getLocalSettings does not touch the fullscreen state`() {
-        prefs("get_no_touch").edit().putBoolean("experimental_fullscreen_mode", true).commit()
+        val suffix = "get_no_touch"
+        prefs(suffix).edit().putBoolean("experimental_fullscreen_mode", true).commit()
         val repo =
             SettingsRepository(
                 RuntimeEnvironment.getApplication(),
-                preferencesSuffix = "get_no_touch",
+                preferencesSuffix = suffix,
             )
         assertTrue(repo.immersiveFullscreenEnabled.value)
 
         // 修改其它诊断 prefs 后重新读取完整设置 — 全屏位不得被 getLocalSettings 扰动。
-        prefs("get_no_touch").edit().putBoolean("diagnostics_verbose", false).commit()
+        prefs(suffix).edit().putBoolean("diagnostics_verbose", false).commit()
         repo.getLocalSettings()
         assertTrue(
             "getLocalSettings 只返回完整设置，不得改动全屏状态",
