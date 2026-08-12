@@ -9,6 +9,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
+import androidx.navigation3.runtime.NavEntry
+import androidx.navigation3.runtime.NavEntryDecorator
+import androidx.navigation3.runtime.rememberDecoratedNavEntries
+import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 
 /**
  * 一级导航 TopLevelBackStack — Navigation 3 多栈可恢复模型。
@@ -69,6 +75,54 @@ class SujianTopLevelBackStack(
         s.clear()
         s.add(currentTopLevel.toRoute())
     }
+
+    /**
+     * #614 评论三：每个 top-level 栈绑定自己的 decorated entries。
+     *
+     * 三个 [rememberDecoratedNavEntries] 始终处于组合中（无条件调用），
+     * 每个 top-level 有独立的 [rememberSaveableStateHolderNavEntryDecorator] +
+     * [rememberViewModelStoreNavEntryDecorator]。
+     * inactive tab 的 decorator 和状态仍活着；真正 pop 该 tab 内的 route 时才清掉。
+     * 切 tab 不会把 inactive tab 的 saveable/viewmodel 状态误清。
+     */
+    @Composable
+    fun decoratedEntries(
+        entryProvider: (NavKey) -> NavEntry<NavKey>,
+    ): List<NavEntry<NavKey>> {
+        val worksEntries = rememberDecoratedNavEntries(
+            backStack = worksStack,
+            entryDecorators = rememberPerStackDecorators(),
+            entryProvider = entryProvider,
+        )
+        val starMapEntries = rememberDecoratedNavEntries(
+            backStack = starMapStack,
+            entryDecorators = rememberPerStackDecorators(),
+            entryProvider = entryProvider,
+        )
+        val statsEntries = rememberDecoratedNavEntries(
+            backStack = statsStack,
+            entryDecorators = rememberPerStackDecorators(),
+            entryProvider = entryProvider,
+        )
+        return when (currentTopLevel) {
+            SujianDestination.Works -> worksEntries
+            SujianDestination.StarMap -> starMapEntries
+            SujianDestination.Stats -> statsEntries
+        }
+    }
+}
+
+/**
+ * #614 评论三：每个 top-level 栈独立的 decorators。
+ * SaveableStateHolder 在前，ViewModelStore 在后。
+ * 三个调用点各自有独立的 remember slot，互不影响。
+ */
+@Composable
+private fun rememberPerStackDecorators(): List<NavEntryDecorator<NavKey>> {
+    val saveableStateHolder = rememberSaveableStateHolder()
+    val saveableDecorator = rememberSaveableStateHolderNavEntryDecorator<NavKey>(saveableStateHolder)
+    val viewModelDecorator = rememberViewModelStoreNavEntryDecorator<NavKey>()
+    return listOf(saveableDecorator, viewModelDecorator)
 }
 
 /**

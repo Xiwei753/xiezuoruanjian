@@ -42,7 +42,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -53,7 +52,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
-import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.scene.Scene
 import androidx.navigation3.ui.NavDisplay
 import com.xiwei.sujian.R
@@ -268,53 +266,51 @@ private fun SujianNavDisplayContent(
     workspaceNavState: ProjectNavigationState,
     workspaceActions: AndroidWorkspaceActionSpec,
 ) {
-    // #614 评论三：SaveableStateHolderNavEntryDecorator 保留各 top-level 页面级 saveable 状态，
-    // 切 tab 时离开的 tab 状态不丢失（滚动位置、表单输入等），切回时恢复。
-    val saveableStateHolder = rememberSaveableStateHolder()
-    val saveableStateDecorator = rememberSaveableStateHolderNavEntryDecorator<NavKey>(saveableStateHolder)
+    // #614 评论三：每个 top-level 栈绑定自己的 decorated entries（独立 SaveableStateHolder +
+    // ViewModelStore decorator）。三个 rememberDecoratedNavEntries 始终在组合中，
+    // inactive tab 状态不丢失；NavDisplay 直接消费 entries。
+    val entryProvider: (NavKey) -> NavEntry<NavKey> = { key: NavKey ->
+        when (key) {
+            is SujianRoute ->
+                when (key) {
+                    is SujianRoute.Works ->
+                        NavEntry(key, metadata = noPageTransitionMetadata) { route ->
+                            ProjectWorkspaceScreen(
+                                appState = appState,
+                                workspaceNavState = workspaceNavState,
+                                workspaceActions = workspaceActions,
+                            )
+                        }
+                    is SujianRoute.StarMap ->
+                        NavEntry(key, metadata = noPageTransitionMetadata) { route ->
+                            StarMapPlaceholderScreen(
+                                modifier = Modifier.testTag(SujianSemanticIds.StarMapScreen),
+                            )
+                        }
+                    is SujianRoute.Stats ->
+                        NavEntry(key, metadata = noPageTransitionMetadata) { route ->
+                            StatsScreen()
+                        }
+                    // Settings 保留全局 fade，不附加无动画 metadata
+                    is SujianRoute.Settings ->
+                        NavEntry(key) { route ->
+                            SettingsRoute()
+                        }
+                }
+            else -> NavEntry(key) {}
+        }
+    }
 
     NavDisplay(
-        backStack = topLevelBackStack.backStack,
+        entries = topLevelBackStack.decoratedEntries(entryProvider),
         onBack = {
             val handled = topLevelBackStack.removeLastOrNull()
             com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navBack(handled)
             handled
         },
-        entryDecorators = listOf(saveableStateDecorator),
         transitionSpec = navForwardTransition,
         popTransitionSpec = navPopTransition,
         predictivePopTransitionSpec = navPredictivePopTransition,
-        entryProvider = { key: NavKey ->
-            when (key) {
-                is SujianRoute ->
-                    when (key) {
-                        is SujianRoute.Works ->
-                            NavEntry(key, metadata = noPageTransitionMetadata) { route ->
-                                ProjectWorkspaceScreen(
-                                    appState = appState,
-                                    workspaceNavState = workspaceNavState,
-                                    workspaceActions = workspaceActions,
-                                )
-                            }
-                        is SujianRoute.StarMap ->
-                            NavEntry(key, metadata = noPageTransitionMetadata) { route ->
-                                StarMapPlaceholderScreen(
-                                    modifier = Modifier.testTag(SujianSemanticIds.StarMapScreen),
-                                )
-                            }
-                        is SujianRoute.Stats ->
-                            NavEntry(key, metadata = noPageTransitionMetadata) { route ->
-                                StatsScreen()
-                            }
-                        // Settings 保留全局 fade，不附加无动画 metadata
-                        is SujianRoute.Settings ->
-                            NavEntry(key) { route ->
-                                SettingsRoute()
-                            }
-                    }
-                else -> NavEntry(key) {}
-            }
-        },
     )
 }
 
