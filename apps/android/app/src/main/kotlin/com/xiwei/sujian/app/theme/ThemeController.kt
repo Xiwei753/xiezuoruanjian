@@ -139,7 +139,9 @@ fun rememberThemeController(
     }
 
     LaunchedEffect(Unit) {
-        com.xiwei.sujian.feature.settings.data.CoreSettingsEvents.settingsChanged.collect {
+        // #618 三：只监听外部主题目录变化（同步把调色板目录拉回来）才刷新主题；
+        // 本机设置保存不再触发主题重载（本机主题字段走 affectsTheme → ThemeStore.reload()）。
+        com.xiwei.sujian.feature.settings.data.CoreSettingsEvents.themeCatalogChanged.collect {
             ThemeStore.onSyncCompleted()
             controller.reload()
         }

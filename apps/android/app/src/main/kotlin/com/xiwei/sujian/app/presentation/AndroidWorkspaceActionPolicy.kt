@@ -7,6 +7,7 @@ import uniffi.writer_core.ActionRoleDto
 import uniffi.writer_core.ActionSlotDto
 import uniffi.writer_core.ActionTargetDto
 import uniffi.writer_core.ScreenPolicyDto
+import uniffi.writer_core.ScreenRoleDto
 
 /*
  * Android Workspace Action Policy（#610 评论四、评论六）— 把 Core 的 `ScreenPolicyDto`
@@ -178,6 +179,9 @@ internal object AndroidWorkspaceActionPolicy {
      *
      * #610 评论六：用 `mapNotNull` 跳过非 workspace 动作（Sync/Search/Settings/Back）
      * 和非 workspace 区域（HeaderLeading/HeaderTrailing），它们由 AndroidChromePolicy 处理。
+     *
+     * #618 一：调用方固定从 [PresentationPolicyCatalog] 取对应角色的 ScreenPolicyDto
+     * 再 resolve — 动作契约不再依赖调用时刻的导航/组合帧。
      */
     fun resolve(policy: ScreenPolicyDto?): AndroidWorkspaceActionSpec {
         val slots = policy?.actionSlots.orEmpty().mapNotNull { WorkspaceActionSpec.from(it) }
@@ -186,10 +190,18 @@ internal object AndroidWorkspaceActionPolicy {
 }
 
 /**
- * #610 评论四：在 Composable 中从 Core ScreenPolicyDto 解析 workspace 动作 spec。
+ * #618 一：作品工作区的两份静态动作 spec — 章节树按 PROJECT_WORKSPACE、作品列表按
+ * PROJECT_LIST，都来自容器创建时解析的 [PresentationPolicyCatalog]，随 catalog 稳定保存。
+ * 页面组合不再按当前导航位置临时解析动作契约。
  *
- * 放在 presentation 层，navigation/feature UI 无需接触 uniffi DTO 类型。
+ * 放在 presentation 层（本层允许 uniffi contract DTO），navigation/feature UI
+ * 无需接触 uniffi 类型。
  */
 @Composable
-internal fun rememberWorkspaceActions(screenPolicy: ScreenPolicyDto?): AndroidWorkspaceActionSpec =
-    remember(screenPolicy) { AndroidWorkspaceActionPolicy.resolve(screenPolicy) }
+internal fun rememberProjectActions(
+    catalog: PresentationPolicyCatalog,
+): Pair<AndroidWorkspaceActionSpec, AndroidWorkspaceActionSpec> =
+    remember(catalog) {
+        AndroidWorkspaceActionPolicy.resolve(catalog[ScreenRoleDto.PROJECT_LIST]) to
+            AndroidWorkspaceActionPolicy.resolve(catalog[ScreenRoleDto.PROJECT_WORKSPACE])
+    }

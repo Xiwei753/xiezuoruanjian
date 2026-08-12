@@ -106,7 +106,7 @@ internal object AndroidChromePolicy {
      * 合成最终 chrome 决策。
      *
      * @param screenRole 当前页面角色（[screenRoleFor]）
-     * @param screenPolicy Core 页面契约（PresentationContractBridge.resolveScreenPolicy）
+     * @param screenPolicy Core 页面契约（PresentationPolicyCatalog 一次性解析）
      * @param workspaceLocation 工作区位置（正文/章节树/作品列表）
      * @param canWorkspaceNavigateBack 工作区返回历史是否可回退（Android 动态状态）
      * @param contractShowsPrimaryNavigation Core 布局契约的 show_primary_navigation

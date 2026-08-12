@@ -65,11 +65,10 @@ import com.xiwei.sujian.app.presentation.AndroidChromePolicy
 import com.xiwei.sujian.app.presentation.AndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.AndroidNavigationPresentation
 import com.xiwei.sujian.app.presentation.AndroidWorkspaceActionSpec
-import com.xiwei.sujian.app.presentation.PresentationContractBridge
 import com.xiwei.sujian.app.presentation.SujianChromeAction
 import com.xiwei.sujian.app.presentation.SujianChromeSpec
 import com.xiwei.sujian.app.presentation.rememberAndroidLayoutSpec
-import com.xiwei.sujian.app.presentation.rememberWorkspaceActions
+import com.xiwei.sujian.app.presentation.rememberProjectActions
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
 import com.xiwei.sujian.core.designsystem.component.SujianSnackbar
 import com.xiwei.sujian.core.designsystem.component.SujianTopAppBar
@@ -266,42 +265,16 @@ private fun SujianNavDisplayContent(
     topLevelBackStack: SujianTopLevelBackStack,
     appState: SujianAppState,
     workspaceNavState: ProjectNavigationState,
-    workspaceActions: AndroidWorkspaceActionSpec,
+    projectListActions: AndroidWorkspaceActionSpec,
+    projectWorkspaceActions: AndroidWorkspaceActionSpec,
 ) {
     // #614 评论三：每个 top-level 栈绑定自己的 decorated entries（独立 SaveableStateHolder +
     // ViewModelStore decorator）。三个 rememberDecoratedNavEntries 始终在组合中，
     // inactive tab 状态不丢失；NavDisplay 直接消费 entries。
-    val entryProvider: (NavKey) -> NavEntry<NavKey> = { key: NavKey ->
-        when (key) {
-            is SujianRoute ->
-                when (key) {
-                    is SujianRoute.Works ->
-                        NavEntry(key, metadata = noPageTransitionMetadata) { route ->
-                            ProjectWorkspaceScreen(
-                                appState = appState,
-                                workspaceNavState = workspaceNavState,
-                                workspaceActions = workspaceActions,
-                            )
-                        }
-                    is SujianRoute.StarMap ->
-                        NavEntry(key, metadata = noPageTransitionMetadata) { route ->
-                            StarMapPlaceholderScreen(
-                                modifier = Modifier.testTag(SujianSemanticIds.StarMapScreen),
-                            )
-                        }
-                    is SujianRoute.Stats ->
-                        NavEntry(key, metadata = noPageTransitionMetadata) { route ->
-                            StatsScreen()
-                        }
-                    // Settings 保留全局 fade，不附加无动画 metadata
-                    is SujianRoute.Settings ->
-                        NavEntry(key) { route ->
-                            SettingsRoute()
-                        }
-                }
-            else -> NavEntry(key) {}
-        }
-    }
+    // #618 五：entryProvider 按 appState / workspaceNavState / 两份静态动作 spec 稳定保存，
+    // 底栏切换不再顺手重建三套 NavEntry provider。
+    val entryProvider =
+        rememberSujianEntryProvider(appState, workspaceNavState, projectListActions, projectWorkspaceActions)
 
     NavDisplay(
         entries = topLevelBackStack.decoratedEntries(entryProvider),
@@ -315,6 +288,54 @@ private fun SujianNavDisplayContent(
         predictivePopTransitionSpec = navPredictivePopTransition,
     )
 }
+
+/**
+ * #618 五：工作区 NavEntry provider — 按 [appState] / [workspaceNavState] /
+ * 两份静态动作 spec 稳定保存，避免每次重组都重建三个 back stack 的 provider。
+ * 动作 spec 来自容器创建时解析的 [com.xiwei.sujian.app.presentation.PresentationPolicyCatalog]，
+ * 是稳定引用，因此 provider 只在真正需要时重建。
+ */
+@Composable
+private fun rememberSujianEntryProvider(
+    appState: SujianAppState,
+    workspaceNavState: ProjectNavigationState,
+    projectListActions: AndroidWorkspaceActionSpec,
+    projectWorkspaceActions: AndroidWorkspaceActionSpec,
+): (NavKey) -> NavEntry<NavKey> =
+    remember(appState, workspaceNavState, projectListActions, projectWorkspaceActions) {
+        { key: NavKey ->
+            when (key) {
+                is SujianRoute ->
+                    when (key) {
+                        is SujianRoute.Works ->
+                            NavEntry(key, metadata = noPageTransitionMetadata) { route ->
+                                ProjectWorkspaceScreen(
+                                    appState = appState,
+                                    workspaceNavState = workspaceNavState,
+                                    projectListActions = projectListActions,
+                                    projectWorkspaceActions = projectWorkspaceActions,
+                                )
+                            }
+                        is SujianRoute.StarMap ->
+                            NavEntry(key, metadata = noPageTransitionMetadata) { route ->
+                                StarMapPlaceholderScreen(
+                                    modifier = Modifier.testTag(SujianSemanticIds.StarMapScreen),
+                                )
+                            }
+                        is SujianRoute.Stats ->
+                            NavEntry(key, metadata = noPageTransitionMetadata) { route ->
+                                StatsScreen()
+                            }
+                        // Settings 保留全局 fade，不附加无动画 metadata
+                        is SujianRoute.Settings ->
+                            NavEntry(key) { route ->
+                                SettingsRoute()
+                            }
+                    }
+                else -> NavEntry(key) {}
+            }
+        }
+    }
 
 /**
  * #617 评论二：一级（底栏/侧栏）切换动效 — 只动画“新页面绘制层”。
@@ -620,6 +641,11 @@ private fun rememberSujianTopBarInfo(
     )
 }
 
+/**
+ * #618 一：作品工作区的两份静态动作 spec 取自容器创建时解析的 PresentationPolicyCatalog。
+ * 章节树固定按 PROJECT_WORKSPACE 取动作契约（卷章操作不依赖父层组合帧观察到的
+ * navigator 位置）；作品列表固定按 PROJECT_LIST 取契约（新建作品主操作同理）。
+ */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun SujianNavigationSuite(
@@ -639,16 +665,19 @@ fun SujianNavigationSuite(
     // #614：收集 ViewModel 抛出的 UI 事件，错误走 Snackbar 展示。
     SujianUiEventEffect(appState, snackbarHostState)
 
-    val context = LocalContext.current
     val deps = LocalSujianAppDependencies.current
     val syncState by deps.syncStatusRepository.state.collectAsState()
     val coroutineScope = rememberCoroutineScope()
 
     val workspaceNavState = rememberSujianWorkspaceNavState(appState, layoutSpec.scaffoldDirective)
 
+    // #618 一：页面契约在应用容器创建时已一次性解析进 PresentationPolicyCatalog，
+    // 热路径只查内存 Map，不再同步跨 UniFFI 取契约。章节树固定按 PROJECT_WORKSPACE
+    // 取动作契约（卷章操作不依赖父层组合帧观察到的 navigator 位置）；作品列表
+    // 固定按 PROJECT_LIST 取契约（新建作品主操作同理）。
     val screenRole = AndroidChromePolicy.screenRoleFor(currentRoute, workspaceNavState.currentLocation)
-    val screenPolicy = remember(screenRole) { PresentationContractBridge.resolveScreenPolicy(context, screenRole) }
-    val workspaceActions = rememberWorkspaceActions(screenPolicy)
+    val screenPolicy = deps.presentationPolicyCatalog[screenRole]
+    val (projectListActions, projectWorkspaceActions) = rememberProjectActions(deps.presentationPolicyCatalog)
     val chrome =
         AndroidChromePolicy.resolve(
             screenRole = screenRole,
@@ -660,7 +689,6 @@ fun SujianNavigationSuite(
 
     SujianWorkspaceBackEffects(currentRoute, workspaceNavState, coroutineScope)
     SujianRouteEffects(currentRoute, currentTopDestination)
-
     val env = SujianTopBarEnv(syncState, coroutineScope, deps, topLevelBackStack)
     val topBarInfo = rememberSujianTopBarInfo(currentRoute, appState, chrome, env, workspaceNavState)
 
@@ -680,7 +708,8 @@ fun SujianNavigationSuite(
                 topLevelBackStack,
                 appState,
                 workspaceNavState,
-                workspaceActions,
+                projectListActions,
+                projectWorkspaceActions,
             )
         }
     }

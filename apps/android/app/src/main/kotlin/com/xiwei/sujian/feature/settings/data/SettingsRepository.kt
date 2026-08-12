@@ -109,7 +109,9 @@ class SettingsRepository(
                 }
                 // #617 评论六：保存成功后只同步全屏这一位，实验开关立即驱动窗口能力。
                 _immersiveFullscreenEnabled.value = settings.experimentalFullscreenMode
-                CoreSettingsEvents.record(result.envelope)
+                // #618 三：本机保存只通知编辑器需要的更新，不再把自己保存冒充外部设置变化
+                // （否则 SettingsViewModel/ThemeController 收到自己刚保存的事件又重读/重载）。
+                CoreSettingsEvents.notifyLocalEditorSettingsChanged()
                 SettingsSaveResult.Success
             }
             is BridgeResult.Error -> {
@@ -139,7 +141,8 @@ class SettingsRepository(
     fun saveSyncableSettings(settings: SyncableSettings): SettingsSaveResult {
         return when (val result = settingsBridge.saveSyncableSettings(settings)) {
             is BridgeResult.Success -> {
-                CoreSettingsEvents.record(result.envelope)
+                // #618 三：本机保存只通知编辑器需要的更新（字体大小），不触发外部重读/主题重载。
+                CoreSettingsEvents.notifyLocalEditorSettingsChanged()
                 com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("font_size", "ok")
                 SettingsSaveResult.Success
             }
@@ -173,19 +176,19 @@ class SettingsRepository(
     }
 
     /**
-     * #600 评论 #7: 外部同步拉取后通知设置已变化 — 复用 CoreSettingsEvents 事件总线,
-     * 让 SettingsViewModel / ThemeController 等监听方重新从 Core 读取最新设置。
+     * #600 评论 #7 / #618 三：外部同步拉取后通知设置已变化 — 走 externalSettingsChanged，
+     * 让 SettingsViewModel 从 Core 重新读取最新设置（不再发给 ThemeController）。
      */
     fun notifySyncableSettingsChangedExternally() {
-        CoreSettingsEvents.markEditorChanged()
+        CoreSettingsEvents.notifyExternalSettingsChanged()
     }
 
     /**
-     * #600 评论 #7: 外部同步拉取后通知主题调色板已变化 — 复用 CoreSettingsEvents 事件总线,
-     * 让 ThemeController 重新加载 palette catalog。
+     * #600 评论 #7 / #618 三：外部同步拉取后通知主题调色板已变化 — 走 themeCatalogChanged，
+     * 让 ThemeController 重新加载 palette catalog（不再重读整份设置）。
      */
     fun notifyPaletteCatalogChangedExternally() {
-        CoreSettingsEvents.markEditorChanged()
+        CoreSettingsEvents.notifyExternalThemeCatalogChanged()
     }
 
     fun aiAvailable(): Boolean {

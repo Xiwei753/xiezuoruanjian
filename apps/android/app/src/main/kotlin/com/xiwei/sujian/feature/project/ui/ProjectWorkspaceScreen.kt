@@ -48,13 +48,19 @@ import kotlinx.coroutines.launch
  * [workspaceNavState] 由导航套件层创建并注入（#597：返回历史始终同一份）——
  * 顶栏返回、系统返回、预测返回和页面返回共用同一个 navigator；
  * 本组件不再自行创建第二份工作区导航状态。
+ *
+ * #618 一：两份动作 spec 都由容器创建时解析的 PresentationPolicyCatalog 固定提供，
+ * 不再依赖父层组合帧观察到的 navigator 位置：
+ * - [projectListActions] 固定按 PROJECT_LIST 契约（新建作品主操作/作品菜单）；
+ * - [projectWorkspaceActions] 固定按 PROJECT_WORKSPACE 契约（卷章创建/删除/重命名/排序）。
  */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 internal fun ProjectWorkspaceScreen(
     appState: SujianAppState,
     workspaceNavState: ProjectNavigationState,
-    workspaceActions: AndroidWorkspaceActionSpec,
+    projectListActions: AndroidWorkspaceActionSpec,
+    projectWorkspaceActions: AndroidWorkspaceActionSpec,
     modifier: Modifier = Modifier,
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -141,7 +147,7 @@ internal fun ProjectWorkspaceScreen(
             AnimatedPane {
                 ProjectListContent(
                     appState = appState,
-                    workspaceActions = workspaceActions,
+                    workspaceActions = projectListActions,
                     onSelectProject = { projectId, projectTitle ->
                         appState.selectProject(projectId, projectTitle)
                         coroutineScope.launch {
@@ -157,7 +163,7 @@ internal fun ProjectWorkspaceScreen(
                     ChapterTreeContent(
                         projectId = currentProjectId,
                         projectRepository = projectRepository,
-                        workspaceActions = workspaceActions,
+                        workspaceActions = projectWorkspaceActions,
                         onSelectChapter = { volumeId, chapterId, chapterTitle ->
                             // #595 一：事务成功后才提交业务选择和 Navigator —
                             // 保存/加载失败时 Navigator 完全不变化，不再"先导航再回滚"。

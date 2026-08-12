@@ -14,11 +14,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -107,9 +104,10 @@ class SettingsViewModel(
 
     init {
         loadInitial()
-        // #600 评论 #7: 外部同步拉取设置后, 重新从 Core 加载设置状态
+        // #600 评论 #7 / #618 三：只有外部同步拉取设置时才重新从 Core 加载设置状态；
+        // 本机保存不再回环（本地保存只发 editorSettingsChanged，不进这里）。
         viewModelScope.launch {
-            com.xiwei.sujian.feature.settings.data.CoreSettingsEvents.settingsChanged.collect {
+            com.xiwei.sujian.feature.settings.data.CoreSettingsEvents.externalSettingsChanged.collect {
                 reloadFromExternalSync()
             }
         }
@@ -316,19 +314,10 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
     val snackbarHostState = rememberSettingsSnackbarHost(vm)
     val dims = LocalSujianDimensions.current
 
-    var expanded by rememberSaveable(
-        saver =
-            listSaver(
-                save = { state -> state.value.map { e -> e.name } },
-                restore = { restored ->
-                    mutableStateOf(
-                        restored.mapNotNull { name ->
-                            runCatching { SettingsSection.valueOf(name) }.getOrNull()
-                        }.toSet(),
-                    )
-                },
-            ),
-    ) { mutableStateOf(setOf<SettingsSection>()) }
+    val expansionState =
+        rememberSaveable(saver = SettingsExpansionState.Saver) {
+            SettingsExpansionState()
+        }
 
     Box(modifier = modifier.fillMaxSize()) {
         LazyColumn(
@@ -350,14 +339,9 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
                     SettingsCategoryItem(
                         category = category,
                         uiState = uiState,
-                        expanded = category.section in expanded,
+                        expanded = expansionState.isExpanded(category.section),
                         onExpandedChange = { isExpanded ->
-                            expanded =
-                                if (isExpanded) {
-                                    expanded + category.section
-                                } else {
-                                    expanded - category.section
-                                }
+                            expansionState.setExpanded(category.section, isExpanded)
                         },
                         onIntent = vm::handleIntent,
                     )

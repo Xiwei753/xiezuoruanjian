@@ -10,7 +10,6 @@ import uniffi.writer_core.ActionRoleDto
 import uniffi.writer_core.ActionSlotDto
 import uniffi.writer_core.LayoutContractDto
 import uniffi.writer_core.ScreenPolicyDto
-import uniffi.writer_core.ScreenRoleDto
 import uniffi.writer_core.WindowCapabilitiesDto
 
 /**
@@ -27,6 +26,10 @@ import uniffi.writer_core.WindowCapabilitiesDto
  * 旧的 ScreenPolicyBridge / LayoutPolicyBridge / ScreenPolicyModels /
  * LayoutPolicyModels 已删除，这里只有一个入口。
  *
+ * #618 一：静态页面契约（ScreenRole → ScreenPolicy）的临时解析已由
+ * [PresentationPolicyCatalog] 在应用容器创建时一次性完成，Compose 热路径只查
+ * catalog，不再走本桥。本桥保留动态的布局契约解析（依赖窗口能力）。
+ *
  * #610 评论二：ActionSlotDto 携带平台无关的业务目标身份（target），
  * Delete/Rename 等动作可区分“删卷/删章节/重命名卷/重命名章节”，
  * Android 消费端直接读 DTO 字段即可绑定业务操作，不靠区域/顺序猜身份。
@@ -39,12 +42,6 @@ internal object PresentationContractBridge {
         context: Context,
         capabilities: WindowCapabilitiesDto,
     ): LayoutContractDto? = resolve(context) { bridge -> bridge.resolveLayout(capabilities) }
-
-    /** Core 页面契约：ScreenRole → ActionSlot 列表（区域/顺序是产品语义）。 */
-    fun resolveScreenPolicy(
-        context: Context,
-        screenRole: ScreenRoleDto,
-    ): ScreenPolicyDto? = resolve(context) { bridge -> bridge.resolveScreenPolicy(screenRole) }
 
     private fun <T> resolve(
         context: Context,

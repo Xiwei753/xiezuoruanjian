@@ -66,6 +66,15 @@ class EditorViewModelInjectionTest {
         val deps =
             object : com.xiwei.sujian.app.di.SujianAppDependencies {
                 override val appServiceBridge: AppServiceBridge = bridge
+                override val presentationPolicyCatalog: com.xiwei.sujian.app.presentation.PresentationPolicyCatalog =
+                    com.xiwei.sujian.app.presentation.PresentationPolicyCatalog(
+                        resolver = { role ->
+                            when (val result = bridge.resolveScreenPolicy(role)) {
+                                is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> result.data
+                                else -> null
+                            }
+                        },
+                    )
                 override val projectRepository: ProjectRepository = ProjectRepository(app, bridge)
                 override val chapterRepository: ChapterRepository = ChapterRepository(app, bridge)
                 override val recentEditsRepository: RecentEditsRepository = RecentEditsRepository(app, bridge)

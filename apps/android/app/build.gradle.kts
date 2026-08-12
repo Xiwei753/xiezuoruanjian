@@ -211,6 +211,10 @@ android.applicationVariants.all {
     val variant = this
     val variantCapitalized = variant.name.replaceFirstChar { it.uppercase() }
     val buildNativeTaskName = "build${variantCapitalized}WriterNative"
+    val generateUniffiTaskName = "generate${variantCapitalized}WriterUniffi"
+
+    // #618 二：仓库根 = apps/android 的上一级再上一级。
+    val repoRoot = rootProject.projectDir.resolve("../..").canonicalFile
 
     val nativeDirOverride = providers.gradleProperty("sujian.android.nativeDir").orNull
     val variantNativeDir =
@@ -220,69 +224,120 @@ android.applicationVariants.all {
             layout.buildDirectory.dir("generated/writer-native/${variant.name}").get().asFile
         }
 
+    // Rust features 由 flavor 决定（AGENTS.md：ai / noAi 独立 flavor）。
+    val featuresArg = if (variant.name.startsWith("ai")) "ai" else ""
+    // UniFFI 绑定从 .so 提取契约：优先 arm64-v8a，否则取请求的第一个 ABI。
+    val uniffiSoAbi =
+        if ("arm64-v8a" in requestedAndroidAbis) "arm64-v8a" else requestedAndroidAbis.first()
+    val flavorName = variant.productFlavors.firstOrNull()?.name ?: "noAi"
+    val uniffiOutDir =
+        layout.buildDirectory.dir("generated/writer-uniffi/$flavorName/kotlin").get().asFile
+
     val buildNativeTask =
         tasks.register(buildNativeTaskName) {
             group = "build"
             description = "Build Rust native libraries for $variantCapitalized"
 
+            // #618 二：声明真实输入，让 Gradle 自己判断任务是否 UP-TO-DATE。
+            // 不再"文件存在就永远当最新"——旧逻辑没把 Rust 源码/契约声明为输入，
+            // Core screen_contract.rs 改了以后直接重跑 Gradle 仍可能把旧 .so 打进 APK。
+            inputs.files(
+                fileTree(File(repoRoot, "core/writer_core")) {
+                    include("**/*.rs", "Cargo.toml")
+                },
+                fileTree(File(repoRoot, "core/writer_platform_api")) {
+                    include("**/*.rs", "Cargo.toml")
+                },
+                fileTree(File(repoRoot, "core/writer_uniffi")) {
+                    include("**/*.rs", "Cargo.toml")
+                },
+                fileTree(File(repoRoot, "platform/rust/android")) {
+                    include("**/*.rs", "Cargo.toml")
+                },
+                File(repoRoot, "Cargo.toml"),
+                File(repoRoot, "Cargo.lock"),
+                File(repoRoot, "tools/android/build_native.sh"),
+            )
+            inputs.property("writerNativeAbis", requestedAndroidAbis.sorted().joinToString(","))
+            inputs.property("writerNativeFeatures", featuresArg)
+            inputs.property("writerNativeNdkVersion", ndkVersionValue)
             outputs.dir(variantNativeDir)
 
             doLast {
                 val outDir = variantNativeDir
+                val scriptPath = file("${project.projectDir}/../../../tools/android/build_native.sh")
+
+                if (!scriptPath.exists()) {
+                    throw GradleException("build_native.sh not found at ${scriptPath.absolutePath}")
+                }
+
+                // 脚本自身先删除请求 ABI 的旧 .so 再重新编译；
+                // 任务被 Gradle 判定需要执行时才走到这里。
+                val command =
+                    mutableListOf(
+                        scriptPath.absolutePath,
+                        "--variant",
+                        variant.name,
+                        "--abis",
+                        requestedAndroidAbis.joinToString(","),
+                        "--output",
+                        outDir.absolutePath,
+                    )
+                if (featuresArg.isNotEmpty()) {
+                    command.addAll(listOf("--features", featuresArg))
+                }
+
+                exec {
+                    commandLine(command)
+                }
 
                 for (abi in requestedAndroidAbis) {
                     val soFile = File(outDir, "$abi/libuniffi_writer_core.so")
-                    if (soFile.exists()) {
-                        logger.lifecycle(
-                            "Rust native library for ABI '$abi' already present at " +
-                                "${soFile.absolutePath}, skipping build.",
+                    if (!soFile.exists()) {
+                        throw GradleException(
+                            "Rust native library for ABI '$abi' not found at ${soFile.absolutePath} after build.",
                         )
                     }
                 }
+            }
+        }
 
-                val allPresent =
-                    requestedAndroidAbis.all { abi ->
-                        File(outDir, "$abi/libuniffi_writer_core.so").exists()
-                    }
+    // #618 二：UniFFI Kotlin 绑定生成任务 — 依赖 native 任务，输入是刚生成的 .so + 配置，
+    // 输出 build/generated/writer-uniffi/<flavor>/kotlin。生成前 Gradle 自动清除旧输出目录，
+    // 再执行 uniffi-bindgen。原生库与绑定只剩 Gradle 一份依赖图，
+    // tools/build_android.sh 不再自己维护增量逻辑。
+    val generateUniffiTask =
+        tasks.register(generateUniffiTaskName) {
+            group = "build"
+            description = "Generate UniFFI Kotlin bindings for $variantCapitalized"
 
-                if (allPresent) {
-                    logger.lifecycle("All requested ABI native libraries present, skipping Rust build.")
-                } else {
-                    val variantArg = variant.name
-                    val abiArg = requestedAndroidAbis.joinToString(",")
-                    val featuresArg = if (variant.name.startsWith("ai")) "ai" else ""
-                    val scriptPath = file("${project.projectDir}/../../../tools/android/build_native.sh")
+            dependsOn(buildNativeTask)
 
-                    if (!scriptPath.exists()) {
-                        throw GradleException("build_native.sh not found at ${scriptPath.absolutePath}")
-                    }
+            inputs.dir(variantNativeDir)
+            inputs.files(
+                fileTree(File(repoRoot, "core/writer_uniffi")) {
+                    include("**/*.rs", "Cargo.toml")
+                },
+                File(repoRoot, "Cargo.toml"),
+                File(repoRoot, "Cargo.lock"),
+                File(repoRoot, "core/writer_core/uniffi.toml"),
+            )
+            outputs.dir(uniffiOutDir)
 
-                    val command =
-                        mutableListOf(
-                            scriptPath.absolutePath,
-                            "--variant",
-                            variantArg,
-                            "--abis",
-                            abiArg,
-                            "--output",
-                            outDir.absolutePath,
-                        )
-                    if (featuresArg.isNotEmpty()) {
-                        command.addAll(listOf("--features", featuresArg))
-                    }
-
-                    exec {
-                        commandLine(command)
-                    }
-
-                    for (abi in requestedAndroidAbis) {
-                        val soFile = File(outDir, "$abi/libuniffi_writer_core.so")
-                        if (!soFile.exists()) {
-                            throw GradleException(
-                                "Rust native library for ABI '$abi' not found at ${soFile.absolutePath} after build.",
-                            )
-                        }
-                    }
+            doLast {
+                val soPath = File(variantNativeDir, "$uniffiSoAbi/libuniffi_writer_core.so")
+                if (!soPath.exists()) {
+                    throw GradleException(
+                        "UniFFI binding .so not found at ${soPath.absolutePath} after native build.",
+                    )
+                }
+                project.exec {
+                    workingDir(repoRoot)
+                    commandLine(
+                        "cargo", "run", "--bin", "uniffi-bindgen", "-p", "writer_uniffi",
+                        "--", "generate", "--library", soPath.absolutePath,
+                        "--language", "kotlin", "--out-dir", uniffiOutDir.absolutePath,
+                    )
                 }
             }
         }
@@ -291,8 +346,9 @@ android.applicationVariants.all {
         dependsOn(buildNativeTask)
     }
 
+    // #618 二：preBuild 依赖生成任务（生成任务依赖 native，传递到 Rust 编译）。
     tasks.named("pre${variantCapitalized}Build").configure {
-        dependsOn(buildNativeTask)
+        dependsOn(generateUniffiTask)
     }
 }
 

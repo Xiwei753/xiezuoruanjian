@@ -20,9 +20,9 @@ fun SettingsViewModel.loadInitial() {
 }
 
 /**
- * #600 评论 #7: 外部同步拉取设置/主题后, 重新从 Core 加载设置状态.
- * 监听 CoreSettingsEvents.settingsChanged 触发, 复用 loadInitial 的字段集,
- * 不新建第二套事件系统.
+ * #600 评论 #7 / #618 三: 外部同步拉取设置/主题后, 重新从 Core 加载设置状态.
+ * 只监听 externalSettingsChanged（外部同步拉取）触发, 复用 loadInitial 的字段集,
+ * 不新建第二套事件系统。本机保存不再回环触发本函数。
  */
 suspend fun SettingsViewModel.reloadFromExternalSync() {
     val repo = settingsRepo
