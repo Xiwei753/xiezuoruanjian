@@ -658,6 +658,29 @@ def rule_deleted_types_stay_deleted() -> list[Finding]:
                     message="旧 swallow-failure setSyncSecretsOverride 必须保持删除（#595 十）",
                 )
             )
+    # #617 评论四：labs 旧实验设置实现已删除（第二套真相），不得复活。
+    # 沉浸式全屏执行层只认 SettingsRepository.localSettingsState 这一份状态。
+    labs_dir = APP_SRC / "app" / "labs"
+    if labs_dir.exists():
+        for path in collect_kt_files(labs_dir, ""):
+            findings.append(
+                Finding(
+                    path=str(path.relative_to(APP_SRC)),
+                    line=0,
+                    message="app/labs 旧实验设置实现必须保持删除（#617 评论四：第二套真相）",
+                )
+            )
+    for labs_type in ("ExperimentalSettingsRepository", "ExperimentalFeatureRegistry"):
+        for path in collect_kt_files(APP_SRC, ""):
+            for lineno, raw in enumerate(effective_lines(path.read_text(encoding="utf-8")), 1):
+                if re.search(rf"\b(class|interface|data class|object)\s+{labs_type}\b", raw):
+                    findings.append(
+                        Finding(
+                            path=str(path.relative_to(APP_SRC)),
+                            line=lineno,
+                            message=f"{labs_type} 必须保持删除（#617 评论四：第二套真相）",
+                        )
+                    )
     return findings
 
 

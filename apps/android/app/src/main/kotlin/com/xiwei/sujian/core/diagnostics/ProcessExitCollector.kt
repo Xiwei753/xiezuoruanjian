@@ -46,7 +46,11 @@ internal object ProcessExitCollector {
                 writeError(destDir, "ActivityManager unavailable")
                 return
             }
-            val reasons = am.getHistoricalProcessExitReasons(context.packageName, 0, MAX_REASONS)
+            // getHistoricalProcessExitReasons 是平台类型：SDK stub 标注 @NonNull，但
+            // 运行时可返回 null；显式声明可空类型，让 isNullOrEmpty 空安全且不触发
+            // detekt UselessCallOnNotNull。
+            val reasons: List<ApplicationExitInfo>? =
+                am.getHistoricalProcessExitReasons(context.packageName, 0, MAX_REASONS)
             if (reasons.isNullOrEmpty()) {
                 File(destDir, OUTPUT_NAME).writeText("{\"entries\":[]}\n")
                 return

@@ -117,7 +117,11 @@ class SujianAppViewModel(
      * #614 评论二：未初始化时显式抛异常，避免 safe-call 静默返回 null 被当成 Success(null)。
      * 抛出的 IllegalStateException 由各调用方的 runCatching/try-catch 捕获，走 errorMessage → WorkspaceUiEvent.Error。
      */
-    private fun requireProjectUseCase(): ProjectUseCasePort = checkNotNull(projectUseCase) { "ProjectUseCase 尚未初始化" }
+    private fun requireProjectUseCase(): ProjectUseCasePort =
+        // 编程不变式消息，非 UI 文案（i18n 守卫：异常消息不允许中文硬编码）；
+        // 调用方 runCatching 捕获后 errorMessage 只对 RepositoryException 透出
+        // 本地化 message，其余统一走 R.string.error_internal。
+        checkNotNull(projectUseCase) { "ProjectUseCase is not initialized" }
 
     /**
      * #614：仅用于单元测试注入 fake [ProjectUseCasePort]，绕过 [initialize] 的真实 Repository 构造。
@@ -311,8 +315,8 @@ class SujianAppViewModel(
     private fun errorMessage(e: Throwable): String =
         when (e) {
             is com.xiwei.sujian.core.interop.common.RepositoryException ->
-                e.message ?: (appContext?.getString(com.xiwei.sujian.R.string.error_internal) ?: "操作失败")
-            else -> appContext?.getString(com.xiwei.sujian.R.string.error_internal) ?: "操作失败"
+                e.message ?: (appContext?.getString(com.xiwei.sujian.R.string.error_internal) ?: "Operation failed")
+            else -> appContext?.getString(com.xiwei.sujian.R.string.error_internal) ?: "Operation failed"
         }
 }
 

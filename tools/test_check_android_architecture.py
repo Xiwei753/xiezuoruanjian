@@ -380,6 +380,20 @@ class LayerRuleTests(unittest.TestCase):
         )
         self.assertTrue(findings, "EditorAnimationSettings 复活必须被报告")
 
+    def test_deleted_types_rule_flags_labs_experimental_types_revival(self):
+        """#617 评论四：labs 旧实验设置实现复活必须被报告（第二套真相）。"""
+        findings = self.run_rule(
+            "deleted-types-stay-deleted",
+            {
+                f"{APP_PREFIX}/app/labs/ExperimentalSettingsRepository.kt": (
+                    "package com.xiwei.sujian.app.labs\n\n"
+                    "class ExperimentalSettingsRepository\n"
+                )
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("ExperimentalSettingsRepository", messages, "labs 类型复活必须被报告")
+
     def test_source_contracts_rule_flags_missing_sync_commit(self):
         findings = self.run_rule(
             "source-contracts",
