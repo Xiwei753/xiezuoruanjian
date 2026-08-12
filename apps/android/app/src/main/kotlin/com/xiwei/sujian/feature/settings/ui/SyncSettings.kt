@@ -40,7 +40,7 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
  */
 @Composable
 fun SyncSettings(
-    state: SettingsUiState,
+    state: SyncSectionState,
     onIntent: (SettingsIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -59,7 +59,7 @@ fun SyncSettings(
 
 @Composable
 private fun ProjectSyncSection(
-    state: SettingsUiState,
+    state: SyncSectionState,
     onIntent: (SettingsIntent) -> Unit,
 ) {
     val syncConfig = state.projectSyncConfig
@@ -230,7 +230,7 @@ private fun ProjectSyncSection(
 
 @Composable
 private fun AppSyncSection(
-    state: SettingsUiState,
+    state: SyncSectionState,
     onIntent: (SettingsIntent) -> Unit,
 ) {
     val syncConfig = state.appSyncConfig

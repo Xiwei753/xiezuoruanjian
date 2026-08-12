@@ -17,56 +17,39 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
+import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.core.designsystem.component.SujianCard
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
-import com.xiwei.sujian.core.interop.common.BridgeResult
-import com.xiwei.sujian.feature.stats.data.WritingStatsRepositoryProvider
-import com.xiwei.sujian.feature.stats.data.model.ProjectWritingStatsItem
-import com.xiwei.sujian.feature.stats.data.model.WritingStatsSummary
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.time.LocalDate
-import java.time.format.DateTimeFormatter
 
+/**
+ * #618 六：统计页 UI。
+ *
+ * 数据状态放进 NavEntry 级 [StatsViewModel]（复用 Navigation 3 多 back stack 的
+ * ViewModelStore），页面重新进入时只做一次 revision 判断，不再每次切回都重新跑
+ * 两遍 Core 查询。查询与状态读取全部走容器里的唯一 [WritingStatsRepository]，
+ * 不再绕回 AppServiceProvider 取第二个 Bridge 入口。
+ */
 @Composable
 fun StatsScreen(modifier: Modifier = Modifier) {
+    val deps = LocalSujianAppDependencies.current
+    val vm: StatsViewModel =
+        viewModel(factory = StatsViewModel.Factory(deps.statsRepository))
+    val uiState by vm.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val dims = LocalSujianDimensions.current
-    var summary by remember { mutableStateOf<WritingStatsSummary?>(null) }
-    var projectItems by remember { mutableStateOf<List<ProjectWritingStatsItem>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
-        val today = LocalDate.now()
-        val startDate = today.minusDays(30).format(DateTimeFormatter.ISO_LOCAL_DATE)
-        val endDate = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
-
-        withContext(Dispatchers.IO) {
-            try {
-                val bridge = WritingStatsRepositoryProvider.getStatsBridge(context)
-                when (val result = bridge.getWritingStatsSummary(startDate, endDate)) {
-                    is BridgeResult.Success -> summary = result.data
-                    else -> {}
-                }
-                when (val result = bridge.getWritingStatsByProject(startDate, endDate)) {
-                    is BridgeResult.Success -> projectItems = result.data.projects ?: emptyList()
-                    else -> {}
-                }
-            } catch (_: Exception) {
-            }
-        }
-        isLoading = false
+        vm.refreshIfNeeded()
     }
 
-    if (isLoading) {
+    if (uiState.loading) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(stringResource(id = R.string.loading), style = MaterialTheme.typography.bodyLarge)
         }
@@ -82,7 +65,7 @@ fun StatsScreen(modifier: Modifier = Modifier) {
             Spacer(modifier = Modifier.height(dims.space16))
         }
 
-        summary?.let { s ->
+        uiState.summary?.let { s ->
             item {
                 SujianCard(
                     modifier = Modifier.fillMaxWidth().padding(bottom = dims.space12),
@@ -116,12 +99,12 @@ fun StatsScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        if (projectItems.isNotEmpty()) {
+        if (uiState.projects.isNotEmpty()) {
             item {
                 Text(stringResource(id = R.string.stats_by_project), style = MaterialTheme.typography.titleSmall)
                 Spacer(modifier = Modifier.height(dims.space8))
             }
-            items(projectItems, key = { it.projectId ?: "" }) { item ->
+            items(uiState.projects, key = { it.projectId ?: "" }) { item ->
                 SujianCard(
                     modifier = Modifier.fillMaxWidth().padding(bottom = dims.space8),
                 ) {
@@ -140,7 +123,7 @@ fun StatsScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        if (summary == null && projectItems.isEmpty()) {
+        if (uiState.summary == null && uiState.projects.isEmpty()) {
             item {
                 Box(modifier = Modifier.fillMaxSize().padding(dims.space32), contentAlignment = Alignment.Center) {
                     Text(stringResource(id = R.string.stats_no_data), style = MaterialTheme.typography.bodyLarge)

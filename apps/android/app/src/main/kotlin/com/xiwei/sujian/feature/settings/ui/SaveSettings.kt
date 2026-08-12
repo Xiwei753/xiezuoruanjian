@@ -21,14 +21,13 @@ import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 
 @Composable
 fun SaveSettings(
-    state: SettingsUiState,
+    state: SaveSectionState,
     onIntent: (SettingsIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val settings = state.settings
     val dims = LocalSujianDimensions.current
-    var autoSaveDelay by rememberSaveable(settings.autoSaveDelayMs / 1000f) {
-        mutableFloatStateOf(settings.autoSaveDelayMs / 1000f)
+    var autoSaveDelay by rememberSaveable(state.autoSaveDelayMs / 1000f) {
+        mutableFloatStateOf(state.autoSaveDelayMs / 1000f)
     }
 
     androidx.compose.foundation.layout.Column(
@@ -38,7 +37,7 @@ fun SaveSettings(
         SujianSection(title = stringResource(id = R.string.pref_category_save)) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_auto_save),
-                checked = settings.autoSaveEnabled,
+                checked = state.autoSaveEnabled,
                 onCheckedChange = { checked ->
                     onIntent(SettingsIntent.UpdateLocal { it.copy(autoSaveEnabled = checked) })
                 },

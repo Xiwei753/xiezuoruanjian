@@ -12,11 +12,10 @@ import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 
 @Composable
 fun LaboratorySettings(
-    state: SettingsUiState,
+    state: LaboratorySectionState,
     onIntent: (SettingsIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val settings = state.settings
     val dims = LocalSujianDimensions.current
 
     androidx.compose.foundation.layout.Column(
@@ -26,7 +25,7 @@ fun LaboratorySettings(
         SujianSection(title = stringResource(id = R.string.pref_category_laboratory)) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.lab_fullscreen_immersive),
-                checked = settings.experimentalFullscreenMode,
+                checked = state.immersiveFullscreen,
                 onCheckedChange = { checked ->
                     onIntent(SettingsIntent.UpdateLocal { it.copy(experimentalFullscreenMode = checked) })
                 },

@@ -7,6 +7,7 @@ import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import com.xiwei.sujian.app.MainActivity
 import com.xiwei.sujian.app.di.SujianAppDependencies
+import com.xiwei.sujian.app.presentation.PresentationPolicyCatalog
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
@@ -202,6 +203,18 @@ class TestSujianAppDependencies(
                 ),
         )
     override val appServiceBridge: AppServiceBridge = AppServiceBridge(testHolder)
+
+    // #618 一：androidTest 容器同样在创建时一次性解析静态页面契约（与
+    // DefaultAppServiceContainer 一致），Compose 热路径只查内存 Map。
+    override val presentationPolicyCatalog: PresentationPolicyCatalog =
+        PresentationPolicyCatalog(
+            resolver = { role ->
+                when (val result = appServiceBridge.resolveScreenPolicy(role)) {
+                    is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> result.data
+                    else -> null
+                }
+            },
+        )
     override val projectRepository: ProjectRepository = ProjectRepository(appContext, appServiceBridge)
     override val chapterRepository: com.xiwei.sujian.feature.project.data.ChapterRepository =
         com.xiwei.sujian.feature.project.data.ChapterRepository(appContext, appServiceBridge)

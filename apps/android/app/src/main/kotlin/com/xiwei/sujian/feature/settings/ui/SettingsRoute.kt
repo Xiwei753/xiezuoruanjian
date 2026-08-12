@@ -12,7 +12,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -23,6 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
@@ -38,9 +38,13 @@ import com.xiwei.sujian.feature.sync.data.SyncCoordinator
 import com.xiwei.sujian.feature.sync.data.SyncRepository
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -55,6 +59,193 @@ class SettingsViewModel(
 
     internal val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
+
+    // #618 六：只读分节状态 — 由 _uiState 派生（map -> distinctUntilChanged -> stateIn），
+    // 不新建第二份可写状态。每个分类只订阅自己消费的字段投影：切换实验室开关时只有
+    // laboratoryState 发新值，设置根节点与其它分类不重组。
+    val appearanceState: StateFlow<AppearanceSectionState> =
+        uiState
+            .map { state ->
+                AppearanceSectionState(
+                    appearanceMode = state.settings.appearanceMode,
+                    colorSource = state.settings.colorSource,
+                    dynamicColorEnabled = state.settings.dynamicColorEnabled,
+                    fontSize = state.fontSize,
+                    lineSpacing = state.settings.editorLineSpacingMultiplier,
+                )
+            }
+            .distinctUntilChanged()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                AppearanceSectionState(
+                    _uiState.value.settings.appearanceMode,
+                    _uiState.value.settings.colorSource,
+                    _uiState.value.settings.dynamicColorEnabled,
+                    _uiState.value.fontSize,
+                    _uiState.value.settings.editorLineSpacingMultiplier,
+                ),
+            )
+
+    val editorState: StateFlow<EditorSectionState> =
+        uiState
+            .map { state ->
+                EditorSectionState(
+                    autoIndentEnabled = state.settings.autoIndentEnabled,
+                    autoIndentWidth = state.settings.autoIndentWidth,
+                    typingAnimationEnabled = state.settings.editorTypingAnimationEnabled,
+                    typingAnimationDurationMs = state.settings.editorTypingAnimationDurationMs,
+                    smoothCursorEnabled = state.settings.editorSmoothCursorEnabled,
+                    smoothCursorDurationMs = state.settings.editorSmoothCursorDurationMs,
+                )
+            }
+            .distinctUntilChanged()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                EditorSectionState(
+                    _uiState.value.settings.autoIndentEnabled,
+                    _uiState.value.settings.autoIndentWidth,
+                    _uiState.value.settings.editorTypingAnimationEnabled,
+                    _uiState.value.settings.editorTypingAnimationDurationMs,
+                    _uiState.value.settings.editorSmoothCursorEnabled,
+                    _uiState.value.settings.editorSmoothCursorDurationMs,
+                ),
+            )
+
+    val saveState: StateFlow<SaveSectionState> =
+        uiState
+            .map { state ->
+                SaveSectionState(
+                    autoSaveEnabled = state.settings.autoSaveEnabled,
+                    autoSaveDelayMs = state.settings.autoSaveDelayMs,
+                )
+            }
+            .distinctUntilChanged()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                SaveSectionState(
+                    _uiState.value.settings.autoSaveEnabled,
+                    _uiState.value.settings.autoSaveDelayMs,
+                ),
+            )
+
+    val syncState: StateFlow<SyncSectionState> =
+        uiState
+            .map { state ->
+                SyncSectionState(
+                    projectSyncConfig = state.projectSyncConfig,
+                    projectSyncSecrets = state.projectSyncSecrets,
+                    projectSyncCapability = state.projectSyncCapability,
+                    projectSyncProfileLoadState = state.projectSyncProfileLoadState,
+                    projectDryRunState = state.projectDryRunState,
+                    projectTestConnectionState = state.projectTestConnectionState,
+                    projectPerformSyncState = state.projectPerformSyncState,
+                    projectSyncResult = state.projectSyncResult,
+                    appSyncConfig = state.appSyncConfig,
+                    appSyncSecrets = state.appSyncSecrets,
+                    appSyncProfileLoadState = state.appSyncProfileLoadState,
+                    appDryRunState = state.appDryRunState,
+                    appTestConnectionState = state.appTestConnectionState,
+                    appPerformSyncState = state.appPerformSyncState,
+                    appSyncResult = state.appSyncResult,
+                    secureStorageWarning = state.secureStorageWarning,
+                )
+            }
+            .distinctUntilChanged()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                SyncSectionState(
+                    _uiState.value.projectSyncConfig,
+                    _uiState.value.projectSyncSecrets,
+                    _uiState.value.projectSyncCapability,
+                    _uiState.value.projectSyncProfileLoadState,
+                    _uiState.value.projectDryRunState,
+                    _uiState.value.projectTestConnectionState,
+                    _uiState.value.projectPerformSyncState,
+                    _uiState.value.projectSyncResult,
+                    _uiState.value.appSyncConfig,
+                    _uiState.value.appSyncSecrets,
+                    _uiState.value.appSyncProfileLoadState,
+                    _uiState.value.appDryRunState,
+                    _uiState.value.appTestConnectionState,
+                    _uiState.value.appPerformSyncState,
+                    _uiState.value.appSyncResult,
+                    _uiState.value.secureStorageWarning,
+                ),
+            )
+
+    val aiState: StateFlow<AiSectionState> =
+        uiState
+            .map { state ->
+                AiSectionState(
+                    available = state.aiAvailable,
+                    enabled = state.settings.aiEnabled,
+                )
+            }
+            .distinctUntilChanged()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                AiSectionState(
+                    _uiState.value.aiAvailable,
+                    _uiState.value.settings.aiEnabled,
+                ),
+            )
+
+    val diagnosticsState: StateFlow<DiagnosticsSectionState> =
+        uiState
+            .map { state ->
+                DiagnosticsSectionState(
+                    enabled = state.settings.diagnosticsEnabled,
+                    verbose = state.settings.diagnosticsVerbose,
+                )
+            }
+            .distinctUntilChanged()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                DiagnosticsSectionState(
+                    _uiState.value.settings.diagnosticsEnabled,
+                    _uiState.value.settings.diagnosticsVerbose,
+                ),
+            )
+
+    val laboratoryState: StateFlow<LaboratorySectionState> =
+        uiState
+            .map { state ->
+                LaboratorySectionState(
+                    immersiveFullscreen = state.settings.experimentalFullscreenMode,
+                )
+            }
+            .distinctUntilChanged()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                LaboratorySectionState(
+                    _uiState.value.settings.experimentalFullscreenMode,
+                ),
+            )
+
+    val aboutState: StateFlow<AboutSectionState> =
+        uiState
+            .map { state ->
+                AboutSectionState(
+                    dataRootPath = state.dataRootPath,
+                    versionInfo = state.versionInfo,
+                )
+            }
+            .distinctUntilChanged()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                AboutSectionState(
+                    _uiState.value.dataRootPath,
+                    _uiState.value.versionInfo,
+                ),
+            )
 
     internal sealed interface QueueItem {
         data class Save(val command: SettingsSaveCommand) : QueueItem
@@ -310,7 +501,6 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
                     deps.syncCoordinator,
                 ),
         )
-    val uiState by vm.uiState.collectAsState()
     val snackbarHostState = rememberSettingsSnackbarHost(vm)
     val dims = LocalSujianDimensions.current
 
@@ -338,7 +528,7 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
                 items(categories, key = { it.section.name }) { category ->
                     SettingsCategoryItem(
                         category = category,
-                        uiState = uiState,
+                        vm = vm,
                         expanded = expansionState.isExpanded(category.section),
                         onExpandedChange = { isExpanded ->
                             expansionState.setExpanded(category.section, isExpanded)
@@ -357,11 +547,14 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
 
 /**
  * 单个设置分类的折叠面板项 — 从 [SettingsRoute] 中提取以控制函数长度与认知复杂度。
+ *
+ * #618 六：不再接收整份 [SettingsUiState]；头部当前值与展开内容分别只订阅
+ * 本分类对应的 section state，其它分类的状态变化不会让本项重组。
  */
 @Composable
 private fun SettingsCategoryItem(
     category: SettingsCategory,
-    uiState: SettingsUiState,
+    vm: SettingsViewModel,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     onIntent: (SettingsIntent) -> Unit,
@@ -369,19 +562,43 @@ private fun SettingsCategoryItem(
     SettingsExpandableSection(
         title = stringResource(id = category.titleResId),
         summary = settingsCategorySummary(category),
-        value = settingsCategoryValue(category, uiState),
+        value = settingsCategoryValue(category, vm),
         expanded = expanded,
         onExpandedChange = onExpandedChange,
         content = {
             when (category.section) {
-                SettingsSection.Appearance -> AppearanceSettings(state = uiState, onIntent = onIntent)
-                SettingsSection.Editor -> EditorSettings(state = uiState, onIntent = onIntent)
-                SettingsSection.Save -> SaveSettings(state = uiState, onIntent = onIntent)
-                SettingsSection.Sync -> SyncSettings(state = uiState, onIntent = onIntent)
-                SettingsSection.Ai -> AiSettings(state = uiState, onIntent = onIntent)
-                SettingsSection.Diagnostics -> DiagnosticsSettings(state = uiState, onIntent = onIntent)
-                SettingsSection.Laboratory -> LaboratorySettings(state = uiState, onIntent = onIntent)
-                SettingsSection.About -> AboutSettings(state = uiState, onIntent = onIntent)
+                SettingsSection.Appearance -> {
+                    val state by vm.appearanceState.collectAsStateWithLifecycle()
+                    AppearanceSettings(state = state, onIntent = onIntent)
+                }
+                SettingsSection.Editor -> {
+                    val state by vm.editorState.collectAsStateWithLifecycle()
+                    EditorSettings(state = state, onIntent = onIntent)
+                }
+                SettingsSection.Save -> {
+                    val state by vm.saveState.collectAsStateWithLifecycle()
+                    SaveSettings(state = state, onIntent = onIntent)
+                }
+                SettingsSection.Sync -> {
+                    val state by vm.syncState.collectAsStateWithLifecycle()
+                    SyncSettings(state = state, onIntent = onIntent)
+                }
+                SettingsSection.Ai -> {
+                    val state by vm.aiState.collectAsStateWithLifecycle()
+                    AiSettings(state = state, onIntent = onIntent)
+                }
+                SettingsSection.Diagnostics -> {
+                    val state by vm.diagnosticsState.collectAsStateWithLifecycle()
+                    DiagnosticsSettings(state = state, onIntent = onIntent)
+                }
+                SettingsSection.Laboratory -> {
+                    val state by vm.laboratoryState.collectAsStateWithLifecycle()
+                    LaboratorySettings(state = state, onIntent = onIntent)
+                }
+                SettingsSection.About -> {
+                    val state by vm.aboutState.collectAsStateWithLifecycle()
+                    AboutSettings(state = state, onIntent = onIntent)
+                }
             }
         },
     )
@@ -425,21 +642,39 @@ internal fun settingsCategorySummary(category: SettingsCategory): String? =
     }
 
 /**
- * 设置列表项的真实当前值：全部来自真实 [SettingsUiState]，保存后随状态即时更新；
- * 无当前值可展示的分类（实验室/关于）返回 null，只保留功能说明。
+ * 设置列表项的真实当前值：全部来自本分类对应的 section state（#618 六），
+ * 保存后随状态即时更新；无当前值可展示的分类（实验室/关于）返回 null，只保留功能说明。
  */
 @Composable
 internal fun settingsCategoryValue(
     category: SettingsCategory,
-    state: SettingsUiState,
+    vm: SettingsViewModel,
 ): String? =
     when (category.section) {
-        SettingsSection.Appearance -> appearanceModeValue(state.settings.appearanceMode)
-        SettingsSection.Editor -> fontSizeValue(state.fontSize)
-        SettingsSection.Save -> toggleValue(state.settings.autoSaveEnabled)
-        SettingsSection.Sync -> toggleValue(state.projectSyncConfig.enabled == true)
-        SettingsSection.Ai -> toggleValue(state.settings.aiEnabled)
-        SettingsSection.Diagnostics -> toggleValue(state.settings.diagnosticsEnabled)
+        SettingsSection.Appearance -> {
+            val state by vm.appearanceState.collectAsStateWithLifecycle()
+            appearanceModeValue(state.appearanceMode)
+        }
+        SettingsSection.Editor -> {
+            val state by vm.appearanceState.collectAsStateWithLifecycle()
+            fontSizeValue(state.fontSize)
+        }
+        SettingsSection.Save -> {
+            val state by vm.saveState.collectAsStateWithLifecycle()
+            toggleValue(state.autoSaveEnabled)
+        }
+        SettingsSection.Sync -> {
+            val state by vm.syncState.collectAsStateWithLifecycle()
+            toggleValue(state.projectSyncConfig.enabled == true)
+        }
+        SettingsSection.Ai -> {
+            val state by vm.aiState.collectAsStateWithLifecycle()
+            toggleValue(state.enabled)
+        }
+        SettingsSection.Diagnostics -> {
+            val state by vm.diagnosticsState.collectAsStateWithLifecycle()
+            toggleValue(state.enabled)
+        }
         SettingsSection.Laboratory,
         SettingsSection.About,
         -> null

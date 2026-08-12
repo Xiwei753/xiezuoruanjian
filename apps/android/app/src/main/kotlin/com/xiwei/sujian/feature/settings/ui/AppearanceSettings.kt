@@ -21,18 +21,14 @@ import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 
 @Composable
 fun AppearanceSettings(
-    state: SettingsUiState,
+    state: AppearanceSectionState,
     onIntent: (SettingsIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val settings = state.settings
     val dims = LocalSujianDimensions.current
     var fontSize by rememberSaveable(state.fontSize) { mutableFloatStateOf(state.fontSize) }
-    var lineSpacing by rememberSaveable(settings.editorLineSpacingMultiplier) {
-        mutableFloatStateOf(settings.editorLineSpacingMultiplier)
-    }
-    var autoSaveDelay by rememberSaveable(settings.autoSaveDelayMs / 1000f) {
-        mutableFloatStateOf(settings.autoSaveDelayMs / 1000f)
+    var lineSpacing by rememberSaveable(state.lineSpacing) {
+        mutableFloatStateOf(state.lineSpacing)
     }
 
     androidx.compose.foundation.layout.Column(
@@ -43,7 +39,7 @@ fun AppearanceSettings(
             SujianDropdownMenu(
                 label = stringResource(id = R.string.pref_theme_mode),
                 selectedIndex =
-                    when (settings.appearanceMode) {
+                    when (state.appearanceMode) {
                         "light" -> 1
                         "dark" -> 2
                         else -> 0
@@ -69,7 +65,7 @@ fun AppearanceSettings(
             SujianDropdownMenu(
                 label = stringResource(id = R.string.pref_hint_color_theme),
                 selectedIndex =
-                    when (settings.colorSource) {
+                    when (state.colorSource) {
                         "android_dynamic" -> 1
                         "saved_palette" -> 2
                         else -> 0

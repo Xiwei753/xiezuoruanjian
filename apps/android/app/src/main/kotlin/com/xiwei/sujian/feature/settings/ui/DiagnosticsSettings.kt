@@ -29,12 +29,11 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun DiagnosticsSettings(
-    state: SettingsUiState,
+    state: DiagnosticsSectionState,
     onIntent: (SettingsIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val settings = state.settings
     val dims = LocalSujianDimensions.current
     val clearedText = stringResource(id = R.string.diagnostics_cleared)
     val clearFailedText = stringResource(id = R.string.diagnostics_clear_failed)
@@ -47,27 +46,34 @@ fun DiagnosticsSettings(
         SujianSection(title = stringResource(id = R.string.pref_category_diagnostics)) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_diagnostics_enabled),
-                checked = settings.diagnosticsEnabled,
+                checked = state.enabled,
                 onCheckedChange = { checked ->
-                    var s = settings.copy(diagnosticsEnabled = checked)
                     DiagnosticsLogger.setEnabled(checked)
                     EditorEventRingBuffer.setEnabled(checked)
                     if (!checked) {
-                        s = s.copy(diagnosticsVerbose = false)
                         DiagnosticsLogger.setVerbose(false)
                     }
-                    onIntent(SettingsIntent.UpdateLocal { s })
+                    // 保持整份 LocalSettings 的其余字段：只在当前真相上改诊断开关，
+                    // 关闭诊断时同时关闭 verbose（与旧 settings.copy 语义一致）。
+                    onIntent(
+                        SettingsIntent.UpdateLocal { current ->
+                            current.copy(
+                                diagnosticsEnabled = checked,
+                                diagnosticsVerbose = if (checked) current.diagnosticsVerbose else false,
+                            )
+                        },
+                    )
                 },
             )
             Spacer(modifier = Modifier.height(dims.space8))
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_diagnostics_verbose),
-                checked = settings.diagnosticsVerbose,
+                checked = state.verbose,
                 onCheckedChange = { checked ->
                     DiagnosticsLogger.setVerbose(checked)
                     onIntent(SettingsIntent.UpdateLocal { it.copy(diagnosticsVerbose = checked) })
                 },
-                enabled = settings.diagnosticsEnabled,
+                enabled = state.enabled,
             )
             Spacer(modifier = Modifier.height(dims.space8))
             ExportDiagnosticsButton(context = context, modifier = Modifier.fillMaxWidth())

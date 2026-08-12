@@ -12,11 +12,11 @@ import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 
 @Composable
 fun AiSettings(
-    state: SettingsUiState,
+    state: AiSectionState,
     onIntent: (SettingsIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    if (!state.aiAvailable) return
+    if (!state.available) return
     val dims = LocalSujianDimensions.current
 
     androidx.compose.foundation.layout.Column(
@@ -26,7 +26,7 @@ fun AiSettings(
         SujianSection(title = stringResource(id = R.string.pref_category_ai)) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_ai_enabled),
-                checked = state.settings.aiEnabled,
+                checked = state.enabled,
                 onCheckedChange = { checked ->
                     onIntent(SettingsIntent.UpdateLocal { it.copy(aiEnabled = checked) })
                 },

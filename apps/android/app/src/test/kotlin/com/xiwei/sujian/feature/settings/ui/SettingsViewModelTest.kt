@@ -1,6 +1,8 @@
 package com.xiwei.sujian.feature.settings.ui
 
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -66,6 +68,71 @@ class SettingsViewModelTest {
         vm.handleIntent(SettingsIntent.UpdateFontSize(20f))
         vm.consumeSaveError()
         assertNull(vm.uiState.value.saveErrorResId)
+    }
+
+    @Test
+    fun `section states derive from uiState`() {
+        val vm = createVm()
+        // stateIn(WhileSubscribed) 只在有订阅时推进上游；先挂三个分类的收集器。
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
+        val appearanceValues = mutableListOf<AppearanceSectionState>()
+        val laboratoryValues = mutableListOf<LaboratorySectionState>()
+        val syncValues = mutableListOf<SyncSectionState>()
+        scope.launch { vm.appearanceState.collect { appearanceValues += it } }
+        scope.launch { vm.laboratoryState.collect { laboratoryValues += it } }
+        scope.launch { vm.syncState.collect { syncValues += it } }
+        awaitUntil(
+            predicate = { appearanceValues.isNotEmpty() && laboratoryValues.isNotEmpty() && syncValues.isNotEmpty() },
+            message = "collectors must attach and receive initial values",
+        )
+        vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(experimentalFullscreenMode = true) })
+        vm.handleIntent(SettingsIntent.UpdateFontSize(20f))
+        vm.handleIntent(
+            SettingsIntent.UpdateProjectSyncConfig(
+                com.xiwei.sujian.feature.sync.data.model.SyncConfig(enabled = true),
+            ),
+        )
+        awaitUntil(
+            predicate = { laboratoryValues.last().immersiveFullscreen },
+            message = "laboratory state must emit the new value",
+        )
+        // 各分类 state 立即反映对应字段的新值。
+        assertTrue(laboratoryValues.last().immersiveFullscreen)
+        assertEquals(20f, appearanceValues.last().fontSize, 0.01f)
+        assertTrue(syncValues.last().projectSyncConfig.enabled == true)
+        // 无关字段不受影响：外观主题模式仍是默认 system。
+        assertEquals("system", appearanceValues.last().appearanceMode)
+        scope.cancel()
+    }
+
+    @Test
+    fun `laboratory change only re-emits laboratory state`() {
+        val vm = createVm()
+        val appearanceValues = mutableListOf<AppearanceSectionState>()
+        val laboratoryValues = mutableListOf<LaboratorySectionState>()
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
+        val appearanceJob =
+            scope.launch { vm.appearanceState.collect { appearanceValues += it } }
+        val laboratoryJob =
+            scope.launch { vm.laboratoryState.collect { laboratoryValues += it } }
+        awaitUntil(
+            predicate = { appearanceValues.isNotEmpty() && laboratoryValues.isNotEmpty() },
+            message = "collectors must attach and receive initial values",
+        )
+        vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(experimentalFullscreenMode = true) })
+        awaitUntil(
+            predicate = { laboratoryValues.last().immersiveFullscreen },
+            message = "laboratory state must emit the new value",
+        )
+        // 实验室开关变化不得传播到外观分类（distinctUntilChanged 过滤无关字段）。
+        assertEquals(
+            "外观分类只收到初始值，实验室变化不触发其重发",
+            1,
+            appearanceValues.size,
+        )
+        appearanceJob.cancel()
+        laboratoryJob.cancel()
+        scope.cancel()
     }
 
     @Test

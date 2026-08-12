@@ -16,7 +16,7 @@ import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 
 @Composable
 fun AboutSettings(
-    state: SettingsUiState,
+    state: AboutSectionState,
     onIntent: (SettingsIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {

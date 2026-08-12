@@ -21,18 +21,17 @@ import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 
 @Composable
 fun EditorSettings(
-    state: SettingsUiState,
+    state: EditorSectionState,
     onIntent: (SettingsIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val settings = state.settings
     val dims = LocalSujianDimensions.current
-    var autoIndentWidth by rememberSaveable(settings.autoIndentWidth) { mutableFloatStateOf(settings.autoIndentWidth) }
-    var typingDuration by rememberSaveable(settings.editorTypingAnimationDurationMs.toFloat()) {
-        mutableFloatStateOf(settings.editorTypingAnimationDurationMs.toFloat())
+    var autoIndentWidth by rememberSaveable(state.autoIndentWidth) { mutableFloatStateOf(state.autoIndentWidth) }
+    var typingDuration by rememberSaveable(state.typingAnimationDurationMs.toFloat()) {
+        mutableFloatStateOf(state.typingAnimationDurationMs.toFloat())
     }
-    var cursorDuration by rememberSaveable(settings.editorSmoothCursorDurationMs.toFloat()) {
-        mutableFloatStateOf(settings.editorSmoothCursorDurationMs.toFloat())
+    var cursorDuration by rememberSaveable(state.smoothCursorDurationMs.toFloat()) {
+        mutableFloatStateOf(state.smoothCursorDurationMs.toFloat())
     }
 
     androidx.compose.foundation.layout.Column(
@@ -45,7 +44,7 @@ fun EditorSettings(
         ) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_auto_indent),
-                checked = settings.autoIndentEnabled,
+                checked = state.autoIndentEnabled,
                 onCheckedChange = { checked ->
                     onIntent(SettingsIntent.UpdateLocal { it.copy(autoIndentEnabled = checked) })
                 },
@@ -68,7 +67,7 @@ fun EditorSettings(
         SujianSection(title = stringResource(id = R.string.pref_category_editor_behavior)) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_editor_typing_animation),
-                checked = settings.editorTypingAnimationEnabled,
+                checked = state.typingAnimationEnabled,
                 onCheckedChange = { checked ->
                     onIntent(SettingsIntent.UpdateLocal { it.copy(editorTypingAnimationEnabled = checked) })
                 },
@@ -91,13 +90,13 @@ fun EditorSettings(
                 valueRange = 30f..1000f,
                 steps = 96,
                 valueLabel = "${typingDuration.toInt()}ms",
-                enabled = settings.editorTypingAnimationEnabled,
+                enabled = state.typingAnimationEnabled,
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(modifier = Modifier.height(dims.space8))
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_editor_smooth_cursor),
-                checked = settings.editorSmoothCursorEnabled,
+                checked = state.smoothCursorEnabled,
                 onCheckedChange = { checked ->
                     onIntent(SettingsIntent.UpdateLocal { it.copy(editorSmoothCursorEnabled = checked) })
                 },
@@ -115,7 +114,7 @@ fun EditorSettings(
                 valueRange = 30f..1000f,
                 steps = 96,
                 valueLabel = "${cursorDuration.toInt()}ms",
-                enabled = settings.editorSmoothCursorEnabled,
+                enabled = state.smoothCursorEnabled,
                 modifier = Modifier.fillMaxWidth(),
             )
         }

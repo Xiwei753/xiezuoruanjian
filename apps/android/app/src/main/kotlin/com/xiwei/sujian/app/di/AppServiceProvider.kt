@@ -8,20 +8,22 @@ import com.xiwei.sujian.core.platform.app.AndroidAppVersionProvider
 import com.xiwei.sujian.core.platform.device.AndroidDeviceIdentity
 import com.xiwei.sujian.core.platform.network.AndroidNetworkMonitor
 import com.xiwei.sujian.feature.starmap.data.interop.StarMapBridge
-import com.xiwei.sujian.feature.stats.data.interop.StatsBridge
 import java.util.Locale
 import java.util.TimeZone
 
 /**
  * AppServiceProvider — 应用级服务桥接提供者。
  *
- * 只保留三个桥接获取入口：AppService / Stats / StarMap。
+ * 只保留两个桥接获取入口：AppService / StarMap。
+ * 统计桥接不再保留第二获取入口（#618 六）：应用容器里的唯一
+ * WritingStatsRepository 直接使用 AppServiceBridge.statsBridge，
+ * UI 不再绕回此提供者取 Bridge。
  * 平台相关逻辑已下沉到 :core:platform：
  * - 网络状态检测与回调注册 → AndroidNetworkMonitor
  * - 设备 ID 持久化 → AndroidDeviceIdentity
  * - 应用版本读取 → AndroidAppVersionProvider
  *
- * UI 层不应直接引用此类（架构分层规则 #597），应通过各 RepositoryProvider 间接访问。
+ * UI 层不应直接引用此类（架构分层规则 #597），应通过各 Repository/容器间接访问。
  */
 object AppServiceProvider {
     private const val TAG = "AppServiceProvider"
@@ -58,8 +60,6 @@ object AppServiceProvider {
             }
         }
     }
-
-    fun getStatsBridge(context: Context): StatsBridge = getAppServiceBridge(context).statsBridge
 
     fun getStarmapBridge(context: Context): StarMapBridge = getAppServiceBridge(context).starMapBridge
 
