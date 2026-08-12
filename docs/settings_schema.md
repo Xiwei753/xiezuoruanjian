@@ -69,7 +69,7 @@ Supersedes: None
 - `variant`（字符串，无法可靠识别时为 "system_selected"）
 - `lightScheme` / `darkScheme`（ThemeColorScheme，完整 Material 3 语义角色）
 
-### `<app_data_root>/sync/sync_config.json`
+### `<app_data_root>/app-meta/sync/config.local.json`
 存储同步配置。包括：
 - `enabled`（布尔值，是否启用同步）
 - `backend_type`（字符串，当前为 `github_api`，`git` 为预留）
@@ -82,5 +82,5 @@ Supersedes: None
 - `has_network_permission`（布尔值）
 - `has_network_state_permission`（布尔值）
 
-### `<app_data_root>/sync/sync_secrets.local.json`
+### `<app_data_root>/app-meta/sync/secrets.local.json`
 存储敏感信息，如 GitHub 令牌、SSH 私钥。此文件保存在本地，**绝不**应被同步。
