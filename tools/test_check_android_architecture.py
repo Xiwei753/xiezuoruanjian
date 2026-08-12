@@ -423,6 +423,64 @@ class LayerRuleTests(unittest.TestCase):
         )
         self.assertEqual([], findings, "注释中的 localSettingsState 不得误报")
 
+    def test_deleted_types_rule_flags_ui_model_interaction_state_revival(self):
+        """#617 评论八：UI 模型复活 isExpanded/isSelected 交互状态字段必须被报告（第二份真相）。"""
+        findings = self.run_rule(
+            "deleted-types-stay-deleted",
+            {
+                f"{APP_PREFIX}/feature/project/ui/ProjectWorkspaceUiState.kt": (
+                    "package com.xiwei.sujian.feature.project.ui\n\n"
+                    "data class VolumeUiModel(\n"
+                    "    val id: String,\n"
+                    "    val title: String,\n"
+                    "    val chapters: List<ChapterUiModel>,\n"
+                    "    val isExpanded: Boolean = false,\n"
+                    ")\n\n"
+                    "data class ChapterUiModel(\n"
+                    "    val id: String,\n"
+                    "    val isSelected: Boolean = false,\n"
+                    ")\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("UI 模型交互状态字段必须保持删除", messages, "isExpanded/isSelected 复活必须被报告")
+
+    def test_deleted_types_rule_flags_tree_reading_ui_model_interaction_state(self):
+        """#617 评论八：渲染方直接读 volume.isExpanded 必须被报告（应只从 expandedVolumeIds 派生）。"""
+        findings = self.run_rule(
+            "deleted-types-stay-deleted",
+            {
+                f"{APP_PREFIX}/feature/project/ui/VolumeChapterTree.kt": (
+                    "package com.xiwei.sujian.feature.project.ui\n\n"
+                    "fun render(volume: VolumeUiModel) {\n"
+                    "    if (volume.isExpanded) {}\n"
+                    "}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("渲染方不得读 UI 模型交互状态字段", messages, "渲染方读 isExpanded 必须被报告")
+
+    def test_deleted_types_rule_ignores_ui_model_interaction_state_in_comments(self):
+        """#617 评论八：注释里提及 isExpanded（如本文档注释）不得误报。"""
+        findings = self.run_rule(
+            "deleted-types-stay-deleted",
+            {
+                f"{APP_PREFIX}/feature/project/ui/ProjectWorkspaceUiState.kt": (
+                    "package com.xiwei.sujian.feature.project.ui\n\n"
+                    "// isExpanded 已删除 — 展开只存在 expandedVolumeIds 一份真相\n"
+                    "data class VolumeUiModel(val id: String, val title: String, val chapters: List<ChapterUiModel>)\n"
+                ),
+                f"{APP_PREFIX}/feature/project/ui/VolumeChapterTree.kt": (
+                    "package com.xiwei.sujian.feature.project.ui\n\n"
+                    "// 渲染从 expandedVolumeIds 派生，不再读 volume.isExpanded\n"
+                    "fun render(volume: VolumeUiModel, expanded: Set<String>) {}\n"
+                ),
+            },
+        )
+        self.assertEqual([], findings, "注释中的 isExpanded 不得误报")
+
     def test_source_contracts_rule_flags_missing_sync_commit(self):
         findings = self.run_rule(
             "source-contracts",

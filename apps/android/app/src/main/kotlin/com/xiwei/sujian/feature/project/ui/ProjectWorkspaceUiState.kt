@@ -13,18 +13,19 @@ data class ProjectWorkspaceUiState(
     val errorMessageKey: String? = null,
 )
 
+// #617 评论八：UI 模型只装卷/章节数据，不携带任何交互状态 —
+// 展开/收起只存在 VolumeChapterUiState.expandedVolumeIds 一份真相，
+// 选中章节只存在 selectedChapterId 一份真相；刷新链写回永远不覆盖交互状态。
 data class VolumeUiModel(
     val id: String,
     val title: String,
     val chapters: List<ChapterUiModel>,
-    val isExpanded: Boolean = false,
 )
 
 data class ChapterUiModel(
     val id: String,
     val title: String,
     val wordCount: Int = 0,
-    val isSelected: Boolean = false,
 )
 
 data class ProjectStatsUiModel(

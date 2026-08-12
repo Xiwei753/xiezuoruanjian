@@ -346,11 +346,11 @@ class ProjectViewModelStaleLoadTest {
     @Test
     fun expansionToggleDuringInFlightRefresh_isNotRolledBackByWriteBack() =
         runTest(mainDispatcherRule.dispatcher) {
-            // #617 复审：展开标志必须在写回时从当前 expandedVolumeIds 派生，不能由
-            // 快照在读取时物化 — 否则刷新在途期间的展开切换会被旧快照写回回滚。
+            // #617 评论八：展开状态只存在 expandedVolumeIds 一份真相（UI 模型不携带
+            // isExpanded，渲染方从 expandedVolumeIds 派生）。写回只替换卷/章节数据，
+            // 不得触碰展开状态 — 否则刷新在途期间的展开切换会被旧快照写回回滚。
             // 时序：变更刷新的第二次 getVolumes 挂起 → 折叠 → 放行（快照完成、写回
-            // 尚未入队）→ 再展开 → 驱动写回 — 写回后 UI 模型的展开标志必须与
-            // expandedVolumeIds 一致，不得回滚最后一次切换。
+            // 尚未入队）→ 再展开 → 驱动写回 — 写回后展开状态必须与最后一次切换一致。
             val app = RuntimeEnvironment.getApplication()
             val secondVolumeGate = CountDownLatch(1)
             val repo =
@@ -369,9 +369,9 @@ class ProjectViewModelStaleLoadTest {
             }
             vm.toggleVolumeExpand("vA")
             assertEquals(
-                "首次展开后 UI 模型必须同步",
-                true,
-                vm.uiState.value.volumes.single().isExpanded,
+                "首次展开后 expandedVolumeIds 必须包含 vA",
+                setOf("vA"),
+                vm.uiState.value.expandedVolumeIds,
             )
 
             // 变更刷新：第二次 getVolumes 挂在栅栏上（刷新在途）。
@@ -385,11 +385,12 @@ class ProjectViewModelStaleLoadTest {
             vm.toggleVolumeExpand("vA")
 
             settleUntil { !vm.uiState.value.isLoading }
-            assertEquals(setOf("vA"), vm.uiState.value.expandedVolumeIds)
+            // 卷数据由写回刷新（仍是 A 的作品、卷在列表里），但展开状态不得被写回回滚。
+            assertEquals(listOf("vA"), vm.uiState.value.volumes.map { it.id })
             assertEquals(
-                "写回不得回滚在途期间的展开切换",
-                true,
-                vm.uiState.value.volumes.single().isExpanded,
+                "写回不得回滚在途期间的展开切换（唯一真相 expandedVolumeIds）",
+                setOf("vA"),
+                vm.uiState.value.expandedVolumeIds,
             )
         }
 }

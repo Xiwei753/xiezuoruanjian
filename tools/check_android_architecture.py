@@ -694,6 +694,37 @@ def rule_deleted_types_stay_deleted() -> list[Finding]:
                         message="localSettingsState 必须保持删除（#617 评论六：窗口层只认 immersiveFullscreenEnabled 这一位）",
                     )
                 )
+    # #617 评论八：卷/章节 UI 模型不得携带交互状态 — 展开只存在
+    # expandedVolumeIds 一份真相、选中只存在 selectedChapterId 一份真相；
+    # 刷新链写回与用户切换因此互不覆盖。UI 模型上复活 isExpanded/isSelected
+    # 字段、或渲染方直接读 volume.isExpanded 的接线方式不得复活。
+    ui_state_file = APP_SRC / "feature" / "project" / "ui" / "ProjectWorkspaceUiState.kt"
+    if ui_state_file.exists():
+        effective = "\n".join(effective_lines(ui_state_file.read_text(encoding="utf-8")))
+        for field in (r"val\s+isExpanded\s*:", r"val\s+isSelected\s*:"):
+            if re.search(field, effective):
+                findings.append(
+                    Finding(
+                        path="feature/project/ui/ProjectWorkspaceUiState.kt",
+                        line=0,
+                        message="UI 模型交互状态字段必须保持删除（#617 评论八：展开只认 expandedVolumeIds、选中只认 selectedChapterId）",
+                    )
+                )
+    tree_file = APP_SRC / "feature" / "project" / "ui" / "VolumeChapterTree.kt"
+    if tree_file.exists():
+        effective = "\n".join(effective_lines(tree_file.read_text(encoding="utf-8")))
+        for pattern in (
+            r"\.isExpanded\b",
+            r"\.isSelected\b",
+        ):
+            if re.search(pattern, effective):
+                findings.append(
+                    Finding(
+                        path="feature/project/ui/VolumeChapterTree.kt",
+                        line=0,
+                        message="渲染方不得读 UI 模型交互状态字段（#617 评论八：展开/选中从 expandedVolumeIds/selectedChapterId 派生）",
+                    )
+                )
     return findings
 
 

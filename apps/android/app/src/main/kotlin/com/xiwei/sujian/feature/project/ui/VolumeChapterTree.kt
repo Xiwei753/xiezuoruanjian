@@ -86,7 +86,9 @@ internal fun ChapterTreeContent(
             val items = mutableListOf<VolumeChapterListItem>()
             for (volume in uiState.volumes) {
                 items.add(VolumeChapterListItem.VolumeItem(volume))
-                if (volume.isExpanded) {
+                // #617 评论八：展开状态只从 expandedVolumeIds 派生 — UI 模型不携带
+                // isExpanded，刷新链写回与用户切换不会互相覆盖。
+                if (volume.id in uiState.expandedVolumeIds) {
                     if (volume.chapters.isEmpty()) {
                         items.add(VolumeChapterListItem.EmptyChapterHint(volume.id))
                     } else {
@@ -162,14 +164,20 @@ internal fun ChapterTreeContent(
                         is VolumeChapterListItem.VolumeItem -> {
                             VolumeRow(
                                 volume = item.volume,
-                                workspaceActions = workspaceActions,
-                                onToggleExpand = { viewModel.toggleVolumeExpand(item.volume.id) },
-                                onCreateChapter = {
-                                    dialogState = WorkspaceDialogState.CreateChapter(item.volume.id, item.volume.title)
-                                },
-                                onMoreActions = {
-                                    dialogState = WorkspaceDialogState.VolumeActions(item.volume)
-                                },
+                                // #617 评论八：展开标志显式传入，箭头只认 expandedVolumeIds。
+                                isExpanded = item.volume.id in uiState.expandedVolumeIds,
+                                actions =
+                                    VolumeRowActions(
+                                        workspaceActions = workspaceActions,
+                                        onToggleExpand = { viewModel.toggleVolumeExpand(item.volume.id) },
+                                        onCreateChapter = {
+                                            dialogState =
+                                                WorkspaceDialogState.CreateChapter(item.volume.id, item.volume.title)
+                                        },
+                                        onMoreActions = {
+                                            dialogState = WorkspaceDialogState.VolumeActions(item.volume)
+                                        },
+                                    ),
                             )
                         }
                         is VolumeChapterListItem.ChapterItem -> {
@@ -342,32 +350,38 @@ internal fun ChapterTreeContent(
     }
 }
 
+/** VolumeRow 的 spec 与行内回调 — 打包传递，避免函数参数超出门禁阈值（与 ChapterRowActions 同模式）。 */
+internal class VolumeRowActions(
+    val workspaceActions: AndroidWorkspaceActionSpec,
+    val onToggleExpand: () -> Unit,
+    val onCreateChapter: () -> Unit,
+    val onMoreActions: () -> Unit,
+)
+
 @Composable
 internal fun VolumeRow(
     volume: VolumeUiModel,
-    workspaceActions: AndroidWorkspaceActionSpec,
-    onToggleExpand: () -> Unit,
-    onCreateChapter: () -> Unit,
-    onMoreActions: () -> Unit,
+    isExpanded: Boolean,
+    actions: VolumeRowActions,
     modifier: Modifier = Modifier,
 ) {
     // #610 评论四：行内按钮只按 Core 契约渲染：
     // - CreateChapter + Volume + ItemTrailing → 新建章节图标；
     // - Context(Volume) 非空 → 更多菜单图标。
     val hasCreateChapter =
-        workspaceActions.itemTrailingActions(WorkspaceActionTarget.Volume)
+        actions.workspaceActions.itemTrailingActions(WorkspaceActionTarget.Volume)
             .any { it.kind == WorkspaceActionKind.CreateChapter }
-    val hasContextActions = workspaceActions.contextActions(WorkspaceActionTarget.Volume).isNotEmpty()
+    val hasContextActions = actions.workspaceActions.contextActions(WorkspaceActionTarget.Volume).isNotEmpty()
     SujianListItem(
         headline = volume.title,
-        leadingIcon = if (volume.isExpanded) SujianIcons.KeyboardArrowDown else SujianIcons.KeyboardArrowRight,
-        onClick = onToggleExpand,
+        leadingIcon = if (isExpanded) SujianIcons.KeyboardArrowDown else SujianIcons.KeyboardArrowRight,
+        onClick = actions.onToggleExpand,
         semanticId = SujianSemanticIds.volume(volume.id),
         trailingContent = {
             Row {
                 if (hasCreateChapter) {
                     SujianIconButton(
-                        onClick = onCreateChapter,
+                        onClick = actions.onCreateChapter,
                         icon = SujianIcons.Add,
                         contentDescription = stringResource(id = R.string.action_new_chapter),
                         semanticId = SujianSemanticIds.createChapter(volume.id),
@@ -375,7 +389,7 @@ internal fun VolumeRow(
                 }
                 if (hasContextActions) {
                     SujianIconButton(
-                        onClick = onMoreActions,
+                        onClick = actions.onMoreActions,
                         icon = SujianIcons.MoreVert,
                         contentDescription = stringResource(id = R.string.action_more),
                     )

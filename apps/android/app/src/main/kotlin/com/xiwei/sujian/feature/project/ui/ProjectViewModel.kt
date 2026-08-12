@@ -100,15 +100,12 @@ class ProjectViewModel(
 
                 if (generation != projectGeneration || pid != currentProjectId) return@launch
                 loadedProjectId = pid
-                // 写回时从“当前” expandedVolumeIds 派生 isExpanded：加载在途期间用户
-                // 切换展开时，旧快照里物化的展开标志会让刚点的展开被视觉回滚。
-                val expanded = _uiState.value.expandedVolumeIds
+                // #617 评论八：写回只替换卷/章节数据与统计 — 展开状态不在 UI 模型里，
+                // 只存在于 expandedVolumeIds（写回不触碰），加载在途期间的展开切换
+                // 永远不会被刷新链覆盖。
                 _uiState.value =
                     _uiState.value.copy(
-                        volumes =
-                            snapshot.volumes.map { v ->
-                                v.copy(isExpanded = expanded.contains(v.id))
-                            },
+                        volumes = snapshot.volumes,
                         projectStats = snapshot.projectStats,
                         isLoading = false,
                     )
@@ -126,8 +123,8 @@ class ProjectViewModel(
     }
 
     /** 在 IO 线程读取当前作品快照（卷 + 章节 + 统计），失败时降级为空快照。
-     *  注意：不在这里物化 isExpanded — 展开标志由写回方从当前 expandedVolumeIds 派生，
-     *  避免加载在途期间的展开切换被旧快照覆盖。 */
+     *  注意：UI 模型不携带交互状态（#617 评论八）— 展开/收起只存在
+     *  expandedVolumeIds 一份真相，快照只负责仓库数据，不读也不写展开状态。 */
     private suspend fun loadProjectSnapshot(
         repo: ProjectRepository,
         projectId: String,
@@ -140,7 +137,6 @@ class ProjectViewModel(
                             id = vol.id,
                             title = vol.title,
                             chapters = loadChapters(repo, projectId, vol.id),
-                            isExpanded = false,
                         )
                     }
                 } catch (_: Exception) {
@@ -191,16 +187,11 @@ class ProjectViewModel(
             } else {
                 current + volumeId
             }
-        // #617 评论七：展开状态按 projectId 分 key 保存，不跨作品混用。
+        // #617 评论七/八：展开状态按 projectId 分 key 保存，不跨作品混用；
+        // 这是展开状态的唯一真相 — 不写 volumes（UI 模型不携带 isExpanded），
+        // 渲染方从 expandedVolumeIds 派生，刷新写回永不覆盖用户切换。
         savedStateHandle[expandedVolumeKey(pid)] = newExpanded
-        _uiState.value =
-            _uiState.value.copy(
-                expandedVolumeIds = newExpanded,
-                volumes =
-                    _uiState.value.volumes.map { v ->
-                        v.copy(isExpanded = newExpanded.contains(v.id))
-                    },
-            )
+        _uiState.value = _uiState.value.copy(expandedVolumeIds = newExpanded)
     }
 
     fun selectChapter(chapterId: String) {
