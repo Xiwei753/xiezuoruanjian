@@ -99,7 +99,7 @@ open class ProjectRepository(private val context: Context, bridge: AppServiceBri
         }
     }
 
-    fun createVolume(
+    open fun createVolume(
         projectId: String,
         title: String,
     ): Volume {
@@ -115,7 +115,7 @@ open class ProjectRepository(private val context: Context, bridge: AppServiceBri
         }
     }
 
-    fun createChapter(
+    open fun createChapter(
         projectId: String,
         volumeId: String,
         title: String,

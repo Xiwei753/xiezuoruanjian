@@ -48,6 +48,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ProjectViewModelStaleLoadTest {
+    companion object {
+        private const val testTimestamp = "2026-01-01T00:00:00"
+    }
+
     class MainDispatcherRule(
         val dispatcher: TestDispatcher = StandardTestDispatcher(),
     ) : TestWatcher() {
@@ -131,12 +135,18 @@ class ProjectViewModelStaleLoadTest {
             if (projectId == "A") statsAReturned.set(true)
             return statsMap[projectId] ?: ProjectStats(0, 0, 0)
         }
+
+        /** #617 评论九：override createVolume 返回成功 — 不再依赖"native 未加载失败被吞掉"。 */
+        override fun createVolume(
+            projectId: String,
+            title: String,
+        ): Volume = Volume("v_new", title, testTimestamp, testTimestamp)
     }
 
     private fun volume(
         id: String,
         title: String,
-    ) = Volume(id, title, "2026-01-01T00:00:00", "2026-01-01T00:00:00")
+    ) = Volume(id, title, testTimestamp, testTimestamp)
 
     private val volumesA = listOf(volume("vA", "A卷"))
     private val volumesB = listOf(volume("vB", "B卷"))
@@ -337,9 +347,10 @@ class ProjectViewModelStaleLoadTest {
                 vm.uiState.value.projectStats?.totalWordCount == 300 &&
                     !vm.uiState.value.isLoading
             }
-            // 测试环境 native 未加载：createVolume 失败被吞掉，卷列表保持原状，
-            // 但变更刷新必须重读统计（#617 评论七：变更后不能只刷卷列表）。
-            assertEquals("卷列表不得因失败的 create 变化", listOf("vA"), vm.uiState.value.volumes.map { it.id })
+            // #617 评论九：createVolume 成功（GatedProjectRepository override 返回 Volume），
+            // 走 onSuccess → refreshProject()，重读统计（#617 评论七：变更后不能只刷卷列表）。
+            // getVolumes 仍返回 volumesA（volumes map 未变），卷列表保持 vA。
+            assertEquals("卷列表仍为 volumesA", listOf("vA"), vm.uiState.value.volumes.map { it.id })
             assertEquals(300, vm.uiState.value.projectStats?.totalWordCount)
         }
 

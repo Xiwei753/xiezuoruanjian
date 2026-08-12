@@ -311,6 +311,15 @@ class SujianAppViewModel(
         }
     }
 
+    /**
+     * #617 评论九：章节树错误事件薄入口 — feature 层 ProjectViewModel 通过 SujianAppState
+     * 把错误转交本 ViewModel 已有的 [WorkspaceUiEvent] 流，复用 #614 的全局 Snackbar，
+     * 不在 feature 里另起 Toast/Snackbar 系统。
+     */
+    fun reportWorkspaceError(message: String) {
+        _uiEvents.tryEmit(WorkspaceUiEvent.Error(message))
+    }
+
     /** #614：异常 → 本地化错误文本。RepositoryException.message 已是 context.getString 本地化串。 */
     private fun errorMessage(e: Throwable): String =
         when (e) {
@@ -376,4 +385,7 @@ class SujianAppState(
         projectId: String,
         newTitle: String,
     ) = viewModel.renameProject(projectId, newTitle)
+
+    /** #617 评论九：暴露章节树错误入口 — 转发到全局 WorkspaceUiEvent Snackbar。 */
+    fun reportWorkspaceError(message: String) = viewModel.reportWorkspaceError(message)
 }

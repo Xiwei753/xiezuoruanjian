@@ -186,6 +186,9 @@ internal fun ProjectWorkspaceScreen(
                                 }
                             }
                         },
+                        // #617 评论九：章节树错误事件转交全局 Snackbar —
+                        // 复用 #614 已有的 WorkspaceUiEvent.Error 链，不在 feature 里另起系统。
+                        onError = appState::reportWorkspaceError,
                     )
                 }
             }

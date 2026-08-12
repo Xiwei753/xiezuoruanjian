@@ -70,12 +70,22 @@ internal fun ChapterTreeContent(
     workspaceActions: AndroidWorkspaceActionSpec,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
     modifier: Modifier = Modifier,
+    onError: (String) -> Unit = {},
 ) {
     val viewModel: ProjectViewModel = viewModel()
     // #617 评论一：初始化从组合阶段移入副作用 — 避免随重组反复进入初始化判断；
     // 作品切换时以 projectId 为 key 重新触发，按 key 重新初始化。
     LaunchedEffect(viewModel, projectId, projectRepository) {
         viewModel.initialize(projectId, projectRepository)
+    }
+    // #617 评论九：收集 ViewModel 错误事件，转交全局 Snackbar（onError）—
+    // 不在 feature 里另起 Toast/Snackbar 系统，复用 #614 已有的 WorkspaceUiEvent 链。
+    LaunchedEffect(viewModel) {
+        viewModel.uiEvents.collect { event ->
+            when (event) {
+                is ProjectTreeUiEvent.Error -> onError(event.message)
+            }
+        }
     }
     val uiState by viewModel.uiState.collectAsState()
 
@@ -143,11 +153,22 @@ internal fun ChapterTreeContent(
         }
 
         if (flatItems.isEmpty() && !uiState.isLoading) {
-            Text(
-                stringResource(id = R.string.volume_chapter_empty),
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(16.dp),
-            )
+            // #617 评论九：首次加载失败且没有卷时显示 loadError，不要落进空态 —
+            // 把"读取失败"伪装成"暂无卷"会让用户误以为作品真的是空的。
+            val loadError = uiState.loadError
+            if (loadError != null) {
+                Text(
+                    loadError,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(16.dp),
+                )
+            } else {
+                Text(
+                    stringResource(id = R.string.volume_chapter_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
         } else {
             LazyColumn(
                 modifier = Modifier.testTag(SujianSemanticIds.WorkspaceVolumeList),
