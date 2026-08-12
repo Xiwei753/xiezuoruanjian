@@ -38,6 +38,12 @@ class ProjectViewModel(
     private var projectRepository: ProjectRepository? = null
     private var isInitialized: Boolean = false
 
+    // #617 复审：加载纪元 — 作品切换或任何重新加载都会递增对应纪元；
+    // 迟到的旧纪元结果（跨作品或跨变更的陈旧数据）在写回前被丢弃，
+    // 防止慢设备上旧作品的卷/统计覆盖新作品的章节树。
+    private var volumesLoadEpoch = 0L
+    private var statsLoadEpoch = 0L
+
     fun initialize(
         projectId: String,
         projectRepo: ProjectRepository,
@@ -62,6 +68,7 @@ class ProjectViewModel(
     fun loadVolumes() {
         val pid = currentProjectId ?: return
         val repo = projectRepository ?: return
+        val epoch = ++volumesLoadEpoch
         _uiState.value = _uiState.value.copy(isLoading = true)
         viewModelScope.launch {
             val volumes =
@@ -96,6 +103,7 @@ class ProjectViewModel(
                         isExpanded = _uiState.value.expandedVolumeIds.contains(vol.id),
                     )
                 }
+            if (epoch != volumesLoadEpoch) return@launch
             _uiState.value = _uiState.value.copy(volumes = uiModels, isLoading = false)
         }
     }
@@ -311,6 +319,7 @@ class ProjectViewModel(
 
     private fun loadProjectStats(projectId: String) {
         val repo = projectRepository ?: return
+        val epoch = ++statsLoadEpoch
         viewModelScope.launch {
             val stats =
                 withContext(Dispatchers.IO) {
@@ -320,6 +329,7 @@ class ProjectViewModel(
                         null
                     }
                 }
+            if (epoch != statsLoadEpoch) return@launch
             stats?.let {
                 _uiState.value =
                     _uiState.value.copy(

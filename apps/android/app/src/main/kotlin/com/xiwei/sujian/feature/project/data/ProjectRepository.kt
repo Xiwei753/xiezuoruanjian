@@ -17,8 +17,11 @@ import com.xiwei.sujian.feature.sync.data.SyncFailureKind
  *
  * #602 Phase 5：章节内容函数移到 ChapterRepository，最近编辑函数移到 RecentEditsRepository，
  * 统计函数移到 WritingStatsRepository。本类只保留项目树 CRUD 与 getProjectStats。
+ *
+ * 数据读取方法声明为 open：允许测试子类注入可控数据源，验证 ProjectViewModel
+ * 加载纪元的陈旧结果丢弃语义；生产路径仍是单例真实实现。
  */
-class ProjectRepository(private val context: Context, bridge: AppServiceBridge? = null) {
+open class ProjectRepository(private val context: Context, bridge: AppServiceBridge? = null) {
     private val appBridge = bridge ?: AppServiceProvider.getAppServiceBridge(context)
     private val projectBridge = appBridge.projectBridge
     private val chapterBridge = appBridge.chapterBridge
@@ -41,7 +44,7 @@ class ProjectRepository(private val context: Context, bridge: AppServiceBridge? 
         }
     }
 
-    fun getVolumes(projectId: String): List<Volume> {
+    open fun getVolumes(projectId: String): List<Volume> {
         return when (val result = projectBridge.listVolumes(projectId)) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> throw RepositoryException(
@@ -54,7 +57,7 @@ class ProjectRepository(private val context: Context, bridge: AppServiceBridge? 
         }
     }
 
-    fun getChapters(
+    open fun getChapters(
         projectId: String,
         volumeId: String,
     ): List<ChapterMeta> {
@@ -70,7 +73,7 @@ class ProjectRepository(private val context: Context, bridge: AppServiceBridge? 
         }
     }
 
-    fun getProjectStats(projectId: String): ProjectStats {
+    open fun getProjectStats(projectId: String): ProjectStats {
         return when (val result = statsBridge.getProjectStats(projectId)) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> throw RepositoryException(
