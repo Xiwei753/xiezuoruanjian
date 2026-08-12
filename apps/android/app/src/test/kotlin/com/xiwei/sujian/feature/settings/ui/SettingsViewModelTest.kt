@@ -73,7 +73,7 @@ class SettingsViewModelTest {
     @Test
     fun `section states derive from uiState`() {
         val vm = createVm()
-        // stateIn(WhileSubscribed) 只在有订阅时推进上游；先挂三个分类的收集器。
+        // stateIn(Eagerly) 在 ViewModel 创建时即开始推进上游；挂收集器只为断言投影值。
         val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
         val appearanceValues = mutableListOf<AppearanceSectionState>()
         val laboratoryValues = mutableListOf<LaboratorySectionState>()

@@ -22,8 +22,10 @@ data class AppearanceSectionState(
     val lineSpacing: Float,
 )
 
-/** 编辑器分类真正读取的字段。 */
+/** 编辑器分类真正读取的字段（含字号 — 列表头部当前值也显示字号，
+ * #618 六 复审：改主题颜色时不再让编辑器分类订阅整份外观状态）。 */
 data class EditorSectionState(
+    val fontSize: Float,
     val autoIndentEnabled: Boolean,
     val autoIndentWidth: Float,
     val typingAnimationEnabled: Boolean,

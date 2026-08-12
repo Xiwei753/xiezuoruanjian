@@ -22,6 +22,10 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class StatsViewModelTest {
+    private companion object {
+        const val FIRST_SETTLE_MSG = "first refresh must settle"
+    }
+
     private fun createRepo(): WritingStatsRepository {
         val bridge =
             AppServiceBridge(
@@ -62,7 +66,7 @@ class StatsViewModelTest {
         vm.refreshIfNeeded()
         awaitUntil(
             predicate = { !vm.uiState.value.loading },
-            message = "first refresh must settle",
+            message = FIRST_SETTLE_MSG,
         )
         // revision 未变：第二次 refresh 命中缓存，不应回到 loading 重新查询。
         vm.refreshIfNeeded()
@@ -79,7 +83,7 @@ class StatsViewModelTest {
         vm.refreshIfNeeded()
         awaitUntil(
             predicate = { !vm.uiState.value.loading },
-            message = "first refresh must settle",
+            message = FIRST_SETTLE_MSG,
         )
         // 失败路径契约：查询结束后已推进到当时的 revision，再次 refresh 命中缓存。
         val settled = vm.loadedRevision
@@ -93,6 +97,60 @@ class StatsViewModelTest {
             message = "revision bump must trigger a requery that settles on the new revision",
         )
         assertEquals(settled + 1L, vm.loadedRevision)
+    }
+
+    @Test
+    fun `write during query window is not missed - loadedRevision tracks final revision`() {
+        val repo = createRepo()
+        val vm = StatsViewModel(repo)
+        vm.refreshIfNeeded()
+        awaitUntil(
+            predicate = { !vm.uiState.value.loading },
+            message = FIRST_SETTLE_MSG,
+        )
+        val settled = vm.loadedRevision
+
+        // 触发重查；viewModelScope 用 Main.immediate，调用返回时查询已进入在途
+        // （queriedRevision 已同步快照），此时再写一次即“查询期间发生写入”。
+        repo.invalidate()
+        vm.refreshIfNeeded()
+        assertTrue(
+            "refreshIfNeeded 返回时查询必须已在途（Main.immediate 同步启动协程）",
+            vm.queryInFlight,
+        )
+        repo.invalidate()
+        awaitUntil(
+            predicate = { vm.loadedRevision == repo.revision.value },
+            message =
+                "提交后 revision 越过查询快照必须立即再跑一轮，" +
+                    "loadedRevision 最终对齐窗口后的最新 revision",
+        )
+        assertEquals(settled + 2L, vm.loadedRevision)
+    }
+
+    @Test
+    fun `date rollover triggers requery even when revision unchanged`() {
+        val repo = createRepo()
+        val vm = StatsViewModel(repo)
+        var today = java.time.LocalDate.of(2026, 8, 12)
+        vm.todayProvider = { today }
+        vm.refreshIfNeeded()
+        awaitUntil(
+            predicate = { !vm.uiState.value.loading },
+            message = FIRST_SETTLE_MSG,
+        )
+        assertEquals(today, vm.loadedEndDate)
+        val settled = vm.loadedRevision
+
+        // 跨零点：revision 未变，但查询区间（最近 30 天）已经变了，必须重新查询。
+        today = today.plusDays(1)
+        vm.refreshIfNeeded()
+        awaitUntil(
+            predicate = { vm.loadedEndDate == today },
+            message = "日期变化必须触发重查并推进 loadedEndDate",
+        )
+        assertEquals(settled, vm.loadedRevision)
+        assertFalse(vm.uiState.value.loading)
     }
 
     @Test
