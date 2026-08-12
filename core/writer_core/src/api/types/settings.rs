@@ -564,3 +564,87 @@ impl From<crate::settings::DeviceInfo> for DeviceInfoDto {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::LocalSettings;
+
+    #[test]
+    fn test_local_settings_dto_serialization_snake_case() {
+        let dto = LocalSettingsDto {
+            theme_mode: Some("dark".to_string()),
+            appearance_mode: "system".to_string(),
+            color_source: "preset".to_string(),
+            dynamic_color_enabled: false,
+            selected_builtin_theme_id: "default".to_string(),
+            selected_palette_id: "none".to_string(),
+            locale: Some("zh-CN".to_string()),
+            auto_save_enabled: true,
+            editor_font_size: 16.0,
+            editor_line_spacing_multiplier: 1.5,
+            window_width: 800.0,
+            window_height: 600.0,
+            auto_save_delay_ms: 5000,
+            auto_indent_enabled: true,
+            auto_indent_width: 4.0,
+            editor_typing_animation_enabled: true,
+            editor_smooth_cursor_enabled: true,
+            editor_typing_animation_duration_ms: 100,
+            editor_smooth_cursor_duration_ms: 80,
+            ai_enabled: true,
+            stats_device_id: None,
+            desktop_sidebar_width: 240.0,
+            desktop_editor_width: 0.0,
+            editor_coordinated_text_cursor_animation_enabled: false,
+            diagnostics_enabled: false,
+            diagnostics_verbose: false,
+        };
+
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(json.contains("\"theme_mode\":\"dark\""));
+        assert!(json.contains("\"auto_save_delay_ms\":5000"));
+        assert!(json.contains("\"desktop_sidebar_width\":240.0"));
+    }
+
+    #[test]
+    fn test_local_settings_dto_bidirectional() {
+        let internal = LocalSettings {
+            theme_mode: Some("dark".to_string()),
+            appearance_mode: "system".to_string(),
+            color_source: "preset".to_string(),
+            dynamic_color_enabled: false,
+            selected_builtin_theme_id: "default".to_string(),
+            selected_palette_id: "none".to_string(),
+            locale: Some("zh-CN".to_string()),
+            auto_save_enabled: true,
+            editor_font_size: 16.0,
+            editor_line_spacing_multiplier: 1.5,
+            window_width: 800.0,
+            window_height: 600.0,
+            auto_save_delay_ms: 5000,
+            auto_indent_enabled: true,
+            auto_indent_width: 4.0,
+            editor_typing_animation_enabled: true,
+            editor_smooth_cursor_enabled: true,
+            editor_typing_animation_duration_ms: 100,
+            editor_smooth_cursor_duration_ms: 80,
+            ai_enabled: true,
+            stats_device_id: None,
+            desktop_sidebar_width: 240.0,
+            desktop_editor_width: 0.0,
+            editor_coordinated_text_cursor_animation_enabled: false,
+            diagnostics_enabled: false,
+            diagnostics_verbose: false,
+        };
+
+        let dto: LocalSettingsDto = internal.clone().into();
+        assert_eq!(dto.desktop_sidebar_width, 240.0);
+        assert_eq!(dto.editor_font_size, 16.0);
+
+        let back_to_internal: LocalSettings = dto.into();
+        assert_eq!(back_to_internal.theme_mode, internal.theme_mode);
+        assert_eq!(back_to_internal.auto_save_delay_ms, internal.auto_save_delay_ms);
+        assert_eq!(back_to_internal.desktop_sidebar_width, internal.desktop_sidebar_width);
+    }
+}

@@ -381,3 +381,62 @@ fn first_sync_mode_to_wire(mode: &crate::sync::FirstSyncMode) -> String {
     }
     .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync::{BackendType, SyncConfig, SyncProtocol, SyncScope};
+
+    #[test]
+    fn test_sync_config_dto_serialization_snake_case() {
+        let dto = SyncConfigDto {
+            enabled: true,
+            backend_type: "github_api".to_string(),
+            remote_url: "https://github.com/test/repo".to_string(),
+            transport: "https_token".to_string(),
+            branch: "main".to_string(),
+            auto_sync: true,
+            sync_interval_seconds: 60,
+            username: "test_user".to_string(),
+            has_network_permission: true,
+            has_network_state_permission: true,
+        };
+
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(json.contains("\"backend_type\":\"github_api\""));
+        assert!(json.contains("\"sync_interval_seconds\":60"));
+        assert!(json.contains("\"has_network_permission\":true"));
+    }
+
+    #[test]
+    fn test_sync_config_dto_bidirectional() {
+        let internal = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: "https://github.com/test/repo".to_string(),
+            transport: SyncProtocol::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: true,
+            sync_interval_seconds: 60,
+            username: "test_user".to_string(),
+            has_network_permission: true,
+            has_network_state_permission: true,
+            scope: SyncScope::Project,
+        };
+
+        let dto: SyncConfigDto = internal.clone().into();
+        assert_eq!(dto.backend_type, "github_api");
+        assert_eq!(dto.transport, "https_token");
+        assert_eq!(dto.username, "test_user");
+
+        let back_to_internal: SyncConfig = dto.into();
+        assert_eq!(back_to_internal.enabled, internal.enabled);
+        assert_eq!(back_to_internal.remote_url, internal.remote_url);
+        assert_eq!(back_to_internal.branch, internal.branch);
+        assert_eq!(back_to_internal.auto_sync, internal.auto_sync);
+        assert_eq!(back_to_internal.sync_interval_seconds, internal.sync_interval_seconds);
+        assert_eq!(back_to_internal.username, internal.username);
+        assert_eq!(back_to_internal.has_network_permission, internal.has_network_permission);
+        assert_eq!(back_to_internal.has_network_state_permission, internal.has_network_state_permission);
+    }
+}
