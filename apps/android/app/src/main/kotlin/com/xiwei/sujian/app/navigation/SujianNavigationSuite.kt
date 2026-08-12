@@ -328,15 +328,21 @@ private fun SujianTopLevelSwitchMotion(
     destination: SujianDestination,
     content: @Composable () -> Unit,
 ) {
-    val contentAlpha = remember { Animatable(1f) }
     var previousDestination by remember { mutableStateOf<SujianDestination?>(null) }
+    // 判断本次组合是否属于一级切换（首次组合/原地重复选择不算）。
+    // 注意：previousDestination 在 LaunchedEffect 里更新，重组期间读到的是旧值，
+    // 正好用于决定新页面第一帧的初始 alpha。
+    val switching = previousDestination != null && previousDestination != destination
+    // 按 destination 重建 Animatable：切换时新页面第一帧就直接以 0.9 绘制，
+    // 避免评论二原片段“先以 1.0 画一帧再 snapTo(0.9)”的瞬时全透明帧闪现。
+    val contentAlpha =
+        remember(destination) {
+            Animatable(if (switching) 0.9f else 1f)
+        }
 
     LaunchedEffect(destination) {
-        val previous = previousDestination
         previousDestination = destination
-        if (previous == null || previous == destination) return@LaunchedEffect
-
-        contentAlpha.snapTo(0.9f)
+        if (!switching) return@LaunchedEffect
         contentAlpha.animateTo(
             targetValue = 1f,
             animationSpec = tween(durationMillis = 140),

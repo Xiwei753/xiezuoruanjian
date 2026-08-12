@@ -29,6 +29,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -265,6 +266,94 @@ class ProjectViewModelErrorChainTest {
                 (events.filterIsInstance<ProjectTreeUiEvent.Error>().first()).message,
             )
             collectJob.cancel()
+        }
+
+    @Test
+    fun refreshFailureAfterSuccessfulLoad_keepsOldDataAndEmitsError() =
+        runTest(mainDispatcherRule.dispatcher) {
+            // #617 评论九：重载失败（已有成功数据后再次 refresh 失败）— 必须保留上一次
+            // 成功的 volumes/projectStats，不得写 emptyList()/null 覆盖；已有数据时不设
+            // loadError（首次加载才设），只发一次性 Error 事件交 Snackbar。
+            val app = RuntimeEnvironment.getApplication()
+            val repo =
+                FakeProjectRepository(
+                    context = app,
+                    volumes = mapOf("A" to volumesA),
+                    stats = mapOf("A" to ProjectStats(100, 1, 1)),
+                )
+            val vm = ProjectViewModel(SavedStateHandle())
+            val (events, collectJob) = collectEvents(vm)
+
+            vm.initialize("A", repo)
+            settleUntil {
+                vm.uiState.value.volumes.map { it.id } == listOf("vA") &&
+                    vm.uiState.value.projectStats?.totalWordCount == 100 &&
+                    !vm.uiState.value.isLoading
+            }
+
+            // 首次加载成功后让 getVolumes 抛异常：createVolume 成功 → refreshProject 失败。
+            repo.getVolumesException = RepositoryException(loadVolumesFailed)
+            vm.createVolume("新卷")
+            settleUntil { events.any { it is ProjectTreeUiEvent.Error } }
+
+            assertEquals(
+                "重载失败不得把已有卷列表覆盖为空",
+                listOf("vA"),
+                vm.uiState.value.volumes.map { it.id },
+            )
+            assertEquals(
+                "重载失败不得把已有统计覆盖为 null",
+                100,
+                vm.uiState.value.projectStats?.totalWordCount,
+            )
+            assertFalse("重载失败后不得停留在 loading 态", vm.uiState.value.isLoading)
+            assertNull("已有成功数据时重载失败不得设 loadError", vm.uiState.value.loadError)
+            assertTrue(mustEmitError, events.any { it is ProjectTreeUiEvent.Error })
+            assertEquals(
+                loadVolumesFailed,
+                (events.filterIsInstance<ProjectTreeUiEvent.Error>().first()).message,
+            )
+            collectJob.cancel()
+        }
+
+    @Test
+    fun firstLoadFailure_thenSuccessfulMutationRefresh_clearsLoadError() =
+        runTest(mainDispatcherRule.dispatcher) {
+            // #617 评论九：首次加载失败设 loadError 后，后续成功刷新（如重试/变更）
+            // 必须清掉 loadError 并填充真实数据 — 错误态不得永久粘滞。
+            val app = RuntimeEnvironment.getApplication()
+            val repo =
+                FakeProjectRepository(
+                    context = app,
+                    volumes = mapOf("A" to volumesA),
+                    stats = mapOf("A" to ProjectStats(100, 1, 1)),
+                )
+            val vm = ProjectViewModel(SavedStateHandle())
+
+            repo.getVolumesException = RepositoryException(loadVolumesFailed)
+            vm.initialize("A", repo)
+            settleUntil { vm.uiState.value.loadError != null }
+            assertNotNull("首次加载失败必须设 loadError", vm.uiState.value.loadError)
+
+            // 仓库恢复后触发一次成功变更刷新（createVolume 成功 → refreshProject）。
+            repo.getVolumesException = null
+            vm.createVolume("新卷")
+            settleUntil {
+                vm.uiState.value.volumes.map { it.id } == listOf("vA") &&
+                    !vm.uiState.value.isLoading
+            }
+
+            assertNull("成功刷新后必须清掉 loadError", vm.uiState.value.loadError)
+            assertEquals(
+                "成功刷新后必须填充真实卷数据",
+                listOf("vA"),
+                vm.uiState.value.volumes.map { it.id },
+            )
+            assertEquals(
+                "成功刷新后统计恢复",
+                100,
+                vm.uiState.value.projectStats?.totalWordCount,
+            )
         }
 
     @Test

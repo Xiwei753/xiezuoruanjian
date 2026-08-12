@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.core.interop.common.RepositoryException
 import com.xiwei.sujian.feature.project.data.ProjectRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -162,7 +163,10 @@ class ProjectViewModel(
      *  注意：UI 模型不携带交互状态（#617 评论八）— 展开/收起只存在
      *  expandedVolumeIds 一份真相，快照只负责仓库数据，不读也不写展开状态。
      *  #617 评论九：不再吞异常 — 任一读取失败让异常自然传播到 [refreshProject]
-     *  统一处理，避免把"读取失败"伪装成"作品真的是空的"。 */
+     *  统一处理，避免把"读取失败"伪装成"作品真的是空的"。
+     *  取消语义：块内全是阻塞调用，CancellationException 只在 withContext 退出点
+     *  抛出（块外），这里显式 rethrow 声明——被 refreshProject 取消的在途加载
+     *  必须按取消传播，不得被当成数据失败发出错误事件。 */
     private suspend fun loadProjectSnapshot(
         repo: ProjectRepository,
         projectId: String,
@@ -193,7 +197,11 @@ class ProjectViewModel(
                         )
                     }
                 Result.success(ProjectSnapshot(volumes, stats))
-            } catch (e: Throwable) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 只把可恢复的业务/IO 异常转成失败结果；Error（OOM 等）按 JVM 语义
+                // 向上传播，不得伪装成"读取失败"数据错误。
                 Result.failure(e)
             }
         }
@@ -221,7 +229,9 @@ class ProjectViewModel(
                 withContext(Dispatchers.IO) {
                     try {
                         Result.success(block(repo))
-                    } catch (e: Throwable) {
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
                         Result.failure(e)
                     }
                 }
@@ -270,7 +280,9 @@ class ProjectViewModel(
                 withContext(Dispatchers.IO) {
                     try {
                         Result.success(repo.createChapter(pid, volumeId, title))
-                    } catch (e: Throwable) {
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
                         Result.failure(e)
                     }
                 }
