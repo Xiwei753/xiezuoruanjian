@@ -115,6 +115,12 @@ internal object PersistentLogWriter {
     @Volatile private var enabled = false
 
     /**
+     * #623 评论 3：当前构建身份。init 时设置，决定日志文件名 build key。
+     * 由 init 调用线程写入，由 writer 线程读取；用 @Volatile 保证可见性。
+     */
+    @Volatile private var buildIdentity: DiagnosticsBuildIdentity? = null
+
+    /**
      * writer 线程私有落盘健康位（Issue #612 评论 3.1）。只在 writer 线程访问，
      * 无需 volatile/atomic。写盘失败后置 false，FlushBarrier 据此告知调用方
      * “前序日志未完整落盘”；只有成功的 ClearBarrier 重置为 true。
@@ -125,11 +131,15 @@ internal object PersistentLogWriter {
      * 初始化并启动 writer 线程。幂等：重复调用无副作用。
      * [context] 保留供未来绑定应用生命周期；当前日志目录由 [AndroidDataRoot] 决定。
      */
-    fun init(context: Context) {
+    fun init(
+        context: Context,
+        identity: DiagnosticsBuildIdentity,
+    ) {
         synchronized(lock) {
             if (initialized) return
             initialized = true
             enabled = true
+            buildIdentity = identity
             val thread = Thread({ writerLoop() }, "sujian-logger")
             thread.priority = Thread.MIN_PRIORITY
             thread.isDaemon = true
@@ -137,6 +147,31 @@ internal object PersistentLogWriter {
         }
         // 目录创建推迟到 writer 线程第一次 writeBatch()（Issue #612 评论 3.5）：
         // init() 的调用线程不做任何文件 I/O，日志目录只由 sujian-logger 线程创建。
+    }
+
+    /**
+     * 向后兼容重载：未提供构建身份时从 BuildConfig 生成。
+     *
+     * 生产路径走 [DiagnosticsLogger.init] -> init(context, identity)；
+     * 此重载供测试直接初始化 [PersistentLogWriter] 时使用，确保日志文件名同样
+     * 按当前 BuildConfig 的 build key 分界（#623 评论 3）。
+     */
+    fun init(context: Context) {
+        init(context, DiagnosticsBuildIdentity.fromBuildConfig())
+    }
+
+    /**
+     * #623 评论 3：当前构建的日志文件名。带 build key 时为
+     * sujian-current-v1234-e2ce827-ai-debug.log；未设置身份时回退到裸
+     * sujian-current.log（仅用于旧历史文件兼容，不作为新构建的当前文件）。
+     */
+    private fun currentLogFileName(): String {
+        val identity = buildIdentity
+        return if (identity != null) {
+            "$LOG_PREFIX-${identity.buildKey}.log"
+        } else {
+            "$LOG_PREFIX.log"
+        }
     }
 
     fun setEnabled(enabled: Boolean) {
@@ -377,7 +412,7 @@ internal object PersistentLogWriter {
     private fun writeBatch(batch: List<LogRequest>): Boolean =
         try {
             ensureLogsDirOrThrow()
-            val currentFile = File(AndroidDataRoot.logsDir(), "$LOG_PREFIX.log")
+            val currentFile = File(AndroidDataRoot.logsDir(), currentLogFileName())
             rotateIfNeeded(currentFile)
             FileOutputStream(currentFile, true)
                 .bufferedWriter(Charsets.UTF_8)
@@ -400,7 +435,10 @@ internal object PersistentLogWriter {
     private fun rotateIfNeeded(file: File) {
         if (!file.exists() || file.length() < MAX_FILE_SIZE) return
         val logDir = file.parentFile ?: return
-        val rotated = File(logDir, "$LOG_PREFIX-${System.currentTimeMillis()}.log")
+        // #623 评论 3：轮转文件名带 build key，围绕当前构建身份轮转，
+        // 不丢掉构建身份。baseName 例如 sujian-current-v1234-e2ce827-ai-debug。
+        val baseName = file.nameWithoutExtension
+        val rotated = File(logDir, "$baseName-${System.currentTimeMillis()}.log")
         file.renameTo(rotated)
         pruneOldLogs(logDir)
     }

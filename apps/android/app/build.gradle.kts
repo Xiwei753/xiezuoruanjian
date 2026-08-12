@@ -103,6 +103,11 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        // #623 评论 3：把 git commit short sha 写入 BuildConfig，
+        // 与 VERSION_CODE / VERSION_NAME / FLAVOR / BUILD_TYPE 一起构成构建身份，
+        // 日志文件名按构建身份分界（见 DiagnosticsBuildIdentity）。
+        buildConfigField("String", "GIT_COMMIT_SHA", "\"$gitCommitSha\"")
+
         ndk {
             abiFilters.addAll(requestedAndroidAbis)
         }

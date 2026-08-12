@@ -145,6 +145,22 @@ fun EditorSessionCoordinator.releasePreparedTarget(handle: PreparedSessionHandle
     }
 }
 
+private fun EditorSessionCoordinator.isBindingForDifferentWindow(
+    windowId: String,
+    targetId: String,
+): Boolean {
+    val currentBinding = _sessionStateFlow.value.bindingState
+    return when (currentBinding) {
+        is WindowBindingState.Attaching ->
+            currentBinding.windowId != windowId || currentBinding.targetId != targetId
+        is WindowBindingState.Attached ->
+            currentBinding.windowId != windowId || currentBinding.targetId != targetId
+        // Detached/Idle/Detaching/Committing/Cancelling — 不需要 windowId 校验，
+        // 继续执行后续逻辑（幂等解绑或草稿清理）。
+        else -> false
+    }
+}
+
 fun EditorSessionCoordinator.detachWindowBinding(
     windowId: String,
     targetId: String,
@@ -155,6 +171,10 @@ fun EditorSessionCoordinator.detachWindowBinding(
     // #595 二：窗口解绑使该窗口持有的输入 lease 失效 — 解绑后晚到的回调
     // （回调清除窗口期内的竞态）不能再进入会话层。
     invalidateInputLease()
+    // #623 评论 2：当前状态是 Attaching/Attached 时，只有 windowId + targetId
+    // 都与要释放的 View 对得上才允许进入 Detached。如果已经是另一个窗口/更新的
+    // 一次绑定，旧 View 的 release 直接忽略，不能把新绑定拆掉。
+    if (isBindingForDifferentWindow(windowId, targetId)) return
     if (!isPersistent || sessionId == null || sessionId == 0UL) {
         // 草稿会话或已无会话：直接关闭/清理窗口引用
         if (sessionId != null && sessionId != 0UL) {

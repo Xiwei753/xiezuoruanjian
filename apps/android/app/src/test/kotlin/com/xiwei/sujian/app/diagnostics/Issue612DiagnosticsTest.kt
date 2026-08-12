@@ -5,6 +5,7 @@ package com.xiwei.sujian.app.diagnostics
 import com.xiwei.sujian.app.navigation.SujianDestination
 import com.xiwei.sujian.app.navigation.resolveTopLevelSwitchInteraction
 import com.xiwei.sujian.app.navigation.syncIndicatorSummary
+import com.xiwei.sujian.core.diagnostics.DiagnosticsBuildIdentity
 import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 import com.xiwei.sujian.core.diagnostics.DiagnosticsExporter
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
@@ -631,7 +632,10 @@ class PersistentLogWriterTest {
         threadName = "main",
     )
 
-    private fun currentLogFile(): File = File(AndroidDataRoot.logsDir(), "sujian-current.log")
+    private fun currentLogFile(): File {
+        val identity = DiagnosticsBuildIdentity.fromBuildConfig()
+        return File(AndroidDataRoot.logsDir(), "sujian-current-${identity.buildKey}.log")
+    }
 
     @Test
     fun flushBlockingWritesAllEnqueuedMessagesToFile() {
@@ -740,7 +744,7 @@ class PersistentLogWriterTest {
         // 当前文件应存在
         assertTrue(
             "current log sujian-current.log should exist",
-            files.any { it.name == "sujian-current.log" },
+            files.any { it.name == currentLogFile().name },
         )
     }
 
@@ -850,7 +854,7 @@ class PersistentLogWriterTest {
         assertTrue("getLogFiles should not be empty", files.isNotEmpty())
         assertTrue(
             "should contain sujian-current.log",
-            files.any { it.name == "sujian-current.log" },
+            files.any { it.name == currentLogFile().name },
         )
         assertTrue(
             "all returned files should match sujian-current*.log",

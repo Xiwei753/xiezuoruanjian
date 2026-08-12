@@ -1,5 +1,6 @@
 package com.xiwei.sujian.app.diagnostics
 
+import com.xiwei.sujian.core.diagnostics.DiagnosticsBuildIdentity
 import com.xiwei.sujian.core.diagnostics.DiagnosticsExporter
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.diagnostics.LogRequest
@@ -32,7 +33,7 @@ import java.util.zip.ZipFile
 @Config(sdk = [34])
 class DiagnosticsExportPackageTest {
     private companion object {
-        const val CURRENT_LOG_ENTRY = "logs/sujian-current.log"
+        val CURRENT_LOG_ENTRY = "logs/sujian-current-${DiagnosticsBuildIdentity.fromBuildConfig().buildKey}.log"
     }
 
     private lateinit var context: android.content.Context
@@ -81,7 +82,7 @@ class DiagnosticsExportPackageTest {
             val entries = zip.entries().asSequence().map { it.name }.toSet()
             val expected =
                 setOf(
-                    "logs/sujian-current.log",
+                    CURRENT_LOG_ENTRY,
                     "logcat.txt",
                     "process_exits.json",
                     "threads.txt",

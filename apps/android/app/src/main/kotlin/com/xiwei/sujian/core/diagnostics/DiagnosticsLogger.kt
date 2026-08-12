@@ -150,8 +150,28 @@ object DiagnosticsLogger {
         contextRef.set(context.applicationContext)
         enabled.set(isEnabled)
         verbose.set(isVerbose)
-        PersistentLogWriter.init(context.applicationContext)
+        // #623 评论 3：生成构建身份并传给持久 writer，日志文件名按 build key 生成。
+        val identity = DiagnosticsBuildIdentity.fromBuildConfig()
+        PersistentLogWriter.init(context.applicationContext, identity)
         PersistentLogWriter.setEnabled(isEnabled)
+        // 初始化完成后按队列顺序先写构建身份和进程启动标记。
+        // app.build / app.process_start 在 PersistentLogWriter.init 之后入队
+        // （writer 已启动），且早于 SujianApplication.onStart 里的 app.lifecycle("start")。
+        DiagnosticsEvents.appBuild(
+            versionName = identity.versionName,
+            versionCode = identity.versionCode,
+            gitCommitSha = identity.gitCommitSha,
+            flavor = identity.flavor,
+            buildType = identity.buildType,
+            applicationId = identity.applicationId,
+        )
+        DiagnosticsEvents.appProcessStart(
+            versionCode = identity.versionCode,
+            gitCommitSha = identity.gitCommitSha,
+            flavor = identity.flavor,
+            buildType = identity.buildType,
+            processStartMs = System.currentTimeMillis(),
+        )
     }
 
     fun setEnabled(isEnabled: Boolean) {

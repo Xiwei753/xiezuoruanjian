@@ -35,6 +35,40 @@ object DiagnosticsEvents {
 
     fun activityLifecycle(state: String) = record("app.activity", "state" to state)
 
+    // ── 构建身份 / 进程启动（#623 评论 3）─────────────────────────
+
+    fun appBuild(
+        versionName: String,
+        versionCode: Int,
+        gitCommitSha: String,
+        flavor: String,
+        buildType: String,
+        applicationId: String,
+    ) = record(
+        "app.build",
+        "versionName" to versionName,
+        "versionCode" to versionCode,
+        "gitCommitSha" to gitCommitSha,
+        "flavor" to flavor,
+        "buildType" to buildType,
+        "applicationId" to applicationId,
+    )
+
+    fun appProcessStart(
+        versionCode: Int,
+        gitCommitSha: String,
+        flavor: String,
+        buildType: String,
+        processStartMs: Long,
+    ) = record(
+        "app.process_start",
+        "versionCode" to versionCode,
+        "gitCommitSha" to gitCommitSha,
+        "flavor" to flavor,
+        "buildType" to buildType,
+        "processStartMs" to processStartMs,
+    )
+
     // ── 一级导航 ─────────────────────────────────────────────────
 
     fun navigation(destination: String) = record("nav.destination", "destination" to destination)

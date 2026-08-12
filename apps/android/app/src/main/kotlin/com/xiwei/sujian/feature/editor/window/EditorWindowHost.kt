@@ -656,12 +656,18 @@ class EditorWindowHost(
         targetId: String,
         view: SujianEditorView,
     ) {
+        // #623 评论 2：只允许当前 sharedEditorView === view 的 View 执行解绑，
+        // 旧 View 的晚到 onRelease 不能动新 View。
+        if (sharedEditorView !== view) return
+        // 解绑前保存当前滚动投影。
+        saveActiveTargetProjection(targetId)
         clearActiveCallbacks()
         view.unbindSession("compose_release")
         view.setFrameClock(null)
-        if (sharedEditorView === view) {
-            sharedEditorView = null
-        }
+        // 调用会话层的窗口解绑，把当前绑定明确推进到 Detached。
+        // 持久正文 session 只解除窗口绑定，不关闭 Rust session。
+        sessionCoordinator.detachWindowBinding(windowId, targetId)
+        sharedEditorView = null
     }
 
     /**

@@ -281,13 +281,16 @@ class AndroidTextAnimationEngine(
      * that would otherwise be visible alongside the old-snapshot animation during the
      * brief window between mirror update and first animation frame).
      *
-     * Timestamp: When [frameTimeMs] is provided, it is used as the current time (e.g.
-     * from a Choreographer frame callback). Otherwise [AnimationTimeSource.nowNanos] / 1_000_000
-     * provides a monotonic millisecond clock consistent with [AnimationTimeline]'s internal
-     * time base. Sub-millisecond precision is intentionally discarded —
+     * Timestamp: 事务提交时间 (submittedAtMs) 使用 [AnimationTimeSource.nowNanos]（生产实现
+     * 取 [System.nanoTime]）— 这是"现在"语义，不返回缓存帧，避免输入发生在两帧之间时新事务
+     * 拿到旧 VSync 时间导致 100ms 事务报 2875ms（#623 评论 1）。
+     * rebase snapshot 使用最近一次真实 VSync 帧时间 [AnimationTimeSource.lastFrameTimeNanos]：
+     * 当 [frameTimeMs] 显式传入时优先用它（来自 Choreographer 帧回调），否则取
+     * [lastFrameTimeNanos]（未收到过帧时回退到 monotonic now）。
+     * Sub-millisecond precision is intentionally discarded —
      * [AnimationTimeline.progress] operates in whole milliseconds.
-     * The default [ChoreographerAnimationTimeSource] delegates to [System.nanoTime], which is
-     * monotonic (unlike [System.currentTimeMillis], which can jump backwards on NTP adjustments).
+     * [System.nanoTime] is monotonic (unlike [System.currentTimeMillis], which can jump
+     * backwards on NTP adjustments).
      */
     fun prepareAndSubmit(
         visualIntent: VisualIntent,
@@ -297,7 +300,11 @@ class AndroidTextAnimationEngine(
         frameTimeMs: Long? = null,
     ) {
         val textSuppressed = animationPolicy == TextAnimationPolicy.SYSTEM_SUPPRESSED || reduceMotion
-        val effectiveFrameTimeMs = frameTimeMs ?: (timeSource.nowNanos() / 1_000_000)
+        val submitTimeMs = timeSource.nowNanos() / 1_000_000
+        val rebaseFrameTimeMs =
+            frameTimeMs
+                ?: timeSource.lastFrameTimeNanos()?.let { it / 1_000_000 }
+                ?: submitTimeMs
 
         if (textSuppressed && !smoothCursorEnabled) {
             // Both text and cursor suppressed (or reduce-motion): static update only.
@@ -314,10 +321,10 @@ class AndroidTextAnimationEngine(
             // same FrameClock. Text slices are suppressed (SYSTEM_SUPPRESSED mode → no
             // slices from the planner), but the cursor transition is preserved so the
             // cursor timeline drives smooth cursor movement from the same VSync source.
-            submitCursorOnlyTransaction(visualIntent, layoutEngine, mirrorUpdate, beforePatch, effectiveFrameTimeMs)
+            submitCursorOnlyTransaction(visualIntent, layoutEngine, mirrorUpdate, beforePatch)
             return
         }
-        val rebaseSnapshot = captureRebaseSnapshot(effectiveFrameTimeMs)
+        val rebaseSnapshot = captureRebaseSnapshot(rebaseFrameTimeMs)
 
         val oldRevision = layoutEngine.captureImmutableRevision()
         // Two-phase affected-line computation invariant:
@@ -356,7 +363,7 @@ class AndroidTextAnimationEngine(
         val affectedNewLineIndices = affectedResult.newLineIndices
         val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
         val transaction = prepare(visualIntent, oldRevision, newRevision, oldSnapshots, newSnapshots, rebaseSnapshot)
-        submit(transaction, effectiveFrameTimeMs)
+        submit(transaction, submitTimeMs)
     }
 
     /**
@@ -372,9 +379,10 @@ class AndroidTextAnimationEngine(
         layoutEngine: AndroidLayoutEngine,
         mirrorUpdate: (() -> Unit)?,
         beforePatch: (() -> Unit)?,
-        frameTimeMs: Long,
     ) {
-        val rebaseSnapshot = captureRebaseSnapshot(frameTimeMs)
+        val submitTimeMs = timeSource.nowNanos() / 1_000_000
+        val rebaseFrameTimeMs = timeSource.lastFrameTimeNanos()?.let { it / 1_000_000 } ?: submitTimeMs
+        val rebaseSnapshot = captureRebaseSnapshot(rebaseFrameTimeMs)
         val oldRevision = layoutEngine.captureImmutableRevision()
         beforePatch?.invoke()
         mirrorUpdate?.invoke()
@@ -387,7 +395,7 @@ class AndroidTextAnimationEngine(
                 durationMs = cursorDuration,
             )
         val transaction = prepare(cursorOnlyIntent, oldRevision, newRevision, emptyMap(), emptyMap(), rebaseSnapshot)
-        submit(transaction, frameTimeMs)
+        submit(transaction, submitTimeMs)
     }
 
     fun registerSnapshots(

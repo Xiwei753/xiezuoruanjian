@@ -82,6 +82,10 @@ class SujianEditorView
         @Volatile
         private var pendingFrameTimeNanos: Long = Long.MIN_VALUE
 
+        // #623 评论 1：重新获得窗口焦点时不立即 resume，而是等到下一个真实 VSync 帧
+        // （onFrame）再用新的 frameTimeNanos 恢复时间线，避免拿旧缓存帧时间立即 resume。
+        private var pendingResume: Boolean = false
+
         var kernelBridge: EditorKernelBridge?
             get() = pipeline.kernelBridge
             set(value) {
@@ -438,6 +442,12 @@ class SujianEditorView
             if (timeSource is com.xiwei.sujian.feature.editor.visual.ChoreographerAnimationTimeSource) {
                 timeSource.onFrameTimeNanos(frameTimeNanos)
             }
+            // 重新获得焦点后在第一个真实 VSync 帧恢复时间线，
+            // 不用旧缓存帧时间立即 resume（#623 评论 1）。
+            if (pendingResume) {
+                pendingResume = false
+                pipeline.resumeAnimation(frameTimeNanos / 1_000_000)
+            }
             // Advance timeline state at dispatch time (anchor + completion). The draw below
             // repeats these transitions idempotently, so the animation state does not depend
             // on when the invalidate-driven draw is actually delivered (a delayed vsync must
@@ -663,11 +673,14 @@ class SujianEditorView
         override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
             super.onWindowFocusChanged(hasWindowFocus)
             com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.editorFocus(hasWindowFocus)
-            val frameTimeMs = timeSource.nowNanos() / 1_000_000
             if (!hasWindowFocus) {
-                pipeline.pauseAnimation(frameTimeMs)
+                // 失焦可以用最后一帧暂停 — 保存当前可见帧，不永久取消事务。
+                val pauseTimeMs = (timeSource.lastFrameTimeNanos() ?: timeSource.nowNanos()) / 1_000_000
+                pipeline.pauseAnimation(pauseTimeMs)
             } else {
-                pipeline.resumeAnimation(frameTimeMs)
+                // 重新获得焦点时不要拿旧缓存立即 resume，
+                // 先 requestAnimationFrame()，在下一次真实 onFrame 里用新的 frameTimeNanos 恢复时间线。
+                pendingResume = true
                 if (pipeline.hasActiveAnimation()) {
                     requestAnimationFrame()
                 }
