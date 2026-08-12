@@ -5,6 +5,7 @@ import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -45,6 +46,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -312,6 +314,43 @@ private fun SujianNavDisplayContent(
         popTransitionSpec = navPopTransition,
         predictivePopTransitionSpec = navPredictivePopTransition,
     )
+}
+
+/**
+ * #617 评论二：一级（底栏/侧栏）切换动效 — 只动画“新页面绘制层”。
+ *
+ * 不恢复 #614 删除的双页面整页 crossfade：切换期间旧页立即退出，新页只在
+ * graphicsLayer 上做 140ms 淡入（0.9 → 1.0），不触发新页面重新布局。
+ * noPageTransitionMetadata 保留，Works/StarMap/Stats 不重新挂回全局 transitionSpec。
+ */
+@Composable
+private fun SujianTopLevelSwitchMotion(
+    destination: SujianDestination,
+    content: @Composable () -> Unit,
+) {
+    val contentAlpha = remember { Animatable(1f) }
+    var previousDestination by remember { mutableStateOf<SujianDestination?>(null) }
+
+    LaunchedEffect(destination) {
+        val previous = previousDestination
+        previousDestination = destination
+        if (previous == null || previous == destination) return@LaunchedEffect
+
+        contentAlpha.snapTo(0.9f)
+        contentAlpha.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = 140),
+        )
+    }
+
+    Box(
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = contentAlpha.value },
+    ) {
+        content()
+    }
 }
 
 /** compact 底栏 — 一级入口只保留 作品/星图/统计（#597 评论问题一）。 */
@@ -629,12 +668,15 @@ fun SujianNavigationSuite(
     SujianProcessStateEffect(currentTopDestination, appState, syncState)
 
     val navDisplayContent: @Composable () -> Unit = {
-        SujianNavDisplayContent(
-            topLevelBackStack,
-            appState,
-            workspaceNavState,
-            workspaceActions,
-        )
+        // #617 评论二：一级切换只动画新页面的绘制层，旧一级页面立即退出。
+        SujianTopLevelSwitchMotion(currentTopDestination) {
+            SujianNavDisplayContent(
+                topLevelBackStack,
+                appState,
+                workspaceNavState,
+                workspaceActions,
+            )
+        }
     }
 
     if (layoutSpec.navigationPresentation == AndroidNavigationPresentation.BottomBar) {

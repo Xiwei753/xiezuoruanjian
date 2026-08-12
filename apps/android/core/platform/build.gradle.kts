@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.detekt)
 }
 
@@ -19,9 +20,17 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    buildFeatures {
+        compose = true
+    }
 }
 
 dependencies {
+    // #617 评论四：ImmersiveSystemBarsEffect 用 Compose 生命周期效果封装系统栏能力。
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.runtime)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.window)
     implementation(libs.androidx.window.core)

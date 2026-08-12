@@ -144,7 +144,13 @@ class SettingsViewModel(
     internal fun mergeCommand(command: SettingsSaveCommand) {
         pendingCommands =
             when (command) {
-                is SettingsSaveCommand.Local -> pendingCommands.copy(local = command)
+                is SettingsSaveCommand.Local -> {
+                    // #617 评论三：合并连续本地设置时，后一个非主题设置不能盖掉
+                    // 前一个已记录的主题变化 — affectsTheme 取并集。
+                    val affectsTheme =
+                        command.affectsTheme || (pendingCommands.local?.affectsTheme == true)
+                    pendingCommands.copy(local = command.copy(affectsTheme = affectsTheme))
+                }
                 is SettingsSaveCommand.FontSize -> pendingCommands.copy(fontSize = command)
                 is SettingsSaveCommand.ProjectSyncConfig ->
                     pendingCommands.copy(projectSyncConfig = command)
@@ -191,8 +197,20 @@ class SettingsViewModel(
     }
 
     private fun updateLocalSettings(newSettings: LocalSettings) {
+        // #617 评论三：保存前比较旧值，只有真正影响主题的字段变化才标记 affectsTheme。
+        val previous = _uiState.value.settings
+        val affectsTheme = newSettings.hasDifferentThemeFrom(previous)
+
         _uiState.update { it.copy(settings = newSettings) }
-        saveChannel.trySend(QueueItem.Save(SettingsSaveCommand.Local(newSettings, ++localRevision)))
+        saveChannel.trySend(
+            QueueItem.Save(
+                SettingsSaveCommand.Local(
+                    settings = newSettings,
+                    revision = ++localRevision,
+                    affectsTheme = affectsTheme,
+                ),
+            ),
+        )
     }
 
     private fun updateFontSize(fontSize: Float) {
@@ -200,6 +218,15 @@ class SettingsViewModel(
         saveChannel.trySend(QueueItem.Save(SettingsSaveCommand.FontSize(fontSize, ++fontSizeRevision)))
     }
 }
+
+// #617 评论三：本地设置中真正影响主题的字段集合 — 其余字段（自动保存、诊断、
+// 编辑器选项、沉浸式全屏等）变化不触发主题重建。提取为 internal 顶层函数便于单测正反验证。
+internal fun LocalSettings.hasDifferentThemeFrom(other: LocalSettings): Boolean =
+    appearanceMode != other.appearanceMode ||
+        colorSource != other.colorSource ||
+        dynamicColorEnabled != other.dynamicColorEnabled ||
+        selectedBuiltinThemeId != other.selectedBuiltinThemeId ||
+        selectedPaletteId != other.selectedPaletteId
 
 /**
  * 设置列表分组（手机列表按组呈现，组内每一项显示标题、说明或当前值与展开箭头）。

@@ -309,7 +309,6 @@ def rule_ui_no_uniffi_jna_bridge() -> list[Finding]:
     ui_filters = [
         "/sujian/app/theme/",
         "/sujian/app/navigation/",
-        "/sujian/app/labs/",
     ] + _feature_ui_filters()
     findings = []
     for f in ui_filters:
@@ -326,7 +325,6 @@ def rule_ui_no_editor_input() -> list[Finding]:
     ui_filters = [
         "/sujian/app/theme/",
         "/sujian/app/navigation/",
-        "/sujian/app/labs/",
     ] + _feature_ui_filters()
     findings = []
     for f in ui_filters:
@@ -751,6 +749,16 @@ def rule_source_contracts() -> list[Finding]:
                         "ChapterPreviewState 不得持有动画引擎/Bitmap/VisualRuntime 相关字段",
                     )
                 )
+    # #617 评论一：ProjectViewModel 不得复活 AndroidViewModel/Application 依赖 —
+    # Navigation 3 NavEntry 级 ViewModelStoreOwner 的 CreationExtras 不保证
+    # APPLICATION_KEY，该依赖曾在进入章节树时直接崩溃。
+    project_vm = APP_SRC / "feature" / "project" / "ui" / "ProjectViewModel.kt"
+    forbid(
+        project_vm,
+        r"AndroidViewModel|android\.app\.Application",
+        "ProjectViewModel 依赖 AndroidViewModel/Application（#617 评论一，Navigation 3 崩溃根因）",
+    )
+
     return findings
 
 

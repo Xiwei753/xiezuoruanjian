@@ -7,6 +7,9 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import com.xiwei.sujian.feature.settings.data.model.SyncableSettings
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * SettingsRepository — 设置仓库层
@@ -40,6 +43,11 @@ class SettingsRepository(
             android.content.Context.MODE_PRIVATE,
         )
 
+    // #617 评论四：本地设置的可观察状态 — 系统栏执行层（ImmersiveSystemBarsEffect）
+    // 只认这一份状态，实验设置写入后立即反映到窗口能力。
+    private val _localSettingsState = MutableStateFlow(LocalSettings())
+    val localSettingsState: StateFlow<LocalSettings> = _localSettingsState.asStateFlow()
+
     @Volatile
     var lastWarning: String? = null
         private set
@@ -65,12 +73,15 @@ class SettingsRepository(
                 }
                 BridgeResult.NotLoaded -> LocalSettings()
             }
-        return fromCore.copy(
-            diagnosticsEnabled = diagPrefs.getBoolean("diagnostics_enabled", true),
-            diagnosticsVerbose = diagPrefs.getBoolean("diagnostics_verbose", true),
-            useSelfRenderEditorOnAndroid = diagPrefs.getBoolean("use_self_render_editor_on_android", true),
-            experimentalFullscreenMode = diagPrefs.getBoolean("experimental_fullscreen_mode", false),
-        )
+        val resolved =
+            fromCore.copy(
+                diagnosticsEnabled = diagPrefs.getBoolean("diagnostics_enabled", true),
+                diagnosticsVerbose = diagPrefs.getBoolean("diagnostics_verbose", true),
+                useSelfRenderEditorOnAndroid = diagPrefs.getBoolean("use_self_render_editor_on_android", true),
+                experimentalFullscreenMode = diagPrefs.getBoolean("experimental_fullscreen_mode", false),
+            )
+        _localSettingsState.value = resolved
+        return resolved
     }
 
     fun saveLocalSettings(settings: LocalSettings): SettingsSaveResult {
@@ -85,12 +96,15 @@ class SettingsRepository(
             is BridgeResult.Success -> {
                 com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "ok")
                 val effectiveVerbose = if (settings.diagnosticsEnabled) settings.diagnosticsVerbose else false
+                val resolved = settings.copy(diagnosticsVerbose = effectiveVerbose)
                 diagPrefs.edit {
                     putBoolean("diagnostics_enabled", settings.diagnosticsEnabled)
                     putBoolean("diagnostics_verbose", effectiveVerbose)
                     putBoolean("use_self_render_editor_on_android", settings.useSelfRenderEditorOnAndroid)
                     putBoolean("experimental_fullscreen_mode", settings.experimentalFullscreenMode)
                 }
+                // #617 评论四：保存成功后同步可观察状态，实验开关立即驱动窗口能力。
+                _localSettingsState.value = resolved
                 CoreSettingsEvents.record(result.envelope)
                 SettingsSaveResult.Success
             }

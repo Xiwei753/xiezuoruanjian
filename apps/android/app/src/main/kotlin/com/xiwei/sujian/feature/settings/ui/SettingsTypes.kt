@@ -139,9 +139,13 @@ sealed interface SettingsIntent {
 }
 
 sealed interface SettingsSaveCommand {
+    // #617 评论三：本地保存命令携带 affectsTheme — 只有真正影响主题的字段
+    // （外观模式/颜色来源/动态色/内置主题/调色板）变化时才需要重建主题；
+    // 自动保存、诊断、编辑器选项、沉浸式全屏等普通设置不再触发 ThemeStore.reload()。
     data class Local(
         val settings: LocalSettings,
         val revision: Long,
+        val affectsTheme: Boolean,
     ) : SettingsSaveCommand
 
     data class FontSize(

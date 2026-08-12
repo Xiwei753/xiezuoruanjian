@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.settings.ui
 
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -68,11 +69,51 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `SettingsSaveCommand Local carries settings and revision`() {
+    fun `SettingsSaveCommand Local carries settings revision and affectsTheme`() {
         val settings = LocalSettings(editorFontSize = 18f)
-        val cmd = SettingsSaveCommand.Local(settings, 1L)
+        val cmd = SettingsSaveCommand.Local(settings, 1L, affectsTheme = true)
         assertEquals(18f, cmd.settings.editorFontSize, 0.01f)
         assertEquals(1L, cmd.revision)
+        assertTrue(cmd.affectsTheme)
+    }
+
+    @Test
+    fun `hasDifferentThemeFrom is true when theme fields change`() {
+        val base = LocalSettings()
+        assertTrue(base.hasDifferentThemeFrom(LocalSettings(appearanceMode = "light")))
+        assertTrue(base.hasDifferentThemeFrom(LocalSettings(colorSource = "dynamic")))
+        assertTrue(base.hasDifferentThemeFrom(LocalSettings(dynamicColorEnabled = true)))
+        assertTrue(base.hasDifferentThemeFrom(LocalSettings(selectedBuiltinThemeId = "ink")))
+        assertTrue(base.hasDifferentThemeFrom(LocalSettings(selectedPaletteId = "p1")))
+    }
+
+    @Test
+    fun `hasDifferentThemeFrom is false for non-theme fields`() {
+        val base = LocalSettings()
+        assertFalse(base.hasDifferentThemeFrom(LocalSettings(experimentalFullscreenMode = true)))
+        assertFalse(base.hasDifferentThemeFrom(LocalSettings(diagnosticsVerbose = false)))
+        assertFalse(base.hasDifferentThemeFrom(LocalSettings(editorFontSize = 20f)))
+        assertFalse(base.hasDifferentThemeFrom(LocalSettings(autoSaveDelayMs = 500L)))
+        assertFalse(base.hasDifferentThemeFrom(LocalSettings()))
+    }
+
+    @Test
+    fun `mergeCommand keeps affectsTheme when later local save is non-theme`() {
+        val vm = createVm()
+        val themeSettings = LocalSettings(appearanceMode = "light")
+        val themeCmd = SettingsSaveCommand.Local(themeSettings, 1L, affectsTheme = true)
+        val nonThemeCmd =
+            SettingsSaveCommand.Local(
+                themeSettings.copy(experimentalFullscreenMode = true),
+                2L,
+                affectsTheme = false,
+            )
+        vm.mergeCommand(themeCmd)
+        vm.mergeCommand(nonThemeCmd)
+        assertTrue("后一个非主题保存不能盖掉前一个主题变化", vm.pendingCommands.local?.affectsTheme == true)
+        // 合并后的命令携带最新的 settings 与 revision，但 affectsTheme 取并集。
+        assertEquals(2L, vm.pendingCommands.local?.revision)
+        assertTrue(vm.pendingCommands.local?.settings?.experimentalFullscreenMode == true)
     }
 
     @Test

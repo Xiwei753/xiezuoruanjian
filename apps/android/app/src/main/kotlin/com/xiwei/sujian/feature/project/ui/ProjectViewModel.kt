@@ -1,8 +1,7 @@
 package com.xiwei.sujian.feature.project.ui
 
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import kotlinx.coroutines.Dispatchers
@@ -20,10 +19,13 @@ data class VolumeChapterUiState(
     val isLoading: Boolean = false,
 )
 
+// #617 评论一：ProjectViewModel 不依赖 Application — Navigation 3 的 NavEntry 级
+// ViewModelStoreOwner 的 CreationExtras 只保证提供 SavedStateHandle（由
+// SaveableStateHolderNavEntryDecorator + ViewModelStoreNavEntryDecorator 提供），
+// 不保证 APPLICATION_KEY；此前继承 AndroidViewModel 会在进入章节树时崩溃。
 class ProjectViewModel(
-    application: Application,
     private val savedStateHandle: SavedStateHandle,
-) : AndroidViewModel(application) {
+) : ViewModel() {
     private val _uiState =
         MutableStateFlow(
             VolumeChapterUiState(

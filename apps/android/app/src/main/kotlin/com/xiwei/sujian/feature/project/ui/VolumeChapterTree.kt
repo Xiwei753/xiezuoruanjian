@@ -12,6 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -71,7 +72,11 @@ internal fun ChapterTreeContent(
     modifier: Modifier = Modifier,
 ) {
     val viewModel: ProjectViewModel = viewModel()
-    viewModel.initialize(projectId, projectRepository)
+    // #617 评论一：初始化从组合阶段移入副作用 — 避免随重组反复进入初始化判断；
+    // 作品切换时以 projectId 为 key 重新触发，按 key 重新初始化。
+    LaunchedEffect(viewModel, projectId, projectRepository) {
+        viewModel.initialize(projectId, projectRepository)
+    }
     val uiState by viewModel.uiState.collectAsState()
 
     var dialogState by remember { mutableStateOf<WorkspaceDialogState>(WorkspaceDialogState.None) }

@@ -217,7 +217,11 @@ private suspend fun SettingsViewModel.saveLocalField(
     when (result) {
         is SettingsSaveResult.Success -> {
             localPersistedRevision = local.revision
-            com.xiwei.sujian.app.theme.ThemeStore.reload()
+            // #617 评论三：只有真正影响主题的本地保存才重建主题 — 自动保存、诊断、
+            // 编辑器选项、沉浸式全屏等普通设置保存不再触发 ThemeStore.reload()。
+            if (local.affectsTheme) {
+                com.xiwei.sujian.app.theme.ThemeStore.reload()
+            }
         }
         is SettingsSaveResult.Failed -> {
             if (localRevision == local.revision) {

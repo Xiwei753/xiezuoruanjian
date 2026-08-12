@@ -396,6 +396,21 @@ class LayerRuleTests(unittest.TestCase):
         messages = " | ".join(f.message for f in findings)
         self.assertIn("commitSyncProfile", messages, "缺少 commitSyncProfile 必须被报告")
 
+    def test_source_contracts_rule_flags_project_view_model_android_view_model_revival(self):
+        """#617 评论一：ProjectViewModel 复活 AndroidViewModel/Application 依赖必须被报告。"""
+        findings = self.run_rule(
+            "source-contracts",
+            {
+                f"{APP_PREFIX}/feature/project/ui/ProjectViewModel.kt": (
+                    "package com.xiwei.sujian.feature.project.ui\n\n"
+                    "import android.app.Application\n"
+                    "class ProjectViewModel(application: Application) : AndroidViewModel(application)\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("AndroidViewModel/Application", messages, "崩溃根因依赖复活必须被报告")
+
     def test_package_dir_inconsistent_must_fail(self):
         """package 声明与物理目录不一致必须被报告（#602 评论#7 项13）。"""
         # 直接调 rule_package_dir_consistent 并注入临时 source_roots，

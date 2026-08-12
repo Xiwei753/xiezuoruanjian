@@ -28,6 +28,15 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SujianNavDecoratedEntriesTest {
+    private companion object {
+        // 两个测试共用同一组占位内容文本，提取常量避免 StringLiteralDuplication。
+        const val STAR_MAP_CONTENT = "starmap-content"
+        const val STATS_CONTENT = "stats-content"
+        const val SETTINGS_CONTENT = "settings-content"
+        const val WORKS_CONTENT = "works-content"
+        const val OPEN_SETTINGS = "open-settings"
+    }
+
     @get:Rule
     val composeRule = createComposeRule()
 
@@ -39,16 +48,17 @@ class SujianNavDecoratedEntriesTest {
             topLevelBackStack = rememberSujianTopLevelBackStack()
             val entryProvider: (NavKey) -> NavEntry<NavKey> = { key ->
                 when (key) {
-                    is SujianRoute.Works -> NavEntry(key) {
-                        var count by rememberSaveable { mutableIntStateOf(0) }
-                        Column {
-                            Text("works-count:$count")
-                            Button(onClick = { count++ }) { Text("works-inc") }
+                    is SujianRoute.Works ->
+                        NavEntry(key) {
+                            var count by rememberSaveable { mutableIntStateOf(0) }
+                            Column {
+                                Text("works-count:$count")
+                                Button(onClick = { count++ }) { Text("works-inc") }
+                            }
                         }
-                    }
-                    is SujianRoute.StarMap -> NavEntry(key) { Text("starmap-content") }
-                    is SujianRoute.Stats -> NavEntry(key) { Text("stats-content") }
-                    is SujianRoute.Settings -> NavEntry(key) { Text("settings-content") }
+                    is SujianRoute.StarMap -> NavEntry(key) { Text(STAR_MAP_CONTENT) }
+                    is SujianRoute.Stats -> NavEntry(key) { Text(STATS_CONTENT) }
+                    is SujianRoute.Settings -> NavEntry(key) { Text(SETTINGS_CONTENT) }
                     else -> NavEntry(key) {}
                 }
             }
@@ -79,23 +89,25 @@ class SujianNavDecoratedEntriesTest {
             topLevelBackStack = rememberSujianTopLevelBackStack()
             val entryProvider: (NavKey) -> NavEntry<NavKey> = { key ->
                 when (key) {
-                    is SujianRoute.Works -> NavEntry(key) {
-                        Column {
-                            Text("works-content")
-                            Button(onClick = { topLevelBackStack.add(SujianRoute.Settings) }) {
-                                Text("open-settings")
+                    is SujianRoute.Works ->
+                        NavEntry(key) {
+                            Column {
+                                Text(WORKS_CONTENT)
+                                Button(onClick = { topLevelBackStack.add(SujianRoute.Settings) }) {
+                                    Text(OPEN_SETTINGS)
+                                }
                             }
                         }
-                    }
-                    is SujianRoute.StarMap -> NavEntry(key) { Text("starmap-content") }
-                    is SujianRoute.Stats -> NavEntry(key) { Text("stats-content") }
-                    is SujianRoute.Settings -> NavEntry(key) {
-                        var count by rememberSaveable { mutableIntStateOf(0) }
-                        Column {
-                            Text("settings-count:$count")
-                            Button(onClick = { count++ }) { Text("settings-inc") }
+                    is SujianRoute.StarMap -> NavEntry(key) { Text(STAR_MAP_CONTENT) }
+                    is SujianRoute.Stats -> NavEntry(key) { Text(STATS_CONTENT) }
+                    is SujianRoute.Settings ->
+                        NavEntry(key) {
+                            var count by rememberSaveable { mutableIntStateOf(0) }
+                            Column {
+                                Text("settings-count:$count")
+                                Button(onClick = { count++ }) { Text("settings-inc") }
+                            }
                         }
-                    }
                     else -> NavEntry(key) {}
                 }
             }
@@ -106,18 +118,18 @@ class SujianNavDecoratedEntriesTest {
         }
 
         // 初始: works-content
-        composeRule.onNodeWithText("works-content").assertExists()
+        composeRule.onNodeWithText(WORKS_CONTENT).assertExists()
         // 进入 Settings
-        composeRule.onNodeWithText("open-settings").performClick()
+        composeRule.onNodeWithText(OPEN_SETTINGS).performClick()
         composeRule.onNodeWithText("settings-count:0").assertExists()
         // 增加计数
         composeRule.onNodeWithText("settings-inc").performClick()
         composeRule.onNodeWithText("settings-count:1").assertExists()
         // pop Settings 回到 Works
         composeRule.runOnIdle { topLevelBackStack.removeLastOrNull() }
-        composeRule.onNodeWithText("works-content").assertExists()
+        composeRule.onNodeWithText(WORKS_CONTENT).assertExists()
         // 重新进入 Settings — saveable 状态应重置
-        composeRule.onNodeWithText("open-settings").performClick()
+        composeRule.onNodeWithText(OPEN_SETTINGS).performClick()
         composeRule.onNodeWithText("settings-count:0").assertExists()
     }
 }

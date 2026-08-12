@@ -6,14 +6,14 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.navigation3.runtime.NavBackStack
-import androidx.navigation3.runtime.NavKey
-import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
+import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavEntryDecorator
+import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberDecoratedNavEntries
+import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 
 /**
@@ -86,24 +86,25 @@ class SujianTopLevelBackStack(
      * 切 tab 不会把 inactive tab 的 saveable/viewmodel 状态误清。
      */
     @Composable
-    fun decoratedEntries(
-        entryProvider: (NavKey) -> NavEntry<NavKey>,
-    ): List<NavEntry<NavKey>> {
-        val worksEntries = rememberDecoratedNavEntries(
-            backStack = worksStack,
-            entryDecorators = rememberPerStackDecorators(),
-            entryProvider = entryProvider,
-        )
-        val starMapEntries = rememberDecoratedNavEntries(
-            backStack = starMapStack,
-            entryDecorators = rememberPerStackDecorators(),
-            entryProvider = entryProvider,
-        )
-        val statsEntries = rememberDecoratedNavEntries(
-            backStack = statsStack,
-            entryDecorators = rememberPerStackDecorators(),
-            entryProvider = entryProvider,
-        )
+    fun decoratedEntries(entryProvider: (NavKey) -> NavEntry<NavKey>): List<NavEntry<NavKey>> {
+        val worksEntries =
+            rememberDecoratedNavEntries(
+                backStack = worksStack,
+                entryDecorators = rememberPerStackDecorators(),
+                entryProvider = entryProvider,
+            )
+        val starMapEntries =
+            rememberDecoratedNavEntries(
+                backStack = starMapStack,
+                entryDecorators = rememberPerStackDecorators(),
+                entryProvider = entryProvider,
+            )
+        val statsEntries =
+            rememberDecoratedNavEntries(
+                backStack = statsStack,
+                entryDecorators = rememberPerStackDecorators(),
+                entryProvider = entryProvider,
+            )
         return when (currentTopLevel) {
             SujianDestination.Works -> worksEntries
             SujianDestination.StarMap -> starMapEntries
