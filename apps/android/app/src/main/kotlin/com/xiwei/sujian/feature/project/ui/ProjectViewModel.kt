@@ -100,9 +100,15 @@ class ProjectViewModel(
 
                 if (generation != projectGeneration || pid != currentProjectId) return@launch
                 loadedProjectId = pid
+                // 写回时从“当前” expandedVolumeIds 派生 isExpanded：加载在途期间用户
+                // 切换展开时，旧快照里物化的展开标志会让刚点的展开被视觉回滚。
+                val expanded = _uiState.value.expandedVolumeIds
                 _uiState.value =
                     _uiState.value.copy(
-                        volumes = snapshot.volumes,
+                        volumes =
+                            snapshot.volumes.map { v ->
+                                v.copy(isExpanded = expanded.contains(v.id))
+                            },
                         projectStats = snapshot.projectStats,
                         isLoading = false,
                     )
@@ -119,7 +125,9 @@ class ProjectViewModel(
             )
     }
 
-    /** 在 IO 线程读取当前作品快照（卷 + 章节 + 统计），失败时降级为空快照。 */
+    /** 在 IO 线程读取当前作品快照（卷 + 章节 + 统计），失败时降级为空快照。
+     *  注意：不在这里物化 isExpanded — 展开标志由写回方从当前 expandedVolumeIds 派生，
+     *  避免加载在途期间的展开切换被旧快照覆盖。 */
     private suspend fun loadProjectSnapshot(
         repo: ProjectRepository,
         projectId: String,
@@ -132,7 +140,7 @@ class ProjectViewModel(
                             id = vol.id,
                             title = vol.title,
                             chapters = loadChapters(repo, projectId, vol.id),
-                            isExpanded = _uiState.value.expandedVolumeIds.contains(vol.id),
+                            isExpanded = false,
                         )
                     }
                 } catch (_: Exception) {

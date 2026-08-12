@@ -71,8 +71,11 @@ class ProjectViewModelStaleLoadTest {
         private val volumeGates: Map<String, CountDownLatch> = emptyMap(),
         private val chapterGates: Map<String, CountDownLatch> = emptyMap(),
         private val statsGates: Map<String, CountDownLatch> = emptyMap(),
+        // 仅阻塞“第二次” getVolumes（变更刷新场景：首次加载放行后，再挂起刷新链的卷读取）。
+        private val secondVolumeGate: CountDownLatch? = null,
     ) : ProjectRepository(context) {
         private val statsMap = stats.toMutableMap()
+        private var volumeCallCount = 0
 
         /** 变更测试用：模拟 Core 侧数据变化（创建/删除卷章节后统计变化）。 */
         fun setStats(
@@ -84,6 +87,9 @@ class ProjectViewModelStaleLoadTest {
 
         /** getVolumes("A", …) 已进入（真实 IO 侧已开始执行，尚未放行）。 */
         val volumeAEntered = AtomicBoolean(false)
+
+        /** 第二次 getVolumes("A", …) 已进入（挂在 secondVolumeGate 上）。 */
+        val secondVolumeAEntered = AtomicBoolean(false)
 
         /** getChapters("A", …) 已进入（挂在章节栅栏上）。 */
         val chapterAEntered = AtomicBoolean(false)
@@ -100,7 +106,13 @@ class ProjectViewModelStaleLoadTest {
 
         override fun getVolumes(projectId: String): List<Volume> {
             if (projectId == "A") volumeAEntered.set(true)
-            await(volumeGates[projectId])
+            volumeCallCount++
+            if (secondVolumeGate != null && volumeCallCount == 2) {
+                if (projectId == "A") secondVolumeAEntered.set(true)
+                await(secondVolumeGate)
+            } else {
+                await(volumeGates[projectId])
+            }
             return volumes[projectId].orEmpty()
         }
 
@@ -329,5 +341,55 @@ class ProjectViewModelStaleLoadTest {
             // 但变更刷新必须重读统计（#617 评论七：变更后不能只刷卷列表）。
             assertEquals("卷列表不得因失败的 create 变化", listOf("vA"), vm.uiState.value.volumes.map { it.id })
             assertEquals(300, vm.uiState.value.projectStats?.totalWordCount)
+        }
+
+    @Test
+    fun expansionToggleDuringInFlightRefresh_isNotRolledBackByWriteBack() =
+        runTest(mainDispatcherRule.dispatcher) {
+            // #617 复审：展开标志必须在写回时从当前 expandedVolumeIds 派生，不能由
+            // 快照在读取时物化 — 否则刷新在途期间的展开切换会被旧快照写回回滚。
+            // 时序：变更刷新的第二次 getVolumes 挂起 → 折叠 → 放行（快照完成、写回
+            // 尚未入队）→ 再展开 → 驱动写回 — 写回后 UI 模型的展开标志必须与
+            // expandedVolumeIds 一致，不得回滚最后一次切换。
+            val app = RuntimeEnvironment.getApplication()
+            val secondVolumeGate = CountDownLatch(1)
+            val repo =
+                GatedProjectRepository(
+                    context = app,
+                    volumes = mapOf("A" to volumesA),
+                    stats = mapOf("A" to ProjectStats(100, 1, 1)),
+                    secondVolumeGate = secondVolumeGate,
+                )
+            val vm = ProjectViewModel(SavedStateHandle())
+
+            vm.initialize("A", repo)
+            settleUntil {
+                vm.uiState.value.volumes.map { it.id } == listOf("vA") &&
+                    !vm.uiState.value.isLoading
+            }
+            vm.toggleVolumeExpand("vA")
+            assertEquals(
+                "首次展开后 UI 模型必须同步",
+                true,
+                vm.uiState.value.volumes.single().isExpanded,
+            )
+
+            // 变更刷新：第二次 getVolumes 挂在栅栏上（刷新在途）。
+            vm.createVolume("新卷")
+            runCurrent()
+            settleUntil { repo.secondVolumeAEntered.get() }
+
+            // 在途期间折叠，放行后（写回尚未入队）再展开 — 最后一次切换必须生效。
+            vm.toggleVolumeExpand("vA")
+            secondVolumeGate.countDown()
+            vm.toggleVolumeExpand("vA")
+
+            settleUntil { !vm.uiState.value.isLoading }
+            assertEquals(setOf("vA"), vm.uiState.value.expandedVolumeIds)
+            assertEquals(
+                "写回不得回滚在途期间的展开切换",
+                true,
+                vm.uiState.value.volumes.single().isExpanded,
+            )
         }
 }

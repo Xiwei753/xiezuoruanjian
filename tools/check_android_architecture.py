@@ -659,7 +659,6 @@ def rule_deleted_types_stay_deleted() -> list[Finding]:
                 )
             )
     # #617 评论四：labs 旧实验设置实现已删除（第二套真相），不得复活。
-    # 沉浸式全屏执行层只认 SettingsRepository.localSettingsState 这一份状态。
     labs_dir = APP_SRC / "app" / "labs"
     if labs_dir.exists():
         for path in collect_kt_files(labs_dir, ""):
@@ -681,6 +680,20 @@ def rule_deleted_types_stay_deleted() -> list[Finding]:
                             message=f"{labs_type} 必须保持删除（#617 评论四：第二套真相）",
                         )
                     )
+    # #617 评论六：整份 localSettingsState 可观察状态已删除 — 窗口执行层只认
+    # immersiveFullscreenEnabled 这一位（构造时从 prefs 初始化、保存成功后同步）。
+    # 把整份 LocalSettings 重新暴露为仓库级可观察状态的接线方式不得复活：
+    # 其它本地设置字段的保存/读取会因此无谓触发应用根重组（评论六批评的热路径）。
+    for path in collect_kt_files(APP_SRC, ""):
+        for lineno, raw in enumerate(effective_lines(path.read_text(encoding="utf-8")), 1):
+            if re.search(r"\b(var|val)\s+localSettingsState\b", raw):
+                findings.append(
+                    Finding(
+                        path=str(path.relative_to(APP_SRC)),
+                        line=lineno,
+                        message="localSettingsState 必须保持删除（#617 评论六：窗口层只认 immersiveFullscreenEnabled 这一位）",
+                    )
+                )
     return findings
 
 
@@ -780,6 +793,15 @@ def rule_source_contracts() -> list[Finding]:
         project_vm,
         r"AndroidViewModel|android\.app\.Application",
         "ProjectViewModel 依赖 AndroidViewModel/Application（#617 评论一，Navigation 3 崩溃根因）",
+    )
+    # #617 评论六：应用根不得读取/收集整份本地设置 — 窗口层只认
+    # immersiveFullscreenEnabled 这一位；根部 collectAsState 整份 LocalSettings
+    # （或为此在根调 getLocalSettings）会让其它本地设置变化无谓触发根部重组。
+    sujian_app = APP_SRC / "app" / "SujianApp.kt"
+    forbid(
+        sujian_app,
+        r"localSettingsState|getLocalSettings\s*\(",
+        "SujianApp 根读取/收集整份本地设置（#617 评论六：根部只认 immersiveFullscreenEnabled 这一位）",
     )
 
     return findings

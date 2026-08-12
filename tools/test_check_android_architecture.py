@@ -394,6 +394,35 @@ class LayerRuleTests(unittest.TestCase):
         messages = " | ".join(f.message for f in findings)
         self.assertIn("ExperimentalSettingsRepository", messages, "labs 类型复活必须被报告")
 
+    def test_deleted_types_rule_flags_local_settings_state_revival(self):
+        """#617 评论六：整份 localSettingsState 可观察状态复活必须被报告（根热路径回归）。"""
+        findings = self.run_rule(
+            "deleted-types-stay-deleted",
+            {
+                f"{APP_PREFIX}/feature/settings/data/SettingsRepository.kt": (
+                    "package com.xiwei.sujian.feature.settings.data\n\n"
+                    "private val _localSettingsState = MutableStateFlow(LocalSettings())\n"
+                    "val localSettingsState: StateFlow<LocalSettings> = _localSettingsState.asStateFlow()\n"
+                )
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("localSettingsState", messages, "localSettingsState 复活必须被报告")
+
+    def test_deleted_types_rule_ignores_local_settings_state_in_comments(self):
+        """#617 评论六：注释里提及 localSettingsState（如本文档注释）不得误报。"""
+        findings = self.run_rule(
+            "deleted-types-stay-deleted",
+            {
+                f"{APP_PREFIX}/feature/settings/data/SettingsRepository.kt": (
+                    "package com.xiwei.sujian.feature.settings.data\n\n"
+                    "// localSettingsState 已删除 — 窗口层只认 immersiveFullscreenEnabled\n"
+                    "class SettingsRepository\n"
+                )
+            },
+        )
+        self.assertEqual([], findings, "注释中的 localSettingsState 不得误报")
+
     def test_source_contracts_rule_flags_missing_sync_commit(self):
         findings = self.run_rule(
             "source-contracts",
@@ -424,6 +453,39 @@ class LayerRuleTests(unittest.TestCase):
         )
         messages = " | ".join(f.message for f in findings)
         self.assertIn("AndroidViewModel/Application", messages, "崩溃根因依赖复活必须被报告")
+
+    def test_source_contracts_rule_flags_app_root_local_settings_collection(self):
+        """#617 评论六：应用根收集/读取整份本地设置必须被报告（根热路径回归）。"""
+        findings = self.run_rule(
+            "source-contracts",
+            {
+                f"{APP_PREFIX}/app/SujianApp.kt": (
+                    "package com.xiwei.sujian.app\n\n"
+                    "val localSettings by deps.settingsRepository.localSettingsState.collectAsState()\n"
+                    "val localSettings2 = deps.settingsRepository.getLocalSettings()\n"
+                )
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("整份本地设置", messages, "应用根收集整份本地设置必须被报告")
+
+    def test_source_contracts_rule_allows_immersive_boolean_at_app_root(self):
+        """#617 评论六：根部只收集沉浸式全屏专用布尔，不得误报。"""
+        findings = self.run_rule(
+            "source-contracts",
+            {
+                f"{APP_PREFIX}/app/SujianApp.kt": (
+                    "package com.xiwei.sujian.app\n\n"
+                    "val immersiveFullscreenEnabled by\n"
+                    "    deps.settingsRepository.immersiveFullscreenEnabled.collectAsState()\n"
+                    "ImmersiveSystemBarsEffect(activity = activityRef, enabled = immersiveFullscreenEnabled)\n"
+                )
+            },
+        )
+        # rule_source_contracts 的 require() 还会报告夹具缺失的其它文件；
+        # 本用例只关心 SujianApp.kt 不得被 forbid 误报。
+        app_findings = [f for f in findings if f.path == "app/SujianApp.kt"]
+        self.assertEqual([], app_findings, "根部收集沉浸式全屏布尔不得误报")
 
     def test_package_dir_inconsistent_must_fail(self):
         """package 声明与物理目录不一致必须被报告（#602 评论#7 项13）。"""
