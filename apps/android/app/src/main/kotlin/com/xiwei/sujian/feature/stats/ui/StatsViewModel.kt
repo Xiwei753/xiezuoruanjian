@@ -60,11 +60,13 @@ class StatsViewModel(
     /**
      * 只在数据确实变化时重新查询：revision 与查询日期都与已加载值相同且非加载中则直接复用。
      *
-     * 成功时只把已加载状态推进到查询开始时的 [queriedRevision]/[queriedEndDate] 快照：
-     * 查询期间新写入的事件留待提交后的 revision 校验触发立即再跑一轮，不把
-     * “可能未包含最新事件”的数据冒充最新。查询失败（BridgeResult 非 Success /
-     * 未加载原生库）如实显示空数据，不伪装成功；失败时推进到当前 revision，
-     * 避免切回一次就重查一次的死循环。
+     * 成功与失败时都只把已加载状态推进到查询开始时的 [queriedRevision]/[queriedEndDate]
+     * 快照：结果（哪怕是失败的空结果）只属于这个窗口。查询期间新写入的事件留待提交后的
+     * revision 校验触发立即再跑一轮，不把“可能未包含最新事件”的数据冒充最新。查询失败
+     * （BridgeResult 非 Success / 未加载原生库 / 未预期异常）如实显示空数据，不伪装成功；
+     * 失败时也推进到查询快照而非查询结束时的当前 revision — 否则查询期间的写入会让递归
+     * refreshIfNeeded() 立即命中缓存跳过，漏掉重跑；推进到快照则 revision 越过快照时
+     * 递归不跳过，正确重跑，无写入时不递归，避免死循环。
      */
     fun refreshIfNeeded() {
         if (queryInFlight) return
@@ -90,8 +92,11 @@ class StatsViewModel(
                 loadedEndDate = queriedEndDate
                 _uiState.value = StatsUiState(result.first, result.second, false)
             } catch (e: Exception) {
-                loadedRevision = repository.revision.value
-                loadedEndDate = todayProvider()
+                // 失败也只推进到查询快照：查询期间若有写入，下方 revision 校验会触发
+                // 重跑（loadedRevision=queriedRevision != 当前值，递归不命中缓存）；
+                // 无写入则不递归，下次切回命中缓存，避免死循环。
+                loadedRevision = queriedRevision
+                loadedEndDate = queriedEndDate
                 _uiState.value = StatsUiState(null, emptyList(), false)
             } finally {
                 queryInFlight = false
