@@ -357,6 +357,82 @@ class ProjectViewModelErrorChainTest {
         }
 
     @Test
+    fun emptyProjectSuccessfulLoad_thenRefreshFailure_keepsEmptyStateAndNoLoadError() =
+        runTest(mainDispatcherRule.dispatcher) {
+            // #617 评论十：合法空作品第一次加载成功后 volumes 本来就是 emptyList()，
+            // 之后刷新失败不得被误判成"首次加载失败"：空态保持、loadError 不设，
+            // 只发一次性错误事件（Snackbar）— 不能把正常空态改成持久错误态。
+            val app = RuntimeEnvironment.getApplication()
+            val repo =
+                FakeProjectRepository(
+                    context = app,
+                    volumes = mapOf("A" to emptyList()),
+                    stats = mapOf("A" to ProjectStats(0, 0, 0)),
+                )
+            val vm = ProjectViewModel(SavedStateHandle())
+            val (events, collectJob) = collectEvents(vm)
+
+            vm.initialize("A", repo)
+            settleUntil {
+                vm.uiState.value.projectStats != null && !vm.uiState.value.isLoading
+            }
+            assertTrue("空作品首次加载成功后 volumes 保持为空", vm.uiState.value.volumes.isEmpty())
+            assertNull("空作品首次加载成功不得设 loadError", vm.uiState.value.loadError)
+
+            // 首次加载成功后让 getVolumes 抛异常：createVolume 成功 → refreshProject 失败。
+            repo.getVolumesException = RepositoryException(loadVolumesFailed)
+            vm.createVolume("新卷")
+            settleUntil { events.any { it is ProjectTreeUiEvent.Error } }
+
+            assertNull(
+                "空作品后续刷新失败不得把正常空态改成 loadError（已成功加载过）",
+                vm.uiState.value.loadError,
+            )
+            assertTrue("空作品后续刷新失败后 volumes 仍为空", vm.uiState.value.volumes.isEmpty())
+            assertFalse("刷新失败后不得停留在 loading 态", vm.uiState.value.isLoading)
+            assertTrue(mustEmitError, events.any { it is ProjectTreeUiEvent.Error })
+            assertEquals(
+                loadVolumesFailed,
+                (events.filterIsInstance<ProjectTreeUiEvent.Error>().first()).message,
+            )
+            collectJob.cancel()
+        }
+
+    @Test
+    fun projectSwitch_resetsSuccessfulFlag_newProjectFirstLoadFailureSetsLoadError() =
+        runTest(mainDispatcherRule.dispatcher) {
+            // #617 评论十：enterProject 必须重置"已成功加载"标志 — A 成功加载后切到 B，
+            // B 的首次加载失败仍要设 loadError（不能沿用 A 的成功标志把 B 的失败
+            // 当成"非首次"而跳过错误态）。
+            val app = RuntimeEnvironment.getApplication()
+            val repo =
+                FakeProjectRepository(
+                    context = app,
+                    volumes = mapOf("A" to volumesA, "B" to emptyList()),
+                    stats = mapOf("A" to ProjectStats(100, 1, 1), "B" to ProjectStats(0, 0, 0)),
+                )
+            val vm = ProjectViewModel(SavedStateHandle())
+            val (events, collectJob) = collectEvents(vm)
+
+            vm.initialize("A", repo)
+            settleUntil {
+                vm.uiState.value.volumes.map { it.id } == listOf("vA") &&
+                    !vm.uiState.value.isLoading
+            }
+
+            // 切到 B：B 的 getVolumes 抛异常 → B 的首次加载失败必须设 loadError。
+            repo.getVolumesException = RepositoryException(loadVolumesFailed)
+            vm.initialize("B", repo)
+            settleUntil { vm.uiState.value.loadError != null }
+
+            assertEquals("B 首次加载失败必须设 loadError", loadVolumesFailed, vm.uiState.value.loadError)
+            assertTrue("B 首次加载失败 volumes 保持为空", vm.uiState.value.volumes.isEmpty())
+            assertFalse("B 首次加载失败后不得停留 loading 态", vm.uiState.value.isLoading)
+            assertTrue(mustEmitError, events.any { it is ProjectTreeUiEvent.Error })
+            collectJob.cancel()
+        }
+
+    @Test
     fun createChapterSuccess_expandsAndRefreshes() =
         runTest(mainDispatcherRule.dispatcher) {
             val app = RuntimeEnvironment.getApplication()

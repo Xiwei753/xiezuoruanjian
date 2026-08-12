@@ -77,6 +77,12 @@ class ProjectViewModel(
     /** 当前 _uiState 数据所属的作品；用于区分“作品切换”与“同作品变更刷新”。 */
     private var loadedProjectId: String? = null
 
+    /** #617 评论十：当前作品是否已有过一次成功快照 — “首次加载失败”的唯一判定依据。
+     *  不能从 volumes.isEmpty() 反推：合法空作品成功加载后 volumes 本来就是
+     *  emptyList()，后续刷新失败不得被误判成“首次加载失败”而把正常空态改成
+     *  持久 loadError。进入新作品时在 [enterProject] 重置，成功后置 true。 */
+    private var hasSuccessfulSnapshotForCurrentProject = false
+
     private fun expandedVolumeKey(projectId: String) = "expandedVolumeIds:$projectId"
 
     fun initialize(
@@ -85,9 +91,12 @@ class ProjectViewModel(
     ) {
         val projectChanged = currentProjectId != projectId
         val repoChanged = projectRepository !== projectRepo
+        // #617 评论十：重载与否看“当前作品是否已有成功快照”标志，不能从
+        // volumes.isEmpty() 反推 — 合法空作品成功加载后 volumes 就是 emptyList，
+        // 用空判断会让它每次重进都做一次无意义刷新。
         val needsReload =
             !isInitialized || projectChanged || repoChanged ||
-                _uiState.value.volumes.isEmpty()
+                !hasSuccessfulSnapshotForCurrentProject
 
         currentProjectId = projectId
         savedStateHandle["currentProjectId"] = projectId
@@ -124,6 +133,7 @@ class ProjectViewModel(
                 result
                     .onSuccess { snapshot ->
                         loadedProjectId = pid
+                        hasSuccessfulSnapshotForCurrentProject = true
                         // #617 评论八：写回只替换卷/章节数据与统计 — 展开状态不在 UI 模型里，
                         // 只存在于 expandedVolumeIds（写回不触碰），加载在途期间的展开切换
                         // 永远不会被刷新链覆盖。
@@ -138,7 +148,11 @@ class ProjectViewModel(
                         // #617 评论九：保留上一次成功的 volumes/projectStats，不要写
                         // emptyList()/null 覆盖；首次加载没有旧数据时记录 loadError，
                         // 让 UI 显示"加载失败"不要显示"暂无卷"。
-                        val firstLoad = _uiState.value.volumes.isEmpty()
+                        // #617 评论十：首次加载与否看 hasSuccessfulSnapshotForCurrentProject
+                        // 标志，不能从 volumes.isEmpty() 反推 — 空作品成功加载后 volumes
+                        // 本来就是 emptyList()，后续刷新失败只发 Snackbar，不得把正常空态
+                        // 改成持久 loadError。
+                        val firstLoad = !hasSuccessfulSnapshotForCurrentProject
                         _uiState.value =
                             _uiState.value.copy(
                                 isLoading = false,
@@ -149,9 +163,12 @@ class ProjectViewModel(
             }
     }
 
-    /** 作品切换：立即清掉只属于旧作品的 UI 状态（卷/选中章节/统计），展开按 projectId 恢复。 */
+    /** 作品切换：立即清掉只属于旧作品的 UI 状态（卷/选中章节/统计），展开按 projectId 恢复。
+     *  #617 评论十：同时重置“已成功加载”标志 — 新作品的首次加载失败必须按首次处理
+     *  （设 loadError），不能沿用旧作品的成功标志。 */
     private fun enterProject(pid: String) {
         loadedProjectId = pid
+        hasSuccessfulSnapshotForCurrentProject = false
         _uiState.value =
             VolumeChapterUiState(
                 expandedVolumeIds = savedStateHandle[expandedVolumeKey(pid)] ?: emptySet(),
