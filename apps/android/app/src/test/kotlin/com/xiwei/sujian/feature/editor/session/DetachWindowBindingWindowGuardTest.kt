@@ -201,4 +201,58 @@ class DetachWindowBindingWindowGuardTest {
             coordinator.inputLeaseEpoch > epochBefore,
         )
     }
+
+    @Test
+    fun detachWindowBinding_fromDetached_withSameTargetId_isIdempotentAndDoesNotInvalidateLease() {
+        val coordinator = createCoordinator()
+        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
+        coordinator.registerTarget(target)
+        coordinator.store.put(
+            EditorSessionRecord(targetId = "t1", sessionId = 42UL, persistent = true),
+        )
+        setWindowBindingState(coordinator, WindowBindingState.Detached("t1", 42UL, null))
+        val epochBefore = coordinator.inputLeaseEpoch
+
+        coordinator.detachWindowBinding("w1", "t1")
+
+        val binding = coordinator.windowBindingState
+        assertTrue(
+            "detachWindowBinding from Detached with same targetId must stay Detached, got $binding",
+            binding is WindowBindingState.Detached,
+        )
+        assertEquals(
+            "detachWindowBinding from Detached with same targetId must not invalidate input lease " +
+                "(idempotent no-op, old View late release must not redundantly bump epoch)",
+            epochBefore,
+            coordinator.inputLeaseEpoch,
+        )
+    }
+
+    @Test
+    fun detachWindowBinding_fromDetached_withDifferentTargetId_continuesDraftCleanup() {
+        val coordinator = createCoordinator()
+        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
+        coordinator.registerTarget(target)
+        coordinator.store.put(
+            EditorSessionRecord(targetId = "t1", sessionId = 42UL, persistent = true),
+        )
+        setWindowBindingState(coordinator, WindowBindingState.Detached("t1", 42UL, null))
+        val epochBefore = coordinator.inputLeaseEpoch
+
+        // 不同 targetId 的解绑不被新 Detached(targetId) 守卫拦截 — 草稿清理路径仍继续，
+        // 仍会失效 lease（t2 的解绑是独立事件，不是 t1 的重复 detach）。
+        coordinator.detachWindowBinding("w1", "t2")
+
+        val binding = coordinator.windowBindingState
+        assertTrue(
+            "detachWindowBinding with different targetId must not alter t1's Detached state, got $binding",
+            binding is WindowBindingState.Detached,
+        )
+        assertEquals("t1", (binding as WindowBindingState.Detached).targetId)
+        assertTrue(
+            "detachWindowBinding with different targetId must still invalidate lease " +
+                "(draft cleanup continues, not blocked by Detached idempotency guard)",
+            coordinator.inputLeaseEpoch > epochBefore,
+        )
+    }
 }

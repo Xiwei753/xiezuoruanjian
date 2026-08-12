@@ -173,6 +173,12 @@ fun EditorSessionCoordinator.detachWindowBinding(
     // 一次绑定，旧 View 的 release 直接忽略，不能把新绑定拆掉，也不能失效
     // 新绑定的输入 lease（否则新绑定的输入会被意外拒绝）。
     if (isBindingForDifferentWindow(windowId, targetId)) return
+    // #623 复审：已经是 Detached(targetId) 时，持久 session 已窗口解绑但保留。
+    // 重复 detach 是幂等 no-op，不再失效 lease — 旧 View 晚到的 onRelease/onDispose
+    // 不应冗余递增 inputLeaseEpoch。新绑定从 Detached 重新 beginEdit 时签发新 lease，
+    // 不被旧解绑的冗余失效影响。不同 targetId 的解绑仍继续（草稿清理路径）。
+    val currentBinding = _sessionStateFlow.value.bindingState
+    if (currentBinding is WindowBindingState.Detached && currentBinding.targetId == targetId) return
     // #595 二：窗口解绑使该窗口持有的输入 lease 失效 — 解绑后晚到的回调
     // （回调清除窗口期内的竞态）不能再进入会话层。
     // #623 评论 2 复审：只在确认是当前窗口的解绑后才失效 lease —
