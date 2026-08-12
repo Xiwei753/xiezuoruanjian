@@ -84,6 +84,7 @@ class SujianEditorView
 
         // #623 评论 1：重新获得窗口焦点时不立即 resume，而是等到下一个真实 VSync 帧
         // （onFrame）再用新的 frameTimeNanos 恢复时间线，避免拿旧缓存帧时间立即 resume。
+        @Volatile
         private var pendingResume: Boolean = false
 
         var kernelBridge: EditorKernelBridge?

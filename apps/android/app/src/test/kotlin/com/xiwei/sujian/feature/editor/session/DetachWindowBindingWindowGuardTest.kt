@@ -141,4 +141,64 @@ class DetachWindowBindingWindowGuardTest {
             coordinator.windowBindingState,
         )
     }
+
+    @Test
+    fun detachWindowBinding_withDifferentWindowId_doesNotInvalidateInputLease() {
+        val coordinator = createCoordinator()
+        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
+        coordinator.registerTarget(target)
+        coordinator.store.put(
+            EditorSessionRecord(targetId = "t1", sessionId = 42UL, persistent = true),
+        )
+        setWindowBindingState(coordinator, WindowBindingState.Attached("w1", "t1", 42UL))
+        val epochBefore = coordinator.inputLeaseEpoch
+
+        coordinator.detachWindowBinding("w2", "t1")
+
+        assertEquals(
+            "detachWindowBinding with different windowId must not invalidate input lease " +
+                "(old View's late release must not break the new binding's lease)",
+            epochBefore,
+            coordinator.inputLeaseEpoch,
+        )
+    }
+
+    @Test
+    fun detachWindowBinding_withDifferentTargetId_doesNotInvalidateInputLease() {
+        val coordinator = createCoordinator()
+        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
+        coordinator.registerTarget(target)
+        coordinator.store.put(
+            EditorSessionRecord(targetId = "t1", sessionId = 42UL, persistent = true),
+        )
+        setWindowBindingState(coordinator, WindowBindingState.Attached("w1", "t1", 42UL))
+        val epochBefore = coordinator.inputLeaseEpoch
+
+        coordinator.detachWindowBinding("w1", "t2")
+
+        assertEquals(
+            "detachWindowBinding with different targetId must not invalidate input lease",
+            epochBefore,
+            coordinator.inputLeaseEpoch,
+        )
+    }
+
+    @Test
+    fun detachWindowBinding_withMatchingWindowId_invalidatesInputLease() {
+        val coordinator = createCoordinator()
+        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
+        coordinator.registerTarget(target)
+        coordinator.store.put(
+            EditorSessionRecord(targetId = "t1", sessionId = 42UL, persistent = true),
+        )
+        setWindowBindingState(coordinator, WindowBindingState.Attached("w1", "t1", 42UL))
+        val epochBefore = coordinator.inputLeaseEpoch
+
+        coordinator.detachWindowBinding("w1", "t1")
+
+        assertTrue(
+            "detachWindowBinding with matching windowId+targetId must invalidate input lease",
+            coordinator.inputLeaseEpoch > epochBefore,
+        )
+    }
 }

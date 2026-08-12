@@ -168,13 +168,16 @@ fun EditorSessionCoordinator.detachWindowBinding(
     val record = store.record(targetId)
     val isPersistent = record?.persistent ?: false
     val sessionId = record?.sessionId
-    // #595 二：窗口解绑使该窗口持有的输入 lease 失效 — 解绑后晚到的回调
-    // （回调清除窗口期内的竞态）不能再进入会话层。
-    invalidateInputLease()
     // #623 评论 2：当前状态是 Attaching/Attached 时，只有 windowId + targetId
     // 都与要释放的 View 对得上才允许进入 Detached。如果已经是另一个窗口/更新的
-    // 一次绑定，旧 View 的 release 直接忽略，不能把新绑定拆掉。
+    // 一次绑定，旧 View 的 release 直接忽略，不能把新绑定拆掉，也不能失效
+    // 新绑定的输入 lease（否则新绑定的输入会被意外拒绝）。
     if (isBindingForDifferentWindow(windowId, targetId)) return
+    // #595 二：窗口解绑使该窗口持有的输入 lease 失效 — 解绑后晚到的回调
+    // （回调清除窗口期内的竞态）不能再进入会话层。
+    // #623 评论 2 复审：只在确认是当前窗口的解绑后才失效 lease —
+    // 旧 View 的晚到 release（不同 windowId/targetId）已在上面 return，不会误伤新绑定。
+    invalidateInputLease()
     if (!isPersistent || sessionId == null || sessionId == 0UL) {
         // 草稿会话或已无会话：直接关闭/清理窗口引用
         if (sessionId != null && sessionId != 0UL) {
