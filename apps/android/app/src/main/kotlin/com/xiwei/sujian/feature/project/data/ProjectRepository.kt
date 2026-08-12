@@ -1,7 +1,6 @@
 package com.xiwei.sujian.feature.project.data
 import android.content.Context
 import com.xiwei.sujian.R
-import com.xiwei.sujian.app.di.AppServiceProvider
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.MessageKeyMapper
@@ -21,8 +20,7 @@ import com.xiwei.sujian.feature.sync.data.SyncFailureKind
  * 数据读取方法声明为 open：允许测试子类注入可控数据源，验证 ProjectViewModel
  * 加载纪元的陈旧结果丢弃语义；生产路径仍是单例真实实现。
  */
-open class ProjectRepository(private val context: Context, bridge: AppServiceBridge? = null) {
-    private val appBridge = bridge ?: AppServiceProvider.getAppServiceBridge(context)
+open class ProjectRepository(private val context: Context, private val appBridge: AppServiceBridge) {
     private val projectBridge = appBridge.projectBridge
     private val chapterBridge = appBridge.chapterBridge
     private val statsBridge = appBridge.statsBridge

@@ -7,14 +7,13 @@ import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.platform.app.AndroidAppVersionProvider
 import com.xiwei.sujian.core.platform.device.AndroidDeviceIdentity
 import com.xiwei.sujian.core.platform.network.AndroidNetworkMonitor
-import com.xiwei.sujian.feature.starmap.data.interop.StarMapBridge
 import java.util.Locale
 import java.util.TimeZone
 
 /**
  * AppServiceProvider — 应用级服务桥接提供者。
  *
- * 只保留两个桥接获取入口：AppService / StarMap。
+ * 只保留 AppServiceBridge 唯一获取入口。
  * 统计桥接不再保留第二获取入口（#618 六）：应用容器里的唯一
  * WritingStatsRepository 直接使用 AppServiceBridge.statsBridge，
  * UI 不再绕回此提供者取 Bridge。
@@ -38,30 +37,31 @@ object AppServiceProvider {
         }
         return appServiceInstance ?: synchronized(this) {
             appServiceInstance ?: run {
-                val appContext = context.applicationContext
-                val (isConnected, isMetered) = AndroidNetworkMonitor.detectNetworkState(appContext)
-                val holder =
-                    WriterAppServiceHolder.createFromContext(
-                        context = appContext,
-                        cacheDir = appContext.cacheDir.absolutePath,
-                        noBackupDir = appContext.noBackupFilesDir.absolutePath,
-                        deviceId = AndroidDeviceIdentity.getOrCreateDeviceId(appContext),
-                        appVersion = AndroidAppVersionProvider.getAppVersion(appContext),
-                        locale = Locale.getDefault().toLanguageTag(),
-                        timezone = TimeZone.getDefault().id,
-                        isConnected = isConnected,
-                        isMetered = isMetered,
-                    )
-                val bridge = AppServiceBridge(holder)
-                AndroidNetworkMonitor.registerNetworkCallback(appContext) {
-                    refreshNetworkState(appContext, bridge)
-                }
-                bridge
+                createAppServiceBridge(context.applicationContext).also { appServiceInstance = it }
             }
         }
     }
 
-    fun getStarmapBridge(context: Context): StarMapBridge = getAppServiceBridge(context).starMapBridge
+    private fun createAppServiceBridge(appContext: Context): AppServiceBridge {
+        val (isConnected, isMetered) = AndroidNetworkMonitor.detectNetworkState(appContext)
+        val holder =
+            WriterAppServiceHolder.createFromContext(
+                context = appContext,
+                cacheDir = appContext.cacheDir.absolutePath,
+                noBackupDir = appContext.noBackupFilesDir.absolutePath,
+                deviceId = AndroidDeviceIdentity.getOrCreateDeviceId(appContext),
+                appVersion = AndroidAppVersionProvider.getAppVersion(appContext),
+                locale = Locale.getDefault().toLanguageTag(),
+                timezone = TimeZone.getDefault().id,
+                isConnected = isConnected,
+                isMetered = isMetered,
+            )
+        val bridge = AppServiceBridge(holder)
+        AndroidNetworkMonitor.registerNetworkCallback(appContext) {
+            refreshNetworkState(appContext, bridge)
+        }
+        return bridge
+    }
 
     private fun refreshNetworkState(
         context: Context,

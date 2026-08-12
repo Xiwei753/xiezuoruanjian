@@ -13,7 +13,6 @@ import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowWidthSizeClass
 import com.xiwei.sujian.app.LocalAndroidCapabilities
@@ -39,8 +38,10 @@ import uniffi.writer_core.WorkspacePaneModeDto
  */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
-internal fun rememberAndroidLayoutSpec(foldingFeatures: List<AospFoldFeatureInfo>): AndroidLayoutSpec {
-    val context = LocalContext.current
+internal fun rememberAndroidLayoutSpec(
+    foldingFeatures: List<AospFoldFeatureInfo>,
+    resolveLayoutContract: (WindowCapabilitiesDto) -> LayoutContractDto?,
+): AndroidLayoutSpec {
     val windowAdaptiveInfo = currentWindowAdaptiveInfo()
     val defaultDirective =
         remember(windowAdaptiveInfo) {
@@ -62,7 +63,7 @@ internal fun rememberAndroidLayoutSpec(foldingFeatures: List<AospFoldFeatureInfo
         }
     val contract =
         remember(capabilities) {
-            PresentationContractBridge.resolveLayoutContract(context, capabilities)
+            resolveLayoutContract(capabilities)
         }
 
     // Android 平台决策：NavigationBar vs NavigationRail（Material3 WindowSizeClass）。

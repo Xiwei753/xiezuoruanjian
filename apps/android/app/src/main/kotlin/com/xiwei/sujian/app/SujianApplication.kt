@@ -114,7 +114,7 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
         if (!AndroidDataRoot.hasStorageAccess()) return
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.appLifecycle("stop")
         autoSyncScheduler?.stop()
-        val result = AppServiceProvider.getStarmapBridge(this).flushAllStarmapStores()
+        val result = AppServiceProvider.getAppServiceBridge(this).starMapBridge.flushAllStarmapStores()
         when (result) {
             is BridgeResult.Error ->
                 DiagnosticsLogger.e(

@@ -73,9 +73,10 @@ class ProjectViewModelErrorChainTest {
      */
     private class FakeProjectRepository(
         context: android.content.Context,
+        bridge: com.xiwei.sujian.core.interop.app.AppServiceBridge,
         private val volumes: Map<String, List<Volume>> = emptyMap(),
         private val stats: Map<String, ProjectStats> = emptyMap(),
-    ) : ProjectRepository(context) {
+    ) : ProjectRepository(context, bridge) {
         var getVolumesException: Exception? = null
         var createVolumeException: Exception? = null
         var createChapterException: Exception? = null
@@ -157,6 +158,7 @@ class ProjectViewModelErrorChainTest {
             val repo =
                 FakeProjectRepository(
                     context = app,
+                    bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(app),
                     volumes = mapOf("A" to volumesA),
                     stats = mapOf("A" to ProjectStats(100, 1, 1)),
                 )
@@ -197,6 +199,7 @@ class ProjectViewModelErrorChainTest {
             val repo =
                 FakeProjectRepository(
                     context = app,
+                    bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(app),
                     volumes = mapOf("A" to volumesA),
                     stats = mapOf("A" to ProjectStats(100, 1, 1)),
                 )
@@ -238,6 +241,7 @@ class ProjectViewModelErrorChainTest {
             val repo =
                 FakeProjectRepository(
                     context = app,
+                    bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(app),
                     volumes = mapOf("A" to volumesA),
                     stats = mapOf("A" to ProjectStats(100, 1, 1)),
                 )
@@ -278,6 +282,7 @@ class ProjectViewModelErrorChainTest {
             val repo =
                 FakeProjectRepository(
                     context = app,
+                    bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(app),
                     volumes = mapOf("A" to volumesA),
                     stats = mapOf("A" to ProjectStats(100, 1, 1)),
                 )
@@ -325,6 +330,7 @@ class ProjectViewModelErrorChainTest {
             val repo =
                 FakeProjectRepository(
                     context = app,
+                    bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(app),
                     volumes = mapOf("A" to volumesA),
                     stats = mapOf("A" to ProjectStats(100, 1, 1)),
                 )
@@ -366,6 +372,7 @@ class ProjectViewModelErrorChainTest {
             val repo =
                 FakeProjectRepository(
                     context = app,
+                    bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(app),
                     volumes = mapOf("A" to emptyList()),
                     stats = mapOf("A" to ProjectStats(0, 0, 0)),
                 )
@@ -408,6 +415,7 @@ class ProjectViewModelErrorChainTest {
             val repo =
                 FakeProjectRepository(
                     context = app,
+                    bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(app),
                     volumes = mapOf("A" to volumesA, "B" to emptyList()),
                     stats = mapOf("A" to ProjectStats(100, 1, 1), "B" to ProjectStats(0, 0, 0)),
                 )
@@ -439,6 +447,7 @@ class ProjectViewModelErrorChainTest {
             val repo =
                 FakeProjectRepository(
                     context = app,
+                    bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(app),
                     volumes = mapOf("A" to volumesA),
                     stats = mapOf("A" to ProjectStats(100, 1, 1)),
                 )

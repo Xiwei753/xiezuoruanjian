@@ -1,7 +1,6 @@
 package com.xiwei.sujian.feature.settings.data
 import android.content.Context
 import androidx.core.content.edit
-import com.xiwei.sujian.app.di.AppServiceProvider
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
@@ -30,11 +29,10 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 class SettingsRepository(
     context: Context,
-    bridge: AppServiceBridge? = null,
+    private val appBridge: AppServiceBridge,
     preferencesSuffix: String = "",
 ) {
     private val appContext = context.applicationContext
-    private val appBridge = bridge ?: AppServiceProvider.getAppServiceBridge(context)
     private val settingsBridge = appBridge.settingsBridge
     private val statsBridge = appBridge.statsBridge
     private val diagPrefs =
@@ -192,7 +190,7 @@ class SettingsRepository(
     }
 
     fun aiAvailable(): Boolean {
-        return AppServiceProvider.getAppServiceBridge(appContext).aiAvailable()
+        return appBridge.aiAvailable()
     }
 
     fun getSecureStorageWarning(): String? {

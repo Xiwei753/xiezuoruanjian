@@ -13,9 +13,10 @@ class SettingsViewModelInjectionTest {
     @Test
     fun factory_createsViewModelWithNonNullDeps() {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
-        val repo = com.xiwei.sujian.feature.settings.data.SettingsRepository(context)
-        val themeRepo = com.xiwei.sujian.app.theme.ThemeRepository(context)
-        val syncRepo = com.xiwei.sujian.feature.sync.data.SyncRepository(context)
+        val bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(context)
+        val repo = com.xiwei.sujian.feature.settings.data.SettingsRepository(context, bridge)
+        val themeRepo = com.xiwei.sujian.app.theme.ThemeRepository(context, bridge)
+        val syncRepo = com.xiwei.sujian.feature.sync.data.SyncRepository(context, bridge)
         val syncStatusRepo = com.xiwei.sujian.feature.sync.data.SyncStatusRepository(syncRepo)
         val coordinator = com.xiwei.sujian.feature.sync.data.SyncCoordinator(syncRepo, syncStatusRepo)
         val factory = SettingsViewModel.Factory(repo, themeRepo, syncRepo, coordinator)
@@ -26,9 +27,10 @@ class SettingsViewModelInjectionTest {
     @Test
     fun constructorInjectedDeps_noInitializeNeeded() {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
-        val repo = com.xiwei.sujian.feature.settings.data.SettingsRepository(context)
-        val themeRepo = com.xiwei.sujian.app.theme.ThemeRepository(context)
-        val syncRepo = com.xiwei.sujian.feature.sync.data.SyncRepository(context)
+        val bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(context)
+        val repo = com.xiwei.sujian.feature.settings.data.SettingsRepository(context, bridge)
+        val themeRepo = com.xiwei.sujian.app.theme.ThemeRepository(context, bridge)
+        val syncRepo = com.xiwei.sujian.feature.sync.data.SyncRepository(context, bridge)
         val syncStatusRepo = com.xiwei.sujian.feature.sync.data.SyncStatusRepository(syncRepo)
         val coordinator = com.xiwei.sujian.feature.sync.data.SyncCoordinator(syncRepo, syncStatusRepo)
         val vm = SettingsViewModel(repo, themeRepo, syncRepo, coordinator)
@@ -38,9 +40,10 @@ class SettingsViewModelInjectionTest {
     @Test
     fun factory_producesDistinctInstances() {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
-        val repo = com.xiwei.sujian.feature.settings.data.SettingsRepository(context)
-        val themeRepo = com.xiwei.sujian.app.theme.ThemeRepository(context)
-        val syncRepo = com.xiwei.sujian.feature.sync.data.SyncRepository(context)
+        val bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(context)
+        val repo = com.xiwei.sujian.feature.settings.data.SettingsRepository(context, bridge)
+        val themeRepo = com.xiwei.sujian.app.theme.ThemeRepository(context, bridge)
+        val syncRepo = com.xiwei.sujian.feature.sync.data.SyncRepository(context, bridge)
         val syncStatusRepo = com.xiwei.sujian.feature.sync.data.SyncStatusRepository(syncRepo)
         val coordinator = com.xiwei.sujian.feature.sync.data.SyncCoordinator(syncRepo, syncStatusRepo)
         val factory = SettingsViewModel.Factory(repo, themeRepo, syncRepo, coordinator)

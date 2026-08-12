@@ -76,10 +76,10 @@ class DefaultAppServiceContainer(context: Context) : AppServiceContainer {
     override val syncRepository: SyncRepository = SyncRepository(appContext, appServiceBridge)
     override val syncStatusRepository: SyncStatusRepository = SyncStatusRepository(syncRepository)
     override val starmapRepository: com.xiwei.sujian.feature.starmap.data.StarMapRepository =
-        AppServiceProvider.getStarmapBridge(appContext).repository
+        appServiceBridge.starMapBridge.repository
     private val appSyncDataBarrier: AppSyncDataBarrier =
         AppSyncDataBarrier(
-            starmapBridge = AppServiceProvider.getStarmapBridge(appContext),
+            starmapBridge = appServiceBridge.starMapBridge,
             reloadSettings = { settingsRepository.notifySyncableSettingsChangedExternally() },
             reloadThemes = { settingsRepository.notifyPaletteCatalogChangedExternally() },
             invalidateStarmapCache = { starmapRepository.invalidateCache() },

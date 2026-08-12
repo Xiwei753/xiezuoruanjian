@@ -1,7 +1,5 @@
 package com.xiwei.sujian.app.presentation
 
-import android.content.Context
-import com.xiwei.sujian.app.di.AppServiceProvider
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
@@ -39,23 +37,29 @@ internal object PresentationContractBridge {
 
     /** Core 布局契约：窗口能力 → ShellMode/WorkspacePaneMode。 */
     fun resolveLayoutContract(
-        context: Context,
+        bridge: AppServiceBridge,
         capabilities: WindowCapabilitiesDto,
-    ): LayoutContractDto? = resolve(context) { bridge -> bridge.resolveLayout(capabilities) }
-
-    private fun <T> resolve(
-        context: Context,
-        call: (AppServiceBridge) -> BridgeResult<T>,
-    ): T? =
+    ): LayoutContractDto? =
         try {
-            when (val result = call(AppServiceProvider.getAppServiceBridge(context))) {
+            when (val result = bridge.resolveLayout(capabilities)) {
                 is BridgeResult.Success -> result.data
                 else -> null
             }
         } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "resolve failed: ${e.message}", e)
+            DiagnosticsLogger.e(TAG, "resolveLayoutContract failed: ${e.message}", e)
             null
         }
+
+    /**
+     * #618 评论四：创建绑定 bridge 的布局契约解析器（函数类型）。
+     *
+     * 供 DI/navigation 层注入到 rememberAndroidLayoutSpec；presentation 层
+     * （AndroidAdaptiveLayoutPolicy.kt）只消费函数类型，不直接依赖 AppServiceBridge，
+     * 遵守架构门禁 presentation-contract-layer（只有本文件可以引用 Bridge）。
+     */
+    fun layoutContractResolver(bridge: AppServiceBridge): (WindowCapabilitiesDto) -> LayoutContractDto? {
+        return { capabilities -> resolveLayoutContract(bridge, capabilities) }
+    }
 
     // ── Android 消费端便捷转换（同一入口，避免各 UI 层重复映射） ──
 

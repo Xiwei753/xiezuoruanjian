@@ -237,7 +237,7 @@ class TestSujianAppDependencies(
             syncStatusRepository,
         )
     override val starmapRepository: com.xiwei.sujian.feature.starmap.data.StarMapRepository =
-        com.xiwei.sujian.app.di.AppServiceProvider.getStarmapBridge(appContext).repository
+        appServiceBridge.starMapBridge.repository
     private val _sessionCoordinator = lazy { EditorSessionCoordinator(appServiceBridge) }
     val sessionCoordinator: EditorSessionCoordinator get() = _sessionCoordinator.value
     private val _coordinator =

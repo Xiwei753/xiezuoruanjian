@@ -88,7 +88,7 @@ class EditorViewModelInjectionTest {
                 override val syncCoordinator: com.xiwei.sujian.feature.sync.data.SyncCoordinator =
                     com.xiwei.sujian.feature.sync.data.SyncCoordinator(syncRepository, syncStatusRepository)
                 override val starmapRepository: com.xiwei.sujian.feature.starmap.data.StarMapRepository =
-                    com.xiwei.sujian.app.di.AppServiceProvider.getStarmapBridge(app).repository
+                    com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(app).starMapBridge.repository
             }
         val coordinator = EditorSessionCoordinator(bridge)
 

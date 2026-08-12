@@ -195,7 +195,11 @@ object DiagnosticsExporter {
         destDir: File,
     ) {
         try {
-            val repo = SettingsRepository(context)
+            val repo =
+                SettingsRepository(
+                    context,
+                    com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(context),
+                )
             val settings = repo.getLocalSettings()
             val sanitized =
                 mapOf(
@@ -229,7 +233,11 @@ object DiagnosticsExporter {
         destDir: File,
     ) {
         try {
-            val repo = SyncRepository(context)
+            val repo =
+                SyncRepository(
+                    context,
+                    com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(context),
+                )
             // #600：sync 已改为 per-project — 诊断导出当前活动作品的同步状态。
             val projectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
             val sanitized =

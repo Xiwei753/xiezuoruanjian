@@ -1,7 +1,6 @@
 package com.xiwei.sujian.app.theme
 
 import android.content.Context
-import com.xiwei.sujian.app.di.AppServiceProvider
 import com.xiwei.sujian.app.theme.interop.ThemeDtoMapper
 import com.xiwei.sujian.app.theme.model.BuiltinTheme
 import com.xiwei.sujian.app.theme.model.DeviceInfo
@@ -27,10 +26,9 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
  */
 class ThemeRepository(
     context: Context,
-    bridge: AppServiceBridge? = null,
+    private val appBridge: AppServiceBridge,
 ) {
     private val appContext = context.applicationContext
-    private val appBridge = bridge ?: AppServiceProvider.getAppServiceBridge(context)
     private val settingsBridge = appBridge.settingsBridge
     private val defaultDeviceClass = "phone"
 

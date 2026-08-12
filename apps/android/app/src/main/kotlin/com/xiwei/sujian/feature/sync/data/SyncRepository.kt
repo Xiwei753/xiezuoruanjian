@@ -1,6 +1,5 @@
 package com.xiwei.sujian.feature.sync.data
 import android.content.Context
-import com.xiwei.sujian.app.di.AppServiceProvider
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
@@ -18,11 +17,10 @@ import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 
 class SyncRepository(
     context: Context,
-    bridge: AppServiceBridge? = null,
+    private val appBridge: AppServiceBridge,
     preferencesSuffix: String = "",
 ) {
     private val appContext = context.applicationContext
-    private val appBridge = bridge ?: AppServiceProvider.getAppServiceBridge(context)
     private val settingsBridge = appBridge.settingsBridge
     private val syncBridge = appBridge.syncBridge
     private val profileStore by lazy { ProjectSyncProfileStore(appContext) }

@@ -1,7 +1,6 @@
 package com.xiwei.sujian.feature.project.data
 import android.content.Context
 import com.xiwei.sujian.R
-import com.xiwei.sujian.app.di.AppServiceProvider
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.MessageKeyMapper
@@ -19,8 +18,10 @@ import com.xiwei.sujian.feature.sync.data.SyncFailureKind
  * 专门负责章节正文的读取、保存、清空、备注更新与字数计算。
  * 实现 [ChapterContentSavePort] — EditorViewModel 的保存流程只依赖此端口。
  */
-class ChapterRepository(private val context: Context, bridge: AppServiceBridge? = null) : ChapterContentSavePort {
-    private val appBridge = bridge ?: AppServiceProvider.getAppServiceBridge(context)
+class ChapterRepository(
+    private val context: Context,
+    private val appBridge: AppServiceBridge,
+) : ChapterContentSavePort {
     private val writingBridge = WritingBridge(appBridge)
 
     private fun BridgeResult.Error.localizedMessage(): String {

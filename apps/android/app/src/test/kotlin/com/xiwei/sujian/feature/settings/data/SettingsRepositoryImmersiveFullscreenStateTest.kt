@@ -27,9 +27,12 @@ class SettingsRepositoryImmersiveFullscreenStateTest {
     @Test
     fun `immersiveFullscreenEnabled initializes from prefs at construction`() {
         prefs("init_true").edit().putBoolean("experimental_fullscreen_mode", true).commit()
+        val context = RuntimeEnvironment.getApplication()
+        val bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(context)
         val repo =
             SettingsRepository(
-                RuntimeEnvironment.getApplication(),
+                context,
+                bridge,
                 preferencesSuffix = "init_true",
             )
         assertTrue(
@@ -39,7 +42,8 @@ class SettingsRepositoryImmersiveFullscreenStateTest {
 
         val repoDefault =
             SettingsRepository(
-                RuntimeEnvironment.getApplication(),
+                context,
+                bridge,
                 preferencesSuffix = "init_default",
             )
         assertFalse(
@@ -52,9 +56,12 @@ class SettingsRepositoryImmersiveFullscreenStateTest {
     fun `getLocalSettings does not touch the fullscreen state`() {
         val suffix = "get_no_touch"
         prefs(suffix).edit().putBoolean("experimental_fullscreen_mode", true).commit()
+        val context = RuntimeEnvironment.getApplication()
+        val bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(context)
         val repo =
             SettingsRepository(
-                RuntimeEnvironment.getApplication(),
+                context,
+                bridge,
                 preferencesSuffix = suffix,
             )
         assertTrue(repo.immersiveFullscreenEnabled.value)

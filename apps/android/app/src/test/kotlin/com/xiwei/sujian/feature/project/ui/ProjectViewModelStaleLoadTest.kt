@@ -70,6 +70,7 @@ class ProjectViewModelStaleLoadTest {
     /** 按 projectId 控制三个数据读取的阻塞/放行，并记录调用进度。 */
     private class GatedProjectRepository(
         context: android.content.Context,
+        bridge: com.xiwei.sujian.core.interop.app.AppServiceBridge,
         private val volumes: Map<String, List<Volume>>,
         stats: Map<String, ProjectStats>,
         private val volumeGates: Map<String, CountDownLatch> = emptyMap(),
@@ -77,7 +78,7 @@ class ProjectViewModelStaleLoadTest {
         private val statsGates: Map<String, CountDownLatch> = emptyMap(),
         // 仅阻塞“第二次” getVolumes（变更刷新场景：首次加载放行后，再挂起刷新链的卷读取）。
         private val secondVolumeGate: CountDownLatch? = null,
-    ) : ProjectRepository(context) {
+    ) : ProjectRepository(context, bridge) {
         private val statsMap = stats.toMutableMap()
         private var volumeCallCount = 0
 
@@ -173,6 +174,7 @@ class ProjectViewModelStaleLoadTest {
             val repo =
                 GatedProjectRepository(
                     context = app,
+                    bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(app),
                     volumes = mapOf("A" to volumesA, "B" to volumesB),
                     stats = mapOf("A" to ProjectStats(100, 1, 1), "B" to ProjectStats(200, 2, 2)),
                     volumeGates = mapOf("A" to volumeGateA),
@@ -238,6 +240,7 @@ class ProjectViewModelStaleLoadTest {
             val repo =
                 GatedProjectRepository(
                     context = app,
+                    bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(app),
                     volumes = mapOf("A" to volumesA, "B" to volumesB),
                     stats = mapOf("A" to ProjectStats(100, 1, 1), "B" to ProjectStats(200, 2, 2)),
                     volumeGates = mapOf("A" to volumeGateA),
@@ -275,6 +278,7 @@ class ProjectViewModelStaleLoadTest {
             val repo =
                 GatedProjectRepository(
                     context = app,
+                    bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(app),
                     volumes = mapOf("A" to volumesA, "B" to volumesB),
                     stats = mapOf("A" to ProjectStats(100, 1, 1), "B" to ProjectStats(200, 2, 2)),
                     volumeGates = mapOf("B" to volumeGateB),
@@ -328,6 +332,7 @@ class ProjectViewModelStaleLoadTest {
             val repo =
                 GatedProjectRepository(
                     context = app,
+                    bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(app),
                     volumes = mapOf("A" to volumesA),
                     stats = mapOf("A" to ProjectStats(100, 1, 1)),
                 )
@@ -367,6 +372,7 @@ class ProjectViewModelStaleLoadTest {
             val repo =
                 GatedProjectRepository(
                     context = app,
+                    bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(app),
                     volumes = mapOf("A" to volumesA),
                     stats = mapOf("A" to ProjectStats(100, 1, 1)),
                     secondVolumeGate = secondVolumeGate,

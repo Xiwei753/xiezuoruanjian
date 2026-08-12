@@ -62,9 +62,9 @@ import com.xiwei.sujian.app.WorkspaceUiEvent
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.app.presentation.AndroidChromePolicy
-import com.xiwei.sujian.app.presentation.AndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.AndroidNavigationPresentation
 import com.xiwei.sujian.app.presentation.AndroidWorkspaceActionSpec
+import com.xiwei.sujian.app.presentation.PresentationContractBridge
 import com.xiwei.sujian.app.presentation.SujianChromeAction
 import com.xiwei.sujian.app.presentation.SujianChromeSpec
 import com.xiwei.sujian.app.presentation.rememberAndroidLayoutSpec
@@ -654,7 +654,9 @@ fun SujianNavigationSuite(
     initialDestination: String? = null,
     foldingFeatures: List<AospFoldFeatureInfo> = emptyList(),
 ) {
-    val layoutSpec: AndroidLayoutSpec = rememberAndroidLayoutSpec(foldingFeatures)
+    val deps = LocalSujianAppDependencies.current
+    val resolver = PresentationContractBridge.layoutContractResolver(deps.appServiceBridge)
+    val layoutSpec = rememberAndroidLayoutSpec(foldingFeatures, resolver)
     val (initialTopLevel, initialStackRoutes) = rememberInitialNavStack(initialDestination)
     val topLevelBackStack = rememberSujianTopLevelBackStack(initialTopLevel, initialStackRoutes)
     val backStack = topLevelBackStack.backStack
@@ -665,7 +667,6 @@ fun SujianNavigationSuite(
     // #614：收集 ViewModel 抛出的 UI 事件，错误走 Snackbar 展示。
     SujianUiEventEffect(appState, snackbarHostState)
 
-    val deps = LocalSujianAppDependencies.current
     val syncState by deps.syncStatusRepository.state.collectAsState()
     val coroutineScope = rememberCoroutineScope()
 

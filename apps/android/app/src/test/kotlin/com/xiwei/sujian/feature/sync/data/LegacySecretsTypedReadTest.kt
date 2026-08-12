@@ -18,7 +18,8 @@ import org.robolectric.annotation.Config
 class LegacySecretsTypedReadTest {
     private fun createRepo(): SyncRepository {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
-        return SyncRepository(context)
+        val bridge = com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(context)
+        return SyncRepository(context, bridge)
     }
 
     @Test

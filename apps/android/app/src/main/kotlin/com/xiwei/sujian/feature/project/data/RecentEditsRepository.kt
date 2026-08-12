@@ -1,7 +1,6 @@
 package com.xiwei.sujian.feature.project.data
 import android.content.Context
 import com.xiwei.sujian.R
-import com.xiwei.sujian.app.di.AppServiceProvider
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
@@ -14,8 +13,7 @@ import com.xiwei.sujian.feature.project.data.model.RecentEdit
  * 从 [com.xiwei.sujian.feature.project.data.ProjectRepository] 拆出，
  * 专门负责最近编辑记录的查询、记录与刷盘。
  */
-class RecentEditsRepository(private val context: Context, bridge: AppServiceBridge? = null) {
-    private val appBridge = bridge ?: AppServiceProvider.getAppServiceBridge(context)
+class RecentEditsRepository(private val context: Context, private val appBridge: AppServiceBridge) {
     private val recentEditsBridge = appBridge.recentEditsBridge
 
     private fun BridgeResult.Error.localizedMessage(): String {
