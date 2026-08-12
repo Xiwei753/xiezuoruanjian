@@ -46,7 +46,6 @@ pub unsafe extern "C" fn writer_core_load_local_settings() -> *mut c_char {
 /// `settings_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
@@ -121,7 +120,6 @@ pub unsafe extern "C" fn writer_core_save_local_settings(
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,

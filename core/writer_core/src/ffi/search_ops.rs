@@ -23,7 +23,6 @@ fn parse_scope(s: &str) -> crate::search::SearchScope {
 /// `query` and `scope` must be valid null-terminated UTF-8 C strings.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,

@@ -184,7 +184,6 @@ pub unsafe extern "C" fn writer_core_get_load_status() -> *mut c_char {
 /// already holding the Mutex (non-recursive lock, will deadlock).
 /// Returns word count on success, -2 on invalid UTF-8, -3 on mutex error.
 #[no_mangle]
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
@@ -220,7 +219,6 @@ pub unsafe extern "C" fn writer_core_free_string(ptr: *mut c_char) {
 /// already holding the Mutex (non-recursive lock, will deadlock).
 /// Returns 1 if AI is available, 0 if unavailable or on error.
 #[no_mangle]
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,

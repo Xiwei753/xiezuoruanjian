@@ -147,7 +147,6 @@ pub(crate) fn github_api_error(context: &str, status: u16, body: String) -> crat
 ///
 /// 返回 `Some((bytes, sha))` 表示文件存在，`None` 表示 404（文件不存在，非错误）。
 /// `bytes` 为文件内容的 base64 解码结果，`sha` 为 Git blob SHA（用于后续 PUT/DELETE 的冲突检测）。
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,

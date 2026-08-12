@@ -228,7 +228,6 @@ fn validate_edges(
 
 /// 验证嵌入：instance_id 唯一、禁止自嵌入、目标星图存在、
 /// placement/viewport 数值合法性、source_node_id/host_endpoint 引用完整性。
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::excessive_nesting,
     clippy::too_many_lines,

@@ -160,7 +160,6 @@ impl Drop for SaveTransaction {
 /// - `committed` 标记存在 → 事务已成功完成，清理目录
 /// - `manifest.json` 存在但无 `committed` → 中断的事务，尝试将暂存文件 rename 到目标
 /// - 两者都不存在 → 无效目录，清理
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,

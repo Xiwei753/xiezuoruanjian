@@ -152,7 +152,6 @@ pub fn mask_token_in_url(url: &str) -> String {
 /// 1. Redact URL userinfo (https://user:token@host/path -> https://***@host/path)
 /// 2. If a known token string is provided, redact every occurrence of it.
 /// 3. Does NOT touch ordinary error text, git return codes, or libgit2 messages.
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,

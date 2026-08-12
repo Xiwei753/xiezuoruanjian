@@ -128,7 +128,6 @@ impl StarMapStore {
         Ok(result)
     }
 
-    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
     #[allow(
         clippy::too_many_lines,
         clippy::cognitive_complexity,

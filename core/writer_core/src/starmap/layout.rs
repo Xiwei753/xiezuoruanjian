@@ -72,7 +72,6 @@ pub fn calculate_grid_layout(node_ids: &[String], existing: &StarMapLayout) -> S
 ///
 /// 已有位置的节点保留原位（从 existing 中克隆），仅计算新增节点位置。
 /// 已被前驱层级定位的节点不会被子节点重新定位（`positions.contains_key` 检查）。
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::excessive_nesting,
     clippy::too_many_lines,

@@ -63,7 +63,6 @@ impl StatsAggregator {
     ///
     /// 将时间范围按 `bucket_minutes` 分桶，统计每个桶内的输入字符数和字符/分钟。
     /// 桶区间为半开区间 `[bucket_start, bucket_end)`。
-    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
     #[allow(
         clippy::too_many_lines,
         clippy::cognitive_complexity,

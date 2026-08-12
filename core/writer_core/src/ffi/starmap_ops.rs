@@ -357,7 +357,6 @@ pub unsafe extern "C" fn writer_core_save_starmap_viewport(
 /// `graph_json` must be a valid null-terminated UTF-8 C string containing StarMapGraphDto JSON.
 /// Returns a caller-owned C string containing JSON array of StarMapEdgeRenderDto. Free with `writer_core_free_string`.
 #[no_mangle]
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
