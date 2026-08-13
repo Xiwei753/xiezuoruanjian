@@ -52,12 +52,27 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
                 val redactedTrace = DiagnosticsLogger.redactStackTrace(throwable)
+                // #623 评论7：crash 头部必须带构建身份 — crash handler 安装在
+                // initDiagnostics 之前，不能依赖 DiagnosticsLogger.init 完成，
+                // 直接从 BuildConfig 取身份。last_crash.txt 保持"最近一次崩溃"
+                // 单文件语义，但文件内可见它属于哪个 APK/commit/flavor。
+                val identity = com.xiwei.sujian.core.diagnostics.DiagnosticsBuildIdentity.fromBuildConfig()
                 val timestamp =
                     java.text.SimpleDateFormat(
                         "yyyy-MM-dd HH:mm:ss",
                         java.util.Locale.US,
                     ).format(java.util.Date())
-                val header = "Crash at $timestamp\nThread: ${thread.name}\n\n"
+                val header =
+                    buildString {
+                        appendLine("buildKey: ${identity.buildKey}")
+                        appendLine("versionName: ${identity.versionName}")
+                        appendLine("versionCode: ${identity.versionCode}")
+                        appendLine("gitCommitSha: ${identity.gitCommitSha}")
+                        appendLine("flavor: ${identity.flavor}")
+                        appendLine("buildType: ${identity.buildType}")
+                        appendLine("applicationId: ${identity.applicationId}")
+                        append("Crash at $timestamp\nThread: ${thread.name}\n\n")
+                    }
                 val externalWritten =
                     writeCrashFile(File(AndroidDataRoot.logsDir(), "last_crash.txt"), header, redactedTrace)
                 if (!externalWritten) {

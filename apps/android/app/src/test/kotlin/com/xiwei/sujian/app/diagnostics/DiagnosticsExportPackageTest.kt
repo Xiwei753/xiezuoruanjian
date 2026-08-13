@@ -92,10 +92,13 @@ class DiagnosticsExportPackageTest {
                     "sync_state_sanitized.json",
                     "editor_snapshot.json",
                     "last_crash.txt",
+                    // #623 评论7：导出包必须带当前 APK 的构建身份
+                    "build_identity.json",
                 )
             for (name in expected) {
                 assertTrue("package must contain $name, got $entries", name in entries)
             }
+            assertBuildIdentityInZip(zip)
             val logText =
                 zip.getEntry(CURRENT_LOG_ENTRY)
                     ?.let { zip.getInputStream(it).readBytes().toString(Charsets.UTF_8) }
@@ -112,6 +115,38 @@ class DiagnosticsExportPackageTest {
             assertTrue("jank_summary.json must contain jankFrames", jankJson.contains("jankFrames"))
         }
         zipFile.delete()
+    }
+
+    /**
+     * #623 评论7：build_identity.json 必须携带当前 APK 的完整构建身份 —
+     * 表示"这次导出动作来自哪个 APK"。
+     */
+    private fun assertBuildIdentityInZip(zip: ZipFile) {
+        val identityJson =
+            zip.getEntry("build_identity.json")
+                ?.let { zip.getInputStream(it).readBytes().toString(Charsets.UTF_8) }
+                .orEmpty()
+        val expectedIdentity = DiagnosticsBuildIdentity.fromBuildConfig()
+        assertTrue(
+            "build_identity.json must carry versionCode, got: $identityJson",
+            identityJson.contains("\"versionCode\": ${expectedIdentity.versionCode}"),
+        )
+        assertTrue(
+            "build_identity.json must carry gitCommitSha, got: $identityJson",
+            identityJson.contains(expectedIdentity.gitCommitSha),
+        )
+        assertTrue(
+            "build_identity.json must carry flavor, got: $identityJson",
+            identityJson.contains(expectedIdentity.flavor),
+        )
+        assertTrue(
+            "build_identity.json must carry buildType, got: $identityJson",
+            identityJson.contains(expectedIdentity.buildType),
+        )
+        assertTrue(
+            "build_identity.json must carry applicationId, got: $identityJson",
+            identityJson.contains(expectedIdentity.applicationId),
+        )
     }
 
     /** 反：缓存目录不可写时导出失败返回 null（不抛异常、不崩溃）。 */

@@ -406,7 +406,10 @@ class EditorSessionCoordinator(
      * #595 二：新建 session 同样携带 create 后的真实 snapshot（createSession 已
      * 接收初始正文，是唯一一次 Core 命令），窗口层 attachSnapshot 只重建本地镜像。
      * #595 一：章节切换事务预准备 session 时传入 windowId="prepared" —
-     * 窗口层 beginEdit 复用同一 session，completeWindowAttach 时替换为真实 windowId。
+     * 窗口层 beginEdit 复用同一 session 时，restampAttachingToWindow 把
+     * "prepared" 预绑定重贴为真实窗口的 Attaching，再由该窗口自己的
+     * completeWindowAttach 推进为 Attached（#623 评论6：completion 不参与
+     * 所有权接管，只认精确匹配的 Attaching）。
      * #595 四：sessionId 写入 store 记录 — 非持久 target 同样记录。
      */
 

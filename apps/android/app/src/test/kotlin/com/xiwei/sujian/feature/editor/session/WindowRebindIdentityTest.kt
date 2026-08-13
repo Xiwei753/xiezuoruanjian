@@ -12,15 +12,18 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * #623 评论5：窗口重建后绑定身份完整性契约测试。
+ * #623 评论5/6：窗口重建后绑定身份完整性契约测试。
  *
  * 配置变化/Activity 重建后新 EditorWindowHost 有新的 windowId，旧窗口的
  * Attached/Attaching 残留会让新窗口误判"已附着"而跳过 beginEdit。规则：
  * 1. prepareSessionForEdit 复用活动 session 时，把属于其他窗口的绑定
- *    重贴为当前窗口的 Attaching（同一 targetId + sessionId 才生效）；
- * 2. completeWindowAttach 幂等判定带 windowId + targetId + sessionId；
- *    同一 session 但残留自其他窗口的 Attached 由新窗口的真实 View 绑定
- *    重贴为当前窗口的 Attached；
+ *    重贴为当前窗口的 Attaching（同一 targetId + sessionId 才生效）——
+ *    这是窗口接管旧绑定的唯一动作；
+ * 2. completeWindowAttach 不再参与所有权接管，只允许两种结果：
+ *    当前是精确相同的 Attached(windowId,targetId,sessionId) → 幂等 return；
+ *    当前是精确相同的 Attaching(windowId,targetId,sessionId) → 推进为 Attached；
+ *    windowId/targetId/sessionId 任一不一致（包括旧窗口晚到的 completion、
+ *    错误 session 的 completion）都直接忽略，不能修改状态；
  * 3. 不同 target/session 的完成请求不得覆盖现有绑定。
  */
 @RunWith(RobolectricTestRunner::class)
@@ -164,24 +167,77 @@ class WindowRebindIdentityTest {
         )
     }
 
-    // ── completeWindowAttach 身份 ──
+    // ── completeWindowAttach 身份（#623 评论6：completion 不参与所有权接管）──
 
     @Test
-    fun completeWindowAttach_restampsAttachedFromForeignWindow() {
+    fun completeWindowAttach_foreignWindowCompletion_doesNotRestampAttached() {
         val coordinator = createCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
-        setWindowBindingState(coordinator, WindowBindingState.Attached("w1", "t1", 42UL))
+        // 新窗口 w2 的真实 View 已绑定完成
+        setWindowBindingState(coordinator, WindowBindingState.Attached("w2", "t1", 42UL))
 
+        // 旧窗口 w1 晚到一次 completion — 不得把已经属于 w2 的 Attached 抢回 w1。
+        coordinator.completeWindowAttach("w1", "t1", 42UL)
+
+        assertEquals(
+            "old window's late completion must not re-stamp the new window's Attached",
+            WindowBindingState.Attached("w2", "t1", 42UL),
+            coordinator.windowBindingState,
+        )
+        assertEquals(EditingState.EDITING, coordinator.editingState)
+    }
+
+    @Test
+    fun completeWindowAttach_foreignWindowCompletion_keepsAttaching() {
+        val coordinator = createCoordinator()
+        registerPersistentTarget(coordinator, "t1", 42UL)
+        // 新窗口 w2 已进入 Attaching（真实 View 尚未完成绑定）
+        val attaching = WindowBindingState.Attaching("w2", "t1", 42UL)
+        setWindowBindingState(coordinator, attaching, editingState = EditingState.BINDING)
+
+        // 旧窗口 w1 晚到 completion — 不得把 Attaching(w2) 推进或改写。
+        coordinator.completeWindowAttach("w1", "t1", 42UL)
+
+        assertEquals(
+            "old window's late completion must leave the new window's Attaching untouched",
+            attaching,
+            coordinator.windowBindingState,
+        )
+        assertEquals(EditingState.BINDING, coordinator.editingState)
+    }
+
+    @Test
+    fun completeWindowAttach_wrongSessionCompletion_keepsAttaching() {
+        val coordinator = createCoordinator()
+        registerPersistentTarget(coordinator, "t1", 42UL)
+        val attaching = WindowBindingState.Attaching("w2", "t1", 42UL)
+        setWindowBindingState(coordinator, attaching, editingState = EditingState.BINDING)
+
+        // 错误 session 的 completion（同窗口、不同 sessionId）— 必须保持原 Attaching。
+        coordinator.completeWindowAttach("w2", "t1", 99UL)
+
+        assertEquals(
+            "completion with wrong sessionId must leave Attaching untouched",
+            attaching,
+            coordinator.windowBindingState,
+        )
+    }
+
+    @Test
+    fun completeWindowAttach_exactAttaching_advancesToAttached() {
+        val coordinator = createCoordinator()
+        registerPersistentTarget(coordinator, "t1", 42UL)
+        setWindowBindingState(
+            coordinator,
+            WindowBindingState.Attaching("w2", "t1", 42UL),
+            editingState = EditingState.BINDING,
+        )
+
+        // 当前窗口自己的真实 View bind 完成 — Attaching(w2) → Attached(w2)。
         coordinator.completeWindowAttach("w2", "t1", 42UL)
 
         val binding = coordinator.windowBindingState
-        assertTrue(
-            "new window's real view bind must win over stale Attached from another window, got $binding",
-            binding is WindowBindingState.Attached,
-        )
-        assertEquals("w2", (binding as WindowBindingState.Attached).windowId)
-        assertEquals("t1", binding.targetId)
-        assertEquals(42UL, binding.sessionId)
+        assertEquals(WindowBindingState.Attached("w2", "t1", 42UL), binding)
         assertEquals(EditingState.EDITING, coordinator.editingState)
     }
 

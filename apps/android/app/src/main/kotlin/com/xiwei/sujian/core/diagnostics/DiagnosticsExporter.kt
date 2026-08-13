@@ -45,6 +45,7 @@ object DiagnosticsExporter {
             writeProcessExits(context, tempDir)
             writeThreadDump(tempDir)
             writeDeviceInfo(context, tempDir)
+            writeBuildIdentity(tempDir)
             writeAppSettingsSanitized(context, tempDir)
             writeSyncStateSanitized(context, tempDir)
             writeEditorSnapshot(tempDir)
@@ -177,6 +178,26 @@ object DiagnosticsExporter {
             val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
             val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
             File(destDir, "jank_summary.json").writeText(errorJson)
+        }
+    }
+
+    /**
+     * #623 评论7：导出包根目录的 build_identity.json — 序列化当前 APK 的
+     * [DiagnosticsBuildIdentity]，表示"这次导出动作来自哪个 APK"。
+     * logs/ 里允许同时带旧 build 的分文件日志，last_crash.txt 也允许来自旧 build，
+     * 但它们各自有明确 build identity（文件名 build key / crash header），
+     * 不再和当前 APK 混淆。
+     */
+    private fun writeBuildIdentity(destDir: File) {
+        try {
+            val identity = DiagnosticsBuildIdentity.fromBuildConfig()
+            val gson = GsonBuilder().setPrettyPrinting().create()
+            val json = DiagnosticsLogger.redact(gson.toJson(identity))
+            File(destDir, "build_identity.json").writeText(json)
+        } catch (e: Exception) {
+            val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
+            val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
+            File(destDir, "build_identity.json").writeText(errorJson)
         }
     }
 

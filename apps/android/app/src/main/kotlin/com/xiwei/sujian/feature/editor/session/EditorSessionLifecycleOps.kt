@@ -222,35 +222,21 @@ fun EditorSessionCoordinator.completeWindowAttach(
     sessionId: ULong,
 ) {
     val current = _sessionStateFlow.value.bindingState
-    // #623 评论5：幂等重入必须同时匹配 windowId + targetId + sessionId —
-    // 同一窗口重复完成同一绑定保持现状，不再只认 targetId。
-    val sameWindowAttached =
-        current is WindowBindingState.Attached &&
-            current.windowId == windowId &&
-            current.targetId == targetId &&
-            current.sessionId == sessionId
-    if (sameWindowAttached) {
+    // #623 评论6：绑定所有权已在 prepareSessionForEdit（restampAttachingToWindow）阶段
+    // 确定，completion 阶段不再抢所有权 — 只允许两种结果：
+    // 1. 当前已经是完全相同的 Attached(windowId, targetId, sessionId) → 幂等 return；
+    // 2. 当前必须是完全相同的 Attaching(windowId, targetId, sessionId) → 才推进为 Attached。
+    // windowId、targetId、sessionId 任一不一致都直接忽略，不能修改状态。
+    // 旧窗口晚到的 completeWindowAttach 不得把已经属于新窗口的 Attached/Attaching
+    // 抢回旧窗口；新窗口接管旧窗口的动作只发生在 prepareSessionForEdit 的重贴中。
+    if (current.isExactAttached(windowId, targetId, sessionId)) {
         return
     }
-    // #623 评论5：Attached 残留自其他窗口（旧窗口 release 与新窗口绑定之间的竞态）
-    // 但 targetId + sessionId 一致时 — 当前窗口已对新 View 完成真实
-    // performViewBind，较新的真实 View 绑定胜出，重贴为当前窗口的 Attached。
-    if (current is WindowBindingState.Attached &&
-        current.targetId == targetId && current.sessionId == sessionId
-    ) {
-        updateSessionState {
-            it.copy(
-                bindingState = WindowBindingState.Attached(windowId, targetId, sessionId),
-                editingState = EditingState.EDITING,
-            )
-        }
-        return
-    }
-    if (current !is WindowBindingState.Attaching || current.targetId != targetId) {
+    if (!current.isExactAttaching(windowId, targetId, sessionId)) {
         Log.w(
             EditorSessionCoordinator.TAG,
-            "completeWindowAttach($targetId): current state $current is not Attaching for target — " +
-                "ignoring (Attached requires a bound View)",
+            "completeWindowAttach($windowId,$targetId,$sessionId): current state $current is not the " +
+                "exact Attaching for this window/target/session — ignoring (Attached requires a bound View)",
         )
         return
     }
@@ -262,6 +248,28 @@ fun EditorSessionCoordinator.completeWindowAttach(
         )
     }
 }
+
+/** #623 评论6：绑定是否与 (windowId, targetId, sessionId) 完全相同的 Attached。 */
+private fun WindowBindingState.isExactAttached(
+    windowId: String,
+    targetId: String,
+    sessionId: ULong,
+): Boolean =
+    this is WindowBindingState.Attached &&
+        this.windowId == windowId &&
+        this.targetId == targetId &&
+        this.sessionId == sessionId
+
+/** #623 评论6：绑定是否与 (windowId, targetId, sessionId) 完全相同的 Attaching。 */
+private fun WindowBindingState.isExactAttaching(
+    windowId: String,
+    targetId: String,
+    sessionId: ULong,
+): Boolean =
+    this is WindowBindingState.Attaching &&
+        this.windowId == windowId &&
+        this.targetId == targetId &&
+        this.sessionId == sessionId
 
 fun EditorSessionCoordinator.closeTarget(
     targetId: String,
