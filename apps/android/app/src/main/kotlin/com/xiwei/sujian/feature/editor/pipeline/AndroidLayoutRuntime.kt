@@ -100,9 +100,10 @@ class AndroidLayoutRuntime(
     }
 
     private fun rebuildProjectionContent() {
-        val text = mirror.getText()
         currentProjection =
             if (secretDisplayMode) {
+                // secret 模式才需要整章文本构建 masked projection。
+                val text = mirror.getText()
                 val compRange = mirror.getCompositionRangeUtf16()
                 if (compRange != null && compRange.first >= 0 && compRange.second > compRange.first) {
                     val compText = mirror.getSpannable().substring(compRange.first, compRange.second)
@@ -112,6 +113,7 @@ class AndroidLayoutRuntime(
                 }
             } else {
                 // #624 评论4: 非 secret 路径复用 identityProjection，不拷贝整章。
+                // mirror.getText() 只在 secret 分支内调用，这里绝不整章复制。
                 identityProjection
             }
         layoutEngine.applyDisplaySource(
