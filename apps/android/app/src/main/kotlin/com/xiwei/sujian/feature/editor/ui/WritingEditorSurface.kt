@@ -39,7 +39,9 @@ fun WritingEditorSurface(
     // bindingState / sessionId 永远来自同一个不可变快照，不会读到跨帧组合。
     val sessionState by coordinator.sessionStateFlow.collectAsStateWithLifecycle()
     val bindingState = sessionState.bindingState
-    val showEditor = shouldShowEditor(bindingState, targetId)
+    // #623 评论5：渲染决策带窗口身份 — 旧窗口残留的绑定不得让新窗口显示
+    // 未绑定 session 的编辑器 View。
+    val showEditor = shouldShowEditor(bindingState, coordinator.windowId, targetId)
 
     val themeColors = EditorThemeAdapter.extractColors()
 
@@ -84,16 +86,21 @@ fun WritingEditorSurface(
  * #595 八：正文 Surface 的渲染决策 — 窗口绑定状态机到"显示编辑器/预览"的纯函数。
  *
  * - [WindowBindingState.Attaching]/[Attached]：窗口已绑定该 target → 编辑器。
+ *   #623 评论5：必须同时匹配 windowId + targetId — 残留自其他窗口的绑定
+ *   （旧窗口 release 与新窗口附着之间的竞态）对新窗口不算已绑定，显示预览。
  * - [WindowBindingState.Committing]/[Cancelling]：编辑事务收尾中，编辑器保持显示。
  * - [WindowBindingState.Idle]/[Detaching]/[Detached]：未绑定/已解绑 → 预览。
  */
 fun shouldShowEditor(
     bindingState: WindowBindingState,
+    windowId: String,
     targetId: String,
 ): Boolean =
     when (bindingState) {
-        is WindowBindingState.Attaching -> bindingState.targetId == targetId
-        is WindowBindingState.Attached -> bindingState.targetId == targetId
+        is WindowBindingState.Attaching ->
+            bindingState.windowId == windowId && bindingState.targetId == targetId
+        is WindowBindingState.Attached ->
+            bindingState.windowId == windowId && bindingState.targetId == targetId
         is WindowBindingState.Committing -> bindingState.targetId == targetId
         is WindowBindingState.Cancelling -> bindingState.targetId == targetId
         WindowBindingState.Idle -> false

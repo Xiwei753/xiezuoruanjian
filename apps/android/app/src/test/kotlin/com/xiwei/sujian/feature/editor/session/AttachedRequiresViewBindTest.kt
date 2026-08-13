@@ -92,22 +92,27 @@ class AttachedRequiresViewBindTest {
         assertTrue(
             com.xiwei.sujian.feature.editor.ui.shouldShowEditor(
                 WindowBindingState.Attaching("w", targetId, 1UL),
+                "w",
                 targetId,
             ),
         )
         assertTrue(
             com.xiwei.sujian.feature.editor.ui.shouldShowEditor(
                 WindowBindingState.Attached("w", targetId, 1UL),
+                "w",
                 targetId,
             ),
         )
-        assertFalse(com.xiwei.sujian.feature.editor.ui.shouldShowEditor(WindowBindingState.Idle, targetId))
         assertFalse(
-            com.xiwei.sujian.feature.editor.ui.shouldShowEditor(WindowBindingState.Detaching(null), targetId),
+            com.xiwei.sujian.feature.editor.ui.shouldShowEditor(WindowBindingState.Idle, "w", targetId),
+        )
+        assertFalse(
+            com.xiwei.sujian.feature.editor.ui.shouldShowEditor(WindowBindingState.Detaching(null), "w", targetId),
         )
         assertFalse(
             com.xiwei.sujian.feature.editor.ui.shouldShowEditor(
                 WindowBindingState.Detached(targetId, 1UL, null),
+                "w",
                 targetId,
             ),
         )

@@ -222,10 +222,28 @@ fun EditorSessionCoordinator.completeWindowAttach(
     sessionId: ULong,
 ) {
     val current = _sessionStateFlow.value.bindingState
-    // 幂等重入：已经是同一 target/session 的 Attached（如 beginEdit 重复调用）保持现状。
+    // #623 评论5：幂等重入必须同时匹配 windowId + targetId + sessionId —
+    // 同一窗口重复完成同一绑定保持现状，不再只认 targetId。
+    val sameWindowAttached =
+        current is WindowBindingState.Attached &&
+            current.windowId == windowId &&
+            current.targetId == targetId &&
+            current.sessionId == sessionId
+    if (sameWindowAttached) {
+        return
+    }
+    // #623 评论5：Attached 残留自其他窗口（旧窗口 release 与新窗口绑定之间的竞态）
+    // 但 targetId + sessionId 一致时 — 当前窗口已对新 View 完成真实
+    // performViewBind，较新的真实 View 绑定胜出，重贴为当前窗口的 Attached。
     if (current is WindowBindingState.Attached &&
         current.targetId == targetId && current.sessionId == sessionId
     ) {
+        updateSessionState {
+            it.copy(
+                bindingState = WindowBindingState.Attached(windowId, targetId, sessionId),
+                editingState = EditingState.EDITING,
+            )
+        }
         return
     }
     if (current !is WindowBindingState.Attaching || current.targetId != targetId) {
@@ -309,7 +327,14 @@ fun EditorSessionCoordinator.prepareSessionForEdit(
     val isPersistent = record.persistent
     val profile = record.profile
 
-    prepareActiveSessionIfCurrent(targetId)?.let { return it }
+    prepareActiveSessionIfCurrent(targetId)?.let { bind ->
+        // #623 评论5：复用活动 session 时，若绑定仍停留在其他窗口（旧窗口残留的
+        // Attached/Attaching，或章节切换 commitPreparedSession 的 "prepared"
+        // 预绑定），重贴为当前窗口的 Attaching — 保证 shouldShowEditor /
+        // alreadyAttached 的 windowId 判定一致，当前窗口的 View 才会被创建并绑定。
+        restampAttachingToWindow(windowId, targetId)
+        return bind
+    }
     rebindFromOtherActiveIfNeeded(targetId)
 
     updateSessionState { it.copy(editingState = EditingState.BINDING) }
@@ -392,6 +417,41 @@ private fun EditorSessionCoordinator.commitPreparedBindingState(
             sessionBaseVersion = doc?.sessionBaseVersion ?: DocumentVersion(),
             localDirty = doc?.localDirty ?: false,
         )
+    }
+}
+
+/**
+ * #623 评论5：把属于其他窗口的绑定重贴为当前窗口的 Attaching。
+ * 仅当 targetId + sessionId 都匹配（同一持久 session）且 windowId 不同时生效；
+ * 相同窗口 / 不同 session / 非 Attaching/Attached 状态一律 no-op。
+ * 重贴后由 [EditorSessionCoordinator.completeWindowAttach] 在新 View 完成
+ * 真实绑定后推进到 Attached（windowId 同样参与幂等判定）。
+ */
+private fun EditorSessionCoordinator.restampAttachingToWindow(
+    windowId: String,
+    targetId: String,
+) {
+    val sessionId = store.record(targetId)?.sessionId ?: return
+    if (sessionId == 0UL) return
+    val current = _sessionStateFlow.value.bindingState
+    val currentWindowId: String? =
+        when (current) {
+            is WindowBindingState.Attaching ->
+                current.windowId.takeIf { current.targetId == targetId && current.sessionId == sessionId }
+            is WindowBindingState.Attached ->
+                current.windowId.takeIf { current.targetId == targetId && current.sessionId == sessionId }
+            else -> null
+        }
+    if (currentWindowId == null || currentWindowId == windowId) return
+    updateSessionState {
+        if (it.targetId == targetId) {
+            it.copy(
+                bindingState = WindowBindingState.Attaching(windowId, targetId, sessionId),
+                editingState = EditingState.BINDING,
+            )
+        } else {
+            it
+        }
     }
 }
 

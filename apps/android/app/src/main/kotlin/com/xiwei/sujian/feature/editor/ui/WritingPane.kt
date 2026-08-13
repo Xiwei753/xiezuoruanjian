@@ -242,7 +242,15 @@ private fun WritingPaneEditorAttach(
             return@LaunchedEffect
         }
         val binding = inputs.sessionState.bindingState
-        val alreadyAttached = binding is WindowBindingState.Attached && binding.targetId == targetId
+        // #623 评论5：alreadyAttached 必须同时匹配 windowId + targetId —
+        // 配置变化/Activity 重建后新 EditorWindowHost 有新的 windowId，
+        // 只要会话层残留旧窗口的 Attached，新窗口就误以为"已有真实 View 绑定"
+        // 而跳过 beginEdit；旧窗口的 Attached 对新窗口一律不算已附着，必须重新走
+        // beginEdit -> Attaching -> attachView -> Attached。
+        val alreadyAttached =
+            binding is WindowBindingState.Attached &&
+                binding.windowId == coordinator.windowId &&
+                binding.targetId == targetId
         if (!alreadyAttached && !inputs.uiState.loading) {
             coordinator.updateTargetText(targetId, inputs.uiState.content)
             coordinator.beginEdit(targetId, inputs.uiState.content.toByteArray(Charsets.UTF_8).size)

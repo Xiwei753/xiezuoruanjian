@@ -711,6 +711,18 @@ class EditorWindowHost(
             view.release()
         }
         sharedEditorView = null
+        // #623 评论5：窗口销毁必须把会话层绑定明确推进到 Detached —
+        // 否则新窗口（新 windowId）看到残留的 Attached/Attaching 会误判
+        // "已附着"而跳过 beginEdit，新建的 AndroidView 没有 pendingViewBind
+        // 可消费，得到 isSessionBound=false 的编辑器 View。
+        // detachWindowBinding 内部校验 windowId+targetId：若绑定已属于更新的
+        // 窗口/目标则 no-op；持久 Rust session 只解除窗口绑定，不关闭。
+        // 与 detachView 一致清除 pendingViewBind，避免残留的 session 绑定参数
+        // 被后续复用。
+        pendingViewBind = null
+        if (activeId != null) {
+            sessionCoordinator.detachWindowBinding(windowId, activeId)
+        }
         windowFrameClock.release()
     }
 
