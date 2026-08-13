@@ -304,7 +304,8 @@ pub fn resolve_screen_policy(screen_role: ScreenRole) -> Vec<ActionSlot> {
                 requires_confirmation: false,
             },
         ],
-        // #597 正文：写作区只保留需要的图标层 — 同步、设置（搜索未实现不进入写作区）；
+        // #624：写作区顶栏恢复 返回 + 同步 → 搜索 → 设置。搜索入口由 #477 接管，
+        // 功能未完成时点击可暂无动作，但图标不得从产品契约消失。
         // #610 评论二：正文自动保存，Save 不再是真实存在的动作，不再声明。
         // 返回箭头是否出现由平台端按工作区导航状态动态决定，不在静态契约里。
         ScreenRole::Writing => vec![
@@ -317,6 +318,13 @@ pub fn resolve_screen_policy(screen_role: ScreenRole) -> Vec<ActionSlot> {
             },
             ActionSlot {
                 role: ActionRole::Sync,
+                target: ActionTarget::App,
+                region: ActionRegion::HeaderTrailing,
+                order: 10,
+                requires_confirmation: false,
+            },
+            ActionSlot {
+                role: ActionRole::Search,
                 target: ActionTarget::App,
                 region: ActionRegion::HeaderTrailing,
                 order: 20,

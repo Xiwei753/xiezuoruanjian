@@ -269,6 +269,56 @@ class EditorWindowHost(
     val motionPolicyFlow: kotlinx.coroutines.flow.StateFlow<EditorMotionPolicy>
         get() = sessionCoordinator.motionPolicyFlow
 
+    /**
+     * #624 评论3/4：排版设置持续应用到当前共享 [SujianEditorView] — 字号、行距、
+     * 首行缩进（开关 + 字符宽度）。设置变化后当前正文立即重排，不重建编辑 session。
+     * 与 [applyMotionPolicy] 同为窗口层唯一设置写入点。
+     *
+     * 最近一次排版设置缓存在窗口层（与 motion policy 存于会话层同源模式）：
+     * 设置先于 View 创建到达时，[createWindowView] 用缓存补齐新 View，
+     * 保证窗口重建后编辑器不回到默认字号/行距/缩进。
+     */
+    fun applyEditorTypography(
+        fontSizeSp: Float,
+        lineSpacingMultiplier: Float,
+        autoIndentEnabled: Boolean,
+        autoIndentWidth: Float,
+    ) {
+        lastTypography =
+            EditorTypography(
+                fontSizeSp = fontSizeSp,
+                lineSpacingMultiplier = lineSpacingMultiplier,
+                autoIndentEnabled = autoIndentEnabled,
+                autoIndentWidth = autoIndentWidth,
+            )
+        sharedEditorView?.let { view -> applyTypographyToView(view, lastTypography!!) }
+    }
+
+    private fun applyTypographyToView(
+        view: SujianEditorView,
+        typography: EditorTypography,
+    ) {
+        view.setFontSize(typography.fontSizeSp)
+        view.setLineSpacingMultiplier(typography.lineSpacingMultiplier)
+        view.setAutoIndent(typography.autoIndentEnabled, typography.autoIndentWidth)
+    }
+
+    /**
+     * #624 评论5：导航离开正文前先立刻收 IME — 只转发给当前真实 shared editor view。
+     */
+    fun dismissImeForNavigation() {
+        sharedEditorView?.dismissImeForNavigation()
+    }
+
+    private data class EditorTypography(
+        val fontSizeSp: Float,
+        val lineSpacingMultiplier: Float,
+        val autoIndentEnabled: Boolean,
+        val autoIndentWidth: Float,
+    )
+
+    private var lastTypography: EditorTypography? = null
+
     // ── Edit operations (orchestrates session + window) ──
 
     fun beginEdit(
@@ -599,6 +649,8 @@ class EditorWindowHost(
             // #595 四：创建时按活动 target（若有）应用全局策略 + profile 约束；
             // 绑定完成后 performViewBind 会用 pending.targetId 的约束再次应用。
             applyPolicyToView(view, pendingViewBind?.targetId ?: activeTargetId)
+            // #624 评论3/4：设置先于 View 创建到达时用缓存补齐字号/行距/首行缩进。
+            lastTypography?.let { applyTypographyToView(view, it) }
             sharedEditorView = view
         }
     }

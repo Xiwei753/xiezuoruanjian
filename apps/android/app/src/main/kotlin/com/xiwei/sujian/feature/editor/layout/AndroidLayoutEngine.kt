@@ -3,29 +3,57 @@ package com.xiwei.sujian.feature.editor.layout
 import android.os.Build
 import android.text.DynamicLayout
 import android.text.Layout
+import android.text.SpannableStringBuilder
+import android.text.TextDirectionHeuristics
 import android.text.TextPaint
 import com.xiwei.sujian.feature.editor.input.AndroidTextIndexMap
+import com.xiwei.sujian.feature.editor.projection.DisplayPatch
 import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import com.xiwei.sujian.feature.editor.projection.DisplayTextProjection
 
+/**
+ * 排版引擎 — 单一正文宽度 + DynamicLayout 复用（#624 评论4/7）。
+ *
+ * 布局配置（contentWidthPx / fontSizePx / lineSpacingMultiplier / firstLineIndentPx /
+ * layoutDirection）收敛为一份 fingerprint：只有配置真正变化时才重建 DynamicLayout；
+ * 普通 mirror 内容变化继续持有同一个 SpannableStringBuilder 和同一个
+ * DynamicLayout（DynamicLayout 本身就是给可编辑 Spannable 增量变化使用的，
+ * 文本/span 变化触发区域 reflow）。
+ *
+ * 首行缩进（#624 评论3）由 [ParagraphStyleProjection] 以显示层 span 施加在同一份
+ * Spannable 上：配置变化/整篇重载时整篇重同步，正文编辑影响段落结构时只重同步
+ * 受影响段落区域，普通按键不触碰任何 span。
+ */
 class AndroidLayoutEngine(
     private val mirror: DisplayTextMirror,
     private val textPaint: TextPaint,
 ) {
     private val snapshotBuilder = AndroidLineSnapshotBuilder()
+    private val paragraphStyle = ParagraphStyleProjection()
     private var layout: DynamicLayout? = null
     private var currentRevision: AndroidLayoutRevision? = null
     private var width: Float = 0f
     private var lineSpacingMultiplier: Float = 1.0f
+    private var firstLineIndentEnabled: Boolean = false
+    private var firstLineIndentWidthChars: Float = 0f
+    private val textDirection = TextDirectionHeuristics.FIRSTSTRONG_LTR
     private var revisionCounter: Long = 0
     private var lastConfigFingerprint: String = ""
     private var displayTextOverride: String? = null
     private var currentProjection: DisplayTextProjection? = null
 
-    private fun computeConfigFingerprint(): String {
-        return "${width}_${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}_$lineSpacingMultiplier"
-    }
+    private fun currentFirstLineIndentPx(): Float =
+        if (firstLineIndentEnabled && firstLineIndentWidthChars > 0f) {
+            paragraphStyle.firstLineIndentPx(textPaint, firstLineIndentWidthChars)
+        } else {
+            0f
+        }
 
+    private fun computeConfigFingerprint(): String =
+        "${width}_${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}_" +
+            "${lineSpacingMultiplier}_${currentFirstLineIndentPx()}_${textDirection.hashCode()}"
+
+    /** 唯一正文宽度来源 — 由宿主按真实可绘制宽度 `(width - paddingL - paddingR)` 传入。 */
     fun setWidth(width: Float) {
         if (this.width != width) {
             this.width = width
@@ -36,22 +64,54 @@ class AndroidLayoutEngine(
         lineSpacingMultiplier = multiplier
     }
 
+    /**
+     * #624 评论3：首行缩进设置（开关 + 字符宽度）— 只影响显示层 span 与
+     * fingerprint；变化后让布局配置失效，下一次 requestLayout 整篇重排。
+     */
+    fun setFirstLineIndent(
+        enabled: Boolean,
+        widthChars: Float,
+    ) {
+        if (firstLineIndentEnabled != enabled || firstLineIndentWidthChars != widthChars) {
+            firstLineIndentEnabled = enabled
+            firstLineIndentWidthChars = widthChars
+            lastConfigFingerprint = ""
+        }
+    }
+
     fun requestLayout() {
+        if (width <= 0f) return
         val effectiveText =
             displayTextOverride?.let { override ->
-                android.text.SpannableStringBuilder(override)
+                SpannableStringBuilder(override)
             } ?: mirror.getSpannable()
-        if (width <= 0f) return
 
         val currentConfigFp = computeConfigFingerprint()
 
+        // 只有配置（宽度/字号/行距/首行缩进/方向）或显示 source 类型变化才重建
+        // DynamicLayout；普通 mirror 内容变化在这里直接复用现有 layout。
         if (currentConfigFp != lastConfigFingerprint || layout == null) {
+            if (displayTextOverride == null) {
+                // 重建前整篇重同步段落缩进 span（attach/配置变化后 span 可能
+                // 已随 buffer.clear() 消失或过期；启用时整篇应用，禁用时清空）。
+                if (firstLineIndentEnabled && firstLineIndentWidthChars > 0f) {
+                    paragraphStyle.applyFirstLineIndent(
+                        effectiveText,
+                        true,
+                        firstLineIndentWidthChars,
+                        textPaint,
+                    )
+                } else {
+                    paragraphStyle.clearParagraphIndent(effectiveText)
+                }
+            }
             layout =
                 if (Build.VERSION.SDK_INT >= 28) {
                     DynamicLayout.Builder.obtain(effectiveText, textPaint, width.toInt())
                         .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                         .setLineSpacing(0f, lineSpacingMultiplier)
                         .setIncludePad(false)
+                        .setTextDirection(textDirection)
                         .build()
                 } else {
                     @Suppress("DEPRECATION")
@@ -67,6 +127,59 @@ class AndroidLayoutEngine(
 
         revisionCounter++
         currentRevision = buildRevision(layout!!)
+    }
+
+    /**
+     * #624 评论7：普通 mirror 内容变化后的投影刷新 — 更新 identity 投影的
+     * offset 映射，不触碰 displayTextOverride（display source 类型没变，
+     * 不得清 fingerprint 导致 DynamicLayout 重建）；只有真正的 mirror ← override
+     * 源切换（secret 关闭等）才让配置失效。
+     *
+     * #624 评论3：随后增量维护首行缩进 span — 只处理影响段落结构的编辑
+     * （插入/删除包含 `\n`、替换选区、段落边界插入），普通按键跳过，
+     * 避免每字符都产生 span 抖动。patch 的 byte offset 在其应用时刻的缓冲区
+     * 坐标中，替换起点前的字节在新旧缓冲区一致，因此用当前（新）投影换算
+     * UTF-16 偏移仍正确。
+     */
+    fun onMirrorContentChanged(
+        projection: DisplayTextProjection,
+        patches: List<DisplayPatch>,
+    ) {
+        if (displayTextOverride != null) {
+            displayTextOverride = null
+            lastConfigFingerprint = ""
+        }
+        currentProjection = projection
+        if (displayTextOverride != null || !firstLineIndentEnabled || firstLineIndentWidthChars <= 0f) {
+            return
+        }
+        if (patches.isEmpty()) return
+        val text = mirror.getSpannable()
+        if (text.isEmpty()) return
+
+        var regionStart = Int.MAX_VALUE
+        var regionEnd = -1
+        for (patch in patches) {
+            val startUtf16 =
+                projection.realUtf8ToDisplayUtf16(patch.replaceByteStart).coerceIn(0, text.length)
+            val endUtf16 = (startUtf16 + patch.insertedText.length).coerceAtMost(text.length)
+            val structural =
+                patch.insertedText.indexOf('\n') >= 0 ||
+                    patch.replaceByteStart != patch.replaceByteEndExclusive ||
+                    startUtf16 == 0 ||
+                    text[startUtf16 - 1] == '\n'
+            if (!structural) continue
+            regionStart = minOf(regionStart, startUtf16)
+            regionEnd = maxOf(regionEnd, endUtf16)
+        }
+        if (regionEnd < 0) return
+        paragraphStyle.resyncParagraphIndent(
+            text,
+            regionStart,
+            regionEnd,
+            firstLineIndentEnabled,
+            currentFirstLineIndentPx(),
+        )
     }
 
     fun captureImmutableRevision(): AndroidLayoutRevision? {
@@ -85,19 +198,6 @@ class AndroidLayoutEngine(
      *  Bitmap is the expensive part, cluster rects are computed from Layout API calls), always
      *  including it avoids a capture-mode mismatch that would silently produce whole-line
      *  crossfade instead of cluster-level animation. */
-    fun captureLineBitmapSnapshots(lineIndices: Set<Int>): Map<Int, AndroidLineSnapshot> {
-        val l = layout ?: return emptyMap()
-        val rev = currentRevision ?: return emptyMap()
-        val result = mutableMapOf<Int, AndroidLineSnapshot>()
-        for (idx in lineIndices) {
-            val snapshot = snapshotBuilder.buildSnapshotForLineWithClusters(l, idx, rev, mirror, currentProjection)
-            if (snapshot != null) {
-                result[idx] = snapshot
-            }
-        }
-        return result
-    }
-
     fun captureLineBitmapSnapshotsWithClusters(lineIndices: Set<Int>): Map<Int, AndroidLineSnapshot> {
         val l = layout ?: return emptyMap()
         val rev = currentRevision ?: return emptyMap()
@@ -233,17 +333,16 @@ class AndroidLayoutEngine(
         )
     }
 
-    fun setDisplayTextOverride(
-        override: String,
+    /**
+     * 切换显示文本 source（mirror ↔ override）— 真正的 source 类型切换才让
+     * 配置失效（下一次 requestLayout 重建 DynamicLayout）；identity 投影的
+     * 内容更新走 [onMirrorContentChanged]，不清 fingerprint。
+     */
+    fun applyDisplaySource(
+        override: String?,
         projection: DisplayTextProjection? = null,
     ) {
         displayTextOverride = override
-        currentProjection = projection
-        lastConfigFingerprint = ""
-    }
-
-    fun clearDisplayTextOverride(projection: DisplayTextProjection? = null) {
-        displayTextOverride = null
         currentProjection = projection
         lastConfigFingerprint = ""
     }

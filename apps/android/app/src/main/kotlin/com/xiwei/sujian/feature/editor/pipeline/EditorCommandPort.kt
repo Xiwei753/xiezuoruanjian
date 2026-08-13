@@ -14,6 +14,14 @@ interface InputCommandPort {
         cause: EditorTransactionCauseDto,
     ): PipelineOutput
 
+    /**
+     * #624 评论2：统一的换行命令 — 软键盘 commitText("\n")、硬件 Enter、
+     * 粘贴换行全部收敛到这一个入口。无选区时走 Core insertLineBreak（继承
+     * auto-indent 策略）；有选区时也必须通过 Core 的单一“换行替换”语义完成
+     * （一次 replace 命令把选区换成 \n），不能在平台端先删选区再插入换行。
+     */
+    fun insertLineBreak(cause: EditorTransactionCauseDto): PipelineOutput
+
     fun deleteRange(
         byteStart: Int,
         byteEndExclusive: Int,
@@ -109,6 +117,9 @@ interface EditorCommandPort {
         text: String,
         cause: EditorTransactionCauseDto,
     ): PipelineOutput
+
+    /** 见 [InputCommandPort.insertLineBreak] — 唯一换行命令入口。 */
+    fun insertLineBreak(cause: EditorTransactionCauseDto): PipelineOutput
 
     fun deleteRange(
         byteStart: Int,

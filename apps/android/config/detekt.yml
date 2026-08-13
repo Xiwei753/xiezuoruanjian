@@ -244,6 +244,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/pipeline/CompositionCommitConsumesCoreIntentTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/pipeline/InsertLineBreakAutoIndentPolicyTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/interop/SelectionOnlySessionCallbackTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/platform/SujianEditorViewSessionGateTest.kt"
       # --- 诊断事件：多字段事件枚举 ---
       - "**/kotlin/com/xiwei/sujian/core/diagnostics/DiagnosticsEvents.kt"
       - "**/kotlin/com/xiwei/sujian/app/diagnostics/DiagnosticsTest.kt"

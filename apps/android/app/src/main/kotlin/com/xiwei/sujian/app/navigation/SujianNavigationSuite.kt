@@ -201,31 +201,40 @@ private fun rememberSujianTopBarNavigation(
 }
 
 /** 顶栏右侧操作 — 顺序由 Core screen contract 的 HeaderTrailing order 决定（#610）：
- * 作品页依次提供 同步状态、搜索、设置（视觉从右往左为 设置/搜索/同步）；
- * 写作区只保留需要的图标层（同步、设置）。 */
+ * 作品页/写作区依次提供 同步状态、搜索、设置（视觉从右往左为 设置/搜索/同步）。 */
 
+@Composable
 private fun rememberSujianTopBarActions(
     currentRoute: SujianRoute,
     chrome: SujianChromeSpec,
     env: SujianTopBarEnv,
-): @Composable () -> Unit =
-    {
+): @Composable () -> Unit {
+    // #624 评论5：CompositionLocal 只能在组合上下文读取 — 先取窗口宿主，
+    // 供 Settings onClick 在导航前立刻收 IME。
+    val editorWindowHost = com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost.current
+    val actions: @Composable () -> Unit = {
         if (currentRoute is SujianRoute.Works) {
             chrome.actions.forEach { action ->
                 when (action) {
                     SujianChromeAction.Settings ->
                         SujianIconButton(
-                            onClick = { env.topLevelBackStack.add(SujianRoute.Settings) },
+                            onClick = {
+                                // #624 评论5：进入设置前先立刻收 IME（清焦点 + 隐藏输入法），
+                                // 再切页面 — 不等 AndroidView onRelease 晚一拍才 hide keyboard。
+                                editorWindowHost?.dismissImeForNavigation()
+                                env.topLevelBackStack.add(SujianRoute.Settings)
+                            },
                             icon = SujianIcons.Settings,
                             contentDescription = stringResource(id = R.string.action_settings),
                             semanticId = SujianSemanticIds.NavigationSettings,
                         )
                     SujianChromeAction.Search ->
+                        // #624 评论6：写作页/作品页搜索入口恢复可用状态 — #477 的全局搜索
+                        // 界面接入前 onClick 保持空动作，但图标不能从产品契约消失。
                         SujianIconButton(
                             onClick = { },
                             icon = SujianIcons.Search,
                             contentDescription = stringResource(id = R.string.cd_search_dev),
-                            enabled = false,
                             semanticId = SujianSemanticIds.NavigationSearch,
                         )
                     SujianChromeAction.Sync ->
@@ -245,6 +254,8 @@ private fun rememberSujianTopBarActions(
             }
         }
     }
+    return actions
+}
 
 /** #600：手动同步 onClick — 提取为独立函数降低 rememberSujianTopBarActions 认知复杂度。 */
 private fun rememberSujianManualSyncOnClick(env: SujianTopBarEnv): () -> Unit =

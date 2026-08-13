@@ -4,6 +4,7 @@ import android.text.Layout
 import android.text.TextPaint
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutEngine
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
+import com.xiwei.sujian.feature.editor.projection.DisplayPatch
 import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import com.xiwei.sujian.feature.editor.projection.DisplayTextProjection
 
@@ -37,19 +38,42 @@ class AndroidLayoutRuntime(
         layoutEngine.setLineSpacingMultiplier(multiplier)
     }
 
+    /**
+     * #624 评论3：首行缩进设置透传（开关 + 字符宽度）— 变化后当前正文立即重排。
+     */
+    fun setFirstLineIndent(
+        enabled: Boolean,
+        widthChars: Float,
+    ) {
+        layoutEngine.setFirstLineIndent(enabled, widthChars)
+    }
+
+    /**
+     * #624 评论7：普通 mirror 内容变化 — 不再每次重建 display projection。
+     *
+     * - 普通正文：更新 identity projection 的 revision/offset 映射，继续复用
+     *   现有 DynamicLayout；只有影响段落结构的编辑才增量维护首行缩进 span。
+     * - secret 显示模式：真正改变显示文本的投影，重建 masked projection。
+     */
+    fun onMirrorContentChanged(patches: List<DisplayPatch> = emptyList()) {
+        if (secretDisplayMode) {
+            rebuildProjectionContent()
+        } else {
+            currentProjection = DisplayTextProjection.identity(mirror.getText())
+            layoutEngine.onMirrorContentChanged(currentProjection, patches)
+        }
+        layoutEngine.requestLayout()
+    }
+
     fun applyProjection(projection: DisplayTextProjection) {
         currentProjection = projection
-        if (projection.isMasked) {
-            layoutEngine.setDisplayTextOverride(projection.displayText, projection)
-        } else {
-            layoutEngine.clearDisplayTextOverride(projection)
-        }
+        layoutEngine.applyDisplaySource(if (projection.isMasked) projection.displayText else null, projection)
         layoutEngine.requestLayout()
     }
 
     fun clearProjection() {
         currentProjection = DisplayTextProjection.identity(mirror.getText())
-        layoutEngine.clearDisplayTextOverride(currentProjection)
+        layoutEngine.applyDisplaySource(null, currentProjection)
         layoutEngine.requestLayout()
     }
 
@@ -90,17 +114,11 @@ class AndroidLayoutRuntime(
             } else {
                 DisplayTextProjection.identity(text)
             }
-        if (currentProjection.isMasked) {
-            layoutEngine.setDisplayTextOverride(currentProjection.displayText, currentProjection)
-        } else {
-            layoutEngine.clearDisplayTextOverride(currentProjection)
-        }
+        layoutEngine.applyDisplaySource(
+            if (currentProjection.isMasked) currentProjection.displayText else null,
+            currentProjection,
+        )
     }
-
-    fun captureLineBitmapSnapshots(
-        lineIndices: Set<Int>,
-    ): Map<Int, com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot> =
-        layoutEngine.captureLineBitmapSnapshots(lineIndices)
 
     fun captureLineBitmapSnapshotsWithClusters(
         lineIndices: Set<Int>,

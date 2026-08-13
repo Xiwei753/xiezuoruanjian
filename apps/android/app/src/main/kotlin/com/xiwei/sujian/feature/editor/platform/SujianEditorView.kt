@@ -378,10 +378,18 @@ class SujianEditorView
             oldh: Int,
         ) {
             super.onSizeChanged(w, h, oldw, oldh)
+            // #624 评论4：只在真实正文宽度（可绘制宽度）改变时才更新布局配置 —
+            // 不要在每次输入时把当前 view width 当成新布局源。
             if (w > 0) {
-                updateLayoutConfig()
+                val contentWidth = (w - paddingLeft - paddingRight).coerceAtLeast(1)
+                if (contentWidth != lastContentWidthPx) {
+                    lastContentWidthPx = contentWidth
+                    updateLayoutConfig()
+                }
             }
         }
+
+        private var lastContentWidthPx: Int = 0
 
         private fun updateMaxScroll() {
             val layoutOverflow = pipeline.getLayoutMaxScrollY(height)
@@ -476,6 +484,10 @@ class SujianEditorView
         }
 
         override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): InputConnection? {
+            // #624 评论5：会话未绑定直接返回 null — 系统拿到的 InputConnection
+            // 必须属于当前真实 session。绑定完成并取得焦点后由 attachSession
+            // 的 restartInput 让系统重新查询，不再出现 created=true sessionBound=false。
+            if (!isSessionBound) return null
             val ic = inputAdapter.onCreateInputConnection(outAttrs)
             com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.inputConnection(
                 created = ic != null,
@@ -638,17 +650,29 @@ class SujianEditorView
                     }
                     return true
                 }
-                KeyEvent.KEYCODE_ENTER -> {
-                    if (currentProfile.newlinePolicy == NewlinePolicy.FORBID) {
-                        if (currentProfile.commitOnImeAction) {
-                            onCommitRequested?.invoke()
-                        }
-                        return true
-                    }
-                    return super.onKeyDown(keyCode, event)
-                }
+                KeyEvent.KEYCODE_ENTER -> handleEnterKey()
             }
             return super.onKeyDown(keyCode, event)
+        }
+
+        /**
+         * #624 评论2：硬件键盘 Enter 与软键盘 commitText("\n") 共用同一个
+         * insertLineBreak()；NewlinePolicy.FORBID 才消费而不写入。
+         */
+        private fun handleEnterKey(): Boolean {
+            if (currentProfile.newlinePolicy == NewlinePolicy.FORBID) {
+                if (currentProfile.commitOnImeAction) {
+                    onCommitRequested?.invoke()
+                }
+                return true
+            }
+            if (inputAdapter.isComposing()) {
+                // 先提交未完成的 preedit，再插入换行 — 不能丢弃正在输入的内容。
+                inputAdapter.handleCompositionFinish()
+            }
+            val output = pipeline.insertLineBreak(EditorTransactionCauseDto.TYPING)
+            handlePipelineOutput(output)
+            return true
         }
 
         override fun onFocusChanged(
@@ -783,14 +807,16 @@ class SujianEditorView
 
         fun setAutoIndent(
             enabled: Boolean,
-            widthSp: Float,
+            widthChars: Float,
         ) {
-            pipeline.setAutoIndent(enabled, widthSp)
+            // #624 评论3：Core 换行策略跟随设置开关（正文从不含前导空白，继承为空），
+            // 首行缩进显示样式由 layout runtime 的 ParagraphStyleProjection 施加。
+            pipeline.setAutoIndent(enabled)
+            pipeline.setFirstLineIndent(enabled, widthChars)
+            updateLayoutConfig()
         }
 
         fun isAutoIndentEnabled(): Boolean = pipeline.isAutoIndentEnabled()
-
-        fun getAutoIndentWidthSp(): Float = pipeline.getAutoIndentWidthSp()
 
         private var coordinatedAnimationEnabled: Boolean = true
         private var reduceMotionEnabled: Boolean = false
@@ -905,6 +931,18 @@ class SujianEditorView
             bindSessionInternal(sessionBridge, profile)
             applyProfileToPipeline(profile)
             pipeline.attachSnapshot(text, revision, cursorUtf8, selStartUtf8, selEndUtf8)
+            // #624 评论5：绑定完成并取得焦点后重启输入连接 — 系统重新查询
+            // onCreateInputConnection，保证拿到的 InputConnection 属于当前真实
+            // session（未绑定阶段 onCreateInputConnection 已返回 null）。
+            post {
+                requestFocus()
+                if (isSessionBound) {
+                    val imm =
+                        context.getSystemService(Context.INPUT_METHOD_SERVICE)
+                            as? InputMethodManager
+                    imm?.restartInput(this)
+                }
+            }
             return true
         }
 
@@ -951,10 +989,9 @@ class SujianEditorView
 
         private fun applyProfileToPipeline(profile: TextEditorProfile): Boolean {
             inputAdapter.applyProfile(profile)
-            pipeline.setAutoIndent(
-                profile.autoIndentPolicy == com.xiwei.sujian.feature.editor.session.AutoIndentPolicy.INDENT_ON_ENTER,
-                2f,
-            )
+            // #624 评论3：不再硬编码 setAutoIndent(..., 2f) — DocumentBody 只声明
+            // “允许首行缩进样式”，实际开关和宽度由设置里的 autoIndentEnabled /
+            // autoIndentWidth 经 EditorWindowHost.applyEditorTypography 持续应用。
             inputAdapter.onPerformEditorAction = { _ ->
                 if (profile.commitOnImeAction) {
                     onCommitRequested?.invoke()
@@ -1024,6 +1061,17 @@ class SujianEditorView
             clearFocus()
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             imm?.hideSoftInputFromWindow(windowToken, 0)
+        }
+
+        /**
+         * #624 评论5：进入设置等导航动作前先立刻收 IME — 清焦点 + 隐藏输入法窗口。
+         * 由导航套件在把 Settings 放进 back stack 之前调用，不等 AndroidView
+         * onRelease → unbindSession 晚一拍才 hide keyboard。
+         */
+        fun dismissImeForNavigation() {
+            clearFocus()
+            androidx.core.view.ViewCompat.getWindowInsetsController(this)
+                ?.hide(androidx.core.view.WindowInsetsCompat.Type.ime())
         }
 
         /**

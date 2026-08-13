@@ -110,10 +110,12 @@ fn test_writing_header_actions_order() {
         .iter()
         .filter(|s| s.region == ActionRegion::HeaderTrailing)
         .collect();
-    // #610 评论二：正文自动保存，写作区顶栏只保留真实存在的同步 / 设置。
-    assert_eq!(header.len(), 2);
+    // #624：写作区顶栏恢复 同步 → 搜索 → 设置（搜索入口由 #477 接管，
+    // 功能未完成可点击无动作，但图标不得从产品契约消失）。
+    assert_eq!(header.len(), 3);
     assert_eq!(header[0].role, ActionRole::Sync);
-    assert_eq!(header[1].role, ActionRole::Settings);
+    assert_eq!(header[1].role, ActionRole::Search);
+    assert_eq!(header[2].role, ActionRole::Settings);
     assert!(header.windows(2).all(|w| w[0].order < w[1].order));
 }
 

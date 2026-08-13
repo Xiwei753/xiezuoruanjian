@@ -190,7 +190,6 @@ class AndroidEditorPipeline private constructor(
     }
 
     private var autoIndentEnabled: Boolean = false
-    private var autoIndentWidthSp: Float = 2f
     private var maxLength: Int = 0
     private var typingAnimationDurationMs: Long = 200L
 
@@ -285,6 +284,39 @@ class AndroidEditorPipeline private constructor(
             editPipeline.insertText(byteOffset, text, cause)
                 ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
+    }
+
+    /**
+     * #624 评论2：唯一换行命令入口 — 软键盘 commitText("\n")、硬件 Enter、
+     * 粘贴换行都收敛到这里。无选区时走 Core insertLineBreak（继承 auto-indent
+     * 策略）；有选区时通过 Core 的单一“换行替换”语义完成（一次 replace 命令
+     * 把选区换成 \n），不在平台端先删选区再插入换行。
+     */
+    override fun insertLineBreak(cause: EditorTransactionCauseDto): PipelineOutput {
+        val selStart = editPipeline.getCommittedSelectionStartUtf8()
+        val selEnd = editPipeline.getCommittedSelectionEndUtf8()
+        if (selStart != selEnd) {
+            val originalText = committedSubstring(selStart, selEnd)
+            val result =
+                editPipeline.replaceRange(selStart, selEnd, "\n", originalText, cause)
+                    ?: return PipelineOutput.StaleOrInvalid
+            return applyEditResult(result)
+        }
+        val byteOffset = editPipeline.getCommittedCursorUtf8()
+        val result =
+            editPipeline.insertLineBreak(byteOffset, autoIndentEnabled, cause)
+                ?: return PipelineOutput.StaleOrInvalid
+        return applyEditResult(result)
+    }
+
+    private fun committedSubstring(
+        startUtf8: Int,
+        endUtf8: Int,
+    ): String {
+        val bytes = editPipeline.getCommittedText().toByteArray(Charsets.UTF_8)
+        val safeStart = startUtf8.coerceIn(0, bytes.size)
+        val safeEnd = endUtf8.coerceIn(safeStart, bytes.size)
+        return String(bytes, safeStart, safeEnd - safeStart, Charsets.UTF_8)
     }
 
     override fun deleteRange(
@@ -402,7 +434,7 @@ class AndroidEditorPipeline private constructor(
             layoutEngine = layoutRuntime.layoutEngine,
             mirrorUpdate = {
                 editPipeline.applyEditResult(result)
-                layoutRuntime.rebuildDisplayProjection()
+                layoutRuntime.onMirrorContentChanged(result.displayPatches)
             },
             beforePatch = beforePatch,
         )
@@ -456,7 +488,7 @@ class AndroidEditorPipeline private constructor(
             layoutEngine = layoutRuntime.layoutEngine,
             mirrorUpdate = {
                 editPipeline.applyEditResult(result)
-                layoutRuntime.rebuildDisplayProjection()
+                layoutRuntime.onMirrorContentChanged(result.displayPatches)
             },
             beforePatch = beforePatch,
         )
@@ -484,12 +516,12 @@ class AndroidEditorPipeline private constructor(
                 layoutEngine = layoutRuntime.layoutEngine,
                 mirrorUpdate = {
                     mirrorUpdate?.invoke()
-                    layoutRuntime.rebuildDisplayProjection()
+                    layoutRuntime.onMirrorContentChanged()
                 },
             )
         } else {
             mirrorUpdate?.invoke()
-            layoutRuntime.rebuildDisplayProjection()
+            layoutRuntime.onMirrorContentChanged()
         }
     }
 
@@ -512,12 +544,12 @@ class AndroidEditorPipeline private constructor(
                 layoutEngine = layoutRuntime.layoutEngine,
                 mirrorUpdate = {
                     mirrorUpdate?.invoke()
-                    layoutRuntime.rebuildDisplayProjection()
+                    layoutRuntime.onMirrorContentChanged()
                 },
             )
         } else {
             mirrorUpdate?.invoke()
-            layoutRuntime.rebuildDisplayProjection()
+            layoutRuntime.onMirrorContentChanged()
         }
     }
 
@@ -702,17 +734,27 @@ class AndroidEditorPipeline private constructor(
 
     fun getCommittedText(): String = editPipeline.getCommittedText()
 
-    fun setAutoIndent(
-        enabled: Boolean,
-        widthSp: Float,
-    ) {
+    /**
+     * Core insertLineBreak 的 auto-indent 策略（继承当前行前导空白 — 代码编辑器式
+     * 语义）。#624 评论3：写作软件的首行缩进不往正文塞空格，由 [setFirstLineIndent]
+     * 以显示层 span 实现；本开关只跟随设置值，不再由 profile 硬编码。
+     */
+    fun setAutoIndent(enabled: Boolean) {
         autoIndentEnabled = enabled
-        autoIndentWidthSp = widthSp
+    }
+
+    /**
+     * #624 评论3：首行缩进显示样式（开关 + 字符宽度）透传给 layout runtime —
+     * 由 ParagraphStyleProjection 以 span 施加在显示层，不改正文字符串。
+     */
+    fun setFirstLineIndent(
+        enabled: Boolean,
+        widthChars: Float,
+    ) {
+        layoutRuntime.setFirstLineIndent(enabled, widthChars)
     }
 
     fun isAutoIndentEnabled(): Boolean = autoIndentEnabled
-
-    fun getAutoIndentWidthSp(): Float = autoIndentWidthSp
 
     /**
      * #606: Returns the byte length of the grapheme cluster immediately before [offset].
@@ -747,6 +789,9 @@ class AndroidEditorPipeline private constructor(
         val layout = layoutRuntime.getLayout() ?: return 0f
         return (layout.height - viewHeight).coerceAtLeast(0).toFloat()
     }
+
+    /** 当前排版实例（只读查询）— 测试与宿主可验证 DynamicLayout 复用契约（#624 评论7）。 */
+    fun getLayout(): android.text.Layout? = layoutRuntime.getLayout()
 
     fun getLayoutLineForVertical(y: Int): Int {
         val layout = layoutRuntime.getLayout() ?: return 0

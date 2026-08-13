@@ -65,6 +65,14 @@ class AndroidInputConnection(
             notifySelectionChanged()
             return true
         }
+        // #624 评论2：非 composition 状态收到 "\n" / "\r\n" 不再走普通
+        // sendCommitTextToKernel()，统一调用 insertLineBreak()（CRLF 先规范化为
+        // 一个逻辑换行）。连续按 Enter 得到连续 \n，第二个空行不会被吞掉。
+        if (commitStr == "\n" || commitStr == "\r\n") {
+            commandPort.insertLineBreak(EditorTransactionCauseDto.TYPING)
+            notifySelectionChanged()
+            return true
+        }
         val selStart = mirror.getCommittedSelectionStartUtf8()
         val selEnd = mirror.getCommittedSelectionEndUtf8()
         val byteStart = selStart

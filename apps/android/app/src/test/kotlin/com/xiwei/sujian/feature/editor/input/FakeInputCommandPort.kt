@@ -582,6 +582,24 @@ class FakeInputCommandPort(
         return PipelineOutput.Edited(EditResult.fromDto(dto))
     }
 
+    /** #624 评论2：换行命令 — 无选区插 \n，有选区时按“换行替换”语义一次替换。 */
+    override fun insertLineBreak(cause: EditorTransactionCauseDto): PipelineOutput {
+        val selStart = mirror.getSelectionStartUtf8()
+        val selEnd = mirror.getSelectionEndUtf8()
+        if (selStart != selEnd) {
+            return replaceRangeTyped(
+                selStart,
+                selEnd,
+                "\n",
+                "",
+                cause,
+                null,
+                com.xiwei.sujian.feature.editor.platform.EditorEditSource.NORMAL,
+            )
+        }
+        return insertText(mirror.getCursorUtf8(), "\n", cause)
+    }
+
     override fun deleteRange(
         byteStart: Int,
         byteEndExclusive: Int,

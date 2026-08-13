@@ -87,6 +87,8 @@ fun WritingPane(
 
     // 生产动画链：设置状态 → Editor Host → 输入事务 → 动画协调器 → 真实 VSync 渲染。
     WritingPaneMotionPolicySync(coordinator, uiState.settings, chapterId)
+    // #624 评论3/4：字号/行距/首行缩进 → Editor Host → 当前共享 View 立即重排。
+    WritingPaneTypographySync(coordinator, uiState.settings, chapterId)
     WritingPaneSettingsReload(viewModel, targetId)
 
     // #595 一：章节切换收口 — 宿主已用 requestOpenChapter 预提交章节
@@ -308,6 +310,30 @@ private fun WritingPaneMotionPolicySync(
                 coordinated = settings.coordinatedTextCursorAnimationEnabled,
                 reduceMotion = settings.reduceMotion,
             ),
+        )
+    }
+}
+
+/** 排版设置链：字号/行距/首行缩进设置 → Editor Host → 当前共享编辑器 View。
+ * 设置变化后当前正文立即重排，不重建编辑 session（#624 评论3）。 */
+@Composable
+private fun WritingPaneTypographySync(
+    coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
+    settings: EditorSettingsState,
+    chapterId: String,
+) {
+    LaunchedEffect(
+        settings.fontSize,
+        settings.lineSpacingMultiplier,
+        settings.autoIndentEnabled,
+        settings.autoIndentWidth,
+        chapterId,
+    ) {
+        coordinator.applyEditorTypography(
+            fontSizeSp = settings.fontSize,
+            lineSpacingMultiplier = settings.lineSpacingMultiplier,
+            autoIndentEnabled = settings.autoIndentEnabled,
+            autoIndentWidth = settings.autoIndentWidth,
         )
     }
 }

@@ -44,10 +44,15 @@ fun EditorViewModel.scheduleAutoSave(content: String) {
                 // #595 七：保存命令携带入队时的 Rust session revision — 回执按
                 // (target, revision) 记录，Flush 屏障据此验证 revision 对应正文已落盘。
                 val revision = _sessionCoordinator?.sessionState?.revision ?: 0L
-                if (content.trim().isEmpty() && contentExplicitlyCleared) {
-                    saveCommandChannel.trySend(SaveCommand.Clear(session, revision))
-                } else if (content.trim().isNotEmpty()) {
-                    saveCommandChannel.trySend(SaveCommand.Save(content, session, revision))
+                // #624 评论1：正文是否为空只看原始字符串 — "\n"、连续空行、
+                // 只含空格/制表符的段落都是用户正文，不能被 trim 后当成空正文拒绝保存。
+                when {
+                    !contentDirty -> Unit
+                    content.isNotEmpty() ->
+                        saveCommandChannel.trySend(SaveCommand.Save(content, session, revision))
+                    content.isEmpty() && contentExplicitlyCleared ->
+                        saveCommandChannel.trySend(SaveCommand.Clear(session, revision))
+                    else -> Unit // UnexpectedEmptyBuffer：空但未确认清空 — 不发任何保存命令
                 }
             }
         }
@@ -102,7 +107,9 @@ private suspend fun EditorViewModel.dispatchSaveCommand(
         return true
     }
     val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
-    if (content.trim().isEmpty()) {
+    // #624 评论1：空正文判定只看原始字符串 — "\n" 等空白正文按真实内容保存，
+    // 只有真正的 "" 才走"防止异常空覆盖"保护。
+    if (content.isEmpty()) {
         if (contentExplicitlyCleared) {
             if (saveCommandChannel.trySend(SaveCommand.Clear(session, requiredRevision)).isFailure) {
                 return false
@@ -408,7 +415,9 @@ suspend fun EditorViewModel.performSave(
     isAutoSave: Boolean,
     revisionAtEnqueue: Long = 0L,
 ): Boolean {
-    if (content.trim().isEmpty()) {
+    // #624 评论1："\n"/连续空行/纯空白段落是用户正文，原样保存；
+    // 只有真正的空字符串才触发清空语义。
+    if (content.isEmpty()) {
         if (contentExplicitlyCleared) {
             return clearChapterContentInternal(session, revisionAtEnqueue)
         }

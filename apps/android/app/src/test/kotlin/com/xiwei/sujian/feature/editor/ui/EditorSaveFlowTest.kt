@@ -49,6 +49,12 @@ import org.robolectric.annotation.Config
 class EditorSaveFlowTest {
     private companion object {
         const val TARGET_ID = "chapter-body:p:v:a"
+
+        /** #624 评论1：纯空行正文 — 是用户正文，不是空文档。 */
+        const val TWO_NEWLINES = "\n\n"
+
+        /** #624 评论1：只含空格/制表符的段落正文。 */
+        const val INDENT_ONLY_BODY = "   \t\n"
     }
 
     /** 可控假保存器 — 每次调用挂起在 gate 上，测试放行后返回预设回执。 */
@@ -208,6 +214,77 @@ class EditorSaveFlowTest {
             assertEquals("hash-A", vm.uiState.value.chapterHash)
             assertFalse("保存成功后 dirty 必须清", vm.contentDirty)
         }
+
+    /**
+     * #624 评论1："\n"、连续空行、纯空白段落都是用户正文，原样保存 —
+     * 不能被 trim 后当成“空正文”拒绝保存（旧逻辑会把它们当作空内容跳过保存，
+     * 造成正文从未落盘却显示“保存失败”的假象）。
+     */
+    @Test
+    fun whitespaceOnlyBody_newlinesSavedAsRealContent() =
+        runTest(UnconfinedTestDispatcher()) {
+            commitSession(text = TWO_NEWLINES, revision = 1L)
+            // 立即返回的保存端口 — 不挂起，直接记录保存内容。
+            val immediatePort = ImmediateSavePort()
+            vm.chapterSavePort = immediatePort
+
+            val ok =
+                vm.performSave(
+                    TWO_NEWLINES,
+                    requireNotNull(vm.currentSession),
+                    isAutoSave = false,
+                    revisionAtEnqueue = 1L,
+                )
+
+            assertTrue("空白正文必须真正落盘", ok)
+            assertEquals("保存内容必须原样保留 \n\n", TWO_NEWLINES, immediatePort.savedContent)
+            assertEquals(SaveStatus.Saved, vm.uiState.value.saveStatus)
+        }
+
+    /** #624 评论1：只含缩进/空白的段落也是正文 — 不 trim、不拒绝。 */
+    @Test
+    fun bodyWithOnlyIndentSpaces_savedAsIs() =
+        runTest(UnconfinedTestDispatcher()) {
+            commitSession(text = INDENT_ONLY_BODY, revision = 1L)
+            val immediatePort = ImmediateSavePort()
+            vm.chapterSavePort = immediatePort
+
+            val ok =
+                vm.performSave(
+                    INDENT_ONLY_BODY,
+                    requireNotNull(vm.currentSession),
+                    isAutoSave = false,
+                    revisionAtEnqueue = 1L,
+                )
+
+            assertTrue(ok)
+            assertEquals("带空格/制表符的段落必须原样保存", INDENT_ONLY_BODY, immediatePort.savedContent)
+            assertEquals(SaveStatus.Saved, vm.uiState.value.saveStatus)
+        }
+
+    /** 立即返回成功的假保存端口 — 用于不关心 IO 挂起时序的保存语义测试。 */
+    private class ImmediateSavePort : ChapterContentSavePort {
+        var savedContent: String? = null
+
+        override suspend fun saveChapterContent(
+            projectId: String,
+            volumeId: String,
+            chapterId: String,
+            content: String,
+        ): BridgeResult<ChapterSaveReceipt> {
+            savedContent = content
+            return BridgeResult.Success(
+                ChapterSaveReceipt(
+                    chapterRelativePath = "chapters/a.md",
+                    contentLen = content.toByteArray(Charsets.UTF_8).size.toLong(),
+                    contentHash = "hash-$content",
+                    metaHash = "meta-A",
+                    updatedAt = "2026-08-07T00:00:00Z",
+                    wordCount = 0,
+                ),
+            )
+        }
+    }
 
     private suspend fun runCurrentUntil(condition: () -> Boolean) {
         var spins = 0

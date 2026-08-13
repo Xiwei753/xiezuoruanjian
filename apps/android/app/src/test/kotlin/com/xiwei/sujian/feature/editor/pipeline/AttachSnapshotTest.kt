@@ -4,13 +4,22 @@ import android.text.TextPaint
 import com.xiwei.sujian.feature.editor.interop.EditorKernelBridge
 import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import uniffi.writer_core.AnimationModeDto
+import uniffi.writer_core.CoordinatedCursorDto
+import uniffi.writer_core.DisplayPatchDto
+import uniffi.writer_core.EditorByteRangeDto
+import uniffi.writer_core.EditorEditOutcomeDto
 import uniffi.writer_core.EditorEditResultDto
+import uniffi.writer_core.EditorOperationKindDto
 import uniffi.writer_core.EditorTransactionCauseDto
+import uniffi.writer_core.EditorVisualIntentDto
 
 /**
  * #592 一：attachSnapshot 契约测试。
@@ -26,6 +35,7 @@ class AttachSnapshotTest {
     private class RecordingBridge : EditorKernelBridge {
         var loadTextCalls = 0
         var insertCalls = 0
+        var insertResult: EditorEditResultDto? = null
 
         override fun insert(
             byteOffset: Int,
@@ -34,7 +44,7 @@ class AttachSnapshotTest {
             expectedRevision: Long,
         ): EditorEditResultDto? {
             insertCalls++
-            return null
+            return insertResult
         }
 
         override fun delete(
@@ -210,4 +220,63 @@ class AttachSnapshotTest {
         pipeline.insertText(3, "d", EditorTransactionCauseDto.TYPING)
         assertTrue("后续编辑必须到达 bridge", bridge.insertCalls == 1)
     }
+
+    /**
+     * #624 评论7：普通编辑（普通正文，无 secret projection）走 mirror 增量修改 +
+     * identity 投影刷新，不重建 DynamicLayout — 布局实例跨编辑保持同一个，
+     * 只有 revision 前进。旧代码在每次编辑时 rebuildDisplayProjection 清 fingerprint，
+     * 导致每字符都 new DynamicLayout（卡顿来源之一）。
+     */
+    @Test
+    fun plainEdit_reusesSameDynamicLayout() {
+        val (pipeline, bridge) = newPipeline()
+        pipeline.attachSnapshot(text = "ab\ncd", revision = 0L, cursorUtf8 = 5, selStartUtf8 = 5, selEndUtf8 = 5)
+        pipeline.updateLayout(500f)
+        val layoutBefore = pipeline.getLayout()
+        assertNotNull("首次布局必须已建立", layoutBefore)
+        bridge.insertResult = appliedInsertDto()
+
+        val output = pipeline.insertText(1, "X", EditorTransactionCauseDto.TYPING)
+
+        assertTrue("普通编辑必须成功应用", output is PipelineOutput.Edited)
+        assertSame("普通编辑必须复用同一个 DynamicLayout", layoutBefore, pipeline.getLayout())
+        assertEquals("mirror 反映新正文", "aXb\ncd", pipeline.getText())
+        assertEquals("kernel revision 前进", 1L, pipeline.getRevision())
+    }
+
+    private fun appliedInsertDto(): EditorEditResultDto =
+        EditorEditResultDto(
+            outcome = EditorEditOutcomeDto.APPLIED,
+            transactionId = 1uL,
+            baseRevision = 0uL,
+            newRevision = 1uL,
+            displayPatches =
+                listOf(
+                    DisplayPatchDto(
+                        baseRevision = 0uL,
+                        newRevision = 1uL,
+                        replaceByteStart = 1u,
+                        replaceByteEndExclusive = 1u,
+                        insertedText = "X",
+                        resultingSelectionStart = 2u,
+                        resultingSelectionEnd = 2u,
+                    ),
+                ),
+            oldSelectionStart = 1u,
+            oldSelectionEnd = 1u,
+            newSelectionStart = 2u,
+            newSelectionEnd = 2u,
+            visualIntent =
+                EditorVisualIntentDto(
+                    cause = EditorTransactionCauseDto.TYPING,
+                    operationKind = EditorOperationKindDto.INSERT,
+                    oldAffectedByteRanges = emptyList(),
+                    newAffectedByteRanges = listOf(EditorByteRangeDto(1u, 2u)),
+                    animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
+                    durationMs = 0uL,
+                    coordinatedCursor = CoordinatedCursorDto(1u, 2u, false),
+                    offsetMap = null,
+                ),
+            compositionSession = null,
+        )
 }

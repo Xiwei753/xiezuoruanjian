@@ -24,7 +24,7 @@ internal enum class SujianChromeAction {
     /** 手动触发同步并显示同步状态图标（Material3 视觉最左）。 */
     Sync,
 
-    /** 搜索（当前未实现，保留入口占位）。 */
+    /** 搜索（#624：恢复写作页入口，功能由 #477 全局搜索接管，接入前点击无动作）。 */
     Search,
 
     /** 打开设置一级页面（Material3 视觉最右）。 */
@@ -52,7 +52,7 @@ internal object AndroidChromePolicy {
      * 在 Android 必须有真实消费点：
      * - 作品列表 → ProjectList（新建作品主操作/作品菜单）
      * - 章节树 → ProjectWorkspace（同步/搜索/设置 + 卷章动作）
-     * - 正文 → Writing（写作区只保留同步/设置，搜索不进入写作区，#597）
+     * - 正文 → Writing（写作区顶栏 同步/搜索/设置，#624；搜索入口由 #477 接管）
      * - Settings/StarMap/Stats → 对应角色
      */
     fun screenRoleFor(
