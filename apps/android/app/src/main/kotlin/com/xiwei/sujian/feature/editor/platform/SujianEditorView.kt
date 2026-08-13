@@ -633,12 +633,21 @@ class SujianEditorView
                     return true
                 }
                 KeyEvent.KEYCODE_FORWARD_DEL -> {
+                    // #624 评论7：与 KEYCODE_DEL 一致 — 有活动 composition 时先取消，
+                    // 不在 overlay 状态下执行前向删除。
+                    if (inputAdapter.isComposing()) {
+                        inputAdapter.handleCompositionCancel()
+                        return true
+                    }
                     val selStart = pipeline.getSelectionStartUtf8()
                     val selEnd = pipeline.getSelectionEndUtf8()
                     if (selStart != selEnd) {
                         replaceRange(selStart, selEnd, "")
                     } else {
-                        val textLen = pipeline.getText().toByteArray(Charsets.UTF_8).size
+                        // #624 评论7：用 O(1) committed UTF-8 长度判断光标是否在文末，
+                        // 不再 getText().toByteArray() 整章复制。composition 已在上文取消，
+                        // display text == committed text，偏移语义一致。
+                        val textLen = pipeline.getCommittedTextLengthUtf8()
                         if (selEnd < textLen) {
                             val nextGraphemeLen = pipeline.nextGraphemeByteLen(selEnd)
                             if (nextGraphemeLen > 0) {
