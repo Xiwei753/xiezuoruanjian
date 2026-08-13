@@ -16,7 +16,7 @@ internal class AffectedLineCapture {
     /** 捕获上下文 — 一次编辑的布局/投影/缩进设置快照。 */
     class CaptureParams(
         val layout: Layout,
-        val layoutText: String,
+        val layoutText: CharSequence,
         val projection: DisplayTextProjection,
         val mirror: DisplayTextMirror,
         val firstLineIndentEnabled: Boolean,
@@ -78,7 +78,7 @@ internal class AffectedLineCapture {
      * 新段落内容来自旧编辑段）。
      */
     private fun collectAffectedParagraphStarts(
-        layoutText: String,
+        layoutText: CharSequence,
         safeStart: Int,
         safeEnd: Int,
         includeNextParagraph: Boolean,
@@ -110,7 +110,7 @@ internal class AffectedLineCapture {
     /** 逐段捕获视觉行（绝对行号 + LineRange），段落 id 在捕获范围内递增。 */
     private fun buildAffectedLines(
         l: Layout,
-        layoutText: String,
+        layoutText: CharSequence,
         projection: DisplayTextProjection,
         affectedParagraphStarts: List<Int>,
     ): Pair<Int, List<AndroidLayoutRevision.LineRange>> {
@@ -158,7 +158,7 @@ internal class AffectedLineCapture {
     private fun buildLineRange(
         l: Layout,
         i: Int,
-        layoutText: String,
+        layoutText: CharSequence,
         projection: DisplayTextProjection,
         paragraphId: Int,
         paragraphLocalLineIndex: Int,
@@ -245,7 +245,7 @@ internal class AffectedLineCapture {
 
     /** 光标位于正文末尾的空段落起点（文本为空，或最后一个字符是 `\n`）。 */
     private fun cursorAtEmptyTrailingParagraph(
-        layoutText: String,
+        layoutText: CharSequence,
         cursorDisplayUtf16: Int,
     ): Boolean {
         if (cursorDisplayUtf16 != layoutText.length) return false

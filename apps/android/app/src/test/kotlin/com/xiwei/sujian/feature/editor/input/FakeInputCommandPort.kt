@@ -819,8 +819,6 @@ class FakeInputCommandPort(
         mirrorUpdate?.invoke()
     }
 
-    override fun onCompositionUpdated() = Unit
-
     /**
      * Simulate an out-of-band kernel text reset (external sync / chapter switch while the
      * editor is bound): the kernel replaces the committed text, bumps the revision and

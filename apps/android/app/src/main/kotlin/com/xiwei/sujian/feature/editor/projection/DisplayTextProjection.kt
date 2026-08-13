@@ -52,8 +52,11 @@ class DisplayTextProjection(
         )
 
         private fun buildRealBoundaries(text: String): Pair<IntArray, IntArray> {
-            val realUtf8List = mutableListOf(0)
-            val realUtf16List = mutableListOf(0)
+            // 单遍无装箱构建（#624 评论3：identity 投影每键重建，不能逐字符装箱）。
+            val capacity = text.length + 1
+            val realUtf8Arr = IntArray(capacity)
+            val realUtf16Arr = IntArray(capacity)
+            var count = 0
             var bytePos = 0
             var utf16Pos = 0
             var i = 0
@@ -61,24 +64,12 @@ class DisplayTextProjection(
                 val codePoint = text.codePointAt(i)
                 bytePos += utf8ByteLength(codePoint)
                 utf16Pos += Character.charCount(codePoint)
-                realUtf8List.add(bytePos)
-                realUtf16List.add(utf16Pos)
+                count++
+                realUtf8Arr[count] = bytePos
+                realUtf16Arr[count] = utf16Pos
                 i += Character.charCount(codePoint)
             }
-            return Pair(realUtf8List.toIntArray(), realUtf16List.toIntArray())
-        }
-
-        private fun buildDisplayBoundaries(text: String): IntArray {
-            val displayUtf16List = mutableListOf(0)
-            var displayUtf16Pos = 0
-            var j = 0
-            while (j < text.length) {
-                val codePoint = text.codePointAt(j)
-                displayUtf16Pos += Character.charCount(codePoint)
-                displayUtf16List.add(displayUtf16Pos)
-                j += Character.charCount(codePoint)
-            }
-            return displayUtf16List.toIntArray()
+            return Pair(realUtf8Arr.copyOf(count + 1), realUtf16Arr.copyOf(count + 1))
         }
 
         private fun lookupByBinarySearch(
@@ -93,9 +84,10 @@ class DisplayTextProjection(
         }
 
         fun identity(text: String): DisplayTextProjection {
-            val bytes = text.toByteArray(Charsets.UTF_8)
             val (realUtf8Arr, realUtf16Arr) = buildRealBoundaries(text)
             val utf16Len = realUtf16Arr.lastOrNull() ?: 0
+            // 总 UTF-8 字节数来自边界构建的末位 — 不再 toByteArray 整章拷贝。
+            val utf8Len = realUtf8Arr.lastOrNull() ?: 0
 
             return DisplayTextProjection(
                 realText = text,
@@ -109,7 +101,7 @@ class DisplayTextProjection(
                         },
                         displayUtf16ToRealUtf8 = { utf16 ->
                             val idx = lookupByBinarySearch(realUtf16Arr, utf16)
-                            realUtf8Arr.getOrElse(idx) { bytes.size }.coerceIn(0, bytes.size)
+                            realUtf8Arr.getOrElse(idx) { utf8Len }.coerceIn(0, utf8Len)
                         },
                         realUtf16ToDisplayUtf16 = { realUtf16 ->
                             val idx = lookupByBinarySearch(realUtf16Arr, realUtf16)
@@ -125,10 +117,10 @@ class DisplayTextProjection(
                         },
                         realUtf16ToRealUtf8 = { utf16 ->
                             val idx = lookupByBinarySearch(realUtf16Arr, utf16)
-                            realUtf8Arr.getOrElse(idx) { bytes.size }.coerceIn(0, bytes.size)
+                            realUtf8Arr.getOrElse(idx) { utf8Len }.coerceIn(0, utf8Len)
                         },
                         displayLengthUtf16 = utf16Len,
-                        realLengthUtf8 = bytes.size,
+                        realLengthUtf8 = utf8Len,
                         realLengthUtf16 = utf16Len,
                     ),
             )
@@ -141,7 +133,6 @@ class DisplayTextProjection(
             compText: String,
             maskChar: String = "\u2022",
         ): DisplayTextProjection {
-            val bytes = text.toByteArray(Charsets.UTF_8)
             val utf16Len = text.length
             var safeCompStart = compStartUtf16.coerceIn(0, utf16Len)
             var safeCompEnd = compEndUtf16.coerceIn(safeCompStart, utf16Len)
@@ -181,6 +172,7 @@ class DisplayTextProjection(
             val displayLen = displayText.length
 
             val (realUtf8Arr, realUtf16Arr) = buildRealBoundaries(text)
+            val utf8Len = realUtf8Arr.lastOrNull() ?: 0
 
             val codePointCount = realUtf8Arr.size - 1
             var compStartCp: Int = 0
@@ -230,23 +222,23 @@ class DisplayTextProjection(
                 when {
                     safeUtf16 < preCompDisplayUtf16 -> {
                         val cpPos = safeUtf16
-                        realUtf8Arr.getOrElse(cpPos) { bytes.size }.coerceIn(0, bytes.size)
+                        realUtf8Arr.getOrElse(cpPos) { utf8Len }.coerceIn(0, utf8Len)
                     }
                     safeUtf16 < postCompDisplayUtf16Start -> {
                         if (compTextUtf16Len == 0) {
-                            realUtf8Arr.getOrElse(compStartCp) { bytes.size }.coerceIn(0, bytes.size)
+                            realUtf8Arr.getOrElse(compStartCp) { utf8Len }.coerceIn(0, utf8Len)
                         } else {
                             val cpPos =
                                 compStartCp +
                                     ((safeUtf16 - preCompDisplayUtf16) * (compEndCp - compStartCp) / compTextUtf16Len)
                             realUtf8Arr.getOrElse(
                                 cpPos.coerceIn(compStartCp, compEndCp),
-                            ) { bytes.size }.coerceIn(0, bytes.size)
+                            ) { utf8Len }.coerceIn(0, utf8Len)
                         }
                     }
                     else -> {
                         val cpPos = compEndCp + (safeUtf16 - postCompDisplayUtf16Start)
-                        realUtf8Arr.getOrElse(cpPos.coerceIn(0, codePointCount)) { bytes.size }.coerceIn(0, bytes.size)
+                        realUtf8Arr.getOrElse(cpPos.coerceIn(0, codePointCount)) { utf8Len }.coerceIn(0, utf8Len)
                     }
                 }
             }
@@ -300,7 +292,7 @@ class DisplayTextProjection(
 
             val realUtf16ToRealUtf8Mapping = { utf16: Int ->
                 val idx = lookupByBinarySearch(realUtf16Arr, utf16)
-                realUtf8Arr.getOrElse(idx) { bytes.size }.coerceIn(0, bytes.size)
+                realUtf8Arr.getOrElse(idx) { utf8Len }.coerceIn(0, utf8Len)
             }
 
             return DisplayTextProjection(
@@ -316,7 +308,7 @@ class DisplayTextProjection(
                         realUtf8ToRealUtf16 = realUtf8ToRealUtf16Mapping,
                         realUtf16ToRealUtf8 = realUtf16ToRealUtf8Mapping,
                         displayLengthUtf16 = displayLen,
-                        realLengthUtf8 = bytes.size,
+                        realLengthUtf8 = utf8Len,
                         realLengthUtf16 = utf16Len,
                     ),
             )
@@ -326,7 +318,6 @@ class DisplayTextProjection(
             text: String,
             maskChar: String = "\u2022",
         ): DisplayTextProjection {
-            val bytes = text.toByteArray(Charsets.UTF_8)
             val displayText =
                 buildString {
                     var i = 0
@@ -345,6 +336,7 @@ class DisplayTextProjection(
             val (realUtf8Arr, realUtf16Arr) = buildRealBoundaries(text)
             val codePointCount = realUtf8Arr.size - 1
             val utf16Len = realUtf16Arr.lastOrNull() ?: 0
+            val utf8Len = realUtf8Arr.lastOrNull() ?: 0
 
             return DisplayTextProjection(
                 realText = text,
@@ -358,7 +350,7 @@ class DisplayTextProjection(
                         },
                         displayUtf16ToRealUtf8 = { utf16 ->
                             val cpPos = utf16.coerceIn(0, codePointCount)
-                            realUtf8Arr.getOrElse(cpPos) { bytes.size }.coerceIn(0, bytes.size)
+                            realUtf8Arr.getOrElse(cpPos) { utf8Len }.coerceIn(0, utf8Len)
                         },
                         realUtf16ToDisplayUtf16 = { realUtf16 ->
                             val idx = lookupByBinarySearch(realUtf16Arr, realUtf16)
@@ -374,10 +366,10 @@ class DisplayTextProjection(
                         },
                         realUtf16ToRealUtf8 = { utf16 ->
                             val idx = lookupByBinarySearch(realUtf16Arr, utf16)
-                            realUtf8Arr.getOrElse(idx) { bytes.size }.coerceIn(0, bytes.size)
+                            realUtf8Arr.getOrElse(idx) { utf8Len }.coerceIn(0, utf8Len)
                         },
                         displayLengthUtf16 = displayLen,
-                        realLengthUtf8 = bytes.size,
+                        realLengthUtf8 = utf8Len,
                         realLengthUtf16 = utf16Len,
                     ),
             )

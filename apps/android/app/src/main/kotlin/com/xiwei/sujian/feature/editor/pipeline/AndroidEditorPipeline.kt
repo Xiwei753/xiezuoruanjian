@@ -558,19 +558,6 @@ class AndroidEditorPipeline private constructor(
     }
 
     /**
-     * Request a layout rebuild after composition state changes.
-     *
-     * Composition overlay changes (preedit text, underline) are applied to the mirror's
-     * Spannable but do not automatically trigger a layout rebuild. This method must be
-     * called after composition updates so that [AndroidLayoutEngine] produces a new
-     * [AndroidLayoutRevision] reflecting the updated composition overlay — without it,
-     * the renderer would draw the old composition state.
-     */
-    override fun onCompositionUpdated() {
-        layoutRuntime.requestLayout()
-    }
-
-    /**
      * Render one frame. Layer order when animation is active:
      * background → search highlights → selection → static text with holes → animated slices
      * → preedit underline → animated cursor (or static cursor if no cursor transition).

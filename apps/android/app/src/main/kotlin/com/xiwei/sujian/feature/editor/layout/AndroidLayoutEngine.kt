@@ -179,7 +179,11 @@ class AndroidLayoutEngine(
         val l = layout ?: return null
         if (width <= 0f) return null
         val projection = currentProjection ?: DisplayTextProjection.identity(mirror.getText())
-        val layoutText = displayTextOverride ?: mirror.getText()
+        // #624 评论3：热路径不整章复制 — layoutText 直接引用 mirror 的 Spannable
+        // （与 DynamicLayout 同源，段落边界扫描/行内容判定一致），不再每次
+        // getText() 拷贝整章 String。masked override 时是小型 masked 文本。
+        val layoutText: CharSequence =
+            displayTextOverride?.let { SpannableStringBuilder(it) } ?: mirror.getSpannable()
 
         val regionStartUtf16 = projection.realUtf8ToDisplayUtf16(editStartUtf8.coerceAtLeast(0))
         val regionEndUtf16 = projection.realUtf8ToDisplayUtf16(editEndUtf8.coerceAtLeast(0))
@@ -200,7 +204,8 @@ class AndroidLayoutEngine(
             ) ?: return null
 
         // ── 稳定后缀锚点：受影响区域之后第一个内容未变化的段落起点 ──
-        val textLengthUtf8 = mirror.getText().toByteArray(Charsets.UTF_8).size
+        // 字节长度 O(1) 读取（mirror 增量维护，不做整章 toByteArray — #624 评论3）。
+        val textLengthUtf8 = mirror.getTextLengthUtf8()
         val stableAnchor =
             if (captured.affectedEndUtf16 < layoutText.length) {
                 val anchorLine = l.getLineForOffset(captured.affectedEndUtf16)
@@ -349,7 +354,8 @@ class AndroidLayoutEngine(
 
     private fun buildRevision(l: Layout): AndroidLayoutRevision {
         val projection = currentProjection ?: DisplayTextProjection.identity(mirror.getText())
-        val layoutText = displayTextOverride ?: mirror.getText()
+        val layoutText: CharSequence =
+            displayTextOverride?.let { SpannableStringBuilder(it) } ?: mirror.getSpannable()
         // 全量捕获：区域覆盖整个文档，行捕获器按段落推进生成全部 lineRanges。
         val captured =
             lineCapture.capture(

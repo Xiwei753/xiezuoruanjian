@@ -266,16 +266,6 @@ class SujianEditorView
             }
         }
 
-        fun onCompositionUpdated() {
-            pipeline.onCompositionUpdated()
-            updateMaxScroll()
-            scrollY = scrollY.coerceIn(0f, maxScrollY)
-            invalidate()
-            if (pipeline.hasActiveAnimation()) {
-                requestAnimationFrame()
-            }
-        }
-
         fun getText(): String = pipeline.getText()
 
         /**

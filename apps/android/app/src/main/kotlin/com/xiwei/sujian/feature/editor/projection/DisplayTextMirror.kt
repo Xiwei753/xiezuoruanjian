@@ -295,7 +295,23 @@ class DisplayTextMirror {
     private var compositionOriginalText: String = ""
     private var hasActiveComposition: Boolean = false
 
+    /**
+     * 已提交缓冲区的 UTF-8 字节长度 — 随 patch/装载增量维护，避免热路径上
+     * `getText().toByteArray(Charsets.UTF_8).size` 的整章拷贝（#624 评论3：
+     * 每键热路径不得做整章级复制）。
+     */
+    private var committedTextLengthUtf8: Int = 0
+
+    /** 活动 composition 覆盖层相对已提交文本的 UTF-8 字节增量（无覆盖时为 0）。 */
+    private var compositionOverlayDeltaUtf8: Int = 0
+
     fun getText(): String = buffer.toString()
+
+    /**
+     * 当前缓冲区的 UTF-8 字节长度（含活动 composition 覆盖层，与 [getText] 一致）。
+     * O(1) 读取 — 由 [applyPatches]/[loadFromSnapshot]/[updateComposition] 增量维护。
+     */
+    fun getTextLengthUtf8(): Int = committedTextLengthUtf8 + compositionOverlayDeltaUtf8
 
     fun getCursorUtf8(): Int = cursorUtf8
 
@@ -420,6 +436,9 @@ class DisplayTextMirror {
             val replaceEndUtf16 = indexMap.utf8ToUtf16(normReplaceEnd)
 
             buffer.replace(replaceStartUtf16, replaceEndUtf16, patch.insertedText as CharSequence)
+            // 增量维护 UTF-8 字节长度：被替换区间字节数（patch 字节坐标）换成
+            // 插入文本的字节数 — 不扫描整章。
+            committedTextLengthUtf8 += utf8LengthOf(patch.insertedText) - (normReplaceEnd - normReplaceStart)
 
             currentRevision = patch.newRevision
             indexMap = AndroidTextIndexMap(this)
@@ -452,8 +471,12 @@ class DisplayTextMirror {
         replaceEndUtf8: Int,
         preeditText: String,
     ) {
-        val indexMap = AndroidTextIndexMap(this)
+        // 先把缓冲区恢复到 committed 状态，再构建 indexMap — indexMap 必须基于
+        // committed 文本映射（replaceStart/End 是 committed 坐标）。若在覆盖层仍
+        // 在缓冲区时构建，多字节区间会映射到覆盖层文本的错误 UTF-16 位置，连续
+        // composition 更新会把替换变成插入（#624 评论3 回归测试暴露）。
         removeCompositionOverlay()
+        val indexMap = AndroidTextIndexMap(this)
 
         compositionReplaceStartUtf8 = replaceStartUtf8
         compositionReplaceEndUtf8 = replaceEndUtf8
@@ -467,6 +490,10 @@ class DisplayTextMirror {
             compositionOriginalText = ""
             buffer.insert(insertStartUtf16, preeditText as CharSequence)
         }
+        // 覆盖层字节增量 = 新 preedit 字节数 - 被覆盖原文本节数（removeCompositionOverlay
+        // 已把上一轮覆盖层的增量清零）。
+        compositionOverlayDeltaUtf8 =
+            utf8LengthOf(preeditText) - utf8LengthOf(compositionOriginalText)
 
         compositionStartUtf16 = insertStartUtf16
         compositionEndUtf16 = insertStartUtf16 + preeditText.length
@@ -508,6 +535,7 @@ class DisplayTextMirror {
         compositionEndUtf16 = -1
         hasActiveComposition = false
         compositionOriginalText = ""
+        compositionOverlayDeltaUtf8 = 0
     }
 
     fun getCompositionRangeUtf16(): Pair<Int, Int>? {
@@ -531,6 +559,8 @@ class DisplayTextMirror {
     ) {
         buffer.clear()
         buffer.append(text)
+        committedTextLengthUtf8 = utf8LengthOf(text)
+        compositionOverlayDeltaUtf8 = 0
         this.cursorUtf8 = cursorUtf8
         this.currentRevision = revision
         this.compositionStartUtf16 = -1
@@ -563,5 +593,23 @@ class DisplayTextMirror {
         selectionHeadUtf16 = indexMap.utf8ToUtf16(headUtf8)
         cursorUtf8 = headUtf8
         cursorUtf16 = selectionHeadUtf16
+    }
+
+    /** 字符串的 UTF-8 字节长度 — 无分配的单遍扫描（热路径避免整章 toByteArray）。 */
+    private fun utf8LengthOf(s: String): Int {
+        var len = 0
+        var i = 0
+        while (i < s.length) {
+            val codePoint = s.codePointAt(i)
+            len +=
+                when {
+                    codePoint <= 0x7F -> 1
+                    codePoint <= 0x7FF -> 2
+                    codePoint <= 0xFFFF -> 3
+                    else -> 4
+                }
+            i += Character.charCount(codePoint)
+        }
+        return len
     }
 }

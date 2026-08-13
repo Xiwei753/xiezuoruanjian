@@ -154,8 +154,10 @@ class AndroidLineSnapshotBuilder {
         projection: DisplayTextProjection? = null,
     ): List<LineClusterSnapshot> {
         val clusters = mutableListOf<LineClusterSnapshot>()
-        val text = mirror.getText()
-        val effectiveProjection = projection ?: DisplayTextProjection.identity(text)
+        // #624 评论3：热路径不整章复制 — 直接引用 mirror 的 Spannable（与 DynamicLayout
+        // 同源），只对当前行做 subSequence 局部拷贝。
+        val text: CharSequence = mirror.getSpannable()
+        val effectiveProjection = projection ?: DisplayTextProjection.identity(text.toString())
 
         val lineStartDisplayUtf16 = layout.getLineStart(lineIndex)
         val lineEndDisplayUtf16 = layout.getLineEnd(lineIndex)
@@ -165,7 +167,7 @@ class AndroidLineSnapshotBuilder {
 
         val safeLineStart = lineStartRealUtf16.coerceIn(0, text.length)
         val safeLineEnd = lineEndRealUtf16.coerceIn(safeLineStart, text.length)
-        val lineText = text.substring(safeLineStart, safeLineEnd)
+        val lineText = text.subSequence(safeLineStart, safeLineEnd).toString()
 
         val graphemeRanges = computeGraphemeRanges(lineText)
 

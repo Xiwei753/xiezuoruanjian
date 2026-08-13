@@ -276,4 +276,140 @@ class DisplayTextMirrorTest {
         mirror.applyEditResult(result)
         assertNull(mirror.getCompositionRangeUtf16())
     }
+
+    // ── #624 评论3：增量 UTF-8 字节长度（热路径不做整章 toByteArray） ──
+
+    private fun assertLengthMatches(mirror: DisplayTextMirror) {
+        assertEquals(
+            mirror.getText().toByteArray(Charsets.UTF_8).size,
+            mirror.getTextLengthUtf8(),
+        )
+    }
+
+    @Test
+    fun textLengthUtf8_tracksLoadAndPatches() {
+        val mirror = DisplayTextMirror()
+        mirror.loadText("你好", 0)
+        assertLengthMatches(mirror)
+
+        // 插入多字节字符
+        applySinglePatch(
+            mirror,
+            PatchSpec(
+                0,
+                1,
+                uniffi.writer_core.EditorOperationKindDto.INSERT,
+                emptyList(),
+                listOf(Pair(6, 15)),
+                6,
+                15,
+            ),
+            DisplayPatch(0, 1, 6, 6, "，世界", 15, 15),
+        )
+        assertEquals("你好，世界", mirror.getText())
+        assertLengthMatches(mirror)
+
+        // 删除覆盖多字节区间
+        applySinglePatch(
+            mirror,
+            PatchSpec(
+                1,
+                2,
+                uniffi.writer_core.EditorOperationKindDto.DELETE,
+                listOf(Pair(3, 12)),
+                emptyList(),
+                15,
+                3,
+            ),
+            DisplayPatch(1, 2, 3, 12, "", 3, 3),
+        )
+        assertEquals("你界", mirror.getText())
+        assertLengthMatches(mirror)
+
+        // 替换（含换行）
+        applySinglePatch(
+            mirror,
+            PatchSpec(
+                2,
+                3,
+                uniffi.writer_core.EditorOperationKindDto.REPLACE,
+                listOf(Pair(3, 6)),
+                listOf(Pair(3, 4)),
+                6,
+                4,
+            ),
+            DisplayPatch(2, 3, 3, 6, "\n", 4, 4),
+        )
+        assertEquals("你\n", mirror.getText())
+        assertLengthMatches(mirror)
+    }
+
+    private data class PatchSpec(
+        val baseRevision: Long,
+        val newRevision: Long,
+        val kind: uniffi.writer_core.EditorOperationKindDto,
+        val oldAffected: List<Pair<Int, Int>>,
+        val newAffected: List<Pair<Int, Int>>,
+        val oldCursor: Int,
+        val newCursor: Int,
+    )
+
+    private fun applySinglePatch(
+        mirror: DisplayTextMirror,
+        spec: PatchSpec,
+        patch: DisplayPatch,
+    ) {
+        mirror.applyEditResult(
+            EditResult(
+                outcome = uniffi.writer_core.EditorEditOutcomeDto.APPLIED,
+                transactionId = spec.newRevision,
+                baseRevision = spec.baseRevision,
+                newRevision = spec.newRevision,
+                displayPatches = listOf(patch),
+                oldSelectionStart = spec.oldCursor,
+                oldSelectionEnd = spec.oldCursor,
+                newSelectionStart = spec.newCursor,
+                newSelectionEnd = spec.newCursor,
+                visualIntent =
+                    VisualIntent(
+                        cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+                        operationKind = spec.kind,
+                        oldAffectedByteRanges = spec.oldAffected,
+                        newAffectedByteRanges = spec.newAffected,
+                        animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+                        durationMs = 160,
+                        coordinatedCursor = CoordinatedCursor(spec.oldCursor, spec.newCursor, true),
+                    ),
+            ),
+        )
+    }
+
+    @Test
+    fun textLengthUtf8_includesCompositionOverlay() {
+        val mirror = DisplayTextMirror()
+        mirror.loadText("ab", 2)
+        assertLengthMatches(mirror)
+
+        // 覆盖层替换 1 个 ASCII 字符为 2 个 CJK 字符
+        mirror.updateComposition(replaceStartUtf8 = 1, replaceEndUtf8 = 2, preeditText = "中文")
+        assertLengthMatches(mirror)
+        assertEquals("a中文", mirror.getText())
+
+        // 覆盖层更新
+        mirror.updateComposition(replaceStartUtf8 = 1, replaceEndUtf8 = 2, preeditText = "中")
+        assertLengthMatches(mirror)
+        assertEquals("a中", mirror.getText())
+
+        // 提交覆盖层（先清除再走 patch）
+        mirror.clearComposition()
+        assertLengthMatches(mirror)
+        assertEquals("ab", mirror.getText())
+
+        // 空文档 + 覆盖层插入
+        val empty = DisplayTextMirror()
+        empty.loadText("", 0)
+        empty.updateComposition(replaceStartUtf8 = 0, replaceEndUtf8 = 0, preeditText = "你")
+        assertLengthMatches(empty)
+        assertEquals("你", empty.getText())
+    }
 }

@@ -56,8 +56,6 @@ interface InputCommandPort {
 
     fun applyCompositionCancelAnimated(mirrorUpdate: (() -> Unit)?)
 
-    fun onCompositionUpdated()
-
     fun reloadFromKernel(): Boolean
 
     fun getCursorUtf8(): Int
@@ -154,8 +152,6 @@ interface EditorCommandPort {
     fun applyCompositionUpdateAnimated(mirrorUpdate: (() -> Unit)? = null)
 
     fun applyCompositionCancelAnimated(mirrorUpdate: (() -> Unit)? = null)
-
-    fun onCompositionUpdated()
 
     fun reloadFromKernel(): Boolean
 
