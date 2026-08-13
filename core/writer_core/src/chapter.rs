@@ -297,8 +297,12 @@ pub fn clear_chapter_content_verified(
 ///
 /// ## 空内容覆盖保护
 ///
-/// 当 `allow_empty_overwrite == false` 时，拒绝用空/纯空白内容覆盖非空章节。
+/// 当 `allow_empty_overwrite == false` 时，拒绝用真正的空字符串 `""` 覆盖非空章节。
 /// 这是防止客户端 bug 导致数据丢失的最后一道防线。
+///
+/// #624 评论1：写作软件里 `"\n"`、连续空行、只含空格/制表符的段落都是用户正文，
+/// 必须原样保存 — 本防线只对真正的空字符串生效，不再用 `trim()` 把纯空白正文
+/// 当成"空文档"拒绝（正文持久化链路不调用 `trim()`，空覆盖判定只看原始字符串）。
 ///
 /// ## 事务写入 + 写后验证
 ///
@@ -330,8 +334,10 @@ fn save_chapter_verified_with_options(
         String::new()
     };
 
-    if !allow_empty_overwrite && !old_content.trim().is_empty() && content.trim().is_empty() {
-        let reason = "new_content_empty_or_whitespace_without_allow_empty_overwrite".to_string();
+    // #624 评论1：空覆盖保护只看真正的空字符串 — 纯空白正文（"\n"、空格、制表符）
+    // 是用户正文，原样保存，不 trim、不拦截。
+    if !allow_empty_overwrite && !old_content.is_empty() && content.is_empty() {
+        let reason = "new_content_empty_without_allow_empty_overwrite".to_string();
         log::warn!(
             "blocked_empty_overwrite chapter_id={} old_len={} new_len={} reason={}",
             chapter_id,

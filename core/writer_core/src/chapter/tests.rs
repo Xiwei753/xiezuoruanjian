@@ -168,10 +168,7 @@ fn non_empty_chapter_blocks_empty_overwrite_and_keeps_original() {
             assert_eq!(chapter_id, chapter.id);
             assert_eq!(old_len, "Original content".len());
             assert_eq!(new_len, 0);
-            assert_eq!(
-                reason,
-                "new_content_empty_or_whitespace_without_allow_empty_overwrite"
-            );
+            assert_eq!(reason, "new_content_empty_without_allow_empty_overwrite");
         }
         other => panic!("expected EmptyOverwriteBlocked, got {other:?}"),
     }
@@ -184,17 +181,17 @@ fn non_empty_chapter_blocks_empty_overwrite_and_keeps_original() {
     .unwrap();
     assert_eq!(content.content, "Original content");
 
-    let whitespace_err = save_chapter_verified(
+    // #624 评论1：纯空白正文（换行/空格/制表符）是用户正文，原样保存 —
+    // 只有真正的空字符串才受空覆盖保护，不再用 trim() 拦截空白正文。
+    let whitespace_body = " \n\t\n";
+    let whitespace_receipt = save_chapter_verified(
         &data_root.join("projects").join(&project.id),
         &volume.id,
         &chapter.id,
-        " \n\t",
+        whitespace_body,
     )
-    .unwrap_err();
-    assert!(matches!(
-        whitespace_err,
-        Error::EmptyOverwriteBlocked { .. }
-    ));
+    .expect("纯空白正文必须原样保存");
+    assert_eq!(whitespace_receipt.content_len, whitespace_body.len());
 
     let content = read_chapter(
         &data_root.join("projects").join(&project.id),
@@ -202,7 +199,7 @@ fn non_empty_chapter_blocks_empty_overwrite_and_keeps_original() {
         &chapter.id,
     )
     .unwrap();
-    assert_eq!(content.content, "Original content");
+    assert_eq!(content.content, whitespace_body);
 }
 
 #[test]

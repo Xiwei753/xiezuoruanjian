@@ -803,21 +803,9 @@ class SujianEditorView
 
         fun isSmoothCursorEnabled(): Boolean = smoothCursorEnabled
 
-        /**
-         * #624 评论3：首行缩进显示样式（开关 + 字符宽度）— 只透传给 layout runtime
-         * 的 ParagraphStyleProjection（显示层 span，不改正文字符串）。不再调用
-         * pipeline.setAutoIndent — 写作软件的“自动首行缩进”是显示排版，不是代码
-         * 编辑器 Enter 后复制上一行空格/Tab；Core 的 code-style auto-indent 能力
-         * 保留给未来真正需要 INDENT_ON_ENTER 的 profile，不与写作区首行缩进共用
-         * 一个 boolean。
-         */
-        fun setFirstLineIndent(
-            enabled: Boolean,
-            widthChars: Float,
-        ) {
-            pipeline.setFirstLineIndent(enabled, widthChars)
-            updateLayoutConfig()
-        }
+        // #624 评论3：首行缩进显示样式（开关 + 字符宽度）只经 applyLayoutConfig 原子入口
+        // （一次更新 TextPaint / runtime config，最后只推进一次布局）到达 pipeline —
+        // 不再保留独立的 setFirstLineIndent 第二入口（零调用方，且会多一次整篇布局推进）。
 
         private var coordinatedAnimationEnabled: Boolean = true
         private var reduceMotionEnabled: Boolean = false
