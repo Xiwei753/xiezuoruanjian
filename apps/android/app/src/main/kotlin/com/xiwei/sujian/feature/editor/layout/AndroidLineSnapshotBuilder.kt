@@ -157,7 +157,9 @@ class AndroidLineSnapshotBuilder {
         // #624 评论3：热路径不整章复制 — 直接引用 mirror 的 Spannable（与 DynamicLayout
         // 同源），只对当前行做 subSequence 局部拷贝。
         val text: CharSequence = mirror.getSpannable()
-        val effectiveProjection = projection ?: DisplayTextProjection.identity(text.toString())
+        val effectiveProjection =
+            projection
+                ?: DisplayTextProjection.identityFromIndex(mirror.getTextOffsetIndex(), mirror.getSpannable())
 
         val lineStartDisplayUtf16 = layout.getLineStart(lineIndex)
         val lineEndDisplayUtf16 = layout.getLineEnd(lineIndex)

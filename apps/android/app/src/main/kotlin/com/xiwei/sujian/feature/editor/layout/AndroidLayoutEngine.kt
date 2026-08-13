@@ -178,7 +178,9 @@ class AndroidLayoutEngine(
     ): AffectedLayoutRevision? {
         val l = layout ?: return null
         if (width <= 0f) return null
-        val projection = currentProjection ?: DisplayTextProjection.identity(mirror.getText())
+        val projection =
+            currentProjection
+                ?: DisplayTextProjection.identityFromIndex(mirror.getTextOffsetIndex(), mirror.getSpannable())
         // #624 评论3：热路径不整章复制 — layoutText 直接引用 mirror 的 Spannable
         // （与 DynamicLayout 同源，段落边界扫描/行内容判定一致），不再每次
         // getText() 拷贝整章 String。masked override 时是小型 masked 文本。
@@ -353,7 +355,9 @@ class AndroidLayoutEngine(
     fun getMirror(): DisplayTextMirror = mirror
 
     private fun buildRevision(l: Layout): AndroidLayoutRevision {
-        val projection = currentProjection ?: DisplayTextProjection.identity(mirror.getText())
+        val projection =
+            currentProjection
+                ?: DisplayTextProjection.identityFromIndex(mirror.getTextOffsetIndex(), mirror.getSpannable())
         val layoutText: CharSequence =
             displayTextOverride?.let { SpannableStringBuilder(it) } ?: mirror.getSpannable()
         // 全量捕获：区域覆盖整个文档，行捕获器按段落推进生成全部 lineRanges。

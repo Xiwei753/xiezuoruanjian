@@ -12,15 +12,22 @@ data class OffsetMapping(
     val realLengthUtf16: Int,
 )
 
+/**
+ * #624 评论4: [realText]/[displayText] 改为 [CharSequence] 以长期引用 mirror 的
+ * SpannableStringBuilder，避免每键 mirror.getText() 整章 String 拷贝。
+ * [indexRef] 非空时长度 getter 优先从增量索引读取（index 随 mirror 增量更新，
+ * 长度自动反映最新内容）；为空时回退到 [offsetMapping] 的快照长度。
+ */
 class DisplayTextProjection(
-    val realText: String,
-    val displayText: String,
+    val realText: CharSequence,
+    val displayText: CharSequence,
     val isMasked: Boolean,
     private val offsetMapping: OffsetMapping,
+    private val indexRef: TextOffsetIndex? = null,
 ) {
-    val realLengthUtf8: Int get() = offsetMapping.realLengthUtf8
-    val displayLengthUtf16: Int get() = offsetMapping.displayLengthUtf16
-    val realLengthUtf16: Int get() = offsetMapping.realLengthUtf16
+    val realLengthUtf8: Int get() = indexRef?.utf8Length() ?: offsetMapping.realLengthUtf8
+    val displayLengthUtf16: Int get() = indexRef?.utf16Length() ?: offsetMapping.displayLengthUtf16
+    val realLengthUtf16: Int get() = indexRef?.utf16Length() ?: offsetMapping.realLengthUtf16
 
     fun realUtf8ToDisplayUtf16(utf8: Int): Int = offsetMapping.realUtf8ToDisplayUtf16(utf8)
 
@@ -34,7 +41,16 @@ class DisplayTextProjection(
 
     fun realUtf16ToRealUtf8(utf16: Int): Int = offsetMapping.realUtf16ToRealUtf8(utf16)
 
-    fun getDisplaySpannable(): android.text.SpannableStringBuilder = android.text.SpannableStringBuilder(displayText)
+    /**
+     * #624 评论4: 若 [displayText] 已是 [android.text.SpannableStringBuilder] 直接返回
+     * （避免拷贝），否则用其构造（适配 String/其他 CharSequence）。
+     */
+    fun getDisplaySpannable(): android.text.SpannableStringBuilder =
+        if (displayText is android.text.SpannableStringBuilder) {
+            displayText
+        } else {
+            android.text.SpannableStringBuilder(displayText)
+        }
 
     companion object {
         private fun utf8ByteLength(codePoint: Int): Int =
@@ -81,6 +97,36 @@ class DisplayTextProjection(
             val safe = value.coerceAtMost(last)
             val idx = arr.binarySearch(safe)
             return if (idx >= 0) idx else -(idx + 1) - 1
+        }
+
+        /**
+         * #624 评论4: 从增量 [TextOffsetIndex] 构建 identity projection — 长期引用
+         * mirror 的 index 和 spannable，不拷贝整章。index 随 mirror 增量更新，
+         * offset 映射 lambda 始终读最新 index；长度 getter 优先从 [index] 读取。
+         * [OffsetMapping] 的长度字段是创建时快照，仅作 [indexRef] 为 null 时的 fallback。
+         */
+        fun identityFromIndex(
+            index: TextOffsetIndex,
+            text: CharSequence,
+        ): DisplayTextProjection {
+            return DisplayTextProjection(
+                realText = text,
+                displayText = text,
+                isMasked = false,
+                offsetMapping =
+                    OffsetMapping(
+                        realUtf8ToDisplayUtf16 = { index.utf8ToUtf16(it) },
+                        displayUtf16ToRealUtf8 = { index.utf16ToUtf8(it) },
+                        realUtf16ToDisplayUtf16 = { it.coerceIn(0, index.utf16Length()) },
+                        displayUtf16ToRealUtf16 = { it.coerceIn(0, index.utf16Length()) },
+                        realUtf8ToRealUtf16 = { index.utf8ToUtf16(it) },
+                        realUtf16ToRealUtf8 = { index.utf16ToUtf8(it) },
+                        displayLengthUtf16 = index.utf16Length(),
+                        realLengthUtf8 = index.utf8Length(),
+                        realLengthUtf16 = index.utf16Length(),
+                    ),
+                indexRef = index,
+            )
         }
 
         fun identity(text: String): DisplayTextProjection {

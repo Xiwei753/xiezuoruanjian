@@ -2,7 +2,6 @@ package com.xiwei.sujian.feature.editor.projection
 
 import android.text.SpannableStringBuilder
 import android.text.style.UnderlineSpan
-import com.xiwei.sujian.feature.editor.input.AndroidTextIndexMap
 import uniffi.writer_core.AnimationModeDto
 import uniffi.writer_core.CoordinatedCursorDto
 import uniffi.writer_core.DisplayPatchDto
@@ -271,6 +270,13 @@ data class EditResult(
  */
 class DisplayTextMirror {
     private val buffer = SpannableStringBuilder()
+
+    /**
+     * #624 评论4: 增量 UTF-8/UTF-16 偏移索引 — 由本 mirror 唯一持有，随 patch/装载
+     * 增量更新，避免每键整章 AndroidTextIndexMap(this) 重建。identity projections
+     * 长期引用本索引，不再每键 mirror.getText() / buildRealBoundaries()。
+     */
+    private val textOffsetIndex = TextOffsetIndex()
     private var currentRevision: Long = 0
     private var cursorUtf8: Int = 0
     private var cursorUtf16: Int = 0
@@ -321,6 +327,9 @@ class DisplayTextMirror {
 
     fun getSpannable(): SpannableStringBuilder = buffer
 
+    /** #624 评论4: 暴露增量偏移索引供 identity projection 长期引用。 */
+    fun getTextOffsetIndex(): TextOffsetIndex = textOffsetIndex
+
     fun getLengthUtf16(): Int = buffer.length
 
     fun getSelectionStartUtf16(): Int = minOf(selectionAnchorUtf16, selectionHeadUtf16)
@@ -363,8 +372,7 @@ class DisplayTextMirror {
      *  Reconstructs the text by replacing the preedit range with [compositionOriginalText]. */
     fun getCommittedText(): String {
         if (!hasActiveComposition) return buffer.toString()
-        val indexMap = AndroidTextIndexMap(this)
-        val startUtf16 = indexMap.utf8ToUtf16(compositionReplaceStartUtf8)
+        val startUtf16 = textOffsetIndex.utf8ToUtf16(compositionReplaceStartUtf8)
         val endUtf16 = compositionStartUtf16
         return buffer.substring(0, startUtf16) +
             compositionOriginalText +
@@ -373,8 +381,7 @@ class DisplayTextMirror {
 
     fun getCommittedLengthUtf16(): Int {
         if (!hasActiveComposition) return buffer.length
-        val indexMap = AndroidTextIndexMap(this)
-        val startUtf16 = indexMap.utf8ToUtf16(compositionReplaceStartUtf8)
+        val startUtf16 = textOffsetIndex.utf8ToUtf16(compositionReplaceStartUtf8)
         return startUtf16 +
             compositionOriginalText.length +
             (buffer.length - compositionEndUtf16.coerceAtMost(buffer.length))
@@ -395,15 +402,14 @@ class DisplayTextMirror {
     }
 
     private fun updateSelectionFromResult(result: EditResult) {
-        val indexMap = AndroidTextIndexMap(this)
         val normStart = minOf(result.newSelectionStart, result.newSelectionEnd)
         val normEnd = maxOf(result.newSelectionStart, result.newSelectionEnd)
         cursorUtf8 = normEnd
-        cursorUtf16 = indexMap.utf8ToUtf16(normEnd)
+        cursorUtf16 = textOffsetIndex.utf8ToUtf16(normEnd)
         selectionAnchorUtf8 = normStart
         selectionHeadUtf8 = normEnd
-        selectionAnchorUtf16 = indexMap.utf8ToUtf16(normStart)
-        selectionHeadUtf16 = indexMap.utf8ToUtf16(normEnd)
+        selectionAnchorUtf16 = textOffsetIndex.utf8ToUtf16(normStart)
+        selectionHeadUtf16 = textOffsetIndex.utf8ToUtf16(normEnd)
     }
 
     /**
@@ -419,7 +425,6 @@ class DisplayTextMirror {
     fun applyPatches(patches: List<DisplayPatch>) {
         if (patches.isEmpty()) return
 
-        var indexMap = AndroidTextIndexMap(this)
         for (patch in patches) {
             if (patch.baseRevision != currentRevision) {
                 throw IllegalStateException(
@@ -432,16 +437,17 @@ class DisplayTextMirror {
             val normReplaceStart = minOf(patch.replaceByteStart, patch.replaceByteEndExclusive)
             val normReplaceEnd = maxOf(patch.replaceByteStart, patch.replaceByteEndExclusive)
 
-            val replaceStartUtf16 = indexMap.utf8ToUtf16(normReplaceStart)
-            val replaceEndUtf16 = indexMap.utf8ToUtf16(normReplaceEnd)
+            val replaceStartUtf16 = textOffsetIndex.utf8ToUtf16(normReplaceStart)
+            val replaceEndUtf16 = textOffsetIndex.utf8ToUtf16(normReplaceEnd)
 
             buffer.replace(replaceStartUtf16, replaceEndUtf16, patch.insertedText as CharSequence)
             // 增量维护 UTF-8 字节长度：被替换区间字节数（patch 字节坐标）换成
             // 插入文本的字节数 — 不扫描整章。
             committedTextLengthUtf8 += utf8LengthOf(patch.insertedText) - (normReplaceEnd - normReplaceStart)
+            // #624 评论4: 增量更新偏移索引 — 只扫描受影响段落，不整章重建。
+            textOffsetIndex.onBufferReplaced(replaceStartUtf16, replaceEndUtf16, patch.insertedText, buffer)
 
             currentRevision = patch.newRevision
-            indexMap = AndroidTextIndexMap(this)
         }
     }
 
@@ -471,17 +477,19 @@ class DisplayTextMirror {
         replaceEndUtf8: Int,
         preeditText: String,
     ) {
-        // 先把缓冲区恢复到 committed 状态，再构建 indexMap — indexMap 必须基于
-        // committed 文本映射（replaceStart/End 是 committed 坐标）。若在覆盖层仍
-        // 在缓冲区时构建，多字节区间会映射到覆盖层文本的错误 UTF-16 位置，连续
+        // 先把缓冲区恢复到 committed 状态，再用 textOffsetIndex 查询 committed 坐标 —
+        // index 必须基于 committed 文本映射（replaceStart/End 是 committed 坐标）。
+        // removeCompositionOverlay 已把 index 恢复到 committed 状态。若在覆盖层仍
+        // 在缓冲区时查询，多字节区间会映射到覆盖层文本的错误 UTF-16 位置，连续
         // composition 更新会把替换变成插入（#624 评论3 回归测试暴露）。
+        // #624 评论4: buffer.replace 叠加 preedit 后不调用 onBufferReplaced —
+        // index 始终反映 committed 文本，不含 overlay。
         removeCompositionOverlay()
-        val indexMap = AndroidTextIndexMap(this)
 
         compositionReplaceStartUtf8 = replaceStartUtf8
         compositionReplaceEndUtf8 = replaceEndUtf8
-        val insertStartUtf16 = indexMap.utf8ToUtf16(replaceStartUtf8)
-        val insertEndUtf16 = indexMap.utf8ToUtf16(replaceEndUtf8)
+        val insertStartUtf16 = textOffsetIndex.utf8ToUtf16(replaceStartUtf8)
+        val insertEndUtf16 = textOffsetIndex.utf8ToUtf16(replaceEndUtf8)
 
         if (insertStartUtf16 < insertEndUtf16) {
             compositionOriginalText = buffer.substring(insertStartUtf16, insertEndUtf16)
@@ -530,6 +538,9 @@ class DisplayTextMirror {
         if (compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
             clearCompositionSpans()
             buffer.replace(compositionStartUtf16, compositionEndUtf16, compositionOriginalText)
+            // #624 评论4: index 始终反映 committed 文本（updateComposition 叠加 overlay
+            // 时不调用 onBufferReplaced），removeCompositionOverlay 恢复 buffer 到
+            // committed 文本后 index 已经正确 — 不需要 onBufferReplaced。
         }
         compositionStartUtf16 = -1
         compositionEndUtf16 = -1
@@ -561,6 +572,8 @@ class DisplayTextMirror {
         buffer.append(text)
         committedTextLengthUtf8 = utf8LengthOf(text)
         compositionOverlayDeltaUtf8 = 0
+        // #624 评论4: 全量重建偏移索引 — 加载/快照路径扫描整篇一次。
+        textOffsetIndex.rebuildFromText(text)
         this.cursorUtf8 = cursorUtf8
         this.currentRevision = revision
         this.compositionStartUtf16 = -1
@@ -569,10 +582,9 @@ class DisplayTextMirror {
         this.compositionOriginalText = ""
         this.selectionAnchorUtf8 = selectionAnchorUtf8
         this.selectionHeadUtf8 = selectionHeadUtf8
-        val indexMap = AndroidTextIndexMap(this)
-        this.cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
-        this.selectionAnchorUtf16 = indexMap.utf8ToUtf16(selectionAnchorUtf8)
-        this.selectionHeadUtf16 = indexMap.utf8ToUtf16(selectionHeadUtf8)
+        this.cursorUtf16 = textOffsetIndex.utf8ToUtf16(cursorUtf8)
+        this.selectionAnchorUtf16 = textOffsetIndex.utf8ToUtf16(selectionAnchorUtf8)
+        this.selectionHeadUtf16 = textOffsetIndex.utf8ToUtf16(selectionHeadUtf8)
     }
 
     fun loadText(
@@ -586,11 +598,10 @@ class DisplayTextMirror {
         anchorUtf8: Int,
         headUtf8: Int,
     ) {
-        val indexMap = AndroidTextIndexMap(this)
         selectionAnchorUtf8 = anchorUtf8
         selectionHeadUtf8 = headUtf8
-        selectionAnchorUtf16 = indexMap.utf8ToUtf16(anchorUtf8)
-        selectionHeadUtf16 = indexMap.utf8ToUtf16(headUtf8)
+        selectionAnchorUtf16 = textOffsetIndex.utf8ToUtf16(anchorUtf8)
+        selectionHeadUtf16 = textOffsetIndex.utf8ToUtf16(headUtf8)
         cursorUtf8 = headUtf8
         cursorUtf16 = selectionHeadUtf16
     }

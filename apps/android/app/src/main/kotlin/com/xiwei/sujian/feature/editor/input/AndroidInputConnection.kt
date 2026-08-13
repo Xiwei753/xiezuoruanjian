@@ -20,7 +20,7 @@ class AndroidInputConnection(
         if (projection != null) {
             return projection.displayUtf16ToRealUtf8(utf16)
         }
-        return AndroidTextIndexMap(mirror).utf16ToUtf8(utf16)
+        return mirror.getTextOffsetIndex().utf16ToUtf8(utf16)
     }
 
     private fun realUtf8ToDisplayUtf16(utf8: Int): Int {
@@ -28,7 +28,7 @@ class AndroidInputConnection(
         if (projection != null) {
             return projection.realUtf8ToDisplayUtf16(utf8)
         }
-        return AndroidTextIndexMap(mirror).utf8ToUtf16(utf8)
+        return mirror.getTextOffsetIndex().utf8ToUtf16(utf8)
     }
 
     override fun performEditorAction(actionCode: Int): Boolean {
@@ -187,7 +187,7 @@ class AndroidInputConnection(
 
         val selMinUtf16 = realUtf8ToDisplayUtf16(selMin)
         val selMaxUtf16 = realUtf8ToDisplayUtf16(selMax)
-        val displayText = projectionProvider?.invoke()?.displayText ?: mirror.getText()
+        val displayText = (projectionProvider?.invoke()?.displayText ?: mirror.getText()).toString()
 
         var deleteStartUtf16 = selMinUtf16
         var count = beforeLength
@@ -413,10 +413,10 @@ class AndroidInputConnection(
         if (projection != null) {
             val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
             val start = (cursorDisplayUtf16 - n).coerceAtLeast(0)
-            return projection.displayText.substring(
+            return projection.displayText.subSequence(
                 start,
                 cursorDisplayUtf16.coerceAtMost(projection.displayText.length),
-            )
+            ).toString()
         }
         val cursorUtf16 = mirror.getCursorUtf16()
         val start = (cursorUtf16 - n).coerceAtLeast(0)
@@ -432,7 +432,10 @@ class AndroidInputConnection(
         if (projection != null) {
             val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
             val end = (cursorDisplayUtf16 + n).coerceAtMost(projection.displayText.length)
-            return projection.displayText.substring(cursorDisplayUtf16.coerceAtMost(projection.displayText.length), end)
+            return projection.displayText.subSequence(
+                cursorDisplayUtf16.coerceAtMost(projection.displayText.length),
+                end,
+            ).toString()
         }
         val cursorUtf16 = mirror.getCursorUtf16()
         val text = mirror.getText()
@@ -452,7 +455,7 @@ class AndroidInputConnection(
             }
             val start = selStartDisplayUtf16.coerceAtMost(projection.displayText.length)
             val end = selEndDisplayUtf16.coerceAtMost(projection.displayText.length)
-            return projection.displayText.substring(start.coerceAtMost(end), end.coerceAtLeast(start))
+            return projection.displayText.subSequence(start.coerceAtMost(end), end.coerceAtLeast(start)).toString()
         }
         val selStart = mirror.getSelectionStartUtf16()
         val selEnd = mirror.getSelectionEndUtf16()

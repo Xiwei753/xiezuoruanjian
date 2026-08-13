@@ -18,7 +18,13 @@ class AndroidLayoutRuntime(
         AndroidLayoutEngine(mirror, textPaint),
     )
 
-    private var currentProjection: DisplayTextProjection = DisplayTextProjection.identity("")
+    /**
+     * #624 评论4: 长期 identity projection — 引用 mirror 的增量 index 和 spannable，
+     * 不每键重建。index 由 mirror.applyPatches 增量更新，spannable 自动反映最新内容。
+     */
+    private var identityProjection: DisplayTextProjection =
+        DisplayTextProjection.identityFromIndex(mirror.getTextOffsetIndex(), mirror.getSpannable())
+    private var currentProjection: DisplayTextProjection = identityProjection
     private var secretDisplayMode: Boolean = false
 
     /** 全量布局推进（配置变化/加载路径）。 */
@@ -71,7 +77,9 @@ class AndroidLayoutRuntime(
         if (secretDisplayMode) {
             rebuildProjectionContent()
         } else {
-            currentProjection = DisplayTextProjection.identity(mirror.getText())
+            // #624 评论4: 复用 identityProjection — index 已由 mirror.applyPatches 增量更新，
+            // spannable 自动反映最新内容，不每键 DisplayTextProjection.identity(getText())。
+            currentProjection = identityProjection
             layoutEngine.onMirrorContentChanged(currentProjection, patches)
         }
     }
@@ -103,10 +111,11 @@ class AndroidLayoutRuntime(
                     DisplayTextProjection.masked(text)
                 }
             } else {
-                DisplayTextProjection.identity(text)
+                // #624 评论4: 非 secret 路径复用 identityProjection，不拷贝整章。
+                identityProjection
             }
         layoutEngine.applyDisplaySource(
-            if (currentProjection.isMasked) currentProjection.displayText else null,
+            if (currentProjection.isMasked) currentProjection.displayText.toString() else null,
             currentProjection,
         )
     }

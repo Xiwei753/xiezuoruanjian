@@ -888,7 +888,7 @@ class SujianEditorView
 
         fun getDisplayText(): String {
             if (isSecretMode && isSessionBound) {
-                return pipeline.getCurrentProjection().displayText
+                return pipeline.getCurrentProjection().displayText.toString()
             }
             return pipeline.getText()
         }
