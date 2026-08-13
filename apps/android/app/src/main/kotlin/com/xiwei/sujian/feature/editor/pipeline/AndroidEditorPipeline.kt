@@ -288,9 +288,9 @@ class AndroidEditorPipeline private constructor(
 
     /**
      * #624 评论2：唯一换行命令入口 — 软键盘 commitText("\n")、硬件 Enter、
-     * 粘贴换行都收敛到这里。无选区时走 Core insertLineBreak（继承 auto-indent
-     * 策略）；有选区时通过 Core 的单一“换行替换”语义完成（一次 replace 命令
-     * 把选区换成 \n），不在平台端先删选区再插入换行。
+     * 粘贴换行都收敛到这里。无选区时走 Core insertLineBreak（写作区 auto-indent
+     * 恒为 false，只产生 `\n`）；有选区时通过 Core 的单一“换行替换”语义完成（一次
+     * replace 命令把选区换成 \n），不在平台端先删选区再插入换行。
      */
     override fun insertLineBreak(cause: EditorTransactionCauseDto): PipelineOutput {
         val selStart = editPipeline.getCommittedSelectionStartUtf8()
@@ -520,8 +520,10 @@ class AndroidEditorPipeline private constructor(
                 },
             )
         } else {
+            // 无视觉意图的兜底路径：没有动画引擎推进布局，这里显式推进一次。
             mirrorUpdate?.invoke()
             layoutRuntime.onMirrorContentChanged()
+            layoutRuntime.requestLayout()
         }
     }
 
@@ -548,8 +550,10 @@ class AndroidEditorPipeline private constructor(
                 },
             )
         } else {
+            // 无视觉意图的兜底路径：没有动画引擎推进布局，这里显式推进一次。
             mirrorUpdate?.invoke()
             layoutRuntime.onMirrorContentChanged()
+            layoutRuntime.requestLayout()
         }
     }
 
@@ -737,7 +741,9 @@ class AndroidEditorPipeline private constructor(
     /**
      * Core insertLineBreak 的 auto-indent 策略（继承当前行前导空白 — 代码编辑器式
      * 语义）。#624 评论3：写作软件的首行缩进不往正文塞空格，由 [setFirstLineIndent]
-     * 以显示层 span 实现；本开关只跟随设置值，不再由 profile 硬编码。
+     * 以显示层 span 实现；写作区不再调用本开关（恒为 false，DocumentBody 的
+     * insertLineBreak 只产生 `\n`）。本入口保留给未来真正需要 INDENT_ON_ENTER 的
+     * profile，不与首行缩进显示样式共用 boolean。
      */
     fun setAutoIndent(enabled: Boolean) {
         autoIndentEnabled = enabled

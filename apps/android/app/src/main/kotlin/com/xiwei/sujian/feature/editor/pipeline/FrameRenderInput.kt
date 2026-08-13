@@ -1,11 +1,11 @@
 package com.xiwei.sujian.feature.editor.pipeline
 
-import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
+import com.xiwei.sujian.feature.editor.layout.LayoutRevisionSource
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 
 data class FrameRenderInput(
     val layout: android.text.Layout,
-    val layoutRevision: AndroidLayoutRevision?,
+    val layoutRevision: LayoutRevisionSource?,
     /** 文字动画事务 — 文字轨结束时为 null（静态新布局直接绘制），但 [cursorTransition] 仍可携带。 */
     val transaction: PreparedVisualTransaction?,
     /** #595 五：光标过渡几何 — 文字轨结束/抑制但光标轨未结束时仍非 null，

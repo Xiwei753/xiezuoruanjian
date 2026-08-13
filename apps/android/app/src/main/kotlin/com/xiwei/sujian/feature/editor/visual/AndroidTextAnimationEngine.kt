@@ -1,7 +1,7 @@
 package com.xiwei.sujian.feature.editor.visual
 
+import com.xiwei.sujian.feature.editor.layout.AffectedLayoutRevision
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutEngine
-import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
 import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
 import com.xiwei.sujian.feature.editor.projection.VisualIntent
 
@@ -111,8 +111,8 @@ class AndroidTextAnimationEngine(
      */
     fun prepare(
         visualIntent: VisualIntent,
-        oldRevision: AndroidLayoutRevision?,
-        newRevision: AndroidLayoutRevision?,
+        oldRevision: AffectedLayoutRevision?,
+        newRevision: AffectedLayoutRevision?,
         oldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         newSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         rebaseFrame: VisualFrameSnapshot? = null,
@@ -306,18 +306,10 @@ class AndroidTextAnimationEngine(
         frameTimeMs: Long? = null,
     ) {
         val textSuppressed = animationPolicy == TextAnimationPolicy.SYSTEM_SUPPRESSED || reduceMotion
-        val rebaseFrameTimeMs =
-            frameTimeMs
-                ?: timeSource.lastFrameTimeNanos()?.let { it / 1_000_000 }
-                ?: timeSource.nowNanos() / 1_000_000
+        val rebaseFrameTimeMs = resolveRebaseFrameTime(frameTimeMs)
 
         if (textSuppressed && !smoothCursorEnabled) {
-            // Both text and cursor suppressed (or reduce-motion): static update only.
-            // beforePatch runs first (e.g. to hide stale static text), then mirrorUpdate
-            // applies the edit, then requestLayout rebuilds the visual layout.
-            beforePatch?.invoke()
-            mirrorUpdate?.invoke()
-            layoutEngine.requestLayout()
+            applyStaticUpdate(visualIntent, layoutEngine, mirrorUpdate, beforePatch)
             return
         }
 
@@ -331,44 +323,90 @@ class AndroidTextAnimationEngine(
         }
         val rebaseSnapshot = captureRebaseSnapshot(rebaseFrameTimeMs)
 
-        val oldRevision = layoutEngine.captureImmutableRevision()
-        // Two-phase affected-line computation invariant:
-        // Phase 1 (newRevision=null): determines old snapshot lines BEFORE mirror update,
-        // using only the old layout. The new revision does not exist yet — the mirror
-        // has not been updated, so layoutEngine still holds the old layout.
-        // Phase 2 (both revisions): determines new snapshot lines AND BlockShifts AFTER
-        // mirror update and layout rebuild. BlockShifts require both revisions to compare
-        // paragraph Y positions; they cannot be computed in Phase 1.
-        // This split is essential: capturing old snapshots after mirrorUpdate would
-        // produce stale bitmaps (the layout has already changed), and computing
-        // BlockShifts with only one revision would miss the Y-delta information.
-        val preliminaryResult =
-            visualPlanner.computeAffectedLineIndicesFromBothRevisions(
-                visualIntent,
-                oldRevision,
-                null,
-            )
-        val affectedOldLineIndices = preliminaryResult.oldLineIndices
-        val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
+        // #624 评论3：普通编辑只抓受影响区域 — 编辑前（old 侧）用当前 DynamicLayout
+        // 的 getLineForOffset() 找到编辑所在段落，只保存该段落及删除/合段时相邻
+        // 段落的 old line geometry；mirror 更新后只读取新的受影响段落。
+        val oldRevision = captureOldAffected(visualIntent, layoutEngine)
+        // 旧受影响行的 snapshot 必须在 mirror 更新前抓取（布局还是旧正文）。
+        val oldSnapshots = captureSnapshots(oldRevision, layoutEngine)
         beforePatch?.invoke()
         mirrorUpdate?.invoke()
-        layoutEngine.requestLayout()
-        val newRevision = layoutEngine.getCurrentRevision()
-        // Phase 2: compute new affected lines and BlockShifts using both revisions.
-        // BlockShifts can only be determined when both old and new revisions are available,
-        // because they require comparing paragraph Y positions across revisions.
-        // New snapshot lines must be captured AFTER mirrorUpdate (the layout reflects
-        // the new text state); capturing them before would produce the old layout's bitmaps.
-        val affectedResult =
-            visualPlanner.computeAffectedLineIndicesFromBothRevisions(
-                visualIntent,
-                oldRevision,
-                newRevision,
-            )
-        val affectedNewLineIndices = affectedResult.newLineIndices
-        val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
+        // 布局推进所有权唯一入口：mirror 更新后只推进一次（配置没变则复用
+        // 现有 DynamicLayout，revision 由 captureAffectedRevision 产生）。
+        layoutEngine.ensureLayoutConfig()
+        val newRevision = captureNewAffected(visualIntent, layoutEngine, oldRevision)
+        val newSnapshots = captureSnapshots(newRevision, layoutEngine)
         val transaction = prepare(visualIntent, oldRevision, newRevision, oldSnapshots, newSnapshots, rebaseSnapshot)
         submit(transaction)
+    }
+
+    /** 静态更新路径（文字+光标都抑制）：mirror 更新后只推进一次布局配置，
+     *  捕获 new 侧受影响区域仅为渲染路径提供新的光标/选区几何。 */
+    private fun applyStaticUpdate(
+        visualIntent: VisualIntent,
+        layoutEngine: AndroidLayoutEngine,
+        mirrorUpdate: (() -> Unit)?,
+        beforePatch: (() -> Unit)?,
+    ) {
+        beforePatch?.invoke()
+        mirrorUpdate?.invoke()
+        layoutEngine.ensureLayoutConfig()
+        layoutEngine.captureAffectedRevision(
+            visualIntent.newAffectedByteRanges.firstOrNull()?.first
+                ?: layoutEngine.getMirror().getCursorUtf8(),
+            visualIntent.newAffectedByteRanges.lastOrNull()?.second
+                ?: layoutEngine.getMirror().getCursorUtf8(),
+            includeNextParagraph = false,
+        )
+    }
+
+    private fun resolveRebaseFrameTime(frameTimeMs: Long?): Long =
+        frameTimeMs
+            ?: timeSource.lastFrameTimeNanos()?.let { it / 1_000_000 }
+            ?: timeSource.nowNanos() / 1_000_000
+
+    private fun captureSnapshots(
+        revision: AffectedLayoutRevision?,
+        layoutEngine: AndroidLayoutEngine,
+    ): Map<Int, AndroidLineSnapshot> =
+        revision?.let { layoutEngine.captureLineBitmapSnapshotsWithClusters(it) } ?: emptyMap()
+
+    /** 编辑前捕获 old 侧受影响区域（old 坐标，mirror 尚未更新）。 */
+    private fun captureOldAffected(
+        visualIntent: VisualIntent,
+        layoutEngine: AndroidLayoutEngine,
+    ): AffectedLayoutRevision? {
+        val start =
+            visualIntent.oldAffectedByteRanges.firstOrNull()?.first
+                ?: layoutEngine.getMirror().getCursorUtf8()
+        val end =
+            visualIntent.oldAffectedByteRanges.lastOrNull()?.second
+                ?: layoutEngine.getMirror().getCursorUtf8()
+        return layoutEngine.captureAffectedRevision(
+            start,
+            end,
+            includeNextParagraph = visualIntent.isDeleteOrReplaceRenderRole(),
+        )
+    }
+
+    /** 编辑后捕获 new 侧受影响区域（new 坐标，mirror 已更新），并计算稳定后缀 deltaY。 */
+    private fun captureNewAffected(
+        visualIntent: VisualIntent,
+        layoutEngine: AndroidLayoutEngine,
+        oldRevision: AffectedLayoutRevision?,
+    ): AffectedLayoutRevision? {
+        val start =
+            visualIntent.newAffectedByteRanges.firstOrNull()?.first
+                ?: layoutEngine.getMirror().getCursorUtf8()
+        val end =
+            visualIntent.newAffectedByteRanges.lastOrNull()?.second
+                ?: layoutEngine.getMirror().getCursorUtf8()
+        return layoutEngine.captureAffectedRevision(
+            start,
+            end,
+            includeNextParagraph = false,
+            previousRevision = oldRevision,
+        )
     }
 
     /**
@@ -385,14 +423,12 @@ class AndroidTextAnimationEngine(
         mirrorUpdate: (() -> Unit)?,
         beforePatch: (() -> Unit)?,
     ) {
-        val rebaseFrameTimeMs =
-            timeSource.lastFrameTimeNanos()?.let { it / 1_000_000 } ?: timeSource.nowNanos() / 1_000_000
-        val rebaseSnapshot = captureRebaseSnapshot(rebaseFrameTimeMs)
-        val oldRevision = layoutEngine.captureImmutableRevision()
+        val rebaseSnapshot = captureRebaseSnapshot(resolveRebaseFrameTime(null))
+        val oldRevision = captureOldAffected(visualIntent, layoutEngine)
         beforePatch?.invoke()
         mirrorUpdate?.invoke()
-        layoutEngine.requestLayout()
-        val newRevision = layoutEngine.getCurrentRevision()
+        layoutEngine.ensureLayoutConfig()
+        val newRevision = captureNewAffected(visualIntent, layoutEngine, oldRevision)
         val cursorDuration = smoothCursorDurationMs.coerceAtLeast(1L)
         val cursorOnlyIntent =
             visualIntent.copy(

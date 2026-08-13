@@ -1,6 +1,40 @@
 package com.xiwei.sujian.feature.editor.layout
 
 /**
+ * #624 评论3：布局快照公共契约 — 全量 [AndroidLayoutRevision] 与受影响区域
+ * [AffectedLayoutRevision] 都实现本接口，动画 planner / snapshot builder / 渲染路径
+ * 只依赖本接口，不区分快照是整章还是受影响子集。
+ *
+ * 行访问统一用绝对行号（与 Layout 行号、Bitmap snapshot 键一致）；
+ * 越界行返回 null，查询方不得假设快照覆盖整章。
+ */
+interface LayoutRevisionSource {
+    /** 当前 layout 的总行数。 */
+    val lineCount: Int
+
+    val cursorUtf8: Int
+    val cursorUtf16: Int
+    val cursorX: Float
+    val cursorY: Float
+    val cursorHeight: Float
+    val selectionAnchorUtf8: Int
+    val selectionHeadUtf8: Int
+    val selectionAnchorUtf16: Int
+    val selectionHeadUtf16: Int
+    val compositionStartUtf16: Int
+    val compositionEndUtf16: Int
+
+    val selectionStartUtf16: Int get() = minOf(selectionAnchorUtf16, selectionHeadUtf16)
+    val selectionEndUtf16: Int get() = maxOf(selectionAnchorUtf16, selectionHeadUtf16)
+
+    /** 绝对行号 → LineRange；未知行返回 null。 */
+    fun lineRangeAt(lineIndex: Int): AndroidLayoutRevision.LineRange?
+
+    /** 本快照提供的全部（绝对行号, LineRange）对。 */
+    fun lineEntries(): List<Pair<Int, AndroidLayoutRevision.LineRange>>
+}
+
+/**
  * Immutable snapshot of the Android Layout state at a point in time.
  *
  * [revisionId] is the layout engine's local monotonic counter, incremented on every
@@ -16,29 +50,34 @@ data class AndroidLayoutRevision(
     val editorRevision: Long,
     val widthFingerprint: Float,
     val fontFingerprint: String,
-    val lineCount: Int,
+    override val lineCount: Int,
     val lineRanges: List<LineRange>,
-    val cursorUtf8: Int,
-    val cursorUtf16: Int,
-    val cursorX: Float,
-    val cursorY: Float,
-    val cursorHeight: Float,
-    val selectionAnchorUtf8: Int,
-    val selectionHeadUtf8: Int,
-    val selectionAnchorUtf16: Int,
-    val selectionHeadUtf16: Int,
-    val compositionStartUtf16: Int,
-    val compositionEndUtf16: Int,
+    override val cursorUtf8: Int,
+    override val cursorUtf16: Int,
+    override val cursorX: Float,
+    override val cursorY: Float,
+    override val cursorHeight: Float,
+    override val selectionAnchorUtf8: Int,
+    override val selectionHeadUtf8: Int,
+    override val selectionAnchorUtf16: Int,
+    override val selectionHeadUtf16: Int,
+    override val compositionStartUtf16: Int,
+    override val compositionEndUtf16: Int,
     /** Opaque handles from the Rust kernel identifying snapshots associated with this
      *  revision. Currently unused by the Android animation pipeline (which manages its
      *  own Bitmap snapshots via [VisualResourceStore]), but preserved for future
      *  kernel-driven snapshot management. */
     val snapshotHandles: List<Long>,
-) {
+) : LayoutRevisionSource {
+    override fun lineRangeAt(lineIndex: Int): AndroidLayoutRevision.LineRange? = lineRanges.getOrNull(lineIndex)
+
+    override fun lineEntries(): List<Pair<Int, AndroidLayoutRevision.LineRange>> =
+        lineRanges.withIndex().map { it.index to it.value }
+
     val selectionStartUtf8: Int get() = minOf(selectionAnchorUtf8, selectionHeadUtf8)
     val selectionEndUtf8: Int get() = maxOf(selectionAnchorUtf8, selectionHeadUtf8)
-    val selectionStartUtf16: Int get() = minOf(selectionAnchorUtf16, selectionHeadUtf16)
-    val selectionEndUtf16: Int get() = maxOf(selectionAnchorUtf16, selectionHeadUtf16)
+    override val selectionStartUtf16: Int get() = minOf(selectionAnchorUtf16, selectionHeadUtf16)
+    override val selectionEndUtf16: Int get() = maxOf(selectionAnchorUtf16, selectionHeadUtf16)
 
     /** Byte ranges are half-open: [startUtf8, endUtf8). UTF-8 byte offsets.
      *

@@ -1,27 +1,34 @@
 package com.xiwei.sujian.feature.editor.layout
 
 import android.text.Spannable
+import android.text.Spanned
 import android.text.TextPaint
 import android.text.TextUtils
-import android.text.style.LeadingMarginSpan
 
 /**
  * #624 评论3：写作软件式“自动首行缩进”的显示层投影 — 只负责平台显示样式，
  * 不改正文字符串。
  *
  * 每个真实段落（正文开头 + 每个 `\n` 之后的下一个字符位置）应用
- * [LeadingMarginSpan.Standard]：第一视觉行按全角字符宽度 × [widthChars] 缩进，
+ * [FirstLineIndentSpan]：第一视觉行按全角字符宽度 × [widthChars] 缩进，
  * 自动换行后的第二、第三视觉行从正常左边界开始（后续行 margin 为 0）。
  * Span 只作用于显示层，不插入两个空格、不改变 UTF-8/UTF-16 offset、
  * 不污染保存和同步正文。
+ *
+ * Span 类型（#624 评论3）：
+ * - 使用项目自己的 [FirstLineIndentSpan]（`LeadingMarginSpan` + `UpdateLayout`）—
+ *   `DynamicLayout` 的 ChangeWatcher 只对 `UpdateLayout` span 的增删/移动触发
+ *   reflow；`LeadingMarginSpan.Standard` 不实现 `UpdateLayout`，正文修改后
+ *   重设 span 不会让布局重算段落宽度。
+ * - 使用 [Spanned.SPAN_PARAGRAPH] 管理段落边界，不再用 `SPAN_INCLUSIVE_EXCLUSIVE`
+ *   猜换行删除后的端点移动。官方语义：端点必须在正文边界或 `\n` 后，删除锚点
+ *   换行时端点自动拉到下一个 `\n`（或文末）。
  *
  * 维护策略（配合 [AndroidLayoutEngine]）：
  * - 布局配置变化（开关/宽度）或整篇重载时做整篇重同步（[applyFirstLineIndent]）；
  * - 正文编辑影响段落结构时（插入/删除包含 `\n`、替换选区、段落边界插入）
  *   做受影响段落区域的增量重同步（[resyncParagraphIndent]）；
- * - 普通按键（段落内部增删字符）不触碰 span，段落起点的 span 用
- *   SPAN_INCLUSIVE_EXCLUSIVE 锚定：在段落起点插入文本时 span 起点不漂移，
- *   在段落末尾（`\n` 处）插入文本时 span 不越过下一个段落起点。
+ * - 普通按键（段落内部增删字符）不触碰 span。
  *
  * 每个段落使用独立的 span 实例（复用同一实例会让 setSpan 只更新一个 range，
  * 其余 range 保持旧边界，段落缩进会错位）。
@@ -107,7 +114,7 @@ class ParagraphStyleProjection {
         start: Int,
         end: Int,
     ) {
-        val spans = text.getSpans(start, end, LeadingMarginSpan.Standard::class.java)
+        val spans = text.getSpans(start, end, FirstLineIndentSpan::class.java)
         for (span in spans) {
             text.removeSpan(span)
         }
@@ -121,14 +128,16 @@ class ParagraphStyleProjection {
     ) {
         if (regionStart >= regionEnd || text.length == 0) return
         // 段落起点 = 文本开头 + 每个 '\n' 之后的位置。regionStart 已是段落起点
-        // （调用方保证），从它开始逐段应用。
+        // （调用方保证），从它开始逐段应用。SPAN_PARAGRAPH 要求端点在正文边界
+        // 或 '\n' 后：start 满足（0 或 '\n' 之后），end = 段落终点（含结尾 '\n'，
+        // 即下一个段落起点或文末），同样满足。
         var position = regionStart
         while (position in regionStart until regionEnd) {
             text.setSpan(
-                LeadingMarginSpan.Standard(firstLinePx.toInt(), 0),
+                FirstLineIndentSpan(firstLinePx.toInt()),
                 position,
                 paragraphEndExclusive(text, position),
-                Spannable.SPAN_INCLUSIVE_EXCLUSIVE,
+                Spannable.SPAN_PARAGRAPH,
             )
             val nextBreak = TextUtils.indexOf(text, '\n', position)
             if (nextBreak < 0 || nextBreak + 1 >= regionEnd) break

@@ -6,7 +6,6 @@ import android.text.Layout
 import android.text.SpannableStringBuilder
 import android.text.TextDirectionHeuristics
 import android.text.TextPaint
-import com.xiwei.sujian.feature.editor.input.AndroidTextIndexMap
 import com.xiwei.sujian.feature.editor.projection.DisplayPatch
 import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import com.xiwei.sujian.feature.editor.projection.DisplayTextProjection
@@ -20,7 +19,17 @@ import com.xiwei.sujian.feature.editor.projection.DisplayTextProjection
  * DynamicLayout（DynamicLayout 本身就是给可编辑 Spannable 增量变化使用的，
  * 文本/span 变化触发区域 reflow）。
  *
- * 首行缩进（#624 评论3）由 [ParagraphStyleProjection] 以显示层 span 施加在同一份
+ * 布局推进职责（#624 评论3）：普通编辑路径由动画引擎 [captureAffectedRevision]
+ * 唯一推进 — 不再每次按键重建整章 lineRanges。布局对象配置与本次编辑需要的
+ * 不可变视觉快照拆开：
+ * - [ensureLayoutConfig]：宽度/字体/行距/首行缩进/方向或显示 source 类型变化时
+ *   才重建 DynamicLayout；普通 mirror 内容变化直接复用现有 layout。
+ * - [captureAffectedRevision]：普通输入只抓本次受影响段落/视觉行 + 光标/选区
+ *   几何 + 稳定后缀锚点；不复制整章 `AndroidLayoutRevision.lineRanges`。
+ * - [requestLayout]（全量）：只用于配置变化/加载等非按键路径。
+ *
+ * 首行缩进（#624 评论3）由 [ParagraphStyleProjection] 以显示层 span
+ * （[FirstLineIndentSpan]，`SPAN_PARAGRAPH` + `UpdateLayout`）施加在同一份
  * Spannable 上：配置变化/整篇重载时整篇重同步，正文编辑影响段落结构时只重同步
  * 受影响段落区域，普通按键不触碰任何 span。
  */
@@ -30,8 +39,10 @@ class AndroidLayoutEngine(
 ) {
     private val snapshotBuilder = AndroidLineSnapshotBuilder()
     private val paragraphStyle = ParagraphStyleProjection()
+    private val lineCapture = AffectedLineCapture()
     private var layout: DynamicLayout? = null
-    private var currentRevision: AndroidLayoutRevision? = null
+    private var currentFullRevision: AndroidLayoutRevision? = null
+    private var currentAffectedRevision: AffectedLayoutRevision? = null
     private var width: Float = 0f
     private var lineSpacingMultiplier: Float = 1.0f
     private var firstLineIndentEnabled: Boolean = false
@@ -49,7 +60,10 @@ class AndroidLayoutEngine(
             0f
         }
 
-    private fun computeConfigFingerprint(): String =
+    /** 测试辅助：当前首行缩进像素。 */
+    internal fun getFirstLineIndentPxForTest(): Float = currentFirstLineIndentPx()
+
+    internal fun computeConfigFingerprint(): String =
         "${width}_${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}_" +
             "${lineSpacingMultiplier}_${currentFirstLineIndentPx()}_${textDirection.hashCode()}"
 
@@ -66,7 +80,7 @@ class AndroidLayoutEngine(
 
     /**
      * #624 评论3：首行缩进设置（开关 + 字符宽度）— 只影响显示层 span 与
-     * fingerprint；变化后让布局配置失效，下一次 requestLayout 整篇重排。
+     * fingerprint；变化后让布局配置失效，下一次 [ensureLayoutConfig] 整篇重排。
      */
     fun setFirstLineIndent(
         enabled: Boolean,
@@ -79,7 +93,14 @@ class AndroidLayoutEngine(
         }
     }
 
-    fun requestLayout() {
+    /**
+     * #624 评论3：布局配置推进 — 只有配置（宽度/字号/行距/首行缩进/方向）或显示
+     * source 类型变化才重建 DynamicLayout；普通 mirror 内容变化在这里直接复用
+     * 现有 layout（DynamicLayout 随 Editable 文本/span 变化自动 reflow）。
+     * 本方法**不**构建任何 revision — revision 由 [captureAffectedRevision] 或
+     * 全量 [requestLayout] 单独产生。
+     */
+    fun ensureLayoutConfig() {
         if (width <= 0f) return
         val effectiveText =
             displayTextOverride?.let { override ->
@@ -88,8 +109,6 @@ class AndroidLayoutEngine(
 
         val currentConfigFp = computeConfigFingerprint()
 
-        // 只有配置（宽度/字号/行距/首行缩进/方向）或显示 source 类型变化才重建
-        // DynamicLayout；普通 mirror 内容变化在这里直接复用现有 layout。
         if (currentConfigFp != lastConfigFingerprint || layout == null) {
             if (displayTextOverride == null) {
                 // 重建前整篇重同步段落缩进 span（attach/配置变化后 span 可能
@@ -123,10 +142,114 @@ class AndroidLayoutEngine(
                     )
                 }
             lastConfigFingerprint = currentConfigFp
+            // 布局对象重建后旧快照的几何全部过期 — 渲染路径退回全量 revision。
+            currentAffectedRevision = null
         }
+    }
+
+    /**
+     * 全量布局推进 — 只用于配置变化/加载/显式重建路径（不是每键热路径）。
+     * 推进配置后构建整章 revision（供查询与渲染回退）。
+     */
+    fun requestLayout() {
+        ensureLayoutConfig()
+        val l = layout ?: return
+        revisionCounter++
+        currentFullRevision = buildRevision(l)
+    }
+
+    /**
+     * #624 评论3：普通编辑路径的受影响区域捕获 — 编辑前（old 侧）用当前
+     * DynamicLayout 的 `getLineForOffset()` 找到编辑所在段落，只保存该段落及
+     * 删除/合段时的相邻段落的 line geometry；编辑后（new 侧）只读取新的受影响
+     * 段落。不复制整章 `lineRanges`。
+     *
+     * [editStartUtf8]/[editEndUtf8] 为编辑区域（UTF-8 字节，半开区间）在本侧
+     * 坐标中的位置（old 侧 = 旧正文坐标，new 侧 = 新正文坐标）。
+     * [includeNextParagraph]：删除/替换角色（old 侧）或区域终点后紧跟段落边界
+     * （new 侧）时，把区域后的相邻段落一并纳入受影响范围。
+     * [previousRevision]：new 侧传入 old 侧快照，用于计算稳定后缀的 deltaY。
+     */
+    fun captureAffectedRevision(
+        editStartUtf8: Int,
+        editEndUtf8: Int,
+        includeNextParagraph: Boolean,
+        previousRevision: AffectedLayoutRevision? = null,
+    ): AffectedLayoutRevision? {
+        val l = layout ?: return null
+        if (width <= 0f) return null
+        val projection = currentProjection ?: DisplayTextProjection.identity(mirror.getText())
+        val layoutText = displayTextOverride ?: mirror.getText()
+
+        val regionStartUtf16 = projection.realUtf8ToDisplayUtf16(editStartUtf8.coerceAtLeast(0))
+        val regionEndUtf16 = projection.realUtf8ToDisplayUtf16(editEndUtf8.coerceAtLeast(0))
+        val captured =
+            lineCapture.capture(
+                AffectedLineCapture.CaptureParams(
+                    layout = l,
+                    layoutText = layoutText,
+                    projection = projection,
+                    mirror = mirror,
+                    firstLineIndentEnabled = firstLineIndentEnabled,
+                    firstLineIndentWidthChars = firstLineIndentWidthChars,
+                    firstLineIndentPx = currentFirstLineIndentPx(),
+                ),
+                regionStartUtf16 = regionStartUtf16,
+                regionEndUtf16 = regionEndUtf16,
+                includeNextParagraph = includeNextParagraph,
+            ) ?: return null
+
+        // ── 稳定后缀锚点：受影响区域之后第一个内容未变化的段落起点 ──
+        val textLengthUtf8 = mirror.getText().toByteArray(Charsets.UTF_8).size
+        val stableAnchor =
+            if (captured.affectedEndUtf16 < layoutText.length) {
+                val anchorLine = l.getLineForOffset(captured.affectedEndUtf16)
+                val anchorTop = l.getLineTop(anchorLine).toFloat()
+                val oldAnchor = previousRevision?.stableSuffixAnchor
+                val anchorUtf8 = projection.displayUtf16ToRealUtf8(captured.affectedEndUtf16)
+                // 两侧锚点指向同一段未变化内容（净长度变化一致）时才可信。
+                val suffixCorresponds =
+                    oldAnchor != null && anchorUtf8 - oldAnchor.startUtf8 == textLengthUtf8 - oldAnchor.textLengthUtf8
+                AffectedLayoutRevision.StableSuffixAnchor(
+                    startUtf8 = anchorUtf8,
+                    startUtf16 = captured.affectedEndUtf16,
+                    lineIndex = anchorLine,
+                    top = anchorTop,
+                    bottom = l.getLineBottom(anchorLine).toFloat(),
+                    left = l.getLineLeft(anchorLine),
+                    right = l.getLineRight(anchorLine),
+                    textLengthUtf8 = textLengthUtf8,
+                    deltaY = if (previousRevision == null || !suffixCorresponds) 0f else anchorTop - oldAnchor.top,
+                )
+            } else {
+                null
+            }
 
         revisionCounter++
-        currentRevision = buildRevision(layout!!)
+        val geometry = captured.cursorGeometry
+        val revision =
+            AffectedLayoutRevision(
+                editorRevision = mirror.getRevision(),
+                layoutRevision = revisionCounter,
+                layoutConfigFingerprint = computeConfigFingerprint(),
+                firstAffectedLineIndex = captured.firstAffectedLineIndex,
+                affectedLines = captured.affectedLines,
+                lineCount = l.lineCount,
+                cursorUtf8 = geometry.cursorUtf8,
+                cursorUtf16 = geometry.cursorUtf16,
+                cursorX = geometry.cursorX,
+                cursorY = geometry.cursorY,
+                cursorHeight = geometry.cursorHeight,
+                selectionAnchorUtf8 = geometry.selectionAnchorUtf8,
+                selectionHeadUtf8 = geometry.selectionHeadUtf8,
+                selectionAnchorUtf16 = geometry.selectionAnchorUtf16,
+                selectionHeadUtf16 = geometry.selectionHeadUtf16,
+                compositionStartUtf16 = geometry.compositionStartUtf16,
+                compositionEndUtf16 = geometry.compositionEndUtf16,
+                stableSuffixAnchor = stableAnchor,
+            )
+        currentAffectedRevision = revision
+        return revision
     }
 
     /**
@@ -140,6 +263,10 @@ class AndroidLayoutEngine(
      * 避免每字符都产生 span 抖动。patch 的 byte offset 在其应用时刻的缓冲区
      * 坐标中，替换起点前的字节在新旧缓冲区一致，因此用当前（新）投影换算
      * UTF-16 偏移仍正确。
+     *
+     * 本方法**不**推进布局（不构建 revision、不触发重建）— 布局推进所有权在
+     * 动画引擎 [captureAffectedRevision] / 全量 [requestLayout]，避免一次编辑
+     * 出现两次 revision 推进（#624 评论3）。
      */
     fun onMirrorContentChanged(
         projection: DisplayTextProjection,
@@ -182,134 +309,67 @@ class AndroidLayoutEngine(
         )
     }
 
-    fun captureImmutableRevision(): AndroidLayoutRevision? {
-        return currentRevision?.copy()
+    /** 最近一次捕获的受影响 revision（编辑路径）— 渲染/查询优先使用。 */
+    fun getCurrentAffectedRevision(): AffectedLayoutRevision? = currentAffectedRevision
+
+    /**
+     * 渲染路径的当前 revision：优先返回与当前正文 + 配置一致的受影响 revision；
+     * 否则回退到全量 revision（配置变化/加载路径）。
+     */
+    fun getCurrentRevision(): LayoutRevisionSource? {
+        val affected = currentAffectedRevision ?: return currentFullRevision
+        if (affected.editorRevision != mirror.getRevision()) return currentFullRevision
+        return if (affected.layoutConfigFingerprint == computeConfigFingerprint()) affected else currentFullRevision
     }
 
-    /** Capture line snapshots with per-cluster data. Both this method and
-     *  [captureLineBitmapSnapshotsWithClusters] currently delegate to
-     *  [AndroidLineSnapshotBuilder.buildSnapshotForLineWithClusters] — cluster data is
-     *  always included so that callers can switch animation modes without re-capturing.
-     *
-     *  Design intent: always capturing cluster data is a deliberate trade-off. The alternative
-     *  (cluster-less snapshots for SnapshotAnimation mode) would require re-capturing if the
-     *  animation mode changes or if [addMoveSlicesForShiftedClustersCrossLine] needs cluster
-     *  data for cross-line Move generation. Since cluster data adds negligible overhead (the
-     *  Bitmap is the expensive part, cluster rects are computed from Layout API calls), always
-     *  including it avoids a capture-mode mismatch that would silently produce whole-line
-     *  crossfade instead of cluster-level animation. */
-    fun captureLineBitmapSnapshotsWithClusters(lineIndices: Set<Int>): Map<Int, AndroidLineSnapshot> {
+    /**
+     * 捕获受影响行的 line Bitmap 快照（含 cluster 数据）。
+     * 只捕获 [revision] 覆盖的受影响行 — 不触碰整章。
+     */
+    fun captureLineBitmapSnapshotsWithClusters(revision: AffectedLayoutRevision): Map<Int, AndroidLineSnapshot> {
         val l = layout ?: return emptyMap()
-        val rev = currentRevision ?: return emptyMap()
         val result = mutableMapOf<Int, AndroidLineSnapshot>()
-        for (idx in lineIndices) {
-            val snapshot = snapshotBuilder.buildSnapshotForLineWithClusters(l, idx, rev, mirror, currentProjection)
+        for (i in 0 until revision.affectedLineCount) {
+            val lineIndex = revision.firstAffectedLineIndex + i
+            val snapshot =
+                snapshotBuilder.buildSnapshotForLineWithClusters(l, lineIndex, revision, mirror, currentProjection)
             if (snapshot != null) {
-                result[idx] = snapshot
+                result[lineIndex] = snapshot
             }
         }
         return result
     }
 
+    /** 全量 revision 的行快照入口（当前仅测试/工具场景使用）。 */
     fun getLayout(): Layout? = layout
-
-    fun getCurrentRevision(): AndroidLayoutRevision? = currentRevision
 
     fun getWidth(): Float = width
 
     fun getMirror(): DisplayTextMirror = mirror
 
-    fun getLineForUtf8(byteOffset: Int): Int {
-        val utf16 =
-            currentProjection?.realUtf8ToDisplayUtf16(byteOffset)
-                ?: AndroidTextIndexMap(mirror).utf8ToUtf16(byteOffset)
-        val l = layout ?: return 0
-        return l.getLineForOffset(utf16)
-    }
-
-    fun getCursorLine(): Int {
-        return getLineForUtf8(mirror.getCursorUtf8())
-    }
-
-    fun getPrimaryHorizontalUtf8(byteOffset: Int): Float {
-        val utf16 =
-            currentProjection?.realUtf8ToDisplayUtf16(byteOffset)
-                ?: AndroidTextIndexMap(mirror).utf8ToUtf16(byteOffset)
-        val l = layout ?: return 0f
-        return l.getPrimaryHorizontal(utf16)
-    }
-
     private fun buildRevision(l: Layout): AndroidLayoutRevision {
         val projection = currentProjection ?: DisplayTextProjection.identity(mirror.getText())
         val layoutText = displayTextOverride ?: mirror.getText()
-        val lineRanges = mutableListOf<AndroidLayoutRevision.LineRange>()
-        var currentParagraphId = 0
-        var currentParagraphLocalLineIndex = 0
-        for (i in 0 until l.lineCount) {
-            val lineStartUtf16 = l.getLineStart(i)
-            val lineEndUtf16 = l.getLineEnd(i)
-            val top = l.getLineTop(i).toFloat()
-            val bottom = l.getLineBottom(i).toFloat()
-            val baseline = l.getLineBaseline(i).toFloat()
-            val left = l.getLineLeft(i)
-            val right = l.getLineRight(i)
-
-            val startUtf8 = projection.displayUtf16ToRealUtf8(lineStartUtf16)
-            val endUtf8 = projection.displayUtf16ToRealUtf8(lineEndUtf16)
-
-            val endsWithHardBreak =
-                lineEndUtf16 > 0 && lineEndUtf16 <= layoutText.length &&
-                    layoutText[lineEndUtf16 - 1] == '\n'
-
-            if (i == 0) {
-                currentParagraphId = 0
-                currentParagraphLocalLineIndex = 0
-            } else if (lineRanges.lastOrNull()?.endsWithHardBreak == true) {
-                currentParagraphId++
-                currentParagraphLocalLineIndex = 0
-            } else {
-                currentParagraphLocalLineIndex++
-            }
-
-            lineRanges.add(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = startUtf8,
-                    endUtf8 = endUtf8,
-                    startUtf16 = lineStartUtf16,
-                    endUtf16 = lineEndUtf16,
-                    top = top,
-                    bottom = bottom,
-                    baseline = baseline,
-                    left = left,
-                    right = right,
-                    endsWithHardBreak = endsWithHardBreak,
-                    paragraphId = currentParagraphId,
-                    paragraphLocalLineIndex = currentParagraphLocalLineIndex,
+        // 全量捕获：区域覆盖整个文档，行捕获器按段落推进生成全部 lineRanges。
+        val captured =
+            lineCapture.capture(
+                AffectedLineCapture.CaptureParams(
+                    layout = l,
+                    layoutText = layoutText,
+                    projection = projection,
+                    mirror = mirror,
+                    firstLineIndentEnabled = firstLineIndentEnabled,
+                    firstLineIndentWidthChars = firstLineIndentWidthChars,
+                    firstLineIndentPx = currentFirstLineIndentPx(),
                 ),
+                regionStartUtf16 = 0,
+                regionEndUtf16 = layoutText.length,
+                includeNextParagraph = false,
             )
-        }
+        val lineRanges = captured?.affectedLines ?: emptyList()
+        val geometry = captured?.cursorGeometry
 
         val fontFingerprint = "${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}"
-
-        val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
-        val cursorLine = if (cursorDisplayUtf16 in 0..layoutText.length) l.getLineForOffset(cursorDisplayUtf16) else 0
-        val cursorX = if (cursorDisplayUtf16 in 0..layoutText.length) l.getPrimaryHorizontal(cursorDisplayUtf16) else 0f
-        val cursorY = l.getLineTop(cursorLine).toFloat()
-        val cursorHeight = (l.getLineBottom(cursorLine) - l.getLineTop(cursorLine)).toFloat()
-
-        val compRange = mirror.getCompositionRangeUtf16()
-        val compStartDisplayUtf16: Int
-        val compEndDisplayUtf16: Int
-        if (compRange != null && compRange.first >= 0 && compRange.second >= 0) {
-            compStartDisplayUtf16 = projection.realUtf16ToDisplayUtf16(compRange.first)
-            compEndDisplayUtf16 = projection.realUtf16ToDisplayUtf16(compRange.second)
-        } else {
-            compStartDisplayUtf16 = compRange?.first ?: -1
-            compEndDisplayUtf16 = compRange?.second ?: -1
-        }
-
-        val selectionAnchorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getSelectionAnchorUtf8())
-        val selectionHeadDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getSelectionHeadUtf8())
 
         return AndroidLayoutRevision(
             revisionCounter,
@@ -317,25 +377,25 @@ class AndroidLayoutEngine(
             width,
             fontFingerprint,
             l.lineCount,
-            lineRanges.toList(),
-            mirror.getCursorUtf8(),
-            cursorDisplayUtf16,
-            cursorX,
-            cursorY,
-            cursorHeight,
-            mirror.getSelectionAnchorUtf8(),
-            mirror.getSelectionHeadUtf8(),
-            selectionAnchorDisplayUtf16,
-            selectionHeadDisplayUtf16,
-            compStartDisplayUtf16,
-            compEndDisplayUtf16,
+            lineRanges,
+            geometry?.cursorUtf8 ?: 0,
+            geometry?.cursorUtf16 ?: 0,
+            geometry?.cursorX ?: 0f,
+            geometry?.cursorY ?: 0f,
+            geometry?.cursorHeight ?: 0f,
+            geometry?.selectionAnchorUtf8 ?: 0,
+            geometry?.selectionHeadUtf8 ?: 0,
+            geometry?.selectionAnchorUtf16 ?: 0,
+            geometry?.selectionHeadUtf16 ?: 0,
+            geometry?.compositionStartUtf16 ?: -1,
+            geometry?.compositionEndUtf16 ?: -1,
             emptyList(),
         )
     }
 
     /**
      * 切换显示文本 source（mirror ↔ override）— 真正的 source 类型切换才让
-     * 配置失效（下一次 requestLayout 重建 DynamicLayout）；identity 投影的
+     * 配置失效（下一次 [ensureLayoutConfig] 重建 DynamicLayout）；identity 投影的
      * 内容更新走 [onMirrorContentChanged]，不清 fingerprint。
      */
     fun applyDisplaySource(
@@ -349,7 +409,8 @@ class AndroidLayoutEngine(
 
     fun release() {
         layout = null
-        currentRevision = null
+        currentFullRevision = null
+        currentAffectedRevision = null
         displayTextOverride = null
     }
 }

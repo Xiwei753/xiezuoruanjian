@@ -1,13 +1,13 @@
 package com.xiwei.sujian.feature.editor.visual.planner
 
-import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
 import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
+import com.xiwei.sujian.feature.editor.layout.LayoutRevisionSource
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 
 class SnapshotPlanner {
     fun createSnapshotFromRevision(
-        revision: AndroidLayoutRevision,
+        revision: LayoutRevisionSource,
         lineIndex: Int,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
@@ -20,7 +20,7 @@ class SnapshotPlanner {
         }
     }
 
-    fun buildSelectionDecoration(newRev: AndroidLayoutRevision): PreparedVisualTransaction.SelectionDecoration? {
+    fun buildSelectionDecoration(newRev: LayoutRevisionSource): PreparedVisualTransaction.SelectionDecoration? {
         if (newRev.selectionStartUtf16 < 0 || newRev.selectionEndUtf16 < 0) return null
         if (newRev.selectionStartUtf16 == newRev.selectionEndUtf16) return null
         return PreparedVisualTransaction.SelectionDecoration(
@@ -29,7 +29,7 @@ class SnapshotPlanner {
         )
     }
 
-    fun buildPreeditDecoration(newRev: AndroidLayoutRevision): PreparedVisualTransaction.PreeditDecoration? {
+    fun buildPreeditDecoration(newRev: LayoutRevisionSource): PreparedVisualTransaction.PreeditDecoration? {
         if (newRev.compositionStartUtf16 < 0 || newRev.compositionEndUtf16 < 0) return null
         if (newRev.compositionStartUtf16 == newRev.compositionEndUtf16) return null
         return PreparedVisualTransaction.PreeditDecoration(

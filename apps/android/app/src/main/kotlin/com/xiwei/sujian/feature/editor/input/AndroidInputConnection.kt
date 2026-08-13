@@ -68,8 +68,9 @@ class AndroidInputConnection(
         // #624 评论2：非 composition 状态收到 "\n" / "\r\n" 不再走普通
         // sendCommitTextToKernel()，统一调用 insertLineBreak()（CRLF 先规范化为
         // 一个逻辑换行）。连续按 Enter 得到连续 \n，第二个空行不会被吞掉。
+        // 输出与其他 send* 路径一致经 onPipelineOutput 回到宿主 — 不能丢弃。
         if (commitStr == "\n" || commitStr == "\r\n") {
-            commandPort.insertLineBreak(EditorTransactionCauseDto.TYPING)
+            adapter.sendLineBreakToKernel(EditorTransactionCauseDto.TYPING)
             notifySelectionChanged()
             return true
         }

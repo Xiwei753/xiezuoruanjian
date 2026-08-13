@@ -1,7 +1,7 @@
 package com.xiwei.sujian.feature.editor.visual.planner
 
-import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
 import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
+import com.xiwei.sujian.feature.editor.layout.LayoutRevisionSource
 import com.xiwei.sujian.feature.editor.layout.LineClusterSnapshot
 import com.xiwei.sujian.feature.editor.projection.VisualIntent
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
@@ -12,8 +12,8 @@ class MoveCrossfadePlanner {
         allOldSnapshots: Map<Int, AndroidLineSnapshot>,
         allNewSnapshots: Map<Int, AndroidLineSnapshot>,
         visualIntent: VisualIntent,
-        oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision,
+        oldRev: LayoutRevisionSource,
+        newRev: LayoutRevisionSource,
         excludedNewByteRanges: Set<Pair<Int, Int>>,
         excludedOldByteRanges: Set<Pair<Int, Int>>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
@@ -135,39 +135,39 @@ class MoveCrossfadePlanner {
 
     fun planLineReflowAnimation(
         visualIntent: VisualIntent,
-        oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision,
+        oldRev: LayoutRevisionSource,
+        newRev: LayoutRevisionSource,
         affectedOldLineIndices: Set<Int>,
         affectedNewLineIndices: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
-        createSnapshotFromRevision: (AndroidLayoutRevision, Int, Boolean) -> AndroidLineSnapshot?,
+        createSnapshotFromRevision: (LayoutRevisionSource, Int, Boolean) -> AndroidLineSnapshot?,
         offsetMapper: (Int) -> Int?,
     ) {
         val affectedOldParagraphIds = mutableSetOf<Int>()
         val affectedNewParagraphIds = mutableSetOf<Int>()
         for (lineIndex in affectedOldLineIndices) {
-            oldRev.lineRanges.getOrNull(lineIndex)?.paragraphId?.let { affectedOldParagraphIds.add(it) }
+            oldRev.lineRangeAt(lineIndex)?.paragraphId?.let { affectedOldParagraphIds.add(it) }
         }
         for (lineIndex in affectedNewLineIndices) {
-            newRev.lineRanges.getOrNull(lineIndex)?.paragraphId?.let { affectedNewParagraphIds.add(it) }
+            newRev.lineRangeAt(lineIndex)?.paragraphId?.let { affectedNewParagraphIds.add(it) }
         }
 
         val allOldClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
-        for (lineEntry in oldRev.lineRanges.withIndex()) {
-            if (lineEntry.value.paragraphId !in affectedOldParagraphIds) continue
-            val oldSnapshot = createSnapshotFromRevision(oldRev, lineEntry.index, false) ?: continue
+        for ((lineIndex, lineRange) in oldRev.lineEntries()) {
+            if (lineRange.paragraphId !in affectedOldParagraphIds) continue
+            val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, false) ?: continue
             for (cluster in oldSnapshot.clusters) {
                 allOldClusters.add(Pair(cluster, oldSnapshot))
             }
         }
 
         val allNewClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
-        for (lineEntry in newRev.lineRanges.withIndex()) {
-            if (lineEntry.value.paragraphId !in affectedNewParagraphIds) continue
-            val newSnapshot = createSnapshotFromRevision(newRev, lineEntry.index, true) ?: continue
+        for ((lineIndex, lineRange) in newRev.lineEntries()) {
+            if (lineRange.paragraphId !in affectedNewParagraphIds) continue
+            val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, true) ?: continue
             for (cluster in newSnapshot.clusters) {
                 allNewClusters.add(Pair(cluster, newSnapshot))
             }
@@ -303,21 +303,21 @@ class MoveCrossfadePlanner {
 
     fun planCrossfadeAnimation(
         visualIntent: VisualIntent,
-        oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision,
+        oldRev: LayoutRevisionSource,
+        newRev: LayoutRevisionSource,
         affectedOldLineIndices: Set<Int>,
         affectedNewLineIndices: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
-        createSnapshotFromRevision: (AndroidLayoutRevision, Int, Boolean) -> AndroidLineSnapshot?,
+        createSnapshotFromRevision: (LayoutRevisionSource, Int, Boolean) -> AndroidLineSnapshot?,
         offsetMapper: (Int) -> Int?,
     ) {
         val matchedNewLineIndices = mutableSetOf<Int>()
 
         for (lineIndex in affectedOldLineIndices) {
-            val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex) ?: continue
+            val oldLineRange = oldRev.lineRangeAt(lineIndex) ?: continue
             val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, false) ?: continue
 
             var bestNewLineIdx: Int? = null
@@ -325,7 +325,7 @@ class MoveCrossfadePlanner {
             if (mappedStart != null) {
                 for (newLineIdx in affectedNewLineIndices) {
                     if (newLineIdx in matchedNewLineIndices) continue
-                    val newLineRange = newRev.lineRanges.getOrNull(newLineIdx) ?: continue
+                    val newLineRange = newRev.lineRangeAt(newLineIdx) ?: continue
                     if (newLineRange.startUtf8 == mappedStart) {
                         bestNewLineIdx = newLineIdx
                         break
@@ -337,7 +337,7 @@ class MoveCrossfadePlanner {
                 if (mappedEnd != null) {
                     for (newLineIdx in affectedNewLineIndices) {
                         if (newLineIdx in matchedNewLineIndices) continue
-                        val newLineRange = newRev.lineRanges.getOrNull(newLineIdx) ?: continue
+                        val newLineRange = newRev.lineRangeAt(newLineIdx) ?: continue
                         if (newLineRange.endUtf8 == mappedEnd) {
                             bestNewLineIdx = newLineIdx
                             break
@@ -348,7 +348,7 @@ class MoveCrossfadePlanner {
             if (bestNewLineIdx == null) {
                 for (newLineIdx in affectedNewLineIndices) {
                     if (newLineIdx in matchedNewLineIndices) continue
-                    val newLineRange = newRev.lineRanges.getOrNull(newLineIdx) ?: continue
+                    val newLineRange = newRev.lineRangeAt(newLineIdx) ?: continue
                     if (oldLineRange.startUtf8 < newLineRange.endUtf8 &&
                         oldLineRange.endUtf8 > newLineRange.startUtf8
                     ) {
@@ -360,7 +360,7 @@ class MoveCrossfadePlanner {
 
             if (bestNewLineIdx != null) {
                 matchedNewLineIndices.add(bestNewLineIdx)
-                val newLineRange = newRev.lineRanges.getOrNull(bestNewLineIdx) ?: continue
+                val newLineRange = newRev.lineRangeAt(bestNewLineIdx) ?: continue
                 val newSnapshot = createSnapshotFromRevision(newRev, bestNewLineIdx, true) ?: continue
                 animatedSlices.add(
                     PreparedVisualTransaction.AnimatedSlice(
@@ -416,7 +416,7 @@ class MoveCrossfadePlanner {
 
         for (lineIndex in affectedNewLineIndices) {
             if (lineIndex in matchedNewLineIndices) continue
-            val newLineRange = newRev.lineRanges.getOrNull(lineIndex) ?: continue
+            val newLineRange = newRev.lineRangeAt(lineIndex) ?: continue
             val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, true) ?: continue
             animatedSlices.add(
                 PreparedVisualTransaction.AnimatedSlice(

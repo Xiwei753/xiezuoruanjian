@@ -1,7 +1,6 @@
 package com.xiwei.sujian.feature.editor.layout
 
 import android.text.TextPaint
-import android.text.style.LeadingMarginSpan
 import com.xiwei.sujian.feature.editor.projection.DisplayPatch
 import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import com.xiwei.sujian.feature.editor.projection.DisplayTextProjection
@@ -109,7 +108,7 @@ class AndroidLayoutEngineReuseTest {
         assertNotSame("首行缩进配置变化必须重建 DynamicLayout", layout1, engine.getLayout())
         val text = mirror.getSpannable()
         val starts =
-            text.getSpans(0, text.length, LeadingMarginSpan.Standard::class.java)
+            text.getSpans(0, text.length, FirstLineIndentSpan::class.java)
                 .map { text.getSpanStart(it) }
                 .sorted()
         assertEquals("每个段落起点都必须有首行缩进 span", listOf(0, 3), starts)
@@ -145,7 +144,7 @@ class AndroidLayoutEngineReuseTest {
         assertSame("结构性编辑也不得整篇重建 DynamicLayout", layout1, engine.getLayout())
         val text = mirror.getSpannable()
         val starts =
-            text.getSpans(0, text.length, LeadingMarginSpan.Standard::class.java)
+            text.getSpans(0, text.length, FirstLineIndentSpan::class.java)
                 .map { text.getSpanStart(it) }
                 .sorted()
         assertEquals("新段落必须获得首行缩进 span", listOf(0, 3, 4), starts)
@@ -180,7 +179,7 @@ class AndroidLayoutEngineReuseTest {
         assertEquals("正文必须是替换结果", "新第三段\n第四段", mirror.getText())
         val text = mirror.getSpannable()
         val spans =
-            text.getSpans(0, text.length, LeadingMarginSpan.Standard::class.java)
+            text.getSpans(0, text.length, FirstLineIndentSpan::class.java)
                 .sortedBy { text.getSpanStart(it) }
         assertEquals("合并后的两段都必须有缩进 span", 2, spans.size)
         assertEquals("第一段 span 起点", 0, text.getSpanStart(spans[0]))
@@ -217,7 +216,7 @@ class AndroidLayoutEngineReuseTest {
 
         val text = mirror.getSpannable()
         val starts =
-            text.getSpans(0, text.length, LeadingMarginSpan.Standard::class.java)
+            text.getSpans(0, text.length, FirstLineIndentSpan::class.java)
                 .map { text.getSpanStart(it) }
                 .sorted()
         assertEquals("每个段落（含空段落）都必须有缩进 span", listOf(0, 3, 4), starts)

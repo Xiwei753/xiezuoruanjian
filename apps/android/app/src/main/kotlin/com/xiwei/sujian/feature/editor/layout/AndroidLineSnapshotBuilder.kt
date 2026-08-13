@@ -17,7 +17,7 @@ class AndroidLineSnapshotBuilder {
 
     fun buildSnapshots(
         layout: Layout?,
-        revision: AndroidLayoutRevision?,
+        revision: LayoutRevisionSource?,
         startIndex: Int,
         endIndex: Int,
         projection: DisplayTextProjection? = null,
@@ -40,13 +40,13 @@ class AndroidLineSnapshotBuilder {
     fun buildSnapshotForLine(
         layout: Layout?,
         lineIndex: Int,
-        revision: AndroidLayoutRevision?,
+        revision: LayoutRevisionSource?,
         projection: DisplayTextProjection? = null,
     ): AndroidLineSnapshot? {
         if (layout == null || revision == null) return null
         if (lineIndex < 0 || lineIndex >= layout.lineCount) return null
 
-        val lineRange = revision.lineRanges.getOrNull(lineIndex) ?: return null
+        val lineRange = revision.lineRangeAt(lineIndex) ?: return null
 
         val left = lineRange.left
         val right = lineRange.right
@@ -133,14 +133,14 @@ class AndroidLineSnapshotBuilder {
     fun buildSnapshotForLineWithClusters(
         layout: Layout?,
         lineIndex: Int,
-        revision: AndroidLayoutRevision?,
+        revision: LayoutRevisionSource?,
         mirror: DisplayTextMirror,
         projection: DisplayTextProjection? = null,
     ): AndroidLineSnapshot? {
         val snapshot = buildSnapshotForLine(layout, lineIndex, revision, projection) ?: return null
         if (layout == null) return snapshot
 
-        val lineRange = revision?.lineRanges?.getOrNull(lineIndex) ?: return snapshot
+        val lineRange = revision?.lineRangeAt(lineIndex) ?: return snapshot
         val clusters = buildClustersForLine(layout, lineIndex, lineRange, mirror, projection)
 
         return snapshot.copy(clusters = clusters)

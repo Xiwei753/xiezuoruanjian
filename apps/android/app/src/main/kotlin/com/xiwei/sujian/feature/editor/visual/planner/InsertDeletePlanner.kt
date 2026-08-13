@@ -1,7 +1,7 @@
 package com.xiwei.sujian.feature.editor.visual.planner
 
-import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
 import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
+import com.xiwei.sujian.feature.editor.layout.LayoutRevisionSource
 import com.xiwei.sujian.feature.editor.layout.LineClusterSnapshot
 import com.xiwei.sujian.feature.editor.projection.VisualIntent
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
@@ -12,15 +12,15 @@ class InsertDeletePlanner {
 
     fun planClusterLevelAnimation(
         visualIntent: VisualIntent,
-        oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision,
+        oldRev: LayoutRevisionSource,
+        newRev: LayoutRevisionSource,
         affectedOldLineIndices: Set<Int>,
         affectedNewLineIndices: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
-        createSnapshotFromRevision: (AndroidLayoutRevision, Int, Boolean) -> AndroidLineSnapshot?,
+        createSnapshotFromRevision: (LayoutRevisionSource, Int, Boolean) -> AndroidLineSnapshot?,
         offsetMapper: (Int) -> Int?,
     ) {
         if (visualIntent.isReplaceRenderRole()) {
@@ -114,15 +114,15 @@ class InsertDeletePlanner {
 
     fun planRunAnimation(
         visualIntent: VisualIntent,
-        oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision,
+        oldRev: LayoutRevisionSource,
+        newRev: LayoutRevisionSource,
         affectedOldLineIndices: Set<Int>,
         affectedNewLineIndices: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
-        createSnapshotFromRevision: (AndroidLayoutRevision, Int, Boolean) -> AndroidLineSnapshot?,
+        createSnapshotFromRevision: (LayoutRevisionSource, Int, Boolean) -> AndroidLineSnapshot?,
         offsetMapper: (Int) -> Int?,
     ) {
         if (visualIntent.isReplaceRenderRole()) {
@@ -283,22 +283,22 @@ class InsertDeletePlanner {
 
     fun planClusterReplaceAnimation(
         visualIntent: VisualIntent,
-        oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision,
+        oldRev: LayoutRevisionSource,
+        newRev: LayoutRevisionSource,
         affectedOldLineIndices: Set<Int>,
         affectedNewLineIndices: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
-        createSnapshotFromRevision: (AndroidLayoutRevision, Int, Boolean) -> AndroidLineSnapshot?,
+        createSnapshotFromRevision: (LayoutRevisionSource, Int, Boolean) -> AndroidLineSnapshot?,
         offsetMapper: (Int) -> Int?,
     ) {
         val allOldAffectedClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
         val allNewAffectedClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
 
         for (lineIndex in affectedOldLineIndices) {
-            oldRev.lineRanges.getOrNull(lineIndex) ?: continue
+            oldRev.lineRangeAt(lineIndex) ?: continue
             val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, false) ?: continue
             // #605 评论3: clusters 为空时不生成 alpha fallback slice —
             // 无 cluster caret 几何时无法做 clip reveal，直接静态切换。
@@ -316,7 +316,7 @@ class InsertDeletePlanner {
         }
 
         for (lineIndex in affectedNewLineIndices) {
-            newRev.lineRanges.getOrNull(lineIndex) ?: continue
+            newRev.lineRangeAt(lineIndex) ?: continue
             val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, true) ?: continue
             // #605 评论3: clusters 为空时不生成 alpha fallback slice —
             // 无 cluster caret 几何时无法做 clip reveal，直接静态切换。
@@ -480,22 +480,22 @@ class InsertDeletePlanner {
 
     fun planRunReplaceAnimation(
         visualIntent: VisualIntent,
-        oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision,
+        oldRev: LayoutRevisionSource,
+        newRev: LayoutRevisionSource,
         affectedOldLineIndices: Set<Int>,
         affectedNewLineIndices: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
-        createSnapshotFromRevision: (AndroidLayoutRevision, Int, Boolean) -> AndroidLineSnapshot?,
+        createSnapshotFromRevision: (LayoutRevisionSource, Int, Boolean) -> AndroidLineSnapshot?,
         offsetMapper: (Int) -> Int?,
     ) {
         val allOldAffectedClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
         val allNewAffectedClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
 
         for (lineIndex in affectedOldLineIndices) {
-            val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex) ?: continue
+            val oldLineRange = oldRev.lineRangeAt(lineIndex) ?: continue
             val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, false) ?: continue
             if (visualIntent.oldAffectedByteRanges.isNotEmpty()) {
                 val oldRunClusters = groupClustersIntoRuns(oldSnapshot.clusters, visualIntent.oldAffectedByteRanges)
@@ -506,7 +506,7 @@ class InsertDeletePlanner {
         }
 
         for (lineIndex in affectedNewLineIndices) {
-            val newLineRange = newRev.lineRanges.getOrNull(lineIndex) ?: continue
+            val newLineRange = newRev.lineRangeAt(lineIndex) ?: continue
             val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, true) ?: continue
             if (visualIntent.newAffectedByteRanges.isNotEmpty()) {
                 val newRunClusters = groupClustersIntoRuns(newSnapshot.clusters, visualIntent.newAffectedByteRanges)

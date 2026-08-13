@@ -2,6 +2,8 @@ package com.xiwei.sujian.feature.editor.input
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -59,6 +61,25 @@ class AndroidInputConnectionNewlineTest {
 
         assertEquals("连续 Enter 必须产生连续空行", ABXY_TWO_NEWLINES, h.mirror.getCommittedText())
         assertEquals(KERNEL_MATCHES_MIRROR, ABXY_TWO_NEWLINES, h.commandPort.getKernelText())
+    }
+
+    @Test
+    fun commitTextNewline_outputRoutedToHost() {
+        val h = InputConnectionTestHarness(ABXY, 4)
+        val outputs = mutableListOf<com.xiwei.sujian.feature.editor.pipeline.PipelineOutput>()
+        h.adapter.onPipelineOutput = { outputs.add(it) }
+
+        h.connection.commitText(NEWLINE, 1)
+
+        // 输出必须与其他 send* 路径一致经 onPipelineOutput 回到宿主：宿主据此更新
+        // 滚动上限、触发 onLocalEdit/onContentChanged、invalidate 与动画帧请求。
+        // 若丢弃输出，正文进了 mirror 但屏幕不重绘、会话层与 ViewModel 内容不更新。
+        assertEquals("换行输出必须路由到宿主", 1, outputs.size)
+        val edited = outputs.single() as? com.xiwei.sujian.feature.editor.pipeline.PipelineOutput.Edited
+        assertNotNull("输出必须是 Edited", edited)
+        assertTrue("输出结果必须已应用", edited!!.result.isApplied())
+        assertEquals("输出 patch 必须插入换行", NEWLINE, edited.result.displayPatches.single().insertedText)
+        assertEquals(KERNEL_MATCHES_MIRROR, ABXY_NEWLINE, h.mirror.getCommittedText())
     }
 
     @Test

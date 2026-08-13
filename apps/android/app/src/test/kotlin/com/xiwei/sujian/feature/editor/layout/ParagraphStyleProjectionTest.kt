@@ -2,7 +2,6 @@ package com.xiwei.sujian.feature.editor.layout
 
 import android.text.SpannableStringBuilder
 import android.text.TextPaint
-import android.text.style.LeadingMarginSpan
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -12,7 +11,7 @@ import org.robolectric.annotation.Config
 
 /**
  * #624 评论3：首行缩进显示层投影契约测试 — 每个真实段落一个
- * LeadingMarginSpan.Standard（第一行缩进、续行不缩进），span 只作用于显示层，
+ * [FirstLineIndentSpan]（第一行缩进、续行不缩进），span 只作用于显示层，
  * 不改正文字符串；增量重同步只动受影响段落区域。
  */
 @RunWith(RobolectricTestRunner::class)
@@ -30,7 +29,7 @@ class ParagraphStyleProjectionTest {
         }
 
     private fun paragraphStarts(text: SpannableStringBuilder): List<Int> =
-        text.getSpans(0, text.length, LeadingMarginSpan.Standard::class.java)
+        text.getSpans(0, text.length, FirstLineIndentSpan::class.java)
             .map { text.getSpanStart(it) }
             .sorted()
 
@@ -38,7 +37,7 @@ class ParagraphStyleProjectionTest {
         text: SpannableStringBuilder,
         paragraphStart: Int,
     ): Int =
-        text.getSpans(paragraphStart, paragraphStart + 1, LeadingMarginSpan.Standard::class.java)
+        text.getSpans(paragraphStart, paragraphStart + 1, FirstLineIndentSpan::class.java)
             .map { it.getLeadingMargin(true) }
             .firstOrNull() ?: 0
 
@@ -61,7 +60,7 @@ class ParagraphStyleProjectionTest {
 
         assertEquals("缩进像素 = 全角字符宽 × 2", (fullWidthPx * 2).toInt(), indentOf(text, 0))
         val margin =
-            text.getSpans(0, 1, LeadingMarginSpan.Standard::class.java)
+            text.getSpans(0, 1, FirstLineIndentSpan::class.java)
                 .map { it.getLeadingMargin(true) }
                 .first()
         assertTrue("缩进必须为正", margin > 0)
@@ -72,7 +71,7 @@ class ParagraphStyleProjectionTest {
         val text = SpannableStringBuilder("段落")
         projection.applyFirstLineIndent(text, true, 2f, paint)
 
-        val margin = text.getSpans(0, 1, LeadingMarginSpan.Standard::class.java).first()
+        val margin = text.getSpans(0, 1, FirstLineIndentSpan::class.java).first()
         assertEquals("续行 margin 必须为 0", 0, margin.getLeadingMargin(false))
     }
 
@@ -135,7 +134,7 @@ class ParagraphStyleProjectionTest {
 
         projection.resyncParagraphIndent(text, 3, 3, true, fullWidthPx)
 
-        assertEquals("合并后只剩一个段落 span", 1, text.getSpans(0, text.length, LeadingMarginSpan.Standard::class.java).size)
+        assertEquals("合并后只剩一个段落 span", 1, text.getSpans(0, text.length, FirstLineIndentSpan::class.java).size)
         assertParagraphsCovered(text, "第一段第二段")
     }
 
@@ -152,7 +151,7 @@ class ParagraphStyleProjectionTest {
         for (start in paragraphStarts) {
             assertTrue(
                 "段落起点 $start 必须有首行缩进 span 覆盖",
-                text.getSpans(start, start + 1, LeadingMarginSpan.Standard::class.java).isNotEmpty(),
+                text.getSpans(start, start + 1, FirstLineIndentSpan::class.java).isNotEmpty(),
             )
         }
     }

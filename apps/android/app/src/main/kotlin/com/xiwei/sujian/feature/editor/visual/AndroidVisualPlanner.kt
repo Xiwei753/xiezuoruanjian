@@ -1,6 +1,6 @@
 package com.xiwei.sujian.feature.editor.visual
 
-import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
+import com.xiwei.sujian.feature.editor.layout.AffectedLayoutRevision
 import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
 import com.xiwei.sujian.feature.editor.projection.VisualIntent
 import com.xiwei.sujian.feature.editor.visual.planner.AffectedLayoutPlanner
@@ -40,27 +40,16 @@ class AndroidVisualPlanner(
      */
     internal val rebaseMappingProvider: RebaseMappingProvider? = null,
 ) {
-    fun computeAffectedLineIndices(
-        visualIntent: VisualIntent,
-        revision: AndroidLayoutRevision?,
-        useNewRanges: Boolean = false,
-    ): Set<Int> = affectedLayoutPlanner.computeAffectedLineIndices(visualIntent, revision, useNewRanges)
-
     fun computeAffectedLineIndicesFromBothRevisions(
         visualIntent: VisualIntent,
-        oldRevision: AndroidLayoutRevision?,
-        newRevision: AndroidLayoutRevision?,
+        oldRevision: AffectedLayoutRevision?,
+        newRevision: AffectedLayoutRevision?,
     ): AffectedLinesResult =
         affectedLayoutPlanner.computeAffectedLineIndicesFromBothRevisions(
             visualIntent,
             oldRevision,
             newRevision,
         )
-
-    fun computeStructurallyAffectedOldLineIndices(
-        visualIntent: VisualIntent,
-        oldRevision: AndroidLayoutRevision,
-    ): Set<Int> = affectedLayoutPlanner.computeStructurallyAffectedOldLineIndices(visualIntent, oldRevision)
 
     /**
      * Build a [PreparedVisualTransaction] from visual intent, layout revisions, and snapshots.
@@ -83,8 +72,8 @@ class AndroidVisualPlanner(
      */
     fun prepare(
         visualIntent: VisualIntent,
-        oldRevision: AndroidLayoutRevision?,
-        newRevision: AndroidLayoutRevision?,
+        oldRevision: AffectedLayoutRevision?,
+        newRevision: AffectedLayoutRevision?,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         rebaseSnapshot: VisualFrameSnapshot? = null,
@@ -103,7 +92,8 @@ class AndroidVisualPlanner(
         val newRev = newRevision
 
         if (oldRev != null && newRev != null) {
-            val affectedResult = affectedLayoutPlanner.computeAffectedLines(visualIntent, oldRev, newRev)
+            val affectedResult =
+                affectedLayoutPlanner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRev, newRev)
             val affectedOldLineIndices = affectedResult.oldLineIndices
             val affectedNewLineIndices = affectedResult.newLineIndices
             blockShifts = affectedResult.blockShifts

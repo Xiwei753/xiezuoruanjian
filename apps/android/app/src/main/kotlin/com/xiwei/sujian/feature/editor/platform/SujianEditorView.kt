@@ -278,18 +278,26 @@ class SujianEditorView
 
         fun getText(): String = pipeline.getText()
 
-        fun setFontSize(sizeSp: Float) {
-            textPaint.textSize = sizeSp * resources.displayMetrics.scaledDensity
+        /**
+         * #624 评论3：排版设置原子入口 — 一次更新 TextPaint / runtime config，
+         * 最后只推进一次布局。字号、行距、首行缩进（开关 + 字符宽度）由
+         * [EditorWindowHost.applyEditorTypography] 持续应用到当前共享 View；
+         * 设置变化后当前正文立即重排，不重建编辑 session。
+         */
+        fun applyLayoutConfig(
+            fontSizeSp: Float,
+            lineSpacingMultiplier: Float,
+            firstLineIndentEnabled: Boolean,
+            firstLineIndentWidthChars: Float,
+        ) {
+            textPaint.textSize = fontSizeSp * resources.displayMetrics.scaledDensity
+            this.lineSpacingMultiplier = lineSpacingMultiplier
+            pipeline.setLineSpacingMultiplier(lineSpacingMultiplier)
+            pipeline.setFirstLineIndent(firstLineIndentEnabled, firstLineIndentWidthChars)
             updateLayoutConfig()
         }
 
         private var lineSpacingMultiplier: Float = 1.0f
-
-        fun setLineSpacingMultiplier(multiplier: Float) {
-            lineSpacingMultiplier = multiplier
-            pipeline.setLineSpacingMultiplier(multiplier)
-            updateLayoutConfig()
-        }
 
         fun getSelectionStart(): Int = pipeline.getSelectionStartUtf8()
 
@@ -805,18 +813,21 @@ class SujianEditorView
 
         fun isSmoothCursorEnabled(): Boolean = smoothCursorEnabled
 
-        fun setAutoIndent(
+        /**
+         * #624 评论3：首行缩进显示样式（开关 + 字符宽度）— 只透传给 layout runtime
+         * 的 ParagraphStyleProjection（显示层 span，不改正文字符串）。不再调用
+         * pipeline.setAutoIndent — 写作软件的“自动首行缩进”是显示排版，不是代码
+         * 编辑器 Enter 后复制上一行空格/Tab；Core 的 code-style auto-indent 能力
+         * 保留给未来真正需要 INDENT_ON_ENTER 的 profile，不与写作区首行缩进共用
+         * 一个 boolean。
+         */
+        fun setFirstLineIndent(
             enabled: Boolean,
             widthChars: Float,
         ) {
-            // #624 评论3：Core 换行策略跟随设置开关（正文从不含前导空白，继承为空），
-            // 首行缩进显示样式由 layout runtime 的 ParagraphStyleProjection 施加。
-            pipeline.setAutoIndent(enabled)
             pipeline.setFirstLineIndent(enabled, widthChars)
             updateLayoutConfig()
         }
-
-        fun isAutoIndentEnabled(): Boolean = pipeline.isAutoIndentEnabled()
 
         private var coordinatedAnimationEnabled: Boolean = true
         private var reduceMotionEnabled: Boolean = false

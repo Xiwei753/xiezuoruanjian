@@ -43,7 +43,10 @@ data class TextEditorProfile(
                 inputType = TextInputType.MULTI_LINE,
                 imeAction = ImeAction.NONE,
                 newlinePolicy = NewlinePolicy.ALLOW,
-                autoIndentPolicy = AutoIndentPolicy.INDENT_ON_ENTER,
+                // #624 评论3：写作正文不继承上一行前导空白 — “自动首行缩进”是显示层
+                // 排版（ParagraphStyleProjection 的 FirstLineIndentSpan），不是代码
+                // 编辑器 Enter 后复制空格/Tab 的 code-style auto-indent。
+                autoIndentPolicy = AutoIndentPolicy.NONE,
                 animationPolicy = AnimationPolicy.INHERIT_GLOBAL,
                 commitOnFocusLoss = false,
             )

@@ -2,8 +2,9 @@ package com.xiwei.sujian.feature.editor.pipeline
 
 import android.text.Layout
 import android.text.TextPaint
+import com.xiwei.sujian.feature.editor.layout.AffectedLayoutRevision
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutEngine
-import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
+import com.xiwei.sujian.feature.editor.layout.LayoutRevisionSource
 import com.xiwei.sujian.feature.editor.projection.DisplayPatch
 import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import com.xiwei.sujian.feature.editor.projection.DisplayTextProjection
@@ -20,13 +21,21 @@ class AndroidLayoutRuntime(
     private var currentProjection: DisplayTextProjection = DisplayTextProjection.identity("")
     private var secretDisplayMode: Boolean = false
 
+    /** 全量布局推进（配置变化/加载路径）。 */
     fun requestLayout() {
         layoutEngine.requestLayout()
     }
 
+    /** 布局配置推进 — 不构建 revision（普通编辑路径由动画引擎推进）。 */
+    fun ensureLayoutConfig() {
+        layoutEngine.ensureLayoutConfig()
+    }
+
     fun getLayout(): Layout? = layoutEngine.getLayout()
 
-    fun getCurrentRevision(): AndroidLayoutRevision? = layoutEngine.getCurrentRevision()
+    fun getCurrentRevision(): LayoutRevisionSource? = layoutEngine.getCurrentRevision()
+
+    fun getCurrentAffectedRevision(): AffectedLayoutRevision? = layoutEngine.getCurrentAffectedRevision()
 
     fun getWidth(): Float = layoutEngine.getWidth()
 
@@ -49,7 +58,10 @@ class AndroidLayoutRuntime(
     }
 
     /**
-     * #624 评论7：普通 mirror 内容变化 — 不再每次重建 display projection。
+     * #624 评论3/7：普通 mirror 内容变化 — 不再每次重建 display projection，
+     * 也**不再自己推进布局**（布局推进所有权在动画引擎
+     * [AndroidTextAnimationEngine.prepareAndSubmit]，一次编辑只推进一次；
+     * 无动画兜底路径由调用方显式 [requestLayout]）。
      *
      * - 普通正文：更新 identity projection 的 revision/offset 映射，继续复用
      *   现有 DynamicLayout；只有影响段落结构的编辑才增量维护首行缩进 span。
@@ -62,7 +74,6 @@ class AndroidLayoutRuntime(
             currentProjection = DisplayTextProjection.identity(mirror.getText())
             layoutEngine.onMirrorContentChanged(currentProjection, patches)
         }
-        layoutEngine.requestLayout()
     }
 
     fun applyProjection(projection: DisplayTextProjection) {
@@ -120,14 +131,26 @@ class AndroidLayoutRuntime(
         )
     }
 
+    /**
+     * #624 评论3：受影响区域捕获（普通编辑路径）— 只抓编辑所在段落及相邻段落
+     * 的视觉行 + 光标/选区几何 + 稳定后缀锚点。new 侧传入 old 侧快照计算后缀
+     * deltaY。捕获即布局推进（revisionCounter 递增）。
+     */
+    fun captureAffectedRevision(
+        editStartUtf8: Int,
+        editEndUtf8: Int,
+        includeNextParagraph: Boolean,
+        previousRevision: AffectedLayoutRevision? = null,
+    ): AffectedLayoutRevision? =
+        layoutEngine.captureAffectedRevision(
+            editStartUtf8,
+            editEndUtf8,
+            includeNextParagraph,
+            previousRevision,
+        )
+
     fun captureLineBitmapSnapshotsWithClusters(
-        lineIndices: Set<Int>,
+        revision: AffectedLayoutRevision,
     ): Map<Int, com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot> =
-        layoutEngine.captureLineBitmapSnapshotsWithClusters(lineIndices)
-
-    fun getLineForUtf8(byteOffset: Int): Int = layoutEngine.getLineForUtf8(byteOffset)
-
-    fun getCursorLine(): Int = layoutEngine.getCursorLine()
-
-    fun getPrimaryHorizontalUtf8(byteOffset: Int): Float = layoutEngine.getPrimaryHorizontalUtf8(byteOffset)
+        layoutEngine.captureLineBitmapSnapshotsWithClusters(revision)
 }

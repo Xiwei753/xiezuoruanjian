@@ -298,9 +298,14 @@ class EditorWindowHost(
         view: SujianEditorView,
         typography: EditorTypography,
     ) {
-        view.setFontSize(typography.fontSizeSp)
-        view.setLineSpacingMultiplier(typography.lineSpacingMultiplier)
-        view.setAutoIndent(typography.autoIndentEnabled, typography.autoIndentWidth)
+        // #624 评论3：一个原子入口一次更新 TextPaint / runtime config，
+        // 最后只推进一次布局 — 不再连续调用三个各自 updateLayoutConfig 的 setter。
+        view.applyLayoutConfig(
+            typography.fontSizeSp,
+            typography.lineSpacingMultiplier,
+            typography.autoIndentEnabled,
+            typography.autoIndentWidth,
+        )
     }
 
     /**

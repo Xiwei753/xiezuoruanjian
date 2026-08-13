@@ -131,6 +131,18 @@ class AndroidInputAdapter(
         onPipelineOutput?.invoke(output)
     }
 
+    /**
+     * #624 评论2：统一换行命令的输出路由 — 软键盘 commitText("\n"/"\r\n") 与
+     * 硬件 Enter 共用同一入口；输出必须与其他 send* 路径一样经 [onPipelineOutput]
+     * 回到宿主（滚动上限更新、onLocalEdit/onContentChanged 回调、invalidate、
+     * 动画帧请求），不能丢弃 — 否则正文进了 mirror 但屏幕不重绘、会话层与
+     * ViewModel 内容不更新。
+     */
+    fun sendLineBreakToKernel(cause: EditorTransactionCauseDto) {
+        val output = commandPort.insertLineBreak(cause)
+        onPipelineOutput?.invoke(output)
+    }
+
     fun sendDeleteToKernel(
         byteStart: Int,
         byteEndExclusive: Int,

@@ -1,7 +1,7 @@
 package com.xiwei.sujian.feature.editor.pipeline
 
 import com.xiwei.sujian.feature.editor.layout.AndroidLayoutEngine
-import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
+import com.xiwei.sujian.feature.editor.layout.LayoutRevisionSource
 import com.xiwei.sujian.feature.editor.projection.VisualIntent
 import com.xiwei.sujian.feature.editor.visual.AndroidTextAnimationEngine
 import com.xiwei.sujian.feature.editor.visual.AndroidVisualPlanner
@@ -131,7 +131,7 @@ class AndroidVisualRuntime(
     fun tick(
         frameTimeMs: Long,
         layout: android.text.Layout?,
-        layoutRevision: AndroidLayoutRevision?,
+        layoutRevision: LayoutRevisionSource?,
         searchHighlightsUtf16: List<Pair<Int, Int>>,
         viewportWidth: Int,
         viewportHeight: Int,

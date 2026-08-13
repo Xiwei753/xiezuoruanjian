@@ -1,13 +1,13 @@
 package com.xiwei.sujian.feature.editor.visual
 
-import com.xiwei.sujian.feature.editor.layout.AndroidLayoutRevision
 import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
+import com.xiwei.sujian.feature.editor.layout.LayoutRevisionSource
 import uniffi.writer_core.EditorOperationKindDto
 
 data class PreparedVisualTransaction(
     val transactionId: Long,
-    val oldRevision: AndroidLayoutRevision?,
-    val newRevision: AndroidLayoutRevision?,
+    val oldRevision: LayoutRevisionSource?,
+    val newRevision: LayoutRevisionSource?,
     val staticPatches: List<StaticPatch>,
     val animatedSlices: List<AnimatedSlice>,
     val ownedSnapshotIds: Set<Long>,
