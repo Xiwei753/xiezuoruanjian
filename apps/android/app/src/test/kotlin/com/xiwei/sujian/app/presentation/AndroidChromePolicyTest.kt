@@ -22,7 +22,7 @@ import uniffi.writer_core.ScreenRoleDto
  * - 作品页顶栏右侧产品顺序（从右往左）为 设置/搜索/同步状态，
  *   代码顺序（Core order 升序）为 同步 → 搜索 → 设置；
  * - 进入设置后顶栏只保留左上返回，一级导航（底栏/侧栏）消失；
- * - 进入正文后一级导航消失；写作区顶栏透明、不显示标题、只保留同步/设置
+ * - 进入正文后一级导航消失；写作区顶栏透明、不显示标题、只保留同步/搜索/设置（#624 评论6 恢复搜索入口）
  *   （Save 已从 Core 契约删除，Android 不再过滤任何动作）；
  * - 星图/统计根页没有返回动作。
  */
@@ -62,13 +62,18 @@ class AndroidChromePolicyTest {
             ),
         )
 
-    /** 写作页契约：HeaderLeading=Back，HeaderTrailing = 同步(20)/设置(30)，无 Save。 */
+    /**
+     * 写作页契约（#624 评论6 对齐 Core `screen_contract.rs` ScreenRole::Writing）：
+     * HeaderLeading=Back，HeaderTrailing = 同步(10)/搜索(20)/设置(30)，无 Save。
+     * 搜索入口由 #477 接管，功能未完成时点击可暂无动作，但图标不得从产品契约消失。
+     */
     private fun writingPolicy(): ScreenPolicyDto =
         policy(
             ScreenRoleDto.WRITING,
             listOf(
                 slot(ActionRoleDto.BACK, ActionRegionDto.HEADER_LEADING, 10),
-                slot(ActionRoleDto.SYNC, ActionRegionDto.HEADER_TRAILING, 20),
+                slot(ActionRoleDto.SYNC, ActionRegionDto.HEADER_TRAILING, 10),
+                slot(ActionRoleDto.SEARCH, ActionRegionDto.HEADER_TRAILING, 20),
                 slot(ActionRoleDto.SETTINGS, ActionRegionDto.HEADER_TRAILING, 30),
             ),
         )
@@ -192,9 +197,9 @@ class AndroidChromePolicyTest {
         assertTrue("写作区顶栏透明背景", spec.appBarTransparent)
         assertFalse("写作区顶栏不显示标题", spec.showTitle)
         assertTrue(spec.showBack)
-        // 写作区只保留需要的图标层：同步、设置（Save 已从 Core 契约删除，#610 评论二）。
+        // 写作区只保留需要的图标层：同步、搜索、设置（Save 已从 Core 契约删除，#610 评论二）。
         assertEquals(
-            listOf(SujianChromeAction.Sync, SujianChromeAction.Settings),
+            listOf(SujianChromeAction.Sync, SujianChromeAction.Search, SujianChromeAction.Settings),
             spec.actions,
         )
     }
@@ -328,8 +333,8 @@ class AndroidChromePolicyTest {
     }
 
     @Test
-    fun `writing contract without save renders only sync and settings`() {
-        // #610 评论二：正文自动保存，Core 契约不再声明 Save；
+    fun `writing contract without save renders sync search and settings`() {
+        // #610 评论二：正文自动保存，Core 契约不再声明 Save；#624 评论6：写作页顶栏恢复搜索入口。
         // Android 呈现的就是契约里真实存在的动作，没有第二个真相。
         val spec =
             resolve(
@@ -338,7 +343,7 @@ class AndroidChromePolicyTest {
                 location = WorkspaceLocation.Editor("p1", "v1", "c1"),
             )
         assertEquals(
-            listOf(SujianChromeAction.Sync, SujianChromeAction.Settings),
+            listOf(SujianChromeAction.Sync, SujianChromeAction.Search, SujianChromeAction.Settings),
             spec.actions,
         )
     }
