@@ -39,34 +39,39 @@ internal object InputCursorMapper {
         val newReplaceEndUtf16 = replaceStartUtf16 + replacementUtf16Len
         val totalUtf16 = replaceStartUtf16 + replacementUtf16Len + (totalCommittedUtf16 - replaceEndUtf16)
 
-        val targetUtf16: Int = if (newCursorPosition > 0) {
-            (newReplaceEndUtf16 + newCursorPosition - 1).coerceIn(0, totalUtf16)
-        } else {
-            (replaceStartUtf16 + newCursorPosition).coerceIn(0, totalUtf16)
-        }
+        val targetUtf16: Int =
+            if (newCursorPosition > 0) {
+                (newReplaceEndUtf16 + newCursorPosition - 1).coerceIn(0, totalUtf16)
+            } else {
+                (replaceStartUtf16 + newCursorPosition).coerceIn(0, totalUtf16)
+            }
 
         // virtual text = old[0,safeStart) + replacement + old[safeEnd,end)；按三段映射，snap 到 codepoint 边界
-        val targetUtf8 = when {
-            // 旧前缀
-            targetUtf16 <= replaceStartUtf16 -> index.utf16ToUtf8(targetUtf16)
-            // replacement 内
-            targetUtf16 < newReplaceEndUtf16 -> {
-                val localUtf16 = targetUtf16 - replaceStartUtf16
-                safeStart + utf16ToUtf8Local(replacementText, localUtf16)
+        val targetUtf8 =
+            when {
+                // 旧前缀
+                targetUtf16 <= replaceStartUtf16 -> index.utf16ToUtf8(targetUtf16)
+                // replacement 内
+                targetUtf16 < newReplaceEndUtf16 -> {
+                    val localUtf16 = targetUtf16 - replaceStartUtf16
+                    safeStart + utf16ToUtf8Local(replacementText, localUtf16)
+                }
+                // 旧后缀
+                else -> {
+                    val suffixUtf16 = targetUtf16 - newReplaceEndUtf16
+                    val oldUtf16 = replaceEndUtf16 + suffixUtf16
+                    val oldUtf8 = index.utf16ToUtf8(oldUtf16)
+                    safeStart + replacementUtf8Len + (oldUtf8 - safeEnd)
+                }
             }
-            // 旧后缀
-            else -> {
-                val suffixUtf16 = targetUtf16 - newReplaceEndUtf16
-                val oldUtf16 = replaceEndUtf16 + suffixUtf16
-                val oldUtf8 = index.utf16ToUtf8(oldUtf16)
-                safeStart + replacementUtf8Len + (oldUtf8 - safeEnd)
-            }
-        }
         return Pair(targetUtf8, targetUtf8)
     }
 
     /** replacementText 内 UTF-16 偏移 → UTF-8 偏移，snap 到 codepoint 起始（向下取整）。 */
-    private fun utf16ToUtf8Local(text: String, utf16Offset: Int): Int {
+    private fun utf16ToUtf8Local(
+        text: String,
+        utf16Offset: Int,
+    ): Int {
         if (utf16Offset <= 0) return 0
         var byteLen = 0
         var i = 0
@@ -92,10 +97,11 @@ internal object InputCursorMapper {
         return len
     }
 
-    private fun utf8ByteLength(codePoint: Int): Int = when {
-        codePoint <= 0x7F -> 1
-        codePoint <= 0x7FF -> 2
-        codePoint <= 0xFFFF -> 3
-        else -> 4
-    }
+    private fun utf8ByteLength(codePoint: Int): Int =
+        when {
+            codePoint <= 0x7F -> 1
+            codePoint <= 0x7FF -> 2
+            codePoint <= 0xFFFF -> 3
+            else -> 4
+        }
 }

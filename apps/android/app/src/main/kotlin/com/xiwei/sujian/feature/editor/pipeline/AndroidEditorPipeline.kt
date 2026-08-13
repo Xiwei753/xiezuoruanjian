@@ -724,7 +724,10 @@ class AndroidEditorPipeline private constructor(
     fun getCommittedTextLengthUtf8(): Int = editPipeline.getCommittedTextLengthUtf8()
 
     /** #624 评论7：已提交文本 UTF-8 字节区间局部读取。 */
-    fun committedSliceUtf8(startUtf8: Int, endUtf8: Int): String = editPipeline.committedSliceUtf8(startUtf8, endUtf8)
+    fun committedSliceUtf8(
+        startUtf8: Int,
+        endUtf8: Int,
+    ): String = editPipeline.committedSliceUtf8(startUtf8, endUtf8)
 
     /**
      * Core insertLineBreak 的 auto-indent 策略（继承当前行前导空白 — 代码编辑器式

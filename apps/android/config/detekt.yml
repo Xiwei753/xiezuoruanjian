@@ -262,6 +262,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/pipeline/EditPipeline.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/pipeline/EditorCommandPort.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/projection/DisplayTextProjectionTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/projection/DisplayTextMirrorTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/AndroidTextAnimationEngine.kt"
       # --- UI状态/工作台测试 ---
       - "**/kotlin/com/xiwei/sujian/app/SujianAppState.kt"
@@ -296,6 +297,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/pipeline/AttachSnapshotTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/pipeline/EditPipelineTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/projection/DisplayTextProjectionTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/projection/DisplayTextMirrorTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/projection/SecretProjectionAtomicityTest.kt"
       # --- 实验设置 ---
       - "**/kotlin/com/xiwei/sujian/app/labs/ExperimentalSettingsRepository.kt"

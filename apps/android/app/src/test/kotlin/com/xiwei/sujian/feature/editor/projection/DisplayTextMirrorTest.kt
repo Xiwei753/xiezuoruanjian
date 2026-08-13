@@ -412,4 +412,183 @@ class DisplayTextMirrorTest {
         assertLengthMatches(empty)
         assertEquals("你", empty.getText())
     }
+    // ── #624 评论6：getCommittedTextLengthUtf8 / committedSliceUtf8 直接单元测试 ──
+    // 这两个 API 是评论6新增的核心读取路径，之前无直接覆盖。下面覆盖无 composition
+    // （ASCII/多字节/emoji/全范围/空区间/越界 coerce）和有 composition（覆盖区前/内/后/
+    // 横跨三段/全范围等于 getCommittedText/多字节覆盖层）两类状态。
+
+    @Test
+    fun getCommittedTextLengthUtf8_noComposition_ascii() {
+        // 无 composition 时已提交长度 = 全文 UTF-8 字节长度（ASCII）。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("Hello", 5)
+        assertEquals(5, mirror.getCommittedTextLengthUtf8())
+    }
+
+    @Test
+    fun getCommittedTextLengthUtf8_noComposition_multibyte() {
+        // 无 composition 时已提交长度 = 全文 UTF-8 字节长度（每中文 3 字节）。
+        // 同时验证 getTextLengthUtf8 在无覆盖层时与 committed 一致。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("你好", 2)
+        assertEquals(6, mirror.getCommittedTextLengthUtf8())
+        assertEquals(6, mirror.getTextLengthUtf8())
+    }
+
+    @Test
+    fun getCommittedTextLengthUtf8_withComposition_excludesOverlay() {
+        // 有 composition 时 committed 长度不含 preedit 覆盖层增量。
+        // loadText("abc") committed=3；updateComposition(1,2,"你好") 覆盖 b，
+        // committed 仍是 "abc"（3 字节），而 getTextLengthUtf8 含覆盖层增量 = 3-1+6 = 8。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("abc", 3)
+        mirror.updateComposition(replaceStartUtf8 = 1, replaceEndUtf8 = 2, preeditText = "你好")
+        assertEquals(3, mirror.getCommittedTextLengthUtf8())
+        assertEquals(8, mirror.getTextLengthUtf8())
+    }
+
+    @Test
+    fun committedSliceUtf8_noComposition_ascii() {
+        // 无 composition ASCII 局部切片：字节 1..4 = "ell"。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("Hello", 5)
+        assertEquals("ell", mirror.committedSliceUtf8(1, 4))
+    }
+
+    @Test
+    fun committedSliceUtf8_noComposition_multibyte() {
+        // 无 composition 多字节切片：a=1,你=3,好=3,b=1 共 8 字节。
+        // 字节 1..7 = "你好"；全范围 = "a你好b"。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("a你好b", 4)
+        assertEquals("你好", mirror.committedSliceUtf8(1, 7))
+        assertEquals("a你好b", mirror.committedSliceUtf8(0, 8))
+    }
+
+    @Test
+    fun committedSliceUtf8_noComposition_emoji() {
+        // 无 composition emoji 切片：a=1,😀=4,b=1 共 6 字节。
+        // 😀 是 supplementary char（UTF-16 surrogate pair 占 2 char），验证 UTF-8→UTF-16
+        // 映射在 surrogate 边界正确。字节 1..5 = "😀"；全范围 = "a😀b"。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("a😀b", 3)
+        assertEquals("😀", mirror.committedSliceUtf8(1, 5))
+        assertEquals("a😀b", mirror.committedSliceUtf8(0, 6))
+    }
+
+    @Test
+    fun committedSliceUtf8_noComposition_fullRange_equalsGetCommittedText() {
+        // 无 composition 时全范围切片应等于 getCommittedText()。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("a你好b", 4)
+        assertEquals(
+            mirror.getCommittedText(),
+            mirror.committedSliceUtf8(0, mirror.getCommittedTextLengthUtf8()),
+        )
+    }
+
+    @Test
+    fun committedSliceUtf8_noComposition_emptyRange() {
+        // 空区间返回 ""：start==end 直接返回；reversed 区间经 coerce 后 safeStart>=safeEnd 也返回 ""。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("abc", 3)
+        assertEquals("", mirror.committedSliceUtf8(1, 1))
+        assertEquals("", mirror.committedSliceUtf8(2, 1))
+    }
+
+    @Test
+    fun committedSliceUtf8_noComposition_outOfBounds_coerced() {
+        // 越界参数被 coerce 到 [0, committedLen]：(-5,100)→[0,3]="abc"；(2,100)→[2,3]="c"。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("abc", 3)
+        assertEquals("abc", mirror.committedSliceUtf8(-5, 100))
+        assertEquals("c", mirror.committedSliceUtf8(2, 100))
+    }
+
+    // ── committedSliceUtf8 有 composition ──
+    // 以下用 loadText("abcdef") + updateComposition(3,4,"XY") 作为基础 setup：
+    // 覆盖区 [3,4) 原文本 "d" 被替换为 preedit "XY"，committed text 仍是 "abcdef"。
+    // 验证三段拼接逻辑（覆盖区前 / compositionOriginalText / 覆盖区后）。
+
+    @Test
+    fun committedSliceUtf8_composition_beforeOverlay() {
+        // 覆盖区前段：字节 0..3 = "abc"（纯 buffer 前段，不进入覆盖区）。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("abcdef", 6)
+        mirror.updateComposition(replaceStartUtf8 = 3, replaceEndUtf8 = 4, preeditText = "XY")
+        assertEquals("abc", mirror.committedSliceUtf8(0, 3))
+    }
+
+    @Test
+    fun committedSliceUtf8_composition_withinOverlay_returnsOriginalText() {
+        // 覆盖区内段：committed 坐标 [3,4) 对应 compositionOriginalText="d"，
+        // 不是 buffer 里的 preedit "XY"。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("abcdef", 6)
+        mirror.updateComposition(replaceStartUtf8 = 3, replaceEndUtf8 = 4, preeditText = "XY")
+        assertEquals("d", mirror.committedSliceUtf8(3, 4))
+    }
+
+    @Test
+    fun committedSliceUtf8_composition_afterOverlay() {
+        // 覆盖区后段：字节 4..6 = "ef"（映射回 buffer 后段）。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("abcdef", 6)
+        mirror.updateComposition(replaceStartUtf8 = 3, replaceEndUtf8 = 4, preeditText = "XY")
+        assertEquals("ef", mirror.committedSliceUtf8(4, 6))
+    }
+
+    @Test
+    fun committedSliceUtf8_composition_spanningAllThreeSegments() {
+        // 横跨三段：字节 0..6 = "abc" + "d" + "ef" = "abcdef"。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("abcdef", 6)
+        mirror.updateComposition(replaceStartUtf8 = 3, replaceEndUtf8 = 4, preeditText = "XY")
+        assertEquals("abcdef", mirror.committedSliceUtf8(0, 6))
+    }
+
+    @Test
+    fun committedSliceUtf8_composition_spanningBeforeAndOverlay() {
+        // 横跨前段+覆盖区：字节 1..4 = "bc" + "d" = "bcd"。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("abcdef", 6)
+        mirror.updateComposition(replaceStartUtf8 = 3, replaceEndUtf8 = 4, preeditText = "XY")
+        assertEquals("bcd", mirror.committedSliceUtf8(1, 4))
+    }
+
+    @Test
+    fun committedSliceUtf8_composition_spanningOverlayAndAfter() {
+        // 横跨覆盖区+后段：字节 3..6 = "d" + "ef" = "def"。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("abcdef", 6)
+        mirror.updateComposition(replaceStartUtf8 = 3, replaceEndUtf8 = 4, preeditText = "XY")
+        assertEquals("def", mirror.committedSliceUtf8(3, 6))
+    }
+
+    @Test
+    fun committedSliceUtf8_composition_fullRange_equalsGetCommittedText() {
+        // 有 composition 时全范围切片应等于 getCommittedText()（多字节覆盖层场景）。
+        // loadText("a你好c") committed=8 字节；updateComposition(1,4,"XX") 覆盖 "你"（UTF-8 1..4）。
+        // committed text = "a你好c"。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("a你好c", 3)
+        mirror.updateComposition(replaceStartUtf8 = 1, replaceEndUtf8 = 4, preeditText = "XX")
+        assertEquals(
+            mirror.getCommittedText(),
+            mirror.committedSliceUtf8(0, mirror.getCommittedTextLengthUtf8()),
+        )
+    }
+
+    @Test
+    fun committedSliceUtf8_composition_multibyteOverlay() {
+        // 多字节覆盖层：loadText("a你好b") committed=8 字节；
+        // updateComposition(1,7,"X") 覆盖 "你好"（UTF-8 1..7）。committed text = "a你好b"。
+        // 切片 [1,7) = "你好"（从 compositionOriginalText 按字节切片）；
+        // 全范围 [0,8) = "a你好b"（三段拼接）。
+        val mirror = DisplayTextMirror()
+        mirror.loadText("a你好b", 4)
+        mirror.updateComposition(replaceStartUtf8 = 1, replaceEndUtf8 = 7, preeditText = "X")
+        assertEquals("你好", mirror.committedSliceUtf8(1, 7))
+        assertEquals("a你好b", mirror.committedSliceUtf8(0, 8))
+    }
 }

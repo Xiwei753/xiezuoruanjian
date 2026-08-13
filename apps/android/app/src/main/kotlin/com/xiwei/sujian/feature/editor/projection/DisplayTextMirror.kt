@@ -389,7 +389,10 @@ class DisplayTextMirror {
      * subSequence。composition 时按 committed 坐标把区间拆成覆盖区前 /
      * [compositionOriginalText] / 覆盖区后三段局部拼接，禁止调用 [getCommittedText]。
      */
-    fun committedSliceUtf8(startUtf8: Int, endUtf8: Int): String {
+    fun committedSliceUtf8(
+        startUtf8: Int,
+        endUtf8: Int,
+    ): String {
         val committedLen = committedTextLengthUtf8
         val safeStart = startUtf8.coerceIn(0, committedLen)
         val safeEnd = endUtf8.coerceIn(safeStart, committedLen)
@@ -679,7 +682,11 @@ class DisplayTextMirror {
     }
 
     /** 字符串按 UTF-8 字节区间切片，snap 到 codepoint 边界。 */
-    private fun utf8SliceByBytes(text: String, startByte: Int, endByte: Int): String {
+    private fun utf8SliceByBytes(
+        text: String,
+        startByte: Int,
+        endByte: Int,
+    ): String {
         if (startByte >= endByte) return ""
         var bytePos = 0
         var i = 0
@@ -701,10 +708,11 @@ class DisplayTextMirror {
         return text.substring(startIdx, i)
     }
 
-    private fun utf8ByteLengthCp(codePoint: Int): Int = when {
-        codePoint <= 0x7F -> 1
-        codePoint <= 0x7FF -> 2
-        codePoint <= 0xFFFF -> 3
-        else -> 4
-    }
+    private fun utf8ByteLengthCp(codePoint: Int): Int =
+        when {
+            codePoint <= 0x7F -> 1
+            codePoint <= 0x7FF -> 2
+            codePoint <= 0xFFFF -> 3
+            else -> 4
+        }
 }
