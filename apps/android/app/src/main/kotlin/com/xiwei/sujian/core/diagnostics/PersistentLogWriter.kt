@@ -5,6 +5,7 @@ import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.file.Files
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -409,11 +410,11 @@ internal object PersistentLogWriter {
      * @return 写盘成功返回 true；写盘失败返回 false（Issue #612 评论 3.1）。
      * I/O 失败：丢弃本批次，writer 线程继续存活处理后续日志。
      */
-    private fun writeBatch(batch: List<LogRequest>): Boolean =
-        try {
+    private fun writeBatch(batch: List<LogRequest>): Boolean {
+        return try {
             ensureLogsDirOrThrow()
             val currentFile = File(AndroidDataRoot.logsDir(), currentLogFileName())
-            rotateIfNeeded(currentFile)
+            if (!rotateIfNeeded(currentFile)) return false
             FileOutputStream(currentFile, true)
                 .bufferedWriter(Charsets.UTF_8)
                 .use { writer ->
@@ -430,28 +431,54 @@ internal object PersistentLogWriter {
         } catch (_: SecurityException) {
             false
         }
+    }
 
-    /** 当前文件超过 1 MiB 时重命名为带时间戳的轮转文件，并裁剪到 5 个。 */
-    private fun rotateIfNeeded(file: File) {
-        if (!file.exists() || file.length() < MAX_FILE_SIZE) return
-        val logDir = file.parentFile ?: return
+    /**
+     * 当前文件超过 1 MiB 时移动到带时间戳的轮转文件，并裁剪到 [MAX_LOG_FILES] 个。
+     *
+     * #623 评论 9：不再使用无结果语义的 `File.renameTo`（失败只返回 false 不抛
+     * 异常，会被静默吞掉，writeBatch 仍返回 true，persistenceHealthy 仍认为日志
+     * 正常落盘）。改用 [Files.move] 同目录移动：失败抛 IOException（无权限/目标
+     * 已存在等），直接进入 [writeBatch] 的失败链 — writeBatch=false →
+     * persistenceHealthy=false → flushBlocking=false，导出/清空能感知日志系统不完整。
+     * 移动成功后才执行裁剪，裁剪失败（delete 返回 false）同样返回 false 进入失败链。
+     *
+     * @return 无需轮转、或轮转与裁剪全部成功返回 true；无法移动/无法裁剪返回 false。
+     */
+    private fun rotateIfNeeded(file: File): Boolean {
+        if (!file.exists() || file.length() < MAX_FILE_SIZE) return true
+        val logDir = file.parentFile ?: return false
         // #623 评论 3：轮转文件名带 build key，围绕当前构建身份轮转，
         // 不丢掉构建身份。baseName 例如 sujian-current-v1234-e2ce827-ai-debug。
         val baseName = file.nameWithoutExtension
         val rotated = File(logDir, "$baseName-${System.currentTimeMillis()}.log")
-        file.renameTo(rotated)
-        pruneOldLogs(logDir)
+        // Files.move 失败抛 IOException（FileAlreadyExistsException 是其子类），
+        // 由 writeBatch 的 catch 统一转成写盘失败 — 轮转失败不再伪装成成功。
+        Files.move(file.toPath(), rotated.toPath())
+        return pruneOldLogs(logDir)
     }
 
-    /** 按最后修改时间降序保留前 [MAX_LOG_FILES] 个，多余删除。 */
-    private fun pruneOldLogs(logDir: File) {
+    /**
+     * 按最后修改时间降序保留前 [MAX_LOG_FILES] 个，多余删除。
+     *
+     * #623 评论 9：下标从 [MAX_LOG_FILES] 开始（索引 0..MAX_LOG_FILES-1 才是保留的
+     * 前 N 个；旧实现从 MAX_LOG_FILES-1 开始删，实际只保留 4 个）。删除失败不再
+     * 无视 — 返回 false 进入日志健康状态，否则“保留数量正常”仍可能是假象。
+     *
+     * @return 全部删除成功（或无多余文件）返回 true；任一删除失败返回 false。
+     */
+    internal fun pruneOldLogs(logDir: File): Boolean {
         val logs =
             logDir.listFiles { _, name -> name.startsWith(LOG_PREFIX) && name.endsWith(".log") }
                 ?.sortedByDescending { it.lastModified() }
-                ?: return
-        for (i in (MAX_LOG_FILES - 1) until logs.size) {
-            logs[i].delete()
+                ?: return true
+        var allDeleted = true
+        for (i in MAX_LOG_FILES until logs.size) {
+            if (!logs[i].delete()) {
+                allDeleted = false
+            }
         }
+        return allDeleted
     }
 
     /**

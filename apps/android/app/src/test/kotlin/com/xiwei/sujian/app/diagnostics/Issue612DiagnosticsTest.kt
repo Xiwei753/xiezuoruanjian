@@ -740,7 +740,13 @@ class PersistentLogWriterTest {
 
         val files = PersistentLogWriter.getLogFiles()
         assertTrue("should have rotated files, got ${files.size}", files.size >= 2)
-        assertTrue("should keep at most 5 files, got ${files.size}", files.size <= 5)
+        // #623 评论 9：prune 修正后保留前 5 个轮转文件（索引 0..4），加上当前
+        // 文件最多 6 个。旧断言 <=5 实际编码了错误 prune（从 MAX_LOG_FILES-1
+        // 开始删，只保留 4 个轮转文件）——那正是评论 9 要求修掉的缺陷。
+        assertTrue(
+            "should keep at most 5 rotated + 1 current = 6 files, got ${files.size}",
+            files.size <= 6,
+        )
         // 当前文件应存在
         assertTrue(
             "current log sujian-current.log should exist",
@@ -935,6 +941,132 @@ class PersistentLogWriterTest {
         PersistentLogWriter.clearLogs()
         PersistentLogWriter.enqueue(req("after-recover"))
         assertTrue("flushBlocking must recover after clearLogs", PersistentLogWriter.flushBlocking())
+    }
+}
+
+/**
+ * #623 评论 9：轮转/裁剪语义回归测试。
+ *
+ * - prune 下标修正：6 个日志文件裁剪后精确剩 5 个（旧实现从 MAX_LOG_FILES-1 开始删，
+ *   实际只保留 4 个）；
+ * - 裁剪删除失败返回 false，不得把“保留数量正常”伪装成成功；
+ * - 轮转失败（Files.move 抛 IOException）必须进入与写盘失败相同的错误语义：
+ *   writeBatch=false → persistenceHealthy=false → flushBlocking=false，
+ *   导出不得把日志系统不完整伪装成完整落盘。
+ */
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [34])
+class PersistentLogWriterRotationPruneTest {
+    @Before
+    fun setUp() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        PersistentLogWriter.init(context)
+        PersistentLogWriter.setEnabled(true)
+        PersistentLogWriter.flushBlocking()
+        PersistentLogWriter.clearLogs()
+    }
+
+    @After
+    fun tearDown() {
+        PersistentLogWriter.flushBlocking()
+        PersistentLogWriter.clearLogs()
+        PersistentLogWriter.setEnabled(false)
+    }
+
+    private fun req(
+        message: String,
+        ts: Long = 1_000L,
+    ) = LogRequest(
+        level = "I",
+        tag = "test",
+        message = message,
+        timestampMs = ts,
+        threadName = "main",
+    )
+
+    private fun currentLogFile(): File {
+        val identity = DiagnosticsBuildIdentity.fromBuildConfig()
+        return File(AndroidDataRoot.logsDir(), "sujian-current-${identity.buildKey}.log")
+    }
+
+    @Test
+    fun pruneOldLogsKeepsExactlyFiveNewest() {
+        // #623 评论 9：旧实现 for 循环从 MAX_LOG_FILES-1 开始删，6 个文件裁剪后
+        // 只剩 4 个；修正后保留前 5 个（降序索引 0..4），最旧的一个被删。
+        val logsDir = AndroidDataRoot.logsDir()
+        logsDir.mkdirs()
+        PersistentLogWriter.getLogFiles().forEach { it.delete() }
+        val files =
+            (0 until 6).map { i ->
+                val f = File(logsDir, "sujian-current-probe-$i.log")
+                f.writeText("probe-$i")
+                f.setLastModified(1_000_000_000L + i * 60_000L)
+                f
+            }
+
+        assertTrue("prune must report success when all deletes succeed", PersistentLogWriter.pruneOldLogs(logsDir))
+
+        val remaining = PersistentLogWriter.getLogFiles().map { it.name }.toSet()
+        assertEquals("must keep exactly 5 files, got ${remaining.size}", 5, remaining.size)
+        for (i in 1 until 6) {
+            assertTrue("newest ${files[i].name} must be kept", remaining.contains(files[i].name))
+        }
+        assertTrue("oldest probe-0 must be pruned", !remaining.contains(files[0].name))
+    }
+
+    @Test
+    fun pruneOldLogsReportsDeleteFailure() {
+        // #623 评论 9：裁剪删除失败必须返回 false，不得把“保留数量正常”伪装成成功。
+        // 用“非空目录占用 .log 文件名”构造必然删除失败的路径 — 不依赖宿主权限。
+        val logsDir = AndroidDataRoot.logsDir()
+        logsDir.mkdirs()
+        PersistentLogWriter.getLogFiles().forEach { it.delete() }
+        val blocker = File(logsDir, "sujian-current-blocker.log")
+        blocker.mkdirs()
+        File(blocker, "child").writeText("occupies the name")
+        blocker.setLastModified(999_000_000L) // 最旧 → 位于裁剪位
+        val files =
+            (0 until 5).map { i ->
+                val f = File(logsDir, "sujian-current-probe-$i.log")
+                f.writeText("probe-$i")
+                f.setLastModified(1_000_000_000L + i * 60_000L)
+                f
+            }
+        try {
+            assertFalse(
+                "delete failure must be reported as prune failure",
+                PersistentLogWriter.pruneOldLogs(logsDir),
+            )
+            assertTrue("all kept files must remain when prune fails", files.all { it.exists() })
+        } finally {
+            blocker.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun flushBlockingReturnsFalseWhenRotationFails() {
+        // #623 评论 9：轮转失败必须进入与写盘失败相同的错误语义。旧实现
+        // File.renameTo 失败只返回 false 被无视，writeBatch 继续 append 旧文件并
+        // 返回 true，persistenceHealthy 仍认为日志正常落盘。新实现 Files.move
+        // 失败抛 IOException → writeBatch=false → persistenceHealthy=false →
+        // flushBlocking=false，导出据此不得把日志系统不完整伪装成完整落盘。
+        PersistentLogWriter.flushBlocking()
+        val logsDir = AndroidDataRoot.logsDir()
+        logsDir.mkdirs()
+        PersistentLogWriter.getLogFiles().forEach { it.delete() }
+        // 预置超过 1 MiB 的当前日志文件 → 下一次 writeBatch 必然触发轮转。
+        val currentFile = File(logsDir, currentLogFile().name)
+        currentFile.writeText("A".repeat(1024 * 1024 + 100))
+        // 目录只读 → 同目录 Files.move 抛 AccessDeniedException（非 root 宿主）。
+        logsDir.setWritable(false)
+        try {
+            PersistentLogWriter.enqueue(req("must-not-be-claimed-persisted"))
+            val ok = PersistentLogWriter.flushBlocking()
+            assertFalse("rotation failure must surface through flushBlocking", ok)
+            assertTrue("current file must still exist after failed rotation", currentFile.exists())
+        } finally {
+            logsDir.setWritable(true)
+        }
     }
 }
 

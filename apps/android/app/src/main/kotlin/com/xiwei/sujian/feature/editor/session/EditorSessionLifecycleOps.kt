@@ -432,6 +432,8 @@ private fun EditorSessionCoordinator.commitPreparedBindingState(
  * #623 评论5：把属于其他窗口的绑定重贴为当前窗口的 Attaching。
  * 仅当 targetId + sessionId 都匹配（同一持久 session）且 windowId 不同时生效；
  * 相同窗口 / 不同 session / 非 Attaching/Attached 状态一律 no-op。
+ * #623 评论8：跨窗口重贴时同时使旧窗口的 input lease 失效（epoch+1），
+ * 输入所有权随窗口所有权一起转移，旧 View 晚到回调全部被拒绝。
  * 重贴后由 [EditorSessionCoordinator.completeWindowAttach] 在新 View 完成
  * 真实绑定后推进到 Attached（windowId 同样参与幂等判定）。
  */
@@ -451,6 +453,14 @@ private fun EditorSessionCoordinator.restampAttachingToWindow(
             else -> null
         }
     if (currentWindowId == null || currentWindowId == windowId) return
+    // #623 评论8：窗口所有权转移时，输入所有权必须一起转移 — 先使旧窗口持有的
+    // input lease 失效（epoch+1），再把绑定重贴给当前窗口。旧 w1 View 晚到的
+    // IME/onContentChanged 回调因 epoch 不匹配被会话层拒绝；w2 后续
+    // performViewBind 通过 currentInputLease() 签发新 epoch 的 lease。
+    // w1 晚到的 detachWindowBinding 因 windowId 不匹配在 isBindingForDifferentWindow
+    // 直接 no-op，不会二次递增 epoch。invalidateInputLease 只在本跨窗口重贴路径
+    // 执行一次（同窗口/无绑定/不匹配 session 都在上方 return）。
+    invalidateInputLease()
     updateSessionState {
         if (it.targetId == targetId) {
             it.copy(

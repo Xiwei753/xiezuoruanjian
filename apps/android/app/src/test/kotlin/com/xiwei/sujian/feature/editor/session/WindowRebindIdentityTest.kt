@@ -5,6 +5,8 @@ package com.xiwei.sujian.feature.editor.session
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 import com.xiwei.sujian.feature.editor.window.EditingState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -25,6 +27,9 @@ import org.robolectric.annotation.Config
  *    windowId/targetId/sessionId 任一不一致（包括旧窗口晚到的 completion、
  *    错误 session 的 completion）都直接忽略，不能修改状态；
  * 3. 不同 target/session 的完成请求不得覆盖现有绑定。
+ * #623 评论8：跨窗口 restamp（窗口接管旧绑定的唯一动作）必须同时使旧窗口的
+ * input lease 失效（epoch+1）— 旧 w1 View 晚到的 IME 回调被拒绝、晚到的
+ * detachWindowBinding 不再二次递增 epoch，新 w2 的 performViewBind 签发新 lease。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -285,6 +290,113 @@ class WindowRebindIdentityTest {
         assertEquals(
             "completeWindowAttach for a different target must not clobber the existing binding",
             attached,
+            coordinator.windowBindingState,
+        )
+    }
+
+    // ── #623 评论8：跨窗口 restamp 时 input lease 随窗口所有权一起转移 ──
+
+    @Test
+    fun restampToNewWindow_invalidatesOldInputLeaseExactlyOnce() {
+        val coordinator = createCoordinator()
+        registerPersistentTarget(coordinator, "t1", 42UL)
+        setWindowBindingState(coordinator, WindowBindingState.Attached("w1", "t1", 42UL))
+
+        val oldLease = coordinator.currentInputLease()
+        assertNotNull("old window must hold a lease before restamp", oldLease)
+        val oldEpoch = coordinator.inputLeaseEpoch
+        assertTrue("old lease must be current before restamp", coordinator.isInputLeaseCurrent(oldLease))
+
+        coordinator.prepareSessionForEdit("t1", "hello", 5, "w2")
+
+        assertEquals(
+            "cross-window restamp must bump inputLeaseEpoch exactly once",
+            oldEpoch + 1,
+            coordinator.inputLeaseEpoch,
+        )
+        assertFalse(
+            "old window's lease must be rejected after restamp",
+            coordinator.isInputLeaseCurrent(oldLease),
+        )
+        val newLease = coordinator.currentInputLease()
+        assertNotNull("new window must hold a lease after restamp", newLease)
+        assertEquals(
+            "new lease must carry the bumped epoch",
+            oldEpoch + 1,
+            newLease!!.epoch,
+        )
+        assertTrue(
+            "new lease must be current",
+            coordinator.isInputLeaseCurrent(newLease),
+        )
+    }
+
+    @Test
+    fun restampToNewWindow_lateOldWindowDetach_doesNotBumpEpochAgain() {
+        val coordinator = createCoordinator()
+        registerPersistentTarget(coordinator, "t1", 42UL)
+        setWindowBindingState(coordinator, WindowBindingState.Attached("w1", "t1", 42UL))
+        val oldEpoch = coordinator.inputLeaseEpoch
+
+        coordinator.prepareSessionForEdit("t1", "hello", 5, "w2")
+        assertEquals(oldEpoch + 1, coordinator.inputLeaseEpoch)
+
+        // 旧 w1 View 晚到的 detachWindowBinding — 绑定已属于 w2，windowId 不匹配
+        // 直接 no-op，不得再次递增 epoch（旧 lease 已经因 restamp 失效）。
+        coordinator.detachWindowBinding("w1", "t1")
+
+        assertEquals(
+            "old window's late detach must not bump epoch a second time",
+            oldEpoch + 1,
+            coordinator.inputLeaseEpoch,
+        )
+        assertEquals(
+            "binding must still belong to the new window",
+            WindowBindingState.Attaching("w2", "t1", 42UL),
+            coordinator.windowBindingState,
+        )
+    }
+
+    @Test
+    fun restampFromPreparedAttaching_issuesNewLeaseForRealWindow() {
+        val coordinator = createCoordinator()
+        registerPersistentTarget(coordinator, "t1", 42UL)
+        // 章节切换 commitPreparedSession 的 "prepared" 预绑定
+        setWindowBindingState(
+            coordinator,
+            WindowBindingState.Attaching("prepared", "t1", 42UL),
+            editingState = EditingState.BINDING,
+        )
+        val preparedLease = coordinator.currentInputLease()
+        assertNotNull("prepared stage must hold a lease", preparedLease)
+        val oldEpoch = coordinator.inputLeaseEpoch
+
+        // 真实窗口 w2 接管预绑定时重新签发自己的 lease，预绑定阶段的 lease 不得沿用。
+        coordinator.prepareSessionForEdit("t1", "hello", 5, "w2")
+
+        assertEquals(
+            "real window taking over the prepared binding must bump epoch exactly once",
+            oldEpoch + 1,
+            coordinator.inputLeaseEpoch,
+        )
+        assertFalse(
+            "prepared-stage lease must not survive the handover",
+            coordinator.isInputLeaseCurrent(preparedLease),
+        )
+        val realLease = coordinator.currentInputLease()
+        assertNotNull("real window must hold a fresh lease", realLease)
+        assertEquals(
+            "real window's lease must carry the bumped epoch",
+            oldEpoch + 1,
+            realLease!!.epoch,
+        )
+        assertTrue(
+            "real window's lease must be current",
+            coordinator.isInputLeaseCurrent(realLease),
+        )
+        assertEquals(
+            "binding must now belong to the real window",
+            WindowBindingState.Attaching("w2", "t1", 42UL),
             coordinator.windowBindingState,
         )
     }
