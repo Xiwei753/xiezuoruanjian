@@ -564,3 +564,30 @@ impl From<crate::settings::DeviceInfo> for DeviceInfoDto {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_device_info_dto_serialization() {
+        let dto = DeviceInfoDto {
+            device_id: "test-device-id".to_string(),
+            device_class: "desktop".to_string(),
+            platform: "linux_qt".to_string(),
+        };
+
+        let serialized = serde_json::to_value(&dto).unwrap();
+        let expected = json!({
+            "device_id": "test-device-id",
+            "device_class": "desktop",
+            "platform": "linux_qt"
+        });
+
+        assert_eq!(serialized, expected);
+
+        let deserialized: DeviceInfoDto = serde_json::from_value(expected).unwrap();
+        assert_eq!(deserialized, dto);
+    }
+}
