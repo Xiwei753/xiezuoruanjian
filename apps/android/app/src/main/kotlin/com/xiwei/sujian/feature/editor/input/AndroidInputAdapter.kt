@@ -43,7 +43,7 @@ class AndroidInputAdapter(
 
     fun wouldExceedMaxLength(newText: String): Boolean {
         if (currentProfile.maxLength <= 0) return false
-        val currentLen = mirror.getCommittedText().toByteArray(Charsets.UTF_8).size
+        val currentLen = mirror.getCommittedTextLengthUtf8()
         val newLen = newText.toByteArray(Charsets.UTF_8).size
         val selStart = mirror.getCommittedSelectionStartUtf8()
         val selEnd = mirror.getCommittedSelectionEndUtf8()
@@ -370,7 +370,7 @@ class AndroidInputAdapter(
             return
         }
         if (currentProfile.maxLength > 0) {
-            val currentLen = mirror.getCommittedText().toByteArray(Charsets.UTF_8).size
+            val currentLen = mirror.getCommittedTextLengthUtf8()
             val preeditLen = preeditText.toByteArray(Charsets.UTF_8).size
             val replaceLen = compositionReplaceEndUtf8 - compositionReplaceStartUtf8
             if (currentLen - replaceLen + preeditLen > currentProfile.maxLength) {
@@ -396,7 +396,7 @@ class AndroidInputAdapter(
         }
         previousCompositionText = currentCompositionText
         currentCompositionText = preeditText
-        val preeditUtf16Len = AndroidTextIndexMap.countUtf16CodeUnits(preeditText)
+        val preeditUtf16Len = preeditText.length
         compositionCursorUtf16 =
             if (newCursorPosition > 0) {
                 (preeditUtf16Len + newCursorPosition - 1).coerceIn(0, preeditUtf16Len)
@@ -428,12 +428,12 @@ class AndroidInputAdapter(
         val replaceEnd = compositionReplaceEndUtf8
 
         val (resultingAnchor, resultingHead) =
-            AndroidTextIndexMap.computeResultingSelectionUtf8(
-                mirror.getCommittedText(),
-                newCursorPosition,
+            InputCursorMapper.computeResultingSelectionUtf8(
+                mirror.getTextOffsetIndex(),
                 replaceStart,
                 replaceEnd,
                 finalText,
+                newCursorPosition,
             )
 
         val (sessionId, baseRev, generation) = compositionSessionInfo()
@@ -475,7 +475,7 @@ class AndroidInputAdapter(
             return
         }
         clearCompositionState()
-        val originalText = extractCommittedTextAt(replaceStart, replaceEnd)
+        val originalText = mirror.committedSliceUtf8(replaceStart, replaceEnd)
         sendCommitTextToKernel(
             replaceStart,
             replaceEnd,
@@ -485,15 +485,6 @@ class AndroidInputAdapter(
             resultingHead,
             EditorTransactionCauseDto.TYPING,
         )
-    }
-
-    private fun extractCommittedTextAt(
-        byteStart: Int,
-        byteEndExclusive: Int,
-    ): String {
-        val bytes = mirror.getCommittedText().toByteArray(Charsets.UTF_8)
-        if (byteStart < 0 || byteEndExclusive > bytes.size || byteStart > byteEndExclusive) return ""
-        return String(bytes.copyOfRange(byteStart, byteEndExclusive), Charsets.UTF_8)
     }
 
     fun handleCompositionFinish() {

@@ -312,12 +312,7 @@ class AndroidEditorPipeline private constructor(
     private fun committedSubstring(
         startUtf8: Int,
         endUtf8: Int,
-    ): String {
-        val bytes = editPipeline.getCommittedText().toByteArray(Charsets.UTF_8)
-        val safeStart = startUtf8.coerceIn(0, bytes.size)
-        val safeEnd = endUtf8.coerceIn(safeStart, bytes.size)
-        return String(bytes, safeStart, safeEnd - safeStart, Charsets.UTF_8)
-    }
+    ): String = editPipeline.committedSliceUtf8(startUtf8, endUtf8)
 
     override fun deleteRange(
         byteStart: Int,
@@ -724,6 +719,12 @@ class AndroidEditorPipeline private constructor(
     fun getCommittedSelectionEndUtf8(): Int = editPipeline.getCommittedSelectionEndUtf8()
 
     fun getCommittedText(): String = editPipeline.getCommittedText()
+
+    /** #624 评论7：已提交文本 UTF-8 字节长度 — O(1) 转发。 */
+    fun getCommittedTextLengthUtf8(): Int = editPipeline.getCommittedTextLengthUtf8()
+
+    /** #624 评论7：已提交文本 UTF-8 字节区间局部读取。 */
+    fun committedSliceUtf8(startUtf8: Int, endUtf8: Int): String = editPipeline.committedSliceUtf8(startUtf8, endUtf8)
 
     /**
      * Core insertLineBreak 的 auto-indent 策略（继承当前行前导空白 — 代码编辑器式

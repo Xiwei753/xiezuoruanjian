@@ -250,7 +250,6 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/app/diagnostics/DiagnosticsTest.kt"
       # --- 编辑器：管线/协调器/输入法，函数由协议决定 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/EditorSessionCoordinator.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/editor/input/AndroidTextIndexMapTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/ui/AnimatedTextSemanticsTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/window/EditorWindowHost.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/TextEditorProfileTest.kt"

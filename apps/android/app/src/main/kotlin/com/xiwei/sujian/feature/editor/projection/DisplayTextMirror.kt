@@ -273,7 +273,7 @@ class DisplayTextMirror {
 
     /**
      * #624 评论4: 增量 UTF-8/UTF-16 偏移索引 — 由本 mirror 唯一持有，随 patch/装载
-     * 增量更新，避免每键整章 AndroidTextIndexMap(this) 重建。identity projections
+     * 增量更新，避免每键整章偏移索引重建。identity projections
      * 长期引用本索引，不再每键 mirror.getText() / buildRealBoundaries()。
      */
     private val textOffsetIndex = TextOffsetIndex()
@@ -377,6 +377,66 @@ class DisplayTextMirror {
         return buffer.substring(0, startUtf16) +
             compositionOriginalText +
             buffer.substring(compositionEndUtf16.coerceAtMost(buffer.length))
+    }
+
+    /** 已提交文本的 UTF-8 字节长度（不含活动 composition 覆盖层）。O(1) 读取。 */
+    fun getCommittedTextLengthUtf8(): Int = committedTextLengthUtf8
+
+    /**
+     * #624 评论7：已提交文本的 UTF-8 字节区间局部读取 — 只复制请求区间，不重建整篇。
+     *
+     * 无 composition 时直接用 [textOffsetIndex] 把两端映射到 UTF-16，对 buffer 做局部
+     * subSequence。composition 时按 committed 坐标把区间拆成覆盖区前 /
+     * [compositionOriginalText] / 覆盖区后三段局部拼接，禁止调用 [getCommittedText]。
+     */
+    fun committedSliceUtf8(startUtf8: Int, endUtf8: Int): String {
+        val committedLen = committedTextLengthUtf8
+        val safeStart = startUtf8.coerceIn(0, committedLen)
+        val safeEnd = endUtf8.coerceIn(safeStart, committedLen)
+        if (safeStart >= safeEnd) return ""
+
+        if (!hasActiveComposition) {
+            val start16 = textOffsetIndex.utf8ToUtf16(safeStart)
+            val end16 = textOffsetIndex.utf8ToUtf16(safeEnd)
+            return buffer.subSequence(start16, end16).toString()
+        }
+
+        // composition 时 committed text = buffer[0, compReplaceStartUtf16) + compositionOriginalText + buffer[compEndUtf16, len)
+        val compStartUtf8 = compositionReplaceStartUtf8
+        val compEndUtf8 = compositionReplaceEndUtf8
+        val compReplaceStartUtf16 = textOffsetIndex.utf8ToUtf16(compStartUtf8)
+        val compEndUtf16 = compositionEndUtf16.coerceAtMost(buffer.length)
+        val origText = compositionOriginalText
+
+        val sb = StringBuilder()
+        // 覆盖区前
+        val preEnd = minOf(safeEnd, compStartUtf8)
+        if (safeStart < preEnd) {
+            val s16 = textOffsetIndex.utf8ToUtf16(safeStart)
+            val e16 = textOffsetIndex.utf8ToUtf16(preEnd)
+            sb.append(buffer.subSequence(s16, e16))
+        }
+        // compositionOriginalText 段
+        val origStart = maxOf(safeStart, compStartUtf8)
+        val origEnd = minOf(safeEnd, compEndUtf8)
+        if (origStart < origEnd) {
+            val localStart = origStart - compStartUtf8
+            val localEnd = origEnd - compStartUtf8
+            sb.append(utf8SliceByBytes(origText, localStart, localEnd))
+        }
+        // 覆盖区后
+        val postStart = maxOf(safeStart, compEndUtf8)
+        if (postStart < safeEnd) {
+            // committed UTF-8 c (c >= compEndUtf8) → buffer UTF-16:
+            // 后段内 UTF-16 = index.utf8ToUtf16(c) - compReplaceStartUtf16 - origText.length
+            // bufferUtf16 = compEndUtf16 + 后段内UTF16
+            val committedUtf16Start = textOffsetIndex.utf8ToUtf16(postStart)
+            val committedUtf16End = textOffsetIndex.utf8ToUtf16(safeEnd)
+            val s16 = compEndUtf16 + (committedUtf16Start - compReplaceStartUtf16 - origText.length)
+            val e16 = compEndUtf16 + (committedUtf16End - compReplaceStartUtf16 - origText.length)
+            sb.append(buffer.subSequence(s16.coerceIn(0, buffer.length), e16.coerceIn(0, buffer.length)))
+        }
+        return sb.toString()
     }
 
     fun getCommittedLengthUtf16(): Int {
@@ -612,15 +672,39 @@ class DisplayTextMirror {
         var i = 0
         while (i < s.length) {
             val codePoint = s.codePointAt(i)
-            len +=
-                when {
-                    codePoint <= 0x7F -> 1
-                    codePoint <= 0x7FF -> 2
-                    codePoint <= 0xFFFF -> 3
-                    else -> 4
-                }
+            len += utf8ByteLengthCp(codePoint)
             i += Character.charCount(codePoint)
         }
         return len
+    }
+
+    /** 字符串按 UTF-8 字节区间切片，snap 到 codepoint 边界。 */
+    private fun utf8SliceByBytes(text: String, startByte: Int, endByte: Int): String {
+        if (startByte >= endByte) return ""
+        var bytePos = 0
+        var i = 0
+        while (i < text.length && bytePos < startByte) {
+            val cp = text.codePointAt(i)
+            val cpLen = utf8ByteLengthCp(cp)
+            if (bytePos + cpLen > startByte) break
+            bytePos += cpLen
+            i += Character.charCount(cp)
+        }
+        val startIdx = i
+        while (i < text.length && bytePos < endByte) {
+            val cp = text.codePointAt(i)
+            val cpLen = utf8ByteLengthCp(cp)
+            if (bytePos + cpLen > endByte) break
+            bytePos += cpLen
+            i += Character.charCount(cp)
+        }
+        return text.substring(startIdx, i)
+    }
+
+    private fun utf8ByteLengthCp(codePoint: Int): Int = when {
+        codePoint <= 0x7F -> 1
+        codePoint <= 0x7FF -> 2
+        codePoint <= 0xFFFF -> 3
+        else -> 4
     }
 }

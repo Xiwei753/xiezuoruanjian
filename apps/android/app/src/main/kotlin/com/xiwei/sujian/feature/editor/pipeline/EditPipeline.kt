@@ -168,5 +168,11 @@ class EditPipeline(
 
     fun getCommittedText(): String = mirror.getCommittedText()
 
+    /** #624 评论7：已提交文本 UTF-8 字节长度 — O(1) 转发，不重建整篇。 */
+    fun getCommittedTextLengthUtf8(): Int = mirror.getCommittedTextLengthUtf8()
+
+    /** #624 评论7：已提交文本 UTF-8 字节区间局部读取 — 只复制请求区间。 */
+    fun committedSliceUtf8(startUtf8: Int, endUtf8: Int): String = mirror.committedSliceUtf8(startUtf8, endUtf8)
+
     fun getSpannable(): android.text.SpannableStringBuilder = mirror.getSpannable()
 }

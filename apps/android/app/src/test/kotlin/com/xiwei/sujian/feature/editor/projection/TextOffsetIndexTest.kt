@@ -635,4 +635,34 @@ class TextOffsetIndexTest {
         }
         return sb.toString()
     }
+    // ---- #624 评论7：从旧正文偏移索引迁移的 offset 回退语义用例 ----
+
+    @Test
+    fun combiningCharacterRoundTrip() {
+        val index = TextOffsetIndex().apply { rebuildFromText("e\u0301") }
+        assertEquals(0, index.utf8ToUtf16(0))
+        assertEquals(1, index.utf8ToUtf16(1))
+        assertEquals(2, index.utf8ToUtf16(3))
+        assertEquals(0, index.utf16ToUtf8(0))
+        assertEquals(1, index.utf16ToUtf8(1))
+        assertEquals(3, index.utf16ToUtf8(2))
+    }
+
+    @Test
+    fun flagEmojiBoundaries() {
+        val index = TextOffsetIndex().apply { rebuildFromText("🇨🇳") }
+        assertEquals(0, index.utf8ToUtf16(0))
+        assertEquals(4, index.utf8ToUtf16(8))
+        assertEquals(0, index.utf16ToUtf8(0))
+        assertEquals(8, index.utf16ToUtf8(4))
+        assertEquals(4, index.utf16Length())
+        assertEquals(8, index.utf8Length())
+    }
+
+    @Test
+    fun utf16SurrogateInteriorSnapsToCodepointStart() {
+        val index = TextOffsetIndex().apply { rebuildFromText("a😀b") }
+        // utf16 offset 2 落在 😀 surrogate pair 中间，snap 到 😀 起始 UTF-8 = 1
+        assertEquals(1, index.utf16ToUtf8(2))
+    }
 }
