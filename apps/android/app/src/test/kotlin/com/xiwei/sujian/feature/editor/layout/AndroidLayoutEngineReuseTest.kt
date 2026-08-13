@@ -150,4 +150,76 @@ class AndroidLayoutEngineReuseTest {
                 .sorted()
         assertEquals("新段落必须获得首行缩进 span", listOf(0, 3, 4), starts)
     }
+
+    @Test
+    fun multiParagraphSelectionReplace_keepsEveryParagraphSpanAligned() {
+        val (mirror, engine) = newEngine("第一段\n第二段\n第三段\n第四段")
+        engine.setWidth(500f)
+        engine.setFirstLineIndent(true, 2f)
+        engine.requestLayout()
+
+        // 跨段选区替换：选中前两段（含两个 \n）一次替换为单行文本 —
+        // 合并段落与后续段落的缩进 span 都必须对齐到真实段落起点。
+        mirror.getSpannable().replace(0, 8, "新")
+        engine.onMirrorContentChanged(
+            DisplayTextProjection.identity(mirror.getText()),
+            listOf(
+                DisplayPatch(
+                    baseRevision = 0L,
+                    newRevision = 1L,
+                    replaceByteStart = 0,
+                    replaceByteEndExclusive = 8,
+                    insertedText = "新",
+                    resultingSelectionStart = 1,
+                    resultingSelectionEnd = 1,
+                ),
+            ),
+        )
+        engine.requestLayout()
+
+        assertEquals("正文必须是替换结果", "新第三段\n第四段", mirror.getText())
+        val text = mirror.getSpannable()
+        val spans =
+            text.getSpans(0, text.length, LeadingMarginSpan.Standard::class.java)
+                .sortedBy { text.getSpanStart(it) }
+        assertEquals("合并后的两段都必须有缩进 span", 2, spans.size)
+        assertEquals("第一段 span 起点", 0, text.getSpanStart(spans[0]))
+        assertEquals("第二段 span 起点", 5, text.getSpanStart(spans[1]))
+        assertEquals("第一段 span 必须止于自身段落末尾（含换行）", 5, text.getSpanEnd(spans[0]))
+        assertEquals("第二段 span 必须覆盖到文末", 8, text.getSpanEnd(spans[1]))
+    }
+
+    @Test
+    fun newlineInsert_midParagraph_atRegionEndKeepsFollowingParagraphSpan() {
+        // 在段落中部插入换行且该位置恰为区域末尾 — 后续段落 span 不得被误删。
+        val (mirror, engine) = newEngine("ab\ncd")
+        engine.setWidth(500f)
+        engine.setFirstLineIndent(true, 2f)
+        engine.requestLayout()
+
+        // 把第二段首字符前插入换行："ab\n\ncd" — 新空段落起点 3。
+        mirror.getSpannable().insert(3, "\n")
+        engine.onMirrorContentChanged(
+            DisplayTextProjection.identity(mirror.getText()),
+            listOf(
+                DisplayPatch(
+                    baseRevision = 0L,
+                    newRevision = 1L,
+                    replaceByteStart = 3,
+                    replaceByteEndExclusive = 3,
+                    insertedText = "\n",
+                    resultingSelectionStart = 4,
+                    resultingSelectionEnd = 4,
+                ),
+            ),
+        )
+        engine.requestLayout()
+
+        val text = mirror.getSpannable()
+        val starts =
+            text.getSpans(0, text.length, LeadingMarginSpan.Standard::class.java)
+                .map { text.getSpanStart(it) }
+                .sorted()
+        assertEquals("每个段落（含空段落）都必须有缩进 span", listOf(0, 3, 4), starts)
+    }
 }

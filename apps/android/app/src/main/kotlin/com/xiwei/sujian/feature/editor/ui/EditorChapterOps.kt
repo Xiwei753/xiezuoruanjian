@@ -276,8 +276,11 @@ private suspend fun EditorViewModel.switchSaveOldChapter(
     val content = _uiState.value.content
     // #595 七：保存旧章节也记录保存回执（revision 在保存时从会话层读取）。
     val oldRevision = _sessionCoordinator?.sessionState?.revision ?: 0L
+    // #624 评论1：空正文判定只看原始字符串 — "\n"、连续空行、只含空格/制表符的
+    // 段落都是用户正文，原样保存；只有真正的 "" 且已确认清空才走 Clear，
+    // 未编辑过的空正文无需保存。不再用 trim() 把纯空白正文当成空文档跳过。
     val saveOk =
-        if (content.trim().isNotEmpty()) {
+        if (content.isNotEmpty()) {
             saveChapterContentForSwitch(oldSession, content, oldRevision)
         } else if (contentExplicitlyCleared) {
             clearChapterContentForSwitch(oldSession, oldRevision)

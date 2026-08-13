@@ -333,6 +333,46 @@ class EditorViewModelChapterSwitchTest {
         }
 
     @Test
+    fun switchWithWhitespaceOnlyBody_savesRawBodyInsteadOfSkipping() =
+        runTest {
+            val vm = createVm()
+            // #624 评论1：纯空行/纯空白正文是用户正文，不是空文档 —
+            // 章节切换保存旧章节时也必须原样保存，不得 trim 后当成空文档跳过。
+            val whitespaceBody = "\n\n   \t\n"
+            var savedContent: String? = null
+            vm.chapterSavePort =
+                object : com.xiwei.sujian.feature.editor.session.ChapterContentSavePort {
+                    override suspend fun saveChapterContent(
+                        projectId: String,
+                        volumeId: String,
+                        chapterId: String,
+                        content: String,
+                    ): BridgeResult<ChapterSaveReceipt> {
+                        savedContent = content
+                        return BridgeResult.Success(
+                            ChapterSaveReceipt("c", 0L, "h", "m", "t", 0),
+                        )
+                    }
+                }
+            vm.onContentChanged(whitespaceBody)
+            vm.initChapter("p", "v", "a", "A")
+
+            // 切换到 B：旧章节保存必须真实尝试（无 native → 新章节加载失败
+            // 返回 LoadFailed），但保存端口必须收到原始空白正文。
+            val result = vm.switchChapter("p", "v", "b", "B")
+
+            assertTrue(
+                "空白正文切换必须走到保存阶段（LoadFailed 说明保存已尝试、加载才失败）",
+                result is ChapterSwitchResult.LoadFailed,
+            )
+            assertEquals(
+                "纯空白正文必须原样保存，不得被 trim 后当成空文档跳过",
+                whitespaceBody,
+                savedContent,
+            )
+        }
+
+    @Test
     fun isCurrentChapter_reflectsCommittedSession() {
         val vm = createVm()
         vm.initChapter("p", "v", "a", "A")
