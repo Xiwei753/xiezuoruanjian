@@ -41,8 +41,8 @@ Supersedes: None
 - `editorCoordinatedTextCursorAnimationEnabled`（布尔值，协同光标动画开关，默认 false）
 - `aiEnabled`（布尔值，AI 功能开关，默认 false）
 - `statsDeviceId`（字符串，统计设备 ID，默认自动生成 UUID）
-- `desktopSidebarWidth`（浮点数，桌面端侧边栏宽度像素，默认 240.0；兼容读取 `linux_qt_sidebar_width`、`desktop_sidebar_width`、`linux_sidebar_width`）
-- `desktopEditorWidth`（浮点数，桌面端编辑器宽度像素，默认 0.0；兼容读取 `linux_qt_editor_width`、`desktop_editor_width`）
+- `desktopSidebarWidth`（浮点数，Linux/Windows 客户端侧边栏宽度像素，默认 240.0；兼容读取 `linux_qt_sidebar_width`、`desktop_sidebar_width`、`linux_sidebar_width`）
+- `desktopEditorWidth`（浮点数，Linux/Windows 客户端编辑器宽度像素，默认 0.0；兼容读取 `linux_qt_editor_width`、`desktop_editor_width`）
 - `diagnosticsEnabled`（布尔值，本地诊断日志开关，默认 true，不进入同步、不含敏感数据）
 - `diagnosticsVerbose`（布尔值，本地诊断详细模式，默认 true，不进入同步、不含敏感数据）
 
@@ -69,7 +69,7 @@ Supersedes: None
 - `variant`（字符串，无法可靠识别时为 "system_selected"）
 - `lightScheme` / `darkScheme`（ThemeColorScheme，完整 Material 3 语义角色）
 
-### `<app_data_root>/sync/sync_config.json`
+### `<app_data_root>/app-meta/sync/config.local.json`
 存储同步配置。包括：
 - `enabled`（布尔值，是否启用同步）
 - `backend_type`（字符串，当前为 `github_api`，`git` 为预留）
@@ -82,5 +82,5 @@ Supersedes: None
 - `has_network_permission`（布尔值）
 - `has_network_state_permission`（布尔值）
 
-### `<app_data_root>/sync/sync_secrets.local.json`
+### `<app_data_root>/app-meta/sync/secrets.local.json`
 存储敏感信息，如 GitHub 令牌、SSH 私钥。此文件保存在本地，**绝不**应被同步。
