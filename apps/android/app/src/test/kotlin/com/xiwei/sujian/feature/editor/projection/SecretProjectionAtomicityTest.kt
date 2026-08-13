@@ -79,27 +79,6 @@ class SecretProjectionAtomicityTest {
     }
 
     @Test
-    fun layoutRuntimeOwnsApplySecretDisplayIfActive() {
-        val clazz = Class.forName("com.xiwei.sujian.feature.editor.pipeline.AndroidLayoutRuntime")
-        val method = clazz.getDeclaredMethod("applySecretDisplayIfActive")
-        assertNotNull(method)
-    }
-
-    @Test
-    fun layoutRuntimeOwnsApplySecretDisplayIfActiveWithLayout() {
-        val clazz = Class.forName("com.xiwei.sujian.feature.editor.pipeline.AndroidLayoutRuntime")
-        val method = clazz.getDeclaredMethod("applySecretDisplayIfActiveWithLayout")
-        assertNotNull(method)
-    }
-
-    @Test
-    fun applySecretDisplayIfActiveDelegatesToRebuildDisplayProjection() {
-        val clazz = Class.forName("com.xiwei.sujian.feature.editor.pipeline.AndroidLayoutRuntime")
-        val rebuildMethod = clazz.getDeclaredMethod("rebuildDisplayProjection")
-        assertNotNull(rebuildMethod)
-    }
-
-    @Test
     fun layoutRuntimeOwnsRebuildDisplayProjection() {
         val clazz = Class.forName("com.xiwei.sujian.feature.editor.pipeline.AndroidLayoutRuntime")
         val method = clazz.getDeclaredMethod("rebuildDisplayProjection")

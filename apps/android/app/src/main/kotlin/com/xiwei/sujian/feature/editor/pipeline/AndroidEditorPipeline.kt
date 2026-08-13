@@ -1014,18 +1014,6 @@ class AndroidEditorPipeline private constructor(
 
     fun isSecretDisplayMode(): Boolean = layoutRuntime.isSecretDisplayMode()
 
-    fun applySecretDisplayIfActive() {
-        layoutRuntime.rebuildDisplayProjection()
-    }
-
-    fun applySecretDisplayIfActiveWithLayout() {
-        layoutRuntime.rebuildDisplayProjection()
-    }
-
-    fun rebuildDisplayProjection() {
-        layoutRuntime.rebuildDisplayProjection()
-    }
-
     fun getCurrentProjection(): DisplayTextProjection = layoutRuntime.getCurrentProjection()
 
     fun setAnimationPolicy(policy: com.xiwei.sujian.feature.editor.visual.TextAnimationPolicy) {

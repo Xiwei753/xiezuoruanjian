@@ -76,18 +76,6 @@ class AndroidLayoutRuntime(
         }
     }
 
-    fun applyProjection(projection: DisplayTextProjection) {
-        currentProjection = projection
-        layoutEngine.applyDisplaySource(if (projection.isMasked) projection.displayText else null, projection)
-        layoutEngine.requestLayout()
-    }
-
-    fun clearProjection() {
-        currentProjection = DisplayTextProjection.identity(mirror.getText())
-        layoutEngine.applyDisplaySource(null, currentProjection)
-        layoutEngine.requestLayout()
-    }
-
     fun getCurrentProjection(): DisplayTextProjection = currentProjection
 
     fun setSecretDisplayMode(enabled: Boolean) {
@@ -101,14 +89,6 @@ class AndroidLayoutRuntime(
     fun rebuildDisplayProjection() {
         rebuildProjectionContent()
         layoutEngine.requestLayout()
-    }
-
-    fun applySecretDisplayIfActive() {
-        rebuildDisplayProjection()
-    }
-
-    fun applySecretDisplayIfActiveWithLayout() {
-        rebuildDisplayProjection()
     }
 
     private fun rebuildProjectionContent() {
