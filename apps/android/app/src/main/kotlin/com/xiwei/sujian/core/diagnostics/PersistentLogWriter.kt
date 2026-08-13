@@ -68,7 +68,8 @@ internal sealed interface LogWriterCommand {
  *   [clearLogs] 入队 [LogWriterCommand.ClearBarrier] 并等待 latch。
  * - writer 线程被唤醒后 drain 整个命令队列到本地列表，按入队顺序处理：
  *   连续 Append 收集为 batch 写盘，遇到屏障先写完 batch 再执行屏障语义。
- * - 1 MiB / 5 文件轮转，轮转、打开、append、flush、delete 全部只在 writer 线程执行。
+ * - 同一构建 1 MiB / 5 文件轮转（4 轮转 + 1 当前），跨构建互不裁剪；轮转、打开、
+ *   append、flush、delete 全部只在 writer 线程执行。
  *
  * 线程安全模型：[lock] 守护 [queue]；文件 I/O 在 lock 外只由 writer 线程执行，
  * 故 enqueue 与 flushBlocking 不会阻塞 I/O。所有通知均用 notifyAll：
@@ -98,7 +99,12 @@ internal sealed interface LogWriterCommand {
 internal object PersistentLogWriter {
     private const val LOG_PREFIX = "sujian-current"
     private const val MAX_FILE_SIZE = 1024 * 1024L // 1 MiB
-    private const val MAX_LOG_FILES = 5
+
+    /** 同一构建（buildKey）下日志文件总数上限（当前 + 轮转）。 */
+    private const val MAX_TOTAL_FILES_PER_BUILD = 5
+
+    /** 同一构建下轮转文件上限（不含当前文件）。 */
+    private const val MAX_ROTATED_FILES_PER_BUILD = MAX_TOTAL_FILES_PER_BUILD - 1
 
     /**
      * flushBlocking / clearLogs 的等待上限：writer 因不可控 Error 死亡时，
@@ -434,7 +440,8 @@ internal object PersistentLogWriter {
     }
 
     /**
-     * 当前文件超过 1 MiB 时移动到带时间戳的轮转文件，并裁剪到 [MAX_LOG_FILES] 个。
+     * 当前文件超过 1 MiB 时移动到带时间戳的轮转文件，并裁剪到当前 buildKey 的
+     * [MAX_ROTATED_FILES_PER_BUILD] 个轮转文件。
      *
      * #623 评论 9：不再使用无结果语义的 `File.renameTo`（失败只返回 false 不抛
      * 异常，会被静默吞掉，writeBatch 仍返回 true，persistenceHealthy 仍认为日志
@@ -443,11 +450,16 @@ internal object PersistentLogWriter {
      * persistenceHealthy=false → flushBlocking=false，导出/清空能感知日志系统不完整。
      * 移动成功后才执行裁剪，裁剪失败（delete 返回 false）同样返回 false 进入失败链。
      *
-     * @return 无需轮转、或轮转与裁剪全部成功返回 true；无法移动/无法裁剪返回 false。
+     * #623 评论 10：裁剪只针对当前 buildKey 的轮转文件，不允许 B 构建的轮转删除
+     * A 构建的日志。[buildIdentity] 为 null（未初始化身份，不应发生在生产路径）
+     * 时返回 false 进入失败链，不进行无身份的裁剪。
+     *
+     * @return 无需轮转、或轮转与裁剪全部成功返回 true；无法移动/无法裁剪/无构建身份返回 false。
      */
     private fun rotateIfNeeded(file: File): Boolean {
         if (!file.exists() || file.length() < MAX_FILE_SIZE) return true
         val logDir = file.parentFile ?: return false
+        val identity = buildIdentity ?: return false
         // #623 评论 3：轮转文件名带 build key，围绕当前构建身份轮转，
         // 不丢掉构建身份。baseName 例如 sujian-current-v1234-e2ce827-ai-debug。
         val baseName = file.nameWithoutExtension
@@ -455,26 +467,33 @@ internal object PersistentLogWriter {
         // Files.move 失败抛 IOException（FileAlreadyExistsException 是其子类），
         // 由 writeBatch 的 catch 统一转成写盘失败 — 轮转失败不再伪装成成功。
         Files.move(file.toPath(), rotated.toPath())
-        return pruneOldLogs(logDir)
+        return pruneOldLogs(logDir, identity.buildKey)
     }
 
     /**
-     * 按最后修改时间降序保留前 [MAX_LOG_FILES] 个，多余删除。
+     * 按最后修改时间降序保留当前 buildKey 的前 [MAX_ROTATED_FILES_PER_BUILD] 个轮转文件，
+     * 多余删除。当前文件不参与 rotated 计数。
      *
-     * #623 评论 9：下标从 [MAX_LOG_FILES] 开始（索引 0..MAX_LOG_FILES-1 才是保留的
-     * 前 N 个；旧实现从 MAX_LOG_FILES-1 开始删，实际只保留 4 个）。删除失败不再
-     * 无视 — 返回 false 进入日志健康状态，否则“保留数量正常”仍可能是假象。
+     * #623 评论 10：只裁剪指定 buildKey 的轮转文件，不允许 B 构建的轮转删除 A 构建的日志。
+     * 当前文件 `sujian-current-${buildKey}.log` 不参与裁剪（它由轮转逻辑管理）。
+     * 删除失败不再无视 — 返回 false 进入日志健康状态。
      *
      * @return 全部删除成功（或无多余文件）返回 true；任一删除失败返回 false。
      */
-    internal fun pruneOldLogs(logDir: File): Boolean {
-        val logs =
-            logDir.listFiles { _, name -> name.startsWith(LOG_PREFIX) && name.endsWith(".log") }
-                ?.sortedByDescending { it.lastModified() }
+    internal fun pruneOldLogs(
+        logDir: File,
+        buildKey: String,
+    ): Boolean {
+        val currentName = "$LOG_PREFIX-$buildKey.log"
+        val prefix = "$LOG_PREFIX-$buildKey"
+        val rotatedFiles =
+            logDir.listFiles { _, name ->
+                name.startsWith(prefix) && name.endsWith(".log") && name != currentName
+            }?.sortedByDescending { it.lastModified() }
                 ?: return true
         var allDeleted = true
-        for (i in MAX_LOG_FILES until logs.size) {
-            if (!logs[i].delete()) {
+        for (i in MAX_ROTATED_FILES_PER_BUILD until rotatedFiles.size) {
+            if (!rotatedFiles[i].delete()) {
                 allDeleted = false
             }
         }

@@ -740,12 +740,13 @@ class PersistentLogWriterTest {
 
         val files = PersistentLogWriter.getLogFiles()
         assertTrue("should have rotated files, got ${files.size}", files.size >= 2)
-        // #623 评论 9：prune 修正后保留前 5 个轮转文件（索引 0..4），加上当前
-        // 文件最多 6 个。旧断言 <=5 实际编码了错误 prune（从 MAX_LOG_FILES-1
-        // 开始删，只保留 4 个轮转文件）——那正是评论 9 要求修掉的缺陷。
+        // #623 评论 10：同一构建 4 轮转 + 1 当前 = 最多 5 个文件。旧断言 <=6
+        // 编码的正是评论 10 指出的“总数变成 6”错误（prune 从 MAX_LOG_FILES=5
+        // 开始删，保留 5 个 rotated + 1 当前 = 6）。新契约 pruneOldLogs 只保留
+        // MAX_ROTATED_FILES_PER_BUILD=4 个轮转 + 1 当前 = 5。
         assertTrue(
-            "should keep at most 5 rotated + 1 current = 6 files, got ${files.size}",
-            files.size <= 6,
+            "should keep at most 4 rotated + 1 current = 5 files, got ${files.size}",
+            files.size <= 5,
         )
         // 当前文件应存在
         assertTrue(
@@ -990,54 +991,72 @@ class PersistentLogWriterRotationPruneTest {
     }
 
     @Test
-    fun pruneOldLogsKeepsExactlyFiveNewest() {
-        // #623 评论 9：旧实现 for 循环从 MAX_LOG_FILES-1 开始删，6 个文件裁剪后
-        // 只剩 4 个；修正后保留前 5 个（降序索引 0..4），最旧的一个被删。
+    fun pruneOldLogsKeepsExactlyFourRotatedPerBuild() {
+        // #623 评论 10：同一 buildKey 最多 4 个轮转 + 1 当前 = 5 总数。
+        // 创建 6 个 rotated + 1 当前，裁剪后保留 4 个最新 rotated（probe-2..probe-5），
+        // 删除 2 个最旧 rotated（probe-0, probe-1）；当前文件不参与裁剪必须保留。
         val logsDir = AndroidDataRoot.logsDir()
         logsDir.mkdirs()
         PersistentLogWriter.getLogFiles().forEach { it.delete() }
-        val files =
+        val rotated =
             (0 until 6).map { i ->
                 val f = File(logsDir, "sujian-current-probe-$i.log")
                 f.writeText("probe-$i")
                 f.setLastModified(1_000_000_000L + i * 60_000L)
                 f
             }
+        val current = File(logsDir, "sujian-current-probe.log")
+        current.writeText("current")
+        current.setLastModified(2_000_000_000L)
 
-        assertTrue("prune must report success when all deletes succeed", PersistentLogWriter.pruneOldLogs(logsDir))
+        assertTrue(
+            "prune must report success when all deletes succeed",
+            PersistentLogWriter.pruneOldLogs(logsDir, "probe"),
+        )
 
         val remaining = PersistentLogWriter.getLogFiles().map { it.name }.toSet()
-        assertEquals("must keep exactly 5 files, got ${remaining.size}", 5, remaining.size)
-        for (i in 1 until 6) {
-            assertTrue("newest ${files[i].name} must be kept", remaining.contains(files[i].name))
+        // 4 rotated + 1 current = 5
+        assertEquals("must keep exactly 4 rotated + 1 current = 5 files, got ${remaining.size}", 5, remaining.size)
+        for (i in 2 until 6) {
+            assertTrue("newest rotated ${rotated[i].name} must be kept", remaining.contains(rotated[i].name))
         }
-        assertTrue("oldest probe-0 must be pruned", !remaining.contains(files[0].name))
+        for (i in 0 until 2) {
+            assertTrue("oldest rotated ${rotated[i].name} must be pruned", !remaining.contains(rotated[i].name))
+        }
+        assertTrue("current file must be kept (not参与 rotated 裁剪)", remaining.contains(current.name))
     }
 
     @Test
     fun pruneOldLogsReportsDeleteFailure() {
-        // #623 评论 9：裁剪删除失败必须返回 false，不得把“保留数量正常”伪装成成功。
-        // 用“非空目录占用 .log 文件名”构造必然删除失败的路径 — 不依赖宿主权限。
+        // #623 评论 9/10：裁剪删除失败必须返回 false，不得把“保留数量正常”伪装成成功。
+        // buildKey=probe：4 个 rotated（probe-0..3）+ 1 current + 1 blocker 目录（占用文件名）。
+        // current 被排除，参与裁剪 5 项（4 rotated + blocker），保留前 4 个 rotated，
+        // blocker 位于索引 4 裁剪位，delete() 非空目录返回 false → prune 返回 false。
+        // 5 个 probe 文件（4 rotated + 1 current）必须全部保留。
         val logsDir = AndroidDataRoot.logsDir()
         logsDir.mkdirs()
         PersistentLogWriter.getLogFiles().forEach { it.delete() }
-        val blocker = File(logsDir, "sujian-current-blocker.log")
+        val blocker = File(logsDir, "sujian-current-probe-blocker.log")
         blocker.mkdirs()
         File(blocker, "child").writeText("occupies the name")
         blocker.setLastModified(999_000_000L) // 最旧 → 位于裁剪位
-        val files =
-            (0 until 5).map { i ->
+        val rotated =
+            (0 until 4).map { i ->
                 val f = File(logsDir, "sujian-current-probe-$i.log")
                 f.writeText("probe-$i")
                 f.setLastModified(1_000_000_000L + i * 60_000L)
                 f
             }
+        val current = File(logsDir, "sujian-current-probe.log")
+        current.writeText("current")
+        current.setLastModified(2_000_000_000L)
         try {
             assertFalse(
                 "delete failure must be reported as prune failure",
-                PersistentLogWriter.pruneOldLogs(logsDir),
+                PersistentLogWriter.pruneOldLogs(logsDir, "probe"),
             )
-            assertTrue("all kept files must remain when prune fails", files.all { it.exists() })
+            assertTrue("all rotated files must remain when prune fails", rotated.all { it.exists() })
+            assertTrue("current file must remain when prune fails", current.exists())
         } finally {
             blocker.deleteRecursively()
         }
@@ -1066,6 +1085,77 @@ class PersistentLogWriterRotationPruneTest {
             assertTrue("current file must still exist after failed rotation", currentFile.exists())
         } finally {
             logsDir.setWritable(true)
+        }
+    }
+
+    @Test
+    fun pruneOldLogsDoesNotDeleteOtherBuildFiles() {
+        // #623 评论 10：裁剪必须按 buildKey 隔离，不允许 B 构建的轮转删除 A 构建的日志。
+        // A buildKey=v1-aaa-noAi-debug：1 current + 5 rotated
+        // B buildKey=v2-bbb-ai-debug：1 current + 6 rotated（超过 4，触发裁剪）
+        // 裁剪 B 后：A 的所有文件必须原样保留（存在 + 内容不变 + 数量不变），
+        // B current 保留，B rotated 保留恰好 4 个最新。
+        val logsDir = AndroidDataRoot.logsDir()
+        logsDir.mkdirs()
+        PersistentLogWriter.getLogFiles().forEach { it.delete() }
+
+        val buildKeyA = "v1-aaa-noAi-debug"
+        val buildKeyB = "v2-bbb-ai-debug"
+        val baseA = "sujian-current-$buildKeyA"
+        val baseB = "sujian-current-$buildKeyB"
+
+        // A：1 current + 5 rotated，内容唯一可辨。
+        val aCurrent = File(logsDir, "$baseA.log")
+        aCurrent.writeText("A-current-content")
+        aCurrent.setLastModified(1_000_000_000L)
+        val aRotated =
+            (0 until 5).map { i ->
+                val f = File(logsDir, "$baseA-$i.log")
+                f.writeText("A-rotated-$i-content")
+                f.setLastModified(1_000_000_000L + i * 60_000L)
+                f
+            }
+        val aAll = listOf(aCurrent) + aRotated
+        val aSnapshots = aAll.associateWith { it.readText() }
+
+        // B：1 current + 6 rotated，mtime 整体比 A 新以确保裁剪位落在 B 内。
+        val bCurrent = File(logsDir, "$baseB.log")
+        bCurrent.writeText("B-current-content")
+        bCurrent.setLastModified(2_000_000_000L)
+        val bRotated =
+            (0 until 6).map { i ->
+                val f = File(logsDir, "$baseB-$i.log")
+                f.writeText("B-rotated-$i-content")
+                f.setLastModified(2_000_000_000L + i * 60_000L)
+                f
+            }
+
+        assertTrue(
+            "prune B must report success when all deletes succeed",
+            PersistentLogWriter.pruneOldLogs(logsDir, buildKeyB),
+        )
+
+        // 1. A 的所有文件仍然存在，内容完全不变。
+        for (f in aAll) {
+            assertTrue("A file ${f.name} must still exist", f.exists())
+            assertEquals("A file ${f.name} content must be unchanged", aSnapshots[f], f.readText())
+        }
+        // 2. A 的文件数量不变（1 current + 5 rotated = 6）。
+        val aRemaining = logsDir.listFiles { _, name -> name.startsWith(baseA) && name.endsWith(".log") }!!.toList()
+        assertEquals("A file count must be unchanged", 6, aRemaining.size)
+        // 3. B 的 current 文件仍存在。
+        assertTrue("B current file must still exist", bCurrent.exists())
+        // 4. B 的 rotated 保留恰好 4 个最新的（bRotated[2..5]，删除 bRotated[0], bRotated[1]）。
+        val bRotatedRemaining =
+            logsDir.listFiles { _, name ->
+                name.startsWith(baseB) && name.endsWith(".log") && name != "$baseB.log"
+            }!!.toList()
+        assertEquals("B must keep exactly 4 rotated files, got ${bRotatedRemaining.size}", 4, bRotatedRemaining.size)
+        for (i in 2 until 6) {
+            assertTrue("B newest rotated ${bRotated[i].name} must be kept", bRotated[i].exists())
+        }
+        for (i in 0 until 2) {
+            assertTrue("B oldest rotated ${bRotated[i].name} must be pruned", !bRotated[i].exists())
         }
     }
 }
