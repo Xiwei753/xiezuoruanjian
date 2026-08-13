@@ -1,104 +1,92 @@
 package com.xiwei.sujian.feature.editor.projection
 
+import java.util.Random
+
 /**
- * 增量 UTF-8/UTF-16 偏移索引，按段落维护 codepoint 边界与段落级前缀和。
+ * 增量 UTF-8/UTF-16 偏移索引，按段落维护 codepoint 边界。
  *
- * 设计意图（Issue #624 评论4）：
- * - 旧实现里 [DisplayTextProjection.identity] 每键都执行 `buildRealBoundaries(text)`，
- *   对整章做一次完整 UTF-8/UTF-16 边界扫描；[DisplayTextMirror.applyPatches] 又会
- *   反复创建 `AndroidTextIndexMap(this)`，等于在普通输入路径上跑两套整章索引。
- * - [TextOffsetIndex] 由 Mirror 唯一持有，普通 patch 只更新受影响段落，避免每键
- *   复制整章并重建整章边界。identity projections 长期引用本索引，不再每键
- *   `mirror.getText()` / `buildRealBoundaries()`。
+ * 设计意图（Issue #624 评论5）：
+ * - 旧实现内部是平铺数组，[onBufferReplaced] 每次编辑都重新分配 `finalCount` 大小
+ *   的数组并复制编辑点前后所有段落，热路径仍是 O(全文段落数 P)。
+ * - 现改为按段落的隐式 Treap（平衡树）：每个节点代表一个段落，保存本段 codepoint
+ *   UTF-8/UTF-16 边界及子树段落/字节/单元汇总。普通输入只 split/merge 受影响段落
+ *   邻域，复杂度 O(受影响段落 + 树高)，不再分配整章数组或 shift 全文前缀。
  *
  * 段落定义：以 `\n` 分隔的文本段（含末尾 `\n`）。空文本有 1 个空段落。
  * 例如 `"abc\ndef\n"` → 段落 0 = `"abc\n"`，段落 1 = `"def\n"`；
  *      `"abc\ndef"`   → 段落 0 = `"abc\n"`，段落 1 = `"def"`（无尾换行）。
  *
- * 内部数据结构：
- * - [paragraphStartUtf8] / [paragraphStartUtf16]：段落 i 的起始偏移（前缀和），
- *   长度 = `paragraphCount + 1`，末尾哨兵 = 总长度。
- * - [paragraphCpUtf8] / [paragraphCpUtf16]：段落 i 内每个 codepoint 的边界
- *   （相对段落起点），长度 = 段落 codepoint 数 + 1（首元素 0，末尾哨兵 = 段落长度）。
+ * 内部数据结构（隐式 Treap）：
+ * - 隐式键 = 段落在中序遍历中的位置（段落索引）。
+ * - [ParagraphNode] 保存本段 [ParagraphNode.cpUtf8] / [ParagraphNode.cpUtf16] 边界
+ *   及子树 [ParagraphNode.subtreeParagraphs] / [ParagraphNode.subtreeUtf8] /
+ *   [ParagraphNode.subtreeUtf16] 汇总。
+ * - [root] 永远非 null（至少 1 个空段落节点）。
  *
  * 复杂度：
  * - 全量重建 [rebuildFromText]：O(N)，N = 文本 codepoint 数。
- * - 增量更新 [onBufferReplaced]：O(M + K)，M = 受影响范围 codepoint 数，
- *   K = 后续段落数（前缀 shift）。普通单字符编辑 M、K 都很小。
+ * - 增量更新 [onBufferReplaced]：O(M + log P)，M = 受影响范围 codepoint 数，
+ *   P = 段落数。普通单字符编辑 M 很小，整体 O(log P)。
  * - 查询 [utf8ToUtf16] / [utf16ToUtf8]：O(log P + log C)，P = 段落数，
  *   C = 段落内 codepoint 数。
  *
  * 线程约束：非线程安全；所有访问必须在 UI 线程。
  */
 class TextOffsetIndex {
-    /** 段落 i 的起始 UTF-8 字节偏移（前缀和），长度 = `paragraphCount + 1`。 */
-    private var paragraphStartUtf8: IntArray = IntArray(2)
+    /** 随机堆优先级来源（固定种子，单线程无需同步）。 */
+    private val random: Random = Random(0x624L)
 
-    /** 段落 i 的起始 UTF-16 偏移（前缀和），长度 = `paragraphCount + 1`。 */
-    private var paragraphStartUtf16: IntArray = IntArray(2)
+    /** 隐式 Treap 根节点，永远非 null（至少 1 个空段落）。 */
+    private var root: ParagraphNode? = null
 
-    /** 段落 i 内 codepoint 的 UTF-8 边界（相对段落起点），长度 = codepoint 数 + 1。 */
-    private var paragraphCpUtf8: Array<IntArray> = arrayOf(IntArray(1))
-
-    /** 段落 i 内 codepoint 的 UTF-16 边界（相对段落起点），长度 = codepoint 数 + 1。 */
-    private var paragraphCpUtf16: Array<IntArray> = arrayOf(IntArray(1))
+    init {
+        root = newEmptyParagraphNode()
+    }
 
     /** 段落数量。空文本返回 1（一个空段落）。 */
-    fun paragraphCount(): Int = paragraphCpUtf8.size
+    fun paragraphCount(): Int = root?.subtreeParagraphs ?: 0
 
     /** 全文 UTF-8 字节数。 */
-    fun utf8Length(): Int = paragraphStartUtf8[paragraphCount()]
+    fun utf8Length(): Int = root?.subtreeUtf8 ?: 0
 
     /** 全文 UTF-16 单元数。 */
-    fun utf16Length(): Int = paragraphStartUtf16[paragraphCount()]
+    fun utf16Length(): Int = root?.subtreeUtf16 ?: 0
 
     /**
-     * 全量重建索引。用于加载/快照路径，扫描整个 [text] 按 `\n` 分段构建每段 codepoint 边界。
+     * 全量重建索引。用于加载/快照路径，扫描整个 [text] 按 `\n` 分段构建每段 codepoint 边界，
+     * 再分治构建隐式 Treap。
      *
      * 复杂度 O(N)，N = [text] 的 codepoint 数。
      */
     fun rebuildFromText(text: String) {
         val paragraphs = scanParagraphs(text, 0, text.length)
-        val count = paragraphs.size
-        val newStartUtf8 = IntArray(count + 1)
-        val newStartUtf16 = IntArray(count + 1)
-        val newCpUtf8 = Array(count) { IntArray(1) }
-        val newCpUtf16 = Array(count) { IntArray(1) }
-        var accUtf8 = 0
-        var accUtf16 = 0
-        for (i in 0 until count) {
-            newStartUtf8[i] = accUtf8
-            newStartUtf16[i] = accUtf16
-            newCpUtf8[i] = paragraphs[i].cpUtf8
-            newCpUtf16[i] = paragraphs[i].cpUtf16
-            accUtf8 += paragraphs[i].cpUtf8.last()
-            accUtf16 += paragraphs[i].cpUtf16.last()
+        val nodes = ArrayList<ParagraphNode>(paragraphs.size)
+        for (p in paragraphs) {
+            nodes.add(ParagraphNode(p.cpUtf8, p.cpUtf16, nextPriority()))
         }
-        newStartUtf8[count] = accUtf8
-        newStartUtf16[count] = accUtf16
-        paragraphStartUtf8 = newStartUtf8
-        paragraphStartUtf16 = newStartUtf16
-        paragraphCpUtf8 = newCpUtf8
-        paragraphCpUtf16 = newCpUtf16
+        root = buildTreapFromList(nodes, 0, nodes.size - 1) ?: newEmptyParagraphNode()
     }
 
     /**
      * 增量更新索引。在 `buffer.replace(replaceStartUtf16, replaceEndUtf16, insertedText)`
      * **之后**调用——[buffer] 已是新内容。
      *
-     * 只扫描受影响段落范围并替换，后续段落前缀 O(后续段落数) shift。普通单字符编辑
-     * 只触及 1 个段落，避免整章扫描。
+     * 只扫描受影响段落范围并替换，前后段落通过隐式 Treap 的 split/merge 重连指针，
+     * 不分配整章数组、不 shift 全文前缀。普通单字符编辑只触及 1 个段落。
      *
      * 算法：
-     * 1. 用旧索引找到 [replaceStartUtf16] 所在段落 [startParagraph] 和
-     *    [replaceEndUtf16] 所在段落 [endParagraph]（基于旧 paragraphStartUtf16 二分）。
+     * 1. 用旧索引按累计 UTF-16 下行定位 [replaceStartUtf16] 所在段落 [startPara] 和
+     *    [replaceEndUtf16] 所在段落 [endPara]。
      * 2. 旧受影响范围在新 buffer 中的对应：
-     *    - 起点 = `paragraphStartUtf16[startParagraph]`（不变）
-     *    - 终点 = `paragraphStartUtf16[endParagraph + 1]`（旧值）+ delta，
+     *    - 起点 = [startPara] 段落起点累计 UTF-16（不变）
+     *    - 终点 = [endPara] 段落末尾累计 UTF-16（旧值）+ delta，
      *      delta = `insertedText.length - (replaceEndUtf16 - replaceStartUtf16)`
      * 3. 扫描新 buffer 的 `[oldAffectedStartUtf16, newAffectedEndUtf16)` 范围，
-     *    按 `\n` 分段，构建新段落的 codepoint 边界。
-     * 4. 替换旧段落 `[startParagraph, endParagraph]` 为新段落，shift 后续段落前缀。
+     *    按 `\n` 分段，构建新段落 codepoint 边界与新节点。
+     * 4. split 出 prefix / affected / suffix 三段，丢弃 affected，
+     *    merge(prefix, newRoot, suffix) 重连。若结果为空（删除所有段落）保留 1 个空段落。
+     *
+     * 复杂度 O(M + log P)，M = 受影响范围 codepoint 数，P = 段落数。
      *
      * @param replaceStartUtf16 旧 buffer 中被替换的起始 UTF-16 偏移
      * @param replaceEndUtf16   旧 buffer 中被替换的结束 UTF-16 偏移
@@ -111,18 +99,20 @@ class TextOffsetIndex {
         insertedText: String,
         buffer: CharSequence,
     ) {
-        val oldCount = paragraphCount()
-        val oldUtf16Len = paragraphStartUtf16[oldCount]
+        val r = root ?: return
+        val oldUtf16Len = r.subtreeUtf16
         val safeStart = replaceStartUtf16.coerceIn(0, oldUtf16Len)
         val safeEnd = replaceEndUtf16.coerceIn(safeStart, oldUtf16Len)
 
-        val startParagraph = findParagraphForUtf16(safeStart)
-        val endParagraph = findParagraphForUtf16(safeEnd)
+        val startLookup = findParagraphByUtf16(r, safeStart)
+        val endLookup = findParagraphByUtf16(r, safeEnd)
+        val startPara = startLookup.paragraphIndex
+        val endPara = endLookup.paragraphIndex
+        val oldAffectedStartUtf16 = startLookup.cumUtf16Start
+        val endNode = endLookup.node ?: return
+        val oldEndParagraphEndUtf16 = endLookup.cumUtf16Start + endNode.cpUtf16.last()
 
         val delta = insertedText.length - (safeEnd - safeStart)
-
-        val oldAffectedStartUtf16 = paragraphStartUtf16[startParagraph]
-        val oldEndParagraphEndUtf16 = paragraphStartUtf16[endParagraph + 1]
         val newAffectedEndUtf16 = oldEndParagraphEndUtf16 + delta
 
         // 扫描新 buffer 的受影响范围，构建新段落 codepoint 边界。
@@ -134,7 +124,20 @@ class TextOffsetIndex {
             } else {
                 emptyList()
             }
-        replaceParagraphs(startParagraph, endParagraph, newParagraphs)
+
+        val affectedCount = endPara - startPara + 1
+
+        val (prefix, rest) = split(r, startPara)
+        val (_, suffix) = split(rest, affectedCount)
+
+        val newNodes = ArrayList<ParagraphNode>(newParagraphs.size)
+        for (p in newParagraphs) {
+            newNodes.add(ParagraphNode(p.cpUtf8, p.cpUtf16, nextPriority()))
+        }
+        val newRoot = buildTreapFromList(newNodes, 0, newNodes.size - 1)
+
+        val merged = merge(merge(prefix, newRoot), suffix)
+        root = merged ?: newEmptyParagraphNode()
     }
 
     /**
@@ -148,18 +151,15 @@ class TextOffsetIndex {
      */
     fun utf8ToUtf16(byteOffset: Int): Int {
         if (byteOffset <= 0) return 0
-        val count = paragraphCount()
-        val totalUtf8 = paragraphStartUtf8[count]
-        if (byteOffset >= totalUtf8) return paragraphStartUtf16[count]
+        val r = root ?: return 0
+        val totalUtf8 = r.subtreeUtf8
+        if (byteOffset >= totalUtf8) return r.subtreeUtf16
 
-        val paraIdx = findParagraphForUtf8(byteOffset)
-        val paraStartUtf8 = paragraphStartUtf8[paraIdx]
-        val paraStartUtf16 = paragraphStartUtf16[paraIdx]
-        val localByteOffset = byteOffset - paraStartUtf8
-        val cpUtf8 = paragraphCpUtf8[paraIdx]
-        val cpUtf16 = paragraphCpUtf16[paraIdx]
-        val cpIdx = binarySearchCeiling(cpUtf8, localByteOffset)
-        return paraStartUtf16 + cpUtf16[cpIdx]
+        val lookup = findParagraphByUtf8(r, byteOffset)
+        val node = lookup.node ?: return 0
+        val localByteOffset = byteOffset - lookup.cumUtf8Start
+        val cpIdx = binarySearchCeiling(node.cpUtf8, localByteOffset)
+        return lookup.cumUtf16Start + node.cpUtf16[cpIdx]
     }
 
     /**
@@ -173,47 +173,231 @@ class TextOffsetIndex {
      */
     fun utf16ToUtf8(utf16Offset: Int): Int {
         if (utf16Offset <= 0) return 0
-        val count = paragraphCount()
-        val totalUtf16 = paragraphStartUtf16[count]
-        if (utf16Offset >= totalUtf16) return paragraphStartUtf8[count]
+        val r = root ?: return 0
+        val totalUtf16 = r.subtreeUtf16
+        if (utf16Offset >= totalUtf16) return r.subtreeUtf8
 
-        val paraIdx = findParagraphForUtf16(utf16Offset)
-        val paraStartUtf8 = paragraphStartUtf8[paraIdx]
-        val paraStartUtf16 = paragraphStartUtf16[paraIdx]
-        val localUtf16Offset = utf16Offset - paraStartUtf16
-        val cpUtf8 = paragraphCpUtf8[paraIdx]
-        val cpUtf16 = paragraphCpUtf16[paraIdx]
-        val cpIdx = binarySearchCeiling(cpUtf16, localUtf16Offset)
-        return paraStartUtf8 + cpUtf8[cpIdx]
+        val lookup = findParagraphByUtf16(r, utf16Offset)
+        val node = lookup.node ?: return 0
+        val localUtf16Offset = utf16Offset - lookup.cumUtf16Start
+        val cpIdx = binarySearchCeiling(node.cpUtf16, localUtf16Offset)
+        return lookup.cumUtf8Start + node.cpUtf8[cpIdx]
     }
 
-    // ---- 内部辅助 ----
+    // ---- 隐式 Treap 节点与操作 ----
 
     /**
-     * 二分 [paragraphStartUtf8] 找到 [byteOffset] 所在段落（最大的 i 使
-     * `paragraphStartUtf8[i] <= byteOffset` 且 `i < paragraphCount`）。
+     * 隐式 Treap 节点，代表一个段落。
+     *
+     * - [cpUtf8] / [cpUtf16]：本段 codepoint UTF-8/UTF-16 边界（相对段起点），
+     *   首元素 0，末尾 = 段落长度。空段落为 `[0]`。
+     * - [priority]：随机堆优先级，维护 Treap 堆性质。
+     * - [subtreeParagraphs] / [subtreeUtf8] / [subtreeUtf16]：子树汇总，
+     *   由 [updateNode] 重算。
      */
-    private fun findParagraphForUtf8(byteOffset: Int): Int {
-        if (byteOffset <= 0) return 0
-        val count = paragraphCount()
-        val last = paragraphStartUtf8[count]
-        if (byteOffset >= last) return count - 1
-        val idx = paragraphStartUtf8.binarySearch(byteOffset)
-        return (if (idx >= 0) idx else -(idx + 1) - 1).coerceIn(0, count - 1)
+    private class ParagraphNode(
+        val cpUtf8: IntArray,
+        val cpUtf16: IntArray,
+        val priority: Int,
+    ) {
+        var left: ParagraphNode? = null
+        var right: ParagraphNode? = null
+        var subtreeParagraphs: Int = 1
+        var subtreeUtf8: Int = cpUtf8.last()
+        var subtreeUtf16: Int = cpUtf16.last()
+    }
+
+    /** 段落定位结果：段落索引、起点累计 UTF-16/UTF-8 偏移、节点引用。 */
+    private data class ParagraphLookup(
+        val paragraphIndex: Int,
+        val cumUtf16Start: Int,
+        val cumUtf8Start: Int,
+        val node: ParagraphNode?,
+    )
+
+    /** 重算 [node] 的子树汇总（假设左右子树汇总已正确）。 */
+    private fun updateNode(node: ParagraphNode) {
+        val l = node.left
+        val r = node.right
+        node.subtreeParagraphs = 1 + (l?.subtreeParagraphs ?: 0) + (r?.subtreeParagraphs ?: 0)
+        node.subtreeUtf8 = node.cpUtf8.last() + (l?.subtreeUtf8 ?: 0) + (r?.subtreeUtf8 ?: 0)
+        node.subtreeUtf16 = node.cpUtf16.last() + (l?.subtreeUtf16 ?: 0) + (r?.subtreeUtf16 ?: 0)
     }
 
     /**
-     * 二分 [paragraphStartUtf16] 找到 [utf16Offset] 所在段落（最大的 i 使
-     * `paragraphStartUtf16[i] <= utf16Offset` 且 `i < paragraphCount`）。
+     * 隐式 Treap split：[root] 的前 [k] 个段落归 L，剩余归 R。
+     *
+     * 边界：k <= 0 → (null, root)；k >= total → (root, null)。
+     * 只重连指针 + updateNode，不分配新节点。
      */
-    private fun findParagraphForUtf16(utf16Offset: Int): Int {
-        if (utf16Offset <= 0) return 0
-        val count = paragraphCount()
-        val last = paragraphStartUtf16[count]
-        if (utf16Offset >= last) return count - 1
-        val idx = paragraphStartUtf16.binarySearch(utf16Offset)
-        return (if (idx >= 0) idx else -(idx + 1) - 1).coerceIn(0, count - 1)
+    private fun split(
+        root: ParagraphNode?,
+        k: Int,
+    ): Pair<ParagraphNode?, ParagraphNode?> {
+        if (root == null) {
+            return null to null
+        }
+        val leftSize = root.left?.subtreeParagraphs ?: 0
+        return if (k <= leftSize) {
+            val (ll, lr) = split(root.left, k)
+            root.left = lr
+            updateNode(root)
+            ll to root
+        } else {
+            // k >= leftSize + 1：root 归 L，递归 split 右子树取 (k - leftSize - 1) 个到 L。
+            val (rl, rr) = split(root.right, k - leftSize - 1)
+            root.right = rl
+            updateNode(root)
+            root to rr
+        }
     }
+
+    /**
+     * 隐式 Treap merge：合并 [left] 和 [right]，要求 left 的所有段落索引 < right 的。
+     * 按 [ParagraphNode.priority] 维护堆性质。只重连指针 + updateNode，不分配新节点。
+     */
+    private fun merge(
+        left: ParagraphNode?,
+        right: ParagraphNode?,
+    ): ParagraphNode? {
+        if (left == null) return right
+        if (right == null) return left
+        return if (left.priority > right.priority) {
+            left.right = merge(left.right, right)
+            updateNode(left)
+            left
+        } else {
+            right.left = merge(left, right.left)
+            updateNode(right)
+            right
+        }
+    }
+
+    /** 生成下一个随机堆优先级。 */
+    private fun nextPriority(): Int = random.nextInt()
+
+    /** 创建一个空段落节点。 */
+    private fun newEmptyParagraphNode(): ParagraphNode = ParagraphNode(IntArray(1), IntArray(1), nextPriority())
+
+    /**
+     * 分治构建隐式 Treap：`build(lo, hi) = merge(build(lo, mid), build(mid+1, hi))`，
+     * 空区间返回 null。O(n) 期望，避免退化为链。
+     */
+    private fun buildTreapFromList(
+        nodes: List<ParagraphNode>,
+        lo: Int,
+        hi: Int,
+    ): ParagraphNode? {
+        if (lo > hi) return null
+        if (lo == hi) return nodes[lo]
+        val mid = (lo + hi) ushr 1
+        return merge(
+            buildTreapFromList(nodes, lo, mid),
+            buildTreapFromList(nodes, mid + 1, hi),
+        )
+    }
+
+    /**
+     * 按累计 UTF-16 下行定位包含 [utf16Offset] 的段落。
+     *
+     * 返回 (段落索引, 段落起点累计 UTF-16, 段落起点累计 UTF-8, 节点)。
+     * - `utf16Offset <= 0` 返回最左段落 (0, 0, 0, leftmost)。
+     * - `utf16Offset >= 总长` 返回最右段落。
+     *
+     * 不分配，O(树高)。
+     */
+    private fun findParagraphByUtf16(
+        root: ParagraphNode,
+        utf16Offset: Int,
+    ): ParagraphLookup {
+        if (utf16Offset <= 0) {
+            var n = root
+            while (true) {
+                val l = n.left ?: break
+                n = l
+            }
+            return ParagraphLookup(0, 0, 0, n)
+        }
+        var node: ParagraphNode = root
+        var idx = 0
+        var acc16 = 0
+        var acc8 = 0
+        while (true) {
+            val left = node.left
+            val ls = left?.subtreeParagraphs ?: 0
+            val l16 = left?.subtreeUtf16 ?: 0
+            val l8 = left?.subtreeUtf8 ?: 0
+            val p16 = node.cpUtf16.last()
+            val p8 = node.cpUtf8.last()
+            if (utf16Offset < acc16 + l16) {
+                // l16 > 0 蕴含 left != null；防御性兜底。
+                if (left == null) {
+                    return ParagraphLookup(idx + ls, acc16 + l16, acc8 + l8, node)
+                }
+                node = left
+            } else if (utf16Offset < acc16 + l16 + p16) {
+                return ParagraphLookup(idx + ls, acc16 + l16, acc8 + l8, node)
+            } else {
+                acc16 += l16 + p16
+                acc8 += l8 + p8
+                idx += ls + 1
+                val right = node.right
+                if (right == null) {
+                    // 偏移 >= 总长，返回当前最后一个段落。
+                    return ParagraphLookup(idx - 1, acc16 - p16, acc8 - p8, node)
+                }
+                node = right
+            }
+        }
+    }
+
+    /**
+     * 按累计 UTF-8 下行定位包含 [byteOffset] 的段落。对称于 [findParagraphByUtf16]。
+     */
+    private fun findParagraphByUtf8(
+        root: ParagraphNode,
+        byteOffset: Int,
+    ): ParagraphLookup {
+        if (byteOffset <= 0) {
+            var n = root
+            while (true) {
+                val l = n.left ?: break
+                n = l
+            }
+            return ParagraphLookup(0, 0, 0, n)
+        }
+        var node: ParagraphNode = root
+        var idx = 0
+        var acc16 = 0
+        var acc8 = 0
+        while (true) {
+            val left = node.left
+            val ls = left?.subtreeParagraphs ?: 0
+            val l16 = left?.subtreeUtf16 ?: 0
+            val l8 = left?.subtreeUtf8 ?: 0
+            val p16 = node.cpUtf16.last()
+            val p8 = node.cpUtf8.last()
+            if (byteOffset < acc8 + l8) {
+                if (left == null) {
+                    return ParagraphLookup(idx + ls, acc16 + l16, acc8 + l8, node)
+                }
+                node = left
+            } else if (byteOffset < acc8 + l8 + p8) {
+                return ParagraphLookup(idx + ls, acc16 + l16, acc8 + l8, node)
+            } else {
+                acc16 += l16 + p16
+                acc8 += l8 + p8
+                idx += ls + 1
+                val right = node.right
+                if (right == null) {
+                    return ParagraphLookup(idx - 1, acc16 - p16, acc8 - p8, node)
+                }
+                node = right
+            }
+        }
+    }
+
+    // ---- 段落扫描与 codepoint 边界 ----
 
     /**
      * 返回最大的 i 使 `arr[i] <= value`（codepoint snap）。
@@ -303,78 +487,5 @@ class TextOffsetIndex {
             result.add(ParagraphCpBoundaries(IntArray(1), IntArray(1)))
         }
         return result
-    }
-
-    /**
-     * 替换旧段落 `[startParagraph, endParagraph]`（含端点）为 [newParagraphs]，
-     * shift 后续段落前缀。
-     *
-     * - `[0, startParagraph)` 不变。
-     * - `[startParagraph, startParagraph + newCount)` 填充新段落，起点前缀连续累加。
-     * - 旧 `[endParagraph + 1, oldCount)` shift 到新 `[startParagraph + newCount, finalCount)`，
-     *   内部 codepoint 边界不变，起点前缀加 delta（新受影响范围末尾 - 旧受影响范围末尾）。
-     */
-    private fun replaceParagraphs(
-        startParagraph: Int,
-        endParagraph: Int,
-        newParagraphs: List<ParagraphCpBoundaries>,
-    ) {
-        val oldCount = paragraphCount()
-        val replacedCount = endParagraph - startParagraph + 1
-        val newCount = newParagraphs.size
-        val deltaCount = newCount - replacedCount
-        val finalCount = oldCount + deltaCount
-
-        if (finalCount == 0) {
-            // 删除所有段落后保留 1 个空段落，与 rebuildFromText("") 一致。
-            paragraphStartUtf8 = IntArray(2)
-            paragraphStartUtf16 = IntArray(2)
-            paragraphCpUtf8 = arrayOf(IntArray(1))
-            paragraphCpUtf16 = arrayOf(IntArray(1))
-            return
-        }
-
-        val newStartUtf8 = IntArray(finalCount + 1)
-        val newStartUtf16 = IntArray(finalCount + 1)
-        val newCpUtf8 = Array(finalCount) { IntArray(1) }
-        val newCpUtf16 = Array(finalCount) { IntArray(1) }
-
-        // 1. 复制 [0, startParagraph) 不变。
-        for (i in 0 until startParagraph) {
-            newStartUtf8[i] = paragraphStartUtf8[i]
-            newStartUtf16[i] = paragraphStartUtf16[i]
-            newCpUtf8[i] = paragraphCpUtf8[i]
-            newCpUtf16[i] = paragraphCpUtf16[i]
-        }
-
-        // 2. 填充新段落，起点前缀从 paragraphStart[startParagraph] 连续累加。
-        var curStartUtf8 = paragraphStartUtf8[startParagraph]
-        var curStartUtf16 = paragraphStartUtf16[startParagraph]
-        for (j in 0 until newCount) {
-            val newIdx = startParagraph + j
-            newStartUtf8[newIdx] = curStartUtf8
-            newStartUtf16[newIdx] = curStartUtf16
-            newCpUtf8[newIdx] = newParagraphs[j].cpUtf8
-            newCpUtf16[newIdx] = newParagraphs[j].cpUtf16
-            curStartUtf8 += newParagraphs[j].cpUtf8.last()
-            curStartUtf16 += newParagraphs[j].cpUtf16.last()
-        }
-
-        // 3. shift 后续段落：内部 codepoint 边界不变，起点前缀加 delta。
-        val deltaUtf8 = curStartUtf8 - paragraphStartUtf8[endParagraph + 1]
-        val deltaUtf16 = curStartUtf16 - paragraphStartUtf16[endParagraph + 1]
-        for (i in (endParagraph + 1)..oldCount) {
-            newStartUtf8[i + deltaCount] = paragraphStartUtf8[i] + deltaUtf8
-            newStartUtf16[i + deltaCount] = paragraphStartUtf16[i] + deltaUtf16
-        }
-        for (i in (endParagraph + 1) until oldCount) {
-            newCpUtf8[i + deltaCount] = paragraphCpUtf8[i]
-            newCpUtf16[i + deltaCount] = paragraphCpUtf16[i]
-        }
-
-        paragraphStartUtf8 = newStartUtf8
-        paragraphStartUtf16 = newStartUtf16
-        paragraphCpUtf8 = newCpUtf8
-        paragraphCpUtf16 = newCpUtf16
     }
 }
