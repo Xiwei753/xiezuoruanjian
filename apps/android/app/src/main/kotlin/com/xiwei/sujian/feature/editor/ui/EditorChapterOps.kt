@@ -150,27 +150,90 @@ fun EditorViewModel.confirmEditorAttached(targetId: String) {
 // #624 评论12 第2项：保存完成统一提交（回执 + markSaved）— 切章保存成功后
 // 持久 session 的 DocumentState.localDirty 必须清掉，否则后面的同步事实会被
 // IgnoreDirtyConflict 拦截。
+// #624 评论13 第2项：切章保存收成稳定 lease 事务 — Repository 成功只代表
+// "这一版 lease 正文已落盘"，不代表"可以离开章节"；保存期间 revision 前进时
+// 重新签发最新 lease 再保存，直到最新 revision 真正提交（Committed）。
+
+/** #624 评论13 第2项：切章保存事务结果。 */
+private enum class SwitchSaveOutcome {
+    /** 最新 revision 已真正落盘（或无需保存），可以继续加载新章节。 */
+    Committed,
+
+    /** 事务已过期（有更新请求排队）— 回滚后由调用方返回 Stale。 */
+    Stale,
+
+    /** snapshot 缺失/错版或保存失败 — 中止切章，返回 SaveFailed。 */
+    Failed,
+}
+
+/**
+ * #624 评论13 第2项：切章保存的版本提交判定 — Repository 成功只代表这一版
+ * lease 正文已写进磁盘。回执总是记录（该 revision 确实已落盘）；只有 lease
+ * 仍匹配 target/session/epoch 且活动 revision 未前进时才 markSaved 并返回
+ * true（Committed）。返回 false 表示保存期间 revision 前进 — 调用方必须重新
+ * 签发最新 lease 再保存，不得把"旧 revision 已写盘"算成可以离开章节。
+ */
 private fun EditorViewModel.commitSwitchSave(
     lease: DocumentOperationLease,
     hash: String,
-) {
+): Boolean {
     saveReceipts.record(lease.toSaveToken(hash))
-    // #624 评论12 第2项：切章保存成功必须 markSaved 提交回 session 文档状态 —
-    // 但只有 lease 仍 current 且 revision 未前进时才清 localDirty（切章保存期间
-    // 迟到按键会推进 revision，不得把新输入误标为已落盘）。
-    val coordinator = _sessionCoordinator ?: return
+    val coordinator = _sessionCoordinator ?: return false
     if (coordinator.isDocumentOperationLeaseCurrent(lease) &&
         coordinator.sessionState.revision == lease.rustRevision
     ) {
         coordinator.markSaved(lease.targetId, DocumentVersion(contentHash = hash))
+        return true
+    }
+    return false
+}
+
+/**
+ * #624 评论13 第2项：切章保存稳定 lease 事务 — 循环签发当前真实
+ * [DocumentOperationLease]，直到最新 revision 真正落盘：
+ *
+ * - `!lease.localDirty` → 未编辑，直接 [SwitchSaveOutcome.Committed]；
+ * - dirty+空正文 → Clear；dirty+非空 → Save（正文/revision 都来自真实 snapshot）；
+ * - Repository 成功只代表这一版 lease 正文写进磁盘 — lease 已前进（保存期间
+ *   revision 前进）就重新签发最新 snapshot 再保存，直到最新 revision 提交；
+ * - `ctx.isLatest()` 失效返回 [SwitchSaveOutcome.Stale]（latest-wins 边界在
+ *   保存循环内同样生效）；
+ * - snapshot 缺失/错版返回 [SwitchSaveOutcome.Failed]（不伪造空正文，评论10）。
+ */
+private suspend fun EditorViewModel.persistOldChapterForSwitch(
+    ctx: SwitchContext,
+    oldSession: EditorSession,
+): SwitchSaveOutcome {
+    val oldTargetId = chapterTargetId(oldSession.projectId, oldSession.volumeId, oldSession.chapterId)
+    while (true) {
+        if (!ctx.isLatest()) return SwitchSaveOutcome.Stale
+        val coordinator = _sessionCoordinator ?: return SwitchSaveOutcome.Failed
+        // #624 评论10 第1/2项：每次循环都从真实 Rust session 重新签发权威 lease
+        // （snapshot 缺失/错版 → null → 中止切章，不伪造空正文）。
+        val lease = coordinator.issueDocumentOperationLease(oldTargetId) ?: return SwitchSaveOutcome.Failed
+        if (!lease.localDirty) return SwitchSaveOutcome.Committed
+        val savedHash =
+            if (lease.text.isEmpty()) {
+                clearChapterContentForSwitch(oldSession, lease)
+            } else {
+                saveChapterContentForSwitch(oldSession, lease.text, lease)
+            }
+        if (savedHash == null) return SwitchSaveOutcome.Failed
+        // 回执已记录；只有 lease 仍匹配且最新 revision 已落盘才算事务完成 —
+        // 否则循环重新签发最新 snapshot 再保存。
+        if (commitSwitchSave(lease, savedHash)) return SwitchSaveOutcome.Committed
     }
 }
 
+/**
+ * 保存旧章节正文。返回落盘 contentHash（Repository Success）；失败返回 null
+ * （saveStatus=SaveFailed + 错误事件已上报）。
+ */
 private suspend fun EditorViewModel.saveChapterContentForSwitch(
     session: EditorSession,
     content: String,
     lease: DocumentOperationLease,
-): Boolean =
+): String? =
     saveMutex.withLock {
         try {
             when (
@@ -182,23 +245,20 @@ private suspend fun EditorViewModel.saveChapterContentForSwitch(
                         content,
                     )
             ) {
-                is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> {
-                    commitSwitchSave(lease, result.data?.contentHash ?: "")
-                    true
-                }
+                is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> result.data?.contentHash ?: ""
                 is com.xiwei.sujian.core.interop.common.BridgeResult.Error -> {
                     _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
                     emitErrorEvent(
                         getApplication<Application>().getString(R.string.error_save_failed, result.message),
                     )
-                    false
+                    null
                 }
                 com.xiwei.sujian.core.interop.common.BridgeResult.NotLoaded -> {
                     _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
                     emitErrorEvent(
                         getApplication<Application>().getString(R.string.error_save_native_not_loaded),
                     )
-                    false
+                    null
                 }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -208,14 +268,18 @@ private suspend fun EditorViewModel.saveChapterContentForSwitch(
             emitErrorEvent(
                 getApplication<Application>().getString(R.string.error_save_exception, e.message ?: ""),
             )
-            false
+            null
         }
     }
 
+/**
+ * 清空旧章节正文（dirty+空正文）。返回落盘 contentHash（Repository Success）；
+ * 失败返回 null（saveStatus=SaveFailed + 错误事件已上报）。
+ */
 private suspend fun EditorViewModel.clearChapterContentForSwitch(
     session: EditorSession,
     lease: DocumentOperationLease,
-): Boolean =
+): String? =
     saveMutex.withLock {
         try {
             when (
@@ -226,27 +290,24 @@ private suspend fun EditorViewModel.clearChapterContentForSwitch(
                         session.chapterId,
                     )
             ) {
-                is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> {
-                    commitSwitchSave(lease, result.data?.contentHash ?: "")
-                    true
-                }
+                is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> result.data?.contentHash ?: ""
                 is com.xiwei.sujian.core.interop.common.BridgeResult.Error -> {
                     _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
                     emitErrorEvent(
                         getApplication<Application>().getString(R.string.error_save_failed, result.message),
                     )
-                    false
+                    null
                 }
                 com.xiwei.sujian.core.interop.common.BridgeResult.NotLoaded -> {
                     _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                    false
+                    null
                 }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-            false
+            null
         }
     }
 
@@ -271,7 +332,7 @@ private class SwitchContext(
     val oldUiState: EditorUiState,
 )
 
-/** #595 一：阶段 1 — 保存旧章节（含保存回执与失败/过期回滚）。null 表示继续。 */
+/** #595 一：阶段 1 — 保存旧章节（稳定 lease 事务，含回执/过期回滚）。null 表示继续。 */
 private suspend fun EditorViewModel.switchSaveOldChapter(
     ctx: SwitchContext,
     oldSession: EditorSession,
@@ -283,42 +344,30 @@ private suspend fun EditorViewModel.switchSaveOldChapter(
     // #624 评论10 第2项：旧章节保存必须从 Rust session 的真实 snapshot/lease 取
     // text + revision。评论9 之后本地正常输入不再更新 _uiState.content，
     // _uiState.content 是"刚打开章节时的旧正文"，用它保存会把刚才输入覆盖回去（数据丢失）。
-    // lease 由 issueDocumentOperationLease 签发：只有活动 target/session 存在且
-    // snapshot 可读且 revision 匹配时才非空（评论10 第1项收紧）。
-    val lease = _sessionCoordinator?.issueDocumentOperationLease()
-    if (lease == null) {
-        // 拿不到真实 snapshot — 中止本次保存/切章，不回退 _uiState.content，
-        // 不伪造空正文保存（否则会把旧章节清空）。
-        _uiState.value = _uiState.value.copy(loading = false, saveStatus = SaveStatus.SaveFailed)
-        saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
-        startSaveActor()
-        inputFrozen = false
-        return ChapterSwitchResult.SaveFailed(oldSession)
-    }
-    // #624 评论12 第2项：旧章节保存只看 lease.localDirty + lease.text：未 dirty
-    // 无事可做（不再无条件重写非空章节）；dirty + 空正文（用户删空）→ Clear —
-    // 不得走 else true 让磁盘旧正文残留。正文/revision 都来自真实 snapshot。
-    val saveOk =
-        when {
-            !lease.localDirty -> true
-            lease.text.isEmpty() -> clearChapterContentForSwitch(oldSession, lease)
-            else -> saveChapterContentForSwitch(oldSession, lease.text, lease)
+    // #624 评论13 第2项：persistOldChapterForSwitch 循环签发权威 lease，只有最新
+    // revision 真正落盘（Committed）才继续加载新章节。
+    when (persistOldChapterForSwitch(ctx, oldSession)) {
+        SwitchSaveOutcome.Committed -> {
+            // #595 一：可见提交边界 1 — 保存完成后若已有更新请求，回滚并退出。
+            if (!ctx.isLatest()) {
+                restoreAfterSwitch(ctx.oldSession, ctx.oldUiState)
+                return ChapterSwitchResult.Stale
+            }
+            return null
         }
-
-    if (!saveOk) {
-        // #595 一：保存失败返回明确失败结果，且完整恢复旧 EditorUiState。
-        _uiState.value = ctx.oldUiState.copy(loading = false, saveStatus = SaveStatus.SaveFailed)
-        saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
-        startSaveActor()
-        inputFrozen = false
-        return ChapterSwitchResult.SaveFailed(oldSession)
+        SwitchSaveOutcome.Stale -> {
+            restoreAfterSwitch(ctx.oldSession, ctx.oldUiState)
+            return ChapterSwitchResult.Stale
+        }
+        SwitchSaveOutcome.Failed -> {
+            // #595 一：保存失败返回明确失败结果，且完整恢复旧 EditorUiState。
+            _uiState.value = ctx.oldUiState.copy(loading = false, saveStatus = SaveStatus.SaveFailed)
+            saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
+            startSaveActor()
+            inputFrozen = false
+            return ChapterSwitchResult.SaveFailed(oldSession)
+        }
     }
-    // #595 一：可见提交边界 1 — 保存完成后若已有更新请求，回滚并退出。
-    if (!ctx.isLatest()) {
-        restoreAfterSwitch(ctx.oldSession, ctx.oldUiState)
-        return ChapterSwitchResult.Stale
-    }
-    return null
 }
 
 private sealed interface SwitchPrepareOutcome {
@@ -596,11 +645,10 @@ suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
             )
         // #624 评论12 第2项：dirty 唯一真值在 session store — 加载新章节时
         // 记录由 commitPreparedSession 新建（localDirty=false），不再有 ViewModel 第二份。
-        // #595 七：加载即记录磁盘版本回执（revision 0 — 尚未编辑，屏幕与磁盘一致），
-        // 同步前 flush 不把"从未保存"误判为假成功。
-        saveReceipts.record(
-            buildSaveToken(chapterTargetId(session.projectId, session.volumeId, session.chapterId), 0L, meta.hash),
-        )
+        // #624 评论13 第3项：加载不是一次 Save/Clear 操作 — 不记录回执。旧实现用
+        // buildSaveToken 读"此刻的 currentInputLease"拼进新 target（loadChapter(B)
+        // 时 A 的 session/epoch 会写进 B 的假回执）。DocumentSaveReceiptTracker 只记录
+        // 真实 Save/Clear 使用的 DocumentOperationLease.toSaveToken。
         val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
         // #595 四：Android 不自行填写 parentVersion — 磁盘版本可能来自 Git 回退、
         // 外部修改或迟到 IO，不能伪称为上次 committed 的后代。版本因果只能由
@@ -654,7 +702,7 @@ suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
     }
 }
 
-fun EditorViewModel.applyExternalContentToUi(
+suspend fun EditorViewModel.applyExternalContentToUi(
     targetId: String,
     text: String,
     fileHash: String,
@@ -670,12 +718,12 @@ fun EditorViewModel.applyExternalContentToUi(
         )
     // #624 评论12 第2项：dirty 唯一真值在 session store — 外部 reset 由
     // applyExternalContentFact/resetPersistentSession 清 localDirty，不再有 ViewModel 第二份。
-    // #595 七：同步合并内容已由 Core 写入磁盘 — 记录回执（revision 取
-    // reset 后的真实 session revision），同步后 flush 不误判为未保存。
-    val revision = _sessionCoordinator?.sessionState?.revision ?: 0L
-    saveReceipts.record(buildSaveToken(targetId, revision, fileHash))
+    // #624 评论13 第3项：同步合并正文已经是磁盘事实 — 不记录回执（旧 buildSaveToken
+    // 会拼出 targetId + "此刻 currentInputLease" 的假身份）。回执跟踪器只记录真实
+    // Save/Clear 操作使用的 lease.toSaveToken。
     // #624 评论9：previousText 已删除 — 统计改增量 recordWritingEvent。
     // 冷路径 external-apply：用整章 text 重算 wordCount 并设入 _uiState，再 updateStats() 算 speed。
+    // #624 评论13 第4项：calculateWordCount 是 suspend（Repository 自己 main-safe）。
     _uiState.value = _uiState.value.copy(wordCount = calculateWordCount(text))
     updateStats()
 }

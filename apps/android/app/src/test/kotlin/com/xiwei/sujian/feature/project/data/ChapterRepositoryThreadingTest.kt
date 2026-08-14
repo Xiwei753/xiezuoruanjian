@@ -80,4 +80,25 @@ class ChapterRepositoryThreadingTest {
             // 桥调用真实执行到边界（无 native → NotLoaded）。
             assertEquals(BridgeResult.NotLoaded, result)
         }
+
+    /**
+     * #624 评论13 第4项：字数统计同样必须 main-safe — 正文加载后的
+     * calculateWordCount 是整章文本同步跨 UniFFI 的调用，不得跑在调用方
+     * （Compose/Main）线程。与 save/clear 一样统一经注入的 IO dispatcher。
+     */
+    @Test
+    fun calculateWordCount_runsThroughInjectedIoDispatcher() =
+        runTest {
+            val dispatcher = RecordingDispatcher()
+            val repo = createRepo(dispatcher)
+
+            val count = repo.calculateWordCount("正文一二三")
+
+            assertTrue(
+                "calculateWordCount 必须经注入的 IO dispatcher 派发（main-safe）",
+                dispatcher.dispatchCount >= 1,
+            )
+            // 无 native 时桥回退 text.length，结果仍然可得。
+            assertEquals("正文一二三".length, count)
+        }
 }

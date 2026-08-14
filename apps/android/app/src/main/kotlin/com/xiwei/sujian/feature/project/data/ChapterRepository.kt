@@ -111,7 +111,13 @@ class ChapterRepository(
             writingBridge.clearChapterContent(projectId, volumeId, chapterId)
         }
 
-    fun calculateWordCount(text: String): Int {
-        return writingBridge.calculateWordCount(text)
-    }
+    /**
+     * #624 评论13 第4项：字数统计同样必须 main-safe — 正文加载后的
+     * calculateWordCount 是整章文本同步跨 UniFFI 的调用，不得跑在调用方
+     * （Compose/Main）线程。与 save/clear 一样统一经注入的 IO dispatcher。
+     */
+    suspend fun calculateWordCount(text: String): Int =
+        withContext(ioDispatcher) {
+            writingBridge.calculateWordCount(text)
+        }
 }

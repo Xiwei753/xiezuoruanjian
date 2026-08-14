@@ -87,7 +87,7 @@ class EditorContentOpsCauseTest {
     }
 
     /** 提交一个活动会话并同步 ViewModel 到已保存状态（saveStatus=Saved, 无 dirty）。 */
-    private fun commitSavedSession(
+    private suspend fun commitSavedSession(
         text: String,
         revision: Long,
         sessionId: ULong = 1UL,

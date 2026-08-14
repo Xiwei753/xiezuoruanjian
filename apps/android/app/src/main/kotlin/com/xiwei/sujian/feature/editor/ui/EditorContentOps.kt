@@ -131,7 +131,9 @@ fun EditorViewModel.updateStats() {
         )
 }
 
-/** 冷路径字数计算（load/external-apply 时用整章 String）。 */
-fun EditorViewModel.calculateWordCount(text: String): Int {
+/** 冷路径字数计算（load/external-apply 时用整章 String）。
+ * #624 评论13 第4项：suspend — main-safe 责任在 Repository（经注入的 IO dispatcher），
+ * 调用方（loadChapter/applyExternalContentToUi）直接 await，不再套 launch(IO)。 */
+suspend fun EditorViewModel.calculateWordCount(text: String): Int {
     return chapterRepository.calculateWordCount(text)
 }

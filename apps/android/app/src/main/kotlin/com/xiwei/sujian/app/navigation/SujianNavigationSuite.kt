@@ -1,6 +1,6 @@
 package com.xiwei.sujian.app.navigation
 
-import androidx.activity.compose.BackHandler
+import android.annotation.SuppressLint
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
@@ -578,38 +578,70 @@ private fun rememberSujianWorkspaceNavState(
  *
  * #624 评论12 第1项：预测返回不再用 ThreePaneScaffoldPredictiveBackHandler
  * （它会自己提交 navigator.navigateBack，保存来不及做）— 改用
- * androidx.activity.compose.PredictiveBackHandler：
+ * androidx.activity.compose.PredictiveBackHandler。
+ *
+ * #624 评论13 第1项：同一 back dispatcher 里最后组合的 enabled handler 优先 —
+ * 旧的第二个 BackHandler 会抢先消费普通返回，predictive callback 拿不到手势
+ * progress。现在只保留这一个 PredictiveBackHandler：
+ * - 无条件参与组合（官方要求），只用 `enabled` 控制：Works 路由且可返回时生效；
  * - 手势过程把 BackEventCompat.progress 喂给 navigator.seekBack；
  * - 手势真正完成后先 ActiveDocumentGate.flushActiveDocument()（保存活动正文）；
- * - 保存成功再真正导航离开（back()）；
- * - 保存失败把 seek 复位到 0f，保持 Editor 目的地不变。
- *
- * 系统返回（非预测路径）同样只调用 guardedBack 这一个入口。 */
+ *   保存成功再真正导航离开（back()）；保存失败把 seek 复位到 0f；
+ * - 手势取消（CancellationException）同样把 seek 复位到 0f 后重新抛出 —
+ *   navigator 不得停在半截 seek 状态；
+ * - AndroidX 自己的 handleOnBackPressed() 会为普通返回创建 non-predictive
+ *   back instance（progressFlow 单事件后正常完成），不再叠第二个 BackHandler。 */
 @Composable
+@SuppressLint("NoCollectCallFound")
+// NoCollectCallFound 是静态启发式：只认 lambda 内的直接 progressFlow.collect；
+// collect 在 runPredictiveWorkspaceBack 内（progressFlow.collect { … }），其语义
+// （手势 progress → 保存 → 返回/复位）由 PredictiveWorkspaceBackTest 真实覆盖。
 private fun SujianWorkspaceBackEffects(
     currentRoute: SujianRoute,
     workspaceNavState: ProjectNavigationState,
-    coroutineScope: CoroutineScope,
 ) {
-    if (currentRoute is SujianRoute.Works) {
-        PredictiveBackHandler(enabled = workspaceNavState.canNavigateBack) { progressFlow ->
-            // 手势过程：只 seek 过渡进度，不提交导航。
-            progressFlow.collect { event ->
-                workspaceNavState.seekBack(event.progress)
-            }
-            // 手势真正完成：先保存活动正文，保存成功才导航离开。
-            if (ActiveDocumentGate.flushActiveDocument()) {
-                workspaceNavState.back()
-            } else {
-                // 保存失败 — 复位 seek，保持 Editor 目的地（正文不丢）。
-                workspaceNavState.seekBack(0f)
-            }
+    PredictiveBackHandler(
+        enabled = currentRoute is SujianRoute.Works && workspaceNavState.canNavigateBack,
+    ) { progressFlow ->
+        runPredictiveWorkspaceBack(
+            progressFlow = progressFlow,
+            onSeekBack = workspaceNavState::seekBack,
+            onFlushActiveDocument = ActiveDocumentGate::flushActiveDocument,
+            onBack = workspaceNavState::back,
+        )
+    }
+}
+
+/**
+ * #624 评论13 第1项：工作区预测/系统返回的单一执行体（纯逻辑，便于单测）。
+ *
+ * - 手势过程：把每个 [androidx.activity.BackEventCompat.progress] 喂给 [onSeekBack]；
+ * - 手势正常完成：先 [onFlushActiveDocument] 保存活动正文 — 成功才 [onBack] 导航
+ *   离开；失败把 seek 复位到 0f（保持 Editor 目的地，正文不丢）；
+ * - 手势取消（[kotlinx.coroutines.CancellationException]）：把 seek 复位到 0f 后
+ *   重新抛出 — navigator 不得停在半截 seek 状态。
+ */
+internal suspend fun runPredictiveWorkspaceBack(
+    progressFlow: kotlinx.coroutines.flow.Flow<androidx.activity.BackEventCompat>,
+    onSeekBack: suspend (Float) -> Unit,
+    onFlushActiveDocument: suspend () -> Boolean,
+    onBack: suspend () -> Unit,
+) {
+    try {
+        progressFlow.collect { event ->
+            onSeekBack(event.progress)
         }
-        BackHandler(enabled = workspaceNavState.canNavigateBack) {
-            coroutineScope.launch {
-                workspaceNavState.guardedBack()
-            }
+        // 手势真正完成：先保存活动正文，保存成功才导航离开。
+        if (onFlushActiveDocument()) {
+            onBack()
+        } else {
+            // 保存失败 — 复位 seek，保持 Editor 目的地（正文不丢）。
+            onSeekBack(0f)
         }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        // 手势取消 — 复位 seek（navigator 不得停在半截过渡态）后向上重抛。
+        onSeekBack(0f)
+        throw e
     }
 }
 
@@ -717,7 +749,7 @@ fun SujianNavigationSuite(
             contractShowsPrimaryNavigation = layoutSpec.contract?.showPrimaryNavigation ?: true,
         )
 
-    SujianWorkspaceBackEffects(currentRoute, workspaceNavState, coroutineScope)
+    SujianWorkspaceBackEffects(currentRoute, workspaceNavState)
     SujianRouteEffects(currentRoute, currentTopDestination)
     val env = SujianTopBarEnv(syncState, coroutineScope, deps, topLevelBackStack)
     val topBarInfo = rememberSujianTopBarInfo(currentRoute, appState, chrome, env, workspaceNavState)

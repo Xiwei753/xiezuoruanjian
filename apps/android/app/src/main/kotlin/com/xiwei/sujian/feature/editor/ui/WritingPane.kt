@@ -454,8 +454,10 @@ private fun WritingPaneExternalContentFlow(
 /**
  * #595 一/二：外部文档事实决策执行 — 调用方已通过 shouldApplyExternalContent
  * 确认版本更新与本地 dirty 状态，此处只执行 Core reset 和 UI 同步。
+ * #624 评论13 第4项：suspend — 与 [com.xiwei.sujian.feature.editor.ui.EditorViewModel.applyExternalContentToUi]
+ * （await calculateWordCount）同一调用链；本来就在 LaunchedEffect collect 里调用。
  */
-private fun handleExternalDocumentFact(
+private suspend fun handleExternalDocumentFact(
     coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
     viewModel: EditorViewModel,
     targetId: String,

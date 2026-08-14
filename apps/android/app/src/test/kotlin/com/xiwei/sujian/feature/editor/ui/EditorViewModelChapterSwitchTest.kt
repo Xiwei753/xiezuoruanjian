@@ -35,6 +35,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -619,6 +620,163 @@ class EditorViewModelChapterSwitchTest {
                 result is ChapterSwitchResult.SaveFailed,
             )
             assertEquals(SaveStatus.SaveFailed, vm.uiState.value.saveStatus)
+        }
+
+    /**
+     * #624 评论13 第2项：切章保存期间 revision 前进 — Repository 成功只代表
+     * "这一版 lease 正文已落盘"，不能算成可以离开章节；必须重新签发最新 lease
+     * 再保存，直到最新 revision 真正提交（Committed）。旧实现把 stale save 当
+     * 成功直接切走，最新输入可能从未落盘。
+     */
+    @Test
+    fun switchChapter_saveRevisionAdvancedDuringSave_reissuesLeaseAndSavesLatest() =
+        runTest {
+            val vm = createVm()
+            val targetA = vm.chapterTargetId("p", "v", "a")
+            vm.initChapter("p", "v", "a", "A")
+            commitActiveSession(vm, "p", "v", "a", "旧正文")
+            markLocalDirty(vm, "p", "v", "a")
+
+            var saveCalls = 0
+            val savedContents = mutableListOf<String>()
+            vm.chapterSavePort =
+                object : com.xiwei.sujian.feature.editor.session.ChapterContentSavePort {
+                    override suspend fun saveChapterContent(
+                        projectId: String,
+                        volumeId: String,
+                        chapterId: String,
+                        content: String,
+                    ): BridgeResult<ChapterSaveReceipt> {
+                        saveCalls++
+                        savedContents.add(content)
+                        if (saveCalls == 1) {
+                            // 模拟保存 IO 期间用户继续输入：revision 前进到 2。
+                            val inputLease = fakeCoordinator.currentInputLease()
+                            fakeCoordinator.applyLocalEdit(
+                                EditorDocumentUpdate.LocalInput(
+                                    targetId = targetA,
+                                    revision = 2L,
+                                    transactionId = 21L,
+                                    operationKind = EditorOperationKind.INSERT,
+                                    contentChanged = true,
+                                    contentDelta = EditorContentDelta(insertedChars = 3),
+                                    lease = inputLease!!,
+                                ),
+                            )
+                            fakeCoordinator.installSnapshot(1UL, "旧正文新输入", 2L)
+                            return BridgeResult.Success(
+                                ChapterSaveReceipt("c", 0L, "hash-stale", "m", "t", 0),
+                            )
+                        }
+                        return BridgeResult.Success(
+                            ChapterSaveReceipt("c", 0L, "hash-latest", "m", "t", 0),
+                        )
+                    }
+                }
+
+            val result = vm.switchChapter("p", "v", "b", "B")
+
+            assertTrue(
+                "保存期间 revision 前进后必须重新保存最新版本" +
+                    "（LoadFailed 说明保存已提交、新章节加载才失败）",
+                result is ChapterSwitchResult.LoadFailed,
+            )
+            assertEquals("stale 版保存后必须重新签发 lease 再保存", 2, saveCalls)
+            assertEquals("第一次保存的是旧 revision 的正文", "旧正文", savedContents[0])
+            assertEquals("第二次保存的必须是最新 revision 的正文", "旧正文新输入", savedContents[1])
+            assertEquals(
+                "只有最新 revision 提交才 markSaved — committedVersion 必须是第二次保存的 hash",
+                "hash-latest",
+                fakeCoordinator.documentCommittedVersionFor(targetA).contentHash,
+            )
+            val receipt = vm.saveReceipts.receipt(targetA)
+            assertTrue(
+                "回执必须是最新 revision 的真实保存（DocumentOperationLease.toSaveToken）",
+                receipt != null && receipt.rustRevision == 2L && receipt.textHash == "hash-latest",
+            )
+        }
+
+    /**
+     * #624 评论13 第2项：切章保存循环中 ctx.isLatest() 失效 — 必须返回 Stale
+     * 并恢复旧状态，不得把 stale 保存算成成功继续提交新章节（latest-wins
+     * 事务边界在保存期间同样生效）。
+     */
+    @Test
+    fun switchChapter_staleDuringSaveLoop_returnsStale() =
+        runTest {
+            val vm = createVm()
+            vm.initChapter("p", "v", "a", "A")
+            commitActiveSession(vm, "p", "v", "a", "旧正文")
+            markLocalDirty(vm, "p", "v", "a")
+
+            val saveGate = kotlinx.coroutines.CompletableDeferred<Unit>()
+            var saveCalls = 0
+            vm.chapterSavePort =
+                object : com.xiwei.sujian.feature.editor.session.ChapterContentSavePort {
+                    override suspend fun saveChapterContent(
+                        projectId: String,
+                        volumeId: String,
+                        chapterId: String,
+                        content: String,
+                    ): BridgeResult<ChapterSaveReceipt> {
+                        saveCalls++
+                        saveGate.await()
+                        return BridgeResult.Success(
+                            ChapterSaveReceipt("c", 0L, "hash-s", "m", "t", 0),
+                        )
+                    }
+                }
+
+            val first = async { vm.requestOpenChapter("p", "v", "b", "B") }
+            // 等第一次切换进入保存挂起点。
+            var spin = 0
+            while (saveCalls < 1 && spin < 200) {
+                runCurrent()
+                spin++
+            }
+            assertTrue("第一次切换必须进入保存挂起点", saveCalls >= 1)
+            // 第二个请求到达 — 第一个事务的 isLatest() 立即失效。
+            val second = async { vm.requestOpenChapter("p", "v", "c", "C") }
+            saveGate.complete(Unit)
+            runCurrent()
+
+            val firstResult = first.await()
+            assertTrue(
+                "保存期间 isLatest 失效必须返回 Stale（不得把 stale 保存当成功切走）",
+                firstResult is ChapterSwitchResult.Stale,
+            )
+            val secondResult = second.await()
+            assertTrue(
+                "后续最新请求正常完成（Success/SaveFailed/LoadFailed/Stale 之一），不得挂起：$secondResult",
+                secondResult is ChapterSwitchResult.Success ||
+                    secondResult is ChapterSwitchResult.SaveFailed ||
+                    secondResult is ChapterSwitchResult.LoadFailed ||
+                    secondResult is ChapterSwitchResult.Stale,
+            )
+            assertFalse("Stale 后 loading 必须恢复 false", vm.uiState.value.loading)
+            assertEquals("Stale 后章节保持旧章节", "A", vm.uiState.value.chapterTitle)
+        }
+
+    /**
+     * #624 评论13 第3项：外部应用/同步合并不是一次 Save/Clear 操作 —
+     * 不得记录回执。旧 buildSaveToken 会读"此刻的 currentInputLease"拼进
+     * 目标 targetId（加载 B 时拼出 targetId=B + A 的 session/epoch 假身份），
+     * 回执从身份上就是假的。DocumentSaveReceiptTracker 只记录真实
+     * Save/Clear 操作使用的 DocumentOperationLease.toSaveToken。
+     */
+    @Test
+    fun applyExternalContentToUi_doesNotRecordFabricatedSaveReceipt() =
+        runTest {
+            val vm = createVm()
+            vm.initChapter("p", "v", "a", "A")
+            val targetId = vm.chapterTargetId("p", "v", "a")
+
+            vm.applyExternalContentToUi(targetId, "同步合并后的正文", "hash-sync")
+
+            assertNull(
+                "外部应用不得记录假回执 — 只有真实 Save/Clear 才进入回执跟踪器",
+                vm.saveReceipts.receipt(targetId),
+            )
         }
 
     @Test

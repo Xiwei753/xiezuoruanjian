@@ -22,7 +22,6 @@ package com.xiwei.sujian.feature.editor.ui
 import android.app.Application
 import com.xiwei.sujian.R
 import com.xiwei.sujian.feature.editor.session.DocumentOperationLease
-import com.xiwei.sujian.feature.editor.session.DocumentSaveReceiptTracker
 import com.xiwei.sujian.feature.editor.session.DocumentVersion
 import com.xiwei.sujian.feature.editor.session.documentCommittedVersionFor
 import com.xiwei.sujian.feature.editor.session.markSaved
@@ -32,22 +31,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
-
-fun EditorViewModel.buildSaveToken(
-    targetId: String,
-    revision: Long,
-    hash: String,
-): DocumentSaveReceiptTracker.SaveToken {
-    val lease = _sessionCoordinator?.currentInputLease()
-    return DocumentSaveReceiptTracker.SaveToken(
-        operationId = 0L,
-        targetId = targetId,
-        coreSessionId = lease?.sessionId ?: 0UL,
-        inputEpoch = lease?.epoch ?: 0L,
-        rustRevision = revision,
-        textHash = hash,
-    )
-}
 
 /**
  * #624 评论12 第2项：保存完成统一提交 — 输入必须是本次 [DocumentOperationLease]

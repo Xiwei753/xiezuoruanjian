@@ -173,7 +173,7 @@ class EditorSaveFlowTest {
     }
 
     /** 通过 coordinator 提交一个带可控 sessionId 的活动会话，并同步 ViewModel 状态。 */
-    private fun commitSession(
+    private suspend fun commitSession(
         text: String,
         revision: Long,
         sessionId: ULong = 1UL,
@@ -360,6 +360,47 @@ class EditorSaveFlowTest {
             spins++
         }
     }
+
+    /** 记录派发次数的 dispatcher — 断言 Repository 的 main-safe 职责真实生效。 */
+    private class RecordingDispatcher : kotlinx.coroutines.CoroutineDispatcher() {
+        var dispatchCount = 0
+
+        override fun dispatch(
+            context: kotlin.coroutines.CoroutineContext,
+            block: Runnable,
+        ) {
+            dispatchCount++
+            block.run()
+        }
+    }
+
+    /**
+     * #624 评论13 第4项：EditorViewModel.calculateWordCount 是 suspend —
+     * 整章字数统计必须经注入的 IO dispatcher 派发，不得同步跨 UniFFI 跑在 Main。
+     */
+    @Test
+    fun calculateWordCount_dispatchesThroughRepositoryIoDispatcher() =
+        runTest(UnconfinedTestDispatcher()) {
+            val dispatcher = RecordingDispatcher()
+            val app = RuntimeEnvironment.getApplication()
+            val vm = EditorViewModel(app)
+            vm.initialize(
+                ProjectRepository(app, bridge),
+                SettingsRepository(app, bridge),
+                sessionCoordinator = coordinator,
+                chapterRepo = ChapterRepository(app, bridge, ioDispatcher = dispatcher),
+                recentEditsRepo = RecentEditsRepository(app, bridge),
+                statsRepo = WritingStatsRepository(bridge.statsBridge, statsWriterScope()),
+            )
+
+            val count = vm.calculateWordCount("正文一二三")
+
+            assertTrue(
+                "calculateWordCount 必须经注入的 IO dispatcher 派发（main-safe）",
+                dispatcher.dispatchCount >= 1,
+            )
+            assertEquals("正文一二三".length, count)
+        }
 }
 
 /** #624 评论11 第3项：测试用进程级 stats writer scope（与 SujianAppDependencies 同构）。 */
