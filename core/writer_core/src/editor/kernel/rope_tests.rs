@@ -10,12 +10,35 @@
 mod rope_tests {
     use super::super::result::EditorContentDelta;
     use super::super::result::EditorEditOutcome;
-    use super::super::types::{EditorCommand, EditorOperationKind};
+    use super::super::types::{DisplayPatch, EditorCommand, EditorOperationKind};
     use super::super::EditorKernel;
     use crate::editor::strong_types::{
         EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
     };
     use crate::editor::transaction::{EditorTransactionCause, OffsetMap, OffsetMapKind};
+
+    /// #624 评论10：模拟 Android 对原子 patch batch 的应用。
+    ///
+    /// 协议：一个 EditorEditResult 是一个原子 batch，batch 内所有 patch range 都使用
+    /// base（编辑前）文档坐标；Android 按 replace_byte_range.start 降序局部应用，
+    /// 右侧修改不影响左侧旧坐标。本函数复刻该应用顺序，用于断言 Core 生成的 patch
+    /// 列表与最终正文（snapshot）完全一致（Core/Android mirror 一致性）。
+    fn apply_patches_descending(old: &str, patches: &[DisplayPatch]) -> String {
+        let mut text = old.to_string();
+        let mut sorted: Vec<&DisplayPatch> = patches.iter().collect();
+        sorted.sort_by_key(|p| std::cmp::Reverse(p.replace_byte_range.start().value()));
+        for p in sorted {
+            let start = p.replace_byte_range.start().value();
+            let end = p.replace_byte_range.end().value();
+            assert!(
+                start <= text.len() && end <= text.len(),
+                "patch 范围 [{start},{end}) 超出当前文本长度 {}",
+                text.len()
+            );
+            text.replace_range(start..end, &p.inserted_text);
+        }
+        text
+    }
 
     fn insert(kernel: &mut EditorKernel, offset: usize, text: &str) -> EditorEditOutcome {
         kernel.apply(EditorCommand::Insert {
@@ -336,13 +359,30 @@ mod rope_tests {
         // 两个 delta 各删除 1 个字符
         assert_eq!(r1.content_delta.deleted_chars, 2);
         assert_eq!(r1.content_delta.inserted_chars, 0);
-        // 对 Android 仍是一条最终 DisplayPatch：最外层范围 [2,5) → "Y"
-        assert_eq!(r1.display_patches.len(), 1);
+        // #624 评论10：原子 patch batch — 每条 delta 一条局部 DisplayPatch
+        // （base 文档坐标，删除的 inserted_text 为空）。batch 内顺序不构成协议
+        // （Android 按 start 降序应用），这里按 start 排序后断言两条局部 patch。
+        let mut ranges: Vec<Utf8ByteRange> = r1
+            .display_patches
+            .iter()
+            .map(|p| p.replace_byte_range)
+            .collect();
+        ranges.sort_by_key(|r| r.start().value());
+        assert_eq!(r1.display_patches.len(), 2);
+        assert_eq!(ranges[0], Utf8ByteRange::from_ordered(2, 3));
+        assert_eq!(ranges[1], Utf8ByteRange::from_ordered(4, 5));
+        assert!(r1
+            .display_patches
+            .iter()
+            .all(|p| p.inserted_text.is_empty()));
         assert_eq!(
-            r1.display_patches[0].replace_byte_range,
-            Utf8ByteRange::from_ordered(2, 5)
+            r1.display_patches[0].base_revision,
+            r1.display_patches[1].base_revision
         );
-        assert_eq!(r1.display_patches[0].inserted_text, "Y");
+        assert_eq!(
+            r1.display_patches[0].new_revision,
+            r1.display_patches[1].new_revision
+        );
 
         // undo：两个 delta 逆序恢复 → "abXYcd"
         let undid = undo(&mut kernel).into_result();
@@ -372,6 +412,27 @@ mod rope_tests {
         let undid = undo(&mut kernel).into_result();
         assert_eq!(kernel.snapshot_text(), "ab cd");
         assert_eq!(undid.content_delta.inserted_chars, 1);
+    }
+
+    #[test]
+    fn delete_surrounding_patches_apply_to_base_coords() {
+        // "abXYcd"：before=[2,3)="X"，after=[4,5)="c" → 两条 base 坐标局部 patch。
+        // Android 按 start 降序应用后必须与 snapshot "abYd" 一致（mirror 一致性）。
+        let mut kernel = EditorKernel::with_text("abXYcd".to_string(), 3).unwrap();
+        let r1 = kernel
+            .apply(EditorCommand::DeleteSurrounding {
+                before_byte_range: Utf8ByteRange::from_ordered(2, 3),
+                after_byte_range: Utf8ByteRange::from_ordered(4, 5),
+                cause: EditorTransactionCause::Delete,
+                expected_revision: EditorRevision::new(kernel.revision()),
+            })
+            .into_result();
+        assert_eq!(kernel.snapshot_text(), "abYd");
+        assert_eq!(r1.display_patches.len(), 2);
+        assert_eq!(
+            apply_patches_descending("abXYcd", &r1.display_patches),
+            kernel.snapshot_text()
+        );
     }
 
     // ── replace-all：多 delta ──
@@ -433,6 +494,103 @@ mod rope_tests {
         let undid2 = undo(&mut kernel).into_result();
         assert_eq!(kernel.snapshot_text(), "aXXbXXc");
         assert_eq!(undid2.display_patches.len(), 2);
+    }
+
+    #[test]
+    fn replace_all_patches_are_local_per_match() {
+        // aXbXc + X→YY：Core 正文正确是 aYYbYYc。patch 必须是每条匹配一条局部
+        // patch（base 坐标 [1,2) 与 [3,4)），不再合成覆盖 [1,4) 的外层 patch
+        // （旧实现的 saturating_sub 长度差在替换变长时得到错误 retained）。
+        let mut kernel = EditorKernel::with_text("aXbXc".to_string(), 5).unwrap();
+        let r1 = kernel
+            .apply(EditorCommand::ReplaceAll {
+                search: "X".to_string(),
+                replacement: "YY".to_string(),
+                expected_revision: EditorRevision::new(kernel.revision()),
+            })
+            .into_result();
+        assert_eq!(kernel.snapshot_text(), "aYYbYYc");
+        assert_eq!(r1.display_patches.len(), 2);
+        assert_eq!(
+            r1.display_patches[0].replace_byte_range,
+            Utf8ByteRange::from_ordered(1, 2)
+        );
+        assert_eq!(r1.display_patches[0].inserted_text, "YY");
+        assert_eq!(
+            r1.display_patches[1].replace_byte_range,
+            Utf8ByteRange::from_ordered(3, 4)
+        );
+        assert_eq!(r1.display_patches[1].inserted_text, "YY");
+        // batch 内所有 patch 携带同一组 base/new revision（原子 batch 边界）。
+        assert_eq!(
+            r1.display_patches[0].base_revision,
+            r1.display_patches[1].base_revision
+        );
+        assert_eq!(
+            r1.display_patches[0].new_revision,
+            r1.display_patches[1].new_revision
+        );
+        // Core/Android mirror 一致性：降序局部应用 == snapshot。
+        assert_eq!(
+            apply_patches_descending("aXbXc", &r1.display_patches),
+            kernel.snapshot_text()
+        );
+    }
+
+    #[test]
+    fn replace_all_variable_length_and_far_apart() {
+        // 缩短："aXXbXXc" + XX→x → 两条局部 patch（[1,3)→"x"、[4,6)→"x"）。
+        let mut kernel = EditorKernel::with_text("aXXbXXc".to_string(), 7).unwrap();
+        let r1 = kernel
+            .apply(EditorCommand::ReplaceAll {
+                search: "XX".to_string(),
+                replacement: "x".to_string(),
+                expected_revision: EditorRevision::new(kernel.revision()),
+            })
+            .into_result();
+        assert_eq!(kernel.snapshot_text(), "axbxc");
+        assert_eq!(r1.display_patches.len(), 2);
+        assert_eq!(
+            r1.display_patches[0].replace_byte_range,
+            Utf8ByteRange::from_ordered(1, 3)
+        );
+        assert_eq!(r1.display_patches[0].inserted_text, "x");
+        assert_eq!(
+            r1.display_patches[1].replace_byte_range,
+            Utf8ByteRange::from_ordered(4, 6)
+        );
+        assert_eq!(r1.display_patches[1].inserted_text, "x");
+        assert_eq!(
+            apply_patches_descending("aXXbXXc", &r1.display_patches),
+            kernel.snapshot_text()
+        );
+
+        // 变长且两处相距远："aXbcXdef" + X→YYY → patch [1,2) 与 [4,5)，
+        // 中间保留正文不得被复制进任何一条 patch。
+        let mut kernel2 = EditorKernel::with_text("aXbcXdef".to_string(), 8).unwrap();
+        let r2 = kernel2
+            .apply(EditorCommand::ReplaceAll {
+                search: "X".to_string(),
+                replacement: "YYY".to_string(),
+                expected_revision: EditorRevision::new(kernel2.revision()),
+            })
+            .into_result();
+        assert_eq!(kernel2.snapshot_text(), "aYYYbcYYYdef");
+        assert_eq!(r2.display_patches.len(), 2);
+        assert_eq!(
+            r2.display_patches[0].replace_byte_range,
+            Utf8ByteRange::from_ordered(1, 2)
+        );
+        assert_eq!(r2.display_patches[0].inserted_text, "YYY");
+        assert_eq!(
+            r2.display_patches[1].replace_byte_range,
+            Utf8ByteRange::from_ordered(4, 5)
+        );
+        assert_eq!(r2.display_patches[1].inserted_text, "YYY");
+        assert_eq!(
+            apply_patches_descending("aXbcXdef", &r2.display_patches),
+            kernel2.snapshot_text()
+        );
     }
 
     #[test]

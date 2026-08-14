@@ -99,6 +99,24 @@ impl EditorKernel {
         }
         let old_affected: Vec<Utf8ByteRange> = edits.iter().map(|e| e.old_range).collect();
         let new_affected: Vec<Utf8ByteRange> = edits.iter().map(|e| e.new_range).collect();
+        let new_revision = self.revision;
+
+        // #624 评论10：一个 EditorEditResult 是一个原子 patch batch — 每条 delta 一条
+        // 局部 DisplayPatch（base 文档坐标，inserted_text 只含本次替换文本）。
+        // 不再合成覆盖 [outer_start, outer_end) 的单条外层 patch：旧实现的
+        // `saturating_sub` 总长度差在替换变长时变成 0，从新 Rope 截出错误 retained
+        // （aXbXc 做 X→YY 时 Android 变成 aYYbc）；相距很远的两个匹配还会复制中间
+        // 整段保留正文。batch 内所有 patch 携带同一组 base/new revision（版本边界）。
+        let display_patches: Vec<DisplayPatch> = edits
+            .iter()
+            .map(|d| DisplayPatch {
+                base_revision,
+                new_revision,
+                replace_byte_range: d.old_range,
+                inserted_text: d.inserted_text.clone(),
+                resulting_selection_byte_range: new_selection,
+            })
+            .collect();
 
         self.undo_stack.push(UndoEntry {
             edits,
@@ -106,32 +124,6 @@ impl EditorKernel {
             new_selection,
         });
         self.redo_stack.clear();
-
-        let new_revision = self.revision;
-
-        // 单条最终 DisplayPatch：最外层范围（旧文本坐标）+ 中间保留文本的局部拼接。
-        // #624 评论8：retained 长度必须扣除总长度差（替换变短时 outer_end 超出新文本）。
-        let outer_start = match_starts[0];
-        let outer_end = match_starts.last().map_or(0, |s| s + search_len);
-        let total_diff = search_len
-            .saturating_sub(replacement_len)
-            .saturating_mul(match_starts.len());
-        let retained_len = (outer_end - outer_start).saturating_sub(total_diff);
-        let retained = self
-            .text
-            .byte_slice(outer_start..outer_start + retained_len)
-            .to_string();
-        let display_patches = if outer_start < outer_end || !retained.is_empty() {
-            vec![DisplayPatch {
-                base_revision,
-                new_revision,
-                replace_byte_range: Utf8ByteRange::from_ordered(outer_start, outer_end),
-                inserted_text: retained,
-                resulting_selection_byte_range: new_selection,
-            }]
-        } else {
-            vec![]
-        };
 
         let visual_intent = EditorVisualIntent {
             cause: EditorTransactionCause::Format,

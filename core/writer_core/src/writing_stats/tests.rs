@@ -636,6 +636,87 @@ fn test_facade_record_writing_event() {
     assert_eq!(summary["totalNetDeltaChars"], 55);
 }
 
+/// #624 评论10：Android 直接按 Core cause 分类后传回的 source 字符串必须显式映射，
+/// undo/redo/programmatic/selection 不得靠 `_ => HumanTyped` 默认分支落入人工输入。
+#[test]
+fn test_facade_record_writing_event_non_typed_sources_never_human_typed() {
+    let temp_dir = tempdir().unwrap();
+    std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+    let core = crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+
+    // Android 按 cause 明确分类后发送的字符串：
+    // - "typing"（Typing/TypingCommit/ImeComposition）→ HumanTyped；
+    // - "pasted"（Paste）→ Pasted；
+    // - "deleted"（Delete）→ Deleted；
+    // - "undo"/"redo"/"programmatic"（Undo/Redo/Programmatic）→ 明确的非 HumanTyped
+    //   （Unknown：不计入分类计数器，但仍计入 net_delta）。
+    // - "selection"（纯光标移动不进入统计，防御性显式映射）。
+    core.record_writing_event(
+        "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "typing", 10, 0, 0, 0, 0, "s1",
+    )
+    .unwrap();
+    core.record_writing_event(
+        "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "pasted", 0, 0, 7, 0, 0, "s1",
+    )
+    .unwrap();
+    core.record_writing_event(
+        "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "deleted", 0, 3, 0, 0, 0, "s1",
+    )
+    .unwrap();
+    core.record_writing_event(
+        "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "undo", 0, 2, 0, 0, 0, "s1",
+    )
+    .unwrap();
+    core.record_writing_event(
+        "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "redo", 4, 0, 0, 0, 0, "s1",
+    )
+    .unwrap();
+    core.record_writing_event(
+        "dev-1",
+        "linux",
+        "desktop",
+        "proj1",
+        "vol1",
+        "chap1",
+        "programmatic",
+        5,
+        1,
+        0,
+        0,
+        0,
+        "s1",
+    )
+    .unwrap();
+    core.record_writing_event(
+        "dev-1",
+        "linux",
+        "desktop",
+        "proj1",
+        "vol1",
+        "chap1",
+        "selection",
+        0,
+        0,
+        0,
+        0,
+        0,
+        "s1",
+    )
+    .unwrap();
+
+    core.flush_writing_stats().unwrap();
+
+    let today = StatsApi::today_date();
+    let summary = core.get_writing_stats_summary(&today, &today).unwrap();
+    // typing 是唯一落入人工输入的来源；undo/redo/programmatic/selection 一律不是。
+    assert_eq!(summary["totalHumanTypedChars"], 10);
+    assert_eq!(summary["totalPastedChars"], 7);
+    assert_eq!(summary["totalDeletedChars"], 3);
+    // net_delta = 10(typing) + 7(pasted) - 3(deleted) - 2(undo) + 4(redo) + 5-1(programmatic)
+    // 未知/非人工来源仍计入净增量，但不进任何分类计数器。
+    assert_eq!(summary["totalNetDeltaChars"], 20);
+}
+
 #[test]
 fn test_sync_stats_paths_outside_repo_not_blacklisted() {
     // 统计事件/缓存位于 app_data_root/app-meta/stats，不在作品仓库内（Issue #600）。

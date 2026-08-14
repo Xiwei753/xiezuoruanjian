@@ -1018,13 +1018,6 @@ impl EditorKernel {
             None
         };
 
-        // #624 评论8：删除前在 old 文本坐标上取 before/after 之间的保留段
-        // （两个删除都不影响该区域内容），用于构造单条最终 DisplayPatch。
-        let middle = match (before_range, after_range) {
-            (Some((_, be)), Some((as_, _))) => self.text.byte_slice(be..as_).to_string(),
-            _ => String::new(),
-        };
-
         if let Some((as_, ae)) = after_range {
             if as_ > self.text.byte_len()
                 || ae > self.text.byte_len()
@@ -1134,6 +1127,22 @@ impl EditorKernel {
             ));
         }
         let old_affected: Vec<Utf8ByteRange> = edits.iter().map(|e| e.old_range).collect();
+        let new_revision = self.revision;
+
+        // #624 评论10：原子 patch batch — 每条 delta 一条局部 DisplayPatch
+        // （base 文档坐标，删除的 inserted_text 为空）。不再合成最外层单条 patch
+        // （把 before/after 之间的保留段 middle 重新拼接进 inserted_text）：
+        // 两个相距很远的删除会复制中间整段正文，且与 batch 协议不一致。
+        let display_patches: Vec<DisplayPatch> = edits
+            .iter()
+            .map(|d| DisplayPatch {
+                base_revision,
+                new_revision,
+                replace_byte_range: d.old_range,
+                inserted_text: d.inserted_text.clone(),
+                resulting_selection_byte_range: new_selection,
+            })
+            .collect();
 
         self.undo_stack.push(UndoEntry {
             edits,
@@ -1141,28 +1150,6 @@ impl EditorKernel {
             new_selection,
         });
         self.redo_stack.clear();
-
-        let new_revision = self.revision;
-
-        // #624 评论8：对 Android 维持一次事务/一条最终 DisplayPatch —
-        // 用最外层旧范围 + 中间保留的局部 RopeSlice 构造 replacement，不需要全文。
-        let (replace_start, replace_end, retained) = match (before_range, after_range) {
-            (Some((bs, _)), Some((_, ae))) => (bs, ae, middle),
-            (Some((bs, be)), None) => (bs, be, String::new()),
-            (None, Some((as_, ae))) => (as_, ae, String::new()),
-            (None, None) => unreachable!("edits 非空保证 at least one range"),
-        };
-        let display_patches = if replace_start < replace_end || !retained.is_empty() {
-            vec![DisplayPatch {
-                base_revision,
-                new_revision,
-                replace_byte_range: Utf8ByteRange::from_ordered(replace_start, replace_end),
-                inserted_text: retained,
-                resulting_selection_byte_range: new_selection,
-            }]
-        } else {
-            vec![]
-        };
 
         let visual_intent = EditorVisualIntent {
             cause,

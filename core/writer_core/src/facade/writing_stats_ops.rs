@@ -94,10 +94,15 @@ impl super::WriterCore {
         let platform = writer_platform_api::PlatformKind::from_str_name(platform_str)
             .unwrap_or(writer_platform_api::PlatformKind::Desktop);
         let source = match source_str {
+            "typing" => EventSource::HumanTyped,
             "pasted" => EventSource::Pasted,
             "deleted" => EventSource::Deleted,
             "ai_inserted" => EventSource::AiInserted,
             "sync_remote" => EventSource::SyncRemote,
+            // #624 评论10：Android 按 Core cause 明确分类后发送的字符串。
+            // Undo/Redo/Programmatic/纯光标移动不是人工输入 — 显式映射为 Unknown
+            // （不计入分类计数器，但仍计入 net_delta_chars），不得落入默认 HumanTyped。
+            "undo" | "redo" | "programmatic" | "selection" => EventSource::Unknown,
             _ => EventSource::HumanTyped,
         };
 
