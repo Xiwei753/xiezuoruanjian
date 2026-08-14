@@ -98,6 +98,10 @@ private fun EditorSessionCoordinator.prepareNewCandidateSession(
  *
  * #624 评论17 问题1：在 [mutateSession] 单一临界区内原子完成 lease 失效、
  * 旧活动目标提交、B 的 store/sessionState 写入，不再用 update lambda + pendingRecord。
+ *
+ * #624 评论17 问题3：Core 调用不得持 [EditorSessionCoordinator.mutationLock]。
+ * 旧活动目标的 `closeSession` 拆到锁外执行 — 锁内读取待关闭的 id/profile →
+ * 解锁调用 Core `closeSession` → 再进锁校验前提仍成立后 `removeRecord` 并提交 B。
  */
 @Suppress("CyclomaticComplexMethod", "CognitiveComplexMethod")
 fun EditorSessionCoordinator.commitPreparedSession(handle: PreparedSessionHandle): Boolean {
@@ -112,10 +116,15 @@ fun EditorSessionCoordinator.commitPreparedSession(handle: PreparedSessionHandle
 
     val snapshot = handle.snapshot
     var committedProfile: TextEditorProfile? = null
+
+    // #624 评论17 问题3：锁内读取需要关闭的旧 session 信息（不调 Core）。
+    var pendingCloseTargetId: String? = null
+    var pendingCloseSessionId: ULong = 0UL
+    var pendingCloseProfile: TextEditorProfile? = null
     mutateSession {
         // 1. 冻结并撤销 A 的输入 lease。
         invalidateLease()
-        // 2. 一次性提交旧活动目标 A（若仍是活动状态且不是 B）。
+        // 2. 读取旧活动目标 A 的关闭信息（若仍是活动状态且不是 B）。
         val oldActive = sessionState.activeTargetId
         if (oldActive != null && oldActive != handle.targetId) {
             val oldRec = record(oldActive)
@@ -126,48 +135,25 @@ fun EditorSessionCoordinator.commitPreparedSession(handle: PreparedSessionHandle
                     sessionState.bindingState is WindowBindingState.Attached ||
                         sessionState.bindingState is WindowBindingState.Attaching
                 if (!oldPersistent || !oldWindowBound) {
-                    coordinator.closeSession(oldSessionId)
-                    removeRecord(oldActive)
+                    pendingCloseTargetId = oldActive
+                    pendingCloseSessionId = oldSessionId
+                    pendingCloseProfile = oldRec.profile
+                } else {
+                    committedProfile = oldRec.profile
                 }
-                committedProfile = oldRec.profile
             }
         }
-        // 3. 激活 B 的正式 session 记录 — store 写入 handle.sessionId + snapshot。
-        val rec = record(handle.targetId)
-        val doc = rec?.documentState ?: DocumentState()
-        putRecord(
-            (
-                rec ?: EditorSessionRecord(
-                    targetId = handle.targetId,
-                    persistent = handle.previousRecord?.persistent ?: false,
-                )
-            ).copy(sessionId = handle.sessionId)
-                .withDocumentState {
-                    it.copy(
-                        revision = snapshot.revision,
-                        selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
-                        selectionHeadUtf8 = snapshot.selectionHeadUtf8,
-                    )
-                },
-        )
-        // #624 评论17 问题2：prepared commit 后 Detached/IDLE/activeTargetId=null —
-        // 不再用 Attaching("prepared", ...)。真实窗口出现后从 Detached 调 beginEdit。
-        sessionState =
-            EditorSessionState(
-                targetId = handle.targetId,
-                sessionId = handle.sessionId,
-                revision = snapshot.revision,
-                selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
-                selectionHeadUtf8 = snapshot.selectionHeadUtf8,
-                lastAppliedTransactionId = doc.lastAppliedTransactionId,
-                origin = EditorSessionOrigin.INITIAL_LOAD,
-                bindingState = WindowBindingState.Detached(handle.targetId, handle.sessionId, snapshot),
-                editingState = EditingState.IDLE,
-                activeTargetId = null,
-                committedVersion = doc.committedVersion,
-                sessionBaseVersion = doc.sessionBaseVersion,
-                localDirty = doc.localDirty,
-            )
+    }
+
+    // #624 评论17 问题3：锁外关闭旧 Core session — Core 调用不得持 mutationLock。
+    if (pendingCloseTargetId != null) {
+        closeSession(pendingCloseSessionId)
+        committedProfile = pendingCloseProfile
+    }
+
+    // 再进锁校验前提仍成立并提交 B 的 session。
+    mutateSession {
+        finalizePreparedSessionCommit(handle, snapshot, pendingCloseTargetId, pendingCloseSessionId)
     }
     // #624 评论15 问题2：candidate swap commit 成功后关闭被替换的旧 session。
     closeReplacedSessionAfterCommit(handle)
@@ -179,6 +165,64 @@ fun EditorSessionCoordinator.commitPreparedSession(handle: PreparedSessionHandle
         "commit_prepared",
     )
     return true
+}
+
+/**
+ * #624 评论17 问题3：commitPreparedSession 第二次进锁的提交逻辑 — 校验旧活动目标前提
+ * 仍成立后 removeRecord，并写入 B 的正式 session 记录与 SessionState。
+ */
+private fun SessionMutationScope.finalizePreparedSessionCommit(
+    handle: PreparedSessionHandle,
+    snapshot: TargetSnapshot,
+    pendingCloseTargetId: String?,
+    pendingCloseSessionId: ULong,
+) {
+    // 若锁外 closeSession 期间旧活动目标未被其他线程改换，移除其记录。
+    if (pendingCloseTargetId != null) {
+        val currentActive = sessionState.activeTargetId
+        if (currentActive == pendingCloseTargetId) {
+            val currentRec = record(pendingCloseTargetId)
+            if (currentRec?.sessionId == pendingCloseSessionId) {
+                removeRecord(pendingCloseTargetId)
+            }
+        }
+    }
+    // 激活 B 的正式 session 记录 — store 写入 handle.sessionId + snapshot。
+    val rec = record(handle.targetId)
+    val doc = rec?.documentState ?: DocumentState()
+    putRecord(
+        (
+            rec ?: EditorSessionRecord(
+                targetId = handle.targetId,
+                persistent = handle.previousRecord?.persistent ?: false,
+            )
+        ).copy(sessionId = handle.sessionId)
+            .withDocumentState {
+                it.copy(
+                    revision = snapshot.revision,
+                    selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
+                    selectionHeadUtf8 = snapshot.selectionHeadUtf8,
+                )
+            },
+    )
+    // #624 评论17 问题2：prepared commit 后 Detached/IDLE/activeTargetId=null —
+    // 不再用 Attaching("prepared", ...)。真实窗口出现后从 Detached 调 beginEdit。
+    sessionState =
+        EditorSessionState(
+            targetId = handle.targetId,
+            sessionId = handle.sessionId,
+            revision = snapshot.revision,
+            selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
+            selectionHeadUtf8 = snapshot.selectionHeadUtf8,
+            lastAppliedTransactionId = doc.lastAppliedTransactionId,
+            origin = EditorSessionOrigin.INITIAL_LOAD,
+            bindingState = WindowBindingState.Detached(handle.targetId, handle.sessionId, snapshot),
+            editingState = EditingState.IDLE,
+            activeTargetId = null,
+            committedVersion = doc.committedVersion,
+            sessionBaseVersion = doc.sessionBaseVersion,
+            localDirty = doc.localDirty,
+        )
 }
 
 private fun EditorSessionCoordinator.closeReplacedSessionAfterCommit(handle: PreparedSessionHandle) {
