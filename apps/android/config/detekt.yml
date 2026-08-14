@@ -324,7 +324,10 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/PreparedSessionTransactionTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/ResetSnapshotCommitTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/SessionLayerNoMutableStateTest.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/editor/session/TransformPurityTest.kt"
+      # #624 评论17 问题3：TransformPurityTest.kt 已删除，由 SessionMutationGate*Test.kt 替代。
+      - "**/kotlin/com/xiwei/sujian/feature/editor/session/SessionMutationGateTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/session/SessionMutationGateConcurrencyTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/session/SessionMutationGateCoreOutsideLockTest.kt"
   NamedArguments:
     active: false    # 现有代码大量位置参数调用（247处），命名参数整改是独立后续任务
 
