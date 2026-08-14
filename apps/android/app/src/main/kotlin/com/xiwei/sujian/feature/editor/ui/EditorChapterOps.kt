@@ -240,6 +240,45 @@ private suspend fun EditorViewModel.clearChapterContentForSwitch(
         }
     }
 
+/**
+ * #624 评论10 第2项：离开正文（章节关闭）前保存当前真实正文。
+ *
+ * 与切章同一入口：从 Rust session 的真实 snapshot/lease（按 target 取得，
+ * 活动窗口/Detached 持久 session 同一入口）取 text + revision，不回退
+ * `_uiState.content`（评论9 后本地输入不再更新它 — 保存旧正文会把刚输入
+ * 的内容覆盖回磁盘）。
+ *
+ * 返回 true 表示可安全关闭（已保存或无需保存）；false 表示拿不到真实
+ * snapshot（未注册/session 已关/快照缺失/错版）或落盘失败 — 调用方必须
+ * 中止关闭，保留 Detached session 与未落盘正文，绝不伪造空正文保存
+ * （否则旧章节会被清空）。
+ */
+suspend fun EditorViewModel.saveTargetBeforeClose(
+    targetId: String,
+    projectId: String,
+    volumeId: String,
+    chapterId: String,
+): Boolean {
+    // #624 评论10 第1项：只有 snapshot 存在且 revision 匹配才返回 lease。
+    val lease = _sessionCoordinator?.issueDocumentOperationLease(targetId)
+    if (lease == null) {
+        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+        return false
+    }
+    val session = EditorSession(java.util.UUID.randomUUID().toString(), projectId, volumeId, chapterId)
+    val content = lease.text
+    // #595 七：revision 从 lease 取，与正文同源（真实 snapshot）。
+    val revision = lease.rustRevision
+    // #624 评论1：空正文判定只看原始字符串；只有真正的 "" 且已确认清空才走 Clear。
+    return if (content.isNotEmpty()) {
+        saveChapterContentForSwitch(session, content, revision)
+    } else if (contentExplicitlyCleared) {
+        clearChapterContentForSwitch(session, revision)
+    } else {
+        true
+    }
+}
+
 /** #595 一：加载/session 预准备失败回滚 — 恢复旧 EditorUiState 与输入冻结。 */
 private fun EditorViewModel.rollbackAfterLoadFailure(
     oldSession: EditorSession?,

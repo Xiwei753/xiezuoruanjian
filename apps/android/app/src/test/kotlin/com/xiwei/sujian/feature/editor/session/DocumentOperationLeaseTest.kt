@@ -1,6 +1,8 @@
 package com.xiwei.sujian.feature.editor.session
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -152,5 +154,127 @@ class DocumentOperationLeaseTest {
             )
         assertTrue(commitWithSession(coordinator, "b", "text-b", sessionId = 2UL))
         assertFalse("切换到 B 后 A 的 lease 必须失效", coordinator.isDocumentOperationLeaseCurrent(leaseA))
+    }
+}
+
+// ── #624 评论10 第2项：按 target/session 取得 lease ──
+// 活动窗口、Detached 持久 session、切章中的旧 target 走同一入口；
+// snapshot 缺失/错版返回 null，不伪造空正文。
+
+/** 可控 snapshot 注入 fake — querySnapshotForSession 由测试安装。 */
+private class FakeSnapshotCoordinator(bridge: com.xiwei.sujian.core.interop.app.AppServiceBridge) :
+    EditorSessionCoordinator(bridge) {
+    private val snapshots = mutableMapOf<ULong, TargetSnapshot>()
+
+    fun installSnapshot(
+        sessionId: ULong,
+        text: String,
+        revision: Long,
+    ) {
+        val cursor = text.toByteArray(Charsets.UTF_8).size
+        snapshots[sessionId] = TargetSnapshot(text, cursor, revision, 0, cursor)
+    }
+
+    internal override fun querySnapshotForSession(sessionId: ULong): TargetSnapshot? = snapshots[sessionId]
+}
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class DocumentOperationLeaseByTargetTest {
+    private fun createCoordinator(): FakeSnapshotCoordinator {
+        return FakeSnapshotCoordinator(
+            com.xiwei.sujian.core.interop.app.AppServiceBridge(
+                com.xiwei.sujian.core.interop.app.WriterAppServiceHolder(
+                    "/tmp/sujian_test_workspace_624_lease_by_target",
+                    "/tmp/sujian_test_workspace_624_lease_by_target",
+                ),
+            ),
+        )
+    }
+
+    private fun commitWithSession(
+        coordinator: FakeSnapshotCoordinator,
+        targetId: String,
+        text: String,
+        sessionId: ULong,
+        revision: Long,
+    ): Boolean {
+        coordinator.registerTargetMeta(targetId, TextEditorProfile.DocumentBody, persistent = true)
+        val cursor = text.toByteArray(Charsets.UTF_8).size
+        val handle =
+            PreparedSessionHandle(
+                targetId = targetId,
+                sessionId = sessionId,
+                snapshot = TargetSnapshot(text, cursor, revision, 0, cursor),
+                newlyCreated = true,
+                previousRecord = null,
+            )
+        return coordinator.commitPreparedSession(handle)
+    }
+
+    /** 离开正文后 session 进入 Detached：activeTargetId=null，无活动 lease。 */
+    private fun detachWindow(
+        coordinator: FakeSnapshotCoordinator,
+        targetId: String,
+    ) {
+        // commitPreparedSession 产生 Attaching(windowId="prepared") — 用同一 windowId 解绑。
+        coordinator.detachWindowBinding("prepared", targetId)
+    }
+
+    /**
+     * Detached 持久 session 必须仍能按 target 取得 lease（text 从真实 snapshot 取，
+     * revision 与 store 记录一致）。无活动 target 时无参 issueDocumentOperationLease
+     * 必须仍返回 null — 二者行为分开。
+     */
+    @Test
+    fun issueLease_byTarget_worksForDetachedPersistentSession() {
+        val coordinator = createCoordinator()
+        assertTrue(commitWithSession(coordinator, "a", "旧正文", sessionId = 1UL, revision = 3L))
+        coordinator.installSnapshot(1UL, "用户刚输入的真实正文", revision = 3L)
+
+        detachWindow(coordinator, "a")
+        assertNull(
+            "Detached 后无活动 target — 无参 lease 必须为 null",
+            coordinator.issueDocumentOperationLease(),
+        )
+
+        val lease = coordinator.issueDocumentOperationLease("a")
+        assertNotNull("Detached 持久 session 必须能按 target 取得 lease", lease)
+        val l = lease!!
+        assertEquals("a", l.targetId)
+        assertEquals("lease.text 必须来自真实 snapshot，不是空字符串", "用户刚输入的真实正文", l.text)
+        assertEquals("lease.rustRevision 必须来自 snapshot 且与记录一致", 3L, l.rustRevision)
+    }
+
+    /** 按 target 取得 lease 时，snapshot 缺失必须返回 null（不伪造空正文）。 */
+    @Test
+    fun issueLease_byTarget_nullWhenSnapshotMissing() {
+        val coordinator = createCoordinator()
+        assertTrue(commitWithSession(coordinator, "a", "text", sessionId = 1UL, revision = 1L))
+        detachWindow(coordinator, "a")
+        // 未安装 snapshot → querySnapshotForSession 返回 null。
+        assertNull("snapshot 缺失时按 target 取得 lease 必须为 null", coordinator.issueDocumentOperationLease("a"))
+    }
+
+    /** 按 target 取得 lease 时，snapshot revision 与 store 记录不一致必须返回 null。 */
+    @Test
+    fun issueLease_byTarget_nullWhenRevisionMismatch() {
+        val coordinator = createCoordinator()
+        assertTrue(commitWithSession(coordinator, "a", "text", sessionId = 1UL, revision = 3L))
+        detachWindow(coordinator, "a")
+        // 记录 revision=3，但 snapshot 返回 revision=4（内核已前进，记录未跟上）→ 错版。
+        coordinator.installSnapshot(1UL, "newer", revision = 4L)
+        assertNull(
+            "snapshot revision 与记录不一致时按 target 取得 lease 必须为 null",
+            coordinator.issueDocumentOperationLease("a"),
+        )
+    }
+
+    /** 无 session 记录（仅注册元数据）时按 target 取得 lease 必须为 null。 */
+    @Test
+    fun issueLease_byTarget_nullWithoutSession() {
+        val coordinator = createCoordinator()
+        coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
+        assertNull(coordinator.issueDocumentOperationLease("a"))
     }
 }

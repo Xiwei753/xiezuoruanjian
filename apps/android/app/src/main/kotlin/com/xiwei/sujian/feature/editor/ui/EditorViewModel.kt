@@ -387,23 +387,11 @@ class EditorViewModel(
         gateRegistration = null
         try {
             val session = currentSession
-            val content = _uiState.value.content
             if (session != null) {
-                // 保存端口为 suspend 契约（测试可控假实现需要挂起点）；
-                // onCleared 的兜底保存是同步桥接调用，用 runBlocking 保持原有
-                // 生命周期语义（不延迟进程退出，不依赖仍会被取消的 viewModelScope）。
-                kotlinx.coroutines.runBlocking {
-                    if (content.isNotEmpty()) {
-                        chapterRepository.saveChapterContent(
-                            session.projectId,
-                            session.volumeId,
-                            session.chapterId,
-                            content,
-                        )
-                    } else if (contentExplicitlyCleared) {
-                        chapterRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
-                    }
-                }
+                // #624 评论10 第2项：兜底保存从真实 snapshot/lease 取正文 —
+                // 不回退 _uiState.content（评论9 后本地输入不再更新它，保存旧正文
+                // 会把刚输入的内容覆盖回磁盘）。
+                saveFallbackOnClear(session)
             }
         } catch (_: Exception) {
         }

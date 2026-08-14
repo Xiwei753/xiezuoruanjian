@@ -32,6 +32,33 @@ fun EditorViewModel.buildSaveToken(
     )
 }
 
+/**
+ * #624 评论10 第2项：ViewModel 销毁（onCleared）兜底保存 — 从真实 Rust
+ * snapshot/lease 按 target 取 text + revision，不回退 `_uiState.content`
+ * （评论9 后本地输入不再更新它 — 保存旧正文会把刚输入的内容覆盖回磁盘）。
+ *
+ * snapshot 不可得（session 未激活/已关闭/快照缺失/错版）时跳过保存：正文
+ * 要么已由对应关闭路径落盘，要么 session 保留可再保存；绝不伪造空正文。
+ * 保存端口为 suspend 契约，此处用 runBlocking 保持原有生命周期语义
+ * （不延迟进程退出，不依赖仍会被取消的 viewModelScope）。
+ */
+internal fun EditorViewModel.saveFallbackOnClear(session: EditorSession) {
+    val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
+    val lease = _sessionCoordinator?.issueDocumentOperationLease(targetId) ?: return
+    kotlinx.coroutines.runBlocking {
+        if (lease.text.isNotEmpty()) {
+            effectiveChapterSavePort.saveChapterContent(
+                session.projectId,
+                session.volumeId,
+                session.chapterId,
+                lease.text,
+            )
+        } else if (contentExplicitlyCleared) {
+            chapterRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
+        }
+    }
+}
+
 fun EditorViewModel.scheduleAutoSave() {
     val session = currentSession ?: return
     autoSaveJob?.cancel()

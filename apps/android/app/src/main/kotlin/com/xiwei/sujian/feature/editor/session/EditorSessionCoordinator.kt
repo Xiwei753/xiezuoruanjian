@@ -116,17 +116,47 @@ open class EditorSessionCoordinator(
      * 包含 target/session/epoch/revision/text/committedVersion 全部字段，
      * 调用方不再自行拼接 currentSession + sessionState。无活动 target 或
      * 无 session 时返回 null（无可操作的文档）。
+     *
+     * #624 评论10 第1项：只有拿到与当前 session revision 一致的权威 snapshot
+     * 才返回 lease。snapshot 失败/错版不得伪造空正文 — 返回 null，调用方
+     * 保持 Unsaved 状态，绝不误触发 Clear 或用空正文覆盖磁盘。
+     *
+     * #624 评论10 第2项：[targetId] 参数 — 按 target/session 取得 lease，活动窗口、
+     * Detached 持久 session、切章中的旧 target 走同一入口。为 null 时保持原有
+     * 活动 target 行为（revision 与活动 SessionState 比较）；显式传 targetId 时
+     * revision 与该 target 的 store 记录（applyLocalEdit 每次同步更新）比较。
      */
-    fun issueDocumentOperationLease(): DocumentOperationLease? {
-        val s = _sessionStateFlow.value
-        val targetId = s.activeTargetId ?: return null
-        val sessionId = s.sessionId ?: return null
+    fun issueDocumentOperationLease(targetId: String? = null): DocumentOperationLease? {
+        if (targetId == null) {
+            val s = _sessionStateFlow.value
+            val activeTargetId = s.activeTargetId ?: return null
+            val sessionId = s.sessionId ?: return null
+            val record = store.record(activeTargetId) ?: return null
+            // #624 评论10 第1项：只有拿到与当前 session revision 一致的权威 snapshot
+            // 才返回 lease。snapshot 失败/错版不得伪造空正文 — 返回 null，调用方
+            // 保持 Unsaved 状态，绝不误触发 Clear 或用空正文覆盖磁盘。
+            val snapshot = querySnapshotForSession(sessionId)
+            if (snapshot == null || snapshot.revision != s.revision) {
+                return null
+            }
+            return DocumentOperationLease(
+                operationId = operationIdCounter.incrementAndGet(),
+                targetId = activeTargetId,
+                coreSessionId = sessionId,
+                inputEpoch = inputLeaseEpoch,
+                rustRevision = snapshot.revision,
+                text = snapshot.text,
+                committedVersion = record.documentState.committedVersion,
+            )
+        }
+        // #624 评论10 第2项：按 target/session 取得 — Detached 持久 session 同样
+        // 可签发（store 记录保留 sessionId 与 revision 事实）。snapshot 缺失/错版
+        // 返回 null，不伪造空正文。
         val record = store.record(targetId) ?: return null
-        // #624 评论10 第1项：只有拿到与当前 session revision 一致的权威 snapshot
-        // 才返回 lease。snapshot 失败/错版不得伪造空正文 — 返回 null，调用方
-        // 保持 Unsaved 状态，绝不误触发 Clear 或用空正文覆盖磁盘。
+        val sessionId = record.sessionId ?: return null
+        if (sessionId == 0UL) return null
         val snapshot = querySnapshotForSession(sessionId)
-        if (snapshot == null || snapshot.revision != s.revision) {
+        if (snapshot == null || snapshot.revision != record.documentState.revision) {
             return null
         }
         return DocumentOperationLease(
@@ -134,7 +164,7 @@ open class EditorSessionCoordinator(
             targetId = targetId,
             coreSessionId = sessionId,
             inputEpoch = inputLeaseEpoch,
-            rustRevision = s.revision,
+            rustRevision = snapshot.revision,
             text = snapshot.text,
             committedVersion = record.documentState.committedVersion,
         )

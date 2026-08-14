@@ -31,6 +31,7 @@ import com.xiwei.sujian.feature.editor.ui.EditorViewModel
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
 import com.xiwei.sujian.feature.editor.ui.requestOpenChapter
+import com.xiwei.sujian.feature.editor.ui.saveTargetBeforeClose
 import kotlinx.coroutines.launch
 
 /**
@@ -110,10 +111,25 @@ internal fun ProjectWorkspaceScreen(
         lastWorkspaceLocation = location
         val previousEditor = previous as? WorkspaceLocation.Editor
         if (previousEditor != null && location !is WorkspaceLocation.Editor) {
-            editorHost?.closeTarget(
-                "chapter-body:${previousEditor.projectId}:${previousEditor.volumeId}:${previousEditor.chapterId}",
-                com.xiwei.sujian.feature.editor.session.SessionCloseReason.WORKSPACE_NAVIGATION,
-            )
+            // #624 评论10 第2项：离开正文先保存当前真实正文（snapshot lease），
+            // 再关闭 Rust session — autosave debounce 窗口内离开不得丢未落盘输入；
+            // 拿不到真实 snapshot 或落盘失败时中止关闭（session 保留 Detached，
+            // 正文不丢），绝不回退 _uiState.content 旧正文。
+            val targetId =
+                "chapter-body:${previousEditor.projectId}:${previousEditor.volumeId}:${previousEditor.chapterId}"
+            val safeToClose =
+                editorViewModel.saveTargetBeforeClose(
+                    targetId,
+                    previousEditor.projectId,
+                    previousEditor.volumeId,
+                    previousEditor.chapterId,
+                )
+            if (safeToClose) {
+                editorHost?.closeTarget(
+                    targetId,
+                    com.xiwei.sujian.feature.editor.session.SessionCloseReason.WORKSPACE_NAVIGATION,
+                )
+            }
         }
         when (location) {
             is WorkspaceLocation.ProjectList -> {
