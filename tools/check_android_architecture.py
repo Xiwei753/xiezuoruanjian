@@ -22,9 +22,9 @@
     sessionStateFlow + value getter；
 7.  FrameClock 只能由窗口/显示层持有：EditorWindowHost 拥有唯一
     windowFrameClock 字段，session 层不得引用 WindowDisplayFrameClock；
-8.  updateSessionState transform 是纯函数：transform 体内不得调用
-    store.put/store.update/store.remove，store 写入只能在 mutateSession
-    闭包内（SessionMutationGate 锁保护）执行；
+8.  session 的 state/store/epoch 写入只能从 SessionMutationGate/mutateSession
+    进入（updateSessionState 已删除）；store.put/store.update/store.remove
+    只在 SessionMutationScope 闭包内（锁保护）执行；
 9.  core/designsystem 不能反向依赖 app 模块（源码与 build.gradle.kts 均不得）；
 10. 已删除类型/入口不得复活：EditorAnimationSettings、派生 flow getter、
     SettingsRepository 旧的 1 参 setSyncSecretsOverride；
