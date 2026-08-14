@@ -7,6 +7,7 @@ import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole
 import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
 import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldNavigator
 import androidx.compose.runtime.Stable
+import com.xiwei.sujian.app.state.ActiveDocumentGate
 import kotlinx.parcelize.Parcelize
 
 /**
@@ -128,6 +129,19 @@ class ProjectNavigationState(
     suspend fun seekBack(progress: Float) {
         navigator.seekBack(BackNavigationBehavior.PopUntilScaffoldValueChange, progress)
     }
+}
+
+/**
+ * #624 评论12 第1项：工作区统一返回入口 — 顶栏返回、系统返回全部走这里。
+ *
+ * 先经 [ActiveDocumentGate.flushActiveDocument] 把活动正文保存到磁盘（保存失败
+ * 返回 false，导航保持 Editor 目的地），保存成功才真正弹出工作区导航。
+ * 旧实现先导航离开正文再在 LaunchedEffect 里补保存 — 保存失败只能阻止
+ * closeTarget，阻止不了导航本身。
+ */
+suspend fun ProjectNavigationState.guardedBack(): Boolean {
+    if (!ActiveDocumentGate.flushActiveDocument()) return false
+    return back()
 }
 
 /**

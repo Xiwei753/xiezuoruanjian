@@ -6,12 +6,15 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
 import com.xiwei.sujian.feature.editor.session.EditorContentDelta
+import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
 import com.xiwei.sujian.feature.editor.session.TargetSnapshot
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
+import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
+import com.xiwei.sujian.feature.editor.session.documentCommittedVersionFor
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
@@ -132,6 +135,28 @@ class EditorViewModelChapterSwitchTest {
             ),
         )
         fakeCoordinator.installSnapshot(sessionId, text, revision)
+    }
+
+    /**
+     * #624 评论12 第2项：dirty 唯一真值在 session store — 通过真实输入路径
+     * （applyLocalEdit contentChanged=true）置位，不再读写 ViewModel contentDirty。
+     */
+    private fun markLocalDirty(
+        vm: EditorViewModel,
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ) {
+        fakeCoordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput(
+                targetId = vm.chapterTargetId(projectId, volumeId, chapterId),
+                revision = fakeCoordinator.sessionState.revision,
+                transactionId = 1L,
+                lease = fakeCoordinator.currentInputLease()!!,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = 1),
+            ),
+        )
     }
 
     @Test
@@ -266,6 +291,7 @@ class EditorViewModelChapterSwitchTest {
             vm.confirmEditorAttached(vm.chapterTargetId("p", "v", "a"))
             vm._uiState.value = vm._uiState.value.copy(content = "正文A")
             commitActiveSession(vm, "p", "v", "a", "正文A")
+            markLocalDirty(vm, "p", "v", "a")
 
             // #597：可控保存端口 — 保存 A 时挂起，为取消制造确定性挂起点
             // （loadChapter 的 withContext(IO) 在无 native 时几乎立即返回，
@@ -430,6 +456,7 @@ class EditorViewModelChapterSwitchTest {
             vm._uiState.value = vm._uiState.value.copy(content = whitespaceBody)
             vm.initChapter("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", whitespaceBody)
+            markLocalDirty(vm, "p", "v", "a")
 
             // 切换到 B：旧章节保存必须真实尝试（无 native → 新章节加载失败
             // 返回 LoadFailed），但保存端口必须收到原始空白正文。
@@ -458,6 +485,7 @@ class EditorViewModelChapterSwitchTest {
             val snapshotText = "用户刚输入的真实正文"
             vm.initChapter("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", snapshotText)
+            markLocalDirty(vm, "p", "v", "a")
             // 评论9 后本地正常输入不更新 _uiState.content — 它停留在打开时的旧正文。
             vm._uiState.value = vm._uiState.value.copy(content = "打开章节时的旧正文")
             var savedContent: String? = null
@@ -489,6 +517,108 @@ class EditorViewModelChapterSwitchTest {
                 snapshotText,
                 savedContent,
             )
+        }
+
+    /**
+     * #624 评论12 第2项：完全没改过的非空章节（localDirty=false）每次切章不得
+     * 重写磁盘 — 旧实现 `content.isNotEmpty() → Save` 无条件重写。
+     */
+    @Test
+    fun switchChapter_untouchedNonEmptyChapter_doesNotRewriteDisk() =
+        runTest {
+            val vm = createVm()
+            var saveCalls = 0
+            vm.chapterSavePort =
+                object : com.xiwei.sujian.feature.editor.session.ChapterContentSavePort {
+                    override suspend fun saveChapterContent(
+                        projectId: String,
+                        volumeId: String,
+                        chapterId: String,
+                        content: String,
+                    ): BridgeResult<ChapterSaveReceipt> {
+                        saveCalls++
+                        return BridgeResult.Success(
+                            ChapterSaveReceipt("c", 0L, "h", "m", "t", 0),
+                        )
+                    }
+                }
+            vm._uiState.value = vm._uiState.value.copy(content = "正文A")
+            vm.initChapter("p", "v", "a", "A")
+            commitActiveSession(vm, "p", "v", "a", "正文A")
+
+            val result = vm.switchChapter("p", "v", "b", "B")
+
+            assertTrue(
+                "未 dirty 章节切章必须跳过保存（LoadFailed 说明保存阶段未中止、加载才失败）",
+                result is ChapterSwitchResult.LoadFailed,
+            )
+            assertEquals("未 dirty 的非空章节切章时不得重写磁盘", 0, saveCalls)
+        }
+
+    /**
+     * #624 评论12 第2项：切章保存成功必须 markSaved 提交回 session 文档状态 —
+     * 旧实现只记 saveReceipts，DocumentState.localDirty 保持 true，后面的同步
+     * 事实会被 IgnoreDirtyConflict 拦截。
+     */
+    @Test
+    fun switchChapter_saveSuccess_marksSavedIntoSessionStore() =
+        runTest {
+            val vm = createVm()
+            val targetA = vm.chapterTargetId("p", "v", "a")
+            vm.initChapter("p", "v", "a", "A")
+            commitActiveSession(vm, "p", "v", "a", "正文A")
+            markLocalDirty(vm, "p", "v", "a")
+            vm.chapterSavePort =
+                object : com.xiwei.sujian.feature.editor.session.ChapterContentSavePort {
+                    override suspend fun saveChapterContent(
+                        projectId: String,
+                        volumeId: String,
+                        chapterId: String,
+                        content: String,
+                    ): BridgeResult<ChapterSaveReceipt> {
+                        return BridgeResult.Success(
+                            ChapterSaveReceipt("c", 0L, "hash-A", "m", "t", 0),
+                        )
+                    }
+                }
+
+            val result = vm.switchChapter("p", "v", "b", "B")
+
+            assertTrue(
+                "保存成功后继续加载失败 — LoadFailed 证明切章已走完保存阶段",
+                result is ChapterSwitchResult.LoadFailed,
+            )
+            assertEquals(
+                "切章保存成功必须 markSaved — committedVersion 推进到落盘 hash",
+                "hash-A",
+                fakeCoordinator.documentCommittedVersionFor(targetA).contentHash,
+            )
+            assertEquals(
+                "markSaved 后 store 记录 localDirty 必须为 false（同步事实不再被 IgnoreDirtyConflict 拦截）",
+                false,
+                fakeCoordinator.store.record(targetA)?.documentState?.localDirty,
+            )
+        }
+
+    /**
+     * #624 评论11 第2项/评论12：dirty+空正文切章必须尝试 Clear（旧实现
+     * `else true` 直接放行，磁盘旧正文不会被清掉）。无 native → SaveFailed。
+     */
+    @Test
+    fun switchChapter_dirtyEmptyOldChapter_attemptsClear() =
+        runTest {
+            val vm = createVm()
+            vm.initChapter("p", "v", "a", "A")
+            commitActiveSession(vm, "p", "v", "a", "")
+            markLocalDirty(vm, "p", "v", "a")
+
+            val result = vm.switchChapter("p", "v", "b", "B")
+
+            assertTrue(
+                "dirty+空正文切章必须真实尝试 Clear（无 native → SaveFailed）",
+                result is ChapterSwitchResult.SaveFailed,
+            )
+            assertEquals(SaveStatus.SaveFailed, vm.uiState.value.saveStatus)
         }
 
     @Test

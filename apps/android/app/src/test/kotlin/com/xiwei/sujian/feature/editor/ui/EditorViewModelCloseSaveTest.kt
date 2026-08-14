@@ -5,10 +5,13 @@ import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.ResultEnvelope
 import com.xiwei.sujian.feature.editor.session.ChapterContentSavePort
+import com.xiwei.sujian.feature.editor.session.EditorContentDelta
+import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
 import com.xiwei.sujian.feature.editor.session.TargetSnapshot
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
+import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
@@ -19,31 +22,58 @@ import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TestWatcher
+import org.junit.runner.Description
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
- * #624 评论10 第2项：章节关闭（离开正文）与 ViewModel 兜底保存必须从真实
- * Rust snapshot/lease 取 text+revision，不得回退 `_uiState.content`（评论9 后
- * 本地输入不再更新它 — 保存它会用刚打开章节时的旧正文覆盖用户输入）。
+ * #624 评论12 第1/2/3项：离开正文（workspace 返回）的保存、业务关闭与
+ * 生命周期收口测试。
  *
- * - [EditorViewModel.saveTargetBeforeClose]：离开正文前保存真实正文；
- *   snapshot 缺失/错版时中止（返回 false），绝不伪造空正文保存；
- * - [EditorViewModel.onCleared]：ViewModel 销毁兜底保存同样只消费 lease 正文。
+ * - 离开正文的保存由 workspace 返回事务（guardedBack → ActiveDocumentGate
+ *   flush → requestSave）完成：正文必须从真实 Rust snapshot/lease 取，
+ *   不得回退 `_uiState.content`（评论9 后本地输入不再更新它）；
+ *   snapshot 缺失/错版时保存必须中止（返回失败），绝不伪造空正文；
+ * - [EditorViewModel.finishWorkspaceClose]：导航成功离开后清空 currentSession，
+ *   避免「Rust session 已关闭，ViewModel 仍宣称 A 是当前章节」；
+ * - onCleared 不再同步阻塞保存（评论12 第3项）— 正文安全由统一
+ *   autosave / ActiveDocumentGate / workspace 离开事务负责。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class EditorViewModelCloseSaveTest {
+    class MainDispatcherRule(
+        val dispatcher: kotlinx.coroutines.test.TestDispatcher = UnconfinedTestDispatcher(),
+    ) : TestWatcher() {
+        override fun starting(description: Description) {
+            Dispatchers.setMain(dispatcher)
+        }
+
+        override fun finished(description: Description) {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @get:Rule
+    val mainDispatcherRule = MainDispatcherRule()
+
     private companion object {
         const val TARGET_ID = "chapter-body:p:v:a"
 
@@ -152,33 +182,49 @@ class EditorViewModelCloseSaveTest {
         vm.currentSession = EditorSession("s1", "p", "v", "a")
     }
 
-    // ── saveTargetBeforeClose：章节关闭前保存真实 snapshot 正文 ──
+    /** 真实输入路径：applyLocalEdit(contentChanged=true) 置 session store localDirty。 */
+    private fun markDirty() {
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput(
+                targetId = TARGET_ID,
+                revision = coordinator.sessionState.revision,
+                transactionId = 1L,
+                lease = coordinator.currentInputLease()!!,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = 1),
+            ),
+        )
+    }
+
+    // ── requestSave：workspace 离开事务（guardedBack → ActiveDocumentGate flush）的保存入口 ──
 
     /**
      * 用户输入后（snapshot 已含"真实正文"，_uiState.content 仍是打开的旧正文），
      * 离开正文必须保存 snapshot 正文，绝不能保存 _uiState.content 旧正文。
      */
     @Test
-    fun saveTargetBeforeClose_savesRealSnapshotNotColdPathContent() =
+    fun requestSave_savesRealSnapshotNotColdPathContent() =
         runTest(UnconfinedTestDispatcher()) {
             commitActiveSession(text = REAL_SNAPSHOT_CONTENT, revision = 2L)
             setCurrentSession()
             // 评论9 后本地输入不更新 _uiState.content — 它停留在打开章节时的旧正文。
             vm._uiState.value = vm._uiState.value.copy(content = STALE_COLD_PATH_CONTENT)
+            markDirty()
+            vm.startSaveActor()
 
-            val safe = vm.saveTargetBeforeClose(TARGET_ID, "p", "v", "a")
+            val ok = vm.requestSave().await()
 
-            assertTrue("拿到真实 snapshot 必须允许关闭", safe)
+            assertTrue("拿到真实 snapshot 必须保存成功", ok)
             assertEquals("必须保存 snapshot 正文而不是 _uiState.content", REAL_SNAPSHOT_CONTENT, savePort.savedContent)
             assertEquals(1, savePort.calls)
         }
 
     /**
-     * snapshot 缺失（querySnapshotForSession 返回 null）时保存/关闭必须中止 —
+     * snapshot 缺失（querySnapshotForSession 返回 null）时保存必须中止 —
      * 不伪造空正文保存（否则旧章节被清空）。
      */
     @Test
-    fun saveTargetBeforeClose_abortsWhenSnapshotUnavailable() =
+    fun requestSave_abortsWhenSnapshotUnavailable() =
         runTest(UnconfinedTestDispatcher()) {
             // 只注册元数据 + 提交 session，但不安装 snapshot → 快照不可得。
             coordinator.registerTargetMeta(TARGET_ID, TextEditorProfile.DocumentBody, persistent = true)
@@ -193,100 +239,141 @@ class EditorViewModelCloseSaveTest {
             assertTrue(coordinator.commitPreparedSession(handle))
             setCurrentSession()
             vm._uiState.value = vm._uiState.value.copy(content = "旧正文")
+            vm.startSaveActor()
 
-            val safe = vm.saveTargetBeforeClose(TARGET_ID, "p", "v", "a")
+            val ok = vm.requestSave().await()
 
-            assertFalse("snapshot 不可得时必须中止关闭", safe)
+            assertFalse("snapshot 不可得时必须中止保存", ok)
             assertEquals("snapshot 不可得时不得发出任何保存", 0, savePort.calls)
             assertEquals(
-                "snapshot 不可得时必须上报 SaveFailed（不得误报已保存）",
-                SaveStatus.SaveFailed,
+                "snapshot 不可得时不得误报 Saved",
+                SaveStatus.Idle,
                 vm.uiState.value.saveStatus,
             )
         }
 
     /**
-     * snapshot revision 与 store 记录不一致（错版）时保存/关闭必须中止。
+     * snapshot revision 与 store 记录不一致（错版）时保存必须中止。
      */
     @Test
-    fun saveTargetBeforeClose_abortsWhenSnapshotRevisionMismatch() =
+    fun requestSave_abortsWhenSnapshotRevisionMismatch() =
         runTest(UnconfinedTestDispatcher()) {
             commitActiveSession(text = "记录正文", revision = 2L)
             // 内核已前进到 revision 3，记录仍为 2 → 错版 snapshot。
             coordinator.installSnapshot(1UL, "内核新正文", revision = 3L)
             setCurrentSession()
+            vm.startSaveActor()
 
-            val safe = vm.saveTargetBeforeClose(TARGET_ID, "p", "v", "a")
+            val ok = vm.requestSave().await()
 
-            assertFalse("错版 snapshot 时必须中止关闭", safe)
+            assertFalse("错版 snapshot 时必须中止保存", ok)
             assertEquals("错版 snapshot 时不得发出任何保存", 0, savePort.calls)
         }
 
-    /** 保存失败（磁盘错误）时中止关闭，正文保留在 session 中。 */
+    /** 保存失败（磁盘错误）时离开事务失败 — 正文保留在 session 中。 */
     @Test
-    fun saveTargetBeforeClose_abortsOnSaveFailure() =
+    fun requestSave_abortsOnSaveFailure() =
         runTest(UnconfinedTestDispatcher()) {
             commitActiveSession(text = "真实正文", revision = 2L)
             setCurrentSession()
+            markDirty()
             savePort.nextResult = BridgeResult.Error(ResultEnvelope.errorOf("IO_ERROR", "disk full"))
+            vm.startSaveActor()
 
-            val safe = vm.saveTargetBeforeClose(TARGET_ID, "p", "v", "a")
+            val ok = vm.requestSave().await()
 
-            assertFalse("保存失败必须中止关闭", safe)
+            assertFalse("保存失败必须中止离开事务", ok)
             assertEquals(SaveStatus.SaveFailed, vm.uiState.value.saveStatus)
         }
 
-    /** 真实 snapshot 正文为空且未确认清空时：无需保存，可安全关闭。 */
+    /** 真实 snapshot 正文为空且未编辑时：无需保存，可安全离开。 */
     @Test
-    fun saveTargetBeforeClose_safeWhenSnapshotEmptyAndNotCleared() =
+    fun requestSave_safeWhenEmptyAndNotDirty() =
         runTest(UnconfinedTestDispatcher()) {
             commitActiveSession(text = "", revision = 1L)
             setCurrentSession()
+            vm.startSaveActor()
 
-            val safe = vm.saveTargetBeforeClose(TARGET_ID, "p", "v", "a")
+            val ok = vm.requestSave().await()
 
-            assertTrue("空正文且未确认清空 — 无需保存即可关闭", safe)
+            assertTrue("空正文且未编辑 — 无需保存即可离开", ok)
             assertEquals(0, savePort.calls)
         }
 
-    // ── onCleared：ViewModel 兜底保存同样只消费 lease 正文 ──
+    // ── finishWorkspaceClose：workspace 离开正文后的业务关闭收口 ──
 
     /**
-     * onCleared 兜底保存必须保存 snapshot 正文；_uiState.content 是冷路径旧正文，
-     * 用它保存会把用户刚输入的内容覆盖回磁盘（数据丢失）。
+     * 导航成功离开正文后必须清空 currentSession — 否则「Rust session 已关闭，
+     * ViewModel 仍宣称 A 是当前章节」：再点 A 会命中"相同章节 no-op"跳过重新
+     * 加载；点 B 会把已关闭的 A 当 oldSession 去拿活动 lease（拿不到 → SaveFailed）。
      */
     @Test
-    fun onCleared_savesRealSnapshotNotColdPathContent() {
+    fun finishWorkspaceClose_clearsCurrentSessionAndUiState() {
+        commitActiveSession(text = "正文", revision = 1L)
+        setCurrentSession()
+        vm._uiState.value = vm._uiState.value.copy(content = "正文", saveStatus = SaveStatus.Unsaved)
+        vm.autoSaveJob = vm.editorScope.launch { delay(100_000) }
+
+        vm.finishWorkspaceClose(TARGET_ID)
+
+        assertNull("离开正文后 currentSession 必须清空", vm.currentSession)
+        assertEquals(
+            "UI 冷状态必须复位（保留设置字段）",
+            EditorUiState(settings = vm.uiState.value.settings),
+            vm.uiState.value,
+        )
+        assertTrue("离开后 autosave job 必须取消", vm.autoSaveJob?.isCancelled == true)
+    }
+
+    /** 不匹配的 target 不得清掉当前会话（防串章）。 */
+    @Test
+    fun finishWorkspaceClose_noopForDifferentTarget() {
+        commitActiveSession(text = "正文", revision = 1L)
+        setCurrentSession()
+
+        vm.finishWorkspaceClose("chapter-body:p:v:other")
+
+        assertNotNull("不匹配的 target 不得清掉当前会话", vm.currentSession)
+    }
+
+    /** 无当前会话时是 no-op。 */
+    @Test
+    fun finishWorkspaceClose_noopWithoutCurrentSession() {
+        commitActiveSession(text = "正文", revision = 1L)
+
+        vm.finishWorkspaceClose(TARGET_ID)
+
+        assertNull(vm.currentSession)
+    }
+
+    /** onCleared 是 protected 生命周期回调 — 测试经反射调用（不改变产品可见性）。 */
+    private fun invokeOnCleared(vm: EditorViewModel) {
+        val method = EditorViewModel::class.java.getDeclaredMethod("onCleared")
+        method.isAccessible = true
+        method.invoke(vm)
+    }
+
+    // ── onCleared：生命周期收尾不再同步阻塞保存 ──
+
+    /**
+     * #624 评论12 第3项：onCleared 不是持久化边界 — 不再 runBlocking 阻塞主线程
+     * 做文件保存；正文安全由统一 autosave / ActiveDocumentGate / workspace 离开
+     * 事务负责，生命周期收尾只取消 Job、关闭注册。
+     */
+    @Test
+    fun onCleared_doesNotBlockOnSave() {
         commitActiveSession(text = REAL_SNAPSHOT_CONTENT, revision = 2L)
         setCurrentSession()
         vm._uiState.value = vm._uiState.value.copy(content = STALE_COLD_PATH_CONTENT)
+        markDirty()
 
-        vm.saveFallbackOnClear(EditorSession("s1", "p", "v", "a"))
+        invokeOnCleared(vm)
 
-        assertEquals("onCleared 必须保存 snapshot 正文而不是 _uiState.content", REAL_SNAPSHOT_CONTENT, savePort.savedContent)
-        assertEquals(1, savePort.calls)
-    }
-
-    /** snapshot 不可得时 onCleared 不得用 _uiState.content 兜底保存（不覆盖磁盘）。 */
-    @Test
-    fun onCleared_skipsSaveWhenSnapshotUnavailable() {
-        coordinator.registerTargetMeta(TARGET_ID, TextEditorProfile.DocumentBody, persistent = true)
-        val handle =
-            PreparedSessionHandle(
-                targetId = TARGET_ID,
-                sessionId = 9UL,
-                snapshot = TargetSnapshot("x", 1, 1L, 0, 1),
-                newlyCreated = true,
-                previousRecord = null,
-            )
-        assertTrue(coordinator.commitPreparedSession(handle))
-        setCurrentSession()
-        vm._uiState.value = vm._uiState.value.copy(content = "冷路径旧正文")
-
-        vm.saveFallbackOnClear(EditorSession("s1", "p", "v", "a"))
-
-        assertNull("snapshot 不可得时不得保存任何正文", savePort.savedContent)
-        assertEquals("snapshot 不可得时不得发出任何保存", 0, savePort.calls)
+        assertEquals(
+            "onCleared 不得同步阻塞保存（评论12 第3项）",
+            0,
+            savePort.calls,
+        )
     }
 }
 

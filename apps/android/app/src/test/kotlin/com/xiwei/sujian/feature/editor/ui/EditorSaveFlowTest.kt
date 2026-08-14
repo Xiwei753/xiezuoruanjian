@@ -15,6 +15,7 @@ import com.xiwei.sujian.feature.editor.session.TargetSnapshot
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
+import com.xiwei.sujian.feature.editor.session.documentCommittedVersionFor
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
@@ -39,16 +40,19 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
- * #597（评论五）：真正执行完整保存流程的可控假保存对象测试。
+ * #597（评论五）/ #624 评论12 第2项：真正执行完整保存流程的可控假保存对象测试。
  *
  * 流程：
  * 1. 开始保存正文 A（performSave 经 [ChapterContentSavePort] 调用假保存器，
- *    假保存器挂起直到测试放行）；
- * 2. 保存返回前继续输入正文 B（onContentChanged + applyLocalEdit 推进 revision）；
+ *    假保存器挂起直到测试放行；lease 由权威 snapshot 签发）；
+ * 2. 保存返回前继续输入正文 B（applyLocalEdit + onEditorApplied 推进 revision）；
  * 3. 让 A 返回保存成功；
  * 4. 检查当前正文仍是 B；
- * 5. 检查页面仍显示未保存（revision 不匹配 → 不标记 Saved）；
+ * 5. 检查页面仍显示未保存（revision 不匹配 → 不标记 Saved、不 markSaved）；
  * 6. 检查 B 没有被 A 的晚到结果覆盖（chapterHash 仍是 B 的）。
+ *
+ * #624 评论12：dirty 唯一真值在 session store（applyLocalEdit 写入），
+ * 不再读写 ViewModel contentDirty；保存完成按 lease + 落盘 hash 统一提交。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -61,6 +65,12 @@ class EditorSaveFlowTest {
 
         /** #624 评论1：只含空格/制表符的段落正文。 */
         const val INDENT_ONLY_BODY = "   \t\n"
+
+        /** 测试正文 A（保存中/保存完成后的一致性检查）。 */
+        const val BODY_A = "正文A"
+
+        /** 测试保存回执 hash。 */
+        const val HASH_A = "hash-A"
     }
 
     /** 可控假保存器 — 每次调用挂起在 gate 上，测试放行后返回预设回执。 */
@@ -72,7 +82,7 @@ class EditorSaveFlowTest {
             ChapterSaveReceipt(
                 chapterRelativePath = "chapters/a.md",
                 contentLen = 0L,
-                contentHash = "hash-A",
+                contentHash = HASH_A,
                 metaHash = "meta-A",
                 updatedAt = "2026-08-07T00:00:00Z",
                 wordCount = 0,
@@ -92,8 +102,48 @@ class EditorSaveFlowTest {
         }
     }
 
+    /** 立即返回成功的假保存端口 — 用于不关心 IO 挂起时序的保存语义测试。 */
+    private class ImmediateSavePort : ChapterContentSavePort {
+        var savedContent: String? = null
+
+        override suspend fun saveChapterContent(
+            projectId: String,
+            volumeId: String,
+            chapterId: String,
+            content: String,
+        ): BridgeResult<ChapterSaveReceipt> {
+            savedContent = content
+            return BridgeResult.Success(
+                ChapterSaveReceipt(
+                    chapterRelativePath = "chapters/a.md",
+                    contentLen = content.toByteArray(Charsets.UTF_8).size.toLong(),
+                    contentHash = "hash-$content",
+                    metaHash = "meta-A",
+                    updatedAt = "2026-08-07T00:00:00Z",
+                    wordCount = 0,
+                ),
+            )
+        }
+    }
+
+    /** 可控 snapshot 注入 fake — querySnapshotForSession 由测试安装。 */
+    private class FakeSnapshotCoordinator(bridge: AppServiceBridge) : EditorSessionCoordinator(bridge) {
+        private val snapshots = mutableMapOf<ULong, TargetSnapshot>()
+
+        fun installSnapshot(
+            sessionId: ULong,
+            text: String,
+            revision: Long,
+        ) {
+            val cursor = text.toByteArray(Charsets.UTF_8).size
+            snapshots[sessionId] = TargetSnapshot(text, cursor, revision, 0, cursor)
+        }
+
+        internal override fun querySnapshotForSession(sessionId: ULong): TargetSnapshot? = snapshots[sessionId]
+    }
+
     private lateinit var bridge: AppServiceBridge
-    private lateinit var coordinator: EditorSessionCoordinator
+    private lateinit var coordinator: FakeSnapshotCoordinator
     private lateinit var vm: EditorViewModel
     private lateinit var savePort: ControllableSavePort
 
@@ -106,7 +156,7 @@ class EditorSaveFlowTest {
                     "/tmp/sujian_test_workspace_597_save_flow",
                 ),
             )
-        coordinator = EditorSessionCoordinator(bridge)
+        coordinator = FakeSnapshotCoordinator(bridge)
         val app = RuntimeEnvironment.getApplication()
         val repo = ProjectRepository(app, bridge)
         vm = EditorViewModel(app)
@@ -141,31 +191,37 @@ class EditorSaveFlowTest {
                 ),
             ),
         )
+        coordinator.installSnapshot(sessionId, text, revision)
         vm.currentSession = EditorSession("s1", "p", "v", "a")
         // #624 评论9：章节加载是冷路径 — uiState.content 经 applyExternalContentToUi 一次性设置。
         // hash 传空串：模拟"从未保存过"的章节（保存成功后由回执写入 hash）。
         vm.applyExternalContentToUi(TARGET_ID, text, "")
     }
 
+    private fun storeLocalDirty(): Boolean = coordinator.store.record(TARGET_ID)?.documentState?.localDirty ?: false
+
     @Test
     fun saveInFlight_continuedTyping_notOverwrittenByLateReceipt() =
         runTest(UnconfinedTestDispatcher()) {
-            commitSession(text = "正文A", revision = 1L)
+            commitSession(text = BODY_A, revision = 1L)
 
-            // 1. 开始保存正文 A — 假保存器挂起（保存 IO 未返回）。
+            // 1. 开始保存正文 A — lease 从权威 snapshot 签发（revision=1），
+            // 假保存器挂起（保存 IO 未返回）。
+            val lease = coordinator.issueDocumentOperationLease()!!
+            assertEquals(1L, lease.rustRevision)
             val saveJob =
                 async(Dispatchers.Default) {
                     vm.performSave(
-                        content = "正文A",
+                        content = BODY_A,
                         session = requireNotNull(vm.currentSession),
+                        lease = lease,
                         isAutoSave = false,
-                        revisionAtEnqueue = 1L,
                     )
                 }
             // 等保存器真正进入挂起（至少一次调用）。
             runCurrentUntil { savePort.calls >= 1 }
             assertTrue("performSave 必须已调用假保存器", savePort.calls >= 1)
-            assertEquals("保存中的正文必须是 A", "正文A", savePort.savedContent)
+            assertEquals("保存中的正文必须是 A", BODY_A, savePort.savedContent)
             assertEquals(SaveStatus.Saving, vm.uiState.value.saveStatus)
 
             // 2. 保存返回前继续输入正文 B — UI 与会话层 revision 同步前进。
@@ -197,7 +253,7 @@ class EditorSaveFlowTest {
                 ),
             )
             assertEquals("输入后必须标记未保存", SaveStatus.Unsaved, vm.uiState.value.saveStatus)
-            assertTrue("输入后必须置 dirty", vm.contentDirty)
+            assertTrue("输入后 session store 必须置 dirty", storeLocalDirty())
             assertEquals(2L, coordinator.sessionState.revision)
 
             // 3. 让 A 返回保存成功（晚到回执）。
@@ -210,21 +266,27 @@ class EditorSaveFlowTest {
             assertEquals("保存期间继续输入后不得显示已保存", SaveStatus.Unsaved, vm.uiState.value.saveStatus)
             // 6. B 没有被 A 的晚到结果覆盖 — chapterHash 不得变成 A 的 hash。
             assertEquals("", vm.uiState.value.chapterHash)
-            assertTrue("B 必须保持 dirty（未落盘）", vm.contentDirty)
+            assertTrue("B 必须保持 dirty（未落盘）", storeLocalDirty())
+            assertEquals(
+                "revision 不匹配时不得 markSaved — committedVersion 不得推进到 A",
+                "",
+                coordinator.documentCommittedVersionFor(TARGET_ID).contentHash,
+            )
         }
 
     @Test
     fun saveInFlight_noFurtherTyping_marksSavedWithMatchingRevision() =
         runTest(UnconfinedTestDispatcher()) {
-            commitSession(text = "正文A", revision = 1L)
+            commitSession(text = BODY_A, revision = 1L)
+            val lease = coordinator.issueDocumentOperationLease()!!
 
             val saveJob =
                 async(Dispatchers.Default) {
                     vm.performSave(
-                        content = "正文A",
+                        content = BODY_A,
                         session = requireNotNull(vm.currentSession),
+                        lease = lease,
                         isAutoSave = false,
-                        revisionAtEnqueue = 1L,
                     )
                 }
             runCurrentUntil { savePort.calls >= 1 }
@@ -233,10 +295,15 @@ class EditorSaveFlowTest {
             savePort.gate.complete(Unit)
             assertTrue(saveJob.await())
 
-            // revision 匹配 → 标记 Saved 并记录 hash。
+            // revision 匹配 → 标记 Saved 并记录 hash + markSaved。
             assertEquals(SaveStatus.Saved, vm.uiState.value.saveStatus)
-            assertEquals("hash-A", vm.uiState.value.chapterHash)
-            assertFalse("保存成功后 dirty 必须清", vm.contentDirty)
+            assertEquals(HASH_A, vm.uiState.value.chapterHash)
+            assertFalse("保存成功后 store localDirty 必须清", storeLocalDirty())
+            assertEquals(
+                "保存成功后 committedVersion 必须推进到落盘 hash",
+                HASH_A,
+                coordinator.documentCommittedVersionFor(TARGET_ID).contentHash,
+            )
         }
 
     /**
@@ -256,8 +323,8 @@ class EditorSaveFlowTest {
                 vm.performSave(
                     TWO_NEWLINES,
                     requireNotNull(vm.currentSession),
+                    coordinator.issueDocumentOperationLease()!!,
                     isAutoSave = false,
-                    revisionAtEnqueue = 1L,
                 )
 
             assertTrue("空白正文必须真正落盘", ok)
@@ -277,38 +344,14 @@ class EditorSaveFlowTest {
                 vm.performSave(
                     INDENT_ONLY_BODY,
                     requireNotNull(vm.currentSession),
+                    coordinator.issueDocumentOperationLease()!!,
                     isAutoSave = false,
-                    revisionAtEnqueue = 1L,
                 )
 
             assertTrue(ok)
             assertEquals("带空格/制表符的段落必须原样保存", INDENT_ONLY_BODY, immediatePort.savedContent)
             assertEquals(SaveStatus.Saved, vm.uiState.value.saveStatus)
         }
-
-    /** 立即返回成功的假保存端口 — 用于不关心 IO 挂起时序的保存语义测试。 */
-    private class ImmediateSavePort : ChapterContentSavePort {
-        var savedContent: String? = null
-
-        override suspend fun saveChapterContent(
-            projectId: String,
-            volumeId: String,
-            chapterId: String,
-            content: String,
-        ): BridgeResult<ChapterSaveReceipt> {
-            savedContent = content
-            return BridgeResult.Success(
-                ChapterSaveReceipt(
-                    chapterRelativePath = "chapters/a.md",
-                    contentLen = content.toByteArray(Charsets.UTF_8).size.toLong(),
-                    contentHash = "hash-$content",
-                    metaHash = "meta-A",
-                    updatedAt = "2026-08-07T00:00:00Z",
-                    wordCount = 0,
-                ),
-            )
-        }
-    }
 
     private suspend fun runCurrentUntil(condition: () -> Boolean) {
         var spins = 0

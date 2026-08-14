@@ -147,6 +147,8 @@ open class EditorSessionCoordinator(
                 rustRevision = snapshot.revision,
                 text = snapshot.text,
                 committedVersion = record.documentState.committedVersion,
+                // #624 评论12 第2项：唯一 dirty 真值从 store 记录填入。
+                localDirty = record.documentState.localDirty,
             )
         }
         // #624 评论10 第2项：按 target/session 取得 — Detached 持久 session 同样
@@ -167,6 +169,8 @@ open class EditorSessionCoordinator(
             rustRevision = snapshot.revision,
             text = snapshot.text,
             committedVersion = record.documentState.committedVersion,
+            // #624 评论12 第2项：唯一 dirty 真值从 store 记录填入。
+            localDirty = record.documentState.localDirty,
         )
     }
 

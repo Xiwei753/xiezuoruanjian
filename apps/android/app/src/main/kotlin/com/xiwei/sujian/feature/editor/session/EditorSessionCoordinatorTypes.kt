@@ -95,6 +95,12 @@ data class DocumentOperationLease(
     val rustRevision: Long,
     val text: String,
     val committedVersion: DocumentVersion,
+    /**
+     * #624 评论12 第2项：唯一 dirty 真值 — 从对应 target 的 store 记录
+     * [DocumentState.localDirty] 填入。所有保存入口只消费 lease 的 localDirty
+     * + text 决策（NoOp/Clear/Save），ViewModel 不再维护第二份 contentDirty。
+     */
+    val localDirty: Boolean = false,
 )
 
 /**

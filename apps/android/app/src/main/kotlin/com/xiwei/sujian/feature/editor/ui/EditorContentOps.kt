@@ -19,8 +19,8 @@ import kotlinx.coroutines.launch
  * #624 评论9/10：轻量编辑应用入口 — 替代旧 onContentChanged(newContent: String)。
  *
  * #624 评论10 第5项：状态机门控 —
- * - **contentChanged=true**：置 Unsaved、contentDirty=true、scheduleAutoSave()、
- *   增量 wordCount、记写作统计、scheduleStatsRefresh；
+ * - **contentChanged=true**：置 Unsaved、scheduleAutoSave()、增量 wordCount、记写作统计、
+ *   scheduleStatsRefresh（dirty 由会话层 applyLocalEdit 写入 session store，见评论12 第2项）；
  * - **contentChanged=false**（纯 selection/cursor-only）：不进持久化状态机 —
  *   不置 Unsaved、不置 dirty、不 scheduleAutoSave、不改 wordCount、不记统计。
  *   会话层 selection/revision 由 EditorWindowHost 的 onLocalEdit/onExternalEdit
@@ -41,9 +41,8 @@ fun EditorViewModel.onEditorApplied(event: EditorAppliedEvent) {
 
     // #624 评论9：不再每键存 content — 只更新 saveStatus。
     _uiState.value = currentState.copy(saveStatus = SaveStatus.Unsaved)
-    contentDirty = true
-    // #624 评论11 第2项：Save/Clear 决策统一在保存路径按 contentDirty + 有效
-    // lease.text 判定（EditorSaveOps）— 不在此维护布尔侧信道。
+    // #624 评论12 第2项：dirty 唯一真值在 session store（applyLocalEdit 经
+    // EditorSessionEditOps 写入 localDirty）— ViewModel 不再维护第二份 contentDirty。
     scheduleAutoSave()
 
     // #624 评论9：即时增量维护 wordCount — 不再每键全文 calculateWordCount。

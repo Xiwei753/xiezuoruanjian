@@ -8,13 +8,16 @@ package com.xiwei.sujian.feature.editor.ui
 import android.app.Application
 import com.xiwei.sujian.R
 import com.xiwei.sujian.feature.editor.session.DocumentFactOrigin
+import com.xiwei.sujian.feature.editor.session.DocumentOperationLease
 import com.xiwei.sujian.feature.editor.session.DocumentVersion
 import com.xiwei.sujian.feature.editor.session.TargetDocumentFact
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
 import com.xiwei.sujian.feature.editor.session.documentCommittedVersionFor
+import com.xiwei.sujian.feature.editor.session.markSaved
 import com.xiwei.sujian.feature.editor.session.prepareTargetSessionForCommit
 import com.xiwei.sujian.feature.editor.session.releasePreparedTarget
+import com.xiwei.sujian.feature.editor.session.toSaveToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
@@ -144,10 +147,29 @@ fun EditorViewModel.confirmEditorAttached(targetId: String) {
 // #597：章节切换事务收敛 — 旧章节保存/清空收敛到独立函数，事务本体只保留
 // 串行流程（保存→加载→预准备→提交）与 3 个可见提交边界检查；回滚路径统一
 // 走 restoreAfterSwitch / rollbackAfterLoadFailure。
+// #624 评论12 第2项：保存完成统一提交（回执 + markSaved）— 切章保存成功后
+// 持久 session 的 DocumentState.localDirty 必须清掉，否则后面的同步事实会被
+// IgnoreDirtyConflict 拦截。
+private fun EditorViewModel.commitSwitchSave(
+    lease: DocumentOperationLease,
+    hash: String,
+) {
+    saveReceipts.record(lease.toSaveToken(hash))
+    // #624 评论12 第2项：切章保存成功必须 markSaved 提交回 session 文档状态 —
+    // 但只有 lease 仍 current 且 revision 未前进时才清 localDirty（切章保存期间
+    // 迟到按键会推进 revision，不得把新输入误标为已落盘）。
+    val coordinator = _sessionCoordinator ?: return
+    if (coordinator.isDocumentOperationLeaseCurrent(lease) &&
+        coordinator.sessionState.revision == lease.rustRevision
+    ) {
+        coordinator.markSaved(lease.targetId, DocumentVersion(contentHash = hash))
+    }
+}
+
 private suspend fun EditorViewModel.saveChapterContentForSwitch(
     session: EditorSession,
     content: String,
-    revision: Long,
+    lease: DocumentOperationLease,
 ): Boolean =
     saveMutex.withLock {
         try {
@@ -161,15 +183,7 @@ private suspend fun EditorViewModel.saveChapterContentForSwitch(
                     )
             ) {
                 is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> {
-                    result.data?.contentHash?.let { hash ->
-                        saveReceipts.record(
-                            buildSaveToken(
-                                chapterTargetId(session.projectId, session.volumeId, session.chapterId),
-                                revision,
-                                hash,
-                            ),
-                        )
-                    }
+                    commitSwitchSave(lease, result.data?.contentHash ?: "")
                     true
                 }
                 is com.xiwei.sujian.core.interop.common.BridgeResult.Error -> {
@@ -200,7 +214,7 @@ private suspend fun EditorViewModel.saveChapterContentForSwitch(
 
 private suspend fun EditorViewModel.clearChapterContentForSwitch(
     session: EditorSession,
-    revision: Long,
+    lease: DocumentOperationLease,
 ): Boolean =
     saveMutex.withLock {
         try {
@@ -213,15 +227,7 @@ private suspend fun EditorViewModel.clearChapterContentForSwitch(
                     )
             ) {
                 is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> {
-                    result.data?.contentHash?.let { hash ->
-                        saveReceipts.record(
-                            buildSaveToken(
-                                chapterTargetId(session.projectId, session.volumeId, session.chapterId),
-                                revision,
-                                hash,
-                            ),
-                        )
-                    }
+                    commitSwitchSave(lease, result.data?.contentHash ?: "")
                     true
                 }
                 is com.xiwei.sujian.core.interop.common.BridgeResult.Error -> {
@@ -243,47 +249,6 @@ private suspend fun EditorViewModel.clearChapterContentForSwitch(
             false
         }
     }
-
-/**
- * #624 评论10 第2项：离开正文（章节关闭）前保存当前真实正文。
- *
- * 与切章同一入口：从 Rust session 的真实 snapshot/lease（按 target 取得，
- * 活动窗口/Detached 持久 session 同一入口）取 text + revision，不回退
- * `_uiState.content`（评论9 后本地输入不再更新它 — 保存旧正文会把刚输入
- * 的内容覆盖回磁盘）。
- *
- * 返回 true 表示可安全关闭（已保存或无需保存）；false 表示拿不到真实
- * snapshot（未注册/session 已关/快照缺失/错版）或落盘失败 — 调用方必须
- * 中止关闭，保留 Detached session 与未落盘正文，绝不伪造空正文保存
- * （否则旧章节会被清空）。
- */
-suspend fun EditorViewModel.saveTargetBeforeClose(
-    targetId: String,
-    projectId: String,
-    volumeId: String,
-    chapterId: String,
-): Boolean {
-    // #624 评论10 第1项：只有 snapshot 存在且 revision 匹配才返回 lease。
-    val lease = _sessionCoordinator?.issueDocumentOperationLease(targetId)
-    if (lease == null) {
-        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-        return false
-    }
-    val session = EditorSession(java.util.UUID.randomUUID().toString(), projectId, volumeId, chapterId)
-    val content = lease.text
-    // #595 七：revision 从 lease 取，与正文同源（真实 snapshot）。
-    val revision = lease.rustRevision
-    // #624 评论11 第2项：空正文判定只看原始字符串 — "\n"、连续空行、只含空格/
-    // 制表符的段落都是用户正文，原样保存；只有真正的 "" 且 contentDirty
-    // （用户删空）才走 Clear；未编辑过的空正文无需保存。
-    return if (content.isNotEmpty()) {
-        saveChapterContentForSwitch(session, content, revision)
-    } else if (contentDirty) {
-        clearChapterContentForSwitch(session, revision)
-    } else {
-        true
-    }
-}
 
 /** #595 一：加载/session 预准备失败回滚 — 恢复旧 EditorUiState 与输入冻结。 */
 private fun EditorViewModel.rollbackAfterLoadFailure(
@@ -330,18 +295,14 @@ private suspend fun EditorViewModel.switchSaveOldChapter(
         inputFrozen = false
         return ChapterSwitchResult.SaveFailed(oldSession)
     }
-    val content = lease.text
-    // #595 七：保存旧章节也记录保存回执（revision 从 lease 取，与正文同源）。
-    val oldRevision = lease.rustRevision
-    // #624 评论11 第2项：旧章节保存只看 contentDirty + lease.text：未 dirty 不保存；
-    // dirty + 空正文（用户删空）→ Clear — 不得走 else true 让磁盘旧正文残留。
+    // #624 评论12 第2项：旧章节保存只看 lease.localDirty + lease.text：未 dirty
+    // 无事可做（不再无条件重写非空章节）；dirty + 空正文（用户删空）→ Clear —
+    // 不得走 else true 让磁盘旧正文残留。正文/revision 都来自真实 snapshot。
     val saveOk =
-        if (content.isNotEmpty()) {
-            saveChapterContentForSwitch(oldSession, content, oldRevision)
-        } else if (contentDirty) {
-            clearChapterContentForSwitch(oldSession, oldRevision)
-        } else {
-            true
+        when {
+            !lease.localDirty -> true
+            lease.text.isEmpty() -> clearChapterContentForSwitch(oldSession, lease)
+            else -> saveChapterContentForSwitch(oldSession, lease.text, lease)
         }
 
     if (!saveOk) {
@@ -633,7 +594,8 @@ suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
                 editorEnabled = true,
                 saveStatus = SaveStatus.Idle,
             )
-        contentDirty = false
+        // #624 评论12 第2项：dirty 唯一真值在 session store — 加载新章节时
+        // 记录由 commitPreparedSession 新建（localDirty=false），不再有 ViewModel 第二份。
         // #595 七：加载即记录磁盘版本回执（revision 0 — 尚未编辑，屏幕与磁盘一致），
         // 同步前 flush 不把"从未保存"误判为假成功。
         saveReceipts.record(
@@ -706,7 +668,8 @@ fun EditorViewModel.applyExternalContentToUi(
             chapterHash = fileHash,
             saveStatus = SaveStatus.Saved,
         )
-    contentDirty = false
+    // #624 评论12 第2项：dirty 唯一真值在 session store — 外部 reset 由
+    // applyExternalContentFact/resetPersistentSession 清 localDirty，不再有 ViewModel 第二份。
     // #595 七：同步合并内容已由 Core 写入磁盘 — 记录回执（revision 取
     // reset 后的真实 session revision），同步后 flush 不误判为未保存。
     val revision = _sessionCoordinator?.sessionState?.revision ?: 0L

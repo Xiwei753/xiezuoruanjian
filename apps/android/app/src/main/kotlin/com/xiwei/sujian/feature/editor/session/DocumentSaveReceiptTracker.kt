@@ -79,3 +79,18 @@ class DocumentSaveReceiptTracker {
         receipts.clear()
     }
 }
+
+/**
+ * #624 评论12 第2项：由权威 [DocumentOperationLease] 直接构造保存令牌 —
+ * 保存完成/Flush 校验只消费本次签发的 lease 字段，不重读"此刻的
+ * currentInputLease"（保存期间输入/切章可能已使当前 lease 前进）。
+ */
+fun DocumentOperationLease.toSaveToken(textHash: String): DocumentSaveReceiptTracker.SaveToken =
+    DocumentSaveReceiptTracker.SaveToken(
+        operationId = operationId,
+        targetId = targetId,
+        coreSessionId = coreSessionId,
+        inputEpoch = inputEpoch,
+        rustRevision = rustRevision,
+        textHash = textHash,
+    )

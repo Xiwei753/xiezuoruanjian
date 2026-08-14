@@ -39,21 +39,23 @@ data class ChapterKey(
 )
 
 sealed class SaveCommand {
+    /**
+     * #624 评论12 第2项：保存命令携带本次权威 [DocumentOperationLease] —
+     * 完成提交（回执/markSaved/UI 状态）只消费 lease 字段，不重读当前输入 lease。
+     */
     data class Save(
         val content: String,
         val session: EditorSession,
-        val revisionAtEnqueue: Long,
+        val lease: com.xiwei.sujian.feature.editor.session.DocumentOperationLease,
     ) : SaveCommand()
 
     data class Clear(
         val session: EditorSession,
-        val revisionAtEnqueue: Long,
+        val lease: com.xiwei.sujian.feature.editor.session.DocumentOperationLease,
     ) : SaveCommand()
 
     data class Flush(
-        val targetId: String,
-        val sessionId: String,
-        val requiredRustRevision: Long,
+        val lease: com.xiwei.sujian.feature.editor.session.DocumentOperationLease,
         val reply: kotlinx.coroutines.CompletableDeferred<Boolean>,
     ) : SaveCommand()
 }

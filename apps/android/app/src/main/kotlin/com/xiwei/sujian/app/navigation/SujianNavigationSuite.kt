@@ -1,6 +1,7 @@
 package com.xiwei.sujian.app.navigation
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.EnterTransition
@@ -31,8 +32,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
-import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
-import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldPredictiveBackHandler
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -68,6 +67,7 @@ import com.xiwei.sujian.app.presentation.SujianChromeAction
 import com.xiwei.sujian.app.presentation.SujianChromeSpec
 import com.xiwei.sujian.app.presentation.rememberAndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.rememberProjectActions
+import com.xiwei.sujian.app.state.ActiveDocumentGate
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
 import com.xiwei.sujian.core.designsystem.component.SujianSnackbar
 import com.xiwei.sujian.core.designsystem.component.SujianTopAppBar
@@ -78,6 +78,7 @@ import com.xiwei.sujian.feature.project.ui.ProjectNavigationState
 import com.xiwei.sujian.feature.project.ui.ProjectWorkspaceScreen
 import com.xiwei.sujian.feature.project.ui.buildInitialHistory
 import com.xiwei.sujian.feature.project.ui.deriveRestoreDestination
+import com.xiwei.sujian.feature.project.ui.guardedBack
 import com.xiwei.sujian.feature.settings.ui.SettingsRoute
 import com.xiwei.sujian.feature.starmap.ui.StarMapPlaceholderScreen
 import com.xiwei.sujian.feature.stats.ui.StatsScreen
@@ -186,7 +187,9 @@ private fun rememberSujianTopBarNavigation(
                 if (workspaceNavState.canNavigateBack) {
                     {
                         env.coroutineScope.launch {
-                            workspaceNavState.back()
+                            // #624 评论12 第1项：顶栏返回统一走 guardedBack —
+                            // 先保存活动正文（ActiveDocumentGate flush），成功才导航离开。
+                            workspaceNavState.guardedBack()
                         }
                     }
                 } else {
@@ -571,8 +574,17 @@ private fun rememberSujianWorkspaceNavState(
 }
 
 /** 工作区返回处理 — 系统返回/预测返回（正文→章节树→作品列表）。
- * NavDisplay 只在全局栈可弹出（如设置页）时处理返回；Works 根时由这里接管。 */
-@OptIn(ExperimentalMaterial3AdaptiveApi::class)
+ * NavDisplay 只在全局栈可弹出（如设置页）时处理返回；Works 根时由这里接管。
+ *
+ * #624 评论12 第1项：预测返回不再用 ThreePaneScaffoldPredictiveBackHandler
+ * （它会自己提交 navigator.navigateBack，保存来不及做）— 改用
+ * androidx.activity.compose.PredictiveBackHandler：
+ * - 手势过程把 BackEventCompat.progress 喂给 navigator.seekBack；
+ * - 手势真正完成后先 ActiveDocumentGate.flushActiveDocument()（保存活动正文）；
+ * - 保存成功再真正导航离开（back()）；
+ * - 保存失败把 seek 复位到 0f，保持 Editor 目的地不变。
+ *
+ * 系统返回（非预测路径）同样只调用 guardedBack 这一个入口。 */
 @Composable
 private fun SujianWorkspaceBackEffects(
     currentRoute: SujianRoute,
@@ -580,13 +592,22 @@ private fun SujianWorkspaceBackEffects(
     coroutineScope: CoroutineScope,
 ) {
     if (currentRoute is SujianRoute.Works) {
-        ThreePaneScaffoldPredictiveBackHandler(
-            navigator = workspaceNavState.navigator,
-            backBehavior = BackNavigationBehavior.PopUntilScaffoldValueChange,
-        )
+        PredictiveBackHandler(enabled = workspaceNavState.canNavigateBack) { progressFlow ->
+            // 手势过程：只 seek 过渡进度，不提交导航。
+            progressFlow.collect { event ->
+                workspaceNavState.seekBack(event.progress)
+            }
+            // 手势真正完成：先保存活动正文，保存成功才导航离开。
+            if (ActiveDocumentGate.flushActiveDocument()) {
+                workspaceNavState.back()
+            } else {
+                // 保存失败 — 复位 seek，保持 Editor 目的地（正文不丢）。
+                workspaceNavState.seekBack(0f)
+            }
+        }
         BackHandler(enabled = workspaceNavState.canNavigateBack) {
             coroutineScope.launch {
-                workspaceNavState.back()
+                workspaceNavState.guardedBack()
             }
         }
     }

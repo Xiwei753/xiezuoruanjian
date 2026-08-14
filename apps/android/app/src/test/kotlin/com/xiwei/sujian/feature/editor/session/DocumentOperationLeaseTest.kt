@@ -312,4 +312,35 @@ class DocumentOperationLeaseByTargetTest {
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         assertNull(coordinator.issueDocumentOperationLease("a"))
     }
+
+    /**
+     * #624 评论12 第2项：lease.localDirty 唯一真值来自对应 target 的 store 记录 —
+     * 未编辑为 false；applyLocalEdit(contentChanged=true) 后为 true。
+     * 保存入口只消费 lease 的 localDirty，不再读 ViewModel 第二份 contentDirty。
+     */
+    @Test
+    fun issueLease_carriesLocalDirtyFromStoreRecord() {
+        val coordinator = createCoordinator()
+        assertTrue(commitWithSession(coordinator, "a", "正文", sessionId = 1UL, revision = 3L))
+        coordinator.installSnapshot(1UL, "正文", revision = 3L)
+
+        val cleanLease = coordinator.issueDocumentOperationLease()
+        assertNotNull(cleanLease)
+        assertFalse("未编辑时 lease.localDirty 必须为 false", cleanLease!!.localDirty)
+
+        // 真实输入路径：本地编辑事件置 store localDirty（revision 不变，保持 snapshot 一致）。
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput(
+                targetId = "a",
+                revision = 3L,
+                transactionId = 1L,
+                lease = coordinator.currentInputLease()!!,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = 1),
+            ),
+        )
+        val dirtyLease = coordinator.issueDocumentOperationLease()
+        assertNotNull(dirtyLease)
+        assertTrue("输入后 lease.localDirty 必须为 true", dirtyLease!!.localDirty)
+    }
 }

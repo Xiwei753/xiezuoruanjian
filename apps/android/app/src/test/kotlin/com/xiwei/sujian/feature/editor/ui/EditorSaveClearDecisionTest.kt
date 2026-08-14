@@ -4,10 +4,13 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.editor.session.ChapterContentSavePort
+import com.xiwei.sujian.feature.editor.session.EditorContentDelta
+import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
 import com.xiwei.sujian.feature.editor.session.TargetSnapshot
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
+import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
@@ -35,13 +38,14 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
- * #624 评论11 第2项：保存/切章决策统一为「contentDirty + 有效 lease.text」，
- * 删除 contentExplicitlyCleared 布尔侧信道。
+ * #624 评论12 第2项：保存/切章决策只消费权威 lease（`localDirty + text`），
+ * 删除 ViewModel 第二份 contentDirty — dirty 唯一真值在 session store
+ * （applyLocalEdit 写入，issueDocumentOperationLease 从记录填入 lease）。
  *
- * 关键回归：用户把正文删到 "" 后（contentDirty=true，snapshot 正文已确定为空），
- * 在 autosave 跑完之前立刻 requestSave/切章/关闭，旧实现走
+ * 关键回归：用户把正文删到 "" 后（store localDirty=true，snapshot 正文已确定为空），
+ * 在 autosave 跑完之前立刻 requestSave/切章，旧实现走
  * `contentExplicitlyCleared == false → else true`，磁盘旧正文不会被清掉。
- * 新实现 dirty+空正文 → Clear；未 dirty → 无事可做。
+ * 新实现 `!lease.localDirty → NoOp；dirty+空正文 → Clear；dirty+非空 → Save`。
  *
  * 测试环境无 native 库：真实 bridge 的 clearChapterContent 返回 NotLoaded →
  * clearChapterContentInternal/clearChapterContentForSwitch 报 SaveFailed。
@@ -165,6 +169,23 @@ class EditorSaveClearDecisionTest {
     }
 
     /**
+     * #624 评论12 第2项：dirty 唯一真值在 session store — 通过真实输入路径
+     * （applyLocalEdit contentChanged=true）置位，不再读写 ViewModel contentDirty。
+     */
+    private fun markDirty() {
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput(
+                targetId = TARGET_ID,
+                revision = coordinator.sessionState.revision,
+                transactionId = 1L,
+                lease = coordinator.currentInputLease()!!,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = 1),
+            ),
+        )
+    }
+
+    /**
      * 等真实 IO save actor 把 saveStatus 置成 SaveFailed。
      * 轮询必须同时：yield() 推进测试调度器（跑 Main 上的 autosave 协程）+ 真实
      * sleep 让 IO 线程获得 CPU（actor/FFI 调用是真实线程，不受虚拟时间控制）。
@@ -190,7 +211,7 @@ class EditorSaveClearDecisionTest {
     fun requestSave_dirtyEmptyContent_attemptsClear_notFakeSuccess() =
         runTest {
             commitActiveSession(text = "", revision = 1L)
-            vm.contentDirty = true
+            markDirty()
             vm._uiState.value = vm._uiState.value.copy(saveStatus = SaveStatus.Unsaved)
             vm.startSaveActor()
 
@@ -206,7 +227,7 @@ class EditorSaveClearDecisionTest {
         }
 
     /**
-     * 未编辑（!contentDirty）时保存无事可做 — 直接成功，不发任何命令
+     * 未编辑（!lease.localDirty）时保存无事可做 — 直接成功，不发任何命令
      * （旧实现发 Flush 且无回执 → 假失败）。
      */
     @Test
@@ -228,7 +249,7 @@ class EditorSaveClearDecisionTest {
     fun requestSave_dirtyNonEmptyContent_savesThroughPort() =
         runTest {
             commitActiveSession(text = "真实正文", revision = 1L)
-            vm.contentDirty = true
+            markDirty()
             vm._uiState.value = vm._uiState.value.copy(saveStatus = SaveStatus.Unsaved)
             vm.startSaveActor()
 
@@ -255,7 +276,7 @@ class EditorSaveClearDecisionTest {
                 )
             assertTrue(coordinator.commitPreparedSession(handle))
             vm.currentSession = EditorSession("s1", "p", "v", "a")
-            vm.contentDirty = true
+            markDirty()
             vm._uiState.value = vm._uiState.value.copy(saveStatus = SaveStatus.Unsaved, content = "冷路径旧正文")
             vm.startSaveActor()
 
@@ -266,52 +287,17 @@ class EditorSaveClearDecisionTest {
             assertEquals("snapshot 不可得时不得误报 Saved", SaveStatus.Unsaved, vm.uiState.value.saveStatus)
         }
 
-    // ── saveTargetBeforeClose：章节关闭/切章前保存 ──
-
-    /**
-     * 删空正文后立刻关闭章节：dirty+空 snapshot → 必须尝试 Clear（旧实现
-     * `else true` 直接放行，磁盘旧正文不会被清掉）。
-     */
-    @Test
-    fun saveTargetBeforeClose_dirtyEmptyContent_attemptsClear() =
-        runTest {
-            commitActiveSession(text = "", revision = 1L)
-            vm.contentDirty = true
-            vm._uiState.value = vm._uiState.value.copy(saveStatus = SaveStatus.Unsaved)
-
-            val safe = vm.saveTargetBeforeClose(TARGET_ID, "p", "v", "a")
-
-            assertFalse(
-                "#624 评论11 第2项：dirty+空正文关闭前必须尝试 Clear — " +
-                    "拿不到真实落盘确认不得假装无事",
-                safe,
-            )
-            assertEquals(SaveStatus.SaveFailed, vm.uiState.value.saveStatus)
-        }
-
-    /** 未编辑的空正文关闭前无需保存（保持旧语义，防止空覆盖保护误伤）。 */
-    @Test
-    fun saveTargetBeforeClose_notDirtyEmptyContent_noSave() =
-        runTest {
-            commitActiveSession(text = "", revision = 1L)
-
-            val safe = vm.saveTargetBeforeClose(TARGET_ID, "p", "v", "a")
-
-            assertTrue("未 dirty 的空正文无需保存即可关闭", safe)
-            assertEquals(0, savePort.calls)
-        }
-
     // ── scheduleAutoSave：自动保存统一决策 ──
 
     /**
-     * autosave 到点后同样按 dirty+lease.text 决策：dirty+空 → Clear 尝试
+     * autosave 到点后同样按 lease.localDirty + lease.text 决策：dirty+空 → Clear 尝试
      * （无 native → SaveFailed）。
      */
     @Test
     fun autoSave_dirtyEmptyContent_attemptsClear() =
         runTest {
             commitActiveSession(text = "", revision = 1L)
-            vm.contentDirty = true
+            markDirty()
             vm._uiState.value =
                 vm._uiState.value.copy(
                     saveStatus = SaveStatus.Unsaved,
@@ -365,7 +351,7 @@ class EditorSaveClearDecisionTest {
                 )
             assertTrue(coordinator.commitPreparedSession(handle))
             vm.currentSession = EditorSession("s1", "p", "v", "a")
-            vm.contentDirty = true
+            markDirty()
             vm._uiState.value =
                 vm._uiState.value.copy(
                     saveStatus = SaveStatus.Unsaved,

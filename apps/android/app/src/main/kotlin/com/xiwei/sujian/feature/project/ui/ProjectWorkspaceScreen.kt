@@ -31,7 +31,6 @@ import com.xiwei.sujian.feature.editor.ui.EditorViewModel
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
 import com.xiwei.sujian.feature.editor.ui.requestOpenChapter
-import com.xiwei.sujian.feature.editor.ui.saveTargetBeforeClose
 import kotlinx.coroutines.launch
 
 /**
@@ -105,31 +104,25 @@ internal fun ProjectWorkspaceScreen(
     }
     // 会话业务选择与导航位置的对账：导航位置回退到章节列表时清 chapter 选择，
     // 回退到作品列表时清 project 选择；进入正文不清除任何选择。
+    // #624 评论12 第1项：离开正文的保存已由 guardedBack（ActiveDocumentGate
+    // flush）在导航提交前完成 — 这里不再补保存（旧实现在导航完成后才调用
+    // saveTargetBeforeClose，保存失败只能阻止 closeTarget，阻止不了导航本身）。
+    // 导航成功以后只做两件事：关闭已经成功离开的 target，并同步通知 ViewModel
+    // 完成业务关闭（currentSession=null，避免"Rust session 已关闭，ViewModel
+    // 仍宣称 A 是当前章节"）。
     LaunchedEffect(workspaceNavState.currentLocation) {
         val location = workspaceNavState.currentLocation
         val previous = lastWorkspaceLocation
         lastWorkspaceLocation = location
         val previousEditor = previous as? WorkspaceLocation.Editor
         if (previousEditor != null && location !is WorkspaceLocation.Editor) {
-            // #624 评论10 第2项：离开正文先保存当前真实正文（snapshot lease），
-            // 再关闭 Rust session — autosave debounce 窗口内离开不得丢未落盘输入；
-            // 拿不到真实 snapshot 或落盘失败时中止关闭（session 保留 Detached，
-            // 正文不丢），绝不回退 _uiState.content 旧正文。
             val targetId =
                 "chapter-body:${previousEditor.projectId}:${previousEditor.volumeId}:${previousEditor.chapterId}"
-            val safeToClose =
-                editorViewModel.saveTargetBeforeClose(
-                    targetId,
-                    previousEditor.projectId,
-                    previousEditor.volumeId,
-                    previousEditor.chapterId,
-                )
-            if (safeToClose) {
-                editorHost?.closeTarget(
-                    targetId,
-                    com.xiwei.sujian.feature.editor.session.SessionCloseReason.WORKSPACE_NAVIGATION,
-                )
-            }
+            editorHost?.closeTarget(
+                targetId,
+                com.xiwei.sujian.feature.editor.session.SessionCloseReason.WORKSPACE_NAVIGATION,
+            )
+            editorViewModel.finishWorkspaceClose(targetId)
         }
         when (location) {
             is WorkspaceLocation.ProjectList -> {
@@ -245,7 +238,7 @@ internal fun ProjectWorkspaceScreen(
                                 } else {
                                     appState.clearChapterSelection()
                                     coroutineScope.launch {
-                                        workspaceNavState.back()
+                                        workspaceNavState.guardedBack()
                                     }
                                 }
                             },

@@ -5,11 +5,13 @@ import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
 import com.xiwei.sujian.feature.editor.session.EditorContentDelta
+import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
 import com.xiwei.sujian.feature.editor.session.TargetSnapshot
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
+import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
 import com.xiwei.sujian.feature.editor.session.writingEventSourceFrom
 import com.xiwei.sujian.feature.project.data.ChapterRepository
@@ -84,7 +86,7 @@ class EditorContentOpsCauseTest {
         )
     }
 
-    /** 提交一个活动会话并同步 ViewModel 到已保存状态（saveStatus=Saved, contentDirty=false）。 */
+    /** 提交一个活动会话并同步 ViewModel 到已保存状态（saveStatus=Saved, 无 dirty）。 */
     private fun commitSavedSession(
         text: String,
         revision: Long,
@@ -107,6 +109,34 @@ class EditorContentOpsCauseTest {
         vm.applyExternalContentToUi(TARGET_ID, text, "hash-init")
     }
 
+    /**
+     * #624 评论12 第2项：dirty 唯一真值在 session store — 与窗口层一致，
+     * 会话层经 applyLocalEdit 按 contentChanged 更新 localDirty。
+     */
+    private fun driveSessionEdit(
+        revision: Long,
+        contentChanged: Boolean,
+        insertedChars: Int = 0,
+    ) {
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput(
+                targetId = TARGET_ID,
+                revision = revision,
+                transactionId = 1L,
+                operationKind = if (contentChanged) EditorOperationKind.INSERT else EditorOperationKind.SELECTION,
+                lease = coordinator.currentInputLease()!!,
+                contentChanged = contentChanged,
+                contentDelta =
+                    EditorContentDelta(
+                        insertedChars = insertedChars,
+                        insertedNonWhitespaceChars = if (contentChanged) insertedChars else 0,
+                    ),
+            ),
+        )
+    }
+
+    private fun storeLocalDirty(): Boolean = coordinator.store.record(TARGET_ID)?.documentState?.localDirty ?: false
+
     // ── 5B: onEditorApplied 状态机门控 ──
 
     /**
@@ -118,12 +148,14 @@ class EditorContentOpsCauseTest {
         runTest(UnconfinedTestDispatcher()) {
             commitSavedSession(text = "正文", revision = 1L)
             assertEquals("前置必须是已保存", SaveStatus.Saved, vm.uiState.value.saveStatus)
-            assertFalse("前置必须不 dirty", vm.contentDirty)
+            assertFalse("前置必须不 dirty", storeLocalDirty())
             val wordCountBefore = vm.uiState.value.wordCount
             assertNull("前置 autoSaveJob 必须为 null", vm.autoSaveJob)
             val statsLastEventMsBefore = vm.statsLastEventMs
 
-            // 纯选区移动 — contentChanged=false, cause=Typing（光标移动也用 Typing cause）。
+            // 会话层：cursor-only（contentChanged=false）不得置 store localDirty。
+            driveSessionEdit(revision = 1L, contentChanged = false)
+            // UI 层：纯选区移动 — contentChanged=false, cause=Typing（光标移动也用 Typing cause）。
             vm.onEditorApplied(
                 EditorAppliedEvent(
                     revision = 1L,
@@ -143,7 +175,7 @@ class EditorContentOpsCauseTest {
                 SaveStatus.Saved,
                 vm.uiState.value.saveStatus,
             )
-            assertFalse("cursor-only 不得置 dirty", vm.contentDirty)
+            assertFalse("cursor-only 不得置 dirty", storeLocalDirty())
             assertEquals("cursor-only 不得改 wordCount", wordCountBefore, vm.uiState.value.wordCount)
             assertNull("cursor-only 不得 scheduleAutoSave", vm.autoSaveJob)
             assertEquals(
@@ -155,7 +187,7 @@ class EditorContentOpsCauseTest {
 
     /**
      * contentChanged=true 事件进入持久化状态机 —
-     * saveStatus=Unsaved、contentDirty=true、scheduleAutoSave 调用、wordCount 更新、统计记录。
+     * saveStatus=Unsaved、store localDirty=true、scheduleAutoSave 调用、wordCount 更新、统计记录。
      */
     @Test
     fun onEditorApplied_contentChanged_setsUnsaved() =
@@ -163,6 +195,8 @@ class EditorContentOpsCauseTest {
             commitSavedSession(text = "正文", revision = 1L)
             val wordCountBefore = vm.uiState.value.wordCount
 
+            // 会话层：真实输入路径置 store localDirty。
+            driveSessionEdit(revision = 2L, contentChanged = true, insertedChars = 3)
             vm.onEditorApplied(
                 EditorAppliedEvent(
                     revision = 2L,
@@ -178,7 +212,7 @@ class EditorContentOpsCauseTest {
             )
 
             assertEquals("contentChanged 必须置 Unsaved", SaveStatus.Unsaved, vm.uiState.value.saveStatus)
-            assertTrue("contentChanged 必须置 dirty", vm.contentDirty)
+            assertTrue("contentChanged 必须置 store localDirty", storeLocalDirty())
             assertNotNull("contentChanged 必须 scheduleAutoSave", vm.autoSaveJob)
             assertTrue(
                 "contentChanged 必须更新 wordCount",

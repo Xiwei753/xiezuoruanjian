@@ -223,7 +223,7 @@ class EditorViewModel(
 
     internal val saveMutex = Mutex()
 
-    // #624 评论9：pendingSaveContent 已删除 — 保存期间继续输入只标记 contentDirty=true。
+    // #624 评论9：pendingSaveContent 已删除 — 保存期间继续输入只标记 dirty（session store）。
     internal var autoSaveJob: kotlinx.coroutines.Job? = null
 
     /** #624 评论9：延迟刷新 speed 的可取消 Job。 */
@@ -247,12 +247,9 @@ class EditorViewModel(
      */
     internal val chapterLoadEpoch = java.util.concurrent.atomic.AtomicLong(0L)
 
-    /**
-     * #595 七：屏幕正文是否自加载/外部应用以来被编辑过 — 未编辑的空章节
-     * （磁盘与屏幕一致）允许直接 flush；编辑过的正文必须得到保存回执。
-     */
-    @Volatile
-    internal var contentDirty = false
+    // #624 评论12 第2项：contentDirty 已删除 — dirty 唯一真值在 session store
+    // （applyLocalUpdate 写入 DocumentState.localDirty，issueDocumentOperationLease
+    // 从记录填入 lease.localDirty），ViewModel 不再维护第二份。
 
     /** #595 四：ActiveDocumentGate 注册句柄 — onCleared 只关闭自己的注册。 */
     internal var gateRegistration: com.xiwei.sujian.app.state.ActiveDocumentGate.Registration? = null
@@ -385,16 +382,6 @@ class EditorViewModel(
         gateRegistration?.close()
         gateRegistration = null
         try {
-            val session = currentSession
-            if (session != null) {
-                // #624 评论10 第2项：兜底保存从真实 snapshot/lease 取正文 —
-                // 不回退 _uiState.content（评论9 后本地输入不再更新它，保存旧正文
-                // 会把刚输入的内容覆盖回磁盘）。
-                saveFallbackOnClear(session)
-            }
-        } catch (_: Exception) {
-        }
-        try {
             // #624 评论11 第3项：flush 入队同一 writer actor — 不在主线程直接刷盘；
             // Record/Flush 顺序由进程级 Channel 决定。
             statsRepository.flushWritingStats()
@@ -404,6 +391,30 @@ class EditorViewModel(
             recentEditsRepository.flushRecentEdits()
         } catch (_: Exception) {
         }
+    }
+
+    /**
+     * #624 评论12 第1项：workspace 离开正文后的业务关闭收口。
+     *
+     * 由 [com.xiwei.sujian.feature.project.ui.ProjectWorkspaceScreen] 的 location
+     * observer 在导航成功离开 Editor 后调用（离开前的保存已由 guardedBack →
+     * ActiveDocumentGate flush 在导航提交前完成）。Rust session 已经由
+     * [com.xiwei.sujian.feature.editor.window.EditorWindowHost.closeTarget] 关闭，
+     * 这里清空 ViewModel 的章节身份：
+     *
+     * - `currentSession = null` — 从章节树再点 A，switchChapterLocked 不再命中
+     *   "相同章节直接 Success" 的 no-op，会走完整重新加载；点 B 也不会把已关闭
+     *   的 A 当 oldSession 去拿活动 lease（拿不到 → 误报 SaveFailed）；
+     * - 取消 autosave、关闭保存命令 channel；
+     * - UI 冷状态复位（保留设置字段），不再宣称 A 是当前正文。
+     */
+    fun finishWorkspaceClose(targetId: String) {
+        val session = currentSession ?: return
+        if (chapterTargetId(session.projectId, session.volumeId, session.chapterId) != targetId) return
+        currentSession = null
+        autoSaveJob?.cancel()
+        saveCommandChannel.close()
+        _uiState.value = EditorUiState(settings = _uiState.value.settings)
     }
 
     internal suspend fun emitErrorEvent(message: String) {
