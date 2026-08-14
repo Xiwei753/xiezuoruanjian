@@ -56,7 +56,7 @@ class DocumentOperationLeaseTest {
                 targetId = targetId,
                 sessionId = sessionId,
                 snapshot = TargetSnapshot(text, cursor, revision, 0, cursor),
-                newlyCreated = true,
+                mode = PreparedSessionMode.Created,
                 previousRecord = null,
             )
         return coordinator.commitPreparedSession(handle)
@@ -206,7 +206,7 @@ class DocumentOperationLeaseByTargetTest {
                 targetId = targetId,
                 sessionId = sessionId,
                 snapshot = TargetSnapshot(text, cursor, revision, 0, cursor),
-                newlyCreated = true,
+                mode = PreparedSessionMode.Created,
                 previousRecord = null,
             )
         return coordinator.commitPreparedSession(handle)

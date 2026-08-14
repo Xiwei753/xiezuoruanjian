@@ -125,7 +125,7 @@ class SessionLayerNoMutableStateTest {
                 targetId = "b",
                 sessionId = 5UL,
                 snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
-                newlyCreated = true,
+                mode = PreparedSessionMode.Created,
                 previousRecord = null,
             )
         assertTrue(coordinator.commitPreparedSession(handle))

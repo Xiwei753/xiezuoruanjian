@@ -204,7 +204,12 @@ private fun WritingPaneEditorAttachSync(
     WritingPaneEditorAttach(currentViewModel, coordinator, targetId, inputs)
 }
 
-/** #595 一：编辑器附着 — 切换失败/未提交章节禁止 beginEdit；附着后解除输入冻结。 */
+/** #595 一 / #624 评论16 问题3：编辑器附着 —
+ * 只有真正 [WindowBindingState.Attached] 且 windowId + targetId 都匹配才解除输入冻结。
+ * - Attached 且匹配 → confirmEditorAttached（解除冻结）；
+ * - Attaching → 等待 AndroidView factory/attachView() 推进到 Attached，不解除冻结；
+ * - Idle/Detached 且当前章节已提交 → beginEdit 发起绑定，不解除冻结；
+ * - beginEdit 返回 false 时保持冻结，由 session/window 状态机继续处理。 */
 @Composable
 private fun WritingPaneEditorAttach(
     currentViewModel: EditorViewModel,
@@ -225,22 +230,23 @@ private fun WritingPaneEditorAttach(
             return@LaunchedEffect
         }
         val binding = inputs.sessionState.bindingState
-        // #623 评论5：alreadyAttached 必须同时匹配 windowId + targetId —
-        // 配置变化/Activity 重建后新 EditorWindowHost 有新的 windowId，
-        // 只要会话层残留旧窗口的 Attached，新窗口就误以为"已有真实 View 绑定"
-        // 而跳过 beginEdit；旧窗口的 Attached 对新窗口一律不算已附着，必须重新走
-        // beginEdit -> Attaching -> attachView -> Attached。
-        val alreadyAttached =
-            binding is WindowBindingState.Attached &&
-                binding.windowId == coordinator.windowId &&
-                binding.targetId == targetId
-        if (!alreadyAttached && !inputs.uiState.loading) {
+        // #624 评论16 问题3：只有真正 Attached 且 windowId + targetId 都匹配才 confirmEditorAttached。
+        // 不再用"尝试附着"当完成信号 — beginEdit()==true 不等于 View 已真实绑定
+        // （sharedEditorView == null 时只是保存 pendingViewBind，状态仍是 Attaching）。
+        if (shouldConfirmEditorAttached(binding, coordinator.windowId, targetId)) {
+            currentViewModel.confirmEditorAttached(targetId)
+            return@LaunchedEffect
+        }
+        // Attaching：等待 AndroidView factory/attachView() 推进到 Attached，不解除冻结。
+        if (binding is WindowBindingState.Attaching) return@LaunchedEffect
+        // Idle/Detached 且当前章节已提交：发起 beginEdit，调用后直接返回，
+        // 等下一次 sessionStateFlow 状态变化。
+        // beginEdit 返回 false 时保持冻结，由 session/window 状态机继续处理，
+        // 不能把 ViewModel 提前宣布为可输入。
+        if (!inputs.uiState.loading) {
             coordinator.updateTargetText(targetId, inputs.uiState.content)
             coordinator.beginEdit(targetId, inputs.uiState.content.toByteArray(Charsets.UTF_8).size)
         }
-        // #595 一：新章节编辑器附着（或尝试附着）后解除输入冻结 —
-        // 提交→导航窗口期内旧 pane 无法写入新章节；附着后输入恢复正常。
-        currentViewModel.confirmEditorAttached(targetId)
     }
 }
 

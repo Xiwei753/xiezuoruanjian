@@ -107,3 +107,21 @@ fun shouldShowEditor(
         is WindowBindingState.Detaching -> false
         is WindowBindingState.Detached -> false
     }
+
+/**
+ * #624 评论16 问题3：confirmEditorAttached 的决策 — 只有 [WindowBindingState.Attached]
+ * 且 windowId + targetId 都匹配才返回 true。
+ *
+ * - Attached 且匹配 → true（真正 View 已绑定，解除输入冻结）；
+ * - Attaching → false（等待 AndroidView factory/attachView() 推进到 Attached，不解除冻结）；
+ * - Idle/Detached → false（beginEdit 发起绑定，不解除冻结）；
+ * - Attached 但 windowId/targetId 不匹配 → false（残留自其他窗口的绑定）。
+ */
+fun shouldConfirmEditorAttached(
+    bindingState: WindowBindingState,
+    windowId: String,
+    targetId: String,
+): Boolean =
+    bindingState is WindowBindingState.Attached &&
+        bindingState.windowId == windowId &&
+        bindingState.targetId == targetId

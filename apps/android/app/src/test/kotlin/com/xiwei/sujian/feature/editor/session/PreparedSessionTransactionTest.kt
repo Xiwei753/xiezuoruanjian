@@ -100,7 +100,7 @@ class PreparedSessionTransactionTest {
                 targetId = "b",
                 sessionId = 0UL,
                 snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
-                newlyCreated = true,
+                mode = PreparedSessionMode.Created,
                 previousRecord = null,
             )
         assertTrue(coordinator.commitPreparedSession(handle))
@@ -162,7 +162,7 @@ class PreparedSessionTransactionTest {
                 targetId = "b",
                 sessionId = 7UL,
                 snapshot = TargetSnapshot("textB", 5, 1L, 0, 5),
-                newlyCreated = false,
+                mode = PreparedSessionMode.Borrowed,
                 previousRecord = EditorSessionRecord("b", sessionId = 7UL),
             )
         assertFalse("复用事务记录不再指向 handle session 必须拒绝提交", coordinator.commitPreparedSession(handle))
@@ -181,7 +181,7 @@ class PreparedSessionTransactionTest {
                 targetId = "b",
                 sessionId = 7UL,
                 snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
-                newlyCreated = true,
+                mode = PreparedSessionMode.Created,
                 previousRecord = null,
             )
         assertTrue("新建 session 提交必须成功（不要求记录已存在该 sessionId）", coordinator.commitPreparedSession(handle))
@@ -205,7 +205,7 @@ class PreparedSessionTransactionTest {
                 targetId = "b",
                 sessionId = 7UL,
                 snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
-                newlyCreated = true,
+                mode = PreparedSessionMode.Created,
                 previousRecord = null,
             )
         // 模拟并发：直接通过复用事务把记录 sessionId 占用为 9UL。
@@ -236,7 +236,7 @@ class PreparedSessionTransactionTest {
                 // 与替换后的记录 sessionId 相同（0UL）— 属于本事务新建
                 sessionId = 0UL,
                 snapshot = TargetSnapshot("textB", 5, 1L, 0, 5),
-                newlyCreated = true,
+                mode = PreparedSessionMode.Created,
                 previousRecord = null,
             )
         coordinator.releasePreparedTarget(handle)
@@ -264,14 +264,14 @@ class PreparedSessionTransactionTest {
                 targetId = "b",
                 sessionId = 5UL,
                 snapshot = TargetSnapshot("t", 1, 0L, 0, 1),
-                newlyCreated = true,
+                mode = PreparedSessionMode.Created,
                 previousRecord = null,
             )
-        assertTrue(handle.newlyCreated)
+        assertTrue(handle.mode is PreparedSessionMode.Created)
         assertNull(handle.previousRecord)
         assertEquals(5UL, handle.sessionId)
-        val borrowed = handle.copy(newlyCreated = false, previousRecord = EditorSessionRecord("b"))
-        assertFalse(borrowed.newlyCreated)
+        val borrowed = handle.copy(mode = PreparedSessionMode.Borrowed, previousRecord = EditorSessionRecord("b"))
+        assertTrue(borrowed.mode is PreparedSessionMode.Borrowed)
         assertEquals("b", borrowed.previousRecord?.targetId)
     }
 
@@ -313,11 +313,11 @@ class PreparedSessionTransactionTest {
             handle.sessionId,
         )
         assertEquals(
-            "replacedSessionId 必须记录被替换的旧 session 100",
+            "mode 必须是 Replacement 且 oldSessionId 记录被替换的旧 session 100",
             100UL,
-            handle.replacedSessionId,
+            (handle.mode as PreparedSessionMode.Replacement).oldSessionId,
         )
-        assertTrue("candidate swap 时 newlyCreated 必须为 true", handle.newlyCreated)
+        assertTrue("candidate swap 时 mode 必须是 Replacement", handle.mode is PreparedSessionMode.Replacement)
         assertEquals(
             "prepare 不得关闭旧 session（candidate 失败/回滚时旧 session 仍可用）",
             0,
@@ -355,8 +355,8 @@ class PreparedSessionTransactionTest {
         assertNotNull("snapshot 一致时必须返回复用 handle", handle)
         handle!!
         assertEquals("复用既有 session ID 100", 100UL, handle.sessionId)
-        assertNull("复用时 replacedSessionId 必须为 null", handle.replacedSessionId)
-        assertFalse("复用时 newlyCreated 必须为 false", handle.newlyCreated)
+        assertTrue("复用时 mode 必须是 Borrowed", handle.mode is PreparedSessionMode.Borrowed)
+        assertFalse("复用时 mode 不得是 Replacement", handle.mode is PreparedSessionMode.Replacement)
         assertEquals("复用时不得创建 candidate", 0, coordinator.createCallCount())
         assertEquals("复用时不得关闭既有 session", 0, coordinator.closeCallCount(100UL))
     }
@@ -411,9 +411,8 @@ class PreparedSessionTransactionTest {
                 targetId = "b",
                 sessionId = 200UL,
                 snapshot = TargetSnapshot("newText", 7, 2L, 0, 7),
-                newlyCreated = true,
+                mode = PreparedSessionMode.Replacement(100UL),
                 previousRecord = coordinator.store.record("b"),
-                replacedSessionId = 100UL,
             )
         coordinator.installCandidateSnapshot(200UL, "newText", 2L)
 
@@ -458,9 +457,8 @@ class PreparedSessionTransactionTest {
                 targetId = "b",
                 sessionId = 200UL,
                 snapshot = TargetSnapshot("newText", 7, 2L, 0, 7),
-                newlyCreated = true,
+                mode = PreparedSessionMode.Replacement(100UL),
                 previousRecord = previousRecord,
-                replacedSessionId = 100UL,
             )
 
         coordinator.releasePreparedTarget(handle)
@@ -510,6 +508,81 @@ class PreparedSessionTransactionTest {
             100UL,
             coordinator.store.record("b")?.sessionId,
         )
+    }
+
+    // ── #624 评论16 问题1：prepare 不关闭旧 session + 回滚不覆盖新记录 ──
+
+    /**
+     * #624 评论16 问题1：prepare 阶段不得关闭旧 session —
+     * 无论 snapshot 读取失败还是 session 已失效，都不在 prepare 阶段 closeSession。
+     * 无效旧 session 也不要在 prepare 阶段清理，真正 commit 新 candidate 后再清旧 ID。
+     *
+     * 旧缺陷：prepareTargetSessionForCommit 在 querySnapshotForSession 返回 null 时
+     * 直接 closeSession(existingIdNonNull)，破坏旧 session 的 Undo/Redo/正文。
+     */
+    @Test
+    fun prepareTargetSessionForCommit_doesNotCloseOldSessionInAnyFailureCase() {
+        // 场景1：snapshot 读取失败（validateSession true 但 querySnapshotForSession null）
+        val coord1 = FakeSessionCoordinatorForPrepareSwap()
+        coord1.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
+        coord1.installExistingPersistentSession("b", 100UL, "oldText", 1L)
+        coord1.breakSnapshot(100UL)
+        coord1.prepareTargetSessionForCommit("b", "newText", 7)
+        assertEquals("snapshot 失败时 prepare 不得关闭旧 session", 0, coord1.closeCallCount(100UL))
+        assertEquals("snapshot 失败时 prepare 不得修改 store", 100UL, coord1.store.record("b")?.sessionId)
+
+        // 场景2：session 已失效（validateSession false）
+        val coord2 = FakeSessionCoordinatorForPrepareSwap()
+        coord2.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
+        coord2.installExistingPersistentSession("b", 100UL, "oldText", 1L)
+        coord2.invalidateSession(100UL)
+        coord2.prepareTargetSessionForCommit("b", "newText", 7)
+        assertEquals("session 失效时 prepare 不得 closeSession", 0, coord2.closeCallCount(100UL))
+    }
+
+    /**
+     * #624 评论16 问题1：回滚不得覆盖事务期间被推进的新记录 —
+     * candidate swap 和借用 session 的 abort 都不 store.put(previousRecord)。
+     *
+     * 旧缺陷：releaseCandidateSwap 无条件 store.put(previousRecord)，
+     * 事务期间记录被并发推进（另一个 commit/applyLocalEdit 把 sessionId 改成 300）后，
+     * 回滚把 sessionId 写回 100，丢失新记录。
+     */
+    @Test
+    fun releasePreparedTarget_doesNotOverwriteRecordAdvancedDuringTransaction() {
+        // 场景1：candidate swap 回滚
+        val coord1 = FakeSessionCoordinatorForPrepareSwap()
+        coord1.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
+        coord1.installExistingPersistentSession("b", 100UL, "oldText", 1L)
+        val prev1 = coord1.store.record("b")
+        val handle1 =
+            PreparedSessionHandle(
+                targetId = "b",
+                sessionId = 200UL,
+                snapshot = TargetSnapshot("newText", 7, 2L, 0, 7),
+                mode = PreparedSessionMode.Replacement(100UL),
+                previousRecord = prev1,
+            )
+        coord1.store.put(prev1!!.copy(sessionId = 300UL))
+        coord1.releasePreparedTarget(handle1)
+        assertEquals("candidate swap 回滚不得覆盖新记录", 300UL, coord1.store.record("b")?.sessionId)
+
+        // 场景2：借用 session 回滚
+        val coord2 = FakeSessionCoordinatorForPrepareSwap()
+        coord2.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
+        coord2.installExistingPersistentSession("b", 100UL, "sameText", 1L)
+        val prev2 = coord2.store.record("b")
+        val handle2 =
+            PreparedSessionHandle(
+                targetId = "b",
+                sessionId = 100UL,
+                snapshot = TargetSnapshot("sameText", 8, 1L, 0, 8),
+                mode = PreparedSessionMode.Borrowed,
+                previousRecord = prev2,
+            )
+        coord2.store.put(prev2!!.copy(sessionId = 300UL))
+        coord2.releasePreparedTarget(handle2)
+        assertEquals("借用 session 回滚不得覆盖新记录", 300UL, coord2.store.record("b")?.sessionId)
     }
 }
 
@@ -576,6 +649,23 @@ private class FakeSessionCoordinatorForPrepareSwap(
         val cursor = text.toByteArray(Charsets.UTF_8).size
         snapshots[sessionId] = TargetSnapshot(text, cursor, revision, 0, cursor)
         validSessions.add(sessionId)
+    }
+
+    /**
+     * #624 评论16 问题1：让 validateSession 返回 true 但 querySnapshotForSession 返回 null —
+     * 模拟既有 session 有效但 snapshot 读取失败的场景，验证 prepare 不关闭旧 session。
+     */
+    fun breakSnapshot(sessionId: ULong) {
+        snapshots.remove(sessionId)
+    }
+
+    /**
+     * #624 评论16 问题1：让 validateSession 返回 false —
+     * 模拟既有 session 已失效的场景，验证 prepare 不关闭旧 session。
+     */
+    fun invalidateSession(sessionId: ULong) {
+        validSessions.remove(sessionId)
+        snapshots.remove(sessionId)
     }
 
     fun closeCallCount(sessionId: ULong): Int = closeCounts[sessionId] ?: 0

@@ -78,7 +78,7 @@ class ResetSnapshotCommitTest {
                     targetId = targetId,
                     sessionId = sessionId,
                     snapshot = TargetSnapshot(text, cursor, revision, 0, cursor),
-                    newlyCreated = true,
+                    mode = PreparedSessionMode.Created,
                     previousRecord = null,
                 ),
             )
@@ -309,7 +309,13 @@ class ResetSnapshotCommitTest {
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
         assertTrue(
             coordinator.commitPreparedSession(
-                PreparedSessionHandle("b", 2UL, TargetSnapshot("textB", 5, 2L, 0, 5), true, null),
+                PreparedSessionHandle(
+                    "b",
+                    2UL,
+                    TargetSnapshot("textB", 5, 2L, 0, 5),
+                    PreparedSessionMode.Created,
+                    null,
+                ),
             ),
         )
 

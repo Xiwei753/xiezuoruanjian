@@ -5,16 +5,19 @@ import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import com.xiwei.sujian.feature.editor.session.ChapterContentSavePort
+import com.xiwei.sujian.feature.editor.session.DocumentVersion
 import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
 import com.xiwei.sujian.feature.editor.session.EditorContentDelta
 import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
+import com.xiwei.sujian.feature.editor.session.PreparedSessionMode
 import com.xiwei.sujian.feature.editor.session.TargetSnapshot
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
+import com.xiwei.sujian.feature.editor.session.commitSavedLease
 import com.xiwei.sujian.feature.editor.session.documentCommittedVersionFor
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
@@ -186,7 +189,7 @@ class EditorSaveFlowTest {
                     targetId = TARGET_ID,
                     sessionId = sessionId,
                     snapshot = TargetSnapshot(text, cursor, revision, 0, cursor),
-                    newlyCreated = true,
+                    mode = PreparedSessionMode.Created,
                     previousRecord = null,
                 ),
             ),
@@ -199,6 +202,63 @@ class EditorSaveFlowTest {
     }
 
     private fun storeLocalDirty(): Boolean = coordinator.store.record(TARGET_ID)?.documentState?.localDirty ?: false
+
+    /**
+     * #624 评论16 问题2：保存 N 回执不应清掉 N+1 的 localDirty —
+     * commitSavedLease 必须原子校验 target/session/epoch/revision + markSaved 一次完成，
+     * 不存在"先检查 lease/revision，再单独调用 markSaved"的竞态窗口。
+     *
+     * 旧缺陷：commitSaveSuccess 是两步操作 —
+     * 保存线程检查 rev=N 仍有效 → 主线程输入推进到 N+1/localDirty=true →
+     * 保存线程再 markSaved()，把 N+1 的 localDirty 清成 false（新输入没落盘却标成已保存）。
+     */
+    @Test
+    fun commitSavedLease_revisionMismatch_doesNotClearDirtyOfNewerInput() =
+        runTest(UnconfinedTestDispatcher()) {
+            commitSession(text = BODY_A, revision = 1L)
+            // 标记 dirty — 模拟用户编辑后保存
+            val inputLease0 = coordinator.currentInputLease()!!
+            coordinator.applyLocalEdit(
+                EditorDocumentUpdate.LocalInput(
+                    targetId = TARGET_ID,
+                    revision = 1L,
+                    transactionId = 1L,
+                    operationKind = EditorOperationKind.INSERT,
+                    contentChanged = true,
+                    contentDelta = EditorContentDelta(insertedChars = 1),
+                    lease = inputLease0,
+                ),
+            )
+            assertTrue("编辑后必须 dirty", storeLocalDirty())
+
+            val lease = coordinator.issueDocumentOperationLease()!!
+            assertEquals(1L, lease.rustRevision)
+
+            // 主线程推进到 N+1/localDirty=true（竞态窗口内）
+            val inputLease = coordinator.currentInputLease()!!
+            coordinator.applyLocalEdit(
+                EditorDocumentUpdate.LocalInput(
+                    targetId = TARGET_ID,
+                    revision = 2L,
+                    transactionId = 11L,
+                    operationKind = EditorOperationKind.INSERT,
+                    contentChanged = true,
+                    contentDelta = EditorContentDelta(insertedChars = 1),
+                    lease = inputLease,
+                ),
+            )
+            assertTrue("N+1 输入后必须 dirty", storeLocalDirty())
+            assertEquals(2L, coordinator.sessionState.revision)
+
+            // 保存 N 回执 — commitSavedLease 应原子校验 revision 不匹配，不清 dirty
+            val committed = coordinator.commitSavedLease(lease, DocumentVersion(contentHash = HASH_A))
+
+            assertFalse("revision 不匹配时 commitSavedLease 必须返回 false", committed)
+            assertTrue(
+                "保存 N 回执不应清掉 N+1 的 localDirty（新输入没落盘却标成已保存）",
+                storeLocalDirty(),
+            )
+        }
 
     @Test
     fun saveInFlight_continuedTyping_notOverwrittenByLateReceipt() =

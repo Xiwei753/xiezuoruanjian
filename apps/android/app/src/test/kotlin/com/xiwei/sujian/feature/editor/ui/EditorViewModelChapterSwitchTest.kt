@@ -10,6 +10,7 @@ import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
+import com.xiwei.sujian.feature.editor.session.PreparedSessionMode
 import com.xiwei.sujian.feature.editor.session.TargetSnapshot
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.applyLocalEdit
@@ -130,7 +131,7 @@ class EditorViewModelChapterSwitchTest {
                     targetId = targetId,
                     sessionId = sessionId,
                     snapshot = TargetSnapshot(text, cursor, revision, 0, cursor),
-                    newlyCreated = true,
+                    mode = PreparedSessionMode.Created,
                     previousRecord = null,
                 ),
             ),

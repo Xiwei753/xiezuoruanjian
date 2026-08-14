@@ -177,7 +177,7 @@ class EditorSessionStoreTest {
                 targetId = "t1",
                 sessionId = 0UL,
                 snapshot = TargetSnapshot("text", 4, 1L, 0, 4),
-                newlyCreated = true,
+                mode = PreparedSessionMode.Created,
                 previousRecord = null,
             )
         coordinator.releasePreparedTarget(handle)
@@ -185,9 +185,11 @@ class EditorSessionStoreTest {
     }
 
     @Test
-    fun releasePreparedTarget_borrowed_restoresPreviousRecordAndKeepsSession() {
-        // #595 一/二：newlyCreated=false（借用的既有 session）→ 恢复事务前记录，
-        // 不关闭 session — 回滚不得销毁事务开始前已经存在的 B session 与 Undo 历史。
+    fun releasePreparedTarget_borrowed_isNoOp_keepsSessionAndStoreUnchanged() {
+        // #624 评论16 问题1：借用既有 session 的 abort 是 no-op —
+        // 不关闭 session、不恢复 previousRecord、不修改 store。
+        // 旧实现会 store.put(previousRecord) 覆盖事务期间被推进的记录；
+        // 新实现 abort 不触碰 store，事务期间推进的记录原样保留。
         val coordinator = createCoordinator()
         val previous =
             EditorSessionRecord(
@@ -220,15 +222,15 @@ class EditorSessionStoreTest {
                 targetId = "t1",
                 sessionId = 0UL,
                 snapshot = TargetSnapshot("prepared", 8, 1L, 0, 8),
-                newlyCreated = false,
+                mode = PreparedSessionMode.Borrowed,
                 previousRecord = previous,
             )
         coordinator.releasePreparedTarget(handle)
 
-        // 借用 session 不关闭：记录恢复为事务前的文档事实（正文/版本/选区）。
+        // 借用 session abort 是 no-op：记录保持 abort 前的状态（不恢复 previousRecord）。
         assertTrue(coordinator.isTargetRegistered("t1"))
-        assertEquals(7UL, coordinator.getPersistentSessionId("t1"))
-        // 全局状态不被回滚触碰（准备阶段无副作用 — 只更新 store 记录）。
+        assertEquals(0UL, coordinator.getPersistentSessionId("t1"))
+        // 全局状态不被回滚触碰（准备阶段无副作用 — abort 同样无副作用）。
         assertEquals(EditorSessionOrigin.EXTERNAL_REPLACE, coordinator.sessionState.origin)
     }
 

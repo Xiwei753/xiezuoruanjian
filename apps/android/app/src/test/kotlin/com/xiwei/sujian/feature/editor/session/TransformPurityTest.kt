@@ -237,7 +237,7 @@ class TransformPurityTest {
                 targetId = "b",
                 sessionId = 2UL,
                 snapshot = TargetSnapshot("textB", 5, 1L, 0, 5),
-                newlyCreated = true,
+                mode = PreparedSessionMode.Created,
                 previousRecord = null,
             )
         assertTrue(coordinator.commitPreparedSession(handle))
@@ -320,7 +320,13 @@ class TransformPurityTest {
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
         assertTrue(
             coordinator.commitPreparedSession(
-                PreparedSessionHandle("b", 2UL, TargetSnapshot("textB", 5, 2L, 0, 5), true, null),
+                PreparedSessionHandle(
+                    "b",
+                    2UL,
+                    TargetSnapshot("textB", 5, 2L, 0, 5),
+                    PreparedSessionMode.Created,
+                    null,
+                ),
             ),
         )
 

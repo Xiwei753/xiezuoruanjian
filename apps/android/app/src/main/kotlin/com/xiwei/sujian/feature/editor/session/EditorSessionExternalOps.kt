@@ -122,3 +122,63 @@ fun EditorSessionCoordinator.markSaved(
 
 fun EditorSessionCoordinator.documentCommittedVersionFor(targetId: String): DocumentVersion =
     store.record(targetId)?.documentState?.committedVersion ?: DocumentVersion()
+
+/**
+ * #624 评论16 问题2：保存回执原子提交 — 一次完成 target/session/epoch/revision 校验
+ * + store/sessionState 的 markSaved，不存在"先检查 lease/revision，再单独调用 markSaved"
+ * 的竞态窗口。
+ *
+ * ViewModel 不再先 [isDocumentOperationLeaseCurrent] 再 [markSaved]（两步操作有竞态：
+ * 保存线程检查 rev=N 仍有效 → 主线程输入推进到 N+1/localDirty=true → 保存线程再
+ * markSaved()，把 N+1 的 localDirty 清成 false）。
+ *
+ * 校验全通过（target/session/epoch/revision 都匹配）时原子推进
+ * committedVersion/sessionBaseVersion/lastSavedVersion 并清 localDirty；
+ * 任一不匹配时返回 false，不清 dirty（新输入没落盘不得标成已保存）。
+ */
+fun EditorSessionCoordinator.commitSavedLease(
+    lease: DocumentOperationLease,
+    savedVersion: DocumentVersion,
+): Boolean {
+    if (savedVersion.isEmpty) return false
+    var committed = false
+    var pendingRecord: EditorSessionRecord? = null
+    updateSessionState { state ->
+        if (!isSavedLeaseMatchingState(state, lease)) return@updateSessionState state
+        committed = true
+        pendingRecord = savedRecordFor(lease.targetId, savedVersion)
+        state.copy(
+            committedVersion = savedVersion,
+            sessionBaseVersion = savedVersion,
+            localDirty = false,
+        )
+    }
+    pendingRecord?.let { store.put(it) }
+    return committed
+}
+
+/** #624 评论16 问题2：原子校验 target/session/epoch/revision 是否全匹配。 */
+private fun EditorSessionCoordinator.isSavedLeaseMatchingState(
+    state: EditorSessionState,
+    lease: DocumentOperationLease,
+): Boolean =
+    state.activeTargetId == lease.targetId &&
+        state.sessionId == lease.coreSessionId &&
+        inputLeaseEpoch == lease.inputEpoch &&
+        state.revision == lease.rustRevision
+
+/** #624 评论16 问题2：构造保存后的 store 记录（committedVersion/baseVersion/dirty 推进）。 */
+private fun EditorSessionCoordinator.savedRecordFor(
+    targetId: String,
+    savedVersion: DocumentVersion,
+): EditorSessionRecord? {
+    val record = store.record(targetId) ?: return null
+    return record.withDocumentState {
+        it.copy(
+            committedVersion = savedVersion,
+            sessionBaseVersion = savedVersion,
+            lastSavedVersion = savedVersion,
+            localDirty = false,
+        )
+    }
+}

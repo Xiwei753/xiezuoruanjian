@@ -8,6 +8,7 @@ import com.xiwei.sujian.feature.editor.session.EditorContentDelta
 import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
+import com.xiwei.sujian.feature.editor.session.PreparedSessionMode
 import com.xiwei.sujian.feature.editor.session.TargetSnapshot
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.applyLocalEdit
@@ -159,7 +160,7 @@ class EditorSaveClearDecisionTest {
                     targetId = TARGET_ID,
                     sessionId = sessionId,
                     snapshot = TargetSnapshot(text, cursor, revision, 0, cursor),
-                    newlyCreated = true,
+                    mode = PreparedSessionMode.Created,
                     previousRecord = null,
                 ),
             ),
@@ -271,7 +272,7 @@ class EditorSaveClearDecisionTest {
                     targetId = TARGET_ID,
                     sessionId = 9UL,
                     snapshot = TargetSnapshot("x", 1, 1L, 0, 1),
-                    newlyCreated = true,
+                    mode = PreparedSessionMode.Created,
                     previousRecord = null,
                 )
             assertTrue(coordinator.commitPreparedSession(handle))
@@ -346,7 +347,7 @@ class EditorSaveClearDecisionTest {
                     targetId = TARGET_ID,
                     sessionId = 9UL,
                     snapshot = TargetSnapshot("x", 1, 1L, 0, 1),
-                    newlyCreated = true,
+                    mode = PreparedSessionMode.Created,
                     previousRecord = null,
                 )
             assertTrue(coordinator.commitPreparedSession(handle))

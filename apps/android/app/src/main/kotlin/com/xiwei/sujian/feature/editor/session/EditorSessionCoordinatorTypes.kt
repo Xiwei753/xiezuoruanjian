@@ -104,38 +104,59 @@ data class DocumentOperationLease(
 )
 
 /**
+ * #624 评论16 问题1：预准备事务的所有权模式 — 明确枚举，不再靠布尔字段组合判断。
+ *
+ * - [Borrowed]：借用既有 session（snapshot 正文与 initialText 一致）— abort 是 no-op；
+ * - [Created]：本事务新建的 candidate session（无既有有效 session）— abort 关闭 candidate；
+ * - [Replacement]：candidate swap — 既有持久 session 的 snapshot 正文与 initialText 不一致
+ *   且 localDirty=false 时，prepare 创建 candidate 装入 initialText，[oldSessionId] 记录
+ *   被替换的旧 session。commit 成功后关闭旧 session；abort 只关闭 candidate。
+ */
+sealed interface PreparedSessionMode {
+    /** 借用既有 session（snapshot 正文与 initialText 一致）— abort 是 no-op。 */
+    data object Borrowed : PreparedSessionMode
+
+    /** 本事务新建的 candidate session（无既有有效 session）— abort 关闭 candidate。 */
+    data object Created : PreparedSessionMode
+
+    /**
+     * Candidate swap — 既有持久 session 的 snapshot 正文与 initialText 不一致，
+     * prepare 创建 candidate 装入 initialText，[oldSessionId] 记录被替换的旧 session。
+     * commit 成功后关闭旧 session；abort 只关闭 candidate。
+     */
+    data class Replacement(val oldSessionId: ULong) : PreparedSessionMode
+}
+
+/**
  * #595 一：无副作用章节预准备句柄 — 由 [EditorSessionCoordinator.prepareTargetSessionForCommit]
  * 返回，是章节切换事务在最终 requestId 校验前取得的唯一预准备产物。
  *
  * 准备阶段只允许：读取 B 的记录、验证或新建 B session、读取 snapshot；
  * 禁止 commit/cancel A、修改 activeTargetId/WindowBindingState/全局
- * EditorSessionState、关闭任何既有有效 session。提交与回滚分别由
- * [EditorSessionCoordinator.commitPreparedSession] 与
+ * EditorSessionState、关闭任何既有有效 session、写 [EditorSessionStore]。
+ * 提交与回滚分别由 [EditorSessionCoordinator.commitPreparedSession] 与
  * [EditorSessionCoordinator.releasePreparedTarget] 完成。
  *
- * - [newlyCreated]=true 且 [replacedSessionId]=null：本事务新建的临时 session
- *   （记录中无既有有效 session）— 回滚时关闭 candidate、移除记录；
- * - [newlyCreated]=true 且 [replacedSessionId]!=null：#624 评论15 问题2 candidate
- *   swap — 既有持久 session 的 snapshot 正文与 initialText 不一致且 localDirty=false
- *   时，prepare 创建一个装有 initialText 的 candidate session，[replacedSessionId]
- *   记录被替换的旧 session ID。commit 成功后由 [commitPreparedSession] 关闭旧 session；
- *   回滚（[releasePreparedTarget]）只关闭 candidate，恢复 [previousRecord]（旧 session
- *   原样保留，Undo/Redo 不丢）；
- * - [newlyCreated]=false：snapshot 正文与 initialText 一致 → 复用既有保留 session
- *   （含 Undo 历史）— 回滚时恢复 [previousRecord]，不关闭 session。
+ * #624 评论16 问题1：所有权由 [mode] 枚举明确表达，不再靠 newlyCreated + replacedSessionId
+ * 字段组合判断。[previousRecord] 是 prepare 前的记录快照，用于 commit 校验目标记录
+ * 仍是 prepare 时的旧 session/文档身份（prepare 不写 store，commit 是唯一写入点）。
+ *
+ * - [PreparedSessionMode.Borrowed]：snapshot 正文与 initialText 一致 → 复用既有 session
+ *   （含 Undo 历史）— abort 是 no-op（不关闭 session、不修改 store）；
+ * - [PreparedSessionMode.Created]：记录中无既有有效 session → 新建 candidate —
+ *   abort 关闭 candidate、移除仍指向该 session 的记录；
+ * - [PreparedSessionMode.Replacement]：snapshot 正文不一致且 localDirty=false →
+ *   创建 candidate 装入 initialText — commit 成功后关闭旧 session；
+ *   abort 只关闭 candidate（旧 session 原样保留，不恢复 previousRecord）。
  */
 @Immutable
 data class PreparedSessionHandle(
     val targetId: String,
     val sessionId: ULong,
     val snapshot: TargetSnapshot,
-    val newlyCreated: Boolean,
+    val mode: PreparedSessionMode,
+    /** prepare 前的记录快照（commit 校验目标记录仍是 prepare 时的旧 session/文档身份）。 */
     val previousRecord: EditorSessionRecord?,
-    /**
-     * #624 评论15 问题2：candidate swap 时被替换的旧 session ID；null 表示纯新建
-     * （[previousRecord]==null 或记录中无既有有效 session）或纯复用（[newlyCreated]==false）。
-     */
-    val replacedSessionId: ULong? = null,
 )
 
 /**

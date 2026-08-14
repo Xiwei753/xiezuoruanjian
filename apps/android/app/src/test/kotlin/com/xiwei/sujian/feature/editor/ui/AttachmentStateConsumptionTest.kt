@@ -99,4 +99,54 @@ class AttachmentStateConsumptionTest {
     fun idleShowsPreview() {
         assertFalse("Idle must show preview", shouldShowEditor(WindowBindingState.Idle, "w1", "t1"))
     }
+
+    // ── #624 评论16 问题3：confirmEditorAttached 只在真正 Attached 且 windowId+targetId 匹配时调用 ──
+
+    @Test
+    fun shouldConfirmEditorAttached_falseWhenAttaching() {
+        assertFalse(
+            "Attaching 状态不得 confirmEditorAttached — View 尚未真实绑定",
+            shouldConfirmEditorAttached(WindowBindingState.Attaching("w1", "t1", 7UL), "w1", "t1"),
+        )
+    }
+
+    @Test
+    fun shouldConfirmEditorAttached_falseWhenIdle() {
+        assertFalse(
+            "Idle 状态不得 confirmEditorAttached — beginEdit 尚未成功",
+            shouldConfirmEditorAttached(WindowBindingState.Idle, "w1", "t1"),
+        )
+    }
+
+    @Test
+    fun shouldConfirmEditorAttached_falseWhenDetached() {
+        assertFalse(
+            "Detached 状态不得 confirmEditorAttached",
+            shouldConfirmEditorAttached(WindowBindingState.Detached("t1", 7UL, null), "w1", "t1"),
+        )
+    }
+
+    @Test
+    fun shouldConfirmEditorAttached_falseWhenAttachedDifferentWindow() {
+        assertFalse(
+            "Attached 但 windowId 不匹配不得 confirmEditorAttached",
+            shouldConfirmEditorAttached(WindowBindingState.Attached("w2", "t1", 7UL), "w1", "t1"),
+        )
+    }
+
+    @Test
+    fun shouldConfirmEditorAttached_falseWhenAttachedDifferentTarget() {
+        assertFalse(
+            "Attached 但 targetId 不匹配不得 confirmEditorAttached",
+            shouldConfirmEditorAttached(WindowBindingState.Attached("w1", "t2", 7UL), "w1", "t1"),
+        )
+    }
+
+    @Test
+    fun shouldConfirmEditorAttached_trueOnlyWhenAttachedAndMatching() {
+        assertTrue(
+            "Attached 且 windowId + targetId 都匹配时才 confirmEditorAttached",
+            shouldConfirmEditorAttached(WindowBindingState.Attached("w1", "t1", 7UL), "w1", "t1"),
+        )
+    }
 }

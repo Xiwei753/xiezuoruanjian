@@ -23,8 +23,8 @@ import android.app.Application
 import com.xiwei.sujian.R
 import com.xiwei.sujian.feature.editor.session.DocumentOperationLease
 import com.xiwei.sujian.feature.editor.session.DocumentVersion
+import com.xiwei.sujian.feature.editor.session.commitSavedLease
 import com.xiwei.sujian.feature.editor.session.documentCommittedVersionFor
-import com.xiwei.sujian.feature.editor.session.markSaved
 import com.xiwei.sujian.feature.editor.session.toSaveToken
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -48,13 +48,9 @@ private fun EditorViewModel.commitSaveSuccess(
 ): Boolean {
     saveReceipts.record(lease.toSaveToken(hash))
     val coordinator = _sessionCoordinator ?: return false
-    val leaseCurrent = coordinator.isDocumentOperationLeaseCurrent(lease)
-    val revisionCurrent = coordinator.sessionState.revision == lease.rustRevision
-    if (leaseCurrent && revisionCurrent) {
-        coordinator.markSaved(lease.targetId, DocumentVersion(contentHash = hash))
-        return true
-    }
-    return false
+    // #624 评论16 问题2：原子提交 — commitSavedLease 一次完成校验 + markSaved，
+    // 不再先 isDocumentOperationLeaseCurrent() 再 markSaved()（两步操作有竞态窗口）。
+    return coordinator.commitSavedLease(lease, DocumentVersion(contentHash = hash))
 }
 
 /**
