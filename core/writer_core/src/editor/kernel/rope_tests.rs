@@ -666,6 +666,51 @@ mod rope_tests {
         );
     }
 
+    /// #624 评论10 第4项：replace-all 的 **undo** patch 使用 undo 前文本（= 替换后
+    /// 最终文本）坐标。变长替换时 new_range 由累计长度差决定（X→YY 时第二处
+    /// 从 [3,4) 变成 [4,6)），undo batch 按 start 降序应用必须与 Core snapshot 一致
+    /// （mirror 一致性）；旧实现若把 new_range 误写成 base 坐标，降序应用会得到
+    /// "aXbYXc" 之类的分裂正文。
+    #[test]
+    fn replace_all_undo_patches_apply_to_final_coords() {
+        // "aXbXc" + X→YY → "aYYbYYc"（undo 前文本，patch base 坐标）。
+        let mut kernel = EditorKernel::with_text("aXbXc".to_string(), 5).unwrap();
+        let r1 = kernel
+            .apply(EditorCommand::ReplaceAll {
+                search: "X".to_string(),
+                replacement: "YY".to_string(),
+                expected_revision: EditorRevision::new(kernel.revision()),
+            })
+            .into_result();
+        assert_eq!(kernel.snapshot_text(), "aYYbYYc");
+        // 前向 patch 是 base（编辑前 "aXbXc"）坐标局部列表：降序应用与 snapshot 一致。
+        assert_eq!(
+            apply_patches_descending("aXbXc", &r1.display_patches),
+            kernel.snapshot_text()
+        );
+
+        let undid = undo(&mut kernel).into_result();
+        assert_eq!(kernel.snapshot_text(), "aXbXc");
+        // undo patch 是 undo 前文本（"aYYbYYc"）坐标：变长替换后第二处起点右移 1
+        // （[4,6)），第一处 [1,3)。列表按 start 降序（与 undo_order 一致）。
+        assert_eq!(undid.display_patches.len(), 2);
+        assert_eq!(
+            undid.display_patches[0].replace_byte_range,
+            Utf8ByteRange::from_ordered(4, 6)
+        );
+        assert_eq!(undid.display_patches[0].inserted_text, "X");
+        assert_eq!(
+            undid.display_patches[1].replace_byte_range,
+            Utf8ByteRange::from_ordered(1, 3)
+        );
+        assert_eq!(undid.display_patches[1].inserted_text, "X");
+        // 降序应用 undo batch 必须还原原文（mirror 一致性）。
+        assert_eq!(
+            apply_patches_descending("aYYbYYc", &undid.display_patches),
+            kernel.snapshot_text()
+        );
+    }
+
     #[test]
     fn replace_all_no_match_is_no_change() {
         let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();

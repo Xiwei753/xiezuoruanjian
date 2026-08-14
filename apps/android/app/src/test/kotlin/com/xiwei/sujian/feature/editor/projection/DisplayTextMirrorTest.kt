@@ -328,6 +328,33 @@ class DisplayTextMirrorTest {
         assertEquals(6, mirror.getRevision())
     }
 
+    /**
+     * #624 评论10 第4项：replace-all 的 undo patch 使用 undo 前文本（= 替换后
+     * 最终文本）坐标。变长替换（X→YY）后第二处 new_range 右移（[4,6) 而不是
+     * [3,4)）；batch 降序应用必须还原原文，只更新一次 revision。
+     */
+    @Test
+    fun applyPatches_replaceAllUndo_batch_final_coords() {
+        val mirror = DisplayTextMirror()
+        // undo 前文本 = replace-all 后的 "aYYbYYc"，revision 5。
+        mirror.loadFromSnapshot("aYYbYYc", cursorUtf8 = 7, revision = 5)
+
+        val patches =
+            listOf(
+                // 第二处（新文本坐标 [4,6)，起点右移 cumulative_diff=1）→ "X"。
+                DisplayPatch(5, 6, 4, 6, "X", 3, 3),
+                // 第一处 [1,3) → "X"。
+                DisplayPatch(5, 6, 1, 3, "X", 3, 3),
+            )
+
+        mirror.applyPatches(patches)
+
+        // 降序应用：先 [4,6)→"X" → "aYYbXc"，再 [1,3)→"X" → "aXbXc"。
+        assertEquals("aXbXc", mirror.getText())
+        // 整个 batch 完成后只更新一次 revision。
+        assertEquals(6, mirror.getRevision())
+    }
+
     @Test
     fun applyEditResult_handlesChineseText() {
         val mirror = DisplayTextMirror()
