@@ -446,6 +446,51 @@ class EditorViewModelChapterSwitchTest {
             )
         }
 
+    /**
+     * #624 评论10 第2项：切章保存旧章节必须用真实 snapshot 正文，
+     * 不得保存 `_uiState.content`（评论9 后本地输入不更新它 — 它停在打开章节时
+     * 的旧正文；用它保存会把用户刚输入的内容覆盖回磁盘，数据丢失）。
+     */
+    @Test
+    fun switchSaveOldChapter_savesSnapshotNotColdPathContent() =
+        runTest {
+            val vm = createVm()
+            val snapshotText = "用户刚输入的真实正文"
+            vm.initChapter("p", "v", "a", "A")
+            commitActiveSession(vm, "p", "v", "a", snapshotText)
+            // 评论9 后本地正常输入不更新 _uiState.content — 它停留在打开时的旧正文。
+            vm._uiState.value = vm._uiState.value.copy(content = "打开章节时的旧正文")
+            var savedContent: String? = null
+            vm.chapterSavePort =
+                object : com.xiwei.sujian.feature.editor.session.ChapterContentSavePort {
+                    override suspend fun saveChapterContent(
+                        projectId: String,
+                        volumeId: String,
+                        chapterId: String,
+                        content: String,
+                    ): BridgeResult<ChapterSaveReceipt> {
+                        savedContent = content
+                        return BridgeResult.Success(
+                            ChapterSaveReceipt("c", 0L, "h", "m", "t", 0),
+                        )
+                    }
+                }
+
+            // 切换到 B：保存阶段必须真实执行（无 native → 新章节加载失败返回
+            // LoadFailed），但保存端口收到的必须是 snapshot 正文，不是冷路径旧正文。
+            val result = vm.switchChapter("p", "v", "b", "B")
+
+            assertTrue(
+                "切章必须走到保存阶段（LoadFailed 说明保存已尝试、加载才失败）",
+                result is ChapterSwitchResult.LoadFailed,
+            )
+            assertEquals(
+                "切章保存必须用真实 snapshot 正文，不得用 _uiState.content 旧正文覆盖",
+                snapshotText,
+                savedContent,
+            )
+        }
+
     @Test
     fun isCurrentChapter_reflectsCommittedSession() {
         val vm = createVm()

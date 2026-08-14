@@ -344,4 +344,50 @@ class EditorSaveClearDecisionTest {
 
             assertEquals("显式清空必须真实尝试 Clear", SaveStatus.SaveFailed, vm.uiState.value.saveStatus)
         }
+
+    /**
+     * #624 评论10 第1项：autosave 到点后 snapshot 不可得（lease null）—
+     * 不回退 "" 伪造空正文、不回退 _uiState.content、不发 Save/Clear 命令，
+     * 保持 Unsaved（绝不误触发 Clear）。
+     */
+    @Test
+    fun autoSave_snapshotUnavailable_keepsUnsavedNoCommand() =
+        runTest {
+            // 只提交 session，不安装 snapshot → lease 不可签发。
+            coordinator.registerTargetMeta(TARGET_ID, TextEditorProfile.DocumentBody, persistent = true)
+            val handle =
+                PreparedSessionHandle(
+                    targetId = TARGET_ID,
+                    sessionId = 9UL,
+                    snapshot = TargetSnapshot("x", 1, 1L, 0, 1),
+                    newlyCreated = true,
+                    previousRecord = null,
+                )
+            assertTrue(coordinator.commitPreparedSession(handle))
+            vm.currentSession = EditorSession("s1", "p", "v", "a")
+            vm.contentDirty = true
+            vm._uiState.value =
+                vm._uiState.value.copy(
+                    saveStatus = SaveStatus.Unsaved,
+                    content = "冷路径旧正文",
+                    settings = EditorSettingsState(autoSaveDelayMs = 0, autoSaveEnabled = true),
+                )
+            vm.startSaveActor()
+
+            vm.scheduleAutoSave()
+            // 等 debounce(0) + actor 处理窗口结束 — 若错误触发命令会落到 SaveFailed。
+            var spins = 0
+            while (spins < 500) {
+                kotlinx.coroutines.yield()
+                Thread.sleep(2)
+                spins++
+            }
+
+            assertEquals(
+                "snapshot 不可得时 autosave 必须保持 Unsaved，不得误触发 Clear",
+                SaveStatus.Unsaved,
+                vm.uiState.value.saveStatus,
+            )
+            assertEquals("snapshot 不可得时不得发出任何保存命令", 0, savePort.calls)
+        }
 }

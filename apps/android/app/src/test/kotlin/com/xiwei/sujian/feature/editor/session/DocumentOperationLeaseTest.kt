@@ -246,6 +246,41 @@ class DocumentOperationLeaseByTargetTest {
         assertEquals("lease.rustRevision 必须来自 snapshot 且与记录一致", 3L, l.rustRevision)
     }
 
+    /**
+     * #624 评论10 第1项：活动路径（无 targetId）同样必须校验
+     * snapshot.revision == sessionState.revision。错版 snapshot（内核已前进、
+     * 活动状态未跟上）返回 null，不伪造空正文 lease。
+     */
+    @Test
+    fun issueLease_activePath_nullWhenSnapshotRevisionMismatch() {
+        val coordinator = createCoordinator()
+        // 提交时 sessionState.revision 与 store 记录均为 3。
+        assertTrue(commitWithSession(coordinator, "a", "text", sessionId = 1UL, revision = 3L))
+        // 注入错版 snapshot（revision=4）→ 活动路径校验失败。
+        coordinator.installSnapshot(1UL, "newer", revision = 4L)
+        assertNull(
+            "活动路径错版 snapshot 时 lease 必须为 null，不伪造空正文",
+            coordinator.issueDocumentOperationLease(),
+        )
+    }
+
+    /**
+     * #624 评论10 第1项：活动路径正例 — revision 匹配时 lease 携带真实 snapshot
+     * 正文（用户输入后的真值），不是空字符串。
+     */
+    @Test
+    fun issueLease_activePath_returnsLeaseWithSnapshotText() {
+        val coordinator = createCoordinator()
+        assertTrue(commitWithSession(coordinator, "a", "旧正文", sessionId = 1UL, revision = 3L))
+        // 用户输入后 snapshot 已前进到 revision 3，正文是真实输入。
+        coordinator.installSnapshot(1UL, "用户刚输入的真实正文", revision = 3L)
+
+        val lease = coordinator.issueDocumentOperationLease()
+        assertNotNull("活动路径 revision 匹配时必须签发 lease", lease)
+        assertEquals("lease.text 必须来自真实 snapshot", "用户刚输入的真实正文", lease!!.text)
+        assertEquals("lease.rustRevision 必须与 snapshot 一致", 3L, lease.rustRevision)
+    }
+
     /** 按 target 取得 lease 时，snapshot 缺失必须返回 null（不伪造空正文）。 */
     @Test
     fun issueLease_byTarget_nullWhenSnapshotMissing() {
