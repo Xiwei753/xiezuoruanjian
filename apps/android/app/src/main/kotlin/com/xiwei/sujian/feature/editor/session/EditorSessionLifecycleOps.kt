@@ -84,7 +84,6 @@ fun EditorSessionCoordinator.commitPreparedSession(
             ).copy(sessionId = handle.sessionId)
                 .withDocumentState {
                     it.copy(
-                        text = snapshot.text,
                         revision = snapshot.revision,
                         selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
                         selectionHeadUtf8 = snapshot.selectionHeadUtf8,
@@ -93,7 +92,6 @@ fun EditorSessionCoordinator.commitPreparedSession(
         EditorSessionState(
             targetId = handle.targetId,
             sessionId = handle.sessionId,
-            text = snapshot.text,
             revision = snapshot.revision,
             selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
             selectionHeadUtf8 = snapshot.selectionHeadUtf8,
@@ -391,14 +389,12 @@ private fun EditorSessionCoordinator.commitPreparedBindingState(
             documentState =
                 if (snapshot != null) {
                     r.documentState.copy(
-                        text = snapshot.text,
                         revision = snapshot.revision,
                         selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
                         selectionHeadUtf8 = snapshot.selectionHeadUtf8,
                     )
                 } else {
                     r.documentState.copy(
-                        text = textForSession,
                         revision = 0L,
                         selectionAnchorUtf8 = sel,
                         selectionHeadUtf8 = sel,
@@ -412,7 +408,6 @@ private fun EditorSessionCoordinator.commitPreparedBindingState(
         EditorSessionState(
             targetId = targetId,
             sessionId = sessionId,
-            text = doc?.text ?: textForSession,
             revision = doc?.revision ?: 0L,
             selectionAnchorUtf8 = doc?.selectionAnchorUtf8 ?: sel,
             selectionHeadUtf8 = doc?.selectionHeadUtf8 ?: sel,
@@ -644,7 +639,6 @@ fun EditorSessionCoordinator.commitResetSnapshot(
                 sessionId = sessionId,
                 documentState =
                     (rec?.documentState ?: DocumentState()).copy(
-                        text = snapshot.text,
                         revision = snapshot.revision,
                         selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
                         selectionHeadUtf8 = snapshot.selectionHeadUtf8,
@@ -653,7 +647,6 @@ fun EditorSessionCoordinator.commitResetSnapshot(
         if (previous.targetId != targetId) return@updateSessionState previous
         previous.copy(
             sessionId = sessionId,
-            text = snapshot.text,
             revision = snapshot.revision,
             selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
             selectionHeadUtf8 = snapshot.selectionHeadUtf8,

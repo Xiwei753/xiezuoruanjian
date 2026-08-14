@@ -7,6 +7,8 @@ import android.util.Log
 // #597：本地输入/撤销恢复/程序化替换三类编辑事件共用同一 reducer 骨架
 // （lease 校验 → sessionId/dirty 计算 → documentState 更新 → SessionState 构建），
 // 差异只有 dirty 规则与来源标记；收敛到 applyLocalUpdate 后各入口只保留类型。
+// #624 评论9：热路径不传整章 String — dirty 判定用 [EditorDocumentUpdate.contentChanged]
+// 替代旧 `update.text != previousDoc.text` 字符串比较。
 
 /**
  * #597：本地编辑事件统一 reducer — 校验 lease 后原子更新
@@ -35,7 +37,6 @@ private fun EditorSessionCoordinator.applyLocalUpdate(
             existing?.copy(
                 documentState =
                     previousDoc.copy(
-                        text = update.text,
                         revision = update.revision,
                         selectionAnchorUtf8 =
                             if (update.selectionAnchorUtf8 >= 0) {
@@ -56,7 +57,6 @@ private fun EditorSessionCoordinator.applyLocalUpdate(
                 targetId = update.targetId,
                 documentState =
                     DocumentState(
-                        text = update.text,
                         revision = update.revision,
                         selectionAnchorUtf8 = update.selectionAnchorUtf8.coerceAtLeast(0),
                         selectionHeadUtf8 = update.selectionHeadUtf8.coerceAtLeast(0),
@@ -67,7 +67,6 @@ private fun EditorSessionCoordinator.applyLocalUpdate(
         EditorSessionState(
             targetId = update.targetId,
             sessionId = sessionId,
-            text = update.text,
             revision = update.revision,
             selectionAnchorUtf8 =
                 if (update.selectionAnchorUtf8 >= 0) {
@@ -94,11 +93,16 @@ private fun EditorSessionCoordinator.applyLocalUpdate(
     pendingRecord?.let { store.put(it) }
 }
 
+/**
+ * #624 评论9：本地输入 dirty 规则 — 用 [EditorDocumentUpdate.contentChanged]
+ * 替代旧 `update.text != previousDoc.text` 字符串比较。
+ * selection-only 且 !contentChanged 时保留原 dirty，否则 contentChanged。
+ */
 private fun localInputDirty(
     update: EditorDocumentUpdate,
     previousDoc: DocumentState,
 ): Boolean {
-    val contentChanged = update.text != previousDoc.text
+    val contentChanged = update.contentChanged
     return if (!contentChanged &&
         update is EditorDocumentUpdate.LocalInput &&
         update.operationKind == EditorOperationKind.SELECTION
@@ -115,12 +119,12 @@ fun EditorSessionCoordinator.applyLocalEdit(update: EditorDocumentUpdate.LocalIn
 
 fun EditorSessionCoordinator.applyUndoRestored(update: EditorDocumentUpdate.UndoRestored) {
     applyLocalUpdate(update, EditorSessionOrigin.UNDO_RESTORED) { update, previousDoc ->
-        previousDoc.localDirty || update.text != previousDoc.text
+        previousDoc.localDirty || update.contentChanged
     }
 }
 
 fun EditorSessionCoordinator.applyProgrammaticReplace(update: EditorDocumentUpdate.ProgrammaticReplace) {
     applyLocalUpdate(update, EditorSessionOrigin.PROGRAMMATIC_REPLACE) { update, previousDoc ->
-        previousDoc.localDirty || update.text != previousDoc.text
+        previousDoc.localDirty || update.contentChanged
     }
 }

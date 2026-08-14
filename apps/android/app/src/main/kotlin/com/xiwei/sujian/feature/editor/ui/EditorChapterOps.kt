@@ -603,10 +603,12 @@ suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
                 origin = DocumentFactOrigin.REPOSITORY_LOAD,
             ),
         )
-        previousText = content
+        // #624 评论9：previousText 已删除 — 统计改增量 recordWritingEvent。
+        // 冷路径 load：用整章 content 重算 wordCount 并设入 _uiState，再 updateStats() 算 speed。
         initialWordCount = calculateWordCount(content)
         sessionStartTime = System.currentTimeMillis()
-        updateStats(content)
+        _uiState.value = _uiState.value.copy(wordCount = initialWordCount)
+        updateStats()
         isLoadingChapter = false
         true
     } catch (e: Throwable) {
@@ -657,8 +659,10 @@ fun EditorViewModel.applyExternalContentToUi(
     // reset 后的真实 session revision），同步后 flush 不误判为未保存。
     val revision = _sessionCoordinator?.sessionState?.revision ?: 0L
     saveReceipts.record(buildSaveToken(targetId, revision, fileHash))
-    previousText = text
-    updateStats(text)
+    // #624 评论9：previousText 已删除 — 统计改增量 recordWritingEvent。
+    // 冷路径 external-apply：用整章 text 重算 wordCount 并设入 _uiState，再 updateStats() 算 speed。
+    _uiState.value = _uiState.value.copy(wordCount = calculateWordCount(text))
+    updateStats()
 }
 
 fun EditorViewModel.notifySyncMergeConflict() {

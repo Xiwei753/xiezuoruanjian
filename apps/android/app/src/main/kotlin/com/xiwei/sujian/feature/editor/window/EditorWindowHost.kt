@@ -13,7 +13,6 @@ import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.session.AnimationPolicy
 import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorInputLease
-import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.EditorSessionState
 import com.xiwei.sujian.feature.editor.session.ExternalResetResult
@@ -807,47 +806,48 @@ class EditorWindowHost(
         target: EditableTextTarget,
         lease: EditorInputLease,
     ) {
-        view.onContentChanged = { newText ->
-            // #595 二：onContentChanged 同样携带输入 lease — 章节切换提交后
-            // 旧 View 晚到的正文回显不能进入新章节的 ViewModel。
-            if (sessionCoordinator.isInputLeaseCurrent(lease, target.targetId)) {
-                target.onTextChanged?.invoke(newText)
-            }
-        }
+        // #624 评论9：onContentChanged 已删除 — 热路径不再传整章 String。
         // #595 一/二：类型化本地编辑回调 — 先更新会话层唯一 SessionState（revision/transactionId），
         // 再通知 ViewModel 保存。ViewModel 不再靠字符串比较猜测来源，
         // WritingPane 收集 sessionStateFlow 发现 revision 已应用，不触发 reset。
-        view.onLocalEdit = { text, revision, transactionId, operationKind, selectionAnchorUtf8, selectionHeadUtf8 ->
+        view.onLocalEdit = { event ->
+            // lease 校验 — 章节切换提交后旧 View 晚到事件不能进入新章节会话。
+            if (!sessionCoordinator.isInputLeaseCurrent(lease, target.targetId)) return@onLocalEdit
             sessionCoordinator.applyLocalEdit(
                 EditorDocumentUpdate.LocalInput(
                     targetId = target.targetId,
-                    text = text,
-                    revision = revision,
-                    transactionId = transactionId,
-                    operationKind = operationKind,
-                    selectionAnchorUtf8 = selectionAnchorUtf8,
-                    selectionHeadUtf8 = selectionHeadUtf8,
+                    revision = event.revision,
+                    transactionId = event.transactionId,
+                    operationKind = event.operationKind,
+                    selectionAnchorUtf8 = event.selectionAnchorUtf8,
+                    selectionHeadUtf8 = event.selectionHeadUtf8,
                     lease = lease,
+                    contentChanged = event.contentChanged,
+                    contentDelta = event.contentDelta,
                 ),
             )
+            // #624 评论9：ViewModel 增量处理（保存调度/统计/字数）— 不传整章 String。
+            target.onEditorApplied?.invoke(event)
         }
         // #595 二/四：类型化外部编辑回调 — 撤销/恢复/程序化替换走类型化事件，
         // 来源由 PipelineOutput 天然携带，由 Coordinator 的 apply* 统一处理。
-        view.onExternalEdit = { source, text, revision, transactionId, selectionAnchorUtf8, selectionHeadUtf8 ->
-            when (source) {
+        view.onExternalEdit = { event ->
+            if (!sessionCoordinator.isInputLeaseCurrent(lease, target.targetId)) return@onExternalEdit
+            when (event.source) {
                 com.xiwei.sujian.feature.editor.platform.EditorEditSource.UNDO,
                 com.xiwei.sujian.feature.editor.platform.EditorEditSource.REDO,
                 -> {
                     sessionCoordinator.applyUndoRestored(
                         EditorDocumentUpdate.UndoRestored(
                             targetId = target.targetId,
-                            text = text,
-                            snapshotId = transactionId,
-                            revision = revision,
-                            transactionId = transactionId,
-                            selectionAnchorUtf8 = selectionAnchorUtf8,
-                            selectionHeadUtf8 = selectionHeadUtf8,
+                            snapshotId = event.transactionId,
+                            revision = event.revision,
+                            transactionId = event.transactionId,
+                            selectionAnchorUtf8 = event.selectionAnchorUtf8,
+                            selectionHeadUtf8 = event.selectionHeadUtf8,
                             lease = lease,
+                            contentChanged = event.contentChanged,
+                            contentDelta = event.contentDelta,
                         ),
                     )
                 }
@@ -855,13 +855,14 @@ class EditorWindowHost(
                     sessionCoordinator.applyProgrammaticReplace(
                         EditorDocumentUpdate.ProgrammaticReplace(
                             targetId = target.targetId,
-                            text = text,
-                            commandId = transactionId,
-                            revision = revision,
-                            transactionId = transactionId,
-                            selectionAnchorUtf8 = selectionAnchorUtf8,
-                            selectionHeadUtf8 = selectionHeadUtf8,
+                            commandId = event.transactionId,
+                            revision = event.revision,
+                            transactionId = event.transactionId,
+                            selectionAnchorUtf8 = event.selectionAnchorUtf8,
+                            selectionHeadUtf8 = event.selectionHeadUtf8,
                             lease = lease,
+                            contentChanged = event.contentChanged,
+                            contentDelta = event.contentDelta,
                         ),
                     )
                 }
@@ -870,17 +871,19 @@ class EditorWindowHost(
                     sessionCoordinator.applyLocalEdit(
                         EditorDocumentUpdate.LocalInput(
                             targetId = target.targetId,
-                            text = text,
-                            revision = revision,
-                            transactionId = transactionId,
-                            operationKind = EditorOperationKind.REPLACE,
-                            selectionAnchorUtf8 = selectionAnchorUtf8,
-                            selectionHeadUtf8 = selectionHeadUtf8,
+                            revision = event.revision,
+                            transactionId = event.transactionId,
+                            operationKind = event.operationKind,
+                            selectionAnchorUtf8 = event.selectionAnchorUtf8,
+                            selectionHeadUtf8 = event.selectionHeadUtf8,
                             lease = lease,
+                            contentChanged = event.contentChanged,
+                            contentDelta = event.contentDelta,
                         ),
                     )
                 }
             }
+            target.onEditorApplied?.invoke(event)
         }
         view.onSearchHighlightsCleared = {
             sessionCoordinator.setTargetDecorations(target.targetId, TargetDecorations())
@@ -901,7 +904,6 @@ class EditorWindowHost(
 
     private fun clearActiveCallbacks() {
         sharedEditorView?.let { view ->
-            view.onContentChanged = null
             view.onLocalEdit = null
             view.onExternalEdit = null
             view.onCommitRequested = null

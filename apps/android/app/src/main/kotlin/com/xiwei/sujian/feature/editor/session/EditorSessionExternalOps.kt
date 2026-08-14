@@ -5,13 +5,17 @@ package com.xiwei.sujian.feature.editor.session
 fun EditorSessionCoordinator.shouldApplyExternalContent(fact: TargetDocumentFact): ExternalContentDecision {
     if (fact.sourceVersion.isEmpty) return ExternalContentDecision.IgnoreEmptyVersion
     // #595 二/四：比较基于该 target 的 store 记录文档事实（committedVersion /
-    // localDirty / text）— 与可观察 SessionState 是否恰好指向活动 target 无关，
+    // localDirty）— 与可观察 SessionState 是否恰好指向活动 target 无关，
     // 新 collector 读到的是当前文档事实，重放旧事实幂等忽略。
     val doc = store.record(fact.targetId)?.documentState ?: DocumentState()
     if (doc.committedVersion == fact.sourceVersion) return ExternalContentDecision.IgnoreReplay
     if (doc.localDirty) return ExternalContentDecision.IgnoreDirtyConflict
     if (isVersionOlder(doc.committedVersion, fact.sourceVersion)) return ExternalContentDecision.IgnoreOlder
-    if (doc.text == fact.text) return ExternalContentDecision.IgnoreSameContent
+    // #624 评论9：DocumentState.text 已删除 — 需要比较正文时低频调用
+    // [queryTargetSnapshot] 取 Core snapshot.text（冷路径，非每键热路径）。
+    // snapshot.text == fact.text 时无需 reset；否则继续 Apply 判定。
+    val snapshot = queryTargetSnapshot(fact.targetId)
+    if (snapshot != null && snapshot.text == fact.text) return ExternalContentDecision.IgnoreSameContent
     // 空 committed（从未建立版本事实）→ 首次应用（章节首次加载）。
     if (doc.committedVersion.isEmpty) return ExternalContentDecision.Apply
     // #595 四：正文不同且版本不可比较 — Repository 加载（用户主动打开章节）

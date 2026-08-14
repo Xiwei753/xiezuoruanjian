@@ -4,10 +4,14 @@ import androidx.compose.runtime.Immutable
 import com.xiwei.sujian.feature.editor.window.EditingState
 
 /**
- * #595 一/二：会话层唯一可观察状态。
+ * #595 一/二 / #624 评论9：会话层唯一可观察状态。
  *
  * 由 [EditorSessionCoordinator] 维护，通过 [StateFlow] 暴露给 Compose 消费者。
- * 包含当前正文、revision、选区、最后应用的事务 ID、来源类型和文档版本事实。
+ * 包含当前 revision、选区、最后应用的事务 ID、来源类型和文档版本事实。
+ *
+ * #624 评论9：删除 `text` 字段 — 正文只在冷路径（load/snapshot/save/sync/external-apply）
+ * 经 [TargetSnapshot.text] 一次性 materialize，热路径不存整章 String。
+ * WritingPane 不再比较 `sessionState.text == uiState.content`。
  *
  * WritingPane 收集该状态：本地输入时 revision 已在 SessionState 中更新，
  * UI 回显只更新保存状态，不触发 resetPersistentSession。
@@ -20,7 +24,6 @@ import com.xiwei.sujian.feature.editor.window.EditingState
 data class EditorSessionState(
     val targetId: String? = null,
     val sessionId: ULong? = null,
-    val text: String = "",
     val revision: Long = 0L,
     val selectionAnchorUtf8: Int = 0,
     val selectionHeadUtf8: Int = 0,

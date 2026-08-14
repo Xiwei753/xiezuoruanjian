@@ -159,14 +159,15 @@ private fun rememberWritingPaneTarget(
         remember(targetId) {
             EditableTextTarget(targetId = targetId)
         }
-    target.onTextChanged = { newText ->
-        // #595 一：本地输入不再维护 generation — onLocalEdit 已在 EditorWindowHost
-        // 中更新 sessionStateFlow.revision，WritingPane 用 revision 判断来源。
-        currentViewModel.onContentChanged(newText)
+    // #624 评论9：热路径不再传整章 String — onTextChanged/onCommit 已删除，
+    // 改用 onEditorApplied 接轻量 EditorAppliedEvent（保存调度/统计/字数增量）。
+    target.onEditorApplied = { event ->
+        currentViewModel.onEditorApplied(event)
     }
-    target.onCommit = { finalText ->
-        currentViewModel.onContentChanged(finalText)
-    }
+    // commit/cancel 仍由 EditorWindowHost 的 onCommitRequested/onCancelRequested
+    // 触发 commitActiveEdit/cancelActiveEdit；target.onCommit/onCancel 不再走
+    // 整章 String 热路径。
+    target.onCommit = { }
     target.onCancel = {}
     target.updateProfile(TextEditorProfile.DocumentBody)
     target.updatePersistent(true)
@@ -189,7 +190,10 @@ private data class EditorAttachInputs(
     val chapter: ChapterRef,
 )
 
-/** 本地输入正文同步 + 编辑器附着（beginEdit / confirmEditorAttached）。 */
+/** 编辑器附着（beginEdit / confirmEditorAttached）。
+ * #624 评论9：WritingPaneTargetTextSync 已删除 — sessionState.text 已不存在，
+ * 不再比较 `sessionState.text == uiState.content`；本地输入正文同步由
+ * onEditorApplied 增量处理，target.updateText(content) 只在 attach 冷路径执行。 */
 @Composable
 private fun WritingPaneEditorAttachSync(
     currentViewModel: EditorViewModel,
@@ -197,28 +201,7 @@ private fun WritingPaneEditorAttachSync(
     targetId: String,
     inputs: EditorAttachInputs,
 ) {
-    WritingPaneTargetTextSync(currentViewModel, coordinator, targetId, inputs)
     WritingPaneEditorAttach(currentViewModel, coordinator, targetId, inputs)
-}
-
-/** #595 二：本地输入的 target 正文同步 — onLocalEdit 先更新 sessionStateFlow，
- * 后通知 ViewModel 更新 uiState.content，sessionState.text 已与之一致。 */
-@Composable
-private fun WritingPaneTargetTextSync(
-    currentViewModel: EditorViewModel,
-    coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
-    targetId: String,
-    inputs: EditorAttachInputs,
-) {
-    LaunchedEffect(inputs.uiState.content, inputs.chapter.chapterId) {
-        if (inputs.chapterState.failedSwitchTarget == targetId) return@LaunchedEffect
-        if (!inputs.uiState.loading &&
-            inputs.sessionState.origin == com.xiwei.sujian.feature.editor.session.EditorSessionOrigin.LOCAL_INPUT &&
-            inputs.sessionState.text == inputs.uiState.content
-        ) {
-            coordinator.updateTargetText(targetId, inputs.uiState.content)
-        }
-    }
 }
 
 /** #595 一：编辑器附着 — 切换失败/未提交章节禁止 beginEdit；附着后解除输入冻结。 */

@@ -42,12 +42,16 @@ data class DocumentVersion(
 }
 
 /**
- * #595 二/四：每个 target 的完整文档事实 — 事件总线保存的是文档事实而非
+ * #595 二/四 / #624 评论9：每个 target 的完整文档事实 — 事件总线保存的是文档事实而非
  * "最后一个事件对象"；新 collector 读到的就是当前文档状态，重放旧命令不会
  * 再次执行副作用（同 sourceVersion 幂等）。
  *
+ * #624 评论9：删除 `text` 字段 — 正文只在冷路径（load/snapshot/save/sync/external-apply）
+ * 经 [TargetSnapshot.text] 一次性 materialize，热路径不存整章 String。
+ * [shouldApplyExternalContent] 需要比较正文时低频调用 [queryTargetSnapshot] 取 snapshot.text。
+ *
  * 字段含义：
- * - [text]/[revision]：Rust session 的真实正文与 revision（snapshot 镜像）；
+ * - [revision]：Rust session 的真实 revision（snapshot 镜像）；
  * - [selectionAnchorUtf8]/[selectionHeadUtf8]：真实选区（UTF-8 字节）；
  * - [committedVersion]：最后应用的文档版本（本地输入不改变它；外部版本应用或
  *   保存成功上报后更新）；
@@ -61,7 +65,6 @@ data class DocumentVersion(
  */
 @Immutable
 data class DocumentState(
-    val text: String = "",
     val revision: Long = 0L,
     val selectionAnchorUtf8: Int = 0,
     val selectionHeadUtf8: Int = 0,

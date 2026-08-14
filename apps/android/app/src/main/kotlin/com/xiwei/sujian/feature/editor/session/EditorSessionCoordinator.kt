@@ -122,13 +122,16 @@ class EditorSessionCoordinator(
         val targetId = s.activeTargetId ?: return null
         val sessionId = s.sessionId ?: return null
         val record = store.record(targetId) ?: return null
+        // #624 评论9：EditorSessionState.text 已删除 — 正文从 Core snapshot 取（冷路径）。
+        // snapshot == null 时 text="" 保留 lease（避免 save 完全失败），save 路径会处理空。
+        val snapshot = querySnapshotForSession(sessionId)
         return DocumentOperationLease(
             operationId = operationIdCounter.incrementAndGet(),
             targetId = targetId,
             coreSessionId = sessionId,
             inputEpoch = inputLeaseEpoch,
             rustRevision = s.revision,
-            text = s.text,
+            text = snapshot?.text ?: "",
             committedVersion = record.documentState.committedVersion,
         )
     }

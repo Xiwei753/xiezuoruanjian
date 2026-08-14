@@ -222,8 +222,12 @@ class EditorViewModel(
     internal var sessionStartTime = System.currentTimeMillis()
 
     internal val saveMutex = Mutex()
-    internal var pendingSaveContent: String? = null
+
+    // #624 评论9：pendingSaveContent 已删除 — 保存期间继续输入只标记 contentDirty=true。
     internal var autoSaveJob: kotlinx.coroutines.Job? = null
+
+    /** #624 评论9：延迟刷新 speed 的可取消 Job。 */
+    internal var statsRefreshJob: kotlinx.coroutines.Job? = null
     internal var saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
     internal var saveActorJob: kotlinx.coroutines.Job? = null
     internal var contentExplicitlyCleared = false
@@ -266,7 +270,8 @@ class EditorViewModel(
 
     internal var statsSessionId: String = java.util.UUID.randomUUID().toString()
     internal var statsLastEventMs: Long = 0
-    internal var previousText: String = ""
+
+    // #624 评论9：previousText 已删除 — 统计改增量 recordWritingEvent。
     internal var isLoadingChapter = false
 
     /**
@@ -375,6 +380,7 @@ class EditorViewModel(
         super.onCleared()
         syncObserverJob?.cancel()
         autoSaveJob?.cancel()
+        statsRefreshJob?.cancel()
         saveCommandChannel.close()
         // #595 四：只关闭自己的 gate 注册 — 新实例的 flusher 不被旧实例清除。
         gateRegistration?.close()

@@ -32,7 +32,7 @@ fun EditorViewModel.buildSaveToken(
     )
 }
 
-fun EditorViewModel.scheduleAutoSave(content: String) {
+fun EditorViewModel.scheduleAutoSave() {
     val session = currentSession ?: return
     autoSaveJob?.cancel()
     autoSaveJob =
@@ -41,9 +41,19 @@ fun EditorViewModel.scheduleAutoSave(content: String) {
             if (!_uiState.value.settings.autoSaveEnabled) return@launch
             delay(delayMs)
             if (_uiState.value.saveStatus == SaveStatus.Unsaved) {
+                // #624 评论9：正文从 Core snapshot lease 取（冷路径），不再每键存 content。
+                val lease = _sessionCoordinator?.issueDocumentOperationLease()
+                val content = lease?.text ?: ""
+                // #624 评论9：contentExplicitlyCleared 从 lease.text 判定 —
+                // 非空编辑撤销清空意图；空正文 + 之前 dirty 视为显式清空。
+                if (content.isNotEmpty()) {
+                    contentExplicitlyCleared = false
+                } else if (contentDirty) {
+                    contentExplicitlyCleared = true
+                }
                 // #595 七：保存命令携带入队时的 Rust session revision — 回执按
                 // (target, revision) 记录，Flush 屏障据此验证 revision 对应正文已落盘。
-                val revision = _sessionCoordinator?.sessionState?.revision ?: 0L
+                val revision = lease?.rustRevision ?: _sessionCoordinator?.sessionState?.revision ?: 0L
                 // #624 评论1：正文是否为空只看原始字符串 — "\n"、连续空行、
                 // 只含空格/制表符的段落都是用户正文，不能被 trim 后当成空正文拒绝保存。
                 when {
@@ -196,7 +206,7 @@ suspend fun EditorViewModel.clearChapterContentInternal(
                             chapterHash = savedHash,
                             saveStatus = SaveStatus.Saved,
                         )
-                    previousText = ""
+                    // #624 评论9：previousText 已删除 — 不再维护整章 String 缓存。
                     // #595 三：清空落盘成功后统一清理 dirty/cleared — 否则下次同步
                     // requestSave 仍见 contentExplicitlyCleared=true 重复发送 Clear，
                     // 再次触发空覆盖保护（旧实现分散在多套可写状态未统一清理）。
@@ -248,13 +258,11 @@ suspend fun EditorViewModel.clearChapterContentInternal(
     }
 }
 
-// #597：保存循环与单次落盘分离 — 单次尝试（lease 校验→内容保存→回执记录→
-// 状态更新）收敛到 saveChapterAttempt，performSave 只负责 pending 重试循环；
-// 保存期间继续输入（pending）时按新 revision 重试，晚到回执不覆盖新输入。
+// #597 / #624 评论9：保存循环与单次落盘分离 — 单次尝试（lease 校验→内容保存→
+// 回执记录→状态更新）收敛到 saveChapterAttempt。pendingSaveContent 已删除：
+// 保存期间继续输入只标记 contentDirty=true，下次 autoSave/requestSave 重新签发 lease。
 private sealed interface SaveAttemptResult {
     data class Finished(val success: Boolean) : SaveAttemptResult
-
-    data class RetryPending(val content: String) : SaveAttemptResult
 }
 
 private suspend fun EditorViewModel.saveChapterAttempt(
@@ -266,7 +274,8 @@ private suspend fun EditorViewModel.saveChapterAttempt(
 ): SaveAttemptResult {
     val currentState = _uiState.value
     if (currentState.saveStatus == SaveStatus.Saving) {
-        pendingSaveContent = contentToSave
+        // #624 评论9：pendingSaveContent 已删除 — 保存期间继续输入只标记 contentDirty=true，
+        // 下次 autoSave/requestSave 重新签发 lease（saveCommandChannel actor 已处理队列）。
         return SaveAttemptResult.Finished(false)
     }
     _uiState.value = currentState.copy(saveStatus = SaveStatus.Saving)
@@ -329,13 +338,9 @@ private fun EditorViewModel.handleSaveSuccess(
     } else {
         _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Unsaved)
     }
-    val pending = pendingSaveContent
-    pendingSaveContent = null
-    return if (pending != null && pending != contentToSave) {
-        SaveAttemptResult.RetryPending(pending)
-    } else {
-        SaveAttemptResult.Finished(true)
-    }
+    // #624 评论9：pendingSaveContent 已删除 — 保存期间继续输入由 contentDirty 标记，
+    // 下次 autoSave/requestSave 重新签发 lease。不再返回 RetryPending。
+    return SaveAttemptResult.Finished(true)
 }
 
 private suspend fun EditorViewModel.handleSaveError(
@@ -423,23 +428,11 @@ suspend fun EditorViewModel.performSave(
         }
         return false
     }
-    var currentContent = content
-    var currentIsAutoSave = isAutoSave
-    var currentRevision = revisionAtEnqueue
+    // #624 评论9：pendingSaveContent 已删除 — 不再重试循环，单次尝试即返回。
     val saveStartedAt = System.currentTimeMillis()
-    while (true) {
-        val contentToSave = currentContent
-        val attempt =
-            saveMutex.withLock {
-                saveChapterAttempt(contentToSave, session, currentIsAutoSave, currentRevision, saveStartedAt)
-            }
-        when (attempt) {
-            is SaveAttemptResult.Finished -> return attempt.success
-            is SaveAttemptResult.RetryPending -> {
-                currentContent = attempt.content
-                currentIsAutoSave = true
-                currentRevision = _sessionCoordinator?.sessionState?.revision ?: currentRevision
-            }
+    val attempt =
+        saveMutex.withLock {
+            saveChapterAttempt(content, session, isAutoSave, revisionAtEnqueue, saveStartedAt)
         }
-    }
+    return (attempt as SaveAttemptResult.Finished).success
 }

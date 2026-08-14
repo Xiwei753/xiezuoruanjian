@@ -4,7 +4,7 @@ import androidx.compose.runtime.Immutable
 import com.xiwei.sujian.feature.editor.window.EditorWindowHost
 
 /**
- * #595 一/二/四：类型化正文更新协议。
+ * #595 一/二/四 / #624 评论9：类型化正文更新协议。
  *
  * ## 直接回调事件（View → 会话层，不走事件总线）
  *
@@ -15,6 +15,11 @@ import com.xiwei.sujian.feature.editor.window.EditorWindowHost
  * 这些事件在 [EditorWindowHost.installContentCallback] 中由 View 的
  * onLocalEdit / onExternalEdit 同步回调直接送入会话层 reducer，
  * 不经 [com.xiwei.sujian.feature.editor.ui.TargetDocumentUpdateBus]。
+ *
+ * #624 评论9：热路径不再传整章 String — 只携带 [contentChanged]/[contentDelta]
+ * 增量信号；正文只在冷路径（load/snapshot/save/sync）经 [TargetSnapshot.text]
+ * 一次性 materialize。dirty 判定由 [contentChanged] 替代旧 `text != previousDoc.text`
+ * 字符串比较。
  *
  * ## 事件总线事实（[TargetDocumentFact]）
  *
@@ -29,7 +34,6 @@ import com.xiwei.sujian.feature.editor.window.EditorWindowHost
 @Immutable
 sealed interface EditorDocumentUpdate {
     val targetId: String
-    val text: String
     val revision: Long
     val transactionId: Long
 
@@ -44,10 +48,18 @@ sealed interface EditorDocumentUpdate {
      */
     val lease: EditorInputLease
 
+    /**
+     * #624 评论9：本次编辑是否真改了正文（displayPatches 非空）。
+     * 替代旧 `text != previousDoc.text` 字符串比较 — 热路径不传整章 String。
+     */
+    val contentChanged: Boolean
+
+    /** #624 评论9：增量字符统计 — 不依赖整章 String。 */
+    val contentDelta: EditorContentDelta
+
     @Immutable
     data class LocalInput(
         override val targetId: String,
-        override val text: String,
         override val revision: Long,
         override val transactionId: Long,
         val operationKind: EditorOperationKind = EditorOperationKind.INSERT,
@@ -57,6 +69,8 @@ sealed interface EditorDocumentUpdate {
         override val selectionAnchorUtf8: Int = -1,
         override val selectionHeadUtf8: Int = -1,
         override val lease: EditorInputLease = EditorInputLease(targetId, 0UL, 0L),
+        override val contentChanged: Boolean = true,
+        override val contentDelta: EditorContentDelta = EditorContentDelta(),
     ) : EditorDocumentUpdate
 
     /**
@@ -70,7 +84,6 @@ sealed interface EditorDocumentUpdate {
     @Immutable
     data class UndoRestored(
         override val targetId: String,
-        override val text: String,
         /** Rust 快照 ID — 用于版本比较。 */
         val snapshotId: Long,
         override val revision: Long,
@@ -78,6 +91,8 @@ sealed interface EditorDocumentUpdate {
         override val selectionAnchorUtf8: Int = -1,
         override val selectionHeadUtf8: Int = -1,
         override val lease: EditorInputLease = EditorInputLease(targetId, 0UL, 0L),
+        override val contentChanged: Boolean = true,
+        override val contentDelta: EditorContentDelta = EditorContentDelta(),
     ) : EditorDocumentUpdate
 
     /**
@@ -91,7 +106,6 @@ sealed interface EditorDocumentUpdate {
     @Immutable
     data class ProgrammaticReplace(
         override val targetId: String,
-        override val text: String,
         /** 程序化命令 ID — 用于版本比较。 */
         val commandId: Long,
         override val revision: Long,
@@ -99,6 +113,8 @@ sealed interface EditorDocumentUpdate {
         override val selectionAnchorUtf8: Int = -1,
         override val selectionHeadUtf8: Int = -1,
         override val lease: EditorInputLease = EditorInputLease(targetId, 0UL, 0L),
+        override val contentChanged: Boolean = true,
+        override val contentDelta: EditorContentDelta = EditorContentDelta(),
     ) : EditorDocumentUpdate
 }
 

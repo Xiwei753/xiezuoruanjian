@@ -36,6 +36,13 @@ class EditableTextTarget(
     var onCancel: (() -> Unit)? = null
     var onEditingStateChanged: ((EditingState) -> Unit)? = null
 
+    /**
+     * #624 评论9：轻量编辑应用回调 — 热路径不传整章 String，只传 [EditorAppliedEvent]。
+     * 由 [EditorWindowHost.installContentCallback] 在 onLocalEdit/onExternalEdit
+     * 完成会话层 reducer 后调用，ViewModel 据此做保存调度/统计/字数增量。
+     */
+    var onEditorApplied: ((com.xiwei.sujian.feature.editor.session.EditorAppliedEvent) -> Unit)? = null
+
     var currentGeometry: Rect by mutableStateOf(Rect())
         private set
     var currentTransform: Transform2D by mutableStateOf(Transform2D.IDENTITY)

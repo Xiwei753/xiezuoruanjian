@@ -18,9 +18,12 @@ import com.xiwei.sujian.feature.editor.interop.EditorKernelBridge
 import com.xiwei.sujian.feature.editor.pipeline.AndroidEditorPipeline
 import com.xiwei.sujian.feature.editor.pipeline.EditorCommandPort
 import com.xiwei.sujian.feature.editor.pipeline.PipelineOutput
+import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
+import com.xiwei.sujian.feature.editor.session.EditorContentDelta
 import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import com.xiwei.sujian.feature.editor.session.NewlinePolicy
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
+import com.xiwei.sujian.feature.editor.session.contentDeltaFromPatches
 import com.xiwei.sujian.feature.editor.session.toEditorOperationKind
 import com.xiwei.sujian.feature.editor.window.WindowDisplayFrameClock
 import uniffi.writer_core.EditorTransactionCauseDto
@@ -197,36 +200,49 @@ class SujianEditorView
                     updateMaxScroll()
                     scrollY = scrollY.coerceIn(0f, maxScrollY)
                     if (!suppressContentCallback && output.result.isApplied()) {
-                        val editText = pipeline.getText()
+                        // #624 评论9：热路径不传整章 String — 只构造轻量 EditorAppliedEvent。
+                        // contentChanged = displayPatches 非空；contentDelta 由 patches 累加。
                         val source = output.source
+                        val contentChanged = output.result.displayPatches.isNotEmpty()
+                        val contentDelta =
+                            output.result.displayPatches
+                                .map {
+                                    contentDeltaFromPatches(
+                                        it.insertedText,
+                                        it.replaceByteStart,
+                                        it.replaceByteEndExclusive,
+                                    )
+                                }
+                                .fold(EditorContentDelta()) { acc, d ->
+                                    EditorContentDelta(
+                                        insertedChars = acc.insertedChars + d.insertedChars,
+                                        deletedChars = acc.deletedChars + d.deletedChars,
+                                        insertedNonWhitespaceChars =
+                                            acc.insertedNonWhitespaceChars + d.insertedNonWhitespaceChars,
+                                        deletedNonWhitespaceChars =
+                                            acc.deletedNonWhitespaceChars + d.deletedNonWhitespaceChars,
+                                    )
+                                }
+                        val event =
+                            EditorAppliedEvent(
+                                revision = output.result.newRevision,
+                                transactionId = output.result.transactionId,
+                                operationKind = output.result.visualIntent.operationKind.toEditorOperationKind(),
+                                source = source,
+                                contentChanged = contentChanged,
+                                contentDelta = contentDelta,
+                                selectionAnchorUtf8 = pipeline.getSelectionStartUtf8(),
+                                selectionHeadUtf8 = pipeline.getSelectionEndUtf8(),
+                            )
                         // #595 二/四：根据输出携带的来源分派 — 撤销/恢复/程序化替换走
-                        // onExternalEdit 类型化事件，普通输入走 onLocalEdit。来源在命令
-                        // 与 PipelineOutput 本身携带，不再使用 pendingEditSource 可变
-                        // 侧信道（NeedReload/Stale 不会污染下一条命令的来源分类）。
+                        // onExternalEdit，普通输入走 onLocalEdit。来源在命令与
+                        // PipelineOutput 本身携带，不再使用 pendingEditSource 可变侧信道。
                         // #595 五：selection-only 操作（CURSOR_ONLY）没有 displayPatches，
-                        // 但会话层 selection 必须更新 — 回调不受 displayPatches 门控，
-                        // 只有 onContentChanged（ViewModel 保存）仍按文字 patch 门控。
+                        // 但会话层 selection 必须更新 — 回调不受 displayPatches 门控。
                         if (source != EditorEditSource.NORMAL) {
-                            onExternalEdit?.invoke(
-                                source,
-                                editText,
-                                output.result.newRevision,
-                                output.result.transactionId,
-                                pipeline.getSelectionStartUtf8(),
-                                pipeline.getSelectionEndUtf8(),
-                            )
+                            onExternalEdit?.invoke(event)
                         } else {
-                            onLocalEdit?.invoke(
-                                editText,
-                                output.result.newRevision,
-                                output.result.transactionId,
-                                output.result.visualIntent.operationKind.toEditorOperationKind(),
-                                pipeline.getSelectionStartUtf8(),
-                                pipeline.getSelectionEndUtf8(),
-                            )
-                        }
-                        if (output.result.displayPatches.isNotEmpty()) {
-                            onContentChanged?.invoke(editText)
+                            onLocalEdit?.invoke(event)
                         }
                     }
                     invalidate()
@@ -251,16 +267,25 @@ class SujianEditorView
                         "cursor=${pipeline.getCursorUtf8()}",
                 )
                 updateLayoutConfig()
+                // #624 评论9：reloadFromKernel 是冷路径（NeedReload/Stale 后整章重装），
+                // 仍用 pipeline.getText() 构造轻量 EditorAppliedEvent（contentChanged=true）。
                 val reloadText = pipeline.getText()
-                onLocalEdit?.invoke(
-                    reloadText,
-                    pipeline.getRevision(),
-                    0L,
-                    EditorOperationKind.REPLACE,
-                    pipeline.getSelectionStartUtf8(),
-                    pipeline.getSelectionEndUtf8(),
-                )
-                onContentChanged?.invoke(reloadText)
+                val event =
+                    EditorAppliedEvent(
+                        revision = pipeline.getRevision(),
+                        transactionId = 0L,
+                        operationKind = EditorOperationKind.REPLACE,
+                        source = EditorEditSource.NORMAL,
+                        contentChanged = true,
+                        contentDelta =
+                            EditorContentDelta(
+                                insertedChars = reloadText.length,
+                                insertedNonWhitespaceChars = reloadText.count { !it.isWhitespace() },
+                            ),
+                        selectionAnchorUtf8 = pipeline.getSelectionStartUtf8(),
+                        selectionHeadUtf8 = pipeline.getSelectionEndUtf8(),
+                    )
+                onLocalEdit?.invoke(event)
             } else {
                 android.util.Log.w("SujianEditorInput", "reloadFromKernel FAILED (no session snapshot)")
             }
@@ -725,46 +750,24 @@ class SujianEditorView
 
         fun getPipeline(): EditorCommandPort = pipeline
 
-        var onContentChanged: ((String) -> Unit)? = null
-
         /**
-         * #595 一：类型化本地编辑回调 — 传递 text/revision/transactionId/operationKind。
+         * #595 一 / #624 评论9：类型化本地编辑回调 — 传递轻量 [EditorAppliedEvent]。
          *
          * 由 [EditorWindowHost.installContentCallback] 设置，回调中先调用
          * [EditorSessionCoordinator.applyLocalEdit] 更新唯一 SessionState，
-         * 再通知 ViewModel 保存。替代仅传字符串的 [onContentChanged]。
-         *
-         * #595 解决二：operationKind 由 Rust EditResult 的 VisualIntent 映射而来，
-         * 随 [EditorDocumentUpdate.LocalInput] 记录本次编辑语义。
+         * 再通知 ViewModel 保存。热路径不传整章 String。
          */
-        var onLocalEdit: (
-            (
-                text: String,
-                revision: Long,
-                transactionId: Long,
-                operationKind: EditorOperationKind,
-                selectionAnchorUtf8: Int,
-                selectionHeadUtf8: Int,
-            ) -> Unit
-        )? = null
+        var onLocalEdit: ((EditorAppliedEvent) -> Unit)? = null
 
         /**
-         * #595 二：类型化外部编辑回调 — 撤销/恢复/程序化替换产生 EditResult 后调用。
+         * #595 二 / #624 评论9：类型化外部编辑回调 — 撤销/恢复/程序化替换产生
+         * EditResult 后调用，传递轻量 [EditorAppliedEvent]。
          *
-         * 由 [EditorWindowHost.installContentCallback] 设置，回调中根据 source 构造
-         * [EditorDocumentUpdate.UndoRestored] 或 [EditorDocumentUpdate.ProgrammaticReplace]，
+         * 由 [EditorWindowHost.installContentCallback] 设置，回调中根据 event.source
+         * 构造 [EditorDocumentUpdate.UndoRestored] 或 [EditorDocumentUpdate.ProgrammaticReplace]，
          * 调用 [EditorSessionCoordinator.applyExternalUpdate] 更新唯一 SessionState。
          */
-        var onExternalEdit: (
-            (
-                source: EditorEditSource,
-                text: String,
-                revision: Long,
-                transactionId: Long,
-                selectionAnchorUtf8: Int,
-                selectionHeadUtf8: Int,
-            ) -> Unit
-        )? = null
+        var onExternalEdit: ((EditorAppliedEvent) -> Unit)? = null
 
         fun setTypingAnimationEnabled(
             enabled: Boolean,
@@ -973,8 +976,8 @@ class SujianEditorView
             profile: TextEditorProfile,
         ) {
             if (isSessionBound) {
-                onContentChanged = null
                 onLocalEdit = null
+                onExternalEdit = null
                 onCommitRequested = null
                 onCancelRequested = null
                 unbindSession("rebind")
@@ -1050,8 +1053,8 @@ class SujianEditorView
             pipeline.cancelActiveTransaction()
             inputAdapter.invalidateCompositionSession()
             inputAdapter.onPerformEditorAction = null
-            onContentChanged = null
             onLocalEdit = null
+            onExternalEdit = null
             onCommitRequested = null
             onCancelRequested = null
             kernelBridge = null
