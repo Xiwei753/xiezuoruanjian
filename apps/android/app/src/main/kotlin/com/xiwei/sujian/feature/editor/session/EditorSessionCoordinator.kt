@@ -11,7 +11,6 @@ import com.xiwei.sujian.feature.editor.window.EditorWindowHost
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import java.util.concurrent.locks.ReentrantLock
 
 /**
@@ -438,49 +437,6 @@ open class EditorSessionCoordinator(
     fun getProjectionSnapshot(targetId: String): ProjectionSnapshot? = store.record(targetId)?.projection
 
     // ── 窗口绑定状态机 ──
-
-    /**
-     * #592 二：Compose onDispose 唯一入口 — 只解除窗口绑定，不关闭持久 Rust session。
-     *
-     * persistent target：捕获真实 snapshot 并进入 [WindowBindingState.Detached]，
-     * Rust session、Undo/Redo、revision、文档事实全部保留，新窗口可自动附着。
-     * 非 persistent（草稿）target：关闭临时 session、删除记录并回到 Idle。
-     *
-     * 关闭持久 session 必须由业务事件 [closeTarget] 触发（返回章节列表、切换章节、
-     * 删除章节），配置变化不改变 workspace route，因此不会关闭 session。
-     * #595 四：只清理本 target 的窗口状态，不得把其他活动 target 的 binding
-     * 状态一并清成 Idle。
-     *
-     *
-     * #592 二：窗口绑定完成（视图已 bind/attach 成功）。
-     * 由 [EditorWindowHost] 在 View 真实绑定成功后调用。
-     *
-     * #595 三：防御性状态守卫 — Attached 只能从 Attaching 进入。
-     *
-     *
-     * #592 三：#595 四：业务级关闭 — 由 workspace 导航事件调用（返回章节列表、
-     * 切换章节、删除章节）。与窗口解绑 [detachWindowBinding] 分开：关闭会销毁
-     * Rust session，解绑只解除窗口引用。
-     *
-     * 只有关闭的 target 是当前活动/当前 SessionState 的 target 时才重置全局状态；
-     * 关闭非活动 target 不得清掉活动 target 的 binding/editing。
-     * 关闭同时使该 target 的输入 lease 失效（旧 View 晚到的回调不再被接受）。
-     *
-     *
-     * 准备会话绑定 — 创建/复用 session 并设置活动状态。
-     * 返回绑定信息或 null（失败时）。
-     *
-     * #592 一：复用既有持久 session 时，绑定信息携带 Rust 的真实
-     * textEditSessionSnapshot（text/revision/cursor/selection），窗口层据此执行
-     * attachSnapshot，不再用新 Compose target 的正文/末尾光标执行 loadText
-     * （那会 revision+1 并清空 Undo/Redo）。
-     * #595 二：新建 session 同样携带 create 后的真实 snapshot（createSession 已
-     * 接收初始正文，是唯一一次 Core 命令），窗口层 attachSnapshot 只重建本地镜像。
-     * #624 评论17 问题2：删除 "prepared" 假窗口 — commitPreparedSession 后
-     * target 进入 Detached（activeTargetId=null），真实窗口出现后从 Detached
-     * 调 beginEdit 走 Detached → Attaching(realWindowId) → Attached(realWindowId)。
-     * #595 四：sessionId 写入 store 记录 — 非持久 target 同样记录。
-     */
 
     /**
      * #624 评论17 问题3：forceEditingState 走 [mutateSession] 单一临界区 —

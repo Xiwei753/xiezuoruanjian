@@ -31,6 +31,10 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SessionMutationGateTest {
+    companion object {
+        private const val REMOTE_HASH = "hash-remote"
+    }
+
     private fun createCoordinator(): EditorSessionCoordinator =
         EditorSessionCoordinator(
             com.xiwei.sujian.core.interop.app.AppServiceBridge(
@@ -153,7 +157,7 @@ class SessionMutationGateTest {
             TargetDocumentFact(
                 targetId = "t1",
                 text = "remoteText-very-long-content-that-must-not-be-cached",
-                sourceVersion = DocumentVersion(contentHash = "hash-remote"),
+                sourceVersion = DocumentVersion(contentHash = REMOTE_HASH),
                 baseVersion = DocumentVersion(),
                 origin = DocumentFactOrigin.SYNC_MERGED,
             )
@@ -161,7 +165,7 @@ class SessionMutationGateTest {
         val pending = coordinator.pendingExternalFactFor("t1")
         assertNotNull("pendingExternal 必须保存", pending)
         pending!!
-        assertEquals(DocumentVersion(contentHash = "hash-remote"), pending.sourceVersion)
+        assertEquals(DocumentVersion(contentHash = REMOTE_HASH), pending.sourceVersion)
         assertEquals(DocumentFactOrigin.SYNC_MERGED, pending.origin)
     }
 
@@ -185,7 +189,7 @@ class SessionMutationGateTest {
             TargetDocumentFact(
                 "t1",
                 "remoteText",
-                DocumentVersion(contentHash = "hash-remote"),
+                DocumentVersion(contentHash = REMOTE_HASH),
                 DocumentVersion(),
                 DocumentFactOrigin.SYNC_MERGED,
             )
@@ -194,7 +198,7 @@ class SessionMutationGateTest {
         val consumed = coordinator.consumePendingExternalFact("t1")
         assertNotNull(consumed)
         consumed!!
-        assertEquals(DocumentVersion(contentHash = "hash-remote"), consumed.sourceVersion)
+        assertEquals(DocumentVersion(contentHash = REMOTE_HASH), consumed.sourceVersion)
         assertEquals(DocumentFactOrigin.SYNC_MERGED, consumed.origin)
         assertNull("consume 后 pendingExternal 必须清除", coordinator.pendingExternalFactFor("t1"))
     }
@@ -213,8 +217,11 @@ class SessionMutationGateTest {
         assertTrue(
             coordinator.commitPreparedSession(
                 PreparedSessionHandle(
-                    "t1", 5UL, TargetSnapshot("initial", 7, 10L, 0, 7),
-                    PreparedSessionMode.Created, null,
+                    "t1",
+                    5UL,
+                    TargetSnapshot("initial", 7, 10L, 0, 7),
+                    PreparedSessionMode.Created,
+                    null,
                 ),
             ),
         )
@@ -237,16 +244,17 @@ class SessionMutationGateTest {
         assertEquals(10L, coordinator.sessionState.revision)
 
         // 构造 lease（revision=10，与当前 state 匹配）
-        val saveLease = DocumentOperationLease(
-            operationId = 1L,
-            targetId = "t1",
-            coreSessionId = 5UL,
-            inputEpoch = activeLease.epoch,
-            rustRevision = 10L,
-            text = "initial-edit",
-            committedVersion = DocumentVersion(),
-            localDirty = true,
-        )
+        val saveLease =
+            DocumentOperationLease(
+                operationId = 1L,
+                targetId = "t1",
+                coreSessionId = 5UL,
+                inputEpoch = activeLease.epoch,
+                rustRevision = 10L,
+                text = "initial-edit",
+                committedVersion = DocumentVersion(),
+                localDirty = true,
+            )
 
         // 保存期间继续输入：revision 前进到 11
         coordinator.applyLocalEdit(
@@ -281,8 +289,11 @@ class SessionMutationGateTest {
         assertTrue(
             coordinator.commitPreparedSession(
                 PreparedSessionHandle(
-                    "t1", 5UL, TargetSnapshot("initial", 7, 10L, 0, 7),
-                    PreparedSessionMode.Created, null,
+                    "t1",
+                    5UL,
+                    TargetSnapshot("initial", 7, 10L, 0, 7),
+                    PreparedSessionMode.Created,
+                    null,
                 ),
             ),
         )
@@ -302,16 +313,17 @@ class SessionMutationGateTest {
         )
         assertTrue(coordinator.sessionState.localDirty)
 
-        val saveLease = DocumentOperationLease(
-            operationId = 1L,
-            targetId = "t1",
-            coreSessionId = 5UL,
-            inputEpoch = activeLease.epoch,
-            rustRevision = 10L,
-            text = "initial-edit",
-            committedVersion = DocumentVersion(),
-            localDirty = true,
-        )
+        val saveLease =
+            DocumentOperationLease(
+                operationId = 1L,
+                targetId = "t1",
+                coreSessionId = 5UL,
+                inputEpoch = activeLease.epoch,
+                rustRevision = 10L,
+                text = "initial-edit",
+                committedVersion = DocumentVersion(),
+                localDirty = true,
+            )
         val savedVersion = DocumentVersion(contentHash = "hash-saved")
         val committed = coordinator.commitSavedLease(saveLease, savedVersion)
         assertTrue("matching lease 必须提交成功", committed)

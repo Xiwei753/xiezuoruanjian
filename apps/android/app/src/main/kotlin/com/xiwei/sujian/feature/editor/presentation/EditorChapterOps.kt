@@ -14,9 +14,8 @@ import com.xiwei.sujian.feature.editor.session.TargetDocumentFact
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.applyExternalContentFact
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
-import com.xiwei.sujian.feature.editor.session.documentCommittedVersionFor
 import com.xiwei.sujian.feature.editor.session.commitSavedLease
-import com.xiwei.sujian.feature.editor.session.markSaved
+import com.xiwei.sujian.feature.editor.session.documentCommittedVersionFor
 import com.xiwei.sujian.feature.editor.session.prepareTargetSessionForCommit
 import com.xiwei.sujian.feature.editor.session.releasePreparedTarget
 import com.xiwei.sujian.feature.editor.session.toSaveToken

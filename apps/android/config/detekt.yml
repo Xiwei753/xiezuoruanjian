@@ -155,7 +155,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/InsertDeletePlanner.kt"
       # --- 工作台Reducer大类 ---
       # --- 测试：章节切换契约测试，多场景断言（预先存在的大类，HEAD 839 行已超 500） ---
-      - "**/kotlin/com/xiwei/sujian/feature/editor/ui/EditorViewModelChapterSwitchTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/presentation/EditorViewModelChapterSwitchTest.kt"
   LongParameterList:
     active: true
     functionThreshold: 7
@@ -193,7 +193,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/AndroidVisualPlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/InsertDeletePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/MoveCrossfadePlanner.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/editor/ui/EditorViewModel.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/presentation/EditorViewModel.kt"
       # --- 工作台组件：多面板布局参数 ---
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectWorkspaceScreen.kt"
       # --- 手机端 ---
@@ -253,7 +253,7 @@ complexity:
       # --- 编辑器：管线/协调器/输入法，函数由协议决定 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/EditorSessionCoordinator.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/ui/AnimatedTextSemanticsTest.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/editor/ui/EditorViewModelChapterSwitchTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/presentation/EditorViewModelChapterSwitchTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/window/EditorWindowHost.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/TextEditorProfileTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/platform/SujianEditorView.kt"
@@ -307,8 +307,8 @@ complexity:
       # --- 平台安全 ---
       - "**/kotlin/com/xiwei/sujian/core/interop/security/AndroidKeystoreSecureStorage.kt"
       # --- UI测试/工具 ---
-      - "**/kotlin/com/xiwei/sujian/feature/editor/ui/ChapterSwitchGateTest.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/editor/ui/EditorViewModelChapterSwitchTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/presentation/ChapterSwitchGateTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/presentation/EditorViewModelChapterSwitchTest.kt"
       - "**/kotlin/com/xiwei/sujian/app/ErrorUtil.kt"
       - "**/kotlin/com/xiwei/sujian/app/ErrorUtilTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/ui/SyncMergeEmitDedupTest.kt"

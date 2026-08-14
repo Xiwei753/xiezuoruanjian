@@ -218,6 +218,25 @@ fun EditorViewModel.startSaveActor() {
         }
 }
 
+private suspend fun EditorViewModel.handleClearChapterError(
+    result: com.xiwei.sujian.core.interop.common.BridgeResult.Error,
+) {
+    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+    if (result.code == "EMPTY_OVERWRITE_BLOCKED") {
+        _events.send(
+            EditorEvent.ShowSaveFailedDialog(
+                getApplication<Application>().getString(R.string.error_empty_overwrite_dialog),
+            ),
+        )
+    } else {
+        _events.send(
+            EditorEvent.ShowSaveFailedDialog(
+                getApplication<Application>().getString(R.string.error_save_failed, result.message),
+            ),
+        )
+    }
+}
+
 suspend fun EditorViewModel.clearChapterContentInternal(
     session: EditorSession,
     lease: DocumentOperationLease,
@@ -243,20 +262,7 @@ suspend fun EditorViewModel.clearChapterContentInternal(
                     true
                 }
                 is com.xiwei.sujian.core.interop.common.BridgeResult.Error -> {
-                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                    if (result.code == "EMPTY_OVERWRITE_BLOCKED") {
-                        _events.send(
-                            EditorEvent.ShowSaveFailedDialog(
-                                getApplication<Application>().getString(R.string.error_empty_overwrite_dialog),
-                            ),
-                        )
-                    } else {
-                        _events.send(
-                            EditorEvent.ShowSaveFailedDialog(
-                                getApplication<Application>().getString(R.string.error_save_failed, result.message),
-                            ),
-                        )
-                    }
+                    handleClearChapterError(result)
                     false
                 }
                 com.xiwei.sujian.core.interop.common.BridgeResult.NotLoaded -> {
