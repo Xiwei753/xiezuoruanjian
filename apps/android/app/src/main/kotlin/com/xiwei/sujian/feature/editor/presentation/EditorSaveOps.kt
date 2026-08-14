@@ -255,9 +255,12 @@ suspend fun EditorViewModel.clearChapterContentInternal(
                             chapterHash = savedHash,
                             saveStatus = if (committed) SaveStatus.Saved else SaveStatus.Unsaved,
                         )
-                    // #624 评论17 问题5：清空保存提交后同样检查 pendingExternal 重读。
+                    // #624 评论17 问题5：清空保存提交后重读 pendingExternal 并重新应用。
+                    // 用 reapplyPendingExternalAfterSave 替换无条件 checkSyncMergedChapter —
+                    // 保留 pending 原 origin，避免 REPOSITORY_LOAD 被错误标成 SYNC_MERGED。
                     if (committed) {
-                        editorScope.launch(Dispatchers.IO) { checkSyncMergedChapter() }
+                        val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
+                        editorScope.launch(Dispatchers.IO) { reapplyPendingExternalAfterSave(targetId) }
                     }
                     true
                 }
@@ -355,7 +358,11 @@ private fun EditorViewModel.handleSaveSuccess(
         // #624 评论17 问题5：commitSavedLease 真正提交后，如果 target 有
         // pendingExternal，重新从 Repository 读最新正文/hash 走
         // shouldApplyExternalContent（不拿缓存的旧正文覆盖刚保存的本地正文）。
-        editorScope.launch(Dispatchers.IO) { checkSyncMergedChapter() }
+        // 用 reapplyPendingExternalAfterSave 替换无条件 checkSyncMergedChapter —
+        // 保留 pending 原 origin，避免 REPOSITORY_LOAD 被错误标成 SYNC_MERGED
+        // 导致不可比较版本走 IgnoreUncomparableConflict 永不解决。
+        val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
+        editorScope.launch(Dispatchers.IO) { reapplyPendingExternalAfterSave(targetId) }
     } else {
         // 用户在保存 IO 期间继续输入（revision 前进）— 只记录回执，不覆盖新输入
         // 产生的 UI 状态/chapterHash（旧实现无条件设 Saved，页面错误显示"已保存"）。

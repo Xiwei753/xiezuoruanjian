@@ -10,12 +10,14 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.feature.editor.session.DocumentFactOrigin
 import com.xiwei.sujian.feature.editor.session.DocumentOperationLease
 import com.xiwei.sujian.feature.editor.session.DocumentVersion
+import com.xiwei.sujian.feature.editor.session.PendingExternalVersion
 import com.xiwei.sujian.feature.editor.session.TargetDocumentFact
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.applyExternalContentFact
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
 import com.xiwei.sujian.feature.editor.session.commitSavedLease
 import com.xiwei.sujian.feature.editor.session.documentCommittedVersionFor
+import com.xiwei.sujian.feature.editor.session.pendingExternalFactFor
 import com.xiwei.sujian.feature.editor.session.prepareTargetSessionForCommit
 import com.xiwei.sujian.feature.editor.session.releasePreparedTarget
 import com.xiwei.sujian.feature.editor.session.toSaveToken
@@ -113,6 +115,108 @@ suspend fun EditorViewModel.checkSyncMergedChapter() {
         throw e
     } catch (_: Exception) {
         // 同步合并检查失败不阻塞用户操作
+    }
+}
+
+/**
+ * #624 评论17 问题5：从 pending + Repository 读结果构造 reapply 事实 — 纯函数。
+ *
+ * 旧 `checkSyncMergedChapter()` 始终用 `origin = SYNC_MERGED` 构造事实，
+ * 导致 `REPOSITORY_LOAD` origin 的 pending 保存清 dirty 后重读被错误标成
+ * SYNC_MERGED，`shouldApplyExternalContent` 对不可比较版本返回
+ * `IgnoreUncomparableConflict`（重新存 pending，永不解决）。
+ *
+ * 本函数从 [pending] 取 origin（保留原事实来源），从 Repository 读最新
+ * [repositoryContent]/[repositoryHash] 构造事实版本（不拿 pending 旧 hash）。
+ *
+ * sourceVersion 保留 pending 原事实的版本锚点（[DocumentVersion.parentVersion]/
+ * [DocumentVersion.repositoryRevision]）— 重读事实的版本关系与原事实一致，
+ * 不假设基于当前 committedVersion。否则 parentVersion=baseVersion=committed
+ * 会让二者可比较，无法暴露 origin 对不可比较版本决策的影响（可比较时
+ * 不论 origin 都 Apply）。[baseVersion] 仅用于 [TargetDocumentFact.baseVersion]
+ * （本地正文基于的版本，保存后的 committedVersion）。
+ *
+ * [syncCommitId] 仅在 `pending.origin == SYNC_MERGED` 时由调用方传入
+ * `syncRepository.loadSyncState().lastSyncedCommit`；`REPOSITORY_LOAD` origin
+ * 传 null（章节加载事实不带同步锚点）。
+ */
+internal fun buildPendingReapplyFact(
+    pending: PendingExternalVersion,
+    targetId: String,
+    repositoryContent: String,
+    repositoryHash: String,
+    baseVersion: DocumentVersion,
+    syncCommitId: String?,
+): TargetDocumentFact =
+    TargetDocumentFact(
+        targetId = targetId,
+        text = repositoryContent,
+        sourceVersion =
+            DocumentVersion(
+                contentHash = repositoryHash,
+                repositoryRevision = pending.sourceVersion.repositoryRevision,
+                syncCommitId = syncCommitId,
+                parentVersion = pending.sourceVersion.parentVersion,
+            ),
+        baseVersion = baseVersion,
+        origin = pending.origin,
+    )
+
+/**
+ * #624 评论17 问题5：保存成功后重读 pendingExternal 并重新应用 — 替换无条件
+ * `checkSyncMergedChapter()`。
+ *
+ * 流程：
+ * 1. 取 target 的 pendingExternal，无则返回 false（无事可做）；
+ * 2. 从 Repository 读最新正文/hash（不拿 pending 旧正文/hash）；
+ * 3. baseVersion = 当前 committedVersion（保存后版本）；
+ * 4. syncCommitId 仅在 `pending.origin == SYNC_MERGED` 时读
+ *    `syncRepository.loadSyncState().lastSyncedCommit`，否则 null；
+ * 5. 用 [buildPendingReapplyFact] 构造事实（origin 来自 pending）并 emit；
+ * 6. 返回 true 表示已触发 reapply。
+ *
+ * 异常处理：CancellationException 重抛，其他异常返回 false（pending 保留等下次触发）。
+ */
+suspend fun EditorViewModel.reapplyPendingExternalAfterSave(targetId: String): Boolean {
+    val coordinator = _sessionCoordinator ?: return false
+    val pending = coordinator.pendingExternalFactFor(targetId) ?: return false
+    val session = currentSession ?: return false
+    return try {
+        val (content, meta) =
+            withContext(Dispatchers.IO) {
+                chapterRepository.getChapterContentWithMeta(
+                    session.projectId,
+                    session.volumeId,
+                    session.chapterId,
+                )
+            }
+        val baseVersion = coordinator.documentCommittedVersionFor(targetId)
+        val syncCommitId =
+            if (pending.origin == DocumentFactOrigin.SYNC_MERGED) {
+                try {
+                    syncRepository.loadSyncState(session.projectId).lastSyncedCommit
+                } catch (_: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
+        val fact =
+            buildPendingReapplyFact(
+                pending = pending,
+                targetId = targetId,
+                repositoryContent = content,
+                repositoryHash = meta.hash,
+                baseVersion = baseVersion,
+                syncCommitId = syncCommitId,
+            )
+        emitDocumentFact(fact)
+        true
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        // 重读失败：pending 保留，等下次保存/同步触发再重试。
+        false
     }
 }
 
