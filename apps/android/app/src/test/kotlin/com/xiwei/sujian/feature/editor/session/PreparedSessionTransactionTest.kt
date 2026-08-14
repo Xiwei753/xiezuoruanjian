@@ -274,4 +274,337 @@ class PreparedSessionTransactionTest {
         assertFalse(borrowed.newlyCreated)
         assertEquals("b", borrowed.previousRecord?.targetId)
     }
+
+    /**
+     * #624 评论15 问题2：prepareTargetSessionForCommit 必须做"文档版本预准备" —
+     * 不能无条件复用既有持久 session。当既有 session 的 snapshot 正文与
+     * initialText 不一致且 localDirty=false 时，必须创建一个装有 initialText
+     * 的 candidate session，记录被替换的旧 session ID；prepare 阶段不修改
+     * store、不关闭旧 session。
+     *
+     * 旧实现：只看 existingId 有效就复用，完全不比较正文 — B 章节之前打开过
+     * （旧正文），后台同步更新磁盘，再次打开 B 时 Repository 读到新正文
+     * （loaded.text），但 prepare 复用旧 Rust session。switchCommit 又把
+     * loaded.text/hash 写进 UI 并 applyExternalContentFact 标成新版本，
+     * 最终磁盘/UI 是新正文，Rust editor session 还是旧正文。
+     */
+    @Test
+    fun prepareTargetSessionForCommit_createsCandidateWhenSnapshotDiffersFromInitialText() {
+        val coordinator = FakeSessionCoordinatorForPrepareSwap()
+        coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
+        // 模拟 B 之前打开过：store 中 "b" 的 record.sessionId = 100UL，旧正文 "oldText"。
+        coordinator.installExistingPersistentSession(
+            targetId = "b",
+            sessionId = 100UL,
+            text = "oldText",
+            revision = 1L,
+        )
+
+        val handle = coordinator.prepareTargetSessionForCommit("b", "newTextFromDisk", 11)
+
+        assertNotNull(
+            "snapshot 不一致且 localDirty=false 时必须返回 candidate handle（不能复用旧 session）",
+            handle,
+        )
+        handle!!
+        assertEquals(
+            "candidate session 必须是新创建的 ID（不是旧 100）",
+            200UL,
+            handle.sessionId,
+        )
+        assertEquals(
+            "replacedSessionId 必须记录被替换的旧 session 100",
+            100UL,
+            handle.replacedSessionId,
+        )
+        assertTrue("candidate swap 时 newlyCreated 必须为 true", handle.newlyCreated)
+        assertEquals(
+            "prepare 不得关闭旧 session（candidate 失败/回滚时旧 session 仍可用）",
+            0,
+            coordinator.closeCallCount(100UL),
+        )
+        assertEquals(
+            "prepare 必须创建一个 candidate session",
+            1,
+            coordinator.createCallCount(),
+        )
+        assertEquals(
+            "prepare 不得修改 store 记录（commit 是唯一写入点）",
+            100UL,
+            coordinator.store.record("b")?.sessionId,
+        )
+    }
+
+    /**
+     * #624 评论15 问题2：snapshot 正文与 initialText 一致且 localDirty=false →
+     * 复用既有 session，保留 Undo/Redo；不创建 candidate。
+     */
+    @Test
+    fun prepareTargetSessionForCommit_reusesSessionWhenSnapshotMatchesInitialText() {
+        val coordinator = FakeSessionCoordinatorForPrepareSwap()
+        coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
+        coordinator.installExistingPersistentSession(
+            targetId = "b",
+            sessionId = 100UL,
+            text = "sameText",
+            revision = 3L,
+        )
+
+        val handle = coordinator.prepareTargetSessionForCommit("b", "sameText", 8)
+
+        assertNotNull("snapshot 一致时必须返回复用 handle", handle)
+        handle!!
+        assertEquals("复用既有 session ID 100", 100UL, handle.sessionId)
+        assertNull("复用时 replacedSessionId 必须为 null", handle.replacedSessionId)
+        assertFalse("复用时 newlyCreated 必须为 false", handle.newlyCreated)
+        assertEquals("复用时不得创建 candidate", 0, coordinator.createCallCount())
+        assertEquals("复用时不得关闭既有 session", 0, coordinator.closeCallCount(100UL))
+    }
+
+    /**
+     * #624 评论15 问题2：localDirty=true 时直接返回 null — 不能拿 Repository 内容
+     * 覆盖本地未保存编辑，也不能提前把 committedVersion 标成新版本。
+     */
+    @Test
+    fun prepareTargetSessionForCommit_returnsNullWhenLocalDirtyTrue() {
+        val coordinator = FakeSessionCoordinatorForPrepareSwap()
+        coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
+        coordinator.installExistingPersistentSession(
+            targetId = "b",
+            sessionId = 100UL,
+            text = "userEditing",
+            revision = 5L,
+            localDirty = true,
+        )
+
+        val handle = coordinator.prepareTargetSessionForCommit("b", "newTextFromSync", 13)
+
+        assertNull(
+            "localDirty=true 时必须返回 null（类型化失败）— 不能用 Repository 内容覆盖本地编辑",
+            handle,
+        )
+        assertEquals("localDirty 拒绝时不得关闭既有 session", 0, coordinator.closeCallCount(100UL))
+        assertEquals("localDirty 拒绝时不得创建 candidate", 0, coordinator.createCallCount())
+        assertEquals(
+            "localDirty 拒绝时 store 记录不得修改",
+            100UL,
+            coordinator.store.record("b")?.sessionId,
+        )
+    }
+
+    /**
+     * #624 评论15 问题2：candidate swap commit 成功后必须关闭旧 session —
+     * 旧 session 的 Undo/Redo/正文被 candidate 替换，不再保留孤儿 session。
+     */
+    @Test
+    fun commitPreparedSession_candidateSwap_closesOldSessionAndActivatesCandidate() {
+        val coordinator = FakeSessionCoordinatorForPrepareSwap()
+        coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
+        coordinator.installExistingPersistentSession(
+            targetId = "b",
+            sessionId = 100UL,
+            text = "oldText",
+            revision = 1L,
+        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "b",
+                sessionId = 200UL,
+                snapshot = TargetSnapshot("newText", 7, 2L, 0, 7),
+                newlyCreated = true,
+                previousRecord = coordinator.store.record("b"),
+                replacedSessionId = 100UL,
+            )
+        coordinator.installCandidateSnapshot(200UL, "newText", 2L)
+
+        assertTrue(
+            "candidate swap commit 必须成功",
+            coordinator.commitPreparedSession(handle),
+        )
+        assertEquals(
+            "commit 成功后必须关闭被替换的旧 session 100",
+            1,
+            coordinator.closeCallCount(100UL),
+        )
+        assertEquals(
+            "commit 后活动 session 必须是 candidate 200",
+            200UL,
+            coordinator.sessionState.sessionId,
+        )
+        assertEquals(
+            "commit 后 store 记录必须指向 candidate 200",
+            200UL,
+            coordinator.store.record("b")?.sessionId,
+        )
+    }
+
+    /**
+     * #624 评论15 问题2：candidate swap 回滚只关闭 candidate session，旧 session
+     * 原样保留（Undo/Redo 不丢），store 恢复 previousRecord。
+     */
+    @Test
+    fun releasePreparedTarget_candidateSwap_closesCandidateOnlyOldSessionPreserved() {
+        val coordinator = FakeSessionCoordinatorForPrepareSwap()
+        coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
+        coordinator.installExistingPersistentSession(
+            targetId = "b",
+            sessionId = 100UL,
+            text = "oldText",
+            revision = 1L,
+        )
+        val previousRecord = coordinator.store.record("b")
+        val handle =
+            PreparedSessionHandle(
+                targetId = "b",
+                sessionId = 200UL,
+                snapshot = TargetSnapshot("newText", 7, 2L, 0, 7),
+                newlyCreated = true,
+                previousRecord = previousRecord,
+                replacedSessionId = 100UL,
+            )
+
+        coordinator.releasePreparedTarget(handle)
+
+        assertEquals(
+            "回滚必须关闭 candidate session 200",
+            1,
+            coordinator.closeCallCount(200UL),
+        )
+        assertEquals(
+            "回滚不得关闭旧 session 100（保留 Undo/Redo）",
+            0,
+            coordinator.closeCallCount(100UL),
+        )
+        assertEquals(
+            "回滚后 store 必须恢复 previousRecord（sessionId=100）",
+            100UL,
+            coordinator.store.record("b")?.sessionId,
+        )
+    }
+
+    /**
+     * #624 评论15 问题2：candidate 创建失败（createSession 返回 null）时
+     * 必须返回 null，旧 session 不动，store 不动。
+     */
+    @Test
+    fun prepareTargetSessionForCommit_candidateCreationFails_returnsNullAndPreservesOldSession() {
+        val coordinator = FakeSessionCoordinatorForPrepareSwap(allowCreateSession = false)
+        coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
+        coordinator.installExistingPersistentSession(
+            targetId = "b",
+            sessionId = 100UL,
+            text = "oldText",
+            revision = 1L,
+        )
+
+        val handle = coordinator.prepareTargetSessionForCommit("b", "newText", 7)
+
+        assertNull("candidate 创建失败时必须返回 null", handle)
+        assertEquals(
+            "candidate 创建失败时旧 session 不得关闭",
+            0,
+            coordinator.closeCallCount(100UL),
+        )
+        assertEquals(
+            "candidate 创建失败时 store 不得修改",
+            100UL,
+            coordinator.store.record("b")?.sessionId,
+        )
+    }
+}
+
+/**
+ * #624 评论15 问题2：可控制 createSession/validateSession/closeSession/querySnapshotForSession
+ * 的 fake — 让测试能模拟"既有持久 session + 旧正文"场景，验证 prepareTargetSessionForCommit
+ * 的 candidate swap 行为。
+ *
+ * EditorSessionCoordinator 的 createSession/validateSession/closeSession 已改为
+ * `internal open fun`（可测试性改进，不改变运行时行为），fake 可以 override 来
+ * 返回可控 session ID 并追踪关闭事件。
+ */
+private class FakeSessionCoordinatorForPrepareSwap(
+    private val allowCreateSession: Boolean = true,
+) : EditorSessionCoordinator(
+        com.xiwei.sujian.core.interop.app.AppServiceBridge(
+            com.xiwei.sujian.core.interop.app.WriterAppServiceHolder(
+                "/tmp/sujian_test_workspace_624_comment15_p2",
+                "/tmp/sujian_test_workspace_624_comment15_p2",
+            ),
+        ),
+    ) {
+    private val snapshots = mutableMapOf<ULong, TargetSnapshot>()
+    private val validSessions = mutableSetOf<ULong>()
+    private val closeCounts = mutableMapOf<ULong, Int>()
+    private var createCalls = 0
+    private var nextSessionId = 200UL
+
+    /**
+     * 模拟 B 之前打开过：直接写 store 记录（sessionId + DocumentState.localDirty）
+     * 并装上 snapshot，让 validateSession 返回 true、querySnapshotForSession 返回旧正文。
+     */
+    fun installExistingPersistentSession(
+        targetId: String,
+        sessionId: ULong,
+        text: String,
+        revision: Long,
+        localDirty: Boolean = false,
+    ) {
+        validSessions.add(sessionId)
+        val cursor = text.toByteArray(Charsets.UTF_8).size
+        snapshots[sessionId] = TargetSnapshot(text, cursor, revision, 0, cursor)
+        store.put(
+            EditorSessionRecord(
+                targetId = targetId,
+                sessionId = sessionId,
+                persistent = true,
+                documentState =
+                    DocumentState(
+                        revision = revision,
+                        selectionAnchorUtf8 = 0,
+                        selectionHeadUtf8 = cursor,
+                        localDirty = localDirty,
+                    ),
+            ),
+        )
+    }
+
+    fun installCandidateSnapshot(
+        sessionId: ULong,
+        text: String,
+        revision: Long,
+    ) {
+        val cursor = text.toByteArray(Charsets.UTF_8).size
+        snapshots[sessionId] = TargetSnapshot(text, cursor, revision, 0, cursor)
+        validSessions.add(sessionId)
+    }
+
+    fun closeCallCount(sessionId: ULong): Int = closeCounts[sessionId] ?: 0
+
+    fun createCallCount(): Int = createCalls
+
+    internal override fun createSession(
+        targetId: String,
+        text: String,
+        cursorByteOffset: Int,
+        isPersistent: Boolean,
+    ): ULong? {
+        createCalls++
+        if (!allowCreateSession) return null
+        val id = nextSessionId++
+        val cursor = text.toByteArray(Charsets.UTF_8).size
+        snapshots[id] = TargetSnapshot(text, cursor, 1L, 0, cursor)
+        validSessions.add(id)
+        return id
+    }
+
+    internal override fun closeSession(sessionId: ULong) {
+        if (sessionId == 0UL) return
+        closeCounts[sessionId] = (closeCounts[sessionId] ?: 0) + 1
+        validSessions.remove(sessionId)
+        snapshots.remove(sessionId)
+    }
+
+    internal override fun validateSession(sessionId: ULong): Boolean = sessionId != 0UL && sessionId in validSessions
+
+    internal override fun querySnapshotForSession(sessionId: ULong): TargetSnapshot? = snapshots[sessionId]
 }

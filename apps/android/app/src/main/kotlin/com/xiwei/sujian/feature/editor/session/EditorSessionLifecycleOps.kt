@@ -10,35 +10,99 @@ fun EditorSessionCoordinator.prepareTargetSessionForCommit(
     initialText: String,
     initialSelection: Int?,
 ): PreparedSessionHandle? {
+    // #624 评论15 问题2：文档版本预准备 — 不再无条件复用既有持久 session。
+    // 1. localDirty=true → 返回 null（不能用 Repository 内容覆盖本地未保存编辑）；
+    // 2. 既有 session snapshot 正文 == initialText 且 localDirty=false → 复用，保留 Undo/Redo；
+    // 3. 既有 session snapshot 正文 != initialText 且 localDirty=false → 创建 candidate
+    //    session 装入 initialText，prepare 不修改 store、不关闭旧 session；commit 成功后
+    //    由 commitPreparedSession 关闭旧 session；回滚由 releasePreparedTarget 只关闭 candidate。
     val record = store.record(targetId) ?: return null
     val isPersistent = record.persistent
     val existingId = record.sessionId
-    var newlyCreated = false
-    val sessionId: ULong? =
-        if (existingId != null && existingId != 0UL && validateSession(existingId)) {
-            existingId
-        } else {
-            // 记录中的 ID 无效/缺失：清理失效 ID（Core 侧已不存在）并新建临时 session。
-            if (existingId != null && existingId != 0UL) {
-                closeSession(existingId)
-            }
-            newlyCreated = true
-            val sel = initialSelection ?: initialText.toByteArray(Charsets.UTF_8).size
-            createSession(targetId, initialText, sel, isPersistent)
+
+    // 1. localDirty=true — 类型化失败：不能拿 Repository 内容覆盖本地编辑。
+    if (record.documentState.localDirty) return null
+
+    // existingId 是 ULong（非 null，默认 0UL）— 只需检查 != 0UL + validateSession
+    val existingValid = existingId != 0UL && validateSession(existingId)
+
+    if (existingValid) {
+        val existingIdNonNull = existingId!!
+        val existingSnapshot = querySnapshotForSession(existingIdNonNull)
+        if (existingSnapshot == null) {
+            // 既有 session 读不到 snapshot — 视为失效：清理后走新建路径。
+            closeSession(existingIdNonNull)
+            return prepareNewSessionHandle(targetId, initialText, initialSelection, isPersistent, record)
         }
+        if (existingSnapshot.text == initialText) {
+            // 2. snapshot 正文与 initialText 一致 → 复用既有 session，保留 Undo/Redo。
+            return PreparedSessionHandle(
+                targetId = targetId,
+                sessionId = existingIdNonNull,
+                snapshot = existingSnapshot,
+                newlyCreated = false,
+                previousRecord = record,
+                replacedSessionId = null,
+            )
+        }
+        // 3. snapshot 正文与 initialText 不一致 → 创建 candidate session 装入 initialText。
+        // prepare 阶段不修改 store、不关闭旧 session — commit 是唯一写入点。
+        val sel = initialSelection ?: initialText.toByteArray(Charsets.UTF_8).size
+        val candidateId = createSession(targetId, initialText, sel, isPersistent)
+        if (candidateId == null || candidateId == 0UL) {
+            // candidate 创建失败 — 旧 session 不动，返回 null 让调用方回滚。
+            return null
+        }
+        val candidateSnapshot = querySnapshotForSession(candidateId)
+        if (candidateSnapshot == null) {
+            // candidate snapshot 读取失败 — 关闭 candidate，旧 session 不动。
+            closeSession(candidateId)
+            return null
+        }
+        return PreparedSessionHandle(
+            targetId = targetId,
+            sessionId = candidateId,
+            snapshot = candidateSnapshot,
+            newlyCreated = true,
+            previousRecord = record,
+            replacedSessionId = existingIdNonNull,
+        )
+    }
+
+    // existingId 无效/缺失：清理失效 ID（Core 侧已不存在）后新建临时 session。
+    if (existingId != 0UL) {
+        closeSession(existingId)
+    }
+    return prepareNewSessionHandle(targetId, initialText, initialSelection, isPersistent, record)
+}
+
+/**
+ * #624 评论15 问题2：纯新建 session 路径 — 既无既有有效 session 也不复用。
+ * 创建新 session、读取真实 snapshot；失败时关闭新建 session 不留孤儿。
+ */
+private fun EditorSessionCoordinator.prepareNewSessionHandle(
+    targetId: String,
+    initialText: String,
+    initialSelection: Int?,
+    isPersistent: Boolean,
+    previousRecord: EditorSessionRecord,
+): PreparedSessionHandle? {
+    val sel = initialSelection ?: initialText.toByteArray(Charsets.UTF_8).size
+    val sessionId = createSession(targetId, initialText, sel, isPersistent)
     if (sessionId == null || sessionId == 0UL) return null
     val snapshot = querySnapshotForSession(sessionId)
     if (snapshot == null) {
         // 新建的 session 读不到 snapshot — 预准备失败，关闭临时 session 不留下孤儿。
-        if (newlyCreated) closeSession(sessionId)
+        closeSession(sessionId)
         return null
     }
     return PreparedSessionHandle(
         targetId = targetId,
         sessionId = sessionId,
         snapshot = snapshot,
-        newlyCreated = newlyCreated,
-        previousRecord = record,
+        newlyCreated = true,
+        previousRecord = previousRecord,
+        replacedSessionId = null,
     )
 }
 
@@ -69,6 +133,28 @@ fun EditorSessionCoordinator.commitPreparedSession(
     // 3. 激活 B — 通过唯一 reducer 原子推进。
     val snapshot = handle.snapshot
     val attaching = WindowBindingState.Attaching(windowId, handle.targetId, handle.sessionId)
+    val pendingRecord = applyCommitSessionStateUpdate(handle, snapshot, attaching)
+    pendingRecord?.let { store.put(it) }
+    // #624 评论15 问题2：candidate swap commit 成功后关闭被替换的旧 session —
+    // 旧 session 的 Undo/Redo/正文已被 candidate 替换，不再保留孤儿 session。
+    // prepare 阶段不关闭旧 session（回滚时仍可用），commit 是唯一关闭点。
+    closeReplacedSessionAfterCommit(handle)
+    com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
+        handle.sessionId.toString(),
+        "commit_prepared",
+    )
+    return true
+}
+
+/**
+ * #624 评论15 问题2：commit 时构造 pendingRecord 和新 EditorSessionState。
+ * 从 [commitPreparedSession] 抽取以降低圈复杂度 — 行为完全一致。
+ */
+private fun EditorSessionCoordinator.applyCommitSessionStateUpdate(
+    handle: PreparedSessionHandle,
+    snapshot: TargetSnapshot,
+    attaching: WindowBindingState.Attaching,
+): EditorSessionRecord? {
     var pendingRecord: EditorSessionRecord? = null
     updateSessionState { _ ->
         // #595 一：提交时把 handle.sessionId + snapshot 写入 B 的正式记录 —
@@ -105,16 +191,34 @@ fun EditorSessionCoordinator.commitPreparedSession(
             localDirty = doc.localDirty,
         )
     }
-    pendingRecord?.let { store.put(it) }
-    com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
-        handle.sessionId.toString(),
-        "commit_prepared",
-    )
-    return true
+    return pendingRecord
+}
+
+/**
+ * #624 评论15 问题2：commit 成功后关闭被替换的旧 session。
+ * 从 [commitPreparedSession] 抽取以降低圈复杂度 — 行为完全一致。
+ */
+private fun EditorSessionCoordinator.closeReplacedSessionAfterCommit(handle: PreparedSessionHandle) {
+    val replaced = handle.replacedSessionId
+    if (replaced != null && replaced != 0UL && replaced != handle.sessionId) {
+        closeSession(replaced)
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
+            replaced.toString(),
+            "commit_prepared_replaced",
+        )
+    }
 }
 
 fun EditorSessionCoordinator.releasePreparedTarget(handle: PreparedSessionHandle) {
     val record = store.record(handle.targetId)
+    // #624 评论15 问题2：candidate swap 回滚 — 只关闭 candidate session，
+    // 恢复 previousRecord（旧 session 原样保留，Undo/Redo 不丢）。
+    // prepare 阶段不修改 store、不关闭旧 session，所以旧 session 仍有效。
+    val replaced = handle.replacedSessionId
+    if (replaced != null) {
+        releaseCandidateSwap(handle)
+        return
+    }
     if (handle.newlyCreated) {
         closeSession(handle.sessionId)
         if (handle.sessionId != 0UL) {
@@ -140,6 +244,26 @@ fun EditorSessionCoordinator.releasePreparedTarget(handle: PreparedSessionHandle
                 "release_prepared_borrowed",
             )
         }
+    }
+}
+
+/**
+ * #624 评论15 问题2：candidate swap 回滚 — 只关闭 candidate session，
+ * 恢复 previousRecord（旧 session 原样保留，Undo/Redo 不丢）。
+ * 从 [releasePreparedTarget] 抽取以降低认知复杂度 — 行为完全一致。
+ */
+private fun EditorSessionCoordinator.releaseCandidateSwap(handle: PreparedSessionHandle) {
+    closeSession(handle.sessionId)
+    // 恢复 previousRecord — 把 store 记录切回旧 session。
+    val previous = handle.previousRecord
+    if (previous != null) {
+        store.put(previous)
+    }
+    if (handle.sessionId != 0UL) {
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
+            handle.sessionId.toString(),
+            "release_prepared_candidate",
+        )
     }
 }
 

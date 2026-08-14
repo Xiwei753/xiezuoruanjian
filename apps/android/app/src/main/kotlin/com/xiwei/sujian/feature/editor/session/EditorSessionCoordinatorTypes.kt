@@ -113,9 +113,16 @@ data class DocumentOperationLease(
  * [EditorSessionCoordinator.commitPreparedSession] 与
  * [EditorSessionCoordinator.releasePreparedTarget] 完成。
  *
- * - [newlyCreated]=true：本事务新建的临时 session — 回滚时关闭；
- * - [newlyCreated]=false：事务前已存在的保留 session（含 Undo 历史）—
- *   回滚时恢复 [previousRecord]，不关闭 session。
+ * - [newlyCreated]=true 且 [replacedSessionId]=null：本事务新建的临时 session
+ *   （记录中无既有有效 session）— 回滚时关闭 candidate、移除记录；
+ * - [newlyCreated]=true 且 [replacedSessionId]!=null：#624 评论15 问题2 candidate
+ *   swap — 既有持久 session 的 snapshot 正文与 initialText 不一致且 localDirty=false
+ *   时，prepare 创建一个装有 initialText 的 candidate session，[replacedSessionId]
+ *   记录被替换的旧 session ID。commit 成功后由 [commitPreparedSession] 关闭旧 session；
+ *   回滚（[releasePreparedTarget]）只关闭 candidate，恢复 [previousRecord]（旧 session
+ *   原样保留，Undo/Redo 不丢）；
+ * - [newlyCreated]=false：snapshot 正文与 initialText 一致 → 复用既有保留 session
+ *   （含 Undo 历史）— 回滚时恢复 [previousRecord]，不关闭 session。
  */
 @Immutable
 data class PreparedSessionHandle(
@@ -124,6 +131,11 @@ data class PreparedSessionHandle(
     val snapshot: TargetSnapshot,
     val newlyCreated: Boolean,
     val previousRecord: EditorSessionRecord?,
+    /**
+     * #624 评论15 问题2：candidate swap 时被替换的旧 session ID；null 表示纯新建
+     * （[previousRecord]==null 或记录中无既有有效 session）或纯复用（[newlyCreated]==false）。
+     */
+    val replacedSessionId: ULong? = null,
 )
 
 /**

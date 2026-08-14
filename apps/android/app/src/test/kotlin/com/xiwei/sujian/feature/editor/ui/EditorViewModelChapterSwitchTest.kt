@@ -833,6 +833,78 @@ class EditorViewModelChapterSwitchTest {
                 vm.uiState.value.content,
             )
         }
+
+    /**
+     * #624 评论15 问题1：切章失败必须完整回滚 — 旧实现三条失败路径
+     * （loadChapterForSwitch null / prepareTargetSession null /
+     * commitPreparedSession false）只恢复 `_uiState`，不恢复 inputFrozen、
+     * 不重建 save channel/startSaveActor。结果：旧章节虽然重新显示，但
+     * inputFrozen 仍为 true，新的保存 channel 没有 actor 消费。用户看到旧
+     * 正文恢复了，实际上输入被 ViewModel 丢弃，自动保存也停了。
+     *
+     * 修复：三条失败路径统一走 [restoreAfterSwitch]（恢复 currentSession、
+     * 重建 channel、启动 save actor、恢复 autosave、解除 inputFrozen）。
+     *
+     * 测试环境无 native → loadChapterForSwitch 返回 null（路径1）— 正好覆盖
+     * 加载失败回滚。断言 inputFrozen 恢复 false 且 saveActorJob 重启 active。
+     */
+    @Test
+    fun loadFailure_restoresInputFrozenAndRestartsSaveActor() =
+        runTest {
+            val vm = createVm()
+            vm.enterChapterForTest("p", "v", "a", "A")
+            commitActiveSession(vm, "p", "v", "a", "")
+            // enterChapterForTest 已置 loading=false；防御性等待落定。
+            var attempts = 0
+            while (vm.uiState.value.loading && attempts < 200) {
+                Thread.sleep(5)
+                attempts++
+            }
+            assertFalse("前置状态必须是已落定（loading=false）", vm.uiState.value.loading)
+
+            // 切换到 B：旧章节 localDirty=false → 跳过保存 → 加载 B 失败（无 native）。
+            val result = vm.requestOpenChapter("p", "v", "b", "B")
+
+            assertTrue(
+                "加载失败必须返回 LoadFailed",
+                result is ChapterSwitchResult.LoadFailed,
+            )
+            assertFalse(
+                "#624 评论15 问题1：加载失败后 inputFrozen 必须恢复 false" +
+                    "（否则用户输入被 ViewModel 丢弃 — 旧正文可见但输入被冻结拦截）",
+                vm.inputFrozen,
+            )
+            assertTrue(
+                "#624 评论15 问题1：加载失败后 save actor 必须已重启（active）" +
+                    "— 否则新 saveCommandChannel 无 actor 消费，自动保存停止",
+                vm.saveActorJob?.isActive == true,
+            )
+        }
+
+    /**
+     * #624 评论15 问题1：首次进入（无旧章节）加载失败也必须解除 inputFrozen —
+     * 旧实现路径1 只恢复 _uiState，inputFrozen 保持 true，编辑器永久冻结。
+     */
+    @Test
+    fun firstEntryLoadFailure_unfreezesInputAndRestartsSaveActor() =
+        runTest {
+            val vm = createVm()
+            // 无旧章节（首次进入）→ 加载失败 → LoadFailed。
+            val result = vm.requestOpenChapter("p", "v", "b", "B")
+
+            assertTrue(
+                "首次进入加载失败必须返回 LoadFailed",
+                result is ChapterSwitchResult.LoadFailed,
+            )
+            assertFalse(
+                "#624 评论15 问题1：首次进入加载失败后 inputFrozen 必须恢复 false",
+                vm.inputFrozen,
+            )
+            assertTrue(
+                "#624 评论15 问题1：首次进入加载失败后 save actor 必须已重启（active）",
+                vm.saveActorJob?.isActive == true,
+            )
+        }
 }
 
 /** #624 评论11 第3项：测试用进程级 stats writer scope（与 SujianAppDependencies 同构）。 */

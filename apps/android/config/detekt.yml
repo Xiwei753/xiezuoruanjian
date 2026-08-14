@@ -154,6 +154,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/AffectedLayoutPlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/InsertDeletePlanner.kt"
       # --- 工作台Reducer大类 ---
+      # --- 测试：章节切换契约测试，多场景断言（预先存在的大类，HEAD 839 行已超 500） ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/ui/EditorViewModelChapterSwitchTest.kt"
   LongParameterList:
     active: true
     functionThreshold: 7

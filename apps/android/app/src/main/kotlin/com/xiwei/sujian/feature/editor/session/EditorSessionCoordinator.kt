@@ -596,7 +596,7 @@ open class EditorSessionCoordinator(
 
     // ── Session lifecycle ──
 
-    internal fun createSession(
+    internal open fun createSession(
         targetId: String,
         text: String,
         cursorByteOffset: Int,
@@ -628,7 +628,7 @@ open class EditorSessionCoordinator(
         }
     }
 
-    internal fun closeSession(sessionId: ULong) {
+    internal open fun closeSession(sessionId: ULong) {
         if (sessionId == 0UL) return
         when (appServiceBridge.textEditSessionClose(sessionId)) {
             is BridgeResult.Success -> { }
@@ -636,7 +636,7 @@ open class EditorSessionCoordinator(
         }
     }
 
-    internal fun validateSession(sessionId: ULong): Boolean {
+    internal open fun validateSession(sessionId: ULong): Boolean {
         if (sessionId == 0UL) return false
         return appServiceBridge.textEditSessionSnapshot(sessionId) is BridgeResult.Success
     }
