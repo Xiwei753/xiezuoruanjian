@@ -2,6 +2,10 @@ package com.xiwei.sujian.feature.editor.ui
 
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
+import com.xiwei.sujian.feature.editor.platform.EditorEditSource
+import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
+import com.xiwei.sujian.feature.editor.session.EditorContentDelta
+import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
@@ -150,8 +154,18 @@ class EditorViewModelInjectionTest {
         vm.confirmEditorAttached("chapter-body:p:v:other")
         // 当前章节 target → 解除（此时无冻结，幂等）。
         vm.confirmEditorAttached("chapter-body:p:v:a")
-        vm.onContentChanged("after attach")
-        assertEquals("解除冻结后输入必须恢复", "after attach", vm.uiState.value.content)
+        // #624 评论9：热路径走 onEditorApplied（不传整章 String）。
+        vm.onEditorApplied(
+            EditorAppliedEvent(
+                revision = 1L,
+                transactionId = 1L,
+                operationKind = EditorOperationKind.INSERT,
+                source = EditorEditSource.NORMAL,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = 11),
+            ),
+        )
+        assertEquals("解除冻结后输入必须恢复（saveStatus 标 Unsaved）", SaveStatus.Unsaved, vm.uiState.value.saveStatus)
     }
 
     @Test

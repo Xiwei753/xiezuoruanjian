@@ -1,11 +1,12 @@
-use super::result::{EditorEditOutcome, EditorEditResult};
+use super::result::{EditorContentDelta, EditorEditOutcome, EditorEditResult};
 use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
 use super::EditorKernel;
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
-use crate::editor::transaction::{AnimationMode, EditorChange, EditorTransactionCause, OffsetMap};
+use crate::editor::transaction::{AnimationMode, EditorTransactionCause, OffsetMap};
 
 impl EditorKernel {
+    #[allow(clippy::cast_possible_truncation)]
     pub fn load_text(&mut self, text: String, cursor: usize) -> EditorEditOutcome {
         let base_revision = self.revision;
         let old_cursor = self.cursor;
@@ -14,13 +15,17 @@ impl EditorKernel {
 
         let needs_clamp = cursor > text.len() || !text.is_char_boundary(cursor);
         let resolved_cursor = if needs_clamp {
-            Self::clamp_to_char_boundary(&text, cursor)
+            crate::editor::transaction::clamp_to_char_boundary(&text, cursor)
         } else {
             cursor
         };
 
-        let old_text = self.text.clone();
-        self.text = text;
+        // #624 评论8：load 是冷路径，允许全文统计与 materialize；
+        // offset map 用 from_single_edit（无静态区域）构造。
+        let old_len = self.text.byte_len();
+        let old_chars: u32 = self.text.chars().count() as u32;
+        let old_non_ws: u32 = self.text.chars().filter(|c| !c.is_whitespace()).count() as u32;
+        self.text = crop::Rope::from(text);
         self.cursor = Utf8ByteOffset::unchecked(resolved_cursor);
         self.selection_anchor = Utf8ByteOffset::unchecked(resolved_cursor);
         self.revision = self.revision.next();
@@ -30,27 +35,31 @@ impl EditorKernel {
 
         let new_selection = Utf8ByteRange::point(resolved_cursor);
         let new_revision = self.revision;
+        let new_text = self.snapshot_text();
+        let new_len = new_text.len();
+        let new_chars: u32 = new_text.chars().count() as u32;
+        let new_non_ws: u32 = new_text.chars().filter(|c| !c.is_whitespace()).count() as u32;
 
         let display_patches = vec![DisplayPatch {
             base_revision,
             new_revision,
-            replace_byte_range: Utf8ByteRange::from_start_len(0, old_text.len()),
-            inserted_text: self.text.clone(),
+            replace_byte_range: Utf8ByteRange::from_start_len(0, old_len),
+            inserted_text: new_text,
             resulting_selection_byte_range: new_selection,
         }];
 
         let visual_intent = EditorVisualIntent {
             cause: EditorTransactionCause::Load,
             operation_kind: EditorOperationKind::Load,
-            old_affected_byte_ranges: if old_text.is_empty() {
+            old_affected_byte_ranges: if old_len == 0 {
                 vec![]
             } else {
-                vec![Utf8ByteRange::from_start_len(0, old_text.len())]
+                vec![Utf8ByteRange::from_start_len(0, old_len)]
             },
-            new_affected_byte_ranges: if self.text.is_empty() {
+            new_affected_byte_ranges: if new_len == 0 {
                 vec![]
             } else {
-                vec![Utf8ByteRange::from_start_len(0, self.text.len())]
+                vec![Utf8ByteRange::from_start_len(0, new_len)]
             },
             animation_mode: AnimationMode::SystemSuppressed,
             duration_ms: 0,
@@ -59,7 +68,7 @@ impl EditorKernel {
                 new_offset: Utf8ByteOffset::unchecked(resolved_cursor),
                 should_animate: false,
             },
-            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
+            offset_map: Some(OffsetMap::from_single_edit(old_len, (0, old_len), new_len)),
         };
 
         let result = EditorEditResult {
@@ -70,6 +79,12 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
+            content_delta: EditorContentDelta {
+                inserted_chars: new_chars,
+                deleted_chars: old_chars,
+                inserted_non_whitespace_chars: new_non_ws,
+                deleted_non_whitespace_chars: old_non_ws,
+            },
         };
 
         if needs_clamp {
@@ -103,6 +118,7 @@ impl EditorKernel {
                 },
                 offset_map: None,
             },
+            content_delta: EditorContentDelta::default(),
         }
     }
 
@@ -133,18 +149,25 @@ impl EditorKernel {
                 },
                 offset_map: None,
             },
+            content_delta: EditorContentDelta::default(),
         }
     }
+    pub(crate) fn take_transaction_id(&mut self) -> u64 {
+        let id = self.next_transaction_id;
+        self.next_transaction_id = self.next_transaction_id.saturating_add(1);
+        id
+    }
 
-    pub(crate) fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
-        if offset > text.len() {
-            return text.len();
+    /// #624 评论8：Rope 版 char boundary clamp（不 materialize 全文）。
+    pub(crate) fn clamp_to_char_boundary(rope: &crop::Rope, offset: usize) -> usize {
+        if offset > rope.byte_len() {
+            return rope.byte_len();
         }
-        if text.is_char_boundary(offset) {
+        if rope.is_char_boundary(offset) {
             return offset;
         }
         let mut clamped = offset;
-        while clamped > 0 && !text.is_char_boundary(clamped) {
+        while clamped > 0 && !rope.is_char_boundary(clamped) {
             clamped -= 1;
         }
         clamped
@@ -156,115 +179,5 @@ impl EditorKernel {
         } else {
             (start, end)
         }
-    }
-
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cognitive_complexity,
-        clippy::excessive_nesting,
-        clippy::too_many_arguments,
-        clippy::type_complexity
-    )]
-    pub(crate) fn compute_single_patch(old_text: &str, new_text: &str) -> (Utf8ByteRange, String) {
-        if old_text == new_text {
-            return (Utf8ByteRange::zero(), String::new());
-        }
-
-        let mut prefix_len = 0;
-        for (ob, nb) in old_text.bytes().zip(new_text.bytes()) {
-            if ob != nb {
-                break;
-            }
-            prefix_len += 1;
-        }
-        while prefix_len > 0 && !old_text.is_char_boundary(prefix_len) {
-            prefix_len -= 1;
-        }
-        while prefix_len > 0 && !new_text.is_char_boundary(prefix_len) {
-            prefix_len -= 1;
-        }
-
-        let mut old_suffix_len = 0;
-        let mut new_suffix_len = 0;
-        {
-            let old_remaining = &old_text[prefix_len..];
-            let new_remaining = &new_text[prefix_len..];
-            let old_rev = old_remaining.bytes().rev();
-            let new_rev = new_remaining.bytes().rev();
-            for (ob, nb) in old_rev.zip(new_rev) {
-                if ob != nb {
-                    break;
-                }
-                old_suffix_len += 1;
-                new_suffix_len += 1;
-            }
-        }
-
-        while old_suffix_len > 0 && !old_text.is_char_boundary(old_text.len() - old_suffix_len) {
-            old_suffix_len -= 1;
-        }
-        while new_suffix_len > 0 && !new_text.is_char_boundary(new_text.len() - new_suffix_len) {
-            new_suffix_len -= 1;
-        }
-
-        let old_remaining_after_prefix = old_text.len() - prefix_len;
-        let new_remaining_after_prefix = new_text.len() - prefix_len;
-        if old_suffix_len > old_remaining_after_prefix {
-            old_suffix_len = old_remaining_after_prefix;
-            while old_suffix_len > 0 && !old_text.is_char_boundary(old_text.len() - old_suffix_len)
-            {
-                old_suffix_len -= 1;
-            }
-        }
-        if new_suffix_len > new_remaining_after_prefix {
-            new_suffix_len = new_remaining_after_prefix;
-            while new_suffix_len > 0 && !new_text.is_char_boundary(new_text.len() - new_suffix_len)
-            {
-                new_suffix_len -= 1;
-            }
-        }
-
-        let replace_start = prefix_len;
-        let replace_end = old_text.len() - old_suffix_len;
-        let inserted_end = new_text.len() - new_suffix_len;
-
-        if replace_start > replace_end && inserted_end <= prefix_len {
-            return (Utf8ByteRange::point(replace_start), String::new());
-        }
-
-        let inserted_text = if prefix_len < inserted_end {
-            new_text[prefix_len..inserted_end].to_string()
-        } else {
-            String::new()
-        };
-
-        (
-            Utf8ByteRange::from_ordered(replace_start, replace_end),
-            inserted_text,
-        )
-    }
-
-    pub(crate) fn affected_ranges_from_changes(
-        changes: &[EditorChange],
-    ) -> (Vec<Utf8ByteRange>, Vec<Utf8ByteRange>) {
-        let mut old_ranges = Vec::new();
-        let mut new_ranges = Vec::new();
-        for c in changes {
-            match c {
-                EditorChange::Delete { index, text } => {
-                    old_ranges.push(Utf8ByteRange::from_start_len(index.value(), text.len()));
-                }
-                EditorChange::Insert { index, text } => {
-                    new_ranges.push(Utf8ByteRange::from_start_len(index.value(), text.len()));
-                }
-            }
-        }
-        (old_ranges, new_ranges)
-    }
-
-    pub(crate) fn take_transaction_id(&mut self) -> u64 {
-        let id = self.next_transaction_id;
-        self.next_transaction_id = self.next_transaction_id.saturating_add(1);
-        id
     }
 }

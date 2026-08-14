@@ -57,7 +57,9 @@ class EditorSessionStoreTest {
         coordinator.applyLocalEdit(
             EditorDocumentUpdate.LocalInput(
                 targetId = "t1",
-                text = "draft text",
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "draft text".length),
                 revision = 2L,
                 transactionId = 5L,
                 selectionAnchorUtf8 = 3,
@@ -66,7 +68,8 @@ class EditorSessionStoreTest {
         )
         // 会话状态保留记录中的 sessionId 派生路径（0UL 表示尚无 Rust session）。
         assertEquals("t1", coordinator.sessionState.targetId)
-        assertEquals("draft text", coordinator.sessionState.text)
+        // #624 评论9：SessionState 无 text 镜像。
+        assertEquals(true, coordinator.sessionState.localDirty)
         assertEquals(2L, coordinator.sessionState.revision)
     }
 
@@ -77,7 +80,9 @@ class EditorSessionStoreTest {
         coordinator.applyLocalEdit(
             EditorDocumentUpdate.LocalInput(
                 targetId = "t1",
-                text = "你好世界",
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "你好世界".length),
                 revision = 3L,
                 transactionId = 7L,
                 selectionAnchorUtf8 = 3,
@@ -85,7 +90,7 @@ class EditorSessionStoreTest {
             ),
         )
         val state = coordinator.sessionState
-        assertEquals("你好世界", state.text)
+        assertEquals(true, state.localDirty)
         assertEquals(3L, state.revision)
         assertEquals(7L, state.lastAppliedTransactionId)
         assertEquals(3, state.selectionAnchorUtf8)
@@ -100,7 +105,16 @@ class EditorSessionStoreTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("t1", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4),
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "text".length),
+                selectionAnchorUtf8 = 2,
+                selectionHeadUtf8 = 4,
+            ),
         )
         coordinator.forceEditingState(EditingState.EDITING)
         assertEquals("t1", coordinator.sessionState.targetId)
@@ -110,7 +124,7 @@ class EditorSessionStoreTest {
         coordinator.closeTarget("t2", SessionCloseReason.CHAPTER_SWITCH)
 
         assertEquals("t1", coordinator.sessionState.targetId)
-        assertEquals("text", coordinator.sessionState.text)
+        assertEquals(true, coordinator.sessionState.localDirty)
         assertEquals(EditingState.EDITING, coordinator.sessionState.editingState)
         // t2 的记录已删除。
         assertFalse(coordinator.isTargetRegistered("t2"))
@@ -121,12 +135,21 @@ class EditorSessionStoreTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("t1", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4),
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "text".length),
+                selectionAnchorUtf8 = 2,
+                selectionHeadUtf8 = 4,
+            ),
         )
         coordinator.closeTarget("t1", SessionCloseReason.WORKSPACE_NAVIGATION)
         val state = coordinator.sessionState
         assertNull(state.targetId)
-        assertEquals("", state.text)
+        assertEquals(null, state.targetId)
         assertEquals(WindowBindingState.Idle, state.bindingState)
         assertEquals(EditorSessionOrigin.NONE, state.origin)
     }
@@ -137,7 +160,16 @@ class EditorSessionStoreTest {
         // 该 session 的记录；不修改全局 SessionState（准备阶段从未修改它）。
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("t1", TextEditorProfile.DocumentBody, persistent = true)
-        coordinator.applyLocalEdit(EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L))
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "text".length),
+            ),
+        )
         assertEquals("t1", coordinator.sessionState.targetId)
 
         val handle =
@@ -164,7 +196,6 @@ class EditorSessionStoreTest {
                 persistent = true,
                 documentState =
                     DocumentState(
-                        text = "original",
                         revision = 3L,
                         committedVersion = DocumentVersion(contentHash = "hash-original"),
                         sessionBaseVersion = DocumentVersion(contentHash = "hash-original"),
@@ -205,7 +236,16 @@ class EditorSessionStoreTest {
     fun detachWindowBinding_nonPersistent_closesAndRemovesRecord() {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("t1", TextEditorProfile.ShortTitle, persistent = false)
-        coordinator.applyLocalEdit(EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L))
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "text".length),
+            ),
+        )
         coordinator.detachWindowBinding("w1", "t1")
         assertFalse(coordinator.isTargetRegistered("t1"))
         assertNull(coordinator.sessionState.targetId)
@@ -227,7 +267,16 @@ class EditorSessionStoreTest {
         )
         assertEquals("hash-1", coordinator.sessionState.committedVersion.contentHash)
 
-        coordinator.applyLocalEdit(EditorDocumentUpdate.LocalInput("t1", "repo v1 + local", 2L, 3L))
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                2L,
+                3L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "repo v1 + local".length),
+            ),
+        )
         val state = coordinator.sessionState
         assertEquals("hash-1", state.committedVersion.contentHash)
         assertTrue(state.localDirty)
@@ -240,7 +289,16 @@ class EditorSessionStoreTest {
     fun sessionState_derivesFromActiveRecordDocument() {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("t1", TextEditorProfile.DocumentBody, persistent = true)
-        coordinator.applyLocalEdit(EditorDocumentUpdate.LocalInput("t1", "a", 1L, 1L))
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "a".length),
+            ),
+        )
         val record = coordinator.sessionState
         assertNotNull(record)
     }

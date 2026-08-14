@@ -53,7 +53,15 @@ class PreparedSessionTransactionTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "textA".length),
+                lease = lease("a"),
+            ),
         )
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
 
@@ -73,7 +81,15 @@ class PreparedSessionTransactionTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "textA".length),
+                lease = lease("a"),
+            ),
         )
         // 提交前无活动目标 — 没有可签发的 lease（窗口未绑定）。
         val staleLease = lease("a")
@@ -83,14 +99,7 @@ class PreparedSessionTransactionTest {
             PreparedSessionHandle(
                 targetId = "b",
                 sessionId = 0UL,
-                snapshot =
-                    TargetSnapshot(
-                        text = "textB",
-                        cursorUtf8 = 5,
-                        revision = 2L,
-                        selectionAnchorUtf8 = 0,
-                        selectionHeadUtf8 = 5,
-                    ),
+                snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
                 newlyCreated = true,
                 previousRecord = null,
             )
@@ -102,26 +111,43 @@ class PreparedSessionTransactionTest {
         assertEquals(0UL, state.sessionId)
         assertEquals(EditingState.BINDING, state.editingState)
         assertEquals(WindowBindingState.Attaching("prepared", "b", 0UL), state.bindingState)
-        assertEquals("textB", state.text)
+        // #624 评论9：SessionState 无 text 镜像（正文在 TargetSnapshot.text 冷路径）。
         assertEquals(2L, state.revision)
 
         // 提交使旧 lease 失效 — 旧 View 晚到的输入不能再进入会话层。
         assertFalse("提交后旧 lease 必须失效", coordinator.isInputLeaseCurrent(staleLease, "a"))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "late input from stale view", 9L, 9L, lease = staleLease),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                9L,
+                9L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "late input from stale view".length),
+                lease = staleLease,
+            ),
         )
         assertEquals(
             "旧 A 的晚到输入不得写入 B 的会话",
-            "textB",
-            coordinator.sessionState.text,
+            "b",
+            coordinator.sessionState.targetId,
         )
         // 新绑定签发的 lease 被接受。
         val leaseB = coordinator.currentInputLease()
         assertNotNull("提交后活动目标可签发新 lease", leaseB)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("b", "textB typed", 3L, 11L, lease = leaseB!!),
+            EditorDocumentUpdate.LocalInput(
+                "b",
+                3L,
+                11L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "textB typed".length),
+                lease = leaseB!!,
+            ),
         )
-        assertEquals("textB typed", coordinator.sessionState.text)
+        // #624 评论9：SessionState 无 text 镜像 — revision 足以证明输入已应用。
+        assertEquals(3L, coordinator.sessionState.revision)
     }
 
     @Test
@@ -162,7 +188,7 @@ class PreparedSessionTransactionTest {
         val state = coordinator.sessionState
         assertEquals(7UL, state.sessionId)
         assertEquals("b", state.activeTargetId)
-        assertEquals("textB", state.text)
+        // #624 评论9：SessionState 无 text 镜像（正文在 TargetSnapshot.text 冷路径）。
         assertEquals(2L, state.revision)
         // store 记录的 sessionId 必须与 SessionState 一致（不再分裂为 0UL）。
         assertEquals(7UL, coordinator.getPersistentSessionId("b"))
@@ -194,7 +220,15 @@ class PreparedSessionTransactionTest {
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
         // 模拟事务期间记录被替换为另一个 session。
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("b", "replaced", 1L, 1L, lease = lease("b")),
+            EditorDocumentUpdate.LocalInput(
+                "b",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "replaced".length),
+                lease = lease("b"),
+            ),
         )
         val handle =
             PreparedSessionHandle(

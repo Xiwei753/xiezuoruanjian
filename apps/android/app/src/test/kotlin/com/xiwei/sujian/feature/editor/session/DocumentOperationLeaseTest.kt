@@ -81,7 +81,8 @@ class DocumentOperationLeaseTest {
         assertEquals("a", l.targetId)
         assertEquals("lease.coreSessionId 必须来自活动记录的 sessionId", 1UL, l.coreSessionId)
         assertEquals("lease.rustRevision 必须来自活动记录的 revision", 1L, l.rustRevision)
-        assertEquals("lease.text 必须来自活动记录的正文", "hello", l.text)
+        // #624 评论9：lease.text 从 Core snapshot 取（冷路径 querySnapshotForSession）。
+        // 本测试无真实 Rust session → snapshot 为 null 时按契约 text=""（save 路径自行处理空）。
         // committedVersion 来自 store 记录（commitPreparedSession 保留 doc.committedVersion）。
         val record = coordinator.getPersistentSessionId("a")
         assertEquals("store 记录的 sessionId 必须与 lease 一致", 1UL, record)
@@ -135,12 +136,10 @@ class DocumentOperationLeaseTest {
         assertTrue(commitWithSession(coordinator, "a", "text-a", sessionId = 1UL))
         val leaseA = coordinator.issueDocumentOperationLease()!!
         assertEquals(1UL, leaseA.coreSessionId)
-        assertEquals("text-a", leaseA.text)
 
         assertTrue(commitWithSession(coordinator, "b", "text-b", sessionId = 2UL))
         val leaseB = coordinator.issueDocumentOperationLease()!!
         assertEquals(2UL, leaseB.coreSessionId)
-        assertEquals("text-b", leaseB.text)
         assertEquals("b", leaseB.targetId)
 
         // 切到 B 后 A 的 lease 失效（target/session 不再匹配活动记录）。
@@ -162,9 +161,11 @@ class DocumentOperationLeaseTest {
         coordinator.applyLocalEdit(
             EditorDocumentUpdate.LocalInput(
                 targetId = "a",
-                text = "text edited",
+                operationKind = EditorOperationKind.INSERT,
                 revision = 2L,
                 transactionId = 11L,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "text edited".length),
                 lease = inputLease,
             ),
         )
@@ -176,7 +177,6 @@ class DocumentOperationLeaseTest {
         // 调用方（EditorViewModel.performSave）据此走条件提交路径。
         val leaseAfterEdit = coordinator.issueDocumentOperationLease()!!
         assertEquals(2L, leaseAfterEdit.rustRevision)
-        assertEquals("text edited", leaseAfterEdit.text)
         assertTrue(coordinator.isDocumentOperationLeaseCurrent(leaseAfterEdit))
     }
 }

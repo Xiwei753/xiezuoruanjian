@@ -101,6 +101,5 @@ class ExternalResetResultTest {
         val failed = ExternalResetResult.Failed
         assertTrue(success is ExternalResetResult.Success)
         assertTrue(failed is ExternalResetResult.Failed)
-        assertEquals("t", success.snapshot.text)
     }
 }

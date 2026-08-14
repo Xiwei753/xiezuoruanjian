@@ -123,11 +123,39 @@ impl Utf8ByteOffset {
         Ok(Self(offset))
     }
 
+    /// #624 评论8：Rope 版边界校验（不 materialize 全文）。
+    pub fn try_new_rope(rope: &crop::Rope, offset: usize) -> Result<Self, InvalidUtf8OffsetError> {
+        if offset > rope.byte_len() {
+            return Err(InvalidUtf8OffsetError::BeyondEnd {
+                offset,
+                text_len: rope.byte_len(),
+            });
+        }
+        if !rope.is_char_boundary(offset) {
+            return Err(InvalidUtf8OffsetError::NotCharBoundary { offset });
+        }
+        Ok(Self(offset))
+    }
+
     pub fn clamp(text: &str, offset: usize) -> Self {
         let clamped = if offset > text.len() {
             text.len()
         } else {
             crate::editor::transaction::clamp_to_char_boundary(text, offset)
+        };
+        Self(clamped)
+    }
+
+    /// #624 评论8：Rope 版 clamp（不 materialize 全文）。
+    pub fn clamp_rope(rope: &crop::Rope, offset: usize) -> Self {
+        let clamped = if offset > rope.byte_len() {
+            rope.byte_len()
+        } else {
+            let mut safe = offset;
+            while safe > 0 && !rope.is_char_boundary(safe) {
+                safe -= 1;
+            }
+            safe
         };
         Self(clamped)
     }
@@ -175,6 +203,22 @@ impl Utf8ByteRange {
         let s =
             Utf8ByteOffset::try_new(text, start).map_err(InvalidUtf8RangeError::InvalidStart)?;
         let e = Utf8ByteOffset::try_new(text, end).map_err(InvalidUtf8RangeError::InvalidEnd)?;
+        Ok(Self { start: s, end: e })
+    }
+
+    /// #624 评论8：Rope 版边界校验（不 materialize 全文）。
+    pub fn try_new_rope(
+        rope: &crop::Rope,
+        start: usize,
+        end: usize,
+    ) -> Result<Self, InvalidUtf8RangeError> {
+        if start > end {
+            return Err(InvalidUtf8RangeError::StartAfterEnd { start, end });
+        }
+        let s = Utf8ByteOffset::try_new_rope(rope, start)
+            .map_err(InvalidUtf8RangeError::InvalidStart)?;
+        let e =
+            Utf8ByteOffset::try_new_rope(rope, end).map_err(InvalidUtf8RangeError::InvalidEnd)?;
         Ok(Self { start: s, end: e })
     }
 
@@ -504,13 +548,12 @@ mod tests {
     fn undo_entry_uses_strong_cursor_types() {
         use crate::editor::kernel::UndoEntry;
         let entry = UndoEntry {
-            old_text: "hello".to_string(),
-            new_text: "world".to_string(),
-            old_cursor: Utf8ByteOffset::unchecked(0),
-            new_cursor: Utf8ByteOffset::unchecked(5),
+            edits: vec![],
+            old_selection: Utf8ByteRange::point(0),
+            new_selection: Utf8ByteRange::point(5),
         };
-        assert_eq!(entry.old_cursor.value(), 0);
-        assert_eq!(entry.new_cursor.value(), 5);
+        assert_eq!(entry.old_selection.end().value(), 0);
+        assert_eq!(entry.new_selection.end().value(), 5);
     }
 
     #[test]

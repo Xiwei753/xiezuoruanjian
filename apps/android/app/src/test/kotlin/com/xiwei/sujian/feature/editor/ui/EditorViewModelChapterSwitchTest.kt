@@ -3,6 +3,10 @@ package com.xiwei.sujian.feature.editor.ui
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
+import com.xiwei.sujian.feature.editor.platform.EditorEditSource
+import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
+import com.xiwei.sujian.feature.editor.session.EditorContentDelta
+import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
@@ -81,8 +85,8 @@ class EditorViewModelChapterSwitchTest {
     fun saveFailure_returnsSaveFailedAndKeepsCurrentChapter() =
         runTest {
             val vm = createVm()
-            // 先有正文内容（loading=false 初始态下 onContentChanged 生效）
-            vm.onContentChanged("已有章节内容")
+            // 先有正文内容（#624 评论9：content 只走冷路径，测试直接设 uiState）
+            vm._uiState.value = vm._uiState.value.copy(content = "已有章节内容")
             assertEquals("已有章节内容", vm.uiState.value.content)
 
             // 进入章节 A（initChapter 同步置 loading=true）
@@ -205,7 +209,7 @@ class EditorViewModelChapterSwitchTest {
             // initChapter 事务后 inputFrozen 保持 true（等待编辑器附着），
             // 测试环境无编辑器 — 显式确认附着以解除冻结，模拟真实附着。
             vm.confirmEditorAttached(vm.chapterTargetId("p", "v", "a"))
-            vm.onContentChanged("正文A")
+            vm._uiState.value = vm._uiState.value.copy(content = "正文A")
 
             // #597：可控保存端口 — 保存 A 时挂起，为取消制造确定性挂起点
             // （loadChapter 的 withContext(IO) 在无 native 时几乎立即返回，
@@ -260,11 +264,21 @@ class EditorViewModelChapterSwitchTest {
             assertEquals("取消后正文必须保留旧章节内容", "正文A", vm.uiState.value.content)
             assertFalse("取消后 loading 必须恢复 false", vm.uiState.value.loading)
             // 取消后 inputFrozen 必须释放：后续输入能正常进入状态（否则输入被冻结）。
-            vm.onContentChanged("取消后的新输入")
+            // #624 评论9：热路径走 onEditorApplied（不再传整章 String）。
+            vm.onEditorApplied(
+                EditorAppliedEvent(
+                    revision = 1L,
+                    transactionId = 1L,
+                    operationKind = EditorOperationKind.INSERT,
+                    source = EditorEditSource.NORMAL,
+                    contentChanged = true,
+                    contentDelta = EditorContentDelta(insertedChars = 3),
+                ),
+            )
             assertEquals(
-                "取消后输入必须解冻（inputFrozen 由 finally 复位）",
-                "取消后的新输入",
-                vm.uiState.value.content,
+                "取消后输入必须解冻（inputFrozen 由 finally 复位 — 事件被接受并标 Unsaved）",
+                SaveStatus.Unsaved,
+                vm.uiState.value.saveStatus,
             )
         }
 
@@ -354,7 +368,7 @@ class EditorViewModelChapterSwitchTest {
                         )
                     }
                 }
-            vm.onContentChanged(whitespaceBody)
+            vm._uiState.value = vm._uiState.value.copy(content = whitespaceBody)
             vm.initChapter("p", "v", "a", "A")
 
             // 切换到 B：旧章节保存必须真实尝试（无 native → 新章节加载失败

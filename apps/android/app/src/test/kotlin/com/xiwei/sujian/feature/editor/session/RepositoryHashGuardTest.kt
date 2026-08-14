@@ -7,6 +7,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.annotation.Config
 
 /**
  * #595 二：Reducer 文档版本守卫契约测试。
@@ -18,6 +20,8 @@ import org.junit.Test
  *   不得被旧加载/迟到合并事件覆盖）；
  * - 正文一致 → IgnoreSameContent（无需 reset）。
  */
+@RunWith(org.robolectric.RobolectricTestRunner::class)
+@Config(sdk = [34])
 class RepositoryHashGuardTest {
     private fun createCoordinator(): EditorSessionCoordinator {
         return EditorSessionCoordinator(
@@ -49,9 +53,16 @@ class RepositoryHashGuardTest {
 
         // 用户输入得到正文 B（committedVersion 仍是 H1，localDirty=true）
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "B", revision = 1L, transactionId = 7L),
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                1L,
+                7L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "B".length),
+            ),
         )
-        assertEquals("B", coordinator.sessionState.text)
+        assertEquals(true, coordinator.sessionState.localDirty)
         assertTrue(coordinator.sessionState.localDirty)
 
         // 旧的 RepositoryLoaded(H1, A) 重放 → 幂等忽略（同 sourceVersion 先于
@@ -63,7 +74,7 @@ class RepositoryHashGuardTest {
                 decision == ExternalContentDecision.IgnoreDirtyConflict,
         )
         // 状态必须保持本地输入 B
-        assertEquals("B", coordinator.sessionState.text)
+        assertEquals(true, coordinator.sessionState.localDirty)
         assertEquals(EditorSessionOrigin.LOCAL_INPUT, coordinator.sessionState.origin)
     }
 
@@ -137,7 +148,14 @@ class RepositoryHashGuardTest {
 
         // 用户输入得到 D（committedVersion 仍是 H1，localDirty=true）
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "D", revision = 1L, transactionId = 9L),
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                1L,
+                9L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "D".length),
+            ),
         )
 
         // 下一个同步周期重复发射同一版本的合并事实 → 幂等忽略，不得覆盖本地输入。
@@ -147,7 +165,6 @@ class RepositoryHashGuardTest {
             decision == ExternalContentDecision.IgnoreReplay ||
                 decision == ExternalContentDecision.IgnoreDirtyConflict,
         )
-        assertEquals("D", coordinator.sessionState.text)
         assertEquals(EditorSessionOrigin.LOCAL_INPUT, coordinator.sessionState.origin)
     }
 
@@ -203,14 +220,13 @@ class RepositoryHashGuardTest {
     }
 
     @Test
-    fun sameContentDifferentVersion_isIgnoredWithoutReset() {
+    fun sameContentDifferentVersion_withoutSnapshot_doesNotFalselyIgnore() {
+        // #624 评论9：SessionState.text 镜像已删除 — 正文相同性判定依赖冷路径
+        // queryTargetSnapshot（Core snapshot.text）。本测试环境无真实 Rust session
+        // （bridge 返回 NotLoaded），snapshot 为 null 时不得误判 IgnoreSameContent：
+        // 走 Apply（由调用方决定重置/合并），保证"相同内容"不会被错误吞掉。
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
-
-        // 会话正文已是 "C"（如预准备 session 装载），外部事实正文相同 → IgnoreSameContent。
-        coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "C", revision = 1L, transactionId = 1L),
-        )
         coordinator.markSaved("t1", DocumentVersion(contentHash = "saved-c"))
         assertFalse(coordinator.sessionState.localDirty)
 
@@ -223,8 +239,23 @@ class RepositoryHashGuardTest {
                 DocumentFactOrigin.REPOSITORY_LOAD,
             )
         assertEquals(
-            ExternalContentDecision.IgnoreSameContent,
+            "无真实 snapshot 时不得误判正文相同 — 必须走 Apply 由调用方处理",
+            ExternalContentDecision.Apply,
             coordinator.shouldApplyExternalContent(sameText),
+        )
+        // 同 sourceVersion 重放仍幂等忽略（版本判定不依赖 snapshot）。
+        val replay =
+            TargetDocumentFact(
+                "t1",
+                "C",
+                DocumentVersion(contentHash = "saved-c"),
+                DocumentVersion(contentHash = "saved-c"),
+                DocumentFactOrigin.REPOSITORY_LOAD,
+            )
+        assertEquals(
+            "同版本重放必须幂等忽略",
+            ExternalContentDecision.IgnoreReplay,
+            coordinator.shouldApplyExternalContent(replay),
         )
     }
 }

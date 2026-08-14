@@ -35,9 +35,23 @@ class EditorDocumentUpdateTypedEventsTest {
 
     @Test
     fun directCallbackEventsCarryTransactionIds() {
-        val localInput = EditorDocumentUpdate.LocalInput("t", "text", 1L, 1L)
-        val undoRestored = EditorDocumentUpdate.UndoRestored("t", "text", 1L, 0L, 1L)
-        val programmaticReplace = EditorDocumentUpdate.ProgrammaticReplace("t", "text", 1L, 0L, 1L)
+        val localInput =
+            EditorDocumentUpdate.LocalInput(
+                "t",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "text".length),
+            )
+        val undoRestored = EditorDocumentUpdate.UndoRestored("t", snapshotId = 1L, revision = 0L, transactionId = 1L)
+        val programmaticReplace =
+            EditorDocumentUpdate.ProgrammaticReplace(
+                "t",
+                commandId = 1L,
+                revision = 0L,
+                transactionId = 1L,
+            )
 
         assertEquals(1L, localInput.transactionId)
         assertEquals(1L, undoRestored.transactionId)
@@ -59,7 +73,6 @@ class EditorDocumentUpdateTypedEventsTest {
                 origin = DocumentFactOrigin.SYNC_MERGED,
             )
         assertEquals("t1", fact.targetId)
-        assertEquals("merged text", fact.text)
         assertEquals("sync-hash-1", fact.sourceVersion.contentHash)
         assertEquals("commit-42", fact.sourceVersion.syncCommitId)
         assertEquals("base-hash", fact.baseVersion.contentHash)
@@ -71,7 +84,6 @@ class EditorDocumentUpdateTypedEventsTest {
         val update =
             EditorDocumentUpdate.UndoRestored(
                 targetId = "t1",
-                text = "restored",
                 snapshotId = 99L,
                 revision = 5L,
                 transactionId = 7L,
@@ -86,7 +98,6 @@ class EditorDocumentUpdateTypedEventsTest {
         val update =
             EditorDocumentUpdate.ProgrammaticReplace(
                 targetId = "t1",
-                text = "replaced",
                 commandId = 55L,
                 revision = 3L,
                 transactionId = 8L,
@@ -154,7 +165,16 @@ class EditorDocumentUpdateTypedEventsTest {
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         // 本地输入 → localDirty=true
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "本地未保存输入", 3L, 7L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4),
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                3L,
+                7L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "本地未保存输入".length),
+                selectionAnchorUtf8 = 2,
+                selectionHeadUtf8 = 4,
+            ),
         )
         assertTrue(coordinator.sessionState.localDirty)
 
@@ -239,16 +259,16 @@ class EditorDocumentUpdateTypedEventsTest {
         val update =
             EditorDocumentUpdate.UndoRestored(
                 "t1",
-                "undo text",
-                1L,
-                5L,
-                10L,
+                snapshotId = 1L,
+                revision = 5L,
+                transactionId = 10L,
                 selectionAnchorUtf8 = 2,
                 selectionHeadUtf8 = 4,
             )
         coordinator.applyUndoRestored(update)
         assertEquals(EditorSessionOrigin.UNDO_RESTORED, coordinator.sessionState.origin)
-        assertEquals("undo text", coordinator.sessionState.text)
+        // #624 评论9：SessionState 无 text 镜像 — 正文变化用 contentChanged 表达。
+        assertEquals(true, coordinator.sessionState.localDirty)
         assertEquals(5L, coordinator.sessionState.revision)
         assertEquals(10L, coordinator.sessionState.lastAppliedTransactionId)
         assertEquals(2, coordinator.sessionState.selectionAnchorUtf8)
@@ -262,16 +282,16 @@ class EditorDocumentUpdateTypedEventsTest {
         val update =
             EditorDocumentUpdate.ProgrammaticReplace(
                 "t1",
-                "replaced text",
-                1L,
-                3L,
-                8L,
+                commandId = 1L,
+                revision = 3L,
+                transactionId = 8L,
                 selectionAnchorUtf8 = 0,
                 selectionHeadUtf8 = 5,
             )
         coordinator.applyProgrammaticReplace(update)
         assertEquals(EditorSessionOrigin.PROGRAMMATIC_REPLACE, coordinator.sessionState.origin)
-        assertEquals("replaced text", coordinator.sessionState.text)
+        // #624 评论9：SessionState 无 text 镜像。
+        assertEquals(true, coordinator.sessionState.localDirty)
         assertEquals(3L, coordinator.sessionState.revision)
         assertEquals(8L, coordinator.sessionState.lastAppliedTransactionId)
     }
@@ -280,7 +300,16 @@ class EditorDocumentUpdateTypedEventsTest {
     fun markSaved_clearsLocalDirtyAndRecordsVersion() {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
-        coordinator.applyLocalEdit(EditorDocumentUpdate.LocalInput("t1", "typed", 3L, 7L))
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                3L,
+                7L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "typed".length),
+            ),
+        )
         assertTrue(coordinator.sessionState.localDirty)
 
         coordinator.markSaved("t1", DocumentVersion(contentHash = "saved-hash"))

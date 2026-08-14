@@ -1617,6 +1617,13 @@ enum EditorEditOutcomeDto {
     "InvalidRange"
 };
 
+dictionary EditorContentDeltaDto {
+    u32 inserted_chars;
+    u32 deleted_chars;
+    u32 inserted_non_whitespace_chars;
+    u32 deleted_non_whitespace_chars;
+};
+
 dictionary EditorEditResultDto {
     EditorEditOutcomeDto outcome;
     u64 transaction_id;
@@ -1629,6 +1636,8 @@ dictionary EditorEditResultDto {
     u32 new_selection_end;
     EditorVisualIntentDto visual_intent;
     CompositionSessionDto? composition_session;
+    // #624 评论8：本次编辑的字符增量（正文无变化时为全 0）。
+    EditorContentDeltaDto content_delta;
 };
 
 dictionary CompositionSessionDto {

@@ -53,7 +53,15 @@ class SessionLayerNoMutableStateTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "text", 1L, 1L, lease = EditorInputLease("a", 0UL, 0L)),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "text".length),
+                lease = EditorInputLease("a", 0UL, 0L),
+            ),
         )
 
         val snapshot = coordinator.sessionStateFlow.value
@@ -61,7 +69,6 @@ class SessionLayerNoMutableStateTest {
         assertEquals(snapshot.editingState, coordinator.editingState)
         assertEquals(snapshot.bindingState, coordinator.windowBindingState)
         assertEquals(snapshot.targetId, coordinator.sessionState.targetId)
-        assertEquals(snapshot.text, coordinator.sessionState.text)
     }
 
     @Test
@@ -73,7 +80,9 @@ class SessionLayerNoMutableStateTest {
         coordinator.applyLocalEdit(
             EditorDocumentUpdate.LocalInput(
                 targetId = "a",
-                text = "hello",
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "hello".length),
                 revision = 3L,
                 transactionId = 7L,
                 selectionAnchorUtf8 = 2,
@@ -83,7 +92,6 @@ class SessionLayerNoMutableStateTest {
         )
         val snapshot = coordinator.sessionStateFlow.value
         assertEquals("a", snapshot.targetId)
-        assertEquals("hello", snapshot.text)
         assertEquals(3L, snapshot.revision)
         assertEquals(7L, snapshot.lastAppliedTransactionId)
         assertEquals(2, snapshot.selectionAnchorUtf8)
@@ -99,7 +107,15 @@ class SessionLayerNoMutableStateTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = EditorInputLease("a", 0UL, 0L)),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "textA".length),
+                lease = EditorInputLease("a", 0UL, 0L),
+            ),
         )
         val staleLeaseA = EditorInputLease("a", 0UL, 0L)
 
@@ -118,24 +134,38 @@ class SessionLayerNoMutableStateTest {
         assertEquals("b", snapshot.targetId)
         assertEquals("b", snapshot.activeTargetId)
         assertEquals(5UL, snapshot.sessionId)
-        assertEquals("textB", snapshot.text)
         assertEquals(2L, snapshot.revision)
         assertEquals(EditingState.BINDING, snapshot.editingState)
 
         // 旧 A 的 lease 失效 — 晚到的输入不得修改快照。
         assertFalse(coordinator.isInputLeaseCurrent(staleLeaseA, "a"))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "late from A", 9L, 9L, lease = staleLeaseA),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                9L,
+                9L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "late from A".length),
+                lease = staleLeaseA,
+            ),
         )
-        assertEquals("旧 A 晚到输入不得写入 B 快照", "textB", coordinator.sessionStateFlow.value.text)
+        assertEquals("旧 A 晚到输入不得写入 B 快照", "b", coordinator.sessionStateFlow.value.targetId)
 
         // 新章节的 lease 被接受，输入推进快照。
         val leaseB = coordinator.currentInputLease()!!
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("b", "textB edited", 3L, 12L, lease = leaseB),
+            EditorDocumentUpdate.LocalInput(
+                "b",
+                3L,
+                12L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "textB edited".length),
+                lease = leaseB,
+            ),
         )
         val after = coordinator.sessionStateFlow.value
-        assertEquals("textB edited", after.text)
         assertEquals(3L, after.revision)
     }
 
@@ -144,7 +174,15 @@ class SessionLayerNoMutableStateTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "text", 1L, 1L, lease = EditorInputLease("a", 0UL, 0L)),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "text".length),
+                lease = EditorInputLease("a", 0UL, 0L),
+            ),
         )
         assertNotNull(coordinator.sessionStateFlow.value.targetId)
 
@@ -161,7 +199,15 @@ class SessionLayerNoMutableStateTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = false)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "text", 1L, 1L, lease = EditorInputLease("a", 0UL, 0L)),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "text".length),
+                lease = EditorInputLease("a", 0UL, 0L),
+            ),
         )
         coordinator.detachWindowBinding("w1", "a")
         val snapshot = coordinator.sessionStateFlow.value

@@ -9,6 +9,7 @@ import uniffi.writer_core.CompositionSessionDto
 import uniffi.writer_core.CoordinatedCursorDto
 import uniffi.writer_core.DisplayPatchDto
 import uniffi.writer_core.EditorByteRangeDto
+import uniffi.writer_core.EditorContentDeltaDto
 import uniffi.writer_core.EditorEditOutcomeDto
 import uniffi.writer_core.EditorEditResultDto
 import uniffi.writer_core.EditorOperationKindDto
@@ -188,6 +189,7 @@ class FakeInputCommandPort(
                     offsetMap = null,
                 ),
             compositionSession = null,
+            contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
         )
     }
 
@@ -224,6 +226,7 @@ class FakeInputCommandPort(
                     offsetMap = null,
                 ),
             compositionSession = null,
+            contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
         )
     }
 
@@ -306,6 +309,7 @@ class FakeInputCommandPort(
                     baseRevision = sessionBaseRevision.toULong(),
                     generation = sessionGeneration.toULong(),
                 ),
+            contentDelta = EditorContentDeltaDto(0u, 0u, 0u, 0u),
         )
     }
 
@@ -368,6 +372,7 @@ class FakeInputCommandPort(
                     offsetMap = null,
                 ),
             compositionSession = null,
+            contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
         )
     }
 
@@ -555,6 +560,7 @@ class FakeInputCommandPort(
                     offsetMap = null,
                 ),
             compositionSession = null,
+            contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
         )
     }
 
@@ -696,6 +702,7 @@ class FakeInputCommandPort(
                         offsetMap = null,
                     ),
                 compositionSession = null,
+                contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
             )
         selectionAnchorUtf8 = anchorByteOffset
         selectionHeadUtf8 = headByteOffset
@@ -792,6 +799,7 @@ class FakeInputCommandPort(
                     offsetMap = null,
                 ),
             compositionSession = null,
+            contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
         )
     }
 

@@ -1,6 +1,6 @@
-use super::result::{EditorEditOutcome, EditorEditResult};
+use super::result::{EditorContentDelta, EditorEditOutcome, EditorEditResult};
 use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
-use super::{CompositionSessionState, EditorKernel, UndoEntry};
+use super::{CompositionSessionState, EditorKernel, TextEditDelta, UndoEntry};
 
 use crate::editor::strong_types::{
     EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
@@ -33,7 +33,7 @@ impl EditorKernel {
                 old_selection,
             ));
         }
-        if replace_start > self.text.len() || replace_end_exclusive > self.text.len() {
+        if replace_start > self.text.byte_len() || replace_end_exclusive > self.text.byte_len() {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
@@ -87,6 +87,7 @@ impl EditorKernel {
                 },
                 offset_map: None,
             },
+            content_delta: EditorContentDelta::default(),
         })
     }
 
@@ -151,6 +152,7 @@ impl EditorKernel {
                 },
                 offset_map: None,
             },
+            content_delta: EditorContentDelta::default(),
         })
     }
 
@@ -205,6 +207,7 @@ impl EditorKernel {
                     },
                     offset_map: None,
                 },
+                content_delta: EditorContentDelta::default(),
             });
         }
 
@@ -213,7 +216,7 @@ impl EditorKernel {
         let committed_text = session.preedit_text.clone();
         let preedit_cursor_utf16 = session.preedit_cursor_utf16;
 
-        if replace_start > self.text.len() || replace_end > self.text.len() {
+        if replace_start > self.text.byte_len() || replace_end > self.text.byte_len() {
             self.composition_session = None;
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
@@ -222,9 +225,10 @@ impl EditorKernel {
             ));
         }
 
-        let old_text = self.text.clone();
+        // #624 评论8：先取局部删除文本，再局部 Rope replace，不 clone 全文。
+        let deleted_text = self.text.byte_slice(replace_start..replace_end).to_string();
         self.text
-            .replace_range(replace_start..replace_end, &committed_text);
+            .replace(replace_start..replace_end, &committed_text);
         self.revision = self.revision.next();
 
         let committed_utf16_len: usize = committed_text.chars().map(|c| c.len_utf16()).sum();
@@ -253,16 +257,21 @@ impl EditorKernel {
         self.selection_anchor = Utf8ByteOffset::unchecked(resulting_cursor);
         self.composition_session = None;
 
+        let new_selection = Utf8ByteRange::point(resulting_cursor);
+        let delta = TextEditDelta {
+            old_range: Utf8ByteRange::from_ordered(replace_start, replace_end),
+            new_range: Utf8ByteRange::from_start_len(replace_start, committed_text.len()),
+            deleted_text: deleted_text.clone(),
+            inserted_text: committed_text.clone(),
+        };
         self.undo_stack.push(UndoEntry {
-            old_text: old_text.clone(),
-            new_text: self.text.clone(),
-            old_cursor,
-            new_cursor: Utf8ByteOffset::unchecked(resulting_cursor),
+            edits: vec![delta],
+            old_selection,
+            new_selection,
         });
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::point(resulting_cursor);
 
         let display_patches = vec![DisplayPatch {
             base_revision,
@@ -301,8 +310,14 @@ impl EditorKernel {
                     should_animate: self.animation_enabled
                         && old_cursor.value() != resulting_cursor,
                 },
-                offset_map: Some(OffsetMap::build(&old_text, &self.text)),
+                // #624 评论8：单次 composition commit 从 delta 直接构造 offset map。
+                offset_map: Some(OffsetMap::from_single_edit(
+                    self.text.byte_len() - committed_text.len() + (replace_end - replace_start),
+                    (replace_start, replace_end),
+                    committed_text.len(),
+                )),
             },
+            content_delta: EditorContentDelta::from_texts(&committed_text, &deleted_text),
         };
 
         if selection_was_adjusted {
@@ -335,7 +350,7 @@ impl EditorKernel {
         let replace_end = session.replace_end_exclusive.value();
 
         if replace_start != replace_end
-            && (replace_start > self.text.len() || replace_end > self.text.len())
+            && (replace_start > self.text.byte_len() || replace_end > self.text.byte_len())
         {
             self.composition_session = None;
             return EditorEditOutcome::InvalidOffset(self.noop_result(
@@ -379,6 +394,7 @@ impl EditorKernel {
                 },
                 offset_map: None,
             },
+            content_delta: EditorContentDelta::default(),
         })
     }
 

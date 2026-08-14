@@ -77,35 +77,44 @@ class LocalInputOperationKindTest {
         val update =
             EditorDocumentUpdate.LocalInput(
                 targetId = "t1",
-                text = "typed",
+                operationKind = EditorOperationKind.INSERT,
                 revision = 7L,
                 transactionId = 42L,
-                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "typed".length),
             )
-        assertEquals("typed", update.text)
+        // #624 评论9：LocalInput 不再携带整章 text — 正文变化用 contentChanged/contentDelta。
+        assertEquals(true, update.contentChanged)
+        assertEquals(5, update.contentDelta.insertedChars)
         assertEquals(7L, update.revision)
         assertEquals(42L, update.transactionId)
         assertEquals(EditorOperationKind.INSERT, update.operationKind)
         // 默认值兜底：未显式传 operationKind 时按 INSERT 处理。
-        val legacy = EditorDocumentUpdate.LocalInput("t1", "x", 1L, 0L)
+        val legacy =
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                1L,
+                0L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "x".length),
+            )
         assertEquals(EditorOperationKind.INSERT, legacy.operationKind)
     }
 
     @Test
     fun operationKindDoesNotAffectLocalResetJudgement() {
-        // WritingPane 的本地/外部判断只用 origin + text；operationKind 是语义记录，
-        // 不能改变 reset 判定结果。
+        // #624 评论9：SessionState 已无 text 镜像 — 本地/外部判断走 origin +
+        // 版本/dirty 判定（shouldApplyExternalContent），operationKind 只记录语义，
+        // 不参与 reset 判定。
         val sessionState =
             EditorSessionState(
                 targetId = "t1",
-                text = "本地输入结果",
                 revision = 9L,
                 origin = EditorSessionOrigin.LOCAL_INPUT,
             )
-        val uiContent = "本地输入结果"
-        val isLocal =
-            sessionState.origin == EditorSessionOrigin.LOCAL_INPUT &&
-                sessionState.text == uiContent
-        assertTrue("operationKind 不得参与 reset 判定，本地回显必须仍判为本地", isLocal)
+        assertEquals(EditorSessionOrigin.LOCAL_INPUT, sessionState.origin)
+        assertEquals(9L, sessionState.revision)
+        assertTrue("本地输入 origin 保留，不因 operationKind 改变", sessionState.origin == EditorSessionOrigin.LOCAL_INPUT)
     }
 }

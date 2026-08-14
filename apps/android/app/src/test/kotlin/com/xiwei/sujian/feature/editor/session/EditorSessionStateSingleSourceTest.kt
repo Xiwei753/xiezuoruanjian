@@ -41,16 +41,19 @@ class EditorSessionStateSingleSourceTest {
         coordinator.applyLocalEdit(
             EditorDocumentUpdate.LocalInput(
                 targetId = "t1",
-                text = "你好世界",
+                operationKind = EditorOperationKind.INSERT,
                 revision = 3L,
                 transactionId = 7L,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "你好世界".length),
                 selectionAnchorUtf8 = 3,
                 selectionHeadUtf8 = 9,
             ),
         )
         val state = coordinator.sessionState
         assertEquals("t1", state.targetId)
-        assertEquals("你好世界", state.text)
+        // #624 评论9：SessionState 无 text 镜像 — 正文变化由 contentChanged/contentDelta 表达。
+        assertEquals(true, state.localDirty)
         assertEquals(3L, state.revision)
         assertEquals(7L, state.lastAppliedTransactionId)
         assertEquals(3, state.selectionAnchorUtf8)
@@ -63,7 +66,16 @@ class EditorSessionStateSingleSourceTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = false))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4),
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "text".length),
+                selectionAnchorUtf8 = 2,
+                selectionHeadUtf8 = 4,
+            ),
         )
         coordinator.detachWindowBinding("w1", "t1")
         assertEquals(
@@ -79,13 +91,23 @@ class EditorSessionStateSingleSourceTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4),
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "text".length),
+                selectionAnchorUtf8 = 2,
+                selectionHeadUtf8 = 4,
+            ),
         )
         coordinator.closeTarget("t1", SessionCloseReason.WORKSPACE_NAVIGATION)
         val state = coordinator.sessionState
         assertNull("closeTarget must clear session target", state.targetId)
         assertNull("closeTarget must clear session id", state.sessionId)
-        assertEquals("", state.text)
+        // #624 评论9：SessionState 无 text 镜像。
+        assertEquals(null, state.targetId)
         assertEquals(0L, state.revision)
         assertEquals(WindowBindingState.Idle, state.bindingState)
         assertEquals(EditorSessionOrigin.NONE, state.origin)

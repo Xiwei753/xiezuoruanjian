@@ -5,8 +5,8 @@ package com.xiwei.sujian.feature.editor.ui
 // ! #624 评论9：热路径不传整章 String — onEditorApplied 接轻量 EditorAppliedEvent，
 // ! 保存调度/统计/字数全部增量处理。完整正文只在冷路径（save/snapshot）经 lease.text 取。
 
+import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
-import com.xiwei.sujian.feature.editor.session.EditorEditSource
 import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch

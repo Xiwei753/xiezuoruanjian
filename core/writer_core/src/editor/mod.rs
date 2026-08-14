@@ -16,7 +16,7 @@ pub mod text_edit_session;
 pub mod transaction;
 
 pub use kernel::{
-    result::{EditorEditOutcome, EditorEditResult, EditorInputError},
+    result::{EditorContentDelta, EditorEditOutcome, EditorEditResult, EditorInputError},
     types::{
         CoordinatedCursor, DisplayPatch, EditorCommand, EditorOperationKind, EditorVisualIntent,
     },

@@ -1,111 +1,112 @@
 package com.xiwei.sujian.feature.editor.session
 
+import com.xiwei.sujian.feature.editor.window.EditableTextTarget
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #595 一：本地输入回灌不触发 session reset 契约测试。
+ * #624 评论9：本地输入回灌不触发 session reset 的会话层契约测试（重写）。
  *
- * 验证 WritingPane 用 `sessionState.origin == LOCAL_INPUT && sessionState.text == uiState.content`
- * 判断本地更新，而非 `revision == lastAppliedRevision` 比较（后者在连续输入时第二次不满足）。
- *
- * onLocalEdit 先于 onContentChanged 调用，确保 LaunchedEffect(uiState.content) 触发时
- * sessionStateFlow 已是最新。
+ * 上轮机制的 `sessionState.origin == LOCAL_INPUT && sessionState.text == uiState.content`
+ * 已随 SessionState.text 镜像删除。新机制：
+ * - 本地输入经 [EditorSessionEditOps.applyLocalUpdate] 推进 revision/transactionId，
+ *   origin 置 LOCAL_INPUT，WritingPane 不再做全文 String 比较；
+ * - 连续输入第二次同样满足（revision 单调推进，不依赖字符串比较）；
+ * - 外部内容是否应用由 [shouldApplyExternalContent] 用版本/dirty 判定 +
+ *   冷路径 snapshot.text 低频比较决定。
  */
 class LocalInputOriginTest {
-    @Test
-    fun localInputWithMatchingTextDoesNotTriggerReset() {
-        val sessionState =
-            EditorSessionState(
-                targetId = "t1",
-                text = "hello world",
-                revision = 5L,
-                origin = EditorSessionOrigin.LOCAL_INPUT,
-            )
-        val uiContent = "hello world"
-        val isLocal =
-            sessionState.origin == EditorSessionOrigin.LOCAL_INPUT &&
-                sessionState.text == uiContent
-        assertTrue("Local input with matching text must not trigger reset", isLocal)
+    private fun createCoordinator(): EditorSessionCoordinator {
+        return EditorSessionCoordinator(
+            com.xiwei.sujian.core.interop.app.AppServiceBridge(
+                com.xiwei.sujian.core.interop.app.WriterAppServiceHolder(
+                    "/tmp/sujian_test_workspace_624_local_input_origin",
+                    "/tmp/sujian_test_workspace_624_local_input_origin",
+                ),
+            ),
+        )
     }
 
     @Test
-    fun externalReplaceWithMismatchedTextTriggersReset() {
-        val sessionState =
-            EditorSessionState(
+    fun localInputAdvancesRevisionAndKeepsLocalOrigin() {
+        val coordinator = createCoordinator()
+        coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput(
                 targetId = "t1",
-                text = "local edit",
                 revision = 5L,
-                origin = EditorSessionOrigin.LOCAL_INPUT,
-            )
-        val uiContent = "external replace"
-        val needsReset = uiContent != sessionState.text
-        assertTrue("External replace with mismatched text must trigger reset", needsReset)
+                transactionId = 11L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = 11),
+                lease = EditorInputLease("t1", 0UL, 0L),
+            ),
+        )
+        val state = coordinator.sessionState
+        assertEquals(EditorSessionOrigin.LOCAL_INPUT, state.origin)
+        assertEquals(5L, state.revision)
+        assertEquals(11L, state.lastAppliedTransactionId)
+        assertTrue("本地输入必须置 localDirty", state.localDirty)
     }
 
     @Test
     fun consecutiveLocalInputsDoNotFalselyTriggerReset() {
-        val state1 =
-            EditorSessionState(
+        val coordinator = createCoordinator()
+        coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
+        val lease = EditorInputLease("t1", 0UL, 0L)
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput(
                 targetId = "t1",
-                text = "a",
                 revision = 5L,
-                origin = EditorSessionOrigin.LOCAL_INPUT,
-            )
-        val content1 = "a"
-        val isLocal1 =
-            state1.origin == EditorSessionOrigin.LOCAL_INPUT &&
-                state1.text == content1
-        assertTrue("First local input must be detected", isLocal1)
+                transactionId = 11L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = 1),
+                lease = lease,
+            ),
+        )
+        assertEquals(5L, coordinator.sessionState.revision)
 
-        val state2 =
-            EditorSessionState(
+        // 连续第二次输入：revision 继续推进，不依赖任何字符串比较。
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput(
                 targetId = "t1",
-                text = "ab",
                 revision = 6L,
-                origin = EditorSessionOrigin.LOCAL_INPUT,
-            )
-        val content2 = "ab"
-        val isLocal2 =
-            state2.origin == EditorSessionOrigin.LOCAL_INPUT &&
-                state2.text == content2
-        assertTrue("Second consecutive local input must be detected", isLocal2)
+                transactionId = 12L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = 1),
+                lease = lease,
+            ),
+        )
+        assertEquals(6L, coordinator.sessionState.revision)
+        assertEquals(12L, coordinator.sessionState.lastAppliedTransactionId)
+        assertEquals(EditorSessionOrigin.LOCAL_INPUT, coordinator.sessionState.origin)
     }
 
     @Test
-    fun initialLoadWithMatchingTextDoesNotTriggerReset() {
-        val sessionState =
-            EditorSessionState(
+    fun selectionOnlyEditKeepsLocalOriginAndDoesNotMarkDirty() {
+        val coordinator = createCoordinator()
+        coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput(
                 targetId = "t1",
-                text = "loaded content",
-                revision = 0L,
-                origin = EditorSessionOrigin.INITIAL_LOAD,
-            )
-        val uiContent = "loaded content"
-        val isLocal =
-            sessionState.origin == EditorSessionOrigin.LOCAL_INPUT &&
-                sessionState.text == uiContent
-        assertFalse("Initial load is not local input", isLocal)
-        val needsReset = uiContent != sessionState.text
-        assertFalse("Initial load with matching text does not need reset", needsReset)
-    }
-
-    @Test
-    fun externalReplaceWithSameTextButDifferentOriginDoesNotReset() {
-        val sessionState =
-            EditorSessionState(
-                targetId = "t1",
-                text = "same",
                 revision = 5L,
-                origin = EditorSessionOrigin.LOCAL_INPUT,
-            )
-        val uiContent = "same"
-        val isLocal =
-            sessionState.origin == EditorSessionOrigin.LOCAL_INPUT &&
-                sessionState.text == uiContent
-        assertTrue("Same text with LOCAL_INPUT origin is local", isLocal)
-        val needsReset = uiContent != sessionState.text
-        assertFalse("Same text does not need reset", needsReset)
+                transactionId = 13L,
+                operationKind = EditorOperationKind.SELECTION,
+                contentChanged = false,
+                contentDelta = EditorContentDelta(),
+                selectionAnchorUtf8 = 2,
+                selectionHeadUtf8 = 4,
+                lease = EditorInputLease("t1", 0UL, 0L),
+            ),
+        )
+        val state = coordinator.sessionState
+        assertEquals(5L, state.revision)
+        assertEquals(2, state.selectionAnchorUtf8)
+        assertEquals(4, state.selectionHeadUtf8)
+        assertFalse("selection-only 不改变正文 → 不置 dirty", state.localDirty)
     }
 }

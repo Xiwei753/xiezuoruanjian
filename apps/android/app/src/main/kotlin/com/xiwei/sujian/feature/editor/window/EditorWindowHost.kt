@@ -810,9 +810,9 @@ class EditorWindowHost(
         // #595 一/二：类型化本地编辑回调 — 先更新会话层唯一 SessionState（revision/transactionId），
         // 再通知 ViewModel 保存。ViewModel 不再靠字符串比较猜测来源，
         // WritingPane 收集 sessionStateFlow 发现 revision 已应用，不触发 reset。
-        view.onLocalEdit = { event ->
+        view.onLocalEdit = localEdit@{ event ->
             // lease 校验 — 章节切换提交后旧 View 晚到事件不能进入新章节会话。
-            if (!sessionCoordinator.isInputLeaseCurrent(lease, target.targetId)) return@onLocalEdit
+            if (!sessionCoordinator.isInputLeaseCurrent(lease, target.targetId)) return@localEdit
             sessionCoordinator.applyLocalEdit(
                 EditorDocumentUpdate.LocalInput(
                     targetId = target.targetId,
@@ -831,8 +831,8 @@ class EditorWindowHost(
         }
         // #595 二/四：类型化外部编辑回调 — 撤销/恢复/程序化替换走类型化事件，
         // 来源由 PipelineOutput 天然携带，由 Coordinator 的 apply* 统一处理。
-        view.onExternalEdit = { event ->
-            if (!sessionCoordinator.isInputLeaseCurrent(lease, target.targetId)) return@onExternalEdit
+        view.onExternalEdit = externalEdit@{ event ->
+            if (!sessionCoordinator.isInputLeaseCurrent(lease, target.targetId)) return@externalEdit
             when (event.source) {
                 com.xiwei.sujian.feature.editor.platform.EditorEditSource.UNDO,
                 com.xiwei.sujian.feature.editor.platform.EditorEditSource.REDO,

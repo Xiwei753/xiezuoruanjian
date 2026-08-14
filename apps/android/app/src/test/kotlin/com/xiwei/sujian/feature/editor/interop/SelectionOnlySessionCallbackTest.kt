@@ -75,6 +75,7 @@ class SelectionOnlySessionCallbackTest {
                         offsetMap = null,
                     ),
                 compositionSession = null,
+                contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
             )
 
         override fun setSelection(
@@ -224,17 +225,18 @@ class SelectionOnlySessionCallbackTest {
         var lastKind: EditorOperationKind? = null
         var lastAnchor = -1
         var lastHead = -1
-        var contentChangedCalls = 0
-        view.onLocalEdit = { text, revision, transactionId, operationKind, anchor, head ->
+        var lastContentChanged: Boolean? = null
+        // #624 评论9：热路径回调已是轻量 EditorAppliedEvent（无整章 String）。
+        view.onLocalEdit = { event ->
             localEditCalls++
-            assertEquals("正文未变", "hello", text)
-            assertEquals("selection-only 不改变 revision", 1L, revision)
-            assertTrue("selection-only 事务必须携带 transactionId", transactionId > 0L)
-            lastKind = operationKind
-            lastAnchor = anchor
-            lastHead = head
+            assertEquals("selection-only 不改变 revision", 1L, event.revision)
+            assertTrue("selection-only 事务必须携带 transactionId", event.transactionId > 0L)
+            assertEquals("正文未变 → contentChanged=false", false, event.contentChanged)
+            lastKind = event.operationKind
+            lastAnchor = event.selectionAnchorUtf8
+            lastHead = event.selectionHeadUtf8
+            lastContentChanged = event.contentChanged
         }
-        view.onContentChanged = { contentChangedCalls++ }
 
         // CURSOR_ONLY：光标从末尾移到 "he|llo"（UTF-8 偏移 2）。
         view.setSelectionTyped(2, 2)
@@ -250,9 +252,9 @@ class SelectionOnlySessionCallbackTest {
         assertEquals("onLocalEdit 必须携带真实新选区 anchor", 2, lastAnchor)
         assertEquals("onLocalEdit 必须携带真实新选区 head", 2, lastHead)
         assertEquals(
-            "纯选区移动不得触发 onContentChanged（正文未变，不应标记未保存）",
-            0,
-            contentChangedCalls,
+            "#624 评论9：纯选区移动 contentChanged=false（正文未变，不应标记未保存）",
+            false,
+            lastContentChanged,
         )
         assertEquals("View 镜像选区必须同步", 2, view.getSelectionStart())
         assertEquals(2, view.getSelectionEnd())

@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.editor.session
 
 import androidx.compose.runtime.Immutable
 import com.xiwei.sujian.feature.editor.platform.EditorEditSource
+import uniffi.writer_core.EditorContentDeltaDto
 
 /**
  * #624 评论9：轻量编辑应用事件 — 热路径（IME/Key → Core EditResult → Android Spannable 局部 patch）
@@ -31,14 +32,15 @@ data class EditorAppliedEvent(
 )
 
 /**
- * #624 评论9：增量字符统计 — 不需要前后整章 String，只看本次 patch。
+ * #624 评论8/9：增量字符统计 — Core 计算的本地 delta 真值，不依赖前后整章 String。
  *
- * - [insertedChars]：本次插入的 UTF-16 char 数（Kotlin String.length 精确）；
- * - [deletedChars]：本次删除的 UTF-8 byte 数近似（patch 已 apply 后无法取删除原文，
- *   待 Core EditorContentDelta #624评论8 精确化）；
+ * - [insertedChars]：本次插入的 Unicode scalar（char）数；
+ * - [deletedChars]：本次删除的 Unicode scalar（char）数；
  * - [insertedNonWhitespaceChars]：本次插入的非空白字符数；
- * - [deletedNonWhitespaceChars]：保守 0（patch 已 apply 后无法取删除原文，
- *   待 Core #624评论8 精确化）。
+ * - [deletedNonWhitespaceChars]：本次删除的非空白字符数。
+ *
+ * 全部字段由 Rust `EditorEditResultDto.contentDelta` 映射而来（对 inserted_text /
+ * deleted_text 局部计算），不再是 UTF-8 byte 近似。
  */
 @Immutable
 data class EditorContentDelta(
@@ -53,22 +55,15 @@ data class EditorContentDelta(
 }
 
 /**
- * #624 评论9：从单个 DisplayPatch 推算 [EditorContentDelta]。
+ * #624 评论8/9：Core delta 真值 → 会话层轻量 [EditorContentDelta]。
  *
- * - insertedChars = insertedText.length（UTF-16 精确）；
- * - deletedChars = (replaceByteEndExclusive - replaceByteStart).coerceAtLeast(0)
- *   （UTF-8 byte 长度近似，patch 已 apply 后无法取删除原文）；
- * - insertedNonWhitespaceChars = insertedText.count { !it.isWhitespace() }；
- * - deletedNonWhitespaceChars = 0（保守，待 Core #624评论8 精确化）。
+ * Core 对本次 inserted_text / deleted_text 局部计算（Unicode scalar 计数），
+ * Android 直接消费，不再用 UTF-8 byte 长度冒充 deletedChars、不再全文重算。
  */
-fun contentDeltaFromPatches(
-    insertedText: String,
-    replaceByteStart: Int,
-    replaceByteEndExclusive: Int,
-): EditorContentDelta =
+fun EditorContentDeltaDto.toSessionDelta(): EditorContentDelta =
     EditorContentDelta(
-        insertedChars = insertedText.length,
-        deletedChars = (replaceByteEndExclusive - replaceByteStart).coerceAtLeast(0),
-        insertedNonWhitespaceChars = insertedText.count { !it.isWhitespace() },
-        deletedNonWhitespaceChars = 0,
+        insertedChars = insertedChars.toInt(),
+        deletedChars = deletedChars.toInt(),
+        insertedNonWhitespaceChars = insertedNonWhitespaceChars.toInt(),
+        deletedNonWhitespaceChars = deletedNonWhitespaceChars.toInt(),
     )

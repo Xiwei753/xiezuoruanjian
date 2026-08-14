@@ -902,6 +902,32 @@ pub struct CompositionSessionDto {
     pub generation: u64,
 }
 
+/// #624 评论8：内容增量 DTO — 本次编辑实际插入/删除的字符统计。
+///
+/// `_chars` 按 Unicode scalar 计数（非 UTF-8 byte、非 UTF-16 code unit）；
+/// Cursor/selection/composition-update 没有 committed 正文变化时为全 0；
+/// composition commit、Undo/Redo 按实际 delta 统计。Android 直接消费此字段，
+/// 不再用 UTF-8 byte 长度或全文重算。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorContentDeltaDto {
+    pub inserted_chars: u32,
+    pub deleted_chars: u32,
+    pub inserted_non_whitespace_chars: u32,
+    pub deleted_non_whitespace_chars: u32,
+}
+
+impl From<crate::editor::EditorContentDelta> for EditorContentDeltaDto {
+    fn from(d: crate::editor::EditorContentDelta) -> Self {
+        Self {
+            inserted_chars: d.inserted_chars,
+            deleted_chars: d.deleted_chars,
+            inserted_non_whitespace_chars: d.inserted_non_whitespace_chars,
+            deleted_non_whitespace_chars: d.deleted_non_whitespace_chars,
+        }
+    }
+}
+
 /// 编辑结果 DTO — EditorKernel.apply() 的跨平台返回值。
 ///
 /// 包含正文变化（display_patches）、选区变化、视觉意图和 composition 会话状态。
@@ -925,6 +951,9 @@ pub struct EditorEditResultDto {
     pub visual_intent: EditorVisualIntentDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition_session: Option<CompositionSessionDto>,
+    /// #624 评论8：本次编辑的字符增量（正文无变化时为全 0）。
+    #[serde(default)]
+    pub content_delta: EditorContentDeltaDto,
 }
 
 impl EditorEditResultDto {
@@ -941,6 +970,7 @@ impl EditorEditResultDto {
             new_selection_end: 0,
             visual_intent: EditorVisualIntentDto::default_fallback(),
             composition_session: None,
+            content_delta: EditorContentDeltaDto::default(),
         }
     }
 
@@ -957,6 +987,7 @@ impl EditorEditResultDto {
             new_selection_end: 0,
             visual_intent: EditorVisualIntentDto::default_fallback(),
             composition_session: None,
+            content_delta: EditorContentDeltaDto::default(),
         }
     }
 
@@ -973,6 +1004,7 @@ impl EditorEditResultDto {
             new_selection_end: 0,
             visual_intent: EditorVisualIntentDto::default_fallback(),
             composition_session: None,
+            content_delta: EditorContentDeltaDto::default(),
         }
     }
 }
@@ -1028,6 +1060,7 @@ impl From<crate::editor::EditorEditOutcome> for EditorEditResultDto {
             new_selection_end: r.new_selection_byte_range.end().value() as u32,
             visual_intent: r.visual_intent.into(),
             composition_session: None,
+            content_delta: r.content_delta.into(),
         }
     }
 }
@@ -1048,6 +1081,7 @@ impl From<crate::editor::EditorEditResult> for EditorEditResultDto {
             new_selection_end: r.new_selection_byte_range.end().value() as u32,
             visual_intent: r.visual_intent.into(),
             composition_session: None,
+            content_delta: r.content_delta.into(),
         }
     }
 }
@@ -1150,6 +1184,67 @@ impl From<crate::editor::TransactionCancelReason> for TransactionCancelReasonDto
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #624 评论8: EditorEditResultDto 映射 content_delta（插入/删除/空白统计）。
+    #[test]
+    fn edit_result_dto_maps_content_delta() {
+        use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
+        use crate::editor::EditorCommand;
+        use crate::editor::EditorKernel;
+
+        let mut kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
+        let result = kernel
+            .apply(EditorCommand::Delete {
+                byte_range: Utf8ByteRange::from_ordered(6, 12),
+                deleted_text: "世界".to_string(),
+                cause: crate::editor::EditorTransactionCause::Delete,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(result.content_delta.deleted_chars, 2);
+        assert_eq!(result.content_delta.deleted_non_whitespace_chars, 2);
+        let dto: EditorEditResultDto = result.into();
+        // Unicode scalar 计数：删除 2 个 CJK char，非 UTF-8 byte 数（6）
+        assert_eq!(dto.content_delta.deleted_chars, 2u32);
+        assert_eq!(dto.content_delta.inserted_chars, 0u32);
+        assert_eq!(dto.content_delta.deleted_non_whitespace_chars, 2u32);
+        assert_eq!(dto.content_delta.inserted_non_whitespace_chars, 0u32);
+    }
+
+    /// #624 评论8: selection-only 结果 content_delta 为全 0，DTO 默认值正确。
+    #[test]
+    fn edit_result_dto_selection_only_has_zero_content_delta() {
+        use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
+        use crate::editor::EditorCommand;
+        use crate::editor::EditorKernel;
+
+        let mut kernel = EditorKernel::with_text("hello".to_string(), 5).unwrap();
+        let result = kernel
+            .apply(EditorCommand::SetSelection {
+                anchor: Utf8ByteOffset::unchecked(0),
+                head: Utf8ByteOffset::unchecked(3),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        let dto: EditorEditResultDto = result.into();
+        assert_eq!(dto.content_delta, EditorContentDeltaDto::default());
+    }
+
+    /// #624 评论8: EditorContentDeltaDto 序列化 camelCase（Android 直接消费）。
+    #[test]
+    fn content_delta_dto_serializes_camel_case() {
+        let dto = EditorContentDeltaDto {
+            inserted_chars: 1,
+            deleted_chars: 2,
+            inserted_non_whitespace_chars: 3,
+            deleted_non_whitespace_chars: 4,
+        };
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(json.contains("\"insertedChars\":1"));
+        assert!(json.contains("\"deletedChars\":2"));
+        assert!(json.contains("\"insertedNonWhitespaceChars\":3"));
+        assert!(json.contains("\"deletedNonWhitespaceChars\":4"));
+    }
 
     /// T1.8: Verify all fields are correctly mapped for an Insert visual transaction.
     #[test]

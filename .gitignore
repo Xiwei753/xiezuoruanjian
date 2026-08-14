@@ -132,3 +132,6 @@ temp_csr/
 .arts/
 .codeartsdoer/
 .wrangler/
+
+# pi 代理运行时目录（不提交）
+.pi/

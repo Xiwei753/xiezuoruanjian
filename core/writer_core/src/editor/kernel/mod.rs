@@ -5,6 +5,7 @@ mod composition;
 mod history;
 mod replace;
 pub mod result;
+mod rope_tests;
 mod selection;
 mod session;
 mod tests;
@@ -12,12 +13,38 @@ pub mod types;
 
 use self::result::EditorInputError;
 use crate::editor::strong_types::{
-    EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset,
+    EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
 };
+use crop::Rope;
+
+/// #624 评论8 — 编辑 delta：只保存实际删除/插入的局部文本及 old/new ranges。
+///
+/// `old_range` 是编辑前正文中的半开 byte range，`new_range` 是编辑后正文中的
+/// 半开 byte range（同一逻辑编辑位置）；`deleted_text`/`inserted_text` 只保存
+/// 被替换区间的局部文本，不再保存两份全文。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TextEditDelta {
+    pub(crate) old_range: Utf8ByteRange,
+    pub(crate) new_range: Utf8ByteRange,
+    pub(crate) deleted_text: String,
+    pub(crate) inserted_text: String,
+}
+
+/// #624 评论8 — Undo 栈条目：编辑 delta 列表 + 编辑前后选区。
+///
+/// 普通编辑一个 delta；deleteSurrounding 两个；replace-all 多个。
+/// Undo 按 new_range 逆序应用 inverse delta，Redo 按 old_range 从后往前（降序）
+/// 应用 forward delta（避免先前替换使后面 delta 的旧文本坐标漂移）。
+#[derive(Debug, Clone)]
+pub(crate) struct UndoEntry {
+    pub(crate) edits: Vec<TextEditDelta>,
+    pub(crate) old_selection: Utf8ByteRange,
+    pub(crate) new_selection: Utf8ByteRange,
+}
 
 #[derive(Debug, Clone)]
 pub struct EditorKernel {
-    text: String,
+    text: Rope,
     revision: EditorRevision,
     cursor: Utf8ByteOffset,
     selection_anchor: Utf8ByteOffset,
@@ -41,14 +68,6 @@ pub(crate) struct CompositionSessionState {
     pub(crate) preedit_cursor_utf16: usize,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct UndoEntry {
-    pub(crate) old_text: String,
-    pub(crate) new_text: String,
-    pub(crate) old_cursor: Utf8ByteOffset,
-    pub(crate) new_cursor: Utf8ByteOffset,
-}
-
 impl Default for EditorKernel {
     fn default() -> Self {
         Self::new()
@@ -58,7 +77,7 @@ impl Default for EditorKernel {
 impl EditorKernel {
     pub fn new() -> Self {
         Self {
-            text: String::new(),
+            text: Rope::new(),
             revision: EditorRevision::initial(),
             cursor: Utf8ByteOffset::unchecked(0),
             selection_anchor: Utf8ByteOffset::unchecked(0),
@@ -80,7 +99,7 @@ impl EditorKernel {
             });
         }
         Ok(Self {
-            text,
+            text: Rope::from(text),
             revision: EditorRevision::initial(),
             cursor: Utf8ByteOffset::unchecked(cursor),
             selection_anchor: Utf8ByteOffset::unchecked(cursor),
@@ -102,7 +121,36 @@ impl EditorKernel {
         self.animation_enabled = enabled;
     }
 
-    pub fn text(&self) -> &str {
+    /// #624 评论8 — 热路径访问器：UTF-8 byte 长度，O(1)。
+    pub fn byte_len(&self) -> usize {
+        self.text.byte_len()
+    }
+
+    /// #624 评论8 — 热路径访问器：offset 是否 UTF-8 char 边界（O(1)）。
+    ///
+    /// 越界 offset 一律返回 false（crop 自身在越界时 panic，调用方需先自查）。
+    pub fn is_char_boundary(&self, byte_offset: usize) -> bool {
+        byte_offset <= self.text.byte_len() && self.text.is_char_boundary(byte_offset)
+    }
+
+    /// #624 评论8 — 热路径访问器：局部 byte slice（不 materialize 全文）。
+    ///
+    /// `start`/`end` 为 UTF-8 byte offset 半开区间，必须已通过 [Self::is_char_boundary]
+    /// 或其它边界验证；越界会 panic（调用方契约保证）。
+    pub fn byte_slice(&self, start: usize, end: usize) -> crop::RopeSlice<'_> {
+        self.text.byte_slice(start..end)
+    }
+
+    /// #624 评论8 — 冷路径访问器：全文 String。
+    ///
+    /// 只在 session snapshot、save/load、global search、replace-all 等明确需要
+    /// 全文的边界调用；普通输入热路径不得使用。
+    pub fn snapshot_text(&self) -> String {
+        self.text.to_string()
+    }
+
+    /// 内部只读访问 Rope（供 app_service 边界校验使用）。
+    pub(crate) fn rope(&self) -> &Rope {
         &self.text
     }
 
@@ -124,47 +172,75 @@ impl EditorKernel {
 
     /// #606: 返回严格在 `byte_offset` 之前的最近 grapheme cluster 边界（UTF-8 byte offset）。
     ///
-    /// 平台端 Backspace/Delete 的 grapheme 边界计算由 Core 唯一决定，
-    /// 不再依赖 ICU BreakIterator。
-    #[allow(clippy::cast_possible_truncation)]
-    pub fn previous_grapheme_boundary(&self, byte_offset: u32) -> u32 {
-        use unicode_segmentation::UnicodeSegmentation;
-        let text = self.text();
-        let offset = byte_offset as usize;
-        if offset == 0 {
-            return 0;
-        }
-        if offset > text.len() {
-            return text.len() as u32;
-        }
-        let mut prev: usize = 0;
-        for (start, _) in text.grapheme_indices(true) {
-            if start >= offset {
-                break;
-            }
-            prev = start;
-        }
-        prev as u32
-    }
-
-    /// #606: 返回严格在 `byte_offset` 之后的最近 grapheme cluster 边界（UTF-8 byte offset）。
+    /// #624 评论8：从光标附近 RopeSlice 迭代 — 取 `[0, offset)` slice 的最后一个
+    /// grapheme（`next_back()`），不再从全文开头 `grapheme_indices(true)` 扫到光标。
     ///
     /// 平台端 Backspace/Delete 的 grapheme 边界计算由 Core 唯一决定，
     /// 不再依赖 ICU BreakIterator。
     #[allow(clippy::cast_possible_truncation)]
+    pub fn previous_grapheme_boundary(&self, byte_offset: u32) -> u32 {
+        let offset = byte_offset as usize;
+        let len = self.text.byte_len();
+        if offset == 0 {
+            return 0;
+        }
+        if offset > len {
+            return len as u32;
+        }
+        let prefix = self.text.byte_slice(0..offset);
+        match prefix.graphemes().next_back() {
+            Some(g) => (offset - g.len()) as u32,
+            None => 0,
+        }
+    }
+
+    /// #606: 返回严格在 `byte_offset` 之后的最近 grapheme cluster 边界（UTF-8 byte offset）。
+    ///
+    /// #624 评论8：从光标附近 RopeSlice 迭代 — 只取光标后一个小窗口（每次最多
+    /// 64 个 Unicode scalar）用标准分段规则求第一个 cluster 边界；若 cluster 延伸
+    /// 出窗口则自动向后扩展。不从全文开头 `grapheme_indices(true)` 扫描，也不依赖
+    /// crop 前向 grapheme 迭代（crop 0.4.3 前向迭代不合并 regional-indicator 对）。
+    ///
+    /// 平台端 Backspace/Delete 的 grapheme 边界计算由 Core 唯一决定，
+    /// 不再依赖 ICU BreakIterator。
+    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::too_many_lines, clippy::excessive_nesting)]
     pub fn next_grapheme_boundary(&self, byte_offset: u32) -> u32 {
         use unicode_segmentation::UnicodeSegmentation;
-        let text = self.text();
+
         let offset = byte_offset as usize;
-        if offset >= text.len() {
-            return text.len() as u32;
+        let len = self.text.byte_len();
+        if offset >= len {
+            return len as u32;
         }
-        for (start, g) in text.grapheme_indices(true) {
-            let end = start + g.len();
-            if end > offset {
-                return end as u32;
+
+        // 向后扩展窗口（每次 64 个 Unicode scalar 边界），直到窗口内能确定
+        // 从 offset 开始（或包含 offset）的第一个完整 grapheme 的结束位置。
+        const WINDOW_CHARS: usize = 64;
+        let mut window_end = offset;
+        loop {
+            // 从 window_end 向后取最多 WINDOW_CHARS 个 char 边界。
+            let mut chars_taken = 0usize;
+            let slice = self.text.byte_slice(window_end..len);
+            let mut char_end = window_end;
+            for ch in slice.chars() {
+                char_end += ch.len_utf8();
+                chars_taken += 1;
+                if chars_taken >= WINDOW_CHARS {
+                    break;
+                }
             }
+            window_end = char_end;
+            let window = self.text.byte_slice(offset..window_end).to_string();
+            // 窗口内第一个 grapheme 的结束（相对窗口起点）。
+            let first_end = window
+                .grapheme_indices(true)
+                .next()
+                .map_or(window.len(), |(_, g)| g.len());
+            if first_end < window.len() || window_end == len {
+                return (offset + first_end) as u32;
+            }
+            // cluster 延伸出窗口：继续向后扩展。
         }
-        text.len() as u32
     }
 }

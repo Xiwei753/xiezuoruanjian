@@ -3,8 +3,12 @@ package com.xiwei.sujian.feature.editor.ui
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
+import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import com.xiwei.sujian.feature.editor.session.ChapterContentSavePort
+import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
+import com.xiwei.sujian.feature.editor.session.EditorContentDelta
 import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
+import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
 import com.xiwei.sujian.feature.editor.session.TargetSnapshot
@@ -136,7 +140,9 @@ class EditorSaveFlowTest {
             ),
         )
         vm.currentSession = EditorSession("s1", "p", "v", "a")
-        vm.onContentChanged(text)
+        // #624 评论9：章节加载是冷路径 — uiState.content 经 applyExternalContentToUi 一次性设置。
+        // hash 传空串：模拟"从未保存过"的章节（保存成功后由回执写入 hash）。
+        vm.applyExternalContentToUi(TARGET_ID, text, "")
     }
 
     @Test
@@ -161,27 +167,42 @@ class EditorSaveFlowTest {
             assertEquals(SaveStatus.Saving, vm.uiState.value.saveStatus)
 
             // 2. 保存返回前继续输入正文 B — UI 与会话层 revision 同步前进。
-            vm.onContentChanged("正文B")
             val inputLease = coordinator.currentInputLease()
             assertTrue("会话提交后必须存在有效输入 lease", inputLease != null)
             coordinator.applyLocalEdit(
                 EditorDocumentUpdate.LocalInput(
                     targetId = TARGET_ID,
-                    text = "正文B",
                     revision = 2L,
                     transactionId = 11L,
+                    operationKind = EditorOperationKind.INSERT,
+                    contentChanged = true,
+                    contentDelta = EditorContentDelta(insertedChars = "正文B".length),
                     lease = inputLease!!,
                 ),
             )
-            assertEquals("当前正文必须是 B", "正文B", vm.uiState.value.content)
+            // #624 评论9：热路径不传整章 String — ViewModel 收轻量事件（revision/delta）。
+            vm.onEditorApplied(
+                EditorAppliedEvent(
+                    revision = 2L,
+                    transactionId = 11L,
+                    operationKind = EditorOperationKind.INSERT,
+                    source = EditorEditSource.NORMAL,
+                    contentChanged = true,
+                    contentDelta = EditorContentDelta(insertedChars = "正文B".length),
+                    selectionAnchorUtf8 = 3,
+                    selectionHeadUtf8 = 3,
+                ),
+            )
+            assertEquals("输入后必须标记未保存", SaveStatus.Unsaved, vm.uiState.value.saveStatus)
+            assertTrue("输入后必须置 dirty", vm.contentDirty)
             assertEquals(2L, coordinator.sessionState.revision)
 
             // 3. 让 A 返回保存成功（晚到回执）。
             savePort.gate.complete(Unit)
             assertTrue("performSave 必须以成功返回", saveJob.await())
 
-            // 4. 当前正文仍是 B。
-            assertEquals("A 的晚到结果不得覆盖 B", "正文B", vm.uiState.value.content)
+            // 4. 当前正文仍是 B（未 materialize 到 uiState — 保存走 lease/快照）。
+            assertEquals("A 的晚到结果不得把 UI 标成 Saved", SaveStatus.Unsaved, vm.uiState.value.saveStatus)
             // 5. 页面仍显示未保存 — revision 已前进，不得标记 Saved。
             assertEquals("保存期间继续输入后不得显示已保存", SaveStatus.Unsaved, vm.uiState.value.saveStatus)
             // 6. B 没有被 A 的晚到结果覆盖 — chapterHash 不得变成 A 的 hash。

@@ -160,7 +160,15 @@ class DocumentVersionCausalityTest {
             ),
         )
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "edited", 3L, 7L, lease = lease("t1")),
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                3L,
+                7L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "edited".length),
+                lease = lease("t1"),
+            ),
         )
         assertTrue(coordinator.sessionState.localDirty)
 
@@ -188,7 +196,15 @@ class DocumentVersionCausalityTest {
             ),
         )
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "edited", 3L, 7L, lease = lease("t1")),
+            EditorDocumentUpdate.LocalInput(
+                "t1",
+                3L,
+                7L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "edited".length),
+                lease = lease("t1"),
+            ),
         )
         coordinator.markSaved("t1", DocumentVersion())
         assertTrue("空版本保存上报必须被忽略（不推进版本）", coordinator.sessionState.localDirty)

@@ -132,14 +132,15 @@ class ResetSnapshotCommitTest {
 
         val leaseAtSave = coordinator.issueDocumentOperationLease()!!
         assertEquals(1L, leaseAtSave.rustRevision)
-        assertEquals("text", leaseAtSave.text)
 
         // 保存 IO 期间用户继续输入 — revision 前进。
         val inputLease = coordinator.currentInputLease()!!
         coordinator.applyLocalEdit(
             EditorDocumentUpdate.LocalInput(
                 targetId = "a",
-                text = "text edited",
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "text edited".length),
                 revision = 2L,
                 transactionId = 11L,
                 lease = inputLease,
@@ -162,8 +163,8 @@ class ResetSnapshotCommitTest {
         // 正文仍是 B（"text edited"），未被 A 的晚到结果覆盖。
         assertEquals(
             "保存期间继续输入的 B 必须保留，不得被 A 的晚到回执覆盖",
-            "text edited",
-            coordinator.sessionState.text,
+            true,
+            coordinator.sessionState.localDirty,
         )
         // 页面仍显示未保存 — localDirty 必须为 true（B 尚未落盘）。
         assertTrue(
@@ -259,13 +260,11 @@ class ResetSnapshotCommitTest {
         val coordinator = createCoordinator()
         assertTrue(commitSession(coordinator, "a", "original text", sessionId = 5UL, revision = 3L))
         val stateBefore = coordinator.sessionState
-        assertEquals("original text", stateBefore.text)
         assertEquals(3L, stateBefore.revision)
 
         val result = coordinator.resetPersistentSession("a", "new text", 0, SessionResetSource.EXTERNAL)
         assertEquals(ExternalResetResult.Failed, result)
         // 失败后 SessionState 保留旧正文/revision（不分裂）。
-        assertEquals("original text", coordinator.sessionState.text)
         assertEquals(3L, coordinator.sessionState.revision)
     }
 
@@ -275,7 +274,15 @@ class ResetSnapshotCommitTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "textA".length),
+                lease = lease("a"),
+            ),
         )
         val staleLease = lease("a")
 
@@ -288,9 +295,16 @@ class ResetSnapshotCommitTest {
 
         assertFalse(coordinator.isInputLeaseCurrent(staleLease, "a"))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "late input", 9L, 9L, lease = staleLease),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                9L,
+                9L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "late input".length),
+                lease = staleLease,
+            ),
         )
-        assertEquals("textB", coordinator.sessionState.text)
         assertEquals("b", coordinator.sessionState.targetId)
     }
 
@@ -301,7 +315,6 @@ class ResetSnapshotCommitTest {
         val failed = ExternalResetResult.Failed
         assertTrue(success is ExternalResetResult.Success)
         assertTrue(failed is ExternalResetResult.Failed)
-        assertEquals("t", success.snapshot.text)
         assertEquals(1L, success.snapshot.revision)
     }
 }

@@ -21,7 +21,7 @@ mod tests {
             })
             .into_result();
 
-        assert_eq!(kernel.text(), "你好世界");
+        assert_eq!(kernel.snapshot_text(), "你好世界");
         assert_eq!(kernel.cursor(), 12);
         assert_eq!(result.base_revision.value(), 0);
         assert_eq!(result.new_revision.value(), 1);
@@ -45,7 +45,7 @@ mod tests {
             })
             .into_result();
 
-        assert_eq!(kernel.text(), "你好");
+        assert_eq!(kernel.snapshot_text(), "你好");
         assert_eq!(kernel.cursor(), 6);
         assert_eq!(
             result.visual_intent.operation_kind,
@@ -66,7 +66,7 @@ mod tests {
             })
             .into_result();
 
-        assert_eq!(kernel.text(), "你好朋友");
+        assert_eq!(kernel.snapshot_text(), "你好朋友");
         assert_eq!(kernel.cursor(), 12);
         assert_eq!(
             result.visual_intent.operation_kind,
@@ -84,7 +84,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "hello");
+        assert_eq!(kernel.snapshot_text(), "hello");
         assert_eq!(kernel.cursor(), 3);
         assert_eq!(result.display_patches.len(), 0);
         assert_eq!(
@@ -104,14 +104,14 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "abc");
+        assert_eq!(kernel.snapshot_text(), "abc");
 
         let result = kernel
             .apply(EditorCommand::Undo {
                 expected_revision: r1.new_revision,
             })
             .into_result();
-        assert_eq!(kernel.text(), "ab");
+        assert_eq!(kernel.snapshot_text(), "ab");
         assert_eq!(kernel.cursor(), 2);
         assert_eq!(result.visual_intent.cause, EditorTransactionCause::Undo);
     }
@@ -132,14 +132,14 @@ mod tests {
                 expected_revision: r1.new_revision,
             })
             .into_result();
-        assert_eq!(kernel.text(), "ab");
+        assert_eq!(kernel.snapshot_text(), "ab");
 
         let result = kernel
             .apply(EditorCommand::Redo {
                 expected_revision: r2.new_revision,
             })
             .into_result();
-        assert_eq!(kernel.text(), "abc");
+        assert_eq!(kernel.snapshot_text(), "abc");
         assert_eq!(result.visual_intent.cause, EditorTransactionCause::Redo);
     }
 
@@ -156,7 +156,7 @@ mod tests {
             .into_result();
 
         let result = kernel.load_text("new content".to_string(), 0).into_result();
-        assert_eq!(kernel.text(), "new content");
+        assert_eq!(kernel.snapshot_text(), "new content");
         assert_eq!(kernel.cursor(), 0);
         assert_eq!(
             result.visual_intent.operation_kind,
@@ -273,7 +273,7 @@ mod tests {
                 expected_revision: r1.new_revision,
             })
             .into_result();
-        assert_eq!(kernel.text(), "ab");
+        assert_eq!(kernel.snapshot_text(), "ab");
 
         let r3 = kernel
             .apply(EditorCommand::Insert {
@@ -289,7 +289,7 @@ mod tests {
                 expected_revision: r3.new_revision,
             })
             .into_result();
-        assert_eq!(kernel.text(), "abd");
+        assert_eq!(kernel.snapshot_text(), "abd");
         assert_eq!(
             result.visual_intent.operation_kind,
             EditorOperationKind::CursorOnly
@@ -425,7 +425,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "你好你好");
+        assert_eq!(kernel.snapshot_text(), "你好你好");
         assert_eq!(
             result.visual_intent.operation_kind,
             EditorOperationKind::Insert
@@ -445,7 +445,7 @@ mod tests {
             cause: EditorTransactionCause::Delete,
             expected_revision: EditorRevision::new(0),
         });
-        assert_eq!(kernel.text(), "abc");
+        assert_eq!(kernel.snapshot_text(), "abc");
         assert!(matches!(outcome, EditorEditOutcome::InvalidRange(_)));
     }
 
@@ -459,7 +459,7 @@ mod tests {
             expected_revision: EditorRevision::new(0),
         });
         assert!(matches!(outcome, EditorEditOutcome::InvalidOffset(_)));
-        assert_eq!(kernel.text(), "ab");
+        assert_eq!(kernel.snapshot_text(), "ab");
     }
 
     #[test]
@@ -474,7 +474,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "aXc");
+        assert_eq!(kernel.snapshot_text(), "aXc");
         assert!(!result.display_patches.is_empty());
     }
 
@@ -505,28 +505,28 @@ mod tests {
                 expected_revision: r2.new_revision,
             })
             .into_result();
-        assert_eq!(kernel.text(), "abc");
+        assert_eq!(kernel.snapshot_text(), "abc");
 
         let r4 = kernel
             .apply(EditorCommand::Undo {
                 expected_revision: r3.new_revision,
             })
             .into_result();
-        assert_eq!(kernel.text(), "ab");
+        assert_eq!(kernel.snapshot_text(), "ab");
 
         let r5 = kernel
             .apply(EditorCommand::Undo {
                 expected_revision: r4.new_revision,
             })
             .into_result();
-        assert_eq!(kernel.text(), "a");
+        assert_eq!(kernel.snapshot_text(), "a");
 
         kernel
             .apply(EditorCommand::Undo {
                 expected_revision: r5.new_revision,
             })
             .into_result();
-        assert_eq!(kernel.text(), "");
+        assert_eq!(kernel.snapshot_text(), "");
     }
 
     #[test]
@@ -540,7 +540,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "你好世界");
+        assert_eq!(kernel.snapshot_text(), "你好世界");
         assert_eq!(kernel.cursor(), 12);
 
         let result = kernel
@@ -551,7 +551,7 @@ mod tests {
                 expected_revision: result.new_revision,
             })
             .into_result();
-        assert_eq!(kernel.text(), "你好");
+        assert_eq!(kernel.snapshot_text(), "你好");
         assert_eq!(kernel.cursor(), 6);
         assert_eq!(
             result.visual_intent.operation_kind,
@@ -588,7 +588,7 @@ mod tests {
             expected_revision: EditorRevision::new(0),
         });
         assert!(matches!(result, EditorEditOutcome::StaleRevision(_)));
-        assert_eq!(kernel.text(), "new");
+        assert_eq!(kernel.snapshot_text(), "new");
     }
 
     #[test]
@@ -644,62 +644,6 @@ mod tests {
     }
 
     #[test]
-    fn compute_single_patch_cjk_replace() {
-        let (range, inserted) = EditorKernel::compute_single_patch("你好", "你坏");
-        assert_eq!(range.start().value(), 3);
-        assert_eq!(range.end().value(), 6);
-        assert_eq!(inserted, "坏");
-    }
-
-    #[test]
-    fn compute_single_patch_cjk_insert() {
-        let (range, inserted) = EditorKernel::compute_single_patch("你好", "你好世界");
-        assert_eq!(range.start().value(), 6);
-        assert_eq!(range.end().value(), 6);
-        assert_eq!(inserted, "世界");
-    }
-
-    #[test]
-    fn compute_single_patch_cjk_delete() {
-        let (range, inserted) = EditorKernel::compute_single_patch("你好世界", "你好");
-        assert_eq!(range.start().value(), 6);
-        assert_eq!(range.end().value(), 12);
-        assert_eq!(inserted, "");
-    }
-
-    #[test]
-    fn compute_single_patch_mixed_ascii_cjk() {
-        let (range, inserted) = EditorKernel::compute_single_patch("a你好b", "a你坏b");
-        assert_eq!(range.start().value(), 4);
-        assert_eq!(range.end().value(), 7);
-        assert_eq!(inserted, "坏");
-    }
-
-    #[test]
-    fn compute_single_patch_empty_old() {
-        let (range, inserted) = EditorKernel::compute_single_patch("", "你好");
-        assert_eq!(range.start().value(), 0);
-        assert_eq!(range.end().value(), 0);
-        assert_eq!(inserted, "你好");
-    }
-
-    #[test]
-    fn compute_single_patch_empty_new() {
-        let (range, inserted) = EditorKernel::compute_single_patch("你好", "");
-        assert_eq!(range.start().value(), 0);
-        assert_eq!(range.end().value(), 6);
-        assert_eq!(inserted, "");
-    }
-
-    #[test]
-    fn compute_single_patch_identical() {
-        let (range, inserted) = EditorKernel::compute_single_patch("你好", "你好");
-        assert_eq!(range.start().value(), 0);
-        assert_eq!(range.end().value(), 0);
-        assert_eq!(inserted, "");
-    }
-
-    #[test]
     fn delete_surrounding_both_sides_preserves_selection() {
         let mut kernel = EditorKernel::with_text("ABCDEFGHIJ".to_string(), 3).unwrap();
         kernel
@@ -717,7 +661,7 @@ mod tests {
             expected_revision: EditorRevision::new(0),
         });
         assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
-        assert_eq!(kernel.text(), "CDEFGJ");
+        assert_eq!(kernel.snapshot_text(), "CDEFGJ");
         assert_eq!(kernel.selection_anchor(), 1);
         assert_eq!(kernel.cursor(), 4);
     }
@@ -740,7 +684,7 @@ mod tests {
             expected_revision: EditorRevision::new(0),
         });
         assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
-        assert_eq!(kernel.text(), "CDE");
+        assert_eq!(kernel.snapshot_text(), "CDE");
         assert_eq!(kernel.selection_anchor(), 1);
         assert_eq!(kernel.cursor(), 3);
     }
@@ -763,7 +707,7 @@ mod tests {
             expected_revision: EditorRevision::new(0),
         });
         assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
-        assert_eq!(kernel.text(), "ABCD");
+        assert_eq!(kernel.snapshot_text(), "ABCD");
         assert_eq!(kernel.selection_anchor(), 0);
         assert_eq!(kernel.cursor(), 3);
     }
@@ -792,7 +736,7 @@ mod tests {
             expected_revision: begin.new_revision,
         });
         assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
-        assert_eq!(kernel.text(), "你好世界");
+        assert_eq!(kernel.snapshot_text(), "你好世界");
         assert_eq!(kernel.cursor(), 12);
         assert!(kernel.composition_session_info().is_none());
     }
@@ -819,7 +763,7 @@ mod tests {
             expected_revision: EditorRevision::new(1),
         });
         assert!(matches!(outcome, EditorEditOutcome::StaleRevision(_)));
-        assert_eq!(kernel.text(), "你好");
+        assert_eq!(kernel.snapshot_text(), "你好");
     }
 
     #[test]
@@ -846,7 +790,7 @@ mod tests {
             expected_revision: begin.new_revision,
         });
         assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
-        assert_eq!(kernel.text(), "你好");
+        assert_eq!(kernel.snapshot_text(), "你好");
         assert_eq!(kernel.cursor(), 6);
     }
 
@@ -880,7 +824,7 @@ mod tests {
             expected_revision: begin.new_revision,
         });
         assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
-        assert_eq!(kernel.text(), "你好世界");
+        assert_eq!(kernel.snapshot_text(), "你好世界");
         assert_eq!(kernel.cursor(), 12);
         assert!(kernel.composition_session_info().is_none());
     }
@@ -903,7 +847,7 @@ mod tests {
             expected_revision: begin.new_revision,
         });
         assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
-        assert_eq!(kernel.text(), "你好");
+        assert_eq!(kernel.snapshot_text(), "你好");
         assert_eq!(kernel.cursor(), 6);
         assert!(kernel.composition_session_info().is_none());
     }
@@ -938,7 +882,7 @@ mod tests {
             expected_revision: begin.new_revision,
         });
         assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
-        assert_eq!(kernel.text(), "你好");
+        assert_eq!(kernel.snapshot_text(), "你好");
         assert!(kernel.composition_session_info().is_none());
     }
 
@@ -978,7 +922,7 @@ mod tests {
             outcome,
             EditorEditOutcome::AppliedWithAdjustedSelection(_)
         ));
-        assert_eq!(kernel.text(), "new");
+        assert_eq!(kernel.snapshot_text(), "new");
         assert_eq!(kernel.cursor(), 3);
     }
 
@@ -987,7 +931,7 @@ mod tests {
         let mut kernel = EditorKernel::with_text("old".to_string(), 3).unwrap();
         let outcome = kernel.load_text("new".to_string(), 2);
         assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
-        assert_eq!(kernel.text(), "new");
+        assert_eq!(kernel.snapshot_text(), "new");
         assert_eq!(kernel.cursor(), 2);
     }
 
@@ -1015,7 +959,7 @@ mod tests {
             expected_revision: begin.new_revision,
         });
         assert!(matches!(outcome, EditorEditOutcome::InvalidRange(_)));
-        assert_eq!(kernel.text(), "你好世界");
+        assert_eq!(kernel.snapshot_text(), "你好世界");
     }
 
     #[test]
@@ -1035,7 +979,7 @@ mod tests {
         });
         assert!(matches!(outcome, EditorEditOutcome::NoChange(_)));
         assert_eq!(kernel.revision(), rev_before);
-        assert_eq!(kernel.text(), "abc");
+        assert_eq!(kernel.snapshot_text(), "abc");
     }
 
     #[test]
@@ -1068,7 +1012,7 @@ mod tests {
             expected_revision: begin.new_revision,
         });
         assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
-        assert_eq!(kernel.text(), "你好世界");
+        assert_eq!(kernel.snapshot_text(), "你好世界");
         assert_eq!(kernel.cursor(), 12);
         assert_eq!(kernel.selection_anchor(), 12);
     }
@@ -1106,7 +1050,7 @@ mod tests {
             outcome,
             EditorEditOutcome::AppliedWithAdjustedSelection(_)
         ));
-        assert_eq!(kernel.text(), "你好世界");
+        assert_eq!(kernel.snapshot_text(), "你好世界");
         assert_eq!(kernel.cursor(), 12);
         assert!(kernel.composition_session_info().is_none());
     }
@@ -1129,7 +1073,7 @@ mod tests {
             expected_revision: EditorRevision::new(0),
         });
         assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
-        assert_eq!(kernel.text(), "CDE");
+        assert_eq!(kernel.snapshot_text(), "CDE");
         assert_eq!(kernel.selection_anchor(), 1);
         assert_eq!(kernel.cursor(), 3);
     }
@@ -1153,7 +1097,7 @@ mod tests {
             result.visual_intent.operation_kind,
             EditorOperationKind::Insert
         );
-        assert_eq!(kernel.text(), "Hello");
+        assert_eq!(kernel.snapshot_text(), "Hello");
     }
 
     #[test]
@@ -1175,7 +1119,7 @@ mod tests {
             result.visual_intent.operation_kind,
             EditorOperationKind::Delete
         );
-        assert_eq!(kernel.text(), "AE");
+        assert_eq!(kernel.snapshot_text(), "AE");
     }
 
     #[test]
@@ -1204,7 +1148,7 @@ mod tests {
             result.visual_intent.operation_kind,
             EditorOperationKind::CompositionCommit
         );
-        assert_eq!(kernel.text(), "你好");
+        assert_eq!(kernel.snapshot_text(), "你好");
     }
 
     #[test]
@@ -1266,7 +1210,7 @@ mod tests {
             result.visual_intent.operation_kind,
             EditorOperationKind::CompositionCommit
         );
-        assert_eq!(kernel.text(), "abyc");
+        assert_eq!(kernel.snapshot_text(), "abyc");
         // The session is consumed by the commit; the next begin starts clean again.
         assert!(kernel.composition_session_info().is_none());
     }
@@ -1287,7 +1231,7 @@ mod tests {
             result.visual_intent.operation_kind,
             EditorOperationKind::Insert
         );
-        assert_eq!(kernel.text(), "ABCXDE");
+        assert_eq!(kernel.snapshot_text(), "ABCXDE");
     }
 
     #[test]
@@ -1306,7 +1250,7 @@ mod tests {
             result.visual_intent.operation_kind,
             EditorOperationKind::Delete
         );
-        assert_eq!(kernel.text(), "AE");
+        assert_eq!(kernel.snapshot_text(), "AE");
     }
 
     #[test]
@@ -1325,7 +1269,7 @@ mod tests {
             result.visual_intent.operation_kind,
             EditorOperationKind::Replace
         );
-        assert_eq!(kernel.text(), "AXYE");
+        assert_eq!(kernel.snapshot_text(), "AXYE");
     }
 
     // #606: auto-indent 测试
@@ -1341,7 +1285,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "    hello\n    ");
+        assert_eq!(kernel.snapshot_text(), "    hello\n    ");
         assert_eq!(kernel.cursor(), 14);
         assert_eq!(
             result.visual_intent.operation_kind,
@@ -1360,7 +1304,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "\t\thello\n\t\t");
+        assert_eq!(kernel.snapshot_text(), "\t\thello\n\t\t");
     }
 
     #[test]
@@ -1374,7 +1318,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "    hello\n");
+        assert_eq!(kernel.snapshot_text(), "    hello\n");
     }
 
     #[test]
@@ -1388,7 +1332,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "hello\n");
+        assert_eq!(kernel.snapshot_text(), "hello\n");
     }
 
     #[test]
@@ -1402,7 +1346,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "  hello\n   world");
+        assert_eq!(kernel.snapshot_text(), "  hello\n   world");
     }
 
     #[test]
@@ -1418,7 +1362,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "first\n    second\n    ");
+        assert_eq!(kernel.snapshot_text(), "first\n    second\n    ");
     }
 
     #[test]
@@ -1434,7 +1378,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "  你好世界\n  ");
+        assert_eq!(kernel.snapshot_text(), "  你好世界\n  ");
     }
 
     #[test]
@@ -1450,7 +1394,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "你好  world\n");
+        assert_eq!(kernel.snapshot_text(), "你好  world\n");
     }
 
     #[test]
@@ -1466,7 +1410,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "  \t  hello\n  \t  ");
+        assert_eq!(kernel.snapshot_text(), "  \t  hello\n  \t  ");
     }
 
     #[test]
@@ -1480,13 +1424,13 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(kernel.text(), "    hello\n    ");
+        assert_eq!(kernel.snapshot_text(), "    hello\n    ");
         let _ = kernel
             .apply(EditorCommand::Undo {
                 expected_revision: EditorRevision::new(1),
             })
             .into_result();
-        assert_eq!(kernel.text(), "    hello");
+        assert_eq!(kernel.snapshot_text(), "    hello");
     }
 
     // #606: composition 视觉分类通过共享逻辑确定
@@ -1577,7 +1521,7 @@ mod tests {
             result.visual_intent.operation_kind,
             EditorOperationKind::CompositionCommit
         );
-        assert_eq!(kernel.text(), "hello world");
+        assert_eq!(kernel.snapshot_text(), "hello world");
     }
 
     // ── #606: grapheme 边界 API 测试 ──

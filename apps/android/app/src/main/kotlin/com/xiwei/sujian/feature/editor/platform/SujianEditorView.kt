@@ -23,8 +23,8 @@ import com.xiwei.sujian.feature.editor.session.EditorContentDelta
 import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import com.xiwei.sujian.feature.editor.session.NewlinePolicy
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
-import com.xiwei.sujian.feature.editor.session.contentDeltaFromPatches
 import com.xiwei.sujian.feature.editor.session.toEditorOperationKind
+import com.xiwei.sujian.feature.editor.session.toSessionDelta
 import com.xiwei.sujian.feature.editor.window.WindowDisplayFrameClock
 import uniffi.writer_core.EditorTransactionCauseDto
 
@@ -200,29 +200,13 @@ class SujianEditorView
                     updateMaxScroll()
                     scrollY = scrollY.coerceIn(0f, maxScrollY)
                     if (!suppressContentCallback && output.result.isApplied()) {
-                        // #624 评论9：热路径不传整章 String — 只构造轻量 EditorAppliedEvent。
-                        // contentChanged = displayPatches 非空；contentDelta 由 patches 累加。
+                        // #624 评论8/9：热路径不传整章 String — 只构造轻量 EditorAppliedEvent。
+                        // contentChanged = displayPatches 非空；contentDelta 直接消费
+                        // Core EditorEditResultDto.contentDelta 真值（Unicode scalar 计数），
+                        // 不再从 patch 的 UTF-8 byte 长度推算 deletedChars。
                         val source = output.source
                         val contentChanged = output.result.displayPatches.isNotEmpty()
-                        val contentDelta =
-                            output.result.displayPatches
-                                .map {
-                                    contentDeltaFromPatches(
-                                        it.insertedText,
-                                        it.replaceByteStart,
-                                        it.replaceByteEndExclusive,
-                                    )
-                                }
-                                .fold(EditorContentDelta()) { acc, d ->
-                                    EditorContentDelta(
-                                        insertedChars = acc.insertedChars + d.insertedChars,
-                                        deletedChars = acc.deletedChars + d.deletedChars,
-                                        insertedNonWhitespaceChars =
-                                            acc.insertedNonWhitespaceChars + d.insertedNonWhitespaceChars,
-                                        deletedNonWhitespaceChars =
-                                            acc.deletedNonWhitespaceChars + d.deletedNonWhitespaceChars,
-                                    )
-                                }
+                        val contentDelta = output.result.contentDelta.toSessionDelta()
                         val event =
                             EditorAppliedEvent(
                                 revision = output.result.newRevision,

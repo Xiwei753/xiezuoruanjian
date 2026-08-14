@@ -195,7 +195,7 @@ mod tests {
         let session = registry
             .get_session(TextEditSessionId::new(id.as_u64()))
             .unwrap();
-        assert_eq!(session.kernel.text(), "Hello");
+        assert_eq!(session.kernel.snapshot_text(), "Hello");
         assert_eq!(session.target_id, "project-title:1");
         assert!(!session.is_persistent);
 
@@ -230,7 +230,7 @@ mod tests {
         let session = registry
             .get_session(TextEditSessionId::new(id.as_u64()))
             .unwrap();
-        assert_eq!(session.kernel.text(), "");
+        assert_eq!(session.kernel.snapshot_text(), "");
     }
 
     #[test]
@@ -245,7 +245,7 @@ mod tests {
         let session = registry
             .get_session(TextEditSessionId::new(id.as_u64()))
             .unwrap();
-        assert_eq!(session.kernel.text(), "New");
+        assert_eq!(session.kernel.snapshot_text(), "New");
         assert_eq!(session.generation, 1);
     }
 
@@ -272,7 +272,7 @@ mod tests {
         let s2 = registry
             .get_session(TextEditSessionId::new(id2.as_u64()))
             .unwrap();
-        assert_eq!(s1.kernel.text(), "Alpha");
-        assert_eq!(s2.kernel.text(), "Beta");
+        assert_eq!(s1.kernel.snapshot_text(), "Alpha");
+        assert_eq!(s2.kernel.snapshot_text(), "Beta");
     }
 }

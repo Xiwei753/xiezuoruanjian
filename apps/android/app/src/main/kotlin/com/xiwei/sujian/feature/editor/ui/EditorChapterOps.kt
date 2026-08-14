@@ -481,7 +481,7 @@ fun EditorViewModel.restoreAfterSwitch(
     contentExplicitlyCleared = oldContentExplicitlyCleared
     saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
     startSaveActor()
-    scheduleAutoSave(_uiState.value.content)
+    scheduleAutoSave()
     inputFrozen = false
 }
 

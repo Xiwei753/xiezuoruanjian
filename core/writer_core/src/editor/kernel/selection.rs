@@ -1,4 +1,4 @@
-use super::result::{EditorEditOutcome, EditorEditResult};
+use super::result::{EditorContentDelta, EditorEditOutcome, EditorEditResult};
 use super::types::{CoordinatedCursor, EditorOperationKind, EditorVisualIntent};
 use super::EditorKernel;
 
@@ -16,7 +16,7 @@ impl EditorKernel {
     ) -> EditorEditOutcome {
         let anchor = anchor_byte_offset;
         let head = head_byte_offset;
-        if anchor > self.text.len() || head > self.text.len() {
+        if anchor > self.text.byte_len() || head > self.text.byte_len() {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
@@ -63,6 +63,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
+            content_delta: EditorContentDelta::default(),
         })
     }
 }

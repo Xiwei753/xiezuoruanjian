@@ -22,12 +22,16 @@ class EditorDocumentUpdateTest {
         val update =
             EditorDocumentUpdate.LocalInput(
                 targetId = "chapter-body:p:v:c",
-                text = "hello",
+                operationKind = EditorOperationKind.INSERT,
                 revision = 5L,
                 transactionId = 42L,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "hello".length),
             )
         assertEquals("chapter-body:p:v:c", update.targetId)
-        assertEquals("hello", update.text)
+        // #624 评论9：LocalInput 不携带整章 text — 用 contentChanged/contentDelta 表达正文变化。
+        assertEquals(true, update.contentChanged)
+        assertEquals(5, update.contentDelta.insertedChars)
         assertEquals(5L, update.revision)
         assertEquals(42L, update.transactionId)
         assertEquals(EditorOperationKind.INSERT, update.operationKind)
@@ -44,14 +48,21 @@ class EditorDocumentUpdateTest {
                 origin = DocumentFactOrigin.REPOSITORY_LOAD,
             )
         assertEquals("chapter-body:p:v:c", fact.targetId)
-        assertEquals("loaded", fact.text)
         assertEquals("sha256:abc123", fact.sourceVersion.contentHash)
         assertEquals(DocumentFactOrigin.REPOSITORY_LOAD, fact.origin)
     }
 
     @Test
     fun localInputAndDocumentFactAreDistinctTypes() {
-        val local = EditorDocumentUpdate.LocalInput("t", "text", 1L, 100L)
+        val local =
+            EditorDocumentUpdate.LocalInput(
+                "t",
+                1L,
+                100L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "text".length),
+            )
         val fact =
             TargetDocumentFact(
                 "t",
@@ -111,7 +122,7 @@ class EditorDocumentUpdateTest {
     fun editorSessionStateDefaultsToNone() {
         val state = EditorSessionState()
         assertEquals(null, state.targetId)
-        assertEquals("", state.text)
+        // #624 评论9：SessionState 无 text 镜像（正文只走冷路径 snapshot）。
         assertEquals(0L, state.revision)
         assertEquals(EditorSessionOrigin.NONE, state.origin)
         assertEquals(WindowBindingState.Idle, state.bindingState)
@@ -124,11 +135,18 @@ class EditorDocumentUpdateTest {
     fun localInputPreservesRevisionAcrossUiRoundTrip() {
         // 模拟本地输入：IME → Rust EditResult(rev=5) → applyLocalEdit → SessionState(rev=5)
         // WritingPane 收集 sessionStateFlow 发现 rev=5 已应用，不触发 reset
-        val update = EditorDocumentUpdate.LocalInput("t", "new text", 5L, 42L)
+        val update =
+            EditorDocumentUpdate.LocalInput(
+                "t",
+                5L,
+                42L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "new text".length),
+            )
         val state =
             EditorSessionState(
                 targetId = update.targetId,
-                text = update.text,
                 revision = update.revision,
                 lastAppliedTransactionId = update.transactionId,
                 origin = EditorSessionOrigin.LOCAL_INPUT,

@@ -5,6 +5,7 @@ import android.text.style.UnderlineSpan
 import uniffi.writer_core.AnimationModeDto
 import uniffi.writer_core.CoordinatedCursorDto
 import uniffi.writer_core.DisplayPatchDto
+import uniffi.writer_core.EditorContentDeltaDto
 import uniffi.writer_core.EditorEditResultDto
 import uniffi.writer_core.EditorOperationKindDto
 import uniffi.writer_core.EditorTransactionCauseDto
@@ -215,6 +216,9 @@ data class EditResult(
     val newSelectionStart: Int,
     val newSelectionEnd: Int,
     val visualIntent: VisualIntent,
+    /** #624 评论8：Core 计算的本地字符增量（Unicode scalar 计数），非 UTF-8 byte 近似。
+     * 默认值仅服务测试夹具；生产路径一律由 [fromDto] 从 Core DTO 显式映射。 */
+    val contentDelta: EditorContentDeltaDto = EditorContentDeltaDto(0u, 0u, 0u, 0u),
 ) {
     companion object {
         fun fromDto(dto: EditorEditResultDto): EditResult =
@@ -229,6 +233,7 @@ data class EditResult(
                 newSelectionStart = dto.newSelectionStart.toInt(),
                 newSelectionEnd = dto.newSelectionEnd.toInt(),
                 visualIntent = VisualIntent.fromDto(dto.visualIntent),
+                contentDelta = dto.contentDelta,
             )
     }
 

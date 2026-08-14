@@ -100,7 +100,7 @@ class EditorViewModelStaleLoadTest {
                         )
                 }
 
-            vm.onContentChanged("已有章节内容")
+            vm._uiState.value = vm._uiState.value.copy(content = "已有章节内容")
             vm.initChapter("p", "v", "a", "A")
             // 让 initChapter 的后台加载启动并挂起在真实 IO 上（捕获事务前的纪元）。
             runCurrent()

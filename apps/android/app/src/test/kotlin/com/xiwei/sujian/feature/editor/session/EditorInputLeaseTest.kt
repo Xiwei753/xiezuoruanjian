@@ -74,9 +74,17 @@ class EditorInputLeaseTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "text", 1L, 1L),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "text".length),
+            ),
         )
-        assertEquals("text", coordinator.sessionState.text)
+        // #624 评论9：SessionState 无 text 镜像；正文断言由冷路径 snapshot 承担。
+        assertEquals(1L, coordinator.sessionState.revision)
         // 一旦进入真实绑定（commitPreparedSession 激活带 session 的状态），
         // 默认 lease 必须被拒绝。
         val handle =
@@ -89,9 +97,16 @@ class EditorInputLeaseTest {
             )
         assertTrue(coordinator.commitPreparedSession(handle))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "stale default lease", 2L, 2L),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                2L,
+                2L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "stale default lease".length),
+            ),
         )
-        assertEquals("绑定后默认 lease（epoch 已失效）必须被拒绝", "text", coordinator.sessionState.text)
+        assertEquals("绑定后默认 lease（epoch 已失效）必须被拒绝", 1L, coordinator.sessionState.revision)
     }
 
     @Test
@@ -99,7 +114,15 @@ class EditorInputLeaseTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "textA".length),
+                lease = lease("a"),
+            ),
         )
         val staleLease = lease("a")
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
@@ -116,13 +139,25 @@ class EditorInputLeaseTest {
 
         // 旧 A 的撤销/程序化事件同样被拒绝。
         coordinator.applyUndoRestored(
-            EditorDocumentUpdate.UndoRestored("a", "undo text", 1L, 9L, 9L, lease = staleLease),
+            EditorDocumentUpdate.UndoRestored(
+                "a",
+                snapshotId = 1L,
+                revision = 9L,
+                transactionId = 9L,
+                lease = staleLease,
+            ),
         )
-        assertEquals("textB", coordinator.sessionState.text)
+        assertEquals("旧 A 事件被拒绝后 revision 不变", 2L, coordinator.sessionState.revision)
         coordinator.applyProgrammaticReplace(
-            EditorDocumentUpdate.ProgrammaticReplace("a", "replace text", 1L, 10L, 10L, lease = staleLease),
+            EditorDocumentUpdate.ProgrammaticReplace(
+                "a",
+                commandId = 1L,
+                revision = 10L,
+                transactionId = 10L,
+                lease = staleLease,
+            ),
         )
-        assertEquals("textB", coordinator.sessionState.text)
+        assertEquals("旧 A 事件被拒绝后 revision 不变", 2L, coordinator.sessionState.revision)
     }
 
     @Test
@@ -130,13 +165,29 @@ class EditorInputLeaseTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "textA".length),
+                lease = lease("a"),
+            ),
         )
         val staleLease = lease("a")
         coordinator.closeTarget("a", SessionCloseReason.WORKSPACE_NAVIGATION)
         assertFalse("业务关闭后旧 lease 必须失效", coordinator.isInputLeaseCurrent(staleLease, "a"))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "resurrected", 2L, 2L, lease = staleLease),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                2L,
+                2L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "resurrected".length),
+                lease = staleLease,
+            ),
         )
         assertNull("关闭后晚到输入不得复活会话状态", coordinator.sessionState.targetId)
     }
@@ -146,7 +197,15 @@ class EditorInputLeaseTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "textA".length),
+                lease = lease("a"),
+            ),
         )
         val staleLease = lease("a")
         coordinator.detachWindowBinding("w1", "a")
@@ -158,7 +217,15 @@ class EditorInputLeaseTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "textA".length),
+                lease = lease("a"),
+            ),
         )
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
         val handle =
@@ -174,9 +241,17 @@ class EditorInputLeaseTest {
         assertNotNull(newLease)
         // 新章节的输入携带新 lease → 接受。
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("b", "textB typed", 3L, 11L, lease = newLease!!),
+            EditorDocumentUpdate.LocalInput(
+                "b",
+                3L,
+                11L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "textB typed".length),
+                lease = newLease!!,
+            ),
         )
-        assertEquals("textB typed", coordinator.sessionState.text)
+        assertEquals(3L, coordinator.sessionState.revision)
         assertEquals(3L, coordinator.sessionState.revision)
     }
 
@@ -185,7 +260,15 @@ class EditorInputLeaseTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                1L,
+                1L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "textA".length),
+                lease = lease("a"),
+            ),
         )
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
         val handle =
@@ -202,9 +285,17 @@ class EditorInputLeaseTest {
         val wrongTargetLease = current.copy(targetId = "a")
         assertFalse(coordinator.isInputLeaseCurrent(wrongTargetLease, "a"))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "cross talk", 4L, 12L, lease = wrongTargetLease),
+            EditorDocumentUpdate.LocalInput(
+                "a",
+                4L,
+                12L,
+                operationKind = EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = EditorContentDelta(insertedChars = "cross talk".length),
+                lease = wrongTargetLease,
+            ),
         )
-        assertEquals("textB", coordinator.sessionState.text)
+        assertEquals("旧 A 事件被拒绝后 revision 不变", 2L, coordinator.sessionState.revision)
     }
 
     @Test

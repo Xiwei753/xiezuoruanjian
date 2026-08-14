@@ -1,7 +1,7 @@
-use super::result::{EditorEditOutcome, EditorEditResult};
+use super::result::{EditorContentDelta, EditorEditOutcome, EditorEditResult};
 use super::types::EditorCommand;
 use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
-use super::{EditorKernel, UndoEntry};
+use super::{EditorKernel, TextEditDelta, UndoEntry};
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
 use crate::editor::transaction::{
@@ -239,7 +239,7 @@ impl EditorKernel {
         old_cursor: Utf8ByteOffset,
         old_selection: Utf8ByteRange,
     ) -> EditorEditOutcome {
-        if byte_offset > self.text.len() {
+        if byte_offset > self.text.byte_len() {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
@@ -256,23 +256,28 @@ impl EditorKernel {
 
         self.composition_session = None;
 
-        let old_text = self.text.clone();
-        self.text.insert_str(byte_offset, text);
+        // #624 评论8：局部 Rope edit，不 clone 全文。
+        self.text.insert(byte_offset, text);
         self.revision = self.revision.next();
         let new_cursor_val = byte_offset + text.len();
         self.cursor = Utf8ByteOffset::unchecked(new_cursor_val);
         self.selection_anchor = Utf8ByteOffset::unchecked(new_cursor_val);
 
+        let new_selection = Utf8ByteRange::point(new_cursor_val);
+        let delta = TextEditDelta {
+            old_range: Utf8ByteRange::point(byte_offset),
+            new_range: Utf8ByteRange::from_start_len(byte_offset, text.len()),
+            deleted_text: String::new(),
+            inserted_text: text.to_string(),
+        };
         self.undo_stack.push(UndoEntry {
-            old_text: self.text[..byte_offset].to_string() + &self.text[byte_offset + text.len()..],
-            new_text: self.text.clone(),
-            old_cursor,
-            new_cursor: Utf8ByteOffset::unchecked(new_cursor_val),
+            edits: vec![delta],
+            old_selection,
+            new_selection,
         });
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::point(new_cursor_val);
         let new_affected = vec![Utf8ByteRange::from_start_len(byte_offset, text.len())];
 
         let display_patches = vec![DisplayPatch {
@@ -319,7 +324,12 @@ impl EditorKernel {
                     && !is_loading
                     && !is_format,
             },
-            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
+            // #624 评论8：单次编辑从 delta 直接构造 offset map，不再扫全文。
+            offset_map: Some(OffsetMap::from_single_edit(
+                self.text.byte_len() - text.len(),
+                (byte_offset, byte_offset),
+                text.len(),
+            )),
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -330,9 +340,12 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
+            content_delta: EditorContentDelta::from_inserted_text(text),
         })
     }
 
+    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
+    #[allow(clippy::too_many_lines)]
     fn apply_delete(
         &mut self,
         byte_start: usize,
@@ -344,7 +357,7 @@ impl EditorKernel {
     ) -> EditorEditOutcome {
         let (byte_start, byte_end_exclusive) =
             Self::normalize_range(byte_start, byte_end_exclusive);
-        if byte_start > self.text.len() || byte_end_exclusive > self.text.len() {
+        if byte_start > self.text.byte_len() || byte_end_exclusive > self.text.byte_len() {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
@@ -368,25 +381,34 @@ impl EditorKernel {
             ));
         }
 
-        let old_text = self.text.clone();
+        // #624 评论8：先取局部删除文本，再局部 Rope delete，不 clone 全文。
+        let deleted_text = self
+            .text
+            .byte_slice(byte_start..byte_end_exclusive)
+            .to_string();
 
         self.composition_session = None;
 
-        self.text.replace_range(byte_start..byte_end_exclusive, "");
+        self.text.delete(byte_start..byte_end_exclusive);
         self.revision = self.revision.next();
         self.cursor = Utf8ByteOffset::unchecked(byte_start);
         self.selection_anchor = Utf8ByteOffset::unchecked(byte_start);
 
+        let new_selection = Utf8ByteRange::point(byte_start);
+        let delta = TextEditDelta {
+            old_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
+            new_range: Utf8ByteRange::point(byte_start),
+            deleted_text: deleted_text.clone(),
+            inserted_text: String::new(),
+        };
         self.undo_stack.push(UndoEntry {
-            old_text: old_text.clone(),
-            new_text: self.text.clone(),
-            old_cursor,
-            new_cursor: Utf8ByteOffset::unchecked(byte_start),
+            edits: vec![delta],
+            old_selection,
+            new_selection,
         });
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::point(byte_start);
         let old_affected = vec![Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive)];
 
         let display_patches = vec![DisplayPatch {
@@ -403,10 +425,9 @@ impl EditorKernel {
         let animation_mode = if !self.animation_enabled || is_loading || is_format {
             AnimationMode::SystemSuppressed
         } else {
-            let deleted_text = &old_text[byte_start..byte_end_exclusive];
-            let cluster_count = count_grapheme_clusters(deleted_text);
+            let cluster_count = count_grapheme_clusters(&deleted_text);
             let contains_newline = deleted_text.contains('\n');
-            let contains_complex = text_contains_complex_grapheme(deleted_text);
+            let contains_complex = text_contains_complex_grapheme(&deleted_text);
             choose_animation_mode(
                 cluster_count,
                 contains_newline,
@@ -434,7 +455,12 @@ impl EditorKernel {
                     && !is_loading
                     && !is_format,
             },
-            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
+            // #624 评论8：单次删除从 delta 直接构造 offset map。
+            offset_map: Some(OffsetMap::from_single_edit(
+                self.text.byte_len() + (byte_end_exclusive - byte_start),
+                (byte_start, byte_end_exclusive),
+                0,
+            )),
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -445,6 +471,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
+            content_delta: EditorContentDelta::from_deleted_text(&deleted_text),
         })
     }
 
@@ -467,7 +494,7 @@ impl EditorKernel {
     ) -> EditorEditOutcome {
         let (byte_start, byte_end_exclusive) =
             Self::normalize_range(byte_start, byte_end_exclusive);
-        if byte_start > self.text.len() || byte_end_exclusive > self.text.len() {
+        if byte_start > self.text.byte_len() || byte_end_exclusive > self.text.byte_len() {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
@@ -484,22 +511,32 @@ impl EditorKernel {
             ));
         }
 
-        let old_text = self.text.clone();
+        // #624 评论8：先取局部删除文本，再局部 Rope replace，不 clone 全文。
+        let deleted_text = self
+            .text
+            .byte_slice(byte_start..byte_end_exclusive)
+            .to_string();
 
         self.composition_session = None;
 
         self.text
-            .replace_range(byte_start..byte_end_exclusive, replacement_text);
+            .replace(byte_start..byte_end_exclusive, replacement_text);
         self.revision = self.revision.next();
         let new_cursor_val = byte_start + replacement_text.len();
         self.cursor = Utf8ByteOffset::unchecked(new_cursor_val);
         self.selection_anchor = Utf8ByteOffset::unchecked(new_cursor_val);
 
+        let new_selection = Utf8ByteRange::point(new_cursor_val);
+        let delta = TextEditDelta {
+            old_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
+            new_range: Utf8ByteRange::from_start_len(byte_start, replacement_text.len()),
+            deleted_text: deleted_text.clone(),
+            inserted_text: replacement_text.to_string(),
+        };
         self.undo_stack.push(UndoEntry {
-            old_text: old_text.clone(),
-            new_text: self.text.clone(),
-            old_cursor,
-            new_cursor: Utf8ByteOffset::unchecked(byte_start),
+            edits: vec![delta],
+            old_selection,
+            new_selection,
         });
         self.redo_stack.clear();
 
@@ -528,7 +565,7 @@ impl EditorKernel {
             let diff_text = if !replacement_text.is_empty() {
                 replacement_text
             } else {
-                &old_text[byte_start..byte_end_exclusive]
+                &deleted_text
             };
             let cluster_count = count_grapheme_clusters(diff_text);
             let contains_newline = diff_text.contains('\n');
@@ -568,7 +605,12 @@ impl EditorKernel {
                     && !is_loading
                     && !is_format,
             },
-            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
+            // #624 评论8：单次替换从 delta 直接构造 offset map。
+            offset_map: Some(OffsetMap::from_single_edit(
+                self.text.byte_len() - replacement_text.len() + (byte_end_exclusive - byte_start),
+                (byte_start, byte_end_exclusive),
+                replacement_text.len(),
+            )),
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -579,6 +621,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
+            content_delta: EditorContentDelta::from_texts(replacement_text, &deleted_text),
         })
     }
 
@@ -591,7 +634,7 @@ impl EditorKernel {
         old_cursor: Utf8ByteOffset,
         old_selection: Utf8ByteRange,
     ) -> EditorEditOutcome {
-        if byte_offset > self.text.len() {
+        if byte_offset > self.text.byte_len() {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
@@ -608,6 +651,7 @@ impl EditorKernel {
         // #606: Core 端 auto-indent — 从正文按 UTF-8 安全边界找到当前逻辑行开头，
         // 读取已有前导空白（空格/Tab），构造插入文本为 \n + prefix。
         // auto_indent_enabled 为 false 时只插入 \n。
+        // #624 评论8：行首定位与前导空白读取都基于光标附近 RopeSlice，不 materialize 全文。
         let text = if auto_indent_enabled {
             let prefix = Self::compute_auto_indent_prefix(&self.text, byte_offset);
             format!("\n{}", prefix)
@@ -617,18 +661,24 @@ impl EditorKernel {
 
         self.composition_session = None;
 
-        let old_text = self.text.clone();
-        self.text.insert_str(byte_offset, &text);
+        // #624 评论8：局部 Rope insert，不 clone 全文。
+        self.text.insert(byte_offset, &text);
         self.revision = self.revision.next();
         let new_cursor_val = byte_offset + text.len();
         self.cursor = Utf8ByteOffset::unchecked(new_cursor_val);
         self.selection_anchor = Utf8ByteOffset::unchecked(new_cursor_val);
 
+        let new_selection = Utf8ByteRange::point(new_cursor_val);
+        let delta = TextEditDelta {
+            old_range: Utf8ByteRange::point(byte_offset),
+            new_range: Utf8ByteRange::from_start_len(byte_offset, text.len()),
+            deleted_text: String::new(),
+            inserted_text: text.clone(),
+        };
         self.undo_stack.push(UndoEntry {
-            old_text: self.text[..byte_offset].to_string() + &self.text[byte_offset + text.len()..],
-            new_text: self.text.clone(),
-            old_cursor,
-            new_cursor: Utf8ByteOffset::unchecked(new_cursor_val),
+            edits: vec![delta],
+            old_selection,
+            new_selection,
         });
         self.redo_stack.clear();
 
@@ -674,7 +724,12 @@ impl EditorKernel {
                 new_offset: Utf8ByteOffset::unchecked(new_cursor_val),
                 should_animate: self.animation_enabled && old_cursor.value() != new_cursor_val,
             },
-            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
+            // #624 评论8：单次换行插入从 delta 直接构造 offset map。
+            offset_map: Some(OffsetMap::from_single_edit(
+                self.text.byte_len() - text.len(),
+                (byte_offset, byte_offset),
+                text.len(),
+            )),
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -685,6 +740,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
+            content_delta: EditorContentDelta::from_inserted_text(&text),
         })
     }
 
@@ -700,13 +756,21 @@ impl EditorKernel {
     /// - UTF-8 安全：空格和 Tab 都是单字节 ASCII，不会出现在多字节字符的续字节中
     ///
     /// 返回的前导空白会被追加到新行之后，实现自动缩进。
-    fn compute_auto_indent_prefix(text: &str, byte_offset: usize) -> String {
+    /// #624 评论8：Rope 局部版本 — 只在光标前 `[0, byte_offset)` slice 上迭代，
+    /// 不 materialize 全文。`bytes().rev()` 从光标向前找行首，再从行首收集前导空白。
+    fn compute_auto_indent_prefix(rope: &crop::Rope, byte_offset: usize) -> String {
         // 找到 byte_offset 所在行的行首
-        let line_start = text[..byte_offset].rfind('\n').map_or(0, |pos| pos + 1);
+        let prefix_slice = rope.byte_slice(0..byte_offset);
+        let line_start = prefix_slice
+            .bytes()
+            .rev()
+            .position(|b| b == b'\n')
+            .map_or(0, |from_end| byte_offset - from_end);
 
         // 从行首开始收集前导空白（空格和 Tab）
+        let line = rope.byte_slice(line_start..byte_offset);
         let mut prefix = String::new();
-        for &byte in &text.as_bytes()[line_start..] {
+        for byte in line.bytes() {
             if byte == b' ' || byte == b'\t' {
                 prefix.push(byte as char);
             } else {
@@ -775,7 +839,7 @@ impl EditorKernel {
                 old_selection,
             ));
         }
-        if byte_start > self.text.len() || byte_end_exclusive > self.text.len() {
+        if byte_start > self.text.byte_len() || byte_end_exclusive > self.text.byte_len() {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
@@ -792,10 +856,14 @@ impl EditorKernel {
             ));
         }
 
-        let old_text = self.text.clone();
+        // #624 评论8：先取局部删除文本，再局部 Rope replace，不 clone 全文。
+        let deleted_text = self
+            .text
+            .byte_slice(byte_start..byte_end_exclusive)
+            .to_string();
 
         self.text
-            .replace_range(byte_start..byte_end_exclusive, replacement_text);
+            .replace(byte_start..byte_end_exclusive, replacement_text);
         self.revision = self.revision.next();
 
         let sel_anchor = Self::clamp_to_char_boundary(&self.text, resulting_selection_anchor);
@@ -805,11 +873,17 @@ impl EditorKernel {
         self.selection_anchor = Utf8ByteOffset::unchecked(sel_anchor);
         self.cursor = Utf8ByteOffset::unchecked(sel_head);
 
+        let new_selection = Utf8ByteRange::from_ordered(sel_anchor, sel_head);
+        let delta = TextEditDelta {
+            old_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
+            new_range: Utf8ByteRange::from_start_len(byte_start, replacement_text.len()),
+            deleted_text: deleted_text.clone(),
+            inserted_text: replacement_text.to_string(),
+        };
         self.undo_stack.push(UndoEntry {
-            old_text: old_text.clone(),
-            new_text: self.text.clone(),
-            old_cursor,
-            new_cursor: Utf8ByteOffset::unchecked(byte_start),
+            edits: vec![delta],
+            old_selection,
+            new_selection,
         });
         self.redo_stack.clear();
         let preedit_byte_len = self
@@ -821,7 +895,6 @@ impl EditorKernel {
         self.composition_session = None;
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::from_ordered(sel_anchor, sel_head);
         let old_affected = if preedit_byte_len > 0 {
             vec![Utf8ByteRange::from_start_len(byte_start, preedit_byte_len)]
         } else {
@@ -878,7 +951,12 @@ impl EditorKernel {
                 new_offset: Utf8ByteOffset::unchecked(sel_head),
                 should_animate: self.animation_enabled && old_cursor.value() != sel_head,
             },
-            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
+            // #624 评论8：单次 commit 从 delta 直接构造 offset map。
+            offset_map: Some(OffsetMap::from_single_edit(
+                self.text.byte_len() - replacement_text.len() + (byte_end_exclusive - byte_start),
+                (byte_start, byte_end_exclusive),
+                replacement_text.len(),
+            )),
         };
 
         let edit_result = EditorEditResult {
@@ -889,6 +967,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
+            content_delta: EditorContentDelta::from_texts(replacement_text, &deleted_text),
         };
 
         if selection_was_adjusted {
@@ -925,8 +1004,8 @@ impl EditorKernel {
             (sel_head, sel_anchor)
         };
 
-        let mut patches = Vec::new();
-        let mut text = self.text.clone();
+        let mut edits: Vec<TextEditDelta> = Vec::new();
+        let old_len = self.text.byte_len();
 
         let after_range = if after_byte_start < after_byte_end_exclusive {
             Some((after_byte_start, after_byte_end_exclusive))
@@ -939,11 +1018,18 @@ impl EditorKernel {
             None
         };
 
+        // #624 评论8：删除前在 old 文本坐标上取 before/after 之间的保留段
+        // （两个删除都不影响该区域内容），用于构造单条最终 DisplayPatch。
+        let middle = match (before_range, after_range) {
+            (Some((_, be)), Some((as_, _))) => self.text.byte_slice(be..as_).to_string(),
+            _ => String::new(),
+        };
+
         if let Some((as_, ae)) = after_range {
-            if as_ > text.len()
-                || ae > text.len()
-                || !text.is_char_boundary(as_)
-                || !text.is_char_boundary(ae)
+            if as_ > self.text.byte_len()
+                || ae > self.text.byte_len()
+                || !self.text.is_char_boundary(as_)
+                || !self.text.is_char_boundary(ae)
             {
                 return EditorEditOutcome::InvalidOffset(self.noop_result(
                     base_revision,
@@ -958,15 +1044,22 @@ impl EditorKernel {
                     old_selection,
                 ));
             }
-            text.replace_range(as_..ae, "");
-            patches.push((as_, ae, String::new()));
+            // #624 评论8：局部 Rope delete + 记录 delta。
+            let deleted = self.text.byte_slice(as_..ae).to_string();
+            self.text.delete(as_..ae);
+            edits.push(TextEditDelta {
+                old_range: Utf8ByteRange::from_ordered(as_, ae),
+                new_range: Utf8ByteRange::point(as_),
+                deleted_text: deleted,
+                inserted_text: String::new(),
+            });
         }
 
         if let Some((bs, be)) = before_range {
-            if bs > text.len()
-                || be > text.len()
-                || !text.is_char_boundary(bs)
-                || !text.is_char_boundary(be)
+            if bs > self.text.byte_len()
+                || be > self.text.byte_len()
+                || !self.text.is_char_boundary(bs)
+                || !self.text.is_char_boundary(be)
             {
                 return EditorEditOutcome::InvalidOffset(self.noop_result(
                     base_revision,
@@ -981,11 +1074,18 @@ impl EditorKernel {
                     old_selection,
                 ));
             }
-            text.replace_range(bs..be, "");
-            patches.push((bs, be, String::new()));
+            // #624 评论8：局部 Rope delete + 记录 delta。
+            let deleted = self.text.byte_slice(bs..be).to_string();
+            self.text.delete(bs..be);
+            edits.push(TextEditDelta {
+                old_range: Utf8ByteRange::from_ordered(bs, be),
+                new_range: Utf8ByteRange::point(bs),
+                deleted_text: deleted,
+                inserted_text: String::new(),
+            });
         }
 
-        if patches.is_empty() {
+        if edits.is_empty() {
             return EditorEditOutcome::NoChange(self.noop_result(
                 base_revision,
                 old_cursor,
@@ -993,8 +1093,6 @@ impl EditorKernel {
             ));
         }
 
-        let old_text = self.text.clone();
-        self.text = text;
         self.revision = self.revision.next();
         self.composition_session = None;
 
@@ -1017,26 +1115,49 @@ impl EditorKernel {
         self.selection_anchor = Utf8ByteOffset::unchecked(new_sel_anchor);
         self.cursor = Utf8ByteOffset::unchecked(new_sel_head);
 
+        let new_selection = Utf8ByteRange::from_ordered(new_sel_anchor, new_sel_head);
+
+        // #624 评论8：content delta / offset map / affected ranges 全部从 delta 构造，
+        // 计算完成后才把 edits 移入 Undo 栈。
+        let mut content_delta = EditorContentDelta::default();
+        let mut offset_pairs: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(edits.len());
+        for delta in &edits {
+            content_delta.accumulate(&EditorContentDelta::from_texts(
+                &delta.inserted_text,
+                &delta.deleted_text,
+            ));
+            offset_pairs.push((
+                delta.old_range.start().value(),
+                delta.old_range.end().value(),
+                delta.new_range.start().value(),
+                delta.new_range.end().value(),
+            ));
+        }
+        let old_affected: Vec<Utf8ByteRange> = edits.iter().map(|e| e.old_range).collect();
+
         self.undo_stack.push(UndoEntry {
-            old_text: old_text.clone(),
-            new_text: self.text.clone(),
-            old_cursor,
-            new_cursor: Utf8ByteOffset::unchecked(new_sel_head),
+            edits,
+            old_selection,
+            new_selection,
         });
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::from_ordered(new_sel_anchor, new_sel_head);
 
-        let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
-        let display_patches = if replace_range.start().value() < replace_range.end().value()
-            || !inserted_text.is_empty()
-        {
+        // #624 评论8：对 Android 维持一次事务/一条最终 DisplayPatch —
+        // 用最外层旧范围 + 中间保留的局部 RopeSlice 构造 replacement，不需要全文。
+        let (replace_start, replace_end, retained) = match (before_range, after_range) {
+            (Some((bs, _)), Some((_, ae))) => (bs, ae, middle),
+            (Some((bs, be)), None) => (bs, be, String::new()),
+            (None, Some((as_, ae))) => (as_, ae, String::new()),
+            (None, None) => unreachable!("edits 非空保证 at least one range"),
+        };
+        let display_patches = if replace_start < replace_end || !retained.is_empty() {
             vec![DisplayPatch {
                 base_revision,
                 new_revision,
-                replace_byte_range: replace_range,
-                inserted_text,
+                replace_byte_range: Utf8ByteRange::from_ordered(replace_start, replace_end),
+                inserted_text: retained,
                 resulting_selection_byte_range: new_selection,
             }]
         } else {
@@ -1046,10 +1167,7 @@ impl EditorKernel {
         let visual_intent = EditorVisualIntent {
             cause,
             operation_kind: EditorOperationKind::Delete,
-            old_affected_byte_ranges: patches
-                .iter()
-                .map(|(s, e, _)| Utf8ByteRange::from_ordered(*s, *e))
-                .collect(),
+            old_affected_byte_ranges: old_affected,
             new_affected_byte_ranges: vec![],
             animation_mode: AnimationMode::SystemSuppressed,
             duration_ms: 0,
@@ -1058,7 +1176,7 @@ impl EditorKernel {
                 new_offset: Utf8ByteOffset::unchecked(new_sel_head),
                 should_animate: false,
             },
-            offset_map: Some(OffsetMap::build(&old_text, &self.text)),
+            offset_map: Some(OffsetMap::from_edits(old_len, &offset_pairs)),
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -1069,6 +1187,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
+            content_delta,
         })
     }
 }

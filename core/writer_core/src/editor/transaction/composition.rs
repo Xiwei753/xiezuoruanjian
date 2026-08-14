@@ -272,6 +272,83 @@ impl OffsetMap {
         OffsetMap { entries }
     }
 
+    /// #624 评论8：单次编辑的偏移映射 — `[0,start)` Identity + `[oldEnd,oldLen)` Shifted。
+    ///
+    /// `old_len` 是编辑前文本的 UTF-8 byte 长度，`old_range` 是编辑前被替换的
+    /// 半开范围 `(start, end)`，`inserted_len` 是插入文本的 UTF-8 byte 长度。
+    /// 普通按键不再比较 old/new 全文。
+    pub fn from_single_edit(
+        old_len: usize,
+        old_range: (usize, usize),
+        inserted_len: usize,
+    ) -> Self {
+        let (old_start, old_end) = old_range;
+        debug_assert!(old_start <= old_end && old_end <= old_len);
+        let mut entries = Vec::new();
+        if old_start > 0 {
+            entries.push(OffsetMapEntry {
+                old_byte_offset: Utf8ByteOffset::unchecked(0),
+                new_byte_offset: Utf8ByteOffset::unchecked(0),
+                length: old_start,
+                kind: OffsetMapKind::Identity,
+            });
+        }
+        let suffix = old_len - old_end;
+        if suffix > 0 {
+            entries.push(OffsetMapEntry {
+                old_byte_offset: Utf8ByteOffset::unchecked(old_end),
+                new_byte_offset: Utf8ByteOffset::unchecked(old_start + inserted_len),
+                length: suffix,
+                kind: OffsetMapKind::Shifted,
+            });
+        }
+        OffsetMap { entries }
+    }
+
+    /// #624 评论8：多次编辑（replace-all / delete-surrounding / undo 多 delta）的偏移映射。
+    ///
+    /// `edits` 为 `(old_start, old_end, new_start, new_end)` 元组列表（无需预排序，
+    /// 内部按 `old_start` 升序处理；各编辑的 old range 必须互不重叠）。
+    /// 静态区域（未编辑部分）生成 Identity/Shifted 映射；编辑区域无映射。
+    #[allow(clippy::excessive_nesting)]
+    pub fn from_edits(old_len: usize, edits: &[(usize, usize, usize, usize)]) -> Self {
+        let mut sorted: Vec<(usize, usize, usize, usize)> = edits.to_vec();
+        sorted.sort_by_key(|e| e.0);
+        let mut entries = Vec::new();
+        let mut old_pos = 0usize;
+        let mut new_pos = 0usize;
+        let mut first = true;
+        for &(old_start, old_end, _new_start, new_end) in &sorted {
+            debug_assert!(old_start >= old_pos && old_end >= old_start);
+            if old_start > old_pos {
+                let length = old_start - old_pos;
+                let kind = if first && old_pos == 0 {
+                    OffsetMapKind::Identity
+                } else {
+                    OffsetMapKind::Shifted
+                };
+                entries.push(OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(old_pos),
+                    new_byte_offset: Utf8ByteOffset::unchecked(new_pos),
+                    length,
+                    kind,
+                });
+            }
+            first = false;
+            old_pos = old_end;
+            new_pos = new_end;
+        }
+        if old_pos < old_len {
+            entries.push(OffsetMapEntry {
+                old_byte_offset: Utf8ByteOffset::unchecked(old_pos),
+                new_byte_offset: Utf8ByteOffset::unchecked(new_pos),
+                length: old_len - old_pos,
+                kind: OffsetMapKind::Shifted,
+            });
+        }
+        OffsetMap { entries }
+    }
+
     /// 查找 old byte offset 在 new text 中的对应位置。
     pub fn map_old_to_new(&self, old_byte_offset: usize) -> Option<usize> {
         for entry in &self.entries {

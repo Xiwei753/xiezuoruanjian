@@ -4,6 +4,7 @@ import com.xiwei.sujian.feature.editor.projection.CoordinatedCursor
 import com.xiwei.sujian.feature.editor.projection.DisplayPatch
 import com.xiwei.sujian.feature.editor.projection.EditResult
 import com.xiwei.sujian.feature.editor.projection.VisualIntent
+import com.xiwei.sujian.feature.editor.session.toSessionDelta
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -88,5 +89,86 @@ class EditResultTest {
         assertEquals(0, cursor.oldByteOffset)
         assertEquals(5, cursor.newByteOffset)
         assertFalse(cursor.shouldAnimate)
+    }
+}
+
+/**
+ * #624 评论8/9：Android 直接消费 Core EditorContentDeltaDto 真值 —
+ * 不允许用 UTF-8 byte 长度冒充 deletedChars。验证 fromDto 映射 + toSessionDelta 转换。
+ */
+class EditorContentDeltaConsumptionTest {
+    @Test
+    fun editResultFromDtoMapsContentDeltaTruthfully() {
+        // 删除 2 个 CJK char（6 UTF-8 bytes）+ 插入 1 emoji（4 bytes）：
+        // Core 计数按 Unicode scalar，deletedChars=2、insertedChars=1，
+        // 不是 UTF-8 byte 数（6/4）。
+        val dto =
+            uniffi.writer_core.EditorEditResultDto(
+                outcome = uniffi.writer_core.EditorEditOutcomeDto.APPLIED,
+                transactionId = 1u,
+                baseRevision = 0u,
+                newRevision = 1u,
+                displayPatches = emptyList(),
+                oldSelectionStart = 6u,
+                oldSelectionEnd = 12u,
+                newSelectionStart = 6u,
+                newSelectionEnd = 10u,
+                visualIntent =
+                    uniffi.writer_core.EditorVisualIntentDto(
+                        cause = uniffi.writer_core.EditorTransactionCauseDto.DELETE,
+                        operationKind = uniffi.writer_core.EditorOperationKindDto.DELETE,
+                        oldAffectedByteRanges = emptyList(),
+                        newAffectedByteRanges = emptyList(),
+                        animationMode = uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED,
+                        durationMs = 0u,
+                        coordinatedCursor = uniffi.writer_core.CoordinatedCursorDto(6u, 6u, false),
+                        offsetMap = null,
+                    ),
+                compositionSession = null,
+                contentDelta =
+                    uniffi.writer_core.EditorContentDeltaDto(
+                        insertedChars = 1u,
+                        deletedChars = 2u,
+                        insertedNonWhitespaceChars = 1u,
+                        deletedNonWhitespaceChars = 2u,
+                    ),
+            )
+        val result = EditResult.fromDto(dto)
+        val sessionDelta = result.contentDelta.toSessionDelta()
+        // Unicode scalar 计数真值：非 UTF-8 byte 近似
+        assertEquals(1, sessionDelta.insertedChars)
+        assertEquals(2, sessionDelta.deletedChars)
+        assertEquals(1, sessionDelta.insertedNonWhitespaceChars)
+        assertEquals(2, sessionDelta.deletedNonWhitespaceChars)
+        assertEquals(-1, sessionDelta.netNonWhitespace)
+    }
+
+    @Test
+    fun contentDeltaWhitespaceOnlyCountsZeroNonWhitespace() {
+        // 删除 "\n"（1 char、0 非空白）：Core 真值 deletedChars=1、nonWhitespace=0。
+        val dto =
+            uniffi.writer_core.EditorContentDeltaDto(
+                insertedChars = 0u,
+                deletedChars = 1u,
+                insertedNonWhitespaceChars = 0u,
+                deletedNonWhitespaceChars = 0u,
+            )
+        val sessionDelta = dto.toSessionDelta()
+        assertEquals(1, sessionDelta.deletedChars)
+        assertEquals(0, sessionDelta.deletedNonWhitespaceChars)
+    }
+
+    @Test
+    fun selectionOnlyHasZeroContentDelta() {
+        val dto =
+            uniffi.writer_core.EditorContentDeltaDto(
+                insertedChars = 0u,
+                deletedChars = 0u,
+                insertedNonWhitespaceChars = 0u,
+                deletedNonWhitespaceChars = 0u,
+            )
+        val sessionDelta = dto.toSessionDelta()
+        assertEquals(0, sessionDelta.netNonWhitespace)
+        assertEquals(com.xiwei.sujian.feature.editor.session.EditorContentDelta(), sessionDelta)
     }
 }
