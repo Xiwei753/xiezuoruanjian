@@ -579,7 +579,11 @@ impl LinuxEditorPipeline {
         cause: EditorTransactionCause,
     ) -> Option<EditorEditResult> {
         let command = EditorCommand::Delete {
-            byte_range: Utf8ByteRange::clamp_rope(self.kernel.rope(), byte_start, byte_end_exclusive),
+            byte_range: Utf8ByteRange::clamp_rope(
+                self.kernel.rope(),
+                byte_start,
+                byte_end_exclusive,
+            ),
             deleted_text: String::new(),
             cause,
             expected_revision: EditorRevision::new(self.mirror.revision()),
@@ -622,7 +626,11 @@ impl LinuxEditorPipeline {
         cause: EditorTransactionCause,
     ) -> Option<EditorEditResult> {
         let command = EditorCommand::Replace {
-            byte_range: Utf8ByteRange::clamp_rope(self.kernel.rope(), byte_start, byte_end_exclusive),
+            byte_range: Utf8ByteRange::clamp_rope(
+                self.kernel.rope(),
+                byte_start,
+                byte_end_exclusive,
+            ),
             replacement_text: replacement.to_string(),
             original_text: String::new(),
             cause,

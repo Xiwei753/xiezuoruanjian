@@ -531,7 +531,10 @@ mod rope_tests {
 
         let undid = undo(&mut kernel).into_result();
         assert_eq!(kernel.snapshot_text(), "abcd");
-        let map = undid.visual_intent.offset_map.expect("undo 必须携带 OffsetMap");
+        let map = undid
+            .visual_intent
+            .offset_map
+            .expect("undo 必须携带 OffsetMap");
         // old = undo 前文本 "ad"：头部 [0,1) 恒等；'d' 在 old 1，undo 后 "abcd" 中在 new 3。
         assert_eq!(map.map_old_to_new(0), Some(0));
         assert_eq!(map.map_old_to_new(1), Some(3));
