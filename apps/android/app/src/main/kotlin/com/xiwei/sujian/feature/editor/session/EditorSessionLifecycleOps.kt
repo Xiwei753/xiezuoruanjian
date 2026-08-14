@@ -294,12 +294,23 @@ fun EditorSessionCoordinator.detachWindowBinding(
     val currentBinding = _sessionStateFlow.value.bindingState
     if (currentBinding is WindowBindingState.Detached && currentBinding.targetId == targetId) return
     if (!isPersistent || sessionId == null || sessionId == 0UL) {
+        // #624 评论17 问题3：锁内读取待关闭的 sessionId → 锁外 closeSession →
+        // 再进锁校验前提仍成立并提交。Core 调用不得持 mutationLock。
+        val pendingCloseSessionId = sessionId
         mutateSession {
             invalidateLease()
-            if (sessionId != null && sessionId != 0UL) {
-                coordinator.closeSession(sessionId)
+        }
+        // 锁外关闭 Core session — Core 调用不得持 mutationLock。
+        if (pendingCloseSessionId != null && pendingCloseSessionId != 0UL) {
+            closeSession(pendingCloseSessionId)
+        }
+        // 再进锁校验前提仍成立并提交 — 锁外 closeSession 期间记录的 sessionId 可能被
+        // 其他线程改换，只有仍匹配才 removeRecord，避免误删新 session 的记录。
+        mutateSession {
+            val currentRec = record(targetId)
+            if (currentRec?.sessionId == pendingCloseSessionId) {
+                removeRecord(targetId)
             }
-            removeRecord(targetId)
             if (sessionState.targetId == targetId) {
                 sessionState =
                     sessionState.copy(
@@ -608,10 +619,15 @@ private fun EditorSessionCoordinator.resolveSessionForPrepare(
     return createSession(targetId, textForSession, sel, isPersistent)
 }
 
-@Suppress("CognitiveComplexMethod")
+@Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod")
 fun EditorSessionCoordinator.commitActiveSession(finalText: String?): Boolean {
     var committed = false
     var profile: TextEditorProfile? = null
+    // #624 评论17 问题3：锁内读取待关闭的 id/状态 → 锁外 closeSession →
+    // 再进锁校验前提仍成立并提交。Core 调用不得持 mutationLock。
+    var pendingTargetId: String? = null
+    var pendingCloseSessionId: ULong = 0UL
+    var needClose = false
     mutateSession {
         val targetId = sessionState.activeTargetId ?: return@mutateSession
         val rec = record(targetId) ?: return@mutateSession
@@ -631,23 +647,45 @@ fun EditorSessionCoordinator.commitActiveSession(finalText: String?): Boolean {
                         sessionState.bindingState
                     },
             )
+        pendingTargetId = targetId
         if (!isPersistent || !windowBound) {
-            coordinator.closeSession(sessionId)
-            removeRecord(targetId)
+            pendingCloseSessionId = sessionId
+            needClose = true
         }
-        sessionState = EditorSessionState()
         profile = rec.profile
         committed = true
     }
+    // 锁外关闭 Core session — Core 调用不得持 mutationLock。
+    if (committed && needClose && pendingCloseSessionId != 0UL) {
+        closeSession(pendingCloseSessionId)
+    }
+    // 再进锁校验前提仍成立并提交 — 锁外 closeSession 期间活动 target 可能被其他线程
+    // 改换，只有仍匹配才 removeRecord 并重置 sessionState，避免误删/覆盖新状态。
     if (committed) {
+        mutateSession {
+            if (sessionState.activeTargetId == pendingTargetId) {
+                if (needClose && pendingTargetId != null) {
+                    val currentRec = record(pendingTargetId)
+                    if (currentRec?.sessionId == pendingCloseSessionId) {
+                        removeRecord(pendingTargetId)
+                    }
+                }
+                sessionState = EditorSessionState()
+            }
+        }
         _lastCommittedTextFlow.value =
             if (profile?.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) null else finalText
     }
     return committed
 }
 
+@Suppress("CognitiveComplexMethod")
 fun EditorSessionCoordinator.cancelActiveSession(): Boolean {
     var cancelled = false
+    // #624 评论17 问题3：锁内读取待关闭的 id/状态 → 锁外 closeSession →
+    // 再进锁校验前提仍成立并提交。Core 调用不得持 mutationLock。
+    var pendingCloseTargetId: String? = null
+    var pendingCloseSessionId: ULong = 0UL
     mutateSession {
         val targetId = sessionState.activeTargetId ?: return@mutateSession
         val rec = record(targetId) ?: return@mutateSession
@@ -666,10 +704,26 @@ fun EditorSessionCoordinator.cancelActiveSession(): Boolean {
                         sessionState.bindingState
                     },
             )
-        coordinator.closeSession(sessionId)
-        removeRecord(targetId)
-        sessionState = EditorSessionState()
+        pendingCloseTargetId = targetId
+        pendingCloseSessionId = sessionId
         cancelled = true
+    }
+    // 锁外关闭 Core session — Core 调用不得持 mutationLock。
+    if (cancelled && pendingCloseSessionId != 0UL) {
+        closeSession(pendingCloseSessionId)
+    }
+    // 再进锁校验前提仍成立并提交 — 锁外 closeSession 期间活动 target 可能被其他线程
+    // 改换，只有仍匹配才 removeRecord 并重置 sessionState，避免误删/覆盖新状态。
+    if (cancelled) {
+        mutateSession {
+            if (pendingCloseTargetId != null && sessionState.activeTargetId == pendingCloseTargetId) {
+                val currentRec = record(pendingCloseTargetId)
+                if (currentRec?.sessionId == pendingCloseSessionId) {
+                    removeRecord(pendingCloseTargetId)
+                }
+                sessionState = EditorSessionState()
+            }
+        }
     }
     return cancelled
 }
@@ -787,11 +841,14 @@ fun EditorSessionCoordinator.releaseHost() {
     if (activeTargetId != null) {
         cancelActiveSession()
     }
+    // #624 评论17 问题3：锁外读取待关闭的记录列表（cancelActiveSession 后剩余的记录）。
     val recordsToClose = store.allRecords().filter { it.sessionId != 0UL }
+    // 锁外关闭所有 Core session — Core 调用不得持 mutationLock。
+    recordsToClose.forEach { record ->
+        closeSession(record.sessionId)
+    }
+    // 再进锁清理记录并设 RELEASED 状态。
     mutateSession {
-        recordsToClose.forEach { record ->
-            coordinator.closeSession(record.sessionId)
-        }
         clearRecords()
         sessionState = EditorSessionState(editingState = EditingState.RELEASED)
     }
