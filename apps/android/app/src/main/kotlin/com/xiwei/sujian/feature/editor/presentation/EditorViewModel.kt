@@ -1,4 +1,4 @@
-package com.xiwei.sujian.feature.editor.ui
+package com.xiwei.sujian.feature.editor.presentation
 
 // ! # 编辑器 ViewModel（Android UI 层 - ViewModel）
 // !

@@ -1,4 +1,4 @@
-package com.xiwei.sujian.feature.editor.ui
+package com.xiwei.sujian.feature.editor.presentation
 
 import com.xiwei.sujian.feature.editor.session.TargetDocumentFact
 import kotlinx.coroutines.flow.Flow

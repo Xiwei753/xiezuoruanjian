@@ -26,11 +26,11 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.presentation.AndroidWorkspaceActionSpec
-import com.xiwei.sujian.feature.editor.ui.ChapterSwitchResult
-import com.xiwei.sujian.feature.editor.ui.EditorViewModel
+import com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult
+import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
+import com.xiwei.sujian.feature.editor.presentation.requestOpenChapter
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
-import com.xiwei.sujian.feature.editor.ui.requestOpenChapter
 import kotlinx.coroutines.launch
 
 /**

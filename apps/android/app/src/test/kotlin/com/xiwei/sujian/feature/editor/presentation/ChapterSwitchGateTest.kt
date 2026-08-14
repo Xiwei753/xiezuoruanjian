@@ -1,4 +1,4 @@
-package com.xiwei.sujian.feature.editor.ui
+package com.xiwei.sujian.feature.editor.presentation
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async

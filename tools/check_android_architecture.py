@@ -919,6 +919,43 @@ def rule_package_dir_consistent(
 
 
 
+# #624 评论17 第1/3部分：feature/editor/presentation 是从 ui 层抽出的页面事务层
+# （EditorViewModel + 拆分 ops + ChapterSwitchGate + TargetDocumentUpdateBus）。
+# 它只承载 ViewModel/状态机/协程事务，不得依赖 Compose 布局/Android View/SujianEditorView
+# 与 editor 显示/输入/平台/排版/渲染层。
+EDITOR_PRESENTATION_FORBIDDEN = (
+    COMPOSE_UI_FRAMEWORK
+    + [
+        "androidx.compose.runtime",  # @Composable/@Immutable 等 Compose 标记也不得进入
+        "android.view",
+        "com.xiwei.sujian.feature.editor.platform",
+        "com.xiwei.sujian.feature.editor.render",
+        "com.xiwei.sujian.feature.editor.input",
+        "com.xiwei.sujian.feature.editor.layout",
+        "com.xiwei.sujian.feature.editor.ui",
+        "com.xiwei.sujian.feature.editor.visual",
+        "com.xiwei.sujian.feature.editor.motion",
+        "com.xiwei.sujian.feature.editor.window",
+    ]
+)
+
+
+def rule_editor_presentation_pure() -> list[Finding]:
+    """#624 评论17 第1/3部分：feature/editor/presentation 不得依赖
+    Compose/View/editor platform/render/input/layout/ui/visual/motion/window。
+
+    presentation 只承载 ViewModel/状态机/协程事务，Compose 表面留在 ui 层
+    （WritingPane/WritingEditorSurface 等）。这条规则保护从 ui 包迁出的
+    EditorViewModel/EditorViewModelTypes/Editor*Ops/ChapterSwitchGate/
+    TargetDocumentUpdateBus 不会把 Compose/View/平台依赖带进新包。
+    """
+    return scan_forbidden(
+        APP_SRC,
+        "/feature/editor/presentation/",
+        EDITOR_PRESENTATION_FORBIDDEN,
+    )
+
+
 PRESENTATION_CONTRACT_DTO_WHITELIST = [
     "uniffi.writer_core.WindowCapabilitiesDto",
     "uniffi.writer_core.LayoutContractDto",
@@ -1052,6 +1089,11 @@ RULES: list[tuple[str, str, object]] = [
         "package-dir-consistent",
         "package 声明必须与物理目录结构一致",
         rule_package_dir_consistent,
+    ),
+    (
+        "editor-presentation-pure",
+        "feature/editor/presentation 不得依赖 Compose/View/editor platform/render/input/layout（#624 评论17）",
+        rule_editor_presentation_pure,
     ),
     (
         "presentation-contract-layer",

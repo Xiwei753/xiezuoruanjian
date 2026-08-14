@@ -1,4 +1,4 @@
-package com.xiwei.sujian.feature.editor.ui
+package com.xiwei.sujian.feature.editor.presentation
 
 /**
  * 编辑器 ViewModel 的类型声明 - 从 EditorViewModel 拆分以降低单文件复杂度。

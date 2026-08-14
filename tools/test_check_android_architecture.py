@@ -672,6 +672,93 @@ class LayerRuleTests(unittest.TestCase):
         )
         self.assertTrue(findings, "settings/data 依赖 editor.ui 必须被报告")
 
+    def test_editor_presentation_pure_flags_compose_ui(self):
+        """feature/editor/presentation 依赖 Compose UI 必须被报告（#624 评论17）。"""
+        findings = self.run_rule(
+            "editor-presentation-pure",
+            {
+                f"{APP_PREFIX}/feature/editor/presentation/BadVm.kt": (
+                    "package com.xiwei.sujian.feature.editor.presentation\n\n"
+                    "import androidx.compose.ui.Modifier\n"
+                    "class BadVm(val m: Modifier)\n"
+                )
+            },
+        )
+        self.assertTrue(findings, "presentation 依赖 androidx.compose.ui 必须被报告")
+
+    def test_editor_presentation_pure_flags_android_view(self):
+        """feature/editor/presentation 依赖 android.view 必须被报告（#624 评论17）。"""
+        findings = self.run_rule(
+            "editor-presentation-pure",
+            {
+                f"{APP_PREFIX}/feature/editor/presentation/BadVm.kt": (
+                    "package com.xiwei.sujian.feature.editor.presentation\n\n"
+                    "import android.view.View\n"
+                    "class BadVm(val v: View)\n"
+                )
+            },
+        )
+        self.assertTrue(findings, "presentation 依赖 android.view 必须被报告")
+
+    def test_editor_presentation_pure_flags_editor_platform(self):
+        """feature/editor/presentation 依赖 editor.platform 必须被报告（#624 评论17）。"""
+        findings = self.run_rule(
+            "editor-presentation-pure",
+            {
+                f"{APP_PREFIX}/feature/editor/presentation/BadVm.kt": (
+                    "package com.xiwei.sujian.feature.editor.presentation\n\n"
+                    "import com.xiwei.sujian.feature.editor.platform.SujianEditorView\n"
+                    "class BadVm(val v: SujianEditorView)\n"
+                )
+            },
+        )
+        self.assertTrue(findings, "presentation 依赖 editor.platform 必须被报告")
+
+    def test_editor_presentation_pure_flags_editor_layout(self):
+        """feature/editor/presentation 依赖 editor.layout 必须被报告（#624 评论17）。"""
+        findings = self.run_rule(
+            "editor-presentation-pure",
+            {
+                f"{APP_PREFIX}/feature/editor/presentation/BadVm.kt": (
+                    "package com.xiwei.sujian.feature.editor.presentation\n\n"
+                    "import com.xiwei.sujian.feature.editor.layout.LayoutToken\n"
+                    "class BadVm(val t: LayoutToken)\n"
+                )
+            },
+        )
+        self.assertTrue(findings, "presentation 依赖 editor.layout 必须被报告")
+
+    def test_editor_presentation_pure_flags_editor_ui(self):
+        """feature/editor/presentation 依赖 editor.ui 必须被报告（#624 评论17）。"""
+        findings = self.run_rule(
+            "editor-presentation-pure",
+            {
+                f"{APP_PREFIX}/feature/editor/presentation/BadVm.kt": (
+                    "package com.xiwei.sujian.feature.editor.presentation\n\n"
+                    "import com.xiwei.sujian.feature.editor.ui.WritingPane\n"
+                    "class BadVm(val p: WritingPane)\n"
+                )
+            },
+        )
+        self.assertTrue(findings, "presentation 依赖 editor.ui 必须被报告")
+
+    def test_editor_presentation_pure_passes_clean_viewmodel(self):
+        """干净的 presentation ViewModel（只依赖 lifecycle/coroutines/session）不报违规。"""
+        findings = self.run_rule(
+            "editor-presentation-pure",
+            {
+                f"{APP_PREFIX}/feature/editor/presentation/CleanVm.kt": (
+                    "package com.xiwei.sujian.feature.editor.presentation\n\n"
+                    "import androidx.lifecycle.ViewModel\n"
+                    "import androidx.lifecycle.viewModelScope\n"
+                    "import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator\n"
+                    "import kotlinx.coroutines.launch\n"
+                    "class CleanVm(val c: EditorSessionCoordinator) : ViewModel()\n"
+                )
+            },
+        )
+        self.assertEqual([], findings, "干净 presentation 不应被报告")
+
 
 class PackageSourceRootsFollowAppSrcTest(unittest.TestCase):
     """configure(--app-src) 后 PACKAGE_SOURCE_ROOTS 必须跟随（#602 评论#9 项9.3）。"""

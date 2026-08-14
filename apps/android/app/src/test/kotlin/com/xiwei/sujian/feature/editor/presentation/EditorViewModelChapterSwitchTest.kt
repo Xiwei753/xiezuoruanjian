@@ -1,4 +1,4 @@
-package com.xiwei.sujian.feature.editor.ui
+package com.xiwei.sujian.feature.editor.presentation
 
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder

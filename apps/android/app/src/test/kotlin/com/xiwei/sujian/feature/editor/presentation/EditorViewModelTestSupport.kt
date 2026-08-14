@@ -1,4 +1,4 @@
-package com.xiwei.sujian.feature.editor.ui
+package com.xiwei.sujian.feature.editor.presentation
 
 /**
  * #624 评论14 第2项：EditorViewModel 测试共享辅助。

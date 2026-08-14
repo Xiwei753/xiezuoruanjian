@@ -14,7 +14,7 @@ import com.xiwei.sujian.feature.editor.window.EditorWindowHost
  *
  * 这些事件在 [EditorWindowHost.installContentCallback] 中由 View 的
  * onLocalEdit / onExternalEdit 同步回调直接送入会话层 reducer，
- * 不经 [com.xiwei.sujian.feature.editor.ui.TargetDocumentUpdateBus]。
+ * 不经 [com.xiwei.sujian.feature.editor.presentation.TargetDocumentUpdateBus]。
  *
  * #624 评论9：热路径不再传整章 String — 只携带 [contentChanged]/[contentDelta]
  * 增量信号；正文只在冷路径（load/snapshot/save/sync）经 [TargetSnapshot.text]
@@ -131,7 +131,7 @@ enum class DocumentFactOrigin {
 /**
  * #595 二：事件总线保存的每 target 完整文档事实 — 不是"最后一个事件对象"。
  *
- * 由 [com.xiwei.sujian.feature.editor.ui.EditorViewModel] 在章节加载完成 / 同步合并检测时发布。
+ * 由 [com.xiwei.sujian.feature.editor.presentation.EditorViewModel] 在章节加载完成 / 同步合并检测时发布。
  * WritingPane collector 经 [EditorSessionCoordinator.shouldApplyExternalContent]
  * 判断是否执行一次 Core reset；同 sourceVersion 重放幂等忽略。
  */

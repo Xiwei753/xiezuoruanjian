@@ -1,4 +1,4 @@
-package com.xiwei.sujian.feature.editor.ui
+package com.xiwei.sujian.feature.editor.presentation
 
 // ! # 编辑器设置操作（从 EditorViewModel 拆分）
 // !

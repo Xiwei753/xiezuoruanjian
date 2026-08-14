@@ -30,6 +30,19 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
+import com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult
+import com.xiwei.sujian.feature.editor.presentation.EditorSettingsState
+import com.xiwei.sujian.feature.editor.presentation.EditorUiState
+import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
+import com.xiwei.sujian.feature.editor.presentation.SaveStatus
+import com.xiwei.sujian.feature.editor.presentation.applyExternalContentToUi
+import com.xiwei.sujian.feature.editor.presentation.calculateWordCount
+import com.xiwei.sujian.feature.editor.presentation.confirmEditorAttached
+import com.xiwei.sujian.feature.editor.presentation.isCurrentChapter
+import com.xiwei.sujian.feature.editor.presentation.notifySyncMergeConflict
+import com.xiwei.sujian.feature.editor.presentation.onEditorApplied
+import com.xiwei.sujian.feature.editor.presentation.reloadSettings
+import com.xiwei.sujian.feature.editor.presentation.requestOpenChapter
 import com.xiwei.sujian.feature.editor.session.ExternalContentDecision
 import com.xiwei.sujian.feature.editor.session.SessionResetSource
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
@@ -187,7 +200,7 @@ private fun rememberWritingPaneTarget(
 
 /** 编辑器附着所需的可观察状态（正文/会话/章节身份）。 */
 private data class EditorAttachInputs(
-    val uiState: com.xiwei.sujian.feature.editor.ui.EditorUiState,
+    val uiState: com.xiwei.sujian.feature.editor.presentation.EditorUiState,
     val sessionState: com.xiwei.sujian.feature.editor.session.EditorSessionState,
     val chapter: ChapterRef,
 )
@@ -438,13 +451,13 @@ private fun rememberChapterSwitchSync(
                             chapter.title,
                         )
                 ) {
-                    is com.xiwei.sujian.feature.editor.ui.ChapterSwitchResult.Success -> {
+                    is com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult.Success -> {
                         // #595 一：只有保存+加载+session 预准备都成功，旧章节才
                         // 由事务提交（commitPreparedSession 保留其持久 session）；
                         // 窗口解绑由 DisposableEffect onDispose 完成。
                     }
-                    is com.xiwei.sujian.feature.editor.ui.ChapterSwitchResult.SaveFailed,
-                    is com.xiwei.sujian.feature.editor.ui.ChapterSwitchResult.LoadFailed,
+                    is com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult.SaveFailed,
+                    is com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult.LoadFailed,
                     -> {
                         // #595 一：保存/加载失败 → 回滚工作区选择到旧章节（activeChapterKey）。
                         onChapterSwitchFailed?.invoke(
@@ -454,7 +467,7 @@ private fun rememberChapterSwitchSync(
                             lastChapterTitle,
                         )
                     }
-                    com.xiwei.sujian.feature.editor.ui.ChapterSwitchResult.Stale -> {
+                    com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult.Stale -> {
                         // #595 一：请求已过期 — 更新的请求正在完成切换，本请求不再动作。
                     }
                 }
@@ -480,7 +493,7 @@ private fun WritingPaneExternalContentFlow(
     viewModel: EditorViewModel,
     coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
     targetId: String,
-    currentUiState: com.xiwei.sujian.feature.editor.ui.EditorUiState,
+    currentUiState: com.xiwei.sujian.feature.editor.presentation.EditorUiState,
 ) {
     val currentViewModel by rememberUpdatedState(viewModel)
     val currentCoordinator by rememberUpdatedState(coordinator)
@@ -497,7 +510,7 @@ private fun WritingPaneExternalContentFlow(
 /**
  * #595 一/二：外部文档事实决策执行 — 调用方已通过 shouldApplyExternalContent
  * 确认版本更新与本地 dirty 状态，此处只执行 Core reset 和 UI 同步。
- * #624 评论13 第4项：suspend — 与 [com.xiwei.sujian.feature.editor.ui.EditorViewModel.applyExternalContentToUi]
+ * #624 评论13 第4项：suspend — 与 [com.xiwei.sujian.feature.editor.presentation.EditorViewModel.applyExternalContentToUi]
  * （await calculateWordCount）同一调用链；本来就在 LaunchedEffect collect 里调用。
  */
 private suspend fun handleExternalDocumentFact(
@@ -573,7 +586,7 @@ private suspend fun handleExternalDocumentFact(
 private fun WritingPaneColumn(
     modifier: Modifier,
     chapterTitle: String,
-    uiState: com.xiwei.sujian.feature.editor.ui.EditorUiState,
+    uiState: com.xiwei.sujian.feature.editor.presentation.EditorUiState,
     showEditor: Boolean,
     coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
     targetId: String,

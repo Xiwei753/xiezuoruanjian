@@ -327,7 +327,7 @@ open class EditorSessionCoordinator(
      * 因此 lastSavedVersion 同步推进。
      *
      *
-     * #595 二：保存成功上报 — 由 [com.xiwei.sujian.feature.editor.ui.EditorViewModel] 在保存
+     * #595 二：保存成功上报 — 由 [com.xiwei.sujian.feature.editor.presentation.EditorViewModel] 在保存
      * 成功后调用。保存回执必须作为文档提交原子推进：
      *
      * ```text
