@@ -508,6 +508,35 @@ mod rope_tests {
         );
     }
 
+    /// #624 评论10 第4项复审补漏：相邻 deleteSurrounding undo 的 OffsetMap 尾段映射。
+    ///
+    /// "abcd" 光标 2，before=[1,2)="b"、after=[2,3)="c"（紧邻）→ "ad"。undo 时两条
+    /// inverse delta 的 new_range 都退化为 point(1)（同点零长编辑），`from_edits` 必须
+    /// 取两条端点中的**最大值**推进 new_pos：尾段保留字符 'd'（old 1）应映射到 undo 后
+    /// 文本 "abcd" 的 new offset 3（"b"+"c" 都插入到 point 1）。旧实现顺序赋值
+    /// `new_pos = new_end`，后处理的 before 端点 2 覆盖 after 的 3，尾段映射偏移 1 字节
+    /// （动画 OffsetMap 坐标错误，不影响正文/mirror）。
+    #[test]
+    fn delete_surrounding_adjacent_undo_offset_map_tail_maps_to_final() {
+        let mut kernel = EditorKernel::with_text("abcd".to_string(), 2).unwrap();
+        kernel
+            .apply(EditorCommand::DeleteSurrounding {
+                before_byte_range: Utf8ByteRange::from_ordered(1, 2),
+                after_byte_range: Utf8ByteRange::from_ordered(2, 3),
+                cause: EditorTransactionCause::Delete,
+                expected_revision: EditorRevision::new(kernel.revision()),
+            })
+            .into_result();
+        assert_eq!(kernel.snapshot_text(), "ad");
+
+        let undid = undo(&mut kernel).into_result();
+        assert_eq!(kernel.snapshot_text(), "abcd");
+        let map = undid.visual_intent.offset_map.expect("undo 必须携带 OffsetMap");
+        // old = undo 前文本 "ad"：头部 [0,1) 恒等；'d' 在 old 1，undo 后 "abcd" 中在 new 3。
+        assert_eq!(map.map_old_to_new(0), Some(0));
+        assert_eq!(map.map_old_to_new(1), Some(3));
+    }
+
     // ── replace-all：多 delta ──
 
     #[test]

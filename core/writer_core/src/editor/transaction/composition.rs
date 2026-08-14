@@ -336,7 +336,13 @@ impl OffsetMap {
             }
             first = false;
             old_pos = old_end;
-            new_pos = new_end;
+            // #624 评论10 第4项复审补漏：相邻 deleteSurrounding 的 undo 两条 inverse
+            // delta 的 new_range 同点退化为零长（如 before/after 紧邻均 point(bs)），
+            // 顺序赋值 `new_pos = new_end` 时后处理的端点会覆盖前面更大的端点，尾段
+            // 静态区映射偏移。同点零长编辑在最终文本中占据同一插入间隙，取所有端点
+            // 最大值才是 point 处的累计位移（p + 总插入字节数）；非零长相邻编辑的
+            // new_end 单调递增，max 与赋值等价，不改变既有行为。
+            new_pos = new_pos.max(new_end);
         }
         if old_pos < old_len {
             entries.push(OffsetMapEntry {
