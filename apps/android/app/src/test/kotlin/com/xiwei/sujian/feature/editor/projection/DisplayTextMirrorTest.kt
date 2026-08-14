@@ -274,6 +274,60 @@ class DisplayTextMirrorTest {
         assertEquals("abZdefghXY", batchMirror.getText())
     }
 
+    /**
+     * #624 评论10 第4项补漏：deleteSurrounding 的 **undo** patch batch（最终文本坐标）。
+     * 旧实现 after delta 的 new_range 用「仅删除 after」时刻的坐标，before 删除后该点
+     * 左移，Android 降序应用时 after patch 插到错误位置，mirror 与 Core 分裂。
+     *
+     * 非紧邻："abYd" + undo patches [after (3,3)→"c", before (2,2)→"X"]
+     * 降序应用 → "abXYcd"（Core undo snapshot）。
+     */
+    @Test
+    fun applyPatches_deleteSurrounding_undo_batch_final_coords() {
+        val mirror = DisplayTextMirror()
+        // undo 前文本 = deleteSurrounding 后的最终文本 "abYd"，revision 5。
+        mirror.loadFromSnapshot("abYd", cursorUtf8 = 2, revision = 5)
+
+        val patches =
+            listOf(
+                // after delta：new_range=point(3)（最终坐标：as_=4 左移 before_deleted_len=1）。
+                DisplayPatch(5, 6, 3, 3, "c", 3, 3),
+                // before delta：new_range=point(2)。
+                DisplayPatch(5, 6, 2, 2, "X", 3, 3),
+            )
+
+        mirror.applyPatches(patches)
+
+        // 降序应用：先 [3,3)→"c" → "abYcd"，再 [2,2)→"X" → "abXYcd"。
+        assertEquals("abXYcd", mirror.getText())
+        assertEquals(6, mirror.getRevision())
+    }
+
+    /**
+     * #624 评论10 第4项补漏：before/after 紧邻时两个 undo patch 退化为同一位置
+     * point(bs)。列表顺序（after 在前）在 Android 稳定降序下保持，先插 "c" 后插
+     * "b" → "abcd"；若顺序颠倒会得 "abdc"。
+     */
+    @Test
+    fun applyPatches_deleteSurrounding_adjacent_undo_same_position_order() {
+        val mirror = DisplayTextMirror()
+        // undo 前文本 = "ad"（"abcd" 删除 before=[1,2) 与 after=[2,3) 之后）。
+        mirror.loadFromSnapshot("ad", cursorUtf8 = 1, revision = 5)
+
+        val patches =
+            listOf(
+                // after delta：new_range=point(2-1)=point(1)。
+                DisplayPatch(5, 6, 1, 1, "c", 1, 1),
+                // before delta：new_range=point(1)。
+                DisplayPatch(5, 6, 1, 1, "b", 1, 1),
+            )
+
+        mirror.applyPatches(patches)
+
+        assertEquals("abcd", mirror.getText())
+        assertEquals(6, mirror.getRevision())
+    }
+
     @Test
     fun applyEditResult_handlesChineseText() {
         val mirror = DisplayTextMirror()

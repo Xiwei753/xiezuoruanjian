@@ -31,8 +31,27 @@ impl EditorKernel {
 
         let old_len_before_undo = self.text.byte_len();
 
-        // 逆序应用 inverse delta：new 文本 → old 文本。
-        for delta in entry.edits.iter().rev() {
+        // #624 评论10 第4项补漏：inverse delta 按 new_range.start 降序应用（先恢复右侧），
+        // 保证左侧 delta 的 new_range（最终文本坐标）在应用时仍然有效。旧实现固定
+        // iter().rev() 隐含「edits 列表按 new_range 升序」——replace-all 满足，但
+        // deleteSurrounding 的 edits 是 [after, before]，rev() 变成升序，before 先恢复
+        // 会把 after 点坐标推偏（顺序应用碰巧对，但 DisplayPatch/OffsetMap 坐标是错的）。
+        // 同起点（before/after 紧邻，均退化为 point(bs)）时按 old_range.start 降序决胜：
+        // after（右侧）先插入，before 后插入，文本顺序才是先 before 后 after。
+        let mut undo_order: Vec<&super::TextEditDelta> = entry.edits.iter().collect();
+        undo_order.sort_by(|a, b| {
+            b.new_range
+                .start()
+                .value()
+                .cmp(&a.new_range.start().value())
+                .then_with(|| {
+                    b.old_range
+                        .start()
+                        .value()
+                        .cmp(&a.old_range.start().value())
+                })
+        });
+        for delta in &undo_order {
             self.text.replace(
                 delta.new_range.start().value()..delta.new_range.end().value(),
                 &delta.deleted_text,
@@ -48,8 +67,9 @@ impl EditorKernel {
         let new_selection = entry.old_selection;
 
         // DisplayPatch 从 inverse delta 生成：undo 前文本（new 坐标）中被替换区域。
-        let mut patches: Vec<DisplayPatch> = entry
-            .edits
+        // 列表顺序 = undo_order（new_range 降序）— Android 稳定降序排序后同一批顺序，
+        // 紧邻同起点时 after（右侧）先应用，与顺序应用语义一致。
+        let patches: Vec<DisplayPatch> = undo_order
             .iter()
             .map(|d| DisplayPatch {
                 base_revision,
@@ -59,7 +79,6 @@ impl EditorKernel {
                 resulting_selection_byte_range: new_selection,
             })
             .collect();
-        patches.sort_by_key(|p| p.replace_byte_range.start().value());
 
         // OffsetMap：old=undo 前文本 → new=undo 后文本，从 inverse delta 构造。
         let inverse_pairs: Vec<(usize, usize, usize, usize)> = entry
