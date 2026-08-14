@@ -311,7 +311,6 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/presentation/EditorViewModelChapterSwitchTest.kt"
       - "**/kotlin/com/xiwei/sujian/app/ErrorUtil.kt"
       - "**/kotlin/com/xiwei/sujian/app/ErrorUtilTest.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/editor/ui/SyncMergeEmitDedupTest.kt"
       - "**/kotlin/com/xiwei/sujian/app/theme/ThemePaletteHelperTest.kt"
       # --- UI状态/设置/工作台 ---
       - "**/kotlin/com/xiwei/sujian/app/SujianAppState.kt"
