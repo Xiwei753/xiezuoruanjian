@@ -42,7 +42,7 @@ import kotlinx.coroutines.flow.update
  * #595 二：正文版本使用 [DocumentVersion]（Repository/Core 锚点），
  * 不再使用进程内 contentVersion 计数器。
  */
-class EditorSessionCoordinator(
+open class EditorSessionCoordinator(
     internal val appServiceBridge: AppServiceBridge,
 ) : SessionCommandPort {
     // ── 纯会话状态 ──
@@ -122,16 +122,20 @@ class EditorSessionCoordinator(
         val targetId = s.activeTargetId ?: return null
         val sessionId = s.sessionId ?: return null
         val record = store.record(targetId) ?: return null
-        // #624 评论9：EditorSessionState.text 已删除 — 正文从 Core snapshot 取（冷路径）。
-        // snapshot == null 时 text="" 保留 lease（避免 save 完全失败），save 路径会处理空。
+        // #624 评论10 第1项：只有拿到与当前 session revision 一致的权威 snapshot
+        // 才返回 lease。snapshot 失败/错版不得伪造空正文 — 返回 null，调用方
+        // 保持 Unsaved 状态，绝不误触发 Clear 或用空正文覆盖磁盘。
         val snapshot = querySnapshotForSession(sessionId)
+        if (snapshot == null || snapshot.revision != s.revision) {
+            return null
+        }
         return DocumentOperationLease(
             operationId = operationIdCounter.incrementAndGet(),
             targetId = targetId,
             coreSessionId = sessionId,
             inputEpoch = inputLeaseEpoch,
             rustRevision = s.revision,
-            text = snapshot?.text ?: "",
+            text = snapshot.text,
             committedVersion = record.documentState.committedVersion,
         )
     }
@@ -449,7 +453,7 @@ class EditorSessionCoordinator(
      * #595 五：返回 reset 后的真实 snapshot 供 [resetPersistentSession] 上报。
      * 按 sessionId 直接读取真实 snapshot（不依赖持久注册）。
      */
-    internal fun querySnapshotForSession(sessionId: ULong): TargetSnapshot? {
+    internal open fun querySnapshotForSession(sessionId: ULong): TargetSnapshot? {
         if (!validateSession(sessionId)) return null
         return when (val result = appServiceBridge.textEditSessionSnapshot(sessionId)) {
             is BridgeResult.Success -> {

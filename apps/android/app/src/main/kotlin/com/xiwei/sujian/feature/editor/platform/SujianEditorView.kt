@@ -213,6 +213,9 @@ class SujianEditorView
                                 transactionId = output.result.transactionId,
                                 operationKind = output.result.visualIntent.operationKind.toEditorOperationKind(),
                                 source = source,
+                                // #624 评论10 第5项：cause 从 Core VisualIntent.cause 真值填入 —
+                                // 统计层按此明确分类，不再靠 source/operationKind 猜。
+                                cause = output.result.visualIntent.cause,
                                 contentChanged = contentChanged,
                                 contentDelta = contentDelta,
                                 selectionAnchorUtf8 = pipeline.getSelectionStartUtf8(),
@@ -260,6 +263,9 @@ class SujianEditorView
                         transactionId = 0L,
                         operationKind = EditorOperationKind.REPLACE,
                         source = EditorEditSource.NORMAL,
+                        // #624 评论10 第5项：reloadFromKernel 是冷路径整章重装 —
+                        // cause=Load 表示非人工输入（统计层映射为 programmatic）。
+                        cause = EditorTransactionCauseDto.LOAD,
                         contentChanged = true,
                         contentDelta =
                             EditorContentDelta(

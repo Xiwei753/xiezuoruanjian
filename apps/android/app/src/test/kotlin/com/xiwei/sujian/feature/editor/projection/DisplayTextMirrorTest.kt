@@ -10,6 +10,7 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
+@Suppress("LargeClass")
 class DisplayTextMirrorTest {
     @Test
     fun loadText_setsInitialContent() {
@@ -157,13 +158,120 @@ class DisplayTextMirrorTest {
         val mirror = DisplayTextMirror()
         mirror.loadText("ab", 2)
 
+        // 真正的 stale：patch.baseRevision (5) != mirror.currentRevision (0)。
+        // 进入 batch 时只校验一次 base revision，不匹配即抛 revision discontinuity。
+        // （旧实现用两个共享 revision 的 patch 借第二个 patch 触发 discontinuity，
+        // 但在原子 batch 协议下那是合法 batch——故改为真正 base 不匹配。）
         val patches =
             listOf(
-                DisplayPatch(0, 1, 2, 2, "c", 3, 3),
-                DisplayPatch(0, 1, 2, 2, "d", 3, 3),
+                DisplayPatch(5, 6, 2, 2, "c", 3, 3),
             )
 
         mirror.applyPatches(patches)
+    }
+
+    // ── Issue #624 评论 #10 第 3 项：原子 patch batch ──
+    // 一个 EditorEditResult 是一个原子 batch：所有 patch 共享同一组 base→new revision，
+    // batch 内 patch range 都使用 base 文档坐标（编辑前文本）。进入 batch 只校验一次
+    // base revision，按 replaceByteStart 降序应用（右侧修改不改变左侧旧坐标），
+    // 全部完成后只更新一次 currentRevision，不给 patch 人造中间 revision。
+
+    /**
+     * 原子 batch：两个 patch 共享 baseRevision=5→newRevision=6，降序应用。
+     * 旧实现逐个校验 baseRevision，第二个 patch 会用旧 baseRevision 校验触发
+     * revision discontinuity 异常。修复后应正常应用且 currentRevision==6。
+     */
+    @Test
+    fun applyPatches_atomic_batch_shared_revision() {
+        val mirror = DisplayTextMirror()
+        // base 文本 "0123456789"（10 字节），currentRevision=5。
+        mirror.loadFromSnapshot("0123456789", cursorUtf8 = 10, revision = 5)
+
+        // 两个 patch 共享 baseRevision=5, newRevision=6（原子 batch）。
+        // patch range 都用 base 文档坐标：
+        //   patch A: [8,10)→"X"（替换 "89"）
+        //   patch B: [3,4)→"Y"（替换 "3"）
+        // 降序应用：先 A ([8,10)→"X") 再 B ([3,4)→"Y")。
+        // 结果：base "0123456789" → A 后 "01234567X" → B 后 "012Y4567X"
+        val patches =
+            listOf(
+                // patch B（replaceByteStart=3，降序后排第二）
+                DisplayPatch(
+                    baseRevision = 5,
+                    newRevision = 6,
+                    replaceByteStart = 3,
+                    replaceByteEndExclusive = 4,
+                    insertedText = "Y",
+                    resultingSelectionStart = 4,
+                    resultingSelectionEnd = 4,
+                ),
+                // patch A（replaceByteStart=8，降序后排第一）
+                DisplayPatch(
+                    baseRevision = 5,
+                    newRevision = 6,
+                    replaceByteStart = 8,
+                    replaceByteEndExclusive = 10,
+                    insertedText = "X",
+                    resultingSelectionStart = 9,
+                    resultingSelectionEnd = 9,
+                ),
+            )
+
+        mirror.applyPatches(patches)
+
+        // 降序局部应用：先 [8,10)→"X" 得 "01234567X"，再 [3,4)→"Y" 得 "012Y4567X"。
+        assertEquals("012Y4567X", mirror.getText())
+        // 整个 batch 完成后 currentRevision 一次更新为 6（不人造中间 revision）。
+        assertEquals(6, mirror.getRevision())
+    }
+
+    /**
+     * batch 进入时只校验一次 base revision：first patch 的 baseRevision 不匹配
+     * currentRevision 即抛 revision discontinuity，不应用任何 patch。
+     */
+    @Test(expected = IllegalStateException::class)
+    fun applyPatches_batch_validates_base_revision_once() {
+        val mirror = DisplayTextMirror()
+        mirror.loadFromSnapshot("0123456789", cursorUtf8 = 10, revision = 5)
+
+        // batch 的 first patch baseRevision=7 != currentRevision=5 → 抛异常。
+        val patches =
+            listOf(
+                DisplayPatch(7, 8, 8, 10, "X", 9, 9),
+                DisplayPatch(7, 8, 3, 4, "Y", 4, 4),
+            )
+
+        mirror.applyPatches(patches)
+    }
+
+    /**
+     * batch 内 patch 降序应用后 buffer 与逐个独立应用的一致性：相同 base 坐标的多个
+     * 不重叠 replace，降序 batch 一次应用的结果应等于逐个独立应用的结果。
+     */
+    @Test
+    fun applyPatches_batch_descending_equals_sequential_independent() {
+        // 场景：base "abcdefghij"（10 字节），两个不重叠 replace：
+        //   [8,10)→"XY"（替换 "ij"）
+        //   [2,3)→"Z"（替换 "c"）
+        // 降序 batch：先 [8,10)→"XY" 再 [2,3)→"Z" → "abZdefghXY"
+        // 逐个独立：先 [8,10)→"XY"（rev 0→1）得 "abcdefghXY"，
+        //   再 [2,3)→"Z"（rev 1→2）得 "abZdefghXY"。两者一致。
+        val batchMirror = DisplayTextMirror()
+        batchMirror.loadFromSnapshot("abcdefghij", cursorUtf8 = 10, revision = 0)
+        val batchPatches =
+            listOf(
+                DisplayPatch(0, 1, 2, 3, "Z", 3, 3),
+                DisplayPatch(0, 1, 8, 10, "XY", 10, 10),
+            )
+        batchMirror.applyPatches(batchPatches)
+
+        val sequentialMirror = DisplayTextMirror()
+        sequentialMirror.loadFromSnapshot("abcdefghij", cursorUtf8 = 10, revision = 0)
+        sequentialMirror.applyPatches(listOf(DisplayPatch(0, 1, 8, 10, "XY", 10, 10)))
+        sequentialMirror.applyPatches(listOf(DisplayPatch(1, 2, 2, 3, "Z", 3, 3)))
+
+        assertEquals(sequentialMirror.getText(), batchMirror.getText())
+        assertEquals("abZdefghXY", batchMirror.getText())
     }
 
     @Test

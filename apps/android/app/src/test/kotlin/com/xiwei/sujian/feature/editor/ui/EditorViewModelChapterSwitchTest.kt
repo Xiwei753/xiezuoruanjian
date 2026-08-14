@@ -7,6 +7,11 @@ import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
 import com.xiwei.sujian.feature.editor.session.EditorContentDelta
 import com.xiwei.sujian.feature.editor.session.EditorOperationKind
+import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
+import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
+import com.xiwei.sujian.feature.editor.session.TargetSnapshot
+import com.xiwei.sujian.feature.editor.session.TextEditorProfile
+import com.xiwei.sujian.feature.editor.session.commitPreparedSession
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
@@ -64,21 +69,67 @@ class EditorViewModelChapterSwitchTest {
     @get:Rule
     val mainDispatcherRule = MainDispatcherRule()
 
+    // #624 评论10 第2项：fake coordinator 注入可控 snapshot
+    private class FakeSessionCoordinator(bridge: AppServiceBridge) : EditorSessionCoordinator(bridge) {
+        private val snapshots = mutableMapOf<ULong, TargetSnapshot>()
+
+        fun installSnapshot(
+            sessionId: ULong,
+            text: String,
+            revision: Long,
+        ) {
+            val cursor = text.toByteArray(Charsets.UTF_8).size
+            snapshots[sessionId] = TargetSnapshot(text, cursor, revision, 0, cursor)
+        }
+
+        internal override fun querySnapshotForSession(sessionId: ULong): TargetSnapshot? = snapshots[sessionId]
+    }
+
+    private lateinit var fakeCoordinator: FakeSessionCoordinator
+
     private fun createVm(): EditorViewModel {
         val app = RuntimeEnvironment.getApplication()
-        // 无 native 库时所有桥接调用返回 NotLoaded，不会抛 UnsatisfiedLinkError。
         val bridge =
             AppServiceBridge(WriterAppServiceHolder("/tmp/sujian_test_workspace_595", "/tmp/sujian_test_workspace_595"))
+        fakeCoordinator = FakeSessionCoordinator(bridge)
         val repo = ProjectRepository(app, bridge)
         val vm = EditorViewModel(app)
         vm.initialize(
             repo,
             SettingsRepository(app, bridge),
+            sessionCoordinator = fakeCoordinator,
             chapterRepo = ChapterRepository(app, bridge),
             recentEditsRepo = RecentEditsRepository(app, bridge),
             statsRepo = WritingStatsRepository(bridge.statsBridge),
         )
         return vm
+    }
+
+    @Suppress("LongParameterList")
+    private fun commitActiveSession(
+        vm: EditorViewModel,
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        text: String,
+        revision: Long = 1L,
+        sessionId: ULong = 1UL,
+    ) {
+        val targetId = vm.chapterTargetId(projectId, volumeId, chapterId)
+        fakeCoordinator.registerTargetMeta(targetId, TextEditorProfile.DocumentBody, persistent = true)
+        val cursor = text.toByteArray(Charsets.UTF_8).size
+        assertTrue(
+            fakeCoordinator.commitPreparedSession(
+                PreparedSessionHandle(
+                    targetId = targetId,
+                    sessionId = sessionId,
+                    snapshot = TargetSnapshot(text, cursor, revision, 0, cursor),
+                    newlyCreated = true,
+                    previousRecord = null,
+                ),
+            ),
+        )
+        fakeCoordinator.installSnapshot(sessionId, text, revision)
     }
 
     @Test
@@ -126,6 +177,7 @@ class EditorViewModelChapterSwitchTest {
         runTest {
             val vm = createVm()
             vm.initChapter("p", "v", "a", "A")
+            commitActiveSession(vm, "p", "v", "a", "")
 
             // 内容为空 → 保存跳过 → 同步部分（loading=true、建新 session、启动加载）直接完成，
             // 然后挂起在真实 IO 加载上。加载完成前 loading 必须已置 true —
@@ -143,6 +195,7 @@ class EditorViewModelChapterSwitchTest {
         runTest {
             val vm = createVm()
             vm.initChapter("p", "v", "a", "A")
+            commitActiveSession(vm, "p", "v", "a", "")
 
             // 切换到 B：旧章节内容为空 → 跳过保存 → 新 session=B → 加载 B 失败
             val result = vm.switchChapter("p", "v", "b", "B")
@@ -210,6 +263,7 @@ class EditorViewModelChapterSwitchTest {
             // 测试环境无编辑器 — 显式确认附着以解除冻结，模拟真实附着。
             vm.confirmEditorAttached(vm.chapterTargetId("p", "v", "a"))
             vm._uiState.value = vm._uiState.value.copy(content = "正文A")
+            commitActiveSession(vm, "p", "v", "a", "正文A")
 
             // #597：可控保存端口 — 保存 A 时挂起，为取消制造确定性挂起点
             // （loadChapter 的 withContext(IO) 在无 native 时几乎立即返回，
@@ -271,6 +325,7 @@ class EditorViewModelChapterSwitchTest {
                     transactionId = 1L,
                     operationKind = EditorOperationKind.INSERT,
                     source = EditorEditSource.NORMAL,
+                    cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
                     contentChanged = true,
                     contentDelta = EditorContentDelta(insertedChars = 3),
                 ),
@@ -287,6 +342,7 @@ class EditorViewModelChapterSwitchTest {
         runTest {
             val vm = createVm()
             vm.initChapter("p", "v", "a", "A")
+            commitActiveSession(vm, "p", "v", "a", "")
             // 等 initChapter 的加载落定（无 native 时必失败 → loading=false）。
             var attempts = 0
             while (vm.uiState.value.loading && attempts < 200) {
@@ -315,6 +371,7 @@ class EditorViewModelChapterSwitchTest {
         runTest {
             val vm = createVm()
             vm.initChapter("p", "v", "a", "A")
+            commitActiveSession(vm, "p", "v", "a", "")
 
             // #595 一：并发点击多个章节 — 请求经 ChapterSwitchGate 串行执行，
             // 不得死锁；失败环境下最终状态必须回到旧章节。
@@ -370,6 +427,7 @@ class EditorViewModelChapterSwitchTest {
                 }
             vm._uiState.value = vm._uiState.value.copy(content = whitespaceBody)
             vm.initChapter("p", "v", "a", "A")
+            commitActiveSession(vm, "p", "v", "a", whitespaceBody)
 
             // 切换到 B：旧章节保存必须真实尝试（无 native → 新章节加载失败
             // 返回 LoadFailed），但保存端口必须收到原始空白正文。

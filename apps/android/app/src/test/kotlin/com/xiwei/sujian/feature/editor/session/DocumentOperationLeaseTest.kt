@@ -1,8 +1,6 @@
 package com.xiwei.sujian.feature.editor.session
 
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -69,114 +67,90 @@ class DocumentOperationLeaseTest {
         assertNull("未绑定/无活动目标时必须返回 null", coordinator.issueDocumentOperationLease())
     }
 
+    /**
+     * #624 评论10 第1项：snapshot 缺失（无 native）时 issueDocumentOperationLease
+     * 必须返回 null — 不伪造空正文 lease。这是数据安全核心守卫。
+     */
     @Test
-    fun issueLease_returnsCompleteSnapshotFromSingleRecord() {
-        // lease 的 target/session/epoch/revision/text/committedVersion 必须全部来自
-        // 同一活动记录 — 不再由调用方拼接 currentSession + sessionState 两个独立源。
+    fun issueLease_returnsNullWhenSnapshotMissing() {
         val coordinator = createCoordinator()
         assertTrue(commitWithSession(coordinator, "a", "hello", sessionId = 1UL, revision = 1L))
-        val lease = coordinator.issueDocumentOperationLease()
-        assertNotNull("活动 target 必须签发 lease", lease)
-        val l = lease!!
-        assertEquals("a", l.targetId)
-        assertEquals("lease.coreSessionId 必须来自活动记录的 sessionId", 1UL, l.coreSessionId)
-        assertEquals("lease.rustRevision 必须来自活动记录的 revision", 1L, l.rustRevision)
-        // #624 评论9：lease.text 从 Core snapshot 取（冷路径 querySnapshotForSession）。
-        // 本测试无真实 Rust session → snapshot 为 null 时按契约 text=""（save 路径自行处理空）。
-        // committedVersion 来自 store 记录（commitPreparedSession 保留 doc.committedVersion）。
-        val record = coordinator.getPersistentSessionId("a")
-        assertEquals("store 记录的 sessionId 必须与 lease 一致", 1UL, record)
+        // 测试环境无 native → querySnapshotForSession 返回 null → lease 必须为 null。
+        assertNull(
+            "snapshot 缺失时必须返回 null，不伪造空正文 lease",
+            coordinator.issueDocumentOperationLease(),
+        )
     }
+
+    /**
+     * #624 评论10 第1项：snapshot 缺失时连续调用都返回 null —
+     * 不会因为 session 存在就放宽守卫。
+     */
+    @Test
+    fun issueLease_alwaysNullWhenSnapshotMissing() {
+        val coordinator = createCoordinator()
+        assertTrue(commitWithSession(coordinator, "a", "text", sessionId = 1UL))
+        assertNull(coordinator.issueDocumentOperationLease())
+        assertNull(coordinator.issueDocumentOperationLease())
+    }
+
+    // ── isDocumentOperationLeaseCurrent：手动构造 lease 测试（不依赖 snapshot） ──
 
     @Test
     fun isLeaseCurrent_trueWhenMatching() {
         val coordinator = createCoordinator()
         assertTrue(commitWithSession(coordinator, "a", "text", sessionId = 2UL))
-        val lease = coordinator.issueDocumentOperationLease()
-        assertNotNull(lease)
-        assertTrue("刚签发的 lease 必须有效", coordinator.isDocumentOperationLeaseCurrent(lease!!))
+        // 手动构造 lease（不经过 issueDocumentOperationLease，避免 snapshot 依赖）。
+        // epoch 从 currentInputLease 取 — commitPreparedSession 递增 inputLeaseEpoch。
+        val epoch = coordinator.currentInputLease()!!.epoch
+        val lease =
+            DocumentOperationLease(
+                operationId = 1L,
+                targetId = "a",
+                coreSessionId = 2UL,
+                inputEpoch = epoch,
+                rustRevision = 1L,
+                text = "text",
+                committedVersion = DocumentVersion(),
+            )
+        assertTrue("匹配 target/session/epoch 的 lease 必须有效", coordinator.isDocumentOperationLeaseCurrent(lease))
     }
 
     @Test
     fun isLeaseCurrent_falseAfterInvalidate() {
         val coordinator = createCoordinator()
         assertTrue(commitWithSession(coordinator, "a", "text", sessionId = 1UL))
-        val lease = coordinator.issueDocumentOperationLease()
-        assertNotNull(lease)
+        val epoch = coordinator.currentInputLease()!!.epoch
+        val lease =
+            DocumentOperationLease(
+                operationId = 1L,
+                targetId = "a",
+                coreSessionId = 1UL,
+                inputEpoch = epoch,
+                rustRevision = 1L,
+                text = "text",
+                committedVersion = DocumentVersion(),
+            )
         coordinator.invalidateInputLease()
-        assertFalse("invalidateInputLease 后旧 lease 必须失效", coordinator.isDocumentOperationLeaseCurrent(lease!!))
+        assertFalse("invalidateInputLease 后旧 lease 必须失效", coordinator.isDocumentOperationLeaseCurrent(lease))
     }
 
     @Test
     fun isLeaseCurrent_falseForDifferentTarget() {
         val coordinator = createCoordinator()
         assertTrue(commitWithSession(coordinator, "a", "text-a", sessionId = 1UL))
-        val leaseA = coordinator.issueDocumentOperationLease()
-        assertNotNull(leaseA)
-        assertTrue(commitWithSession(coordinator, "b", "text-b", sessionId = 2UL))
-        assertFalse("切换到 B 后 A 的 lease 必须失效", coordinator.isDocumentOperationLeaseCurrent(leaseA!!))
-    }
-
-    @Test
-    fun leaseOperationIdMonotonic() {
-        val coordinator = createCoordinator()
-        assertTrue(commitWithSession(coordinator, "a", "text", sessionId = 1UL))
-        val lease1 = coordinator.issueDocumentOperationLease()
-        assertNotNull(lease1)
-        val lease2 = coordinator.issueDocumentOperationLease()
-        assertNotNull(lease2)
-        assertTrue("每次签发 operationId 必须递增", lease2!!.operationId > lease1!!.operationId)
-    }
-
-    @Test
-    fun leaseCarriesDistinctSessionIdsForDifferentTargets() {
-        // 两个 target 各自提交可控的非零 session ID，lease 必须携带各自的 ID，
-        // 不互相串扰（旧实现拼接 currentSession + sessionState 会交错）。
-        val coordinator = createCoordinator()
-        assertTrue(commitWithSession(coordinator, "a", "text-a", sessionId = 1UL))
-        val leaseA = coordinator.issueDocumentOperationLease()!!
-        assertEquals(1UL, leaseA.coreSessionId)
-
-        assertTrue(commitWithSession(coordinator, "b", "text-b", sessionId = 2UL))
-        val leaseB = coordinator.issueDocumentOperationLease()!!
-        assertEquals(2UL, leaseB.coreSessionId)
-        assertEquals("b", leaseB.targetId)
-
-        // 切到 B 后 A 的 lease 失效（target/session 不再匹配活动记录）。
-        assertFalse(coordinator.isDocumentOperationLeaseCurrent(leaseA))
-        assertTrue(coordinator.isDocumentOperationLeaseCurrent(leaseB))
-    }
-
-    @Test
-    fun leaseRejectedAfterLocalEditAdvancesRevision() {
-        // 保存期间用户继续输入 → revision 前进 → 旧 lease 的 rustRevision 不再匹配
-        // 活动记录（调用方据此判断保存回执是否仍属于当前文档）。
-        val coordinator = createCoordinator()
-        assertTrue(commitWithSession(coordinator, "a", "text", sessionId = 1UL, revision = 1L))
-        val leaseAtSave = coordinator.issueDocumentOperationLease()!!
-        assertEquals(1L, leaseAtSave.rustRevision)
-
-        // 用活动 lease 继续输入，revision 前进。
-        val inputLease = coordinator.currentInputLease()!!
-        coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput(
+        val epochA = coordinator.currentInputLease()!!.epoch
+        val leaseA =
+            DocumentOperationLease(
+                operationId = 1L,
                 targetId = "a",
-                operationKind = EditorOperationKind.INSERT,
-                revision = 2L,
-                transactionId = 11L,
-                contentChanged = true,
-                contentDelta = EditorContentDelta(insertedChars = "text edited".length),
-                lease = inputLease,
-            ),
-        )
-        assertEquals(2L, coordinator.sessionState.revision)
-
-        // 旧 lease 的 epoch 仍匹配（未发生章节切换/关闭），但调用方通过比较
-        // lease.rustRevision 与当前 sessionState.revision 检测保存期间是否有新输入。
-        // lease 本身仍 "current"（target/session/epoch 一致），但 revision 已前进 —
-        // 调用方（EditorViewModel.performSave）据此走条件提交路径。
-        val leaseAfterEdit = coordinator.issueDocumentOperationLease()!!
-        assertEquals(2L, leaseAfterEdit.rustRevision)
-        assertTrue(coordinator.isDocumentOperationLeaseCurrent(leaseAfterEdit))
+                coreSessionId = 1UL,
+                inputEpoch = epochA,
+                rustRevision = 1L,
+                text = "text-a",
+                committedVersion = DocumentVersion(),
+            )
+        assertTrue(commitWithSession(coordinator, "b", "text-b", sessionId = 2UL))
+        assertFalse("切换到 B 后 A 的 lease 必须失效", coordinator.isDocumentOperationLeaseCurrent(leaseA))
     }
 }

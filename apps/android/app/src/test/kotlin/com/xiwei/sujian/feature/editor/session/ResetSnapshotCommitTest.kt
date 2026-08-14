@@ -32,8 +32,25 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ResetSnapshotCommitTest {
-    private fun createCoordinator(): EditorSessionCoordinator {
-        return EditorSessionCoordinator(
+    // #624 评论10 第1项：fake coordinator 注入可控 snapshot
+    private class FakeSessionCoordinator(bridge: com.xiwei.sujian.core.interop.app.AppServiceBridge) :
+        EditorSessionCoordinator(bridge) {
+        private val snapshots = mutableMapOf<ULong, TargetSnapshot>()
+
+        fun installSnapshot(
+            sessionId: ULong,
+            text: String,
+            revision: Long,
+        ) {
+            val cursor = text.toByteArray(Charsets.UTF_8).size
+            snapshots[sessionId] = TargetSnapshot(text, cursor, revision, 0, cursor)
+        }
+
+        internal override fun querySnapshotForSession(sessionId: ULong): TargetSnapshot? = snapshots[sessionId]
+    }
+
+    private fun createCoordinator(): FakeSessionCoordinator {
+        return FakeSessionCoordinator(
             com.xiwei.sujian.core.interop.app.AppServiceBridge(
                 com.xiwei.sujian.core.interop.app.WriterAppServiceHolder(
                     "/tmp/sujian_test_workspace_595_reset_commit",
@@ -47,7 +64,7 @@ class ResetSnapshotCommitTest {
 
     /** 提交一个携带可控非零 sessionId 的 prepared handle，建立活动 session。 */
     private fun commitSession(
-        coordinator: EditorSessionCoordinator,
+        coordinator: FakeSessionCoordinator,
         targetId: String,
         text: String,
         sessionId: ULong,
@@ -55,15 +72,18 @@ class ResetSnapshotCommitTest {
     ): Boolean {
         coordinator.registerTargetMeta(targetId, TextEditorProfile.DocumentBody, persistent = true)
         val cursor = text.toByteArray(Charsets.UTF_8).size
-        return coordinator.commitPreparedSession(
-            PreparedSessionHandle(
-                targetId = targetId,
-                sessionId = sessionId,
-                snapshot = TargetSnapshot(text, cursor, revision, 0, cursor),
-                newlyCreated = true,
-                previousRecord = null,
-            ),
-        )
+        val ok =
+            coordinator.commitPreparedSession(
+                PreparedSessionHandle(
+                    targetId = targetId,
+                    sessionId = sessionId,
+                    snapshot = TargetSnapshot(text, cursor, revision, 0, cursor),
+                    newlyCreated = true,
+                    previousRecord = null,
+                ),
+            )
+        if (ok) coordinator.installSnapshot(sessionId, text, revision)
+        return ok
     }
 
     // ── #595 一：reset 不构造兜底 revision=0 snapshot ──

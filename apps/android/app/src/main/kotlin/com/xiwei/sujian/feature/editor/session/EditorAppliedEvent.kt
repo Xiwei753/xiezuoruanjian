@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.editor.session
 import androidx.compose.runtime.Immutable
 import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import uniffi.writer_core.EditorContentDeltaDto
+import uniffi.writer_core.EditorTransactionCauseDto
 
 /**
  * #624 评论9：轻量编辑应用事件 — 热路径（IME/Key → Core EditResult → Android Spannable 局部 patch）
@@ -14,6 +15,8 @@ import uniffi.writer_core.EditorContentDeltaDto
  * - [revision]/[transactionId]：来自 Rust EditResult；
  * - [operationKind]：来自 VisualIntent 映射；
  * - [source]：编辑来源（NORMAL/UNDO/REDO/PROGRAMMATIC）；
+ * - [cause]：#624 评论10 第5项 — Core VisualIntent.cause 真值（Typing/Paste/Delete/
+ *   Undo/Redo/Programmatic/...），统计层按此明确分类，不再靠 source/operationKind 猜；
  * - [contentChanged]：本次是否真改了正文（displayPatches 非空）；
  * - [contentDelta]：增量字符统计（不依赖整章 String）；
  * - [selectionAnchorUtf8]/[selectionHeadUtf8]：编辑后真实选区（UTF-8 字节），
@@ -25,6 +28,7 @@ data class EditorAppliedEvent(
     val transactionId: Long,
     val operationKind: EditorOperationKind,
     val source: EditorEditSource,
+    val cause: EditorTransactionCauseDto,
     val contentChanged: Boolean,
     val contentDelta: EditorContentDelta,
     val selectionAnchorUtf8: Int = -1,
@@ -67,3 +71,33 @@ fun EditorContentDeltaDto.toSessionDelta(): EditorContentDelta =
         insertedNonWhitespaceChars = insertedNonWhitespaceChars.toInt(),
         deletedNonWhitespaceChars = deletedNonWhitespaceChars.toInt(),
     )
+
+// #624 评论10 第5项：统计 source 字符串常量。
+private const val STATS_SOURCE_TYPING = "typing"
+private const val STATS_SOURCE_PASTED = "pasted"
+private const val STATS_SOURCE_DELETED = "deleted"
+private const val STATS_SOURCE_UNDO = "undo"
+private const val STATS_SOURCE_REDO = "redo"
+private const val STATS_SOURCE_PROGRAMMATIC = "programmatic"
+
+/**
+ * #624 评论10 第5项：把 Core [EditorTransactionCauseDto] 映射为统计 source 字符串。
+ */
+fun writingEventSourceFrom(cause: EditorTransactionCauseDto): String =
+    when (cause) {
+        EditorTransactionCauseDto.TYPING,
+        EditorTransactionCauseDto.TYPING_COMMIT,
+        EditorTransactionCauseDto.IME_COMPOSITION,
+        -> STATS_SOURCE_TYPING
+        EditorTransactionCauseDto.PASTE -> STATS_SOURCE_PASTED
+        EditorTransactionCauseDto.DELETE -> STATS_SOURCE_DELETED
+        EditorTransactionCauseDto.UNDO -> STATS_SOURCE_UNDO
+        EditorTransactionCauseDto.REDO -> STATS_SOURCE_REDO
+        EditorTransactionCauseDto.PROGRAMMATIC,
+        EditorTransactionCauseDto.LOAD,
+        EditorTransactionCauseDto.FORMAT,
+        -> STATS_SOURCE_PROGRAMMATIC
+    }
+
+/** #624 评论10 第5项：判断 cause 是否为粘贴操作。 */
+fun isPasteCause(cause: EditorTransactionCauseDto): Boolean = cause == EditorTransactionCauseDto.PASTE

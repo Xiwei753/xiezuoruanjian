@@ -161,6 +161,7 @@ class EditorViewModelInjectionTest {
                 transactionId = 1L,
                 operationKind = EditorOperationKind.INSERT,
                 source = EditorEditSource.NORMAL,
+                cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
                 contentChanged = true,
                 contentDelta = EditorContentDelta(insertedChars = 11),
             ),

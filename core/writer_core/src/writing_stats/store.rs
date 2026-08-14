@@ -683,8 +683,9 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    fn create_mock_store() -> StatsStore {
-        StatsStore::new(Path::new("/tmp/mock_projects_root"))
+    fn create_mock_store() -> (StatsStore, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir for mock store");
+        (StatsStore::new(tmp.path()), tmp)
     }
 
     fn create_mock_event() -> WritingInputEvent {
@@ -707,7 +708,7 @@ mod tests {
 
     #[test]
     fn test_merge_daily_stats_success() {
-        let store = create_mock_store();
+        let (store, _tmp) = create_mock_store();
 
         let mut existing = DailyStats {
             date: "2023-10-26".to_string(),
@@ -821,7 +822,7 @@ mod tests {
 
     #[test]
     fn test_merge_daily_stats_different_date() {
-        let store = create_mock_store();
+        let (store, _tmp) = create_mock_store();
 
         let mut existing = DailyStats::default();
         existing.date = "2023-10-26".to_string();
@@ -844,7 +845,7 @@ mod tests {
 
     #[test]
     fn test_merge_daily_stats_different_device() {
-        let store = create_mock_store();
+        let (store, _tmp) = create_mock_store();
 
         let mut existing = DailyStats::default();
         existing.date = "2023-10-26".to_string();
@@ -1079,13 +1080,13 @@ mod tests {
 
     #[test]
     fn test_flush_events_empty() {
-        let store = create_mock_store();
+        let (store, _tmp) = create_mock_store();
         assert!(store.flush_events().is_ok());
     }
 
     #[test]
     fn test_record_event_buffers_without_flushing() {
-        let store = create_mock_store();
+        let (store, _tmp) = create_mock_store();
 
         // Set last_flush to now so debounce doesn't trigger
         {
@@ -1102,7 +1103,7 @@ mod tests {
 
     #[test]
     fn test_record_event_flushes_on_debounce_time() {
-        let store = create_mock_store();
+        let (store, _tmp) = create_mock_store();
 
         // Set last_flush far in the past to trigger time-based flush
         {
@@ -1120,7 +1121,7 @@ mod tests {
 
     #[test]
     fn test_record_event_flushes_on_max_buffer_size() {
-        let store = create_mock_store();
+        let (store, _tmp) = create_mock_store();
 
         // Set last_flush to now so debounce doesn't trigger early
         {

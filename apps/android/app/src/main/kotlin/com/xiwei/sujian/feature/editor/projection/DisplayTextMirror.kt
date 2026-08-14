@@ -481,27 +481,53 @@ class DisplayTextMirror {
     }
 
     /**
-     * Apply a sequence of display patches from the Rust kernel.
+     * Apply a sequence of display patches from the Rust kernel as one atomic batch.
      *
-     * Revision continuity invariant: each patch's [baseRevision] must equal the mirror's
-     * current [currentRevision]. A mismatch means patches were generated against an
-     * outdated revision and the mirror must be reloaded from the kernel snapshot instead.
+     * #624 评论 #10 第 3 项 — 原子 patch batch 协议：
+     * 一个 EditorEditResult 是一个原子 batch：所有 patch 共享同一组
+     * base_revision → new_revision（[patches.first().baseRevision] 是整个 batch 的
+     * base 辑界，[patches.first().newRevision] 是整个 batch 的 new 辑界）。batch 内
+     * 所有 patch range 都使用 **base 文档坐标**（编辑前文本）。
      *
-     * After each patch, the UTF-8→UTF-16 index map is rebuilt because the buffer
-     * content has changed — subsequent patches in the same batch must use updated offsets.
+     * 应用顺序：
+     * 1. 空 batch 直接返回。
+     * 2. 进入 batch 时**只校验一次** base revision：[patches.first().baseRevision]
+     *    != [currentRevision] 则抛 revision discontinuity 异常。不逐个 patch 校验
+     *    （否则第二个 patch 会用已被前序 patch 推进的 currentRevision 校验，必然
+     *    触发 discontinuity —— Core 的 Undo/Redo/replace-all/deleteSurrounding 多
+     *    delta patch 共享同一组 base→new revision）。
+     * 3. 对 patch 按 [replaceByteStart] **降序**应用，这样右侧修改不会改变左侧
+     *    旧坐标（patch range 是 base 文档坐标，降序保证左侧 patch 的坐标仍指向
+     *    未被右侧修改影响的区域）。
+     * 4. 每次局部 replace 后增量更新 [textOffsetIndex]（[onBufferReplaced]）和
+     *    [committedTextLengthUtf8] —— 后续 patch 的 utf8ToUtf16 映射基于已更新的
+     *    buffer（局部应用顺序）。
+     * 5. **所有 patch 完成后**只执行一次 [currentRevision = patches.first().newRevision]
+     *    （所有 patch 共享同一 newRevision）。不给 batch 内每个 patch 人造中间 revision。
+     *
+     * selection 更新：本方法不直接更新 selection（selection 由调用方从
+     * EditorEditResult 取，见 [applyEditResult]/[updateSelectionFromResult]）。
+     *
+     * Revision continuity invariant: a base mismatch means patches were generated
+     * against an outdated revision and the mirror must be reloaded from the kernel
+     * snapshot instead.
      */
     fun applyPatches(patches: List<DisplayPatch>) {
         if (patches.isEmpty()) return
 
-        for (patch in patches) {
-            if (patch.baseRevision != currentRevision) {
-                throw IllegalStateException(
-                    "DisplayTextMirror revision discontinuity: expected baseRevision=$currentRevision, " +
-                        "got ${patch.baseRevision}. " +
-                        "Must reload from EditorSession.",
-                )
-            }
+        // 进入 batch 只校验一次 base revision（整个 batch 的版本辑界）。
+        val batchBaseRevision = patches.first().baseRevision
+        if (batchBaseRevision != currentRevision) {
+            throw IllegalStateException(
+                "DisplayTextMirror revision discontinuity: expected baseRevision=$currentRevision, " +
+                    "got $batchBaseRevision. " +
+                    "Must reload from EditorSession.",
+            )
+        }
 
+        // 按 replaceByteStart 降序应用：右侧修改不改变左侧旧坐标（base 文档坐标）。
+        val sortedPatches = patches.sortedByDescending { it.replaceByteStart }
+        for (patch in sortedPatches) {
             val normReplaceStart = minOf(patch.replaceByteStart, patch.replaceByteEndExclusive)
             val normReplaceEnd = maxOf(patch.replaceByteStart, patch.replaceByteEndExclusive)
 
@@ -514,9 +540,10 @@ class DisplayTextMirror {
             committedTextLengthUtf8 += utf8LengthOf(patch.insertedText) - (normReplaceEnd - normReplaceStart)
             // #624 评论4: 增量更新偏移索引 — 只扫描受影响段落，不整章重建。
             textOffsetIndex.onBufferReplaced(replaceStartUtf16, replaceEndUtf16, patch.insertedText, buffer)
-
-            currentRevision = patch.newRevision
         }
+
+        // 整个 batch 完成后只更新一次 currentRevision（所有 patch 共享同一 newRevision）。
+        currentRevision = patches.first().newRevision
     }
 
     fun applyDtoPatches(patches: List<DisplayPatchDto>) {

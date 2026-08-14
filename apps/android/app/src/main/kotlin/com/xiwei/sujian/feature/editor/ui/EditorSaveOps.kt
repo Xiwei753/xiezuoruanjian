@@ -40,32 +40,36 @@ fun EditorViewModel.scheduleAutoSave() {
             val delayMs = _uiState.value.settings.autoSaveDelayMs
             if (!_uiState.value.settings.autoSaveEnabled) return@launch
             delay(delayMs)
-            if (_uiState.value.saveStatus == SaveStatus.Unsaved) {
-                // #624 评论9：正文从 Core snapshot lease 取（冷路径），不再每键存 content。
-                val lease = _sessionCoordinator?.issueDocumentOperationLease()
-                val content = lease?.text ?: ""
-                // #624 评论9：contentExplicitlyCleared 从 lease.text 判定 —
-                // 非空编辑撤销清空意图；空正文 + 之前 dirty 视为显式清空。
-                if (content.isNotEmpty()) {
-                    contentExplicitlyCleared = false
-                } else if (contentDirty) {
-                    contentExplicitlyCleared = true
-                }
-                // #595 七：保存命令携带入队时的 Rust session revision — 回执按
-                // (target, revision) 记录，Flush 屏障据此验证 revision 对应正文已落盘。
-                val revision = lease?.rustRevision ?: _sessionCoordinator?.sessionState?.revision ?: 0L
-                // #624 评论1：正文是否为空只看原始字符串 — "\n"、连续空行、
-                // 只含空格/制表符的段落都是用户正文，不能被 trim 后当成空正文拒绝保存。
-                when {
-                    !contentDirty -> Unit
-                    content.isNotEmpty() ->
-                        saveCommandChannel.trySend(SaveCommand.Save(content, session, revision))
-                    content.isEmpty() && contentExplicitlyCleared ->
-                        saveCommandChannel.trySend(SaveCommand.Clear(session, revision))
-                    else -> Unit // UnexpectedEmptyBuffer：空但未确认清空 — 不发任何保存命令
-                }
-            }
+            if (_uiState.value.saveStatus != SaveStatus.Unsaved) return@launch
+            // #624 评论10 第1项：正文从 Core snapshot lease 取（冷路径）。
+            // lease null（snapshot 缺失/错版）时不回退到 "" — 保持 Unsaved，
+            // 不发任何保存命令，绝不误触发 Clear。
+            val lease = _sessionCoordinator?.issueDocumentOperationLease() ?: return@launch
+            dispatchAutoSaveCommand(lease.text, lease.rustRevision, session)
         }
+}
+
+/** #624 评论10：提取自动保存命令派发以降低 scheduleAutoSave 认知复杂度。 */
+private fun EditorViewModel.dispatchAutoSaveCommand(
+    content: String,
+    revision: Long,
+    session: EditorSession,
+) {
+    // #624 评论9：contentExplicitlyCleared 从 lease.text 判定。
+    if (content.isNotEmpty()) {
+        contentExplicitlyCleared = false
+    } else if (contentDirty) {
+        contentExplicitlyCleared = true
+    }
+    // #624 评论1：正文是否为空只看原始字符串。
+    when {
+        !contentDirty -> Unit
+        content.isNotEmpty() ->
+            saveCommandChannel.trySend(SaveCommand.Save(content, session, revision))
+        content.isEmpty() && contentExplicitlyCleared ->
+            saveCommandChannel.trySend(SaveCommand.Clear(session, revision))
+        else -> Unit
+    }
 }
 
 // #597 保存请求需校验 lease/session/revision 多重前置条件后签发，拆分会破坏 lease 语义 — 待后续重构
@@ -75,8 +79,14 @@ fun EditorViewModel.requestSave(): kotlinx.coroutines.Deferred<Boolean> {
     // #595 二：签发文档操作租约 — 一次性取得完整不可变文档快照，
     // 不再拼接 currentSession + sessionState 两个独立状态源。
     val lease = _sessionCoordinator?.issueDocumentOperationLease()
-    val content = lease?.text ?: _uiState.value.content
-    val requiredRevision = lease?.rustRevision ?: 0L
+    // #624 评论10 第1项：lease null（snapshot 缺失/错版）时不回退到 _uiState.value.content —
+    // UI 冷路径正文不是真值，用它保存会导致数据丢失。返回失败，保持 Unsaved。
+    if (lease == null) {
+        deferred.complete(false)
+        return deferred
+    }
+    val content = lease.text
+    val requiredRevision = lease.rustRevision
     if (!validateSaveLease(session, lease, deferred)) {
         return deferred
     }

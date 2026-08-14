@@ -273,9 +273,24 @@ private suspend fun EditorViewModel.switchSaveOldChapter(
     saveActorJob?.cancel()
     saveCommandChannel.close()
 
-    val content = _uiState.value.content
-    // #595 七：保存旧章节也记录保存回执（revision 在保存时从会话层读取）。
-    val oldRevision = _sessionCoordinator?.sessionState?.revision ?: 0L
+    // #624 评论10 第2项：旧章节保存必须从 Rust session 的真实 snapshot/lease 取
+    // text + revision。评论9 之后本地正常输入不再更新 _uiState.content，
+    // _uiState.content 是"刚打开章节时的旧正文"，用它保存会把刚才输入覆盖回去（数据丢失）。
+    // lease 由 issueDocumentOperationLease 签发：只有活动 target/session 存在且
+    // snapshot 可读且 revision 匹配时才非空（评论10 第1项收紧）。
+    val lease = _sessionCoordinator?.issueDocumentOperationLease()
+    if (lease == null) {
+        // 拿不到真实 snapshot — 中止本次保存/切章，不回退 _uiState.content，
+        // 不伪造空正文保存（否则会把旧章节清空）。
+        _uiState.value = _uiState.value.copy(loading = false, saveStatus = SaveStatus.SaveFailed)
+        saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
+        startSaveActor()
+        inputFrozen = false
+        return ChapterSwitchResult.SaveFailed(oldSession)
+    }
+    val content = lease.text
+    // #595 七：保存旧章节也记录保存回执（revision 从 lease 取，与正文同源）。
+    val oldRevision = lease.rustRevision
     // #624 评论1：空正文判定只看原始字符串 — "\n"、连续空行、只含空格/制表符的
     // 段落都是用户正文，原样保存；只有真正的 "" 且已确认清空才走 Clear，
     // 未编辑过的空正文无需保存。不再用 trim() 把纯空白正文当成空文档跳过。

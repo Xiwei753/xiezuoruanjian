@@ -187,6 +187,7 @@ class EditorSaveFlowTest {
                     transactionId = 11L,
                     operationKind = EditorOperationKind.INSERT,
                     source = EditorEditSource.NORMAL,
+                    cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
                     contentChanged = true,
                     contentDelta = EditorContentDelta(insertedChars = "正文B".length),
                     selectionAnchorUtf8 = 3,

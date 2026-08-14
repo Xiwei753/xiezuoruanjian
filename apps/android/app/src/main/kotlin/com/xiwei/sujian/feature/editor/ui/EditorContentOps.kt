@@ -4,21 +4,27 @@ package com.xiwei.sujian.feature.editor.ui
 // !
 // ! #624 评论9：热路径不传整章 String — onEditorApplied 接轻量 EditorAppliedEvent，
 // ! 保存调度/统计/字数全部增量处理。完整正文只在冷路径（save/snapshot）经 lease.text 取。
+// !
+// ! #624 评论10 第5项：onEditorApplied 状态机门控 — 只有 contentChanged=true 才进
+// ! 持久化状态机（置 Unsaved/dirty/scheduleAutoSave/wordCount/统计）；
+// ! 纯 selection/cursor-only（contentChanged=false）不进持久化状态机。
 
-import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
-import com.xiwei.sujian.feature.editor.session.EditorOperationKind
+import com.xiwei.sujian.feature.editor.session.isPasteCause
+import com.xiwei.sujian.feature.editor.session.writingEventSourceFrom
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * #624 评论9：轻量编辑应用入口 — 替代旧 onContentChanged(newContent: String)。
+ * #624 评论9/10：轻量编辑应用入口 — 替代旧 onContentChanged(newContent: String)。
  *
- * - 不再每键存 content 到 _uiState（content 只在冷路径 load/external-apply 设置）；
- * - contentDirty = true（if event.contentChanged）；
- * - contentExplicitlyCleared 在 save 路径从 lease.text 判定（不在此猜测）；
- * - scheduleAutoSave() 无正文参数（save 时从 lease.text 取）；
- * - 统计：增量 recordWritingEvent + 即时 wordCount += netNonWhitespace + 延迟 speed 刷新。
+ * #624 评论10 第5项：状态机门控 —
+ * - **contentChanged=true**：置 Unsaved、contentDirty=true、scheduleAutoSave()、
+ *   增量 wordCount、记写作统计、scheduleStatsRefresh；
+ * - **contentChanged=false**（纯 selection/cursor-only）：不进持久化状态机 —
+ *   不置 Unsaved、不置 dirty、不 scheduleAutoSave、不改 wordCount、不记统计。
+ *   会话层 selection/revision 由 EditorWindowHost 的 onLocalEdit/onExternalEdit
+ *   回调经 sessionCoordinator.applyLocalEdit 独立更新，不经过此方法。
  */
 fun EditorViewModel.onEditorApplied(event: EditorAppliedEvent) {
     val currentState = _uiState.value
@@ -26,31 +32,33 @@ fun EditorViewModel.onEditorApplied(event: EditorAppliedEvent) {
     if (isLoadingChapter) return
     if (inputFrozen) return
 
+    if (!event.contentChanged) {
+        // #624 评论10 第5项：纯 selection/cursor-only 不进持久化状态机 —
+        // 不置 Unsaved、不置 dirty、不 scheduleAutoSave、不改 wordCount、不记统计。
+        // 会话层 selection 已由 sessionCoordinator.applyLocalEdit 独立更新。
+        return
+    }
+
     // #624 评论9：不再每键存 content — 只更新 saveStatus。
     _uiState.value = currentState.copy(saveStatus = SaveStatus.Unsaved)
-
-    if (event.contentChanged) {
-        contentDirty = true
-        // #624 评论9：contentExplicitlyCleared 不在此判定（需要正文）—
-        // 改由 save 路径（EditorSaveOps）从 lease.text 判定。
-    }
-
+    contentDirty = true
+    // #624 评论9：contentExplicitlyCleared 不在此判定（需要正文）—
+    // 改由 save 路径（EditorSaveOps）从 lease.text 判定。
     scheduleAutoSave()
 
-    if (event.contentChanged) {
-        // #624 评论9：即时增量维护 wordCount — 不再每键全文 calculateWordCount。
-        _uiState.value =
-            _uiState.value.copy(
-                wordCount = (_uiState.value.wordCount + event.contentDelta.netNonWhitespace).coerceAtLeast(0),
-            )
-        recordWritingEventIncremental(event)
-        scheduleStatsRefresh()
-    }
+    // #624 评论9：即时增量维护 wordCount — 不再每键全文 calculateWordCount。
+    _uiState.value =
+        _uiState.value.copy(
+            wordCount = (_uiState.value.wordCount + event.contentDelta.netNonWhitespace).coerceAtLeast(0),
+        )
+    recordWritingEventIncremental(event)
+    scheduleStatsRefresh()
 }
 
 /**
  * #624 评论9：增量写作统计上报 — 不传前后整章 String，只用 contentDelta 增量。
- * source 字符串从 event.operationKind/source 映射（typing/paste/undo/redo/programmatic）。
+ * #624 评论10 第5项：source 字符串从 event.cause 明确映射（typing/pasted/deleted/
+ * undo/redo/programmatic），不再靠 source/operationKind 猜。
  */
 fun EditorViewModel.recordWritingEventIncremental(event: EditorAppliedEvent) {
     val session = currentSession ?: return
@@ -67,15 +75,11 @@ fun EditorViewModel.recordWritingEventIncremental(event: EditorAppliedEvent) {
         }
     statsLastEventMs = nowMs
 
-    // #624 评论9：source 映射 — typing/paste/undo/redo/programmatic/selection。
-    val source = writingEventSourceFrom(event)
-    // paste 检测：PROGRAMMATIC + REPLACE 且 insertedChars > 1 近似为 paste；
-    // 待 Core 在 EditResult 携带 cause 后精确化。
+    // #624 评论10 第5项：source 按 Core cause 明确分类。
+    val source = writingEventSourceFrom(event.cause)
+    // #624 评论10 第5项：paste 检测用 cause==Paste，不再用 PROGRAMMATIC+REPLACE 猜。
     val pastedChars =
-        if (event.operationKind == EditorOperationKind.REPLACE &&
-            event.source == EditorEditSource.PROGRAMMATIC &&
-            event.contentDelta.insertedChars > 1
-        ) {
+        if (isPasteCause(event.cause)) {
             event.contentDelta.insertedChars
         } else {
             0
@@ -96,27 +100,6 @@ fun EditorViewModel.recordWritingEventIncremental(event: EditorAppliedEvent) {
         statsSessionId,
     )
 }
-
-// #624 评论9：统计 source 字符串常量 — 避免 StringLiteralDuplication。
-private const val STATS_SOURCE_TYPING = "typing"
-private const val STATS_SOURCE_SELECTION = "selection"
-private const val STATS_SOURCE_UNDO = "undo"
-private const val STATS_SOURCE_REDO = "redo"
-private const val STATS_SOURCE_PROGRAMMATIC = "programmatic"
-
-/** #624 评论9：把 [EditorAppliedEvent] 映射为统计 source 字符串。 */
-private fun writingEventSourceFrom(event: EditorAppliedEvent): String =
-    when (event.source) {
-        EditorEditSource.UNDO -> STATS_SOURCE_UNDO
-        EditorEditSource.REDO -> STATS_SOURCE_REDO
-        EditorEditSource.PROGRAMMATIC -> STATS_SOURCE_PROGRAMMATIC
-        EditorEditSource.NORMAL ->
-            if (event.operationKind == EditorOperationKind.SELECTION) {
-                STATS_SOURCE_SELECTION
-            } else {
-                STATS_SOURCE_TYPING
-            }
-    }
 
 /**
  * #624 评论9：延迟刷新 speed（可取消 Job）— wordCount 已即时增量维护，
