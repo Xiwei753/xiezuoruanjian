@@ -55,6 +55,12 @@ class DefaultAppServiceContainer(context: Context) : AppServiceContainer {
     private val appContext = context.applicationContext
     override val appServiceBridge: AppServiceBridge = AppServiceProvider.getAppServiceBridge(appContext)
 
+    // #624 评论11 第3项：stats writer actor 的进程级 scope（SupervisorJob + Dispatchers.IO）—
+    // 与 WritingStatsRepository 同生命周期；不放进 EditorViewModel，否则 Activity/ViewModel
+    // 重建会切断统计写队列。
+    private val statsWriterScope: kotlinx.coroutines.CoroutineScope =
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+
     // #618 一：桥创建后立即解析静态页面契约（resolver 在 DI 层提供 Bridge 调用，
     // presentation 层不直接依赖 Bridge），之后 Compose 只查 Map，
     // 不再在页面组合过程中临时跨 UniFFI 取契约。
@@ -70,7 +76,8 @@ class DefaultAppServiceContainer(context: Context) : AppServiceContainer {
     override val projectRepository: ProjectRepository = ProjectRepository(appContext, appServiceBridge)
     override val chapterRepository: ChapterRepository = ChapterRepository(appContext, appServiceBridge)
     override val recentEditsRepository: RecentEditsRepository = RecentEditsRepository(appContext, appServiceBridge)
-    override val statsRepository: WritingStatsRepository = WritingStatsRepository(appServiceBridge.statsBridge)
+    override val statsRepository: WritingStatsRepository =
+        WritingStatsRepository(appServiceBridge.statsBridge, statsWriterScope)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge)
     override val themeRepository: ThemeRepository = ThemeRepository(appContext, appServiceBridge)
     override val syncRepository: SyncRepository = SyncRepository(appContext, appServiceBridge)

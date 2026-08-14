@@ -46,6 +46,9 @@ internal fun EditorViewModel.saveFallbackOnClear(session: EditorSession) {
     val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
     val lease = _sessionCoordinator?.issueDocumentOperationLease(targetId) ?: return
     kotlinx.coroutines.runBlocking {
+        // #624 评论11 第2项：统一按 contentDirty + 有效 lease.text 决定 —
+        // dirty + 空正文 → Clear（用户删空了，磁盘旧正文必须清掉）；
+        // 未 dirty → 无事可做。
         if (lease.text.isNotEmpty()) {
             effectiveChapterSavePort.saveChapterContent(
                 session.projectId,
@@ -53,7 +56,7 @@ internal fun EditorViewModel.saveFallbackOnClear(session: EditorSession) {
                 session.chapterId,
                 lease.text,
             )
-        } else if (contentExplicitlyCleared) {
+        } else if (contentDirty) {
             chapterRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
         }
     }
@@ -72,30 +75,24 @@ fun EditorViewModel.scheduleAutoSave() {
             // lease null（snapshot 缺失/错版）时不回退到 "" — 保持 Unsaved，
             // 不发任何保存命令，绝不误触发 Clear。
             val lease = _sessionCoordinator?.issueDocumentOperationLease() ?: return@launch
-            dispatchAutoSaveCommand(lease.text, lease.rustRevision, session)
+            dispatchAutoSaveCommand(lease, session)
         }
 }
 
-/** #624 评论10：提取自动保存命令派发以降低 scheduleAutoSave 认知复杂度。 */
+/**
+ * #624 评论11 第2项：自动保存统一按 `contentDirty + 有效 lease.text` 决定：
+ * `!contentDirty` 无事可做；dirty 且空正文发 Clear；dirty 且非空发 Save。
+ * 不再维护 contentExplicitlyCleared 布尔侧信道。
+ */
 private fun EditorViewModel.dispatchAutoSaveCommand(
-    content: String,
-    revision: Long,
+    lease: com.xiwei.sujian.feature.editor.session.DocumentOperationLease,
     session: EditorSession,
 ) {
-    // #624 评论9：contentExplicitlyCleared 从 lease.text 判定。
-    if (content.isNotEmpty()) {
-        contentExplicitlyCleared = false
-    } else if (contentDirty) {
-        contentExplicitlyCleared = true
-    }
-    // #624 评论1：正文是否为空只看原始字符串。
-    when {
-        !contentDirty -> Unit
-        content.isNotEmpty() ->
-            saveCommandChannel.trySend(SaveCommand.Save(content, session, revision))
-        content.isEmpty() && contentExplicitlyCleared ->
-            saveCommandChannel.trySend(SaveCommand.Clear(session, revision))
-        else -> Unit
+    if (!contentDirty) return
+    if (lease.text.isEmpty()) {
+        saveCommandChannel.trySend(SaveCommand.Clear(session, lease.rustRevision))
+    } else {
+        saveCommandChannel.trySend(SaveCommand.Save(lease.text, session, lease.rustRevision))
     }
 }
 
@@ -115,6 +112,12 @@ fun EditorViewModel.requestSave(): kotlinx.coroutines.Deferred<Boolean> {
     val content = lease.text
     val requiredRevision = lease.rustRevision
     if (!validateSaveLease(session, lease, deferred)) {
+        return deferred
+    }
+    // #624 评论11 第2项：未编辑（!contentDirty）→ 无事可做，直接成功 —
+    // 不发保存/清空命令，不触碰 saveStatus。
+    if (!contentDirty) {
+        deferred.complete(true)
         return deferred
     }
     editorScope.launch {
@@ -154,15 +157,10 @@ private suspend fun EditorViewModel.dispatchSaveCommand(
         return true
     }
     val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
-    // #624 评论1：空正文判定只看原始字符串 — "\n" 等空白正文按真实内容保存，
-    // 只有真正的 "" 才走"防止异常空覆盖"保护。
+    // #624 评论11 第2项：dirty+空正文 → Clear（用户删空后必须真正清掉磁盘旧正文，
+    // 不得停留在假失败）；dirty+非空 → Save。
     if (content.isEmpty()) {
-        if (contentExplicitlyCleared) {
-            if (saveCommandChannel.trySend(SaveCommand.Clear(session, requiredRevision)).isFailure) {
-                return false
-            }
-        } else if (contentDirty) {
-            // 编辑过但未确认清空 — 磁盘与屏幕不一致，不得报告假成功。
+        if (saveCommandChannel.trySend(SaveCommand.Clear(session, requiredRevision)).isFailure) {
             return false
         }
     } else {
@@ -182,7 +180,7 @@ private suspend fun EditorViewModel.dispatchSaveCommand(
 
 fun EditorViewModel.clearChapterContent() {
     val session = currentSession ?: return
-    contentExplicitlyCleared = true
+    // #624 评论11 第2项：显式清空本身就是 Clear 语义 — 直接发命令，不再写布尔侧信道。
     val revision = _sessionCoordinator?.sessionState?.revision ?: 0L
     saveCommandChannel.trySend(SaveCommand.Clear(session, revision))
 }
@@ -244,11 +242,9 @@ suspend fun EditorViewModel.clearChapterContentInternal(
                             saveStatus = SaveStatus.Saved,
                         )
                     // #624 评论9：previousText 已删除 — 不再维护整章 String 缓存。
-                    // #595 三：清空落盘成功后统一清理 dirty/cleared — 否则下次同步
-                    // requestSave 仍见 contentExplicitlyCleared=true 重复发送 Clear，
-                    // 再次触发空覆盖保护（旧实现分散在多套可写状态未统一清理）。
+                    // #595 三：清空落盘成功后统一清理 dirty — 否则下次同步
+                    // requestSave 仍见 dirty=true 重复发送 Clear。
                     contentDirty = false
-                    contentExplicitlyCleared = false
                     val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
                     // #595 七：清空落盘后记录回执（revision 精确锚定）。
                     saveReceipts.record(buildSaveToken(targetId, revisionAtEnqueue, savedHash))
@@ -460,7 +456,8 @@ suspend fun EditorViewModel.performSave(
     // #624 评论1："\n"/连续空行/纯空白段落是用户正文，原样保存；
     // 只有真正的空字符串才触发清空语义。
     if (content.isEmpty()) {
-        if (contentExplicitlyCleared) {
+        // #624 评论11 第2项：dirty+空正文 → Clear（用户删空）；未 dirty 的空正文不动作。
+        if (contentDirty) {
             return clearChapterContentInternal(session, revisionAtEnqueue)
         }
         return false

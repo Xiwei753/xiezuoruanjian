@@ -61,7 +61,7 @@ private fun EditorSessionCoordinator.applyLocalUpdate(
                         selectionAnchorUtf8 = update.selectionAnchorUtf8.coerceAtLeast(0),
                         selectionHeadUtf8 = update.selectionHeadUtf8.coerceAtLeast(0),
                         lastAppliedTransactionId = update.transactionId,
-                        localDirty = true,
+                        localDirty = dirty,
                     ),
             )
         EditorSessionState(
@@ -96,22 +96,15 @@ private fun EditorSessionCoordinator.applyLocalUpdate(
 /**
  * #624 评论9：本地输入 dirty 规则 — 用 [EditorDocumentUpdate.contentChanged]
  * 替代旧 `update.text != previousDoc.text` 字符串比较。
- * selection-only 且 !contentChanged 时保留原 dirty，否则 contentChanged。
+ *
+ * #624 评论11 第1项：dirty 不能由「这次没改正文」清掉 — reload 事件
+ * （REPLACE + contentChanged=false）只是 mirror 重新对齐，未保存正文仍在
+ * session 里；只有保存成功/外部事实提交才能清 dirty。
  */
 private fun localInputDirty(
     update: EditorDocumentUpdate,
     previousDoc: DocumentState,
-): Boolean {
-    val contentChanged = update.contentChanged
-    return if (!contentChanged &&
-        update is EditorDocumentUpdate.LocalInput &&
-        update.operationKind == EditorOperationKind.SELECTION
-    ) {
-        previousDoc.localDirty
-    } else {
-        contentChanged
-    }
-}
+): Boolean = previousDoc.localDirty || update.contentChanged
 
 fun EditorSessionCoordinator.applyLocalEdit(update: EditorDocumentUpdate.LocalInput) {
     applyLocalUpdate(update, EditorSessionOrigin.LOCAL_INPUT, ::localInputDirty)

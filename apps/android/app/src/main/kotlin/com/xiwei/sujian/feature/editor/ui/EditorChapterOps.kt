@@ -31,18 +31,20 @@ private fun EditorSession.matchesChapter(
 ): Boolean = this.projectId == projectId && this.volumeId == volumeId && this.chapterId == chapterId
 
 /**
- * 同步合并是否需要应用 — 拆分复杂条件，避免 ComplexCondition 抑制。
+ * #624 评论11 第5项：同步合并前置筛选 — 只做 hash/dedup 判断。
+ *
+ * 旧实现还比较 `content != currentContent`：拿「同步后的磁盘正文」和「刚打开
+ * 章节时的冷路径旧 UI 字符串」比较。评论9 之后本地正常输入不再更新
+ * `_uiState.content`，这个比较会错误提前吞掉 hash 真变化的同步事实。
+ * 正文相同/dirty/版本因果全部交给会话层
+ * EditorSessionExternalOps.shouldApplyExternalContent（低频权威 snapshot 比较），
+ * 这里不复制第二套正文真值。
  */
-private fun EditorViewModel.isSyncMergeApplicable(
+internal fun syncMergePrefilter(
     hash: String,
     currentHash: String,
-    content: String,
-    currentContent: String,
-): Boolean =
-    hash.isNotEmpty() &&
-        hash != currentHash &&
-        content != currentContent &&
-        syncMergeEmitDedup.shouldEmit(hash)
+    shouldEmit: Boolean,
+): Boolean = hash.isNotEmpty() && hash != currentHash && shouldEmit
 
 fun EditorViewModel.restartSyncObserver() {
     syncObserverJob?.cancel()
@@ -73,7 +75,9 @@ suspend fun EditorViewModel.checkSyncMergedChapter() {
                 )
             }
         val currentHash = _uiState.value.chapterHash
-        if (isSyncMergeApplicable(meta.hash, currentHash, content, _uiState.value.content)) {
+        // #624 评论11 第5项：只做 hash/dedup 前置筛选 — 不再拿 _uiState.content
+        // （冷路径旧正文）与磁盘正文比较；是否应用由 shouldApplyExternalContent 判定。
+        if (syncMergePrefilter(meta.hash, currentHash, syncMergeEmitDedup.shouldEmit(meta.hash))) {
             val syncState =
                 try {
                     syncRepository.loadSyncState(session.projectId)
@@ -269,10 +273,12 @@ suspend fun EditorViewModel.saveTargetBeforeClose(
     val content = lease.text
     // #595 七：revision 从 lease 取，与正文同源（真实 snapshot）。
     val revision = lease.rustRevision
-    // #624 评论1：空正文判定只看原始字符串；只有真正的 "" 且已确认清空才走 Clear。
+    // #624 评论11 第2项：空正文判定只看原始字符串 — "\n"、连续空行、只含空格/
+    // 制表符的段落都是用户正文，原样保存；只有真正的 "" 且 contentDirty
+    // （用户删空）才走 Clear；未编辑过的空正文无需保存。
     return if (content.isNotEmpty()) {
         saveChapterContentForSwitch(session, content, revision)
-    } else if (contentExplicitlyCleared) {
+    } else if (contentDirty) {
         clearChapterContentForSwitch(session, revision)
     } else {
         true
@@ -283,11 +289,9 @@ suspend fun EditorViewModel.saveTargetBeforeClose(
 private fun EditorViewModel.rollbackAfterLoadFailure(
     oldSession: EditorSession?,
     oldUiState: EditorUiState,
-    oldContentExplicitlyCleared: Boolean,
 ) {
     currentSession = oldSession
     _uiState.value = oldUiState.copy(loading = false)
-    contentExplicitlyCleared = oldContentExplicitlyCleared
     inputFrozen = false
 }
 
@@ -300,7 +304,6 @@ private class SwitchContext(
     val chapterTitle: String,
     val oldSession: EditorSession?,
     val oldUiState: EditorUiState,
-    val oldContentExplicitlyCleared: Boolean,
 )
 
 /** #595 一：阶段 1 — 保存旧章节（含保存回执与失败/过期回滚）。null 表示继续。 */
@@ -330,13 +333,12 @@ private suspend fun EditorViewModel.switchSaveOldChapter(
     val content = lease.text
     // #595 七：保存旧章节也记录保存回执（revision 从 lease 取，与正文同源）。
     val oldRevision = lease.rustRevision
-    // #624 评论1：空正文判定只看原始字符串 — "\n"、连续空行、只含空格/制表符的
-    // 段落都是用户正文，原样保存；只有真正的 "" 且已确认清空才走 Clear，
-    // 未编辑过的空正文无需保存。不再用 trim() 把纯空白正文当成空文档跳过。
+    // #624 评论11 第2项：旧章节保存只看 contentDirty + lease.text：未 dirty 不保存；
+    // dirty + 空正文（用户删空）→ Clear — 不得走 else true 让磁盘旧正文残留。
     val saveOk =
         if (content.isNotEmpty()) {
             saveChapterContentForSwitch(oldSession, content, oldRevision)
-        } else if (contentExplicitlyCleared) {
+        } else if (contentDirty) {
             clearChapterContentForSwitch(oldSession, oldRevision)
         } else {
             true
@@ -345,7 +347,6 @@ private suspend fun EditorViewModel.switchSaveOldChapter(
     if (!saveOk) {
         // #595 一：保存失败返回明确失败结果，且完整恢复旧 EditorUiState。
         _uiState.value = ctx.oldUiState.copy(loading = false, saveStatus = SaveStatus.SaveFailed)
-        contentExplicitlyCleared = ctx.oldContentExplicitlyCleared
         saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
         startSaveActor()
         inputFrozen = false
@@ -353,7 +354,7 @@ private suspend fun EditorViewModel.switchSaveOldChapter(
     }
     // #595 一：可见提交边界 1 — 保存完成后若已有更新请求，回滚并退出。
     if (!ctx.isLatest()) {
-        restoreAfterSwitch(ctx.oldSession, ctx.oldUiState, ctx.oldContentExplicitlyCleared)
+        restoreAfterSwitch(ctx.oldSession, ctx.oldUiState)
         return ChapterSwitchResult.Stale
     }
     return null
@@ -390,20 +391,19 @@ private suspend fun EditorViewModel.switchLoadAndPrepare(ctx: SwitchContext): Sw
             chapterTitle = ctx.chapterTitle,
             saveStatus = SaveStatus.Idle,
         )
-    contentExplicitlyCleared = false
     startSaveActor()
     reloadSettings()
     // #595 一：加载在事务内完成 — 只有内容就绪后才提交 Success。
     val loaded = loadChapter(newSession)
     if (!loaded) {
-        rollbackAfterLoadFailure(ctx.oldSession, ctx.oldUiState, ctx.oldContentExplicitlyCleared)
+        rollbackAfterLoadFailure(ctx.oldSession, ctx.oldUiState)
         return SwitchPrepareOutcome.Aborted(
             ChapterSwitchResult.LoadFailed(ChapterKey(ctx.projectId, ctx.volumeId, ctx.chapterId)),
         )
     }
     // #595 一：可见提交边界 2 — 加载完成后若已有更新请求，回滚并退出。
     if (!ctx.isLatest()) {
-        restoreAfterSwitch(ctx.oldSession, ctx.oldUiState, ctx.oldContentExplicitlyCleared)
+        restoreAfterSwitch(ctx.oldSession, ctx.oldUiState)
         return SwitchPrepareOutcome.Aborted(ChapterSwitchResult.Stale)
     }
 
@@ -412,7 +412,7 @@ private suspend fun EditorViewModel.switchLoadAndPrepare(ctx: SwitchContext): Sw
     val content = _uiState.value.content
     val handle = prepareTargetSession(chapterTargetId(ctx.projectId, ctx.volumeId, ctx.chapterId), content)
     if (handle == null) {
-        rollbackAfterLoadFailure(ctx.oldSession, ctx.oldUiState, ctx.oldContentExplicitlyCleared)
+        rollbackAfterLoadFailure(ctx.oldSession, ctx.oldUiState)
         return SwitchPrepareOutcome.Aborted(
             ChapterSwitchResult.LoadFailed(ChapterKey(ctx.projectId, ctx.volumeId, ctx.chapterId)),
         )
@@ -420,7 +420,7 @@ private suspend fun EditorViewModel.switchLoadAndPrepare(ctx: SwitchContext): Sw
     // #595 一：可见提交边界 3 — session 预准备后再次校验 requestId。
     if (!ctx.isLatest()) {
         rollbackPreparedSession(handle)
-        restoreAfterSwitch(ctx.oldSession, ctx.oldUiState, ctx.oldContentExplicitlyCleared)
+        restoreAfterSwitch(ctx.oldSession, ctx.oldUiState)
         return SwitchPrepareOutcome.Aborted(ChapterSwitchResult.Stale)
     }
     return SwitchPrepareOutcome.Ready(newSession, handle)
@@ -435,7 +435,7 @@ private suspend fun EditorViewModel.switchCommit(
     val coordinator = _sessionCoordinator
     if (coordinator == null || !coordinator.commitPreparedSession(handle)) {
         rollbackPreparedSession(handle)
-        rollbackAfterLoadFailure(ctx.oldSession, ctx.oldUiState, ctx.oldContentExplicitlyCleared)
+        rollbackAfterLoadFailure(ctx.oldSession, ctx.oldUiState)
         return ChapterSwitchResult.LoadFailed(ChapterKey(ctx.projectId, ctx.volumeId, ctx.chapterId))
     }
 
@@ -453,7 +453,9 @@ private suspend fun EditorViewModel.switchCommit(
         }
     }
     // Success：inputFrozen 保持 true，由新 pane 附着编辑器后解除。
-    return ChapterSwitchResult.Success(newSession, _uiState.value.content)
+    // #624 评论11 第5项：Success 不再携带正文 — 生产调用方只判断 Success 不消费
+    // 正文；继续暴露只会让后续代码再次误把 load-only UI 字段当编辑正文真值。
+    return ChapterSwitchResult.Success(newSession)
 }
 
 suspend fun EditorViewModel.switchChapterLocked(
@@ -473,12 +475,12 @@ suspend fun EditorViewModel.switchChapterLocked(
             oldSession = currentSession,
             // #595 一：事务回滚需要完整的旧 EditorUiState — 保存/加载失败时整体恢复。
             oldUiState = _uiState.value,
-            oldContentExplicitlyCleared = contentExplicitlyCleared,
         )
 
     val oldSession = ctx.oldSession
     if (oldSession != null && oldSession.matchesChapter(projectId, volumeId, chapterId)) {
-        return ChapterSwitchResult.Success(oldSession, _uiState.value.content)
+        // #624 评论11 第5项：Success 不再携带正文（冷路径字段不是编辑真值）。
+        return ChapterSwitchResult.Success(oldSession)
     }
 
     // #597：真实切换事务开始 — 作废 initChapter 遗留入口启动的后台加载的
@@ -515,7 +517,7 @@ suspend fun EditorViewModel.switchChapterLocked(
         if (preparedHandle != null) {
             rollbackPreparedSession(preparedHandle)
         }
-        restoreAfterSwitch(ctx.oldSession, ctx.oldUiState, ctx.oldContentExplicitlyCleared)
+        restoreAfterSwitch(ctx.oldSession, ctx.oldUiState)
         throw e
     } finally {
         // 注意：Success 路径不在此解除冻结 — 由 confirmEditorAttached 解除。
@@ -525,14 +527,12 @@ suspend fun EditorViewModel.switchChapterLocked(
 fun EditorViewModel.restoreAfterSwitch(
     oldSession: EditorSession?,
     oldUiState: EditorUiState,
-    oldContentExplicitlyCleared: Boolean,
 ) {
     // #595 一：无副作用预准备不修改 A 的会话状态（不 commit/cancel A、
     // 不切换 activeTargetId），回滚无需重新 prepare A — A 的 Rust session ID、
     // Undo/Redo、composition、selection 与事务前完全一致。
     currentSession = oldSession
     _uiState.value = oldUiState.copy(loading = false)
-    contentExplicitlyCleared = oldContentExplicitlyCleared
     saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
     startSaveActor()
     scheduleAutoSave()
@@ -584,7 +584,6 @@ fun EditorViewModel.initChapter(
             loading = true,
             chapterTitle = chapterTitle,
         )
-    contentExplicitlyCleared = false
     startSaveActor()
     reloadSettings()
     editorScope.launch {
@@ -708,7 +707,6 @@ fun EditorViewModel.applyExternalContentToUi(
             saveStatus = SaveStatus.Saved,
         )
     contentDirty = false
-    contentExplicitlyCleared = false
     // #595 七：同步合并内容已由 Core 写入磁盘 — 记录回执（revision 取
     // reset 后的真实 session revision），同步后 flush 不误判为未保存。
     val revision = _sessionCoordinator?.sessionState?.revision ?: 0L

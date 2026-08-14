@@ -17,6 +17,9 @@ import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -77,7 +80,7 @@ class EditorContentOpsCauseTest {
             sessionCoordinator = coordinator,
             chapterRepo = ChapterRepository(app, bridge),
             recentEditsRepo = RecentEditsRepository(app, bridge),
-            statsRepo = WritingStatsRepository(bridge.statsBridge),
+            statsRepo = WritingStatsRepository(bridge.statsBridge, statsWriterScope()),
         )
     }
 
@@ -231,3 +234,6 @@ class EditorContentOpsCauseTest {
         assertEquals(EditorTransactionCauseDto.UNDO, undoEvent.cause)
     }
 }
+
+/** #624 评论11 第3项：测试用进程级 stats writer scope（与 SujianAppDependencies 同构）。 */
+private fun statsWriterScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

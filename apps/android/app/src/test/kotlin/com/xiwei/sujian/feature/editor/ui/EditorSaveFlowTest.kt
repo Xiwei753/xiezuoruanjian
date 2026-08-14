@@ -22,7 +22,9 @@ import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -114,7 +116,7 @@ class EditorSaveFlowTest {
             sessionCoordinator = coordinator,
             chapterRepo = ChapterRepository(app, bridge),
             recentEditsRepo = RecentEditsRepository(app, bridge),
-            statsRepo = WritingStatsRepository(bridge.statsBridge),
+            statsRepo = WritingStatsRepository(bridge.statsBridge, statsWriterScope()),
         )
         savePort = ControllableSavePort()
         vm.chapterSavePort = savePort
@@ -316,3 +318,6 @@ class EditorSaveFlowTest {
         }
     }
 }
+
+/** #624 评论11 第3项：测试用进程级 stats writer scope（与 SujianAppDependencies 同构）。 */
+private fun statsWriterScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

@@ -20,7 +20,10 @@ data class EditorSession(
 )
 
 sealed interface ChapterSwitchResult {
-    data class Success(val session: EditorSession, val content: String) : ChapterSwitchResult
+    // #624 评论11 第5项：Success 不再携带正文 — 生产调用方只判断 Success 并不消费
+    // 这份正文；继续暴露只会让后续代码再次误把 load-only UI 字段当编辑正文真值。
+    // 当前编辑正文由 SujianEditorView mirror / Rust snapshot 负责。
+    data class Success(val session: EditorSession) : ChapterSwitchResult
 
     data class SaveFailed(val current: EditorSession) : ChapterSwitchResult
 

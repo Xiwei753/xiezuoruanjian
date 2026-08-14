@@ -13,7 +13,9 @@ import com.xiwei.sujian.feature.project.data.RecentEditsRepository
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
 import com.xiwei.sujian.feature.sync.data.SyncRepository
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -82,7 +84,8 @@ class EditorViewModelInjectionTest {
                 override val projectRepository: ProjectRepository = ProjectRepository(app, bridge)
                 override val chapterRepository: ChapterRepository = ChapterRepository(app, bridge)
                 override val recentEditsRepository: RecentEditsRepository = RecentEditsRepository(app, bridge)
-                override val statsRepository: WritingStatsRepository = WritingStatsRepository(bridge.statsBridge)
+                override val statsRepository: WritingStatsRepository =
+                    WritingStatsRepository(bridge.statsBridge, statsWriterScope())
                 override val settingsRepository: SettingsRepository = SettingsRepository(app, bridge)
                 override val themeRepository: com.xiwei.sujian.app.theme.ThemeRepository =
                     com.xiwei.sujian.app.theme.ThemeRepository(app, bridge)
@@ -140,7 +143,7 @@ class EditorViewModelInjectionTest {
             syncRepo = SyncRepository(app, bridge),
             chapterRepo = ChapterRepository(app, bridge),
             recentEditsRepo = RecentEditsRepository(app, bridge),
-            statsRepo = WritingStatsRepository(bridge.statsBridge),
+            statsRepo = WritingStatsRepository(bridge.statsBridge, statsWriterScope()),
         )
         vm.initChapter("p", "v", "a", "A")
         // 等待 initChapter 的加载落定（无 native 时必失败 → loading=false）。
@@ -180,10 +183,13 @@ class EditorViewModelInjectionTest {
             syncRepo = SyncRepository(app, bridge),
             chapterRepo = ChapterRepository(app, bridge),
             recentEditsRepo = RecentEditsRepository(app, bridge),
-            statsRepo = WritingStatsRepository(bridge.statsBridge),
+            statsRepo = WritingStatsRepository(bridge.statsBridge, statsWriterScope()),
         )
         vm.initChapter("p", "v", "a", "A")
         assertTrue(vm.isCurrentChapter("p", "v", "a"))
         assertFalse(vm.isCurrentChapter("p", "v", "b"))
     }
 }
+
+/** #624 评论11 第3项：测试用进程级 stats writer scope（与 SujianAppDependencies 同构）。 */
+private fun statsWriterScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

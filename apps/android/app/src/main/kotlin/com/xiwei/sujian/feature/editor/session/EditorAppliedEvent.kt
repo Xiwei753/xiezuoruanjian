@@ -99,5 +99,53 @@ fun writingEventSourceFrom(cause: EditorTransactionCauseDto): String =
         -> STATS_SOURCE_PROGRAMMATIC
     }
 
-/** #624 评论10 第5项：判断 cause 是否为粘贴操作。 */
-fun isPasteCause(cause: EditorTransactionCauseDto): Boolean = cause == EditorTransactionCauseDto.PASTE
+/**
+ * #624 评论11 第4项：cause → 各分类计数 mapper — 一次事件只应有一个来源的
+ * 非零字段，与 Core `WritingInputEvent::new()` 的
+ * `net_delta_chars = inserted_chars + pasted_chars + ai_inserted_chars - deleted_chars`
+ * 一致。
+ *
+ * - **Paste**：inserted=0、pasted=delta.inserted、deleted=delta.deleted
+ *   （旧实现 inserted 和 pasted 都传 delta.inserted，粘贴 5 个字符记成净增 10）；
+ * - **Typing/IME**：inserted=delta.inserted、pasted=0、deleted=delta.deleted；
+ * - **Delete**：inserted=0、pasted=0、deleted=delta.deleted；
+ * - **Undo/Redo/Programmatic/Load/Format**：按实际 delta 传 inserted/deleted，
+ *   source 继续由 [writingEventSourceFrom] 映射为非 HumanTyped。
+ */
+@Immutable
+data class StatsEventCounts(
+    val insertedChars: Int = 0,
+    val deletedChars: Int = 0,
+    val pastedChars: Int = 0,
+)
+
+/** #624 评论11 第4项：cause → 各分类计数（不依赖整章 String，不猜测 paste）。 */
+fun statsCountsFor(
+    cause: EditorTransactionCauseDto,
+    delta: EditorContentDelta,
+): StatsEventCounts =
+    when (cause) {
+        EditorTransactionCauseDto.PASTE ->
+            StatsEventCounts(
+                insertedChars = 0,
+                pastedChars = delta.insertedChars,
+                deletedChars = delta.deletedChars,
+            )
+        EditorTransactionCauseDto.DELETE ->
+            StatsEventCounts(
+                deletedChars = delta.deletedChars,
+            )
+        EditorTransactionCauseDto.TYPING,
+        EditorTransactionCauseDto.TYPING_COMMIT,
+        EditorTransactionCauseDto.IME_COMPOSITION,
+        EditorTransactionCauseDto.UNDO,
+        EditorTransactionCauseDto.REDO,
+        EditorTransactionCauseDto.PROGRAMMATIC,
+        EditorTransactionCauseDto.LOAD,
+        EditorTransactionCauseDto.FORMAT,
+        ->
+            StatsEventCounts(
+                insertedChars = delta.insertedChars,
+                deletedChars = delta.deletedChars,
+            )
+    }

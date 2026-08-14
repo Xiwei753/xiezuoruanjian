@@ -10,7 +10,7 @@ package com.xiwei.sujian.feature.editor.ui
 // ! 纯 selection/cursor-only（contentChanged=false）不进持久化状态机。
 
 import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
-import com.xiwei.sujian.feature.editor.session.isPasteCause
+import com.xiwei.sujian.feature.editor.session.statsCountsFor
 import com.xiwei.sujian.feature.editor.session.writingEventSourceFrom
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -42,8 +42,8 @@ fun EditorViewModel.onEditorApplied(event: EditorAppliedEvent) {
     // #624 评论9：不再每键存 content — 只更新 saveStatus。
     _uiState.value = currentState.copy(saveStatus = SaveStatus.Unsaved)
     contentDirty = true
-    // #624 评论9：contentExplicitlyCleared 不在此判定（需要正文）—
-    // 改由 save 路径（EditorSaveOps）从 lease.text 判定。
+    // #624 评论11 第2项：Save/Clear 决策统一在保存路径按 contentDirty + 有效
+    // lease.text 判定（EditorSaveOps）— 不在此维护布尔侧信道。
     scheduleAutoSave()
 
     // #624 评论9：即时增量维护 wordCount — 不再每键全文 calculateWordCount。
@@ -59,6 +59,10 @@ fun EditorViewModel.onEditorApplied(event: EditorAppliedEvent) {
  * #624 评论9：增量写作统计上报 — 不传前后整章 String，只用 contentDelta 增量。
  * #624 评论10 第5项：source 字符串从 event.cause 明确映射（typing/pasted/deleted/
  * undo/redo/programmatic），不再靠 source/operationKind 猜。
+ * #624 评论11 第4项：各分类计数由 [statsCountsFor]（session 层 mapper）决定，
+ * 不在调用参数里临时拼；Paste 不再把净增字符算两遍。
+ * #624 评论11 第3项：只 enqueue 到进程级 stats writer actor，不在输入主线程
+ * 同步跨 UniFFI 写盘。
  */
 fun EditorViewModel.recordWritingEventIncremental(event: EditorAppliedEvent) {
     val session = currentSession ?: return
@@ -77,13 +81,8 @@ fun EditorViewModel.recordWritingEventIncremental(event: EditorAppliedEvent) {
 
     // #624 评论10 第5项：source 按 Core cause 明确分类。
     val source = writingEventSourceFrom(event.cause)
-    // #624 评论10 第5项：paste 检测用 cause==Paste，不再用 PROGRAMMATIC+REPLACE 猜。
-    val pastedChars =
-        if (isPasteCause(event.cause)) {
-            event.contentDelta.insertedChars
-        } else {
-            0
-        }
+    // #624 评论11 第4项：各分类计数收成 mapper — 不在调用参数里临时拼。
+    val counts = statsCountsFor(event.cause, event.contentDelta)
     val aiInsertedChars = 0
 
     statsRepository.recordWritingEvent(
@@ -92,9 +91,9 @@ fun EditorViewModel.recordWritingEventIncremental(event: EditorAppliedEvent) {
         session.volumeId,
         session.chapterId,
         source,
-        event.contentDelta.insertedChars,
-        event.contentDelta.deletedChars,
-        pastedChars,
+        counts.insertedChars,
+        counts.deletedChars,
+        counts.pastedChars,
         aiInsertedChars,
         durationSeconds,
         statsSessionId,

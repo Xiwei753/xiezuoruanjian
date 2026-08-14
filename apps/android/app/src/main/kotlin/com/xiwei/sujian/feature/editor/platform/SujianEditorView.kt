@@ -253,30 +253,27 @@ class SujianEditorView
 
         private fun reloadFromKernel() {
             if (pipeline.reloadFromKernel()) {
+                // #624 评论11 第1项：日志不再输出整章正文 — 只留长度/revision/cursor。
                 android.util.Log.w(
                     "SujianEditorInput",
-                    "reloadFromKernel applied; mirror='${pipeline.getText()}' rev=${pipeline.getRevision()} " +
+                    "reloadFromKernel applied; len=${pipeline.getLengthUtf16()} rev=${pipeline.getRevision()} " +
                         "cursor=${pipeline.getCursorUtf8()}",
                 )
                 updateLayoutConfig()
-                // #624 评论9：reloadFromKernel 是冷路径（NeedReload/Stale 后整章重装），
-                // 仍用 pipeline.getText() 构造轻量 EditorAppliedEvent（contentChanged=true）。
-                val reloadText = pipeline.getText()
+                // #624 评论11 第1项：reloadFromKernel 只是 Android mirror 与同一个 Rust
+                // session 重新对齐，不是一次正文编辑 — 不得伪造整章插入 delta。
+                // 事件必须是 contentChanged=false + 空 contentDelta + cause=LOAD：
+                // 不置 Unsaved、不置 dirty、不触发 autosave、不改 wordCount、不记统计；
+                // 会话层 dirty 由 EditorSessionEditOps 保留（previous || contentChanged）。
                 val event =
                     EditorAppliedEvent(
                         revision = pipeline.getRevision(),
                         transactionId = 0L,
                         operationKind = EditorOperationKind.REPLACE,
                         source = EditorEditSource.NORMAL,
-                        // #624 评论10 第5项：reloadFromKernel 是冷路径整章重装 —
-                        // cause=Load 表示非人工输入（统计层映射为 programmatic）。
                         cause = EditorTransactionCauseDto.LOAD,
-                        contentChanged = true,
-                        contentDelta =
-                            EditorContentDelta(
-                                insertedChars = reloadText.length,
-                                insertedNonWhitespaceChars = reloadText.count { !it.isWhitespace() },
-                            ),
+                        contentChanged = false,
+                        contentDelta = EditorContentDelta(),
                         selectionAnchorUtf8 = pipeline.getSelectionStartUtf8(),
                         selectionHeadUtf8 = pipeline.getSelectionEndUtf8(),
                     )

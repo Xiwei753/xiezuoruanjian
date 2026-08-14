@@ -3,6 +3,9 @@ package com.xiwei.sujian.feature.stats.ui
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -34,7 +37,7 @@ class StatsViewModelTest {
                     "/tmp/sujian_stats_test_ws",
                 ),
             )
-        return WritingStatsRepository(bridge.statsBridge)
+        return WritingStatsRepository(bridge.statsBridge, statsWriterScope())
     }
 
     private fun createVm(): StatsViewModel = StatsViewModel(createRepo())
@@ -205,3 +208,6 @@ class StatsViewModelTest {
         org.junit.Assert.fail("$message (within ${timeoutMs}ms)")
     }
 }
+
+/** #624 评论11 第3项：测试用进程级 stats writer scope（与 SujianAppDependencies 同构）。 */
+private fun statsWriterScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

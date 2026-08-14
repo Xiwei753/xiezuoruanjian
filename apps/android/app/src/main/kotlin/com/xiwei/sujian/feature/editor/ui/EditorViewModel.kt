@@ -230,7 +230,6 @@ class EditorViewModel(
     internal var statsRefreshJob: kotlinx.coroutines.Job? = null
     internal var saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
     internal var saveActorJob: kotlinx.coroutines.Job? = null
-    internal var contentExplicitlyCleared = false
 
     /**
      * #595 七：按 target 的保存回执（替代旧全局 lastSaveResult）—
@@ -396,6 +395,8 @@ class EditorViewModel(
         } catch (_: Exception) {
         }
         try {
+            // #624 评论11 第3项：flush 入队同一 writer actor — 不在主线程直接刷盘；
+            // Record/Flush 顺序由进程级 Channel 决定。
             statsRepository.flushWritingStats()
         } catch (_: Exception) {
         }
