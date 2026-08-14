@@ -268,9 +268,7 @@ class EditorViewModel(
     @Volatile
     internal var inputFrozen = false
 
-    // #595 二：同步合并发射去重 — 每个章节只发射一次同一 fileHash 的 SyncMerged。
-    // 章节提交时 reset（见 switchCommit）。
-    internal val syncMergeEmitDedup = SyncMergeEmitDedup()
+    // #624 评论17 问题3：SyncMergeEmitDedup 已删除 — 发射端不维护 lastEmittedHash。
 
     // #595 一：章节切换串行门 — 同一时间只允许一个切换事务执行；
     // 请求序号在每个可见提交边界校验，过期请求回滚临时状态并返回 Stale。

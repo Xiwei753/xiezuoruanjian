@@ -11,6 +11,7 @@ import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
 import com.xiwei.sujian.feature.editor.session.PreparedSessionMode
 import com.xiwei.sujian.feature.editor.session.TargetSnapshot
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
+import com.xiwei.sujian.feature.editor.session.activateAttachedForTest
 import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
 import com.xiwei.sujian.feature.project.data.ChapterRepository
@@ -165,6 +166,7 @@ class EditorSaveClearDecisionTest {
                 ),
             ),
         )
+        coordinator.activateAttachedForTest(TARGET_ID)
         coordinator.installSnapshot(sessionId, text, revision)
         vm.currentSession = EditorSession("s1", "p", "v", "a")
     }
@@ -276,6 +278,7 @@ class EditorSaveClearDecisionTest {
                     previousRecord = null,
                 )
             assertTrue(coordinator.commitPreparedSession(handle))
+            coordinator.activateAttachedForTest(TARGET_ID)
             vm.currentSession = EditorSession("s1", "p", "v", "a")
             markDirty()
             vm._uiState.value = vm._uiState.value.copy(saveStatus = SaveStatus.Unsaved, content = "冷路径旧正文")
@@ -351,6 +354,7 @@ class EditorSaveClearDecisionTest {
                     previousRecord = null,
                 )
             assertTrue(coordinator.commitPreparedSession(handle))
+            coordinator.activateAttachedForTest(TARGET_ID)
             vm.currentSession = EditorSession("s1", "p", "v", "a")
             markDirty()
             vm._uiState.value =

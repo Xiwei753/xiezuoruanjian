@@ -107,12 +107,17 @@ class PreparedSessionTransactionTest {
 
         val state = coordinator.sessionState
         assertEquals("b", state.targetId)
-        assertEquals("b", state.activeTargetId)
+        // #624 评论17 问题2：commitPreparedSession 后 target 进入 Detached（不造假窗口）。
+        // 真实窗口绑定由 prepareSessionForEdit + completeWindowAttach 完成。
+        assertNull(state.activeTargetId)
         assertEquals(0UL, state.sessionId)
-        assertEquals(EditingState.BINDING, state.editingState)
-        assertEquals(WindowBindingState.Attaching("prepared", "b", 0UL), state.bindingState)
+        assertEquals(EditingState.IDLE, state.editingState)
+        assertEquals(WindowBindingState.Detached("b", 0UL, handle.snapshot), state.bindingState)
         // #624 评论9：SessionState 无 text 镜像（正文在 TargetSnapshot.text 冷路径）。
         assertEquals(2L, state.revision)
+
+        // 模拟真实窗口绑定完成 — 激活 target 以签发 lease。
+        coordinator.activateAttachedForTest("b")
 
         // 提交使旧 lease 失效 — 旧 View 晚到的输入不能再进入会话层。
         assertFalse("提交后旧 lease 必须失效", coordinator.isInputLeaseCurrent(staleLease, "a"))
@@ -187,7 +192,8 @@ class PreparedSessionTransactionTest {
         assertTrue("新建 session 提交必须成功（不要求记录已存在该 sessionId）", coordinator.commitPreparedSession(handle))
         val state = coordinator.sessionState
         assertEquals(7UL, state.sessionId)
-        assertEquals("b", state.activeTargetId)
+        // #624 评论17 问题2：commitPreparedSession 后 target 进入 Detached，activeTargetId=null。
+        assertNull(state.activeTargetId)
         // #624 评论9：SessionState 无 text 镜像（正文在 TargetSnapshot.text 冷路径）。
         assertEquals(2L, state.revision)
         // store 记录的 sessionId 必须与 SessionState 一致（不再分裂为 0UL）。

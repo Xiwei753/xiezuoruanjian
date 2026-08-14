@@ -9,31 +9,33 @@ import android.util.Log
 // 差异只有 dirty 规则与来源标记；收敛到 applyLocalUpdate 后各入口只保留类型。
 // #624 评论9：热路径不传整章 String — dirty 判定用 [EditorDocumentUpdate.contentChanged]
 // 替代旧 `update.text != previousDoc.text` 字符串比较。
+// #624 评论17 问题1：走 [mutateSession] 单一临界区，state/store 原子一致，
+// 不再用 update lambda + pendingRecord 外置副作用。
 
 /**
- * #597：本地编辑事件统一 reducer — 校验 lease 后原子更新
- * session/document/revision 三态（updateSessionState 单点写入 + pendingRecord
- * 落 store），与拆分前行为完全一致。
+ * #597：本地编辑事件统一 reducer — 校验 lease 后在 [mutateSession] 临界区内
+ * 原子更新 session/document/revision 三态，与拆分前行为完全一致。
  */
+@Suppress("CognitiveComplexMethod")
 private fun EditorSessionCoordinator.applyLocalUpdate(
     update: EditorDocumentUpdate,
     origin: EditorSessionOrigin,
     dirtyRule: (EditorDocumentUpdate, DocumentState) -> Boolean,
 ) {
-    if (!isInputLeaseCurrent(update.lease, update.targetId)) {
-        Log.w(EditorSessionCoordinator.TAG, "applyLocalUpdate(${update.targetId}): stale input lease rejected")
-        return
-    }
-    var pendingRecord: EditorSessionRecord? = null
-    updateSessionState { previous ->
-        val existing = store.record(update.targetId)
+    mutateSession {
+        if (!isInputLeaseCurrent(update.lease, update.targetId)) {
+            Log.w(EditorSessionCoordinator.TAG, "applyLocalUpdate(${update.targetId}): stale input lease rejected")
+            return@mutateSession
+        }
+        val previous = sessionState
+        val existing = record(update.targetId)
         val previousDoc = existing?.documentState ?: DocumentState()
         val sessionId =
             existing?.sessionId
                 ?: previous.sessionId?.takeIf { previous.targetId == update.targetId }
                 ?: 0UL
         val dirty = dirtyRule(update, previousDoc)
-        pendingRecord =
+        val newRecord =
             existing?.copy(
                 documentState =
                     previousDoc.copy(
@@ -64,33 +66,34 @@ private fun EditorSessionCoordinator.applyLocalUpdate(
                         localDirty = dirty,
                     ),
             )
-        EditorSessionState(
-            targetId = update.targetId,
-            sessionId = sessionId,
-            revision = update.revision,
-            selectionAnchorUtf8 =
-                if (update.selectionAnchorUtf8 >= 0) {
-                    update.selectionAnchorUtf8
-                } else {
-                    previousDoc.selectionAnchorUtf8
-                },
-            selectionHeadUtf8 =
-                if (update.selectionHeadUtf8 >= 0) {
-                    update.selectionHeadUtf8
-                } else {
-                    previousDoc.selectionHeadUtf8
-                },
-            lastAppliedTransactionId = update.transactionId,
-            origin = origin,
-            bindingState = previous.bindingState,
-            editingState = previous.editingState,
-            activeTargetId = previous.activeTargetId,
-            committedVersion = previousDoc.committedVersion,
-            sessionBaseVersion = previousDoc.sessionBaseVersion,
-            localDirty = dirty,
-        )
+        putRecord(newRecord)
+        sessionState =
+            EditorSessionState(
+                targetId = update.targetId,
+                sessionId = sessionId,
+                revision = update.revision,
+                selectionAnchorUtf8 =
+                    if (update.selectionAnchorUtf8 >= 0) {
+                        update.selectionAnchorUtf8
+                    } else {
+                        previousDoc.selectionAnchorUtf8
+                    },
+                selectionHeadUtf8 =
+                    if (update.selectionHeadUtf8 >= 0) {
+                        update.selectionHeadUtf8
+                    } else {
+                        previousDoc.selectionHeadUtf8
+                    },
+                lastAppliedTransactionId = update.transactionId,
+                origin = origin,
+                bindingState = previous.bindingState,
+                editingState = previous.editingState,
+                activeTargetId = previous.activeTargetId,
+                committedVersion = previousDoc.committedVersion,
+                sessionBaseVersion = previousDoc.sessionBaseVersion,
+                localDirty = dirty,
+            )
     }
-    pendingRecord?.let { store.put(it) }
 }
 
 /**

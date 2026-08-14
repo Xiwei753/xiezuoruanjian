@@ -64,11 +64,11 @@ class EditorSessionStore {
 
     fun isRegistered(targetId: String): Boolean = records.containsKey(targetId)
 
-    fun put(record: EditorSessionRecord) {
+    internal fun put(record: EditorSessionRecord) {
         records[record.targetId] = record
     }
 
-    fun update(
+    internal fun update(
         targetId: String,
         transform: (EditorSessionRecord) -> EditorSessionRecord,
     ) {
@@ -76,9 +76,9 @@ class EditorSessionStore {
         records[targetId] = transform(current)
     }
 
-    fun remove(targetId: String): EditorSessionRecord? = records.remove(targetId)
+    internal fun remove(targetId: String): EditorSessionRecord? = records.remove(targetId)
 
-    fun clear() {
+    internal fun clear() {
         records.clear()
     }
 

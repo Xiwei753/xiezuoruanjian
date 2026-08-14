@@ -73,6 +73,15 @@ data class DocumentState(
     val lastSavedVersion: DocumentVersion? = null,
     val localDirty: Boolean = false,
     val lastAppliedTransactionId: Long = 0L,
+    /**
+     * #624 评论17 问题3：未解决的外部文档事实 — IgnoreDirtyConflict /
+     * IgnoreUncomparableConflict 时保存，避免被 hash 去重永久吞掉。
+     *
+     * 本地保存成功清 dirty 后，调用方检查 pendingExternalFact 触发 Repository
+     * 重新读取与版本比较，再决定 merge/apply（不直接用缓存 fact.text 覆盖
+     * 刚保存的本地正文）。真正 Apply/IgnoreSameContent 提交版本后才清。
+     */
+    val pendingExternalFact: TargetDocumentFact? = null,
 )
 
 /** 纯数据选区快照（UTF-8 字节偏移）。 */

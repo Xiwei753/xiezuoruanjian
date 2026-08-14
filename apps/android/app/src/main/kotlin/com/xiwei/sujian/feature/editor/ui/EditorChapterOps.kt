@@ -35,7 +35,7 @@ private fun EditorSession.matchesChapter(
 ): Boolean = this.projectId == projectId && this.volumeId == volumeId && this.chapterId == chapterId
 
 /**
- * #624 评论11 第5项：同步合并前置筛选 — 只做 hash/dedup 判断。
+ * #624 评论174 第5项 / 评论17 问题3：同步合并前置筛选 — 只做 hash 比较。
  *
  * 旧实现还比较 `content != currentContent`：拿「同步后的磁盘正文」和「刚打开
  * 章节时的冷路径旧 UI 字符串」比较。评论9 之后本地正常输入不再更新
@@ -43,12 +43,16 @@ private fun EditorSession.matchesChapter(
  * 正文相同/dirty/版本因果全部交给会话层
  * EditorSessionExternalOps.shouldApplyExternalContent（低频权威 snapshot 比较），
  * 这里不复制第二套正文真值。
+ *
+ * #624 评论17 问题3：删除 SyncMergeEmitDedup hash 去重 — 发射端不维护
+ * "最后发过什么 hash"。Repository hash 与 documentCommittedVersion.contentHash
+ * 不同即放行，真正的 Replay/Older/SameContent 判断只由 shouldApplyExternalContent 做。
+ * 同 hash dirty conflict 事实不得被永久吞掉。
  */
 internal fun syncMergePrefilter(
     hash: String,
     currentHash: String,
-    shouldEmit: Boolean,
-): Boolean = hash.isNotEmpty() && hash != currentHash && shouldEmit
+): Boolean = hash.isNotEmpty() && hash != currentHash
 
 fun EditorViewModel.restartSyncObserver() {
     syncObserverJob?.cancel()
@@ -78,17 +82,17 @@ suspend fun EditorViewModel.checkSyncMergedChapter() {
                     session.chapterId,
                 )
             }
-        val currentHash = _uiState.value.chapterHash
-        // #624 评论11 第5项：只做 hash/dedup 前置筛选 — 不再拿 _uiState.content
-        // （冷路径旧正文）与磁盘正文比较；是否应用由 shouldApplyExternalContent 判定。
-        if (syncMergePrefilter(meta.hash, currentHash, syncMergeEmitDedup.shouldEmit(meta.hash))) {
+        val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
+        // #624 评论17 问题3：用 Repository hash 与 documentCommittedVersion.contentHash 比较，
+        // 不再用 SyncMergeEmitDedup hash 去重。同 hash dirty conflict 事实不被吞。
+        val committedHash = _sessionCoordinator?.documentCommittedVersionFor(targetId)?.contentHash ?: ""
+        if (syncMergePrefilter(meta.hash, committedHash)) {
             val syncState =
                 try {
                     syncRepository.loadSyncState(session.projectId)
                 } catch (_: Exception) {
                     null
                 }
-            val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
             val baseVersion = _sessionCoordinator?.documentCommittedVersionFor(targetId) ?: DocumentVersion()
             emitDocumentFact(
                 TargetDocumentFact(
@@ -511,7 +515,6 @@ private suspend fun EditorViewModel.switchCommit(
 
     // #624 评论14 第2项：commit 成功后才发布 B — 写 currentSession/_uiState/emit fact。
     currentSession = newSession
-    syncMergeEmitDedup.reset()
     _uiState.value =
         _uiState.value.copy(
             loading = false,

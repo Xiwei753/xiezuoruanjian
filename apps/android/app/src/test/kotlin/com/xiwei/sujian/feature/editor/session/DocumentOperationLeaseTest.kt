@@ -59,7 +59,9 @@ class DocumentOperationLeaseTest {
                 mode = PreparedSessionMode.Created,
                 previousRecord = null,
             )
-        return coordinator.commitPreparedSession(handle)
+        val ok = coordinator.commitPreparedSession(handle)
+        if (ok) coordinator.activateAttachedForTest(targetId)
+        return ok
     }
 
     @Test
@@ -209,7 +211,9 @@ class DocumentOperationLeaseByTargetTest {
                 mode = PreparedSessionMode.Created,
                 previousRecord = null,
             )
-        return coordinator.commitPreparedSession(handle)
+        val ok = coordinator.commitPreparedSession(handle)
+        if (ok) coordinator.activateAttachedForTest(targetId)
+        return ok
     }
 
     /** 离开正文后 session 进入 Detached：activeTargetId=null，无活动 lease。 */
@@ -217,8 +221,8 @@ class DocumentOperationLeaseByTargetTest {
         coordinator: FakeSnapshotCoordinator,
         targetId: String,
     ) {
-        // commitPreparedSession 产生 Attaching(windowId="prepared") — 用同一 windowId 解绑。
-        coordinator.detachWindowBinding("prepared", targetId)
+        // activateAttachedForTest 用 windowId="w1" 绑定 — 用同一 windowId 解绑。
+        coordinator.detachWindowBinding("w1", targetId)
     }
 
     /**

@@ -5,25 +5,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #624 评论11 第5项：同步合并前置筛选只做 hash/dedup 判断。
+ * #624 评论11 第5项 / 评论17 问题3：同步合并前置筛选只做 hash 比较。
  *
  * 旧实现 `isSyncMergeApplicable` 还比较 `content != currentContent` — 拿
  * 「同步后的磁盘正文」和「刚打开章节时的冷路径旧 UI 字符串」比较。评论9 之后
  * 本地正常输入不再更新 `_uiState.content`，这个比较会错误吞掉 hash 真变化的
- * 同步事实（例如：用户输入并 autosave 后，远端把正文改回与旧 UI 字符串相同的
- * 内容 — chapterHash 已前进，正文却与冷路径字符串相等，事实被提前吞掉）。
- * 正文相同/dirty/版本因果全部交给会话层
- * EditorSessionExternalOps.shouldApplyExternalContent（低频权威 snapshot 比较）。
+ * 同步事实。
+ *
+ * #624 评论17 问题3：删除 SyncMergeEmitDedup hash 去重 — 发射端不维护
+ * lastEmittedHash。Repository hash 与 documentCommittedVersion.contentHash
+ * 不同即放行，真正的 Replay/Older/SameContent 判断只由 shouldApplyExternalContent 做。
+ * 同 hash dirty conflict 事实不得被永久吞掉。
  */
 class SyncMergePrefilterTest {
-    /** hash 真变化即放行 — 不再拿冷路径正文做第二套比较。 */
+    /** hash 真变化即放行 — 不再拿冷路径正文做第二套比较，也不做 dedup。 */
     @Test
     fun hashChanged_passesWithoutColdPathContentComparison() {
         assertTrue(
             syncMergePrefilter(
                 hash = "H2",
                 currentHash = "H1",
-                shouldEmit = true,
             ),
         )
     }
@@ -35,7 +36,6 @@ class SyncMergePrefilterTest {
             syncMergePrefilter(
                 hash = "",
                 currentHash = "H1",
-                shouldEmit = true,
             ),
         )
     }
@@ -47,20 +47,17 @@ class SyncMergePrefilterTest {
             syncMergePrefilter(
                 hash = "H1",
                 currentHash = "H1",
-                shouldEmit = true,
             ),
         )
     }
 
-    /** 同一 hash 已发射过（去重）— 不放行。 */
+    /**
+     * #624 评论17 问题3：同 hash 再次放行（dedup 已删除）—
+     * dirty conflict 事实不被永久吞掉。
+     */
     @Test
-    fun dedupSuppressed_blocked() {
-        assertFalse(
-            syncMergePrefilter(
-                hash = "H2",
-                currentHash = "H1",
-                shouldEmit = false,
-            ),
-        )
+    fun sameHashRepeated_passes_noDedupSuppression() {
+        assertTrue(syncMergePrefilter(hash = "H2", currentHash = "H1"))
+        assertTrue("同 hash 再次放行（dedup 已删除）", syncMergePrefilter(hash = "H2", currentHash = "H1"))
     }
 }

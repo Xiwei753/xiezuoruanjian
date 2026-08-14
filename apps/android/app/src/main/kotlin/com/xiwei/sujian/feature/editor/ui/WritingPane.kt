@@ -35,7 +35,9 @@ import com.xiwei.sujian.feature.editor.session.SessionResetSource
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.session.applyExternalContentFact
+import com.xiwei.sujian.feature.editor.session.consumePendingExternalFact
 import com.xiwei.sujian.feature.editor.session.shouldApplyExternalContent
+import com.xiwei.sujian.feature.editor.session.storePendingExternalFact
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 
 /**
@@ -204,12 +206,54 @@ private fun WritingPaneEditorAttachSync(
     WritingPaneEditorAttach(currentViewModel, coordinator, targetId, inputs)
 }
 
-/** #595 一 / #624 评论16 问题3：编辑器附着 —
- * 只有真正 [WindowBindingState.Attached] 且 windowId + targetId 都匹配才解除输入冻结。
- * - Attached 且匹配 → confirmEditorAttached（解除冻结）；
- * - Attaching → 等待 AndroidView factory/attachView() 推进到 Attached，不解除冻结；
- * - Idle/Detached 且当前章节已提交 → beginEdit 发起绑定，不解除冻结；
- * - beginEdit 返回 false 时保持冻结，由 session/window 状态机继续处理。 */
+/**
+ * #624 评论17 问题2：编辑器附着决策 — 纯函数，覆盖所有 WindowBindingState 分支。
+ *
+ * - [EditorAttachAction.Confirm]：Attached 且 window/target 匹配 → confirmEditorAttached；
+ * - [EditorAttachAction.Wait]：Attaching 且 window/target 匹配 → 等待 AndroidView factory；
+ * - [EditorAttachAction.BeginEdit]：Idle/Detached 或 Attaching/Attached 属于旧窗口
+ *   → beginEdit，让 session 层 restamp 到当前窗口；
+ * - [EditorAttachAction.Hold]：Committing/Cancelling/Detaching → 不发起新绑定。
+ */
+sealed interface EditorAttachAction {
+    data object Confirm : EditorAttachAction
+
+    data object Wait : EditorAttachAction
+
+    data object BeginEdit : EditorAttachAction
+
+    data object Hold : EditorAttachAction
+}
+
+fun editorAttachDecision(
+    bindingState: WindowBindingState,
+    windowId: String,
+    targetId: String,
+): EditorAttachAction =
+    when (bindingState) {
+        is WindowBindingState.Attached ->
+            if (bindingState.windowId == windowId && bindingState.targetId == targetId) {
+                EditorAttachAction.Confirm
+            } else {
+                EditorAttachAction.BeginEdit
+            }
+        is WindowBindingState.Attaching ->
+            if (bindingState.windowId == windowId && bindingState.targetId == targetId) {
+                EditorAttachAction.Wait
+            } else {
+                EditorAttachAction.BeginEdit
+            }
+        is WindowBindingState.Detached -> EditorAttachAction.BeginEdit
+        WindowBindingState.Idle -> EditorAttachAction.BeginEdit
+        is WindowBindingState.Committing -> EditorAttachAction.Hold
+        is WindowBindingState.Cancelling -> EditorAttachAction.Hold
+        is WindowBindingState.Detaching -> EditorAttachAction.Hold
+    }
+
+/**
+ * #595 一 / #624 评论17 问题2：编辑器附着 — 用 [editorAttachDecision] 纯函数决策，
+ * 覆盖所有 WindowBindingState 分支，不会因 Attaching("prepared") 卡死。
+ */
 @Composable
 private fun WritingPaneEditorAttach(
     currentViewModel: EditorViewModel,
@@ -218,9 +262,6 @@ private fun WritingPaneEditorAttach(
     inputs: EditorAttachInputs,
 ) {
     LaunchedEffect(targetId, inputs.uiState.loading, inputs.sessionState.bindingState) {
-        // #595 一：只有 ViewModel 当前已提交章节才允许 beginEdit —
-        // 切换事务提交后、业务选择/导航落地前的一帧内，旧 pane 不得用
-        // 新章节正文对旧 target 创建/重置 session。
         if (!currentViewModel.isCurrentChapter(
                 inputs.chapter.projectId,
                 inputs.chapter.volumeId,
@@ -230,22 +271,22 @@ private fun WritingPaneEditorAttach(
             return@LaunchedEffect
         }
         val binding = inputs.sessionState.bindingState
-        // #624 评论16 问题3：只有真正 Attached 且 windowId + targetId 都匹配才 confirmEditorAttached。
-        // 不再用"尝试附着"当完成信号 — beginEdit()==true 不等于 View 已真实绑定
-        // （sharedEditorView == null 时只是保存 pendingViewBind，状态仍是 Attaching）。
-        if (shouldConfirmEditorAttached(binding, coordinator.windowId, targetId)) {
-            currentViewModel.confirmEditorAttached(targetId)
-            return@LaunchedEffect
-        }
-        // Attaching：等待 AndroidView factory/attachView() 推进到 Attached，不解除冻结。
-        if (binding is WindowBindingState.Attaching) return@LaunchedEffect
-        // Idle/Detached 且当前章节已提交：发起 beginEdit，调用后直接返回，
-        // 等下一次 sessionStateFlow 状态变化。
-        // beginEdit 返回 false 时保持冻结，由 session/window 状态机继续处理，
-        // 不能把 ViewModel 提前宣布为可输入。
-        if (!inputs.uiState.loading) {
-            coordinator.updateTargetText(targetId, inputs.uiState.content)
-            coordinator.beginEdit(targetId, inputs.uiState.content.toByteArray(Charsets.UTF_8).size)
+        when (editorAttachDecision(binding, coordinator.windowId, targetId)) {
+            EditorAttachAction.Confirm -> {
+                currentViewModel.confirmEditorAttached(targetId)
+            }
+            EditorAttachAction.Wait -> {
+                // 等待 AndroidView factory/attachView() 推进到 Attached，不解除冻结。
+            }
+            EditorAttachAction.BeginEdit -> {
+                if (!inputs.uiState.loading) {
+                    coordinator.updateTargetText(targetId, inputs.uiState.content)
+                    coordinator.beginEdit(targetId, inputs.uiState.content.toByteArray(Charsets.UTF_8).size)
+                }
+            }
+            EditorAttachAction.Hold -> {
+                // Committing/Cancelling/Detaching — 不发起新绑定。
+            }
         }
     }
 }
@@ -476,6 +517,8 @@ private suspend fun handleExternalDocumentFact(
                 // reset 失败时保持旧正文与旧版本，不得推进任何状态（旧实现
                 // 无条件推进导致 Rust session/SessionStore/ViewModel 三份分裂）。
                 coordinator.sessionCoordinator.applyExternalContentFact(fact)
+                // #624 评论17 问题3：真正 Apply 提交版本后清除未解决事实。
+                coordinator.sessionCoordinator.consumePendingExternalFact(targetId)
                 if (fact.origin == com.xiwei.sujian.feature.editor.session.DocumentFactOrigin.SYNC_MERGED) {
                     // #595 三：同步合并同时更新 ViewModel 正文/hash/保存状态/字数 —
                     // 磁盘、Rust session、ViewModel 三方保持一致。
@@ -486,10 +529,13 @@ private suspend fun handleExternalDocumentFact(
         ExternalContentDecision.IgnoreSameContent -> {
             // 正文已一致 — 只记录版本事实（幂等）。
             coordinator.sessionCoordinator.applyExternalContentFact(fact)
+            // #624 评论17 问题3：IgnoreSameContent 提交版本后清除未解决事实。
+            coordinator.sessionCoordinator.consumePendingExternalFact(targetId)
         }
         ExternalContentDecision.IgnoreDirtyConflict -> {
-            // #595 二/三：本地未保存编辑存在 — 禁止直接 reset，
-            // 发布类型化冲突（不覆盖用户输入）。
+            // #624 评论17 问题3：保存未解决事实到 pendingExternalFact，
+            // 不得只发 UI 错误后丢掉。本地保存清 dirty 后触发重读与版本比较。
+            coordinator.sessionCoordinator.storePendingExternalFact(targetId, fact)
             if (fact.origin == com.xiwei.sujian.feature.editor.session.DocumentFactOrigin.SYNC_MERGED) {
                 viewModel.notifySyncMergeConflict()
             }
@@ -501,8 +547,10 @@ private suspend fun handleExternalDocumentFact(
             // 重放/更旧/无版本锚点 — 忽略。
         }
         ExternalContentDecision.IgnoreUncomparableConflict -> {
+            // #624 评论17 问题3：保存未解决事实到 pendingExternalFact。
             // #595 五：不同版本但不可比较（无共同 revision 锚点/父链）—
-            // 不得盲目覆盖；进入重新读取/三方合并/冲突路径（类型化通知）。
+            // 不得盲目覆盖；进入重新读取/(三方合并/冲突路径（类型化通知）。
+            coordinator.sessionCoordinator.storePendingExternalFact(targetId, fact)
             if (fact.origin == com.xiwei.sujian.feature.editor.session.DocumentFactOrigin.SYNC_MERGED) {
                 viewModel.notifySyncMergeConflict()
             }

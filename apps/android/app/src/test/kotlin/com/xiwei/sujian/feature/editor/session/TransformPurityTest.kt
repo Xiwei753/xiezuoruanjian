@@ -241,6 +241,7 @@ class TransformPurityTest {
                 previousRecord = null,
             )
         assertTrue(coordinator.commitPreparedSession(handle))
+        coordinator.activateAttachedForTest("b")
         val leaseB = coordinator.currentInputLease()!!
         coordinator.applyLocalEdit(
             EditorDocumentUpdate.LocalInput(

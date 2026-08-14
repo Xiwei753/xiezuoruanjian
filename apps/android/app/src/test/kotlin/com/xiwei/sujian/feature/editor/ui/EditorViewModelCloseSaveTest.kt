@@ -12,6 +12,7 @@ import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
 import com.xiwei.sujian.feature.editor.session.PreparedSessionMode
 import com.xiwei.sujian.feature.editor.session.TargetSnapshot
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
+import com.xiwei.sujian.feature.editor.session.activateAttachedForTest
 import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
 import com.xiwei.sujian.feature.project.data.ChapterRepository
@@ -176,6 +177,7 @@ class EditorViewModelCloseSaveTest {
                 ),
             ),
         )
+        coordinator.activateAttachedForTest(TARGET_ID)
         coordinator.installSnapshot(sessionId, text, revision)
     }
 

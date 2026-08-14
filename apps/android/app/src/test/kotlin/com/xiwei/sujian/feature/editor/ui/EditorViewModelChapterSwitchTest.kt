@@ -13,6 +13,7 @@ import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
 import com.xiwei.sujian.feature.editor.session.PreparedSessionMode
 import com.xiwei.sujian.feature.editor.session.TargetSnapshot
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
+import com.xiwei.sujian.feature.editor.session.activateAttachedForTest
 import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
 import com.xiwei.sujian.feature.editor.session.documentCommittedVersionFor
@@ -136,6 +137,7 @@ class EditorViewModelChapterSwitchTest {
                 ),
             ),
         )
+        fakeCoordinator.activateAttachedForTest(targetId)
         fakeCoordinator.installSnapshot(sessionId, text, revision)
     }
 

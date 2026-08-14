@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import java.util.concurrent.locks.ReentrantLock
 
 /**
  * #592 四：窗口绑定状态机 — 会话层唯一的窗口生命周期事实。
@@ -49,6 +50,9 @@ open class EditorSessionCoordinator(
 
     // #595 四：per-target 会话记录存储 — 会话层持久事实的唯一来源。
     internal val store = EditorSessionStore()
+
+    // #624 评论17 问题1：会话变更单一临界区 — 保护 _sessionStateFlow.value / store / inputLeaseEpoch。
+    internal val mutationLock = ReentrantLock()
 
     // #595 三：_sessionStateFlow 是会话层唯一可写 MutableStateFlow — 所有状态变化
     // 通过 [updateSessionState]（原子 [MutableStateFlow.update]）统一推进。
@@ -105,9 +109,43 @@ open class EditorSessionCoordinator(
         return EditorInputLease(targetId, s.sessionId ?: 0UL, inputLeaseEpoch)
     }
 
-    /** 使当前所有输入 lease 失效 — 旧 View 晚到的回调不能再进入会话层。 */
+    /**
+     * 使当前所有输入 lease 失效 — 旧 View 晚到的回调不能再进入会话层。
+     * #624 评论17 问题1：在 [mutationLock] 内递增，与 [mutateSession] 互斥。
+     */
     fun invalidateInputLease() {
-        inputLeaseEpoch++
+        mutationLock.lock()
+        try {
+            inputLeaseEpoch++
+        } finally {
+            mutationLock.unlock()
+        }
+    }
+
+    /**
+     * #624 评论17 问题1：会话变更统一入口 — 在 [mutationLock] 内原子推进
+     * `_sessionStateFlow.value` / [EditorSessionStore] / `inputLeaseEpoch`。
+     *
+     * block 拿到 [SessionMutationScope]（当前 state/epoch/store 只读+写接口），
+     * 完成记录修改、epoch 修改和最终 SessionState 构造；block 结束后一次性写回
+     * StateFlow 与 epoch。不再使用带外部副作用的 `MutableStateFlow.update {}` +
+     * lambda 外 `store.put`（CAS 重试导致 state/store 分裂）。
+     *
+     * ReentrantLock 可重入：block 内调用 [updateSessionState] / [invalidateInputLease]
+     * 不会自死锁（它们也走 mutationLock）。但 block 内应直接操作 scope，不再调
+     * updateSessionState，以保证 state/store/epoch 在同一临界区原子一致。
+     */
+    internal inline fun <T> mutateSession(block: SessionMutationScope.() -> T): T {
+        mutationLock.lock()
+        try {
+            val scope = SessionMutationScope(this, store, _sessionStateFlow.value, inputLeaseEpoch)
+            val result = scope.block()
+            _sessionStateFlow.value = scope.sessionState
+            inputLeaseEpoch = scope.leaseEpoch
+            return result
+        } finally {
+            mutationLock.unlock()
+        }
     }
 
     /**
@@ -221,9 +259,20 @@ open class EditorSessionCoordinator(
      * [MutableStateFlow.update] 原子推进 [_sessionStateFlow]（CAS 重试，
      * 不存在读后写竞态窗口）。不得在其他位置直接赋值 [_sessionStateFlow]
      * 或创建第二套可写 Flow。
+     *
+     * #624 评论17 问题1：`open` 仅供并发测试 hook（模拟 CAS 重试期间另一线程
+     * 改 state），生产路径不 override。新写路径走 [mutateSession] 统一临界区，
+     * 本入口保留给只改 SessionState 不改 store/epoch 的便利场景。
      */
-    internal fun updateSessionState(transform: (EditorSessionState) -> EditorSessionState) {
-        _sessionStateFlow.update(transform)
+    internal open fun updateSessionState(transform: (EditorSessionState) -> EditorSessionState) {
+        // #624 评论17 问题1：在 mutationLock 内直接赋值，不再用 MutableStateFlow.update 的 CAS。
+        // 与 mutateSession 互斥；ReentrantLock 可重入，mutateSession block 内调用不会自死锁。
+        mutationLock.lock()
+        try {
+            _sessionStateFlow.value = transform(_sessionStateFlow.value)
+        } finally {
+            mutationLock.unlock()
+        }
     }
 
     /**
@@ -328,11 +377,13 @@ open class EditorSessionCoordinator(
         profile: TextEditorProfile,
         persistent: Boolean,
     ) {
-        val existing = store.record(targetId)
-        if (existing != null) {
-            store.update(targetId) { it.copy(profile = profile, persistent = persistent) }
-        } else {
-            store.put(EditorSessionRecord(targetId = targetId, profile = profile, persistent = persistent))
+        mutateSession {
+            val existing = record(targetId)
+            if (existing != null) {
+                updateRecord(targetId) { it.copy(profile = profile, persistent = persistent) }
+            } else {
+                putRecord(EditorSessionRecord(targetId = targetId, profile = profile, persistent = persistent))
+            }
         }
     }
 
@@ -402,7 +453,7 @@ open class EditorSessionCoordinator(
         targetId: String,
         snapshot: ProjectionSnapshot,
     ) {
-        store.update(targetId) { it.copy(projection = snapshot) }
+        mutateSession { updateRecord(targetId) { it.copy(projection = snapshot) } }
     }
 
     fun getProjectionSnapshot(targetId: String): ProjectionSnapshot? = store.record(targetId)?.projection
@@ -583,11 +634,13 @@ open class EditorSessionCoordinator(
         targetId: String,
         decorations: TargetDecorations,
     ) {
-        val existing = store.record(targetId)
-        if (existing != null) {
-            store.update(targetId) { it.copy(decorations = decorations) }
-        } else {
-            store.put(EditorSessionRecord(targetId = targetId, decorations = decorations))
+        mutateSession {
+            val existing = record(targetId)
+            if (existing != null) {
+                updateRecord(targetId) { it.copy(decorations = decorations) }
+            } else {
+                putRecord(EditorSessionRecord(targetId = targetId, decorations = decorations))
+            }
         }
         _targetDecorationsVersionFlow.value++
     }

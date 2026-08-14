@@ -319,7 +319,7 @@ class LayerRuleTests(unittest.TestCase):
                     "        store.put(previous)\n"
                     "        previous\n"
                     "    }\n"
-                    "    pendingRecord?.let { store.put(it) }\n"
+                    "    mutateSession { }\n"
                     "}\n"
                 )
             },
@@ -333,14 +333,15 @@ class LayerRuleTests(unittest.TestCase):
                 f"{APP_PREFIX}/feature/editor/session/EditorSessionEditOps.kt": (
                     "package com.xiwei.sujian.feature.editor.session\n\n"
                     "fun good() {\n"
-                    "    var pendingRecord: Any? = null\n"
-                    "    updateSessionState { previous -> previous.copy() }\n"
-                    "    pendingRecord?.let { store.put(it) }\n"
+                    "    mutateSession {\n"
+                    "        updateSessionState { previous -> previous.copy() }\n"
+                    "        store.put(record)\n"
+                    "    }\n"
                     "}\n"
                 )
             },
         )
-        self.assertEqual([], findings, "纯 transform + pendingRecord 模式不应误报")
+        self.assertEqual([], findings, "纯 transform + mutateSession 模式不应误报")
 
     def test_designsystem_rule_flags_app_package_reference(self):
         findings = self.run_rule(

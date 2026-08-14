@@ -61,6 +61,7 @@ class EditorInputLeaseTest {
                 previousRecord = null,
             )
         assertTrue(coordinator.commitPreparedSession(handle))
+        coordinator.activateAttachedForTest("a")
         val lease = coordinator.currentInputLease()
         assertNotNull(lease)
         assertEquals("a", lease!!.targetId)
@@ -237,6 +238,7 @@ class EditorInputLeaseTest {
                 previousRecord = null,
             )
         coordinator.commitPreparedSession(handle)
+        coordinator.activateAttachedForTest("b")
         val newLease = coordinator.currentInputLease()
         assertNotNull(newLease)
         // 新章节的输入携带新 lease → 接受。
@@ -280,6 +282,7 @@ class EditorInputLeaseTest {
                 previousRecord = null,
             )
         coordinator.commitPreparedSession(handle)
+        coordinator.activateAttachedForTest("b")
         // epoch 是当前值但 target 是 a → 拒绝（当前活动是 b）。
         val current = coordinator.currentInputLease()!!
         val wrongTargetLease = current.copy(targetId = "a")

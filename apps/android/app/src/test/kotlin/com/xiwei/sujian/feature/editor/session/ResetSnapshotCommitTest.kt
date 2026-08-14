@@ -82,7 +82,10 @@ class ResetSnapshotCommitTest {
                     previousRecord = null,
                 ),
             )
-        if (ok) coordinator.installSnapshot(sessionId, text, revision)
+        if (ok) {
+            coordinator.activateAttachedForTest(targetId)
+            coordinator.installSnapshot(sessionId, text, revision)
+        }
         return ok
     }
 

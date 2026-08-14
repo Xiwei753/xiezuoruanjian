@@ -21,7 +21,6 @@ internal fun EditorViewModel.enterChapterForTest(
             volumeId = volumeId,
             chapterId = chapterId,
         )
-    syncMergeEmitDedup.reset()
     _uiState.value =
         _uiState.value.copy(
             loading = false,

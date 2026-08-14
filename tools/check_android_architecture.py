@@ -23,8 +23,8 @@
 7.  FrameClock 只能由窗口/显示层持有：EditorWindowHost 拥有唯一
     windowFrameClock 字段，session 层不得引用 WindowDisplayFrameClock；
 8.  updateSessionState transform 是纯函数：transform 体内不得调用
-    store.put/store.update/store.remove，store 写入只能在 transform 外
-    通过 pendingRecord?.let { store.put(it) } 执行；
+    store.put/store.update/store.remove，store 写入只能在 mutateSession
+    闭包内（SessionMutationGate 锁保护）执行；
 9.  core/designsystem 不能反向依赖 app 模块（源码与 build.gradle.kts 均不得）；
 10. 已删除类型/入口不得复活：EditorAnimationSettings、派生 flow getter、
     SettingsRepository 旧的 1 参 setSyncSecretsOverride；
@@ -589,17 +589,17 @@ def rule_transform_purity() -> list[Finding]:
                         line=0,
                         message=(
                             f"第 {idx} 个 updateSessionState transform 体内调用 {store_call} — "
-                            "transform 是纯函数，store 写入只能在 transform 外通过 "
-                            "pendingRecord?.let { store.put(it) } 执行（#595 五）"
+                            "transform 是纯函数，store 写入只能在 mutateSession 闭包内"
+                            "（SessionMutationGate 锁保护）执行（#624 评论17 问题1）"
                         ),
                     )
                 )
-    if "pendingRecord?.let { store.put(it) }" not in sources:
+    if "mutateSession" not in sources:
         findings.append(
             Finding(
                 path="feature/editor/session",
                 line=0,
-                message="store 写入必须使用 pendingRecord?.let { store.put(it) } 模式（transform 外）",
+                message="store 写入必须通过 mutateSession 闭包（SessionMutationGate 锁保护）执行",
             )
         )
     return findings

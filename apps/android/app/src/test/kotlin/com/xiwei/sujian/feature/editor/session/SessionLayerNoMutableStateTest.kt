@@ -132,10 +132,14 @@ class SessionLayerNoMutableStateTest {
 
         val snapshot = coordinator.sessionStateFlow.value
         assertEquals("b", snapshot.targetId)
-        assertEquals("b", snapshot.activeTargetId)
+        // #624 评论17 问题2：commitPreparedSession 后 target 进入 Detached（不造假窗口）。
+        assertNull(snapshot.activeTargetId)
         assertEquals(5UL, snapshot.sessionId)
         assertEquals(2L, snapshot.revision)
-        assertEquals(EditingState.BINDING, snapshot.editingState)
+        assertEquals(EditingState.IDLE, snapshot.editingState)
+
+        // 模拟真实窗口绑定完成 — 激活 target 以签发 lease。
+        coordinator.activateAttachedForTest("b")
 
         // 旧 A 的 lease 失效 — 晚到的输入不得修改快照。
         assertFalse(coordinator.isInputLeaseCurrent(staleLeaseA, "a"))

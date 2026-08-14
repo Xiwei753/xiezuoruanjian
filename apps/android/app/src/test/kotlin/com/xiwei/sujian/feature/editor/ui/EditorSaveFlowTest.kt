@@ -15,6 +15,7 @@ import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
 import com.xiwei.sujian.feature.editor.session.PreparedSessionMode
 import com.xiwei.sujian.feature.editor.session.TargetSnapshot
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
+import com.xiwei.sujian.feature.editor.session.activateAttachedForTest
 import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
 import com.xiwei.sujian.feature.editor.session.commitSavedLease
@@ -194,6 +195,7 @@ class EditorSaveFlowTest {
                 ),
             ),
         )
+        coordinator.activateAttachedForTest(TARGET_ID)
         coordinator.installSnapshot(sessionId, text, revision)
         vm.currentSession = EditorSession("s1", "p", "v", "a")
         // #624 评论9：章节加载是冷路径 — uiState.content 经 applyExternalContentToUi 一次性设置。
