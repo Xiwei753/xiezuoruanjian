@@ -74,14 +74,32 @@ data class DocumentState(
     val localDirty: Boolean = false,
     val lastAppliedTransactionId: Long = 0L,
     /**
-     * #624 评论17 问题3：未解决的外部文档事实 — IgnoreDirtyConflict /
+     * #624 评论17 问题3/5：未解决的外部文档事实 — IgnoreDirtyConflict /
      * IgnoreUncomparableConflict 时保存，避免被 hash 去重永久吞掉。
      *
-     * 本地保存成功清 dirty 后，调用方检查 pendingExternalFact 触发 Repository
-     * 重新读取与版本比较，再决定 merge/apply（不直接用缓存 fact.text 覆盖
-     * 刚保存的本地正文）。真正 Apply/IgnoreSameContent 提交版本后才清。
+     * #624 评论17 问题5：只存 [PendingExternalVersion]（sourceVersion + origin），
+     * 不存 [TargetDocumentFact] 整个 — TargetDocumentFact 带 text: String，
+     * 会把已经从 session state 删除的整章正文复制重新引回来。本地保存成功清 dirty
+     * 后，调用方检查 pendingExternal 触发 Repository 重新读取最新正文/hash，再走
+     * 正常 TargetDocumentFact → shouldApplyExternalContent() 决定 merge/apply
+     * （不直接用缓存的旧正文覆盖刚保存的本地正文）。真正 Apply/IgnoreSameContent
+     * 提交版本后才清。
      */
-    val pendingExternalFact: TargetDocumentFact? = null,
+    val pendingExternal: PendingExternalVersion? = null,
+)
+
+/**
+ * #624 评论17 问题5：未解决外部事实的轻量记录 — 只含 sourceVersion + origin，
+ * 不含 text: String（不得把整章正文复制重新引回 [DocumentState]）。
+ *
+ * 本地保存清 dirty 后，调用方据 sourceVersion/origin 重新从 Repository 读最新
+ * 正文/hash，构造完整 [TargetDocumentFact] 走 [shouldApplyExternalContent]，
+ * 不使用缓存的旧正文。
+ */
+@Immutable
+data class PendingExternalVersion(
+    val sourceVersion: DocumentVersion,
+    val origin: DocumentFactOrigin,
 )
 
 /** 纯数据选区快照（UTF-8 字节偏移）。 */

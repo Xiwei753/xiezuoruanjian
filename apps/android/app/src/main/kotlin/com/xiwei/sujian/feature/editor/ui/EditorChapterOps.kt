@@ -15,6 +15,7 @@ import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.applyExternalContentFact
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
 import com.xiwei.sujian.feature.editor.session.documentCommittedVersionFor
+import com.xiwei.sujian.feature.editor.session.commitSavedLease
 import com.xiwei.sujian.feature.editor.session.markSaved
 import com.xiwei.sujian.feature.editor.session.prepareTargetSessionForCommit
 import com.xiwei.sujian.feature.editor.session.releasePreparedTarget
@@ -184,13 +185,9 @@ private fun EditorViewModel.commitSwitchSave(
 ): Boolean {
     saveReceipts.record(lease.toSaveToken(hash))
     val coordinator = _sessionCoordinator ?: return false
-    if (coordinator.isDocumentOperationLeaseCurrent(lease) &&
-        coordinator.sessionState.revision == lease.rustRevision
-    ) {
-        coordinator.markSaved(lease.targetId, DocumentVersion(contentHash = hash))
-        return true
-    }
-    return false
+    // #624 评论17 问题5：改成和正常保存相同的 commitSavedLease — 在 mutateSession
+    // 临界区内原子校验 lease + 清 dirty，不再保留第二套先判断再清 dirty 的窗口。
+    return coordinator.commitSavedLease(lease, DocumentVersion(contentHash = hash))
 }
 
 /**

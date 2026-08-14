@@ -49,8 +49,8 @@ data class EditorSessionRecord(
 /**
  * #595 四：会话记录存储 — Map<TargetId, EditorSessionRecord> + activeTargetId。
  *
- * 线程安全：所有写操作都通过 [EditorSessionCoordinator] 的单一 reducer 路径
- * （updateSessionState transform 内）执行，不存在并行写入。
+ * 线程安全：所有写操作都通过 [EditorSessionCoordinator.mutateSession] 的单一临界区
+ * （[SessionMutationScope] 内）执行，不存在并行写入。
  */
 class EditorSessionStore {
     private val records = mutableMapOf<String, EditorSessionRecord>()

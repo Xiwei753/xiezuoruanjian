@@ -14,13 +14,14 @@ internal fun EditorSessionCoordinator.activateAttachedForTest(
     windowId: String = "w1",
 ) {
     val sid = store.record(targetId)?.sessionId ?: return
-    updateSessionState {
-        it.copy(
-            targetId = targetId,
-            sessionId = sid,
-            activeTargetId = targetId,
-            bindingState = WindowBindingState.Attached(windowId, targetId, sid),
-            editingState = EditingState.EDITING,
-        )
+    mutateSession {
+        sessionState =
+            sessionState.copy(
+                targetId = targetId,
+                sessionId = sid,
+                activeTargetId = targetId,
+                bindingState = WindowBindingState.Attached(windowId, targetId, sid),
+                editingState = EditingState.EDITING,
+            )
     }
 }

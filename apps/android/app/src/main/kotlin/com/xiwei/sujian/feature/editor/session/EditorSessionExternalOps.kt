@@ -124,9 +124,14 @@ fun EditorSessionCoordinator.documentCommittedVersionFor(targetId: String): Docu
     store.record(targetId)?.documentState?.committedVersion ?: DocumentVersion()
 
 /**
- * #624 评论17 问题3：保存未解决的外部文档事实 — IgnoreDirtyConflict /
+ * #624 评论17 问题3/5：保存未解决的外部文档事实 — IgnoreDirtyConflict /
  * IgnoreUncomparableConflict 时调用，避免被 hash 去重永久吞掉。
- * 在 [mutateSession] 临界区内原子写入 store 记录的 pendingExternalFact。
+ * 在 [mutateSession] 临界区内原子写入 store 记录的 pendingExternal。
+ *
+ * #624 评论17 问题5：只存 [PendingExternalVersion]（sourceVersion + origin），
+ * 不存 fact.text — 不得把整章正文复制重新引回 [DocumentState]。调用方清 dirty
+ * 后据 sourceVersion/origin 重新从 Repository 读最新正文/hash 走完整
+ * [shouldApplyExternalContent] 判定。
  */
 fun EditorSessionCoordinator.storePendingExternalFact(
     targetId: String,
@@ -134,24 +139,28 @@ fun EditorSessionCoordinator.storePendingExternalFact(
 ) {
     mutateSession {
         val rec = record(targetId) ?: return@mutateSession
-        putRecord(rec.withDocumentState { it.copy(pendingExternalFact = fact) })
+        val pending = PendingExternalVersion(fact.sourceVersion, fact.origin)
+        putRecord(rec.withDocumentState { it.copy(pendingExternal = pending) })
     }
 }
 
-/** 读取 target 的未解决外部事实（不消费）。 */
-fun EditorSessionCoordinator.pendingExternalFactFor(targetId: String): TargetDocumentFact? =
-    store.record(targetId)?.documentState?.pendingExternalFact
+/**
+ * 读取 target 的未解决外部事实（不消费）。返回 [PendingExternalVersion] —
+ * 只含 sourceVersion + origin，不含正文。调用方需重新从 Repository 读正文。
+ */
+fun EditorSessionCoordinator.pendingExternalFactFor(targetId: String): PendingExternalVersion? =
+    store.record(targetId)?.documentState?.pendingExternal
 
 /**
- * #624 评论17 问题3：消费并清除未解决外部事实 — 真正 Apply/IgnoreSameContent
- * 提交版本后调用。返回被清除的事实（供调用方确认）。
+ * #624 评论17 问题3/5：消费并清除未解决外部事实 — 真正 Apply/IgnoreSameContent
+ * 提交版本后调用。返回被清除的 [PendingExternalVersion]（供调用方确认）。
  */
-fun EditorSessionCoordinator.consumePendingExternalFact(targetId: String): TargetDocumentFact? {
-    var consumed: TargetDocumentFact? = null
+fun EditorSessionCoordinator.consumePendingExternalFact(targetId: String): PendingExternalVersion? {
+    var consumed: PendingExternalVersion? = null
     mutateSession {
         val rec = record(targetId) ?: return@mutateSession
-        consumed = rec.documentState.pendingExternalFact
-        putRecord(rec.withDocumentState { it.copy(pendingExternalFact = null) })
+        consumed = rec.documentState.pendingExternal
+        putRecord(rec.withDocumentState { it.copy(pendingExternal = null) })
     }
     return consumed
 }

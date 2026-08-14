@@ -308,40 +308,76 @@ class LayerRuleTests(unittest.TestCase):
         )
         self.assertTrue(findings, "session 层持有 FrameClock 必须被报告")
 
-    def test_transform_purity_rule_flags_store_write_inside_transform(self):
+    def test_session_mutation_gate_only_flags_updateSessionState_presence(self):
         findings = self.run_rule(
-            "update-session-state-transform-purity",
+            "session-mutation-gate-only",
             {
                 f"{APP_PREFIX}/feature/editor/session/EditorSessionEditOps.kt": (
                     "package com.xiwei.sujian.feature.editor.session\n\n"
                     "fun bad() {\n"
-                    "    updateSessionState { previous ->\n"
-                    "        store.put(previous)\n"
-                    "        previous\n"
-                    "    }\n"
+                    "    updateSessionState { previous -> previous }\n"
                     "    mutateSession { }\n"
                     "}\n"
                 )
             },
         )
-        self.assertTrue(findings, "transform 体内调用 store.put 必须被报告")
+        self.assertTrue(findings, "updateSessionState 出现必须被报告（已删除）")
 
-    def test_transform_purity_rule_passes_pure_transform(self):
+    def test_session_mutation_gate_only_flags_direct_state_flow_write(self):
         findings = self.run_rule(
-            "update-session-state-transform-purity",
+            "session-mutation-gate-only",
             {
                 f"{APP_PREFIX}/feature/editor/session/EditorSessionEditOps.kt": (
                     "package com.xiwei.sujian.feature.editor.session\n\n"
-                    "fun good() {\n"
-                    "    mutateSession {\n"
-                    "        updateSessionState { previous -> previous.copy() }\n"
-                    "        store.put(record)\n"
-                    "    }\n"
+                    "fun bad() {\n"
+                    "    _sessionStateFlow.value = newState\n"
+                    "    mutateSession { }\n"
                     "}\n"
                 )
             },
         )
-        self.assertEqual([], findings, "纯 transform + mutateSession 模式不应误报")
+        self.assertTrue(findings, "_sessionStateFlow.value 直接赋值必须被报告")
+
+    def test_session_mutation_gate_only_flags_direct_epoch_write(self):
+        findings = self.run_rule(
+            "session-mutation-gate-only",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionEditOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "fun bad() {\n"
+                    "    inputLeaseEpoch = 42\n"
+                    "    mutateSession { }\n"
+                    "}\n"
+                )
+            },
+        )
+        self.assertTrue(findings, "inputLeaseEpoch 直接赋值必须被报告")
+
+    def test_session_mutation_gate_only_passes_clean_mutateSession(self):
+        findings = self.run_rule(
+            "session-mutation-gate-only",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionCoordinator.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "class EditorSessionCoordinator {\n"
+                    "    val _sessionStateFlow = MutableStateFlow(0)\n"
+                    "    var inputLeaseEpoch = 0L\n"
+                    "    fun mutateSession(block: () -> Unit) {\n"
+                    "        _sessionStateFlow.value = 1\n"
+                    "        inputLeaseEpoch = 1\n"
+                    "    }\n"
+                    "}\n"
+                ),
+                f"{APP_PREFIX}/feature/editor/session/SessionMutationScope.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "class SessionMutationScope {\n"
+                    "    var sessionState = 0\n"
+                    "    var leaseEpoch = 0L\n"
+                    "}\n"
+                ),
+            },
+        )
+        self.assertEqual([], findings, "mutateSession 内写 state/epoch 不应误报")
 
     def test_designsystem_rule_flags_app_package_reference(self):
         findings = self.run_rule(

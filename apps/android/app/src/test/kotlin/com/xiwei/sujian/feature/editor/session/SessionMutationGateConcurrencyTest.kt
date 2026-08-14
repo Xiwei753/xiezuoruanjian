@@ -133,10 +133,9 @@ class SessionMutationGateConcurrencyTest {
 }
 
 /**
- * 测试用 Coordinator：override updateSessionState 在 transform 第一次求值后
- * 直接改 _sessionStateFlow.value，确定性触发 MutableStateFlow.update 的 CAS 重试。
- *
- * 同时提供 installExistingPersistentSession / activateTarget 便利方法设置初始状态。
+ * 测试用 Coordinator：提供 installExistingPersistentSession / activateTarget 便利方法
+ * 设置初始状态。#624 评论17 问题3：updateSessionState 已删除，新实现用 [mutateSession]
+ * 单一临界区（ReentrantLock）保证 state/store/epoch 原子一致，不存在 CAS 重试分裂。
  */
 private class CasRetryHookCoordinator(
     bridge: com.xiwei.sujian.core.interop.app.AppServiceBridge,
@@ -188,25 +187,6 @@ private class CasRetryHookCoordinator(
                 bindingState = WindowBindingState.Attached("w1", targetId, sessionId),
                 editingState = com.xiwei.sujian.feature.editor.window.EditingState.EDITING,
             )
-    }
-
-    override fun updateSessionState(transform: (EditorSessionState) -> EditorSessionState) {
-        var firstCall = true
-        super.updateSessionState { state ->
-            val result = transform(state)
-            if (firstCall) {
-                firstCall = false
-                // 模拟并发：transform 第一次求值返回后、CAS 前，另一线程改了 value，
-                // 迫使 MutableStateFlow.update CAS 失败并重试 transform。
-                // 旧实现的 pendingRecord/committed var 保留第一次的旧值，store.put 分裂。
-                _sessionStateFlow.value =
-                    state.copy(
-                        revision = state.revision + 1,
-                        localDirty = true,
-                    )
-            }
-            result
-        }
     }
 
     internal override fun createSession(

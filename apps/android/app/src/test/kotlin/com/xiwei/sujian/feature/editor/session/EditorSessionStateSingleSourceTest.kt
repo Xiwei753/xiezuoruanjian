@@ -272,17 +272,26 @@ class EditorSessionStateSingleSourceTest {
     }
 
     @Test
-    fun updateSessionState_isSingleReducerEntry() {
-        // #595 三：updateSessionState 是唯一状态更新入口（reducer）。
-        // internal 方法在 JVM 字节码中会被 Kotlin 名称修饰（updateSessionState$module），
+    fun mutateSession_isSingleMutationGateEntry() {
+        // #624 评论17 问题1/3：mutateSession 是 session state/store/epoch 写入的唯一入口。
+        // updateSessionState 已删除（#624 评论17 问题3）。
+        // internal inline 方法在 JVM 字节码中会被 Kotlin 名称修饰（mutateSession$module），
         // 用 startsWith 匹配避免绑定修饰后缀。
         val method =
             EditorSessionCoordinator::class.java.declaredMethods.firstOrNull {
-                it.name.startsWith("updateSessionState")
+                it.name.startsWith("mutateSession")
             }
         assertNotNull(
-            "updateSessionState must exist as the single reducer entry point (#595 三)",
+            "mutateSession must exist as the single mutation gate entry point (#624 评论17 问题1)",
             method,
+        )
+        val updateSessionStateMethod =
+            EditorSessionCoordinator::class.java.declaredMethods.firstOrNull {
+                it.name.startsWith("updateSessionState")
+            }
+        assertNull(
+            "updateSessionState must be removed (#624 评论17 问题3)",
+            updateSessionStateMethod,
         )
     }
 

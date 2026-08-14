@@ -55,7 +55,7 @@ open class EditorSessionCoordinator(
     internal val mutationLock = ReentrantLock()
 
     // #595 三：_sessionStateFlow 是会话层唯一可写 MutableStateFlow — 所有状态变化
-    // 通过 [updateSessionState]（原子 [MutableStateFlow.update]）统一推进。
+    // 通过 [mutateSession]（[mutationLock] 单一临界区）统一推进。
     internal val _sessionStateFlow = MutableStateFlow(EditorSessionState())
     val sessionStateFlow: StateFlow<EditorSessionState> = _sessionStateFlow.asStateFlow()
     val sessionState: EditorSessionState get() = _sessionStateFlow.value
@@ -131,9 +131,9 @@ open class EditorSessionCoordinator(
      * StateFlow 与 epoch。不再使用带外部副作用的 `MutableStateFlow.update {}` +
      * lambda 外 `store.put`（CAS 重试导致 state/store 分裂）。
      *
-     * ReentrantLock 可重入：block 内调用 [updateSessionState] / [invalidateInputLease]
-     * 不会自死锁（它们也走 mutationLock）。但 block 内应直接操作 scope，不再调
-     * updateSessionState，以保证 state/store/epoch 在同一临界区原子一致。
+     * ReentrantLock 可重入：block 内调用 [invalidateInputLease]
+     * 不会自死锁（它也走 mutationLock）。block 内直接操作 scope，
+     * state/store/epoch 在同一临界区原子一致。
      */
     internal inline fun <T> mutateSession(block: SessionMutationScope.() -> T): T {
         mutationLock.lock()
@@ -253,27 +253,6 @@ open class EditorSessionCoordinator(
     // #595 七：只保留一个可写事实源 — MutableStateFlow<EditorMotionPolicy>。
     internal val _motionPolicyFlow = MutableStateFlow(EditorMotionPolicy())
     val motionPolicyFlow: StateFlow<EditorMotionPolicy> = _motionPolicyFlow.asStateFlow()
-
-    /**
-     * #595 三：唯一状态更新入口（reducer）— 所有会话状态变化通过
-     * [MutableStateFlow.update] 原子推进 [_sessionStateFlow]（CAS 重试，
-     * 不存在读后写竞态窗口）。不得在其他位置直接赋值 [_sessionStateFlow]
-     * 或创建第二套可写 Flow。
-     *
-     * #624 评论17 问题1：`open` 仅供并发测试 hook（模拟 CAS 重试期间另一线程
-     * 改 state），生产路径不 override。新写路径走 [mutateSession] 统一临界区，
-     * 本入口保留给只改 SessionState 不改 store/epoch 的便利场景。
-     */
-    internal open fun updateSessionState(transform: (EditorSessionState) -> EditorSessionState) {
-        // #624 评论17 问题1：在 mutationLock 内直接赋值，不再用 MutableStateFlow.update 的 CAS。
-        // 与 mutateSession 互斥；ReentrantLock 可重入，mutateSession block 内调用不会自死锁。
-        mutationLock.lock()
-        try {
-            _sessionStateFlow.value = transform(_sessionStateFlow.value)
-        } finally {
-            mutationLock.unlock()
-        }
-    }
 
     /**
      * #595 三/七：原子应用 [EditorMotionPolicy] — 唯一可写事实源。
@@ -497,16 +476,18 @@ open class EditorSessionCoordinator(
      * （那会 revision+1 并清空 Undo/Redo）。
      * #595 二：新建 session 同样携带 create 后的真实 snapshot（createSession 已
      * 接收初始正文，是唯一一次 Core 命令），窗口层 attachSnapshot 只重建本地镜像。
-     * #595 一：章节切换事务预准备 session 时传入 windowId="prepared" —
-     * 窗口层 beginEdit 复用同一 session 时，restampAttachingToWindow 把
-     * "prepared" 预绑定重贴为真实窗口的 Attaching，再由该窗口自己的
-     * completeWindowAttach 推进为 Attached（#623 评论6：completion 不参与
-     * 所有权接管，只认精确匹配的 Attaching）。
+     * #624 评论17 问题2：删除 "prepared" 假窗口 — commitPreparedSession 后
+     * target 进入 Detached（activeTargetId=null），真实窗口出现后从 Detached
+     * 调 beginEdit 走 Detached → Attaching(realWindowId) → Attached(realWindowId)。
      * #595 四：sessionId 写入 store 记录 — 非持久 target 同样记录。
      */
 
+    /**
+     * #624 评论17 问题3：forceEditingState 走 [mutateSession] 单一临界区 —
+     * updateSessionState 入口已删除，session 的 state 写入只走 mutateSession。
+     */
     fun forceEditingState(state: EditingState) {
-        updateSessionState { it.copy(editingState = state) }
+        mutateSession { sessionState = sessionState.copy(editingState = state) }
     }
 
     /**

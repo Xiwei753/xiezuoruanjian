@@ -5,6 +5,7 @@ package com.xiwei.sujian.feature.editor.ui
 import com.xiwei.sujian.feature.editor.session.DocumentFactOrigin
 import com.xiwei.sujian.feature.editor.session.DocumentVersion
 import com.xiwei.sujian.feature.editor.session.ExternalContentDecision
+import com.xiwei.sujian.feature.editor.session.PendingExternalVersion
 import com.xiwei.sujian.feature.editor.session.TargetDocumentFact
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.applyExternalContentFact
@@ -100,12 +101,13 @@ class DirtyConflictNotSwallowedTest {
         val decision = coordinator.shouldApplyExternalContent(syncFact)
         assertEquals("本地 dirty 时必须 IgnoreDirtyConflict", ExternalContentDecision.IgnoreDirtyConflict, decision)
 
-        // 新实现：保存未解决事实，不被吞掉。
+        // 新实现：保存未解决事实（只存 sourceVersion + origin），不被吞掉。
         coordinator.storePendingExternalFact("t1", syncFact)
+        val pending = coordinator.pendingExternalFactFor("t1")
         assertEquals(
-            "pendingExternalFact 必须保存 fact（不得吞掉）",
-            syncFact,
-            coordinator.pendingExternalFactFor("t1"),
+            "pendingExternal 必须保存 sourceVersion（不得吞掉）",
+            PendingExternalVersion(syncFact.sourceVersion, syncFact.origin),
+            pending,
         )
     }
 
@@ -143,8 +145,8 @@ class DirtyConflictNotSwallowedTest {
         coordinator.markSaved("t1", DocumentVersion(contentHash = "hash-local-saved"))
         assertTrue("保存后 dirty 必须清除", !coordinator.sessionState.localDirty)
         assertEquals(
-            "保存后 pendingExternalFact 必须保留（事实尚未解决）",
-            syncFact,
+            "保存后 pendingExternal 必须保留（事实尚未解决）",
+            PendingExternalVersion(syncFact.sourceVersion, syncFact.origin),
             coordinator.pendingExternalFactFor("t1"),
         )
     }
@@ -211,8 +213,8 @@ class DirtyConflictNotSwallowedTest {
         assertNotNull(coordinator.pendingExternalFactFor("t1"))
 
         val consumed = coordinator.consumePendingExternalFact("t1")
-        assertEquals(syncFact, consumed)
-        assertNull("consume 后 pendingExternalFact 必须清除", coordinator.pendingExternalFactFor("t1"))
+        assertEquals(PendingExternalVersion(syncFact.sourceVersion, syncFact.origin), consumed)
+        assertNull("consume 后 pendingExternal 必须清除", coordinator.pendingExternalFactFor("t1"))
     }
 
     /**

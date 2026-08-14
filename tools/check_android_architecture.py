@@ -548,10 +548,13 @@ def rule_frame_clock_window_owned() -> list[Finding]:
     return findings
 
 
-def rule_transform_purity() -> list[Finding]:
-    """updateSessionState { ... } transform 体内不得调用 store.put/update/remove。"""
+def rule_session_mutation_gate_only() -> list[Finding]:
+    """session 的 state/store/epoch 写入只能从 SessionMutationGate/mutateSession 进入。
+
+    #624 评论17 问题3：updateSessionState 入口已删除。session 的 state/store/epoch
+    写入只走 mutateSession 单一临界区（SessionMutationScope 内）。
+    """
     findings: list[Finding] = []
-    # #602 目录重构：transform 纯函数检查针对 feature/editor/session。
     session_dir = APP_SRC / "feature" / "editor" / "session"
     if not session_dir.exists():
         return findings
@@ -559,49 +562,65 @@ def rule_transform_purity() -> list[Finding]:
         p.read_text(encoding="utf-8")
         for p in sorted(session_dir.glob("*.kt"))
     )
-    pattern = re.compile(r"updateSessionState\s*\{")
-    bodies: list[str] = []
-    for match in pattern.finditer(sources):
-        start = match.end()
-        depth = 1
-        i = start
-        while i < len(sources) and depth > 0:
-            if sources[i] == "{":
-                depth += 1
-            elif sources[i] == "}":
-                depth -= 1
-            i += 1
-        bodies.append(sources[start : i - 1])
-    if not bodies:
+    # 1. updateSessionState 不得作为函数定义或调用出现在 session 生产代码中（已删除）。
+    #    注释中提及 updateSessionState（说明已删除）是允许的。
+    if re.search(r"\bfun\s+updateSessionState\b", sources) or re.search(r"\bupdateSessionState\s*[\{(]", sources):
         findings.append(
             Finding(
                 path="feature/editor/session",
                 line=0,
-                message="必须存在 updateSessionState transform（找不到任何调用）",
+                message=(
+                    "updateSessionState 必须删除 — session 的 state/store/epoch 写入"
+                    "只走 mutateSession 单一临界区（#624 评论17 问题3）"
+                ),
             )
         )
-    for idx, body in enumerate(bodies, 1):
-        for store_call in ("store.put(", "store.update(", "store.remove("):
-            if store_call in body:
-                findings.append(
-                    Finding(
-                        path="feature/editor/session",
-                        line=0,
-                        message=(
-                            f"第 {idx} 个 updateSessionState transform 体内调用 {store_call} — "
-                            "transform 是纯函数，store 写入只能在 mutateSession 闭包内"
-                            "（SessionMutationGate 锁保护）执行（#624 评论17 问题1）"
-                        ),
-                    )
-                )
+    # 2. mutateSession 必须存在。
     if "mutateSession" not in sources:
         findings.append(
             Finding(
                 path="feature/editor/session",
                 line=0,
-                message="store 写入必须通过 mutateSession 闭包（SessionMutationGate 锁保护）执行",
+                message="必须存在 mutateSession 单一临界区入口（SessionMutationGate 锁保护）",
             )
         )
+    # 3. _sessionStateFlow.value = 只允许出现在 EditorSessionCoordinator.kt
+    #    （mutateSession 内）和 SessionMutationScope.kt — 不得在其他 session .kt
+    #    文件中直接写 _sessionStateFlow.value。
+    for kt in sorted(session_dir.glob("*.kt")):
+        if kt.name in ("EditorSessionCoordinator.kt", "SessionMutationScope.kt"):
+            continue
+        text = kt.read_text(encoding="utf-8")
+        if "_sessionStateFlow.value =" in text or "_sessionStateFlow.value=" in text:
+            findings.append(
+                Finding(
+                    path=f"feature/editor/session/{kt.name}",
+                    line=0,
+                    message=(
+                        "_sessionStateFlow.value 直接赋值只允许在 "
+                        "EditorSessionCoordinator.mutateSession 内 — "
+                        "其他位置必须走 mutateSession 闭包（#624 评论17 问题1/3）"
+                    ),
+                )
+            )
+    # 4. inputLeaseEpoch 赋值只允许出现在 EditorSessionCoordinator.kt
+    #    （mutateSession/invalidateInputLease 内）和 SessionMutationScope.kt。
+    for kt in sorted(session_dir.glob("*.kt")):
+        if kt.name in ("EditorSessionCoordinator.kt", "SessionMutationScope.kt"):
+            continue
+        text = kt.read_text(encoding="utf-8")
+        if "inputLeaseEpoch =" in text or "inputLeaseEpoch=" in text:
+            findings.append(
+                Finding(
+                    path=f"feature/editor/session/{kt.name}",
+                    line=0,
+                    message=(
+                        "inputLeaseEpoch 赋值只允许在 EditorSessionCoordinator.mutateSession/"
+                        "invalidateInputLease 内 — 其他位置必须走 mutateSession 闭包"
+                        "（#624 评论17 问题1/3）"
+                    ),
+                )
+            )
     return findings
 
 
@@ -1010,9 +1029,9 @@ RULES: list[tuple[str, str, object]] = [
         rule_frame_clock_window_owned,
     ),
     (
-        "update-session-state-transform-purity",
-        "updateSessionState transform 是纯函数（transform 内不写 store）",
-        rule_transform_purity,
+        "session-mutation-gate-only",
+        "session 的 state/store/epoch 写入只能从 mutateSession 进入（updateSessionState 已删除）",
+        rule_session_mutation_gate_only,
     ),
     (
         "designsystem-independence",

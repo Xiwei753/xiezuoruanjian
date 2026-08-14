@@ -236,6 +236,10 @@ suspend fun EditorViewModel.clearChapterContentInternal(
                             chapterHash = savedHash,
                             saveStatus = if (committed) SaveStatus.Saved else SaveStatus.Unsaved,
                         )
+                    // #624 评论17 问题5：清空保存提交后同样检查 pendingExternal 重读。
+                    if (committed) {
+                        editorScope.launch(Dispatchers.IO) { checkSyncMergedChapter() }
+                    }
                     true
                 }
                 is com.xiwei.sujian.core.interop.common.BridgeResult.Error -> {
@@ -342,6 +346,10 @@ private fun EditorViewModel.handleSaveSuccess(
     val committed = commitSaveSuccess(lease, savedHash)
     if (committed) {
         _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Saved, chapterHash = savedHash)
+        // #624 评论17 问题5：commitSavedLease 真正提交后，如果 target 有
+        // pendingExternal，重新从 Repository 读最新正文/hash 走
+        // shouldApplyExternalContent（不拿缓存的旧正文覆盖刚保存的本地正文）。
+        editorScope.launch(Dispatchers.IO) { checkSyncMergedChapter() }
     } else {
         // 用户在保存 IO 期间继续输入（revision 前进）— 只记录回执，不覆盖新输入
         // 产生的 UI 状态/chapterHash（旧实现无条件设 Saved，页面错误显示"已保存"）。

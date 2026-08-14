@@ -252,7 +252,15 @@ fun editorAttachDecision(
 
 /**
  * #595 一 / #624 评论17 问题2：编辑器附着 — 用 [editorAttachDecision] 纯函数决策，
- * 覆盖所有 WindowBindingState 分支，不会因 Attaching("prepared") 卡死。
+ * 覆盖所有 WindowBindingState 分支。
+ *
+ * #624 评论17 问题2：删除 "prepared" 假窗口后，绑定状态机为
+ * Detached → Attaching(realWindowId) → Attached(realWindowId)。
+ * - Attached 且 windowId/targetId 都匹配 → Confirm（confirmEditorAttached）；
+ * - Attaching 且 windowId/targetId 都匹配 → Wait（等待 attachView 推进到 Attached）；
+ * - Attaching/Attached 属于旧 window → BeginEdit（restamp 到新窗口）；
+ * - Idle/Detached → BeginEdit；
+ * - Committing/Cancelling/Detaching → Hold（等待当前事务结束）。
  */
 @Composable
 private fun WritingPaneEditorAttach(
@@ -533,8 +541,10 @@ private suspend fun handleExternalDocumentFact(
             coordinator.sessionCoordinator.consumePendingExternalFact(targetId)
         }
         ExternalContentDecision.IgnoreDirtyConflict -> {
-            // #624 评论17 问题3：保存未解决事实到 pendingExternalFact，
-            // 不得只发 UI 错误后丢掉。本地保存清 dirty 后触发重读与版本比较。
+            // #624 评论17 问题3/5：保存未解决事实到 pendingExternal（只存
+            // sourceVersion + origin，不缓存 fact.text），不得只发 UI 错误后丢掉。
+            // 本地保存清 dirty 后据 sourceVersion/origin 重新从 Repository 读最新
+            // 正文/hash 走 shouldApplyExternalContent，不拿缓存的旧正文覆盖。
             coordinator.sessionCoordinator.storePendingExternalFact(targetId, fact)
             if (fact.origin == com.xiwei.sujian.feature.editor.session.DocumentFactOrigin.SYNC_MERGED) {
                 viewModel.notifySyncMergeConflict()
@@ -547,7 +557,8 @@ private suspend fun handleExternalDocumentFact(
             // 重放/更旧/无版本锚点 — 忽略。
         }
         ExternalContentDecision.IgnoreUncomparableConflict -> {
-            // #624 评论17 问题3：保存未解决事实到 pendingExternalFact。
+            // #624 评论17 问题3/5：保存未解决事实到 pendingExternal（只存
+            // sourceVersion + origin，不缓存 fact.text）。
             // #595 五：不同版本但不可比较（无共同 revision 锚点/父链）—
             // 不得盲目覆盖；进入重新读取/(三方合并/冲突路径（类型化通知）。
             coordinator.sessionCoordinator.storePendingExternalFact(targetId, fact)
