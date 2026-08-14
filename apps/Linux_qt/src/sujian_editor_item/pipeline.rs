@@ -379,7 +379,7 @@ impl LinuxEditorPipeline {
 
     pub fn swap_kernel(&mut self, new_kernel: EditorKernel) -> EditorKernel {
         let old = std::mem::replace(&mut self.kernel, new_kernel);
-        let text = self.kernel.text().to_string();
+        let text = self.kernel.snapshot_text();
         let cursor = self.kernel.cursor();
         let revision = self.kernel.revision();
         let anchor = self.kernel.selection_anchor();
@@ -516,7 +516,7 @@ impl LinuxEditorPipeline {
             Ok(kernel) => {
                 self.kernel = kernel;
                 self.mirror.load_from_snapshot(
-                    self.kernel.text().to_string(),
+                    self.kernel.snapshot_text(),
                     self.kernel.cursor(),
                     self.kernel.revision(),
                     self.kernel.selection_anchor(),
@@ -537,7 +537,7 @@ impl LinuxEditorPipeline {
         cause: EditorTransactionCause,
     ) -> Option<EditorEditResult> {
         let command = EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::clamp(self.kernel.text(), byte_offset),
+            byte_offset: Utf8ByteOffset::clamp_rope(self.kernel.rope(), byte_offset),
             text: text.to_string(),
             cause,
             expected_revision: EditorRevision::new(self.mirror.revision()),
@@ -548,7 +548,7 @@ impl LinuxEditorPipeline {
             | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
-                        self.kernel.text().to_string(),
+                        self.kernel.snapshot_text(),
                         self.kernel.cursor(),
                         self.kernel.revision(),
                         self.kernel.selection_anchor(),
@@ -559,7 +559,7 @@ impl LinuxEditorPipeline {
             EditorEditOutcome::NoChange(result) => Some(result),
             EditorEditOutcome::StaleRevision(result) => {
                 self.mirror.load_from_snapshot(
-                    self.kernel.text().to_string(),
+                    self.kernel.snapshot_text(),
                     self.kernel.cursor(),
                     self.kernel.revision(),
                     self.kernel.selection_anchor(),
@@ -579,7 +579,7 @@ impl LinuxEditorPipeline {
         cause: EditorTransactionCause,
     ) -> Option<EditorEditResult> {
         let command = EditorCommand::Delete {
-            byte_range: Utf8ByteRange::clamp(self.kernel.text(), byte_start, byte_end_exclusive),
+            byte_range: Utf8ByteRange::clamp_rope(self.kernel.rope(), byte_start, byte_end_exclusive),
             deleted_text: String::new(),
             cause,
             expected_revision: EditorRevision::new(self.mirror.revision()),
@@ -590,7 +590,7 @@ impl LinuxEditorPipeline {
             | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
-                        self.kernel.text().to_string(),
+                        self.kernel.snapshot_text(),
                         self.kernel.cursor(),
                         self.kernel.revision(),
                         self.kernel.selection_anchor(),
@@ -601,7 +601,7 @@ impl LinuxEditorPipeline {
             EditorEditOutcome::NoChange(result) => Some(result),
             EditorEditOutcome::StaleRevision(result) => {
                 self.mirror.load_from_snapshot(
-                    self.kernel.text().to_string(),
+                    self.kernel.snapshot_text(),
                     self.kernel.cursor(),
                     self.kernel.revision(),
                     self.kernel.selection_anchor(),
@@ -622,7 +622,7 @@ impl LinuxEditorPipeline {
         cause: EditorTransactionCause,
     ) -> Option<EditorEditResult> {
         let command = EditorCommand::Replace {
-            byte_range: Utf8ByteRange::clamp(self.kernel.text(), byte_start, byte_end_exclusive),
+            byte_range: Utf8ByteRange::clamp_rope(self.kernel.rope(), byte_start, byte_end_exclusive),
             replacement_text: replacement.to_string(),
             original_text: String::new(),
             cause,
@@ -634,7 +634,7 @@ impl LinuxEditorPipeline {
             | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
-                        self.kernel.text().to_string(),
+                        self.kernel.snapshot_text(),
                         self.kernel.cursor(),
                         self.kernel.revision(),
                         self.kernel.selection_anchor(),
@@ -645,7 +645,7 @@ impl LinuxEditorPipeline {
             EditorEditOutcome::NoChange(result) => Some(result),
             EditorEditOutcome::StaleRevision(result) => {
                 self.mirror.load_from_snapshot(
-                    self.kernel.text().to_string(),
+                    self.kernel.snapshot_text(),
                     self.kernel.cursor(),
                     self.kernel.revision(),
                     self.kernel.selection_anchor(),
@@ -659,10 +659,9 @@ impl LinuxEditorPipeline {
     }
 
     pub fn set_selection(&mut self, anchor: usize, head: usize) -> Option<EditorEditResult> {
-        let text = self.kernel.text();
         let command = EditorCommand::SetSelection {
-            anchor: Utf8ByteOffset::clamp(text, anchor),
-            head: Utf8ByteOffset::clamp(text, head),
+            anchor: Utf8ByteOffset::clamp_rope(self.kernel.rope(), anchor),
+            head: Utf8ByteOffset::clamp_rope(self.kernel.rope(), head),
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
@@ -671,7 +670,7 @@ impl LinuxEditorPipeline {
             | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
-                        self.kernel.text().to_string(),
+                        self.kernel.snapshot_text(),
                         self.kernel.cursor(),
                         self.kernel.revision(),
                         self.kernel.selection_anchor(),
@@ -682,7 +681,7 @@ impl LinuxEditorPipeline {
             EditorEditOutcome::NoChange(result) => Some(result),
             EditorEditOutcome::StaleRevision(result) => {
                 self.mirror.load_from_snapshot(
-                    self.kernel.text().to_string(),
+                    self.kernel.snapshot_text(),
                     self.kernel.cursor(),
                     self.kernel.revision(),
                     self.kernel.selection_anchor(),
@@ -705,7 +704,7 @@ impl LinuxEditorPipeline {
             | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
-                        self.kernel.text().to_string(),
+                        self.kernel.snapshot_text(),
                         self.kernel.cursor(),
                         self.kernel.revision(),
                         self.kernel.selection_anchor(),
@@ -716,7 +715,7 @@ impl LinuxEditorPipeline {
             EditorEditOutcome::NoChange(_) => None,
             EditorEditOutcome::StaleRevision(result) => {
                 self.mirror.load_from_snapshot(
-                    self.kernel.text().to_string(),
+                    self.kernel.snapshot_text(),
                     self.kernel.cursor(),
                     self.kernel.revision(),
                     self.kernel.selection_anchor(),
@@ -737,7 +736,7 @@ impl LinuxEditorPipeline {
             | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
-                        self.kernel.text().to_string(),
+                        self.kernel.snapshot_text(),
                         self.kernel.cursor(),
                         self.kernel.revision(),
                         self.kernel.selection_anchor(),
@@ -748,7 +747,7 @@ impl LinuxEditorPipeline {
             EditorEditOutcome::NoChange(_) => None,
             EditorEditOutcome::StaleRevision(result) => {
                 self.mirror.load_from_snapshot(
-                    self.kernel.text().to_string(),
+                    self.kernel.snapshot_text(),
                     self.kernel.cursor(),
                     self.kernel.revision(),
                     self.kernel.selection_anchor(),
@@ -761,7 +760,7 @@ impl LinuxEditorPipeline {
 
     pub fn reload_from_kernel(&mut self) -> bool {
         self.mirror.load_from_snapshot(
-            self.kernel.text().to_string(),
+            self.kernel.snapshot_text(),
             self.kernel.cursor(),
             self.kernel.revision(),
             self.kernel.selection_anchor(),
@@ -773,20 +772,19 @@ impl LinuxEditorPipeline {
     }
 
     pub fn clear_undo_redo(&mut self) {
-        let text = self.kernel.text().to_string();
+        let text = self.kernel.snapshot_text();
         let cursor = self.kernel.cursor();
         let anchor = self.kernel.selection_anchor();
         self.kernel = EditorKernel::with_text(text, cursor).unwrap_or_else(|_| EditorKernel::new());
         if anchor != cursor {
-            let text = self.kernel.text();
             let _ = self.kernel.apply(EditorCommand::SetSelection {
-                anchor: Utf8ByteOffset::clamp(text, anchor),
-                head: Utf8ByteOffset::clamp(text, cursor),
+                anchor: Utf8ByteOffset::clamp_rope(self.kernel.rope(), anchor),
+                head: Utf8ByteOffset::clamp_rope(self.kernel.rope(), cursor),
                 expected_revision: EditorRevision::new(self.kernel.revision()),
             });
         }
         self.mirror.load_from_snapshot(
-            self.kernel.text().to_string(),
+            self.kernel.snapshot_text(),
             self.kernel.cursor(),
             self.kernel.revision(),
             self.kernel.selection_anchor(),

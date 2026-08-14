@@ -232,6 +232,18 @@ impl Utf8ByteRange {
         }
     }
 
+    /// #624 评论8：Rope 版 clamp（不 materialize 全文）— 供 Rust 平台适配器
+    /// （Linux Qt 等）在输入热路径做坐标校验时避免整章复制。
+    pub fn clamp_rope(rope: &crop::Rope, start: usize, end: usize) -> Self {
+        let s = Utf8ByteOffset::clamp_rope(rope, start);
+        let e = Utf8ByteOffset::clamp_rope(rope, end);
+        if s.value() > e.value() {
+            Self { start: e, end: e }
+        } else {
+            Self { start: s, end: e }
+        }
+    }
+
     pub fn from_values(start: usize, end: usize) -> Option<Self> {
         if start > end {
             return None;

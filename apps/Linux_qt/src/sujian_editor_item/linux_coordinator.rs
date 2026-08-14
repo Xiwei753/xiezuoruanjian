@@ -645,7 +645,7 @@ mod tests {
         let kernel = coord.take_active_session_kernel();
         assert!(kernel.is_some());
         let k = kernel.unwrap();
-        assert_eq!(k.text(), "hello world");
+        assert_eq!(k.snapshot_text(), "hello world");
         assert!(coord.return_kernel_to_active_session(k));
     }
 
@@ -766,7 +766,7 @@ mod tests {
         });
         assert!(coord.begin_edit("secret-1"));
         let kernel = coord.take_active_session_kernel().unwrap();
-        assert_eq!(kernel.text(), "my-secret");
+        assert_eq!(kernel.snapshot_text(), "my-secret");
         assert!(coord.return_kernel_to_active_session(kernel));
         assert!(coord.commit_active_edit());
         assert_eq!(coord.targets.get("secret-1").unwrap().current_text, "");

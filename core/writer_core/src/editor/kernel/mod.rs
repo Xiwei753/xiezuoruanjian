@@ -149,8 +149,10 @@ impl EditorKernel {
         self.text.to_string()
     }
 
-    /// 内部只读访问 Rope（供 app_service 边界校验使用）。
-    pub(crate) fn rope(&self) -> &Rope {
+    /// 内部只读访问 Rope（供 app_service 边界校验与 Rust 平台适配器
+    /// （Linux Qt 等）做零拷贝 clamp/校验使用）。普通输入热路径可用
+    /// [Utf8ByteOffset::clamp_rope] 避免 materialize 全文。
+    pub fn rope(&self) -> &Rope {
         &self.text
     }
 
