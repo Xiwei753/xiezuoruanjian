@@ -21,6 +21,7 @@ import com.xiwei.sujian.feature.editor.presentation.isCurrentChapter
 import com.xiwei.sujian.feature.editor.presentation.notifySyncMergeConflict
 import com.xiwei.sujian.feature.editor.presentation.onEditorApplied
 import com.xiwei.sujian.feature.editor.presentation.reloadSettings
+import com.xiwei.sujian.feature.editor.presentation.shouldConsumePendingAfterFact
 import com.xiwei.sujian.feature.editor.session.ExternalContentDecision
 import com.xiwei.sujian.feature.editor.session.SessionResetSource
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
@@ -553,9 +554,9 @@ private suspend fun handleExternalDocumentFact(
         }
         ExternalContentDecision.IgnoreReplay,
         ExternalContentDecision.IgnoreOlder,
-        ExternalContentDecision.IgnoreEmptyVersion,
-        -> {
-            // 重放/更旧/无版本锚点 — 忽略。
+        -> consumePendingForReapplyIfApplicable(coordinator, targetId, decision, fact)
+        ExternalContentDecision.IgnoreEmptyVersion -> {
+            // 无版本锚点 — 忽略，不消费 pending。
         }
         ExternalContentDecision.IgnoreUncomparableConflict -> {
             // #624 评论17 问题3/5：保存未解决事实到 pendingExternal（只存
@@ -567,5 +568,21 @@ private suspend fun handleExternalDocumentFact(
                 viewModel.notifySyncMergeConflict()
             }
         }
+    }
+}
+
+/**
+ * #624 评论17 问题5：reapply fact 的 IgnoreReplay/IgnoreOlder 消费 pending
+ * （外部状态已对齐/本地更新，冲突已解决）。正常 fact 不消费（可能消费无关 pending）。
+ * 提取为独立函数以控制 [handleExternalDocumentFact] 的 Cognitive Complexity。
+ */
+private fun consumePendingForReapplyIfApplicable(
+    coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
+    targetId: String,
+    decision: ExternalContentDecision,
+    fact: com.xiwei.sujian.feature.editor.session.TargetDocumentFact,
+) {
+    if (shouldConsumePendingAfterFact(decision, fact.isReapply)) {
+        coordinator.sessionCoordinator.consumePendingExternalFact(targetId)
     }
 }

@@ -146,6 +146,14 @@ data class TargetDocumentFact(
     val origin: DocumentFactOrigin,
     /** 仅供参考的 Rust revision；最终 revision 来自 reset 后的真实 snapshot。 */
     val revision: Long = 0L,
+    /**
+     * #624 评论17 问题5：reapply fact 标记 — [buildPendingReapplyFact] 构造的
+     * 事实设为 true。[handleExternalDocumentFact] 据此在 IgnoreReplay/IgnoreOlder 分支
+     * 也消费 pendingExternal（外部状态已对齐/本地更新，冲突已解决），避免 pending 泄漏。
+     * 正常事实（章节加载/同步合并）为 false，IgnoreReplay/IgnoreOlder 不消费 pending
+     * （可能消费无关的 pending）。
+     */
+    val isReapply: Boolean = false,
 )
 
 @Immutable

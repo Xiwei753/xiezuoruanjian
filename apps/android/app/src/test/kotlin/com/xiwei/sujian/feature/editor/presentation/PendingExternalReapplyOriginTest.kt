@@ -10,13 +10,18 @@ import com.xiwei.sujian.feature.editor.session.TargetDocumentFact
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.applyExternalContentFact
 import com.xiwei.sujian.feature.editor.session.applyLocalEdit
+import com.xiwei.sujian.feature.editor.session.consumePendingExternalFact
 import com.xiwei.sujian.feature.editor.session.documentCommittedVersionFor
 import com.xiwei.sujian.feature.editor.session.markSaved
 import com.xiwei.sujian.feature.editor.session.pendingExternalFactFor
 import com.xiwei.sujian.feature.editor.session.shouldApplyExternalContent
 import com.xiwei.sujian.feature.editor.session.storePendingExternalFact
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -237,5 +242,129 @@ class PendingExternalReapplyOriginTest {
             ExternalContentDecision.IgnoreUncomparableConflict,
             syncMergedDecision,
         )
+    }
+
+    /**
+     * #624 评论17 问题5：reapply fact 必须标记 isReapply = true，
+     * 让 handleExternalDocumentFact 在 IgnoreReplay/IgnoreOlder 分支也消费 pending。
+     */
+    @Test
+    fun buildPendingReapplyFact_setsIsReapplyFlag() {
+        val pending =
+            PendingExternalVersion(
+                sourceVersion = DocumentVersion(contentHash = "hash-old"),
+                origin = DocumentFactOrigin.REPOSITORY_LOAD,
+            )
+        val fact =
+            buildPendingReapplyFact(
+                pending = pending,
+                targetId = "t1",
+                repositoryContent = "text",
+                repositoryHash = "hash-new",
+                baseVersion = DocumentVersion(),
+                syncCommitId = null,
+            )
+        assertTrue("reapply fact 必须标记 isReapply = true", fact.isReapply)
+    }
+
+    /**
+     * #624 评论17 问题5：shouldConsumePendingAfterFact 纯函数 —
+     * reapply fact 的 IgnoreReplay/IgnoreOlder 应消费 pending。
+     */
+    @Test
+    fun shouldConsumePending_reapplyIgnoreReplay_consumes() {
+        assertTrue(shouldConsumePendingAfterFact(ExternalContentDecision.IgnoreReplay, isReapply = true))
+        assertTrue(shouldConsumePendingAfterFact(ExternalContentDecision.IgnoreOlder, isReapply = true))
+    }
+
+    @Test
+    fun shouldConsumePending_normalIgnoreReplay_doesNotConsume() {
+        assertFalse(shouldConsumePendingAfterFact(ExternalContentDecision.IgnoreReplay, isReapply = false))
+        assertFalse(shouldConsumePendingAfterFact(ExternalContentDecision.IgnoreOlder, isReapply = false))
+    }
+
+    @Test
+    fun shouldConsumePending_applyAndSameContent_alwaysConsumes() {
+        assertTrue(shouldConsumePendingAfterFact(ExternalContentDecision.Apply, isReapply = false))
+        assertTrue(shouldConsumePendingAfterFact(ExternalContentDecision.IgnoreSameContent, isReapply = false))
+        assertTrue(shouldConsumePendingAfterFact(ExternalContentDecision.Apply, isReapply = true))
+    }
+
+    @Test
+    fun shouldConsumePending_dirtyAndUncomparable_neverConsumes() {
+        assertFalse(shouldConsumePendingAfterFact(ExternalContentDecision.IgnoreDirtyConflict, isReapply = true))
+        assertFalse(shouldConsumePendingAfterFact(ExternalContentDecision.IgnoreUncomparableConflict, isReapply = true))
+        assertFalse(shouldConsumePendingAfterFact(ExternalContentDecision.IgnoreEmptyVersion, isReapply = true))
+    }
+
+    /**
+     * #624 评论17 问题5 集成：IgnoreReplay 场景（Repository hash == savedHash）
+     * 下 reapply fact 必须消费 pending，避免泄漏。
+     */
+    @Test
+    fun reapplyIgnoreReplay_consumesPending() {
+        val coordinator = createCoordinator()
+        coordinator.registerTargetMeta("t1", TextEditorProfile.DocumentBody, persistent = true)
+        // 建立版本事实
+        coordinator.applyExternalContentFact(
+            TargetDocumentFact(
+                targetId = "t1",
+                text = "text",
+                sourceVersion = DocumentVersion(contentHash = "hash-local"),
+                baseVersion = DocumentVersion(),
+                origin = DocumentFactOrigin.REPOSITORY_LOAD,
+            ),
+        )
+        // 本地编辑 dirty
+        coordinator.applyLocalEdit(
+            com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate.LocalInput(
+                targetId = "t1",
+                operationKind = com.xiwei.sujian.feature.editor.session.EditorOperationKind.INSERT,
+                contentChanged = true,
+                contentDelta = com.xiwei.sujian.feature.editor.session.EditorContentDelta(insertedChars = 1),
+                revision = 2L,
+                transactionId = 1L,
+            ),
+        )
+        // REPOSITORY_LOAD fact dirty → IgnoreDirtyConflict → store pending
+        val externalFact =
+            TargetDocumentFact(
+                targetId = "t1",
+                text = "externalText",
+                sourceVersion = DocumentVersion(contentHash = "hash-external"),
+                baseVersion = DocumentVersion(),
+                origin = DocumentFactOrigin.REPOSITORY_LOAD,
+            )
+        assertEquals(
+            "dirty 时必须 IgnoreDirtyConflict",
+            ExternalContentDecision.IgnoreDirtyConflict,
+            coordinator.shouldApplyExternalContent(externalFact),
+        )
+        coordinator.storePendingExternalFact("t1", externalFact)
+        assertNotNull("pending 已存储", coordinator.pendingExternalFactFor("t1"))
+        // 保存成功 → committedVersion = hash-saved
+        coordinator.markSaved("t1", DocumentVersion(contentHash = "hash-saved"))
+        // reapply：Repository hash == savedHash → IgnoreReplay
+        val reapplyFact =
+            buildPendingReapplyFact(
+                pending = coordinator.pendingExternalFactFor("t1")!!,
+                targetId = "t1",
+                repositoryContent = "savedText",
+                repositoryHash = "hash-saved",
+                baseVersion = coordinator.documentCommittedVersionFor("t1"),
+                syncCommitId = null,
+            )
+        assertEquals(
+            "Repository hash == savedHash → IgnoreReplay",
+            ExternalContentDecision.IgnoreReplay,
+            coordinator.shouldApplyExternalContent(reapplyFact),
+        )
+        assertTrue(
+            "isReapply fact + IgnoreReplay → 应消费 pending",
+            shouldConsumePendingAfterFact(ExternalContentDecision.IgnoreReplay, reapplyFact.isReapply),
+        )
+        // 模拟消费
+        coordinator.consumePendingExternalFact("t1")
+        assertNull("pending 应被消费", coordinator.pendingExternalFactFor("t1"))
     }
 }

@@ -10,16 +10,19 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.feature.editor.session.DocumentFactOrigin
 import com.xiwei.sujian.feature.editor.session.DocumentOperationLease
 import com.xiwei.sujian.feature.editor.session.DocumentVersion
+import com.xiwei.sujian.feature.editor.session.ExternalContentDecision
 import com.xiwei.sujian.feature.editor.session.PendingExternalVersion
 import com.xiwei.sujian.feature.editor.session.TargetDocumentFact
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.applyExternalContentFact
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
 import com.xiwei.sujian.feature.editor.session.commitSavedLease
+import com.xiwei.sujian.feature.editor.session.consumePendingExternalFact
 import com.xiwei.sujian.feature.editor.session.documentCommittedVersionFor
 import com.xiwei.sujian.feature.editor.session.pendingExternalFactFor
 import com.xiwei.sujian.feature.editor.session.prepareTargetSessionForCommit
 import com.xiwei.sujian.feature.editor.session.releasePreparedTarget
+import com.xiwei.sujian.feature.editor.session.shouldApplyExternalContent
 import com.xiwei.sujian.feature.editor.session.toSaveToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -160,7 +163,34 @@ internal fun buildPendingReapplyFact(
             ),
         baseVersion = baseVersion,
         origin = pending.origin,
+        // #624 评论17 问题5：reapply fact 标记 — 让 handleExternalDocumentFact
+        // 在 IgnoreReplay/IgnoreOlder 分支也消费 pending，避免泄漏。
+        isReapply = true,
     )
+
+/**
+ * #624 评论17 问题5：决定事实处理后是否消费 pendingExternal。
+ *
+ * - Apply/IgnoreSameContent → 消费（冲突已解决，版本已提交）
+ * - IgnoreReplay/IgnoreOlder → 仅 reapply fact 消费（外部状态已对齐/本地更新）
+ * - IgnoreDirtyConflict/IgnoreUncomparableConflict/IgnoreEmptyVersion → 不消费
+ */
+internal fun shouldConsumePendingAfterFact(
+    decision: ExternalContentDecision,
+    isReapply: Boolean,
+): Boolean =
+    when (decision) {
+        ExternalContentDecision.Apply,
+        ExternalContentDecision.IgnoreSameContent,
+        -> true
+        ExternalContentDecision.IgnoreReplay,
+        ExternalContentDecision.IgnoreOlder,
+        -> isReapply
+        ExternalContentDecision.IgnoreDirtyConflict,
+        ExternalContentDecision.IgnoreUncomparableConflict,
+        ExternalContentDecision.IgnoreEmptyVersion,
+        -> false
+    }
 
 /**
  * #624 评论17 问题5：保存成功后重读 pendingExternal 并重新应用 — 替换无条件
@@ -210,6 +240,16 @@ suspend fun EditorViewModel.reapplyPendingExternalAfterSave(targetId: String): B
                 baseVersion = baseVersion,
                 syncCommitId = syncCommitId,
             )
+        // #624 评论17 问题5：预检查决策 — IgnoreReplay/IgnoreOlder 时直接消费 pending，
+        // 不 emit（事实是 no-op，避免 collector 处理的竞态窗口）。
+        val decision = coordinator.shouldApplyExternalContent(fact)
+        if (shouldConsumePendingAfterFact(decision, fact.isReapply) &&
+            decision != ExternalContentDecision.Apply &&
+            decision != ExternalContentDecision.IgnoreSameContent
+        ) {
+            coordinator.consumePendingExternalFact(targetId)
+            return true
+        }
         emitDocumentFact(fact)
         true
     } catch (e: kotlinx.coroutines.CancellationException) {
