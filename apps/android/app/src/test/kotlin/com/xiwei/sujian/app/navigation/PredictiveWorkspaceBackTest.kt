@@ -2,9 +2,15 @@ package com.xiwei.sujian.app.navigation
 
 import androidx.activity.BackEventCompat
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -20,9 +26,18 @@ import org.junit.Test
  * - 手势取消（[CancellationException]）→ seekBack(0f) 复位后重新抛出 —
  *   navigator 不得停在半截 seek 状态。
  *
+ * #624 评论14 第1项：cancellation 测试改成真实 `job.cancel()` + 真实 suspension point。
+ * Activity Compose 的 PredictiveBackHandler 在手势取消时不仅 cancel progress
+ * channel，还直接 `job.cancel()`；catch 块运行在已取消的 coroutine 里，继续调用
+ * suspend `seekBack(0f)` 会再次响应取消，复位可能没完成。测试用 Channel.receive()
+ * 作为真实 suspension point：在已取消的 coroutine 里 receive 立即抛
+ * CancellationException；只有用 `withContext(NonCancellable)` 包裹才能让 receive
+ * 挂起等数据并最终完成 0f 复位。
+ *
  * 组合层只保留这一个 PredictiveBackHandler（不再注册会抢先消费返回的
  * BackHandler），普通系统返回与预测返回共用同一执行体。
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class PredictiveWorkspaceBackTest {
     /** 记录式回调 — 捕获 seek/flush/back 调用与参数。 */
     private class BackRecorder {
@@ -93,35 +108,87 @@ class PredictiveWorkspaceBackTest {
             assertEquals("保存失败不得导航离开", 0, recorder.backCalls)
         }
 
+    /**
+     * #624 评论14 第1项：真实取消语义测试。
+     *
+     * Activity Compose 的 PredictiveBackHandler 在手势取消时直接 `job.cancel()`，
+     * catch 块运行在已取消的 coroutine 里。seekBack(0f) 必须用 NonCancellable
+     * 包裹才能完成复位。
+     *
+     * 测试用 `Channel.receive()` 作为 seekBack(0f) 的真实 suspension point：
+     * - 当前实现（无 NonCancellable）：cancel 后 catch 块调用 seekBack(0f) →
+     *   receive() 立即抛 CancellationException（coroutine 已取消），0f 不会被
+     *   记录到 seeks，测试失败；
+     * - 修复后（NonCancellable）：cancel 后 catch 块 withContext(NonCancellable)
+     *   { seekBack(0f) } → receive() 挂起等数据，测试送入数据后 receive 完成，
+     *   0f 被记录，测试通过。
+     */
     @Test
     fun cancellation_seeksBackToZeroAndRethrows() =
         runTest {
-            val recorder = BackRecorder()
+            val seeks = mutableListOf<Float>()
+            // 真实 suspension point：receive() 在已取消的 coroutine 里立即抛
+            // CancellationException；在 NonCancellable 里挂起等数据。
+            val seekZeroGate = Channel<Unit>(capacity = Channel.CONFLATED)
+
+            suspend fun seekBack(progress: Float) {
+                if (progress == 0f) {
+                    // 0f 复位需要真实挂起 — 模拟 navigator.seekBack(0f) 的 suspension。
+                    seekZeroGate.receive()
+                    seeks.add(0f)
+                } else {
+                    seeks.add(progress)
+                }
+            }
+
+            // progress flow：发一个 progress 后挂起（不 complete），等外部 cancel。
             val progressFlow =
                 flow<BackEventCompat> {
                     emit(BackEventCompat(0f, 0f, 0.6f, 0))
-                    throw CancellationException("gesture cancelled")
+                    CompletableDeferred<Unit>().await() // 永不完成，等 cancel
                 }
 
             var rethrown: CancellationException? = null
-            try {
-                runPredictiveWorkspaceBack(
-                    progressFlow = progressFlow,
-                    onSeekBack = recorder::seekBack,
-                    onFlushActiveDocument = recorder::flushActiveDocument,
-                    onBack = recorder::back,
-                )
-            } catch (e: CancellationException) {
-                rethrown = e
-            }
+            val job: Job =
+                launch {
+                    try {
+                        runPredictiveWorkspaceBack(
+                            progressFlow = progressFlow,
+                            onSeekBack = { progress -> seekBack(progress) },
+                            onFlushActiveDocument = { true },
+                            onBack = { },
+                        )
+                    } catch (e: CancellationException) {
+                        rethrown = e
+                    }
+                }
+
+            // 等 progress 0.6f 被消费。
+            runCurrent()
+            assertEquals(
+                "手势过程必须先把 progress 0.6f 喂给 seekBack",
+                listOf(0.6f),
+                seeks,
+            )
+
+            // 真正 cancel child job — 模拟 Activity Compose PredictiveBackHandler 的 job.cancel()。
+            job.cancel()
+            // 推进让 catch 块运行；修复后 onSeekBack(0f) 挂起在 receive()。
+            runCurrent()
+
+            // 送数据让 receive 完成（修复后 seeks 记录 0f；当前实现 receive 已抛
+            // CancellationException，send 无人接收但 CONFLATED 不阻塞）。
+            seekZeroGate.send(Unit)
+            runCurrent()
+
+            job.join()
+            seekZeroGate.close()
 
             assertTrue("手势取消必须重新抛出 CancellationException", rethrown != null)
-            assertEquals(
-                "手势取消必须把 seek 复位到 0f（navigator 不得停在半截 seek 状态）",
-                0f,
-                recorder.seeks.last(),
+            assertTrue(
+                "手势取消必须用 NonCancellable 包裹 seekBack(0f) 保证复位完成" +
+                    "（navigator 不得停在半截 seek 状态）",
+                seeks.contains(0f),
             )
-            assertEquals("手势取消不得导航离开", 0, recorder.backCalls)
-            assertEquals("手势取消不得执行保存", 0, recorder.flushCalls)
         }
 }

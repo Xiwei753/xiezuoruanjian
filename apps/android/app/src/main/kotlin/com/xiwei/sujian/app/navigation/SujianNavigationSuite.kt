@@ -86,6 +86,7 @@ import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -639,8 +640,11 @@ internal suspend fun runPredictiveWorkspaceBack(
             onSeekBack(0f)
         }
     } catch (e: kotlinx.coroutines.CancellationException) {
-        // 手势取消 — 复位 seek（navigator 不得停在半截过渡态）后向上重抛。
-        onSeekBack(0f)
+        // #624 评论14 第1项：catch 块运行在已取消的 coroutine 里（Activity Compose
+        // 的 PredictiveBackHandler 在手势取消时直接 job.cancel()）。直接调用 suspend
+        // onSeekBack(0f) 会再次响应取消，复位可能没完成。用 NonCancellable 包裹保证
+        // 复位完整执行后再向上重抛（navigator 不得停在半截过渡态）。
+        withContext(NonCancellable) { onSeekBack(0f) }
         throw e
     }
 }

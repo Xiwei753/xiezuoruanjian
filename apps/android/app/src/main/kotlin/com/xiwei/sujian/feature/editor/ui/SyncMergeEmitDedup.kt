@@ -12,7 +12,7 @@ package com.xiwei.sujian.feature.editor.ui
  *
  * 语义：
  * - [shouldEmit] 只在真正发射时记录 hash；同一 hash 的后续请求返回 false；
- * - [reset] 在章节提交（switchChapterLocked 成功提交 / initChapter）时调用，
+ * - [reset] 在章节提交（switchCommit 成功提交）时调用，
  *   使重新进入章节后同一 hash 可以再次发射（重新进入时正文由
  *   RepositoryLoaded 事件装载，SyncMerged 只需报告新的磁盘变化）。
  *

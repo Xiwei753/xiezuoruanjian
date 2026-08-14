@@ -237,16 +237,6 @@ class EditorViewModel(
      */
     internal val saveReceipts = DocumentSaveReceiptTracker()
 
-    /**
-     * #597：章节加载纪元 — 每次真实切换事务开始时递增。
-     *
-     * initChapter 遗留入口会后台启动 loadChapter；该背景加载与切换事务
-     * 共享同一个 session（保存失败时事务不替换 currentSession），其迟到的
-     * 失败写入会把事务已提交的 SaveFailed 覆盖成 Idle（满载调度下偶发）。
-     * 事务开始后递增纪元，旧加载写可见状态前校验纪元，迟到写入被拒绝。
-     */
-    internal val chapterLoadEpoch = java.util.concurrent.atomic.AtomicLong(0L)
-
     // #624 评论12 第2项：contentDirty 已删除 — dirty 唯一真值在 session store
     // （applyLocalUpdate 写入 DocumentState.localDirty，issueDocumentOperationLease
     // 从记录填入 lease.localDirty），ViewModel 不再维护第二份。
@@ -279,7 +269,7 @@ class EditorViewModel(
     internal var inputFrozen = false
 
     // #595 二：同步合并发射去重 — 每个章节只发射一次同一 fileHash 的 SyncMerged。
-    // 章节提交时 reset（见 switchChapterLocked/initChapter）。
+    // 章节提交时 reset（见 switchCommit）。
     internal val syncMergeEmitDedup = SyncMergeEmitDedup()
 
     // #595 一：章节切换串行门 — 同一时间只允许一个切换事务执行；

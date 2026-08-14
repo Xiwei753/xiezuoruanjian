@@ -100,13 +100,15 @@ fun WritingPane(
     // WORKSPACE_NAVIGATION 关闭。
     // 深链/恢复路径（currentSession 不是本 pane 章节）仍走 switchChapter 事务。
     val chapter = ChapterRef(projectId, volumeId, chapterId, chapterTitle)
-    val chapterState =
-        rememberChapterSwitchSync(
-            viewModel,
-            chapter,
-            targetId,
-            onChapterSwitchFailed,
-        )
+    // #624 评论14 第2项：failedSwitchTarget 已删除 — switchLoadAndPrepare 不提前发布 B，
+    // WritingPaneEditorAttach 的 isCurrentChapter 守卫已足够阻止提前 beginEdit。
+    // onChapterSwitchFailed 回调仍需保留（保存/加载失败回滚导航）。
+    rememberChapterSwitchSync(
+        viewModel,
+        chapter,
+        targetId,
+        onChapterSwitchFailed,
+    )
 
     val sessionState by coordinator.sessionStateFlow.collectAsStateWithLifecycle()
     val currentUiState by rememberUpdatedState(uiState)
@@ -127,14 +129,13 @@ fun WritingPane(
         coordinator,
         targetId,
         currentUiState,
-        chapterState.failedSwitchTarget,
     )
 
     WritingPaneEditorAttachSync(
         currentViewModel = currentViewModel,
         coordinator = coordinator,
         targetId = targetId,
-        inputs = EditorAttachInputs(uiState, sessionState, chapterState, chapter),
+        inputs = EditorAttachInputs(uiState, sessionState, chapter),
     )
 
     WritingPaneColumn(
@@ -182,11 +183,10 @@ private fun rememberWritingPaneTarget(
     return target
 }
 
-/** 编辑器附着所需的可观察状态（正文/会话/切换标记/章节身份）。 */
+/** 编辑器附着所需的可观察状态（正文/会话/章节身份）。 */
 private data class EditorAttachInputs(
     val uiState: com.xiwei.sujian.feature.editor.ui.EditorUiState,
     val sessionState: com.xiwei.sujian.feature.editor.session.EditorSessionState,
-    val chapterState: ChapterSwitchSyncState,
     val chapter: ChapterRef,
 )
 
@@ -213,8 +213,6 @@ private fun WritingPaneEditorAttach(
     inputs: EditorAttachInputs,
 ) {
     LaunchedEffect(targetId, inputs.uiState.loading, inputs.sessionState.bindingState) {
-        // #595 一：切换失败的目标禁止 beginEdit。
-        if (inputs.chapterState.failedSwitchTarget == targetId) return@LaunchedEffect
         // #595 一：只有 ViewModel 当前已提交章节才允许 beginEdit —
         // 切换事务提交后、业务选择/导航落地前的一帧内，旧 pane 不得用
         // 新章节正文对旧 target 创建/重置 session。
@@ -348,7 +346,11 @@ private fun WritingPaneSettingsReload(
     }
 }
 
-/** 章节切换收口：深链/恢复路径（currentSession 不是本 pane 章节）走 switchChapter 事务。 */
+/**
+ * 章节切换收口：深链/恢复路径（currentSession 不是本 pane 章节）走 switchChapter 事务。
+ * #624 评论14 第2项：failedSwitchTarget 已删除 — switchLoadAndPrepare 不提前发布 B，
+ * isCurrentChapter 守卫已足够；onChapterSwitchFailed 回调保留用于保存/加载失败回滚导航。
+ */
 @Composable
 private fun rememberChapterSwitchSync(
     viewModel: EditorViewModel,
@@ -357,14 +359,11 @@ private fun rememberChapterSwitchSync(
     onChapterSwitchFailed: (
         (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
     )?,
-): ChapterSwitchSyncState {
+) {
     var lastProjectId by remember { mutableStateOf("") }
     var lastVolumeId by remember { mutableStateOf("") }
     var lastChapterId by remember { mutableStateOf("") }
     var lastChapterTitle by remember { mutableStateOf("") }
-    // #595 一：切换失败标记 — 阻止 beginEdit/外部替换协议用旧章节正文创建新章节
-    // session（"新 target 使用旧内容创建 Rust session"）；回滚重组合到旧章节后自然失效。
-    var failedSwitchTarget by remember { mutableStateOf<String?>(null) }
     val currentViewModel by rememberUpdatedState(viewModel)
 
     LaunchedEffect(chapter.projectId, chapter.volumeId, chapter.chapterId) {
@@ -374,11 +373,7 @@ private fun rememberChapterSwitchSync(
                 lastVolumeId == chapter.volumeId &&
                 lastChapterId == chapter.chapterId
         if (!sameChapter) {
-            if (currentViewModel.isCurrentChapter(chapter.projectId, chapter.volumeId, chapter.chapterId)) {
-                // #595 一：宿主已预提交该章节 — 直接进入编辑（旧 target 由
-                // DisposableEffect onDispose 解绑，session 保留）。
-                failedSwitchTarget = null
-            } else {
+            if (!currentViewModel.isCurrentChapter(chapter.projectId, chapter.volumeId, chapter.chapterId)) {
                 when (
                     val result =
                         viewModel.switchChapter(
@@ -392,13 +387,11 @@ private fun rememberChapterSwitchSync(
                         // #595 一：只有保存+加载+session 预准备都成功，旧章节才
                         // 由事务提交（commitPreparedSession 保留其持久 session）；
                         // 窗口解绑由 DisposableEffect onDispose 完成。
-                        failedSwitchTarget = null
                     }
                     is com.xiwei.sujian.feature.editor.ui.ChapterSwitchResult.SaveFailed,
                     is com.xiwei.sujian.feature.editor.ui.ChapterSwitchResult.LoadFailed,
                     -> {
                         // #595 一：保存/加载失败 → 回滚工作区选择到旧章节（activeChapterKey）。
-                        failedSwitchTarget = targetId
                         onChapterSwitchFailed?.invoke(
                             lastProjectId.takeIf { it.isNotEmpty() } ?: chapter.projectId,
                             lastVolumeId.takeIf { it.isNotEmpty() },
@@ -417,14 +410,10 @@ private fun rememberChapterSwitchSync(
             lastChapterTitle = chapter.title
         }
     }
-    return ChapterSwitchSyncState(failedSwitchTarget)
 }
 
 /** 章节引用 — 当前 pane 的章节身份（用于切换同步与附着判断）。 */
 private data class ChapterRef(val projectId: String, val volumeId: String, val chapterId: String, val title: String)
-
-/** 章节切换同步所需的可观察状态（失败目标标记）。 */
-private data class ChapterSwitchSyncState(val failedSwitchTarget: String?)
 
 /**
  * #595 一/二：外部文档事实（RepositoryLoaded/SyncMerged）— 调用方已通过
@@ -437,7 +426,6 @@ private fun WritingPaneExternalContentFlow(
     coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
     targetId: String,
     currentUiState: com.xiwei.sujian.feature.editor.ui.EditorUiState,
-    failedSwitchTarget: String?,
 ) {
     val currentViewModel by rememberUpdatedState(viewModel)
     val currentCoordinator by rememberUpdatedState(coordinator)

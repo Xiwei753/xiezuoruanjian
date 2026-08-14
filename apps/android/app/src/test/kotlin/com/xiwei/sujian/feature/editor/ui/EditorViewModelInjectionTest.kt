@@ -103,8 +103,10 @@ class EditorViewModelInjectionTest {
         assertNotNull(vm)
 
         // #595 一：Factory 创建即注入 — 不允许退回到 getApplication() 第二份容器。
-        vm.initChapter("p", "v", "a", "A")
-        assertTrue("注入后 must 能正常进入章节加载", vm.uiState.value.loading)
+        // enterChapterForTest 依赖注入的 Repository（startSaveActor/reloadSettings）；
+        // 注入失败会抛错。currentSession 设置成功证明注入正常。
+        vm.enterChapterForTest("p", "v", "a", "A")
+        assertTrue("注入后 must 能正常进入章节", vm.isCurrentChapter("p", "v", "a"))
     }
 
     @Test
@@ -145,13 +147,7 @@ class EditorViewModelInjectionTest {
             recentEditsRepo = RecentEditsRepository(app, bridge),
             statsRepo = WritingStatsRepository(bridge.statsBridge, statsWriterScope()),
         )
-        vm.initChapter("p", "v", "a", "A")
-        // 等待 initChapter 的加载落定（无 native 时必失败 → loading=false）。
-        var attempts = 0
-        while (vm.uiState.value.loading && attempts < 200) {
-            Thread.sleep(5)
-            attempts++
-        }
+        vm.enterChapterForTest("p", "v", "a", "A")
 
         // 未提交章节的 target 调用 confirmEditorAttached → no-op（不解除冻结）。
         vm.confirmEditorAttached("chapter-body:p:v:other")
@@ -185,7 +181,7 @@ class EditorViewModelInjectionTest {
             recentEditsRepo = RecentEditsRepository(app, bridge),
             statsRepo = WritingStatsRepository(bridge.statsBridge, statsWriterScope()),
         )
-        vm.initChapter("p", "v", "a", "A")
+        vm.enterChapterForTest("p", "v", "a", "A")
         assertTrue(vm.isCurrentChapter("p", "v", "a"))
         assertFalse(vm.isCurrentChapter("p", "v", "b"))
     }

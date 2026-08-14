@@ -169,7 +169,7 @@ class EditorViewModelChapterSwitchTest {
             assertEquals("已有章节内容", vm.uiState.value.content)
 
             // 进入章节 A（initChapter 同步置 loading=true）
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
 
             // 切换到章节 B：oldSession=A → 保存 A 的正文 → 无 native → 保存失败
             val result = vm.switchChapter("p", "v", "b", "B")
@@ -204,13 +204,15 @@ class EditorViewModelChapterSwitchTest {
     fun switchChapterSetsLoadingTrueDuringTransition() =
         runTest {
             val vm = createVm()
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", "")
 
             // 内容为空 → 保存跳过 → 同步部分（loading=true、建新 session、启动加载）直接完成，
             // 然后挂起在真实 IO 加载上。加载完成前 loading 必须已置 true —
             // 编辑器在旧正文可见期间不会被重新绑定到新章节。
             val switchJob = launch { vm.switchChapter("p", "v", "b", "B") }
+            // enterChapterForTest 置 loading=false；推进调度让 switchChapter 执行到置 loading=true。
+            runCurrent()
             assertTrue(
                 "切换章节时 loading 必须已置 true（编辑器隐藏，新章节 session 待内容就绪后创建）",
                 vm.uiState.value.loading,
@@ -222,7 +224,7 @@ class EditorViewModelChapterSwitchTest {
     fun loadFailure_returnsLoadFailedAndRestoresCurrentChapter() =
         runTest {
             val vm = createVm()
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", "")
 
             // 切换到 B：旧章节内容为空 → 跳过保存 → 新 session=B → 加载 B 失败
@@ -264,7 +266,7 @@ class EditorViewModelChapterSwitchTest {
     fun sameChapterSwitchIsNoOp() =
         runTest {
             val vm = createVm()
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
             val before = vm.uiState.value.loading
             val result = vm.switchChapter("p", "v", "a", "A")
             assertTrue(
@@ -279,7 +281,7 @@ class EditorViewModelChapterSwitchTest {
     fun cancelledSwitch_restoresFullOldStateAndRethrowsCancellation() =
         runTest {
             val vm = createVm()
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
             // 等 initChapter 的加载落定，保证事务起点是稳定状态。
             var attempts = 0
             while (vm.uiState.value.loading && attempts < 200) {
@@ -370,7 +372,7 @@ class EditorViewModelChapterSwitchTest {
     fun loadFailure_restoresCompleteOldUiStateSnapshot() =
         runTest {
             val vm = createVm()
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", "")
             // 等 initChapter 的加载落定（无 native 时必失败 → loading=false）。
             var attempts = 0
@@ -399,7 +401,7 @@ class EditorViewModelChapterSwitchTest {
     fun concurrentSwitchRequests_serializeWithoutDeadlock() =
         runTest {
             val vm = createVm()
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", "")
 
             // #595 一：并发点击多个章节 — 请求经 ChapterSwitchGate 串行执行，
@@ -425,7 +427,7 @@ class EditorViewModelChapterSwitchTest {
     fun requestOpenChapter_successPathIsRequiredByCallers() =
         runTest {
             val vm = createVm()
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
 
             // 同一章节（已提交）→ Success；调用方据此导航，不触发回滚。
             val same = vm.requestOpenChapter("p", "v", "a", "A")
@@ -455,7 +457,7 @@ class EditorViewModelChapterSwitchTest {
                     }
                 }
             vm._uiState.value = vm._uiState.value.copy(content = whitespaceBody)
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", whitespaceBody)
             markLocalDirty(vm, "p", "v", "a")
 
@@ -484,7 +486,7 @@ class EditorViewModelChapterSwitchTest {
         runTest {
             val vm = createVm()
             val snapshotText = "用户刚输入的真实正文"
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", snapshotText)
             markLocalDirty(vm, "p", "v", "a")
             // 评论9 后本地正常输入不更新 _uiState.content — 它停留在打开时的旧正文。
@@ -544,7 +546,7 @@ class EditorViewModelChapterSwitchTest {
                     }
                 }
             vm._uiState.value = vm._uiState.value.copy(content = "正文A")
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", "正文A")
 
             val result = vm.switchChapter("p", "v", "b", "B")
@@ -566,7 +568,7 @@ class EditorViewModelChapterSwitchTest {
         runTest {
             val vm = createVm()
             val targetA = vm.chapterTargetId("p", "v", "a")
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", "正文A")
             markLocalDirty(vm, "p", "v", "a")
             vm.chapterSavePort =
@@ -609,7 +611,7 @@ class EditorViewModelChapterSwitchTest {
     fun switchChapter_dirtyEmptyOldChapter_attemptsClear() =
         runTest {
             val vm = createVm()
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", "")
             markLocalDirty(vm, "p", "v", "a")
 
@@ -633,7 +635,7 @@ class EditorViewModelChapterSwitchTest {
         runTest {
             val vm = createVm()
             val targetA = vm.chapterTargetId("p", "v", "a")
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", "旧正文")
             markLocalDirty(vm, "p", "v", "a")
 
@@ -705,7 +707,7 @@ class EditorViewModelChapterSwitchTest {
     fun switchChapter_staleDuringSaveLoop_returnsStale() =
         runTest {
             val vm = createVm()
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", "旧正文")
             markLocalDirty(vm, "p", "v", "a")
 
@@ -768,7 +770,7 @@ class EditorViewModelChapterSwitchTest {
     fun applyExternalContentToUi_doesNotRecordFabricatedSaveReceipt() =
         runTest {
             val vm = createVm()
-            vm.initChapter("p", "v", "a", "A")
+            vm.enterChapterForTest("p", "v", "a", "A")
             val targetId = vm.chapterTargetId("p", "v", "a")
 
             vm.applyExternalContentToUi(targetId, "同步合并后的正文", "hash-sync")
@@ -782,7 +784,7 @@ class EditorViewModelChapterSwitchTest {
     @Test
     fun isCurrentChapter_reflectsCommittedSession() {
         val vm = createVm()
-        vm.initChapter("p", "v", "a", "A")
+        vm.enterChapterForTest("p", "v", "a", "A")
         assertTrue(
             "initChapter 后当前章节必须匹配",
             vm.isCurrentChapter("p", "v", "a"),
@@ -792,6 +794,45 @@ class EditorViewModelChapterSwitchTest {
             vm.isCurrentChapter("p", "v", "b"),
         )
     }
+
+    /**
+     * #624 评论14 第2项：章节切换 prepare→commit→publish — B 在 commit 前不可见。
+     *
+     * switchLoadAndPrepare 不写 currentSession/_uiState/不 emit fact；只有 switchCommit
+     * commit 成功后才发布 B。加载失败时 currentSession 必须保持旧章节 A —
+     * B 从未被发布，WritingPane 的 isCurrentChapter 守卫不会提前 beginEdit(B)，
+     * WritingPaneExternalContentFlow 不会消费提前发出的 REPOSITORY_LOAD fact。
+     */
+    @Test
+    fun loadFailure_currentSessionStaysOnOldChapter_bNotPublishedBeforeCommit() =
+        runTest {
+            val vm = createVm()
+            vm.enterChapterForTest("p", "v", "a", "A")
+            vm._uiState.value = vm._uiState.value.copy(content = "正文A")
+            commitActiveSession(vm, "p", "v", "a", "正文A")
+
+            // 切换到 B：旧章节内容非空但 localDirty=false → 跳过保存 → 加载 B 失败。
+            val result = vm.requestOpenChapter("p", "v", "b", "B")
+
+            assertTrue(
+                "无 native 时加载 B 必须失败",
+                result is ChapterSwitchResult.LoadFailed,
+            )
+            assertTrue(
+                "加载失败时 currentSession 必须保持旧章节 A" +
+                    "（B 在 commit 前不发布 — isCurrentChapter(B) 必须为 false）",
+                vm.isCurrentChapter("p", "v", "a"),
+            )
+            assertFalse(
+                "B 在 commit 前不得发布成 currentSession",
+                vm.isCurrentChapter("p", "v", "b"),
+            )
+            assertEquals(
+                "加载失败时正文必须保持旧章节 A（B 的正文不提前写入 _uiState）",
+                "正文A",
+                vm.uiState.value.content,
+            )
+        }
 }
 
 /** #624 评论11 第3项：测试用进程级 stats writer scope（与 SujianAppDependencies 同构）。 */
