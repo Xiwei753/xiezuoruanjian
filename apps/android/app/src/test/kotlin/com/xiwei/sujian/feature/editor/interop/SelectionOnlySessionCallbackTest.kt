@@ -35,10 +35,15 @@ import uniffi.writer_core.EditorVisualIntentDto
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SelectionOnlySessionCallbackTest {
-    // 记录 setSelection 调用并返回 APPLIED + CURSOR_ONLY + 空 displayPatches 的假 bridge。
+    // 记录 setSelection 调用并返回 CURSOR_ONLY + 空 displayPatches 的假 bridge。
     // #597 测试 fake bridge，函数由 EditorKernelBridge 接口契约决定 — 无法裁减
     @Suppress("TooManyFunctions")
-    private class CursorOnlyBridge : EditorKernelBridge {
+    private class CursorOnlyBridge(
+        // #624 评论10 第5项：真实 Core 内核 apply_set_selection 返回 NoChange
+        // （正文未变）。旧测试 fake 返回 APPLIED，掩盖了生产路径上光标移动
+        // 无法到达会话层的问题 — 两个 outcome 都必须触发 onLocalEdit。
+        private val outcome: EditorEditOutcomeDto = EditorEditOutcomeDto.APPLIED,
+    ) : EditorKernelBridge {
         var setSelectionCalls = 0
         var lastAnchor = -1
         var lastHead = -1
@@ -49,7 +54,7 @@ class SelectionOnlySessionCallbackTest {
             head: Int,
         ): EditorEditResultDto =
             EditorEditResultDto(
-                outcome = EditorEditOutcomeDto.APPLIED,
+                outcome = outcome,
                 transactionId = txId++,
                 baseRevision = 1UL,
                 newRevision = 1UL,
@@ -244,6 +249,69 @@ class SelectionOnlySessionCallbackTest {
         assertEquals("setSelection 必须到达 kernel bridge", 1, bridge.setSelectionCalls)
         assertEquals(
             "#595 五：selection-only（空 displayPatches）也必须调用 onLocalEdit — " +
+                "会话层 selection 不得停留在旧值",
+            1,
+            localEditCalls,
+        )
+        assertEquals("operationKind 必须为 SELECTION", EditorOperationKind.SELECTION, lastKind)
+        assertEquals("onLocalEdit 必须携带真实新选区 anchor", 2, lastAnchor)
+        assertEquals("onLocalEdit 必须携带真实新选区 head", 2, lastHead)
+        assertEquals(
+            "#624 评论9：纯选区移动 contentChanged=false（正文未变，不应标记未保存）",
+            false,
+            lastContentChanged,
+        )
+        assertEquals("View 镜像选区必须同步", 2, view.getSelectionStart())
+        assertEquals(2, view.getSelectionEnd())
+    }
+
+    /**
+     * #624 评论10 第5项：真实 Core 内核 `apply_set_selection` 返回 NO_CHANGE
+     * （正文未变，outcome 不是 APPLIED）。旧门控 `output.result.isApplied()`
+     * 会把这个结果整个拦掉：onLocalEdit 不被调用，会话层 selection 停留在旧值，
+     * 与"纯 selection 只更新会话层 selection/revision"的契约矛盾。
+     * NO_CHANGE 结果同样携带真实新选区/transactionId/revision，必须进入会话层；
+     * 持久化状态机由 contentChanged=false 在 onEditorApplied 侧拦截。
+     */
+    @Test
+    fun selectionOnlyEdit_noChangeOutcome_stillInvokesOnLocalEdit() {
+        val context = RuntimeEnvironment.getApplication()
+        val view = SujianEditorView(context)
+        // 真实内核语义：CURSOR_ONLY + NO_CHANGE + 空 displayPatches。
+        val bridge = CursorOnlyBridge(outcome = EditorEditOutcomeDto.NO_CHANGE)
+        val attached =
+            view.attachSession(
+                sessionBridge = bridge,
+                profile = TextEditorProfile.DocumentBody,
+                text = "hello",
+                revision = 1L,
+                cursorUtf8 = 5,
+                selStartUtf8 = 5,
+                selEndUtf8 = 5,
+            )
+        assertTrue("attachSession must succeed", attached)
+
+        var localEditCalls = 0
+        var lastKind: EditorOperationKind? = null
+        var lastAnchor = -1
+        var lastHead = -1
+        var lastContentChanged: Boolean? = null
+        view.onLocalEdit = { event ->
+            localEditCalls++
+            assertEquals("selection-only 不改变 revision", 1L, event.revision)
+            assertTrue("selection-only 事务必须携带 transactionId", event.transactionId > 0L)
+            lastKind = event.operationKind
+            lastAnchor = event.selectionAnchorUtf8
+            lastHead = event.selectionHeadUtf8
+            lastContentChanged = event.contentChanged
+        }
+
+        // CURSOR_ONLY（NO_CHANGE）：光标从末尾移到 "he|llo"（UTF-8 偏移 2）。
+        view.setSelectionTyped(2, 2)
+
+        assertEquals("setSelection 必须到达 kernel bridge", 1, bridge.setSelectionCalls)
+        assertEquals(
+            "#624 评论10 第5项：NO_CHANGE 光标移动也必须调用 onLocalEdit — " +
                 "会话层 selection 不得停留在旧值",
             1,
             localEditCalls,

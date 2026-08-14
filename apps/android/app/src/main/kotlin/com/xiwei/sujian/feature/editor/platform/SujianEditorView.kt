@@ -199,7 +199,9 @@ class SujianEditorView
                 is PipelineOutput.Edited -> {
                     updateMaxScroll()
                     scrollY = scrollY.coerceIn(0f, maxScrollY)
-                    if (!suppressContentCallback && output.result.isApplied()) {
+                    if (!suppressContentCallback &&
+                        (output.result.isApplied() || output.result.isNoChange())
+                    ) {
                         // #624 评论8/9：热路径不传整章 String — 只构造轻量 EditorAppliedEvent。
                         // contentChanged = displayPatches 非空；contentDelta 直接消费
                         // Core EditorEditResultDto.contentDelta 真值（Unicode scalar 计数），
@@ -226,6 +228,9 @@ class SujianEditorView
                         // PipelineOutput 本身携带，不再使用 pendingEditSource 可变侧信道。
                         // #595 五：selection-only 操作（CURSOR_ONLY）没有 displayPatches，
                         // 但会话层 selection 必须更新 — 回调不受 displayPatches 门控。
+                        // #624 评论10 第5项：真实 Core 内核的光标移动返回 NO_CHANGE
+                        // （不是 APPLIED），同样必须进入会话层更新 selection；
+                        // 持久化状态机由 contentChanged=false 在 onEditorApplied 侧拦截。
                         if (source != EditorEditSource.NORMAL) {
                             onExternalEdit?.invoke(event)
                         } else {
