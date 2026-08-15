@@ -17,8 +17,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 HARMONY_CPP="$PROJECT_ROOT/apps/harmony/entry/src/main/cpp"
-NAPI_SOURCES=("$HARMONY_CPP"/napi_*.cpp)
-BRIDGE_H="$HARMONY_CPP/writer_core_bridge.h"
+NAPI_SOURCES=("$HARMONY_CPP"/corebridge/napi/napi_*.cpp)
+BRIDGE_H="$HARMONY_CPP/corebridge/writer_core_bridge.h"
 FFI_DIR="$PROJECT_ROOT/core/writer_core/src/ffi"
 
 RED='\033[0;31m'
@@ -163,9 +163,14 @@ fi
 # ── Step 8: Check DTO field name consistency (FFI JSON vs CoreDtos.ets) ──
 echo "Step 8: Checking DTO field name consistency (FFI JSON vs CoreDtos.ets)..."
 
-core_dtos="$PROJECT_ROOT/apps/harmony/entry/src/main/ets/model/CoreDtos.ets"
+# 注意：原 model/CoreDtos.ets 已按 Issue #629 第3节拆分到 corebridge/dto/ 下多个文件
+# (ProjectDtos.ets, EditorDtos.ets, SettingsDtos.ets, SyncDtos.ets, StarMapDtos.ets,
+#  PlatformDtos.ets, ResultEnvelope.ets)。下面的字段一致性检查只关心 Rust FFI 是否
+# 输出错误字段名（"name" vs "title"、"editedAt" vs "timestamp"），与具体哪个 .ets
+# 文件无关，因此只要 dto/ 目录存在即触发检查。
+core_dtos="$PROJECT_ROOT/apps/harmony/entry/src/main/ets/corebridge/dto"
 
-if [[ -f "$core_dtos" ]]; then
+if [[ -d "$core_dtos" ]]; then
     # Check that FFI does NOT output "name" for Project/Volume/Chapter
     # (CoreDtos.ets uses "title" for these entities)
     name_count=0
