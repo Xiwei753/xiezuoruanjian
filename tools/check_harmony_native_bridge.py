@@ -42,10 +42,12 @@ def check_native_bridge_no_mock(harmony_root: str) -> List[Tuple[bool, str]]:
     results: List[Tuple[bool, str]] = []
 
     # 1a: 扫描所有 Native*Bridge.ets 文件，检查不能有 MockWriterCoreBridge 的 import 或使用
+    # #629 迁移后：NativeWriterCoreBridge 在 corebridge/ 根，其余 Native*Bridge 与
+    # NativeCoreModule 在 corebridge/native/。NativeWorkspaceBridge 已随 Workspace
+    # 拆成 Project 而移除。
     bridge_files = [
         "NativeWriterCoreBridge.ets",
         "NativeCoreModule.ets",
-        "NativeWorkspaceBridge.ets",
         "NativeProjectBridge.ets",
         "NativeChapterBridge.ets",
         "NativeSettingsBridge.ets",
@@ -54,9 +56,14 @@ def check_native_bridge_no_mock(harmony_root: str) -> List[Tuple[bool, str]]:
         "NativeStarMapBridge.ets",
         "NativeLayoutBridge.ets",
     ]
+    ets_corebridge_root = "entry/src/main/ets/corebridge"
+    ets_corebridge_native = "entry/src/main/ets/corebridge/native"
     all_bridge_content = ""
     for bf in bridge_files:
-        fpath = os.path.join(harmony_root, "entry/src/main/ets/bridge", bf)
+        if bf == "NativeWriterCoreBridge.ets":
+            fpath = os.path.join(harmony_root, ets_corebridge_root, bf)
+        else:
+            fpath = os.path.join(harmony_root, ets_corebridge_native, bf)
         c = read_file(fpath)
         if c is not None:
             all_bridge_content += c + "\n"
@@ -76,7 +83,7 @@ def check_native_bridge_no_mock(harmony_root: str) -> List[Tuple[bool, str]]:
 
     # 1b: initialize() 失败时不能降级到 mock
     # 只检查 NativeWriterCoreBridge.ets 中的 initialize 方法
-    main_bridge_path = os.path.join(harmony_root, "entry/src/main/ets/bridge/NativeWriterCoreBridge.ets")
+    main_bridge_path = os.path.join(harmony_root, "entry/src/main/ets/corebridge/NativeWriterCoreBridge.ets")
     main_bridge_content = read_file(main_bridge_path)
     if main_bridge_content is None:
         results.append((False, f"文件不存在: {main_bridge_path}"))
@@ -89,8 +96,7 @@ def check_native_bridge_no_mock(harmony_root: str) -> List[Tuple[bool, str]]:
     degrade_ok = True
     degrade_detail = ""
     if init_match:
-        # 从匹配位置开始，找到对应的大括号闭合
-        start = init_match.end() - 1  # 指向 {
+        start = init_match.end() - 1
         depth = 0
         end = start
         for i in range(start, len(main_bridge_content)):
@@ -103,17 +109,17 @@ def check_native_bridge_no_mock(harmony_root: str) -> List[Tuple[bool, str]]:
                     break
         init_body = main_bridge_content[start:end]
 
-        # 去除注释行再检查，避免误报
         init_body_no_comments = re.sub(r"//.*$", "", init_body, flags=re.MULTILINE)
         init_body_no_comments = re.sub(r"/\*.*?\*/", "", init_body_no_comments, flags=re.DOTALL)
 
-        # 检查是否降级到 mock
         if re.search(r"[Mm]ock", init_body_no_comments):
             degrade_ok = False
             degrade_detail = "initialize() 方法体中包含 mock 降级逻辑"
         if re.search(r"fallback.*mock|mock.*fallback", init_body_no_comments, re.IGNORECASE):
             degrade_ok = False
             degrade_detail = "initialize() 方法体中包含 fallback 到 mock 的逻辑"
+        if degrade_ok and not degrade_detail:
+            degrade_detail = "initialize() 不含 mock 降级"
     else:
         degrade_ok = False
         degrade_detail = "未找到 initialize() 方法定义"
@@ -124,60 +130,49 @@ def check_native_bridge_no_mock(harmony_root: str) -> List[Tuple[bool, str]]:
 
 
 # ---------------------------------------------------------------------------
-# 检查 2: AppContext 默认 native
+# 检查 2: AppContext 装配 NativeWriterCoreBridge 且无 mock 切换
 # ---------------------------------------------------------------------------
 
 def check_app_context_native_default(harmony_root: str) -> List[Tuple[bool, str]]:
     results: List[Tuple[bool, str]] = []
-    fpath = os.path.join(harmony_root, "entry/src/main/ets/common/AppContext.ets")
+    # #629 迁移后：AppContext 从 common/ 移到 app/，不再有 environment:'native' 字段，
+    # 而是在构造时直接 this.bridge = NativeWriterCoreBridge.getInstance()。
+    fpath = os.path.join(harmony_root, "entry/src/main/ets/app/AppContext.ets")
     content = read_file(fpath)
 
     if content is None:
         results.append((False, f"文件不存在: {fpath}"))
         return results
 
-    # 2a: 默认 environment 必须是 'native'
-    has_native_default = bool(re.search(r"environment\s*:\s*['\"]native['\"]", content))
-    native_detail = "存在" if has_native_default else "未找到 environment: 'native' 默认值"
-    results.append((
-        has_native_default,
-        f"AppContext.ets 默认 environment='native' — {native_detail}",
-    ))
+    # 2a: 必须导入 NativeWriterCoreBridge 并在构造中装配 getInstance()
+    has_import = bool(re.search(r"import\s+.*NativeWriterCoreBridge", content))
+    has_assemble = bool(re.search(r"NativeWriterCoreBridge\s*\.\s*getInstance\s*\(\s*\)", content))
+    assemble_ok = has_import and has_assemble
+    detail_parts = []
+    if not has_import:
+        detail_parts.append("未找到 NativeWriterCoreBridge import")
+    if not has_assemble:
+        detail_parts.append("未找到 NativeWriterCoreBridge.getInstance() 装配")
+    detail = "; ".join(detail_parts) if detail_parts else "import 与 getInstance() 装配均存在"
+    results.append((assemble_ok, f"AppContext.ets 装配 NativeWriterCoreBridge — {detail}"))
 
-    # 2b: markNativeInitFailed() 中不能有降级到 mock 的逻辑
-    mark_match = re.search(
-        r"(?:async\s+)?markNativeInitFailed\s*\([^)]*\)\s*(?::\s*[^{]+?)?\{",
-        content,
-    )
-    degrade_ok = True
-    degrade_detail = "无降级逻辑"
-    if mark_match:
-        start = mark_match.end() - 1
-        depth = 0
-        end = start
-        for i in range(start, len(content)):
-            if content[i] == "{":
-                depth += 1
-            elif content[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    end = i + 1
-                    break
-        body = content[start:end]
-        # 去除注释行再检查，避免误报
-        body_no_comments = re.sub(r"//.*$", "", body, flags=re.MULTILINE)
-        body_no_comments = re.sub(r"/\*.*?\*/", "", body_no_comments, flags=re.DOTALL)
-        if re.search(r"[Mm]ock", body_no_comments):
-            degrade_ok = False
-            degrade_detail = "markNativeInitFailed() 方法体中包含 mock 降级逻辑"
-        if re.search(r"environment\s*=\s*['\"]mock['\"]", body_no_comments):
-            degrade_ok = False
-            degrade_detail = "markNativeInitFailed() 方法体中将 environment 设为 mock"
-    else:
-        degrade_ok = False
-        degrade_detail = "未找到 markNativeInitFailed() 方法定义"
-
-    results.append((degrade_ok, f"AppContext.ets markNativeInitFailed() 不降级到 mock — {degrade_detail}"))
+    # 2b: 不能含 mock/native 运行时切换或 mock 桥接
+    has_mock_ref = bool(re.search(r"\bMockWriterCoreBridge\b", content))
+    has_smoke_test = bool(re.search(r"nativeSmokeTest", content))
+    has_env_mock = bool(re.search(r"environment\s*===?\s*['\"]mock['\"]", content))
+    has_use_mock = bool(re.search(r"\buseMock\b", content))
+    no_switch_ok = not (has_mock_ref or has_smoke_test or has_env_mock or has_use_mock)
+    bad = []
+    if has_mock_ref:
+        bad.append("MockWriterCoreBridge")
+    if has_smoke_test:
+        bad.append("nativeSmokeTest")
+    if has_env_mock:
+        bad.append("environment === 'mock'")
+    if has_use_mock:
+        bad.append("useMock")
+    detail = "无 mock 切换" if no_switch_ok else f"发现禁止项: {bad}"
+    results.append((no_switch_ok, f"AppContext.ets 不含 mock/native 运行时切换 — {detail}"))
 
     return results
 
@@ -195,7 +190,6 @@ def check_entry_ability_set_context(harmony_root: str) -> List[Tuple[bool, str]]
         results.append((False, f"文件不存在: {fpath}"))
         return results
 
-    # 查找 onCreate 方法体
     on_create_match = re.search(
         r"(?:async\s+)?onCreate\s*\([^)]*\)\s*(?::\s*[^{]+?)?\{",
         content,
@@ -227,11 +221,13 @@ def check_entry_ability_set_context(harmony_root: str) -> List[Tuple[bool, str]]
 
 
 # ---------------------------------------------------------------------------
-# 检查 4: Index 必须调用 nativeBridge.initialize
+# 检查 4: Index 只做 Navigation 宿主
 # ---------------------------------------------------------------------------
 
 def check_index_native_init(harmony_root: str) -> List[Tuple[bool, str]]:
     results: List[Tuple[bool, str]] = []
+    # #629 后 Index.ets 简化为只渲染 AppNavigation，不再有 initAndLoad/nativeBridge。
+    # 初始化在 AppContext 构造 + EntryAbility.onCreate。
     fpath = os.path.join(harmony_root, "entry/src/main/ets/pages/Index.ets")
     content = read_file(fpath)
 
@@ -239,57 +235,35 @@ def check_index_native_init(harmony_root: str) -> List[Tuple[bool, str]]:
         results.append((False, f"文件不存在: {fpath}"))
         return results
 
-    # 查找 initAndLoad 方法体
-    init_match = re.search(
-        r"(?:async\s+)?initAndLoad\s*\([^)]*\)\s*(?::\s*[^{]+?)?\{",
-        content,
-    )
-    if init_match is None:
-        results.append((False, "Index.ets 未找到 initAndLoad() 方法"))
-        return results
-
-    start = init_match.end() - 1
-    depth = 0
-    end = start
-    for i in range(start, len(content)):
-        if content[i] == "{":
-            depth += 1
-        elif content[i] == "}":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-    body = content[start:end]
-
-    # 4a: 必须调用 nativeBridge.initialize(workspacePath)
-    has_init = bool(re.search(r"nativeBridge\s*\.?\s*initialize\s*\(", body))
-    results.append((
-        has_init,
-        f"Index.ets initAndLoad() 调用 nativeBridge.initialize() — {'存在' if has_init else '未找到'}",
-    ))
-
-    # 4b: 初始化失败时必须设置 errorMessage，不能静默降级
-    # 检查 catch 或失败分支中是否有 errorMessage 赋值
-    has_error_msg = bool(re.search(r"errorMessage\s*=", body))
-    has_silent_degrade = False
-
-    # 检查 catch 块中是否有 mock 降级（去除注释后检查）
-    body_no_comments = re.sub(r"//.*$", "", body, flags=re.MULTILINE)
-    body_no_comments = re.sub(r"/\*.*?\*/", "", body_no_comments, flags=re.DOTALL)
-    catch_matches = re.findall(r"catch\s*\([^)]*\)\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}", body_no_comments, re.DOTALL)
-    for cm in catch_matches:
-        if re.search(r"[Mm]ock", cm):
-            has_silent_degrade = True
-
-    error_ok = has_error_msg and not has_silent_degrade
+    # 4a: 必须导入 AppNavigation 并在 build() 中渲染 AppNavigation()
+    has_nav_import = bool(re.search(r"import\s+.*AppNavigation", content))
+    has_nav_render = bool(re.search(r"AppNavigation\s*\(\s*\)", content))
+    nav_ok = has_nav_import and has_nav_render
     detail_parts = []
-    if not has_error_msg:
-        detail_parts.append("未找到 errorMessage 赋值")
-    if has_silent_degrade:
-        detail_parts.append("catch 块中存在 mock 降级")
-    detail = "; ".join(detail_parts) if detail_parts else "正常"
+    if not has_nav_import:
+        detail_parts.append("未找到 AppNavigation import")
+    if not has_nav_render:
+        detail_parts.append("未找到 AppNavigation() 渲染")
+    detail = "; ".join(detail_parts) if detail_parts else "import 与渲染均存在"
+    results.append((nav_ok, f"Index.ets 渲染 AppNavigation — {detail}"))
 
-    results.append((error_ok, f"Index.ets 初始化失败设置 errorMessage 且不静默降级 — {detail}"))
+    # 4b: 不应堆业务逻辑：不含 initAndLoad/nativeBridge/MockWriterCoreBridge/mock 降级
+    has_init_and_load = bool(re.search(r"\binitAndLoad\b", content))
+    has_native_bridge = bool(re.search(r"\bnativeBridge\b", content))
+    has_mock_ref = bool(re.search(r"\bMockWriterCoreBridge\b", content))
+    has_mock_degrade = bool(re.search(r"[Mm]ock", content))
+    clean_ok = not (has_init_and_load or has_native_bridge or has_mock_ref or has_mock_degrade)
+    bad = []
+    if has_init_and_load:
+        bad.append("initAndLoad")
+    if has_native_bridge:
+        bad.append("nativeBridge")
+    if has_mock_ref:
+        bad.append("MockWriterCoreBridge")
+    if has_mock_degrade:
+        bad.append("mock")
+    detail = "无业务逻辑残留" if clean_ok else f"发现禁止项: {bad}"
+    results.append((clean_ok, f"Index.ets 不堆业务逻辑 — {detail}"))
 
     return results
 
@@ -331,6 +305,7 @@ def check_napi_vs_arkts(harmony_root: str) -> List[Tuple[bool, str]]:
     results: List[Tuple[bool, str]] = []
 
     # 6a: 提取所有 napi_*.cpp 中注册的函数名
+    # #629 迁移后：napi_*.cpp 从 cpp/ 移到 cpp/corebridge/napi/，并新增 napi_editor_session.cpp。
     napi_files = [
         "napi_init.cpp",
         "napi_app_state.cpp",
@@ -340,10 +315,12 @@ def check_napi_vs_arkts(harmony_root: str) -> List[Tuple[bool, str]]:
         "napi_sync.cpp",
         "napi_stats.cpp",
         "napi_starmap.cpp",
+        "napi_editor_session.cpp",
     ]
+    cpp_napi_dir = "entry/src/main/cpp/corebridge/napi"
     napi_content = ""
     for nf in napi_files:
-        fpath = os.path.join(harmony_root, "entry/src/main/cpp", nf)
+        fpath = os.path.join(harmony_root, cpp_napi_dir, nf)
         content = read_file(fpath)
         if content is not None:
             napi_content += content + "\n"
@@ -351,34 +328,32 @@ def check_napi_vs_arkts(harmony_root: str) -> List[Tuple[bool, str]]:
         results.append((False, "No napi_*.cpp files found"))
         return results
 
-    # 匹配 napi_define_properties 中的函数名描述符
-    # 典型模式: { "nativeInit", nullptr, NativeInit, nullptr, nullptr, nullptr, napi_default, nullptr }
-    # 或 napi_define_properties 调用中的属性描述
     napi_funcs = set()
-    # 方式1: 在初始化数组中找 "nativeXxx" 字符串
     for m in re.finditer(r"\"(native\w+)\"", napi_content):
         napi_funcs.add(m.group(1))
 
-    # 方式2: napi_set_property_name 等模式
     for m in re.finditer(r"napi_set_property_name\s*\([^,]+,\s*\"(\w+)\"", napi_content):
         napi_funcs.add(m.group(1))
 
     # 6b: 提取所有 Native*Bridge.ets 中调用的函数名
-    bridge_files = [
-        "NativeWriterCoreBridge.ets",
-        "NativeCoreModule.ets",
-        "NativeWorkspaceBridge.ets",
-        "NativeProjectBridge.ets",
-        "NativeChapterBridge.ets",
-        "NativeSettingsBridge.ets",
-        "NativeSyncBridge.ets",
-        "NativeStatsBridge.ets",
-        "NativeStarMapBridge.ets",
-        "NativeLayoutBridge.ets",
+    # #629 迁移后：NativeWriterCoreBridge 在 corebridge/ 根，其余 Native*Bridge 与
+    # NativeCoreModule 在 corebridge/native/，NativeEditorSessionBridge 在
+    # feature/editor/interop/。NativeWorkspaceBridge 已移除。
+    bridge_locations = [
+        ("NativeWriterCoreBridge.ets", "entry/src/main/ets/corebridge"),
+        ("NativeCoreModule.ets", "entry/src/main/ets/corebridge/native"),
+        ("NativeProjectBridge.ets", "entry/src/main/ets/corebridge/native"),
+        ("NativeChapterBridge.ets", "entry/src/main/ets/corebridge/native"),
+        ("NativeSettingsBridge.ets", "entry/src/main/ets/corebridge/native"),
+        ("NativeSyncBridge.ets", "entry/src/main/ets/corebridge/native"),
+        ("NativeStatsBridge.ets", "entry/src/main/ets/corebridge/native"),
+        ("NativeStarMapBridge.ets", "entry/src/main/ets/corebridge/native"),
+        ("NativeLayoutBridge.ets", "entry/src/main/ets/corebridge/native"),
+        ("NativeEditorSessionBridge.ets", "entry/src/main/ets/feature/editor/interop"),
     ]
     bridge_content = ""
-    for bf in bridge_files:
-        fpath = os.path.join(harmony_root, "entry/src/main/ets/bridge", bf)
+    for bf, subdir in bridge_locations:
+        fpath = os.path.join(harmony_root, subdir, bf)
         c = read_file(fpath)
         if c is not None:
             bridge_content += c + "\n"
@@ -386,7 +361,6 @@ def check_napi_vs_arkts(harmony_root: str) -> List[Tuple[bool, str]]:
         results.append((False, "No Native*Bridge.ets files found"))
         return results
 
-    # 匹配 this.getNativeModule().nativeXxx( 或 nativeModule.nativeXxx(
     arkts_funcs = set()
     for m in re.finditer(
         r"(?:getNativeModule|nativeModule)\s*\(\s*\)\s*\.\s*(native\w+)\s*\(",
@@ -394,7 +368,6 @@ def check_napi_vs_arkts(harmony_root: str) -> List[Tuple[bool, str]]:
     ):
         arkts_funcs.add(m.group(1))
 
-    # 也匹配 this.nativeModule.nativeXxx(
     for m in re.finditer(r"this\.nativeModule\.\s*(native\w+)\s*\(", bridge_content):
         arkts_funcs.add(m.group(1))
 
@@ -419,7 +392,8 @@ def check_c_header_vs_rust_ffi(harmony_root: str, core_root: str) -> List[Tuple[
     results: List[Tuple[bool, str]] = []
 
     # 7a: 提取 writer_core_bridge.h 中的函数声明
-    header_path = os.path.join(harmony_root, "entry/src/main/cpp/writer_core_bridge.h")
+    # #629 迁移后：header 从 cpp/ 移到 cpp/corebridge/writer_core_bridge.h。
+    header_path = os.path.join(harmony_root, "entry/src/main/cpp/corebridge/writer_core_bridge.h")
     header_content = read_file(header_path)
     if header_content is None:
         results.append((False, f"文件不存在: {header_path}"))
@@ -436,8 +410,6 @@ def check_c_header_vs_rust_ffi(harmony_root: str, core_root: str) -> List[Tuple[
         for rs_file in Path(ffi_dir).rglob("*.rs"):
             rs_content = rs_file.read_text(encoding="utf-8", errors="replace")
             for m in re.finditer(
-                # #[no_mangle] 与函数之间可能隔着属性块（如 #597 起的 clippy #[allow]）
-                # 或说明注释，不影响导出事实，正则需容忍这些中间行。
                 r"#\[no_mangle\]\s*(?:(?:#\[[^\]]*\]|//[^\n]*\n\s*)\s*)*pub\s+unsafe\s+extern\s+\"C\"\s+fn\s+(writer_core_\w+)",
                 rs_content,
             ):
@@ -447,11 +419,9 @@ def check_c_header_vs_rust_ffi(harmony_root: str, core_root: str) -> List[Tuple[
         return results
 
     # 7c: 比对
-    # C header 声明必须是 Rust FFI 导出的子集
     in_header_not_in_rust = header_funcs - rust_funcs
     in_rust_not_in_header = rust_funcs - header_funcs
 
-    # C header 有但 Rust 缺失 → 错误
     ok = len(in_header_not_in_rust) == 0
     if ok:
         detail = f"C header 声明 {len(header_funcs)} 个函数, Rust FFI 导出 {len(rust_funcs)} 个函数, C header 是 Rust 子集"
@@ -460,7 +430,6 @@ def check_c_header_vs_rust_ffi(harmony_root: str, core_root: str) -> List[Tuple[
 
     results.append((ok, f"writer_core_bridge.h 声明是 Rust FFI 导出的子集 — {detail}"))
 
-    # Rust 有但 C header 缺失 → 仅报告（可能是 Desktop 专用）
     if in_rust_not_in_header:
         results.append((
             True,
@@ -537,9 +506,9 @@ def main():
 
     checks = [
         ("1. NativeWriterCoreBridge.ets 不落回 mock", check_native_bridge_no_mock, harmony_root),
-        ("2. AppContext 默认 native", check_app_context_native_default, harmony_root),
+        ("2. AppContext 装配 NativeWriterCoreBridge 且无 mock 切换", check_app_context_native_default, harmony_root),
         ("3. EntryAbility 必须 setAbilityContext", check_entry_ability_set_context, harmony_root),
-        ("4. Index 必须调用 nativeBridge.initialize", check_index_native_init, harmony_root),
+        ("4. Index 只做 Navigation 宿主", check_index_native_init, harmony_root),
         ("5. CMakeLists.txt 必须检查 prebuilt SO", check_cmake_prebuilt_so, harmony_root),
         ("6. NAPI 注册 vs ArkTS 调用", check_napi_vs_arkts, harmony_root),
         ("7. C header vs Rust FFI", lambda hr: check_c_header_vs_rust_ffi(hr, core_root), harmony_root),
@@ -557,7 +526,6 @@ def main():
             all_results.append((passed, detail))
         print()
 
-    # 汇总
     failures = sum(1 for passed, _ in all_results if not passed)
     print("=" * 60)
     if failures == 0:

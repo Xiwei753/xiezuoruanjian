@@ -8,6 +8,7 @@ import { WorkspaceScreen } from '../../feature/project/ui/WorkspaceScreen'
 import { WritingScreen } from '../../feature/editor/ui/WritingScreen'
 import { StarMapScreen } from '../../feature/starmap/ui/StarMapScreen'
 import { SettingsScreen } from '../../feature/settings/ui/SettingsScreen'
+import { StatsScreen } from '../../feature/stats/ui/StatsScreen'
 
 @Component
 export struct AppNavigation {
@@ -30,6 +31,8 @@ export struct AppNavigation {
       StarMapScreen()
     } else if (name === Routes.Settings) {
       SettingsScreen()
+    } else if (name === Routes.Stats) {
+      StatsScreen()
     }
   }
 
