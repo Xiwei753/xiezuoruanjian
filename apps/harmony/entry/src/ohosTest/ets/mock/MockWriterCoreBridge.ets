@@ -1,12 +1,11 @@
 import { IWriterCoreBridge } from '../../../main/ets/corebridge/IWriterCoreBridge'
 import { EditorVisualTransaction, EditorTransactionCause } from '../../../main/ets/corebridge/dto/EditorDtos'
-import { WindowCapabilities, LayoutContract, ScreenPolicy, ActionSlot, ScreenRole, ActionRole, ActionRegion, ActionTarget } from '../../../main/ets/corebridge/dto/PlatformDtos'
+import { WindowCapabilities, LayoutContract, ScreenPolicy, ActionSlot, ScreenRole, ActionRole, ActionRegion, ActionTarget, PointerClass, ShellMode, WorkspacePaneMode } from '../../../main/ets/corebridge/dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../../../main/ets/corebridge/dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit, ChangedEntity, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../../main/ets/corebridge/dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapViewport, StarMapLayout, StarMapLayoutNode, StarMapEdgeRender, StarMapMotionPolicy } from '../../../main/ets/corebridge/dto/StarMapDtos'
 import { SyncConfig, SyncResult, SyncDiagnosticsResult, SyncState, SyncConflict } from '../../../main/ets/corebridge/dto/SyncDtos'
-import { resolveLayoutFromCapabilities } from '../../../main/ets/ui/adaptive/LayoutPolicyHelper'
 
 export class MockWriterCoreBridge implements IWriterCoreBridge {
   private mockProjects: Project[] = []
@@ -766,9 +765,9 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success([] as RecentEdit[])
   }
 
-  // Layout Contract methods — 委托给 LayoutPolicyHelper 纯函数（与 Core 完全一致）
+  // Layout Contract methods — mock 内联实现（与 Core resolve_layout 等价，仅用于测试源码）
   resolveLayout(capabilities: WindowCapabilities): Promise<ResultEnvelope<LayoutContract>> {
-    const contract = resolveLayoutFromCapabilities(capabilities)
+    const contract = this.mockResolveLayoutFromCapabilities(capabilities)
     return Promise.resolve({
       success: true,
       data: contract,
@@ -776,6 +775,41 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       changedPaths: [] as string[],
       changedEntities: [] as ChangedEntity[]
     } as ResultEnvelope<LayoutContract>)
+  }
+
+  // 与 Core resolve_layout() 等价的纯函数，仅 mock 测试源码使用。
+  // 生产代码走 NativeWriterCoreBridge.resolveLayout() → Core FFI，不经过此处。
+  private mockResolveLayoutFromCapabilities(capabilities: WindowCapabilities): LayoutContract {
+    let shellMode: ShellMode
+    let workspacePaneMode: WorkspacePaneMode
+
+    const paneCount = capabilities.availablePaneCount
+    if (paneCount <= 1) {
+      shellMode = ShellMode.SinglePane
+      workspacePaneMode = WorkspacePaneMode.SinglePane
+    } else if (paneCount === 2) {
+      shellMode = ShellMode.TwoPane
+      workspacePaneMode = WorkspacePaneMode.ListDetail
+    } else {
+      shellMode = ShellMode.ThreePane
+      workspacePaneMode = WorkspacePaneMode.ThreePane
+    }
+
+    if (capabilities.hasSeparatingFold) {
+      shellMode = ShellMode.SupportingPane
+    }
+
+    const touchInput =
+      capabilities.pointerClass === PointerClass.Touch ||
+      capabilities.pointerClass === PointerClass.Stylus
+    const showPrimaryNavigation = !(capabilities.keyboardVisible && touchInput &&
+      (shellMode === ShellMode.SinglePane || shellMode === ShellMode.SupportingPane))
+
+    return {
+      shellMode: shellMode,
+      workspacePaneMode: workspacePaneMode,
+      showPrimaryNavigation: showPrimaryNavigation
+    }
   }
 
   // Screen Policy methods — mock 返回与 Core 一致的策略（#610：区域/顺序是产品语义）

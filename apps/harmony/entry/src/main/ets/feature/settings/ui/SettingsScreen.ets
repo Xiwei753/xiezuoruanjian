@@ -8,7 +8,7 @@ import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { WidthClass, ShellMode } from '../../../corebridge/dto/PlatformDtos'
-import { MessageKeyMapper } from '../../../ui/MessageKeyMapper'
+import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
 
 interface SettingsSelectOption {
   value: string

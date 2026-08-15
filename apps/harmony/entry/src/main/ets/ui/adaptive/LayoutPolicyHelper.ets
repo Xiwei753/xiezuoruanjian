@@ -1,57 +1,19 @@
 /**
- * LayoutPolicyHelper — 与 Core presentation/layout_contract.rs 完全一致的纯函数
+ * LayoutPolicyHelper — Harmony 平台值计算
  *
- * ⚠️ DEPRECATED: 本文件仅用于 Mock 模式（MockWriterCoreBridge）。
- * 正式 native 模式必须通过 bridge.resolveLayout() 调用 Core FFI。
- * 当 Mock 模式被移除后，本文件应一并删除。
+ * 本文件只含 Harmony 平台值计算：
+ *   - harmonyAvailablePaneCount：窗口宽 → 可用栏数（Harmony 断点）
+ *   - buildHarmonyLayoutPlan：在 Core 契约之上叠加纸面宽度/内边距/网格列数
+ * 这些是 Harmony 平台决策，不出现在 Core 契约里。
  *
- * 契约映射规则必须与 Core layout_contract.rs 保持同步。
- * 任何契约变更必须先在 Core 中修改，再同步到本文件。
+ * Core 布局契约（shellMode/workspacePaneMode/showPrimaryNavigation）的解析
+ * 由 AdaptiveContext 通过 bridge.resolveLayout() 调用 Core FFI 完成，不在本文件。
  *
  * #610：Harmony 平台值（断点、纸面宽度、内边距、网格列数）是平台决策，
  * 在 buildHarmonyLayoutPlan 中计算，不出现在 Core 契约里。
  */
 
-import { WindowCapabilities, LayoutContract, LayoutPlan, PointerClass, ShellMode, WorkspacePaneMode } from '../../corebridge/dto/PlatformDtos'
-
-// ========== 与 Core resolve_layout() 完全一致的纯函数 ==========
-
-/**
- * 根据窗口能力解析布局契约
- * 逻辑与 Core resolve_layout() 完全一致，纯函数，无副作用
- */
-export function resolveLayoutFromCapabilities(capabilities: WindowCapabilities): LayoutContract {
-  let shellMode: ShellMode
-  let workspacePaneMode: WorkspacePaneMode
-
-  const paneCount = capabilities.availablePaneCount
-  if (paneCount <= 1) {
-    shellMode = ShellMode.SinglePane
-    workspacePaneMode = WorkspacePaneMode.SinglePane
-  } else if (paneCount === 2) {
-    shellMode = ShellMode.TwoPane
-    workspacePaneMode = WorkspacePaneMode.ListDetail
-  } else {
-    shellMode = ShellMode.ThreePane
-    workspacePaneMode = WorkspacePaneMode.ThreePane
-  }
-
-  if (capabilities.hasSeparatingFold) {
-    shellMode = ShellMode.SupportingPane
-  }
-
-  const touchInput =
-    capabilities.pointerClass === PointerClass.Touch ||
-    capabilities.pointerClass === PointerClass.Stylus
-  const showPrimaryNavigation = !(capabilities.keyboardVisible && touchInput &&
-    (shellMode === ShellMode.SinglePane || shellMode === ShellMode.SupportingPane))
-
-  return {
-    shellMode: shellMode,
-    workspacePaneMode: workspacePaneMode,
-    showPrimaryNavigation: showPrimaryNavigation
-  }
-}
+import { LayoutContract, LayoutPlan, ShellMode, WorkspacePaneMode } from '../../corebridge/dto/PlatformDtos'
 
 // ========== Harmony 平台值（不在 Core） ==========
 
