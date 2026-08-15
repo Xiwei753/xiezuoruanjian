@@ -463,3 +463,104 @@ pub unsafe extern "C" fn writer_core_editor_session_get_revision(session_id: u64
         Err(e) => err_json("EDITOR_SESSION_ERROR", &e),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_cause;
+    use crate::api::EditorTransactionCauseDto;
+
+    #[test]
+    fn test_parse_cause_typing() {
+        assert!(matches!(
+            parse_cause("Typing"),
+            Ok(EditorTransactionCauseDto::Typing)
+        ));
+    }
+
+    #[test]
+    fn test_parse_cause_delete() {
+        assert!(matches!(
+            parse_cause("Delete"),
+            Ok(EditorTransactionCauseDto::Delete)
+        ));
+    }
+
+    #[test]
+    fn test_parse_cause_ime_composition() {
+        assert!(matches!(
+            parse_cause("ImeComposition"),
+            Ok(EditorTransactionCauseDto::ImeComposition)
+        ));
+    }
+
+    #[test]
+    fn test_parse_cause_typing_commit() {
+        assert!(matches!(
+            parse_cause("TypingCommit"),
+            Ok(EditorTransactionCauseDto::TypingCommit)
+        ));
+    }
+
+    #[test]
+    fn test_parse_cause_paste() {
+        assert!(matches!(
+            parse_cause("Paste"),
+            Ok(EditorTransactionCauseDto::Paste)
+        ));
+    }
+
+    #[test]
+    fn test_parse_cause_undo() {
+        assert!(matches!(
+            parse_cause("Undo"),
+            Ok(EditorTransactionCauseDto::Undo)
+        ));
+    }
+
+    #[test]
+    fn test_parse_cause_redo() {
+        assert!(matches!(
+            parse_cause("Redo"),
+            Ok(EditorTransactionCauseDto::Redo)
+        ));
+    }
+
+    #[test]
+    fn test_parse_cause_load() {
+        assert!(matches!(
+            parse_cause("Load"),
+            Ok(EditorTransactionCauseDto::Load)
+        ));
+    }
+
+    #[test]
+    fn test_parse_cause_format() {
+        assert!(matches!(
+            parse_cause("Format"),
+            Ok(EditorTransactionCauseDto::Format)
+        ));
+    }
+
+    #[test]
+    fn test_parse_cause_programmatic() {
+        assert!(matches!(
+            parse_cause("Programmatic"),
+            Ok(EditorTransactionCauseDto::Programmatic)
+        ));
+    }
+
+    #[test]
+    fn test_parse_cause_unknown() {
+        assert!(parse_cause("Unknown").is_err());
+    }
+
+    #[test]
+    fn test_parse_cause_foo() {
+        assert!(parse_cause("foo").is_err());
+    }
+
+    #[test]
+    fn test_parse_cause_empty() {
+        assert!(parse_cause("").is_err());
+    }
+}
