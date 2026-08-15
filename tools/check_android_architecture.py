@@ -698,6 +698,157 @@ def rule_session_mutation_gate_only() -> list[Finding]:
     return findings
 
 
+def _extract_member_function_body(
+    text: str,
+    func_name: str,
+) -> tuple[int, int, list[str]] | None:
+    """提取 `fun EditorSessionCoordinator.<func_name>(...)` 的函数体行。
+
+    返回 (start_lineno_1based, end_lineno_1based, body_lines)。找不到返回 None。
+    大括号跟踪在去注释后的文本上进行（块注释 re.sub 去掉，行注释 strip_line_comment 去掉），
+    不解析字符串字面量 — 对目标函数体内无字符串大括号干扰足够稳健。
+    """
+    cleaned = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    lines = cleaned.splitlines()
+    pattern = re.compile(
+        rf"\bfun\s+EditorSessionCoordinator\.{re.escape(func_name)}\s*\("
+    )
+    start_idx = None
+    for i, line in enumerate(lines):
+        if pattern.search(strip_line_comment(line)):
+            start_idx = i
+            break
+    if start_idx is None:
+        return None
+    depth = 0
+    in_body = False
+    for j in range(start_idx, len(lines)):
+        line = strip_line_comment(lines[j])
+        for ch in line:
+            if ch == "{":
+                depth += 1
+                in_body = True
+            elif ch == "}":
+                depth -= 1
+        if in_body and depth == 0:
+            return (start_idx + 1, j + 1, lines[start_idx : j + 1])
+    return None
+
+
+def rule_session_close_before_claim() -> list[Finding]:
+    """#624 评论5294575627 要求5：close-before-claim 防回退。
+
+    1. closeTarget / detachWindowBinding / releaseHost：closeSession 直接调用必须在
+       mutateSession 闭包之后（先认领再 close）。
+    2. releaseHost 不得出现 recordsToClose 旧模式（readSession{allRecords()} → 锁外 forEach
+       closeSession → mutateSession clearRecords）。
+    3. resetPersistentSession 不得出现 updateRecord(targetId) { it.copy(sessionId = 0UL) }
+       旧路径 — 必须走 commitResetSnapshot CAS。
+    4. commitPreparedBindingState 必须返回 Boolean（bind precondition CAS）。
+    """
+    findings: list[Finding] = []
+    session_dir = APP_SRC / "feature" / "editor" / "session"
+    lifecycle_path = session_dir / "EditorSessionLifecycleOps.kt"
+    if not lifecycle_path.exists():
+        return findings
+    text = lifecycle_path.read_text(encoding="utf-8")
+    rel = "feature/editor/session/EditorSessionLifecycleOps.kt"
+
+    # 1. closeTarget / detachWindowBinding / releaseHost：closeSession 直接调用必须在
+    #    mutateSession 闭包之后（先认领再 close）。
+    for func_name in ("closeTarget", "detachWindowBinding", "releaseHost"):
+        body_info = _extract_member_function_body(text, func_name)
+        if body_info is None:
+            findings.append(
+                Finding(
+                    path=rel,
+                    line=0,
+                    message=(
+                        f"缺少 EditorSessionCoordinator.{func_name} — "
+                        "close-before-claim 检查无法进行（#624 评论5294575627 要求5）"
+                    ),
+                )
+            )
+            continue
+        start_lineno, _, body_lines = body_info
+        mutate_session_rel: int | None = None
+        for r, line in enumerate(body_lines):
+            if "mutateSession" in strip_line_comment(line):
+                mutate_session_rel = r
+                break
+        if mutate_session_rel is None:
+            continue
+        for r, line in enumerate(body_lines):
+            stripped = strip_line_comment(line)
+            if "closeSession(" in stripped and r < mutate_session_rel:
+                findings.append(
+                    Finding(
+                        path=rel,
+                        line=start_lineno + r,
+                        message=(
+                            f"{func_name}: closeSession 必须在 mutateSession 认领之后调用"
+                            "（close-before-claim，#624 评论5294575627 要求1/5）"
+                        ),
+                    )
+                )
+
+    # 2. releaseHost 不得出现 recordsToClose 旧模式。
+    body_info = _extract_member_function_body(text, "releaseHost")
+    if body_info is not None:
+        start_lineno, _, body_lines = body_info
+        for r, line in enumerate(body_lines):
+            if "recordsToClose" in strip_line_comment(line):
+                findings.append(
+                    Finding(
+                        path=rel,
+                        line=start_lineno + r,
+                        message=(
+                            "releaseHost 不得使用 recordsToClose 旧模式 — 必须单次 "
+                            "mutateSession 收集 sessionId 再锁外 close"
+                            "（#624 评论5294575627 要求2/5）"
+                        ),
+                    )
+                )
+
+    # 3. resetPersistentSession 不得出现 updateRecord(targetId) { it.copy(sessionId = 0UL) } 旧路径。
+    body_info = _extract_member_function_body(text, "resetPersistentSession")
+    if body_info is not None:
+        start_lineno, _, body_lines = body_info
+        body_text = "\n".join(body_lines)
+        if re.search(
+            r"updateRecord\s*\(\s*targetId\s*\)\s*\{\s*it\.copy\s*\(\s*sessionId\s*=\s*0UL\s*\)\s*\}",
+            body_text,
+        ):
+            findings.append(
+                Finding(
+                    path=rel,
+                    line=start_lineno,
+                    message=(
+                        "resetPersistentSession 不得出现 updateRecord(targetId) { it.copy(sessionId = 0UL) } "
+                        "旧路径 — 必须走 commitResetSnapshot CAS（#624 评论5294575627 要求4/5）"
+                    ),
+                )
+            )
+
+    # 4. commitPreparedBindingState 必须返回 Boolean（bind precondition CAS）。
+    if not re.search(
+        r"fun\s+EditorSessionCoordinator\.commitPreparedBindingState\s*\([^)]*\)\s*:\s*Boolean",
+        text,
+    ):
+        findings.append(
+            Finding(
+                path=rel,
+                line=0,
+                message=(
+                    "commitPreparedBindingState 必须返回 Boolean — bind precondition CAS"
+                    "（#624 评论5294575627 要求3/5）"
+                ),
+            )
+        )
+
+    return findings
+
+
 def rule_designsystem_independent() -> list[Finding]:
     forbidden_app_packages = [
         "com.xiwei.sujian.app",
@@ -1143,6 +1294,11 @@ RULES: list[tuple[str, str, object]] = [
         "session-mutation-gate-only",
         "session 的 state/store/epoch 写入只能从 mutateSession 进入（updateSessionState 已删除）",
         rule_session_mutation_gate_only,
+    ),
+    (
+        "session-close-before-claim",
+        "closeTarget/detach/releaseHost 先 mutateSession 认领再锁外 close；commitPreparedBindingState 返回 Boolean；reset 不得走 0UL 旧路径（#624 评论5294575627）",
+        rule_session_close_before_claim,
     ),
     (
         "designsystem-independence",

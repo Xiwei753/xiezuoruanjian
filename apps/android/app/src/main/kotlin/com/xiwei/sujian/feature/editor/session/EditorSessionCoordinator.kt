@@ -429,6 +429,8 @@ open class EditorSessionCoordinator(
         persistent: Boolean,
     ) {
         mutateSession {
+            // #624 评论5294575627 要求2：host 已释放后拒绝 — 不允许 RELEASED 后重新塞记录。
+            if (sessionState.editingState == EditingState.RELEASED) return@mutateSession
             val existing = record(targetId)
             if (existing != null) {
                 updateRecord(targetId) { it.copy(profile = profile, persistent = persistent) }

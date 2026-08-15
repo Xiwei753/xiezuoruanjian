@@ -981,6 +981,180 @@ class PackageSourceRootsFollowAppSrcTest(unittest.TestCase):
             )
 
 
+class SessionCloseBeforeClaimTest(unittest.TestCase):
+    """#624 评论5294575627 要求5：close-before-claim 守卫测试。"""
+
+    def run_rule(self, rule_id: str, files: dict[str, str]) -> list[arch.Finding]:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            make_tree(root, files)
+            arch.configure(
+                app_src=root / APP_PREFIX,
+                designsystem_src=root / DS_PREFIX,
+                designsystem_module=root,
+                platform_module=root,
+            )
+            _, by_rule = arch.run_checks()
+            return by_rule[rule_id]
+
+    def test_flags_close_target_close_before_claim(self):
+        """closeTarget 中 closeSession 出现在 mutateSession 之前必须被报告。"""
+        findings = self.run_rule(
+            "session-close-before-claim",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionLifecycleOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "fun EditorSessionCoordinator.closeTarget(\n"
+                    "    targetId: String,\n"
+                    "    reason: SessionCloseReason,\n"
+                    ") {\n"
+                    "    val sid = readSession { record(targetId)?.sessionId }\n"
+                    "    closeSession(sid)\n"
+                    "    mutateSession { removeRecord(targetId) }\n"
+                    "}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("close-before-claim", messages, "closeTarget close-before-claim 违规必须被报告")
+
+    def test_flags_detach_window_binding_close_before_claim(self):
+        """detachWindowBinding 中 closeSession 出现在 mutateSession 之前必须被报告。"""
+        findings = self.run_rule(
+            "session-close-before-claim",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionLifecycleOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "fun EditorSessionCoordinator.detachWindowBinding(\n"
+                    "    windowId: String,\n"
+                    "    targetId: String,\n"
+                    ") {\n"
+                    "    val sid = readSession { record(targetId)?.sessionId }\n"
+                    "    closeSession(sid)\n"
+                    "    mutateSession { removeRecord(targetId) }\n"
+                    "}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("close-before-claim", messages, "detachWindowBinding close-before-claim 违规必须被报告")
+
+    def test_flags_release_host_records_to_close_old_pattern(self):
+        """releaseHost 使用 recordsToClose 旧模式必须被报告。"""
+        findings = self.run_rule(
+            "session-close-before-claim",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionLifecycleOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "fun EditorSessionCoordinator.releaseHost() {\n"
+                    "    val recordsToClose = readSession { allRecords() }\n"
+                    "    recordsToClose.forEach { closeSession(it.sessionId) }\n"
+                    "    mutateSession { clearRecords() }\n"
+                    "}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("recordsToClose", messages, "releaseHost recordsToClose 旧模式必须被报告")
+
+    def test_flags_reset_persistent_session_zero_session_id_old_path(self):
+        """resetPersistentSession 出现 updateRecord(targetId) { it.copy(sessionId = 0UL) } 必须被报告。"""
+        findings = self.run_rule(
+            "session-close-before-claim",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionLifecycleOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "fun EditorSessionCoordinator.resetPersistentSession(\n"
+                    "    targetId: String,\n"
+                    "    text: String,\n"
+                    "    cursorUtf8: Int,\n"
+                    "): ExternalResetResult {\n"
+                    "    if (!validateSession(sessionId)) {\n"
+                    "        mutateSession { updateRecord(targetId) { it.copy(sessionId = 0UL) } }\n"
+                    "        closeSession(sessionId)\n"
+                    "    }\n"
+                    "    return ExternalResetResult.Failed\n"
+                    "}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("0UL", messages, "resetPersistentSession 0UL 旧路径必须被报告")
+
+    def test_flags_commit_prepared_binding_state_non_boolean(self):
+        """commitPreparedBindingState 非 Boolean 返回必须被报告。"""
+        findings = self.run_rule(
+            "session-close-before-claim",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionLifecycleOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "fun EditorSessionCoordinator.commitPreparedBindingState(\n"
+                    "    targetId: String,\n"
+                    "    sessionId: ULong,\n"
+                    "    precondition: SessionBindPrecondition,\n"
+                    "): Unit {}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("commitPreparedBindingState", messages, "commitPreparedBindingState 非 Boolean 必须被报告")
+
+    def test_passes_clean_claim_then_close(self):
+        """干净实现（mutateSession 认领 → 锁外 closeSession(claim)）不应被报告。"""
+        findings = self.run_rule(
+            "session-close-before-claim",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionLifecycleOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "fun EditorSessionCoordinator.closeTarget(\n"
+                    "    targetId: String,\n"
+                    "    reason: SessionCloseReason,\n"
+                    ") {\n"
+                    "    val claim = mutateSession {\n"
+                    "        val sid = record(targetId)?.sessionId ?: return@mutateSession null\n"
+                    "        removeRecord(targetId)\n"
+                    "        SessionCloseClaim(targetId, sid)\n"
+                    "    }\n"
+                    "    if (claim != null) closeSession(claim.sessionId)\n"
+                    "}\n\n"
+                    "fun EditorSessionCoordinator.detachWindowBinding(\n"
+                    "    windowId: String,\n"
+                    "    targetId: String,\n"
+                    ") {\n"
+                    "    val claim = mutateSession {\n"
+                    "        val sid = record(targetId)?.sessionId ?: return@mutateSession null\n"
+                    "        removeRecord(targetId)\n"
+                    "        SessionCloseClaim(targetId, sid)\n"
+                    "    }\n"
+                    "    if (claim != null) closeSession(claim.sessionId)\n"
+                    "}\n\n"
+                    "fun EditorSessionCoordinator.releaseHost() {\n"
+                    "    val ids = mutateSession {\n"
+                    "        val l = allRecords().map { it.sessionId }\n"
+                    "        clearRecords()\n"
+                    "        l\n"
+                    "    }\n"
+                    "    ids.forEach { closeSession(it) }\n"
+                    "}\n\n"
+                    "fun EditorSessionCoordinator.resetPersistentSession(\n"
+                    "    targetId: String,\n"
+                    "    text: String,\n"
+                    "    cursorUtf8: Int,\n"
+                    "): ExternalResetResult {\n"
+                    "    val candidate = createSession(targetId, text, cursorUtf8, true)\n"
+                    "    return commitResetSnapshot(targetId, candidate, precondition, oldSessionIdToClose = null)\n"
+                    "}\n\n"
+                    "fun EditorSessionCoordinator.commitPreparedBindingState(\n"
+                    "    targetId: String,\n"
+                    "    sessionId: ULong,\n"
+                    "    precondition: SessionBindPrecondition,\n"
+                    "): Boolean = mutateSession { true }\n"
+                ),
+            },
+        )
+        self.assertEqual([], findings, "干净 claim-then-close 实现不应被报告")
+
+
 class RealRepoTest(unittest.TestCase):
     def test_real_repo_scan_passes(self):
         """真实仓库全量扫描必须零违规（架构门禁回归测试）。"""

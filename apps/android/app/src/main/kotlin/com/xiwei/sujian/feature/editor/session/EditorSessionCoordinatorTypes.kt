@@ -160,6 +160,51 @@ data class PreparedSessionHandle(
 )
 
 /**
+ * #624 评论5294575627 要求1：closeSession 前的纯数据认领结果 —
+ * [EditorSessionCoordinator.detachWindowBinding] 非持久分支与 [EditorSessionCoordinator.closeTarget]
+ * 先在 mutateSession 内校验 binding+record.sessionId 仍属本次操作 → invalidateLease →
+ * removeRecord → 重置 sessionState → 返回本次独占的 (targetId, sessionId)；
+ * 解锁后才 closeSession(claim.sessionId)。认领失败不返回 claim，调用方不调 closeSession。
+ */
+@Immutable
+data class SessionCloseClaim(
+    val targetId: String,
+    val sessionId: ULong,
+)
+
+/**
+ * #624 评论5294575627 要求3：prepareSessionForEdit 的纯数据前置条件 —
+ * readSession 捕获后，锁外 validate/create/querySnapshot，再进 mutateSession 内
+ * 重新校验 precondition 完全一致才 putRecord + 写 Attaching。任一字段不一致说明
+ * 锁外期间同 target 的 session/revision/binding/epoch 已前进，candidate 必须丢弃，
+ * 不得覆盖当前新绑定。
+ */
+@Immutable
+data class SessionBindPrecondition(
+    val targetId: String,
+    val oldSessionId: ULong,
+    val oldRevision: Long,
+    val leaseEpoch: Long,
+    val bindingState: WindowBindingState,
+)
+
+/**
+ * #624 评论5294575627 要求3：resolveSessionForPrepare 的所有权结果 —
+ * 既有有效 session 返回 [Borrowed]（stale 时不关闭）；本事务新建的 candidate 返回
+ * [Created]（stale 时关闭 candidate，避免孤儿 Core session）。
+ */
+sealed interface PreparedBindSession {
+    /** 候选/既有 session 的 Core sessionId（两个变体共用，便于上层不分支读取）。 */
+    val sessionId: ULong
+
+    /** 复用既有有效 session — bind precondition stale 时不关闭。 */
+    data class Borrowed(override val sessionId: ULong) : PreparedBindSession
+
+    /** 本事务新建的 candidate session — bind precondition stale 时关闭 candidate。 */
+    data class Created(override val sessionId: ULong) : PreparedBindSession
+}
+
+/**
  * #595 二：外部文档事实的应用决策 — 替代旧 shouldApply* 布尔判断。
  *
  * - [Apply]：版本更新且无本地 dirty，可执行一次 Core reset；

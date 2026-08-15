@@ -270,26 +270,38 @@ fun EditorSessionCoordinator.detachWindowBinding(
     if (token.binding is WindowBindingState.Detached && token.binding.targetId == targetId) return
 
     if (!token.isPersistent || token.sessionId == 0UL) {
-        // 非持久 / 无 session：锁外 closeSession → 再进锁校验 token 仍完全一致才 removeRecord/Idle。
-        if (token.sessionId != 0UL) {
-            closeSession(token.sessionId)
-        }
-        mutateSession {
-            // token 仍完全一致才允许 removeRecord/Idle — 旧窗口晚到不能清新绑定的 session。
-            if (sessionState.bindingState != token.binding) return@mutateSession
-            val currentRec = record(targetId)
-            if (currentRec?.sessionId != token.sessionId) return@mutateSession
-            removeRecord(targetId)
-            if (sessionState.targetId == targetId) {
-                sessionState =
-                    sessionState.copy(
-                        editingState = EditingState.IDLE,
-                        bindingState = WindowBindingState.Idle,
-                        activeTargetId = null,
-                        targetId = null,
-                        sessionId = null,
-                    )
+        // #624 评论5294575627 要求1：先认领，再关闭 — mutateSession 内校验 binding+record.sessionId
+        // 仍属本次操作 → removeRecord → 重置 sessionState → 返回独占的 SessionCloseClaim；
+        // 解锁后才 closeSession(claim.sessionId)。认领失败不调 closeSession，避免锁外 closeSession
+        // 期间同 target 被新窗口重新绑定后旧操作先把 Rust session 关掉。
+        // #624 评论5294575627 验证修复3：走到非持久分支说明已通过前面的守卫（不是同 targetId
+        // 的 Detached 幂等 no-op —— 那在行 270 已 return；也不是不同窗口的 Attaching/Attached ——
+        // 那在 isBindingForDifferentWindow 已 return），所以这是一个有效的 detach 事件，先无条件
+        // invalidateLease 让旧 View lease 失效；removeRecord 仍由 binding/record CAS 守护，
+        // 认领失败不 removeRecord、不 closeSession。
+        val claim =
+            mutateSession {
+                invalidateLease()
+                // token 仍完全一致才允许认领 — 旧窗口晚到不能清新绑定的 session。
+                if (sessionState.bindingState != token.binding) return@mutateSession null
+                val currentRec = record(targetId)
+                if (currentRec?.sessionId != token.sessionId) return@mutateSession null
+                removeRecord(targetId)
+                if (sessionState.targetId == targetId) {
+                    sessionState =
+                        sessionState.copy(
+                            editingState = EditingState.IDLE,
+                            bindingState = WindowBindingState.Idle,
+                            activeTargetId = null,
+                            targetId = null,
+                            sessionId = null,
+                        )
+                }
+                SessionCloseClaim(targetId = targetId, sessionId = token.sessionId)
             }
+        // 解锁后关闭本次独占的 Core session — 认领失败时 claim 为 null，不调 closeSession。
+        if (claim != null && claim.sessionId != 0UL) {
+            closeSession(claim.sessionId)
         }
         return
     }
@@ -368,9 +380,13 @@ private fun WindowBindingState.isExactAttaching(
         this.sessionId == sessionId
 
 /**
- * #624 评论17 问题2：closeTarget — readSession 取 token（sessionId + binding），锁外 closeSession，
- * 重新进 mutation 校验 record.sessionId 仍是 token.sessionId 且 binding 仍一致才 removeRecord/重置。
- * 锁外 closeSession 期间新窗口可能 attach 同 target，binding 校验防止清掉刚建立的新绑定。
+ * #624 评论5294575627 要求1：closeTarget — 先认领，再关闭。
+ *
+ * wasActive 时先 commitActiveSession(null)（它内部也是"先认领再 close"），再由
+ * mutateSession 内校验 binding+record.sessionId 仍属本次操作 → invalidateLease →
+ * removeRecord → 重置 sessionState → 返回独占的 SessionCloseClaim；解锁后才
+ * closeSession(claim.sessionId)。认领失败不调 closeSession，避免锁外 closeSession
+ * 期间同 target 被新窗口重新绑定后旧操作先把 Rust session 关掉。
  */
 fun EditorSessionCoordinator.closeTarget(
     targetId: String,
@@ -381,31 +397,33 @@ fun EditorSessionCoordinator.closeTarget(
         commitActiveSession(null)
     }
 
-    // #624 评论17 问题2：token 含 sessionId + binding — 与 detachWindowBinding 一致。
     data class CloseTargetToken(val sessionId: ULong?, val binding: WindowBindingState)
     val token = readSession { CloseTargetToken(record(targetId)?.sessionId, sessionState.bindingState) }
-    if (token.sessionId != null && token.sessionId != 0UL) {
-        closeSession(token.sessionId)
+    val claim =
+        mutateSession {
+            // token 仍完全一致才允许认领 — 锁外期间新窗口 attach 不能被清掉。
+            if (sessionState.bindingState != token.binding) return@mutateSession null
+            val currentRec = record(targetId)
+            if (currentRec?.sessionId != token.sessionId) return@mutateSession null
+            removeRecord(targetId)
+            invalidateLease()
+            if (sessionState.targetId == targetId) {
+                sessionState =
+                    EditorSessionState(
+                        editingState = EditingState.IDLE,
+                        bindingState = WindowBindingState.Idle,
+                        activeTargetId = null,
+                    )
+            }
+            SessionCloseClaim(targetId = targetId, sessionId = token.sessionId ?: 0UL)
+        }
+    // 解锁后关闭本次独占的 Core session — 认领失败时 claim 为 null，不调 closeSession。
+    if (claim != null && claim.sessionId != 0UL) {
+        closeSession(claim.sessionId)
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
-            token.sessionId.toString(),
+            claim.sessionId.toString(),
             "close_target:${reason.name.lowercase()}",
         )
-    }
-    mutateSession {
-        // token 仍完全一致才 removeRecord — 锁外 closeSession 期间新窗口 attach 不能被清掉。
-        if (sessionState.bindingState != token.binding) return@mutateSession
-        val currentRec = record(targetId)
-        if (currentRec?.sessionId != token.sessionId) return@mutateSession
-        removeRecord(targetId)
-        invalidateLease()
-        if (sessionState.targetId == targetId) {
-            sessionState =
-                EditorSessionState(
-                    editingState = EditingState.IDLE,
-                    bindingState = WindowBindingState.Idle,
-                    activeTargetId = null,
-                )
-        }
     }
 }
 
@@ -428,6 +446,11 @@ fun EditorSessionCoordinator.clearWindowAttach(targetId: String) {
 /**
  * #624 评论17 问题2：准备会话绑定 — 删除 "prepared" 假窗口默认参数。
  * 真实窗口层必须传入真实 windowId。
+ *
+ * #624 评论5294575627 要求2：host 已释放（editingState==RELEASED）时直接拒绝，不允许重新塞记录。
+ * #624 评论5294575627 要求3：readSession 捕获 [SessionBindPrecondition] → 锁外 resolve/query →
+ * [commitPreparedBindingState] 带 precondition CAS 才写 Attaching。stale 时 Created 关闭 candidate、
+ * Borrowed 不关闭，返回 null 让上层重新按当前状态发起 bind。
  */
 @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod")
 fun EditorSessionCoordinator.prepareSessionForEdit(
@@ -437,7 +460,17 @@ fun EditorSessionCoordinator.prepareSessionForEdit(
     windowId: String,
 ): SessionBindInfo? {
     // #624 评论17 问题1：record 从 readSession 取 — 不在锁外读 store。
-    val record = readSession { record(targetId) } ?: return null
+    // #624 评论5294575627 要求2：同时检查 RELEASED — host 已释放后拒绝。
+    data class PrepareInitialRead(val record: EditorSessionRecord?, val isReleased: Boolean)
+    val initial =
+        readSession {
+            PrepareInitialRead(
+                record = record(targetId),
+                isReleased = sessionState.editingState == EditingState.RELEASED,
+            )
+        }
+    if (initial.isReleased) return null
+    val record = initial.record ?: return null
     val isPersistent = record.persistent
     val profile = record.profile
 
@@ -447,14 +480,29 @@ fun EditorSessionCoordinator.prepareSessionForEdit(
     }
     rebindFromOtherActiveIfNeeded(targetId)
 
+    // #624 评论5294575627 要求3：rebind 之后捕获 SessionBindPrecondition — 锁外 resolve/query 期间
+    // 同 target 可能换了 session/revision/binding，commitPreparedBindingState 内重新校验
+    // precondition 完全一致才 putRecord + 写 Attaching。
+    val precondition =
+        readSession {
+            val rec = record(targetId)
+            SessionBindPrecondition(
+                targetId = targetId,
+                oldSessionId = rec?.sessionId ?: 0UL,
+                oldRevision = rec?.documentState?.revision ?: 0L,
+                leaseEpoch = leaseEpoch,
+                bindingState = sessionState.bindingState,
+            )
+        }
+
     val textForSession = initialText
     val sel = initialSelection ?: textForSession.toByteArray(Charsets.UTF_8).size
-    val sessionId = resolveSessionForPrepare(targetId, textForSession, sel, isPersistent)
+    val prepared = resolveSessionForPrepare(targetId, textForSession, sel, isPersistent)
 
-    if (sessionId == null || sessionId == 0UL) {
+    if (prepared == null) {
         Log.e(
             EditorSessionCoordinator.TAG,
-            "prepareSessionForEdit($targetId): session creation returned invalid id=$sessionId, aborting",
+            "prepareSessionForEdit($targetId): session creation returned invalid id, aborting",
         )
         mutateSession {
             removeRecord(targetId)
@@ -467,21 +515,40 @@ fun EditorSessionCoordinator.prepareSessionForEdit(
         return null
     }
 
+    val sessionId = prepared.sessionId
     val attaching = WindowBindingState.Attaching(windowId, targetId, sessionId)
     val snapshot = querySnapshotForSession(sessionId)
-    commitPreparedBindingState(targetId, sessionId, textForSession, sel, snapshot, attaching)
+    val committed =
+        commitPreparedBindingState(textForSession, sel, snapshot, attaching, precondition)
+    if (!committed) {
+        // #624 评论5294575627 要求3：precondition stale — 本次新建的 candidate 关闭；
+        // 复用的既有 session 不关闭。返回 null 让上层重新按当前状态发起 bind。
+        if (prepared is PreparedBindSession.Created) {
+            closeSession(prepared.sessionId)
+        }
+        return null
+    }
     return SessionBindInfo(sessionId, profile, isPersistent, snapshot = snapshot)
 }
 
+/**
+ * #624 评论5294575627 要求3：commitPreparedBindingState 返回 Boolean — mutateSession 内重新校验
+ * [SessionBindPrecondition] 完全一致才 putRecord + 写 Attaching 并返回 true；否则返回 false（不写）。
+ * 删除旧的无条件提交。targetId/sessionId 从 precondition/attaching 派生（调用方保证一致），
+ * 不重复传参（避免 detekt LongParameterList）。
+ */
 private fun EditorSessionCoordinator.commitPreparedBindingState(
-    targetId: String,
-    sessionId: ULong,
     textForSession: String,
     sel: Int,
     snapshot: TargetSnapshot?,
     attaching: WindowBindingState.Attaching,
-) {
-    mutateSession {
+    precondition: SessionBindPrecondition,
+): Boolean {
+    val targetId = precondition.targetId
+    val sessionId = attaching.sessionId
+    return mutateSession {
+        // precondition CAS — 完全一致才 putRecord + 写 Attaching。
+        if (isBindPreconditionStale(targetId, precondition)) return@mutateSession false
         val currentRec = record(targetId)
         putRecord(
             currentRec?.copy(
@@ -537,7 +604,25 @@ private fun EditorSessionCoordinator.commitPreparedBindingState(
                 sessionBaseVersion = doc?.sessionBaseVersion ?: DocumentVersion(),
                 localDirty = doc?.localDirty ?: false,
             )
+        true
     }
+}
+
+/**
+ * #624 评论5294575627 要求3：bind precondition stale 判定 — 与 [isResetPreconditionStale] 同构，
+ * 额外校验 bindingState 仍一致（锁外 resolve/query 期间同 target 的 binding 可能被改换）。
+ */
+private fun SessionMutationScope.isBindPreconditionStale(
+    targetId: String,
+    precondition: SessionBindPrecondition,
+): Boolean {
+    val rec = record(targetId)
+    val currentSessionId = rec?.sessionId ?: 0UL
+    val currentRevision = rec?.documentState?.revision ?: 0L
+    return currentSessionId != precondition.oldSessionId ||
+        currentRevision != precondition.oldRevision ||
+        leaseEpoch != precondition.leaseEpoch ||
+        sessionState.bindingState != precondition.bindingState
 }
 
 /**
@@ -641,21 +726,29 @@ private fun EditorSessionCoordinator.rebindFromOtherActiveIfNeeded(targetId: Str
     }
 }
 
+/**
+ * #624 评论5294575627 要求3：resolveSessionForPrepare 返回 [PreparedBindSession] —
+ * 既有有效 session 返回 [PreparedBindSession.Borrowed]（stale 时不关闭）；
+ * 否则锁外 create 返回 [PreparedBindSession.Created]（stale 时关闭 candidate）。
+ */
 private fun EditorSessionCoordinator.resolveSessionForPrepare(
     targetId: String,
     textForSession: String,
     sel: Int,
     isPersistent: Boolean,
-): ULong? {
+): PreparedBindSession? {
     // #624 评论17 问题1：sessionId 从 readSession 取 — 不在锁外读 store。
     val existingId = readSession { record(targetId)?.sessionId }
     if (existingId != null && existingId != 0UL && validateSession(existingId)) {
-        return existingId
+        return PreparedBindSession.Borrowed(existingId)
     }
     if (existingId != null && existingId != 0UL) {
+        // existingId 已无效（validateSession 返回 false）— 关闭是 no-op 防御，不影响新 session。
         closeSession(existingId)
     }
-    return createSession(targetId, textForSession, sel, isPersistent)
+    val newId = createSession(targetId, textForSession, sel, isPersistent)
+    if (newId == null || newId == 0UL) return null
+    return PreparedBindSession.Created(newId)
 }
 
 @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod")
@@ -838,13 +931,25 @@ fun EditorSessionCoordinator.resetPersistentSession(
     }
 
     if (!validateSession(sessionId)) {
+        // #624 评论5294575627 要求4：旧 session 已失效 — 不再把 record 写成 0UL + 递归。
+        // 直接锁外 create candidate → commitResetSnapshot(candidate, 同一个 precondition,
+        // oldSessionIdToClose = oldSessionId)。CAS 决定能否 swap；stale 关闭 candidate；
+        // 成功后再关闭旧失效 session。reset 只有一套提交语义（commitResetSnapshot）。
         Log.w(
             EditorSessionCoordinator.TAG,
-            "resetPersistentSession($targetId): session $sessionId no longer valid, deleting and recreating",
+            "resetPersistentSession($targetId): session $sessionId no longer valid, " +
+                "recreating via commitResetSnapshot CAS",
         )
-        mutateSession { updateRecord(targetId) { it.copy(sessionId = 0UL) } }
-        closeSession(sessionId)
-        return resetPersistentSession(targetId, text, cursorUtf8, source)
+        val candidateSessionId = createSession(targetId, text, cursorUtf8, true)
+        if (candidateSessionId == null || candidateSessionId == 0UL) {
+            Log.e(
+                EditorSessionCoordinator.TAG,
+                "resetPersistentSession($targetId): failed to create candidate session for invalid old " +
+                    "session — old session preserved",
+            )
+            return ExternalResetResult.Failed
+        }
+        return commitResetSnapshot(targetId, candidateSessionId, precondition, oldSessionIdToClose = sessionId)
     }
 
     val candidateSessionId = createSession(targetId, text, cursorUtf8, true)
@@ -952,19 +1057,31 @@ fun EditorSessionCoordinator.refreshDetachedSnapshot(targetId: String): TargetSn
     return snapshot
 }
 
+/**
+ * #624 评论5294575627 要求2：releaseHost — 先一次性拿走所有 session 所有权，再锁外逐个 close。
+ *
+ * 旧实现 readSession{allRecords()} → 锁外逐个 closeSession → mutateSession{clearRecords;RELEASED}
+ * 在锁外 close 循环期间若又注册/创建了 session，最后 clearRecords() 会把新记录一起清掉，
+ * 而新 session 又不在旧 recordsToClose 列表里，形成孤儿 Core session。
+ *
+ * 改成：mutateSession{收集当前所有非零 sessionId; invalidateLease; clearRecords;
+ * sessionState=RELEASED; 返回 sessionId 列表} → 解锁后逐个 closeSession。
+ */
 fun EditorSessionCoordinator.releaseHost() {
     if (activeTargetId != null) {
         cancelActiveSession()
     }
-    // #624 评论17 问题1/3：records snapshot 从 readSession 取 — 不在锁外读 store。
-    val recordsToClose = readSession { allRecords().filter { it.sessionId != 0UL } }
-    // 锁外关闭所有 Core session — Core 调用不得持 mutationLock。
-    recordsToClose.forEach { record ->
-        closeSession(record.sessionId)
-    }
-    // 再进锁清理记录并设 RELEASED 状态。
-    mutateSession {
-        clearRecords()
-        sessionState = EditorSessionState(editingState = EditingState.RELEASED)
+    // 单次 mutateSession 内一次性拿走所有 session 所有权 — invalidateLease + clearRecords + RELEASED。
+    val sessionIdsToClose =
+        mutateSession {
+            val ids = allRecords().map { it.sessionId }.filter { it != 0UL }
+            invalidateLease()
+            clearRecords()
+            sessionState = EditorSessionState(editingState = EditingState.RELEASED)
+            ids
+        }
+    // 解锁后逐个 closeSession — Core 调用不得持 mutationLock。
+    sessionIdsToClose.forEach { sessionId ->
+        closeSession(sessionId)
     }
 }
