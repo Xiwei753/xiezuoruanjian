@@ -47,16 +47,17 @@ data class EditorSessionRecord(
 }
 
 /**
- * #595 四：会话记录存储 — Map<TargetId, EditorSessionRecord> + activeTargetId。
+ * #595 四：会话记录存储 — Map<TargetId, EditorSessionRecord>。
  *
- * 线程安全：所有写操作都通过 [EditorSessionCoordinator.mutateSession] 的单一临界区
- * （[SessionMutationScope] 内）执行，不存在并行写入。
+ * #624 评论17 问题1：删除旧 [activeTargetId] 字段 — 真正活动目标已在
+ * [EditorSessionState.activeTargetId]，Store 这份是第二状态，只会形成分裂。
+ *
+ * 线程安全：所有读写都通过 [EditorSessionCoordinator.readSession] /
+ * [EditorSessionCoordinator.mutateSession] 的单一临界区执行，不存在并行写入。
+ * 生产代码不得在 gateway 之外直接调用 record/allRecords/isRegistered。
  */
 class EditorSessionStore {
     private val records = mutableMapOf<String, EditorSessionRecord>()
-
-    var activeTargetId: String? = null
-        internal set
 
     fun record(targetId: String): EditorSessionRecord? = records[targetId]
 

@@ -17,12 +17,14 @@ package com.xiwei.sujian.feature.editor.session
  * [EditorSessionStore] 的 put/update/remove 只在 [SessionMutationScope] 内暴露，
  * 不再允许 gateway 外直接修改。
  *
+ * #624 评论17 问题5：Mutation scope 只能操作 Kotlin 会话状态，不持有
+ * [EditorSessionCoordinator] / Core bridge — Core 调用统一放在 mutation/read
+ * snapshot 之外，回来做 compare-and-swap。block 内不得调 closeSession/createSession。
+ *
  * 会话层不持有 Compose 状态；ReentrantLock 与现有同步语义一致（会话层方法
  * 非 suspend，调用方在 Dispatchers.IO 或主线程调用）。
  */
 internal class SessionMutationScope(
-    /** 持有 coordinator 引用 — block 内可调 closeSession/createSession 等外部 Core 操作。 */
-    internal val coordinator: EditorSessionCoordinator,
     /** 受锁保护的 store — block 内通过 putRecord/updateRecord/removeRecord 修改。 */
     val store: EditorSessionStore,
     /** 当前 SessionState 快照（block 内可读写，block 结束后写回 StateFlow）。 */
@@ -75,4 +77,25 @@ internal class SessionMutationScope(
         val expectedSession = sessionState.sessionId ?: 0UL
         return lease.sessionId == expectedSession
     }
+}
+
+/**
+ * #624 评论17 问题1：会话只读临界区 — 与 [EditorSessionCoordinator.mutateSession]
+ * 共用同一把 [mutationLock]，生产代码不得在 readSession/mutateSession 之外直接
+ * 读取 [EditorSessionStore]（record/allRecords/isRegistered）或 _sessionStateFlow.value。
+ *
+ * 只暴露同一临界区内的只读视图：[sessionState]、[leaseEpoch]、[record]、[allRecords]、
+ * [isRegistered]。block 内不得调用 Core（createSession/closeSession/querySnapshotForSession）
+ * — Core 调用统一在锁外执行，回来用 [EditorSessionCoordinator.mutateSession] 做 CAS。
+ */
+internal class SessionReadScope(
+    val sessionState: EditorSessionState,
+    val leaseEpoch: Long,
+    private val store: EditorSessionStore,
+) {
+    fun record(targetId: String): EditorSessionRecord? = store.record(targetId)
+
+    fun allRecords(): List<EditorSessionRecord> = store.allRecords()
+
+    fun isRegistered(targetId: String): Boolean = store.isRegistered(targetId)
 }

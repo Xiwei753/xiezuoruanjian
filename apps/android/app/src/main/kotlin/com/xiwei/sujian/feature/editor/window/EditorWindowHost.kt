@@ -370,8 +370,11 @@ class EditorWindowHost(
         // 禁止在 View 尚未创建/绑定时提前进入 Attached。
         val view = sharedEditorView
         if (view != null) {
-            if (performViewBind(view, pending, target)) {
+            if (performViewBind(view, pending, target) &&
                 sessionCoordinator.completeWindowAttach(windowId, targetId, bindInfo.sessionId)
+            ) {
+                // #624 评论17 问题2：只有 completeWindowAttach==true（binding 仍是本次
+                // Attaching）才通知 EDITING + requestFocus + showSoftInput。旧 View 晚到直接丢弃。
                 target.onEditingStateChanged?.invoke(EditingState.EDITING)
                 view.post {
                     view.requestFocus()
@@ -382,7 +385,8 @@ class EditorWindowHost(
                     imm?.showSoftInput(view, 0)
                 }
             } else {
-                // 绑定失败：回到 Detached/Idle，不能留下没有 View 绑定的 Attached 状态。
+                // 绑定失败或 binding 已不属于本次 attach：回到 Detached/Idle，
+                // 不能留下没有 View 绑定的 Attached 状态。
                 pendingViewBind = null
                 sessionCoordinator.detachWindowBinding(windowId, targetId)
                 return false
@@ -680,8 +684,11 @@ class EditorWindowHost(
             pendingViewBind = null
             val target = targets[targetId]
             if (target != null) {
-                if (performViewBind(view, pending, target)) {
+                if (performViewBind(view, pending, target) &&
                     sessionCoordinator.completeWindowAttach(windowId, targetId, pending.sessionId)
+                ) {
+                    // #624 评论17 问题2：只有 completeWindowAttach==true 才通知 EDITING +
+                    // requestFocus + showSoftInput。旧 View 晚到直接丢弃，不得表现成绑定成功。
                     target.onEditingStateChanged?.invoke(EditingState.EDITING)
                     view.post {
                         view.requestFocus()
@@ -692,7 +699,7 @@ class EditorWindowHost(
                         imm?.showSoftInput(view, 0)
                     }
                 } else {
-                    // 绑定失败：回到 Detached/Idle，清除 pending，
+                    // 绑定失败或 binding 已不属于本次 attach：回到 Detached/Idle，
                     // 不留下没有 View 绑定的 Attached 状态。
                     sessionCoordinator.detachWindowBinding(windowId, targetId)
                 }

@@ -621,6 +621,80 @@ def rule_session_mutation_gate_only() -> list[Finding]:
                     ),
                 )
             )
+    # #624 评论17 问题1/6：readSession 必须存在（与 mutateSession 共用 mutationLock 的只读 gateway）。
+    if "readSession" not in sources:
+        findings.append(
+            Finding(
+                path="feature/editor/session",
+                line=0,
+                message="必须存在 readSession 只读临界区入口（与 mutateSession 共用 mutationLock）",
+            )
+        )
+    # #624 评论17 问题1/6：生产 session 代码不得在 readSession/mutateSession 之外直接读写
+    # EditorSessionStore。store.record/allRecords/isRegistered 只允许出现在
+    # SessionMutationScope.kt（scope 方法实现）。EditorSessionCoordinator.kt 构造 scope
+    # 时传 store 引用合法，但不得直接调 store.record。
+    for kt in sorted(session_dir.glob("*.kt")):
+        if kt.name == "SessionMutationScope.kt":
+            continue
+        text = kt.read_text(encoding="utf-8")
+        for call in ("store.record(", "store.allRecords(", "store.isRegistered("):
+            if call in text:
+                findings.append(
+                    Finding(
+                        path=f"feature/editor/session/{kt.name}",
+                        line=0,
+                        message=(
+                            f"生产 session 代码不得直接调用 {call} — 必须通过 "
+                            "readSession/mutateSession 闭包内的 scope 访问 EditorSessionStore"
+                            "（#624 评论17 问题1/6）"
+                        ),
+                    )
+                )
+    # #624 评论17 问题5/6：SessionMutationScope 不得持有 EditorSessionCoordinator / Core bridge。
+    scope_path = session_dir / "SessionMutationScope.kt"
+    if scope_path.exists():
+        scope_text = scope_path.read_text(encoding="utf-8")
+        if "coordinator: EditorSessionCoordinator" in scope_text or "val coordinator" in scope_text:
+            findings.append(
+                Finding(
+                    path="feature/editor/session/SessionMutationScope.kt",
+                    line=0,
+                    message=(
+                        "SessionMutationScope 不得持有 EditorSessionCoordinator / Core bridge — "
+                        "Core 调用统一在 mutation/read snapshot 之外（#624 评论17 问题5/6）"
+                    ),
+                )
+            )
+    # #624 评论17 问题5/6：markSaved(targetId, ...) 不得在生产 session 代码重新出现。
+    for kt in sorted(session_dir.glob("*.kt")):
+        text = kt.read_text(encoding="utf-8")
+        if re.search(r"\bfun\s+EditorSessionCoordinator\.markSaved\s*\(", text):
+            findings.append(
+                Finding(
+                    path=f"feature/editor/session/{kt.name}",
+                    line=0,
+                    message=(
+                        "markSaved(targetId, ...) 必须保持删除 — 正常保存和切章保存都走 "
+                        "commitSavedLease（#624 评论17 问题5/6）"
+                    ),
+                )
+            )
+    # #624 评论17 问题2/6：completeWindowAttach 必须返回 Boolean（窗口绑定判断+提交同一次 mutation）。
+    lifecycle_path = session_dir / "EditorSessionLifecycleOps.kt"
+    if lifecycle_path.exists():
+        lifecycle_text = lifecycle_path.read_text(encoding="utf-8")
+        if not re.search(r"fun\s+EditorSessionCoordinator\.completeWindowAttach\s*\([^)]*\)\s*:\s*Boolean", lifecycle_text):
+            findings.append(
+                Finding(
+                    path="feature/editor/session/EditorSessionLifecycleOps.kt",
+                    line=0,
+                    message=(
+                        "completeWindowAttach 必须返回 Boolean — 单次 mutateSession 内校验 "
+                        "isExactAttaching 才写 Attached，旧窗口晚到返回 false（#624 评论17 问题2/6）"
+                    ),
+                )
+            )
     return findings
 
 

@@ -198,10 +198,15 @@ sealed interface ExternalContentDecision {
  * ViewModel（新正文+hash）三份状态分裂。
  *
  * - [Success]：Core reset 成功，携带真实 snapshot — 调用方据此一次性提交会话事实与 UI；
- * - [Failed]：reset 未执行或 Core 失败 — 调用方必须保持旧正文与旧版本，不得推进任何状态。
+ * - [Failed]：reset 未执行或 Core 失败 — 调用方必须保持旧正文与旧版本，不得推进任何状态；
+ * - [Stale]：#624 评论17 问题4 — candidate 创建/读 snapshot 期间同 target 的
+ *   revision/session/epoch 已前进（precondition 不再成立），candidate 已丢弃，
+ *   当前新 session 原样保留，不得覆盖。与 [Failed]（Core 失败）明确区分。
  */
 sealed interface ExternalResetResult {
     data class Success(val snapshot: TargetSnapshot) : ExternalResetResult
 
     data object Failed : ExternalResetResult
+
+    data object Stale : ExternalResetResult
 }

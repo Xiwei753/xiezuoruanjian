@@ -366,6 +366,7 @@ class LayerRuleTests(unittest.TestCase):
                     "        _sessionStateFlow.value = 1\n"
                     "        inputLeaseEpoch = 1\n"
                     "    }\n"
+                    "    fun readSession(block: () -> Unit) {}\n"
                     "}\n"
                 ),
                 f"{APP_PREFIX}/feature/editor/session/SessionMutationScope.kt": (
@@ -375,9 +376,105 @@ class LayerRuleTests(unittest.TestCase):
                     "    var leaseEpoch = 0L\n"
                     "}\n"
                 ),
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionLifecycleOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "fun EditorSessionCoordinator.completeWindowAttach(\n"
+                    "    windowId: String,\n"
+                    "    targetId: String,\n"
+                    "    sessionId: ULong,\n"
+                    "): Boolean = true\n"
+                ),
             },
         )
         self.assertEqual([], findings, "mutateSession 内写 state/epoch 不应误报")
+
+    def test_session_mutation_gate_only_flags_missing_read_session(self):
+        """#624 评论17 问题1/6：readSession 必须存在。"""
+        findings = self.run_rule(
+            "session-mutation-gate-only",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionCoordinator.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "class EditorSessionCoordinator {\n"
+                    "    fun mutateSession(block: () -> Unit) {}\n"
+                    "}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("readSession", messages, "缺少 readSession 必须被报告")
+
+    def test_session_mutation_gate_only_flags_direct_store_access_outside_gateway(self):
+        """#624 评论17 问题1/6：生产 session 代码不得直接调 store.record/allRecords/isRegistered。"""
+        findings = self.run_rule(
+            "session-mutation-gate-only",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionEditOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "fun bad(coordinator: EditorSessionCoordinator) {\n"
+                    "    val rec = coordinator.store.record(\"t1\")\n"
+                    "    val all = coordinator.store.allRecords()\n"
+                    "    val reg = coordinator.store.isRegistered(\"t1\")\n"
+                    "    mutateSession { }\n"
+                    "}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("store.record(", messages, "直接调 store.record 必须被报告")
+        self.assertIn("store.allRecords(", messages, "直接调 store.allRecords 必须被报告")
+        self.assertIn("store.isRegistered(", messages, "直接调 store.isRegistered 必须被报告")
+
+    def test_session_mutation_gate_only_flags_scope_holding_coordinator(self):
+        """#624 评论17 问题5/6：SessionMutationScope 不得持有 EditorSessionCoordinator。"""
+        findings = self.run_rule(
+            "session-mutation-gate-only",
+            {
+                f"{APP_PREFIX}/feature/editor/session/SessionMutationScope.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "class SessionMutationScope(\n"
+                    "    internal val coordinator: EditorSessionCoordinator,\n"
+                    ") {\n"
+                    "    var sessionState = 0\n"
+                    "    var leaseEpoch = 0L\n"
+                    "}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("EditorSessionCoordinator", messages, "scope 持有 coordinator 必须被报告")
+
+    def test_session_mutation_gate_only_flags_mark_saved_revival(self):
+        """#624 评论17 问题5/6：markSaved(targetId,...) 不得在生产 session 代码重新出现。"""
+        findings = self.run_rule(
+            "session-mutation-gate-only",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionExternalOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "fun EditorSessionCoordinator.markSaved(targetId: String, v: Int) {}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("markSaved", messages, "markSaved 复活必须被报告")
+
+    def test_session_mutation_gate_only_flags_complete_window_attach_non_boolean(self):
+        """#624 评论17 问题2/6：completeWindowAttach 必须返回 Boolean。"""
+        findings = self.run_rule(
+            "session-mutation-gate-only",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionLifecycleOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "fun EditorSessionCoordinator.completeWindowAttach(\n"
+                    "    windowId: String,\n"
+                    "    targetId: String,\n"
+                    "    sessionId: ULong,\n"
+                    "): Unit {}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("completeWindowAttach", messages, "completeWindowAttach 非 Boolean 必须被报告")
 
     def test_designsystem_rule_flags_app_package_reference(self):
         findings = self.run_rule(

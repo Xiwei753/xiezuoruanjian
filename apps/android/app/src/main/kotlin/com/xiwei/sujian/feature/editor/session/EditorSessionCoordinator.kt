@@ -102,11 +102,13 @@ open class EditorSessionCoordinator(
      * 之后每次 onLocalEdit/onExternalEdit/onContentChanged 提交都携带。
      * 无活动 target（未绑定）时返回 null — 没有可接收输入的会话。
      */
-    fun currentInputLease(): EditorInputLease? {
-        val s = _sessionStateFlow.value
-        val targetId = s.activeTargetId ?: return null
-        return EditorInputLease(targetId, s.sessionId ?: 0UL, inputLeaseEpoch)
-    }
+    fun currentInputLease(): EditorInputLease? =
+        // #624 评论17 问题1：从 readSession 取 state+epoch 一致快照 — 不在锁外分别读
+        // _sessionStateFlow.value 与 inputLeaseEpoch（两者可能分裂）。
+        readSession {
+            val targetId = sessionState.activeTargetId ?: return@readSession null
+            EditorInputLease(targetId, sessionState.sessionId ?: 0UL, leaseEpoch)
+        }
 
     /**
      * 使当前所有输入 lease 失效 — 旧 View 晚到的回调不能再进入会话层。
@@ -133,15 +135,34 @@ open class EditorSessionCoordinator(
      * ReentrantLock 可重入：block 内调用 [invalidateInputLease]
      * 不会自死锁（它也走 mutationLock）。block 内直接操作 scope，
      * state/store/epoch 在同一临界区原子一致。
+     *
+     * #624 评论17 问题5：scope 不持有 [EditorSessionCoordinator] / Core bridge —
+     * block 内不得调 closeSession/createSession。Core 调用统一在锁外执行，
+     * 回来用 [mutateSession] 做 compare-and-swap。
      */
     internal inline fun <T> mutateSession(block: SessionMutationScope.() -> T): T {
         mutationLock.lock()
         try {
-            val scope = SessionMutationScope(this, store, _sessionStateFlow.value, inputLeaseEpoch)
+            val scope = SessionMutationScope(store, _sessionStateFlow.value, inputLeaseEpoch)
             val result = scope.block()
             _sessionStateFlow.value = scope.sessionState
             inputLeaseEpoch = scope.leaseEpoch
             return result
+        } finally {
+            mutationLock.unlock()
+        }
+    }
+
+    /**
+     * #624 评论17 问题1：会话只读入口 — 与 [mutateSession] 共用同一把 [mutationLock]，
+     * 生产代码不得在此之外直接读取 [EditorSessionStore]（record/allRecords/isRegistered）
+     * 或 `_sessionStateFlow.value`。block 拿到 [SessionReadScope]，在同一临界区内取得
+     * state+epoch+store 的一致快照。block 内不得调用 Core（Core 调用统一在锁外）。
+     */
+    internal inline fun <T> readSession(block: SessionReadScope.() -> T): T {
+        mutationLock.lock()
+        try {
+            return SessionReadScope(_sessionStateFlow.value, inputLeaseEpoch, store).block()
         } finally {
             mutationLock.unlock()
         }
@@ -164,52 +185,84 @@ open class EditorSessionCoordinator(
      * revision 与该 target 的 store 记录（applyLocalEdit 每次同步更新）比较。
      */
     fun issueDocumentOperationLease(targetId: String? = null): DocumentOperationLease? {
-        if (targetId == null) {
-            val s = _sessionStateFlow.value
-            val activeTargetId = s.activeTargetId ?: return null
-            val sessionId = s.sessionId ?: return null
-            val record = store.record(activeTargetId) ?: return null
-            // #624 评论10 第1项：只有拿到与当前 session revision 一致的权威 snapshot
-            // 才返回 lease。snapshot 失败/错版不得伪造空正文 — 返回 null，调用方
-            // 保持 Unsaved 状态，绝不误触发 Clear 或用空正文覆盖磁盘。
-            val snapshot = querySnapshotForSession(sessionId)
-            if (snapshot == null || snapshot.revision != s.revision) {
-                return null
-            }
-            return DocumentOperationLease(
-                operationId = operationIdCounter.incrementAndGet(),
-                targetId = activeTargetId,
-                coreSessionId = sessionId,
-                inputEpoch = inputLeaseEpoch,
-                rustRevision = snapshot.revision,
-                text = snapshot.text,
-                committedVersion = record.documentState.committedVersion,
-                // #624 评论12 第2项：唯一 dirty 真值从 store 记录填入。
-                localDirty = record.documentState.localDirty,
-            )
-        }
-        // #624 评论10 第2项：按 target/session 取得 — Detached 持久 session 同样
-        // 可签发（store 记录保留 sessionId 与 revision 事实）。snapshot 缺失/错版
-        // 返回 null，不伪造空正文。
-        val record = store.record(targetId) ?: return null
-        val sessionId = record.sessionId ?: return null
-        if (sessionId == 0UL) return null
-        val snapshot = querySnapshotForSession(sessionId)
-        if (snapshot == null || snapshot.revision != record.documentState.revision) {
-            return null
-        }
+        // #624 评论17 问题1：三段 — readSession 取 premise → 锁外 querySnapshotForSession →
+        // readSession 再次确认 target/session/epoch/revision 完全相同 → 相同才返回 lease。
+        // 不持锁调 Core。
+        val premise = captureLeasePremise(targetId) ?: return null
+        val snapshot = querySnapshotForSession(premise.sessionId)
+        if (snapshot == null || snapshot.revision != premise.revision) return null
+        if (!isLeasePremiseStillValid(premise, targetId)) return null
         return DocumentOperationLease(
             operationId = operationIdCounter.incrementAndGet(),
-            targetId = targetId,
-            coreSessionId = sessionId,
-            inputEpoch = inputLeaseEpoch,
+            targetId = premise.targetId,
+            coreSessionId = premise.sessionId,
+            inputEpoch = premise.epoch,
             rustRevision = snapshot.revision,
             text = snapshot.text,
-            committedVersion = record.documentState.committedVersion,
+            committedVersion = premise.committedVersion,
             // #624 评论12 第2项：唯一 dirty 真值从 store 记录填入。
-            localDirty = record.documentState.localDirty,
+            localDirty = premise.localDirty,
         )
     }
+
+    /** #624 评论17 问题1：lease premise — readSession 内捕获的一致快照。 */
+    private data class LeasePremise(
+        val targetId: String,
+        val sessionId: ULong,
+        val epoch: Long,
+        val revision: Long,
+        val committedVersion: DocumentVersion,
+        val localDirty: Boolean,
+    )
+
+    private fun captureLeasePremise(targetId: String?): LeasePremise? =
+        readSession {
+            if (targetId == null) {
+                val s = sessionState
+                val active = s.activeTargetId ?: return@readSession null
+                val sid = s.sessionId ?: return@readSession null
+                val rec = record(active) ?: return@readSession null
+                LeasePremise(
+                    active,
+                    sid,
+                    leaseEpoch,
+                    s.revision,
+                    rec.documentState.committedVersion,
+                    rec.documentState.localDirty,
+                )
+            } else {
+                val rec = record(targetId) ?: return@readSession null
+                val sid = rec.sessionId ?: return@readSession null
+                if (sid == 0UL) return@readSession null
+                LeasePremise(
+                    targetId,
+                    sid,
+                    leaseEpoch,
+                    rec.documentState.revision,
+                    rec.documentState.committedVersion,
+                    rec.documentState.localDirty,
+                )
+            }
+        }
+
+    private fun isLeasePremiseStillValid(
+        premise: LeasePremise,
+        targetId: String?,
+    ): Boolean =
+        readSession {
+            if (targetId == null) {
+                val s = sessionState
+                s.activeTargetId == premise.targetId &&
+                    s.sessionId == premise.sessionId &&
+                    leaseEpoch == premise.epoch &&
+                    s.revision == premise.revision
+            } else {
+                val rec = record(targetId)
+                rec?.sessionId == premise.sessionId &&
+                    leaseEpoch == premise.epoch &&
+                    rec.documentState.revision == premise.revision
+            }
+        }
 
     /**
      * #595 二：校验文档操作租约是否仍匹配当前活动文档。
@@ -218,13 +271,15 @@ open class EditorSessionCoordinator(
      * - target/session/epoch 完全一致 → 操作有效；
      * - 任一字段不匹配 → 只记录旧版本确实落盘，当前文档保持 Unsaved。
      */
-    fun isDocumentOperationLeaseCurrent(lease: DocumentOperationLease): Boolean {
-        val s = _sessionStateFlow.value
-        if (s.activeTargetId != lease.targetId) return false
-        val expectedSession = s.sessionId ?: return false
-        if (expectedSession != lease.coreSessionId) return false
-        return inputLeaseEpoch == lease.inputEpoch
-    }
+    fun isDocumentOperationLeaseCurrent(lease: DocumentOperationLease): Boolean =
+        // #624 评论17 问题1：从 readSession 取一致快照。
+        readSession {
+            val s = sessionState
+            if (s.activeTargetId != lease.targetId) return@readSession false
+            val expectedSession = s.sessionId ?: return@readSession false
+            if (expectedSession != lease.coreSessionId) return@readSession false
+            leaseEpoch == lease.inputEpoch
+        }
 
     /**
      * 校验事件携带的 lease 是否仍匹配当前活动 target/session/epoch。
@@ -237,16 +292,34 @@ open class EditorSessionCoordinator(
     fun isInputLeaseCurrent(
         lease: EditorInputLease?,
         eventTargetId: String? = null,
+    ): Boolean =
+        // #624 评论17 问题1：从 readSession 取 state+epoch 一致快照。
+        if (lease == null) {
+            false
+        } else {
+            readSession {
+                isInputLeaseCurrentSnapshot(
+                    lease,
+                    eventTargetId,
+                    sessionState.activeTargetId,
+                    sessionState.sessionId,
+                    leaseEpoch,
+                )
+            }
+        }
+
+    private fun isInputLeaseCurrentSnapshot(
+        lease: EditorInputLease,
+        eventTargetId: String?,
+        activeTargetId: String?,
+        sessionId: ULong?,
+        currentEpoch: Long,
     ): Boolean {
-        if (lease == null) return false
-        if (lease.epoch != inputLeaseEpoch) return false
+        if (lease.epoch != currentEpoch) return false
         if (eventTargetId != null && lease.targetId != eventTargetId) return false
-        val s = _sessionStateFlow.value
-        val active = s.activeTargetId
-        if (active == null) return true
-        if (active != lease.targetId) return false
-        val expectedSession = s.sessionId ?: 0UL
-        return lease.sessionId == expectedSession
+        if (activeTargetId == null) return true
+        if (activeTargetId != lease.targetId) return false
+        return lease.sessionId == (sessionId ?: 0UL)
     }
 
     // #595 七：只保留一个可写事实源 — MutableStateFlow<EditorMotionPolicy>。
@@ -373,15 +446,22 @@ open class EditorSessionCoordinator(
         targetId: String,
         profile: TextEditorProfile? = null,
     ) {
-        profile?.let { registerTargetMeta(targetId, it, store.record(targetId)?.persistent ?: false) }
+        // #624 评论17 问题1：persistent 从 readSession 取，不在锁外读 store。
+        val persistent =
+            if (profile == null) {
+                null
+            } else {
+                readSession { record(targetId)?.persistent ?: false }
+            }
+        profile?.let { registerTargetMeta(targetId, it, persistent ?: false) }
     }
 
-    fun isTargetPersistent(targetId: String): Boolean = store.record(targetId)?.persistent ?: false
+    fun isTargetPersistent(targetId: String): Boolean = readSession { record(targetId)?.persistent ?: false }
 
     /** #595 四：所有活动 session 都有 ID — 非持久 target 同样返回记录中的 ID。 */
-    fun getPersistentSessionId(targetId: String): ULong? = store.record(targetId)?.sessionId
+    fun getPersistentSessionId(targetId: String): ULong? = readSession { record(targetId)?.sessionId }
 
-    fun isTargetRegistered(targetId: String): Boolean = store.isRegistered(targetId)
+    fun isTargetRegistered(targetId: String): Boolean = readSession { isRegistered(targetId) }
 
     /**
      * #595 一：无副作用预准备 — 章节切换事务在最终 requestId 校验前调用。
@@ -434,7 +514,7 @@ open class EditorSessionCoordinator(
         mutateSession { updateRecord(targetId) { it.copy(projection = snapshot) } }
     }
 
-    fun getProjectionSnapshot(targetId: String): ProjectionSnapshot? = store.record(targetId)?.projection
+    fun getProjectionSnapshot(targetId: String): ProjectionSnapshot? = readSession { record(targetId)?.projection }
 
     // ── 窗口绑定状态机 ──
 
@@ -493,7 +573,8 @@ open class EditorSessionCoordinator(
     }
 
     override fun queryTargetSnapshot(targetId: String): TargetSnapshot? {
-        val sessionId = store.record(targetId)?.sessionId ?: return null
+        // #624 评论17 问题1：sessionId 从 readSession 取 → 锁外 querySnapshotForSession。
+        val sessionId = readSession { record(targetId)?.sessionId } ?: return null
         if (sessionId == 0UL) return null
         return querySnapshotForSession(sessionId)
     }
@@ -506,8 +587,9 @@ open class EditorSessionCoordinator(
         targetId: String,
         command: TargetCommand,
     ): TargetCommandResult {
+        // #624 评论17 问题1：sessionId 从 readSession 取 → 锁外 Core 命令。
         val sessionId =
-            store.record(targetId)?.sessionId
+            readSession { record(targetId)?.sessionId }
                 ?: return TargetCommandResult.Failed(TargetCommandError.NO_PERSISTENT_SESSION)
         if (sessionId == 0UL || !validateSession(sessionId)) {
             return TargetCommandResult.Failed(TargetCommandError.SESSION_INVALID)
@@ -582,7 +664,7 @@ open class EditorSessionCoordinator(
         _targetDecorationsVersionFlow.value++
     }
 
-    fun getTargetDecorations(targetId: String): TargetDecorations? = store.record(targetId)?.decorations
+    fun getTargetDecorations(targetId: String): TargetDecorations? = readSession { record(targetId)?.decorations }
 
     // ── Session lifecycle ──
 

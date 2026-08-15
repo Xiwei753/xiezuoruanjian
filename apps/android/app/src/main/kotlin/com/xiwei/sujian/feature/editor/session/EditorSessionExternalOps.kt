@@ -1,14 +1,16 @@
 package com.xiwei.sujian.feature.editor.session
 
 // ! # 编辑器会话外部文档操作（从 EditorSessionCoordinator 拆分）
-// ! #624 评论17 问题1：走 mutateSession 单一临界区，删除 pendingRecord 外置副作用。
+// ! #624 评论17 问题1：走 mutateSession/readSession 单一临界区，删除 pendingRecord 外置副作用。
+// ! #624 评论17 问题5：删除 markSaved — 正常保存和切章保存都走 commitSavedLease。
 
 fun EditorSessionCoordinator.shouldApplyExternalContent(fact: TargetDocumentFact): ExternalContentDecision {
     if (fact.sourceVersion.isEmpty) return ExternalContentDecision.IgnoreEmptyVersion
+    // #624 评论17 问题1：doc 从 readSession 取一致快照 — 不在锁外读 store.record。
     // #595 二/四：比较基于该 target 的 store 记录文档事实（committedVersion /
     // localDirty）— 与可观察 SessionState 是否恰好指向活动 target 无关，
     // 新 collector 读到的是当前文档事实，重放旧事实幂等忽略。
-    val doc = store.record(fact.targetId)?.documentState ?: DocumentState()
+    val doc = readSession { record(fact.targetId)?.documentState ?: DocumentState() }
     if (doc.committedVersion == fact.sourceVersion) return ExternalContentDecision.IgnoreReplay
     if (doc.localDirty) return ExternalContentDecision.IgnoreDirtyConflict
     if (isVersionOlder(doc.committedVersion, fact.sourceVersion)) return ExternalContentDecision.IgnoreOlder
@@ -90,38 +92,12 @@ fun EditorSessionCoordinator.applyExternalContentFact(fact: TargetDocumentFact) 
     }
 }
 
-fun EditorSessionCoordinator.markSaved(
-    targetId: String,
-    savedVersion: DocumentVersion,
-) {
-    if (savedVersion.isEmpty) return
-    mutateSession {
-        val rec = record(targetId)
-        if (rec != null) {
-            putRecord(
-                rec.withDocumentState {
-                    it.copy(
-                        committedVersion = savedVersion,
-                        sessionBaseVersion = savedVersion,
-                        lastSavedVersion = savedVersion,
-                        localDirty = false,
-                    )
-                },
-            )
-        }
-        if (sessionState.targetId == targetId) {
-            sessionState =
-                sessionState.copy(
-                    committedVersion = savedVersion,
-                    sessionBaseVersion = savedVersion,
-                    localDirty = false,
-                )
-        }
-    }
-}
+// #624 评论17 问题5：markSaved(targetId, savedVersion) 已删除 — 正常保存和切章保存
+// 都走 commitSavedLease()，不再留一个不带 lease、可以直接清 localDirty 的第二入口。
 
 fun EditorSessionCoordinator.documentCommittedVersionFor(targetId: String): DocumentVersion =
-    store.record(targetId)?.documentState?.committedVersion ?: DocumentVersion()
+    // #624 评论17 问题1：从 readSession 取 — 不在锁外读 store.record。
+    readSession { record(targetId)?.documentState?.committedVersion ?: DocumentVersion() }
 
 /**
  * #624 评论17 问题3/5：保存未解决的外部文档事实 — IgnoreDirtyConflict /
@@ -149,7 +125,8 @@ fun EditorSessionCoordinator.storePendingExternalFact(
  * 只含 sourceVersion + origin，不含正文。调用方需重新从 Repository 读正文。
  */
 fun EditorSessionCoordinator.pendingExternalFactFor(targetId: String): PendingExternalVersion? =
-    store.record(targetId)?.documentState?.pendingExternal
+    // #624 评论17 问题1：从 readSession 取 — 不在锁外读 store.record。
+    readSession { record(targetId)?.documentState?.pendingExternal }
 
 /**
  * #624 评论17 问题3/5：消费并清除未解决外部事实 — 真正 Apply/IgnoreSameContent
