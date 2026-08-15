@@ -78,7 +78,7 @@ impl From<crate::writing_stats::Platform> for PlatformDto {
     }
 }
 
-// ── Layout Contract DTOs ──
+// ── Layout Contract DTOs（#628：WindowCapabilitiesDto → WindowViewportDto） ──
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
 pub enum ShellModeDto {
@@ -89,18 +89,18 @@ pub enum ShellModeDto {
     ThreePane,
 }
 
-impl From<crate::presentation::layout_contract::ShellMode> for ShellModeDto {
-    fn from(s: crate::presentation::layout_contract::ShellMode) -> Self {
+impl From<crate::presentation::layout::ShellMode> for ShellModeDto {
+    fn from(s: crate::presentation::layout::ShellMode) -> Self {
         match s {
-            crate::presentation::layout_contract::ShellMode::SinglePane => Self::SinglePane,
-            crate::presentation::layout_contract::ShellMode::SupportingPane => Self::SupportingPane,
-            crate::presentation::layout_contract::ShellMode::TwoPane => Self::TwoPane,
-            crate::presentation::layout_contract::ShellMode::ThreePane => Self::ThreePane,
+            crate::presentation::layout::ShellMode::SinglePane => Self::SinglePane,
+            crate::presentation::layout::ShellMode::SupportingPane => Self::SupportingPane,
+            crate::presentation::layout::ShellMode::TwoPane => Self::TwoPane,
+            crate::presentation::layout::ShellMode::ThreePane => Self::ThreePane,
         }
     }
 }
 
-impl From<ShellModeDto> for crate::presentation::layout_contract::ShellMode {
+impl From<ShellModeDto> for crate::presentation::layout::ShellMode {
     fn from(dto: ShellModeDto) -> Self {
         match dto {
             ShellModeDto::SinglePane => Self::SinglePane,
@@ -119,17 +119,17 @@ pub enum WorkspacePaneModeDto {
     ThreePane,
 }
 
-impl From<crate::presentation::layout_contract::WorkspacePaneMode> for WorkspacePaneModeDto {
-    fn from(w: crate::presentation::layout_contract::WorkspacePaneMode) -> Self {
+impl From<crate::presentation::layout::WorkspacePaneMode> for WorkspacePaneModeDto {
+    fn from(w: crate::presentation::layout::WorkspacePaneMode) -> Self {
         match w {
-            crate::presentation::layout_contract::WorkspacePaneMode::SinglePane => Self::SinglePane,
-            crate::presentation::layout_contract::WorkspacePaneMode::ListDetail => Self::ListDetail,
-            crate::presentation::layout_contract::WorkspacePaneMode::ThreePane => Self::ThreePane,
+            crate::presentation::layout::WorkspacePaneMode::SinglePane => Self::SinglePane,
+            crate::presentation::layout::WorkspacePaneMode::ListDetail => Self::ListDetail,
+            crate::presentation::layout::WorkspacePaneMode::ThreePane => Self::ThreePane,
         }
     }
 }
 
-impl From<WorkspacePaneModeDto> for crate::presentation::layout_contract::WorkspacePaneMode {
+impl From<WorkspacePaneModeDto> for crate::presentation::layout::WorkspacePaneMode {
     fn from(dto: WorkspacePaneModeDto) -> Self {
         match dto {
             WorkspacePaneModeDto::SinglePane => Self::SinglePane,
@@ -139,92 +139,135 @@ impl From<WorkspacePaneModeDto> for crate::presentation::layout_contract::Worksp
     }
 }
 
+/// #628 评论第 4 节：一级导航放置位置（平台无关）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-pub enum PointerClassDto {
+pub enum PrimaryNavigationPlacementDto {
     #[default]
-    Unknown,
-    Touch,
-    Stylus,
-    Mouse,
+    Bottom,
+    Side,
 }
 
-impl From<crate::presentation::layout_contract::PointerClass> for PointerClassDto {
-    fn from(p: crate::presentation::layout_contract::PointerClass) -> Self {
+impl From<crate::presentation::layout::PrimaryNavigationPlacement>
+    for PrimaryNavigationPlacementDto
+{
+    fn from(p: crate::presentation::layout::PrimaryNavigationPlacement) -> Self {
         match p {
-            crate::presentation::layout_contract::PointerClass::Unknown => Self::Unknown,
-            crate::presentation::layout_contract::PointerClass::Touch => Self::Touch,
-            crate::presentation::layout_contract::PointerClass::Stylus => Self::Stylus,
-            crate::presentation::layout_contract::PointerClass::Mouse => Self::Mouse,
+            crate::presentation::layout::PrimaryNavigationPlacement::Bottom => Self::Bottom,
+            crate::presentation::layout::PrimaryNavigationPlacement::Side => Self::Side,
         }
     }
 }
 
-impl From<PointerClassDto> for crate::presentation::layout_contract::PointerClass {
-    fn from(dto: PointerClassDto) -> Self {
+impl From<PrimaryNavigationPlacementDto>
+    for crate::presentation::layout::PrimaryNavigationPlacement
+{
+    fn from(dto: PrimaryNavigationPlacementDto) -> Self {
         match dto {
-            PointerClassDto::Unknown => Self::Unknown,
-            PointerClassDto::Touch => Self::Touch,
-            PointerClassDto::Stylus => Self::Stylus,
-            PointerClassDto::Mouse => Self::Mouse,
+            PrimaryNavigationPlacementDto::Bottom => Self::Bottom,
+            PrimaryNavigationPlacementDto::Side => Self::Side,
         }
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+/// #628 评论第 6 节：共用布局尺寸 DTO。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct WindowCapabilitiesDto {
-    pub available_pane_count: u8,
-    pub has_separating_fold: bool,
-    pub pointer_class: PointerClassDto,
-    pub keyboard_visible: bool,
+pub struct LayoutMetricsDto {
+    pub list_pane_width_dp: f32,
 }
 
-impl From<crate::presentation::layout_contract::WindowCapabilities> for WindowCapabilitiesDto {
-    fn from(c: crate::presentation::layout_contract::WindowCapabilities) -> Self {
+impl Default for LayoutMetricsDto {
+    fn default() -> Self {
         Self {
-            available_pane_count: c.available_pane_count,
-            has_separating_fold: c.has_separating_fold,
-            pointer_class: c.pointer_class.into(),
-            keyboard_visible: c.keyboard_visible,
+            list_pane_width_dp: 320.0,
         }
     }
 }
 
-impl From<WindowCapabilitiesDto> for crate::presentation::layout_contract::WindowCapabilities {
-    fn from(dto: WindowCapabilitiesDto) -> Self {
+impl From<crate::presentation::layout::metrics::LayoutMetrics> for LayoutMetricsDto {
+    fn from(m: crate::presentation::layout::metrics::LayoutMetrics) -> Self {
         Self {
-            available_pane_count: dto.available_pane_count,
-            has_separating_fold: dto.has_separating_fold,
-            pointer_class: dto.pointer_class.into(),
-            keyboard_visible: dto.keyboard_visible,
+            list_pane_width_dp: m.list_pane_width_dp,
         }
     }
 }
 
+impl From<LayoutMetricsDto> for crate::presentation::layout::metrics::LayoutMetrics {
+    fn from(dto: LayoutMetricsDto) -> Self {
+        Self {
+            list_pane_width_dp: dto.list_pane_width_dp,
+        }
+    }
+}
+
+/// #628：原始窗口尺寸 DTO，替代旧的 WindowCapabilitiesDto。
+///
+/// 平台端只传宽高（dp），不再传 paneCount / has_separating_fold /
+/// pointer_class / keyboard_visible。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowViewportDto {
+    pub width_dp: f32,
+    pub height_dp: f32,
+}
+
+impl Default for WindowViewportDto {
+    fn default() -> Self {
+        // 默认按窄窗口（手机竖屏）算，与 Core 内部 WindowViewport::default() 对齐。
+        Self {
+            width_dp: 360.0,
+            height_dp: 640.0,
+        }
+    }
+}
+
+impl From<crate::presentation::layout::resolver::WindowViewport> for WindowViewportDto {
+    fn from(v: crate::presentation::layout::resolver::WindowViewport) -> Self {
+        Self {
+            width_dp: v.width_dp,
+            height_dp: v.height_dp,
+        }
+    }
+}
+
+impl From<WindowViewportDto> for crate::presentation::layout::resolver::WindowViewport {
+    fn from(dto: WindowViewportDto) -> Self {
+        Self {
+            width_dp: dto.width_dp,
+            height_dp: dto.height_dp,
+        }
+    }
+}
+
+/// #628：LayoutContractDto 删除 `show_primary_navigation`（改由 ScreenPolicy 提供），
+/// 新增 `primary_navigation_placement` 与 `metrics`。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutContractDto {
     pub shell_mode: ShellModeDto,
     pub workspace_pane_mode: WorkspacePaneModeDto,
-    pub show_primary_navigation: bool,
+    pub primary_navigation_placement: PrimaryNavigationPlacementDto,
+    pub metrics: LayoutMetricsDto,
 }
 
-impl From<crate::presentation::layout_contract::LayoutContract> for LayoutContractDto {
-    fn from(c: crate::presentation::layout_contract::LayoutContract) -> Self {
+impl From<crate::presentation::layout::LayoutContract> for LayoutContractDto {
+    fn from(c: crate::presentation::layout::LayoutContract) -> Self {
         Self {
             shell_mode: c.shell_mode.into(),
             workspace_pane_mode: c.workspace_pane_mode.into(),
-            show_primary_navigation: c.show_primary_navigation,
+            primary_navigation_placement: c.primary_navigation_placement.into(),
+            metrics: c.metrics.into(),
         }
     }
 }
 
-impl From<LayoutContractDto> for crate::presentation::layout_contract::LayoutContract {
+impl From<LayoutContractDto> for crate::presentation::layout::LayoutContract {
     fn from(dto: LayoutContractDto) -> Self {
         Self {
             shell_mode: dto.shell_mode.into(),
             workspace_pane_mode: dto.workspace_pane_mode.into(),
-            show_primary_navigation: dto.show_primary_navigation,
+            primary_navigation_placement: dto.primary_navigation_placement.into(),
+            metrics: dto.metrics.into(),
         }
     }
 }
@@ -236,65 +279,125 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pointer_class_dto_roundtrip() {
+    fn test_window_viewport_dto_roundtrip() {
+        let viewport = crate::presentation::layout::resolver::WindowViewport {
+            width_dp: 1024.0,
+            height_dp: 768.0,
+        };
+        let dto: WindowViewportDto = viewport.into();
+        let back: crate::presentation::layout::resolver::WindowViewport = dto.into();
+        assert_eq!(back.width_dp, viewport.width_dp);
+        assert_eq!(back.height_dp, viewport.height_dp);
+    }
+
+    #[test]
+    fn test_window_viewport_dto_camel_case_fields() {
+        let dto = WindowViewportDto {
+            width_dp: 360.0,
+            height_dp: 640.0,
+        };
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(json.contains("\"widthDp\""));
+        assert!(json.contains("\"heightDp\""));
+        // #628：不得再出现旧字段。
+        assert!(!json.contains("availablePaneCount"));
+        assert!(!json.contains("hasSeparatingFold"));
+        assert!(!json.contains("pointerClass"));
+        assert!(!json.contains("keyboardVisible"));
+    }
+
+    #[test]
+    fn test_primary_navigation_placement_dto_roundtrip() {
         for p in [
-            crate::presentation::layout_contract::PointerClass::Unknown,
-            crate::presentation::layout_contract::PointerClass::Touch,
-            crate::presentation::layout_contract::PointerClass::Stylus,
-            crate::presentation::layout_contract::PointerClass::Mouse,
+            crate::presentation::layout::PrimaryNavigationPlacement::Bottom,
+            crate::presentation::layout::PrimaryNavigationPlacement::Side,
         ] {
-            let dto: PointerClassDto = p.into();
-            let back: crate::presentation::layout_contract::PointerClass = dto.into();
+            let dto: PrimaryNavigationPlacementDto = p.into();
+            let back: crate::presentation::layout::PrimaryNavigationPlacement = dto.into();
             assert_eq!(back, p);
         }
     }
 
     #[test]
-    fn test_window_capabilities_dto_roundtrip() {
-        let caps = crate::presentation::layout_contract::WindowCapabilities {
-            available_pane_count: 3,
-            has_separating_fold: true,
-            pointer_class: crate::presentation::layout_contract::PointerClass::Mouse,
-            keyboard_visible: false,
+    fn test_layout_metrics_dto_roundtrip() {
+        let m = crate::presentation::layout::metrics::LayoutMetrics {
+            list_pane_width_dp: 320.0,
         };
-        let dto: WindowCapabilitiesDto = caps.clone().into();
-        let back: crate::presentation::layout_contract::WindowCapabilities = dto.into();
-        assert_eq!(back.available_pane_count, caps.available_pane_count);
-        assert_eq!(back.has_separating_fold, caps.has_separating_fold);
-        assert_eq!(back.pointer_class, caps.pointer_class);
-        assert_eq!(back.keyboard_visible, caps.keyboard_visible);
+        let dto: LayoutMetricsDto = m.into();
+        let back: crate::presentation::layout::metrics::LayoutMetrics = dto.into();
+        assert_eq!(back.list_pane_width_dp, m.list_pane_width_dp);
     }
 
     #[test]
-    fn test_window_capabilities_dto_camel_case_fields() {
-        let dto = WindowCapabilitiesDto {
-            available_pane_count: 2,
-            has_separating_fold: false,
-            pointer_class: PointerClassDto::Touch,
-            keyboard_visible: true,
+    fn test_layout_metrics_dto_camel_case_fields() {
+        let dto = LayoutMetricsDto {
+            list_pane_width_dp: 320.0,
         };
         let json = serde_json::to_string(&dto).unwrap();
-        assert!(json.contains("\"availablePaneCount\""));
-        assert!(json.contains("\"hasSeparatingFold\""));
-        assert!(json.contains("\"pointerClass\""));
-        assert!(json.contains("\"keyboardVisible\""));
+        assert!(json.contains("\"listPaneWidthDp\""));
     }
 
     #[test]
     fn test_layout_contract_dto_roundtrip() {
-        let contract = crate::presentation::layout_contract::LayoutContract {
-            shell_mode: crate::presentation::layout_contract::ShellMode::TwoPane,
-            workspace_pane_mode:
-                crate::presentation::layout_contract::WorkspacePaneMode::ListDetail,
-            show_primary_navigation: true,
+        let contract = crate::presentation::layout::LayoutContract {
+            shell_mode: crate::presentation::layout::ShellMode::TwoPane,
+            workspace_pane_mode: crate::presentation::layout::WorkspacePaneMode::ListDetail,
+            primary_navigation_placement:
+                crate::presentation::layout::PrimaryNavigationPlacement::Side,
+            metrics: crate::presentation::layout::metrics::LayoutMetrics {
+                list_pane_width_dp: 320.0,
+            },
         };
         let dto: LayoutContractDto = contract.clone().into();
-        let back: crate::presentation::layout_contract::LayoutContract = dto.into();
+        let back: crate::presentation::layout::LayoutContract = dto.into();
         assert_eq!(back.shell_mode, contract.shell_mode);
         assert_eq!(back.workspace_pane_mode, contract.workspace_pane_mode);
         assert_eq!(
-            back.show_primary_navigation,
-            contract.show_primary_navigation
+            back.primary_navigation_placement,
+            contract.primary_navigation_placement
         );
+        assert_eq!(
+            back.metrics.list_pane_width_dp,
+            contract.metrics.list_pane_width_dp
+        );
+    }
+
+    #[test]
+    fn test_layout_contract_dto_no_legacy_fields() {
+        // #628：LayoutContractDto 不得再含 showPrimaryNavigation（改由 ScreenPolicy 提供）。
+        let contract = crate::presentation::layout::LayoutContract {
+            shell_mode: crate::presentation::layout::ShellMode::SinglePane,
+            workspace_pane_mode: crate::presentation::layout::WorkspacePaneMode::SinglePane,
+            primary_navigation_placement:
+                crate::presentation::layout::PrimaryNavigationPlacement::Bottom,
+            metrics: crate::presentation::layout::metrics::LayoutMetrics::default(),
+        };
+        let dto: LayoutContractDto = contract.into();
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(!json.contains("showPrimaryNavigation"));
+        assert!(json.contains("\"primaryNavigationPlacement\""));
+        assert!(json.contains("\"metrics\""));
+    }
+
+    #[test]
+    fn test_resolve_layout_end_to_end_through_dto() {
+        // 端到端：WindowViewportDto → Core → LayoutContractDto。
+        let dto = WindowViewportDto {
+            width_dp: 1000.0,
+            height_dp: 800.0,
+        };
+        let viewport: crate::presentation::layout::resolver::WindowViewport = dto.into();
+        let contract = crate::presentation::layout::resolve_layout(&viewport);
+        let contract_dto: LayoutContractDto = contract.into();
+        assert_eq!(contract_dto.shell_mode, ShellModeDto::TwoPane);
+        assert_eq!(
+            contract_dto.workspace_pane_mode,
+            WorkspacePaneModeDto::ListDetail
+        );
+        assert_eq!(
+            contract_dto.primary_navigation_placement,
+            PrimaryNavigationPlacementDto::Side
+        );
+        assert_eq!(contract_dto.metrics.list_pane_width_dp, 320.0);
     }
 }

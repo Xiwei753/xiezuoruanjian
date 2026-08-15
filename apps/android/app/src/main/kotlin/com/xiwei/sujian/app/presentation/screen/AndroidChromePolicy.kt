@@ -1,12 +1,13 @@
-package com.xiwei.sujian.app.presentation
+package com.xiwei.sujian.app.presentation.screen
 
+import com.xiwei.sujian.app.presentation.contract.PresentationContractBridge
 import com.xiwei.sujian.feature.project.ui.WorkspaceLocation
 import uniffi.writer_core.ActionRoleDto
 import uniffi.writer_core.ScreenPolicyDto
 import uniffi.writer_core.ScreenRoleDto
 
 /**
- * Android Chrome Policy（#610 第 3 节）— 只做一件事：
+ * Android Chrome Policy（#610 第 3 节 / #628 评论第 5 节）— 只做一件事：
  *
  * ```text
  * Core ActionSlot → Android 顶栏/列表/菜单位置 → 对应 Material3 控件
@@ -15,7 +16,14 @@ import uniffi.writer_core.ScreenRoleDto
  * 图标、颜色、TopAppBar、NavigationBar、NavigationRail 全留 Android
  * （SujianNavigationSuite 渲染层）。产品设计语言（#597）的唯一事实来源是
  * Core screen_contract：本策略只消费 [ScreenPolicyDto]，不再自建第二份
- * “同步→搜索→设置”或“哪些页面显示顶栏/底栏”的规则。
+ * "同步→搜索→设置"或"哪些页面显示顶栏/底栏"的规则。
+ *
+ * #628 评论第 5 节：一级导航可见性（`showPrimaryNavigation`）改由 Core
+ * `ScreenPolicy.show_primary_navigation` 决定（Rust 的 Writing/Settings 返回 false，
+ * 其余一级页面返回 true）。本策略直接读 `screenPolicy?.showPrimaryNavigation`，
+ * 不再接收 `contractShowsPrimaryNavigation` 参数，也不再在此处写
+ * `when (screenRole) { SETTINGS, WRITING -> false; else -> ... }` 的产品规则 —
+ * 避免在每个平台重新写一遍。
  *
  * Android 独有的动态状态（工作区返回历史、正文位置）在这里与静态产品契约
  * 合成最终 chrome 决策。
@@ -40,7 +48,7 @@ internal data class SujianChromeSpec(
     val showTitle: Boolean,
     /** 顶栏右侧操作，按 Core order 排序（从左往右）。 */
     val actions: List<SujianChromeAction>,
-    /** 一级导航是否可见：由 Core 布局契约 + 路由规则共同决定。 */
+    /** 一级导航是否可见：由 Core ScreenPolicy.show_primary_navigation 决定（#628 评论第 5 节）。 */
     val showPrimaryNavigation: Boolean,
 )
 
@@ -76,7 +84,7 @@ internal object AndroidChromePolicy {
      *
      * 只做 ActionRole → Android 控件映射（#610 评论二）：动作是否存在、在哪个产品区域
      * 已由 Core 契约决定（Save/Sort 等死动作已从契约删除），本函数不再承担
-     * “过滤掉 Core 里其实不存在于当前 UI 的动作”的职责。
+     * "过滤掉 Core 里其实不存在于当前 UI 的动作"的职责。
      * 非 HeaderTrailing 角色即使出现，也由 Android 画成各自区域的控件
      * （FAB/列表按钮/菜单项），不是顶栏图标——这是控件映射，不是动作存在性判断。
      */
@@ -109,14 +117,15 @@ internal object AndroidChromePolicy {
      * @param screenPolicy Core 页面契约（PresentationPolicyCatalog 一次性解析）
      * @param workspaceLocation 工作区位置（正文/章节树/作品列表）
      * @param canWorkspaceNavigateBack 工作区返回历史是否可回退（Android 动态状态）
-     * @param contractShowsPrimaryNavigation Core 布局契约的 show_primary_navigation
+     *
+     * #628 评论第 5 节：删除 `contractShowsPrimaryNavigation` 参数 —
+     * 一级导航可见性直接读 `screenPolicy?.showPrimaryNavigation`（Core 决定）。
      */
     fun resolve(
         screenRole: ScreenRoleDto,
         screenPolicy: ScreenPolicyDto?,
         workspaceLocation: WorkspaceLocation,
         canWorkspaceNavigateBack: Boolean,
-        contractShowsPrimaryNavigation: Boolean,
     ): SujianChromeSpec {
         val isEditor = workspaceLocation is WorkspaceLocation.Editor
         val showBack =
@@ -131,12 +140,10 @@ internal object AndroidChromePolicy {
                         canWorkspaceNavigateBack
                 else -> false
             }
-        val showPrimaryNavigation =
-            when (screenRole) {
-                // #597：设置页从顶栏进入，不创建一级导航；正文隐藏一级导航。
-                ScreenRoleDto.SETTINGS, ScreenRoleDto.WRITING -> false
-                else -> contractShowsPrimaryNavigation
-            }
+        // #628 评论第 5 节：一级导航可见性由 Core ScreenPolicy.show_primary_navigation 决定。
+        // Rust 的 Writing/Settings 返回 false，其余一级页面返回 true；Android 直接读，
+        // 不再在此处写 when(screenRole) { SETTINGS, WRITING -> false; else -> ... }。
+        val showPrimaryNavigation = screenPolicy?.showPrimaryNavigation ?: true
         return SujianChromeSpec(
             showBack = showBack,
             appBarTransparent = isEditor,

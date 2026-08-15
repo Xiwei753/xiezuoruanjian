@@ -7,7 +7,7 @@ import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import com.xiwei.sujian.app.MainActivity
 import com.xiwei.sujian.app.di.SujianAppDependencies
-import com.xiwei.sujian.app.presentation.PresentationPolicyCatalog
+import com.xiwei.sujian.app.presentation.screen.PresentationPolicyCatalog
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator

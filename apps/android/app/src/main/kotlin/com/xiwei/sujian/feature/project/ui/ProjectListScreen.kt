@@ -25,10 +25,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.WorkspaceAppState
-import com.xiwei.sujian.app.presentation.AndroidWorkspaceActionSpec
-import com.xiwei.sujian.app.presentation.WorkspaceActionKind
-import com.xiwei.sujian.app.presentation.WorkspaceActionSpec
-import com.xiwei.sujian.app.presentation.WorkspaceActionTarget
+import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
+import com.xiwei.sujian.app.presentation.screen.WorkspaceActionKind
+import com.xiwei.sujian.app.presentation.screen.WorkspaceActionSpec
+import com.xiwei.sujian.app.presentation.screen.WorkspaceActionTarget
 import com.xiwei.sujian.core.designsystem.component.SujianCard
 import com.xiwei.sujian.core.designsystem.component.SujianDialog
 import com.xiwei.sujian.core.designsystem.component.SujianFab

@@ -1,4 +1,4 @@
-package com.xiwei.sujian.app.presentation
+package com.xiwei.sujian.app.presentation.contract
 
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
@@ -8,40 +8,44 @@ import uniffi.writer_core.ActionRoleDto
 import uniffi.writer_core.ActionSlotDto
 import uniffi.writer_core.LayoutContractDto
 import uniffi.writer_core.ScreenPolicyDto
-import uniffi.writer_core.WindowCapabilitiesDto
+import uniffi.writer_core.WindowViewportDto
 
 /**
- * Presentation Contract Bridge — Android 侧消费 Core presentation contract 的唯一入口（#610）。
+ * Presentation Contract Bridge — Android 侧消费 Core presentation contract 的唯一入口（#610 / #628）。
  *
- * 分层（#610）：
- * - Core `presentation/layout_contract.rs` + `presentation/screen_contract.rs` 是
- *   平台无关的产品界面契约唯一事实来源；
- * - 本桥只做两件事：把 Android 需要的能力/角色 DTO 传给 Core，把 Core 返回的
- *   contract DTO 转成 Android 可消费的形式；
+ * 分层（#610 / #628）：
+ * - Core `presentation/layout` + `presentation/screen` 是平台无关的产品界面契约唯一事实来源；
+ * - 本桥只做两件事：把 Android 测量好的原始窗口尺寸（[WindowViewportDto]）传给 Core，
+ *   把 Core 返回的 contract DTO 转成 Android 可消费的形式；
  * - 图标、颜色、TopAppBar、NavigationBar、NavigationRail 等具体控件全部留在
  *   Android presentation/render 层（SujianNavigationSuite + AndroidChromePolicy）。
+ *
+ * #628：`resolveLayout` 签名从 `WindowCapabilitiesDto`（paneCount/fold/pointer/keyboard）
+ * 改为 `WindowViewportDto`（原始窗口宽高 dp）。平台端不再做"窗口能力判断"，
+ * 只测量窗口尺寸，断点/壳层/导航放置全由 Rust `presentation/layout` 决定。
  *
  * 旧的 ScreenPolicyBridge / LayoutPolicyBridge / ScreenPolicyModels /
  * LayoutPolicyModels 已删除，这里只有一个入口。
  *
  * #618 一：静态页面契约（ScreenRole → ScreenPolicy）的临时解析已由
- * [PresentationPolicyCatalog] 在应用容器创建时一次性完成，Compose 热路径只查
- * catalog，不再走本桥。本桥保留动态的布局契约解析（依赖窗口能力）。
+ * [com.xiwei.sujian.app.presentation.screen.PresentationPolicyCatalog] 在应用容器创建时
+ * 一次性完成，Compose 热路径只查 catalog，不再走本桥。本桥保留动态的布局契约解析
+ * （依赖窗口尺寸）。
  *
  * #610 评论二：ActionSlotDto 携带平台无关的业务目标身份（target），
- * Delete/Rename 等动作可区分“删卷/删章节/重命名卷/重命名章节”，
+ * Delete/Rename 等动作可区分"删卷/删章节/重命名卷/重命名章节"，
  * Android 消费端直接读 DTO 字段即可绑定业务操作，不靠区域/顺序猜身份。
  */
 internal object PresentationContractBridge {
     private const val TAG = "PresentationContractBridge"
 
-    /** Core 布局契约：窗口能力 → ShellMode/WorkspacePaneMode。 */
+    /** Core 布局契约：原始窗口尺寸（dp） → ShellMode/WorkspacePaneMode/导航放置/共用尺寸。 */
     fun resolveLayoutContract(
         bridge: AppServiceBridge,
-        capabilities: WindowCapabilitiesDto,
+        viewport: WindowViewportDto,
     ): LayoutContractDto? =
         try {
-            when (val result = bridge.resolveLayout(capabilities)) {
+            when (val result = bridge.resolveLayout(viewport)) {
                 is BridgeResult.Success -> result.data
                 else -> null
             }
@@ -54,11 +58,13 @@ internal object PresentationContractBridge {
      * #618 评论四：创建绑定 bridge 的布局契约解析器（函数类型）。
      *
      * 供 DI/navigation 层注入到 rememberAndroidLayoutSpec；presentation 层
-     * （AndroidAdaptiveLayoutPolicy.kt）只消费函数类型，不直接依赖 AppServiceBridge，
+     * （AndroidLayoutAdapter.kt）只消费函数类型，不直接依赖 AppServiceBridge，
      * 遵守架构门禁 presentation-contract-layer（只有本文件可以引用 Bridge）。
+     *
+     * #628：解析器输入变为 [WindowViewportDto]（原始窗口宽高 dp）。
      */
-    fun layoutContractResolver(bridge: AppServiceBridge): (WindowCapabilitiesDto) -> LayoutContractDto? {
-        return { capabilities -> resolveLayoutContract(bridge, capabilities) }
+    fun layoutContractResolver(bridge: AppServiceBridge): (WindowViewportDto) -> LayoutContractDto? {
+        return { viewport -> resolveLayoutContract(bridge, viewport) }
     }
 
     // ── Android 消费端便捷转换（同一入口，避免各 UI 层重复映射） ──

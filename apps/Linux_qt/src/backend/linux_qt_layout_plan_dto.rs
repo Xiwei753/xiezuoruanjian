@@ -1,16 +1,18 @@
-//! Linux_qt 客户端专用的布局 DTO（#610）
+//! Linux_qt 客户端专用的布局 DTO（#610 / #628）
 //!
 //! 与 Core 的 LayoutContract 不同，LinuxQtLayoutPlanDto 在 Core 契约之上叠加
 //! Qt 自己的平台值（纸面最大宽度、页面内边距），并确保输出为 camelCase。
 //!
-//! 分层（#610）：
-//! - Core `presentation::layout_contract::resolve_layout(WindowCapabilities)`
-//!   产出产品壳层契约（ShellMode / WorkspacePaneMode）；
+//! 分层（#610 / #628）：
+//! - Core `presentation::layout::resolve_layout(WindowViewport)`
+//!   产出产品壳层契约（ShellMode / WorkspacePaneMode / PrimaryNavigationPlacement / LayoutMetrics）；
 //! - 本文件把契约 + Qt 窗口宽高换算成 QML 实际使用的字段。
 //!   Material 断点与 dp/vp 值属于 Qt 平台决策，不出现在 Core。
+//! - #628：`show_primary_navigation` 改由 `ScreenPolicy` 提供，
+//!   `from_contract` 接收它作为参数，由调用方从 `ScreenPolicy` 传入。
 
 use serde::Serialize;
-use writer_core::presentation::layout_contract::{LayoutContract, ShellMode, WorkspacePaneMode};
+use writer_core::presentation::layout::{LayoutContract, ShellMode, WorkspacePaneMode};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,7 +35,14 @@ impl LinuxQtLayoutPlanDto {
     /// - ≥ 840vp：三栏。
     ///
     /// 桌面端以鼠标为主，无软键盘，折叠屏能力按无处理。
-    pub fn from_contract(contract: &LayoutContract, window_width_vp: f32) -> Self {
+    ///
+    /// #628：`show_primary_navigation` 改由 `ScreenPolicy` 提供，
+    /// 调用方从 `resolve_screen_policy` 获取后传入。
+    pub fn from_contract(
+        contract: &LayoutContract,
+        window_width_vp: f32,
+        show_primary_navigation: bool,
+    ) -> Self {
         let paper_max_width_vp = if contract.workspace_pane_mode == WorkspacePaneMode::SinglePane {
             0.0
         } else {
@@ -53,7 +62,7 @@ impl LinuxQtLayoutPlanDto {
                 WorkspacePaneMode::ListDetail => "ListDetail".to_string(),
                 WorkspacePaneMode::ThreePane => "ThreePane".to_string(),
             },
-            show_primary_navigation: contract.show_primary_navigation,
+            show_primary_navigation,
             content_max_width_vp: paper_max_width_vp,
             content_padding_vp: Self::content_padding_vp(contract),
         }
@@ -83,23 +92,20 @@ pub fn qt_available_pane_count(window_width_vp: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use writer_core::presentation::layout_contract::{
-        resolve_layout, PointerClass, WindowCapabilities,
-    };
+    use writer_core::presentation::layout::resolver::WindowViewport;
 
-    fn contract_for(pane_count: u8) -> LayoutContract {
-        resolve_layout(&WindowCapabilities {
-            available_pane_count: pane_count,
-            has_separating_fold: false,
-            pointer_class: PointerClass::Mouse,
-            keyboard_visible: false,
-        })
+    fn contract_for(width_vp: f32, height_vp: f32) -> LayoutContract {
+        let viewport = WindowViewport {
+            width_dp: width_vp,
+            height_dp: height_vp,
+        };
+        writer_core::presentation::layout::resolve_layout(&viewport)
     }
 
     #[test]
     fn test_linux_qt_layout_plan_dto_camel_case_output() {
-        let contract = contract_for(1);
-        let dto = LinuxQtLayoutPlanDto::from_contract(&contract, 360.0);
+        let contract = contract_for(360.0, 640.0);
+        let dto = LinuxQtLayoutPlanDto::from_contract(&contract, 360.0, true);
         let json = serde_json::to_string(&dto).unwrap();
 
         assert!(json.contains("\"shellMode\""));
@@ -116,9 +122,12 @@ mod tests {
 
     #[test]
     fn test_linux_qt_layout_plan_dto_shell_mode_values() {
-        assert_eq!(contract_for(1).shell_mode, ShellMode::SinglePane);
-        assert_eq!(contract_for(2).shell_mode, ShellMode::TwoPane);
-        assert_eq!(contract_for(3).shell_mode, ShellMode::ThreePane);
+        // Narrow width → SinglePane
+        assert_eq!(contract_for(360.0, 640.0).shell_mode, ShellMode::SinglePane);
+        // Wide width → TwoPane
+        assert_eq!(contract_for(1000.0, 800.0).shell_mode, ShellMode::TwoPane);
+        // Large width → ThreePane
+        assert_eq!(contract_for(1400.0, 900.0).shell_mode, ShellMode::ThreePane);
     }
 
     #[test]
@@ -134,18 +143,20 @@ mod tests {
 
     #[test]
     fn test_single_pane_paper_is_unbounded() {
-        let dto = LinuxQtLayoutPlanDto::from_contract(&contract_for(1), 360.0);
+        let contract = contract_for(360.0, 640.0);
+        let dto = LinuxQtLayoutPlanDto::from_contract(&contract, 360.0, true);
         assert_eq!(dto.content_max_width_vp, 0.0);
         assert_eq!(dto.content_padding_vp, 16.0);
     }
 
     #[test]
     fn test_multi_pane_paper_clamps_to_window() {
-        let narrow = LinuxQtLayoutPlanDto::from_contract(&contract_for(3), 900.0);
+        let contract = contract_for(1400.0, 900.0);
+        let narrow = LinuxQtLayoutPlanDto::from_contract(&contract, 900.0, true);
         // 900 - 2*32 = 836 < 840 → 夹紧到窗口内。
         assert_eq!(narrow.content_max_width_vp, 836.0);
 
-        let wide = LinuxQtLayoutPlanDto::from_contract(&contract_for(3), 1600.0);
+        let wide = LinuxQtLayoutPlanDto::from_contract(&contract, 1600.0, true);
         assert_eq!(wide.content_max_width_vp, 840.0);
         assert_eq!(wide.content_padding_vp, 32.0);
     }

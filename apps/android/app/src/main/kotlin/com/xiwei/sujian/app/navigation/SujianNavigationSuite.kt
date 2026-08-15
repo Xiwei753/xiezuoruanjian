@@ -59,14 +59,13 @@ import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.WorkspaceUiEvent
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.di.SujianAppDependencies
-import com.xiwei.sujian.app.presentation.AndroidChromePolicy
-import com.xiwei.sujian.app.presentation.AndroidNavigationPresentation
-import com.xiwei.sujian.app.presentation.AndroidWorkspaceActionSpec
-import com.xiwei.sujian.app.presentation.PresentationContractBridge
-import com.xiwei.sujian.app.presentation.SujianChromeAction
-import com.xiwei.sujian.app.presentation.SujianChromeSpec
-import com.xiwei.sujian.app.presentation.rememberAndroidLayoutSpec
-import com.xiwei.sujian.app.presentation.rememberProjectActions
+import com.xiwei.sujian.app.presentation.contract.PresentationContractBridge
+import com.xiwei.sujian.app.presentation.layout.rememberAndroidLayoutSpec
+import com.xiwei.sujian.app.presentation.screen.AndroidChromePolicy
+import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
+import com.xiwei.sujian.app.presentation.screen.SujianChromeAction
+import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
+import com.xiwei.sujian.app.presentation.screen.rememberProjectActions
 import com.xiwei.sujian.app.state.ActiveDocumentGate
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
 import com.xiwei.sujian.core.designsystem.component.SujianSnackbar
@@ -306,7 +305,7 @@ private fun SujianNavDisplayContent(
 /**
  * #618 五：工作区 NavEntry provider — 按 [appState] / [workspaceNavState] /
  * 两份静态动作 spec 稳定保存，避免每次重组都重建三个 back stack 的 provider。
- * 动作 spec 来自容器创建时解析的 [com.xiwei.sujian.app.presentation.PresentationPolicyCatalog]，
+ * 动作 spec 来自容器创建时解析的 [com.xiwei.sujian.app.presentation.screen.PresentationPolicyCatalog]，
  * 是稳定引用，因此 provider 只在真正需要时重建。
  */
 @Composable
@@ -546,7 +545,7 @@ private fun SujianWideNavScaffold(
 }
 
 /** 工作区 navigator — 在导航套件层创建的唯一实例（#597：返回历史始终同一份）。
- * 布局指令（含折叠铰链 excludedBounds / pane 宽度）来自 AndroidAdaptiveLayoutPolicy（#610）。 */
+ * 布局指令（含折叠铰链 excludedBounds / pane 宽度）来自 AndroidLayoutAdapter（#610 / #628）。 */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 private fun rememberSujianWorkspaceNavState(
@@ -750,7 +749,6 @@ fun SujianNavigationSuite(
             screenPolicy = screenPolicy,
             workspaceLocation = workspaceNavState.currentLocation,
             canWorkspaceNavigateBack = workspaceNavState.canNavigateBack,
-            contractShowsPrimaryNavigation = layoutSpec.contract?.showPrimaryNavigation ?: true,
         )
 
     SujianWorkspaceBackEffects(currentRoute, workspaceNavState)
@@ -780,7 +778,10 @@ fun SujianNavigationSuite(
         }
     }
 
-    if (layoutSpec.navigationPresentation == AndroidNavigationPresentation.BottomBar) {
+    // #628：底栏/侧栏改读 Core LayoutContractDto.primaryNavigationPlacement（Bottom/Side），
+    // 不再用 AndroidNavigationPresentation（已删除）。Rust 根据窗口 class 决定放置位置。
+    // useBottomNavigation 是 AndroidLayoutAdapter 暴露的便捷布尔视图，避免本层引用 uniffi DTO。
+    if (layoutSpec.useBottomNavigation) {
         SujianCompactNavScaffold(
             modifier = modifier,
             topBarInfo = topBarInfo,

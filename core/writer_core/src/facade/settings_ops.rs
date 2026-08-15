@@ -44,13 +44,13 @@ impl super::WriterCore {
         crate::settings_registry::SettingsRegistry::default_registry()
     }
 
-    pub fn get_settings_presentation(&self) -> crate::settings_presentation::SettingsPresentation {
-        crate::settings_presentation::default_settings_presentation()
+    pub fn get_settings_presentation(&self) -> crate::presentation::settings::SettingsPresentation {
+        crate::presentation::settings::default_settings_presentation()
     }
 
     /// 返回 SettingsPresentation 的 JSON 字符串，方便客户端通过 FFI 消费
     pub fn get_settings_presentation_json(&self) -> String {
-        let presentation = crate::settings_presentation::default_settings_presentation();
+        let presentation = crate::presentation::settings::default_settings_presentation();
         serde_json::to_string(&presentation).unwrap_or_else(|_| "{}".to_string())
     }
 

@@ -2,7 +2,7 @@ package com.xiwei.sujian.app.di
 
 import android.content.Context
 import androidx.compose.runtime.compositionLocalOf
-import com.xiwei.sujian.app.presentation.PresentationPolicyCatalog
+import com.xiwei.sujian.app.presentation.screen.PresentationPolicyCatalog
 import com.xiwei.sujian.app.theme.ThemeRepository
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult

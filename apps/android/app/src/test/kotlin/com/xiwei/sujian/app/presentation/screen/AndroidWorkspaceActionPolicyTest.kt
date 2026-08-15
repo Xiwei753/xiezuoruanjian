@@ -1,4 +1,4 @@
-package com.xiwei.sujian.app.presentation
+package com.xiwei.sujian.app.presentation.screen
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -14,7 +14,7 @@ import uniffi.writer_core.ScreenRoleDto
  * #610 评论四、评论六：AndroidWorkspaceActionPolicy 是 Core screen contract 的纯映射层 —
  * 只按 region + target + order 输出可渲染动作 spec，不查业务状态。
  *
- * 测试在 presentation 包，可以用 uniffi DTO 构造输入（ActionSlotDto/ScreenPolicyDto 等），
+ * 测试在 presentation.screen 包，可以用 uniffi DTO 构造输入（ActionSlotDto/ScreenPolicyDto 等），
  * 但断言改用 presentation model（WorkspaceActionKind/Target/Region）— feature UI
  * 不再接触 uniffi DTO 类型。
  *
@@ -38,10 +38,17 @@ class AndroidWorkspaceActionPolicyTest {
             requiresConfirmation = requiresConfirmation,
         )
 
+    /** 构造 ScreenPolicyDto（#628：含 showPrimaryNavigation 字段，测试中默认 true）。 */
     private fun policy(
         screenRole: ScreenRoleDto,
         slots: List<ActionSlotDto>,
-    ): ScreenPolicyDto = ScreenPolicyDto(screenRole = screenRole, actionSlots = slots)
+        showPrimaryNavigation: Boolean = true,
+    ): ScreenPolicyDto =
+        ScreenPolicyDto(
+            screenRole = screenRole,
+            actionSlots = slots,
+            showPrimaryNavigation = showPrimaryNavigation,
+        )
 
     /** 作品列表契约（与 Core resolve_screen_policy(ProjectList) 一致）。 */
     private fun projectListPolicy(): ScreenPolicyDto =

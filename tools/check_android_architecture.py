@@ -1215,7 +1215,7 @@ def rule_editor_presentation_pure() -> list[Finding]:
 
 
 PRESENTATION_CONTRACT_DTO_WHITELIST = [
-    "uniffi.writer_core.WindowCapabilitiesDto",
+    "uniffi.writer_core.WindowViewportDto",
     "uniffi.writer_core.LayoutContractDto",
     "uniffi.writer_core.ScreenPolicyDto",
     "uniffi.writer_core.ScreenRoleDto",
@@ -1223,8 +1223,10 @@ PRESENTATION_CONTRACT_DTO_WHITELIST = [
     "uniffi.writer_core.ActionRoleDto",
     "uniffi.writer_core.ActionTargetDto",
     "uniffi.writer_core.ActionRegionDto",
-    "uniffi.writer_core.PointerClassDto",
+    "uniffi.writer_core.PrimaryNavigationPlacementDto",
+    "uniffi.writer_core.LayoutMetricsDto",
     "uniffi.writer_core.WorkspacePaneModeDto",
+    "uniffi.writer_core.ShellModeDto",
 ]
 
 
@@ -1252,19 +1254,21 @@ def rule_presentation_contract_layer() -> list[Finding]:
                         message=f"presentation 层引用非契约 DTO: {raw.strip()}",
                     )
                 )
-            # Bridge 依赖只允许出现在唯一入口 PresentationContractBridge.kt
+            # Bridge 依赖只允许出现在唯一入口
+            # app/presentation/contract/PresentationContractBridge.kt（#628：文件
+            # 已迁入 contract/ 子目录，按相对路径精确匹配，不再按文件名匹配）。
             if any(
                 b in raw
                 for b in [
                     "com.xiwei.sujian.app.di.AppServiceProvider",
                     "com.xiwei.sujian.core.interop.app.AppServiceBridge",
                 ]
-            ) and not path.name == "PresentationContractBridge.kt":
+            ) and not str(path.relative_to(APP_SRC)) == "app/presentation/contract/PresentationContractBridge.kt":
                 findings.append(
                     Finding(
                         path=str(path.relative_to(APP_SRC)),
                         line=lineno,
-                        message="presentation 层只有 PresentationContractBridge.kt 可以依赖 Bridge",
+                        message="presentation 层只有 app/presentation/contract/PresentationContractBridge.kt 可以依赖 Bridge",
                     )
                 )
     # 旧的双份 UI policy 不得复活
@@ -1281,6 +1285,60 @@ def rule_presentation_contract_layer() -> list[Finding]:
                     )
                 )
     return findings
+
+
+def rule_presentation_layout_no_breakpoints() -> list[Finding]:
+    """#628：app/presentation/layout/ 不得出现 WindowWidthSizeClass /
+    availablePaneCount / windowWidthSizeClass 这类布局断点判断，也不得硬编码
+    600/840/1200/1600 窗口断点比较。
+
+    布局断点已收回 Rust presentation/layout/breakpoints.rs，Android layout 层
+    只消费 LayoutContractDto。
+    """
+    forbidden = [
+        "WindowWidthSizeClass",
+        "availablePaneCount",
+        "windowWidthSizeClass",
+    ]
+    findings = scan_forbidden(APP_SRC, "/sujian/app/presentation/layout/", forbidden)
+    # 数字断点 600/840/1200/1600 容易误报（注释、其他数值），用更精确的匹配：
+    # 仅匹配形如 `>= 600` / `== 840` / `1200 >` 这类断点比较。
+    for path in collect_kt_files(APP_SRC, "/sujian/app/presentation/layout/"):
+        for lineno, raw in enumerate(
+            effective_lines(path.read_text(encoding="utf-8")), 1
+        ):
+            if re.search(r"[<>=!]=?\s*(600|840|1200|1600)\b", raw) or re.search(
+                r"\b(600|840|1200|1600)\s*[<>=]", raw
+            ):
+                findings.append(
+                    Finding(
+                        path=str(path.relative_to(APP_SRC)),
+                        line=lineno,
+                        message="presentation/layout/ 不得硬编码窗口断点 600/840/1200/1600（已收回 Rust breakpoints.rs）",
+                    )
+                )
+    return findings
+
+
+def rule_ui_no_direct_layout_decision() -> list[Finding]:
+    """#628：feature/*/ui 和 app/navigation 下不得直接根据窗口尺寸决定 pane 数
+    或 Bottom/Side；必须消费 LayoutContractDto。
+
+    navigation 层可以读 LayoutContractDto.primaryNavigationPlacement（通过 DTO
+    字段），但不应自己判断窗口尺寸来决定 Bottom/Side，因此只禁
+    WindowWidthSizeClass / availablePaneCount / windowWidthSizeClass。
+    """
+    ui_filters = ["/sujian/app/navigation/"] + _feature_ui_filters()
+    forbidden = [
+        "WindowWidthSizeClass",
+        "availablePaneCount",
+        "windowWidthSizeClass",
+    ]
+    findings: list[Finding] = []
+    for f in ui_filters:
+        findings += scan_forbidden(APP_SRC, f, forbidden)
+    return findings
+
 
 RULES: list[tuple[str, str, object]] = [
     (
@@ -1362,6 +1420,16 @@ RULES: list[tuple[str, str, object]] = [
         "presentation-contract-layer",
         "app/presentation 只消费 Core presentation contract DTO（#610）",
         rule_presentation_contract_layer,
+    ),
+    (
+        "presentation-layout-no-breakpoints",
+        "app/presentation/layout/ 不得硬编码窗口断点（#628：已收回 Rust breakpoints.rs）",
+        rule_presentation_layout_no_breakpoints,
+    ),
+    (
+        "ui-no-direct-layout-decision",
+        "feature/*/ui 和 app/navigation 不得直接判断窗口尺寸决定布局（#628：必须消费 LayoutContractDto）",
+        rule_ui_no_direct_layout_decision,
     ),
 ]
 

@@ -1,4 +1,4 @@
-package com.xiwei.sujian.app.presentation
+package com.xiwei.sujian.app.presentation.screen
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -17,9 +17,9 @@ import uniffi.writer_core.ScreenRoleDto
  * #618 一：PresentationPolicyCatalog 在容器创建时一次性解析静态页面契约，
  * Compose 热路径只查内存 Map。
  *
- * 契约内容（哪些动作在哪些区域）的唯一事实来源是 Core screen_contract 及其
- * Rust 单测（screen_contract_tests.rs）；本测试通过注入 resolver 验证目录自身的
- * 行为：
+ * 契约内容（哪些动作在哪些区域、是否显示一级导航）的唯一事实来源是 Core
+ * screen_contract 及其 Rust 单测（screen_contract_tests.rs）；本测试通过注入 resolver
+ * 验证目录自身的行为：
  * - 六个 Android 消费的角色在构造时全部解析一次；
  * - 解析失败的角色返回 null，不崩溃；
  * - 目录是静态快照：同一实例重复查询返回同一份契约实例（引用相等）；
@@ -42,10 +42,17 @@ class PresentationPolicyCatalogTest {
             requiresConfirmation = false,
         )
 
+    /** 构造 ScreenPolicyDto（#628：含 showPrimaryNavigation 字段，测试中默认 true）。 */
     private fun policy(
         screenRole: ScreenRoleDto,
         slots: List<ActionSlotDto>,
-    ): ScreenPolicyDto = ScreenPolicyDto(screenRole = screenRole, actionSlots = slots)
+        showPrimaryNavigation: Boolean = true,
+    ): ScreenPolicyDto =
+        ScreenPolicyDto(
+            screenRole = screenRole,
+            actionSlots = slots,
+            showPrimaryNavigation = showPrimaryNavigation,
+        )
 
     /** 与 Core ProjectWorkspace 契约一致的测试样本（真实性由 Core 单测保证）。 */
     private fun projectWorkspacePolicy(): ScreenPolicyDto =
@@ -64,7 +71,11 @@ class PresentationPolicyCatalogTest {
         val catalog =
             PresentationPolicyCatalog { role ->
                 queried.add(role)
-                ScreenPolicyDto(screenRole = role, actionSlots = emptyList())
+                ScreenPolicyDto(
+                    screenRole = role,
+                    actionSlots = emptyList(),
+                    showPrimaryNavigation = true,
+                )
             }
         assertEquals(PresentationPolicyCatalog.ROLES, queried)
         assertEquals(6, queried.size)
@@ -82,6 +93,7 @@ class PresentationPolicyCatalogTest {
                     ScreenPolicyDto(
                         screenRole = role,
                         actionSlots = emptyList(),
+                        showPrimaryNavigation = true,
                     )
                 }
             }

@@ -1,9 +1,10 @@
-//! FFI 层页面契约操作（#610：动作区域与顺序是产品语义，不随壳层变化）
+//! FFI 层页面契约操作（#610 / #628：动作区域与顺序是产品语义，不随壳层变化；
+//! ScreenPolicy 含 show_primary_navigation 由 Rust 决定）
 
 use std::os::raw::c_char;
 
 use crate::ffi::{c_str_to_rust, err_json, ok_json};
-use crate::presentation::screen_contract::{resolve_screen_policy, ScreenRole};
+use crate::presentation::screen::{resolve_screen_policy, ScreenRole};
 
 /// # Safety
 /// `screen_role_json` must be a valid null-terminated UTF-8 C string.
@@ -32,12 +33,13 @@ pub unsafe extern "C" fn writer_core_resolve_screen_policy(
         }
     };
 
-    let action_slots = resolve_screen_policy(screen_role);
+    let policy = resolve_screen_policy(screen_role);
 
     use crate::api::types::screen_policy::*;
     let dto = ScreenPolicyDto {
-        screen_role: screen_role.into(),
-        action_slots: action_slots.into_iter().map(Into::into).collect(),
+        screen_role: policy.screen_role.into(),
+        action_slots: policy.action_slots.into_iter().map(Into::into).collect(),
+        show_primary_navigation: policy.show_primary_navigation,
     };
     ok_json(dto)
 }

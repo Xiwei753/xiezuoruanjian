@@ -1,4 +1,4 @@
-package com.xiwei.sujian.app.presentation
+package com.xiwei.sujian.app.presentation.screen
 
 import uniffi.writer_core.ScreenPolicyDto
 import uniffi.writer_core.ScreenRoleDto
@@ -19,8 +19,9 @@ import uniffi.writer_core.ScreenRoleDto
  * 解析失败的角色返回 null（与旧 PresentationContractBridge.resolveScreenPolicy
  * 失败语义一致：对应 UI 区域按无契约处理，不崩溃）。
  *
- * 契约内容（哪些动作在哪些区域）的唯一事实来源是 Core screen_contract 及其
- * Rust 单测（screen_contract_tests.rs）；本类只负责"一次性解析 + 静态快照"。
+ * 契约内容（哪些动作在哪些区域、是否显示一级导航）的唯一事实来源是 Core
+ * screen_contract 及其 Rust 单测（screen_contract_tests.rs）；本类只负责
+ * "一次性解析 + 静态快照"。
  */
 class PresentationPolicyCatalog(
     resolver: (ScreenRoleDto) -> ScreenPolicyDto?,

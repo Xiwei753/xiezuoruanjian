@@ -73,7 +73,6 @@ pub mod project;
 pub mod recent_edits;
 pub mod search;
 pub mod settings;
-pub mod settings_presentation;
 pub mod starmap;
 pub mod storage;
 pub mod sync;

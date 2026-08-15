@@ -105,32 +105,28 @@ fn ffi_project_maps_title_to_title() {
 }
 
 #[test]
-fn window_capabilities_dto_fields_match_harmony() {
-    let capabilities = crate::presentation::layout_contract::WindowCapabilities::default();
-    let _json = serde_json::to_value(&capabilities).unwrap();
+fn window_viewport_dto_fields_match_harmony() {
+    // #628：WindowViewportDto 替代 WindowCapabilitiesDto，只含 width_dp / height_dp。
+    let viewport = crate::presentation::layout::resolver::WindowViewport::default();
+    let _json = serde_json::to_value(viewport).unwrap();
     let ffi_json = json!({
-        "availablePaneCount": capabilities.available_pane_count,
-        "hasSeparatingFold": capabilities.has_separating_fold,
-        "pointerClass": "Touch",
-        "keyboardVisible": capabilities.keyboard_visible
+        "widthDp": viewport.width_dp,
+        "heightDp": viewport.height_dp
     });
-    let expected_keys = vec![
-        "availablePaneCount",
-        "hasSeparatingFold",
-        "keyboardVisible",
-        "pointerClass",
-    ];
+    let expected_keys = vec!["heightDp", "widthDp"];
     let actual_keys = sorted_keys(&ffi_json);
     assert_eq!(
         actual_keys, expected_keys,
-        "WindowCapabilities DTO field names must match Harmony CoreDtos.ets"
+        "WindowViewport DTO field names must match Harmony CoreDtos.ets"
     );
 }
 
 #[test]
 fn layout_contract_dto_fields_match_harmony() {
-    let capabilities = crate::presentation::layout_contract::WindowCapabilities::default();
-    let contract = crate::presentation::layout_contract::resolve_layout(&capabilities);
+    // #628：LayoutContract 不再含 show_primary_navigation（改由 ScreenPolicy 提供），
+    // 新增 primary_navigation_placement 与 metrics。
+    let viewport = crate::presentation::layout::resolver::WindowViewport::default();
+    let contract = crate::presentation::layout::resolve_layout(&viewport);
     let json = serde_json::to_value(&contract).unwrap();
     assert!(
         json.get("shell_mode").is_some(),
@@ -140,6 +136,14 @@ fn layout_contract_dto_fields_match_harmony() {
         json.get("workspace_pane_mode").is_some(),
         "Core internal LayoutContract uses snake_case 'workspace_pane_mode'"
     );
+    assert!(
+        json.get("primary_navigation_placement").is_some(),
+        "Core internal LayoutContract uses snake_case 'primary_navigation_placement'"
+    );
+    assert!(
+        json.get("metrics").is_some(),
+        "Core internal LayoutContract uses snake_case 'metrics'"
+    );
     // #610：Core 不再输出 Material 断点 / dp / 导航呈现等平台值。
     assert!(
         json.get("content_max_width_dp").is_none()
@@ -148,13 +152,26 @@ fn layout_contract_dto_fields_match_harmony() {
             && json.get("width_class").is_none(),
         "LayoutContract 不得包含 Material 断点/dp/导航呈现等平台值"
     );
+    // #628：Core 内部不再含 show_primary_navigation（改由 ScreenPolicy 提供）。
+    assert!(
+        json.get("show_primary_navigation").is_none(),
+        "LayoutContract 不得再含 show_primary_navigation（改由 ScreenPolicy 提供）"
+    );
 
     let ffi_json = json!({
         "shellMode": "SinglePane",
         "workspacePaneMode": "SinglePane",
-        "showPrimaryNavigation": true
+        "primaryNavigationPlacement": "Bottom",
+        "metrics": {
+            "listPaneWidthDp": 320.0
+        }
     });
-    let expected_keys = vec!["shellMode", "showPrimaryNavigation", "workspacePaneMode"];
+    let expected_keys = vec![
+        "metrics",
+        "primaryNavigationPlacement",
+        "shellMode",
+        "workspacePaneMode",
+    ];
     let actual_keys = sorted_keys(&ffi_json);
     assert_eq!(
         actual_keys, expected_keys,

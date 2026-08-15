@@ -1,10 +1,10 @@
-//! #610：页面契约纯函数测试（从 screen_contract.rs 拆出，避免生产文件测试膨胀）。
+//! #610 / #628：页面契约纯函数测试（从 screen_contract_tests.rs 迁移）。
 //!
 //! 覆盖：页面角色/面板角色/动作角色/动作区域枚举、各页面动作槽位表、
-//! 产品顺序（#597）、共享契约不含平台控件名、序列化往返。
-//! 纯函数测试，不触碰 UI / 平台 API / 文件系统。
+//! 产品顺序（#597）、共享契约不含平台控件名、序列化往返，
+//! 以及 #628 新增的 `show_primary_navigation` 决策。
 
-use super::screen_contract::*;
+use super::policy::*;
 
 #[test]
 fn test_screen_role_variants() {
@@ -84,8 +84,8 @@ fn test_action_region_variants() {
 #[test]
 fn test_contract_has_no_platform_widget_names() {
     // #610：共享契约不得出现平台控件名。
-    let all_json =
-        serde_json::to_string(&resolve_screen_policy(ScreenRole::ProjectWorkspace)).unwrap();
+    let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
+    let all_json = serde_json::to_string(&policy).unwrap();
     for platform_name in [
         "BottomBar",
         "NavigationRail",
@@ -105,8 +105,9 @@ fn test_contract_has_no_platform_widget_names() {
 
 #[test]
 fn test_writing_header_actions_order() {
-    let slots = resolve_screen_policy(ScreenRole::Writing);
-    let header: Vec<_> = slots
+    let policy = resolve_screen_policy(ScreenRole::Writing);
+    let header: Vec<_> = policy
+        .action_slots
         .iter()
         .filter(|s| s.region == ActionRegion::HeaderTrailing)
         .collect();
@@ -123,7 +124,8 @@ fn test_writing_header_actions_order() {
 fn test_writing_has_no_save_slot() {
     // #610 评论二：Core 不得声明平台上被过滤掉的动作（Save 是第二真相）。
     // 枚举已删除 Save，此处用序列化结果做门禁：任何死动作名不得出现在契约里。
-    let json = serde_json::to_string(&resolve_screen_policy(ScreenRole::Writing)).unwrap();
+    let policy = resolve_screen_policy(ScreenRole::Writing);
+    let json = serde_json::to_string(&policy).unwrap();
     assert!(
         !json.contains("Save"),
         "Writing 契约不得包含 Save（正文自动保存，动作不存在）"
@@ -133,7 +135,8 @@ fn test_writing_has_no_save_slot() {
 #[test]
 fn test_workspace_has_no_sort_slot() {
     // #610 评论二：Sort 未实现，不得在共享契约中声明。
-    let json = serde_json::to_string(&resolve_screen_policy(ScreenRole::ProjectWorkspace)).unwrap();
+    let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
+    let json = serde_json::to_string(&policy).unwrap();
     assert!(
         !json.contains("Sort"),
         "ProjectWorkspace 契约不得包含 Sort（未实现，动作不存在）"
@@ -142,8 +145,9 @@ fn test_workspace_has_no_sort_slot() {
 
 #[test]
 fn test_workspace_header_actions_product_order() {
-    let slots = resolve_screen_policy(ScreenRole::ProjectWorkspace);
-    let header: Vec<_> = slots
+    let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
+    let header: Vec<_> = policy
+        .action_slots
         .iter()
         .filter(|s| s.region == ActionRegion::HeaderTrailing)
         .collect();
@@ -160,8 +164,9 @@ fn test_workspace_header_actions_product_order() {
 fn test_workspace_context_actions_have_business_targets() {
     // #610 评论二：Delete/Rename 靠 ActionTarget 区分"删卷/删章节"、"重命名卷/重命名章节"。
     // #610 评论四：MoveEarlier/MoveLater 同样按目标区分卷/章节的顺序动作。
-    let slots = resolve_screen_policy(ScreenRole::ProjectWorkspace);
-    let context: Vec<_> = slots
+    let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
+    let context: Vec<_> = policy
+        .action_slots
         .iter()
         .filter(|s| s.region == ActionRegion::Context)
         .collect();
@@ -194,8 +199,9 @@ fn test_workspace_context_actions_have_business_targets() {
 #[test]
 fn test_move_actions_are_real_sequence_actions() {
     // #610 评论四：MoveEarlier/MoveLater 是真实存在的顺序动作，不是笼统的 Sort。
-    let slots = resolve_screen_policy(ScreenRole::ProjectWorkspace);
-    let moves: Vec<_> = slots
+    let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
+    let moves: Vec<_> = policy
+        .action_slots
         .iter()
         .filter(|s| matches!(s.role, ActionRole::MoveEarlier | ActionRole::MoveLater))
         .collect();
@@ -209,8 +215,9 @@ fn test_move_actions_are_real_sequence_actions() {
 fn test_create_project_is_primary_action() {
     // #610 评论四：新建作品是页面主操作（PrimaryAction），
     // 不再一边声明 HeaderTrailing、一边实际画在右下角 FAB。
-    let slots = resolve_screen_policy(ScreenRole::ProjectList);
-    let create = slots
+    let policy = resolve_screen_policy(ScreenRole::ProjectList);
+    let create = policy
+        .action_slots
         .iter()
         .find(|s| s.role == ActionRole::CreateProject)
         .unwrap();
@@ -221,8 +228,9 @@ fn test_create_project_is_primary_action() {
 
 #[test]
 fn test_create_chapter_targets_volume() {
-    let slots = resolve_screen_policy(ScreenRole::ProjectWorkspace);
-    let create_chapters: Vec<_> = slots
+    let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
+    let create_chapters: Vec<_> = policy
+        .action_slots
         .iter()
         .filter(|s| s.role == ActionRole::CreateChapter)
         .collect();
@@ -235,7 +243,8 @@ fn test_create_chapter_targets_volume() {
         .iter()
         .all(|s| s.target == ActionTarget::Volume));
     // 新建卷作用于作品。
-    let create_volume = slots
+    let create_volume = policy
+        .action_slots
         .iter()
         .find(|s| s.role == ActionRole::CreateVolume)
         .unwrap();
@@ -245,12 +254,21 @@ fn test_create_chapter_targets_volume() {
 #[test]
 fn test_project_list_targets_project() {
     // #610 评论二：ProjectList 的删除/重命名目标就是 Project。
-    let slots = resolve_screen_policy(ScreenRole::ProjectList);
-    let delete = slots.iter().find(|s| s.role == ActionRole::Delete).unwrap();
+    let policy = resolve_screen_policy(ScreenRole::ProjectList);
+    let delete = policy
+        .action_slots
+        .iter()
+        .find(|s| s.role == ActionRole::Delete)
+        .unwrap();
     assert_eq!(delete.target, ActionTarget::Project);
-    let rename = slots.iter().find(|s| s.role == ActionRole::Rename).unwrap();
+    let rename = policy
+        .action_slots
+        .iter()
+        .find(|s| s.role == ActionRole::Rename)
+        .unwrap();
     assert_eq!(rename.target, ActionTarget::Project);
-    let create = slots
+    let create = policy
+        .action_slots
         .iter()
         .find(|s| s.role == ActionRole::CreateProject)
         .unwrap();
@@ -267,8 +285,8 @@ fn test_app_actions_have_app_target() {
         ScreenRole::Writing,
         ScreenRole::Sync,
     ] {
-        let slots = resolve_screen_policy(role);
-        for slot in slots.iter().filter(|s| {
+        let policy = resolve_screen_policy(role);
+        for slot in policy.action_slots.iter().filter(|s| {
             matches!(
                 s.role,
                 ActionRole::Settings | ActionRole::Search | ActionRole::Sync | ActionRole::Back
@@ -286,50 +304,62 @@ fn test_app_actions_have_app_target() {
 
 #[test]
 fn test_writing_has_back_leading() {
-    let slots = resolve_screen_policy(ScreenRole::Writing);
-    let back = slots.iter().find(|s| s.role == ActionRole::Back).unwrap();
+    let policy = resolve_screen_policy(ScreenRole::Writing);
+    let back = policy
+        .action_slots
+        .iter()
+        .find(|s| s.role == ActionRole::Back)
+        .unwrap();
     assert_eq!(back.region, ActionRegion::HeaderLeading);
 }
 
 #[test]
 fn test_settings_policy_only_back() {
-    let slots = resolve_screen_policy(ScreenRole::Settings);
-    assert_eq!(slots.len(), 1);
-    assert_eq!(slots[0].role, ActionRole::Back);
-    assert_eq!(slots[0].region, ActionRegion::HeaderLeading);
+    let policy = resolve_screen_policy(ScreenRole::Settings);
+    assert_eq!(policy.action_slots.len(), 1);
+    assert_eq!(policy.action_slots[0].role, ActionRole::Back);
+    assert_eq!(policy.action_slots[0].region, ActionRegion::HeaderLeading);
 }
 
 #[test]
 fn test_starmap_and_stats_have_no_slots() {
     // #597 正文四：星图根页没有返回动作；统计根页是独立一级入口。
-    assert!(resolve_screen_policy(ScreenRole::StarMap).is_empty());
-    assert!(resolve_screen_policy(ScreenRole::Stats).is_empty());
+    assert!(resolve_screen_policy(ScreenRole::StarMap)
+        .action_slots
+        .is_empty());
+    assert!(resolve_screen_policy(ScreenRole::Stats)
+        .action_slots
+        .is_empty());
 }
 
 #[test]
 fn test_home_policy() {
-    let slots = resolve_screen_policy(ScreenRole::Home);
-    assert_eq!(slots.len(), 2);
-    assert_eq!(slots[0].role, ActionRole::Search);
-    assert_eq!(slots[0].region, ActionRegion::HeaderTrailing);
-    assert_eq!(slots[1].role, ActionRole::Settings);
-    assert_eq!(slots[1].region, ActionRegion::HeaderTrailing);
+    let policy = resolve_screen_policy(ScreenRole::Home);
+    assert_eq!(policy.action_slots.len(), 2);
+    assert_eq!(policy.action_slots[0].role, ActionRole::Search);
+    assert_eq!(policy.action_slots[0].region, ActionRegion::HeaderTrailing);
+    assert_eq!(policy.action_slots[1].role, ActionRole::Settings);
+    assert_eq!(policy.action_slots[1].region, ActionRegion::HeaderTrailing);
 }
 
 #[test]
 fn test_sync_policy() {
-    let slots = resolve_screen_policy(ScreenRole::Sync);
-    assert_eq!(slots.len(), 2);
-    assert_eq!(slots[0].role, ActionRole::Back);
-    assert_eq!(slots[1].role, ActionRole::Sync);
-    assert_eq!(slots[1].region, ActionRegion::HeaderTrailing);
+    let policy = resolve_screen_policy(ScreenRole::Sync);
+    assert_eq!(policy.action_slots.len(), 2);
+    assert_eq!(policy.action_slots[0].role, ActionRole::Back);
+    assert_eq!(policy.action_slots[1].role, ActionRole::Sync);
+    assert_eq!(policy.action_slots[1].region, ActionRegion::HeaderTrailing);
 }
 
 #[test]
 fn test_delete_requires_confirmation() {
     for role in [ScreenRole::ProjectList, ScreenRole::ProjectWorkspace] {
-        let slots = resolve_screen_policy(role);
-        for slot in slots.iter().filter(|s| s.role == ActionRole::Delete) {
+        let policy = resolve_screen_policy(role);
+        for slot in policy
+            .action_slots
+            .iter()
+            .filter(|s| s.role == ActionRole::Delete)
+        {
             assert!(slot.requires_confirmation);
         }
     }
@@ -357,8 +387,9 @@ fn test_action_slot_serialization() {
 #[test]
 fn test_slot_order_is_product_level_not_shell_dependent() {
     // #610：同一页面同一区域的槽位不随壳层变化 — 平台呈现差异由平台端决定。
-    let slots = resolve_screen_policy(ScreenRole::ProjectList);
-    let create = slots
+    let policy = resolve_screen_policy(ScreenRole::ProjectList);
+    let create = policy
+        .action_slots
         .iter()
         .find(|s| s.role == ActionRole::CreateProject)
         .unwrap();
@@ -370,8 +401,9 @@ fn test_slot_order_is_product_level_not_shell_dependent() {
 #[test]
 fn test_project_list_has_header_actions() {
     // #610 评论五：作品列表顶栏右侧与 ProjectWorkspace 一致。
-    let slots = resolve_screen_policy(ScreenRole::ProjectList);
-    let header: Vec<_> = slots
+    let policy = resolve_screen_policy(ScreenRole::ProjectList);
+    let header: Vec<_> = policy
+        .action_slots
         .iter()
         .filter(|s| s.region == ActionRegion::HeaderTrailing)
         .collect();
@@ -388,15 +420,60 @@ fn test_project_list_has_header_actions() {
 #[test]
 fn test_project_list_full_slot_count() {
     // #610 评论五：ProjectList 总槽位 = 3 顶栏 + CreateProject + Delete + Rename。
-    let slots = resolve_screen_policy(ScreenRole::ProjectList);
-    assert_eq!(slots.len(), 6);
+    let policy = resolve_screen_policy(ScreenRole::ProjectList);
+    assert_eq!(policy.action_slots.len(), 6);
 }
 
 #[test]
 fn test_workspace_has_back_leading() {
     // #610 评论五：作品工作区顶栏左侧返回动作。
-    let slots = resolve_screen_policy(ScreenRole::ProjectWorkspace);
-    let back = slots.iter().find(|s| s.role == ActionRole::Back).unwrap();
+    let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
+    let back = policy
+        .action_slots
+        .iter()
+        .find(|s| s.role == ActionRole::Back)
+        .unwrap();
     assert_eq!(back.region, ActionRegion::HeaderLeading);
     assert_eq!(back.target, ActionTarget::App);
+}
+
+// ── #628 新增：show_primary_navigation 决策 ──
+
+#[test]
+fn test_show_primary_navigation_writing_is_false() {
+    // 写作区是沉浸态，不显示一级导航。
+    let policy = resolve_screen_policy(ScreenRole::Writing);
+    assert!(!policy.show_primary_navigation);
+}
+
+#[test]
+fn test_show_primary_navigation_settings_is_false() {
+    // 设置是二级页，不显示一级导航。
+    let policy = resolve_screen_policy(ScreenRole::Settings);
+    assert!(!policy.show_primary_navigation);
+}
+
+#[test]
+fn test_show_primary_navigation_other_first_level_pages_are_true() {
+    for role in [
+        ScreenRole::Home,
+        ScreenRole::ProjectList,
+        ScreenRole::ProjectWorkspace,
+        ScreenRole::StarMap,
+        ScreenRole::Stats,
+        ScreenRole::Sync,
+    ] {
+        let policy = resolve_screen_policy(role);
+        assert!(policy.show_primary_navigation, "{role:?} 应显示一级导航");
+    }
+}
+
+#[test]
+fn test_screen_policy_serialization_roundtrip() {
+    let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
+    let json = serde_json::to_string(&policy).unwrap();
+    let back: ScreenPolicy = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.screen_role, policy.screen_role);
+    assert_eq!(back.action_slots.len(), policy.action_slots.len());
+    assert_eq!(back.show_primary_navigation, policy.show_primary_navigation);
 }

@@ -1286,11 +1286,12 @@ interface WriterAppService {
 
     sequence<BuiltinThemeDto> list_builtin_themes();
 
-    // ── Layout Contract（#610：输入为平台已判断好的窗口能力） ──
+    // ── Layout Contract（#628：输入为原始窗口尺寸，不再接收平台已判断好的窗口能力） ──
 
-    LayoutContractDto resolve_layout(WindowCapabilitiesDto capabilities);
+    LayoutContractDto resolve_layout(WindowViewportDto viewport);
 
-    // ── Screen Contract（#610：动作区域/顺序是产品语义，不随壳层变化） ──
+    // ── Screen Contract（#610 / #628：动作区域/顺序是产品语义，不随壳层变化；
+    //     ScreenPolicy 含 show_primary_navigation 由 Rust 决定） ──
 
     ScreenPolicyDto resolve_screen_policy(ScreenRoleDto screen_role);
 
@@ -1389,7 +1390,7 @@ interface WriterAppService {
     boolean enqueue_search_update(string action, string object_id, string scope, string title, string body);
 };
 
-// ── Layout Contract DTOs（#610） ──
+// ── Layout Contract DTOs（#628：WindowCapabilitiesDto → WindowViewportDto） ──
 
 enum ShellModeDto {
     "SinglePane",
@@ -1404,24 +1405,32 @@ enum WorkspacePaneModeDto {
     "ThreePane",
 };
 
-enum PointerClassDto {
-    "Unknown",
-    "Touch",
-    "Stylus",
-    "Mouse",
+// #628 评论第 4 节：一级导航放置位置（平台无关）。
+enum PrimaryNavigationPlacementDto {
+    "Bottom",
+    "Side",
 };
 
-dictionary WindowCapabilitiesDto {
-    u8 available_pane_count;
-    boolean has_separating_fold;
-    PointerClassDto pointer_class;
-    boolean keyboard_visible;
+// #628 评论第 6 节：共用布局尺寸 DTO。
+dictionary LayoutMetricsDto {
+    f32 list_pane_width_dp;
 };
 
+// #628：原始窗口尺寸 DTO，替代旧的 WindowCapabilitiesDto。
+// 平台端只传宽高（dp），不再传 paneCount / has_separating_fold /
+// pointer_class / keyboard_visible。
+dictionary WindowViewportDto {
+    f32 width_dp;
+    f32 height_dp;
+};
+
+// #628：LayoutContractDto 删除 show_primary_navigation（改由 ScreenPolicy 提供），
+// 新增 primary_navigation_placement 与 metrics。
 dictionary LayoutContractDto {
     ShellModeDto shell_mode;
     WorkspacePaneModeDto workspace_pane_mode;
-    boolean show_primary_navigation;
+    PrimaryNavigationPlacementDto primary_navigation_placement;
+    LayoutMetricsDto metrics;
 };
 
 // ── Screen Contract DTOs ──
@@ -1486,9 +1495,12 @@ dictionary ActionSlotDto {
     boolean requires_confirmation;
 };
 
+// #628 评论第 5 节：ScreenPolicyDto 新增 show_primary_navigation，
+// 由 Rust 根据页面角色决定，平台端直接读，不再传 contractShowsPrimaryNavigation。
 dictionary ScreenPolicyDto {
     ScreenRoleDto screen_role;
     sequence<ActionSlotDto> action_slots;
+    boolean show_primary_navigation;
 };
 
 // ── Editor Animation DTOs ──

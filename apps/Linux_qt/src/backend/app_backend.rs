@@ -622,30 +622,29 @@ impl AppBackend {
     // 可用栏数（Qt 平台断点），再调 Core 解析产品壳层契约。
 
     fn resolve_layout(&self, width_vp: f64, height_vp: f64) -> QJsonObject {
-        use writer_core::presentation::layout_contract::{
-            resolve_layout, PointerClass, WindowCapabilities,
+        use writer_core::presentation::layout::resolver::WindowViewport;
+
+        let viewport = WindowViewport {
+            width_dp: width_vp as f32,
+            height_dp: height_vp as f32,
         };
 
-        let pane_count = super::linux_qt_layout_plan_dto::qt_available_pane_count(width_vp as f32);
-        let capabilities = WindowCapabilities {
-            available_pane_count: pane_count,
-            has_separating_fold: false,
-            pointer_class: PointerClass::Mouse,
-            keyboard_visible: false,
-        };
-
-        let contract = resolve_layout(&capabilities);
-        let dto = LinuxQtLayoutPlanDto::from_contract(&contract, width_vp as f32);
+        let contract = writer_core::presentation::layout::resolve_layout(&viewport);
+        // #628：show_primary_navigation 改由 ScreenPolicy 提供。
+        // 桌面端默认显示一级导航；具体页面（Writing/Settings）的隐藏由
+        // resolve_screen_policy 返回的 ScreenPolicy.show_primary_navigation 决定。
+        let dto = LinuxQtLayoutPlanDto::from_contract(&contract, width_vp as f32, true);
         let json = serde_json::to_string(&dto).unwrap_or_else(|_| "{}".to_string());
         qjson_object_from_json(&json)
     }
 
-    /// 根据页面角色解析动作槽位列表（#610：动作区域/顺序是产品语义，不随壳层变化）
+    /// 根据页面角色解析动作槽位列表（#610 / #628：动作区域/顺序是产品语义，不随壳层变化；
+    /// ScreenPolicy 含 show_primary_navigation 由 Rust 决定）
     ///
     /// QML 调用：backend.resolve_screen_policy("Writing")
-    /// 返回：{ screenRole: "Writing", actionSlots: [...] }
+    /// 返回：{ screenRole: "Writing", actionSlots: [...], showPrimaryNavigation: bool }
     fn resolve_screen_policy(&self, screen_role: QString) -> QJsonObject {
-        use writer_core::presentation::screen_contract::{resolve_screen_policy, ScreenRole};
+        use writer_core::presentation::screen::{resolve_screen_policy, ScreenRole};
 
         let role = match screen_role.to_string().as_str() {
             "Home" => ScreenRole::Home,
@@ -659,12 +658,13 @@ impl AppBackend {
             _ => ScreenRole::Home,
         };
 
-        let action_slots = resolve_screen_policy(role);
+        let policy = resolve_screen_policy(role);
 
         use writer_core::api::types::screen_policy::*;
         let dto = ScreenPolicyDto {
-            screen_role: role.into(),
-            action_slots: action_slots.into_iter().map(Into::into).collect(),
+            screen_role: policy.screen_role.into(),
+            action_slots: policy.action_slots.into_iter().map(Into::into).collect(),
+            show_primary_navigation: policy.show_primary_navigation,
         };
 
         let json = serde_json::to_string(&dto).unwrap_or_else(|_| "{}".to_string());

@@ -1,4 +1,4 @@
-package com.xiwei.sujian.app.presentation
+package com.xiwei.sujian.app.presentation.screen
 
 import com.xiwei.sujian.app.navigation.SujianRoute
 import com.xiwei.sujian.feature.project.ui.WorkspaceLocation
@@ -14,11 +14,13 @@ import uniffi.writer_core.ScreenPolicyDto
 import uniffi.writer_core.ScreenRoleDto
 
 /**
- * #610：AndroidChromePolicy 只消费 Core screen contract（ActionSlot 区域/顺序/业务目标），
- * 不再自建第二份“同步→搜索→设置”或“哪些页面显示顶栏/底栏”的规则。
+ * #610 / #628：AndroidChromePolicy 只消费 Core screen contract（ActionSlot 区域/顺序/业务目标
+ * + show_primary_navigation），不再自建第二份"同步→搜索→设置"或"哪些页面显示顶栏/底栏"的规则。
  *
- * 行为对齐 #597 正文一/三/四 + #610 评论二：
- * - 一级导航只保留 作品/星图/统计；设置从顶栏进入，不是一级入口；
+ * 行为对齐 #597 正文一/三/四 + #610 评论二 + #628 评论第 5 节：
+ * - 一级导航可见性由 Core `ScreenPolicy.show_primary_navigation` 决定（Rust 的
+ *   Writing/Settings 返回 false，其余一级页面返回 true）；Android 直接读，
+ *   不再传 `contractShowsPrimaryNavigation` 参数；
  * - 作品页顶栏右侧产品顺序（从右往左）为 设置/搜索/同步状态，
  *   代码顺序（Core order 升序）为 同步 → 搜索 → 设置；
  * - 进入设置后顶栏只保留左上返回，一级导航（底栏/侧栏）消失；
@@ -42,10 +44,27 @@ class AndroidChromePolicyTest {
             requiresConfirmation = requiresConfirmation,
         )
 
+    /**
+     * 构造 ScreenPolicyDto。#628：新增 showPrimaryNavigation 字段，由 Core 决定。
+     * 默认 true（与 Core resolve_show_primary_navigation 对齐：除 Writing/Settings 外均为 true）。
+     */
     private fun policy(
         screenRole: ScreenRoleDto,
         slots: List<ActionSlotDto>,
-    ): ScreenPolicyDto = ScreenPolicyDto(screenRole = screenRole, actionSlots = slots)
+        showPrimaryNavigation: Boolean = defaultShowPrimaryNavigation(screenRole),
+    ): ScreenPolicyDto =
+        ScreenPolicyDto(
+            screenRole = screenRole,
+            actionSlots = slots,
+            showPrimaryNavigation = showPrimaryNavigation,
+        )
+
+    /** 与 Core resolve_show_primary_navigation 对齐的默认值（Writing/Settings=false，其余=true）。 */
+    private fun defaultShowPrimaryNavigation(screenRole: ScreenRoleDto): Boolean =
+        when (screenRole) {
+            ScreenRoleDto.WRITING, ScreenRoleDto.SETTINGS -> false
+            else -> true
+        }
 
     /**
      * 作品页契约（#610 评论五 / 任务 1 后）：HeaderLeading=Back，HeaderTrailing = 同步(10)/搜索(20)/设置(30)。
@@ -66,6 +85,7 @@ class AndroidChromePolicyTest {
      * 写作页契约（#624 评论6 对齐 Core `screen_contract.rs` ScreenRole::Writing）：
      * HeaderLeading=Back，HeaderTrailing = 同步(10)/搜索(20)/设置(30)，无 Save。
      * 搜索入口由 #477 接管，功能未完成时点击可暂无动作，但图标不得从产品契约消失。
+     * #628：Writing 的 showPrimaryNavigation=false（Core 决定）。
      */
     private fun writingPolicy(): ScreenPolicyDto =
         policy(
@@ -78,6 +98,7 @@ class AndroidChromePolicyTest {
             ),
         )
 
+    /** #628：Settings 的 showPrimaryNavigation=false（Core 决定）。 */
     private fun settingsPolicy(): ScreenPolicyDto =
         policy(
             ScreenRoleDto.SETTINGS,
@@ -89,14 +110,12 @@ class AndroidChromePolicyTest {
         screenPolicy: ScreenPolicyDto?,
         location: WorkspaceLocation = WorkspaceLocation.ProjectList,
         canBack: Boolean = false,
-        contractShowsPrimaryNavigation: Boolean = true,
     ): SujianChromeSpec =
         AndroidChromePolicy.resolve(
             screenRole = screenRole,
             screenPolicy = screenPolicy,
             workspaceLocation = location,
             canWorkspaceNavigateBack = canBack,
-            contractShowsPrimaryNavigation = contractShowsPrimaryNavigation,
         )
 
     // ---- 页面角色映射 ----
@@ -168,6 +187,15 @@ class AndroidChromePolicyTest {
         assertTrue(spec.showPrimaryNavigation)
         assertFalse(spec.showBack)
         assertTrue(spec.actions.isEmpty())
+        // 即使 workspace 历史可回退，stats 根页也不显示返回箭头（与 ProjectWorkspace/Editor 不同）。
+        assertFalse(
+            resolve(
+                ScreenRoleDto.STATS,
+                policy(ScreenRoleDto.STATS, emptyList()),
+                location = WorkspaceLocation.Editor("p1", "v1", "c1"),
+                canBack = true,
+            ).showBack,
+        )
     }
 
     // ---- 设置：顶栏只保留左上返回，无一级导航 ----
@@ -180,6 +208,10 @@ class AndroidChromePolicyTest {
         assertTrue(spec.actions.isEmpty())
         assertFalse(spec.appBarTransparent)
         assertTrue(spec.showTitle)
+        // Core 无 Back 槽位时不得显示返回箭头（同源：返回来自 Core Back 槽位）。
+        val withoutBack =
+            resolve(ScreenRoleDto.SETTINGS, policy(ScreenRoleDto.SETTINGS, emptyList()))
+        assertFalse("Core 无 Back 槽位时不得显示返回箭头", withoutBack.showBack)
     }
 
     // ---- 正文：隐藏一级导航、透明顶栏、无标题、只保留需要的图标层 ----
@@ -275,38 +307,41 @@ class AndroidChromePolicyTest {
         )
     }
 
-    @Test
-    fun `stats root never shows a back arrow even if workspace could go back`() {
-        val spec =
-            resolve(
-                ScreenRoleDto.STATS,
-                policy(ScreenRoleDto.STATS, emptyList()),
-                location = WorkspaceLocation.Editor("p1", "v1", "c1"),
-                canBack = true,
-            )
-        assertFalse(spec.showBack)
-    }
-
-    // ---- #610：一级导航可见性跟随 Core 布局契约 ----
+    // ---- #628 评论第 5 节：一级导航可见性由 Core ScreenPolicy.show_primary_navigation 决定 ----
 
     @Test
-    fun `primary navigation hidden when Core contract hides it`() {
-        val spec =
+    fun `primary navigation follows Core screen policy show_primary_navigation`() {
+        // #628：一级导航可见性直接读 ScreenPolicy.showPrimaryNavigation（Core 决定）。
+        // Android 不再传 contractShowsPrimaryNavigation 参数，也不在此处写
+        // when(screenRole) { SETTINGS, WRITING -> false; else -> ... }。
+        val visible =
             resolve(
                 ScreenRoleDto.PROJECT_WORKSPACE,
-                projectWorkspacePolicy(),
-                contractShowsPrimaryNavigation = false,
+                policy(
+                    ScreenRoleDto.PROJECT_WORKSPACE,
+                    emptyList(),
+                    showPrimaryNavigation = true,
+                ),
             )
-        assertFalse("键盘/触控单栏时 Core 隐藏一级导航，Android 不得覆盖", spec.showPrimaryNavigation)
+        assertTrue("Core show_primary_navigation=true 时 Android 显示一级导航", visible.showPrimaryNavigation)
+
+        val hidden =
+            resolve(
+                ScreenRoleDto.PROJECT_WORKSPACE,
+                policy(
+                    ScreenRoleDto.PROJECT_WORKSPACE,
+                    emptyList(),
+                    showPrimaryNavigation = false,
+                ),
+            )
+        assertFalse("Core show_primary_navigation=false 时 Android 隐藏一级导航", hidden.showPrimaryNavigation)
     }
 
-    // ---- 设置页返回来自 Core Back 槽位 ----
-
     @Test
-    fun `settings back requires Core back slot`() {
-        val withoutBack =
-            resolve(ScreenRoleDto.SETTINGS, policy(ScreenRoleDto.SETTINGS, emptyList()))
-        assertFalse("Core 无 Back 槽位时不得显示返回箭头", withoutBack.showBack)
+    fun `null screen policy defaults to showing primary navigation`() {
+        // 契约缺失（桥失败/空契约）时 fallback 到 true，避免误隐藏一级导航。
+        val spec = resolve(ScreenRoleDto.PROJECT_WORKSPACE, null)
+        assertTrue(spec.showPrimaryNavigation)
     }
 
     // ---- #610 评论二：headerActions 只做角色→控件映射，不做动作存在性过滤 ----

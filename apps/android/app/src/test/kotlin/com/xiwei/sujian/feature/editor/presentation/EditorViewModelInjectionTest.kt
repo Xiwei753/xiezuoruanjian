@@ -1,7 +1,9 @@
 package com.xiwei.sujian.feature.editor.presentation
 
+import com.xiwei.sujian.app.presentation.screen.PresentationPolicyCatalog
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
+import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
 import com.xiwei.sujian.feature.editor.session.EditorContentDelta
@@ -72,11 +74,11 @@ class EditorViewModelInjectionTest {
         val deps =
             object : com.xiwei.sujian.app.di.SujianAppDependencies {
                 override val appServiceBridge: AppServiceBridge = bridge
-                override val presentationPolicyCatalog: com.xiwei.sujian.app.presentation.PresentationPolicyCatalog =
-                    com.xiwei.sujian.app.presentation.PresentationPolicyCatalog(
+                override val presentationPolicyCatalog: PresentationPolicyCatalog =
+                    PresentationPolicyCatalog(
                         resolver = { role ->
                             when (val result = bridge.resolveScreenPolicy(role)) {
-                                is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> result.data
+                                is BridgeResult.Success -> result.data
                                 else -> null
                             }
                         },

@@ -856,6 +856,180 @@ class LayerRuleTests(unittest.TestCase):
         )
         self.assertEqual([], findings, "干净 presentation 不应被报告")
 
+    # ----------------------------------------------------------------------
+    # #628：架构扫描规则跟着新目录改
+    # ----------------------------------------------------------------------
+
+    def test_presentation_contract_layer_bridge_only_in_contract_dir(self):
+        """Bridge 在 app/presentation/contract/PresentationContractBridge.kt 不报违规，
+        在其他 presentation 文件报违规（#628：Bridge 路径改为相对路径判断）。"""
+        findings = self.run_rule(
+            "presentation-contract-layer",
+            {
+                f"{APP_PREFIX}/app/presentation/contract/PresentationContractBridge.kt": (
+                    "package com.xiwei.sujian.app.presentation.contract\n\n"
+                    "import com.xiwei.sujian.core.interop.app.AppServiceBridge\n"
+                    "class PresentationContractBridge(val b: AppServiceBridge)\n"
+                ),
+                f"{APP_PREFIX}/app/presentation/OtherPolicy.kt": (
+                    "package com.xiwei.sujian.app.presentation\n\n"
+                    "import com.xiwei.sujian.core.interop.app.AppServiceBridge\n"
+                    "class OtherPolicy(val b: AppServiceBridge)\n"
+                ),
+            },
+        )
+        paths = {f.path for f in findings}
+        self.assertIn(
+            "app/presentation/OtherPolicy.kt",
+            paths,
+            "Bridge 在非 contract/PresentationContractBridge.kt 的 presentation 文件必须被报告",
+        )
+        self.assertNotIn(
+            "app/presentation/contract/PresentationContractBridge.kt",
+            paths,
+            "Bridge 在 app/presentation/contract/PresentationContractBridge.kt 不应被报告",
+        )
+
+    def test_presentation_contract_layer_allows_new_dto_whitelist(self):
+        """新白名单 DTO（WindowViewportDto/PrimaryNavigationPlacementDto/LayoutMetricsDto/ShellModeDto）
+        在 presentation 层不报违规（#628）。"""
+        findings = self.run_rule(
+            "presentation-contract-layer",
+            {
+                f"{APP_PREFIX}/app/presentation/contract/CleanContract.kt": (
+                    "package com.xiwei.sujian.app.presentation.contract\n\n"
+                    "import uniffi.writer_core.WindowViewportDto\n"
+                    "import uniffi.writer_core.PrimaryNavigationPlacementDto\n"
+                    "import uniffi.writer_core.LayoutMetricsDto\n"
+                    "import uniffi.writer_core.ShellModeDto\n"
+                    "import uniffi.writer_core.LayoutContractDto\n"
+                    "class CleanContract(\n"
+                    "    val viewport: WindowViewportDto,\n"
+                    "    val placement: PrimaryNavigationPlacementDto,\n"
+                    "    val metrics: LayoutMetricsDto,\n"
+                    "    val shell: ShellModeDto,\n"
+                    "    val contract: LayoutContractDto,\n"
+                    ")\n"
+                ),
+            },
+        )
+        self.assertEqual([], findings, "新白名单 DTO 不应被报告")
+
+    def test_presentation_contract_layer_flags_old_dto(self):
+        """旧 DTO（WindowCapabilitiesDto/PointerClassDto）已从白名单移除，
+        presentation 层引用必须被报告（#628）。"""
+        findings = self.run_rule(
+            "presentation-contract-layer",
+            {
+                f"{APP_PREFIX}/app/presentation/contract/BadContract.kt": (
+                    "package com.xiwei.sujian.app.presentation.contract\n\n"
+                    "import uniffi.writer_core.WindowCapabilitiesDto\n"
+                    "import uniffi.writer_core.PointerClassDto\n"
+                    "class BadContract(val w: WindowCapabilitiesDto, val p: PointerClassDto)\n"
+                ),
+            },
+        )
+        self.assertTrue(findings, "旧 DTO WindowCapabilitiesDto/PointerClassDto 必须被报告")
+
+    def test_presentation_layout_no_breakpoints_flags_window_width_size_class(self):
+        """app/presentation/layout/ 引用 WindowWidthSizeClass 必须被报告（#628）。"""
+        findings = self.run_rule(
+            "presentation-layout-no-breakpoints",
+            {
+                f"{APP_PREFIX}/app/presentation/layout/BadLayout.kt": (
+                    "package com.xiwei.sujian.app.presentation.layout\n\n"
+                    "import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass\n"
+                    "class BadLayout(val w: WindowWidthSizeClass)\n"
+                ),
+            },
+        )
+        self.assertTrue(findings, "presentation/layout/ 引用 WindowWidthSizeClass 必须被报告")
+
+    def test_presentation_layout_no_breakpoints_flags_hardcoded_600(self):
+        """app/presentation/layout/ 硬编码 >= 600 必须被报告（#628）。"""
+        findings = self.run_rule(
+            "presentation-layout-no-breakpoints",
+            {
+                f"{APP_PREFIX}/app/presentation/layout/BadBreakpoint.kt": (
+                    "package com.xiwei.sujian.app.presentation.layout\n\n"
+                    "fun isExpanded(width: Int): Boolean = width >= 600\n"
+                ),
+            },
+        )
+        self.assertTrue(findings, "presentation/layout/ 硬编码 >= 600 必须被报告")
+
+    def test_presentation_layout_no_breakpoints_flags_hardcoded_1200(self):
+        """app/presentation/layout/ 硬编码 < 1200 必须被报告（#628）。"""
+        findings = self.run_rule(
+            "presentation-layout-no-breakpoints",
+            {
+                f"{APP_PREFIX}/app/presentation/layout/BadBreakpoint2.kt": (
+                    "package com.xiwei.sujian.app.presentation.layout\n\n"
+                    "fun isCompact(width: Int): Boolean = width < 1200\n"
+                ),
+            },
+        )
+        self.assertTrue(findings, "presentation/layout/ 硬编码 < 1200 必须被报告")
+
+    def test_presentation_layout_no_breakpoints_passes_clean_adapter(self):
+        """干净的 AndroidLayoutAdapter（只消费 LayoutContractDto）不报违规（#628）。"""
+        findings = self.run_rule(
+            "presentation-layout-no-breakpoints",
+            {
+                f"{APP_PREFIX}/app/presentation/layout/AndroidLayoutAdapter.kt": (
+                    "package com.xiwei.sujian.app.presentation.layout\n\n"
+                    "import uniffi.writer_core.LayoutContractDto\n"
+                    "class AndroidLayoutAdapter(val contract: LayoutContractDto) {\n"
+                    "    fun paneCount(): Int = contract.paneCount\n"
+                    "}\n"
+                ),
+            },
+        )
+        self.assertEqual([], findings, "干净 AndroidLayoutAdapter 不应被报告")
+
+    def test_ui_no_direct_layout_decision_flags_navigation(self):
+        """app/navigation/ 引用 WindowWidthSizeClass 必须被报告（#628）。"""
+        findings = self.run_rule(
+            "ui-no-direct-layout-decision",
+            {
+                f"{APP_PREFIX}/app/navigation/BadNav.kt": (
+                    "package com.xiwei.sujian.app.navigation\n\n"
+                    "import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass\n"
+                    "class BadNav(val w: WindowWidthSizeClass)\n"
+                ),
+            },
+        )
+        self.assertTrue(findings, "app/navigation/ 引用 WindowWidthSizeClass 必须被报告")
+
+    def test_ui_no_direct_layout_decision_flags_feature_ui(self):
+        """feature/*/ui 引用 availablePaneCount 必须被报告（#628）。"""
+        findings = self.run_rule(
+            "ui-no-direct-layout-decision",
+            {
+                f"{APP_PREFIX}/feature/project/ui/BadUi.kt": (
+                    "package com.xiwei.sujian.feature.project.ui\n\n"
+                    "fun pane(availablePaneCount: Int): Int = availablePaneCount\n"
+                ),
+            },
+        )
+        self.assertTrue(findings, "feature/project/ui 引用 availablePaneCount 必须被报告")
+
+    def test_ui_no_direct_layout_decision_passes_clean_navigation(self):
+        """干净的 navigation（消费 LayoutContractDto.primaryNavigationPlacement）不报违规（#628）。"""
+        findings = self.run_rule(
+            "ui-no-direct-layout-decision",
+            {
+                f"{APP_PREFIX}/app/navigation/CleanNav.kt": (
+                    "package com.xiwei.sujian.app.navigation\n\n"
+                    "import uniffi.writer_core.LayoutContractDto\n"
+                    "class CleanNav(val contract: LayoutContractDto) {\n"
+                    "    fun isSideNav(): Boolean = contract.primaryNavigationPlacement.isSide\n"
+                    "}\n"
+                ),
+            },
+        )
+        self.assertEqual([], findings, "干净 navigation 消费 LayoutContractDto 不应被报告")
+
 
 class PackageSourceRootsFollowAppSrcTest(unittest.TestCase):
     """configure(--app-src) 后 PACKAGE_SOURCE_ROOTS 必须跟随（#602 评论#9 项9.3）。"""

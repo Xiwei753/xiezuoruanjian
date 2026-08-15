@@ -235,11 +235,10 @@ impl WriterAppService {
 
     pub fn resolve_layout(
         &self,
-        capabilities: crate::api::WindowCapabilitiesDto,
+        viewport: crate::api::WindowViewportDto,
     ) -> crate::api::LayoutContractDto {
-        let core_caps: crate::presentation::layout_contract::WindowCapabilities =
-            capabilities.into();
-        let contract = crate::presentation::layout_contract::resolve_layout(&core_caps);
+        let core_viewport: crate::presentation::layout::resolver::WindowViewport = viewport.into();
+        let contract = crate::presentation::layout::resolve_layout(&core_viewport);
         contract.into()
     }
 
@@ -249,11 +248,12 @@ impl WriterAppService {
         &self,
         screen_role: crate::api::ScreenRoleDto,
     ) -> crate::api::ScreenPolicyDto {
-        let core_role: crate::presentation::screen_contract::ScreenRole = screen_role.into();
-        let action_slots = crate::presentation::screen_contract::resolve_screen_policy(core_role);
+        let core_role: crate::presentation::screen::ScreenRole = screen_role.into();
+        let policy = crate::presentation::screen::resolve_screen_policy(core_role);
         crate::api::ScreenPolicyDto {
-            screen_role: core_role.into(),
-            action_slots: action_slots.into_iter().map(Into::into).collect(),
+            screen_role: policy.screen_role.into(),
+            action_slots: policy.action_slots.into_iter().map(Into::into).collect(),
+            show_primary_navigation: policy.show_primary_navigation,
         }
     }
 }

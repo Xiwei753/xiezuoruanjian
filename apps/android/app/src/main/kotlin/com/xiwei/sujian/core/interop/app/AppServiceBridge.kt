@@ -494,11 +494,13 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
             false
         }
 
+    // #628：resolveLayout 签名从 WindowCapabilitiesDto 改为 WindowViewportDto
+    // （原始窗口宽高 dp）。断点/壳层/导航放置由 Rust presentation/layout 决定。
     fun resolveLayout(
-        capabilities: uniffi.writer_core.WindowCapabilitiesDto,
+        viewport: uniffi.writer_core.WindowViewportDto,
     ): BridgeResult<uniffi.writer_core.LayoutContractDto> =
         holder.wrapResult {
-            holder.service.resolveLayout(capabilities)
+            holder.service.resolveLayout(viewport)
         }
 
     fun resolveScreenPolicy(screenRole: ScreenRoleDto): BridgeResult<uniffi.writer_core.ScreenPolicyDto> =

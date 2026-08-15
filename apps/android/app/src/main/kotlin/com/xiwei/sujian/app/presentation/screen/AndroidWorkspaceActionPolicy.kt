@@ -1,4 +1,4 @@
-package com.xiwei.sujian.app.presentation
+package com.xiwei.sujian.app.presentation.screen
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -18,7 +18,7 @@ import uniffi.writer_core.ScreenRoleDto
  * - 输出按 Core `region + target + order` 排好的动作描述：
  *   `primaryActions / listHeaderActions / itemTrailingActions(target) /
  *   contextActions(target) / emptyStateActions(target)`；
- * - 不调用 ProjectViewModel、不做任何业务，只做“契约 → 可渲染动作 spec”的纯映射；
+ * - 不调用 ProjectViewModel、不做任何业务，只做"契约 → 可渲染动作 spec"的纯映射；
  * - 动作是否存在、出现在哪个产品区域、排第几个，全部由 Core 决定，
  *   本层和 feature UI 不再自行发明。
  *

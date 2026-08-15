@@ -1,16 +1,12 @@
-//! # 页面契约 — 平台无关的产品动作语义（#610）
+//! # 页面策略 — 平台无关的产品动作语义（#610 / #628）
 //!
 //! 本模块不碰 UI、不碰平台 API、不访问文件系统。
-//! 只定义"动作属于哪个产品区域、按什么顺序"，不定义"动作长什么样"。
+//! 只定义"动作属于哪个产品区域、按什么顺序"以及"该页面是否显示一级导航"，
+//! 不定义"动作长什么样"。
 //!
-//! 从共享契约删除的平台控件名：`BottomBar / NavigationRail /
-//! PermanentDrawer / Floating / SidePanel`（#610 评论"怎么改"第 2 节）。
-//! 控件呈现由各平台 presentation 层决定：例如 Android 把 `HeaderTrailing`
-//! 映射到 TopAppBar actions（或窄窗口的扩展按钮），把 `Context` 映射到
-//! DropdownMenu，把 `ItemTrailing` 映射到列表项尾部的图标按钮。
-//!
-//! "设置/搜索/同步位于页头右侧以及它们的顺序"（#597）是素笺自己的设计语言，
-//! 由 `ActionSlot.order` 表达，跨端统一。
+//! #628 评论第 5 节：`ScreenPolicy` 新增 `show_primary_navigation`，
+//! 由 Rust 根据页面角色决定，平台端直接读，不再传
+//! `contractShowsPrimaryNavigation` 参数。
 
 use serde::{Deserialize, Serialize};
 
@@ -114,6 +110,18 @@ pub struct ActionSlot {
     pub requires_confirmation: bool,
 }
 
+/// 页面策略 — `resolve_screen_policy` 的输出（#628 新增 `show_primary_navigation`）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScreenPolicy {
+    pub screen_role: ScreenRole,
+    pub action_slots: Vec<ActionSlot>,
+    /// 该页面是否显示一级导航（#628 评论第 5 节）。
+    ///
+    /// 由 Rust 根据页面角色决定，平台端直接读，不再传
+    /// `contractShowsPrimaryNavigation` 参数。
+    pub show_primary_navigation: bool,
+}
+
 // ========== 核心纯函数 ==========
 
 /// 根据页面角色解析动作槽位列表。纯函数，无副作用。
@@ -122,7 +130,7 @@ pub struct ActionSlot {
 /// （#610：删除 `visible_in` 与壳层过滤的重复真相）。
 // 槽位表是产品设计语言（#597）的平铺表达，行数多但无分支复杂度。
 #[allow(clippy::too_many_lines)]
-pub fn resolve_screen_policy(screen_role: ScreenRole) -> Vec<ActionSlot> {
+pub fn resolve_action_slots(screen_role: ScreenRole) -> Vec<ActionSlot> {
     match screen_role {
         ScreenRole::Home => vec![
             ActionSlot {
@@ -365,5 +373,32 @@ pub fn resolve_screen_policy(screen_role: ScreenRole) -> Vec<ActionSlot> {
                 requires_confirmation: false,
             },
         ],
+    }
+}
+
+/// 根据页面角色决定是否显示一级导航（#628 评论第 5 节）。
+///
+/// `Writing` 与 `Settings` 返回 false（沉浸态/二级页），其余按产品规则返回 true。
+/// 不再依赖 `keyboard_visible` / `pointer_class`（已从输入删除）。
+pub fn resolve_show_primary_navigation(screen_role: ScreenRole) -> bool {
+    match screen_role {
+        ScreenRole::Writing | ScreenRole::Settings => false,
+        ScreenRole::Home
+        | ScreenRole::ProjectList
+        | ScreenRole::ProjectWorkspace
+        | ScreenRole::StarMap
+        | ScreenRole::Stats
+        | ScreenRole::Sync => true,
+    }
+}
+
+/// 根据页面角色解析完整页面策略。纯函数，无副作用。
+///
+/// 返回 [`ScreenPolicy`]，含动作槽位与 `show_primary_navigation`。
+pub fn resolve_screen_policy(screen_role: ScreenRole) -> ScreenPolicy {
+    ScreenPolicy {
+        screen_role,
+        action_slots: resolve_action_slots(screen_role),
+        show_primary_navigation: resolve_show_primary_navigation(screen_role),
     }
 }
