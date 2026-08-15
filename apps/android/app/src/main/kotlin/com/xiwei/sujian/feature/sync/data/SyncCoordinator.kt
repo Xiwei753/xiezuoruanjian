@@ -5,7 +5,10 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.RepositoryException
 import com.xiwei.sujian.core.interop.common.ResultEnvelope
+import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
+import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncResult
+import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 import kotlinx.coroutines.Dispatchers
@@ -46,10 +49,36 @@ sealed class SyncOutcome {
  */
 data class ProjectSyncCompletedSignal(val projectId: String)
 
-class SyncCoordinator(
+/**
+ * #625 评论5301204285 问题1 测试 seam：作品级同步执行边界。
+ *
+ * 封装 [SyncCoordinator.runSync] 中依赖 native bridge 的四个操作（capability 判定、
+ * 凭据 override 注入、performSync、override 清除）。生产实现 [RepositorySyncExecution]
+ * 委托 [SyncRepository] 并在 [Dispatchers.IO] 执行，行为与原内联 withContext 调用完全一致；
+ * 单测注入确定性实现，使 Completed 分支在 JVM 测试中真实执行 runSync 全部控制流
+ * （enabled 判定 / capability 判定 / 独占锁 / flush / override / perform / 结果映射 / 信号发射）。
+ *
+ * 不引入第二状态机：本接口只搬运 bridge 调用与 IO 线程切换，不做任何业务判定。
+ * runAppSync 不经此 seam（其测试已确定性断言且不发作品级信号）。
+ */
+internal interface SyncExecutionPort {
+    suspend fun capability(projectId: String): SyncCapabilityData
+
+    suspend fun setSecretsOverride(secrets: SyncSecrets): Boolean
+
+    suspend fun perform(
+        projectId: String,
+        config: SyncConfig,
+    ): BridgeResult<SyncResult>
+
+    suspend fun clearSecretsOverride(): Boolean
+}
+
+class SyncCoordinator internal constructor(
     private val settingsRepository: SyncRepository,
     private val syncStatusRepository: SyncStatusRepository,
     private val appSyncDataBarrier: AppSyncDataBarrier? = null,
+    private val syncExecution: SyncExecutionPort = RepositorySyncExecution(settingsRepository),
 ) {
     /**
      * #625 评论5301204285 问题1：作品级同步完成纯事件流。
@@ -111,7 +140,7 @@ class SyncCoordinator(
                 syncStatusRepository.notifyUnconfigured()
                 return SyncOutcome.Unconfigured
             }
-            val capability = withContext(Dispatchers.IO) { settingsRepository.getSyncCapability(projectId) }
+            val capability = syncExecution.capability(projectId)
             if (!capability.canRun) {
                 syncStatusRepository.notifyUnconfigured()
                 return SyncOutcome.Disabled
@@ -146,10 +175,7 @@ class SyncCoordinator(
                     // #595 三：签发文档身份 lease — 同步前后校验文档是否仍是同一 target/session/epoch。
                     val identityBeforeSync = ActiveDocumentGate.activeDocumentIdentity()
                     syncStatusRepository.notifySyncStarted()
-                    val overrideOk =
-                        withContext(Dispatchers.IO) {
-                            settingsRepository.setSyncSecretsOverrideStrict(profile.secrets)
-                        }
+                    val overrideOk = syncExecution.setSecretsOverride(profile.secrets)
                     if (!overrideOk) {
                         val error =
                             BridgeResult.Error(
@@ -163,8 +189,7 @@ class SyncCoordinator(
                         return@runExclusive error
                     }
                     try {
-                        val bridgeResult =
-                            withContext(Dispatchers.IO) { settingsRepository.performSync(projectId, config) }
+                        val bridgeResult = syncExecution.perform(projectId, config)
                         // #595 三：校验文档身份 — 同步期间章节切换/关闭导致身份变化时，
                         // 不应用同步结果，新输入作为下一代 dirty 文档继续保存。
                         val identityAfterSync = ActiveDocumentGate.activeDocumentIdentity()
@@ -190,7 +215,7 @@ class SyncCoordinator(
                         resolveAndPublish(bridgeResult)
                         bridgeResult
                     } finally {
-                        withContext(Dispatchers.IO) { settingsRepository.clearSyncSecretsOverride() }
+                        syncExecution.clearSecretsOverride()
                     }
                 }
 
@@ -456,5 +481,25 @@ class SyncCoordinator(
                 syncStatusRepository.notifyUnconfigured()
             }
         }
+    }
+
+    /**
+     * 生产默认实现 — 委托 [settingsRepository] 并在 [Dispatchers.IO] 执行，
+     * 行为与原 runSync 内联 withContext(Dispatchers.IO) 调用完全一致。
+     */
+    private class RepositorySyncExecution(private val repo: SyncRepository) : SyncExecutionPort {
+        override suspend fun capability(projectId: String): SyncCapabilityData =
+            withContext(Dispatchers.IO) { repo.getSyncCapability(projectId) }
+
+        override suspend fun setSecretsOverride(secrets: SyncSecrets): Boolean =
+            withContext(Dispatchers.IO) { repo.setSyncSecretsOverrideStrict(secrets) }
+
+        override suspend fun perform(
+            projectId: String,
+            config: SyncConfig,
+        ): BridgeResult<SyncResult> = withContext(Dispatchers.IO) { repo.performSync(projectId, config) }
+
+        override suspend fun clearSecretsOverride(): Boolean =
+            withContext(Dispatchers.IO) { repo.clearSyncSecretsOverride() }
     }
 }

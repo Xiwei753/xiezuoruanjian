@@ -1,8 +1,10 @@
 package com.xiwei.sujian.feature.sync.data
+import com.xiwei.sujian.app.state.ActiveDocumentGate
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.settings.ui.SettingsTransactionCommand
+import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
@@ -11,19 +13,65 @@ import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
+@Suppress("TooManyFunctions") // 21 个测试方法 + @Before/@After 隔离;与 RebaseMappingBridgeTest 等 4 个测试类先例一致
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SyncCoordinatorTest {
     companion object {
         private const val PROJECT_ID_625 = "p-625"
+    }
+
+    /**
+     * #625 评论5301204285 问题1：ActiveDocumentGate 是进程级单例,
+     * 其他测试类(ActiveDocumentGateTest / EditorViewModel 等)可能残留 flush 回调
+     * (flush = { false } 或抛异常),导致本类 runSync 的 flushActiveDocument 返回 false
+     * → DocumentSaveFailed,污染 Completed 路径。每个测试前注册一个 benign flush
+     * ({ true })覆盖任何残留,@After 清除本注册,确保测试隔离。
+     */
+    private var gateRegistration: ActiveDocumentGate.Registration? = null
+
+    @Before
+    fun isolateActiveDocumentGate() {
+        gateRegistration = ActiveDocumentGate.register(owner = Any(), flush = { true })
+    }
+
+    @After
+    fun clearActiveDocumentGate() {
+        gateRegistration?.close()
+        gateRegistration = null
+    }
+
+    /**
+     * #625 评论5301204285 问题1 测试 seam：确定性同步执行 fake。
+     * 使 runSync 的 Completed/Disabled/TerminalFailure 分支在 JVM 测试中
+     * 不依赖 native 库加载,确定性执行真实控制流。
+     */
+    private class FakeSyncExecution(
+        val capabilityData: SyncCapabilityData = SyncCapabilityData(canRun = true),
+        val overrideOk: Boolean = true,
+        val performResult: BridgeResult<SyncResult> =
+            BridgeResult.Success(SyncResult(status = SyncStatus.Success)),
+        val clearOverrideOk: Boolean = true,
+    ) : SyncExecutionPort {
+        override suspend fun capability(projectId: String) = capabilityData
+
+        override suspend fun setSecretsOverride(secrets: SyncSecrets) = overrideOk
+
+        override suspend fun perform(
+            projectId: String,
+            config: SyncConfig,
+        ) = performResult
+
+        override suspend fun clearSecretsOverride() = clearOverrideOk
     }
 
     @Test
@@ -190,7 +238,7 @@ class SyncCoordinatorTest {
      * （getSyncCapability / setSyncSecretsOverrideStrict / performSync 均依赖 native）。
      * WriterAppServiceHolder.service 是 lazy 的，构造时不初始化 native 库。
      */
-    private fun createCoordinator(): SyncCoordinator {
+    private fun createCoordinator(syncExecution: SyncExecutionPort? = null): SyncCoordinator {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
         val holder =
             WriterAppServiceHolder(
@@ -200,7 +248,11 @@ class SyncCoordinatorTest {
         val bridge = AppServiceBridge(holder)
         val syncRepo = SyncRepository(context, bridge)
         val syncStatusRepo = SyncStatusRepository(syncRepo)
-        return SyncCoordinator(syncRepo, syncStatusRepo)
+        return if (syncExecution != null) {
+            SyncCoordinator(syncRepo, syncStatusRepo, null, syncExecution)
+        } else {
+            SyncCoordinator(syncRepo, syncStatusRepo)
+        }
     }
 
     private fun enabledSnapshot(): ProjectSyncProfileSnapshot =
@@ -249,11 +301,14 @@ class SyncCoordinatorTest {
     @Test
     fun runSync_disabled_doesNotEmitProjectSyncCompleted() =
         runTest(UnconfinedTestDispatcher()) {
-            val coordinator = createCoordinator()
+            // config.enabled=true 但 capability.canRun=false → Disabled（显式确定性，不依赖 native 缺席）
+            val coordinator =
+                createCoordinator(
+                    syncExecution = FakeSyncExecution(capabilityData = SyncCapabilityData(canRun = false)),
+                )
             val collected = mutableListOf<ProjectSyncCompletedSignal>()
             val collectorJob = launch { coordinator.projectSyncCompleted.collect { collected += it } }
 
-            // config.enabled=true 但测试环境无 native 库 → getSyncCapability 返回 canRun=false → Disabled
             val outcome =
                 coordinator.runSync(
                     SyncTrigger.Manual,
@@ -262,34 +317,50 @@ class SyncCoordinatorTest {
                 )
 
             collectorJob.cancel()
-            assertTrue("应返回 Disabled", outcome is SyncOutcome.Disabled)
+            assertTrue("应返回 Disabled，实际: $outcome", outcome is SyncOutcome.Disabled)
             assertTrue("Disabled 不应发出信号，实际收到: $collected", collected.isEmpty())
         }
 
     @Test
     fun runSync_terminalFailure_doesNotEmitProjectSyncCompleted() =
         runTest(UnconfinedTestDispatcher()) {
-            val coordinator = createCoordinator()
+            // perform 返回 Success(SyncResult(FatalError)) → mapToOutcome → TerminalFailure（显式确定性）
+            val coordinator =
+                createCoordinator(
+                    syncExecution =
+                        FakeSyncExecution(
+                            performResult = BridgeResult.Success(SyncResult(status = SyncStatus.FatalError)),
+                        ),
+                )
             val collected = mutableListOf<ProjectSyncCompletedSignal>()
             val collectorJob = launch { coordinator.projectSyncCompleted.collect { collected += it } }
 
-            // 不传 snapshot → snapshotSyncProfile 调用 native bridge 失败 → TerminalFailure
             val outcome =
                 coordinator.runSync(
                     SyncTrigger.Manual,
                     "p-625-terminal",
-                    snapshot = null,
+                    snapshot = enabledSnapshot(),
                 )
 
             collectorJob.cancel()
-            assertTrue("应返回 TerminalFailure", outcome is SyncOutcome.TerminalFailure)
+            assertTrue("应返回 TerminalFailure，实际: $outcome", outcome is SyncOutcome.TerminalFailure)
             assertTrue("TerminalFailure 不应发出信号，实际收到: $collected", collected.isEmpty())
         }
 
     @Test
     fun runSync_completed_emitsProjectSyncCompleted() =
         runTest(UnconfinedTestDispatcher()) {
-            val coordinator = createCoordinator()
+            // #625 评论5301204285 问题1：注入确定性 SyncExecutionPort，
+            // 使 runSync 真实执行全部控制流（enabled/capability/独占锁/flush/override/perform/
+            // 结果映射/信号发射）并到达 Completed 分支 — 不依赖 native 库加载，不跳过。
+            val coordinator =
+                createCoordinator(
+                    syncExecution =
+                        FakeSyncExecution(
+                            capabilityData = SyncCapabilityData(canRun = true),
+                            performResult = BridgeResult.Success(SyncResult(status = SyncStatus.Success)),
+                        ),
+                )
             val collected = mutableListOf<ProjectSyncCompletedSignal>()
             val collectorJob = launch { coordinator.projectSyncCompleted.collect { collected += it } }
             val projectId = "p-625-completed"
@@ -301,16 +372,8 @@ class SyncCoordinatorTest {
                     snapshot = enabledSnapshot(),
                 )
 
-            // 测试环境无 native 库时 runSync 不会返回 Completed
-            // （getSyncCapability / setSyncSecretsOverrideStrict / performSync 均依赖 native）。
-            // 有 native 库且配置有效时才走到 Completed 路径；此时验证信号契约。
-            // 无 native 库时跳过本例（不算失败）— 非 Completed 路径由上面三个测试覆盖。
-            assumeTrue(
-                "需要 native 库才能走到 Completed 路径，当前 runSync 返回 $outcome",
-                outcome is SyncOutcome.Completed,
-            )
-
             collectorJob.cancel()
+            assertTrue("应返回 Completed，实际: $outcome", outcome is SyncOutcome.Completed)
             assertEquals("Completed 应发出一次信号", 1, collected.size)
             assertEquals(projectId, collected[0].projectId)
         }
