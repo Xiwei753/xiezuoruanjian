@@ -1030,6 +1030,211 @@ class LayerRuleTests(unittest.TestCase):
         )
         self.assertEqual([], findings, "干净 navigation 消费 LayoutContractDto 不应被报告")
 
+    # ------------------------------------------------------------------
+    # #628 验收点 7：架构守卫收口（结构尺寸 / 旧 pane API / 旧模式禁回归）
+    # ------------------------------------------------------------------
+
+    def test_presentation_layout_no_structural_dimensions_flags_180dp(self):
+        """feature/*/ui 硬编码 180.dp 必须被报告（#628 验收点 7）。"""
+        findings = self.run_rule(
+            "presentation-layout-no-structural-dimensions",
+            {
+                f"{APP_PREFIX}/feature/project/ui/BadCard.kt": (
+                    "package com.xiwei.sujian.feature.project.ui\n\n"
+                    "import androidx.compose.ui.unit.dp\n"
+                    "val cardWidth = 180.dp\n"
+                ),
+            },
+        )
+        self.assertTrue(findings, "feature/*/ui 硬编码 180.dp 必须被报告")
+
+    def test_presentation_layout_no_structural_dimensions_flags_240dp_and_56dp(self):
+        """feature/*/ui 硬编码 240.dp / 56.dp 必须被报告（#628 验收点 7）。"""
+        findings = self.run_rule(
+            "presentation-layout-no-structural-dimensions",
+            {
+                f"{APP_PREFIX}/feature/project/ui/BadPane.kt": (
+                    "package com.xiwei.sujian.feature.project.ui\n\n"
+                    "import androidx.compose.ui.unit.dp\n"
+                    "val paneWidth = 240.dp\n"
+                    "val railHeight = 56.dp\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("240.dp", messages, "240.dp 必须被报告")
+        self.assertIn("56.dp", messages, "56.dp 必须被报告")
+
+    def test_presentation_layout_no_structural_dimensions_passes_layout_metrics(self):
+        """feature/*/ui 消费 Rust LayoutMetrics 不报违规（#628 验收点 7）。"""
+        findings = self.run_rule(
+            "presentation-layout-no-structural-dimensions",
+            {
+                f"{APP_PREFIX}/feature/project/ui/GoodCard.kt": (
+                    "package com.xiwei.sujian.feature.project.ui\n\n"
+                    "import uniffi.writer_core.LayoutMetricsDto\n"
+                    "class GoodCard(val metrics: LayoutMetricsDto) {\n"
+                    "    val cardWidth = metrics.projectCardWidthDp\n"
+                    "}\n"
+                ),
+            },
+        )
+        self.assertEqual([], findings, "消费 LayoutMetrics 不应被报告")
+
+    def test_presentation_layout_no_pane_scaffold_directive_flags_revival(self):
+        """AndroidLayoutAdapter.kt 重新出现 PaneScaffoldDirective 死链必须被报告（#628 验收点 7）。"""
+        findings = self.run_rule(
+            "presentation-layout-no-pane-scaffold-directive",
+            {
+                f"{APP_PREFIX}/app/presentation/layout/AndroidLayoutAdapter.kt": (
+                    "package com.xiwei.sujian.app.presentation.layout\n\n"
+                    "import androidx.compose.material3.adaptive.PaneScaffoldDirective\n"
+                    "class BadAdapter(val directive: PaneScaffoldDirective)\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("PaneScaffoldDirective", messages, "PaneScaffoldDirective 复活必须被报告")
+
+    def test_presentation_layout_no_pane_scaffold_directive_flags_calculate_and_max_partitions(self):
+        """calculatePaneScaffoldDirective / maxHorizontalPartitionsFor 复活必须被报告（#628 验收点 7）。"""
+        findings = self.run_rule(
+            "presentation-layout-no-pane-scaffold-directive",
+            {
+                f"{APP_PREFIX}/app/presentation/layout/AndroidLayoutAdapter.kt": (
+                    "package com.xiwei.sujian.app.presentation.layout\n\n"
+                    "fun bad() {\n"
+                    "    val d = calculatePaneScaffoldDirective()\n"
+                    "    val n = maxHorizontalPartitionsFor(d)\n"
+                    "}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("calculatePaneScaffoldDirective", messages)
+        self.assertIn("maxHorizontalPartitionsFor", messages)
+
+    def test_presentation_layout_no_pane_scaffold_directive_ignores_comment(self):
+        """注释中提及 PaneScaffoldDirective（说明已删除）不得误报（#628 验收点 7）。"""
+        findings = self.run_rule(
+            "presentation-layout-no-pane-scaffold-directive",
+            {
+                f"{APP_PREFIX}/app/presentation/layout/AndroidLayoutAdapter.kt": (
+                    "package com.xiwei.sujian.app.presentation.layout\n\n"
+                    "/**\n"
+                    " * #628：PaneScaffoldDirective / calculatePaneScaffoldDirective /\n"
+                    " * maxHorizontalPartitionsFor 整条死链已删除。\n"
+                    " */\n"
+                    "class CleanAdapter\n"
+                ),
+            },
+        )
+        self.assertEqual([], findings, "注释中的 PaneScaffoldDirective 不得误报")
+
+    def test_presentation_layout_no_local_configuration_screen_size_flags_width(self):
+        """AndroidLayoutAdapter.kt 用 screenWidthDp 必须被报告（#628 验收点 7）。"""
+        findings = self.run_rule(
+            "presentation-layout-no-local-configuration-screen-size",
+            {
+                f"{APP_PREFIX}/app/presentation/layout/AndroidLayoutAdapter.kt": (
+                    "package com.xiwei.sujian.app.presentation.layout\n\n"
+                    "import androidx.compose.ui.platform.LocalConfiguration\n"
+                    "fun badWidth(): Int = LocalConfiguration.current.screenWidthDp\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("screenWidthDp", messages, "screenWidthDp 必须被报告")
+
+    def test_presentation_layout_no_local_configuration_screen_size_flags_height(self):
+        """AndroidLayoutAdapter.kt 用 screenHeightDp 必须被报告（#628 验收点 7）。"""
+        findings = self.run_rule(
+            "presentation-layout-no-local-configuration-screen-size",
+            {
+                f"{APP_PREFIX}/app/presentation/layout/AndroidLayoutAdapter.kt": (
+                    "package com.xiwei.sujian.app.presentation.layout\n\n"
+                    "import android.content.res.Configuration\n"
+                    "fun badHeight(c: Configuration): Int = c.screenHeightDp\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("screenHeightDp", messages, "screenHeightDp 必须被报告")
+
+    def test_presentation_layout_no_local_configuration_screen_size_passes_local_window_info(self):
+        """AndroidLayoutAdapter.kt 用 LocalWindowInfo.containerDpSize 不报违规（#628 验收点 7）。"""
+        findings = self.run_rule(
+            "presentation-layout-no-local-configuration-screen-size",
+            {
+                f"{APP_PREFIX}/app/presentation/layout/AndroidLayoutAdapter.kt": (
+                    "package com.xiwei.sujian.app.presentation.layout\n\n"
+                    "import androidx.compose.ui.platform.LocalWindowInfo\n"
+                    "fun width(): Float = LocalWindowInfo.current.containerDpSize.width\n"
+                ),
+            },
+        )
+        self.assertEqual([], findings, "用 LocalWindowInfo.containerDpSize 不应被报告")
+
+    def test_no_legacy_workspace_pane_mode_flags_workspace_pane_mode(self):
+        """WorkspacePaneMode 复活必须被报告（#628 验收点 7）。"""
+        findings = self.run_rule(
+            "no-legacy-workspace-pane-mode",
+            {
+                f"{APP_PREFIX}/feature/project/ui/BadMode.kt": (
+                    "package com.xiwei.sujian.feature.project.ui\n\n"
+                    "enum class WorkspacePaneMode { SinglePane, ListDetail, ThreePane }\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("WorkspacePaneMode", messages, "WorkspacePaneMode 复活必须被报告")
+
+    def test_no_legacy_workspace_pane_mode_flags_list_detail_and_three_pane_variants(self):
+        """Kotlin 枚举变体 LIST_DETAIL / THREE_PANE 复活必须被报告（#628 验收点 7）。"""
+        findings = self.run_rule(
+            "no-legacy-workspace-pane-mode",
+            {
+                f"{APP_PREFIX}/feature/project/ui/BadEnum.kt": (
+                    "package com.xiwei.sujian.feature.project.ui\n\n"
+                    "enum class WorkspaceLayoutMode {\n"
+                    "    SINGLE_PANE,\n"
+                    "    LIST_DETAIL,\n"
+                    "    THREE_PANE,\n"
+                    "}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("LIST_DETAIL", messages, "LIST_DETAIL 变体必须被报告")
+        self.assertIn("THREE_PANE", messages, "THREE_PANE 变体必须被报告")
+
+    def test_no_legacy_workspace_pane_mode_passes_workspace_layout_mode(self):
+        """新工作区模式 WorkspaceLayoutMode{SinglePane,Workbench} 不报违规（#628 验收点 7）。"""
+        findings = self.run_rule(
+            "no-legacy-workspace-pane-mode",
+            {
+                f"{APP_PREFIX}/feature/project/ui/GoodMode.kt": (
+                    "package com.xiwei.sujian.feature.project.ui\n\n"
+                    "enum class WorkspaceLayoutMode { SinglePane, Workbench }\n"
+                ),
+            },
+        )
+        self.assertEqual([], findings, "WorkspaceLayoutMode 不应被报告")
+
+    def test_no_legacy_workspace_pane_mode_passes_shell_mode_three_pane(self):
+        """ShellMode::ThreePane 是壳层模式，允许保留，不报违规（#628 验收点 7）。"""
+        findings = self.run_rule(
+            "no-legacy-workspace-pane-mode",
+            {
+                f"{APP_PREFIX}/app/navigation/ShellMode.kt": (
+                    "package com.xiwei.sujian.app.navigation\n\n"
+                    "enum class ShellMode { SinglePane, TwoPane, ThreePane }\n"
+                    "val shell = ShellMode.ThreePane\n"
+                ),
+            },
+        )
+        self.assertEqual([], findings, "ShellMode::ThreePane 壳层模式不应被报告")
+
 
 class PackageSourceRootsFollowAppSrcTest(unittest.TestCase):
     """configure(--app-src) 后 PACKAGE_SOURCE_ROOTS 必须跟随（#602 评论#9 项9.3）。"""

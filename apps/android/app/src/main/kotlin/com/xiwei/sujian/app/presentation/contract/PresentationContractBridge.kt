@@ -39,7 +39,7 @@ import uniffi.writer_core.WindowViewportDto
 internal object PresentationContractBridge {
     private const val TAG = "PresentationContractBridge"
 
-    /** Core 布局契约：原始窗口尺寸（dp） → ShellMode/WorkspacePaneMode/导航放置/共用尺寸。 */
+    /** Core 布局契约：原始窗口尺寸（dp） → ShellMode/WorkspaceLayoutMode/导航放置/共用尺寸。 */
     fun resolveLayoutContract(
         bridge: AppServiceBridge,
         viewport: WindowViewportDto,

@@ -5,23 +5,33 @@
 
 use super::resolver::WindowViewport;
 use super::{
-    resolve_layout, LayoutContract, PrimaryNavigationPlacement, ShellMode, WorkspacePaneMode,
+    resolve_layout, LayoutContract, PrimaryNavigationPlacement, ShellMode, WorkspaceLayoutMode,
 };
+
+/// 测试辅助：构造无遮挡的 viewport。
+fn viewport(width_dp: f32, height_dp: f32) -> WindowViewport {
+    WindowViewport {
+        width_dp,
+        height_dp,
+        occlusions: Vec::new(),
+    }
+}
 
 #[test]
 fn test_resolve_layout_returns_full_contract() {
-    let viewport = WindowViewport {
-        width_dp: 1000.0,
-        height_dp: 800.0,
-    };
+    let viewport = viewport(1000.0, 800.0);
     let contract: LayoutContract = resolve_layout(&viewport);
     assert_eq!(contract.shell_mode, ShellMode::TwoPane);
-    assert_eq!(contract.workspace_pane_mode, WorkspacePaneMode::ListDetail);
+    assert_eq!(
+        contract.workspace_layout_mode,
+        WorkspaceLayoutMode::Workbench
+    );
     assert_eq!(
         contract.primary_navigation_placement,
         PrimaryNavigationPlacement::Side
     );
     assert_eq!(contract.metrics.list_pane_width_dp, 320.0);
+    assert!(contract.workbench_occlusion.is_none());
 }
 
 #[test]
@@ -31,7 +41,7 @@ fn test_resolve_layout_decision_table_smoke() {
         f32,
         f32,
         ShellMode,
-        WorkspacePaneMode,
+        WorkspaceLayoutMode,
         PrimaryNavigationPlacement,
     )] = &[
         // Narrow
@@ -39,7 +49,7 @@ fn test_resolve_layout_decision_table_smoke() {
             360.0,
             640.0,
             ShellMode::SinglePane,
-            WorkspacePaneMode::SinglePane,
+            WorkspaceLayoutMode::SinglePane,
             PrimaryNavigationPlacement::Bottom,
         ),
         // Medium + Compact → 降级
@@ -47,7 +57,7 @@ fn test_resolve_layout_decision_table_smoke() {
             700.0,
             400.0,
             ShellMode::SinglePane,
-            WorkspacePaneMode::SinglePane,
+            WorkspaceLayoutMode::SinglePane,
             PrimaryNavigationPlacement::Bottom,
         ),
         // Medium + Medium
@@ -55,7 +65,7 @@ fn test_resolve_layout_decision_table_smoke() {
             700.0,
             600.0,
             ShellMode::TwoPane,
-            WorkspacePaneMode::ListDetail,
+            WorkspaceLayoutMode::Workbench,
             PrimaryNavigationPlacement::Bottom,
         ),
         // Medium + Tall
@@ -63,7 +73,7 @@ fn test_resolve_layout_decision_table_smoke() {
             700.0,
             1000.0,
             ShellMode::TwoPane,
-            WorkspacePaneMode::ListDetail,
+            WorkspaceLayoutMode::Workbench,
             PrimaryNavigationPlacement::Bottom,
         ),
         // Wide
@@ -71,7 +81,7 @@ fn test_resolve_layout_decision_table_smoke() {
             1000.0,
             800.0,
             ShellMode::TwoPane,
-            WorkspacePaneMode::ListDetail,
+            WorkspaceLayoutMode::Workbench,
             PrimaryNavigationPlacement::Side,
         ),
         // Large
@@ -79,7 +89,7 @@ fn test_resolve_layout_decision_table_smoke() {
             1400.0,
             900.0,
             ShellMode::ThreePane,
-            WorkspacePaneMode::ThreePane,
+            WorkspaceLayoutMode::Workbench,
             PrimaryNavigationPlacement::Side,
         ),
         // ExtraLarge
@@ -87,22 +97,19 @@ fn test_resolve_layout_decision_table_smoke() {
             2000.0,
             1200.0,
             ShellMode::ThreePane,
-            WorkspacePaneMode::ThreePane,
+            WorkspaceLayoutMode::Workbench,
             PrimaryNavigationPlacement::Side,
         ),
     ];
     for &(w, h, shell, workspace, nav) in cases {
-        let viewport = WindowViewport {
-            width_dp: w,
-            height_dp: h,
-        };
+        let viewport = viewport(w, h);
         let contract = resolve_layout(&viewport);
         assert_eq!(
             contract.shell_mode, shell,
             "width={w}, height={h} shell mismatch"
         );
         assert_eq!(
-            contract.workspace_pane_mode, workspace,
+            contract.workspace_layout_mode, workspace,
             "width={w}, height={h} workspace mismatch"
         );
         assert_eq!(

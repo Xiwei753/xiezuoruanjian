@@ -1414,10 +1414,9 @@ enum ShellModeDto {
     "ThreePane",
 };
 
-enum WorkspacePaneModeDto {
+enum WorkspaceLayoutModeDto {
     "SinglePane",
-    "ListDetail",
-    "ThreePane",
+    "Workbench",
 };
 
 // #628 评论第 4 节：一级导航放置位置（平台无关）。
@@ -1426,26 +1425,42 @@ enum PrimaryNavigationPlacementDto {
     "Side",
 };
 
-// #628 评论第 6 节：共用布局尺寸 DTO。
+// #628 评论第 6 节 / 验收点 4：共用布局尺寸 DTO。
 dictionary LayoutMetricsDto {
     f32 list_pane_width_dp;
+    f32 project_card_min_width_dp;
+    f32 tool_pane_width_dp;
+    f32 tool_rail_width_dp;
+};
+
+// #628 验收点 5：平台中立的窗口遮挡 DTO。
+dictionary WindowOcclusionDto {
+    f32 left_dp;
+    f32 top_dp;
+    f32 right_dp;
+    f32 bottom_dp;
+    boolean separating;
 };
 
 // #628：原始窗口尺寸 DTO，替代旧的 WindowCapabilitiesDto。
-// 平台端只传宽高（dp），不再传 paneCount / has_separating_fold /
+// 平台端只传宽高（dp）与遮挡列表，不再传 paneCount / has_separating_fold /
 // pointer_class / keyboard_visible。
 dictionary WindowViewportDto {
     f32 width_dp;
     f32 height_dp;
+    sequence<WindowOcclusionDto> occlusions;
 };
 
 // #628：LayoutContractDto 删除 show_primary_navigation（改由 ScreenPolicy 提供），
 // 新增 primary_navigation_placement 与 metrics。
+// 验收点 1：workspace_pane_mode → workspace_layout_mode（WorkspaceLayoutModeDto）。
+// 验收点 5：新增 workbench_occlusion 承认遮挡输入。
 dictionary LayoutContractDto {
     ShellModeDto shell_mode;
-    WorkspacePaneModeDto workspace_pane_mode;
+    WorkspaceLayoutModeDto workspace_layout_mode;
     PrimaryNavigationPlacementDto primary_navigation_placement;
     LayoutMetricsDto metrics;
+    WindowOcclusionDto? workbench_occlusion;
 };
 
 // ── Screen Contract DTOs ──

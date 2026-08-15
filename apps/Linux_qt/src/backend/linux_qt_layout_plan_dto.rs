@@ -5,20 +5,20 @@
 //!
 //! 分层（#610 / #628）：
 //! - Core `presentation::layout::resolve_layout(WindowViewport)`
-//!   产出产品壳层契约（ShellMode / WorkspacePaneMode / PrimaryNavigationPlacement / LayoutMetrics）；
+//!   产出产品壳层契约（ShellMode / WorkspaceLayoutMode / PrimaryNavigationPlacement / LayoutMetrics）；
 //! - 本文件把契约 + Qt 窗口宽高换算成 QML 实际使用的字段。
 //!   Material 断点与 dp/vp 值属于 Qt 平台决策，不出现在 Core。
 //! - #628：`show_primary_navigation` 改由 `ScreenPolicy` 提供，
 //!   `from_contract` 接收它作为参数，由调用方从 `ScreenPolicy` 传入。
 
 use serde::Serialize;
-use writer_core::presentation::layout::{LayoutContract, ShellMode, WorkspacePaneMode};
+use writer_core::presentation::layout::{LayoutContract, ShellMode, WorkspaceLayoutMode};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinuxQtLayoutPlanDto {
     pub shell_mode: String,
-    pub workspace_pane_mode: String,
+    pub workspace_layout_mode: String,
     pub show_primary_navigation: bool,
     /// 编辑纸面最大宽度（vp）。0 表示不限制（QML 自行回退）。
     pub content_max_width_vp: f32,
@@ -43,13 +43,14 @@ impl LinuxQtLayoutPlanDto {
         window_width_vp: f32,
         show_primary_navigation: bool,
     ) -> Self {
-        let paper_max_width_vp = if contract.workspace_pane_mode == WorkspacePaneMode::SinglePane {
-            0.0
-        } else {
-            // 桌面写作纸面限宽 — Qt 平台值（QML 在 < 480 时还会再夹紧）。
-            let padding = Self::content_padding_vp(contract) * 2.0;
-            (840.0f32).min(window_width_vp - padding).max(0.0)
-        };
+        let paper_max_width_vp =
+            if contract.workspace_layout_mode == WorkspaceLayoutMode::SinglePane {
+                0.0
+            } else {
+                // 桌面写作纸面限宽 — Qt 平台值（QML 在 < 480 时还会再夹紧）。
+                let padding = Self::content_padding_vp(contract) * 2.0;
+                (840.0f32).min(window_width_vp - padding).max(0.0)
+            };
         Self {
             shell_mode: match contract.shell_mode {
                 ShellMode::SinglePane => "SinglePane".to_string(),
@@ -57,10 +58,11 @@ impl LinuxQtLayoutPlanDto {
                 ShellMode::TwoPane => "TwoPane".to_string(),
                 ShellMode::ThreePane => "ThreePane".to_string(),
             },
-            workspace_pane_mode: match contract.workspace_pane_mode {
-                WorkspacePaneMode::SinglePane => "SinglePane".to_string(),
-                WorkspacePaneMode::ListDetail => "ListDetail".to_string(),
-                WorkspacePaneMode::ThreePane => "ThreePane".to_string(),
+            // #628 验收点 1：Core 已把 ListDetail/ThreePane 收口为 Workbench，
+            // Qt 只剩 SinglePane / Workbench 两个产品语义。
+            workspace_layout_mode: match contract.workspace_layout_mode {
+                WorkspaceLayoutMode::SinglePane => "SinglePane".to_string(),
+                WorkspaceLayoutMode::Workbench => "Workbench".to_string(),
             },
             show_primary_navigation,
             content_max_width_vp: paper_max_width_vp,
@@ -70,10 +72,13 @@ impl LinuxQtLayoutPlanDto {
 
     fn content_padding_vp(contract: &LayoutContract) -> f32 {
         // Qt 平台页面内边距：栏数越多留白越大（桌面窗口大，不用手机级 16）。
-        match contract.workspace_pane_mode {
-            WorkspacePaneMode::SinglePane => 16.0,
-            WorkspacePaneMode::ListDetail => 24.0,
-            WorkspacePaneMode::ThreePane => 32.0,
+        // #628 验收点 1：ListDetail/ThreePane 已收口为 Workbench。
+        // Workbench 是大屏工作台（章节导航 + 正文 + 工具 pane + 工具 rail），
+        // 沿用原 ThreePane 的 32.0 留白，与 test_multi_pane_paper_clamps_to_window
+        // 断言（900 - 2*32 = 836）一致。
+        match contract.workspace_layout_mode {
+            WorkspaceLayoutMode::SinglePane => 16.0,
+            WorkspaceLayoutMode::Workbench => 32.0,
         }
     }
 }
@@ -98,6 +103,7 @@ mod tests {
         let viewport = WindowViewport {
             width_dp: width_vp,
             height_dp: height_vp,
+            occlusions: Vec::new(),
         };
         writer_core::presentation::layout::resolve_layout(&viewport)
     }
@@ -109,7 +115,7 @@ mod tests {
         let json = serde_json::to_string(&dto).unwrap();
 
         assert!(json.contains("\"shellMode\""));
-        assert!(json.contains("\"workspacePaneMode\""));
+        assert!(json.contains("\"workspaceLayoutMode\""));
         assert!(json.contains("\"contentMaxWidthVp\""));
         assert!(json.contains("\"contentPaddingVp\""));
         assert!(json.contains("\"showPrimaryNavigation\""));

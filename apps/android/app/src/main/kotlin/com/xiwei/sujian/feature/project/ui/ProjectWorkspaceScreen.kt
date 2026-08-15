@@ -25,7 +25,7 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
-import com.xiwei.sujian.app.presentation.layout.WorkspacePaneMode
+import com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
 import com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult
@@ -38,10 +38,10 @@ import kotlinx.coroutines.launch
 /**
  * 写作工作区 — 「作品」一级入口的唯一内容。
  *
- * #625 第二段：根据 [AndroidLayoutSpec.contract.workspacePaneMode]（**不自己判断窗口尺寸**）
- * + [WorkspaceLocation] 决定画什么：
+ * #625 第二段 / #628 验收点 1：根据 [AndroidLayoutSpec.contract.workspaceLayoutMode]
+ * （**不自己判断窗口尺寸**）+ [WorkspaceLocation] 决定画什么：
  * - **窄屏**（SinglePane）：只画当前业务位置（AnimatedContent 切换）；
- * - **大屏**（ListDetail / ThreePane）：
+ * - **大屏**（Workbench）：
  *   - ProjectList 位置 → [ProjectListContent]（grid）；
  *   - ChapterTree 位置 → [ChapterTreeContent] + 占位；
  *   - Editor 位置 → [WideWritingWorkspace]（左章节树 + 中央编辑器 + 右工具面板）。
@@ -49,7 +49,7 @@ import kotlinx.coroutines.launch
  * 不再用 [androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold] 三窗格硬塞所有情况。
  *
  * #628 原则：窗口尺寸→布局决策唯一在 Rust — 判断窄屏/大屏必须通过
- * `layoutSpec.contract.workspacePaneMode`，不得引入 600/840/1200/1600 或 WindowWidthSizeClass 断点。
+ * `layoutSpec.contract.workspaceLayoutMode`，不得引入 600/840/1200/1600 或 WindowWidthSizeClass 断点。
  *
  * [workspaceNavState] 由导航套件层创建并注入（#597：返回历史始终同一份）——
  * 顶栏返回、系统返回、预测返回和页面返回共用同一个 navigator；
@@ -146,12 +146,19 @@ internal fun ProjectWorkspaceScreen(
     val currentChapterId = appState.currentChapterId
     val currentChapterTitle = appState.currentChapterTitle
 
-    // #628 原则：窗口尺寸→布局决策唯一在 Rust — 通过 layoutSpec.workspacePaneMode。
+    // #628 原则：窗口尺寸→布局决策唯一在 Rust — 通过 layoutSpec.workspaceLayoutMode。
     // 契约缺失（桥失败/空契约）时 fallback 到 SinglePane（与窄窗口基线一致）。
-    val workspacePaneMode = layoutSpec.workspacePaneMode
-    val isWideLayout = workspacePaneMode != WorkspacePaneMode.SINGLE_PANE
-    // 列表栏宽度来自 Rust LayoutMetrics.listPaneWidthDp；缺失时 fallback 到 320.dp。
-    val listPaneWidthDp = layoutSpec.contract?.metrics?.listPaneWidthDp ?: 320f
+    val workspaceLayoutMode = layoutSpec.workspaceLayoutMode
+    val isWideLayout = workspaceLayoutMode != WorkspaceLayoutMode.SINGLE_PANE
+    // 列表栏宽度来自 Rust LayoutMetrics.listPaneWidthDp；缺失时不画列表栏（窄屏 SinglePane 不需要）。
+    val listPaneWidthDp = layoutSpec.contract?.metrics?.listPaneWidthDp
+    // #628 验收点 4：作品卡片最小宽度来自 Rust LayoutMetrics.projectCardMinWidthDp。
+    // isWideLayout=true 时 contract 必非 null（workspaceLayoutMode 缺失回落 SINGLE_PANE），
+    // 因此 projectCardMinWidthDp 必非 null；SinglePane 时不画 grid，传 0f 占位。
+    val projectCardMinWidthDp = layoutSpec.contract?.metrics?.projectCardMinWidthDp ?: 0f
+    // #628 验收点 4：工具面板/工具栏宽度来自 Rust LayoutMetrics（isWideLayout 时 contract 必非 null）。
+    val toolPaneWidthDp = layoutSpec.contract?.metrics?.toolPaneWidthDp
+    val toolRailWidthDp = layoutSpec.contract?.metrics?.toolRailWidthDp
 
     val location = workspaceNavState.currentLocation
 
@@ -170,6 +177,9 @@ internal fun ProjectWorkspaceScreen(
             projectRepository = projectRepository,
             editorViewModel = editorViewModel,
             listPaneWidthDp = listPaneWidthDp,
+            projectCardMinWidthDp = projectCardMinWidthDp,
+            toolPaneWidthDp = toolPaneWidthDp,
+            toolRailWidthDp = toolRailWidthDp,
             onTopLevelSettings = onTopLevelSettings,
             onTopLevelSearch = onTopLevelSearch,
             onTopLevelSync = onTopLevelSync,
@@ -236,7 +246,8 @@ internal fun ProjectWorkspaceScreen(
                 projectListActions = projectListActions,
                 projectWorkspaceActions = projectWorkspaceActions,
                 location = targetLocation,
-                workspacePaneMode = workspacePaneMode,
+                workspaceLayoutMode = workspaceLayoutMode,
+                projectCardMinWidthDp = projectCardMinWidthDp,
                 currentProjectId = currentProjectId,
                 currentVolumeId = currentVolumeId,
                 currentChapterId = currentChapterId,
@@ -302,7 +313,8 @@ private fun SinglePaneContent(
     projectListActions: AndroidWorkspaceActionSpec,
     projectWorkspaceActions: AndroidWorkspaceActionSpec,
     location: WorkspaceLocation,
-    workspacePaneMode: WorkspacePaneMode,
+    workspaceLayoutMode: WorkspaceLayoutMode,
+    projectCardMinWidthDp: Float,
     currentProjectId: String?,
     currentVolumeId: String?,
     currentChapterId: String?,
@@ -322,7 +334,8 @@ private fun SinglePaneContent(
                 workspaceActions = projectListActions,
                 onSelectProject = onSelectProject,
                 modifier = Modifier.fillMaxSize(),
-                workspacePaneMode = workspacePaneMode,
+                workspaceLayoutMode = workspaceLayoutMode,
+                projectCardMinWidthDp = projectCardMinWidthDp,
             )
         is WorkspaceLocation.ChapterTree ->
             Box(modifier = Modifier.fillMaxSize()) {
@@ -366,7 +379,7 @@ private fun SinglePaneContent(
 }
 
 /**
- * 大屏（ListDetail / ThreePane）内容 — 根据业务位置画不同布局。
+ * 大屏（Workbench）内容 — 根据业务位置画不同布局。
  *
  * - ProjectList 位置 → [ProjectListContent]（grid）；
  * - ChapterTree 位置 → [ChapterTreeContent] + 占位；
@@ -386,7 +399,10 @@ private fun WideLayoutContent(
     currentChapterTitle: String,
     projectRepository: com.xiwei.sujian.feature.project.data.ProjectRepository,
     editorViewModel: EditorViewModel,
-    listPaneWidthDp: Float,
+    listPaneWidthDp: Float?,
+    projectCardMinWidthDp: Float,
+    toolPaneWidthDp: Float?,
+    toolRailWidthDp: Float?,
     onTopLevelSettings: () -> Unit,
     onTopLevelSearch: () -> Unit,
     onTopLevelSync: () -> Unit,
@@ -405,7 +421,8 @@ private fun WideLayoutContent(
                 workspaceActions = projectListActions,
                 onSelectProject = onSelectProject,
                 modifier = modifier.fillMaxSize(),
-                workspacePaneMode = WorkspacePaneMode.LIST_DETAIL,
+                workspaceLayoutMode = WorkspaceLayoutMode.WORKBENCH,
+                projectCardMinWidthDp = projectCardMinWidthDp,
             )
         is WorkspaceLocation.ChapterTree ->
             Box(modifier = modifier.fillMaxSize()) {
@@ -438,7 +455,12 @@ private fun WideLayoutContent(
                             currentChapterTitle = currentChapterTitle,
                         ),
                     editorViewModel = editorViewModel,
-                    listPaneWidthDp = listPaneWidthDp,
+                    metrics =
+                        WideWorkspaceMetrics(
+                            listPaneWidthDp = listPaneWidthDp,
+                            toolPaneWidthDp = toolPaneWidthDp ?: 0f,
+                            toolRailWidthDp = toolRailWidthDp ?: 0f,
+                        ),
                     callbacks =
                         WideWorkspaceCallbacks(
                             onBack = onBack,
@@ -457,7 +479,8 @@ private fun WideLayoutContent(
                     workspaceActions = projectListActions,
                     onSelectProject = onSelectProject,
                     modifier = modifier.fillMaxSize(),
-                    workspacePaneMode = WorkspacePaneMode.LIST_DETAIL,
+                    workspaceLayoutMode = WorkspaceLayoutMode.WORKBENCH,
+                    projectCardMinWidthDp = projectCardMinWidthDp,
                 )
             }
     }

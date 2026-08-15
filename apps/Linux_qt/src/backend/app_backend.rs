@@ -627,6 +627,8 @@ impl AppBackend {
         let viewport = WindowViewport {
             width_dp: width_vp as f32,
             height_dp: height_vp as f32,
+            // Qt 桌面端无折叠屏/系统遮挡（与上方"无折叠屏"注释一致，#628 验收点 5）。
+            occlusions: Vec::new(),
         };
 
         let contract = writer_core::presentation::layout::resolve_layout(&viewport);

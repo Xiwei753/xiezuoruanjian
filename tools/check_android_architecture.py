@@ -1216,6 +1216,7 @@ def rule_editor_presentation_pure() -> list[Finding]:
 
 PRESENTATION_CONTRACT_DTO_WHITELIST = [
     "uniffi.writer_core.WindowViewportDto",
+    "uniffi.writer_core.WindowOcclusionDto",
     "uniffi.writer_core.LayoutContractDto",
     "uniffi.writer_core.ScreenPolicyDto",
     "uniffi.writer_core.ScreenRoleDto",
@@ -1225,7 +1226,9 @@ PRESENTATION_CONTRACT_DTO_WHITELIST = [
     "uniffi.writer_core.ActionRegionDto",
     "uniffi.writer_core.PrimaryNavigationPlacementDto",
     "uniffi.writer_core.LayoutMetricsDto",
-    "uniffi.writer_core.WorkspacePaneModeDto",
+    # #628 任务 1-3：WorkspacePaneMode 改名为 WorkspaceLayoutMode，
+    # 对应 uniffi DTO 由 WorkspacePaneModeDto 改为 WorkspaceLayoutModeDto。
+    "uniffi.writer_core.WorkspaceLayoutModeDto",
     "uniffi.writer_core.ShellModeDto",
 ]
 
@@ -1340,6 +1343,154 @@ def rule_ui_no_direct_layout_decision() -> list[Finding]:
     return findings
 
 
+# #628 验收点 7：跨端产品结构宽度（project_card / tool_pane / tool_rail）已收回
+# Rust presentation/layout/metrics（LayoutMetrics），feature/*/ui 只做 .dp 映射，
+# 不得重新硬编码 180.dp / 240.dp / 56.dp。只扫 feature/*/ui/，不扫 designsystem
+# （Material 控件皮肤允许有自己的尺寸 token）。
+STRUCTURAL_DIMENSION_LITERALS = ["180.dp", "240.dp", "56.dp"]
+
+
+def rule_presentation_layout_no_structural_dimensions() -> list[Finding]:
+    """#628 验收点 7：feature/*/ui 不得重新硬编码跨端产品结构宽度
+    180.dp / 240.dp / 56.dp（project_card / tool_pane / tool_rail）。
+
+    这些结构尺寸必须来自 Rust LayoutMetrics（Core presentation/layout/metrics
+    决定），Android 只做 .dp 映射。只扫 feature/*/ui/，不扫 designsystem
+    （Material 控件皮肤允许有尺寸）。
+    """
+    findings: list[Finding] = []
+    for f in _feature_ui_filters():
+        for path in collect_kt_files(APP_SRC, f):
+            for lineno, raw in enumerate(
+                effective_lines(path.read_text(encoding="utf-8")), 1
+            ):
+                for hit in references(raw, STRUCTURAL_DIMENSION_LITERALS):
+                    findings.append(
+                        Finding(
+                            path=str(path.relative_to(APP_SRC)),
+                            line=lineno,
+                            message=(
+                                f"feature/*/ui 不得硬编码跨端结构宽度 {hit}"
+                                "（#628 验收点 7：必须来自 Rust LayoutMetrics）"
+                            ),
+                        )
+                    )
+    return findings
+
+
+def _android_layout_adapter_path() -> Path:
+    """AndroidLayoutAdapter.kt 的位置（#628：app/presentation/layout/）。"""
+    return APP_SRC / "app" / "presentation" / "layout" / "AndroidLayoutAdapter.kt"
+
+
+# #628 验收点 7：Material3 PaneScaffoldDirective / calculatePaneScaffoldDirective /
+# maxHorizontalPartitionsFor 整条死链已删除（无消费者），不得复活。
+PANE_SCAFFOLD_DIRECTIVE_DEAD_CHAIN = [
+    "PaneScaffoldDirective",
+    "calculatePaneScaffoldDirective",
+    "maxHorizontalPartitionsFor",
+]
+
+
+def rule_presentation_layout_no_pane_scaffold_directive() -> list[Finding]:
+    """#628 验收点 7：AndroidLayoutAdapter.kt 不得重新出现 Material3
+    PaneScaffoldDirective 整条死链。
+
+    PaneScaffoldDirective / calculatePaneScaffoldDirective /
+    maxHorizontalPartitionsFor 已删除（无消费者），不得复活。注释中提及
+    （说明已删除）允许，effective_lines 已去注释。
+    """
+    findings: list[Finding] = []
+    path = _android_layout_adapter_path()
+    if not path.exists():
+        return findings
+    for lineno, raw in enumerate(
+        effective_lines(path.read_text(encoding="utf-8")), 1
+    ):
+        for hit in references(raw, PANE_SCAFFOLD_DIRECTIVE_DEAD_CHAIN):
+            findings.append(
+                Finding(
+                    path=str(path.relative_to(APP_SRC)),
+                    line=lineno,
+                    message=(
+                        f"PaneScaffoldDirective 死链必须保持删除: {hit}"
+                        "（#628 验收点 7：Material3 scaffold directive 已无消费者）"
+                    ),
+                )
+            )
+    return findings
+
+
+# #628 验收点 7：Android layout adapter 不得用 LocalConfiguration.screenWidthDp/
+# screenHeightDp 作为共享布局输入 — 窗口尺寸改用 LocalWindowInfo.current.
+# containerDpSize（Compose 1.7+ 标准方式）。
+LOCAL_CONFIGURATION_SCREEN_SIZE = ["screenWidthDp", "screenHeightDp"]
+
+
+def rule_presentation_layout_no_local_configuration_screen_size() -> list[Finding]:
+    """#628 验收点 7：AndroidLayoutAdapter.kt 不得用
+    LocalConfiguration.screenWidthDp/screenHeightDp 作为共享布局输入。
+
+    窗口尺寸改用 LocalWindowInfo.current.containerDpSize（Compose 1.7+ 标准方式）。
+    注释中提及（说明已改用）允许，effective_lines 已去注释。
+    """
+    findings: list[Finding] = []
+    path = _android_layout_adapter_path()
+    if not path.exists():
+        return findings
+    for lineno, raw in enumerate(
+        effective_lines(path.read_text(encoding="utf-8")), 1
+    ):
+        for hit in references(raw, LOCAL_CONFIGURATION_SCREEN_SIZE):
+            findings.append(
+                Finding(
+                    path=str(path.relative_to(APP_SRC)),
+                    line=lineno,
+                    message=(
+                        f"AndroidLayoutAdapter 不得用 LocalConfiguration.{hit}"
+                        " 作为共享布局输入"
+                        "（#628 验收点 7：改用 LocalWindowInfo.current.containerDpSize）"
+                    ),
+                )
+            )
+    return findings
+
+
+# #628 验收点 7：旧工作区产品模式 WorkspacePaneMode{SinglePane,ListDetail,ThreePane}
+# 已删除（改为 WorkspaceLayoutMode{SinglePane,Workbench}），不得复活。
+# ShellMode::ThreePane / ShellModeDto::ThreePane 是壳层模式，允许保留 —
+# 只禁工作区产品模式 token：WorkspacePaneMode / LIST_DETAIL / THREE_PANE
+# （Kotlin 枚举变体大写蛇形，与 Rust 风格 ThreePane 区分）。
+LEGACY_WORKSPACE_PANE_MODE_TOKENS = ["WorkspacePaneMode", "LIST_DETAIL", "THREE_PANE"]
+
+
+def rule_no_legacy_workspace_pane_mode() -> list[Finding]:
+    """#628 验收点 7：旧工作区产品模式 WorkspacePaneMode{ListDetail,ThreePane}
+    已删除（改为 WorkspaceLayoutMode{SinglePane,Workbench}），不得复活。
+
+    Android main 源码不得重新引入 WorkspacePaneMode / LIST_DETAIL / THREE_PANE
+    （Kotlin 枚举变体）。ShellMode::ThreePane / ShellModeDto::ThreePane 是壳层
+    模式，允许保留 — 只禁工作区产品模式。
+    """
+    findings: list[Finding] = []
+    for path in collect_kt_files(APP_SRC, None):
+        for lineno, raw in enumerate(
+            effective_lines(path.read_text(encoding="utf-8")), 1
+        ):
+            for hit in references(raw, LEGACY_WORKSPACE_PANE_MODE_TOKENS):
+                findings.append(
+                    Finding(
+                        path=str(path.relative_to(APP_SRC)),
+                        line=lineno,
+                        message=(
+                            f"旧工作区产品模式必须保持删除: {hit}"
+                            "（#628 验收点 7：改用 WorkspaceLayoutMode{SinglePane,Workbench}）"
+                        ),
+                    )
+                )
+    return findings
+
+
 RULES: list[tuple[str, str, object]] = [
     (
         "ui-no-uniffi-jna-bridge",
@@ -1430,6 +1581,26 @@ RULES: list[tuple[str, str, object]] = [
         "ui-no-direct-layout-decision",
         "feature/*/ui 和 app/navigation 不得直接判断窗口尺寸决定布局（#628：必须消费 LayoutContractDto）",
         rule_ui_no_direct_layout_decision,
+    ),
+    (
+        "presentation-layout-no-structural-dimensions",
+        "feature/*/ui 不得硬编码跨端结构宽度 180/240/56.dp（#628 验收点 7：必须来自 Rust LayoutMetrics）",
+        rule_presentation_layout_no_structural_dimensions,
+    ),
+    (
+        "presentation-layout-no-pane-scaffold-directive",
+        "AndroidLayoutAdapter.kt 不得重新出现 PaneScaffoldDirective 死链（#628 验收点 7）",
+        rule_presentation_layout_no_pane_scaffold_directive,
+    ),
+    (
+        "presentation-layout-no-local-configuration-screen-size",
+        "AndroidLayoutAdapter.kt 不得用 LocalConfiguration.screenWidthDp/screenHeightDp（#628 验收点 7）",
+        rule_presentation_layout_no_local_configuration_screen_size,
+    ),
+    (
+        "no-legacy-workspace-pane-mode",
+        "旧工作区产品模式 WorkspacePaneMode/ListDetail/ThreePane 不得重新引入（#628 验收点 7）",
+        rule_no_legacy_workspace_pane_mode,
     ),
 ]
 

@@ -64,26 +64,39 @@ internal data class WideWorkspaceCallbacks(
 )
 
 /**
+ * #628 验收点 4：大屏写作工作台结构尺寸 — 来自 Rust LayoutMetrics，
+ * 打包传递避免函数参数超出门禁阈值。
+ *
+ * - [listPaneWidthDp]：左侧章节树宽度（null 时不画章节树，防御性）；
+ * - [toolPaneWidthDp]：右侧工具面板宽度；
+ * - [toolRailWidthDp]：最右工具栏图标列宽度。
+ */
+internal data class WideWorkspaceMetrics(
+    val listPaneWidthDp: Float?,
+    val toolPaneWidthDp: Float,
+    val toolRailWidthDp: Float,
+)
+
+/**
  * 大屏写作工作台（#625 第二段）— Row 布局：
- * - 左：[ChapterTreeContent]（宽度来自 `layoutSpec.contract.metrics.listPaneWidthDp`，
+ * - 左：[ChapterTreeContent]（宽度来自 [WideWorkspaceMetrics.listPaneWidthDp]，
  *   用户主动收起，不按设备尺寸自动收起）；
  * - 中：[SujianEditorHost]（复用现有编辑器，不创建第二个）；
- * - 右：[WritingToolPane]（用户主动收起）+ [WritingToolRail]（最右图标列）。
+ * - 右：[WritingToolPane]（用户主动收起，宽度来自 [WideWorkspaceMetrics.toolPaneWidthDp]）
+ *   + [WritingToolRail]（最右图标列，宽度来自 [WideWorkspaceMetrics.toolRailWidthDp]）。
  *
- * 顶部 [WritingWorkspaceToolbar] 由调用方 [ProjectWorkspaceScreen] 决定是否绘制
- * （窄屏时由 SujianNavigationSuite 的全局顶栏承担，大屏时由本组件承担）。
+ * 顶部 [WritingWorkspaceToolbar] 由本组件承担（#628 验收点 6：Workbench Writing
+ * 由工作台自己拥有顶部工具栏，外层 app shell 不再额外画通用顶栏）。
  *
  * #625 评论：用户主动收起 — 不按设备尺寸/方向自动多档收 pane。
  * 收起状态用 rememberSaveable 持有，跨配置变化保留。
- *
- * @param listPaneWidthDp 左侧章节树宽度（来自 Rust LayoutMetrics.listPaneWidthDp）
  */
 @Composable
 internal fun WideWritingWorkspace(
     deps: WideWorkspaceDeps,
     documentState: WideWorkspaceDocumentState,
     editorViewModel: EditorViewModel,
-    listPaneWidthDp: Float,
+    metrics: WideWorkspaceMetrics,
     callbacks: WideWorkspaceCallbacks,
     modifier: Modifier = Modifier,
 ) {
@@ -109,8 +122,8 @@ internal fun WideWritingWorkspace(
         )
 
         Row(modifier = Modifier.fillMaxSize()) {
-            // 左：章节树（用户主动收起）
-            if (!chapterTreeCollapsed) {
+            // 左：章节树（用户主动收起）。listPaneWidthDp 缺失时不画（防御性，isWideLayout 时应有值）。
+            if (!chapterTreeCollapsed && metrics.listPaneWidthDp != null) {
                 ChapterTreeContent(
                     projectId = documentState.currentProjectId,
                     projectRepository = deps.projectRepository,
@@ -131,7 +144,7 @@ internal fun WideWritingWorkspace(
                     modifier =
                         Modifier
                             .fillMaxHeight()
-                            .width(listPaneWidthDp.dp),
+                            .width(metrics.listPaneWidthDp.dp),
                 )
             }
 
@@ -142,14 +155,15 @@ internal fun WideWritingWorkspace(
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             )
 
-            // 右：工具面板（用户主动收起）+ 工具栏图标列
+            // 右：工具面板（用户主动收起，宽度来自 metrics.toolPaneWidthDp）
+            // + 工具栏图标列（宽度来自 metrics.toolRailWidthDp）。
             if (!toolPaneCollapsed) {
                 WritingToolPane(
-                    modifier = Modifier.fillMaxHeight().width(240.dp),
+                    modifier = Modifier.fillMaxHeight().width(metrics.toolPaneWidthDp.dp),
                 )
             }
             WritingToolRail(
-                modifier = Modifier.fillMaxHeight(),
+                modifier = Modifier.fillMaxHeight().width(metrics.toolRailWidthDp.dp),
             )
         }
     }

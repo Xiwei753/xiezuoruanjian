@@ -483,6 +483,7 @@ private fun SujianCompactBottomBar(
 private fun SujianCompactNavScaffold(
     modifier: Modifier,
     topBarInfo: SujianTopBarInfo,
+    showTopBar: Boolean,
     snackbarHostState: SnackbarHostState,
     bottomBar: @Composable () -> Unit,
     navDisplayContent: @Composable () -> Unit,
@@ -490,13 +491,17 @@ private fun SujianCompactNavScaffold(
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
-            SujianTopAppBar(
-                title = topBarInfo.title,
-                navigationIcon = topBarInfo.navigationIcon,
-                onNavigationClick = topBarInfo.onNavigationClick,
-                actions = topBarInfo.actions,
-                containerColor = topBarInfo.containerColor,
-            )
+            // #628 验收点 6：Workbench Writing 由工作台自己拥有顶部工具栏，
+            // 外层 app shell 不再额外画通用顶栏。窄屏 SinglePane 仍画透明 App bar。
+            if (showTopBar) {
+                SujianTopAppBar(
+                    title = topBarInfo.title,
+                    navigationIcon = topBarInfo.navigationIcon,
+                    onNavigationClick = topBarInfo.onNavigationClick,
+                    actions = topBarInfo.actions,
+                    containerColor = topBarInfo.containerColor,
+                )
+            }
         },
         bottomBar = bottomBar,
         snackbarHost = {
@@ -555,6 +560,7 @@ private fun SujianWideRail(
 private fun SujianWideNavScaffold(
     modifier: Modifier,
     topBarInfo: SujianTopBarInfo,
+    showTopBar: Boolean,
     snackbarHostState: SnackbarHostState,
     rail: (@Composable () -> Unit)?,
     navDisplayContent: @Composable () -> Unit,
@@ -562,13 +568,17 @@ private fun SujianWideNavScaffold(
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
-            SujianTopAppBar(
-                title = topBarInfo.title,
-                navigationIcon = topBarInfo.navigationIcon,
-                onNavigationClick = topBarInfo.onNavigationClick,
-                actions = topBarInfo.actions,
-                containerColor = topBarInfo.containerColor,
-            )
+            // #628 验收点 6：Workbench Writing 由工作台自己拥有顶部工具栏，
+            // 外层 app shell 不再额外画通用顶栏。
+            if (showTopBar) {
+                SujianTopAppBar(
+                    title = topBarInfo.title,
+                    navigationIcon = topBarInfo.navigationIcon,
+                    onNavigationClick = topBarInfo.onNavigationClick,
+                    actions = topBarInfo.actions,
+                    containerColor = topBarInfo.containerColor,
+                )
+            }
         },
         snackbarHost = {
             SnackbarHost(hostState = snackbarHostState) { data ->
@@ -602,7 +612,7 @@ private fun SujianWideNavScaffold(
  * #625 第二段：改用纯业务 [WorkspaceNavigator]，不再依赖 Material3 Adaptive
  * 的 rememberListDetailPaneScaffoldNavigator。"当前在哪个业务位置"与"屏幕上同时画
  * 哪些区域"彻底分开 — 后者由 [com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec]
- * 的 `workspacePaneMode` 决定，[ProjectWorkspaceScreen] 消费。 */
+ * 的 `workspaceLayoutMode` 决定，[ProjectWorkspaceScreen] 消费。 */
 @Composable
 private fun rememberSujianWorkspaceNavState(appState: SujianAppState): ProjectNavigationState {
     val initialDestination =
@@ -840,11 +850,22 @@ fun SujianNavigationSuite(
     val navDisplayContent =
         rememberSujianNavDisplayContent(currentTopDestination, topLevelBackStack, navContext, deps, syncState)
 
+    // #628 验收点 6：大屏 Writing 顶栏归属 — Workbench Writing 由工作台自己拥有顶部工具栏
+    // （WideWritingWorkspace 内的 WritingWorkspaceToolbar），外层 app shell 不再额外画通用顶栏。
+    // 窄屏 SinglePane Writing 仍使用外层透明 App bar。
+    // SujianNavigationSuite 只消费 screenRole + workspaceLayoutMode 做控件映射，不按窗口宽度自行判断。
+    val isWorkbenchWriting =
+        currentRoute is SujianRoute.Works &&
+            workspaceNavState.currentLocation is WorkspaceLocation.Editor &&
+            layoutSpec.workspaceLayoutMode == com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode.WORKBENCH
+    val showOuterTopBar = !isWorkbenchWriting
+
     // #628：底栏/侧栏改读 Core LayoutContractDto.primaryNavigationPlacement（Bottom/Side）。
     if (layoutSpec.useBottomNavigation) {
         SujianCompactNavScaffold(
             modifier = modifier,
             topBarInfo = topBarInfo,
+            showTopBar = showOuterTopBar,
             snackbarHostState = snackbarHostState,
             // #597 正文一：进入正文后隐藏底栏；设置页从顶栏进入，也不再显示底栏。
             bottomBar =
@@ -861,6 +882,7 @@ fun SujianNavigationSuite(
         SujianWideNavScaffold(
             modifier = modifier,
             topBarInfo = topBarInfo,
+            showTopBar = showOuterTopBar,
             snackbarHostState = snackbarHostState,
             // #597 正文一：宽窗口同一套规则 — Settings/Editor 不创建 NavigationRail。
             rail =

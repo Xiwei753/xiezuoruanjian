@@ -28,7 +28,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.WorkspaceAppState
-import com.xiwei.sujian.app.presentation.layout.WorkspacePaneMode
+import com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.screen.WorkspaceActionKind
 import com.xiwei.sujian.app.presentation.screen.WorkspaceActionSpec
@@ -83,13 +83,20 @@ internal fun ProjectListContent(
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     modifier: Modifier = Modifier,
     /**
-     * #625 第二段：宽屏 grid 切换依据 — 来自 Rust `LayoutContractDto.workspacePaneMode`。
+     * #625 第二段 / #628 验收点 1：宽屏 grid 切换依据 — 来自 Rust `LayoutContractDto.workspaceLayoutMode`。
      *
-     * #628 原则：不自己判断窗口尺寸 — 通过 layoutSpec.contract.workspacePaneMode 决定。
-     * SinglePane → LazyColumn（单列）；ListDetail / ThreePane → LazyVerticalGrid（多列）。
+     * #628 原则：不自己判断窗口尺寸 — 通过 layoutSpec.contract.workspaceLayoutMode 决定。
+     * SinglePane → LazyColumn（单列）；Workbench → LazyVerticalGrid（多列）。
      * 默认 SinglePane（与窄窗口基线一致）。
      */
-    workspacePaneMode: WorkspacePaneMode = WorkspacePaneMode.SINGLE_PANE,
+    workspaceLayoutMode: WorkspaceLayoutMode = WorkspaceLayoutMode.SINGLE_PANE,
+    /**
+     * #628 验收点 4：作品卡片最小宽度 — 来自 Rust `LayoutMetricsDto.projectCardMinWidthDp`。
+     *
+     * 仅在 [workspaceLayoutMode] 为 WORKBENCH 时使用（画 grid）。
+     * SinglePane 不画 grid，传 0f 即可（调用方约定）。
+     */
+    projectCardMinWidthDp: Float = 0f,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     // #625：菜单展开状态留在每张卡片本地（见 [ProjectCard]），
@@ -111,8 +118,8 @@ internal fun ProjectListContent(
             appState.projectSummaries.associateBy { it.id }
         }
 
-    // #628 原则：宽屏 grid 切换依据是 workspacePaneMode，不自己判断宽度。
-    val useWideGrid = workspacePaneMode != WorkspacePaneMode.SINGLE_PANE
+    // #628 原则：宽屏 grid 切换依据是 workspaceLayoutMode，不自己判断宽度。
+    val useWideGrid = workspaceLayoutMode != WorkspaceLayoutMode.SINGLE_PANE
 
     Box(modifier = modifier.fillMaxSize()) {
         if (appState.projects.isEmpty()) {
@@ -123,11 +130,12 @@ internal fun ProjectListContent(
                 modifier = Modifier.fillMaxSize(),
             )
         } else if (useWideGrid) {
-            // #625 第二段 4d：宽屏 grid — LazyVerticalGrid（多列）。
+            // #625 第二段 4d / #628 验收点 4：宽屏 grid — LazyVerticalGrid（多列）。
             // recentEdits 区块保持单列横跨（用 header item + full-span items），
             // projects 区块用 grid。当前简化：宽屏直接全部用 grid（recentEdits 较少）。
+            // 卡片最小宽度来自 Rust LayoutMetrics.projectCardMinWidthDp。
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 180.dp),
+                columns = GridCells.Adaptive(minSize = projectCardMinWidthDp.dp),
                 contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
                 horizontalArrangement = Arrangement.spacedBy(dims.space8),
                 verticalArrangement = Arrangement.spacedBy(dims.space8),

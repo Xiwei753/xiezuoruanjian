@@ -1,30 +1,23 @@
-@file:OptIn(ExperimentalMaterial3AdaptiveApi::class)
-
 package com.xiwei.sujian.app.presentation.layout
 
-import android.annotation.SuppressLint
-import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
-import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
-import androidx.compose.material3.adaptive.layout.PaneScaffoldDirective
-import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import com.xiwei.sujian.core.platform.window.AospFoldFeatureInfo
 import uniffi.writer_core.LayoutContractDto
 import uniffi.writer_core.PrimaryNavigationPlacementDto
+import uniffi.writer_core.WindowOcclusionDto
 import uniffi.writer_core.WindowViewportDto
-import uniffi.writer_core.WorkspacePaneModeDto
+import uniffi.writer_core.WorkspaceLayoutModeDto
 
 /**
  * Android Layout Adapter（#610 / #628）— Android presentation/layout 层。
  *
  * 职责只剩两件事（#628 评论第 2 节）：
- * 1. 用 [LocalConfiguration] 读取当前 Compose 宿主窗口的原始 dp 宽高，
+ * 1. 用 [LocalWindowInfo] 读取当前 Compose 宿主窗口的原始 dp 宽高 + 折叠铰链 occlusion，
  *    构造 [WindowViewportDto] 交给 Core `presentation/layout` 解析；
- * 2. 把 Rust [LayoutContractDto] 映射成 Material3 [PaneScaffoldDirective] 与具体控件。
+ * 2. 把 Rust [LayoutContractDto] 映射成具体控件（[AndroidLayoutSpec]）。
  *
  * #628 删除的内容（改由 Rust 决定）：
  * - `WindowWidthSizeClass` / `buildCapabilities()` / `availablePaneCount` —
@@ -33,13 +26,18 @@ import uniffi.writer_core.WorkspacePaneModeDto
  * - `AndroidNavigationPresentation` 枚举 — 底栏/侧栏改读
  *   [LayoutContractDto.primaryNavigationPlacement]（Bottom/Side）；
  * - 列表栏写死 `320.dp` — 改读 [LayoutContractDto.metrics.listPaneWidthDp]
- *   （Core `presentation/layout/metrics` 决定，Android 只做 `.dp` 映射）。
+ *   （Core `presentation/layout/metrics` 决定，Android 只做 `.dp` 映射）；
+ * - Material3 `PaneScaffoldDirective` / `currentWindowAdaptiveInfo` /
+ *   `calculatePaneScaffoldDirective` / `maxHorizontalPartitionsFor` /
+ *   `excludedBounds`(Rect) — 整条死链删除（无消费者）；
+ * - `LocalConfiguration.screenWidthDp/screenHeightDp` — 改用
+ *   [LocalWindowInfo.current.containerDpSize]（Compose 1.7+ 标准方式）。
  *
  * 调用链（#628 评论第 4 节）：
  * ```text
- * Android LocalConfiguration.screenWidthDp/screenHeightDp
+ * Android LocalWindowInfo.containerDpSize + AospFoldFeatureInfo.bounds
  *         ↓
- * WindowViewportDto(width, height)
+ * WindowViewportDto(width, height, occlusions)
  *         ↓
  * Rust presentation/layout (breakpoints/metrics/resolver)
  *         ↓
@@ -47,32 +45,45 @@ import uniffi.writer_core.WorkspacePaneModeDto
  *         ↓
  * AndroidLayoutAdapter
  *         ↓
- * Material3 PaneScaffoldDirective / NavigationBar / NavigationRail
+ * AndroidLayoutSpec (contract + 便捷视图)
  * ```
  */
-@OptIn(ExperimentalMaterial3AdaptiveApi::class)
-@SuppressLint("ConfigurationScreenWidthHeight")
 @Composable
 internal fun rememberAndroidLayoutSpec(
     foldingFeatures: List<AospFoldFeatureInfo>,
     resolveLayoutContract: (WindowViewportDto) -> LayoutContractDto?,
 ): AndroidLayoutSpec {
-    val windowAdaptiveInfo = currentWindowAdaptiveInfo()
-    val defaultDirective =
-        remember(windowAdaptiveInfo) {
-            calculatePaneScaffoldDirective(windowAdaptiveInfo)
+    // #628 验收点 3：窗口尺寸改用 LocalWindowInfo.current.containerDpSize（DpSize）。
+    // 取 width.value / height.value 得到 Float dp，构造 WindowViewportDto。
+    val windowInfo = LocalWindowInfo.current
+    val containerDpSize = windowInfo.containerDpSize
+
+    // #628 验收点 5：折叠铰链 → WindowOcclusionDto。
+    // AospFoldFeatureInfo.bounds 是 px 坐标，用 LocalDensity 转 dp。
+    val density = LocalDensity.current
+    val occlusions =
+        remember(foldingFeatures, density) {
+            foldingFeatures
+                .filter { it.isSeparating }
+                .map { feature ->
+                    with(density) {
+                        WindowOcclusionDto(
+                            leftDp = feature.boundsLeft.toDp().value,
+                            topDp = feature.boundsTop.toDp().value,
+                            rightDp = feature.boundsRight.toDp().value,
+                            bottomDp = feature.boundsBottom.toDp().value,
+                            separating = feature.isSeparating,
+                        )
+                    }
+                }
         }
 
-    // #628：读取当前 Compose 宿主窗口的原始 dp 宽高（Android 平台测量）。
-    // LocalConfiguration.screenWidthDp/screenHeightDp 是 Android 平台测量窗口尺寸
-    // 的标准方式（Compose 1.7 的 LocalWindowInfo.containerDpSize 在本项目未使用，
-    // 沿用现有 LocalConfiguration 路径保持一致）。
-    val configuration = LocalConfiguration.current
     val viewport =
-        remember(configuration.screenWidthDp, configuration.screenHeightDp) {
+        remember(containerDpSize, occlusions) {
             WindowViewportDto(
-                widthDp = configuration.screenWidthDp.toFloat(),
-                heightDp = configuration.screenHeightDp.toFloat(),
+                widthDp = containerDpSize.width.value,
+                heightDp = containerDpSize.height.value,
+                occlusions = occlusions,
             )
         }
     val contract =
@@ -80,87 +91,48 @@ internal fun rememberAndroidLayoutSpec(
             resolveLayoutContract(viewport)
         }
 
-    // Android 平台值：列表栏 preferred width — 优先用 Core metrics 返回的共用尺寸，
-    // 仅在契约缺失（桥失败/空契约）时 fallback 到 320.dp。
-    val preferredListPaneWidth = contract?.metrics?.listPaneWidthDp?.dp ?: 320.dp
-
-    // Android 平台值：hinge excludedBounds（分隔式折叠铰链区域，px 坐标）。
-    // 这是 Android 折叠屏独有平台值，不进入 Core。
-    val excludedBounds =
-        foldingFeatures
-            .filter { it.isSeparating }
-            .map { feature ->
-                Rect(
-                    left = feature.boundsLeft.toFloat(),
-                    top = feature.boundsTop.toFloat(),
-                    right = feature.boundsRight.toFloat(),
-                    bottom = feature.boundsBottom.toFloat(),
-                )
-            }
-
-    val scaffoldDirective =
-        remember(contract, defaultDirective, excludedBounds, preferredListPaneWidth) {
-            val maxHorizontalPartitions =
-                contract?.workspacePaneMode?.let(::maxHorizontalPartitionsFor)
-                    ?: defaultDirective.maxHorizontalPartitions
-            defaultDirective.copy(
-                maxHorizontalPartitions = maxHorizontalPartitions,
-                defaultPanePreferredWidth = preferredListPaneWidth,
-                excludedBounds = excludedBounds,
-            )
-        }
-
-    return AndroidLayoutSpec(
-        contract = contract,
-        scaffoldDirective = scaffoldDirective,
-    )
+    return AndroidLayoutSpec(contract = contract)
 }
 
 /**
- * #625 第二段：工作区窗格模式 — Kotlin 侧枚举，避免 UI 层直接引用 uniffi DTO
- * （遵守 ui-no-uniffi-jna-bridge 架构门禁）。
+ * #625 第二段 / #628 验收点 1：工作区布局模式 — Kotlin 侧枚举，
+ * 避免 UI 层直接引用 uniffi DTO（遵守 ui-no-uniffi-jna-bridge 架构门禁）。
  *
- * 由 Core `LayoutContractDto.workspacePaneMode` 决定（#628：窗口尺寸→布局决策唯一在 Rust）。
+ * 由 Core `LayoutContractDto.workspaceLayoutMode` 决定（#628：窗口尺寸→布局决策唯一在 Rust）。
+ * - [WorkspaceLayoutMode.SINGLE_PANE]：窄屏单栏；
+ * - [WorkspaceLayoutMode.WORKBENCH]：大屏工作台（左章节树 + 中央编辑器 + 右工具面板）。
  */
-internal enum class WorkspacePaneMode {
+internal enum class WorkspaceLayoutMode {
     SINGLE_PANE,
-    LIST_DETAIL,
-    THREE_PANE,
+    WORKBENCH,
 }
 
-/** Core [WorkspacePaneModeDto] → Kotlin [WorkspacePaneMode]（interop 映射，非断点判断）。 */
-internal fun WorkspacePaneModeDto.toWorkspacePaneMode(): WorkspacePaneMode =
+/** Core [WorkspaceLayoutModeDto] → Kotlin [WorkspaceLayoutMode]（interop 映射，非断点判断）。 */
+internal fun WorkspaceLayoutModeDto.toWorkspaceLayoutMode(): WorkspaceLayoutMode =
     when (this) {
-        WorkspacePaneModeDto.SINGLE_PANE -> WorkspacePaneMode.SINGLE_PANE
-        WorkspacePaneModeDto.LIST_DETAIL -> WorkspacePaneMode.LIST_DETAIL
-        else -> WorkspacePaneMode.THREE_PANE
-    }
-
-/** Core WorkspacePaneMode → Material3 maxHorizontalPartitions（控件映射，非断点判断）。 */
-internal fun maxHorizontalPartitionsFor(mode: WorkspacePaneModeDto): Int =
-    when (mode) {
-        WorkspacePaneModeDto.SINGLE_PANE -> 1
-        WorkspacePaneModeDto.LIST_DETAIL -> 2
-        else -> 3
+        WorkspaceLayoutModeDto.SINGLE_PANE -> WorkspaceLayoutMode.SINGLE_PANE
+        WorkspaceLayoutModeDto.WORKBENCH -> WorkspaceLayoutMode.WORKBENCH
     }
 
 /**
  * Android UI spec — AndroidLayoutAdapter 的最终输出。
  *
- * [contract] 是 Core presentation contract（产品壳层语义，含一级导航放置与共用尺寸）；
- * [scaffoldDirective] 是 Android 平台自己的 Material3 呈现决策。
+ * [contract] 是 Core presentation contract（产品壳层语义，含一级导航放置、共用尺寸、
+ * 工作区布局模式与 workbenchOcclusion）。
  *
  * #628：删除 `navigationPresentation` 字段 — 底栏/侧栏改读
  * `contract?.primaryNavigationPlacement`（PrimaryNavigationPlacementDto.Bottom/Side）。
  * [useBottomNavigation] 是该决策的便捷布尔视图，供 navigation 层消费，
  * 避免上层直接引用 uniffi DTO（遵守 ui-no-uniffi-jna-bridge 架构门禁）。
  *
- * #625 第二段：[workspacePaneMode] 是工作区窗格模式的便捷 Kotlin 枚举视图，供 feature/ui 层消费，
- * 避免上层直接引用 uniffi DTO（遵守 ui-no-uniffi-jna-bridge 架构门禁）。
+ * #625 第二段 / #628 验收点 1：[workspaceLayoutMode] 是工作区布局模式的便捷 Kotlin 枚举视图，
+ * 供 feature/ui 层消费，避免上层直接引用 uniffi DTO（遵守 ui-no-uniffi-jna-bridge 架构门禁）。
+ *
+ * #628 验收点 2：删除 `scaffoldDirective` 字段 — Material3 PaneScaffoldDirective 整条死链
+ * 已删除（无消费者），断点/壳层/导航放置全由 Rust 决定。
  */
 internal data class AndroidLayoutSpec(
     val contract: LayoutContractDto?,
-    val scaffoldDirective: PaneScaffoldDirective,
 ) {
     /**
      * 一级导航是否用底栏（NavigationBar）而非侧栏（NavigationRail）。
@@ -174,11 +146,11 @@ internal data class AndroidLayoutSpec(
         get() = contract?.primaryNavigationPlacement == PrimaryNavigationPlacementDto.BOTTOM
 
     /**
-     * 工作区窗格模式（#625 第二段）— 供 feature/ui 层判断窄屏/大屏布局。
+     * 工作区布局模式（#625 第二段 / #628 验收点 1）— 供 feature/ui 层判断窄屏/大屏布局。
      *
-     * 由 Core `LayoutContractDto.workspacePaneMode` 决定（#628：窗口尺寸→布局决策唯一在 Rust）。
-     * 契约缺失（桥失败/空契约）→ [WorkspacePaneMode.SINGLE_PANE]（默认窄屏，与基线一致）。
+     * 由 Core `LayoutContractDto.workspaceLayoutMode` 决定（#628：窗口尺寸→布局决策唯一在 Rust）。
+     * 契约缺失（桥失败/空契约）→ [WorkspaceLayoutMode.SINGLE_PANE]（默认窄屏，与基线一致）。
      */
-    val workspacePaneMode: WorkspacePaneMode
-        get() = contract?.workspacePaneMode?.toWorkspacePaneMode() ?: WorkspacePaneMode.SINGLE_PANE
+    val workspaceLayoutMode: WorkspaceLayoutMode
+        get() = contract?.workspaceLayoutMode?.toWorkspaceLayoutMode() ?: WorkspaceLayoutMode.SINGLE_PANE
 }

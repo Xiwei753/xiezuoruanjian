@@ -14,7 +14,7 @@
 //!
 //! - [`layout`]：产品壳层语义。输入是平台端测量好的原始窗口尺寸
 //!   （宽高 dp，[`layout::resolver::WindowViewport`]），输出 `ShellMode /
-//!   WorkspacePaneMode / PrimaryNavigationPlacement / LayoutMetrics`。
+//!   WorkspaceLayoutMode / PrimaryNavigationPlacement / LayoutMetrics`。
 //!   Material 断点、dp 宽度、导航控件呈现
 //!   （BottomBar/NavigationRail/Drawer）不属于产品事务语义，
 //!   各平台自己算；但"底栏还是侧栏"由 Rust 决定（#628 评论第 4 节）。

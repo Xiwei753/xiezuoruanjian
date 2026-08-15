@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -16,7 +15,9 @@ import com.xiwei.sujian.R
 /**
  * 写作工作台最右图标列（#625 第二段）— 中屏折叠态占位。
  *
- * 固定宽度 56.dp，未来放星图/AI 工具入口图标。当前为占位 Composable。
+ * 宽度由调用方 [WideWritingWorkspace] 通过 modifier 传入（来自 Rust
+ * `LayoutMetrics.toolRailWidthDp`，#628 验收点 4）。未来放星图/AI 工具入口图标。
+ * 当前为占位 Composable。
  *
  * #625 评论：用户主动收起 — 不按设备尺寸/方向自动多档收 pane。
  * 收起状态由 [WideWritingWorkspace] 用 rememberSaveable 持有。
@@ -24,7 +25,7 @@ import com.xiwei.sujian.R
 @Composable
 internal fun WritingToolRail(modifier: Modifier = Modifier) {
     Column(
-        modifier = modifier.fillMaxHeight().width(56.dp).padding(vertical = 8.dp),
+        modifier = modifier.fillMaxHeight().padding(vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(

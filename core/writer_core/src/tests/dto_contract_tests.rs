@@ -108,7 +108,7 @@ fn ffi_project_maps_title_to_title() {
 fn window_viewport_dto_fields_match_harmony() {
     // #628：WindowViewportDto 替代 WindowCapabilitiesDto，只含 width_dp / height_dp。
     let viewport = crate::presentation::layout::resolver::WindowViewport::default();
-    let _json = serde_json::to_value(viewport).unwrap();
+    let _json = serde_json::to_value(&viewport).unwrap();
     let ffi_json = json!({
         "widthDp": viewport.width_dp,
         "heightDp": viewport.height_dp
@@ -133,8 +133,8 @@ fn layout_contract_dto_fields_match_harmony() {
         "Core internal LayoutContract uses snake_case 'shell_mode'"
     );
     assert!(
-        json.get("workspace_pane_mode").is_some(),
-        "Core internal LayoutContract uses snake_case 'workspace_pane_mode'"
+        json.get("workspace_layout_mode").is_some(),
+        "Core internal LayoutContract uses snake_case 'workspace_layout_mode'"
     );
     assert!(
         json.get("primary_navigation_placement").is_some(),

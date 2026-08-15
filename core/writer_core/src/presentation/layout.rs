@@ -20,7 +20,7 @@
 //!
 //! ## 输出：产品壳层契约
 //!
-//! [`LayoutContract`] 含产品角色：壳层模式、作品面板模式、
+//! [`LayoutContract`] 含产品角色：壳层模式、工作区布局模式、
 //! 一级导航放置（[`PrimaryNavigationPlacement`]）、共用尺寸（[`metrics::LayoutMetrics`]）。
 //! 是否显示一级导航不再放在 `LayoutContract`，改由 [`super::screen::ScreenPolicy`] 提供
 //! （#628 评论第 5 节）。
@@ -45,12 +45,19 @@ pub enum ShellMode {
     ThreePane,
 }
 
-/// 作品面板模式 — 决定项目列表/章节树/编辑器的组合方式。
+/// 工作区布局模式 — 决定项目列表/章节树/编辑器的产品级组合方式（#628 验收点 1）。
+///
+/// 不再输出旧的"三窗格"语义（`ListDetail` / `ThreePane`），改为产品语义：
+/// - `SinglePane`：窄屏单栏（手机/小平板竖屏）。
+/// - `Workbench`：#625 定下的稳定大屏结构——章节导航 + 正文 + 工具 pane + 工具 rail，
+///   左右 pane 由用户主动收起，不因为 Medium/Large 自动变成另一套页面。
+///
+/// Rust 内部仍保留 Narrow/Medium/Wide/Large/ExtraLarge（在 [`breakpoints`]）
+/// 来计算导航位置和尺寸，但不再把"2 pane / 3 pane"作为跨平台产品输出。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum WorkspacePaneMode {
+pub enum WorkspaceLayoutMode {
     SinglePane,
-    ListDetail,
-    ThreePane,
+    Workbench,
 }
 
 /// 一级导航放置位置 — 平台无关（#628 评论第 4 节）。
@@ -75,11 +82,17 @@ pub enum PrimaryNavigationPlacement {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayoutContract {
     pub shell_mode: ShellMode,
-    pub workspace_pane_mode: WorkspacePaneMode,
+    pub workspace_layout_mode: WorkspaceLayoutMode,
     /// 一级导航放置位置（平台无关，由 Rust 根据窗口 class 决定）。
     pub primary_navigation_placement: PrimaryNavigationPlacement,
     /// 共用布局尺寸（dp），由 Core 决定，平台端只做 `.dp` 映射。
     pub metrics: metrics::LayoutMetrics,
+    /// 工作台可用分区的分隔遮挡（#628 验收点 5）。
+    ///
+    /// 当 [`WindowViewport`] 的 `occlusions` 中存在 `separating == true` 的遮挡
+    /// （典型场景：折叠屏铰链）且工作区为 `Workbench` 时，此处记录该遮挡几何，
+    /// 平台端据此避免正文/控件跨在 hinge 上。其余情况为 `None`。
+    pub workbench_occlusion: Option<resolver::WindowOcclusion>,
 }
 
 // ========== 核心纯函数（重导出） ==========

@@ -13,8 +13,8 @@ import kotlinx.parcelize.Parcelize
  * 不再携带 Material3 Adaptive 的 [androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole]，
  * "当前在哪个业务位置"与"屏幕上同时画哪些区域"彻底分开：
  * - 业务位置（ProjectList / ChapterTree / Editor）由 [WorkspaceNavigator] 历史栈唯一持有；
- * - 屏幕布局（窄屏单栏 / 大屏多栏）由 [com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec]
- *   的 `workspacePaneMode` 决定，[ProjectWorkspaceScreen] 消费。
+ * - 屏幕布局（窄屏单栏 / 大屏工作台）由 [com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec]
+ *   的 `workspaceLayoutMode` 决定，[ProjectWorkspaceScreen] 消费。
  */
 sealed interface WorkspacePaneKey : Parcelable {
     @Parcelize
