@@ -8,6 +8,12 @@ import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../../../platform/l
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { WidthClass, ShellMode } from '../../../corebridge/dto/PlatformDtos'
+import { EditorSessionCoordinator } from '../../editor/session/EditorSessionCoordinator'
+import { NativeEditorSessionBridge } from '../../editor/interop/NativeEditorSessionBridge'
+import { EditorLayoutSnapshot } from '../../editor/render/EditorLayoutSnapshot'
+import { TextOffsetMapper } from '../../editor/input/TextOffsetMapper'
+import { SujianEditor } from '../../editor/ui/SujianEditor'
+import { EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
 
 /** 左侧面板宽度（双栏模式） */
 const LEFT_PANEL_WIDTH: number = 320
@@ -63,6 +69,7 @@ export struct WorkspaceScreen {
   @State sessionOldText: string = ''
   @State sessionId: string = ''
   @State sessionStartTime: number = 0
+  @State editorSnapshot: EditorLayoutSnapshot | null = null
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
@@ -70,6 +77,7 @@ export struct WorkspaceScreen {
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
   private autoSaveObserver: AutoSaveLifecycleObserver | null = null
+  private coordinator: EditorSessionCoordinator = new EditorSessionCoordinator(new NativeEditorSessionBridge())
 
   aboutToAppear() {
     const paramsArr = this.navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
@@ -118,6 +126,11 @@ export struct WorkspaceScreen {
         durationSeconds,
         this.sessionId
       )
+    }
+
+    // 关闭编辑会话（若当前有打开的章节）
+    if (this.selectedChapterId) {
+      this.coordinator.close()
     }
 
     // 清理观察者
@@ -177,6 +190,13 @@ export struct WorkspaceScreen {
         this.sessionId = `hm-${this.selectedChapterId}-${Date.now()}`
         this.sessionStartTime = Date.now()
 
+        // 打开编辑会话，用 Core 管理正文
+        const openResult = await this.coordinator.open(this.selectedChapterId, result.data.content)
+        if (openResult.success && openResult.data) {
+          this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(openResult.data)
+        } else {
+          this.editorErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
+        }
       } else {
         this.editorErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
       }
@@ -266,12 +286,19 @@ export struct WorkspaceScreen {
   }
 
   onContentChange(text: string) {
-    this.content = text
-    this.hasUnsavedChanges = text !== this.lastSavedContent
-
-    // 更新字数统计
-    this.bridge.calculateWordCount(text).then(count => {
-      this.wordCount = count
+    // 通过 coordinator.replace 更新 Core 正文（byte offset 语义）
+    const oldContent = this.content
+    const byteStart = TextOffsetMapper.utf16ToUtf8(oldContent, 0)
+    const byteEnd = TextOffsetMapper.utf16ToUtf8(oldContent, oldContent.length)
+    this.coordinator.replace(byteStart, byteEnd, text, oldContent, EditorTransactionCause.Typing).then(result => {
+      if (result.success && result.data) {
+        this.content = result.data.text
+        this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(result.data)
+        this.hasUnsavedChanges = result.data.text !== this.lastSavedContent
+        this.bridge.calculateWordCount(result.data.text).then(count => {
+          this.wordCount = count
+        })
+      }
     })
   }
 
@@ -298,6 +325,10 @@ export struct WorkspaceScreen {
   }
 
   doSelectChapter(chapterId: string, chapterTitle: string, volumeId: string) {
+    // 切换章节前，关闭旧编辑会话
+    if (this.selectedChapterId) {
+      this.coordinator.close()
+    }
     this.selectedChapterId = chapterId
     this.selectedChapterTitle = chapterTitle
     this.selectedVolumeId = volumeId
@@ -372,6 +403,9 @@ export struct WorkspaceScreen {
       if (result.success) {
         // 如果删除的是当前打开的章节，清空右侧
         if (this.selectedChapterId === chapterId) {
+          // 关闭当前编辑会话
+          this.coordinator.close()
+          this.editorSnapshot = null
           this.selectedChapterId = ''
           this.selectedChapterTitle = ''
           this.selectedVolumeId = ''
@@ -674,15 +708,10 @@ export struct WorkspaceScreen {
         } else {
           Scroll() {
             Column() {
-               TextArea({ text: this.content, placeholder: getContext(this).resourceManager.getStringSync($r('app.string.start_writing_placeholder').id) })
+              // 自研写作区组件，消费 EditorLayoutSnapshot 静态渲染
+              SujianEditor({ snapshot: this.editorSnapshot })
                 .width('100%')
                 .constraintSize({ minHeight: '100%' })
-                .fontSize(this.settings.editorFontSize)
-                .lineHeight(this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize)
-                .backgroundColor(this.themeConfig.colors.surface)
-                .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 20, bottom: 20 })
-                .fontColor(this.themeConfig.colors.textPrimary)
-                .placeholderColor(this.themeConfig.colors.textHint)
                 .onChange((value: string): void => { this.onContentChange(value) })
             }
             .width('100%')
