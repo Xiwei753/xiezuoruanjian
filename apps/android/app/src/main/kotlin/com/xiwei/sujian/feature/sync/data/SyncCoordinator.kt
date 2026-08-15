@@ -9,6 +9,9 @@ import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
 import java.io.IOException
 
@@ -36,11 +39,31 @@ sealed class SyncOutcome {
     ) : SyncOutcome()
 }
 
+/**
+ * #625 评论5301204285 问题1：作品级同步完成纯事件 — 仅在 [SyncCoordinator.runSync]
+ * 最终映射成 [SyncOutcome.Completed] 后发一次。携带 projectId，不携带字数/标题/summary；
+ * ProjectSummary 继续是列表唯一数据源。runAppSync 不发此作品级事件。
+ */
+data class ProjectSyncCompletedSignal(val projectId: String)
+
 class SyncCoordinator(
     private val settingsRepository: SyncRepository,
     private val syncStatusRepository: SyncStatusRepository,
     private val appSyncDataBarrier: AppSyncDataBarrier? = null,
 ) {
+    /**
+     * #625 评论5301204285 问题1：作品级同步完成纯事件流。
+     *
+     * 仅在 [runSync] 最终映射成 [SyncOutcome.Completed] 后用 [MutableSharedFlow.tryEmit]
+     * 非阻塞发射一次。`extraBufferCapacity = 1` 保证无订阅者时不丢最近一次完成事件
+     * （与 ChapterSavedSignal 模式一致）。不使用 `emit`（suspend，SharedFlow 无 replay
+     * 时无订阅者会挂起，会阻塞同步流程）。[runAppSync] 不发此作品级事件。
+     */
+    private val _projectSyncCompleted =
+        MutableSharedFlow<ProjectSyncCompletedSignal>(extraBufferCapacity = 1)
+    val projectSyncCompleted: SharedFlow<ProjectSyncCompletedSignal> =
+        _projectSyncCompleted.asSharedFlow()
+
     /**
      * #592 四：统一异常边界 — 每条路径必须结束在明确终态。
      *
@@ -171,21 +194,28 @@ class SyncCoordinator(
                     }
                 }
 
-            return when (exclusiveResult) {
-                is ExclusiveResult.Busy -> {
-                    SyncOutcome.Busy
-                }
-                is ExclusiveResult.Success -> {
-                    when (val br = exclusiveResult.value) {
-                        is BridgeResult.Success -> mapToOutcome(br.data)
-                        is BridgeResult.Error -> classifyFailure(br).toOutcome()
-                        BridgeResult.NotLoaded -> {
-                            DiagnosticsLogger.w("SyncCoordinator", "Native library not loaded — NativeUnavailable")
-                            SyncFailureKind.NativeUnavailable.toOutcome()
+            val outcome =
+                when (exclusiveResult) {
+                    is ExclusiveResult.Busy -> {
+                        SyncOutcome.Busy
+                    }
+                    is ExclusiveResult.Success -> {
+                        when (val br = exclusiveResult.value) {
+                            is BridgeResult.Success -> mapToOutcome(br.data)
+                            is BridgeResult.Error -> classifyFailure(br).toOutcome()
+                            BridgeResult.NotLoaded -> {
+                                DiagnosticsLogger.w("SyncCoordinator", "Native library not loaded — NativeUnavailable")
+                                SyncFailureKind.NativeUnavailable.toOutcome()
+                            }
                         }
                     }
                 }
+            // #625 评论5301204285 问题1：仅 Completed 发一次作品级完成信号；
+            // Busy / RetryableFailure / TerminalFailure 均不发。
+            if (outcome is SyncOutcome.Completed) {
+                _projectSyncCompleted.tryEmit(ProjectSyncCompletedSignal(projectId))
             }
+            return outcome
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: IOException) {

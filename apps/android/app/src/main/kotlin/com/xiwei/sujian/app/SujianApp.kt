@@ -146,6 +146,15 @@ private fun SujianAppInitialization(
             vm.refreshProjectSummaries()
         }
     }
+    // #625 评论5301204285 问题1：作品级同步完成 → 及时刷新作品摘要（含字数/修改时间），
+    // 不再仅靠 RESUMED 生命周期。信号由 SyncCoordinator.runSync 映射成 Completed 后发出；
+    // 手动同步 / 设置触发 / AutoSyncWorker 走同一 deps.syncCoordinator，同一条失效链。
+    // 事件只携带 projectId，ProjectSummary 继续是列表唯一数据源。
+    LaunchedEffect(deps, vm) {
+        deps.syncCoordinator.projectSyncCompleted.collect {
+            vm.refreshProjectSummaries()
+        }
+    }
 }
 
 @Composable

@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconToggleButton
 
 @Composable
 fun SujianPrimaryButton(
@@ -183,6 +184,43 @@ fun SujianIconButton(
                     tint = tint,
                 )
             }
+        }
+    }
+}
+
+/**
+ * #625 评论5301204285 问题2：图标切换按钮 — 包 Material3 [IconToggleButton]，
+ * 用 M3 selected/checked 语义表达选中态，不在业务层手写颜色。
+ * 尺寸约定同 [SujianIconButton]（minTouchTarget 外框 + iconSizeMedium 图标）。
+ *
+ * 不传 `colors`，让 M3 [IconToggleButtonDefaults] 处理 selected/unselected 配色；
+ * 图标 tint 用 [LocalContentColor]，M3 会在 selected 时注入选中内容色。
+ */
+@Composable
+fun SujianIconToggleButton(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+    contentDescription: String? = null,
+    enabled: Boolean = true,
+    semanticId: String? = null,
+) {
+    val dimensions = LocalSujianDimensions.current
+    val tagModifier = modifier.then(if (semanticId != null) Modifier.testTag(semanticId) else Modifier)
+    IconToggleButton(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        modifier = tagModifier.size(dimensions.minTouchTarget),
+        enabled = enabled,
+    ) {
+        if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                modifier = Modifier.size(dimensions.iconSizeMedium),
+                tint = LocalContentColor.current,
+            )
         }
     }
 }

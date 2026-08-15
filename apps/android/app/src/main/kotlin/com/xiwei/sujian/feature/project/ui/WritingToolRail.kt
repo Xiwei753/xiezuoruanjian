@@ -11,6 +11,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
+import com.xiwei.sujian.core.designsystem.component.SujianIconToggleButton
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 
 /**
@@ -33,6 +34,8 @@ internal data class WritingToolItem(
  * - pane 收起/展开由 [onTogglePane] 控制，[paneCollapsed] 决定按钮图标方向；
  * - 星图/AI 真正内容归 #373 / #506，这里不实现业务；
  * - 当前没有可用工具内容时 [tools] 为空，rail 只显示收起/展开按钮，不放伪功能按钮。
+ * - [selectedToolId] 映射成 M3 [androidx.compose.material3.IconToggleButton] 选中态
+ *   （checked = tool.id == selectedToolId），选中配色由 M3 defaults 决定，不在业务层手写颜色。
  *
  * #625 评论：用户主动收起 — 不按设备尺寸/方向自动多档收 pane。
  * 收起状态由 [WideWritingWorkspace] 用 rememberSaveable 持有。
@@ -51,8 +54,9 @@ internal fun WritingToolRail(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         tools.forEach { tool ->
-            SujianIconButton(
-                onClick = { onSelect(tool.id) },
+            SujianIconToggleButton(
+                checked = tool.id == selectedToolId,
+                onCheckedChange = { onSelect(tool.id) },
                 icon = tool.icon,
                 contentDescription = stringResource(id = tool.labelResId),
             )

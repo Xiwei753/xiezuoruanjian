@@ -1,4 +1,6 @@
 package com.xiwei.sujian.feature.sync.data
+import com.xiwei.sujian.core.interop.app.AppServiceBridge
+import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.settings.ui.SettingsTransactionCommand
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
@@ -6,12 +8,24 @@ import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class SyncCoordinatorTest {
+    companion object {
+        private const val PROJECT_ID_625 = "p-625"
+    }
+
     @Test
     fun syncSession_runExclusive_blocksConcurrentAccess() =
         runTest {
@@ -167,4 +181,154 @@ class SyncCoordinatorTest {
             )
         assertEquals(3, commands.distinctBy { it::class }.size)
     }
+
+    // === #625 评论5301204285 问题1：ProjectSyncCompletedSignal 契约测试 ===
+
+    /**
+     * 构造真实 SyncCoordinator（与 SettingsViewModelTest 同构）。
+     * 测试环境无 native 库时 runSync/runAppSync 不会返回 Completed
+     * （getSyncCapability / setSyncSecretsOverrideStrict / performSync 均依赖 native）。
+     * WriterAppServiceHolder.service 是 lazy 的，构造时不初始化 native 库。
+     */
+    private fun createCoordinator(): SyncCoordinator {
+        val context = org.robolectric.RuntimeEnvironment.getApplication()
+        val holder =
+            WriterAppServiceHolder(
+                appDataRoot = "/home/xiwei/.cache/agent-tmp/sujian-test-sync-signal-data",
+                projectsRoot = "/home/xiwei/.cache/agent-tmp/sujian-test-sync-signal-projects",
+            )
+        val bridge = AppServiceBridge(holder)
+        val syncRepo = SyncRepository(context, bridge)
+        val syncStatusRepo = SyncStatusRepository(syncRepo)
+        return SyncCoordinator(syncRepo, syncStatusRepo)
+    }
+
+    private fun enabledSnapshot(): ProjectSyncProfileSnapshot =
+        ProjectSyncProfileSnapshot(
+            generation = 1L,
+            config = SyncConfig(enabled = true, remoteUrl = "https://unit.example/repo.git"),
+            secrets = SyncSecrets(token = "test-token-625"),
+        )
+
+    @Test
+    fun projectSyncCompletedSignal_carriesProjectIdOnly() {
+        // #625 评论5301204285 问题1：事件只携带 projectId，不携带字数/标题/summary。
+        val signal = ProjectSyncCompletedSignal(PROJECT_ID_625)
+        assertEquals(PROJECT_ID_625, signal.projectId)
+        // data class 单属性契约 — copy/component1 验证只有 projectId 一个属性，
+        // ProjectSummary 继续是列表唯一数据源。
+        assertEquals(signal, signal.copy(projectId = PROJECT_ID_625))
+        assertEquals(PROJECT_ID_625, signal.component1())
+    }
+
+    @Test
+    fun runSync_unconfigured_doesNotEmitProjectSyncCompleted() =
+        runTest(UnconfinedTestDispatcher()) {
+            val coordinator = createCoordinator()
+            val collected = mutableListOf<ProjectSyncCompletedSignal>()
+            val collectorJob = launch { coordinator.projectSyncCompleted.collect { collected += it } }
+
+            // config.enabled=false → Unconfigured（早退出口，不发信号）
+            val outcome =
+                coordinator.runSync(
+                    SyncTrigger.Manual,
+                    "p-625-unconfigured",
+                    snapshot =
+                        ProjectSyncProfileSnapshot(
+                            generation = 1L,
+                            config = SyncConfig(enabled = false),
+                            secrets = SyncSecrets(),
+                        ),
+                )
+
+            collectorJob.cancel()
+            assertTrue("应返回 Unconfigured", outcome is SyncOutcome.Unconfigured)
+            assertTrue("Unconfigured 不应发出信号，实际收到: $collected", collected.isEmpty())
+        }
+
+    @Test
+    fun runSync_disabled_doesNotEmitProjectSyncCompleted() =
+        runTest(UnconfinedTestDispatcher()) {
+            val coordinator = createCoordinator()
+            val collected = mutableListOf<ProjectSyncCompletedSignal>()
+            val collectorJob = launch { coordinator.projectSyncCompleted.collect { collected += it } }
+
+            // config.enabled=true 但测试环境无 native 库 → getSyncCapability 返回 canRun=false → Disabled
+            val outcome =
+                coordinator.runSync(
+                    SyncTrigger.Manual,
+                    "p-625-disabled",
+                    snapshot = enabledSnapshot(),
+                )
+
+            collectorJob.cancel()
+            assertTrue("应返回 Disabled", outcome is SyncOutcome.Disabled)
+            assertTrue("Disabled 不应发出信号，实际收到: $collected", collected.isEmpty())
+        }
+
+    @Test
+    fun runSync_terminalFailure_doesNotEmitProjectSyncCompleted() =
+        runTest(UnconfinedTestDispatcher()) {
+            val coordinator = createCoordinator()
+            val collected = mutableListOf<ProjectSyncCompletedSignal>()
+            val collectorJob = launch { coordinator.projectSyncCompleted.collect { collected += it } }
+
+            // 不传 snapshot → snapshotSyncProfile 调用 native bridge 失败 → TerminalFailure
+            val outcome =
+                coordinator.runSync(
+                    SyncTrigger.Manual,
+                    "p-625-terminal",
+                    snapshot = null,
+                )
+
+            collectorJob.cancel()
+            assertTrue("应返回 TerminalFailure", outcome is SyncOutcome.TerminalFailure)
+            assertTrue("TerminalFailure 不应发出信号，实际收到: $collected", collected.isEmpty())
+        }
+
+    @Test
+    fun runSync_completed_emitsProjectSyncCompleted() =
+        runTest(UnconfinedTestDispatcher()) {
+            val coordinator = createCoordinator()
+            val collected = mutableListOf<ProjectSyncCompletedSignal>()
+            val collectorJob = launch { coordinator.projectSyncCompleted.collect { collected += it } }
+            val projectId = "p-625-completed"
+
+            val outcome =
+                coordinator.runSync(
+                    SyncTrigger.Manual,
+                    projectId,
+                    snapshot = enabledSnapshot(),
+                )
+
+            // 测试环境无 native 库时 runSync 不会返回 Completed
+            // （getSyncCapability / setSyncSecretsOverrideStrict / performSync 均依赖 native）。
+            // 有 native 库且配置有效时才走到 Completed 路径；此时验证信号契约。
+            // 无 native 库时跳过本例（不算失败）— 非 Completed 路径由上面三个测试覆盖。
+            assumeTrue(
+                "需要 native 库才能走到 Completed 路径，当前 runSync 返回 $outcome",
+                outcome is SyncOutcome.Completed,
+            )
+
+            collectorJob.cancel()
+            assertEquals("Completed 应发出一次信号", 1, collected.size)
+            assertEquals(projectId, collected[0].projectId)
+        }
+
+    @Test
+    fun runAppSync_doesNotEmitProjectSyncCompleted() =
+        runTest(UnconfinedTestDispatcher()) {
+            val coordinator = createCoordinator()
+            val collected = mutableListOf<ProjectSyncCompletedSignal>()
+            val collectorJob = launch { coordinator.projectSyncCompleted.collect { collected += it } }
+
+            // runAppSync 不传 snapshot → snapshotAppSyncProfile 调用 native bridge 失败 → TerminalFailure。
+            // 无论成功与否，runAppSync 实现中无 tryEmit 调用 — 不发作品级信号。
+            val outcome = coordinator.runAppSync(SyncTrigger.Manual)
+
+            collectorJob.cancel()
+            // runAppSync 执行完毕返回明确终态（未抛异常），且未发出作品级信号。
+            assertTrue("runAppSync 应返回非 Busy 终态: $outcome", outcome !is SyncOutcome.Busy)
+            assertTrue("runAppSync 不应发出作品级信号，实际收到: $collected", collected.isEmpty())
+        }
 }

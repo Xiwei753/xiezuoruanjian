@@ -69,23 +69,22 @@ internal fun formatProjectWordCount(
 }
 
 /**
- * #625 项7：作品卡片字数行 — 用 `stringResource` 取 i18n 格式串，再交 [formatProjectWordCount] 格式化。
- * null 或 0 不显示。
+ * #625 项7 / 评论5301204285 问题4：作品卡片字数行 — 用 stringResource 取 i18n 格式串，
+ * 再交 [formatProjectWordCount] 格式化。空作品也显示 0 字；负数防御性 coerceAtLeast(0)。
  */
 @Composable
-private fun ProjectCardWordCount(totalWordCount: Int?) {
-    if (totalWordCount != null && totalWordCount > 0) {
-        val formatted =
-            formatProjectWordCount(
-                totalWordCount,
-                wordsFormat = stringResource(id = R.string.project_word_count_words),
-                wanFormat = stringResource(id = R.string.project_word_count_wan),
-            )
-        Text(
-            stringResource(id = R.string.project_word_count_with_dot, formatted),
-            style = MaterialTheme.typography.bodySmall,
+private fun ProjectCardWordCount(totalWordCount: Int) {
+    val safeCount = totalWordCount.coerceAtLeast(0)
+    val formatted =
+        formatProjectWordCount(
+            safeCount,
+            wordsFormat = stringResource(id = R.string.project_word_count_words),
+            wanFormat = stringResource(id = R.string.project_word_count_wan),
         )
-    }
+    Text(
+        stringResource(id = R.string.project_word_count_with_dot, formatted),
+        style = MaterialTheme.typography.bodySmall,
+    )
 }
 
 @Composable
@@ -125,12 +124,6 @@ internal fun ProjectListContent(
     val createProjectAction =
         workspaceActions.primaryActions.firstOrNull { it.kind == WorkspaceActionKind.CreateProject }
     val projectMenuActions = workspaceActions.contextActions(WorkspaceActionTarget.Project)
-
-    // #625 第二段：作品摘要查找表 — 由 id 索引，避免每张卡片 O(n) 查找。
-    val summaryById =
-        remember(appState.projectSummaries) {
-            appState.projectSummaries.associateBy { it.id }
-        }
 
     // #628 原则：宽屏 grid 切换依据是 workspaceLayoutMode，不自己判断宽度。
     val useWideGrid = workspaceLayoutMode != WorkspaceLayoutMode.SINGLE_PANE
