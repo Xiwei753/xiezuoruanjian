@@ -8,8 +8,11 @@ import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 import com.xiwei.sujian.feature.editor.window.EditingState
 import com.xiwei.sujian.feature.editor.window.EditorWindowHost
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.locks.ReentrantLock
 
@@ -83,6 +86,16 @@ open class EditorSessionCoordinator(
     internal val _lastCommittedTextFlow = MutableStateFlow<String?>(null)
     val lastCommittedTextFlow: StateFlow<String?> = _lastCommittedTextFlow.asStateFlow()
     val lastCommittedText: String? get() = _lastCommittedTextFlow.value
+
+    // ── #625 项6：章节保存成功信号 ──
+    // EditorViewModel 在 commitSavedLease 真正落盘后 emit；app 层经 EditorWindowHost
+    // 收集该流触发 refreshProjectSummaries()。纯事件，不镜像业务数据。
+    internal val _chapterSavedSignal = MutableSharedFlow<ChapterSavedSignal>(extraBufferCapacity = 64)
+    val chapterSavedSignal: SharedFlow<ChapterSavedSignal> = _chapterSavedSignal.asSharedFlow()
+
+    internal open fun emitChapterSaved(signal: ChapterSavedSignal) {
+        _chapterSavedSignal.tryEmit(signal)
+    }
 
     // ── #595 二：输入 lease / epoch ──
 

@@ -122,6 +122,7 @@ private fun SujianAppInitialization(
     deps: SujianAppDependencies,
     vm: SujianAppViewModel,
     context: android.content.Context,
+    windowCoordinator: EditorWindowHost,
 ) {
     // #614 评论二：单条 LaunchedEffect 链保证 initialize 先于 repeatOnLifecycle refresh，
     // 避免两个独立 LaunchedEffect 无顺序保证、refresh 可能在 initialize 前执行。
@@ -131,10 +132,18 @@ private fun SujianAppInitialization(
         vm.initialize(deps.projectRepository, projectUC, deps.settingsRepository, context)
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             deps.syncStatusRepository.refreshState(vm.currentProjectId)
-            vm.refreshProjects()
-            // #625 第二段：与 projects 同步刷新作品摘要（含字数），用于作品卡片字数显示。
+            // #625 项6：列表 UI 唯一数据源是 projectSummaries（含字数），
+            // projects 第二数据源已删 — 只刷新 projectSummaries。
             vm.refreshProjectSummaries()
             vm.refreshRecentEdits()
+        }
+    }
+    // #625 项6：章节保存成功 → 及时刷新作品摘要（含字数），不再仅靠 RESUMED 生命周期。
+    // 信号由 EditorViewModel 落盘成功后经 sessionCoordinator 向上暴露，app 层向下收集；
+    // editor feature 层不依赖 app 层，不新增第二数据源。
+    LaunchedEffect(windowCoordinator, vm) {
+        windowCoordinator.chapterSavedSignal.collect {
+            vm.refreshProjectSummaries()
         }
     }
 }
@@ -210,7 +219,7 @@ fun SujianApp(initialDestination: String? = null) {
     SujianAppCapabilityEffects(capabilityProvider)
 
     SujianAppActivityLifecycleEvents(activityRef)
-    SujianAppInitialization(deps, vm, context)
+    SujianAppInitialization(deps, vm, context, windowCoordinator)
 
     val foldingFeatures = rememberFoldFeatureCollection(activityRef)
     SujianAppAdaptiveWindowSync(capabilityProvider, foldingFeatures, deps)

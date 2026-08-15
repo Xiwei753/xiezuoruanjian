@@ -30,10 +30,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * #614：SujianAppViewModel 错误事件与 refreshProjects 保留行为单元测试。
+ * #614 / #625 项6：SujianAppViewModel 错误事件与 refreshProjectSummaries 保留行为单元测试。
  *
  * - createProject/deleteProject/renameProject 失败时必须通过 uiEvents 发出 [WorkspaceUiEvent.Error]；
- * - refreshProjects 失败时保留上一份 projects（不覆盖为空），仅首次加载失败设 loadError。
+ * - refreshProjectSummaries 失败时保留上一份 projectSummaries（不覆盖为空），仅首次加载失败设 loadError。
  *
  * 用 fake [ProjectUseCasePort] 注入，避免构造真实 Repository/Bridge。
  */
@@ -150,14 +150,14 @@ class SujianAppViewModelErrorEventTest {
     }
 
     @Test
-    fun refreshProjects_setsLoadErrorOnFirstLoadFailure() {
+    fun refreshProjectSummaries_setsLoadErrorOnFirstLoadFailure() {
         val fake = FakeProjectUseCase()
-        fake.getProjectsError = RepositoryException("首次失败")
+        fake.getProjectSummariesError = RepositoryException("首次失败")
         val vm = SujianAppViewModel(SavedStateHandle())
         vm.setProjectUseCaseForTesting(fake)
 
         val collector = ErrorCollector(vm)
-        vm.refreshProjects()
+        vm.refreshProjectSummaries()
         awaitCondition { vm.loadError != null }
         val error = collector.await()
         collector.close()
@@ -167,8 +167,8 @@ class SujianAppViewModelErrorEventTest {
             vm.loadError!!.contains("首次失败"),
         )
         assertTrue(
-            "首次加载失败时 projects 必须仍为空",
-            vm.projects.isEmpty(),
+            "首次加载失败时 projectSummaries 必须仍为空",
+            vm.projectSummaries.isEmpty(),
         )
         assertTrue(
             "错误事件 message 必须含「首次失败」，实际: ${error.message}",
@@ -177,37 +177,53 @@ class SujianAppViewModelErrorEventTest {
     }
 
     @Test
-    fun refreshProjects_keepsPreviousProjectsOnFailure() {
+    fun refreshProjectSummaries_keepsPreviousSummariesOnFailure() {
         val fake = FakeProjectUseCase()
-        val previousProjects =
+        val previousSummaries =
             listOf(
-                Project(id = "p1", title = "作品一", createdAt = "", updatedAt = ""),
-                Project(id = "p2", title = "作品二", createdAt = "", updatedAt = ""),
+                ProjectSummary(
+                    id = "p1",
+                    title = "作品一",
+                    createdAt = "",
+                    updatedAt = "",
+                    totalWordCount = 100,
+                    volumeCount = 1,
+                    chapterCount = 2,
+                ),
+                ProjectSummary(
+                    id = "p2",
+                    title = "作品二",
+                    createdAt = "",
+                    updatedAt = "",
+                    totalWordCount = 200,
+                    volumeCount = 2,
+                    chapterCount = 5,
+                ),
             )
-        fake.projectsResult = previousProjects
+        fake.projectSummariesResult = previousSummaries
         val vm = SujianAppViewModel(SavedStateHandle())
         vm.setProjectUseCaseForTesting(fake)
 
-        // 1. 首次加载成功，填充 projects 并清 loadError。
-        vm.refreshProjects()
-        awaitCondition { vm.projects.isNotEmpty() }
-        assertEquals("首次加载成功后 projects 必须为 fake 返回列表", previousProjects, vm.projects)
+        // 1. 首次加载成功，填充 projectSummaries 并清 loadError。
+        vm.refreshProjectSummaries()
+        awaitCondition { vm.projectSummaries.isNotEmpty() }
+        assertEquals("首次加载成功后 projectSummaries 必须为 fake 返回列表", previousSummaries, vm.projectSummaries)
         assertNull("首次加载成功后 loadError 必须为 null", vm.loadError)
 
-        // 2. 再次加载失败 — 必须保留上一份 projects（不覆盖为空），且不设 loadError。
-        fake.getProjectsError = RepositoryException("刷新失败")
+        // 2. 再次加载失败 — 必须保留上一份 projectSummaries（不覆盖为空），且不设 loadError。
+        fake.getProjectSummariesError = RepositoryException("刷新失败")
         val collector = ErrorCollector(vm)
-        vm.refreshProjects()
+        vm.refreshProjectSummaries()
         val error = collector.await()
         collector.close()
 
         assertEquals(
-            "刷新失败时必须保留上一份 projects，不得覆盖为空",
-            previousProjects,
-            vm.projects,
+            "刷新失败时必须保留上一份 projectSummaries，不得覆盖为空",
+            previousSummaries,
+            vm.projectSummaries,
         )
         assertNull(
-            "projects 非空时刷新失败不得设 loadError",
+            "projectSummaries 非空时刷新失败不得设 loadError",
             vm.loadError,
         )
         assertTrue(
@@ -231,10 +247,10 @@ class SujianAppViewModelErrorEventTest {
     }
 
     @Test
-    fun refreshProjects_setsLoadErrorWhenNotInitialized() {
+    fun refreshProjectSummaries_setsLoadErrorWhenNotInitialized() {
         val vm = SujianAppViewModel(SavedStateHandle())
         val collector = ErrorCollector(vm)
-        vm.refreshProjects()
+        vm.refreshProjectSummaries()
         awaitCondition { vm.loadError != null }
         val error = collector.await()
         collector.close()
@@ -247,23 +263,22 @@ class SujianAppViewModelErrorEventTest {
 }
 
 /**
- * #614：测试用 [ProjectUseCasePort] fake。各方法可独立控制抛异常/返回值。
+ * #614 / #625 项6：测试用 [ProjectUseCasePort] fake。各方法可独立控制抛异常/返回值。
  */
 private class FakeProjectUseCase : ProjectUseCasePort {
-    var projectsResult: List<Project> = emptyList()
     var projectSummariesResult: List<ProjectSummary> = emptyList()
     var recentEditsResult: List<RecentEdit> = emptyList()
-    var getProjectsError: Throwable? = null
+    var getProjectSummariesError: Throwable? = null
     var createProjectError: Throwable? = null
     var deleteProjectError: Throwable? = null
     var renameProjectError: Throwable? = null
 
-    override suspend fun getProjects(): List<Project> {
-        getProjectsError?.let { throw it }
-        return projectsResult
-    }
+    override suspend fun getProjects(): List<Project> = emptyList()
 
-    override suspend fun getProjectSummaries(): List<ProjectSummary> = projectSummariesResult
+    override suspend fun getProjectSummaries(): List<ProjectSummary> {
+        getProjectSummariesError?.let { throw it }
+        return projectSummariesResult
+    }
 
     override suspend fun getRecentEdits(limit: Int): List<RecentEdit> = recentEditsResult.take(limit)
 

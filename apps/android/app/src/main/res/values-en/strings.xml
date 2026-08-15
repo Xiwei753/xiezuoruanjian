@@ -209,9 +209,6 @@
     <string name="action_undo">Undo</string>
     <string name="action_redo">Redo</string>
     <string name="writing_tool_pane_title">Tools</string>
-    <string name="writing_tool_pane_placeholder">Star map and AI tools coming soon</string>
-    <string name="writing_tool_rail_placeholder">Tools</string>
-    <string name="writing_workspace_chapter_placeholder">No chapter selected</string>
 
     <!-- #625 评论项2-5: writing workspace toolbar / tool shell collapse-expand / empty state -->
     <string name="cd_back">Back</string>

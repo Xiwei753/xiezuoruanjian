@@ -5,6 +5,7 @@ import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import com.xiwei.sujian.feature.editor.session.ChapterContentSavePort
+import com.xiwei.sujian.feature.editor.session.ChapterSavedSignal
 import com.xiwei.sujian.feature.editor.session.DocumentVersion
 import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
 import com.xiwei.sujian.feature.editor.session.EditorContentDelta
@@ -134,6 +135,9 @@ class EditorSaveFlowTest {
     private class FakeSnapshotCoordinator(bridge: AppServiceBridge) : EditorSessionCoordinator(bridge) {
         private val snapshots = mutableMapOf<ULong, TargetSnapshot>()
 
+        /** #625 项6：记录 emitChapterSaved 调用，避免 SharedFlow collect 时序问题。 */
+        val emittedSavedSignals = mutableListOf<ChapterSavedSignal>()
+
         fun installSnapshot(
             sessionId: ULong,
             text: String,
@@ -144,6 +148,11 @@ class EditorSaveFlowTest {
         }
 
         internal override fun querySnapshotForSession(sessionId: ULong): TargetSnapshot? = snapshots[sessionId]
+
+        internal override fun emitChapterSaved(signal: ChapterSavedSignal) {
+            emittedSavedSignals += signal
+            super.emitChapterSaved(signal)
+        }
     }
 
     private lateinit var bridge: AppServiceBridge
@@ -413,6 +422,77 @@ class EditorSaveFlowTest {
             assertTrue(ok)
             assertEquals("带空格/制表符的段落必须原样保存", INDENT_ONLY_BODY, immediatePort.savedContent)
             assertEquals(SaveStatus.Saved, vm.uiState.value.saveStatus)
+        }
+
+    /**
+     * #625 项6：章节保存真正落盘（revision 匹配、commitSavedLease 返回 true）后，
+     * 必须经 [EditorSessionCoordinator.chapterSavedSignal] 发射 [ChapterSavedSignal]，
+     * 供 app 层收集后刷新作品摘要（含字数）。纯事件，不携带字数/摘要。
+     */
+    @Test
+    fun saveSuccess_emitsChapterSavedSignal() =
+        runTest(UnconfinedTestDispatcher()) {
+            commitSession(text = BODY_A, revision = 1L)
+            val immediatePort = ImmediateSavePort()
+            vm.chapterSavePort = immediatePort
+
+            val ok =
+                vm.performSave(
+                    BODY_A,
+                    requireNotNull(vm.currentSession),
+                    coordinator.issueDocumentOperationLease()!!,
+                    isAutoSave = false,
+                )
+
+            assertTrue("保存必须成功", ok)
+            assertEquals("保存成功后必须发射一个 ChapterSavedSignal", 1, coordinator.emittedSavedSignals.size)
+            val signal = coordinator.emittedSavedSignals.single()
+            assertEquals("信号 projectId 必须匹配章节", "p", signal.projectId)
+            assertEquals("信号 volumeId 必须匹配章节", "v", signal.volumeId)
+            assertEquals("信号 chapterId 必须匹配章节", "a", signal.chapterId)
+        }
+
+    /**
+     * #625 项6：保存期间继续输入导致 revision 不匹配时，commitSavedLease 返回 false，
+     * 不得发射 [ChapterSavedSignal] — 晚到回执不算真正落盘，不应触发摘要刷新。
+     */
+    @Test
+    fun saveRevisionMismatch_doesNotEmitChapterSavedSignal() =
+        runTest(UnconfinedTestDispatcher()) {
+            commitSession(text = BODY_A, revision = 1L)
+            val savePort = ControllableSavePort()
+            vm.chapterSavePort = savePort
+
+            val lease = coordinator.issueDocumentOperationLease()!!
+            val saveJob =
+                async(Dispatchers.Default) {
+                    vm.performSave(
+                        content = BODY_A,
+                        session = requireNotNull(vm.currentSession),
+                        lease = lease,
+                        isAutoSave = false,
+                    )
+                }
+            runCurrentUntil { savePort.calls >= 1 }
+
+            // 保存期间继续输入推进 revision
+            val inputLease = coordinator.currentInputLease()!!
+            coordinator.applyLocalEdit(
+                EditorDocumentUpdate.LocalInput(
+                    targetId = TARGET_ID,
+                    revision = 2L,
+                    transactionId = 11L,
+                    operationKind = EditorOperationKind.INSERT,
+                    contentChanged = true,
+                    contentDelta = EditorContentDelta(insertedChars = 1),
+                    lease = inputLease,
+                ),
+            )
+
+            savePort.gate.complete(Unit)
+            saveJob.await()
+
+            assertEquals("revision 不匹配时不得发射 ChapterSavedSignal", 0, coordinator.emittedSavedSignals.size)
         }
 
     private suspend fun runCurrentUntil(condition: () -> Boolean) {

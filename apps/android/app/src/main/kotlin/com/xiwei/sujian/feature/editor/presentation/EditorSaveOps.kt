@@ -21,6 +21,7 @@ package com.xiwei.sujian.feature.editor.presentation
 
 import android.app.Application
 import com.xiwei.sujian.R
+import com.xiwei.sujian.feature.editor.session.ChapterSavedSignal
 import com.xiwei.sujian.feature.editor.session.DocumentOperationLease
 import com.xiwei.sujian.feature.editor.session.DocumentVersion
 import com.xiwei.sujian.feature.editor.session.commitSavedLease
@@ -45,12 +46,21 @@ import kotlinx.coroutines.sync.withLock
 private fun EditorViewModel.commitSaveSuccess(
     lease: DocumentOperationLease,
     hash: String,
+    session: EditorSession,
 ): Boolean {
     saveReceipts.record(lease.toSaveToken(hash))
     val coordinator = _sessionCoordinator ?: return false
     // #624 评论16 问题2：原子提交 — commitSavedLease 一次完成校验 + markSaved，
     // 不再先 isDocumentOperationLeaseCurrent() 再 markSaved()（两步操作有竞态窗口）。
-    return coordinator.commitSavedLease(lease, DocumentVersion(contentHash = hash))
+    val committed = coordinator.commitSavedLease(lease, DocumentVersion(contentHash = hash))
+    if (committed) {
+        // #625 项6：正文真正落盘后通知 app 层刷新作品摘要（含字数）。
+        // 纯事件信号，不携带字数/摘要 — 不构成第二数据源。app 层全量 refreshProjectSummaries()。
+        coordinator.emitChapterSaved(
+            ChapterSavedSignal(session.projectId, session.volumeId, session.chapterId),
+        )
+    }
+    return committed
 }
 
 /**
@@ -248,7 +258,7 @@ suspend fun EditorViewModel.clearChapterContentInternal(
                 is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> {
                     val savedHash = result.data?.contentHash ?: ""
                     // #624 评论12 第2项：回执 + markSaved 统一提交（revision 匹配才清 dirty）。
-                    val committed = commitSaveSuccess(lease, savedHash)
+                    val committed = commitSaveSuccess(lease, savedHash, session)
                     _uiState.value =
                         _uiState.value.copy(
                             content = "",
@@ -352,7 +362,7 @@ private fun EditorViewModel.handleSaveSuccess(
     )
     // #624 评论12 第2项：保存完成统一提交 — 回执总是记录（该 revision 确实已
     // 落盘）；只有活动文档仍是同一 lease/revision 才 markSaved + UI Saved。
-    val committed = commitSaveSuccess(lease, savedHash)
+    val committed = commitSaveSuccess(lease, savedHash, session)
     if (committed) {
         _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Saved, chapterHash = savedHash)
         // #624 评论17 问题5：commitSavedLease 真正提交后，如果 target 有

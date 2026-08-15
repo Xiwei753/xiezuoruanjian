@@ -11,6 +11,7 @@ import com.xiwei.sujian.feature.editor.platform.SujianEditorView
 import com.xiwei.sujian.feature.editor.projection.ChapterPreviewState
 import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.session.AnimationPolicy
+import com.xiwei.sujian.feature.editor.session.ChapterSavedSignal
 import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorInputLease
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
@@ -39,6 +40,7 @@ import com.xiwei.sujian.feature.editor.session.prepareSessionForEdit
 import com.xiwei.sujian.feature.editor.session.releaseHost
 import com.xiwei.sujian.feature.editor.session.resetPersistentSession
 import com.xiwei.sujian.feature.editor.ui.theme.EditorThemeAdapter
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -99,6 +101,14 @@ class EditorWindowHost(
     val sessionStateFlow: StateFlow<EditorSessionState> get() = sessionCoordinator.sessionStateFlow
     val targetDecorationsVersionFlow: StateFlow<Long> get() = sessionCoordinator.targetDecorationsVersionFlow
     val lastCommittedTextFlow: StateFlow<String?> get() = sessionCoordinator.lastCommittedTextFlow
+
+    /**
+     * #625 项6：章节保存成功信号 — 转发 [EditorSessionCoordinator.chapterSavedSignal]。
+     * app 层收集该流后调用 refreshProjectSummaries()，使作品卡字数在保存后及时刷新，
+     * 不再仅靠 RESUMED 生命周期。纯事件，不镜像业务数据。
+     */
+    val chapterSavedSignal: SharedFlow<ChapterSavedSignal>
+        get() = sessionCoordinator.chapterSavedSignal
 
     val activeTargetId: String? get() = sessionCoordinator.activeTargetId
     val editingState: EditingState get() = sessionCoordinator.editingState
