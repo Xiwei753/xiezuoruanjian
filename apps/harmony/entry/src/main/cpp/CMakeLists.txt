@@ -16,12 +16,14 @@ set_target_properties(writer_core_ffi PROPERTIES
 )
 message(STATUS "Found prebuilt libwriter_core_ffi.so: ${PREBUILT_SO}")
 
+# napi_init.cpp 通过 #include "napi/napi_xxx.cpp" 内联各域实现，
+# 故只需编译 napi_init.cpp 一个翻译单元（与历史结构一致）。
 add_library(writer_core_napi SHARED
-    napi_init.cpp
+    corebridge/napi/napi_init.cpp
 )
 
 target_include_directories(writer_core_napi PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/corebridge
 )
 
 target_link_libraries(writer_core_napi PUBLIC

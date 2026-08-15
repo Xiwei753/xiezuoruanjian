@@ -1,10 +1,5 @@
 {
   "src": [
-    "pages/Index",
-    "pages/MainWorkspace",
-    "pages/WorkspacePage",
-    "pages/WritingPage",
-    "pages/StarMapPage",
-    "pages/SettingsPage"
+    "pages/Index"
   ]
 }

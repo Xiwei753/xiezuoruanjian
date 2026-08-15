@@ -3,9 +3,9 @@ import Want from '@ohos.app.ability.Want'
 import AbilityConstant from '@ohos.app.ability.AbilityConstant'
 import hilog from '@ohos.hilog'
 import window from '@ohos.window'
-import { HarmonyLifecycle } from '../system/HarmonyLifecycle'
-import { getAppContext } from '../common/AppContext'
-import { getAdaptiveContext } from '../common/AdaptiveContext'
+import { HarmonyLifecycle } from '../platform/lifecycle/HarmonyLifecycle'
+import { getAppContext } from '../app/AppContext'
+import { getAdaptiveContext } from '../ui/adaptive/AdaptiveContext'
 
 export default class EntryAbility extends UIAbility {
   private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()

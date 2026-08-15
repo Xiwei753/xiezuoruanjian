@@ -11,6 +11,7 @@
 //! - 所有函数要求先调用 `writer_core_init` 初始化全局单例
 
 mod app_state_ops;
+mod editor_session_ops;
 mod layout_ops;
 mod project_ops;
 mod screen_policy_ops;
@@ -24,6 +25,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::{Mutex, OnceLock};
 
+use crate::app_service::WriterAppService;
 use crate::facade::WriterCore;
 
 /// 全局 `WriterCore` 单例，由 `writer_core_init` 初始化。
@@ -33,6 +35,17 @@ use crate::facade::WriterCore;
 /// `OnceLock` 保证只初始化一次；`Mutex` 保证同一时刻只有一个线程访问。
 /// 非递归锁：不得在 `with_core` 闭包中再次调用 `with_core`。
 static CORE: OnceLock<Mutex<Option<WriterCore>>> = OnceLock::new();
+
+/// 全局 `WriterAppService` 单例，由 `writer_core_init` 初始化。
+///
+/// 持有 `text_edit_session_*` 系列方法所需的多目标会话注册表，
+/// 会话跨 FFI 调用持久化，不随单次调用重建。
+///
+/// ## 线程安全
+///
+/// `OnceLock` 保证只初始化一次；`Mutex` 保证同一时刻只有一个线程访问。
+/// 非递归锁：不得在 `with_app_service` 闭包中再次调用 `with_app_service`。
+static APP_SERVICE: OnceLock<Mutex<WriterAppService>> = OnceLock::new();
 
 /// 全局最近一次错误信息，供 `writer_core_get_last_error` 读取。
 static LAST_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
@@ -68,6 +81,28 @@ where
         .ok_or("core not initialized")?;
     let core = guard.as_ref().ok_or("core not initialized")?;
     f(core)
+}
+
+/// 获取全局 `WriterAppService` 单例的互斥锁并执行闭包。
+///
+/// ## 线程安全
+///
+/// `APP_SERVICE` 是全局 `OnceLock<Mutex<WriterAppService>>`。同一时刻只有一个线程可以访问。
+/// 调用方不得在闭包中再次调用 `with_app_service`（非递归锁，会死锁）。
+///
+/// ## 所有权
+///
+/// 闭包只获得 `&WriterAppService` 不可变引用。所有修改操作通过内部可变性
+/// （`session_registry` 内部的 `Mutex` 等）实现，不违反只读约束。
+pub(crate) fn with_app_service<F, R>(f: F) -> Result<R, String>
+where
+    F: FnOnce(&WriterAppService) -> Result<R, String>,
+{
+    let guard = APP_SERVICE
+        .get()
+        .and_then(|m| m.lock().ok())
+        .ok_or("app service not initialized")?;
+    f(&guard)
 }
 
 /// 将成功数据包装为 JSON ResultEnvelope 并返回 C string。
@@ -142,8 +177,12 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
     };
     let projects_root = std::path::Path::new(&c_str).join("projects");
     std::fs::create_dir_all(&projects_root).ok();
+    let app_data_root_str = c_str.clone();
+    let projects_root_str = projects_root.to_string_lossy().to_string();
     let core = WriterCore::new(std::path::Path::new(&c_str), projects_root);
     let m = CORE.get_or_init(|| Mutex::new(None));
+    APP_SERVICE
+        .get_or_init(|| Mutex::new(WriterAppService::new(app_data_root_str, projects_root_str)));
     if let Ok(mut guard) = m.lock() {
         *guard = Some(core);
         0

@@ -1,10 +1,10 @@
 import { describe, it, expect } from '@ohos/hypium'
-import { WriterCoreBridge } from '../../../main/ets/bridge/WriterCoreBridge'
+import { NativeWriterCoreBridge } from '../../../main/ets/corebridge/NativeWriterCoreBridge'
 
 export default function writerCoreBridgeTest() {
   describe('WriterCoreBridge', () => {
-    it('should return mock instance when native is unavailable', () => {
-      const bridge = WriterCoreBridge.getInstance()
+    it('should return native instance', () => {
+      const bridge = NativeWriterCoreBridge.getInstance()
       expect(bridge).not.toBeNull()
     })
   })
