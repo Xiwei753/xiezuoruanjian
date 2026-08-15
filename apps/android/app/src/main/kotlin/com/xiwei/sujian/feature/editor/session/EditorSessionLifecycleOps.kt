@@ -368,8 +368,9 @@ private fun WindowBindingState.isExactAttaching(
         this.sessionId == sessionId
 
 /**
- * #624 评论17 问题2：closeTarget — readSession 取 token（sessionId），锁外 closeSession，
- * 重新进 mutation 校验 record.sessionId 仍是 token.sessionId 才 removeRecord/重置。
+ * #624 评论17 问题2：closeTarget — readSession 取 token（sessionId + binding），锁外 closeSession，
+ * 重新进 mutation 校验 record.sessionId 仍是 token.sessionId 且 binding 仍一致才 removeRecord/重置。
+ * 锁外 closeSession 期间新窗口可能 attach 同 target，binding 校验防止清掉刚建立的新绑定。
  */
 fun EditorSessionCoordinator.closeTarget(
     targetId: String,
@@ -379,19 +380,22 @@ fun EditorSessionCoordinator.closeTarget(
     if (wasActive) {
         commitActiveSession(null)
     }
-    // #624 评论17 问题1/2：sessionId 从 readSession 取（token），锁外 closeSession，
-    // 重新进 mutation 校验 record.sessionId 仍是 token.sessionId 才 removeRecord。
-    val tokenSessionId = readSession { record(targetId)?.sessionId }
-    if (tokenSessionId != null && tokenSessionId != 0UL) {
-        closeSession(tokenSessionId)
+
+    // #624 评论17 问题2：token 含 sessionId + binding — 与 detachWindowBinding 一致。
+    data class CloseTargetToken(val sessionId: ULong?, val binding: WindowBindingState)
+    val token = readSession { CloseTargetToken(record(targetId)?.sessionId, sessionState.bindingState) }
+    if (token.sessionId != null && token.sessionId != 0UL) {
+        closeSession(token.sessionId)
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
-            tokenSessionId.toString(),
+            token.sessionId.toString(),
             "close_target:${reason.name.lowercase()}",
         )
     }
     mutateSession {
+        // token 仍完全一致才 removeRecord — 锁外 closeSession 期间新窗口 attach 不能被清掉。
+        if (sessionState.bindingState != token.binding) return@mutateSession
         val currentRec = record(targetId)
-        if (currentRec?.sessionId != tokenSessionId) return@mutateSession
+        if (currentRec?.sessionId != token.sessionId) return@mutateSession
         removeRecord(targetId)
         invalidateLease()
         if (sessionState.targetId == targetId) {
@@ -882,6 +886,8 @@ fun EditorSessionCoordinator.commitResetSnapshot(
                 // 已 stale — 不 swap，返回 true 表示 stale。
                 return@mutateSession true
             }
+            // CAS 通过后读取当前 record — 反映 precondition 校验通过后的状态。
+            val rec = record(targetId)
             putRecord(
                 (rec ?: EditorSessionRecord(targetId = targetId, persistent = true)).copy(
                     sessionId = sessionId,

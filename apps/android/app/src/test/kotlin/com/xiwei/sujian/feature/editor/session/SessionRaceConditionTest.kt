@@ -217,4 +217,77 @@ class SessionRaceConditionTest {
             docLease == null,
         )
     }
+
+    /**
+     * 问题4：commitResetSnapshot stale CAS — candidate 创建成功但锁外期间同 target
+     * revision/session/epoch 前进，precondition 在 mutateSession 内校验时 stale。
+     *
+     * 断言：返回 Stale、candidate session 被 closeSession、并发改换后的新 session 原样保留。
+     */
+    @Test
+    fun commitResetSnapshot_returnsStaleWhenPreconditionAdvancedDuringCreate() {
+        val closedSessions = mutableListOf<ULong>()
+        val coordinator =
+            object : EditorSessionCoordinator(
+                com.xiwei.sujian.core.interop.app.AppServiceBridge(
+                    com.xiwei.sujian.core.interop.app.WriterAppServiceHolder(
+                        "/home/xiwei/.cache/agent-tmp/sujian_test_624_c17_stale_cas",
+                        "/home/xiwei/.cache/agent-tmp/sujian_test_624_c17_stale_cas",
+                    ),
+                ),
+            ) {
+                internal override fun createSession(
+                    targetId: String,
+                    text: String,
+                    cursorByteOffset: Int,
+                    isPersistent: Boolean,
+                ): ULong? {
+                    // 锁外 createSession 期间注入并发改换：同 target revision/sessionId/epoch 前进。
+                    mutateSession {
+                        val rec = record(targetId)
+                        if (rec != null) {
+                            putRecord(
+                                rec.copy(
+                                    sessionId = 99UL,
+                                    documentState = rec.documentState.copy(revision = 77L),
+                                ),
+                            )
+                        }
+                        invalidateLease()
+                    }
+                    return 200UL
+                }
+
+                internal override fun querySnapshotForSession(sessionId: ULong): TargetSnapshot? =
+                    if (sessionId == 200UL) TargetSnapshot("candidateText", 0, 1L, 0, 0) else null
+
+                internal override fun closeSession(sessionId: ULong) {
+                    closedSessions.add(sessionId)
+                    super.closeSession(sessionId)
+                }
+
+                internal override fun validateSession(sessionId: ULong): Boolean = true
+            }
+        coordinator.registerTargetMeta("B", TextEditorProfile.DocumentBody, persistent = true)
+        coordinator.mutateSession {
+            putRecord(record("B")!!.copy(sessionId = 1UL))
+        }
+
+        val result = coordinator.resetPersistentSession("B", "newText", 0, SessionResetSource.EXTERNAL)
+
+        assertEquals(
+            "precondition stale 时必须返回 Stale",
+            ExternalResetResult.Stale,
+            result,
+        )
+        assertTrue(
+            "candidate session 200UL 必须被 closeSession",
+            closedSessions.contains(200UL),
+        )
+        assertEquals(
+            "并发改换后的新 session 99UL 必须原样保留（不被 candidate 覆盖）",
+            99UL,
+            coordinator.store.record("B")?.sessionId,
+        )
+    }
 }
