@@ -8,6 +8,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.feature.project.data.model.Project
+import com.xiwei.sujian.feature.project.data.model.ProjectSummary
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
 import com.xiwei.sujian.feature.project.domain.ProjectUseCasePort
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
@@ -28,6 +29,13 @@ sealed interface WorkspaceUiEvent {
 
 interface WorkspaceAppState {
     val projects: List<com.xiwei.sujian.feature.project.data.model.Project>
+
+    /**
+     * #625 第二段：作品摘要列表（含字数/卷数/章节数）—
+     * 用于作品卡片字数显示。与 [projects] 同生命周期刷新。
+     */
+    val projectSummaries: List<com.xiwei.sujian.feature.project.data.model.ProjectSummary>
+
     val recentEdits: List<com.xiwei.sujian.feature.project.data.model.RecentEdit>
     val currentProjectId: String?
     val currentProjectTitle: String
@@ -62,6 +70,9 @@ interface WorkspaceAppState {
 
     fun refreshProjects()
 
+    /** #625 第二段：刷新作品摘要列表（含字数）。 */
+    fun refreshProjectSummaries()
+
     fun refreshRecentEdits()
 
     fun createProject(title: String)
@@ -78,6 +89,14 @@ class SujianAppViewModel(
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
     var projects by androidx.compose.runtime.mutableStateOf<List<Project>>(emptyList())
+        private set
+
+    /**
+     * #625 第二段：作品摘要列表（含字数/卷数/章节数）—
+     * 由 [refreshProjectSummaries] 与 [projects] 同步刷新。
+     * 失败时保留上一份（不覆盖为空），错误经 [uiEvents] 发出。
+     */
+    var projectSummaries by androidx.compose.runtime.mutableStateOf<List<ProjectSummary>>(emptyList())
         private set
 
     var recentEdits by androidx.compose.runtime.mutableStateOf<List<RecentEdit>>(emptyList())
@@ -264,6 +283,23 @@ class SujianAppViewModel(
         }
     }
 
+    /**
+     * #625 第二段：刷新作品摘要列表（含字数）。
+     *
+     * 与 [refreshProjects] 同模式：失败保留上一份，错误经 [uiEvents] 发出。
+     * 不更新 [loadError]（loadError 只跟踪 projects 首次加载失败）。
+     */
+    fun refreshProjectSummaries() {
+        viewModelScope.launch {
+            val result =
+                withContext(Dispatchers.IO) {
+                    runCatching { requireProjectUseCase().getProjectSummaries() }
+                }
+            result.onSuccess { list -> projectSummaries = list }
+                .onFailure { _uiEvents.tryEmit(WorkspaceUiEvent.Error(errorMessage(it))) }
+        }
+    }
+
     fun refreshRecentEdits() {
         viewModelScope.launch {
             val result =
@@ -334,6 +370,7 @@ class SujianAppState(
     val viewModel: SujianAppViewModel,
 ) : WorkspaceAppState {
     override val projects: List<Project> get() = viewModel.projects
+    override val projectSummaries: List<ProjectSummary> get() = viewModel.projectSummaries
     override val recentEdits: List<RecentEdit> get() = viewModel.recentEdits
     override val currentProjectId: String? get() = viewModel.currentProjectId
     override val currentProjectTitle: String get() = viewModel.currentProjectTitle
@@ -374,6 +411,8 @@ class SujianAppState(
     override fun clearProjectSelection() = viewModel.clearProjectSelection()
 
     override fun refreshProjects() = viewModel.refreshProjects()
+
+    override fun refreshProjectSummaries() = viewModel.refreshProjectSummaries()
 
     override fun refreshRecentEdits() = viewModel.refreshRecentEdits()
 

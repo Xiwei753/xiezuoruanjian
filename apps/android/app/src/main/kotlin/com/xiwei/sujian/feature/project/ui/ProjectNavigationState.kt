@@ -1,18 +1,20 @@
 package com.xiwei.sujian.feature.project.ui
 
 import android.os.Parcelable
-import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
-import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
-import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole
-import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
-import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldNavigator
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import com.xiwei.sujian.app.state.ActiveDocumentGate
 import kotlinx.parcelize.Parcelize
 
 /**
- * 唯一工作区导航目的地键 — 由 [ProjectNavigationState] 持有的
- * Material3 Adaptive navigator 使用；导航位置从当前 destination 推导。
+ * 唯一工作区导航目的地键 — 业务身份（#625 第二段）。
+ *
+ * 不再携带 Material3 Adaptive 的 [androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole]，
+ * "当前在哪个业务位置"与"屏幕上同时画哪些区域"彻底分开：
+ * - 业务位置（ProjectList / ChapterTree / Editor）由 [WorkspaceNavigator] 历史栈唯一持有；
+ * - 屏幕布局（窄屏单栏 / 大屏多栏）由 [com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec]
+ *   的 `workspacePaneMode` 决定，[ProjectWorkspaceScreen] 消费。
  */
 sealed interface WorkspacePaneKey : Parcelable {
     @Parcelize
@@ -29,15 +31,6 @@ sealed interface WorkspacePaneKey : Parcelable {
     ) : WorkspacePaneKey
 }
 
-@OptIn(ExperimentalMaterial3AdaptiveApi::class)
-internal val WorkspacePaneKey.role: ThreePaneScaffoldRole
-    get() =
-        when (this) {
-            WorkspacePaneKey.ProjectList -> ListDetailPaneScaffoldRole.List
-            is WorkspacePaneKey.ChapterTree -> ListDetailPaneScaffoldRole.Detail
-            is WorkspacePaneKey.Editor -> ListDetailPaneScaffoldRole.Extra
-        }
-
 sealed interface WorkspaceLocation {
     data object ProjectList : WorkspaceLocation
 
@@ -50,7 +43,7 @@ sealed interface WorkspaceLocation {
     ) : WorkspaceLocation
 }
 
-/** 从导航目的地推导工作区位置 — 唯一事实来源是 navigator 的当前 destination。 */
+/** 从导航目的地推导工作区位置 — 唯一事实来源是 [WorkspaceNavigator] 的当前 destination。 */
 internal fun deriveWorkspaceLocation(paneKey: WorkspacePaneKey?): WorkspaceLocation =
     when (paneKey) {
         null -> WorkspaceLocation.ProjectList
@@ -84,28 +77,96 @@ sealed interface SessionRestoreState {
 }
 
 /**
- * 组合层可保存的唯一工作区导航状态。
+ * 纯业务工作区导航器（#625 第二段）— 持有 [WorkspacePaneKey] 历史栈，
+ * 不再依赖 Material3 Adaptive 的 [androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldNavigator]。
  *
- * 持有唯一 Material3 Adaptive navigator，[currentLocation] 从 navigator 的当前 destination 推导，
- * 不另存页面位置副本。顶栏返回、系统返回、页面返回和预测返回必须统一调用 [back]。
+ * 职责：
+ * - 维护业务位置历史栈（[history]）；
+ * - 暴露当前业务位置（[currentDestination] / [currentLocation]）；
+ * - 提供 navigateTo / back / seekBack / replaceInitialHistory 业务方法；
+ * - canNavigateBack 由历史栈长度决定。
+ *
+ * seekBack 是预测返回手势进度回调 — 业务级实现只保留入口签名（手势动画由
+ * [ProjectWorkspaceScreen] 的 AnimatedContent 过渡承担，不需要 Material scaffold seek）。
+ * 真正的预测返回手势由 [com.xiwei.sujian.app.navigation.SujianNavigationSuite] 的
+ * PredictiveBackHandler 接管，本类只提供 seekBack 空实现 + 注释。
  */
 @Stable
-@OptIn(ExperimentalMaterial3AdaptiveApi::class)
-class ProjectNavigationState(
-    val navigator: ThreePaneScaffoldNavigator<WorkspacePaneKey>,
-) {
+internal class WorkspaceNavigator {
+    private val _history: SnapshotStateList<WorkspacePaneKey> = mutableStateListOf()
+    val history: List<WorkspacePaneKey> get() = _history
+
+    val currentDestination: WorkspacePaneKey?
+        get() = _history.lastOrNull()
+
     val currentLocation: WorkspaceLocation
-        get() = deriveWorkspaceLocation(navigator.currentDestination?.contentKey)
+        get() = deriveWorkspaceLocation(currentDestination)
 
     val canNavigateBack: Boolean
-        get() = navigator.canNavigateBack()
+        get() = _history.size > 1
+
+    suspend fun navigateTo(key: WorkspacePaneKey) {
+        _history.add(key)
+    }
+
+    /** 弹出一级业务历史；已在根页时返回 false。 */
+    suspend fun back(): Boolean {
+        if (!canNavigateBack) return false
+        _history.removeAt(_history.size - 1)
+        return true
+    }
+
+    /**
+     * 预测返回手势进度 — 业务级空实现。
+     *
+     * #625 第二段：解耦 Material scaffold 后，预测返回的视觉过渡由
+     * [ProjectWorkspaceScreen] 的 AnimatedContent 与 NavDisplay 的 predictivePopTransitionSpec
+     * 承担，不再需要 ThreePaneScaffoldNavigator.seekBack 驱动 pane 位移。
+     * 保留入口签名以兼容 [com.xiwei.sujian.app.navigation.SujianWorkspaceBackEffects]
+     * 的 PredictiveBackHandler 调用契约。
+     */
+    suspend fun seekBack(
+        @Suppress("UNUSED_PARAMETER") progress: Float,
+    ) {
+        // 业务级空实现 — 视觉过渡由 AnimatedContent 承担。
+    }
+
+    /**
+     * 一次性替换初始历史（会话恢复）— 之后导航只使用 [_history] 自己保存/恢复的历史，
+     * 不再从业务字段反复重建。
+     */
+    fun replaceInitialHistory(initialHistory: List<WorkspacePaneKey>) {
+        if (_history.isEmpty() && initialHistory.isNotEmpty()) {
+            _history.addAll(initialHistory)
+        }
+    }
+}
+
+/**
+ * 组合层可保存的唯一工作区导航状态。
+ *
+ * #625 第二段：持有纯业务 [WorkspaceNavigator]，[currentLocation] 从 navigator 的当前
+ * destination 推导，不另存页面位置副本。顶栏返回、系统返回、页面返回和预测返回必须统一调用 [back]。
+ *
+ * 不再暴露 Material3 Adaptive navigator 字段 — "当前在哪个业务位置"与"屏幕上同时画哪些区域"
+ * 彻底分开，后者由 [com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec] 决定。
+ */
+@Stable
+internal class ProjectNavigationState(
+    val navigator: WorkspaceNavigator,
+) {
+    val currentLocation: WorkspaceLocation
+        get() = navigator.currentLocation
+
+    val canNavigateBack: Boolean
+        get() = navigator.canNavigateBack
 
     suspend fun navigateToProjectList() {
-        navigator.navigateTo(ListDetailPaneScaffoldRole.List, WorkspacePaneKey.ProjectList)
+        navigator.navigateTo(WorkspacePaneKey.ProjectList)
     }
 
     suspend fun navigateToChapterTree(projectId: String) {
-        navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, WorkspacePaneKey.ChapterTree(projectId))
+        navigator.navigateTo(WorkspacePaneKey.ChapterTree(projectId))
     }
 
     suspend fun navigateToEditor(
@@ -113,21 +174,15 @@ class ProjectNavigationState(
         volumeId: String,
         chapterId: String,
     ) {
-        navigator.navigateTo(
-            ListDetailPaneScaffoldRole.Extra,
-            WorkspacePaneKey.Editor(projectId, volumeId, chapterId),
-        )
+        navigator.navigateTo(WorkspacePaneKey.Editor(projectId, volumeId, chapterId))
     }
 
     /** 统一返回入口：弹出一级工作区导航；已在作品根页时返回 false。 */
-    suspend fun back(): Boolean {
-        if (!navigator.canNavigateBack()) return false
-        return navigator.navigateBack(BackNavigationBehavior.PopUntilScaffoldValueChange)
-    }
+    suspend fun back(): Boolean = navigator.back()
 
     /** 预测返回手势进度：把导航器 seek 到对应过渡进度；取消时传 0f 复位。 */
     suspend fun seekBack(progress: Float) {
-        navigator.seekBack(BackNavigationBehavior.PopUntilScaffoldValueChange, progress)
+        navigator.seekBack(progress)
     }
 }
 
@@ -139,7 +194,7 @@ class ProjectNavigationState(
  * 旧实现先导航离开正文再在 LaunchedEffect 里补保存 — 保存失败只能阻止
  * closeTarget，阻止不了导航本身。
  */
-suspend fun ProjectNavigationState.guardedBack(): Boolean {
+internal suspend fun ProjectNavigationState.guardedBack(): Boolean {
     if (!ActiveDocumentGate.flushActiveDocument()) return false
     return back()
 }
@@ -148,51 +203,27 @@ suspend fun ProjectNavigationState.guardedBack(): Boolean {
  * 从会话恢复目的地一次性构建 navigator 初始历史（唯一实现；测试复用同一契约）。
  * 恢复目的地由会话就绪后给出，之后导航只使用 navigator 自己保存/恢复的历史，
  * 不再从业务字段反复重建。
+ *
+ * #625 第二段：返回 `List<WorkspacePaneKey>`（业务身份历史），
+ * 不再返回 [androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem]。
  */
-@OptIn(ExperimentalMaterial3AdaptiveApi::class)
-internal fun buildInitialHistory(
-    destination: SessionRestoreState.Destination,
-): List<androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem<WorkspacePaneKey>> =
+internal fun buildInitialHistory(destination: SessionRestoreState.Destination): List<WorkspacePaneKey> =
     when (destination) {
         is SessionRestoreState.Destination.ProjectList ->
-            listOf(
-                androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
-                    WorkspacePaneKey.ProjectList.role,
-                    WorkspacePaneKey.ProjectList,
-                ),
-            )
+            listOf(WorkspacePaneKey.ProjectList)
         is SessionRestoreState.Destination.ChapterTree ->
             listOf(
-                androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
-                    WorkspacePaneKey.ProjectList.role,
-                    WorkspacePaneKey.ProjectList,
-                ),
-                androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
-                    WorkspacePaneKey.ChapterTree(destination.projectId).role,
-                    WorkspacePaneKey.ChapterTree(destination.projectId),
-                ),
+                WorkspacePaneKey.ProjectList,
+                WorkspacePaneKey.ChapterTree(destination.projectId),
             )
         is SessionRestoreState.Destination.Editor ->
             listOf(
-                androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
-                    WorkspacePaneKey.ProjectList.role,
-                    WorkspacePaneKey.ProjectList,
-                ),
-                androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
-                    WorkspacePaneKey.ChapterTree(destination.projectId).role,
-                    WorkspacePaneKey.ChapterTree(destination.projectId),
-                ),
-                androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
-                    WorkspacePaneKey.Editor(
-                        destination.projectId,
-                        destination.volumeId,
-                        destination.chapterId,
-                    ).role,
-                    WorkspacePaneKey.Editor(
-                        destination.projectId,
-                        destination.volumeId,
-                        destination.chapterId,
-                    ),
+                WorkspacePaneKey.ProjectList,
+                WorkspacePaneKey.ChapterTree(destination.projectId),
+                WorkspacePaneKey.Editor(
+                    destination.projectId,
+                    destination.volumeId,
+                    destination.chapterId,
                 ),
             )
     }

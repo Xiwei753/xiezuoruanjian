@@ -8,6 +8,14 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// #625 第二段：批量返回项目摘要（元数据 + 统计）。
+    pub fn list_project_summaries(&self) -> ApiResult<Vec<ProjectSummaryDto>> {
+        self.core()
+            .list_project_summaries()
+            .map(|v| v.into_iter().map(Into::into).collect())
+            .map_err(Into::into)
+    }
+
     pub fn create_project(&self, title: &str) -> ApiResult<ProjectDto> {
         let project: ProjectDto = self
             .core()

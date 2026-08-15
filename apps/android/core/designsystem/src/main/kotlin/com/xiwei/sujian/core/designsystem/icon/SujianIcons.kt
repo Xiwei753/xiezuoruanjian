@@ -33,6 +33,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.UnfoldLess
+import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.filled.Redo
 import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.BarChart
@@ -74,6 +76,8 @@ object SujianIcons {
     val Search = Icons.Filled.Search
     val SmartToy = Icons.Filled.SmartToy
     val UnfoldLess = Icons.Filled.UnfoldLess
+    val Undo = Icons.Filled.Undo
+    val Redo = Icons.Filled.Redo
     val Widgets = Icons.Filled.Widgets
     val ListAlt = Icons.Filled.ListAlt
     val Person = Icons.Filled.Person

@@ -31,8 +31,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
-import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -75,6 +73,8 @@ import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.platform.window.AospFoldFeatureInfo
 import com.xiwei.sujian.feature.project.ui.ProjectNavigationState
 import com.xiwei.sujian.feature.project.ui.ProjectWorkspaceScreen
+import com.xiwei.sujian.feature.project.ui.WorkspaceLocation
+import com.xiwei.sujian.feature.project.ui.WorkspaceNavigator
 import com.xiwei.sujian.feature.project.ui.buildInitialHistory
 import com.xiwei.sujian.feature.project.ui.deriveRestoreDestination
 import com.xiwei.sujian.feature.project.ui.guardedBack
@@ -155,15 +155,17 @@ private fun rememberInitialNavStack(initialDestination: String?): Pair<SujianDes
 private fun rememberSujianTopBarTitle(
     currentRoute: SujianRoute,
     appState: SujianAppState,
+    workspaceLocation: WorkspaceLocation,
 ): String =
     when (currentRoute) {
-        is SujianRoute.Works -> {
-            if (appState.currentProjectId != null) {
-                appState.currentProjectTitle.ifEmpty { stringResource(id = R.string.title_projects) }
-            } else {
-                stringResource(id = R.string.title_projects)
+        is SujianRoute.Works ->
+            when (workspaceLocation) {
+                // #625 第二段：作品根页（ProjectList 位置）标题用「素笺」，
+                // 进入 ChapterTree / Editor 后用项目标题。
+                WorkspaceLocation.ProjectList -> stringResource(id = R.string.title_sujian)
+                is WorkspaceLocation.ChapterTree, is WorkspaceLocation.Editor ->
+                    appState.currentProjectTitle.ifEmpty { stringResource(id = R.string.title_projects) }
             }
-        }
         is SujianRoute.StarMap -> stringResource(id = R.string.title_starmap)
         is SujianRoute.Stats -> stringResource(id = R.string.title_stats)
         is SujianRoute.Settings -> stringResource(id = R.string.action_settings)
@@ -272,22 +274,39 @@ private fun rememberSujianManualSyncOnClick(env: SujianTopBarEnv): () -> Unit =
         }
     }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
+/**
+ * 导航内容上下文 — 打包传递，避免函数参数超出门禁阈值。
+ */
+private data class SujianNavContext(
+    val appState: SujianAppState,
+    val workspaceNavState: ProjectNavigationState,
+    val projectListActions: AndroidWorkspaceActionSpec,
+    val projectWorkspaceActions: AndroidWorkspaceActionSpec,
+    val layoutSpec: com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec,
+    val chrome: SujianChromeSpec,
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SujianNavDisplayContent(
     topLevelBackStack: SujianTopLevelBackStack,
-    appState: SujianAppState,
-    workspaceNavState: ProjectNavigationState,
-    projectListActions: AndroidWorkspaceActionSpec,
-    projectWorkspaceActions: AndroidWorkspaceActionSpec,
+    context: SujianNavContext,
+    deps: SujianAppDependencies,
+    syncState: com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState,
 ) {
     // #614 评论三：每个 top-level 栈绑定自己的 decorated entries（独立 SaveableStateHolder +
     // ViewModelStore decorator）。三个 rememberDecoratedNavEntries 始终在组合中，
     // inactive tab 状态不丢失；NavDisplay 直接消费 entries。
     // #618 五：entryProvider 按 appState / workspaceNavState / 两份静态动作 spec 稳定保存，
     // 底栏切换不再顺手重建三套 NavEntry provider。
+    // #625 第二段：entryProvider 还消费 layoutSpec / chrome — 大屏 Editor 位置画 WideWritingWorkspace。
     val entryProvider =
-        rememberSujianEntryProvider(appState, workspaceNavState, projectListActions, projectWorkspaceActions)
+        rememberSujianEntryProvider(
+            context,
+            topLevelBackStack,
+            deps,
+            syncState,
+        )
 
     NavDisplay(
         entries = topLevelBackStack.decoratedEntries(entryProvider),
@@ -310,25 +329,18 @@ private fun SujianNavDisplayContent(
  */
 @Composable
 private fun rememberSujianEntryProvider(
-    appState: SujianAppState,
-    workspaceNavState: ProjectNavigationState,
-    projectListActions: AndroidWorkspaceActionSpec,
-    projectWorkspaceActions: AndroidWorkspaceActionSpec,
+    context: SujianNavContext,
+    topLevelBackStack: SujianTopLevelBackStack,
+    deps: SujianAppDependencies,
+    syncState: com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState,
 ): (NavKey) -> NavEntry<NavKey> =
-    remember(appState, workspaceNavState, projectListActions, projectWorkspaceActions) {
+    remember(context) {
         { key: NavKey ->
             when (key) {
                 is SujianRoute ->
                     when (key) {
                         is SujianRoute.Works ->
-                            NavEntry(key, metadata = noPageTransitionMetadata) { route ->
-                                ProjectWorkspaceScreen(
-                                    appState = appState,
-                                    workspaceNavState = workspaceNavState,
-                                    projectListActions = projectListActions,
-                                    projectWorkspaceActions = projectWorkspaceActions,
-                                )
-                            }
+                            rememberWorksEntry(key, context, topLevelBackStack, deps)
                         is SujianRoute.StarMap ->
                             NavEntry(key, metadata = noPageTransitionMetadata) { route ->
                                 StarMapPlaceholderScreen(
@@ -348,6 +360,47 @@ private fun rememberSujianEntryProvider(
                 else -> NavEntry(key) {}
             }
         }
+    }
+
+/**
+ * #625 第二段：Works 路由的 NavEntry — 提取以降低 [rememberSujianEntryProvider] 认知复杂度。
+ * ProjectWorkspaceScreen 消费 layoutSpec 与 chrome — 大屏 Editor 位置画 WideWritingWorkspace。
+ */
+private fun rememberWorksEntry(
+    key: SujianRoute.Works,
+    context: SujianNavContext,
+    topLevelBackStack: SujianTopLevelBackStack,
+    deps: SujianAppDependencies,
+): NavEntry<NavKey> =
+    NavEntry(key, metadata = noPageTransitionMetadata) { route ->
+        val entryCoroutineScope = rememberCoroutineScope()
+        val editorWindowHost =
+            com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost.current
+        ProjectWorkspaceScreen(
+            appState = context.appState,
+            workspaceNavState = context.workspaceNavState,
+            projectListActions = context.projectListActions,
+            projectWorkspaceActions = context.projectWorkspaceActions,
+            layoutSpec = context.layoutSpec,
+            chrome = context.chrome,
+            onTopLevelSettings = {
+                // 进入设置前先立刻收 IME，再切页面。
+                editorWindowHost?.dismissImeForNavigation()
+                topLevelBackStack.add(SujianRoute.Settings)
+            },
+            onTopLevelSearch = { },
+            onTopLevelSync = {
+                entryCoroutineScope.launch {
+                    val pid = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
+                    if (pid != null) {
+                        deps.syncCoordinator.runSync(
+                            com.xiwei.sujian.feature.sync.data.model.SyncTrigger.Manual,
+                            pid,
+                        )
+                    }
+                }
+            },
+        )
     }
 
 /**
@@ -425,7 +478,7 @@ private fun SujianCompactBottomBar(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SujianCompactNavScaffold(
     modifier: Modifier,
@@ -497,7 +550,7 @@ private fun SujianWideRail(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SujianWideNavScaffold(
     modifier: Modifier,
@@ -545,13 +598,13 @@ private fun SujianWideNavScaffold(
 }
 
 /** 工作区 navigator — 在导航套件层创建的唯一实例（#597：返回历史始终同一份）。
- * 布局指令（含折叠铰链 excludedBounds / pane 宽度）来自 AndroidLayoutAdapter（#610 / #628）。 */
-@OptIn(ExperimentalMaterial3AdaptiveApi::class)
+ *
+ * #625 第二段：改用纯业务 [WorkspaceNavigator]，不再依赖 Material3 Adaptive
+ * 的 rememberListDetailPaneScaffoldNavigator。"当前在哪个业务位置"与"屏幕上同时画
+ * 哪些区域"彻底分开 — 后者由 [com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec]
+ * 的 `workspacePaneMode` 决定，[ProjectWorkspaceScreen] 消费。 */
 @Composable
-private fun rememberSujianWorkspaceNavState(
-    appState: SujianAppState,
-    scaffoldDirective: androidx.compose.material3.adaptive.layout.PaneScaffoldDirective,
-): ProjectNavigationState {
+private fun rememberSujianWorkspaceNavState(appState: SujianAppState): ProjectNavigationState {
     val initialDestination =
         remember(
             appState.currentProjectId,
@@ -565,11 +618,11 @@ private fun rememberSujianWorkspaceNavState(
             )
         }
     val initialHistory = remember(initialDestination) { buildInitialHistory(initialDestination) }
-    val navigator =
-        rememberListDetailPaneScaffoldNavigator(
-            scaffoldDirective = scaffoldDirective,
-            initialDestinationHistory = initialHistory,
-        )
+    val navigator = remember { WorkspaceNavigator() }
+    // 一次性注入会话恢复初始历史 — 之后导航只使用 navigator 自己保存/恢复的历史。
+    LaunchedEffect(initialHistory) {
+        navigator.replaceInitialHistory(initialHistory)
+    }
     return remember { ProjectNavigationState(navigator) }
 }
 
@@ -689,7 +742,8 @@ private fun rememberSujianTopBarInfo(
     return SujianTopBarInfo(
         title =
             if (chrome.showTitle) {
-                rememberSujianTopBarTitle(currentRoute, appState)
+                // #625 第二段：顶栏标题按业务位置区分「素笺」/项目标题。
+                rememberSujianTopBarTitle(currentRoute, appState, workspaceNavState.currentLocation)
             } else {
                 ""
             },
@@ -706,11 +760,28 @@ private fun rememberSujianTopBarInfo(
 }
 
 /**
+ * #625 第二段：navDisplayContent 工厂 — 提取以降低 [SujianNavigationSuite] 方法长度。
+ */
+@Composable
+private fun rememberSujianNavDisplayContent(
+    currentTopDestination: SujianDestination,
+    topLevelBackStack: SujianTopLevelBackStack,
+    context: SujianNavContext,
+    deps: SujianAppDependencies,
+    syncState: com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState,
+): @Composable () -> Unit =
+    {
+        SujianTopLevelSwitchMotion(currentTopDestination) {
+            SujianNavDisplayContent(topLevelBackStack, context, deps, syncState)
+        }
+    }
+
+/**
  * #618 一：作品工作区的两份静态动作 spec 取自容器创建时解析的 PresentationPolicyCatalog。
  * 章节树固定按 PROJECT_WORKSPACE 取动作契约（卷章操作不依赖父层组合帧观察到的
  * navigator 位置）；作品列表固定按 PROJECT_LIST 取契约（新建作品主操作同理）。
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SujianNavigationSuite(
     appState: SujianAppState,
@@ -734,7 +805,7 @@ fun SujianNavigationSuite(
     val syncState by deps.syncStatusRepository.state.collectAsState()
     val coroutineScope = rememberCoroutineScope()
 
-    val workspaceNavState = rememberSujianWorkspaceNavState(appState, layoutSpec.scaffoldDirective)
+    val workspaceNavState = rememberSujianWorkspaceNavState(appState)
 
     // #618 一：页面契约在应用容器创建时已一次性解析进 PresentationPolicyCatalog，
     // 热路径只查内存 Map，不再同步跨 UniFFI 取契约。章节树固定按 PROJECT_WORKSPACE
@@ -757,7 +828,6 @@ fun SujianNavigationSuite(
     val topBarInfo = rememberSujianTopBarInfo(currentRoute, appState, chrome, env, workspaceNavState)
 
     // 底栏点击只调 addTopLevel；同一已选中项由 addTopLevel 内部早退。
-    // nav.top_level_switch 诊断由目的地变化的 LaunchedEffect 异步记录。
     val onTopLevelSelected: (SujianDestination) -> Unit = { destination ->
         topLevelBackStack.addTopLevel(destination)
     }
@@ -765,29 +835,18 @@ fun SujianNavigationSuite(
     SujianJankInteractionClearEffect(currentTopDestination)
     SujianProcessStateEffect(currentTopDestination, appState, syncState)
 
-    val navDisplayContent: @Composable () -> Unit = {
-        // #617 评论二：一级切换只动画新页面的绘制层，旧一级页面立即退出。
-        SujianTopLevelSwitchMotion(currentTopDestination) {
-            SujianNavDisplayContent(
-                topLevelBackStack,
-                appState,
-                workspaceNavState,
-                projectListActions,
-                projectWorkspaceActions,
-            )
-        }
-    }
+    val navContext =
+        SujianNavContext(appState, workspaceNavState, projectListActions, projectWorkspaceActions, layoutSpec, chrome)
+    val navDisplayContent =
+        rememberSujianNavDisplayContent(currentTopDestination, topLevelBackStack, navContext, deps, syncState)
 
-    // #628：底栏/侧栏改读 Core LayoutContractDto.primaryNavigationPlacement（Bottom/Side），
-    // 不再用 AndroidNavigationPresentation（已删除）。Rust 根据窗口 class 决定放置位置。
-    // useBottomNavigation 是 AndroidLayoutAdapter 暴露的便捷布尔视图，避免本层引用 uniffi DTO。
+    // #628：底栏/侧栏改读 Core LayoutContractDto.primaryNavigationPlacement（Bottom/Side）。
     if (layoutSpec.useBottomNavigation) {
         SujianCompactNavScaffold(
             modifier = modifier,
             topBarInfo = topBarInfo,
             snackbarHostState = snackbarHostState,
             // #597 正文一：进入正文后隐藏底栏；设置页从顶栏进入，也不再显示底栏。
-            // #610：一级导航可见性由 Core 布局契约（键盘/触控单栏时隐藏）决定。
             bottomBar =
                 if (chrome.showPrimaryNavigation) {
                     {

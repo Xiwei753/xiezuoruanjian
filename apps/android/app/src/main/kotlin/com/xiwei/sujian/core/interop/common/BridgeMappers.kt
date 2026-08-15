@@ -4,6 +4,7 @@ import com.xiwei.sujian.feature.project.data.model.ChapterOpenResult
 import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
 import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.ProjectStats
+import com.xiwei.sujian.feature.project.data.model.ProjectSummary
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
 import com.xiwei.sujian.feature.project.data.model.Volume
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
@@ -43,6 +44,7 @@ import uniffi.writer_core.ProjectDto
 import uniffi.writer_core.ProjectStatsDto
 import uniffi.writer_core.ProjectStatsRecordDto
 import uniffi.writer_core.ProjectStatsSummaryDto
+import uniffi.writer_core.ProjectSummaryDto
 import uniffi.writer_core.RecentEditDto
 import uniffi.writer_core.SpeedCurvePointDto
 import uniffi.writer_core.SpeedCurveSummaryDto
@@ -102,6 +104,22 @@ internal fun WriterException.toSyncFailureKind(): SyncFailureKind? =
     }
 
 internal fun ProjectDto.toModel() = Project(id, title, createdAt, updatedAt)
+
+/**
+ * #625 第二段：[uniffi.writer_core.ProjectSummaryDto] → [ProjectSummary]。
+ * 字段映射与 [ProjectDto.toModel] + [ProjectStatsDto.toModel] 同语义，
+ * 但合并为单一数据类，避免作品卡片字数显示时跨 FFI 二次查询。
+ */
+internal fun ProjectSummaryDto.toModel() =
+    ProjectSummary(
+        id = id,
+        title = title,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+        totalWordCount = totalWordCount.toInt(),
+        volumeCount = volumeCount.toInt(),
+        chapterCount = chapterCount.toInt(),
+    )
 
 internal fun RecentEditDto.toModel() = RecentEdit(projectId, volumeId, chapterId, timestamp)
 

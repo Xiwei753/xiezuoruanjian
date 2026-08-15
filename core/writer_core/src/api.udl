@@ -39,6 +39,17 @@ dictionary ProjectStatsDto {
     u32 chapter_count;
 };
 
+// #625 第二段：项目摘要 — 元数据 + 统计一次性返回，作品卡片显示字数用。
+dictionary ProjectSummaryDto {
+    string id;
+    string title;
+    string created_at;
+    string updated_at;
+    u32 total_word_count;
+    u32 volume_count;
+    u32 chapter_count;
+};
+
 dictionary VolumeDto {
     string id;
     string title;
@@ -954,6 +965,10 @@ interface WriterAppService {
 
     [Throws=WriterError]
     sequence<ProjectDto> list_projects();
+
+    // #625 第二段：批量返回项目摘要（元数据 + 统计），作品卡片显示字数用。
+    [Throws=WriterError]
+    sequence<ProjectSummaryDto> list_project_summaries();
 
         [Throws=WriterError]
     sequence<RecentEditDto> get_recent_edits();

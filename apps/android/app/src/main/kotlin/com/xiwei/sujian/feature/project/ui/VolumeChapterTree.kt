@@ -1,9 +1,11 @@
 package com.xiwei.sujian.feature.project.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -30,6 +32,7 @@ import com.xiwei.sujian.app.presentation.screen.WorkspaceActionKind
 import com.xiwei.sujian.app.presentation.screen.WorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.screen.WorkspaceActionTarget
 import com.xiwei.sujian.core.designsystem.component.SujianDialog
+import com.xiwei.sujian.core.designsystem.component.SujianFab
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
 import com.xiwei.sujian.core.designsystem.component.SujianListItem
 import com.xiwei.sujian.core.designsystem.component.SujianOverflowMenu
@@ -188,141 +191,149 @@ internal fun ChapterTreeContent(
             items
         }
 
-    Column(modifier = modifier) {
-        // #610 评论四：新建卷按钮按 Core ListHeader 契约存在与否渲染。
-        val hasCreateVolume =
-            workspaceActions.listHeaderActions.any { it.kind == WorkspaceActionKind.CreateVolume }
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                stringResource(id = R.string.volume_chapter_title),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            if (hasCreateVolume) {
-                SujianIconButton(
-                    onClick = {
-                        dialogState = WorkspaceDialogState.CreateVolume()
-                    },
-                    icon = SujianIcons.Add,
-                    contentDescription = stringResource(id = R.string.action_new_volume_short),
-                    semanticId = SujianSemanticIds.WorkspaceCreateVolume,
-                )
-            }
-        }
+    // #625 第二段 4b：CreateVolume 改为 FAB（BottomEnd），由 primaryActions 守护。
+    // Rust 侧 CreateVolume region 已从 ListHeader 改为 PrimaryAction（与 CreateProject 同 region）。
+    val hasCreateVolume =
+        workspaceActions.primaryActions.any { it.kind == WorkspaceActionKind.CreateVolume }
 
-        uiState.projectStats?.let { stats ->
-            Text(
-                stringResource(
-                    R.string.volume_chapter_stats,
-                    stats.volumeCount,
-                    stats.chapterCount,
-                    stats.totalWordCount,
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-        }
-
-        if (flatItems.isEmpty() && !uiState.isLoading) {
-            // #617 评论九：首次加载失败且没有卷时显示 loadError，不要落进空态 —
-            // 把"读取失败"伪装成"暂无卷"会让用户误以为作品真的是空的。
-            val loadError = uiState.loadError
-            if (loadError != null) {
-                Text(
-                    loadError,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(16.dp),
-                )
-            } else {
-                Text(
-                    stringResource(id = R.string.volume_chapter_empty),
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(16.dp),
-                )
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.testTag(SujianSemanticIds.WorkspaceVolumeList),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+    Box(modifier = modifier) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                items(flatItems, key = { item ->
-                    when (item) {
-                        is VolumeChapterListItem.VolumeItem -> "vol_${item.volume.id}"
-                        is VolumeChapterListItem.ChapterItem -> "ch_${item.volumeId}_${item.chapter.id}"
-                        is VolumeChapterListItem.EmptyChapterHint -> "empty_${item.volumeId}"
-                    }
-                }) { item ->
-                    when (item) {
-                        is VolumeChapterListItem.VolumeItem -> {
-                            VolumeRow(
-                                volume = item.volume,
-                                // #617 评论八：展开标志显式传入，箭头只认 expandedVolumeIds。
-                                isExpanded = item.volume.id in uiState.expandedVolumeIds,
-                                actions =
-                                    VolumeRowActions(
-                                        workspaceActions = workspaceActions,
-                                        onToggleExpand = { viewModel.toggleVolumeExpand(item.volume.id) },
-                                        onCreateChapter = {
-                                            dialogState =
-                                                WorkspaceDialogState.CreateChapter(item.volume.id, item.volume.title)
-                                        },
-                                        // #625：菜单项点击映射到业务回调（提取为 handleVolumeAction）。
-                                        onAction = { action ->
-                                            handleVolumeAction(action, item.volume, viewModel) { dialogState = it }
-                                        },
-                                    ),
-                            )
+                Text(
+                    stringResource(id = R.string.volume_chapter_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
+
+            uiState.projectStats?.let { stats ->
+                Text(
+                    stringResource(
+                        R.string.volume_chapter_stats,
+                        stats.volumeCount,
+                        stats.chapterCount,
+                        stats.totalWordCount,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+
+            if (flatItems.isEmpty() && !uiState.isLoading) {
+                // #617 评论九：首次加载失败且没有卷时显示 loadError，不要落进空态 —
+                // 把"读取失败"伪装成"暂无卷"会让用户误以为作品真的是空的。
+                val loadError = uiState.loadError
+                if (loadError != null) {
+                    Text(
+                        loadError,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                } else {
+                    Text(
+                        stringResource(id = R.string.volume_chapter_empty),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.testTag(SujianSemanticIds.WorkspaceVolumeList),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                    items(flatItems, key = { item ->
+                        when (item) {
+                            is VolumeChapterListItem.VolumeItem -> "vol_${item.volume.id}"
+                            is VolumeChapterListItem.ChapterItem -> "ch_${item.volumeId}_${item.chapter.id}"
+                            is VolumeChapterListItem.EmptyChapterHint -> "empty_${item.volumeId}"
                         }
-                        is VolumeChapterListItem.ChapterItem -> {
-                            ChapterRow(
-                                chapter = item.chapter,
-                                isSelected = item.chapter.id == uiState.selectedChapterId,
-                                actions =
-                                    ChapterRowActions(
-                                        workspaceActions = workspaceActions,
-                                        onSelect = {
-                                            viewModel.selectChapter(item.chapter.id)
-                                            onSelectChapter(item.volumeId, item.chapter.id, item.chapter.title)
-                                        },
-                                        onAction = { action ->
-                                            handleChapterAction(
-                                                action,
+                    }) { item ->
+                        when (item) {
+                            is VolumeChapterListItem.VolumeItem -> {
+                                VolumeRow(
+                                    volume = item.volume,
+                                    // #617 评论八：展开标志显式传入，箭头只认 expandedVolumeIds。
+                                    isExpanded = item.volume.id in uiState.expandedVolumeIds,
+                                    actions =
+                                        VolumeRowActions(
+                                            workspaceActions = workspaceActions,
+                                            onToggleExpand = { viewModel.toggleVolumeExpand(item.volume.id) },
+                                            onCreateChapter = {
+                                                dialogState =
+                                                    WorkspaceDialogState.CreateChapter(
+                                                        item.volume.id,
+                                                        item.volume.title,
+                                                    )
+                                            },
+                                            // #625：菜单项点击映射到业务回调（提取为 handleVolumeAction）。
+                                            onAction = { action ->
+                                                handleVolumeAction(action, item.volume, viewModel) { dialogState = it }
+                                            },
+                                        ),
+                                )
+                            }
+                            is VolumeChapterListItem.ChapterItem -> {
+                                ChapterRow(
+                                    chapter = item.chapter,
+                                    isSelected = item.chapter.id == uiState.selectedChapterId,
+                                    actions =
+                                        ChapterRowActions(
+                                            workspaceActions = workspaceActions,
+                                            onSelect = {
+                                                viewModel.selectChapter(item.chapter.id)
+                                                onSelectChapter(item.volumeId, item.chapter.id, item.chapter.title)
+                                            },
+                                            onAction = { action ->
+                                                handleChapterAction(
+                                                    action,
+                                                    item.volumeId,
+                                                    item.chapter,
+                                                    viewModel,
+                                                ) { dialogState = it }
+                                            },
+                                        ),
+                                    volumeId = item.volumeId,
+                                )
+                            }
+                            is VolumeChapterListItem.EmptyChapterHint -> {
+                                // #610 评论四：空态必须真正消费 CreateChapter + Volume + EmptyState 槽位，
+                                // 不能只有"没有章节"的文字而契约声明了动作。
+                                EmptyChapterHint(
+                                    volumeId = item.volumeId,
+                                    hasCreateChapter =
+                                        workspaceActions.emptyStateActions(WorkspaceActionTarget.Volume)
+                                            .any { it.kind == WorkspaceActionKind.CreateChapter },
+                                    onCreateChapter = {
+                                        val volume = uiState.volumes.find { it.id == item.volumeId }
+                                        dialogState =
+                                            WorkspaceDialogState.CreateChapter(
                                                 item.volumeId,
-                                                item.chapter,
-                                                viewModel,
-                                            ) { dialogState = it }
-                                        },
-                                    ),
-                                volumeId = item.volumeId,
-                            )
-                        }
-                        is VolumeChapterListItem.EmptyChapterHint -> {
-                            // #610 评论四：空态必须真正消费 CreateChapter + Volume + EmptyState 槽位，
-                            // 不能只有"没有章节"的文字而契约声明了动作。
-                            EmptyChapterHint(
-                                volumeId = item.volumeId,
-                                hasCreateChapter =
-                                    workspaceActions.emptyStateActions(WorkspaceActionTarget.Volume)
-                                        .any { it.kind == WorkspaceActionKind.CreateChapter },
-                                onCreateChapter = {
-                                    val volume = uiState.volumes.find { it.id == item.volumeId }
-                                    dialogState =
-                                        WorkspaceDialogState.CreateChapter(
-                                            item.volumeId,
-                                            volume?.title.orEmpty(),
-                                        )
-                                },
-                            )
+                                                volume?.title.orEmpty(),
+                                            )
+                                    },
+                                )
+                            }
                         }
                     }
                 }
             }
+        }
+
+        // #625 第二段 4b：CreateVolume FAB（BottomEnd）— 由 primaryActions 守护。
+        // 契约里有该槽位才画；契约没有（或桥失败）则不画。
+        if (hasCreateVolume) {
+            SujianFab(
+                onClick = { dialogState = WorkspaceDialogState.CreateVolume() },
+                icon = SujianIcons.Add,
+                contentDescription = stringResource(id = R.string.action_new_volume_short),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+            )
         }
     }
 

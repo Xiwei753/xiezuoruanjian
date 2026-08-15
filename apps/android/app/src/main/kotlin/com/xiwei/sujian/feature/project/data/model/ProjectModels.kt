@@ -7,6 +7,23 @@ data class Project(
     val updatedAt: String,
 )
 
+/**
+ * #625 第二段：作品摘要 — 在 [Project] 4 字段基础上携带字数/卷数/章节数。
+ *
+ * 由 Rust `list_project_summaries` 一次性返回，避免端侧逐卡跨 FFI 调用
+ * `get_project_stats`。字段语义与 [ProjectStats] 一致，但与 [Project] 同生命周期，
+ * 用于作品卡片字数显示。
+ */
+data class ProjectSummary(
+    val id: String,
+    val title: String,
+    val createdAt: String,
+    val updatedAt: String,
+    val totalWordCount: Int,
+    val volumeCount: Int,
+    val chapterCount: Int,
+)
+
 data class ProjectStats(
     val totalWordCount: Int,
     val volumeCount: Int,

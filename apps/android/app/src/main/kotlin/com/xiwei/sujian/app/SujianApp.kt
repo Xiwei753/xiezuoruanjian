@@ -132,6 +132,8 @@ private fun SujianAppInitialization(
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             deps.syncStatusRepository.refreshState(vm.currentProjectId)
             vm.refreshProjects()
+            // #625 第二段：与 projects 同步刷新作品摘要（含字数），用于作品卡片字数显示。
+            vm.refreshProjectSummaries()
             vm.refreshRecentEdits()
         }
     }

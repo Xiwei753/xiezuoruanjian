@@ -3,6 +3,7 @@ package com.xiwei.sujian.app
 import androidx.lifecycle.SavedStateHandle
 import com.xiwei.sujian.core.interop.common.RepositoryException
 import com.xiwei.sujian.feature.project.data.model.Project
+import com.xiwei.sujian.feature.project.data.model.ProjectSummary
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
 import com.xiwei.sujian.feature.project.domain.ProjectUseCasePort
 import kotlinx.coroutines.CompletableDeferred
@@ -250,6 +251,7 @@ class SujianAppViewModelErrorEventTest {
  */
 private class FakeProjectUseCase : ProjectUseCasePort {
     var projectsResult: List<Project> = emptyList()
+    var projectSummariesResult: List<ProjectSummary> = emptyList()
     var recentEditsResult: List<RecentEdit> = emptyList()
     var getProjectsError: Throwable? = null
     var createProjectError: Throwable? = null
@@ -260,6 +262,8 @@ private class FakeProjectUseCase : ProjectUseCasePort {
         getProjectsError?.let { throw it }
         return projectsResult
     }
+
+    override suspend fun getProjectSummaries(): List<ProjectSummary> = projectSummariesResult
 
     override suspend fun getRecentEdits(limit: Int): List<RecentEdit> = recentEditsResult.take(limit)
 

@@ -227,6 +227,21 @@ fn test_create_project_is_primary_action() {
 }
 
 #[test]
+fn test_create_volume_is_primary_action() {
+    // #625 第二段：新建卷是 ProjectWorkspace 的页面主操作（PrimaryAction），
+    // 与 CreateProject 同 region — Android compact 画成 FAB，宽窗口按平台 M3 映射。
+    let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
+    let create_volume = policy
+        .action_slots
+        .iter()
+        .find(|s| s.role == ActionRole::CreateVolume)
+        .unwrap();
+    assert_eq!(create_volume.region, ActionRegion::PrimaryAction);
+    assert_eq!(create_volume.target, ActionTarget::Project);
+    assert_eq!(create_volume.order, 10);
+}
+
+#[test]
 fn test_create_chapter_targets_volume() {
     let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
     let create_chapters: Vec<_> = policy

@@ -1,11 +1,16 @@
 use crate::chapter::{self, Chapter, ChapterContent, ChapterSaveReceipt};
 use crate::error::Result;
-use crate::project::{self, Project};
+use crate::project::{self, Project, ProjectSummary};
 use crate::volume::{self, Volume};
 
 impl super::WriterCore {
     pub fn list_projects(&self) -> Result<Vec<Project>> {
         project::list_projects(&self.projects_root)
+    }
+
+    /// #625 第二段：批量返回项目摘要（元数据 + 统计）。
+    pub fn list_project_summaries(&self) -> Result<Vec<ProjectSummary>> {
+        project::list_project_summaries(&self.projects_root)
     }
 
     pub fn create_project(&self, title: &str) -> Result<Project> {

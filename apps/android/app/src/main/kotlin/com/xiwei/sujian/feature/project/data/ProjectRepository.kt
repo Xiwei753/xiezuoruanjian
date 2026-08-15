@@ -8,6 +8,7 @@ import com.xiwei.sujian.core.interop.common.RepositoryException
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.ProjectStats
+import com.xiwei.sujian.feature.project.data.model.ProjectSummary
 import com.xiwei.sujian.feature.project.data.model.Volume
 import com.xiwei.sujian.feature.sync.data.SyncFailureKind
 
@@ -34,6 +35,25 @@ open class ProjectRepository(private val context: Context, private val appBridge
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> throw RepositoryException(
                 context.getString(R.string.repo_get_projects_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
+        }
+    }
+
+    /**
+     * #625 第二段：批量作品摘要 — 一次 FFI 调用返回所有项目摘要（含字数）。
+     *
+     * 用于作品卡片字数显示，避免端侧逐卡跨 FFI 调用 [getProjectStats]。
+     * 声明为 open 以便测试子类注入可控数据源。
+     */
+    open fun getProjectSummaries(): List<ProjectSummary> {
+        return when (val result = projectBridge.listProjectSummaries()) {
+            is BridgeResult.Success -> result.data
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_get_project_summaries_failed, result.localizedMessage()),
             )
             BridgeResult.NotLoaded -> throw RepositoryException(
                 context.getString(R.string.repo_native_not_loaded),

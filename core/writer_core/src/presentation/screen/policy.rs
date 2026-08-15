@@ -233,10 +233,12 @@ pub fn resolve_action_slots(screen_role: ScreenRole) -> Vec<ActionSlot> {
                 order: 30,
                 requires_confirmation: false,
             },
+            // #625 第二段：新建卷是 ProjectWorkspace 的主操作，与 CreateProject 同 region。
+            // Android compact 画成 FAB，宽窗口按平台 M3 映射成合适的主操作控件。
             ActionSlot {
                 role: ActionRole::CreateVolume,
                 target: ActionTarget::Project,
-                region: ActionRegion::ListHeader,
+                region: ActionRegion::PrimaryAction,
                 order: 10,
                 requires_confirmation: false,
             },

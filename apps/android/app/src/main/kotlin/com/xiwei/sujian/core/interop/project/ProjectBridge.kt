@@ -4,6 +4,7 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.toModel
 import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.ProjectStats
+import com.xiwei.sujian.feature.project.data.model.ProjectSummary
 import com.xiwei.sujian.feature.project.data.model.Volume
 
 /**
@@ -15,6 +16,17 @@ class ProjectBridge internal constructor(private val holder: WriterAppServiceHol
     fun listProjects(): BridgeResult<List<Project>> =
         holder.wrapResult {
             holder.service.listProjects().map { it.toModel() }
+        }
+
+    /**
+     * #625 第二段：批量作品摘要 — 一次 FFI 调用返回所有项目的
+     * id/title/createdAt/updatedAt/totalWordCount/volumeCount/chapterCount。
+     *
+     * 用于作品卡片字数显示，避免端侧逐卡跨 FFI 调用 [getProjectStats]。
+     */
+    fun listProjectSummaries(): BridgeResult<List<ProjectSummary>> =
+        holder.wrapResult {
+            holder.service.listProjectSummaries().map { it.toModel() }
         }
 
     fun createProject(title: String): BridgeResult<Project> =

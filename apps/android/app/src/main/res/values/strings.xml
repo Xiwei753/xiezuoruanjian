@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">素笺写作</string>
+    <string name="title_sujian">素笺</string>
     <string name="title_projects">作品</string>
     <string name="title_starmap">星图</string>
     <string name="title_stats">统计</string>
@@ -194,6 +195,7 @@
     <string name="repo_get_volumes_failed">获取卷列表失败: %1$s</string>
     <string name="repo_get_chapters_failed">获取章节列表失败: %1$s</string>
     <string name="repo_get_project_stats_failed">获取作品统计失败: %1$s</string>
+    <string name="repo_get_project_summaries_failed">获取作品摘要失败: %1$s</string>
     <string name="repo_create_project_failed">创建作品失败: %1$s</string>
     <string name="repo_create_volume_failed">创建卷失败: %1$s</string>
     <string name="repo_create_chapter_failed">创建章节失败: %1$s</string>
@@ -265,6 +267,14 @@
     <string name="hint_new_title">新标题</string>
     <string name="select_chapter_to_write">选择章节开始写作</string>
     <string name="back_to_project_list">返回作品列表</string>
+
+    <!-- #625 第二段：写作工作台工具栏 / 工具面板 / 工具栏图标列占位 -->
+    <string name="action_undo">撤销</string>
+    <string name="action_redo">重做</string>
+    <string name="writing_tool_pane_title">工具</string>
+    <string name="writing_tool_pane_placeholder">星图与 AI 工具即将上线</string>
+    <string name="writing_tool_rail_placeholder">工具</string>
+    <string name="writing_workspace_chapter_placeholder">未选择章节</string>
     <string name="volume_chapter_title">卷章</string>
     <string name="action_new_volume_short">新建卷</string>
     <string name="volume_chapter_stats">共 %1$d 卷 · %2$d 章 · %3$d 字</string>

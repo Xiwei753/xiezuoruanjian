@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.project.domain
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
 import com.xiwei.sujian.feature.project.data.model.Project
+import com.xiwei.sujian.feature.project.data.model.ProjectSummary
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -13,6 +14,12 @@ import kotlinx.coroutines.withContext
  */
 interface ProjectUseCasePort {
     suspend fun getProjects(): List<Project>
+
+    /**
+     * #625 第二段：批量作品摘要（含字数/卷数/章节数）—
+     * 用于作品卡片字数显示，避免端侧逐卡跨 FFI 查询。
+     */
+    suspend fun getProjectSummaries(): List<ProjectSummary>
 
     suspend fun getRecentEdits(limit: Int): List<RecentEdit>
 
@@ -39,6 +46,11 @@ class ProjectUseCase(
     override suspend fun getProjects(): List<Project> =
         withContext(Dispatchers.IO) {
             repository.getProjects()
+        }
+
+    override suspend fun getProjectSummaries(): List<ProjectSummary> =
+        withContext(Dispatchers.IO) {
+            repository.getProjectSummaries()
         }
 
     override suspend fun getRecentEdits(limit: Int): List<RecentEdit> =

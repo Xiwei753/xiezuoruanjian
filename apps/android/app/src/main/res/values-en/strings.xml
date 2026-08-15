@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Sujian Writing</string>
+    <string name="title_sujian">Sujian</string>
     <string name="title_projects">Projects</string>
     <string name="title_starmap">Star Map</string>
     <string name="title_stats">Statistics</string>
@@ -136,6 +137,7 @@
     <string name="repo_get_volumes_failed">Failed to get volume list: %1$s</string>
     <string name="repo_get_chapters_failed">Failed to get chapter list: %1$s</string>
     <string name="repo_get_project_stats_failed">Failed to get project stats: %1$s</string>
+    <string name="repo_get_project_summaries_failed">Failed to get project summaries: %1$s</string>
     <string name="repo_create_project_failed">Failed to create project: %1$s</string>
     <string name="repo_create_volume_failed">Failed to create volume: %1$s</string>
     <string name="repo_create_chapter_failed">Failed to create chapter: %1$s</string>
@@ -202,4 +204,12 @@
     <string name="sync_diag_ok">OK</string>
     <string name="sync_diag_fail">Fail</string>
     <string name="starmap_not_implemented">Star Map is under development</string>
+
+    <!-- #625 第二段: writing workspace toolbar / tool pane / tool rail placeholders -->
+    <string name="action_undo">Undo</string>
+    <string name="action_redo">Redo</string>
+    <string name="writing_tool_pane_title">Tools</string>
+    <string name="writing_tool_pane_placeholder">Star map and AI tools coming soon</string>
+    <string name="writing_tool_rail_placeholder">Tools</string>
+    <string name="writing_workspace_chapter_placeholder">No chapter selected</string>
 </resources>

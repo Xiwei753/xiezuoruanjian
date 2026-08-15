@@ -1,8 +1,13 @@
-use crate::api::{ProjectDto, ProjectStatsDto, RecentEditDto, WriterError};
+use crate::api::{ProjectDto, ProjectStatsDto, ProjectSummaryDto, RecentEditDto, WriterError};
 
 impl super::WriterAppService {
     pub fn list_projects(&self) -> Result<Vec<ProjectDto>, WriterError> {
         self.api.list_projects()
+    }
+
+    /// #625 第二段：批量返回项目摘要（元数据 + 统计）。
+    pub fn list_project_summaries(&self) -> Result<Vec<ProjectSummaryDto>, WriterError> {
+        self.api.list_project_summaries()
     }
 
     pub fn get_recent_edits(&self) -> Result<Vec<RecentEditDto>, WriterError> {

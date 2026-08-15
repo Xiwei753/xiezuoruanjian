@@ -116,6 +116,26 @@ internal fun rememberAndroidLayoutSpec(
     )
 }
 
+/**
+ * #625 第二段：工作区窗格模式 — Kotlin 侧枚举，避免 UI 层直接引用 uniffi DTO
+ * （遵守 ui-no-uniffi-jna-bridge 架构门禁）。
+ *
+ * 由 Core `LayoutContractDto.workspacePaneMode` 决定（#628：窗口尺寸→布局决策唯一在 Rust）。
+ */
+internal enum class WorkspacePaneMode {
+    SINGLE_PANE,
+    LIST_DETAIL,
+    THREE_PANE,
+}
+
+/** Core [WorkspacePaneModeDto] → Kotlin [WorkspacePaneMode]（interop 映射，非断点判断）。 */
+internal fun WorkspacePaneModeDto.toWorkspacePaneMode(): WorkspacePaneMode =
+    when (this) {
+        WorkspacePaneModeDto.SINGLE_PANE -> WorkspacePaneMode.SINGLE_PANE
+        WorkspacePaneModeDto.LIST_DETAIL -> WorkspacePaneMode.LIST_DETAIL
+        else -> WorkspacePaneMode.THREE_PANE
+    }
+
 /** Core WorkspacePaneMode → Material3 maxHorizontalPartitions（控件映射，非断点判断）。 */
 internal fun maxHorizontalPartitionsFor(mode: WorkspacePaneModeDto): Int =
     when (mode) {
@@ -134,6 +154,9 @@ internal fun maxHorizontalPartitionsFor(mode: WorkspacePaneModeDto): Int =
  * `contract?.primaryNavigationPlacement`（PrimaryNavigationPlacementDto.Bottom/Side）。
  * [useBottomNavigation] 是该决策的便捷布尔视图，供 navigation 层消费，
  * 避免上层直接引用 uniffi DTO（遵守 ui-no-uniffi-jna-bridge 架构门禁）。
+ *
+ * #625 第二段：[workspacePaneMode] 是工作区窗格模式的便捷 Kotlin 枚举视图，供 feature/ui 层消费，
+ * 避免上层直接引用 uniffi DTO（遵守 ui-no-uniffi-jna-bridge 架构门禁）。
  */
 internal data class AndroidLayoutSpec(
     val contract: LayoutContractDto?,
@@ -149,4 +172,13 @@ internal data class AndroidLayoutSpec(
      */
     val useBottomNavigation: Boolean
         get() = contract?.primaryNavigationPlacement == PrimaryNavigationPlacementDto.BOTTOM
+
+    /**
+     * 工作区窗格模式（#625 第二段）— 供 feature/ui 层判断窄屏/大屏布局。
+     *
+     * 由 Core `LayoutContractDto.workspacePaneMode` 决定（#628：窗口尺寸→布局决策唯一在 Rust）。
+     * 契约缺失（桥失败/空契约）→ [WorkspacePaneMode.SINGLE_PANE]（默认窄屏，与基线一致）。
+     */
+    val workspacePaneMode: WorkspacePaneMode
+        get() = contract?.workspacePaneMode?.toWorkspacePaneMode() ?: WorkspacePaneMode.SINGLE_PANE
 }

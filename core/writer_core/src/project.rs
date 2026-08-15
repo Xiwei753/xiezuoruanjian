@@ -87,6 +87,22 @@ pub struct ProjectStats {
     pub chapter_count: u32,
 }
 
+/// 项目摘要 — 元数据 + 统计一次性返回（#625 第二段）。
+///
+/// 作品卡片要显示字数，需要在列表时一次拿到所有项目的 summary，
+/// 避免端侧逐卡跨 FFI 调 `get_project_stats`（N 次 FFI + N 次遍历）。
+/// `total_word_count`/`volume_count`/`chapter_count` 复用 `get_project_stats` 逻辑。
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProjectSummary {
+    pub id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub total_word_count: u32,
+    pub volume_count: u32,
+    pub chapter_count: u32,
+}
+
 #[derive(Deserialize)]
 struct ChapterWordCount {
     #[serde(default)]
@@ -146,6 +162,32 @@ pub fn get_project_stats(project_root: &Path) -> Result<ProjectStats> {
     }
 
     Ok(stats)
+}
+
+/// 列出所有项目摘要（元数据 + 统计），#625 第二段新增批量 API。
+///
+/// 复用 `list_projects`（继承排序、旧作品 Git 迁移）和 `get_project_stats`（字数累加），
+/// 一次遍历返回带 `total_word_count`/`volume_count`/`chapter_count` 的列表。
+/// 不破坏现有 `list_projects` 4 字段契约。
+///
+/// 错误处理：磁盘/IO 错误显式向上传播，不用 unwrap/expect。
+pub fn list_project_summaries(projects_root: &Path) -> Result<Vec<ProjectSummary>> {
+    let projects = list_projects(projects_root)?;
+    let mut summaries = Vec::with_capacity(projects.len());
+    for project in projects {
+        let project_dir = projects_root.join(&project.id);
+        let stats = get_project_stats(&project_dir)?;
+        summaries.push(ProjectSummary {
+            id: project.id,
+            title: project.title,
+            created_at: project.created_at,
+            updated_at: project.updated_at,
+            total_word_count: stats.total_word_count,
+            volume_count: stats.volume_count,
+            chapter_count: stats.chapter_count,
+        });
+    }
+    Ok(summaries)
 }
 
 /// 创建项目并自动创建"第一卷"。
@@ -561,6 +603,94 @@ mod inline_tests {
             Err(crate::error::Error::InvalidDeleteTarget(_)) => {}
             _ => panic!("Expected InvalidDeleteTarget error for non-existent project"),
         }
+    }
+
+    /// #625 第二段：空目录返回空 summary 列表。
+    #[test]
+    fn test_list_project_summaries_empty_dir() {
+        let temp_dir = tempdir().unwrap();
+        let data_root = temp_dir.path();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
+
+        let summaries = list_project_summaries(&data_root.join("projects")).unwrap();
+        assert!(summaries.is_empty());
+    }
+
+    /// #625 第二段：有项目时返回正确 summary，含 total_word_count/volume_count/chapter_count。
+    #[test]
+    fn test_list_project_summaries_with_stats() {
+        let temp_dir = tempdir().unwrap();
+        let data_root = temp_dir.path();
+        let projects_root = data_root.join("projects");
+        std::fs::create_dir_all(&projects_root).unwrap();
+
+        // 项目 1：自动创建"第一卷"，再加一个章节并写入正文。
+        let project1 = create_project(&projects_root, "ProjectOne").unwrap();
+        let volumes1 = crate::volume::list_volumes(&projects_root.join(&project1.id)).unwrap();
+        assert_eq!(volumes1.len(), 1);
+        let volume1 = &volumes1[0];
+        let ch1 =
+            crate::chapter::create_chapter(&projects_root.join(&project1.id), &volume1.id, "Ch1")
+                .unwrap();
+        // "Hello World" 非空白字符数 = 10（calculate_word_count 按非空白字符计）。
+        crate::chapter::save_chapter_verified(
+            &projects_root.join(&project1.id),
+            &volume1.id,
+            &ch1.id,
+            "Hello World",
+        )
+        .unwrap();
+
+        // 项目 2：只有自动创建的"第一卷"，无章节。
+        let project2 = create_project(&projects_root, "ProjectTwo").unwrap();
+
+        let summaries = list_project_summaries(&projects_root).unwrap();
+        assert_eq!(summaries.len(), 2);
+
+        // 按 order 排序，project1 先创建（order=0），project2 后创建（order=1）。
+        let s1 = &summaries[0];
+        let s2 = &summaries[1];
+        assert_eq!(s1.id, project1.id);
+        assert_eq!(s1.title, "ProjectOne");
+        assert_eq!(s1.volume_count, 1);
+        assert_eq!(s1.chapter_count, 1);
+        assert_eq!(s1.total_word_count, 10);
+
+        assert_eq!(s2.id, project2.id);
+        assert_eq!(s2.title, "ProjectTwo");
+        assert_eq!(s2.volume_count, 1);
+        assert_eq!(s2.chapter_count, 0);
+        assert_eq!(s2.total_word_count, 0);
+
+        // 元数据字段应与 Project 一致。
+        assert_eq!(s1.created_at, project1.created_at);
+        assert_eq!(s1.updated_at, project1.updated_at);
+    }
+
+    /// #625 第二段：list_project_summaries 与 list_projects 排序一致（按 order）。
+    #[test]
+    fn test_list_project_summaries_order_consistent_with_list_projects() {
+        let temp_dir = tempdir().unwrap();
+        let data_root = temp_dir.path();
+        let projects_root = data_root.join("projects");
+        std::fs::create_dir_all(&projects_root).unwrap();
+
+        let p1 = create_project(&projects_root, "P1").unwrap();
+        let p2 = create_project(&projects_root, "P2").unwrap();
+        let p3 = create_project(&projects_root, "P3").unwrap();
+
+        let projects = list_projects(&projects_root).unwrap();
+        let summaries = list_project_summaries(&projects_root).unwrap();
+
+        assert_eq!(projects.len(), summaries.len());
+        for (p, s) in projects.iter().zip(summaries.iter()) {
+            assert_eq!(p.id, s.id);
+            assert_eq!(p.title, s.title);
+        }
+        // 顺序应一致。
+        assert_eq!(summaries[0].id, p1.id);
+        assert_eq!(summaries[1].id, p2.id);
+        assert_eq!(summaries[2].id, p3.id);
     }
 }
 
