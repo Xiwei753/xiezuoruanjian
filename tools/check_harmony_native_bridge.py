@@ -54,7 +54,6 @@ def check_native_bridge_no_mock(harmony_root: str) -> List[Tuple[bool, str]]:
         "NativeSyncBridge.ets",
         "NativeStatsBridge.ets",
         "NativeStarMapBridge.ets",
-        "NativeLayoutBridge.ets",
     ]
     ets_corebridge_root = "entry/src/main/ets/corebridge"
     ets_corebridge_native = "entry/src/main/ets/corebridge/native"
@@ -348,7 +347,6 @@ def check_napi_vs_arkts(harmony_root: str) -> List[Tuple[bool, str]]:
         ("NativeSyncBridge.ets", "entry/src/main/ets/corebridge/native"),
         ("NativeStatsBridge.ets", "entry/src/main/ets/corebridge/native"),
         ("NativeStarMapBridge.ets", "entry/src/main/ets/corebridge/native"),
-        ("NativeLayoutBridge.ets", "entry/src/main/ets/corebridge/native"),
         ("NativeEditorSessionBridge.ets", "entry/src/main/ets/feature/editor/interop"),
     ]
     bridge_content = ""
@@ -473,6 +471,70 @@ def check_readme_no_mock_claims(harmony_root: str) -> List[Tuple[bool, str]]:
 
 
 # ---------------------------------------------------------------------------
+# 检查 9: ArkTS 相对 import 路径可解析
+# ---------------------------------------------------------------------------
+
+def check_arkts_relative_imports_resolvable(harmony_root: str) -> List[Tuple[bool, str]]:
+    """遍历所有 .ets 文件，检查相对 import 路径能解析到实际存在的文件/目录。
+
+    防止 #629 之类的 import 层级回归（如 ../../ 误写成 ../../../）。
+    跳过 @ohos.* / @kit.* 等非相对路径。
+    """
+    results: List[Tuple[bool, str]] = []
+    ets_root = os.path.join(harmony_root, "entry/src/main/ets")
+    if not os.path.isdir(ets_root):
+        results.append((False, f"ets 目录不存在: {ets_root}"))
+        return results
+
+    import_re = re.compile(r"""import\s+.*\s+from\s+['"]([^'"]+)['"]""")
+    unresolved: List[Tuple[str, int, str]] = []
+    total_imports = 0
+    checked_files = 0
+
+    for dirpath, _dirnames, filenames in os.walk(ets_root):
+        for fname in filenames:
+            if not fname.endswith(".ets"):
+                continue
+            fpath = os.path.join(dirpath, fname)
+            content = read_file(fpath)
+            if content is None:
+                continue
+            checked_files += 1
+            file_dir = os.path.dirname(fpath)
+            for line_no, line in enumerate(content.splitlines(), start=1):
+                m = import_re.search(line)
+                if m is None:
+                    continue
+                relpath = m.group(1)
+                if not relpath.startswith("."):
+                    continue
+                total_imports += 1
+                resolved = os.path.normpath(os.path.join(file_dir, relpath))
+                if (os.path.exists(resolved)
+                        or os.path.exists(resolved + ".ets")
+                        or os.path.exists(resolved + ".ts")):
+                    continue
+                rel_fpath = os.path.relpath(fpath, harmony_root)
+                unresolved.append((rel_fpath, line_no, relpath))
+
+    ok = len(unresolved) == 0
+    if ok:
+        detail = (f"扫描 {checked_files} 个 .ets 文件, "
+                  f"{total_imports} 个相对 import, 全部可解析")
+    else:
+        head = "; ".join(f"{f}:{ln} '{rp}'"
+                         for f, ln, rp in unresolved[:10])
+        suffix = f"; ... 共 {len(unresolved)} 个" if len(unresolved) > 10 else ""
+        detail = (f"扫描 {checked_files} 个 .ets 文件, "
+                  f"{total_imports} 个相对 import; "
+                  f"{len(unresolved)} 个无法解析: {head}{suffix}")
+
+    results.append((ok, f"ArkTS 相对 import 路径可解析 — {detail}"))
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # 主函数
 # ---------------------------------------------------------------------------
 
@@ -513,6 +575,7 @@ def main():
         ("6. NAPI 注册 vs ArkTS 调用", check_napi_vs_arkts, harmony_root),
         ("7. C header vs Rust FFI", lambda hr: check_c_header_vs_rust_ffi(hr, core_root), harmony_root),
         ("8. README 不含 mock 声明", check_readme_no_mock_claims, harmony_root),
+        ("9. ArkTS 相对 import 路径可解析", check_arkts_relative_imports_resolvable, harmony_root),
     ]
 
     for title, check_fn, root in checks:

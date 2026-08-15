@@ -14,7 +14,6 @@ import { NativeSettingsBridge } from './native/NativeSettingsBridge'
 import { NativeSyncBridge } from './native/NativeSyncBridge'
 import { NativeStatsBridge } from './native/NativeStatsBridge'
 import { NativeStarMapBridge } from './native/NativeStarMapBridge'
-import { NativeLayoutBridge } from './native/NativeLayoutBridge'
 
 export class NativeWriterCoreBridge implements IWriterCoreBridge {
   private static instance: NativeWriterCoreBridge
@@ -31,7 +30,6 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   private syncBridge = new NativeSyncBridge(this.core)
   private statsBridge = new NativeStatsBridge(this.core)
   private starMapBridge = new NativeStarMapBridge(this.core)
-  private layoutBridge = new NativeLayoutBridge(this.core)
 
   static getInstance(): NativeWriterCoreBridge {
     if (!NativeWriterCoreBridge.instance) {
@@ -346,13 +344,23 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   // ── Layout Contract（#610） ──
 
   async resolveLayout(capabilities: WindowCapabilities): Promise<ResultEnvelope<LayoutContract>> {
-    return this.layoutBridge.resolveLayout(capabilities)
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeResolveLayout(JSON.stringify(capabilities))
+      return this.core.parseEnvelope<LayoutContract>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+    }
   }
 
   // ── Screen Contract（#610：不随壳层变化） ──
 
   async resolveScreenPolicy(screenRole: ScreenRole): Promise<ResultEnvelope<ScreenPolicy>> {
-    return this.layoutBridge.resolveScreenPolicy(screenRole)
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeResolveScreenPolicy(JSON.stringify(screenRole))
+      return this.core.parseEnvelope<ScreenPolicy>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+    }
   }
 
   // ── Editor Animation ──

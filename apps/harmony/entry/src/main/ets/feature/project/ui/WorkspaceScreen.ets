@@ -1,13 +1,13 @@
 import { Routes, WorkspaceRouteParams } from '../../../app/navigation/Routes'
-import { IWriterCoreBridge } from '../../corebridge/IWriterCoreBridge'
-import { ProjectTree, VolumeTree, ChapterMeta, Project, ChapterContent, ChapterSaveReceipt } from '../../corebridge/dto/ProjectDtos'
-import { LocalSettings } from '../../corebridge/dto/SettingsDtos'
-import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ThemeUpdateParams } from '../../ui/theme/HarmonyThemeAdapter'
-import { DesignTokens } from '../../ui/theme/DesignTokens'
-import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../../platform/lifecycle/HarmonyLifecycle'
-import { getBridge } from '../../app/AppContext'
-import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
-import { WidthClass, ShellMode } from '../../corebridge/dto/PlatformDtos'
+import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
+import { ProjectTree, VolumeTree, ChapterMeta, Project, ChapterContent, ChapterSaveReceipt } from '../../../corebridge/dto/ProjectDtos'
+import { LocalSettings } from '../../../corebridge/dto/SettingsDtos'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ThemeUpdateParams } from '../../../ui/theme/HarmonyThemeAdapter'
+import { DesignTokens } from '../../../ui/theme/DesignTokens'
+import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
+import { getBridge } from '../../../app/AppContext'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
+import { WidthClass, ShellMode } from '../../../corebridge/dto/PlatformDtos'
 
 /** 左侧面板宽度（双栏模式） */
 const LEFT_PANEL_WIDTH: number = 320

@@ -1,11 +1,11 @@
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
-import { IWriterCoreBridge } from '../../corebridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta, StarMapLayoutNode, StarMapEdgeRender, StarMapLayout, StarMapMotionPolicy } from '../../corebridge/dto/StarMapDtos'
-import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../ui/theme/HarmonyThemeAdapter'
-import { DesignTokens } from '../../ui/theme/DesignTokens'
-import { getBridge } from '../../app/AppContext'
-import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
-import { WidthClass } from '../../corebridge/dto/PlatformDtos'
+import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
+import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta, StarMapLayoutNode, StarMapEdgeRender, StarMapLayout, StarMapMotionPolicy } from '../../../corebridge/dto/StarMapDtos'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
+import { DesignTokens } from '../../../ui/theme/DesignTokens'
+import { getBridge } from '../../../app/AppContext'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
+import { WidthClass } from '../../../corebridge/dto/PlatformDtos'
 
 interface SelectOption {
   value: string

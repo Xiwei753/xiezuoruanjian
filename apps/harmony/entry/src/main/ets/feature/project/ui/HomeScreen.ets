@@ -1,15 +1,15 @@
 import { Routes } from '../../../app/navigation/Routes'
 // router 已由 AppNavigation 统一接管；HomeScreen 通过 navPathStack 跳转。
-import { IWriterCoreBridge } from '../../corebridge/IWriterCoreBridge'
-import { Project, WritingStats } from '../../corebridge/dto/ProjectDtos'
-import { RecentEdit, AppSummary } from '../../corebridge/dto/ResultEnvelope'
-import { ThemePaletteRecordDto, BuiltinThemeDto } from '../../corebridge/dto/SettingsDtos'
-import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ThemeMode } from '../../ui/theme/HarmonyThemeAdapter'
-import { DesignTokens } from '../../ui/theme/DesignTokens'
-import { getBridge, getAppDataRoot, getAppContext } from '../../app/AppContext'
-import { NativeWriterCoreBridge } from '../../corebridge/NativeWriterCoreBridge'
-import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
-import { WidthClass, ShellMode } from '../../corebridge/dto/PlatformDtos'
+import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
+import { Project, WritingStats } from '../../../corebridge/dto/ProjectDtos'
+import { RecentEdit, AppSummary } from '../../../corebridge/dto/ResultEnvelope'
+import { ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ThemeMode } from '../../../ui/theme/HarmonyThemeAdapter'
+import { DesignTokens } from '../../../ui/theme/DesignTokens'
+import { getBridge, getAppDataRoot, getAppContext } from '../../../app/AppContext'
+import { NativeWriterCoreBridge } from '../../../corebridge/NativeWriterCoreBridge'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
+import { WidthClass, ShellMode } from '../../../corebridge/dto/PlatformDtos'
 
 @Component
 export struct HomeScreen {
