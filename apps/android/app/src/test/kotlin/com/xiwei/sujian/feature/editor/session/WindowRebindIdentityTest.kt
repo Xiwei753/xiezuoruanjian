@@ -17,7 +17,7 @@ import org.robolectric.annotation.Config
  * #623 评论5/6：窗口重建后绑定身份完整性契约测试。
  *
  * 配置变化/Activity 重建后新 EditorWindowHost 有新的 windowId，旧窗口的
- * Attached/Attaching 残留会让新窗口误判"已附着"而跳过 beginEdit。规则：
+ * Attached/Attaching 拖留会让新窗口误判"已附着"而跳过 beginEdit。规则：
  * 1. prepareSessionForEdit 复用活动 session 时，把属于其他窗口的绑定
  *    重贴为当前窗口的 Attaching（同一 targetId + sessionId 才生效）——
  *    这是窗口接管旧绑定的唯一动作；
@@ -30,20 +30,55 @@ import org.robolectric.annotation.Config
  * #623 评论8：跨窗口 restamp（窗口接管旧绑定的唯一动作）必须同时使旧窗口的
  * input lease 失效（epoch+1）— 旧 w1 View 晚到的 IME 回调被拒绝、晚到的
  * detachWindowBinding 不再二次递增 epoch，新 w2 的 performViewBind 签发新 lease。
+ *
+ * #624 评论5294575627 要求2：删除 fast path 后，restamp 通过 precondition CAS
+ * （commitPreparedBindingState）完成 — prepareSessionForEdit 走完整 resolve →
+ * querySnapshot → CAS 路径，不再有 prepareActiveSessionIfCurrent + restampAttachingToWindow
+ * 快捷路径。测试用 [RebindTestCoordinator] mock native session（validateSession=true、
+ * querySnapshotForSession 返回有效 snapshot）使 CAS 路径在测试环境完整执行。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class WindowRebindIdentityTest {
-    private fun createCoordinator(): EditorSessionCoordinator {
-        return EditorSessionCoordinator(
+    /**
+     * #624 评论5294575627 要求2：fast path 删除后 prepareSessionForEdit 走完整 precondition CAS 路径，
+     * 需要 validateSession/querySnapshotForSession 返回有效值。RebindTestCoordinator mock native session
+     * 使 CAS 路径可在测试环境完整执行（验证 restamp 通过 commitPreparedBindingState CAS 完成）。
+     */
+    private class RebindTestCoordinator(
+        private val validSessionId: ULong,
+        private val snapshotText: String,
+    ) : EditorSessionCoordinator(
             com.xiwei.sujian.core.interop.app.AppServiceBridge(
                 com.xiwei.sujian.core.interop.app.WriterAppServiceHolder(
-                    "/tmp/sujian_test_workspace_623_rebind",
-                    "/tmp/sujian_test_workspace_623_rebind",
+                    "/home/xiwei/.cache/agent-tmp/sujian_test_624_rebind",
+                    "/home/xiwei/.cache/agent-tmp/sujian_test_624_rebind",
                 ),
             ),
-        )
+        ) {
+        private val snapshot = TargetSnapshot(snapshotText, 5, 1L, 0, 5)
+
+        internal override fun validateSession(sessionId: ULong): Boolean = sessionId == validSessionId
+
+        internal override fun querySnapshotForSession(sessionId: ULong): TargetSnapshot? =
+            if (sessionId == validSessionId) snapshot else null
+
+        internal override fun createSession(
+            targetId: String,
+            text: String,
+            cursorByteOffset: Int,
+            isPersistent: Boolean,
+        ): ULong? = null
+
+        internal override fun closeSession(sessionId: ULong) {
+            // no-op — 测试环境无 native
+        }
     }
+
+    private fun createRebindCoordinator(
+        sessionId: ULong = 42UL,
+        text: String = "hello",
+    ): RebindTestCoordinator = RebindTestCoordinator(sessionId, text)
 
     private fun setWindowBindingState(
         coordinator: EditorSessionCoordinator,
@@ -94,7 +129,7 @@ class WindowRebindIdentityTest {
 
     @Test
     fun prepareSessionForEdit_restampsAttachedFromForeignWindow() {
-        val coordinator = createCoordinator()
+        val coordinator = createRebindCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
         setWindowBindingState(coordinator, WindowBindingState.Attached("w1", "t1", 42UL))
 
@@ -121,7 +156,7 @@ class WindowRebindIdentityTest {
 
     @Test
     fun prepareSessionForEdit_restampsPreparedAttachingFromForeignWindow() {
-        val coordinator = createCoordinator()
+        val coordinator = createRebindCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
         // 章节切换 commitPreparedSession 的 "prepared" 预绑定
         setWindowBindingState(
@@ -142,7 +177,7 @@ class WindowRebindIdentityTest {
 
     @Test
     fun prepareSessionForEdit_keepsAttachingFromSameWindow() {
-        val coordinator = createCoordinator()
+        val coordinator = createRebindCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
         val attaching = WindowBindingState.Attaching("w2", "t1", 42UL)
         setWindowBindingState(coordinator, attaching, editingState = EditingState.BINDING)
@@ -157,18 +192,25 @@ class WindowRebindIdentityTest {
     }
 
     @Test
-    fun prepareSessionForEdit_keepsAttachedFromSameWindow() {
-        val coordinator = createCoordinator()
+    fun prepareSessionForEdit_rebindsAttachedFromSameWindow() {
+        // #624 评论5294575627 要求2：删除 fast path 后 prepareSessionForEdit 总是走 precondition CAS，
+        // 即使当前已是同窗口 Attached 也会重写为 Attaching + BINDING（等待 completeWindowAttach 重新推进）。
+        val coordinator = createRebindCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
-        val attached = WindowBindingState.Attached("w2", "t1", 42UL)
-        setWindowBindingState(coordinator, attached)
+        setWindowBindingState(coordinator, WindowBindingState.Attached("w2", "t1", 42UL))
 
         coordinator.prepareSessionForEdit("t1", "hello", 5, "w2")
 
+        val binding = coordinator.windowBindingState
         assertEquals(
-            "same-window Attached must not be re-stamped",
-            attached,
-            coordinator.windowBindingState,
+            "same-window Attached is re-prepared as Attaching via CAS (fast path deleted)",
+            WindowBindingState.Attaching("w2", "t1", 42UL),
+            binding,
+        )
+        assertEquals(
+            "editing state moves back to BINDING until the view re-completes attach",
+            EditingState.BINDING,
+            coordinator.editingState,
         )
     }
 
@@ -176,7 +218,7 @@ class WindowRebindIdentityTest {
 
     @Test
     fun completeWindowAttach_foreignWindowCompletion_doesNotRestampAttached() {
-        val coordinator = createCoordinator()
+        val coordinator = createRebindCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
         // 新窗口 w2 的真实 View 已绑定完成
         setWindowBindingState(coordinator, WindowBindingState.Attached("w2", "t1", 42UL))
@@ -194,7 +236,7 @@ class WindowRebindIdentityTest {
 
     @Test
     fun completeWindowAttach_foreignWindowCompletion_keepsAttaching() {
-        val coordinator = createCoordinator()
+        val coordinator = createRebindCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
         // 新窗口 w2 已进入 Attaching（真实 View 尚未完成绑定）
         val attaching = WindowBindingState.Attaching("w2", "t1", 42UL)
@@ -213,7 +255,7 @@ class WindowRebindIdentityTest {
 
     @Test
     fun completeWindowAttach_wrongSessionCompletion_keepsAttaching() {
-        val coordinator = createCoordinator()
+        val coordinator = createRebindCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
         val attaching = WindowBindingState.Attaching("w2", "t1", 42UL)
         setWindowBindingState(coordinator, attaching, editingState = EditingState.BINDING)
@@ -230,7 +272,7 @@ class WindowRebindIdentityTest {
 
     @Test
     fun completeWindowAttach_exactAttaching_advancesToAttached() {
-        val coordinator = createCoordinator()
+        val coordinator = createRebindCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
         setWindowBindingState(
             coordinator,
@@ -248,7 +290,7 @@ class WindowRebindIdentityTest {
 
     @Test
     fun completeWindowAttach_sameWindowSameSession_isIdempotentNoOp() {
-        val coordinator = createCoordinator()
+        val coordinator = createRebindCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
         val attached = WindowBindingState.Attached("w1", "t1", 42UL)
         setWindowBindingState(coordinator, attached)
@@ -264,7 +306,7 @@ class WindowRebindIdentityTest {
 
     @Test
     fun completeWindowAttach_differentSession_isIgnored() {
-        val coordinator = createCoordinator()
+        val coordinator = createRebindCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
         val attached = WindowBindingState.Attached("w1", "t1", 42UL)
         setWindowBindingState(coordinator, attached)
@@ -280,7 +322,7 @@ class WindowRebindIdentityTest {
 
     @Test
     fun completeWindowAttach_differentTarget_isIgnored() {
-        val coordinator = createCoordinator()
+        val coordinator = createRebindCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
         val attached = WindowBindingState.Attached("w1", "t1", 42UL)
         setWindowBindingState(coordinator, attached)
@@ -298,7 +340,7 @@ class WindowRebindIdentityTest {
 
     @Test
     fun restampToNewWindow_invalidatesOldInputLeaseExactlyOnce() {
-        val coordinator = createCoordinator()
+        val coordinator = createRebindCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
         setWindowBindingState(coordinator, WindowBindingState.Attached("w1", "t1", 42UL))
 
@@ -333,7 +375,7 @@ class WindowRebindIdentityTest {
 
     @Test
     fun restampToNewWindow_lateOldWindowDetach_doesNotBumpEpochAgain() {
-        val coordinator = createCoordinator()
+        val coordinator = createRebindCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
         setWindowBindingState(coordinator, WindowBindingState.Attached("w1", "t1", 42UL))
         val oldEpoch = coordinator.inputLeaseEpoch
@@ -359,7 +401,7 @@ class WindowRebindIdentityTest {
 
     @Test
     fun restampFromPreparedAttaching_issuesNewLeaseForRealWindow() {
-        val coordinator = createCoordinator()
+        val coordinator = createRebindCoordinator()
         registerPersistentTarget(coordinator, "t1", 42UL)
         // 章节切换 commitPreparedSession 的 "prepared" 预绑定
         setWindowBindingState(

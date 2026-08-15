@@ -756,7 +756,7 @@ def rule_session_close_before_claim() -> list[Finding]:
 
     # 1. closeTarget / detachWindowBinding / releaseHost：closeSession 直接调用必须在
     #    mutateSession 闭包之后（先认领再 close）。
-    for func_name in ("closeTarget", "detachWindowBinding", "releaseHost"):
+    for func_name in ("closeTarget", "detachWindowBinding", "releaseHost", "commitActiveSession", "cancelActiveSession"):
         body_info = _extract_member_function_body(text, func_name)
         if body_info is None:
             findings.append(
@@ -845,6 +845,39 @@ def rule_session_close_before_claim() -> list[Finding]:
                 ),
             )
         )
+
+    # 5. #624 评论5294575627 要求4/5：旧入口不得重新出现。
+    for forbidden_func in ("prepareActiveSessionIfCurrent", "restampAttachingToWindow", "clearWindowAttach"):
+        if re.search(rf"\bfun\s+EditorSessionCoordinator\.{forbidden_func}\s*\(", text):
+            findings.append(
+                Finding(
+                    path=rel,
+                    line=0,
+                    message=(
+                        f"{forbidden_func} 必须保持删除 — 统一走 bind precondition CAS"
+                        "（#624 评论5294575627 要求2/4/5）"
+                    ),
+                )
+            )
+
+    # 6. #624 评论5294575627 要求3/5：prepareSessionForEdit 失败时不得 removeRecord(targetId)。
+    body_info = _extract_member_function_body(text, "prepareSessionForEdit")
+    if body_info is not None:
+        start_lineno, _, body_lines = body_info
+        for r, line in enumerate(body_lines):
+            stripped = strip_line_comment(line)
+            if "removeRecord(targetId)" in stripped:
+                findings.append(
+                    Finding(
+                        path=rel,
+                        line=start_lineno + r,
+                        message=(
+                            "prepareSessionForEdit 失败时不得 removeRecord(targetId) — "
+                            "失败阶段尚未认领 Kotlin 所有权，直接 return null"
+                            "（#624 评论5294575627 要求3/5）"
+                        ),
+                    )
+                )
 
     return findings
 

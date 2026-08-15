@@ -1099,6 +1099,66 @@ class SessionCloseBeforeClaimTest(unittest.TestCase):
         messages = " | ".join(f.message for f in findings)
         self.assertIn("commitPreparedBindingState", messages, "commitPreparedBindingState 非 Boolean 必须被报告")
 
+    def test_flags_commit_active_session_close_before_claim(self):
+        """commitActiveSession 中 closeSession 出现在 mutateSession 之前必须被报告。"""
+        findings = self.run_rule(
+            "session-close-before-claim",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionLifecycleOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "fun EditorSessionCoordinator.commitActiveSession(finalText: String?): Boolean {\n"
+                    "    val sid = readSession { record(sessionState.activeTargetId ?: return@readSession 0UL)?.sessionId ?: 0UL }\n"
+                    "    closeSession(sid)\n"
+                    "    mutateSession { sessionState = EditorSessionState() }\n"
+                    "    return true\n"
+                    "}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("close-before-claim", messages, "commitActiveSession close-before-claim 违规必须被报告")
+
+    def test_flags_cancel_active_session_close_before_claim(self):
+        """cancelActiveSession 中 closeSession 出现在 mutateSession 之前必须被报告。"""
+        findings = self.run_rule(
+            "session-close-before-claim",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionLifecycleOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "fun EditorSessionCoordinator.cancelActiveSession(): Boolean {\n"
+                    "    val sid = readSession { record(sessionState.activeTargetId ?: return@readSession 0UL)?.sessionId ?: 0UL }\n"
+                    "    closeSession(sid)\n"
+                    "    mutateSession { sessionState = EditorSessionState() }\n"
+                    "    return true\n"
+                    "}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("close-before-claim", messages, "cancelActiveSession close-before-claim 违规必须被报告")
+
+    def test_flags_deleted_old_bind_entries(self):
+        """prepareActiveSessionIfCurrent/restampAttachingToWindow/clearWindowAttach 重新出现必须被报告。"""
+        findings = self.run_rule(
+            "session-close-before-claim",
+            {
+                f"{APP_PREFIX}/feature/editor/session/EditorSessionLifecycleOps.kt": (
+                    "package com.xiwei.sujian.feature.editor.session\n\n"
+                    "fun EditorSessionCoordinator.prepareActiveSessionIfCurrent(targetId: String): SessionBindInfo? {\n"
+                    "    return null\n"
+                    "}\n"
+                    "fun EditorSessionCoordinator.restampAttachingToWindow(windowId: String, targetId: String) {\n"
+                    "}\n"
+                    "fun EditorSessionCoordinator.clearWindowAttach(targetId: String) {\n"
+                    "}\n"
+                ),
+            },
+        )
+        messages = " | ".join(f.message for f in findings)
+        self.assertIn("prepareActiveSessionIfCurrent", messages)
+        self.assertIn("restampAttachingToWindow", messages)
+        self.assertIn("clearWindowAttach", messages)
+
     def test_passes_clean_claim_then_close(self):
         """干净实现（mutateSession 认领 → 锁外 closeSession(claim)）不应被报告。"""
         findings = self.run_rule(
@@ -1148,7 +1208,27 @@ class SessionCloseBeforeClaimTest(unittest.TestCase):
                     "    targetId: String,\n"
                     "    sessionId: ULong,\n"
                     "    precondition: SessionBindPrecondition,\n"
-                    "): Boolean = mutateSession { true }\n"
+                    "): Boolean = mutateSession { true }\n\n"
+                    "fun EditorSessionCoordinator.commitActiveSession(finalText: String?): Boolean {\n"
+                    "    val sid = mutateSession {\n"
+                    "        val targetId = sessionState.activeTargetId ?: return@mutateSession 0UL\n"
+                    "        val rec = record(targetId) ?: return@mutateSession 0UL\n"
+                    "        removeRecord(targetId)\n"
+                    "        rec.sessionId\n"
+                    "    }\n"
+                    "    if (sid != 0UL) closeSession(sid)\n"
+                    "    return true\n"
+                    "}\n\n"
+                    "fun EditorSessionCoordinator.cancelActiveSession(): Boolean {\n"
+                    "    val sid = mutateSession {\n"
+                    "        val targetId = sessionState.activeTargetId ?: return@mutateSession 0UL\n"
+                    "        val rec = record(targetId) ?: return@mutateSession 0UL\n"
+                    "        removeRecord(targetId)\n"
+                    "        rec.sessionId\n"
+                    "    }\n"
+                    "    if (sid != 0UL) closeSession(sid)\n"
+                    "    return true\n"
+                    "}\n"
                 ),
             },
         )

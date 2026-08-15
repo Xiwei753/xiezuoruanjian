@@ -427,22 +427,6 @@ fun EditorSessionCoordinator.closeTarget(
     }
 }
 
-fun EditorSessionCoordinator.clearWindowAttach(targetId: String) {
-    mutateSession {
-        removeRecord(targetId)
-        if (sessionState.targetId == targetId) {
-            sessionState =
-                sessionState.copy(
-                    editingState = EditingState.IDLE,
-                    bindingState = WindowBindingState.Idle,
-                    activeTargetId = null,
-                    targetId = null,
-                    sessionId = null,
-                )
-        }
-    }
-}
-
 /**
  * #624 评论17 问题2：准备会话绑定 — 删除 "prepared" 假窗口默认参数。
  * 真实窗口层必须传入真实 windowId。
@@ -474,10 +458,6 @@ fun EditorSessionCoordinator.prepareSessionForEdit(
     val isPersistent = record.persistent
     val profile = record.profile
 
-    prepareActiveSessionIfCurrent(targetId)?.let { bind ->
-        restampAttachingToWindow(windowId, targetId)
-        return bind
-    }
     rebindFromOtherActiveIfNeeded(targetId)
 
     // #624 评论5294575627 要求3：rebind 之后捕获 SessionBindPrecondition — 锁外 resolve/query 期间
@@ -492,6 +472,10 @@ fun EditorSessionCoordinator.prepareSessionForEdit(
                 oldRevision = rec?.documentState?.revision ?: 0L,
                 leaseEpoch = leaseEpoch,
                 bindingState = sessionState.bindingState,
+                stateTargetId = sessionState.targetId,
+                stateSessionId = sessionState.sessionId,
+                activeTargetId = sessionState.activeTargetId,
+                editingState = sessionState.editingState,
             )
         }
 
@@ -499,25 +483,19 @@ fun EditorSessionCoordinator.prepareSessionForEdit(
     val sel = initialSelection ?: textForSession.toByteArray(Charsets.UTF_8).size
     val prepared = resolveSessionForPrepare(targetId, textForSession, sel, isPersistent)
 
-    if (prepared == null) {
-        Log.e(
-            EditorSessionCoordinator.TAG,
-            "prepareSessionForEdit($targetId): session creation returned invalid id, aborting",
-        )
-        mutateSession {
-            removeRecord(targetId)
-            sessionState =
-                sessionState.copy(
-                    editingState = EditingState.IDLE,
-                    bindingState = WindowBindingState.Idle,
-                )
-        }
-        return null
-    }
+    if (prepared == null) return null
 
     val sessionId = prepared.sessionId
     val attaching = WindowBindingState.Attaching(windowId, targetId, sessionId)
     val snapshot = querySnapshotForSession(sessionId)
+    if (snapshot == null) {
+        // #624 评论5294575627 要求3：snapshot == null — Created 关闭本事务 candidate；
+        // Borrowed 不关闭。不能拿 snapshot=null 继续进入 commitPreparedBindingState 写 revision=0。
+        if (prepared is PreparedBindSession.Created) {
+            closeSession(prepared.sessionId)
+        }
+        return null
+    }
     val committed =
         commitPreparedBindingState(textForSession, sel, snapshot, attaching, precondition)
     if (!committed) {
@@ -536,11 +514,14 @@ fun EditorSessionCoordinator.prepareSessionForEdit(
  * [SessionBindPrecondition] 完全一致才 putRecord + 写 Attaching 并返回 true；否则返回 false（不写）。
  * 删除旧的无条件提交。targetId/sessionId 从 precondition/attaching 派生（调用方保证一致），
  * 不重复传参（避免 detekt LongParameterList）。
+ *
+ * #624 评论5294575627 要求3（收口）：[snapshot] 由调用方保证非空 — null 在 prepareSessionForEdit
+ * 已提前 return（Created 关闭 candidate、Borrowed 不关闭），不进入本函数写 revision=0。
  */
 private fun EditorSessionCoordinator.commitPreparedBindingState(
     textForSession: String,
     sel: Int,
-    snapshot: TargetSnapshot?,
+    snapshot: TargetSnapshot,
     attaching: WindowBindingState.Attaching,
     precondition: SessionBindPrecondition,
 ): Boolean {
@@ -549,41 +530,28 @@ private fun EditorSessionCoordinator.commitPreparedBindingState(
     return mutateSession {
         // precondition CAS — 完全一致才 putRecord + 写 Attaching。
         if (isBindPreconditionStale(targetId, precondition)) return@mutateSession false
+        // #624 评论5294575627 要求2：跨窗口 restamp 时使旧窗口 input lease 失效 —
+        // 旧 fast path 的 restampAttachingToWindow 负责递增 epoch，删除后由本 CAS 路径承担。
+        invalidateLease()
         val currentRec = record(targetId)
         putRecord(
             currentRec?.copy(
                 sessionId = sessionId,
                 documentState =
-                    if (snapshot != null) {
-                        currentRec.documentState.copy(
-                            revision = snapshot.revision,
-                            selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
-                            selectionHeadUtf8 = snapshot.selectionHeadUtf8,
-                        )
-                    } else {
-                        currentRec.documentState.copy(
-                            revision = 0L,
-                            selectionAnchorUtf8 = sel,
-                            selectionHeadUtf8 = sel,
-                        )
-                    },
+                    currentRec.documentState.copy(
+                        revision = snapshot.revision,
+                        selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
+                        selectionHeadUtf8 = snapshot.selectionHeadUtf8,
+                    ),
             ) ?: EditorSessionRecord(
                 targetId = targetId,
                 sessionId = sessionId,
                 documentState =
-                    if (snapshot != null) {
-                        DocumentState(
-                            revision = snapshot.revision,
-                            selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
-                            selectionHeadUtf8 = snapshot.selectionHeadUtf8,
-                        )
-                    } else {
-                        DocumentState(
-                            revision = 0L,
-                            selectionAnchorUtf8 = sel,
-                            selectionHeadUtf8 = sel,
-                        )
-                    },
+                    DocumentState(
+                        revision = snapshot.revision,
+                        selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
+                        selectionHeadUtf8 = snapshot.selectionHeadUtf8,
+                    ),
             ),
         )
         val rec = record(targetId)
@@ -622,45 +590,12 @@ private fun SessionMutationScope.isBindPreconditionStale(
     return currentSessionId != precondition.oldSessionId ||
         currentRevision != precondition.oldRevision ||
         leaseEpoch != precondition.leaseEpoch ||
-        sessionState.bindingState != precondition.bindingState
+        sessionState.bindingState != precondition.bindingState ||
+        sessionState.targetId != precondition.stateTargetId ||
+        sessionState.sessionId != precondition.stateSessionId ||
+        sessionState.activeTargetId != precondition.activeTargetId ||
+        sessionState.editingState != precondition.editingState
 }
-
-/**
- * #624 评论17 问题2：restampAttachingToWindow — 单个 mutation 内确认
- * record.sessionId + sessionState.targetId/sessionId + 当前 binding 仍属预期 session 后才 restamp。
- */
-private fun EditorSessionCoordinator.restampAttachingToWindow(
-    windowId: String,
-    targetId: String,
-) {
-    mutateSession {
-        val sid = record(targetId)?.sessionId ?: return@mutateSession
-        if (sid == 0UL) return@mutateSession
-        if (sessionState.targetId != targetId) return@mutateSession
-        if (sessionState.sessionId != sid) return@mutateSession
-        val currentWindowId = bindingWindowIdFor(sessionState.bindingState, targetId, sid)
-        if (currentWindowId == null || currentWindowId == windowId) return@mutateSession
-        invalidateLease()
-        sessionState =
-            sessionState.copy(
-                bindingState = WindowBindingState.Attaching(windowId, targetId, sid),
-                editingState = EditingState.BINDING,
-            )
-    }
-}
-
-private fun bindingWindowIdFor(
-    binding: WindowBindingState,
-    targetId: String,
-    sessionId: ULong,
-): String? =
-    when (binding) {
-        is WindowBindingState.Attaching ->
-            binding.windowId.takeIf { binding.targetId == targetId && binding.sessionId == sessionId }
-        is WindowBindingState.Attached ->
-            binding.windowId.takeIf { binding.targetId == targetId && binding.sessionId == sessionId }
-        else -> null
-    }
 
 private fun SessionMutationScope.isResetPreconditionStale(
     targetId: String,
@@ -697,23 +632,6 @@ private fun SessionMutationScope.evictOldActiveForPreparedCommit(newTargetId: St
             0UL
         }
     return OldActiveEvictionResult(closeId, oldRec.profile)
-}
-
-private fun EditorSessionCoordinator.prepareActiveSessionIfCurrent(targetId: String): SessionBindInfo? {
-    // #624 评论17 问题1：从 readSession 取一致快照 — 不在锁外多处读 store。
-    val snap =
-        readSession {
-            if (sessionState.activeTargetId != targetId ||
-                (sessionState.editingState != EditingState.EDITING && sessionState.editingState != EditingState.BINDING)
-            ) {
-                return@readSession null
-            }
-            val rec = record(targetId) ?: return@readSession null
-            Triple(rec.sessionId, rec.profile, rec.persistent)
-        } ?: return null
-    val sid = snap.first
-    if (sid == 0UL) return null
-    return SessionBindInfo(sid, snap.second, snap.third, snapshot = querySnapshotForSession(sid))
 }
 
 private fun EditorSessionCoordinator.rebindFromOtherActiveIfNeeded(targetId: String) {
@@ -753,135 +671,62 @@ private fun EditorSessionCoordinator.resolveSessionForPrepare(
 
 @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod")
 fun EditorSessionCoordinator.commitActiveSession(finalText: String?): Boolean {
-    var committed = false
+    // #624 评论5294575627 要求1：先认领，再 close — 一次 mutateSession 完成 Kotlin 所有权转移：
+    // invalidateLease → 需要关闭则 removeRecord + 收集 closeSessionId → sessionState 直接落 Idle →
+    // 解锁后只有 closeSessionId != 0 才 closeSession。不再写 COMMITTING → close → 第二次 mutation。
     var profile: TextEditorProfile? = null
-    // #624 评论17 问题3：锁内读取待关闭的 id/状态 → 锁外 closeSession →
-    // 再进锁校验前提仍成立并提交。Core 调用不得持 mutationLock。
-    var pendingTargetId: String? = null
     var pendingCloseSessionId: ULong = 0UL
-    var needClose = false
-    mutateSession {
-        val targetId = sessionState.activeTargetId ?: return@mutateSession
-        val rec = record(targetId) ?: return@mutateSession
-        val sessionId = rec.sessionId
-        if (sessionId == 0UL) return@mutateSession
-        val isPersistent = rec.persistent
-        val windowBound =
-            sessionState.bindingState is WindowBindingState.Attached ||
-                sessionState.bindingState is WindowBindingState.Attaching
-        sessionState =
-            sessionState.copy(
-                editingState = EditingState.COMMITTING,
-                bindingState =
-                    if (windowBound) {
-                        WindowBindingState.Committing(targetId, sessionId)
-                    } else {
-                        sessionState.bindingState
-                    },
-            )
-        pendingTargetId = targetId
-        if (!isPersistent || !windowBound) {
-            pendingCloseSessionId = sessionId
-            needClose = true
+    val committed =
+        mutateSession {
+            val targetId = sessionState.activeTargetId ?: return@mutateSession false
+            val rec = record(targetId) ?: return@mutateSession false
+            val sessionId = rec.sessionId
+            if (sessionId == 0UL) return@mutateSession false
+            val isPersistent = rec.persistent
+            val windowBound =
+                sessionState.bindingState is WindowBindingState.Attached ||
+                    sessionState.bindingState is WindowBindingState.Attaching
+            invalidateLease()
+            if (!isPersistent || !windowBound) {
+                removeRecord(targetId)
+                pendingCloseSessionId = sessionId
+            }
+            profile = rec.profile
+            sessionState = EditorSessionState()
+            true
         }
-        profile = rec.profile
-        committed = true
-    }
-    // 锁外关闭 Core session — Core 调用不得持 mutationLock。
-    if (committed && needClose && pendingCloseSessionId != 0UL) {
+    if (!committed) return false
+    if (pendingCloseSessionId != 0UL) {
         closeSession(pendingCloseSessionId)
     }
-    // 再进锁校验前提仍成立并提交 — 锁外 closeSession 期间活动 target 可能被其他线程
-    // 改换，只有仍匹配才 removeRecord 并重置 sessionState，避免误删/覆盖新状态。
-    if (committed) {
-        mutateSession {
-            if (sessionState.activeTargetId == pendingTargetId) {
-                if (needClose && pendingTargetId != null) {
-                    val currentRec = record(pendingTargetId)
-                    if (currentRec?.sessionId == pendingCloseSessionId) {
-                        removeRecord(pendingTargetId)
-                    }
-                }
-                sessionState = EditorSessionState()
-            } else {
-                // #624 评论17 问题4：锁外 closeSession 期间活动 target 被改换，
-                // 复位自己设的 COMMITTING + Committing(pendingTargetId) 中间态，
-                // 避免 editorAttachDecision 对 Committing 返回 Hold 导致新 target
-                // 附着 LaunchedEffect 持续不触发 beginEdit → 永久卡死。
-                if (sessionState.editingState == EditingState.COMMITTING) {
-                    sessionState = sessionState.copy(editingState = EditingState.IDLE)
-                }
-                val binding = sessionState.bindingState
-                if (binding is WindowBindingState.Committing && binding.targetId == pendingTargetId) {
-                    sessionState = sessionState.copy(bindingState = WindowBindingState.Idle)
-                }
-            }
-        }
-        _lastCommittedTextFlow.value =
-            if (profile?.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) null else finalText
-    }
-    return committed
+    _lastCommittedTextFlow.value =
+        if (profile?.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) null else finalText
+    return true
 }
 
 @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod")
 fun EditorSessionCoordinator.cancelActiveSession(): Boolean {
-    var cancelled = false
-    // #624 评论17 问题3：锁内读取待关闭的 id/状态 → 锁外 closeSession →
-    // 再进锁校验前提仍成立并提交。Core 调用不得持 mutationLock。
-    var pendingCloseTargetId: String? = null
+    // #624 评论5294575627 要求1：先认领，再 close — 一次 mutateSession 完成 Kotlin 所有权转移：
+    // invalidateLease → removeRecord + 收集 closeSessionId → sessionState 直接回 Idle →
+    // 解锁后 closeSession。不再写 CANCELLING → close → 第二次 mutation。
     var pendingCloseSessionId: ULong = 0UL
-    mutateSession {
-        val targetId = sessionState.activeTargetId ?: return@mutateSession
-        val rec = record(targetId) ?: return@mutateSession
-        val sessionId = rec.sessionId
-        if (sessionId == 0UL) return@mutateSession
-        val windowBound =
-            sessionState.bindingState is WindowBindingState.Attached ||
-                sessionState.bindingState is WindowBindingState.Attaching
-        sessionState =
-            sessionState.copy(
-                editingState = EditingState.CANCELLING,
-                bindingState =
-                    if (windowBound) {
-                        WindowBindingState.Cancelling(targetId, sessionId)
-                    } else {
-                        sessionState.bindingState
-                    },
-            )
-        pendingCloseTargetId = targetId
-        pendingCloseSessionId = sessionId
-        cancelled = true
-    }
-    // 锁外关闭 Core session — Core 调用不得持 mutationLock。
-    if (cancelled && pendingCloseSessionId != 0UL) {
+    val cancelled =
+        mutateSession {
+            val targetId = sessionState.activeTargetId ?: return@mutateSession false
+            val rec = record(targetId) ?: return@mutateSession false
+            val sessionId = rec.sessionId
+            if (sessionId == 0UL) return@mutateSession false
+            invalidateLease()
+            removeRecord(targetId)
+            pendingCloseSessionId = sessionId
+            sessionState = EditorSessionState()
+            true
+        }
+    if (!cancelled) return false
+    if (pendingCloseSessionId != 0UL) {
         closeSession(pendingCloseSessionId)
     }
-    // 再进锁校验前提仍成立并提交 — 锁外 closeSession 期间活动 target 可能被其他线程
-    // 改换，只有仍匹配才 removeRecord 并重置 sessionState，避免误删/覆盖新状态。
-    if (cancelled) {
-        mutateSession {
-            if (pendingCloseTargetId != null && sessionState.activeTargetId == pendingCloseTargetId) {
-                val currentRec = record(pendingCloseTargetId)
-                if (currentRec?.sessionId == pendingCloseSessionId) {
-                    removeRecord(pendingCloseTargetId)
-                }
-                sessionState = EditorSessionState()
-            } else {
-                // #624 评论17 问题4：锁外 closeSession 期间活动 target 被改换，
-                // 复位自己设的 CANCELLING + Cancelling(pendingCloseTargetId) 中间态，
-                // 避免 editorAttachDecision 对 Cancelling 返回 Hold 导致新 target
-                // 附着 LaunchedEffect 持续不触发 beginEdit → 永久卡死。
-                if (sessionState.editingState == EditingState.CANCELLING) {
-                    sessionState = sessionState.copy(editingState = EditingState.IDLE)
-                }
-                val binding = sessionState.bindingState
-                if (binding is WindowBindingState.Cancelling && binding.targetId == pendingCloseTargetId) {
-                    sessionState = sessionState.copy(bindingState = WindowBindingState.Idle)
-                }
-            }
-        }
-    }
-    return cancelled
+    return true
 }
 
 /**
@@ -1066,11 +911,11 @@ fun EditorSessionCoordinator.refreshDetachedSnapshot(targetId: String): TargetSn
  *
  * 改成：mutateSession{收集当前所有非零 sessionId; invalidateLease; clearRecords;
  * sessionState=RELEASED; 返回 sessionId 列表} → 解锁后逐个 closeSession。
+ *
+ * #624 评论5294575627 要求1（收口）：不再先额外走一次 cancelActiveSession — 单次 mutateSession
+ * 已收走全部 session（active 记录也在 allRecords() 内），避免两次进锁期间状态被改换的竞态。
  */
 fun EditorSessionCoordinator.releaseHost() {
-    if (activeTargetId != null) {
-        cancelActiveSession()
-    }
     // 单次 mutateSession 内一次性拿走所有 session 所有权 — invalidateLease + clearRecords + RELEASED。
     val sessionIdsToClose =
         mutateSession {

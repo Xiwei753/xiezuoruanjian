@@ -11,22 +11,19 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * #624 评论17 问题4：commitActiveSession/cancelActiveSession 第二次进锁时
- * 即使 activeTargetId 不匹配也要复位 COMMITTING/CANCELLING 中间态，
- * 避免 editorAttachDecision 卡在 Hold。
+ * #624 评论5294575627 要求1：commitActiveSession/cancelActiveSession 改成单 mutation
+ * "先认领再 close" — 不再有 COMMITTING/CANCELLING 中间态和两次进锁。
  *
- * 旧缺陷：两次进锁模式 — 第一次进锁设 COMMITTING + Committing(A)，
- * 锁外 closeSession，第二次进锁若 activeTargetId != pendingTargetId（锁外期间
- * 被其他线程改换）不重置 sessionState，保留 COMMITTING + Committing(A)。
- * 后续 editorAttachDecision 对 Committing 返回 Hold，新 target 的附着
- * LaunchedEffect 持续不触发 beginEdit → 永久卡死。
+ * 新实现：一次 mutateSession 完成 invalidateLease → removeRecord → sessionState=Idle →
+ * 收集 closeSessionId → 解锁后 closeSession。closeSession 在 mutation 之后（锁外）调用。
  *
- * 修复：第二次进锁的 else 分支复位自己设的中间态：
- * COMMITTING → IDLE，Committing(pendingTargetId) → Idle。
+ * 测试验证：closeSession（锁外）期间 activeTargetId 被其他线程改换时，最终态正确 —
+ * editingState=IDLE、bindingState=Idle、activeTargetId 保留被改换的值（不覆盖新状态）。
+ * 新实现下 sessionState 在 mutation 内已直接落 Idle，closeSession 锁外改换 activeTargetId
+ * 不影响已落定的 Idle/Idle，只改 activeTargetId。
  *
- * 测试策略：由于难以精确控制两次进锁间的线程交错，使用 fake coordinator
- * 在 closeSession（锁外调用）时改换 activeTargetId，模拟锁外期间被其他
- * 线程改换的场景，直接验证第二次进锁的复位语义。
+ * 测试策略：使用 fake coordinator 在 closeSession（锁外调用）时改换 activeTargetId，
+ * 模拟锁外期间被其他线程改换的并发场景，验证最终态正确。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -35,9 +32,10 @@ class CommitActiveSessionMidTxResetTest {
      * 模拟锁外 closeSession 期间 activeTargetId 被其他线程改换 —
      * fake 在 closeSession 时把 activeTargetId 改为 [swapTargetId]。
      *
-     * closeSession 在 commitActiveSession/cancelActiveSession 的锁外执行
-     * （Core 调用不得持 mutationLock），此时另一线程的 mutateSession 可以
-     * 获取锁并改换 activeTargetId — 这是真实的并发场景。
+     * closeSession 在 commitActiveSession/cancelActiveSession 的 mutation 之后
+     * （锁外）调用，此时另一线程的 mutateSession 可以获取锁并改换 activeTargetId —
+     * 这是真实的并发场景。新实现下 sessionState 已在 mutation 内落 Idle，
+     * closeSession 锁外改换只影响 activeTargetId。
      */
     private class MidTxSwapCoordinator(
         private val swapTargetId: String,
@@ -80,22 +78,18 @@ class CommitActiveSessionMidTxResetTest {
 
     /**
      * commitActiveSession 锁外 closeSession 期间 activeTargetId 被改换时，
-     * 第二次进锁必须复位 COMMITTING + Committing(oldTarget) 中间态，
-     * 不能保留卡死状态。
+     * 最终态必须正确 — editingState=IDLE、bindingState=Idle、activeTargetId 保留被改换的值。
      *
-     * 修复前（RED）：editingState 拟留 COMMITTING，bindingState 拟留 Committing(A)，
-     * editorAttachDecision 返回 Hold → 永久卡死。
-     * 修复后（GREEN）：editingState 复位 IDLE，bindingState 复位 Idle，
-     * editorAttachDecision 返回 BeginEdit → 新窗口可附着。
+     * 新实现（单 mutation "先认领再 close"）：mutation 内 sessionState 已直接落 Idle，
+     * 锁外 closeSession 期间 fake 改换 activeTargetId 不影响已落定的 Idle/Idle。
      */
     @Test
-    fun commitActiveSession_resetsCommittingMidStateWhenActiveTargetSwappedDuringClose() {
+    fun commitActiveSession_finalStateCorrectWhenActiveTargetSwappedDuringClose() {
         val coordinator = MidTxSwapCoordinator(swapTargetId = "B")
         setupActiveSessionA(coordinator)
 
-        // 调用 commitActiveSession — 第一次进锁设 COMMITTING + Committing(A)，
-        // 锁外 closeSession 时 fake 把 activeTargetId 改为 B，
-        // 第二次进锁 activeTargetId=B != A=pendingTargetId。
+        // 调用 commitActiveSession — mutation 内 sessionState 落 Idle + removeRecord(A)，
+        // 锁外 closeSession 时 fake 把 activeTargetId 改为 B。
         coordinator.commitActiveSession(null)
 
         val state = coordinator.sessionState
@@ -118,14 +112,13 @@ class CommitActiveSessionMidTxResetTest {
 
     /**
      * cancelActiveSession 锁外 closeSession 期间 activeTargetId 被改换时，
-     * 第二次进锁必须复位 CANCELLING + Cancelling(oldTarget) 中间态。
+     * 最终态必须正确 — editingState=IDLE、bindingState=Idle、activeTargetId 保留被改换的值。
      *
-     * 修复前（RED）：editingState 拟留 CANCELLING，bindingState 拟留 Cancelling(A)，
-     * editorAttachDecision 返回 Hold → 永久卡死。
-     * 修复后（GREEN）：editingState 复位 IDLE，bindingState 复位 Idle。
+     * 新实现（单 mutation "先认领再 close"）：mutation 内 sessionState 已直接落 Idle，
+     * 锁外 closeSession 期间 fake 改换 activeTargetId 不影响已落定的 Idle/Idle。
      */
     @Test
-    fun cancelActiveSession_resetsCancellingMidStateWhenActiveTargetSwappedDuringClose() {
+    fun cancelActiveSession_finalStateCorrectWhenActiveTargetSwappedDuringClose() {
         val coordinator = MidTxSwapCoordinator(swapTargetId = "B")
         setupActiveSessionA(coordinator)
 

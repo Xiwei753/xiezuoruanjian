@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.editor.session
 // ! # 编辑器会话协调器类型声明（从 EditorSessionCoordinator �?分）
 
 import androidx.compose.runtime.Immutable
+import com.xiwei.sujian.feature.editor.window.EditingState
 
 sealed interface WindowBindingState {
     data object Idle : WindowBindingState
@@ -178,6 +179,11 @@ data class SessionCloseClaim(
  * 重新校验 precondition 完全一致才 putRecord + 写 Attaching。任一字段不一致说明
  * 锁外期间同 target 的 session/revision/binding/epoch 已前进，candidate 必须丢弃，
  * 不得覆盖当前新绑定。
+ *
+ * #624 评论5294575627 要求3（收口）：[stateTargetId]/[stateSessionId]/[activeTargetId]/
+ * [editingState] 捕获 sessionState 的完整身份（targetId/sessionId/activeTargetId/editingState）。
+ * 锁外 Core 操作（validate/create/querySnapshot）期间活动目标或编辑状态若被其他线程改换，
+ * 本次 bind 作废 — 不写 Attaching、不覆盖新状态。Created 关闭 candidate，Borrowed 不关闭。
  */
 @Immutable
 data class SessionBindPrecondition(
@@ -186,6 +192,10 @@ data class SessionBindPrecondition(
     val oldRevision: Long,
     val leaseEpoch: Long,
     val bindingState: WindowBindingState,
+    val stateTargetId: String?,
+    val stateSessionId: ULong?,
+    val activeTargetId: String?,
+    val editingState: EditingState,
 )
 
 /**
