@@ -1,9 +1,11 @@
 // EditorSessionCoordinator — 编辑会话协调器。
 // 持有 IEditorSessionBridge 与 EditorSessionState。
 // 所有文本修改发给 Core，再用 Core 返回的新 snapshot 更新 UI。不自己维护正文。
+// expectedRevision 由本协调器从 state.revision 传入；cause 由调用方按输入语义传入。
 
 import { IEditorSessionBridge, EditorSnapshot } from '../interop/IEditorSessionBridge'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
+import { EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
 import { EditorSessionState } from './EditorSessionState'
 
 export class EditorSessionCoordinator {
@@ -15,7 +17,7 @@ export class EditorSessionCoordinator {
   }
 
   async open(targetId: string, initialText: string): Promise<ResultEnvelope<EditorSnapshot>> {
-    const result = await this.bridge.create(initialText)
+    const result = await this.bridge.create(targetId, initialText, 0, false)
     if (result.success && result.data) {
       this.state = EditorSessionState.fromSnapshot(result.data)
     }
@@ -42,71 +44,71 @@ export class EditorSessionCoordinator {
     return result
   }
 
-  async insert(byteOffset: number, text: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async insert(byteOffset: number, text: string, cause: EditorTransactionCause): Promise<ResultEnvelope<EditorSnapshot>> {
     if (!this.state) return this.noSession()
-    return this.update(this.bridge.insert(this.state.sessionId, byteOffset, text))
+    return this.update(this.bridge.insert(this.state.sessionId, byteOffset, text, cause, this.state.revision))
   }
 
-  async delete(byteOffsetStart: number, byteOffsetEnd: number): Promise<ResultEnvelope<EditorSnapshot>> {
+  async delete(byteOffsetStart: number, byteOffsetEnd: number, cause: EditorTransactionCause): Promise<ResultEnvelope<EditorSnapshot>> {
     if (!this.state) return this.noSession()
-    return this.update(this.bridge.delete(this.state.sessionId, byteOffsetStart, byteOffsetEnd))
+    return this.update(this.bridge.delete(this.state.sessionId, byteOffsetStart, byteOffsetEnd, cause, this.state.revision))
   }
 
-  async replace(byteOffsetStart: number, byteOffsetEnd: number, text: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async replace(byteOffsetStart: number, byteOffsetEnd: number, text: string, originalText: string, cause: EditorTransactionCause): Promise<ResultEnvelope<EditorSnapshot>> {
     if (!this.state) return this.noSession()
-    return this.update(this.bridge.replace(this.state.sessionId, byteOffsetStart, byteOffsetEnd, text))
+    return this.update(this.bridge.replace(this.state.sessionId, byteOffsetStart, byteOffsetEnd, text, originalText, cause, this.state.revision))
   }
 
   async setSelection(anchorByteOffset: number, headByteOffset: number): Promise<ResultEnvelope<EditorSnapshot>> {
     if (!this.state) return this.noSession()
-    return this.update(this.bridge.setSelection(this.state.sessionId, anchorByteOffset, headByteOffset))
+    return this.update(this.bridge.setSelection(this.state.sessionId, anchorByteOffset, headByteOffset, this.state.revision))
   }
 
   async undo(): Promise<ResultEnvelope<EditorSnapshot>> {
     if (!this.state) return this.noSession()
-    return this.update(this.bridge.undo(this.state.sessionId))
+    return this.update(this.bridge.undo(this.state.sessionId, this.state.revision))
   }
 
   async redo(): Promise<ResultEnvelope<EditorSnapshot>> {
     if (!this.state) return this.noSession()
-    return this.update(this.bridge.redo(this.state.sessionId))
+    return this.update(this.bridge.redo(this.state.sessionId, this.state.revision))
   }
 
-  async commitText(byteOffset: number, text: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async commitText(byteStart: number, byteEndExclusive: number, replacementText: string, resultingSelectionAnchor: number, resultingSelectionHead: number, compositionSessionId: number, compositionBaseRevision: number, compositionGeneration: number, cause: EditorTransactionCause): Promise<ResultEnvelope<EditorSnapshot>> {
     if (!this.state) return this.noSession()
-    return this.update(this.bridge.commitText(this.state.sessionId, byteOffset, text))
+    return this.update(this.bridge.commitText(this.state.sessionId, byteStart, byteEndExclusive, replacementText, resultingSelectionAnchor, resultingSelectionHead, compositionSessionId, compositionBaseRevision, compositionGeneration, cause, this.state.revision))
   }
 
-  async deleteSurrounding(beforeByteLen: number, afterByteLen: number): Promise<ResultEnvelope<EditorSnapshot>> {
+  async deleteSurrounding(beforeByteStart: number, beforeByteEndExclusive: number, afterByteStart: number, afterByteEndExclusive: number, cause: EditorTransactionCause): Promise<ResultEnvelope<EditorSnapshot>> {
     if (!this.state) return this.noSession()
-    return this.update(this.bridge.deleteSurrounding(this.state.sessionId, beforeByteLen, afterByteLen))
+    return this.update(this.bridge.deleteSurrounding(this.state.sessionId, beforeByteStart, beforeByteEndExclusive, afterByteStart, afterByteEndExclusive, cause, this.state.revision))
   }
 
-  async beginComposition(byteOffset: number): Promise<ResultEnvelope<EditorSnapshot>> {
+  async beginComposition(replaceStart: number, replaceEndExclusive: number): Promise<ResultEnvelope<EditorSnapshot>> {
     if (!this.state) return this.noSession()
-    return this.update(this.bridge.beginComposition(this.state.sessionId, byteOffset))
+    return this.update(this.bridge.beginComposition(this.state.sessionId, replaceStart, replaceEndExclusive, this.state.revision))
   }
 
-  async updateComposition(preedit: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async updateComposition(compositionSessionId: number, compositionGeneration: number, newPreeditText: string, newPreeditCursorOffset: number): Promise<ResultEnvelope<EditorSnapshot>> {
     if (!this.state) return this.noSession()
-    return this.update(this.bridge.updateComposition(this.state.sessionId, preedit))
+    return this.update(this.bridge.updateComposition(this.state.sessionId, compositionSessionId, compositionGeneration, newPreeditText, newPreeditCursorOffset, this.state.revision))
   }
 
-  async finishComposition(committed: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async finishComposition(compositionSessionId: number, compositionGeneration: number): Promise<ResultEnvelope<EditorSnapshot>> {
     if (!this.state) return this.noSession()
-    return this.update(this.bridge.finishComposition(this.state.sessionId, committed))
+    return this.update(this.bridge.finishComposition(this.state.sessionId, compositionSessionId, compositionGeneration, this.state.revision))
   }
 
-  async cancelComposition(): Promise<ResultEnvelope<EditorSnapshot>> {
+  async cancelComposition(compositionSessionId: number, compositionGeneration: number): Promise<ResultEnvelope<EditorSnapshot>> {
     if (!this.state) return this.noSession()
-    return this.update(this.bridge.cancelComposition(this.state.sessionId))
+    return this.update(this.bridge.cancelComposition(this.state.sessionId, compositionSessionId, compositionGeneration, this.state.revision))
   }
 
   getSnapshot(): EditorSnapshot | null {
     return this.state ? this.state.snapshot : null
   }
 
-  getSessionId(): string | null {
+  getSessionId(): number | null {
     return this.state ? this.state.sessionId : null
   }
 

@@ -4,21 +4,22 @@
 
 import { IEditorSessionBridge, EditorSnapshot } from './IEditorSessionBridge'
 import { ResultEnvelope, ChangedEntity } from '../../../corebridge/dto/ResultEnvelope'
+import { EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 
 export class NativeEditorSessionBridge implements IEditorSessionBridge {
   private core: NativeCoreModule = new NativeCoreModule()
 
-  async create(initialText: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async create(targetId: string, initialText: string, initialCursorByteOffset: number, isPersistent: boolean): Promise<ResultEnvelope<EditorSnapshot>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionCreate(initialText) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionCreate(targetId, initialText, initialCursorByteOffset, isPersistent ? 1 : 0) as string
       return this.core.parseEnvelope<EditorSnapshot>(jsonStr)
     } catch (e) {
       return this.nativeError<EditorSnapshot>(e)
     }
   }
 
-  async close(sessionId: string): Promise<ResultEnvelope<boolean>> {
+  async close(sessionId: number): Promise<ResultEnvelope<boolean>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeEditorSessionClose(sessionId) as string
       return this.core.parseEnvelope<boolean>(jsonStr)
@@ -27,7 +28,7 @@ export class NativeEditorSessionBridge implements IEditorSessionBridge {
     }
   }
 
-  async snapshot(sessionId: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async snapshot(sessionId: number): Promise<ResultEnvelope<EditorSnapshot>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeEditorSessionSnapshot(sessionId) as string
       return this.core.parseEnvelope<EditorSnapshot>(jsonStr)
@@ -36,115 +37,115 @@ export class NativeEditorSessionBridge implements IEditorSessionBridge {
     }
   }
 
-  async insert(sessionId: string, byteOffset: number, text: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async insert(sessionId: number, byteOffset: number, text: string, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionInsert(sessionId, byteOffset, text) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionInsert(sessionId, byteOffset, text, cause, expectedRevision) as string
       return this.core.parseEnvelope<EditorSnapshot>(jsonStr)
     } catch (e) {
       return this.nativeError<EditorSnapshot>(e)
     }
   }
 
-  async delete(sessionId: string, byteOffsetStart: number, byteOffsetEnd: number): Promise<ResultEnvelope<EditorSnapshot>> {
+  async delete(sessionId: number, byteOffsetStart: number, byteOffsetEnd: number, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionDelete(sessionId, byteOffsetStart, byteOffsetEnd) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionDelete(sessionId, byteOffsetStart, byteOffsetEnd, cause, expectedRevision) as string
       return this.core.parseEnvelope<EditorSnapshot>(jsonStr)
     } catch (e) {
       return this.nativeError<EditorSnapshot>(e)
     }
   }
 
-  async replace(sessionId: string, byteOffsetStart: number, byteOffsetEnd: number, text: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async replace(sessionId: number, byteOffsetStart: number, byteOffsetEnd: number, text: string, originalText: string, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionReplace(sessionId, byteOffsetStart, byteOffsetEnd, text) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionReplace(sessionId, byteOffsetStart, byteOffsetEnd, text, originalText, cause, expectedRevision) as string
       return this.core.parseEnvelope<EditorSnapshot>(jsonStr)
     } catch (e) {
       return this.nativeError<EditorSnapshot>(e)
     }
   }
 
-  async setSelection(sessionId: string, anchorByteOffset: number, headByteOffset: number): Promise<ResultEnvelope<EditorSnapshot>> {
+  async setSelection(sessionId: number, anchorByteOffset: number, headByteOffset: number, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionSetSelection(sessionId, anchorByteOffset, headByteOffset) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionSetSelection(sessionId, anchorByteOffset, headByteOffset, expectedRevision) as string
       return this.core.parseEnvelope<EditorSnapshot>(jsonStr)
     } catch (e) {
       return this.nativeError<EditorSnapshot>(e)
     }
   }
 
-  async undo(sessionId: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async undo(sessionId: number, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionUndo(sessionId) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionUndo(sessionId, expectedRevision) as string
       return this.core.parseEnvelope<EditorSnapshot>(jsonStr)
     } catch (e) {
       return this.nativeError<EditorSnapshot>(e)
     }
   }
 
-  async redo(sessionId: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async redo(sessionId: number, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionRedo(sessionId) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionRedo(sessionId, expectedRevision) as string
       return this.core.parseEnvelope<EditorSnapshot>(jsonStr)
     } catch (e) {
       return this.nativeError<EditorSnapshot>(e)
     }
   }
 
-  async commitText(sessionId: string, byteOffset: number, text: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async commitText(sessionId: number, byteStart: number, byteEndExclusive: number, replacementText: string, resultingSelectionAnchor: number, resultingSelectionHead: number, compositionSessionId: number, compositionBaseRevision: number, compositionGeneration: number, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionCommitText(sessionId, byteOffset, text) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionCommitText(sessionId, byteStart, byteEndExclusive, replacementText, resultingSelectionAnchor, resultingSelectionHead, compositionSessionId, compositionBaseRevision, compositionGeneration, cause, expectedRevision) as string
       return this.core.parseEnvelope<EditorSnapshot>(jsonStr)
     } catch (e) {
       return this.nativeError<EditorSnapshot>(e)
     }
   }
 
-  async deleteSurrounding(sessionId: string, beforeByteLen: number, afterByteLen: number): Promise<ResultEnvelope<EditorSnapshot>> {
+  async deleteSurrounding(sessionId: number, beforeByteStart: number, beforeByteEndExclusive: number, afterByteStart: number, afterByteEndExclusive: number, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionDeleteSurrounding(sessionId, beforeByteLen, afterByteLen) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionDeleteSurrounding(sessionId, beforeByteStart, beforeByteEndExclusive, afterByteStart, afterByteEndExclusive, cause, expectedRevision) as string
       return this.core.parseEnvelope<EditorSnapshot>(jsonStr)
     } catch (e) {
       return this.nativeError<EditorSnapshot>(e)
     }
   }
 
-  async beginComposition(sessionId: string, byteOffset: number): Promise<ResultEnvelope<EditorSnapshot>> {
+  async beginComposition(sessionId: number, replaceStart: number, replaceEndExclusive: number, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionBeginComposition(sessionId, byteOffset) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionBeginComposition(sessionId, replaceStart, replaceEndExclusive, expectedRevision) as string
       return this.core.parseEnvelope<EditorSnapshot>(jsonStr)
     } catch (e) {
       return this.nativeError<EditorSnapshot>(e)
     }
   }
 
-  async updateComposition(sessionId: string, preedit: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async updateComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, newPreeditText: string, newPreeditCursorOffset: number, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionUpdateComposition(sessionId, preedit) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionUpdateComposition(sessionId, compositionSessionId, compositionGeneration, newPreeditText, newPreeditCursorOffset, expectedRevision) as string
       return this.core.parseEnvelope<EditorSnapshot>(jsonStr)
     } catch (e) {
       return this.nativeError<EditorSnapshot>(e)
     }
   }
 
-  async finishComposition(sessionId: string, committed: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async finishComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionFinishComposition(sessionId, committed) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionFinishComposition(sessionId, compositionSessionId, compositionGeneration, expectedRevision) as string
       return this.core.parseEnvelope<EditorSnapshot>(jsonStr)
     } catch (e) {
       return this.nativeError<EditorSnapshot>(e)
     }
   }
 
-  async cancelComposition(sessionId: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  async cancelComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionCancelComposition(sessionId) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionCancelComposition(sessionId, compositionSessionId, compositionGeneration, expectedRevision) as string
       return this.core.parseEnvelope<EditorSnapshot>(jsonStr)
     } catch (e) {
       return this.nativeError<EditorSnapshot>(e)
     }
   }
 
-  async getText(sessionId: string): Promise<ResultEnvelope<string>> {
+  async getText(sessionId: number): Promise<ResultEnvelope<string>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeEditorSessionGetText(sessionId) as string
       return this.core.parseEnvelope<string>(jsonStr)
@@ -153,7 +154,7 @@ export class NativeEditorSessionBridge implements IEditorSessionBridge {
     }
   }
 
-  async getRevision(sessionId: string): Promise<ResultEnvelope<number>> {
+  async getRevision(sessionId: number): Promise<ResultEnvelope<number>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeEditorSessionGetRevision(sessionId) as string
       return this.core.parseEnvelope<number>(jsonStr)

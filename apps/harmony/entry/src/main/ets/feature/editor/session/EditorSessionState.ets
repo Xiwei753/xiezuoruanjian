@@ -4,11 +4,11 @@
 import { EditorSnapshot } from '../interop/IEditorSessionBridge'
 
 export class EditorSessionState {
-  readonly sessionId: string
+  readonly sessionId: number
   readonly revision: number
   readonly snapshot: EditorSnapshot
 
-  constructor(sessionId: string, revision: number, snapshot: EditorSnapshot) {
+  constructor(sessionId: number, revision: number, snapshot: EditorSnapshot) {
     this.sessionId = sessionId
     this.revision = revision
     this.snapshot = snapshot

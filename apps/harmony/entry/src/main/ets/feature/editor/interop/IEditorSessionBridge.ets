@@ -1,12 +1,14 @@
 // IEditorSessionBridge — 编辑会话与 Core 之间的接口契约。
 // byte offset 始终是 UTF-8 byte offset（Core 用 byte offset）。
 // ArkTS 端通过 TextOffsetMapper 做 UTF-16 ↔ UTF-8 转换后再调用本接口。
+// sessionId / revision 是 Core u64，实际值 < 2^53，ArkTS 用 number。
+// cause 传 EditorTransactionCause 枚举（字符串值与 Rust parse_cause 匹配）。
 
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
 
 export interface EditorSnapshot {
-  sessionId: string
+  sessionId: number
   revision: number
   text: string
   selectionAnchor: number  // byte offset
@@ -16,23 +18,23 @@ export interface EditorSnapshot {
 }
 
 export interface IEditorSessionBridge {
-  create(initialText: string): Promise<ResultEnvelope<EditorSnapshot>>
-  close(sessionId: string): Promise<ResultEnvelope<boolean>>
-  snapshot(sessionId: string): Promise<ResultEnvelope<EditorSnapshot>>
-  insert(sessionId: string, byteOffset: number, text: string): Promise<ResultEnvelope<EditorSnapshot>>
-  delete(sessionId: string, byteOffsetStart: number, byteOffsetEnd: number): Promise<ResultEnvelope<EditorSnapshot>>
-  replace(sessionId: string, byteOffsetStart: number, byteOffsetEnd: number, text: string): Promise<ResultEnvelope<EditorSnapshot>>
-  setSelection(sessionId: string, anchorByteOffset: number, headByteOffset: number): Promise<ResultEnvelope<EditorSnapshot>>
-  undo(sessionId: string): Promise<ResultEnvelope<EditorSnapshot>>
-  redo(sessionId: string): Promise<ResultEnvelope<EditorSnapshot>>
+  create(targetId: string, initialText: string, initialCursorByteOffset: number, isPersistent: boolean): Promise<ResultEnvelope<EditorSnapshot>>
+  close(sessionId: number): Promise<ResultEnvelope<boolean>>
+  snapshot(sessionId: number): Promise<ResultEnvelope<EditorSnapshot>>
+  insert(sessionId: number, byteOffset: number, text: string, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>>
+  delete(sessionId: number, byteOffsetStart: number, byteOffsetEnd: number, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>>
+  replace(sessionId: number, byteOffsetStart: number, byteOffsetEnd: number, text: string, originalText: string, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>>
+  setSelection(sessionId: number, anchorByteOffset: number, headByteOffset: number, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>>
+  undo(sessionId: number, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>>
+  redo(sessionId: number, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>>
   // IME composition
-  commitText(sessionId: string, byteOffset: number, text: string): Promise<ResultEnvelope<EditorSnapshot>>
-  deleteSurrounding(sessionId: string, beforeByteLen: number, afterByteLen: number): Promise<ResultEnvelope<EditorSnapshot>>
-  beginComposition(sessionId: string, byteOffset: number): Promise<ResultEnvelope<EditorSnapshot>>
-  updateComposition(sessionId: string, preedit: string): Promise<ResultEnvelope<EditorSnapshot>>
-  finishComposition(sessionId: string, committed: string): Promise<ResultEnvelope<EditorSnapshot>>
-  cancelComposition(sessionId: string): Promise<ResultEnvelope<EditorSnapshot>>
+  commitText(sessionId: number, byteStart: number, byteEndExclusive: number, replacementText: string, resultingSelectionAnchor: number, resultingSelectionHead: number, compositionSessionId: number, compositionBaseRevision: number, compositionGeneration: number, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>>
+  deleteSurrounding(sessionId: number, beforeByteStart: number, beforeByteEndExclusive: number, afterByteStart: number, afterByteEndExclusive: number, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>>
+  beginComposition(sessionId: number, replaceStart: number, replaceEndExclusive: number, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>>
+  updateComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, newPreeditText: string, newPreeditCursorOffset: number, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>>
+  finishComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>>
+  cancelComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorSnapshot>>
   // 查询
-  getText(sessionId: string): Promise<ResultEnvelope<string>>
-  getRevision(sessionId: string): Promise<ResultEnvelope<number>>
+  getText(sessionId: number): Promise<ResultEnvelope<string>>
+  getRevision(sessionId: number): Promise<ResultEnvelope<number>>
 }

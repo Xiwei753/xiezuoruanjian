@@ -3,20 +3,20 @@
 // to be available. 与 Android TextEditSessionBridge 职责对齐。
 //
 // 参数约定：
-// - uint64 参数（session_id / expected_revision / composition_*）通过 napi_get_value_bigint_uint64
-//   读取（lossless flag 忽略；超 2^63 的 revision/session_id 不支持，需调用方保证）。
+// - uint64 参数（session_id / expected_revision / composition_*）通过 napi_get_value_int64
+//   读取（ArkTS number；超 2^63 的 revision/session_id 不支持，需调用方保证）。
 // - uint32 参数通过 napi_get_value_uint32 读取。
 // - 字符串参数动态分配（dup_str），调用 C ABI 后立即 delete[]。
 // - 所有 handler 返回 ReturnJsonString(env, json)，json 由 core 分配，须 writer_core_free_string 释放。
 
 // ── Inline helpers（本域专用）──
 
-// get_u64: 从 napi_value 读取 uint64_t（BigInt）。lossless flag 忽略。
+// get_u64: 从 napi_value 读取 uint64_t（ArkTS number → int64 → uint64_t）。
+// ArkTS 侧 sessionId/revision 用 number（JSON.parse 返回），实际值 < 2^63，cast 安全。
 static uint64_t get_u64(napi_env env, napi_value value) {
-    uint64_t val = 0;
-    bool lossless = false;
-    napi_get_value_bigint_uint64(env, value, &val, &lossless);
-    return val;
+    int64_t val = 0;
+    napi_get_value_int64(env, value, &val);
+    return static_cast<uint64_t>(val);
 }
 
 // get_u32: 从 napi_value 读取 uint32_t。

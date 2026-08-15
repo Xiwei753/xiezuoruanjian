@@ -11,6 +11,7 @@ import { NativeEditorSessionBridge } from '../interop/NativeEditorSessionBridge'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { SujianEditor } from './SujianEditor'
+import { EditorTransactionCause } from '../../corebridge/dto/EditorDtos'
 
 @Component
 export struct WritingScreen {
@@ -241,7 +242,7 @@ export struct WritingScreen {
     const oldContent = this.content
     const byteStart = TextOffsetMapper.utf16ToUtf8(oldContent, 0)
     const byteEnd = TextOffsetMapper.utf16ToUtf8(oldContent, oldContent.length)
-    this.coordinator.replace(byteStart, byteEnd, text).then(result => {
+    this.coordinator.replace(byteStart, byteEnd, text, oldContent, EditorTransactionCause.Typing).then(result => {
       if (result.success && result.data) {
         this.content = result.data.text
         this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(result.data)
