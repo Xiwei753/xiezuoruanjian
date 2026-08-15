@@ -32,8 +32,8 @@ import com.xiwei.sujian.app.presentation.screen.WorkspaceActionTarget
 import com.xiwei.sujian.core.designsystem.component.SujianCard
 import com.xiwei.sujian.core.designsystem.component.SujianDialog
 import com.xiwei.sujian.core.designsystem.component.SujianFab
-import com.xiwei.sujian.core.designsystem.component.SujianIconButton
-import com.xiwei.sujian.core.designsystem.component.SujianListItem
+import com.xiwei.sujian.core.designsystem.component.SujianOverflowMenu
+import com.xiwei.sujian.core.designsystem.component.SujianOverflowMenuItem
 import com.xiwei.sujian.core.designsystem.component.SujianTextField
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
@@ -49,7 +49,9 @@ internal fun ProjectListContent(
     modifier: Modifier = Modifier,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
-    var showMenuForProject by remember { mutableStateOf<Project?>(null) }
+    // #625：菜单展开状态留在每张卡片本地（见 [ProjectCard]），
+    // 页面级只持有"重命名输入"与"确认删除"两个真正需要居中 Dialog 的目标。
+    var renameProject by remember { mutableStateOf<Project?>(null) }
     var confirmDeleteProject by remember { mutableStateOf<Project?>(null) }
     val dims = LocalSujianDimensions.current
 
@@ -112,8 +114,13 @@ internal fun ProjectListContent(
                     ProjectCard(
                         project = project,
                         onSelect = { onSelectProject(project.id, project.title) },
-                        hasMenuActions = projectMenuActions.isNotEmpty(),
-                        onMoreActions = { showMenuForProject = project },
+                        menuActions = projectMenuActions,
+                        onRename = { renameProject = project },
+                        onDelete = { action ->
+                            // #610 评论五：Delete 是否需要确认由 Core 契约 requiresConfirmation 决定，
+                            // 不再写死进入确认弹窗。
+                            handleProjectDeleteAction(action, project, appState) { confirmDeleteProject = project }
+                        },
                         modifier = Modifier.testTag(SujianSemanticIds.project(project.id)),
                     )
                 }
@@ -157,21 +164,13 @@ internal fun ProjectListContent(
         )
     }
 
-    showMenuForProject?.let { project ->
-        ProjectMenuDialog(
+    // #625：重命名输入 Dialog — 菜单项点击后由卡片回调 onRename 把目标抬到页面级，
+    // 输入完成后写回 Core 并清空目标。Dialog 主体提取为 [RenameProjectDialog] 以控制认知复杂度。
+    renameProject?.let { project ->
+        RenameProjectDialog(
             project = project,
-            actions = projectMenuActions,
-            onRename = { newTitle ->
-                appState.renameProject(project.id, newTitle)
-                showMenuForProject = null
-            },
-            // #610 评论五：Delete 是否需要确认由 Core 契约 requiresConfirmation 决定，
-            // 不再写死进入确认弹窗。
-            onDelete = { action ->
-                handleProjectDeleteAction(action, project, appState) { confirmDeleteProject = project }
-                showMenuForProject = null
-            },
-            onDismiss = { showMenuForProject = null },
+            onRename = { newTitle -> appState.renameProject(project.id, newTitle) },
+            onDismiss = { renameProject = null },
         )
     }
 
@@ -216,11 +215,14 @@ private fun ProjectListEmptyState(
 private fun ProjectCard(
     project: Project,
     onSelect: () -> Unit,
-    hasMenuActions: Boolean,
-    onMoreActions: () -> Unit,
+    menuActions: List<WorkspaceActionSpec>,
+    onRename: () -> Unit,
+    onDelete: (WorkspaceActionSpec) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val dims = LocalSujianDimensions.current
+    // #625：菜单展开状态留在卡片本地 — 多张卡片各自独立，不会互相覆盖。
+    var menuExpanded by remember { mutableStateOf(false) }
     SujianCard(
         onClick = onSelect,
         modifier = modifier.fillMaxWidth().padding(bottom = dims.space8),
@@ -234,72 +236,31 @@ private fun ProjectCard(
                 Text(project.title, style = MaterialTheme.typography.titleMedium)
                 Text(project.updatedAt.substringBefore("T"), style = MaterialTheme.typography.bodySmall)
             }
-            // #610 评论四：菜单按钮只按 Core Context(Project) 契约存在与否渲染。
-            if (hasMenuActions) {
-                SujianIconButton(
-                    onClick = onMoreActions,
-                    icon = SujianIcons.MoreVert,
+            // #610 评论四 + #625：菜单触发器与 DropdownMenu 在同一组合位置一起画，
+            // 菜单锚定到 ⋮ 按钮左下角；菜单项按 Core Context(Project) spec 渲染，顺序来自 Core order。
+            if (menuActions.isNotEmpty()) {
+                SujianOverflowMenu(
+                    expanded = menuExpanded,
+                    onExpandedChange = { menuExpanded = it },
                     contentDescription = stringResource(id = R.string.action_more),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProjectMenuDialog(
-    project: Project,
-    actions: List<WorkspaceActionSpec>,
-    onRename: (String) -> Unit,
-    onDelete: (WorkspaceActionSpec) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var showRename by remember { mutableStateOf(false) }
-
-    if (showRename) {
-        var newTitle by remember { mutableStateOf(project.title) }
-        SujianDialog(
-            onDismissRequest = { showRename = false },
-            title = stringResource(id = R.string.action_rename),
-            confirmText = stringResource(id = R.string.action_ok),
-            onConfirm = {
-                if (newTitle.isNotBlank() && newTitle != project.title) {
-                    onRename(newTitle.trim())
-                }
-                showRename = false
-            },
-            dismissText = stringResource(id = R.string.action_cancel),
-            onDismiss = { showRename = false },
-            body = {
-                SujianTextField(
-                    value = newTitle,
-                    onValueChange = { newTitle = it },
-                    label = { Text(stringResource(id = R.string.hint_new_title)) },
-                    singleLine = true,
-                )
-            },
-        )
-    } else {
-        SujianDialog(
-            onDismissRequest = onDismiss,
-            title = project.title,
-            confirmText = "",
-            onConfirm = {},
-            body = {
-                Column {
-                    // #610 评论四：菜单项按 Core Context(Project) spec 渲染，
-                    // 顺序来自 Core order；Composable 不再自行决定出现哪些动作、排第几个。
-                    actions.forEach { action ->
+                ) {
+                    menuActions.forEach { action ->
                         when (action.kind) {
                             WorkspaceActionKind.Rename ->
-                                SujianListItem(
-                                    headline = stringResource(id = R.string.action_rename),
-                                    onClick = { showRename = true },
+                                SujianOverflowMenuItem(
+                                    text = stringResource(id = R.string.action_rename),
+                                    onClick = {
+                                        menuExpanded = false
+                                        onRename()
+                                    },
                                 )
                             WorkspaceActionKind.Delete ->
-                                SujianListItem(
-                                    headline = stringResource(id = R.string.action_delete),
-                                    onClick = { onDelete(action) },
+                                SujianOverflowMenuItem(
+                                    text = stringResource(id = R.string.action_delete),
+                                    onClick = {
+                                        menuExpanded = false
+                                        onDelete(action)
+                                    },
                                 )
                             else -> {
                                 // 其它角色不属于作品 Context 契约，不渲染。
@@ -307,9 +268,43 @@ private fun ProjectMenuDialog(
                         }
                     }
                 }
-            },
-        )
+            }
+        }
     }
+}
+
+/**
+ * #625：作品重命名输入 Dialog。从 [ProjectListContent] 提取为独立 Composable，
+ * 与 [ConfirmDeleteProjectDialog] 同模式，以控制 [ProjectListContent] 的认知复杂度。
+ */
+@Composable
+private fun RenameProjectDialog(
+    project: Project,
+    onRename: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var newTitle by remember { mutableStateOf(project.title) }
+    SujianDialog(
+        onDismissRequest = onDismiss,
+        title = stringResource(id = R.string.action_rename),
+        confirmText = stringResource(id = R.string.action_ok),
+        onConfirm = {
+            if (newTitle.isNotBlank() && newTitle != project.title) {
+                onRename(newTitle.trim())
+            }
+            onDismiss()
+        },
+        dismissText = stringResource(id = R.string.action_cancel),
+        onDismiss = onDismiss,
+        body = {
+            SujianTextField(
+                value = newTitle,
+                onValueChange = { newTitle = it },
+                label = { Text(stringResource(id = R.string.hint_new_title)) },
+                singleLine = true,
+            )
+        },
+    )
 }
 
 @Composable

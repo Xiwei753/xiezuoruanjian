@@ -32,6 +32,8 @@ import com.xiwei.sujian.app.presentation.screen.WorkspaceActionTarget
 import com.xiwei.sujian.core.designsystem.component.SujianDialog
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
 import com.xiwei.sujian.core.designsystem.component.SujianListItem
+import com.xiwei.sujian.core.designsystem.component.SujianOverflowMenu
+import com.xiwei.sujian.core.designsystem.component.SujianOverflowMenuItem
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 
@@ -49,10 +51,6 @@ sealed class WorkspaceDialogState {
     data class DeleteVolume(val volume: VolumeUiModel) : WorkspaceDialogState()
 
     data class DeleteChapter(val volumeId: String, val chapter: ChapterUiModel) : WorkspaceDialogState()
-
-    data class VolumeActions(val volume: VolumeUiModel) : WorkspaceDialogState()
-
-    data class ChapterActions(val volumeId: String, val chapter: ChapterUiModel) : WorkspaceDialogState()
 }
 
 sealed class VolumeChapterListItem {
@@ -61,6 +59,85 @@ sealed class VolumeChapterListItem {
     data class ChapterItem(val chapter: ChapterUiModel, val volumeId: String) : VolumeChapterListItem()
 
     data class EmptyChapterHint(val volumeId: String) : VolumeChapterListItem()
+}
+
+/**
+ * #625：把 [WorkspaceActionSpec.kind] 映射到菜单项文字资源 id。
+ * 不属于卷/章节 Context 契约的 kind 返回 null，调用方跳过渲染。
+ */
+private fun workspaceActionLabelRes(action: WorkspaceActionSpec): Int? =
+    when (action.kind) {
+        WorkspaceActionKind.Rename -> R.string.action_rename
+        WorkspaceActionKind.MoveEarlier -> R.string.action_move_up
+        WorkspaceActionKind.MoveLater -> R.string.action_move_down
+        WorkspaceActionKind.Delete -> R.string.action_delete
+        else -> null
+    }
+
+/**
+ * #625：把 Volume Context 菜单项点击映射到业务回调 — 提取以控制行长度与嵌套深度。
+ *
+ * MoveEarlier/MoveLater 立即执行并收菜单；Delete 按 Core 契约 [WorkspaceActionSpec.requiresConfirmation]
+ * 决定是否进入确认弹窗；Rename 进入重命名输入弹窗。
+ */
+private fun handleVolumeAction(
+    action: WorkspaceActionSpec,
+    volume: VolumeUiModel,
+    viewModel: ProjectViewModel,
+    setDialogState: (WorkspaceDialogState) -> Unit,
+) {
+    when (action.kind) {
+        WorkspaceActionKind.Rename -> setDialogState(WorkspaceDialogState.RenameVolume(volume))
+        WorkspaceActionKind.Delete ->
+            if (action.requiresConfirmation) {
+                setDialogState(WorkspaceDialogState.DeleteVolume(volume))
+            } else {
+                viewModel.deleteVolume(volume.id)
+                setDialogState(WorkspaceDialogState.None)
+            }
+        WorkspaceActionKind.MoveEarlier -> {
+            viewModel.moveVolumeUp(volume.id)
+            setDialogState(WorkspaceDialogState.None)
+        }
+        WorkspaceActionKind.MoveLater -> {
+            viewModel.moveVolumeDown(volume.id)
+            setDialogState(WorkspaceDialogState.None)
+        }
+        else -> {}
+    }
+}
+
+/**
+ * #625：把 Chapter Context 菜单项点击映射到业务回调 — 提取以控制行长度与嵌套深度。
+ *
+ * 行为与 [handleVolumeAction] 对称，作用于章节。
+ */
+private fun handleChapterAction(
+    action: WorkspaceActionSpec,
+    volumeId: String,
+    chapter: ChapterUiModel,
+    viewModel: ProjectViewModel,
+    setDialogState: (WorkspaceDialogState) -> Unit,
+) {
+    when (action.kind) {
+        WorkspaceActionKind.Rename -> setDialogState(WorkspaceDialogState.RenameChapter(volumeId, chapter))
+        WorkspaceActionKind.Delete ->
+            if (action.requiresConfirmation) {
+                setDialogState(WorkspaceDialogState.DeleteChapter(volumeId, chapter))
+            } else {
+                viewModel.deleteChapter(volumeId, chapter.id)
+                setDialogState(WorkspaceDialogState.None)
+            }
+        WorkspaceActionKind.MoveEarlier -> {
+            viewModel.moveChapterUp(volumeId, chapter.id)
+            setDialogState(WorkspaceDialogState.None)
+        }
+        WorkspaceActionKind.MoveLater -> {
+            viewModel.moveChapterDown(volumeId, chapter.id)
+            setDialogState(WorkspaceDialogState.None)
+        }
+        else -> {}
+    }
 }
 
 @Composable
@@ -195,8 +272,9 @@ internal fun ChapterTreeContent(
                                             dialogState =
                                                 WorkspaceDialogState.CreateChapter(item.volume.id, item.volume.title)
                                         },
-                                        onMoreActions = {
-                                            dialogState = WorkspaceDialogState.VolumeActions(item.volume)
+                                        // #625：菜单项点击映射到业务回调（提取为 handleVolumeAction）。
+                                        onAction = { action ->
+                                            handleVolumeAction(action, item.volume, viewModel) { dialogState = it }
                                         },
                                     ),
                             )
@@ -212,9 +290,13 @@ internal fun ChapterTreeContent(
                                             viewModel.selectChapter(item.chapter.id)
                                             onSelectChapter(item.volumeId, item.chapter.id, item.chapter.title)
                                         },
-                                        onMoreActions = {
-                                            dialogState =
-                                                WorkspaceDialogState.ChapterActions(item.volumeId, item.chapter)
+                                        onAction = { action ->
+                                            handleChapterAction(
+                                                action,
+                                                item.volumeId,
+                                                item.chapter,
+                                                viewModel,
+                                            ) { dialogState = it }
                                         },
                                     ),
                                 volumeId = item.volumeId,
@@ -265,37 +347,6 @@ internal fun ChapterTreeContent(
                 onDismiss = { dialogState = WorkspaceDialogState.None },
             )
         }
-        is WorkspaceDialogState.VolumeActions -> {
-            // #610 评论四：菜单项按 Core Context(Volume) spec 渲染，顺序来自 Core order；
-            // Delete 需要确认（契约 requiresConfirmation=true），先进入确认弹窗。
-            VolumeActionsDialog(
-                volume = state.volume,
-                actions = workspaceActions.contextActions(WorkspaceActionTarget.Volume),
-                onAction = { action ->
-                    when (action.kind) {
-                        WorkspaceActionKind.Rename ->
-                            dialogState = WorkspaceDialogState.RenameVolume(state.volume)
-                        WorkspaceActionKind.Delete ->
-                            if (action.requiresConfirmation) {
-                                dialogState = WorkspaceDialogState.DeleteVolume(state.volume)
-                            } else {
-                                viewModel.deleteVolume(state.volume.id)
-                                dialogState = WorkspaceDialogState.None
-                            }
-                        WorkspaceActionKind.MoveEarlier -> {
-                            viewModel.moveVolumeUp(state.volume.id)
-                            dialogState = WorkspaceDialogState.None
-                        }
-                        WorkspaceActionKind.MoveLater -> {
-                            viewModel.moveVolumeDown(state.volume.id)
-                            dialogState = WorkspaceDialogState.None
-                        }
-                        else -> {}
-                    }
-                },
-                onDismiss = { dialogState = WorkspaceDialogState.None },
-            )
-        }
         is WorkspaceDialogState.RenameVolume -> {
             RenameDialog(
                 title = stringResource(id = R.string.rename_volume),
@@ -303,36 +354,6 @@ internal fun ChapterTreeContent(
                 onConfirm = { newTitle ->
                     viewModel.renameVolume(state.volume.id, newTitle)
                     dialogState = WorkspaceDialogState.None
-                },
-                onDismiss = { dialogState = WorkspaceDialogState.None },
-            )
-        }
-        is WorkspaceDialogState.ChapterActions -> {
-            // #610 评论四：菜单项按 Core Context(Chapter) spec 渲染，顺序来自 Core order。
-            ChapterActionsDialog(
-                chapter = state.chapter,
-                actions = workspaceActions.contextActions(WorkspaceActionTarget.Chapter),
-                onAction = { action ->
-                    when (action.kind) {
-                        WorkspaceActionKind.Rename ->
-                            dialogState = WorkspaceDialogState.RenameChapter(state.volumeId, state.chapter)
-                        WorkspaceActionKind.Delete ->
-                            if (action.requiresConfirmation) {
-                                dialogState = WorkspaceDialogState.DeleteChapter(state.volumeId, state.chapter)
-                            } else {
-                                viewModel.deleteChapter(state.volumeId, state.chapter.id)
-                                dialogState = WorkspaceDialogState.None
-                            }
-                        WorkspaceActionKind.MoveEarlier -> {
-                            viewModel.moveChapterUp(state.volumeId, state.chapter.id)
-                            dialogState = WorkspaceDialogState.None
-                        }
-                        WorkspaceActionKind.MoveLater -> {
-                            viewModel.moveChapterDown(state.volumeId, state.chapter.id)
-                            dialogState = WorkspaceDialogState.None
-                        }
-                        else -> {}
-                    }
                 },
                 onDismiss = { dialogState = WorkspaceDialogState.None },
             )
@@ -376,7 +397,7 @@ internal class VolumeRowActions(
     val workspaceActions: AndroidWorkspaceActionSpec,
     val onToggleExpand: () -> Unit,
     val onCreateChapter: () -> Unit,
-    val onMoreActions: () -> Unit,
+    val onAction: (WorkspaceActionSpec) -> Unit,
 )
 
 @Composable
@@ -393,6 +414,8 @@ internal fun VolumeRow(
         actions.workspaceActions.itemTrailingActions(WorkspaceActionTarget.Volume)
             .any { it.kind == WorkspaceActionKind.CreateChapter }
     val hasContextActions = actions.workspaceActions.contextActions(WorkspaceActionTarget.Volume).isNotEmpty()
+    // #625：菜单展开状态留在行本地 — 多行各自独立，不会互相覆盖。
+    var menuExpanded by remember { mutableStateOf(false) }
     SujianListItem(
         headline = volume.title,
         leadingIcon = if (isExpanded) SujianIcons.KeyboardArrowDown else SujianIcons.KeyboardArrowRight,
@@ -408,12 +431,28 @@ internal fun VolumeRow(
                         semanticId = SujianSemanticIds.createChapter(volume.id),
                     )
                 }
+                // #625：⋮ 触发器与 DropdownMenu 在同一组合位置一起画，菜单锚定到按钮左下角；
+                // 菜单项按 Core Context(Volume) spec 渲染，顺序来自 Core order。
                 if (hasContextActions) {
-                    SujianIconButton(
-                        onClick = actions.onMoreActions,
-                        icon = SujianIcons.MoreVert,
+                    SujianOverflowMenu(
+                        expanded = menuExpanded,
+                        onExpandedChange = { menuExpanded = it },
                         contentDescription = stringResource(id = R.string.action_more),
-                    )
+                    ) {
+                        val volumeActions = actions.workspaceActions.contextActions(WorkspaceActionTarget.Volume)
+                        volumeActions.forEach { action ->
+                            val labelRes = workspaceActionLabelRes(action)
+                            if (labelRes != null) {
+                                SujianOverflowMenuItem(
+                                    text = stringResource(labelRes),
+                                    onClick = {
+                                        menuExpanded = false
+                                        actions.onAction(action)
+                                    },
+                                )
+                            }
+                        }
+                    }
                 }
             }
         },
@@ -425,7 +464,7 @@ internal fun VolumeRow(
 internal class ChapterRowActions(
     val workspaceActions: AndroidWorkspaceActionSpec,
     val onSelect: () -> Unit,
-    val onMoreActions: () -> Unit,
+    val onAction: (WorkspaceActionSpec) -> Unit,
 )
 
 @Composable
@@ -438,6 +477,8 @@ internal fun ChapterRow(
 ) {
     // #610 评论四：更多菜单按钮按 Core Context(Chapter) 契约存在与否渲染。
     val hasContextActions = actions.workspaceActions.contextActions(WorkspaceActionTarget.Chapter).isNotEmpty()
+    // #625：菜单展开状态留在行本地 — 多行各自独立，不会互相覆盖。
+    var menuExpanded by remember { mutableStateOf(false) }
     SujianListItem(
         headline = chapter.title,
         supportingText =
@@ -453,12 +494,28 @@ internal fun ChapterRow(
         onClick = actions.onSelect,
         semanticId = if (volumeId.isNotEmpty()) SujianSemanticIds.chapter(volumeId, chapter.id) else null,
         trailingContent = {
+            // #625：⋮ 触发器与 DropdownMenu 在同一组合位置一起画，菜单锚定到按钮左下角；
+            // 菜单项按 Core Context(Chapter) spec 渲染，顺序来自 Core order。
             if (hasContextActions) {
-                SujianIconButton(
-                    onClick = actions.onMoreActions,
-                    icon = SujianIcons.MoreVert,
+                SujianOverflowMenu(
+                    expanded = menuExpanded,
+                    onExpandedChange = { menuExpanded = it },
                     contentDescription = stringResource(id = R.string.action_more),
-                )
+                ) {
+                    val chapterActions = actions.workspaceActions.contextActions(WorkspaceActionTarget.Chapter)
+                    chapterActions.forEach { action ->
+                        val labelRes = workspaceActionLabelRes(action)
+                        if (labelRes != null) {
+                            SujianOverflowMenuItem(
+                                text = stringResource(labelRes),
+                                onClick = {
+                                    menuExpanded = false
+                                    actions.onAction(action)
+                                },
+                            )
+                        }
+                    }
+                }
             }
         },
         modifier = modifier,
@@ -564,80 +621,6 @@ private fun CreateChapterDialog(
                 label = { Text(stringResource(id = R.string.hint_chapter_title_short)) },
                 singleLine = true,
             )
-        },
-    )
-}
-
-@Composable
-private fun VolumeActionsDialog(
-    volume: VolumeUiModel,
-    actions: List<WorkspaceActionSpec>,
-    onAction: (WorkspaceActionSpec) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    SujianDialog(
-        onDismissRequest = onDismiss,
-        title = volume.title,
-        confirmText = "",
-        onConfirm = {},
-        body = {
-            Column {
-                // #610 评论四：只按 Core Context(Volume) spec 渲染菜单项，顺序来自 Core order；
-                // 角色→业务回调由调用方绑定（本层只做角色→菜单项渲染）。
-                actions.forEach { action ->
-                    val labelRes =
-                        when (action.kind) {
-                            WorkspaceActionKind.Rename -> R.string.action_rename
-                            WorkspaceActionKind.MoveEarlier -> R.string.action_move_up
-                            WorkspaceActionKind.MoveLater -> R.string.action_move_down
-                            WorkspaceActionKind.Delete -> R.string.action_delete
-                            else -> null
-                        }
-                    if (labelRes != null) {
-                        SujianListItem(
-                            headline = stringResource(id = labelRes),
-                            onClick = { onAction(action) },
-                        )
-                    }
-                }
-            }
-        },
-    )
-}
-
-@Composable
-private fun ChapterActionsDialog(
-    chapter: ChapterUiModel,
-    actions: List<WorkspaceActionSpec>,
-    onAction: (WorkspaceActionSpec) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    SujianDialog(
-        onDismissRequest = onDismiss,
-        title = chapter.title,
-        confirmText = "",
-        onConfirm = {},
-        body = {
-            Column {
-                // #610 评论四：只按 Core Context(Chapter) spec 渲染菜单项，顺序来自 Core order；
-                // 角色→业务回调由调用方绑定（本层只做角色→菜单项渲染）。
-                actions.forEach { action ->
-                    val labelRes =
-                        when (action.kind) {
-                            WorkspaceActionKind.Rename -> R.string.action_rename
-                            WorkspaceActionKind.MoveEarlier -> R.string.action_move_up
-                            WorkspaceActionKind.MoveLater -> R.string.action_move_down
-                            WorkspaceActionKind.Delete -> R.string.action_delete
-                            else -> null
-                        }
-                    if (labelRes != null) {
-                        SujianListItem(
-                            headline = stringResource(id = labelRes),
-                            onClick = { onAction(action) },
-                        )
-                    }
-                }
-            }
         },
     )
 }

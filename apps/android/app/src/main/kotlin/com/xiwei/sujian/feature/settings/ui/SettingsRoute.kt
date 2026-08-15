@@ -127,6 +127,10 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxSize().testTag(SujianSemanticIds.SettingsScreen),
             contentPadding = PaddingValues(vertical = dims.space8),
         ) {
+            // 设置页顶部紧凑全局搜索入口；#477 未接入时空动作，接入后只替换此回调。
+            item(key = "settings_search_entry") {
+                SettingsSearchEntry(onClick = {})
+            }
             SettingsGroup.entries.forEach { group ->
                 val categories = settingsCategories.filter { it.group == group }
                 if (categories.isEmpty()) return@forEach

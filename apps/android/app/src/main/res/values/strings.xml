@@ -49,6 +49,9 @@
     <string name="pref_category_app_sync">应用数据同步</string>
     <string name="pref_category_ai">AI</string>
 
+    <!-- 设置页顶部紧凑全局搜索入口（#477 未接入时为占位） -->
+    <string name="settings_search_hint">搜索设置</string>
+
     <!-- 设置列表分组 -->
     <string name="pref_group_appearance">外观</string>
     <string name="pref_group_writing">写作</string>
