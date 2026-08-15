@@ -275,10 +275,22 @@
     <string name="writing_tool_pane_placeholder">星图与 AI 工具即将上线</string>
     <string name="writing_tool_rail_placeholder">工具</string>
     <string name="writing_workspace_chapter_placeholder">未选择章节</string>
+
+    <!-- #625 评论项2-5：写作工作台工具栏 / 工具壳收起展开 / 空态 -->
+    <string name="cd_back">返回</string>
+    <string name="cd_chapter_tree_collapse">收起章节栏</string>
+    <string name="cd_chapter_tree_expand">展开章节栏</string>
+    <string name="cd_writing_tool_pane_collapse">收起工具面板</string>
+    <string name="cd_writing_tool_pane_expand">展开工具面板</string>
+    <string name="writing_tool_pane_empty">暂无工具内容</string>
     <string name="volume_chapter_title">卷章</string>
     <string name="action_new_volume_short">新建卷</string>
     <string name="volume_chapter_stats">共 %1$d 卷 · %2$d 章 · %3$d 字</string>
     <string name="volume_chapter_empty">暂无卷章数据</string>
+    <!-- #625 项7：作品卡字数 i18n — Core 只返回整数 totalWordCount，UI 用资源 + 当前 Locale 格式化。 -->
+    <string name="project_word_count_words">%1$d 字</string>
+    <string name="project_word_count_wan">%2$.1f 万字</string>
+    <string name="project_word_count_with_dot">· %1$s</string>
     <string name="chapter_list_empty">暂无章节</string>
     <string name="rename_volume">重命名卷</string>
     <string name="rename_chapter">重命名章节</string>

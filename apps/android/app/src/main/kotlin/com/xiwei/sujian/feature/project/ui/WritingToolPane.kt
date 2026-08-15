@@ -13,26 +13,34 @@ import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 
 /**
- * 写作工作台右侧工具面板（#625 第二段）— 大屏展开态占位。
+ * 写作工作台右侧工具面板（#625 评论项5）— 工具壳。
  *
- * 未来放星图、AI 工具等。当前为占位 Composable，等具体功能实现再填充。
+ * pane 只负责承载选中的工具 content slot（[content]）：
+ * - [content] 非空时画工具内容；
+ * - [content] 为 null 时显示明确空态（i18n），不放伪功能按钮；
+ * - 星图/AI 真正内容分别归 #373 / #506，以后只往 slot 填内容，不再改写作工作台布局。
  *
  * #625 评论：用户主动收起 — 不按设备尺寸/方向自动多档收 pane。
  * 收起状态由 [WideWritingWorkspace] 用 rememberSaveable 持有。
+ *
+ * @param content 当前选中工具的 content slot；null 表示无可用工具内容，显示空态。
  */
 @Composable
-internal fun WritingToolPane(modifier: Modifier = Modifier) {
+internal fun WritingToolPane(
+    content: (@Composable () -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
     Column(
         modifier = modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(
-            text = stringResource(id = R.string.writing_tool_pane_title),
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Text(
-            text = stringResource(id = R.string.writing_tool_pane_placeholder),
-            style = MaterialTheme.typography.bodyMedium,
-        )
+        if (content != null) {
+            content()
+        } else {
+            Text(
+                text = stringResource(id = R.string.writing_tool_pane_empty),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
     }
 }

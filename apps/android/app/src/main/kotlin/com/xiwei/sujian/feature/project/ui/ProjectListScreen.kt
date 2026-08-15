@@ -43,34 +43,46 @@ import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.core.designsystem.theme.SujianDimensions
-import com.xiwei.sujian.feature.project.data.model.Project
+import com.xiwei.sujian.feature.project.data.model.ProjectSummary
 import androidx.compose.foundation.lazy.grid.items as gridItems
 
 /**
- * #625 第二段：作品卡片字数格式化。
+ * #625 项7：作品卡片字数格式化 — 纯函数，接收 i18n 格式串，便于单测。
  *
- * - < 10000 字：原数（如 "1234 字"）；
- * - >= 10000 字：x.x 万字（如 "1.2 万字"）。
+ * - < 10000 字：用 [wordsFormat] 格式化原数（中文 "%1$d 字" / 英文 "%1$d words"）；
+ * - >= 10000 字：用 [wanFormat] 格式化（中文 "%2$.1f 万字" / 英文 "%1$d words"，英文不区分万字）。
  *
- * 提取为顶层函数以控制 [ProjectCard] 认知复杂度，便于单测。
+ * 两个格式串都接收 (wordCount, wanValue) 两个参数，由调用方从 `stringResource` 取出，
+ * 这样 UI 不自己拼中文单位，Core 只返回整数 `totalWordCount`。
  */
-internal fun formatProjectWordCount(wordCount: Int): String =
-    if (wordCount < 10_000) {
-        "$wordCount 字"
+internal fun formatProjectWordCount(
+    wordCount: Int,
+    wordsFormat: String,
+    wanFormat: String,
+): String {
+    val wanValue = wordCount / 10_000.0
+    return if (wordCount < 10_000) {
+        String.format(wordsFormat, wordCount, wanValue)
     } else {
-        val wan = wordCount / 10_000.0
-        String.format("%.1f 万字", wan)
+        String.format(wanFormat, wordCount, wanValue)
     }
+}
 
 /**
- * #625 第二段 4c：作品卡片字数行 — 提取以降低 [ProjectCard] 认知复杂度。
+ * #625 项7：作品卡片字数行 — 用 `stringResource` 取 i18n 格式串，再交 [formatProjectWordCount] 格式化。
  * null 或 0 不显示。
  */
 @Composable
 private fun ProjectCardWordCount(totalWordCount: Int?) {
     if (totalWordCount != null && totalWordCount > 0) {
+        val formatted =
+            formatProjectWordCount(
+                totalWordCount,
+                wordsFormat = stringResource(id = R.string.project_word_count_words),
+                wanFormat = stringResource(id = R.string.project_word_count_wan),
+            )
         Text(
-            "· ${formatProjectWordCount(totalWordCount)}",
+            stringResource(id = R.string.project_word_count_with_dot, formatted),
             style = MaterialTheme.typography.bodySmall,
         )
     }
@@ -101,8 +113,10 @@ internal fun ProjectListContent(
     var showCreateDialog by remember { mutableStateOf(false) }
     // #625：菜单展开状态留在每张卡片本地（见 [ProjectCard]），
     // 页面级只持有"重命名输入"与"确认删除"两个真正需要居中 Dialog 的目标。
-    var renameProject by remember { mutableStateOf<Project?>(null) }
-    var confirmDeleteProject by remember { mutableStateOf<Project?>(null) }
+    // #625 项6：列表 UI 唯一数据源是 ProjectSummary（含 title/字数/卷数/章节数），
+    // 不再保留 Project + ProjectSummary 双源拼接。
+    var renameProject by remember { mutableStateOf<ProjectSummary?>(null) }
+    var confirmDeleteProject by remember { mutableStateOf<ProjectSummary?>(null) }
     val dims = LocalSujianDimensions.current
 
     // #610 评论四：动作存在性与位置来自 Core 契约，不再由 Composable 自己决定：
@@ -122,7 +136,7 @@ internal fun ProjectListContent(
     val useWideGrid = workspaceLayoutMode != WorkspaceLayoutMode.SINGLE_PANE
 
     Box(modifier = modifier.fillMaxSize()) {
-        if (appState.projects.isEmpty()) {
+        if (appState.projectSummaries.isEmpty()) {
             // #614：首次加载失败显示错误态（loadError 文本 + 同样 hint）；否则显示原"暂无作品"空状态。
             ProjectListEmptyState(
                 loadError = appState.loadError,
@@ -130,7 +144,7 @@ internal fun ProjectListContent(
                 modifier = Modifier.fillMaxSize(),
             )
         } else if (useWideGrid) {
-            // #625 第二段 4d / #628 验收点 4：宽屏 grid — LazyVerticalGrid（多列）。
+            // #625 项6 / #628 验收点 4：宽屏 grid — LazyVerticalGrid（多列），数据源 ProjectSummary。
             // recentEdits 区块保持单列横跨（用 header item + full-span items），
             // projects 区块用 grid。当前简化：宽屏直接全部用 grid（recentEdits 较少）。
             // 卡片最小宽度来自 Rust LayoutMetrics.projectCardMinWidthDp。
@@ -141,25 +155,23 @@ internal fun ProjectListContent(
                 verticalArrangement = Arrangement.spacedBy(dims.space8),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                gridItems(appState.projects, key = { it.id }) { project ->
-                    val summary = summaryById[project.id]
+                gridItems(appState.projectSummaries, key = { it.id }) { summary ->
                     ProjectCard(
-                        project = project,
-                        totalWordCount = summary?.totalWordCount,
-                        onSelect = { onSelectProject(project.id, project.title) },
+                        summary = summary,
+                        onSelect = { onSelectProject(summary.id, summary.title) },
                         menuActions =
                             ProjectCardMenuActions(
                                 menuActions = projectMenuActions,
-                                onRename = { renameProject = project },
+                                onRename = { renameProject = summary },
                                 onDelete = { action ->
                                     handleProjectDeleteAction(
                                         action,
-                                        project,
+                                        summary,
                                         appState,
-                                    ) { confirmDeleteProject = project }
+                                    ) { confirmDeleteProject = summary }
                                 },
                             ),
-                        modifier = Modifier.testTag(SujianSemanticIds.project(project.id)),
+                        modifier = Modifier.testTag(SujianSemanticIds.project(summary.id)),
                     )
                 }
             }
@@ -178,14 +190,15 @@ internal fun ProjectListContent(
                         )
                     }
                     items(appState.recentEdits) { edit ->
-                        val project = appState.projects.find { it.id == edit.projectId }
+                        // #625 项6：recentEdits 标题也来自 ProjectSummary 单数据源。
+                        val summary = appState.projectSummaries.find { it.id == edit.projectId }
                         SujianCard(
-                            onClick = { onSelectProject(edit.projectId, project?.title ?: "") },
+                            onClick = { onSelectProject(edit.projectId, summary?.title ?: "") },
                             modifier = Modifier.fillMaxWidth().padding(bottom = dims.space8),
                         ) {
                             Column(modifier = Modifier.padding(dims.space16)) {
                                 Text(
-                                    project?.title ?: stringResource(id = R.string.unknown_project),
+                                    summary?.title ?: stringResource(id = R.string.unknown_project),
                                     style = MaterialTheme.typography.titleMedium,
                                 )
                                 Text(
@@ -204,27 +217,25 @@ internal fun ProjectListContent(
                         )
                     }
                 }
-                items(appState.projects) { project ->
-                    val summary = summaryById[project.id]
+                items(appState.projectSummaries, key = { it.id }) { summary ->
                     ProjectCard(
-                        project = project,
-                        totalWordCount = summary?.totalWordCount,
-                        onSelect = { onSelectProject(project.id, project.title) },
+                        summary = summary,
+                        onSelect = { onSelectProject(summary.id, summary.title) },
                         menuActions =
                             ProjectCardMenuActions(
                                 menuActions = projectMenuActions,
-                                onRename = { renameProject = project },
+                                onRename = { renameProject = summary },
                                 onDelete = { action ->
                                     // #610 评论五：Delete 是否需要确认由 Core 契约 requiresConfirmation 决定，
                                     // 不再写死进入确认弹窗。
                                     handleProjectDeleteAction(
                                         action,
-                                        project,
+                                        summary,
                                         appState,
-                                    ) { confirmDeleteProject = project }
+                                    ) { confirmDeleteProject = summary }
                                 },
                             ),
-                        modifier = Modifier.testTag(SujianSemanticIds.project(project.id)),
+                        modifier = Modifier.testTag(SujianSemanticIds.project(summary.id)),
                     )
                 }
             }
@@ -269,19 +280,19 @@ internal fun ProjectListContent(
 
     // #625：重命名输入 Dialog — 菜单项点击后由卡片回调 onRename 把目标抬到页面级，
     // 输入完成后写回 Core 并清空目标。Dialog 主体提取为 [RenameProjectDialog] 以控制认知复杂度。
-    renameProject?.let { project ->
+    renameProject?.let { summary ->
         RenameProjectDialog(
-            project = project,
-            onRename = { newTitle -> appState.renameProject(project.id, newTitle) },
+            summary = summary,
+            onRename = { newTitle -> appState.renameProject(summary.id, newTitle) },
             onDismiss = { renameProject = null },
         )
     }
 
-    confirmDeleteProject?.let { project ->
+    confirmDeleteProject?.let { summary ->
         ConfirmDeleteProjectDialog(
-            name = project.title,
+            name = summary.title,
             onConfirm = {
-                appState.deleteProject(project.id)
+                appState.deleteProject(summary.id)
                 confirmDeleteProject = null
             },
             onDismiss = { confirmDeleteProject = null },
@@ -325,15 +336,10 @@ internal data class ProjectCardMenuActions(
 
 @Composable
 private fun ProjectCard(
-    project: Project,
+    summary: ProjectSummary,
     onSelect: () -> Unit,
     menuActions: ProjectCardMenuActions,
     modifier: Modifier = Modifier,
-    /**
-     * #625 第二段：作品字数 — 来自 [com.xiwei.sujian.app.WorkspaceAppState.projectSummaries]。
-     * null 表示摘要未加载或该作品无摘要，不显示字数行。
-     */
-    totalWordCount: Int? = null,
 ) {
     val dims = LocalSujianDimensions.current
     // #625：菜单展开状态留在卡片本地 — 多张卡片各自独立，不会互相覆盖。
@@ -348,14 +354,14 @@ private fun ProjectCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(project.title, style = MaterialTheme.typography.titleMedium)
+                Text(summary.title, style = MaterialTheme.typography.titleMedium)
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(dims.space8),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(project.updatedAt.substringBefore("T"), style = MaterialTheme.typography.bodySmall)
-                    // #625 第二段 4c：作品卡片字数 — < 10000 原数，>= 10000 "x.x 万字"。
-                    ProjectCardWordCount(totalWordCount)
+                    Text(summary.updatedAt.substringBefore("T"), style = MaterialTheme.typography.bodySmall)
+                    // #625 项7：作品卡片字数 — i18n 由 [ProjectCardWordCount] 内部用 stringResource 格式化。
+                    ProjectCardWordCount(summary.totalWordCount)
                 }
             }
             // #610 评论四 + #625：菜单触发器与 DropdownMenu 在同一组合位置一起画，
@@ -401,17 +407,17 @@ private fun ProjectCard(
  */
 @Composable
 private fun RenameProjectDialog(
-    project: Project,
+    summary: ProjectSummary,
     onRename: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var newTitle by remember { mutableStateOf(project.title) }
+    var newTitle by remember { mutableStateOf(summary.title) }
     SujianDialog(
         onDismissRequest = onDismiss,
         title = stringResource(id = R.string.action_rename),
         confirmText = stringResource(id = R.string.action_ok),
         onConfirm = {
-            if (newTitle.isNotBlank() && newTitle != project.title) {
+            if (newTitle.isNotBlank() && newTitle != summary.title) {
                 onRename(newTitle.trim())
             }
             onDismiss()
@@ -455,13 +461,13 @@ private fun ConfirmDeleteProjectDialog(
  */
 private fun handleProjectDeleteAction(
     action: WorkspaceActionSpec,
-    project: Project,
+    summary: ProjectSummary,
     appState: WorkspaceAppState,
     onRequestConfirmDelete: () -> Unit,
 ) {
     if (action.requiresConfirmation) {
         onRequestConfirmDelete()
     } else {
-        appState.deleteProject(project.id)
+        appState.deleteProject(summary.id)
     }
 }

@@ -314,6 +314,25 @@ class EditorWindowHost(
         sharedEditorView?.dismissImeForNavigation()
     }
 
+    /**
+     * #625 评论项3：撤销 — 只转发给当前真实 [sharedEditorView]。
+     *
+     * 继续走现有 View → Pipeline → session 编辑链（dirty/保存/字数/动画同一份状态），
+     * 不重建 TextEditSessionBridge，不直接跨 UniFFI 调 undo/redo。
+     */
+    fun performUndo() {
+        sharedEditorView?.performUndo()
+    }
+
+    /**
+     * #625 评论项3：重做 — 只转发给当前真实 [sharedEditorView]。
+     *
+     * 同 [performUndo]，继续走现有 View → Pipeline → session 编辑链。
+     */
+    fun performRedo() {
+        sharedEditorView?.performRedo()
+    }
+
     private data class EditorTypography(
         val fontSizeSp: Float,
         val lineSpacingMultiplier: Float,

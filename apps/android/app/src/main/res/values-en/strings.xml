@@ -212,4 +212,16 @@
     <string name="writing_tool_pane_placeholder">Star map and AI tools coming soon</string>
     <string name="writing_tool_rail_placeholder">Tools</string>
     <string name="writing_workspace_chapter_placeholder">No chapter selected</string>
+
+    <!-- #625 评论项2-5: writing workspace toolbar / tool shell collapse-expand / empty state -->
+    <string name="cd_back">Back</string>
+    <string name="cd_chapter_tree_collapse">Collapse chapter tree</string>
+    <string name="cd_chapter_tree_expand">Expand chapter tree</string>
+    <string name="cd_writing_tool_pane_collapse">Collapse tool pane</string>
+    <string name="cd_writing_tool_pane_expand">Expand tool pane</string>
+    <string name="writing_tool_pane_empty">No tool content available</string>
+    <!-- #625 项7：作品卡字数 i18n — 英文不区分万字，始终用原数。 -->
+    <string name="project_word_count_words">%1$d words</string>
+    <string name="project_word_count_wan">%1$d words</string>
+    <string name="project_word_count_with_dot">· %1$s</string>
 </resources>

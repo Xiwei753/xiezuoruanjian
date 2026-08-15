@@ -182,10 +182,12 @@ class SujianAppViewModel(
         savedStateHandle["currentProjectId"] = projectId
         com.xiwei.sujian.app.state.ActiveProjectGate.setCurrentProjectId(projectId)
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceSelection("project", projectId)
-        val cachedProject = projects.find { it.id == projectId }
-        if (cachedProject != null) {
-            currentProjectTitle = cachedProject.title
-            savedStateHandle["currentProjectTitle"] = cachedProject.title
+        // #625 项6：列表 UI 唯一数据源是 ProjectSummary，selectProject(id) 取标题也从 projectSummaries 缓存查，
+        // 不再依赖 projects 列表（避免 CRUD 后 projects 陈旧导致标题回退到远端查询）。
+        val cachedSummary = projectSummaries.find { it.id == projectId }
+        if (cachedSummary != null) {
+            currentProjectTitle = cachedSummary.title
+            savedStateHandle["currentProjectTitle"] = cachedSummary.title
         } else {
             viewModelScope.launch {
                 val title =
@@ -318,7 +320,9 @@ class SujianAppViewModel(
                     runCatching { requireProjectUseCase().createProject(title) }
                 }
             result.onFailure { _uiEvents.tryEmit(WorkspaceUiEvent.Error(errorMessage(it))) }
-            refreshProjects()
+            // #625 项6：作品 CRUD 后只刷新 ProjectSummary 这一份列表（列表 UI 唯一数据源），
+            // 不再单独刷新 projects — 避免两份列表分别异步刷新导致字数/标题不同步。
+            refreshProjectSummaries()
         }
     }
 
@@ -329,7 +333,8 @@ class SujianAppViewModel(
                     runCatching { requireProjectUseCase().deleteProject(projectId) }
                 }
             result.onFailure { _uiEvents.tryEmit(WorkspaceUiEvent.Error(errorMessage(it))) }
-            refreshProjects()
+            // #625 项6：同 createProject — 只刷新 ProjectSummary。
+            refreshProjectSummaries()
         }
     }
 
@@ -343,7 +348,8 @@ class SujianAppViewModel(
                     runCatching { requireProjectUseCase().renameProject(projectId, newTitle) }
                 }
             result.onFailure { _uiEvents.tryEmit(WorkspaceUiEvent.Error(errorMessage(it))) }
-            refreshProjects()
+            // #625 项6：同 createProject — 只刷新 ProjectSummary。
+            refreshProjectSummaries()
         }
     }
 

@@ -58,6 +58,7 @@ import com.xiwei.sujian.app.WorkspaceUiEvent
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.app.presentation.contract.PresentationContractBridge
+import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.layout.rememberAndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.screen.AndroidChromePolicy
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
@@ -282,7 +283,7 @@ private data class SujianNavContext(
     val workspaceNavState: ProjectNavigationState,
     val projectListActions: AndroidWorkspaceActionSpec,
     val projectWorkspaceActions: AndroidWorkspaceActionSpec,
-    val layoutSpec: com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec,
+    val layoutSpec: AndroidLayoutSpec,
     val chrome: SujianChromeSpec,
 )
 
@@ -879,6 +880,8 @@ fun SujianNavigationSuite(
             navDisplayContent = navDisplayContent,
         )
     } else {
+        // #628 验收点 6：大屏 Writing 顶栏归属已由上面的 isWorkbenchWriting / showOuterTopBar 统一判定。
+        // SujianWideNavScaffold 复用同一份 topBarInfo + showOuterTopBar，不在此处再算一次。
         SujianWideNavScaffold(
             modifier = modifier,
             topBarInfo = topBarInfo,

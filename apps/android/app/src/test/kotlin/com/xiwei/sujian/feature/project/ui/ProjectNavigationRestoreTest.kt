@@ -1,8 +1,15 @@
 package com.xiwei.sujian.feature.project.ui
 
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
+import java.util.Locale
+
+private const val WORDS_FORMAT_ZH = "%1\$d 字"
+private const val WAN_FORMAT_ZH = "%2\$.1f 万字"
+private const val WORDS_FORMAT_EN = "%1\$d words"
 
 class ProjectNavigationRestoreTest {
     @Test
@@ -179,20 +186,44 @@ class WorkspaceNavigatorTest {
 }
 
 /**
- * #625 第二段：[formatProjectWordCount] 字数格式化单测。
+ * #625 项7：[formatProjectWordCount] 字数格式化单测。
+ *
+ * [formatProjectWordCount] 接收 i18n 格式串，测试传入中文格式串验证格式化逻辑。
+ * 固定 Locale.US 保证 `%.1f` 小数点为 `.`，不受 CI 默认 locale 影响。
  */
 class FormatProjectWordCountTest {
+    private val savedLocale = Locale.getDefault()
+
+    @Before
+    fun setUp() {
+        Locale.setDefault(Locale.US)
+    }
+
+    @After
+    fun tearDown() {
+        Locale.setDefault(savedLocale)
+    }
+
     @Test
     fun lessThanTenThousand_showsRawCount() {
-        assertEquals("0 字", formatProjectWordCount(0))
-        assertEquals("1234 字", formatProjectWordCount(1234))
-        assertEquals("9999 字", formatProjectWordCount(9999))
+        assertEquals("0 字", formatProjectWordCount(0, WORDS_FORMAT_ZH, WAN_FORMAT_ZH))
+        assertEquals("1234 字", formatProjectWordCount(1234, WORDS_FORMAT_ZH, WAN_FORMAT_ZH))
+        assertEquals("9999 字", formatProjectWordCount(9999, WORDS_FORMAT_ZH, WAN_FORMAT_ZH))
     }
 
     @Test
     fun tenThousandOrMore_showsWanUnit() {
-        assertEquals("1.0 万字", formatProjectWordCount(10_000))
-        assertEquals("1.2 万字", formatProjectWordCount(12_000))
-        assertEquals("10.0 万字", formatProjectWordCount(100_000))
+        assertEquals("1.0 万字", formatProjectWordCount(10_000, WORDS_FORMAT_ZH, WAN_FORMAT_ZH))
+        assertEquals("1.2 万字", formatProjectWordCount(12_000, WORDS_FORMAT_ZH, WAN_FORMAT_ZH))
+        assertEquals("10.0 万字", formatProjectWordCount(100_000, WORDS_FORMAT_ZH, WAN_FORMAT_ZH))
+    }
+
+    @Test
+    fun englishLocale_doesNotUseWanUnit() {
+        // 英文不区分万字：wanFormat 也用 "%1$d words"，始终显示原数。
+        assertEquals("0 words", formatProjectWordCount(0, WORDS_FORMAT_EN, WORDS_FORMAT_EN))
+        assertEquals("1234 words", formatProjectWordCount(1234, WORDS_FORMAT_EN, WORDS_FORMAT_EN))
+        assertEquals("10000 words", formatProjectWordCount(10_000, WORDS_FORMAT_EN, WORDS_FORMAT_EN))
+        assertEquals("100000 words", formatProjectWordCount(100_000, WORDS_FORMAT_EN, WORDS_FORMAT_EN))
     }
 }
