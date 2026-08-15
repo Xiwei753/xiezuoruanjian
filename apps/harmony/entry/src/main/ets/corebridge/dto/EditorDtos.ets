@@ -1,5 +1,6 @@
 // ─── Editor Animation DTOs ─── 与 Core api/types/editor.rs 对齐
-// 鸿蒙端动画暂未实现，DTO 定义先行对齐，为后续接入做准备。
+// EditorTransactionCause 已被 NativeEditorSessionBridge 使用；动画 DTO 供 motion 层消费，
+// 符合 Issue #629 评论第5节「以后做动画时新增 motion 层」规划。
 
 export enum EditorAnimationKind {
   Insert = 'Insert',

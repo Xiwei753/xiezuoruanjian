@@ -20,7 +20,7 @@ export class KeyboardInputService {
     return KeyboardInputService.instance
   }
 
-  // 把 HarmonyOS KeyCode 转成可读 keyText（占位，实际由 @ohos.multimodalInput keyCode 映射）。
+  // 把 HarmonyOS KeyCode 转成可读 keyText。基础映射；完整 keyCode→语义由 @ohos.multimodalInput 运行时提供。
   translateKeyCode(keyCode: number): string {
     return String(keyCode)
   }

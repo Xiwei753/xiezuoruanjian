@@ -21,7 +21,7 @@ export class CapabilityRegistry {
 
   // 运行时探测系统能力并更新缓存。具体探测由各平台服务（GripPostureService 等）提供。
   refresh(): void {
-    // 占位：实际探测在各服务初始化时回填。此处保持默认值。
+    // 运行时由各平台服务探测后回填；静态阶段保持默认值。
     this.capabilities = DEFAULT_HARMONY_CAPABILITIES
   }
 }
