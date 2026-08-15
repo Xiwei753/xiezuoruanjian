@@ -2,11 +2,7 @@ package com.xiwei.sujian.feature.project.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -19,11 +15,23 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.MeasurePolicy
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.MeasureScope
+import androidx.compose.ui.layout.layoutId
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
+import com.xiwei.sujian.app.presentation.layout.AndroidLayoutRect
+import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
+import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchRole
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
 import com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult
@@ -32,6 +40,7 @@ import com.xiwei.sujian.feature.editor.presentation.requestOpenChapter
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
 import com.xiwei.sujian.feature.project.data.ProjectRepository
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
@@ -68,30 +77,17 @@ internal data class WideWorkspaceCallbacks(
 )
 
 /**
- * #628 验收点 4：大屏写作工作台结构尺寸 — 来自 Rust LayoutMetrics，
- * 打包传递避免函数参数超出门禁阈值。
+ * 大屏写作工作台（#625 第二段 / #628 评论 5301021120 第 4 步）—
+ * 按 Rust [AndroidWorkbenchLayoutPlan] 放 slot，不跨铰链/遮挡。
  *
- * - [listPaneWidthDp]：左侧章节树宽度（null 时不画章节树，防御性）；
- * - [toolPaneWidthDp]：右侧工具面板宽度；
- * - [toolRailWidthDp]：最右工具栏图标列宽度。
- */
-internal data class WideWorkspaceMetrics(
-    val listPaneWidthDp: Float?,
-    val toolPaneWidthDp: Float,
-    val toolRailWidthDp: Float,
-)
-
-/**
- * 大屏写作工作台（#625 第二段 / 评论项2-5）— Row 布局：
- * - 左：[ChapterTreeContent]（宽度来自 [WideWorkspaceMetrics.listPaneWidthDp]，
- *   用户主动收起，不按设备尺寸自动收起）；
- * - 中：[SujianEditorHost]（复用现有编辑器，不创建第二个，收起不销毁/重建，始终在组合中）；
- * - 右：[WritingToolPane]（用户主动收起，宽度来自 [WideWorkspaceMetrics.toolPaneWidthDp]）
- *   + [WritingToolRail]（最右图标列，宽度来自 [WideWorkspaceMetrics.toolRailWidthDp]）。
+ * 顶部工具栏三组独立容器由本组件承担（#628 验收点 6：Workbench Writing 由工作台
+ * 自己拥有顶部工具栏，外层 app shell 不再额外画通用顶栏）。
  *
- * 顶部 [WritingWorkspaceToolbar]（三组独立容器工具栏）由本组件承担
- * （#628 验收点 6：Workbench Writing 由工作台自己拥有顶部工具栏，
- * 外层 app shell 不再额外画通用顶栏）。
+ * #628 评论 5301021120 第 4 步：用自定义 Compose [Layout] 按
+ * [AndroidWorkbenchPlacement.bounds] 放现有 slot：
+ * ChapterTreeContent / SujianEditorHost / WritingToolPane / WritingToolRail /
+ * Toolbar Leading/Center/Trailing。Android 只做 dp→px 和 place，
+ * 不再判断 hinge 在左还是右、不决定角色挪到哪一侧。
  *
  * #625 评论项4：用户主动收起 — 不按设备尺寸/方向自动多档收 pane。
  * 收起状态用 rememberSaveable 持有，跨配置变化保留。收起只改变布局占用，
@@ -99,119 +95,329 @@ internal data class WideWorkspaceMetrics(
  *
  * #625 评论项5：rail/pane 收成工具壳。当前无真实工具内容（星图/AI 归 #373/#506），
  * 工具列表为空，pane 显示空态，不放伪功能按钮。
+ *
+ * @param workbenchPlan Rust 返回的工作台布局计划（七角色 bounds）。
+ *   null 时回退到不画（应由上层在 layoutSpec 缺失时不进入 Workbench）。
  */
 @Composable
 internal fun WideWritingWorkspace(
     deps: WideWorkspaceDeps,
     documentState: WideWorkspaceDocumentState,
     editorViewModel: EditorViewModel,
-    metrics: WideWorkspaceMetrics,
+    workbenchPlan: AndroidWorkbenchLayoutPlan?,
     callbacks: WideWorkspaceCallbacks,
     modifier: Modifier = Modifier,
 ) {
     // #625 评论项4：用户主动收起 — rememberSaveable 跨配置变化保留收起状态。
     var chapterTreeCollapsed by rememberSaveable { mutableStateOf(false) }
     var toolPaneCollapsed by rememberSaveable { mutableStateOf(false) }
-    // #625 评论项5：当前选中工具 — rememberSaveable 持有。星图/AI 归 #373/#506，
-    // 当前工具列表为空，selectedToolId 仅维护状态机，不放伪功能。
+    // #625 评论项5：当前选中工具 — rememberSaveable 持有。星图/AI 归 #373/#506。
     var selectedToolId by rememberSaveable { mutableStateOf<String?>(null) }
-    val coroutineScope = rememberCoroutineScope()
 
-    // #625 评论项3：撤销/重做从 LocalEditorWindowHost 这条现有窗口链接入，
-    // 继续走 View → Pipeline → session 编辑链，不重建 TextEditSessionBridge。
+    if (workbenchPlan == null) {
+        // 防御性：plan 缺失时不画（上层 isWideLayout 时应已确保 plan 非空）。
+        Box(modifier = modifier.fillMaxSize())
+        return
+    }
+    val bounds = WorkbenchBounds.fromPlan(workbenchPlan)
+    val density = LocalDensity.current
+    val slotState =
+        WorkbenchSlotState(
+            chapterTreeCollapsed = chapterTreeCollapsed,
+            toolPaneCollapsed = toolPaneCollapsed,
+            selectedToolId = selectedToolId,
+            onToggleChapterTree = { chapterTreeCollapsed = !chapterTreeCollapsed },
+            onToggleToolPane = { toolPaneCollapsed = !toolPaneCollapsed },
+            onSelectTool = { id -> selectedToolId = id },
+        )
+    Layout(
+        modifier = modifier.fillMaxSize(),
+        content = {
+            WorkbenchSlots(
+                deps = deps,
+                documentState = documentState,
+                editorViewModel = editorViewModel,
+                callbacks = callbacks,
+                state = slotState,
+                bounds = bounds,
+            )
+        },
+        measurePolicy = workbenchMeasurePolicy(bounds, density),
+    )
+}
+
+/** Layout slot 标识 — 用于自定义 Layout 中按 layoutId 取 placeable。 */
+private enum class LayoutSlotId {
+    TOOLBAR_LEADING,
+    TOOLBAR_CENTER,
+    TOOLBAR_TRAILING,
+    CHAPTER_NAVIGATION,
+    EDITOR,
+    TOOL_PANE,
+    TOOL_RAIL,
+}
+
+private val EMPTY_RECT: AndroidLayoutRect = AndroidLayoutRect(0f, 0f, 0f, 0f)
+
+/**
+ * 七角色 bounds 打包 — 避免 [boundsForSlot] 参数过多（#628 lint LongParameterList）。
+ */
+private data class WorkbenchBounds(
+    val toolbarLeading: AndroidLayoutRect?,
+    val toolbarCenter: AndroidLayoutRect?,
+    val toolbarTrailing: AndroidLayoutRect?,
+    val chapterNav: AndroidLayoutRect?,
+    val editor: AndroidLayoutRect?,
+    val toolPane: AndroidLayoutRect?,
+    val toolRail: AndroidLayoutRect?,
+) {
+    companion object {
+        fun fromPlan(plan: AndroidWorkbenchLayoutPlan): WorkbenchBounds {
+            val p = plan::placementFor
+            return WorkbenchBounds(
+                toolbarLeading = p(AndroidWorkbenchRole.TOOLBAR_LEADING)?.bounds,
+                toolbarCenter = p(AndroidWorkbenchRole.TOOLBAR_CENTER)?.bounds,
+                toolbarTrailing = p(AndroidWorkbenchRole.TOOLBAR_TRAILING)?.bounds,
+                chapterNav = p(AndroidWorkbenchRole.CHAPTER_NAVIGATION)?.bounds,
+                editor = p(AndroidWorkbenchRole.EDITOR)?.bounds,
+                toolPane = p(AndroidWorkbenchRole.TOOL_PANE)?.bounds,
+                toolRail = p(AndroidWorkbenchRole.TOOL_RAIL)?.bounds,
+            )
+        }
+
+        /** 按 slotId 查表取 bounds（Map 替代 when，降低圈复杂度）。 */
+        private val slotBoundsMap: Map<LayoutSlotId, (WorkbenchBounds) -> AndroidLayoutRect> =
+            mapOf(
+                LayoutSlotId.TOOLBAR_LEADING to { b -> b.toolbarLeading ?: EMPTY_RECT },
+                LayoutSlotId.TOOLBAR_CENTER to { b -> b.toolbarCenter ?: EMPTY_RECT },
+                LayoutSlotId.TOOLBAR_TRAILING to { b -> b.toolbarTrailing ?: EMPTY_RECT },
+                LayoutSlotId.CHAPTER_NAVIGATION to { b -> b.chapterNav ?: EMPTY_RECT },
+                LayoutSlotId.EDITOR to { b -> b.editor ?: EMPTY_RECT },
+                LayoutSlotId.TOOL_PANE to { b -> b.toolPane ?: EMPTY_RECT },
+                LayoutSlotId.TOOL_RAIL to { b -> b.toolRail ?: EMPTY_RECT },
+            )
+    }
+
+    /** 按 slotId 查表取 bounds（Map 替代 when，降低圈复杂度）。 */
+    fun forSlot(slotId: LayoutSlotId): AndroidLayoutRect = slotBoundsMap.getValue(slotId)(this)
+}
+
+/**
+ * 工作台 slot 可变状态 + 回调 — 提取以降低 [WideWritingWorkspace] 行数。
+ */
+private data class WorkbenchSlotState(
+    val chapterTreeCollapsed: Boolean,
+    val toolPaneCollapsed: Boolean,
+    val selectedToolId: String?,
+    val onToggleChapterTree: () -> Unit,
+    val onToggleToolPane: () -> Unit,
+    val onSelectTool: (String?) -> Unit,
+)
+
+/**
+ * 七角色 slot 内容 — 提取以降低 [WideWritingWorkspace] 行数。
+ */
+@Composable
+private fun WorkbenchSlots(
+    deps: WideWorkspaceDeps,
+    documentState: WideWorkspaceDocumentState,
+    editorViewModel: EditorViewModel,
+    callbacks: WideWorkspaceCallbacks,
+    state: WorkbenchSlotState,
+    bounds: WorkbenchBounds,
+) {
+    val coroutineScope = rememberCoroutineScope()
     val editorWindowHost = LocalEditorWindowHost.current
     val onUndo: () -> Unit = { editorWindowHost?.performUndo() }
     val onRedo: () -> Unit = { editorWindowHost?.performRedo() }
-
-    // 同步状态 — 显示真实 SyncIndicatorState，不永远画固定 CloudSync。
     val appDeps = LocalSujianAppDependencies.current
     val syncState by appDeps.syncStatusRepository.state.collectAsState()
-
-    // #625 评论项5：工具项列表 — 当前为空（星图/AI 归 #373/#506），不放伪功能按钮。
     val tools = remember { emptyList<WritingToolItem>() }
-    // 当前选中工具的 content slot — 无真实工具内容时为 null，pane 显示空态。
     val toolPaneContent: (@Composable () -> Unit)? = null
 
-    Column(modifier = modifier.fillMaxSize()) {
-        WritingWorkspaceToolbar(
-            chrome = deps.chrome,
-            syncState = syncState,
-            callbacks =
-                WritingToolbarCallbacks(
-                    onBack = callbacks.onBack,
-                    onSync = callbacks.onSync,
-                    onSearch = callbacks.onSearch,
-                    onSettings = callbacks.onSettings,
-                ),
-            actions =
-                WritingToolbarActions(
-                    onUndo = onUndo,
-                    onRedo = onRedo,
-                    onToggleChapterTree = { chapterTreeCollapsed = !chapterTreeCollapsed },
-                    chapterTreeCollapsed = chapterTreeCollapsed,
-                ),
-        )
-
-        Row(modifier = Modifier.fillMaxSize()) {
-            // 左：章节树（用户主动收起）。listPaneWidthDp 缺失时不画（防御性，isWideLayout 时应有值）。
-            // 收起后不画 ChapterTreeContent，展开按钮仍在 toolbar 左组。
-            if (!chapterTreeCollapsed && metrics.listPaneWidthDp != null) {
-                ChapterTreeContent(
-                    projectId = documentState.currentProjectId,
-                    projectRepository = deps.projectRepository,
-                    workspaceActions = deps.projectWorkspaceActions,
-                    onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                        ChapterSelectContext(
-                            coroutineScope = coroutineScope,
-                            editorViewModel = editorViewModel,
-                            appState = deps.appState,
-                            projectId = documentState.currentProjectId,
-                        ).handleChapterSelect(
-                            volumeId = volumeId,
-                            chapterId = chapterId,
-                            chapterTitle = chapterTitle,
-                        )
-                    },
-                    onError = deps.appState::reportWorkspaceError,
-                    modifier =
-                        Modifier
-                            .fillMaxHeight()
-                            .width(metrics.listPaneWidthDp.dp),
-                )
-            }
-
-            // 中：正文编辑器（复用 SujianEditorHost，不创建第二个；收起不销毁/重建，始终在组合中）
-            EditorPane(
-                documentState = documentState,
-                onChapterSwitchFailed = callbacks.onChapterSwitchFailed,
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-            )
-
-            // 右：工具面板（用户主动收起，宽度来自 metrics.toolPaneWidthDp）
-            // + 工具栏图标列（宽度来自 metrics.toolRailWidthDp）。
-            if (!toolPaneCollapsed) {
-                WritingToolPane(
-                    content = toolPaneContent,
-                    modifier = Modifier.fillMaxHeight().width(metrics.toolPaneWidthDp.dp),
-                )
-            }
-            WritingToolRail(
+    WorkbenchToolbarSlots(
+        deps = deps,
+        callbacks = callbacks,
+        state = state,
+        onUndo = onUndo,
+        onRedo = onRedo,
+        syncState = syncState,
+    )
+    WorkbenchContentSlots(
+        deps = deps,
+        documentState = documentState,
+        state = state,
+        bounds = bounds,
+        callbacks = callbacks,
+        env =
+            WorkbenchContentEnv(
+                editorViewModel = editorViewModel,
+                coroutineScope = coroutineScope,
                 tools = tools,
-                selectedToolId = selectedToolId,
-                onSelect = { id -> selectedToolId = id },
-                onTogglePane = { toolPaneCollapsed = !toolPaneCollapsed },
-                paneCollapsed = toolPaneCollapsed,
-                modifier = Modifier.fillMaxHeight().width(metrics.toolRailWidthDp.dp),
-            )
+                toolPaneContent = toolPaneContent,
+            ),
+    )
+}
+
+/** Toolbar 三组 slot — 提取以降低 [WorkbenchSlots] 行数。 */
+@Composable
+private fun WorkbenchToolbarSlots(
+    deps: WideWorkspaceDeps,
+    callbacks: WideWorkspaceCallbacks,
+    state: WorkbenchSlotState,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
+    syncState: com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState,
+) {
+    WritingToolbarLeadingGroup(
+        showBack = deps.chrome.showBack,
+        chapterTreeCollapsed = state.chapterTreeCollapsed,
+        callbacks =
+            WritingToolbarLeadingCallbacks(
+                onBack = callbacks.onBack,
+                onUndo = onUndo,
+                onRedo = onRedo,
+                onToggleChapterTree = state.onToggleChapterTree,
+            ),
+        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_LEADING),
+    )
+    WritingToolbarCenterSlot(
+        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_CENTER),
+    )
+    WritingToolbarTrailingGroup(
+        actions = deps.chrome.actions,
+        syncState = syncState,
+        callbacks =
+            WritingToolbarTrailingCallbacks(
+                onSync = callbacks.onSync,
+                onSearch = callbacks.onSearch,
+                onSettings = callbacks.onSettings,
+            ),
+        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_TRAILING),
+    )
+}
+
+/**
+ * Content slot 所需的编辑环境 — 打包传递，避免函数参数超出门禁阈值。
+ */
+private data class WorkbenchContentEnv(
+    val editorViewModel: EditorViewModel,
+    val coroutineScope: CoroutineScope,
+    val tools: List<WritingToolItem>,
+    val toolPaneContent: (@Composable () -> Unit)?,
+)
+
+/**
+ * Content 四角色 slot — 提取以降低 [WorkbenchSlots] 行数。
+ */
+@Composable
+private fun WorkbenchContentSlots(
+    deps: WideWorkspaceDeps,
+    documentState: WideWorkspaceDocumentState,
+    state: WorkbenchSlotState,
+    bounds: WorkbenchBounds,
+    callbacks: WideWorkspaceCallbacks,
+    env: WorkbenchContentEnv,
+) {
+    // 章节树：用户主动收起时不画（bounds 由 plan 决定，收起通过 visibility 重算 plan）。
+    if (!state.chapterTreeCollapsed && bounds.chapterNav != null && !bounds.chapterNav.isEmpty) {
+        ChapterTreeContent(
+            projectId = documentState.currentProjectId,
+            projectRepository = deps.projectRepository,
+            workspaceActions = deps.projectWorkspaceActions,
+            onSelectChapter = { volumeId, chapterId, chapterTitle ->
+                ChapterSelectContext(
+                    coroutineScope = env.coroutineScope,
+                    editorViewModel = env.editorViewModel,
+                    appState = deps.appState,
+                    projectId = documentState.currentProjectId,
+                ).handleChapterSelect(
+                    volumeId = volumeId,
+                    chapterId = chapterId,
+                    chapterTitle = chapterTitle,
+                )
+            },
+            onError = deps.appState::reportWorkspaceError,
+            modifier = Modifier.layoutId(LayoutSlotId.CHAPTER_NAVIGATION),
+        )
+    }
+    // 正文编辑器（复用 SujianEditorHost，不创建第二个；始终在组合中，bounds 由 plan 决定）。
+    EditorPane(
+        documentState = documentState,
+        onChapterSwitchFailed = callbacks.onChapterSwitchFailed,
+        modifier = Modifier.layoutId(LayoutSlotId.EDITOR),
+    )
+    // 工具面板（用户主动收起时不画）。
+    if (!state.toolPaneCollapsed && bounds.toolPane != null && !bounds.toolPane.isEmpty) {
+        WritingToolPane(
+            content = env.toolPaneContent,
+            modifier = Modifier.layoutId(LayoutSlotId.TOOL_PANE),
+        )
+    }
+    // 工具栏图标列（始终画）。
+    WritingToolRail(
+        tools = env.tools,
+        selectedToolId = state.selectedToolId,
+        onSelect = state.onSelectTool,
+        onTogglePane = state.onToggleToolPane,
+        paneCollapsed = state.toolPaneCollapsed,
+        modifier = Modifier.layoutId(LayoutSlotId.TOOL_RAIL),
+    )
+}
+
+/**
+ * 构造 workbench measure policy — 提取以降低 [WideWritingWorkspace] 行数。
+ * Android 只做 dp→px 和 place，不判断 hinge 在左还是右。
+ */
+private fun workbenchMeasurePolicy(
+    bounds: WorkbenchBounds,
+    density: Density,
+): MeasurePolicy =
+    MeasurePolicy { measurables, constraints ->
+        measureAndPlaceWorkbench(measurables, constraints, bounds, density)
+    }
+
+/**
+ * measure + place 逻辑 — 纯函数，降低 [WideWritingWorkspace] 圈复杂度。
+ */
+private fun MeasureScope.measureAndPlaceWorkbench(
+    measurables: List<Measurable>,
+    constraints: Constraints,
+    bounds: WorkbenchBounds,
+    density: Density,
+): MeasureResult =
+    with(density) {
+        val placeables =
+            measurables.associate { measurable ->
+                val slotId = measurable.layoutId as LayoutSlotId
+                val rect = bounds.forSlot(slotId)
+                val pxWidth = rect.widthDp.dp.roundToPx()
+                val pxHeight = rect.heightDp.dp.roundToPx()
+                val placeable =
+                    measurable.measure(
+                        constraints.copy(
+                            minWidth = pxWidth,
+                            maxWidth = pxWidth,
+                            minHeight = pxHeight,
+                            maxHeight = pxHeight,
+                        ),
+                    )
+                slotId to (placeable to rect)
+            }
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            placeables.values.forEach { (placeable, rect) ->
+                val x = rect.leftDp.dp.roundToPx()
+                val y = rect.topDp.dp.roundToPx()
+                placeable.place(x, y)
+            }
         }
     }
-}
 
 /**
  * 章节选择事务上下文 — 打包传递，避免函数参数超出门禁阈值。
  */
 private data class ChapterSelectContext(
-    val coroutineScope: kotlinx.coroutines.CoroutineScope,
+    val coroutineScope: CoroutineScope,
     val editorViewModel: EditorViewModel,
     val appState: SujianAppState,
     val projectId: String,

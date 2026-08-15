@@ -503,6 +503,16 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
             holder.service.resolveLayout(viewport)
         }
 
+    // #628 评论 5301021120 第 3 步：FFI 直接返回 workbench 布局计划。
+    // Android 不再自己推导 hinge 布局，只按 plan 的 WorkbenchPlacement.bounds 放 slot。
+    fun resolveWorkbenchLayout(
+        viewport: uniffi.writer_core.WindowViewportDto,
+        visibility: uniffi.writer_core.WorkbenchVisibilityDto,
+    ): BridgeResult<uniffi.writer_core.WorkbenchLayoutPlanDto> =
+        holder.wrapResult {
+            holder.service.resolveWorkbenchLayout(viewport, visibility)
+        }
+
     fun resolveScreenPolicy(screenRole: ScreenRoleDto): BridgeResult<uniffi.writer_core.ScreenPolicyDto> =
         holder.wrapResult {
             holder.service.resolveScreenPolicy(screenRole)

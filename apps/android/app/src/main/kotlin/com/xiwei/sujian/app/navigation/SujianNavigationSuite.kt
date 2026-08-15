@@ -60,6 +60,7 @@ import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.app.presentation.contract.PresentationContractBridge
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.layout.rememberAndroidLayoutSpec
+import com.xiwei.sujian.app.presentation.layout.rememberDefaultWorkbenchLayoutPlan
 import com.xiwei.sujian.app.presentation.screen.AndroidChromePolicy
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.screen.SujianChromeAction
@@ -284,6 +285,7 @@ private data class SujianNavContext(
     val projectListActions: AndroidWorkspaceActionSpec,
     val projectWorkspaceActions: AndroidWorkspaceActionSpec,
     val layoutSpec: AndroidLayoutSpec,
+    val workbenchPlan: com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan?,
     val chrome: SujianChromeSpec,
 )
 
@@ -383,6 +385,7 @@ private fun rememberWorksEntry(
             projectListActions = context.projectListActions,
             projectWorkspaceActions = context.projectWorkspaceActions,
             layoutSpec = context.layoutSpec,
+            workbenchPlan = context.workbenchPlan,
             chrome = context.chrome,
             onTopLevelSettings = {
                 // 进入设置前先立刻收 IME，再切页面。
@@ -771,23 +774,6 @@ private fun rememberSujianTopBarInfo(
 }
 
 /**
- * #625 第二段：navDisplayContent 工厂 — 提取以降低 [SujianNavigationSuite] 方法长度。
- */
-@Composable
-private fun rememberSujianNavDisplayContent(
-    currentTopDestination: SujianDestination,
-    topLevelBackStack: SujianTopLevelBackStack,
-    context: SujianNavContext,
-    deps: SujianAppDependencies,
-    syncState: com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState,
-): @Composable () -> Unit =
-    {
-        SujianTopLevelSwitchMotion(currentTopDestination) {
-            SujianNavDisplayContent(topLevelBackStack, context, deps, syncState)
-        }
-    }
-
-/**
  * #618 一：作品工作区的两份静态动作 spec 取自容器创建时解析的 PresentationPolicyCatalog。
  * 章节树固定按 PROJECT_WORKSPACE 取动作契约（卷章操作不依赖父层组合帧观察到的
  * navigator 位置）；作品列表固定按 PROJECT_LIST 取契约（新建作品主操作同理）。
@@ -802,7 +788,9 @@ fun SujianNavigationSuite(
 ) {
     val deps = LocalSujianAppDependencies.current
     val resolver = PresentationContractBridge.layoutContractResolver(deps.appServiceBridge)
+    val workbenchResolver = PresentationContractBridge.workbenchLayoutResolver(deps.appServiceBridge)
     val layoutSpec = rememberAndroidLayoutSpec(foldingFeatures, resolver)
+    val workbenchPlan = rememberDefaultWorkbenchLayoutPlan(layoutSpec.viewport, workbenchResolver)
     val (initialTopLevel, initialStackRoutes) = rememberInitialNavStack(initialDestination)
     val topLevelBackStack = rememberSujianTopLevelBackStack(initialTopLevel, initialStackRoutes)
     val backStack = topLevelBackStack.backStack
@@ -847,32 +835,81 @@ fun SujianNavigationSuite(
     SujianProcessStateEffect(currentTopDestination, appState, syncState)
 
     val navContext =
-        SujianNavContext(appState, workspaceNavState, projectListActions, projectWorkspaceActions, layoutSpec, chrome)
-    val navDisplayContent =
-        rememberSujianNavDisplayContent(currentTopDestination, topLevelBackStack, navContext, deps, syncState)
+        SujianNavContext(
+            appState = appState,
+            workspaceNavState = workspaceNavState,
+            projectListActions = projectListActions,
+            projectWorkspaceActions = projectWorkspaceActions,
+            layoutSpec = layoutSpec,
+            workbenchPlan = workbenchPlan,
+            chrome = chrome,
+        )
+    val navDisplayContent: @Composable () -> Unit = {
+        SujianTopLevelSwitchMotion(currentTopDestination) {
+            SujianNavDisplayContent(topLevelBackStack, navContext, deps, syncState)
+        }
+    }
 
-    // #628 验收点 6：大屏 Writing 顶栏归属 — Workbench Writing 由工作台自己拥有顶部工具栏
-    // （WideWritingWorkspace 内的 WritingWorkspaceToolbar），外层 app shell 不再额外画通用顶栏。
-    // 窄屏 SinglePane Writing 仍使用外层透明 App bar。
-    // SujianNavigationSuite 只消费 screenRole + workspaceLayoutMode 做控件映射，不按窗口宽度自行判断。
     val isWorkbenchWriting =
         currentRoute is SujianRoute.Works &&
             workspaceNavState.currentLocation is WorkspaceLocation.Editor &&
             layoutSpec.workspaceLayoutMode == com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode.WORKBENCH
     val showOuterTopBar = !isWorkbenchWriting
 
-    // #628：底栏/侧栏改读 Core LayoutContractDto.primaryNavigationPlacement（Bottom/Side）。
+    val scaffoldChrome =
+        SujianNavScaffoldChrome(
+            topBarInfo = topBarInfo,
+            showOuterTopBar = showOuterTopBar,
+            snackbarHostState = snackbarHostState,
+        )
+    SujianNavScaffoldContent(
+        modifier = modifier,
+        layoutSpec = layoutSpec,
+        chrome = chrome,
+        scaffoldChrome = scaffoldChrome,
+        selection = SujianTopLevelSelection(currentTopDestination, onTopLevelSelected),
+        navDisplayContent = navDisplayContent,
+    )
+}
+
+/** 外层 scaffold 的顶栏/Snackbar 配置 — 打包传递，避免函数参数超出门禁阈值。 */
+private data class SujianNavScaffoldChrome(
+    val topBarInfo: SujianTopBarInfo,
+    val showOuterTopBar: Boolean,
+    val snackbarHostState: SnackbarHostState,
+)
+
+/** 一级导航选择 — 当前目的地 + 切换回调，打包传递避免函数参数超出门禁阈值。 */
+private data class SujianTopLevelSelection(
+    val current: SujianDestination,
+    val onSelected: (SujianDestination) -> Unit,
+)
+
+/**
+ * #628 验收点 6：根据 [AndroidLayoutSpec.useBottomNavigation] 选择 compact 或 wide scaffold。
+ * 提取以降低 [SujianNavigationSuite] 行数 — 顶栏归属由 showOuterTopBar 统一判定。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SujianNavScaffoldContent(
+    modifier: Modifier,
+    layoutSpec: AndroidLayoutSpec,
+    chrome: SujianChromeSpec,
+    scaffoldChrome: SujianNavScaffoldChrome,
+    selection: SujianTopLevelSelection,
+    navDisplayContent: @Composable () -> Unit,
+) {
     if (layoutSpec.useBottomNavigation) {
         SujianCompactNavScaffold(
             modifier = modifier,
-            topBarInfo = topBarInfo,
-            showTopBar = showOuterTopBar,
-            snackbarHostState = snackbarHostState,
+            topBarInfo = scaffoldChrome.topBarInfo,
+            showTopBar = scaffoldChrome.showOuterTopBar,
+            snackbarHostState = scaffoldChrome.snackbarHostState,
             // #597 正文一：进入正文后隐藏底栏；设置页从顶栏进入，也不再显示底栏。
             bottomBar =
                 if (chrome.showPrimaryNavigation) {
                     {
-                        SujianCompactBottomBar(currentTopDestination, onTopLevelSelected)
+                        SujianCompactBottomBar(selection.current, selection.onSelected)
                     }
                 } else {
                     {}
@@ -880,18 +917,18 @@ fun SujianNavigationSuite(
             navDisplayContent = navDisplayContent,
         )
     } else {
-        // #628 验收点 6：大屏 Writing 顶栏归属已由上面的 isWorkbenchWriting / showOuterTopBar 统一判定。
+        // #628 验收点 6：大屏 Writing 顶栏归属已由 showOuterTopBar 统一判定。
         // SujianWideNavScaffold 复用同一份 topBarInfo + showOuterTopBar，不在此处再算一次。
         SujianWideNavScaffold(
             modifier = modifier,
-            topBarInfo = topBarInfo,
-            showTopBar = showOuterTopBar,
-            snackbarHostState = snackbarHostState,
+            topBarInfo = scaffoldChrome.topBarInfo,
+            showTopBar = scaffoldChrome.showOuterTopBar,
+            snackbarHostState = scaffoldChrome.snackbarHostState,
             // #597 正文一：宽窗口同一套规则 — Settings/Editor 不创建 NavigationRail。
             rail =
                 if (chrome.showPrimaryNavigation) {
                     {
-                        SujianWideRail(currentTopDestination, onTopLevelSelected)
+                        SujianWideRail(selection.current, selection.onSelected)
                     }
                 } else {
                     null

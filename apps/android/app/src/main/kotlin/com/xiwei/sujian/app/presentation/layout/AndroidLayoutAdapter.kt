@@ -9,6 +9,9 @@ import uniffi.writer_core.LayoutContractDto
 import uniffi.writer_core.PrimaryNavigationPlacementDto
 import uniffi.writer_core.WindowOcclusionDto
 import uniffi.writer_core.WindowViewportDto
+import uniffi.writer_core.WorkbenchLayoutPlanDto
+import uniffi.writer_core.WorkbenchRoleDto
+import uniffi.writer_core.WorkbenchVisibilityDto
 import uniffi.writer_core.WorkspaceLayoutModeDto
 
 /**
@@ -17,21 +20,12 @@ import uniffi.writer_core.WorkspaceLayoutModeDto
  * 职责只剩两件事（#628 评论第 2 节）：
  * 1. 用 [LocalWindowInfo] 读取当前 Compose 宿主窗口的原始 dp 宽高 + 折叠铰链 occlusion，
  *    构造 [WindowViewportDto] 交给 Core `presentation/layout` 解析；
- * 2. 把 Rust [LayoutContractDto] 映射成具体控件（[AndroidLayoutSpec]）。
+ * 2. 把 Rust [LayoutContractDto] / [WorkbenchLayoutPlanDto] 映射成具体控件
+ *    （[AndroidLayoutSpec] / [AndroidWorkbenchLayoutPlan]）。
  *
- * #628 删除的内容（改由 Rust 决定）：
- * - `WindowWidthSizeClass` / `buildCapabilities()` / `availablePaneCount` —
- *   断点与 paneCount 不再由 Android 判断；
- * - `Compact/Medium/Expanded -> 1/2/3` 的 when — 壳层模式由 Rust `breakpoints` 决定；
- * - `AndroidNavigationPresentation` 枚举 — 底栏/侧栏改读
- *   [LayoutContractDto.primaryNavigationPlacement]（Bottom/Side）；
- * - 列表栏写死 `320.dp` — 改读 [LayoutContractDto.metrics.listPaneWidthDp]
- *   （Core `presentation/layout/metrics` 决定，Android 只做 `.dp` 映射）；
- * - Material3 `PaneScaffoldDirective` / `currentWindowAdaptiveInfo` /
- *   `calculatePaneScaffoldDirective` / `maxHorizontalPartitionsFor` /
- *   `excludedBounds`(Rect) — 整条死链删除（无消费者）；
- * - `LocalConfiguration.screenWidthDp/screenHeightDp` — 改用
- *   [LocalWindowInfo.current.containerDpSize]（Compose 1.7+ 标准方式）。
+ * #628 评论 5301021120 第 3-4 步：新增 [rememberWorkbenchLayoutPlan] —
+ * 用当前 viewport + visibility 请求 Rust workbench plan，按 plan 放 slot。
+ * Android 只做 dp→px 和 place，不再判断 hinge 在左还是右、不决定角色挪到哪一侧。
  *
  * 调用链（#628 评论第 4 节）：
  * ```text
@@ -41,11 +35,11 @@ import uniffi.writer_core.WorkspaceLayoutModeDto
  *         ↓
  * Rust presentation/layout (breakpoints/metrics/resolver)
  *         ↓
- * LayoutContractDto
+ * LayoutContractDto / WorkbenchLayoutPlanDto
  *         ↓
  * AndroidLayoutAdapter
  *         ↓
- * AndroidLayoutSpec (contract + 便捷视图)
+ * AndroidLayoutSpec / AndroidWorkbenchLayoutPlan (contract + 便捷视图)
  * ```
  */
 @Composable
@@ -91,8 +85,53 @@ internal fun rememberAndroidLayoutSpec(
             resolveLayoutContract(viewport)
         }
 
-    return AndroidLayoutSpec(contract = contract)
+    return AndroidLayoutSpec(contract = contract, viewport = viewport)
 }
+
+/**
+ * #628 评论 5301021120 第 4 步：用当前 viewport + visibility 请求 Rust workbench plan。
+ *
+ * 只在窗口几何（[viewport]）或 visibility 变化时重算，不是每帧请求。
+ * 返回 [AndroidWorkbenchLayoutPlan]（Kotlin 侧纯数据，避免 UI 层直接引用 uniffi DTO）。
+ */
+@Composable
+internal fun rememberWorkbenchLayoutPlan(
+    viewport: WindowViewportDto,
+    visibility: AndroidWorkbenchVisibility,
+    resolveWorkbenchLayout: (WindowViewportDto, WorkbenchVisibilityDto) -> WorkbenchLayoutPlanDto?,
+): AndroidWorkbenchLayoutPlan {
+    val visibilityDto =
+        remember(visibility) {
+            WorkbenchVisibilityDto(
+                chapterNavigationVisible = visibility.chapterNavigationVisible,
+                toolPaneVisible = visibility.toolPaneVisible,
+            )
+        }
+    val planDto =
+        remember(viewport, visibilityDto) {
+            resolveWorkbenchLayout(viewport, visibilityDto)
+        }
+    return remember(planDto) { planDto?.toAndroidWorkbenchLayoutPlan() ?: AndroidWorkbenchLayoutPlan(emptyList()) }
+}
+
+/**
+ * #628 评论 5301021120 第 4 步：用默认 visibility（都可见）请求 Rust workbench plan。
+ *   chapterTreeCollapsed/toolPaneCollapsed 是 WideWritingWorkspace 内的局部 UI 状态；
+ *   WideWritingWorkspace 内部收起状态变化时仍按 plan 放 slot（收起通过不画对应 slot 实现）。
+ *   完整的 per-visibility 重算在 WideWritingWorkspace 内部按需触发（#628 后续优化点）。
+ *
+ * 放在 presentation/layout 层以避免 UI 层（app/navigation）直接引用 uniffi DTO（架构门禁）。
+ */
+@Composable
+internal fun rememberDefaultWorkbenchLayoutPlan(
+    viewport: WindowViewportDto,
+    workbenchResolver: (WindowViewportDto, WorkbenchVisibilityDto) -> WorkbenchLayoutPlanDto?,
+): AndroidWorkbenchLayoutPlan =
+    rememberWorkbenchLayoutPlan(
+        viewport = viewport,
+        visibility = AndroidWorkbenchVisibility(chapterNavigationVisible = true, toolPaneVisible = true),
+        resolveWorkbenchLayout = workbenchResolver,
+    )
 
 /**
  * #625 第二段 / #628 验收点 1：工作区布局模式 — Kotlin 侧枚举，
@@ -118,21 +157,19 @@ internal fun WorkspaceLayoutModeDto.toWorkspaceLayoutMode(): WorkspaceLayoutMode
  * Android UI spec — AndroidLayoutAdapter 的最终输出。
  *
  * [contract] 是 Core presentation contract（产品壳层语义，含一级导航放置、共用尺寸、
- * 工作区布局模式与 workbenchOcclusion）。
+ * 工作区布局模式）。
+ * [viewport] 是当前窗口视口（dp），供 [rememberWorkbenchLayoutPlan] 复用，
+ * 避免重复测量。
  *
- * #628：删除 `navigationPresentation` 字段 — 底栏/侧栏改读
- * `contract?.primaryNavigationPlacement`（PrimaryNavigationPlacementDto.Bottom/Side）。
- * [useBottomNavigation] 是该决策的便捷布尔视图，供 navigation 层消费，
- * 避免上层直接引用 uniffi DTO（遵守 ui-no-uniffi-jna-bridge 架构门禁）。
- *
- * #625 第二段 / #628 验收点 1：[workspaceLayoutMode] 是工作区布局模式的便捷 Kotlin 枚举视图，
- * 供 feature/ui 层消费，避免上层直接引用 uniffi DTO（遵守 ui-no-uniffi-jna-bridge 架构门禁）。
+ * #628 评论 5301021120 第 1 步：删除 `workbenchOcclusion` 字段（死数据）。
+ * 工作台布局计划改由 [rememberWorkbenchLayoutPlan] 单独提供。
  *
  * #628 验收点 2：删除 `scaffoldDirective` 字段 — Material3 PaneScaffoldDirective 整条死链
  * 已删除（无消费者），断点/壳层/导航放置全由 Rust 决定。
  */
 internal data class AndroidLayoutSpec(
     val contract: LayoutContractDto?,
+    val viewport: WindowViewportDto,
 ) {
     /**
      * 一级导航是否用底栏（NavigationBar）而非侧栏（NavigationRail）。
@@ -154,3 +191,79 @@ internal data class AndroidLayoutSpec(
     val workspaceLayoutMode: WorkspaceLayoutMode
         get() = contract?.workspaceLayoutMode?.toWorkspaceLayoutMode() ?: WorkspaceLayoutMode.SINGLE_PANE
 }
+
+// ── Workbench Layout Plan Kotlin 侧纯数据（#628 评论 5301021120 第 3-4 步） ──
+
+/** 工作台角色 — Kotlin 侧枚举（避免 UI 层直接引用 uniffi DTO）。 */
+internal enum class AndroidWorkbenchRole {
+    TOOLBAR_LEADING,
+    TOOLBAR_CENTER,
+    TOOLBAR_TRAILING,
+    CHAPTER_NAVIGATION,
+    EDITOR,
+    TOOL_PANE,
+    TOOL_RAIL,
+}
+
+/** Core [WorkbenchRoleDto] → Kotlin [AndroidWorkbenchRole]。 */
+internal fun WorkbenchRoleDto.toAndroidWorkbenchRole(): AndroidWorkbenchRole =
+    when (this) {
+        WorkbenchRoleDto.TOOLBAR_LEADING -> AndroidWorkbenchRole.TOOLBAR_LEADING
+        WorkbenchRoleDto.TOOLBAR_CENTER -> AndroidWorkbenchRole.TOOLBAR_CENTER
+        WorkbenchRoleDto.TOOLBAR_TRAILING -> AndroidWorkbenchRole.TOOLBAR_TRAILING
+        WorkbenchRoleDto.CHAPTER_NAVIGATION -> AndroidWorkbenchRole.CHAPTER_NAVIGATION
+        WorkbenchRoleDto.EDITOR -> AndroidWorkbenchRole.EDITOR
+        WorkbenchRoleDto.TOOL_PANE -> AndroidWorkbenchRole.TOOL_PANE
+        WorkbenchRoleDto.TOOL_RAIL -> AndroidWorkbenchRole.TOOL_RAIL
+    }
+
+/** 平台无关的布局矩形（dp 坐标系）— Kotlin 侧纯数据。 */
+internal data class AndroidLayoutRect(
+    val leftDp: Float,
+    val topDp: Float,
+    val rightDp: Float,
+    val bottomDp: Float,
+) {
+    val widthDp: Float get() = (rightDp - leftDp).coerceAtLeast(0f)
+    val heightDp: Float get() = (bottomDp - topDp).coerceAtLeast(0f)
+    val isEmpty: Boolean get() = widthDp <= 0f || heightDp <= 0f
+}
+
+/** 单个角色的放置 — 角色与其最终 bounds（dp）。 */
+internal data class AndroidWorkbenchPlacement(
+    val role: AndroidWorkbenchRole,
+    val bounds: AndroidLayoutRect,
+)
+
+/** 工作台可见性 — 端侧局部 UI 状态（#628 评论 5301021120 第 1 步）。 */
+internal data class AndroidWorkbenchVisibility(
+    val chapterNavigationVisible: Boolean,
+    val toolPaneVisible: Boolean,
+)
+
+/** 工作台布局计划 — Kotlin 侧纯数据，含七角色 placement。 */
+internal data class AndroidWorkbenchLayoutPlan(
+    val placements: List<AndroidWorkbenchPlacement>,
+) {
+    /** 取指定角色的 placement；不存在时返回 null。 */
+    fun placementFor(role: AndroidWorkbenchRole): AndroidWorkbenchPlacement? =
+        placements.firstOrNull { it.role == role }
+}
+
+/** Core [WorkbenchLayoutPlanDto] → Kotlin [AndroidWorkbenchLayoutPlan]（interop 映射）。 */
+internal fun WorkbenchLayoutPlanDto.toAndroidWorkbenchLayoutPlan(): AndroidWorkbenchLayoutPlan =
+    AndroidWorkbenchLayoutPlan(
+        placements =
+            placements.map { p ->
+                AndroidWorkbenchPlacement(
+                    role = p.role.toAndroidWorkbenchRole(),
+                    bounds =
+                        AndroidLayoutRect(
+                            leftDp = p.bounds.leftDp,
+                            topDp = p.bounds.topDp,
+                            rightDp = p.bounds.rightDp,
+                            bottomDp = p.bounds.bottomDp,
+                        ),
+                )
+            },
+    )

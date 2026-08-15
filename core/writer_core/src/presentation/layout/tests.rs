@@ -31,7 +31,6 @@ fn test_resolve_layout_returns_full_contract() {
         PrimaryNavigationPlacement::Side
     );
     assert_eq!(contract.metrics.list_pane_width_dp, 320.0);
-    assert!(contract.workbench_occlusion.is_none());
 }
 
 #[test]

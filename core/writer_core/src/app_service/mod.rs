@@ -242,6 +242,22 @@ impl WriterAppService {
         contract.into()
     }
 
+    /// #628 评论 5301021120 第 3 步：FFI 直接返回 workbench 布局计划。
+    ///
+    /// 平台端调用此入口获取七角色 bounds，不再自己推导 hinge 布局。
+    pub fn resolve_workbench_layout(
+        &self,
+        viewport: crate::api::WindowViewportDto,
+        visibility: crate::api::WorkbenchVisibilityDto,
+    ) -> crate::api::WorkbenchLayoutPlanDto {
+        let core_viewport: crate::presentation::layout::resolver::WindowViewport = viewport.into();
+        let core_visibility: crate::presentation::layout::resolver::WorkbenchVisibility =
+            visibility.into();
+        let plan =
+            crate::presentation::layout::resolve_workbench_layout(&core_viewport, core_visibility);
+        plan.into()
+    }
+
     // ── Screen Contract ──
 
     pub fn resolve_screen_policy(

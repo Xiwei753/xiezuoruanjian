@@ -79,6 +79,10 @@ pub enum PrimaryNavigationPlacement {
 ///
 /// #628：删除 `show_primary_navigation`（改由 `ScreenPolicy` 提供），
 /// 新增 `primary_navigation_placement` 与 `metrics`。
+///
+/// #628 评论 5301021120 第 1 步：删除单数 `workbench_occlusion` 字段
+/// （死数据，结构上无法表达多个遮挡）。工作台布局计划改由
+/// [`resolver::resolve_workbench_layout`] 单独提供（平台端按需调用）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayoutContract {
     pub shell_mode: ShellMode,
@@ -87,12 +91,6 @@ pub struct LayoutContract {
     pub primary_navigation_placement: PrimaryNavigationPlacement,
     /// 共用布局尺寸（dp），由 Core 决定，平台端只做 `.dp` 映射。
     pub metrics: metrics::LayoutMetrics,
-    /// 工作台可用分区的分隔遮挡（#628 验收点 5）。
-    ///
-    /// 当 [`WindowViewport`] 的 `occlusions` 中存在 `separating == true` 的遮挡
-    /// （典型场景：折叠屏铰链）且工作区为 `Workbench` 时，此处记录该遮挡几何，
-    /// 平台端据此避免正文/控件跨在 hinge 上。其余情况为 `None`。
-    pub workbench_occlusion: Option<resolver::WindowOcclusion>,
 }
 
 // ========== 核心纯函数（重导出） ==========
@@ -102,4 +100,14 @@ pub struct LayoutContract {
 /// 详见 [`resolver::resolve_layout`]。
 pub fn resolve_layout(viewport: &resolver::WindowViewport) -> LayoutContract {
     resolver::resolve_layout(viewport)
+}
+
+/// 解析工作台布局计划（#628 评论 5301021120 第 1-2 步）。
+///
+/// 详见 [`resolver::resolve_workbench_layout`]。
+pub fn resolve_workbench_layout(
+    viewport: &resolver::WindowViewport,
+    visibility: resolver::WorkbenchVisibility,
+) -> resolver::WorkbenchLayoutPlan {
+    resolver::resolve_workbench_layout(viewport, visibility)
 }

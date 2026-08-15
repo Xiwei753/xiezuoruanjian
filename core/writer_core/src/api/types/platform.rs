@@ -299,10 +299,11 @@ impl From<WindowViewportDto> for crate::presentation::layout::resolver::WindowVi
     }
 }
 
-/// #628：LayoutContractDto 删除 `show_primary_navigation`（改由 ScreenPolicy 提供），
+/// #628 评论 5301021120 第 1 步：LayoutContractDto 删除 `show_primary_navigation`（改由 ScreenPolicy 提供），
 /// 新增 `primary_navigation_placement` 与 `metrics`。
 /// 验收点 1：`workspace_pane_mode` → `workspace_layout_mode`（类型 `WorkspaceLayoutModeDto`）。
-/// 验收点 5：新增 `workbench_occlusion` 承认遮挡输入。
+/// 第 1 步：删除单数 `workbench_occlusion` 字段（死数据）。工作台布局计划改由
+/// `WorkbenchLayoutPlanDto` 单独提供（`resolve_workbench_layout` 接口）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutContractDto {
@@ -310,8 +311,6 @@ pub struct LayoutContractDto {
     pub workspace_layout_mode: WorkspaceLayoutModeDto,
     pub primary_navigation_placement: PrimaryNavigationPlacementDto,
     pub metrics: LayoutMetricsDto,
-    /// 工作台可用分区的分隔遮挡（#628 验收点 5），无遮挡时为 None。
-    pub workbench_occlusion: Option<WindowOcclusionDto>,
 }
 
 impl From<crate::presentation::layout::LayoutContract> for LayoutContractDto {
@@ -321,7 +320,6 @@ impl From<crate::presentation::layout::LayoutContract> for LayoutContractDto {
             workspace_layout_mode: c.workspace_layout_mode.into(),
             primary_navigation_placement: c.primary_navigation_placement.into(),
             metrics: c.metrics.into(),
-            workbench_occlusion: c.workbench_occlusion.map(Into::into),
         }
     }
 }
@@ -333,7 +331,158 @@ impl From<LayoutContractDto> for crate::presentation::layout::LayoutContract {
             workspace_layout_mode: dto.workspace_layout_mode.into(),
             primary_navigation_placement: dto.primary_navigation_placement.into(),
             metrics: dto.metrics.into(),
-            workbench_occlusion: dto.workbench_occlusion.map(Into::into),
+        }
+    }
+}
+
+// ── Workbench Layout Plan DTOs（#628 评论 5301021120 第 1-3 步） ──
+
+/// 平台无关的布局矩形 DTO（dp 坐标系）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutRectDto {
+    pub left_dp: f32,
+    pub top_dp: f32,
+    pub right_dp: f32,
+    pub bottom_dp: f32,
+}
+
+impl From<crate::presentation::layout::resolver::LayoutRect> for LayoutRectDto {
+    fn from(r: crate::presentation::layout::resolver::LayoutRect) -> Self {
+        Self {
+            left_dp: r.left_dp,
+            top_dp: r.top_dp,
+            right_dp: r.right_dp,
+            bottom_dp: r.bottom_dp,
+        }
+    }
+}
+
+impl From<LayoutRectDto> for crate::presentation::layout::resolver::LayoutRect {
+    fn from(dto: LayoutRectDto) -> Self {
+        Self {
+            left_dp: dto.left_dp,
+            top_dp: dto.top_dp,
+            right_dp: dto.right_dp,
+            bottom_dp: dto.bottom_dp,
+        }
+    }
+}
+
+/// 工作台角色 DTO — 七个产品语义角色（#628 评论 5301021120 第 1 步）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+pub enum WorkbenchRoleDto {
+    #[default]
+    ToolbarLeading,
+    ToolbarCenter,
+    ToolbarTrailing,
+    ChapterNavigation,
+    Editor,
+    ToolPane,
+    ToolRail,
+}
+
+impl From<crate::presentation::layout::resolver::WorkbenchRole> for WorkbenchRoleDto {
+    fn from(r: crate::presentation::layout::resolver::WorkbenchRole) -> Self {
+        use crate::presentation::layout::resolver::WorkbenchRole as R;
+        match r {
+            R::ToolbarLeading => Self::ToolbarLeading,
+            R::ToolbarCenter => Self::ToolbarCenter,
+            R::ToolbarTrailing => Self::ToolbarTrailing,
+            R::ChapterNavigation => Self::ChapterNavigation,
+            R::Editor => Self::Editor,
+            R::ToolPane => Self::ToolPane,
+            R::ToolRail => Self::ToolRail,
+        }
+    }
+}
+
+impl From<WorkbenchRoleDto> for crate::presentation::layout::resolver::WorkbenchRole {
+    fn from(dto: WorkbenchRoleDto) -> Self {
+        use WorkbenchRoleDto as D;
+        match dto {
+            D::ToolbarLeading => Self::ToolbarLeading,
+            D::ToolbarCenter => Self::ToolbarCenter,
+            D::ToolbarTrailing => Self::ToolbarTrailing,
+            D::ChapterNavigation => Self::ChapterNavigation,
+            D::Editor => Self::Editor,
+            D::ToolPane => Self::ToolPane,
+            D::ToolRail => Self::ToolRail,
+        }
+    }
+}
+
+/// 单个角色的放置 DTO — 角色与其最终 bounds。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchPlacementDto {
+    pub role: WorkbenchRoleDto,
+    pub bounds: LayoutRectDto,
+}
+
+impl From<crate::presentation::layout::resolver::WorkbenchPlacement> for WorkbenchPlacementDto {
+    fn from(p: crate::presentation::layout::resolver::WorkbenchPlacement) -> Self {
+        Self {
+            role: p.role.into(),
+            bounds: p.bounds.into(),
+        }
+    }
+}
+
+impl From<WorkbenchPlacementDto> for crate::presentation::layout::resolver::WorkbenchPlacement {
+    fn from(dto: WorkbenchPlacementDto) -> Self {
+        Self {
+            role: dto.role.into(),
+            bounds: dto.bounds.into(),
+        }
+    }
+}
+
+/// 工作台可见性 DTO — 端侧局部 UI 状态（#628 评论 5301021120 第 1 步）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchVisibilityDto {
+    pub chapter_navigation_visible: bool,
+    pub tool_pane_visible: bool,
+}
+
+impl From<crate::presentation::layout::resolver::WorkbenchVisibility> for WorkbenchVisibilityDto {
+    fn from(v: crate::presentation::layout::resolver::WorkbenchVisibility) -> Self {
+        Self {
+            chapter_navigation_visible: v.chapter_navigation_visible,
+            tool_pane_visible: v.tool_pane_visible,
+        }
+    }
+}
+
+impl From<WorkbenchVisibilityDto> for crate::presentation::layout::resolver::WorkbenchVisibility {
+    fn from(dto: WorkbenchVisibilityDto) -> Self {
+        Self {
+            chapter_navigation_visible: dto.chapter_navigation_visible,
+            tool_pane_visible: dto.tool_pane_visible,
+        }
+    }
+}
+
+/// 工作台布局计划 DTO — `resolve_workbench_layout` 的输出（#628 评论 5301021120 第 1 步）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchLayoutPlanDto {
+    pub placements: Vec<WorkbenchPlacementDto>,
+}
+
+impl From<crate::presentation::layout::resolver::WorkbenchLayoutPlan> for WorkbenchLayoutPlanDto {
+    fn from(p: crate::presentation::layout::resolver::WorkbenchLayoutPlan) -> Self {
+        Self {
+            placements: p.placements.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<WorkbenchLayoutPlanDto> for crate::presentation::layout::resolver::WorkbenchLayoutPlan {
+    fn from(dto: WorkbenchLayoutPlanDto) -> Self {
+        Self {
+            placements: dto.placements.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -507,13 +656,6 @@ mod tests {
                 tool_pane_width_dp: 240.0,
                 tool_rail_width_dp: 56.0,
             },
-            workbench_occlusion: Some(crate::presentation::layout::resolver::WindowOcclusion {
-                left_dp: 700.0,
-                top_dp: 0.0,
-                right_dp: 720.0,
-                bottom_dp: 800.0,
-                separating: true,
-            }),
         };
         let dto: LayoutContractDto = contract.clone().into();
         let back: crate::presentation::layout::LayoutContract = dto.into();
@@ -524,20 +666,19 @@ mod tests {
             contract.primary_navigation_placement
         );
         assert_eq!(back.metrics, contract.metrics);
-        assert_eq!(back.workbench_occlusion, contract.workbench_occlusion);
     }
 
     #[test]
     fn test_layout_contract_dto_no_legacy_fields() {
         // #628：LayoutContractDto 不得再含 showPrimaryNavigation（改由 ScreenPolicy 提供），
         // 也不得再含旧字段 workspacePaneMode（已重命名为 workspaceLayoutMode）。
+        // #628 评论 5301021120 第 1 步：不得再含 workbenchOcclusion（已删除）。
         let contract = crate::presentation::layout::LayoutContract {
             shell_mode: crate::presentation::layout::ShellMode::SinglePane,
             workspace_layout_mode: crate::presentation::layout::WorkspaceLayoutMode::SinglePane,
             primary_navigation_placement:
                 crate::presentation::layout::PrimaryNavigationPlacement::Bottom,
             metrics: crate::presentation::layout::metrics::LayoutMetrics::default(),
-            workbench_occlusion: None,
         };
         let dto: LayoutContractDto = contract.into();
         let json = serde_json::to_string(&dto).unwrap();
@@ -546,7 +687,8 @@ mod tests {
         assert!(json.contains("\"workspaceLayoutMode\""));
         assert!(json.contains("\"primaryNavigationPlacement\""));
         assert!(json.contains("\"metrics\""));
-        assert!(json.contains("\"workbenchOcclusion\""));
+        // #628 评论 5301021120 第 1 步：workbenchOcclusion 已删除。
+        assert!(!json.contains("workbenchOcclusion"));
     }
 
     #[test]
@@ -573,35 +715,125 @@ mod tests {
         assert_eq!(contract_dto.metrics.project_card_min_width_dp, 180.0);
         assert_eq!(contract_dto.metrics.tool_pane_width_dp, 240.0);
         assert_eq!(contract_dto.metrics.tool_rail_width_dp, 56.0);
-        assert!(contract_dto.workbench_occlusion.is_none());
+    }
+
+    // ── Workbench Layout Plan DTO 测试（#628 评论 5301021120 第 3 步） ──
+
+    #[test]
+    fn test_layout_rect_dto_roundtrip() {
+        let r = crate::presentation::layout::resolver::LayoutRect {
+            left_dp: 10.0,
+            top_dp: 20.0,
+            right_dp: 100.0,
+            bottom_dp: 200.0,
+        };
+        let dto: LayoutRectDto = r.into();
+        let back: crate::presentation::layout::resolver::LayoutRect = dto.into();
+        assert_eq!(back, r);
     }
 
     #[test]
-    fn test_resolve_layout_end_to_end_with_separating_occlusion() {
-        // 端到端：Workbench 模式 + separating 遮挡 → workbench_occlusion 透传到 DTO。
-        let dto = WindowViewportDto {
+    fn test_workbench_role_dto_roundtrip() {
+        use crate::presentation::layout::resolver::WorkbenchRole as R;
+        for r in [
+            R::ToolbarLeading,
+            R::ToolbarCenter,
+            R::ToolbarTrailing,
+            R::ChapterNavigation,
+            R::Editor,
+            R::ToolPane,
+            R::ToolRail,
+        ] {
+            let dto: WorkbenchRoleDto = r.into();
+            let back: R = dto.into();
+            assert_eq!(back, r);
+        }
+    }
+
+    #[test]
+    fn test_workbench_visibility_dto_roundtrip() {
+        let v = crate::presentation::layout::resolver::WorkbenchVisibility {
+            chapter_navigation_visible: true,
+            tool_pane_visible: false,
+        };
+        let dto: WorkbenchVisibilityDto = v.into();
+        let back: crate::presentation::layout::resolver::WorkbenchVisibility = dto.into();
+        assert_eq!(back, v);
+    }
+
+    #[test]
+    fn test_workbench_placement_dto_roundtrip() {
+        let p = crate::presentation::layout::resolver::WorkbenchPlacement {
+            role: crate::presentation::layout::resolver::WorkbenchRole::Editor,
+            bounds: crate::presentation::layout::resolver::LayoutRect {
+                left_dp: 320.0,
+                top_dp: 64.0,
+                right_dp: 700.0,
+                bottom_dp: 800.0,
+            },
+        };
+        let dto: WorkbenchPlacementDto = p.into();
+        let back: crate::presentation::layout::resolver::WorkbenchPlacement = dto.into();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn test_workbench_layout_plan_dto_roundtrip() {
+        let plan = crate::presentation::layout::resolver::WorkbenchLayoutPlan {
+            placements: vec![crate::presentation::layout::resolver::WorkbenchPlacement {
+                role: crate::presentation::layout::resolver::WorkbenchRole::Editor,
+                bounds: crate::presentation::layout::resolver::LayoutRect {
+                    left_dp: 0.0,
+                    top_dp: 64.0,
+                    right_dp: 1000.0,
+                    bottom_dp: 800.0,
+                },
+            }],
+        };
+        let dto: WorkbenchLayoutPlanDto = plan.into();
+        let back: crate::presentation::layout::resolver::WorkbenchLayoutPlan = dto.into();
+        assert_eq!(back.placements.len(), 1);
+        assert_eq!(
+            back.placements[0].role,
+            crate::presentation::layout::resolver::WorkbenchRole::Editor
+        );
+    }
+
+    #[test]
+    fn test_resolve_workbench_layout_end_to_end_through_dto() {
+        // 端到端：WindowViewportDto + WorkbenchVisibilityDto → Core → WorkbenchLayoutPlanDto。
+        let viewport_dto = WindowViewportDto {
             width_dp: 1000.0,
             height_dp: 800.0,
             occlusions: vec![WindowOcclusionDto {
-                left_dp: 700.0,
+                left_dp: 490.0,
                 top_dp: 0.0,
-                right_dp: 720.0,
+                right_dp: 510.0,
                 bottom_dp: 800.0,
                 separating: true,
             }],
         };
-        let viewport: crate::presentation::layout::resolver::WindowViewport = dto.into();
-        let contract = crate::presentation::layout::resolve_layout(&viewport);
-        let contract_dto: LayoutContractDto = contract.into();
-        assert_eq!(
-            contract_dto.workspace_layout_mode,
-            WorkspaceLayoutModeDto::Workbench
+        let visibility_dto = WorkbenchVisibilityDto {
+            chapter_navigation_visible: true,
+            tool_pane_visible: true,
+        };
+        let viewport: crate::presentation::layout::resolver::WindowViewport = viewport_dto.into();
+        let visibility: crate::presentation::layout::resolver::WorkbenchVisibility =
+            visibility_dto.into();
+        let plan = crate::presentation::layout::resolve_workbench_layout(&viewport, visibility);
+        let plan_dto: WorkbenchLayoutPlanDto = plan.into();
+        // 七角色。
+        assert_eq!(plan_dto.placements.len(), 7);
+        // Editor bounds 不与 separating [490, 510] 相交。
+        let editor = plan_dto
+            .placements
+            .iter()
+            .find(|p| p.role == WorkbenchRoleDto::Editor)
+            .unwrap();
+        assert!(
+            editor.bounds.right_dp <= 490.0 || editor.bounds.left_dp >= 510.0,
+            "Editor {:?} 不应跨铰链",
+            editor.bounds
         );
-        let occlusion = contract_dto
-            .workbench_occlusion
-            .expect("occlusion must be present");
-        assert!(occlusion.separating);
-        assert_eq!(occlusion.left_dp, 700.0);
-        assert_eq!(occlusion.right_dp, 720.0);
     }
 }

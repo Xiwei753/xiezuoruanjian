@@ -25,6 +25,7 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
+import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
 import com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
@@ -67,6 +68,7 @@ internal fun ProjectWorkspaceScreen(
     projectListActions: AndroidWorkspaceActionSpec,
     projectWorkspaceActions: AndroidWorkspaceActionSpec,
     layoutSpec: AndroidLayoutSpec,
+    workbenchPlan: AndroidWorkbenchLayoutPlan?,
     chrome: SujianChromeSpec,
     onTopLevelSettings: () -> Unit,
     onTopLevelSearch: () -> Unit,
@@ -150,15 +152,10 @@ internal fun ProjectWorkspaceScreen(
     // 契约缺失（桥失败/空契约）时 fallback 到 SinglePane（与窄窗口基线一致）。
     val workspaceLayoutMode = layoutSpec.workspaceLayoutMode
     val isWideLayout = workspaceLayoutMode != WorkspaceLayoutMode.SINGLE_PANE
-    // 列表栏宽度来自 Rust LayoutMetrics.listPaneWidthDp；缺失时不画列表栏（窄屏 SinglePane 不需要）。
-    val listPaneWidthDp = layoutSpec.contract?.metrics?.listPaneWidthDp
     // #628 验收点 4：作品卡片最小宽度来自 Rust LayoutMetrics.projectCardMinWidthDp。
     // isWideLayout=true 时 contract 必非 null（workspaceLayoutMode 缺失回落 SINGLE_PANE），
     // 因此 projectCardMinWidthDp 必非 null；SinglePane 时不画 grid，传 0f 占位。
     val projectCardMinWidthDp = layoutSpec.contract?.metrics?.projectCardMinWidthDp ?: 0f
-    // #628 验收点 4：工具面板/工具栏宽度来自 Rust LayoutMetrics（isWideLayout 时 contract 必非 null）。
-    val toolPaneWidthDp = layoutSpec.contract?.metrics?.toolPaneWidthDp
-    val toolRailWidthDp = layoutSpec.contract?.metrics?.toolRailWidthDp
 
     val location = workspaceNavState.currentLocation
 
@@ -176,10 +173,8 @@ internal fun ProjectWorkspaceScreen(
             currentChapterTitle = currentChapterTitle,
             projectRepository = projectRepository,
             editorViewModel = editorViewModel,
-            listPaneWidthDp = listPaneWidthDp,
             projectCardMinWidthDp = projectCardMinWidthDp,
-            toolPaneWidthDp = toolPaneWidthDp,
-            toolRailWidthDp = toolRailWidthDp,
+            workbenchPlan = workbenchPlan,
             onTopLevelSettings = onTopLevelSettings,
             onTopLevelSearch = onTopLevelSearch,
             onTopLevelSync = onTopLevelSync,
@@ -399,10 +394,8 @@ private fun WideLayoutContent(
     currentChapterTitle: String,
     projectRepository: com.xiwei.sujian.feature.project.data.ProjectRepository,
     editorViewModel: EditorViewModel,
-    listPaneWidthDp: Float?,
     projectCardMinWidthDp: Float,
-    toolPaneWidthDp: Float?,
-    toolRailWidthDp: Float?,
+    workbenchPlan: AndroidWorkbenchLayoutPlan?,
     onTopLevelSettings: () -> Unit,
     onTopLevelSearch: () -> Unit,
     onTopLevelSync: () -> Unit,
@@ -455,12 +448,7 @@ private fun WideLayoutContent(
                             currentChapterTitle = currentChapterTitle,
                         ),
                     editorViewModel = editorViewModel,
-                    metrics =
-                        WideWorkspaceMetrics(
-                            listPaneWidthDp = listPaneWidthDp,
-                            toolPaneWidthDp = toolPaneWidthDp ?: 0f,
-                            toolRailWidthDp = toolRailWidthDp ?: 0f,
-                        ),
+                    workbenchPlan = workbenchPlan,
                     callbacks =
                         WideWorkspaceCallbacks(
                             onBack = onBack,

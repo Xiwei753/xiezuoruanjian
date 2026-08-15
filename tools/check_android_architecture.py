@@ -1230,6 +1230,13 @@ PRESENTATION_CONTRACT_DTO_WHITELIST = [
     # 对应 uniffi DTO 由 WorkspacePaneModeDto 改为 WorkspaceLayoutModeDto。
     "uniffi.writer_core.WorkspaceLayoutModeDto",
     "uniffi.writer_core.ShellModeDto",
+    # #628 评论 5301021120 第 1-3 步：Workbench Layout Plan DTOs
+    # （删除单数 workbench_occlusion，改为 WorkbenchLayoutPlan 含七角色 bounds）。
+    "uniffi.writer_core.WorkbenchLayoutPlanDto",
+    "uniffi.writer_core.WorkbenchPlacementDto",
+    "uniffi.writer_core.WorkbenchVisibilityDto",
+    "uniffi.writer_core.WorkbenchRoleDto",
+    "uniffi.writer_core.LayoutRectDto",
 ]
 
 

@@ -9,6 +9,8 @@ import uniffi.writer_core.ActionSlotDto
 import uniffi.writer_core.LayoutContractDto
 import uniffi.writer_core.ScreenPolicyDto
 import uniffi.writer_core.WindowViewportDto
+import uniffi.writer_core.WorkbenchLayoutPlanDto
+import uniffi.writer_core.WorkbenchVisibilityDto
 
 /**
  * Presentation Contract Bridge — Android 侧消费 Core presentation contract 的唯一入口（#610 / #628）。
@@ -66,6 +68,34 @@ internal object PresentationContractBridge {
     fun layoutContractResolver(bridge: AppServiceBridge): (WindowViewportDto) -> LayoutContractDto? {
         return { viewport -> resolveLayoutContract(bridge, viewport) }
     }
+
+    // ── Workbench Layout Plan（#628 评论 5301021120 第 3 步） ──
+
+    /** Core 工作台布局计划：viewport + visibility → 七角色 bounds。 */
+    fun resolveWorkbenchLayout(
+        bridge: AppServiceBridge,
+        viewport: WindowViewportDto,
+        visibility: WorkbenchVisibilityDto,
+    ): WorkbenchLayoutPlanDto? =
+        try {
+            when (val result = bridge.resolveWorkbenchLayout(viewport, visibility)) {
+                is BridgeResult.Success -> result.data
+                else -> null
+            }
+        } catch (e: Exception) {
+            DiagnosticsLogger.e(TAG, "resolveWorkbenchLayout failed: ${e.message}", e)
+            null
+        }
+
+    /**
+     * 创建绑定 bridge 的工作台布局计划解析器（函数类型）。
+     *
+     * 供 AndroidLayoutAdapter 注入；presentation 层只消费函数类型，不直接依赖 AppServiceBridge。
+     */
+    fun workbenchLayoutResolver(
+        bridge: AppServiceBridge,
+    ): (WindowViewportDto, WorkbenchVisibilityDto) -> WorkbenchLayoutPlanDto? =
+        { viewport, visibility -> resolveWorkbenchLayout(bridge, viewport, visibility) }
 
     // ── Android 消费端便捷转换（同一入口，避免各 UI 层重复映射） ──
 
