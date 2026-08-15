@@ -4,6 +4,7 @@ import { NativeWriterCoreBridge } from '../corebridge/NativeWriterCoreBridge'
 
 import { HarmonyLifecycle } from '../platform/lifecycle/HarmonyLifecycle'
 import { HarmonyThemeAdapter } from '../ui/theme/HarmonyThemeAdapter'
+import { CapabilityRegistry } from '../platform/capability/CapabilityRegistry'
 
 export interface AppContextConfig {
   appDataRoot: string
@@ -22,6 +23,7 @@ export class AppContext {
 
   private lifecycle: HarmonyLifecycle
   private themeAdapter: HarmonyThemeAdapter
+  private capabilityRegistry: CapabilityRegistry
   private isInitialized: boolean = false
   private abilityContext: common.UIAbilityContext | null = null
 
@@ -29,6 +31,7 @@ export class AppContext {
     this.config = config
     this.lifecycle = HarmonyLifecycle.getInstance()
     this.themeAdapter = HarmonyThemeAdapter.getInstance()
+    this.capabilityRegistry = CapabilityRegistry.getInstance()
     // 生产上下文只装配 Native Core，不再有 mock/native 切换。
     this.bridge = NativeWriterCoreBridge.getInstance()
   }
@@ -88,6 +91,10 @@ export class AppContext {
     return this.themeAdapter
   }
 
+  getCapabilityRegistry(): CapabilityRegistry {
+    return this.capabilityRegistry
+  }
+
   isReady(): boolean {
     return this.isInitialized
   }
@@ -115,4 +122,8 @@ export function getLifecycle(): HarmonyLifecycle {
 
 export function getThemeAdapter(): HarmonyThemeAdapter {
   return getAppContext().getThemeAdapter()
+}
+
+export function getCapabilityRegistry(): CapabilityRegistry {
+  return getAppContext().getCapabilityRegistry()
 }
