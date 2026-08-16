@@ -402,7 +402,12 @@ def check_c_header_vs_rust_ffi(harmony_root: str, core_root: str) -> List[Tuple[
         header_funcs.add(m.group(1))
 
     # 7b: 提取 Rust ffi 目录下所有 .rs 文件中的导出函数
+    # 兼容 core_root=core (ffi 在 core/writer_core/src/ffi) 与 core_root=core/writer_core 两种调用。
     ffi_dir = os.path.join(core_root, "src/ffi")
+    if not os.path.isdir(ffi_dir):
+        writer_core_ffi = os.path.join(core_root, "writer_core/src/ffi")
+        if os.path.isdir(writer_core_ffi):
+            ffi_dir = writer_core_ffi
     rust_funcs = set()
     if os.path.isdir(ffi_dir):
         for rs_file in Path(ffi_dir).rglob("*.rs"):
