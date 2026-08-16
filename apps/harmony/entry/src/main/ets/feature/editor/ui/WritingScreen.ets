@@ -101,9 +101,16 @@ export struct WritingScreen {
   // Issue #629 评论8 第2项：改为 Promise<boolean>；关闭失败（保存失败/close 失败）时重置，
   // 允许下次返回重试（否则失败后返回按钮永远无法再 pop）。成功关闭后页面即销毁，保留缓存。
   private closeTask: Promise<boolean> | null = null
-  // Issue #629 评论8 第1项：保存事务复用。正在保存时后续调用必须 await/复用同一任务，
-  // 不再 if (isSaving) return true。事务完成后释放（成功失败都释放，允许下次新保存）。
-  private saveTask: Promise<boolean> | null = null
+  // Issue #629 评论 5308748920 问题3：保存事务复用 + 精确目标文本。
+  // activeSave 记录当前正在保存哪份正文（text）和对应任务（task）。
+  // 后续 ensureSnapshotSaved 调用先 await 旧任务；若旧任务保存的正是目标 text 且成功，直接 true；
+  // 若目标不同，旧任务结束后再启动一次精确保存 targetText 的新事务。
+  // 不设固定重试次数，不靠 retry 次数保证落盘。
+  private activeSave: { text: string; task: Promise<boolean> } | null = null
+  // Issue #629 评论 5308748920 问题2：离开事务（close + pop）整体幂等。
+  // 已有 leaveTask 时直接返回同一 task，task 内只 pop 一次。
+  // close 失败时清 leaveTask 允许再次返回重试；成功后不重置（页面已离开）。
+  private leaveTask: Promise<void> | null = null
 
   aboutToAppear() {
     const paramsArr = this.navPathStack.getParamByName(Routes.Writing) as WritingRouteParams[]
@@ -125,7 +132,8 @@ export struct WritingScreen {
     // Issue #629 评论9 第4项：listener 改 typed EditorStateUpdate{snapshot, editResult}。
     // wordCount 实时来自 editResult.contentDelta（insertedNonWhitespaceChars/deletedNonWhitespaceChars，
     // Core 字数语义），不用 snap.text.length（JS UTF-16 code unit 数）。
-    // editResult=null（open 初始加载 / snapshot 恢复）时不更新 wordCount（保持上次值）。
+    // editResult=null（open 初始加载 / stale-invalid 后的 snapshot 恢复）时不更新 wordCount（保持上次值）；
+    // Core 已 Applied 只是平台 patch 失败时 recovery 后 editResult=本次 result.data，仍按 contentDelta 更新。
     this.coordinator.setStateListener((update: EditorStateUpdate) => {
       const snap = update.snapshot
       self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize)
@@ -211,36 +219,30 @@ export struct WritingScreen {
     try {
       // 2. 同一 dispatcher 队列里 finish 当前 composition：最后的中文 preedit 提交进
       //    committed 正文（否则 snapshot.text 不含 preedit，直接保存会漏掉屏幕上看到的预输入）。
-      await this.dispatcher.finishActiveComposition()
+      // Issue #629 评论 5308748920 问题1：必须看 finishResult.success。
+      // FFI 的 ResultEnvelope.success=true 只代表调用成功返回了 DTO，不等于 composition 已结束。
+      const finishResult = await this.dispatcher.finishActiveComposition()
       // 3. drain dispatcher（所有已排队语义输入应用完）
       await this.dispatcher.flush()
       // 4. 等 coordinator 命令队列空闲（所有 Core 编辑命令完成，snapshot 已包含最后输入）
       await this.coordinator.whenIdle()
-      // 5. 保存稳定 snapshot（此时不再读可能已变化的 this.content）
-      const snap = this.coordinator.getSnapshot()
-      const savedText: string = snap ? snap.text : this.content
+      // 5. Issue #629 评论 5308748920 问题1：composition 唯一真源是 Core snapshot。
+      //    重读 afterFinish snapshot，只要 finishResult.success===false、afterFinish===null、
+      //    或 afterFinish.composition!==null，立即 unseal 并 return false，不进入保存。
+      //    发生 stale/恢复时 Core 可能仍保留 composition，close 必须以最终 Core snapshot 为准。
+      const afterFinish = this.coordinator.getSnapshot()
+      if (finishResult.success === false || afterFinish === null || afterFinish.composition !== null) {
+        this.dispatcher.unseal()
+        return false
+      }
+      // 6. 保存稳定 snapshot（此时不再读可能已变化的 this.content）
+      const savedText: string = afterFinish.text
       if (savedText !== this.lastSavedContent) {
-        // 保存事务可能复用了进行中任务（自动保存/手动保存冻结的是更早 snapshot）：
-        // 复用任务完成后必须校验 lastSavedContent 正是本次 close 的 savedText，
-        // 不是则再保存一轮（此时 saveTask 已释放，新事务冻结当前最新 snapshot）。
-        // 这样“保存期间新输入”在 close 路径上也不会被误标成已保存后离开。
-        let settled: boolean = await this.saveChapter()
+        // Issue #629 评论 5308748920 问题3：用 ensureSnapshotSaved 精确保存这份 savedText，
+        // 不靠 retry 次数，不靠 lastSavedContent 校验循环。失败立即 unseal + return false。
+        const settled: boolean = await this.ensureSnapshotSaved(savedText, false)
         if (!settled) {
           // 保存失败：不 detach、不 close、不 pop；解锁输入让用户继续编辑（下次返回重试）。
-          this.dispatcher.unseal()
-          return false
-        }
-        let guard: number = 0
-        while (this.lastSavedContent !== savedText && guard < 5) {
-          settled = await this.saveChapter()
-          if (!settled) {
-            this.dispatcher.unseal()
-            return false
-          }
-          guard++
-        }
-        if (this.lastSavedContent !== savedText) {
-          // 连续多轮仍未把 close 时的 savedText 落盘（异常情况）：不离开，正文留在活跃会话。
           this.dispatcher.unseal()
           return false
         }
@@ -255,14 +257,14 @@ export struct WritingScreen {
         // Issue #629 评论7 第5项：统计成功推进 sessionOldText，避免第二遍重复统计。
         this.sessionOldText = savedText
       }
-      // 6. 关闭编辑会话。Issue #629 评论9 第2项：先 closeAsync，成功后才 detach IME。
+      // 7. 关闭编辑会话。Issue #629 评论9 第2项：先 closeAsync，成功后才 detach IME。
       const closeResult = await this.coordinator.closeAsync()
       if (!closeResult.success) {
         // close 失败：不 detach、不 pop；unseal 让用户继续编辑（不需要重新 attach IME）。
         this.dispatcher.unseal()
         return false
       }
-      // 7. Core close 成功后才 detach IME（不可逆清理放到最后，失败路径不触不可逆动作）
+      // 8. Core close 成功后才 detach IME（不可逆清理放到最后，失败路径不触不可逆动作）
       await this.harmonyImeConnection.detach()
       return true
     } catch (err) {
@@ -291,11 +293,38 @@ export struct WritingScreen {
   // 只有关闭事务成功（保存成功且 Core close 成功）才 navPathStack.pop()；失败留在本页不 pop。
   // 不在 onBackPressed 里直接 await（onBackPressed 同步返回 boolean 拦截默认退栈），
   // 异步关闭链在 requestLeave 里跑，onBackPressed 立即 return true 拦截默认回退。
-  private async requestLeave(): Promise<void> {
-    const closed: boolean = await this.performGracefulClose()
-    if (closed === true) {
-      this.navPathStack.pop()
+  // Issue #629 评论 5308748920 问题2：离开事务（close + pop）整体幂等。
+  // 已有 leaveTask 时直接返回同一 task，task 内只 pop 一次。
+  // close 失败时清 leaveTask 允许再次返回重试；成功后不重置（页面已离开）。
+  // 左上角按钮和 onBackPressed 都只调用此入口，禁止多套关闭/离开流程。
+  private requestLeave(): Promise<void> {
+    if (this.leaveTask !== null) {
+      return this.leaveTask
     }
+    let closed: boolean = false
+    const task: Promise<void> = (async () => {
+      closed = await this.performGracefulClose()
+      if (closed === true) {
+        this.navPathStack.pop()
+      }
+    })()
+    this.leaveTask = task
+    task.then(
+      () => {
+        // close 失败（未 pop）：清 leaveTask 允许再次返回重试。
+        // 成功后页面已离开，保留 leaveTask 防止重入。
+        if (closed === false && this.leaveTask === task) {
+          this.leaveTask = null
+        }
+      },
+      () => {
+        // 异常路径也清 leaveTask（允许重试）。
+        if (this.leaveTask === task) {
+          this.leaveTask = null
+        }
+      }
+    )
+    return task
   }
 
   // Issue #629 评论9 第3项：aboutToDisappear 不再承担“阻止丢正文”职责——返回拦截由
@@ -529,86 +558,105 @@ export struct WritingScreen {
     }
   }
 
-  // Issue #629 评论8 第1项：保存事务入口（复用同一任务）。
-  // 正在保存时后续调用必须 await/复用同一任务，不再 if (isSaving) return true。
-  // 手动保存/自动保存/关闭保存都走 doSaveChapter 这一套保存事务，不各写一套状态结算。
+  // Issue #629 评论 5308748920 问题3：手动/自动保存入口。
+  // 先取得稳定 snapshot（flush + whenIdle），再调 ensureSnapshotSaved 精确保存这份文本。
+  // 不直接 doSaveChapter（ensureSnapshotSaved 负责复用/启动保存事务）。
   async saveChapter(isAutoSave: boolean = false): Promise<boolean> {
-    if (this.saveTask !== null) {
-      return this.saveTask
+    if (this.dispatcher) {
+      await this.dispatcher.flush()
     }
-    const task: Promise<boolean> = this.doSaveChapter(isAutoSave)
-    this.saveTask = task
-    // 事务完成后释放（成功失败都释放，允许下次保存新任务）；
-    // 用同一性检查避免误清新任务（并发窗口：旧任务完成瞬间新任务已启动）。
+    await this.coordinator.whenIdle()
+    const snap = this.coordinator.getSnapshot()
+    const targetText: string = snap ? snap.text : this.content
+    return this.ensureSnapshotSaved(targetText, isAutoSave)
+  }
+
+  // Issue #629 评论 5308748920 问题3：统一保存接口，保证指定 targetText 落盘。
+  // 若 activeSave 正好保存 targetText 且成功，直接 true；
+  // 若目标不同，先 await 旧任务，再启动一次精确保存 targetText 的新事务。
+  // 不设固定重试次数，不靠 retry 次数保证落盘。
+  private async ensureSnapshotSaved(targetText: string, isAutoSave: boolean): Promise<boolean> {
+    // 若有进行中保存任务，先等它结束
+    if (this.activeSave !== null) {
+      const prev = this.activeSave
+      let prevOk: boolean = false
+      try {
+        prevOk = await prev.task
+      } catch (err) {
+        // 旧任务异常，继续启动新事务
+      }
+      // 旧任务保存的正是 targetText 且成功 → 直接复用结果
+      if (prev.text === targetText && prevOk) {
+        return true
+      }
+      // 目标不同或旧任务失败：清 activeSave，启动新事务
+      if (this.activeSave === prev) {
+        this.activeSave = null
+      }
+    }
+    // 启动一次精确保存 targetText 的新事务
+    const task: Promise<boolean> = this.doSaveChapter(targetText, isAutoSave)
+    this.activeSave = { text: targetText, task: task }
     task.then(
       () => {
-        if (this.saveTask === task) {
-          this.saveTask = null
+        if (this.activeSave !== null && this.activeSave.task === task) {
+          this.activeSave = null
         }
       },
       () => {
-        if (this.saveTask === task) {
-          this.saveTask = null
+        if (this.activeSave !== null && this.activeSave.task === task) {
+          this.activeSave = null
         }
       }
     )
     return task
   }
 
-  // Issue #629 评论8 第1项：真实保存事务。
-  // 流程：flush dispatcher → await coordinator idle → 只读一次 Core snapshot 得到不可变
-  // savedText → bridge.saveChapter(chapterId, savedText) 只保存这份文本 → 返回后按 savedText
-  // 结算（processWritingEvent/sessionOldText/lastSavedContent）→ 再取 latestSnapshot：
-  // this.content = latestSnapshot.text；hasUnsavedChanges = latestSnapshot.text !== savedText
-  // （保存期间新输入保持 unsaved，不把 A+B 标成已保存）。
-  // contentHash 是这次 savedText 的回执。wordCount 是当前编辑器正文的实时字数（listener 实时更新），
+  // Issue #629 评论 5308748920 问题3：真实持久化函数，只接受显式 targetText。
+  // 不在里面重新抓"当前正文"（避免保存期间新输入被误存）。
+  // 调用方（saveChapter/ensureSnapshotSaved）负责取得稳定 snapshot 后再调用。
+  // 结算：processWritingEvent/sessionOldText/lastSavedContent 按 targetText；
+  // 再取 latestSnapshot：this.content = latestSnapshot.text；
+  // hasUnsavedChanges = latestSnapshot.text !== targetText（保存期间新输入保持 unsaved）。
+  // contentHash 是这次 targetText 的回执。wordCount 是当前编辑器正文的实时字数（listener 实时更新），
   // 只有保存期间无新输入时才用 receipt.wordCount 校正；有新输入时保留实时 wordCount。
-  private async doSaveChapter(isAutoSave: boolean): Promise<boolean> {
+  private async doSaveChapter(targetText: string, isAutoSave: boolean): Promise<boolean> {
     this.isSaving = true
     this.isAutoSaving = isAutoSave
     this.saveMessage = ''
 
     try {
-      // 1+2. 取得稳定 committed snapshot：flush 所有排队语义输入 + 等 Core 命令队列空闲。
-      // 之后 savedText 不再受保存期间新输入影响（此快照是本次保存的结算基准）。
-      if (this.dispatcher) {
-        await this.dispatcher.flush()
-      }
-      await this.coordinator.whenIdle()
-      // 3. 不可变 savedText：只读一次 Core snapshot，此后不再读可能已变化的 this.content。
-      const snap = this.coordinator.getSnapshot()
-      const savedText: string = snap ? snap.text : this.content
-      // 4. 只保存这份文本
-      const result = await this.bridge.saveChapter(this.chapterId, savedText)
+      // 只保存这份 targetText（不重新抓当前正文）
+      const result = await this.bridge.saveChapter(this.chapterId, targetText)
       if (result.success && result.data) {
-        // 5. 按 savedText 结算统计（不读可能已变化的 this.content）
-        if (this.sessionOldText !== savedText) {
+        // 按 targetText 结算统计（不读可能已变化的 this.content）
+        if (this.sessionOldText !== targetText) {
           const deviceId = this.settings.statsDeviceId || 'unknown'
           const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
           this.bridge.processWritingEvent(
             deviceId, 'harmony', this.projectId, this.volumeId,
-            this.chapterId, this.sessionOldText, savedText, durationSeconds, this.sessionId
+            this.chapterId, this.sessionOldText, targetText, durationSeconds, this.sessionId
           )
-          this.sessionOldText = savedText
+          this.sessionOldText = targetText
           this.sessionId = `hm-${this.chapterId}-${Date.now()}`
           this.sessionStartTime = Date.now()
         }
-        this.lastSavedContent = savedText
+        this.lastSavedContent = targetText
         // Issue #629 评论 5 第 8 节：保存成功后跨设备内容身份来自 ChapterSaveReceipt.contentHash。
         this.lastSavedContentHash = result.data.contentHash
         this.hasUnsavedChanges = false
         this.lastSaveFailed = false
-        // 6. 重新取 latestSnapshot 结算：保存期间若又产生新输入，hasUnsavedChanges 保持 true，
-        //    不把新版正文标成已保存。
+        // 重新取 latestSnapshot 结算：保存期间若又产生新输入，hasUnsavedChanges 保持 true，
+        // 不把新版正文标成已保存。
         // Issue #629 评论9 第4项：wordCount 表示当前编辑器正文的实时字数（listener 按
-        // editResult.contentDelta 实时更新）。只有保存期间无新输入（latest.text === savedText）
+        // editResult.contentDelta 实时更新）。只有保存期间无新输入（latest.text === targetText）
         // 时才用 receipt.wordCount 校正当前实时字数；有新输入时保留实时 wordCount，
-        // 不拿旧 savedText 的 receipt.wordCount 覆盖当前 A+B 的实时字数。
+        // 不拿旧 targetText 的 receipt.wordCount 覆盖当前 A+B 的实时字数。
         const latest = this.coordinator.getSnapshot()
         if (latest) {
           this.content = latest.text
-          this.hasUnsavedChanges = latest.text !== savedText
-          if (latest.text === savedText) {
+          this.hasUnsavedChanges = latest.text !== targetText
+          if (latest.text === targetText) {
             this.wordCount = result.data.wordCount
           }
         } else {
@@ -696,9 +744,20 @@ export struct WritingScreen {
       this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.clear_failed').id)
       return
     }
-    // 走同一套 saveChapter 持久化空正文（saveChapter 内部自己管 isSaving；
-    // 保存后 ChapterSaveReceipt.wordCount/contentHash 再校正）。
-    const saved: boolean = await this.saveChapter()
+    // Issue #629 评论 5308748920 问题3：replace 成功后重读 Core snapshot 确认 text==''，
+    // 再 ensureSnapshotSaved('')。只有这份空正文真的保存成功才显示"已清空"。
+    // 不直接 saveChapter()（可能复用旧 saveTask 把更早正文标成已保存）。
+    if (this.dispatcher) {
+      await this.dispatcher.flush()
+    }
+    await this.coordinator.whenIdle()
+    const afterClear = this.coordinator.getSnapshot()
+    if (afterClear === null || afterClear.text !== '') {
+      this.lastSaveFailed = true
+      this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.clear_failed').id)
+      return
+    }
+    const saved: boolean = await this.ensureSnapshotSaved('', false)
     if (saved) {
       this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.cleared').id)
       setTimeout(() => { this.saveMessage = '' }, 2000)

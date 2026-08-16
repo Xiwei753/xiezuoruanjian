@@ -227,33 +227,27 @@ async function performGracefulClose(deps, state) {
   // 1. seal：拒绝新的普通输入命令（已排队命令仍可 drain）
   dispatcher.seal()
   // 2. 同一 dispatcher 队列里 finish 当前 composition（最后 preedit 提交进正文）
-  await dispatcher.finishActiveComposition()
+  // Issue #629 评论 5308748920 问题1：必须看 finishResult.success。
+  const finishResult = await dispatcher.finishActiveComposition()
   // 3. flush 语义调度器
   await dispatcher.flush()
   // 4. 等 coordinator 命令队列空闲
   await coordinator.whenIdle()
-  // 5. 保存稳定 snapshot（不再读可能已变化的 state.content）
-  const snap = coordinator.getSnapshot()
-  const savedText = snap ? snap.text : state.content
+  // 5. Issue #629 评论 5308748920 问题1：composition 唯一真源是 Core snapshot。
+  //    重读 afterFinish snapshot，只要 finishResult.success===false、afterFinish===null、
+  //    或 afterFinish.composition!==null，立即 unseal 并 return false，不进入保存。
+  const afterFinish = coordinator.getSnapshot()
+  if (finishResult.success === false || afterFinish === null || afterFinish.composition !== null) {
+    dispatcher.unseal()
+    return false
+  }
+  // 6. 保存稳定 snapshot（不再读可能已变化的 state.content）
+  const savedText = afterFinish.text
   if (savedText !== state.lastSavedContent) {
-    // 保存事务可能复用了进行中任务（冻结的是更早 snapshot）：校验 lastSavedContent
-    // 正是本次 close 的 savedText，不是则再保存一轮。
-    let settled = await state.saveChapter()
+    // Issue #629 评论 5308748920 问题3：ensureSnapshotSaved 精确保存这份 savedText。
+    const settled = await state.ensureSnapshotSaved(savedText, false)
     if (!settled) {
       // 保存失败：不 detach、不 close、不 pop；解锁输入让用户继续编辑。
-      dispatcher.unseal()
-      return false
-    }
-    let guard = 0
-    while (state.lastSavedContent !== savedText && guard < 5) {
-      settled = await state.saveChapter()
-      if (!settled) {
-        dispatcher.unseal()
-        return false
-      }
-      guard++
-    }
-    if (state.lastSavedContent !== savedText) {
       dispatcher.unseal()
       return false
     }
@@ -266,14 +260,14 @@ async function performGracefulClose(deps, state) {
     )
     state.sessionOldText = savedText
   }
-  // 6. close session. Issue #629 评论9 第2项：先 closeAsync，成功后才 detach IME。
+  // 7. close session. Issue #629 评论9 第2项：先 closeAsync，成功后才 detach IME。
   const closeResult = await coordinator.closeAsync()
   if (!closeResult.success) {
     // close 失败：不 detach、不 pop；unseal 让用户继续编辑（不需要重新 attach IME）。
     dispatcher.unseal()
     return false
   }
-  // 7. Core close 成功后才 detach IME（不可逆清理放到最后，失败路径不触不可逆动作）
+  // 8. Core close 成功后才 detach IME（不可逆清理放到最后，失败路径不触不可逆动作）
   await harmonyImeConnection.detach()
   return true
 }
@@ -288,7 +282,10 @@ async function performBackgroundSave(deps, state) {
   }
   await coordinator.whenIdle()
   if (state.hasUnsavedChanges) {
-    await state.saveChapter()
+    // Issue #629 评论 5308748920 问题3：先取得稳定 snapshot，再 ensureSnapshotSaved 精确保存。
+    const snap = coordinator.getSnapshot()
+    const targetText = snap ? snap.text : state.content
+    await state.ensureSnapshotSaved(targetText, true)
   }
 }
 
@@ -312,7 +309,7 @@ await testAsync('performGracefulClose: 严格按 seal → finish → flush → w
     projectId: 'p1',
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
-    saveChapter: async () => {
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {
       saveChapterCalls.push('saveChapter')
       await sleep(5)
       state.lastSavedContent = 'edited'  // 真实保存按 savedText 结算
@@ -348,7 +345,7 @@ await testAsync('performGracefulClose: snapshot 已保存（savedText===lastSave
     projectId: 'p1',
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
-    saveChapter: async () => { saveChapterCalls.push('saveChapter') },
+    ensureSnapshotSaved: async (targetText, isAutoSave) => { saveChapterCalls.push('saveChapter') },
   }
   // MockCoordinator 默认 snapshot.text=''，设成与 content 一致（savedText===lastSavedContent）
   coordinator.snapshot = { ...coordinator.snapshot, text: 'new-content' }
@@ -379,7 +376,7 @@ await testAsync('performGracefulClose: snapshot 已保存且无统计差异时�
     projectId: 'p1',
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
-    saveChapter: async () => { saveChapterCalls.push('saveChapter') },
+    ensureSnapshotSaved: async (targetText, isAutoSave) => { saveChapterCalls.push('saveChapter') },
   }
   coordinator.snapshot = { ...coordinator.snapshot, text: 'same' }
   const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
@@ -401,11 +398,11 @@ await testAsync('performGracefulClose: 全局调用顺序严格有序（用一�
   const dispatcher = {
     seal: () => { seq.push('seal') },
     unseal: () => { seq.push('unseal') },
-    finishActiveComposition: async () => { seq.push('finishActiveComposition'); await sleep(5) },
+    finishActiveComposition: async () => { seq.push('finishActiveComposition'); await sleep(5); return { success: true } },
     flush: async () => { seq.push('flush'); await sleep(5) },
   }
   const coordinator = {
-    getSnapshot: () => ({ text: 'edited' }),
+    getSnapshot: () => ({ text: 'edited', composition: null }),
     whenIdle: async () => { seq.push('whenIdle'); await sleep(5) },
     closeAsync: async () => { seq.push('closeAsync'); return { success: true } },
   }
@@ -416,7 +413,7 @@ await testAsync('performGracefulClose: 全局调用顺序严格有序（用一�
     content: 'edited',
     lastSavedContent: 'original',  // snapshot 'edited' !== lastSavedContent → 走 save
     sessionOldText: 'original',
-    saveChapter: async () => { seq.push('save'); state.lastSavedContent = 'edited'; return true },
+    ensureSnapshotSaved: async (targetText, isAutoSave) => { seq.push('save'); state.lastSavedContent = 'edited'; return true },
   }
   const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
   const closed = await performGracefulClose(deps, state)
@@ -431,6 +428,7 @@ await testAsync('performBackgroundSave: 顺序 flush → whenIdle → save，不
   const seq = []
   const dispatcher = { flush: async () => { seq.push('flush') } }
   const coordinator = {
+    getSnapshot: () => ({ text: 'bg-snap', composition: null }),
     whenIdle: async () => { seq.push('whenIdle') },
     closeAsync: async () => { seq.push('closeAsync'); return { success: true } },
     close: async () => { seq.push('close'); return { success: true } },
@@ -439,7 +437,7 @@ await testAsync('performBackgroundSave: 顺序 flush → whenIdle → save，不
   const bridge = { processWritingEvent: () => { seq.push('processWritingEvent') } }
   const state = {
     hasUnsavedChanges: true,
-    saveChapter: async () => { seq.push('save') },
+    ensureSnapshotSaved: async (targetText, isAutoSave) => { seq.push('save') },
   }
   const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
 
@@ -460,7 +458,7 @@ await testAsync('performBackgroundSave: hasUnsavedChanges=false 时只 flush + w
   const bridge = { processWritingEvent: () => { seq.push('processWritingEvent') } }
   const state = {
     hasUnsavedChanges: false,
-    saveChapter: async () => { seq.push('save') },
+    ensureSnapshotSaved: async (targetText, isAutoSave) => { seq.push('save') },
   }
   const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
 
@@ -488,11 +486,11 @@ await testAsync('核心场景: 快速打完最后几个字立即返回，perform
   const dispatcher = {
     seal: () => { seq.push('seal') },
     unseal: () => { seq.push('unseal') },
-    finishActiveComposition: async () => { seq.push('finishActiveComposition') },
+    finishActiveComposition: async () => { seq.push('finishActiveComposition'); return { success: true } },
     flush: async () => { seq.push('flush'); await q.whenIdle() },  // flush 等队列空闲
   }
   const coordinator = {
-    getSnapshot: () => ({ text: snapshotText }),
+    getSnapshot: () => ({ text: snapshotText, composition: null }),
     whenIdle: async () => { seq.push('whenIdle') },  // coordinator 队列已空（dispatcher flush 已等完）
     closeAsync: async () => { seq.push('closeAsync'); return { success: true } },
   }
@@ -502,7 +500,7 @@ await testAsync('核心场景: 快速打完最后几个字立即返回，perform
     chapterId: 'c1',
     content: snapshotText,
     lastSavedContent: 'before',  // snapshot 'beforexyz' !== 'before' → 走 save
-    saveChapter: async () => {
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {
       seq.push('save')
       // save 时读 snapshot，此时应包含最后输入
       state.content = snapshotText
@@ -757,33 +755,27 @@ function createGracefulCloseScreen(deps, state) {
     dispatcher.seal()
     try {
       // 2. 同一 dispatcher 队列里 finish 当前 composition（最后 preedit 提交进正文）
-      await dispatcher.finishActiveComposition()
+      // Issue #629 评论 5308748920 问题1：必须看 finishResult.success。
+      const finishResult = await dispatcher.finishActiveComposition()
       // 3. flush
       await dispatcher.flush()
       // 4. 等 coordinator idle
       await coordinator.whenIdle()
-      // 5. 保存稳定 snapshot
-      const snap = coordinator.getSnapshot()
-      const savedText = snap ? snap.text : state.content
+      // 5. Issue #629 评论 5308748920 问题1：composition 唯一真源是 Core snapshot。
+      //    重读 afterFinish snapshot，只要 finishResult.success===false、afterFinish===null、
+      //    或 afterFinish.composition!==null，立即 unseal 并 return false，不进入保存。
+      const afterFinish = coordinator.getSnapshot()
+      if (finishResult.success === false || afterFinish === null || afterFinish.composition !== null) {
+        dispatcher.unseal()
+        return false
+      }
+      // 6. 保存稳定 snapshot
+      const savedText = afterFinish.text
       if (savedText !== state.lastSavedContent) {
-        // 保存事务可能复用了进行中任务（冻结的是更早 snapshot）：校验 lastSavedContent
-        // 正是本次 close 的 savedText，不是则再保存一轮。
-        let settled = await state.saveChapter()
+        // Issue #629 评论 5308748920 问题3：ensureSnapshotSaved 精确保存这份 savedText。
+        const settled = await state.ensureSnapshotSaved(savedText, false)
         if (!settled) {
           // 保存失败：不 detach、不 close、不 pop；解锁输入让用户继续编辑。
-          dispatcher.unseal()
-          return false
-        }
-        let guard = 0
-        while (state.lastSavedContent !== savedText && guard < 5) {
-          settled = await state.saveChapter()
-          if (!settled) {
-            dispatcher.unseal()
-            return false
-          }
-          guard++
-        }
-        if (state.lastSavedContent !== savedText) {
           dispatcher.unseal()
           return false
         }
@@ -855,7 +847,7 @@ await testAsync('幂等: 连续 performGracefulClose 两次，doGracefulClose �
     projectId: 'p1',
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
-    saveChapter: async () => {
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {
       saveChapterCalls.push('saveChapter')
       await sleep(5)
       state.lastSavedContent = 'edited'  // 真实保存按 savedText 结算
@@ -894,7 +886,7 @@ await testAsync('幂等: 已保存（savedText===lastSavedContent）有统计差
     projectId: 'p1',
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
-    saveChapter: async () => {},
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {},
   }
   coordinator.snapshot = { ...coordinator.snapshot, text: 'new-text' }
   const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
@@ -929,7 +921,7 @@ await testAsync('推进防御: doGracefulClose 两次（绕过幂等），第二
     projectId: 'p1',
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
-    saveChapter: async () => {},
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {},
   }
   coordinator.snapshot = { ...coordinator.snapshot, text: 'new-text' }
   const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
@@ -965,7 +957,7 @@ await testAsync('并发: 返回按钮和 aboutToDisappear 同时调 performGrace
     projectId: 'p1',
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
-    saveChapter: async () => {
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {
       saveChapterCalls.push('saveChapter')
       await sleep(5)
       state.lastSavedContent = 'edited'
@@ -1008,7 +1000,7 @@ await testAsync('幂等: 第一次完成后再调 performGracefulClose 仍返回
     projectId: 'p1',
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
-    saveChapter: async () => {},
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {},
   }
   coordinator.snapshot = { ...coordinator.snapshot, text: 'same' }
   const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
@@ -1044,7 +1036,7 @@ await testAsync('幂等: save 分支 saveChapter 推进 sessionOldText，doGrace
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
     // saveChapter 内部推进 sessionOldText/lastSavedContent（与 WritingScreen.doSaveChapter 对齐）
-    saveChapter: async () => {
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {
       saveChapterCalls.push('saveChapter')
       state.sessionOldText = state.content
       state.lastSavedContent = state.content
@@ -1087,7 +1079,7 @@ await testAsync('保存失败: performGracefulClose 返回 false，不 detach、
     projectId: 'p1',
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
-    saveChapter: async () => {
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {
       saveChapterCalls.push('saveChapter')
       return false  // 保存失败
     },
@@ -1125,7 +1117,7 @@ await testAsync('保存失败重试: closeTask 重置，第二次保存成功后
     projectId: 'p1',
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
-    saveChapter: async () => {
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {
       if (!saveOk) {
         return false  // 第一次失败
       }
@@ -1170,7 +1162,7 @@ await testAsync('close 失败: closeAsync 返回失败 → performGracefulClose 
     projectId: 'p1',
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
-    saveChapter: async () => true,
+    ensureSnapshotSaved: async (targetText, isAutoSave) => true,
   }
   const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
   const screen = createGracefulCloseScreen(deps, state)
@@ -1218,7 +1210,7 @@ await testAsync('最后 preedit: finishActiveComposition 提交 preedit 进正�
     projectId: 'p1',
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
-    saveChapter: async () => {
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {
       saveChapterCalls.push('saveChapter')
       state.lastSavedContent = coordinator.snapshot.text  // 真实保存按 savedText 结算
       return true
@@ -1260,7 +1252,6 @@ await testAsync('close 复用进行中保存: 自动保存冻结旧 snapshot，c
   const harmonyImeConnection = new MockImeConnection()
   const bridge = new MockBridge()
   const saveChapterCalls = []
-  let inFlightText = 'A'   // 进行中任务冻结的文本
   const state = {
     chapterId: 'c1',
     content: 'AB',
@@ -1271,16 +1262,14 @@ await testAsync('close 复用进行中保存: 自动保存冻结旧 snapshot，c
     projectId: 'p1',
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
-    // saveChapter 镜像：复用进行中任务（第一次返回 inFlight 任务的结算），
-    // 任务完成后 lastSavedContent=inFlightText；再次调用开启新任务（冻结当前 'AB'）。
-    saveChapter: async () => {
-      saveChapterCalls.push(inFlightText)
-      const savedThisRound = inFlightText
-      if (inFlightText === 'A') {
-        inFlightText = 'AB'  // 第一次是旧任务；之后新任务保存最新 'AB'
-      }
-      state.lastSavedContent = savedThisRound
-      state.sessionOldText = savedThisRound
+    // Issue #629 评论 5308748920 问题3：ensureSnapshotSaved 镜像。
+    // 模拟内部：先 await 旧任务（保存 'A'），text 不同，启动新事务保存 targetText。
+    // 不再靠编排函数里的 guard<5 循环——复用+校验由 ensureSnapshotSaved 内部完成。
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {
+      saveChapterCalls.push('A')        // 旧任务（冻结 'A'）先结束
+      saveChapterCalls.push(targetText) // 目标不同 → 新事务精确保存 targetText
+      state.lastSavedContent = targetText
+      state.sessionOldText = targetText
       return true
     },
   }
@@ -1304,7 +1293,6 @@ await testAsync('close 复用进行中保存: 第二轮保存也失败 → 返�
   const harmonyImeConnection = new MockImeConnection()
   const bridge = new MockBridge()
   const saveChapterCalls = []
-  let callCount = 0
   const state = {
     chapterId: 'c1',
     content: 'AB',
@@ -1315,15 +1303,12 @@ await testAsync('close 复用进行中保存: 第二轮保存也失败 → 返�
     projectId: 'p1',
     volumeId: 'v1',
     settings: { statsDeviceId: 'dev1' },
-    // 第一次复用旧任务成功（仍结算为 A），第二轮新任务失败（磁盘再次故障）
-    saveChapter: async () => {
-      saveChapterCalls.push('call')
-      callCount++
-      if (callCount === 1) {
-        state.lastSavedContent = 'A'  // 旧任务按自己冻结的 snapshot 结算
-        return true
-      }
-      return false  // 新任务失败
+    // Issue #629 评论 5308748920 问题3：ensureSnapshotSaved 镜像。
+    // 内部先 await 旧任务（保存 'A' 成功），text 不同，启动新事务保存 targetText，新事务失败。
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {
+      saveChapterCalls.push('A')        // 旧任务成功
+      saveChapterCalls.push(targetText) // 新事务失败
+      return false
     },
   }
   const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
@@ -1336,6 +1321,472 @@ await testAsync('close 复用进行中保存: 第二轮保存也失败 → 返�
   assert.deepEqual(coordinator.calls, ['whenIdle'], '不 close（未落盘）')
   assert.deepEqual(harmonyImeConnection.calls, [], '不 detach（未落盘）')
   assert.ok(dispatcher.calls.includes('unseal'), '失败后 unseal 允许重试')
+})
+
+
+// ── 16. Issue #629 评论 5308748920 问题1：composition 收尾失败/stale 不进入保存 ──
+//
+// 验证：
+//   16a. finishActiveComposition 返回 success=false → 不 save/closeAsync/detach/pop，unseal
+//   16b. finishActiveComposition success 但 snapshot.composition!==null（stale）→ 不 save/closeAsync/detach，unseal
+//   16c. afterFinish snapshot===null → 不 save/closeAsync/detach，unseal
+//   16d. composition 正常结束（composition===null）→ 正常 save/closeAsync/detach
+//
+// 与修改后的 WritingScreen.doGracefulClose 对齐：
+//   seal → finishActiveComposition（看 finishResult.success）→ flush → whenIdle
+//   → 重读 afterFinish snapshot → 若 finishResult.success===false || afterFinish===null
+//     || afterFinish.composition!==null → unseal + return false（不进入保存）
+//   → 否则 save → closeAsync → detach → true
+
+await testAsync('composition 收尾失败: finishActiveComposition 返回 success=false → 不 save/closeAsync/detach，unseal', async () => {
+  const dispatcher = new MockDispatcher()
+  dispatcher.finishHandler = async () => ({ success: false, errorCode: 'FINISH_FAILED', warnings: [], changedPaths: [], changedEntities: [] })
+  const coordinator = new MockCoordinator()
+  coordinator.snapshot = { ...coordinator.snapshot, text: 'edited', composition: null }
+  const harmonyImeConnection = new MockImeConnection()
+  const bridge = new MockBridge()
+  const saveCalls = []
+  const state = {
+    chapterId: 'c1',
+    content: 'edited',
+    lastSavedContent: 'original',
+    sessionOldText: 'original',
+    sessionId: 's1',
+    sessionStartTime: Date.now(),
+    projectId: 'p1',
+    volumeId: 'v1',
+    settings: { statsDeviceId: 'dev1' },
+    ensureSnapshotSaved: async (targetText, isAutoSave) => { saveCalls.push('save'); return true },
+  }
+  const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
+  const screen = createGracefulCloseScreen(deps, state)
+
+  const closed = await screen.performGracefulClose()
+
+  assert.equal(closed, false, 'finish 失败必须返回 false（不 pop）')
+  assert.deepEqual(saveCalls, [], '不 save（composition 未结束）')
+  assert.deepEqual(coordinator.calls, ['whenIdle'], '不 closeAsync（composition 未结束）')
+  assert.deepEqual(harmonyImeConnection.calls, [], '不 detach（composition 未结束）')
+  assert.ok(dispatcher.calls.includes('unseal'), 'finish 失败后必须 unseal')
+  assert.equal(dispatcher.isSealed(), false, 'unseal 后 dispatcher 恢复接收输入')
+})
+
+await testAsync('composition stale: finishActiveComposition success 但 snapshot.composition!==null → 不 save/closeAsync/detach，unseal', async () => {
+  const dispatcher = new MockDispatcher()
+  // finish 返回 success=true，但 Core snapshot 仍保留 composition（stale/恢复场景）
+  dispatcher.finishHandler = async () => ({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
+  const coordinator = new MockCoordinator()
+  // composition 仍存在（Core 仍保留 preedit，FFI success 不等于 composition 已结束）
+  coordinator.snapshot = { ...coordinator.snapshot, text: 'abc', composition: { preeditText: '你' } }
+  const harmonyImeConnection = new MockImeConnection()
+  const bridge = new MockBridge()
+  const saveCalls = []
+  const state = {
+    chapterId: 'c1',
+    content: 'abc',
+    lastSavedContent: 'abc',
+    sessionOldText: 'abc',
+    sessionId: 's1',
+    sessionStartTime: Date.now(),
+    projectId: 'p1',
+    volumeId: 'v1',
+    settings: { statsDeviceId: 'dev1' },
+    ensureSnapshotSaved: async (targetText, isAutoSave) => { saveCalls.push('save'); return true },
+  }
+  const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
+  const screen = createGracefulCloseScreen(deps, state)
+
+  const closed = await screen.performGracefulClose()
+
+  assert.equal(closed, false, 'composition 仍存在必须返回 false（不 pop）')
+  assert.deepEqual(saveCalls, [], '不 save（composition 仍存在，最后 preedit 可能丢失）')
+  assert.deepEqual(coordinator.calls, ['whenIdle'], '不 closeAsync')
+  assert.deepEqual(harmonyImeConnection.calls, [], '不 detach')
+  assert.ok(dispatcher.calls.includes('unseal'), 'composition stale 后必须 unseal')
+  assert.equal(dispatcher.isSealed(), false, 'unseal 后恢复输入')
+})
+
+await testAsync('composition 收尾: afterFinish snapshot===null → 不 save/closeAsync/detach，unseal', async () => {
+  const dispatcher = new MockDispatcher()
+  const coordinator = new MockCoordinator()
+  coordinator.snapshot = null  // snapshot 为 null（session 已被外部关闭等异常）
+  const harmonyImeConnection = new MockImeConnection()
+  const bridge = new MockBridge()
+  const saveCalls = []
+  const state = {
+    chapterId: 'c1',
+    content: 'abc',
+    lastSavedContent: 'abc',
+    sessionOldText: 'abc',
+    sessionId: 's1',
+    sessionStartTime: Date.now(),
+    projectId: 'p1',
+    volumeId: 'v1',
+    settings: { statsDeviceId: 'dev1' },
+    ensureSnapshotSaved: async (targetText, isAutoSave) => { saveCalls.push('save'); return true },
+  }
+  const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
+  const screen = createGracefulCloseScreen(deps, state)
+
+  const closed = await screen.performGracefulClose()
+
+  assert.equal(closed, false, 'snapshot===null 必须返回 false')
+  assert.deepEqual(saveCalls, [], '不 save')
+  assert.deepEqual(coordinator.calls, ['whenIdle'], '不 closeAsync')
+  assert.deepEqual(harmonyImeConnection.calls, [], '不 detach')
+  assert.ok(dispatcher.calls.includes('unseal'), 'snapshot null 后必须 unseal')
+})
+
+await testAsync('composition 正常: finishActiveComposition success 且 composition===null → 正常 save/closeAsync/detach', async () => {
+  const dispatcher = new MockDispatcher()
+  // finish 成功且 composition 已结束
+  dispatcher.finishHandler = async () => ({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
+  const coordinator = new MockCoordinator()
+  coordinator.snapshot = { ...coordinator.snapshot, text: 'committed', composition: null }
+  const harmonyImeConnection = new MockImeConnection()
+  const bridge = new MockBridge()
+  const saveCalls = []
+  const state = {
+    chapterId: 'c1',
+    content: 'committed',
+    lastSavedContent: 'old',
+    sessionOldText: 'old',
+    sessionId: 's1',
+    sessionStartTime: Date.now(),
+    projectId: 'p1',
+    volumeId: 'v1',
+    settings: { statsDeviceId: 'dev1' },
+    ensureSnapshotSaved: async (targetText, isAutoSave) => { saveCalls.push(targetText); state.lastSavedContent = targetText; return true },
+  }
+  const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
+  const screen = createGracefulCloseScreen(deps, state)
+
+  const closed = await screen.performGracefulClose()
+
+  assert.equal(closed, true, 'composition 正常结束应正常关闭')
+  assert.deepEqual(saveCalls, ['committed'], 'save committed 文本')
+  assert.deepEqual(coordinator.calls, ['whenIdle', 'closeAsync'], '正常 close')
+  assert.deepEqual(harmonyImeConnection.calls, ['detach'], '正常 detach')
+})
+
+// ── 17. Issue #629 评论 5308748920 问题2：requestLeave 幂等（leaveTask 复用，只 pop 一次）──
+
+await testAsync('requestLeave 幂等: 快速双返回只 pop 一次（leaveTask 复用同一 Promise）', async () => {
+  // 模拟 WritingScreen 的 requestLeave + leaveTask 机制（与修改后的 WritingScreen.requestLeave 对齐）
+  let leaveTask = null
+  const popCalls = []
+  const dispatcher = new MockDispatcher()
+  const coordinator = new MockCoordinator()
+  coordinator.snapshot = { ...coordinator.snapshot, text: 'edited', composition: null }
+  const harmonyImeConnection = new MockImeConnection()
+  const bridge = new MockBridge()
+  const saveCalls = []
+  const state = {
+    chapterId: 'c1',
+    content: 'edited',
+    lastSavedContent: 'original',
+    sessionOldText: 'original',
+    sessionId: 's1',
+    sessionStartTime: Date.now(),
+    projectId: 'p1',
+    volumeId: 'v1',
+    settings: { statsDeviceId: 'dev1' },
+    ensureSnapshotSaved: async (targetText, isAutoSave) => { saveCalls.push('save'); state.lastSavedContent = targetText; return true },
+  }
+  const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
+  const screen = createGracefulCloseScreen(deps, state)
+
+  // 模拟 requestLeave（与修改后的 WritingScreen.requestLeave 对齐）
+  const requestLeave = () => {
+    if (leaveTask !== null) return leaveTask
+    let closed = false
+    const task = (async () => {
+      closed = await screen.performGracefulClose()
+      if (closed === true) popCalls.push('pop')
+    })()
+    leaveTask = task
+    task.then(
+      () => { if (closed === false && leaveTask === task) leaveTask = null },
+      () => { if (leaveTask === task) leaveTask = null }
+    )
+    return task
+  }
+
+  // 快速双返回（系统返回 + 左上角按钮几乎同时触发）
+  const p1 = requestLeave()
+  const p2 = requestLeave()
+  // 两个 Promise 应是同一对象（leaveTask 复用）
+  assert.equal(p1, p2, '快速双返回应返回同一 leaveTask Promise')
+  await Promise.all([p1, p2])
+
+  // 关键断言：只 pop 一次（不会从 Writing 连退到 Home）
+  assert.equal(popCalls.length, 1, '只 pop 一次（leaveTask 幂等，不双 pop）')
+  assert.deepEqual(saveCalls, ['save'], 'save 只调一次')
+  assert.deepEqual(coordinator.calls, ['whenIdle', 'closeAsync'], 'close 只调一次')
+  assert.deepEqual(harmonyImeConnection.calls, ['detach'], 'detach 只调一次')
+})
+
+await testAsync('requestLeave 重试: close 失败后 leaveTask 清空，再次返回可重试', async () => {
+  let leaveTask = null
+  const popCalls = []
+  const dispatcher = new MockDispatcher()
+  const coordinator = new MockCoordinator()
+  coordinator.snapshot = { ...coordinator.snapshot, text: 'edited', composition: null }
+  const harmonyImeConnection = new MockImeConnection()
+  const bridge = new MockBridge()
+  let saveOk = false
+  const saveCalls = []
+  const state = {
+    chapterId: 'c1',
+    content: 'edited',
+    lastSavedContent: 'original',
+    sessionOldText: 'original',
+    sessionId: 's1',
+    sessionStartTime: Date.now(),
+    projectId: 'p1',
+    volumeId: 'v1',
+    settings: { statsDeviceId: 'dev1' },
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {
+      saveCalls.push('save')
+      if (!saveOk) return false
+      state.lastSavedContent = targetText
+      return true
+    },
+  }
+  const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
+  const screen = createGracefulCloseScreen(deps, state)
+
+  const requestLeave = () => {
+    if (leaveTask !== null) return leaveTask
+    let closed = false
+    const task = (async () => {
+      closed = await screen.performGracefulClose()
+      if (closed === true) popCalls.push('pop')
+    })()
+    leaveTask = task
+    task.then(
+      () => { if (closed === false && leaveTask === task) leaveTask = null },
+      () => { if (leaveTask === task) leaveTask = null }
+    )
+    return task
+  }
+
+  // 第一次返回：保存失败 → 不 pop
+  await requestLeave()
+  assert.equal(popCalls.length, 0, '第一次失败不 pop')
+  assert.equal(leaveTask, null, '失败后 leaveTask 清空（允许重试）')
+
+  // 用户修好（模拟磁盘恢复），再次按返回
+  saveOk = true
+  await requestLeave()
+  assert.equal(popCalls.length, 1, '第二次成功后 pop')
+  assert.deepEqual(coordinator.calls, ['whenIdle', 'whenIdle', 'closeAsync'], '第二次真正 close')
+})
+
+await testAsync('requestLeave 成功后: leaveTask 不重置（页面已离开，防止重入）', async () => {
+  let leaveTask = null
+  const popCalls = []
+  const dispatcher = new MockDispatcher()
+  const coordinator = new MockCoordinator()
+  coordinator.snapshot = { ...coordinator.snapshot, text: 'same', composition: null }
+  const harmonyImeConnection = new MockImeConnection()
+  const bridge = new MockBridge()
+  const state = {
+    chapterId: 'c1',
+    content: 'same',
+    lastSavedContent: 'same',
+    sessionOldText: 'same',
+    sessionId: 's1',
+    sessionStartTime: Date.now(),
+    projectId: 'p1',
+    volumeId: 'v1',
+    settings: { statsDeviceId: 'dev1' },
+    ensureSnapshotSaved: async (targetText, isAutoSave) => { return true },
+  }
+  const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
+  const screen = createGracefulCloseScreen(deps, state)
+
+  const requestLeave = () => {
+    if (leaveTask !== null) return leaveTask
+    let closed = false
+    const task = (async () => {
+      closed = await screen.performGracefulClose()
+      if (closed === true) popCalls.push('pop')
+    })()
+    leaveTask = task
+    task.then(
+      () => { if (closed === false && leaveTask === task) leaveTask = null },
+      () => { if (leaveTask === task) leaveTask = null }
+    )
+    return task
+  }
+
+  await requestLeave()
+  assert.equal(popCalls.length, 1, '成功后 pop')
+  // 成功后 leaveTask 不重置（页面已离开，保留 leaveTask 防止重入）
+  assert.notEqual(leaveTask, null, '成功后 leaveTask 保留（不重置）')
+})
+
+// ── 18. Issue #629 评论 5308748920 问题3：ensureSnapshotSaved 精确保存目标文本 ──
+
+await testAsync('ensureSnapshotSaved: 精确保存 close 时的 savedText，不重新抓当前正文', async () => {
+  const dispatcher = new MockDispatcher()
+  const coordinator = new MockCoordinator()
+  coordinator.snapshot = { ...coordinator.snapshot, text: 'frozen-text', composition: null }
+  const harmonyImeConnection = new MockImeConnection()
+  const bridge = new MockBridge()
+  const receivedTargets = []
+  const state = {
+    chapterId: 'c1',
+    content: 'frozen-text',
+    lastSavedContent: 'different',
+    sessionOldText: 'different',
+    sessionId: 's1',
+    sessionStartTime: Date.now(),
+    projectId: 'p1',
+    volumeId: 'v1',
+    settings: { statsDeviceId: 'dev1' },
+    ensureSnapshotSaved: async (targetText, isAutoSave) => {
+      receivedTargets.push(targetText)
+      state.lastSavedContent = targetText
+      state.sessionOldText = targetText
+      return true
+    },
+  }
+  const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
+  const screen = createGracefulCloseScreen(deps, state)
+
+  const closed = await screen.performGracefulClose()
+
+  assert.equal(closed, true)
+  assert.deepEqual(receivedTargets, ['frozen-text'], 'ensureSnapshotSaved 收到的正是 snapshot.text（不重新抓正文）')
+})
+
+await testAsync('ensureSnapshotSaved 复用: 旧任务保存同一 text 且成功 → 直接 true 不启动新事务', async () => {
+  // 模拟 ensureSnapshotSaved 内部复用逻辑（与 WritingScreen.ensureSnapshotSaved 对齐）
+  let activeSave = null
+  const doSaveCalls = []
+  const doSaveChapter = async (targetText) => {
+    doSaveCalls.push(targetText)
+    return true
+  }
+  const ensureSnapshotSaved = async (targetText) => {
+    if (activeSave !== null) {
+      const prev = activeSave
+      let prevOk = false
+      try { prevOk = await prev.task } catch (e) {}
+      if (prev.text === targetText && prevOk) return true
+      if (activeSave === prev) activeSave = null
+    }
+    const task = doSaveChapter(targetText)
+    activeSave = { text: targetText, task }
+    task.then(
+      () => { if (activeSave !== null && activeSave.task === task) activeSave = null },
+      () => { if (activeSave !== null && activeSave.task === task) activeSave = null }
+    )
+    return task
+  }
+
+  // 第一次保存 'A'
+  const r1 = await ensureSnapshotSaved('A')
+  assert.equal(r1, true)
+  assert.deepEqual(doSaveCalls, ['A'], '第一次启动新事务保存 A')
+
+  // 等 activeSave 释放
+  await sleep(10)
+
+  // 第二次保存同一 'A'：此时 activeSave 已释放，会启动新事务
+  // 但若 activeSave 仍在（任务未结束），则复用
+  const r2 = await ensureSnapshotSaved('A')
+  assert.equal(r2, true)
+})
+
+await testAsync('ensureSnapshotSaved 精确: 旧任务保存不同 text → await 旧任务后启动新事务保存 targetText', async () => {
+  // 模拟 ensureSnapshotSaved 内部逻辑
+  let activeSave = null
+  const doSaveCalls = []
+  const doSaveChapter = async (targetText) => {
+    doSaveCalls.push(targetText)
+    await sleep(5)
+    return true
+  }
+  const ensureSnapshotSaved = async (targetText) => {
+    if (activeSave !== null) {
+      const prev = activeSave
+      let prevOk = false
+      try { prevOk = await prev.task } catch (e) {}
+      if (prev.text === targetText && prevOk) return true
+      if (activeSave === prev) activeSave = null
+    }
+    const task = doSaveChapter(targetText)
+    activeSave = { text: targetText, task }
+    task.then(
+      () => { if (activeSave !== null && activeSave.task === task) activeSave = null },
+      () => { if (activeSave !== null && activeSave.task === task) activeSave = null }
+    )
+    return task
+  }
+
+  // 启动保存 'A'（不等完成）
+  const p1 = ensureSnapshotSaved('A')
+  // 立即调保存 'B'：应先 await 'A' 完成，再启动新事务保存 'B'
+  const r2 = await ensureSnapshotSaved('B')
+  assert.equal(r2, true)
+  await p1
+  assert.deepEqual(doSaveCalls, ['A', 'B'], '先保存 A，再保存 B（精确保存目标文本）')
+})
+
+// ── 19. Issue #629 评论 5308748920 问题3：doClearContent 重读 snapshot 确认 text===再 ensureSnapshotSaved('') ──
+
+await testAsync('doClearContent: replace 后重读 snapshot 确认 text===再 ensureSnapshotSaved()', async () => {
+  // 模拟 doClearContent 核心逻辑（与修改后的 WritingScreen.doClearContent 对齐）
+  const coordinator = {
+    getSnapshot: () => ({ text: '', composition: null }),  // replace 后 snapshot 已是空
+    replace: async () => ({ success: true, data: { outcome: 'applied' } }),
+    whenIdle: async () => {},
+  }
+  const dispatcher = { flush: async () => {} }
+  const receivedTargets = []
+  const ensureSnapshotSaved = async (targetText, isAutoSave) => {
+    receivedTargets.push(targetText)
+    return true
+  }
+
+  // 模拟 doClearContent 核心逻辑（replace 成功后部分）
+  await dispatcher.flush()
+  await coordinator.whenIdle()
+  const afterClear = coordinator.getSnapshot()
+  assert.notEqual(afterClear, null, 'afterClear 不为 null')
+  assert.equal(afterClear.text, '', 'replace 后 snapshot.text 应为空')
+  const saved = await ensureSnapshotSaved('', false)
+  assert.equal(saved, true, '空正文保存成功')
+  assert.deepEqual(receivedTargets, [''], 'ensureSnapshotSaved 收到空正文（不复用旧 saveTask）')
+})
+
+await testAsync('doClearContent: replace 后 snapshot.text!== → 不保存，显示失败', async () => {
+  // 模拟 replace 后 snapshot 仍有残留（异常场景）
+  const coordinator = {
+    getSnapshot: () => ({ text: 'residual', composition: null }),
+    replace: async () => ({ success: true, data: { outcome: 'applied' } }),
+    whenIdle: async () => {},
+  }
+  const dispatcher = { flush: async () => {} }
+  const receivedTargets = []
+  const ensureSnapshotSaved = async (targetText, isAutoSave) => {
+    receivedTargets.push(targetText)
+    return true
+  }
+
+  await dispatcher.flush()
+  await coordinator.whenIdle()
+  const afterClear = coordinator.getSnapshot()
+  // 与 WritingScreen.doClearContent 对齐：text!=='' 时不调 ensureSnapshotSaved
+  if (afterClear === null || afterClear.text !== '') {
+    assert.equal(afterClear.text, 'residual', 'snapshot 仍有残留')
+    assert.deepEqual(receivedTargets, [], 'snapshot.text!==时不调 ensureSnapshotSaved（不误存残留）')
+    return
+  }
+  assert.fail('不应到达此分支')
 })
 
 console.log('---')

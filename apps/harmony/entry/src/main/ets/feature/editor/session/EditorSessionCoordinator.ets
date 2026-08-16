@@ -25,7 +25,8 @@ import { SerialCommandQueue } from './editor_patch_logic'
 // Issue #629 评论9 第4项：typed 状态更新。listener 回调携带 snapshot 和触发本次更新的 editResult。
 // - open() 成功后回调：editResult=null（初始加载，无编辑命令）。
 // - 编辑命令成功后回调：editResult=本次 EditorEditResult（含 contentDelta，供 Screen 实时算字数）。
-// - recoverFromCoreSnapshot 恢复后回调：editResult=null（snapshot 恢复，无单条 editResult）。
+// - recoverFromCoreSnapshot 恢复后回调：editResult=sourceEditResult（Core 已 Applied 时为本次 result.data，
+//   stale/invalid 等情况为 null）。
 // Screen 消费 update.snapshot 同步 UI 状态，消费 update.editResult.contentDelta 实时更新 wordCount。
 export interface EditorStateUpdate {
   readonly snapshot: EditorSessionSnapshot
@@ -168,7 +169,10 @@ export class EditorSessionCoordinator {
         } else {
           // patch 应用失败或 StaleRevision/InvalidOffset/InvalidRange：
           // 立即从 Core snapshot() 重建 state，不让 UI 停在旧文本。
-          await this.recoverFromCoreSnapshot()
+          // 传 result.data：Core 已 Applied 时 recovery 后 listener 仍能拿到真实 contentDelta，
+          // WritingScreen 实时 wordCount 不会少算本次已应用的字符。
+          // 对 stale/invalid result，contentDelta 本来就是 0，不会误加。
+          await this.recoverFromCoreSnapshot(result.data)
         }
       }
       return result
@@ -179,8 +183,17 @@ export class EditorSessionCoordinator {
    * 从 Core snapshot() 重建 state：用于 patch 失败或 StaleRevision 恢复。
    * 拿到 Core 完整 snapshot 后替换 this.state 并 notifyListener。
    * snapshot 调用本身失败时无法恢复，保留旧 state（best effort）；不吞错误，记入 warnings 不阻塞后续命令。
+   *
+   * Issue #629 评论 5 第 4 部分：恢复成功后 listener 仍发 { snapshot, editResult: sourceEditResult }。
+   * - enqueueEdit 在 result.success && result.data 但 withEditResult 失败（Core 已 Applied、只是平台 patch 应用失败）
+   *   时，把 result.data 传给本方法。snapshot 恢复正确正文后，WritingScreen 仍能消费真实 Core contentDelta，
+   *   实时 wordCount 不会少算本次已应用的字符。
+   * - 对 staleRevision/invalidOffset/invalidRange 等情况，Core 没有真正改动，调用方传 null（默认值），
+   *   contentDelta 本来就是 0，不会误加。
+   * - 不在 recovery 里重新按 snapshot.text.length 或遍历全文算字数：snapshot 只用来恢复正文，
+   *   字数增量必须来自 Core 真实返回的 EditorEditResult.contentDelta。
    */
-  private async recoverFromCoreSnapshot(): Promise<void> {
+  private async recoverFromCoreSnapshot(sourceEditResult: EditorEditResult | null = null): Promise<void> {
     if (!this.state) {
       return
     }
@@ -188,7 +201,7 @@ export class EditorSessionCoordinator {
     const snapResult = await this.bridge.snapshot(sid)
     if (snapResult.success && snapResult.data) {
       this.state = EditorSessionState.fromCreate(sid, snapResult.data)
-      this.notifyListener(null)
+      this.notifyListener(sourceEditResult)
     }
     // snapResult 失败时无法恢复；保留旧 state。不抛错（避免阻塞命令队列后续命令），
     // 但调用方通过 result.success/data.outcome 已知本次命令失败。
