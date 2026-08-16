@@ -26,6 +26,7 @@ import com.xiwei.sujian.feature.sync.data.model.FullSyncDiagnosticsResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncDryRunResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
 import com.xiwei.sujian.feature.sync.data.model.LegacyMigrationOutcome
+import com.xiwei.sujian.feature.sync.data.model.LegacyProfileMetadata
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncConflict
 import com.xiwei.sujian.feature.sync.data.model.SyncDiagnosticsResult
@@ -49,6 +50,7 @@ import uniffi.writer_core.FullSyncDiagnosticsResultDto
 import uniffi.writer_core.FullSyncDryRunResultDto
 import uniffi.writer_core.FullSyncResultDto
 import uniffi.writer_core.LegacyMigrationOutcomeDto
+import uniffi.writer_core.LegacyProfileMetadataDto
 import uniffi.writer_core.LocalSettingsDto
 import uniffi.writer_core.ProjectDto
 import uniffi.writer_core.ProjectStatsDto
@@ -446,6 +448,20 @@ internal fun LegacyMigrationOutcomeDto.toModel() =
         config = config?.toModel(),
         secrets = secrets?.toModel(),
         reason = reason,
+    )
+
+/**
+ * #630 评论第 5 点 Part C-Android：[LegacyProfileMetadata] → Core [LegacyProfileMetadataDto]。
+ *
+ * activeGeneration 用 Long 表达 DataStore 侧的 Long 值，映射到 Core u32 时检查范围：
+ * 超出 [UInt.MAX_VALUE] 的 generation 视为无效，传 null 让 Core 回退 base key / 文件
+ * （实际 generation 不会超过 UInt.MAX_VALUE，这是防御性处理）。
+ */
+internal fun LegacyProfileMetadata.toDto(): LegacyProfileMetadataDto =
+    LegacyProfileMetadataDto(
+        source = source,
+        projectId = projectId,
+        activeGeneration = activeGeneration?.takeIf { it in 1L..UInt.MAX_VALUE.toLong() }?.toUInt(),
     )
 
 internal fun String?.toBackendType(): BackendType =

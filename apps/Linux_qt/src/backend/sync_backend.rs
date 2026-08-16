@@ -426,7 +426,7 @@ impl AppBackend {
         };
 
         if let Some(api) = self.core_api() {
-            if let Ok(cap) = api.get_sync_capability(project_id) {
+            if let Ok(cap) = api.get_sync_capability() {
                 if !cap.can_run {
                     return cap
                         .block_message_key
@@ -535,7 +535,7 @@ impl AppBackend {
             // closure is UnwindSafe by auto-impl without needing AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
                 let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
-                let mut config = match api.load_sync_config(&project_id_capture) {
+                let mut config = match api.load_sync_config() {
                     Ok(c) => c,
                     Err(e) => {
                         let err_str = e.to_string();
@@ -560,23 +560,23 @@ impl AppBackend {
                 config.has_network_permission = net.is_connected;
                 config.has_network_state_permission = true;
 
-                match api.perform_sync_diagnostics(&project_id_capture, config) {
+                match api.perform_full_sync_diagnostics(config) {
                     Ok(result) => {
-                        let status = determine_diagnostics_status(&result);
+                        let status = determine_diagnostics_status(&result.diagnostics);
 
                         let state = writer_core::api::SyncOperationStateDto {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "diagnose".to_string(),
                             status_code: status.to_string(),
                             phase_key: None,
-                            summary_key: if result.success {
+                            summary_key: if result.diagnostics.success {
                                 Some("sync.result.diagnose_success".to_string())
                             } else {
                                 Some("sync.result.diagnose_failed".to_string())
                             },
                             summary_args: std::collections::HashMap::new(),
                             counts: writer_core::api::SyncOperationCountsDto::default(),
-                            raw_error: result.raw_error.clone(),
+                            raw_error: result.diagnostics.raw_error.clone(),
                         };
 
                         SyncTaskOutcome {
@@ -659,11 +659,8 @@ impl AppBackend {
             }
         };
         if let Some(api) = self.core_api() {
-            let config_opt = api.load_sync_config(&project_id).ok();
-            let token_opt = api
-                .load_sync_secrets(&project_id)
-                .ok()
-                .and_then(|s| s.token);
+            let config_opt = api.load_sync_config().ok();
+            let token_opt = api.load_sync_secrets().ok().and_then(|s| s.token);
             if let Some(config) = config_opt {
                 self.current_sync_enabled = config.enabled;
                 self.current_sync_backend_type = config.backend_type.clone();
@@ -743,8 +740,9 @@ impl AppBackend {
         };
         if let Some(api) = self.core_api() {
             let net = crate::backend::app_backend::current_network_state();
-            let mut c = api.load_sync_config(&project_id).unwrap_or(
-                writer_core::api::types::SyncConfigDto {
+            let mut c = api
+                .load_sync_config()
+                .unwrap_or(writer_core::api::types::SyncConfigDto {
                     enabled: false,
                     backend_type: "github_api".to_string(),
                     remote_url: "".to_string(),
@@ -755,8 +753,7 @@ impl AppBackend {
                     username: "".to_string(),
                     has_network_permission: net.is_connected,
                     has_network_state_permission: true,
-                },
-            );
+                });
 
             let raw_url = self.current_sync_remote_url.clone();
             let parsed = writer_core::sync::sanitize_remote_url(&raw_url);
@@ -785,7 +782,7 @@ impl AppBackend {
             }
 
             let mut s = api
-                .load_sync_secrets(&project_id)
+                .load_sync_secrets()
                 .unwrap_or(writer_core::api::types::SyncSecretsDto { token: None });
             if let Some(ref extracted_token) = parsed.extracted_token {
                 s.token = Some(extracted_token.clone());
@@ -795,7 +792,7 @@ impl AppBackend {
                 s.token = Some(self.current_sync_token.clone());
             }
 
-            let config_result = api.save_sync_config(&project_id, c);
+            let config_result = api.save_sync_config(c);
             let config_envelope = match config_result {
                 Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
                     data,
@@ -826,7 +823,7 @@ impl AppBackend {
                     raw_error: Some(format!("{} ({})", resolved_key, error_code)),
                 });
             } else {
-                let secrets_result = api.save_sync_secrets(&project_id, s);
+                let secrets_result = api.save_sync_secrets(s);
                 let secrets_envelope = match secrets_result {
                     Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
                         data,

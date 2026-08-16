@@ -114,6 +114,23 @@ impl super::WriterCore {
         migrator.migrate()
     }
 
+    /// 旧→新同步 profile 一次性迁移，接受精确 generation metadata（Issue #630 评论第 5 点 Part C）。
+    ///
+    /// 详见 `crate::sync::legacy_migration::LegacySyncProfileMigrator::migrate_with_metadata`。
+    /// metadata 中每个项描述一个旧 profile 的 source 和 committed generation，
+    /// 使 Core 精确读取 `sync_token_<base>_g<N>` 而不猜测枚举上限。
+    pub fn migrate_legacy_sync_profile_with_metadata(
+        &self,
+        metadata: &[crate::sync::legacy_migration::LegacyProfileMetadata],
+    ) -> crate::error::Result<crate::sync::legacy_migration::LegacyMigrationOutcome> {
+        let migrator = crate::sync::legacy_migration::LegacySyncProfileMigrator::new(
+            &self.app_data_root,
+            &self.projects_root,
+            self.secure_storage.as_deref(),
+        );
+        migrator.migrate_with_metadata(metadata)
+    }
+
     /// 加载全局同步配置。路径：`<app_data_root>/app-meta/sync/config.local.json`。
     pub fn load_sync_config(&self) -> crate::error::Result<crate::sync::SyncConfig> {
         let config_path = self.app_data_root.join("app-meta/sync/config.local.json");
@@ -404,13 +421,17 @@ impl super::WriterCore {
     /// 全量同步 — 先建立 App target，再枚举所有作品建立 Project target；
     /// 共享同一份 config / secrets snapshot，按 target 顺序执行。
     /// 一个 target 的状态/manifest 仍写在它自己的本地 root 下。
+    ///
+    /// 单个 target 的 `Err`（本地 root IO 错、transport 调用失败等）不提前打断
+    /// 整个全量同步：该 target 的 Err 被转为 `SyncResult::error(...)` 后 push 到
+    /// `targets`，继续下一 target。只有无法建立 target 列表（`list_projects`
+    /// 失败）或全局配置无法解析/transport 初始化失败这类无法开始事务的错误才让
+    /// 整个 `perform_full_sync` 返回 `Err`。
     pub fn perform_full_sync(
         &self,
         config: &crate::sync::SyncConfig,
         force_sync: bool,
     ) -> crate::error::Result<crate::sync::types::FullSyncResult> {
-        use crate::sync::types::{SyncTarget, TargetSyncResult};
-
         let secrets = self.load_sync_secrets().unwrap_or_default();
         let backend_type = crate::sync::resolved_backend_type(config);
         let backend = if let Some(transport) = self.sync_transport.as_ref() {
@@ -427,17 +448,38 @@ impl super::WriterCore {
             crate::sync::create_sync_backend(&backend_type)
         };
 
+        self.perform_full_sync_with_backend(backend.as_ref(), config, &secrets, force_sync)
+    }
+
+    /// 内部：用给定 backend 执行全量同步。
+    ///
+    /// `perform_full_sync` 创建 backend 后委托到此方法；测试通过此方法注入 mock backend。
+    /// 语义与 `perform_full_sync` 一致：单个 target 的 `Err` 转为该 target 的
+    /// `SyncResult::error(...)` 后继续，只有 `list_projects` 失败才整体 `Err`。
+    pub(crate) fn perform_full_sync_with_backend(
+        &self,
+        backend: &dyn crate::sync::SyncBackend,
+        config: &crate::sync::SyncConfig,
+        secrets: &crate::sync::SyncSecrets,
+        force_sync: bool,
+    ) -> crate::error::Result<crate::sync::types::FullSyncResult> {
+        use crate::sync::types::{SyncTarget, TargetSyncResult};
+
+        // 无法建立 target 列表才整体 Err —— 此时连 App target 都无法有序执行。
+        let projects = self.list_projects()?;
+
         let mut targets: Vec<TargetSyncResult> = Vec::new();
 
         // App target
         let app_target = SyncTarget::app();
-        let app_result = backend.sync(
+        let app_result = run_full_sync_target(
+            backend,
             &self.app_data_root,
             config,
-            &secrets,
+            secrets,
             &app_target,
             force_sync,
-        )?;
+        );
         targets.push(TargetSyncResult {
             target_kind: "app".to_string(),
             project_id: None,
@@ -446,16 +488,16 @@ impl super::WriterCore {
         });
 
         // Project targets
-        let projects = self.list_projects()?;
         for project in &projects {
             let target = SyncTarget::project(&project.id);
-            let result = backend.sync(
+            let result = run_full_sync_target(
+                backend,
                 &self.project_root(&project.id),
                 config,
-                &secrets,
+                secrets,
                 &target,
                 force_sync,
-            )?;
+            );
             targets.push(TargetSyncResult {
                 target_kind: "project".to_string(),
                 project_id: Some(project.id.clone()),
@@ -643,5 +685,403 @@ fn default_sync_config() -> crate::sync::SyncConfig {
         username: String::new(),
         has_network_permission: true,
         has_network_state_permission: true,
+    }
+}
+
+/// 执行单个 target 的同步，把 `Err` 转为该 target 的 `SyncResult::error(...)`。
+///
+/// `perform_full_sync` 中 App target 和每个 Project target 都通过此 helper 调用，
+/// 避免单 target 的 `Err` 用 `?` 提前打断整个全量同步。`Err` 的 `recoverable()`
+/// 决定 `SyncStatus::RecoverableError` / `FatalError`，`sync_category()` 决定
+/// `error_category`（空字符串视为无分类）。
+fn run_full_sync_target(
+    backend: &dyn crate::sync::SyncBackend,
+    local_root: &std::path::Path,
+    config: &crate::sync::SyncConfig,
+    secrets: &crate::sync::SyncSecrets,
+    target: &crate::sync::types::SyncTarget,
+    force_sync: bool,
+) -> crate::sync::types::SyncResult {
+    match backend.sync(local_root, config, secrets, target, force_sync) {
+        Ok(result) => result,
+        Err(err) => {
+            let msg = err.to_string();
+            let category = err.sync_category();
+            let error_category = if category.is_empty() {
+                None
+            } else {
+                Some(category.to_string())
+            };
+            let status = if err.recoverable() {
+                crate::sync::SyncStatus::RecoverableError(msg.clone())
+            } else {
+                crate::sync::SyncStatus::FatalError(msg.clone())
+            };
+            crate::sync::types::SyncResult::error(
+                status,
+                crate::sync::types::FirstSyncMode::NotAttempted,
+                msg,
+                error_category,
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_full_sync_target;
+    use crate::sync::types::{
+        FirstSyncMode, SyncConfig, SyncDiagnosticsResult, SyncResult, SyncStatus, SyncTarget,
+    };
+    use crate::sync::{SyncBackend, SyncSecrets};
+    use std::collections::HashMap;
+    use std::path::Path;
+    use std::sync::Mutex;
+    use tempfile::tempdir;
+
+    /// 可 Clone 的 mock 输出 —— 避免 `Error` 不 `Clone` 的问题。
+    ///
+    /// `Ok` 变体 `Box<SyncResult>` 以避免 clippy::large_enum_variant（SyncResult
+    /// 远大于其他两个变体）。
+    #[derive(Clone)]
+    enum MockOutcome {
+        Ok(Box<SyncResult>),
+        ErrOther(String),
+        ErrSyncAuth(String),
+    }
+
+    impl MockOutcome {
+        fn ok(result: SyncResult) -> Self {
+            Self::Ok(Box::new(result))
+        }
+        fn to_result(&self) -> std::result::Result<SyncResult, crate::Error> {
+            match self {
+                MockOutcome::Ok(r) => Ok((**r).clone()),
+                MockOutcome::ErrOther(msg) => Err(crate::Error::Other(msg.clone())),
+                MockOutcome::ErrSyncAuth(msg) => Err(crate::Error::SyncAuthFailed {
+                    reason: msg.clone(),
+                }),
+            }
+        }
+    }
+
+    /// 按 `remote_prefix` 配置每个 target 返回值的 mock backend。
+    struct MockBackend {
+        behaviors: Mutex<HashMap<String, MockOutcome>>,
+        default: MockOutcome,
+    }
+
+    impl MockBackend {
+        fn new(default: MockOutcome) -> Self {
+            Self {
+                behaviors: Mutex::new(HashMap::new()),
+                default,
+            }
+        }
+        fn set(&self, remote_prefix: &str, outcome: MockOutcome) {
+            self.behaviors
+                .lock()
+                .expect("behaviors mutex poisoned")
+                .insert(remote_prefix.to_string(), outcome);
+        }
+    }
+
+    impl SyncBackend for MockBackend {
+        fn diagnose(
+            &self,
+            _: &SyncConfig,
+            _: &SyncSecrets,
+        ) -> crate::Result<SyncDiagnosticsResult> {
+            Ok(SyncDiagnosticsResult::new())
+        }
+        fn pull(
+            &self,
+            _: &Path,
+            _: &SyncConfig,
+            _: &SyncSecrets,
+            _: &SyncTarget,
+            _: bool,
+        ) -> crate::Result<SyncResult> {
+            Ok(SyncResult::success())
+        }
+        fn push(
+            &self,
+            _: &Path,
+            _: &SyncConfig,
+            _: &SyncSecrets,
+            _: &SyncTarget,
+            _: bool,
+        ) -> crate::Result<SyncResult> {
+            Ok(SyncResult::success())
+        }
+        fn sync(
+            &self,
+            _: &Path,
+            _: &SyncConfig,
+            _: &SyncSecrets,
+            target: &SyncTarget,
+            _: bool,
+        ) -> crate::Result<SyncResult> {
+            let behaviors = self.behaviors.lock().expect("behaviors mutex poisoned");
+            match behaviors.get(&target.remote_prefix) {
+                Some(outcome) => outcome.to_result(),
+                None => self.default.to_result(),
+            }
+        }
+    }
+
+    fn test_config() -> SyncConfig {
+        SyncConfig {
+            enabled: true,
+            backend_type: crate::sync::BackendType::GithubApi,
+            remote_url: "https://github.com/test/repo.git".to_string(),
+            transport: crate::sync::SyncProtocol::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            username: String::new(),
+            has_network_permission: true,
+            has_network_state_permission: true,
+        }
+    }
+
+    /// 单个 target 的 Err 不阻止后续 target 执行，所有 target 都出现在结果中。
+    #[test]
+    fn test_full_sync_single_target_err_does_not_block_others() {
+        let temp_dir = tempdir().expect("tempdir");
+        let core =
+            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).expect("create projects dir");
+
+        let p1 = core.create_project("Project 1").expect("create project 1");
+        let p2 = core.create_project("Project 2").expect("create project 2");
+
+        // App target 返回 Err，两个 Project target 返回 Ok
+        let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
+        backend.set(
+            "app",
+            MockOutcome::ErrOther("app root IO failed".to_string()),
+        );
+
+        let config = test_config();
+        let secrets = SyncSecrets::default();
+        let result = core
+            .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+            .expect("single target failure must not make full sync return Err");
+
+        // 3 个 target 都在结果中（1 app + 2 project）
+        assert_eq!(result.targets.len(), 3, "all targets should be present");
+
+        // App target 失败（Error::Other recoverable=true → RecoverableError）
+        let app_target = &result.targets[0];
+        assert_eq!(app_target.target_kind, "app");
+        assert!(
+            matches!(app_target.result.status, SyncStatus::RecoverableError(_)),
+            "app target should be RecoverableError, got {:?}",
+            app_target.result.status
+        );
+
+        // 两个 Project target 成功
+        let project_results: Vec<_> = result
+            .targets
+            .iter()
+            .filter(|t| t.target_kind == "project")
+            .collect();
+        assert_eq!(
+            project_results.len(),
+            2,
+            "both project targets should succeed"
+        );
+        for pr in &project_results {
+            assert_eq!(pr.result.status, SyncStatus::Success);
+        }
+
+        // overall_status 反映有 target 失败
+        assert!(
+            matches!(result.overall_status, SyncStatus::Error(_)),
+            "overall_status should be Error, got {:?}",
+            result.overall_status
+        );
+
+        // 两个 project 都在结果中
+        let project_ids: std::collections::HashSet<_> = project_results
+            .iter()
+            .map(|t| t.project_id.clone().expect("project target has id"))
+            .collect();
+        assert!(project_ids.contains(&p1.id), "p1 should be in results");
+        assert!(project_ids.contains(&p2.id), "p2 should be in results");
+    }
+
+    /// 混合：App Ok, Project1 Err(auth), Project2 Ok —— 全部 target 在结果中，overall Error。
+    #[test]
+    fn test_full_sync_mixed_outcomes_all_targets_present() {
+        let temp_dir = tempdir().expect("tempdir");
+        let core =
+            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).expect("create projects dir");
+
+        let p1 = core.create_project("Project 1").expect("create project 1");
+        let p2 = core.create_project("Project 2").expect("create project 2");
+
+        let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
+        // p1 失败（auth），p2 用默认 Ok
+        backend.set(
+            &format!("projects/{}", p1.id),
+            MockOutcome::ErrSyncAuth("token invalid".to_string()),
+        );
+
+        let config = test_config();
+        let secrets = SyncSecrets::default();
+        let result = core
+            .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+            .expect("mixed outcomes must not make full sync return Err");
+
+        assert_eq!(result.targets.len(), 3, "all targets present");
+        // App 成功
+        assert_eq!(result.targets[0].result.status, SyncStatus::Success);
+        // overall Error（有一个 target 失败）
+        assert!(
+            matches!(result.overall_status, SyncStatus::Error(_)),
+            "overall should be Error"
+        );
+
+        // p1 target：SyncAuthFailed recoverable=false → FatalError，category=auth_error
+        let p1_target = result
+            .targets
+            .iter()
+            .find(|t| t.project_id.as_deref() == Some(p1.id.as_str()))
+            .expect("p1 target present");
+        assert!(
+            matches!(p1_target.result.status, SyncStatus::FatalError(_)),
+            "auth error should be FatalError, got {:?}",
+            p1_target.result.status
+        );
+        assert_eq!(
+            p1_target.result.error_category.as_deref(),
+            Some("auth_error"),
+            "auth error category should be auth_error"
+        );
+
+        // p2 成功
+        let p2_target = result
+            .targets
+            .iter()
+            .find(|t| t.project_id.as_deref() == Some(p2.id.as_str()))
+            .expect("p2 target present");
+        assert_eq!(p2_target.result.status, SyncStatus::Success);
+    }
+
+    /// 全部 target 成功 → overall Success。
+    #[test]
+    fn test_full_sync_all_ok_overall_success() {
+        let temp_dir = tempdir().expect("tempdir");
+        let core =
+            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).expect("create projects dir");
+
+        core.create_project("Project 1").expect("create project 1");
+
+        let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
+        let config = test_config();
+        let secrets = SyncSecrets::default();
+        let result = core
+            .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+            .expect("full sync ok");
+
+        assert_eq!(result.targets.len(), 2);
+        assert_eq!(result.overall_status, SyncStatus::Success);
+    }
+
+    /// list_projects 失败（projects_root 是文件不是目录）→ 整体 Err。
+    #[test]
+    fn test_full_sync_list_projects_failure_returns_err() {
+        let temp_dir = tempdir().expect("tempdir");
+        // 把 projects_root 设为一个文件，让 read_dir 失败
+        let projects_path = temp_dir.path().join("projects_file");
+        std::fs::write(&projects_path, "not a directory").expect("write file");
+
+        let core = crate::facade::WriterCore::new(temp_dir.path(), &projects_path);
+        let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
+        let config = test_config();
+        let secrets = SyncSecrets::default();
+        let result = core.perform_full_sync_with_backend(&backend, &config, &secrets, false);
+        assert!(
+            result.is_err(),
+            "list_projects failure should make perform_full_sync return Err"
+        );
+    }
+
+    /// run_full_sync_target：Err 转为 SyncResult::error，Error::Other → RecoverableError。
+    #[test]
+    fn test_run_full_sync_target_converts_err_to_error_result() {
+        let backend = MockBackend::new(MockOutcome::ErrOther("boom".to_string()));
+        let config = test_config();
+        let secrets = SyncSecrets::default();
+        let target = SyncTarget::app();
+        let result = run_full_sync_target(
+            &backend,
+            Path::new("/tmp/nonexistent"),
+            &config,
+            &secrets,
+            &target,
+            false,
+        );
+        // Error::Other recoverable=true → RecoverableError
+        assert!(
+            matches!(result.status, SyncStatus::RecoverableError(ref msg) if msg.contains("boom")),
+            "expected RecoverableError containing 'boom', got {:?}",
+            result.status
+        );
+        assert!(result.error.is_some(), "error field should be set");
+        // Error::Other sync_category() 返回空 → error_category None
+        assert!(
+            result.error_category.is_none(),
+            "Error::Other has no sync_category, expected None"
+        );
+        assert_eq!(result.first_sync_mode, FirstSyncMode::NotAttempted);
+    }
+
+    /// run_full_sync_target：Ok 直接透传。
+    #[test]
+    fn test_run_full_sync_target_passes_through_ok() {
+        let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
+        let config = test_config();
+        let secrets = SyncSecrets::default();
+        let target = SyncTarget::app();
+        let result = run_full_sync_target(
+            &backend,
+            Path::new("/tmp/nonexistent"),
+            &config,
+            &secrets,
+            &target,
+            false,
+        );
+        assert_eq!(result.status, SyncStatus::Success);
+    }
+
+    /// run_full_sync_target：auth Err → FatalError + auth_error category。
+    #[test]
+    fn test_run_full_sync_target_auth_err_maps_category() {
+        let backend = MockBackend::new(MockOutcome::ErrSyncAuth("bad token".to_string()));
+        let config = test_config();
+        let secrets = SyncSecrets::default();
+        let target = SyncTarget::app();
+        let result = run_full_sync_target(
+            &backend,
+            Path::new("/tmp/nonexistent"),
+            &config,
+            &secrets,
+            &target,
+            false,
+        );
+        assert!(
+            matches!(result.status, SyncStatus::FatalError(_)),
+            "auth error is not recoverable, expected FatalError"
+        );
+        assert_eq!(
+            result.error_category.as_deref(),
+            Some("auth_error"),
+            "auth error category should map to auth_error"
+        );
     }
 }

@@ -254,3 +254,22 @@ data class LegacyMigrationOutcome(
     val secrets: SyncSecrets? = null,
     val reason: String? = null,
 )
+
+/**
+ * #630 评论第 5 点 Part C-Android：旧 profile 精确 generation metadata（Android 侧 model）。
+ *
+ * 与 Core [uniffi.writer_core.LegacyProfileMetadataDto] 对齐。调用方（平台层 DataStore）
+ * 通过此结构精确告诉 Core 应该读取哪个 `sync_token_<base>_g<N>` key，避免 Core 猜测枚举上限。
+ *
+ * - [source] = "app"：旧应用级 profile；[projectId] 应为 null
+ * - [source] = "project:<id>"：旧作品级 profile；[projectId] 应为 Some(id)
+ * - [activeGeneration] = Some(n)：精确读取 `sync_token_<base>_g{n}`
+ * - [activeGeneration] = null：旧 DataStore 无 committed generation，回退 base key / 文件
+ *
+ * [activeGeneration] 用 Long 表达 DataStore 侧的 Long 值，映射到 Core u32 时检查范围。
+ */
+data class LegacyProfileMetadata(
+    val source: String,
+    val projectId: String? = null,
+    val activeGeneration: Long? = null,
+)

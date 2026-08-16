@@ -31,6 +31,7 @@ class SyncRepository(
     private val settingsBridge = appBridge.settingsBridge
     private val syncBridge = appBridge.syncBridge
     private val profileStore by lazy { SyncProfileStore(appContext) }
+    private val legacyMetadataReader by lazy { LegacySyncProfileMetadataReader(appContext, profileStore) }
     private val nativeUnavailableMessage = "Native library not loaded"
     private val configJson = com.google.gson.Gson()
 
@@ -310,29 +311,60 @@ class SyncRepository(
     }
 
     suspend fun loadCommittedSyncProfile(): SyncProfileReadResult =
-        SyncProfileGate.snapshotExclusive { snapshotSyncProfile() }
+        SyncProfileGate.snapshotExclusive {
+            ensureGlobalProfileMigrated()?.let { failed ->
+                if (failed is SettingsSaveResult.Failed) {
+                    return@snapshotExclusive SyncProfileReadResult.Failed(
+                        SyncFailureKind.Fatal,
+                        "legacy_sync_profile_migration_failed",
+                    )
+                }
+            }
+            snapshotSyncProfile()
+        }
 
     /**
-     * #630 评论第 4 点 / D：旧→新同步 profile 迁移钩子。
+     * #630 评论第 5 点 Part A：读时和写时共用的迁移 helper。
      *
-     * 调用 Core `migrate_legacy_sync_profile` 一步完成：只读探测旧应用级 / 作品级
-     * profile → 提交新全局 → 清理旧凭据。Android 侧不再自己读旧 config/secrets 拼装，
-     * 也不再枚举作品 — 多项目冲突由 Core 判定并返回 `needs_reconfigure`。
+     * 在 [loadCommittedSyncProfile]（设置页首次加载）和 [commitSyncProfile]（首次保存）
+     * 前都执行一次：若已存在 committed profile 直接返回 null；否则触发
+     * [migrateLegacyProfileIfNeeded]。
+     *
+     * 返回 null 表示无需迁移或迁移成功可继续；返回 [SettingsSaveResult.Failed] 表示
+     * 迁移失败，调用方必须类型化返回错误，不得静默降级为"无 profile"。
+     */
+    private suspend fun ensureGlobalProfileMigrated(): SettingsSaveResult? {
+        val state = profileStore.readState()
+        if (state.hasCommittedProfile) return null
+        return migrateLegacyProfileIfNeeded()
+    }
+
+    /**
+     * #630 评论第 4 点 / D + 第 5 点 Part C：旧→新同步 profile 迁移钩子。
+     *
+     * 先用 [legacyMetadataReader] 从旧 DataStore 读取精确
+     * active_generation / committed_config_json，构造 metadata 列表传给 Core
+     * `migrate_legacy_sync_profile_with_metadata`，避免 Core 猜测 generation 上限。
+     * 旧 DataStore 无 metadata 时回退空列表，Core 用 base key / 文件 fallback。
      *
      * 行为：
-     * - `not_needed` / `no_legacy_config`：返回 null，让 [commitSyncProfile] 继续正常提交；
-     * - `migrated`：Core 已写好新全局并删旧凭据，Android 侧把 [profileStore] 推进到新 generation；
+     * - `not_needed` / `no_legacy_config`：返回 null，让调用方继续正常提交；
+     * - `migrated`：Core 已写好新全局并删旧凭据，Android 侧把 [profileStore] 推进到新 generation，
+     *   完整事务：stageConfig → saveSyncSecretsForGeneration → stageSecrets → commitGeneration；
      * - `needs_reconfigure`：多项目冲突，返回 [SettingsSaveResult.Failed] 让 UI 引导用户重选，
      *   Core 不删旧凭据，用户可手动恢复；
-     * - Core 抛错或原生库未加载：返回 [SettingsSaveResult.Failed]，不继续提交，不删旧凭据。
+     * - Core 抛错或原生库未加载：返回 [SettingsSaveResult.Failed]，不继续提交，不删旧凭据；
+     * - `migrated` 但 outcome.config / outcome.secrets 缺失或未知 outcomeKind：
+     *   返回 [SettingsSaveResult.Failed]，不静默返回 null（#630 评论第 5 点 Part B）。
      *
      * 标记为 [internal] 供同模块单元测试直接验证迁移行为（不通过 [commitSyncProfile] 间接测）。
      */
     internal suspend fun migrateLegacyProfileIfNeeded(): SettingsSaveResult? {
         val initialState = profileStore.readState()
         if (initialState.hasCommittedProfile) return null
+        val metadata = legacyMetadataReader.readMetadata()
         val outcome =
-            when (val result = appBridge.migrateLegacySyncProfile()) {
+            when (val result = appBridge.migrateLegacySyncProfileWithMetadata(metadata)) {
                 is BridgeResult.Success -> result.data
                 is BridgeResult.Error -> {
                     warn(
@@ -351,14 +383,26 @@ class SyncRepository(
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
             }
             "migrated" -> {
-                val migratedConfig = outcome.config ?: return null
+                // #630 评论第 5 点 Part B：完整事务 — 缺 config/secrets 直接类型化失败，
+                // 不静默返回 null。secrets 通过 saveSyncSecretsForGeneration 写入安全存储，
+                // 避免 hasCommittedProfile==true 但 sync_token_global_gN 不存在。
+                val migratedConfig = outcome.config
+                if (migratedConfig == null) {
+                    return SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
+                }
+                val migratedSecrets = outcome.secrets
+                if (migratedSecrets == null) {
+                    return SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, 0L)))
+                }
                 val migrationGeneration = profileStore.nextGeneration()
                 profileStore.stageConfig(migrationGeneration, configJson.toJson(migratedConfig.normalize()))
+                val secretResult = saveSyncSecretsForGeneration(migrationGeneration, migratedSecrets)
+                if (secretResult is SettingsSaveResult.Failed) return secretResult
                 profileStore.stageSecrets(migrationGeneration)
                 profileStore.commitGeneration(migrationGeneration, configJson.toJson(migratedConfig.normalize()))
                 null
             }
-            else -> null
+            else -> SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
         }
     }
 
@@ -368,7 +412,7 @@ class SyncRepository(
     ): SettingsSaveResult {
         val committed =
             SyncProfileGate.commitExclusive {
-                migrateLegacyProfileIfNeeded()?.let { return@commitExclusive it }
+                ensureGlobalProfileMigrated()?.let { return@commitExclusive it }
                 val generation = profileStore.nextGeneration()
                 val normalized = config.normalize()
                 profileStore.stageConfig(generation, configJson.toJson(normalized))

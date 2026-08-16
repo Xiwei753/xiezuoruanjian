@@ -368,6 +368,15 @@ dictionary LegacyMigrationOutcomeDto {
     string? reason;
 };
 
+// Issue #630 评论第 5 点 Part C：旧 profile 精确 generation metadata。
+// source: "app" 或 "project:<id>"
+// active_generation: Some(n) → 精确读 sync_token_<base>_g{n}；None → 回退 base key / 文件
+dictionary LegacyProfileMetadataDto {
+    string source;
+    string? project_id;
+    u32? active_generation;
+};
+
 [Error]
 enum WriterError {
     "Io",
@@ -1108,6 +1117,12 @@ interface WriterAppService {
     // Issue #630 评论第 4 点 / D：旧→新同步 profile 一次性迁移。
     [Throws=WriterError]
     LegacyMigrationOutcomeDto migrate_legacy_sync_profile();
+
+    // Issue #630 评论第 5 点 Part C：旧→新同步 profile 迁移，接受精确 generation metadata。
+    [Throws=WriterError]
+    LegacyMigrationOutcomeDto migrate_legacy_sync_profile_with_metadata(
+        sequence<LegacyProfileMetadataDto> metadata
+    );
 
     [Throws=WriterError]
     SyncConfigDto load_sync_config();

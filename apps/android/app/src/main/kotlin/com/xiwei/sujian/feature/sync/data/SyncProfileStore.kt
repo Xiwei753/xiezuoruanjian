@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.xiwei.sujian.feature.sync.data.model.LegacyProfileMetadata
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import kotlinx.coroutines.flow.first
@@ -124,12 +125,61 @@ class SyncProfileStore(context: Context) {
         }
     }
 
+    /**
+     * #630 评论第 5 点 Part C-Android：读取旧作品级 profile 的精确 generation metadata。
+     *
+     * 旧 [ProjectSyncProfileStore] 与本仓库共用同一个 `sync_profile` DataStore 文件，
+     * 但旧作品级 key 带 `<projectId>.` 前缀（如 `proj-1.active_generation`），
+     * 新全局 key 不带前缀（`active_generation`），两者通过 key 是否包含 `.` 区分。
+     *
+     * 遍历 DataStore 所有 key，解析带前缀的 `<projectId>.active_generation` /
+     * `<projectId>.committed_config_json`，只返回 committed_config_json 非空的 project
+     * （无 committed config 的 project 不参与迁移）。active_generation 为 0 或缺失时
+     * 返回 null（Core 回退 base key / 文件）。
+     *
+     * 只读，不写 DataStore，不删旧 key（清理由 Core 迁移成功后统一做）。
+     */
+    internal suspend fun readLegacyProjectMetadata(): List<LegacyProfileMetadata> {
+        val prefs = dataStore.data.first()
+        val projectIds = mutableSetOf<String>()
+        for (key in prefs.asMap().keys) {
+            val name = key.name
+            val dotIndex = name.indexOf('.')
+            if (dotIndex <= 0) continue
+            val suffix = name.substring(dotIndex + 1)
+            if (suffix == KEY_NAME_ACTIVE_GENERATION || suffix == KEY_NAME_COMMITTED_CONFIG_JSON) {
+                projectIds.add(name.substring(0, dotIndex))
+            }
+        }
+        if (projectIds.isEmpty()) return emptyList()
+        val result = mutableListOf<LegacyProfileMetadata>()
+        for (projectId in projectIds) {
+            val committedConfigJson = prefs[stringPreferencesKey("$projectId.$KEY_NAME_COMMITTED_CONFIG_JSON")]
+            if (committedConfigJson.isNullOrEmpty()) continue
+            val activeGeneration = prefs[longPreferencesKey("$projectId.$KEY_NAME_ACTIVE_GENERATION")]
+            result.add(
+                LegacyProfileMetadata(
+                    source = "project:$projectId",
+                    projectId = projectId,
+                    activeGeneration = activeGeneration?.takeIf { it > 0L },
+                ),
+            )
+        }
+        return result
+    }
+
     companion object {
-        private val KEY_ACTIVE_GENERATION = longPreferencesKey("active_generation")
-        private val KEY_COMMITTED_CONFIG_JSON = stringPreferencesKey("committed_config_json")
-        private val KEY_STAGED_CONFIG_GENERATION = longPreferencesKey("staged_config_generation")
-        private val KEY_STAGED_CONFIG_JSON = stringPreferencesKey("staged_config_json")
-        private val KEY_STAGED_SECRETS_GENERATION = longPreferencesKey("staged_secrets_generation")
+        private const val KEY_NAME_ACTIVE_GENERATION = "active_generation"
+        private const val KEY_NAME_COMMITTED_CONFIG_JSON = "committed_config_json"
+        private const val KEY_NAME_STAGED_CONFIG_GENERATION = "staged_config_generation"
+        private const val KEY_NAME_STAGED_CONFIG_JSON = "staged_config_json"
+        private const val KEY_NAME_STAGED_SECRETS_GENERATION = "staged_secrets_generation"
+
+        private val KEY_ACTIVE_GENERATION = longPreferencesKey(KEY_NAME_ACTIVE_GENERATION)
+        private val KEY_COMMITTED_CONFIG_JSON = stringPreferencesKey(KEY_NAME_COMMITTED_CONFIG_JSON)
+        private val KEY_STAGED_CONFIG_GENERATION = longPreferencesKey(KEY_NAME_STAGED_CONFIG_GENERATION)
+        private val KEY_STAGED_CONFIG_JSON = stringPreferencesKey(KEY_NAME_STAGED_CONFIG_JSON)
+        private val KEY_STAGED_SECRETS_GENERATION = longPreferencesKey(KEY_NAME_STAGED_SECRETS_GENERATION)
     }
 }
 

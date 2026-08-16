@@ -1,4 +1,4 @@
-//! 旧同步配置一次性迁移（Issue #630 评论第 4 点 / D）。
+//! 旧同步配置一次性迁移（Issue #630 评论第 4 点 / D、第 5 点 Part C）。
 //!
 //! # 背景
 //!
@@ -17,11 +17,20 @@
 //! # 流程
 //!
 //! 1. 新全局 profile 已存在 → `NotNeeded`
-//! 2. 探测旧应用级 profile（config + `sync_token_app[_gN]`）
-//! 3. 探测旧作品级 profile（每个 project 的 config + `sync_token_<id>[_gN]`）
-//! 4. 多个 profile 完全一致 → 迁一份；不一致 → `NeedsReconfigure`
-//! 5. 提交到新全局（save config + `set_secret(sync_token_global, ...)`）
-//! 6. 提交成功后删除旧 token / 旧 config 文件；失败时不删
+//! 2. 优先探测旧应用级 profile（config + `sync_token_app` 或精确 generation key）
+//!    - 有旧 app profile → 直接迁移，不检查 project（app 优先级高于 project）
+//! 3. 无 app profile 时探测旧作品级 profile（每个 project 的 config + token）
+//!    - 多个 project 互相一致 → 迁一份；不一致 → `NeedsReconfigure`
+//! 4. 提交到新全局（save config + `set_secret(sync_token_global, ...)`）
+//! 5. 提交成功后对所有参与迁移的等价旧 profile 删除旧 token / 旧 config 文件；失败时不删
+//!
+//! # generation 处理
+//!
+//! 旧版安全存储可能存在 `sync_token_<base>_g<N>` 形式的 generation key。
+//! 旧 profile 的 generation 完全可能大于 10，因此本模块不再猜测枚举上限，
+//! 而是接受调用方提供的精确 `LegacyProfileMetadata::active_generation`：
+//! - `Some(n)` → 精确读取 `sync_token_<base>_g{n}`
+//! - `None` → 回退 base key / `secrets.local.json` 文件（旧 DataStore 无 committed generation）
 
 use std::path::{Path, PathBuf};
 
@@ -48,8 +57,26 @@ pub enum LegacyMigrationOutcome {
 const GLOBAL_TOKEN_KEY: &str = "sync_token_global";
 const LEGACY_APP_TOKEN_KEY: &str = "sync_token_app";
 const LEGACY_PROJECT_TOKEN_KEY_PREFIX: &str = "sync_token_";
-/// generation 枚举上限：探测 `sync_token_<base>_g1` .. `sync_token_<base>_g10`。
-const MAX_LEGACY_GENERATION: u32 = 10;
+
+/// 旧 profile 的精确 generation metadata（Issue #630 评论第 5 点 Part C）。
+///
+/// 调用方（平台层 DataStore）知道每个旧 profile 当前 committed 的 generation，
+/// 通过此结构精确告诉 Core 应该读取哪个 `sync_token_<base>_g<N>` key，
+/// 避免 Core 猜测枚举上限（旧 generation 完全可能大于 10）。
+///
+/// - `source = "app"`：旧应用级 profile；`project_id` 应为 None
+/// - `source = "project:<id>"`：旧作品级 profile；`project_id` 应为 Some(id)
+/// - `active_generation = Some(n)`：精确读取 `sync_token_<base>_g{n}`
+/// - `active_generation = None`：旧 DataStore 无 committed generation，回退 base key / 文件
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LegacyProfileMetadata {
+    /// 来源描述：`"app"` 或 `"project:<id>"`。
+    pub source: String,
+    /// 作品 ID（仅 project source 有意义；app source 为 None）。
+    pub project_id: Option<String>,
+    /// 精确的 committed generation；None 表示无 generation 信息，回退 base key / 文件。
+    pub active_generation: Option<u32>,
+}
 
 /// 旧同步 profile 探测结果（内部用）。
 #[derive(Debug, Clone)]
@@ -89,46 +116,64 @@ impl<'a> LegacySyncProfileMigrator<'a> {
 
     /// 一步完成迁移：探测 → 暂存 → 提交 → 清理旧。
     ///
+    /// 无 metadata 的 fallback：只读 base key / `secrets.local.json` 文件，
+    /// 不猜测 generation。当调用方知道精确 generation 时应使用
+    /// [`migrate_with_metadata`](Self::migrate_with_metadata)。
+    ///
     /// 失败/冲突时不删旧凭据。提交失败时返回 `Err`，调用方重试可再次调用。
     pub fn migrate(&self) -> Result<LegacyMigrationOutcome> {
+        self.migrate_with_metadata(&[])
+    }
+
+    /// 一步完成迁移，接受调用方提供的精确 generation metadata。
+    ///
+    /// metadata 中每个 [`LegacyProfileMetadata`] 描述一个旧 profile 的 source 和
+    /// committed generation。当 `active_generation = Some(n)` 时精确读取
+    /// `sync_token_<base>_g{n}`；当 `active_generation = None` 时回退 base key / 文件。
+    ///
+    /// 流程：
+    /// 1. 新全局已存在 → `NotNeeded`
+    /// 2. 优先探测旧 app profile（不检查 project，app 优先级高于 project）
+    /// 3. 无 app profile 时探测旧 project profiles，多个 project 互相不一致 → `NeedsReconfigure`
+    /// 4. 提交成功后清理所有参与迁移的等价旧 profile；失败/冲突时不清理
+    pub fn migrate_with_metadata(
+        &self,
+        metadata: &[LegacyProfileMetadata],
+    ) -> Result<LegacyMigrationOutcome> {
         // 1. 新全局 profile 已存在 → NotNeeded
         if self.new_global_profile_exists() {
             return Ok(LegacyMigrationOutcome::NotNeeded);
         }
 
-        // 2. 探测旧 profile（应用级 + 作品级）
-        let mut profiles = self.detect_legacy_profiles()?;
+        // 2. 优先探测旧 app profile（不检查 project）
+        let app_metadata = metadata.iter().find(|m| m.source == "app");
+        if let Some(app_profile) = self.detect_app_legacy_profile(app_metadata)? {
+            // app 优先：直接迁移，不比较 project
+            return self.execute_migration(&app_profile, std::slice::from_ref(&app_profile));
+        }
 
-        // 3. 根据探测结果决定
-        let chosen = match profiles.as_slice() {
-            [] => return Ok(LegacyMigrationOutcome::NoLegacyConfig),
-            [single] => single.clone(),
+        // 3. 无 app profile → 探测旧 project profiles，只比较 project ↔ project
+        let project_profiles = self.detect_project_legacy_profiles(metadata)?;
+
+        // 4. 根据探测结果决定
+        match project_profiles.as_slice() {
+            [] => Ok(LegacyMigrationOutcome::NoLegacyConfig),
+            [single] => self.execute_migration(single, std::slice::from_ref(single)),
             _ => {
-                // 多个 profile：检查一致性
-                let first = &profiles[0];
-                if profiles.iter().all(|p| profiles_equivalent(p, first)) {
-                    profiles.remove(0)
+                let first = &project_profiles[0];
+                if project_profiles
+                    .iter()
+                    .all(|p| profiles_equivalent(p, first))
+                {
+                    // 多个 project 一致：迁一份，成功后清理全部参与 profile
+                    self.execute_migration(first, &project_profiles)
                 } else {
-                    return Ok(LegacyMigrationOutcome::NeedsReconfigure {
-                        reason: describe_conflict(&profiles),
-                    });
+                    Ok(LegacyMigrationOutcome::NeedsReconfigure {
+                        reason: describe_conflict(&project_profiles),
+                    })
                 }
             }
-        };
-
-        // 4. 提交到新全局（失败时直接返回 Err，不清理旧凭据）
-        self.commit_to_global(&chosen)?;
-
-        // 5. 提交成功后清理旧凭据（清理失败不阻塞迁移成功，只记日志）
-        self.cleanup_legacy(&chosen);
-
-        Ok(LegacyMigrationOutcome::Migrated {
-            config: chosen.config,
-            secrets: SyncSecrets {
-                token: Some(chosen.token),
-                ssh_private_key: None,
-            },
-        })
+        }
     }
 
     /// 新全局 profile 是否已存在（无需迁移）。
@@ -159,31 +204,19 @@ impl<'a> LegacySyncProfileMigrator<'a> {
         read_token_from_secrets_file(&secrets_path)
     }
 
-    /// 探测所有旧 profile（应用级 + 作品级）。
-    fn detect_legacy_profiles(&self) -> Result<Vec<LegacyProfile>> {
-        let mut profiles = Vec::new();
-
-        // 1. 旧应用级
-        if let Some(p) = self.detect_app_legacy_profile()? {
-            profiles.push(p);
-        }
-
-        // 2. 旧作品级
-        for project_id in self.list_project_ids()? {
-            if let Some(p) = self.detect_project_legacy_profile(&project_id)? {
-                profiles.push(p);
-            }
-        }
-
-        Ok(profiles)
-    }
-
     /// 探测旧应用级 profile。
     ///
     /// 旧应用级 config 路径与新全局相同（`<app_data_root>/app-meta/sync/config.local.json`），
-    /// 但 token 在 `sync_token_app[_gN]`。若新全局 token 不存在但旧 app token 存在，
-    /// 视为旧应用级 profile。
-    fn detect_app_legacy_profile(&self) -> Result<Option<LegacyProfile>> {
+    /// 但 token 在 `sync_token_app` 或 `sync_token_app_g<N>`（由 metadata 精确指定）。
+    /// 若新全局 token 不存在但旧 app token 存在，视为旧应用级 profile。
+    ///
+    /// `metadata.active_generation`：
+    /// - `Some(n)` → 精确读 `sync_token_app_g{n}`
+    /// - `None` → 读 `sync_token_app` 或 fallback 文件
+    fn detect_app_legacy_profile(
+        &self,
+        metadata: Option<&LegacyProfileMetadata>,
+    ) -> Result<Option<LegacyProfile>> {
         let config_path = self.app_data_root.join("app-meta/sync/config.local.json");
         let config = match load_sync_config_from(&config_path) {
             Some(c) => c,
@@ -192,8 +225,9 @@ impl<'a> LegacySyncProfileMigrator<'a> {
         if config.remote_url.is_empty() {
             return Ok(None);
         }
+        let precise_gen = metadata.and_then(|m| m.active_generation);
         let (token, secret_keys, secret_files) =
-            self.read_legacy_token(LEGACY_APP_TOKEN_KEY, self.app_data_root)?;
+            self.read_legacy_token(LEGACY_APP_TOKEN_KEY, self.app_data_root, precise_gen)?;
         let Some(token) = token else {
             return Ok(None);
         };
@@ -210,8 +244,35 @@ impl<'a> LegacySyncProfileMigrator<'a> {
         }))
     }
 
+    /// 探测所有旧作品级 profile（不包含 app）。
+    ///
+    /// 对每个作品目录，查找 metadata 中 `source = "project:<id>"` 的项以获取精确 generation。
+    fn detect_project_legacy_profiles(
+        &self,
+        metadata: &[LegacyProfileMetadata],
+    ) -> Result<Vec<LegacyProfile>> {
+        let mut profiles = Vec::new();
+        for project_id in self.list_project_ids()? {
+            let proj_metadata = metadata
+                .iter()
+                .find(|m| m.source == format!("project:{}", project_id));
+            if let Some(p) = self.detect_project_legacy_profile(&project_id, proj_metadata)? {
+                profiles.push(p);
+            }
+        }
+        Ok(profiles)
+    }
+
     /// 探测旧作品级 profile。
-    fn detect_project_legacy_profile(&self, project_id: &str) -> Result<Option<LegacyProfile>> {
+    ///
+    /// `metadata.active_generation`：
+    /// - `Some(n)` → 精确读 `sync_token_<id>_g{n}`
+    /// - `None` → 读 `sync_token_<id>` 或 fallback 文件
+    fn detect_project_legacy_profile(
+        &self,
+        project_id: &str,
+        metadata: Option<&LegacyProfileMetadata>,
+    ) -> Result<Option<LegacyProfile>> {
         let project_root = self.projects_root.join(project_id);
         let config_path = project_root.join("app-meta/sync/config.local.json");
         let config = match load_sync_config_from(&config_path) {
@@ -222,8 +283,9 @@ impl<'a> LegacySyncProfileMigrator<'a> {
             return Ok(None);
         }
         let base_key = format!("{}{}", LEGACY_PROJECT_TOKEN_KEY_PREFIX, project_id);
+        let precise_gen = metadata.and_then(|m| m.active_generation);
         let (token, secret_keys, secret_files) =
-            self.read_legacy_token(&base_key, &project_root)?;
+            self.read_legacy_token(&base_key, &project_root, precise_gen)?;
         let Some(token) = token else {
             return Ok(None);
         };
@@ -244,7 +306,10 @@ impl<'a> LegacySyncProfileMigrator<'a> {
         }))
     }
 
-    /// 读旧 token：先安全存储 `base_key`，再 `base_key_g1..gN`，再 fallback 文件。
+    /// 读旧 token：根据 `precise_generation` 精确读取或回退 base key / 文件。
+    ///
+    /// - `precise_generation = Some(n)` → 只读 `base_key_g{n}`（精确）
+    /// - `precise_generation = None` → 读 `base_key`，再回退 `secrets.local.json` 文件
     ///
     /// 返回 `(token, secret_keys_to_cleanup, secret_files_to_cleanup)`。
     /// `secret_files_to_cleanup` 仅在走文件 fallback 时非空。
@@ -253,27 +318,22 @@ impl<'a> LegacySyncProfileMigrator<'a> {
         &self,
         base_key: &str,
         root: &Path,
+        precise_generation: Option<u32>,
     ) -> Result<(Option<String>, Vec<String>, Vec<PathBuf>)> {
-        // 1-2. 安全存储：base_key + base_key_g1..gN
+        // 1. 安全存储：精确 generation key 或 base key
         if let Some(storage) = self.secure_storage {
-            if let Some((token, key)) = read_token_from_storage(storage, base_key) {
+            if let Some((token, key)) =
+                read_token_from_storage(storage, base_key, precise_generation)
+            {
                 return Ok((Some(token), vec![key], Vec::new()));
             }
         }
 
-        // 3. fallback: <root>/app-meta/sync/secrets.local.json
-        let secrets_path = &root.join("app-meta/sync/secrets.local.json");
-        if let Some(token) = read_token_from_secrets_file(secrets_path) {
-            return Ok((Some(token), Vec::new(), vec![secrets_path.clone()]));
-        }
-
-        // 4. fallback: <root>/app-meta/sync/secrets_g<N>.local.json
-        for gen in 1..=MAX_LEGACY_GENERATION {
-            let path = root
-                .join("app-meta/sync")
-                .join(format!("secrets_g{}.local.json", gen));
-            if let Some(token) = read_token_from_secrets_file(&path) {
-                return Ok((Some(token), Vec::new(), vec![path]));
+        // 2. 文件 fallback：仅在无精确 generation 时回退 base key 文件
+        if precise_generation.is_none() {
+            let secrets_path = &root.join("app-meta/sync/secrets.local.json");
+            if let Some(token) = read_token_from_secrets_file(secrets_path) {
+                return Ok((Some(token), Vec::new(), vec![secrets_path.clone()]));
             }
         }
 
@@ -304,6 +364,34 @@ impl<'a> LegacySyncProfileMigrator<'a> {
         }
         ids.sort();
         Ok(ids)
+    }
+
+    /// 执行迁移：先提交到新全局，成功后清理所有参与旧 profile。
+    ///
+    /// - `chosen`：用于提交的 profile（多个等价 profile 中选第一个）
+    /// - `all_participating`：所有参与迁移的等价旧 profile（成功后全部清理）
+    ///
+    /// 提交失败时返回 Err，不清理任何旧凭据。
+    fn execute_migration(
+        &self,
+        chosen: &LegacyProfile,
+        all_participating: &[LegacyProfile],
+    ) -> Result<LegacyMigrationOutcome> {
+        // 1. 提交到新全局（失败时直接返回 Err，不清理旧凭据）
+        self.commit_to_global(chosen)?;
+
+        // 2. 提交成功后清理所有参与迁移的旧凭据（清理失败不阻塞迁移成功，只记日志）
+        for profile in all_participating {
+            self.cleanup_legacy(profile);
+        }
+
+        Ok(LegacyMigrationOutcome::Migrated {
+            config: chosen.config.clone(),
+            secrets: SyncSecrets {
+                token: Some(chosen.token.clone()),
+                ssh_private_key: None,
+            },
+        })
     }
 
     /// 提交到新全局：保存 config + 写 `sync_token_global`。
@@ -348,22 +436,22 @@ impl<'a> LegacySyncProfileMigrator<'a> {
     }
 }
 
-/// 从安全存储读非空 token：先 base_key，再 base_key_g1..gN。
+/// 从安全存储读非空 token。
+///
+/// - `precise_generation = Some(n)` → 读 `base_key_g{n}`
+/// - `precise_generation = None` → 读 `base_key`
+///
 /// 返回 `(token, key)`，key 用于后续清理。
 fn read_token_from_storage(
     storage: &dyn writer_platform_api::SecureStorage,
     base_key: &str,
+    precise_generation: Option<u32>,
 ) -> Option<(String, String)> {
-    if let Some(token) = read_nonempty_secret(storage, base_key) {
-        return Some((token, base_key.to_string()));
-    }
-    for gen in 1..=MAX_LEGACY_GENERATION {
-        let key = format!("{}_g{}", base_key, gen);
-        if let Some(token) = read_nonempty_secret(storage, &key) {
-            return Some((token, key));
-        }
-    }
-    None
+    let key = match precise_generation {
+        Some(gen) => format!("{}_g{}", base_key, gen),
+        None => base_key.to_string(),
+    };
+    read_nonempty_secret(storage, &key).map(|token| (token, key))
 }
 
 /// 读安全存储 key 的非空 UTF-8 token。
@@ -562,6 +650,22 @@ mod tests {
         .expect("write project.json");
     }
 
+    fn app_metadata(generation: Option<u32>) -> LegacyProfileMetadata {
+        LegacyProfileMetadata {
+            source: "app".to_string(),
+            project_id: None,
+            active_generation: generation,
+        }
+    }
+
+    fn project_metadata(project_id: &str, generation: Option<u32>) -> LegacyProfileMetadata {
+        LegacyProfileMetadata {
+            source: format!("project:{}", project_id),
+            project_id: Some(project_id.to_string()),
+            active_generation: generation,
+        }
+    }
+
     struct TestEnv {
         _tmp: TempDir,
         app_data_root: PathBuf,
@@ -593,7 +697,7 @@ mod tests {
         }
     }
 
-    /// 1. 旧 app token/generation：新全局不存在；旧 `sync_token_app` 有值 + app 配置 → 迁移成功。
+    /// 1. 旧 app token（base key）：新全局不存在；旧 `sync_token_app` 有值 + app 配置 → 迁移成功。
     #[test]
     fn test_legacy_app_token_migration() {
         let env = TestEnv::new();
@@ -615,15 +719,13 @@ mod tests {
             other => panic!("expected Migrated, got {:?}", other),
         }
 
-        // 新全局 token 已写入
         assert!(env.storage.contains_key("sync_token_global"));
-        // 旧 app token 已删除
         assert!(!env.storage.contains_key("sync_token_app"));
     }
 
-    /// 1b. 旧 app generation token：`sync_token_app_g3` 有值 → 迁移成功。
+    /// 1b. 旧 app generation token：`sync_token_app_g3` + metadata active_generation=3 → 迁移成功。
     #[test]
-    fn test_legacy_app_generation_token_migration() {
+    fn test_legacy_app_generation_token_migration_with_metadata() {
         let env = TestEnv::new();
         let config = sample_config("https://github.com/test/repo.git", "main");
         write_config_file(&env.app_data_root, &config);
@@ -631,7 +733,11 @@ mod tests {
             .set_secret("sync_token_app_g3", b"gen3_token")
             .expect("set");
 
-        let outcome = env.migrator().migrate().expect("migrate");
+        let metadata = vec![app_metadata(Some(3))];
+        let outcome = env
+            .migrator()
+            .migrate_with_metadata(&metadata)
+            .expect("migrate");
         match outcome {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.token.as_deref(), Some("gen3_token"));
@@ -640,6 +746,21 @@ mod tests {
         }
         assert!(env.storage.contains_key("sync_token_global"));
         assert!(!env.storage.contains_key("sync_token_app_g3"));
+    }
+
+    /// 1c. 无 metadata 时 generation key 不被读取（不猜测 generation）。
+    #[test]
+    fn test_no_metadata_does_not_guess_generation() {
+        let env = TestEnv::new();
+        let config = sample_config("https://github.com/test/repo.git", "main");
+        write_config_file(&env.app_data_root, &config);
+        env.storage
+            .set_secret("sync_token_app_g3", b"gen3_token")
+            .expect("set");
+
+        let outcome = env.migrator().migrate().expect("migrate");
+        assert_eq!(outcome, LegacyMigrationOutcome::NoLegacyConfig);
+        assert!(env.storage.contains_key("sync_token_app_g3"));
     }
 
     /// 2. 单项目迁移：新全局不存在；app 级无旧配置；一个 project 有配置 → 迁移成功。
@@ -666,19 +787,17 @@ mod tests {
         }
         assert!(env.storage.contains_key("sync_token_global"));
         assert!(!env.storage.contains_key("sync_token_proj1"));
-        // 旧作品级 config 文件已删除
         let old_config = env
             .projects_root
             .join("proj1/app-meta/sync/config.local.json");
         assert!(!old_config.exists());
-        // 新全局 config 已写入
         let new_config = env.app_data_root.join("app-meta/sync/config.local.json");
         assert!(new_config.exists());
     }
 
-    /// 3. 多项目一致：两个 project 旧 profile 完全一致 → 迁一份。
+    /// 3. 多项目一致：两个 project 旧 profile 完全一致 → 迁一份，两个旧 token 都清理。
     #[test]
-    fn test_multiple_projects_consistent_migration() {
+    fn test_multiple_projects_consistent_migration_cleans_all() {
         let env = TestEnv::new();
         write_project_meta(&env.projects_root, "proj1");
         write_project_meta(&env.projects_root, "proj2");
@@ -704,9 +823,53 @@ mod tests {
             other => panic!("expected Migrated, got {:?}", other),
         }
         assert!(env.storage.contains_key("sync_token_global"));
+        assert!(!env.storage.contains_key("sync_token_proj1"));
+        assert!(!env.storage.contains_key("sync_token_proj2"));
+        let old_config1 = env
+            .projects_root
+            .join("proj1/app-meta/sync/config.local.json");
+        let old_config2 = env
+            .projects_root
+            .join("proj2/app-meta/sync/config.local.json");
+        assert!(!old_config1.exists());
+        assert!(!old_config2.exists());
     }
 
-    /// 4. 不一致 NeedsReconfigure：两个 project 仓库或 token 不同 → 返回 NeedsReconfigure，不迁、不删旧凭据。
+    /// 3b. 三个项目一致：3 个 project 旧 profile 完全一致 → 迁一份，3 个旧凭据全部清理。
+    #[test]
+    fn test_three_projects_consistent_migration_cleans_all() {
+        let env = TestEnv::new();
+        for id in ["proj1", "proj2", "proj3"] {
+            write_project_meta(&env.projects_root, id);
+            let config = sample_config("https://github.com/test/shared.git", "main");
+            write_config_file(&env.projects_root.join(id), &config);
+            env.storage
+                .set_secret(&format!("sync_token_{}", id), b"shared_token")
+                .expect("set");
+        }
+
+        let outcome = env.migrator().migrate().expect("migrate");
+        assert!(matches!(outcome, LegacyMigrationOutcome::Migrated { .. }));
+
+        assert!(env.storage.contains_key("sync_token_global"));
+        for id in ["proj1", "proj2", "proj3"] {
+            assert!(
+                !env.storage.contains_key(&format!("sync_token_{}", id)),
+                "old token for {} should be cleaned",
+                id
+            );
+            let old_config = env
+                .projects_root
+                .join(format!("{}/app-meta/sync/config.local.json", id));
+            assert!(
+                !old_config.exists(),
+                "old config for {} should be cleaned",
+                id
+            );
+        }
+    }
+
+    /// 4. 不一致 NeedsReconfigure：两个 project 仓库或 token 不同 → NeedsReconfigure，不删旧凭据。
     #[test]
     fn test_multiple_projects_inconsistent_needs_reconfigure() {
         let env = TestEnv::new();
@@ -732,10 +895,8 @@ mod tests {
             }
             other => panic!("expected NeedsReconfigure, got {:?}", other),
         }
-        // 旧 token 保留（未迁移）
         assert!(env.storage.contains_key("sync_token_proj1"));
         assert!(env.storage.contains_key("sync_token_proj2"));
-        // 新全局未建立
         assert!(!env.storage.contains_key("sync_token_global"));
         let new_config = env.app_data_root.join("app-meta/sync/config.local.json");
         assert!(!new_config.exists());
@@ -755,13 +916,33 @@ mod tests {
         let result = env.migrator().migrate();
         assert!(result.is_err(), "expected migration to fail");
 
-        // 旧 token 仍在
         assert!(env.storage.contains_key("sync_token_app"));
-        // 新全局未建立
         assert!(!env.storage.contains_key("sync_token_global"));
     }
 
-    /// 6. 成功后清理：迁移成功并完整提交后 → 旧 `sync_token_app*` 被删除。
+    /// 5b. 多 project 一致但提交失败：所有旧凭据保留（失败前不清理）。
+    #[test]
+    fn test_migration_failure_preserves_all_participating() {
+        let env = TestEnv::new();
+        for id in ["proj1", "proj2"] {
+            write_project_meta(&env.projects_root, id);
+            let config = sample_config("https://github.com/test/shared.git", "main");
+            write_config_file(&env.projects_root.join(id), &config);
+            env.storage
+                .set_secret(&format!("sync_token_{}", id), b"shared_token")
+                .expect("set");
+        }
+        env.storage.inject_set_failure();
+
+        let result = env.migrator().migrate();
+        assert!(result.is_err(), "expected migration to fail");
+
+        assert!(env.storage.contains_key("sync_token_proj1"));
+        assert!(env.storage.contains_key("sync_token_proj2"));
+        assert!(!env.storage.contains_key("sync_token_global"));
+    }
+
+    /// 6. 成功后清理：迁移成功并完整提交后 → 旧 `sync_token_app` 被删除。
     #[test]
     fn test_successful_migration_cleans_up() {
         let env = TestEnv::new();
@@ -770,21 +951,15 @@ mod tests {
         env.storage
             .set_secret("sync_token_app", b"legacy_app_token")
             .expect("set");
-        env.storage
-            .set_secret("sync_token_app_g1", b"legacy_app_g1_token")
-            .expect("set");
 
         let outcome = env.migrator().migrate().expect("migrate");
         assert!(matches!(outcome, LegacyMigrationOutcome::Migrated { .. }));
 
-        // chosen 是 sync_token_app（先读到），其 key 被删
         assert!(!env.storage.contains_key("sync_token_app"));
-        // sync_token_app_g1 未被选为 chosen，保留（可接受，新全局已建立）
-        // 新全局已建立
         assert!(env.storage.contains_key("sync_token_global"));
     }
 
-    /// 6b. 成功后清理作品级：旧 `sync_token_<id>*` 和旧 config 文件被删除。
+    /// 6b. 成功后清理作品级：旧 `sync_token_<id>` 和旧 config 文件被删除。
     #[test]
     fn test_successful_project_migration_cleans_up() {
         let env = TestEnv::new();
@@ -814,7 +989,6 @@ mod tests {
         env.storage
             .set_secret("sync_token_global", b"existing_global_token")
             .expect("set");
-        // 同时存在旧 app token（应被忽略）
         env.storage
             .set_secret("sync_token_app", b"legacy_app_token")
             .expect("set");
@@ -822,7 +996,6 @@ mod tests {
         let outcome = env.migrator().migrate().expect("migrate");
         assert_eq!(outcome, LegacyMigrationOutcome::NotNeeded);
 
-        // 旧 token 未被触碰
         assert!(env.storage.contains_key("sync_token_app"));
         assert!(env.storage.contains_key("sync_token_global"));
     }
@@ -836,16 +1009,12 @@ mod tests {
     }
 
     /// 9. fallback 文件路径：安全存储无 token，旧作品级 secrets.local.json 有 token → 迁移成功。
-    ///
-    /// app 级 secrets 文件路径与新全局 fallback 相同，会被 NotNeeded 拦截；
-    /// 这里测作品级文件 fallback：app 级无任何东西，project 有 secrets.local.json。
     #[test]
     fn test_fallback_secrets_file_migration() {
         let env = TestEnv::new();
         write_project_meta(&env.projects_root, "proj1");
         let config = sample_config("https://github.com/test/proj1.git", "main");
         write_config_file(&env.projects_root.join("proj1"), &config);
-        // 写旧作品级 secrets 文件（不通过安全存储）
         let secrets_path = env
             .projects_root
             .join("proj1/app-meta/sync/secrets.local.json");
@@ -863,37 +1032,13 @@ mod tests {
             }
             other => panic!("expected Migrated, got {:?}", other),
         }
-        // 旧作品级 secrets 文件已删除
         assert!(!secrets_path.exists());
     }
 
-    /// 10. app 级 + project 级同时存在且一致 → 迁一份（app 优先）。
+    /// 10. app 优先：旧 app profile 和旧 project profile 指向不同仓库 → 用 app profile 迁移成功
+    ///     （不 NeedsReconfigure，app 优先级高于 project，不比较 app ↔ project）。
     #[test]
-    fn test_app_and_project_consistent_migration() {
-        let env = TestEnv::new();
-        let config = sample_config("https://github.com/test/shared.git", "main");
-        write_config_file(&env.app_data_root, &config);
-        env.storage
-            .set_secret("sync_token_app", b"shared_token")
-            .expect("set");
-        write_project_meta(&env.projects_root, "proj1");
-        write_config_file(&env.projects_root.join("proj1"), &config);
-        env.storage
-            .set_secret("sync_token_proj1", b"shared_token")
-            .expect("set");
-
-        let outcome = env.migrator().migrate().expect("migrate");
-        match outcome {
-            LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
-                assert_eq!(s.token.as_deref(), Some("shared_token"));
-            }
-            other => panic!("expected Migrated, got {:?}", other),
-        }
-    }
-
-    /// 11. app 级 + project 级不一致 → NeedsReconfigure。
-    #[test]
-    fn test_app_and_project_inconsistent_needs_reconfigure() {
+    fn test_app_priority_over_project_different_repos() {
         let env = TestEnv::new();
         let app_config = sample_config("https://github.com/app/repo.git", "main");
         write_config_file(&env.app_data_root, &app_config);
@@ -908,12 +1053,150 @@ mod tests {
             .expect("set");
 
         let outcome = env.migrator().migrate().expect("migrate");
-        assert!(matches!(
-            outcome,
-            LegacyMigrationOutcome::NeedsReconfigure { .. }
-        ));
-        // 旧凭据保留
-        assert!(env.storage.contains_key("sync_token_app"));
+        match outcome {
+            LegacyMigrationOutcome::Migrated {
+                config: c,
+                secrets: s,
+            } => {
+                assert_eq!(c.remote_url, "https://github.com/app/repo.git");
+                assert_eq!(s.token.as_deref(), Some("app_token"));
+            }
+            other => panic!("expected Migrated (app priority), got {:?}", other),
+        }
+        assert!(!env.storage.contains_key("sync_token_app"));
         assert!(env.storage.contains_key("sync_token_proj1"));
+        assert!(env.storage.contains_key("sync_token_global"));
+    }
+
+    /// 10b. app 优先 + metadata：旧 app profile 用精确 generation，project 不同 → 仍用 app 迁移。
+    #[test]
+    fn test_app_priority_with_metadata_different_repos() {
+        let env = TestEnv::new();
+        let app_config = sample_config("https://github.com/app/repo.git", "main");
+        write_config_file(&env.app_data_root, &app_config);
+        env.storage
+            .set_secret("sync_token_app_g7", b"app_gen7_token")
+            .expect("set");
+        write_project_meta(&env.projects_root, "proj1");
+        let proj_config = sample_config("https://github.com/proj/repo.git", "main");
+        write_config_file(&env.projects_root.join("proj1"), &proj_config);
+        env.storage
+            .set_secret("sync_token_proj1", b"proj_token")
+            .expect("set");
+
+        let metadata = vec![app_metadata(Some(7)), project_metadata("proj1", None)];
+        let outcome = env
+            .migrator()
+            .migrate_with_metadata(&metadata)
+            .expect("migrate");
+        match outcome {
+            LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
+                assert_eq!(s.token.as_deref(), Some("app_gen7_token"));
+            }
+            other => panic!("expected Migrated (app priority), got {:?}", other),
+        }
+        assert!(!env.storage.contains_key("sync_token_app_g7"));
+        assert!(env.storage.contains_key("sync_token_proj1"));
+    }
+
+    /// 11. 准确 generation > 10：`sync_token_app_g15` 有值，metadata active_generation=15 → 迁移成功。
+    #[test]
+    fn test_precise_generation_greater_than_ten() {
+        let env = TestEnv::new();
+        let config = sample_config("https://github.com/test/repo.git", "main");
+        write_config_file(&env.app_data_root, &config);
+        env.storage
+            .set_secret("sync_token_app_g15", b"gen15_token")
+            .expect("set");
+
+        let metadata = vec![app_metadata(Some(15))];
+        let outcome = env
+            .migrator()
+            .migrate_with_metadata(&metadata)
+            .expect("migrate");
+        match outcome {
+            LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
+                assert_eq!(s.token.as_deref(), Some("gen15_token"));
+            }
+            other => panic!("expected Migrated, got {:?}", other),
+        }
+        assert!(env.storage.contains_key("sync_token_global"));
+        assert!(!env.storage.contains_key("sync_token_app_g15"));
+    }
+
+    /// 11b. project 精确 generation > 10：`sync_token_<id>_g20` 有值 + metadata → 迁移成功。
+    #[test]
+    fn test_project_precise_generation_greater_than_ten() {
+        let env = TestEnv::new();
+        write_project_meta(&env.projects_root, "proj1");
+        let config = sample_config("https://github.com/test/proj1.git", "main");
+        write_config_file(&env.projects_root.join("proj1"), &config);
+        env.storage
+            .set_secret("sync_token_proj1_g20", b"gen20_token")
+            .expect("set");
+
+        let metadata = vec![project_metadata("proj1", Some(20))];
+        let outcome = env
+            .migrator()
+            .migrate_with_metadata(&metadata)
+            .expect("migrate");
+        match outcome {
+            LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
+                assert_eq!(s.token.as_deref(), Some("gen20_token"));
+            }
+            other => panic!("expected Migrated, got {:?}", other),
+        }
+        assert!(env.storage.contains_key("sync_token_global"));
+        assert!(!env.storage.contains_key("sync_token_proj1_g20"));
+    }
+
+    /// 12. 无 metadata fallback：`migrate()` 无 metadata，只有 base key → 仍可迁移。
+    #[test]
+    fn test_no_metadata_fallback_base_key() {
+        let env = TestEnv::new();
+        write_project_meta(&env.projects_root, "proj1");
+        let config = sample_config("https://github.com/test/proj1.git", "main");
+        write_config_file(&env.projects_root.join("proj1"), &config);
+        env.storage
+            .set_secret("sync_token_proj1", b"proj1_token")
+            .expect("set");
+
+        let outcome = env.migrator().migrate().expect("migrate");
+        match outcome {
+            LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
+                assert_eq!(s.token.as_deref(), Some("proj1_token"));
+            }
+            other => panic!("expected Migrated, got {:?}", other),
+        }
+        assert!(env.storage.contains_key("sync_token_global"));
+        assert!(!env.storage.contains_key("sync_token_proj1"));
+    }
+
+    /// 13. metadata 中 active_generation=None → 回退 base key / 文件。
+    #[test]
+    fn test_metadata_none_generation_falls_back_to_base_key() {
+        let env = TestEnv::new();
+        let config = sample_config("https://github.com/test/repo.git", "main");
+        write_config_file(&env.app_data_root, &config);
+        env.storage
+            .set_secret("sync_token_app", b"base_token")
+            .expect("set");
+        env.storage
+            .set_secret("sync_token_app_g5", b"gen5_token")
+            .expect("set");
+
+        let metadata = vec![app_metadata(None)];
+        let outcome = env
+            .migrator()
+            .migrate_with_metadata(&metadata)
+            .expect("migrate");
+        match outcome {
+            LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
+                assert_eq!(s.token.as_deref(), Some("base_token"));
+            }
+            other => panic!("expected Migrated, got {:?}", other),
+        }
+        assert!(!env.storage.contains_key("sync_token_app"));
+        assert!(env.storage.contains_key("sync_token_app_g5"));
     }
 }

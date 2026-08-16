@@ -249,6 +249,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/platform/SujianEditorViewSessionGateTest.kt"
       # --- #630 评论 5306659312 问题 C：activateInput 行为测试的 RecordingBridge 实现 EditorKernelBridge 接口，函数由 Core 契约决定 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/platform/SujianEditorViewActivateInputTest.kt"
+      # --- #630 评论第 5 点 Part A/B/C：迁移行为测试函数由测试场景决定 ---
+      - "**/kotlin/com/xiwei/sujian/feature/sync/data/LegacyMigrationBehaviorTest.kt"
       # --- 诊断事件：多字段事件枚举 ---
       - "**/kotlin/com/xiwei/sujian/core/diagnostics/DiagnosticsEvents.kt"
       - "**/kotlin/com/xiwei/sujian/app/diagnostics/DiagnosticsTest.kt"

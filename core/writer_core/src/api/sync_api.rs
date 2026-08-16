@@ -18,6 +18,23 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 旧→新同步 profile 一次性迁移，接受精确 generation metadata（Issue #630 评论第 5 点 Part C）。
+    ///
+    /// 详见 `crate::sync::legacy_migration::LegacySyncProfileMigrator::migrate_with_metadata`。
+    /// 当 metadata 中某 source 有 `active_generation = Some(n)` 时，精确读取
+    /// `sync_token_<base>_g{n}`；当 `active_generation = None` 时回退 base key / 文件。
+    pub fn migrate_legacy_sync_profile_with_metadata(
+        &self,
+        metadata: Vec<LegacyProfileMetadataDto>,
+    ) -> ApiResult<LegacyMigrationOutcomeDto> {
+        self.core()
+            .migrate_legacy_sync_profile_with_metadata(
+                &metadata.into_iter().map(Into::into).collect::<Vec<_>>(),
+            )
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+
     /// 加载全局同步配置。
     pub fn load_sync_config(&self) -> ApiResult<SyncConfigDto> {
         self.core()

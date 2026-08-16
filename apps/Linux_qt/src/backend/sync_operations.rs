@@ -239,7 +239,7 @@ impl AppBackend {
             // closure is UnwindSafe by auto-impl without needing AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
                 let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
-                let mut config = match api.load_sync_config(&project_id_capture) {
+                let mut config = match api.load_sync_config() {
                     Ok(c) => c,
                     Err(e) => {
                         let err_str = e.to_string();
@@ -264,15 +264,15 @@ impl AppBackend {
                 config.has_network_permission = net.is_connected;
                 config.has_network_state_permission = true;
 
-                match api.perform_sync_dry_run(&project_id_capture, config) {
+                match api.perform_full_sync_dry_run(config) {
                     Ok(plan) => {
                         let counts = writer_core::api::SyncOperationCountsDto {
-                            uploaded: plan.files_to_upload.len() as u32,
-                            downloaded: plan.files_to_download.len() as u32,
-                            local_deleted: plan.files_to_delete_local.len() as u32,
-                            remote_deleted: plan.files_to_delete_remote.len() as u32,
-                            ignored: plan.ignored_files.len() as u32,
-                            conflicts: plan.conflicts.len() as u32,
+                            uploaded: plan.total_to_upload,
+                            downloaded: plan.total_to_download,
+                            local_deleted: plan.total_to_delete_local,
+                            remote_deleted: plan.total_to_delete_remote,
+                            ignored: plan.total_ignored,
+                            conflicts: plan.total_conflicts,
                             overwritten: 0,
                         };
 
@@ -550,7 +550,7 @@ impl AppBackend {
             // closure is UnwindSafe by auto-impl without needing AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
                 let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
-                let mut config = match api.load_sync_config(&project_id_capture) {
+                let mut config = match api.load_sync_config() {
                     Ok(c) => c,
                     Err(e) => {
                         let err_str = e.to_string();
@@ -582,9 +582,9 @@ impl AppBackend {
                     &format!("backend_type={}, sync_mode=lww_manifest", backend_label),
                 );
 
-                match api.perform_sync(&project_id_capture, config, trigger == "manual") {
+                match api.perform_full_sync(config, trigger == "manual") {
                     Ok(result) => {
-                        let status_code = result.status.clone();
+                        let status_code = result.overall_status.clone();
                         let summary_key = match status_code.as_str() {
                             "success" => Some("sync.result.success_summary".to_string()),
                             "latest_wins_applied" => {
@@ -630,19 +630,23 @@ impl AppBackend {
                         };
 
                         let counts = writer_core::api::SyncOperationCountsDto {
-                            uploaded: result.uploaded_files.len() as u32,
-                            downloaded: result.downloaded_files.len() as u32,
-                            local_deleted: result.local_deletes.len() as u32,
-                            remote_deleted: result.remote_deletes.len() as u32,
-                            overwritten: result.overwritten_files.len() as u32,
-                            ignored: result.ignored_files.len() as u32,
-                            conflicts: result.conflicts.len() as u32,
+                            uploaded: result.total_uploaded,
+                            downloaded: result.total_downloaded,
+                            local_deleted: result.total_local_deletes,
+                            remote_deleted: result.total_remote_deletes,
+                            overwritten: result.total_overwritten,
+                            ignored: result.total_ignored,
+                            conflicts: result.total_conflicts,
                         };
 
                         let mut summary_args = std::collections::HashMap::new();
-                        if !result.conflicts.is_empty() {
-                            let mut files = result
-                                .conflicts
+                        let all_conflicts: Vec<_> = result
+                            .targets
+                            .iter()
+                            .flat_map(|t| t.result.conflicts.iter())
+                            .collect();
+                        if !all_conflicts.is_empty() {
+                            let mut files = all_conflicts
                                 .iter()
                                 .map(|c| c.local_path.clone())
                                 .collect::<Vec<_>>();

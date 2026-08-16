@@ -147,7 +147,6 @@ impl AppBackend {
             username: parsed.extracted_username.clone().unwrap_or_default(),
             has_network_permission: net.is_connected,
             has_network_state_permission: true,
-            scope: writer_core::sync::types::SyncScope::Project,
         };
 
         let secrets = SyncSecrets {
@@ -160,7 +159,13 @@ impl AppBackend {
 
         if !has_content() {
             let backend = writer_core::sync::create_sync_backend(&config.backend_type);
-            match backend.sync(path_obj, &config, &secrets, true) {
+            match backend.sync(
+                path_obj,
+                &config,
+                &secrets,
+                &writer_core::sync::SyncTarget::project(project_id),
+                true,
+            ) {
                 Ok(result) => {
                     if result.status == writer_core::sync::SyncStatus::Success {
                         // Core 已删除 workspace 概念。clone 成功后只需确保 projects 子目录存在。
@@ -193,7 +198,13 @@ impl AppBackend {
                         }
                         let push_backend =
                             writer_core::sync::create_sync_backend(&config.backend_type);
-                        let push_result = push_backend.sync(path_obj, &config, &secrets, true);
+                        let push_result = push_backend.sync(
+                            path_obj,
+                            &config,
+                            &secrets,
+                            &writer_core::sync::SyncTarget::project(project_id),
+                            true,
+                        );
                         let save_first = match &push_result {
                             Ok(r) if r.status != writer_core::sync::SyncStatus::Success => true,
                             Err(_) => true,
@@ -320,7 +331,13 @@ impl AppBackend {
             }
         } else if has_directory() {
             let backend = writer_core::sync::create_sync_backend(&config.backend_type);
-            match backend.sync(path_obj, &config, &secrets, true) {
+            match backend.sync(
+                path_obj,
+                &config,
+                &secrets,
+                &writer_core::sync::SyncTarget::project(project_id),
+                true,
+            ) {
                 Ok(result) => {
                     if result.status == writer_core::sync::SyncStatus::Success {
                         match save_sync_configs(path, project_id, cfg_ref, sec_ref) {

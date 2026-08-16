@@ -250,7 +250,7 @@ pub fn save_sync_configs(
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| ".".to_string());
     let api = crate::backend::app_backend::create_core_api(path, &projects_root);
-    let config_result = api.save_sync_config(project_id, config.clone().into());
+    let config_result = api.save_sync_config(config.clone().into());
     let config_envelope = match config_result {
         Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
             data,
@@ -271,7 +271,7 @@ pub fn save_sync_configs(
         return Err(format!("{} ({})", raw_error, error_code));
     }
 
-    let secrets_result = api.save_sync_secrets(project_id, secrets.clone().into());
+    let secrets_result = api.save_sync_secrets(secrets.clone().into());
     let secrets_envelope = match secrets_result {
         Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
             data,

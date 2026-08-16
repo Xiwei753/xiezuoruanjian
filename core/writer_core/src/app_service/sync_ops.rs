@@ -1,6 +1,7 @@
 use crate::api::{
     FullSyncDiagnosticsResultDto, FullSyncDryRunResultDto, FullSyncResultDto,
-    LegacyMigrationOutcomeDto, SyncConfigDto, SyncSecretsDto, SyncStateDto, WriterError,
+    LegacyMigrationOutcomeDto, LegacyProfileMetadataDto, SyncConfigDto, SyncSecretsDto,
+    SyncStateDto, WriterError,
 };
 use crate::sync::{SyncConfig, SyncSecrets};
 
@@ -11,6 +12,14 @@ impl super::WriterAppService {
     /// 冲突返回 `NeedsReconfigure`（非 Err），由 UI 引导用户重选全局仓库。
     pub fn migrate_legacy_sync_profile(&self) -> Result<LegacyMigrationOutcomeDto, WriterError> {
         self.api.migrate_legacy_sync_profile()
+    }
+
+    /// 旧→新同步 profile 一次性迁移，接受精确 generation metadata（Issue #630 评论第 5 点 Part C）。
+    pub fn migrate_legacy_sync_profile_with_metadata(
+        &self,
+        metadata: Vec<LegacyProfileMetadataDto>,
+    ) -> Result<LegacyMigrationOutcomeDto, WriterError> {
+        self.api.migrate_legacy_sync_profile_with_metadata(metadata)
     }
 
     /**

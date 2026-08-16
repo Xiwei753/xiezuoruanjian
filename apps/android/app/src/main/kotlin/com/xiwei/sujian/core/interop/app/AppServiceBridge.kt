@@ -9,6 +9,7 @@ import com.xiwei.sujian.feature.settings.data.model.SyncableSettings
 import com.xiwei.sujian.feature.starmap.data.interop.StarMapBridge
 import com.xiwei.sujian.feature.stats.data.interop.StatsBridge
 import com.xiwei.sujian.feature.sync.data.interop.SyncBridge
+import com.xiwei.sujian.feature.sync.data.model.LegacyProfileMetadata
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import com.xiwei.sujian.feature.sync.data.model.SyncState
@@ -215,6 +216,14 @@ open class AppServiceBridge(val holder: WriterAppServiceHolder) {
      */
     open fun migrateLegacySyncProfile() = syncBridge.migrateLegacySyncProfile()
 
+    /**
+     * #630 评论第 5 点 Part C：旧→新同步 profile 迁移，接受精确 generation metadata 转发。
+     *
+     * 标记为 [open] 供单元测试 fake（覆盖返回不同 outcome 验证 SyncRepository 行为）。
+     */
+    open fun migrateLegacySyncProfileWithMetadata(metadata: List<LegacyProfileMetadata>) =
+        syncBridge.migrateLegacySyncProfileWithMetadata(metadata)
+
     fun saveSyncSecrets(secrets: SyncSecrets) = syncBridge.saveSyncSecrets(secrets)
 
     // #592 五/六/#595 十：进程级 override（操作作用域凭据）与按 generation 保存凭据。
@@ -222,12 +231,12 @@ open class AppServiceBridge(val holder: WriterAppServiceHolder) {
 
     fun clearSyncSecretsOverride() = syncBridge.clearSyncSecretsOverride()
 
-    fun saveSyncSecretsForGeneration(
+    open fun saveSyncSecretsForGeneration(
         generation: ULong,
         secrets: SyncSecrets,
     ) = syncBridge.saveSyncSecretsForGeneration(generation, secrets)
 
-    fun loadSyncSecretsForGeneration(generation: ULong) = syncBridge.loadSyncSecretsForGeneration(generation)
+    open fun loadSyncSecretsForGeneration(generation: ULong) = syncBridge.loadSyncSecretsForGeneration(generation)
 
     /** #595 五：删除指定 generation 的安全存储凭据（旧版本清理）。 */
     fun deleteSyncSecretsForGeneration(generation: ULong) = syncBridge.deleteSyncSecretsForGeneration(generation)

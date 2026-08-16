@@ -7,6 +7,7 @@ import com.xiwei.sujian.feature.sync.data.model.FullSyncDiagnosticsResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncDryRunResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
 import com.xiwei.sujian.feature.sync.data.model.LegacyMigrationOutcome
+import com.xiwei.sujian.feature.sync.data.model.LegacyProfileMetadata
 import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
@@ -62,6 +63,22 @@ open class SyncBridge internal constructor(private val holder: WriterAppServiceH
     open fun migrateLegacySyncProfile(): BridgeResult<LegacyMigrationOutcome> =
         holder.wrapResult {
             holder.service.migrateLegacySyncProfile().toModel()
+        }
+
+    /**
+     * #630 评论第 5 点 Part C：旧→新同步 profile 迁移，接受精确 generation metadata。
+     *
+     * metadata 由 [com.xiwei.sujian.feature.sync.data.LegacySyncProfileMetadataReader]
+     * 从旧 DataStore 读取，Core 据此精确读取 `sync_token_<base>_g<N>` key，
+     * 避免猜测枚举上限。空 metadata 时 Core 回退 base key / 文件 fallback。
+     *
+     * 标记为 [open] 供单元测试 fake（覆盖返回不同 outcome 验证 Repository 行为）。
+     */
+    open fun migrateLegacySyncProfileWithMetadata(
+        metadata: List<LegacyProfileMetadata>,
+    ): BridgeResult<LegacyMigrationOutcome> =
+        holder.wrapResult {
+            holder.service.migrateLegacySyncProfileWithMetadata(metadata.map { it.toDto() }).toModel()
         }
 
     fun saveSyncSecrets(secrets: SyncSecrets): BridgeResult<Boolean> =

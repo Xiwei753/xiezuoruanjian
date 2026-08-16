@@ -546,3 +546,40 @@ impl From<crate::sync::legacy_migration::LegacyMigrationOutcome> for LegacyMigra
         }
     }
 }
+
+/// 旧 profile 的精确 generation metadata DTO（Issue #630 评论第 5 点 Part C）。
+///
+/// 详见 [`crate::sync::legacy_migration::LegacyProfileMetadata`]。
+/// 调用方（平台层 DataStore）通过此结构精确告诉 Core 应该读取哪个
+/// `sync_token_<base>_g<N>` key，避免 Core 猜测枚举上限。
+///
+/// - `source = "app"`：旧应用级 profile；`project_id` 应为 None
+/// - `source = "project:<id>"`：旧作品级 profile；`project_id` 应为 Some(id)
+/// - `active_generation = Some(n)`：精确读取 `sync_token_<base>_g{n}`
+/// - `active_generation = None`：回退 base key / 文件
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct LegacyProfileMetadataDto {
+    pub source: String,
+    pub project_id: Option<String>,
+    pub active_generation: Option<u32>,
+}
+
+impl From<LegacyProfileMetadataDto> for crate::sync::legacy_migration::LegacyProfileMetadata {
+    fn from(d: LegacyProfileMetadataDto) -> Self {
+        Self {
+            source: d.source,
+            project_id: d.project_id,
+            active_generation: d.active_generation,
+        }
+    }
+}
+
+impl From<crate::sync::legacy_migration::LegacyProfileMetadata> for LegacyProfileMetadataDto {
+    fn from(m: crate::sync::legacy_migration::LegacyProfileMetadata) -> Self {
+        Self {
+            source: m.source,
+            project_id: m.project_id,
+            active_generation: m.active_generation,
+        }
+    }
+}
