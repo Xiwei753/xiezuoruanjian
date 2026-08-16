@@ -1,13 +1,15 @@
 // EditorInputAdapter — 把 HarmonyOS 键盘/IME/粘贴翻译成 insert/delete/replace/composition 编辑命令。
 // 委托 EditorSessionCoordinator。不自己维护正文或光标。
 // cause 由本适配器按输入语义决定（Typing/Delete/Paste/ImeComposition/TypingCommit）。
+// Issue #629 评论 3：composition 用 Core 返回的 compositionSession（不伪造 generation）；
+// onCompositionFinish committed!=preedit 改成 updateComposition→新 generation→finishComposition（不 cancel 后 commitText）；
+// getCurrentCursorUtf16 用 snap.cursor。
 
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
 import { EditorImeSession } from './EditorImeSession'
 import { TextOffsetMapper } from './TextOffsetMapper'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
-import { EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
-import { EditorSnapshot } from '../interop/IEditorSessionBridge'
+import { EditorTransactionCause, EditorEditResult, CompositionSession } from '../../../corebridge/dto/EditorDtos'
 
 export class EditorInputAdapter {
   private coordinator: EditorSessionCoordinator
@@ -18,13 +20,13 @@ export class EditorInputAdapter {
   }
 
   // 普通字符输入（UTF-16 offset 来自 ArkTS 事件）。
-  async onTextInput(text: string, utf16Offset: number): Promise<ResultEnvelope<EditorSnapshot>> {
+  async onTextInput(text: string, utf16Offset: number): Promise<ResultEnvelope<EditorEditResult>> {
     const byteOffset = TextOffsetMapper.utf16ToUtf8(this.getCurrentText(), utf16Offset)
     return this.coordinator.insert(byteOffset, text, EditorTransactionCause.Typing)
   }
 
   // 删除（backspace/delete）。
-  async onDelete(utf16Start: number, utf16End: number): Promise<ResultEnvelope<EditorSnapshot>> {
+  async onDelete(utf16Start: number, utf16End: number): Promise<ResultEnvelope<EditorEditResult>> {
     const text = this.getCurrentText()
     return this.coordinator.delete(
       TextOffsetMapper.utf16ToUtf8(text, utf16Start),
@@ -34,57 +36,80 @@ export class EditorInputAdapter {
   }
 
   // 粘贴：在 byteOffset 处插入 text（替换空范围，originalText 为空）。
-  async onPaste(text: string, utf16Offset: number): Promise<ResultEnvelope<EditorSnapshot>> {
+  async onPaste(text: string, utf16Offset: number): Promise<ResultEnvelope<EditorEditResult>> {
     const byteOffset = TextOffsetMapper.utf16ToUtf8(this.getCurrentText(), utf16Offset)
     return this.coordinator.replace(byteOffset, byteOffset, text, '', EditorTransactionCause.Paste)
   }
 
   // IME composition 开始：替换范围 [byteOffset, byteOffset]（空范围）。
-  async onCompositionBegin(utf16Offset: number): Promise<ResultEnvelope<EditorSnapshot>> {
+  // 从 result.compositionSession 设 imeSession（Core 驱动 composition 会话）。
+  async onCompositionBegin(utf16Offset: number): Promise<ResultEnvelope<EditorEditResult>> {
     const byteOffset = TextOffsetMapper.utf16ToUtf8(this.getCurrentText(), utf16Offset)
-    this.imeSession.begin()
-    return this.coordinator.beginComposition(byteOffset, byteOffset)
+    const result = await this.coordinator.beginComposition(byteOffset, byteOffset)
+    if (result.success && result.data && result.data.compositionSession) {
+      this.imeSession.setCompositionSession(result.data.compositionSession)
+    }
+    return result
   }
 
-  async onCompositionUpdate(preedit: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  // IME composition preedit 更新：从 result.compositionSession 更新 imeSession。
+  async onCompositionUpdate(preedit: string): Promise<ResultEnvelope<EditorEditResult>> {
     this.imeSession.updatePreedit(preedit)
     const compId = this.imeSession.getCompositionSessionId()
     const gen = this.imeSession.getGeneration()
     const cursorByte = TextOffsetMapper.utf16ToUtf8(preedit, preedit.length)
-    return this.coordinator.updateComposition(compId, gen, preedit, cursorByte)
+    const result = await this.coordinator.updateComposition(compId, gen, preedit, cursorByte)
+    if (result.success && result.data && result.data.compositionSession) {
+      this.imeSession.setCompositionSession(result.data.compositionSession)
+    }
+    return result
   }
 
   // IME composition 提交。committed 是 IME 最终提交文本，不能忽略。
-  // - committed 与最后一次 preedit 相同 → finishComposition（确认原样提交）
-  // - committed 与 preedit 不同 → 先 cancelComposition，再 commitText 插入最终文本
-  async onCompositionFinish(committed: string): Promise<ResultEnvelope<EditorSnapshot>> {
+  // - committed == preedit → finishComposition（确认原样提交）
+  // - committed != preedit → updateComposition（把 preedit 改成 committed）→ 从 result.compositionSession
+  //   取新 generation → finishComposition。
+  //   禁止 cancel 后 commitText（评论明确说这会 StaleRevision）。
+  async onCompositionFinish(committed: string): Promise<ResultEnvelope<EditorEditResult>> {
     const comp = this.imeSession.finish()
     if (!comp) {
       return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
     }
     if (committed === comp.preedit) {
-      return this.coordinator.finishComposition(comp.sessionId, comp.generation)
+      const result = await this.coordinator.finishComposition(comp.sessionId, comp.generation)
+      this.imeSession.clear()
+      return result
     }
-    const cancelResult = await this.coordinator.cancelComposition(comp.sessionId, comp.generation)
-    if (!cancelResult.success || !cancelResult.data) {
-      return cancelResult
+    // committed != preedit：updateComposition 提交最终文本，再用新 generation finishComposition
+    const cursorByte = TextOffsetMapper.utf16ToUtf8(committed, committed.length)
+    const updateResult = await this.coordinator.updateComposition(comp.sessionId, comp.generation, committed, cursorByte)
+    if (!updateResult.success || !updateResult.data) {
+      return updateResult
     }
-    const byteOffset = cancelResult.data.selectionHead
-    const committedByteLen = TextOffsetMapper.utf16ToUtf8(committed, committed.length)
-    return this.coordinator.commitText(
-      byteOffset, byteOffset, committed,
-      byteOffset + committedByteLen, byteOffset + committedByteLen,
-      comp.sessionId, cancelResult.data.revision, comp.generation,
-      EditorTransactionCause.TypingCommit
-    )
+    const newCompSession: CompositionSession | null = updateResult.data.compositionSession
+    if (!newCompSession) {
+      return {
+        success: false,
+        errorCode: 'NO_COMPOSITION_SESSION',
+        warnings: updateResult.warnings,
+        changedPaths: updateResult.changedPaths,
+        changedEntities: updateResult.changedEntities
+      }
+    }
+    this.imeSession.setCompositionSession(newCompSession)
+    const finishResult = await this.coordinator.finishComposition(newCompSession.sessionId, newCompSession.generation)
+    this.imeSession.clear()
+    return finishResult
   }
 
-  async onCompositionCancel(): Promise<ResultEnvelope<EditorSnapshot>> {
+  async onCompositionCancel(): Promise<ResultEnvelope<EditorEditResult>> {
     const comp = this.imeSession.cancel()
     if (!comp) {
       return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
     }
-    return this.coordinator.cancelComposition(comp.sessionId, comp.generation)
+    const result = await this.coordinator.cancelComposition(comp.sessionId, comp.generation)
+    this.imeSession.clear()
+    return result
   }
 
   isComposing(): boolean {
@@ -92,12 +117,13 @@ export class EditorInputAdapter {
   }
 
   // 当前光标的 UTF-16 code unit offset（供 HarmonyImeConnection 查询）。
+  // Issue #629 评论 3：用 snap.cursor（而非 selectionHead）。
   getCurrentCursorUtf16(): number {
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
       return 0
     }
-    return TextOffsetMapper.utf8ToUtf16(snap.text, snap.selectionHead)
+    return TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursor)
   }
 
   // 当前正文（UTF-16 string，供 HarmonyImeConnection 删除范围计算用）。

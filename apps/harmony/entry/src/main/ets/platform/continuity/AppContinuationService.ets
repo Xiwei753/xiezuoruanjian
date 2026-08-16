@@ -1,16 +1,18 @@
 // AppContinuationService — 当前任务接续（HarmonyOS Continuation）。
-// save(payload) 序列化 payload 准备给 onContinue 使用；
-// getCurrentPayload() 由 EntryAbility.onContinue 调用取当前 payload；
+// updateCurrentState(payload) 由 Navigation/编辑会话状态变化时调用，更新当前可接续任务状态；
+// save(payload) 保留为别名（兼容旧调用点）。
+// getCurrentPayload() 由 EntryAbility.onContinue 调用取当前 payload——读取不清空，
+// pendingPayload 保存当前可接续任务状态，由 updateCurrentState 覆写。
 // restoreFromWant(wantParam) 目标设备从 wantParam 恢复 payload。
 // 不写成第二套同步：正文数据仍由作品数据层和同步体系负责。
 //
-// 不用进程内存"伪持久化"。payload 只带 projectId/volumeId/chapterId/selection/viewport/revision；
+// 不用进程内存"伪持久化"。payload 只带 projectId/volumeId/chapterId/selection/cursor/viewport/revision；
 // 正文由作品仓库/同步负责。
 //
 // 真实接续流程（Ability Kit）：
 // 1. 源设备：用户触发接续 → EntryAbility.onContinue → 调 getCurrentPayload() → 写入 wantParam。
 // 2. 目标设备：EntryAbility.onCreate/onNewWant → 检查 launchReason === CONTINUATION →
-//    从 want.parameters 读取 → restoreFromWant() 还原 payload。
+//    从 want.parameters 读取 → restoreFromWant() 还原 payload → 交 AppNavigation 手动重建 NavPathStack。
 
 import { ContinuationPayload } from './ContinuationPayload'
 
@@ -18,8 +20,10 @@ const WANT_PARAM_KEY: string = 'continuationData'
 
 export class AppContinuationService {
   private static instance: AppContinuationService
-  // 当前待接续 payload。由 save() 设置，由 onContinue 读取后清空。
-  // 这不是"伪持久化"——它是 onContinue 同步读取的临时持有，生命周期与 onContinue 调用绑定。
+  // 当前可接续任务 payload。由 updateCurrentState()/save() 设置，由 onContinue 读取。
+  // 读取不清空：pendingPayload 保存当前可接续任务状态，onContinue 读取不消费；
+  // 状态变化时由 updateCurrentState() 覆写。这不是"伪持久化"——它只暂存接续元数据，
+  // 正文由作品仓库/同步负责。
   private pendingPayload: ContinuationPayload | null = null
 
   static getInstance(): AppContinuationService {
@@ -29,19 +33,25 @@ export class AppContinuationService {
     return AppContinuationService.instance
   }
 
-  // 序列化 payload 准备给 onContinue 使用。
-  // payload 暂存于实例字段，供 EntryAbility.onContinue 调 getCurrentPayload() 取走。
-  // 不写第二套持久化；正文由作品仓库/同步负责。
-  async save(payload: ContinuationPayload): Promise<void> {
+  // 由 Navigation/编辑会话状态变化时调用，更新当前可接续任务状态。
+  // 替代旧 save 的"写入即接续"语义：状态变化即覆写 pendingPayload，
+  // onContinue 读取时拿到的是最近一次状态快照。
+  updateCurrentState(payload: ContinuationPayload): void {
     this.pendingPayload = this.sanitizePayload(payload)
   }
 
+  // 序列化 payload 准备给 onContinue 使用（updateCurrentState 的别名，兼容旧调用点）。
+  // payload 暂存于实例字段，供 EntryAbility.onContinue 调 getCurrentPayload() 读取。
+  // 不写第二套持久化；正文由作品仓库/同步负责。
+  async save(payload: ContinuationPayload): Promise<void> {
+    this.updateCurrentState(payload)
+  }
+
   // EntryAbility.onContinue 调用此方法取当前 payload。
-  // 取出后清空 pendingPayload，避免重复接续。
+  // 读取不清空：pendingPayload 保存当前可接续任务状态，由 updateCurrentState 覆写；
+  // onContinue 多次调用拿到同一份最近状态快照，避免重复接续时丢状态。
   getCurrentPayload(): ContinuationPayload | null {
-    const p: ContinuationPayload | null = this.pendingPayload
-    this.pendingPayload = null
-    return p
+    return this.pendingPayload
   }
 
   // 目标设备从 wantParam 恢复 payload。

@@ -18,10 +18,7 @@ export interface PlatformStylusEvent {
   timestamp: number
 }
 
-// HarmonyOS 触摸事件 SourceType（@ohos.multimodalInput.SourceType 节选）。
-// STYLUS=6, TOUCH_PEN=7（部分版本）；ERASER 通过 toolType 判断。
-const SOURCE_TYPE_STYLUS: number = 6
-const SOURCE_TYPE_TOUCH_PEN: number = 7
+// #629 评论3：stylus 不由数值 source 猜测，由 toolType 笔事件独立判断。
 
 // HarmonyOS TouchPoint.toolType（@ohos.multimodalInput.ToolType）。
 // TIP=0, ERASER=1。

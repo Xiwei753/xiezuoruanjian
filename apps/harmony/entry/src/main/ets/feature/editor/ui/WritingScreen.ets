@@ -9,10 +9,12 @@ import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserve
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
 import { NativeEditorSessionBridge } from '../interop/NativeEditorSessionBridge'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
+import { EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { SujianEditor } from './SujianEditor'
+import { EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
 
 @Component
 export struct WritingScreen {
@@ -80,6 +82,13 @@ export struct WritingScreen {
     }
 
     const self = this
+    // 注册编辑会话状态监听器：open/编辑命令成功后回流 editorSnapshot/content/hasUnsaved/wordCount。
+    this.coordinator.setStateListener((snap: EditorSessionSnapshot) => {
+      self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize)
+      self.content = snap.text
+      self.hasUnsavedChanges = snap.text !== self.lastSavedContent
+      self.wordCount = snap.text.length
+    })
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
       self.themeConfig = theme
     })
@@ -95,6 +104,15 @@ export struct WritingScreen {
       this.settings.autoSaveDelayMs
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
+
+    // 注册编辑会话状态监听器：Core 编辑命令成功后回流 EditorSessionSnapshot，
+    // 更新 editorSnapshot/content/hasUnsavedChanges/wordCount，驱动 SujianEditor 静态渲染。
+    this.coordinator.setStateListener((snap: EditorSessionSnapshot) => {
+      self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize)
+      self.content = snap.text
+      self.hasUnsavedChanges = snap.text !== self.lastSavedContent
+      self.wordCount = snap.text.length
+    })
   }
 
   aboutToDisappear() {
@@ -108,6 +126,12 @@ export struct WritingScreen {
         this.chapterId, this.sessionOldText, this.content, durationSeconds, this.sessionId
       )
     }
+
+    // 清除状态监听器，避免 close 后回调
+    this.coordinator.setStateListener(null)
+
+    // 清除编辑会话状态监听器
+    this.coordinator.setStateListener(null)
 
     // 关闭编辑会话
     this.coordinator.close()
@@ -140,10 +164,10 @@ export struct WritingScreen {
         this.sessionOldText = result.data.content
         this.sessionId = `hm-${this.chapterId}-${Date.now()}`
         this.sessionStartTime = Date.now()
-        // 打开编辑会话，用 Core 管理正文
+        // 打开编辑会话，用 Core 管理正文。open 成功后 listener 自动回流 editorSnapshot/content/hasUnsaved/wordCount。
         const snapResult = await this.coordinator.open(this.chapterId, result.data.content)
-        if (snapResult.success && snapResult.data) {
-          this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snapResult.data, this.settings.editorFontSize)
+        if (!snapResult.success) {
+          this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
         }
       } else {
         this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)

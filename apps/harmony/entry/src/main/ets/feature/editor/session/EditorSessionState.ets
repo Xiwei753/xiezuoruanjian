@@ -1,24 +1,34 @@
-// EditorSessionState — 编辑会话不可变快照值对象。
-// 持有 sessionId + revision + snapshot。每次 Core 返回新 snapshot 时构造新实例。
+// EditorSessionState — 编辑会话不可变状态值对象。
+// 持有 sessionId（来自 Core create 返回的 u64）+ 最后一次 EditorSessionSnapshot。
+// #629 评论3：sessionId 来自 create 的独立 u64，不在 snapshot 内；
+// 编辑命令返回 EditorEditResult，通过 withEditResult 应用 displayPatches 增量更新。
+//
+// 纯逻辑（applyPatch / applyEditResultToSnapshot）提取到 editor_patch_logic.ts，
+// 供 Node --experimental-strip-types 直接 import 单测；本 .ets 文件只保留薄壳。
 
-import { EditorSnapshot } from '../interop/IEditorSessionBridge'
+import { EditorSessionSnapshot, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
+import { applyEditResultToSnapshot } from './editor_patch_logic'
 
 export class EditorSessionState {
   readonly sessionId: number
-  readonly revision: number
-  readonly snapshot: EditorSnapshot
+  readonly snapshot: EditorSessionSnapshot
 
-  constructor(sessionId: number, revision: number, snapshot: EditorSnapshot) {
+  constructor(sessionId: number, snapshot: EditorSessionSnapshot) {
     this.sessionId = sessionId
-    this.revision = revision
     this.snapshot = snapshot
   }
 
-  static fromSnapshot(snapshot: EditorSnapshot): EditorSessionState {
-    return new EditorSessionState(snapshot.sessionId, snapshot.revision, snapshot)
+  static fromCreate(sessionId: number, snapshot: EditorSessionSnapshot): EditorSessionState {
+    return new EditorSessionState(sessionId, snapshot)
   }
 
-  withSnapshot(newSnapshot: EditorSnapshot): EditorSessionState {
-    return new EditorSessionState(newSnapshot.sessionId, newSnapshot.revision, newSnapshot)
+  // 从 EditorEditResult 增量更新：委托纯函数 applyEditResultToSnapshot。
+  // outcome 为 staleRevision/invalidOffset/invalidRange 时不更新（返回 this）。
+  withEditResult(result: EditorEditResult): EditorSessionState {
+    return new EditorSessionState(this.sessionId, applyEditResultToSnapshot(this.snapshot, result))
+  }
+
+  get revision(): number {
+    return this.snapshot.revision
   }
 }

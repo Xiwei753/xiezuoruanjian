@@ -97,12 +97,12 @@ export class HarmonyImeConnection {
       // composition commit：携带最终提交文本
       this.composing = false
       this.lastPreedit = ''
-      this.inputAdapter.onCompositionFinish(text).then((_r) => {})
+      this.inputAdapter.onCompositionFinish(text).catch((_e) => {})
       return
     }
     // 普通文本插入：在当前光标位置插入
     const cursorOffset = this.inputAdapter.getCurrentCursorUtf16()
-    this.inputAdapter.onTextInput(text, cursorOffset).then((_r) => {})
+    this.inputAdapter.onTextInput(text, cursorOffset).catch((_e) => {})
   }
 
   // IME 删除：BACKWARD 删光标前一个 code point，FORWARD 删光标后一个 code point。
@@ -121,7 +121,7 @@ export class HarmonyImeConnection {
       if (start > 0 && text.charCodeAt(start) >= 0xDC00 && text.charCodeAt(start) <= 0xDFFF) {
         start -= 1
       }
-      this.inputAdapter.onDelete(start, cursor).then((_r) => {})
+      this.inputAdapter.onDelete(start, cursor).catch((_e) => {})
     } else {
       // FORWARD
       if (cursor >= text.length) {
@@ -132,7 +132,7 @@ export class HarmonyImeConnection {
       if (end < text.length && text.charCodeAt(cursor) >= 0xD800 && text.charCodeAt(cursor) <= 0xDBFF) {
         end += 1
       }
-      this.inputAdapter.onDelete(cursor, end).then((_r) => {})
+      this.inputAdapter.onDelete(cursor, end).catch((_e) => {})
     }
   }
 
@@ -142,7 +142,7 @@ export class HarmonyImeConnection {
       return
     }
     const cursorOffset = this.inputAdapter.getCurrentCursorUtf16()
-    this.inputAdapter.onTextInput('\n', cursorOffset).then((_r) => {})
+    this.inputAdapter.onTextInput('\n', cursorOffset).catch((_e) => {})
   }
 
   // IME 选区变化：翻译成 SelectionController.onDragSelect / onTap。
@@ -153,9 +153,9 @@ export class HarmonyImeConnection {
     const start = selection.start
     const end = selection.end
     if (start === end) {
-      this.selectionController.onTap(start).then((_r) => {})
+      this.selectionController.onTap(start).catch((_e) => {})
     } else {
-      this.selectionController.onDragSelect(start, end).then((_r) => {})
+      this.selectionController.onDragSelect(start, end).catch((_e) => {})
     }
   }
 
@@ -167,11 +167,11 @@ export class HarmonyImeConnection {
     if (!this.composing) {
       // composition 开始：在当前光标位置
       const cursorOffset = this.inputAdapter.getCurrentCursorUtf16()
-      this.inputAdapter.onCompositionBegin(cursorOffset).then((_r) => {})
+      this.inputAdapter.onCompositionBegin(cursorOffset).catch((_e) => {})
       this.composing = true
     }
     this.lastPreedit = text
-    this.inputAdapter.onCompositionUpdate(text).then((_r) => {})
+    this.inputAdapter.onCompositionUpdate(text).catch((_e) => {})
   }
 
   // IME 取消 composition preedit。
@@ -182,7 +182,7 @@ export class HarmonyImeConnection {
     if (this.composing) {
       this.composing = false
       this.lastPreedit = ''
-      this.inputAdapter.onCompositionCancel().then((_r) => {})
+      this.inputAdapter.onCompositionCancel().catch((_e) => {})
     }
   }
 }

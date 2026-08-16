@@ -11,10 +11,12 @@ import { WidthClass, ShellMode } from '../../../corebridge/dto/PlatformDtos'
 import { EditorSessionCoordinator } from '../../editor/session/EditorSessionCoordinator'
 import { NativeEditorSessionBridge } from '../../editor/interop/NativeEditorSessionBridge'
 import { EditorLayoutSnapshot } from '../../editor/render/EditorLayoutSnapshot'
+import { EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
 import { EditorInputAdapter } from '../../editor/input/EditorInputAdapter'
 import { SelectionController } from '../../editor/selection/SelectionController'
 import { HarmonyImeConnection } from '../../editor/input/HarmonyImeConnection'
 import { SujianEditor } from '../../editor/ui/SujianEditor'
+import { EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
 
 /** 左侧面板宽度（双栏模式） */
 const LEFT_PANEL_WIDTH: number = 320
@@ -93,6 +95,13 @@ export struct WorkspaceScreen {
     }
 
     const self = this
+    // 注册编辑会话状态监听器：open/编辑命令成功后回流 editorSnapshot/content/hasUnsaved/wordCount。
+    this.coordinator.setStateListener((snap: EditorSessionSnapshot) => {
+      self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize)
+      self.content = snap.text
+      self.hasUnsavedChanges = snap.text !== self.lastSavedContent
+      self.wordCount = snap.text.length
+    })
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
       self.themeConfig = theme
     })
@@ -109,6 +118,15 @@ export struct WorkspaceScreen {
       this.settings.autoSaveDelayMs
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
+
+    // 注册编辑会话状态监听器：Core 编辑命令成功后回流 EditorSessionSnapshot，
+    // 更新 editorSnapshot/content/hasUnsavedChanges/wordCount，驱动 SujianEditor 静态渲染。
+    this.coordinator.setStateListener((snap: EditorSessionSnapshot) => {
+      self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize)
+      self.content = snap.text
+      self.hasUnsavedChanges = snap.text !== self.lastSavedContent
+      self.wordCount = snap.text.length
+    })
   }
 
   aboutToDisappear() {
@@ -131,6 +149,12 @@ export struct WorkspaceScreen {
         this.sessionId
       )
     }
+
+    // 清除状态监听器，避免 close 后回调
+    this.coordinator.setStateListener(null)
+
+    // 清除编辑会话状态监听器
+    this.coordinator.setStateListener(null)
 
     // 关闭编辑会话（若当前有打开的章节）
     if (this.selectedChapterId) {
@@ -197,11 +221,9 @@ export struct WorkspaceScreen {
         this.sessionId = `hm-${this.selectedChapterId}-${Date.now()}`
         this.sessionStartTime = Date.now()
 
-        // 打开编辑会话，用 Core 管理正文
+        // 打开编辑会话。open 成功后 listener 自动回流 editorSnapshot/content/hasUnsaved/wordCount。
         const openResult = await this.coordinator.open(this.selectedChapterId, result.data.content)
-        if (openResult.success && openResult.data) {
-          this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(openResult.data, this.settings.editorFontSize)
-        } else {
+        if (!openResult.success) {
           this.editorErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
         }
       } else {
