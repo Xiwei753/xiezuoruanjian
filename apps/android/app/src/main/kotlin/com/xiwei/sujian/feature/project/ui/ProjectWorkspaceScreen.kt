@@ -25,7 +25,7 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
-import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
+import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlanner
 import com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
@@ -68,7 +68,7 @@ internal fun ProjectWorkspaceScreen(
     projectListActions: AndroidWorkspaceActionSpec,
     projectWorkspaceActions: AndroidWorkspaceActionSpec,
     layoutSpec: AndroidLayoutSpec,
-    workbenchPlan: AndroidWorkbenchLayoutPlan?,
+    workbenchPlanner: AndroidWorkbenchLayoutPlanner,
     chrome: SujianChromeSpec,
     onTopLevelSettings: () -> Unit,
     onTopLevelSearch: () -> Unit,
@@ -174,7 +174,7 @@ internal fun ProjectWorkspaceScreen(
             projectRepository = projectRepository,
             editorViewModel = editorViewModel,
             projectCardMinWidthDp = projectCardMinWidthDp,
-            workbenchPlan = workbenchPlan,
+            workbenchPlanner = workbenchPlanner,
             onTopLevelSettings = onTopLevelSettings,
             onTopLevelSearch = onTopLevelSearch,
             onTopLevelSync = onTopLevelSync,
@@ -395,7 +395,7 @@ private fun WideLayoutContent(
     projectRepository: com.xiwei.sujian.feature.project.data.ProjectRepository,
     editorViewModel: EditorViewModel,
     projectCardMinWidthDp: Float,
-    workbenchPlan: AndroidWorkbenchLayoutPlan?,
+    workbenchPlanner: AndroidWorkbenchLayoutPlanner,
     onTopLevelSettings: () -> Unit,
     onTopLevelSearch: () -> Unit,
     onTopLevelSync: () -> Unit,
@@ -448,7 +448,7 @@ private fun WideLayoutContent(
                             currentChapterTitle = currentChapterTitle,
                         ),
                     editorViewModel = editorViewModel,
-                    workbenchPlan = workbenchPlan,
+                    workbenchPlanner = workbenchPlanner,
                     callbacks =
                         WideWorkspaceCallbacks(
                             onBack = onBack,

@@ -1436,6 +1436,12 @@ dictionary LayoutMetricsDto {
     f32 project_card_min_width_dp;
     f32 tool_pane_width_dp;
     f32 tool_rail_width_dp;
+    f32 editor_min_width_dp;
+    f32 toolbar_height_dp;
+    f32 toolbar_leading_width_dp;
+    f32 toolbar_trailing_width_dp;
+    f32 list_pane_min_width_dp;
+    f32 tool_pane_min_width_dp;
 };
 
 // #628 验收点 5：平台中立的窗口遮挡 DTO。
@@ -1499,6 +1505,7 @@ dictionary WorkbenchVisibilityDto {
 
 dictionary WorkbenchLayoutPlanDto {
     sequence<WorkbenchPlacementDto> placements;
+    boolean valid;
 };
 
 // ── Screen Contract DTOs ──

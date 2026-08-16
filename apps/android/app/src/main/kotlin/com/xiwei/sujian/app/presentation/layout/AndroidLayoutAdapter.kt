@@ -111,27 +111,59 @@ internal fun rememberWorkbenchLayoutPlan(
         remember(viewport, visibilityDto) {
             resolveWorkbenchLayout(viewport, visibilityDto)
         }
-    return remember(planDto) { planDto?.toAndroidWorkbenchLayoutPlan() ?: AndroidWorkbenchLayoutPlan(emptyList()) }
+    return remember(planDto) {
+        planDto?.toAndroidWorkbenchLayoutPlan()
+            ?: AndroidWorkbenchLayoutPlan(emptyList(), valid = false)
+    }
 }
 
 /**
- * #628 评论 5301021120 第 4 步：用默认 visibility（都可见）请求 Rust workbench plan。
- *   chapterTreeCollapsed/toolPaneCollapsed 是 WideWritingWorkspace 内的局部 UI 状态；
- *   WideWritingWorkspace 内部收起状态变化时仍按 plan 放 slot（收起通过不画对应 slot 实现）。
- *   完整的 per-visibility 重算在 WideWritingWorkspace 内部按需触发（#628 后续优化点）。
+ * #628 评论 5301021120 问题1：只暴露 Android 纯类型的 workbench layout planner。
  *
- * 放在 presentation/layout 层以避免 UI 层（app/navigation）直接引用 uniffi DTO（架构门禁）。
+ * feature UI（app/navigation、feature/project/ui）不直接 import uniffi.writer_core DTO 或
+ * AppServiceBridge（架构门禁 ui-no-uniffi-jna-bridge / presentation-contract-layer）。
+ * 它们只持有 [AndroidWorkbenchLayoutPlanner] 这个 fun interface，按当前
+ * [AndroidWorkbenchVisibility] 调 [resolve] 拿到一份 [AndroidWorkbenchLayoutPlan]（或 null）。
+ *
+ * planner 内部捕获当前 [WindowViewportDto] 与 UniFFI resolver（函数类型，不暴露 DTO 给调用方），
+ * 窗口几何变化时由 [rememberWorkbenchLayoutPlanner] 重建 planner，visibility 变化时由
+ * 调用方在自己的 remember(planner, visibility) 里重算 — 收起左栏/右栏后 Rust 重新给 Editor
+ * 更大的 bounds，中央 SujianEditorHost 仍是同一个实例，只改变测量/放置。
+ */
+internal fun interface AndroidWorkbenchLayoutPlanner {
+    /**
+     * 按当前 [visibility] 请求 Rust workbench plan。
+     *
+     * @return plan；桥失败时返回 null（调用方应退化为单栏 Editor）。
+     */
+    fun resolve(visibility: AndroidWorkbenchVisibility): AndroidWorkbenchLayoutPlan?
+}
+
+/**
+ * #628 评论 5301021120 问题1：在 presentation/layout 层构造 [AndroidWorkbenchLayoutPlanner]。
+ *
+ * remember(viewport, workbenchResolver) 捕获当前窗口几何与 UniFFI resolver；返回的 lambda 把
+ * [AndroidWorkbenchVisibility] 转 [WorkbenchVisibilityDto] 调 resolver 再 toAndroidWorkbenchLayoutPlan()。
+ * 窗口变化时 viewport 更新 → planner 重建；visibility 变化时调用方 remember(planner, visibility) 重算。
+ *
+ * 放在 presentation/layout 层以避免 UI 层（app/navigation、feature/project/ui）直接引用 uniffi DTO
+ * （架构门禁 ui-no-uniffi-jna-bridge / presentation-contract-layer）。
  */
 @Composable
-internal fun rememberDefaultWorkbenchLayoutPlan(
+internal fun rememberWorkbenchLayoutPlanner(
     viewport: WindowViewportDto,
     workbenchResolver: (WindowViewportDto, WorkbenchVisibilityDto) -> WorkbenchLayoutPlanDto?,
-): AndroidWorkbenchLayoutPlan =
-    rememberWorkbenchLayoutPlan(
-        viewport = viewport,
-        visibility = AndroidWorkbenchVisibility(chapterNavigationVisible = true, toolPaneVisible = true),
-        resolveWorkbenchLayout = workbenchResolver,
-    )
+): AndroidWorkbenchLayoutPlanner =
+    remember(viewport, workbenchResolver) {
+        AndroidWorkbenchLayoutPlanner { visibility ->
+            val visibilityDto =
+                WorkbenchVisibilityDto(
+                    chapterNavigationVisible = visibility.chapterNavigationVisible,
+                    toolPaneVisible = visibility.toolPaneVisible,
+                )
+            workbenchResolver(viewport, visibilityDto)?.toAndroidWorkbenchLayoutPlan()
+        }
+    }
 
 /**
  * #625 第二段 / #628 验收点 1：工作区布局模式 — Kotlin 侧枚举，
@@ -241,9 +273,18 @@ internal data class AndroidWorkbenchVisibility(
     val toolPaneVisible: Boolean,
 )
 
-/** 工作台布局计划 — Kotlin 侧纯数据，含七角色 placement。 */
+/**
+ * 工作台布局计划 — Kotlin 侧纯数据，含七角色 placement 与 Rust 计算的 [valid] 标志。
+ *
+ * #628 评论 5301021120 问题1：[valid] 来自 Rust `WorkbenchLayoutPlanDto.valid` —
+ * 当前 viewport + visibility 放不下最小 workbench 时 Rust 返回 false（Editor 占满最大 free region，
+ * 其余角色空 bounds）。Android 端消费方在 `valid == false` 时不画七角色 Workbench 外壳，
+ * 改为画单栏 Editor（SujianEditorHost 占满 modifier）— 这就是"回到 SinglePane"，
+ * 而不是 Android 临时隐藏控件。
+ */
 internal data class AndroidWorkbenchLayoutPlan(
     val placements: List<AndroidWorkbenchPlacement>,
+    val valid: Boolean,
 ) {
     /** 取指定角色的 placement；不存在时返回 null。 */
     fun placementFor(role: AndroidWorkbenchRole): AndroidWorkbenchPlacement? =
@@ -266,4 +307,5 @@ internal fun WorkbenchLayoutPlanDto.toAndroidWorkbenchLayoutPlan(): AndroidWorkb
                         ),
                 )
             },
+        valid = valid,
     )

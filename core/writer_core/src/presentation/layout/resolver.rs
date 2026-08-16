@@ -19,17 +19,24 @@
 //! `WorkspaceLayoutMode` 只有 `SinglePane` / `Workbench` 两个产品语义变体（#628 验收点 1），
 //! 不再输出旧的 `ListDetail` / `ThreePane`。
 //!
-//! # Workbench 布局计划（#628 评论 5301021120 第 1-2 步）
+//! # Workbench 布局计划（#628 评论 5301021120 第 1-2 步，问题 2/3）
 //!
 //! [`resolve_workbench_layout`] 是平台无关纯函数，输入 [`WindowViewport`] +
 //! [`WorkbenchVisibility`]，输出 [`WorkbenchLayoutPlan`]（含七个 [`WorkbenchRole`]
 //! 的最终 [`LayoutRect`] bounds）。处理全部 `separating == true` 的遮挡：
 //! - 越界矩形 clamp 到 viewport；空矩形丢弃；
-//! - 按 left_dp 排序后切出全部连续可用垂直列；
+//! - 二维 free-region 几何算法（[`compute_free_regions`]）：收集 X/Y 切线形成网格 cell，
+//!   与任一 separating occlusion 相交的 cell 不可用，合并相邻可用 cell 成连续区域；
 //! - 七角色 bounds 都不与任何 separating 相交；
 //! - Editor 拿到连续可编辑区域，不跨两个物理区域；
 //! - 多 separating 同时存在时同样处理，不退化成单 hinge；
-//! - 无遮挡时退化成普通大屏工作台（整列 = viewport）。
+//! - 竖直 hinge、横向 hinge、多个横竖混合 hinge 都走同一套几何算法，不新增平台分支；
+//! - 无遮挡时退化成普通大屏工作台（free region = 整个 viewport）。
+//!
+//! #628 评论 5301021120 问题 3：当 free regions 在合理最小尺寸下已放不下完整 Workbench
+//! （`editor_min_width_dp` + 可见 pane min + tool_rail），Rust 判定本次布局语义失效
+//! （`WorkbenchLayoutPlan.valid = false`），placements 退化为 Editor 单栏占满最大可用
+//! free region，而不是把侧栏压成细线只给正文留 1dp。
 
 use serde::{Deserialize, Serialize};
 
@@ -202,9 +209,29 @@ pub struct WorkbenchVisibility {
 /// 工作台布局计划 — `resolve_workbench_layout` 的输出（#628 评论 5301021120 第 1 步）。
 ///
 /// 含七个 [`WorkbenchPlacement`]，平台端按 bounds 放 slot，不再自行推导 hinge 布局。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+///
+/// #628 评论 5301021120 问题 3：`valid` 表示本次布局语义是否成立。
+/// `valid == false` 时 placements 退化为 Editor 单栏占满最大可用 free region，
+/// 其余角色 bounds 为空——由 Rust 判定语义失效，而不是 Android 临时隐藏控件。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkbenchLayoutPlan {
     pub placements: Vec<WorkbenchPlacement>,
+    /// 本次布局语义是否成立（#628 评论 5301021120 问题 3）。
+    ///
+    /// - `true`：七角色正常放置，Editor 拿到 >= `editor_min_width_dp` 的连续可编辑区域。
+    /// - `false`：当前 free regions 在合理最小尺寸下已放不下完整 Workbench，
+    ///   placements 退化为 Editor 占满最大可用 free region（单栏），其余角色 bounds 为空。
+    pub valid: bool,
+}
+
+impl Default for WorkbenchLayoutPlan {
+    fn default() -> Self {
+        // 默认 valid=true：无遮挡的常见场景应正常布局。
+        Self {
+            placements: Vec::new(),
+            valid: true,
+        }
+    }
 }
 
 // ========== 内部推导 ==========
@@ -273,21 +300,27 @@ pub fn resolve_layout(viewport: &WindowViewport) -> super::LayoutContract {
     }
 }
 
-/// 解析工作台布局计划（#628 评论 5301021120 第 1-2 步）。
+/// 解析工作台布局计划（#628 评论 5301021120 第 1-2 步�，问题 2/3）。
 ///
 /// 平台无关纯函数，处理全部 `separating == true` 的遮挡：
 ///
 /// 1. 越界矩形 clamp 到当前 viewport；空矩形丢弃；
 /// 2. 只把 `separating == true` 的区域作为不可跨越分隔；
-/// 3. 按 `left_dp` 排序后切出全部连续可用垂直列；
-/// 4. 根据 [`LayoutMetrics`] 和当前 [`WorkbenchVisibility`] 给七个 [`WorkbenchRole`]
-///    计算最终 [`LayoutRect`] bounds；
-/// 5. 任意 role 的 bounds 都不与 separating occlusion 相交；
-/// 6. Editor 拿到连续可编辑区域，不跨两个物理区域；
-/// 7. 多个 separating feature 同时存在时同样处理，不退化成单 hinge。
+/// 3. 收集 0 / viewport edge / 所有 occlusion edge 形成 X、Y 两组切线；
+/// 4. 用相邻 X/Y 区间形成网格 cell；与任一 separating occlusion 相交的 cell 标记不可用；
+/// 5. 把相邻可用 cell 合并成连续 [`LayoutRect`] 区域（[`compute_free_regions`]）；
+/// 6. 选一个能放下 Workbench 最小需求（`editor_min_width_dp` + 可见 pane min + tool_rail）
+///    的 free region 作为 placement region；
+/// 7. 放不下时 `valid = false`，placements 退化为 Editor 占满最大可用 free region（单栏），
+///    其余角色 bounds 为空——由 Rust 判定语义失效，而不是 Android 临时隐藏控件；
+/// 8. 放得下时 `valid = true`，七角色在该 region 内按 [`LayoutMetrics`] 尺寸排列，
+///    pane 在 preferred 与 min 间压缩（不压到 0 除非 visibility 不可见），
+///    所有 bounds 不与 separating 相交，Editor 连续。
 ///
-/// 无遮挡时退化成普通大屏工作台（整列 = viewport 宽度）。
-/// 有遮挡时只改 bounds，不新增 FoldableScreen/TabletScreen。
+/// 竖直 hinge、横向 hinge、多个横竖混合 hinge 都走同一套二维几何算法，
+/// 不新增 Android/Foldable 分支，也不在 Rust 建 FoldingFeature.orientation 平台枚举。
+///
+/// 无遮挡时退化成普通大屏工作台（free region = 整个 viewport）。
 ///
 /// 角色顺序：Toolbar [Leading][Center][Trailing]，Content [ChapterNavigation][Editor][ToolPane][ToolRail]。
 pub fn resolve_workbench_layout(
@@ -298,241 +331,390 @@ pub fn resolve_workbench_layout(
     let vw = viewport.width_dp.max(0.0);
     let vh = viewport.height_dp.max(0.0);
 
-    let cols = compute_available_columns(&viewport.occlusions, vw);
-    let (col_l, col_r) = select_placement_column(&cols, &metrics, &visibility);
-    let col_w = (col_r - col_l).max(0.0);
+    let free_regions = compute_free_regions(&viewport.occlusions, vw, vh);
 
-    let toolbar_h = 64.0_f32;
-    let content_top = toolbar_h.min(vh);
-    let content_bottom = vh;
+    // Workbench 最小需求宽度 = 可见 pane min + tool_rail + editor_min。
+    let chapter_nav_min_w = if visibility.chapter_navigation_visible {
+        metrics.list_pane_min_width_dp
+    } else {
+        0.0
+    };
+    let tool_pane_min_w = if visibility.tool_pane_visible {
+        metrics.tool_pane_min_width_dp
+    } else {
+        0.0
+    };
+    let workbench_min_w = chapter_nav_min_w
+        + tool_pane_min_w
+        + metrics.tool_rail_width_dp
+        + metrics.editor_min_width_dp;
 
-    let (chapter_nav_bounds, editor_bounds, tool_pane_bounds, tool_rail_bounds) =
-        compute_content_role_bounds(
-            col_l,
-            col_r,
-            col_w,
-            content_top,
-            content_bottom,
-            &metrics,
-            &visibility,
-        );
+    // 选面积最大的、能放下 Workbench 最小需求的 free region。
+    let placement_region = free_regions
+        .iter()
+        .filter(|r| r.width() >= workbench_min_w && r.height() > metrics.toolbar_height_dp)
+        .max_by(|a, b| {
+            let area_a = a.width() * a.height();
+            let area_b = b.width() * b.height();
+            area_a
+                .partial_cmp(&area_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .copied();
 
-    let (toolbar_leading_bounds, toolbar_center_bounds, toolbar_trailing_bounds) =
-        compute_toolbar_role_bounds(col_l, col_r, col_w, toolbar_h, vh);
-
-    WorkbenchLayoutPlan {
-        placements: vec![
-            WorkbenchPlacement {
-                role: WorkbenchRole::ToolbarLeading,
-                bounds: toolbar_leading_bounds,
-            },
-            WorkbenchPlacement {
-                role: WorkbenchRole::ToolbarCenter,
-                bounds: toolbar_center_bounds,
-            },
-            WorkbenchPlacement {
-                role: WorkbenchRole::ToolbarTrailing,
-                bounds: toolbar_trailing_bounds,
-            },
-            WorkbenchPlacement {
-                role: WorkbenchRole::ChapterNavigation,
-                bounds: chapter_nav_bounds,
-            },
-            WorkbenchPlacement {
-                role: WorkbenchRole::Editor,
-                bounds: editor_bounds,
-            },
-            WorkbenchPlacement {
-                role: WorkbenchRole::ToolPane,
-                bounds: tool_pane_bounds,
-            },
-            WorkbenchPlacement {
-                role: WorkbenchRole::ToolRail,
-                bounds: tool_rail_bounds,
-            },
-        ],
+    if let Some(region) = placement_region {
+        let placements = place_workbench_in_region(region, &metrics, &visibility);
+        WorkbenchLayoutPlan {
+            placements,
+            valid: true,
+        }
+    } else {
+        // valid=false：当前 free regions 放不下完整 Workbench，
+        // 退化为 Editor 单栏占最大可用 free region（或整个 viewport）。
+        let largest = free_regions
+            .iter()
+            .max_by(|a, b| {
+                let area_a = a.width() * a.height();
+                let area_b = b.width() * b.height();
+                area_a
+                    .partial_cmp(&area_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .copied()
+            .unwrap_or(LayoutRect {
+                left_dp: 0.0,
+                top_dp: 0.0,
+                right_dp: vw,
+                bottom_dp: vh,
+            });
+        let placements = degrade_to_editor_only(largest);
+        WorkbenchLayoutPlan {
+            placements,
+            valid: false,
+        }
     }
 }
 
-/// 收集 separating occlusion，clamp 到 viewport，丢空，合并重叠/相邻区间，
-/// 切出全部连续可用垂直列（#628 评论 5301021120 第 2 步）。
-fn compute_available_columns(occlusions: &[WindowOcclusion], vw: f32) -> Vec<(f32, f32)> {
-    let mut separating: Vec<(f32, f32)> = occlusions
+/// 计算二维 free regions（#628 评论 5301021120 问题 2）。
+///
+/// 网格 cell 算法：
+/// 1. 把 separating occlusion 的 left/top/right/bottom 全部 clamp 到 viewport，空矩形删除；
+/// 2. 收集 0 / viewport edge / 所有 occlusion edge 形成 X、Y 两组切线（去重 + 排序）；
+/// 3. 用相邻 X/Y 区间形成网格 cell；与任一 separating occlusion 相交的 cell 标记不可用；
+/// 4. 对每个可用 cell，以它为左上角向右扩展到最远，再向下逐行扩展，得到最大矩形；
+/// 5. 去重后返回所有候选 free region。
+///
+/// 竖直 hinge、横向 hinge、多个横竖混合 hinge 都走同一套几何算法。
+/// 检查 row j 的 [i0, i_max) 列是否全部可用。
+fn row_all_usable(usable: &[Vec<bool>], i0: usize, i_max: usize, j: usize) -> bool {
+    usable[i0..i_max].iter().all(|row| row[j])
+}
+
+/// 从 row j0 向下扩展，返回最远的 j_max 使得 [j0, j_max) 每一行 [i0, i_max) 全部可用。
+fn farthest_usable_row_down(
+    usable: &[Vec<bool>],
+    i0: usize,
+    i_max: usize,
+    j0: usize,
+    ny: usize,
+) -> usize {
+    let mut j_max = j0;
+    while j_max < ny && row_all_usable(usable, i0, i_max, j_max) {
+        j_max += 1;
+    }
+    j_max
+}
+
+fn compute_free_regions(occlusions: &[WindowOcclusion], vw: f32, vh: f32) -> Vec<LayoutRect> {
+    // 1. clamp separating occlusions to viewport, drop empty.
+    let separating: Vec<LayoutRect> = occlusions
         .iter()
         .filter(|o| o.separating)
-        .map(|o| {
-            let left = o.left_dp.clamp(0.0, vw);
-            let right = o.right_dp.clamp(0.0, vw);
-            (left, right)
+        .map(|o| LayoutRect {
+            left_dp: o.left_dp.clamp(0.0, vw),
+            top_dp: o.top_dp.clamp(0.0, vh),
+            right_dp: o.right_dp.clamp(0.0, vw),
+            bottom_dp: o.bottom_dp.clamp(0.0, vh),
         })
-        .filter(|(l, r)| *r > *l)
+        .filter(|r| !r.is_empty())
         .collect();
-    separating.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    let mut merged: Vec<(f32, f32)> = Vec::with_capacity(separating.len());
-    for (l, r) in separating {
-        if let Some(last) = merged.last_mut() {
-            if l <= last.1 {
-                last.1 = last.1.max(r);
+
+    // 2. collect X and Y cut lines: 0, viewport edge, all occlusion edges.
+    let mut xs: Vec<f32> = vec![0.0, vw];
+    let mut ys: Vec<f32> = vec![0.0, vh];
+    for r in &separating {
+        xs.push(r.left_dp);
+        xs.push(r.right_dp);
+        ys.push(r.top_dp);
+        ys.push(r.bottom_dp);
+    }
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    xs.dedup();
+    ys.dedup();
+
+    let nx = xs.len().saturating_sub(1);
+    let ny = ys.len().saturating_sub(1);
+
+    // 3. form grid cells; cell (i,j) covers [xs[i],xs[i+1]] x [ys[j],ys[j+1]].
+    //    cell is usable iff it doesn't intersect any separating occlusion.
+    let mut usable: Vec<Vec<bool>> = vec![vec![false; ny]; nx];
+    for i in 0..nx {
+        for j in 0..ny {
+            let cell = LayoutRect {
+                left_dp: xs[i],
+                top_dp: ys[j],
+                right_dp: xs[i + 1],
+                bottom_dp: ys[j + 1],
+            };
+            if cell.is_empty() {
+                usable[i][j] = false;
                 continue;
             }
+            usable[i][j] = !separating.iter().any(|s| cell.intersects(s));
         }
-        merged.push((l, r));
     }
-    let mut cols: Vec<(f32, f32)> = Vec::with_capacity(merged.len() + 1);
-    let mut cursor = 0.0;
-    for (l, r) in &merged {
-        if *l > cursor {
-            cols.push((cursor, *l));
+
+    // 4. for each usable cell, compute maximal rectangle with that cell as top-left:
+    //    extend right to farthest, then extend down row by row (each row must be fully usable).
+    let mut regions: Vec<LayoutRect> = Vec::new();
+    for i0 in 0..nx {
+        for j0 in 0..ny {
+            if !usable[i0][j0] {
+                continue;
+            }
+            // extend right: rightmost i_max such that [i0, i_max) all usable in row j0
+            let mut i_max = i0;
+            while i_max < nx && usable[i_max][j0] {
+                i_max += 1;
+            }
+            // extend down: farthest j_max such that every row in [j0, j_max)
+            // has all cells [i0, i_max) usable
+            let j_max = farthest_usable_row_down(&usable, i0, i_max, j0, ny);
+            regions.push(LayoutRect {
+                left_dp: xs[i0],
+                top_dp: ys[j0],
+                right_dp: xs[i_max],
+                bottom_dp: ys[j_max],
+            });
         }
-        cursor = cursor.max(*r);
     }
-    if cursor < vw {
-        cols.push((cursor, vw));
-    }
-    if cols.is_empty() {
-        cols.push((0.0, 0.0));
-    }
-    cols
-}
 
-/// 选择放置列：第一个宽度足够的可用列；全不够则用第一个列（Editor 仍连续）。
-fn select_placement_column(
-    cols: &[(f32, f32)],
-    metrics: &LayoutMetrics,
-    visibility: &WorkbenchVisibility,
-) -> (f32, f32) {
-    let chapter_nav_w = if visibility.chapter_navigation_visible {
-        metrics.list_pane_width_dp
-    } else {
-        0.0
-    };
-    let tool_pane_w = if visibility.tool_pane_visible {
-        metrics.tool_pane_width_dp
-    } else {
-        0.0
-    };
-    let needed_min = chapter_nav_w + tool_pane_w + metrics.tool_rail_width_dp + 1.0;
-    cols.iter()
-        .copied()
-        .find(|(l, r)| r - l >= needed_min)
-        .unwrap_or(cols[0])
-}
-
-/// 计算 Content 四角色 bounds（在 placement_col 内横向排列）。
-/// 保证 Editor 至少 1dp 连续宽度；空间不够时按比例缩小两侧。
-fn compute_content_role_bounds(
-    col_l: f32,
-    col_r: f32,
-    col_w: f32,
-    content_top: f32,
-    content_bottom: f32,
-    metrics: &LayoutMetrics,
-    visibility: &WorkbenchVisibility,
-) -> (LayoutRect, LayoutRect, LayoutRect, LayoutRect) {
-    let chapter_nav_w_desired = if visibility.chapter_navigation_visible {
-        metrics.list_pane_width_dp
-    } else {
-        0.0
-    };
-    let tool_pane_w_desired = if visibility.tool_pane_visible {
-        metrics.tool_pane_width_dp
-    } else {
-        0.0
-    };
-    let tool_rail_w_desired = metrics.tool_rail_width_dp;
-    let editor_min_w = 1.0_f32;
-    let total_needed =
-        chapter_nav_w_desired + tool_pane_w_desired + tool_rail_w_desired + editor_min_w;
-
-    let (chapter_nav_actual, tool_pane_actual, tool_rail_actual) = if col_w >= total_needed {
-        (
-            chapter_nav_w_desired,
-            tool_pane_w_desired,
-            tool_rail_w_desired,
-        )
-    } else {
-        let side_budget = (col_w - editor_min_w).max(0.0);
-        let total_desired = chapter_nav_w_desired + tool_pane_w_desired + tool_rail_w_desired;
-        if total_desired > 0.0 {
-            let scale = side_budget / total_desired;
-            (
-                chapter_nav_w_desired * scale,
-                tool_pane_w_desired * scale,
-                tool_rail_w_desired * scale,
+    // 5. dedup
+    regions.sort_by(|a, b| {
+        a.left_dp
+            .partial_cmp(&b.left_dp)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                a.top_dp
+                    .partial_cmp(&b.top_dp)
+                    .unwrap_or(std::cmp::Ordering::Equal),
             )
-        } else {
-            (0.0, 0.0, 0.0)
-        }
-    };
+            .then(
+                a.right_dp
+                    .partial_cmp(&b.right_dp)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then(
+                a.bottom_dp
+                    .partial_cmp(&b.bottom_dp)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+    regions.dedup();
 
-    let chapter_nav_right = col_l + chapter_nav_actual;
-    let tool_rail_left = col_r - tool_rail_actual;
-    let tool_pane_left = tool_rail_left - tool_pane_actual;
+    regions
+}
+
+/// 在 placement region 内放置七角色（valid=true 路径）。
+///
+/// toolbar 在顶部 `toolbar_height_dp` 高度，content 在下方横向排列
+/// ChapterNavigation | Editor | ToolPane | ToolRail。
+/// pane 在 preferred 与 min 之间压缩（不压到 0 除非 visibility 不可见）；
+/// Editor 拿剩余宽度（>= `editor_min_width_dp`，由调用方保证 region 足够放下）。
+fn place_workbench_in_region(
+    region: LayoutRect,
+    metrics: &LayoutMetrics,
+    visibility: &WorkbenchVisibility,
+) -> Vec<WorkbenchPlacement> {
+    let region_w = region.width();
+    let region_h = region.height();
+    let toolbar_h = metrics.toolbar_height_dp.min(region_h);
+    let content_top = region.top_dp + toolbar_h;
+    let content_bottom = region.bottom_dp;
+    let toolbar_bottom = region.top_dp + toolbar_h;
+
+    let (chapter_nav_w, tool_pane_w) = compute_content_pane_widths(region_w, metrics, visibility);
+    let tool_rail_w = metrics.tool_rail_width_dp;
+    let chapter_nav_right = region.left_dp + chapter_nav_w;
+    let tool_rail_left = region.right_dp - tool_rail_w;
+    let tool_pane_left = tool_rail_left - tool_pane_w;
     let editor_left = chapter_nav_right;
     let editor_right = tool_pane_left;
 
-    let chapter_nav = LayoutRect {
-        left_dp: col_l,
-        top_dp: content_top,
-        right_dp: chapter_nav_right,
-        bottom_dp: content_bottom,
-    };
-    let editor = LayoutRect {
-        left_dp: editor_left,
-        top_dp: content_top,
-        right_dp: editor_right,
-        bottom_dp: content_bottom,
-    };
-    let tool_pane = LayoutRect {
-        left_dp: tool_pane_left,
-        top_dp: content_top,
-        right_dp: tool_rail_left,
-        bottom_dp: content_bottom,
-    };
-    let tool_rail = LayoutRect {
-        left_dp: tool_rail_left,
-        top_dp: content_top,
-        right_dp: col_r,
-        bottom_dp: content_bottom,
-    };
-    (chapter_nav, editor, tool_pane, tool_rail)
+    let (toolbar_leading_bounds, toolbar_center_bounds, toolbar_trailing_bounds) =
+        compute_toolbar_bounds(region, region_w, metrics, toolbar_bottom);
+
+    vec![
+        WorkbenchPlacement {
+            role: WorkbenchRole::ToolbarLeading,
+            bounds: toolbar_leading_bounds,
+        },
+        WorkbenchPlacement {
+            role: WorkbenchRole::ToolbarCenter,
+            bounds: toolbar_center_bounds,
+        },
+        WorkbenchPlacement {
+            role: WorkbenchRole::ToolbarTrailing,
+            bounds: toolbar_trailing_bounds,
+        },
+        WorkbenchPlacement {
+            role: WorkbenchRole::ChapterNavigation,
+            bounds: LayoutRect {
+                left_dp: region.left_dp,
+                top_dp: content_top,
+                right_dp: chapter_nav_right,
+                bottom_dp: content_bottom,
+            },
+        },
+        WorkbenchPlacement {
+            role: WorkbenchRole::Editor,
+            bounds: LayoutRect {
+                left_dp: editor_left,
+                top_dp: content_top,
+                right_dp: editor_right,
+                bottom_dp: content_bottom,
+            },
+        },
+        WorkbenchPlacement {
+            role: WorkbenchRole::ToolPane,
+            bounds: LayoutRect {
+                left_dp: tool_pane_left,
+                top_dp: content_top,
+                right_dp: tool_rail_left,
+                bottom_dp: content_bottom,
+            },
+        },
+        WorkbenchPlacement {
+            role: WorkbenchRole::ToolRail,
+            bounds: LayoutRect {
+                left_dp: tool_rail_left,
+                top_dp: content_top,
+                right_dp: region.right_dp,
+                bottom_dp: content_bottom,
+            },
+        },
+    ]
 }
 
-/// 计算 Toolbar 三角色 bounds（顶部 toolbar_h 高度，在 placement_col 内横向分配）。
-fn compute_toolbar_role_bounds(
-    col_l: f32,
-    col_r: f32,
-    col_w: f32,
-    toolbar_h: f32,
-    vh: f32,
+/// 计算 content 区域 chapter_nav / tool_pane 的实际宽度（preferred 或压缩到 min）。
+fn compute_content_pane_widths(
+    region_w: f32,
+    metrics: &LayoutMetrics,
+    visibility: &WorkbenchVisibility,
+) -> (f32, f32) {
+    let chapter_nav_preferred = if visibility.chapter_navigation_visible {
+        metrics.list_pane_width_dp
+    } else {
+        0.0
+    };
+    let chapter_nav_min = if visibility.chapter_navigation_visible {
+        metrics.list_pane_min_width_dp
+    } else {
+        0.0
+    };
+    let tool_pane_preferred = if visibility.tool_pane_visible {
+        metrics.tool_pane_width_dp
+    } else {
+        0.0
+    };
+    let tool_pane_min = if visibility.tool_pane_visible {
+        metrics.tool_pane_min_width_dp
+    } else {
+        0.0
+    };
+    let total_preferred = chapter_nav_preferred
+        + tool_pane_preferred
+        + metrics.tool_rail_width_dp
+        + metrics.editor_min_width_dp;
+
+    // 空间够 preferred 时用 preferred；否则压 pane 到 min，editor 拿剩余（>= editor_min_w）。
+    if region_w >= total_preferred {
+        (chapter_nav_preferred, tool_pane_preferred)
+    } else {
+        (chapter_nav_min, tool_pane_min)
+    }
+}
+
+/// 计算 toolbar 三组 bounds（leading/center/trailing）。
+fn compute_toolbar_bounds(
+    region: LayoutRect,
+    region_w: f32,
+    metrics: &LayoutMetrics,
+    toolbar_bottom: f32,
 ) -> (LayoutRect, LayoutRect, LayoutRect) {
-    let toolbar_leading_w = 200.0_f32.min(col_w);
-    let toolbar_trailing_w = 200.0_f32.min((col_w - toolbar_leading_w).max(0.0));
-    let toolbar_leading_right = col_l + toolbar_leading_w;
-    let toolbar_trailing_left = col_r - toolbar_trailing_w;
+    let toolbar_leading_w = metrics.toolbar_leading_width_dp.min(region_w);
+    let toolbar_trailing_w = metrics
+        .toolbar_trailing_width_dp
+        .min((region_w - toolbar_leading_w).max(0.0));
+    let toolbar_leading_right = region.left_dp + toolbar_leading_w;
+    let toolbar_trailing_left = region.right_dp - toolbar_trailing_w;
     let toolbar_center_left = toolbar_leading_right;
     let toolbar_center_right = toolbar_trailing_left.max(toolbar_center_left);
-    let bottom = toolbar_h.min(vh);
 
     let leading = LayoutRect {
-        left_dp: col_l,
-        top_dp: 0.0,
+        left_dp: region.left_dp,
+        top_dp: region.top_dp,
         right_dp: toolbar_leading_right,
-        bottom_dp: bottom,
+        bottom_dp: toolbar_bottom,
     };
     let center = LayoutRect {
         left_dp: toolbar_center_left,
-        top_dp: 0.0,
+        top_dp: region.top_dp,
         right_dp: toolbar_center_right,
-        bottom_dp: bottom,
+        bottom_dp: toolbar_bottom,
     };
     let trailing = LayoutRect {
         left_dp: toolbar_trailing_left,
-        top_dp: 0.0,
-        right_dp: col_r,
-        bottom_dp: bottom,
+        top_dp: region.top_dp,
+        right_dp: region.right_dp,
+        bottom_dp: toolbar_bottom,
     };
     (leading, center, trailing)
+}
+
+/// valid=false 退化：Editor 占满给定 region，其余角色 bounds 为空（#628 评论 5301021120 问题 3）。
+fn degrade_to_editor_only(region: LayoutRect) -> Vec<WorkbenchPlacement> {
+    vec![
+        WorkbenchPlacement {
+            role: WorkbenchRole::ToolbarLeading,
+            bounds: LayoutRect::default(),
+        },
+        WorkbenchPlacement {
+            role: WorkbenchRole::ToolbarCenter,
+            bounds: LayoutRect::default(),
+        },
+        WorkbenchPlacement {
+            role: WorkbenchRole::ToolbarTrailing,
+            bounds: LayoutRect::default(),
+        },
+        WorkbenchPlacement {
+            role: WorkbenchRole::ChapterNavigation,
+            bounds: LayoutRect::default(),
+        },
+        WorkbenchPlacement {
+            role: WorkbenchRole::Editor,
+            bounds: region,
+        },
+        WorkbenchPlacement {
+            role: WorkbenchRole::ToolPane,
+            bounds: LayoutRect::default(),
+        },
+        WorkbenchPlacement {
+            role: WorkbenchRole::ToolRail,
+            bounds: LayoutRect::default(),
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -1109,5 +1291,193 @@ mod tests {
             bottom_dp: 100.0,
         };
         assert!(!non_empty.is_empty());
+    }
+
+    // ── #628 评论 5301021120 问题 2：二维 free-region 三类场景测试 ──
+
+    /// 测试辅助：构造一个 separating 横向铰链（横贯全宽）。
+    fn horizontal_hinge(top: f32, bottom: f32, width: f32) -> WindowOcclusion {
+        WindowOcclusion {
+            left_dp: 0.0,
+            top_dp: top,
+            right_dp: width,
+            bottom_dp: bottom,
+            separating: true,
+        }
+    }
+
+    /// 测试辅助：断言 plan 中 Editor 非空。
+    fn assert_editor_non_empty(plan: &WorkbenchLayoutPlan) -> LayoutRect {
+        let editor = bounds_for(plan, WorkbenchRole::Editor);
+        assert!(
+            editor.width() > 0.0 && editor.height() > 0.0,
+            "Editor 必须非空，实际 = {:?}",
+            editor
+        );
+        editor
+    }
+
+    #[test]
+    fn test_workbench_plan_full_height_vertical_hinge_valid() {
+        // 场景 1：全高竖直 separating hinge。
+        // viewport 2000x1000，hinge [990,1010] 横贯全高。
+        // free regions = [0,990]x[0,1000] + [1010,2000]x[0,1000]，
+        // 两列都宽 990 >= workbench_min_w=696，plan.valid=true，Editor 连续不跨 hinge。
+        let viewport = WindowViewport {
+            width_dp: 2000.0,
+            height_dp: 1000.0,
+            occlusions: vec![vertical_hinge(990.0, 1010.0, 1000.0)],
+        };
+        let plan = resolve_workbench_layout(
+            &viewport,
+            WorkbenchVisibility {
+                chapter_navigation_visible: true,
+                tool_pane_visible: true,
+            },
+        );
+        assert!(plan.valid, "全高竖直 hinge 两侧都够宽，plan 应 valid=true");
+        let editor = assert_editor_non_empty(&plan);
+        // Editor 完全在 hinge 左侧或右侧。
+        assert!(
+            editor.right_dp <= 990.0 || editor.left_dp >= 1010.0,
+            "Editor {:?} 不应跨竖直 hinge [990,1010]",
+            editor
+        );
+        // 所有非空 placement 与 hinge 零相交。
+        assert_no_role_intersects_separating(&plan, &viewport);
+    }
+
+    #[test]
+    fn test_workbench_plan_full_width_horizontal_hinge_valid() {
+        // 场景 2：全宽横向 separating hinge（#628 评论 5301021120 问题 2 核心场景）。
+        // viewport 2000x1000，hinge [0,2000]x[490,510] 横贯全宽。
+        // 旧的一维算法会把 [0,2000] 当整条横向禁区，七角色全塌。
+        // 新二维算法：free regions = [0,2000]x[0,490] + [0,2000]x[510,1000]，
+        // 上下两条都宽 2000 >= 696、高 490 > toolbar_h=64，plan.valid=true。
+        let viewport = WindowViewport {
+            width_dp: 2000.0,
+            height_dp: 1000.0,
+            occlusions: vec![horizontal_hinge(490.0, 510.0, 2000.0)],
+        };
+        let plan = resolve_workbench_layout(
+            &viewport,
+            WorkbenchVisibility {
+                chapter_navigation_visible: true,
+                tool_pane_visible: true,
+            },
+        );
+        assert!(
+            plan.valid,
+            "全宽横向 hinge 上下都够高，plan 应 valid=true，不应七角色全塌"
+        );
+        let editor = assert_editor_non_empty(&plan);
+        // Editor 完全在 hinge 上方或下方。
+        assert!(
+            editor.bottom_dp <= 490.0 || editor.top_dp >= 510.0,
+            "Editor {:?} 不应跨横向 hinge [490,510]",
+            editor
+        );
+        assert_no_role_intersects_separating(&plan, &viewport);
+    }
+
+    #[test]
+    fn test_workbench_plan_vertical_plus_horizontal_hinge_valid() {
+        // 场景 3：一个竖直 + 一个横向 separating occlusion（横竖混合 hinge）。
+        // viewport 2000x2000，vertical hinge [990,1010]x[0,2000]，horizontal hinge [0,2000]x[990,1010]。
+        // free regions = 四个象限 [0,990]x[0,990] / [1010,2000]x[0,990] /
+        // [0,990]x[1010,2000] / [1010,2000]x[1010,2000]，每个 990x990。
+        // 990 >= workbench_min_w=696 且 990 > toolbar_h=64，plan.valid=true。
+        let viewport = WindowViewport {
+            width_dp: 2000.0,
+            height_dp: 2000.0,
+            occlusions: vec![
+                vertical_hinge(990.0, 1010.0, 2000.0),
+                horizontal_hinge(990.0, 1010.0, 2000.0),
+            ],
+        };
+        let plan = resolve_workbench_layout(
+            &viewport,
+            WorkbenchVisibility {
+                chapter_navigation_visible: true,
+                tool_pane_visible: true,
+            },
+        );
+        assert!(
+            plan.valid,
+            "竖直+横向混合 hinge 四象限都够大，plan 应 valid=true"
+        );
+        let editor = assert_editor_non_empty(&plan);
+        // Editor 完全在某个象限内，不跨竖直 hinge 也不跨横向 hinge。
+        assert!(
+            editor.right_dp <= 990.0 || editor.left_dp >= 1010.0,
+            "Editor {:?} 不应跨竖直 hinge [990,1010]",
+            editor
+        );
+        assert!(
+            editor.bottom_dp <= 990.0 || editor.top_dp >= 1010.0,
+            "Editor {:?} 不应跨横向 hinge [990,1010]",
+            editor
+        );
+        assert_no_role_intersects_separating(&plan, &viewport);
+    }
+
+    #[test]
+    fn test_workbench_plan_valid_false_when_free_region_too_small() {
+        // #628 评论 5301021120 问题 3：free region 放不下最小 workbench 时 valid=false。
+        // viewport 600x800 无遮挡，free region = [0,600]x[0,800]，
+        // workbench_min_w = list_pane_min(200) + tool_pane_min(200) + tool_rail(56) + editor_min(240) = 696。
+        // 600 < 696，放不下，valid=false，Editor 占满整个 viewport，其余角色 bounds 为空。
+        let viewport = viewport(600.0, 800.0);
+        let plan = resolve_workbench_layout(
+            &viewport,
+            WorkbenchVisibility {
+                chapter_navigation_visible: true,
+                tool_pane_visible: true,
+            },
+        );
+        assert!(
+            !plan.valid,
+            "600dp 宽放不下 696dp 最小 workbench，应 valid=false"
+        );
+        let editor = bounds_for(&plan, WorkbenchRole::Editor);
+        // Editor 占满整个 viewport（单栏退化）。
+        assert_eq!(editor.left_dp, 0.0);
+        assert_eq!(editor.right_dp, 600.0);
+        assert_eq!(editor.top_dp, 0.0);
+        assert_eq!(editor.bottom_dp, 800.0);
+        // 其余角色 bounds 为空。
+        for p in &plan.placements {
+            if p.role != WorkbenchRole::Editor {
+                assert!(
+                    p.bounds.is_empty(),
+                    "valid=false 时 {:?} bounds 应为空，实际 = {:?}",
+                    p.role,
+                    p.bounds
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_workbench_plan_visibility_false_reduces_min_width() {
+        // visibility 全 false 时 workbench_min_w = 0 + 0 + 56 + 240 = 296，
+        // 600dp 宽能放下，valid=true（对比 test_workbench_plan_valid_false_when_free_region_too_small）。
+        let viewport = viewport(600.0, 800.0);
+        let plan = resolve_workbench_layout(
+            &viewport,
+            WorkbenchVisibility {
+                chapter_navigation_visible: false,
+                tool_pane_visible: false,
+            },
+        );
+        assert!(
+            plan.valid,
+            "visibility 全 false 时 min_w=296，600dp 能放下，应 valid=true"
+        );
+        let editor = bounds_for(&plan, WorkbenchRole::Editor);
+        assert!(
+            editor.width() >= 240.0,
+            "Editor 应 >= editor_min_width_dp=240"
+        );
     }
 }

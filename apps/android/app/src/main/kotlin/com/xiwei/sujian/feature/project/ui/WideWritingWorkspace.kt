@@ -31,7 +31,9 @@ import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutRect
 import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
+import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlanner
 import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchRole
+import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchVisibility
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
 import com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult
@@ -96,15 +98,18 @@ internal data class WideWorkspaceCallbacks(
  * #625 评论项5：rail/pane 收成工具壳。当前无真实工具内容（星图/AI 归 #373/#506），
  * 工具列表为空，pane 显示空态，不放伪功能按钮。
  *
- * @param workbenchPlan Rust 返回的工作台布局计划（七角色 bounds）。
- *   null 时回退到不画（应由上层在 layoutSpec 缺失时不进入 Workbench）。
+ * @param workbenchPlanner presentation/layout 层提供的 workbench layout planner —
+ *   内部捕获当前 WindowViewportDto 与 UniFFI resolver。本组件在拥有真实
+ *   chapterTreeCollapsed/toolPaneCollapsed 处构造 [AndroidWorkbenchVisibility] 并
+ *   只在 planner/visibility 变化时 resolve — 收起左栏/右栏后 Rust 重新给 Editor 更大 bounds。
+ *   plan == null（桥失败）或 plan.valid == false（放不下最小 workbench）时退化为单栏 Editor。
  */
 @Composable
 internal fun WideWritingWorkspace(
     deps: WideWorkspaceDeps,
     documentState: WideWorkspaceDocumentState,
     editorViewModel: EditorViewModel,
-    workbenchPlan: AndroidWorkbenchLayoutPlan?,
+    workbenchPlanner: AndroidWorkbenchLayoutPlanner,
     callbacks: WideWorkspaceCallbacks,
     modifier: Modifier = Modifier,
 ) {
@@ -114,9 +119,28 @@ internal fun WideWritingWorkspace(
     // #625 评论项5：当前选中工具 — rememberSaveable 持有。星图/AI 归 #373/#506。
     var selectedToolId by rememberSaveable { mutableStateOf<String?>(null) }
 
-    if (workbenchPlan == null) {
-        // 防御性：plan 缺失时不画（上层 isWideLayout 时应已确保 plan 非空）。
-        Box(modifier = modifier.fillMaxSize())
+    // #628 评论 5301021120 问题1：在拥有真实收起状态处构造 visibility，只在 planner/visibility
+    // 变化时 resolve — 收起左栏/右栏后 Rust 重新给 Editor 更大 bounds，中央 SujianEditorHost
+    // 仍是同一个实例，只改变测量/放置。窗口变化时 planner 本身随 viewport 更新（由
+    // rememberWorkbenchLayoutPlanner 重建），这里 remember(planner, visibility) 自动重算。
+    val visibility =
+        AndroidWorkbenchVisibility(
+            chapterNavigationVisible = !chapterTreeCollapsed,
+            toolPaneVisible = !toolPaneCollapsed,
+        )
+    val workbenchPlan =
+        remember(workbenchPlanner, visibility) {
+            workbenchPlanner.resolve(visibility)
+        }
+
+    // plan == null（桥失败）或 plan.valid == false（放不下最小 workbench）→ 退化为单栏 Editor。
+    // 这就是"回到 SinglePane"，而不是 Android 临时隐藏控件 — 中央 SujianEditorHost 占满 modifier。
+    if (workbenchPlan == null || !workbenchPlan.valid) {
+        EditorPane(
+            documentState = documentState,
+            onChapterSwitchFailed = callbacks.onChapterSwitchFailed,
+            modifier = modifier.fillMaxSize(),
+        )
         return
     }
     val bounds = WorkbenchBounds.fromPlan(workbenchPlan)

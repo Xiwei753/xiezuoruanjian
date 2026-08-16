@@ -172,6 +172,10 @@ impl From<PrimaryNavigationPlacementDto>
 /// #628 评论第 6 节 / 验收点 4：共用布局尺寸 DTO。
 ///
 /// 把新出现的结构尺寸继续收回 `LayoutMetricsDto`，避免平台端各自硬编码。
+///
+/// #628 评论 5301021120 问题 3：再收回 `editor_min_width_dp` /
+/// `toolbar_height_dp` / `toolbar_leading_width_dp` / `toolbar_trailing_width_dp`
+/// 以及左右 pane 的最小压缩宽度。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutMetricsDto {
@@ -182,16 +186,24 @@ pub struct LayoutMetricsDto {
     pub tool_pane_width_dp: f32,
     /// 工具 rail 宽度，dp。原 Android `56.dp`。
     pub tool_rail_width_dp: f32,
+    /// 正文编辑器最小可编辑宽度，dp（#628 评论 5301021120 问题 3）。
+    pub editor_min_width_dp: f32,
+    /// 工作台顶栏高度，dp。
+    pub toolbar_height_dp: f32,
+    /// 顶栏左组宽度，dp。
+    pub toolbar_leading_width_dp: f32,
+    /// 顶栏右组宽度，dp。
+    pub toolbar_trailing_width_dp: f32,
+    /// 列表栏最小压缩宽度，dp。
+    pub list_pane_min_width_dp: f32,
+    /// 工具面板最小压缩宽度，dp。
+    pub tool_pane_min_width_dp: f32,
 }
 
 impl Default for LayoutMetricsDto {
     fn default() -> Self {
-        Self {
-            list_pane_width_dp: 320.0,
-            project_card_min_width_dp: 180.0,
-            tool_pane_width_dp: 240.0,
-            tool_rail_width_dp: 56.0,
-        }
+        let m = crate::presentation::layout::metrics::LayoutMetrics::default();
+        m.into()
     }
 }
 
@@ -202,6 +214,12 @@ impl From<crate::presentation::layout::metrics::LayoutMetrics> for LayoutMetrics
             project_card_min_width_dp: m.project_card_min_width_dp,
             tool_pane_width_dp: m.tool_pane_width_dp,
             tool_rail_width_dp: m.tool_rail_width_dp,
+            editor_min_width_dp: m.editor_min_width_dp,
+            toolbar_height_dp: m.toolbar_height_dp,
+            toolbar_leading_width_dp: m.toolbar_leading_width_dp,
+            toolbar_trailing_width_dp: m.toolbar_trailing_width_dp,
+            list_pane_min_width_dp: m.list_pane_min_width_dp,
+            tool_pane_min_width_dp: m.tool_pane_min_width_dp,
         }
     }
 }
@@ -213,6 +231,12 @@ impl From<LayoutMetricsDto> for crate::presentation::layout::metrics::LayoutMetr
             project_card_min_width_dp: dto.project_card_min_width_dp,
             tool_pane_width_dp: dto.tool_pane_width_dp,
             tool_rail_width_dp: dto.tool_rail_width_dp,
+            editor_min_width_dp: dto.editor_min_width_dp,
+            toolbar_height_dp: dto.toolbar_height_dp,
+            toolbar_leading_width_dp: dto.toolbar_leading_width_dp,
+            toolbar_trailing_width_dp: dto.toolbar_trailing_width_dp,
+            list_pane_min_width_dp: dto.list_pane_min_width_dp,
+            tool_pane_min_width_dp: dto.tool_pane_min_width_dp,
         }
     }
 }
@@ -465,16 +489,30 @@ impl From<WorkbenchVisibilityDto> for crate::presentation::layout::resolver::Wor
 }
 
 /// 工作台布局计划 DTO — `resolve_workbench_layout` 的输出（#628 评论 5301021120 第 1 步）。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+///
+/// #628 评论 5301021120 问题 3：`valid` 表示本次布局语义是否成立。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkbenchLayoutPlanDto {
     pub placements: Vec<WorkbenchPlacementDto>,
+    /// 本次布局语义是否成立（#628 评论 5301021120 问题 3）。
+    pub valid: bool,
+}
+
+impl Default for WorkbenchLayoutPlanDto {
+    fn default() -> Self {
+        Self {
+            placements: Vec::new(),
+            valid: true,
+        }
+    }
 }
 
 impl From<crate::presentation::layout::resolver::WorkbenchLayoutPlan> for WorkbenchLayoutPlanDto {
     fn from(p: crate::presentation::layout::resolver::WorkbenchLayoutPlan) -> Self {
         Self {
             placements: p.placements.into_iter().map(Into::into).collect(),
+            valid: p.valid,
         }
     }
 }
@@ -483,6 +521,7 @@ impl From<WorkbenchLayoutPlanDto> for crate::presentation::layout::resolver::Wor
     fn from(dto: WorkbenchLayoutPlanDto) -> Self {
         Self {
             placements: dto.placements.into_iter().map(Into::into).collect(),
+            valid: dto.valid,
         }
     }
 }
@@ -618,6 +657,12 @@ mod tests {
             project_card_min_width_dp: 180.0,
             tool_pane_width_dp: 240.0,
             tool_rail_width_dp: 56.0,
+            editor_min_width_dp: 240.0,
+            toolbar_height_dp: 64.0,
+            toolbar_leading_width_dp: 200.0,
+            toolbar_trailing_width_dp: 200.0,
+            list_pane_min_width_dp: 200.0,
+            tool_pane_min_width_dp: 200.0,
         };
         let dto: LayoutMetricsDto = m.into();
         let back: crate::presentation::layout::metrics::LayoutMetrics = dto.into();
@@ -631,6 +676,12 @@ mod tests {
         assert_eq!(dto.project_card_min_width_dp, 180.0);
         assert_eq!(dto.tool_pane_width_dp, 240.0);
         assert_eq!(dto.tool_rail_width_dp, 56.0);
+        assert_eq!(dto.editor_min_width_dp, 240.0);
+        assert_eq!(dto.toolbar_height_dp, 64.0);
+        assert_eq!(dto.toolbar_leading_width_dp, 200.0);
+        assert_eq!(dto.toolbar_trailing_width_dp, 200.0);
+        assert_eq!(dto.list_pane_min_width_dp, 200.0);
+        assert_eq!(dto.tool_pane_min_width_dp, 200.0);
     }
 
     #[test]
@@ -641,6 +692,12 @@ mod tests {
         assert!(json.contains("\"projectCardMinWidthDp\""));
         assert!(json.contains("\"toolPaneWidthDp\""));
         assert!(json.contains("\"toolRailWidthDp\""));
+        assert!(json.contains("\"editorMinWidthDp\""));
+        assert!(json.contains("\"toolbarHeightDp\""));
+        assert!(json.contains("\"toolbarLeadingWidthDp\""));
+        assert!(json.contains("\"toolbarTrailingWidthDp\""));
+        assert!(json.contains("\"listPaneMinWidthDp\""));
+        assert!(json.contains("\"toolPaneMinWidthDp\""));
     }
 
     #[test]
@@ -655,6 +712,12 @@ mod tests {
                 project_card_min_width_dp: 180.0,
                 tool_pane_width_dp: 240.0,
                 tool_rail_width_dp: 56.0,
+                editor_min_width_dp: 240.0,
+                toolbar_height_dp: 64.0,
+                toolbar_leading_width_dp: 200.0,
+                toolbar_trailing_width_dp: 200.0,
+                list_pane_min_width_dp: 200.0,
+                tool_pane_min_width_dp: 200.0,
             },
         };
         let dto: LayoutContractDto = contract.clone().into();
@@ -715,6 +778,12 @@ mod tests {
         assert_eq!(contract_dto.metrics.project_card_min_width_dp, 180.0);
         assert_eq!(contract_dto.metrics.tool_pane_width_dp, 240.0);
         assert_eq!(contract_dto.metrics.tool_rail_width_dp, 56.0);
+        assert_eq!(contract_dto.metrics.editor_min_width_dp, 240.0);
+        assert_eq!(contract_dto.metrics.toolbar_height_dp, 64.0);
+        assert_eq!(contract_dto.metrics.toolbar_leading_width_dp, 200.0);
+        assert_eq!(contract_dto.metrics.toolbar_trailing_width_dp, 200.0);
+        assert_eq!(contract_dto.metrics.list_pane_min_width_dp, 200.0);
+        assert_eq!(contract_dto.metrics.tool_pane_min_width_dp, 200.0);
     }
 
     // ── Workbench Layout Plan DTO 测试（#628 评论 5301021120 第 3 步） ──
@@ -789,14 +858,17 @@ mod tests {
                     bottom_dp: 800.0,
                 },
             }],
+            valid: true,
         };
-        let dto: WorkbenchLayoutPlanDto = plan.into();
+        let dto: WorkbenchLayoutPlanDto = plan.clone().into();
         let back: crate::presentation::layout::resolver::WorkbenchLayoutPlan = dto.into();
+        assert_eq!(back, plan);
         assert_eq!(back.placements.len(), 1);
         assert_eq!(
             back.placements[0].role,
             crate::presentation::layout::resolver::WorkbenchRole::Editor
         );
+        assert!(back.valid);
     }
 
     #[test]

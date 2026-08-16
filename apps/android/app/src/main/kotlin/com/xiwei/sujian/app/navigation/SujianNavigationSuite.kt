@@ -60,7 +60,7 @@ import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.app.presentation.contract.PresentationContractBridge
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.layout.rememberAndroidLayoutSpec
-import com.xiwei.sujian.app.presentation.layout.rememberDefaultWorkbenchLayoutPlan
+import com.xiwei.sujian.app.presentation.layout.rememberWorkbenchLayoutPlanner
 import com.xiwei.sujian.app.presentation.screen.AndroidChromePolicy
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.screen.SujianChromeAction
@@ -285,7 +285,7 @@ private data class SujianNavContext(
     val projectListActions: AndroidWorkspaceActionSpec,
     val projectWorkspaceActions: AndroidWorkspaceActionSpec,
     val layoutSpec: AndroidLayoutSpec,
-    val workbenchPlan: com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan?,
+    val workbenchPlanner: com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlanner,
     val chrome: SujianChromeSpec,
 )
 
@@ -385,7 +385,7 @@ private fun rememberWorksEntry(
             projectListActions = context.projectListActions,
             projectWorkspaceActions = context.projectWorkspaceActions,
             layoutSpec = context.layoutSpec,
-            workbenchPlan = context.workbenchPlan,
+            workbenchPlanner = context.workbenchPlanner,
             chrome = context.chrome,
             onTopLevelSettings = {
                 // 进入设置前先立刻收 IME，再切页面。
@@ -790,7 +790,7 @@ fun SujianNavigationSuite(
     val resolver = PresentationContractBridge.layoutContractResolver(deps.appServiceBridge)
     val workbenchResolver = PresentationContractBridge.workbenchLayoutResolver(deps.appServiceBridge)
     val layoutSpec = rememberAndroidLayoutSpec(foldingFeatures, resolver)
-    val workbenchPlan = rememberDefaultWorkbenchLayoutPlan(layoutSpec.viewport, workbenchResolver)
+    val workbenchPlanner = rememberWorkbenchLayoutPlanner(layoutSpec.viewport, workbenchResolver)
     val (initialTopLevel, initialStackRoutes) = rememberInitialNavStack(initialDestination)
     val topLevelBackStack = rememberSujianTopLevelBackStack(initialTopLevel, initialStackRoutes)
     val backStack = topLevelBackStack.backStack
@@ -841,7 +841,7 @@ fun SujianNavigationSuite(
             projectListActions = projectListActions,
             projectWorkspaceActions = projectWorkspaceActions,
             layoutSpec = layoutSpec,
-            workbenchPlan = workbenchPlan,
+            workbenchPlanner = workbenchPlanner,
             chrome = chrome,
         )
     val navDisplayContent: @Composable () -> Unit = {
