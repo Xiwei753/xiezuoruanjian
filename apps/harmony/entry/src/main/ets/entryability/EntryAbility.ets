@@ -1,6 +1,4 @@
-import UIAbility from '@ohos.app.ability.UIAbility'
-import Want from '@ohos.app.ability.Want'
-import AbilityConstant from '@ohos.app.ability.AbilityConstant'
+import { AbilityConstant, UIAbility, Want, wantConstant } from '@kit.AbilityKit'
 import hilog from '@ohos.hilog'
 import window from '@ohos.window'
 import { HarmonyLifecycle } from '../platform/lifecycle/HarmonyLifecycle'
@@ -88,10 +86,10 @@ export default class EntryAbility extends UIAbility {
   // 返回 AGREE 表示同意接续、REJECT 表示拒绝（无 payload 时）。
   // SUPPORT_CONTINUE_PAGE_STACK_KEY=false：评论明确要求禁用自动页面栈迁移，
   // Navigation 页面栈不能跨设备自动迁移，由 AppNavigation.restoreFromContinuation 手动重建。
-  // 该常量在当前 SDK 中的精确模块路径未确认，用字符串字面量 'SUPPORT_CONTINUE_PAGE_STACK_KEY'。
+  // 用官方 wantConstant.Params.SUPPORT_CONTINUE_PAGE_STACK_KEY 常量，不自己写字符串字面量。
   onContinue(wantParam: Record<string, Object>): AbilityConstant.OnContinueResult {
     hilog.info(0x0000, 'EntryAbility', 'onContinue')
-    wantParam['SUPPORT_CONTINUE_PAGE_STACK_KEY'] = false as Object
+    wantParam[wantConstant.Params.SUPPORT_CONTINUE_PAGE_STACK_KEY] = false as Object
     const payload: ContinuationPayload | null = this.continuationService.getCurrentPayload()
     if (payload !== null) {
       wantParam['continuationData'] = this.continuationService.serializeForWant(payload)

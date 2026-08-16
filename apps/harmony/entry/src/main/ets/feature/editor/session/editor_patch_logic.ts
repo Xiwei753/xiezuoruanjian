@@ -1,9 +1,20 @@
-// editor_patch_logic.ts — 编辑会话 patch 应用的纯逻辑模块。
-// 不依赖 ArkUI，只依赖 string/number/Array。
-// 生产由 EditorSessionState.ets 调用；测试由 Node 单测直接 import。
+// editor_patch_logic.ts — 编辑会话纯逻辑模块。
+// 不依赖 ArkUI，只依赖 string/number/Array/Promise。
+// 生产由 EditorSessionState.ets / EditorSessionCoordinator.ets 调用；
+// 测试由 Node 单测直接 import。
+//
+// 包含三块纯逻辑：
+//   1. UTF-8 byte offset ↔ UTF-16 code unit offset 严格映射（utf8ByteOffsetToUtf16）
+//   2. DisplayPatch 严格应用（applyPatchStrict）+ EditorEditResult → snapshot 增量更新（applyEditResultToSnapshot）
+//   3. 串行命令队列（SerialCommandQueue）— 保证编辑命令按 enqueue 顺序执行，
+//      前一条完成才下一条；每条出队执行时才读当前 state，避免并发命令拿到同一个 expectedRevision。
 //
 // 与 Core api/types/editor.rs 真实契约对齐：字段名严格 camelCase
 // （Core serde rename_all = "camelCase"）。
+//
+// Issue #629 评论 5 第 3 部分：
+//   - applyEditResultToSnapshot 不再用"返回原 snapshot"表达失败，改成明确的 { ok, snapshot, reason } 结果。
+//   - 删除旧 deprecated applyPatch（UTF-8 byte offset 直接当 JS UTF-16 下标的错误实现）。
 
 /** DisplayPatch 形状（与 Core DTO 对齐，camelCase）。 */
 export interface DisplayPatch {
@@ -64,6 +75,17 @@ export const NO_CHANGE = 'noChange'
 export const STALE_REVISION = 'staleRevision'
 export const INVALID_OFFSET = 'invalidOffset'
 export const INVALID_RANGE = 'invalidRange'
+
+/**
+ * applyEditResultToSnapshot 的结果：明确区分成功与失败，不吞失败。
+ * - ok=true：snapshot 是应用 patch 后的新状态
+ * - ok=false：reason 说明失败原因（staleRevision/invalidOffset/invalidRange/patchFailed:.../unknownOutcome:...）
+ *   调用方（EditorSessionState/Coordinator）收到 ok=false 时必须从 Core snapshot() 重建 state，
+ *   不能吞失败让 UI 停在旧文本。
+ */
+export type ApplyEditResultOutcome =
+  | { readonly ok: true; readonly snapshot: EditorSessionSnapshot }
+  | { readonly ok: false; readonly reason: string }
 
 /**
  * UTF-8 byte offset → UTF-16 code unit offset（严格版）。
@@ -151,53 +173,118 @@ export function applyPatchStrict(
 }
 
 /**
- * @deprecated 旧版 applyPatch 直接把 UTF-8 byte offset 当 UTF-16 code unit offset 用，
- * 中文/emoji 会错位。新代码应使用 applyPatchStrict。保留导出以兼容现有调用方。
- * ASCII 文本下 byte offset === utf16 offset，结果与 applyPatchStrict 一致。
- */
-export function applyPatch(text: string, patch: DisplayPatch): string {
-  const before: string = text.substring(0, patch.replaceByteStart)
-  const after: string = text.substring(patch.replaceByteEndExclusive)
-  return before + patch.insertedText + after
-}
-
-/**
  * 从 EditorEditResult 增量更新 snapshot。
- * outcome 为 staleRevision/invalidOffset/invalidRange 时不更新（返回原 snapshot）。
- * 应用 displayPatches 到 text，更新 revision/cursor/selectionAnchor/generation。
+ *
+ * 成功返回 { ok: true, snapshot }；失败返回 { ok: false, reason }，reason 明确说明失败原因。
+ * 失败情况：
+ *   - outcome 为 staleRevision → reason = 'staleRevision'
+ *   - outcome 为 invalidOffset → reason = 'invalidOffset'
+ *   - outcome 为 invalidRange → reason = 'invalidRange'
+ *   - outcome 为未知值 → reason = 'unknownOutcome:<value>'
+ *   - patch 应用失败（非字符边界或越界）→ reason = 'patchFailed:<details>'
+ *
+ * 调用方（EditorSessionState/Coordinator）收到 ok=false 时必须从 Core snapshot() 重建 state，
+ * 不能吞失败让 UI 停在旧文本。
+ *
+ * 多个 DisplayPatch 按顺序应用，每个 patch 都针对当时的当前文本转换 offset。
  * compositionSession 非空时取其 generation；为空时保留原 snapshot.generation
  * （finishComposition 后 compositionSession=null，generation 不重置）。
- *
- * patch 应用失败（非字符边界或越界）时返回原 snapshot，
- * 让上层（EditorSessionState/Coordinator）检测到 text 未变化后从 Core snapshot() 恢复。
- * 多个 DisplayPatch 按顺序应用，每个 patch 都针对当时的当前文本转换 offset。
  */
 export function applyEditResultToSnapshot(
   snapshot: EditorSessionSnapshot,
   result: EditorEditResult
-): EditorSessionSnapshot {
+): ApplyEditResultOutcome {
+  if (result.outcome === STALE_REVISION) {
+    return { ok: false, reason: STALE_REVISION }
+  }
+  if (result.outcome === INVALID_OFFSET) {
+    return { ok: false, reason: INVALID_OFFSET }
+  }
+  if (result.outcome === INVALID_RANGE) {
+    return { ok: false, reason: INVALID_RANGE }
+  }
   if (result.outcome !== APPLIED
     && result.outcome !== APPLIED_WITH_ADJUSTED_SELECTION
     && result.outcome !== NO_CHANGE) {
-    return snapshot
+    return { ok: false, reason: `unknownOutcome:${result.outcome}` }
   }
   let newText: string = snapshot.text
   const patches: DisplayPatch[] = result.displayPatches ?? []
   for (let i = 0; i < patches.length; i++) {
     const applied = applyPatchStrict(newText, patches[i])
     if (!applied.ok) {
-      // patch 应用失败（非字符边界或越界）：返回原 snapshot，
-      // 让上层从 Core snapshot() 恢复，不静默截断。
-      return snapshot
+      return { ok: false, reason: `patchFailed:${applied.reason}` }
     }
     newText = applied.text
   }
   return {
-    text: newText,
-    revision: result.newRevision,
-    cursor: result.newSelectionEnd,
-    selectionAnchor: result.newSelectionStart,
-    generation: result.compositionSession ? result.compositionSession.generation : snapshot.generation,
-    chapterId: snapshot.chapterId
+    ok: true,
+    snapshot: {
+      text: newText,
+      revision: result.newRevision,
+      cursor: result.newSelectionEnd,
+      selectionAnchor: result.newSelectionStart,
+      generation: result.compositionSession ? result.compositionSession.generation : snapshot.generation,
+      chapterId: snapshot.chapterId
+    }
+  }
+}
+
+// ─── 串行命令队列 ─────────────────────────────────────────────────────────────
+// 编辑命令必须严格按 enqueue 顺序执行：前一条完成（state 更新）后，下一条才能开始。
+// 每条命令在出队执行时才读取当前 state（revision），避免多条并发命令拿到同一个 expectedRevision。
+// 这把"平台输入事件有序 → Core 命令有序"固定成编辑器边界。
+//
+// 实现用链式 Promise：tail 是上一条命令完成（无论成功失败）后才 resolve 的 Promise。
+// 新 enqueue 的命令 .then 在 tail 上，保证顺序；thunk 自身的 reject 传给调用方，
+// 但 tail 永远不 reject（加了两个 handler），所以一条失败不阻塞后续。
+//
+// 纯逻辑（不依赖 ArkUI），可由 Node --experimental-strip-types 直接 import 单测。
+
+export interface QueueStats {
+  readonly pending: number
+  readonly running: boolean
+}
+
+export class SerialCommandQueue {
+  private tail: Promise<void> = Promise.resolve()
+  private pendingCount: number = 0
+  private activeCount: number = 0
+
+  /**
+   * 把一个异步命令 thunk 排入队列。
+   * thunk 必须在出队执行时才读取当前 state（调用方在 thunk 闭包内读 this.state.snapshot.revision）。
+   * 返回的 Promise 在 thunk 完成时 resolve/reject，与 thunk 的结果一致。
+   */
+  enqueue<T>(thunk: () => Promise<T>): Promise<T> {
+    this.pendingCount++
+    // 链式：等前一条完成（无论成功失败）后才执行当前 thunk
+    const result: Promise<T> = this.tail.then(() => {
+      this.pendingCount--
+      this.activeCount++
+      return thunk()
+    })
+    // 更新 tail：当前 thunk 完成后（无论成功失败）才让下一条开始。
+    // tail 永远不 reject（两个 handler 都返回 void），避免一条失败阻塞后续。
+    this.tail = result.then(
+      () => { this.activeCount-- },
+      () => { this.activeCount-- }
+    )
+    return result
+  }
+
+  /** 当前排队中（未开始）的命令数。 */
+  size(): number {
+    return this.pendingCount
+  }
+
+  /** 是否有命令正在执行或排队。 */
+  isIdle(): boolean {
+    return this.pendingCount === 0 && this.activeCount === 0
+  }
+
+  /** 队列状态快照（用于测试断言）。 */
+  stats(): QueueStats {
+    return { pending: this.pendingCount, running: this.activeCount > 0 }
   }
 }

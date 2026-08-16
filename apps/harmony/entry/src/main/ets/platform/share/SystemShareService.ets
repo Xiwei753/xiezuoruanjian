@@ -22,6 +22,8 @@ export class SystemShareService {
 
   // UIAbilityContext，由 AppContext 注入。无 context 时 share 返回 false，不假装成功。
   private abilityContext: common.UIAbilityContext | null = null
+  // 系统分享能力缓存：share() 成功过一次即置 true。CapabilityRegistry 从此读，不自己探测 Share Kit API。
+  private supported: boolean = false
 
   static getInstance(): SystemShareService {
     if (!SystemShareService.instance) {
@@ -34,6 +36,11 @@ export class SystemShareService {
   // 不持有 Activity/Window 引用以外的平台状态；context 仅用于 controller.show()。
   setAbilityContext(context: common.UIAbilityContext): void {
     this.abilityContext = context
+  }
+
+  // 系统分享能力：share() 成功过即 true。CapabilityRegistry 汇总时读此方法。
+  isSupported(): boolean {
+    return this.supported
   }
 
   // 系统分享入口：构造 SharedData → 创建 ShareController → controller.show(context)。
@@ -53,6 +60,7 @@ export class SystemShareService {
     try {
       const controller: systemShare.ShareController = new systemShare.ShareController(sharedData)
       await controller.show(this.abilityContext)
+      this.supported = true
       return true
     } catch (e) {
       // 系统分享失败；返回真实失败。

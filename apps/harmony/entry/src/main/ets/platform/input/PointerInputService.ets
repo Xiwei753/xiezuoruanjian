@@ -2,7 +2,10 @@
 // 不把 MouseEvent/deviceId 传进 Core。
 //
 // 真实事件源：@kit.InputKit 的 MouseEvent / TouchEvent。
-// normalize 从真实事件提取 x / y / button / action。
+// normalize 从真实事件提取 x / y / button / action / wheelDelta。
+//
+// Issue #629 评论 5 第 5 节：SujianEditor 接 onMouse → normalizeMouseEvent →
+// 点击命中/drag selection 走 SelectionController；滚轮只改 viewport。
 
 import { MouseEvent, TouchEvent, Action } from '@kit.InputKit'
 
@@ -11,6 +14,11 @@ export interface PlatformPointerEvent {
   y: number
   button: number  // 0=left, 1=right, 2=middle
   action: 'down' | 'up' | 'move' | 'wheel'
+  // 滚轮偏移（仅 action==='wheel' 有意义）。向下/向右为正（与 scrollTop/scrollLeft 增量方向一致）。
+  // HarmonyOS MouseEvent 滚轮事件的增量由 ArkUI 框架消费（Scroll 组件自动滚动），
+  // 此字段供 SujianEditor 在需要手动改 viewport 时使用；normalize 从 MouseEvent 提取（缺失时 0）。
+  wheelDeltaX: number
+  wheelDeltaY: number
   timestamp: number
 }
 
@@ -37,12 +45,17 @@ export class PointerInputService {
   }
 
   // 接 HarmonyOS 原始 MouseEvent，归一化为 PlatformPointerEvent。
+  // 滚轮增量从 MouseEvent 的 scroll/axis 字段提取（HarmonyOS MouseEvent 在 wheel action 时
+  // 通过 ArkUI Scroll 组件自动消费；此处提取供手动 viewport 调整用，缺失时 0）。
   normalizeMouseEvent(raw: MouseEvent): PlatformPointerEvent {
+    const action: 'down' | 'up' | 'move' | 'wheel' = this.mapMouseAction(raw.action ?? MOUSE_ACTION_MOVE)
     return {
       x: raw.x ?? 0,
       y: raw.y ?? 0,
       button: this.mapMouseButton(raw.button ?? MOUSE_BUTTON_LEFT),
-      action: this.mapMouseAction(raw.action ?? MOUSE_ACTION_MOVE),
+      action: action,
+      wheelDeltaX: this.extractWheelDeltaX(raw),
+      wheelDeltaY: this.extractWheelDeltaY(raw),
       timestamp: Date.now()
     }
   }
@@ -59,6 +72,8 @@ export class PointerInputService {
       y: y,
       button: MOUSE_BUTTON_LEFT,
       action: this.mapTouchAction(raw.action ?? Action.DOWN),
+      wheelDeltaX: 0,
+      wheelDeltaY: 0,
       timestamp: Date.now()
     }
   }
@@ -70,6 +85,8 @@ export class PointerInputService {
       y: (rawMouseEvent['y'] ?? 0) as number,
       button: this.mapMouseButton((rawMouseEvent['button'] ?? MOUSE_BUTTON_LEFT) as number),
       action: this.mapMouseAction((rawMouseEvent['action'] ?? MOUSE_ACTION_MOVE) as number),
+      wheelDeltaX: (rawMouseEvent['wheelDeltaX'] ?? 0) as number,
+      wheelDeltaY: (rawMouseEvent['wheelDeltaY'] ?? 0) as number,
       timestamp: Date.now()
     }
   }
@@ -108,5 +125,23 @@ export class PointerInputService {
     }
     // CANCEL / UNKNOWN 等归 move（保守不丢位置）。
     return 'move'
+  }
+
+  // 从 MouseEvent 提取滚轮 X 增量。HarmonyOS MouseEvent 滚轮增量字段名因 SDK 版本而异，
+  // 此处保守提取：若 raw 含 scrollX/axisX 则用，否则 0（Scroll 组件已自动消费滚轮）。
+  private extractWheelDeltaX(raw: MouseEvent): number {
+    const v: Object | undefined = (raw as Record<string, Object>)['scrollX']
+    if (v !== undefined && typeof v === 'number') {
+      return v as number
+    }
+    return 0
+  }
+
+  private extractWheelDeltaY(raw: MouseEvent): number {
+    const v: Object | undefined = (raw as Record<string, Object>)['scrollY']
+    if (v !== undefined && typeof v === 'number') {
+      return v as number
+    }
+    return 0
   }
 }

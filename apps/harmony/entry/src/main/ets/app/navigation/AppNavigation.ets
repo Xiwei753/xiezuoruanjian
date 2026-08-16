@@ -71,7 +71,7 @@ export class AppNavigationHost {
 @Component
 export struct AppNavigation {
   @Provide('navPathStack') navPathStack: NavPathStack = new NavPathStack()
-  // 当前接续恢复的编辑器状态（selection/cursor/viewport/revision），供页面层主动读取。
+  // 当前接续恢复的编辑器状态（selection/cursor/viewport/contentHash），供页面层主动读取。
   @State continuationPayload: ContinuationPayload | null = null
 
   aboutToAppear(): void {
@@ -107,7 +107,7 @@ export struct AppNavigation {
     }
 
     if (hasChapter && hasProject && hasVolume) {
-      // 携带 selection/cursor/viewport/revision 到 WritingScreen 入口。
+      // 携带 selection/cursor/viewport/contentHash 到 WritingScreen 入口。
       // WritingRouteParams 正式声明这些可选字段，不再用 Record<string,Object> 偷塞。
       const wParam: WritingRouteParams = {
         chapterId: payload.chapterId as string,
@@ -124,8 +124,8 @@ export struct AppNavigation {
       if (payload.viewport !== undefined) {
         wParam.viewport = payload.viewport
       }
-      if (payload.revision !== undefined) {
-        wParam.revision = payload.revision
+      if (payload.contentHash !== undefined) {
+        wParam.contentHash = payload.contentHash
       }
       this.navPathStack.pushPath({ name: Routes.Writing, param: wParam })
     }

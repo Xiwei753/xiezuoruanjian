@@ -4,6 +4,11 @@
 // 真实事件源：@kit.InputKit 的 KeyEvent。normalize 从真实 KeyEvent 提取
 // keyCode / keyText / isShiftPressed / isCtrlPressed / isAltPressed。
 // translateKeyCode 用真实 keyCode 映射成可读 keyText，不是 String(keyCode)。
+//
+// Issue #629 评论 5 第 5 节：toSemanticCommand 把归一化后的 PlatformKeyEvent 翻译成
+// 编辑器语义命令（character/Enter/Backspace/Delete/方向/Home/End 等）。
+// SujianEditor 接 ArkUI onKeyEvent → normalize → toSemanticCommand → 调
+// EditorInputAdapter/SelectionController。原始 KeyEvent 不进 Rust。
 
 import { KeyEvent } from '@kit.InputKit'
 
@@ -15,6 +20,32 @@ export interface PlatformKeyEvent {
   isAltPressed: boolean
   timestamp: number
 }
+
+// 语义命令：编辑器输入语义。原始 KeyEvent 不进 Rust，由 SujianEditor 转成语义命令后
+// 调 EditorInputAdapter/SelectionController。
+// - character: 可打印字符（含空格），text 是 UTF-16 字符串（可能多 code unit，如 emoji）
+// - enter: 回车/换行
+// - backspace: 退格删除（光标前）
+// - delete: 向前删除（光标后）
+// - arrowLeft/arrowRight/arrowUp/arrowDown: 方向键，extend=true 表示 shift+方向键扩展选区
+// - home/end: 行首/行末，extend=true 表示 shift+Home/End 扩展选区
+// - tab: 制表符（这轮当字符插入，不做焦点切换）
+// - escape: ESC（这轮忽略，不做取消/退出）
+// - ignore: 修饰键单独按下、Ctrl/Alt 组合、无法识别的键 — SujianEditor 不转发
+export type SemanticKeyCommand =
+  | { kind: 'character'; text: string }
+  | { kind: 'enter' }
+  | { kind: 'backspace' }
+  | { kind: 'delete' }
+  | { kind: 'arrowLeft'; extend: boolean }
+  | { kind: 'arrowRight'; extend: boolean }
+  | { kind: 'arrowUp'; extend: boolean }
+  | { kind: 'arrowDown'; extend: boolean }
+  | { kind: 'home'; extend: boolean }
+  | { kind: 'end'; extend: boolean }
+  | { kind: 'tab' }
+  | { kind: 'escape' }
+  | { kind: 'ignore' }
 
 // HarmonyOS KeyCode 常量（@ohos.multimodalInput.KeyCode 节选）。
 // 完整列表由系统提供；这里覆盖编辑器常用键。
@@ -88,5 +119,57 @@ export class KeyboardInputService {
       isAltPressed: rawKeyEvent.isAltPressed ?? false,
       timestamp: Date.now()
     }
+  }
+
+  // 把归一化后的 PlatformKeyEvent 翻译成语义命令。
+  // isShiftPressed 决定方向键/Home/End 是否扩展选区（shift+方向键）。
+  // 控制键组合（Ctrl/Cmd + 字符）这轮先忽略，不做快捷键绑定
+  // （Ctrl+C/V/X 等由 IME/系统剪贴板处理，Backspace/Delete 已有专门语义命令）。
+  // 修饰键单独按下（Shift/Ctrl/Alt）返回 ignore。
+  toSemanticCommand(ev: PlatformKeyEvent): SemanticKeyCommand {
+    const extend: boolean = ev.isShiftPressed
+    // Ctrl/Alt 组合这轮不处理（Ctrl+X/C/V 等由系统/IME 处理）。
+    if (ev.isCtrlPressed || ev.isAltPressed) {
+      return { kind: 'ignore' }
+    }
+    switch (ev.keyCode) {
+      case KEYCODE_ENTER:
+        return { kind: 'enter' }
+      case KEYCODE_BACKSPACE:
+        return { kind: 'backspace' }
+      case KEYCODE_DELETE:
+        return { kind: 'delete' }
+      case KEYCODE_TAB:
+        return { kind: 'tab' }
+      case KEYCODE_ESCAPE:
+        return { kind: 'escape' }
+      case KEYCODE_DPAD_LEFT:
+        return { kind: 'arrowLeft', extend: extend }
+      case KEYCODE_DPAD_RIGHT:
+        return { kind: 'arrowRight', extend: extend }
+      case KEYCODE_DPAD_UP:
+        return { kind: 'arrowUp', extend: extend }
+      case KEYCODE_DPAD_DOWN:
+        return { kind: 'arrowDown', extend: extend }
+      case KEYCODE_HOME:
+        return { kind: 'home', extend: extend }
+      case KEYCODE_END:
+        return { kind: 'end', extend: extend }
+      case KEYCODE_SHIFT_LEFT:
+      case KEYCODE_SHIFT_RIGHT:
+      case KEYCODE_CTRL_LEFT:
+      case KEYCODE_CTRL_RIGHT:
+      case KEYCODE_ALT_LEFT:
+      case KEYCODE_ALT_RIGHT:
+        return { kind: 'ignore' }
+      default:
+        break
+    }
+    // 字符键：keyText 非空且不是 `key:xxx` 回退形式。
+    // Space（keyCode 2012）的 keyText 是 ' '（translateKeyCode 映射）。
+    if (ev.keyText.length > 0 && !ev.keyText.startsWith('key:')) {
+      return { kind: 'character', text: ev.keyText }
+    }
+    return { kind: 'ignore' }
   }
 }

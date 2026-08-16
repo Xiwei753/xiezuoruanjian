@@ -6,6 +6,8 @@ import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { HarmonyShareService } from '../../../platform/share/HarmonyShareService'
+import { SharePayload } from '../../../platform/share/SharePayload'
 
 interface SelectOption {
   value: string
@@ -58,6 +60,9 @@ export struct StarMapScreen {
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
 
+  // 分享服务（碰一碰/隔空传送/系统分享统一入口）。
+  private shareService: HarmonyShareService = HarmonyShareService.getInstance()
+
   aboutToAppear() {
     const paramsArr = this.navPathStack.getParamByName(Routes.StarMap) as StarMapRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
@@ -87,6 +92,11 @@ export struct StarMapScreen {
 
     // 启动动画定时器
     this.startMotionTimer()
+
+    // 进入前台：注册碰一碰/隔空传送分享生命周期。
+    // payload 携带当前星图信息（title + graph 摘要）；graph 加载完成后 update 补全。
+    // fire-and-forget；内部吞错，不假装成功。
+    void this.startShareLifecycle()
   }
 
   aboutToDisappear() {
@@ -101,6 +111,10 @@ export struct StarMapScreen {
       clearInterval(this.motionTimer)
       this.motionTimer = -1
     }
+
+    // 离开页面：成对 stop 碰一碰/隔空传送分享生命周期，并清空 payload。
+    // fire-and-forget；内部吞错。
+    void this.stopShareLifecycle()
   }
 
   async loadStarMap() {
@@ -147,6 +161,9 @@ export struct StarMapScreen {
     } finally {
       this.isLoading = false
     }
+
+    // 内容加载完成：update 碰一碰/隔空传送 payload（携带完整 graph 摘要）。
+    this.updateSharePayload()
   }
 
   async loadAllStarMaps() {
@@ -222,6 +239,95 @@ export struct StarMapScreen {
   selectNode(nodeId: string) {
     this.selectedNodeId = nodeId
     this.selectedNode = this.graph?.nodes.find(n => n.id === nodeId) || null
+  }
+
+  // —— 分享生命周期（Issue #629 评论5 第7部分）——
+  // 由星图页拥有生命周期：进入前台 start、内容变化 update、离开/退后台 stop。
+  // 碰一碰/隔空传送走生命周期接口；普通系统分享按钮只走 share(payload, 'system')。
+
+  // 构造当前星图的分享 payload。
+  // payload 携带星图标题 + 节点/关系摘要 + 节点名列表（前 20 个）。
+  buildSharePayload(): SharePayload {
+    const title: string = this.starmapTitle
+    let text: string = ''
+    if (this.graph !== null) {
+      const nodeCount: number = this.graph.nodes.length
+      const edgeCount: number = this.graph.edges.length
+      const nodeNames: string[] = []
+      for (let i = 0; i < this.graph.nodes.length; i++) {
+        const node: StarMapNode = this.graph.nodes[i]
+        if (node.title.length > 0) {
+          nodeNames.push(node.title)
+          if (nodeNames.length >= 20) {
+            break
+          }
+        }
+      }
+      text = `\u661f\u56fe\uff1a${title}\n\u8282\u70b9 ${nodeCount} / \u5173\u7cfb ${edgeCount}`
+      if (nodeNames.length > 0) {
+        text = text + '\n' + nodeNames.join('\u3001')
+      }
+    } else {
+      if (title.length > 0) {
+        text = `\u661f\u56fe\uff1a${title}`
+      }
+    }
+    const payload: SharePayload = {
+      kind: 'text',
+      text: text
+    }
+    if (title.length > 0) {
+      payload.title = title
+    }
+    return payload
+  }
+
+  // 进入前台：注册碰一碰 + 隔空传送分享生命周期。
+  // startTapSharing 同步返回真实注册结果；startAirTransferSharing 异步返回真实注册结果。
+  // 失败不抛、不假装成功。
+  async startShareLifecycle(): Promise<void> {
+    const payload: SharePayload = this.buildSharePayload()
+    try {
+      this.shareService.startTapSharing(payload)
+    } catch (e) {
+      // tap start 失败；忽略，不假装成功。
+    }
+    try {
+      await this.shareService.startAirTransferSharing(payload)
+    } catch (e) {
+      // airTransfer start 失败；忽略，不假装成功。
+    }
+  }
+
+  // 内容变化：update 碰一碰 + 隔空传送 payload（不重新 start）。
+  updateSharePayload(): void {
+    const payload: SharePayload = this.buildSharePayload()
+    try {
+      this.shareService.updateTapPayload(payload)
+      this.shareService.updateAirTransferPayload(payload)
+    } catch (e) {
+      // update 失败；忽略。
+    }
+  }
+
+  // 离开页面/退后台：成对 stop 碰一碰 + 隔空传送，并清空 payload 避免悬空。
+  async stopShareLifecycle(): Promise<void> {
+    try {
+      this.shareService.stopTapSharing()
+    } catch (e) {
+      // 忽略。
+    }
+    try {
+      await this.shareService.stopAirTransferSharing()
+    } catch (e) {
+      // 忽略。
+    }
+    try {
+      this.shareService.updateTapPayload(null)
+      this.shareService.updateAirTransferPayload(null)
+    } catch (e) {
+      // 忽略。
+    }
   }
 
   /**
@@ -367,6 +473,19 @@ export struct StarMapScreen {
               this.zoomScale = 1
               this.offsetX = 0
               this.offsetY = 0
+            })
+
+          // 普通"系统分享"按钮：只走 HarmonyShareService.share(payload, 'system')。
+          // 碰一碰/隔空传送走生命周期接口，不在此按钮混用。
+          Button('\u5206\u4eab')
+            .fontSize(12)
+            .height(36)
+            .backgroundColor(this.themeConfig.colors.surface)
+            .fontColor(this.themeConfig.colors.textPrimary)
+            .margin({ left: 8 })
+            .onClick(() => {
+              const payload: SharePayload = this.buildSharePayload()
+              void this.shareService.share(payload, 'system')
             })
         }
       }

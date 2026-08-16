@@ -30,6 +30,8 @@ export class TapShareService {
   private knockCallback: ((target: harmonyShare.SharableTarget) => void) | null = null
   // 是否已 start（避免重复注册 / 未注册就 stop）。
   private listening: boolean = false
+  // 碰一碰能力缓存：start() 注册成功即 true。CapabilityRegistry 从此读。
+  private supported: boolean = false
 
   static getInstance(): TapShareService {
     if (!TapShareService.instance) {
@@ -38,14 +40,20 @@ export class TapShareService {
     return TapShareService.instance
   }
 
+  // 碰一碰能力：start() 注册成功过即 true。CapabilityRegistry 汇总时读此方法。
+  isSupported(): boolean {
+    return this.supported
+  }
+
   // 进入可分享页面/状态时调用：注册 harmonyShare.on('knockShare', ...)。
   // 系统碰一碰事件触发时，callback 拿到 SharableTarget，用 currentPayload 构造 SharedData 并 share。
   // 若当前 payload 为空，callback 内跳过（不假装成功）。
-  // 重复 start 是幂等的：已 listening 时直接返回，不重复注册。
-  start(): void {
+  // 重复 start 是幂等的：已 listening 时直接返回 true，不重复注册。
+  // 返回 boolean 真实反映注册结果（Issue #629 评论5 第7部分）：成功 true，失败 false。
+  start(): boolean {
     if (this.listening) {
-      // 已在监听；不重复注册，避免泄漏。
-      return
+      // 已在监听；不重复注册，避免泄漏。返回当前真实 listening 状态。
+      return true
     }
     const cb = (target: harmonyShare.SharableTarget): void => {
       const payload: SharePayload | null = this.currentPayload
@@ -68,10 +76,14 @@ export class TapShareService {
     try {
       harmonyShare.on('knockShare', cb)
       this.listening = true
+      this.supported = true
+      return true
     } catch (e) {
-      // 注册失败；清空 callback 引用，不假装 listening。
+      // 注册失败；清空 callback 引用，不假装 listening/supported。
       this.knockCallback = null
       this.listening = false
+      this.supported = false
+      return false
     }
   }
 

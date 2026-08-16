@@ -1,13 +1,20 @@
 // continuation_restore_logic.test.mjs — 接续编辑器状态恢复的纯逻辑单测。
 //
-// 验证 Issue #629 评论 5306513458 问题4 的核心行为：
+// 验证 Issue #629 评论 5 第 8 节的核心行为：
 //   1. WritingRouteParams 正式字段传递（不用 Record 偷塞）— 结构性检查
-//   2. revision 不匹配时不强套旧 offset（安全恢复）
-//   3. revision 匹配时 selection/cursor 正确恢复（UTF-16→UTF-8 转换）
+//   2. contentHash 不匹配时不强套旧 offset（安全恢复）
+//   3. contentHash 匹配时 selection/cursor 正确恢复（UTF-16→UTF-8 转换）
 //   4. selection 优先于 cursor
 //   5. updateCurrentState 持续写入（UTF-8→UTF-16 转换）
 //   6. offset 转换 round-trip 正确性（含多字节字符）
-//   7. viewport 透传到 UI，不参与 revision 校验
+//   7. viewport 透传到 UI，不参与 contentHash 校验
+//
+// Issue #629 评论 5 第 8 节：跨设备内容身份用 contentHash（稳定内容哈希），
+// 不用 TextEditSession.revision。Rust TextEditSession::with_text() 每次新建会话 revision
+// 都是 EditorRevision::initial()，目标设备重新打开章节后拿到的是新会话 revision，
+// 跟源设备 session revision 没有跨设备比较意义。contentHash 来自：
+//   - 加载章节时：ChapterContent.meta.hash
+//   - 保存成功后：ChapterSaveReceipt.contentHash
 //
 // 运行：node continuation_restore_logic.test.mjs
 //
@@ -61,7 +68,7 @@ function utf8ToUtf16(text, utf8Offset) {
   return utf16Index
 }
 
-// ContinuationPayload 形状
+// ContinuationPayload 形状（contentHash 替代 revision）
 function makePayload(overrides) {
   return {
     projectId: undefined,
@@ -70,16 +77,16 @@ function makePayload(overrides) {
     selection: undefined,
     cursor: undefined,
     viewport: undefined,
-    revision: undefined,
+    contentHash: undefined,
     ...overrides,
   }
 }
 
-// Core snapshot 形状（cursor/selectionAnchor 是 UTF-8 byte offset）
+// Core snapshot 形状（cursor/selectionAnchor 是 UTF-8 byte offset；contentHash 是稳定内容哈希）
 function makeSnapshot(overrides) {
   return {
     text: '',
-    revision: 1,
+    contentHash: 'hash-1',
     cursor: 0,
     selectionAnchor: 0,
     ...overrides,
@@ -87,6 +94,7 @@ function makeSnapshot(overrides) {
 }
 
 // ── decideRestoration：恢复决策（与 WritingScreen.restoreContinuationEditorState 对齐）──
+// contentHash 匹配时恢复 selection/cursor；不匹配时安全恢复（不强套旧 offset）。
 function decideRestoration(snap, params) {
   const defaultResult = {
     shouldRestoreSelection: false,
@@ -97,9 +105,10 @@ function decideRestoration(snap, params) {
   }
   if (params === null) return defaultResult
 
-  const revisionMatches =
-    params.revision === undefined || params.revision === snap.revision
-  if (!revisionMatches) return defaultResult
+  // contentHash 校验：undefined 时视为匹配（兼容旧 payload）；否则必须严格相等。
+  const contentHashMatches =
+    params.contentHash === undefined || params.contentHash === snap.contentHash
+  if (!contentHashMatches) return defaultResult
 
   if (params.selection !== undefined && params.selection.length >= 2) {
     return {
@@ -124,6 +133,7 @@ function decideRestoration(snap, params) {
 }
 
 // ── buildPayloadFromSnapshot：updateCurrentState 构造（与 WritingScreen.updateContinuationState 对齐）──
+// contentHash 来自 snap.contentHash（加载时 ChapterContent.meta.hash，保存后 ChapterSaveReceipt.contentHash）。
 function buildPayloadFromSnapshot(snap, projectId, volumeId, chapterId, viewport) {
   const cursorUtf16 = utf8ToUtf16(snap.text, snap.cursor)
   const anchorUtf16 = utf8ToUtf16(snap.text, snap.selectionAnchor)
@@ -133,17 +143,17 @@ function buildPayloadFromSnapshot(snap, projectId, volumeId, chapterId, viewport
     chapterId,
     selection: [anchorUtf16, cursorUtf16],
     cursor: cursorUtf16,
-    revision: snap.revision,
+    contentHash: snap.contentHash,
   }
   if (viewport !== null) payload.viewport = viewport
   return payload
 }
 
-console.log('continuation_restore_logic 纯逻辑单测')
+console.log('continuation_restore_logic 纯逻辑单测（contentHash 跨设备校验）')
 console.log('---')
 
 // ── 1. WritingRouteParams 正式字段传递 ──
-test('WritingRouteParams: selection/cursor/viewport/revision 作为正式可选字段可传递', () => {
+test('WritingRouteParams: selection/cursor/viewport/contentHash 作为正式可选字段可传递', () => {
   // 模拟 AppNavigation.applyContinuation 构造 WritingRouteParams
   const payload = makePayload({
     projectId: 'p1',
@@ -151,8 +161,8 @@ test('WritingRouteParams: selection/cursor/viewport/revision 作为正式可选�
     chapterId: 'c1',
     selection: [3, 7],
     cursor: 5,
-    viewport: { scrollTop: 120 },
-    revision: 42,
+    viewport: { scrollTop: 120, scrollLeft: 0, viewportWidth: 800, viewportHeight: 600, contentWidth: 800, contentHeight: 1200 },
+    contentHash: 'sha256-abc123',
   })
 
   const wParam = {
@@ -164,7 +174,7 @@ test('WritingRouteParams: selection/cursor/viewport/revision 作为正式可选�
   if (payload.selection !== undefined) wParam.selection = payload.selection
   if (payload.cursor !== undefined) wParam.cursor = payload.cursor
   if (payload.viewport !== undefined) wParam.viewport = payload.viewport
-  if (payload.revision !== undefined) wParam.revision = payload.revision
+  if (payload.contentHash !== undefined) wParam.contentHash = payload.contentHash
 
   // 正式字段可访问，不是 Record<string,Object> 偷塞
   assert.equal(wParam.chapterId, 'c1')
@@ -172,11 +182,15 @@ test('WritingRouteParams: selection/cursor/viewport/revision 作为正式可选�
   assert.equal(wParam.volumeId, 'v1')
   assert.deepEqual(wParam.selection, [3, 7])
   assert.equal(wParam.cursor, 5)
-  assert.deepEqual(wParam.viewport, { scrollTop: 120 })
-  assert.equal(wParam.revision, 42)
+  assert.equal(wParam.contentHash, 'sha256-abc123')
+  // viewport 是强类型 EditorViewportState，有明确字段
+  assert.equal(wParam.viewport.scrollTop, 120)
+  assert.equal(wParam.viewport.scrollLeft, 0)
+  assert.equal(wParam.viewport.viewportWidth, 800)
+  assert.equal(wParam.viewport.viewportHeight, 600)
 })
 
-test('WritingRouteParams: 缺省时不带 selection/cursor/viewport/revision（undefined）', () => {
+test('WritingRouteParams: 缺省时不带 selection/cursor/viewport/contentHash（undefined）', () => {
   const wParam = {
     chapterId: 'c1',
     chapterTitle: 't',
@@ -186,16 +200,16 @@ test('WritingRouteParams: 缺省时不带 selection/cursor/viewport/revision（u
   assert.equal(wParam.selection, undefined)
   assert.equal(wParam.cursor, undefined)
   assert.equal(wParam.viewport, undefined)
-  assert.equal(wParam.revision, undefined)
+  assert.equal(wParam.contentHash, undefined)
 })
 
-// ── 2. revision 不匹配时不强套旧 offset ──
-test('decideRestoration: revision 不匹配 → shouldRestoreSelection=false（安全恢复）', () => {
-  const snap = makeSnapshot({ text: 'hello world', revision: 10, cursor: 5, selectionAnchor: 3 })
+// ── 2. contentHash 不匹配时不强套旧 offset ──
+test('decideRestoration: contentHash 不匹配 → shouldRestoreSelection=false（安全恢复）', () => {
+  const snap = makeSnapshot({ text: 'hello world', contentHash: 'hash-A', cursor: 5, selectionAnchor: 3 })
   const params = {
     selection: [2, 8],
     cursor: 5,
-    revision: 99,  // 不匹配
+    contentHash: 'hash-B',  // 不匹配
   }
   const decision = decideRestoration(snap, params)
   assert.equal(decision.shouldRestoreSelection, false)
@@ -203,11 +217,11 @@ test('decideRestoration: revision 不匹配 → shouldRestoreSelection=false（�
   assert.equal(decision.headByte, 0)
 })
 
-test('decideRestoration: revision 不匹配但 viewport 仍透传到 UI', () => {
-  const snap = makeSnapshot({ text: 'hello', revision: 1 })
+test('decideRestoration: contentHash 不匹配但 viewport 仍透传到 UI', () => {
+  const snap = makeSnapshot({ text: 'hello', contentHash: 'hash-1' })
   const params = {
     selection: [1, 3],
-    revision: 999,
+    contentHash: 'hash-999',
     viewport: { scrollTop: 200 },
   }
   const decision = decideRestoration(snap, params)
@@ -216,13 +230,13 @@ test('decideRestoration: revision 不匹配但 viewport 仍透传到 UI', () => 
   assert.deepEqual(decision.viewport, { scrollTop: 200 })
 })
 
-// ── 3. revision 匹配时 selection/cursor 正确恢复（UTF-16→UTF-8）──
-test('decideRestoration: revision 匹配 + selection → UTF-16 转 UTF-8 byte offset', () => {
+// ── 3. contentHash 匹配时 selection/cursor 正确恢复（UTF-16→UTF-8）──
+test('decideRestoration: contentHash 匹配 + selection → UTF-16 转 UTF-8 byte offset', () => {
   // 纯 ASCII：UTF-16 offset == UTF-8 byte offset
-  const snap = makeSnapshot({ text: 'hello world', revision: 5 })
+  const snap = makeSnapshot({ text: 'hello world', contentHash: 'hash-5' })
   const params = {
     selection: [2, 7],  // UTF-16 offsets
-    revision: 5,
+    contentHash: 'hash-5',
   }
   const decision = decideRestoration(snap, params)
   assert.equal(decision.shouldRestoreSelection, true)
@@ -233,10 +247,10 @@ test('decideRestoration: revision 匹配 + selection → UTF-16 转 UTF-8 byte o
 test('decideRestoration: 多字节字符 UTF-16→UTF-8 转换正确', () => {
   // 中文：每个汉字 UTF-16 = 1 code unit，UTF-8 = 3 bytes
   const text = '你好世界'  // 4 UTF-16 code units, 12 UTF-8 bytes
-  const snap = makeSnapshot({ text, revision: 1 })
+  const snap = makeSnapshot({ text, contentHash: 'hash-zh' })
   const params = {
     selection: [1, 3],  // UTF-16 offsets: 第1个字符到第3个字符
-    revision: 1,
+    contentHash: 'hash-zh',
   }
   const decision = decideRestoration(snap, params)
   assert.equal(decision.shouldRestoreSelection, true)
@@ -249,10 +263,10 @@ test('decideRestoration: 多字节字符 UTF-16→UTF-8 转换正确', () => {
 test('decideRestoration: emoji（surrogate pair）UTF-16→UTF-8 转换正确', () => {
   // 🎉 是 surrogate pair：UTF-16 = 2 code units，UTF-8 = 4 bytes
   const text = 'a🎉b'  // UTF-16: 4 code units, UTF-8: 1+4+1=6 bytes
-  const snap = makeSnapshot({ text, revision: 1 })
+  const snap = makeSnapshot({ text, contentHash: 'hash-emoji' })
   const params = {
     selection: [1, 3],  // UTF-16 offsets: 跨过 emoji
-    revision: 1,
+    contentHash: 'hash-emoji',
   }
   const decision = decideRestoration(snap, params)
   assert.equal(decision.shouldRestoreSelection, true)
@@ -264,11 +278,11 @@ test('decideRestoration: emoji（surrogate pair）UTF-16→UTF-8 转换正确', 
 
 // ── 4. selection 优先于 cursor ──
 test('decideRestoration: 有 selection 时忽略 cursor（selection 优先）', () => {
-  const snap = makeSnapshot({ text: 'hello', revision: 1 })
+  const snap = makeSnapshot({ text: 'hello', contentHash: 'h1' })
   const params = {
     selection: [1, 3],
     cursor: 4,  // 应被忽略
-    revision: 1,
+    contentHash: 'h1',
   }
   const decision = decideRestoration(snap, params)
   assert.equal(decision.shouldRestoreSelection, true)
@@ -277,10 +291,10 @@ test('decideRestoration: 有 selection 时忽略 cursor（selection 优先）', 
 })
 
 test('decideRestoration: 无 selection 但有 cursor → cursor 转 byte offset', () => {
-  const snap = makeSnapshot({ text: 'hello', revision: 1 })
+  const snap = makeSnapshot({ text: 'hello', contentHash: 'h1' })
   const params = {
     cursor: 2,
-    revision: 1,
+    contentHash: 'h1',
   }
   const decision = decideRestoration(snap, params)
   assert.equal(decision.shouldRestoreSelection, true)
@@ -289,14 +303,14 @@ test('decideRestoration: 无 selection 但有 cursor → cursor 转 byte offset'
 })
 
 test('decideRestoration: 无 selection 无 cursor → shouldRestoreSelection=false', () => {
-  const snap = makeSnapshot({ text: 'hello', revision: 1 })
-  const params = { revision: 1 }
+  const snap = makeSnapshot({ text: 'hello', contentHash: 'h1' })
+  const params = { contentHash: 'h1' }
   const decision = decideRestoration(snap, params)
   assert.equal(decision.shouldRestoreSelection, false)
 })
 
 test('decideRestoration: params=null → shouldRestoreSelection=false', () => {
-  const snap = makeSnapshot({ text: 'hello', revision: 1 })
+  const snap = makeSnapshot({ text: 'hello', contentHash: 'h1' })
   const decision = decideRestoration(snap, null)
   assert.equal(decision.shouldRestoreSelection, false)
   assert.equal(decision.hasViewport, false)
@@ -306,7 +320,7 @@ test('decideRestoration: params=null → shouldRestoreSelection=false', () => {
 test('buildPayloadFromSnapshot: Core UTF-8 cursor/anchor 转 UTF-16 存入 payload', () => {
   const snap = makeSnapshot({
     text: '你好世界',
-    revision: 7,
+    contentHash: 'hash-save-7',
     cursor: 6,        // UTF-8 byte offset（前两个汉字）
     selectionAnchor: 3, // UTF-8 byte offset（第一个汉字后）
   })
@@ -314,7 +328,7 @@ test('buildPayloadFromSnapshot: Core UTF-8 cursor/anchor 转 UTF-16 存入 paylo
   assert.equal(payload.projectId, 'p1')
   assert.equal(payload.volumeId, 'v1')
   assert.equal(payload.chapterId, 'c1')
-  assert.equal(payload.revision, 7)
+  assert.equal(payload.contentHash, 'hash-save-7')
   // UTF-8 byte 3 → UTF-16 offset 1
   assert.equal(payload.selection[0], 1)
   // UTF-8 byte 6 → UTF-16 offset 2
@@ -323,14 +337,14 @@ test('buildPayloadFromSnapshot: Core UTF-8 cursor/anchor 转 UTF-16 存入 paylo
 })
 
 test('buildPayloadFromSnapshot: viewport 非空时存入 payload', () => {
-  const snap = makeSnapshot({ text: 'hello', revision: 1, cursor: 3, selectionAnchor: 1 })
-  const viewport = { scrollTop: 250, line: 10 }
+  const snap = makeSnapshot({ text: 'hello', contentHash: 'h1', cursor: 3, selectionAnchor: 1 })
+  const viewport = { scrollTop: 250, scrollLeft: 0, viewportWidth: 800, viewportHeight: 600, contentWidth: 800, contentHeight: 800 }
   const payload = buildPayloadFromSnapshot(snap, 'p1', 'v1', 'c1', viewport)
-  assert.deepEqual(payload.viewport, { scrollTop: 250, line: 10 })
+  assert.deepEqual(payload.viewport, viewport)
 })
 
 test('buildPayloadFromSnapshot: viewport=null 时 payload 不带 viewport', () => {
-  const snap = makeSnapshot({ text: 'hello', revision: 1, cursor: 0, selectionAnchor: 0 })
+  const snap = makeSnapshot({ text: 'hello', contentHash: 'h1', cursor: 0, selectionAnchor: 0 })
   const payload = buildPayloadFromSnapshot(snap, 'p1', 'v1', 'c1', null)
   assert.equal(payload.viewport, undefined)
 })
@@ -376,11 +390,11 @@ test('round-trip: UTF-8→UTF-16→UTF-8 == identity（中文，byte 对齐）',
   }
 })
 
-// ── 7. viewport 透传到 UI，不参与 revision 校验 ──
-test('decideRestoration: viewport 在 revision 不匹配时仍透传', () => {
-  const snap = makeSnapshot({ text: 'hello', revision: 1 })
+// ── 7. viewport 透传到 UI，不参与 contentHash 校验 ──
+test('decideRestoration: viewport 在 contentHash 不匹配时仍透传', () => {
+  const snap = makeSnapshot({ text: 'hello', contentHash: 'h1' })
   const params = {
-    revision: 999,
+    contentHash: 'h999',
     viewport: { scrollTop: 100 },
   }
   const decision = decideRestoration(snap, params)
@@ -389,10 +403,10 @@ test('decideRestoration: viewport 在 revision 不匹配时仍透传', () => {
   assert.deepEqual(decision.viewport, { scrollTop: 100 })
 })
 
-test('decideRestoration: viewport 在 revision 匹配时也透传', () => {
-  const snap = makeSnapshot({ text: 'hello', revision: 1 })
+test('decideRestoration: viewport 在 contentHash 匹配时也透传', () => {
+  const snap = makeSnapshot({ text: 'hello', contentHash: 'h1' })
   const params = {
-    revision: 1,
+    contentHash: 'h1',
     selection: [1, 2],
     viewport: { scrollTop: 50 },
   }
@@ -402,12 +416,12 @@ test('decideRestoration: viewport 在 revision 匹配时也透传', () => {
   assert.deepEqual(decision.viewport, { scrollTop: 50 })
 })
 
-// ── 8. revision undefined 时不校验（兼容旧 payload）──
-test('decideRestoration: revision undefined → 视为匹配，恢复 selection', () => {
-  const snap = makeSnapshot({ text: 'hello', revision: 42 })
+// ── 8. contentHash undefined 时不校验（兼容旧 payload）──
+test('decideRestoration: contentHash undefined → 视为匹配，恢复 selection', () => {
+  const snap = makeSnapshot({ text: 'hello', contentHash: 'h42' })
   const params = {
     selection: [1, 3],
-    // revision 不带
+    // contentHash 不带
   }
   const decision = decideRestoration(snap, params)
   assert.equal(decision.shouldRestoreSelection, true)
@@ -441,13 +455,13 @@ test('utf8ToUtf16: byte offset 落在字符中间 → 回退到字符边界', ()
 })
 
 // ── 10. 完整恢复流程模拟 ──
-test('完整流程: 源设备 save → 目标设备 restore（ASCII）', () => {
-  // 源设备：Core snapshot cursor=5, anchor=3, revision=10
-  const sourceSnap = makeSnapshot({ text: 'hello world', revision: 10, cursor: 5, selectionAnchor: 3 })
+test('完整流程: 源设备 save → 目标设备 restore（ASCII, contentHash 匹配）', () => {
+  // 源设备：Core snapshot cursor=5, anchor=3, contentHash='hash-10'
+  const sourceSnap = makeSnapshot({ text: 'hello world', contentHash: 'hash-10', cursor: 5, selectionAnchor: 3 })
   const sourcePayload = buildPayloadFromSnapshot(sourceSnap, 'p1', 'v1', 'c1', null)
 
-  // 目标设备：Core 加载同一章节，revision 匹配
-  const targetSnap = makeSnapshot({ text: 'hello world', revision: 10 })
+  // 目标设备：Core 加载同一章节，contentHash 匹配（同一份持久化内容）
+  const targetSnap = makeSnapshot({ text: 'hello world', contentHash: 'hash-10' })
   const decision = decideRestoration(targetSnap, sourcePayload)
 
   assert.equal(decision.shouldRestoreSelection, true)
@@ -456,9 +470,9 @@ test('完整流程: 源设备 save → 目标设备 restore（ASCII）', () => {
   assert.equal(decision.headByte, 5)
 })
 
-test('完整流程: 源设备 save → 目标设备 restore（中文）', () => {
-  // 源设备：Core snapshot cursor=6 (byte), anchor=3 (byte), revision=10
-  const sourceSnap = makeSnapshot({ text: '你好世界', revision: 10, cursor: 6, selectionAnchor: 3 })
+test('完整流程: 源设备 save → 目标设备 restore（中文, contentHash 匹配）', () => {
+  // 源设备：Core snapshot cursor=6 (byte), anchor=3 (byte), contentHash='hash-zh-10'
+  const sourceSnap = makeSnapshot({ text: '你好世界', contentHash: 'hash-zh-10', cursor: 6, selectionAnchor: 3 })
   const sourcePayload = buildPayloadFromSnapshot(sourceSnap, 'p1', 'v1', 'c1', null)
 
   // payload 中 selection/cursor 应为 UTF-16 offset
@@ -466,8 +480,8 @@ test('完整流程: 源设备 save → 目标设备 restore（中文）', () => 
   assert.equal(sourcePayload.selection[0], 1)  // byte 3 → utf16 1
   assert.equal(sourcePayload.selection[1], 2)  // byte 6 → utf16 2
 
-  // 目标设备：Core 加载同一章节，revision 匹配
-  const targetSnap = makeSnapshot({ text: '你好世界', revision: 10 })
+  // 目标设备：Core 加载同一章节，contentHash 匹配
+  const targetSnap = makeSnapshot({ text: '你好世界', contentHash: 'hash-zh-10' })
   const decision = decideRestoration(targetSnap, sourcePayload)
 
   assert.equal(decision.shouldRestoreSelection, true)
@@ -476,19 +490,50 @@ test('完整流程: 源设备 save → 目标设备 restore（中文）', () => 
   assert.equal(decision.headByte, 6)
 })
 
-test('完整流程: 目标设备 Core 正文已变（revision 不匹配）→ 安全恢复', () => {
-  // 源设备：revision=10
-  const sourceSnap = makeSnapshot({ text: '你好世界', revision: 10, cursor: 6, selectionAnchor: 3 })
+test('完整流程: 目标设备 Core 正文已变（contentHash 不匹配）→ 安全恢复', () => {
+  // 源设备：contentHash='hash-original'
+  const sourceSnap = makeSnapshot({ text: '你好世界', contentHash: 'hash-original', cursor: 6, selectionAnchor: 3 })
   const sourcePayload = buildPayloadFromSnapshot(sourceSnap, 'p1', 'v1', 'c1', null)
 
-  // 目标设备：Core 正文已变，revision=11
-  const targetSnap = makeSnapshot({ text: '你好世界已修改', revision: 11 })
+  // 目标设备：Core 正文已变（用户在别处编辑后同步过来），contentHash 不同
+  const targetSnap = makeSnapshot({ text: '你好世界已修改', contentHash: 'hash-modified' })
   const decision = decideRestoration(targetSnap, sourcePayload)
 
   // 不强套旧 offset
   assert.equal(decision.shouldRestoreSelection, false)
   assert.equal(decision.anchorByte, 0)
   assert.equal(decision.headByte, 0)
+})
+
+// ── 11. contentHash 跨设备语义：不用 revision ──
+test('contentHash 语义: 同一份持久化内容 → contentHash 相同 → 可恢复', () => {
+  // 源设备保存后 ChapterSaveReceipt.contentHash = 'sha256-xyz'
+  // 目标设备加载同一章节 ChapterContent.meta.hash = 'sha256-xyz'
+  // 即使两设备的 TextEditSession.revision 都是 initial()（不同会话），contentHash 仍匹配。
+  const sourceSnap = makeSnapshot({ text: '正文', contentHash: 'sha256-xyz', cursor: 3, selectionAnchor: 0 })
+  const sourcePayload = buildPayloadFromSnapshot(sourceSnap, 'p1', 'v1', 'c1', null)
+
+  // 目标设备新会话 revision=0（EditorRevision::initial()），但 contentHash 来自磁盘，匹配。
+  const targetSnap = makeSnapshot({ text: '正文', contentHash: 'sha256-xyz' })
+  const decision = decideRestoration(targetSnap, sourcePayload)
+
+  assert.equal(decision.shouldRestoreSelection, true)
+  assert.equal(decision.anchorByte, 0)
+  assert.equal(decision.headByte, 3)
+})
+
+test('contentHash 语义: 源设备有未保存修改 → contentHash 仍是上次保存的 hash', () => {
+  // 源设备加载时 contentHash='hash-v1'，用户编辑后未保存，
+  // updateCurrentState 仍用上次保存的 contentHash（不基于未持久化正文标"可精确恢复"）。
+  // 目标设备拿到 payload.contentHash='hash-v1'，但目标设备磁盘内容已是 'hash-v2'（同步更新过），
+  // contentHash 不匹配 → 安全恢复。
+  const sourceSnap = makeSnapshot({ text: '正文已编辑未保存', contentHash: 'hash-v1', cursor: 5, selectionAnchor: 0 })
+  const sourcePayload = buildPayloadFromSnapshot(sourceSnap, 'p1', 'v1', 'c1', null)
+
+  const targetSnap = makeSnapshot({ text: '正文已编辑未保存', contentHash: 'hash-v2' })
+  const decision = decideRestoration(targetSnap, sourcePayload)
+
+  assert.equal(decision.shouldRestoreSelection, false)
 })
 
 console.log('---')

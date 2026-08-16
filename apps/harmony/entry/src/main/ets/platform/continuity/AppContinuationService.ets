@@ -6,7 +6,7 @@
 // restoreFromWant(wantParam) 目标设备从 wantParam 恢复 payload。
 // 不写成第二套同步：正文数据仍由作品数据层和同步体系负责。
 //
-// 不用进程内存"伪持久化"。payload 只带 projectId/volumeId/chapterId/selection/cursor/viewport/revision；
+// 不用进程内存"伪持久化"。payload 只带 projectId/volumeId/chapterId/selection/cursor/viewport/contentHash；
 // 正文由作品仓库/同步负责。
 //
 // 真实接续流程（Ability Kit）：
@@ -15,6 +15,7 @@
 //    从 want.parameters 读取 → restoreFromWant() 还原 payload → 交 AppNavigation 手动重建 NavPathStack。
 
 import { ContinuationPayload } from './ContinuationPayload'
+import { EditorViewportState } from '../../feature/editor/render/EditorViewportState'
 
 const WANT_PARAM_KEY: string = 'continuationData'
 
@@ -99,8 +100,8 @@ export class AppContinuationService {
     if (payload.viewport !== undefined) {
       result.viewport = payload.viewport
     }
-    if (payload.revision !== undefined) {
-      result.revision = payload.revision
+    if (payload.contentHash !== undefined) {
+      result.contentHash = payload.contentHash
     }
     return result
   }
@@ -124,10 +125,10 @@ export class AppContinuationService {
       result.cursor = obj['cursor'] as number
     }
     if (obj['viewport'] !== undefined) {
-      result.viewport = obj['viewport'] as object
+      result.viewport = EditorViewportState.fromObject(obj['viewport'] as Record<string, Object>)
     }
-    if (obj['revision'] !== undefined) {
-      result.revision = obj['revision'] as number
+    if (obj['contentHash'] !== undefined) {
+      result.contentHash = obj['contentHash'] as string
     }
     return result
   }

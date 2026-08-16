@@ -3,13 +3,22 @@
 // 不复用编辑器 capability；编辑器能力由 EditorRenderBackend 自描述。
 //
 // refresh() 查询各 service 真实 support 状态汇总，不靠默认 bool 假装能力存在。
+//
+// Issue #629 评论5 第6部分：
+//   - 不再探测 systemShareManager / shareContent（普通分享已改 systemShare.SharedData + ShareController）。
+//   - 不再 InputDeviceService.hasDeviceOfKind('stylus')（InputDeviceService 不再产生 stylus kind）。
+//   - stylus 能力从 StylusInputService.isSupported() 读，由它统一负责。
+//   - share 能力从 SystemShareService/TapShareService/AirTransferService 三后端实际 support 汇总，
+//     本类不认识 Share Kit API 名称。
 
 import { HarmonySystemCapabilities, DEFAULT_HARMONY_CAPABILITIES } from './HarmonyCapabilities'
 import { GripPostureService } from '../awareness/GripPostureService'
 import { ShoulderSurfingService } from '../privacy/ShoulderSurfingService'
 import { WindowPrivacyService } from '../privacy/WindowPrivacyService'
-import { InputDeviceService } from '../input/InputDeviceService'
-import { systemShareManager } from '@kit.ShareKit'
+import { StylusInputService } from '../input/StylusInputService'
+import { SystemShareService } from '../share/SystemShareService'
+import { TapShareService } from '../share/TapShareService'
+import { AirTransferService } from '../share/AirTransferService'
 
 export class CapabilityRegistry {
   private static instance: CapabilityRegistry
@@ -32,21 +41,25 @@ export class CapabilityRegistry {
   //   supportsShoulderSurfing → ShoulderSurfingService.isSupported()
   //   supportsWindowPrivacy → WindowPrivacyService.isSupported()
   //   supportsAppContinuation → module.json5 continuable:true（运行时直接 true）
-  //   supportsShare → systemShareManager 可用性（try/catch 探测）
-  //   supportsStylus → InputDeviceService 查询是否有 stylus 设备
+  //   supportsShare → SystemShareService/TapShareService/AirTransferService 三后端任一 isSupported()
+  //   supportsStylus → StylusInputService.isSupported()
+  // 不探测 systemShareManager.shareContent；不调 InputDeviceService.hasDeviceOfKind('stylus')。
   refresh(): void {
     const grip: GripPostureService = GripPostureService.getInstance()
     const shoulder: ShoulderSurfingService = ShoulderSurfingService.getInstance()
     const windowPrivacy: WindowPrivacyService = WindowPrivacyService.getInstance()
-    const inputDevice: InputDeviceService = InputDeviceService.getInstance()
+    const stylus: StylusInputService = StylusInputService.getInstance()
+    const systemShare: SystemShareService = SystemShareService.getInstance()
+    const tapShare: TapShareService = TapShareService.getInstance()
+    const airTransfer: AirTransferService = AirTransferService.getInstance()
 
     this.capabilities = {
       supportsGripPosture: grip.isSupported(),
       supportsShoulderSurfing: shoulder.isSupported(),
       supportsWindowPrivacy: windowPrivacy.isSupported(),
       supportsAppContinuation: this.detectAppContinuation(),
-      supportsShare: this.detectShare(),
-      supportsStylus: inputDevice.hasDeviceOfKind('stylus')
+      supportsShare: systemShare.isSupported() || tapShare.isSupported() || airTransfer.isSupported(),
+      supportsStylus: stylus.isSupported()
     }
   }
 
@@ -55,19 +68,5 @@ export class CapabilityRegistry {
   // 运行时直接 true（配置在编译期确定）。
   private detectAppContinuation(): boolean {
     return true
-  }
-
-  // 系统分享能力：探测 systemShareManager 是否可用。
-  // 通过引用 systemShareManager 对象 + 检查 shareContent 方法存在性判断。
-  // 静态 import 在不支持的设备上会编译失败，故本方法只在已成功 import 的前提下检查方法可达。
-  private detectShare(): boolean {
-    try {
-      // systemShareManager 已通过静态 import 引入；检查其 shareContent 方法是否存在。
-      const mgr: Object = systemShareManager as Object
-      const fn: Object | undefined = (mgr as Record<string, Object>)['shareContent']
-      return fn !== undefined && fn !== null
-    } catch (e) {
-      return false
-    }
   }
 }

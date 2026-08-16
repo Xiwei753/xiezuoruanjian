@@ -67,9 +67,10 @@ export class HarmonyShareService {
 
   // tap 生命周期
   // 进入可碰一碰分享页面：先 updatePayload 再 start。
-  startTapSharing(payload: SharePayload): void {
+  // 返回 start() 真实注册结果（Issue #629 评论5 第7部分）：成功 true，失败 false。
+  startTapSharing(payload: SharePayload): boolean {
     this.tapShare.updatePayload(payload)
-    this.tapShare.start()
+    return this.tapShare.start()
   }
 
   // 更新当前碰一碰 payload（页面内容变化时）。
@@ -85,7 +86,7 @@ export class HarmonyShareService {
   // airTransfer 生命周期
   // 进入可隔空传送页面：先 updatePayload 再 start(windowId)。
   // windowId 可选：未提供时从 abilityContext + window.getLastWindow 统一获取。
-  // 返回 true 表示成功注册；false 表示无 context/无 window/注册失败（不假装成功）。
+  // 返回 AirTransferService.start 的真实注册结果（Issue #629 评论5 第7部分），不假返回 true。
   async startAirTransferSharing(payload: SharePayload, windowId?: number): Promise<boolean> {
     this.airTransfer.updatePayload(payload)
     let wid: number
@@ -99,8 +100,7 @@ export class HarmonyShareService {
       }
       wid = resolved
     }
-    this.airTransfer.start(wid)
-    return true
+    return this.airTransfer.start(wid)
   }
 
   // 更新当前隔空传送 payload。

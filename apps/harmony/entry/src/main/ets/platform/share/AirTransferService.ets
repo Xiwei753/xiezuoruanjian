@@ -33,6 +33,8 @@ export class AirTransferService {
   private activeWindowId: number = -1
   // 是否已 start。
   private listening: boolean = false
+  // 隔空传送能力缓存：start() 注册成功即 true。CapabilityRegistry 从此读。
+  private supported: boolean = false
 
   static getInstance(): AirTransferService {
     if (!AirTransferService.instance) {
@@ -41,14 +43,21 @@ export class AirTransferService {
     return AirTransferService.instance
   }
 
+  // 隔空传送能力：start() 注册成功过即 true。CapabilityRegistry 汇总时读此方法。
+  isSupported(): boolean {
+    return this.supported
+  }
+
   // 进入可隔空传送页面/状态时调用：注册 harmonyShare.on('gesturesShare', { windowId }, callback)。
   // windowId 由外部注入（WindowPrivacyService/AppContext 统一获取），本类不自己查 Window。
-  // 重复 start 是幂等的：已 listening 且 windowId 一致时直接返回。
-  start(windowId: number): void {
+  // 重复 start 是幂等的：已 listening 且 windowId 一致时直接返回 true。
+  // 返回 boolean 真实反映注册结果（Issue #629 评论5 第7部分）：成功 true，失败 false。
+  // 不再无论内部 harmonyShare.on(...) 是否抛错都返回 true——返回值必须真实。
+  start(windowId: number): boolean {
     if (this.listening) {
-      // 已在监听。若 windowId 一致则幂等返回；若不一致则先 stop 旧的再注册新的。
+      // 已在监听。若 windowId 一致则幂等返回 true；若不一致则先 stop 旧的再注册新的。
       if (this.activeWindowId === windowId) {
-        return
+        return true
       }
       this.stopInternal()
     }
@@ -72,11 +81,15 @@ export class AirTransferService {
       harmonyShare.on('gesturesShare', { windowId: windowId }, cb)
       this.listening = true
       this.activeWindowId = windowId
+      this.supported = true
+      return true
     } catch (e) {
-      // 注册失败；清空引用，不假装 listening。
+      // 注册失败；清空引用，不假装 listening/supported。
       this.gesturesCallback = null
       this.listening = false
       this.activeWindowId = -1
+      this.supported = false
+      return false
     }
   }
 

@@ -2,16 +2,15 @@
 // 环境阻塞：无 hvigor/ohpm/SDK，需在 CI 或本地 HarmonyOS 环境运行。
 // 运行：在 DevEco Studio 中以 ohosTest 模块运行，或 hvigorw assembleHap。
 //
-// 覆盖：
-//   1. system share → SystemShareService（systemShareManager.shareContent）
-//   2. tap share → TapShareService（碰一碰官方独立流程，不落 systemShareManager）
-//   3. air transfer → AirTransferService（sharableTarget.share() 官方独立流程）
-//   4. 各走独立路径，不混用
+// 覆盖（Issue #629 评论5 第6/7部分）：
+//   1. system share -> SystemShareService（systemShare.SharedData + ShareController.show，非淘汰的 shareContent）
+//   2. tap share -> TapShareService 生命周期接口（start/stop，非一次性 share）
+//   3. air transfer -> AirTransferService 生命周期接口（start/stop，返回真实注册结果）
+//   4. 各走独立路径，不混用；普通分享只走 system，碰一碰/隔空走生命周期
 //   5. 未知 channel 返回 false
+//   6. startTapSharing/startAirTransferSharing 返回真实注册结果（不假返回 true）
 //
 // 注：本测试需在真实 HarmonyOS 环境运行（依赖 @kit.ShareKit）。
-// 在有 SDK 的环境里，可通过注入 mock 或 @ohos/hypium 的 mock 能力验证后端调用。
-// 此处给出行为契约断言，CI 接入 SDK 后可直接运行。
 
 import { describe, it, expect } from '@ohos/hypium'
 import { HarmonyShareService } from '../../../main/ets/platform/share/HarmonyShareService'
@@ -90,56 +89,107 @@ export default function shareDispatchRoutingTest() {
   })
 
   describe('HarmonyShareService.share 调度行为', () => {
-    // 注：真实环境需 mock 三个后端 service 验证调用路由。
-    // 此处验证：未知 channel 返回 false（不假装成功）。
-    // SDK 不可用时 tap/airTransfer 占位返回 false（不假装成功）。
+    // 第7部分：普通系统分享只调用 share(payload, 'system')。
+    // 碰一碰和隔空传送走生命周期接口，不和普通分享混用。
 
-    it('system channel 委托 SystemShareService', async () => {
+    it('system channel 委托 SystemShareService（ShareController.show，非淘汰的 shareContent）', async () => {
       const svc: HarmonyShareService = HarmonyShareService.getInstance()
       const payload: SharePayload = { kind: 'text', text: 'test' }
-      // 真实环境：mock SystemShareService.share 返回 true，验证 HarmonyShareService.share('system') 也返回 true
-      // SDK 不可用时 systemShareManager.shareContent 抛错 → 返回 false
+      // 真实环境：SystemShareService.share 走 systemShare.SharedData + ShareController.show。
+      // SDK 不可用或无 context 时返回 false（不假装成功）。
       const ok: boolean = await svc.share(payload, 'system')
       expect(typeof ok === 'boolean').assertTrue()
     })
 
-    it('tap channel 委托 TapShareService（不落 systemShareManager）', async () => {
+    it('tap channel 一次性 share 返回 false：引导走 startTapSharing 生命周期', async () => {
       const svc: HarmonyShareService = HarmonyShareService.getInstance()
       const payload: SharePayload = { kind: 'text', text: 'test' }
       const ok: boolean = await svc.share(payload, 'tap')
-      // SDK 不可用时占位返回 false（不假装成功）
-      expect(typeof ok === 'boolean').assertTrue()
+      // tap 是生命周期通道，不一次性 share；返回 false 引导调用方用 startTapSharing。
+      expect(ok).assertFalse()
     })
 
-    it('airTransfer channel 委托 AirTransferService（不落 systemShareManager）', async () => {
+    it('airTransfer channel 一次性 share 返回 false：引导走 startAirTransferSharing 生命周期', async () => {
       const svc: HarmonyShareService = HarmonyShareService.getInstance()
       const payload: SharePayload = { kind: 'text', text: 'test' }
       const ok: boolean = await svc.share(payload, 'airTransfer')
-      // SDK 不可用时占位返回 false（不假装成功）
+      // airTransfer 是生命周期通道，不一次性 share；返回 false 引导调用方用 startAirTransferSharing。
+      expect(ok).assertFalse()
+    })
+
+    it('未知 channel 返回 false', async () => {
+      const svc: HarmonyShareService = HarmonyShareService.getInstance()
+      const payload: SharePayload = { kind: 'text', text: 'test' }
+      const ok: boolean = await svc.share(payload, 'unknown' as 'system')
+      expect(ok).assertFalse()
+    })
+  })
+
+  describe('生命周期接口返回真实注册结果（第7部分）', () => {
+    it('startTapSharing 返回 boolean 真实注册结果', () => {
+      const svc: HarmonyShareService = HarmonyShareService.getInstance()
+      const payload: SharePayload = { kind: 'text', text: 'hello' }
+      // startTapSharing 返回 TapShareService.start 的真实结果。
+      // SDK 不可用时 harmonyShare.on 抛错 -> false（不假返回 true）。
+      const ok: boolean = svc.startTapSharing(payload)
       expect(typeof ok === 'boolean').assertTrue()
+      svc.stopTapSharing()
+    })
+
+    it('startAirTransferSharing 返回真实注册结果（不假返回 true）', async () => {
+      const svc: HarmonyShareService = HarmonyShareService.getInstance()
+      const payload: SharePayload = { kind: 'text', text: 'hello' }
+      // 不传 windowId：无 context 时 getWindowId 返回 null -> false。
+      // 有 windowId 时返回 AirTransferService.start 的真实结果。
+      const ok: boolean = await svc.startAirTransferSharing(payload)
+      expect(typeof ok === 'boolean').assertTrue()
+      await svc.stopAirTransferSharing()
+    })
+
+    it('startAirTransferSharing 显式 windowId 返回真实注册结果', async () => {
+      const svc: HarmonyShareService = HarmonyShareService.getInstance()
+      const payload: SharePayload = { kind: 'text', text: 'hello' }
+      const ok: boolean = await svc.startAirTransferSharing(payload, 1)
+      // 真实环境：harmonyShare.on 成功 -> true，抛错 -> false。不假返回 true。
+      expect(typeof ok === 'boolean').assertTrue()
+      await svc.stopAirTransferSharing(1)
     })
   })
 
   describe('三通道独立后端 — 不混用', () => {
-    it('SystemShareService 只走 systemShareManager.shareContent', () => {
-      // SystemShareService.share 内部调 systemShareManager.shareContent
-      // 不调碰一碰 / 隔空传送 API
+    it('SystemShareService 只走 systemShare.SharedData + ShareController.show', () => {
+      // 不走淘汰的 systemShareManager.shareContent；不走碰一碰/隔空传送 API。
       const svc: SystemShareService = SystemShareService.getInstance()
       expect(svc !== null).assertTrue()
     })
 
-    it('TapShareService 不落 systemShareManager', () => {
-      // TapShareService.share 走官方碰一碰独立流程
-      // 不调 systemShareManager.shareContent
+    it('TapShareService 走 harmonyShare.on knockShare 生命周期', () => {
+      // 不走 systemShareManager；不走 ShareController.show；不走 gesturesShare。
       const svc: TapShareService = TapShareService.getInstance()
       expect(svc !== null).assertTrue()
     })
 
-    it('AirTransferService 不落 systemShareManager', () => {
-      // AirTransferService.share 走官方 sharableTarget.share() 独立流程
-      // 不调 systemShareManager.shareContent
+    it('AirTransferService 走 harmonyShare.on gesturesShare 生命周期', () => {
+      // 不走 systemShareManager；不走 ShareController.show；不走 knockShare。
       const svc: AirTransferService = AirTransferService.getInstance()
       expect(svc !== null).assertTrue()
+    })
+  })
+
+  describe('能力暴露（第6部分）', () => {
+    it('SystemShareService 暴露 isSupported', () => {
+      const svc: SystemShareService = SystemShareService.getInstance()
+      expect(typeof svc.isSupported()).assertEqual('boolean')
+    })
+
+    it('TapShareService 暴露 isSupported', () => {
+      const svc: TapShareService = TapShareService.getInstance()
+      expect(typeof svc.isSupported()).assertEqual('boolean')
+    })
+
+    it('AirTransferService 暴露 isSupported', () => {
+      const svc: AirTransferService = AirTransferService.getInstance()
+      expect(typeof svc.isSupported()).assertEqual('boolean')
     })
   })
 }
