@@ -22,13 +22,13 @@ import uniffi.writer_core.ScreenRoleDto
  *
  * 新代码应直接使用领域 Bridge，不再依赖此门面类。
  */
-class AppServiceBridge(val holder: WriterAppServiceHolder) {
+open class AppServiceBridge(val holder: WriterAppServiceHolder) {
     // ── 领域 Bridge ──
     val projectBridge: ProjectBridge by lazy { ProjectBridge(holder) }
     val recentEditsBridge: RecentEditsBridge by lazy { RecentEditsBridge(holder) }
     val chapterBridge: ChapterBridge by lazy { ChapterBridge(holder) }
     val settingsBridge: SettingsBridge by lazy { SettingsBridge(holder) }
-    val syncBridge: SyncBridge by lazy { SyncBridge(holder) }
+    open val syncBridge: SyncBridge by lazy { SyncBridge(holder) }
     val statsBridge: StatsBridge by lazy { StatsBridge(holder) }
     val starMapBridge: StarMapBridge by lazy { StarMapBridge(holder) }
     val secureStorageWarning: String? get() = holder.secureStorageWarning
@@ -207,6 +207,13 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
     fun saveSyncConfig(config: SyncConfig) = syncBridge.saveSyncConfig(config)
 
     fun loadSyncSecrets() = syncBridge.loadSyncSecrets()
+
+    /**
+     * #630 评论第 4 点 / D：旧→新同步 profile 一次性迁移转发。
+     *
+     * 标记为 [open] 供单元测试 fake（覆盖返回不同 outcome 验证 SyncRepository 行为）。
+     */
+    open fun migrateLegacySyncProfile() = syncBridge.migrateLegacySyncProfile()
 
     fun saveSyncSecrets(secrets: SyncSecrets) = syncBridge.saveSyncSecrets(secrets)
 

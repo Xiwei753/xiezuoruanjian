@@ -6,6 +6,7 @@ import com.xiwei.sujian.core.interop.common.toModel
 import com.xiwei.sujian.feature.sync.data.model.FullSyncDiagnosticsResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncDryRunResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
+import com.xiwei.sujian.feature.sync.data.model.LegacyMigrationOutcome
 import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
@@ -31,7 +32,7 @@ import com.xiwei.sujian.feature.sync.data.model.SyncState
  * UniFFI 调用是同步阻塞的，底层 Core 使用 `Mutex` 保护共享状态。
  * 不得在持有 Android 锁的同时调用此桥接方法，避免与 Core 侧 Mutex 死锁。
  */
-class SyncBridge internal constructor(private val holder: WriterAppServiceHolder) {
+open class SyncBridge internal constructor(private val holder: WriterAppServiceHolder) {
     // ── 全局同步配置 / 凭据 ──
 
     fun loadSyncConfig(): BridgeResult<SyncConfig> =
@@ -47,6 +48,20 @@ class SyncBridge internal constructor(private val holder: WriterAppServiceHolder
     fun loadSyncSecrets(): BridgeResult<SyncSecrets> =
         holder.wrapResult {
             holder.service.loadSyncSecrets().toModel()
+        }
+
+    /**
+     * #630 评论第 4 点 / D：旧→新同步 profile 一次性迁移。
+     *
+     * Core 一步完成：只读探测旧应用级 / 作品级 profile → 提交新全局 → 清理旧凭据。
+     * 失败/冲突时 Core 不删旧凭据。Android 侧 [com.xiwei.sujian.feature.sync.data.SyncRepository]
+     * 据此决定是否继续提交。
+     *
+     * 标记为 [open] 供单元测试 fake（覆盖返回不同 outcome 验证 Repository 行为）。
+     */
+    open fun migrateLegacySyncProfile(): BridgeResult<LegacyMigrationOutcome> =
+        holder.wrapResult {
+            holder.service.migrateLegacySyncProfile().toModel()
         }
 
     fun saveSyncSecrets(secrets: SyncSecrets): BridgeResult<Boolean> =

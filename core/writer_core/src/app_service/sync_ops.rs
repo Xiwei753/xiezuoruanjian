@@ -1,10 +1,18 @@
 use crate::api::{
-    FullSyncDiagnosticsResultDto, FullSyncDryRunResultDto, FullSyncResultDto, SyncConfigDto,
-    SyncSecretsDto, SyncStateDto, WriterError,
+    FullSyncDiagnosticsResultDto, FullSyncDryRunResultDto, FullSyncResultDto,
+    LegacyMigrationOutcomeDto, SyncConfigDto, SyncSecretsDto, SyncStateDto, WriterError,
 };
 use crate::sync::{SyncConfig, SyncSecrets};
 
 impl super::WriterAppService {
+    /// 旧→新同步 profile 一次性迁移（Issue #630 评论第 4 点 / D）。
+    ///
+    /// 详见 `crate::sync::legacy_migration`。失败返回 `WriterError`；
+    /// 冲突返回 `NeedsReconfigure`（非 Err），由 UI 引导用户重选全局仓库。
+    pub fn migrate_legacy_sync_profile(&self) -> Result<LegacyMigrationOutcomeDto, WriterError> {
+        self.api.migrate_legacy_sync_profile()
+    }
+
     /**
      * #592 六：secrets override 只在该进程尚未显式设置时从磁盘填充。
      * 同步启动前 Android 层会把 snapshot 的凭据显式写入 override，

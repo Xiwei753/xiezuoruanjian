@@ -98,6 +98,22 @@ impl super::WriterCore {
 
     // ── 全局配置 + 全局凭据（Issue #630：唯一一份） ──
 
+    /// 旧→新同步 profile 一次性迁移（Issue #630 评论第 4 点 / D）。
+    ///
+    /// 新全局 profile 已存在时返回 `NotNeeded`；否则依次探测旧应用级 / 旧作品级
+    /// profile，多项目一致迁一份，不一致返回 `NeedsReconfigure`。提交成功后清理
+    /// 旧凭据；失败/冲突时不删旧凭据。
+    pub fn migrate_legacy_sync_profile(
+        &self,
+    ) -> crate::error::Result<crate::sync::legacy_migration::LegacyMigrationOutcome> {
+        let migrator = crate::sync::legacy_migration::LegacySyncProfileMigrator::new(
+            &self.app_data_root,
+            &self.projects_root,
+            self.secure_storage.as_deref(),
+        );
+        migrator.migrate()
+    }
+
     /// 加载全局同步配置。路径：`<app_data_root>/app-meta/sync/config.local.json`。
     pub fn load_sync_config(&self) -> crate::error::Result<crate::sync::SyncConfig> {
         let config_path = self.app_data_root.join("app-meta/sync/config.local.json");

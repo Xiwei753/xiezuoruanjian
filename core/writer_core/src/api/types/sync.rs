@@ -496,3 +496,53 @@ impl From<crate::sync::types::FullSyncDiagnosticsResult> for FullSyncDiagnostics
         }
     }
 }
+
+/// 旧→新同步 profile 迁移结果 DTO（Issue #630 评论第 4 点 / D）。
+///
+/// 用 `outcome_kind` 字段区分变体，避免 UniFFI enum-with-data 的复杂性：
+/// - `"not_needed"`：新全局已存在，无需迁移
+/// - `"migrated"`：迁移成功，`config` / `secrets` 字段填充
+/// - `"needs_reconfigure"`：多项目冲突，`reason` 字段填充
+/// - `"no_legacy_config"`：没找到任何旧配置
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct LegacyMigrationOutcomeDto {
+    pub outcome_kind: String,
+    pub config: Option<SyncConfigDto>,
+    pub secrets: Option<SyncSecretsDto>,
+    pub reason: Option<String>,
+}
+
+impl From<crate::sync::legacy_migration::LegacyMigrationOutcome> for LegacyMigrationOutcomeDto {
+    fn from(o: crate::sync::legacy_migration::LegacyMigrationOutcome) -> Self {
+        match o {
+            crate::sync::legacy_migration::LegacyMigrationOutcome::NotNeeded => Self {
+                outcome_kind: "not_needed".to_string(),
+                config: None,
+                secrets: None,
+                reason: None,
+            },
+            crate::sync::legacy_migration::LegacyMigrationOutcome::Migrated { config, secrets } => {
+                Self {
+                    outcome_kind: "migrated".to_string(),
+                    config: Some(config.into()),
+                    secrets: Some(secrets.into()),
+                    reason: None,
+                }
+            }
+            crate::sync::legacy_migration::LegacyMigrationOutcome::NeedsReconfigure { reason } => {
+                Self {
+                    outcome_kind: "needs_reconfigure".to_string(),
+                    config: None,
+                    secrets: None,
+                    reason: Some(reason),
+                }
+            }
+            crate::sync::legacy_migration::LegacyMigrationOutcome::NoLegacyConfig => Self {
+                outcome_kind: "no_legacy_config".to_string(),
+                config: None,
+                secrets: None,
+                reason: None,
+            },
+        }
+    }
+}

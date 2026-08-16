@@ -4,7 +4,9 @@ import android.annotation.SuppressLint
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
@@ -124,17 +126,33 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
         }
 
     Box(modifier = modifier.fillMaxSize()) {
+        // #630 评论 5306659312 问题 B：页面级几何统一由 Route 管 —
+        // LazyColumn horizontal padding=space16 让外层 group 大卡左右留白，
+        // vertical=space8 留上下页边距；组间/搜索条与第一组之间用 Spacer(space16) 分档。
+        // 不在 SettingsGroupHeader/ItemContainer 内各自硬补左右 margin。
         LazyColumn(
             modifier = Modifier.fillMaxSize().testTag(SujianSemanticIds.SettingsScreen),
-            contentPadding = PaddingValues(vertical = dims.space8),
+            contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
         ) {
             // 设置页顶部紧凑全局搜索入口；#477 未接入时空动作，接入后只替换此回调。
             item(key = "settings_search_entry") {
                 SettingsSearchEntry(onClick = {})
             }
+            // 搜索条与第一组之间留一档纵向间距
+            item(key = "settings_search_entry_bottom_spacer") {
+                Spacer(Modifier.height(dims.space16))
+            }
+            var firstGroupShown = false
             SettingsGroup.entries.forEach { group ->
                 val categories = settingsCategories.filter { it.group == group }
                 if (categories.isEmpty()) return@forEach
+                // 不同 SettingsGroup 之间留一档纵向间距（第一组前不加，搜索条后已加）
+                if (firstGroupShown) {
+                    item(key = "settings_group_spacer_${group.name}") {
+                        Spacer(Modifier.height(dims.space16))
+                    }
+                }
+                firstGroupShown = true
                 item(key = "settings_group_${group.name}") {
                     SettingsGroupHeader(title = stringResource(id = group.titleResId))
                 }

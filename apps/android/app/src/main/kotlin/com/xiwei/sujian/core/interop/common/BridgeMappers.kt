@@ -25,6 +25,7 @@ import com.xiwei.sujian.feature.sync.data.model.FirstSyncMode
 import com.xiwei.sujian.feature.sync.data.model.FullSyncDiagnosticsResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncDryRunResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
+import com.xiwei.sujian.feature.sync.data.model.LegacyMigrationOutcome
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncConflict
 import com.xiwei.sujian.feature.sync.data.model.SyncDiagnosticsResult
@@ -47,6 +48,7 @@ import uniffi.writer_core.DeviceStatsSummaryDto
 import uniffi.writer_core.FullSyncDiagnosticsResultDto
 import uniffi.writer_core.FullSyncDryRunResultDto
 import uniffi.writer_core.FullSyncResultDto
+import uniffi.writer_core.LegacyMigrationOutcomeDto
 import uniffi.writer_core.LocalSettingsDto
 import uniffi.writer_core.ProjectDto
 import uniffi.writer_core.ProjectStatsDto
@@ -430,6 +432,20 @@ internal fun FullSyncDryRunResultDto.toModel() =
 internal fun FullSyncDiagnosticsResultDto.toModel() =
     FullSyncDiagnosticsResult(
         diagnostics = diagnostics.toModel(),
+    )
+
+/**
+ * #630 评论第 4 点 / D：Core [LegacyMigrationOutcomeDto] → Android [LegacyMigrationOutcome]。
+ *
+ * outcome_kind 字符串原样透传，config/secrets 用现有 [SyncConfigDto.toModel] /
+ * [SyncSecretsDto.toModel] 映射；reason 原样透传。
+ */
+internal fun LegacyMigrationOutcomeDto.toModel() =
+    LegacyMigrationOutcome(
+        outcomeKind = outcomeKind,
+        config = config?.toModel(),
+        secrets = secrets?.toModel(),
+        reason = reason,
     )
 
 internal fun String?.toBackendType(): BackendType =

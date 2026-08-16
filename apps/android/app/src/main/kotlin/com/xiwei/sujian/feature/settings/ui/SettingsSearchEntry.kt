@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.settings.ui
 
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
@@ -35,7 +36,7 @@ internal fun SettingsSearchEntry(
     val dims = LocalSujianDimensions.current
     Surface(
         onClick = onClick,
-        modifier = modifier.testTag("settings_search_entry"),
+        modifier = modifier.fillMaxWidth().testTag("settings_search_entry"),
         shape = MaterialTheme.shapes.extraLarge,
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
     ) {

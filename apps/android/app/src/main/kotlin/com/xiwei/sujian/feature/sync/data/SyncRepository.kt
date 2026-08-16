@@ -312,31 +312,54 @@ class SyncRepository(
     suspend fun loadCommittedSyncProfile(): SyncProfileReadResult =
         SyncProfileGate.snapshotExclusive { snapshotSyncProfile() }
 
-    private suspend fun migrateLegacyProfileIfNeeded(): SettingsSaveResult? {
+    /**
+     * #630 评论第 4 点 / D：旧→新同步 profile 迁移钩子。
+     *
+     * 调用 Core `migrate_legacy_sync_profile` 一步完成：只读探测旧应用级 / 作品级
+     * profile → 提交新全局 → 清理旧凭据。Android 侧不再自己读旧 config/secrets 拼装，
+     * 也不再枚举作品 — 多项目冲突由 Core 判定并返回 `needs_reconfigure`。
+     *
+     * 行为：
+     * - `not_needed` / `no_legacy_config`：返回 null，让 [commitSyncProfile] 继续正常提交；
+     * - `migrated`：Core 已写好新全局并删旧凭据，Android 侧把 [profileStore] 推进到新 generation；
+     * - `needs_reconfigure`：多项目冲突，返回 [SettingsSaveResult.Failed] 让 UI 引导用户重选，
+     *   Core 不删旧凭据，用户可手动恢复；
+     * - Core 抛错或原生库未加载：返回 [SettingsSaveResult.Failed]，不继续提交，不删旧凭据。
+     *
+     * 标记为 [internal] 供同模块单元测试直接验证迁移行为（不通过 [commitSyncProfile] 间接测）。
+     */
+    internal suspend fun migrateLegacyProfileIfNeeded(): SettingsSaveResult? {
         val initialState = profileStore.readState()
         if (initialState.hasCommittedProfile) return null
-        val legacyConfig = loadSyncConfigStrict()
-        if (legacyConfig == null) {
-            warn("commitSyncProfile: strict read of legacy config failed - aborting migration before any write")
-            return SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
+        val outcome =
+            when (val result = appBridge.migrateLegacySyncProfile()) {
+                is BridgeResult.Success -> result.data
+                is BridgeResult.Error -> {
+                    warn(
+                        "commitSyncProfile: legacy migration failed - aborting before any write: " +
+                            result.fullEnvelope,
+                    )
+                    return SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
+                }
+                BridgeResult.NotLoaded ->
+                    return SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
+            }
+        return when (outcome.outcomeKind) {
+            "not_needed", "no_legacy_config" -> null
+            "needs_reconfigure" -> {
+                warn("commitSyncProfile: legacy migration needs reconfigure - ${outcome.reason}")
+                SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
+            }
+            "migrated" -> {
+                val migratedConfig = outcome.config ?: return null
+                val migrationGeneration = profileStore.nextGeneration()
+                profileStore.stageConfig(migrationGeneration, configJson.toJson(migratedConfig.normalize()))
+                profileStore.stageSecrets(migrationGeneration)
+                profileStore.commitGeneration(migrationGeneration, configJson.toJson(migratedConfig.normalize()))
+                null
+            }
+            else -> null
         }
-        val legacySecrets = loadLegacySyncSecretsTyped()
-        if (legacySecrets is GenerationSecretsReadResult.Failed) {
-            warn("commitSyncProfile: legacy secrets read failed - aborting migration before any write")
-            return SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, 0L)))
-        }
-        val migrationSecrets =
-            if (legacySecrets is GenerationSecretsReadResult.Found) legacySecrets.secrets else SyncSecrets()
-        val migrationGeneration = profileStore.nextGeneration()
-        val migrationResult = saveSyncSecretsForGeneration(migrationGeneration, migrationSecrets)
-        if (migrationResult is SettingsSaveResult.Failed) {
-            warn("commitSyncProfile: legacy secrets migration to generation $migrationGeneration failed - aborting")
-            return migrationResult
-        }
-        profileStore.stageConfig(migrationGeneration, configJson.toJson(legacyConfig.normalize()))
-        profileStore.stageSecrets(migrationGeneration)
-        profileStore.commitGeneration(migrationGeneration, configJson.toJson(legacyConfig.normalize()))
-        return null
     }
 
     suspend fun commitSyncProfile(

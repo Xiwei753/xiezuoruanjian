@@ -34,6 +34,7 @@ pub mod git_backend;
 pub mod github_api_client;
 #[cfg(feature = "github-api")]
 pub mod github_backend;
+pub mod legacy_migration;
 #[cfg(feature = "github-api")]
 pub mod lww;
 pub mod scanner;

@@ -260,7 +260,7 @@ impl SyncTarget {
 ///
 /// 敏感字段（token、ssh_private_key）不在 SyncConfig 中，
 /// 由 SyncSecrets 单独管理，平台端安全存储注入。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SyncConfig {
     /// 是否启用同步
     pub enabled: bool,
@@ -308,7 +308,7 @@ pub(crate) fn default_branch() -> String {
 ///
 /// `token`：GitHub personal access token（HTTPS 模式）。
 /// `ssh_private_key`：SSH deploy key（SSH 模式，当前未使用）。
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SyncSecrets {
     pub token: Option<String>,
     pub ssh_private_key: Option<String>,

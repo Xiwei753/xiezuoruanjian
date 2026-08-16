@@ -7,6 +7,17 @@ use super::types::*;
 /// 把不同本地根映射到同一个远端仓库的不同前缀。
 /// 旧的"作品同步 + 应用数据同步"两套用户配置 API 已删除。
 impl WriterCoreApi {
+    /// 旧→新同步 profile 一次性迁移（Issue #630 评论第 4 点 / D）。
+    ///
+    /// 详见 `crate::sync::legacy_migration`。失败时返回 `WriterError`；
+    /// 冲突时返回 `NeedsReconfigure`（非 Err），由 UI 引导用户重选全局仓库。
+    pub fn migrate_legacy_sync_profile(&self) -> ApiResult<LegacyMigrationOutcomeDto> {
+        self.core()
+            .migrate_legacy_sync_profile()
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+
     /// 加载全局同步配置。
     pub fn load_sync_config(&self) -> ApiResult<SyncConfigDto> {
         self.core()

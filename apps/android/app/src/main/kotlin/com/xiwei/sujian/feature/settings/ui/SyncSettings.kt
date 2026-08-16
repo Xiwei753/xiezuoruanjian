@@ -1,5 +1,6 @@
 package com.xiwei.sujian.feature.settings.ui
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -32,7 +33,12 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
  *
  * 编辑 [SettingsUiState.syncConfig]/[SettingsUiState.syncSecrets]，
  * 发送 [SettingsIntent.DryRun]/[SettingsIntent.TestConnection]/[SettingsIntent.PerformSync]。
- * 标题只出现一次（"同步"），supporting text 说明同步范围与 GitHub API 限制。
+ * 标题只出现一次（"同步"由 SettingsRoute 的 SettingsExpandableSection 提供），
+ * 这里不再重复同名大标题；supporting text 说明同步范围与 GitHub API 限制。
+ *
+ * #630 评论 5306659312 问题 A：删除外层 SettingsSyncScope（已被全量同步方案淘汰的
+ * "当前作品同步/应用数据同步"作用域容器），改用普通 Column 承载展开内容。
+ * 需要给字段分层时用 SettingsFieldGroup，不再造第二个同步标题。
  */
 @Composable
 fun SyncSettings(
@@ -55,7 +61,10 @@ fun SyncSettings(
     LaunchedEffect(syncSecrets.token) { token = syncSecrets.token ?: "" }
     LaunchedEffect(syncConfig.syncIntervalSeconds) { syncInterval = (syncConfig.syncIntervalSeconds ?: 300).toFloat() }
 
-    SettingsSyncScope(title = stringResource(id = R.string.pref_category_sync)) {
+    // #630 评论 5306659312 问题 A：外层不再用 SettingsSyncScope（会重复显示"同步"标题）。
+    // 同步分类标题已由 SettingsRoute 的 SettingsExpandableSection 显示一次，
+    // 展开内容直接用普通 Column 承载；需要给字段分层时用 SettingsFieldGroup。
+    Column(modifier = modifier.fillMaxWidth()) {
         // supporting text：同步范围 + GitHub API 提示
         Text(
             text = stringResource(id = R.string.sync_github_api_hint),

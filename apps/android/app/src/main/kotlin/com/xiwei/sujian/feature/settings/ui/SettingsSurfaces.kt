@@ -117,34 +117,3 @@ fun SettingsFieldGroup(
         }
     }
 }
-
-/**
- * 同步作用域容器 — 仅负责显示同步作用域标题（"当前作品同步"/"应用数据同步"）一次，
- * 内部直接放字段、开关、按钮与 error surface，不再重复同名大标题。
- *
- * Issue #630 评论 5305922534：消除 SyncSettings 里重复的同名 SettingsFieldGroup 标题。
- * 视觉上与 [SettingsFieldGroup] 同色（surfaceContainerHigh），但标题用 titleMedium
- * 以区分作用域标题与普通字段组标题。
- */
-@Composable
-fun SettingsSyncScope(
-    title: String,
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit,
-) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = MaterialTheme.shapes.large,
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 12.dp),
-            )
-            content()
-        }
-    }
-}

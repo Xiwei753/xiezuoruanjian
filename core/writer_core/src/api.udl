@@ -359,6 +359,15 @@ dictionary FullSyncDiagnosticsResultDto {
     SyncDiagnosticsResultDto diagnostics;
 };
 
+// Issue #630 评论第 4 点 / D：旧→新同步 profile 迁移结果。
+// outcome_kind: "not_needed" | "migrated" | "needs_reconfigure" | "no_legacy_config"
+dictionary LegacyMigrationOutcomeDto {
+    string outcome_kind;
+    SyncConfigDto? config;
+    SyncSecretsDto? secrets;
+    string? reason;
+};
+
 [Error]
 enum WriterError {
     "Io",
@@ -1095,6 +1104,11 @@ interface WriterAppService {
     boolean save_syncable_settings(SyncableSettingsDto settings);
 
     // 全量同步统一入口（Issue #630）：一个全局 config + 一份全局凭据。
+
+    // Issue #630 评论第 4 点 / D：旧→新同步 profile 一次性迁移。
+    [Throws=WriterError]
+    LegacyMigrationOutcomeDto migrate_legacy_sync_profile();
+
     [Throws=WriterError]
     SyncConfigDto load_sync_config();
 

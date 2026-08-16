@@ -236,3 +236,21 @@ data class FullSyncDryRunResult(
 data class FullSyncDiagnosticsResult(
     val diagnostics: SyncDiagnosticsResult,
 )
+
+/**
+ * #630 评论第 4 点 / D：旧→新同步 profile 一次性迁移结果（Android 侧 model）。
+ *
+ * 与 Core `LegacyMigrationOutcomeDto` 对齐，用 [outcomeKind] 字符串区分变体：
+ * - `"not_needed"`：新全局已存在，无需迁移
+ * - `"migrated"`：迁移成功，[config] / [secrets] 字段填充
+ * - `"needs_reconfigure"`：多项目冲突，[reason] 字段填充
+ * - `"no_legacy_config"`：没找到任何旧配置
+ *
+ * 失败/冲突时 Core 不删旧凭据；Android 侧据此决定是否继续提交。
+ */
+data class LegacyMigrationOutcome(
+    val outcomeKind: String,
+    val config: SyncConfig? = null,
+    val secrets: SyncSecrets? = null,
+    val reason: String? = null,
+)

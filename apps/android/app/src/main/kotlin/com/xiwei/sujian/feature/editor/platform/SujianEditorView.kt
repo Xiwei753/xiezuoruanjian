@@ -507,11 +507,17 @@ class SujianEditorView
         }
 
         override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): InputConnection? {
-            // #624 评论5：会话未绑定直接返回 null — 系统拿到的 InputConnection
-            // 必须属于当前真实 session。绑定完成并取得焦点后由 attachSession
-            // 的 restartInput 让系统重新查询，不再出现 created=true sessionBound=false。
+            // #624 评论5 / #630 评论 5306659312 问题 C：会话未绑定直接返回 null —
+            // 系统拿到的 InputConnection 必须属于当前真实 session。绑定后由
+            // activateInput 在 session 换绑时按需 restartInput 让系统重新查询，
+            // 不再出现 created=true sessionBound=false。
             if (!isSessionBound) return null
             val ic = inputAdapter.onCreateInputConnection(outAttrs)
+            if (ic != null) {
+                // 系统已拿到属于当前 session 的连接，清掉换绑 pending —
+                // 不需要 activateInput 再 restartInput 一次。
+                inputRestartPending = false
+            }
             com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.inputConnection(
                 created = ic != null,
                 sessionBound = isSessionBound,
@@ -858,18 +864,24 @@ class SujianEditorView
         }
 
         /**
-         * #630 C块：唯一的"让用户开始输入"入口 — session 绑定与唤起 IME 彻底分开。
-         * 新获得焦点只 requestFocus；已持有焦点但换了 session 才 restartInput；
+         * #630 C块 / 评论 5306659312 问题 C：唯一的"让用户开始输入"入口 —
+         * session 绑定与唤起 IME 彻底分开。
+         *
+         * - 未绑定：直接返回（不创建属于空 session 的连接）。
+         * - 未聚焦：requestFocus（系统会回调 onCreateInputConnection 拿新连接）。
+         * - 已聚焦且 inputRestartPending（session 换绑过）：restartInput 一次让系统
+         *   重新查询当前 session 的连接，然后清 pending。
+         * - 已聚焦且未换绑（普通重复 tap）：不 restart，不打断 composition/候选。
          * 最后 WindowInsetsControllerCompat.show(ime())，与 dismissImeForNavigation 对称。
          */
         fun activateInput() {
             if (!isSessionBound) return
-            val alreadyFocused = hasFocus()
-            if (!alreadyFocused) {
+            if (!hasFocus()) {
                 requestFocus()
-            } else {
+            } else if (inputRestartPending) {
                 (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
                     ?.restartInput(this)
+                inputRestartPending = false
             }
             ViewCompat.getWindowInsetsController(this)
                 ?.show(WindowInsetsCompat.Type.ime())
@@ -906,6 +918,14 @@ class SujianEditorView
 
         var isSessionBound: Boolean = false
             internal set
+
+        // #630 评论 5306659312 问题 C：session 换绑一次性标记 —
+        // rebind 时若旧连接仍持有焦点，设 pending；下次 activateInput 在已聚焦状态下
+        // 据此 restartInput 一次让系统重新查询新 session 的 InputConnection，然后清 pending。
+        // 普通重复 tap（不换 session）pending 保持 false，不 restart，不打断 composition/候选。
+        // onCreateInputConnection 成功创建连接后也清 pending（系统已拿到新连接）。
+        private var inputRestartPending: Boolean = false
+
         private var currentProfile: TextEditorProfile = TextEditorProfile.DocumentBody
         private val isSecretMode: Boolean
             get() =
@@ -946,8 +966,10 @@ class SujianEditorView
             bindSessionInternal(sessionBridge, profile)
             applyProfileToPipeline(profile)
             pipeline.attachSnapshot(text, revision, cursorUtf8, selStartUtf8, selEndUtf8)
-            // #630 C块：attachSession 只装 bridge/profile/snapshot — 不再 requestFocus + restartInput。
-            // 唤起 IME 由 EditorWindowHost 在 completeWindowAttach==true 后调 activateInput() 统一处理。
+            // #630 C块 / 评论 5306659312 问题 C：attachSession 只装 bridge/profile/snapshot —
+            // 不再 requestFocus + restartInput。唤起 IME 由 EditorWindowHost 在
+            // completeWindowAttach==true 后调 activateInput() 统一处理；session 换绑时
+            // bindSessionInternal 已设 inputRestartPending，activateInput 据此按需 restartInput。
             return true
         }
 
@@ -980,11 +1002,20 @@ class SujianEditorView
             profile: TextEditorProfile,
         ) {
             if (isSessionBound) {
+                // #630 评论 5306659312 问题 C：rebind — 旧连接仍活着但即将换 session。
+                // unbindSession 会 clearFocus()，所以先捕获旧焦点状态；若旧连接持有焦点，
+                // 设 inputRestartPending，让下次 activateInput 在已聚焦时 restartInput 一次，
+                // 让系统重新查询新 session 的 InputConnection。首次绑定不设 pending
+                // （没有旧连接需要 restart）。
+                val hadFocusBeforeRebind = hasFocus()
                 onLocalEdit = null
                 onExternalEdit = null
                 onCommitRequested = null
                 onCancelRequested = null
                 unbindSession("rebind")
+                if (hadFocusBeforeRebind) {
+                    inputRestartPending = true
+                }
             }
             kernelBridge = sessionBridge
             currentProfile = profile
