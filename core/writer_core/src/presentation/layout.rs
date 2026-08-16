@@ -28,9 +28,13 @@
 pub mod breakpoints;
 pub mod metrics;
 pub mod resolver;
+pub mod workbench;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod resolver_tests;
 
 use serde::{Deserialize, Serialize};
 
@@ -109,5 +113,5 @@ pub fn resolve_workbench_layout(
     viewport: &resolver::WindowViewport,
     visibility: resolver::WorkbenchVisibility,
 ) -> resolver::WorkbenchLayoutPlan {
-    resolver::resolve_workbench_layout(viewport, visibility)
+    workbench::resolve_workbench_layout(viewport, visibility)
 }

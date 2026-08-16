@@ -2,38 +2,14 @@ package com.xiwei.sujian.app.navigation
 
 import android.annotation.SuppressLint
 import androidx.activity.compose.PredictiveBackHandler
-import androidx.compose.animation.AnimatedContentTransitionScope
-import androidx.compose.animation.ContentTransform
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,16 +17,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
-import androidx.navigation3.scene.Scene
 import androidx.navigation3.ui.NavDisplay
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.SujianAppState
@@ -63,13 +35,9 @@ import com.xiwei.sujian.app.presentation.layout.rememberAndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.layout.rememberWorkbenchLayoutPlanner
 import com.xiwei.sujian.app.presentation.screen.AndroidChromePolicy
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
-import com.xiwei.sujian.app.presentation.screen.SujianChromeAction
 import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
 import com.xiwei.sujian.app.presentation.screen.rememberProjectActions
 import com.xiwei.sujian.app.state.ActiveDocumentGate
-import com.xiwei.sujian.core.designsystem.component.SujianIconButton
-import com.xiwei.sujian.core.designsystem.component.SujianSnackbar
-import com.xiwei.sujian.core.designsystem.component.SujianTopAppBar
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.platform.window.AospFoldFeatureInfo
@@ -79,13 +47,11 @@ import com.xiwei.sujian.feature.project.ui.WorkspaceLocation
 import com.xiwei.sujian.feature.project.ui.WorkspaceNavigator
 import com.xiwei.sujian.feature.project.ui.buildInitialHistory
 import com.xiwei.sujian.feature.project.ui.deriveRestoreDestination
-import com.xiwei.sujian.feature.project.ui.guardedBack
 import com.xiwei.sujian.feature.settings.ui.SettingsRoute
 import com.xiwei.sujian.feature.starmap.ui.StarMapPlaceholderScreen
 import com.xiwei.sujian.feature.stats.ui.StatsScreen
 import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
@@ -128,152 +94,12 @@ internal fun SujianDestination.toRoute(): SujianRoute =
         SujianDestination.Stats -> SujianRoute.Stats
     }
 
-@Stable
-private class SujianTopBarInfo(
-    val title: String,
-    val navigationIcon: ImageVector?,
-    val onNavigationClick: (() -> Unit)?,
-    val actions: @Composable () -> Unit,
-    val containerColor: Color,
-)
-
-/** 顶栏操作所需的环境依赖 — 打包传递，避免函数参数超出门禁阈值。 */
-private data class SujianTopBarEnv(
-    val syncState: SyncIndicatorState,
-    val coroutineScope: CoroutineScope,
-    val deps: SujianAppDependencies,
-    val topLevelBackStack: SujianTopLevelBackStack,
-)
-
 private fun rememberInitialNavStack(initialDestination: String?): Pair<SujianDestination, List<SujianRoute>> =
     when (initialDestination) {
         "settings" -> SujianDestination.Works to listOf(SujianRoute.Works, SujianRoute.Settings)
         "starmap" -> SujianDestination.StarMap to listOf(SujianRoute.StarMap)
         "stats" -> SujianDestination.Stats to listOf(SujianRoute.Stats)
         else -> SujianDestination.Works to listOf(SujianRoute.Works)
-    }
-
-@Composable
-private fun rememberSujianTopBarTitle(
-    currentRoute: SujianRoute,
-    appState: SujianAppState,
-    workspaceLocation: WorkspaceLocation,
-): String =
-    when (currentRoute) {
-        is SujianRoute.Works ->
-            when (workspaceLocation) {
-                // #625 第二段：作品根页（ProjectList 位置）标题用「素笺」，
-                // 进入 ChapterTree / Editor 后用项目标题。
-                WorkspaceLocation.ProjectList -> stringResource(id = R.string.title_sujian)
-                is WorkspaceLocation.ChapterTree, is WorkspaceLocation.Editor ->
-                    appState.currentProjectTitle.ifEmpty { stringResource(id = R.string.title_projects) }
-            }
-        is SujianRoute.StarMap -> stringResource(id = R.string.title_starmap)
-        is SujianRoute.Stats -> stringResource(id = R.string.title_stats)
-        is SujianRoute.Settings -> stringResource(id = R.string.action_settings)
-    }
-
-/** 顶栏返回逻辑 — 先生成唯一的返回动作，再决定是否显示图标（#597 评论问题三）。
- * 工作区内的返回（正文→章节树→作品列表）统一走 [ProjectNavigationState.back]，
- * 与系统返回、页面返回共用同一个工作区 navigator 历史（返回历史始终同一份）。 */
-@Composable
-private fun rememberSujianTopBarNavigation(
-    currentRoute: SujianRoute,
-    env: SujianTopBarEnv,
-    workspaceNavState: ProjectNavigationState,
-): Pair<ImageVector?, (() -> Unit)?> {
-    val onNavigationClick: (() -> Unit)? =
-        when (currentRoute) {
-            is SujianRoute.Settings -> {
-                { env.topLevelBackStack.removeLastOrNull() }
-            }
-            is SujianRoute.Works -> {
-                if (workspaceNavState.canNavigateBack) {
-                    {
-                        env.coroutineScope.launch {
-                            // #624 评论12 第1项：顶栏返回统一走 guardedBack —
-                            // 先保存活动正文（ActiveDocumentGate flush），成功才导航离开。
-                            workspaceNavState.guardedBack()
-                        }
-                    }
-                } else {
-                    null
-                }
-            }
-            is SujianRoute.StarMap -> null
-            is SujianRoute.Stats -> null
-        }
-    val navigationIcon = if (onNavigationClick != null) SujianIcons.ArrowBack else null
-    return navigationIcon to onNavigationClick
-}
-
-/** 顶栏右侧操作 — 顺序由 Core screen contract 的 HeaderTrailing order 决定（#610）：
- * 作品页/写作区依次提供 同步状态、搜索、设置（视觉从右往左为 设置/搜索/同步）。 */
-
-@Composable
-private fun rememberSujianTopBarActions(
-    currentRoute: SujianRoute,
-    chrome: SujianChromeSpec,
-    env: SujianTopBarEnv,
-): @Composable () -> Unit {
-    // #624 评论5：CompositionLocal 只能在组合上下文读取 — 先取窗口宿主，
-    // 供 Settings onClick 在导航前立刻收 IME。
-    val editorWindowHost = com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost.current
-    val actions: @Composable () -> Unit = {
-        if (currentRoute is SujianRoute.Works) {
-            chrome.actions.forEach { action ->
-                when (action) {
-                    SujianChromeAction.Settings ->
-                        SujianIconButton(
-                            onClick = {
-                                // #624 评论5：进入设置前先立刻收 IME（清焦点 + 隐藏输入法），
-                                // 再切页面 — 不等 AndroidView onRelease 晚一拍才 hide keyboard。
-                                editorWindowHost?.dismissImeForNavigation()
-                                env.topLevelBackStack.add(SujianRoute.Settings)
-                            },
-                            icon = SujianIcons.Settings,
-                            contentDescription = stringResource(id = R.string.action_settings),
-                            semanticId = SujianSemanticIds.NavigationSettings,
-                        )
-                    SujianChromeAction.Search ->
-                        // #624 评论6：写作页/作品页搜索入口恢复可用状态 — #477 的全局搜索
-                        // 界面接入前 onClick 保持空动作，但图标不能从产品契约消失。
-                        SujianIconButton(
-                            onClick = { },
-                            icon = SujianIcons.Search,
-                            contentDescription = stringResource(id = R.string.cd_search_dev),
-                            semanticId = SujianSemanticIds.NavigationSearch,
-                        )
-                    SujianChromeAction.Sync ->
-                        SujianIconButton(
-                            onClick = rememberSujianManualSyncOnClick(env),
-                            icon =
-                                when (env.syncState) {
-                                    SyncIndicatorState.Unconfigured -> SujianIcons.CloudOff
-                                    SyncIndicatorState.Syncing -> SujianIcons.CloudSync
-                                    SyncIndicatorState.Synced -> SujianIcons.CloudDone
-                                    SyncIndicatorState.Failed -> SujianIcons.CloudError
-                                },
-                            contentDescription = stringResource(id = R.string.cd_sync_manual),
-                            semanticId = SujianSemanticIds.NavigationSync,
-                        )
-                }
-            }
-        }
-    }
-    return actions
-}
-
-/** #600：手动同步 onClick — 提取为独立函数降低 rememberSujianTopBarActions 认知复杂度。 */
-private fun rememberSujianManualSyncOnClick(env: SujianTopBarEnv): () -> Unit =
-    {
-        env.coroutineScope.launch {
-            // sync 已改为 per-project — 手动同步针对当前活动作品。
-            val pid = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
-            if (pid != null) {
-                env.deps.syncCoordinator.runSync(SyncTrigger.Manual, pid)
-            }
-        }
     }
 
 /**
@@ -450,167 +276,6 @@ private fun SujianTopLevelSwitchMotion(
     }
 }
 
-/** compact 底栏 — 一级入口只保留 作品/星图/统计（#597 评论问题一）。 */
-@Composable
-private fun SujianCompactBottomBar(
-    currentTopDestination: SujianDestination,
-    onTopLevelSelected: (SujianDestination) -> Unit,
-) {
-    NavigationBar(
-        windowInsets = WindowInsets(0.dp),
-        modifier = Modifier.testTag(SujianSemanticIds.NavigationBar),
-    ) {
-        SujianDestination.entries.forEach { destination ->
-            NavigationBarItem(
-                selected = currentTopDestination == destination,
-                onClick = { onTopLevelSelected(destination) },
-                icon = {
-                    Icon(
-                        imageVector =
-                            if (currentTopDestination == destination) {
-                                destination.selectedIcon
-                            } else {
-                                destination.unselectedIcon
-                            },
-                        contentDescription = stringResource(id = destination.labelResId),
-                    )
-                },
-                label = { Text(text = stringResource(id = destination.labelResId)) },
-                modifier = Modifier.navItemModifier(destination),
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SujianCompactNavScaffold(
-    modifier: Modifier,
-    topBarInfo: SujianTopBarInfo,
-    showTopBar: Boolean,
-    snackbarHostState: SnackbarHostState,
-    bottomBar: @Composable () -> Unit,
-    navDisplayContent: @Composable () -> Unit,
-) {
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        topBar = {
-            // #628 验收点 6：Workbench Writing 由工作台自己拥有顶部工具栏，
-            // 外层 app shell 不再额外画通用顶栏。窄屏 SinglePane 仍画透明 App bar。
-            if (showTopBar) {
-                SujianTopAppBar(
-                    title = topBarInfo.title,
-                    navigationIcon = topBarInfo.navigationIcon,
-                    onNavigationClick = topBarInfo.onNavigationClick,
-                    actions = topBarInfo.actions,
-                    containerColor = topBarInfo.containerColor,
-                )
-            }
-        },
-        bottomBar = bottomBar,
-        snackbarHost = {
-            SnackbarHost(hostState = snackbarHostState) { data ->
-                SujianSnackbar(data = data)
-            }
-        },
-        containerColor = MaterialTheme.colorScheme.background,
-        contentWindowInsets = WindowInsets.safeDrawing,
-    ) { innerPadding ->
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-        ) {
-            navDisplayContent()
-        }
-    }
-}
-
-/** 宽窗口一级导航 — NavigationRail 容器（#597 九：NavigationRail 稳定语义 ID）。 */
-@Composable
-private fun SujianWideRail(
-    currentTopDestination: SujianDestination,
-    onTopLevelSelected: (SujianDestination) -> Unit,
-) {
-    NavigationRail(
-        modifier = Modifier.fillMaxHeight().testTag(SujianSemanticIds.NavigationRail),
-        windowInsets = WindowInsets(0.dp),
-    ) {
-        SujianDestination.entries.forEach { destination ->
-            NavigationRailItem(
-                selected = currentTopDestination == destination,
-                onClick = { onTopLevelSelected(destination) },
-                icon = {
-                    Icon(
-                        imageVector =
-                            if (currentTopDestination == destination) {
-                                destination.selectedIcon
-                            } else {
-                                destination.unselectedIcon
-                            },
-                        contentDescription = stringResource(id = destination.labelResId),
-                    )
-                },
-                label = { Text(text = stringResource(id = destination.labelResId)) },
-                modifier = Modifier.navItemModifier(destination),
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SujianWideNavScaffold(
-    modifier: Modifier,
-    topBarInfo: SujianTopBarInfo,
-    showTopBar: Boolean,
-    snackbarHostState: SnackbarHostState,
-    rail: (@Composable () -> Unit)?,
-    navDisplayContent: @Composable () -> Unit,
-) {
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        topBar = {
-            // #628 验收点 6：Workbench Writing 由工作台自己拥有顶部工具栏，
-            // 外层 app shell 不再额外画通用顶栏。
-            if (showTopBar) {
-                SujianTopAppBar(
-                    title = topBarInfo.title,
-                    navigationIcon = topBarInfo.navigationIcon,
-                    onNavigationClick = topBarInfo.onNavigationClick,
-                    actions = topBarInfo.actions,
-                    containerColor = topBarInfo.containerColor,
-                )
-            }
-        },
-        snackbarHost = {
-            SnackbarHost(hostState = snackbarHostState) { data ->
-                SujianSnackbar(data = data)
-            }
-        },
-        containerColor = MaterialTheme.colorScheme.background,
-        contentWindowInsets = WindowInsets.safeDrawing,
-    ) { innerPadding ->
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-        ) {
-            rail?.invoke()
-            Box(
-                modifier =
-                    Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
-            ) {
-                navDisplayContent()
-            }
-        }
-    }
-}
-
 /** 工作区 navigator — 在导航套件层创建的唯一实例（#597：返回历史始终同一份）。
  *
  * #625 第二段：改用纯业务 [WorkspaceNavigator]，不再依赖 Material3 Adaptive
@@ -742,37 +407,6 @@ private fun SujianRouteEffects(
     }
 }
 
-/** 顶栏信息 — 标题/返回/操作/透明背景 全部由同一份 [SujianChromeSpec] 决策驱动。 */
-@Composable
-private fun rememberSujianTopBarInfo(
-    currentRoute: SujianRoute,
-    appState: SujianAppState,
-    chrome: SujianChromeSpec,
-    env: SujianTopBarEnv,
-    workspaceNavState: ProjectNavigationState,
-): SujianTopBarInfo {
-    val topBarNavigation =
-        rememberSujianTopBarNavigation(currentRoute, env, workspaceNavState)
-    return SujianTopBarInfo(
-        title =
-            if (chrome.showTitle) {
-                // #625 第二段：顶栏标题按业务位置区分「素笺」/项目标题。
-                rememberSujianTopBarTitle(currentRoute, appState, workspaceNavState.currentLocation)
-            } else {
-                ""
-            },
-        navigationIcon = topBarNavigation.first,
-        onNavigationClick = topBarNavigation.second,
-        actions = rememberSujianTopBarActions(currentRoute, chrome, env),
-        containerColor =
-            if (chrome.appBarTransparent) {
-                Color.Transparent
-            } else {
-                MaterialTheme.colorScheme.surface
-            },
-    )
-}
-
 /**
  * #618 一：作品工作区的两份静态动作 spec 取自容器创建时解析的 PresentationPolicyCatalog。
  * 章节树固定按 PROJECT_WORKSPACE 取动作契约（卷章操作不依赖父层组合帧观察到的
@@ -872,72 +506,6 @@ fun SujianNavigationSuite(
     )
 }
 
-/** 外层 scaffold 的顶栏/Snackbar 配置 — 打包传递，避免函数参数超出门禁阈值。 */
-private data class SujianNavScaffoldChrome(
-    val topBarInfo: SujianTopBarInfo,
-    val showOuterTopBar: Boolean,
-    val snackbarHostState: SnackbarHostState,
-)
-
-/** 一级导航选择 — 当前目的地 + 切换回调，打包传递避免函数参数超出门禁阈值。 */
-private data class SujianTopLevelSelection(
-    val current: SujianDestination,
-    val onSelected: (SujianDestination) -> Unit,
-)
-
-/**
- * #628 验收点 6：根据 [AndroidLayoutSpec.useBottomNavigation] 选择 compact 或 wide scaffold。
- * 提取以降低 [SujianNavigationSuite] 行数 — 顶栏归属由 showOuterTopBar 统一判定。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SujianNavScaffoldContent(
-    modifier: Modifier,
-    layoutSpec: AndroidLayoutSpec,
-    chrome: SujianChromeSpec,
-    scaffoldChrome: SujianNavScaffoldChrome,
-    selection: SujianTopLevelSelection,
-    navDisplayContent: @Composable () -> Unit,
-) {
-    if (layoutSpec.useBottomNavigation) {
-        SujianCompactNavScaffold(
-            modifier = modifier,
-            topBarInfo = scaffoldChrome.topBarInfo,
-            showTopBar = scaffoldChrome.showOuterTopBar,
-            snackbarHostState = scaffoldChrome.snackbarHostState,
-            // #597 正文一：进入正文后隐藏底栏；设置页从顶栏进入，也不再显示底栏。
-            bottomBar =
-                if (chrome.showPrimaryNavigation) {
-                    {
-                        SujianCompactBottomBar(selection.current, selection.onSelected)
-                    }
-                } else {
-                    {}
-                },
-            navDisplayContent = navDisplayContent,
-        )
-    } else {
-        // #628 验收点 6：大屏 Writing 顶栏归属已由 showOuterTopBar 统一判定。
-        // SujianWideNavScaffold 复用同一份 topBarInfo + showOuterTopBar，不在此处再算一次。
-        SujianWideNavScaffold(
-            modifier = modifier,
-            topBarInfo = scaffoldChrome.topBarInfo,
-            showTopBar = scaffoldChrome.showOuterTopBar,
-            snackbarHostState = scaffoldChrome.snackbarHostState,
-            // #597 正文一：宽窗口同一套规则 — Settings/Editor 不创建 NavigationRail。
-            rail =
-                if (chrome.showPrimaryNavigation) {
-                    {
-                        SujianWideRail(selection.current, selection.onSelected)
-                    }
-                } else {
-                    null
-                },
-            navDisplayContent = navDisplayContent,
-        )
-    }
-}
-
 /** #614：收集 ViewModel 抛出的 UI 事件，错误走 Snackbar 展示。 */
 @Composable
 private fun SujianUiEventEffect(
@@ -951,17 +519,6 @@ private fun SujianUiEventEffect(
             }
         }
     }
-}
-
-private fun Modifier.navItemModifier(destination: SujianDestination): Modifier {
-    val semanticTag =
-        when (destination) {
-            SujianDestination.Works -> SujianSemanticIds.NavigationWorks
-            SujianDestination.StarMap -> SujianSemanticIds.NavigationStarMap
-            SujianDestination.Stats -> SujianSemanticIds.NavigationStats
-        }
-    // 枚举覆盖全部分支，semanticTag 恒非空；testTag 需要非空 tag。
-    return this.testTag(semanticTag)
 }
 
 /**
@@ -1036,47 +593,3 @@ internal fun syncIndicatorSummary(syncState: SyncIndicatorState): String =
         SyncIndicatorState.Failed -> "failed"
         SyncIndicatorState.Unconfigured -> "unconfigured"
     }
-
-// #614：Works/StarMap/Stats 一级入口无整页动画 — NavEntry metadata 覆盖全局 transitionSpec。
-private val noPageTransitionMetadata: Map<String, Any> =
-    androidx.navigation3.ui.NavDisplay.transitionSpec {
-        EnterTransition.None togetherWith ExitTransition.None
-    } +
-        androidx.navigation3.ui.NavDisplay.popTransitionSpec {
-            EnterTransition.None togetherWith ExitTransition.None
-        }
-
-private val navForwardTransition: AnimatedContentTransitionScope<Scene<NavKey>>.() -> ContentTransform = {
-    fadeIn(animationSpec = tween(180)) togetherWith fadeOut(animationSpec = tween(150))
-}
-
-private val navPopTransition: AnimatedContentTransitionScope<Scene<NavKey>>.() -> ContentTransform = {
-    fadeIn(animationSpec = tween(150)) togetherWith fadeOut(animationSpec = tween(180))
-}
-
-private val navPredictivePopTransition:
-    (AnimatedContentTransitionScope<Scene<NavKey>>, Int) -> ContentTransform = { _, swipeEdge ->
-        when (swipeEdge) {
-            androidx.navigationevent.NavigationEvent.EDGE_LEFT -> {
-                val enter = slideInHorizontally(animationSpec = tween(300)) { fullWidth -> -fullWidth / 3 }
-                val exit = slideOutHorizontally(animationSpec = tween(300)) { fullWidth -> fullWidth / 3 }
-                (fadeIn(animationSpec = tween(300)) + enter) togetherWith
-                    (fadeOut(animationSpec = tween(300)) + exit)
-            }
-            androidx.navigationevent.NavigationEvent.EDGE_RIGHT -> {
-                val enter = slideInHorizontally(animationSpec = tween(300)) { fullWidth -> fullWidth / 3 }
-                val exit = slideOutHorizontally(animationSpec = tween(300)) { fullWidth -> -fullWidth / 3 }
-                (fadeIn(animationSpec = tween(300)) + enter) togetherWith
-                    (fadeOut(animationSpec = tween(300)) + exit)
-            }
-            else -> fadeIn(animationSpec = tween(300)) togetherWith fadeOut(animationSpec = tween(300))
-        }
-    }
-
-internal fun predictiveBackStateFraction(progress: Float): Float =
-    PREDICTIVE_BACK_EASING.transform(progress) * SINGLE_PANE_PROGRESS_RATIO
-
-private val PREDICTIVE_BACK_EASING: androidx.compose.animation.core.CubicBezierEasing =
-    androidx.compose.animation.core.CubicBezierEasing(0.1f, 0.1f, 0f, 1f)
-
-internal const val SINGLE_PANE_PROGRESS_RATIO: Float = 0.1f
