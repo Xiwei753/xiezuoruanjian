@@ -96,6 +96,10 @@ export struct WritingScreen {
   // WritingScreen 持有 controller 实例并注入 SujianEditor；接续加载完成、目标设备 layout 就绪后
   // 调 controller.restore(state)，controller 按目标设备当前 viewport/content 尺寸 clamp + scrollTo。
   private viewportController: EditorViewportController = new EditorViewportController()
+  // Issue #629 评论7 第5项：幂等关闭事务 Promise。performGracefulClose 复用此 Promise，
+  // 避免返回按钮 + aboutToDisappear 双重执行真实关闭链，防止重复统计。
+  // 不重置：页面 close 后即销毁，新会话是新 WritingScreen 实例。
+  private closeTask: Promise<void> | null = null
 
   aboutToAppear() {
     const paramsArr = this.navPathStack.getParamByName(Routes.Writing) as WritingRouteParams[]
@@ -154,19 +158,33 @@ export struct WritingScreen {
     this.lifecycle.addObserver(this.shareLifecycleObserver!)
   }
 
-  // Issue #629 评论6 Part G：统一关闭事务。
+  // Issue #629 评论6 Part G + 评论7 第5项：统一幂等关闭事务。
   // flush input → await coordinator idle → save latest snapshot → detach IME → close session → leave
   // 返回按钮和生命周期退后台都调此方法，禁止多套关闭流程。
+  // 幂等：复用 closeTask Promise，返回按钮 + aboutToDisappear 双重调用只执行一次真实关闭链。
   private async performGracefulClose(): Promise<void> {
+    // Issue #629 评论7 第5项：已有 closeTask 时直接返回同一 Promise（幂等）。
+    if (this.closeTask !== null) {
+      return this.closeTask
+    }
+    this.closeTask = this.doGracefulClose()
+    return this.closeTask
+  }
+
+  // Issue #629 评论7 第5项：真实关闭逻辑（拆出，由 performGracefulClose 幂等包装）。
+  // 保持原顺序：flush → whenIdle → save/统计 → detach → closeAsync。
+  private async doGracefulClose(): Promise<void> {
     // 1. flush 语义调度器中排队的输入（物理键盘/IME/鼠标/触摸）
     if (this.dispatcher) {
       await this.dispatcher.flush()
     }
     // 2. 等 coordinator 命令队列空闲（所有 Core 编辑命令完成，snapshot 已包含最后输入）
     await this.coordinator.whenIdle()
-    // 3. 保存最新 snapshot（此时 snapshot 已包含最后输入，不会读到旧文本）
+    // 3. 保存最新 snapshot / 兜底上报统计（此时 snapshot 已包含最后输入，不会读到旧文本）
     if (this.hasUnsavedChanges) {
       await this.saveChapter()
+      // saveChapter 成功时内部已推进 sessionOldText = content 并重置 session；
+      // 失败时保留旧 sessionOldText 供重试。此处不额外推进，避免覆盖 saveChapter 内部状态。
     } else if (this.sessionOldText !== this.content && this.chapterId) {
       // 没有未保存变更但有统计差异时，兜底上报一次写作统计
       const deviceId = this.settings.statsDeviceId || 'unknown'
@@ -175,6 +193,10 @@ export struct WritingScreen {
         deviceId, 'harmony', this.projectId, this.volumeId,
         this.chapterId, this.sessionOldText, this.content, durationSeconds, this.sessionId
       )
+      // Issue #629 评论7 第5项：统计成功推进 sessionOldText，避免第二遍重复统计。
+      // processWritingEvent 为 fire-and-forget（与 saveChapter 内部一致，不阻塞 detach/close），
+      // best effort 推进；同一段统计不再满足发送条件。
+      this.sessionOldText = this.content
     }
     // 4. detach IME 连接（取消监听并 detach，失败不阻塞）
     await this.harmonyImeConnection.detach()

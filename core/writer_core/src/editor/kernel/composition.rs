@@ -3,7 +3,8 @@ use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorV
 use super::{CompositionSessionState, EditorKernel, TextEditDelta, UndoEntry};
 
 use crate::editor::strong_types::{
-    EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
+    EditorRevision, EditorSessionGeneration, EditorSessionId, Utf16CodeUnitOffset, Utf8ByteOffset,
+    Utf8ByteRange,
 };
 use crate::editor::transaction::{
     classify_composition_visual, AnimationMode, CompositionOperationKind, EditorTransactionCause,
@@ -61,7 +62,7 @@ impl EditorKernel {
             replace_start: Utf8ByteOffset::unchecked(replace_start),
             replace_end_exclusive: Utf8ByteOffset::unchecked(replace_end_exclusive),
             preedit_text: String::new(),
-            preedit_cursor_utf16: 0,
+            preedit_cursor_utf16: Utf16CodeUnitOffset::default(),
         });
 
         let new_selection =
@@ -97,7 +98,7 @@ impl EditorKernel {
         composition_session_id: u64,
         composition_generation: u64,
         new_preedit_text: &str,
-        new_preedit_cursor_offset: usize,
+        new_preedit_cursor_utf16: Utf16CodeUnitOffset,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
         old_selection: Utf8ByteRange,
@@ -117,7 +118,7 @@ impl EditorKernel {
         let replace_start = session.replace_start.value();
 
         session.preedit_text = new_preedit_text.to_string();
-        session.preedit_cursor_utf16 = new_preedit_cursor_offset;
+        session.preedit_cursor_utf16 = new_preedit_cursor_utf16;
         session.generation = session.generation.next();
 
         let classification = classify_composition_visual(
@@ -214,7 +215,7 @@ impl EditorKernel {
         let replace_start = session.replace_start.value();
         let replace_end = session.replace_end_exclusive.value();
         let committed_text = session.preedit_text.clone();
-        let preedit_cursor_utf16 = session.preedit_cursor_utf16;
+        let preedit_cursor_utf16 = session.preedit_cursor_utf16.value();
 
         if replace_start > self.text.byte_len() || replace_end > self.text.byte_len() {
             self.composition_session = None;
@@ -427,7 +428,7 @@ impl EditorKernel {
                 s.replace_start.value() as u32,
                 s.replace_end_exclusive.value() as u32,
                 s.preedit_text.clone(),
-                s.preedit_cursor_utf16 as u32,
+                s.preedit_cursor_utf16.value() as u32,
             )
         })
     }

@@ -5,7 +5,8 @@ mod tests {
     use super::super::types::{DisplayPatch, EditorCommand, EditorOperationKind};
     use super::super::*;
     use crate::editor::strong_types::{
-        EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
+        EditorRevision, EditorSessionGeneration, EditorSessionId, Utf16CodeUnitOffset,
+        Utf8ByteOffset, Utf8ByteRange,
     };
     use crate::editor::transaction::{AnimationMode, EditorTransactionCause};
 
@@ -811,7 +812,7 @@ mod tests {
                 composition_session_id: EditorSessionId::new(session_id),
                 composition_generation: EditorSessionGeneration::new(gen),
                 new_preedit_text: "世界".to_string(),
-                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(2),
+                new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(2),
                 expected_revision: begin.new_revision,
             })
             .into_result();
@@ -869,7 +870,7 @@ mod tests {
                 composition_session_id: EditorSessionId::new(session_id),
                 composition_generation: EditorSessionGeneration::new(gen),
                 new_preedit_text: "坏".to_string(),
-                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(3),
+                new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(3),
                 expected_revision: begin.new_revision,
             })
             .into_result();
@@ -999,7 +1000,7 @@ mod tests {
                 composition_session_id: EditorSessionId::new(session_id),
                 composition_generation: EditorSessionGeneration::new(gen),
                 new_preedit_text: "世界".to_string(),
-                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(2),
+                new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(2),
                 expected_revision: begin.new_revision,
             })
             .into_result();
@@ -1034,7 +1035,7 @@ mod tests {
                 composition_session_id: EditorSessionId::new(session_id),
                 composition_generation: EditorSessionGeneration::new(gen),
                 new_preedit_text: "世界".to_string(),
-                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(99),
+                new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(99),
                 expected_revision: begin.new_revision,
             })
             .into_result();
@@ -1448,7 +1449,7 @@ mod tests {
                 composition_session_id: EditorSessionId::new(session_id),
                 composition_generation: EditorSessionGeneration::new(generation),
                 new_preedit_text: "n".to_string(),
-                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(1),
+                new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(1),
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
@@ -1475,7 +1476,7 @@ mod tests {
             composition_session_id: EditorSessionId::new(session_id),
             composition_generation: EditorSessionGeneration::new(generation),
             new_preedit_text: "nihao".to_string(),
-            new_preedit_cursor_offset: Utf8ByteOffset::unchecked(5),
+            new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(5),
             expected_revision: EditorRevision::new(0),
         });
         let (_, _, gen2) = kernel.composition_session_info().unwrap();
@@ -1506,7 +1507,7 @@ mod tests {
             composition_session_id: EditorSessionId::new(session_id),
             composition_generation: EditorSessionGeneration::new(generation),
             new_preedit_text: " world".to_string(),
-            new_preedit_cursor_offset: Utf8ByteOffset::unchecked(6),
+            new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(6),
             expected_revision: EditorRevision::new(0),
         });
         let (_, _, gen2) = kernel.composition_session_info().unwrap();

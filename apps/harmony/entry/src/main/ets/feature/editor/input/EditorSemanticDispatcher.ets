@@ -6,14 +6,20 @@
 // Issue #629 评论6 Part A：统一串行边界。
 // HarmonyImeConnection 不再自己拥有另一套编辑顺序状态（imeQueue），
 // 物理键盘也不再直接调用 EditorInputAdapter/SelectionController。
-// 所有语义输入（insertText/delete/setSelection/composition/grapheme 导航/paste）
+// 所有语义输入（insertText/setSelection/ime*/grapheme 导航/paste）
 // 都经此 Dispatcher 排队，出队执行时才读 snapshot。
 //
-// grapheme-based 导航（graphemeBackspace/graphemeDelete/graphemeLeft/graphemeRight）
-// 用 Core previousGraphemeBoundary/nextGraphemeBoundary（Part E 已暴露），
-// 不再用 UTF-16 ±1 猜字符边界（避免切进组合附加符 / ZWJ emoji）。
+// Issue #629 评论7 第2项：HarmonyImeConnection 变纯协议翻译器。
+// - HarmonyImeConnection 只派发 imePreviewText/imeCommitText/imeCancelPreview（不判断 composition 状态）。
+// - 本 Dispatcher 在唯一队列出队时查 inputAdapter.isComposing()（Core 驱动状态）决定
+//   begin/update/finish/cancel。事件顺序和 composition 状态判断属于同一条串行边界。
+//
+// Issue #629 评论7 第6项：软键盘删除统一 Core grapheme。
+// - 删除 {kind:'delete',direction} 命令变体和 inputAdapter.onDelete 调用。
+// - graphemeBackspace/graphemeDelete 用 Core previousGraphemeBoundary/nextGraphemeBoundary（Part E 已暴露），
+//   不再用 UTF-16 ±1 猜字符边界（避免切进组合附加符 / ZWJ emoji）。
 
-import { EditorInputAdapter, DeleteDirection } from './EditorInputAdapter'
+import { EditorInputAdapter } from './EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
 import { SerialCommandQueue } from '../session/editor_patch_logic'
@@ -23,16 +29,17 @@ import { EditorTransactionCause, EditorEditResult } from '../../../corebridge/dt
 
 // 语义命令类型：把物理键盘/IME/鼠标/触摸的输入统一成语义命令。
 // 出队执行时才读 Coordinator snapshot，避免并发命令拿到同一个旧 cursor/selection。
+// Issue #629 评论7 第2项：composition 命令改为 imePreviewText/imeCommitText/imeCancelPreview，
+// 出队时查 isComposing() 决定 begin/update/finish/cancel（不在 HarmonyImeConnection 队列外判断）。
+// Issue #629 评论7 第6项：删除 {kind:'delete',direction}，软键盘删除统一 graphemeBackspace/graphemeDelete。
 export type SemanticEditCommand =
   | { kind: 'insertText'; text: string }
-  | { kind: 'delete'; direction: DeleteDirection }
   | { kind: 'setSelection'; utf16Offset: number }
   | { kind: 'dragSelect'; utf16Anchor: number; utf16Head: number }
   | { kind: 'selectAll' }
-  | { kind: 'compositionBegin' }
-  | { kind: 'compositionUpdate'; preedit: string }
-  | { kind: 'compositionFinish'; committed: string }
-  | { kind: 'compositionCancel' }
+  | { kind: 'imePreviewText'; text: string }
+  | { kind: 'imeCommitText'; text: string }
+  | { kind: 'imeCancelPreview' }
   | { kind: 'paste'; text: string }
   // grapheme-based navigation (Part E)
   | { kind: 'graphemeBackspace' }
@@ -75,26 +82,24 @@ export class EditorSemanticDispatcher {
   }
 
   // 出队后真正执行：此时 snapshot 已是最新（前一条命令已完成并更新 state）
+  // Issue #629 评论7 第2项：ime* 命令出队时查 inputAdapter.isComposing()（Core 驱动状态）
+  // 决定 begin/update/finish/cancel。事件顺序和 composition 状态判断属于同一条串行边界。
   private async executeCommand(cmd: SemanticEditCommand): Promise<ResultEnvelope<EditorEditResult>> {
     switch (cmd.kind) {
       case 'insertText':
         return this.inputAdapter.onTextInput(cmd.text)
-      case 'delete':
-        return this.inputAdapter.onDelete(cmd.direction)
       case 'setSelection':
         return this.selectionController.onTap(cmd.utf16Offset)
       case 'dragSelect':
         return this.selectionController.onDragSelect(cmd.utf16Anchor, cmd.utf16Head)
       case 'selectAll':
         return this.selectionController.selectAll()
-      case 'compositionBegin':
-        return this.inputAdapter.onCompositionBegin()
-      case 'compositionUpdate':
-        return this.inputAdapter.onCompositionUpdate(cmd.preedit)
-      case 'compositionFinish':
-        return this.inputAdapter.onCompositionFinish(cmd.committed)
-      case 'compositionCancel':
-        return this.inputAdapter.onCompositionCancel()
+      case 'imePreviewText':
+        return this.executeImePreviewText(cmd.text)
+      case 'imeCommitText':
+        return this.executeImeCommitText(cmd.text)
+      case 'imeCancelPreview':
+        return this.executeImeCancelPreview()
       case 'paste':
         return this.inputAdapter.onPaste(cmd.text)
       case 'graphemeBackspace':
@@ -106,6 +111,47 @@ export class EditorSemanticDispatcher {
       case 'graphemeRight':
         return this.executeGraphemeRight(cmd.extend)
     }
+  }
+
+  // imePreviewText：出队时查 isComposing() 决定 begin+update 还是只 update。
+  // - 未开始 composition：await onCompositionBegin 成功后紧接 await onCompositionUpdate。
+  //   begin 失败时不 update（不让 update 读到 sessionId=0/generation=0）。
+  // - 已开始 composition：只 await onCompositionUpdate。
+  // 顺序执行（begin→update 在同一出队 thunk 内 await 串行），不派生新队列任务。
+  private async executeImePreviewText(text: string): Promise<ResultEnvelope<EditorEditResult>> {
+    if (!this.inputAdapter.isComposing()) {
+      // composition 开始：先 begin，成功后才 update。
+      const beginResult = await this.inputAdapter.onCompositionBegin()
+      if (!beginResult.success) {
+        // begin 失败：不 update。避免 update 读到 sessionId=0/generation=0。
+        return beginResult
+      }
+      // begin 成功后紧接 update（同一出队 thunk 内 await 串行）。
+      return this.inputAdapter.onCompositionUpdate(text)
+    }
+    // 已开始 composition：只 update。
+    return this.inputAdapter.onCompositionUpdate(text)
+  }
+
+  // imeCommitText：出队时查 isComposing() 决定 finish 还是普通插入。
+  // - 有 composition：await onCompositionFinish（composition commit）。
+  // - 无 composition：await onTextInput（普通文字插入）。
+  private async executeImeCommitText(text: string): Promise<ResultEnvelope<EditorEditResult>> {
+    if (this.inputAdapter.isComposing()) {
+      return this.inputAdapter.onCompositionFinish(text)
+    }
+    return this.inputAdapter.onTextInput(text)
+  }
+
+  // imeCancelPreview：出队时查 isComposing() 决定 cancel 还是 no-op。
+  // - 有 composition：await onCompositionCancel。
+  // - 无 composition：no-op（返回 success）。
+  private async executeImeCancelPreview(): Promise<ResultEnvelope<EditorEditResult>> {
+    if (this.inputAdapter.isComposing()) {
+      return this.inputAdapter.onCompositionCancel()
+    }
+    // 无 composition：no-op（不设 data，调用方据此知道无编辑结果）
+    return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
   }
 
   // grapheme-based backspace: 用 Core previous_grapheme_boundary 找前一个 grapheme 边界

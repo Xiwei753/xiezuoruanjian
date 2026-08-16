@@ -631,5 +631,266 @@ await testAsync('端到端: 打字→返回，最后输入全部保存，session
   assert.equal(coordinatorQueue.isIdle(), true)
 })
 
+// ── 13. Issue #629 评论7 第5项：幂等关闭事务（closeTask 复用同一 Promise）──
+//
+// 验证：
+//   13a. 连续 performGracefulClose 两次，doGracefulClose 内部逻辑只执行一次，Promise 同一性
+//   13b. hasUnsavedChanges=false 有统计差异时，performGracefulClose 两次 processWritingEvent 只调一次
+//   13c. sessionOldText 推进防御：doGracefulClose 两次（绕过幂等），第二次不再满足统计条件
+//   13d. 返回按钮 + aboutToDisappear 并发：真实关闭链只跑一次
+//   13e. 第一次完成后再调仍返回已 resolved 的同一 Promise（不重跑）
+//   13f. hasUnsavedChanges=true 分支 saveChapter 推进 sessionOldText，第二次不走统计分支也不重复
+//
+// 与修改后的 WritingScreen.performGracefulClose / doGracefulClose 对齐：
+//   performGracefulClose(): closeTask !== null ? return closeTask : closeTask = doGracefulClose()
+//   doGracefulClose(): flush → whenIdle → save/统计(推进 sessionOldText) → detach → closeAsync
+
+// 幂等 performGracefulClose + doGracefulClose 工厂（与修改后的 WritingScreen 对齐）
+function createGracefulCloseScreen(deps, state) {
+  let closeTask = null
+  const doGracefulClose = async () => {
+    const { dispatcher, coordinator, harmonyImeConnection, bridge } = deps
+    // 1. flush
+    if (dispatcher) {
+      await dispatcher.flush()
+    }
+    // 2. 等 coordinator idle
+    await coordinator.whenIdle()
+    // 3. 保存/统计
+    if (state.hasUnsavedChanges) {
+      await state.saveChapter()
+    } else if (state.sessionOldText !== state.content && state.chapterId) {
+      const deviceId = state.settings.statsDeviceId || 'unknown'
+      const durationSeconds = Math.round((Date.now() - state.sessionStartTime) / 1000)
+      bridge.processWritingEvent(
+        deviceId, 'harmony', state.projectId, state.volumeId,
+        state.chapterId, state.sessionOldText, state.content, durationSeconds, state.sessionId
+      )
+      // Issue #629 评论7 第5项：统计成功推进 sessionOldText，避免第二遍重复统计。
+      state.sessionOldText = state.content
+    }
+    // 4. detach IME
+    await harmonyImeConnection.detach()
+    // 5. close session
+    await coordinator.closeAsync()
+  }
+  const performGracefulClose = () => {
+    // 幂等：复用同一 Promise，避免双重执行真实关闭链。
+    if (closeTask !== null) {
+      return closeTask
+    }
+    closeTask = doGracefulClose()
+    return closeTask
+  }
+  return { performGracefulClose, doGracefulClose, getCloseTask: () => closeTask }
+}
+
+await testAsync('幂等: 连续 performGracefulClose 两次，doGracefulClose 内部逻辑只执行一次，Promise 同一', async () => {
+  const dispatcher = new MockDispatcher()
+  const coordinator = new MockCoordinator()
+  const harmonyImeConnection = new MockImeConnection()
+  const bridge = new MockBridge()
+  const saveChapterCalls = []
+  const state = {
+    hasUnsavedChanges: true,
+    chapterId: 'c1',
+    content: 'edited',
+    sessionOldText: 'original',
+    sessionId: 's1',
+    sessionStartTime: Date.now(),
+    projectId: 'p1',
+    volumeId: 'v1',
+    settings: { statsDeviceId: 'dev1' },
+    saveChapter: async () => { saveChapterCalls.push('saveChapter'); await sleep(5) },
+  }
+  const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
+  const screen = createGracefulCloseScreen(deps, state)
+
+  const p1 = screen.performGracefulClose()
+  const p2 = screen.performGracefulClose()
+  // 关键断言：两次返回的 Promise 是同一个对象（===）
+  assert.equal(p1, p2, '两次返回的 Promise 应严格相等（同一对象）')
+  await p1
+
+  // 内部逻辑只执行一次（计数验证，非字符串匹配）
+  assert.deepEqual(dispatcher.calls, ['flush'], 'flush 只调一次')
+  assert.deepEqual(coordinator.calls, ['whenIdle', 'closeAsync'], 'coordinator 只调一次 whenIdle+closeAsync')
+  assert.deepEqual(harmonyImeConnection.calls, ['detach'], 'detach 只调一次')
+  assert.deepEqual(saveChapterCalls, ['saveChapter'], 'saveChapter 只调一次')
+})
+
+await testAsync('幂等: hasUnsavedChanges=false 有统计差异，performGracefulClose 两次 processWritingEvent 只调一次', async () => {
+  const dispatcher = new MockDispatcher()
+  const coordinator = new MockCoordinator()
+  const harmonyImeConnection = new MockImeConnection()
+  const bridge = new MockBridge()
+  const state = {
+    hasUnsavedChanges: false,
+    chapterId: 'c1',
+    content: 'new-text',
+    sessionOldText: 'old-text',  // 不同 → 有统计差异
+    sessionId: 's1',
+    sessionStartTime: Date.now() - 3000,
+    projectId: 'p1',
+    volumeId: 'v1',
+    settings: { statsDeviceId: 'dev1' },
+    saveChapter: async () => {},
+  }
+  const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
+  const screen = createGracefulCloseScreen(deps, state)
+
+  await screen.performGracefulClose()
+  await screen.performGracefulClose()
+
+  // 关键断言：processWritingEvent 只被调一次（幂等复用 Promise，第二次根本不执行 doGracefulClose）
+  assert.equal(bridge.processWritingEventCalls.length, 1, 'processWritingEvent 只调一次')
+  // sessionOldText 已推进（防御性，即使 closeTask 被重置也不会重复统计）
+  assert.equal(state.sessionOldText, state.content, 'sessionOldText 已推进到 content')
+  // 真实关闭链只跑一次
+  assert.deepEqual(coordinator.calls, ['whenIdle', 'closeAsync'], 'coordinator 只调一次')
+  assert.deepEqual(harmonyImeConnection.calls, ['detach'], 'detach 只调一次')
+})
+
+await testAsync('推进防御: doGracefulClose 两次（绕过幂等），第二次因 sessionOldText 已推进不调 processWritingEvent', async () => {
+  // 此测试验证 sessionOldText 推进的防御价值：即使 closeTask 机制失效（被重置或并发窗口），
+  // sessionOldText 推进后第二次也不满足统计条件，不会重复上报。
+  const dispatcher = new MockDispatcher()
+  const coordinator = new MockCoordinator()
+  const harmonyImeConnection = new MockImeConnection()
+  const bridge = new MockBridge()
+  const state = {
+    hasUnsavedChanges: false,
+    chapterId: 'c1',
+    content: 'new-text',
+    sessionOldText: 'old-text',
+    sessionId: 's1',
+    sessionStartTime: Date.now() - 3000,
+    projectId: 'p1',
+    volumeId: 'v1',
+    settings: { statsDeviceId: 'dev1' },
+    saveChapter: async () => {},
+  }
+  const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
+  const screen = createGracefulCloseScreen(deps, state)
+
+  await screen.doGracefulClose()
+  assert.equal(bridge.processWritingEventCalls.length, 1, '第一次 doGracefulClose 调 processWritingEvent 一次')
+  assert.equal(state.sessionOldText, state.content, '第一次后 sessionOldText 推进到 content')
+
+  await screen.doGracefulClose()
+  // 关键断言：第二次不调 processWritingEvent（sessionOldText 已推进，不再满足 !== content 条件）
+  assert.equal(bridge.processWritingEventCalls.length, 1, '第二次 doGracefulClose 不调 processWritingEvent')
+  // 但 detach/closeAsync 仍执行（doGracefulClose 本身不幂等，幂等由 performGracefulClose 保证）
+  assert.deepEqual(coordinator.calls, ['whenIdle', 'closeAsync', 'whenIdle', 'closeAsync'], 'doGracefulClose 两次各执行一次 closeAsync')
+})
+
+await testAsync('并发: 返回按钮和 aboutToDisappear 同时调 performGracefulClose，真实关闭链只跑一次', async () => {
+  // 模拟返回按钮 onClick 和 aboutToDisappear 并发触发（真实场景：用户按返回瞬间页面也 aboutToDisappear）
+  const dispatcher = new MockDispatcher()
+  dispatcher.flushDelayMs = 20  // flush 有延迟，制造并发窗口
+  const coordinator = new MockCoordinator()
+  coordinator.whenIdleDelayMs = 20
+  const harmonyImeConnection = new MockImeConnection()
+  const bridge = new MockBridge()
+  const saveChapterCalls = []
+  const state = {
+    hasUnsavedChanges: true,
+    chapterId: 'c1',
+    content: 'edited',
+    sessionOldText: 'original',
+    sessionId: 's1',
+    sessionStartTime: Date.now(),
+    projectId: 'p1',
+    volumeId: 'v1',
+    settings: { statsDeviceId: 'dev1' },
+    saveChapter: async () => { saveChapterCalls.push('saveChapter'); await sleep(5) },
+  }
+  const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
+  const screen = createGracefulCloseScreen(deps, state)
+
+  // 并发：返回按钮和 aboutToDisappear 同时触发（不等第一个完成就调第二个）
+  const pBack = screen.performGracefulClose()
+  const pDisappear = screen.performGracefulClose()
+  // 两个 Promise 应是同一对象
+  assert.equal(pBack, pDisappear, '并发调用返回同一 Promise')
+  await Promise.all([pBack, pDisappear])
+
+  // 关键断言：真实关闭链只跑一次（不是两次）
+  assert.deepEqual(dispatcher.calls, ['flush'], 'flush 只调一次（并发复用同一 Promise）')
+  assert.deepEqual(coordinator.calls, ['whenIdle', 'closeAsync'], 'coordinator 只调一次')
+  assert.deepEqual(harmonyImeConnection.calls, ['detach'], 'detach 只调一次')
+  assert.deepEqual(saveChapterCalls, ['saveChapter'], 'saveChapter 只调一次')
+  assert.equal(bridge.processWritingEventCalls.length, 0, 'hasUnsavedChanges=true 时不调 processWritingEvent')
+})
+
+await testAsync('幂等: 第一次完成后再调 performGracefulClose 仍返回已 resolved 的同一 Promise（不重跑）', async () => {
+  const dispatcher = new MockDispatcher()
+  const coordinator = new MockCoordinator()
+  const harmonyImeConnection = new MockImeConnection()
+  const bridge = new MockBridge()
+  const state = {
+    hasUnsavedChanges: false,
+    chapterId: 'c1',
+    content: 'same',
+    sessionOldText: 'same',
+    sessionId: 's1',
+    sessionStartTime: Date.now(),
+    projectId: 'p1',
+    volumeId: 'v1',
+    settings: { statsDeviceId: 'dev1' },
+    saveChapter: async () => {},
+  }
+  const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
+  const screen = createGracefulCloseScreen(deps, state)
+
+  const p1 = screen.performGracefulClose()
+  await p1
+  const p2 = screen.performGracefulClose()
+  // 完成后再次调用仍返回同一 Promise（不重置 closeTask）
+  assert.equal(p1, p2, '完成后再次调用仍返回同一 Promise')
+  await p2  // 应立即 resolve（已 resolved）
+  assert.deepEqual(coordinator.calls, ['whenIdle', 'closeAsync'], '仍只执行一次真实关闭链')
+  assert.deepEqual(dispatcher.calls, ['flush'], 'flush 仍只调一次')
+})
+
+await testAsync('幂等: hasUnsavedChanges=true 分支 saveChapter 推进 sessionOldText，第二次不重复统计', async () => {
+  // 验证 hasUnsavedChanges=true 分支：saveChapter 内部推进 sessionOldText（与 WritingScreen.saveChapter 对齐），
+  // doGracefulClose 两次（绕过幂等）第二次不再走统计分支也不重复 saveChapter。
+  const dispatcher = new MockDispatcher()
+  const coordinator = new MockCoordinator()
+  const harmonyImeConnection = new MockImeConnection()
+  const bridge = new MockBridge()
+  const saveChapterCalls = []
+  const state = {
+    hasUnsavedChanges: true,
+    chapterId: 'c1',
+    content: 'edited',
+    sessionOldText: 'original',
+    sessionId: 's1',
+    sessionStartTime: Date.now(),
+    projectId: 'p1',
+    volumeId: 'v1',
+    settings: { statsDeviceId: 'dev1' },
+    // saveChapter 内部推进 sessionOldText = content（与 WritingScreen.saveChapter 对齐）
+    saveChapter: async () => {
+      saveChapterCalls.push('saveChapter')
+      state.sessionOldText = state.content
+      state.hasUnsavedChanges = false
+    },
+  }
+  const deps = { dispatcher, coordinator, harmonyImeConnection, bridge }
+  const screen = createGracefulCloseScreen(deps, state)
+
+  await screen.doGracefulClose()
+  assert.deepEqual(saveChapterCalls, ['saveChapter'], '第一次调 saveChapter')
+  assert.equal(state.sessionOldText, state.content, 'saveChapter 后 sessionOldText 推进')
+  assert.equal(state.hasUnsavedChanges, false, 'saveChapter 后 hasUnsavedChanges=false')
+
+  await screen.doGracefulClose()
+  // 第二次：hasUnsavedChanges=false 且 sessionOldText === content → 不调 saveChapter 也不调 processWritingEvent
+  assert.deepEqual(saveChapterCalls, ['saveChapter'], '第二次不调 saveChapter（hasUnsavedChanges=false）')
+  assert.equal(bridge.processWritingEventCalls.length, 0, '第二次不调 processWritingEvent（sessionOldText 已推进）')
+})
+
 console.log('---')
 console.log(`全部通过：${passed} 个测试`)

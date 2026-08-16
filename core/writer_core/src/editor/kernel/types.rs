@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::editor::strong_types::{
-    EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
+    EditorRevision, EditorSessionGeneration, EditorSessionId, Utf16CodeUnitOffset, Utf8ByteOffset,
+    Utf8ByteRange,
 };
 use crate::editor::transaction::{AnimationMode, EditorTransactionCause, OffsetMap};
 
@@ -72,7 +73,7 @@ pub enum EditorCommand {
         composition_session_id: EditorSessionId,
         composition_generation: EditorSessionGeneration,
         new_preedit_text: String,
-        new_preedit_cursor_offset: Utf8ByteOffset,
+        new_preedit_cursor_utf16: Utf16CodeUnitOffset,
         expected_revision: EditorRevision,
     },
     FinishComposition {

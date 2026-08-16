@@ -13,7 +13,8 @@ pub mod types;
 
 use self::result::EditorInputError;
 use crate::editor::strong_types::{
-    EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
+    EditorRevision, EditorSessionGeneration, EditorSessionId, Utf16CodeUnitOffset, Utf8ByteOffset,
+    Utf8ByteRange,
 };
 use crop::Rope;
 
@@ -65,7 +66,7 @@ pub(crate) struct CompositionSessionState {
     pub(crate) replace_start: Utf8ByteOffset,
     pub(crate) replace_end_exclusive: Utf8ByteOffset,
     pub(crate) preedit_text: String,
-    pub(crate) preedit_cursor_utf16: usize,
+    pub(crate) preedit_cursor_utf16: Utf16CodeUnitOffset,
 }
 
 impl Default for EditorKernel {

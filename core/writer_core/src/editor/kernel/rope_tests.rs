@@ -13,7 +13,8 @@ mod rope_tests {
     use super::super::types::{DisplayPatch, EditorCommand, EditorOperationKind};
     use super::super::EditorKernel;
     use crate::editor::strong_types::{
-        EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
+        EditorRevision, EditorSessionGeneration, EditorSessionId, Utf16CodeUnitOffset,
+        Utf8ByteOffset, Utf8ByteRange,
     };
     use crate::editor::transaction::{EditorTransactionCause, OffsetMap, OffsetMapKind};
 
@@ -233,7 +234,7 @@ mod rope_tests {
                 composition_session_id: EditorSessionId::new(session_id),
                 composition_generation: EditorSessionGeneration::new(generation),
                 new_preedit_text: "世界".to_string(),
-                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(4),
+                new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(4),
                 expected_revision: begin.new_revision,
             })
             .into_result();
@@ -257,7 +258,7 @@ mod rope_tests {
                 composition_session_id: EditorSessionId::new(session_id),
                 composition_generation: EditorSessionGeneration::new(generation),
                 new_preedit_text: "世界".to_string(),
-                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(4),
+                new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(4),
                 expected_revision: begin.new_revision,
             })
             .into_result();

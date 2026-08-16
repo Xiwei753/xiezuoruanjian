@@ -323,7 +323,7 @@ impl super::WriterAppService {
         expected_revision: u64,
     ) -> EditorEditResultDto {
         use crate::editor::strong_types::{
-            EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset,
+            EditorRevision, EditorSessionGeneration, EditorSessionId, Utf16CodeUnitOffset,
         };
         use crate::editor::EditorCommand;
         self.with_session(|s| {
@@ -338,7 +338,7 @@ impl super::WriterAppService {
                 },
                 composition_generation: EditorSessionGeneration::new(composition_generation),
                 new_preedit_text,
-                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(
+                new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(
                     new_preedit_cursor_offset as usize,
                 ),
                 expected_revision: EditorRevision::new(expected_revision),

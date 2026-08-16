@@ -194,13 +194,13 @@ impl EditorKernel {
                 composition_session_id,
                 composition_generation,
                 new_preedit_text,
-                new_preedit_cursor_offset,
+                new_preedit_cursor_utf16,
                 ..
             } => self.apply_update_composition(
                 composition_session_id.value(),
                 composition_generation.value(),
                 &new_preedit_text,
-                new_preedit_cursor_offset.value(),
+                new_preedit_cursor_utf16,
                 base_revision,
                 old_cursor,
                 old_selection,

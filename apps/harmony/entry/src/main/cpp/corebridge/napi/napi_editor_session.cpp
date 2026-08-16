@@ -261,7 +261,7 @@ static napi_value NativeEditorSessionBeginComposition(napi_env env, napi_callbac
 }
 
 // NativeEditorSessionUpdateComposition(session_id, composition_session_id, composition_generation,
-//   new_preedit_text, new_preedit_cursor_offset, expected_revision)
+//   new_preedit_text, new_preedit_cursor_utf16, expected_revision)
 static napi_value NativeEditorSessionUpdateComposition(napi_env env, napi_callback_info info) {
     size_t argc = 6;
     napi_value args[6];
@@ -271,12 +271,12 @@ static napi_value NativeEditorSessionUpdateComposition(napi_env env, napi_callba
     uint64_t composition_session_id = arg_u64(env, args, argc, 1);
     uint64_t composition_generation = arg_u64(env, args, argc, 2);
     char* new_preedit_text = arg_str(env, args, argc, 3);
-    uint32_t new_preedit_cursor_offset = arg_u32(env, args, argc, 4);
+    uint32_t new_preedit_cursor_utf16 = arg_u32(env, args, argc, 4);
     uint64_t expected_revision = arg_u64(env, args, argc, 5);
 
     napi_value result = ReturnJsonString(env,
         writer_core_editor_session_update_composition(session_id, composition_session_id, composition_generation,
-                                                      new_preedit_text, new_preedit_cursor_offset, expected_revision));
+                                                      new_preedit_text, new_preedit_cursor_utf16, expected_revision));
     delete[] new_preedit_text;
     return result;
 }

@@ -120,9 +120,9 @@ export class NativeEditorSessionBridge implements IEditorSessionBridge {
     }
   }
 
-  async updateComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, newPreeditText: string, newPreeditCursorOffset: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
+  async updateComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, newPreeditText: string, newPreeditCursorUtf16: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionUpdateComposition(sessionId, compositionSessionId, compositionGeneration, newPreeditText, newPreeditCursorOffset, expectedRevision) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionUpdateComposition(sessionId, compositionSessionId, compositionGeneration, newPreeditText, newPreeditCursorUtf16, expectedRevision) as string
       return this.core.parseEnvelope<EditorEditResult>(jsonStr)
     } catch (e) {
       return this.nativeError<EditorEditResult>(e)

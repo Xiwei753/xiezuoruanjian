@@ -912,6 +912,7 @@ pub struct CompositionSessionDto {
 ///   指明 committed text 中将被 preedit_text 替换的范围。平台端据此构造临时显示文本。
 /// - `preedit_text`：当前预输入文本（未提交到正文）。Core 不把它写进正文持久化。
 /// - `preedit_cursor_utf16`：preedit 内部光标的 UTF-16 code unit offset（IME 协议要求）。
+///   Core 内部用 `Utf16CodeUnitOffset` 强类型承载（#629 评论7 第1项），DTO 边界仍 u32。
 ///
 /// 平台端构造临时显示文本时：把 committed text 的
 /// `[replace_byte_start, replace_byte_end_exclusive)` 替换为 `preedit_text`，

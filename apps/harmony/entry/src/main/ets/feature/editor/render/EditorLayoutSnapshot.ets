@@ -78,13 +78,20 @@ export class EditorLayoutSnapshot {
     const compositionStart: number = composition.replaceByteStart
     const preeditUtf8Len: number = new TextEncoder().encode(composition.preeditText).length
     const compositionEnd: number = composition.replaceByteStart + preeditUtf8Len
+    // Issue #629 评论7 第3项：composition 活跃时显示光标/选区按 preedit cursor 投影到 displayText。
+    // preeditCursorUtf16（IME 协议要求的 preedit 内 UTF-16 cursor）转成 preedit 内 UTF-8 byte offset，
+    // 再加 replaceByteStart 得 displayCaretByte（displayText 中的 byte offset）。
+    // selection/cursor 全部 collapse 到 displayCaretByte，不用 committed text 的 snap.cursor（不是 displayText 坐标）。
+    const preeditCursorByte: number = TextOffsetMapper.utf16ToUtf8(
+      composition.preeditText, composition.preeditCursorUtf16)
+    const displayCaretByte: number = composition.replaceByteStart + preeditCursorByte
     return new EditorLayoutSnapshot(
       displayText,
-      snap.selectionAnchor,
-      snap.cursor,
+      displayCaretByte,
+      displayCaretByte,
       compositionStart,
       compositionEnd,
-      snap.cursor,
+      displayCaretByte,
       snap.revision,
       fontSize ?? 16
     )

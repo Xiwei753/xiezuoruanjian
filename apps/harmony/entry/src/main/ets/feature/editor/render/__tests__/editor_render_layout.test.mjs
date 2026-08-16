@@ -288,5 +288,347 @@ test('端到端: emoji surrogate pair 选区不切断', () => {
   assert.equal(sel[1].width, 20)
 })
 
+// ════════════════════════════════════════════════════════════════════
+// ── Issue #629 评论7 第3项：EditorLayoutSnapshot composition 显示投影 ──
+// 纯逻辑：与 EditorLayoutSnapshot.ets + TextOffsetMapper.ets 对齐。
+// 验证 composition 活跃时显示光标/选区按 preeditCursorUtf16→UTF8 byte 投影到 displayText。
+// ════════════════════════════════════════════════════════════════════
+
+// ── 纯逻辑：与 TextOffsetMapper.ets 对齐 ──
+class TextOffsetMapper {
+  static utf16ToUtf8(text, utf16Offset) {
+    if (utf16Offset <= 0) return 0
+    const limited = utf16Offset > text.length ? text.length : utf16Offset
+    const sub = text.substring(0, limited)
+    return new TextEncoder().encode(sub).length
+  }
+  static utf8ToUtf16(text, utf8Offset) {
+    if (utf8Offset <= 0) return 0
+    let byteLen = 0
+    let utf16Index = 0
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i)
+      let charByteLen = 1
+      if (code < 0x80) {
+        charByteLen = 1
+      } else if (code < 0x800) {
+        charByteLen = 2
+      } else if (code >= 0xD800 && code <= 0xDBFF) {
+        charByteLen = 4
+        i += 1
+      } else {
+        charByteLen = 3
+      }
+      if (byteLen + charByteLen > utf8Offset) {
+        return utf16Index
+      }
+      byteLen += charByteLen
+      utf16Index += (charByteLen === 4 ? 2 : 1)
+    }
+    return utf16Index
+  }
+}
+
+// ── 纯逻辑：与 EditorLayoutSnapshot.ets 对齐 ──
+class EditorLayoutSnapshot {
+  constructor(text, selectionAnchor, selectionHead, compositionStart, compositionEnd,
+              cursorByteOffset, revision, fontSize = 16) {
+    this.text = text
+    this.selectionAnchor = selectionAnchor
+    this.selectionHead = selectionHead
+    this.compositionStart = compositionStart
+    this.compositionEnd = compositionEnd
+    this.cursorByteOffset = cursorByteOffset
+    this.revision = revision
+    this.fontSize = fontSize
+  }
+  static fromEditorSnapshot(snap, fontSize) {
+    const composition = snap.composition
+    if (composition === null || composition === undefined) {
+      return new EditorLayoutSnapshot(
+        snap.text, snap.selectionAnchor, snap.cursor,
+        null, null, snap.cursor, snap.revision, fontSize ?? 16)
+    }
+    const committedText = snap.text
+    const startUtf16 = TextOffsetMapper.utf8ToUtf16(committedText, composition.replaceByteStart)
+    const endUtf16 = TextOffsetMapper.utf8ToUtf16(committedText, composition.replaceByteEndExclusive)
+    const before = committedText.substring(0, startUtf16)
+    const after = committedText.substring(endUtf16)
+    const displayText = before + composition.preeditText + after
+    const compositionStart = composition.replaceByteStart
+    const preeditUtf8Len = new TextEncoder().encode(composition.preeditText).length
+    const compositionEnd = composition.replaceByteStart + preeditUtf8Len
+    // Issue #629 评论7 第3项：preedit cursor 投影
+    const preeditCursorByte = TextOffsetMapper.utf16ToUtf8(
+      composition.preeditText, composition.preeditCursorUtf16)
+    const displayCaretByte = composition.replaceByteStart + preeditCursorByte
+    return new EditorLayoutSnapshot(
+      displayText, displayCaretByte, displayCaretByte,
+      compositionStart, compositionEnd, displayCaretByte,
+      snap.revision, fontSize ?? 16)
+  }
+}
+
+console.log('---')
+console.log('Issue #629 评论7 第3项：EditorLayoutSnapshot composition 显示投影')
+console.log('---')
+
+// ── 无 composition：行为不变 ──
+test('composition 投影: 无 composition → text=committed, cursor=snap.cursor', () => {
+  const snap = {
+    text: 'abc', revision: 1, cursor: 2, selectionAnchor: 1,
+    generation: 0, chapterId: 'c1', composition: null
+  }
+  const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+  assert.equal(layout.text, 'abc')
+  assert.equal(layout.selectionAnchor, 1)
+  assert.equal(layout.selectionHead, 2)
+  assert.equal(layout.cursorByteOffset, 2)
+  assert.equal(layout.compositionStart, null)
+  assert.equal(layout.compositionEnd, null)
+})
+
+// ── composition displayText 构造 ──
+test('composition 投影: displayText = before + preedit + after', () => {
+  // committed = "abc你好def"（"你好" 在 UTF-8 byte 3..9）
+  // replaceByteStart=3, replaceByteEndExclusive=9, preeditText="世界"
+  // displayText = "abc世界def"
+  const snap = {
+    text: 'abc你好def', revision: 1, cursor: 3, selectionAnchor: 3,
+    generation: 0, chapterId: 'c1',
+    composition: {
+      sessionId: 1, baseRevision: 1, generation: 0,
+      replaceByteStart: 3, replaceByteEndExclusive: 9,
+      preeditText: '世界', preeditCursorUtf16: 0
+    }
+  }
+  const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+  assert.equal(layout.text, 'abc世界def')
+})
+
+test('composition 投影: preeditText 为空 → displayText = committed 删掉 replace range', () => {
+  // committed = "abcdef", replace [1,4) → displayText = "a" + "" + "ef" = "aef"
+  const snap = {
+    text: 'abcdef', revision: 1, cursor: 1, selectionAnchor: 1,
+    generation: 0, chapterId: 'c1',
+    composition: {
+      sessionId: 1, baseRevision: 1, generation: 0,
+      replaceByteStart: 1, replaceByteEndExclusive: 4,
+      preeditText: '', preeditCursorUtf16: 0
+    }
+  }
+  const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+  assert.equal(layout.text, 'aef')
+})
+
+// ── composition underline 范围 [replaceByteStart, replaceByteStart + preeditUtf8Len) ──
+test('composition 投影: underline 范围 = [replaceByteStart, replaceByteStart+preeditUtf8Len)', () => {
+  // preeditText="你好" → preeditUtf8Len=6, replaceByteStart=0
+  // compositionStart=0, compositionEnd=6
+  const snap = {
+    text: '', revision: 1, cursor: 0, selectionAnchor: 0,
+    generation: 0, chapterId: 'c1',
+    composition: {
+      sessionId: 1, baseRevision: 1, generation: 0,
+      replaceByteStart: 0, replaceByteEndExclusive: 0,
+      preeditText: '你好', preeditCursorUtf16: 0
+    }
+  }
+  const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+  assert.equal(layout.compositionStart, 0)
+  assert.equal(layout.compositionEnd, 6)
+})
+
+test('composition 投影: underline 范围 replaceByteStart>0', () => {
+  // committed="abc你好def", replace [3,9), preedit="世界"
+  // preeditUtf8Len=6, compositionStart=3, compositionEnd=9
+  const snap = {
+    text: 'abc你好def', revision: 1, cursor: 3, selectionAnchor: 3,
+    generation: 0, chapterId: 'c1',
+    composition: {
+      sessionId: 1, baseRevision: 1, generation: 0,
+      replaceByteStart: 3, replaceByteEndExclusive: 9,
+      preeditText: '世界', preeditCursorUtf16: 0
+    }
+  }
+  const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+  assert.equal(layout.compositionStart, 3)
+  assert.equal(layout.compositionEnd, 9)
+})
+
+// ── display caret 投影：preeditCursorUtf16 → UTF8 byte → displayCaretByte ──
+test('composition 投影: 中文 preedit cursor 在中间 → displayCaretByte=3', () => {
+  // preeditText="你好", preeditCursorUtf16=1（"你"之后，UTF-16 offset 1）
+  // preeditCursorByte = utf16ToUtf8("你好", 1) = 3（"你" 的 UTF-8 byte len=3）
+  // replaceByteStart=0 → displayCaretByte=0+3=3
+  const snap = {
+    text: '', revision: 1, cursor: 0, selectionAnchor: 0,
+    generation: 0, chapterId: 'c1',
+    composition: {
+      sessionId: 1, baseRevision: 1, generation: 0,
+      replaceByteStart: 0, replaceByteEndExclusive: 0,
+      preeditText: '你好', preeditCursorUtf16: 1
+    }
+  }
+  const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+  assert.equal(layout.cursorByteOffset, 3)
+  assert.equal(layout.selectionAnchor, 3)
+  assert.equal(layout.selectionHead, 3)
+  assert.equal(layout.compositionStart, 0)
+  assert.equal(layout.compositionEnd, 6)
+})
+
+test('composition 投影: preedit cursor 在开头 → displayCaretByte=replaceByteStart', () => {
+  // preeditCursorUtf16=0 → preeditCursorByte=0 → displayCaretByte=0
+  const snap = {
+    text: '', revision: 1, cursor: 0, selectionAnchor: 0,
+    generation: 0, chapterId: 'c1',
+    composition: {
+      sessionId: 1, baseRevision: 1, generation: 0,
+      replaceByteStart: 0, replaceByteEndExclusive: 0,
+      preeditText: '你好', preeditCursorUtf16: 0
+    }
+  }
+  const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+  assert.equal(layout.cursorByteOffset, 0)
+  assert.equal(layout.selectionAnchor, 0)
+  assert.equal(layout.selectionHead, 0)
+})
+
+test('composition 投影: preedit cursor 在末尾 → displayCaretByte=replaceByteStart+preeditUtf8Len', () => {
+  // preeditText="你好", preeditCursorUtf16=2（末尾）
+  // preeditCursorByte = utf16ToUtf8("你好", 2) = 6
+  // displayCaretByte = 0 + 6 = 6 = compositionEnd
+  const snap = {
+    text: '', revision: 1, cursor: 0, selectionAnchor: 0,
+    generation: 0, chapterId: 'c1',
+    composition: {
+      sessionId: 1, baseRevision: 1, generation: 0,
+      replaceByteStart: 0, replaceByteEndExclusive: 0,
+      preeditText: '你好', preeditCursorUtf16: 2
+    }
+  }
+  const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+  assert.equal(layout.cursorByteOffset, 6)
+  assert.equal(layout.selectionAnchor, 6)
+  assert.equal(layout.selectionHead, 6)
+  assert.equal(layout.cursorByteOffset, layout.compositionEnd)
+})
+
+test('composition 投影: replaceByteStart>0 + 中文 cursor 在中间', () => {
+  // committed="abc你好def", replace [3,9), preedit="世界", preeditCursorUtf16=1
+  // preeditCursorByte = utf16ToUtf8("世界", 1) = 3（"世" 的 UTF-8 byte len=3）
+  // displayCaretByte = 3 + 3 = 6
+  const snap = {
+    text: 'abc你好def', revision: 1, cursor: 3, selectionAnchor: 3,
+    generation: 0, chapterId: 'c1',
+    composition: {
+      sessionId: 1, baseRevision: 1, generation: 0,
+      replaceByteStart: 3, replaceByteEndExclusive: 9,
+      preeditText: '世界', preeditCursorUtf16: 1
+    }
+  }
+  const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+  assert.equal(layout.text, 'abc世界def')
+  assert.equal(layout.cursorByteOffset, 6)
+  assert.equal(layout.selectionAnchor, 6)
+  assert.equal(layout.selectionHead, 6)
+  assert.equal(layout.compositionStart, 3)
+  assert.equal(layout.compositionEnd, 9)
+})
+
+test('composition 投影: ASCII preedit cursor', () => {
+  // preeditText="xyz", preeditCursorUtf16=2 → preeditCursorByte=2
+  // replaceByteStart=0 → displayCaretByte=2
+  const snap = {
+    text: '', revision: 1, cursor: 0, selectionAnchor: 0,
+    generation: 0, chapterId: 'c1',
+    composition: {
+      sessionId: 1, baseRevision: 1, generation: 0,
+      replaceByteStart: 0, replaceByteEndExclusive: 0,
+      preeditText: 'xyz', preeditCursorUtf16: 2
+    }
+  }
+  const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+  assert.equal(layout.text, 'xyz')
+  assert.equal(layout.cursorByteOffset, 2)
+  assert.equal(layout.selectionAnchor, 2)
+  assert.equal(layout.selectionHead, 2)
+  assert.equal(layout.compositionStart, 0)
+  assert.equal(layout.compositionEnd, 3)
+})
+
+test('composition 投影: selection collapse 到 displayCaretByte（不用 snap.selectionAnchor/snap.cursor）', () => {
+  // snap.cursor=99, snap.selectionAnchor=88（committed text 坐标，应被忽略）
+  // preeditText="你", preeditCursorUtf16=1 → preeditCursorByte=3 → displayCaretByte=3
+  const snap = {
+    text: '', revision: 1, cursor: 99, selectionAnchor: 88,
+    generation: 0, chapterId: 'c1',
+    composition: {
+      sessionId: 1, baseRevision: 1, generation: 0,
+      replaceByteStart: 0, replaceByteEndExclusive: 0,
+      preeditText: '你', preeditCursorUtf16: 1
+    }
+  }
+  const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+  // 不用 snap.cursor=99 或 snap.selectionAnchor=88
+  assert.equal(layout.cursorByteOffset, 3)
+  assert.equal(layout.selectionAnchor, 3)
+  assert.equal(layout.selectionHead, 3)
+})
+
+test('composition 投影: emoji preedit cursor（surrogate pair）', () => {
+  // preeditText="a😀b", 😀 是 surrogate pair 占 UTF-16 index 1-2
+  // preeditCursorUtf16=3（😀 之后，'b' 之前，合法光标位置）
+  // preeditCursorByte = utf16ToUtf8("a😀b", 3) = UTF-8 byte len of "a😀" = 1 + 4 = 5
+  // replaceByteStart=0 → displayCaretByte=5
+  const snap = {
+    text: '', revision: 1, cursor: 0, selectionAnchor: 0,
+    generation: 0, chapterId: 'c1',
+    composition: {
+      sessionId: 1, baseRevision: 1, generation: 0,
+      replaceByteStart: 0, replaceByteEndExclusive: 0,
+      preeditText: 'a😀b', preeditCursorUtf16: 3
+    }
+  }
+  const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+  assert.equal(layout.text, 'a😀b')
+  assert.equal(layout.cursorByteOffset, 5)
+  assert.equal(layout.selectionAnchor, 5)
+  assert.equal(layout.selectionHead, 5)
+  // preeditUtf8Len = 1 + 4 + 1 = 6
+  assert.equal(layout.compositionEnd, 6)
+})
+
+test('composition 投影: fontSize 透传', () => {
+  const snap = {
+    text: '', revision: 1, cursor: 0, selectionAnchor: 0,
+    generation: 0, chapterId: 'c1',
+    composition: {
+      sessionId: 1, baseRevision: 1, generation: 0,
+      replaceByteStart: 0, replaceByteEndExclusive: 0,
+      preeditText: '你好', preeditCursorUtf16: 1
+    }
+  }
+  const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap, 20)
+  assert.equal(layout.fontSize, 20)
+  const layout2 = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+  assert.equal(layout2.fontSize, 16)
+})
+
+test('composition 投影: revision 透传', () => {
+  const snap = {
+    text: '', revision: 42, cursor: 0, selectionAnchor: 0,
+    generation: 0, chapterId: 'c1',
+    composition: {
+      sessionId: 1, baseRevision: 42, generation: 0,
+      replaceByteStart: 0, replaceByteEndExclusive: 0,
+      preeditText: '你好', preeditCursorUtf16: 0
+    }
+  }
+  const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+  assert.equal(layout.revision, 42)
+})
+
 console.log('---')
 console.log(`✅ editor_render_geometry: ${passed} tests passed`)

@@ -1,5 +1,6 @@
 use crate::editor::strong_types::{
-    EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
+    EditorRevision, EditorSessionGeneration, EditorSessionId, Utf16CodeUnitOffset, Utf8ByteOffset,
+    Utf8ByteRange,
 };
 use crate::editor::transaction::composition::*;
 use crate::editor::transaction::engine::*;
@@ -866,7 +867,7 @@ fn composition_finish_exposes_offset_map_via_visual_intent() {
         composition_session_id: EditorSessionId::new(session_id),
         composition_generation: EditorSessionGeneration::new(generation),
         new_preedit_text: " world".to_string(),
-        new_preedit_cursor_offset: Utf8ByteOffset::unchecked(6),
+        new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(6),
         expected_revision: EditorRevision::new(0),
     });
     let (_, _, gen2) = kernel.composition_session_info().unwrap();
@@ -911,7 +912,7 @@ fn composition_update_does_not_produce_offset_map() {
             composition_session_id: EditorSessionId::new(session_id),
             composition_generation: EditorSessionGeneration::new(generation),
             new_preedit_text: " world".to_string(),
-            new_preedit_cursor_offset: Utf8ByteOffset::unchecked(6),
+            new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(6),
             expected_revision: EditorRevision::new(0),
         })
         .into_result();

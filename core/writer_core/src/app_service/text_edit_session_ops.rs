@@ -436,16 +436,16 @@ impl super::WriterAppService {
         composition_session_id: u64,
         composition_generation: u64,
         new_preedit_text: String,
-        new_preedit_cursor_offset: u32,
+        new_preedit_cursor_utf16: u32,
         expected_revision: u64,
     ) -> EditorEditResultDto {
         use crate::editor::strong_types::{
-            EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset,
+            EditorRevision, EditorSessionGeneration, EditorSessionId, Utf16CodeUnitOffset,
         };
         use crate::editor::EditorCommand;
         self.with_session_in_registry(session_id, |s| {
             let preedit_utf16_len: usize = new_preedit_text.chars().map(|c| c.len_utf16()).sum();
-            if new_preedit_cursor_offset as usize > preedit_utf16_len {
+            if new_preedit_cursor_utf16 as usize > preedit_utf16_len {
                 return EditorEditResultDto::invalid_offset_fallback();
             }
             let result = s.kernel.apply(EditorCommand::UpdateComposition {
@@ -455,8 +455,8 @@ impl super::WriterAppService {
                 },
                 composition_generation: EditorSessionGeneration::new(composition_generation),
                 new_preedit_text,
-                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(
-                    new_preedit_cursor_offset as usize,
+                new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(
+                    new_preedit_cursor_utf16 as usize,
                 ),
                 expected_revision: EditorRevision::new(expected_revision),
             });
@@ -701,171 +701,5 @@ impl super::WriterAppService {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::api::EditorEditOutcomeDto;
-    use crate::WriterAppService;
-
-    fn make_service() -> (WriterAppService, tempfile::TempDir) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(
-            dir.path().to_string_lossy().to_string(),
-            dir.path().join("projects").to_string_lossy().to_string(),
-        );
-        (svc, dir)
-    }
-
-    /// #629 评论5306513458 问题2：`text_edit_session_update_composition` 成功后必须把
-    /// Core 真实的 composition_session（session_id / base_revision / generation）写回 DTO，
-    /// 不能只返回 `result.into()` 让 composition_session 保持 None。
-    #[test]
-    fn update_composition_writes_back_composition_session_dto() {
-        let (svc, _dir) = make_service();
-        let session_id = svc
-            .text_edit_session_create("test".to_string(), String::new(), 0, 0)
-            .expect("session created");
-
-        // begin_composition 已正确写回 composition_session，作为 update 的输入基准。
-        let begin = svc.text_edit_session_begin_composition(session_id, 0, 0, 0);
-        assert_eq!(begin.outcome, EditorEditOutcomeDto::Applied);
-        let begin_cs = begin
-            .composition_session
-            .expect("begin_composition writes composition_session");
-        assert!(begin_cs.session_id > 0);
-
-        // update_composition 成功后 DTO 必须带 Core 真实的 composition_session。
-        let upd1 = svc.text_edit_session_update_composition(
-            session_id,
-            begin_cs.session_id,
-            begin_cs.generation,
-            "你".to_string(),
-            1, // UTF-16 cursor offset
-            begin.new_revision,
-        );
-        assert_eq!(upd1.outcome, EditorEditOutcomeDto::Applied);
-        let upd1_cs = upd1
-            .composition_session
-            .expect("update_composition writes composition_session");
-        assert_eq!(upd1_cs.session_id, begin_cs.session_id);
-        assert_eq!(upd1_cs.base_revision, begin_cs.base_revision);
-        assert!(
-            upd1_cs.generation > begin_cs.generation,
-            "generation should advance after update"
-        );
-
-        // 多次 update：generation 继续由 Core 裁判递增。
-        let upd2 = svc.text_edit_session_update_composition(
-            session_id,
-            upd1_cs.session_id,
-            upd1_cs.generation,
-            "你好".to_string(),
-            2, // UTF-16 cursor offset
-            upd1.new_revision,
-        );
-        assert_eq!(upd2.outcome, EditorEditOutcomeDto::Applied);
-        let upd2_cs = upd2
-            .composition_session
-            .expect("second update_composition writes composition_session");
-        assert!(
-            upd2_cs.generation > upd1_cs.generation,
-            "generation should keep advancing across updates"
-        );
-    }
-
-    /// update_composition 失败（stale generation）时不应写回 composition_session，
-    /// 与 begin_composition 的 outcome 守卫一致。
-    #[test]
-    fn update_composition_skips_writeback_on_stale_outcome() {
-        let (svc, _dir) = make_service();
-        let session_id = svc
-            .text_edit_session_create("test".to_string(), String::new(), 0, 0)
-            .expect("session created");
-        let begin = svc.text_edit_session_begin_composition(session_id, 0, 0, 0);
-        let begin_cs = begin
-            .composition_session
-            .expect("begin writes composition_session");
-
-        // 用错误的 generation 触发 StaleRevision。
-        let stale = svc.text_edit_session_update_composition(
-            session_id,
-            begin_cs.session_id,
-            begin_cs.generation.saturating_add(999),
-            "你".to_string(),
-            1,
-            begin.new_revision,
-        );
-        assert_eq!(stale.outcome, EditorEditOutcomeDto::StaleRevision);
-        assert!(
-            stale.composition_session.is_none(),
-            "stale outcome must not write composition_session"
-        );
-    }
-
-    /// #629 评论6 Part B：begin/update_composition 成功后必须把 Core 真实的 composition
-    /// 完整状态（preedit_text + replace range + cursor）写回 DTO.composition，
-    /// 平台端据此构造临时显示文本和下划线。snapshot 在 composition 活跃时也返回 composition。
-    #[test]
-    fn composition_state_is_exposed_in_edit_result_and_snapshot() {
-        let (svc, _dir) = make_service();
-        let session_id = svc
-            .text_edit_session_create("test".to_string(), "abc".to_string(), 0, 0)
-            .expect("session created");
-
-        // begin_composition replace range [1, 2)（"b"）。
-        let begin = svc.text_edit_session_begin_composition(session_id, 1, 2, 0);
-        assert_eq!(begin.outcome, EditorEditOutcomeDto::Applied);
-        let begin_comp = begin
-            .composition
-            .expect("begin_composition writes composition state");
-        assert_eq!(begin_comp.replace_byte_start, 1);
-        assert_eq!(begin_comp.replace_byte_end_exclusive, 2);
-        assert!(begin_comp.preedit_text.is_empty());
-        assert_eq!(begin_comp.preedit_cursor_utf16, 0);
-
-        // update_composition 写入 preedit_text "你"。
-        let upd = svc.text_edit_session_update_composition(
-            session_id,
-            begin_comp.session_id,
-            begin_comp.generation,
-            "你".to_string(),
-            1,
-            begin.new_revision,
-        );
-        assert_eq!(upd.outcome, EditorEditOutcomeDto::Applied);
-        let upd_comp = upd
-            .composition
-            .expect("update_composition writes composition state");
-        assert_eq!(upd_comp.replace_byte_start, 1);
-        assert_eq!(upd_comp.replace_byte_end_exclusive, 2);
-        assert_eq!(upd_comp.preedit_text, "你");
-        assert_eq!(upd_comp.preedit_cursor_utf16, 1);
-
-        // snapshot 在 composition 活跃时也返回 composition。
-        let snap = svc.text_edit_session_snapshot(session_id);
-        let snap_comp = snap
-            .composition
-            .expect("snapshot returns composition when active");
-        assert_eq!(snap_comp.preedit_text, "你");
-        assert_eq!(snap_comp.replace_byte_start, 1);
-        assert_eq!(snap_comp.replace_byte_end_exclusive, 2);
-        // 保存正文仍只取 committed text，不把 preedit 写进文件。
-        assert_eq!(snap.text, "abc");
-
-        // finish_composition 后 composition 为 None。
-        let finish = svc.text_edit_session_finish_composition(
-            session_id,
-            upd_comp.session_id,
-            upd_comp.generation,
-            upd.new_revision,
-        );
-        assert_eq!(finish.outcome, EditorEditOutcomeDto::Applied);
-        assert!(
-            finish.composition.is_none(),
-            "finish_composition clears composition"
-        );
-        let snap2 = svc.text_edit_session_snapshot(session_id);
-        assert!(
-            snap2.composition.is_none(),
-            "snapshot returns no composition after finish"
-        );
-    }
-}
+#[path = "text_edit_session_ops_tests.rs"]
+mod tests;

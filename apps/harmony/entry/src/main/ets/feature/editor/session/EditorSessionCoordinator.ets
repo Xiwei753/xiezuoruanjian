@@ -215,8 +215,8 @@ export class EditorSessionCoordinator {
     return this.enqueueEdit((sid, rev) => this.bridge.beginComposition(sid, replaceStart, replaceEndExclusive, rev))
   }
 
-  async updateComposition(compositionSessionId: number, compositionGeneration: number, newPreeditText: string, newPreeditCursorOffset: number): Promise<ResultEnvelope<EditorEditResult>> {
-    return this.enqueueEdit((sid, rev) => this.bridge.updateComposition(sid, compositionSessionId, compositionGeneration, newPreeditText, newPreeditCursorOffset, rev))
+  async updateComposition(compositionSessionId: number, compositionGeneration: number, newPreeditText: string, newPreeditCursorUtf16: number): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.enqueueEdit((sid, rev) => this.bridge.updateComposition(sid, compositionSessionId, compositionGeneration, newPreeditText, newPreeditCursorUtf16, rev))
   }
 
   async finishComposition(compositionSessionId: number, compositionGeneration: number): Promise<ResultEnvelope<EditorEditResult>> {

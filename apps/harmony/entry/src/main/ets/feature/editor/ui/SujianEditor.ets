@@ -94,9 +94,10 @@ export struct SujianEditor {
 
   aboutToAppear(): void {
     this.refreshRender()
-    // Issue #629 评论6 Part C：注册父子 viewport 恢复通道。
+    // Issue #629 评论6 Part C + 评论7 第4项：注册父子 viewport 恢复通道。
     // scrollTo 由 scroller.scrollTo 实现；getDimensions 返回当前真实 viewport/content 尺寸。
-    // 注册后 controller 会立即执行 pendingRestore（WritingScreen 在注册前可能已调 restore）。
+    // register 不立即消费 pending（尺寸可能为 0）；onAreaChange 拿到真实尺寸后
+    // 调 notifyDimensionsChanged 才消费 pending（评论7 第4项）。
     if (this.viewportController) {
       this.viewportController.register(
         (xOffset: number, yOffset: number): void => {
@@ -535,6 +536,11 @@ export struct SujianEditor {
               this.contentHeight = Number(newArea.height)
               // 内容尺寸已知后重新计算几何（选区/光标/composition 下划线）。
               this.refreshRenderLayout()
+              // Issue #629 评论7 第4项：内容尺寸更新后通知 controller 重试消费 pending。
+              // register 时尺寸可能为 0，pending 保留；onAreaChange 拿到真实尺寸后才消费。
+              if (this.viewportController) {
+                this.viewportController.notifyDimensionsChanged()
+              }
             })
             .onTouch((event: TouchEvent): void => {
               // 触摸/笔事件 → hit test + drag selection。
@@ -579,6 +585,11 @@ export struct SujianEditor {
       // （viewportWidth/viewportHeight），不是内层正文实际渲染尺寸。
       this.viewportWidth = Number(newArea.width)
       this.viewportHeight = Number(newArea.height)
+      // Issue #629 评论7 第4项：viewport 尺寸更新后通知 controller 重试消费 pending。
+      // register 时尺寸可能为 0，pending 保留；onAreaChange 拿到真实尺寸后才消费。
+      if (this.viewportController) {
+        this.viewportController.notifyDimensionsChanged()
+      }
     })
     .onScroll((xOffset: number, yOffset: number): void => {
       // 滚动时把 viewport 状态回调给 WritingScreen（供接续状态持续写入）。

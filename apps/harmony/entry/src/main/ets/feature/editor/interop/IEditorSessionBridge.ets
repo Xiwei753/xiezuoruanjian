@@ -23,7 +23,7 @@ export interface IEditorSessionBridge {
   commitText(sessionId: number, byteStart: number, byteEndExclusive: number, replacementText: string, resultingSelectionAnchor: number, resultingSelectionHead: number, compositionSessionId: number, compositionBaseRevision: number, compositionGeneration: number, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>>
   deleteSurrounding(sessionId: number, beforeByteStart: number, beforeByteEndExclusive: number, afterByteStart: number, afterByteEndExclusive: number, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>>
   beginComposition(sessionId: number, replaceStart: number, replaceEndExclusive: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>>
-  updateComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, newPreeditText: string, newPreeditCursorOffset: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>>
+  updateComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, newPreeditText: string, newPreeditCursorUtf16: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>>
   finishComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>>
   cancelComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>>
   // 查询

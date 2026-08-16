@@ -228,5 +228,341 @@ await testAsync('IME composition 顺序：begin → update → finish 经同一�
   assert.deepEqual(events, ['begin:你', 'update:你好', 'finish:你好'])
 })
 
+// ── 7. Issue #629 评论7 第1项：中文 preedit cursor 单位是 UTF-16 code unit ──
+// makeImeDispatcher：模拟 EditorSemanticDispatcher 的 ime* 命令出队逻辑。
+// mock inputAdapter（isComposing/onCompositionBegin/Update/Finish/Cancel/onTextInput）
+// 和 coordinator（updateComposition/delete/previousGraphemeBoundary/nextGraphemeBoundary）。
+// 记录调用次数、参数、顺序，真实验证行为。
+async function makeImeDispatcher() {
+  let snapshot = { text: '', cursor: 0, selectionAnchor: 0 }
+  const queue = new SerialCommandQueue()
+  const calls = { begin: 0, update: 0, finish: 0, cancel: 0, textInput: 0, previousGraphemeBoundary: 0, nextGraphemeBoundary: 0 }
+  const callSequence = []
+  const coordinatorCalls = { updateComposition: [], delete: [] }
+  const textInputCalls = []
+  let composing = false
+  let mockPrevBoundaryFn = null
+  let mockNextBoundaryFn = null
+
+  const inputAdapter = {
+    isComposing: () => composing,
+    onCompositionBegin: async () => {
+      calls.begin++
+      callSequence.push('begin')
+      composing = true
+      return { success: true, data: { compositionSession: { sessionId: 1, generation: 1 } } }
+    },
+    onCompositionUpdate: async (preedit) => {
+      calls.update++
+      callSequence.push(`update:${preedit}`)
+      // Issue #629 评论7 第1项：cursor 单位是 UTF-16 code unit（preedit.length）
+      const cursorUtf16 = preedit.length
+      coordinatorCalls.updateComposition.push({ preedit, cursorUtf16 })
+      return { success: true, data: {} }
+    },
+    onCompositionFinish: async (committed) => {
+      calls.finish++
+      callSequence.push(`finish:${committed}`)
+      composing = false
+      return { success: true, data: {} }
+    },
+    onCompositionCancel: async () => {
+      calls.cancel++
+      callSequence.push('cancel')
+      composing = false
+      return { success: true, data: {} }
+    },
+    onTextInput: async (text) => {
+      calls.textInput++
+      callSequence.push(`textInput:${text}`)
+      textInputCalls.push({ text })
+      return { success: true, data: {} }
+    },
+    currentSelectionUtf8: () => {
+      const start = Math.min(snapshot.selectionAnchor, snapshot.cursor)
+      const end = Math.max(snapshot.selectionAnchor, snapshot.cursor)
+      return { start, end }
+    },
+  }
+
+  const coordinator = {
+    getSnapshot: () => snapshot,
+    previousGraphemeBoundary: async (byteOffset) => {
+      calls.previousGraphemeBoundary++
+      const result = mockPrevBoundaryFn ? mockPrevBoundaryFn(byteOffset) : byteOffset - 1
+      return { success: true, data: result }
+    },
+    nextGraphemeBoundary: async (byteOffset) => {
+      calls.nextGraphemeBoundary++
+      const result = mockNextBoundaryFn ? mockNextBoundaryFn(byteOffset) : byteOffset + 1
+      return { success: true, data: result }
+    },
+    delete: async (start, end, cause) => {
+      coordinatorCalls.delete.push({ start, end, cause })
+      // 模拟删除后 snapshot 更新：text 截掉 [start,end)，cursor 移到 start
+      // 简化：测试用 ASCII 文本时 byte offset == UTF-16 code unit offset
+      const newText = snapshot.text.substring(0, start) + snapshot.text.substring(end)
+      snapshot = { text: newText, cursor: start, selectionAnchor: start }
+      return { success: true, data: {} }
+    },
+  }
+
+  const executeGraphemeBackspace = async () => {
+    const sel = inputAdapter.currentSelectionUtf8()
+    if (sel.end > sel.start) {
+      return coordinator.delete(sel.start, sel.end, 'Delete')
+    }
+    if (sel.start <= 0) {
+      return { success: false, errorCode: 'NO_CHAR_TO_DELETE' }
+    }
+    const prevResult = await coordinator.previousGraphemeBoundary(sel.start)
+    if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) {
+      return prevResult
+    }
+    return coordinator.delete(prevResult.data, sel.start, 'Delete')
+  }
+
+  const executeGraphemeDelete = async () => {
+    const sel = inputAdapter.currentSelectionUtf8()
+    if (sel.end > sel.start) {
+      return coordinator.delete(sel.start, sel.end, 'Delete')
+    }
+    const nextResult = await coordinator.nextGraphemeBoundary(sel.start)
+    if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) {
+      return nextResult
+    }
+    return coordinator.delete(sel.start, nextResult.data, 'Delete')
+  }
+
+  const executeCommand = async (cmd) => {
+    switch (cmd.kind) {
+      case 'imePreviewText':
+        if (!inputAdapter.isComposing()) {
+          const beginResult = await inputAdapter.onCompositionBegin()
+          if (!beginResult.success) return beginResult
+          return inputAdapter.onCompositionUpdate(cmd.text)
+        }
+        return inputAdapter.onCompositionUpdate(cmd.text)
+      case 'imeCommitText':
+        if (inputAdapter.isComposing()) {
+          return inputAdapter.onCompositionFinish(cmd.text)
+        }
+        return inputAdapter.onTextInput(cmd.text)
+      case 'imeCancelPreview':
+        if (inputAdapter.isComposing()) {
+          return inputAdapter.onCompositionCancel()
+        }
+        return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+      case 'graphemeBackspace':
+        return executeGraphemeBackspace()
+      case 'graphemeDelete':
+        return executeGraphemeDelete()
+      case 'insertText':
+        return inputAdapter.onTextInput(cmd.text)
+      default:
+        return { success: true, data: {} }
+    }
+  }
+
+  const dispatch = (cmd) => queue.enqueue(async () => executeCommand(cmd))
+  const dispatchFireAndForget = (cmd) => { dispatch(cmd).then(() => {}, () => {}) }
+  const flush = () => queue.whenIdle()
+  const isIdle = () => queue.isIdle()
+
+  return {
+    dispatch, dispatchFireAndForget, flush, isIdle,
+    calls, callSequence, coordinatorCalls, textInputCalls,
+    setSnapshot: (s) => { snapshot = s },
+    mockPreviousGraphemeBoundary: (fn) => { mockPrevBoundaryFn = fn },
+    mockNextGraphemeBoundary: (fn) => { mockNextBoundaryFn = fn },
+    getSnapshot: () => snapshot,
+  }
+}
+
+// UTF-8 byte length 辅助
+const utf8ByteLen = (s) => new TextEncoder().encode(s).length
+
+await testAsync('评论7 第1项：imePreviewText("你") → update 传 cursorUtf16=1（UTF-16 code unit，不是 3）', async () => {
+  const d = await makeImeDispatcher()
+  await d.dispatch({ kind: 'imePreviewText', text: '你' })
+  // begin 成功后 update
+  assert.equal(d.calls.begin, 1, '应调一次 begin')
+  assert.equal(d.calls.update, 1, '应调一次 update')
+  // update 传给 coordinator.updateComposition 的 cursorUtf16=1（"你".length=1 UTF-16 code unit）
+  // 不是 3（UTF-8 byte length）
+  const updateCall = d.coordinatorCalls.updateComposition[0]
+  assert.equal(updateCall.preedit, '你')
+  assert.equal(updateCall.cursorUtf16, 1, 'cursorUtf16 应为 1（UTF-16 code unit），不是 3（UTF-8 byte）')
+})
+
+await testAsync('评论7 第1项：imePreviewText("你好") → cursorUtf16=2（两个 UTF-16 code unit，不是 6 byte）', async () => {
+  const d = await makeImeDispatcher()
+  await d.dispatch({ kind: 'imePreviewText', text: '你好' })
+  const updateCall = d.coordinatorCalls.updateComposition[0]
+  assert.equal(updateCall.preedit, '你好')
+  assert.equal(updateCall.cursorUtf16, 2, 'cursorUtf16 应为 2（UTF-16 code unit），不是 6（UTF-8 byte）')
+})
+
+await testAsync('评论7 第1项：imePreviewText("👨‍👩‍👧") → cursorUtf16=8（ZWJ emoji 8 个 UTF-16 code unit）', async () => {
+  const d = await makeImeDispatcher()
+  const emoji = '👨‍👩‍👧'  // 8 UTF-16 code units, 1 grapheme
+  await d.dispatch({ kind: 'imePreviewText', text: emoji })
+  const updateCall = d.coordinatorCalls.updateComposition[0]
+  assert.equal(updateCall.preedit, emoji)
+  assert.equal(updateCall.cursorUtf16, 8, 'cursorUtf16 应为 8（UTF-16 code unit），不是 ' + utf8ByteLen(emoji) + '（UTF-8 byte）')
+})
+
+// ── 8. Issue #629 评论7 第2项：快速 preview/commit 顺序经串行队列 ──
+await testAsync('评论7 第2项：imePreviewText("你")→imePreviewText("你好")→imeCommitText("你好") 串行 begin→update→update→finish', async () => {
+  const d = await makeImeDispatcher()
+  const promises = [
+    d.dispatch({ kind: 'imePreviewText', text: '你' }),
+    d.dispatch({ kind: 'imePreviewText', text: '你好' }),
+    d.dispatch({ kind: 'imeCommitText', text: '你好' }),
+  ]
+  await Promise.all(promises)
+  // 顺序：begin, update("你"), update("你好"), finish("你好")
+  assert.deepEqual(d.callSequence, [
+    'begin', 'update:你', 'update:你好', 'finish:你好'
+  ], '调用顺序应为 begin→update→update→finish')
+  assert.equal(d.calls.begin, 1)
+  assert.equal(d.calls.update, 2)
+  assert.equal(d.calls.finish, 1)
+})
+
+await testAsync('评论7 第2项：imeCancelPreview 有 composition 时 cancel', async () => {
+  const d = await makeImeDispatcher()
+  await d.dispatch({ kind: 'imePreviewText', text: '你' })  // begin + update
+  assert.equal(d.calls.cancel, 0)
+  await d.dispatch({ kind: 'imeCancelPreview' })
+  assert.equal(d.calls.cancel, 1, '有 composition 时应调 cancel')
+})
+
+await testAsync('评论7 第2项：imeCancelPreview 无 composition 时 no-op（不调 cancel）', async () => {
+  const d = await makeImeDispatcher()
+  // 初始无 composition
+  const result = await d.dispatch({ kind: 'imeCancelPreview' })
+  assert.equal(d.calls.cancel, 0, '无 composition 时不应调 cancel')
+  assert.equal(result.success, true)
+})
+
+// ── 9. Issue #629 评论7 第2项：imeCommitText 无 composition 时普通插入 ──
+await testAsync('评论7 第2项：imeCommitText 无 composition 时 onTextInput("x")，不走 finish', async () => {
+  const d = await makeImeDispatcher()
+  // isComposing()=false（初始状态）
+  await d.dispatch({ kind: 'imeCommitText', text: 'x' })
+  assert.equal(d.calls.textInput, 1, '应调 onTextInput')
+  assert.equal(d.calls.finish, 0, '不应调 onCompositionFinish')
+  assert.equal(d.textInputCalls[0].text, 'x')
+})
+
+await testAsync('评论7 第2项：imeCommitText 有 composition 时 onCompositionFinish，不走 onTextInput', async () => {
+  const d = await makeImeDispatcher()
+  await d.dispatch({ kind: 'imePreviewText', text: '你' })  // begin + update → composing=true
+  await d.dispatch({ kind: 'imeCommitText', text: '你' })
+  assert.equal(d.calls.finish, 1, '有 composition 时应调 onCompositionFinish')
+  assert.equal(d.calls.textInput, 0, '有 composition 时不应调 onTextInput')
+})
+
+// ── 10. Issue #629 评论7 第6项：软键盘删除统一 Core grapheme ──
+await testAsync('评论7 第6项：ZWJ emoji "👨‍👩‍👧" graphemeBackspace 删整个 grapheme（不拆 surrogate）', async () => {
+  const d = await makeImeDispatcher()
+  const emoji = '👨‍👩‍👧'  // 1 grapheme, 8 UTF-16 code units, 18 UTF-8 bytes
+  const text = 'a' + emoji
+  const textByteLen = utf8ByteLen(text)  // 1 + 18 = 19
+  // 光标在文本末尾
+  d.setSnapshot({ text, cursor: textByteLen, selectionAnchor: textByteLen })
+  // mock previousGraphemeBoundary：从 textByteLen 返回 1（'a' 后的位置，emoji 前）
+  const aByteLen = utf8ByteLen('a')  // 1
+  d.mockPreviousGraphemeBoundary((byteOffset) => aByteLen)
+  await d.dispatch({ kind: 'graphemeBackspace' })
+  // previousGraphemeBoundary 被调
+  assert.equal(d.calls.previousGraphemeBoundary, 1, '应调 previousGraphemeBoundary')
+  // delete 删整个 grapheme：从 aByteLen 到 textByteLen
+  const deleteCall = d.coordinatorCalls.delete[0]
+  assert.equal(deleteCall.start, aByteLen, 'delete start 应为 emoji 前边界')
+  assert.equal(deleteCall.end, textByteLen, 'delete end 应为整个 emoji 的 byte 范围（不拆 surrogate）')
+})
+
+await testAsync('评论7 第6项：组合附加符 "é" = e + U+0301 graphemeBackspace 删整个组合字符', async () => {
+  const d = await makeImeDispatcher()
+  const combining = 'e\u0301'  // e + combining acute accent, 1 grapheme, 2 UTF-16 code units, 3 UTF-8 bytes
+  const text = combining
+  const textByteLen = utf8ByteLen(text)  // 3
+  d.setSnapshot({ text, cursor: textByteLen, selectionAnchor: textByteLen })
+  // mock previousGraphemeBoundary：从 textByteLen 返回 0（文本开头）
+  d.mockPreviousGraphemeBoundary((byteOffset) => 0)
+  await d.dispatch({ kind: 'graphemeBackspace' })
+  assert.equal(d.calls.previousGraphemeBoundary, 1)
+  const deleteCall = d.coordinatorCalls.delete[0]
+  assert.equal(deleteCall.start, 0, 'delete start 应为文本开头')
+  assert.equal(deleteCall.end, textByteLen, 'delete end 应为整个组合字符的 byte 范围（不拆 e 和附加符）')
+})
+
+await testAsync('评论7 第6项：graphemeBackspace 空选区在文本开头返回 NO_CHAR_TO_DELETE', async () => {
+  const d = await makeImeDispatcher()
+  d.setSnapshot({ text: 'abc', cursor: 0, selectionAnchor: 0 })
+  const result = await d.dispatch({ kind: 'graphemeBackspace' })
+  assert.equal(result.success, false)
+  assert.equal(result.errorCode, 'NO_CHAR_TO_DELETE')
+})
+
+await testAsync('评论7 第6项：graphemeBackspace 有选区时删除整个选区', async () => {
+  const d = await makeImeDispatcher()
+  // 选区 [1, 3)
+  d.setSnapshot({ text: 'abcde', cursor: 3, selectionAnchor: 1 })
+  await d.dispatch({ kind: 'graphemeBackspace' })
+  const deleteCall = d.coordinatorCalls.delete[0]
+  assert.equal(deleteCall.start, 1)
+  assert.equal(deleteCall.end, 3)
+  // 有选区时不调 previousGraphemeBoundary（直接删选区）
+  assert.equal(d.calls.previousGraphemeBoundary, 0)
+})
+
+await testAsync('评论7 第6项：graphemeDelete 用 nextGraphemeBoundary 删后一个 grapheme', async () => {
+  const d = await makeImeDispatcher()
+  const emoji = '👨‍👩‍👧'
+  const text = emoji + 'b'
+  const emojiByteLen = utf8ByteLen(emoji)  // 18
+  // 光标在 emoji 前（offset=0）
+  d.setSnapshot({ text, cursor: 0, selectionAnchor: 0 })
+  // mock nextGraphemeBoundary：从 0 返回 emojiByteLen（emoji 后边界）
+  d.mockNextGraphemeBoundary((byteOffset) => emojiByteLen)
+  await d.dispatch({ kind: 'graphemeDelete' })
+  assert.equal(d.calls.nextGraphemeBoundary, 1)
+  const deleteCall = d.coordinatorCalls.delete[0]
+  assert.equal(deleteCall.start, 0)
+  assert.equal(deleteCall.end, emojiByteLen, 'delete end 应为整个 emoji 的 byte 范围')
+})
+
+await testAsync('评论7 第6项：连续 graphemeBackspace 串行执行（不并发）', async () => {
+  const d = await makeImeDispatcher()
+  d.setSnapshot({ text: 'abc', cursor: 3, selectionAnchor: 3 })
+  // mock previousGraphemeBoundary：每次返回 cursor-1
+  d.mockPreviousGraphemeBoundary((byteOffset) => byteOffset - 1)
+  // 连续两次 graphemeBackspace
+  await d.dispatch({ kind: 'graphemeBackspace' })
+  await d.dispatch({ kind: 'graphemeBackspace' })
+  assert.equal(d.calls.previousGraphemeBoundary, 2)
+  // 第一次删 [2,3)，第二次删 [1,2)
+  assert.equal(d.coordinatorCalls.delete[0].start, 2)
+  assert.equal(d.coordinatorCalls.delete[0].end, 3)
+  assert.equal(d.coordinatorCalls.delete[1].start, 1)
+  assert.equal(d.coordinatorCalls.delete[1].end, 2)
+})
+
+await testAsync('评论7 第2+6项：imePreviewText → graphemeBackspace 串行（composition 和删除经同一队列）', async () => {
+  const d = await makeImeDispatcher()
+  d.setSnapshot({ text: 'abc', cursor: 3, selectionAnchor: 3 })
+  d.mockPreviousGraphemeBoundary((byteOffset) => byteOffset - 1)
+  // 先 composition preview，再 backspace
+  await d.dispatch({ kind: 'imePreviewText', text: '你' })
+  await d.dispatch({ kind: 'graphemeBackspace' })
+  // 顺序：begin, update, graphemeBackspace 的 previousGraphemeBoundary + delete
+  assert.deepEqual(d.callSequence, ['begin', 'update:你'])
+  assert.equal(d.calls.previousGraphemeBoundary, 1)
+  assert.equal(d.coordinatorCalls.delete.length, 1)
+})
+
 console.log('---')
 console.log(`✅ editor_semantic_dispatcher: ${passed} tests passed`)

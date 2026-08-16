@@ -169,6 +169,83 @@ impl Utf8ByteOffset {
     }
 }
 
+/// UTF-16 code unit offset（用于 IME composition preedit cursor）。
+///
+/// 语义是 JS/ArkTS string 的 code unit 累计偏移，不是 UTF-8 byte offset。
+/// 只校验 `<= preedit_utf16_len`，不检查 char boundary——UTF-16 code unit 边界
+/// 就是任意 code unit（surrogate pair 的前/后都是合法 code unit 边界）。
+///
+/// #629 评论7 第1项：此前 preedit cursor 用 `Utf8ByteOffset` 装载 UTF-16 值，
+/// 语义错配（`Utf8ByteOffset::try_new` 会做 char boundary 校验，对 UTF-16
+/// 值无意义）。本类型只做 `<= len` 校验，匹配 IME 协议的 code unit 语义。
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub struct Utf16CodeUnitOffset(usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InvalidUtf16OffsetError {
+    BeyondEnd { offset: usize, utf16_len: usize },
+}
+
+impl fmt::Display for InvalidUtf16OffsetError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InvalidUtf16OffsetError::BeyondEnd { offset, utf16_len } => {
+                write!(
+                    f,
+                    "utf16 code unit offset {} beyond preedit utf16 length {}",
+                    offset, utf16_len
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for InvalidUtf16OffsetError {}
+
+impl Utf16CodeUnitOffset {
+    /// 按 preedit 文本的 UTF-16 code unit 长度校验 offset。
+    ///
+    /// `utf16_len` 应为 `preedit_text.chars().map(|c| c.len_utf16()).sum()`。
+    /// 合法条件：`offset <= utf16_len`。不做 char boundary 校验。
+    pub fn try_new(utf16_len: usize, offset: usize) -> Result<Self, InvalidUtf16OffsetError> {
+        if offset > utf16_len {
+            return Err(InvalidUtf16OffsetError::BeyondEnd { offset, utf16_len });
+        }
+        Ok(Self(offset))
+    }
+
+    /// 跳过校验构造。仅用于调用方已在上游校验过 `offset <= preedit_utf16_len` 的热路径。
+    pub fn unchecked(offset: usize) -> Self {
+        Self(offset)
+    }
+
+    pub fn value(self) -> usize {
+        self.0
+    }
+}
+
+impl fmt::Display for Utf16CodeUnitOffset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Utf16CodeUnitOffset({})", self.0)
+    }
+}
+
+impl std::ops::Add<usize> for Utf16CodeUnitOffset {
+    type Output = Utf16CodeUnitOffset;
+    fn add(self, rhs: usize) -> Self::Output {
+        Utf16CodeUnitOffset(self.0.saturating_add(rhs))
+    }
+}
+
+impl std::ops::Sub<usize> for Utf16CodeUnitOffset {
+    type Output = Utf16CodeUnitOffset;
+    fn sub(self, rhs: usize) -> Self::Output {
+        Utf16CodeUnitOffset(self.0.saturating_sub(rhs))
+    }
+}
+
 impl fmt::Display for Utf8ByteOffset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Utf8ByteOffset({})", self.0)
@@ -578,7 +655,7 @@ mod tests {
             replace_start: Utf8ByteOffset::unchecked(3),
             replace_end_exclusive: Utf8ByteOffset::unchecked(6),
             preedit_text: "你好".to_string(),
-            preedit_cursor_utf16: 1,
+            preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(1),
         };
         assert_eq!(state.replace_start.value(), 3);
         assert_eq!(state.replace_end_exclusive.value(), 6);
@@ -620,6 +697,76 @@ mod tests {
         assert_eq!(
             EditorSessionGeneration::try_new(0).unwrap(),
             EditorSessionGeneration::initial()
+        );
+    }
+
+    // ── #629 评论7 第1项：Utf16CodeUnitOffset 强类型 ──
+
+    #[test]
+    fn utf16_code_unit_offset_try_new_valid() {
+        // 中文"你" UTF-16 len = 1
+        assert!(Utf16CodeUnitOffset::try_new(1, 0).is_ok());
+        assert!(Utf16CodeUnitOffset::try_new(1, 1).is_ok());
+        // 空串 len=0，offset=0 合法
+        assert!(Utf16CodeUnitOffset::try_new(0, 0).is_ok());
+    }
+
+    #[test]
+    fn utf16_code_unit_offset_try_new_rejects_beyond_end() {
+        // "你" utf16_len=1, offset=2 越界
+        let result = Utf16CodeUnitOffset::try_new(1, 2);
+        assert!(result.is_err());
+        if let Err(InvalidUtf16OffsetError::BeyondEnd { offset, utf16_len }) = result {
+            assert_eq!(offset, 2);
+            assert_eq!(utf16_len, 1);
+        } else {
+            panic!("expected BeyondEnd error");
+        }
+    }
+
+    #[test]
+    fn utf16_code_unit_offset_unchecked_and_value() {
+        let off = Utf16CodeUnitOffset::unchecked(7);
+        assert_eq!(off.value(), 7);
+    }
+
+    #[test]
+    fn utf16_code_unit_offset_default_is_zero() {
+        assert_eq!(Utf16CodeUnitOffset::default().value(), 0);
+    }
+
+    #[test]
+    fn utf16_code_unit_offset_add_sub() {
+        let off = Utf16CodeUnitOffset::unchecked(5);
+        assert_eq!((off + 3).value(), 8);
+        assert_eq!((off - 2).value(), 3);
+        // saturating
+        assert_eq!((Utf16CodeUnitOffset::unchecked(0) - 1).value(), 0);
+    }
+
+    #[test]
+    fn utf16_code_unit_offset_ordering_and_eq() {
+        let a = Utf16CodeUnitOffset::unchecked(3);
+        let b = Utf16CodeUnitOffset::unchecked(5);
+        assert!(a < b);
+        assert_eq!(a.min(b), a);
+        assert_eq!(a, Utf16CodeUnitOffset::unchecked(3));
+        // hash/eq 一致性（放进 HashSet 不重复）
+        let set = std::collections::HashSet::from([a, b, a]);
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn utf16_code_unit_offset_display() {
+        let off = Utf16CodeUnitOffset::unchecked(42);
+        assert_eq!(format!("{}", off), "Utf16CodeUnitOffset(42)");
+        let err = InvalidUtf16OffsetError::BeyondEnd {
+            offset: 5,
+            utf16_len: 3,
+        };
+        assert_eq!(
+            format!("{}", err),
+            "utf16 code unit offset 5 beyond preedit utf16 length 3"
         );
     }
 }
