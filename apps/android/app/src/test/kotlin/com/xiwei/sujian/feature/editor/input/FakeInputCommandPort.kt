@@ -9,6 +9,7 @@ import uniffi.writer_core.CompositionSessionDto
 import uniffi.writer_core.CoordinatedCursorDto
 import uniffi.writer_core.DisplayPatchDto
 import uniffi.writer_core.EditorByteRangeDto
+import uniffi.writer_core.EditorCompositionStateDto
 import uniffi.writer_core.EditorContentDeltaDto
 import uniffi.writer_core.EditorEditOutcomeDto
 import uniffi.writer_core.EditorEditResultDto
@@ -101,6 +102,27 @@ class FakeInputCommandPort(
 
     private fun isSessionActive(): Boolean = sessionId != 0L
 
+    /**
+     * #629 评论6 Part B：当前 composition 完整状态，仅活跃时非 null。
+     * 与 Core app_service backfill_active_composition 同一出口语义：
+     * begin/update 成功后、以及不结束 composition 的命令（setSelection）后回填；
+     * commit/finish/cancel/insert/delete/replace 后为 null。
+     */
+    private fun activeCompositionStateOrNull(): EditorCompositionStateDto? =
+        if (isSessionActive()) {
+            EditorCompositionStateDto(
+                sessionId = sessionId.toULong(),
+                baseRevision = sessionBaseRevision.toULong(),
+                generation = sessionGeneration.toULong(),
+                replaceByteStart = sessionReplaceStart.toUInt(),
+                replaceByteEndExclusive = sessionReplaceEndExclusive.toUInt(),
+                preeditText = sessionPreeditText,
+                preeditCursorUtf16 = sessionPreeditCursorUtf16.toUInt(),
+            )
+        } else {
+            null
+        }
+
     /** True when the fake still holds a live composition session (kernel-side state). */
     fun hasActiveSession(): Boolean = isSessionActive()
 
@@ -190,6 +212,7 @@ class FakeInputCommandPort(
                 ),
             compositionSession = null,
             contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
+            composition = null,
         )
     }
 
@@ -227,6 +250,7 @@ class FakeInputCommandPort(
                 ),
             compositionSession = null,
             contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
+            composition = null,
         )
     }
 
@@ -310,6 +334,7 @@ class FakeInputCommandPort(
                     generation = sessionGeneration.toULong(),
                 ),
             contentDelta = EditorContentDeltaDto(0u, 0u, 0u, 0u),
+            composition = activeCompositionStateOrNull(),
         )
     }
 
@@ -373,6 +398,7 @@ class FakeInputCommandPort(
                 ),
             compositionSession = null,
             contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
+            composition = activeCompositionStateOrNull(),
         )
     }
 
@@ -561,6 +587,7 @@ class FakeInputCommandPort(
                 ),
             compositionSession = null,
             contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
+            composition = null,
         )
     }
 
@@ -703,6 +730,8 @@ class FakeInputCommandPort(
                     ),
                 compositionSession = null,
                 contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
+                // #629 评论8：setSelection 不结束 composition，内核回填活跃状态。
+                composition = activeCompositionStateOrNull(),
             )
         selectionAnchorUtf8 = anchorByteOffset
         selectionHeadUtf8 = headByteOffset
@@ -800,6 +829,7 @@ class FakeInputCommandPort(
                 ),
             compositionSession = null,
             contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
+            composition = null,
         )
     }
 

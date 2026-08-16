@@ -132,6 +132,7 @@ class EditorContentDeltaConsumptionTest {
                         insertedNonWhitespaceChars = 1u,
                         deletedNonWhitespaceChars = 2u,
                     ),
+                composition = null,
             )
         val result = EditResult.fromDto(dto)
         val sessionDelta = result.contentDelta.toSessionDelta()

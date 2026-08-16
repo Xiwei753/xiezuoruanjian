@@ -213,6 +213,7 @@ class InsertLineBreakAutoIndentPolicyTest {
                     ),
                 compositionSession = null,
                 contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
+                composition = null,
             )
         }
 

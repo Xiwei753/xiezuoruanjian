@@ -67,6 +67,7 @@ class SujianEditorViewReloadEventTest {
                     ),
                 compositionSession = null,
                 contentDelta = uniffi.writer_core.EditorContentDeltaDto(0u, 0u, 0u, 0u),
+                composition = null,
             )
 
         override fun undo(expectedRevision: Long): EditorEditResultDto? {
@@ -210,6 +211,7 @@ class SujianEditorViewReloadEventTest {
                     selectionAnchor = 6u,
                     generation = 0UL,
                     chapterId = "a",
+                    composition = null,
                 ),
             )
         val attached =
