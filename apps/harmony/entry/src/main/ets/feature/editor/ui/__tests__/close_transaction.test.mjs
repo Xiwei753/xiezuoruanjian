@@ -10,7 +10,7 @@
 //   7. performGracefulClose 顺序：flush → idle → save → closeAsync → detach（严格有序）
 //   8. performBackgroundSave 顺序：flush → idle → save（不 detach、不 close）
 //   9. 最后输入后立即返回仍 flush/save/close 有序（不丢最后几个字）
-//  10. 返回按钮和 aboutToDisappear 走同一套 performGracefulClose（禁止多套关闭流程）
+//  10. 返回按钮和 onBackPressed 走同一 requestLeave，aboutToDisappear 只做 observer 清理（禁止多套关闭流程）
 //
 // 运行：node --experimental-strip-types close_transaction.test.mjs
 //
@@ -537,15 +537,19 @@ await testAsync('核心场景: 不走 flush 直接 save 会丢最后输入（反
   // 这就是 Part G 要解决的问题：必须先 flush 再 save
 })
 
-// ── 10. 返回按钮和 aboutToDisappear 走同一套 performGracefulClose ──
+// ── 10. 返回按钮和 onBackPressed 走同一 requestLeave，aboutToDisappear 只做清理 ──
 
-await testAsync('统一关闭: 返回按钮和 aboutToDisappear 都调 performGracefulClose（禁止多套关闭流程）', async () => {
-  // 模拟 WritingScreen：返回按钮 onClick 和 aboutToDisappear 都调 performGracefulClose
+await testAsync('统一关闭: 返回按钮和 onBackPressed 都调 requestLeave，aboutToDisappear 只做清理（禁止多套关闭流程）', async () => {
+  // 模拟 WritingScreen（评论9 第3项 + 评论 5308748920 第2项）：
+  //   - 返回按钮 onClick 和 onBackPressed 都调 requestLeave（统一离开入口）
+  //   - requestLeave 内部调 performGracefulClose，成功才 pop；用 leaveTask 幂等
+  //   - aboutToDisappear 不再调 performGracefulClose，只做 observer 清理
   const closeCallLog = []
   const mockScreen = {
+    leaveTask: null,
     async performGracefulClose() {
       closeCallLog.push('performGracefulClose')
-      // 简化：内部 7 步（评论9 第2项顺序：save → closeAsync → detach）
+      // 简化：内部 7 步（评论9 第2项顺序：flush → whenIdle → save → closeAsync → detach）
       closeCallLog.push('seal')
       closeCallLog.push('finishActiveComposition')
       closeCallLog.push('flush')
@@ -555,41 +559,76 @@ await testAsync('统一关闭: 返回按钮和 aboutToDisappear 都调 performGr
       closeCallLog.push('detach')
       return true
     },
-    async onBackClick() {
-      // 返回按钮：只有 closed === true 才 pop（评论8 第2项）
-      const closed = await this.performGracefulClose()
-      if (closed === true) {
-        closeCallLog.push('pop')
+    async requestLeave() {
+      // 评论 5308748920 第2项：leaveTask 幂等——已有 task 直接返回
+      if (this.leaveTask !== null) {
+        return this.leaveTask
       }
+      closeCallLog.push('requestLeave')
+      const task = (async () => {
+        const closed = await this.performGracefulClose()
+        if (closed === true) {
+          closeCallLog.push('pop')
+        }
+      })()
+      this.leaveTask = task
+      return task
+    },
+    async onBackClick() {
+      // 左上角返回按钮 onClick：走统一离开入口 requestLeave
+      await this.requestLeave()
+    },
+    onBackPressed() {
+      // NavDestination.onBackPressed：异步调 requestLeave，同步 return true 拦截默认退栈
+      this.requestLeave()
+      return true
     },
     async aboutToDisappear() {
-      // aboutToDisappear：performGracefulClose → 清监听器
-      await this.performGracefulClose()
-      closeCallLog.push('clearListener')
+      // 评论9 第3项：aboutToDisappear 只做 observer 清理，不调 performGracefulClose
+      closeCallLog.push('setStateListenerNull')
+      closeCallLog.push('stopShareLifecycle')
+      closeCallLog.push('removeObserver')
     },
   }
 
+  // 1. 返回按钮 onClick：走 requestLeave → performGracefulClose → ... → pop
   await mockScreen.onBackClick()
-  assert.deepEqual(closeCallLog, ['performGracefulClose', 'seal', 'finishActiveComposition', 'flush', 'whenIdle', 'save', 'closeAsync', 'detach', 'pop'])
+  assert.deepEqual(closeCallLog, ['requestLeave', 'performGracefulClose', 'seal', 'finishActiveComposition', 'flush', 'whenIdle', 'save', 'closeAsync', 'detach', 'pop'])
 
+  // 2. onBackPressed：return true 拦截默认退栈，异步走 requestLeave
+  closeCallLog.length = 0
+  mockScreen.leaveTask = null
+  const ret = mockScreen.onBackPressed()
+  assert.equal(ret, true, 'onBackPressed 应 return true 拦截默认退栈')
+  // 等待 requestLeave 异步链跑完
+  await mockScreen.leaveTask
+  assert.ok(closeCallLog.includes('requestLeave'), 'onBackPressed 应触发 requestLeave')
+  assert.deepEqual(closeCallLog, ['requestLeave', 'performGracefulClose', 'seal', 'finishActiveComposition', 'flush', 'whenIdle', 'save', 'closeAsync', 'detach', 'pop'])
+
+  // 3. aboutToDisappear：只做清理，不走关闭流程
   closeCallLog.length = 0
   await mockScreen.aboutToDisappear()
-  assert.deepEqual(closeCallLog, ['performGracefulClose', 'seal', 'finishActiveComposition', 'flush', 'whenIdle', 'save', 'closeAsync', 'detach', 'clearListener'])
+  assert.deepEqual(closeCallLog, ['setStateListenerNull', 'stopShareLifecycle', 'removeObserver'])
+  assert.ok(!closeCallLog.includes('performGracefulClose'), 'aboutToDisappear 不应调 performGracefulClose')
+  assert.ok(!closeCallLog.includes('flush'), 'aboutToDisappear 不应调 flush')
+  assert.ok(!closeCallLog.includes('closeAsync'), 'aboutToDisappear 不应调 closeAsync')
+  assert.ok(!closeCallLog.includes('detach'), 'aboutToDisappear 不应调 detach')
 
-  // 关键：两者都走 performGracefulClose，没有第二套关闭流程
-  // （没有直接 coordinator.close() 不等 idle，没有直接 detach 不 flush）
+  // 关键：返回按钮和 onBackPressed 走同一 requestLeave 入口；aboutToDisappear 不走关闭流程
+  // （没有第二套关闭流程，没有直接 coordinator.close() 不等 idle，没有直接 detach 不 flush）
 })
 
-await testAsync('统一关闭: 不存在绕过 performGracefulClose 的直接 close/detach 路径', async () => {
-  // 验证：aboutToDisappear 不再直接调 coordinator.close() 或 harmonyImeConnection.detach()
-  // 而是都包在 performGracefulClose 里
-  // 这里用代码审查方式验证：模拟 aboutToDisappear 的调用记录
+await testAsync('统一关闭: aboutToDisappear 不调 flush/closeAsync/detach，只做 observer 清理', async () => {
+  // 验证（评论9 第3项）：aboutToDisappear 只做 observer 清理，
+  // 不调 coordinator.close / coordinator.closeAsync / coordinator.whenIdle /
+  // dispatcher.flush / harmonyImeConnection.detach。
+  // 关闭流程只在 requestLeave → performGracefulClose 里执行。
   const calls = []
   const coordinator = {
     close: async () => { calls.push('direct-close') },  // 旧路径，不应被调
     closeAsync: async () => { calls.push('closeAsync'); return { success: true } },
     whenIdle: async () => { calls.push('whenIdle') },
-    setStateListener: () => {},
+    setStateListener: (l) => { if (l === null) calls.push('setStateListenerNull') },
   }
   const harmonyImeConnection = {
     detach: async () => { calls.push('detach') },
@@ -597,20 +636,26 @@ await testAsync('统一关闭: 不存在绕过 performGracefulClose 的直接 cl
   const dispatcher = { flush: async () => { calls.push('flush') } }
 
   // 新的 aboutToDisappear 实现（与修改后的 WritingScreen 对齐）
-  // Issue #629 评论9 第2/3项：顺序 flush → whenIdle → closeAsync → detach
+  // 评论9 第3项：只做 observer 清理，不调 flush/whenIdle/closeAsync/detach
   async function aboutToDisappear() {
-    // performGracefulClose 内部调 closeAsync 和 detach
-    await dispatcher.flush()
-    await coordinator.whenIdle()
-    await coordinator.closeAsync()
-    await harmonyImeConnection.detach()
     coordinator.setStateListener(null)
+    calls.push('stopShareLifecycle')
+    calls.push('removeAutoSaveObserver')
+    calls.push('removeShareLifecycleObserver')
+    calls.push('removeThemeObserver')
+    calls.push('removeAdaptiveObserver')
   }
 
   await aboutToDisappear()
 
+  // 不应出现任何关闭流程调用
   assert.ok(!calls.includes('direct-close'), '不应直接调 coordinator.close()（旧路径）')
-  assert.deepEqual(calls, ['flush', 'whenIdle', 'closeAsync', 'detach'])
+  assert.ok(!calls.includes('closeAsync'), 'aboutToDisappear 不应调 coordinator.closeAsync')
+  assert.ok(!calls.includes('whenIdle'), 'aboutToDisappear 不应调 coordinator.whenIdle')
+  assert.ok(!calls.includes('flush'), 'aboutToDisappear 不应调 dispatcher.flush')
+  assert.ok(!calls.includes('detach'), 'aboutToDisappear 不应调 harmonyImeConnection.detach')
+  // 应出现清理操作
+  assert.deepEqual(calls, ['setStateListenerNull', 'stopShareLifecycle', 'removeAutoSaveObserver', 'removeShareLifecycleObserver', 'removeThemeObserver', 'removeAdaptiveObserver'])
 })
 
 // ── 11. closeAsync vs close 语义差异 ──
