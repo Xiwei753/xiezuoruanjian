@@ -14,7 +14,9 @@ import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { SujianEditor } from './SujianEditor'
-import { EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
+import { TextOffsetMapper } from '../input/TextOffsetMapper'
+import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
+import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 
 @Component
 export struct WritingScreen {
@@ -57,6 +59,8 @@ export struct WritingScreen {
   @State sessionStartTime: number = 0
   @State adaptiveState: AdaptiveState = getAdaptiveState()
   @State editorSnapshot: EditorLayoutSnapshot | null = null
+  // 当前 UI 滚动位置（viewport），接续恢复时只设 UI，不写 Core。
+  @State currentViewport: object | null = null
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
@@ -68,6 +72,8 @@ export struct WritingScreen {
   private inputAdapter: EditorInputAdapter = new EditorInputAdapter(this.coordinator)
   private selectionController: SelectionController = new SelectionController(this.coordinator)
   private harmonyImeConnection: HarmonyImeConnection = new HarmonyImeConnection()
+  // 接续进入时携带的编辑器状态（selection/cursor/viewport/revision），loadChapter 恢复时消费。
+  private continuationParams: WritingRouteParams | null = null
 
   aboutToAppear() {
     const paramsArr = this.navPathStack.getParamByName(Routes.Writing) as WritingRouteParams[]
@@ -77,17 +83,21 @@ export struct WritingScreen {
       this.chapterTitle = params.chapterTitle
       this.projectId = params.projectId || ''
       this.volumeId = params.volumeId || ''
+      // 暂存接续参数，loadChapter 在 coordinator.open 成功后消费以恢复编辑器状态。
+      this.continuationParams = params
       this.loadChapter()
       this.loadSettings()
     }
 
     const self = this
     // 注册编辑会话状态监听器：open/编辑命令成功后回流 editorSnapshot/content/hasUnsaved/wordCount。
+    // 选区/正文变化后持续写入当前接续状态，保证 onContinue 读取到最新编辑器状态。
     this.coordinator.setStateListener((snap: EditorSessionSnapshot) => {
       self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize)
       self.content = snap.text
       self.hasUnsavedChanges = snap.text !== self.lastSavedContent
       self.wordCount = snap.text.length
+      self.updateContinuationState()
     })
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
       self.themeConfig = theme
@@ -104,15 +114,6 @@ export struct WritingScreen {
       this.settings.autoSaveDelayMs
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
-
-    // 注册编辑会话状态监听器：Core 编辑命令成功后回流 EditorSessionSnapshot，
-    // 更新 editorSnapshot/content/hasUnsavedChanges/wordCount，驱动 SujianEditor 静态渲染。
-    this.coordinator.setStateListener((snap: EditorSessionSnapshot) => {
-      self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize)
-      self.content = snap.text
-      self.hasUnsavedChanges = snap.text !== self.lastSavedContent
-      self.wordCount = snap.text.length
-    })
   }
 
   aboutToDisappear() {
@@ -127,10 +128,7 @@ export struct WritingScreen {
       )
     }
 
-    // 清除状态监听器，避免 close 后回调
-    this.coordinator.setStateListener(null)
-
-    // 清除编辑会话状态监听器
+    // 清除状态监听器，避免 close 后回调。
     this.coordinator.setStateListener(null)
 
     // 关闭编辑会话
@@ -168,6 +166,9 @@ export struct WritingScreen {
         const snapResult = await this.coordinator.open(this.chapterId, result.data.content)
         if (!snapResult.success) {
           this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
+        } else if (snapResult.data) {
+          // ── 恢复接续编辑器状态（selection/cursor/viewport/revision）──
+          await this.restoreContinuationEditorState(snapResult.data)
         }
       } else {
         this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
@@ -177,6 +178,72 @@ export struct WritingScreen {
     } finally {
       this.isLoading = false
     }
+  }
+
+  // 恢复接续编辑器状态。在 coordinator.open 成功后调用。
+  // offset 转换方向：payload(UTF-16) → Core(UTF-8)，用 TextOffsetMapper.utf16ToUtf8。
+  // revision 不匹配时不强套旧 offset，只恢复章节导航，以当前 Core 正文为准。
+  private async restoreContinuationEditorState(snap: EditorSessionSnapshot): Promise<void> {
+    const params = this.continuationParams
+    if (params === null) {
+      // 非接续进入；写入当前状态供后续 onContinue 读取。
+      this.updateContinuationState()
+      return
+    }
+
+    // revision 校验：continuation revision 与当前 Core 正文不匹配时，
+    // 不强套旧 offset，只恢复章节导航，以当前 Core 正文为准。
+    const revisionMatches: boolean =
+      params.revision === undefined || params.revision === snap.revision
+
+    if (revisionMatches) {
+      // selection 优先；无 selection 时用 cursor。
+      // selection/cursor 是 UTF-16 code unit offset（UI 坐标），转成 Core UTF-8 byte offset。
+      if (params.selection !== undefined && params.selection.length >= 2) {
+        const anchorByte: number = TextOffsetMapper.utf16ToUtf8(snap.text, params.selection[0])
+        const headByte: number = TextOffsetMapper.utf16ToUtf8(snap.text, params.selection[1])
+        await this.coordinator.setSelection(anchorByte, headByte)
+      } else if (params.cursor !== undefined) {
+        const cursorByte: number = TextOffsetMapper.utf16ToUtf8(snap.text, params.cursor)
+        await this.coordinator.setSelection(cursorByte, cursorByte)
+      }
+    }
+
+    // viewport 只恢复到 UI 滚动位置，不写 Core。
+    if (params.viewport !== undefined) {
+      this.currentViewport = params.viewport
+    }
+
+    // 恢复后写入当前状态（UTF-8 → UTF-16 转换在 updateContinuationState 内完成）。
+    this.updateContinuationState()
+  }
+
+  // 持续写入当前接续状态。每次章节打开、选区变化、正文编辑、viewport 变化后调用。
+  // offset 转换方向：Core(UTF-8) → payload(UTF-16)，用 TextOffsetMapper.utf8ToUtf16。
+  private updateContinuationState(): void {
+    if (!this.projectId || !this.chapterId) {
+      return
+    }
+    const snap = this.coordinator.getSnapshot()
+    if (!snap) {
+      return
+    }
+    // Core snapshot 的 cursor/selectionAnchor 是 UTF-8 byte offset；
+    // ContinuationPayload 存 UTF-16 code unit offset（UI 坐标，跨设备平台无关）。
+    const cursorUtf16: number = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursor)
+    const anchorUtf16: number = TextOffsetMapper.utf8ToUtf16(snap.text, snap.selectionAnchor)
+    const payload: ContinuationPayload = {
+      projectId: this.projectId,
+      volumeId: this.volumeId,
+      chapterId: this.chapterId,
+      selection: [anchorUtf16, cursorUtf16],
+      cursor: cursorUtf16,
+      revision: snap.revision
+    }
+    if (this.currentViewport !== null) {
+      payload.viewport = this.currentViewport
+    }
+    AppContinuationService.getInstance().updateCurrentState(payload)
   }
 
   async loadSettings() {
@@ -238,6 +305,8 @@ export struct WritingScreen {
         this.wordCount = result.data.wordCount
         this.saveMessage = isAutoSave ? getContext(this).resourceManager.getStringSync($r('app.string.auto_saved').id) : getContext(this).resourceManager.getStringSync($r('app.string.saved').id)
         setTimeout(() => { this.saveMessage = '' }, 2000)
+        // 保存成功后更新接续状态（revision 前进）。
+        this.updateContinuationState()
         return true
       } else {
         this.lastSaveFailed = true

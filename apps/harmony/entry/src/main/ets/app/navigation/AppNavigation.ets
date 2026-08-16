@@ -108,25 +108,24 @@ export struct AppNavigation {
 
     if (hasChapter && hasProject && hasVolume) {
       // 携带 selection/cursor/viewport/revision 到 WritingScreen 入口。
-      // WritingRouteParams 只声明四个必需字段；额外字段通过 param(Object) 透传，
-      // 当前 WritingScreen 忽略，未来可扩展 WritingRouteParams 消费以恢复编辑器状态。
-      const wParam: Record<string, Object> = {
+      // WritingRouteParams 正式声明这些可选字段，不再用 Record<string,Object> 偷塞。
+      const wParam: WritingRouteParams = {
         chapterId: payload.chapterId as string,
         chapterTitle: '', // payload 不带 chapterTitle；WritingScreen 会从 core 加载章节标题。
         projectId: payload.projectId as string,
         volumeId: payload.volumeId as string
       }
       if (payload.selection !== undefined) {
-        wParam['selection'] = payload.selection as Object
+        wParam.selection = payload.selection
       }
       if (payload.cursor !== undefined) {
-        wParam['cursor'] = payload.cursor as Object
+        wParam.cursor = payload.cursor
       }
       if (payload.viewport !== undefined) {
-        wParam['viewport'] = payload.viewport as Object
+        wParam.viewport = payload.viewport
       }
       if (payload.revision !== undefined) {
-        wParam['revision'] = payload.revision as Object
+        wParam.revision = payload.revision
       }
       this.navPathStack.pushPath({ name: Routes.Writing, param: wParam })
     }

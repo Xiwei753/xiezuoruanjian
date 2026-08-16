@@ -403,6 +403,7 @@ impl super::WriterAppService {
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
 
+    #[allow(clippy::excessive_nesting)]
     pub fn text_edit_session_update_composition(
         &self,
         session_id: u64,
@@ -433,7 +434,19 @@ impl super::WriterAppService {
                 ),
                 expected_revision: EditorRevision::new(expected_revision),
             });
-            result.into()
+            let mut dto: EditorEditResultDto = result.into();
+            if dto.outcome == EditorEditOutcomeDto::Applied
+                || dto.outcome == EditorEditOutcomeDto::AppliedWithAdjustedSelection
+            {
+                if let Some((cs_id, base_rev, gen)) = s.kernel.composition_session_info() {
+                    dto.composition_session = Some(crate::api::types::CompositionSessionDto {
+                        session_id: cs_id,
+                        base_revision: base_rev,
+                        generation: gen,
+                    });
+                }
+            }
+            dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
@@ -649,5 +662,106 @@ impl super::WriterAppService {
                 offset_map: core_offset_map.as_ref(),
             });
         mappings.into_iter().map(Into::into).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::api::EditorEditOutcomeDto;
+    use crate::WriterAppService;
+
+    fn make_service() -> (WriterAppService, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WriterAppService::new(
+            dir.path().to_string_lossy().to_string(),
+            dir.path().join("projects").to_string_lossy().to_string(),
+        );
+        (svc, dir)
+    }
+
+    /// #629 评论5306513458 问题2：`text_edit_session_update_composition` 成功后必须把
+    /// Core 真实的 composition_session（session_id / base_revision / generation）写回 DTO，
+    /// 不能只返回 `result.into()` 让 composition_session 保持 None。
+    #[test]
+    fn update_composition_writes_back_composition_session_dto() {
+        let (svc, _dir) = make_service();
+        let session_id = svc
+            .text_edit_session_create("test".to_string(), String::new(), 0, 0)
+            .expect("session created");
+
+        // begin_composition 已正确写回 composition_session，作为 update 的输入基准。
+        let begin = svc.text_edit_session_begin_composition(session_id, 0, 0, 0);
+        assert_eq!(begin.outcome, EditorEditOutcomeDto::Applied);
+        let begin_cs = begin
+            .composition_session
+            .expect("begin_composition writes composition_session");
+        assert!(begin_cs.session_id > 0);
+
+        // update_composition 成功后 DTO 必须带 Core 真实的 composition_session。
+        let upd1 = svc.text_edit_session_update_composition(
+            session_id,
+            begin_cs.session_id,
+            begin_cs.generation,
+            "你".to_string(),
+            1, // UTF-16 cursor offset
+            begin.new_revision,
+        );
+        assert_eq!(upd1.outcome, EditorEditOutcomeDto::Applied);
+        let upd1_cs = upd1
+            .composition_session
+            .expect("update_composition writes composition_session");
+        assert_eq!(upd1_cs.session_id, begin_cs.session_id);
+        assert_eq!(upd1_cs.base_revision, begin_cs.base_revision);
+        assert!(
+            upd1_cs.generation > begin_cs.generation,
+            "generation should advance after update"
+        );
+
+        // 多次 update：generation 继续由 Core 裁判递增。
+        let upd2 = svc.text_edit_session_update_composition(
+            session_id,
+            upd1_cs.session_id,
+            upd1_cs.generation,
+            "你好".to_string(),
+            2, // UTF-16 cursor offset
+            upd1.new_revision,
+        );
+        assert_eq!(upd2.outcome, EditorEditOutcomeDto::Applied);
+        let upd2_cs = upd2
+            .composition_session
+            .expect("second update_composition writes composition_session");
+        assert!(
+            upd2_cs.generation > upd1_cs.generation,
+            "generation should keep advancing across updates"
+        );
+    }
+
+    /// update_composition 失败（stale generation）时不应写回 composition_session，
+    /// 与 begin_composition 的 outcome 守卫一致。
+    #[test]
+    fn update_composition_skips_writeback_on_stale_outcome() {
+        let (svc, _dir) = make_service();
+        let session_id = svc
+            .text_edit_session_create("test".to_string(), String::new(), 0, 0)
+            .expect("session created");
+        let begin = svc.text_edit_session_begin_composition(session_id, 0, 0, 0);
+        let begin_cs = begin
+            .composition_session
+            .expect("begin writes composition_session");
+
+        // 用错误的 generation 触发 StaleRevision。
+        let stale = svc.text_edit_session_update_composition(
+            session_id,
+            begin_cs.session_id,
+            begin_cs.generation.saturating_add(999),
+            "你".to_string(),
+            1,
+            begin.new_revision,
+        );
+        assert_eq!(stale.outcome, EditorEditOutcomeDto::StaleRevision);
+        assert!(
+            stale.composition_session.is_none(),
+            "stale outcome must not write composition_session"
+        );
     }
 }

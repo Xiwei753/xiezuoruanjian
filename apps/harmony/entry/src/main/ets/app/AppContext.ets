@@ -9,6 +9,7 @@ import { InputDeviceService } from '../platform/input/InputDeviceService'
 import { GripPostureService } from '../platform/awareness/GripPostureService'
 import { ShoulderSurfingService } from '../platform/privacy/ShoulderSurfingService'
 import { WindowPrivacyService } from '../platform/privacy/WindowPrivacyService'
+import { HarmonyShareService } from '../platform/share/HarmonyShareService'
 
 export interface AppContextConfig {
   appDataRoot: string
@@ -47,6 +48,11 @@ export class AppContext {
 
     // 把 UIAbilityContext 注入 WindowPrivacyService，使其能获取 window 实例。
     WindowPrivacyService.getInstance().setAbilityContext(context)
+
+    // 把 UIAbilityContext 注入 HarmonyShareService（进而注入 SystemShareService），
+    // 使其能调 systemShare.ShareController.show 和获取 windowId（隔空传送）。
+    // feature/page 不直接 import Share Kit，统一通过 HarmonyShareService。
+    HarmonyShareService.getInstance().setAbilityContext(context)
 
     // 启动各平台 service 真实监听，并刷新 CapabilityRegistry 真实探测。
     // 不靠默认 bool 假装能力存在；各 service 报告真实 support 状态。

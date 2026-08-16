@@ -18,6 +18,8 @@
 import { strict as assert } from 'node:assert'
 import {
   applyPatch,
+  applyPatchStrict,
+  utf8ByteOffsetToUtf16,
   applyEditResultToSnapshot,
   APPLIED,
   APPLIED_WITH_ADJUSTED_SELECTION,
@@ -71,6 +73,481 @@ function makeSnapshot(overrides) {
 }
 
 console.log('editor_patch_logic 纯逻辑单测')
+// ── 11. utf8ByteOffsetToUtf16 基础边界映射 ──
+test('utf8ByteOffsetToUtf16: ASCII text="abc" byteOffset 0/1/2/3 → 0/1/2/3', () => {
+  assert.equal(utf8ByteOffsetToUtf16('abc', 0), 0)
+  assert.equal(utf8ByteOffsetToUtf16('abc', 1), 1)
+  assert.equal(utf8ByteOffsetToUtf16('abc', 2), 2)
+  assert.equal(utf8ByteOffsetToUtf16('abc', 3), 3)
+})
+
+test('utf8ByteOffsetToUtf16: 中文 text="你好" byteOffset 0/3/6 → 0/1/2', () => {
+  // 你 = UTF-8 3 字节, UTF-16 1 code unit；好 同理
+  assert.equal(utf8ByteOffsetToUtf16('你好', 0), 0)
+  assert.equal(utf8ByteOffsetToUtf16('你好', 3), 1)
+  assert.equal(utf8ByteOffsetToUtf16('你好', 6), 2)
+})
+
+test('utf8ByteOffsetToUtf16: emoji text="😀" byteOffset 0/4 → 0/2', () => {
+  // 😀 = U+1F600, UTF-8 4 字节, UTF-16 surrogate pair 2 code unit
+  assert.equal(utf8ByteOffsetToUtf16('😀', 0), 0)
+  assert.equal(utf8ByteOffsetToUtf16('😀', 4), 2)
+})
+
+test('utf8ByteOffsetToUtf16: 混合 text="A你B" byteOffset 0/1/4/5 → 0/1/2/3', () => {
+  // A=1B, 你=3B, B=1B → 总 5 字节；UTF-16: A=1, 你=1, B=1 → 总 3 code unit
+  assert.equal(utf8ByteOffsetToUtf16('A你B', 0), 0)
+  assert.equal(utf8ByteOffsetToUtf16('A你B', 1), 1)
+  assert.equal(utf8ByteOffsetToUtf16('A你B', 4), 2)
+  assert.equal(utf8ByteOffsetToUtf16('A你B', 5), 3)
+})
+
+test('utf8ByteOffsetToUtf16: 中文+emoji text="你😀好" 边界 0/3/7/10 → 0/1/3/4', () => {
+  // 你=3B/1u, 😀=4B/2u, 好=3B/1u → 总 10 字节, 4 code unit
+  assert.equal(utf8ByteOffsetToUtf16('你😀好', 0), 0)
+  assert.equal(utf8ByteOffsetToUtf16('你😀好', 3), 1)
+  assert.equal(utf8ByteOffsetToUtf16('你😀好', 7), 3)
+  assert.equal(utf8ByteOffsetToUtf16('你😀好', 10), 4)
+})
+
+// ── 12. utf8ByteOffsetToUtf16 非字符边界/越界失败 ──
+test('utf8ByteOffsetToUtf16: 非字符边界 text="你好" byteOffset 1/2/4/5 → -1', () => {
+  assert.equal(utf8ByteOffsetToUtf16('你好', 1), -1)
+  assert.equal(utf8ByteOffsetToUtf16('你好', 2), -1)
+  assert.equal(utf8ByteOffsetToUtf16('你好', 4), -1)
+  assert.equal(utf8ByteOffsetToUtf16('你好', 5), -1)
+})
+
+test('utf8ByteOffsetToUtf16: emoji 中间 byteOffset 1/2/3 → -1（落在 surrogate pair 中间）', () => {
+  // 😀 UTF-8 4 字节，byteOffset 1/2/3 落在 emoji 中间
+  assert.equal(utf8ByteOffsetToUtf16('😀', 1), -1)
+  assert.equal(utf8ByteOffsetToUtf16('😀', 2), -1)
+  assert.equal(utf8ByteOffsetToUtf16('😀', 3), -1)
+})
+
+test('utf8ByteOffsetToUtf16: 越界 byteOffset > 文本总字节 → -1', () => {
+  assert.equal(utf8ByteOffsetToUtf16('你好', 7), -1)
+  assert.equal(utf8ByteOffsetToUtf16('你好', 100), -1)
+  assert.equal(utf8ByteOffsetToUtf16('abc', 4), -1)
+  assert.equal(utf8ByteOffsetToUtf16('😀', 5), -1)
+})
+
+test('utf8ByteOffsetToUtf16: 负 byteOffset → -1', () => {
+  assert.equal(utf8ByteOffsetToUtf16('abc', -1), -1)
+  assert.equal(utf8ByteOffsetToUtf16('你好', -5), -1)
+})
+
+test('utf8ByteOffsetToUtf16: 空文本 byteOffset 0 → 0, >0 → -1', () => {
+  assert.equal(utf8ByteOffsetToUtf16('', 0), 0)
+  assert.equal(utf8ByteOffsetToUtf16('', 1), -1)
+})
+
+// ── 13. applyPatchStrict 中文/emoji 成功路径 ──
+test('applyPatchStrict: 中文中间插入 text="你好" [3,3) 插 "X" → "你X好"', () => {
+  const patch = {
+    baseRevision: 1,
+    newRevision: 2,
+    replaceByteStart: 3,
+    replaceByteEndExclusive: 3,
+    insertedText: 'X',
+    resultingSelectionStart: 2,
+    resultingSelectionEnd: 2,
+  }
+  const r = applyPatchStrict('你好', patch)
+  assert.equal(r.ok, true)
+  assert.equal(r.text, '你X好')
+})
+
+test('applyPatchStrict: 中文范围删除 text="你好" [3,6) 删 → "你"', () => {
+  const patch = {
+    baseRevision: 1,
+    newRevision: 2,
+    replaceByteStart: 3,
+    replaceByteEndExclusive: 6,
+    insertedText: '',
+    resultingSelectionStart: 1,
+    resultingSelectionEnd: 1,
+  }
+  const r = applyPatchStrict('你好', patch)
+  assert.equal(r.ok, true)
+  assert.equal(r.text, '你')
+})
+
+test('applyPatchStrict: 混合文本替换 text="A你B" [1,4) 替换为 "他" → "A他B"', () => {
+  const patch = {
+    baseRevision: 1,
+    newRevision: 2,
+    replaceByteStart: 1,
+    replaceByteEndExclusive: 4,
+    insertedText: '他',
+    resultingSelectionStart: 1,
+    resultingSelectionEnd: 2,
+  }
+  const r = applyPatchStrict('A你B', patch)
+  assert.equal(r.ok, true)
+  assert.equal(r.text, 'A他B')
+})
+
+test('applyPatchStrict: emoji 前插入 text="😀" [0,0) 插 "X" → "X😀"', () => {
+  const patch = {
+    baseRevision: 1,
+    newRevision: 2,
+    replaceByteStart: 0,
+    replaceByteEndExclusive: 0,
+    insertedText: 'X',
+    resultingSelectionStart: 0,
+    resultingSelectionEnd: 1,
+  }
+  const r = applyPatchStrict('😀', patch)
+  assert.equal(r.ok, true)
+  assert.equal(r.text, 'X😀')
+})
+
+test('applyPatchStrict: emoji 后插入 text="😀" [4,4) 插 "X" → "😀X"', () => {
+  const patch = {
+    baseRevision: 1,
+    newRevision: 2,
+    replaceByteStart: 4,
+    replaceByteEndExclusive: 4,
+    insertedText: 'X',
+    resultingSelectionStart: 2,
+    resultingSelectionEnd: 3,
+  }
+  const r = applyPatchStrict('😀', patch)
+  assert.equal(r.ok, true)
+  assert.equal(r.text, '😀X')
+})
+
+test('applyPatchStrict: emoji 删除 text="X😀Y" [1,5) 删 → "XY"', () => {
+  // X=1B, 😀=4B, Y=1B → 总 6 字节；[1,5) 删除 😀
+  const patch = {
+    baseRevision: 1,
+    newRevision: 2,
+    replaceByteStart: 1,
+    replaceByteEndExclusive: 5,
+    insertedText: '',
+    resultingSelectionStart: 1,
+    resultingSelectionEnd: 1,
+  }
+  const r = applyPatchStrict('X😀Y', patch)
+  assert.equal(r.ok, true)
+  assert.equal(r.text, 'XY')
+})
+
+test('applyPatchStrict: 中文+emoji 混合删除 text="你😀好" [3,7) 删 emoji → "你好"', () => {
+  // 你=3B, 😀=4B, 好=3B → [3,7) 是 😀
+  const patch = {
+    baseRevision: 1,
+    newRevision: 2,
+    replaceByteStart: 3,
+    replaceByteEndExclusive: 7,
+    insertedText: '',
+    resultingSelectionStart: 1,
+    resultingSelectionEnd: 1,
+  }
+  const r = applyPatchStrict('你😀好', patch)
+  assert.equal(r.ok, true)
+  assert.equal(r.text, '你好')
+})
+
+test('applyPatchStrict: 中文+emoji 混合替换 text="你😀好" [3,7) 替换为 "X" → "你X好"', () => {
+  const patch = {
+    baseRevision: 1,
+    newRevision: 2,
+    replaceByteStart: 3,
+    replaceByteEndExclusive: 7,
+    insertedText: 'X',
+    resultingSelectionStart: 1,
+    resultingSelectionEnd: 2,
+  }
+  const r = applyPatchStrict('你😀好', patch)
+  assert.equal(r.ok, true)
+  assert.equal(r.text, '你X好')
+})
+
+test('applyPatchStrict: emoji 整体替换 text="😀" [0,4) 替换为 "AB" → "AB"', () => {
+  const patch = {
+    baseRevision: 1,
+    newRevision: 2,
+    replaceByteStart: 0,
+    replaceByteEndExclusive: 4,
+    insertedText: 'AB',
+    resultingSelectionStart: 0,
+    resultingSelectionEnd: 2,
+  }
+  const r = applyPatchStrict('😀', patch)
+  assert.equal(r.ok, true)
+  assert.equal(r.text, 'AB')
+})
+
+// ── 14. applyPatchStrict 失败语义（非字符边界/越界） ──
+test('applyPatchStrict: 非字符边界 startOffset 必须失败 text="你好" [1,3)', () => {
+  const patch = {
+    baseRevision: 1,
+    newRevision: 2,
+    replaceByteStart: 1,
+    replaceByteEndExclusive: 3,
+    insertedText: 'X',
+    resultingSelectionStart: 0,
+    resultingSelectionEnd: 0,
+  }
+  const r = applyPatchStrict('你好', patch)
+  assert.equal(r.ok, false)
+  assert.equal(typeof r.reason, 'string')
+  assert.ok(r.reason.length > 0)
+})
+
+test('applyPatchStrict: 非字符边界 endOffset 必须失败 text="你好" [0,4)', () => {
+  const patch = {
+    baseRevision: 1,
+    newRevision: 2,
+    replaceByteStart: 0,
+    replaceByteEndExclusive: 4,
+    insertedText: 'X',
+    resultingSelectionStart: 0,
+    resultingSelectionEnd: 0,
+  }
+  const r = applyPatchStrict('你好', patch)
+  assert.equal(r.ok, false)
+  assert.equal(typeof r.reason, 'string')
+})
+
+test('applyPatchStrict: 越界 byteOffset 必须失败 text="你好" [100,100)', () => {
+  const patch = {
+    baseRevision: 1,
+    newRevision: 2,
+    replaceByteStart: 100,
+    replaceByteEndExclusive: 100,
+    insertedText: 'X',
+    resultingSelectionStart: 0,
+    resultingSelectionEnd: 0,
+  }
+  const r = applyPatchStrict('你好', patch)
+  assert.equal(r.ok, false)
+  assert.equal(typeof r.reason, 'string')
+})
+
+test('applyPatchStrict: emoji 中间边界必须失败 text="😀" [2,2)', () => {
+  const patch = {
+    baseRevision: 1,
+    newRevision: 2,
+    replaceByteStart: 2,
+    replaceByteEndExclusive: 2,
+    insertedText: 'X',
+    resultingSelectionStart: 0,
+    resultingSelectionEnd: 0,
+  }
+  const r = applyPatchStrict('😀', patch)
+  assert.equal(r.ok, false)
+  assert.equal(typeof r.reason, 'string')
+})
+
+test('applyPatchStrict: 负 offset 必须失败 text="abc" [-1,0)', () => {
+  const patch = {
+    baseRevision: 1,
+    newRevision: 2,
+    replaceByteStart: -1,
+    replaceByteEndExclusive: 0,
+    insertedText: 'X',
+    resultingSelectionStart: 0,
+    resultingSelectionEnd: 0,
+  }
+  const r = applyPatchStrict('abc', patch)
+  assert.equal(r.ok, false)
+  assert.equal(typeof r.reason, 'string')
+})
+
+// ── 15. applyEditResultToSnapshot 中文/emoji 与失败恢复 ──
+test('applyEditResultToSnapshot: 中文 patch 正常应用 text="你好" 末尾插 "世界" → "你好世界"', () => {
+  const snapshot = makeSnapshot({
+    text: '你好',
+    revision: 1,
+    cursor: 2,
+    selectionAnchor: 2,
+    generation: 0,
+    chapterId: 'c1',
+  })
+  const result = makeResult({
+    outcome: APPLIED,
+    baseRevision: 1,
+    newRevision: 2,
+    displayPatches: [{
+      baseRevision: 1,
+      newRevision: 2,
+      replaceByteStart: 6,
+      replaceByteEndExclusive: 6,
+      insertedText: '世界',
+      resultingSelectionStart: 4,
+      resultingSelectionEnd: 4,
+    }],
+    newSelectionStart: 4,
+    newSelectionEnd: 4,
+    compositionSession: null,
+  })
+  const next = applyEditResultToSnapshot(snapshot, result)
+  assert.equal(next.text, '你好世界')
+  assert.equal(next.revision, 2)
+  assert.equal(next.cursor, 4)
+  assert.equal(next.selectionAnchor, 4)
+})
+
+test('applyEditResultToSnapshot: 多 patch 顺序应用含中文 → "大家你好世界"', () => {
+  const snapshot = makeSnapshot({
+    text: '你好',
+    revision: 1,
+    cursor: 2,
+    selectionAnchor: 2,
+    generation: 0,
+    chapterId: 'c1',
+  })
+  const result = makeResult({
+    outcome: APPLIED,
+    baseRevision: 1,
+    newRevision: 3,
+    displayPatches: [
+      {
+        // 末尾插 "世界"：基于 "你好"（6 字节），[6,6) 插
+        baseRevision: 1,
+        newRevision: 2,
+        replaceByteStart: 6,
+        replaceByteEndExclusive: 6,
+        insertedText: '世界',
+        resultingSelectionStart: 4,
+        resultingSelectionEnd: 4,
+      },
+      {
+        // 开头插 "大家"：基于 "你好世界"（12 字节），[0,0) 插
+        baseRevision: 2,
+        newRevision: 3,
+        replaceByteStart: 0,
+        replaceByteEndExclusive: 0,
+        insertedText: '大家',
+        resultingSelectionStart: 0,
+        resultingSelectionEnd: 2,
+      },
+    ],
+    newSelectionStart: 0,
+    newSelectionEnd: 2,
+    compositionSession: null,
+  })
+  const next = applyEditResultToSnapshot(snapshot, result)
+  assert.equal(next.text, '大家你好世界')
+  assert.equal(next.revision, 3)
+})
+
+test('applyEditResultToSnapshot: patch 失败时返回原 snapshot（非字符边界）', () => {
+  const snapshot = makeSnapshot({
+    text: '你好',
+    revision: 5,
+    cursor: 1,
+    selectionAnchor: 1,
+    generation: 3,
+    chapterId: 'c1',
+  })
+  const result = makeResult({
+    outcome: APPLIED,
+    baseRevision: 5,
+    newRevision: 6,
+    displayPatches: [{
+      // replaceByteStart=1 非字符边界
+      baseRevision: 5,
+      newRevision: 6,
+      replaceByteStart: 1,
+      replaceByteEndExclusive: 3,
+      insertedText: 'X',
+      resultingSelectionStart: 0,
+      resultingSelectionEnd: 0,
+    }],
+    newSelectionStart: 0,
+    newSelectionEnd: 0,
+    compositionSession: null,
+  })
+  const next = applyEditResultToSnapshot(snapshot, result)
+  // 返回原 snapshot 引用，让上层从 Core snapshot() 恢复
+  assert.equal(next, snapshot)
+  assert.equal(next.text, '你好')
+  assert.equal(next.revision, 5)
+  assert.equal(next.generation, 3)
+})
+
+test('applyEditResultToSnapshot: 多 patch 中途失败返回原 snapshot', () => {
+  const snapshot = makeSnapshot({
+    text: '你好',
+    revision: 1,
+    cursor: 2,
+    selectionAnchor: 2,
+    generation: 0,
+    chapterId: 'c1',
+  })
+  const result = makeResult({
+    outcome: APPLIED,
+    baseRevision: 1,
+    newRevision: 3,
+    displayPatches: [
+      {
+        // 第一个 patch 正常：末尾插 "世界"
+        baseRevision: 1,
+        newRevision: 2,
+        replaceByteStart: 6,
+        replaceByteEndExclusive: 6,
+        insertedText: '世界',
+        resultingSelectionStart: 4,
+        resultingSelectionEnd: 4,
+      },
+      {
+        // 第二个 patch 失败：基于 "你好世界"（12 字节），replaceByteStart=1 非边界
+        baseRevision: 2,
+        newRevision: 3,
+        replaceByteStart: 1,
+        replaceByteEndExclusive: 3,
+        insertedText: 'X',
+        resultingSelectionStart: 0,
+        resultingSelectionEnd: 0,
+      },
+    ],
+    newSelectionStart: 0,
+    newSelectionEnd: 0,
+    compositionSession: null,
+  })
+  const next = applyEditResultToSnapshot(snapshot, result)
+  // 中途失败 → 返回原 snapshot
+  assert.equal(next, snapshot)
+  assert.equal(next.text, '你好')
+  assert.equal(next.revision, 1)
+})
+
+test('applyEditResultToSnapshot: emoji patch 正常应用 text="😀" 后插 "Y" → "😀Y"', () => {
+  const snapshot = makeSnapshot({
+    text: '😀',
+    revision: 1,
+    cursor: 2,
+    selectionAnchor: 2,
+    generation: 0,
+    chapterId: 'c1',
+  })
+  const result = makeResult({
+    outcome: APPLIED,
+    baseRevision: 1,
+    newRevision: 2,
+    displayPatches: [{
+      baseRevision: 1,
+      newRevision: 2,
+      replaceByteStart: 4,
+      replaceByteEndExclusive: 4,
+      insertedText: 'Y',
+      resultingSelectionStart: 3,
+      resultingSelectionEnd: 3,
+    }],
+    newSelectionStart: 3,
+    newSelectionEnd: 3,
+    compositionSession: null,
+  })
+  const next = applyEditResultToSnapshot(snapshot, result)
+  assert.equal(next.text, '😀Y')
+  assert.equal(next.revision, 2)
+})
+
+
 console.log('---')
 
 // ── 1. applyPatch 基础 ──

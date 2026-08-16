@@ -65,7 +65,96 @@ export const STALE_REVISION = 'staleRevision'
 export const INVALID_OFFSET = 'invalidOffset'
 export const INVALID_RANGE = 'invalidRange'
 
-/** 应用单个 DisplayPatch：把 text[replaceByteStart, replaceByteEndExclusive) 替换为 insertedText。 */
+/**
+ * UTF-8 byte offset → UTF-16 code unit offset（严格版）。
+ * 逐 Unicode code point 累加 UTF-8 byte 长度和 UTF-16 code unit 长度。
+ * byteOffset 必须恰好落在字符边界（某个 code point 的开始处）或等于文本总 byte 长度（末尾）。
+ * 非字符边界（落在某个 code point 中间）或越界时返回 -1。
+ *
+ * 与 TextOffsetMapper.utf8ToUtf16 的区别：后者在非边界时静默截断到前一个边界，
+ * 本函数严格返回 -1，让调用方明确处理失败（从 Core snapshot() 恢复）。
+ */
+export function utf8ByteOffsetToUtf16(text: string, byteOffset: number): number {
+  if (byteOffset < 0) return -1
+  if (byteOffset === 0) return 0
+  let byteLen = 0
+  let utf16Index = 0
+  let i = 0
+  while (i < text.length) {
+    const code = text.charCodeAt(i)
+    let charByteLen: number
+    let utf16Step: number
+    if (code < 0x80) {
+      charByteLen = 1
+      utf16Step = 1
+    } else if (code < 0x800) {
+      charByteLen = 2
+      utf16Step = 1
+    } else if (code >= 0xD800 && code <= 0xDBFF) {
+      // 高代理项：UTF-16 surrogate pair 对应 1 个 code point，UTF-8 4 字节，UTF-16 2 code unit。
+      charByteLen = 4
+      utf16Step = 2
+      i += 1  // 跳过低代理项
+    } else {
+      charByteLen = 3
+      utf16Step = 1
+    }
+    byteLen += charByteLen
+    utf16Index += utf16Step
+    i += 1
+    if (byteLen === byteOffset) {
+      return utf16Index
+    }
+    if (byteLen > byteOffset) {
+      // 落在当前 code point 中间，非字符边界
+      return -1
+    }
+  }
+  // 遍历完所有 code point 仍未达到 byteOffset → 越界
+  return -1
+}
+
+/**
+ * 严格应用单个 DisplayPatch：把 text[replaceByteStart, replaceByteEndExclusive)（UTF-8 byte offset）
+ * 替换为 insertedText。byte offset 先转成 UTF-16 code unit offset 再 substring。
+ *
+ * 成功返回 { ok: true, text }；失败（非字符边界或越界）返回 { ok: false, reason }，
+ * 让上层从 Core snapshot() 恢复，不静默截断。
+ */
+export function applyPatchStrict(
+  text: string,
+  patch: DisplayPatch
+): { ok: true, text: string } | { ok: false, reason: string } {
+  const startUtf16 = utf8ByteOffsetToUtf16(text, patch.replaceByteStart)
+  if (startUtf16 < 0) {
+    return {
+      ok: false,
+      reason: `replaceByteStart=${patch.replaceByteStart} 不是字符边界或越界`,
+    }
+  }
+  const endUtf16 = utf8ByteOffsetToUtf16(text, patch.replaceByteEndExclusive)
+  if (endUtf16 < 0) {
+    return {
+      ok: false,
+      reason: `replaceByteEndExclusive=${patch.replaceByteEndExclusive} 不是字符边界或越界`,
+    }
+  }
+  if (endUtf16 < startUtf16) {
+    return {
+      ok: false,
+      reason: `转换后 endUtf16=${endUtf16} < startUtf16=${startUtf16}`,
+    }
+  }
+  const before = text.substring(0, startUtf16)
+  const after = text.substring(endUtf16)
+  return { ok: true, text: before + patch.insertedText + after }
+}
+
+/**
+ * @deprecated 旧版 applyPatch 直接把 UTF-8 byte offset 当 UTF-16 code unit offset 用，
+ * 中文/emoji 会错位。新代码应使用 applyPatchStrict。保留导出以兼容现有调用方。
+ * ASCII 文本下 byte offset === utf16 offset，结果与 applyPatchStrict 一致。
+ */
 export function applyPatch(text: string, patch: DisplayPatch): string {
   const before: string = text.substring(0, patch.replaceByteStart)
   const after: string = text.substring(patch.replaceByteEndExclusive)
@@ -78,6 +167,10 @@ export function applyPatch(text: string, patch: DisplayPatch): string {
  * 应用 displayPatches 到 text，更新 revision/cursor/selectionAnchor/generation。
  * compositionSession 非空时取其 generation；为空时保留原 snapshot.generation
  * （finishComposition 后 compositionSession=null，generation 不重置）。
+ *
+ * patch 应用失败（非字符边界或越界）时返回原 snapshot，
+ * 让上层（EditorSessionState/Coordinator）检测到 text 未变化后从 Core snapshot() 恢复。
+ * 多个 DisplayPatch 按顺序应用，每个 patch 都针对当时的当前文本转换 offset。
  */
 export function applyEditResultToSnapshot(
   snapshot: EditorSessionSnapshot,
@@ -91,7 +184,13 @@ export function applyEditResultToSnapshot(
   let newText: string = snapshot.text
   const patches: DisplayPatch[] = result.displayPatches ?? []
   for (let i = 0; i < patches.length; i++) {
-    newText = applyPatch(newText, patches[i])
+    const applied = applyPatchStrict(newText, patches[i])
+    if (!applied.ok) {
+      // patch 应用失败（非字符边界或越界）：返回原 snapshot，
+      // 让上层从 Core snapshot() 恢复，不静默截断。
+      return snapshot
+    }
+    newText = applied.text
   }
   return {
     text: newText,

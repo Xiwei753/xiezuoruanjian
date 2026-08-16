@@ -20,6 +20,13 @@ export interface WritingRouteParams {
   chapterTitle: string
   projectId: string
   volumeId: string
+  // 接续编辑器状态（Issue #629 评论 5306513458 问题4）。
+  // selection/cursor 是 UTF-16 code unit offset（UI 坐标，跨设备平台无关）；
+  // 恢复时由 WritingScreen 转成 Core UTF-8 byte offset。
+  selection?: number[]   // [anchorUtf16, headUtf16]
+  cursor?: number         // UTF-16 code unit offset
+  viewport?: object       // UI 滚动位置（不写 Core）
+  revision?: number       // Core 正文 revision
 }
 
 export interface StarMapRouteParams {

@@ -10,6 +10,7 @@ import { getBridge, getAppDataRoot, getAppContext } from '../../../app/AppContex
 import { NativeWriterCoreBridge } from '../../../corebridge/NativeWriterCoreBridge'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { WidthClass, ShellMode } from '../../../corebridge/dto/PlatformDtos'
+import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 
 @Component
 export struct HomeScreen {
@@ -41,6 +42,8 @@ export struct HomeScreen {
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
 
+    // 在根页面清空接续状态，保证 onContinue 不读到旧章节。
+    AppContinuationService.getInstance().clear()
     this.initAndLoad()
   }
 

@@ -17,6 +17,8 @@ import { SelectionController } from '../../editor/selection/SelectionController'
 import { HarmonyImeConnection } from '../../editor/input/HarmonyImeConnection'
 import { SujianEditor } from '../../editor/ui/SujianEditor'
 import { EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
+import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
+import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 
 /** 左侧面板宽度（双栏模式） */
 const LEFT_PANEL_WIDTH: number = 320
@@ -92,6 +94,8 @@ export struct WorkspaceScreen {
       this.projectId = params.projectId
       this.projectName = params.projectName
       this.loadProjectTree()
+      // Workspace 顶层：更新接续状态为当前 project（不带 chapter），清掉旧章节导航。
+      AppContinuationService.getInstance().updateCurrentState({ projectId: this.projectId } as ContinuationPayload)
     }
 
     const self = this
@@ -119,14 +123,6 @@ export struct WorkspaceScreen {
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
 
-    // 注册编辑会话状态监听器：Core 编辑命令成功后回流 EditorSessionSnapshot，
-    // 更新 editorSnapshot/content/hasUnsavedChanges/wordCount，驱动 SujianEditor 静态渲染。
-    this.coordinator.setStateListener((snap: EditorSessionSnapshot) => {
-      self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize)
-      self.content = snap.text
-      self.hasUnsavedChanges = snap.text !== self.lastSavedContent
-      self.wordCount = snap.text.length
-    })
   }
 
   aboutToDisappear() {
@@ -153,8 +149,6 @@ export struct WorkspaceScreen {
     // 清除状态监听器，避免 close 后回调
     this.coordinator.setStateListener(null)
 
-    // 清除编辑会话状态监听器
-    this.coordinator.setStateListener(null)
 
     // 关闭编辑会话（若当前有打开的章节）
     if (this.selectedChapterId) {
