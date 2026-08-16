@@ -12,6 +12,8 @@ import android.view.View
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import androidx.core.graphics.withTranslation
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.xiwei.sujian.R
 import com.xiwei.sujian.feature.editor.input.AndroidInputAdapter
 import com.xiwei.sujian.feature.editor.interop.EditorKernelBridge
@@ -393,13 +395,19 @@ class SujianEditorView
             oldh: Int,
         ) {
             super.onSizeChanged(w, h, oldw, oldh)
-            // #624 评论4：只在真实正文宽度（可绘制宽度）改变时才更新布局配置 —
-            // 不要在每次输入时把当前 view width 当成新布局源。
+            // #630 C块：宽、高分开处理。IME 打开/关闭主要改变高度，宽度真变了才走正文重排。
+            // 高度变化时只更新 viewport 范围并 clamp scrollY，不重排整章、不 scrollToSelection。
             if (w > 0) {
                 val contentWidth = (w - paddingLeft - paddingRight).coerceAtLeast(1)
-                if (contentWidth != lastContentWidthPx) {
+                val widthChanged = contentWidth != lastContentWidthPx
+                val heightChanged = h != oldh
+                if (widthChanged) {
                     lastContentWidthPx = contentWidth
                     updateLayoutConfig()
+                } else if (heightChanged) {
+                    updateMaxScroll()
+                    scrollY = scrollY.coerceIn(0f, maxScrollY)
+                    invalidate()
                 }
             }
         }
@@ -623,7 +631,8 @@ class SujianEditorView
             val offset = pipeline.getLayoutOffsetForHorizontal(line, x)
             val byteOffset = pipeline.utf16ToUtf8(offset)
             setSelectionTyped(byteOffset, byteOffset)
-            showSoftInput()
+            // #630 C块：明确用户手势 — 走唯一 activateInput 入口，不再走另一套 IME API。
+            activateInput()
         }
 
         override fun onKeyDown(
@@ -705,9 +714,9 @@ class SujianEditorView
             previouslyFocusedRect: android.graphics.Rect?,
         ) {
             super.onFocusChanged(gained, direction, previouslyFocusedRect)
-            if (gained) {
-                showSoftInput()
-            } else if (isSessionBound && commitOnFocusLoss) {
+            // #630 C块：窗口临时获得焦点不等于用户要求弹键盘 — 删除自动 showSoftInput。
+            // 失焦仍需 commitOnFocusLoss 提交未完成输入。
+            if (!gained && isSessionBound && commitOnFocusLoss) {
                 onCommitRequested?.invoke()
             }
         }
@@ -848,9 +857,22 @@ class SujianEditorView
             invalidate()
         }
 
-        private fun showSoftInput() {
-            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-            imm?.showSoftInput(this, 0)
+        /**
+         * #630 C块：唯一的"让用户开始输入"入口 — session 绑定与唤起 IME 彻底分开。
+         * 新获得焦点只 requestFocus；已持有焦点但换了 session 才 restartInput；
+         * 最后 WindowInsetsControllerCompat.show(ime())，与 dismissImeForNavigation 对称。
+         */
+        fun activateInput() {
+            if (!isSessionBound) return
+            val alreadyFocused = hasFocus()
+            if (!alreadyFocused) {
+                requestFocus()
+            } else {
+                (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                    ?.restartInput(this)
+            }
+            ViewCompat.getWindowInsetsController(this)
+                ?.show(WindowInsetsCompat.Type.ime())
         }
 
         fun notifyCursorAnchorInfo() {
@@ -924,18 +946,8 @@ class SujianEditorView
             bindSessionInternal(sessionBridge, profile)
             applyProfileToPipeline(profile)
             pipeline.attachSnapshot(text, revision, cursorUtf8, selStartUtf8, selEndUtf8)
-            // #624 评论5：绑定完成并取得焦点后重启输入连接 — 系统重新查询
-            // onCreateInputConnection，保证拿到的 InputConnection 属于当前真实
-            // session（未绑定阶段 onCreateInputConnection 已返回 null）。
-            post {
-                requestFocus()
-                if (isSessionBound) {
-                    val imm =
-                        context.getSystemService(Context.INPUT_METHOD_SERVICE)
-                            as? InputMethodManager
-                    imm?.restartInput(this)
-                }
-            }
+            // #630 C块：attachSession 只装 bridge/profile/snapshot — 不再 requestFocus + restartInput。
+            // 唤起 IME 由 EditorWindowHost 在 completeWindowAttach==true 后调 activateInput() 统一处理。
             return true
         }
 
@@ -977,7 +989,7 @@ class SujianEditorView
             kernelBridge = sessionBridge
             currentProfile = profile
             isSessionBound = true
-            requestFocus()
+            // #630 C块：bindSessionInternal 不 requestFocus — 焦点由 activateInput 统一管理。
         }
 
         private fun applyProfileToPipeline(profile: TextEditorProfile): Boolean {
@@ -1063,8 +1075,8 @@ class SujianEditorView
          */
         fun dismissImeForNavigation() {
             clearFocus()
-            androidx.core.view.ViewCompat.getWindowInsetsController(this)
-                ?.hide(androidx.core.view.WindowInsetsCompat.Type.ime())
+            ViewCompat.getWindowInsetsController(this)
+                ?.hide(WindowInsetsCompat.Type.ime())
         }
 
         /**

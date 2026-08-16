@@ -1,8 +1,11 @@
 package com.xiwei.sujian.feature.settings.ui
 
 // ! # 设置保存操作（从 SettingsRoute 拆分）
+//
+// #630 评论 #1+#2：同步配置只有一份 — 全量同步覆盖设置/星图/主题/全部作品。
 
 import com.xiwei.sujian.R
+import com.xiwei.sujian.feature.settings.data.CoreSettingsEvents
 import com.xiwei.sujian.feature.settings.data.SaveFailure
 import com.xiwei.sujian.feature.settings.data.SaveField
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
@@ -57,61 +60,27 @@ suspend fun SettingsViewModel.reloadFromExternalSync() {
 }
 
 /**
- * #600 评论 #3 问题二：按活动作品读取 committed profile — 无活动作品时返回 Failed。
- */
-internal suspend fun SettingsViewModel.loadCommittedProfileForProject(
-    repo: SyncRepository,
-    projectId: String?,
-): com.xiwei.sujian.feature.sync.data.SyncProfileReadResult =
-    if (projectId != null) {
-        withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(projectId) }
-    } else {
-        com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.Failed(
-            com.xiwei.sujian.feature.sync.data.SyncFailureKind.Fatal,
-            MSG_NO_ACTIVE_PROJECT,
-        )
-    }
-
-/**
- * #600 评论 #3 问题二：按活动作品读取 sync capability — 无活动作品时返回默认。
- */
-internal suspend fun SettingsViewModel.loadSyncCapabilityForProject(
-    repo: SyncRepository,
-    projectId: String?,
-): com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData =
-    if (projectId != null) {
-        withContext(Dispatchers.IO) { repo.getSyncCapability(projectId) }
-    } else {
-        com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData()
-    }
-
-/**
  * 加载初始快照 — 从 loadInitial 拆分以降低认知复杂度。
  * 读取活动 generation 的完整 snapshot（#595 八），不再读 live legacy 槽。
- * #6003 detekt：profile 读取拆分到 loadInitialProjectSyncProfile / loadInitialAppSyncProfile，
- * if 分支收敛到 buildInitialUiState，降低 CognitiveComplexity。
+ * #630 评论 #1+#2：同步 profile 只有一份，不再区分作品级/应用级。
  */
 private suspend fun SettingsViewModel.loadInitialSnapshot(repo: SettingsRepository) {
     val snapshotRevisions =
         InitialSnapshotRevisions(
             local = localRevision,
             fontSize = fontSizeRevision,
-            projectSyncConfig = projectSyncConfigRevision,
-            projectSyncSecrets = projectSyncSecretsRevision,
-            appSyncConfig = appSyncConfigRevision,
-            appSyncSecrets = appSyncSecretsRevision,
+            syncConfig = syncConfigRevision,
+            syncSecrets = syncSecretsRevision,
         )
     val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
     val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
-    val (projectSyncProfileLoadState, projectSyncCapability) = loadInitialProjectSyncProfile(syncRepo)
-    val appSyncProfileLoadState = loadInitialAppSyncProfile(syncRepo)
+    val (syncProfileLoadState, syncCapability) = loadInitialSyncProfile(syncRepo)
     val loaded =
         InitialLoadedValues(
             settings = settings,
             fontSize = fontSize,
-            projectSyncProfileLoadState = projectSyncProfileLoadState,
-            projectSyncCapability = projectSyncCapability,
-            appSyncProfileLoadState = appSyncProfileLoadState,
+            syncProfileLoadState = syncProfileLoadState,
+            syncCapability = syncCapability,
             secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() },
             builtinThemes = withContext(Dispatchers.IO) { themeRepo.listBuiltinThemes() },
             paletteRecords = withContext(Dispatchers.IO) { themeRepo.listPaletteRecords() },
@@ -133,49 +102,33 @@ private fun SettingsViewModel.buildInitialUiState(
     SettingsUiState(
         settings = if (localRevision == snapshotRevisions.local) loaded.settings else current.settings,
         fontSize = if (fontSizeRevision == snapshotRevisions.fontSize) loaded.fontSize else current.fontSize,
-        projectSyncConfig =
-            if (projectSyncConfigRevision == snapshotRevisions.projectSyncConfig) {
-                loaded.projectSyncProfileLoadState.confirmedConfig ?: current.projectSyncConfig
+        syncConfig =
+            if (syncConfigRevision == snapshotRevisions.syncConfig) {
+                loaded.syncProfileLoadState.confirmedConfig ?: current.syncConfig
             } else {
-                current.projectSyncConfig
+                current.syncConfig
             },
-        projectSyncSecrets =
-            if (projectSyncSecretsRevision == snapshotRevisions.projectSyncSecrets) {
-                loaded.projectSyncProfileLoadState.confirmedSecrets ?: current.projectSyncSecrets
+        syncSecrets =
+            if (syncSecretsRevision == snapshotRevisions.syncSecrets) {
+                loaded.syncProfileLoadState.confirmedSecrets ?: current.syncSecrets
             } else {
-                current.projectSyncSecrets
+                current.syncSecrets
             },
-        projectSyncCapability = loaded.projectSyncCapability,
-        projectSyncProfileLoadState = loaded.projectSyncProfileLoadState,
+        syncCapability = loaded.syncCapability,
+        syncProfileLoadState = loaded.syncProfileLoadState,
         // #629 根因C：loadInitialSnapshot 在 init 里异步启动，与 saveChannel 消费协程并发。
-        // 旧实现创建全新 SettingsUiState，projectPerformSyncState 等事务字段默认 IDLE，
+        // 旧实现创建全新 SettingsUiState，performSyncState 等事务字段默认 IDLE，
         // 会覆盖 saveChannel 消费协程已设的 RUNNING/SUCCESS/FAILURE。当
-        // SyncSaveAndRunTransactionTest.performSyncTransaction_doesNotOverwriteNewerQueuedConfig
-        // 连发 UpdateProjectSyncConfig→PerformSync→UpdateProjectSyncConfig（channel 多一项 Save
-        // 使消费协程执行更久）时，loadInitialSnapshot 更易在 SaveAndRunSync 事务设 FAILURE 后
-        // 才完成，把 state 回退为 IDLE，awaitTerminalState 20s 超时。初始加载只重载设置值/
-        // sync profile/capability/themes，不得重置已在进行或已结束的同步事务状态与错误状态。
-        projectDryRunState = current.projectDryRunState,
-        projectTestConnectionState = current.projectTestConnectionState,
-        projectPerformSyncState = current.projectPerformSyncState,
-        projectSyncResult = current.projectSyncResult,
-        appSyncConfig =
-            if (appSyncConfigRevision == snapshotRevisions.appSyncConfig) {
-                loaded.appSyncProfileLoadState.confirmedConfig ?: current.appSyncConfig
-            } else {
-                current.appSyncConfig
-            },
-        appSyncSecrets =
-            if (appSyncSecretsRevision == snapshotRevisions.appSyncSecrets) {
-                loaded.appSyncProfileLoadState.confirmedSecrets ?: current.appSyncSecrets
-            } else {
-                current.appSyncSecrets
-            },
-        appSyncProfileLoadState = loaded.appSyncProfileLoadState,
-        appDryRunState = current.appDryRunState,
-        appTestConnectionState = current.appTestConnectionState,
-        appPerformSyncState = current.appPerformSyncState,
-        appSyncResult = current.appSyncResult,
+        // SyncSaveAndRunTransactionTest 连发 UpdateSyncConfig→PerformSync→UpdateSyncConfig
+        // （channel 多一项 Save 使消费协程执行更久）时，loadInitialSnapshot 更易在
+        // SaveAndRunSync 事务设 FAILURE 后才完成，把 state 回退为 IDLE，awaitTerminalState
+        // 20s 超时。初始加载只重载设置值/sync profile/capability/themes，不得重置已在进行
+        // 或已结束的同步事务状态与错误状态。
+        // #630 评论 #1+#2：同步只有一份（全量），事务状态字段相应合并为单套。
+        dryRunState = current.dryRunState,
+        testConnectionState = current.testConnectionState,
+        performSyncState = current.performSyncState,
+        syncResult = current.syncResult,
         secureStorageWarning = loaded.secureStorageWarning,
         builtinThemes = loaded.builtinThemes,
         paletteRecords = loaded.paletteRecords,
@@ -190,9 +143,8 @@ private fun SettingsViewModel.buildInitialUiState(
 private data class InitialLoadedValues(
     val settings: LocalSettings,
     val fontSize: Float,
-    val projectSyncProfileLoadState: SyncProfileLoadState,
-    val projectSyncCapability: com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData,
-    val appSyncProfileLoadState: SyncProfileLoadState,
+    val syncProfileLoadState: SyncProfileLoadState,
+    val syncCapability: com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData,
     val secureStorageWarning: String?,
     val builtinThemes: List<com.xiwei.sujian.app.theme.model.BuiltinTheme>,
     val paletteRecords: List<com.xiwei.sujian.app.theme.model.ThemePaletteRecord>,
@@ -204,10 +156,8 @@ private data class InitialLoadedValues(
 private data class InitialSnapshotRevisions(
     val local: Long,
     val fontSize: Long,
-    val projectSyncConfig: Long,
-    val projectSyncSecrets: Long,
-    val appSyncConfig: Long,
-    val appSyncSecrets: Long,
+    val syncConfig: Long,
+    val syncSecrets: Long,
 )
 
 suspend fun SettingsViewModel.flushPending() {
@@ -226,18 +176,12 @@ internal suspend fun SettingsViewModel.executeSave(
 
     saveLocalField(repo, commands.local, failures)
     saveFontSizeField(repo, commands.fontSize, failures)
-    val (projConfigSaved, projSecretsSaved) =
-        saveSyncProfileField(syncRepo, commands.projectSyncConfig, commands.projectSyncSecrets, failures)
-    val (appConfigSaved, appSecretsSaved) =
-        saveAppSyncProfileField(syncRepo, commands.appSyncConfig, commands.appSyncSecrets, failures)
+    val (configSaved, secretsSaved) =
+        saveSyncProfileField(syncRepo, commands.syncConfig, commands.syncSecrets, failures)
 
-    if (projConfigSaved || projSecretsSaved) {
-        // #595 五：成功提交后一次性更新作品级 config/secrets/loadState/capability/warning。
+    if (configSaved || secretsSaved) {
+        // #595 五：成功提交后一次性更新 config/secrets/loadState/capability/warning。
         refreshSyncProfileState()
-    }
-    if (appConfigSaved || appSecretsSaved) {
-        // #600 评论 #5：成功提交后一次性更新应用级 config/secrets/loadState。
-        refreshAppSyncProfileState()
     }
 
     handleSaveOutcome(repo, failures, commands)
@@ -258,6 +202,11 @@ private suspend fun SettingsViewModel.saveLocalField(
             // 编辑器选项、沉浸式全屏等普通设置保存不再触发 ThemeStore.reload()。
             if (local.affectsTheme) {
                 com.xiwei.sujian.app.theme.ThemeStore.reload()
+            }
+            // #630 评论二：只有真正影响正文运行时的本地保存才通知编辑器重读设置 —
+            // 自动保存、AI、诊断、沉浸式全屏、主题颜色等保存不再触发编辑器重载。
+            if (local.affectsEditor) {
+                CoreSettingsEvents.notifyLocalEditorSettingsChanged()
             }
         }
         is SettingsSaveResult.Failed -> {
@@ -292,75 +241,32 @@ private suspend fun SettingsViewModel.saveFontSizeField(
  * 原子提交同步配置/凭据 — 从 executeSave 拆分。
  * #595 八：捕获同一时刻的完整 SyncProfileDraft，通过 commitSyncProfile 一次性原子提交，
  * 避免分别排队绕过 generation 提交协议造成 live 槽与 committed profile 双真相。
+ * #630 评论 #1+#2：commitSyncProfile 不带 projectId — 全量同步覆盖全部作品。
  * 返回 (configSaved, secretsSaved)。
  */
 private suspend fun SettingsViewModel.saveSyncProfileField(
     repo: SyncRepository,
-    syncConfig: SettingsSaveCommand.ProjectSyncConfig?,
-    syncSecrets: SettingsSaveCommand.ProjectSyncSecrets?,
+    syncConfig: SettingsSaveCommand.SyncConfig?,
+    syncSecrets: SettingsSaveCommand.SyncSecrets?,
     failures: MutableList<SaveFailure>,
 ): Pair<Boolean, Boolean> {
     if (syncConfig == null && syncSecrets == null) return false to false
-    // #600 评论 #3 问题二：commitSyncProfile 按当前活动作品路由 —
-    // 无活动作品时直接失败，不写入任何作品。
-    val projectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
-    if (projectId == null) {
-        failures.add(SaveFailure(SaveField.SYNC_CONFIG, syncConfig?.revision ?: 0L))
-        return false to false
-    }
-    val draftConfig = syncConfig?.config ?: _uiState.value.projectSyncConfig
-    val draftSecrets = syncSecrets?.secrets ?: _uiState.value.projectSyncSecrets
+    val draftConfig = syncConfig?.config ?: _uiState.value.syncConfig
+    val draftSecrets = syncSecrets?.secrets ?: _uiState.value.syncSecrets
     val commitResult =
         withContext(Dispatchers.IO) {
-            repo.commitSyncProfile(projectId, draftConfig, draftSecrets)
+            repo.commitSyncProfile(draftConfig, draftSecrets)
         }
     var syncConfigSaved = false
     var syncSecretsSaved = false
     when (commitResult) {
         is SettingsSaveResult.Success -> {
-            if (syncConfig != null && projectSyncConfigRevision == syncConfig.revision) {
-                projectSyncConfigPersistedRevision = syncConfig.revision
+            if (syncConfig != null && syncConfigRevision == syncConfig.revision) {
+                syncConfigPersistedRevision = syncConfig.revision
                 syncConfigSaved = true
             }
-            if (syncSecrets != null && projectSyncSecretsRevision == syncSecrets.revision) {
-                projectSyncSecretsPersistedRevision = syncSecrets.revision
-                syncSecretsSaved = true
-            }
-        }
-        is SettingsSaveResult.Failed -> {
-            collectSyncProfileFailures(commitResult.failures, syncConfig, syncSecrets, failures)
-        }
-    }
-    return syncConfigSaved to syncSecretsSaved
-}
-
-/**
- * #600 评论 #5：原子提交应用级同步配置/凭据 — 提交到应用级 profile（不带 projectId）。
- * 返回 (configSaved, secretsSaved)。
- */
-private suspend fun SettingsViewModel.saveAppSyncProfileField(
-    repo: SyncRepository,
-    syncConfig: SettingsSaveCommand.AppSyncConfig?,
-    syncSecrets: SettingsSaveCommand.AppSyncSecrets?,
-    failures: MutableList<SaveFailure>,
-): Pair<Boolean, Boolean> {
-    if (syncConfig == null && syncSecrets == null) return false to false
-    val draftConfig = syncConfig?.config ?: _uiState.value.appSyncConfig
-    val draftSecrets = syncSecrets?.secrets ?: _uiState.value.appSyncSecrets
-    val commitResult =
-        withContext(Dispatchers.IO) {
-            repo.commitAppSyncProfile(draftConfig, draftSecrets)
-        }
-    var syncConfigSaved = false
-    var syncSecretsSaved = false
-    when (commitResult) {
-        is SettingsSaveResult.Success -> {
-            if (syncConfig != null && appSyncConfigRevision == syncConfig.revision) {
-                appSyncConfigPersistedRevision = syncConfig.revision
-                syncConfigSaved = true
-            }
-            if (syncSecrets != null && appSyncSecretsRevision == syncSecrets.revision) {
-                appSyncSecretsPersistedRevision = syncSecrets.revision
+            if (syncSecrets != null && syncSecretsRevision == syncSecrets.revision) {
+                syncSecretsPersistedRevision = syncSecrets.revision
                 syncSecretsSaved = true
             }
         }
@@ -440,7 +346,6 @@ suspend fun SettingsViewModel.rollbackFailures(
     }
 }
 
-// #597 回滚按字段分支检查 revision 后原子恢复，4 分支结构对称；拆分为4个单行方法反而降低可读性 — 待后续重构
 // #597：回滚按字段分支校验 revision 后原子恢复 — 各字段结构对称，
 // 分支体收敛到独立私有函数，分发器只保留字段→函数的映射。
 suspend fun SettingsViewModel.rollbackIfRevisionMatches(
@@ -481,24 +386,14 @@ private suspend fun SettingsViewModel.rollbackSyncConfig(
     repo: SyncRepository,
     expectedRevision: Long,
 ) {
-    if (projectSyncConfigRevision != expectedRevision) return
+    if (syncConfigRevision != expectedRevision) return
     // #595 八/五：回滚读取活动 generation 的完整 snapshot，不再读 live 槽；
     // 类型化处理 — Failed 保留当前 UI 值（不静默退化为默认值/null）。
-    // #600 评论 #3 问题二：按当前活动作品路由。
-    val rollbackProjectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
-    val profile =
-        if (rollbackProjectId != null) {
-            withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(rollbackProjectId) }
-        } else {
-            com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.Failed(
-                com.xiwei.sujian.feature.sync.data.SyncFailureKind.Fatal,
-                MSG_NO_ACTIVE_PROJECT,
-            )
-        }
-    if (projectSyncConfigRevision != expectedRevision) return
-    projectSyncConfigRevision = projectSyncConfigPersistedRevision
+    val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
+    if (syncConfigRevision != expectedRevision) return
+    syncConfigRevision = syncConfigPersistedRevision
     _uiState.update {
-        it.copy(projectSyncConfig = profile.toSyncProfileLoadState().confirmedConfig ?: it.projectSyncConfig)
+        it.copy(syncConfig = profile.toSyncProfileLoadState().confirmedConfig ?: it.syncConfig)
     }
 }
 
@@ -506,23 +401,13 @@ private suspend fun SettingsViewModel.rollbackSyncSecrets(
     repo: SyncRepository,
     expectedRevision: Long,
 ) {
-    if (projectSyncSecretsRevision != expectedRevision) return
-    // #600 评论 #3 问题二：按当前活动作品路由。
-    val rollbackSecretsProjectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
-    val profile =
-        if (rollbackSecretsProjectId != null) {
-            withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile(rollbackSecretsProjectId) }
-        } else {
-            com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.Failed(
-                com.xiwei.sujian.feature.sync.data.SyncFailureKind.Fatal,
-                MSG_NO_ACTIVE_PROJECT,
-            )
-        }
-    if (projectSyncSecretsRevision != expectedRevision) return
-    projectSyncSecretsRevision = projectSyncSecretsPersistedRevision
+    if (syncSecretsRevision != expectedRevision) return
+    val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
+    if (syncSecretsRevision != expectedRevision) return
+    syncSecretsRevision = syncSecretsPersistedRevision
     _uiState.update {
         it.copy(
-            projectSyncSecrets = profile.toSyncProfileLoadState().confirmedSecrets ?: it.projectSyncSecrets,
+            syncSecrets = profile.toSyncProfileLoadState().confirmedSecrets ?: it.syncSecrets,
         )
     }
 }

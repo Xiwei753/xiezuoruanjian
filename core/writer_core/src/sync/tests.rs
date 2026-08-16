@@ -126,7 +126,8 @@ mod tests {
     ) -> crate::Result<crate::sync::SyncResult> {
         let transport = TestHttpTransport::new()
             .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.message })?;
-        SyncService::perform_lww_sync(sync_root, config, secrets, force_sync, &transport)
+        let target = crate::sync::types::SyncTarget::project("test");
+        SyncService::perform_lww_sync(sync_root, config, secrets, &target, force_sync, &transport)
     }
     #[test]
     #[cfg(feature = "github-api")]
@@ -143,7 +144,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: None,
@@ -339,16 +339,20 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
             ssh_private_key: None,
         };
 
-        let result =
-            SyncService::perform_sync(dir.path(), &config, &secrets, &MockUnrelatedBackend)
-                .unwrap();
+        let result = SyncService::perform_sync(
+            dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &MockUnrelatedBackend,
+        )
+        .unwrap();
         assert_eq!(result.first_sync_mode, FirstSyncMode::UnrelatedHistories);
     }
 
@@ -392,7 +396,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -454,7 +457,14 @@ mod tests {
             }
         }
 
-        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackend).unwrap();
+        let res = SyncService::perform_sync(
+            dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &MockBackend,
+        )
+        .unwrap();
         assert_eq!(res.status, SyncStatus::Success);
     }
 
@@ -509,7 +519,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let state = SyncState {
             remote_url: Some("url".to_string()),
@@ -749,7 +758,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let content = serde_json::to_string(&config).unwrap();
         // token might be there if some other struct is serialized, but we want to ensure
@@ -875,10 +883,10 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
 
-        let plan = SyncService::perform_sync_dry_run(dir.path(), &config).unwrap();
+        let plan =
+            SyncService::perform_sync_dry_run(dir.path(), &config, SyncScope::Project).unwrap();
         assert!(plan.files_to_upload.is_empty());
         assert!(plan.ignored_files.is_empty());
     }
@@ -897,7 +905,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
 
         // Create some whitelisted and blacklisted files（per-project：同步根是作品目录）
@@ -907,7 +914,8 @@ mod tests {
         std::fs::write(project_dir.join("volumes/v1/volume.json"), "{}").unwrap();
         std::fs::write(project_dir.join("volumes/v1/volume.json.tmp"), "{}").unwrap();
 
-        let plan = SyncService::perform_sync_dry_run(dir.path(), &config).unwrap();
+        let plan =
+            SyncService::perform_sync_dry_run(dir.path(), &config, SyncScope::Project).unwrap();
         assert!(plan.files_to_upload.contains(&"project.json".to_string()));
         assert!(plan
             .files_to_upload
@@ -932,7 +940,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
 
         let secrets = SyncSecrets {
@@ -942,7 +949,14 @@ mod tests {
 
         // For this test we can use Git2Backend as it won't be called due to early return
         let backend = Git2Backend;
-        let result = SyncService::perform_sync(dir.path(), &config, &secrets, &backend).unwrap();
+        let result = SyncService::perform_sync(
+            dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &backend,
+        )
+        .unwrap();
         assert_eq!(
             result.status,
             SyncStatus::Error("Remote URL is empty".to_string())
@@ -964,7 +978,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -1028,9 +1041,14 @@ mod tests {
             }
         }
 
-        let res =
-            SyncService::perform_sync(dir.path(), &config, &secrets, &MockInitNonEmptyBackend)
-                .unwrap();
+        let res = SyncService::perform_sync(
+            dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &MockInitNonEmptyBackend,
+        )
+        .unwrap();
         assert_eq!(res.first_sync_mode, FirstSyncMode::UnrelatedHistories);
     }
 
@@ -1054,7 +1072,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -1119,7 +1136,14 @@ mod tests {
         std::fs::remove_file(state_dir.join("state.local.json")).unwrap();
         std::fs::create_dir(state_dir.join("state.local.json")).unwrap();
 
-        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackendOk).unwrap();
+        let res = SyncService::perform_sync(
+            dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &MockBackendOk,
+        )
+        .unwrap();
         assert!(matches!(res.status, SyncStatus::FatalError(_)));
     }
 
@@ -1139,7 +1163,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -1201,7 +1224,14 @@ mod tests {
             }
         }
 
-        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackend).unwrap();
+        let res = SyncService::perform_sync(
+            dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &MockBackend,
+        )
+        .unwrap();
         assert_eq!(res.first_sync_mode, FirstSyncMode::CloneIntoEmptyProject);
     }
 
@@ -1221,7 +1251,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -1283,7 +1312,14 @@ mod tests {
             }
         }
 
-        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackend).unwrap();
+        let res = SyncService::perform_sync(
+            dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &MockBackend,
+        )
+        .unwrap();
         assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingProject);
     }
 
@@ -1303,7 +1339,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -1365,7 +1400,14 @@ mod tests {
             }
         }
 
-        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackend).unwrap();
+        let res = SyncService::perform_sync(
+            dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &MockBackend,
+        )
+        .unwrap();
         assert_eq!(res.first_sync_mode, FirstSyncMode::AlreadyGitRepo);
     }
 
@@ -1439,7 +1481,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -1503,8 +1544,14 @@ mod tests {
             }
         }
 
-        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockEmptyRemoteBackend)
-            .unwrap();
+        let res = SyncService::perform_sync(
+            dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &MockEmptyRemoteBackend,
+        )
+        .unwrap();
         assert_eq!(res.status, SyncStatus::Success);
         assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingProject);
     }
@@ -1570,6 +1617,7 @@ mod tests {
     fn start_mock_github_api(
         initial_manifest: Option<SyncManifest>,
         initial_files: std::collections::HashMap<String, String>,
+        remote_prefix: &str,
     ) -> (
         String,
         std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -1590,7 +1638,12 @@ mod tests {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown.clone();
 
-        let files = Arc::new(Mutex::new(initial_files));
+        let remote_prefix = remote_prefix.to_string();
+        let prefixed_files: std::collections::HashMap<String, String> = initial_files
+            .into_iter()
+            .map(|(k, v)| (format!("{}/{}", remote_prefix, k), v))
+            .collect();
+        let files = Arc::new(Mutex::new(prefixed_files));
         let files_clone = files.clone();
 
         let manifest_str = if let Some(m) = initial_manifest {
@@ -1640,7 +1693,7 @@ mod tests {
                                     let m = manifest_clone.lock().unwrap();
                                     if !m.is_empty() {
                                         tree_list.push(serde_json::json!({
-                                            "path": "app-meta/sync/manifest.sync.json",
+                                            "path": format!("{}/app-meta/sync/manifest.sync.json", remote_prefix),
                                             "type": "blob",
                                             "sha": "manifest_blob_sha"
                                         }));
@@ -1655,9 +1708,10 @@ mod tests {
                                     }
                                     response_body =
                                         serde_json::json!({ "tree": tree_list }).to_string();
-                                } else if path
-                                    .contains("/contents/app-meta/sync/manifest.sync.json")
-                                {
+                                } else if path.contains(&format!(
+                                    "/contents/{}/app-meta/sync/manifest.sync.json",
+                                    remote_prefix
+                                )) {
                                     let m = manifest_clone.lock().unwrap();
                                     if method == "GET" {
                                         if m.is_empty() {
@@ -1870,7 +1924,7 @@ mod tests {
         };
 
         let (mock_url, shutdown, _files, _manifest, server_thread) =
-            start_mock_github_api(Some(initial_manifest), initial_files);
+            start_mock_github_api(Some(initial_manifest), initial_files, "projects/test");
 
         let config = SyncConfig {
             enabled: true,
@@ -1884,7 +1938,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
 
         let secrets = SyncSecrets {
@@ -1943,7 +1996,7 @@ mod tests {
         };
 
         let (mock_url, shutdown, _files_map, manifest_str, server_thread) =
-            start_mock_github_api(Some(initial_manifest), initial_files);
+            start_mock_github_api(Some(initial_manifest), initial_files, "projects/test");
 
         let config = SyncConfig {
             enabled: true,
@@ -1957,7 +2010,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2012,8 +2064,11 @@ mod tests {
             }],
         };
 
-        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
-            start_mock_github_api(Some(initial_manifest), std::collections::HashMap::new());
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) = start_mock_github_api(
+            Some(initial_manifest),
+            std::collections::HashMap::new(),
+            "projects/test",
+        );
 
         let config = SyncConfig {
             enabled: true,
@@ -2027,7 +2082,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2107,7 +2161,7 @@ mod tests {
         };
 
         let (mock_url, shutdown, _files_map, manifest_str, server_thread) =
-            start_mock_github_api(Some(initial_manifest), initial_files);
+            start_mock_github_api(Some(initial_manifest), initial_files, "projects/test");
 
         let config = SyncConfig {
             enabled: true,
@@ -2121,7 +2175,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
 
         let secrets = SyncSecrets {
@@ -2180,7 +2233,7 @@ mod tests {
         std::fs::write(dir.path().join("tmp/runtime.tmp"), "x").unwrap();
 
         let (mock_url, shutdown, _files, _manifest, server_thread) =
-            start_mock_github_api(None, std::collections::HashMap::new());
+            start_mock_github_api(None, std::collections::HashMap::new(), "projects/test");
 
         let config = SyncConfig {
             enabled: true,
@@ -2194,7 +2247,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2286,7 +2338,7 @@ mod tests {
         };
 
         let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
-            start_mock_github_api(Some(initial_manifest), initial_files);
+            start_mock_github_api(Some(initial_manifest), initial_files, "projects/test");
 
         let config = SyncConfig {
             enabled: true,
@@ -2300,7 +2352,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2379,7 +2430,7 @@ mod tests {
         };
 
         let (mock_url, shutdown, _files_map, manifest_str, server_thread) =
-            start_mock_github_api(Some(initial_manifest), initial_files);
+            start_mock_github_api(Some(initial_manifest), initial_files, "projects/test");
 
         let config = SyncConfig {
             enabled: true,
@@ -2393,7 +2444,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2477,7 +2527,7 @@ mod tests {
         };
 
         let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
-            start_mock_github_api(Some(initial_manifest), initial_files);
+            start_mock_github_api(Some(initial_manifest), initial_files, "projects/test");
 
         let config = SyncConfig {
             enabled: true,
@@ -2491,7 +2541,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2550,7 +2599,7 @@ mod tests {
         };
 
         let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
-            start_mock_github_api(Some(initial_manifest), initial_files);
+            start_mock_github_api(Some(initial_manifest), initial_files, "projects/test");
 
         let config = SyncConfig {
             enabled: true,
@@ -2564,7 +2613,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2624,8 +2672,11 @@ mod tests {
             }],
         };
 
-        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
-            start_mock_github_api(Some(initial_manifest), std::collections::HashMap::new());
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) = start_mock_github_api(
+            Some(initial_manifest),
+            std::collections::HashMap::new(),
+            "projects/test",
+        );
 
         let config = SyncConfig {
             enabled: true,
@@ -2639,7 +2690,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2709,8 +2759,11 @@ mod tests {
         };
 
         // === First sync: should detect BothChanged conflict ===
-        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
-            start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) = start_mock_github_api(
+            Some(initial_manifest.clone()),
+            initial_files.clone(),
+            "projects/test",
+        );
 
         let config = SyncConfig {
             enabled: true,
@@ -2723,7 +2776,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2764,7 +2816,11 @@ mod tests {
 
         // === Second sync: must NOT auto-resolve the conflict ===
         let (mock_url2, shutdown2, _files_map2, _manifest_str2, server_thread2) =
-            start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
+            start_mock_github_api(
+                Some(initial_manifest.clone()),
+                initial_files.clone(),
+                "projects/test",
+            );
 
         let config2 = SyncConfig {
             enabled: true,
@@ -2777,7 +2833,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
 
         let res2 = lww_sync(dir.path(), &config2, &secrets, false).unwrap();
@@ -3024,8 +3079,11 @@ mod tests {
         };
 
         // === Step 1: First sync generates BothChanged conflict ===
-        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
-            start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) = start_mock_github_api(
+            Some(initial_manifest.clone()),
+            initial_files.clone(),
+            "projects/test",
+        );
 
         let config = SyncConfig {
             enabled: true,
@@ -3038,7 +3096,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -3060,7 +3117,11 @@ mod tests {
         SyncService::save_sync_state(dir.path(), &state_before_2).unwrap();
 
         let (mock_url2, shutdown2, _files_map2, _manifest_str2, server_thread2) =
-            start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
+            start_mock_github_api(
+                Some(initial_manifest.clone()),
+                initial_files.clone(),
+                "projects/test",
+            );
 
         let config2 = SyncConfig {
             enabled: true,
@@ -3073,7 +3134,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
 
         let res2 = lww_sync(dir.path(), &config2, &secrets, false).unwrap();
@@ -3115,7 +3175,11 @@ mod tests {
         SyncService::save_sync_state(dir.path(), &state_before_3).unwrap();
 
         let (mock_url3, shutdown3, _files_map3, _manifest_str3, server_thread3) =
-            start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
+            start_mock_github_api(
+                Some(initial_manifest.clone()),
+                initial_files.clone(),
+                "projects/test",
+            );
 
         let config3 = SyncConfig {
             enabled: true,
@@ -3128,7 +3192,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
 
         let res3 = lww_sync(dir.path(), &config3, &secrets, false).unwrap();
@@ -3208,8 +3271,11 @@ mod tests {
         };
 
         // === Step 1: First sync generates BothChanged conflict ===
-        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
-            start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) = start_mock_github_api(
+            Some(initial_manifest.clone()),
+            initial_files.clone(),
+            "projects/test",
+        );
 
         let config = SyncConfig {
             enabled: true,
@@ -3222,7 +3288,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -3251,7 +3316,11 @@ mod tests {
         SyncService::save_sync_state(dir.path(), &state_before_3).unwrap();
 
         let (mock_url3, shutdown3, _files_map3, _manifest_str3, server_thread3) =
-            start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
+            start_mock_github_api(
+                Some(initial_manifest.clone()),
+                initial_files.clone(),
+                "projects/test",
+            );
 
         let config3 = SyncConfig {
             enabled: true,
@@ -3264,7 +3333,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
 
         let res3 = lww_sync(dir.path(), &config3, &secrets, false).unwrap();
@@ -3306,7 +3374,11 @@ mod tests {
         SyncService::save_sync_state(dir.path(), &state_before_4).unwrap();
 
         let (mock_url4, shutdown4, _files_map4, _manifest_str4, server_thread4) =
-            start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
+            start_mock_github_api(
+                Some(initial_manifest.clone()),
+                initial_files.clone(),
+                "projects/test",
+            );
 
         let config4 = SyncConfig {
             enabled: true,
@@ -3319,7 +3391,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
 
         let res4 = lww_sync(dir.path(), &config4, &secrets, false).unwrap();
@@ -3391,8 +3462,11 @@ mod tests {
         };
 
         // No files in initial_files → mock server returns 404 for content GET
-        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
-            start_mock_github_api(Some(initial_manifest), std::collections::HashMap::new());
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) = start_mock_github_api(
+            Some(initial_manifest),
+            std::collections::HashMap::new(),
+            "projects/test",
+        );
 
         let config = SyncConfig {
             enabled: true,
@@ -3405,7 +3479,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -3505,7 +3578,7 @@ mod tests {
         };
 
         let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
-            start_mock_github_api(Some(initial_manifest), initial_files);
+            start_mock_github_api(Some(initial_manifest), initial_files, "projects/test");
 
         let config = SyncConfig {
             enabled: true,
@@ -3518,7 +3591,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -3622,7 +3694,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("test_token".to_string()),
@@ -3666,7 +3737,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("test_token".to_string()),
@@ -3704,7 +3774,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("test_token".to_string()),
@@ -3753,7 +3822,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         };
         let secrets = SyncSecrets {
             token: Some("test_token".to_string()),
@@ -3853,7 +3921,6 @@ mod tests {
             username: String::new(),
             has_network_permission: true,
             has_network_state_permission: true,
-            scope: SyncScope::Project,
         }
     }
 
@@ -3904,8 +3971,14 @@ mod tests {
         // 调用 perform_sync
         let config = make_sync_config(&remote_url);
         let secrets = make_sync_secrets();
-        let result =
-            SyncService::perform_sync(local_dir.path(), &config, &secrets, &backend).unwrap();
+        let result = SyncService::perform_sync(
+            local_dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &backend,
+        )
+        .unwrap();
 
         assert_eq!(result.status, SyncStatus::Success);
         assert!(
@@ -3950,8 +4023,14 @@ mod tests {
         // 调用 perform_sync
         let config = make_sync_config(&remote_url);
         let secrets = make_sync_secrets();
-        let result =
-            SyncService::perform_sync(local_dir.path(), &config, &secrets, &backend).unwrap();
+        let result = SyncService::perform_sync(
+            local_dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &backend,
+        )
+        .unwrap();
 
         assert_eq!(result.status, SyncStatus::Success);
         assert!(
@@ -3991,8 +4070,14 @@ mod tests {
         // 调用 perform_sync
         let config = make_sync_config(&remote_url);
         let secrets = make_sync_secrets();
-        let result =
-            SyncService::perform_sync(local_dir.path(), &config, &secrets, &backend).unwrap();
+        let result = SyncService::perform_sync(
+            local_dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &backend,
+        )
+        .unwrap();
 
         assert_eq!(result.status, SyncStatus::Success);
         assert!(
@@ -4024,8 +4109,14 @@ mod tests {
         let local_dir = tempfile::tempdir().unwrap();
         let config = make_sync_config(&remote_url);
         let secrets = make_sync_secrets();
-        let result =
-            SyncService::perform_sync(local_dir.path(), &config, &secrets, &backend).unwrap();
+        let result = SyncService::perform_sync(
+            local_dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &backend,
+        )
+        .unwrap();
 
         assert_eq!(result.status, SyncStatus::Success);
         assert_eq!(result.first_sync_mode, FirstSyncMode::CloneIntoEmptyProject);
@@ -4067,8 +4158,14 @@ mod tests {
         let local_dir = tempfile::tempdir().unwrap();
         let config = make_sync_config(&remote_url);
         let secrets = make_sync_secrets();
-        let result =
-            SyncService::perform_sync(local_dir.path(), &config, &secrets, &backend).unwrap();
+        let result = SyncService::perform_sync(
+            local_dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &backend,
+        )
+        .unwrap();
 
         assert_eq!(result.status, SyncStatus::Success);
         assert!(
@@ -4109,8 +4206,14 @@ mod tests {
 
         let config = make_sync_config(&remote_url);
         let secrets = make_sync_secrets();
-        let result =
-            SyncService::perform_sync(local_dir.path(), &config, &secrets, &backend).unwrap();
+        let result = SyncService::perform_sync(
+            local_dir.path(),
+            &config,
+            &secrets,
+            crate::sync::types::SyncScope::Project,
+            &backend,
+        )
+        .unwrap();
 
         assert_eq!(result.status, SyncStatus::Success);
         assert!(

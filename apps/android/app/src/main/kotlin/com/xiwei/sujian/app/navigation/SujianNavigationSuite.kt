@@ -236,13 +236,9 @@ private fun rememberWorksEntry(
             onTopLevelSearch = { },
             onTopLevelSync = {
                 entryCoroutineScope.launch {
-                    val pid = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
-                    if (pid != null) {
-                        deps.syncCoordinator.runSync(
-                            com.xiwei.sujian.feature.sync.data.model.SyncTrigger.Manual,
-                            pid,
-                        )
-                    }
+                    deps.syncCoordinator.runFullSync(
+                        com.xiwei.sujian.feature.sync.data.model.SyncTrigger.Manual,
+                    )
                 }
             },
         )

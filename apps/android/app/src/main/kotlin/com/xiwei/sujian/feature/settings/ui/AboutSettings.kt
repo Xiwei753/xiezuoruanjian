@@ -11,7 +11,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
-import com.xiwei.sujian.core.designsystem.component.SujianSection
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 
 @Composable
@@ -26,7 +25,7 @@ fun AboutSettings(
         modifier = modifier.padding(dims.space16),
         verticalArrangement = Arrangement.spacedBy(dims.space16),
     ) {
-        SujianSection(title = stringResource(id = R.string.pref_category_about)) {
+        SettingsFieldGroup(title = stringResource(id = R.string.pref_category_about)) {
             Text(
                 text = stringResource(id = R.string.about_app_name),
                 style = MaterialTheme.typography.headlineSmall,

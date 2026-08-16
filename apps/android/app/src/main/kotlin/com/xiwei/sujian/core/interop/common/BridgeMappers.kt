@@ -22,6 +22,9 @@ import com.xiwei.sujian.feature.stats.data.model.WritingStatsSummary
 import com.xiwei.sujian.feature.sync.data.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.model.BackendType
 import com.xiwei.sujian.feature.sync.data.model.FirstSyncMode
+import com.xiwei.sujian.feature.sync.data.model.FullSyncDiagnosticsResult
+import com.xiwei.sujian.feature.sync.data.model.FullSyncDryRunResult
+import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncConflict
 import com.xiwei.sujian.feature.sync.data.model.SyncDiagnosticsResult
@@ -31,6 +34,8 @@ import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import com.xiwei.sujian.feature.sync.data.model.SyncState
 import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import com.xiwei.sujian.feature.sync.data.model.SyncTransport
+import com.xiwei.sujian.feature.sync.data.model.TargetSyncPlan
+import com.xiwei.sujian.feature.sync.data.model.TargetSyncResult
 import uniffi.writer_core.ChapterContentDto
 import uniffi.writer_core.ChapterMetaDto
 import uniffi.writer_core.ChapterSaveReceiptDto
@@ -39,6 +44,9 @@ import uniffi.writer_core.ChapterStatsSummaryDto
 import uniffi.writer_core.DateRangeDto
 import uniffi.writer_core.DeviceStatsRecordDto
 import uniffi.writer_core.DeviceStatsSummaryDto
+import uniffi.writer_core.FullSyncDiagnosticsResultDto
+import uniffi.writer_core.FullSyncDryRunResultDto
+import uniffi.writer_core.FullSyncResultDto
 import uniffi.writer_core.LocalSettingsDto
 import uniffi.writer_core.ProjectDto
 import uniffi.writer_core.ProjectStatsDto
@@ -56,6 +64,8 @@ import uniffi.writer_core.SyncResultDto
 import uniffi.writer_core.SyncSecretsDto
 import uniffi.writer_core.SyncStateDto
 import uniffi.writer_core.SyncableSettingsDto
+import uniffi.writer_core.TargetSyncPlanDto
+import uniffi.writer_core.TargetSyncResultDto
 import uniffi.writer_core.VolumeDto
 import uniffi.writer_core.WriterException
 import uniffi.writer_core.WritingStatsSummaryDto
@@ -372,6 +382,54 @@ internal fun SyncResultDto.toModel() =
         error = error,
         errorCategory = errorCategory,
         firstSyncMode = firstSyncMode.toFirstSyncMode(),
+    )
+
+internal fun TargetSyncResultDto.toModel() =
+    TargetSyncResult(
+        targetKind = targetKind,
+        projectId = projectId,
+        remotePrefix = remotePrefix,
+        result = result.toModel(),
+    )
+
+internal fun TargetSyncPlanDto.toModel() =
+    TargetSyncPlan(
+        targetKind = targetKind,
+        projectId = projectId,
+        remotePrefix = remotePrefix,
+        plan = plan.toModel(),
+    )
+
+internal fun FullSyncResultDto.toModel() =
+    FullSyncResult(
+        overallStatus = overallStatus.toSyncStatus(),
+        targets = targets.map { it.toModel() },
+        totalUploaded = totalUploaded.toInt(),
+        totalDownloaded = totalDownloaded.toInt(),
+        totalLocalDeletes = totalLocalDeletes.toInt(),
+        totalRemoteDeletes = totalRemoteDeletes.toInt(),
+        totalOverwritten = totalOverwritten.toInt(),
+        totalIgnored = totalIgnored.toInt(),
+        totalConflicts = totalConflicts.toInt(),
+        error = error,
+        errorCategory = errorCategory,
+        messageKey = messageKey,
+    )
+
+internal fun FullSyncDryRunResultDto.toModel() =
+    FullSyncDryRunResult(
+        targets = targets.map { it.toModel() },
+        totalToUpload = totalToUpload.toInt(),
+        totalToDownload = totalToDownload.toInt(),
+        totalToDeleteLocal = totalToDeleteLocal.toInt(),
+        totalToDeleteRemote = totalToDeleteRemote.toInt(),
+        totalIgnored = totalIgnored.toInt(),
+        totalConflicts = totalConflicts.toInt(),
+    )
+
+internal fun FullSyncDiagnosticsResultDto.toModel() =
+    FullSyncDiagnosticsResult(
+        diagnostics = diagnostics.toModel(),
     )
 
 internal fun String?.toBackendType(): BackendType =

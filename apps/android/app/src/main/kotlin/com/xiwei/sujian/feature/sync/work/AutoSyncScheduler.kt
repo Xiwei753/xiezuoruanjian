@@ -14,14 +14,11 @@ import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import java.util.concurrent.TimeUnit
 
 /**
- * #600 评论 #3 问题三：AutoSyncScheduler 适配 per-project 自动同步。
+ * #630 评论 #1：AutoSyncScheduler 调度全量自动同步。
  *
- * 保持单一周期任务（AutoSyncWorker 内部遍历所有作品），scheduleFromSettings
- * 不再读取某个作品的 snapshot 来决定调度 — 改为始终以默认间隔（15 分钟）
- * 调度周期任务，由 Worker 内部按各作品自己的 syncIntervalSeconds 判定是否到点。
- *
- * 这样避免了"读哪个作品的 snapshot 来决定全局调度间隔"的歧义，也让
- * 不同作品的不同间隔都能在 Worker 内被尊重（Worker 逐个作品检查 elapsed < interval）。
+ * 保持单一周期任务（AutoSyncWorker 内部读一份全局 profile 后调用一次 runFullSync），
+ * scheduleFromSettings 始终以默认间隔（15 分钟，WorkManager 最小周期）调度周期任务，
+ * Worker 内部按全局 config.syncIntervalSeconds 判定是否到点。
  */
 class AutoSyncScheduler(context: Context, private val syncRepository: SyncRepository? = null) {
     private val appContext = context.applicationContext
@@ -49,12 +46,9 @@ class AutoSyncScheduler(context: Context, private val syncRepository: SyncReposi
         internal const val DEFAULT_INTERVAL_SECONDS = 300L
 
         /**
-         * #592 六 / #600 评论 #3 问题三：调度单一周期任务，Worker 内部遍历所有作品。
+         * #630 评论 #1：调度单一周期任务，Worker 内部读一份全局 profile 后调用一次 runFullSync。
          *
-         * 不再读取某个作品的 snapshot 来决定调度间隔 — 不同作品可有不同间隔，
-         * Worker 逐个作品检查 elapsed < interval。这里用默认间隔（15 分钟，
-         * WorkManager 最小周期）调度周期任务，保证 Worker 被定期唤醒。
-         *
+         * 用默认间隔（15 分钟，WorkManager 最小周期）调度周期任务，保证 Worker 被定期唤醒。
          * 调用方（SyncRepository.commitSyncProfile）在 commitExclusive 释放后调用。
          */
         @Suppress("UNUSED_PARAMETER")
@@ -116,7 +110,7 @@ class AutoSyncScheduler(context: Context, private val syncRepository: SyncReposi
         }
 
         /**
-         * #600 评论 #5：应用级同步 interval/elapsed 纯函数判定。
+         * #630 评论 #1：全量同步 interval/elapsed 纯函数判定。
          *
          * - intervalSeconds 为 null 或 <= 0 时使用 [DEFAULT_INTERVAL_SECONDS]；
          * - lastSyncTime 为 null 或 <= 0 时视为从未同步，返回 true；

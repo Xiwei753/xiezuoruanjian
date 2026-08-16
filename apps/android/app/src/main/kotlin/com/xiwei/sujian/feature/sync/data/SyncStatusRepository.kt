@@ -7,6 +7,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 
+/**
+ * #630 评论 #1：全局同步状态指示器。
+ *
+ * 状态来源：全局 [SyncRepository.loadSyncConfig] + [SyncRepository.getSyncCapability] +
+ * App target 的 [SyncRepository.loadAppSyncState]（全量同步的总体完成时间由 App target
+ * 状态最贴近）。不再按 projectId 路由。
+ */
 class SyncStatusRepository(
     private val settingsRepository: SyncRepository,
 ) {
@@ -29,21 +36,17 @@ class SyncStatusRepository(
         _state.value = SyncIndicatorState.Unconfigured
     }
 
-    suspend fun refreshState(projectId: String?) {
-        if (projectId == null) {
-            _state.value = SyncIndicatorState.Unconfigured
-            return
-        }
+    suspend fun refreshState() {
         val indicatorState =
             try {
                 withContext(Dispatchers.IO) {
-                    val config = settingsRepository.loadSyncConfig(projectId)
-                    val capability = settingsRepository.getSyncCapability(projectId)
+                    val config = settingsRepository.loadSyncConfig()
+                    val capability = settingsRepository.getSyncCapability()
                     when {
                         config.enabled != true -> SyncIndicatorState.Unconfigured
                         !capability.canRun -> SyncIndicatorState.Unconfigured
                         else -> {
-                            val syncState = settingsRepository.loadSyncState(projectId)
+                            val syncState = settingsRepository.loadAppSyncState()
                             when (syncState.status) {
                                 SyncStatus.Syncing -> SyncIndicatorState.Syncing
                                 SyncStatus.Success,

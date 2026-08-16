@@ -5,9 +5,9 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.RepositoryException
 import com.xiwei.sujian.core.interop.common.ResultEnvelope
+import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
-import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
@@ -19,7 +19,7 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 
 sealed class SyncOutcome {
-    data class Completed(val result: SyncResult) : SyncOutcome()
+    data class Completed(val result: FullSyncResult) : SyncOutcome()
 
     data object Disabled : SyncOutcome()
 
@@ -43,33 +43,32 @@ sealed class SyncOutcome {
 }
 
 /**
- * #625 评论5301204285 问题1：作品级同步完成纯事件 — 仅在 [SyncCoordinator.runSync]
- * 最终映射成 [SyncOutcome.Completed] 后发一次。携带 projectId，不携带字数/标题/summary；
- * ProjectSummary 继续是列表唯一数据源。runAppSync 不发此作品级事件。
+ * #630 评论 #1：全量同步完成纯事件 — 仅在 [SyncCoordinator.runFullSync] 最终映射成
+ * [SyncOutcome.Completed] 后发一次。携带本次同步中发生下载的 projectId 列表，
+ * 调用方据此刷新对应作品摘要（ProjectSummary 继续是列表唯一数据源）。
  */
-data class ProjectSyncCompletedSignal(val projectId: String)
+data class FullSyncCompletedSignal(val downloadedProjectIds: List<String>)
 
 /**
- * #625 评论5301204285 问题1 测试 seam：作品级同步执行边界。
+ * #625 评论5301204285 问题1 测试 seam：全量同步执行边界。
  *
- * 封装 [SyncCoordinator.runSync] 中依赖 native bridge 的四个操作（capability 判定、
- * 凭据 override 注入、performSync、override 清除）。生产实现 [RepositorySyncExecution]
+ * 封装 [SyncCoordinator.runFullSync] 中依赖 native bridge 的四个操作（capability 判定、
+ * 凭据 override 注入、performFullSync、override 清除）。生产实现 [RepositorySyncExecution]
  * 委托 [SyncRepository] 并在 [Dispatchers.IO] 执行，行为与原内联 withContext 调用完全一致；
- * 单测注入确定性实现，使 Completed 分支在 JVM 测试中真实执行 runSync 全部控制流
+ * 单测注入确定性实现，使 Completed 分支在 JVM 测试中真实执行 runFullSync 全部控制流
  * （enabled 判定 / capability 判定 / 独占锁 / flush / override / perform / 结果映射 / 信号发射）。
  *
  * 不引入第二状态机：本接口只搬运 bridge 调用与 IO 线程切换，不做任何业务判定。
- * runAppSync 不经此 seam（其测试已确定性断言且不发作品级信号）。
  */
 internal interface SyncExecutionPort {
-    suspend fun capability(projectId: String): SyncCapabilityData
+    suspend fun capability(): SyncCapabilityData
 
     suspend fun setSecretsOverride(secrets: SyncSecrets): Boolean
 
     suspend fun perform(
-        projectId: String,
         config: SyncConfig,
-    ): BridgeResult<SyncResult>
+        forceSync: Boolean,
+    ): BridgeResult<FullSyncResult>
 
     suspend fun clearSecretsOverride(): Boolean
 }
@@ -81,49 +80,48 @@ class SyncCoordinator internal constructor(
     private val syncExecution: SyncExecutionPort = RepositorySyncExecution(settingsRepository),
 ) {
     /**
-     * #625 评论5301204285 问题1：作品级同步完成纯事件流。
+     * #630 评论 #1：全量同步完成纯事件流。
      *
-     * 仅在 [runSync] 最终映射成 [SyncOutcome.Completed] 后用 [MutableSharedFlow.tryEmit]
-     * 非阻塞发射一次。`extraBufferCapacity = 1` 保证无订阅者时不丢最近一次完成事件
-     * （与 ChapterSavedSignal 模式一致）。不使用 `emit`（suspend，SharedFlow 无 replay
-     * 时无订阅者会挂起，会阻塞同步流程）。[runAppSync] 不发此作品级事件。
+     * 仅在 [runFullSync] 最终映射成 [SyncOutcome.Completed] 后用 [MutableSharedFlow.tryEmit]
+     * 非阻塞发射一次。`extraBufferCapacity = 1` 保证无订阅者时不丢最近一次完成事件。
      */
-    private val _projectSyncCompleted =
-        MutableSharedFlow<ProjectSyncCompletedSignal>(extraBufferCapacity = 1)
-    val projectSyncCompleted: SharedFlow<ProjectSyncCompletedSignal> =
-        _projectSyncCompleted.asSharedFlow()
+    private val _fullSyncCompleted =
+        MutableSharedFlow<FullSyncCompletedSignal>(extraBufferCapacity = 1)
+    val fullSyncCompleted: SharedFlow<FullSyncCompletedSignal> =
+        _fullSyncCompleted.asSharedFlow()
 
     /**
-     * #592 四：统一异常边界 — 每条路径必须结束在明确终态。
+     * #630 评论 #1：全量同步统一执行入口 — App target + 所有 Project target 一次同步。
      *
-     * #592 六：一次同步操作只使用同一份不可变 ProjectSyncProfileSnapshot
-     * （generation + config + secrets）。调用方（AutoSyncWorker 等）可传入
-     * 预先取得的 snapshot，避免二次读取；未传入时在锁内取一次完整快照。
-     * snapshot 的 secrets 通过进程级 override 注入 Rust，整个操作不再从磁盘
-     * 二次读取 config/secrets。
+     * 流程只跑一次：
+     * 1. 取得一份全局 profile snapshot；
+     * 2. flush 应用级数据屏障；
+     * 3. flush 当前正文；
+     * 4. 写一次 secrets override；
+     * 5. 调 Core `performFullSync`；
+     * 6. 清 override；
+     * 7. 根据聚合结果更新同步状态，发完成信号（携带下载的 projectId 列表）。
      *
      * 所有失败路径通过 [SyncFailureKind] 唯一分类：
      * - CancellationException → 原样抛出
      * - RetryableNetwork / RetryableIo → RetryableFailure，红色
      * - Authentication / Conflict / DirtyRepository / Protocol / NativeUnavailable / Fatal → TerminalFailure，红色
      * - 未配置或关闭 → Unconfigured/Disabled，灰色
-     * - performSync 返回 Syncing → 协议错误，TerminalFailure
      *
-     * BridgeResult.NotLoaded 与 errorCode "NATIVE_NOT_LOADED" 统一进入 NativeUnavailable，
-     * 不再分别维护字符串白名单和独立分支。
+     * BridgeResult.NotLoaded 与 errorCode "NATIVE_NOT_LOADED" 统一进入 NativeUnavailable。
      */
-    suspend fun runSync(
+    suspend fun runFullSync(
         trigger: SyncTrigger,
-        projectId: String,
-        snapshot: ProjectSyncProfileSnapshot? = null,
+        snapshot: SyncProfileSnapshot? = null,
+        forceSync: Boolean = false,
     ): SyncOutcome {
         DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "start")
         try {
-            val profile: ProjectSyncProfileSnapshot =
+            val profile: SyncProfileSnapshot =
                 snapshot ?: run {
                     val result =
                         withContext(Dispatchers.IO) {
-                            SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile(projectId) }
+                            SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
                         }
                     when (result) {
                         is SyncProfileReadResult.Found -> result.snapshot
@@ -140,23 +138,37 @@ class SyncCoordinator internal constructor(
                 syncStatusRepository.notifyUnconfigured()
                 return SyncOutcome.Unconfigured
             }
-            val capability = syncExecution.capability(projectId)
+            val capability = syncExecution.capability()
             if (!capability.canRun) {
                 syncStatusRepository.notifyUnconfigured()
                 return SyncOutcome.Disabled
             }
 
-            // #592 六：整个操作只使用这份 snapshot 的凭据。
-            // #595 十：override 必须在取得同步独占锁（runExclusive）之后写入，
-            // 两个同步同时触发时不可能出现“A 写入 token A、B 写入 token B、
-            // A 实际使用 token B”；设置失败立即终止（不静默继续）；
-            // 操作结束后 finally 清除 override，陈旧凭据不得泄漏到后续操作
-            // （Core 的 refresh_secrets_override 在已有 override 时不再读磁盘）。
             // #595 三：活动正文 flush 与同步执行必须在同一独占锁内串行 —
             // flush 保存磁盘版本后同步立即以该版本为 base；如果 flush 在锁外，
             // 两个同步触发可交叉 flush/执行，正文版本屏障失效。
+            // #595 十：override 必须在取得同步独占锁（runExclusive）之后写入，
+            // 设置失败立即终止（不静默继续）；操作结束后 finally 清除 override。
             val exclusiveResult =
                 SyncSession.runExclusive { _ ->
+                    // #600 评论 #5：应用级同步数据屏障 — flush 星图 store 落盘。
+                    if (appSyncDataBarrier != null) {
+                        val barrierFlushOk = appSyncDataBarrier.flushBeforeSync()
+                        if (!barrierFlushOk) {
+                            DiagnosticsLogger.w(
+                                "SyncCoordinator",
+                                "App sync data barrier flush failed — aborting (typed Fatal)",
+                            )
+                            syncStatusRepository.notifySyncFailed()
+                            return@runExclusive BridgeResult.Error(
+                                ResultEnvelope.errorOf(
+                                    "APP_SYNC_BARRIER_FLUSH_FAILED",
+                                    "App sync data barrier flush failed before sync",
+                                ),
+                                SyncFailureKind.Fatal,
+                            )
+                        }
+                    }
                     val flushOk = ActiveDocumentGate.flushActiveDocument()
                     if (!flushOk) {
                         DiagnosticsLogger.w(
@@ -189,7 +201,7 @@ class SyncCoordinator internal constructor(
                         return@runExclusive error
                     }
                     try {
-                        val bridgeResult = syncExecution.perform(projectId, config)
+                        val bridgeResult = syncExecution.perform(config, forceSync)
                         // #595 三：校验文档身份 — 同步期间章节切换/关闭导致身份变化时，
                         // 不应用同步结果，新输入作为下一代 dirty 文档继续保存。
                         val identityAfterSync = ActiveDocumentGate.activeDocumentIdentity()
@@ -211,6 +223,10 @@ class SyncCoordinator internal constructor(
                                 )
                             resolveAndPublish(staleError)
                             return@runExclusive staleError
+                        }
+                        // #600 评论 #5：同步成功后失效星图/设置/主题缓存。
+                        if (appSyncDataBarrier != null && bridgeResult is BridgeResult.Success) {
+                            appSyncDataBarrier.reloadAfterFullSync(bridgeResult.data)
                         }
                         resolveAndPublish(bridgeResult)
                         bridgeResult
@@ -235,10 +251,13 @@ class SyncCoordinator internal constructor(
                         }
                     }
                 }
-            // #625 评论5301204285 问题1：仅 Completed 发一次作品级完成信号；
-            // Busy / RetryableFailure / TerminalFailure 均不发。
+            // 仅 Completed 发一次全量完成信号，携带下载的 projectId 列表。
             if (outcome is SyncOutcome.Completed) {
-                _projectSyncCompleted.tryEmit(ProjectSyncCompletedSignal(projectId))
+                val downloadedProjectIds =
+                    outcome.result.targets
+                        .filter { it.result.downloadedFiles.isNotEmpty() || it.result.localDeletes.isNotEmpty() }
+                        .mapNotNull { it.projectId }
+                _fullSyncCompleted.tryEmit(FullSyncCompletedSignal(downloadedProjectIds))
             }
             return outcome
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -259,157 +278,13 @@ class SyncCoordinator internal constructor(
     }
 
     /**
-     * #600 评论 #4 问题三：应用级同步执行入口 — 设置/全局星图/主题调色板。
-     *
-     * 镜像 [runSync] 的结构（snapshot → enabled → capability → runExclusive →
-     * flush + secrets override + performAppSync → 分类结果），但**不依赖 projectId** —
-     * 应用级同步目标唯一，不经过 ActiveProjectGate。
-     *
-     * - snapshot 未传入时在锁内取 [SyncRepository.snapshotAppSyncProfile]；
-     * - secrets override 是进程级（与作品级共用同一 override 机制），由
-     *   [SyncSession.runExclusive] 保证同一时刻只有一个同步在执行，不会串用 token；
-     * - 应用级同步不签发文档身份 lease（应用级同步目标不含活动正文，无需文档身份校验）；
-     * - 失败分类复用 [classifyFailure] / [mapToOutcome]，与作品级一致。
-     */
-    suspend fun runAppSync(
-        trigger: SyncTrigger,
-        appSnapshot: AppSyncProfileSnapshot? = null,
-    ): SyncOutcome {
-        DiagnosticsEvents.syncEvent("app_${trigger.name.lowercase()}", "start")
-        try {
-            val profile: AppSyncProfileSnapshot =
-                appSnapshot ?: run {
-                    val result =
-                        withContext(Dispatchers.IO) {
-                            SyncProfileGate.snapshotExclusive { settingsRepository.snapshotAppSyncProfile() }
-                        }
-                    when (result) {
-                        is AppSyncProfileReadResult.Found -> result.snapshot
-                        is AppSyncProfileReadResult.NotConfigured -> result.snapshot
-                        is AppSyncProfileReadResult.Failed -> {
-                            DiagnosticsLogger.w(
-                                "SyncCoordinator",
-                                "App sync profile snapshot failed: ${result.message}",
-                            )
-                            syncStatusRepository.notifySyncFailed()
-                            return result.kind.toOutcome()
-                        }
-                    }
-                }
-            val config = profile.config
-            if (config.enabled != true) {
-                syncStatusRepository.notifyUnconfigured()
-                return SyncOutcome.Unconfigured
-            }
-            // 应用级 capability：config.enabled + remoteUrl 非空即可（应用级无 projectId 路由的 capability）。
-            // 复用 shouldSync 的前置判定逻辑 — 此处只检查 enabled，远程 URL 在 Core perform_app_sync 内校验。
-
-            val exclusiveResult =
-                SyncSession.runExclusive { _ ->
-                    // #600 评论 #5：应用级同步数据屏障 — flush 星图 store 落盘，确保同步引擎读到完整本地数据。
-                    if (appSyncDataBarrier != null) {
-                        val barrierFlushOk = appSyncDataBarrier.flushBeforeSync()
-                        if (!barrierFlushOk) {
-                            DiagnosticsLogger.w(
-                                "SyncCoordinator",
-                                "App sync data barrier flush failed — aborting (typed Fatal)",
-                            )
-                            syncStatusRepository.notifySyncFailed()
-                            return@runExclusive BridgeResult.Error(
-                                ResultEnvelope.errorOf(
-                                    "APP_SYNC_BARRIER_FLUSH_FAILED",
-                                    "App sync data barrier flush failed before sync",
-                                ),
-                                SyncFailureKind.Fatal,
-                            )
-                        }
-                    }
-                    val flushOk = ActiveDocumentGate.flushActiveDocument()
-                    if (!flushOk) {
-                        DiagnosticsLogger.w(
-                            "SyncCoordinator",
-                            "Active document flush failed before app sync — aborting (typed DocumentSaveFailed)",
-                        )
-                        syncStatusRepository.notifySyncFailed()
-                        return@runExclusive BridgeResult.Error(
-                            ResultEnvelope.errorOf(
-                                "DOCUMENT_FLUSH_FAILED",
-                                "Active document could not be persisted before app sync",
-                            ),
-                            SyncFailureKind.DocumentSaveFailed,
-                        )
-                    }
-                    syncStatusRepository.notifySyncStarted()
-                    val overrideOk =
-                        withContext(Dispatchers.IO) {
-                            settingsRepository.setSyncSecretsOverrideStrict(profile.secrets)
-                        }
-                    if (!overrideOk) {
-                        val error =
-                            BridgeResult.Error(
-                                ResultEnvelope.errorOf(
-                                    "SYNC_CREDENTIALS_OVERRIDE_FAILED",
-                                    "Failed to set app sync credentials override",
-                                ),
-                                SyncFailureKind.Fatal,
-                            )
-                        resolveAndPublish(error)
-                        return@runExclusive error
-                    }
-                    try {
-                        val bridgeResult =
-                            withContext(Dispatchers.IO) { settingsRepository.performAppSync(config) }
-                        // #600 评论 #5：同步成功后失效星图/设置/主题缓存，使后续读取拿到同步后的最新数据。
-                        if (appSyncDataBarrier != null && bridgeResult is BridgeResult.Success) {
-                            appSyncDataBarrier.reloadAfterSync(bridgeResult.data)
-                        }
-                        resolveAndPublish(bridgeResult)
-                        bridgeResult
-                    } finally {
-                        withContext(Dispatchers.IO) { settingsRepository.clearSyncSecretsOverride() }
-                    }
-                }
-
-            return when (exclusiveResult) {
-                is ExclusiveResult.Busy -> {
-                    SyncOutcome.Busy
-                }
-                is ExclusiveResult.Success -> {
-                    when (val br = exclusiveResult.value) {
-                        is BridgeResult.Success -> mapToOutcome(br.data)
-                        is BridgeResult.Error -> classifyFailure(br).toOutcome()
-                        BridgeResult.NotLoaded -> {
-                            DiagnosticsLogger.w("SyncCoordinator", "Native library not loaded — NativeUnavailable")
-                            SyncFailureKind.NativeUnavailable.toOutcome()
-                        }
-                    }
-                }
-            }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: IOException) {
-            DiagnosticsEvents.syncEvent("app_${trigger.name.lowercase()}", "io_exception: " + e.message)
-            syncStatusRepository.notifySyncFailed()
-            return SyncFailureKind.RetryableIo.toOutcome()
-        } catch (e: RepositoryException) {
-            DiagnosticsEvents.syncEvent("app_${trigger.name.lowercase()}", "repository_exception: " + e.message)
-            syncStatusRepository.notifySyncFailed()
-            return e.kind.toOutcome()
-        } catch (e: Exception) {
-            DiagnosticsEvents.syncEvent("app_${trigger.name.lowercase()}", "exception: " + e.message)
-            syncStatusRepository.notifySyncFailed()
-            return SyncFailureKind.Fatal.toOutcome()
-        }
-    }
-
-    /**
      * #592 七：类型化失败直接来自 Bridge 边界（WriterException 变体），
      * 不再维护 Android 字符串错误码表；未知错误默认 Fatal。
      */
     internal fun classifyFailure(error: BridgeResult.Error): SyncFailureKind = SyncFailureKind.fromBridgeError(error)
 
-    private fun mapToOutcome(result: SyncResult): SyncOutcome =
-        when (result.status) {
+    private fun mapToOutcome(result: FullSyncResult): SyncOutcome =
+        when (result.overallStatus) {
             SyncStatus.Success,
             SyncStatus.NoChanges,
             SyncStatus.LatestWinsApplied,
@@ -418,8 +293,8 @@ class SyncCoordinator internal constructor(
 
             SyncStatus.RecoverableError ->
                 SyncOutcome.RetryableFailure(
-                    result.status,
-                    SyncFailureKind.fromSyncStatus(result.status),
+                    result.overallStatus,
+                    SyncFailureKind.fromSyncStatus(result.overallStatus),
                 )
 
             SyncStatus.Error,
@@ -429,14 +304,14 @@ class SyncCoordinator internal constructor(
             SyncStatus.DirtyRepoBlocked,
             ->
                 SyncOutcome.TerminalFailure(
-                    result.status,
-                    SyncFailureKind.fromSyncStatus(result.status),
+                    result.overallStatus,
+                    SyncFailureKind.fromSyncStatus(result.overallStatus),
                 )
 
             SyncStatus.Syncing -> {
                 DiagnosticsLogger.w(
                     "SyncCoordinator",
-                    "performSync returned Syncing — protocol error, mapping to terminal failure",
+                    "performFullSync returned Syncing — protocol error, mapping to terminal failure",
                 )
                 SyncOutcome.TerminalFailure(SyncStatus.FatalError, SyncFailureKind.Fatal)
             }
@@ -445,9 +320,9 @@ class SyncCoordinator internal constructor(
             -> SyncOutcome.Unconfigured
         }
 
-    private fun resolveAndPublish(result: BridgeResult<SyncResult>) {
+    private fun resolveAndPublish(result: BridgeResult<FullSyncResult>) {
         when (result) {
-            is BridgeResult.Success -> resolveSyncStatus(result.data.status)
+            is BridgeResult.Success -> resolveSyncStatus(result.data.overallStatus)
             is BridgeResult.Error -> syncStatusRepository.notifySyncFailed()
             BridgeResult.NotLoaded -> syncStatusRepository.notifySyncFailed()
         }
@@ -472,7 +347,7 @@ class SyncCoordinator internal constructor(
                 syncStatusRepository.notifySyncFailed()
             }
             SyncStatus.Syncing -> {
-                DiagnosticsLogger.w("SyncCoordinator", "performSync returned Syncing — forcing to Failed")
+                DiagnosticsLogger.w("SyncCoordinator", "performFullSync returned Syncing — forcing to Failed")
                 syncStatusRepository.notifySyncFailed()
             }
             SyncStatus.Idle,
@@ -485,19 +360,18 @@ class SyncCoordinator internal constructor(
 
     /**
      * 生产默认实现 — 委托 [settingsRepository] 并在 [Dispatchers.IO] 执行，
-     * 行为与原 runSync 内联 withContext(Dispatchers.IO) 调用完全一致。
+     * 行为与原 runFullSync 内联 withContext(Dispatchers.IO) 调用完全一致。
      */
     private class RepositorySyncExecution(private val repo: SyncRepository) : SyncExecutionPort {
-        override suspend fun capability(projectId: String): SyncCapabilityData =
-            withContext(Dispatchers.IO) { repo.getSyncCapability(projectId) }
+        override suspend fun capability(): SyncCapabilityData = withContext(Dispatchers.IO) { repo.getSyncCapability() }
 
         override suspend fun setSecretsOverride(secrets: SyncSecrets): Boolean =
             withContext(Dispatchers.IO) { repo.setSyncSecretsOverrideStrict(secrets) }
 
         override suspend fun perform(
-            projectId: String,
             config: SyncConfig,
-        ): BridgeResult<SyncResult> = withContext(Dispatchers.IO) { repo.performSync(projectId, config) }
+            forceSync: Boolean,
+        ): BridgeResult<FullSyncResult> = withContext(Dispatchers.IO) { repo.performFullSync(config, forceSync) }
 
         override suspend fun clearSecretsOverride(): Boolean =
             withContext(Dispatchers.IO) { repo.clearSyncSecretsOverride() }

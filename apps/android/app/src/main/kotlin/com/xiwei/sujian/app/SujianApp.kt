@@ -131,7 +131,7 @@ private fun SujianAppInitialization(
         val projectUC = ProjectUseCase(deps.projectRepository, deps.recentEditsRepository)
         vm.initialize(deps.projectRepository, projectUC, deps.settingsRepository, context)
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            deps.syncStatusRepository.refreshState(vm.currentProjectId)
+            deps.syncStatusRepository.refreshState()
             // #625 项6：列表 UI 唯一数据源是 projectSummaries（含字数），
             // projects 第二数据源已删 — 只刷新 projectSummaries。
             vm.refreshProjectSummaries()
@@ -146,12 +146,11 @@ private fun SujianAppInitialization(
             vm.refreshProjectSummaries()
         }
     }
-    // #625 评论5301204285 问题1：作品级同步完成 → 及时刷新作品摘要（含字数/修改时间），
-    // 不再仅靠 RESUMED 生命周期。信号由 SyncCoordinator.runSync 映射成 Completed 后发出；
+    // #630 评论 #1：全量同步完成 → 及时刷新作品摘要（含字数/修改时间），
+    // 不再仅靠 RESUMED 生命周期。信号由 SyncCoordinator.runFullSync 映射成 Completed 后发出；
     // 手动同步 / 设置触发 / AutoSyncWorker 走同一 deps.syncCoordinator，同一条失效链。
-    // 事件只携带 projectId，ProjectSummary 继续是列表唯一数据源。
     LaunchedEffect(deps, vm) {
-        deps.syncCoordinator.projectSyncCompleted.collect {
+        deps.syncCoordinator.fullSyncCompleted.collect {
             vm.refreshProjectSummaries()
         }
     }

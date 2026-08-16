@@ -107,9 +107,9 @@ class SettingsRepository(
                 }
                 // #617 评论六：保存成功后只同步全屏这一位，实验开关立即驱动窗口能力。
                 _immersiveFullscreenEnabled.value = settings.experimentalFullscreenMode
-                // #618 三：本机保存只通知编辑器需要的更新，不再把自己保存冒充外部设置变化
-                // （否则 SettingsViewModel/ThemeController 收到自己刚保存的事件又重读/重载）。
-                CoreSettingsEvents.notifyLocalEditorSettingsChanged()
+                // #630 评论二：Repository 只负责保存与 Android 本地全屏状态发布，不再无条件
+                // 通知编辑器重载 — 是否通知编辑器由 SettingsSaveOps 按 affectsEditor 决定，
+                // 避免诊断/自动保存/AI/全屏等普通保存也触发隐藏编辑器重读整份设置。
                 SettingsSaveResult.Success
             }
             is BridgeResult.Error -> {

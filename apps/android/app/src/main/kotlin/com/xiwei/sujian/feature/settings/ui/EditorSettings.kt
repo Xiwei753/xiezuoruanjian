@@ -13,7 +13,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
-import com.xiwei.sujian.core.designsystem.component.SujianSection
 import com.xiwei.sujian.core.designsystem.component.SujianSlider
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
@@ -38,7 +37,7 @@ fun EditorSettings(
         modifier = modifier.padding(dims.space16),
         verticalArrangement = Arrangement.spacedBy(dims.space16),
     ) {
-        SujianSection(
+        SettingsFieldGroup(
             title = stringResource(id = R.string.pref_category_editor),
             semanticId = SujianSemanticIds.SettingsEditorSection,
         ) {
@@ -64,7 +63,7 @@ fun EditorSettings(
             )
         }
 
-        SujianSection(title = stringResource(id = R.string.pref_category_editor_behavior)) {
+        SettingsFieldGroup(title = stringResource(id = R.string.pref_category_editor_behavior)) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_editor_typing_animation),
                 checked = state.typingAnimationEnabled,

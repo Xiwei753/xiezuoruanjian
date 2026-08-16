@@ -6,7 +6,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
-import com.xiwei.sujian.core.designsystem.component.SujianSection
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 
@@ -22,7 +21,7 @@ fun LaboratorySettings(
         modifier = modifier.padding(dims.space16),
         verticalArrangement = Arrangement.spacedBy(dims.space16),
     ) {
-        SujianSection(title = stringResource(id = R.string.pref_category_laboratory)) {
+        SettingsFieldGroup(title = stringResource(id = R.string.pref_category_laboratory)) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.lab_fullscreen_immersive),
                 checked = state.immersiveFullscreen,

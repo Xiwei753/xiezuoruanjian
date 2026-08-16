@@ -14,7 +14,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
-import com.xiwei.sujian.core.designsystem.component.SujianSection
 import com.xiwei.sujian.core.designsystem.component.SujianSlider
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
@@ -34,7 +33,7 @@ fun SaveSettings(
         modifier = modifier.padding(dims.space16),
         verticalArrangement = Arrangement.spacedBy(dims.space16),
     ) {
-        SujianSection(title = stringResource(id = R.string.pref_category_save)) {
+        SettingsFieldGroup(title = stringResource(id = R.string.pref_category_save)) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_auto_save),
                 checked = state.autoSaveEnabled,

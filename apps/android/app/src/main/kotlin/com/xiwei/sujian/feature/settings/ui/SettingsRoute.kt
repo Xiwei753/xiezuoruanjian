@@ -5,11 +5,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -97,6 +94,10 @@ val settingsCategories =
  * 展开内容在行内用 [AnimatedVisibility] 呈现，不导航到子页面，
  * 不建立第二套页面导航状态。展开状态用 [rememberSaveable] 跨配置变更保留。
  *
+ * 分组结构：`LazyColumn -> SettingsGroupHeader -> SettingsGroupItemContainer ->
+ * SettingsExpandableSection -> expanded content`。分组外壳用 surfaceContainerLow，
+ * 视觉上连续成外层大卡片，但 LazyColumn 仍一分类一个 item。
+ *
  * context.getString 在协程 collect 回调中解析错误文案，无法用 stringResource，
  * 因此本文件带单规则 SuppressLint。
  */
@@ -135,23 +136,20 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
                 val categories = settingsCategories.filter { it.group == group }
                 if (categories.isEmpty()) return@forEach
                 item(key = "settings_group_${group.name}") {
-                    Text(
-                        text = stringResource(id = group.titleResId),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = dims.space16, vertical = dims.space8),
-                    )
+                    SettingsGroupHeader(title = stringResource(id = group.titleResId))
                 }
-                items(categories, key = { it.section.name }) { category ->
-                    SettingsCategoryItem(
-                        category = category,
-                        vm = vm,
-                        expanded = expansionState.isExpanded(category.section),
-                        onExpandedChange = { isExpanded ->
-                            expansionState.setExpanded(category.section, isExpanded)
-                        },
-                        onIntent = vm::handleIntent,
-                    )
+                itemsIndexed(categories, key = { _, category -> category.section.name }) { index, category ->
+                    SettingsGroupItemContainer(isLast = index == categories.lastIndex) {
+                        SettingsCategoryItem(
+                            category = category,
+                            vm = vm,
+                            expanded = expansionState.isExpanded(category.section),
+                            onExpandedChange = { isExpanded ->
+                                expansionState.setExpanded(category.section, isExpanded)
+                            },
+                            onIntent = vm::handleIntent,
+                        )
+                    }
                 }
             }
         }
@@ -282,7 +280,7 @@ internal fun settingsCategoryValue(
         }
         SettingsSection.Sync -> {
             val state by vm.syncState.collectAsStateWithLifecycle()
-            toggleValue(state.projectSyncConfig.enabled == true)
+            toggleValue(state.syncConfig.enabled == true)
         }
         SettingsSection.Ai -> {
             val state by vm.aiState.collectAsStateWithLifecycle()

@@ -6,9 +6,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #600 评论 #5：应用级同步 interval/elapsed 纯函数契约测试。
+ * #630 评论 #1：全量同步 interval/elapsed 纯函数契约测试。
  *
- * AutoSyncWorker.syncApp() 调用 shouldAppSyncNow → AutoSyncScheduler.shouldSyncByInterval
+ * AutoSyncWorker.shouldSyncNow 调用 AutoSyncScheduler.shouldSyncByInterval
  * 判定是否到同步时间点。本测试固定纯函数契约，不依赖 Worker/Repository 基础设施。
  */
 class AutoSyncAppIntervalContractTest {

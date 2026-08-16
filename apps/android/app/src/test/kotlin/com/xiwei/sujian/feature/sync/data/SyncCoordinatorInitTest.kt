@@ -1,6 +1,6 @@
 package com.xiwei.sujian.feature.sync.data
 
-import com.xiwei.sujian.feature.sync.data.model.SyncResult
+import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -9,10 +9,24 @@ import org.junit.Test
 class SyncCoordinatorInitTest {
     @Test
     fun syncOutcome_completedHoldsResult() {
-        val result = com.xiwei.sujian.feature.sync.data.model.SyncResult(status = SyncStatus.Success)
+        val result =
+            FullSyncResult(
+                overallStatus = SyncStatus.Success,
+                targets = emptyList(),
+                totalUploaded = 0,
+                totalDownloaded = 0,
+                totalLocalDeletes = 0,
+                totalRemoteDeletes = 0,
+                totalOverwritten = 0,
+                totalIgnored = 0,
+                totalConflicts = 0,
+                error = null,
+                errorCategory = null,
+                messageKey = null,
+            )
         val outcome = SyncOutcome.Completed(result)
         assertTrue(outcome is SyncOutcome.Completed)
-        assertEquals(SyncStatus.Success, (outcome as SyncOutcome.Completed).result.status)
+        assertEquals(SyncStatus.Success, (outcome as SyncOutcome.Completed).result.overallStatus)
     }
 
     @Test
@@ -60,7 +74,21 @@ class SyncCoordinatorInitTest {
             )
 
         completedStatuses.forEach { status ->
-            val result = com.xiwei.sujian.feature.sync.data.model.SyncResult(status = status)
+            val result =
+                FullSyncResult(
+                    overallStatus = status,
+                    targets = emptyList(),
+                    totalUploaded = 0,
+                    totalDownloaded = 0,
+                    totalLocalDeletes = 0,
+                    totalRemoteDeletes = 0,
+                    totalOverwritten = 0,
+                    totalIgnored = 0,
+                    totalConflicts = 0,
+                    error = null,
+                    errorCategory = null,
+                    messageKey = null,
+                )
             val outcome = SyncOutcome.Completed(result)
             assertTrue("Expected Completed for $status", outcome is SyncOutcome.Completed)
         }

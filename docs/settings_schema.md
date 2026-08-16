@@ -69,8 +69,8 @@ Supersedes: None
 - `variant`（字符串，无法可靠识别时为 "system_selected"）
 - `lightScheme` / `darkScheme`（ThemeColorScheme，完整 Material 3 语义角色）
 
-### `<app_data_root>/sync/sync_config.json`
-存储同步配置。包括：
+### `<app_data_root>/app-meta/sync/config.local.json`
+存储全局同步配置（Issue #630）。全应用只有一份全局 `SyncProfile`，不再区分应用级/作品级两套用户配置。包括：
 - `enabled`（布尔值，是否启用同步）
 - `backend_type`（字符串，当前为 `github_api`，`git` 为预留）
 - `remote_url`（字符串）
@@ -82,5 +82,5 @@ Supersedes: None
 - `has_network_permission`（布尔值）
 - `has_network_state_permission`（布尔值）
 
-### `<app_data_root>/sync/sync_secrets.local.json`
-存储敏感信息，如 GitHub 令牌、SSH 私钥。此文件保存在本地，**绝不**应被同步。
+### 全局同步凭据
+存储敏感信息（如 GitHub 令牌、SSH 私钥）使用统一的全局安全存储条目（例如 `sync_token_global`），**绝不**进入同步、**绝不**按作品分散保存。作品目录下只保留该 target 的本地 `state.local.json / manifest.sync.json / conflicts.json`。

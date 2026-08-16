@@ -152,15 +152,11 @@ private fun rememberSujianTopBarActions(
     return actions
 }
 
-/** #600：手动同步 onClick — 提取为独立函数降低 rememberSujianTopBarActions 认知复杂度。 */
+/** #630 评论 #1：手动同步 onClick — 全量同步，不依赖当前活动作品。 */
 private fun rememberSujianManualSyncOnClick(env: SujianTopBarEnv): () -> Unit =
     {
         env.coroutineScope.launch {
-            // sync 已改为 per-project — 手动同步针对当前活动作品。
-            val pid = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
-            if (pid != null) {
-                env.deps.syncCoordinator.runSync(SyncTrigger.Manual, pid)
-            }
+            env.deps.syncCoordinator.runFullSync(SyncTrigger.Manual)
         }
     }
 

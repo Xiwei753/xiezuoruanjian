@@ -63,22 +63,18 @@ data class AboutSectionState(
     val versionInfo: String,
 )
 
-/** 同步分类真正读取的字段 — 作品级与应用级各一套配置/凭据/命令状态。 */
+/**
+ * 同步分类真正读取的字段 — 全量同步只有一份配置/凭据/命令状态
+ * （#630 评论 #1+#2：合并旧 projectSync/appSync 双份）。
+ */
 data class SyncSectionState(
-    val projectSyncConfig: SyncConfig,
-    val projectSyncSecrets: SyncSecrets,
-    val projectSyncCapability: SyncCapabilityData,
-    val projectSyncProfileLoadState: SyncProfileLoadState,
-    val projectDryRunState: SyncCommandState,
-    val projectTestConnectionState: SyncCommandState,
-    val projectPerformSyncState: SyncCommandState,
-    val projectSyncResult: StructuredSyncResult?,
-    val appSyncConfig: SyncConfig,
-    val appSyncSecrets: SyncSecrets,
-    val appSyncProfileLoadState: SyncProfileLoadState,
-    val appDryRunState: SyncCommandState,
-    val appTestConnectionState: SyncCommandState,
-    val appPerformSyncState: SyncCommandState,
-    val appSyncResult: StructuredSyncResult?,
+    val syncConfig: SyncConfig,
+    val syncSecrets: SyncSecrets,
+    val syncCapability: SyncCapabilityData,
+    val syncProfileLoadState: SyncProfileLoadState,
+    val dryRunState: SyncCommandState,
+    val testConnectionState: SyncCommandState,
+    val performSyncState: SyncCommandState,
+    val syncResult: StructuredSyncResult?,
     val secureStorageWarning: String?,
 )

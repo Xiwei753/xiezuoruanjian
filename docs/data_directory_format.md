@@ -51,8 +51,7 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 │           ├── chapter.md         # 正文（纯文本）
 │           └── chapter.meta.json  # 章节元数据
 ├── characters/                    # 角色卡（如适用）
-└── app-meta/sync/                 # 该作品自己的同步元数据
-   ├── config.local.json           # 作品级同步配置（不同步）
+└── app-meta/sync/                 # 该作品自己的同步元数据（不含用户同步 config/secrets）
    ├── state.local.json            # 本地同步状态（不同步）
    ├── conflicts.json              # 冲突记录（不同步）
    └── manifest.sync.json          # 同步清单（参与同步）
@@ -93,13 +92,30 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 
 `log_dir` 由平台提供，与 `app_data_root` 相互独立（Android 为 `Sujian/logs/`），不位于数据根目录下。
 
-## 两种同步目标
+## 同步目标与远端仓库组织
 
-系统存在两种明确的同步目标，各自独立的 Git 仓库、白名单和同步配置：
+系统只有一个全局 `SyncProfile`、一个远端 Git 仓库、一次全量同步（Issue #630）。Core 内部按 `SyncScope::App / Project` 区分两个 target，只用于路径过滤和远端前缀路由，不再暴露成两套用户配置。
 
-| 同步目标 | 同步根 | 白名单 | 同步内容 |
-|----------|--------|--------|----------|
-| **应用级 Git** | `app_data_root` | `settings.sync.json`/`starmaps/**`/`themes/palettes/**` | 设置、全局星图、主题调色板 |
-| **作品级 Git** | `project_root`（`projects_root/<project_id>`） | `project.json`/`volumes/**`/`characters/**`/`app-meta/sync/manifest.sync.json` | 单部作品正文、元数据、作品自己的同步状态 |
+本地目录结构不变：`app_data_root` 继续是应用数据根，每个 `project_root` 继续是独立作品目录与独立本地 Git 仓库。同步引擎把不同本地根映射到同一个远端仓库的不同前缀。
 
-应用级同步配置存储在 `<app_data_root>/app-meta/sync/config.local.json`；作品级同步配置存储在 `<project_root>/app-meta/sync/config.local.json`。两者是独立的 `SyncProfile`，在 API/数据模型里明确区分为 `AppSyncProfile` 与 `ProjectSyncProfile(projectId)`，不混成同一个配置。
+远端仓库组织：
+
+```text
+app/
+  settings.sync.json
+  starmaps/**
+  themes/palettes/**
+  app-meta/sync/manifest.sync.json
+projects/<project_id>/
+  project.json
+  volumes/**
+  characters/**
+  app-meta/sync/manifest.sync.json
+```
+
+| 内部 target | 本地同步根 | 远端前缀 | 白名单 | 同步内容 |
+|-------------|-----------|----------|--------|----------|
+| **App** | `app_data_root` | `app/` | `settings.sync.json`/`starmaps/**`/`themes/palettes/**` | 设置、全局星图、主题调色板 |
+| **Project** | `project_root`（`projects_root/<project_id>`） | `projects/<project_id>/` | `project.json`/`volumes/**`/`characters/**`/`app-meta/sync/manifest.sync.json` | 单部作品正文、元数据、作品自己的同步状态 |
+
+全局同步配置只存在一份：`<app_data_root>/app-meta/sync/config.local.json`。作品目录下不再保存用户同步 config/secrets，只保留该 target 的本地 `state.local.json / manifest.sync.json / conflicts.json`。

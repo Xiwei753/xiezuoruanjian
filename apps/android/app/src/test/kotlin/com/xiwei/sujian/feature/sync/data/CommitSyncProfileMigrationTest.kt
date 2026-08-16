@@ -35,30 +35,29 @@ class CommitSyncProfileMigrationTest {
         )
     }
 
-    private fun storeOf(repo: SyncRepository): ProjectSyncProfileStore {
+    private fun storeOf(repo: SyncRepository): SyncProfileStore {
         val field = SyncRepository::class.java.getDeclaredField("profileStore\$delegate")
         field.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val lazy = field.get(repo) as kotlin.Lazy<ProjectSyncProfileStore>
+        val lazy = field.get(repo) as kotlin.Lazy<SyncProfileStore>
         return lazy.value
     }
 
-    private suspend fun readStoreState(repo: SyncRepository): ProjectSyncProfileStore.ProfileCommitState {
+    private suspend fun readStoreState(repo: SyncRepository): SyncProfileStore.ProfileCommitState {
         val field = SyncRepository::class.java.getDeclaredField("profileStore\$delegate")
         field.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val lazy = field.get(repo) as kotlin.Lazy<ProjectSyncProfileStore>
-        return lazy.value.readState("migration-project-id")
+        val lazy = field.get(repo) as kotlin.Lazy<SyncProfileStore>
+        return lazy.value.readState()
     }
 
     @Test
     fun firstCommitFailsWithoutNative_butNeverWritesLiveOrMarker() =
         runTest {
             val repo = createRepo("migration_contract_1")
-            storeOf(repo).clear("migration-project-id")
+            storeOf(repo).clear()
             val result =
                 repo.commitSyncProfile(
-                    "migration-project-id",
                     com.xiwei.sujian.feature.sync.data.model.SyncConfig(enabled = true),
                     com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "token-new"),
                 )
@@ -83,9 +82,9 @@ class CommitSyncProfileMigrationTest {
         runTest {
             val repo = createRepo("migration_contract_2")
             val store = storeOf(repo)
-            store.clear("migration-project-id")
-            store.commitGeneration("migration-project-id", 1L, "{\"enabled\":true}")
-            val result = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile("migration-project-id") }
+            store.clear()
+            store.commitGeneration(1L, "{\"enabled\":true}")
+            val result = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile() }
             assertTrue(
                 "Secrets read failure must return Failed, not NotConfigured or null",
                 result is SyncProfileReadResult.Failed,
@@ -102,9 +101,9 @@ class CommitSyncProfileMigrationTest {
         runTest {
             val repo = createRepo("migration_contract_3")
             val store = storeOf(repo)
-            store.clear("migration-project-id")
-            store.commitGeneration("migration-project-id", 5L, "{\"enabled\":true}")
-            val state = store.readState("migration-project-id")
+            store.clear()
+            store.commitGeneration(5L, "{\"enabled\":true}")
+            val state = store.readState()
             assertEquals(5L, state.activeGeneration)
             assertEquals("{\"enabled\":true}", state.committedConfigJson)
             assertTrue(state.hasCommittedProfile)
@@ -115,13 +114,12 @@ class CommitSyncProfileMigrationTest {
         runTest {
             val repo = createRepo("migration_contract_4")
             val store = storeOf(repo)
-            store.clear("migration-project-id")
+            store.clear()
             store.commitGeneration(
-                "migration-project-id",
                 2L,
                 "{\"enabled\":true,\"remoteUrl\":\"https://example.com/r.git\"}",
             )
-            val result = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile("migration-project-id") }
+            val result = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile() }
             assertTrue(
                 "Result must be Failed (secrets read fails without native)",
                 result is SyncProfileReadResult.Failed,

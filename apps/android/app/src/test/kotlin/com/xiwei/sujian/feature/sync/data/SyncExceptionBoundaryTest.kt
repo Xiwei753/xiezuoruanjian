@@ -1,6 +1,5 @@
 package com.xiwei.sujian.feature.sync.data
 
-import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -9,7 +8,7 @@ import org.junit.Test
 /**
  * #592 三：同步异常边界分类契约测试。
  *
- * 验证 SyncCoordinator.runSync() 的异常分类规则：
+ * 验证 SyncCoordinator.runFullSync() 的异常分类规则：
  * - CancellationException → 原样抛出
  * - IOException → RetryableFailure(RecoverableError)
  * - RepositoryException → TerminalFailure(FatalError)
@@ -112,7 +111,22 @@ class SyncExceptionBoundaryTest {
         // #592 三：所有路径必须结束在明确终态
         val definiteOutcomes =
             listOf(
-                SyncOutcome.Completed(com.xiwei.sujian.feature.sync.data.model.SyncResult(status = SyncStatus.Success)),
+                SyncOutcome.Completed(
+                    com.xiwei.sujian.feature.sync.data.model.FullSyncResult(
+                        overallStatus = SyncStatus.Success,
+                        targets = emptyList(),
+                        totalUploaded = 0,
+                        totalDownloaded = 0,
+                        totalLocalDeletes = 0,
+                        totalRemoteDeletes = 0,
+                        totalOverwritten = 0,
+                        totalIgnored = 0,
+                        totalConflicts = 0,
+                        error = null,
+                        errorCategory = null,
+                        messageKey = null,
+                    ),
+                ),
                 SyncOutcome.Disabled,
                 SyncOutcome.Unconfigured,
                 SyncOutcome.RetryableFailure(SyncStatus.RecoverableError),

@@ -1,20 +1,17 @@
-//! 同步相关 FFI 函数 — 暴露同步配置、执行、诊断和冲突解决操作。
+//! 同步相关 FFI 函数 — 全量同步统一入口（Issue #630）。
+//!
+//! 一个全局 `SyncConfig` + 一份全局凭据。旧的"作品同步 + 应用数据同步"两套
+//! C ABI 已删除，新增 `writer_core_perform_full_sync` 等全量同步入口。
 //!
 //! ## 线程安全契约
 //!
 //! 所有函数通过 `with_core` 获取全局 `WriterCore` 单例的 `Mutex` 锁。
 //! 调用方不得在回调中再次调用任何 FFI 函数（非递归锁，会死锁）。
-//! NAPI 桥接层在主线程调用这些函数，同步引擎在后台线程通过命令队列通信，
-//! 不直接调用 FFI 函数。
 //!
 //! ## JSON 传递语义
 //!
-//! 所有复杂数据通过 JSON C string 传递，格式为 `ResultEnvelope`：
-//! - 成功：`{"success": true, "data": ...}`
-//! - 失败：`{"success": false, "errorCode": "...", "userMessage": "..."}`
-//!
+//! 所有复杂数据通过 JSON C string 传递，格式为 `ResultEnvelope`。
 //! 调用方必须用 `writer_core_free_string` 释放返回的 C string。
-//! 输入的 C string 由调用方拥有，Rust 侧只读取不释放。
 
 use std::os::raw::c_char;
 
@@ -23,18 +20,9 @@ use super::{c_str_to_rust, err_json, ok_json, with_core};
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-pub unsafe extern "C" fn writer_core_load_sync_config(project_id: *const c_char) -> *mut c_char {
-    let pid = match c_str_to_rust(project_id) {
-        Ok(s) => s,
-        Err(e) => {
-            return err_json(
-                "INVALID_ARGUMENT",
-                &format!("Invalid project_id: error {}", e),
-            )
-        }
-    };
+pub unsafe extern "C" fn writer_core_load_sync_config() -> *mut c_char {
     match with_core(|core| {
-        let config = core.load_sync_config(&pid).map_err(|e| format!("{}", e))?;
+        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "enabled": config.enabled,
             "provider": format!("{:?}", config.backend_type).to_lowercase(),
@@ -53,19 +41,7 @@ pub unsafe extern "C" fn writer_core_load_sync_config(project_id: *const c_char)
 /// `config_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-pub unsafe extern "C" fn writer_core_save_sync_config(
-    project_id: *const c_char,
-    config_json: *const c_char,
-) -> *mut c_char {
-    let pid = match c_str_to_rust(project_id) {
-        Ok(s) => s,
-        Err(e) => {
-            return err_json(
-                "INVALID_ARGUMENT",
-                &format!("Invalid project_id: error {}", e),
-            )
-        }
-    };
+pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char) -> *mut c_char {
     let json_str = match c_str_to_rust(config_json) {
         Ok(s) => s,
         Err(e) => {
@@ -76,7 +52,7 @@ pub unsafe extern "C" fn writer_core_save_sync_config(
         }
     };
     match with_core(|core| {
-        let mut config = core.load_sync_config(&pid).map_err(|e| format!("{}", e))?;
+        let mut config = core.load_sync_config().map_err(|e| format!("{}", e))?;
         let val: serde_json::Value =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
         if let Some(v) = val.get("enabled").and_then(|v| v.as_bool()) {
@@ -91,7 +67,7 @@ pub unsafe extern "C" fn writer_core_save_sync_config(
         if let Some(v) = val.get("autoSync").and_then(|v| v.as_bool()) {
             config.auto_sync = v;
         }
-        core.save_sync_config(&pid, &config)
+        core.save_sync_config(&config)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -100,24 +76,16 @@ pub unsafe extern "C" fn writer_core_save_sync_config(
     }
 }
 
+/// 全量同步 dry-run C ABI（Issue #630）。
+///
 /// # Safety
-/// `project_id` must be a valid null-terminated UTF-8 C string.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-pub unsafe extern "C" fn writer_core_sync_dry_run(project_id: *const c_char) -> *mut c_char {
-    let pid = match c_str_to_rust(project_id) {
-        Ok(s) => s,
-        Err(e) => {
-            return err_json(
-                "INVALID_ARGUMENT",
-                &format!("Invalid project_id: error {}", e),
-            )
-        }
-    };
+pub unsafe extern "C" fn writer_core_full_sync_dry_run() -> *mut c_char {
     match with_core(|core| {
-        let config = core.load_sync_config(&pid).map_err(|e| format!("{}", e))?;
+        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
         let plan = core
-            .perform_sync_dry_run(&pid, &config)
+            .perform_full_sync_dry_run(&config)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&plan).unwrap_or_default())
     }) {
@@ -126,23 +94,16 @@ pub unsafe extern "C" fn writer_core_sync_dry_run(project_id: *const c_char) -> 
     }
 }
 
+/// 全量同步诊断 C ABI（Issue #630）— 只测一次仓库、分支、token。
+///
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-pub unsafe extern "C" fn writer_core_sync_diagnostics(project_id: *const c_char) -> *mut c_char {
-    let pid = match c_str_to_rust(project_id) {
-        Ok(s) => s,
-        Err(e) => {
-            return err_json(
-                "INVALID_ARGUMENT",
-                &format!("Invalid project_id: error {}", e),
-            )
-        }
-    };
+pub unsafe extern "C" fn writer_core_full_sync_diagnostics() -> *mut c_char {
     match with_core(|core| {
-        let config = core.load_sync_config(&pid).map_err(|e| format!("{}", e))?;
+        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
         let diag = core
-            .perform_sync_diagnostics(&pid, &config)
+            .perform_full_sync_diagnostics(&config)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&diag).unwrap_or_default())
     }) {
@@ -151,24 +112,16 @@ pub unsafe extern "C" fn writer_core_sync_diagnostics(project_id: *const c_char)
     }
 }
 
+/// 全量同步 C ABI（Issue #630）— 先 App target，再所有 Project target。
+///
 /// # Safety
-/// `project_id` must be a valid null-terminated UTF-8 C string.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-pub unsafe extern "C" fn writer_core_perform_sync(project_id: *const c_char) -> *mut c_char {
-    let pid = match c_str_to_rust(project_id) {
-        Ok(s) => s,
-        Err(e) => {
-            return err_json(
-                "INVALID_ARGUMENT",
-                &format!("Invalid project_id: error {}", e),
-            )
-        }
-    };
+pub unsafe extern "C" fn writer_core_perform_full_sync() -> *mut c_char {
     match with_core(|core| {
-        let config = core.load_sync_config(&pid).map_err(|e| format!("{}", e))?;
+        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
         let result = core
-            .perform_sync(&pid, &config, false)
+            .perform_full_sync(&config, false)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&result).unwrap_or_default())
     }) {
@@ -177,122 +130,7 @@ pub unsafe extern "C" fn writer_core_perform_sync(project_id: *const c_char) -> 
     }
 }
 
-// ── 应用级同步 C ABI（Issue #600 评论 #3 问题四 / 评论 #4 问题三） ──
-// 同步根 = app_data_root，同步设置/全局星图/主题调色板。
-// 与作品级 C ABI 对称，但不接收 project_id — 应用级同步目标唯一。
-// Core Rust/UDL 层已有完整应用级同步 API，Android 通过 UniFFI(UDL) 接入；
-// 此 C ABI 导出供 Harmony(NAPI) 接入，消除平台契约偏差。
-
-/// # Safety
-/// Returns a caller-owned C string. Free with `writer_core_free_string`.
-#[no_mangle]
-pub unsafe extern "C" fn writer_core_load_app_sync_config() -> *mut c_char {
-    match with_core(|core| {
-        let config = core.load_app_sync_config().map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "enabled": config.enabled,
-            "provider": format!("{:?}", config.backend_type).to_lowercase(),
-            "remoteUrl": config.remote_url,
-            "branch": config.branch,
-            "autoSync": config.auto_sync,
-            "conflictStrategy": "manual"
-        }))
-    }) {
-        Ok(data) => ok_json(data),
-        Err(e) => err_json("SETTINGS_NOT_FOUND", &e),
-    }
-}
-
-/// # Safety
-/// `config_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
-/// Returns a caller-owned C string. Free with `writer_core_free_string`.
-#[no_mangle]
-pub unsafe extern "C" fn writer_core_save_app_sync_config(
-    config_json: *const c_char,
-) -> *mut c_char {
-    let json_str = match c_str_to_rust(config_json) {
-        Ok(s) => s,
-        Err(e) => {
-            return err_json(
-                "INVALID_ARGUMENT",
-                &format!("Invalid config_json: error {}", e),
-            )
-        }
-    };
-    match with_core(|core| {
-        let mut config = core.load_app_sync_config().map_err(|e| format!("{}", e))?;
-        let val: serde_json::Value =
-            serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
-        if let Some(v) = val.get("enabled").and_then(|v| v.as_bool()) {
-            config.enabled = v;
-        }
-        if let Some(v) = val.get("remoteUrl").and_then(|v| v.as_str()) {
-            config.remote_url = v.to_string();
-        }
-        if let Some(v) = val.get("branch").and_then(|v| v.as_str()) {
-            config.branch = v.to_string();
-        }
-        if let Some(v) = val.get("autoSync").and_then(|v| v.as_bool()) {
-            config.auto_sync = v;
-        }
-        core.save_app_sync_config(&config)
-            .map_err(|e| format!("{}", e))?;
-        Ok(true)
-    }) {
-        Ok(data) => ok_json(data),
-        Err(e) => err_json("SETTINGS_INVALID", &e),
-    }
-}
-
-/// # Safety
-/// Returns a caller-owned C string. Free with `writer_core_free_string`.
-#[no_mangle]
-pub unsafe extern "C" fn writer_core_app_sync_dry_run() -> *mut c_char {
-    match with_core(|core| {
-        let config = core.load_app_sync_config().map_err(|e| format!("{}", e))?;
-        let plan = core
-            .perform_app_sync_dry_run(&config)
-            .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::to_value(&plan).unwrap_or_default())
-    }) {
-        Ok(data) => ok_json(data),
-        Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
-    }
-}
-
-/// # Safety
-/// Returns a caller-owned C string. Free with `writer_core_free_string`.
-#[no_mangle]
-pub unsafe extern "C" fn writer_core_app_sync_diagnostics() -> *mut c_char {
-    match with_core(|core| {
-        let config = core.load_app_sync_config().map_err(|e| format!("{}", e))?;
-        let diag = core
-            .perform_app_sync_diagnostics(&config)
-            .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::to_value(&diag).unwrap_or_default())
-    }) {
-        Ok(data) => ok_json(data),
-        Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
-    }
-}
-
-/// # Safety
-/// Returns a caller-owned C string. Free with `writer_core_free_string`.
-#[no_mangle]
-pub unsafe extern "C" fn writer_core_perform_app_sync() -> *mut c_char {
-    match with_core(|core| {
-        let config = core.load_app_sync_config().map_err(|e| format!("{}", e))?;
-        let result = core
-            .perform_app_sync(&config, false)
-            .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::to_value(&result).unwrap_or_default())
-    }) {
-        Ok(data) => ok_json(data),
-        Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
-    }
-}
-
-/// 加载应用级同步状态。返回 JSON 形式的 `SyncState`。
+/// 加载 App target 同步状态。返回 JSON 形式的 `SyncState`。
 ///
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
@@ -307,7 +145,7 @@ pub unsafe extern "C" fn writer_core_load_app_sync_state() -> *mut c_char {
     }
 }
 
-/// 保存应用级同步状态。`state_json` 为 JSON 形式的 `SyncState`。
+/// 保存 App target 同步状态。`state_json` 为 JSON 形式的 `SyncState`。
 ///
 /// # Safety
 /// `state_json` must be a valid null-terminated UTF-8 C string containing valid JSON.

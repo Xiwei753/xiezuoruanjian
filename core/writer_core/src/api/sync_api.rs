@@ -1,52 +1,51 @@
 use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
 
-/// 同步 API — 跨平台同步配置、执行和冲突解决契约。
+/// 同步 API — 全量同步统一入口（Issue #630）。
 ///
-/// 同步配置（config）和密钥（secrets）分开存储：config 可同步，secrets 仅存本地。
-/// 冲突解决提供三种策略：保留本地、采用远端、标记已合并。
+/// 一个全局 `SyncConfig` + 一份全局凭据，`perform_full_sync` 内部按 `SyncTarget`
+/// 把不同本地根映射到同一个远端仓库的不同前缀。
+/// 旧的"作品同步 + 应用数据同步"两套用户配置 API 已删除。
 impl WriterCoreApi {
-    /// 加载同步配置（含 remote_url、backend_type、auto_sync 等）。
-    pub fn load_sync_config(&self, project_id: &str) -> ApiResult<SyncConfigDto> {
+    /// 加载全局同步配置。
+    pub fn load_sync_config(&self) -> ApiResult<SyncConfigDto> {
         self.core()
-            .load_sync_config(project_id)
+            .load_sync_config()
             .map(Into::into)
             .map_err(Into::into)
     }
 
-    /// 保存同步配置。成功返回 true。
-    pub fn save_sync_config(&self, project_id: &str, config: SyncConfigDto) -> ApiResult<bool> {
+    /// 保存全局同步配置。成功返回 true。
+    pub fn save_sync_config(&self, config: SyncConfigDto) -> ApiResult<bool> {
         self.core()
-            .save_sync_config(project_id, &config.into())
+            .save_sync_config(&config.into())
             .map(|_| true)
             .map_err(Into::into)
     }
 
-    /// 加载同步密钥（token 等）。密钥不同步到远端，仅存本地。
-    pub fn load_sync_secrets(&self, project_id: &str) -> ApiResult<SyncSecretsDto> {
+    /// 加载全局同步密钥（token 等）。
+    pub fn load_sync_secrets(&self) -> ApiResult<SyncSecretsDto> {
         self.core()
-            .load_sync_secrets(project_id)
+            .load_sync_secrets()
             .map(Into::into)
             .map_err(Into::into)
     }
 
-    /// 保存同步密钥。成功返回 true。
-    pub fn save_sync_secrets(&self, project_id: &str, secrets: SyncSecretsDto) -> ApiResult<bool> {
+    /// 保存全局同步密钥。成功返回 true。
+    pub fn save_sync_secrets(&self, secrets: SyncSecretsDto) -> ApiResult<bool> {
         self.core()
-            .save_sync_secrets(project_id, &secrets.into())
+            .save_sync_secrets(&secrets.into())
             .map(|_| true)
             .map_err(Into::into)
     }
 
-    /// #592 五：设置进程级 secrets override — 一次同步操作只使用同一份 snapshot 凭据。
+    /// #592 五：设置进程级 secrets override。
     pub fn set_sync_secrets_override(&self, secrets: SyncSecretsDto) -> ApiResult<()> {
         self.core().set_secrets_override(Some(secrets.into()));
         Ok(())
     }
 
-    /// #595 十：清除进程级 secrets override — 同步操作结束后调用，
-    /// 陈旧凭据不得泄漏到后续操作（refresh_secrets_override 在已有 override 时
-    /// 不会重新读取磁盘）。
+    /// #595 十：清除进程级 secrets override。
     pub fn clear_sync_secrets_override(&self) -> ApiResult<()> {
         self.core().set_secrets_override(None);
         Ok(())
@@ -55,12 +54,11 @@ impl WriterCoreApi {
     /// #592 五：按 generation 保存凭据到安全存储。
     pub fn save_sync_secrets_for_generation(
         &self,
-        project_id: &str,
         generation: u64,
         secrets: SyncSecretsDto,
     ) -> ApiResult<bool> {
         self.core()
-            .save_sync_secrets_for_generation(project_id, generation, &secrets.into())
+            .save_sync_secrets_for_generation(generation, &secrets.into())
             .map(|_| true)
             .map_err(Into::into)
     }
@@ -68,28 +66,22 @@ impl WriterCoreApi {
     /// #592 五：读取指定 generation 的安全存储凭据；缺失返回 None。
     pub fn load_sync_secrets_for_generation(
         &self,
-        project_id: &str,
         generation: u64,
     ) -> ApiResult<Option<SyncSecretsDto>> {
         self.core()
-            .load_sync_secrets_for_generation(project_id, generation)
+            .load_sync_secrets_for_generation(generation)
             .map(|opt| opt.map(Into::into))
             .map_err(Into::into)
     }
 
-    /// #595 五：删除指定 generation 的安全存储凭据（旧版本清理）。
-    pub fn delete_sync_secrets_for_generation(
-        &self,
-        project_id: &str,
-        generation: u64,
-    ) -> ApiResult<()> {
+    /// #595 五：删除指定 generation 的安全存储凭据。
+    pub fn delete_sync_secrets_for_generation(&self, generation: u64) -> ApiResult<()> {
         self.core()
-            .delete_sync_secrets_for_generation(project_id, generation)
+            .delete_sync_secrets_for_generation(generation)
             .map_err(Into::into)
     }
 
-    /// 加载同步状态（上次同步时间、远端 commit 等）。
-    /// sync state 存储在 project_root/sync/ 下，每个作品独立维护同步状态。
+    /// Project target 同步状态。
     pub fn load_sync_state(&self, project_id: &str) -> ApiResult<SyncStateDto> {
         self.core()
             .load_sync_state(project_id)
@@ -97,47 +89,56 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// 执行同步诊断——检查网络、认证、仓库、分支可达性。
-    pub fn perform_sync_diagnostics(
-        &self,
-        project_id: &str,
-        config: SyncConfigDto,
-    ) -> ApiResult<SyncDiagnosticsResultDto> {
+    /// App target 同步状态。
+    pub fn load_app_sync_state(&self) -> ApiResult<SyncStateDto> {
         self.core()
-            .perform_sync_diagnostics(project_id, &config.into())
+            .load_app_sync_state()
             .map(Into::into)
             .map_err(Into::into)
     }
 
-    /// 干运行——计算同步计划但不实际执行文件传输。
-    /// 每个作品目录是独立的 Git 仓库，sync 针对单个作品执行。
-    pub fn perform_sync_dry_run(
-        &self,
-        project_id: &str,
-        config: SyncConfigDto,
-    ) -> ApiResult<SyncPlanDto> {
+    /// 保存 App target 同步状态。
+    pub fn save_app_sync_state(&self, state: SyncStateDto) -> ApiResult<()> {
         self.core()
-            .perform_sync_dry_run(project_id, &config.into())
+            .save_app_sync_state(&state.into())
+            .map_err(Into::into)
+    }
+
+    /// 全量同步诊断 — 只测一次仓库、分支、token。
+    pub fn perform_full_sync_diagnostics(
+        &self,
+        config: SyncConfigDto,
+    ) -> ApiResult<FullSyncDiagnosticsResultDto> {
+        self.core()
+            .perform_full_sync_diagnostics(&config.into())
             .map(Into::into)
             .map_err(Into::into)
     }
 
-    /// 执行同步。`force_sync=true` 跳过部分安全检查（如脏仓库保护）。
-    /// 每个作品目录是独立的 Git 仓库，sync 针对单个作品执行。
-    pub fn perform_sync(
+    /// 全量同步 dry-run — 枚举 App target + 所有 Project target。
+    pub fn perform_full_sync_dry_run(
         &self,
-        project_id: &str,
+        config: SyncConfigDto,
+    ) -> ApiResult<FullSyncDryRunResultDto> {
+        self.core()
+            .perform_full_sync_dry_run(&config.into())
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+
+    /// 全量同步 — 先 App target，再所有 Project target，共享同一份 config / secrets。
+    pub fn perform_full_sync(
+        &self,
         config: SyncConfigDto,
         force_sync: bool,
-    ) -> ApiResult<SyncResultDto> {
+    ) -> ApiResult<FullSyncResultDto> {
         self.core()
-            .perform_sync(project_id, &config.into(), force_sync)
+            .perform_full_sync(&config.into(), force_sync)
             .map(Into::into)
             .map_err(Into::into)
     }
 
-    /// 冲突解决：保留本地版本，丢弃远端变更。
-    /// 冲突状态存储在 project_root/sync/ 下，需指定作品。
+    /// 冲突解决：保留本地版本。
     pub fn resolve_conflict_keep_local(&self, project_id: &str, path: &str) -> ApiResult<bool> {
         self.core()
             .resolve_conflict_keep_local(project_id, path)
@@ -145,8 +146,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// 冲突解决：采用远端版本，覆盖本地。
-    /// 冲突状态存储在 project_root/sync/ 下，需指定作品。
+    /// 冲突解决：采用远端版本。
     pub fn resolve_conflict_take_remote(&self, project_id: &str, path: &str) -> ApiResult<bool> {
         self.core()
             .resolve_conflict_take_remote(project_id, path)
@@ -154,8 +154,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// 冲突解决：标记为已合并（用户已手动处理）。
-    /// 冲突状态存储在 project_root/sync/ 下，需指定作品。
+    /// 冲突解决：标记为已合并。
     pub fn resolve_conflict_mark_merged(&self, project_id: &str, path: &str) -> ApiResult<bool> {
         self.core()
             .resolve_conflict_mark_merged(project_id, path)
@@ -163,12 +162,11 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// 检查同步能力——综合 config 和 secrets 判断是否可执行同步。
-    /// 返回 `can_run`、`block_reason_code`（如 "DISABLED"/"TOKEN_MISSING"）和 i18n key。
+    /// 检查同步能力——综合 config 和 secrets 判断是否可执行全量同步。
     #[allow(clippy::unwrap_used)]
-    pub fn get_sync_capability(&self, project_id: &str) -> ApiResult<SyncCapabilityDto> {
-        let config = self.load_sync_config(project_id)?;
-        let secrets = self.load_sync_secrets(project_id)?;
+    pub fn get_sync_capability(&self) -> ApiResult<SyncCapabilityDto> {
+        let config = self.load_sync_config()?;
+        let secrets = self.load_sync_secrets()?;
 
         let mut block_reason_code = None;
         let mut block_message_key = None;
@@ -200,106 +198,6 @@ impl WriterCoreApi {
             message_args,
         })
     }
-
-    // ── 应用级同步通道（Issue #600 评论 #3 问题四） ──
-
-    pub fn load_app_sync_config(&self) -> ApiResult<SyncConfigDto> {
-        self.core()
-            .load_app_sync_config()
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    pub fn save_app_sync_config(&self, config: SyncConfigDto) -> ApiResult<bool> {
-        self.core()
-            .save_app_sync_config(&config.into())
-            .map(|_| true)
-            .map_err(Into::into)
-    }
-
-    pub fn load_app_sync_secrets(&self) -> ApiResult<SyncSecretsDto> {
-        self.core()
-            .load_app_sync_secrets()
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    pub fn save_app_sync_secrets(&self, secrets: SyncSecretsDto) -> ApiResult<bool> {
-        self.core()
-            .save_app_sync_secrets(&secrets.into())
-            .map(|_| true)
-            .map_err(Into::into)
-    }
-
-    pub fn save_app_sync_secrets_for_generation(
-        &self,
-        generation: u64,
-        secrets: SyncSecretsDto,
-    ) -> ApiResult<bool> {
-        self.core()
-            .save_app_sync_secrets_for_generation(generation, &secrets.into())
-            .map(|_| true)
-            .map_err(Into::into)
-    }
-
-    pub fn load_app_sync_secrets_for_generation(
-        &self,
-        generation: u64,
-    ) -> ApiResult<Option<SyncSecretsDto>> {
-        self.core()
-            .load_app_sync_secrets_for_generation(generation)
-            .map(|opt| opt.map(Into::into))
-            .map_err(Into::into)
-    }
-
-    pub fn delete_app_sync_secrets_for_generation(&self, generation: u64) -> ApiResult<()> {
-        self.core()
-            .delete_app_sync_secrets_for_generation(generation)
-            .map_err(Into::into)
-    }
-
-    pub fn perform_app_sync_diagnostics(
-        &self,
-        config: SyncConfigDto,
-    ) -> ApiResult<SyncDiagnosticsResultDto> {
-        self.core()
-            .perform_app_sync_diagnostics(&config.into())
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    pub fn perform_app_sync_dry_run(&self, config: SyncConfigDto) -> ApiResult<SyncPlanDto> {
-        self.core()
-            .perform_app_sync_dry_run(&config.into())
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    pub fn perform_app_sync(
-        &self,
-        config: SyncConfigDto,
-        force_sync: bool,
-    ) -> ApiResult<SyncResultDto> {
-        self.core()
-            .perform_app_sync(&config.into(), force_sync)
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    /// 加载应用级同步状态。路径：`<app_data_root>/app-meta/sync/state.local.json`。
-    pub fn load_app_sync_state(&self) -> ApiResult<SyncStateDto> {
-        self.core()
-            .load_app_sync_state()
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    /// 保存应用级同步状态。路径：`<app_data_root>/app-meta/sync/state.local.json`。
-    pub fn save_app_sync_state(&self, state: SyncStateDto) -> ApiResult<()> {
-        self.core()
-            .save_app_sync_state(&state.into())
-            .map_err(Into::into)
-    }
 }
 
 #[cfg(test)]
@@ -308,25 +206,23 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn test_load_sync_secrets() {
+    fn test_load_sync_secrets_global() {
         let temp_dir = tempdir().unwrap();
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
         let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
-        let project = api.create_project("Secrets Test").unwrap();
-        let pid = &project.id;
 
         // Test loading when no secrets exist (should return default/empty struct)
-        let loaded_empty = api.load_sync_secrets(pid).unwrap();
+        let loaded_empty = api.load_sync_secrets().unwrap();
         assert_eq!(loaded_empty.token, None);
 
         // Save some dummy secrets
         let dummy_secrets = SyncSecretsDto {
             token: Some("ghp_dummy123".to_string()),
         };
-        api.save_sync_secrets(pid, dummy_secrets.clone()).unwrap();
+        api.save_sync_secrets(dummy_secrets.clone()).unwrap();
 
         // Test loading the saved secrets
-        let loaded_secrets = api.load_sync_secrets(pid).unwrap();
+        let loaded_secrets = api.load_sync_secrets().unwrap();
         assert_eq!(loaded_secrets.token, dummy_secrets.token);
     }
 
@@ -335,7 +231,6 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
         let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
-        let project = api.create_project("Config Test").unwrap();
 
         let config = SyncConfigDto {
             enabled: true,
@@ -350,7 +245,7 @@ mod tests {
             has_network_state_permission: true,
         };
 
-        let result = api.save_sync_config(&project.id, config);
+        let result = api.save_sync_config(config);
         assert!(result.unwrap());
     }
 }

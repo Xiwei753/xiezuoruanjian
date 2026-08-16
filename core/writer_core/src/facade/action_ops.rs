@@ -158,16 +158,7 @@ impl super::WriterCore {
                 }
             }
             "settings.sync.config.get" => {
-                let project_id =
-                    args.get("projectId")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            crate::Error::Io(std::io::Error::new(
-                                std::io::ErrorKind::InvalidInput,
-                                "Missing or invalid projectId parameter",
-                            ))
-                        })?;
-                let config = self.load_sync_config(project_id)?;
+                let config = self.load_sync_config()?;
                 Ok(ActionResult {
                     success: true,
                     message: None,
@@ -177,17 +168,8 @@ impl super::WriterCore {
                 })
             }
             "sync.diagnostics.run" => {
-                let project_id =
-                    args.get("projectId")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            crate::Error::Io(std::io::Error::new(
-                                std::io::ErrorKind::InvalidInput,
-                                "Missing or invalid projectId parameter",
-                            ))
-                        })?;
-                let config = self.load_sync_config(project_id)?;
-                let secrets = self.load_sync_secrets(project_id)?;
+                let config = self.load_sync_config()?;
+                let secrets = self.load_sync_secrets()?;
                 let mut diagnostics_config = config.clone();
                 diagnostics_config.enabled = true;
                 let token = secrets.token.clone().unwrap_or_default();
@@ -215,17 +197,8 @@ impl super::WriterCore {
                 }
             }
             "sync.plan.preview" => {
-                let project_id =
-                    args.get("projectId")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            crate::Error::Io(std::io::Error::new(
-                                std::io::ErrorKind::InvalidInput,
-                                "Missing or invalid projectId parameter",
-                            ))
-                        })?;
-                let config = self.load_sync_config(project_id)?;
-                let plan_result = self.perform_sync_dry_run(project_id, &config);
+                let config = self.load_sync_config()?;
+                let plan_result = self.perform_full_sync_dry_run(&config);
                 match plan_result {
                     Ok(plan) => Ok(ActionResult {
                         success: true,

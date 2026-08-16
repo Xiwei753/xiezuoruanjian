@@ -52,6 +52,7 @@ pub trait SyncBackend {
         sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        target: &crate::sync::types::SyncTarget,
         force_sync: bool,
     ) -> crate::Result<SyncResult>;
     fn push(
@@ -59,6 +60,7 @@ pub trait SyncBackend {
         sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        target: &crate::sync::types::SyncTarget,
         force_sync: bool,
     ) -> crate::Result<SyncResult>;
     fn sync(
@@ -66,6 +68,7 @@ pub trait SyncBackend {
         sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        target: &crate::sync::types::SyncTarget,
         force_sync: bool,
     ) -> crate::Result<SyncResult>;
 }
@@ -100,6 +103,7 @@ impl SyncBackend for UnavailableGitBackend {
         _sync_root: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
+        _target: &crate::sync::types::SyncTarget,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         Err(crate::Error::Other(
@@ -111,6 +115,7 @@ impl SyncBackend for UnavailableGitBackend {
         _sync_root: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
+        _target: &crate::sync::types::SyncTarget,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         Err(crate::Error::Other(
@@ -122,6 +127,7 @@ impl SyncBackend for UnavailableGitBackend {
         _sync_root: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
+        _target: &crate::sync::types::SyncTarget,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         Err(crate::Error::Other(
@@ -144,33 +150,36 @@ impl SyncBackend for GitSyncBackend {
         sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        target: &crate::sync::types::SyncTarget,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         use crate::sync::git_backend::Git2Backend;
         let backend = Git2Backend;
-        SyncService::perform_sync(sync_root, config, secrets, &backend)
+        SyncService::perform_sync(sync_root, config, secrets, target.scope, &backend)
     }
     fn push(
         &self,
         sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        target: &crate::sync::types::SyncTarget,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         use crate::sync::git_backend::Git2Backend;
         let backend = Git2Backend;
-        SyncService::perform_sync(sync_root, config, secrets, &backend)
+        SyncService::perform_sync(sync_root, config, secrets, target.scope, &backend)
     }
     fn sync(
         &self,
         sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        target: &crate::sync::types::SyncTarget,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         use crate::sync::git_backend::Git2Backend;
         let backend = Git2Backend;
-        SyncService::perform_sync(sync_root, config, secrets, &backend)
+        SyncService::perform_sync(sync_root, config, secrets, target.scope, &backend)
     }
 }
 
@@ -196,6 +205,7 @@ impl SyncBackend for UnavailableGithubApiBackend {
         _sync_root: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
+        _target: &crate::sync::types::SyncTarget,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         Err(crate::Error::Other(
@@ -207,6 +217,7 @@ impl SyncBackend for UnavailableGithubApiBackend {
         _sync_root: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
+        _target: &crate::sync::types::SyncTarget,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         Err(crate::Error::Other(
@@ -218,6 +229,7 @@ impl SyncBackend for UnavailableGithubApiBackend {
         _sync_root: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
+        _target: &crate::sync::types::SyncTarget,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         Err(crate::Error::Other(

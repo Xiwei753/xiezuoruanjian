@@ -334,12 +334,15 @@ pub(crate) fn perform_lww_sync(
     sync_root: &Path,
     config: &SyncConfig,
     secrets: &SyncSecrets,
+    target: &crate::sync::types::SyncTarget,
     force_sync: bool,
     transport: &dyn SyncTransport,
 ) -> crate::Result<SyncResult> {
+    let remote_prefix = &target.remote_prefix;
     log::debug!(
-        "[sync] backend_type=github_api sync_mode=lww_manifest entry=perform_lww_sync sync_root={}",
-        sync_root.display()
+        "[sync] backend_type=github_api sync_mode=lww_manifest entry=perform_lww_sync sync_root={} remote_prefix={}",
+        sync_root.display(),
+        remote_prefix
     );
     let mut result = SyncResult::success();
     result.status = SyncStatus::Idle;
@@ -415,6 +418,7 @@ pub(crate) fn perform_lww_sync(
             config,
             &token,
             &api_base,
+            target,
             transport,
             &mut state,
             &mut result,
@@ -483,11 +487,17 @@ fn execute_lww_sync_attempt(
     config: &SyncConfig,
     token: &str,
     api_base: &str,
+    target: &crate::sync::types::SyncTarget,
     transport: &dyn SyncTransport,
     state: &mut SyncState,
     result: &mut SyncResult,
 ) -> crate::Result<SyncResult> {
-    log::debug!("[sync] github_api step=正在拉取远端清单");
+    let remote_prefix = &target.remote_prefix;
+    let scope = target.scope;
+    log::debug!(
+        "[sync] github_api step=正在拉取远端清单 remote_prefix={}",
+        remote_prefix
+    );
     let tree_url = format!("{}/git/trees/{}?recursive=1", api_base, config.branch);
     let tree_request = HttpRequest {
         method: "GET".to_string(),
@@ -529,10 +539,14 @@ fn execute_lww_sync_attempt(
             });
         }
         if let Some(tree) = json["tree"].as_array() {
+            let prefix_with_slash = format!("{}/", remote_prefix);
             for item in tree {
                 if item["type"].as_str() == Some("blob") {
                     if let (Some(path), Some(sha)) = (item["path"].as_str(), item["sha"].as_str()) {
-                        remote_tree_files.insert(path.to_string(), sha.to_string());
+                        // 只保留以 remote_prefix/ 开头的远端路径，剥掉前缀后作为本地 relative path。
+                        if let Some(local_path) = path.strip_prefix(&prefix_with_slash) {
+                            remote_tree_files.insert(local_path.to_string(), sha.to_string());
+                        }
                     }
                 }
             }
@@ -628,6 +642,7 @@ fn execute_lww_sync_attempt(
         ));
     }
 
+    let remote_manifest_path = format!("{}/{}", remote_prefix, SYNC_MANIFEST_PATH);
     let mut remote_manifest = SyncManifest::default();
     if remote_tree_files.contains_key(SYNC_MANIFEST_PATH) {
         if let Some((content_bytes, _)) = github_get_content(
@@ -635,7 +650,7 @@ fn execute_lww_sync_attempt(
             api_base,
             token,
             &config.branch,
-            SYNC_MANIFEST_PATH,
+            &remote_manifest_path,
         )? {
             remote_manifest =
                 serde_json::from_slice::<SyncManifest>(&content_bytes).map_err(|e| {
@@ -650,7 +665,7 @@ fn execute_lww_sync_attempt(
     }
 
     log::debug!("[sync] github_api step=正在比较本地和远端");
-    let local_entries = scan_for_sync(sync_root, config.scope)?;
+    let local_entries = scan_for_sync(sync_root, scope)?;
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut local_records = std::collections::HashMap::new();
 
@@ -722,8 +737,8 @@ fn execute_lww_sync_attempt(
     // 否则使用当前时间。content_hash 为空，因为文件已不存在。
     for path in state.known_files.keys() {
         if !local_records.contains_key(path) {
-            if !SyncService::is_whitelisted_path(path, config.scope)
-                || SyncService::is_blacklisted_path(path, config.scope)
+            if !SyncService::is_whitelisted_path(path, scope)
+                || SyncService::is_blacklisted_path(path, scope)
             {
                 continue;
             }
@@ -762,8 +777,8 @@ fn execute_lww_sync_attempt(
     // device_id 设为 "remote" 以避免与本地 device_id 冲突。
     for (path, sha) in &remote_tree_files {
         if path != SYNC_MANIFEST_PATH && !remote_records.contains_key(path) {
-            if !SyncService::is_whitelisted_path(path, config.scope)
-                || SyncService::is_blacklisted_path(path, config.scope)
+            if !SyncService::is_whitelisted_path(path, scope)
+                || SyncService::is_blacklisted_path(path, scope)
             {
                 continue;
             }
@@ -813,8 +828,14 @@ fn execute_lww_sync_attempt(
             pending_paths
                 .par_iter()
                 .map(|path| {
-                    let remote =
-                        github_get_content(transport, api_base, token, &config.branch, path)?;
+                    let remote_path = format!("{}/{}", remote_prefix, path);
+                    let remote = github_get_content(
+                        transport,
+                        api_base,
+                        token,
+                        &config.branch,
+                        &remote_path,
+                    )?;
                     let Some((content, _sha)) = remote else {
                         return Ok((path.clone(), None));
                     };
@@ -984,12 +1005,13 @@ fn execute_lww_sync_attempt(
                             );
 
                             let conflict = if remote_rec.op == "upsert" {
+                                let remote_path = format!("{}/{}", remote_prefix, path);
                                 if let Some((remote_content, _)) = github_get_content(
                                     transport,
                                     api_base,
                                     token,
                                     &config.branch,
-                                    &path,
+                                    &remote_path,
                                 )? {
                                     let conflict_filename =
                                         save_conflict_copy(sync_root, &path, &remote_content)?;
@@ -1149,8 +1171,9 @@ fn execute_lww_sync_attempt(
         let download_pool = sync_download_pool(to_download.len())?;
         let download_result: crate::Result<()> = download_pool.install(|| {
             to_download.par_iter().try_for_each(|path| {
+                let remote_path = format!("{}/{}", remote_prefix, path);
                 let Some((content, _sha)) =
-                    github_get_content(transport, api_base, token, &config.branch, path)?
+                    github_get_content(transport, api_base, token, &config.branch, &remote_path)?
                 else {
                     return Err(crate::Error::SyncGithubApiError {
                         category: "api_error".to_string(),
@@ -1210,24 +1233,26 @@ fn execute_lww_sync_attempt(
         let content = std::fs::read(&full_path).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!("read {}: {}", path, e)))
         })?;
+        let remote_path = format!("{}/{}", remote_prefix, path);
         github_put_content_serial(
             transport,
             api_base,
             token,
             &config.branch,
-            path,
+            &remote_path,
             &content,
             remote_tree_files.get(path).cloned(),
         )?;
     }
 
     for path in &local_deletes_count {
+        let remote_path = format!("{}/{}", remote_prefix, path);
         github_delete_content_serial(
             transport,
             api_base,
             token,
             &config.branch,
-            path,
+            &remote_path,
             remote_tree_files.get(path).cloned(),
         )?;
     }
@@ -1237,7 +1262,7 @@ fn execute_lww_sync_attempt(
         api_base,
         token,
         &config.branch,
-        SYNC_MANIFEST_PATH,
+        &remote_manifest_path,
         manifest_json.as_bytes(),
         remote_tree_files.get(SYNC_MANIFEST_PATH).cloned(),
     )?;
@@ -1250,7 +1275,7 @@ fn execute_lww_sync_attempt(
     state.last_synced_commit = None;
     state.last_error = None;
 
-    let post_local_entries = scan_for_sync(sync_root, config.scope)?;
+    let post_local_entries = scan_for_sync(sync_root, scope)?;
 
     // ── 同步后重建 known_files ──
     // 同步完成后重新扫描本地文件，用当前文件哈希更新 known_files。

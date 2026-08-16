@@ -17,7 +17,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.component.SujianOutlinedButton
-import com.xiwei.sujian.core.designsystem.component.SujianSection
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.core.diagnostics.DiagnosticsExporter
@@ -43,7 +42,7 @@ fun DiagnosticsSettings(
         modifier = modifier.padding(dims.space16),
         verticalArrangement = Arrangement.spacedBy(dims.space16),
     ) {
-        SujianSection(title = stringResource(id = R.string.pref_category_diagnostics)) {
+        SettingsFieldGroup(title = stringResource(id = R.string.pref_category_diagnostics)) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_diagnostics_enabled),
                 checked = state.enabled,

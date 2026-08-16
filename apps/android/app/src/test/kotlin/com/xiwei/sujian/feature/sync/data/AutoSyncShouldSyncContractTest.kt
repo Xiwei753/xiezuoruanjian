@@ -11,7 +11,7 @@ import org.junit.Test
  * #600 评论 #3 问题三：AutoSyncWorker 遍历作品时用 shouldSync 决定哪些作品需要同步。
  *
  * 本测试固定 shouldSync 纯函数的契约 — AutoSyncWorker.doWork 对每个作品读取
- * snapshotSyncProfile(projectId) 后用 shouldSync(snapshot.config, snapshot.secrets)
+ * snapshotSyncProfile() 后用 shouldSync(snapshot.config, snapshot.secrets)
  * 判定是否跳过。不同作品的 config/secrets 互不干扰（per-project 隔离）。
  */
 class AutoSyncShouldSyncContractTest {

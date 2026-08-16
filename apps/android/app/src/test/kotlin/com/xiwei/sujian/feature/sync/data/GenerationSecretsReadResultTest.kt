@@ -38,7 +38,7 @@ class GenerationSecretsReadResultTest {
     @Test
     fun syncProfileReadResult_hasFoundNotConfiguredFailedSubtypes() {
         val snapshot =
-            ProjectSyncProfileSnapshot(
+            SyncProfileSnapshot(
                 1L,
                 com.xiwei.sujian.feature.sync.data.model.SyncConfig(),
                 com.xiwei.sujian.feature.sync.data.model.SyncSecrets(),
@@ -61,7 +61,7 @@ class GenerationSecretsReadResultTest {
     @Test
     fun syncProfileReadResult_Failed_carriesSyncFailureKind() {
         val snapshot =
-            ProjectSyncProfileSnapshot(
+            SyncProfileSnapshot(
                 1L,
                 com.xiwei.sujian.feature.sync.data.model.SyncConfig(),
                 com.xiwei.sujian.feature.sync.data.model.SyncSecrets(),

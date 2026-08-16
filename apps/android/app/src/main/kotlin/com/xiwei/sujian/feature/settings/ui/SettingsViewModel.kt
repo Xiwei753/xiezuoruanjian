@@ -115,21 +115,14 @@ class SettingsViewModel(
         uiState
             .map { state ->
                 SyncSectionState(
-                    projectSyncConfig = state.projectSyncConfig,
-                    projectSyncSecrets = state.projectSyncSecrets,
-                    projectSyncCapability = state.projectSyncCapability,
-                    projectSyncProfileLoadState = state.projectSyncProfileLoadState,
-                    projectDryRunState = state.projectDryRunState,
-                    projectTestConnectionState = state.projectTestConnectionState,
-                    projectPerformSyncState = state.projectPerformSyncState,
-                    projectSyncResult = state.projectSyncResult,
-                    appSyncConfig = state.appSyncConfig,
-                    appSyncSecrets = state.appSyncSecrets,
-                    appSyncProfileLoadState = state.appSyncProfileLoadState,
-                    appDryRunState = state.appDryRunState,
-                    appTestConnectionState = state.appTestConnectionState,
-                    appPerformSyncState = state.appPerformSyncState,
-                    appSyncResult = state.appSyncResult,
+                    syncConfig = state.syncConfig,
+                    syncSecrets = state.syncSecrets,
+                    syncCapability = state.syncCapability,
+                    syncProfileLoadState = state.syncProfileLoadState,
+                    dryRunState = state.dryRunState,
+                    testConnectionState = state.testConnectionState,
+                    performSyncState = state.performSyncState,
+                    syncResult = state.syncResult,
                     secureStorageWarning = state.secureStorageWarning,
                 )
             }
@@ -138,21 +131,14 @@ class SettingsViewModel(
                 viewModelScope,
                 SharingStarted.Eagerly,
                 SyncSectionState(
-                    _uiState.value.projectSyncConfig,
-                    _uiState.value.projectSyncSecrets,
-                    _uiState.value.projectSyncCapability,
-                    _uiState.value.projectSyncProfileLoadState,
-                    _uiState.value.projectDryRunState,
-                    _uiState.value.projectTestConnectionState,
-                    _uiState.value.projectPerformSyncState,
-                    _uiState.value.projectSyncResult,
-                    _uiState.value.appSyncConfig,
-                    _uiState.value.appSyncSecrets,
-                    _uiState.value.appSyncProfileLoadState,
-                    _uiState.value.appDryRunState,
-                    _uiState.value.appTestConnectionState,
-                    _uiState.value.appPerformSyncState,
-                    _uiState.value.appSyncResult,
+                    _uiState.value.syncConfig,
+                    _uiState.value.syncSecrets,
+                    _uiState.value.syncCapability,
+                    _uiState.value.syncProfileLoadState,
+                    _uiState.value.dryRunState,
+                    _uiState.value.testConnectionState,
+                    _uiState.value.performSyncState,
+                    _uiState.value.syncResult,
                     _uiState.value.secureStorageWarning,
                 ),
             )
@@ -240,24 +226,16 @@ class SettingsViewModel(
     internal var localRevision = 0L
     internal var fontSizeRevision = 0L
 
-    // 作品级同步 revision
-    internal var projectSyncConfigRevision = 0L
-    internal var projectSyncSecretsRevision = 0L
-
-    // 应用级同步 revision
-    internal var appSyncConfigRevision = 0L
-    internal var appSyncSecretsRevision = 0L
+    // 同步 revision（全量同步只有一份）
+    internal var syncConfigRevision = 0L
+    internal var syncSecretsRevision = 0L
 
     internal var localPersistedRevision = 0L
     internal var fontSizePersistedRevision = 0L
 
-    // 作品级同步 persisted revision
-    internal var projectSyncConfigPersistedRevision = 0L
-    internal var projectSyncSecretsPersistedRevision = 0L
-
-    // 应用级同步 persisted revision
-    internal var appSyncConfigPersistedRevision = 0L
-    internal var appSyncSecretsPersistedRevision = 0L
+    // 同步 persisted revision
+    internal var syncConfigPersistedRevision = 0L
+    internal var syncSecretsPersistedRevision = 0L
 
     internal var pendingCommands = PendingCommands()
 
@@ -265,13 +243,9 @@ class SettingsViewModel(
 
     internal fun hasUnsavedFontSize() = fontSizeRevision != fontSizePersistedRevision
 
-    internal fun hasUnsavedProjectSyncConfig() = projectSyncConfigRevision != projectSyncConfigPersistedRevision
+    internal fun hasUnsavedSyncConfig() = syncConfigRevision != syncConfigPersistedRevision
 
-    internal fun hasUnsavedProjectSyncSecrets() = projectSyncSecretsRevision != projectSyncSecretsPersistedRevision
-
-    internal fun hasUnsavedAppSyncConfig() = appSyncConfigRevision != appSyncConfigPersistedRevision
-
-    internal fun hasUnsavedAppSyncSecrets() = appSyncSecretsRevision != appSyncSecretsPersistedRevision
+    internal fun hasUnsavedSyncSecrets() = syncSecretsRevision != syncSecretsPersistedRevision
 
     init {
         loadInitial()
@@ -316,19 +290,21 @@ class SettingsViewModel(
                 is SettingsSaveCommand.Local -> {
                     // #617 评论三：合并连续本地设置时，后一个非主题设置不能盖掉
                     // 前一个已记录的主题变化 — affectsTheme 取并集。
+                    // #630 评论二：affectsEditor 同样取并集 — 后一个非编辑器设置不能盖掉
+                    // 前一个已记录的编辑器变化。
                     val affectsTheme =
                         command.affectsTheme || (pendingCommands.local?.affectsTheme == true)
-                    pendingCommands.copy(local = command.copy(affectsTheme = affectsTheme))
+                    val affectsEditor =
+                        command.affectsEditor || (pendingCommands.local?.affectsEditor == true)
+                    pendingCommands.copy(
+                        local = command.copy(affectsTheme = affectsTheme, affectsEditor = affectsEditor),
+                    )
                 }
                 is SettingsSaveCommand.FontSize -> pendingCommands.copy(fontSize = command)
-                is SettingsSaveCommand.ProjectSyncConfig ->
-                    pendingCommands.copy(projectSyncConfig = command)
-                is SettingsSaveCommand.ProjectSyncSecrets ->
-                    pendingCommands.copy(projectSyncSecrets = command)
-                is SettingsSaveCommand.AppSyncConfig ->
-                    pendingCommands.copy(appSyncConfig = command)
-                is SettingsSaveCommand.AppSyncSecrets ->
-                    pendingCommands.copy(appSyncSecrets = command)
+                is SettingsSaveCommand.SyncConfig ->
+                    pendingCommands.copy(syncConfig = command)
+                is SettingsSaveCommand.SyncSecrets ->
+                    pendingCommands.copy(syncSecrets = command)
             }
     }
 
@@ -357,18 +333,21 @@ class SettingsViewModel(
         when (intent) {
             is SettingsIntent.UpdateLocal -> updateLocalSettings(intent.transform(_uiState.value.settings))
             is SettingsIntent.UpdateFontSize -> updateFontSize(intent.fontSize)
-            is SettingsIntent.UpdateProjectSyncConfig -> updateProjectSyncConfig(intent.config)
-            is SettingsIntent.UpdateProjectSyncSecrets -> updateProjectSyncSecrets(intent.secrets)
-            is SettingsIntent.UpdateAppSyncConfig -> updateAppSyncConfig(intent.config)
-            is SettingsIntent.UpdateAppSyncSecrets -> updateAppSyncSecrets(intent.secrets)
+            is SettingsIntent.UpdateSyncConfig -> updateSyncConfig(intent.config)
+            is SettingsIntent.UpdateSyncSecrets -> updateSyncSecrets(intent.secrets)
             else -> handleActionIntent(intent)
         }
     }
 
     private fun updateLocalSettings(newSettings: LocalSettings) {
         // #617 评论三：保存前比较旧值，只有真正影响主题的字段变化才标记 affectsTheme。
+        // #630 评论二：同时标记 affectsEditor — 只有真正影响正文运行时的字段变化才通知
+        // 编辑器重读设置；自动保存/AI/诊断/全屏/主题颜色不再触发编辑器重载。
+        // previous==newSettings 时本就无需保存，直接早返回。
         val previous = _uiState.value.settings
+        if (newSettings == previous) return
         val affectsTheme = newSettings.hasDifferentThemeFrom(previous)
+        val affectsEditor = newSettings.hasDifferentEditorFrom(previous)
 
         _uiState.update { it.copy(settings = newSettings) }
         saveChannel.trySend(
@@ -377,6 +356,7 @@ class SettingsViewModel(
                     settings = newSettings,
                     revision = ++localRevision,
                     affectsTheme = affectsTheme,
+                    affectsEditor = affectsEditor,
                 ),
             ),
         )
@@ -396,3 +376,19 @@ internal fun LocalSettings.hasDifferentThemeFrom(other: LocalSettings): Boolean 
         dynamicColorEnabled != other.dynamicColorEnabled ||
         selectedBuiltinThemeId != other.selectedBuiltinThemeId ||
         selectedPaletteId != other.selectedPaletteId
+
+// #630 评论二：本地设置中真正影响正文运行时的字段集合 — 字号 fallback、行距、
+// 首行缩进开关/宽度、文字动画开关/时长、光标动画开关/时长、协同动画、Android 自渲染
+// 编辑器开关。自动保存、AI、诊断、沉浸式全屏、主题颜色变化都不算 editor change，
+// 不触发编辑器重读设置。提取为 internal 顶层函数便于单测正反验证。
+internal fun LocalSettings.hasDifferentEditorFrom(other: LocalSettings): Boolean =
+    editorFontSize != other.editorFontSize ||
+        editorLineSpacingMultiplier != other.editorLineSpacingMultiplier ||
+        autoIndentEnabled != other.autoIndentEnabled ||
+        autoIndentWidth != other.autoIndentWidth ||
+        editorTypingAnimationEnabled != other.editorTypingAnimationEnabled ||
+        editorTypingAnimationDurationMs != other.editorTypingAnimationDurationMs ||
+        editorSmoothCursorEnabled != other.editorSmoothCursorEnabled ||
+        editorSmoothCursorDurationMs != other.editorSmoothCursorDurationMs ||
+        editorCoordinatedTextCursorAnimationEnabled != other.editorCoordinatedTextCursorAnimationEnabled ||
+        useSelfRenderEditorOnAndroid != other.useSelfRenderEditorOnAndroid

@@ -1,7 +1,7 @@
 package com.xiwei.sujian.feature.sync.data
 
+import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
-import com.xiwei.sujian.feature.sync.data.model.SyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -27,7 +27,23 @@ class SyncOutcomeColorTest {
                 SyncStatus.BranchMissingRecovered,
             )
         statuses.forEach { status ->
-            val outcome = SyncOutcome.Completed(SyncResult(status = status))
+            val outcome =
+                SyncOutcome.Completed(
+                    FullSyncResult(
+                        overallStatus = status,
+                        targets = emptyList(),
+                        totalUploaded = 0,
+                        totalDownloaded = 0,
+                        totalLocalDeletes = 0,
+                        totalRemoteDeletes = 0,
+                        totalOverwritten = 0,
+                        totalIgnored = 0,
+                        totalConflicts = 0,
+                        error = null,
+                        errorCategory = null,
+                        messageKey = null,
+                    ),
+                )
             assertEquals("Expected Synced for $status", SyncIndicatorState.Synced, outcome.expectedIndicator())
         }
     }
@@ -76,7 +92,22 @@ class SyncOutcomeColorTest {
     fun autoSyncWorker_mappingContract() {
         val cases =
             listOf(
-                SyncOutcome.Completed(SyncResult(status = SyncStatus.Success)) to true,
+                SyncOutcome.Completed(
+                    FullSyncResult(
+                        overallStatus = SyncStatus.Success,
+                        targets = emptyList(),
+                        totalUploaded = 0,
+                        totalDownloaded = 0,
+                        totalLocalDeletes = 0,
+                        totalRemoteDeletes = 0,
+                        totalOverwritten = 0,
+                        totalIgnored = 0,
+                        totalConflicts = 0,
+                        error = null,
+                        errorCategory = null,
+                        messageKey = null,
+                    ),
+                ) to true,
                 SyncOutcome.Unconfigured to true,
                 SyncOutcome.Disabled to true,
                 SyncOutcome.Busy to false,

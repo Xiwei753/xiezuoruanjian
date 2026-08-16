@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.sync.data
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.starmap.data.interop.StarMapBridge
+import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncResult
 
 /**
@@ -51,6 +52,42 @@ class AppSyncDataBarrier(
         val downloaded = result.downloadedFiles
         val deleted = result.localDeletes + result.remoteDeletes
         val allChanged = downloaded + deleted
+        if (allChanged.any { it.startsWith("starmaps/") }) {
+            try {
+                invalidateStarmapCache()
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "invalidate starmap cache failed", e)
+            }
+        }
+        if (allChanged.any { it == "settings.sync.json" }) {
+            try {
+                reloadSettings()
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "reload settings failed", e)
+            }
+        }
+        if (allChanged.any { it.startsWith("themes/palettes/") }) {
+            try {
+                reloadThemes()
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "reload themes failed", e)
+            }
+        }
+    }
+
+    /**
+     * #630 评论 #1：全量同步成功后根据聚合结果失效对应缓存。
+     *
+     * 遍历所有 target 的下载/删除文件列表，按前缀触发对应缓存重载。
+     * 单个缓存重载失败不影响其他缓存。
+     */
+    suspend fun reloadAfterFullSync(result: FullSyncResult) {
+        val allChanged = mutableListOf<String>()
+        for (target in result.targets) {
+            allChanged += target.result.downloadedFiles
+            allChanged += target.result.localDeletes
+            allChanged += target.result.remoteDeletes
+        }
         if (allChanged.any { it.startsWith("starmaps/") }) {
             try {
                 invalidateStarmapCache()

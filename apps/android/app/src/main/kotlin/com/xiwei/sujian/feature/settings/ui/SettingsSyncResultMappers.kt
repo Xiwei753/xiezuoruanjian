@@ -24,100 +24,14 @@ internal fun ExclusiveResult<SyncCommandIoResult>.toIoResult(): SyncCommandIoRes
         is ExclusiveResult.Success -> value
     }
 
-/** 应用级 performAppSyncDryRun 的 UI 层类型化封装。 */
-internal fun com.xiwei.sujian.feature.sync.data.SyncDryRunOutcome.toAppIoResult(): SyncCommandIoResult =
-    when (this) {
-        is com.xiwei.sujian.feature.sync.data.SyncDryRunOutcome.Success -> {
-            val plan = plan
-            SyncCommandIoResult(
-                true,
-                true,
-                StructuredSyncResult(
-                    statusCode = "ok",
-                    messageKey = "sync_dry_run_result",
-                    counts =
-                        SyncCounts(
-                            uploaded = plan.filesToUpload.size,
-                            downloaded = plan.filesToDownload.size,
-                            deletedRemote = plan.filesToDeleteRemote.size,
-                            deletedLocal = plan.filesToDeleteLocal.size,
-                            conflicts = plan.conflicts.size,
-                            ignored = plan.ignoredFiles.size,
-                        ),
-                ),
-            )
-        }
-        is com.xiwei.sujian.feature.sync.data.SyncDryRunOutcome.Error ->
-            SyncCommandIoResult(
-                true,
-                true,
-                StructuredSyncResult(
-                    statusCode = SYNC_STATUS_ERROR,
-                    messageKey = syncFailureKind.messageKey(),
-                    sanitizedDiagnostic = message,
-                ),
-            )
-        com.xiwei.sujian.feature.sync.data.SyncDryRunOutcome.NotLoaded ->
-            SyncCommandIoResult(
-                true,
-                true,
-                StructuredSyncResult(
-                    statusCode = SYNC_STATUS_ERROR,
-                    messageKey = SyncFailureKind.NativeUnavailable.messageKey(),
-                    sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name,
-                ),
-            )
-    }
-
-/** 应用级 performAppSyncDiagnostics 成功分支的 UI 层封装 — 提取为独立 helper 降低认知复杂度。 */
-internal fun SyncDiagnosticsOutcome.Success.appDiagnosticsSuccessToAppIoResult(): SyncCommandIoResult {
-    val diag = result
-    return SyncCommandIoResult(
-        true,
-        true,
-        StructuredSyncResult(
-            statusCode = if (diag.success) "ok" else "fail",
-            messageKey = "sync_test_connection_result",
-            messageArgs =
-                mapOf(
-                    "network" to if (diag.networkOk) "ok" else "fail",
-                    "auth" to if (diag.authOk) "ok" else "fail",
-                    "repo" to if (diag.repoOk) "ok" else "fail",
-                    "branch" to if (diag.branchOk) "ok" else "fail",
-                ),
-            sanitizedDiagnostic = if (!diag.success) "connection_failed" else null,
-        ),
-    )
-}
-
-/** 应用级 performAppSyncDiagnostics 的 UI 层类型化封装。 */
-internal fun com.xiwei.sujian.feature.sync.data.SyncDiagnosticsOutcome.toAppIoResult(): SyncCommandIoResult =
-    when (this) {
-        is com.xiwei.sujian.feature.sync.data.SyncDiagnosticsOutcome.Success -> appDiagnosticsSuccessToAppIoResult()
-        is com.xiwei.sujian.feature.sync.data.SyncDiagnosticsOutcome.Error ->
-            SyncCommandIoResult(
-                true,
-                true,
-                StructuredSyncResult(
-                    statusCode = SYNC_STATUS_ERROR,
-                    messageKey = syncFailureKind.messageKey(),
-                    sanitizedDiagnostic = message,
-                ),
-            )
-        com.xiwei.sujian.feature.sync.data.SyncDiagnosticsOutcome.NotLoaded ->
-            SyncCommandIoResult(
-                true,
-                true,
-                StructuredSyncResult(
-                    statusCode = SYNC_STATUS_ERROR,
-                    messageKey = SyncFailureKind.NativeUnavailable.messageKey(),
-                    sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name,
-                ),
-            )
-    }
-
 // ── #597：结果映射 — 各同步结果类型 → SyncCommandIoResult（isSuccess 由 statusCode 决定）──
 
+/**
+ * #630 评论 #1：全量同步完成结果的 UI 层封装。
+ *
+ * SyncOutcome.Completed 现在持有 FullSyncResult（聚合所有 target 的结果），
+ * 用 totalUploaded / totalDownloaded 等聚合字段填充 SyncCounts。
+ */
 internal fun SyncOutcome.Completed.completedToIoResult(): SyncCommandIoResult {
     val sr = result
     return SyncCommandIoResult(
@@ -128,13 +42,13 @@ internal fun SyncOutcome.Completed.completedToIoResult(): SyncCommandIoResult {
             messageKey = "sync_perform_result",
             counts =
                 SyncCounts(
-                    uploaded = sr.uploadedFiles.size,
-                    downloaded = sr.downloadedFiles.size,
-                    deletedRemote = sr.remoteDeletes.size,
-                    deletedLocal = sr.localDeletes.size,
-                    conflicts = sr.conflicts.size,
-                    overwritten = sr.overwrittenFiles.size,
-                    ignored = sr.ignoredFiles.size,
+                    uploaded = sr.totalUploaded,
+                    downloaded = sr.totalDownloaded,
+                    deletedRemote = sr.totalRemoteDeletes,
+                    deletedLocal = sr.totalLocalDeletes,
+                    conflicts = sr.totalConflicts,
+                    overwritten = sr.totalOverwritten,
+                    ignored = sr.totalIgnored,
                 ),
             sanitizedDiagnostic = if (sr.error != null) "sync_failed" else null,
         ),
@@ -194,12 +108,12 @@ internal fun SyncDryRunOutcome.toIoResult(): SyncCommandIoResult =
                     messageKey = "sync_dry_run_result",
                     counts =
                         SyncCounts(
-                            uploaded = plan.filesToUpload.size,
-                            downloaded = plan.filesToDownload.size,
-                            deletedRemote = plan.filesToDeleteRemote.size,
-                            deletedLocal = plan.filesToDeleteLocal.size,
-                            conflicts = plan.conflicts.size,
-                            ignored = plan.ignoredFiles.size,
+                            uploaded = plan.totalToUpload,
+                            downloaded = plan.totalToDownload,
+                            deletedRemote = plan.totalToDeleteRemote,
+                            deletedLocal = plan.totalToDeleteLocal,
+                            conflicts = plan.totalConflicts,
+                            ignored = plan.totalIgnored,
                         ),
                 ),
             )
@@ -227,7 +141,7 @@ internal fun SyncDryRunOutcome.toIoResult(): SyncCommandIoResult =
     }
 
 internal fun SyncDiagnosticsOutcome.Success.diagnosticsSuccessToIoResult(): SyncCommandIoResult {
-    val diag = result
+    val diag = result.diagnostics
     return SyncCommandIoResult(
         true,
         true,

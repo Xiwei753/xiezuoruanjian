@@ -1,6 +1,5 @@
 package com.xiwei.sujian.feature.settings.ui
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,7 +21,6 @@ import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.component.SujianOutlinedButton
 import com.xiwei.sujian.core.designsystem.component.SujianSecretTextField
-import com.xiwei.sujian.core.designsystem.component.SujianSection
 import com.xiwei.sujian.core.designsystem.component.SujianSlider
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.designsystem.component.SujianTextField
@@ -30,13 +28,11 @@ import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 
 /**
- * #600 评论 #5：设置页同步区域拆成两组完全独立的 UI：
- * - 作品同步：编辑 [SettingsUiState.projectSyncConfig]/[SettingsUiState.projectSyncSecrets]，
- *   发送 [SettingsIntent.DryRun]/[SettingsIntent.TestConnection]/[SettingsIntent.PerformSync]。
- * - 应用数据同步：编辑 [SettingsUiState.appSyncConfig]/[SettingsUiState.appSyncSecrets]，
- *   发送 [SettingsIntent.AppDryRun]/[SettingsIntent.AppTestConnection]/[SettingsIntent.AppPerformSync]。
+ * #630 评论 #1+#2：设置页同步区域只有一份 — 全量同步覆盖设置/星图/主题/全部作品。
  *
- * 两组控件不共用任何状态字段，rememberSaveable 局部变量也各自独立。
+ * 编辑 [SettingsUiState.syncConfig]/[SettingsUiState.syncSecrets]，
+ * 发送 [SettingsIntent.DryRun]/[SettingsIntent.TestConnection]/[SettingsIntent.PerformSync]。
+ * 标题只出现一次（"同步"），supporting text 说明同步范围与 GitHub API 限制。
  */
 @Composable
 fun SyncSettings(
@@ -45,27 +41,9 @@ fun SyncSettings(
     modifier: Modifier = Modifier,
 ) {
     val dims = LocalSujianDimensions.current
-
-    androidx.compose.foundation.layout.Column(
-        modifier = modifier.padding(dims.space16),
-        verticalArrangement = Arrangement.spacedBy(dims.space16),
-    ) {
-        ProjectSyncSection(state, onIntent)
-        AppSyncSection(state, onIntent)
-    }
-}
-
-// ── 作品同步 ──
-
-@Composable
-private fun ProjectSyncSection(
-    state: SyncSectionState,
-    onIntent: (SettingsIntent) -> Unit,
-) {
-    val syncConfig = state.projectSyncConfig
-    val syncSecrets = state.projectSyncSecrets
-    val syncCapability = state.projectSyncCapability
-    val dims = LocalSujianDimensions.current
+    val syncConfig = state.syncConfig
+    val syncSecrets = state.syncSecrets
+    val syncCapability = state.syncCapability
 
     var remoteUrl by rememberSaveable { mutableStateOf(syncConfig.remoteUrl ?: "") }
     var branch by rememberSaveable { mutableStateOf(syncConfig.branch ?: "main") }
@@ -77,45 +55,49 @@ private fun ProjectSyncSection(
     LaunchedEffect(syncSecrets.token) { token = syncSecrets.token ?: "" }
     LaunchedEffect(syncConfig.syncIntervalSeconds) { syncInterval = (syncConfig.syncIntervalSeconds ?: 300).toFloat() }
 
-    // #595 四：同步 profile 读取失败（安全存储/原生库/配置损坏）→ 显示真实错误，
-    // 字段保留上一次已确认值，不再静默退化为默认空 token。
-    if (state.projectSyncProfileLoadState is SyncProfileLoadState.Failed) {
-        val failed = state.projectSyncProfileLoadState
-        SujianSection(title = stringResource(id = R.string.pref_category_sync)) {
+    SettingsSyncScope(title = stringResource(id = R.string.pref_category_sync)) {
+        // supporting text：同步范围 + GitHub API 提示
+        Text(
+            text = stringResource(id = R.string.sync_github_api_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = dims.space12),
+        )
+
+        // #595 四：同步 profile 读取失败 → 显示真实错误
+        if (state.syncProfileLoadState is SyncProfileLoadState.Failed) {
+            val failed = state.syncProfileLoadState
             Text(
                 text = resolveSyncFailureMessage(failed.kind.messageKey()),
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = dims.space8),
             )
         }
-    }
-    if (!syncCapability.canRun && syncCapability.blockReasonCode != null) {
-        val blockMessage = resolveBlockMessage(syncCapability.blockReasonCode, syncCapability.blockMessageKey)
-        SujianSection(title = stringResource(id = R.string.pref_category_sync)) {
+        if (!syncCapability.canRun && syncCapability.blockReasonCode != null) {
+            val blockMessage = resolveBlockMessage(syncCapability.blockReasonCode, syncCapability.blockMessageKey)
             Text(
                 text = blockMessage,
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = dims.space8),
             )
         }
-    }
-
-    if (state.secureStorageWarning != null) {
-        SujianSection(title = stringResource(id = R.string.pref_category_sync)) {
+        if (state.secureStorageWarning != null) {
             Text(
                 text = stringResource(id = R.string.sync_migration_warning),
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = dims.space8),
             )
         }
-    }
 
-    SujianSection(title = stringResource(id = R.string.pref_category_sync)) {
+        // 启用/自动同步
         SujianSwitchRow(
             title = stringResource(id = R.string.pref_enable_sync),
             checked = syncConfig.enabled ?: false,
             onCheckedChange = { checked ->
-                onIntent(SettingsIntent.UpdateProjectSyncConfig(syncConfig.copy(enabled = checked)))
+                onIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(enabled = checked)))
             },
         )
         Spacer(modifier = Modifier.height(dims.space8))
@@ -123,21 +105,21 @@ private fun ProjectSyncSection(
             title = stringResource(id = R.string.pref_auto_sync),
             checked = syncConfig.autoSync ?: false,
             onCheckedChange = { checked ->
-                onIntent(SettingsIntent.UpdateProjectSyncConfig(syncConfig.copy(autoSync = checked)))
+                onIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(autoSync = checked)))
             },
             enabled = syncConfig.enabled ?: false,
         )
-    }
+        Spacer(modifier = Modifier.height(dims.space16))
 
-    SujianSection(title = stringResource(id = R.string.pref_category_sync)) {
+        // GitHub 仓库/分支/Token/间隔
         SujianTextField(
             value = remoteUrl,
             onValueChange = {
                 remoteUrl = it
-                onIntent(SettingsIntent.UpdateProjectSyncConfig(syncConfig.copy(remoteUrl = it)))
+                onIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(remoteUrl = it)))
             },
             label = { Text(stringResource(id = R.string.pref_github_repo)) },
-            modifier = rememberFieldFocusModifier("project_remote_url") { remoteUrl },
+            modifier = rememberFieldFocusModifier("sync_remote_url") { remoteUrl },
             enabled = syncConfig.enabled ?: false,
         )
         Spacer(modifier = Modifier.height(dims.space8))
@@ -145,10 +127,10 @@ private fun ProjectSyncSection(
             value = branch,
             onValueChange = {
                 branch = it
-                onIntent(SettingsIntent.UpdateProjectSyncConfig(syncConfig.copy(branch = it)))
+                onIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(branch = it)))
             },
             label = { Text(stringResource(id = R.string.pref_branch)) },
-            modifier = rememberFieldFocusModifier("project_branch") { branch },
+            modifier = rememberFieldFocusModifier("sync_branch") { branch },
             enabled = syncConfig.enabled ?: false,
         )
         Spacer(modifier = Modifier.height(dims.space8))
@@ -156,10 +138,10 @@ private fun ProjectSyncSection(
             value = token,
             onValueChange = {
                 token = it
-                onIntent(SettingsIntent.UpdateProjectSyncSecrets(syncSecrets.copy(token = it.ifBlank { null })))
+                onIntent(SettingsIntent.UpdateSyncSecrets(syncSecrets.copy(token = it.ifBlank { null })))
             },
             label = { Text(stringResource(id = R.string.pref_https_token)) },
-            modifier = rememberFieldFocusModifier("project_token") { token },
+            modifier = rememberFieldFocusModifier("sync_token") { token },
             enabled = syncConfig.enabled ?: false,
         )
         Spacer(modifier = Modifier.height(dims.space16))
@@ -169,7 +151,7 @@ private fun ProjectSyncSection(
             onValueChange = { syncInterval = it },
             onValueChangeFinished = {
                 val seconds = syncInterval.toInt().coerceAtLeast(60)
-                onIntent(SettingsIntent.UpdateProjectSyncConfig(syncConfig.copy(syncIntervalSeconds = seconds)))
+                onIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(syncIntervalSeconds = seconds)))
             },
             valueRange = 60f..3600f,
             steps = 5,
@@ -179,19 +161,19 @@ private fun ProjectSyncSection(
             },
             enabled = syncConfig.enabled ?: false,
         )
-    }
 
-    if (syncConfig.enabled == true) {
-        val anySyncRunning =
-            state.projectDryRunState == SyncCommandState.RUNNING ||
-                state.projectTestConnectionState == SyncCommandState.RUNNING ||
-                state.projectPerformSyncState == SyncCommandState.RUNNING
-        SujianSection(title = stringResource(id = R.string.pref_category_sync)) {
+        // 检查/测试/立即同步
+        if (syncConfig.enabled == true) {
+            val anySyncRunning =
+                state.dryRunState == SyncCommandState.RUNNING ||
+                    state.testConnectionState == SyncCommandState.RUNNING ||
+                    state.performSyncState == SyncCommandState.RUNNING
+            Spacer(modifier = Modifier.height(dims.space16))
             SujianOutlinedButton(
                 text = stringResource(id = R.string.btn_dry_run),
                 onClick = { onIntent(SettingsIntent.DryRun) },
                 modifier = Modifier.fillMaxWidth(),
-                loading = state.projectDryRunState == SyncCommandState.RUNNING,
+                loading = state.dryRunState == SyncCommandState.RUNNING,
                 enabled = syncCapability.canRun && !anySyncRunning,
             )
             Spacer(modifier = Modifier.height(dims.space8))
@@ -199,7 +181,7 @@ private fun ProjectSyncSection(
                 text = stringResource(id = R.string.btn_test_connection),
                 onClick = { onIntent(SettingsIntent.TestConnection) },
                 modifier = Modifier.fillMaxWidth(),
-                loading = state.projectTestConnectionState == SyncCommandState.RUNNING,
+                loading = state.testConnectionState == SyncCommandState.RUNNING,
                 enabled = syncCapability.canRun && !anySyncRunning,
             )
             Spacer(modifier = Modifier.height(dims.space8))
@@ -207,162 +189,11 @@ private fun ProjectSyncSection(
                 text = stringResource(id = R.string.btn_perform_sync),
                 onClick = { onIntent(SettingsIntent.PerformSync) },
                 modifier = Modifier.fillMaxWidth(),
-                loading = state.projectPerformSyncState == SyncCommandState.RUNNING,
+                loading = state.performSyncState == SyncCommandState.RUNNING,
                 enabled = syncCapability.canRun && !anySyncRunning,
             )
 
-            val structured = state.projectSyncResult
-            if (structured != null) {
-                Spacer(modifier = Modifier.height(dims.space8))
-                val isSuccess = structured.statusCode == "ok"
-                val displayResult = resolveStructuredResult(structured)
-                Text(
-                    text = displayResult,
-                    color = if (isSuccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-        }
-    }
-}
-
-// ── 应用数据同步（#600 评论 #5） ──
-
-@Composable
-private fun AppSyncSection(
-    state: SyncSectionState,
-    onIntent: (SettingsIntent) -> Unit,
-) {
-    val syncConfig = state.appSyncConfig
-    val syncSecrets = state.appSyncSecrets
-    val dims = LocalSujianDimensions.current
-
-    var remoteUrl by rememberSaveable { mutableStateOf(syncConfig.remoteUrl ?: "") }
-    var branch by rememberSaveable { mutableStateOf(syncConfig.branch ?: "main") }
-    var token by rememberSaveable { mutableStateOf(syncSecrets.token ?: "") }
-    var syncInterval by rememberSaveable { mutableFloatStateOf((syncConfig.syncIntervalSeconds ?: 300).toFloat()) }
-
-    LaunchedEffect(syncConfig.remoteUrl) { remoteUrl = syncConfig.remoteUrl ?: "" }
-    LaunchedEffect(syncConfig.branch) { branch = syncConfig.branch ?: "main" }
-    LaunchedEffect(syncSecrets.token) { token = syncSecrets.token ?: "" }
-    LaunchedEffect(syncConfig.syncIntervalSeconds) { syncInterval = (syncConfig.syncIntervalSeconds ?: 300).toFloat() }
-
-    // 应用级 profile 读取失败 → 显示真实错误。
-    if (state.appSyncProfileLoadState is SyncProfileLoadState.Failed) {
-        val failed = state.appSyncProfileLoadState
-        SujianSection(title = stringResource(id = R.string.pref_category_app_sync)) {
-            Text(
-                text = resolveSyncFailureMessage(failed.kind.messageKey()),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-
-    SujianSection(title = stringResource(id = R.string.pref_category_app_sync)) {
-        SujianSwitchRow(
-            title = stringResource(id = R.string.pref_enable_sync),
-            checked = syncConfig.enabled ?: false,
-            onCheckedChange = { checked ->
-                onIntent(SettingsIntent.UpdateAppSyncConfig(syncConfig.copy(enabled = checked)))
-            },
-        )
-        Spacer(modifier = Modifier.height(dims.space8))
-        SujianSwitchRow(
-            title = stringResource(id = R.string.pref_auto_sync),
-            checked = syncConfig.autoSync ?: false,
-            onCheckedChange = { checked ->
-                onIntent(SettingsIntent.UpdateAppSyncConfig(syncConfig.copy(autoSync = checked)))
-            },
-            enabled = syncConfig.enabled ?: false,
-        )
-    }
-
-    SujianSection(title = stringResource(id = R.string.pref_category_app_sync)) {
-        SujianTextField(
-            value = remoteUrl,
-            onValueChange = {
-                remoteUrl = it
-                onIntent(SettingsIntent.UpdateAppSyncConfig(syncConfig.copy(remoteUrl = it)))
-            },
-            label = { Text(stringResource(id = R.string.pref_github_repo)) },
-            modifier = rememberFieldFocusModifier("app_remote_url") { remoteUrl },
-            enabled = syncConfig.enabled ?: false,
-        )
-        Spacer(modifier = Modifier.height(dims.space8))
-        SujianTextField(
-            value = branch,
-            onValueChange = {
-                branch = it
-                onIntent(SettingsIntent.UpdateAppSyncConfig(syncConfig.copy(branch = it)))
-            },
-            label = { Text(stringResource(id = R.string.pref_branch)) },
-            modifier = rememberFieldFocusModifier("app_branch") { branch },
-            enabled = syncConfig.enabled ?: false,
-        )
-        Spacer(modifier = Modifier.height(dims.space8))
-        SujianSecretTextField(
-            value = token,
-            onValueChange = {
-                token = it
-                onIntent(SettingsIntent.UpdateAppSyncSecrets(syncSecrets.copy(token = it.ifBlank { null })))
-            },
-            label = { Text(stringResource(id = R.string.pref_https_token)) },
-            modifier = rememberFieldFocusModifier("app_token") { token },
-            enabled = syncConfig.enabled ?: false,
-        )
-        Spacer(modifier = Modifier.height(dims.space16))
-        SujianSlider(
-            title = stringResource(id = R.string.pref_sync_interval),
-            value = syncInterval,
-            onValueChange = { syncInterval = it },
-            onValueChangeFinished = {
-                val seconds = syncInterval.toInt().coerceAtLeast(60)
-                onIntent(SettingsIntent.UpdateAppSyncConfig(syncConfig.copy(syncIntervalSeconds = seconds)))
-            },
-            valueRange = 60f..3600f,
-            steps = 5,
-            valueFormatter = { v ->
-                val minutes = (v / 60).toInt()
-                if (minutes >= 1) "${minutes}min" else "${v.toInt()}s"
-            },
-            enabled = syncConfig.enabled ?: false,
-        )
-    }
-
-    if (syncConfig.enabled == true) {
-        val anySyncRunning =
-            state.appDryRunState == SyncCommandState.RUNNING ||
-                state.appTestConnectionState == SyncCommandState.RUNNING ||
-                state.appPerformSyncState == SyncCommandState.RUNNING
-        // 应用级不需要 capability 检查：enabled + remoteUrl 非空即可操作。
-        val canAct = (syncConfig.remoteUrl ?: "").isNotEmpty()
-        SujianSection(title = stringResource(id = R.string.pref_category_app_sync)) {
-            SujianOutlinedButton(
-                text = stringResource(id = R.string.btn_dry_run),
-                onClick = { onIntent(SettingsIntent.AppDryRun) },
-                modifier = Modifier.fillMaxWidth(),
-                loading = state.appDryRunState == SyncCommandState.RUNNING,
-                enabled = canAct && !anySyncRunning,
-            )
-            Spacer(modifier = Modifier.height(dims.space8))
-            SujianOutlinedButton(
-                text = stringResource(id = R.string.btn_test_connection),
-                onClick = { onIntent(SettingsIntent.AppTestConnection) },
-                modifier = Modifier.fillMaxWidth(),
-                loading = state.appTestConnectionState == SyncCommandState.RUNNING,
-                enabled = canAct && !anySyncRunning,
-            )
-            Spacer(modifier = Modifier.height(dims.space8))
-            SujianOutlinedButton(
-                text = stringResource(id = R.string.btn_perform_sync),
-                onClick = { onIntent(SettingsIntent.AppPerformSync) },
-                modifier = Modifier.fillMaxWidth(),
-                loading = state.appPerformSyncState == SyncCommandState.RUNNING,
-                enabled = canAct && !anySyncRunning,
-            )
-
-            val structured = state.appSyncResult
+            val structured = state.syncResult
             if (structured != null) {
                 Spacer(modifier = Modifier.height(dims.space8))
                 val isSuccess = structured.statusCode == "ok"

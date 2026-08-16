@@ -24,7 +24,7 @@ class LegacySecretsTypedReadTest {
 
     @Test
     fun nativeUnavailable_isFailedNotNotConfigured() {
-        val result = createRepo().loadLegacySyncSecretsTyped("legacy-test-project")
+        val result = createRepo().loadLegacySyncSecretsTyped()
         assertTrue(
             "原生库未加载必须返回 Failed(NativeUnavailable)，不得伪装成 NotConfigured，实际: $result",
             result is GenerationSecretsReadResult.Failed &&
@@ -37,7 +37,7 @@ class LegacySecretsTypedReadTest {
         val result =
             kotlinx.coroutines.runBlocking {
                 SyncProfileGate.snapshotExclusive {
-                    createRepo().snapshotSyncProfile("legacy-test-project")
+                    createRepo().snapshotSyncProfile()
                 }
             }
         assertTrue(

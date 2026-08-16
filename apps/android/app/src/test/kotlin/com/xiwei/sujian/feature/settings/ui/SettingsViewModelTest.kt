@@ -41,19 +41,19 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `handleIntent UpdateProjectSyncConfig updates uiState projectSyncConfig`() {
+    fun `handleIntent UpdateSyncConfig updates uiState syncConfig`() {
         val vm = createVm()
         val config = com.xiwei.sujian.feature.sync.data.model.SyncConfig(autoSync = true)
-        vm.handleIntent(SettingsIntent.UpdateProjectSyncConfig(config))
-        assertEquals(true, vm.uiState.value.projectSyncConfig.autoSync)
+        vm.handleIntent(SettingsIntent.UpdateSyncConfig(config))
+        assertEquals(true, vm.uiState.value.syncConfig.autoSync)
     }
 
     @Test
-    fun `handleIntent UpdateProjectSyncSecrets updates uiState projectSyncSecrets`() {
+    fun `handleIntent UpdateSyncSecrets updates uiState syncSecrets`() {
         val vm = createVm()
         val secrets = com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "test-token")
-        vm.handleIntent(SettingsIntent.UpdateProjectSyncSecrets(secrets))
-        assertEquals("test-token", vm.uiState.value.projectSyncSecrets.token)
+        vm.handleIntent(SettingsIntent.UpdateSyncSecrets(secrets))
+        assertEquals("test-token", vm.uiState.value.syncSecrets.token)
     }
 
     @Test
@@ -89,7 +89,7 @@ class SettingsViewModelTest {
         vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(experimentalFullscreenMode = true) })
         vm.handleIntent(SettingsIntent.UpdateFontSize(20f))
         vm.handleIntent(
-            SettingsIntent.UpdateProjectSyncConfig(
+            SettingsIntent.UpdateSyncConfig(
                 com.xiwei.sujian.feature.sync.data.model.SyncConfig(enabled = true),
             ),
         )
@@ -100,7 +100,7 @@ class SettingsViewModelTest {
         // 各分类 state 立即反映对应字段的新值。
         assertTrue(laboratoryValues.last().immersiveFullscreen)
         assertEquals(20f, appearanceValues.last().fontSize, 0.01f)
-        assertTrue(syncValues.last().projectSyncConfig.enabled == true)
+        assertTrue(syncValues.last().syncConfig.enabled == true)
         // 无关字段不受影响：外观主题模式仍是默认 system。
         assertEquals("system", appearanceValues.last().appearanceMode)
         scope.cancel()
@@ -192,17 +192,17 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `SettingsSaveCommand ProjectSyncConfig carries config and revision`() {
+    fun `SettingsSaveCommand SyncConfig carries config and revision`() {
         val config = com.xiwei.sujian.feature.sync.data.model.SyncConfig(autoSync = true)
-        val cmd = SettingsSaveCommand.ProjectSyncConfig(config, 3L)
+        val cmd = SettingsSaveCommand.SyncConfig(config, 3L)
         assertEquals(true, cmd.config.autoSync)
         assertEquals(3L, cmd.revision)
     }
 
     @Test
-    fun `SettingsSaveCommand ProjectSyncSecrets carries secrets and revision`() {
+    fun `SettingsSaveCommand SyncSecrets carries secrets and revision`() {
         val secrets = com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "secret")
-        val cmd = SettingsSaveCommand.ProjectSyncSecrets(secrets, 4L)
+        val cmd = SettingsSaveCommand.SyncSecrets(secrets, 4L)
         assertEquals("secret", cmd.secrets.token)
         assertEquals(4L, cmd.revision)
     }
@@ -216,15 +216,15 @@ class SettingsViewModelTest {
                 autoSync = false,
                 remoteUrl = "https://unit.example/repo.git",
             )
-        vm.handleIntent(SettingsIntent.UpdateProjectSyncConfig(config))
+        vm.handleIntent(SettingsIntent.UpdateSyncConfig(config))
         // 保存并同步必须走 SaveAndRunSync 串行事务（保存队列屏障），并结束在明确终态：
         // 未配置 → 失败；不允许绕过保存队列或停留在 RUNNING/IDLE（#592）。
         vm.handleIntent(SettingsIntent.PerformSync)
         awaitUntil(
-            predicate = { vm.uiState.value.projectPerformSyncState == SyncCommandState.FAILURE },
+            predicate = { vm.uiState.value.performSyncState == SyncCommandState.FAILURE },
             message = "PerformSync must end in terminal FAILURE state via SaveAndRunSync transaction",
         )
-        assertEquals(SyncCommandState.FAILURE, vm.uiState.value.projectPerformSyncState)
+        assertEquals(SyncCommandState.FAILURE, vm.uiState.value.performSyncState)
     }
 
     @Test
@@ -234,16 +234,16 @@ class SettingsViewModelTest {
         // #595 四：设置页必须显示 Failed（真实错误），不得通过 toConfigSecretsOrNull()
         // 把失败静默转成默认空 token（那会伪装成“尚未配置”）。
         awaitUntil(
-            predicate = { vm.uiState.value.projectSyncProfileLoadState !is SyncProfileLoadState.Loading },
+            predicate = { vm.uiState.value.syncProfileLoadState !is SyncProfileLoadState.Loading },
             message = "initial sync profile load must settle",
         )
         assertTrue(
-            "读取失败必须显示为 SyncProfileLoadState.Failed，实际: ${vm.uiState.value.projectSyncProfileLoadState}",
-            vm.uiState.value.projectSyncProfileLoadState is SyncProfileLoadState.Failed,
+            "读取失败必须显示为 SyncProfileLoadState.Failed，实际: ${vm.uiState.value.syncProfileLoadState}",
+            vm.uiState.value.syncProfileLoadState is SyncProfileLoadState.Failed,
         )
         assertTrue(
             "Failed 不是 Unconfigured",
-            vm.uiState.value.projectSyncProfileLoadState !is SyncProfileLoadState.Unconfigured,
+            vm.uiState.value.syncProfileLoadState !is SyncProfileLoadState.Unconfigured,
         )
         // 失败时字段保留已确认值（初始默认），不因失败清空。
         assertEquals(16f, vm.uiState.value.fontSize, 0.01f)

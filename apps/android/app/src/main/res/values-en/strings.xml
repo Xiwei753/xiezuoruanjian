@@ -49,7 +49,8 @@
 
 
     <!-- Sync Settings -->
-    <string name="pref_category_sync">Sync Settings (GitHub API upload only)</string>
+    <string name="pref_category_sync">Sync</string>
+    <string name="sync_github_api_hint">Syncs settings, starmaps, themes and all projects. Currently supports GitHub API upload only.</string>
     <string name="pref_category_app_sync">App Data Sync</string>
     <string name="pref_category_ai">AI</string>
     <string name="pref_ai_enabled">Enable AI</string>

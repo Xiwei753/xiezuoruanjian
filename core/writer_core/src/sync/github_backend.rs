@@ -246,9 +246,10 @@ impl SyncBackend for GitHubApiBackend {
         sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        target: &crate::sync::types::SyncTarget,
         force_sync: bool,
     ) -> crate::Result<SyncResult> {
-        self.sync(sync_root, config, secrets, force_sync)
+        self.sync(sync_root, config, secrets, target, force_sync)
     }
 
     fn push(
@@ -256,9 +257,10 @@ impl SyncBackend for GitHubApiBackend {
         sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        target: &crate::sync::types::SyncTarget,
         force_sync: bool,
     ) -> crate::Result<SyncResult> {
-        self.sync(sync_root, config, secrets, force_sync)
+        self.sync(sync_root, config, secrets, target, force_sync)
     }
 
     fn sync(
@@ -266,17 +268,19 @@ impl SyncBackend for GitHubApiBackend {
         sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        target: &crate::sync::types::SyncTarget,
         force_sync: bool,
     ) -> crate::Result<SyncResult> {
         log::debug!(
-            "[sync] backend_type=github_api sync_mode=lww_manifest force_sync={} entry=GitHubApiBackend::sync remote_url={}",
+            "[sync] backend_type=github_api sync_mode=lww_manifest force_sync={} entry=GitHubApiBackend::sync remote_url={} remote_prefix={}",
             force_sync,
-            mask_token_in_url(&sanitize_remote_url(&config.remote_url).sanitized_url)
+            mask_token_in_url(&sanitize_remote_url(&config.remote_url).sanitized_url),
+            target.remote_prefix
         );
         let transport = self.ensure_transport()?;
         // SAFETY: AssertUnwindSafe needed for catch_unwind at sync boundary; the closure only calls perform_lww_sync with borrowed data; on panic, the error is caught and returned as a SyncResult::Error.
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            SyncService::perform_lww_sync(sync_root, config, secrets, force_sync, transport)
+            SyncService::perform_lww_sync(sync_root, config, secrets, target, force_sync, transport)
         })) {
             Ok(result) => result,
             Err(err) => {

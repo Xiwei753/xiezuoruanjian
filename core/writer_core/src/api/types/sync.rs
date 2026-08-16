@@ -68,7 +68,6 @@ impl From<SyncConfigDto> for crate::sync::SyncConfig {
             username: c.username,
             has_network_state_permission: c.has_network_state_permission,
             has_network_permission: c.has_network_permission,
-            scope: crate::sync::SyncScope::default(),
         }
     }
 }
@@ -380,4 +379,120 @@ fn first_sync_mode_to_wire(mode: &crate::sync::FirstSyncMode) -> String {
         crate::sync::FirstSyncMode::UnrelatedHistories => "unrelated_histories",
     }
     .to_string()
+}
+
+/// 单个 target 的同步结果 DTO。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct TargetSyncResultDto {
+    pub target_kind: String,
+    pub project_id: Option<String>,
+    pub remote_prefix: String,
+    pub result: SyncResultDto,
+}
+
+/// 单个 target 的 dry-run 计划 DTO。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct TargetSyncPlanDto {
+    pub target_kind: String,
+    pub project_id: Option<String>,
+    pub remote_prefix: String,
+    pub plan: SyncPlanDto,
+}
+
+/// 全量同步聚合结果 DTO（Issue #630）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct FullSyncResultDto {
+    pub overall_status: String,
+    pub targets: Vec<TargetSyncResultDto>,
+    pub total_uploaded: u32,
+    pub total_downloaded: u32,
+    pub total_local_deletes: u32,
+    pub total_remote_deletes: u32,
+    pub total_overwritten: u32,
+    pub total_ignored: u32,
+    pub total_conflicts: u32,
+    pub error: Option<String>,
+    pub error_category: Option<String>,
+    pub message_key: Option<String>,
+}
+
+impl From<crate::sync::types::FullSyncResult> for FullSyncResultDto {
+    fn from(r: crate::sync::types::FullSyncResult) -> Self {
+        Self {
+            overall_status: sync_status_to_wire(&r.overall_status),
+            targets: r.targets.into_iter().map(Into::into).collect(),
+            total_uploaded: r.total_uploaded,
+            total_downloaded: r.total_downloaded,
+            total_local_deletes: r.total_local_deletes,
+            total_remote_deletes: r.total_remote_deletes,
+            total_overwritten: r.total_overwritten,
+            total_ignored: r.total_ignored,
+            total_conflicts: r.total_conflicts,
+            error: r.error,
+            error_category: r.error_category,
+            message_key: r.message_key,
+        }
+    }
+}
+
+impl From<crate::sync::types::TargetSyncResult> for TargetSyncResultDto {
+    fn from(t: crate::sync::types::TargetSyncResult) -> Self {
+        Self {
+            target_kind: t.target_kind,
+            project_id: t.project_id,
+            remote_prefix: t.remote_prefix,
+            result: t.result.into(),
+        }
+    }
+}
+
+/// 全量同步 dry-run 聚合结果 DTO。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct FullSyncDryRunResultDto {
+    pub targets: Vec<TargetSyncPlanDto>,
+    pub total_to_upload: u32,
+    pub total_to_download: u32,
+    pub total_to_delete_local: u32,
+    pub total_to_delete_remote: u32,
+    pub total_ignored: u32,
+    pub total_conflicts: u32,
+}
+
+impl From<crate::sync::types::FullSyncDryRunResult> for FullSyncDryRunResultDto {
+    fn from(r: crate::sync::types::FullSyncDryRunResult) -> Self {
+        Self {
+            targets: r.targets.into_iter().map(Into::into).collect(),
+            total_to_upload: r.total_to_upload,
+            total_to_download: r.total_to_download,
+            total_to_delete_local: r.total_to_delete_local,
+            total_to_delete_remote: r.total_to_delete_remote,
+            total_ignored: r.total_ignored,
+            total_conflicts: r.total_conflicts,
+        }
+    }
+}
+
+impl From<crate::sync::types::TargetSyncPlan> for TargetSyncPlanDto {
+    fn from(t: crate::sync::types::TargetSyncPlan) -> Self {
+        Self {
+            target_kind: t.target_kind,
+            project_id: t.project_id,
+            remote_prefix: t.remote_prefix,
+            plan: t.plan.into(),
+        }
+    }
+}
+
+/// 全量同步诊断结果 DTO。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct FullSyncDiagnosticsResultDto {
+    pub diagnostics: SyncDiagnosticsResultDto,
+}
+
+impl From<crate::sync::types::FullSyncDiagnosticsResult> for FullSyncDiagnosticsResultDto {
+    fn from(d: crate::sync::types::FullSyncDiagnosticsResult) -> Self {
+        Self {
+            diagnostics: d.diagnostics.into(),
+        }
+    }
 }

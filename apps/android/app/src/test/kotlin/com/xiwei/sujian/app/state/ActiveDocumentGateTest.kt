@@ -127,7 +127,7 @@ class ActiveDocumentGateTest {
 
     @Test
     fun syncCoordinatorExposesFlushEntryPoint() {
-        // 编译期契约：SyncCoordinator.runSync 内部经 ActiveDocumentGate 刷新 —
+        // 编译期契约：SyncCoordinator.runFullSync 内部经 ActiveDocumentGate 刷新 —
         // 这里验证门对象存在即可（行为由上述用例覆盖）。
         assertEquals("ActiveDocumentGate", ActiveDocumentGate.javaClass.simpleName)
     }

@@ -272,6 +272,14 @@ class EditorWindowHost(
     }
 
     /**
+     * #630 C块：窗口绑定成功后唯一的"唤起活动 View 输入"入口。
+     * 只有 completeWindowAttach(...) == true 后调用，内部委托 [SujianEditorView.activateInput]。
+     */
+    private fun activateBoundView(view: SujianEditorView) {
+        view.post { view.activateInput() }
+    }
+
+    /**
      * #595 三：动画策略 StateFlow — 只读可观察的单一事实源（不可变）。
      * UI 生命周期感知地收集该值，[applyMotionPolicy] 原子更新全部字段。
      */
@@ -403,16 +411,10 @@ class EditorWindowHost(
                 sessionCoordinator.completeWindowAttach(windowId, targetId, bindInfo.sessionId)
             ) {
                 // #624 评论17 问题2：只有 completeWindowAttach==true（binding 仍是本次
-                // Attaching）才通知 EDITING + requestFocus + showSoftInput。旧 View 晚到直接丢弃。
+                // Attaching）才通知 EDITING + 唤起输入。旧 View 晚到直接丢弃。
+                // #630 C块：用唯一 activateBoundView 入口替代 requestFocus + showSoftInput。
                 target.onEditingStateChanged?.invoke(EditingState.EDITING)
-                view.post {
-                    view.requestFocus()
-                    val imm =
-                        context.getSystemService(
-                            android.content.Context.INPUT_METHOD_SERVICE,
-                        ) as? android.view.inputmethod.InputMethodManager
-                    imm?.showSoftInput(view, 0)
-                }
+                activateBoundView(view)
             } else {
                 // 绑定失败或 binding 已不属于本次 attach：回到 Detached/Idle，
                 // 不能留下没有 View 绑定的 Attached 状态。
@@ -683,9 +685,9 @@ class EditorWindowHost(
         ).also {
                 view ->
             view.setFrameClock(windowFrameClock)
-            // #595 四：创建时按活动 target（若有）应用全局策略 + profile 约束；
-            // 绑定完成后 performViewBind 会用 pending.targetId 的约束再次应用。
-            applyPolicyToView(view, pendingViewBind?.targetId ?: activeTargetId)
+            // #630 C块：createWindowView 不再 applyPolicyToView — 真实 target 还没完成 bind，
+            // 真正的策略只在 performViewBind() 根据 pending.targetId 应用一次。
+            // 后续全局设置变化只走 applyMotionPolicy() 更新活动 View。
             // #624 评论3/4：设置先于 View 创建到达时用缓存补齐字号/行距/首行缩进。
             lastTypography?.let { applyTypographyToView(view, it) }
             sharedEditorView = view
@@ -717,16 +719,10 @@ class EditorWindowHost(
                     sessionCoordinator.completeWindowAttach(windowId, targetId, pending.sessionId)
                 ) {
                     // #624 评论17 问题2：只有 completeWindowAttach==true 才通知 EDITING +
-                    // requestFocus + showSoftInput。旧 View 晚到直接丢弃，不得表现成绑定成功。
+                    // 唤起输入。旧 View 晚到直接丢弃，不得表现成绑定成功。
+                    // #630 C块：用唯一 activateBoundView 入口替代 requestFocus + showSoftInput。
                     target.onEditingStateChanged?.invoke(EditingState.EDITING)
-                    view.post {
-                        view.requestFocus()
-                        val imm =
-                            context.getSystemService(
-                                android.content.Context.INPUT_METHOD_SERVICE,
-                            ) as? android.view.inputmethod.InputMethodManager
-                        imm?.showSoftInput(view, 0)
-                    }
+                    activateBoundView(view)
                 } else {
                     // 绑定失败或 binding 已不属于本次 attach：回到 Detached/Idle，
                     // 不留下没有 View 绑定的 Attached 状态。

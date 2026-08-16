@@ -17,7 +17,7 @@ private const val CONFIG_ENABLED_TRUE = "{\"enabled\":true}"
 private const val CONFIG_ENABLED_FALSE = "{\"enabled\":false}"
 
 /**
- * #600 评论 #4 问题三：AppSyncProfileStore 应用级版本化提交契约测试。
+ * #600 评论 #4 问题三：SyncProfileStore 应用级版本化提交契约测试。
  *
  * 镜像 [SyncProfileGenerationTest]（作品级）的测试模式，验证应用级 store 的
  * generation + commit marker 行为：初始态、stageAndCommit 推进 activeGeneration、
@@ -28,13 +28,13 @@ private const val CONFIG_ENABLED_FALSE = "{\"enabled\":false}"
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
-class AppSyncProfileStoreTest {
-    private lateinit var store: AppSyncProfileStore
+class SyncProfileStoreTest {
+    private lateinit var store: SyncProfileStore
 
     @Before
     fun setup() {
         val context: Context = ApplicationProvider.getApplicationContext()
-        store = AppSyncProfileStore(context)
+        store = SyncProfileStore(context)
         kotlinx.coroutines.runBlocking {
             store.clear()
         }

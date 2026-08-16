@@ -164,3 +164,75 @@ data class SyncPlan(
     val ignoredFiles: List<String> = emptyList(),
     val conflicts: List<String> = emptyList(),
 )
+
+/**
+ * #630 评论 #1：单个同步目标（App / Project）的执行结果。
+ *
+ * Core 的全量同步把 App 和每个 Project 当作独立 target，按 remote_prefix 路由到
+ * 同一远端仓库的不同目录。Android 不再自己循环调用两套 API，直接消费 Core 返回的
+ * 聚合结果。
+ *
+ * - [targetKind]：`"app"` 或 `"project"`，与 Core `SyncTarget.scope` 对应。
+ * - [projectId]：仅 Project target 携带；App target 为 null。
+ * - [remotePrefix]：远端路径前缀（`app` 或 `projects/<project_id>`）。
+ * - [result]：该 target 的单目标同步结果。
+ */
+data class TargetSyncResult(
+    val targetKind: String,
+    val projectId: String?,
+    val remotePrefix: String,
+    val result: SyncResult,
+)
+
+/**
+ * #630 评论 #1：单个同步目标的试运行计划。
+ */
+data class TargetSyncPlan(
+    val targetKind: String,
+    val projectId: String?,
+    val remotePrefix: String,
+    val plan: SyncPlan,
+)
+
+/**
+ * #630 评论 #1：全量同步聚合结果。
+ *
+ * 一次 `performFullSync` 同时同步 App target（设置/星图/主题）和所有 Project target，
+ * 每个目标独立返回 [TargetSyncResult]，[overallStatus] 是 Core 聚合后的总体状态。
+ */
+data class FullSyncResult(
+    val overallStatus: SyncStatus,
+    val targets: List<TargetSyncResult>,
+    val totalUploaded: Int,
+    val totalDownloaded: Int,
+    val totalLocalDeletes: Int,
+    val totalRemoteDeletes: Int,
+    val totalOverwritten: Int,
+    val totalIgnored: Int,
+    val totalConflicts: Int,
+    val error: String?,
+    val errorCategory: String?,
+    val messageKey: String?,
+)
+
+/**
+ * #630 评论 #1：全量同步试运行聚合计划。
+ */
+data class FullSyncDryRunResult(
+    val targets: List<TargetSyncPlan>,
+    val totalToUpload: Int,
+    val totalToDownload: Int,
+    val totalToDeleteLocal: Int,
+    val totalToDeleteRemote: Int,
+    val totalIgnored: Int,
+    val totalConflicts: Int,
+)
+
+/**
+ * #630 评论 #1：全量同步连接诊断结果。
+ *
+ * 诊断只测一次仓库、分支、token，不为每个 target 重复打一轮 GitHub 网络请求。
+ */
+data class FullSyncDiagnosticsResult(
+    val diagnostics: SyncDiagnosticsResult,
+)

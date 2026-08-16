@@ -201,94 +201,44 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
 
     fun saveSyncableSettings(settings: SyncableSettings) = settingsBridge.saveSyncableSettings(settings)
 
-    // #600 评论 #3 问题二：作品级 sync 入口全部按 projectId 路由。
-    fun loadSyncConfig(projectId: String) = syncBridge.loadSyncConfig(projectId)
+    // #630 评论 #1：全量同步统一入口 — 全局 config/secrets，不按 projectId 路由。
+    fun loadSyncConfig() = syncBridge.loadSyncConfig()
 
-    fun saveSyncConfig(
-        projectId: String,
-        config: SyncConfig,
-    ) = syncBridge.saveSyncConfig(projectId, config)
+    fun saveSyncConfig(config: SyncConfig) = syncBridge.saveSyncConfig(config)
 
-    fun loadSyncSecrets(projectId: String) = syncBridge.loadSyncSecrets(projectId)
+    fun loadSyncSecrets() = syncBridge.loadSyncSecrets()
 
-    fun saveSyncSecrets(
-        projectId: String,
-        secrets: SyncSecrets,
-    ) = syncBridge.saveSyncSecrets(projectId, secrets)
+    fun saveSyncSecrets(secrets: SyncSecrets) = syncBridge.saveSyncSecrets(secrets)
 
     // #592 五/六/#595 十：进程级 override（操作作用域凭据）与按 generation 保存凭据。
-    // override 是进程级，不按作品区分。
     fun setSyncSecretsOverride(secrets: SyncSecrets) = syncBridge.setSyncSecretsOverride(secrets)
 
     fun clearSyncSecretsOverride() = syncBridge.clearSyncSecretsOverride()
 
     fun saveSyncSecretsForGeneration(
-        projectId: String,
         generation: ULong,
         secrets: SyncSecrets,
-    ) = syncBridge.saveSyncSecretsForGeneration(
-        projectId,
-        generation,
-        secrets,
-    )
+    ) = syncBridge.saveSyncSecretsForGeneration(generation, secrets)
 
-    fun loadSyncSecretsForGeneration(
-        projectId: String,
-        generation: ULong,
-    ) = syncBridge.loadSyncSecretsForGeneration(projectId, generation)
+    fun loadSyncSecretsForGeneration(generation: ULong) = syncBridge.loadSyncSecretsForGeneration(generation)
 
     /** #595 五：删除指定 generation 的安全存储凭据（旧版本清理）。 */
-    fun deleteSyncSecretsForGeneration(
-        projectId: String,
-        generation: ULong,
-    ) = syncBridge.deleteSyncSecretsForGeneration(projectId, generation)
+    fun deleteSyncSecretsForGeneration(generation: ULong) = syncBridge.deleteSyncSecretsForGeneration(generation)
 
+    fun getSyncCapability() = syncBridge.getSyncCapability()
+
+    // #630 评论 #1：全量同步执行入口 — App + 所有 Project 一次同步。
+    fun performFullSync(
+        config: SyncConfig,
+        forceSync: Boolean = false,
+    ) = syncBridge.performFullSync(config, forceSync)
+
+    fun performFullSyncDryRun(config: SyncConfig) = syncBridge.performFullSyncDryRun(config)
+
+    fun performFullSyncDiagnostics(config: SyncConfig) = syncBridge.performFullSyncDiagnostics(config)
+
+    // per-target 同步状态查询（App / Project 各自的本地 state）。
     fun loadSyncState(projectId: String) = syncBridge.loadSyncState(projectId)
-
-    fun getSyncCapability(projectId: String) = syncBridge.getSyncCapability(projectId)
-
-    fun performSyncDiagnostics(
-        projectId: String,
-        config: SyncConfig,
-    ) = syncBridge.performSyncDiagnostics(projectId, config)
-
-    fun performSyncDryRun(
-        projectId: String,
-        config: SyncConfig,
-    ) = syncBridge.performSyncDryRun(projectId, config)
-
-    fun performSync(
-        projectId: String,
-        config: SyncConfig,
-        forceSync: Boolean = false,
-    ) = syncBridge.performSync(projectId, config, forceSync)
-
-    // #600 评论 #3 问题四：应用级同步通道（设置/全局星图/主题调色板）。
-    fun loadAppSyncConfig() = syncBridge.loadAppSyncConfig()
-
-    fun saveAppSyncConfig(config: SyncConfig) = syncBridge.saveAppSyncConfig(config)
-
-    fun loadAppSyncSecrets() = syncBridge.loadAppSyncSecrets()
-
-    fun saveAppSyncSecrets(secrets: SyncSecrets) = syncBridge.saveAppSyncSecrets(secrets)
-
-    fun saveAppSyncSecretsForGeneration(
-        generation: ULong,
-        secrets: SyncSecrets,
-    ) = syncBridge.saveAppSyncSecretsForGeneration(generation, secrets)
-
-    fun loadAppSyncSecretsForGeneration(generation: ULong) = syncBridge.loadAppSyncSecretsForGeneration(generation)
-
-    fun deleteAppSyncSecretsForGeneration(generation: ULong) = syncBridge.deleteAppSyncSecretsForGeneration(generation)
-
-    fun performAppSyncDiagnostics(config: SyncConfig) = syncBridge.performAppSyncDiagnostics(config)
-
-    fun performAppSyncDryRun(config: SyncConfig) = syncBridge.performAppSyncDryRun(config)
-
-    fun performAppSync(
-        config: SyncConfig,
-        forceSync: Boolean = false,
-    ) = syncBridge.performAppSync(config, forceSync)
 
     fun loadAppSyncState() = syncBridge.loadAppSyncState()
 

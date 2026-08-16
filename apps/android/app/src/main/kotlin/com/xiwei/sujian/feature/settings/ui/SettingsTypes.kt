@@ -6,6 +6,9 @@ import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 
 // ! # 设置页类型声明（从 SettingsRoute 拆分）
+//
+// #630 评论 #1+#2：同步配置只有一份 — 全量同步覆盖设置/星图/主题/全部作品，
+// 不再区分作品级与应用级两套 UI 状态/Intent/SaveCommand。
 
 enum class SyncCommandState { IDLE, RUNNING, SUCCESS, FAILURE }
 
@@ -68,28 +71,17 @@ internal fun com.xiwei.sujian.feature.sync.data.SyncProfileReadResult.toSyncProf
 data class SettingsUiState(
     val settings: LocalSettings = LocalSettings(),
     val fontSize: Float = 16f,
-    // 作品级同步
-    val projectSyncConfig: com.xiwei.sujian.feature.sync.data.model.SyncConfig =
+    // 同步（全量：设置/星图/主题/全部作品，单一一份）
+    val syncConfig: com.xiwei.sujian.feature.sync.data.model.SyncConfig =
         com.xiwei.sujian.feature.sync.data.model.SyncConfig(),
-    val projectSyncSecrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets =
+    val syncSecrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets =
         com.xiwei.sujian.feature.sync.data.model.SyncSecrets(),
-    val projectSyncCapability: SyncCapabilityData = SyncCapabilityData(),
-    val projectSyncProfileLoadState: SyncProfileLoadState = SyncProfileLoadState.Loading,
-    val projectDryRunState: SyncCommandState = SyncCommandState.IDLE,
-    val projectTestConnectionState: SyncCommandState = SyncCommandState.IDLE,
-    val projectPerformSyncState: SyncCommandState = SyncCommandState.IDLE,
-    val projectSyncResult: StructuredSyncResult? = null,
-    // 应用级同步
-    val appSyncConfig: com.xiwei.sujian.feature.sync.data.model.SyncConfig =
-        com.xiwei.sujian.feature.sync.data.model.SyncConfig(),
-    val appSyncSecrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets =
-        com.xiwei.sujian.feature.sync.data.model.SyncSecrets(),
-    val appSyncProfileLoadState: SyncProfileLoadState = SyncProfileLoadState.Loading,
-    val appDryRunState: SyncCommandState = SyncCommandState.IDLE,
-    val appTestConnectionState: SyncCommandState = SyncCommandState.IDLE,
-    val appPerformSyncState: SyncCommandState = SyncCommandState.IDLE,
-    val appSyncResult: StructuredSyncResult? = null,
-    // 共用
+    val syncCapability: SyncCapabilityData = SyncCapabilityData(),
+    val syncProfileLoadState: SyncProfileLoadState = SyncProfileLoadState.Loading,
+    val dryRunState: SyncCommandState = SyncCommandState.IDLE,
+    val testConnectionState: SyncCommandState = SyncCommandState.IDLE,
+    val performSyncState: SyncCommandState = SyncCommandState.IDLE,
+    val syncResult: StructuredSyncResult? = null,
     val secureStorageWarning: String? = null,
     val builtinThemes: List<com.xiwei.sujian.app.theme.model.BuiltinTheme> = emptyList(),
     val paletteRecords: List<com.xiwei.sujian.app.theme.model.ThemePaletteRecord> = emptyList(),
@@ -105,17 +97,9 @@ sealed interface SettingsIntent {
 
     data class UpdateFontSize(val fontSize: Float) : SettingsIntent
 
-    // 作品级同步
-    data class UpdateProjectSyncConfig(val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig) : SettingsIntent
+    data class UpdateSyncConfig(val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig) : SettingsIntent
 
-    data class UpdateProjectSyncSecrets(
-        val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
-    ) : SettingsIntent
-
-    // 应用级同步
-    data class UpdateAppSyncConfig(val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig) : SettingsIntent
-
-    data class UpdateAppSyncSecrets(val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets) : SettingsIntent
+    data class UpdateSyncSecrets(val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets) : SettingsIntent
 
     data object Refresh : SettingsIntent
 
@@ -123,29 +107,26 @@ sealed interface SettingsIntent {
 
     data class DeletePalette(val deviceId: String, val fingerprint: String) : SettingsIntent
 
-    // 作品级命令
     data object DryRun : SettingsIntent
 
     data object TestConnection : SettingsIntent
 
     data object PerformSync : SettingsIntent
-
-    // 应用级命令
-    data object AppDryRun : SettingsIntent
-
-    data object AppTestConnection : SettingsIntent
-
-    data object AppPerformSync : SettingsIntent
 }
 
 sealed interface SettingsSaveCommand {
     // #617 评论三：本地保存命令携带 affectsTheme — 只有真正影响主题的字段
     // （外观模式/颜色来源/动态色/内置主题/调色板）变化时才需要重建主题；
     // 自动保存、诊断、编辑器选项、沉浸式全屏等普通设置不再触发 ThemeStore.reload()。
+    // #630 评论二：affectsEditor 标记真正影响正文运行时的字段（字号 fallback/行距/
+    // 首行缩进开关与宽度/文字动画开关与时长/光标动画开关与时长/协同动画/Android 自渲染
+    // 编辑器开关）变化 — 只有这类保存才通知编辑器重读设置；自动保存、AI、诊断、
+    // 沉浸式全屏、主题颜色等普通保存不再触发编辑器重载。默认 false 以减少对其它构造点的破坏。
     data class Local(
         val settings: LocalSettings,
         val revision: Long,
         val affectsTheme: Boolean,
+        val affectsEditor: Boolean = false,
     ) : SettingsSaveCommand
 
     data class FontSize(
@@ -153,22 +134,12 @@ sealed interface SettingsSaveCommand {
         val revision: Long,
     ) : SettingsSaveCommand
 
-    data class ProjectSyncConfig(
+    data class SyncConfig(
         val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
         val revision: Long,
     ) : SettingsSaveCommand
 
-    data class ProjectSyncSecrets(
-        val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
-        val revision: Long,
-    ) : SettingsSaveCommand
-
-    data class AppSyncConfig(
-        val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
-        val revision: Long,
-    ) : SettingsSaveCommand
-
-    data class AppSyncSecrets(
+    data class SyncSecrets(
         val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
         val revision: Long,
     ) : SettingsSaveCommand
@@ -201,58 +172,26 @@ sealed interface SettingsTransactionCommand {
         override val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
         override val secretsRevision: Long,
     ) : SettingsTransactionCommand
-
-    // #600 评论 #4 问题三：应用级同步事务命令 — 设置/全局星图/主题调色板。
-    // 与作品级事务对称，但提交到应用级 profile（commitAppSyncProfile），
-    // 执行应用级同步 API（runAppSync / performAppSyncDryRun / performAppSyncDiagnostics）。
-    data class SaveAndRunAppSync(
-        override val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
-        override val configRevision: Long,
-        override val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
-        override val secretsRevision: Long,
-        val trigger: SyncTrigger,
-    ) : SettingsTransactionCommand
-
-    data class SaveAndRunAppDryRun(
-        override val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
-        override val configRevision: Long,
-        override val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
-        override val secretsRevision: Long,
-    ) : SettingsTransactionCommand
-
-    data class SaveAndRunAppDiagnostics(
-        override val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig,
-        override val configRevision: Long,
-        override val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets,
-        override val secretsRevision: Long,
-    ) : SettingsTransactionCommand
 }
 
 internal data class PendingCommands(
     val local: SettingsSaveCommand.Local? = null,
     val fontSize: SettingsSaveCommand.FontSize? = null,
-    val projectSyncConfig: SettingsSaveCommand.ProjectSyncConfig? = null,
-    val projectSyncSecrets: SettingsSaveCommand.ProjectSyncSecrets? = null,
-    val appSyncConfig: SettingsSaveCommand.AppSyncConfig? = null,
-    val appSyncSecrets: SettingsSaveCommand.AppSyncSecrets? = null,
+    val syncConfig: SettingsSaveCommand.SyncConfig? = null,
+    val syncSecrets: SettingsSaveCommand.SyncSecrets? = null,
 ) {
     /** 所有待保存命令均为空 — 拆分复杂条件，避免 ComplexCondition。 */
     fun isEmpty(): Boolean =
         local == null &&
             fontSize == null &&
-            projectSyncConfig == null &&
-            projectSyncSecrets == null &&
-            appSyncConfig == null &&
-            appSyncSecrets == null
+            syncConfig == null &&
+            syncSecrets == null
 }
 
 enum class SyncCommandType {
     DRY_RUN,
     TEST_CONNECTION,
     PERFORM_SYNC,
-    DRY_RUN_APP,
-    TEST_CONNECTION_APP,
-    PERFORM_APP_SYNC,
 }
 
 internal data class SyncCommandIoResult(

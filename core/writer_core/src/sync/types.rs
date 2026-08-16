@@ -194,13 +194,14 @@ pub enum FirstSyncMode {
     UnrelatedHistories,
 }
 
-/// 同步范围 — 区分作品级与应用级两个独立同步通道（Issue #600 评论 #3）。
+/// 同步范围 — 内部路径过滤语义，不再携带产品配置含义（Issue #630）。
 ///
+/// 一个全局 `SyncConfig` + 一份全局凭据，`perform_full_sync` 内部按 `SyncTarget`
+/// 把不同本地根映射到同一个远端仓库的不同前缀：
 /// - `Project`：同步根为单个作品目录，白名单为作品正文/元数据。
 /// - `App`：同步根为 `app_data_root`，白名单为设置/全局星图/主题调色板。
 ///
-/// 该字段不暴露到 `SyncConfigDto`（DTO 转换时默认 `Project`），
-/// 应用级同步由 facade 层 `perform_app_sync` 等入口显式设置 `scope = App`。
+/// 该字段不暴露到 `SyncConfigDto`，由 `SyncTarget` 内部携带。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncScope {
@@ -211,15 +212,54 @@ pub enum SyncScope {
     App,
 }
 
-/// 同步配置 — 持久化为 `<sync_root>/app-meta/sync/config.local.json`，UI 层读写。
+/// 同步目标 — 一次全量同步中的一个本地根 → 远端前缀映射（Issue #630）。
+///
+/// 一个远端仓库内部按目录分流：
+/// - App 目标固定 `remote_prefix = "app"`
+/// - Project 目标固定 `remote_prefix = "projects/{project_id}"`
+///
+/// `scope` 仅用于本地路径白名单/黑名单过滤，不再决定 `SyncConfig` 的产品语义。
+/// `remote_prefix` 用于远端 GitHub Contents API 路径拼装：
+/// 所有远端路径统一走 `remote_prefix + "/" + local_relative_path`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncTarget {
+    pub scope: SyncScope,
+    pub remote_prefix: String,
+}
+
+impl SyncTarget {
+    /// 应用级目标：本地根 = `app_data_root`，远端前缀 = `app`。
+    pub fn app() -> Self {
+        Self {
+            scope: SyncScope::App,
+            remote_prefix: "app".to_string(),
+        }
+    }
+
+    /// 作品级目标：本地根 = `projects_root/<project_id>`，远端前缀 = `projects/<project_id>`。
+    pub fn project(project_id: &str) -> Self {
+        Self {
+            scope: SyncScope::Project,
+            remote_prefix: format!("projects/{}", project_id),
+        }
+    }
+
+    /// 将本地相对路径映射为远端路径：`remote_prefix + "/" + local_relative_path`。
+    pub fn remote_path(&self, local_relative_path: &str) -> String {
+        format!("{}/{}", self.remote_prefix, local_relative_path)
+    }
+}
+
+/// 同步配置 — 全局唯一，持久化为 `<app_data_root>/app-meta/sync/config.local.json`（Issue #630）。
+///
+/// 一次全量同步 = 设置 + 全局星图 + 主题调色板 + 全部作品。
+/// App/Project 的区分由 `SyncTarget` 内部携带，`SyncConfig` 不再携带"我是应用同步还是作品同步"的产品配置含义。
 ///
 /// 非线程安全：只在主线程读写，同步引擎在同步期间持有快照。
 /// `sync_interval_seconds` 最小有效值为 60（引擎侧 clamp），0 表示仅手动同步。
 ///
 /// 敏感字段（token、ssh_private_key）不在 SyncConfig 中，
 /// 由 SyncSecrets 单独管理，平台端安全存储注入。
-///
-/// `scope` 字段区分作品级与应用级同步，默认 `Project`（向后兼容）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
     /// 是否启用同步
@@ -254,10 +294,6 @@ pub struct SyncConfig {
         alias = "android_has_access_network_state_permission"
     )]
     pub has_network_state_permission: bool,
-    /// 同步范围（作品级 / 应用级），默认 `Project`。
-    /// 不暴露到 DTO，由 facade 层应用级入口显式设置。
-    #[serde(default)]
-    pub scope: SyncScope,
 }
 
 pub(crate) fn default_true() -> bool {
@@ -704,4 +740,70 @@ impl Default for SyncState {
             pending_take_remote: std::collections::HashSet::new(),
         }
     }
+}
+
+/// 单个 target 的同步结果 — `perform_full_sync` 中一个本地根 → 远端前缀目标的输出。
+///
+/// `target_kind` 为 `"app"` 或 `"project"`；`project_id` 仅在 Project target 时有值。
+/// `result` 为该 target 的 `SyncResult`；`error` 为该 target 执行失败时的错误描述。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TargetSyncResult {
+    pub target_kind: String,
+    pub project_id: Option<String>,
+    pub remote_prefix: String,
+    pub result: SyncResult,
+}
+
+/// 单个 target 的 dry-run 计划。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TargetSyncPlan {
+    pub target_kind: String,
+    pub project_id: Option<String>,
+    pub remote_prefix: String,
+    pub plan: SyncPlan,
+}
+
+/// 全量同步聚合结果 — 一次 `perform_full_sync` 的完整输出（Issue #630）。
+///
+/// `overall_status` 为总体状态（Success/PartialConflict/Error 等）：
+/// - 所有 target 成功 → Success
+/// - 部分 target 冲突 → PartialConflict
+/// - 部分 target 错误 → Error
+///
+/// `targets` 为每个 target 的结果列表，顺序为 App target 在前、Project targets 在后。
+/// `total_*` 为上传/下载/删除/冲突的聚合统计。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullSyncResult {
+    pub overall_status: SyncStatus,
+    pub targets: Vec<TargetSyncResult>,
+    pub total_uploaded: u32,
+    pub total_downloaded: u32,
+    pub total_local_deletes: u32,
+    pub total_remote_deletes: u32,
+    pub total_overwritten: u32,
+    pub total_ignored: u32,
+    pub total_conflicts: u32,
+    pub error: Option<String>,
+    pub error_category: Option<String>,
+    pub message_key: Option<String>,
+}
+
+/// 全量同步 dry-run 聚合结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullSyncDryRunResult {
+    pub targets: Vec<TargetSyncPlan>,
+    pub total_to_upload: u32,
+    pub total_to_download: u32,
+    pub total_to_delete_local: u32,
+    pub total_to_delete_remote: u32,
+    pub total_ignored: u32,
+    pub total_conflicts: u32,
+}
+
+/// 全量同步诊断结果 — 只测一次仓库、分支、token（Issue #630）。
+///
+/// `diagnostics` 为单次诊断结果；`error` 为诊断失败时的错误描述。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullSyncDiagnosticsResult {
+    pub diagnostics: SyncDiagnosticsResult,
 }

@@ -15,10 +15,11 @@ Supersedes: None
 - 详见 `.github/workflows/` 目录。
 
 ## 同步规则
-- 系统存在两种明确的同步目标（Issue #600 评论 #3 问题四）：
-  - **应用级 Git**：同步根 = `app_data_root`，同步设置、全局星图、主题调色板。
-  - **作品级 Git**：同步根 = `project_root`（`projects_root/<project_id>`），同步单部作品正文、元数据、作品自己的同步状态。
-- 两种目标各自独立的 Git 仓库、白名单/黑名单和同步配置，在 API/数据模型里明确区分为 `AppSyncProfile` 与 `ProjectSyncProfile(projectId)`，不混成同一个 `SyncProfile`。
+- 系统只有一个全局 `SyncProfile`、一个远端仓库、一次全量同步（Issue #630）。
+- Core 内部仍区分 `SyncScope::App / Project` 两个 target，但只用于路径过滤和远端前缀路由，不再暴露成两套用户配置。
+- App target 同步根 = `app_data_root`，远端前缀 `app/`，同步设置、全局星图、主题调色板。
+- Project target 同步根 = `project_root`（`projects_root/<project_id>`），远端前缀 `projects/<project_id>/`，同步单部作品正文、元数据、作品自己的同步状态。
+- 全局同步配置只存在一份：`<app_data_root>/app-meta/sync/config.local.json`。
 - 冲突存储为单独的冲突文件，绝不自动覆盖本地数据。
 - 保存 ≠ 同步。连续保存不会产生连续网络请求。
 
@@ -120,6 +121,6 @@ Supersedes: None
 | Core | `perform_lww_sync` 入口检查 `last_sync_time` | `max(sync_interval_seconds, 60)` |
 | Linux_qt Rust | `can_start_auto_sync(reason, 60)` | 同 reason 60 秒 |
 | Linux_qt QML | `workspaceOpenAutoSyncTimer` / `foregroundAutoSyncTimer` | 1.5s / 1.2s 延迟 |
-| Android | `AutoSyncWorker` 遍历所有作品，每个作品独立检查 interval/elapsed + WorkManager 周期 | 每作品 `syncIntervalSeconds`（默认 300s） |
+| Android | `AutoSyncWorker` 读取全局 profile，检查一次 interval/elapsed + WorkManager 周期 | `syncIntervalSeconds`（默认 300s） |
 
-`AutoSyncWorker` 遍历 `ProjectRepository.getProjects()`，逐个读取该作品的 `snapshotSyncProfile(projectId)`，只处理 `enabled && autoSync` 的作品，分别调用 `runSync(..., projectId, snapshot)`，每个作品独立检查 interval/elapsed，不再依赖单一 `ActiveProjectGate`。
+`AutoSyncWorker` 只读取一份全局 `snapshotSyncProfile()`，判断一次 `enabled && autoSync`，调用一次 `runFullSync(...)`。作品枚举由 Core 的 full-sync 完成，不再逐作品读取不同 profile、不再依赖单一 `ActiveProjectGate`。

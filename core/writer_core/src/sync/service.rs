@@ -33,7 +33,6 @@ use crate::sync::types::SyncPlan;
 use crate::sync::types::SyncProtocol;
 #[cfg(any(feature = "git-https", feature = "github-api"))]
 use crate::sync::types::SyncResult;
-#[cfg(feature = "git-https")]
 use crate::sync::types::SyncScope;
 #[cfg(any(feature = "git-https", feature = "github-api"))]
 use crate::sync::types::SyncSecrets;
@@ -171,11 +170,16 @@ impl SyncService {
 
 impl SyncService {
     /// 干运行——构建同步计划但不执行文件传输。config.enabled=false 时返回空计划。
-    pub fn perform_sync_dry_run(sync_root: &Path, config: &SyncConfig) -> crate::Result<SyncPlan> {
+    /// `scope` 由调用方通过 `SyncTarget` 提供，`SyncConfig` 不再携带 scope（Issue #630）。
+    pub fn perform_sync_dry_run(
+        sync_root: &Path,
+        config: &SyncConfig,
+        scope: SyncScope,
+    ) -> crate::Result<SyncPlan> {
         if !config.enabled {
             return Ok(SyncPlan::new());
         }
-        scanner::build_sync_plan(sync_root, config.scope)
+        scanner::build_sync_plan(sync_root, scope)
     }
 }
 
@@ -188,10 +192,11 @@ impl SyncService {
         sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        target: &crate::sync::types::SyncTarget,
         force_sync: bool,
         transport: &dyn writer_platform_api::SyncTransport,
     ) -> crate::Result<SyncResult> {
-        lww::perform_lww_sync(sync_root, config, secrets, force_sync, transport)
+        lww::perform_lww_sync(sync_root, config, secrets, target, force_sync, transport)
     }
 }
 
@@ -499,6 +504,7 @@ impl SyncService {
         sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        scope: SyncScope,
         backend: &dyn GitBackend,
     ) -> crate::Result<SyncResult> {
         // #614：所有直接进入 libgit2 的入口先确保运行时已按平台配置（Android 关闭
@@ -637,11 +643,11 @@ impl SyncService {
             }
         }
 
-        if let Ok(status_list) = backend.status(sync_root, config.scope) {
+        if let Ok(status_list) = backend.status(sync_root, scope) {
             let mut dirty_non_whitelisted = Vec::new();
             for p in &status_list {
-                if !SyncService::is_blacklisted_path(p, config.scope)
-                    && !SyncService::is_whitelisted_path(p, config.scope)
+                if !SyncService::is_blacklisted_path(p, scope)
+                    && !SyncService::is_whitelisted_path(p, scope)
                 {
                     dirty_non_whitelisted.push(p.clone());
                 }
@@ -656,17 +662,17 @@ impl SyncService {
             }
         }
 
-        if let Ok(status_list) = backend.status(sync_root, config.scope) {
+        if let Ok(status_list) = backend.status(sync_root, scope) {
             let mut paths_to_stage = Vec::new();
             for p in &status_list {
-                if SyncService::is_whitelisted_path(p, config.scope)
-                    && !SyncService::is_blacklisted_path(p, config.scope)
+                if SyncService::is_whitelisted_path(p, scope)
+                    && !SyncService::is_blacklisted_path(p, scope)
                 {
                     paths_to_stage.push(p.as_str());
                 }
             }
             if !paths_to_stage.is_empty() {
-                if let Err(e) = backend.stage_paths(sync_root, &paths_to_stage, config.scope) {
+                if let Err(e) = backend.stage_paths(sync_root, &paths_to_stage, scope) {
                     return Ok(SyncResult::error(
                         classify_error(&e),
                         result.first_sync_mode,
@@ -697,18 +703,12 @@ impl SyncService {
         };
 
         let pull_failed = backend
-            .pull(sync_root, &config.branch, auth.as_ref(), config.scope)
+            .pull(sync_root, &config.branch, auth.as_ref(), scope)
             .map_err(map_git_error)
             .err();
         let pull_succeeded = pull_failed.is_none();
         if let Some(e) = pull_failed {
-            match handle_pull_error(
-                e,
-                sync_root,
-                &result,
-                result.first_sync_mode.clone(),
-                config.scope,
-            ) {
+            match handle_pull_error(e, sync_root, &result, result.first_sync_mode.clone(), scope) {
                 PullOutcome::Continue => {}
                 PullOutcome::Return(res) => return Ok(res),
             }
@@ -728,7 +728,7 @@ impl SyncService {
                                 &repo,
                                 old_tree.as_ref(),
                                 &new_tree,
-                                config.scope,
+                                scope,
                                 &mut result,
                             );
                         }
@@ -822,7 +822,7 @@ impl SyncService {
             let _ = Self::save_sync_state(sync_root, &state_for_pending);
         }
 
-        let plan = match scanner::build_sync_plan(sync_root, config.scope) {
+        let plan = match scanner::build_sync_plan(sync_root, scope) {
             Ok(p) => p,
             Err(e) => {
                 return Ok(SyncResult::error(
@@ -838,7 +838,7 @@ impl SyncService {
 
         let paths_to_stage: Vec<&str> = plan.files_to_upload.iter().map(|s| s.as_str()).collect();
         if !paths_to_stage.is_empty() {
-            if let Err(e) = backend.stage_paths(sync_root, &paths_to_stage, config.scope) {
+            if let Err(e) = backend.stage_paths(sync_root, &paths_to_stage, scope) {
                 return Ok(SyncResult::error(
                     classify_error(&e),
                     result.first_sync_mode,
@@ -848,7 +848,7 @@ impl SyncService {
             }
         }
 
-        let changed_files = backend.status(sync_root, config.scope).unwrap_or_default();
+        let changed_files = backend.status(sync_root, scope).unwrap_or_default();
         let mut actual_staged = Vec::new();
         for file in changed_files {
             if paths_to_stage.contains(&file.as_str()) {

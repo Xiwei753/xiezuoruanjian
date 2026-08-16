@@ -734,8 +734,6 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
         let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
-        let project = api.create_project("Envelope Test").unwrap();
-
         let config = crate::api::types::SyncConfigDto {
             enabled: true,
             backend_type: "github_api".to_string(),
@@ -749,7 +747,7 @@ mod tests {
             has_network_state_permission: true,
         };
 
-        let result = api.save_sync_config(&project.id, config);
+        let result = api.save_sync_config(config);
         let json = match result {
             Ok(data) => ResultEnvelope::success_with_changes(
                 data,

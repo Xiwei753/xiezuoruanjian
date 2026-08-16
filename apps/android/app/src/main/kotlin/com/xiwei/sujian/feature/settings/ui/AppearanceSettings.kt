@@ -14,7 +14,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.component.SujianDropdownMenu
-import com.xiwei.sujian.core.designsystem.component.SujianSection
 import com.xiwei.sujian.core.designsystem.component.SujianSlider
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
@@ -35,7 +34,7 @@ fun AppearanceSettings(
         modifier = modifier.padding(dims.space16),
         verticalArrangement = Arrangement.spacedBy(dims.space16),
     ) {
-        SujianSection(title = stringResource(id = R.string.pref_category_theme)) {
+        SettingsFieldGroup(title = stringResource(id = R.string.pref_category_theme)) {
             SujianDropdownMenu(
                 label = stringResource(id = R.string.pref_theme_mode),
                 selectedIndex =
@@ -107,7 +106,7 @@ fun AppearanceSettings(
             )
         }
 
-        SujianSection(title = stringResource(id = R.string.pref_category_font_layout)) {
+        SettingsFieldGroup(title = stringResource(id = R.string.pref_category_font_layout)) {
             SujianSlider(
                 title = stringResource(id = R.string.pref_font_size),
                 value = fontSize,

@@ -316,6 +316,49 @@ dictionary SyncResultDto {
     string? search_index_rebuild_error;
 };
 
+dictionary TargetSyncResultDto {
+    string target_kind;
+    string? project_id;
+    string remote_prefix;
+    SyncResultDto result;
+};
+
+dictionary TargetSyncPlanDto {
+    string target_kind;
+    string? project_id;
+    string remote_prefix;
+    SyncPlanDto plan;
+};
+
+dictionary FullSyncResultDto {
+    string overall_status;
+    sequence<TargetSyncResultDto> targets;
+    u32 total_uploaded;
+    u32 total_downloaded;
+    u32 total_local_deletes;
+    u32 total_remote_deletes;
+    u32 total_overwritten;
+    u32 total_ignored;
+    u32 total_conflicts;
+    string? error;
+    string? error_category;
+    string? message_key;
+};
+
+dictionary FullSyncDryRunResultDto {
+    sequence<TargetSyncPlanDto> targets;
+    u32 total_to_upload;
+    u32 total_to_download;
+    u32 total_to_delete_local;
+    u32 total_to_delete_remote;
+    u32 total_ignored;
+    u32 total_conflicts;
+};
+
+dictionary FullSyncDiagnosticsResultDto {
+    SyncDiagnosticsResultDto diagnostics;
+};
+
 [Error]
 enum WriterError {
     "Io",
@@ -1051,17 +1094,18 @@ interface WriterAppService {
     [Throws=WriterError]
     boolean save_syncable_settings(SyncableSettingsDto settings);
 
+    // 全量同步统一入口（Issue #630）：一个全局 config + 一份全局凭据。
     [Throws=WriterError]
-    SyncConfigDto load_sync_config(string project_id);
+    SyncConfigDto load_sync_config();
 
     [Throws=WriterError]
-    boolean save_sync_config(string project_id, SyncConfigDto config);
+    boolean save_sync_config(SyncConfigDto config);
 
     [Throws=WriterError]
-    SyncSecretsDto load_sync_secrets(string project_id);
+    SyncSecretsDto load_sync_secrets();
 
     [Throws=WriterError]
-    boolean save_sync_secrets(string project_id, SyncSecretsDto secrets);
+    boolean save_sync_secrets(SyncSecretsDto secrets);
 
     [Throws=WriterError]
     void set_sync_secrets_override(SyncSecretsDto secrets);
@@ -1070,54 +1114,36 @@ interface WriterAppService {
     void clear_sync_secrets_override();
 
     [Throws=WriterError]
-    boolean save_sync_secrets_for_generation(string project_id, u64 generation, SyncSecretsDto secrets);
+    boolean save_sync_secrets_for_generation(u64 generation, SyncSecretsDto secrets);
 
     [Throws=WriterError]
-    SyncSecretsDto? load_sync_secrets_for_generation(string project_id, u64 generation);
+    SyncSecretsDto? load_sync_secrets_for_generation(u64 generation);
 
     [Throws=WriterError]
-    void delete_sync_secrets_for_generation(string project_id, u64 generation);
+    void delete_sync_secrets_for_generation(u64 generation);
 
+    // per-target 同步状态查询（App / Project 各自的本地 state）。
     [Throws=WriterError]
     SyncStateDto load_sync_state(string project_id);
 
     [Throws=WriterError]
-    SyncCapabilityDto get_sync_capability(string project_id);
-
-    [Throws=WriterError]
-    SyncDiagnosticsResultDto perform_sync_diagnostics(string project_id, SyncConfigDto config);
-
-    [Throws=WriterError]
-    SyncPlanDto perform_sync_dry_run(string project_id, SyncConfigDto config);
-
-    [Throws=WriterError]
-    SyncResultDto perform_sync(string project_id, SyncConfigDto config, boolean force_sync);
-
-    // 应用级同步通道（Issue #600 评论 #3 问题四）
-    [Throws=WriterError]
-    SyncConfigDto load_app_sync_config();
-    [Throws=WriterError]
-    boolean save_app_sync_config(SyncConfigDto config);
-    [Throws=WriterError]
-    SyncSecretsDto load_app_sync_secrets();
-    [Throws=WriterError]
-    boolean save_app_sync_secrets(SyncSecretsDto secrets);
-    [Throws=WriterError]
-    boolean save_app_sync_secrets_for_generation(u64 generation, SyncSecretsDto secrets);
-    [Throws=WriterError]
-    SyncSecretsDto? load_app_sync_secrets_for_generation(u64 generation);
-    [Throws=WriterError]
-    void delete_app_sync_secrets_for_generation(u64 generation);
-    [Throws=WriterError]
-    SyncDiagnosticsResultDto perform_app_sync_diagnostics(SyncConfigDto config);
-    [Throws=WriterError]
-    SyncPlanDto perform_app_sync_dry_run(SyncConfigDto config);
-    [Throws=WriterError]
-    SyncResultDto perform_app_sync(SyncConfigDto config, boolean force_sync);
-    [Throws=WriterError]
     SyncStateDto load_app_sync_state();
+
     [Throws=WriterError]
     void save_app_sync_state(SyncStateDto state);
+
+    [Throws=WriterError]
+    SyncCapabilityDto get_sync_capability();
+
+    // 全量同步执行入口。
+    [Throws=WriterError]
+    FullSyncDiagnosticsResultDto perform_full_sync_diagnostics(SyncConfigDto config);
+
+    [Throws=WriterError]
+    FullSyncDryRunResultDto perform_full_sync_dry_run(SyncConfigDto config);
+
+    [Throws=WriterError]
+    FullSyncResultDto perform_full_sync(SyncConfigDto config, boolean force_sync);
 
     [Throws=WriterError]
     boolean resolve_conflict_keep_local(string project_id, string path);

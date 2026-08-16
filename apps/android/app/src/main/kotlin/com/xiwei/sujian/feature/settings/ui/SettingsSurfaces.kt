@@ -1,0 +1,150 @@
+package com.xiwei.sujian.feature.settings.ui
+
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+
+/**
+ * 设置页自己的三层 Material 3 容器组件。
+ *
+ * 颜色层级固定为：
+ * - 页面 surface
+ * - 分组外壳 surfaceContainerLow（[SettingsGroupHeader] + [SettingsGroupItemContainer]）
+ * - 可展开分类卡 surfaceContainer（[SettingsExpandableSection]）
+ * - 展开后字段组 surfaceContainerHigh（[SettingsFieldGroup]）
+ * - 搜索入口 surfaceContainerHighest（[SettingsSearchEntry]）
+ *
+ * 层级靠 tonal surface 区分，不靠边框阴影，也不用 primary 文本充当分组层级。
+ * 放在 feature/settings/ui 而非 :core:designsystem，因为这些容器只服务设置页结构，
+ * 不是通用设计系统组件（AGENTS.md：:core:designsystem 不依赖 :app）。
+ */
+private val SettingsGroupTopShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+private val SettingsGroupBottomShape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp)
+
+/**
+ * 分组标题行 — [Surface] 顶部 28dp 圆角、底部直角，标题放在容器里面。
+ *
+ * 与下方一连串 [SettingsGroupItemContainer] 视觉上拼成一张外层大卡片。
+ */
+@Composable
+fun SettingsGroupHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = SettingsGroupTopShape,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        )
+    }
+}
+
+/**
+ * 分组内单个分类项的容器 — 与 [SettingsGroupHeader] 同色，中间项直角，
+ * 最后一项底部 28dp 圆角，视觉上与标题行拼成一张外层大卡片。
+ *
+ * LazyColumn 仍然是一分类一个 item，不把整个超长分组塞成一个巨型 Lazy item，
+ * 但通过同色 + 拼接圆角让用户看到连续的外层卡片。
+ *
+ * @param isLast 是否为分组最后一项；决定底部圆角与底部 padding。
+ */
+@Composable
+fun SettingsGroupItemContainer(
+    isLast: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val shape = if (isLast) SettingsGroupBottomShape else RectangleShape
+    val bottomPadding = if (isLast) 12.dp else 8.dp
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = shape,
+    ) {
+        Column(
+            modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = bottomPadding),
+        ) {
+            content()
+        }
+    }
+}
+
+/**
+ * 展开后字段组 — surfaceContainerHigh + [MaterialTheme.shapes.large]，
+ * 标题 titleSmall/onSurfaceVariant，内容 16dp padding。
+ *
+ * 替代旧 SujianSection，避免"展开分类 padding + SujianSection 标题 + SujianCard padding"
+ * 一层套一层；外层 padding 只保留一层。
+ */
+@Composable
+fun SettingsFieldGroup(
+    title: String,
+    modifier: Modifier = Modifier,
+    semanticId: String? = null,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .then(if (semanticId != null) Modifier.testTag(semanticId) else Modifier),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            content()
+        }
+    }
+}
+
+/**
+ * 同步作用域容器 — 仅负责显示同步作用域标题（"当前作品同步"/"应用数据同步"）一次，
+ * 内部直接放字段、开关、按钮与 error surface，不再重复同名大标题。
+ *
+ * Issue #630 评论 5305922534：消除 SyncSettings 里重复的同名 SettingsFieldGroup 标题。
+ * 视觉上与 [SettingsFieldGroup] 同色（surfaceContainerHigh），但标题用 titleMedium
+ * 以区分作用域标题与普通字段组标题。
+ */
+@Composable
+fun SettingsSyncScope(
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 12.dp),
+            )
+            content()
+        }
+    }
+}
