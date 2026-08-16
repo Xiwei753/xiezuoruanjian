@@ -147,6 +147,18 @@ private fun SettingsViewModel.buildInitialUiState(
             },
         projectSyncCapability = loaded.projectSyncCapability,
         projectSyncProfileLoadState = loaded.projectSyncProfileLoadState,
+        // #629 根因C：loadInitialSnapshot 在 init 里异步启动，与 saveChannel 消费协程并发。
+        // 旧实现创建全新 SettingsUiState，projectPerformSyncState 等事务字段默认 IDLE，
+        // 会覆盖 saveChannel 消费协程已设的 RUNNING/SUCCESS/FAILURE。当
+        // SyncSaveAndRunTransactionTest.performSyncTransaction_doesNotOverwriteNewerQueuedConfig
+        // 连发 UpdateProjectSyncConfig→PerformSync→UpdateProjectSyncConfig（channel 多一项 Save
+        // 使消费协程执行更久）时，loadInitialSnapshot 更易在 SaveAndRunSync 事务设 FAILURE 后
+        // 才完成，把 state 回退为 IDLE，awaitTerminalState 20s 超时。初始加载只重载设置值/
+        // sync profile/capability/themes，不得重置已在进行或已结束的同步事务状态与错误状态。
+        projectDryRunState = current.projectDryRunState,
+        projectTestConnectionState = current.projectTestConnectionState,
+        projectPerformSyncState = current.projectPerformSyncState,
+        projectSyncResult = current.projectSyncResult,
         appSyncConfig =
             if (appSyncConfigRevision == snapshotRevisions.appSyncConfig) {
                 loaded.appSyncProfileLoadState.confirmedConfig ?: current.appSyncConfig
@@ -160,11 +172,18 @@ private fun SettingsViewModel.buildInitialUiState(
                 current.appSyncSecrets
             },
         appSyncProfileLoadState = loaded.appSyncProfileLoadState,
+        appDryRunState = current.appDryRunState,
+        appTestConnectionState = current.appTestConnectionState,
+        appPerformSyncState = current.appPerformSyncState,
+        appSyncResult = current.appSyncResult,
         secureStorageWarning = loaded.secureStorageWarning,
         builtinThemes = loaded.builtinThemes,
         paletteRecords = loaded.paletteRecords,
         aiAvailable = loaded.aiAvailable,
         dataRootPath = loaded.dataRootPath,
+        versionInfo = current.versionInfo,
+        saveErrorResId = current.saveErrorResId,
+        lastCommandType = current.lastCommandType,
     )
 
 /** 初始加载读取的值 — 打包避免 buildInitialUiState LongParameterList。 */

@@ -356,11 +356,17 @@ jobs:
         env:
           # #629 reactivecircus/android-emulator-runner@v2 的 parseScript 按行拆分，
           # 每行用独立 sh -c 执行，script 内赋值的 shell 变量不能跨行传递。
-          # FLAVOR_CAP/AI_FILTER/TEST_IME 必须通过 step 级 env 注入（经
+          # FLAVOR_CAP/AI_FILTER/APP_PKG/TEST_IME 必须通过 step 级 env 注入（经
           # process.env 传递给每行 sh -c），不能在 script 内赋值。
           FLAVOR_CAP: ${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}
           AI_FILTER: ${{ matrix.flavor == 'ai' && '-Pandroid.testInstrumentationRunnerArguments.package=com.xiwei.sujian.ai' || '' }}
-          TEST_IME: com.xiwei.sujian.test/.testime.TestInputMethodService
+          # #629 根因A：ai flavor 有 applicationIdSuffix=".ai"（build.gradle.kts），
+          # app applicationId 与 test APK 包名都随之变化。APP_PKG 是被测 app 的
+          # applicationId（appops 授权目标），TEST_IME 是 test APK 的 IME component
+          # （ime enable/set 目标）。旧实现对两 flavor 硬编码 com.xiwei.sujian.test，
+          # 导致 ai flavor 的 IME（实际在 com.xiwei.sujian.ai.test）永远找不到。
+          APP_PKG: ${{ matrix.flavor == 'ai' && 'com.xiwei.sujian.ai' || 'com.xiwei.sujian' }}
+          TEST_IME: ${{ matrix.flavor == 'ai' && 'com.xiwei.sujian.ai.test/com.xiwei.sujian.test.testime.TestInputMethodService' || 'com.xiwei.sujian.test/.testime.TestInputMethodService' }}
         with:
           api-level: 34
           arch: x86_64
@@ -370,6 +376,9 @@ jobs:
           script: |
             adb shell getprop ro.product.cpu.abi
             cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew :app:install${FLAVOR_CAP}Debug :app:install${FLAVOR_CAP}DebugAndroidTest -x build${FLAVOR_CAP}DebugWriterNative -x generate${FLAVOR_CAP}DebugWriterUniffi -Psujian.android.abis=x86_64
+            # #629 根因B：MainActivity.onCreate 在无 MANAGE_EXTERNAL_STORAGE 时跳转系统授权页、不调 setContent，导致所有依赖 Compose hierarchy 的仪器化测试报 "No compose hierarchies found in the app"。appops set 直接授予 special permission（API 30+，emulator root 可用）；GrantPermissionRule 对 special permission 无效。赋值与验证必须在同一行（parseScript 按行拆分，APP_OPS_STATE 不能跨行传递）。
+            adb shell appops set "$APP_PKG" MANAGE_EXTERNAL_STORAGE allow
+            APP_OPS_STATE=$(adb shell appops get "$APP_PKG" MANAGE_EXTERNAL_STORAGE 2>/dev/null | tr -d '\r'); echo "MANAGE_EXTERNAL_STORAGE op for $APP_PKG: [$APP_OPS_STATE]"; [ "$APP_OPS_STATE" = "allow" ] || { echo "::error::Failed to grant MANAGE_EXTERNAL_STORAGE to $APP_PKG"; exit 1; }
             IME_FOUND=""; for i in $(seq 1 15); do IME_FOUND=$(adb shell ime list -a -s 2>/dev/null | tr -d '\r' | grep -F "$TEST_IME" || true); [ -n "$IME_FOUND" ] && break; sleep 2; done; echo "Test IME registered: [$IME_FOUND]"; [ -n "$IME_FOUND" ] || { echo "::error::Test IME not registered after install: $TEST_IME"; exit 1; }
             adb shell ime enable "$TEST_IME" || { echo "::error::Test IME enable failed: $TEST_IME"; exit 1; }
             ENABLED_IME=$(adb shell ime list -s 2>/dev/null | tr -d '\r' | grep -F "$TEST_IME" || true); echo "Test IME enabled: [$ENABLED_IME]"; [ -n "$ENABLED_IME" ] || { echo "::error::Test IME not enabled after ime enable: $TEST_IME"; exit 1; }
