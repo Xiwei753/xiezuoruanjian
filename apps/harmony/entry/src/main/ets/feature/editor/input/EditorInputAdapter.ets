@@ -54,12 +54,29 @@ export class EditorInputAdapter {
     return this.coordinator.updateComposition(compId, gen, preedit, cursorByte)
   }
 
+  // IME composition 提交。committed 是 IME 最终提交文本，不能忽略。
+  // - committed 与最后一次 preedit 相同 → finishComposition（确认原样提交）
+  // - committed 与 preedit 不同 → 先 cancelComposition，再 commitText 插入最终文本
   async onCompositionFinish(committed: string): Promise<ResultEnvelope<EditorSnapshot>> {
     const comp = this.imeSession.finish()
     if (!comp) {
       return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
     }
-    return this.coordinator.finishComposition(comp.sessionId, comp.generation)
+    if (committed === comp.preedit) {
+      return this.coordinator.finishComposition(comp.sessionId, comp.generation)
+    }
+    const cancelResult = await this.coordinator.cancelComposition(comp.sessionId, comp.generation)
+    if (!cancelResult.success || !cancelResult.data) {
+      return cancelResult
+    }
+    const byteOffset = cancelResult.data.selectionHead
+    const committedByteLen = TextOffsetMapper.utf16ToUtf8(committed, committed.length)
+    return this.coordinator.commitText(
+      byteOffset, byteOffset, committed,
+      byteOffset + committedByteLen, byteOffset + committedByteLen,
+      comp.sessionId, cancelResult.data.revision, comp.generation,
+      EditorTransactionCause.TypingCommit
+    )
   }
 
   async onCompositionCancel(): Promise<ResultEnvelope<EditorSnapshot>> {
@@ -70,19 +87,21 @@ export class EditorInputAdapter {
     return this.coordinator.cancelComposition(comp.sessionId, comp.generation)
   }
 
-  // onChange 整篇变化：把整篇替换翻译成 replace 编辑命令发给 Core。
-  // ArkUI TextArea/SujianEditor 的 onChange 返回整篇文本，本方法把它转成 replace 编辑命令。
-  async onContentChange(oldText: string, newText: string): Promise<ResultEnvelope<EditorSnapshot>> {
-    const byteStart = TextOffsetMapper.utf16ToUtf8(oldText, 0)
-    const byteEnd = TextOffsetMapper.utf16ToUtf8(oldText, oldText.length)
-    return this.coordinator.replace(byteStart, byteEnd, newText, oldText, EditorTransactionCause.Typing)
-  }
-
   isComposing(): boolean {
     return this.imeSession.isActive()
   }
 
-  private getCurrentText(): string {
+  // 当前光标的 UTF-16 code unit offset（供 HarmonyImeConnection 查询）。
+  getCurrentCursorUtf16(): number {
+    const snap = this.coordinator.getSnapshot()
+    if (!snap) {
+      return 0
+    }
+    return TextOffsetMapper.utf8ToUtf16(snap.text, snap.selectionHead)
+  }
+
+  // 当前正文（UTF-16 string，供 HarmonyImeConnection 删除范围计算用）。
+  getCurrentText(): string {
     const snap = this.coordinator.getSnapshot()
     return snap ? snap.text : ''
   }

@@ -13,6 +13,7 @@ import { NativeEditorSessionBridge } from '../../editor/interop/NativeEditorSess
 import { EditorLayoutSnapshot } from '../../editor/render/EditorLayoutSnapshot'
 import { EditorInputAdapter } from '../../editor/input/EditorInputAdapter'
 import { SelectionController } from '../../editor/selection/SelectionController'
+import { HarmonyImeConnection } from '../../editor/input/HarmonyImeConnection'
 import { SujianEditor } from '../../editor/ui/SujianEditor'
 
 /** 左侧面板宽度（双栏模式） */
@@ -80,6 +81,7 @@ export struct WorkspaceScreen {
   private coordinator: EditorSessionCoordinator = new EditorSessionCoordinator(new NativeEditorSessionBridge())
   private inputAdapter: EditorInputAdapter = new EditorInputAdapter(this.coordinator)
   private selectionController: SelectionController = new SelectionController(this.coordinator)
+  private harmonyImeConnection: HarmonyImeConnection = new HarmonyImeConnection()
 
   aboutToAppear() {
     const paramsArr = this.navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
@@ -134,6 +136,9 @@ export struct WorkspaceScreen {
     if (this.selectedChapterId) {
       this.coordinator.close()
     }
+
+    // detach IME 连接
+    this.harmonyImeConnection.detach().then(() => {})
 
     // 清理观察者
     if (this.autoSaveObserver) {
@@ -285,21 +290,6 @@ export struct WorkspaceScreen {
     } finally {
       this.isSaving = false
     }
-  }
-
-  onContentChange(text: string) {
-    // 通过 inputAdapter 把整篇变化翻译成 replace 编辑命令发给 Core
-    const oldContent = this.content
-    this.inputAdapter.onContentChange(oldContent, text).then(result => {
-      if (result.success && result.data) {
-        this.content = result.data.text
-        this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(result.data, this.settings.editorFontSize)
-        this.hasUnsavedChanges = result.data.text !== this.lastSavedContent
-        this.bridge.calculateWordCount(result.data.text).then(count => {
-          this.wordCount = count
-        })
-      }
-    })
   }
 
   private getSaveStatusColor(): ResourceColor {
@@ -709,10 +699,15 @@ export struct WorkspaceScreen {
           Scroll() {
             Column() {
               // 自研写作区组件，消费 EditorLayoutSnapshot 静态渲染
-              SujianEditor({ snapshot: this.editorSnapshot, onSelectionTap: (offset: number): void => { this.selectionController.onTap(offset) } })
+              SujianEditor({
+                snapshot: this.editorSnapshot,
+                onSelectionTap: (offset: number): void => { this.selectionController.onTap(offset) },
+                harmonyImeConnection: this.harmonyImeConnection,
+                inputAdapter: this.inputAdapter,
+                selectionController: this.selectionController
+              })
                 .width('100%')
                 .constraintSize({ minHeight: '100%' })
-                .onChange((value: string): void => { this.onContentChange(value) })
             }
             .width('100%')
             .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })

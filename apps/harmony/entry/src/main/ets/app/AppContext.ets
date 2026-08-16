@@ -5,6 +5,10 @@ import { NativeWriterCoreBridge } from '../corebridge/NativeWriterCoreBridge'
 import { HarmonyLifecycle } from '../platform/lifecycle/HarmonyLifecycle'
 import { HarmonyThemeAdapter } from '../ui/theme/HarmonyThemeAdapter'
 import { CapabilityRegistry } from '../platform/capability/CapabilityRegistry'
+import { InputDeviceService } from '../platform/input/InputDeviceService'
+import { GripPostureService } from '../platform/awareness/GripPostureService'
+import { ShoulderSurfingService } from '../platform/privacy/ShoulderSurfingService'
+import { WindowPrivacyService } from '../platform/privacy/WindowPrivacyService'
 
 export interface AppContextConfig {
   appDataRoot: string
@@ -40,6 +44,40 @@ export class AppContext {
     this.abilityContext = context
     const filesDir = context.filesDir
     this.config.appDataRoot = `${filesDir}/${DEFAULT_APP_DATA_DIR_NAME}`
+
+    // 把 UIAbilityContext 注入 WindowPrivacyService，使其能获取 window 实例。
+    WindowPrivacyService.getInstance().setAbilityContext(context)
+
+    // 启动各平台 service 真实监听，并刷新 CapabilityRegistry 真实探测。
+    // 不靠默认 bool 假装能力存在；各 service 报告真实 support 状态。
+    this.startPlatformServices()
+  }
+
+  // 启动平台系统能力 service 并刷新 CapabilityRegistry。
+  // 异步启动；失败不阻塞主流程，各 service 内部已 try/catch。
+  private startPlatformServices(): void {
+    // 异步启动，不 await（setAbilityContext 是同步入口）。
+    const inputDevice: InputDeviceService = InputDeviceService.getInstance()
+    const grip: GripPostureService = GripPostureService.getInstance()
+    const shoulder: ShoulderSurfingService = ShoulderSurfingService.getInstance()
+
+    // 启动设备枚举/监听（异步，不阻塞）。
+    inputDevice.startListening().then(() => {
+      // 设备列表就绪后刷新 capability（stylus 探测依赖设备表）。
+      this.capabilityRegistry.refresh()
+    }).catch(() => {
+      // 启动失败不伪造状态；refresh 仍执行以填充其余能力。
+      this.capabilityRegistry.refresh()
+    })
+
+    // 启动握姿感知监听（异步）。
+    grip.startListening().catch(() => {})
+
+    // 启动防窥检测监听（异步）。
+    shoulder.startListening().catch(() => {})
+
+    // 首次刷新：填充不依赖异步监听的能力（shoulderSurfing/windowPrivacy/continuation/share）。
+    this.capabilityRegistry.refresh()
   }
 
   static getInstance(config?: AppContextConfig): AppContext {
@@ -101,6 +139,10 @@ export class AppContext {
 
   dispose(): void {
     this.isInitialized = false
+    // 停止平台 service 监听，释放系统资源。
+    InputDeviceService.getInstance().stopListening()
+    GripPostureService.getInstance().stopListening()
+    ShoulderSurfingService.getInstance().stopListening()
   }
 }
 
