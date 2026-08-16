@@ -1,8 +1,7 @@
 import { Routes } from '../../../app/navigation/Routes'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { ResultEnvelope, ChangedEntity } from '../../../corebridge/dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemeMode, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
-import { SyncConfig, SyncResult, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
+import { SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl, ColorSource } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { getBridge } from '../../../app/AppContext'
@@ -103,10 +102,8 @@ export struct SettingsScreen {
 
     try {
       const settingsResult = await this.bridge.getLocalSettings()
-      // per-project sync：需要选中作品才能加载该作品的同步配置。
-      const syncConfigResult = this.projectId.length > 0
-        ? await this.bridge.loadSyncConfig(this.projectId)
-        : { success: false, errorCode: 'NO_PROJECT', messageKey: 'sync.block.no_project_selected', messageArgs: {} as Record<string, string>, rawError: 'no project selected', warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] } as ResultEnvelope<SyncConfig>
+      // 全量同步（Issue #630）：一个全局 SyncConfig，不依赖选中作品。
+      const syncConfigResult = await this.bridge.loadSyncConfig()
 
       try {
         const paletteResult = await this.bridge.listPaletteRecords()
@@ -186,30 +183,37 @@ export struct SettingsScreen {
   }
 
   async performSync() {
-    if (!this.projectId || this.projectId.length === 0) {
-      this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_sync_no_project').id)
-      return
-    }
     this.isSyncing = true
     this.syncMessage = ''
 
     try {
-      const result = await this.bridge.performSync(this.projectId)
+      const result = await this.bridge.performSync()
       if (result.success && result.data) {
         const syncResult = result.data
-        if (syncResult.status === 'Conflict' || syncResult.status === 'PartialConflict') {
+        if (syncResult.overallStatus === 'conflict' || syncResult.overallStatus === 'partial_conflict') {
           this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_sync_conflict').id)
-        } else if (syncResult.status === 'DirtyRepoBlocked') {
+        } else if (syncResult.overallStatus === 'dirty_repo_blocked') {
           this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_dirty_repo_blocked').id)
-        } else if (syncResult.status === 'NoChanges') {
+        } else if (syncResult.overallStatus === 'no_changes') {
           this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_complete_format').id).replace('%s', '0')
           setTimeout(() => { this.syncMessage = '' }, 3000)
+        } else if (syncResult.overallStatus === 'recoverable_error' ||
+          syncResult.overallStatus === 'fatal_error' ||
+          syncResult.overallStatus === 'error' ||
+          syncResult.overallStatus === 'syncing') {
+          // 失败/未完成：需要用户处理或可重试，展示错误分类文案
+          const errorCategory = syncResult.errorCategory
+          if (errorCategory && errorCategory.length > 0) {
+            this.syncMessage = MessageKeyMapper.resolveMessage(getContext(this), `error.${errorCategory}`, undefined, undefined)
+          } else {
+            this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_error').id)
+          }
         } else {
-          this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_complete_format').id).replace('%s', `${syncResult.downloadedFiles.length}`)
+          this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_complete_format').id).replace('%s', `${syncResult.totalDownloaded}`)
           setTimeout(() => { this.syncMessage = '' }, 3000)
         }
       } else {
-        // 优先用 SyncResult.errorCategory，其次用 ResultEnvelope.messageKey
+        // 优先用 FullSyncResult.errorCategory，其次用 ResultEnvelope.messageKey
         const errorCategory = result.data?.errorCategory
         if (errorCategory && errorCategory.length > 0) {
           this.syncMessage = MessageKeyMapper.resolveMessage(getContext(this), `error.${errorCategory}`, undefined, undefined)
@@ -231,11 +235,9 @@ export struct SettingsScreen {
     this.syncDiagnostics = null
 
     try {
-      const result = this.projectId.length > 0
-        ? await this.bridge.syncDiagnostics(this.projectId)
-        : { success: false, errorCode: 'NO_PROJECT', messageKey: 'sync.block.no_project_selected', messageArgs: {} as Record<string, string>, rawError: 'no project selected', warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] } as ResultEnvelope<SyncDiagnosticsResult>
-      if (result.success && result.data) {
-        this.syncDiagnostics = result.data
+      const result = await this.bridge.syncDiagnostics()
+      if (result.success && result.data && result.data.diagnostics) {
+        this.syncDiagnostics = result.data.diagnostics
       } else {
         this.syncDiagnostics = {
           success: false,
@@ -763,13 +765,13 @@ export struct SettingsScreen {
         .width('100%')
         .margin({ bottom: 16 })
 
-        // Sync actions (per-project: disabled when no projectId selected)
+        // Sync actions（全量同步：全局配置，不依赖选中作品）
         Row() {
           Button($r('app.string.sync_section'))
             .fontSize(14)
             .height(36)
             .backgroundColor(this.themeConfig.colors.primary)
-            .enabled(!this.isSyncing && this.projectId.length > 0)
+            .enabled(!this.isSyncing)
             .onClick(() => this.performSync())
 
           Button($r('app.string.diagnose'))

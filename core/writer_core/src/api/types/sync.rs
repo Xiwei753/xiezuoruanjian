@@ -369,6 +369,28 @@ fn sync_status_to_wire(status: &crate::sync::SyncStatus) -> String {
     .to_string()
 }
 
+/// 将线格式状态字符串反序列化为 `SyncStatus`（Issue #630 评论 5308040939 Part 1）。
+///
+/// 与 `sync_status_to_wire` 同一映射。未知 code 映射为 `FatalError`：平台预处理
+/// 失败宁可落在终态（需要用户处理），不给"可自动重试"的错觉。
+pub(crate) fn sync_status_from_wire(s: &str) -> crate::sync::SyncStatus {
+    match s {
+        "idle" => crate::sync::SyncStatus::Idle,
+        "syncing" => crate::sync::SyncStatus::Syncing,
+        "success" => crate::sync::SyncStatus::Success,
+        "configured_not_tested" => crate::sync::SyncStatus::ConfiguredNotTested,
+        "conflict" => crate::sync::SyncStatus::Conflict,
+        "partial_conflict" => crate::sync::SyncStatus::PartialConflict,
+        "recoverable_error" => crate::sync::SyncStatus::RecoverableError("preflight".to_string()),
+        "fatal_error" => crate::sync::SyncStatus::FatalError("preflight".to_string()),
+        "dirty_repo_blocked" => crate::sync::SyncStatus::DirtyRepoBlocked,
+        "branch_missing_recovered" => crate::sync::SyncStatus::BranchMissingRecovered,
+        "no_changes" => crate::sync::SyncStatus::NoChanges,
+        "latest_wins_applied" => crate::sync::SyncStatus::LatestWinsApplied,
+        _ => crate::sync::SyncStatus::FatalError("preflight".to_string()),
+    }
+}
+
 fn first_sync_mode_to_wire(mode: &crate::sync::FirstSyncMode) -> String {
     match mode {
         crate::sync::FirstSyncMode::NotAttempted => "not_attempted",
@@ -499,7 +521,7 @@ impl From<crate::sync::types::FullSyncDiagnosticsResult> for FullSyncDiagnostics
 
 /// 全量同步持久状态 DTO（Issue #630 评论 5307423953 Part B）。
 ///
-/// 与 `crate::sync::types::FullSyncState` 对齐。overall_status 用线格式字符串
+/// 与 `crate::sync::full_sync_state::FullSyncState` 对齐。overall_status 用线格式字符串
 /// （与 `FullSyncResultDto.overall_status` 同一映射），last_*_time 为 Unix 秒。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct FullSyncStateDto {
@@ -509,8 +531,8 @@ pub struct FullSyncStateDto {
     pub failed_targets: Vec<String>,
 }
 
-impl From<crate::sync::types::FullSyncState> for FullSyncStateDto {
-    fn from(s: crate::sync::types::FullSyncState) -> Self {
+impl From<crate::sync::full_sync_state::FullSyncState> for FullSyncStateDto {
+    fn from(s: crate::sync::full_sync_state::FullSyncState) -> Self {
         Self {
             overall_status: sync_status_to_wire(&s.overall_status),
             last_attempt_time: s.last_attempt_time,

@@ -63,30 +63,7 @@ class AutoSyncWorker(
         if (!shouldSyncNow(settingsRepository, snapshot)) return Result.success()
 
         val outcome = deps.syncCoordinator.runFullSync(SyncTrigger.Auto, snapshot)
-        return when (outcome) {
-            is SyncOutcome.Completed -> {
-                DiagnosticsEvents.syncEvent("autosync", "completed")
-                Result.success()
-            }
-            is SyncOutcome.Unconfigured,
-            is SyncOutcome.Disabled,
-            -> {
-                DiagnosticsEvents.syncEvent("autosync", "unconfigured")
-                Result.success()
-            }
-            is SyncOutcome.Busy -> {
-                DiagnosticsEvents.syncEvent("autosync", "busy")
-                Result.retry()
-            }
-            is SyncOutcome.RetryableFailure -> {
-                DiagnosticsEvents.syncEvent("autosync", "retryable_failure")
-                Result.retry()
-            }
-            is SyncOutcome.TerminalFailure -> {
-                DiagnosticsEvents.syncEvent("autosync", "terminal_failure")
-                Result.failure()
-            }
-        }
+        return mapOutcomeToWorkerResult(outcome)
     }
 
     /**
@@ -117,5 +94,38 @@ class AutoSyncWorker(
 
     companion object {
         private const val TAG = "AutoSyncWorker"
+
+        /**
+         * #630 评论 5308040939 Part 2：SyncOutcome → WorkManager Result 映射。
+         *
+         * RetryableFailure → [Result.retry]（下次自动重试）；Fatal/Dirty/Conflict 等
+         * TerminalFailure → [Result.failure]（确定性失败，重试没有意义）。
+         * 纯函数，供单元测试直接验证 retry/failure 区分。
+         */
+        internal fun mapOutcomeToWorkerResult(outcome: SyncOutcome): Result =
+            when (outcome) {
+                is SyncOutcome.Completed -> {
+                    DiagnosticsEvents.syncEvent("autosync", "completed")
+                    Result.success()
+                }
+                is SyncOutcome.Unconfigured,
+                is SyncOutcome.Disabled,
+                -> {
+                    DiagnosticsEvents.syncEvent("autosync", "unconfigured")
+                    Result.success()
+                }
+                is SyncOutcome.Busy -> {
+                    DiagnosticsEvents.syncEvent("autosync", "busy")
+                    Result.retry()
+                }
+                is SyncOutcome.RetryableFailure -> {
+                    DiagnosticsEvents.syncEvent("autosync", "retryable_failure")
+                    Result.retry()
+                }
+                is SyncOutcome.TerminalFailure -> {
+                    DiagnosticsEvents.syncEvent("autosync", "terminal_failure")
+                    Result.failure()
+                }
+            }
     }
 }

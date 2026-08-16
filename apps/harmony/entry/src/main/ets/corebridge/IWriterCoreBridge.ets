@@ -4,7 +4,7 @@ import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, Proje
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRender, StarMapMotionPolicy } from './dto/StarMapDtos'
-import { SyncConfig, SyncResult, SyncDiagnosticsResult } from './dto/SyncDtos'
+import { SyncConfig, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
 
 export interface IWriterCoreBridge {
   // App State 查询
@@ -63,19 +63,17 @@ export interface IWriterCoreBridge {
   deletePaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<boolean>>
   listBuiltinThemes(): Promise<ResultEnvelope<BuiltinThemeDto[]>>
 
-  // Sync（作品级，per-project: projectId selects the sync root）
-  loadSyncConfig(projectId: string): Promise<ResultEnvelope<SyncConfig>>
-  saveSyncConfig(projectId: string, config: SyncConfig): Promise<ResultEnvelope<boolean>>
-  syncDryRun(projectId: string): Promise<ResultEnvelope<SyncResult>>
-  performSync(projectId: string): Promise<ResultEnvelope<SyncResult>>
-  syncDiagnostics(projectId: string): Promise<ResultEnvelope<SyncDiagnosticsResult>>
+  // Sync（全量同步统一入口，Issue #630）
+  // 一个全局 SyncConfig + 一份全局凭据，App target + 所有 Project target 一次同步。
+  loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>>
+  saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>>
+  syncDryRun(): Promise<ResultEnvelope<FullSyncDryRunResult>>
+  performSync(): Promise<ResultEnvelope<FullSyncResult>>
+  syncDiagnostics(): Promise<ResultEnvelope<FullSyncDiagnosticsResult>>
 
-  // 应用级同步通道（Issue #600 评论 #3 问题四）
-  // 应用级 Git 仓库根 = app_data_root，同步设置/全局星图/主题调色板。
-  loadAppSyncConfig(): Promise<ResultEnvelope<SyncConfig>>
-  saveAppSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>>
-  performAppSync(): Promise<ResultEnvelope<SyncResult>>
-  appSyncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>>
+  // App target 同步状态（per-target 状态查询）
+  loadAppSyncState(): Promise<ResultEnvelope<SyncState>>
+  saveAppSyncState(state: SyncState): Promise<ResultEnvelope<boolean>>
 
   // Stats
   getWritingStats(): Promise<ResultEnvelope<WritingStats>>

@@ -1,5 +1,5 @@
 import { ChangedEntity, ResultEnvelope } from '../dto/ResultEnvelope'
-import { SyncConfig, SyncResult, SyncDiagnosticsResult, SyncState } from '../dto/SyncDtos'
+import { FullSyncDiagnosticsResult, FullSyncDryRunResult, FullSyncResult, SyncConfig, SyncState } from '../dto/SyncDtos'
 import { NativeCoreModule } from './NativeCoreModule'
 
 function nativeError<T>(e: unknown): ResultEnvelope<T> {
@@ -9,76 +9,45 @@ function nativeError<T>(e: unknown): ResultEnvelope<T> {
 export class NativeSyncBridge {
   constructor(private core: NativeCoreModule) {}
 
-  // ── 作品级同步（per-project: projectId selects the sync root） ──
+  // ── 全量同步统一入口（Issue #630） ──
+  // 一个全局 SyncConfig + 一份全局凭据，App target + 所有 Project target 一次同步。
+  // 旧的 per-project / app-level 双套入口已删除。
 
-  async loadSyncConfig(projectId: string): Promise<ResultEnvelope<SyncConfig>> {
+  async loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeLoadSyncConfig(projectId)
+      const jsonStr: string = this.core.getNativeModule().nativeLoadSyncConfig()
       return this.core.parseEnvelope<SyncConfig>(jsonStr)
     } catch (e) { return nativeError<SyncConfig>(e) }
   }
 
-  async saveSyncConfig(projectId: string, config: SyncConfig): Promise<ResultEnvelope<boolean>> {
+  async saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeSaveSyncConfig(projectId, JSON.stringify(config))
+      const jsonStr: string = this.core.getNativeModule().nativeSaveSyncConfig(JSON.stringify(config))
       return this.core.parseEnvelope<boolean>(jsonStr)
     } catch (e) { return nativeError<boolean>(e) }
   }
 
-  async syncDryRun(projectId: string): Promise<ResultEnvelope<SyncResult>> {
+  async syncDryRun(): Promise<ResultEnvelope<FullSyncDryRunResult>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeSyncDryRun(projectId)
-      return this.core.parseEnvelope<SyncResult>(jsonStr)
-    } catch (e) { return nativeError<SyncResult>(e) }
+      const jsonStr: string = this.core.getNativeModule().nativeSyncDryRun()
+      return this.core.parseEnvelope<FullSyncDryRunResult>(jsonStr)
+    } catch (e) { return nativeError<FullSyncDryRunResult>(e) }
   }
 
-  async performSync(projectId: string): Promise<ResultEnvelope<SyncResult>> {
+  async performSync(): Promise<ResultEnvelope<FullSyncResult>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativePerformSync(projectId)
-      return this.core.parseEnvelope<SyncResult>(jsonStr)
-    } catch (e) { return nativeError<SyncResult>(e) }
+      const jsonStr: string = this.core.getNativeModule().nativePerformSync()
+      return this.core.parseEnvelope<FullSyncResult>(jsonStr)
+    } catch (e) { return nativeError<FullSyncResult>(e) }
   }
 
-  async syncDiagnostics(projectId: string): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
+  async syncDiagnostics(): Promise<ResultEnvelope<FullSyncDiagnosticsResult>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeSyncDiagnostics(projectId)
-      return this.core.parseEnvelope<SyncDiagnosticsResult>(jsonStr)
+      const jsonStr: string = this.core.getNativeModule().nativeSyncDiagnostics()
+      return this.core.parseEnvelope<FullSyncDiagnosticsResult>(jsonStr)
     } catch (err) {
       return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.sync_failed', messageArgs: { 'detail': String(err) } as Record<string, string>, rawError: `syncDiagnostics failed: ${err}`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
-  }
-
-  // ── 应用级同步通道（Issue #600 评论 #3 问题四） ──
-  // 应用级同步根 = app_data_root，同步设置/全局星图/主题调色板。
-  // Core FFI 已导出应用级 sync C ABI，Harmony(NAPI) 通过这些入口接入，
-  // 与作品级通道对称，但不接收 projectId — 应用级同步目标唯一。
-
-  async loadAppSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
-    try {
-      const jsonStr: string = this.core.getNativeModule().nativeLoadAppSyncConfig()
-      return this.core.parseEnvelope<SyncConfig>(jsonStr)
-    } catch (e) { return nativeError<SyncConfig>(e) }
-  }
-
-  async saveAppSyncConfig(_config: SyncConfig): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.core.getNativeModule().nativeSaveAppSyncConfig(JSON.stringify(_config))
-      return this.core.parseEnvelope<boolean>(jsonStr)
-    } catch (e) { return nativeError<boolean>(e) }
-  }
-
-  async performAppSync(): Promise<ResultEnvelope<SyncResult>> {
-    try {
-      const jsonStr: string = this.core.getNativeModule().nativePerformAppSync()
-      return this.core.parseEnvelope<SyncResult>(jsonStr)
-    } catch (e) { return nativeError<SyncResult>(e) }
-  }
-
-  async appSyncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
-    try {
-      const jsonStr: string = this.core.getNativeModule().nativeAppSyncDiagnostics()
-      return this.core.parseEnvelope<SyncDiagnosticsResult>(jsonStr)
-    } catch (e) { return nativeError<SyncDiagnosticsResult>(e) }
   }
 
   // ── 应用级同步状态（Issue #600 评论 #5） ──

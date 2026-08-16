@@ -5,7 +5,7 @@ import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, Proje
 import { AppSummary, ResultEnvelope, RecentEdit, ChangedEntity } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRender, StarMapMotionPolicy } from './dto/StarMapDtos'
-import { SyncConfig, SyncResult, SyncDiagnosticsResult } from './dto/SyncDtos'
+import { SyncConfig, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
 import { NativeCoreModule } from './native/NativeCoreModule'
 import { NativeAppStateBridge } from './native/NativeAppStateBridge'
 import { NativeProjectBridge } from './native/NativeProjectBridge'
@@ -246,46 +246,37 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.settingsBridge.listBuiltinThemes()
   }
 
-  // ── Sync（作品级，per-project:<projectId>） ──
+  // ── Sync（全量同步统一入口，Issue #630） ──
+  // 一个全局 SyncConfig + 一份全局凭据，App target + 所有 Project target 一次同步。
 
-  async loadSyncConfig(projectId: string): Promise<ResultEnvelope<SyncConfig>> {
-    return this.syncBridge.loadSyncConfig(projectId)
+  async loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
+    return this.syncBridge.loadSyncConfig()
   }
 
-  async saveSyncConfig(projectId: string, config: SyncConfig): Promise<ResultEnvelope<boolean>> {
-    return this.syncBridge.saveSyncConfig(projectId, config)
+  async saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
+    return this.syncBridge.saveSyncConfig(config)
   }
 
-  async syncDryRun(projectId: string): Promise<ResultEnvelope<SyncResult>> {
-    return this.syncBridge.syncDryRun(projectId)
+  async syncDryRun(): Promise<ResultEnvelope<FullSyncDryRunResult>> {
+    return this.syncBridge.syncDryRun()
   }
 
-  async performSync(projectId: string): Promise<ResultEnvelope<SyncResult>> {
-    return this.syncBridge.performSync(projectId)
+  async performSync(): Promise<ResultEnvelope<FullSyncResult>> {
+    return this.syncBridge.performSync()
   }
 
-  async syncDiagnostics(projectId: string): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
-    return this.syncBridge.syncDiagnostics(projectId)
+  async syncDiagnostics(): Promise<ResultEnvelope<FullSyncDiagnosticsResult>> {
+    return this.syncBridge.syncDiagnostics()
   }
 
-  // ── 应用级同步通道（Issue #600 评论 #3 问题四） ──
-  // 应用级 Git 仓库根 = app_data_root，同步设置/全局星图/主题调色板。
-  // AppSyncProfile 与 ProjectSyncProfile(projectId) 在 API/数据模型里明确区分。
+  // ── App target 同步状态（per-target 状态查询） ──
 
-  async loadAppSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
-    return this.syncBridge.loadAppSyncConfig()
+  async loadAppSyncState(): Promise<ResultEnvelope<SyncState>> {
+    return this.syncBridge.loadAppSyncState()
   }
 
-  async saveAppSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
-    return this.syncBridge.saveAppSyncConfig(config)
-  }
-
-  async performAppSync(): Promise<ResultEnvelope<SyncResult>> {
-    return this.syncBridge.performAppSync()
-  }
-
-  async appSyncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
-    return this.syncBridge.appSyncDiagnostics()
+  async saveAppSyncState(state: SyncState): Promise<ResultEnvelope<boolean>> {
+    return this.syncBridge.saveAppSyncState(state)
   }
 
   // ── Stats ──

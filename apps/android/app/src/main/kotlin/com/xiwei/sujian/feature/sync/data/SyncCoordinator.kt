@@ -163,6 +163,13 @@ class SyncCoordinator internal constructor(
                                 "App sync data barrier flush failed — aborting (typed Fatal)",
                             )
                             syncStatusRepository.notifySyncFailed()
+                            // #630 评论 5308040939 Part 1：预处理失败写同一份 Core
+                            // FullSyncState（FatalError / preflight），重启后顶部红灯
+                            // 不被旧 Success 覆盖。
+                            settingsRepository.recordFullSyncPreflightFailure(
+                                SyncStatus.FatalError,
+                                "preflight",
+                            )
                             return@runExclusive BridgeResult.Error(
                                 ResultEnvelope.errorOf(
                                     "APP_SYNC_BARRIER_FLUSH_FAILED",
@@ -179,6 +186,10 @@ class SyncCoordinator internal constructor(
                             "Active document flush failed before sync — aborting (typed DocumentSaveFailed)",
                         )
                         syncStatusRepository.notifySyncFailed()
+                        settingsRepository.recordFullSyncPreflightFailure(
+                            SyncStatus.FatalError,
+                            "preflight",
+                        )
                         return@runExclusive BridgeResult.Error(
                             ResultEnvelope.errorOf(
                                 "DOCUMENT_FLUSH_FAILED",
@@ -200,6 +211,12 @@ class SyncCoordinator internal constructor(
                                 ),
                                 SyncFailureKind.Fatal,
                             )
+                        // #630 评论 5308040939 Part 1：credentials override 失败同样写
+                        // 同一份 Core FullSyncState（FatalError / preflight）。
+                        settingsRepository.recordFullSyncPreflightFailure(
+                            SyncStatus.FatalError,
+                            "preflight",
+                        )
                         resolveAndPublish(error)
                         return@runExclusive error
                     }

@@ -1,96 +1,17 @@
 // ── Sync NAPI handlers ──
 // Included by napi_init.cpp — expects ReturnJsonString and writer_core_bridge.h to be available.
 // All handlers return ResultEnvelope JSON via ReturnJsonString (which frees the core-allocated char*).
-// All sync handlers are per-project: project_id is the first argument (Issue #600 评论 #3).
-// NativeSaveSyncConfig takes project_id + SyncConfigDto JSON as arguments.
+// 全量同步统一入口（Issue #630）：一个全局 SyncConfig + 一份全局凭据，
+// App target + 所有 Project target 一次同步。旧的 per-project sync /
+// app-level sync 双套 handler 已删除，只保留全量同步三个入口
+// （dry-run / diagnostics / perform）+ 全局 config 读写 + App target 状态查询。
 
 static napi_value NativeLoadSyncConfig(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_load_sync_config(project_id));
+    (void)info;
+    return ReturnJsonString(env, writer_core_load_sync_config());
 }
 
 static napi_value NativeSaveSyncConfig(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value args[2];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[1], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_save_sync_config(project_id, json));
-    delete[] json;
-    return result;
-}
-
-static napi_value NativeSyncDryRun(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_sync_dry_run(project_id));
-}
-
-static napi_value NativeSyncDiagnostics(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_sync_diagnostics(project_id));
-}
-
-static napi_value NativePerformSync(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_perform_sync(project_id));
-}
-
-// ── App-level sync NAPI handlers (Issue #600 评论 #3/#4) — sync root = app_data_root ──
-// 镜像作品级 handler 但不接收 project_id — 应用级同步目标唯一。
-
-static napi_value NativeLoadAppSyncConfig(napi_env env, napi_callback_info info) {
-    (void)info;
-    return ReturnJsonString(env, writer_core_load_app_sync_config());
-}
-
-static napi_value NativeSaveAppSyncConfig(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
@@ -106,24 +27,24 @@ static napi_value NativeSaveAppSyncConfig(napi_env env, napi_callback_info info)
         json[0] = '\0';
     }
 
-    napi_value result = ReturnJsonString(env, writer_core_save_app_sync_config(json));
+    napi_value result = ReturnJsonString(env, writer_core_save_sync_config(json));
     delete[] json;
     return result;
 }
 
-static napi_value NativeAppSyncDryRun(napi_env env, napi_callback_info info) {
+static napi_value NativeSyncDryRun(napi_env env, napi_callback_info info) {
     (void)info;
-    return ReturnJsonString(env, writer_core_app_sync_dry_run());
+    return ReturnJsonString(env, writer_core_full_sync_dry_run());
 }
 
-static napi_value NativeAppSyncDiagnostics(napi_env env, napi_callback_info info) {
+static napi_value NativeSyncDiagnostics(napi_env env, napi_callback_info info) {
     (void)info;
-    return ReturnJsonString(env, writer_core_app_sync_diagnostics());
+    return ReturnJsonString(env, writer_core_full_sync_diagnostics());
 }
 
-static napi_value NativePerformAppSync(napi_env env, napi_callback_info info) {
+static napi_value NativePerformSync(napi_env env, napi_callback_info info) {
     (void)info;
-    return ReturnJsonString(env, writer_core_perform_app_sync());
+    return ReturnJsonString(env, writer_core_perform_full_sync());
 }
 
 static napi_value NativeLoadAppSyncState(napi_env env, napi_callback_info info) {
@@ -161,11 +82,6 @@ napi_property_descriptor* getSyncDescriptors(size_t* count) {
         {"nativeSyncDryRun", nullptr, NativeSyncDryRun, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeSyncDiagnostics", nullptr, NativeSyncDiagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativePerformSync", nullptr, NativePerformSync, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeLoadAppSyncConfig", nullptr, NativeLoadAppSyncConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeSaveAppSyncConfig", nullptr, NativeSaveAppSyncConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeAppSyncDryRun", nullptr, NativeAppSyncDryRun, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeAppSyncDiagnostics", nullptr, NativeAppSyncDiagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativePerformAppSync", nullptr, NativePerformAppSync, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeLoadAppSyncState", nullptr, NativeLoadAppSyncState, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeSaveAppSyncState", nullptr, NativeSaveAppSyncState, nullptr, nullptr, nullptr, napi_default, nullptr},
     };

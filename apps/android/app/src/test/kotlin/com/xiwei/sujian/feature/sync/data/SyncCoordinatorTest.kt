@@ -30,6 +30,7 @@ import org.robolectric.annotation.Config
 class SyncCoordinatorTest {
     companion object {
         private const val PROJECT_ID_625 = "p-625"
+        private const val PREFLIGHT_TARGET = "preflight"
 
         private fun fullSyncSuccess(targets: List<TargetSyncResult> = emptyList()): FullSyncResult =
             FullSyncResult(
@@ -203,6 +204,10 @@ class SyncCoordinatorTest {
         assertEquals(3, commands.distinctBy { it::class }.size)
     }
 
+    private fun assertTerminalFailure(outcome: SyncOutcome) {
+        assertTrue("应返回 TerminalFailure，实际: $outcome", outcome is SyncOutcome.TerminalFailure)
+    }
+
     private fun createCoordinator(syncExecution: SyncExecutionPort? = null): SyncCoordinator {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
         val holder =
@@ -315,7 +320,7 @@ class SyncCoordinatorTest {
                 )
 
             collectorJob.cancel()
-            assertTrue("应返回 TerminalFailure，实际: $outcome", outcome is SyncOutcome.TerminalFailure)
+            assertTerminalFailure(outcome)
             assertTrue("TerminalFailure 不应发出信号，实际收到: $collected", collected.isEmpty())
         }
 
@@ -361,5 +366,254 @@ class SyncCoordinatorTest {
             assertTrue("应返回 Completed，实际: $outcome", outcome is SyncOutcome.Completed)
             assertEquals("Completed 应发出一次信号", 1, collected.size)
             assertEquals(listOf(projectId), collected[0].downloadedProjectIds)
+        }
+
+    // ── #630 评论 5308040939 Part 1：预处理失败写同一份 Core FullSyncState ──
+
+    /**
+     * 记录式 Repository：override [SyncRepository.recordFullSyncPreflightFailure]，
+     * 验证 [SyncCoordinator] 在预处理失败路径上写 Core FullSyncState 的窄接口调用。
+     */
+    private class RecordingSyncRepository :
+        SyncRepository(
+            org.robolectric.RuntimeEnvironment.getApplication(),
+            com.xiwei.sujian.core.interop.app.AppServiceBridge(
+                com.xiwei.sujian.core.interop.app.WriterAppServiceHolder(
+                    appDataRoot = "/home/xiwei/.cache/agent-tmp/sujian-test-preflight-data",
+                    projectsRoot = "/home/xiwei/.cache/agent-tmp/sujian-test-preflight-projects",
+                ),
+            ),
+        ) {
+        val recorded: MutableList<Pair<SyncStatus, String>> = mutableListOf()
+
+        override fun recordFullSyncPreflightFailure(
+            status: SyncStatus,
+            failedTarget: String,
+        ) {
+            recorded += status to failedTarget
+        }
+    }
+
+    private class FailingBarrier :
+        AppSyncDataBarrier(
+            starmapBridge =
+                com.xiwei.sujian.feature.starmap.data.interop.StarMapBridge(
+                    com.xiwei.sujian.core.interop.app.WriterAppServiceHolder(
+                        appDataRoot = "/home/xiwei/.cache/agent-tmp/sujian-test-preflight-data",
+                        projectsRoot = "/home/xiwei/.cache/agent-tmp/sujian-test-preflight-projects",
+                    ),
+                ),
+            reloadSettings = { },
+            reloadThemes = { },
+            invalidateStarmapCache = { },
+        ) {
+        override fun flushBeforeSync(): Boolean = false
+    }
+
+    /**
+     * app data barrier flush 失败 → TerminalFailure，且同时写 Core FullSyncState
+     * （FatalError / "preflight"），重启后顶部红灯不被旧 Success 覆盖。
+     */
+    @Test
+    fun preflight_appBarrierFlushFailure_recordsCoreFullSyncState() =
+        runTest(UnconfinedTestDispatcher()) {
+            val repo = RecordingSyncRepository()
+            val syncStatusRepo = SyncStatusRepository(repo)
+            val coordinator = SyncCoordinator(repo, syncStatusRepo, FailingBarrier(), FakeSyncExecution())
+
+            val outcome =
+                coordinator.runFullSync(
+                    SyncTrigger.Manual,
+                    snapshot = enabledSnapshot(),
+                )
+
+            assertTerminalFailure(outcome)
+            assertEquals(
+                "app barrier flush 失败必须写同一份 Core FullSyncState",
+                listOf(SyncStatus.FatalError to PREFLIGHT_TARGET),
+                repo.recorded,
+            )
+        }
+
+    /**
+     * 活动正文 flush 失败 → TerminalFailure，且同时写 Core FullSyncState
+     * （FatalError / "preflight"）。
+     */
+    @Test
+    fun preflight_activeDocumentFlushFailure_recordsCoreFullSyncState() =
+        runTest(UnconfinedTestDispatcher()) {
+            // 替换默认成功 flush 的 gate 为失败 flush
+            gateRegistration?.close()
+            gateRegistration = ActiveDocumentGate.register(owner = Any(), flush = { false })
+
+            val repo = RecordingSyncRepository()
+            val syncStatusRepo = SyncStatusRepository(repo)
+            val coordinator = SyncCoordinator(repo, syncStatusRepo, null, FakeSyncExecution())
+
+            val outcome =
+                coordinator.runFullSync(
+                    SyncTrigger.Manual,
+                    snapshot = enabledSnapshot(),
+                )
+
+            assertTerminalFailure(outcome)
+            assertEquals(
+                "文档 flush 失败必须写同一份 Core FullSyncState",
+                listOf(SyncStatus.FatalError to PREFLIGHT_TARGET),
+                repo.recorded,
+            )
+        }
+
+    /**
+     * secrets override 失败 → TerminalFailure，且同时写 Core FullSyncState
+     * （FatalError / "preflight"）。
+     */
+    @Test
+    fun preflight_secretsOverrideFailure_recordsCoreFullSyncState() =
+        runTest(UnconfinedTestDispatcher()) {
+            val repo = RecordingSyncRepository()
+            val syncStatusRepo = SyncStatusRepository(repo)
+            val coordinator =
+                SyncCoordinator(
+                    repo,
+                    syncStatusRepo,
+                    null,
+                    FakeSyncExecution(overrideOk = false),
+                )
+
+            val outcome =
+                coordinator.runFullSync(
+                    SyncTrigger.Manual,
+                    snapshot = enabledSnapshot(),
+                )
+
+            assertTerminalFailure(outcome)
+            assertEquals(
+                "credentials override 失败必须写同一份 Core FullSyncState",
+                listOf(SyncStatus.FatalError to PREFLIGHT_TARGET),
+                repo.recorded,
+            )
+        }
+
+    /**
+     * #630 评论 5308040939 Part 2：聚合保留错误类型优先级 —
+     * RecoverableError → RetryableFailure（Worker retry）；Fatal/Dirty/Conflict →
+     * TerminalFailure（Worker failure）。mapToOutcome 必须区分这两类。
+     */
+    @Test
+    fun runFullSync_recoverableError_mapsToRetryableFailure() =
+        runTest(UnconfinedTestDispatcher()) {
+            val coordinator =
+                createCoordinator(
+                    syncExecution =
+                        FakeSyncExecution(
+                            performResult =
+                                BridgeResult.Success(
+                                    FullSyncResult(
+                                        overallStatus = SyncStatus.RecoverableError,
+                                        targets = emptyList(),
+                                        totalUploaded = 0,
+                                        totalDownloaded = 0,
+                                        totalLocalDeletes = 0,
+                                        totalRemoteDeletes = 0,
+                                        totalOverwritten = 0,
+                                        totalIgnored = 0,
+                                        totalConflicts = 0,
+                                        error = "temporary network failure",
+                                        errorCategory = null,
+                                        messageKey = null,
+                                    ),
+                                ),
+                        ),
+                )
+
+            val outcome =
+                coordinator.runFullSync(
+                    SyncTrigger.Manual,
+                    snapshot = enabledSnapshot(),
+                )
+
+            assertTrue(
+                "RecoverableError 应映射为 RetryableFailure（Worker 才能 retry），实际: $outcome",
+                outcome is SyncOutcome.RetryableFailure,
+            )
+        }
+
+    @Test
+    fun runFullSync_dirtyRepoBlocked_mapsToTerminalFailure() =
+        runTest(UnconfinedTestDispatcher()) {
+            val coordinator =
+                createCoordinator(
+                    syncExecution =
+                        FakeSyncExecution(
+                            performResult =
+                                BridgeResult.Success(
+                                    FullSyncResult(
+                                        overallStatus = SyncStatus.DirtyRepoBlocked,
+                                        targets = emptyList(),
+                                        totalUploaded = 0,
+                                        totalDownloaded = 0,
+                                        totalLocalDeletes = 0,
+                                        totalRemoteDeletes = 0,
+                                        totalOverwritten = 0,
+                                        totalIgnored = 0,
+                                        totalConflicts = 0,
+                                        error = "remote repo dirty",
+                                        errorCategory = null,
+                                        messageKey = null,
+                                    ),
+                                ),
+                        ),
+                )
+
+            val outcome =
+                coordinator.runFullSync(
+                    SyncTrigger.Manual,
+                    snapshot = enabledSnapshot(),
+                )
+
+            assertTrue(
+                "DirtyRepoBlocked 应映射为 TerminalFailure（Worker failure），实际: $outcome",
+                outcome is SyncOutcome.TerminalFailure,
+            )
+        }
+
+    @Test
+    fun runFullSync_partialConflict_mapsToTerminalFailure() =
+        runTest(UnconfinedTestDispatcher()) {
+            val coordinator =
+                createCoordinator(
+                    syncExecution =
+                        FakeSyncExecution(
+                            performResult =
+                                BridgeResult.Success(
+                                    FullSyncResult(
+                                        overallStatus = SyncStatus.PartialConflict,
+                                        targets = emptyList(),
+                                        totalUploaded = 0,
+                                        totalDownloaded = 0,
+                                        totalLocalDeletes = 0,
+                                        totalRemoteDeletes = 0,
+                                        totalOverwritten = 0,
+                                        totalIgnored = 0,
+                                        totalConflicts = 0,
+                                        error = "conflict detected",
+                                        errorCategory = null,
+                                        messageKey = null,
+                                    ),
+                                ),
+                        ),
+                )
+
+            val outcome =
+                coordinator.runFullSync(
+                    SyncTrigger.Manual,
+                    snapshot = enabledSnapshot(),
+                )
+
+            assertTrue(
+                "PartialConflict 应映射为 TerminalFailure（Worker failure），实际: $outcome",
+                outcome is SyncOutcome.TerminalFailure,
+            )
         }
 }

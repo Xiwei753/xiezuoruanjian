@@ -13,6 +13,7 @@ import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import com.xiwei.sujian.feature.sync.data.model.SyncState
+import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 
 /**
@@ -91,6 +92,25 @@ open class SyncRepository(
             }
             BridgeResult.NotLoaded -> null
         }
+
+    /**
+     * #630 评论 5308040939 Part 1：平台预处理失败写同一份 Core FullSyncState 的窄接口。
+     *
+     * 与 [performFullSync] 写同一个 `<app_data_root>/app-meta/sync/full_state.local.json`，
+     * 不新建 Android 第二份状态。[SyncCoordinator] 在正文 flush / app data barrier /
+     * credentials override 失败时，在 [notifySyncFailed] 的同时调用本方法，保证重启后
+     * 顶部红灯不被旧 Success 覆盖。失败只记日志，不抛异常。
+     */
+    open fun recordFullSyncPreflightFailure(
+        status: SyncStatus,
+        failedTarget: String,
+    ) {
+        when (val result = syncBridge.recordFullSyncPreflightFailure(status, failedTarget)) {
+            is BridgeResult.Success -> { }
+            is BridgeResult.Error -> warn("Failed to record full sync preflight failure: ${result.fullEnvelope}")
+            BridgeResult.NotLoaded -> warn("Full sync preflight failure not recorded: native library not loaded")
+        }
+    }
 
     // ── 全局同步配置 / 凭据 ──
 

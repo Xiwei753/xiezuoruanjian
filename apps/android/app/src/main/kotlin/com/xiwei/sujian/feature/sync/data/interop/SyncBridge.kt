@@ -3,6 +3,7 @@ import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.toDto
 import com.xiwei.sujian.core.interop.common.toModel
+import com.xiwei.sujian.core.interop.common.toWire
 import com.xiwei.sujian.feature.sync.data.model.FullSyncDiagnosticsResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncDryRunResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
@@ -13,6 +14,7 @@ import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import com.xiwei.sujian.feature.sync.data.model.SyncState
+import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 
 /**
  * Android 端同步功能桥接层 — 委托 Core `WriterAppService` 的同步方法。
@@ -179,5 +181,22 @@ open class SyncBridge internal constructor(private val holder: WriterAppServiceH
     fun loadFullSyncState(): BridgeResult<FullSyncState?> =
         holder.wrapResult {
             holder.service.loadFullSyncState()?.toModel()
+        }
+
+    /**
+     * #630 评论 5308040939 Part 1：平台预处理失败写同一份 Core FullSyncState 的窄接口。
+     *
+     * 只更新 Core 的 `<app_data_root>/app-meta/sync/full_state.local.json`（与
+     * [performFullSync] 同一份），不新建 Android 第二份状态。覆盖正文 flush /
+     * app data barrier / credentials override 等 Core 根本没进入 full sync 的失败路径。
+     * [status] 用 Android [SyncStatus] 枚举（映射为线格式 code）；[failedTarget] 传
+     * `"preflight"`。保留旧 last_success_time，保证重启后顶部不会出现旧绿灯。
+     */
+    fun recordFullSyncPreflightFailure(
+        status: SyncStatus,
+        failedTarget: String,
+    ): BridgeResult<Unit> =
+        holder.wrapResult {
+            holder.service.recordFullSyncPreflightFailure(status.toWire(), failedTarget)
         }
 }

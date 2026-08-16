@@ -93,20 +93,14 @@ char*  writer_core_rename_starmap(const char* starmap_id, const char* new_title)
 
 // ── Sync ──
 // All sync functions use JSON-in/JSON-out via ResultEnvelope.
-// All sync functions are per-project: project_id selects the sync root (Issue #600 评论 #3).
-// writer_core_save_sync_config: project_id + SyncConfigDto JSON input.
-char*  writer_core_load_sync_config(const char* project_id);
-char*  writer_core_save_sync_config(const char* project_id, const char* config_json);
-char*  writer_core_sync_dry_run(const char* project_id);
-char*  writer_core_sync_diagnostics(const char* project_id);
-char*  writer_core_perform_sync(const char* project_id);
-
-// ── App-level sync (Issue #600 评论 #3/#4) — sync root = app_data_root ──
-char*  writer_core_load_app_sync_config(void);
-char*  writer_core_save_app_sync_config(const char* config_json);
-char*  writer_core_app_sync_dry_run(void);
-char*  writer_core_app_sync_diagnostics(void);
-char*  writer_core_perform_app_sync(void);
+// 全量同步统一入口（Issue #630）：一个全局 SyncConfig + 一份全局凭据，
+// App target + 所有 Project target 一次同步。旧的 per-project sync /
+// app-level sync 双套 C ABI 已删除，对应声明不再保留。
+char*  writer_core_load_sync_config(void);
+char*  writer_core_save_sync_config(const char* config_json);
+char*  writer_core_full_sync_dry_run(void);
+char*  writer_core_full_sync_diagnostics(void);
+char*  writer_core_perform_full_sync(void);
 char*  writer_core_load_app_sync_state(void);
 char*  writer_core_save_app_sync_state(const char* state_json);
 

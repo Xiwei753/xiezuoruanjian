@@ -5,375 +5,29 @@
 //! - App target：`<app_data_root>` → `app/`
 //! - Project target：`<project_root>` → `projects/<project_id>/`
 //!
-//! 旧的"作品同步 + 应用数据同步"两套用户配置入口已删除。
+//! ## FullSyncState 生命周期（Issue #630 评论 5308040939 Part 1）
+//!
+//! 全量同步持久状态（`<app_data_root>/app-meta/sync/full_state.local.json`）在
+//! 三个时点原子写入，保证失败/中断不会留下旧绿灯：
+//! 1. `perform_full_sync()` 一进正式事务先写 `Syncing` + 本次 attempt 时间
+//!    （[`WriterCore::persist_full_sync_started`]）；进程中断后重启读到 Syncing；
+//! 2. target 开始执行前失败（transport 初始化 / `list_projects` / 平台预处理）
+//!    写失败状态 + `"preflight"` / `"global"` 标记
+//!    （[`WriterCore::persist_full_sync_early_failure`]、
+//!    [`WriterCore::record_full_sync_preflight_failure`]）；
+//! 3. target 全部执行、聚合完成后用 `FullSyncState::from_result_and_previous`
+//!    覆盖为终态。
+//!
+//! 三个时点都保留旧 `last_success_time`，只有整体成功类才更新它。
+//!
+//! ## 聚合优先级（Issue #630 评论 5308040939 Part 2）
+//!
+//! `aggregate_full_sync_result` 按"需要用户处理的终态 > 可重试 > 成功"保留错误类型：
+//! `Fatal/Error > Dirty > Conflict > Recoverable > Success`。`error` /
+//! `error_category` / `message_key` 从与总体同优先级的第一个 dominant target 取得，
+//! 避免"总体是认证失败、文案却拿到前一个网络错误"的错位。
 
 impl super::WriterCore {
-    pub fn scan_sync_files(
-        &self,
-        project_id: &str,
-    ) -> crate::error::Result<Vec<crate::sync::SyncFileEntry>> {
-        crate::sync::SyncService::scan_for_sync(
-            &self.project_root(project_id),
-            crate::sync::types::SyncScope::Project,
-        )
-    }
-
-    pub fn build_sync_plan(&self, project_id: &str) -> crate::error::Result<crate::sync::SyncPlan> {
-        crate::sync::SyncService::build_sync_plan(
-            &self.project_root(project_id),
-            crate::sync::types::SyncScope::Project,
-        )
-    }
-
-    /// Project target 同步状态。路径：`<project_root>/app-meta/sync/state.local.json`。
-    pub fn load_sync_state(
-        &self,
-        project_id: &str,
-    ) -> crate::error::Result<crate::sync::SyncState> {
-        crate::sync::SyncService::load_sync_state(&self.project_root(project_id))
-    }
-
-    pub fn save_sync_state(
-        &self,
-        project_id: &str,
-        state: &crate::sync::SyncState,
-    ) -> crate::error::Result<()> {
-        crate::sync::SyncService::save_sync_state(&self.project_root(project_id), state)
-    }
-
-    pub fn record_sync_conflict(
-        &self,
-        project_id: &str,
-        conflict: crate::sync::SyncConflict,
-        local_content: Option<&str>,
-    ) -> crate::error::Result<()> {
-        crate::sync::SyncService::record_sync_conflict(
-            &self.project_root(project_id),
-            conflict,
-            local_content,
-        )
-    }
-
-    pub fn resolve_conflict_keep_local(
-        &self,
-        project_id: &str,
-        path: &str,
-    ) -> crate::error::Result<()> {
-        crate::sync::SyncService::resolve_conflict_keep_local(&self.project_root(project_id), path)
-    }
-
-    pub fn resolve_conflict_take_remote(
-        &self,
-        project_id: &str,
-        path: &str,
-    ) -> crate::error::Result<()> {
-        crate::sync::SyncService::resolve_conflict_take_remote(&self.project_root(project_id), path)
-    }
-
-    pub fn resolve_conflict_mark_merged(
-        &self,
-        project_id: &str,
-        path: &str,
-    ) -> crate::error::Result<()> {
-        crate::sync::SyncService::resolve_conflict_mark_merged(&self.project_root(project_id), path)
-    }
-
-    pub fn get_sync_ignored_paths(&self, project_id: &str) -> crate::error::Result<Vec<String>> {
-        crate::sync::SyncService::get_sync_ignored_paths(
-            &self.project_root(project_id),
-            crate::sync::types::SyncScope::Project,
-        )
-    }
-
-    // ── App target 同步状态（per-target 状态查询，非配置入口） ──
-
-    /// App target 同步状态。路径：`<app_data_root>/app-meta/sync/state.local.json`。
-    pub fn load_app_sync_state(&self) -> crate::error::Result<crate::sync::SyncState> {
-        crate::sync::SyncService::load_sync_state(&self.app_data_root)
-    }
-
-    pub fn save_app_sync_state(&self, state: &crate::sync::SyncState) -> crate::error::Result<()> {
-        crate::sync::SyncService::save_sync_state(&self.app_data_root, state)
-    }
-
-    // ── 全量同步持久状态（Issue #630 评论 5307423953 Part B） ──
-    // 路径：<app_data_root>/app-meta/sync/full_state.local.json
-    // 与 per-target state.local.json 分层：full_state 只记录"这一次全量事务整体是什么结果"。
-
-    /// 加载全量同步持久状态。文件不存在或 JSON 损坏时返回 None，不 panic。
-    pub fn load_full_sync_state(
-        &self,
-    ) -> crate::error::Result<Option<crate::sync::types::FullSyncState>> {
-        let path = self
-            .app_data_root
-            .join("app-meta/sync/full_state.local.json");
-        if !path.exists() {
-            return Ok(None);
-        }
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(crate::Error::Io(e)),
-        };
-        match serde_json::from_str::<crate::sync::types::FullSyncState>(&content) {
-            Ok(state) => Ok(Some(state)),
-            Err(_) => {
-                // 损坏 JSON：记录警告并返回 None，不 panic、不阻断同步。
-                log::warn!("full_state.local.json corrupted — returning None");
-                Ok(None)
-            }
-        }
-    }
-
-    /// 原子写全量同步持久状态。写临时文件后 rename，保证读端不会看到部分写入。
-    pub fn save_full_sync_state(
-        &self,
-        state: &crate::sync::types::FullSyncState,
-    ) -> crate::error::Result<()> {
-        let path = self
-            .app_data_root
-            .join("app-meta/sync/full_state.local.json");
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let content = serde_json::to_string_pretty(state)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-        crate::storage::atomic_write_string(&path, &content)
-    }
-
-    // ── 全局配置 + 全局凭据（Issue #630：唯一一份） ──
-
-    /// 旧→新同步 profile 一次性迁移（Issue #630 评论第 4 点 / D）。
-    ///
-    /// 新全局 profile 已存在时返回 `NotNeeded`；否则依次探测旧应用级 / 旧作品级
-    /// profile，多项目一致迁一份，不一致返回 `NeedsReconfigure`。提交成功后清理
-    /// 旧凭据；失败/冲突时不删旧凭据。
-    pub fn migrate_legacy_sync_profile(
-        &self,
-    ) -> crate::error::Result<crate::sync::legacy_migration::LegacyMigrationOutcome> {
-        let migrator = crate::sync::legacy_migration::LegacySyncProfileMigrator::new(
-            &self.app_data_root,
-            &self.projects_root,
-            self.secure_storage.as_deref(),
-        );
-        migrator.migrate()
-    }
-
-    /// 旧→新同步 profile 一次性迁移，接受精确 generation metadata（Issue #630 评论第 5 点 Part C）。
-    ///
-    /// 详见 `crate::sync::legacy_migration::LegacySyncProfileMigrator::migrate_with_metadata`。
-    /// metadata 中每个项描述一个旧 profile 的 source 和 committed generation，
-    /// 使 Core 精确读取 `sync_token_<base>_g<N>` 而不猜测枚举上限。
-    pub fn migrate_legacy_sync_profile_with_metadata(
-        &self,
-        metadata: &[crate::sync::legacy_migration::LegacyProfileMetadata],
-    ) -> crate::error::Result<crate::sync::legacy_migration::LegacyMigrationOutcome> {
-        let migrator = crate::sync::legacy_migration::LegacySyncProfileMigrator::new(
-            &self.app_data_root,
-            &self.projects_root,
-            self.secure_storage.as_deref(),
-        );
-        migrator.migrate_with_metadata(metadata)
-    }
-
-    /// 加载全局同步配置。路径：`<app_data_root>/app-meta/sync/config.local.json`。
-    pub fn load_sync_config(&self) -> crate::error::Result<crate::sync::SyncConfig> {
-        let config_path = self.app_data_root.join("app-meta/sync/config.local.json");
-        if !config_path.exists() {
-            return Ok(default_sync_config());
-        }
-        let content = std::fs::read_to_string(&config_path)?;
-        let raw: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-        let mut config: crate::sync::SyncConfig = serde_json::from_str(&content)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-
-        let backend_missing = raw
-            .as_object()
-            .map(|obj| !obj.contains_key("backend_type"))
-            .unwrap_or(false);
-        let should_migrate = crate::sync::is_github_https_remote(&config.remote_url)
-            && (backend_missing || config.backend_type == crate::sync::BackendType::Git);
-        if should_migrate {
-            config.backend_type = crate::sync::BackendType::GithubApi;
-            self.save_sync_config(&config)?;
-        }
-        Ok(config)
-    }
-
-    /// 保存全局同步配置。路径：`<app_data_root>/app-meta/sync/config.local.json`。
-    pub fn save_sync_config(&self, config: &crate::sync::SyncConfig) -> crate::error::Result<()> {
-        let config_path = self.app_data_root.join("app-meta/sync/config.local.json");
-        save_config_atomic(&config_path, config)
-    }
-
-    pub fn validate_sync_config(
-        &self,
-        config: &crate::sync::SyncConfig,
-    ) -> crate::error::Result<bool> {
-        if config.enabled && config.remote_url.is_empty() {
-            return Ok(false);
-        }
-        Ok(true)
-    }
-
-    /// 加载全局同步凭据。安全存储 key = `sync_token_global`。
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cognitive_complexity,
-        clippy::excessive_nesting,
-        clippy::too_many_arguments,
-        clippy::type_complexity
-    )]
-    pub fn load_sync_secrets(&self) -> crate::error::Result<crate::sync::SyncSecrets> {
-        if let Some(ref override_secrets) = self.secrets_override {
-            return Ok(override_secrets.clone());
-        }
-        const GLOBAL_KEY: &str = "sync_token_global";
-        if let Some(ref storage) = self.secure_storage {
-            if let Ok(Some(bytes)) = storage.get_secret(GLOBAL_KEY) {
-                if let Ok(token) = String::from_utf8(bytes) {
-                    if !token.is_empty() {
-                        return Ok(crate::sync::SyncSecrets {
-                            token: Some(token),
-                            ssh_private_key: None,
-                        });
-                    }
-                }
-            }
-            let file_secrets = self.load_sync_secrets_from_file()?;
-            if let Some(token) = &file_secrets.token {
-                if !token.is_empty() {
-                    let _ = storage.set_secret(GLOBAL_KEY, token.as_bytes());
-                    let secrets_path = self.app_data_root.join("app-meta/sync/secrets.local.json");
-                    let _ = std::fs::remove_file(&secrets_path);
-                }
-            }
-            return Ok(file_secrets);
-        }
-        self.load_sync_secrets_from_file()
-    }
-
-    /// #592 五：进程级 secrets override — 一次同步操作只使用同一份 snapshot 的凭据。
-    pub fn set_secrets_override(&mut self, secrets: Option<crate::sync::SyncSecrets>) {
-        self.secrets_override = secrets;
-    }
-
-    pub(crate) fn has_secrets_override(&self) -> bool {
-        self.secrets_override.is_some()
-    }
-
-    /// #592 五：按 generation 保存凭据到安全存储（key: sync_token_global_g{N}）。
-    pub fn save_sync_secrets_for_generation(
-        &self,
-        generation: u64,
-        secrets: &crate::sync::SyncSecrets,
-    ) -> crate::error::Result<()> {
-        let key = format!("sync_token_global_g{}", generation);
-        if let Some(ref storage) = self.secure_storage {
-            if let Some(token) = &secrets.token {
-                storage
-                    .set_secret(&key, token.as_bytes())
-                    .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-            } else {
-                storage
-                    .delete_secret(&key)
-                    .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-            }
-            return Ok(());
-        }
-        let secrets_path = self
-            .app_data_root
-            .join(format!("app-meta/sync/secrets_g{}.local.json", generation));
-        write_secrets_atomic(
-            &secrets_path,
-            secrets,
-            &format!("secrets_g{}.local.json", generation),
-        )
-    }
-
-    /// #592 五：读取指定 generation 的安全存储凭据；缺失返回 None。
-    pub fn load_sync_secrets_for_generation(
-        &self,
-        generation: u64,
-    ) -> crate::error::Result<Option<crate::sync::SyncSecrets>> {
-        let key = format!("sync_token_global_g{}", generation);
-        if let Some(ref storage) = self.secure_storage {
-            let token = storage
-                .get_secret(&key)
-                .ok()
-                .flatten()
-                .and_then(|bytes| String::from_utf8(bytes).ok())
-                .filter(|t| !t.is_empty());
-            return Ok(token.map(|t| crate::sync::SyncSecrets {
-                token: Some(t),
-                ssh_private_key: None,
-            }));
-        }
-        let secrets_path = self
-            .app_data_root
-            .join(format!("app-meta/sync/secrets_g{}.local.json", generation));
-        if !secrets_path.exists() {
-            return Ok(None);
-        }
-        let content = std::fs::read_to_string(&secrets_path)?;
-        let secrets: crate::sync::SyncSecrets = serde_json::from_str(&content)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-        Ok(Some(secrets))
-    }
-
-    /// #595 五：删除指定 generation 的安全存储凭据。
-    pub fn delete_sync_secrets_for_generation(&self, generation: u64) -> crate::error::Result<()> {
-        let key = format!("sync_token_global_g{}", generation);
-        if let Some(ref storage) = self.secure_storage {
-            storage
-                .delete_secret(&key)
-                .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-            return Ok(());
-        }
-        let secrets_path = self
-            .app_data_root
-            .join(format!("app-meta/sync/secrets_g{}.local.json", generation));
-        if secrets_path.exists() {
-            std::fs::remove_file(&secrets_path)?;
-        }
-        Ok(())
-    }
-
-    fn load_sync_secrets_from_file(&self) -> crate::error::Result<crate::sync::SyncSecrets> {
-        let secrets_path = self.app_data_root.join("app-meta/sync/secrets.local.json");
-        if !secrets_path.exists() {
-            return Ok(crate::sync::SyncSecrets::default());
-        }
-        let content = std::fs::read_to_string(&secrets_path)?;
-        let secrets: crate::sync::SyncSecrets = serde_json::from_str(&content)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-        Ok(secrets)
-    }
-
-    pub fn save_sync_secrets(
-        &self,
-        secrets: &crate::sync::SyncSecrets,
-    ) -> crate::error::Result<()> {
-        const GLOBAL_KEY: &str = "sync_token_global";
-        if let Some(ref storage) = self.secure_storage {
-            if let Some(token) = &secrets.token {
-                storage
-                    .set_secret(GLOBAL_KEY, token.as_bytes())
-                    .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-            } else {
-                storage
-                    .delete_secret(GLOBAL_KEY)
-                    .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-            }
-            return Ok(());
-        }
-        let secrets_path = self.app_data_root.join("app-meta/sync/secrets.local.json");
-        write_secrets_atomic(&secrets_path, secrets, "sync_secrets")
-    }
-
-    // ── 全量同步统一入口（Issue #630） ──
-
     /// 全量同步诊断 — 只测一次仓库、分支、token。
     pub fn perform_full_sync_diagnostics(
         &self,
@@ -477,16 +131,25 @@ impl super::WriterCore {
         config: &crate::sync::SyncConfig,
         force_sync: bool,
     ) -> crate::error::Result<crate::sync::types::FullSyncResult> {
+        // #630 评论 5308040939 Part 1：一进正式事务先原子写 Syncing + 本次 attempt
+        // 时间（保留旧 last_success_time）。进程中断/被杀后重启读到的是 Syncing，
+        // 而不是上一次 Success 绿灯。
+        self.persist_full_sync_started();
+
         let secrets = self.load_sync_secrets().unwrap_or_default();
         let backend_type = crate::sync::resolved_backend_type(config);
         let backend = if let Some(transport) = self.sync_transport.as_ref() {
             match transport() {
                 Ok(t) => crate::sync::create_sync_backend_with_transport(&backend_type, t),
                 Err(e) => {
+                    // transport 初始化失败：先持久化提前失败状态（按错误分类
+                    // Recoverable/Fatal，failed_target="preflight"），再返回 Err。
+                    let status = transport_init_failure_status(&e.category);
+                    self.persist_full_sync_early_failure(status, "preflight");
                     return Err(crate::Error::Io(std::io::Error::other(format!(
                         "Transport init failed: {} - {}",
                         e.category, e.message
-                    ))))
+                    ))));
                 }
             }
         } else {
@@ -511,7 +174,19 @@ impl super::WriterCore {
         use crate::sync::types::{SyncTarget, TargetSyncResult};
 
         // 无法建立 target 列表才整体 Err —— 此时连 App target 都无法有序执行。
-        let projects = self.list_projects()?;
+        // #630 评论 5308040939 Part 1：list_projects 失败也要先持久化提前失败状态
+        // （failed_target="global"）再返回 Err，不能留下上一次绿灯。
+        let projects = match self.list_projects() {
+            Ok(projects) => projects,
+            Err(err) => {
+                let msg = err.to_string();
+                self.persist_full_sync_early_failure(
+                    crate::sync::SyncStatus::RecoverableError(msg),
+                    "global",
+                );
+                return Err(err);
+            }
+        };
 
         let mut targets: Vec<TargetSyncResult> = Vec::new();
 
@@ -553,19 +228,16 @@ impl super::WriterCore {
 
         let result = Self::aggregate_full_sync_result(targets);
 
-        // #630 评论 5307423953 Part B：聚合后把 FullSyncState 原子写到
-        // <app_data_root>/app-meta/sync/full_state.local.json。每次尝试更新
-        // last_attempt_time；仅整体成功类更新 last_success_time；部分失败保留旧值。
+        // #630 评论 5307423953 Part B + 5308040939 Part 1：聚合后把 FullSyncState
+        // 原子写到 <app_data_root>/app-meta/sync/full_state.local.json，覆盖事务开始
+        // 时写入的 Syncing。每次尝试更新 last_attempt_time；仅整体成功类更新
+        // last_success_time；部分失败保留旧值。
         // 写失败只记录警告，不覆盖同步结果（同步本身已成功，状态持久化是副作用）。
-        let now_epoch_seconds = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
-            .unwrap_or(0);
         let previous_state = self.load_full_sync_state().unwrap_or(None);
-        let new_state = crate::sync::types::FullSyncState::from_result_and_previous(
+        let new_state = crate::sync::full_sync_state::FullSyncState::from_result_and_previous(
             &result,
             previous_state.as_ref(),
-            now_epoch_seconds,
+            now_epoch_seconds(),
         );
         if let Err(e) = self.save_full_sync_state(&new_state) {
             log::warn!("Failed to persist full sync state: {e}");
@@ -585,12 +257,73 @@ impl super::WriterCore {
         Ok(result)
     }
 
+    /// #630 评论 5308040939 Part 1：平台端预处理失败写同一份 Core FullSyncState 的窄接口。
+    ///
+    /// 只负责更新 `<app_data_root>/app-meta/sync/full_state.local.json`（与
+    /// `perform_full_sync` 同一份），不新建平台第二份状态、不恢复旧双同步 API。
+    /// 覆盖 Android 正文 flush / app data barrier / credentials override 等
+    /// Core 根本没进入 full sync 的失败路径。
+    ///
+    /// - `status`：按失败类型给定（通常 `FatalError`）；
+    /// - `failed_target`：传 `"preflight"`（或 `"global"`），不要伪造某个 project id。
+    ///
+    /// 保留旧 `last_success_time`，保证重启后顶部不会出现旧绿灯。
+    pub fn record_full_sync_preflight_failure(
+        &self,
+        status: crate::sync::SyncStatus,
+        failed_target: &str,
+    ) -> crate::error::Result<()> {
+        self.persist_full_sync_early_failure(status, failed_target);
+        Ok(())
+    }
+
+    /// 正式事务开始：原子写 `Syncing` + 本次 attempt 时间，保留旧 last_success_time。
+    /// 写失败只记录警告（同步本身继续，状态持久化是副作用）。
+    /// `pub(super)`：仅供 facade 内部与 `sync_ops_tests` 验证中断语义。
+    pub(super) fn persist_full_sync_started(&self) {
+        let previous = self.load_full_sync_state().unwrap_or(None);
+        let state = crate::sync::full_sync_state::FullSyncState::started(
+            previous.as_ref(),
+            now_epoch_seconds(),
+        );
+        if let Err(e) = self.save_full_sync_state(&state) {
+            log::warn!("Failed to persist full sync started state: {e}");
+        }
+    }
+
+    /// target 开始执行前失败：原子写失败状态 + failed_target（"global"/"preflight"），
+    /// 保留旧 last_success_time。写失败只记录警告。
+    /// `pub(super)`：仅供 facade 内部与 `sync_ops_tests` 验证提前失败语义。
+    pub(super) fn persist_full_sync_early_failure(
+        &self,
+        status: crate::sync::SyncStatus,
+        failed_target: &str,
+    ) {
+        let previous = self.load_full_sync_state().unwrap_or(None);
+        let state = crate::sync::full_sync_state::FullSyncState::failed_before_targets(
+            previous.as_ref(),
+            status,
+            now_epoch_seconds(),
+            failed_target,
+        );
+        if let Err(e) = self.save_full_sync_state(&state) {
+            log::warn!("Failed to persist full sync early failure state: {e}");
+        }
+    }
+
     /// 将各 target 的结果聚合为 `FullSyncResult`：统计上传/下载/删除/冲突数，
-    /// 按任一错误 → Error、任一冲突 → PartialConflict、否则 Success 决定总体状态。
+    /// 总体状态保留错误类型，优先级按"需要用户处理的终态 > 可重试 > 成功"：
+    /// `Fatal/Error > Dirty > Conflict/PartialConflict > Recoverable > Success`
+    /// （Issue #630 评论 5308040939 Part 2）。
+    ///
+    /// `error` / `error_category` / `message_key` 从与 `overall_status` 同优先级的
+    /// 第一个 dominant target 取得，避免"总体是认证失败、文案却拿到前一个网络错误"
+    /// 的错位。
     fn aggregate_full_sync_result(
         targets: Vec<crate::sync::types::TargetSyncResult>,
     ) -> crate::sync::types::FullSyncResult {
         use crate::sync::types::FullSyncResult;
+        use crate::sync::SyncStatus;
 
         let total_uploaded: u32 = targets
             .iter()
@@ -621,36 +354,34 @@ impl super::WriterCore {
             .map(|t| u32::try_from(t.result.conflicts.len()).unwrap_or(u32::MAX))
             .sum();
 
-        let any_error = targets.iter().any(|t| {
-            matches!(
-                t.result.status,
-                crate::sync::SyncStatus::FatalError(_)
-                    | crate::sync::SyncStatus::Error(_)
-                    | crate::sync::SyncStatus::RecoverableError(_)
-                    | crate::sync::SyncStatus::DirtyRepoBlocked
-            )
-        });
-        let any_conflict = targets.iter().any(|t| {
-            matches!(
-                t.result.status,
-                crate::sync::SyncStatus::Conflict | crate::sync::SyncStatus::PartialConflict
-            )
-        });
-        let overall_status = if any_error {
-            crate::sync::SyncStatus::Error("one_or_more_targets_failed".to_string())
-        } else if any_conflict {
-            crate::sync::SyncStatus::PartialConflict
-        } else {
-            crate::sync::SyncStatus::Success
+        let overall_priority = targets
+            .iter()
+            .map(|t| full_sync_status_priority(&t.result.status))
+            .max()
+            .unwrap_or(0);
+        let overall_status = match overall_priority {
+            4 => SyncStatus::FatalError("one_or_more_targets_failed".to_string()),
+            3 => SyncStatus::DirtyRepoBlocked,
+            2 => SyncStatus::PartialConflict,
+            1 => SyncStatus::RecoverableError("one_or_more_targets_temporarily_failed".to_string()),
+            _ => SyncStatus::Success,
         };
 
-        let error = targets.iter().find_map(|t| t.result.error.clone());
-        let error_category = targets.iter().find_map(|t| t.result.error_category.clone());
-        let message_key = error_category.as_deref().map(|c| {
-            crate::sync::types::SyncErrorCategory::from_code(c, "")
-                .to_message_key()
-                .to_string()
-        });
+        // dominant target：与 overall_status 同优先级的第一个 target。
+        let dominant = targets
+            .iter()
+            .find(|t| full_sync_status_priority(&t.result.status) == overall_priority);
+        let error = dominant.and_then(|t| t.result.error.clone());
+        let error_category = dominant.and_then(|t| t.result.error_category.clone());
+        let message_key = dominant
+            .and_then(|t| t.result.message_key.clone())
+            .or_else(|| {
+                error_category.as_deref().map(|c| {
+                    crate::sync::types::SyncErrorCategory::from_code(c, "")
+                        .to_message_key()
+                        .to_string()
+                })
+            });
 
         FullSyncResult {
             overall_status,
@@ -693,61 +424,44 @@ impl super::WriterCore {
     }
 }
 
-/// 写 secrets 到文件的原子操作。
-fn write_secrets_atomic(
-    secrets_path: &std::path::Path,
-    secrets: &crate::sync::SyncSecrets,
-    tmp_prefix: &str,
-) -> crate::error::Result<()> {
-    if let Some(parent) = secrets_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let content = serde_json::to_string_pretty(secrets)
-        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-    let parent = secrets_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new(""));
-    let mut tmp_file = tempfile::Builder::new()
-        .prefix(tmp_prefix)
-        .suffix(".tmp")
-        .tempfile_in(parent)?;
-
-    use std::io::Write;
-    tmp_file.write_all(content.as_bytes())?;
-    tmp_file.persist(secrets_path).map_err(|e| e.error)?;
-
-    Ok(())
+/// 当前 Unix 秒 — 全量同步持久状态统一时间源。
+/// 系统时钟异常时回退 0（极端情况下 attempt 时间戳为 0，不阻断同步）。
+fn now_epoch_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
-/// 原子写入 sync config。
-fn save_config_atomic(
-    config_path: &std::path::Path,
-    config: &crate::sync::SyncConfig,
-) -> crate::error::Result<()> {
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)?;
+/// transport 初始化失败的 FullSyncState 状态分类（Issue #630 评论 5308040939 Part 1）。
+///
+/// 认证/权限类 category → `FatalError`（用户必须干预）；其余（网络/IO/未知）→
+/// `RecoverableError`（下次自动重试可恢复）。
+fn transport_init_failure_status(category: &str) -> crate::sync::SyncStatus {
+    use crate::sync::types::SyncErrorCategory;
+    match SyncErrorCategory::from_code(category, "") {
+        SyncErrorCategory::TokenMissing
+        | SyncErrorCategory::TokenInvalid
+        | SyncErrorCategory::TokenPermissionDenied
+        | SyncErrorCategory::AuthError
+        | SyncErrorCategory::GithubUnauthorized
+        | SyncErrorCategory::GithubForbidden
+        | SyncErrorCategory::RepoNotFoundOrNoPermission => {
+            crate::sync::SyncStatus::FatalError("transport_init_failed".to_string())
+        }
+        _ => crate::sync::SyncStatus::RecoverableError("transport_init_failed".to_string()),
     }
-    let content = serde_json::to_string_pretty(config)
-        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-    let tmp_path = config_path.with_extension("tmp");
-    std::fs::write(&tmp_path, content)?;
-    std::fs::rename(tmp_path, config_path)?;
-    Ok(())
 }
 
-/// 默认同步配置（未配置时返回）。
-fn default_sync_config() -> crate::sync::SyncConfig {
-    crate::sync::SyncConfig {
-        enabled: false,
-        backend_type: crate::sync::BackendType::GithubApi,
-        remote_url: String::new(),
-        transport: crate::sync::SyncProtocol::HttpsToken,
-        branch: "main".to_string(),
-        auto_sync: false,
-        sync_interval_seconds: 300,
-        username: String::new(),
-        has_network_permission: true,
-        has_network_state_permission: true,
+/// 单个 target 状态在聚合中的优先级（数字越大越需要用户处理）：
+/// 4=Fatal/Error，3=Dirty，2=Conflict/PartialConflict，1=Recoverable，0=其余（成功类）。
+fn full_sync_status_priority(status: &crate::sync::SyncStatus) -> u8 {
+    match status {
+        crate::sync::SyncStatus::FatalError(_) | crate::sync::SyncStatus::Error(_) => 4,
+        crate::sync::SyncStatus::DirtyRepoBlocked => 3,
+        crate::sync::SyncStatus::Conflict | crate::sync::SyncStatus::PartialConflict => 2,
+        crate::sync::SyncStatus::RecoverableError(_) => 1,
+        _ => 0,
     }
 }
 
@@ -757,7 +471,7 @@ fn default_sync_config() -> crate::sync::SyncConfig {
 /// 避免单 target 的 `Err` 用 `?` 提前打断整个全量同步。`Err` 的 `recoverable()`
 /// 决定 `SyncStatus::RecoverableError` / `FatalError`，`sync_category()` 决定
 /// `error_category`（空字符串视为无分类）。
-fn run_full_sync_target(
+pub(super) fn run_full_sync_target(
     backend: &dyn crate::sync::SyncBackend,
     local_root: &std::path::Path,
     config: &crate::sync::SyncConfig,
@@ -787,509 +501,5 @@ fn run_full_sync_target(
                 error_category,
             )
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::run_full_sync_target;
-    use crate::sync::types::{
-        FirstSyncMode, SyncConfig, SyncDiagnosticsResult, SyncResult, SyncStatus, SyncTarget,
-    };
-    use crate::sync::{SyncBackend, SyncSecrets};
-    use std::collections::HashMap;
-    use std::path::Path;
-    use std::sync::Mutex;
-    use tempfile::tempdir;
-
-    /// 可 Clone 的 mock 输出 —— 避免 `Error` 不 `Clone` 的问题。
-    ///
-    /// `Ok` 变体 `Box<SyncResult>` 以避免 clippy::large_enum_variant（SyncResult
-    /// 远大于其他两个变体）。
-    #[derive(Clone)]
-    enum MockOutcome {
-        Ok(Box<SyncResult>),
-        ErrOther(String),
-        ErrSyncAuth(String),
-    }
-
-    impl MockOutcome {
-        fn ok(result: SyncResult) -> Self {
-            Self::Ok(Box::new(result))
-        }
-        fn to_result(&self) -> std::result::Result<SyncResult, crate::Error> {
-            match self {
-                MockOutcome::Ok(r) => Ok((**r).clone()),
-                MockOutcome::ErrOther(msg) => Err(crate::Error::Other(msg.clone())),
-                MockOutcome::ErrSyncAuth(msg) => Err(crate::Error::SyncAuthFailed {
-                    reason: msg.clone(),
-                }),
-            }
-        }
-    }
-
-    /// 按 `remote_prefix` 配置每个 target 返回值的 mock backend。
-    struct MockBackend {
-        behaviors: Mutex<HashMap<String, MockOutcome>>,
-        default: MockOutcome,
-    }
-
-    impl MockBackend {
-        fn new(default: MockOutcome) -> Self {
-            Self {
-                behaviors: Mutex::new(HashMap::new()),
-                default,
-            }
-        }
-        fn set(&self, remote_prefix: &str, outcome: MockOutcome) {
-            self.behaviors
-                .lock()
-                .expect("behaviors mutex poisoned")
-                .insert(remote_prefix.to_string(), outcome);
-        }
-    }
-
-    impl SyncBackend for MockBackend {
-        fn diagnose(
-            &self,
-            _: &SyncConfig,
-            _: &SyncSecrets,
-        ) -> crate::Result<SyncDiagnosticsResult> {
-            Ok(SyncDiagnosticsResult::new())
-        }
-        fn pull(
-            &self,
-            _: &Path,
-            _: &SyncConfig,
-            _: &SyncSecrets,
-            _: &SyncTarget,
-            _: bool,
-        ) -> crate::Result<SyncResult> {
-            Ok(SyncResult::success())
-        }
-        fn push(
-            &self,
-            _: &Path,
-            _: &SyncConfig,
-            _: &SyncSecrets,
-            _: &SyncTarget,
-            _: bool,
-        ) -> crate::Result<SyncResult> {
-            Ok(SyncResult::success())
-        }
-        fn sync(
-            &self,
-            _: &Path,
-            _: &SyncConfig,
-            _: &SyncSecrets,
-            target: &SyncTarget,
-            _: bool,
-        ) -> crate::Result<SyncResult> {
-            let behaviors = self.behaviors.lock().expect("behaviors mutex poisoned");
-            match behaviors.get(&target.remote_prefix) {
-                Some(outcome) => outcome.to_result(),
-                None => self.default.to_result(),
-            }
-        }
-    }
-
-    fn test_config() -> SyncConfig {
-        SyncConfig {
-            enabled: true,
-            backend_type: crate::sync::BackendType::GithubApi,
-            remote_url: "https://github.com/test/repo.git".to_string(),
-            transport: crate::sync::SyncProtocol::HttpsToken,
-            branch: "main".to_string(),
-            auto_sync: false,
-            sync_interval_seconds: 300,
-            username: String::new(),
-            has_network_permission: true,
-            has_network_state_permission: true,
-        }
-    }
-
-    /// 单个 target 的 Err 不阻止后续 target 执行，所有 target 都出现在结果中。
-    #[test]
-    fn test_full_sync_single_target_err_does_not_block_others() {
-        let temp_dir = tempdir().expect("tempdir");
-        let core =
-            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
-        std::fs::create_dir_all(temp_dir.path().join("projects")).expect("create projects dir");
-
-        let p1 = core.create_project("Project 1").expect("create project 1");
-        let p2 = core.create_project("Project 2").expect("create project 2");
-
-        // App target 返回 Err，两个 Project target 返回 Ok
-        let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
-        backend.set(
-            "app",
-            MockOutcome::ErrOther("app root IO failed".to_string()),
-        );
-
-        let config = test_config();
-        let secrets = SyncSecrets::default();
-        let result = core
-            .perform_full_sync_with_backend(&backend, &config, &secrets, false)
-            .expect("single target failure must not make full sync return Err");
-
-        // 3 个 target 都在结果中（1 app + 2 project）
-        assert_eq!(result.targets.len(), 3, "all targets should be present");
-
-        // App target 失败（Error::Other recoverable=true → RecoverableError）
-        let app_target = &result.targets[0];
-        assert_eq!(app_target.target_kind, "app");
-        assert!(
-            matches!(app_target.result.status, SyncStatus::RecoverableError(_)),
-            "app target should be RecoverableError, got {:?}",
-            app_target.result.status
-        );
-
-        // 两个 Project target 成功
-        let project_results: Vec<_> = result
-            .targets
-            .iter()
-            .filter(|t| t.target_kind == "project")
-            .collect();
-        assert_eq!(
-            project_results.len(),
-            2,
-            "both project targets should succeed"
-        );
-        for pr in &project_results {
-            assert_eq!(pr.result.status, SyncStatus::Success);
-        }
-
-        // overall_status 反映有 target 失败
-        assert!(
-            matches!(result.overall_status, SyncStatus::Error(_)),
-            "overall_status should be Error, got {:?}",
-            result.overall_status
-        );
-
-        // 两个 project 都在结果中
-        let project_ids: std::collections::HashSet<_> = project_results
-            .iter()
-            .map(|t| t.project_id.clone().expect("project target has id"))
-            .collect();
-        assert!(project_ids.contains(&p1.id), "p1 should be in results");
-        assert!(project_ids.contains(&p2.id), "p2 should be in results");
-    }
-
-    /// 混合：App Ok, Project1 Err(auth), Project2 Ok —— 全部 target 在结果中，overall Error。
-    #[test]
-    fn test_full_sync_mixed_outcomes_all_targets_present() {
-        let temp_dir = tempdir().expect("tempdir");
-        let core =
-            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
-        std::fs::create_dir_all(temp_dir.path().join("projects")).expect("create projects dir");
-
-        let p1 = core.create_project("Project 1").expect("create project 1");
-        let p2 = core.create_project("Project 2").expect("create project 2");
-
-        let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
-        // p1 失败（auth），p2 用默认 Ok
-        backend.set(
-            &format!("projects/{}", p1.id),
-            MockOutcome::ErrSyncAuth("token invalid".to_string()),
-        );
-
-        let config = test_config();
-        let secrets = SyncSecrets::default();
-        let result = core
-            .perform_full_sync_with_backend(&backend, &config, &secrets, false)
-            .expect("mixed outcomes must not make full sync return Err");
-
-        assert_eq!(result.targets.len(), 3, "all targets present");
-        // App 成功
-        assert_eq!(result.targets[0].result.status, SyncStatus::Success);
-        // overall Error（有一个 target 失败）
-        assert!(
-            matches!(result.overall_status, SyncStatus::Error(_)),
-            "overall should be Error"
-        );
-
-        // p1 target：SyncAuthFailed recoverable=false → FatalError，category=auth_error
-        let p1_target = result
-            .targets
-            .iter()
-            .find(|t| t.project_id.as_deref() == Some(p1.id.as_str()))
-            .expect("p1 target present");
-        assert!(
-            matches!(p1_target.result.status, SyncStatus::FatalError(_)),
-            "auth error should be FatalError, got {:?}",
-            p1_target.result.status
-        );
-        assert_eq!(
-            p1_target.result.error_category.as_deref(),
-            Some("auth_error"),
-            "auth error category should be auth_error"
-        );
-
-        // p2 成功
-        let p2_target = result
-            .targets
-            .iter()
-            .find(|t| t.project_id.as_deref() == Some(p2.id.as_str()))
-            .expect("p2 target present");
-        assert_eq!(p2_target.result.status, SyncStatus::Success);
-    }
-
-    /// 全部 target 成功 → overall Success。
-    #[test]
-    fn test_full_sync_all_ok_overall_success() {
-        let temp_dir = tempdir().expect("tempdir");
-        let core =
-            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
-        std::fs::create_dir_all(temp_dir.path().join("projects")).expect("create projects dir");
-
-        core.create_project("Project 1").expect("create project 1");
-
-        let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
-        let config = test_config();
-        let secrets = SyncSecrets::default();
-        let result = core
-            .perform_full_sync_with_backend(&backend, &config, &secrets, false)
-            .expect("full sync ok");
-
-        assert_eq!(result.targets.len(), 2);
-        assert_eq!(result.overall_status, SyncStatus::Success);
-    }
-
-    /// list_projects 失败（projects_root 是文件不是目录）→ 整体 Err。
-    #[test]
-    fn test_full_sync_list_projects_failure_returns_err() {
-        let temp_dir = tempdir().expect("tempdir");
-        // 把 projects_root 设为一个文件，让 read_dir 失败
-        let projects_path = temp_dir.path().join("projects_file");
-        std::fs::write(&projects_path, "not a directory").expect("write file");
-
-        let core = crate::facade::WriterCore::new(temp_dir.path(), &projects_path);
-        let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
-        let config = test_config();
-        let secrets = SyncSecrets::default();
-        let result = core.perform_full_sync_with_backend(&backend, &config, &secrets, false);
-        assert!(
-            result.is_err(),
-            "list_projects failure should make perform_full_sync return Err"
-        );
-    }
-
-    /// run_full_sync_target：Err 转为 SyncResult::error，Error::Other → RecoverableError。
-    #[test]
-    fn test_run_full_sync_target_converts_err_to_error_result() {
-        let backend = MockBackend::new(MockOutcome::ErrOther("boom".to_string()));
-        let config = test_config();
-        let secrets = SyncSecrets::default();
-        let target = SyncTarget::app();
-        let result = run_full_sync_target(
-            &backend,
-            Path::new("/tmp/nonexistent"),
-            &config,
-            &secrets,
-            &target,
-            false,
-        );
-        // Error::Other recoverable=true → RecoverableError
-        assert!(
-            matches!(result.status, SyncStatus::RecoverableError(ref msg) if msg.contains("boom")),
-            "expected RecoverableError containing 'boom', got {:?}",
-            result.status
-        );
-        assert!(result.error.is_some(), "error field should be set");
-        // Error::Other sync_category() 返回空 → error_category None
-        assert!(
-            result.error_category.is_none(),
-            "Error::Other has no sync_category, expected None"
-        );
-        assert_eq!(result.first_sync_mode, FirstSyncMode::NotAttempted);
-    }
-
-    /// run_full_sync_target：Ok 直接透传。
-    #[test]
-    fn test_run_full_sync_target_passes_through_ok() {
-        let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
-        let config = test_config();
-        let secrets = SyncSecrets::default();
-        let target = SyncTarget::app();
-        let result = run_full_sync_target(
-            &backend,
-            Path::new("/tmp/nonexistent"),
-            &config,
-            &secrets,
-            &target,
-            false,
-        );
-        assert_eq!(result.status, SyncStatus::Success);
-    }
-
-    /// run_full_sync_target：auth Err → FatalError + auth_error category。
-    #[test]
-    fn test_run_full_sync_target_auth_err_maps_category() {
-        let backend = MockBackend::new(MockOutcome::ErrSyncAuth("bad token".to_string()));
-        let config = test_config();
-        let secrets = SyncSecrets::default();
-        let target = SyncTarget::app();
-        let result = run_full_sync_target(
-            &backend,
-            Path::new("/tmp/nonexistent"),
-            &config,
-            &secrets,
-            &target,
-            false,
-        );
-        assert!(
-            matches!(result.status, SyncStatus::FatalError(_)),
-            "auth error is not recoverable, expected FatalError"
-        );
-        assert_eq!(
-            result.error_category.as_deref(),
-            Some("auth_error"),
-            "auth error category should map to auth_error"
-        );
-    }
-
-    // ── #630 评论 5307423953 Part B：FullSyncState 持久化行为测试 ──
-
-    fn make_full_sync_state(
-        status: SyncStatus,
-        last_success: Option<i64>,
-    ) -> crate::sync::types::FullSyncState {
-        crate::sync::types::FullSyncState {
-            overall_status: status,
-            last_attempt_time: Some(1000),
-            last_success_time: last_success,
-            failed_targets: vec![],
-        }
-    }
-
-    /// save 后 load 读回一致（原子写 + JSON 往返）。
-    #[test]
-    fn full_sync_state_save_then_load_roundtrip() {
-        let temp_dir = tempdir().expect("tempdir");
-        let core =
-            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
-        let state = make_full_sync_state(SyncStatus::Success, Some(999));
-        core.save_full_sync_state(&state).expect("save");
-        let loaded = core
-            .load_full_sync_state()
-            .expect("load")
-            .expect("should exist");
-        assert_eq!(loaded, state);
-    }
-
-    /// 文件不存在时 load 返回 None，不报错。
-    #[test]
-    fn full_sync_state_load_returns_none_when_absent() {
-        let temp_dir = tempdir().expect("tempdir");
-        let core =
-            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
-        let loaded = core.load_full_sync_state().expect("load should not error");
-        assert!(loaded.is_none());
-    }
-
-    /// 损坏 JSON 时 load 返回 None，不 panic、不报错。
-    #[test]
-    fn full_sync_state_load_corrupted_json_returns_none() {
-        let temp_dir = tempdir().expect("tempdir");
-        let core =
-            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
-        let path = temp_dir.path().join("app-meta/sync/full_state.local.json");
-        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&path, "{ this is not valid json").expect("write corrupted");
-        let loaded = core
-            .load_full_sync_state()
-            .expect("corrupted JSON must not error");
-        assert!(loaded.is_none(), "corrupted JSON should yield None");
-    }
-
-    /// perform_full_sync_with_backend 全成功后 full_state.local.json 被写入，
-    /// overall_status=Success，last_success_time 有值。
-    #[test]
-    fn full_sync_state_persisted_after_all_success() {
-        let temp_dir = tempdir().expect("tempdir");
-        let core =
-            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
-        std::fs::create_dir_all(temp_dir.path().join("projects")).expect("create projects dir");
-
-        let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
-        let config = test_config();
-        let secrets = SyncSecrets::default();
-        let result = core
-            .perform_full_sync_with_backend(&backend, &config, &secrets, false)
-            .expect("full sync");
-        assert_eq!(result.overall_status, SyncStatus::Success);
-
-        let state = core
-            .load_full_sync_state()
-            .expect("load")
-            .expect("should exist");
-        assert_eq!(state.overall_status, SyncStatus::Success);
-        assert!(
-            state.last_success_time.is_some(),
-            "overall success must set last_success_time"
-        );
-        assert!(state.last_attempt_time.is_some());
-        assert!(state.failed_targets.is_empty());
-    }
-
-    /// perform_full_sync_with_backend 部分失败后 full_state 保留旧 last_success_time。
-    /// 先全成功（last_success_time=T1），再部分失败（last_success_time 仍为 T1）。
-    #[test]
-    fn full_sync_state_partial_failure_preserves_previous_last_success() {
-        let temp_dir = tempdir().expect("tempdir");
-        let core =
-            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
-        std::fs::create_dir_all(temp_dir.path().join("projects")).expect("create projects dir");
-        let p1 = core.create_project("Project 1").expect("create project 1");
-
-        // 第一次：全成功
-        let backend_ok = MockBackend::new(MockOutcome::ok(SyncResult::success()));
-        let config = test_config();
-        let secrets = SyncSecrets::default();
-        let result1 = core
-            .perform_full_sync_with_backend(&backend_ok, &config, &secrets, false)
-            .expect("full sync 1");
-        assert_eq!(result1.overall_status, SyncStatus::Success);
-        let state1 = core
-            .load_full_sync_state()
-            .expect("load")
-            .expect("should exist");
-        let t1 = state1
-            .last_success_time
-            .expect("first success should set last_success_time");
-
-        // 第二次：p1 失败（部分失败）
-        let backend_partial = MockBackend::new(MockOutcome::ok(SyncResult::success()));
-        backend_partial.set(
-            &format!("projects/{}", p1.id),
-            MockOutcome::ErrOther("project sync failed".to_string()),
-        );
-        let result2 = core
-            .perform_full_sync_with_backend(&backend_partial, &config, &secrets, false)
-            .expect("full sync 2");
-        assert!(
-            matches!(result2.overall_status, SyncStatus::Error(_)),
-            "partial failure overall should be Error"
-        );
-        let state2 = core
-            .load_full_sync_state()
-            .expect("load")
-            .expect("should exist");
-        // 部分失败保留旧 last_success_time
-        assert_eq!(
-            state2.last_success_time,
-            Some(t1),
-            "partial failure must preserve previous last_success_time"
-        );
-        // failed_targets 记录失败的 project
-        assert!(
-            state2
-                .failed_targets
-                .iter()
-                .any(|t| t == &format!("project:{}", p1.id)),
-            "failed_targets should contain project:{}, got {:?}",
-            p1.id,
-            state2.failed_targets
-        );
     }
 }

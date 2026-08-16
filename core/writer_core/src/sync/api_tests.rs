@@ -183,3 +183,48 @@ fn test_app_sync_state_independent_from_project_sync_state() {
     );
     assert_eq!(app_loaded.last_synced_commit.as_deref(), Some("app-commit"));
 }
+
+/// #630 评论 5308040939 Part 1：平台预处理失败窄接口 — 线格式状态码映射与
+/// full_state 持久化（FatalError / "preflight"，保留旧 last_success_time）。
+#[test]
+fn test_record_full_sync_preflight_failure_wire_mapping() {
+    use crate::sync::full_sync_state::FullSyncState;
+    use crate::sync::types::SyncStatus;
+
+    let temp_dir = tempdir().unwrap();
+    std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+    let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
+
+    // 上一次整体成功（旧绿灯）
+    api.core()
+        .save_full_sync_state(&FullSyncState {
+            overall_status: SyncStatus::Success,
+            last_attempt_time: Some(1000),
+            last_success_time: Some(1000),
+            failed_targets: vec![],
+        })
+        .unwrap();
+
+    // "fatal_error" → FatalError / "preflight"
+    api.record_full_sync_preflight_failure("fatal_error".to_string(), "preflight".to_string())
+        .unwrap();
+    let state = api.load_full_sync_state().unwrap().expect("state exists");
+    assert_eq!(state.overall_status, "fatal_error");
+    assert_eq!(state.failed_targets, vec!["preflight".to_string()]);
+    assert_eq!(state.last_success_time, Some(1000));
+
+    // "recoverable_error" → RecoverableError（Android 预处理失败也可选择可重试语义）
+    api.record_full_sync_preflight_failure(
+        "recoverable_error".to_string(),
+        "preflight".to_string(),
+    )
+    .unwrap();
+    let state = api.load_full_sync_state().unwrap().expect("state exists");
+    assert_eq!(state.overall_status, "recoverable_error");
+
+    // 未知 code 默认 FatalError，不落可重试语义
+    api.record_full_sync_preflight_failure("bogus_code".to_string(), "preflight".to_string())
+        .unwrap();
+    let state = api.load_full_sync_state().unwrap().expect("state exists");
+    assert_eq!(state.overall_status, "fatal_error");
+}

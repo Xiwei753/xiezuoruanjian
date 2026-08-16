@@ -143,6 +143,28 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// #630 评论 5308040939 Part 1：平台预处理失败写同一份 Core FullSyncState 的窄接口。
+    ///
+    /// 只负责更新 `<app_data_root>/app-meta/sync/full_state.local.json`（与
+    /// `perform_full_sync` 同一份），不新建平台第二份状态。覆盖 Android 正文 flush /
+    /// app data barrier / credentials override 等 Core 根本没进入 full sync 的失败路径。
+    ///
+    /// - `status`：线格式状态码（`"fatal_error"` / `"recoverable_error"` / ...，与
+    ///   `FullSyncStateDto.overall_status` 同一映射）；未知 code 视为 `FatalError`；
+    /// - `failed_target`：传 `"preflight"`，不要伪造某个 project id。
+    ///
+    /// 保留旧 `last_success_time`，保证重启后顶部不会出现旧绿灯。
+    pub fn record_full_sync_preflight_failure(
+        &self,
+        status: String,
+        failed_target: String,
+    ) -> ApiResult<()> {
+        let parsed = super::types::sync_status_from_wire(&status);
+        self.core()
+            .record_full_sync_preflight_failure(parsed, &failed_target)
+            .map_err(Into::into)
+    }
+
     /// 全量同步诊断 — 只测一次仓库、分支、token。
     pub fn perform_full_sync_diagnostics(
         &self,

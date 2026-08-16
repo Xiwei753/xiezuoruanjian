@@ -1175,6 +1175,12 @@ interface WriterAppService {
     [Throws=WriterError]
     FullSyncStateDto? load_full_sync_state();
 
+    // Issue #630 评论 5308040939 Part 1：平台预处理失败写同一份 Core FullSyncState。
+    // status 为线格式状态码（"fatal_error" 等，与 FullSyncStateDto.overall_status
+    // 同一映射）；failed_target 传 "preflight"（或 "global"），不要伪造 project id。
+    [Throws=WriterError]
+    void record_full_sync_preflight_failure(string status, string failed_target);
+
     [Throws=WriterError]
     SyncCapabilityDto get_sync_capability();
 

@@ -196,4 +196,17 @@ impl super::WriterAppService {
     pub fn load_full_sync_state(&self) -> Result<Option<FullSyncStateDto>, WriterError> {
         self.api.load_full_sync_state()
     }
+
+    /// #630 评论 5308040939 Part 1：平台预处理失败写同一份 Core FullSyncState 的窄接口。
+    ///
+    /// `status` 为线格式状态码（与 `FullSyncStateDto.overall_status` 同一映射）；
+    /// `failed_target` 传 `"preflight"`。只更新同一个 `full_state.local.json`。
+    pub fn record_full_sync_preflight_failure(
+        &self,
+        status: String,
+        failed_target: String,
+    ) -> Result<(), WriterError> {
+        self.api
+            .record_full_sync_preflight_failure(status, failed_target)
+    }
 }

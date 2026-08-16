@@ -18,7 +18,7 @@ import com.xiwei.sujian.feature.sync.data.model.SyncResult
  * 屏障通过 lambda 注入重载回调, 不直接依赖具体 Repository/Store,
  * 便于测试和避免循环依赖.
  */
-class AppSyncDataBarrier(
+open class AppSyncDataBarrier(
     private val starmapBridge: StarMapBridge,
     private val reloadSettings: suspend () -> Unit,
     private val reloadThemes: suspend () -> Unit,
@@ -28,8 +28,11 @@ class AppSyncDataBarrier(
      * 同步前 flush 所有星图 store. 返回 false 表示 flush 失败, 调用方应终止同步.
      * NotLoaded (原生库未加载) 视为成功 - 同步本身也会以 NotLoaded 失败,
      * 此处不提前阻断.
+     *
+     * 标记为 [open] 供单元测试 fake（注入 flush 失败验证 SyncCoordinator
+     * 的预处理失败路径写 Core FullSyncState）。
      */
-    fun flushBeforeSync(): Boolean {
+    open fun flushBeforeSync(): Boolean {
         return when (val result = starmapBridge.flushAllStarmapStores()) {
             is BridgeResult.Success -> true
             is BridgeResult.Error -> {

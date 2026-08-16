@@ -28,6 +28,7 @@ pub mod backends;
 pub mod config_store;
 pub mod conflict;
 pub mod diagnostics;
+pub mod full_sync_state;
 #[cfg(feature = "git-https")]
 pub mod git_backend;
 #[cfg(feature = "github-api")]

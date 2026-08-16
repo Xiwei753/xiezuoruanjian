@@ -31,8 +31,13 @@ mod search_ops;
 mod service_ops;
 mod settings_ops;
 mod starmap_ops;
+mod sync_config_ops;
 mod sync_ops;
+mod sync_state_ops;
 mod writing_stats_ops;
+
+#[cfg(test)]
+mod sync_ops_tests;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
