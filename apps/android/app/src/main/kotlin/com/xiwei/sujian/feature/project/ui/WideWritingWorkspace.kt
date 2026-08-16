@@ -20,6 +20,7 @@ import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.MeasurePolicy
 import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -30,10 +31,9 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutRect
+import com.xiwei.sujian.app.presentation.layout.AndroidResolvedWorkspaceMode
 import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
-import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlanner
 import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchRole
-import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchVisibility
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
 import com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult
@@ -79,67 +79,83 @@ internal data class WideWorkspaceCallbacks(
 )
 
 /**
- * 大屏写作工作台（#625 第二段 / #628 评论 5301021120 第 4 步）—
+ * 工作台布局输入 — 打包传递，避免函数参数超出门禁阈值（#628 评论 5301021120 02:59:39Z 版）。
+ *
+ * plan 由导航套件层统一解析（外层顶栏归属消费同一份 Rust 最终 mode）；
+ * pane 收起状态仍是 Android 局部 UI 状态，只作为 planner 输入（不抬到 Core）。
+ */
+internal data class WideWorkspaceLayoutState(
+    val workbenchPlan: AndroidWorkbenchLayoutPlan?,
+    val chapterTreeCollapsed: Boolean,
+    val toolPaneCollapsed: Boolean,
+    val onToggleChapterTree: () -> Unit,
+    val onToggleToolPane: () -> Unit,
+)
+
+/**
+ * 大屏写作工作台（#625 第二段 / #628 评论 5301021120 02:59:39Z 版）—
  * 按 Rust [AndroidWorkbenchLayoutPlan] 放 slot，不跨铰链/遮挡。
  *
  * 顶部工具栏三组独立容器由本组件承担（#628 验收点 6：Workbench Writing 由工作台
  * 自己拥有顶部工具栏，外层 app shell 不再额外画通用顶栏）。
  *
- * #628 评论 5301021120 第 4 步：用自定义 Compose [Layout] 按
- * [AndroidWorkbenchPlacement.bounds] 放现有 slot：
- * ChapterTreeContent / SujianEditorHost / WritingToolPane / WritingToolRail /
- * Toolbar Leading/Center/Trailing。Android 只做 dp→px 和 place，
- * 不再判断 hinge 在左还是右、不决定角色挪到哪一侧。
+ * #628 评论 5301021120 02:59:39Z 版：`valid: Boolean` 已删除，改由 plan 的最终 [mode]
+ * 表达产品模式，Android 只做映射：
+ * - [AndroidResolvedWorkspaceMode.WORKBENCH]：按七角色 bounds 的自定义 [Layout] 放置；
+ * - [AndroidResolvedWorkspaceMode.SINGLE_PANE]：仍然按 Rust 返回的 Editor bounds
+ *   measure/place，**不能 `fillMaxSize()`** —— 遇到横向/竖向 separating hinge 时
+ *   fallback 后不再重新跨过遮挡。
+ *
+ * 外层顶栏归属（SujianNavigationSuite）消费同一份 [AndroidWorkbenchLayoutPlan.mode]：
+ * Workbench Writing 隐藏外层顶栏、由工作台三组 toolbar 自己画；SinglePane Writing
+ * 恢复外层透明顶栏。不允许出现 layoutSpec=Workbench 但 plan 已 SinglePane、外层还按
+ * Workbench 隐藏顶栏的分裂状态——因此 plan 由导航套件层统一解析一次后下发到本组件。
  *
  * #625 评论项4：用户主动收起 — 不按设备尺寸/方向自动多档收 pane。
- * 收起状态用 rememberSaveable 持有，跨配置变化保留。收起只改变布局占用，
+ * 收起状态用 rememberSaveable 持有（在导航套件层），跨配置变化保留。收起只改变布局占用，
  * 不销毁/重建中央 [SujianEditorHost]（EditorPane 始终在组合中）。
  *
  * #625 评论项5：rail/pane 收成工具壳。当前无真实工具内容（星图/AI 归 #373/#506），
  * 工具列表为空，pane 显示空态，不放伪功能按钮。
  *
- * @param workbenchPlanner presentation/layout 层提供的 workbench layout planner —
- *   内部捕获当前 WindowViewportDto 与 UniFFI resolver。本组件在拥有真实
- *   chapterTreeCollapsed/toolPaneCollapsed 处构造 [AndroidWorkbenchVisibility] 并
- *   只在 planner/visibility 变化时 resolve — 收起左栏/右栏后 Rust 重新给 Editor 更大 bounds。
- *   plan == null（桥失败）或 plan.valid == false（放不下最小 workbench）时退化为单栏 Editor。
+ * @param layoutState 导航套件层统一解析的 Rust workbench plan + pane 收起状态 + 收起回调
+ *   （plan = null 表示桥失败，按单栏 Editor 处理）。收起左栏/右栏后由导航套件层重新 resolve，
+ *   Rust 重新给 Editor 更大 bounds，中央 SujianEditorHost 仍是同一个实例，只改变测量/放置。
  */
 @Composable
 internal fun WideWritingWorkspace(
     deps: WideWorkspaceDeps,
     documentState: WideWorkspaceDocumentState,
     editorViewModel: EditorViewModel,
-    workbenchPlanner: AndroidWorkbenchLayoutPlanner,
+    layoutState: WideWorkspaceLayoutState,
     callbacks: WideWorkspaceCallbacks,
     modifier: Modifier = Modifier,
 ) {
-    // #625 评论项4：用户主动收起 — rememberSaveable 跨配置变化保留收起状态。
-    var chapterTreeCollapsed by rememberSaveable { mutableStateOf(false) }
-    var toolPaneCollapsed by rememberSaveable { mutableStateOf(false) }
+    val workbenchPlan = layoutState.workbenchPlan
+    val chapterTreeCollapsed = layoutState.chapterTreeCollapsed
+    val toolPaneCollapsed = layoutState.toolPaneCollapsed
     // #625 评论项5：当前选中工具 — rememberSaveable 持有。星图/AI 归 #373/#506。
+    // 工具选中不是 planner 输入（visibility 只有章节树/工具面板两个布尔），保持本组件局部状态。
     var selectedToolId by rememberSaveable { mutableStateOf<String?>(null) }
 
-    // #628 评论 5301021120 问题1：在拥有真实收起状态处构造 visibility，只在 planner/visibility
-    // 变化时 resolve — 收起左栏/右栏后 Rust 重新给 Editor 更大 bounds，中央 SujianEditorHost
-    // 仍是同一个实例，只改变测量/放置。窗口变化时 planner 本身随 viewport 更新（由
-    // rememberWorkbenchLayoutPlanner 重建），这里 remember(planner, visibility) 自动重算。
-    val visibility =
-        AndroidWorkbenchVisibility(
-            chapterNavigationVisible = !chapterTreeCollapsed,
-            toolPaneVisible = !toolPaneCollapsed,
-        )
-    val workbenchPlan =
-        remember(workbenchPlanner, visibility) {
-            workbenchPlanner.resolve(visibility)
-        }
-
-    // plan == null（桥失败）或 plan.valid == false（放不下最小 workbench）→ 退化为单栏 Editor。
-    // 这就是"回到 SinglePane"，而不是 Android 临时隐藏控件 — 中央 SujianEditorHost 占满 modifier。
-    if (workbenchPlan == null || !workbenchPlan.valid) {
+    // #628 评论 5301021120 02:59:39Z 版：plan 由导航套件层统一解析（外层顶栏归属必须消费
+    // 同一份 Rust 最终 mode），本组件不再自行 resolve。
+    // plan == null（桥失败）或 mode == SINGLE_PANE（放不下最小 workbench）→ 单栏 Editor。
+    if (workbenchPlan == null || workbenchPlan.mode == AndroidResolvedWorkspaceMode.SINGLE_PANE) {
+        // 按 Rust 返回的 Editor bounds measure/place，不能 fillMaxSize()：
+        // 遇到横向/竖向 separating hinge 时，fillMaxSize 会让正文重新跨过遮挡。
+        val editorBounds = workbenchPlan?.placementFor(AndroidWorkbenchRole.EDITOR)?.bounds
+        val density = LocalDensity.current
         EditorPane(
             documentState = documentState,
             onChapterSwitchFailed = callbacks.onChapterSwitchFailed,
-            modifier = modifier.fillMaxSize(),
+            modifier =
+                if (editorBounds != null && !editorBounds.isEmpty) {
+                    modifier.editorAtBounds(editorBounds, density)
+                } else {
+                    // 桥失败（null）时 Rust bounds 不可用，只能本地占满——没有任何遮挡信息。
+                    modifier.fillMaxSize()
+                },
         )
         return
     }
@@ -150,8 +166,8 @@ internal fun WideWritingWorkspace(
             chapterTreeCollapsed = chapterTreeCollapsed,
             toolPaneCollapsed = toolPaneCollapsed,
             selectedToolId = selectedToolId,
-            onToggleChapterTree = { chapterTreeCollapsed = !chapterTreeCollapsed },
-            onToggleToolPane = { toolPaneCollapsed = !toolPaneCollapsed },
+            onToggleChapterTree = layoutState.onToggleChapterTree,
+            onToggleToolPane = layoutState.onToggleToolPane,
             onSelectTool = { id -> selectedToolId = id },
         )
     Layout(
@@ -388,6 +404,41 @@ private fun WorkbenchContentSlots(
         modifier = Modifier.layoutId(LayoutSlotId.TOOL_RAIL),
     )
 }
+
+/**
+ * SinglePane 退化：按 Rust 返回的 Editor bounds measure/place（#628 评论 5301021120 02:59:39Z 版）。
+ *
+ * 不能 `fillMaxSize()`：遇到横向/竖向 separating hinge 时，全窗口铺满会让正文
+ * 重新跨过遮挡。这里与 Workbench 模式用同一套 bounds 语义 — 子级按 bounds 尺寸
+ * 测量、按 bounds 偏移放置，Editor 只占 Rust 算好的最大连续安全 free-region。
+ */
+private fun Modifier.editorAtBounds(
+    bounds: AndroidLayoutRect,
+    density: Density,
+): Modifier =
+    this.then(
+        Modifier.layout { measurable, constraints ->
+            with(density) {
+                val pxWidth = bounds.widthDp.dp.roundToPx()
+                val pxHeight = bounds.heightDp.dp.roundToPx()
+                val placeable =
+                    measurable.measure(
+                        constraints.copy(
+                            minWidth = pxWidth,
+                            maxWidth = pxWidth,
+                            minHeight = pxHeight,
+                            maxHeight = pxHeight,
+                        ),
+                    )
+                layout(constraints.maxWidth, constraints.maxHeight) {
+                    placeable.place(
+                        bounds.leftDp.dp.roundToPx(),
+                        bounds.topDp.dp.roundToPx(),
+                    )
+                }
+            }
+        },
+    )
 
 /**
  * 构造 workbench measure policy — 提取以降低 [WideWritingWorkspace] 行数。

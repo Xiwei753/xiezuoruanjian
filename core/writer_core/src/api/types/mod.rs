@@ -17,6 +17,10 @@ mod starmap;
 mod stats;
 mod sync;
 mod volume;
+mod workbench_plan;
+
+#[cfg(test)]
+mod workbench_plan_tests;
 
 #[cfg(test)]
 mod action_tests;
@@ -43,3 +47,4 @@ pub use starmap::*;
 pub use stats::*;
 pub use sync::*;
 pub use volume::*;
+pub use workbench_plan::*;

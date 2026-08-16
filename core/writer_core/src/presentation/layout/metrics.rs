@@ -35,8 +35,8 @@ pub struct LayoutMetrics {
     /// 正文编辑器最小可编辑宽度，dp（#628 评论 5301021120 问题 3）。
     ///
     /// 不再用"非零就算可用"的 `1.0`：低于此宽度时正文已无法正常编辑，
-    /// Rust 直接判定本次布局语义失效（`WorkbenchLayoutPlan.valid = false`），
-    /// 退化为 Editor 单栏占满最大可用 free region，而不是把侧栏压成细线
+    /// Rust 直接判定本次布局语义失效（`WorkbenchLayoutPlan.mode = SinglePane`），
+    /// 只返回 Editor 占最大连续安全 free-region bounds，而不是把侧栏压成细线
     /// 只给正文留 1dp。初始值 `240.0 dp` 起步——这是真正能放下一段正文
     /// （含行号 + 一行可读字符）的最小宽度。
     pub editor_min_width_dp: f32,

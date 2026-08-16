@@ -607,7 +607,7 @@ fn test_workbench_plan_full_height_vertical_hinge_valid() {
     // 场景 1：全高竖直 separating hinge。
     // viewport 2000x1000，hinge [990,1010] 横贯全高。
     // free regions = [0,990]x[0,1000] + [1010,2000]x[0,1000]，
-    // 两列都宽 990 >= workbench_min_w=696，plan.valid=true，Editor 连续不跨 hinge。
+    // 两列都宽 990 >= workbench_min_w=696，plan.mode=Workbench，Editor 连续不跨 hinge。
     let viewport = WindowViewport {
         width_dp: 2000.0,
         height_dp: 1000.0,
@@ -620,7 +620,11 @@ fn test_workbench_plan_full_height_vertical_hinge_valid() {
             tool_pane_visible: true,
         },
     );
-    assert!(plan.valid, "全高竖直 hinge 两侧都够宽，plan 应 valid=true");
+    assert_eq!(
+        plan.mode,
+        ResolvedWorkspaceMode::Workbench,
+        "全高竖直 hinge 两侧都够宽，mode 应 Workbench"
+    );
     let editor = assert_editor_non_empty(&plan);
     // Editor 完全在 hinge 左侧或右侧。
     assert!(
@@ -638,7 +642,7 @@ fn test_workbench_plan_full_width_horizontal_hinge_valid() {
     // viewport 2000x1000，hinge [0,2000]x[490,510] 横贯全宽。
     // 旧的一维算法会把 [0,2000] 当整条横向禁区，七角色全塌。
     // 新二维算法：free regions = [0,2000]x[0,490] + [0,2000]x[510,1000]，
-    // 上下两条都宽 2000 >= 696、高 490 > toolbar_h=64，plan.valid=true。
+    // 上下两条都宽 2000 >= 696、高 490 > toolbar_h=64，plan.mode=Workbench。
     let viewport = WindowViewport {
         width_dp: 2000.0,
         height_dp: 1000.0,
@@ -651,9 +655,10 @@ fn test_workbench_plan_full_width_horizontal_hinge_valid() {
             tool_pane_visible: true,
         },
     );
-    assert!(
-        plan.valid,
-        "全宽横向 hinge 上下都够高，plan 应 valid=true，不应七角色全塌"
+    assert_eq!(
+        plan.mode,
+        ResolvedWorkspaceMode::Workbench,
+        "全宽横向 hinge 上下都够高，mode 应 Workbench，不应七角色全塌"
     );
     let editor = assert_editor_non_empty(&plan);
     // Editor 完全在 hinge 上方或下方。
@@ -671,7 +676,7 @@ fn test_workbench_plan_vertical_plus_horizontal_hinge_valid() {
     // viewport 2000x2000，vertical hinge [990,1010]x[0,2000]，horizontal hinge [0,2000]x[990,1010]。
     // free regions = 四个象限 [0,990]x[0,990] / [1010,2000]x[0,990] /
     // [0,990]x[1010,2000] / [1010,2000]x[1010,2000]，每个 990x990。
-    // 990 >= workbench_min_w=696 且 990 > toolbar_h=64，plan.valid=true。
+    // 990 >= workbench_min_w=696 且 990 > toolbar_h=64，plan.mode=Workbench。
     let viewport = WindowViewport {
         width_dp: 2000.0,
         height_dp: 2000.0,
@@ -687,9 +692,10 @@ fn test_workbench_plan_vertical_plus_horizontal_hinge_valid() {
             tool_pane_visible: true,
         },
     );
-    assert!(
-        plan.valid,
-        "竖直+横向混合 hinge 四象限都够大，plan 应 valid=true"
+    assert_eq!(
+        plan.mode,
+        ResolvedWorkspaceMode::Workbench,
+        "竖直+横向混合 hinge 四象限都够大，mode 应 Workbench"
     );
     let editor = assert_editor_non_empty(&plan);
     // Editor 完全在某个象限内，不跨竖直 hinge 也不跨横向 hinge。
@@ -707,11 +713,11 @@ fn test_workbench_plan_vertical_plus_horizontal_hinge_valid() {
 }
 
 #[test]
-fn test_workbench_plan_valid_false_when_free_region_too_small() {
-    // #628 评论 5301021120 问题 3：free region 放不下最小 workbench 时 valid=false。
+fn test_workbench_plan_single_pane_when_free_region_too_small() {
+    // #628 评论 5301021120 问题 3：free region 放不下最小 workbench 时 mode=SinglePane。
     // viewport 600x800 无遮挡，free region = [0,600]x[0,800]，
     // workbench_min_w = list_pane_min(200) + tool_pane_min(200) + tool_rail(56) + editor_min(240) = 696。
-    // 600 < 696，放不下，valid=false，Editor 占满整个 viewport，其余角色 bounds 为空。
+    // 600 < 696，放不下，mode=SinglePane，Editor 占满整个 viewport，其余角色 bounds 为空。
     let viewport = viewport(600.0, 800.0);
     let plan = resolve_workbench_layout(
         &viewport,
@@ -720,9 +726,10 @@ fn test_workbench_plan_valid_false_when_free_region_too_small() {
             tool_pane_visible: true,
         },
     );
-    assert!(
-        !plan.valid,
-        "600dp 宽放不下 696dp 最小 workbench，应 valid=false"
+    assert_eq!(
+        plan.mode,
+        ResolvedWorkspaceMode::SinglePane,
+        "600dp 宽放不下 696dp 最小 workbench，mode 应 SinglePane"
     );
     let editor = bounds_for(&plan, WorkbenchRole::Editor);
     // Editor 占满整个 viewport（单栏退化）。
@@ -735,7 +742,7 @@ fn test_workbench_plan_valid_false_when_free_region_too_small() {
         if p.role != WorkbenchRole::Editor {
             assert!(
                 p.bounds.is_empty(),
-                "valid=false 时 {:?} bounds 应为空，实际 = {:?}",
+                "mode=SinglePane 时 {:?} bounds 应为空，实际 = {:?}",
                 p.role,
                 p.bounds
             );
@@ -746,7 +753,7 @@ fn test_workbench_plan_valid_false_when_free_region_too_small() {
 #[test]
 fn test_workbench_plan_visibility_false_reduces_min_width() {
     // visibility 全 false 时 workbench_min_w = 0 + 0 + 56 + 240 = 296，
-    // 600dp 宽能放下，valid=true（对比 test_workbench_plan_valid_false_when_free_region_too_small）。
+    // 600dp 宽能放下，mode=Workbench（对比 test_workbench_plan_single_pane_when_free_region_too_small）。
     let viewport = viewport(600.0, 800.0);
     let plan = resolve_workbench_layout(
         &viewport,
@@ -755,9 +762,10 @@ fn test_workbench_plan_visibility_false_reduces_min_width() {
             tool_pane_visible: false,
         },
     );
-    assert!(
-        plan.valid,
-        "visibility 全 false 时 min_w=296，600dp 能放下，应 valid=true"
+    assert_eq!(
+        plan.mode,
+        ResolvedWorkspaceMode::Workbench,
+        "visibility 全 false 时 min_w=296，600dp 能放下，mode 应 Workbench"
     );
     let editor = bounds_for(&plan, WorkbenchRole::Editor);
     assert!(

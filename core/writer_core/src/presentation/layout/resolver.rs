@@ -33,10 +33,10 @@
 //! - 竖直 hinge、横向 hinge、多个横竖混合 hinge 都走同一套几何算法，不新增平台分支；
 //! - 无遮挡时退化成普通大屏工作台（free region = 整个 viewport）。
 //!
-//! #628 评论 5301021120 问题 3：当 free regions 在合理最小尺寸下已放不下完整 Workbench
-//! （`editor_min_width_dp` + 可见 pane min + tool_rail），Rust 判定本次布局语义失效
-//! （`WorkbenchLayoutPlan.valid = false`），placements 退化为 Editor 单栏占满最大可用
-//! free region，而不是把侧栏压成细线只给正文留 1dp。
+//! #628 评论 5301021120 问题 3（02:59:39Z 版）：当 free regions 在合理最小尺寸下已放不下完整
+//! Workbench（`editor_min_width_dp` + 可见 pane min + tool_rail），Rust 判定本次布局语义失效，
+//! 输出 `mode = ResolvedWorkspaceMode::SinglePane`，placements 只返回 Editor 占最大连续
+//! 安全 free-region bounds，其余 role 空 bounds，而不是把侧栏压成细线只给正文留 1dp。
 
 //!
 //! 本模块只保留布局决策（`resolve_layout`）与共享类型定义；工作台计算见 [`super::workbench`]，测试见 [`super::resolver_tests`]。
@@ -208,30 +208,46 @@ pub struct WorkbenchVisibility {
     pub tool_pane_visible: bool,
 }
 
+/// 工作台布局计划的最终产品模式（#628 评论 5301021120 02:59:39Z 版）。
+///
+/// Rust 根据当前 viewport + occlusions + visibility 产出**最终 mode + bounds**；
+/// 平台端只按 mode 映射壳层（外层顶栏归属）、按 bounds measure/place，
+/// 不允许 Android 自己根据尺寸、hinge 或 `valid` 再决定模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ResolvedWorkspaceMode {
+    /// free region 能满足最小 Workbench：七角色正常放置。
+    #[default]
+    Workbench,
+    /// free region 已语义失效：只返回 Editor 的最大连续安全 free-region bounds，
+    /// 其余 role 空 bounds。
+    SinglePane,
+}
+
 /// 工作台布局计划 — `resolve_workbench_layout` 的输出（#628 评论 5301021120 第 1 步）。
 ///
-/// 含七个 [`WorkbenchPlacement`]，平台端按 bounds 放 slot，不再自行推导 hinge 布局。
+/// 含 [`WorkbenchPlacement`]，平台端按 bounds 放 slot，不再自行推导 hinge 布局。
 ///
-/// #628 评论 5301021120 问题 3：`valid` 表示本次布局语义是否成立。
-/// `valid == false` 时 placements 退化为 Editor 单栏占满最大可用 free region，
-/// 其余角色 bounds 为空——由 Rust 判定语义失效，而不是 Android 临时隐藏控件。
+/// #628 评论 5301021120 02:59:39Z 版：不再返回含糊的 `valid: bool`，
+/// 改由 [`ResolvedWorkspaceMode`] 表达 Rust 决定的最终产品模式。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkbenchLayoutPlan {
     pub placements: Vec<WorkbenchPlacement>,
-    /// 本次布局语义是否成立（#628 评论 5301021120 问题 3）。
+    /// Rust 决定的最终产品模式（#628 评论 5301021120 02:59:39Z 版）。
     ///
-    /// - `true`：七角色正常放置，Editor 拿到 >= `editor_min_width_dp` 的连续可编辑区域。
-    /// - `false`：当前 free regions 在合理最小尺寸下已放不下完整 Workbench，
-    ///   placements 退化为 Editor 占满最大可用 free region（单栏），其余角色 bounds 为空。
-    pub valid: bool,
+    /// - [`ResolvedWorkspaceMode::Workbench`]：七角色正常放置，Editor 拿到
+    ///   >= `editor_min_width_dp` 的连续可编辑区域。
+    /// - [`ResolvedWorkspaceMode::SinglePane`]：当前 free regions 在合理最小尺寸下
+    ///   已放不下完整 Workbench，placements 只返回 Editor 的最大连续安全 free-region
+    ///   bounds（其余角色 bounds 为空）——由 Rust 判定语义失效，而不是 Android 临时隐藏控件。
+    pub mode: ResolvedWorkspaceMode,
 }
 
 impl Default for WorkbenchLayoutPlan {
     fn default() -> Self {
-        // 默认 valid=true：无遮挡的常见场景应正常布局。
+        // 默认 Workbench：无遮挡的常见场景应正常布局。
         Self {
             placements: Vec::new(),
-            valid: true,
+            mode: ResolvedWorkspaceMode::Workbench,
         }
     }
 }

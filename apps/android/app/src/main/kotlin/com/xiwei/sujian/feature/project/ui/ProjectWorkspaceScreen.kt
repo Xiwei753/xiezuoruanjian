@@ -25,7 +25,7 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
-import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlanner
+import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
 import com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
@@ -68,7 +68,11 @@ internal fun ProjectWorkspaceScreen(
     projectListActions: AndroidWorkspaceActionSpec,
     projectWorkspaceActions: AndroidWorkspaceActionSpec,
     layoutSpec: AndroidLayoutSpec,
-    workbenchPlanner: AndroidWorkbenchLayoutPlanner,
+    workbenchPlan: AndroidWorkbenchLayoutPlan?,
+    chapterTreeCollapsed: Boolean,
+    toolPaneCollapsed: Boolean,
+    onToggleChapterTree: () -> Unit,
+    onToggleToolPane: () -> Unit,
     chrome: SujianChromeSpec,
     onTopLevelSettings: () -> Unit,
     onTopLevelSearch: () -> Unit,
@@ -79,6 +83,17 @@ internal fun ProjectWorkspaceScreen(
     val context = LocalContext.current
     val deps = LocalSujianAppDependencies.current
     val projectRepository = deps.projectRepository
+
+    // #628 评论 5301021120 02:59:39Z 版：plan + pane 收起状态打包传给工作台，
+    // 避免 WideWritingWorkspace 参数超出门禁阈值。
+    val workbenchLayoutState =
+        WideWorkspaceLayoutState(
+            workbenchPlan = workbenchPlan,
+            chapterTreeCollapsed = chapterTreeCollapsed,
+            toolPaneCollapsed = toolPaneCollapsed,
+            onToggleChapterTree = onToggleChapterTree,
+            onToggleToolPane = onToggleToolPane,
+        )
 
     // #595 一：章节切换事务入口 — 显式 Factory 注入进程级容器依赖 + 会话层协调器。
     // 与 WritingPane 内 viewModel(factory=...) 解析到同一 Activity 级实例。
@@ -174,7 +189,7 @@ internal fun ProjectWorkspaceScreen(
             projectRepository = projectRepository,
             editorViewModel = editorViewModel,
             projectCardMinWidthDp = projectCardMinWidthDp,
-            workbenchPlanner = workbenchPlanner,
+            workbenchLayoutState = workbenchLayoutState,
             onTopLevelSettings = onTopLevelSettings,
             onTopLevelSearch = onTopLevelSearch,
             onTopLevelSync = onTopLevelSync,
@@ -395,7 +410,7 @@ private fun WideLayoutContent(
     projectRepository: com.xiwei.sujian.feature.project.data.ProjectRepository,
     editorViewModel: EditorViewModel,
     projectCardMinWidthDp: Float,
-    workbenchPlanner: AndroidWorkbenchLayoutPlanner,
+    workbenchLayoutState: WideWorkspaceLayoutState,
     onTopLevelSettings: () -> Unit,
     onTopLevelSearch: () -> Unit,
     onTopLevelSync: () -> Unit,
@@ -448,7 +463,7 @@ private fun WideLayoutContent(
                             currentChapterTitle = currentChapterTitle,
                         ),
                     editorViewModel = editorViewModel,
-                    workbenchPlanner = workbenchPlanner,
+                    layoutState = workbenchLayoutState,
                     callbacks =
                         WideWorkspaceCallbacks(
                             onBack = onBack,

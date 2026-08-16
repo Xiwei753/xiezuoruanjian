@@ -1,12 +1,17 @@
 package com.xiwei.sujian.app.presentation.layout
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import com.xiwei.sujian.core.platform.window.AospFoldFeatureInfo
 import uniffi.writer_core.LayoutContractDto
 import uniffi.writer_core.PrimaryNavigationPlacementDto
+import uniffi.writer_core.ResolvedWorkspaceModeDto
 import uniffi.writer_core.WindowOcclusionDto
 import uniffi.writer_core.WindowViewportDto
 import uniffi.writer_core.WorkbenchLayoutPlanDto
@@ -23,7 +28,7 @@ import uniffi.writer_core.WorkspaceLayoutModeDto
  * 2. 把 Rust [LayoutContractDto] / [WorkbenchLayoutPlanDto] 映射成具体控件
  *    （[AndroidLayoutSpec] / [AndroidWorkbenchLayoutPlan]）。
  *
- * #628 评论 5301021120 第 3-4 步：新增 [rememberWorkbenchLayoutPlan] —
+ * #628 评论 5301021120 第 3-4 步：新增 [rememberWorkbenchLayoutPlanner] —
  * 用当前 viewport + visibility 请求 Rust workbench plan，按 plan 放 slot。
  * Android 只做 dp→px 和 place，不再判断 hinge 在左还是右、不决定角色挪到哪一侧。
  *
@@ -89,32 +94,49 @@ internal fun rememberAndroidLayoutSpec(
 }
 
 /**
- * #628 评论 5301021120 第 4 步：用当前 viewport + visibility 请求 Rust workbench plan。
+ * 工作台 plan 状态 — 打包传递，避免函数参数超出门禁阈值（#628 评论 5301021120 02:59:39Z 版）。
+ */
+internal data class AndroidWorkbenchPlanState(
+    val workbenchPlan: AndroidWorkbenchLayoutPlan?,
+    val chapterTreeCollapsed: Boolean,
+    val toolPaneCollapsed: Boolean,
+    val onToggleChapterTree: () -> Unit,
+    val onToggleToolPane: () -> Unit,
+)
+
+/**
+ * #628 评论 5301021120 02:59:39Z 版：pane 收起状态 + Rust workbench plan 的统一持有/解析。
  *
- * 只在窗口几何（[viewport]）或 visibility 变化时重算，不是每帧请求。
- * 返回 [AndroidWorkbenchLayoutPlan]（Kotlin 侧纯数据，避免 UI 层直接引用 uniffi DTO）。
+ * 收起状态仍是 Android 局部 UI 状态，只作为 planner 输入（不抬到 Core）。为了外层顶栏归属
+ * 消费同一份 Rust 最终 mode，把状态上提到导航套件层统一持有（本函数在导航套件层调用）：
+ * 收起左栏/右栏 → visibility 变化 → 重新 resolve plan。回调固定实例：data class 相等性按值
+ * 比较，lambda 按引用比较 —— 不 remember 的话 SujianNavContext 每次重组都变，
+ * rememberSujianEntryProvider 会每帧重建 NavEntry。
  */
 @Composable
-internal fun rememberWorkbenchLayoutPlan(
-    viewport: WindowViewportDto,
-    visibility: AndroidWorkbenchVisibility,
-    resolveWorkbenchLayout: (WindowViewportDto, WorkbenchVisibilityDto) -> WorkbenchLayoutPlanDto?,
-): AndroidWorkbenchLayoutPlan {
-    val visibilityDto =
-        remember(visibility) {
-            WorkbenchVisibilityDto(
-                chapterNavigationVisible = visibility.chapterNavigationVisible,
-                toolPaneVisible = visibility.toolPaneVisible,
-            )
+internal fun rememberAndroidWorkbenchPlanState(
+    workbenchPlanner: AndroidWorkbenchLayoutPlanner,
+): AndroidWorkbenchPlanState {
+    var chapterTreeCollapsed by rememberSaveable { mutableStateOf(false) }
+    var toolPaneCollapsed by rememberSaveable { mutableStateOf(false) }
+    val workbenchVisibility =
+        AndroidWorkbenchVisibility(
+            chapterNavigationVisible = !chapterTreeCollapsed,
+            toolPaneVisible = !toolPaneCollapsed,
+        )
+    val workbenchPlan =
+        remember(workbenchPlanner, workbenchVisibility) {
+            workbenchPlanner.resolve(workbenchVisibility)
         }
-    val planDto =
-        remember(viewport, visibilityDto) {
-            resolveWorkbenchLayout(viewport, visibilityDto)
-        }
-    return remember(planDto) {
-        planDto?.toAndroidWorkbenchLayoutPlan()
-            ?: AndroidWorkbenchLayoutPlan(emptyList(), valid = false)
-    }
+    val onToggleChapterTree = remember { { chapterTreeCollapsed = !chapterTreeCollapsed } }
+    val onToggleToolPane = remember { { toolPaneCollapsed = !toolPaneCollapsed } }
+    return AndroidWorkbenchPlanState(
+        workbenchPlan = workbenchPlan,
+        chapterTreeCollapsed = chapterTreeCollapsed,
+        toolPaneCollapsed = toolPaneCollapsed,
+        onToggleChapterTree = onToggleChapterTree,
+        onToggleToolPane = onToggleToolPane,
+    )
 }
 
 /**
@@ -190,11 +212,11 @@ internal fun WorkspaceLayoutModeDto.toWorkspaceLayoutMode(): WorkspaceLayoutMode
  *
  * [contract] 是 Core presentation contract（产品壳层语义，含一级导航放置、共用尺寸、
  * 工作区布局模式）。
- * [viewport] 是当前窗口视口（dp），供 [rememberWorkbenchLayoutPlan] 复用，
+ * [viewport] 是当前窗口视口（dp），供 [rememberWorkbenchLayoutPlanner] 复用，
  * 避免重复测量。
  *
  * #628 评论 5301021120 第 1 步：删除 `workbenchOcclusion` 字段（死数据）。
- * 工作台布局计划改由 [rememberWorkbenchLayoutPlan] 单独提供。
+ * 工作台布局计划改由 [rememberWorkbenchLayoutPlanner] 单独提供。
  *
  * #628 验收点 2：删除 `scaffoldDirective` 字段 — Material3 PaneScaffoldDirective 整条死链
  * 已删除（无消费者），断点/壳层/导航放置全由 Rust 决定。
@@ -274,17 +296,39 @@ internal data class AndroidWorkbenchVisibility(
 )
 
 /**
- * 工作台布局计划 — Kotlin 侧纯数据，含七角色 placement 与 Rust 计算的 [valid] 标志。
+ * 工作台布局计划的最终产品模式（#628 评论 5301021120 02:59:39Z 版）。
  *
- * #628 评论 5301021120 问题1：[valid] 来自 Rust `WorkbenchLayoutPlanDto.valid` —
- * 当前 viewport + visibility 放不下最小 workbench 时 Rust 返回 false（Editor 占满最大 free region，
- * 其余角色空 bounds）。Android 端消费方在 `valid == false` 时不画七角色 Workbench 外壳，
- * 改为画单栏 Editor（SujianEditorHost 占满 modifier）— 这就是"回到 SinglePane"，
- * 而不是 Android 临时隐藏控件。
+ * Rust 根据当前 viewport + occlusions + visibility 产出最终 mode + bounds；
+ * Android 只按 mode 映射壳层（外层顶栏归属）、按 bounds measure/place，
+ * 不允许 Android 自己根据尺寸、hinge 或 valid 再决定模式。
+ */
+internal enum class AndroidResolvedWorkspaceMode {
+    /** free region 能满足最小 Workbench：七角色正常放置。 */
+    WORKBENCH,
+
+    /** free region 已语义失效：只返回 Editor 的最大连续安全 free-region bounds。 */
+    SINGLE_PANE,
+}
+
+/** Core [ResolvedWorkspaceModeDto] → Kotlin [AndroidResolvedWorkspaceMode]（interop 映射）。 */
+internal fun ResolvedWorkspaceModeDto.toAndroidResolvedWorkspaceMode(): AndroidResolvedWorkspaceMode =
+    when (this) {
+        ResolvedWorkspaceModeDto.WORKBENCH -> AndroidResolvedWorkspaceMode.WORKBENCH
+        ResolvedWorkspaceModeDto.SINGLE_PANE -> AndroidResolvedWorkspaceMode.SINGLE_PANE
+    }
+
+/**
+ * 工作台布局计划 — Kotlin 侧纯数据，含七角色 placement 与 Rust 决定的最终 [mode]。
+ *
+ * #628 评论 5301021120 02:59:39Z 版：`valid: Boolean` 已删除，改由 [mode] 表达最终产品模式：
+ * - [AndroidResolvedWorkspaceMode.WORKBENCH]：七角色正常放置；
+ * - [AndroidResolvedWorkspaceMode.SINGLE_PANE]：Rust 算出的安全 Editor bounds（最大连续
+ *   free region），其余角色空 bounds。Android 消费方按 mode 映射壳层（外层顶栏归属），
+ *   按 Editor bounds measure/place——这就是"回到 SinglePane"，而不是 Android 临时隐藏控件。
  */
 internal data class AndroidWorkbenchLayoutPlan(
     val placements: List<AndroidWorkbenchPlacement>,
-    val valid: Boolean,
+    val mode: AndroidResolvedWorkspaceMode,
 ) {
     /** 取指定角色的 placement；不存在时返回 null。 */
     fun placementFor(role: AndroidWorkbenchRole): AndroidWorkbenchPlacement? =
@@ -307,5 +351,5 @@ internal fun WorkbenchLayoutPlanDto.toAndroidWorkbenchLayoutPlan(): AndroidWorkb
                         ),
                 )
             },
-        valid = valid,
+        mode = mode.toAndroidResolvedWorkspaceMode(),
     )

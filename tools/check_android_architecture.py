@@ -1237,6 +1237,9 @@ PRESENTATION_CONTRACT_DTO_WHITELIST = [
     "uniffi.writer_core.WorkbenchVisibilityDto",
     "uniffi.writer_core.WorkbenchRoleDto",
     "uniffi.writer_core.LayoutRectDto",
+    # #628 评论 5301021120 02:59:39Z 版：WorkbenchLayoutPlan 的 valid: bool 改由
+    # ResolvedWorkspaceModeDto（Workbench/SinglePane）表达 Rust 决定的最终产品模式。
+    "uniffi.writer_core.ResolvedWorkspaceModeDto",
 ]
 
 

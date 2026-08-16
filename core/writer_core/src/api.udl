@@ -1503,9 +1503,18 @@ dictionary WorkbenchVisibilityDto {
     boolean tool_pane_visible;
 };
 
+// #628 评论 5301021120 02:59:39Z 版：不再返回含糊的 boolean valid，
+// 改由 ResolvedWorkspaceModeDto 表达 Rust 决定的最终产品模式。
+// - Workbench：七角色正常放置；
+// - SinglePane：只返回 Editor 的最大连续安全 free-region bounds，其余 role 空。
+enum ResolvedWorkspaceModeDto {
+    "Workbench",
+    "SinglePane"
+};
+
 dictionary WorkbenchLayoutPlanDto {
     sequence<WorkbenchPlacementDto> placements;
-    boolean valid;
+    ResolvedWorkspaceModeDto mode;
 };
 
 // ── Screen Contract DTOs ──

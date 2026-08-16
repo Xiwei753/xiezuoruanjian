@@ -5,6 +5,10 @@
 //! 网格 cell 算法（收集 X/Y 切线→网格 cell→合并相邻可用 cell），给七个
 //! [`WorkbenchRole`] 计算最终 [`LayoutRect`] bounds。
 //!
+//! #628 评论 5301021120 02:59:39Z 版：不再返回含糊的 `valid: bool`，改由
+//! [`ResolvedWorkspaceMode`] 表达 Rust 决定的最终产品模式（Workbench / SinglePane）；
+//! 平台端只按 mode 映射壳层、按 bounds measure/place，不允许自己再决定模式。
+//!
 //! - 越界矩形 clamp 到 viewport；空矩形丢弃；
 //! - 二维 free-region 几何算法（[`compute_free_regions`]）：收集 X/Y 切线形成网格 cell，
 //!   与任一 separating occlusion 相交的 cell 不可用，合并相邻可用 cell 成连续区域；
@@ -16,8 +20,8 @@
 
 use super::metrics::LayoutMetrics;
 use super::resolver::{
-    LayoutRect, WindowOcclusion, WindowViewport, WorkbenchLayoutPlan, WorkbenchPlacement,
-    WorkbenchRole, WorkbenchVisibility,
+    LayoutRect, ResolvedWorkspaceMode, WindowOcclusion, WindowViewport, WorkbenchLayoutPlan,
+    WorkbenchPlacement, WorkbenchRole, WorkbenchVisibility,
 };
 
 /// 解析工作台布局计划（#628 评论 5301021120 第 1-2 步�，问题 2/3）。
@@ -31,9 +35,9 @@ use super::resolver::{
 /// 5. 把相邻可用 cell 合并成连续 [`LayoutRect`] 区域（[`compute_free_regions`]）；
 /// 6. 选一个能放下 Workbench 最小需求（`editor_min_width_dp` + 可见 pane min + tool_rail）
 ///    的 free region 作为 placement region；
-/// 7. 放不下时 `valid = false`，placements 退化为 Editor 占满最大可用 free region（单栏），
-///    其余角色 bounds 为空——由 Rust 判定语义失效，而不是 Android 临时隐藏控件；
-/// 8. 放得下时 `valid = true`，七角色在该 region 内按 [`LayoutMetrics`] 尺寸排列，
+/// 7. 放不下时 `mode = SinglePane`，placements 只返回 Editor 占最大连续安全 free-region
+///    bounds（单栏），其余角色 bounds 为空——由 Rust 判定语义失效，而不是 Android 临时隐藏控件；
+/// 8. 放得下时 `mode = Workbench`，七角色在该 region 内按 [`LayoutMetrics`] 尺寸排列，
 ///    pane 在 preferred 与 min 间压缩（不压到 0 除非 visibility 不可见），
 ///    所有 bounds 不与 separating 相交，Editor 连续。
 ///
@@ -86,11 +90,11 @@ pub fn resolve_workbench_layout(
         let placements = place_workbench_in_region(region, &metrics, &visibility);
         WorkbenchLayoutPlan {
             placements,
-            valid: true,
+            mode: ResolvedWorkspaceMode::Workbench,
         }
     } else {
-        // valid=false：当前 free regions 放不下完整 Workbench，
-        // 退化为 Editor 单栏占最大可用 free region（或整个 viewport）。
+        // mode=SinglePane：当前 free regions 放不下完整 Workbench，
+        // 只返回 Editor 占最大连续安全 free-region bounds（或整个 viewport）。
         let largest = free_regions
             .iter()
             .max_by(|a, b| {
@@ -110,7 +114,7 @@ pub fn resolve_workbench_layout(
         let placements = degrade_to_editor_only(largest);
         WorkbenchLayoutPlan {
             placements,
-            valid: false,
+            mode: ResolvedWorkspaceMode::SinglePane,
         }
     }
 }
@@ -246,7 +250,7 @@ fn compute_free_regions(occlusions: &[WindowOcclusion], vw: f32, vh: f32) -> Vec
     regions
 }
 
-/// 在 placement region 内放置七角色（valid=true 路径）。
+/// 在 placement region 内放置七角色（`mode = Workbench` 路径）。
 ///
 /// toolbar 在顶部 `toolbar_height_dp` 高度，content 在下方横向排列
 /// ChapterNavigation | Editor | ToolPane | ToolRail。
@@ -403,7 +407,8 @@ fn compute_toolbar_bounds(
     (leading, center, trailing)
 }
 
-/// valid=false 退化：Editor 占满给定 region，其余角色 bounds 为空（#628 评论 5301021120 问题 3）。
+/// `mode = SinglePane` 退化：只返回 Editor 占满给定 region（最大连续安全 free-region），
+/// 其余角色 bounds 为空（#628 评论 5301021120 问题 3）。
 fn degrade_to_editor_only(region: LayoutRect) -> Vec<WorkbenchPlacement> {
     vec![
         WorkbenchPlacement {

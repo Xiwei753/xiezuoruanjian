@@ -31,7 +31,10 @@ import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.app.presentation.contract.PresentationContractBridge
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
+import com.xiwei.sujian.app.presentation.layout.AndroidResolvedWorkspaceMode
+import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
 import com.xiwei.sujian.app.presentation.layout.rememberAndroidLayoutSpec
+import com.xiwei.sujian.app.presentation.layout.rememberAndroidWorkbenchPlanState
 import com.xiwei.sujian.app.presentation.layout.rememberWorkbenchLayoutPlanner
 import com.xiwei.sujian.app.presentation.screen.AndroidChromePolicy
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
@@ -104,6 +107,10 @@ private fun rememberInitialNavStack(initialDestination: String?): Pair<SujianDes
 
 /**
  * 导航内容上下文 — 打包传递，避免函数参数超出门禁阈值。
+ *
+ * #628 评论 5301021120 02:59:39Z 版：[workbenchPlan] 与 pane 收起状态在这里统一解析/持有 ——
+ * 外层顶栏归属与工作区必须消费同一份 Rust 最终 mode，不允许 layoutSpec=Workbench 但
+ * plan 已 SinglePane、外层还按 Workbench 隐藏顶栏的分裂状态。
  */
 private data class SujianNavContext(
     val appState: SujianAppState,
@@ -111,7 +118,11 @@ private data class SujianNavContext(
     val projectListActions: AndroidWorkspaceActionSpec,
     val projectWorkspaceActions: AndroidWorkspaceActionSpec,
     val layoutSpec: AndroidLayoutSpec,
-    val workbenchPlanner: com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlanner,
+    val workbenchPlan: AndroidWorkbenchLayoutPlan?,
+    val chapterTreeCollapsed: Boolean,
+    val toolPaneCollapsed: Boolean,
+    val onToggleChapterTree: () -> Unit,
+    val onToggleToolPane: () -> Unit,
     val chrome: SujianChromeSpec,
 )
 
@@ -211,7 +222,11 @@ private fun rememberWorksEntry(
             projectListActions = context.projectListActions,
             projectWorkspaceActions = context.projectWorkspaceActions,
             layoutSpec = context.layoutSpec,
-            workbenchPlanner = context.workbenchPlanner,
+            workbenchPlan = context.workbenchPlan,
+            chapterTreeCollapsed = context.chapterTreeCollapsed,
+            toolPaneCollapsed = context.toolPaneCollapsed,
+            onToggleChapterTree = context.onToggleChapterTree,
+            onToggleToolPane = context.onToggleToolPane,
             chrome = context.chrome,
             onTopLevelSettings = {
                 // 进入设置前先立刻收 IME，再切页面。
@@ -425,6 +440,10 @@ fun SujianNavigationSuite(
     val workbenchResolver = PresentationContractBridge.workbenchLayoutResolver(deps.appServiceBridge)
     val layoutSpec = rememberAndroidLayoutSpec(foldingFeatures, resolver)
     val workbenchPlanner = rememberWorkbenchLayoutPlanner(layoutSpec.viewport, workbenchResolver)
+
+    // #628 评论 5301021120 02:59:39Z 版：pane 收起状态 + Rust workbench plan 统一在
+    // 导航套件层持有/解析（外层顶栏归属必须消费同一份 Rust 最终 mode）。
+    val workbenchPlanState = rememberAndroidWorkbenchPlanState(workbenchPlanner)
     val (initialTopLevel, initialStackRoutes) = rememberInitialNavStack(initialDestination)
     val topLevelBackStack = rememberSujianTopLevelBackStack(initialTopLevel, initialStackRoutes)
     val backStack = topLevelBackStack.backStack
@@ -475,7 +494,11 @@ fun SujianNavigationSuite(
             projectListActions = projectListActions,
             projectWorkspaceActions = projectWorkspaceActions,
             layoutSpec = layoutSpec,
-            workbenchPlanner = workbenchPlanner,
+            workbenchPlan = workbenchPlanState.workbenchPlan,
+            chapterTreeCollapsed = workbenchPlanState.chapterTreeCollapsed,
+            toolPaneCollapsed = workbenchPlanState.toolPaneCollapsed,
+            onToggleChapterTree = workbenchPlanState.onToggleChapterTree,
+            onToggleToolPane = workbenchPlanState.onToggleToolPane,
             chrome = chrome,
         )
     val navDisplayContent: @Composable () -> Unit = {
@@ -484,10 +507,18 @@ fun SujianNavigationSuite(
         }
     }
 
+    // #628 评论 5301021120 02:59:39Z 版：外层顶栏归属必须消费同一份 Rust 最终模式，
+    // 不能只看 layoutSpec：
+    // - Workbench Writing：layoutSpec=Workbench 且 plan mode=Workbench → 外层顶栏隐藏，
+    //   由工作台三组 toolbar 自己画；
+    // - SinglePane Writing：layoutSpec=Workbench 但 plan 已 SinglePane（或桥失败 null）→
+    //   恢复外层透明顶栏；
+    // - 窄屏（layoutSpec=SinglePane）→ 外层顶栏照常显示。
     val isWorkbenchWriting =
         currentRoute is SujianRoute.Works &&
             workspaceNavState.currentLocation is WorkspaceLocation.Editor &&
-            layoutSpec.workspaceLayoutMode == com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode.WORKBENCH
+            layoutSpec.workspaceLayoutMode == com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode.WORKBENCH &&
+            workbenchPlanState.workbenchPlan?.mode == AndroidResolvedWorkspaceMode.WORKBENCH
     val showOuterTopBar = !isWorkbenchWriting
 
     val scaffoldChrome =
