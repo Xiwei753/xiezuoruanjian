@@ -146,6 +146,8 @@ class ParagraphStyleProjection {
     }
 
     private companion object {
-        const val FULL_WIDTH_PROBE = "中"
+        // CJK 全宽字符布局测量探针：用 "中" 测量中文全宽字形像素宽度，再乘以
+        // widthChars 估算段落首行缩进/对齐的几何占用。是排版测量输入而非 UI 文案，故 i18n-exempt。
+        const val FULL_WIDTH_PROBE = "中" // i18n-exempt
     }
 }

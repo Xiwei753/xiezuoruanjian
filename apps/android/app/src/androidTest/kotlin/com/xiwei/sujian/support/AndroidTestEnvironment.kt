@@ -17,6 +17,10 @@ import com.xiwei.sujian.feature.editor.visual.TransactionIdSource
 import com.xiwei.sujian.feature.editor.window.EditorWindowHost
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import org.junit.Assert
 import org.junit.rules.TestRule
 import org.junit.runner.Description
@@ -220,8 +224,13 @@ class TestSujianAppDependencies(
         com.xiwei.sujian.feature.project.data.ChapterRepository(appContext, appServiceBridge)
     override val recentEditsRepository: com.xiwei.sujian.feature.project.data.RecentEditsRepository =
         com.xiwei.sujian.feature.project.data.RecentEditsRepository(appContext, appServiceBridge)
+
+    // #624 评论11 第3项：测试环境 stats writer actor scope，与生产 DefaultAppServiceContainer
+    // 同语义（SupervisorJob + Dispatchers.IO）；releaseRuntime 时取消以隔离测试，避免跨用例泄漏。
+    private val statsWriterScope: CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.IO)
     override val statsRepository: com.xiwei.sujian.feature.stats.data.WritingStatsRepository =
-        com.xiwei.sujian.feature.stats.data.WritingStatsRepository(appServiceBridge.statsBridge)
+        com.xiwei.sujian.feature.stats.data.WritingStatsRepository(appServiceBridge.statsBridge, statsWriterScope)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge, prefsSuffix)
     override val themeRepository: com.xiwei.sujian.app.theme.ThemeRepository =
         com.xiwei.sujian.app.theme.ThemeRepository(appContext, appServiceBridge)
@@ -260,6 +269,7 @@ class TestSujianAppDependencies(
             coordinator.releaseHost()
         }
         testHolder.close()
+        statsWriterScope.cancel("TestSujianAppDependencies released")
     }
 }
 
