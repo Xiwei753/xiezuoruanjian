@@ -11,6 +11,11 @@
 //!   [`FullSyncState::failed_before_targets`]（失败状态 + `"preflight"`/`"global"`）；
 //! - target 全部执行、聚合完成后 → [`FullSyncState::from_result_and_previous`]
 //!   （覆盖 Syncing 为终态）。
+//!
+//! 冷启动恢复（Issue #630 评论 5308439467 Part 1）：新 Core/WriterAppService 实例
+//! 启动时调用 [`FullSyncState::recover_interrupted`] 一次，把磁盘上残留的 `Syncing`
+//! 原子改成 `RecoverableError("previous_full_sync_interrupted")`，避免顶部永久假黄灯。
+//! 该动作只在启动时执行一次，不塞进 `load_full_sync_state()`。
 use super::types::{FullSyncResult, SyncStatus};
 use serde::{Deserialize, Serialize};
 /// 全量同步持久状态 — 一次全量同步事务的总体结果。
@@ -71,6 +76,34 @@ impl FullSyncState {
             failed_targets: vec![failed_target.to_string()],
         }
     }
+
+    /// 冷启动恢复中断的 `Syncing` 状态（Issue #630 评论 5308439467 Part 1）。
+    ///
+    /// 仅当旧状态是 `Syncing` 时生成一份中断终态：
+    /// - `overall_status = RecoverableError("previous_full_sync_interrupted")`
+    /// - `failed_targets = ["global"]`
+    /// - `last_attempt_time` 保留旧 attempt，不伪造一次新尝试
+    /// - `last_success_time` 原样保留
+    ///
+    /// 旧状态不是 `Syncing`（包括 `None`）时返回 `None`，调用方不应落盘。
+    /// 该方法只描述"应该恢复成什么"，不自己读写磁盘；落盘由 facade 层
+    /// `recover_interrupted_full_sync_state` 原子完成，且只在新 Core 实例启动时
+    /// 调用一次，不能塞进 `load_full_sync_state()`。
+    pub fn recover_interrupted(previous: Option<&Self>) -> Option<Self> {
+        let prev = previous?;
+        if !matches!(prev.overall_status, SyncStatus::Syncing) {
+            return None;
+        }
+        Some(Self {
+            overall_status: SyncStatus::RecoverableError(
+                "previous_full_sync_interrupted".to_string(),
+            ),
+            last_attempt_time: prev.last_attempt_time,
+            last_success_time: prev.last_success_time,
+            failed_targets: vec!["global".to_string()],
+        })
+    }
+
     /// 从本次 `FullSyncResult` + 当前时间构造下一份 `FullSyncState`，合并旧 state
     /// 的 `last_success_time`（部分失败时保留旧成功时间）。
     pub fn from_result_and_previous(

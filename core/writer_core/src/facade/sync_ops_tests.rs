@@ -947,3 +947,450 @@ fn aggregate_error_status_target_makes_overall_fatal() {
     );
     assert_eq!(result.error.as_deref(), Some("repo exploded"));
 }
+
+// ── Issue #630 评论 5308439467 Part 2：transport 初始化失败类型化 Error 转换 ──
+
+/// transport 初始化失败（auth 类）：返回 `SyncAuthFailed`（recoverable=false），
+/// 磁盘写 `FatalError`。
+#[test]
+fn transport_init_failure_auth_returns_sync_auth_failed_and_persists_fatal() {
+    let temp_dir = tempdir().expect("tempdir");
+    let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+    let factory: writer_platform_api::SyncTransportFactory = std::sync::Arc::new(|| {
+        Err(writer_platform_api::TransportError::new(
+            "token_invalid",
+            "token rejected by github".to_string(),
+        ))
+    });
+    let mut core = core;
+    core.sync_transport = Some(factory);
+
+    let config = test_config();
+    let result = core.perform_full_sync(&config, false);
+    let err = result.expect_err("transport init failure must return Err");
+    assert!(
+        matches!(err, crate::Error::SyncAuthFailed { .. }),
+        "auth category must return SyncAuthFailed, got {:?}",
+        err
+    );
+    assert!(!err.recoverable(), "SyncAuthFailed must be non-recoverable");
+
+    let state = core
+        .load_full_sync_state()
+        .expect("load")
+        .expect("transport failure must be persisted");
+    assert!(
+        matches!(state.overall_status, SyncStatus::FatalError(_)),
+        "auth failure must persist FatalError, got {:?}",
+        state.overall_status
+    );
+    assert_eq!(state.failed_targets, vec!["preflight".to_string()]);
+}
+
+/// transport 初始化失败（network 类）：返回 `SyncNetworkUnavailable`（recoverable=true），
+/// 磁盘写 `RecoverableError`。
+#[test]
+fn transport_init_failure_network_returns_sync_network_unavailable_and_persists_recoverable() {
+    let temp_dir = tempdir().expect("tempdir");
+    let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+    let factory: writer_platform_api::SyncTransportFactory = std::sync::Arc::new(|| {
+        Err(writer_platform_api::TransportError::new(
+            "dns_failed",
+            "cannot resolve github.com".to_string(),
+        ))
+    });
+    let mut core = core;
+    core.sync_transport = Some(factory);
+
+    let config = test_config();
+    let result = core.perform_full_sync(&config, false);
+    let err = result.expect_err("transport init failure must return Err");
+    assert!(
+        matches!(err, crate::Error::SyncNetworkUnavailable { .. }),
+        "network category must return SyncNetworkUnavailable, got {:?}",
+        err
+    );
+    assert!(
+        err.recoverable(),
+        "SyncNetworkUnavailable must be recoverable"
+    );
+
+    let state = core
+        .load_full_sync_state()
+        .expect("load")
+        .expect("transport failure must be persisted");
+    assert!(
+        matches!(state.overall_status, SyncStatus::RecoverableError(_)),
+        "network failure must persist RecoverableError, got {:?}",
+        state.overall_status
+    );
+    assert_eq!(state.failed_targets, vec!["preflight".to_string()]);
+}
+
+/// transport 初始化失败（rate limit 类）：返回 `SyncRateLimited`（recoverable=true），
+/// 磁盘写 `RecoverableError`。
+#[test]
+fn transport_init_failure_rate_limited_returns_sync_rate_limited_and_persists_recoverable() {
+    let temp_dir = tempdir().expect("tempdir");
+    let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+    let factory: writer_platform_api::SyncTransportFactory = std::sync::Arc::new(|| {
+        Err(writer_platform_api::TransportError::new(
+            "api_rate_limited",
+            "secondary rate limit exceeded".to_string(),
+        ))
+    });
+    let mut core = core;
+    core.sync_transport = Some(factory);
+
+    let config = test_config();
+    let result = core.perform_full_sync(&config, false);
+    let err = result.expect_err("transport init failure must return Err");
+    assert!(
+        matches!(
+            err,
+            crate::Error::SyncRateLimited {
+                retry_after_secs: 0
+            }
+        ),
+        "rate limit category must return SyncRateLimited {{ retry_after_secs: 0 }}, got {:?}",
+        err
+    );
+    assert!(err.recoverable(), "SyncRateLimited must be recoverable");
+
+    let state = core
+        .load_full_sync_state()
+        .expect("load")
+        .expect("transport failure must be persisted");
+    assert!(
+        matches!(state.overall_status, SyncStatus::RecoverableError(_)),
+        "rate limit failure must persist RecoverableError, got {:?}",
+        state.overall_status
+    );
+    assert_eq!(state.failed_targets, vec!["preflight".to_string()]);
+}
+
+/// transport 初始化失败（未知 category）：保守返回 `SyncAuthFailed`（不可恢复），
+/// 不落 Io 后自动变可重试。
+#[test]
+fn transport_init_failure_unknown_category_defaults_to_auth_failed() {
+    let temp_dir = tempdir().expect("tempdir");
+    let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+    let factory: writer_platform_api::SyncTransportFactory = std::sync::Arc::new(|| {
+        Err(writer_platform_api::TransportError::new(
+            "some_unknown_category",
+            "mystery failure".to_string(),
+        ))
+    });
+    let mut core = core;
+    core.sync_transport = Some(factory);
+
+    let config = test_config();
+    let result = core.perform_full_sync(&config, false);
+    let err = result.expect_err("transport init failure must return Err");
+    assert!(
+        matches!(err, crate::Error::SyncAuthFailed { .. }),
+        "unknown category must conservatively return SyncAuthFailed, got {:?}",
+        err
+    );
+    assert!(
+        !err.recoverable(),
+        "unknown category must be non-recoverable (no Io auto-retry)"
+    );
+}
+
+// ── Issue #630 评论 5308439467 Part 3：成功类终态聚合 ──
+
+/// 构造一个指定 status 的 SyncResult（无上传/下载/冲突，仅状态不同）。
+fn sync_result_with_status(status: SyncStatus) -> SyncResult {
+    SyncResult {
+        status,
+        uploaded_files: Vec::new(),
+        downloaded_files: Vec::new(),
+        ignored_files: Vec::new(),
+        conflicts: Vec::new(),
+        commit_hash: None,
+        error: None,
+        error_category: None,
+        message_key: None,
+        conflict_summary: None,
+        first_sync_mode: FirstSyncMode::NotAttempted,
+        local_deletes: Vec::new(),
+        remote_deletes: Vec::new(),
+        overwritten_files: Vec::new(),
+        search_index_rebuild_error: None,
+    }
+}
+
+/// 全部 target 返回 `NoChanges` → overall `NoChanges`（不再丢成普通 Success）。
+#[test]
+fn aggregate_all_no_changes_overall_is_no_changes() {
+    let (_temp_dir, core) = new_core_with_projects();
+    core.create_project("Project 1").expect("create project 1");
+
+    let backend = MockBackend::new(MockOutcome::ok(sync_result_with_status(
+        SyncStatus::NoChanges,
+    )));
+    let config = test_config();
+    let secrets = SyncSecrets::default();
+    let result = core
+        .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+        .expect("full sync");
+
+    assert_eq!(
+        result.overall_status,
+        SyncStatus::NoChanges,
+        "all NoChanges must aggregate to NoChanges, got {:?}",
+        result.overall_status
+    );
+}
+
+/// 任一 `BranchMissingRecovered` + 其余 `Success` → overall `BranchMissingRecovered`。
+#[test]
+fn aggregate_branch_missing_recovered_beats_success() {
+    let (_temp_dir, core) = new_core_with_projects();
+    let p1 = core.create_project("Project 1").expect("create project 1");
+
+    let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
+    backend.set(
+        &format!("projects/{}", p1.id),
+        MockOutcome::ok(sync_result_with_status(SyncStatus::BranchMissingRecovered)),
+    );
+
+    let config = test_config();
+    let secrets = SyncSecrets::default();
+    let result = core
+        .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+        .expect("full sync");
+
+    assert_eq!(
+        result.overall_status,
+        SyncStatus::BranchMissingRecovered,
+        "BranchMissingRecovered must be preserved over Success, got {:?}",
+        result.overall_status
+    );
+}
+
+/// 任一 `LatestWinsApplied` + 其余 `NoChanges` → overall `LatestWinsApplied`。
+#[test]
+fn aggregate_latest_wins_applied_beats_no_changes() {
+    let (_temp_dir, core) = new_core_with_projects();
+    let p1 = core.create_project("Project 1").expect("create project 1");
+
+    let backend = MockBackend::new(MockOutcome::ok(sync_result_with_status(
+        SyncStatus::NoChanges,
+    )));
+    backend.set(
+        &format!("projects/{}", p1.id),
+        MockOutcome::ok(sync_result_with_status(SyncStatus::LatestWinsApplied)),
+    );
+
+    let config = test_config();
+    let secrets = SyncSecrets::default();
+    let result = core
+        .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+        .expect("full sync");
+
+    assert_eq!(
+        result.overall_status,
+        SyncStatus::LatestWinsApplied,
+        "LatestWinsApplied must be preserved over NoChanges, got {:?}",
+        result.overall_status
+    );
+}
+
+/// `BranchMissingRecovered` 优先于 `LatestWinsApplied`（数字越大越优先保留）。
+#[test]
+fn aggregate_branch_missing_recovered_beats_latest_wins_applied() {
+    let (_temp_dir, core) = new_core_with_projects();
+    let p1 = core.create_project("Project 1").expect("create project 1");
+
+    let backend = MockBackend::new(MockOutcome::ok(sync_result_with_status(
+        SyncStatus::LatestWinsApplied,
+    )));
+    backend.set(
+        &format!("projects/{}", p1.id),
+        MockOutcome::ok(sync_result_with_status(SyncStatus::BranchMissingRecovered)),
+    );
+
+    let config = test_config();
+    let secrets = SyncSecrets::default();
+    let result = core
+        .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+        .expect("full sync");
+
+    assert_eq!(
+        result.overall_status,
+        SyncStatus::BranchMissingRecovered,
+        "BranchMissingRecovered must beat LatestWinsApplied, got {:?}",
+        result.overall_status
+    );
+}
+
+/// target 返回 `Syncing` → overall `FatalError`（协议错误，绝不当成功）。
+#[test]
+fn aggregate_target_syncing_is_protocol_error_fatal() {
+    let (_temp_dir, core) = new_core_with_projects();
+
+    let backend = MockBackend::new(MockOutcome::ok(sync_result_with_status(
+        SyncStatus::Syncing,
+    )));
+    let config = test_config();
+    let secrets = SyncSecrets::default();
+    let result = core
+        .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+        .expect("full sync must not return Err for protocol error in target");
+
+    assert!(
+        matches!(result.overall_status, SyncStatus::FatalError(ref msg) if msg == "invalid_target_status_for_aggregation"),
+        "Syncing in target must be FatalError(\"invalid_target_status_for_aggregation\"), got {:?}",
+        result.overall_status
+    );
+}
+
+/// target 返回 `Idle` → overall `FatalError`（协议错误，绝不当成功）。
+#[test]
+fn aggregate_target_idle_is_protocol_error_fatal() {
+    let (_temp_dir, core) = new_core_with_projects();
+
+    let backend = MockBackend::new(MockOutcome::ok(sync_result_with_status(SyncStatus::Idle)));
+    let config = test_config();
+    let secrets = SyncSecrets::default();
+    let result = core
+        .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+        .expect("full sync must not return Err for protocol error in target");
+
+    assert!(
+        matches!(result.overall_status, SyncStatus::FatalError(ref msg) if msg == "invalid_target_status_for_aggregation"),
+        "Idle in target must be FatalError(\"invalid_target_status_for_aggregation\"), got {:?}",
+        result.overall_status
+    );
+}
+
+/// target 返回 `ConfiguredNotTested` → overall `FatalError`（协议错误，绝不当成功）。
+#[test]
+fn aggregate_target_configured_not_tested_is_protocol_error_fatal() {
+    let (_temp_dir, core) = new_core_with_projects();
+
+    let backend = MockBackend::new(MockOutcome::ok(sync_result_with_status(
+        SyncStatus::ConfiguredNotTested,
+    )));
+    let config = test_config();
+    let secrets = SyncSecrets::default();
+    let result = core
+        .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+        .expect("full sync must not return Err for protocol error in target");
+
+    assert!(
+        matches!(result.overall_status, SyncStatus::FatalError(ref msg) if msg == "invalid_target_status_for_aggregation"),
+        "ConfiguredNotTested in target must be FatalError(\"invalid_target_status_for_aggregation\"), got {:?}",
+        result.overall_status
+    );
+}
+
+/// 协议错误（Syncing）压过成功类：即使有 target 返回 Success，overall 仍是 FatalError。
+#[test]
+fn aggregate_protocol_error_beats_success() {
+    let (_temp_dir, core) = new_core_with_projects();
+    let p1 = core.create_project("Project 1").expect("create project 1");
+
+    let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
+    backend.set(
+        &format!("projects/{}", p1.id),
+        MockOutcome::ok(sync_result_with_status(SyncStatus::Syncing)),
+    );
+
+    let config = test_config();
+    let secrets = SyncSecrets::default();
+    let result = core
+        .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+        .expect("full sync");
+
+    assert!(
+        matches!(result.overall_status, SyncStatus::FatalError(_)),
+        "protocol error must beat success, got {:?}",
+        result.overall_status
+    );
+}
+
+// ── Issue #630 评论 5308439467 Part 1：冷启动恢复中断 Syncing ──
+
+/// `recover_interrupted_full_sync_state`：磁盘上是 Syncing 时原子改成
+/// RecoverableError("previous_full_sync_interrupted")，返回 true。
+#[test]
+fn recover_interrupted_full_sync_state_recovers_syncing() {
+    let temp_dir = tempdir().expect("tempdir");
+    let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+    let previous = crate::sync::full_sync_state::FullSyncState {
+        overall_status: SyncStatus::Syncing,
+        last_attempt_time: Some(5555),
+        last_success_time: Some(4444),
+        failed_targets: Vec::new(),
+    };
+    core.save_full_sync_state(&previous).expect("save previous");
+
+    let recovered = core
+        .recover_interrupted_full_sync_state()
+        .expect("recover must not error");
+    assert!(recovered, "should return true when old state was Syncing");
+
+    let state = core
+        .load_full_sync_state()
+        .expect("load")
+        .expect("state must exist");
+    assert!(
+        matches!(
+            state.overall_status,
+            SyncStatus::RecoverableError(ref msg) if msg == "previous_full_sync_interrupted"
+        ),
+        "recovered state must be RecoverableError(\"previous_full_sync_interrupted\"), got {:?}",
+        state.overall_status
+    );
+    assert_eq!(state.failed_targets, vec!["global".to_string()]);
+    assert_eq!(
+        state.last_attempt_time,
+        Some(5555),
+        "last_attempt_time must preserve old attempt, not fabricate a new one"
+    );
+    assert_eq!(
+        state.last_success_time,
+        Some(4444),
+        "last_success_time must be preserved as-is"
+    );
+}
+
+/// `recover_interrupted_full_sync_state`：磁盘上是 Success（终态）时不动，返回 false。
+#[test]
+fn recover_interrupted_full_sync_state_leaves_success_untouched() {
+    let temp_dir = tempdir().expect("tempdir");
+    let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+    let previous = make_full_sync_state(SyncStatus::Success, Some(5555));
+    core.save_full_sync_state(&previous).expect("save previous");
+
+    let recovered = core
+        .recover_interrupted_full_sync_state()
+        .expect("recover must not error");
+    assert!(!recovered, "should return false when old state was Success");
+
+    let state = core
+        .load_full_sync_state()
+        .expect("load")
+        .expect("state must exist");
+    assert_eq!(
+        state.overall_status,
+        SyncStatus::Success,
+        "Success state must be left untouched, got {:?}",
+        state.overall_status
+    );
+}
+
+/// `recover_interrupted_full_sync_state`：文件不存在时返回 false，不报错。
+#[test]
+fn recover_interrupted_full_sync_state_no_file_returns_false() {
+    let temp_dir = tempdir().expect("tempdir");
+    let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+
+    let recovered = core
+        .recover_interrupted_full_sync_state()
+        .expect("recover must not error on absent file");
+    assert!(!recovered, "should return false when no state file exists");
+}

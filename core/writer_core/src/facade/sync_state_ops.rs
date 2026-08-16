@@ -142,4 +142,27 @@ impl super::WriterCore {
             .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         crate::storage::atomic_write_string(&path, &content)
     }
+
+    /// 冷启动恢复中断的 `Syncing` 状态（Issue #630 评论 5308439467 Part 1）。
+    ///
+    /// 读取 `full_state.local.json`，只有旧状态是 `Syncing` 才原子改成
+    /// `RecoverableError("previous_full_sync_interrupted")` + `failed_targets=["global"]`，
+    /// 保留旧 `last_attempt_time` / `last_success_time`。其它终态（Success /
+    /// FatalError / RecoverableError / None 等）不动。
+    ///
+    /// 该动作只能在新 Core/WriterAppService 实例启动时执行一次，不能塞进
+    /// `load_full_sync_state()`：后者是纯读探针，每次状态查询都会调用，若在其中
+    /// 落盘会反复改写磁盘并掩盖真正的事务进度。
+    ///
+    /// 返回值：是否实际发生了恢复落盘（true 表示旧状态是 Syncing 并已原子改写）。
+    pub fn recover_interrupted_full_sync_state(&self) -> crate::error::Result<bool> {
+        let previous = self.load_full_sync_state()?;
+        let recovered =
+            crate::sync::full_sync_state::FullSyncState::recover_interrupted(previous.as_ref());
+        let Some(new_state) = recovered else {
+            return Ok(false);
+        };
+        self.save_full_sync_state(&new_state)?;
+        Ok(true)
+    }
 }

@@ -28,13 +28,24 @@ class WriterAppServiceHolder(
     private val serviceLazy =
         lazy {
             try {
-                if (platformInit != null && secureStorageProvider != null) {
-                    openAppServiceWithSecureStorage(appDataRoot, projectsRoot, platformInit, secureStorageProvider)
-                } else if (platformInit != null) {
-                    openAppServiceWithInit(appDataRoot, projectsRoot, platformInit)
-                } else {
-                    WriterAppService(appDataRoot, projectsRoot)
+                val svc =
+                    if (platformInit != null && secureStorageProvider != null) {
+                        openAppServiceWithSecureStorage(appDataRoot, projectsRoot, platformInit, secureStorageProvider)
+                    } else if (platformInit != null) {
+                        openAppServiceWithInit(appDataRoot, projectsRoot, platformInit)
+                    } else {
+                        WriterAppService(appDataRoot, projectsRoot)
+                    }
+                // #630 评论 5308439467 Part 1：冷启动恢复中断的 Syncing 状态。
+                // 只有旧 full_state 是 Syncing 才原子改成 RecoverableError，
+                // 避免进程被杀后顶部永久假黄灯。只在 service 创建时调用一次。
+                // 失败只记日志，不阻断应用启动。
+                try {
+                    svc.recoverInterruptedFullSyncState()
+                } catch (e: WriterException) {
+                    DiagnosticsLogger.w(TAG, "Failed to recover interrupted full sync state: ${e.message}")
                 }
+                svc
             } catch (e: WriterException) {
                 DiagnosticsLogger.e(TAG, "Failed to open app service: ${e.message}", e)
                 _initError = e

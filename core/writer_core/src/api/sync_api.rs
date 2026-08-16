@@ -143,6 +143,17 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 冷启动恢复中断的 Syncing 状态（Issue #630 评论 5308439467 Part 1）。
+    ///
+    /// 读取 `full_state.local.json`，只有旧状态是 `Syncing` 才原子改成
+    /// `RecoverableError("previous_full_sync_interrupted")`；其它终态不动。
+    /// 只能在新 Core/WriterAppService 实例启动时执行一次。
+    pub fn recover_interrupted_full_sync_state(&self) -> ApiResult<bool> {
+        self.core()
+            .recover_interrupted_full_sync_state()
+            .map_err(Into::into)
+    }
+
     /// #630 评论 5308040939 Part 1：平台预处理失败写同一份 Core FullSyncState 的窄接口。
     ///
     /// 只负责更新 `<app_data_root>/app-meta/sync/full_state.local.json`（与

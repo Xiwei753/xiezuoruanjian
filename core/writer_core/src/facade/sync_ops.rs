@@ -142,14 +142,13 @@ impl super::WriterCore {
             match transport() {
                 Ok(t) => crate::sync::create_sync_backend_with_transport(&backend_type, t),
                 Err(e) => {
-                    // transport 初始化失败：先持久化提前失败状态（按错误分类
-                    // Recoverable/Fatal，failed_target="preflight"），再返回 Err。
-                    let status = transport_init_failure_status(&e.category);
+                    // transport 初始化失败：用唯一的类型化转换生成 Error，
+                    // 同一个 Error 同时用于持久化状态和返回（Issue #630 评论 5308439467 Part 2）。
+                    // 避免"磁盘写 FatalError 但返回 Io → Android 视为 Retryable"的错位。
+                    let err = transport_init_failure_error(&e.category, &e.message);
+                    let status = error_to_persist_status(&err);
                     self.persist_full_sync_early_failure(status, "preflight");
-                    return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "Transport init failed: {} - {}",
-                        e.category, e.message
-                    ))));
+                    return Err(err);
                 }
             }
         } else {
@@ -354,6 +353,29 @@ impl super::WriterCore {
             .map(|t| u32::try_from(t.result.conflicts.len()).unwrap_or(u32::MAX))
             .sum();
 
+        // Issue #630 评论 5308439467 Part 3：终态分两步聚合。
+        // 第一步：任何 target 返回 Syncing/Idle/ConfiguredNotTested 都是协议错误
+        // （这三个是非终态/未测试状态，不应出现在 target 结果里），直接生成
+        // FatalError，绝不能当成功。
+        if let Some((overall_status, error, error_category, message_key)) =
+            build_protocol_error_fields(&targets)
+        {
+            return FullSyncResult {
+                overall_status,
+                targets,
+                total_uploaded,
+                total_downloaded,
+                total_local_deletes,
+                total_remote_deletes,
+                total_overwritten,
+                total_ignored,
+                total_conflicts,
+                error,
+                error_category,
+                message_key,
+            };
+        }
+
         let overall_priority = targets
             .iter()
             .map(|t| full_sync_status_priority(&t.result.status))
@@ -364,7 +386,7 @@ impl super::WriterCore {
             3 => SyncStatus::DirtyRepoBlocked,
             2 => SyncStatus::PartialConflict,
             1 => SyncStatus::RecoverableError("one_or_more_targets_temporarily_failed".to_string()),
-            _ => SyncStatus::Success,
+            _ => aggregate_success_status(&targets),
         };
 
         // dominant target：与 overall_status 同优先级的第一个 target。
@@ -411,10 +433,9 @@ impl super::WriterCore {
             match transport() {
                 Ok(t) => crate::sync::create_sync_backend_with_transport(&backend_type, t),
                 Err(e) => {
-                    return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "Transport init failed: {} - {}",
-                        e.category, e.message
-                    ))))
+                    // 同 perform_full_sync：用类型化 Error，避免 Io → Retryable 错位
+                    // （Issue #630 评论 5308439467 Part 2）。
+                    return Err(transport_init_failure_error(&e.category, &e.message));
                 }
             }
         } else {
@@ -433,12 +454,18 @@ fn now_epoch_seconds() -> i64 {
         .unwrap_or(0)
 }
 
-/// transport 初始化失败的 FullSyncState 状态分类（Issue #630 评论 5308040939 Part 1）。
+/// transport 初始化失败的类型化 Error 转换（Issue #630 评论 5308439467 Part 2）。
 ///
-/// 认证/权限类 category → `FatalError`（用户必须干预）；其余（网络/IO/未知）→
-/// `RecoverableError`（下次自动重试可恢复）。
-fn transport_init_failure_status(category: &str) -> crate::sync::SyncStatus {
+/// 唯一一份转换，同时用于持久化 FullSyncState 状态和返回给调用方，避免
+/// "磁盘写 FatalError 但返回 Io → Android 视为 Retryable"的错位。
+///
+/// - token/auth/permission/repo-permission 类 → `Error::SyncAuthFailed`（不可恢复）
+/// - network/dns/tls/临时 IO 类 → `Error::SyncNetworkUnavailable`（可恢复）
+/// - rate limit → `Error::SyncRateLimited`（可恢复）
+/// - 其它未知项 → `Error::SyncAuthFailed`（保守起视为不可恢复，不落 Io 后自动变可重试）
+fn transport_init_failure_error(category: &str, message: &str) -> crate::Error {
     use crate::sync::types::SyncErrorCategory;
+    let reason = format!("Transport init failed: {} - {}", category, message);
     match SyncErrorCategory::from_code(category, "") {
         SyncErrorCategory::TokenMissing
         | SyncErrorCategory::TokenInvalid
@@ -446,10 +473,103 @@ fn transport_init_failure_status(category: &str) -> crate::sync::SyncStatus {
         | SyncErrorCategory::AuthError
         | SyncErrorCategory::GithubUnauthorized
         | SyncErrorCategory::GithubForbidden
-        | SyncErrorCategory::RepoNotFoundOrNoPermission => {
-            crate::sync::SyncStatus::FatalError("transport_init_failed".to_string())
-        }
-        _ => crate::sync::SyncStatus::RecoverableError("transport_init_failed".to_string()),
+        | SyncErrorCategory::RepoNotFoundOrNoPermission => crate::Error::SyncAuthFailed { reason },
+        SyncErrorCategory::GithubNetworkFailed
+        | SyncErrorCategory::DnsFailed
+        | SyncErrorCategory::TlsFailed
+        | SyncErrorCategory::NetworkProbeFailed => crate::Error::SyncNetworkUnavailable { reason },
+        SyncErrorCategory::ApiRateLimited => crate::Error::SyncRateLimited {
+            retry_after_secs: 0,
+        },
+        // 其它未知项保守起视为不可恢复，不落 Io 后自动变可重试
+        _ => crate::Error::SyncAuthFailed { reason },
+    }
+}
+
+/// 把 Error 转为持久化用的 SyncStatus：recoverable → RecoverableError，否则 FatalError。
+fn error_to_persist_status(err: &crate::Error) -> crate::sync::SyncStatus {
+    let msg = err.to_string();
+    if err.recoverable() {
+        crate::sync::SyncStatus::RecoverableError(msg)
+    } else {
+        crate::sync::SyncStatus::FatalError(msg)
+    }
+}
+
+/// 判断 target 状态是否为协议错误（不应出现在 target 结果里的非终态/未测试状态）。
+fn is_protocol_error_status(status: &crate::sync::SyncStatus) -> bool {
+    matches!(
+        status,
+        crate::sync::SyncStatus::Syncing
+            | crate::sync::SyncStatus::Idle
+            | crate::sync::SyncStatus::ConfiguredNotTested
+    )
+}
+
+/// 协议错误聚合字段：(overall_status, error, error_category, message_key)。
+type ProtocolErrorFields = (
+    crate::sync::SyncStatus,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+/// 协议错误聚合字段构造（Issue #630 评论 5308439467 Part 3）。
+///
+/// 任何 target 返回 Syncing/Idle/ConfiguredNotTested 时，返回
+/// (FatalError("invalid_target_status_for_aggregation"), error, error_category, message_key)，
+/// 从第一个协议错误 target 取 error/error_category/message_key。无协议错误时返回 None。
+fn build_protocol_error_fields(
+    targets: &[crate::sync::types::TargetSyncResult],
+) -> Option<ProtocolErrorFields> {
+    if !targets
+        .iter()
+        .any(|t| is_protocol_error_status(&t.result.status))
+    {
+        return None;
+    }
+    let overall_status =
+        crate::sync::SyncStatus::FatalError("invalid_target_status_for_aggregation".to_string());
+    let dominant = targets
+        .iter()
+        .find(|t| is_protocol_error_status(&t.result.status));
+    let error = dominant.and_then(|t| t.result.error.clone());
+    let error_category = dominant.and_then(|t| t.result.error_category.clone());
+    let message_key = dominant
+        .and_then(|t| t.result.message_key.clone())
+        .or_else(|| {
+            error_category
+                .as_deref()
+                .map(sync_error_category_to_message_key_string)
+        });
+    Some((overall_status, error, error_category, message_key))
+}
+
+/// SyncErrorCategory code → message_key 字符串（供 protocol-error 聚合复用）。
+fn sync_error_category_to_message_key_string(code: &str) -> String {
+    crate::sync::types::SyncErrorCategory::from_code(code, "")
+        .to_message_key()
+        .to_string()
+}
+
+/// 聚合成功类终态（Issue #630 评论 5308439467 Part 3）。
+///
+/// 失败优先级为 0 时调用。按成功类优先级
+/// `BranchMissingRecovered > LatestWinsApplied > NoChanges > Success`
+/// 取最高的成功状态。协议错误状态不应到达此处（已由 `build_protocol_error_fields` 拦截）。
+fn aggregate_success_status(
+    targets: &[crate::sync::types::TargetSyncResult],
+) -> crate::sync::SyncStatus {
+    let success_priority = targets
+        .iter()
+        .map(|t| full_sync_success_priority(&t.result.status))
+        .max()
+        .unwrap_or(1);
+    match success_priority {
+        4 => crate::sync::SyncStatus::BranchMissingRecovered,
+        3 => crate::sync::SyncStatus::LatestWinsApplied,
+        2 => crate::sync::SyncStatus::NoChanges,
+        _ => crate::sync::SyncStatus::Success,
     }
 }
 
@@ -462,6 +582,28 @@ fn full_sync_status_priority(status: &crate::sync::SyncStatus) -> u8 {
         crate::sync::SyncStatus::Conflict | crate::sync::SyncStatus::PartialConflict => 2,
         crate::sync::SyncStatus::RecoverableError(_) => 1,
         _ => 0,
+    }
+}
+
+/// 成功类终态在聚合中的优先级（Issue #630 评论 5308439467 Part 3）。
+///
+/// 数字越大越优先保留：
+/// - `Success` = 1
+/// - `NoChanges` = 2
+/// - `LatestWinsApplied` = 3
+/// - `BranchMissingRecovered` = 4
+/// - `Syncing` / `Idle` / `ConfiguredNotTested` = 协议错误，不参与成功聚合
+///   （由 `aggregate_full_sync_result` 提前拦截生成 FatalError）
+/// - 错误类终态不调用此函数（仅在失败优先级为 0 时才聚合成功类）
+fn full_sync_success_priority(status: &crate::sync::SyncStatus) -> u8 {
+    match status {
+        crate::sync::SyncStatus::BranchMissingRecovered => 4,
+        crate::sync::SyncStatus::LatestWinsApplied => 3,
+        crate::sync::SyncStatus::NoChanges => 2,
+        crate::sync::SyncStatus::Success => 1,
+        // 协议错误状态不应到达此处；若到达，按最低优先级处理（Success），
+        // 真正的拦截在 aggregate_full_sync_result 开头。
+        _ => 1,
     }
 }
 

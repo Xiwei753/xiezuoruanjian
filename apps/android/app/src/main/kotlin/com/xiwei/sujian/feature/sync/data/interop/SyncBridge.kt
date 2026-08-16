@@ -199,4 +199,15 @@ open class SyncBridge internal constructor(private val holder: WriterAppServiceH
         holder.wrapResult {
             holder.service.recordFullSyncPreflightFailure(status.toWire(), failedTarget)
         }
+
+    /**
+     * #630 评论 5308439467 Part 1：冷启动恢复中断的 Syncing 状态。
+     *
+     * 只有旧状态是 Syncing 才原子改成 RecoverableError("previous_full_sync_interrupted")。
+     * 返回 true 表示发生了恢复落盘。只能在 WriterAppService 初始化时调用一次。
+     */
+    open fun recoverInterruptedFullSyncState(): BridgeResult<Boolean> =
+        holder.wrapResult {
+            holder.service.recoverInterruptedFullSyncState()
+        }
 }

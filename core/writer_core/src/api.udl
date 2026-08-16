@@ -1175,6 +1175,11 @@ interface WriterAppService {
     [Throws=WriterError]
     FullSyncStateDto? load_full_sync_state();
 
+    // Issue #630 评论 5308439467 Part 1：冷启动恢复中断的 Syncing 状态。
+    // 只有旧状态是 Syncing 才原子改成 RecoverableError("previous_full_sync_interrupted")。
+    [Throws=WriterError]
+    boolean recover_interrupted_full_sync_state();
+
     // Issue #630 评论 5308040939 Part 1：平台预处理失败写同一份 Core FullSyncState。
     // status 为线格式状态码（"fatal_error" 等，与 FullSyncStateDto.overall_status
     // 同一映射）；failed_target 传 "preflight"（或 "global"），不要伪造 project id。

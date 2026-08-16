@@ -197,6 +197,13 @@ impl super::WriterAppService {
         self.api.load_full_sync_state()
     }
 
+    /// 冷启动恢复中断的 Syncing 状态（Issue #630 评论 5308439467 Part 1）。
+    ///
+    /// 只能在新 WriterAppService 实例启动时执行一次。委托给 api 层。
+    pub fn recover_interrupted_full_sync_state(&self) -> Result<bool, WriterError> {
+        self.api.recover_interrupted_full_sync_state()
+    }
+
     /// #630 评论 5308040939 Part 1：平台预处理失败写同一份 Core FullSyncState 的窄接口。
     ///
     /// `status` 为线格式状态码（与 `FullSyncStateDto.overall_status` 同一映射）；

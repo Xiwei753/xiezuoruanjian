@@ -263,6 +263,14 @@ open class AppServiceBridge(val holder: WriterAppServiceHolder) {
     // #630 评论 5307423953 Part B：全量同步持久状态转发。
     fun loadFullSyncState() = syncBridge.loadFullSyncState()
 
+    /**
+     * #630 评论 5308439467 Part 1：冷启动恢复中断的 Syncing 状态转发。
+     *
+     * 委托 [syncBridge.recoverInterruptedFullSyncState]。仅在 WriterAppService
+     * 初始化时调用一次；此处转发仅作门面向后兼容，新代码应直接用领域 Bridge。
+     */
+    fun recoverInterruptedFullSyncState(): BridgeResult<Boolean> = syncBridge.recoverInterruptedFullSyncState()
+
     fun getWritingStatsSummary(
         startDate: String,
         endDate: String,

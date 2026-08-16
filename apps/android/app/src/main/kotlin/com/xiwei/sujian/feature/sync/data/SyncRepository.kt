@@ -94,6 +94,22 @@ open class SyncRepository(
         }
 
     /**
+     * #630 评论 5308439467 Part 1：冷启动恢复中断的 Syncing 状态。
+     *
+     * 委托给 [syncBridge.recoverInterruptedFullSyncState]。返回 true 表示发生了恢复。
+     * 失败只记日志，不抛异常（不阻断应用启动）。
+     */
+    open fun recoverInterruptedFullSyncState(): Boolean =
+        when (val result = syncBridge.recoverInterruptedFullSyncState()) {
+            is BridgeResult.Success -> result.data
+            is BridgeResult.Error -> {
+                warn("Failed to recover interrupted full sync state: ${result.fullEnvelope}")
+                false
+            }
+            BridgeResult.NotLoaded -> false
+        }
+
+    /**
      * #630 评论 5308040939 Part 1：平台预处理失败写同一份 Core FullSyncState 的窄接口。
      *
      * 与 [performFullSync] 写同一个 `<app_data_root>/app-meta/sync/full_state.local.json`，
