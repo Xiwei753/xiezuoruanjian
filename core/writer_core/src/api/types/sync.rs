@@ -497,6 +497,29 @@ impl From<crate::sync::types::FullSyncDiagnosticsResult> for FullSyncDiagnostics
     }
 }
 
+/// 全量同步持久状态 DTO（Issue #630 评论 5307423953 Part B）。
+///
+/// 与 `crate::sync::types::FullSyncState` 对齐。overall_status 用线格式字符串
+/// （与 `FullSyncResultDto.overall_status` 同一映射），last_*_time 为 Unix 秒。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct FullSyncStateDto {
+    pub overall_status: String,
+    pub last_attempt_time: Option<i64>,
+    pub last_success_time: Option<i64>,
+    pub failed_targets: Vec<String>,
+}
+
+impl From<crate::sync::types::FullSyncState> for FullSyncStateDto {
+    fn from(s: crate::sync::types::FullSyncState) -> Self {
+        Self {
+            overall_status: sync_status_to_wire(&s.overall_status),
+            last_attempt_time: s.last_attempt_time,
+            last_success_time: s.last_success_time,
+            failed_targets: s.failed_targets,
+        }
+    }
+}
+
 /// 旧→新同步 profile 迁移结果 DTO（Issue #630 评论第 4 点 / D）。
 ///
 /// 用 `outcome_kind` 字段区分变体，避免 UniFFI enum-with-data 的复杂性：

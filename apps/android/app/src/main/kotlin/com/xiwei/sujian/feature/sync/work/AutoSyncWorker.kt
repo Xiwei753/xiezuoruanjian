@@ -5,7 +5,6 @@ import androidx.work.WorkerParameters
 import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.feature.sync.data.SyncOutcome
-import com.xiwei.sujian.feature.sync.data.SyncProfileGate
 import com.xiwei.sujian.feature.sync.data.SyncProfileReadResult
 import com.xiwei.sujian.feature.sync.data.SyncProfileSnapshot
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
@@ -33,10 +32,13 @@ class AutoSyncWorker(
                 ?: return Result.failure()
 
         val settingsRepository = deps.syncRepository
-        // #630 评论 #1：只读一份全局 profile snapshot。
+        // #630 评论 5307423953 Part A：自动同步入口直接走 loadCommittedSyncProfile()，
+        // 与设置页/顶栏手动同步共用同一个全局 profile 读取/迁移入口。
+        // loadCommittedSyncProfile() 内部已持有 SyncProfileGate.snapshotExclusive
+        // 并执行 ensureGlobalProfileMigrated()，不再外层套 SyncProfileGate。
         val snapshotResult =
             try {
-                SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
+                settingsRepository.loadCommittedSyncProfile()
             } catch (e: Exception) {
                 DiagnosticsLogger.w(TAG, "Unable to load sync profile snapshot", e)
                 return Result.retry()
@@ -88,26 +90,27 @@ class AutoSyncWorker(
     }
 
     /**
-     * #630 评论 #1：判定全量同步是否到时间点（interval/elapsed 检查）。
+     * #630 评论 5307423953 Part B：判定全量同步是否到时间点（interval/elapsed 检查）。
      *
-     * 全量同步间隔由全局 config.syncIntervalSeconds 决定；上次同步时间取自
-     * App target 的本地 state（<app_data_root>/app-meta/sync/state.local.json），
-     * 因为全量同步的总体完成时间由 App target 状态最贴近。
+     * 全量同步间隔由全局 config.syncIntervalSeconds 决定；上次同步成功时间取自
+     * [com.xiwei.sujian.feature.sync.data.SyncRepository.loadFullSyncState] 的
+     * lastSuccessTime（全量同步持久状态）。不再用 App target 的 lastSyncTime —
+     * 上一次全量只成功一部分时不应把失败作品当成已经同步成功。
      */
     private fun shouldSyncNow(
         settingsRepository: com.xiwei.sujian.feature.sync.data.SyncRepository,
         snapshot: SyncProfileSnapshot,
     ): Boolean {
-        val state =
+        val fullState =
             try {
-                settingsRepository.loadAppSyncState()
+                settingsRepository.loadFullSyncState()
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "Unable to load app sync state", e)
+                DiagnosticsLogger.w(TAG, "Unable to load full sync state", e)
                 return false
             }
         return AutoSyncScheduler.shouldSyncByInterval(
             intervalSeconds = snapshot.config.syncIntervalSeconds?.toLong(),
-            lastSyncTime = state.lastSyncTime,
+            lastSyncTime = fullState?.lastSuccessTime,
             nowEpochSeconds = System.currentTimeMillis() / 1000,
         )
     }

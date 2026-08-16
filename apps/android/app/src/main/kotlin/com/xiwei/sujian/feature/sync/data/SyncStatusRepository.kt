@@ -10,9 +10,10 @@ import kotlinx.coroutines.withContext
 /**
  * #630 评论 #1：全局同步状态指示器。
  *
- * 状态来源：全局 [SyncRepository.loadSyncConfig] + [SyncRepository.getSyncCapability] +
- * App target 的 [SyncRepository.loadAppSyncState]（全量同步的总体完成时间由 App target
- * 状态最贴近）。不再按 projectId 路由。
+ * #630 评论 5307423953 Part B：状态来源改为全局 [SyncRepository.loadSyncConfig] +
+ * [SyncRepository.getSyncCapability] + [SyncRepository.loadFullSyncState]（全量同步
+ * 持久状态）。不再读 [SyncRepository.loadAppSyncState] 拿 App target 冒充总体状态 —
+ * 单 target 失败后 App target 自己的 state 可能仍是 Success，会误把全局灯刷绿。
  */
 class SyncStatusRepository(
     private val settingsRepository: SyncRepository,
@@ -46,24 +47,31 @@ class SyncStatusRepository(
                         config.enabled != true -> SyncIndicatorState.Unconfigured
                         !capability.canRun -> SyncIndicatorState.Unconfigured
                         else -> {
-                            val syncState = settingsRepository.loadAppSyncState()
-                            when (syncState.status) {
-                                SyncStatus.Syncing -> SyncIndicatorState.Syncing
-                                SyncStatus.Success,
-                                SyncStatus.NoChanges,
-                                SyncStatus.LatestWinsApplied,
-                                SyncStatus.BranchMissingRecovered,
-                                -> SyncIndicatorState.Synced
-                                SyncStatus.Conflict,
-                                SyncStatus.PartialConflict,
-                                SyncStatus.RecoverableError,
-                                SyncStatus.FatalError,
-                                SyncStatus.DirtyRepoBlocked,
-                                SyncStatus.Error,
-                                -> SyncIndicatorState.Failed
-                                SyncStatus.Idle,
-                                SyncStatus.ConfiguredNotTested,
-                                -> SyncIndicatorState.Unconfigured
+                            // #630 评论 5307423953 Part B：只看 FullSyncState.overallStatus
+                            // 决定灯色，不再看 loadAppSyncState()。
+                            val fullState = settingsRepository.loadFullSyncState()
+                            if (fullState == null) {
+                                // 从未同步过 — 已配置但无全量状态记录
+                                SyncIndicatorState.Unconfigured
+                            } else {
+                                when (fullState.overallStatus) {
+                                    SyncStatus.Syncing -> SyncIndicatorState.Syncing
+                                    SyncStatus.Success,
+                                    SyncStatus.NoChanges,
+                                    SyncStatus.LatestWinsApplied,
+                                    SyncStatus.BranchMissingRecovered,
+                                    -> SyncIndicatorState.Synced
+                                    SyncStatus.Conflict,
+                                    SyncStatus.PartialConflict,
+                                    SyncStatus.RecoverableError,
+                                    SyncStatus.FatalError,
+                                    SyncStatus.DirtyRepoBlocked,
+                                    SyncStatus.Error,
+                                    -> SyncIndicatorState.Failed
+                                    SyncStatus.Idle,
+                                    SyncStatus.ConfiguredNotTested,
+                                    -> SyncIndicatorState.Unconfigured
+                                }
                             }
                         }
                     }

@@ -132,6 +132,17 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 全量同步持久状态（Issue #630 评论 5307423953 Part B）。
+    ///
+    /// 读取 `<app_data_root>/app-meta/sync/full_state.local.json`。
+    /// 文件不存在或 JSON 损坏时返回 None，不报错。
+    pub fn load_full_sync_state(&self) -> ApiResult<Option<FullSyncStateDto>> {
+        self.core()
+            .load_full_sync_state()
+            .map(|opt| opt.map(Into::into))
+            .map_err(Into::into)
+    }
+
     /// 全量同步诊断 — 只测一次仓库、分支、token。
     pub fn perform_full_sync_diagnostics(
         &self,

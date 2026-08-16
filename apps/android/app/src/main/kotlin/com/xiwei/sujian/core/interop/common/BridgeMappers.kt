@@ -25,6 +25,7 @@ import com.xiwei.sujian.feature.sync.data.model.FirstSyncMode
 import com.xiwei.sujian.feature.sync.data.model.FullSyncDiagnosticsResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncDryRunResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
+import com.xiwei.sujian.feature.sync.data.model.FullSyncState
 import com.xiwei.sujian.feature.sync.data.model.LegacyMigrationOutcome
 import com.xiwei.sujian.feature.sync.data.model.LegacyProfileMetadata
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
@@ -49,6 +50,7 @@ import uniffi.writer_core.DeviceStatsSummaryDto
 import uniffi.writer_core.FullSyncDiagnosticsResultDto
 import uniffi.writer_core.FullSyncDryRunResultDto
 import uniffi.writer_core.FullSyncResultDto
+import uniffi.writer_core.FullSyncStateDto
 import uniffi.writer_core.LegacyMigrationOutcomeDto
 import uniffi.writer_core.LegacyProfileMetadataDto
 import uniffi.writer_core.LocalSettingsDto
@@ -434,6 +436,17 @@ internal fun FullSyncDryRunResultDto.toModel() =
 internal fun FullSyncDiagnosticsResultDto.toModel() =
     FullSyncDiagnosticsResult(
         diagnostics = diagnostics.toModel(),
+    )
+
+/**
+ * #630 评论 5307423953 Part B：Core [FullSyncStateDto] → Android [FullSyncState]。
+ */
+internal fun FullSyncStateDto.toModel() =
+    FullSyncState(
+        overallStatus = overallStatus.toSyncStatus(),
+        lastAttemptTime = lastAttemptTime,
+        lastSuccessTime = lastSuccessTime,
+        failedTargets = failedTargets,
     )
 
 /**

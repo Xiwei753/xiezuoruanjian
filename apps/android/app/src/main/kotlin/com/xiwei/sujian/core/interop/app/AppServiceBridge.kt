@@ -260,6 +260,9 @@ open class AppServiceBridge(val holder: WriterAppServiceHolder) {
 
     fun saveAppSyncState(state: SyncState) = syncBridge.saveAppSyncState(state)
 
+    // #630 评论 5307423953 Part B：全量同步持久状态转发。
+    fun loadFullSyncState() = syncBridge.loadFullSyncState()
+
     fun getWritingStatsSummary(
         startDate: String,
         endDate: String,

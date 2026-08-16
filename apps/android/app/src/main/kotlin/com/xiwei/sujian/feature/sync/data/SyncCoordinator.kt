@@ -120,8 +120,11 @@ class SyncCoordinator internal constructor(
             val profile: SyncProfileSnapshot =
                 snapshot ?: run {
                     val result =
+                        // #630 评论 5307423953 Part A：顶栏手动同步入口直接走
+                        // loadCommittedSyncProfile()，它内部已持有 SyncProfileGate.snapshotExclusive
+                        // 并执行 ensureGlobalProfileMigrated()。不再外层套 SyncProfileGate。
                         withContext(Dispatchers.IO) {
-                            SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
+                            settingsRepository.loadCommittedSyncProfile()
                         }
                     when (result) {
                         is SyncProfileReadResult.Found -> result.snapshot

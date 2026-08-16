@@ -1,5 +1,5 @@
 use crate::api::{
-    FullSyncDiagnosticsResultDto, FullSyncDryRunResultDto, FullSyncResultDto,
+    FullSyncDiagnosticsResultDto, FullSyncDryRunResultDto, FullSyncResultDto, FullSyncStateDto,
     LegacyMigrationOutcomeDto, LegacyProfileMetadataDto, SyncConfigDto, SyncSecretsDto,
     SyncStateDto, WriterError,
 };
@@ -190,5 +190,10 @@ impl super::WriterAppService {
 
     pub fn save_app_sync_state(&self, state: SyncStateDto) -> Result<(), WriterError> {
         self.api.save_app_sync_state(state)
+    }
+
+    /// 全量同步持久状态（Issue #630 评论 5307423953 Part B）。
+    pub fn load_full_sync_state(&self) -> Result<Option<FullSyncStateDto>, WriterError> {
+        self.api.load_full_sync_state()
     }
 }

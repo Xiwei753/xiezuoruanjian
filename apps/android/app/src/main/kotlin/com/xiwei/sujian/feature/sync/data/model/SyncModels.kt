@@ -238,6 +238,26 @@ data class FullSyncDiagnosticsResult(
 )
 
 /**
+ * #6300 评论 5307423953 Part B：全量同步持久状态 — 一次全量同步事务的总体结果。
+ *
+ * 与 per-target 的 [SyncState] 分层：per-target state 记录每个 target 自己的
+ * manifest/LWW 状态；[FullSyncState] 只记录"这一次全量事务整体是什么结果"。
+ *
+ * - [overallStatus]：总体状态（Success/NoChanges/LatestWinsApplied/BranchMissingRecovered
+ *   视为整体成功；Error/PartialConflict/RecoverableError 等为失败）。
+ * - [lastAttemptTime]：上次全量同步尝试时间（Unix 秒），每次尝试都更新。
+ * - [lastSuccessTime]：上次全量同步整体成功时间（Unix 秒），仅整体成功类才更新；
+ *   部分失败保留旧值。
+ * - [failedTargets]：本次尝试中失败的 target 标识（"app" 或 "project:<id>"）。
+ */
+data class FullSyncState(
+    val overallStatus: SyncStatus,
+    val lastAttemptTime: Long?,
+    val lastSuccessTime: Long?,
+    val failedTargets: List<String>,
+)
+
+/**
  * #630 评论第 4 点 / D：旧→新同步 profile 一次性迁移结果（Android 侧 model）。
  *
  * 与 Core `LegacyMigrationOutcomeDto` 对齐，用 [outcomeKind] 字符串区分变体：

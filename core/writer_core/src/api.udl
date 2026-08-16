@@ -359,6 +359,16 @@ dictionary FullSyncDiagnosticsResultDto {
     SyncDiagnosticsResultDto diagnostics;
 };
 
+// Issue #630 评论 5307423953 Part B：全量同步持久状态。
+// 路径：<app_data_root>/app-meta/sync/full_state.local.json
+// overall_status: 与 FullSyncResultDto.overall_status 同一映射
+dictionary FullSyncStateDto {
+    string overall_status;
+    i64? last_attempt_time;
+    i64? last_success_time;
+    sequence<string> failed_targets;
+};
+
 // Issue #630 评论第 4 点 / D：旧→新同步 profile 迁移结果。
 // outcome_kind: "not_needed" | "migrated" | "needs_reconfigure" | "no_legacy_config"
 dictionary LegacyMigrationOutcomeDto {
@@ -1160,6 +1170,10 @@ interface WriterAppService {
 
     [Throws=WriterError]
     void save_app_sync_state(SyncStateDto state);
+
+    // Issue #630 评论 5307423953 Part B：全量同步持久状态。
+    [Throws=WriterError]
+    FullSyncStateDto? load_full_sync_state();
 
     [Throws=WriterError]
     SyncCapabilityDto get_sync_capability();

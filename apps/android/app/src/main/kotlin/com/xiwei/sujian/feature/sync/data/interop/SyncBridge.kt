@@ -6,6 +6,7 @@ import com.xiwei.sujian.core.interop.common.toModel
 import com.xiwei.sujian.feature.sync.data.model.FullSyncDiagnosticsResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncDryRunResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
+import com.xiwei.sujian.feature.sync.data.model.FullSyncState
 import com.xiwei.sujian.feature.sync.data.model.LegacyMigrationOutcome
 import com.xiwei.sujian.feature.sync.data.model.LegacyProfileMetadata
 import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
@@ -167,5 +168,16 @@ open class SyncBridge internal constructor(private val holder: WriterAppServiceH
     fun saveAppSyncState(state: SyncState): BridgeResult<Unit> =
         holder.wrapResult {
             holder.service.saveAppSyncState(state.toDto())
+        }
+
+    /**
+     * #630 评论 5307423953 Part B：全量同步持久状态。
+     *
+     * 读取 `<app_data_root>/app-meta/sync/full_state.local.json`。
+     * 文件不存在或 JSON 损坏时 Core 返回 null，桥接层返回 Success(null)。
+     */
+    fun loadFullSyncState(): BridgeResult<FullSyncState?> =
+        holder.wrapResult {
+            holder.service.loadFullSyncState()?.toModel()
         }
 }

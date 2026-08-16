@@ -22,7 +22,7 @@ import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
  * 不再按 projectId 路由 config/secrets，也不再维护应用级 / 作品级两套入口。
  * 一次同步 = App target + 所有 Project target，由 Core `perform_full_sync` 编排。
  */
-class SyncRepository(
+open class SyncRepository(
     context: Context,
     private val appBridge: AppServiceBridge,
     preferencesSuffix: String = "",
@@ -56,7 +56,7 @@ class SyncRepository(
             BridgeResult.NotLoaded -> SyncState()
         }
 
-    fun loadAppSyncState(): SyncState =
+    open fun loadAppSyncState(): SyncState =
         when (val result = syncBridge.loadAppSyncState()) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
@@ -76,9 +76,25 @@ class SyncRepository(
             BridgeResult.NotLoaded -> false
         }
 
+    // ── 全量同步持久状态（Issue #630 评论 5307423953 Part B） ──
+
+    /**
+     * 加载全量同步持久状态。文件不存在/损坏/Core 返回 null 时返回 null，
+     * 不抛异常，不阻断 UI。
+     */
+    open fun loadFullSyncState(): com.xiwei.sujian.feature.sync.data.model.FullSyncState? =
+        when (val result = syncBridge.loadFullSyncState()) {
+            is BridgeResult.Success -> result.data
+            is BridgeResult.Error -> {
+                warn("Failed to load full sync state: ${result.fullEnvelope}")
+                null
+            }
+            BridgeResult.NotLoaded -> null
+        }
+
     // ── 全局同步配置 / 凭据 ──
 
-    fun loadSyncConfig(): SyncConfig =
+    open fun loadSyncConfig(): SyncConfig =
         when (val result = syncBridge.loadSyncConfig()) {
             is BridgeResult.Success -> result.data.normalize()
             is BridgeResult.Error -> {
@@ -221,7 +237,7 @@ class SyncRepository(
 
     // ── 全局同步能力 ──
 
-    fun getSyncCapability(): SyncCapabilityData =
+    open fun getSyncCapability(): SyncCapabilityData =
         when (val result = syncBridge.getSyncCapability()) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
@@ -268,7 +284,14 @@ class SyncRepository(
 
     // ── 全局 SyncProfile snapshot / commit ──
 
-    suspend fun snapshotSyncProfile(): SyncProfileReadResult {
+    /**
+     * #630 评论 5307423953 Part A：Repository 内部底层 — 读取当前 generation 的 committed profile。
+     *
+     * 不触发 [ensureGlobalProfileMigrated]；业务入口（设置页/顶栏手动同步/自动同步）
+     * 必须走 [loadCommittedSyncProfile]，不得直接调用本函数。标记为 [internal] 仅供
+     * 同模块单元测试验证迁移完成后 generation 读取行为。
+     */
+    internal suspend fun snapshotSyncProfile(): SyncProfileReadResult {
         val state = profileStore.readState()
         val config =
             if (state.hasCommittedProfile) {
@@ -400,6 +423,11 @@ class SyncRepository(
                 if (secretResult is SettingsSaveResult.Failed) return secretResult
                 profileStore.stageSecrets(migrationGeneration)
                 profileStore.commitGeneration(migrationGeneration, configJson.toJson(migratedConfig.normalize()))
+                // #630 评论 5307423953 Part C：新 generation 的
+                // saveSyncSecretsForGeneration → stageSecrets → commitGeneration 全部成功后，
+                // 清除旧 Android DataStore metadata。失败/needs_reconfigure 分支不调用，
+                // 保留旧 metadata 供用户手动恢复。
+                legacyMetadataReader.clearLegacyMetadata()
                 null
             }
             else -> SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))

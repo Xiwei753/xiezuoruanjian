@@ -96,6 +96,51 @@ impl super::WriterCore {
         crate::sync::SyncService::save_sync_state(&self.app_data_root, state)
     }
 
+    // ── 全量同步持久状态（Issue #630 评论 5307423953 Part B） ──
+    // 路径：<app_data_root>/app-meta/sync/full_state.local.json
+    // 与 per-target state.local.json 分层：full_state 只记录"这一次全量事务整体是什么结果"。
+
+    /// 加载全量同步持久状态。文件不存在或 JSON 损坏时返回 None，不 panic。
+    pub fn load_full_sync_state(
+        &self,
+    ) -> crate::error::Result<Option<crate::sync::types::FullSyncState>> {
+        let path = self
+            .app_data_root
+            .join("app-meta/sync/full_state.local.json");
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(crate::Error::Io(e)),
+        };
+        match serde_json::from_str::<crate::sync::types::FullSyncState>(&content) {
+            Ok(state) => Ok(Some(state)),
+            Err(_) => {
+                // 损坏 JSON：记录警告并返回 None，不 panic、不阻断同步。
+                log::warn!("full_state.local.json corrupted — returning None");
+                Ok(None)
+            }
+        }
+    }
+
+    /// 原子写全量同步持久状态。写临时文件后 rename，保证读端不会看到部分写入。
+    pub fn save_full_sync_state(
+        &self,
+        state: &crate::sync::types::FullSyncState,
+    ) -> crate::error::Result<()> {
+        let path = self
+            .app_data_root
+            .join("app-meta/sync/full_state.local.json");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(state)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+        crate::storage::atomic_write_string(&path, &content)
+    }
+
     // ── 全局配置 + 全局凭据（Issue #630：唯一一份） ──
 
     /// 旧→新同步 profile 一次性迁移（Issue #630 评论第 4 点 / D）。
@@ -507,6 +552,24 @@ impl super::WriterCore {
         }
 
         let result = Self::aggregate_full_sync_result(targets);
+
+        // #630 评论 5307423953 Part B：聚合后把 FullSyncState 原子写到
+        // <app_data_root>/app-meta/sync/full_state.local.json。每次尝试更新
+        // last_attempt_time；仅整体成功类更新 last_success_time；部分失败保留旧值。
+        // 写失败只记录警告，不覆盖同步结果（同步本身已成功，状态持久化是副作用）。
+        let now_epoch_seconds = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+            .unwrap_or(0);
+        let previous_state = self.load_full_sync_state().unwrap_or(None);
+        let new_state = crate::sync::types::FullSyncState::from_result_and_previous(
+            &result,
+            previous_state.as_ref(),
+            now_epoch_seconds,
+        );
+        if let Err(e) = self.save_full_sync_state(&new_state) {
+            log::warn!("Failed to persist full sync state: {e}");
+        }
 
         // 同步成功后重建搜索索引
         if matches!(
@@ -1082,6 +1145,151 @@ mod tests {
             result.error_category.as_deref(),
             Some("auth_error"),
             "auth error category should map to auth_error"
+        );
+    }
+
+    // ── #630 评论 5307423953 Part B：FullSyncState 持久化行为测试 ──
+
+    fn make_full_sync_state(
+        status: SyncStatus,
+        last_success: Option<i64>,
+    ) -> crate::sync::types::FullSyncState {
+        crate::sync::types::FullSyncState {
+            overall_status: status,
+            last_attempt_time: Some(1000),
+            last_success_time: last_success,
+            failed_targets: vec![],
+        }
+    }
+
+    /// save 后 load 读回一致（原子写 + JSON 往返）。
+    #[test]
+    fn full_sync_state_save_then_load_roundtrip() {
+        let temp_dir = tempdir().expect("tempdir");
+        let core =
+            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        let state = make_full_sync_state(SyncStatus::Success, Some(999));
+        core.save_full_sync_state(&state).expect("save");
+        let loaded = core
+            .load_full_sync_state()
+            .expect("load")
+            .expect("should exist");
+        assert_eq!(loaded, state);
+    }
+
+    /// 文件不存在时 load 返回 None，不报错。
+    #[test]
+    fn full_sync_state_load_returns_none_when_absent() {
+        let temp_dir = tempdir().expect("tempdir");
+        let core =
+            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        let loaded = core.load_full_sync_state().expect("load should not error");
+        assert!(loaded.is_none());
+    }
+
+    /// 损坏 JSON 时 load 返回 None，不 panic、不报错。
+    #[test]
+    fn full_sync_state_load_corrupted_json_returns_none() {
+        let temp_dir = tempdir().expect("tempdir");
+        let core =
+            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        let path = temp_dir.path().join("app-meta/sync/full_state.local.json");
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&path, "{ this is not valid json").expect("write corrupted");
+        let loaded = core
+            .load_full_sync_state()
+            .expect("corrupted JSON must not error");
+        assert!(loaded.is_none(), "corrupted JSON should yield None");
+    }
+
+    /// perform_full_sync_with_backend 全成功后 full_state.local.json 被写入，
+    /// overall_status=Success，last_success_time 有值。
+    #[test]
+    fn full_sync_state_persisted_after_all_success() {
+        let temp_dir = tempdir().expect("tempdir");
+        let core =
+            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).expect("create projects dir");
+
+        let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
+        let config = test_config();
+        let secrets = SyncSecrets::default();
+        let result = core
+            .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+            .expect("full sync");
+        assert_eq!(result.overall_status, SyncStatus::Success);
+
+        let state = core
+            .load_full_sync_state()
+            .expect("load")
+            .expect("should exist");
+        assert_eq!(state.overall_status, SyncStatus::Success);
+        assert!(
+            state.last_success_time.is_some(),
+            "overall success must set last_success_time"
+        );
+        assert!(state.last_attempt_time.is_some());
+        assert!(state.failed_targets.is_empty());
+    }
+
+    /// perform_full_sync_with_backend 部分失败后 full_state 保留旧 last_success_time。
+    /// 先全成功（last_success_time=T1），再部分失败（last_success_time 仍为 T1）。
+    #[test]
+    fn full_sync_state_partial_failure_preserves_previous_last_success() {
+        let temp_dir = tempdir().expect("tempdir");
+        let core =
+            crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).expect("create projects dir");
+        let p1 = core.create_project("Project 1").expect("create project 1");
+
+        // 第一次：全成功
+        let backend_ok = MockBackend::new(MockOutcome::ok(SyncResult::success()));
+        let config = test_config();
+        let secrets = SyncSecrets::default();
+        let result1 = core
+            .perform_full_sync_with_backend(&backend_ok, &config, &secrets, false)
+            .expect("full sync 1");
+        assert_eq!(result1.overall_status, SyncStatus::Success);
+        let state1 = core
+            .load_full_sync_state()
+            .expect("load")
+            .expect("should exist");
+        let t1 = state1
+            .last_success_time
+            .expect("first success should set last_success_time");
+
+        // 第二次：p1 失败（部分失败）
+        let backend_partial = MockBackend::new(MockOutcome::ok(SyncResult::success()));
+        backend_partial.set(
+            &format!("projects/{}", p1.id),
+            MockOutcome::ErrOther("project sync failed".to_string()),
+        );
+        let result2 = core
+            .perform_full_sync_with_backend(&backend_partial, &config, &secrets, false)
+            .expect("full sync 2");
+        assert!(
+            matches!(result2.overall_status, SyncStatus::Error(_)),
+            "partial failure overall should be Error"
+        );
+        let state2 = core
+            .load_full_sync_state()
+            .expect("load")
+            .expect("should exist");
+        // 部分失败保留旧 last_success_time
+        assert_eq!(
+            state2.last_success_time,
+            Some(t1),
+            "partial failure must preserve previous last_success_time"
+        );
+        // failed_targets 记录失败的 project
+        assert!(
+            state2
+                .failed_targets
+                .iter()
+                .any(|t| t == &format!("project:{}", p1.id)),
+            "failed_targets should contain project:{}, got {:?}",
+            p1.id,
+            state2.failed_targets
         );
     }
 }

@@ -10,7 +10,7 @@ import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import kotlinx.coroutines.flow.first
 
-private val Context.syncProfileDataStore by preferencesDataStore(name = "sync_profile")
+internal val Context.syncProfileDataStore by preferencesDataStore(name = "sync_profile")
 
 /**
  * #630 评论 #1：全局同步配置版本化提交的 DataStore 侧实现。
@@ -166,6 +166,30 @@ class SyncProfileStore(context: Context) {
             )
         }
         return result
+    }
+
+    /**
+     * #630 评论 5307423953 Part C：清除旧作品级 profile metadata key。
+     *
+     * 只删除带 \`<projectId>.\` 前缀的旧 key（如 \`proj-1.active_generation\`、
+     * \`proj-1.committed_config_json\`、\`proj-1.staged_*\`），**绝对不删**当前不带前缀的
+     * 全局 key（\`active_generation\` / \`committed_config_json\` / \`staged_*\`）。
+     *
+     * 遍历 DataStore 所有 key，删除所有 name 包含 \`.\` 前缀的旧 project key。
+     * 与 [readLegacyProjectMetadata] 共用同一 DataStore 实例避免文件锁冲突。
+     */
+    suspend fun clearLegacyProjectMetadataKeys() {
+        dataStore.edit { prefs ->
+            val keysToRemove =
+                prefs.asMap().keys.filter { key ->
+                    val name = key.name
+                    val dotIndex = name.indexOf('.')
+                    dotIndex > 0
+                }
+            for (key in keysToRemove) {
+                prefs.remove(key)
+            }
+        }
     }
 
     companion object {
