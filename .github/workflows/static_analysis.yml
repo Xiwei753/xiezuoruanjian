@@ -22,6 +22,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -32,6 +34,12 @@ jobs:
           key: ${{ runner.os }}-cargo-audit-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-audit-
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: static-analysis
+          cache-on-failure: true
 
       - name: Configure UTF-8 environment
         run: |
@@ -71,8 +79,39 @@ jobs:
         working-directory: apps/android
         run: ./gradlew ktlintCheck
 
+      # === Android NDK + cargo-ndk for lintNoAiDebug ===
+      # lintNoAiDebug 经 preBuild → generateNoAiDebugWriterUniffi → buildNoAiDebugWriterNative
+      # 传递依赖 tools/android/build_native.sh，需要 cargo-ndk + Rust targets + ANDROID_NDK_HOME。
+      # 复用 android_debug_build.yml 的工具链安装模式（固定 CARGO_NDK_VERSION + 缓存）。
+      - name: Read NDK version
+        id: ndk
+        run: |
+          source tools/android/ndk.env
+          echo "ndk_version=$NDK_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ steps.ndk.outputs.ndk_version }}
+
+      - name: Cache cargo-ndk binary
+        id: cache-cargo-ndk
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: cargo-ndk-${{ env.CARGO_NDK_VERSION }}-${{ runner.os }}
+
+      - name: Install cargo-ndk
+        if: steps.cache-cargo-ndk.outputs.cache-hit != 'true'
+        run: cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
+
+      - name: Make native build scripts executable
+        run: chmod +x tools/android/build_native.sh
+
       - name: Android Lint noAiDebug（Android 平台错误）
         working-directory: apps/android
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_ROOT }}
         run: ./gradlew lintNoAiDebug
 
       # === Source structure gate ===
@@ -83,8 +122,9 @@ jobs:
         run: python3 tools/check_source_structure.py
 
       # === Android architecture gate (plain source scan, #597 六/七) ===
-      # 架构规则是普通源码扫描，不再伪装成 Android 单元测试，
-      # 也不再为了静态检查安装 NDK/Rust/cargo-ndk 构建 native。
+      # 架构规则是普通源码扫描，不再伪装成 Android 单元测试。
+      # NDK/cargo-ndk 仅因 lintNoAiDebug 传递依赖 buildNoAiDebugWriterNative 而安装，
+      # 架构检查本身不依赖 native 产物。
       - name: Android architecture checker tests
         run: python3 tools/test_check_android_architecture.py
 
