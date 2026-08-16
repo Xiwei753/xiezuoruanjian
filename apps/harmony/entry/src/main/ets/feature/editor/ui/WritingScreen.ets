@@ -98,8 +98,12 @@ export struct WritingScreen {
   private viewportController: EditorViewportController = new EditorViewportController()
   // Issue #629 评论7 第5项：幂等关闭事务 Promise。performGracefulClose 复用此 Promise，
   // 避免返回按钮 + aboutToDisappear 双重执行真实关闭链，防止重复统计。
-  // 不重置：页面 close 后即销毁，新会话是新 WritingScreen 实例。
-  private closeTask: Promise<void> | null = null
+  // Issue #629 评论8 第2项：改为 Promise<boolean>；关闭失败（保存失败/close 失败）时重置，
+  // 允许下次返回重试（否则失败后返回按钮永远无法再 pop）。成功关闭后页面即销毁，保留缓存。
+  private closeTask: Promise<boolean> | null = null
+  // Issue #629 评论8 第1项：保存事务复用。正在保存时后续调用必须 await/复用同一任务，
+  // 不再 if (isSaving) return true。事务完成后释放（成功失败都释放，允许下次新保存）。
+  private saveTask: Promise<boolean> | null = null
 
   aboutToAppear() {
     const paramsArr = this.navPathStack.getParamByName(Routes.Writing) as WritingRouteParams[]
@@ -158,50 +162,103 @@ export struct WritingScreen {
     this.lifecycle.addObserver(this.shareLifecycleObserver!)
   }
 
-  // Issue #629 评论6 Part G + 评论7 第5项：统一幂等关闭事务。
-  // flush input → await coordinator idle → save latest snapshot → detach IME → close session → leave
-  // 返回按钮和生命周期退后台都调此方法，禁止多套关闭流程。
-  // 幂等：复用 closeTask Promise，返回按钮 + aboutToDisappear 双重调用只执行一次真实关闭链。
-  private async performGracefulClose(): Promise<void> {
+  // Issue #629 评论6 Part G + 评论7 第5项 + 评论8 第2/3项：统一幂等关闭事务。
+  // seal（拒新输入）→ finishActiveComposition（最后中文 preedit 提交）→ drain dispatcher
+  // → coordinator idle → 保存稳定 snapshot → 保存成功后 detach IME → close Core session。
+  // 返回 boolean：保存失败/close 失败都返回 false（不 detach/close/pop，未落盘正文留在活跃会话）。
+  // 幂等：closeTask 复用同一 Promise；失败后重置允许重试。
+  private async performGracefulClose(): Promise<boolean> {
     // Issue #629 评论7 第5项：已有 closeTask 时直接返回同一 Promise（幂等）。
     if (this.closeTask !== null) {
       return this.closeTask
     }
-    this.closeTask = this.doGracefulClose()
-    return this.closeTask
+    const task: Promise<boolean> = this.doGracefulClose()
+    this.closeTask = task
+    task.then(
+      (closed: boolean) => {
+        // 成功关闭：页面即将销毁，保留缓存（不重跑）。失败：重置，允许下次返回重试。
+        if (!closed && this.closeTask === task) {
+          this.closeTask = null
+        }
+      },
+      () => {
+        // 异常路径也重置（失败后页面仍在，允许重试）。
+        if (this.closeTask === task) {
+          this.closeTask = null
+        }
+      }
+    )
+    return task
   }
 
   // Issue #629 评论7 第5项：真实关闭逻辑（拆出，由 performGracefulClose 幂等包装）。
-  // 保持原顺序：flush → whenIdle → save/统计 → detach → closeAsync。
-  private async doGracefulClose(): Promise<void> {
-    // 1. flush 语义调度器中排队的输入（物理键盘/IME/鼠标/触摸）
-    if (this.dispatcher) {
+  // Issue #629 评论8 第3项：顺序改为
+  //   seal → finishActiveComposition → drain → whenIdle → save → detach → closeAsync。
+  // 返回 boolean：保存失败或 closeAsync 失败返回 false，不 pop；正文仍在活跃编辑会话。
+  private async doGracefulClose(): Promise<boolean> {
+    // 1. dispatcher 进入 sealed：拒绝新的普通输入命令（已排队命令仍可 drain）
+    this.dispatcher.seal()
+    try {
+      // 2. 同一 dispatcher 队列里 finish 当前 composition：最后的中文 preedit 提交进
+      //    committed 正文（否则 snapshot.text 不含 preedit，直接保存会漏掉屏幕上看到的预输入）。
+      await this.dispatcher.finishActiveComposition()
+      // 3. drain dispatcher（所有已排队语义输入应用完）
       await this.dispatcher.flush()
+      // 4. 等 coordinator 命令队列空闲（所有 Core 编辑命令完成，snapshot 已包含最后输入）
+      await this.coordinator.whenIdle()
+      // 5. 保存稳定 snapshot（此时不再读可能已变化的 this.content）
+      const snap = this.coordinator.getSnapshot()
+      const savedText: string = snap ? snap.text : this.content
+      if (savedText !== this.lastSavedContent) {
+        // 保存事务可能复用了进行中任务（自动保存/手动保存冻结的是更早 snapshot）：
+        // 复用任务完成后必须校验 lastSavedContent 正是本次 close 的 savedText，
+        // 不是则再保存一轮（此时 saveTask 已释放，新事务冻结当前最新 snapshot）。
+        // 这样“保存期间新输入”在 close 路径上也不会被误标成已保存后离开。
+        let settled: boolean = await this.saveChapter()
+        if (!settled) {
+          // 保存失败：不 detach、不 close、不 pop；解锁输入让用户继续编辑（下次返回重试）。
+          this.dispatcher.unseal()
+          return false
+        }
+        let guard: number = 0
+        while (this.lastSavedContent !== savedText && guard < 5) {
+          settled = await this.saveChapter()
+          if (!settled) {
+            this.dispatcher.unseal()
+            return false
+          }
+          guard++
+        }
+        if (this.lastSavedContent !== savedText) {
+          // 连续多轮仍未把 close 时的 savedText 落盘（异常情况）：不离开，正文留在活跃会话。
+          this.dispatcher.unseal()
+          return false
+        }
+      } else if (this.sessionOldText !== savedText && this.chapterId) {
+        // 没有未保存变更但有统计差异时，兜底上报一次写作统计
+        const deviceId = this.settings.statsDeviceId || 'unknown'
+        const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
+        this.bridge.processWritingEvent(
+          deviceId, 'harmony', this.projectId, this.volumeId,
+          this.chapterId, this.sessionOldText, savedText, durationSeconds, this.sessionId
+        )
+        // Issue #629 评论7 第5项：统计成功推进 sessionOldText，避免第二遍重复统计。
+        this.sessionOldText = savedText
+      }
+      // 6. 保存成功后 detach IME 连接（取消监听并 detach，失败不阻塞）
+      await this.harmonyImeConnection.detach()
+      // 7. 关闭编辑会话（等队列空闲后再 close，避免最后几个字还在队列里就 close 丢输入）
+      const closeResult = await this.coordinator.closeAsync()
+      if (!closeResult.success) {
+        // close 失败：不把关闭失败当成功，页面不 pop（正文会话仍活跃）。
+        return false
+      }
+      return true
+    } catch (err) {
+      // 异常路径按失败处理：不 pop（正文仍在活跃会话），解锁输入允许重试。
+      this.dispatcher.unseal()
+      return false
     }
-    // 2. 等 coordinator 命令队列空闲（所有 Core 编辑命令完成，snapshot 已包含最后输入）
-    await this.coordinator.whenIdle()
-    // 3. 保存最新 snapshot / 兜底上报统计（此时 snapshot 已包含最后输入，不会读到旧文本）
-    if (this.hasUnsavedChanges) {
-      await this.saveChapter()
-      // saveChapter 成功时内部已推进 sessionOldText = content 并重置 session；
-      // 失败时保留旧 sessionOldText 供重试。此处不额外推进，避免覆盖 saveChapter 内部状态。
-    } else if (this.sessionOldText !== this.content && this.chapterId) {
-      // 没有未保存变更但有统计差异时，兜底上报一次写作统计
-      const deviceId = this.settings.statsDeviceId || 'unknown'
-      const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
-      this.bridge.processWritingEvent(
-        deviceId, 'harmony', this.projectId, this.volumeId,
-        this.chapterId, this.sessionOldText, this.content, durationSeconds, this.sessionId
-      )
-      // Issue #629 评论7 第5项：统计成功推进 sessionOldText，避免第二遍重复统计。
-      // processWritingEvent 为 fire-and-forget（与 saveChapter 内部一致，不阻塞 detach/close），
-      // best effort 推进；同一段统计不再满足发送条件。
-      this.sessionOldText = this.content
-    }
-    // 4. detach IME 连接（取消监听并 detach，失败不阻塞）
-    await this.harmonyImeConnection.detach()
-    // 5. 关闭编辑会话（等队列空闲后再 close，避免最后几个字还在队列里就 close 丢输入）
-    await this.coordinator.closeAsync()
   }
 
   // Issue #629 评论6 Part G：退后台保存事务。
@@ -261,7 +318,9 @@ export struct WritingScreen {
         this.sessionId = `hm-${this.chapterId}-${Date.now()}`
         this.sessionStartTime = Date.now()
         // 打开编辑会话，用 Core 管理正文。open 成功后 listener 自动回流 editorSnapshot/content/hasUnsaved/wordCount。
-        const snapResult = await this.coordinator.open(this.chapterId, result.data.content)
+        // Issue #629 评论8 第5项：章节正文是持续编辑内容，传 isPersistent=true（persistent session），
+        // 不再把章节伪装成 temporary session。
+        const snapResult = await this.coordinator.open(this.chapterId, result.data.content, true)
         if (!snapResult.success) {
           this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
         } else if (snapResult.data) {
@@ -447,39 +506,82 @@ export struct WritingScreen {
     }
   }
 
+  // Issue #629 评论8 第1项：保存事务入口（复用同一任务）。
+  // 正在保存时后续调用必须 await/复用同一任务，不再 if (isSaving) return true。
+  // 手动保存/自动保存/关闭保存都走 doSaveChapter 这一套保存事务，不各写一套状态结算。
   async saveChapter(isAutoSave: boolean = false): Promise<boolean> {
-    if (this.isSaving || !this.hasUnsavedChanges) return true
+    if (this.saveTask !== null) {
+      return this.saveTask
+    }
+    const task: Promise<boolean> = this.doSaveChapter(isAutoSave)
+    this.saveTask = task
+    // 事务完成后释放（成功失败都释放，允许下次保存新任务）；
+    // 用同一性检查避免误清新任务（并发窗口：旧任务完成瞬间新任务已启动）。
+    task.then(
+      () => {
+        if (this.saveTask === task) {
+          this.saveTask = null
+        }
+      },
+      () => {
+        if (this.saveTask === task) {
+          this.saveTask = null
+        }
+      }
+    )
+    return task
+  }
 
+  // Issue #629 评论8 第1项：真实保存事务。
+  // 流程：flush dispatcher → await coordinator idle → 只读一次 Core snapshot 得到不可变
+  // savedText → bridge.saveChapter(chapterId, savedText) 只保存这份文本 → 返回后按 savedText
+  // 结算（processWritingEvent/sessionOldText/lastSavedContent）→ 再取 latestSnapshot：
+  // this.content = latestSnapshot.text；hasUnsavedChanges = latestSnapshot.text !== savedText
+  // （保存期间新输入保持 unsaved，不把 A+B 标成已保存）。
+  // contentHash/wordCount 是这次 savedText 的回执。
+  private async doSaveChapter(isAutoSave: boolean): Promise<boolean> {
     this.isSaving = true
     this.isAutoSaving = isAutoSave
     this.saveMessage = ''
 
     try {
-      // 从 coordinator snapshot 取最新正文
-      const snap = this.coordinator.getSnapshot()
-      if (snap) {
-        this.content = snap.text
+      // 1+2. 取得稳定 committed snapshot：flush 所有排队语义输入 + 等 Core 命令队列空闲。
+      // 之后 savedText 不再受保存期间新输入影响（此快照是本次保存的结算基准）。
+      if (this.dispatcher) {
+        await this.dispatcher.flush()
       }
-      const result = await this.bridge.saveChapter(this.chapterId, this.content)
+      await this.coordinator.whenIdle()
+      // 3. 不可变 savedText：只读一次 Core snapshot，此后不再读可能已变化的 this.content。
+      const snap = this.coordinator.getSnapshot()
+      const savedText: string = snap ? snap.text : this.content
+      // 4. 只保存这份文本
+      const result = await this.bridge.saveChapter(this.chapterId, savedText)
       if (result.success && result.data) {
-        if (this.sessionOldText !== this.content) {
+        // 5. 按 savedText 结算统计（不读可能已变化的 this.content）
+        if (this.sessionOldText !== savedText) {
           const deviceId = this.settings.statsDeviceId || 'unknown'
           const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
           this.bridge.processWritingEvent(
             deviceId, 'harmony', this.projectId, this.volumeId,
-            this.chapterId, this.sessionOldText, this.content, durationSeconds, this.sessionId
+            this.chapterId, this.sessionOldText, savedText, durationSeconds, this.sessionId
           )
-          this.sessionOldText = this.content
+          this.sessionOldText = savedText
           this.sessionId = `hm-${this.chapterId}-${Date.now()}`
           this.sessionStartTime = Date.now()
         }
-
-        this.lastSavedContent = this.content
+        this.lastSavedContent = savedText
         // Issue #629 评论 5 第 8 节：保存成功后跨设备内容身份来自 ChapterSaveReceipt.contentHash。
         this.lastSavedContentHash = result.data.contentHash
         this.hasUnsavedChanges = false
         this.lastSaveFailed = false
         this.wordCount = result.data.wordCount
+        // 6. 重新取 latestSnapshot 结算：保存期间若又产生新输入，hasUnsavedChanges 保持 true，
+        //    不把新版正文标成已保存。
+        const latest = this.coordinator.getSnapshot()
+        if (latest) {
+          this.content = latest.text
+          this.hasUnsavedChanges = latest.text !== savedText
+        }
         this.saveMessage = isAutoSave ? getContext(this).resourceManager.getStringSync($r('app.string.auto_saved').id) : getContext(this).resourceManager.getStringSync($r('app.string.saved').id)
         setTimeout(() => { this.saveMessage = '' }, 2000)
         // 保存成功后更新接续状态（contentHash 前进，此时 hasUnsavedChanges=false 带完整 selection/cursor）。
@@ -586,10 +688,13 @@ export struct WritingScreen {
           .height(24)
           .fillColor(this.themeConfig.colors.textPrimary)
           .onClick(async () => {
-            // Issue #629 评论6 Part G：返回按钮走统一关闭事务（flush→idle→save→detach→close），
-            // 禁止多套关闭流程。performGracefulClose 保证最后几个字不丢。
-            await this.performGracefulClose()
-            this.navPathStack.pop()
+            // Issue #629 评论6 Part G：返回按钮走统一关闭事务（seal→finish→flush→idle→save→detach→close），
+            // 禁止多套关闭流程。Issue #629 评论8 第2项：只有关闭事务成功（保存成功且 close 成功）
+            // 才 pop；保存失败/close 失败时不离开，未落盘正文留在活跃编辑会话。
+            const closed = await this.performGracefulClose()
+            if (closed === true) {
+              this.navPathStack.pop()
+            }
           })
 
         Text(this.chapterTitle)

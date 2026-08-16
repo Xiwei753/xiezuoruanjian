@@ -50,8 +50,10 @@ export class EditorSessionCoordinator {
 
   // open：create→sessionId→snapshot→state→notifyListener。返回初始 snapshot 供调用方判断成功。
   // open 不进命令队列：它是初始化，必须先完成才能 enqueue 编辑命令。
-  async open(targetId: string, initialText: string): Promise<ResultEnvelope<EditorSessionSnapshot>> {
-    const createResult = await this.bridge.create(targetId, initialText, 0, false)
+  // Issue #629 评论8 第5项：isPersistent 显式传入 bridge——章节正文等持续编辑内容传 true
+  // （persistent session），项目名/搜索词等临时草稿会话传 false，不内部固定。
+  async open(targetId: string, initialText: string, isPersistent: boolean): Promise<ResultEnvelope<EditorSessionSnapshot>> {
+    const createResult = await this.bridge.create(targetId, initialText, 0, isPersistent)
     if (!createResult.success || createResult.data === undefined || createResult.data === null) {
       return {
         success: false,

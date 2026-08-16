@@ -249,7 +249,8 @@ export struct WorkspaceScreen {
         this.sessionStartTime = Date.now()
 
         // 打开编辑会话。open 成功后 listener 自动回流 editorSnapshot/content/hasUnsaved/wordCount。
-        const openResult = await this.coordinator.open(this.selectedChapterId, result.data.content)
+        // Issue #629 评论8 第5项：章节正文是持续编辑内容，传 isPersistent=true。
+        const openResult = await this.coordinator.open(this.selectedChapterId, result.data.content, true)
         if (!openResult.success) {
           this.editorErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
         }

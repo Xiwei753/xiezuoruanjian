@@ -12,13 +12,16 @@
 //   7. noChange 保留 text 但更新 selection
 //   8. 多 patch 顺序应用
 //   9. EditorInputAdapter.currentSelectionUtf8 normalize（start <= end）
-//  10. EditorInputAdapter onTextInput/onPaste/onDelete/onCompositionBegin 尊重当前选区
+//  10. EditorInputAdapter onTextInput/onPaste/onCompositionBegin 尊重当前选区
+//  10b. 软键盘删除统一走 EditorSemanticDispatcher graphemeBackspace/graphemeDelete（评论7 第6项）
 //  11. IME composition 顺序：begin→update→update→finish/cancel（由 HarmonyImeConnection 串行队列保证）
 
 import { describe, it, expect } from '@ohos/hypium'
 import { EditorSessionState, EditStateOutcome } from '../../../main/ets/feature/editor/session/EditorSessionState'
 import { EditorInputAdapter, SelectionRangeUtf8, DeleteDirection } from '../../../main/ets/feature/editor/input/EditorInputAdapter'
 import { EditorSessionCoordinator } from '../../../main/ets/feature/editor/session/EditorSessionCoordinator'
+import { EditorSemanticDispatcher } from '../../../main/ets/feature/editor/input/EditorSemanticDispatcher'
+import { SelectionController } from '../../../main/ets/feature/editor/selection/SelectionController'
 import { IEditorSessionBridge } from '../../../main/ets/feature/editor/interop/IEditorSessionBridge'
 import {
   EditorSessionSnapshot,
@@ -38,6 +41,8 @@ class MockEditorSessionBridge implements IEditorSessionBridge {
   insertCalls: Array<{ byteOffset: number, text: string, cause: EditorTransactionCause }> = []
   deleteCalls: Array<{ start: number, end: number, cause: EditorTransactionCause }> = []
   replaceCalls: Array<{ start: number, end: number, text: string, originalText: string, cause: EditorTransactionCause }> = []
+  // Issue #629 评论8 第5项：记录 create 的 isPersistent，验证 persistent 章节会话。
+  createCalls: Array<{ targetId: string, isPersistent: boolean }> = []
   beginCompositionCalls: Array<{ start: number, end: number }> = []
   // mock 当前 snapshot（由测试设置）
   mockSnapshot: EditorSessionSnapshot = {
@@ -45,6 +50,7 @@ class MockEditorSessionBridge implements IEditorSessionBridge {
   }
 
   async create(targetId: string, initialText: string, initialCursorByteOffset: number, isPersistent: boolean): Promise<ResultEnvelope<number>> {
+    this.createCalls.push({ targetId, isPersistent })
     return { success: true, data: 1, warnings: [], changedPaths: [], changedEntities: [] }
   }
   async close(sessionId: number): Promise<ResultEnvelope<boolean>> {
@@ -317,7 +323,7 @@ export default function editorSessionPatchTest() {
         text: 'hello', revision: 1, cursor: 5, selectionAnchor: 5, generation: 0, chapterId: 'c1', composition: null
       })
       // open 设置 state（mockSnapshot 空选区：cursor=5, anchor=5）
-      await coordinator.open('c1', 'hello')
+      await coordinator.open('c1', 'hello', true)
       await adapter.onTextInput('!')
       // 应调用 bridge.insert 一次，不调用 replace
       expect(bridge.insertCalls.length).assertEqual(1)
@@ -330,7 +336,7 @@ export default function editorSessionPatchTest() {
       const { bridge, coordinator, adapter } = setup({
         text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1', composition: null
       })
-      await coordinator.open('c1', 'hello world')
+      await coordinator.open('c1', 'hello world', true)
       // 选区 [3,7) = "lo w"
       await adapter.onTextInput('XYZ')
       // 应调用 bridge.replace 一次，不调用 insert
@@ -346,7 +352,7 @@ export default function editorSessionPatchTest() {
       const { bridge, coordinator, adapter } = setup({
         text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1', composition: null
       })
-      await coordinator.open('c1', 'hello world')
+      await coordinator.open('c1', 'hello world', true)
       await adapter.onPaste('PASTED')
       expect(bridge.replaceCalls.length).assertEqual(1)
       expect(bridge.insertCalls.length).assertEqual(0)
@@ -356,12 +362,17 @@ export default function editorSessionPatchTest() {
       expect(bridge.replaceCalls[0].cause).assertEqual(EditorTransactionCause.Paste)
     })
 
-    it('onDelete 有选区时删除整个选区', async () => {
+    it('软键盘删除（graphemeBackspace）有选区时删除整个选区', async () => {
+      // 评论7 第6项：EditorInputAdapter.onDelete 已删除，软键盘删除统一走
+      // EditorSemanticDispatcher graphemeBackspace/graphemeDelete（Core grapheme 边界）。
+      // 有选区时直接删整个选区，不调 previousGraphemeBoundary。
       const { bridge, coordinator, adapter } = setup({
         text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1', composition: null
       })
-      await coordinator.open('c1', 'hello world')
-      await adapter.onDelete('backward')
+      await coordinator.open('c1', 'hello world', true)
+      const selectionController: SelectionController = new SelectionController(coordinator)
+      const dispatcher: EditorSemanticDispatcher = new EditorSemanticDispatcher(adapter, selectionController, coordinator)
+      await dispatcher.dispatch({ kind: 'graphemeBackspace' })
       expect(bridge.deleteCalls.length).assertEqual(1)
       expect(bridge.deleteCalls[0].start).assertEqual(3)
       expect(bridge.deleteCalls[0].end).assertEqual(7)
@@ -371,7 +382,7 @@ export default function editorSessionPatchTest() {
       const { bridge, coordinator, adapter } = setup({
         text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1', composition: null
       })
-      await coordinator.open('c1', 'hello world')
+      await coordinator.open('c1', 'hello world', true)
       await adapter.onCompositionBegin()
       expect(bridge.beginCompositionCalls.length).assertEqual(1)
       expect(bridge.beginCompositionCalls[0].start).assertEqual(3)
@@ -404,6 +415,32 @@ export default function editorSessionPatchTest() {
       // begin 失败时 return，不设 composing、不调 onCompositionUpdate。
       // 纯逻辑验证见 editor_command_queue.test.mjs。
       expect(true).assertTrue()
+    })
+  })
+  // ── Issue #629 评论8 第5项：persistent 章节会话 ──
+  // 环境阻塞：无 hvigor/ohpm/SDK，需真实 HarmonyOS 环境运行。
+  // coordinator.open 把 isPersistent 显式传给 bridge.create：
+  // 章节正文（WritingScreen/WorkspaceScreen）传 true，短文本草稿会话传 false。
+  describe('persistent 章节会话（环境阻塞：无 hvigor/ohpm/SDK）', () => {
+    it('open(targetId, text, true) → bridge.create isPersistent=true', async () => {
+      const bridge: MockEditorSessionBridge = new MockEditorSessionBridge()
+      bridge.mockSnapshot = { text: 'hello', revision: 1, cursor: 5, selectionAnchor: 5, generation: 0, chapterId: 'c1', composition: null }
+      const coordinator: EditorSessionCoordinator = new EditorSessionCoordinator(bridge)
+      const result = await coordinator.open('c1', 'hello', true)
+      expect(result.success).assertTrue()
+      expect(bridge.createCalls.length).assertEqual(1)
+      expect(bridge.createCalls[0].targetId).assertEqual('c1')
+      expect(bridge.createCalls[0].isPersistent).assertTrue()
+    })
+
+    it('open(targetId, text, false) → bridge.create isPersistent=false（短文本草稿会话）', async () => {
+      const bridge: MockEditorSessionBridge = new MockEditorSessionBridge()
+      bridge.mockSnapshot = { text: 'x', revision: 1, cursor: 1, selectionAnchor: 1, generation: 0, chapterId: 'tmp', composition: null }
+      const coordinator: EditorSessionCoordinator = new EditorSessionCoordinator(bridge)
+      const result = await coordinator.open('tmp', 'x', false)
+      expect(result.success).assertTrue()
+      expect(bridge.createCalls.length).assertEqual(1)
+      expect(bridge.createCalls[0].isPersistent).assertFalse()
     })
   })
 }

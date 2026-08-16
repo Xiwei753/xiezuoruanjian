@@ -123,18 +123,18 @@ export class HarmonyImeConnection {
     this.dispatcher.dispatchFireAndForget({ kind: 'insertText', text: '\n' })
   }
 
-  // IME 选区变化：翻译成 setSelection/dragSelect 语义命令，经 dispatcher 派发。
+  // IME 选区变化：翻译成 imeSetSelection 语义命令，经 dispatcher 派发。
+  // Issue #629 评论8 第4项：IME 来源的 selection 不再复用普通 setSelection/dragSelect
+  // （那会走 committed selection，把 Core/UI composition 状态拆开）；
+  // composition 内外判断由 EditorSemanticDispatcher 在唯一队列出队时做，
+  // 本连接只负责传 start/end UTF-16 显示坐标。
   private onSetSelection(selection: inputMethod.Selection): void {
     if (!this.dispatcher) {
       return
     }
     const start = selection.start
     const end = selection.end
-    if (start === end) {
-      this.dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: start })
-    } else {
-      this.dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: start, utf16Head: end })
-    }
+    this.dispatcher.dispatchFireAndForget({ kind: 'imeSetSelection', utf16Start: start, utf16End: end })
   }
 
   // IME composition preedit：纯翻译器，派发 imePreviewText。

@@ -18,6 +18,18 @@
 // - 删除 {kind:'delete',direction} 命令变体和 inputAdapter.onDelete 调用。
 // - graphemeBackspace/graphemeDelete 用 Core previousGraphemeBoundary/nextGraphemeBoundary（Part E 已暴露），
 //   不再用 UTF-16 ±1 猜字符边界（避免切进组合附加符 / ZWJ emoji）。
+//
+// Issue #629 评论8 第3项：close 生命周期入口。
+// - seal()/unseal()：close 开始后拒绝新的普通输入命令，但已排队命令仍可 drain。
+// - finishActiveComposition()：在唯一队列里执行，出队时查 isComposing()，有 composition 就用
+//   EditorImeSession 当前 preedit 调 onCompositionFinish(currentPreedit)，没有就 no-op。
+//   seal 后仍可入队（它是关闭链的一部分），保证最后中文 preedit 提交进正文再保存。
+//
+// Issue #629 评论8 第4项：imeSetSelection 语义命令。
+// - IME 来源的 selection 不再复用普通 setSelection/dragSelect，改派发 imeSetSelection（只传 start/end UTF-16）。
+// - 出队后判断 composition：无 composition 按普通 selection；有 composition 且 selection 在
+//   composition 显示区域内 → 换算成 preedit 内 preeditCursorUtf16 走 composition update；
+//   移出 composition 区域 → 同一 thunk 内先 finish 再普通 selection。
 
 import { EditorInputAdapter } from './EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
@@ -46,6 +58,9 @@ export type SemanticEditCommand =
   | { kind: 'graphemeDelete' }
   | { kind: 'graphemeLeft'; extend: boolean }
   | { kind: 'graphemeRight'; extend: boolean }
+  // Issue #629 评论8 第4项：IME 来源的 selection 语义命令（start/end 是 UTF-16 code unit offset，
+  // 显示文本坐标）。composition 内外判断由本 Dispatcher 在唯一队列出队时做。
+  | { kind: 'imeSetSelection'; utf16Start: number; utf16End: number }
 
 export class EditorSemanticDispatcher {
   private inputAdapter: EditorInputAdapter
@@ -54,6 +69,8 @@ export class EditorSemanticDispatcher {
   // 统一串行队列：物理键盘/IME/鼠标/触摸都从这里排队。
   // 出队执行时才读 Coordinator snapshot（前一条命令已完成并更新 state）。
   private queue: SerialCommandQueue = new SerialCommandQueue()
+  // Issue #629 评论8 第3项：close 开始后 sealed，拒绝新的普通输入命令（已排队命令仍可 drain）。
+  private sealed: boolean = false
 
   constructor(inputAdapter: EditorInputAdapter, selectionController: SelectionController, coordinator: EditorSessionCoordinator) {
     this.inputAdapter = inputAdapter
@@ -64,8 +81,20 @@ export class EditorSemanticDispatcher {
   /**
    * 派发一条语义命令。命令在出队执行时才读 Coordinator 最新 snapshot。
    * 返回的 Promise 在命令完成时 resolve/reject，与命令结果一致。
+   *
+   * Issue #629 评论8 第3项：seal 后拒绝新的普通输入命令（返回 SEALED，不排队）。
+   * 已排队命令不受影响，仍可 drain（flush/whenIdle 照常）。
    */
   dispatch(cmd: SemanticEditCommand): Promise<ResultEnvelope<EditorEditResult>> {
+    if (this.sealed) {
+      return Promise.resolve({
+        success: false,
+        errorCode: 'SEALED',
+        warnings: [],
+        changedPaths: [],
+        changedEntities: []
+      })
+    }
     return this.queue.enqueue<ResultEnvelope<EditorEditResult>>(async () => {
       return this.executeCommand(cmd)
     })
@@ -78,6 +107,41 @@ export class EditorSemanticDispatcher {
   dispatchFireAndForget(cmd: SemanticEditCommand): void {
     this.dispatch(cmd).then(() => {}, (_e: Object) => {
       // 命令失败不阻塞后续；错误已由 EditorInputAdapter/Coordinator 处理（recover）
+    })
+  }
+
+  // Issue #629 评论8 第3项：close 生命周期入口。
+  // seal：close 开始后拒绝新的普通输入命令（dispatch 返回 SEALED，不排队）。
+  // unseal：保存失败不离开时恢复输入（页面继续编辑）。
+  seal(): void {
+    this.sealed = true
+  }
+
+  unseal(): void {
+    this.sealed = false
+  }
+
+  isSealed(): boolean {
+    return this.sealed
+  }
+
+  /**
+   * Issue #629 评论8 第3项：在 dispatcher 唯一队列里 finish 当前 composition。
+   *
+   * 出队时查 inputAdapter.isComposing()：
+   * - 有 composition：用 EditorImeSession 当前 preedit 调 onCompositionFinish(currentPreedit)
+   *   （确认原样提交，preedit 落进 committed 正文，随后的保存不会漏掉最后预输入）；
+   * - 没有 composition：no-op（返回 success）。
+   *
+   * 与普通输入不同：seal 后仍能入队——它是关闭链的一部分（seal → finishActiveComposition →
+   * drain → coordinator idle → 保存 → detach → close）。
+   */
+  finishActiveComposition(): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.queue.enqueue<ResultEnvelope<EditorEditResult>>(async () => {
+      if (!this.inputAdapter.isComposing()) {
+        return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+      }
+      return this.inputAdapter.finishActiveComposition()
     })
   }
 
@@ -100,6 +164,8 @@ export class EditorSemanticDispatcher {
         return this.executeImeCommitText(cmd.text)
       case 'imeCancelPreview':
         return this.executeImeCancelPreview()
+      case 'imeSetSelection':
+        return this.executeImeSetSelection(cmd.utf16Start, cmd.utf16End)
       case 'paste':
         return this.inputAdapter.onPaste(cmd.text)
       case 'graphemeBackspace':
@@ -152,6 +218,63 @@ export class EditorSemanticDispatcher {
     }
     // 无 composition：no-op（不设 data，调用方据此知道无编辑结果）
     return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+  }
+
+  /**
+   * Issue #629 评论8 第4项：IME selection 语义命令（出队执行）。
+   *
+   * start/end 是 IME 给的显示文本 UTF-16 code unit offset（composition 活跃时显示文本 =
+   * committed text 在 replace range 处插入 preedit 的投影）。出队后判断 composition：
+   *
+   * - 无 composition：按普通 selection 处理（与 setSelection/dragSelect 同语义）。
+   * - 有 composition 且 selection 完全落在 composition 显示区域内：把显示坐标换算成 preedit 内
+   *   preeditCursorUtf16，用当前 preedit 文本调 composition update，让 Core 更新
+   *   composition cursor/generation（不改 committed selection）。
+   * - selection 移出 composition 区域（含部分越界）：同一 thunk 内先 finish 当前 composition，
+   *   再把显示坐标映射到 committed 文本坐标，执行普通 selection。
+   */
+  private async executeImeSetSelection(utf16Start: number, utf16End: number): Promise<ResultEnvelope<EditorEditResult>> {
+    const snap = this.coordinator.getSnapshot()
+    if (!snap) {
+      return this.noSession()
+    }
+    if (!this.inputAdapter.isComposing() || snap.composition === null || snap.composition === undefined) {
+      // 无 composition：普通 selection（start/end 即 committed 文本坐标）。
+      if (utf16Start === utf16End) {
+        return this.selectionController.onTap(utf16Start)
+      }
+      return this.selectionController.onDragSelect(utf16Start, utf16End)
+    }
+    const comp = snap.composition
+    const committedText: string = snap.text
+    // composition 显示区域（UTF-16）：[compStartUtf16, compStartUtf16 + preeditUtf16Len)
+    const compStartUtf16: number = TextOffsetMapper.utf8ToUtf16(committedText, comp.replaceByteStart)
+    const preeditUtf16Len: number = comp.preeditText.length
+    const compEndDisplay: number = compStartUtf16 + preeditUtf16Len
+    const start: number = Math.min(utf16Start, utf16End)
+    const end: number = Math.max(utf16Start, utf16End)
+
+    if (start >= compStartUtf16 && end <= compEndDisplay) {
+      // selection 完全在 composition 显示区域内：换算成 preedit 内 cursor，走 composition update。
+      const cursorInPreedit: number = end - compStartUtf16
+      // 同一 preedit 文本 + 新 cursor：Core 更新 composition cursor/generation。
+      return this.inputAdapter.onCompositionUpdate(comp.preeditText, cursorInPreedit)
+    }
+
+    // selection 移出 composition 区域：先 finish 当前 composition（preedit 提交进正文），
+    // 再执行普通 selection。整个过程仍在同一 dispatcher thunk 内顺序 await。
+    const finishResult = await this.inputAdapter.finishActiveComposition()
+    if (!finishResult.success) {
+      return finishResult
+    }
+    // finish 后 coordinator snapshot 已更新：finish 把 [replaceStart, replaceEnd) 替换为
+    // preedit，committed 正文恰好等于之前的显示文本（prefix + preedit + suffix）。
+    // 因此 IME 给的显示坐标就是 committed 文本坐标（恒等映射），直接按普通 selection 处理，
+    // 不再换算（旧公式 d - preeditLen + (end-start) 会把光标放错位置——它假设被替换区还在）。
+    if (start === end) {
+      return this.selectionController.onTap(start)
+    }
+    return this.selectionController.onDragSelect(start, end)
   }
 
   // grapheme-based backspace: 用 Core previous_grapheme_boundary 找前一个 grapheme 边界

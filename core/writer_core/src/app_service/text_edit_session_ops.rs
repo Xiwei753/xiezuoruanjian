@@ -24,6 +24,37 @@ fn make_composition_state_dto(
     }
 }
 
+/// #629 评论8 第4项：统一 composition 回填出口。
+///
+/// 任何 Core 命令成功后（Applied/AppliedWithAdjustedSelection/NoChange），只要 kernel 里
+/// composition 仍然活跃，DTO 的 `composition_session`/`composition` 就必须反映真实 kernel 状态；
+/// 不要只在 begin/update 两个函数里手工补字段。setSelection 等不会结束 composition 的命令
+/// 也走同一个出口，避免再次出现 Core 有 composition、平台 DTO 却是 null。
+///
+/// finish/cancel 成功后 kernel 已无活跃 composition，保持 None；失败命令（stale/invalid）
+/// 不写回，平台端收到失败后从 snapshot() 恢复（snapshot 自带当前 composition）。
+fn backfill_active_composition(
+    dto: &mut EditorEditResultDto,
+    kernel: &crate::editor::EditorKernel,
+) {
+    if dto.outcome != EditorEditOutcomeDto::Applied
+        && dto.outcome != EditorEditOutcomeDto::AppliedWithAdjustedSelection
+        && dto.outcome != EditorEditOutcomeDto::NoChange
+    {
+        return;
+    }
+    if let Some((cs_id, base_rev, gen)) = kernel.composition_session_info() {
+        dto.composition_session = Some(crate::api::types::CompositionSessionDto {
+            session_id: cs_id,
+            base_revision: base_rev,
+            generation: gen,
+        });
+    }
+    if let Some(state) = kernel.composition_state() {
+        dto.composition = Some(make_composition_state_dto(state));
+    }
+}
+
 impl super::WriterAppService {
     fn with_registry<F, R>(&self, f: F) -> R
     where
@@ -124,7 +155,9 @@ impl super::WriterAppService {
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
             });
-            result.into_result().into()
+            let mut dto: EditorEditResultDto = result.into_result().into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
@@ -156,7 +189,9 @@ impl super::WriterAppService {
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
             });
-            result.into_result().into()
+            let mut dto: EditorEditResultDto = result.into_result().into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
@@ -192,7 +227,9 @@ impl super::WriterAppService {
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
             });
-            result.into_result().into()
+            let mut dto: EditorEditResultDto = result.into_result().into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
@@ -222,7 +259,9 @@ impl super::WriterAppService {
                 head,
                 expected_revision: EditorRevision::new(expected_revision),
             });
-            result.into_result().into()
+            let mut dto: EditorEditResultDto = result.into_result().into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
@@ -238,7 +277,9 @@ impl super::WriterAppService {
             let result = s.kernel.apply(EditorCommand::Undo {
                 expected_revision: EditorRevision::new(expected_revision),
             });
-            result.into_result().into()
+            let mut dto: EditorEditResultDto = result.into_result().into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
@@ -254,7 +295,9 @@ impl super::WriterAppService {
             let result = s.kernel.apply(EditorCommand::Redo {
                 expected_revision: EditorRevision::new(expected_revision),
             });
-            result.into_result().into()
+            let mut dto: EditorEditResultDto = result.into_result().into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
@@ -273,7 +316,9 @@ impl super::WriterAppService {
             };
             s.generation = s.generation.saturating_add(1);
             let result = s.kernel.load_text(text, offset.value());
-            result.into_result().into()
+            let mut dto: EditorEditResultDto = result.into_result().into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
@@ -329,7 +374,9 @@ impl super::WriterAppService {
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
             });
-            result.into()
+            let mut dto: EditorEditResultDto = result.into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
@@ -372,7 +419,9 @@ impl super::WriterAppService {
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
             });
-            result.into()
+            let mut dto: EditorEditResultDto = result.into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
@@ -408,22 +457,8 @@ impl super::WriterAppService {
                 expected_revision: EditorRevision::new(expected_revision),
             });
             let mut dto: EditorEditResultDto = result.into();
-            if dto.outcome == EditorEditOutcomeDto::Applied
-                || dto.outcome == EditorEditOutcomeDto::AppliedWithAdjustedSelection
-            {
-                if let Some((cs_id, base_rev, gen)) = s.kernel.composition_session_info() {
-                    dto.composition_session = Some(crate::api::types::CompositionSessionDto {
-                        session_id: cs_id,
-                        base_revision: base_rev,
-                        generation: gen,
-                    });
-                }
-                // #629 评论6 Part B：暴露完整 composition 状态（preedit + replace range + cursor）
-                // 给平台端构造临时显示文本和下划线。begin 时 preedit_text 为空。
-                if let Some(state) = s.kernel.composition_state() {
-                    dto.composition = Some(make_composition_state_dto(state));
-                }
-            }
+            // #629 评论8 第4项：统一回填出口（begin 时 preedit_text 为空，但 composition 已活跃）。
+            backfill_active_composition(&mut dto, &s.kernel);
             dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
@@ -461,22 +496,8 @@ impl super::WriterAppService {
                 expected_revision: EditorRevision::new(expected_revision),
             });
             let mut dto: EditorEditResultDto = result.into();
-            if dto.outcome == EditorEditOutcomeDto::Applied
-                || dto.outcome == EditorEditOutcomeDto::AppliedWithAdjustedSelection
-            {
-                if let Some((cs_id, base_rev, gen)) = s.kernel.composition_session_info() {
-                    dto.composition_session = Some(crate::api::types::CompositionSessionDto {
-                        session_id: cs_id,
-                        base_revision: base_rev,
-                        generation: gen,
-                    });
-                }
-                // #629 评论6 Part B：暴露完整 composition 状态（preedit + replace range + cursor）
-                // 给平台端构造临时显示文本和下划线。update 后 preedit_text 为最新值。
-                if let Some(state) = s.kernel.composition_state() {
-                    dto.composition = Some(make_composition_state_dto(state));
-                }
-            }
+            // #629 评论8 第4项：统一回填出口（update 后 preedit_text 为最新值）。
+            backfill_active_composition(&mut dto, &s.kernel);
             dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
@@ -502,7 +523,9 @@ impl super::WriterAppService {
                 composition_generation: EditorSessionGeneration::new(composition_generation),
                 expected_revision: EditorRevision::new(expected_revision),
             });
-            result.into()
+            let mut dto: EditorEditResultDto = result.into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
@@ -527,7 +550,9 @@ impl super::WriterAppService {
                 composition_generation: EditorSessionGeneration::new(composition_generation),
                 expected_revision: EditorRevision::new(expected_revision),
             });
-            result.into()
+            let mut dto: EditorEditResultDto = result.into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
@@ -593,7 +618,9 @@ impl super::WriterAppService {
                 replacement,
                 expected_revision: EditorRevision::new(expected_revision),
             });
-            result.into_result().into()
+            let mut dto: EditorEditResultDto = result.into_result().into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
@@ -621,7 +648,9 @@ impl super::WriterAppService {
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
             });
-            result.into_result().into()
+            let mut dto: EditorEditResultDto = result.into_result().into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }

@@ -564,5 +564,359 @@ await testAsync('评论7 第2+6项：imePreviewText → graphemeBackspace 串行
   assert.equal(d.coordinatorCalls.delete.length, 1)
 })
 
+
+// ── 11. Issue #629 评论8 第4项：imeSetSelection 语义命令 ──
+// IME 来源的 selection 不再复用普通 setSelection/dragSelect；composition 内外判断
+// 在唯一队列出队时做：
+//   - 无 composition：普通 selection（onTap/onDragSelect）
+//   - 有 composition 且 selection 完全落在 composition 显示区域内：换算成 preedit 内
+//     preeditCursorUtf16，用当前 preedit 文本调 composition update（Core 更新 cursor/generation）
+//   - selection 移出 composition 区域（含部分越界）：同一 thunk 内先 finish 再普通 selection，
+//     显示坐标映射到 committed 文本坐标
+
+// UTF-16 code unit offset ↔ UTF-8 byte offset（与 TextOffsetMapper 对齐）
+function utf16ToUtf8(text, utf16Offset) {
+  if (utf16Offset <= 0) return 0
+  const limited = utf16Offset > text.length ? text.length : utf16Offset
+  return new TextEncoder().encode(text.substring(0, limited)).length
+}
+function utf8ToUtf16(text, utf8Offset) {
+  if (utf8Offset <= 0) return 0
+  let byteLen = 0
+  let utf16Index = 0
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    let charByteLen = 1
+    if (code < 0x80) charByteLen = 1
+    else if (code < 0x800) charByteLen = 2
+    else if (code >= 0xD800 && code <= 0xDBFF) { charByteLen = 4; i += 1 }
+    else charByteLen = 3
+    if (byteLen + charByteLen > utf8Offset) return utf16Index
+    byteLen += charByteLen
+    utf16Index += (charByteLen === 4 ? 2 : 1)
+  }
+  return utf16Index
+}
+
+// makeImeSetSelectionDispatcher：镜像 EditorSemanticDispatcher.executeImeSetSelection。
+// mock inputAdapter（isComposing/onCompositionUpdate/finishActiveComposition）+
+// selectionController（onTap/onDragSelect）+ coordinator snapshot（text + composition）。
+async function makeImeSetSelectionDispatcher() {
+  let snapshot = { text: '', revision: 0, cursor: 0, selectionAnchor: 0, composition: null }
+  let composing = false
+  const calls = { update: 0, finish: 0, tap: 0, dragSelect: 0 }
+  const callSequence = []
+  const updateCalls = []   // { preedit, cursorUtf16 }
+  const tapCalls = []
+  const dragSelectCalls = []
+  const queue = new SerialCommandQueue()
+  let sealed = false
+
+  const inputAdapter = {
+    isComposing: () => composing,
+    onCompositionUpdate: async (preedit, preeditCursorUtf16) => {
+      calls.update++
+      const cursorUtf16 = preeditCursorUtf16 === undefined ? preedit.length : preeditCursorUtf16
+      updateCalls.push({ preedit, cursorUtf16 })
+      callSequence.push(`update:${preedit}@${cursorUtf16}`)
+      return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
+    },
+    finishActiveComposition: async () => {
+      calls.finish++
+      callSequence.push('finishActiveComposition')
+      // 提交 preedit：snapshot.text 在 replace 处插入 preedit，composition 清空
+      const comp = snapshot.composition
+      if (comp) {
+        const startUtf16 = utf8ToUtf16(snapshot.text, comp.replaceByteStart)
+        const endUtf16 = utf8ToUtf16(snapshot.text, comp.replaceByteEndExclusive)
+        const newText = snapshot.text.substring(0, startUtf16) + comp.preeditText + snapshot.text.substring(endUtf16)
+        snapshot = { ...snapshot, text: newText, composition: null }
+        composing = false
+      }
+      return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
+    },
+  }
+
+  const selectionController = {
+    onTap: async (utf16Offset) => {
+      calls.tap++
+      tapCalls.push(utf16Offset)
+      callSequence.push(`tap:${utf16Offset}`)
+      return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
+    },
+    onDragSelect: async (anchor, head) => {
+      calls.dragSelect++
+      dragSelectCalls.push({ anchor, head })
+      callSequence.push(`dragSelect:${anchor}:${head}`)
+      return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
+    },
+  }
+
+  const coordinator = {
+    getSnapshot: () => snapshot,
+    setSnapshot: (s) => { snapshot = s },
+    setComposing: (v) => { composing = v },
+  }
+
+  // 镜像 EditorSemanticDispatcher.executeImeSetSelection（与生产代码逐行对齐）
+  const executeImeSetSelection = async (utf16Start, utf16End) => {
+    const snap = coordinator.getSnapshot()
+    if (!snap) {
+      return { success: false, errorCode: 'NO_SESSION' }
+    }
+    if (!inputAdapter.isComposing() || snap.composition === null || snap.composition === undefined) {
+      if (utf16Start === utf16End) {
+        return selectionController.onTap(utf16Start)
+      }
+      return selectionController.onDragSelect(utf16Start, utf16End)
+    }
+    const comp = snap.composition
+    const committedText = snap.text
+    const compStartUtf16 = utf8ToUtf16(committedText, comp.replaceByteStart)
+    const compEndUtf16 = utf8ToUtf16(committedText, comp.replaceByteEndExclusive)
+    const preeditUtf16Len = comp.preeditText.length
+    const compEndDisplay = compStartUtf16 + preeditUtf16Len
+    const start = Math.min(utf16Start, utf16End)
+    const end = Math.max(utf16Start, utf16End)
+
+    if (start >= compStartUtf16 && end <= compEndDisplay) {
+      const cursorInPreedit = end - compStartUtf16
+      return inputAdapter.onCompositionUpdate(comp.preeditText, cursorInPreedit)
+    }
+
+    const finishResult = await inputAdapter.finishActiveComposition()
+    if (!finishResult.success) {
+      return finishResult
+    }
+    // finish 后 committed 正文 == 之前的显示文本（prefix + preedit + suffix），
+    // IME 显示坐标就是 committed 坐标（恒等映射）。
+    if (start === end) {
+      return selectionController.onTap(start)
+    }
+    return selectionController.onDragSelect(start, end)
+  }
+
+  const dispatch = (cmd) => {
+    // 镜像 EditorSemanticDispatcher.dispatch：seal 后拒绝新输入
+    if (sealed) {
+      return Promise.resolve({ success: false, errorCode: 'SEALED', warnings: [], changedPaths: [], changedEntities: [] })
+    }
+    return queue.enqueue(async () => executeImeSetSelection(cmd.utf16Start, cmd.utf16End))
+  }
+  const finishActiveComposition = () => queue.enqueue(async () => {
+    if (!inputAdapter.isComposing()) {
+      return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+    }
+    return inputAdapter.finishActiveComposition()
+  })
+  const seal = () => { sealed = true }
+  const unseal = () => { sealed = false }
+  const flush = () => queue.whenIdle()
+
+  return {
+    dispatch, finishActiveComposition, seal, unseal, flush,
+    calls, callSequence, updateCalls, tapCalls, dragSelectCalls,
+    coordinator,
+  }
+}
+
+await testAsync('评论8 第4项：imeSetSelection 无 composition → 普通 selection（onTap）', async () => {
+  const d = await makeImeSetSelectionDispatcher()
+  d.coordinator.setSnapshot({ text: 'hello', revision: 0, cursor: 3, selectionAnchor: 3, composition: null })
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 2, utf16End: 2 })
+  assert.equal(d.calls.tap, 1, '无 composition 时走 onTap')
+  assert.equal(d.calls.update, 0, '无 composition 不走 composition update')
+  assert.equal(d.calls.finish, 0)
+  assert.equal(d.tapCalls[0], 2)
+})
+
+await testAsync('评论8 第4项：imeSetSelection 无 composition 非折叠选区 → onDragSelect', async () => {
+  const d = await makeImeSetSelectionDispatcher()
+  d.coordinator.setSnapshot({ text: 'hello', revision: 0, cursor: 3, selectionAnchor: 3, composition: null })
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 1, utf16End: 4 })
+  assert.equal(d.calls.dragSelect, 1)
+  assert.equal(d.calls.tap, 0)
+  assert.deepEqual(d.dragSelectCalls[0], { anchor: 1, head: 4 })
+})
+
+await testAsync('评论8 第4项：imeSetSelection 光标在 composition 内 → composition update（同 preedit + 换算 cursor），不走普通 selection', async () => {
+  const d = await makeImeSetSelectionDispatcher()
+  // committed text "ab", composition replace [0,1)（"a" 被 preedit "你" 替换）
+  // 显示文本 = "你b"；composition 显示区域 [0, 1)（UTF-16：preedit 长 1）
+  d.coordinator.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 1 },
+  })
+  d.coordinator.setComposing(true)
+  // IME 光标在 preedit 中间（显示坐标 0 即 preedit 开头）
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 0, utf16End: 0 })
+  assert.equal(d.calls.update, 1, '光标在 composition 内走 composition update')
+  assert.equal(d.calls.tap, 0, '不改 committed selection')
+  assert.equal(d.calls.finish, 0, '不移出区域不 finish')
+  const upd = d.updateCalls[0]
+  assert.equal(upd.preedit, '你', '用当前 preedit 文本')
+  assert.equal(upd.cursorUtf16, 0, '显示坐标 0 → preeditCursorUtf16=0')
+  assert.deepEqual(d.callSequence, ['update:你@0'])
+})
+
+await testAsync('评论8 第4项：imeSetSelection 光标在 preedit 末尾（显示坐标=区域终点）→ cursorUtf16=preedit.length', async () => {
+  const d = await makeImeSetSelectionDispatcher()
+  d.coordinator.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 0 },
+  })
+  d.coordinator.setComposing(true)
+  // 显示文本 "你b"：preedit 区域 [0,1)，末尾光标显示坐标 1
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 1, utf16End: 1 })
+  assert.equal(d.calls.update, 1)
+  assert.equal(d.updateCalls[0].cursorUtf16, 1, 'preedit 末尾 → cursorUtf16=1（preedit.length）')
+  assert.equal(d.calls.tap, 0)
+})
+
+await testAsync('评论8 第4项：imeSetSelection 中文 preedit 显示坐标换算（"你"占 1 个 UTF-16 unit）', async () => {
+  const d = await makeImeSetSelectionDispatcher()
+  // committed "ab"，replace [0,1)，preedit "你"（UTF-16 长 1）→ 显示 "你b"
+  d.coordinator.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 1 },
+  })
+  d.coordinator.setComposing(true)
+  // IME 光标显示坐标 0.5 不存在；用坐标 0（preedit 开头）
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 0, utf16End: 0 })
+  assert.equal(d.updateCalls[0].cursorUtf16, 0)
+})
+
+await testAsync('评论8 第4项：imeSetSelection 移出 composition 区域 → 先 finish 再普通 selection（坐标映射到 committed）', async () => {
+  const d = await makeImeSetSelectionDispatcher()
+  // committed "ab"，replace [0,1)，preedit "你"（UTF-16 长 1）→ 显示 "你b"（UTF-16 长 2）
+  // 显示坐标 2 = 文本末尾（"b" 之后）
+  d.coordinator.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 1 },
+  })
+  d.coordinator.setComposing(true)
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 2, utf16End: 2 })
+  assert.equal(d.calls.finish, 1, '移出 composition 区域先 finish')
+  assert.equal(d.calls.update, 0, '移出区域不走 composition update')
+  // finish 提交 preedit：committed 文本变为 "你b"
+  assert.equal(d.coordinator.getSnapshot().text, '你b', 'finish 后 preedit 提交进正文')
+  assert.equal(d.coordinator.getSnapshot().composition, null, 'finish 后 composition 清空')
+  // 显示坐标 2 → committed 坐标：恒等映射（finish 后 committed == 显示文本）→ tap(2)（"你b" 末尾）
+  assert.equal(d.calls.tap, 1)
+  assert.equal(d.tapCalls[0], 2, '显示坐标恒等映射到 committed 坐标')
+  assert.deepEqual(d.callSequence, ['finishActiveComposition', 'tap:2'])
+})
+
+await testAsync('评论8 第4项：imeSetSelection 移出 composition 区域（非折叠选区）→ finish 后 onDragSelect', async () => {
+  const d = await makeImeSetSelectionDispatcher()
+  d.coordinator.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 1 },
+  })
+  d.coordinator.setComposing(true)
+  // 显示选区 [0, 2)：从 preedit 开头到文本末尾 → 部分越界 → finish + dragSelect
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 0, utf16End: 2 })
+  assert.equal(d.calls.finish, 1)
+  assert.equal(d.calls.dragSelect, 1)
+  // 恒等映射（finish 后 committed == 显示文本）→ dragSelect(0, 2)
+  assert.deepEqual(d.dragSelectCalls[0], { anchor: 0, head: 2 })
+  assert.equal(d.coordinator.getSnapshot().text, '你b')
+})
+
+await testAsync('评论8 第4项：imeSetSelection 选区完全在 preedit 内（中文，多 code unit）→ composition update cursor=选区末尾', async () => {
+  const d = await makeImeSetSelectionDispatcher()
+  // committed "ab"，replace [0,1)，preedit "你好"（UTF-16 长 2）→ 显示 "你好b"
+  d.coordinator.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你好', preeditCursorUtf16: 2 },
+  })
+  d.coordinator.setComposing(true)
+  // IME 光标在 "你好" 中间：显示坐标 1 → cursorInPreedit = 1
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 1, utf16End: 1 })
+  assert.equal(d.calls.update, 1)
+  assert.equal(d.calls.tap, 0)
+  assert.equal(d.calls.finish, 0)
+  assert.equal(d.updateCalls[0].preedit, '你好', '用当前 preedit 文本')
+  assert.equal(d.updateCalls[0].cursorUtf16, 1, '显示坐标 1 → preeditCursorUtf16=1')
+})
+
+// ── 12. Issue #629 评论8 第3项：seal 拒新输入 + finishActiveComposition 仍可入队 ──
+
+await testAsync('评论8 第3项：seal 后 dispatch imeSetSelection 被拒（SEALED），不排队', async () => {
+  const d = await makeImeSetSelectionDispatcher()
+  d.seal()
+  const result = await d.dispatch({ kind: 'imeSetSelection', utf16Start: 1, utf16End: 1 })
+  assert.equal(result.success, false)
+  assert.equal(result.errorCode, 'SEALED', 'seal 后新输入返回 SEALED')
+  // 队列保持空闲（没排队）
+  await d.flush()
+  assert.equal(d.calls.tap, 0)
+  assert.equal(d.calls.update, 0)
+})
+
+await testAsync('评论8 第3项：seal 后 finishActiveComposition 仍可入队并执行（关闭链一部分）', async () => {
+  const d = await makeImeSetSelectionDispatcher()
+  d.coordinator.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 1 },
+  })
+  d.coordinator.setComposing(true)
+  d.seal()
+  // 普通输入被拒
+  const rejected = await d.dispatch({ kind: 'imeSetSelection', utf16Start: 1, utf16End: 1 })
+  assert.equal(rejected.errorCode, 'SEALED')
+  // 关闭链的 finishActiveComposition 不受 seal 影响
+  const finishResult = await d.finishActiveComposition()
+  assert.equal(finishResult.success, true)
+  assert.equal(d.calls.finish, 1, 'seal 后 finishActiveComposition 仍执行')
+  // preedit 已提交进正文（最后的中文预输入不丢）
+  assert.equal(d.coordinator.getSnapshot().text, '你b', 'seal 后 finish 提交 preedit')
+  assert.equal(d.coordinator.getSnapshot().composition, null)
+})
+
+await testAsync('评论8 第3项：unseal 后 dispatch 恢复接收输入', async () => {
+  const d = await makeImeSetSelectionDispatcher()
+  d.coordinator.setSnapshot({ text: 'hi', revision: 0, cursor: 1, selectionAnchor: 1, composition: null })
+  d.seal()
+  const rejected = await d.dispatch({ kind: 'imeSetSelection', utf16Start: 0, utf16End: 0 })
+  assert.equal(rejected.errorCode, 'SEALED')
+  d.unseal()
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 0, utf16End: 0 })
+  assert.equal(d.calls.tap, 1, 'unseal 后普通 selection 恢复')
+})
+
+
+await testAsync('评论8 第4项回归: preedit 长度 ≠ 被替换区长度时，移出区域坐标仍为恒等映射（旧公式会把光标放错）', async () => {
+  const d = await makeImeSetSelectionDispatcher()
+  // committed "abc"，replace [1,2)（"b" 被替换），preedit "你好"（UTF-16 长 2）
+  // 显示文本 = "a" + "你好" + "c" = "a你好c"（UTF-16 长 4）
+  d.coordinator.setSnapshot({
+    text: 'abc', revision: 2, cursor: 2, selectionAnchor: 2,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 1, replaceByteEndExclusive: 2, preeditText: '你好', preeditCursorUtf16: 2 },
+  })
+  d.coordinator.setComposing(true)
+  // IME 光标在显示文本末尾（坐标 4）：finish 后 committed = "a你好c"，末尾坐标就是 4
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 4, utf16End: 4 })
+  assert.equal(d.calls.finish, 1, '移出 composition 区域先 finish')
+  assert.equal(d.calls.tap, 1)
+  assert.equal(d.tapCalls[0], 4, '显示末尾 4 → committed 末尾 4（恒等映射；旧公式会得 3，把光标放到 c 前面）')
+  assert.equal(d.coordinator.getSnapshot().text, 'a你好c', 'finish 提交 preedit 后 committed 与显示文本一致')
+})
+
+await testAsync('评论8 第4项回归: 中文 replace 区 + 多字 preedit 的非折叠选区同样恒等映射', async () => {
+  const d = await makeImeSetSelectionDispatcher()
+  d.coordinator.setSnapshot({
+    text: 'abc', revision: 2, cursor: 2, selectionAnchor: 2,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 1, replaceByteEndExclusive: 2, preeditText: '你好', preeditCursorUtf16: 2 },
+  })
+  d.coordinator.setComposing(true)
+  // 显示选区 [1, 4)：从 preedit 中到文本末尾 → 部分越界 → finish + dragSelect
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 1, utf16End: 4 })
+  assert.equal(d.calls.finish, 1)
+  assert.equal(d.calls.dragSelect, 1)
+  // 恒等映射：dragSelect(1, 4)
+  assert.deepEqual(d.dragSelectCalls[0], { anchor: 1, head: 4 })
+})
+
 console.log('---')
 console.log(`✅ editor_semantic_dispatcher: ${passed} tests passed`)

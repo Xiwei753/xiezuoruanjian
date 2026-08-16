@@ -111,11 +111,13 @@ export class EditorInputAdapter {
   // IME composition preedit 更新：从 result.compositionSession 更新 imeSession。
   // Issue #629 评论7 第1项：composition cursor 单位是 UTF-16 code unit（preedit.length），
   // 不是 UTF-8 byte offset。光标在预输入末尾，直接传 preedit.length。
-  async onCompositionUpdate(preedit: string): Promise<ResultEnvelope<EditorEditResult>> {
+  // Issue #629 评论8 第4项：imeSetSelection 在 composition 内移动光标时显式传
+  // preeditCursorUtf16（显示坐标换算出的 preedit 内 UTF-16 cursor），省略时默认末尾。
+  async onCompositionUpdate(preedit: string, preeditCursorUtf16?: number): Promise<ResultEnvelope<EditorEditResult>> {
     this.imeSession.updatePreedit(preedit)
     const compId = this.imeSession.getCompositionSessionId()
     const gen = this.imeSession.getGeneration()
-    const cursorUtf16 = preedit.length
+    const cursorUtf16: number = preeditCursorUtf16 === undefined ? preedit.length : preeditCursorUtf16
     const result = await this.coordinator.updateComposition(compId, gen, preedit, cursorUtf16)
     if (result.success && result.data && result.data.compositionSession) {
       this.imeSession.setCompositionSession(result.data.compositionSession)
@@ -169,6 +171,22 @@ export class EditorInputAdapter {
     const result = await this.coordinator.cancelComposition(comp.sessionId, comp.generation)
     this.imeSession.clear()
     return result
+  }
+
+  /**
+   * Issue #629 评论8 第3项：close 生命周期收尾入口。
+   * 内部从 EditorImeSession 当前 preedit / 当前真实 session 走现有 onCompositionFinish()，
+   * 不新造 composition 状态机。
+   * - 有活跃 composition：用当前 preedit 调 onCompositionFinish（committed === preedit，
+   *   确认原样提交，preedit 落进 committed 正文）；
+   * - 无 composition：no-op（返回 success）。
+   */
+  async finishActiveComposition(): Promise<ResultEnvelope<EditorEditResult>> {
+    if (!this.imeSession.isActive()) {
+      return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+    }
+    const preedit: string = this.imeSession.getPreedit()
+    return this.onCompositionFinish(preedit)
   }
 
   isComposing(): boolean {

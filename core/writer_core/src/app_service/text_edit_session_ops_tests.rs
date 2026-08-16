@@ -240,3 +240,276 @@ fn composition_update_emoji_zwj_preedit_cursor_utf16_valid() {
     assert_eq!(upd_comp.preedit_text, preedit);
     assert_eq!(upd_comp.preedit_cursor_utf16, 4);
 }
+
+/// #629 评论8 第4项：所有 Core 命令统一 composition 回填出口。
+/// setSelection（outcome NoChange）在 composition 活跃期间必须回填 composition_session/composition，
+/// 与 kernel 真实状态一致——这是"Core 有 composition、平台 DTO 却是 null"的直接修复场景。
+/// finish 后再 setSelection：composition 已清，DTO 保持 None。
+#[allow(clippy::cast_possible_truncation)]
+#[test]
+fn set_selection_during_composition_backfills_dto() {
+    let (svc, _dir) = make_service();
+    let session_id = svc
+        .text_edit_session_create("test".to_string(), "abc".to_string(), 3, 0)
+        .expect("session created");
+
+    let begin = svc.text_edit_session_begin_composition(session_id, 1, 2, 0);
+    assert_eq!(begin.outcome, EditorEditOutcomeDto::Applied);
+    let begin_comp = begin.composition.expect("begin writes composition");
+    let upd = svc.text_edit_session_update_composition(
+        session_id,
+        begin_comp.session_id,
+        begin_comp.generation,
+        "你".to_string(),
+        1,
+        begin.new_revision,
+    );
+    assert_eq!(upd.outcome, EditorEditOutcomeDto::Applied);
+    let upd_cs = upd
+        .composition_session
+        .expect("update writes composition_session");
+
+    // setSelection 不结束 composition（kernel 不清 composition）：DTO 必须回填当前 composition。
+    // 注：ops 层用 From<EditorEditResult> 转 DTO，outcome 恒为 Applied（现有约定），
+    // 关键断言是 composition_session/composition 与 kernel 真实状态一致。
+    let sel = svc.text_edit_session_set_selection(session_id, 0, 0, upd.new_revision);
+    assert_eq!(sel.outcome, EditorEditOutcomeDto::Applied);
+    let sel_cs = sel
+        .composition_session
+        .expect("setSelection backfills composition_session");
+    assert_eq!(sel_cs.session_id, upd_cs.session_id);
+    assert_eq!(sel_cs.base_revision, upd_cs.base_revision);
+    assert_eq!(sel_cs.generation, upd_cs.generation);
+    let sel_comp = sel
+        .composition
+        .expect("setSelection backfills composition state");
+    assert_eq!(sel_comp.preedit_text, "你");
+    assert_eq!(sel_comp.replace_byte_start, 1);
+    assert_eq!(sel_comp.replace_byte_end_exclusive, 2);
+    assert_eq!(sel_comp.preedit_cursor_utf16, 1);
+
+    // finish 后再 setSelection：composition 已清，DTO 保持 None（不残留旧 composition）。
+    let finish = svc.text_edit_session_finish_composition(
+        session_id,
+        upd_cs.session_id,
+        upd_cs.generation,
+        upd.new_revision,
+    );
+    assert_eq!(finish.outcome, EditorEditOutcomeDto::Applied);
+    assert!(finish.composition_session.is_none());
+    assert!(finish.composition.is_none());
+    let sel2 = svc.text_edit_session_set_selection(session_id, 0, 0, finish.new_revision);
+    assert_eq!(sel2.outcome, EditorEditOutcomeDto::Applied);
+    assert!(
+        sel2.composition_session.is_none(),
+        "finish 后 setSelection 不残留 composition_session"
+    );
+    assert!(
+        sel2.composition.is_none(),
+        "finish 后 setSelection 不残留 composition"
+    );
+}
+
+/// #629 评论8 第4项：text-modifying 命令（insert/delete/undo/redo/commitText/
+/// deleteSurrounding/replaceAll/insertLineBreak）成功时 kernel 会清掉 composition——
+/// DTO 必须同样反映"无活跃 composition"（None），与 snapshot() 一致，平台端不会
+/// 看到 Core 有 composition、DTO 却是 null 的脱节。
+// 测试里取正文 byte 长度转 u32 传给 ops（正文长度远小于 u32 上限，截断无害）。
+#[allow(clippy::cast_possible_truncation)]
+#[test]
+fn text_modifying_commands_report_cleared_composition_consistently() {
+    let (svc, _dir) = make_service();
+    let session_id = svc
+        .text_edit_session_create("test".to_string(), "abc".to_string(), 3, 0)
+        .expect("session created");
+
+    // 每次命令前重新 begin+update 一个活跃 composition（replace range 取当前文本末尾）。
+    // 文本在命令间会变化，不能固定 offset。
+    let begin_at_end = |svc: &WriterAppService, expected_revision: u64| {
+        let text_len = svc.text_edit_session_get_text(session_id).len();
+        let begin = svc.text_edit_session_begin_composition(
+            session_id,
+            text_len as u32,
+            text_len as u32,
+            expected_revision,
+        );
+        assert_eq!(begin.outcome, EditorEditOutcomeDto::Applied);
+        let begin_cs = begin
+            .composition_session
+            .expect("begin writes composition_session");
+        let upd = svc.text_edit_session_update_composition(
+            session_id,
+            begin_cs.session_id,
+            begin_cs.generation,
+            "你".to_string(),
+            1,
+            begin.new_revision,
+        );
+        assert_eq!(upd.outcome, EditorEditOutcomeDto::Applied);
+        assert!(
+            upd.composition.is_some(),
+            "update 时 kernel 有活跃 composition，DTO 必须回填"
+        );
+        upd
+    };
+    let expect_cleared = |label: &str, dto: &crate::api::EditorEditResultDto| {
+        assert!(
+            dto.composition_session.is_none(),
+            "{label} 清 composition 后 DTO 必须为 None（与 kernel 一致）"
+        );
+        assert!(
+            dto.composition.is_none(),
+            "{label} 清 composition 后 DTO.composition 必须为 None"
+        );
+    };
+
+    // insert
+    let upd = begin_at_end(&svc, 0);
+    let ins = svc.text_edit_session_insert(
+        session_id,
+        0,
+        "X".to_string(),
+        crate::api::EditorTransactionCauseDto::Typing,
+        upd.new_revision,
+    );
+    assert_eq!(ins.outcome, EditorEditOutcomeDto::Applied);
+    expect_cleared("insert", &ins);
+    assert!(
+        svc.text_edit_session_snapshot(session_id)
+            .composition
+            .is_none(),
+        "snapshot 与 DTO 一致：insert 后无活跃 composition"
+    );
+
+    // delete
+    let upd = begin_at_end(&svc, ins.new_revision);
+    let del = svc.text_edit_session_delete(
+        session_id,
+        1,
+        2,
+        crate::api::EditorTransactionCauseDto::Delete,
+        upd.new_revision,
+    );
+    assert_eq!(del.outcome, EditorEditOutcomeDto::Applied);
+    expect_cleared("delete", &del);
+
+    // undo（undo 本身清 composition）
+    let upd = begin_at_end(&svc, del.new_revision);
+    let undo = svc.text_edit_session_undo(session_id, upd.new_revision);
+    assert_eq!(undo.outcome, EditorEditOutcomeDto::Applied);
+    expect_cleared("undo", &undo);
+
+    // redo
+    let upd = begin_at_end(&svc, undo.new_revision);
+    let redo = svc.text_edit_session_redo(session_id, upd.new_revision);
+    assert_eq!(redo.outcome, EditorEditOutcomeDto::Applied);
+    expect_cleared("redo", &redo);
+
+    // deleteSurrounding
+    let upd = begin_at_end(&svc, redo.new_revision);
+    let text_len = svc.text_edit_session_get_text(session_id).len() as u32;
+    let ds = svc.text_edit_session_delete_surrounding(
+        session_id,
+        0,
+        1,
+        text_len.saturating_sub(1),
+        text_len,
+        crate::api::EditorTransactionCauseDto::Delete,
+        upd.new_revision,
+    );
+    assert_eq!(ds.outcome, EditorEditOutcomeDto::Applied);
+    expect_cleared("deleteSurrounding", &ds);
+
+    // replaceAll（搜索词必须真实命中；未命中的 NoChange 不清 composition，DTO 回填）
+    let upd = begin_at_end(&svc, ds.new_revision);
+    let replace_all = svc.text_edit_session_replace_all(
+        session_id,
+        "b".to_string(),
+        "z".to_string(),
+        upd.new_revision,
+    );
+    assert_eq!(replace_all.outcome, EditorEditOutcomeDto::Applied);
+    expect_cleared("replaceAll", &replace_all);
+
+    // insertLineBreak
+    let upd = begin_at_end(&svc, replace_all.new_revision);
+    let ilb = svc.text_edit_session_insert_line_break(
+        session_id,
+        1,
+        0,
+        crate::api::EditorTransactionCauseDto::Typing,
+        upd.new_revision,
+    );
+    assert_eq!(ilb.outcome, EditorEditOutcomeDto::Applied);
+    expect_cleared("insertLineBreak", &ilb);
+
+    // commitText（携带活跃 composition 会话标识）
+    let upd = begin_at_end(&svc, ilb.new_revision);
+    let upd_cs = upd
+        .composition_session
+        .expect("update writes composition_session");
+    let text_len = svc.text_edit_session_get_text(session_id).len() as u32;
+    let ct = svc.text_edit_session_commit_text(
+        session_id,
+        text_len,
+        text_len,
+        "AB".to_string(),
+        text_len + 2,
+        text_len + 2,
+        upd_cs.session_id,
+        upd_cs.base_revision,
+        upd_cs.generation,
+        crate::api::EditorTransactionCauseDto::TypingCommit,
+        upd.new_revision,
+    );
+    assert_eq!(ct.outcome, EditorEditOutcomeDto::Applied);
+    expect_cleared("commitText", &ct);
+}
+
+/// #629 评论8 第4项：cancel_composition 成功后 DTO composition 保持 None。
+#[test]
+fn cancel_composition_leaves_dto_composition_none() {
+    let (svc, _dir) = make_service();
+    let session_id = svc
+        .text_edit_session_create("test".to_string(), "abc".to_string(), 3, 0)
+        .expect("session created");
+
+    let begin = svc.text_edit_session_begin_composition(session_id, 1, 2, 0);
+    assert_eq!(begin.outcome, EditorEditOutcomeDto::Applied);
+    let begin_cs = begin
+        .composition_session
+        .expect("begin writes composition_session");
+    let upd = svc.text_edit_session_update_composition(
+        session_id,
+        begin_cs.session_id,
+        begin_cs.generation,
+        "你".to_string(),
+        1,
+        begin.new_revision,
+    );
+    assert_eq!(upd.outcome, EditorEditOutcomeDto::Applied);
+    let upd_cs = upd
+        .composition_session
+        .expect("update writes composition_session");
+
+    let cancel = svc.text_edit_session_cancel_composition(
+        session_id,
+        upd_cs.session_id,
+        upd_cs.generation,
+        upd.new_revision,
+    );
+    assert_eq!(cancel.outcome, EditorEditOutcomeDto::Applied);
+    assert!(
+        cancel.composition_session.is_none(),
+        "cancel_composition clears composition_session"
+    );
+    assert!(
+        cancel.composition.is_none(),
+        "cancel_composition clears composition"
+    );
+    let snap = svc.text_edit_session_snapshot(session_id);
+    assert!(
+        snap.composition.is_none(),
+        "snapshot 无 composition after cancel"
+    );
+}
