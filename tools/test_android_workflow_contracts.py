@@ -439,16 +439,23 @@ def test_ai_emulator_leg_fails_when_no_tests_match(wf, _text):
     # #597：AI 腿用官方包过滤只跑 AI 专项仪器测试，且必须 fail-on-no-matching。
     # 若 androidTestAi 源集被误删或过滤失效，connected 任务会静默通过 0 个测试，
     # 工作流必须在结果 XML 里硬核验 AiFlavorInstrumentationSmokeTest 真实执行。
+    # #629：AI_FILTER 包过滤参数现在通过 step 级 env 注入（parseScript 按行拆分），
+    # 所以检查范围是 step env + script 的组合。
     emulator_job = wf["jobs"]["emulator-test"]
     steps = emulator_job.get("steps", [])
+    emulator_step = None
     script = ""
     for s in steps:
-        script = s.get("with", {}).get("script", "")
-        if script:
+        if "reactivecircus/android-emulator-runner" in str(s.get("uses", "")):
+            emulator_step = s
+            script = s.get("with", {}).get("script", "")
             break
     assert script, "emulator-test job must have an android-emulator-runner script"
-    assert "android.testInstrumentationRunnerArguments.package=com.xiwei.sujian.ai" in script, (
-        "AI emulator leg must filter to the com.xiwei.sujian.ai package"
+    env = emulator_step.get("env", {}) if emulator_step else {}
+    combined = str(env) + "\n" + script
+    assert "android.testInstrumentationRunnerArguments.package=com.xiwei.sujian.ai" in combined, (
+        "AI emulator leg must filter to the com.xiwei.sujian.ai package "
+        "(via step-level env AI_FILTER or script)"
     )
     assert "AiFlavorInstrumentationSmokeTest" in script, (
         "AI emulator leg must verify AiFlavorInstrumentationSmokeTest results"
@@ -457,6 +464,121 @@ def test_ai_emulator_leg_fails_when_no_tests_match(wf, _text):
     assert "exit 1" in tail, (
         "AI emulator leg must fail hard when no AI instrumented test matched"
     )
+
+
+def _get_emulator_runner_step(wf):
+    """Return the reactivecircus/android-emulator-runner step, or None."""
+    emulator_job = wf["jobs"]["emulator-test"]
+    steps = emulator_job.get("steps", [])
+    for s in steps:
+        if "reactivecircus/android-emulator-runner" in str(s.get("uses", "")):
+            return s
+    return None
+
+
+def test_emulator_script_vars_via_step_env_not_inline(wf, _text):
+    """#629: reactivecircus/android-emulator-runner@v2 的 parseScript 按行拆分，
+    每行用独立 sh -c 执行，script 内赋值的 shell 变量不能跨行传递。
+    FLAVOR_CAP/AI_FILTER/TEST_IME 必须通过 step 级 env 注入（经 process.env
+    传递给每行 sh -c），不能在 script 内赋值，否则后续行引用时变量为空，
+    导致 :app:install${FLAVOR_CAP}Debug 退化为 :app:installDebug，而 installDebug
+    在有 ai/noAi 两个 flavor 时是模糊的（candidates installAiDebug/installNoAiDebug）。
+    """
+    step = _get_emulator_runner_step(wf)
+    assert step is not None, "emulator-test must use reactivecircus/android-emulator-runner"
+
+    # step 级 env 必须定义 FLAVOR_CAP、AI_FILTER、TEST_IME
+    env = step.get("env", {})
+    assert "FLAVOR_CAP" in env, (
+        "emulator-runner step must define FLAVOR_CAP in step-level env "
+        "(not as a shell variable in script, which doesn't persist across "
+        "parseScript line splits into separate sh -c invocations)"
+    )
+    assert "AI_FILTER" in env, (
+        "emulator-runner step must define AI_FILTER in step-level env"
+    )
+    assert "TEST_IME" in env, (
+        "emulator-runner step must define TEST_IME in step-level env"
+    )
+    assert "matrix.flavor" in str(env["FLAVOR_CAP"]), (
+        "FLAVOR_CAP env must reference matrix.flavor to select NoAi/Ai"
+    )
+    assert "matrix.flavor" in str(env["AI_FILTER"]), (
+        "AI_FILTER env must reference matrix.flavor to select package filter"
+    )
+    assert "com.xiwei.sujian.ai" in str(env["AI_FILTER"]), (
+        "AI_FILTER env must contain the AI package filter for ai flavor"
+    )
+
+    script = step.get("with", {}).get("script", "")
+    assert script, "emulator-runner step must have a script"
+
+    # script 中不能有 FLAVOR_CAP=/AI_FILTER=/TEST_IME= 赋值（跨行会丢失）
+    for line in script.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        for var in ("FLAVOR_CAP", "AI_FILTER", "TEST_IME"):
+            assignment = var + "="
+            assert assignment not in stripped, (
+                f"script must not assign '{var}' inline (parseScript splits "
+                f"lines into separate sh -c; use step-level env instead): {stripped}"
+            )
+
+
+def test_emulator_script_no_multiline_if_statements(wf, _text):
+    """#629: parseScript 按行拆分，每行独立 sh -c。跨行 if/then/else/fi 会被
+    拆成独立行，'if ...; then' 单独执行会报 syntax error: unexpected end of file。
+    所有 if 语句必须写成单行（if ...; then ...; fi）。
+    """
+    step = _get_emulator_runner_step(wf)
+    assert step is not None, "emulator-test must use reactivecircus/android-emulator-runner"
+    script = step.get("with", {}).get("script", "")
+    assert script, "emulator-runner step must have a script"
+
+    for line in script.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        # 独立的 else/fi 行只出现在跨行 if 中，单行 if 不会有
+        assert stripped not in ("else", "fi"), (
+            f"script has standalone '{stripped}' line; if/fi must be single-line "
+            f"(parseScript splits lines into separate sh -c): {line}"
+        )
+        # 'if ...; then' 行末没有 fi 的是跨行 if
+        if stripped.startswith("if ") and stripped.endswith("then"):
+            raise AssertionError(
+                f"script has multi-line if (ends with 'then'); if must be "
+                f"single-line (if ...; then ...; fi): {line}"
+            )
+
+
+def test_emulator_script_install_tasks_have_flavor(wf, _text):
+    """#629: emulator script 的 gradlew install/connected 任务必须引用 $FLAVOR_CAP
+    （通过 step 级 env 注入），不能出现无 flavor 的 installDebug/connectedDebugAndroidTest
+    （在有 ai/noAi 两个 flavor 时 installDebug 是模糊的）。
+    """
+    step = _get_emulator_runner_step(wf)
+    assert step is not None, "emulator-test must use reactivecircus/android-emulator-runner"
+    script = step.get("with", {}).get("script", "")
+    assert script, "emulator-runner step must have a script"
+
+    # 必须引用 $FLAVOR_CAP 来组装 install/connected 任务
+    assert "install${FLAVOR_CAP}Debug" in script, (
+        "script must use $FLAVOR_CAP (from step env) for install task, "
+        "not a bare installDebug which is ambiguous with ai/noAi flavors"
+    )
+    assert "connected${FLAVOR_CAP}DebugAndroidTest" in script, (
+        "script must use $FLAVOR_CAP for connectedAndroidTest task"
+    )
+
+    # 不能出现无 flavor 的 installDebug / connectedDebugAndroidTest 任务
+    for forbidden in (":app:installDebug ", "connectedDebugAndroidTest"):
+        assert forbidden not in script, (
+            f"script must not reference bare '{forbidden.strip()}' task; "
+            "installDebug is ambiguous with ai/noAi flavors. "
+            "Use $FLAVOR_CAP from step-level env."
+        )
 
 
 def main():
@@ -485,6 +607,9 @@ def main():
         test_jvm_unit_test_has_abi_guard,
         test_rust_and_jvm_test_execute_once_per_flavor,
         test_ai_emulator_leg_fails_when_no_tests_match,
+        test_emulator_script_vars_via_step_env_not_inline,
+        test_emulator_script_no_multiline_if_statements,
+        test_emulator_script_install_tasks_have_flavor,
     ]
     failed = 0
     for t in tests:
