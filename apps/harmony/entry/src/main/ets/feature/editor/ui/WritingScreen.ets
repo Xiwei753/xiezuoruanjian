@@ -9,9 +9,9 @@ import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserve
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
 import { NativeEditorSessionBridge } from '../interop/NativeEditorSessionBridge'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
-import { TextOffsetMapper } from '../input/TextOffsetMapper'
+import { EditorInputAdapter } from '../input/EditorInputAdapter'
+import { SelectionController } from '../selection/SelectionController'
 import { SujianEditor } from './SujianEditor'
-import { EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
 
 @Component
 export struct WritingScreen {
@@ -62,6 +62,8 @@ export struct WritingScreen {
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
   private coordinator: EditorSessionCoordinator = new EditorSessionCoordinator(new NativeEditorSessionBridge())
+  private inputAdapter: EditorInputAdapter = new EditorInputAdapter(this.coordinator)
+  private selectionController: SelectionController = new SelectionController(this.coordinator)
 
   aboutToAppear() {
     const paramsArr = this.navPathStack.getParamByName(Routes.Writing) as WritingRouteParams[]
@@ -238,11 +240,9 @@ export struct WritingScreen {
   }
 
   onContentChange(text: string) {
-    // 通过 coordinator.replace 更新 Core 正文（byte offset 语义）
+    // 通过 inputAdapter 把整篇变化翻译成 replace 编辑命令发给 Core
     const oldContent = this.content
-    const byteStart = TextOffsetMapper.utf16ToUtf8(oldContent, 0)
-    const byteEnd = TextOffsetMapper.utf16ToUtf8(oldContent, oldContent.length)
-    this.coordinator.replace(byteStart, byteEnd, text, oldContent, EditorTransactionCause.Typing).then(result => {
+    this.inputAdapter.onContentChange(oldContent, text).then(result => {
       if (result.success && result.data) {
         this.content = result.data.text
         this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(result.data)
@@ -367,7 +367,7 @@ export struct WritingScreen {
         .justifyContent(FlexAlign.Center)
       } else {
         // 自研写作区组件，消费 EditorLayoutSnapshot 静态渲染
-        SujianEditor({ snapshot: this.editorSnapshot })
+        SujianEditor({ snapshot: this.editorSnapshot, onSelectionTap: (offset: number): void => { this.selectionController.onTap(offset) } })
           .width('100%')
           .layoutWeight(1)
           .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })

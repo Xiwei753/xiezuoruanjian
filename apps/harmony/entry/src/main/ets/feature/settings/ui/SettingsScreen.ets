@@ -565,7 +565,7 @@ export struct SettingsScreen {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 打字动画 — 鸿蒙端暂未实现（需自研渲染层 + Core VisualTransaction 接入），开关禁用
+      // 打字动画 — 按 Issue #629 静态编辑链路有意不做动画（motion 层后续新增，不改输入层/session 层），开关禁用
       Row() {
         Text($r('app.string.typing_animation'))
           .fontSize(16)
@@ -576,10 +576,10 @@ export struct SettingsScreen {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 打字动画时长 — 鸿蒙端动画未实现，暂不显示时长设置
-      // 待动画功能实现后，取消下方注释并绑定 this.settings.editorTypingAnimationDurationMs
+      // 打字动画时长 — 按 Issue #629 静态链路有意不做动画，不显示时长设置
+      // motion 层后续新增时接入 this.settings.editorTypingAnimationDurationMs
 
-      // 平滑光标 — 鸿蒙端暂未实现，开关禁用
+      // 平滑光标 — 按 Issue #629 静态编辑链路有意不做光标动画，开关禁用
       Row() {
         Text($r('app.string.smooth_cursor'))
           .fontSize(16)
@@ -590,8 +590,8 @@ export struct SettingsScreen {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 平滑光标时长 — 鸿蒙端动画未实现，暂不显示时长设置
-      // 待动画功能实现后，取消下方注释并绑定 this.settings.editorSmoothCursorDurationMs
+      // 平滑光标时长 — 按 Issue #629 静态链路有意不做光标动画，不显示时长设置
+      // motion 层后续新增时接入 this.settings.editorSmoothCursorDurationMs
     }
     .width('100%')
     .padding(16)

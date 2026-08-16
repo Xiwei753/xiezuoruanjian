@@ -9,6 +9,7 @@ import { EditorRenderBackend, EditorRenderResult } from '../render/EditorRenderB
 @Component
 export struct SujianEditor {
   @Prop snapshot: EditorLayoutSnapshot | null = null
+  @Prop onSelectionTap: ((utf16Offset: number) => void) | null = null
   @State renderResult: EditorRenderResult | null = null
 
   aboutToAppear(): void {
@@ -35,6 +36,19 @@ export struct SujianEditor {
           .fontSize(16)
           .width('100%')
           .textAlign(TextAlign.Start)
+          .onTouch((event: TouchEvent): void => {
+            if (event.type === TouchType.Up && this.onSelectionTap && this.renderResult) {
+              // 坐标→offset 粗略估算：字符宽度按 fontSize*0.6 近似。
+              // 精确转换需要文本布局信息，后续 motion 层接入时改进。
+              const fontSize = 16
+              const estimatedCharWidth = fontSize * 0.6
+              const touchX = event.touches[0].x
+              const textLen = this.renderResult.text.length
+              let estimatedOffset = Math.round(touchX / estimatedCharWidth)
+              estimatedOffset = Math.max(0, Math.min(estimatedOffset, textLen))
+              this.onSelectionTap(estimatedOffset)
+            }
+          })
       } else {
         Text('')
       }

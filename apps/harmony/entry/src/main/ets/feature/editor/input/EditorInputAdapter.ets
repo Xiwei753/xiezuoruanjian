@@ -70,6 +70,14 @@ export class EditorInputAdapter {
     return this.coordinator.cancelComposition(comp.sessionId, comp.generation)
   }
 
+  // onChange 整篇变化：把整篇替换翻译成 replace 编辑命令发给 Core。
+  // ArkUI TextArea/SujianEditor 的 onChange 返回整篇文本，本方法把它转成 replace 编辑命令。
+  async onContentChange(oldText: string, newText: string): Promise<ResultEnvelope<EditorSnapshot>> {
+    const byteStart = TextOffsetMapper.utf16ToUtf8(oldText, 0)
+    const byteEnd = TextOffsetMapper.utf16ToUtf8(oldText, oldText.length)
+    return this.coordinator.replace(byteStart, byteEnd, newText, oldText, EditorTransactionCause.Typing)
+  }
+
   isComposing(): boolean {
     return this.imeSession.isActive()
   }

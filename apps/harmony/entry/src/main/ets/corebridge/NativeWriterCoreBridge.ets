@@ -364,8 +364,9 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   // ── Editor Animation ──
-  // 鸿蒙端动画暂未实现，返回 NOT_IMPLEMENTED。
-  // 等 NAPI 层接入 writer_core_editor_visual_transaction 后替换为真实调用。
+  // 按 Issue #629 要求，静态编辑链路有意不做动画；动画后续以 motion 层新增，
+  // 消费同一份 snapshot/transaction，不改输入层和 session 层。
+  // 本接口返回 NOT_IMPLEMENTED，待 motion 层接入后替换为真实调用。
 
   async editorVisualTransaction(
     oldText: string,
