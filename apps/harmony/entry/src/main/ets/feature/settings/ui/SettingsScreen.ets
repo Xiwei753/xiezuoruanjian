@@ -1,4 +1,3 @@
-import { Routes } from '../../../app/navigation/Routes'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { LocalSettings, SyncableSettings, ThemeMode, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
 import { SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
@@ -12,11 +11,6 @@ import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
 interface SettingsSelectOption {
   value: string
   icon: string
-}
-
-interface SettingsPageParams {
-  // per-project sync: projectId selects the sync root. Empty = no project selected.
-  projectId?: string
 }
 
 @Component
@@ -55,7 +49,6 @@ export struct SettingsScreen {
   @State syncMessage: string = ''
   @State syncDiagnostics: SyncDiagnosticsResult | null = null
   @State isDiagnosing: boolean = false
-  @State projectId: string = ''
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State adaptiveState: AdaptiveState = getAdaptiveState()
 
@@ -66,12 +59,6 @@ export struct SettingsScreen {
 
   aboutToAppear() {
     const self = this
-    // 读取路由参数中的 projectId（per-project sync）
-    const paramsArr = this.navPathStack.getParamByName(Routes.Settings) as SettingsPageParams[]
-    const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
-    if (params && params.projectId) {
-      this.projectId = params.projectId
-    }
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
       self.themeConfig = theme
     })

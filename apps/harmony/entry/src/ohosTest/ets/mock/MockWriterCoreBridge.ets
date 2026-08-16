@@ -5,7 +5,7 @@ import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, Proje
 import { AppSummary, ResultEnvelope, RecentEdit, ChangedEntity, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../../main/ets/corebridge/dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapViewport, StarMapLayout, StarMapLayoutNode, StarMapEdgeRender, StarMapMotionPolicy } from '../../../main/ets/corebridge/dto/StarMapDtos'
-import { SyncConfig, SyncResult, SyncDiagnosticsResult, SyncState, SyncConflict } from '../../../main/ets/corebridge/dto/SyncDtos'
+import { SyncConfig, SyncResult, SyncDiagnosticsResult, SyncState, SyncConflict, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult } from '../../../main/ets/corebridge/dto/SyncDtos'
 
 export class MockWriterCoreBridge implements IWriterCoreBridge {
   private mockProjects: Project[] = []
@@ -613,8 +613,9 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     }] as BuiltinThemeDto[])
   }
 
-  // Sync methods
-  async loadSyncConfig(_projectId: string): Promise<ResultEnvelope<SyncConfig>> {
+  // Sync methods — 全量同步统一入口（Issue #630）
+  // 一个全局 SyncConfig + 一份全局凭据，App target + 所有 Project target 一次同步。
+  async loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
     await this.delay(100)
     const copy: SyncConfig = {
       enabled: this.mockSyncConfig.enabled,
@@ -631,7 +632,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(copy)
   }
 
-  async saveSyncConfig(_projectId: string, config: SyncConfig): Promise<ResultEnvelope<boolean>> {
+  async saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
     await this.delay(200)
     this.mockSyncConfig = {
       enabled: config.enabled,
@@ -648,9 +649,54 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(true)
   }
 
-  async syncDiagnostics(_projectId: string): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
+  async syncDryRun(): Promise<ResultEnvelope<FullSyncDryRunResult>> {
+    await this.delay(300)
+    const result: FullSyncDryRunResult = {
+      targets: [],
+      totalToUpload: 0,
+      totalToDownload: 0,
+      totalToDeleteLocal: 0,
+      totalToDeleteRemote: 0,
+      totalIgnored: 0,
+      totalConflicts: 0
+    }
+    return this.success(result)
+  }
+
+  async performSync(): Promise<ResultEnvelope<FullSyncResult>> {
+    await this.delay(1000)
+    const result: FullSyncResult = {
+      overallStatus: 'success',
+      targets: [{
+        targetKind: 'app',
+        remotePrefix: 'app',
+        result: {
+          status: 'success',
+          uploadedFiles: [] as string[],
+          downloadedFiles: [] as string[],
+          localDeletes: [] as string[],
+          remoteDeletes: [] as string[],
+          overwrittenFiles: [] as string[],
+          ignoredFiles: [] as string[],
+          conflicts: [] as SyncConflict[],
+          commitHash: 'abc123',
+          firstSyncMode: 'none'
+        } as SyncResult
+      }],
+      totalUploaded: 0,
+      totalDownloaded: 0,
+      totalLocalDeletes: 0,
+      totalRemoteDeletes: 0,
+      totalOverwritten: 0,
+      totalIgnored: 0,
+      totalConflicts: 0
+    }
+    return this.success(result)
+  }
+
+  async syncDiagnostics(): Promise<ResultEnvelope<FullSyncDiagnosticsResult>> {
     await this.delay(500)
-    const result: SyncDiagnosticsResult = {
+    const diagnostics: SyncDiagnosticsResult = {
       success: true,
       backendType: this.mockSyncConfig.backendType,
       androidHasInternetPermission: true,
@@ -678,62 +724,28 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       chosenNetworkMode: undefined,
       networkProbeSummary: undefined
     }
+    const result: FullSyncDiagnosticsResult = {
+      diagnostics
+    }
     return this.success(result)
   }
 
-  // ── 应用级同步通道（Issue #600 评论 #3 问题四，mock 占位） ──
-  async loadAppSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
+  // App target 同步状态（per-target 状态查询）
+  async loadAppSyncState(): Promise<ResultEnvelope<SyncState>> {
     await this.delay(100)
-    return this.loadSyncConfig('app')
-  }
-
-  async saveAppSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
-    await this.delay(200)
-    return this.saveSyncConfig('app', config)
-  }
-
-  async performAppSync(): Promise<ResultEnvelope<SyncResult>> {
-    await this.delay(300)
-    return this.performSync('app')
-  }
-
-  async appSyncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
-    await this.delay(500)
-    return this.syncDiagnostics('app')
-  }
-
-  // per-project sync: projectId selects the sync root (mock ignores it).
-  async syncDryRun(projectId: string): Promise<ResultEnvelope<SyncResult>> {
-    await this.delay(300)
-    const result: SyncResult = {
-      status: 'dry-run',
-      uploadedFiles: [] as string[],
-      downloadedFiles: [] as string[],
-      localDeletes: [] as string[],
-      remoteDeletes: [] as string[],
-      overwrittenFiles: [] as string[],
-      ignoredFiles: [] as string[],
-      conflicts: [] as SyncConflict[],
-      firstSyncMode: 'none'
+    const state: SyncState = {
+      status: 'idle',
+      remoteUrl: this.mockSyncConfig.remoteUrl,
+      backendType: this.mockSyncConfig.backendType,
+      transport: this.mockSyncConfig.transport,
+      conflicts: [] as SyncConflict[]
     }
-    return this.success(result)
+    return this.success(state)
   }
 
-  async performSync(projectId: string): Promise<ResultEnvelope<SyncResult>> {
-    await this.delay(1000)
-    const result: SyncResult = {
-      status: 'success',
-      uploadedFiles: [`projects/${projectId}/volumes/vol-001/chapters/ch-001.md`] as string[],
-      downloadedFiles: [] as string[],
-      localDeletes: [] as string[],
-      remoteDeletes: [] as string[],
-      overwrittenFiles: [] as string[],
-      ignoredFiles: [] as string[],
-      conflicts: [] as SyncConflict[],
-      commitHash: 'abc123',
-      firstSyncMode: 'none'
-    }
-    return this.success(result)
+  async saveAppSyncState(state: SyncState): Promise<ResultEnvelope<boolean>> {
+    await this.delay(100)
+    return this.success(true)
   }
 
   // Stats methods
