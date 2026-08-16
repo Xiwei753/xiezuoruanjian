@@ -9,6 +9,9 @@ export class EditorLayoutSnapshot {
   readonly compositionEnd: number | null      // byte offset
   readonly cursorByteOffset: number  // byte offset
   readonly revision: number
+  // 字体大小（vp）。render 层做确定性命中测试时由 SujianEditor 传给 Text.fontSize
+  // 和 getMeasureUtils().measureText，保证测量与渲染用同一字体度量。
+  readonly fontSize: number
 
   constructor(
     text: string,
@@ -17,7 +20,8 @@ export class EditorLayoutSnapshot {
     compositionStart: number | null,
     compositionEnd: number | null,
     cursorByteOffset: number,
-    revision: number
+    revision: number,
+    fontSize: number = 16
   ) {
     this.text = text
     this.selectionAnchor = selectionAnchor
@@ -26,6 +30,7 @@ export class EditorLayoutSnapshot {
     this.compositionEnd = compositionEnd
     this.cursorByteOffset = cursorByteOffset
     this.revision = revision
+    this.fontSize = fontSize
   }
 
   static fromEditorSnapshot(snap: {
@@ -35,7 +40,8 @@ export class EditorLayoutSnapshot {
     compositionStart?: number
     compositionEnd?: number
     revision: number
-  }): EditorLayoutSnapshot {
+  }, fontSize?: number): EditorLayoutSnapshot {
+    // 默认 fontSize=16，与 SujianEditor Text 默认值一致。
     return new EditorLayoutSnapshot(
       snap.text,
       snap.selectionAnchor,
@@ -43,7 +49,8 @@ export class EditorLayoutSnapshot {
       snap.compositionStart ?? null,
       snap.compositionEnd ?? null,
       snap.selectionHead,
-      snap.revision
+      snap.revision,
+      fontSize ?? 16
     )
   }
 }

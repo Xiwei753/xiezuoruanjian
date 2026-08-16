@@ -138,7 +138,7 @@ export struct WritingScreen {
         // 打开编辑会话，用 Core 管理正文
         const snapResult = await this.coordinator.open(this.chapterId, result.data.content)
         if (snapResult.success && snapResult.data) {
-          this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snapResult.data)
+          this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snapResult.data, this.settings.editorFontSize)
         }
       } else {
         this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
@@ -245,7 +245,7 @@ export struct WritingScreen {
     this.inputAdapter.onContentChange(oldContent, text).then(result => {
       if (result.success && result.data) {
         this.content = result.data.text
-        this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(result.data)
+        this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(result.data, this.settings.editorFontSize)
         this.hasUnsavedChanges = result.data.text !== this.lastSavedContent
         this.bridge.calculateWordCount(result.data.text).then(count => {
           this.wordCount = count

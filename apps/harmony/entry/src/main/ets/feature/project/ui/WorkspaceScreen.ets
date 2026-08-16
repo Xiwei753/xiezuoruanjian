@@ -195,7 +195,7 @@ export struct WorkspaceScreen {
         // 打开编辑会话，用 Core 管理正文
         const openResult = await this.coordinator.open(this.selectedChapterId, result.data.content)
         if (openResult.success && openResult.data) {
-          this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(openResult.data)
+          this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(openResult.data, this.settings.editorFontSize)
         } else {
           this.editorErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
         }
@@ -293,7 +293,7 @@ export struct WorkspaceScreen {
     this.inputAdapter.onContentChange(oldContent, text).then(result => {
       if (result.success && result.data) {
         this.content = result.data.text
-        this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(result.data)
+        this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(result.data, this.settings.editorFontSize)
         this.hasUnsavedChanges = result.data.text !== this.lastSavedContent
         this.bridge.calculateWordCount(result.data.text).then(count => {
           this.wordCount = count
@@ -632,7 +632,7 @@ export struct WorkspaceScreen {
   RightPanel() {
     Column() {
       if (!this.selectedChapterId) {
-        // 未选择章节：显示占位
+        // 未选择章节：显示空状态提示
         Column() {
            Text($r('app.string.select_chapter_to_start'))
             .fontSize(16)

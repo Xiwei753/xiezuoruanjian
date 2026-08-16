@@ -11,6 +11,9 @@ export struct SujianEditor {
   @Prop snapshot: EditorLayoutSnapshot | null = null
   @Prop onSelectionTap: ((utf16Offset: number) => void) | null = null
   @State renderResult: EditorRenderResult | null = null
+  // 实际容器宽度与文本渲染总高度（px），由 onAreaChange 更新，供命中测试计算行高与折行。
+  @State containerWidth: number = 0
+  @State textHeight: number = 0
 
   aboutToAppear(): void {
     this.refreshRender()
@@ -30,23 +33,38 @@ export struct SujianEditor {
 
   build() {
     Column() {
-      if (this.renderResult) {
-        // 静态文本渲染（选区/光标/composition 下划线由后续 motion 层叠加）。
+      if (this.renderResult && this.snapshot) {
+        // 静态文本渲染。选区/光标/composition 下划线由 motion 层叠加
+        // （Issue #629 第 5 节：先做静态，动画层新增 motion 消费同一份 snapshot，不改输入层/session 层）。
+        // wordBreak(BREAK_ALL) 与 EditorRenderBackend.hitTestByPoint 的逐 code point 折行一致。
         Text(this.renderResult.text)
-          .fontSize(16)
+          .fontSize(this.snapshot.fontSize)
           .width('100%')
           .textAlign(TextAlign.Start)
+          .wordBreak(WordBreak.BREAK_ALL)
+          .onAreaChange((_oldArea: Area, newArea: Area): void => {
+            this.containerWidth = Number(newArea.width)
+            this.textHeight = Number(newArea.height)
+          })
           .onTouch((event: TouchEvent): void => {
-            if (event.type === TouchType.Up && this.onSelectionTap && this.renderResult) {
-              // 坐标→offset 粗略估算：字符宽度按 fontSize*0.6 近似。
-              // 精确转换需要文本布局信息，后续 motion 层接入时改进。
-              const fontSize = 16
-              const estimatedCharWidth = fontSize * 0.6
-              const touchX = event.touches[0].x
-              const textLen = this.renderResult.text.length
-              let estimatedOffset = Math.round(touchX / estimatedCharWidth)
-              estimatedOffset = Math.max(0, Math.min(estimatedOffset, textLen))
-              this.onSelectionTap(estimatedOffset)
+            if (event.type === TouchType.Up && this.onSelectionTap && this.snapshot && this.renderResult) {
+              const snap = this.snapshot
+              // 真实文本测量：getMeasureUtils().measureText 返回 px 单行宽度，
+              // fontSize 用 snap.fontSize（vp）与 Text.fontSize 一致，测量与渲染同一字体度量。
+              const measureUtils = this.getUIContext().getMeasureUtils()
+              const measureTextFn = (s: string): number => {
+                return measureUtils.measureText({ textContent: s, fontSize: snap.fontSize })
+              }
+              const touch = event.touches[0]
+              const utf16Offset = EditorRenderBackend.hitTestByPoint(
+                snap,
+                this.containerWidth,
+                this.textHeight,
+                touch.x,
+                touch.y,
+                measureTextFn,
+              )
+              this.onSelectionTap(utf16Offset)
             }
           })
       } else {
