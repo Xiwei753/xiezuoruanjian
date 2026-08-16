@@ -8,7 +8,7 @@ import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../../../platform/l
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { WidthClass, ShellMode } from '../../../corebridge/dto/PlatformDtos'
-import { EditorSessionCoordinator } from '../../editor/session/EditorSessionCoordinator'
+import { EditorSessionCoordinator, EditorStateUpdate } from '../../editor/session/EditorSessionCoordinator'
 import { NativeEditorSessionBridge } from '../../editor/interop/NativeEditorSessionBridge'
 import { EditorLayoutSnapshot } from '../../editor/render/EditorLayoutSnapshot'
 import { EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
@@ -104,7 +104,9 @@ export struct WorkspaceScreen {
 
     const self = this
     // 注册编辑会话状态监听器：open/编辑命令成功后回流 editorSnapshot/content/hasUnsaved/wordCount。
-    this.coordinator.setStateListener((snap: EditorSessionSnapshot) => {
+    // Issue #629 评论9 第4项：listener 改 typed EditorStateUpdate{snapshot, editResult}。
+    this.coordinator.setStateListener((update: EditorStateUpdate) => {
+      const snap = update.snapshot
       self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize)
       self.content = snap.text
       self.hasUnsavedChanges = snap.text !== self.lastSavedContent

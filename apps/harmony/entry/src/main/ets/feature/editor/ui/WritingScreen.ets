@@ -6,10 +6,10 @@ import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, The
 import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
-import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
+import { EditorSessionCoordinator, EditorStateUpdate } from '../session/EditorSessionCoordinator'
 import { NativeEditorSessionBridge } from '../interop/NativeEditorSessionBridge'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
-import { EditorSessionSnapshot, EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
+import { EditorSessionSnapshot, EditorTransactionCause, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
@@ -120,15 +120,22 @@ export struct WritingScreen {
     }
 
     const self = this
-    // 注册编辑会话状态监听器：open/编辑命令成功后回流 editorSnapshot/content/hasUnsaved。
+    // 注册编辑会话状态监听器：open/编辑命令成功后回流 editorSnapshot/content/hasUnsaved/wordCount。
     // 选区/正文变化后持续写入当前接续状态，保证 onContinue 读取到最新编辑器状态。
-    // Issue #629 评论 5 第 4 节：wordCount 不用 snap.text.length（JS UTF-16 code unit 数，
-    // 不是 Core 字数语义）。wordCount 只在加载（ChapterContent.meta.wordCount）、保存
-    // （ChapterSaveReceipt.wordCount）、清空（contentDelta）时更新，始终来自 Core。
-    this.coordinator.setStateListener((snap: EditorSessionSnapshot) => {
+    // Issue #629 评论9 第4项：listener 改 typed EditorStateUpdate{snapshot, editResult}。
+    // wordCount 实时来自 editResult.contentDelta（insertedNonWhitespaceChars/deletedNonWhitespaceChars，
+    // Core 字数语义），不用 snap.text.length（JS UTF-16 code unit 数）。
+    // editResult=null（open 初始加载 / snapshot 恢复）时不更新 wordCount（保持上次值）。
+    this.coordinator.setStateListener((update: EditorStateUpdate) => {
+      const snap = update.snapshot
       self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize)
       self.content = snap.text
       self.hasUnsavedChanges = snap.text !== self.lastSavedContent
+      // 实时字数：消费 editResult.contentDelta（Core 非空白字符增量）
+      if (update.editResult !== null) {
+        const delta = update.editResult.contentDelta
+        self.wordCount = Math.max(0, self.wordCount + delta.insertedNonWhitespaceChars - delta.deletedNonWhitespaceChars)
+      }
       self.updateContinuationState()
       // 内容变化时更新碰一碰/隔空传送 payload（Issue #629 评论 5 第 7 节）。
       self.updateSharePayload()
@@ -192,8 +199,11 @@ export struct WritingScreen {
   }
 
   // Issue #629 评论7 第5项：真实关闭逻辑（拆出，由 performGracefulClose 幂等包装）。
-  // Issue #629 评论8 第3项：顺序改为
-  //   seal → finishActiveComposition → drain → whenIdle → save → detach → closeAsync。
+  // Issue #629 评论8 第3项 + 评论9 第2项：顺序改为
+  //   seal → finishActiveComposition → drain → whenIdle → save → closeAsync → detach。
+  // 关键：先 closeAsync（Core 关闭会话），成功后才 detach IME（不可逆清理）。
+  // 失败路径（保存失败 / closeAsync 失败 / 异常）统一 unseal 后返回 false，且失败前不 detach IME
+  // ——这样页面可立即继续编辑，不需要“重新 attach IME”补救。
   // 返回 boolean：保存失败或 closeAsync 失败返回 false，不 pop；正文仍在活跃编辑会话。
   private async doGracefulClose(): Promise<boolean> {
     // 1. dispatcher 进入 sealed：拒绝新的普通输入命令（已排队命令仍可 drain）
@@ -245,17 +255,18 @@ export struct WritingScreen {
         // Issue #629 评论7 第5项：统计成功推进 sessionOldText，避免第二遍重复统计。
         this.sessionOldText = savedText
       }
-      // 6. 保存成功后 detach IME 连接（取消监听并 detach，失败不阻塞）
-      await this.harmonyImeConnection.detach()
-      // 7. 关闭编辑会话（等队列空闲后再 close，避免最后几个字还在队列里就 close 丢输入）
+      // 6. 关闭编辑会话。Issue #629 评论9 第2项：先 closeAsync，成功后才 detach IME。
       const closeResult = await this.coordinator.closeAsync()
       if (!closeResult.success) {
-        // close 失败：不把关闭失败当成功，页面不 pop（正文会话仍活跃）。
+        // close 失败：不 detach、不 pop；unseal 让用户继续编辑（不需要重新 attach IME）。
+        this.dispatcher.unseal()
         return false
       }
+      // 7. Core close 成功后才 detach IME（不可逆清理放到最后，失败路径不触不可逆动作）
+      await this.harmonyImeConnection.detach()
       return true
     } catch (err) {
-      // 异常路径按失败处理：不 pop（正文仍在活跃会话），解锁输入允许重试。
+      // 异常路径按失败处理：不 pop（正文仍在活跃会话），解锁输入允许重试，不 detach IME。
       this.dispatcher.unseal()
       return false
     }
@@ -275,12 +286,24 @@ export struct WritingScreen {
     }
   }
 
-  async aboutToDisappear() {
-    // 统一关闭事务：flush input → await coordinator idle → save latest snapshot → detach IME → close session → leave
-    // 禁止多套关闭流程，返回按钮和生命周期退后台都走此链。
-    await this.performGracefulClose()
+  // Issue #629 评论9 第3项：统一的离开请求入口。
+  // NavDestination.onBackPressed 和左上角返回按钮都调此方法：执行 performGracefulClose，
+  // 只有关闭事务成功（保存成功且 Core close 成功）才 navPathStack.pop()；失败留在本页不 pop。
+  // 不在 onBackPressed 里直接 await（onBackPressed 同步返回 boolean 拦截默认退栈），
+  // 异步关闭链在 requestLeave 里跑，onBackPressed 立即 return true 拦截默认回退。
+  private async requestLeave(): Promise<void> {
+    const closed: boolean = await this.performGracefulClose()
+    if (closed === true) {
+      this.navPathStack.pop()
+    }
+  }
 
-    // 清除监听器（在 performGracefulClose 后，避免 close 后回调）
+  // Issue #629 评论9 第3项：aboutToDisappear 不再承担“阻止丢正文”职责——返回拦截由
+  // NavDestination.onBackPressed + requestLeave() 统一处理。aboutToDisappear 只做页面已确定
+  // 离开后的 observer/share/view 清理（removeObserver、stopShareLifecycle、setStateListener(null)）。
+  // 不能把它当返回拦截器：此时路由已退栈，无法阻止返回。
+  async aboutToDisappear() {
+    // 清除监听器（避免 close 后回调）
     this.coordinator.setStateListener(null)
 
     // Issue #629 评论 5 第 7 节：页面离开时 stop 碰一碰/隔空传送（成对，不留监听）。
@@ -538,7 +561,8 @@ export struct WritingScreen {
   // 结算（processWritingEvent/sessionOldText/lastSavedContent）→ 再取 latestSnapshot：
   // this.content = latestSnapshot.text；hasUnsavedChanges = latestSnapshot.text !== savedText
   // （保存期间新输入保持 unsaved，不把 A+B 标成已保存）。
-  // contentHash/wordCount 是这次 savedText 的回执。
+  // contentHash 是这次 savedText 的回执。wordCount 是当前编辑器正文的实时字数（listener 实时更新），
+  // 只有保存期间无新输入时才用 receipt.wordCount 校正；有新输入时保留实时 wordCount。
   private async doSaveChapter(isAutoSave: boolean): Promise<boolean> {
     this.isSaving = true
     this.isAutoSaving = isAutoSave
@@ -574,13 +598,21 @@ export struct WritingScreen {
         this.lastSavedContentHash = result.data.contentHash
         this.hasUnsavedChanges = false
         this.lastSaveFailed = false
-        this.wordCount = result.data.wordCount
         // 6. 重新取 latestSnapshot 结算：保存期间若又产生新输入，hasUnsavedChanges 保持 true，
         //    不把新版正文标成已保存。
+        // Issue #629 评论9 第4项：wordCount 表示当前编辑器正文的实时字数（listener 按
+        // editResult.contentDelta 实时更新）。只有保存期间无新输入（latest.text === savedText）
+        // 时才用 receipt.wordCount 校正当前实时字数；有新输入时保留实时 wordCount，
+        // 不拿旧 savedText 的 receipt.wordCount 覆盖当前 A+B 的实时字数。
         const latest = this.coordinator.getSnapshot()
         if (latest) {
           this.content = latest.text
           this.hasUnsavedChanges = latest.text !== savedText
+          if (latest.text === savedText) {
+            this.wordCount = result.data.wordCount
+          }
+        } else {
+          this.wordCount = result.data.wordCount
         }
         this.saveMessage = isAutoSave ? getContext(this).resourceManager.getStringSync($r('app.string.auto_saved').id) : getContext(this).resourceManager.getStringSync($r('app.string.saved').id)
         setTimeout(() => { this.saveMessage = '' }, 2000)
@@ -625,10 +657,12 @@ export struct WritingScreen {
     })
   }
 
-  // Issue #629 评论 5 第 4 节：清空正文必须是一条编辑事务，不在活跃 TextEditSession 外直接 clear 文件。
+  // Issue #629 评论 5 第 4 节 + 评论9 第4项：清空正文必须是一条编辑事务，不在活跃 TextEditSession 外直接 clear 文件。
   // 取 Coordinator 当前 snapshot，把 0..UTF8正文末尾 replace 为 ''，cause 用 Programmatic。
-  // 等 state listener 回流空正文后，再走同一套 saveChapter() 持久化。
-  // 不直接 bridge.clearChapter()（会让磁盘正文和编辑器正文拆成两份）。
+  // replace 成功后 state listener 自动回流空正文（content=''、hasUnsavedChanges=true）并按
+  // editResult.contentDelta 实时更新 wordCount——doClearContent 不再单独算字数，走同一 listener 路径。
+  // 等 listener 回流后走同一套 saveChapter() 持久化。不直接 bridge.clearChapter()（会让磁盘正文和
+  // 编辑器正文拆成两份）。
   private async doClearContent() {
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
@@ -649,13 +683,8 @@ export struct WritingScreen {
         0, utf8EndByte, '', fullText, EditorTransactionCause.Programmatic
       )
       if (replaceResult.success && replaceResult.data) {
-        // state listener 已回流空正文（content=''、hasUnsavedChanges=true）。
-        // 用 contentDelta 即时校正 wordCount（Core 字数语义，不用 JS .length）。
-        const delta = replaceResult.data.contentDelta
-        this.wordCount = this.wordCount + delta.insertedChars - delta.deletedChars
-        if (this.wordCount < 0) {
-          this.wordCount = 0
-        }
+        // state listener 已按 editResult.contentDelta 实时更新 wordCount（非空白字符增量），
+        // 并回流空正文（content=''、hasUnsavedChanges=true）。此处不再单独算字数。
         replaceOk = true
       }
     } catch (err) {
@@ -680,21 +709,21 @@ export struct WritingScreen {
   }
 
   build() {
-    Column() {
-      // Header
-      Row() {
+    // Issue #629 评论9 第3项：NavDestination 作为根容器，onBackPressed 拦截系统返回键/侧滑返回。
+    // 拦截默认退栈（return true），异步调 requestLeave()（performGracefulClose 成功才 pop）；
+    // 失败留在本页不 pop。aboutToDisappear 不再当返回拦截器，只做页面已离开后的清理。
+    NavDestination() {
+      Column() {
+        // Header
+        Row() {
         Image($r('sys.media.ohos_ic_public_arrow_left'))
           .width(24)
           .height(24)
           .fillColor(this.themeConfig.colors.textPrimary)
-          .onClick(async () => {
-            // Issue #629 评论6 Part G：返回按钮走统一关闭事务（seal→finish→flush→idle→save→detach→close），
-            // 禁止多套关闭流程。Issue #629 评论8 第2项：只有关闭事务成功（保存成功且 close 成功）
-            // 才 pop；保存失败/close 失败时不离开，未落盘正文留在活跃编辑会话。
-            const closed = await this.performGracefulClose()
-            if (closed === true) {
-              this.navPathStack.pop()
-            }
+          .onClick(() => {
+            // Issue #629 评论9 第3项：返回按钮走统一离开入口 requestLeave()（performGracefulClose
+            // 成功才 pop），与系统返回键/侧滑返回走同一链，禁止多套关闭流程。
+            this.requestLeave()
           })
 
         Text(this.chapterTitle)
@@ -811,10 +840,18 @@ export struct WritingScreen {
       .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
       .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 10, bottom: 10 })
       .backgroundColor(this.themeConfig.colors.background)
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(this.themeConfig.colors.background)
+      .alignItems(HorizontalAlign.Center)
     }
-    .width('100%')
-    .height('100%')
-    .backgroundColor(this.themeConfig.colors.background)
-    .alignItems(HorizontalAlign.Center)
+    .hideTitleBar(true)
+    .onBackPressed(() => {
+      // 拦截默认退栈：异步调 requestLeave()（成功才 pop），立即 return true 阻止默认回退。
+      // 失败时 requestLeave 不 pop，用户留在本页可继续编辑。
+      this.requestLeave()
+      return true
+    })
   }
 }

@@ -7,7 +7,7 @@
 //   4. EditorSemanticDispatcher.flush() 后队列空闲（通过 mock 验证）
 //   5. EditorSessionCoordinator.whenIdle() 后所有 Core 命令完成
 //   6. EditorSessionCoordinator.closeAsync() 先等队列空闲再 close
-//   7. performGracefulClose 顺序：flush → idle → save → detach → close（严格有序）
+//   7. performGracefulClose 顺序：flush → idle → save → closeAsync → detach（严格有序）
 //   8. performBackgroundSave 顺序：flush → idle → save（不 detach、不 close）
 //   9. 最后输入后立即返回仍 flush/save/close 有序（不丢最后几个字）
 //  10. 返回按钮和 aboutToDisappear 走同一套 performGracefulClose（禁止多套关闭流程）
@@ -218,9 +218,9 @@ class MockBridge {
 }
 
 // ── 5. performGracefulClose 编排（与 WritingScreen.performGracefulClose 对齐）──
-// Issue #629 评论8 第2/3项顺序：seal → finishActiveComposition → flush → whenIdle
-// → save（失败返回 false，不 detach/close）→ detach → closeAsync（失败返回 false）。
-// 返回 boolean：只有 true 才允许 pop。
+// Issue #629 评论8 第2/3项 + 评论9 第2项顺序：seal → finishActiveComposition → flush → whenIdle
+// → save（失败 unseal + 返回 false，不 close/detach）→ closeAsync（失败 unseal + 返回 false，不 detach）
+// → detach（不可逆清理放到最后）。返回 boolean：只有 true 才允许 pop。
 
 async function performGracefulClose(deps, state) {
   const { dispatcher, coordinator, harmonyImeConnection, bridge } = deps
@@ -266,14 +266,15 @@ async function performGracefulClose(deps, state) {
     )
     state.sessionOldText = savedText
   }
-  // 6. detach IME
-  await harmonyImeConnection.detach()
-  // 7. close session
+  // 6. close session. Issue #629 评论9 第2项：先 closeAsync，成功后才 detach IME。
   const closeResult = await coordinator.closeAsync()
   if (!closeResult.success) {
-    // close 失败：不把关闭失败当成功，页面不 pop。
+    // close 失败：不 detach、不 pop；unseal 让用户继续编辑（不需要重新 attach IME）。
+    dispatcher.unseal()
     return false
   }
+  // 7. Core close 成功后才 detach IME（不可逆清理放到最后，失败路径不触不可逆动作）
+  await harmonyImeConnection.detach()
   return true
 }
 
@@ -293,7 +294,7 @@ async function performBackgroundSave(deps, state) {
 
 // ── 7. performGracefulClose 顺序测试 ──
 
-await testAsync('performGracefulClose: 严格按 seal → finish → flush → whenIdle → save → detach → closeAsync 顺序', async () => {
+await testAsync('performGracefulClose: 严格按 seal → finish → flush → whenIdle → save → closeAsync → detach 顺序', async () => {
   const dispatcher = new MockDispatcher()
   const coordinator = new MockCoordinator()
   const harmonyImeConnection = new MockImeConnection()
@@ -421,7 +422,7 @@ await testAsync('performGracefulClose: 全局调用顺序严格有序（用一�
   const closed = await performGracefulClose(deps, state)
 
   assert.equal(closed, true)
-  assert.deepEqual(seq, ['seal', 'finishActiveComposition', 'flush', 'whenIdle', 'save', 'detach', 'closeAsync'])
+  assert.deepEqual(seq, ['seal', 'finishActiveComposition', 'flush', 'whenIdle', 'save', 'closeAsync', 'detach'])
 })
 
 // ── 8. performBackgroundSave 顺序测试 ──
@@ -517,7 +518,7 @@ await testAsync('核心场景: 快速打完最后几个字立即返回，perform
   assert.equal(closed, true)
   assert.equal(snapshotText, 'beforexyz', '队列中的最后输入应已应用')
   assert.equal(state.content, 'beforexyz', 'save 读到的是包含最后输入的 snapshot')
-  assert.deepEqual(seq, ['seal', 'finishActiveComposition', 'flush', 'whenIdle', 'save', 'detach', 'closeAsync'])
+  assert.deepEqual(seq, ['seal', 'finishActiveComposition', 'flush', 'whenIdle', 'save', 'closeAsync', 'detach'])
 })
 
 await testAsync('核心场景: 不走 flush 直接 save 会丢最后输入（反例，证明 Part G 必要性）', async () => {
@@ -546,14 +547,14 @@ await testAsync('统一关闭: 返回按钮和 aboutToDisappear 都调 performGr
   const mockScreen = {
     async performGracefulClose() {
       closeCallLog.push('performGracefulClose')
-      // 简化：内部 7 步（评论8 第3项顺序）
+      // 简化：内部 7 步（评论9 第2项顺序：save → closeAsync → detach）
       closeCallLog.push('seal')
       closeCallLog.push('finishActiveComposition')
       closeCallLog.push('flush')
       closeCallLog.push('whenIdle')
       closeCallLog.push('save')
-      closeCallLog.push('detach')
       closeCallLog.push('closeAsync')
+      closeCallLog.push('detach')
       return true
     },
     async onBackClick() {
@@ -571,11 +572,11 @@ await testAsync('统一关闭: 返回按钮和 aboutToDisappear 都调 performGr
   }
 
   await mockScreen.onBackClick()
-  assert.deepEqual(closeCallLog, ['performGracefulClose', 'seal', 'finishActiveComposition', 'flush', 'whenIdle', 'save', 'detach', 'closeAsync', 'pop'])
+  assert.deepEqual(closeCallLog, ['performGracefulClose', 'seal', 'finishActiveComposition', 'flush', 'whenIdle', 'save', 'closeAsync', 'detach', 'pop'])
 
   closeCallLog.length = 0
   await mockScreen.aboutToDisappear()
-  assert.deepEqual(closeCallLog, ['performGracefulClose', 'seal', 'finishActiveComposition', 'flush', 'whenIdle', 'save', 'detach', 'closeAsync', 'clearListener'])
+  assert.deepEqual(closeCallLog, ['performGracefulClose', 'seal', 'finishActiveComposition', 'flush', 'whenIdle', 'save', 'closeAsync', 'detach', 'clearListener'])
 
   // 关键：两者都走 performGracefulClose，没有第二套关闭流程
   // （没有直接 coordinator.close() 不等 idle，没有直接 detach 不 flush）
@@ -598,19 +599,20 @@ await testAsync('统一关闭: 不存在绕过 performGracefulClose 的直接 cl
   const dispatcher = { flush: async () => { calls.push('flush') } }
 
   // 新的 aboutToDisappear 实现（与修改后的 WritingScreen 对齐）
+  // Issue #629 评论9 第2/3项：顺序 flush → whenIdle → closeAsync → detach
   async function aboutToDisappear() {
-    // performGracefulClose 内部调 detach 和 closeAsync
+    // performGracefulClose 内部调 closeAsync 和 detach
     await dispatcher.flush()
     await coordinator.whenIdle()
-    await harmonyImeConnection.detach()
     await coordinator.closeAsync()
+    await harmonyImeConnection.detach()
     coordinator.setStateListener(null)
   }
 
   await aboutToDisappear()
 
   assert.ok(!calls.includes('direct-close'), '不应直接调 coordinator.close()（旧路径）')
-  assert.deepEqual(calls, ['flush', 'whenIdle', 'detach', 'closeAsync'])
+  assert.deepEqual(calls, ['flush', 'whenIdle', 'closeAsync', 'detach'])
 })
 
 // ── 11. closeAsync vs close 语义差异 ──
@@ -709,13 +711,13 @@ await testAsync('端到端: 打字→返回，最后输入全部保存，session
   seq.push('save-start')
   savedContent = snapshotText
   seq.push('save-done')
-  // 4. detach
-  seq.push('detach')
-  // 5. close
+  // 4. close. Issue #629 评论9 第2项：先 close，成功后才 detach。
   seq.push('close-start')
   await coordinatorQueue.whenIdle()  // closeAsync 先等 idle
   sessionClosed = true
   seq.push('close-done')
+  // 5. detach
+  seq.push('detach')
 
   // 断言：所有 5 个字都进了 save
   assert.equal(snapshotText, 'inithello')
@@ -742,7 +744,8 @@ await testAsync('端到端: 打字→返回，最后输入全部保存，session
 // 与修改后的 WritingScreen.performGracefulClose / doGracefulClose 对齐：
 //   performGracefulClose(): closeTask !== null ? return closeTask : closeTask = doGracefulClose()
 //   doGracefulClose(): seal → finishActiveComposition → flush → whenIdle → save/统计
-//     （失败 unseal + return false）→ detach → closeAsync（失败 return false）→ true
+//     （失败 unseal + return false，不 close/detach）→ closeAsync（失败 unseal + return false，不 detach）
+//     → detach（不可逆清理放到最后）→ true
 //   失败后 closeTask 重置（允许下次返回重试）；成功后保留缓存（页面即将销毁）。
 
 // 幂等 performGracefulClose + doGracefulClose 工厂（与修改后的 WritingScreen 对齐）
@@ -794,13 +797,15 @@ function createGracefulCloseScreen(deps, state) {
         // Issue #629 评论7 第5项：统计成功推进 sessionOldText，避免第二遍重复统计。
         state.sessionOldText = savedText
       }
-      // 6. detach IME
-      await harmonyImeConnection.detach()
-      // 7. close session
+      // 6. close session. Issue #629 评论9 第2项：先 closeAsync，成功后才 detach IME。
       const closeResult = await coordinator.closeAsync()
       if (!closeResult.success) {
+        // close 失败：不 detach、不 pop；unseal 让用户继续编辑（不需要重新 attach IME）。
+        dispatcher.unseal()
         return false
       }
+      // 7. Core close 成功后才 detach IME（不可逆清理放到最后，失败路径不触不可逆动作）
+      await harmonyImeConnection.detach()
       return true
     } catch (err) {
       dispatcher.unseal()
@@ -1173,9 +1178,12 @@ await testAsync('close 失败: closeAsync 返回失败 → performGracefulClose 
   const closed = await screen.performGracefulClose()
 
   assert.equal(closed, false, 'closeAsync 失败必须返回 false（不 pop）')
-  // save 已成功、detach 已执行（顺序语义），但 close 失败不 pop
+  // Issue #629 评论9 第2项：close 失败时不 detach（不可逆清理放到 close 成功之后），
+  // unseal 让用户继续编辑（不需要重新 attach IME）。
   assert.deepEqual(coordinator.calls, ['whenIdle', 'closeAsync'], 'closeAsync 已调')
-  assert.deepEqual(harmonyImeConnection.calls, ['detach'], 'detach 已调（保存成功后）')
+  assert.deepEqual(harmonyImeConnection.calls, [], 'close 失败时不 detach（不可逆清理未触）')
+  assert.ok(dispatcher.calls.includes('unseal'), 'close 失败后必须 unseal')
+  assert.equal(dispatcher.isSealed(), false, 'unseal 后 dispatcher 恢复接收输入')
   assert.equal(bridge.processWritingEventCalls.length, 0)
 })
 
@@ -1235,7 +1243,7 @@ await testAsync('最后 preedit: finishActiveComposition 提交 preedit 进正�
   // 关键断言：保存的是 finish 后的文本（含最后 preedit '你'）
   assert.equal(coordinator.snapshot.text, 'abc你', 'finishActiveComposition 把 preedit 提交进正文')
   assert.equal(saveChapterCalls.length, 1, '有未保存变更 → 保存一次')
-  // 关闭链顺序：seal → finishActiveComposition → flush → whenIdle → save → detach → closeAsync
+  // 关闭链顺序：seal → finishActiveComposition → flush → whenIdle → save → closeAsync → detach
   assert.deepEqual(dispatcher.calls.slice(0, 3), ['seal', 'finishActiveComposition', 'flush'])
   assert.deepEqual(coordinator.calls, ['whenIdle', 'closeAsync'])
 })

@@ -9,9 +9,14 @@
 // 所有语义输入（insertText/setSelection/ime*/grapheme 导航/paste）
 // 都经此 Dispatcher 排队，出队执行时才读 snapshot。
 //
+// Issue #629 评论 9 第 1 项：composition 唯一真源是 Core snapshot。
+// - inputAdapter.isComposing() 读 coordinator.getSnapshot().composition，不再有 Harmony 第二套状态。
+// - composition 命令出队时从 snapshot.composition 取 sessionId/generation/preeditText，
+//   不本地持有 compositionSession，不自造 generation。
+//
 // Issue #629 评论7 第2项：HarmonyImeConnection 变纯协议翻译器。
 // - HarmonyImeConnection 只派发 imePreviewText/imeCommitText/imeCancelPreview（不判断 composition 状态）。
-// - 本 Dispatcher 在唯一队列出队时查 inputAdapter.isComposing()（Core 驱动状态）决定
+// - 本 Dispatcher 在唯一队列出队时查 inputAdapter.isComposing()（Core snapshot 驱动状态）决定
 //   begin/update/finish/cancel。事件顺序和 composition 状态判断属于同一条串行边界。
 //
 // Issue #629 评论7 第6项：软键盘删除统一 Core grapheme。
@@ -21,8 +26,9 @@
 //
 // Issue #629 评论8 第3项：close 生命周期入口。
 // - seal()/unseal()：close 开始后拒绝新的普通输入命令，但已排队命令仍可 drain。
-// - finishActiveComposition()：在唯一队列里执行，出队时查 isComposing()，有 composition 就用
-//   EditorImeSession 当前 preedit 调 onCompositionFinish(currentPreedit)，没有就 no-op。
+// - finishActiveComposition()：在唯一队列里执行，出队时查 isComposing()（读 Core snapshot），
+//   有 composition 就用 Core snapshot 当前 preedit 调 onCompositionFinish(currentPreedit)，
+//   没有就 no-op。
 //   seal 后仍可入队（它是关闭链的一部分），保证最后中文 preedit 提交进正文再保存。
 //
 // Issue #629 评论8 第4项：imeSetSelection 语义命令。
@@ -128,8 +134,8 @@ export class EditorSemanticDispatcher {
   /**
    * Issue #629 评论8 第3项：在 dispatcher 唯一队列里 finish 当前 composition。
    *
-   * 出队时查 inputAdapter.isComposing()：
-   * - 有 composition：用 EditorImeSession 当前 preedit 调 onCompositionFinish(currentPreedit)
+   * 出队时查 inputAdapter.isComposing()（读 Core snapshot.composition）：
+   * - 有 composition：用 Core snapshot 当前 preedit 调 onCompositionFinish(currentPreedit)
    *   （确认原样提交，preedit 落进 committed 正文，随后的保存不会漏掉最后预输入）；
    * - 没有 composition：no-op（返回 success）。
    *
@@ -146,7 +152,7 @@ export class EditorSemanticDispatcher {
   }
 
   // 出队后真正执行：此时 snapshot 已是最新（前一条命令已完成并更新 state）
-  // Issue #629 评论7 第2项：ime* 命令出队时查 inputAdapter.isComposing()（Core 驱动状态）
+  // Issue #629 评论7 第2项：ime* 命令出队时查 inputAdapter.isComposing()（Core snapshot 驱动状态）
   // 决定 begin/update/finish/cancel。事件顺序和 composition 状态判断属于同一条串行边界。
   private async executeCommand(cmd: SemanticEditCommand): Promise<ResultEnvelope<EditorEditResult>> {
     switch (cmd.kind) {

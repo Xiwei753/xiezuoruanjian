@@ -1,8 +1,13 @@
 // EditorInputAdapter — 把 HarmonyOS 键盘/IME/粘贴翻译成 insert/delete/replace/composition 编辑命令。
 // 委托 EditorSessionCoordinator。不自己维护正文或光标。
 // cause 由本适配器按输入语义决定（Typing/Delete/Paste/ImeComposition/TypingCommit）。
-// Issue #629 评论 3：composition 用 Core 返回的 compositionSession（不伪造 generation）；
-// onCompositionFinish committed!=preedit 改成 updateComposition→新 generation→finishComposition（不 cancel 后 commitText）。
+//
+// Issue #629 评论 9 第 1 项：composition 唯一真源是 Core snapshot。
+// - 删除本地 EditorImeSession 状态机；isComposing/onCompositionUpdate/Finish/Cancel/
+//   finishActiveComposition 全部从 coordinator.getSnapshot().composition 读取
+//   sessionId/generation/preeditText。
+// - 不本地提前改任何 composition 状态；Core 成功后 Coordinator snapshot 自动反映新 composition。
+// - generation/sessionId 完全由 Core 裁判，从 snapshot.composition 读取，不自造、不 ++。
 //
 // Issue #629 评论 5 第 2 部分：输入尊重当前选区。
 // - 加 currentSelectionUtf8()，从 snapshot 的 selectionAnchor/cursor 取当前 Core 选区并 normalize（start <= end）。
@@ -13,10 +18,9 @@
 // 由本适配器从 snapshot 选区/cursor 决定。调用方（HarmonyImeConnection）只传语义输入。
 
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
-import { EditorImeSession } from './EditorImeSession'
 import { TextOffsetMapper } from './TextOffsetMapper'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
-import { EditorTransactionCause, EditorEditResult, CompositionSession } from '../../../corebridge/dto/EditorDtos'
+import { EditorTransactionCause, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 
 /** 当前选区的 UTF-8 byte offset（normalized：start <= end）。 */
 export interface SelectionRangeUtf8 {
@@ -33,7 +37,6 @@ export type DeleteDirection = 'backward' | 'forward'
 
 export class EditorInputAdapter {
   private coordinator: EditorSessionCoordinator
-  private imeSession: EditorImeSession = new EditorImeSession()
 
   constructor(coordinator: EditorSessionCoordinator) {
     this.coordinator = coordinator
@@ -97,48 +100,47 @@ export class EditorInputAdapter {
   /**
    * IME composition 开始：replace range 是当前选区（不是空范围 [cursor,cursor)）。
    * 输入法在选中文本后开始预输入时，应替换该选区。
-   * 从 result.compositionSession 设 imeSession（Core 驱动 composition 会话）。
+   *
+   * Issue #629 评论 9 第 1 项：不本地持有 compositionSession。
+   * Core 返回的 composition 会通过 Coordinator snapshot 反映，后续 isComposing/onCompositionUpdate
+   * 等从 snapshot.composition 读取。
    */
   async onCompositionBegin(): Promise<ResultEnvelope<EditorEditResult>> {
     const sel = this.currentSelectionUtf8()
-    const result = await this.coordinator.beginComposition(sel.start, sel.end)
-    if (result.success && result.data && result.data.compositionSession) {
-      this.imeSession.setCompositionSession(result.data.compositionSession)
-    }
-    return result
+    return this.coordinator.beginComposition(sel.start, sel.end)
   }
 
-  // IME composition preedit 更新：从 result.compositionSession 更新 imeSession。
+  // IME composition preedit 更新。
+  // Issue #629 评论 9 第 1 项：从 coordinator.getSnapshot().composition 取 sessionId/generation，
+  // 不本地提前改任何状态。Core 成功后 Coordinator snapshot 自动反映新 composition。
   // Issue #629 评论7 第1项：composition cursor 单位是 UTF-16 code unit（preedit.length），
   // 不是 UTF-8 byte offset。光标在预输入末尾，直接传 preedit.length。
   // Issue #629 评论8 第4项：imeSetSelection 在 composition 内移动光标时显式传
   // preeditCursorUtf16（显示坐标换算出的 preedit 内 UTF-16 cursor），省略时默认末尾。
   async onCompositionUpdate(preedit: string, preeditCursorUtf16?: number): Promise<ResultEnvelope<EditorEditResult>> {
-    this.imeSession.updatePreedit(preedit)
-    const compId = this.imeSession.getCompositionSessionId()
-    const gen = this.imeSession.getGeneration()
-    const cursorUtf16: number = preeditCursorUtf16 === undefined ? preedit.length : preeditCursorUtf16
-    const result = await this.coordinator.updateComposition(compId, gen, preedit, cursorUtf16)
-    if (result.success && result.data && result.data.compositionSession) {
-      this.imeSession.setCompositionSession(result.data.compositionSession)
+    const snap = this.coordinator.getSnapshot()
+    if (!snap || snap.composition === null || snap.composition === undefined) {
+      return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
     }
-    return result
+    const comp = snap.composition
+    const cursorUtf16: number = preeditCursorUtf16 === undefined ? preedit.length : preeditCursorUtf16
+    return this.coordinator.updateComposition(comp.sessionId, comp.generation, preedit, cursorUtf16)
   }
 
   // IME composition 提交。committed 是 IME 最终提交文本，不能忽略。
   // - committed == preedit → finishComposition（确认原样提交）
-  // - committed != preedit → updateComposition（把 preedit 改成 committed）→ 从 result.compositionSession
+  // - committed != preedit → updateComposition（把 preedit 改成 committed）→ 重新读 snapshot.composition
   //   取新 generation → finishComposition。
   //   禁止 cancel 后 commitText（评论明确说这会 StaleRevision）。
+  // Issue #629 评论 9 第 1 项：sessionId/generation/preedit 全部从 Core snapshot 读，不本地持有。
   async onCompositionFinish(committed: string): Promise<ResultEnvelope<EditorEditResult>> {
-    const comp = this.imeSession.finish()
-    if (!comp) {
+    const snap = this.coordinator.getSnapshot()
+    if (!snap || snap.composition === null || snap.composition === undefined) {
       return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
     }
-    if (committed === comp.preedit) {
-      const result = await this.coordinator.finishComposition(comp.sessionId, comp.generation)
-      this.imeSession.clear()
-      return result
+    const comp = snap.composition
+    if (committed === comp.preeditText) {
+      return this.coordinator.finishComposition(comp.sessionId, comp.generation)
     }
     // committed != preedit：updateComposition 提交最终文本，再用新 generation finishComposition
     // Issue #629 评论7 第1项：composition cursor 单位是 UTF-16 code unit（committed.length）。
@@ -147,8 +149,10 @@ export class EditorInputAdapter {
     if (!updateResult.success || !updateResult.data) {
       return updateResult
     }
-    const newCompSession: CompositionSession | null = updateResult.data.compositionSession
-    if (!newCompSession) {
+    // update 成功后重新读最新 snapshot.composition 的 generation（Core 已更新）。
+    const latestSnap = this.coordinator.getSnapshot()
+    const newComp = latestSnap ? latestSnap.composition : null
+    if (newComp === null || newComp === undefined) {
       return {
         success: false,
         errorCode: 'NO_COMPOSITION_SESSION',
@@ -157,40 +161,39 @@ export class EditorInputAdapter {
         changedEntities: updateResult.changedEntities
       }
     }
-    this.imeSession.setCompositionSession(newCompSession)
-    const finishResult = await this.coordinator.finishComposition(newCompSession.sessionId, newCompSession.generation)
-    this.imeSession.clear()
-    return finishResult
+    return this.coordinator.finishComposition(newComp.sessionId, newComp.generation)
   }
 
   async onCompositionCancel(): Promise<ResultEnvelope<EditorEditResult>> {
-    const comp = this.imeSession.cancel()
-    if (!comp) {
+    const snap = this.coordinator.getSnapshot()
+    if (!snap || snap.composition === null || snap.composition === undefined) {
       return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
     }
-    const result = await this.coordinator.cancelComposition(comp.sessionId, comp.generation)
-    this.imeSession.clear()
-    return result
+    const comp = snap.composition
+    return this.coordinator.cancelComposition(comp.sessionId, comp.generation)
   }
 
   /**
    * Issue #629 评论8 第3项：close 生命周期收尾入口。
-   * 内部从 EditorImeSession 当前 preedit / 当前真实 session 走现有 onCompositionFinish()，
-   * 不新造 composition 状态机。
-   * - 有活跃 composition：用当前 preedit 调 onCompositionFinish（committed === preedit，
-   *   确认原样提交，preedit 落进 committed 正文）；
+   * - 有活跃 composition：用当前 preedit（从 Core snapshot 读）调 onCompositionFinish
+   *   （committed === preedit，确认原样提交，preedit 落进 committed 正文）；
    * - 无 composition：no-op（返回 success）。
+   *
+   * Issue #629 评论 9 第 1 项：composition 是否活跃由 snapshot.composition 判断，
+   * preedit 从 snapshot.composition.preeditText 读，不本地持有。
    */
   async finishActiveComposition(): Promise<ResultEnvelope<EditorEditResult>> {
-    if (!this.imeSession.isActive()) {
+    const snap = this.coordinator.getSnapshot()
+    if (!snap || snap.composition === null || snap.composition === undefined) {
       return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
     }
-    const preedit: string = this.imeSession.getPreedit()
-    return this.onCompositionFinish(preedit)
+    return this.onCompositionFinish(snap.composition.preeditText)
   }
 
+  // Issue #629 评论 9 第 1 项：composition 唯一真源是 Core snapshot。
   isComposing(): boolean {
-    return this.imeSession.isActive()
+    const snap = this.coordinator.getSnapshot()
+    return snap !== null && snap.composition !== null && snap.composition !== undefined
   }
 
   // 当前光标的 UTF-16 code unit offset（供外部查询，如 HarmonyImeConnection 通知 IME 选区）。

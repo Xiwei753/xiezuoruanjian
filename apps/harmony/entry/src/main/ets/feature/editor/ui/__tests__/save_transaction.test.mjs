@@ -84,12 +84,19 @@ async function doSaveChapter(deps, bridge, state, isAutoSave = false) {
       state.lastSavedContentHash = result.data.contentHash
       state.hasUnsavedChanges = false
       state.lastSaveFailed = false
-      state.wordCount = result.data.wordCount
-      // 6. 重新取 latestSnapshot 结算
+      // 6. 重新取 latestSnapshot 结算。
+      // Issue #629 评论9 第4项：wordCount 表示当前编辑器正文的实时字数。只有保存期间无新输入
+      // （latest.text === savedText）时才用 receipt.wordCount 校正；有新输入时保留实时 wordCount，
+      // 不拿旧 savedText 的 receipt.wordCount 覆盖当前 A+B 的实时字数。
       const latest = deps.coordinator.getSnapshot()
       if (latest) {
         state.content = latest.text
         state.hasUnsavedChanges = latest.text !== savedText
+        if (latest.text === savedText) {
+          state.wordCount = result.data.wordCount
+        }
+      } else {
+        state.wordCount = result.data.wordCount
       }
       return true
     }
@@ -405,6 +412,71 @@ await testAsync('persistent 会话: open(targetId, text, false) 传 isPersistent
 
   await open('tmp', 'x', false)
   assert.equal(createCalls[0].isPersistent, false, '短文本草稿会话传 isPersistent=false')
+})
+
+// ── 6. Issue #629 评论9 第4项：保存并发不覆盖新字数 ──
+
+await testAsync('wordCount 并发: 保存期间无新输入时 wordCount 用 receipt.wordCount 校正', async () => {
+  const deps = makeSaveDeps('A')
+  const bridge = makeDeferredBridge()
+  const state = makeState('A')
+  state.wordCount = 1  // 保存前实时字数（listener 已按 contentDelta 更新到 1）
+  state.sessionOldText = 'old'
+
+  const savePromise = doSaveChapter(deps, bridge, state)
+  await bridge.waitStarted()
+  // 保存期间无新输入（snapshot 仍是 'A'）
+  bridge.finishSave()
+  const saved = await savePromise
+
+  assert.equal(saved, true)
+  assert.equal(state.lastSavedContent, 'A')
+  assert.equal(state.hasUnsavedChanges, false, '无新输入时保存后已保存')
+  // receipt.wordCount = 'A'.length = 1（makeDeferredBridge 返回 wordCount: text.length）
+  assert.equal(state.wordCount, 1, '无新输入时 wordCount 用 receipt.wordCount 校正')
+})
+
+await testAsync('wordCount 并发: 保存期间有新输入时 wordCount 不被旧 receipt 覆盖（保留实时字数）', async () => {
+  const deps = makeSaveDeps('A')
+  const bridge = makeDeferredBridge()
+  const state = makeState('A')
+  state.wordCount = 1  // 保存前实时字数（A 的非空白字符数）
+  state.sessionOldText = 'old'
+
+  const savePromise = doSaveChapter(deps, bridge, state)
+  await bridge.waitStarted()
+  // 保存期间用户继续输入 B（listener 会按 contentDelta 实时更新 wordCount）
+  deps.coordinator.applyInput('B')
+  state.content = deps.coordinator.text  // listener 回流 content
+  // listener 按 contentDelta 实时更新 wordCount：B 是 1 个非空白字符，wordCount 从 1 → 2
+  state.wordCount = 2
+  assert.equal(state.content, 'AB')
+
+  bridge.finishSave()
+  const saved = await savePromise
+
+  assert.equal(saved, true)
+  // 磁盘保存的是 savedText='A'（保存开始时冻结的快照）
+  assert.equal(bridge.saveChapterCalls[0].text, 'A')
+  assert.equal(state.lastSavedContent, 'A')
+  assert.equal(state.hasUnsavedChanges, true, '保存期间新输入 B 保持 unsaved')
+  assert.equal(state.content, 'AB')
+  // 关键断言：wordCount 保留实时字数 2，不被旧 receipt.wordCount（='A'.length=1）覆盖
+  assert.equal(state.wordCount, 2, '保存期间有新输入时 wordCount 保留实时字数（不被旧 receipt 覆盖）')
+})
+
+await testAsync('wordCount 并发: snapshot 为 null 时用 receipt.wordCount 兜底', async () => {
+  const deps = makeSaveDeps('A')
+  // 让 coordinator.getSnapshot 返回 null（模拟会话已关闭的边界情况）
+  deps.coordinator.getSnapshot = () => null
+  const bridge = makeBridge({ success: true, data: { contentHash: 'h', wordCount: 5 }, warnings: [], changedPaths: [], changedEntities: [] })
+  const state = makeState('A')
+  state.wordCount = 99
+
+  const saved = await doSaveChapter(deps, bridge, state)
+
+  assert.equal(saved, true)
+  assert.equal(state.wordCount, 5, 'snapshot 为 null 时用 receipt.wordCount 兜底')
 })
 
 console.log('---')

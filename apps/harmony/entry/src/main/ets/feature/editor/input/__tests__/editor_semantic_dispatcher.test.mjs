@@ -918,5 +918,284 @@ await testAsync('评论8 第4项回归: 中文 replace 区 + 多字 preedit 的�
   assert.deepEqual(d.dragSelectCalls[0], { anchor: 1, head: 4 })
 })
 
+// ── 13. Issue #629 评论 9 第 1 项：composition 唯一真源是 Core snapshot ──
+// EditorInputAdapter.ets 依赖 ArkUI 无法用 Node 直接测；本段镜像其 composition-from-snapshot
+// 纯逻辑，验证 isComposing/onCompositionUpdate/Finish/Cancel/finishActiveComposition 全部从
+// coordinator.getSnapshot().composition 读取 sessionId/generation/preeditText，不本地持有状态。
+async function makeSnapshotCompositionAdapter() {
+  // coordinator mock：snapshot.composition 是 composition 唯一真源
+  let snapshot = { text: '', revision: 0, cursor: 0, selectionAnchor: 0, composition: null }
+  const coordinatorCalls = {
+    beginComposition: [],
+    updateComposition: [],
+    finishComposition: [],
+    cancelComposition: [],
+  }
+  const coordinator = {
+    getSnapshot: () => snapshot,
+    setSnapshot: (s) => { snapshot = s },
+    beginComposition: async (replaceStart, replaceEndExclusive) => {
+      coordinatorCalls.beginComposition.push({ replaceStart, replaceEndExclusive })
+      // Core 成功后 snapshot.composition 反映新 composition
+      snapshot = {
+        ...snapshot,
+        composition: {
+          sessionId: 1, baseRevision: snapshot.revision, generation: 1,
+          replaceByteStart: replaceStart, replaceByteEndExclusive: replaceEndExclusive,
+          preeditText: '', preeditCursorUtf16: 0,
+        },
+      }
+      return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
+    },
+    updateComposition: async (sessionId, generation, newPreedit, newCursorUtf16) => {
+      coordinatorCalls.updateComposition.push({ sessionId, generation, newPreedit, newCursorUtf16 })
+      // Core 成功后 snapshot.composition 反映新 preedit/generation
+      if (snapshot.composition) {
+        snapshot = {
+          ...snapshot,
+          composition: {
+            ...snapshot.composition,
+            generation: generation + 1,
+            preeditText: newPreedit,
+            preeditCursorUtf16: newCursorUtf16,
+          },
+        }
+      }
+      return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
+    },
+    finishComposition: async (sessionId, generation) => {
+      coordinatorCalls.finishComposition.push({ sessionId, generation })
+      // Core 成功后 composition 结束
+      snapshot = { ...snapshot, composition: null }
+      return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
+    },
+    cancelComposition: async (sessionId, generation) => {
+      coordinatorCalls.cancelComposition.push({ sessionId, generation })
+      snapshot = { ...snapshot, composition: null }
+      return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
+    },
+  }
+
+  // 镜像 EditorInputAdapter 的新逻辑（composition 只认 Core snapshot）
+  const inputAdapter = {
+    isComposing: () => {
+      const snap = coordinator.getSnapshot()
+      return snap !== null && snap.composition !== null && snap.composition !== undefined
+    },
+    onCompositionUpdate: async (preedit, preeditCursorUtf16) => {
+      const snap = coordinator.getSnapshot()
+      if (!snap || snap.composition === null || snap.composition === undefined) {
+        return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
+      }
+      const comp = snap.composition
+      const cursorUtf16 = preeditCursorUtf16 === undefined ? preedit.length : preeditCursorUtf16
+      return coordinator.updateComposition(comp.sessionId, comp.generation, preedit, cursorUtf16)
+    },
+    onCompositionFinish: async (committed) => {
+      const snap = coordinator.getSnapshot()
+      if (!snap || snap.composition === null || snap.composition === undefined) {
+        return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
+      }
+      const comp = snap.composition
+      if (committed === comp.preeditText) {
+        return coordinator.finishComposition(comp.sessionId, comp.generation)
+      }
+      const cursorUtf16 = committed.length
+      const updateResult = await coordinator.updateComposition(comp.sessionId, comp.generation, committed, cursorUtf16)
+      if (!updateResult.success || !updateResult.data) {
+        return updateResult
+      }
+      const latestSnap = coordinator.getSnapshot()
+      const newComp = latestSnap ? latestSnap.composition : null
+      if (newComp === null || newComp === undefined) {
+        return {
+          success: false, errorCode: 'NO_COMPOSITION_SESSION',
+          warnings: updateResult.warnings, changedPaths: updateResult.changedPaths,
+          changedEntities: updateResult.changedEntities,
+        }
+      }
+      return coordinator.finishComposition(newComp.sessionId, newComp.generation)
+    },
+    onCompositionCancel: async () => {
+      const snap = coordinator.getSnapshot()
+      if (!snap || snap.composition === null || snap.composition === undefined) {
+        return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
+      }
+      const comp = snap.composition
+      return coordinator.cancelComposition(comp.sessionId, comp.generation)
+    },
+    finishActiveComposition: async () => {
+      const snap = coordinator.getSnapshot()
+      if (!snap || snap.composition === null || snap.composition === undefined) {
+        return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+      }
+      return inputAdapter.onCompositionFinish(snap.composition.preeditText)
+    },
+  }
+
+  return { inputAdapter, coordinator, coordinatorCalls, getSnapshot: () => snapshot }
+}
+
+await testAsync('评论9 第1项：isComposing() snapshot.composition 非 null → true', async () => {
+  const d = await makeSnapshotCompositionAdapter()
+  d.coordinator.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 1 },
+  })
+  assert.equal(d.inputAdapter.isComposing(), true, 'snapshot.composition 非 null 时 isComposing 应为 true')
+})
+
+await testAsync('评论9 第1项：isComposing() snapshot.composition === null → false', async () => {
+  const d = await makeSnapshotCompositionAdapter()
+  d.coordinator.setSnapshot({ text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, composition: null })
+  assert.equal(d.inputAdapter.isComposing(), false, 'snapshot.composition === null 时 isComposing 应为 false')
+})
+
+await testAsync('评论9 第1项：isComposing() snapshot === null → false', async () => {
+  const d = await makeSnapshotCompositionAdapter()
+  d.coordinator.setSnapshot(null)
+  assert.equal(d.inputAdapter.isComposing(), false, 'snapshot === null 时 isComposing 应为 false')
+})
+
+await testAsync('评论9 第1项：onCompositionUpdate 从 snapshot.composition 取 sessionId/generation，不本地持有', async () => {
+  const d = await makeSnapshotCompositionAdapter()
+  d.coordinator.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 1 },
+  })
+  await d.inputAdapter.onCompositionUpdate('你好', 2)
+  const call = d.coordinatorCalls.updateComposition[0]
+  assert.equal(call.sessionId, 7, 'sessionId 从 snapshot.composition 读')
+  assert.equal(call.generation, 3, 'generation 从 snapshot.composition 读')
+  assert.equal(call.newPreedit, '你好')
+  assert.equal(call.newCursorUtf16, 2)
+})
+
+await testAsync('评论9 第1项：onCompositionUpdate 无 composition → NO_COMPOSITION 失败', async () => {
+  const d = await makeSnapshotCompositionAdapter()
+  d.coordinator.setSnapshot({ text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, composition: null })
+  const result = await d.inputAdapter.onCompositionUpdate('你')
+  assert.equal(result.success, false)
+  assert.equal(result.errorCode, 'NO_COMPOSITION')
+  assert.equal(d.coordinatorCalls.updateComposition.length, 0, '无 composition 不应调 coordinator.updateComposition')
+})
+
+await testAsync('评论9 第1项：onCompositionUpdate 省略 cursor → 默认 preedit.length（UTF-16 code unit）', async () => {
+  const d = await makeSnapshotCompositionAdapter()
+  d.coordinator.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 1 },
+  })
+  await d.inputAdapter.onCompositionUpdate('你好')
+  const call = d.coordinatorCalls.updateComposition[0]
+  assert.equal(call.newCursorUtf16, 2, '省略 cursor 时默认 preedit.length=2（UTF-16 code unit）')
+})
+
+await testAsync('评论9 第1项：onCompositionFinish committed==preedit → finishComposition 用 snapshot 的 sessionId/generation', async () => {
+  const d = await makeSnapshotCompositionAdapter()
+  d.coordinator.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你好', preeditCursorUtf16: 2 },
+  })
+  await d.inputAdapter.onCompositionFinish('你好')
+  assert.equal(d.coordinatorCalls.finishComposition.length, 1)
+  assert.equal(d.coordinatorCalls.updateComposition.length, 0, 'committed==preedit 不走 update')
+  const call = d.coordinatorCalls.finishComposition[0]
+  assert.equal(call.sessionId, 7, 'sessionId 从 snapshot 读')
+  assert.equal(call.generation, 3, 'generation 从 snapshot 读')
+})
+
+await testAsync('评论9 第1项：onCompositionFinish committed!=preedit → update→重读 snapshot→finish', async () => {
+  const d = await makeSnapshotCompositionAdapter()
+  d.coordinator.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你好', preeditCursorUtf16: 2 },
+  })
+  await d.inputAdapter.onCompositionFinish('你好世界')
+  // 先 update
+  assert.equal(d.coordinatorCalls.updateComposition.length, 1)
+  const updCall = d.coordinatorCalls.updateComposition[0]
+  assert.equal(updCall.sessionId, 7, 'update 用原 snapshot 的 sessionId')
+  assert.equal(updCall.generation, 3, 'update 用原 snapshot 的 generation')
+  assert.equal(updCall.newPreedit, '你好世界')
+  assert.equal(updCall.newCursorUtf16, 4, 'cursorUtf16 = committed.length（UTF-16 code unit）')
+  // 再 finish，用 update 后新 snapshot 的 generation（mock 里 generation+1 = 4）
+  assert.equal(d.coordinatorCalls.finishComposition.length, 1)
+  const finCall = d.coordinatorCalls.finishComposition[0]
+  assert.equal(finCall.sessionId, 7, 'finish 用新 snapshot 的 sessionId')
+  assert.equal(finCall.generation, 4, 'finish 用新 snapshot 的 generation（update 后 +1）')
+})
+
+await testAsync('评论9 第1项：onCompositionFinish 无 composition → NO_COMPOSITION 失败', async () => {
+  const d = await makeSnapshotCompositionAdapter()
+  d.coordinator.setSnapshot({ text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, composition: null })
+  const result = await d.inputAdapter.onCompositionFinish('x')
+  assert.equal(result.success, false)
+  assert.equal(result.errorCode, 'NO_COMPOSITION')
+})
+
+await testAsync('评论9 第1项：onCompositionCancel 从 snapshot.composition 取 sessionId/generation', async () => {
+  const d = await makeSnapshotCompositionAdapter()
+  d.coordinator.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1,
+    composition: { sessionId: 9, baseRevision: 0, generation: 5, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 1 },
+  })
+  await d.inputAdapter.onCompositionCancel()
+  assert.equal(d.coordinatorCalls.cancelComposition.length, 1)
+  const call = d.coordinatorCalls.cancelComposition[0]
+  assert.equal(call.sessionId, 9, 'sessionId 从 snapshot 读')
+  assert.equal(call.generation, 5, 'generation 从 snapshot 读')
+})
+
+await testAsync('评论9 第1项：onCompositionCancel 无 composition → NO_COMPOSITION 失败', async () => {
+  const d = await makeSnapshotCompositionAdapter()
+  d.coordinator.setSnapshot({ text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, composition: null })
+  const result = await d.inputAdapter.onCompositionCancel()
+  assert.equal(result.success, false)
+  assert.equal(result.errorCode, 'NO_COMPOSITION')
+})
+
+await testAsync('评论9 第1项：finishActiveComposition 无 composition → no-op（success）', async () => {
+  const d = await makeSnapshotCompositionAdapter()
+  d.coordinator.setSnapshot({ text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, composition: null })
+  const result = await d.inputAdapter.finishActiveComposition()
+  assert.equal(result.success, true, '无 composition 时 finishActiveComposition 是 no-op')
+  assert.equal(d.coordinatorCalls.finishComposition.length, 0)
+})
+
+await testAsync('评论9 第1项：finishActiveComposition 有 composition → 用 snapshot.preeditText 调 onCompositionFinish', async () => {
+  const d = await makeSnapshotCompositionAdapter()
+  d.coordinator.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你好', preeditCursorUtf16: 2 },
+  })
+  await d.inputAdapter.finishActiveComposition()
+  // finishActiveComposition 用 preeditText='你好' 调 onCompositionFinish('你好')，committed==preedit → 直接 finish
+  assert.equal(d.coordinatorCalls.finishComposition.length, 1)
+  assert.equal(d.coordinatorCalls.updateComposition.length, 0, 'committed==preedit 不走 update')
+  const call = d.coordinatorCalls.finishComposition[0]
+  assert.equal(call.sessionId, 7)
+  assert.equal(call.generation, 3)
+})
+
+await testAsync('评论9 第1项：begin→update→update→finish 全程从 snapshot 读，无本地状态', async () => {
+  const d = await makeSnapshotCompositionAdapter()
+  d.coordinator.setSnapshot({ text: '', revision: 0, cursor: 0, selectionAnchor: 0, composition: null })
+  // begin（mock 会设 snapshot.composition）
+  // 这里直接调 coordinator.beginComposition 模拟 onCompositionBegin 的效果
+  await d.coordinator.beginComposition(0, 0)
+  assert.equal(d.inputAdapter.isComposing(), true, 'begin 后 isComposing=true（snapshot.composition 已设）')
+  // update 1
+  await d.inputAdapter.onCompositionUpdate('你')
+  assert.equal(d.coordinatorCalls.updateComposition[0].generation, 1, '第一次 update 用 begin 后的 generation=1')
+  // update 2
+  await d.inputAdapter.onCompositionUpdate('你好')
+  assert.equal(d.coordinatorCalls.updateComposition[1].generation, 2, '第二次 update 用 update 后的 generation=2')
+  // finish
+  await d.inputAdapter.onCompositionFinish('你好')
+  assert.equal(d.coordinatorCalls.finishComposition[0].generation, 3, 'finish 用第二次 update 后的 generation=3')
+  assert.equal(d.inputAdapter.isComposing(), false, 'finish 后 isComposing=false（snapshot.composition=null）')
+})
+
 console.log('---')
 console.log(`✅ editor_semantic_dispatcher: ${passed} tests passed`)

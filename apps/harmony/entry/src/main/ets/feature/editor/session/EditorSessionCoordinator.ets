@@ -22,8 +22,19 @@ import { EditorTransactionCause, EditorSessionSnapshot, EditorEditResult } from 
 import { EditorSessionState, EditStateOutcome } from './EditorSessionState'
 import { SerialCommandQueue } from './editor_patch_logic'
 
-// 状态监听器：每次 state 变化（open/编辑命令成功/失败恢复）时回调，Screen 用来回流 editorSnapshot/content/hasUnsaved/charCount。
-export type EditorStateListener = (snapshot: EditorSessionSnapshot) => void
+// Issue #629 评论9 第4项：typed 状态更新。listener 回调携带 snapshot 和触发本次更新的 editResult。
+// - open() 成功后回调：editResult=null（初始加载，无编辑命令）。
+// - 编辑命令成功后回调：editResult=本次 EditorEditResult（含 contentDelta，供 Screen 实时算字数）。
+// - recoverFromCoreSnapshot 恢复后回调：editResult=null（snapshot 恢复，无单条 editResult）。
+// Screen 消费 update.snapshot 同步 UI 状态，消费 update.editResult.contentDelta 实时更新 wordCount。
+export interface EditorStateUpdate {
+  readonly snapshot: EditorSessionSnapshot
+  readonly editResult: EditorEditResult | null
+}
+
+// 状态监听器：每次 state 变化（open/编辑命令成功/失败恢复）时回调，Screen 用来回流
+// editorSnapshot/content/hasUnsaved/wordCount（wordCount 实时来自 editResult.contentDelta）。
+export type EditorStateListener = (update: EditorStateUpdate) => void
 
 export class EditorSessionCoordinator {
   private bridge: IEditorSessionBridge
@@ -42,9 +53,11 @@ export class EditorSessionCoordinator {
     this.stateListener = listener
   }
 
-  private notifyListener(): void {
+  // Issue #629 评论9 第4项：notifyListener 携带触发本次更新的 editResult。
+  // editResult=null 表示非编辑命令触发的更新（open 初始加载 / snapshot 恢复）。
+  private notifyListener(editResult: EditorEditResult | null): void {
     if (this.stateListener && this.state) {
-      this.stateListener(this.state.snapshot)
+      this.stateListener({ snapshot: this.state.snapshot, editResult })
     }
   }
 
@@ -75,7 +88,7 @@ export class EditorSessionCoordinator {
       }
     }
     this.state = EditorSessionState.fromCreate(sessionId, snapResult.data)
-    this.notifyListener()
+    this.notifyListener(null)
     return {
       success: true,
       data: snapResult.data,
@@ -151,7 +164,7 @@ export class EditorSessionCoordinator {
         const outcome: EditStateOutcome = this.state.withEditResult(result.data)
         if (outcome.ok) {
           this.state = outcome.state
-          this.notifyListener()
+          this.notifyListener(result.data)
         } else {
           // patch 应用失败或 StaleRevision/InvalidOffset/InvalidRange：
           // 立即从 Core snapshot() 重建 state，不让 UI 停在旧文本。
@@ -175,7 +188,7 @@ export class EditorSessionCoordinator {
     const snapResult = await this.bridge.snapshot(sid)
     if (snapResult.success && snapResult.data) {
       this.state = EditorSessionState.fromCreate(sid, snapResult.data)
-      this.notifyListener()
+      this.notifyListener(null)
     }
     // snapResult 失败时无法恢复；保留旧 state。不抛错（避免阻塞命令队列后续命令），
     // 但调用方通过 result.success/data.outcome 已知本次命令失败。

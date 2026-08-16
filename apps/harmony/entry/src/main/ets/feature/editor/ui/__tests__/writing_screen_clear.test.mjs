@@ -1,10 +1,10 @@
 // writing_screen_clear.test.mjs — WritingScreen.doClearContent 纯逻辑单测。
 //
-// 验证 Issue #629 评论 5 第 4 节的核心行为：
+// 验证 Issue #629 评论 5 第 4 节 + 评论9 第4项的核心行为：
 //   1. 清空正文走编辑事务 replace(0, utf8End, '', fullText, Programmatic)，
 //      不直接 bridge.clearChapter()（不在活跃 TextEditSession 外直接 clear 文件）。
-//   2. wordCount 用 Core contentDelta 更新（insertedChars/deletedChars），
-//      不用 snap.text.length（JS UTF-16 code unit 数，不是 Core 字数语义）。
+//   2. doClearContent 不再单独按 contentDelta 修字数——state listener 收到 replace 的 editResult 后
+//      自动按 insertedNonWhitespaceChars/deletedNonWhitespaceChars 实时更新 wordCount（Core 非空白字符）。
 //   3. 保存后用 ChapterSaveReceipt.wordCount 校正（Core 真实字数）。
 //   4. replace 失败时不保存，lastSaveFailed=true。
 //   5. 多字节字符正文：utf8EndByte 用 TextOffsetMapper.utf16ToUtf8 转换，不是 .length。
@@ -103,6 +103,10 @@ class MockBridge {
 }
 
 // doClearContent 编排逻辑（与 WritingScreen.doClearContent 对齐）
+// Issue #629 评论9 第4项：doClearContent 不再单独按 contentDelta 修字数——
+// state listener 收到 replace 的 editResult 后自动按
+// insertedNonWhitespaceChars/deletedNonWhitespaceChars 实时更新 wordCount。
+// doClearContent 只负责 replace → saveChapter 持久化。
 async function doClearContent(state, coordinator, bridge) {
   const snap = coordinator.getSnapshot()
   if (!snap) {
@@ -116,9 +120,8 @@ async function doClearContent(state, coordinator, bridge) {
     const utf8EndByte = utf16ToUtf8(fullText, fullText.length)
     const replaceResult = await coordinator.replace(0, utf8EndByte, '', fullText, 'Programmatic')
     if (replaceResult.success && replaceResult.data) {
-      const delta = replaceResult.data.contentDelta
-      state.wordCount = state.wordCount + delta.insertedChars - delta.deletedChars
-      if (state.wordCount < 0) state.wordCount = 0
+      // state listener 已按 editResult.contentDelta 实时更新 wordCount（非空白字符增量），
+      // 并回流空正文。此处不再单独算字数。
       replaceOk = true
     }
   } catch (err) {
@@ -136,10 +139,24 @@ async function doClearContent(state, coordinator, bridge) {
     state.lastSavedContent = content
     state.lastSavedContentHash = saveResult.data.contentHash
     state.hasUnsavedChanges = false
+    // 保存后 wordCount 校正：清空后 latest.text === savedText === ''，用 receipt.wordCount 校正
     state.wordCount = saveResult.data.wordCount
     state.lastSaveFailed = false
   } else {
     state.lastSaveFailed = true
+  }
+}
+
+// Issue #629 评论9 第4项：state listener 镜像。
+// 收到 EditorStateUpdate{snapshot, editResult} 时按 editResult.contentDelta 实时更新 wordCount
+// （insertedNonWhitespaceChars/deletedNonWhitespaceChars，Core 非空白字符增量）。
+// editResult=null（open/snapshot 恢复）时不更新 wordCount。
+function applyStateUpdate(state, update) {
+  state.content = update.snapshot.text
+  state.hasUnsavedChanges = update.snapshot.text !== state.lastSavedContent
+  if (update.editResult !== null) {
+    const delta = update.editResult.contentDelta
+    state.wordCount = Math.max(0, state.wordCount + delta.insertedNonWhitespaceChars - delta.deletedNonWhitespaceChars)
   }
 }
 
@@ -169,7 +186,7 @@ test('doClearContent: 调用 replace(0, utf8End, "", fullText, Programmatic)，�
   assert.equal(bridge.clearChapterCalls.length, 0)
 })
 
-test('doClearContent: wordCount 用 contentDelta 更新，最终 receipt.wordCount 校正', async () => {
+test('doClearContent: 不单独算字数，listener 按 editResult.contentDelta 实时更新，最终 receipt.wordCount 校正', async () => {
   const snap = { text: 'hello', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1', composition: null }
   const coord = new MockCoordinator(snap)
   coord.replaceResult = {
@@ -181,8 +198,11 @@ test('doClearContent: wordCount 用 contentDelta 更新，最终 receipt.wordCou
   bridge.saveChapterResult = { success: true, data: makeSaveReceipt({ wordCount: 0, contentHash: 'h1' }), warnings: [], changedPaths: [], changedEntities: [] }
 
   const state = { chapterId: 'c1', content: 'hello', wordCount: 50, isSaving: false, lastSaveFailed: false, hasUnsavedChanges: true, lastSavedContent: 'hello', lastSavedContentHash: 'h0' }
+  // 模拟 listener：replace 成功后 coordinator 回调 listener with editResult
+  // listener 按 insertedNonWhitespaceChars/deletedNonWhitespaceChars 更新 wordCount
   await doClearContent(state, coord, bridge)
-
+  // doClearContent 不再单独算字数；listener 路径在下方独立测试验证。
+  // 此处只验证最终 receipt.wordCount 校正（清空后 latest.text==='' === savedText）
   assert.equal(state.wordCount, 0)
   assert.equal(state.lastSaveFailed, false)
 })
@@ -353,6 +373,89 @@ test('doClearContent: replace 后 isSaving 释放，saveChapter 能正常执行'
   assert.equal(bridge.saveChapterCalls.length, 1)
   assert.equal(state.isSaving, false)
   assert.equal(state.lastSaveFailed, false)
+})
+
+// ── Issue #629 评论9 第4项：listener 实时 wordCount 路径 ──
+
+test('listener: 收到 editResult 时 wordCount 用 insertedNonWhitespaceChars/deletedNonWhitespaceChars 实时更新', async () => {
+  // 模拟用户输入 'abc'：3 个非空白字符，listener 应把 wordCount 从 0 → 3
+  const state = { wordCount: 0, content: '', lastSavedContent: '', hasUnsavedChanges: false }
+  const update = {
+    snapshot: { text: 'abc', revision: 1, cursor: 3, selectionAnchor: 3, generation: 1, chapterId: 'c1', composition: null },
+    editResult: makeEditResult({ contentDelta: { insertedChars: 3, deletedChars: 0, insertedNonWhitespaceChars: 3, deletedNonWhitespaceChars: 0 } }),
+  }
+  applyStateUpdate(state, update)
+  assert.equal(state.wordCount, 3, 'listener 按 insertedNonWhitespaceChars 实时更新 wordCount')
+  assert.equal(state.content, 'abc')
+  assert.equal(state.hasUnsavedChanges, true)
+})
+
+test('listener: 删除非空白字符时 wordCount 按 deletedNonWhitespaceChars 递减', async () => {
+  // 模拟用户从 'abc' 删除 'c'：1 个非空白字符，listener 应把 wordCount 从 3 → 2
+  const state = { wordCount: 3, content: 'abc', lastSavedContent: 'abc', hasUnsavedChanges: false }
+  const update = {
+    snapshot: { text: 'ab', revision: 2, cursor: 2, selectionAnchor: 2, generation: 1, chapterId: 'c1', composition: null },
+    editResult: makeEditResult({ contentDelta: { insertedChars: 0, deletedChars: 1, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 1 } }),
+  }
+  applyStateUpdate(state, update)
+  assert.equal(state.wordCount, 2, 'listener 按 deletedNonWhitespaceChars 递减 wordCount')
+  assert.equal(state.content, 'ab')
+})
+
+test('listener: 空白字符输入不增加 wordCount（只算非空白字符）', async () => {
+  // 模拟用户输入空格：insertedNonWhitespaceChars=0，wordCount 不变
+  const state = { wordCount: 3, content: 'abc', lastSavedContent: 'abc', hasUnsavedChanges: false }
+  const update = {
+    snapshot: { text: 'abc ', revision: 2, cursor: 4, selectionAnchor: 4, generation: 1, chapterId: 'c1', composition: null },
+    editResult: makeEditResult({ contentDelta: { insertedChars: 1, deletedChars: 0, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 0 } }),
+  }
+  applyStateUpdate(state, update)
+  assert.equal(state.wordCount, 3, '空白字符输入不增加 wordCount')
+  assert.equal(state.content, 'abc ')
+})
+
+test('listener: editResult=null（open 初始加载）时不更新 wordCount', async () => {
+  // open 成功后 listener 收到 editResult=null，wordCount 保持上次值（由 loadChapter 设置）
+  const state = { wordCount: 42, content: '', lastSavedContent: '', hasUnsavedChanges: false }
+  const update = {
+    snapshot: { text: 'loaded', revision: 1, cursor: 5, selectionAnchor: 5, generation: 1, chapterId: 'c1', composition: null },
+    editResult: null,
+  }
+  applyStateUpdate(state, update)
+  assert.equal(state.wordCount, 42, 'editResult=null 时 wordCount 保持上次值（不更新）')
+  assert.equal(state.content, 'loaded')
+})
+
+test('listener: wordCount 不会变负（Math.max(0, ...) 兜底）', async () => {
+  // 模拟异常：deletedNonWhitespaceChars 大于当前 wordCount
+  const state = { wordCount: 1, content: 'a', lastSavedContent: 'a', hasUnsavedChanges: false }
+  const update = {
+    snapshot: { text: '', revision: 2, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1', composition: null },
+    editResult: makeEditResult({ contentDelta: { insertedChars: 0, deletedChars: 1, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 5 } }),
+  }
+  applyStateUpdate(state, update)
+  assert.equal(state.wordCount, 0, 'wordCount 不变负，Math.max(0, ...) 兜底')
+})
+
+test('doClearContent + listener: 清空正文后 listener 把 wordCount 实时归零，saveChapter 用 receipt.wordCount 校正', async () => {
+  // 端到端：doClearContent replace 后 listener 自动更新 wordCount，saveChapter 保存空正文后 receipt.wordCount=0 校正
+  const snap = { text: 'hello world', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1', composition: null }
+  const coord = new MockCoordinator(snap)
+  coord.replaceResult = {
+    success: true,
+    data: makeEditResult({ contentDelta: { insertedChars: 0, deletedChars: 11, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 10 } }),
+    warnings: [], changedPaths: [], changedEntities: [],
+  }
+  const bridge = new MockBridge()
+  bridge.saveChapterResult = { success: true, data: makeSaveReceipt({ wordCount: 0, contentHash: 'h-empty' }), warnings: [], changedPaths: [], changedEntities: [] }
+
+  const state = { chapterId: 'c1', content: 'hello world', wordCount: 10, isSaving: false, lastSaveFailed: false, hasUnsavedChanges: true, lastSavedContent: 'hello world', lastSavedContentHash: 'h0' }
+  await doClearContent(state, coord, bridge)
+  // doClearContent 不再单独算字数；listener 路径在上方独立测试验证。
+  // 最终 saveChapter 的 receipt.wordCount=0 校正
+  assert.equal(state.wordCount, 0)
+  assert.equal(state.lastSavedContent, '')
+  assert.equal(state.hasUnsavedChanges, false)
 })
 
 console.log('---')
