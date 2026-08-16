@@ -9,8 +9,11 @@
 // 编辑器语义命令（character/Enter/Backspace/Delete/方向/Home/End 等）。
 // SujianEditor 接 ArkUI onKeyEvent → normalize → toSemanticCommand → 调
 // EditorInputAdapter/SelectionController。原始 KeyEvent 不进 Rust。
+//
+// Issue #629 评论6 第6部分：删除手写 KeyCode 魔法数字（2001/2052/2057...），
+// 直接引用 Harmony Input Kit 官方 KeyCode 枚举（@kit.InputKit KeyCode）。
 
-import { KeyEvent } from '@kit.InputKit'
+import { KeyEvent, KeyCode } from '@kit.InputKit'
 
 export interface PlatformKeyEvent {
   keyCode: number
@@ -47,26 +50,9 @@ export type SemanticKeyCommand =
   | { kind: 'escape' }
   | { kind: 'ignore' }
 
-// HarmonyOS KeyCode 常量（@ohos.multimodalInput.KeyCode 节选）。
-// 完整列表由系统提供；这里覆盖编辑器常用键。
-const KEYCODE_SHIFT_LEFT: number = 2001
-const KEYCODE_SHIFT_RIGHT: number = 2002
-const KEYCODE_CTRL_LEFT: number = 2003
-const KEYCODE_CTRL_RIGHT: number = 2004
-const KEYCODE_ALT_LEFT: number = 2005
-const KEYCODE_ALT_RIGHT: number = 2006
-const KEYCODE_ENTER: number = 2052
-const KEYCODE_BACKSPACE: number = 2057
-const KEYCODE_TAB: number = 2049
-const KEYCODE_SPACE: number = 2012
-const KEYCODE_DPAD_LEFT: number = 2013
-const KEYCODE_DPAD_RIGHT: number = 2014
-const KEYCODE_DPAD_UP: number = 2015
-const KEYCODE_DPAD_DOWN: number = 2016
-const KEYCODE_ESCAPE: number = 2054
-const KEYCODE_DELETE: number = 2058
-const KEYCODE_HOME: number = 2073
-const KEYCODE_END: number = 2074
+// HarmonyOS 官方 KeyCode 枚举由 @kit.InputKit 提供（@ohos.multimodalInput.keyCode.KeyCode）。
+// 成员名形如 KEYCODE_ENTER / KEYCODE_BACKSPACE / KEYCODE_DPAD_LEFT 等，
+// 直接引用官方枚举，不在本地复制数值表（Issue #629 评论6 第6部分）。
 
 export class KeyboardInputService {
   private static instance: KeyboardInputService
@@ -80,26 +66,27 @@ export class KeyboardInputService {
 
   // 把 HarmonyOS 真实 KeyCode 转成可读 keyText。
   // 覆盖编辑器常用键；未覆盖的回退为 `key:${keyCode}`，明确表示是 keyCode 而非语义字符。
+  // case 值全部引用官方 KeyCode 枚举，不硬编码数字。
   translateKeyCode(keyCode: number): string {
     switch (keyCode) {
-      case KEYCODE_ENTER: return 'Enter'
-      case KEYCODE_BACKSPACE: return 'Backspace'
-      case KEYCODE_TAB: return 'Tab'
-      case KEYCODE_SPACE: return ' '
-      case KEYCODE_DPAD_LEFT: return 'ArrowLeft'
-      case KEYCODE_DPAD_RIGHT: return 'ArrowRight'
-      case KEYCODE_DPAD_UP: return 'ArrowUp'
-      case KEYCODE_DPAD_DOWN: return 'ArrowDown'
-      case KEYCODE_ESCAPE: return 'Escape'
-      case KEYCODE_DELETE: return 'Delete'
-      case KEYCODE_HOME: return 'Home'
-      case KEYCODE_END: return 'End'
-      case KEYCODE_SHIFT_LEFT:
-      case KEYCODE_SHIFT_RIGHT: return 'Shift'
-      case KEYCODE_CTRL_LEFT:
-      case KEYCODE_CTRL_RIGHT: return 'Control'
-      case KEYCODE_ALT_LEFT:
-      case KEYCODE_ALT_RIGHT: return 'Alt'
+      case KeyCode.KEYCODE_ENTER: return 'Enter'
+      case KeyCode.KEYCODE_BACKSPACE: return 'Backspace'
+      case KeyCode.KEYCODE_TAB: return 'Tab'
+      case KeyCode.KEYCODE_SPACE: return ' '
+      case KeyCode.KEYCODE_DPAD_LEFT: return 'ArrowLeft'
+      case KeyCode.KEYCODE_DPAD_RIGHT: return 'ArrowRight'
+      case KeyCode.KEYCODE_DPAD_UP: return 'ArrowUp'
+      case KeyCode.KEYCODE_DPAD_DOWN: return 'ArrowDown'
+      case KeyCode.KEYCODE_ESCAPE: return 'Escape'
+      case KeyCode.KEYCODE_DELETE: return 'Delete'
+      case KeyCode.KEYCODE_HOME: return 'Home'
+      case KeyCode.KEYCODE_END: return 'End'
+      case KeyCode.KEYCODE_SHIFT_LEFT:
+      case KeyCode.KEYCODE_SHIFT_RIGHT: return 'Shift'
+      case KeyCode.KEYCODE_CTRL_LEFT:
+      case KeyCode.KEYCODE_CTRL_RIGHT: return 'Control'
+      case KeyCode.KEYCODE_ALT_LEFT:
+      case KeyCode.KEYCODE_ALT_RIGHT: return 'Alt'
       default: return `key:${keyCode}`
     }
   }
@@ -126,6 +113,7 @@ export class KeyboardInputService {
   // 控制键组合（Ctrl/Cmd + 字符）这轮先忽略，不做快捷键绑定
   // （Ctrl+C/V/X 等由 IME/系统剪贴板处理，Backspace/Delete 已有专门语义命令）。
   // 修饰键单独按下（Shift/Ctrl/Alt）返回 ignore。
+  // switch case 全部引用官方 KeyCode 枚举，不硬编码数字。
   toSemanticCommand(ev: PlatformKeyEvent): SemanticKeyCommand {
     const extend: boolean = ev.isShiftPressed
     // Ctrl/Alt 组合这轮不处理（Ctrl+X/C/V 等由系统/IME 处理）。
@@ -133,40 +121,40 @@ export class KeyboardInputService {
       return { kind: 'ignore' }
     }
     switch (ev.keyCode) {
-      case KEYCODE_ENTER:
+      case KeyCode.KEYCODE_ENTER:
         return { kind: 'enter' }
-      case KEYCODE_BACKSPACE:
+      case KeyCode.KEYCODE_BACKSPACE:
         return { kind: 'backspace' }
-      case KEYCODE_DELETE:
+      case KeyCode.KEYCODE_DELETE:
         return { kind: 'delete' }
-      case KEYCODE_TAB:
+      case KeyCode.KEYCODE_TAB:
         return { kind: 'tab' }
-      case KEYCODE_ESCAPE:
+      case KeyCode.KEYCODE_ESCAPE:
         return { kind: 'escape' }
-      case KEYCODE_DPAD_LEFT:
+      case KeyCode.KEYCODE_DPAD_LEFT:
         return { kind: 'arrowLeft', extend: extend }
-      case KEYCODE_DPAD_RIGHT:
+      case KeyCode.KEYCODE_DPAD_RIGHT:
         return { kind: 'arrowRight', extend: extend }
-      case KEYCODE_DPAD_UP:
+      case KeyCode.KEYCODE_DPAD_UP:
         return { kind: 'arrowUp', extend: extend }
-      case KEYCODE_DPAD_DOWN:
+      case KeyCode.KEYCODE_DPAD_DOWN:
         return { kind: 'arrowDown', extend: extend }
-      case KEYCODE_HOME:
+      case KeyCode.KEYCODE_HOME:
         return { kind: 'home', extend: extend }
-      case KEYCODE_END:
+      case KeyCode.KEYCODE_END:
         return { kind: 'end', extend: extend }
-      case KEYCODE_SHIFT_LEFT:
-      case KEYCODE_SHIFT_RIGHT:
-      case KEYCODE_CTRL_LEFT:
-      case KEYCODE_CTRL_RIGHT:
-      case KEYCODE_ALT_LEFT:
-      case KEYCODE_ALT_RIGHT:
+      case KeyCode.KEYCODE_SHIFT_LEFT:
+      case KeyCode.KEYCODE_SHIFT_RIGHT:
+      case KeyCode.KEYCODE_CTRL_LEFT:
+      case KeyCode.KEYCODE_CTRL_RIGHT:
+      case KeyCode.KEYCODE_ALT_LEFT:
+      case KeyCode.KEYCODE_ALT_RIGHT:
         return { kind: 'ignore' }
       default:
         break
     }
     // 字符键：keyText 非空且不是 `key:xxx` 回退形式。
-    // Space（keyCode 2012）的 keyText 是 ' '（translateKeyCode 映射）。
+    // Space（KeyCode.KEYCODE_SPACE）的 keyText 是 ' '（translateKeyCode 映射）。
     if (ev.keyText.length > 0 && !ev.keyText.startsWith('key:')) {
       return { kind: 'character', text: ev.keyText }
     }

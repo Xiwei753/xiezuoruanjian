@@ -1789,12 +1789,25 @@ dictionary EditorEditResultDto {
     CompositionSessionDto? composition_session;
     // #624 评论8：本次编辑的字符增量（正文无变化时为全 0）。
     EditorContentDeltaDto content_delta;
+    // #629 评论6 Part B：当前 composition 完整状态（preedit + replace range + cursor）。
+    EditorCompositionStateDto? composition;
 };
 
 dictionary CompositionSessionDto {
     u64 session_id;
     u64 base_revision;
     u64 generation;
+};
+
+// #629 评论6 Part B：Composition 完整状态 DTO。
+dictionary EditorCompositionStateDto {
+    u64 session_id;
+    u64 base_revision;
+    u64 generation;
+    u32 replace_byte_start;
+    u32 replace_byte_end_exclusive;
+    string preedit_text;
+    u32 preedit_cursor_utf16;
 };
 
 dictionary EditorSessionSnapshotDto {
@@ -1804,4 +1817,6 @@ dictionary EditorSessionSnapshotDto {
     u32 selection_anchor;
     u64 generation;
      string chapter_id;
+    // #629 评论6 Part B：composition 活跃时非空。
+    EditorCompositionStateDto? composition;
 };

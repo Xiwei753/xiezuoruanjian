@@ -141,6 +141,8 @@ char* writer_core_editor_session_finish_composition(uint64_t session_id, uint64_
 char* writer_core_editor_session_cancel_composition(uint64_t session_id, uint64_t composition_session_id, uint64_t composition_generation, uint64_t expected_revision);
 char* writer_core_editor_session_get_text(uint64_t session_id);
 char* writer_core_editor_session_get_revision(uint64_t session_id);
+char* writer_core_editor_session_previous_grapheme_boundary(uint64_t session_id, uint32_t byte_offset);
+char* writer_core_editor_session_next_grapheme_boundary(uint64_t session_id, uint32_t byte_offset);
 
 #ifdef __cplusplus
 }

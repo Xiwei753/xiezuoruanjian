@@ -1,7 +1,28 @@
 use crate::api::{
-    AnimatedSliceRoleDto, EditorByteRangeDto, EditorEditOutcomeDto, EditorEditResultDto,
-    EditorSessionSnapshotDto, EditorTransactionCauseDto, OffsetMapDto, RebaseSliceMappingDto,
+    AnimatedSliceRoleDto, EditorByteRangeDto, EditorCompositionStateDto, EditorEditOutcomeDto,
+    EditorEditResultDto, EditorSessionSnapshotDto, EditorTransactionCauseDto, OffsetMapDto,
+    RebaseSliceMappingDto,
 };
+
+/// #629 评论6 Part B：把 EditorKernel.composition_state() 返回的元组转成 DTO。
+///
+/// 元组字段顺序：(session_id, base_revision, generation, replace_byte_start,
+/// replace_byte_end_exclusive, preedit_text, preedit_cursor_utf16)。
+/// 调用方已在 composition 活跃且 outcome 为 Applied/AppliedWithAdjustedSelection 时调用，
+/// 此处不再做守卫，只做类型转换。
+fn make_composition_state_dto(
+    state: (u64, u64, u64, u32, u32, String, u32),
+) -> EditorCompositionStateDto {
+    EditorCompositionStateDto {
+        session_id: state.0,
+        base_revision: state.1,
+        generation: state.2,
+        replace_byte_start: state.3,
+        replace_byte_end_exclusive: state.4,
+        preedit_text: state.5,
+        preedit_cursor_utf16: state.6,
+    }
+}
 
 impl super::WriterAppService {
     fn with_registry<F, R>(&self, f: F) -> R
@@ -397,6 +418,11 @@ impl super::WriterAppService {
                         generation: gen,
                     });
                 }
+                // #629 评论6 Part B：暴露完整 composition 状态（preedit + replace range + cursor）
+                // 给平台端构造临时显示文本和下划线。begin 时 preedit_text 为空。
+                if let Some(state) = s.kernel.composition_state() {
+                    dto.composition = Some(make_composition_state_dto(state));
+                }
             }
             dto
         })
@@ -444,6 +470,11 @@ impl super::WriterAppService {
                         base_revision: base_rev,
                         generation: gen,
                     });
+                }
+                // #629 评论6 Part B：暴露完整 composition 状态（preedit + replace range + cursor）
+                // 给平台端构造临时显示文本和下划线。update 后 preedit_text 为最新值。
+                if let Some(state) = s.kernel.composition_state() {
+                    dto.composition = Some(make_composition_state_dto(state));
                 }
             }
             dto
@@ -532,6 +563,9 @@ impl super::WriterAppService {
             selection_anchor: s.kernel.selection_anchor() as u32,
             generation: s.generation,
             chapter_id: s.target_id.clone(),
+            // #629 评论6 Part B：composition 活跃时返回当前 composition 完整状态，
+            // 平台端据此构造临时显示文本和下划线。无 composition 时为 None。
+            composition: s.kernel.composition_state().map(make_composition_state_dto),
         })
         .unwrap_or_else(|| EditorSessionSnapshotDto {
             text: String::new(),
@@ -540,6 +574,7 @@ impl super::WriterAppService {
             selection_anchor: 0,
             generation: 0,
             chapter_id: String::new(),
+            composition: None,
         })
     }
 
@@ -762,6 +797,75 @@ mod tests {
         assert!(
             stale.composition_session.is_none(),
             "stale outcome must not write composition_session"
+        );
+    }
+
+    /// #629 评论6 Part B：begin/update_composition 成功后必须把 Core 真实的 composition
+    /// 完整状态（preedit_text + replace range + cursor）写回 DTO.composition，
+    /// 平台端据此构造临时显示文本和下划线。snapshot 在 composition 活跃时也返回 composition。
+    #[test]
+    fn composition_state_is_exposed_in_edit_result_and_snapshot() {
+        let (svc, _dir) = make_service();
+        let session_id = svc
+            .text_edit_session_create("test".to_string(), "abc".to_string(), 0, 0)
+            .expect("session created");
+
+        // begin_composition replace range [1, 2)（"b"）。
+        let begin = svc.text_edit_session_begin_composition(session_id, 1, 2, 0);
+        assert_eq!(begin.outcome, EditorEditOutcomeDto::Applied);
+        let begin_comp = begin
+            .composition
+            .expect("begin_composition writes composition state");
+        assert_eq!(begin_comp.replace_byte_start, 1);
+        assert_eq!(begin_comp.replace_byte_end_exclusive, 2);
+        assert!(begin_comp.preedit_text.is_empty());
+        assert_eq!(begin_comp.preedit_cursor_utf16, 0);
+
+        // update_composition 写入 preedit_text "你"。
+        let upd = svc.text_edit_session_update_composition(
+            session_id,
+            begin_comp.session_id,
+            begin_comp.generation,
+            "你".to_string(),
+            1,
+            begin.new_revision,
+        );
+        assert_eq!(upd.outcome, EditorEditOutcomeDto::Applied);
+        let upd_comp = upd
+            .composition
+            .expect("update_composition writes composition state");
+        assert_eq!(upd_comp.replace_byte_start, 1);
+        assert_eq!(upd_comp.replace_byte_end_exclusive, 2);
+        assert_eq!(upd_comp.preedit_text, "你");
+        assert_eq!(upd_comp.preedit_cursor_utf16, 1);
+
+        // snapshot 在 composition 活跃时也返回 composition。
+        let snap = svc.text_edit_session_snapshot(session_id);
+        let snap_comp = snap
+            .composition
+            .expect("snapshot returns composition when active");
+        assert_eq!(snap_comp.preedit_text, "你");
+        assert_eq!(snap_comp.replace_byte_start, 1);
+        assert_eq!(snap_comp.replace_byte_end_exclusive, 2);
+        // 保存正文仍只取 committed text，不把 preedit 写进文件。
+        assert_eq!(snap.text, "abc");
+
+        // finish_composition 后 composition 为 None。
+        let finish = svc.text_edit_session_finish_composition(
+            session_id,
+            upd_comp.session_id,
+            upd_comp.generation,
+            upd.new_revision,
+        );
+        assert_eq!(finish.outcome, EditorEditOutcomeDto::Applied);
+        assert!(
+            finish.composition.is_none(),
+            "finish_composition clears composition"
+        );
+        let snap2 = svc.text_edit_session_snapshot(session_id);
+        assert!(
+            snap2.composition.is_none(),
+            "snapshot returns no composition after finish"
         );
     }
 }

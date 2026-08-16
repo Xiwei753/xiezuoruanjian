@@ -165,6 +165,26 @@ export class NativeEditorSessionBridge implements IEditorSessionBridge {
     }
   }
 
+  // #606: grapheme cluster 边界查询。平台端 Left/Right/Backspace/Delete 通过此方法
+  // 调用 Core 的 unicode_segmentation，不再自己用 UTF-16 ±1 猜字符边界。
+  async previousGraphemeBoundary(sessionId: number, byteOffset: number): Promise<ResultEnvelope<number>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionPreviousGraphemeBoundary(sessionId, byteOffset) as string
+      return this.core.parseEnvelope<number>(jsonStr)
+    } catch (e) {
+      return this.nativeError<number>(e)
+    }
+  }
+
+  async nextGraphemeBoundary(sessionId: number, byteOffset: number): Promise<ResultEnvelope<number>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionNextGraphemeBoundary(sessionId, byteOffset) as string
+      return this.core.parseEnvelope<number>(jsonStr)
+    } catch (e) {
+      return this.nativeError<number>(e)
+    }
+  }
+
   private nativeError<T>(e: unknown): ResultEnvelope<T> {
     return {
       success: false,

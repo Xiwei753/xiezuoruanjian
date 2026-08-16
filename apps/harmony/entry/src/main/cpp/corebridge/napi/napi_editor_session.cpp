@@ -333,6 +333,30 @@ static napi_value NativeEditorSessionGetRevision(napi_env env, napi_callback_inf
     return ReturnJsonString(env, writer_core_editor_session_get_revision(session_id));
 }
 
+// NativeEditorSessionPreviousGraphemeBoundary(session_id, byte_offset)
+// #606: 返回严格在 byte_offset 之前的最近 grapheme cluster 边界（UTF-8 byte offset）。
+static napi_value NativeEditorSessionPreviousGraphemeBoundary(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint32_t byte_offset = arg_u32(env, args, argc, 1);
+    return ReturnJsonString(env, writer_core_editor_session_previous_grapheme_boundary(session_id, byte_offset));
+}
+
+// NativeEditorSessionNextGraphemeBoundary(session_id, byte_offset)
+// #606: 返回严格在 byte_offset 之后的最近 grapheme cluster 边界（UTF-8 byte offset）。
+static napi_value NativeEditorSessionNextGraphemeBoundary(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint32_t byte_offset = arg_u32(env, args, argc, 1);
+    return ReturnJsonString(env, writer_core_editor_session_next_grapheme_boundary(session_id, byte_offset));
+}
+
 // ── Editor Session property descriptors ──
 // 返回 new[] 的副本，调用方（napi_init.cpp Init）负责 delete[]。
 
@@ -355,6 +379,8 @@ napi_property_descriptor* getEditorSessionDescriptors(size_t* count) {
         {"nativeEditorSessionCancelComposition", nullptr, NativeEditorSessionCancelComposition, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeEditorSessionGetText",           nullptr, NativeEditorSessionGetText,           nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeEditorSessionGetRevision",       nullptr, NativeEditorSessionGetRevision,       nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeEditorSessionPreviousGraphemeBoundary", nullptr, NativeEditorSessionPreviousGraphemeBoundary, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeEditorSessionNextGraphemeBoundary",     nullptr, NativeEditorSessionNextGraphemeBoundary,     nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     *count = sizeof(kDesc) / sizeof(kDesc[0]);
     napi_property_descriptor* out = new napi_property_descriptor[*count];

@@ -29,4 +29,9 @@ export interface IEditorSessionBridge {
   // 查询
   getText(sessionId: number): Promise<ResultEnvelope<string>>
   getRevision(sessionId: number): Promise<ResultEnvelope<number>>
+  // #606: grapheme cluster 边界查询（UTF-8 byte offset）。
+  // 平台端 Left/Right/Backspace/Delete 通过此方法确定光标移动目标，
+  // 不再自己用 UTF-16 ±1 猜字符边界（避免切进组合附加符 / ZWJ emoji）。
+  previousGraphemeBoundary(sessionId: number, byteOffset: number): Promise<ResultEnvelope<number>>
+  nextGraphemeBoundary(sessionId: number, byteOffset: number): Promise<ResultEnvelope<number>>
 }

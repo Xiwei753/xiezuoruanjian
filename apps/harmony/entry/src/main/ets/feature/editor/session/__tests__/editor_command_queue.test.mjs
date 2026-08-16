@@ -293,5 +293,61 @@ await testAsync('size/isIdle：执行中 isIdle=false', async () => {
   assert.equal(q.isIdle(), true)
 })
 
+// ── 8. whenIdle/drain（Issue #629 评论6 Part A：统一串行边界的 flush 语义）──
+await testAsync('whenIdle: 空队列立即 resolve', async () => {
+  const q = new SerialCommandQueue()
+  const t0 = Date.now()
+  await q.whenIdle()
+  assert.ok(Date.now() - t0 < 50)
+})
+
+await testAsync('whenIdle: 等所有已 enqueue 命令完成', async () => {
+  const q = new SerialCommandQueue()
+  const order = []
+  q.enqueue(async () => { await sleep(30); order.push('a') })
+  q.enqueue(async () => { await sleep(20); order.push('b') })
+  q.enqueue(async () => { await sleep(10); order.push('c') })
+  assert.equal(q.isIdle(), false)
+  await q.whenIdle()
+  assert.equal(q.isIdle(), true)
+  assert.deepEqual(order, ['a', 'b', 'c'])
+})
+
+await testAsync('whenIdle: 一条失败不阻塞 whenIdle resolve', async () => {
+  const q = new SerialCommandQueue()
+  q.enqueue(async () => { throw new Error('boom') })
+  q.enqueue(async () => { await sleep(10); return 'ok' })
+  await q.whenIdle()
+  assert.equal(q.isIdle(), true)
+})
+
+await testAsync('whenIdle: await 期间又有新命令排入，递归等待', async () => {
+  const q = new SerialCommandQueue()
+  const order = []
+  q.enqueue(async () => { await sleep(30); order.push('a') })
+  // 在 whenIdle await 期间排入新命令
+  setTimeout(() => {
+    q.enqueue(async () => { await sleep(20); order.push('b') })
+  }, 10)
+  await q.whenIdle()
+  assert.equal(q.isIdle(), true)
+  assert.deepEqual(order, ['a', 'b'])
+})
+
+await testAsync('drain: 与 whenIdle 同义', async () => {
+  const q = new SerialCommandQueue()
+  q.enqueue(async () => { await sleep(15); return 1 })
+  q.enqueue(async () => { await sleep(10); return 2 })
+  await q.drain()
+  assert.equal(q.isIdle(), true)
+})
+
+await testAsync('whenIdle: 多次调用安全（幂等）', async () => {
+  const q = new SerialCommandQueue()
+  q.enqueue(async () => { await sleep(15) })
+  await Promise.all([q.whenIdle(), q.whenIdle(), q.whenIdle()])
+  assert.equal(q.isIdle(), true)
+})
+
 console.log('---')
 console.log(`✅ editor_command_queue: ${passed} tests passed`)

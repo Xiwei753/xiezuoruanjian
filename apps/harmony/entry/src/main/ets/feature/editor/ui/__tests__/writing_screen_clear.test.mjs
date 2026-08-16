@@ -47,6 +47,7 @@ function makeEditResult(overrides) {
     visualIntent: {},
     compositionSession: null,
     contentDelta: { insertedChars: 0, deletedChars: 0, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 0 },
+    composition: null,
     ...overrides,
   }
 }
@@ -146,7 +147,7 @@ console.log('writing_screen_clear 纯逻辑单测（doClearContent 走编辑事�
 console.log('---')
 
 test('doClearContent: 调用 replace(0, utf8End, "", fullText, Programmatic)，不调 clearChapter', async () => {
-  const snap = { text: 'hello world', revision: 3, cursor: 5, selectionAnchor: 0, generation: 1, chapterId: 'c1' }
+  const snap = { text: 'hello world', revision: 3, cursor: 5, selectionAnchor: 0, generation: 1, chapterId: 'c1', composition: null }
   const coord = new MockCoordinator(snap)
   coord.replaceResult = {
     success: true,
@@ -169,7 +170,7 @@ test('doClearContent: 调用 replace(0, utf8End, "", fullText, Programmatic)，�
 })
 
 test('doClearContent: wordCount 用 contentDelta 更新，最终 receipt.wordCount 校正', async () => {
-  const snap = { text: 'hello', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1' }
+  const snap = { text: 'hello', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1', composition: null }
   const coord = new MockCoordinator(snap)
   coord.replaceResult = {
     success: true,
@@ -187,7 +188,7 @@ test('doClearContent: wordCount 用 contentDelta 更新，最终 receipt.wordCou
 })
 
 test('doClearContent: 中文正文 replace 后 saveChapter 保存空正文', async () => {
-  const snap = { text: '你好世界', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1' }
+  const snap = { text: '你好世界', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1', composition: null }
   const coord = new MockCoordinator(snap)
   coord.replaceResult = {
     success: true,
@@ -206,7 +207,7 @@ test('doClearContent: 中文正文 replace 后 saveChapter 保存空正文', asy
 })
 
 test('doClearContent: 保存后 wordCount = receipt.wordCount, lastSavedContentHash = receipt.contentHash', async () => {
-  const snap = { text: 'some content', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1' }
+  const snap = { text: 'some content', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1', composition: null }
   const coord = new MockCoordinator(snap)
   coord.replaceResult = {
     success: true,
@@ -225,7 +226,7 @@ test('doClearContent: 保存后 wordCount = receipt.wordCount, lastSavedContentH
 })
 
 test('doClearContent: replace 失败 → 不调 saveChapter，lastSaveFailed=true', async () => {
-  const snap = { text: 'hello', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1' }
+  const snap = { text: 'hello', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1', composition: null }
   const coord = new MockCoordinator(snap)
   coord.replaceResult = { success: false, errorCode: 'STALE_REVISION', warnings: [], changedPaths: [], changedEntities: [] }
   const bridge = new MockBridge()
@@ -239,7 +240,7 @@ test('doClearContent: replace 失败 → 不调 saveChapter，lastSaveFailed=tru
 })
 
 test('doClearContent: replace 抛异常 → 不保存，isSaving 释放', async () => {
-  const snap = { text: 'hello', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1' }
+  const snap = { text: 'hello', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1', composition: null }
   const coord = new MockCoordinator(snap)
   coord.replace = async () => { throw new Error('bridge crashed') }
   const bridge = new MockBridge()
@@ -266,7 +267,7 @@ test('doClearContent: snapshot 为 null → 直接 lastSaveFailed', async () => 
 
 test('doClearContent: 中文 utf8EndByte = 12（不是 .length=4）', async () => {
   const text = '你好世界'
-  const snap = { text, revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1' }
+  const snap = { text, revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1', composition: null }
   const coord = new MockCoordinator(snap)
   coord.replaceResult = {
     success: true,
@@ -285,7 +286,7 @@ test('doClearContent: 中文 utf8EndByte = 12（不是 .length=4）', async () =
 
 test('doClearContent: emoji utf8EndByte = 6（不是 .length=4）', async () => {
   const text = 'a🎉b'
-  const snap = { text, revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1' }
+  const snap = { text, revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1', composition: null }
   const coord = new MockCoordinator(snap)
   coord.replaceResult = {
     success: true,
@@ -302,7 +303,7 @@ test('doClearContent: emoji utf8EndByte = 6（不是 .length=4）', async () => 
 })
 
 test('doClearContent: cause = Programmatic', async () => {
-  const snap = { text: 'x', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1' }
+  const snap = { text: 'x', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1', composition: null }
   const coord = new MockCoordinator(snap)
   coord.replaceResult = {
     success: true,
@@ -319,7 +320,7 @@ test('doClearContent: cause = Programmatic', async () => {
 })
 
 test('doClearContent: saveChapter 失败 → lastSaveFailed=true', async () => {
-  const snap = { text: 'hello', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1' }
+  const snap = { text: 'hello', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1', composition: null }
   const coord = new MockCoordinator(snap)
   coord.replaceResult = {
     success: true,
@@ -336,7 +337,7 @@ test('doClearContent: saveChapter 失败 → lastSaveFailed=true', async () => {
 })
 
 test('doClearContent: replace 后 isSaving 释放，saveChapter 能正常执行', async () => {
-  const snap = { text: 'hello', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1' }
+  const snap = { text: 'hello', revision: 1, cursor: 0, selectionAnchor: 0, generation: 1, chapterId: 'c1', composition: null }
   const coord = new MockCoordinator(snap)
   coord.replaceResult = {
     success: true,

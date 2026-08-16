@@ -6,13 +6,16 @@
 //
 // Issue #629 评论 5 第 5 节：SujianEditor 接 onMouse → normalizeMouseEvent →
 // 点击命中/drag selection 走 SelectionController；滚轮只改 viewport。
+//
+// Issue #629 评论6 第6部分：删除手写 button/action 魔法数字（0/1/2/3/4），
+// 直接引用 Harmony Input Kit 官方 MouseButton / MouseAction 枚举。
 
-import { MouseEvent, TouchEvent, Action } from '@kit.InputKit'
+import { MouseEvent, TouchEvent, Action, MouseButton, MouseAction } from '@kit.InputKit'
 
 export interface PlatformPointerEvent {
   x: number
   y: number
-  button: number  // 0=left, 1=right, 2=middle
+  button: number  // MouseButton 枚举值：BUTTON_LEFT=0, BUTTON_RIGHT=1, BUTTON_MIDDLE=2
   action: 'down' | 'up' | 'move' | 'wheel'
   // 滚轮偏移（仅 action==='wheel' 有意义）。向下/向右为正（与 scrollTop/scrollLeft 增量方向一致）。
   // HarmonyOS MouseEvent 滚轮事件的增量由 ArkUI 框架消费（Scroll 组件自动滚动），
@@ -22,17 +25,11 @@ export interface PlatformPointerEvent {
   timestamp: number
 }
 
-// HarmonyOS MouseEvent.button 取值（@ohos.multimodalInput.MouseEvent）。
-const MOUSE_BUTTON_LEFT: number = 0
-const MOUSE_BUTTON_RIGHT: number = 1
-const MOUSE_BUTTON_MIDDLE: number = 2
-
-// HarmonyOS MouseAction 取值（@ohos.multimodalInput.MouseAction）。
-const MOUSE_ACTION_HOVER: number = 0
-const MOUSE_ACTION_PRESS: number = 1
-const MOUSE_ACTION_RELEASE: number = 2
-const MOUSE_ACTION_MOVE: number = 3
-const MOUSE_ACTION_WHEEL: number = 4
+// HarmonyOS 官方 MouseButton / MouseAction 枚举由 @kit.InputKit 提供
+// （@ohos.multimodalInput.MouseButton / MouseAction）。
+// MouseButton: BUTTON_LEFT=0, BUTTON_RIGHT=1, BUTTON_MIDDLE=2, ...
+// MouseAction: HOVER=0, PRESS=1, RELEASE=2, MOVE=3, WHEEL=4
+// 直接引用官方枚举，不在本地复制数值表（Issue #629 评论6 第6部分）。
 
 export class PointerInputService {
   private static instance: PointerInputService
@@ -48,11 +45,11 @@ export class PointerInputService {
   // 滚轮增量从 MouseEvent 的 scroll/axis 字段提取（HarmonyOS MouseEvent 在 wheel action 时
   // 通过 ArkUI Scroll 组件自动消费；此处提取供手动 viewport 调整用，缺失时 0）。
   normalizeMouseEvent(raw: MouseEvent): PlatformPointerEvent {
-    const action: 'down' | 'up' | 'move' | 'wheel' = this.mapMouseAction(raw.action ?? MOUSE_ACTION_MOVE)
+    const action: 'down' | 'up' | 'move' | 'wheel' = this.mapMouseAction(raw.action ?? MouseAction.MOVE)
     return {
       x: raw.x ?? 0,
       y: raw.y ?? 0,
-      button: this.mapMouseButton(raw.button ?? MOUSE_BUTTON_LEFT),
+      button: this.mapMouseButton(raw.button ?? MouseButton.BUTTON_LEFT),
       action: action,
       wheelDeltaX: this.extractWheelDeltaX(raw),
       wheelDeltaY: this.extractWheelDeltaY(raw),
@@ -61,7 +58,7 @@ export class PointerInputService {
   }
 
   // 接 HarmonyOS 原始 TouchEvent（手指/触控），归一化为 PlatformPointerEvent。
-  // 取第一个 touch point；button=0 表示触控即"左键"。
+  // 取第一个 touch point；button=MouseButton.BUTTON_LEFT 表示触控即"左键"。
   normalizeTouchEvent(raw: TouchEvent): PlatformPointerEvent {
     const touches: Touch[] = raw.touches ?? []
     const primary: Touch | undefined = touches.length > 0 ? touches[0] : undefined
@@ -70,7 +67,7 @@ export class PointerInputService {
     return {
       x: x,
       y: y,
-      button: MOUSE_BUTTON_LEFT,
+      button: MouseButton.BUTTON_LEFT,
       action: this.mapTouchAction(raw.action ?? Action.DOWN),
       wheelDeltaX: 0,
       wheelDeltaY: 0,
@@ -83,8 +80,8 @@ export class PointerInputService {
     return {
       x: (rawMouseEvent['x'] ?? 0) as number,
       y: (rawMouseEvent['y'] ?? 0) as number,
-      button: this.mapMouseButton((rawMouseEvent['button'] ?? MOUSE_BUTTON_LEFT) as number),
-      action: this.mapMouseAction((rawMouseEvent['action'] ?? MOUSE_ACTION_MOVE) as number),
+      button: this.mapMouseButton((rawMouseEvent['button'] ?? MouseButton.BUTTON_LEFT) as number),
+      action: this.mapMouseAction((rawMouseEvent['action'] ?? MouseAction.MOVE) as number),
       wheelDeltaX: (rawMouseEvent['wheelDeltaX'] ?? 0) as number,
       wheelDeltaY: (rawMouseEvent['wheelDeltaY'] ?? 0) as number,
       timestamp: Date.now()
@@ -92,21 +89,23 @@ export class PointerInputService {
   }
 
   // —— private ——
+  // 用官方 MouseButton 枚举值比较，不硬编码数字。
   private mapMouseButton(rawButton: number): number {
-    if (rawButton === MOUSE_BUTTON_LEFT || rawButton === MOUSE_BUTTON_RIGHT || rawButton === MOUSE_BUTTON_MIDDLE) {
+    if (rawButton === MouseButton.BUTTON_LEFT || rawButton === MouseButton.BUTTON_RIGHT || rawButton === MouseButton.BUTTON_MIDDLE) {
       return rawButton
     }
-    return MOUSE_BUTTON_LEFT
+    return MouseButton.BUTTON_LEFT
   }
 
+  // 用官方 MouseAction 枚举值比较，不硬编码数字。
   private mapMouseAction(rawAction: number): 'down' | 'up' | 'move' | 'wheel' {
-    if (rawAction === MOUSE_ACTION_PRESS) {
+    if (rawAction === MouseAction.PRESS) {
       return 'down'
     }
-    if (rawAction === MOUSE_ACTION_RELEASE) {
+    if (rawAction === MouseAction.RELEASE) {
       return 'up'
     }
-    if (rawAction === MOUSE_ACTION_WHEEL) {
+    if (rawAction === MouseAction.WHEEL) {
       return 'wheel'
     }
     // HOVER / MOVE / 未知都归 move。

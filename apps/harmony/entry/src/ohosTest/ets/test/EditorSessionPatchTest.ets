@@ -41,7 +41,7 @@ class MockEditorSessionBridge implements IEditorSessionBridge {
   beginCompositionCalls: Array<{ start: number, end: number }> = []
   // mock 当前 snapshot（由测试设置）
   mockSnapshot: EditorSessionSnapshot = {
-    text: '', revision: 1, cursor: 0, selectionAnchor: 0, generation: 0, chapterId: 'c1'
+    text: '', revision: 1, cursor: 0, selectionAnchor: 0, generation: 0, chapterId: 'c1', composition: null
   }
 
   async create(targetId: string, initialText: string, initialCursorByteOffset: number, isPersistent: boolean): Promise<ResultEnvelope<number>> {
@@ -111,7 +111,8 @@ class MockEditorSessionBridge implements IEditorSessionBridge {
       newSelectionStart: 0, newSelectionEnd: 0,
       visualIntent: {} as EditorVisualIntent,
       compositionSession: null,
-      contentDelta: { insertedChars: 0, deletedChars: 0, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 0 } as EditorContentDelta
+      contentDelta: { insertedChars: 0, deletedChars: 0, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 0 } as EditorContentDelta,
+      composition: null
     }
   }
 }
@@ -127,14 +128,15 @@ export default function editorSessionPatchTest() {
         newSelectionStart: 0, newSelectionEnd: 0,
         visualIntent: {} as EditorVisualIntent,
         compositionSession: null,
-        contentDelta: { insertedChars: 0, deletedChars: 0, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 0 } as EditorContentDelta
+        contentDelta: { insertedChars: 0, deletedChars: 0, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 0 } as EditorContentDelta,
+        composition: null
       }
       return Object.assign({}, base, overrides) as EditorEditResult
     }
 
     const makeSnapshot = (overrides: Partial<EditorSessionSnapshot>): EditorSessionSnapshot => {
       const base: EditorSessionSnapshot = {
-        text: '', revision: 1, cursor: 0, selectionAnchor: 0, generation: 0, chapterId: 'c1'
+        text: '', revision: 1, cursor: 0, selectionAnchor: 0, generation: 0, chapterId: 'c1', composition: null
       }
       return Object.assign({}, base, overrides) as EditorSessionSnapshot
     }
@@ -299,7 +301,7 @@ export default function editorSessionPatchTest() {
 
     it('currentSelectionUtf8: anchor<cursor 时 normalize 返回 { start: anchor, end: cursor }', () => {
       const { adapter, coordinator } = setup({
-        text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1'
+        text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1', composition: null
       })
       // 注意：coordinator.state 初始为 null，currentSelectionUtf8 返回 {0,0}
       // 需要先 open 设置 state；但 open 会调 bridge.create+snapshot，mock 返回 mockSnapshot
@@ -312,7 +314,7 @@ export default function editorSessionPatchTest() {
 
     it('onTextInput 空选区时调用 insert（不是 replace）', async () => {
       const { bridge, coordinator, adapter } = setup({
-        text: 'hello', revision: 1, cursor: 5, selectionAnchor: 5, generation: 0, chapterId: 'c1'
+        text: 'hello', revision: 1, cursor: 5, selectionAnchor: 5, generation: 0, chapterId: 'c1', composition: null
       })
       // open 设置 state（mockSnapshot 空选区：cursor=5, anchor=5）
       await coordinator.open('c1', 'hello')
@@ -326,7 +328,7 @@ export default function editorSessionPatchTest() {
 
     it('onTextInput 有选区时调用 replace（不是 insert）', async () => {
       const { bridge, coordinator, adapter } = setup({
-        text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1'
+        text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1', composition: null
       })
       await coordinator.open('c1', 'hello world')
       // 选区 [3,7) = "lo w"
@@ -342,7 +344,7 @@ export default function editorSessionPatchTest() {
 
     it('onPaste 有选区时调用 replace（不是 insert）', async () => {
       const { bridge, coordinator, adapter } = setup({
-        text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1'
+        text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1', composition: null
       })
       await coordinator.open('c1', 'hello world')
       await adapter.onPaste('PASTED')
@@ -356,7 +358,7 @@ export default function editorSessionPatchTest() {
 
     it('onDelete 有选区时删除整个选区', async () => {
       const { bridge, coordinator, adapter } = setup({
-        text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1'
+        text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1', composition: null
       })
       await coordinator.open('c1', 'hello world')
       await adapter.onDelete('backward')
@@ -367,7 +369,7 @@ export default function editorSessionPatchTest() {
 
     it('onCompositionBegin replace range 是当前选区（不是 [cursor,cursor)）', async () => {
       const { bridge, coordinator, adapter } = setup({
-        text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1'
+        text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1', composition: null
       })
       await coordinator.open('c1', 'hello world')
       await adapter.onCompositionBegin()

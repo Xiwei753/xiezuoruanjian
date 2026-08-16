@@ -102,6 +102,21 @@ export interface CompositionSession {
   generation: number
 }
 
+// #629 评论6 Part B：Composition 完整状态。Core 暴露 preedit 文本和 replace range，
+// ArkTS 端据此构造临时显示文本和下划线，不复制 Core 的 composition 状态机。
+// replaceByteStart/replaceByteEndExclusive 是 UTF-8 byte offset 半开区间，
+// 指明 committed text 中将被 preeditText 替换的范围。
+// preeditCursorUtf16 是 preedit 内部光标的 UTF-16 code unit offset（IME 协议要求）。
+export interface EditorCompositionState {
+  sessionId: number
+  baseRevision: number
+  generation: number
+  replaceByteStart: number
+  replaceByteEndExclusive: number
+  preeditText: string
+  preeditCursorUtf16: number
+}
+
 // 编辑内容增量统计。
 export interface EditorContentDelta {
   insertedChars: number
@@ -130,6 +145,9 @@ export interface EditorEditResult {
   visualIntent: EditorVisualIntent
   compositionSession: CompositionSession | null
   contentDelta: EditorContentDelta
+  // #629 评论6 Part B：当前 composition 完整状态。composition 活跃时非 null，
+  // 平台端据此构造临时显示文本和下划线范围。无 composition 时为 null。
+  composition: EditorCompositionState | null
 }
 
 // 编辑会话快照。Core snapshot() 返回。cursor 是 UTF-8 byte offset（光标位置）。
@@ -140,4 +158,6 @@ export interface EditorSessionSnapshot {
   selectionAnchor: number
   generation: number
   chapterId: string
+  // #629 评论6 Part B：composition 活跃时非 null，平台端据此构造临时显示文本和下划线。
+  composition: EditorCompositionState | null
 }

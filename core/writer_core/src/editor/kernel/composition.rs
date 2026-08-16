@@ -407,4 +407,28 @@ impl EditorKernel {
             )
         })
     }
+
+    /// #629 评论6 Part B：返回当前 composition 完整状态（preedit 文本 + replace range + cursor）。
+    ///
+    /// 返回元组字段顺序：
+    /// `(session_id, base_revision, generation, replace_byte_start, replace_byte_end_exclusive,
+    ///   preedit_text, preedit_cursor_utf16)`
+    ///
+    /// 无活跃 composition session 时返回 None。调用方（app_service）据此构造
+    /// [crate::api::types::EditorCompositionStateDto] 暴露给平台端。
+    /// 平台端不复制 Core 的 composition 状态机，只消费此快照构造临时显示文本和下划线。
+    #[allow(clippy::type_complexity, clippy::cast_possible_truncation)]
+    pub fn composition_state(&self) -> Option<(u64, u64, u64, u32, u32, String, u32)> {
+        self.composition_session.as_ref().map(|s| {
+            (
+                s.session_id.value(),
+                s.base_revision.value(),
+                s.generation.value(),
+                s.replace_start.value() as u32,
+                s.replace_end_exclusive.value() as u32,
+                s.preedit_text.clone(),
+                s.preedit_cursor_utf16 as u32,
+            )
+        })
+    }
 }

@@ -34,6 +34,17 @@ export interface CompositionSession {
   readonly generation: number
 }
 
+/** #629 评论6 Part B：EditorCompositionState 形状（与 Core DTO 对齐，camelCase）。 */
+export interface EditorCompositionState {
+  readonly sessionId: number
+  readonly baseRevision: number
+  readonly generation: number
+  readonly replaceByteStart: number
+  readonly replaceByteEndExclusive: number
+  readonly preeditText: string
+  readonly preeditCursorUtf16: number
+}
+
 /** EditorContentDelta 形状。 */
 export interface EditorContentDelta {
   readonly insertedChars: number
@@ -56,6 +67,8 @@ export interface EditorEditResult {
   readonly visualIntent: Record<string, unknown>
   readonly compositionSession: CompositionSession | null
   readonly contentDelta: EditorContentDelta
+  // #629 评论6 Part B：当前 composition 完整状态。composition 活跃时非 null。
+  readonly composition: EditorCompositionState | null
 }
 
 /** EditorSessionSnapshot 形状。 */
@@ -66,6 +79,8 @@ export interface EditorSessionSnapshot {
   readonly selectionAnchor: number
   readonly generation: number
   readonly chapterId: string
+  // #629 评论6 Part B：composition 活跃时非 null，平台端据此构造临时显示文本和下划线。
+  readonly composition: EditorCompositionState | null
 }
 
 /** 编辑命令结果枚举值。与 Rust EditorEditOutcome 变体字符串对齐。 */
@@ -225,7 +240,11 @@ export function applyEditResultToSnapshot(
       cursor: result.newSelectionEnd,
       selectionAnchor: result.newSelectionStart,
       generation: result.compositionSession ? result.compositionSession.generation : snapshot.generation,
-      chapterId: snapshot.chapterId
+      chapterId: snapshot.chapterId,
+      // #629 评论6 Part B：把 Core 返回的 composition 完整状态透传到新 snapshot，
+      // EditorLayoutSnapshot.fromEditorSnapshot 据此构造临时显示文本和下划线。
+      // finish/cancel/普通编辑后 result.composition 为 null，snapshot.composition 也为 null。
+      composition: result.composition
     }
   }
 }
@@ -286,5 +305,34 @@ export class SerialCommandQueue {
   /** 队列状态快照（用于测试断言）。 */
   stats(): QueueStats {
     return { pending: this.pendingCount, running: this.activeCount > 0 }
+  }
+
+  /**
+   * 等待队列空闲：所有已 enqueue 的命令都完成（无论成功失败）后才 resolve。
+   *
+   * Issue #629 评论6 Part A：统一串行边界需要"flush 语义"——
+   * 页面退出/退后台/切章节前要等所有排队编辑命令完成，避免丢命令或读到半改 state。
+   *
+   * 实现：await 当前 tail（tail 是上一条命令完成后才 resolve 的 Promise，永远不 reject）；
+   * await 期间若有新命令排入，递归再等。直到 pendingCount=0 且 activeCount=0 才返回。
+   *
+   * 不返回 thunk 的结果（调用方不关心每条命令成功失败，只关心"全部完成"）。
+   * 永远不 reject（tail 已加两个 handler 吞掉 reject）。
+   */
+  async whenIdle(): Promise<void> {
+    // 等当前 tail 完成（所有已 enqueue 命令执行完毕）。
+    await this.tail
+    // await 期间若有新命令排入，递归等待。
+    if (!this.isIdle()) {
+      await this.whenIdle()
+    }
+  }
+
+  /**
+   * drain：与 whenIdle 同义，语义更明确（"排空队列"）。
+   * 供调用方按场景命名：页面退出 drain、状态查询 whenIdle。
+   */
+  async drain(): Promise<void> {
+    return this.whenIdle()
   }
 }

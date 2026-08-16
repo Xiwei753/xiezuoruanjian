@@ -1,14 +1,14 @@
 // SujianEditor — 写作区组件宿主。
 // 消费 EditorLayoutSnapshot 经 EditorRenderBackend 静态渲染；
-// 输入经 EditorInputAdapter + SelectionController，IME 连接经 HarmonyImeConnection。
+// 输入经 EditorSemanticDispatcher 统一排队，IME 连接经 HarmonyImeConnection。
 // 用 Stack 组合静态层：selection background → text → composition underline → static caret。
 // 不自己维护 cursor timer/animation；光标固定显示，不做闪烁/平滑移动/淡入淡出。
 // 动画层以后新增 motion 消费同一份 snapshot，不改 session/input/render 的数据边界。
 //
 // Issue #629 评论 5 第 5 节：生产接入键盘/鼠标/触控板/手写笔。
-// - onKeyEvent → KeyboardInputService.normalize → toSemanticCommand → EditorInputAdapter/SelectionController
-// - onMouse → PointerInputService.normalizeMouseEvent → 点击/drag selection/滚轮 viewport
-// - onTouch → 真实 drag selection（TouchDown 记 anchor, TouchMove drag, TouchUp 结束）
+// - onKeyEvent → KeyboardInputService.normalize → toSemanticCommand → dispatcher.dispatch
+// - onMouse → PointerInputService.normalizeMouseEvent → 点击/drag selection/滚轮 viewport（经 dispatcher）
+// - onTouch → 真实 drag selection（TouchDown 计 anchor, TouchMove drag, TouchUp 结束）（经 dispatcher）
 // - 笔事件由 StylusInputService 识别后按触控选择/书写区交互处理
 // 原始平台事件（KeyEvent/MouseEvent/TouchEvent/StylusEvent）不进 Rust，转成语义命令。
 //
@@ -16,6 +16,23 @@
 // - 用 Scroll(scroller) 包裹内容，正文+选区+composition+caret 在同一滚动坐标系里。
 // - onScroll 回调把 viewport 状态回调给 WritingScreen（onViewportChange）。
 // - restoreViewport(state) 由 WritingScreen 在接续加载完成、layout 就绪后调用。
+//
+// Issue #629 评论6 Part A+D：统一串行边界 + 删除重复 onSelectionTap。
+// - 物理键盘/鼠标/触摸都经 EditorSemanticDispatcher 派发语义命令，不再直接调 EditorInputAdapter/SelectionController。
+// - 删除 onSelectionTap prop（双 owner）：TouchUp 只经 dispatcher/SelectionController 发一次 selection。
+// - dispatchKeyCommand 改为派发语义命令（insertText/graphemeBackspace/graphemeLeft 等），
+//   修正旧参数调用（onTextInput/onDelete 旧签名已改）。
+//
+// Issue #629 评论6 Part C：viewport 恢复闭环 + 分开 viewport/content 尺寸。
+// - 旧实现：emitViewportChange() 把 viewportHeight = textHeight、contentHeight = textHeight（两者永远相同），
+//   maxScrollTop 永远 0；Scroll 内 Stack 固定 .height('100%')，长正文真实内容高度被压成视口高度。
+// - 新实现：分开记录外层 Scroll 可视区域尺寸（viewportWidth/viewportHeight，来自 Scroll onAreaChange）
+//   和内层正文实际内容尺寸（contentWidth/contentHeight，来自 Text onAreaChange）。
+//   emitViewportChange() 用真实 viewport + content 尺寸，maxScrollTop = contentHeight - viewportHeight 可正确 > 0。
+//   Scroll 内 Stack 不再固定 .height('100%')，改为按 max(viewportHeight, contentHeight) 动态高度，
+//   至少 viewport 高度，随正文增长。
+// - 父子恢复通道：viewportController prop 由 WritingScreen 注入；aboutToAppear 注册 scrollTo + getDimensions，
+//   aboutToDisappear unregister。删除旧 restoreViewport(state) 方法（恢复改为通过 controller）。
 
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { EditorRenderBackend, EditorRenderResult } from '../render/EditorRenderBackend'
@@ -23,23 +40,30 @@ import { SelectionRect, CaretRect, CompositionUnderlineRect, LineLayout } from '
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
+import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { KeyboardInputService, PlatformKeyEvent, SemanticKeyCommand } from '../../../platform/input/KeyboardInputService'
 import { PointerInputService, PlatformPointerEvent } from '../../../platform/input/PointerInputService'
 import { StylusInputService } from '../../../platform/input/StylusInputService'
 import { EditorViewportState } from '../render/EditorViewportState'
+import { EditorViewportController, ViewportDimensions } from '../render/EditorViewportController'
 import { KeyEvent, MouseEvent } from '@kit.InputKit'
 
 @Component
 export struct SujianEditor {
   @Prop snapshot: EditorLayoutSnapshot | null = null
-  @Prop onSelectionTap: ((utf16Offset: number) => void) | null = null
-  // IME 连接与输入/选区控制器由父组件注入；SujianEditor 在获得/失去焦点时 attach/detach IME。
+  // IME 连接、输入/选区控制器、统一语义调度器由父组件注入；
+  // SujianEditor 在获得/失去焦点时 attach/detach IME。
+  // Issue #629 评论6 Part A：所有输入经 dispatcher 统一排队，不再直接调 inputAdapter/selectionController。
   harmonyImeConnection: HarmonyImeConnection | null = null
   inputAdapter: EditorInputAdapter | null = null
   selectionController: SelectionController | null = null
+  dispatcher: EditorSemanticDispatcher | null = null
   // viewport 状态变化回调（供 WritingScreen 持续写入接续状态）。
   onViewportChange: ((state: EditorViewportState) => void) | null = null
+  // Issue #629 评论6 Part C：父子 viewport 恢复通道。WritingScreen 持有 controller 实例并注入；
+  // SujianEditor 在 aboutToAppear 注册 scrollTo + getDimensions，aboutToDisappear unregister。
+  viewportController: EditorViewportController | null = null
   // 静态渲染颜色（默认值，可由父组件覆盖）。
   selectionBackgroundColor: string = '#33007AFF'
   compositionUnderlineColor: string = '#FF007AFF'
@@ -49,10 +73,16 @@ export struct SujianEditor {
   @State selectionRects: SelectionRect[] = []
   @State caretRect: CaretRect | null = null
   @State compositionUnderlineRects: CompositionUnderlineRect[] = []
-  // 实际容器宽度与文本渲染总高度（px），由 onAreaChange 更新，供命中测试与几何计算。
-  @State containerWidth: number = 0
-  @State textHeight: number = 0
-  // viewport 滚动控制器（ArkUI Scroller）。restoreViewport 用它 scrollTo。
+  // Issue #629 评论6 Part C：分开 viewport 与 content 尺寸。
+  // viewportWidth/viewportHeight：外层 Scroll 可视区域尺寸（px），来自 Scroll onAreaChange。
+  // contentWidth/contentHeight：内层正文实际渲染尺寸（px），来自 Text onAreaChange。
+  // 旧实现 containerWidth/textHeight 混用，emitViewportChange 把 viewportHeight = textHeight、
+  // contentHeight = textHeight（两者永远相同），maxScrollTop 永远 0。新实现分开记录。
+  @State viewportWidth: number = 0
+  @State viewportHeight: number = 0
+  @State contentWidth: number = 0
+  @State contentHeight: number = 0
+  // viewport 滚动控制器（ArkUI Scroller）。controller.restore 经此 scrollTo。
   private scroller: Scroller = new Scroller()
   // 输入服务单例。
   private keyboardService: KeyboardInputService = KeyboardInputService.getInstance()
@@ -64,6 +94,31 @@ export struct SujianEditor {
 
   aboutToAppear(): void {
     this.refreshRender()
+    // Issue #629 评论6 Part C：注册父子 viewport 恢复通道。
+    // scrollTo 由 scroller.scrollTo 实现；getDimensions 返回当前真实 viewport/content 尺寸。
+    // 注册后 controller 会立即执行 pendingRestore（WritingScreen 在注册前可能已调 restore）。
+    if (this.viewportController) {
+      this.viewportController.register(
+        (xOffset: number, yOffset: number): void => {
+          this.scroller.scrollTo({ xOffset: xOffset, yOffset: yOffset })
+        },
+        (): ViewportDimensions => {
+          return {
+            viewportWidth: this.viewportWidth,
+            viewportHeight: this.viewportHeight,
+            contentWidth: this.contentWidth,
+            contentHeight: this.contentHeight,
+          }
+        }
+      )
+    }
+  }
+
+  aboutToDisappear(): void {
+    // Issue #629 评论6 Part C：注销父子 viewport 恢复通道。
+    if (this.viewportController) {
+      this.viewportController.unregister()
+    }
   }
 
   aboutToUpdate(): void {
@@ -88,9 +143,9 @@ export struct SujianEditor {
   }
 
   // 完整静态渲染：用 renderLayout() 计算行布局/选区/光标/composition 下划线几何。
-  // 在 onAreaChange 中调用（此时 containerWidth/textHeight 已更新，getUIContext 可用）。
+  // 在 onAreaChange 中调用（此时 contentWidth/contentHeight 已更新，getUIContext 可用）。
   private refreshRenderLayout(): void {
-    if (this.snapshot && this.containerWidth > 0) {
+    if (this.snapshot && this.contentWidth > 0) {
       const snap = this.snapshot
       // 真实文本测量：getMeasureUtils().measureText 返回 px 单行宽度，
       // fontSize 用 snap.fontSize（vp）与 Text.fontSize 一致，测量与渲染同一字体度量。
@@ -100,8 +155,8 @@ export struct SujianEditor {
       }
       const result = EditorRenderBackend.renderLayout(
         snap,
-        this.containerWidth,
-        this.textHeight,
+        this.contentWidth,
+        this.contentHeight,
         measureTextFn,
       )
       this.renderResult = result
@@ -117,7 +172,7 @@ export struct SujianEditor {
   // Scroll 滚动后内容偏移，hitTestByPoint 期望内容坐标系坐标。
   // 此处用 scroller.currentOffset() 获取当前滚动偏移，把事件坐标加上偏移转成内容坐标。
   private hitTestContent(contentX: number, contentY: number): number {
-    if (!this.snapshot || !this.renderResult || this.containerWidth <= 0) {
+    if (!this.snapshot || !this.renderResult || this.contentWidth <= 0) {
       return 0
     }
     const snap = this.snapshot
@@ -127,8 +182,8 @@ export struct SujianEditor {
     }
     return EditorRenderBackend.hitTestByPoint(
       snap,
-      this.containerWidth,
-      this.textHeight,
+      this.contentWidth,
+      this.contentHeight,
       contentX,
       contentY,
       measureTextFn,
@@ -185,119 +240,96 @@ export struct SujianEditor {
   }
 
   // ── 键盘语义命令分发 ──
-  // 把 SemanticKeyCommand 转成对 EditorInputAdapter/SelectionController 的调用。
-  // 原始 KeyEvent 不进 Rust；这里只调语义命令。
+  // 把 SemanticKeyCommand 转成语义命令经 EditorSemanticDispatcher 派发。
+  // 原始 KeyEvent 不进 Rust；这里只派发语义命令。
+  // Issue #629 评论6 Part A：所有输入经 dispatcher 统一排队，出队时才读 snapshot。
+  // grapheme-based 导航（backspace/delete/arrowLeft/arrowRight）用 Core grapheme boundary（Part E），
+  // 不再用 UTF-16 ±1 猜字符边界。
+  // arrowUp/arrowDown/home/end 是行级导航（不是 grapheme 导航），仍用 renderResult.lines 计算目标行，
+  // 但派发也经 dispatcher（setSelection/dragSelect）保证串行。
   private dispatchKeyCommand(cmd: SemanticKeyCommand): void {
-    if (!this.inputAdapter || !this.selectionController || !this.snapshot) {
+    if (!this.dispatcher || !this.snapshot) {
       return
     }
+    const dispatcher: EditorSemanticDispatcher = this.dispatcher
     const text: string = this.snapshot.text
-    const cursor: number = this.currentCursorUtf16()
     const sel: [number, number] = this.currentSelectionUtf16()
-    const selStart: number = Math.min(sel[0], sel[1])
-    const selEnd: number = Math.max(sel[0], sel[1])
     switch (cmd.kind) {
       case 'character':
-        // 有选区时替换选区（子代理1负责 EditorInputAdapter 内部选区感知，
-        // 这里传当前光标位置；子代理1改后内部会判断选区替换）。
-        this.inputAdapter.onTextInput(cmd.text, cursor).then(() => {})
+        // insertText：由 EditorInputAdapter 判断当前是否有选区（有选区替换，空选区插入）
+        dispatcher.dispatchFireAndForget({ kind: 'insertText', text: cmd.text })
         break
       case 'enter':
-        this.inputAdapter.onTextInput('\n', cursor).then(() => {})
+        dispatcher.dispatchFireAndForget({ kind: 'insertText', text: '\n' })
         break
       case 'tab':
-        this.inputAdapter.onTextInput('\t', cursor).then(() => {})
+        dispatcher.dispatchFireAndForget({ kind: 'insertText', text: '\t' })
         break
       case 'backspace':
-        if (this.hasSelection()) {
-          // 有选区：删除整个选区。
-          this.inputAdapter.onDelete(selStart, selEnd).then(() => {})
-        } else if (cursor > 0) {
-          // 空选区：删除光标前一个字符。
-          this.inputAdapter.onDelete(cursor - 1, cursor).then(() => {})
-        }
+        // grapheme-based backspace：用 Core previous_grapheme_boundary 找前一个 grapheme 边界
+        dispatcher.dispatchFireAndForget({ kind: 'graphemeBackspace' })
         break
       case 'delete':
-        if (this.hasSelection()) {
-          this.inputAdapter.onDelete(selStart, selEnd).then(() => {})
-        } else if (cursor < text.length) {
-          // 空选区：删除光标后一个字符。
-          this.inputAdapter.onDelete(cursor, cursor + 1).then(() => {})
-        }
+        // grapheme-based delete：用 Core next_grapheme_boundary 找后一个 grapheme 边界
+        dispatcher.dispatchFireAndForget({ kind: 'graphemeDelete' })
         break
       case 'arrowLeft':
-        if (cmd.extend) {
-          // shift+arrowLeft：保持 anchor，head 左移。
-          this.selectionController.onDragSelect(sel[0], Math.max(0, sel[1] - 1)).then(() => {})
-        } else {
-          // 空选区时光标左移；有选区时光标移到选区开头（collapse）。
-          if (this.hasSelection()) {
-            this.selectionController.onTap(selStart).then(() => {})
-          } else {
-            this.selectionController.onTap(Math.max(0, cursor - 1)).then(() => {})
-          }
-        }
+        // grapheme-based left：用 Core previous_grapheme_boundary
+        dispatcher.dispatchFireAndForget({ kind: 'graphemeLeft', extend: cmd.extend })
         break
       case 'arrowRight':
-        if (cmd.extend) {
-          this.selectionController.onDragSelect(sel[0], Math.min(text.length, sel[1] + 1)).then(() => {})
-        } else {
-          if (this.hasSelection()) {
-            this.selectionController.onTap(selEnd).then(() => {})
-          } else {
-            this.selectionController.onTap(Math.min(text.length, cursor + 1)).then(() => {})
-          }
-        }
+        // grapheme-based right：用 Core next_grapheme_boundary
+        dispatcher.dispatchFireAndForget({ kind: 'graphemeRight', extend: cmd.extend })
         break
       case 'arrowUp': {
-        // 移到上一行开头（简化：不做列保持）。
+        // 移到上一行开头（简化：不做列保持）。行级导航，不是 grapheme 导航。
         const lineIdx = this.currentLineIndex()
         if (lineIdx > 0 && this.renderResult) {
           const targetLine = this.renderResult.lines[lineIdx - 1]
           if (cmd.extend) {
-            this.selectionController.onDragSelect(sel[0], targetLine.startUtf16).then(() => {})
+            dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: sel[0], utf16Head: targetLine.startUtf16 })
           } else {
-            this.selectionController.onTap(targetLine.startUtf16).then(() => {})
+            dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: targetLine.startUtf16 })
           }
         }
         break
       }
       case 'arrowDown': {
-        // 移到下一行开头。
+        // 移到下一行开头。行级导航，不是 grapheme 导航。
         const lineIdx = this.currentLineIndex()
         if (lineIdx >= 0 && this.renderResult && lineIdx < this.renderResult.lines.length - 1) {
           const targetLine = this.renderResult.lines[lineIdx + 1]
           if (cmd.extend) {
-            this.selectionController.onDragSelect(sel[0], targetLine.startUtf16).then(() => {})
+            dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: sel[0], utf16Head: targetLine.startUtf16 })
           } else {
-            this.selectionController.onTap(targetLine.startUtf16).then(() => {})
+            dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: targetLine.startUtf16 })
           }
         }
         break
       }
       case 'home': {
-        // 行首（当前行 startUtf16）；无行信息时归 0。
+        // 行首（当前行 startUtf16）；无行信息时归 0。行级导航，不是 grapheme 导航。
         const lineIdx = this.currentLineIndex()
         const target: number = lineIdx >= 0 && this.renderResult
           ? this.renderResult.lines[lineIdx].startUtf16
           : 0
         if (cmd.extend) {
-          this.selectionController.onDragSelect(sel[0], target).then(() => {})
+          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: sel[0], utf16Head: target })
         } else {
-          this.selectionController.onTap(target).then(() => {})
+          dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: target })
         }
         break
       }
       case 'end': {
-        // 行末（当前行 endUtf16）；无行信息时归 text.length。
+        // 行末（当前行 endUtf16）；无行信息时归 text.length。行级导航，不是 grapheme 导航。
         const lineIdx = this.currentLineIndex()
         const target: number = lineIdx >= 0 && this.renderResult
           ? this.renderResult.lines[lineIdx].endUtf16
           : text.length
         if (cmd.extend) {
-          this.selectionController.onDragSelect(sel[0], target).then(() => {})
+          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: sel[0], utf16Head: target })
         } else {
-          this.selectionController.onTap(target).then(() => {})
+          dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: target })
         }
         break
       }
@@ -311,11 +343,13 @@ export struct SujianEditor {
   }
 
   // ── 鼠标事件处理 ──
-  // 点击命中、按下拖动选区、抬起结束选择走 SelectionController；滚轮由 Scroll 组件自动消费。
+  // 点击命中、按下拖动选区、抬起结束选择经 dispatcher 派发；滚轮由 Scroll 组件自动消费。
+  // Issue #629 评论6 Part A：所有输入经 dispatcher 统一排队，不再直接调 SelectionController。
   private handleMouseEvent(raw: MouseEvent): void {
-    if (!this.snapshot || !this.renderResult) {
+    if (!this.snapshot || !this.renderResult || !this.dispatcher) {
       return
     }
+    const dispatcher: EditorSemanticDispatcher = this.dispatcher
     const ev: PlatformPointerEvent = this.pointerService.normalizeMouseEvent(raw)
     // 把视口坐标转成内容坐标。
     const contentCoord: [number, number] = this.viewportToContent(ev.x, ev.y)
@@ -326,22 +360,20 @@ export struct SujianEditor {
           // 左键按下：记 anchor，开始 potential drag。
           this.dragAnchorUtf16 = hitUtf16
           this.isDragging = true
-          // 先设光标（单击位置）；move 时改 drag select。
-          if (this.selectionController) {
-            this.selectionController.onTap(hitUtf16).then(() => {})
-          }
+          // 先设光标（单击位置）；move 时改 drag select。经 dispatcher 派发保证串行。
+          dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: hitUtf16 })
         }
         break
       case 'move':
-        if (this.isDragging && this.selectionController) {
-          // 拖动选区：anchor 不变，head 跟随当前位置。
-          this.selectionController.onDragSelect(this.dragAnchorUtf16, hitUtf16).then(() => {})
+        if (this.isDragging) {
+          // 拖动选区：anchor 不变，head 跟随当前位置。经 dispatcher 派发。
+          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: this.dragAnchorUtf16, utf16Head: hitUtf16 })
         }
         break
       case 'up':
         if (this.isDragging) {
-          // 抬起结束 drag。如果 anchor == head（单击），onTap 已在 down 时调用；
-          // 如果 anchor != head（拖动选区），onDragSelect 已在 move 时调用。
+          // 抬起结束 drag。如果 anchor == head（单击），setSelection 已在 down 时派发；
+          // 如果 anchor != head（拖动选区），dragSelect 已在 move 时派发。
           this.isDragging = false
           this.dragAnchorUtf16 = -1
         }
@@ -358,10 +390,13 @@ export struct SujianEditor {
   // ── 触摸事件处理 ──
   // 复用现有 hit test，补真实 drag selection（TouchDown 记 anchor, TouchMove drag, TouchUp 结束）。
   // 笔事件（toolType != 0）由 StylusInputService 识别后按触控选择/书写区交互处理。
+  // Issue #629 评论6 Part A+D：所有输入经 dispatcher 统一排队；删除重复 onSelectionTap prop（双 owner）。
+  // TouchUp 只经 dispatcher 发一次 selection（setSelection），完成后通知 IME。
   private handleTouchEvent(event: TouchEvent): void {
-    if (!this.snapshot || !this.renderResult) {
+    if (!this.snapshot || !this.renderResult || !this.dispatcher) {
       return
     }
+    const dispatcher: EditorSemanticDispatcher = this.dispatcher
     const touch = event.touches[0]
     // 把视口坐标转成内容坐标。
     const contentCoord: [number, number] = this.viewportToContent(touch.x, touch.y)
@@ -382,27 +417,22 @@ export struct SujianEditor {
         this.isDragging = true
         break
       case TouchType.Move:
-        // 拖动选区：anchor 不变，head 跟随当前位置。
-        if (this.isDragging && this.selectionController && this.dragAnchorUtf16 !== hitUtf16) {
-          this.selectionController.onDragSelect(this.dragAnchorUtf16, hitUtf16).then(() => {})
+        // 拖动选区：anchor 不变，head 跟随当前位置。经 dispatcher 派发。
+        if (this.isDragging && this.dragAnchorUtf16 !== hitUtf16) {
+          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: this.dragAnchorUtf16, utf16Head: hitUtf16 })
         }
         break
       case TouchType.Up:
         if (this.isDragging) {
           if (this.dragAnchorUtf16 === hitUtf16) {
-            // 单击（down 和 up 同位置）：设光标。
-            if (this.onSelectionTap) {
-              this.onSelectionTap(hitUtf16)
-            }
-            if (this.selectionController) {
-              this.selectionController.onTap(hitUtf16).then(() => {})
-            }
+            // 单击（down 和 up 同位置）：只经 dispatcher 发一次 selection（Part D：删除重复 onSelectionTap）。
+            dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: hitUtf16 })
             // 通知 IME 当前选区（光标位置）
             if (this.harmonyImeConnection) {
               this.harmonyImeConnection.notifySelection(hitUtf16, hitUtf16).then(() => {})
             }
           }
-          // 拖动选区（anchor != head）已在 Move 时通过 onDragSelect 设置，Up 时保持。
+          // 拖动选区（anchor != head）已在 Move 时通过 dragSelect 派发，Up 时保持。
           this.isDragging = false
           this.dragAnchorUtf16 = -1
         }
@@ -413,6 +443,10 @@ export struct SujianEditor {
   }
 
   // viewport 状态变化时回调给 WritingScreen。
+  // Issue #629 评论6 Part C：用真实 viewportWidth/viewportHeight（外层 Scroll 可视区域）
+  // 和 contentWidth/contentHeight（内层正文实际渲染尺寸）构造状态。
+  // 旧实现把 viewportHeight = textHeight、contentHeight = textHeight（两者永远相同），
+  // maxScrollTop = contentHeight - viewportHeight 永远 0；新实现分开记录，maxScrollTop 可正确 > 0。
   private emitViewportChange(xOffset: number, yOffset: number): void {
     if (!this.onViewportChange) {
       return
@@ -420,19 +454,26 @@ export struct SujianEditor {
     const state: EditorViewportState = new EditorViewportState(
       yOffset,
       xOffset,
-      this.containerWidth,
-      this.textHeight > 0 ? this.textHeight : 0,
-      this.containerWidth,
-      this.textHeight
+      this.viewportWidth,
+      this.viewportHeight,
+      this.contentWidth,
+      this.contentHeight
     )
     this.onViewportChange(state)
   }
 
-  // 接续恢复：由 WritingScreen 在接续加载完成、layout 就绪后调用。
-  // 把 viewport 滚动到 state 指定的 offset。clamp 防止越界。
-  restoreViewport(state: EditorViewportState): void {
-    const clamped: EditorViewportState = state.clamped()
-    this.scroller.scrollTo({ xOffset: clamped.scrollLeft, yOffset: clamped.scrollTop })
+  // Issue #629 评论6 Part C：Stack 高度：至少 viewport 高度，随正文增长。
+  // 旧实现固定 .height('100%')，长正文真实内容高度被压成视口高度，maxScrollTop 永远 0。
+  // 新实现：contentHeight > viewportHeight 时用 contentHeight（长正文可滚动）；
+  // 否则用 viewportHeight（短正文至少占满视口）；都是 0 时用 '100%' 兜底避免高度 0。
+  private stackHeight(): number | string {
+    if (this.contentHeight > 0 && this.contentHeight > this.viewportHeight) {
+      return this.contentHeight
+    }
+    if (this.viewportHeight > 0) {
+      return this.viewportHeight
+    }
+    return '100%'
   }
 
   build() {
@@ -462,9 +503,9 @@ export struct SujianEditor {
             .wordBreak(WordBreak.BREAK_ALL)
             .focusable(true)
             .onFocus((): void => {
-              // 编辑框获得焦点：attach 自绘编辑框到 IME Kit
-              if (this.harmonyImeConnection && this.inputAdapter && this.selectionController) {
-                this.harmonyImeConnection.attach(this.inputAdapter, this.selectionController).then(() => {})
+              // 编辑框获得焦点：attach 自绘编辑框到 IME Kit（传 dispatcher，所有输入经 dispatcher 统一排队）
+              if (this.harmonyImeConnection && this.dispatcher) {
+                this.harmonyImeConnection.attach(this.dispatcher).then(() => {})
               }
             })
             .onBlur((): void => {
@@ -474,8 +515,8 @@ export struct SujianEditor {
               }
             })
             .onKeyEvent((event: KeyEvent): boolean => {
-              // 物理键盘事件 → KeyboardInputService 归一化 → 语义命令 → EditorInputAdapter/SelectionController。
-              // 原始 KeyEvent 不进 Rust。
+              // 物理键盘事件 → KeyboardInputService 归一化 → 语义命令 → dispatcher.dispatch。
+              // 原始 KeyEvent 不进 Rust。所有输入经 dispatcher 统一排队（Part A）。
               const platformEv: PlatformKeyEvent = this.keyboardService.normalize(event)
               const cmd: SemanticKeyCommand = this.keyboardService.toSemanticCommand(platformEv)
               this.dispatchKeyCommand(cmd)
@@ -488,9 +529,11 @@ export struct SujianEditor {
               return false
             })
             .onAreaChange((_oldArea: Area, newArea: Area): void => {
-              this.containerWidth = Number(newArea.width)
-              this.textHeight = Number(newArea.height)
-              // 容器尺寸已知后重新计算几何（选区/光标/composition 下划线）。
+              // Issue #629 评论6 Part C：Text onAreaChange 更新的是内层正文实际渲染尺寸
+              // （contentWidth/contentHeight），不是外层 Scroll 可视区域尺寸。
+              this.contentWidth = Number(newArea.width)
+              this.contentHeight = Number(newArea.height)
+              // 内容尺寸已知后重新计算几何（选区/光标/composition 下划线）。
               this.refreshRenderLayout()
             })
             .onTouch((event: TouchEvent): void => {
@@ -521,12 +564,22 @@ export struct SujianEditor {
       }
       .align(Alignment.TopStart)
       .width('100%')
-      .height('100%')
+      // Issue #629 评论6 Part C：Stack 高度：至少 viewport 高度，随正文增长。
+      // 旧实现固定 .height('100%')，长正文真实内容高度被压成视口高度，maxScrollTop 永远 0。
+      // 新实现：contentHeight > viewportHeight 时用 contentHeight（长正文可滚动）；
+      // 否则用 viewportHeight（短正文至少占满视口）；都是 0 时用 '100%' 兜底避免高度 0。
+      .height(this.stackHeight())
     }
     .scrollable(ScrollDirection.Vertical)
     .scrollBar(BarState.Auto)
     .width('100%')
     .height('100%')
+    .onAreaChange((_oldArea: Area, newArea: Area): void => {
+      // Issue #629 评论6 Part C：Scroll onAreaChange 更新的是外层可视区域尺寸
+      // （viewportWidth/viewportHeight），不是内层正文实际渲染尺寸。
+      this.viewportWidth = Number(newArea.width)
+      this.viewportHeight = Number(newArea.height)
+    })
     .onScroll((xOffset: number, yOffset: number): void => {
       // 滚动时把 viewport 状态回调给 WritingScreen（供接续状态持续写入）。
       this.emitViewportChange(xOffset, yOffset)

@@ -10,7 +10,7 @@
 // 成功返回 { ok: true, state }；失败返回 { ok: false, reason }。
 // 调用方（Coordinator）收到 ok=false 时必须从 Core snapshot() 重建 state，不吞失败。
 
-import { EditorSessionSnapshot, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
+import { EditorSessionSnapshot, EditorEditResult, EditorCompositionState } from '../../../corebridge/dto/EditorDtos'
 import { applyEditResultToSnapshot, ApplyEditResultOutcome } from './editor_patch_logic'
 
 /**
@@ -49,5 +49,13 @@ export class EditorSessionState {
 
   get revision(): number {
     return this.snapshot.revision
+  }
+
+  // #629 评论6 Part B：当前 composition 完整状态。composition 活跃时非 null，
+  // EditorLayoutSnapshot.fromEditorSnapshot 据此构造临时显示文本和下划线。
+  // finish/cancel/普通编辑后为 null。状态由 withEditResult → applyEditResultToSnapshot
+  // 透传 Core 返回的 result.composition，不在此处复制 composition 状态机。
+  get composition(): EditorCompositionState | null {
+    return this.snapshot.composition
   }
 }

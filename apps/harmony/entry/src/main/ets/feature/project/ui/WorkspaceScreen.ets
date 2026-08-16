@@ -15,6 +15,7 @@ import { EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
 import { EditorInputAdapter } from '../../editor/input/EditorInputAdapter'
 import { SelectionController } from '../../editor/selection/SelectionController'
 import { HarmonyImeConnection } from '../../editor/input/HarmonyImeConnection'
+import { EditorSemanticDispatcher } from '../../editor/input/EditorSemanticDispatcher'
 import { SujianEditor } from '../../editor/ui/SujianEditor'
 import { EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
@@ -86,6 +87,9 @@ export struct WorkspaceScreen {
   private inputAdapter: EditorInputAdapter = new EditorInputAdapter(this.coordinator)
   private selectionController: SelectionController = new SelectionController(this.coordinator)
   private harmonyImeConnection: HarmonyImeConnection = new HarmonyImeConnection()
+  // Issue #629 评论6 Part A：统一语义输入调度器。
+  // 物理键盘/IME/鼠标/触摸都经此 dispatcher 排队，出队时才读 Coordinator snapshot。
+  private dispatcher: EditorSemanticDispatcher = new EditorSemanticDispatcher(this.inputAdapter, this.selectionController, this.coordinator)
 
   aboutToAppear() {
     const paramsArr = this.navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
@@ -116,20 +120,33 @@ export struct WorkspaceScreen {
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
 
-    // 自动保存观察者（双栏模式下使用）
+    // Issue #629 评论6 Part G：退后台用 performBackgroundSave（flush+idle+save），
+    // 不只 saveChapter，避免最后几个字还在 dispatcher 队列里就 save 丢输入。
     this.autoSaveObserver = new AutoSaveLifecycleObserver(
-      (): Promise<void> => this.saveChapter(),
+      (): Promise<void> => this.performBackgroundSave(),
       this.settings.autoSaveDelayMs
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
 
   }
 
-  aboutToDisappear() {
-    // 双栏模式：保存未保存的变更（saveChapter 成功后会统一上报统计）
-    if (this.hasUnsavedChanges && this.adaptiveState.isTwoPane) {
-      this.saveChapter()
-    } else if (this.adaptiveState.isTwoPane && this.selectedChapterId && this.sessionOldText !== this.content) {
+  // Issue #629 评论6 Part G：统一关闭事务（双栏模式）。
+  // flush input → await coordinator idle → save latest snapshot → detach IME → close session
+  // 禁止多套关闭流程。
+  private async performGracefulClose(): Promise<void> {
+    if (!this.adaptiveState.isTwoPane || !this.selectedChapterId) {
+      return
+    }
+    // 1. flush 语义调度器中排队的输入
+    if (this.dispatcher) {
+      await this.dispatcher.flush()
+    }
+    // 2. 等 coordinator 命令队列空闲
+    await this.coordinator.whenIdle()
+    // 3. 保存最新 snapshot
+    if (this.hasUnsavedChanges) {
+      await this.saveChapter()
+    } else if (this.sessionOldText !== this.content) {
       // 没有未保存变更但有统计差异时，兜底上报一次
       const deviceId = this.settings.statsDeviceId || 'unknown'
       const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
@@ -145,18 +162,34 @@ export struct WorkspaceScreen {
         this.sessionId
       )
     }
+    // 4. detach IME 连接
+    await this.harmonyImeConnection.detach()
+    // 5. 关闭编辑会话（等队列空闲后再 close）
+    await this.coordinator.closeAsync()
+  }
+
+  // Issue #629 评论6 Part G：退后台保存事务（双栏模式）。
+  // flush input → await coordinator idle → save latest snapshot
+  // 不 detach IME、不 close session。
+  private async performBackgroundSave(): Promise<void> {
+    if (!this.adaptiveState.isTwoPane || !this.selectedChapterId) {
+      return
+    }
+    if (this.dispatcher) {
+      await this.dispatcher.flush()
+    }
+    await this.coordinator.whenIdle()
+    if (this.hasUnsavedChanges) {
+      await this.saveChapter()
+    }
+  }
+
+  async aboutToDisappear() {
+    // 统一关闭事务：flush input → await coordinator idle → save → detach IME → close session
+    await this.performGracefulClose()
 
     // 清除状态监听器，避免 close 后回调
     this.coordinator.setStateListener(null)
-
-
-    // 关闭编辑会话（若当前有打开的章节）
-    if (this.selectedChapterId) {
-      this.coordinator.close()
-    }
-
-    // detach IME 连接
-    this.harmonyImeConnection.detach().then(() => {})
 
     // 清理观察者
     if (this.autoSaveObserver) {
@@ -245,7 +278,7 @@ export struct WorkspaceScreen {
         if (this.autoSaveObserver) {
           this.lifecycle.removeObserver(this.autoSaveObserver)
           this.autoSaveObserver = new AutoSaveLifecycleObserver(
-            (): Promise<void> => this.saveChapter(),
+            (): Promise<void> => this.performBackgroundSave(),
             this.settings.autoSaveDelayMs
           )
           this.lifecycle.addObserver(this.autoSaveObserver)
@@ -315,26 +348,29 @@ export struct WorkspaceScreen {
     return this.themeConfig.colors.success
   }
 
-  selectChapter(chapterId: string, chapterTitle: string, volumeId: string) {
-    // 如果有未保存的变更，先保存（saveChapter 成功后会统一上报统计）
-    if (this.hasUnsavedChanges && this.selectedChapterId) {
-      this.saveChapter().then(() => {
+  // Issue #629 评论6 Part G：切章节走统一关闭事务（flush+idle+save+detach+close），
+  // 避免最后几个字还在队列里就切章节丢输入。
+  async selectChapter(chapterId: string, chapterTitle: string, volumeId: string) {
+    if (this.selectedChapterId) {
+      // flush dispatcher → 等 coordinator idle → save → detach IME → close session
+      if (this.dispatcher) {
+        await this.dispatcher.flush()
+      }
+      await this.coordinator.whenIdle()
+      if (this.hasUnsavedChanges) {
+        await this.saveChapter()
         if (this.lastSaveFailed) {
           // 保存失败，不切换章节
           return
         }
-        this.doSelectChapter(chapterId, chapterTitle, volumeId)
-      })
-      return
+      }
+      await this.harmonyImeConnection.detach()
+      await this.coordinator.closeAsync()
     }
     this.doSelectChapter(chapterId, chapterTitle, volumeId)
   }
 
   doSelectChapter(chapterId: string, chapterTitle: string, volumeId: string) {
-    // 切换章节前，关闭旧编辑会话
-    if (this.selectedChapterId) {
-      this.coordinator.close()
-    }
     this.selectedChapterId = chapterId
     this.selectedChapterTitle = chapterTitle
     this.selectedVolumeId = volumeId
@@ -409,8 +445,8 @@ export struct WorkspaceScreen {
       if (result.success) {
         // 如果删除的是当前打开的章节，清空右侧
         if (this.selectedChapterId === chapterId) {
-          // 关闭当前编辑会话
-          this.coordinator.close()
+          // Issue #629 评论6 Part G：关闭当前编辑会话用 closeAsync（等队列空闲再 close）
+          this.coordinator.closeAsync().then(() => {})
           this.editorSnapshot = null
           this.selectedChapterId = ''
           this.selectedChapterTitle = ''
@@ -715,12 +751,13 @@ export struct WorkspaceScreen {
           Scroll() {
             Column() {
               // 自研写作区组件，消费 EditorLayoutSnapshot 静态渲染
+              // Issue #629 评论6 Part A+D：传 dispatcher（统一串行边界），删除 onSelectionTap（双 owner）。
               SujianEditor({
                 snapshot: this.editorSnapshot,
-                onSelectionTap: (offset: number): void => { this.selectionController.onTap(offset) },
                 harmonyImeConnection: this.harmonyImeConnection,
                 inputAdapter: this.inputAdapter,
-                selectionController: this.selectionController
+                selectionController: this.selectionController,
+                dispatcher: this.dispatcher
               })
                 .width('100%')
                 .constraintSize({ minHeight: '100%' })

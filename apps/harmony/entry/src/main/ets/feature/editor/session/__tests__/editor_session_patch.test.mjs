@@ -70,6 +70,7 @@ function makeResult(overrides) {
       insertedNonWhitespaceChars: 0,
       deletedNonWhitespaceChars: 0,
     },
+    composition: null,
   }
   return { ...base, ...overrides }
 }
@@ -82,6 +83,7 @@ function makeSnapshot(overrides) {
     selectionAnchor: 0,
     generation: 0,
     chapterId: 'c1',
+    composition: null,
   }
   return { ...base, ...overrides }
 }

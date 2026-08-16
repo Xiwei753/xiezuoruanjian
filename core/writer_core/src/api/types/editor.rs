@@ -902,6 +902,33 @@ pub struct CompositionSessionDto {
     pub generation: u64,
 }
 
+/// #629 评论6 Part B：Composition 完整状态 DTO — 暴露 preedit 文本和 replace range
+/// 给平台静态写作区，使其能在不复制业务状态机的前提下显示预输入文本和下划线。
+///
+/// 字段语义：
+/// - `session_id` / `base_revision` / `generation`：与 [CompositionSessionDto] 同义，
+///   平台端用过期检测守卫后续 UpdateComposition/FinishComposition/CancelComposition。
+/// - `replace_byte_start` / `replace_byte_end_exclusive`：UTF-8 byte offset 半开区间，
+///   指明 committed text 中将被 preedit_text 替换的范围。平台端据此构造临时显示文本。
+/// - `preedit_text`：当前预输入文本（未提交到正文）。Core 不把它写进正文持久化。
+/// - `preedit_cursor_utf16`：preedit 内部光标的 UTF-16 code unit offset（IME 协议要求）。
+///
+/// 平台端构造临时显示文本时：把 committed text 的
+/// `[replace_byte_start, replace_byte_end_exclusive)` 替换为 `preedit_text`，
+/// composition 下划线范围 = `[replace_byte_start, replace_byte_start + preedit_text.len_utf8())`。
+/// 保存正文仍只取 committed text（snapshot.text），不把 preedit 写进文件。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorCompositionStateDto {
+    pub session_id: u64,
+    pub base_revision: u64,
+    pub generation: u64,
+    pub replace_byte_start: u32,
+    pub replace_byte_end_exclusive: u32,
+    pub preedit_text: String,
+    pub preedit_cursor_utf16: u32,
+}
+
 /// #624 评论8：内容增量 DTO — 本次编辑实际插入/删除的字符统计。
 ///
 /// `_chars` 按 Unicode scalar 计数（非 UTF-8 byte、非 UTF-16 code unit）；
@@ -954,6 +981,11 @@ pub struct EditorEditResultDto {
     /// #624 评论8：本次编辑的字符增量（正文无变化时为全 0）。
     #[serde(default)]
     pub content_delta: EditorContentDeltaDto,
+    /// #629 评论6 Part B：当前 composition 完整状态（preedit 文本 + replace range + cursor）。
+    /// 仅在 composition 活跃（begin/update 成功）时非 None；finish/cancel/普通编辑后为 None。
+    /// 平台端据此构造临时显示文本和下划线范围，不复制 Core 的 composition 状态机。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composition: Option<EditorCompositionStateDto>,
 }
 
 impl EditorEditResultDto {
@@ -971,6 +1003,7 @@ impl EditorEditResultDto {
             visual_intent: EditorVisualIntentDto::default_fallback(),
             composition_session: None,
             content_delta: EditorContentDeltaDto::default(),
+            composition: None,
         }
     }
 
@@ -988,6 +1021,7 @@ impl EditorEditResultDto {
             visual_intent: EditorVisualIntentDto::default_fallback(),
             composition_session: None,
             content_delta: EditorContentDeltaDto::default(),
+            composition: None,
         }
     }
 
@@ -1005,6 +1039,7 @@ impl EditorEditResultDto {
             visual_intent: EditorVisualIntentDto::default_fallback(),
             composition_session: None,
             content_delta: EditorContentDeltaDto::default(),
+            composition: None,
         }
     }
 }
@@ -1061,6 +1096,7 @@ impl From<crate::editor::EditorEditOutcome> for EditorEditResultDto {
             visual_intent: r.visual_intent.into(),
             composition_session: None,
             content_delta: r.content_delta.into(),
+            composition: None,
         }
     }
 }
@@ -1082,6 +1118,7 @@ impl From<crate::editor::EditorEditResult> for EditorEditResultDto {
             visual_intent: r.visual_intent.into(),
             composition_session: None,
             content_delta: r.content_delta.into(),
+            composition: None,
         }
     }
 }
@@ -1099,6 +1136,10 @@ pub struct EditorSessionSnapshotDto {
     pub selection_anchor: u32,
     pub generation: u64,
     pub chapter_id: String,
+    /// #629 评论6 Part B：当前 composition 完整状态。composition 活跃时非 None，
+    /// 平台端据此构造临时显示文本和下划线范围。无 composition 时为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composition: Option<EditorCompositionStateDto>,
 }
 
 // ── #516: VisualRevision DTO ──

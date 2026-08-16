@@ -39,6 +39,11 @@ export class EditorRenderBackend {
   // 均为 UTF-8 byte offset，必须经 TextOffsetMapper.utf8ToUtf16 转成 UTF-16 code unit offset 后再交给渲染层。
   // 本方法不含几何信息（lines/selectionRects/caretRect/compositionUnderlineRects 为空/null），
   // 用于不需要几何的场景；需要几何时用 renderLayout。
+  //
+  // #629 评论6 Part B：compositionStart/End 由 EditorLayoutSnapshot.fromEditorSnapshot
+  // 从 Core composition 状态构造（preedit 在显示文本中的 UTF-8 byte 范围）。
+  // 本方法把它们转成 UTF-16 offset，renderLayout 再用 computeCompositionUnderlineRects
+  // 计算下划线矩形。无 composition 时 compositionStart/End 为 null，下划线矩形为空。
   static render(snapshot: EditorLayoutSnapshot): EditorRenderResult {
     const text = snapshot.text
     return {

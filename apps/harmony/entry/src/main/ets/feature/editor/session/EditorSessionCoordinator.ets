@@ -96,6 +96,35 @@ export class EditorSessionCoordinator {
   }
 
   /**
+   * 等待命令队列空闲：所有已 enqueue 的编辑命令都完成（无论成功失败）后才 resolve。
+   *
+   * Issue #629 评论6 Part G：统一关闭事务需要"等所有 Core 命令完成"语义——
+   * 页面退出/退后台/切章节前要等所有排队编辑命令完成，避免：
+   *   - save 先读了旧 snapshot（最后几个字还在队列里没应用）
+   *   - 随后 session 被 close，最后输入丢失
+   * 永远不 reject（commandQueue.whenIdle 已吞掉 reject）。
+   */
+  async whenIdle(): Promise<void> {
+    return this.commandQueue.whenIdle()
+  }
+
+  /**
+   * 先等命令队列空闲（所有排队编辑命令完成），再 close session。
+   *
+   * Issue #629 评论6 Part G：统一关闭事务。
+   * 与 close() 的区别：close() 直接调 bridge.close(sid)，不等待排队命令；
+   * closeAsync() 先 await commandQueue.whenIdle() 保证所有编辑命令已应用完，
+   * 再调 bridge.close(sid)。
+   *
+   * 页面退出/切章节用 closeAsync()，避免最后几个字还在队列里就 close session 丢输入。
+   * 永远不 reject（whenIdle 不 reject；bridge.close 的 reject 透传给调用方）。
+   */
+  async closeAsync(): Promise<ResultEnvelope<boolean>> {
+    await this.commandQueue.whenIdle()
+    return this.close()
+  }
+
+  /**
    * 串行执行一条编辑命令。
    * enqueue 一个 thunk 到 commandQueue；thunk 在出队执行时才：
    *   1. 读取 this.state.snapshot.revision 作为 expectedRevision
@@ -208,6 +237,26 @@ export class EditorSessionCoordinator {
 
   getRevision(): number | null {
     return this.state ? this.state.snapshot.revision : null
+  }
+
+  // #606: grapheme cluster 边界查询（UTF-8 byte offset）。
+  // 查询方法，不修改 state，不进 commandQueue。直接调用 bridge，传入当前 sessionId。
+  // 平台端 Left/Right/Backspace/Delete 通过此方法确定光标移动目标，
+  // 不再自己用 UTF-16 ±1 猜字符边界（避免切进组合附加符 / ZWJ emoji）。
+  async previousGraphemeBoundary(byteOffset: number): Promise<ResultEnvelope<number>> {
+    if (!this.state) {
+      return this.noSession<number>()
+    }
+    const sid = this.state.sessionId
+    return this.bridge.previousGraphemeBoundary(sid, byteOffset)
+  }
+
+  async nextGraphemeBoundary(byteOffset: number): Promise<ResultEnvelope<number>> {
+    if (!this.state) {
+      return this.noSession<number>()
+    }
+    const sid = this.state.sessionId
+    return this.bridge.nextGraphemeBoundary(sid, byteOffset)
   }
 
   // 队列状态（供测试/诊断；生产代码一般不查）。

@@ -13,6 +13,7 @@ import { EditorSessionSnapshot, EditorTransactionCause } from '../../../corebrid
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
+import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
 import { SujianEditor } from './SujianEditor'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
@@ -20,6 +21,7 @@ import { ContinuationPayload } from '../../../platform/continuity/ContinuationPa
 import { HarmonyShareService } from '../../../platform/share/HarmonyShareService'
 import { SharePayload } from '../../../platform/share/SharePayload'
 import { EditorViewportState } from '../render/EditorViewportState'
+import { EditorViewportController } from '../render/EditorViewportController'
 import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 
 @Component
@@ -81,12 +83,19 @@ export struct WritingScreen {
   private inputAdapter: EditorInputAdapter = new EditorInputAdapter(this.coordinator)
   private selectionController: SelectionController = new SelectionController(this.coordinator)
   private harmonyImeConnection: HarmonyImeConnection = new HarmonyImeConnection()
+  // Issue #629 评论6 Part A：统一语义输入调度器。
+  // 物理键盘/IME/鼠标/触摸都经此 dispatcher 排队，出队时才读 Coordinator snapshot。
+  private dispatcher: EditorSemanticDispatcher = new EditorSemanticDispatcher(this.inputAdapter, this.selectionController, this.coordinator)
   // Share 生命周期服务（Issue #629 评论 5 第 7 节）：碰一碰/隔空传送由页面拥有生命周期。
   private shareService: HarmonyShareService = HarmonyShareService.getInstance()
   // Share 生命周期观察者：onForeground 重新注册，onBackground stop（成对）。
   private shareLifecycleObserver: LifecycleObserver | null = null
   // 接续进入时携带的编辑器状态（selection/cursor/viewport/contentHash），loadChapter 恢复时消费。
   private continuationParams: WritingRouteParams | null = null
+  // Issue #629 评论6 Part C：父子 viewport 恢复通道 controller。
+  // WritingScreen 持有 controller 实例并注入 SujianEditor；接续加载完成、目标设备 layout 就绪后
+  // 调 controller.restore(state)，controller 按目标设备当前 viewport/content 尺寸 clamp + scrollTo。
+  private viewportController: EditorViewportController = new EditorViewportController()
 
   aboutToAppear() {
     const paramsArr = this.navPathStack.getParamByName(Routes.Writing) as WritingRouteParams[]
@@ -126,8 +135,10 @@ export struct WritingScreen {
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
 
+    // Issue #629 评论6 Part G：退后台用 performBackgroundSave（flush+idle+save），
+    // 不只 saveChapter，避免最后几个字还在 dispatcher 队列里就 save 丢输入。
     this.autoSaveObserver = new AutoSaveLifecycleObserver(
-      (): Promise<void> => this.saveChapter(true).then(() => {}),
+      (): Promise<void> => this.performBackgroundSave(),
       this.settings.autoSaveDelayMs
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
@@ -143,10 +154,21 @@ export struct WritingScreen {
     this.lifecycle.addObserver(this.shareLifecycleObserver!)
   }
 
-  aboutToDisappear() {
+  // Issue #629 评论6 Part G：统一关闭事务。
+  // flush input → await coordinator idle → save latest snapshot → detach IME → close session → leave
+  // 返回按钮和生命周期退后台都调此方法，禁止多套关闭流程。
+  private async performGracefulClose(): Promise<void> {
+    // 1. flush 语义调度器中排队的输入（物理键盘/IME/鼠标/触摸）
+    if (this.dispatcher) {
+      await this.dispatcher.flush()
+    }
+    // 2. 等 coordinator 命令队列空闲（所有 Core 编辑命令完成，snapshot 已包含最后输入）
+    await this.coordinator.whenIdle()
+    // 3. 保存最新 snapshot（此时 snapshot 已包含最后输入，不会读到旧文本）
     if (this.hasUnsavedChanges) {
-      this.saveChapter()
+      await this.saveChapter()
     } else if (this.sessionOldText !== this.content && this.chapterId) {
+      // 没有未保存变更但有统计差异时，兜底上报一次写作统计
       const deviceId = this.settings.statsDeviceId || 'unknown'
       const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
       this.bridge.processWritingEvent(
@@ -154,15 +176,33 @@ export struct WritingScreen {
         this.chapterId, this.sessionOldText, this.content, durationSeconds, this.sessionId
       )
     }
+    // 4. detach IME 连接（取消监听并 detach，失败不阻塞）
+    await this.harmonyImeConnection.detach()
+    // 5. 关闭编辑会话（等队列空闲后再 close，避免最后几个字还在队列里就 close 丢输入）
+    await this.coordinator.closeAsync()
+  }
 
-    // 清除状态监听器，避免 close 后回调。
+  // Issue #629 评论6 Part G：退后台保存事务。
+  // flush input → await coordinator idle → save latest snapshot
+  // 不 detach IME、不 close session（session 在 aboutToDisappear 时才 close）。
+  // 退后台只保证：所有排队输入应用完 + 保存最新正文，回前台可继续编辑。
+  private async performBackgroundSave(): Promise<void> {
+    if (this.dispatcher) {
+      await this.dispatcher.flush()
+    }
+    await this.coordinator.whenIdle()
+    if (this.hasUnsavedChanges) {
+      await this.saveChapter(true)
+    }
+  }
+
+  async aboutToDisappear() {
+    // 统一关闭事务：flush input → await coordinator idle → save latest snapshot → detach IME → close session → leave
+    // 禁止多套关闭流程，返回按钮和生命周期退后台都走此链。
+    await this.performGracefulClose()
+
+    // 清除监听器（在 performGracefulClose 后，避免 close 后回调）
     this.coordinator.setStateListener(null)
-
-    // 关闭编辑会话
-    this.coordinator.close()
-
-    // detach IME 连接
-    this.harmonyImeConnection.detach().then(() => {})
 
     // Issue #629 评论 5 第 7 节：页面离开时 stop 碰一碰/隔空传送（成对，不留监听）。
     this.stopShareLifecycle()
@@ -249,8 +289,12 @@ export struct WritingScreen {
     }
 
     // viewport 只恢复到 UI 滚动位置，不写 Core。
+    // Issue #629 评论6 Part C：通过父子 controller 通道恢复，不直接赋值后跳过子组件滚动。
+    // controller 会等 SujianEditor 注册 scrollTo（layout 就绪）后按目标设备当前尺寸 clamp + scrollTo。
+    // 旧实现只 this.currentViewport = params.viewport，子组件不会真的滚动到接续位置。
     if (params.viewport !== undefined) {
       this.currentViewport = params.viewport
+      this.viewportController.restore(params.viewport)
     }
 
     // 恢复后写入当前状态（UTF-8 → UTF-16 转换在 updateContinuationState 内完成）。
@@ -370,7 +414,7 @@ export struct WritingScreen {
         if (this.autoSaveObserver) {
           this.lifecycle.removeObserver(this.autoSaveObserver)
           this.autoSaveObserver = new AutoSaveLifecycleObserver(
-            (): Promise<void> => this.saveChapter(true).then(() => {}),
+            (): Promise<void> => this.performBackgroundSave(),
             this.settings.autoSaveDelayMs
           )
           this.lifecycle.addObserver(this.autoSaveObserver)
@@ -520,12 +564,10 @@ export struct WritingScreen {
           .height(24)
           .fillColor(this.themeConfig.colors.textPrimary)
           .onClick(async () => {
-            if (this.hasUnsavedChanges) {
-              const ok = await this.saveChapter()
-              if (ok) { this.navPathStack.pop() }
-            } else {
-              this.navPathStack.pop()
-            }
+            // Issue #629 评论6 Part G：返回按钮走统一关闭事务（flush→idle→save→detach→close），
+            // 禁止多套关闭流程。performGracefulClose 保证最后几个字不丢。
+            await this.performGracefulClose()
+            this.navPathStack.pop()
           })
 
         Text(this.chapterTitle)
@@ -601,14 +643,19 @@ export struct WritingScreen {
         .justifyContent(FlexAlign.Center)
       } else {
         // 自研写作区组件，消费 EditorLayoutSnapshot 静态渲染
+        // Issue #629 评论6 Part A+D：传 dispatcher（统一串行边界），删除 onSelectionTap（双 owner）。
         SujianEditor({
           snapshot: this.editorSnapshot,
-          onSelectionTap: (offset: number): void => { this.selectionController.onTap(offset) },
           harmonyImeConnection: this.harmonyImeConnection,
           inputAdapter: this.inputAdapter,
           selectionController: this.selectionController,
+          dispatcher: this.dispatcher,
+          // Issue #629 评论6 Part C：父子 viewport 恢复通道 controller。
+          // SujianEditor 在 aboutToAppear 注册 scrollTo + getDimensions，
+          // WritingScreen 调 controller.restore(state) 时按目标设备当前尺寸 clamp + scrollTo。
+          viewportController: this.viewportController,
           // Issue #629 评论 5 第 8 节：滚动时把 viewport 状态回调给 WritingScreen，
-          // 持续写入接续状态；接续恢复时由 editor.restoreViewport 消费。
+          // 持续写入接续状态。
           onViewportChange: (state: EditorViewportState): void => {
             this.currentViewport = state
             this.updateContinuationState()

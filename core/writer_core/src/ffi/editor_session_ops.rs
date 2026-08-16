@@ -464,6 +464,52 @@ pub unsafe extern "C" fn writer_core_editor_session_get_revision(session_id: u64
     }
 }
 
+/// #606: 返回严格在 `byte_offset` 之前的最近 grapheme cluster 边界（UTF-8 byte offset）。
+///
+/// 平台端 SujianEditor 的 Left/Backspace 通过此函数确定光标移动目标，
+/// 不再自己用 UTF-16 ±1 猜字符边界（避免切进组合附加符 / ZWJ emoji）。
+///
+/// # Safety
+/// `session_id` 是先前由 `writer_core_editor_session_create` 返回的有效会话 ID。
+/// `byte_offset` 是当前正文内的 UTF-8 byte offset（0..=len_bytes）。
+/// 不存在的 session 返回 `byte_offset` 本身（Core `with_session_in_registry` 的 fallback）。
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_editor_session_previous_grapheme_boundary(
+    session_id: u64,
+    byte_offset: u32,
+) -> *mut c_char {
+    match with_app_service(|svc| {
+        Ok(svc.text_edit_session_previous_grapheme_boundary(session_id, byte_offset))
+    }) {
+        Ok(offset) => ok_json(offset),
+        Err(e) => err_json("EDITOR_SESSION_ERROR", &e),
+    }
+}
+
+/// #606: 返回严格在 `byte_offset` 之后的最近 grapheme cluster 边界（UTF-8 byte offset）。
+///
+/// 平台端 SujianEditor 的 Right/Delete 通过此函数确定光标移动目标，
+/// 不再自己用 UTF-16 ±1 猜字符边界（避免切进组合附加符 / ZWJ emoji）。
+///
+/// # Safety
+/// `session_id` 是先前由 `writer_core_editor_session_create` 返回的有效会话 ID。
+/// `byte_offset` 是当前正文内的 UTF-8 byte offset（0..=len_bytes）。
+/// 不存在的 session 返回 `byte_offset` 本身（Core `with_session_in_registry` 的 fallback）。
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_editor_session_next_grapheme_boundary(
+    session_id: u64,
+    byte_offset: u32,
+) -> *mut c_char {
+    match with_app_service(|svc| {
+        Ok(svc.text_edit_session_next_grapheme_boundary(session_id, byte_offset))
+    }) {
+        Ok(offset) => ok_json(offset),
+        Err(e) => err_json("EDITOR_SESSION_ERROR", &e),
+    }
+}
+
 #[cfg(test)]
 #[path = "editor_session_ops_tests.rs"]
 mod tests;
