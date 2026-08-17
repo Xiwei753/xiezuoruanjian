@@ -1,4 +1,5 @@
 import { Routes, WritingRouteParams } from '../../../app/navigation/Routes'
+import { AppNavigationHost } from '../../../app/navigation/AppNavigation'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { ChapterContent, ChapterSaveReceipt } from '../../../corebridge/dto/ProjectDtos'
 import { LocalSettings } from '../../../corebridge/dto/SettingsDtos'
@@ -175,6 +176,11 @@ export struct WritingScreen {
       onBackground: (): void => { this.stopShareLifecycle() }
     }
     this.lifecycle.addObserver(this.shareLifecycleObserver!)
+
+    // Issue #629 评论11 第3项：注册当前 WritingScreen 的离开守卫。
+    // AppNavigationHost.safePop/safeClearAndRebuild 会 await 此 guard（performGracefulClose），
+    // 只有保存成功且 Core close 成功才允许改栈，未保存正文不被程序化 clear/pop 绕过。
+    AppNavigationHost.getInstance().registerLeaveGuard('writing-screen', (): Promise<boolean> => this.performGracefulClose())
   }
 
   // Issue #629 评论6 Part G + 评论7 第5项 + 评论8 第2/3项：统一幂等关闭事务。
@@ -299,28 +305,26 @@ export struct WritingScreen {
   // 已有 leaveTask 时直接返回同一 task，task 内只 pop 一次。
   // close 失败时清 leaveTask 允许再次返回重试；成功后不重置（页面已离开）。
   // 左上角按钮和 onBackPressed 都只调用此入口，禁止多套关闭/离开流程。
+  // Issue #629 评论11 第3项：requestLeave 改用 AppNavigationHost.safePop()。
+  // safePop 内部 runGuardedNavigation 先 await leaveGuard（performGracefulClose），
+  // 成功才 navPathStack.pop()，且两个并发 safePop 合并成一次事务（guard 一次、pop 一次）。
+  // leaveTask 仍保留作为 requestLeave 自身重入防护（safePop 内部 navigationTask 也幂等，双保险）。
   private requestLeave(): Promise<void> {
     if (this.leaveTask !== null) {
       return this.leaveTask
     }
-    let closed: boolean = false
     const task: Promise<void> = (async () => {
-      closed = await this.performGracefulClose()
-      if (closed === true) {
-        this.navPathStack.pop()
-      }
+      await AppNavigationHost.getInstance().safePop()
     })()
     this.leaveTask = task
     task.then(
       () => {
-        // close 失败（未 pop）：清 leaveTask 允许再次返回重试。
-        // 成功后页面已离开，保留 leaveTask 防止重入。
-        if (closed === false && this.leaveTask === task) {
+        // safePop 完成（无论成功失败）：清 leaveTask 允许再次调用。
+        if (this.leaveTask === task) {
           this.leaveTask = null
         }
       },
       () => {
-        // 异常路径也清 leaveTask（允许重试）。
         if (this.leaveTask === task) {
           this.leaveTask = null
         }
@@ -334,6 +338,8 @@ export struct WritingScreen {
   // 离开后的 observer/share/view 清理（removeObserver、stopShareLifecycle、setStateListener(null)）。
   // 不能把它当返回拦截器：此时路由已退栈，无法阻止返回。
   async aboutToDisappear() {
+    // Issue #629 评论11 第3项：注销自己的离开守卫（只注销 'writing-screen' owner）。
+    AppNavigationHost.getInstance().unregisterLeaveGuard('writing-screen')
     // 清除监听器（避免 close 后回调）
     this.coordinator.setStateListener(null)
 
@@ -729,16 +735,10 @@ export struct WritingScreen {
       this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.clear_failed').id)
       return
     }
-    // Issue #629 评论 5308748920 问题3：clearDocument 成功后重读 Core snapshot 确认 text==''，
-    // 再 ensureSnapshotSaved('')。只有这份空正文真的保存成功才显示"已清空"。
-    await this.dispatcher.flush()
-    await this.coordinator.whenIdle()
-    const afterClear = this.coordinator.getSnapshot()
-    if (afterClear === null || afterClear.text !== '') {
-      this.lastSaveFailed = true
-      this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.clear_failed').id)
-      return
-    }
+    // Issue #629 评论11 第1项：executeClearDocument 已自验空正文（cancel composition → replace
+    // → 重读 snapshot 确认 text===''），这里不再二次 flush/whenIdle/afterClear 检查。
+    // clear 之后用户立刻打的新字允许继续进入 Dispatcher；ensureSnapshotSaved('') 只保存空基线，
+    // 保存完成后最新 snapshot 若已有新字，hasUnsavedChanges = latest.text !== '' 正好保持未保存。
     const saved: boolean = await this.ensureSnapshotSaved('', false)
     if (saved) {
       this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.cleared').id)

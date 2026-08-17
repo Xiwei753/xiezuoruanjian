@@ -45,6 +45,7 @@ import { TextOffsetMapper } from './TextOffsetMapper'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorTransactionCause, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { LineNavigationResolver } from '../selection/LineNavigationResolver'
+import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 
 // 语义命令类型：把物理键盘/IME/鼠标/触摸的输入统一成语义命令。
 // 出队执行时才读 Coordinator snapshot，避免并发命令拿到同一个旧 cursor/selection。
@@ -430,23 +431,52 @@ export class EditorSemanticDispatcher {
   }
 
   // Issue #629 评论11 第1项：清空整篇文档。
-  // 出队后读取最新 Core snapshot，计算 UTF-8 全文范围，调 coordinator.replace 清空。
-  // 保证之前的输入先执行（在本命令出队前已应用完），之后的新输入只能排在 clear 后面。
+  // 整个 clear thunk 自包含：读 snapshot → cancel 活跃 composition → replace 全文为空
+  // → 重新读 snapshot 确认空正文。下一条 Dispatcher 命令只能在这个 thunk 返回后执行，
+  // 之前排队输入一定先执行，之后新输入只能排在 clear 后面，不再有跨队列抢跑。
+  // Issue #629 评论11 第1项补充：活跃 composition 先显式 cancel（不依赖 replace 顺手清除），
+  // cancel 失败则不继续清空；replace 后 Core snapshot 非空则返回失败。
   private async executeClearDocument(): Promise<ResultEnvelope<EditorEditResult>> {
-    const snap = this.coordinator.getSnapshot()
+    let snap = this.coordinator.getSnapshot()
     if (!snap) {
       return this.noSession()
     }
+    // 有活跃 composition 时先 cancel：用户选择清空时不应保留 preedit。
+    if (this.inputAdapter.isComposing()) {
+      const cancelResult = await this.inputAdapter.onCompositionCancel()
+      if (!cancelResult.success) {
+        return cancelResult
+      }
+      // cancel 后重新读 snapshot（composition 已清除，正文可能已变化）
+      snap = this.coordinator.getSnapshot()
+      if (!snap) {
+        return this.noSession()
+      }
+    }
     const fullText: string = snap.text
     const utf8EndByte: number = TextOffsetMapper.utf16ToUtf8(fullText, fullText.length)
-    return this.coordinator.replace(
+    const replaceResult = await this.coordinator.replace(
       0, utf8EndByte, '', fullText, EditorTransactionCause.Programmatic
     )
+    if (!replaceResult.success) {
+      return replaceResult
+    }
+    // replace 成功后重新读 Core snapshot 确认正文为空。
+    // StaleRevision/Invalid* 或最终 snapshot 非空都视为清空失败。
+    const afterClear = this.coordinator.getSnapshot()
+    if (afterClear === null || afterClear.text !== '') {
+      return { success: false, errorCode: 'CLEAR_NOT_EMPTY', warnings: [], changedPaths: [], changedEntities: [] }
+    }
+    return replaceResult
   }
 
   // Issue #629 评论11 第2项：行级导航（up/down/home/end）。
   // 出队后基于最新 Core snapshot + 最新行布局（lineResolver）计算目标位置，
   // 再调 SelectionController。不在入队前读旧布局。
+  // Issue #629 评论11 第2项补充：出队时先验证 resolver 布局身份与当前 Core snapshot 匹配。
+  // 身份 = revision + displayText + cursorUtf16。composition 活跃时 displayText 含 preedit
+  // （EditorLayoutSnapshot.fromEditorSnapshot 投影），cursorUtf16 是 displayCaret。
+  // 不匹配（Core snapshot 已前进而 ArkUI 布局还没刷新）返回 STALE_LAYOUT，不拿旧 lines 算目标。
   private async executeLineNavigation(direction: 'up' | 'down' | 'home' | 'end', extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
@@ -456,8 +486,15 @@ export class EditorSemanticDispatcher {
     if (!resolver) {
       return this.noSession()
     }
-    const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursor)
-    const anchorUtf16 = TextOffsetMapper.utf8ToUtf16(snap.text, snap.selectionAnchor)
+    // 构造显示布局身份：composition 活跃时 fromEditorSnapshot 把 text/cursor 投影到显示文本。
+    const displaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+    const displayText: string = displaySnapshot.text
+    const cursorUtf16: number = TextOffsetMapper.utf8ToUtf16(displayText, displaySnapshot.cursorByteOffset)
+    const anchorUtf16: number = TextOffsetMapper.utf8ToUtf16(displayText, displaySnapshot.selectionAnchor)
+    // 验证 resolver 布局身份与当前 Core snapshot 匹配；不匹配返回 STALE_LAYOUT。
+    if (!resolver.matchesIdentity(snap.revision, displayText, cursorUtf16)) {
+      return { success: false, errorCode: 'STALE_LAYOUT', warnings: [], changedPaths: [], changedEntities: [] }
+    }
 
     switch (direction) {
       case 'up': {
@@ -492,7 +529,7 @@ export class EditorSemanticDispatcher {
       }
       case 'end': {
         const lineIdx = resolver.getCurrentLineIndex(cursorUtf16)
-        const textUtf16Len = snap.text.length
+        const textUtf16Len = displayText.length
         const targetOffset = lineIdx >= 0 ? resolver.getLineEnd(lineIdx) : textUtf16Len
         if (extend) {
           return this.selectionController.onDragSelect(anchorUtf16, targetOffset)

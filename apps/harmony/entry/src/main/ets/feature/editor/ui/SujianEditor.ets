@@ -41,7 +41,7 @@ import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
-import { LineNavigationResolver } from '../selection/LineNavigationResolver'
+import { LineNavigationResolver, LineLayoutState } from '../selection/LineNavigationResolver'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { KeyboardInputService, PlatformKeyEvent, SemanticKeyCommand } from '../../../platform/input/KeyboardInputService'
 import { PointerInputService, PlatformPointerEvent } from '../../../platform/input/PointerInputService'
@@ -138,11 +138,19 @@ export struct SujianEditor {
   }
 
   aboutToUpdate(): void {
+    // Issue #629 评论11 第2项：snapshot 变化时先 refreshRender（无几何 fallback），
+    // 再 refreshRenderLayout（contentWidth > 0 时用已有宽度计算真实 lines + 更新 lineResolver 带身份）。
+    // 这样打完字后按 Up/Down/Home/End 不需要等 onAreaChange 才更新 lineResolver，
+    // resolver 的身份与当前 Core snapshot 匹配，executeLineNavigation 不会 STALE_LAYOUT。
     this.refreshRender()
+    this.refreshRenderLayout()
   }
 
   // 基础渲染：用 render() 转 offset，不含几何（lines/rects 为空）。
   // aboutToAppear/aboutToUpdate 调用；onAreaChange 触发后改用 refreshRenderLayout 补几何。
+  // Issue #629 评论11 第2项：refreshRender 不再用 render() 的空 lines 覆盖 lineResolver。
+  // render() 不计算几何（lines: []），用它覆盖会把 resolver 清空。lineResolver 只在
+  // refreshRenderLayout（contentWidth > 0，有真实几何）时更新（带身份）。
   private refreshRender(): void {
     if (this.snapshot) {
       const result = EditorRenderBackend.render(this.snapshot)
@@ -150,19 +158,22 @@ export struct SujianEditor {
       this.selectionRects = result.selectionRects
       this.caretRect = result.caretRect
       this.compositionUnderlineRects = result.compositionUnderlineRects
-      // Issue #629 评论11 第2项：渲染结果更新后同步给行级导航解析器。
-      this.lineResolver.updateLayout(result.lines)
     } else {
       this.renderResult = null
       this.selectionRects = []
       this.caretRect = null
       this.compositionUnderlineRects = []
-      this.lineResolver.updateLayout([])
+      // snapshot 为 null 时清空 resolver（无文本无布局）。
+      this.lineResolver.updateLayout(null)
     }
   }
 
   // 完整静态渲染：用 renderLayout() 计算行布局/选区/光标/composition 下划线几何。
   // 在 onAreaChange 中调用（此时 contentWidth/contentHeight 已更新，getUIContext 可用）。
+  // Issue #629 评论11 第2项：aboutToUpdate 也调此方法（contentWidth 已 > 0 时），
+  // 保证 snapshot/revision/composition 变化时立刻用已有宽度计算真实 lines 并更新 lineResolver，
+  // 不等 onAreaChange 才更新。lineResolver 带身份（revision + displayText + cursorUtf16），
+  // executeLineNavigation 出队时验证身份匹配才用 lines 算目标。
   private refreshRenderLayout(): void {
     if (this.snapshot && this.contentWidth > 0) {
       const snap = this.snapshot
@@ -182,8 +193,18 @@ export struct SujianEditor {
       this.selectionRects = result.selectionRects
       this.caretRect = result.caretRect
       this.compositionUnderlineRects = result.compositionUnderlineRects
-      // Issue #629 评论11 第2项：行布局更新后同步给行级导航解析器。
-      this.lineResolver.updateLayout(result.lines)
+      // Issue #629 评论11 第2项：行布局更新后同步给行级导航解析器（带身份）。
+      // 身份来自 EditorLayoutSnapshot：revision + displayText（snap.text，composition 活跃时
+      // 已是含 preedit 的显示文本）+ cursorUtf16（snap.cursorByteOffset 转 UTF-16）。
+      // executeLineNavigation 出队时验证此身份与当前 Core snapshot 匹配才用 lines 算目标。
+      const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursorByteOffset)
+      const layoutState: LineLayoutState = {
+        revision: snap.revision,
+        displayText: snap.text,
+        cursorUtf16: cursorUtf16,
+        lines: result.lines
+      }
+      this.lineResolver.updateLayout(layoutState)
     }
   }
 
