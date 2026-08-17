@@ -252,25 +252,118 @@ class SettingsViewModel(
     val autoSaveDelayRow =
         rowFlow(_uiState.value.settings.autoSaveDelayMs) { it.settings.autoSaveDelayMs }
 
-    // ── Sync 行级 ──
-    val syncConfigRow =
-        rowFlow(_uiState.value.syncConfig) { it.syncConfig }
-    val syncSecretsRow =
-        rowFlow(_uiState.value.syncSecrets) { it.syncSecrets }
-    val syncCapabilityRow =
-        rowFlow(_uiState.value.syncCapability) { it.syncCapability }
-    val syncTestConnectionRow =
-        rowFlow(_uiState.value.testConnectionState) { it.testConnectionState }
-    val syncPerformSyncRow =
-        rowFlow(_uiState.value.performSyncState) { it.performSyncState }
-    val syncDryRunRow =
-        rowFlow(_uiState.value.dryRunState) { it.dryRunState }
+    // ── Sync 行级 — 每行只订阅自己需要的最小字段投影，避免任一 sync 字段变化导致全部可见 sync item 重组 ──
+
+    data class SyncEnabledRowState(val enabled: Boolean)
+
+    data class SyncAutoSyncRowState(val enabled: Boolean, val autoSync: Boolean)
+
+    data class SyncRemoteUrlRowState(val enabled: Boolean, val remoteUrl: String)
+
+    data class SyncBranchRowState(val enabled: Boolean, val branch: String)
+
+    data class SyncTokenRowState(val enabled: Boolean, val token: String)
+
+    data class SyncIntervalRowState(val enabled: Boolean, val intervalSeconds: Int)
+
+    data class SyncActionsRowState(
+        val enabled: Boolean,
+        val capability: com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData,
+        val dryRun: SyncCommandState,
+        val test: SyncCommandState,
+        val perform: SyncCommandState,
+    )
+
+    val syncEnabledRow =
+        rowFlow(SyncEnabledRowState(_uiState.value.syncConfig.enabled == true)) {
+            SyncEnabledRowState(it.syncConfig.enabled == true)
+        }
+    val syncAutoSyncRow =
+        rowFlow(
+            SyncAutoSyncRowState(
+                _uiState.value.syncConfig.enabled == true,
+                _uiState.value.syncConfig.autoSync == true,
+            ),
+        ) {
+            SyncAutoSyncRowState(
+                enabled = it.syncConfig.enabled == true,
+                autoSync = it.syncConfig.autoSync == true,
+            )
+        }
+    val syncRemoteUrlRow =
+        rowFlow(
+            SyncRemoteUrlRowState(
+                _uiState.value.syncConfig.enabled == true,
+                _uiState.value.syncConfig.remoteUrl.orEmpty(),
+            ),
+        ) {
+            SyncRemoteUrlRowState(
+                enabled = it.syncConfig.enabled == true,
+                remoteUrl = it.syncConfig.remoteUrl.orEmpty(),
+            )
+        }
+    val syncBranchRow =
+        rowFlow(
+            SyncBranchRowState(
+                _uiState.value.syncConfig.enabled == true,
+                _uiState.value.syncConfig.branch.orEmpty(),
+            ),
+        ) {
+            SyncBranchRowState(
+                enabled = it.syncConfig.enabled == true,
+                branch = it.syncConfig.branch.orEmpty(),
+            )
+        }
+    val syncTokenRow =
+        rowFlow(
+            SyncTokenRowState(
+                _uiState.value.syncConfig.enabled == true,
+                _uiState.value.syncSecrets.token.orEmpty(),
+            ),
+        ) {
+            SyncTokenRowState(
+                enabled = it.syncConfig.enabled == true,
+                token = it.syncSecrets.token.orEmpty(),
+            )
+        }
+    val syncIntervalRow =
+        rowFlow(
+            SyncIntervalRowState(
+                _uiState.value.syncConfig.enabled == true,
+                _uiState.value.syncConfig.syncIntervalSeconds ?: 300,
+            ),
+        ) {
+            SyncIntervalRowState(
+                enabled = it.syncConfig.enabled == true,
+                intervalSeconds = it.syncConfig.syncIntervalSeconds ?: 300,
+            )
+        }
+    val syncActionsRow =
+        rowFlow(
+            SyncActionsRowState(
+                enabled = _uiState.value.syncConfig.enabled == true,
+                capability = _uiState.value.syncCapability,
+                dryRun = _uiState.value.dryRunState,
+                test = _uiState.value.testConnectionState,
+                perform = _uiState.value.performSyncState,
+            ),
+        ) {
+            SyncActionsRowState(
+                enabled = it.syncConfig.enabled == true,
+                capability = it.syncCapability,
+                dryRun = it.dryRunState,
+                test = it.testConnectionState,
+                perform = it.performSyncState,
+            )
+        }
     val syncResultRow =
         rowFlow(
             Pair(_uiState.value.syncResult, _uiState.value.syncProfileLoadState),
         ) { Pair(it.syncResult, it.syncProfileLoadState) }
 
     // ── Ai 行级 ──
+    val aiAvailableRow =
+        rowFlow(_uiState.value.aiAvailable) { it.aiAvailable }
     val aiEnabledRow =
         rowFlow(_uiState.value.settings.aiEnabled) { it.settings.aiEnabled }
 
@@ -404,8 +497,8 @@ class SettingsViewModel(
         when (intent) {
             is SettingsIntent.UpdateLocal -> updateLocalSettings(intent.transform(_uiState.value.settings))
             is SettingsIntent.UpdateFontSize -> updateFontSize(intent.fontSize)
-            is SettingsIntent.UpdateSyncConfig -> updateSyncConfig(intent.config)
-            is SettingsIntent.UpdateSyncSecrets -> updateSyncSecrets(intent.secrets)
+            is SettingsIntent.UpdateSyncConfig -> updateSyncConfig(intent.transform)
+            is SettingsIntent.UpdateSyncSecrets -> updateSyncSecrets(intent.transform)
             else -> handleActionIntent(intent)
         }
     }

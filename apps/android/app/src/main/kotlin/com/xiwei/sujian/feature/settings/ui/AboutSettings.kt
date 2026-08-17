@@ -18,18 +18,10 @@ import com.xiwei.sujian.R
  * 使用 [SettingsFieldRowContainer] 的 isFirst/isLast 保持 M3 高色阶卡片视觉。
  */
 fun LazyListScope.aboutSettingsItems(vm: SettingsViewModel) {
-    item(key = "about.info_title") {
-        SettingsGroupItemContainer(isLast = false, isFirst = true) {
-            SettingsFieldRowContainer(isFirst = true, isLast = false) {
-                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_about))
-            }
-        }
-    }
-
     item(key = "about.info_content") {
         val state by vm.aboutState.collectAsStateWithLifecycle()
-        SettingsGroupItemContainer(isLast = true) {
-            SettingsFieldRowContainer(isFirst = false, isLast = true) {
+        SettingsGroupItemContainer(isLast = true, isFirst = true) {
+            SettingsFieldRowContainer(isFirst = true, isLast = true) {
                 androidx.compose.foundation.layout.Column(
                     modifier = Modifier.height(IntrinsicSize.Min),
                 ) {

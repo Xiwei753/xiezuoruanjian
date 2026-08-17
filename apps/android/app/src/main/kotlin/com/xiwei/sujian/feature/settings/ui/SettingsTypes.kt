@@ -3,12 +3,19 @@ package com.xiwei.sujian.feature.settings.ui
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import com.xiwei.sujian.feature.sync.data.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
+import com.xiwei.sujian.feature.sync.data.model.SyncConfig
+import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 
 // ! # 设置页类型声明（从 SettingsRoute 拆分）
 //
 // #630 评论 #1+#2：同步配置只有一份 — 全量同步覆盖设置/星图/主题/全部作品，
 // 不再区分作品级与应用级两套 UI 状态/Intent/SaveCommand。
+
+// #630 评论16：同步配置/凭据 Intent 用 transform 函数，每个 row 不需要抓住整份 config。
+typealias SyncConfigTransform = SyncConfig.() -> SyncConfig
+
+typealias SyncSecretsTransform = SyncSecrets.() -> SyncSecrets
 
 enum class SyncCommandState { IDLE, RUNNING, SUCCESS, FAILURE }
 
@@ -97,9 +104,13 @@ sealed interface SettingsIntent {
 
     data class UpdateFontSize(val fontSize: Float) : SettingsIntent
 
-    data class UpdateSyncConfig(val config: com.xiwei.sujian.feature.sync.data.model.SyncConfig) : SettingsIntent
+    data class UpdateSyncConfig(
+        val transform: SyncConfigTransform,
+    ) : SettingsIntent
 
-    data class UpdateSyncSecrets(val secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets) : SettingsIntent
+    data class UpdateSyncSecrets(
+        val transform: SyncSecretsTransform,
+    ) : SettingsIntent
 
     data object Refresh : SettingsIntent
 

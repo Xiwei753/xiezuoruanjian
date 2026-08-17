@@ -20,20 +20,11 @@ import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
  * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
  */
 fun LazyListScope.saveSettingsItems(vm: SettingsViewModel) {
-    // ── 保存分组标题 ──
-    item(key = "save.auto_title") {
-        SettingsGroupItemContainer(isLast = false, isFirst = true) {
-            SettingsFieldRowContainer(isFirst = true, isLast = false) {
-                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_save))
-            }
-        }
-    }
-
     // 自动保存开关
     item(key = "save.auto_save") {
         val checked by vm.autoSaveRow.collectAsStateWithLifecycle()
         SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+            SettingsFieldRowContainer(isFirst = true, isLast = false) {
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_auto_save),
                     checked = checked,
