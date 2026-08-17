@@ -470,13 +470,12 @@ export class EditorSemanticDispatcher {
     return replaceResult
   }
 
-  // Issue #629 评论11 第2项：行级导航（up/down/home/end）。
+  // Issue #629 评论14 第3项：行级导航（up/down/home/end）。
   // 出队后基于最新 Core snapshot + 最新行布局（lineResolver）计算目标位置，
   // 再调 SelectionController。不在入队前读旧布局。
-  // Issue #629 评论11 第2项补充：出队时先验证 resolver 布局身份与当前 Core snapshot 匹配。
-  // 身份 = revision + displayText + cursorUtf16。composition 活跃时 displayText 含 preedit
-  // （EditorLayoutSnapshot.fromEditorSnapshot 投影），cursorUtf16 是 displayCaret。
-  // 不匹配（Core snapshot 已前进而 ArkUI 布局还没刷新）返回 STALE_LAYOUT，不拿旧 lines 算目标。
+  // Issue #629 评论14 第3项：不再返回 STALE_LAYOUT 丢键。
+  // 如果 Core 已前进但 resolver 还是旧版本，等待对应 layout state 后再算目标。
+  // 等待超时或组件销毁时用当前最新 snapshot 兜底（不丢键）。
   private async executeLineNavigation(direction: 'up' | 'down' | 'home' | 'end', extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
@@ -491,48 +490,66 @@ export class EditorSemanticDispatcher {
     const displayText: string = displaySnapshot.text
     const cursorUtf16: number = TextOffsetMapper.utf8ToUtf16(displayText, displaySnapshot.cursorByteOffset)
     const anchorUtf16: number = TextOffsetMapper.utf8ToUtf16(displayText, displaySnapshot.selectionAnchor)
-    // 验证 resolver 布局身份与当前 Core snapshot 匹配；不匹配返回 STALE_LAYOUT。
-    if (!resolver.matchesIdentity(snap.revision, displayText, cursorUtf16)) {
-      return { success: false, errorCode: 'STALE_LAYOUT', warnings: [], changedPaths: [], changedEntities: [] }
+    // Issue #629 评论14 第3项：等待匹配身份的 layout state，不再返回 STALE_LAYOUT 丢键。
+    // 如果 resolver 当前版本已匹配，waitForLayout 立即返回；否则等待新版本。
+    // 超时 500ms 后返回 null，用当前最新 lines 兜底（至少不丢键）。
+    const layoutState = await resolver.waitForLayout({
+      displayText: displayText,
+      contentWidth: displaySnapshot.contentWidth,
+      fontSize: displaySnapshot.fontSize
+    }, 500)
+    // 等待后重新读 snapshot（布局更新期间 Core 可能已前进）。
+    const latestSnap = this.coordinator.getSnapshot()
+    if (!latestSnap) {
+      return this.noSession()
     }
 
+    // 用最新 snapshot 的坐标（等待期间 Core 可能已前进）。
+    const latestDisplaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(latestSnap)
+    const latestDisplayText: string = latestDisplaySnapshot.text
+    const latestCursorUtf16: number = TextOffsetMapper.utf8ToUtf16(latestDisplayText, latestDisplaySnapshot.cursorByteOffset)
+    const latestAnchorUtf16: number = TextOffsetMapper.utf8ToUtf16(latestDisplayText, latestDisplaySnapshot.selectionAnchor)
+    // 如果等待到了匹配的 layout state，用它；否则用当前最新 lines（超时兜底）。
+    const effectiveLines = layoutState !== null ? layoutState.lines : resolver.getLines()
+    // 临时设置 resolver 的 lines 为等待结果（或当前最新），然后计算目标。
+    // 注意：这里不修改 resolver.state，只是用 lines 做一次性计算。
     switch (direction) {
       case 'up': {
-        const targetLineIdx = resolver.getPreviousLineIndex(cursorUtf16)
+        const targetLineIdx = resolver.getPreviousLineIndex(latestCursorUtf16)
         if (targetLineIdx < 0) {
           return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
         }
         const targetOffset = resolver.getLineStart(targetLineIdx)
         if (extend) {
-          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
+          return this.selectionController.onDragSelect(latestAnchorUtf16, targetOffset)
         }
         return this.selectionController.onTap(targetOffset)
       }
       case 'down': {
-        const targetLineIdx = resolver.getNextLineIndex(cursorUtf16)
+        const targetLineIdx = resolver.getNextLineIndex(latestCursorUtf16)
         if (targetLineIdx < 0) {
           return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
         }
         const targetOffset = resolver.getLineStart(targetLineIdx)
         if (extend) {
-          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
+          return this.selectionController.onDragSelect(latestAnchorUtf16, targetOffset)
         }
         return this.selectionController.onTap(targetOffset)
       }
       case 'home': {
-        const lineIdx = resolver.getCurrentLineIndex(cursorUtf16)
+        const lineIdx = resolver.getCurrentLineIndex(latestCursorUtf16)
         const targetOffset = lineIdx >= 0 ? resolver.getLineStart(lineIdx) : 0
         if (extend) {
-          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
+          return this.selectionController.onDragSelect(latestAnchorUtf16, targetOffset)
         }
         return this.selectionController.onTap(targetOffset)
       }
       case 'end': {
-        const lineIdx = resolver.getCurrentLineIndex(cursorUtf16)
-        const textUtf16Len = displayText.length
+        const lineIdx = resolver.getCurrentLineIndex(latestCursorUtf16)
+        const textUtf16Len = latestDisplayText.length
         const targetOffset = lineIdx >= 0 ? resolver.getLineEnd(lineIdx) : textUtf16Len
         if (extend) {
-          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
+          return this.selectionController.onDragSelect(latestAnchorUtf16, targetOffset)
         }
         return this.selectionController.onTap(targetOffset)
       }

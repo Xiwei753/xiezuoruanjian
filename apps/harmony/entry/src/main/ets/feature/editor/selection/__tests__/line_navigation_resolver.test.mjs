@@ -1,12 +1,10 @@
 // line_navigation_resolver.test.mjs — LineNavigationResolver 纯逻辑单测。
-// Issue #629 评论11 第2项：Up/Down/Home/End 行级导航解析器。
-// resolver 存带身份的布局状态（revision + displayText + cursorUtf16 + lines），
-// executeLineNavigation 出队时验证身份匹配才用 lines 算目标，不匹配返回 STALE_LAYOUT。
+// Issue #629 评论11 第2项 + 评论14 第3项：Up/Down/Home/End 行级导航解析器。
+// resolver 存带身份的布局状态（displayText + contentWidth + fontSize + lines），
+// 版本化 layout source：executeLineNavigation 出队时如果 Core 已前进但 resolver 还是旧版本，
+// 等待对应版本的 layout state 后再算目标，不返回 STALE_LAYOUT 丢键。
 //
 // 运行：node line_navigation_resolver.test.mjs
-//
-// 注意：.ets 依赖 ArkUI 无法用 Node 直接测，本测试验证提取的纯逻辑（与
-// LineNavigationResolver.ets 对齐）。生产代码需 HarmonyOS SDK 才能端到端编译。
 
 import { strict as assert } from 'node:assert'
 
@@ -16,21 +14,74 @@ const test = (name, fn) => {
   passed++
   console.log(`  [PASS] ${name}`)
 }
+const testAsync = async (name, fn) => {
+  await fn()
+  passed++
+  console.log(`  [PASS] ${name}`)
+}
+const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
 // ── 纯逻辑：与 LineNavigationResolver.ets 对齐 ──
+// Issue #629 评论14 第3项：身份 = displayText + contentWidth + fontSize（不含 cursorUtf16）。
 
 class LineNavigationResolver {
   constructor() {
     this.state = null
+    this.nextVersion = 1
+    this.waiters = []
   }
   updateLayout(state) {
     this.state = state
+    if (state !== null) {
+      this.resolveWaiters(state)
+    }
   }
-  matchesIdentity(revision, displayText, cursorUtf16) {
-    if (this.state === null) return false
-    return this.state.revision === revision
-      && this.state.displayText === displayText
-      && this.state.cursorUtf16 === cursorUtf16
+  waitForLayout(identity, timeoutMs = 500) {
+    if (this.state !== null && this.matchesIdentity(this.state, identity)) {
+      return Promise.resolve(this.state)
+    }
+    return new Promise((resolve) => {
+      const version = this.nextVersion
+      const waiter = { identity, resolve, version }
+      this.waiters.push(waiter)
+      const timer = setTimeout(() => {
+        this.removeWaiter(waiter)
+        resolve(null)
+      }, timeoutMs)
+      const originalResolve = waiter.resolve
+      waiter.resolve = (state) => {
+        clearTimeout(timer)
+        originalResolve(state)
+      }
+    })
+  }
+  cancelWait() {
+    for (const waiter of this.waiters) {
+      waiter.resolve(null)
+    }
+    this.waiters = []
+  }
+  resolveWaiters(state) {
+    const resolved = []
+    for (const waiter of this.waiters) {
+      if (this.matchesIdentity(state, waiter.identity)) {
+        waiter.resolve(state)
+        resolved.push(waiter)
+      }
+    }
+    for (const w of resolved) {
+      this.removeWaiter(w)
+    }
+  }
+  removeWaiter(waiter) {
+    const idx = this.waiters.indexOf(waiter)
+    if (idx >= 0) this.waiters.splice(idx, 1)
+  }
+  matchesIdentity(state, identity) {
+    if (state === null) return false
+    return state.displayText === identity.displayText
+      && state.contentWidth === identity.contentWidth
+      && state.fontSize === identity.fontSize
   }
   getLines() {
     return this.state === null ? [] : this.state.lines
@@ -79,115 +130,121 @@ function mockLines(text) {
   return lines
 }
 
-console.log('line_navigation_resolver 纯逻辑单测（Issue #629 评论11 第2项）')
+console.log('line_navigation_resolver 纯逻辑单测（Issue #629 评论11 第2项 + 评论14 第3项）')
 console.log('---')
 
-// ── matchesIdentity ──
+// ── matchesIdentity（新版：displayText + contentWidth + fontSize） ──
 
-test('matchesIdentity: state 为 null → false（无布局信息）', () => {
+test('matchesIdentity: state 为 null → false', () => {
   const r = new LineNavigationResolver()
-  assert.equal(r.matchesIdentity(1, 'abc', 0), false)
+  // state is null initially
+  assert.equal(r.matchesIdentity(null, { displayText: 'abc', contentWidth: 300, fontSize: 16 }), false)
 })
 
-test('matchesIdentity: revision/displayText/cursorUtf16 全匹配 → true', () => {
+test('matchesIdentity: displayText + contentWidth + fontSize 全匹配 → true', () => {
   const r = new LineNavigationResolver()
-  r.updateLayout({ revision: 1, displayText: 'abc', cursorUtf16: 2, lines: mockLines('abc') })
-  assert.equal(r.matchesIdentity(1, 'abc', 2), true)
-})
-
-test('matchesIdentity: revision 不同 → false', () => {
-  const r = new LineNavigationResolver()
-  r.updateLayout({ revision: 1, displayText: 'abc', cursorUtf16: 2, lines: mockLines('abc') })
-  assert.equal(r.matchesIdentity(2, 'abc', 2), false)
+  r.updateLayout({ displayText: 'abc', contentWidth: 300, fontSize: 16, lines: mockLines('abc'), version: 1 })
+  assert.equal(r.matchesIdentity(r.state, { displayText: 'abc', contentWidth: 300, fontSize: 16 }), true)
 })
 
 test('matchesIdentity: displayText 不同 → false', () => {
   const r = new LineNavigationResolver()
-  r.updateLayout({ revision: 1, displayText: 'abc', cursorUtf16: 2, lines: mockLines('abc') })
-  assert.equal(r.matchesIdentity(1, 'abd', 2), false)
+  r.updateLayout({ displayText: 'abc', contentWidth: 300, fontSize: 16, lines: mockLines('abc'), version: 1 })
+  assert.equal(r.matchesIdentity(r.state, { displayText: 'abd', contentWidth: 300, fontSize: 16 }), false)
 })
 
-test('matchesIdentity: cursorUtf16 不同 → false', () => {
+test('matchesIdentity: contentWidth 不同 → false（折行边界变化）', () => {
   const r = new LineNavigationResolver()
-  r.updateLayout({ revision: 1, displayText: 'abc', cursorUtf16: 2, lines: mockLines('abc') })
-  assert.equal(r.matchesIdentity(1, 'abc', 3), false)
+  r.updateLayout({ displayText: 'abc', contentWidth: 300, fontSize: 16, lines: mockLines('abc'), version: 1 })
+  assert.equal(r.matchesIdentity(r.state, { displayText: 'abc', contentWidth: 200, fontSize: 16 }), false)
 })
 
-test('matchesIdentity: composition 活跃时 displayText 含 preedit → 与 committed text 不同 → false', () => {
+test('matchesIdentity: fontSize 不同 → false（折行边界变化）', () => {
   const r = new LineNavigationResolver()
-  // resolver 存的是含 preedit 的显示文本
-  r.updateLayout({ revision: 1, displayText: 'abc你好def', cursorUtf16: 5, lines: mockLines('abc你好def') })
-  // executeLineNavigation 用 committed text 'abcdef' 构造 identity → 不匹配
-  assert.equal(r.matchesIdentity(1, 'abcdef', 3), false)
-  // 用显示文本构造 → 匹配
-  assert.equal(r.matchesIdentity(1, 'abc你好def', 5), true)
+  r.updateLayout({ displayText: 'abc', contentWidth: 300, fontSize: 16, lines: mockLines('abc'), version: 1 })
+  assert.equal(r.matchesIdentity(r.state, { displayText: 'abc', contentWidth: 300, fontSize: 14 }), false)
 })
 
-// ── STALE_LAYOUT 场景（executeLineNavigation 出队时验证） ──
-
-test('STALE_LAYOUT: state 为 null → 不算目标', () => {
+test('matchesIdentity: cursorUtf16 不影响匹配（cursor 不决定折行）', () => {
   const r = new LineNavigationResolver()
-  // executeLineNavigation 会调 matchesIdentity，null → false → STALE_LAYOUT
-  assert.equal(r.matchesIdentity(1, 'abc', 0), false)
-  assert.equal(r.getLines().length, 0)
+  r.updateLayout({ displayText: 'abc', contentWidth: 300, fontSize: 16, lines: mockLines('abc'), version: 1 })
+  // 不同 cursor 但相同 displayText/contentWidth/fontSize → 仍然匹配
+  assert.equal(r.matchesIdentity(r.state, { displayText: 'abc', contentWidth: 300, fontSize: 16 }), true)
 })
 
-test('STALE_LAYOUT: Core snapshot 已前进而 ArkUI 布局还没刷新 → revision 不匹配', () => {
+// ── waitForLayout ──
+
+test('waitForLayout: 当前 state 已匹配 → 立即返回', async () => {
   const r = new LineNavigationResolver()
-  // resolver 存的是 revision=1 的布局
-  r.updateLayout({ revision: 1, displayText: 'abc', cursorUtf16: 1, lines: mockLines('abc') })
-  // Core snapshot 已前进到 revision=2（用户打了字），但 onAreaChange 还没触发 refreshRenderLayout
-  assert.equal(r.matchesIdentity(2, 'abc', 1), false)
+  r.updateLayout({ displayText: 'abc', contentWidth: 300, fontSize: 16, lines: mockLines('abc'), version: 1 })
+  const result = await r.waitForLayout({ displayText: 'abc', contentWidth: 300, fontSize: 16 }, 100)
+  assert.notEqual(result, null)
+  assert.equal(result.lines.length, 1)
 })
 
-test('STALE_LAYOUT: displayText 变化（用户输入新字）→ 不匹配', () => {
+test('waitForLayout: 当前 state 不匹配 → 等待新版本', async () => {
   const r = new LineNavigationResolver()
-  r.updateLayout({ revision: 1, displayText: 'hello', cursorUtf16: 2, lines: mockLines('hello') })
-  // 用户输入 'x' 后 displayText = 'hexllo'，但布局还是 'hello' 的
-  assert.equal(r.matchesIdentity(1, 'hexllo', 3), false)
+  r.updateLayout({ displayText: 'old', contentWidth: 300, fontSize: 16, lines: mockLines('old'), version: 1 })
+  // 启动等待
+  const waitPromise = r.waitForLayout({ displayText: 'new', contentWidth: 300, fontSize: 16 }, 200)
+  // 模拟 SujianEditor 更新布局
+  setTimeout(() => {
+    r.updateLayout({ displayText: 'new', contentWidth: 300, fontSize: 16, lines: mockLines('new'), version: 2 })
+  }, 50)
+  const result = await waitPromise
+  assert.notEqual(result, null)
+  assert.equal(result.displayText, 'new')
 })
 
-// ── 行级导航（identity 匹配时） ──
+test('waitForLayout: 超时返回 null', async () => {
+  const r = new LineNavigationResolver()
+  r.updateLayout({ displayText: 'old', contentWidth: 300, fontSize: 16, lines: mockLines('old'), version: 1 })
+  const result = await r.waitForLayout({ displayText: 'new', contentWidth: 300, fontSize: 16 }, 50)
+  assert.equal(result, null)
+})
 
-test('up: identity 匹配 → 返回上一行行首', () => {
+test('cancelWait: 取消所有等待', async () => {
+  const r = new LineNavigationResolver()
+  r.updateLayout({ displayText: 'old', contentWidth: 300, fontSize: 16, lines: mockLines('old'), version: 1 })
+  const waitPromise = r.waitForLayout({ displayText: 'new', contentWidth: 300, fontSize: 16 }, 500)
+  setTimeout(() => r.cancelWait(), 50)
+  const result = await waitPromise
+  assert.equal(result, null)
+})
+
+// ── 行级导航 ──
+
+test('up: 返回上一行行首', () => {
   const r = new LineNavigationResolver()
   const text = 'aaaaabbbbbccccc'
-  r.updateLayout({ revision: 1, displayText: text, cursorUtf16: 7, lines: mockLines(text) })
-  assert.equal(r.matchesIdentity(1, text, 7), true)
-  // cursor 在第 1 行（bbbbb），上一行是第 0 行（aaaaa），行首 = 0
+  r.updateLayout({ displayText: text, contentWidth: 300, fontSize: 16, lines: mockLines(text), version: 1 })
   const targetLine = r.getPreviousLineIndex(7)
   assert.equal(targetLine, 0)
   assert.equal(r.getLineStart(targetLine), 0)
 })
 
-test('down: identity 匹配 → 返回下一行行首', () => {
+test('down: 返回下一行行首', () => {
   const r = new LineNavigationResolver()
   const text = 'aaaaabbbbbccccc'
-  r.updateLayout({ revision: 1, displayText: text, cursorUtf16: 2, lines: mockLines(text) })
-  assert.equal(r.matchesIdentity(1, text, 2), true)
-  // cursor 在第 0 行，下一行是第 1 行，行首 = 5
+  r.updateLayout({ displayText: text, contentWidth: 300, fontSize: 16, lines: mockLines(text), version: 1 })
   const targetLine = r.getNextLineIndex(2)
   assert.equal(targetLine, 1)
   assert.equal(r.getLineStart(targetLine), 5)
 })
 
-test('home: identity 匹配 → 返回当前行行首', () => {
+test('home: 返回当前行行首', () => {
   const r = new LineNavigationResolver()
   const text = 'aaaaabbbbbccccc'
-  r.updateLayout({ revision: 1, displayText: text, cursorUtf16: 7, lines: mockLines(text) })
-  assert.equal(r.matchesIdentity(1, text, 7), true)
-  // cursor 在第 1 行，行首 = 5
+  r.updateLayout({ displayText: text, contentWidth: 300, fontSize: 16, lines: mockLines(text), version: 1 })
   const lineIdx = r.getCurrentLineIndex(7)
   assert.equal(lineIdx, 1)
   assert.equal(r.getLineStart(lineIdx), 5)
 })
 
-test('end: identity 匹配 → 返回当前行行末', () => {
+test('end: 返回当前行行末', () => {
   const r = new LineNavigationResolver()
   const text = 'aaaaabbbbbccccc'
-  r.updateLayout({ revision: 1, displayText: text, cursorUtf16: 7, lines: mockLines(text) })
-  assert.equal(r.matchesIdentity(1, text, 7), true)
-  // cursor 在第 1 行，行末 = 10
+  r.updateLayout({ displayText: text, contentWidth: 300, fontSize: 16, lines: mockLines(text), version: 1 })
   const lineIdx = r.getCurrentLineIndex(7)
   assert.equal(lineIdx, 1)
   assert.equal(r.getLineEnd(lineIdx), 10)
@@ -196,33 +253,30 @@ test('end: identity 匹配 → 返回当前行行末', () => {
 test('up: 已在第一行 → getPreviousLineIndex 返回 -1', () => {
   const r = new LineNavigationResolver()
   const text = 'aaaaabbbbb'
-  r.updateLayout({ revision: 1, displayText: text, cursorUtf16: 2, lines: mockLines(text) })
+  r.updateLayout({ displayText: text, contentWidth: 300, fontSize: 16, lines: mockLines(text), version: 1 })
   assert.equal(r.getPreviousLineIndex(2), -1)
 })
 
 test('down: 已在最后一行 → getNextLineIndex 返回 -1', () => {
   const r = new LineNavigationResolver()
   const text = 'aaaaabbbbb'
-  r.updateLayout({ revision: 1, displayText: text, cursorUtf16: 7, lines: mockLines(text) })
+  r.updateLayout({ displayText: text, contentWidth: 300, fontSize: 16, lines: mockLines(text), version: 1 })
   assert.equal(r.getNextLineIndex(7), -1)
 })
 
-test('updateLayout(null): 清空 state → matchesIdentity false, getLines 空', () => {
+test('updateLayout(null): 清空 state', () => {
   const r = new LineNavigationResolver()
-  r.updateLayout({ revision: 1, displayText: 'abc', cursorUtf16: 1, lines: mockLines('abc') })
+  r.updateLayout({ displayText: 'abc', contentWidth: 300, fontSize: 16, lines: mockLines('abc'), version: 1 })
   r.updateLayout(null)
-  assert.equal(r.matchesIdentity(1, 'abc', 1), false)
   assert.equal(r.getLines().length, 0)
   assert.equal(r.getCurrentLineIndex(0), -1)
 })
 
-test('中文行布局: identity 含中文 displayText → 匹配时正确算行', () => {
+test('中文行布局: 匹配时正确算行', () => {
   const r = new LineNavigationResolver()
   const text = '你好世界测试'
   const lines = [{ startUtf16: 0, endUtf16: 3, y: 0, height: 20 }, { startUtf16: 3, endUtf16: 6, y: 20, height: 20 }]
-  r.updateLayout({ revision: 2, displayText: text, cursorUtf16: 4, lines })
-  assert.equal(r.matchesIdentity(2, text, 4), true)
-  // cursor 在第 1 行，up → 第 0 行行首 = 0
+  r.updateLayout({ displayText: text, contentWidth: 300, fontSize: 16, lines, version: 1 })
   assert.equal(r.getPreviousLineIndex(4), 0)
   assert.equal(r.getLineStart(0), 0)
 })

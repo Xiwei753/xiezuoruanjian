@@ -112,6 +112,9 @@ export struct WritingScreen {
   // 已有 leaveTask 时直接返回同一 task，task 内只 pop 一次。
   // close 失败时清 leaveTask 允许再次返回重试；成功后不重置（页面已离开）。
   private leaveTask: Promise<void> | null = null
+  // Issue #629 评论14 第2项：离开守卫唯一 token。registerLeaveGuard 返回，
+  // aboutToDisappear 用此 token 注销，避免误注销其他 WritingScreen 实例的 guard。
+  private leaveGuardToken: number = -1
 
   aboutToAppear() {
     const paramsArr = this.navPathStack.getParamByName(Routes.Writing) as WritingRouteParams[]
@@ -177,10 +180,10 @@ export struct WritingScreen {
     }
     this.lifecycle.addObserver(this.shareLifecycleObserver!)
 
-    // Issue #629 评论11 第3项：注册当前 WritingScreen 的离开守卫。
-    // AppNavigationHost.safePop/safeClearAndRebuild 会 await 此 guard（performGracefulClose），
+    // Issue #629 评论14 第2项：注册当前 WritingScreen 的离开守卫，获取唯一 token。
+    // AppNavigationHost.safePop/safeClearAndRebuild/safeReplacePath 会 await 此 guard（performGracefulClose），
     // 只有保存成功且 Core close 成功才允许改栈，未保存正文不被程序化 clear/pop 绕过。
-    AppNavigationHost.getInstance().registerLeaveGuard('writing-screen', (): Promise<boolean> => this.performGracefulClose())
+    this.leaveGuardToken = AppNavigationHost.getInstance().registerLeaveGuard((): Promise<boolean> => this.performGracefulClose())
   }
 
   // Issue #629 评论6 Part G + 评论7 第5项 + 评论8 第2/3项：统一幂等关闭事务。
@@ -338,8 +341,12 @@ export struct WritingScreen {
   // 离开后的 observer/share/view 清理（removeObserver、stopShareLifecycle、setStateListener(null)）。
   // 不能把它当返回拦截器：此时路由已退栈，无法阻止返回。
   async aboutToDisappear() {
-    // Issue #629 评论11 第3项：注销自己的离开守卫（只注销 'writing-screen' owner）。
-    AppNavigationHost.getInstance().unregisterLeaveGuard('writing-screen')
+    // Issue #629 评论14 第2项：用唯一 token 注销自己的离开守卫，
+    // 不影响其他 WritingScreen 实例（如宽屏切章节时新旧实例生命周期重叠）。
+    if (this.leaveGuardToken >= 0) {
+      AppNavigationHost.getInstance().unregisterLeaveGuard(this.leaveGuardToken)
+      this.leaveGuardToken = -1
+    }
     // 清除监听器（避免 close 后回调）
     this.coordinator.setStateListener(null)
 
