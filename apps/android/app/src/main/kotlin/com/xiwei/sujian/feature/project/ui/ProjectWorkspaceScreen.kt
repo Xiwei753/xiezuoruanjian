@@ -198,8 +198,11 @@ internal fun ProjectWorkspaceScreen(
                     appState.selectChapter(edit.volumeId, edit.chapterId, chapter.title)
                     workspaceNavState.navigateToEditor(edit.projectId, edit.volumeId, edit.chapterId)
                 }
-                is ChapterSwitchResult.LoadFailed -> {
-                    // 章节加载失败时回退到作品章节树
+                is ChapterSwitchResult.SaveFailed,
+                is ChapterSwitchResult.LoadFailed,
+                ChapterSwitchResult.Stale,
+                -> {
+                    // 章节保存失败/加载失败/过期时回退到作品章节树
                     appState.selectProject(edit.projectId, projectTitle)
                     appState.clearChapterSelection()
                     workspaceNavState.navigateToChapterTree(edit.projectId)

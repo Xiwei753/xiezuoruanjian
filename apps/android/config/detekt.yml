@@ -129,7 +129,6 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/settings/ui/AppearanceSettings.kt"
       - "**/kotlin/com/xiwei/sujian/feature/settings/ui/EditorSettings.kt"
       - "**/kotlin/com/xiwei/sujian/feature/settings/ui/SyncSettings.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/settings/ui/DiagnosticsSettings.kt"
       # --- 统计/工作台/工作区 ---
       - "**/kotlin/com/xiwei/sujian/feature/stats/ui/StatsScreen.kt"
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectListScreen.kt"

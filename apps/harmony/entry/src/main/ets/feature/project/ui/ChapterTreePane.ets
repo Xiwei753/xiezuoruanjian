@@ -4,9 +4,9 @@
 // 里面不能出现 EditorSessionCoordinator、IME、Dispatcher、saveChapter。
 // 由 WritingScreen 在宽屏模式下持有并展示。
 
-import { VolumeTree, ChapterMeta } from '../../../../corebridge/dto/ProjectDtos'
-import { HarmonyThemeAdapter, ThemeConfig, ThemeObserverImpl } from '../../../../ui/theme/HarmonyThemeAdapter'
-import { DesignTokens } from '../../../../ui/theme/DesignTokens'
+import { VolumeTree, ChapterMeta } from '../../../corebridge/dto/ProjectDtos'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
+import { DesignTokens } from '../../../ui/theme/DesignTokens'
 
 @Component
 export struct ChapterTreePane {

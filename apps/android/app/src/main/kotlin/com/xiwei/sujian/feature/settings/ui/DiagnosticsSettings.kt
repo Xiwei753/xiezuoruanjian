@@ -18,64 +18,52 @@ import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.diagnostics.DiagnosticsExporter
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
+import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
  * #630 评论13/评论15: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
+ *
+ * 结构拆分（detekt LongMethod 阈值 80）：
+ * - [diagnosticsSwitchItem]：通用诊断开关 item（enabled / verbose 共享同一模式）
+ * - [CopyDeviceInfoButton]：复制设备信息按钮（含 Clipboard 操作）
+ * - [ClearLogsButton]、[ExportDiagnosticsButton]：已有独立 Composable
  */
 fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
-    // ── 诊断分组标题 ──
     item(key = "diagnostics.settings_title") {
         SettingsGroupItemContainer(isLast = false, isFirst = true) {
             SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_diagnostics))
         }
     }
 
-    // 诊断开关
-    item(key = "diagnostics.enabled") {
-        val state by vm.diagnosticsState.collectAsStateWithLifecycle()
-        SettingsGroupItemContainer(isLast = false) {
-            SujianSwitchRow(
-                title = stringResource(id = R.string.pref_diagnostics_enabled),
-                checked = state.enabled,
-                onCheckedChange = { checked ->
-                    DiagnosticsLogger.setEnabled(checked)
-                    EditorEventRingBuffer.setEnabled(checked)
-                    if (!checked) {
-                        DiagnosticsLogger.setVerbose(false)
-                    }
-                    vm.handleIntent(
-                        SettingsIntent.UpdateLocal { current ->
-                            current.copy(
-                                diagnosticsEnabled = checked,
-                                diagnosticsVerbose = if (checked) current.diagnosticsVerbose else false,
-                            )
-                        },
-                    )
-                },
+    diagnosticsSwitchItem(
+        key = "diagnostics.enabled",
+        vm = vm,
+        isChecked = { it.enabled },
+        onCheckedChange = { checked, current ->
+            DiagnosticsLogger.setEnabled(checked)
+            EditorEventRingBuffer.setEnabled(checked)
+            if (!checked) DiagnosticsLogger.setVerbose(false)
+            current.copy(
+                diagnosticsEnabled = checked,
+                diagnosticsVerbose = if (checked) current.diagnosticsVerbose else false,
             )
-        }
-    }
+        },
+    )
 
-    // 详细日志开关
-    item(key = "diagnostics.verbose") {
-        val state by vm.diagnosticsState.collectAsStateWithLifecycle()
-        SettingsGroupItemContainer(isLast = false) {
-            SujianSwitchRow(
-                title = stringResource(id = R.string.pref_diagnostics_verbose),
-                checked = state.verbose,
-                onCheckedChange = { checked ->
-                    DiagnosticsLogger.setVerbose(checked)
-                    vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(diagnosticsVerbose = checked) })
-                },
-                enabled = state.enabled,
-            )
-        }
-    }
+    diagnosticsSwitchItem(
+        key = "diagnostics.verbose",
+        vm = vm,
+        isChecked = { it.verbose },
+        onCheckedChange = { checked, current ->
+            DiagnosticsLogger.setVerbose(checked)
+            current.copy(diagnosticsVerbose = checked)
+        },
+        switchEnabled = { it.enabled },
+    )
 
-    // 导出诊断按钮
     item(key = "diagnostics.export") {
         val context = LocalContext.current
         SettingsGroupItemContainer(isLast = false) {
@@ -83,7 +71,6 @@ fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
         }
     }
 
-    // 清空日志按钮
     item(key = "diagnostics.clear") {
         val context = LocalContext.current
         val clearedText = stringResource(id = R.string.diagnostics_cleared)
@@ -98,27 +85,75 @@ fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
         }
     }
 
-    // 复制设备信息按钮
     item(key = "diagnostics.copy_device_info") {
         val context = LocalContext.current
         val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
         SettingsGroupItemContainer(isLast = true) {
-            SujianOutlinedButton(
-                text = stringResource(id = R.string.btn_copy_device_info),
-                onClick = {
-                    val deviceInfoJson = DiagnosticsExporter.getDeviceInfoJson(context)
-                    val clipboard =
-                        context.getSystemService(
-                            android.content.Context.CLIPBOARD_SERVICE,
-                        ) as android.content.ClipboardManager
-                    @Suppress("HardcodedText")
-                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("device_info", deviceInfoJson))
-                    Toast.makeText(context, deviceInfoCopiedText, Toast.LENGTH_SHORT).show()
-                },
+            CopyDeviceInfoButton(
+                context = context,
+                copiedText = deviceInfoCopiedText,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
     }
+}
+
+// ── 辅助 item：诊断开关（enabled / verbose 共享模式） ──
+
+private fun LazyListScope.diagnosticsSwitchItem(
+    key: String,
+    vm: SettingsViewModel,
+    isChecked: (DiagnosticsSectionState) -> Boolean,
+    onCheckedChange: (Boolean, LocalSettings) -> LocalSettings,
+    switchEnabled: ((DiagnosticsSectionState) -> Boolean)? = null,
+) {
+    item(key = key) {
+        val state by vm.diagnosticsState.collectAsStateWithLifecycle()
+        SettingsGroupItemContainer(isLast = false) {
+            SujianSwitchRow(
+                title =
+                    stringResource(
+                        id =
+                            when (key) {
+                                "diagnostics.enabled" -> R.string.pref_diagnostics_enabled
+                                else -> R.string.pref_diagnostics_verbose
+                            },
+                    ),
+                checked = isChecked(state),
+                onCheckedChange = { checked ->
+                    vm.handleIntent(
+                        SettingsIntent.UpdateLocal { current ->
+                            onCheckedChange(checked, current)
+                        },
+                    )
+                },
+                enabled = switchEnabled?.invoke(state) ?: true,
+            )
+        }
+    }
+}
+
+// ── 按钮 Composable ──
+
+@androidx.compose.runtime.Composable
+private fun CopyDeviceInfoButton(
+    context: android.content.Context,
+    copiedText: String,
+    modifier: Modifier = Modifier,
+) {
+    SujianOutlinedButton(
+        text = stringResource(id = R.string.btn_copy_device_info),
+        onClick = {
+            val json = DiagnosticsExporter.getDeviceInfoJson(context)
+            val clipboard =
+                context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                    as android.content.ClipboardManager
+            @Suppress("HardcodedText")
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("device_info", json))
+            Toast.makeText(context, copiedText, Toast.LENGTH_SHORT).show()
+        },
+        modifier = modifier,
+    )
 }
 
 /**
