@@ -27,20 +27,16 @@ export interface LineLayoutIdentity {
 // 带身份的行布局状态。
 export interface LineLayoutState extends LineLayoutIdentity {
   readonly lines: LineLayout[]
-  // 单调递增版本号，用于等待机制。
-  readonly version: number
 }
 
 // 等待条目：当 resolver 版本落后于 Core snapshot 时，行导航命令等待新版本。
 interface Waiter {
-  readonly identity: LineLayoutIdentity
-  readonly resolve: (state: LineLayoutState | null) => void
-  readonly version: number
+  identity: LineLayoutIdentity
+  resolve: (state: LineLayoutState | null) => void
 }
 
 export class LineNavigationResolver {
   private state: LineLayoutState | null = null
-  private nextVersion: number = 1
   // 等待列表：executeLineNavigation 出队时如果版本落后，注册 waiter 等待新布局。
   private waiters: Waiter[] = []
 
@@ -68,8 +64,7 @@ export class LineNavigationResolver {
 
     // 注册 waiter
     return new Promise<LineLayoutState | null>((resolve) => {
-      const version: number = this.nextVersion
-      const waiter: Waiter = { identity, resolve, version }
+      const waiter: Waiter = { identity, resolve }
       this.waiters.push(waiter)
 
       // 超时后取消等待（返回 null，调用方用当前最新 snapshot 兜底）

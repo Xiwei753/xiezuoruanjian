@@ -20,6 +20,10 @@ export class EditorLayoutSnapshot {
   // 字体大小（vp）。render 层做确定性命中测试时由 SujianEditor 传给 Text.fontSize
   // 和 getMeasureUtils().measureText，保证测量与渲染用同一字体度量。
   readonly fontSize: number
+  // Issue #629 评论14 第3项：contentWidth 用于行导航 resolver 身份匹配。
+  // SujianEditor 在 onAreaChange 中更新 contentWidth，刷新行布局时传给 LayoutSnapshot。
+  // 行导航命令出队时用此值判断布局版本是否匹配当前 Core snapshot。
+  readonly contentWidth: number
 
   constructor(
     text: string,
@@ -29,7 +33,8 @@ export class EditorLayoutSnapshot {
     compositionEnd: number | null,
     cursorByteOffset: number,
     revision: number,
-    fontSize: number = 16
+    fontSize: number = 16,
+    contentWidth: number = 0
   ) {
     this.text = text
     this.selectionAnchor = selectionAnchor
@@ -39,6 +44,7 @@ export class EditorLayoutSnapshot {
     this.cursorByteOffset = cursorByteOffset
     this.revision = revision
     this.fontSize = fontSize
+    this.contentWidth = contentWidth
   }
 
   // 从 Core EditorSessionSnapshot 构造布局快照。
@@ -48,7 +54,7 @@ export class EditorLayoutSnapshot {
   //   compositionStart/End = preedit 在显示文本中的 UTF-8 byte 范围。
   // 无 composition 时：text = snap.text（committed text），compositionStart/End = null。
   // 保存正文仍只取 snap.text（committed text），不把 preedit 写进文件。
-  static fromEditorSnapshot(snap: EditorSessionSnapshot, fontSize?: number): EditorLayoutSnapshot {
+  static fromEditorSnapshot(snap: EditorSessionSnapshot, fontSize?: number, contentWidth?: number): EditorLayoutSnapshot {
     const composition: EditorCompositionState | null = snap.composition
     if (composition === null || composition === undefined) {
       // 无 composition：显示文本 = committed text，compositionStart/End = null。
@@ -60,7 +66,8 @@ export class EditorLayoutSnapshot {
         null,
         snap.cursor,
         snap.revision,
-        fontSize ?? 16
+        fontSize ?? 16,
+        contentWidth ?? 0
       )
     }
     // 有 composition：构造临时显示文本。
@@ -93,7 +100,8 @@ export class EditorLayoutSnapshot {
       compositionEnd,
       displayCaretByte,
       snap.revision,
-      fontSize ?? 16
+      fontSize ?? 16,
+      contentWidth ?? 0
     )
   }
 }

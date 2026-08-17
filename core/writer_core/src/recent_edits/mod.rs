@@ -115,7 +115,10 @@ pub fn record_recent_edit(
         let recent_path = app_data_root.join("recent_edits.json");
         if recent_path.exists() {
             let content = fs::read_to_string(&recent_path)?;
-            serde_json::from_str(&content).unwrap_or_default()
+            let raw: Vec<RecentEdit> = serde_json::from_str(&content).unwrap_or_default();
+            // #630 评论12 项1：磁盘数据进入缓存前统一走 normalize，
+            // 确保旧数据里的重复项不会绕过去重进入缓存。
+            normalize_recent_edits(raw)
         } else {
             Vec::new()
         }

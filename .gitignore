@@ -135,3 +135,4 @@ temp_csr/
 
 # pi 代理运行时目录（不提交）
 .pi/
+apps/android/.kotlin/

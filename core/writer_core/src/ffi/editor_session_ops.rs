@@ -85,9 +85,15 @@ pub unsafe extern "C" fn writer_core_editor_session_create(
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_editor_session_close(session_id: u64) -> *mut c_char {
-    match with_app_service(|svc| Ok(svc.text_edit_session_close(session_id) != 0)) {
+    match with_app_service(|svc| {
+        if svc.text_edit_session_close(session_id) != 0 {
+            Ok(true)
+        } else {
+            Err("EDITOR_SESSION_CLOSE_FAILED: session not found or close failed".to_string())
+        }
+    }) {
         Ok(b) => ok_json(b),
-        Err(e) => err_json("EDITOR_SESSION_ERROR", &e),
+        Err(e) => err_json("EDITOR_SESSION_CLOSE_FAILED", &e),
     }
 }
 

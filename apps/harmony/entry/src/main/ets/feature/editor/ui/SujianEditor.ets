@@ -62,6 +62,8 @@ export struct SujianEditor {
   dispatcher: EditorSemanticDispatcher | null = null
   // viewport 状态变化回调（供 WritingScreen 持续写入接续状态）。
   onViewportChange: ((state: EditorViewportState) => void) | null = null
+  // Issue #629 评论14 第3项：内容宽度变化回调（供 WritingScreen 更新 editorSnapshot 的 contentWidth）。
+  onContentWidthChange: ((width: number) => void) | null = null
   // Issue #629 评论6 Part C：父子 viewport 恢复通道。WritingScreen 持有 controller 实例并注入；
   // SujianEditor 在 aboutToAppear 注册 scrollTo + getDimensions，aboutToDisappear unregister。
   viewportController: EditorViewportController | null = null
@@ -193,15 +195,14 @@ export struct SujianEditor {
       this.selectionRects = result.selectionRects
       this.caretRect = result.caretRect
       this.compositionUnderlineRects = result.compositionUnderlineRects
-      // Issue #629 评论11 第2项：行布局更新后同步给行级导航解析器（带身份）。
-      // 身份来自 EditorLayoutSnapshot：revision + displayText（snap.text，composition 活跃时
-      // 已是含 preedit 的显示文本）+ cursorUtf16（snap.cursorByteOffset 转 UTF-16）。
-      // executeLineNavigation 出队时验证此身份与当前 Core snapshot 匹配才用 lines 算目标。
-      const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursorByteOffset)
+      // Issue #629 评论11 第2项 + 评论14 第3项：行布局更新后同步给行级导航解析器（带身份）。
+      // 身份来自 EditorLayoutSnapshot：displayText + contentWidth + fontSize（不包含 cursorUtf16，
+      // 因为 cursor 不决定折行）。executeLineNavigation 出队时验证此身份与当前 Core snapshot
+      // 匹配才用 lines 算目标。
       const layoutState: LineLayoutState = {
-        revision: snap.revision,
         displayText: snap.text,
-        cursorUtf16: cursorUtf16,
+        contentWidth: this.contentWidth,
+        fontSize: snap.fontSize,
         lines: result.lines
       }
       this.lineResolver.updateLayout(layoutState)
@@ -526,6 +527,10 @@ export struct SujianEditor {
               // （contentWidth/contentHeight），不是外层 Scroll 可视区域尺寸。
               this.contentWidth = Number(newArea.width)
               this.contentHeight = Number(newArea.height)
+              // Issue #629 评论14 第3项：通知 WritingScreen 更新 editorSnapshot 的 contentWidth。
+              if (this.onContentWidthChange) {
+                this.onContentWidthChange(this.contentWidth)
+              }
               // 内容尺寸已知后重新计算几何（选区/光标/composition 下划线）。
               this.refreshRenderLayout()
               // Issue #629 评论7 第4项：内容尺寸更新后通知 controller 重试消费 pending。

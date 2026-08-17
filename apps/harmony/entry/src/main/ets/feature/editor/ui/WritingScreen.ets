@@ -24,6 +24,9 @@ import { SharePayload } from '../../../platform/share/SharePayload'
 import { EditorViewportState } from '../render/EditorViewportState'
 import { EditorViewportController } from '../render/EditorViewportController'
 import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
+import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
+import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
+import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
 
 @Component
 export struct WritingScreen {
@@ -70,11 +73,20 @@ export struct WritingScreen {
   @State sessionStartTime: number = 0
   @State adaptiveState: AdaptiveState = getAdaptiveState()
   @State editorSnapshot: EditorLayoutSnapshot | null = null
+  // Issue #629 评论14 第3项：当前内容宽度，由 SujianEditor 回调更新。
+  // 用于构造 EditorLayoutSnapshot 时传递 contentWidth（行导航 resolver 身份匹配）。
+  @State contentWidthForSnapshot: number = 0
+  // Issue #629 评论14 第1项：宽屏双栏模式下的目录数据。
+  // WritingScreen 在宽屏模式下持有 ChapterTreePane，需要加载项目树。
+  @State volumeTrees: VolumeTree[] = []
+  @State expandedVolumes: Set<string> = new Set()
+  @State isTreeLoading: boolean = false
   // 当前 UI 滚动位置（viewport），接续恢复时只设 UI，不写 Core。
   // 强类型 EditorViewportState，不用裸 object（Issue #629 评论 5 第 8 节）。
   @State currentViewport: EditorViewportState | null = null
 
   private bridge: IWriterCoreBridge = getBridge()
+  private projectBridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
   private autoSaveObserver: AutoSaveLifecycleObserver | null = null
@@ -128,6 +140,10 @@ export struct WritingScreen {
       this.continuationParams = params
       this.loadChapter()
       this.loadSettings()
+      // Issue #629 评论14 第1项：宽屏双栏模式下加载项目树（供 ChapterTreePane）。
+      if (this.adaptiveState.isTwoPane) {
+        this.loadProjectTree()
+      }
     }
 
     const self = this
@@ -140,7 +156,7 @@ export struct WritingScreen {
     // Core 已 Applied 只是平台 patch 失败时 recovery 后 editResult=本次 result.data，仍按 contentDelta 更新。
     this.coordinator.setStateListener((update: EditorStateUpdate) => {
       const snap = update.snapshot
-      self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize)
+      self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize, self.contentWidthForSnapshot)
       self.content = snap.text
       self.hasUnsavedChanges = snap.text !== self.lastSavedContent
       // 实时字数：消费 editResult.contentDelta（Core 非空白字符增量）
@@ -547,6 +563,138 @@ export struct WritingScreen {
     await this.shareService.share(payload, 'system')
   }
 
+  // Issue #629 评论14 第1项：宽屏双栏模式加载项目树。
+  private async loadProjectTree(): Promise<void> {
+    if (!this.projectId || this.adaptiveState.isTwoPane === false) {
+      return
+    }
+    this.isTreeLoading = true
+    try {
+      const result = await this.bridge.getProjectTree(this.projectId)
+      if (result.success && result.data) {
+        this.volumeTrees = result.data.volumes
+        // 展开包含当前章节的卷
+        for (const vt of this.volumeTrees) {
+          for (const ch of vt.chapters) {
+            if (ch.id === this.chapterId) {
+              this.expandedVolumes.add(vt.volume.id)
+              break
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load project tree:', err)
+    } finally {
+      this.isTreeLoading = false
+    }
+  }
+
+  // Issue #629 评论14 第1项：宽屏左侧切章节。
+  // 先完成当前 Writing 的 performGracefulClose()，成功后把当前 Writing route
+  // 替换成目标章节的 Writing route；失败保持原章节。
+  private async switchChapter(chapterId: string, chapterTitle: string, volumeId: string): Promise<void> {
+    if (chapterId === this.chapterId) {
+      return // 已是当前章节
+    }
+    const host = AppNavigationHost.getInstance()
+    const targetKey = `writing:${this.projectId}:${volumeId}:${chapterId}`
+    await host.safeReplacePath(targetKey, () => {
+      this.navPathStack.replace({
+        name: Routes.Writing,
+        param: {
+          chapterId: chapterId,
+          chapterTitle: chapterTitle,
+          projectId: this.projectId,
+          volumeId: volumeId
+        }
+      })
+    })
+  }
+
+  // Issue #629 评论14 第1项：展开/折叠卷。
+  private toggleVolume(volumeId: string): void {
+    if (this.expandedVolumes.has(volumeId)) {
+      this.expandedVolumes.delete(volumeId)
+    } else {
+      this.expandedVolumes.add(volumeId)
+    }
+  }
+
+  // Issue #629 评论14 第1项：创建卷（宽屏左侧目录面板回调）。
+  private async createVolume(): Promise<void> {
+    if (!this.projectId) {
+      return
+    }
+    try {
+      const defaultName = getContext(this).resourceManager.getStringSync($r('app.string.default_new_volume_title').id)
+      const result = await this.bridge.createVolume(this.projectId, defaultName)
+      if (result.success) {
+        this.loadProjectTree()
+      }
+    } catch (err) {
+      console.error('Failed to create volume:', err)
+    }
+  }
+
+  // Issue #629 评论14 第1项：创建章节（宽屏左侧目录面板回调）。
+  private async createChapter(volumeId: string): Promise<void> {
+    try {
+      const defaultName = getContext(this).resourceManager.getStringSync($r('app.string.default_new_chapter_title').id)
+      const result = await this.bridge.createChapter(volumeId, defaultName)
+      if (result.success) {
+        this.loadProjectTree()
+      }
+    } catch (err) {
+      console.error('Failed to create chapter:', err)
+    }
+  }
+
+  // Issue #629 评论14 第1项：删除卷（宽屏左侧目录面板回调）— 确认后删除。
+  private deleteVolume(volumeId: string): void {
+    AlertDialog.show({
+      title: $r('app.string.confirm_delete'),
+      message: $r('app.string.confirm_delete_volume'),
+      primaryButton: { value: $r('app.string.cancel'), action: () => {} },
+      secondaryButton: { value: $r('app.string.delete'), action: () => this.doDeleteVolume(volumeId) }
+    })
+  }
+
+  private async doDeleteVolume(volumeId: string): Promise<void> {
+    if (!this.projectId) {
+      return
+    }
+    try {
+      const result = await this.bridge.deleteVolume(this.projectId, volumeId)
+      if (result.success) {
+        this.loadProjectTree()
+      }
+    } catch (err) {
+      console.error('Failed to delete volume:', err)
+    }
+  }
+
+  // Issue #629 评论14 第1项：删除章节（宽屏左侧目录面板回调）— 确认后删除。
+  private deleteChapter(chapterId: string): void {
+    AlertDialog.show({
+      title: $r('app.string.confirm_delete'),
+      message: $r('app.string.confirm_delete_chapter'),
+      primaryButton: { value: $r('app.string.cancel'), action: () => {} },
+      secondaryButton: { value: $r('app.string.delete'), action: () => this.doDeleteChapter(chapterId) }
+    })
+  }
+
+  private async doDeleteChapter(chapterId: string): Promise<void> {
+    try {
+      const result = await this.bridge.deleteChapter(chapterId)
+      if (result.success) {
+        this.loadProjectTree()
+      }
+    } catch (err) {
+      console.error('Failed to delete chapter:', err)
+    }
+  }
+
   async loadSettings() {
     try {
       const result = await this.bridge.getLocalSettings()
@@ -761,16 +909,65 @@ export struct WritingScreen {
     // 拦截默认退栈（return true），异步调 requestLeave()（performGracefulClose 成功才 pop）；
     // 失败留在本页不 pop。aboutToDisappear 不再当返回拦截器，只做页面已离开后的清理。
     NavDestination() {
-      Column() {
-        // Header
+      if (this.adaptiveState.isTwoPane) {
+        // Issue #629 评论14 第1项：宽屏双栏布局。
+        // 左侧：ChapterTreePane（纯目录 UI，不持有编辑会话）。
+        // 右侧：当前 WritingScreen 的编辑会话（同一个 coordinator/inputAdapter/dispatcher/IME/save/close）。
+        // 屏幕宽度变化只改布局，不换 TextEditSession owner。
         Row() {
+          // 左侧目录面板
+          ChapterTreePane({
+            volumeTrees: this.volumeTrees,
+            expandedVolumes: this.expandedVolumes,
+            selectedChapterId: this.chapterId,
+            onToggleVolume: (volumeId: string): void => { this.toggleVolume(volumeId) },
+            onSelectChapter: (chapterId: string, chapterTitle: string, volumeId: string): void => {
+              this.switchChapter(chapterId, chapterTitle, volumeId)
+            },
+            onCreateVolume: (): void => { this.createVolume() },
+            onCreateChapter: (volumeId: string): void => { this.createChapter(volumeId) },
+            onDeleteVolume: (volumeId: string): void => { this.deleteVolume(volumeId) },
+            onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) }
+          })
+            .width(320)
+            .height('100%')
+
+          // 分割线
+          Column() {}
+            .width(0.5)
+            .height('100%')
+            .backgroundColor(this.themeConfig.colors.divider)
+
+          // 右侧编辑区域（同一个 WritingScreen 编辑会话）
+          this.EditorPane()
+        }
+        .width('100%')
+        .height('100%')
+      } else {
+        // Issue #629 评论9 第3项：窄屏单栏布局。
+        this.EditorPane()
+      }
+    }
+    .hideTitleBar(true)
+    .onBackPressed(() => {
+      // 拦截默认退栈：异步调 requestLeave()（成功才 pop），立即 return true 阻止默认回退。
+      // 失败时 requestLeave 不 pop，用户留在本页可继续编辑。
+      this.requestLeave()
+      return true
+    })
+  }
+
+  // Issue #629 评论14 第1项：编辑区域 Builder（窄屏和宽屏复用同一套编辑会话）。
+  @Builder
+  EditorPane() {
+    Column() {
+      // Header
+      Row() {
         Image($r('sys.media.ohos_ic_public_arrow_left'))
           .width(24)
           .height(24)
           .fillColor(this.themeConfig.colors.textPrimary)
           .onClick(() => {
-            // Issue #629 评论9 第3项：返回按钮走统一离开入口 requestLeave()（performGracefulClose
-            // 成功才 pop），与系统返回键/侧滑返回走同一链，禁止多套关闭流程。
             this.requestLeave()
           })
 
@@ -803,8 +1000,6 @@ export struct WritingScreen {
           .enabled(!this.isSaving && this.hasUnsavedChanges)
           .onClick(() => this.saveChapter())
 
-        // 普通系统分享按钮（Issue #629 评论 5 第 7 节）：只调用 share(payload, 'system')。
-        // 碰一碰/隔空传送不走此入口，走其生命周期接口（startTapSharing/startAirTransferSharing）。
         Button($r('app.string.share'))
           .fontSize(14)
           .height(32)
@@ -846,23 +1041,25 @@ export struct WritingScreen {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        // 自研写作区组件，消费 EditorLayoutSnapshot 静态渲染
-        // Issue #629 评论6 Part A+D：传 dispatcher（统一串行边界），删除 onSelectionTap（双 owner）。
         SujianEditor({
           snapshot: this.editorSnapshot,
           harmonyImeConnection: this.harmonyImeConnection,
           inputAdapter: this.inputAdapter,
           selectionController: this.selectionController,
           dispatcher: this.dispatcher,
-          // Issue #629 评论6 Part C：父子 viewport 恢复通道 controller。
-          // SujianEditor 在 aboutToAppear 注册 scrollTo + getDimensions，
-          // WritingScreen 调 controller.restore(state) 时按目标设备当前尺寸 clamp + scrollTo。
           viewportController: this.viewportController,
-          // Issue #629 评论 5 第 8 节：滚动时把 viewport 状态回调给 WritingScreen，
-          // 持续写入接续状态。
           onViewportChange: (state: EditorViewportState): void => {
             this.currentViewport = state
             this.updateContinuationState()
+          },
+          // Issue #629 评论14 第3项：内容宽度变化时更新 editorSnapshot 的 contentWidth。
+          onContentWidthChange: (width: number): void => {
+            this.contentWidthForSnapshot = width
+            // 重新构造带正确 contentWidth 的 editorSnapshot（供行导航 resolver 身份匹配）。
+            const snap = this.coordinator.getSnapshot()
+            if (snap) {
+              this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, this.settings.editorFontSize, width)
+            }
           }
         })
           .width('100%')
@@ -888,18 +1085,10 @@ export struct WritingScreen {
       .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
       .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 10, bottom: 10 })
       .backgroundColor(this.themeConfig.colors.background)
-      }
-      .width('100%')
-      .height('100%')
-      .backgroundColor(this.themeConfig.colors.background)
-      .alignItems(HorizontalAlign.Center)
     }
-    .hideTitleBar(true)
-    .onBackPressed(() => {
-      // 拦截默认退栈：异步调 requestLeave()（成功才 pop），立即 return true 阻止默认回退。
-      // 失败时 requestLeave 不 pop，用户留在本页可继续编辑。
-      this.requestLeave()
-      return true
-    })
+    .width('100%')
+    .height('100%')
+    .backgroundColor(this.themeConfig.colors.background)
+    .alignItems(HorizontalAlign.Center)
   }
 }

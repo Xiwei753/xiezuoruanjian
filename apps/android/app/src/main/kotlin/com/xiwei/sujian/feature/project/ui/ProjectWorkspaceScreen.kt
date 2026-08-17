@@ -34,6 +34,7 @@ import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
 import com.xiwei.sujian.feature.editor.presentation.requestOpenChapter
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
+import com.xiwei.sujian.feature.project.data.model.RecentEdit
 import kotlinx.coroutines.launch
 
 /**
@@ -158,6 +159,39 @@ internal fun ProjectWorkspaceScreen(
         }
     }
 
+    // #630 评论12 项2：「继续写作」— 从最近编辑记录恢复到上次编辑的章节。
+    val handleContinueRecentEdit: (RecentEdit) -> Unit = { edit ->
+        val title = appState.projectSummaries.find { it.id == edit.projectId }?.title ?: ""
+        appState.selectProject(edit.projectId, title)
+        coroutineScope.launch {
+            // chapter title will be resolved by requestOpenChapter
+            val result =
+                editorViewModel.requestOpenChapter(
+                    edit.projectId,
+                    edit.volumeId,
+                    edit.chapterId,
+                    "",
+                )
+            when (result) {
+                is ChapterSwitchResult.Success -> {
+                    // 从章节元数据获取标题
+                    val chapters = projectRepository.getChapters(edit.projectId, edit.volumeId)
+                    val chapterTitle = chapters?.find { it.id == edit.chapterId }?.title ?: ""
+                    appState.selectChapter(edit.volumeId, edit.chapterId, chapterTitle)
+                    workspaceNavState.navigateToEditor(edit.projectId, edit.volumeId, edit.chapterId)
+                }
+                is ChapterSwitchResult.SaveFailed,
+                is ChapterSwitchResult.LoadFailed,
+                ChapterSwitchResult.Stale,
+                -> {
+                    // 章节不存在时回退到作品章节树
+                    appState.clearChapterSelection()
+                    workspaceNavState.navigateToChapterTree(edit.projectId)
+                }
+            }
+        }
+    }
+
     val currentProjectId = appState.currentProjectId
     val currentVolumeId = appState.currentVolumeId
     val currentChapterId = appState.currentChapterId
@@ -212,6 +246,7 @@ internal fun ProjectWorkspaceScreen(
                     workspaceNavState.navigateToChapterTree(projectId)
                 }
             },
+            onContinueRecentEdit = handleContinueRecentEdit,
             onSelectChapter = { volumeId, chapterId, chapterTitle ->
                 if (currentProjectId != null) {
                     coroutineScope.launch {
@@ -270,6 +305,7 @@ internal fun ProjectWorkspaceScreen(
                         workspaceNavState.navigateToChapterTree(projectId)
                     }
                 },
+                onContinueRecentEdit = handleContinueRecentEdit,
                 onSelectChapter = { volumeId, chapterId, chapterTitle ->
                     if (currentProjectId != null) {
                         coroutineScope.launch {
@@ -332,6 +368,7 @@ private fun SinglePaneContent(
     projectRepository: com.xiwei.sujian.feature.project.data.ProjectRepository,
     editorViewModel: EditorViewModel,
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
+    onContinueRecentEdit: (edit: RecentEdit) -> Unit,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
     onChapterSwitchFailed: (
     (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
@@ -343,9 +380,13 @@ private fun SinglePaneContent(
                 appState = appState,
                 workspaceActions = projectListActions,
                 onSelectProject = onSelectProject,
+                onContinueRecentEdit = onContinueRecentEdit,
                 modifier = Modifier.fillMaxSize(),
-                workspaceLayoutMode = workspaceLayoutMode,
-                projectCardMinWidthDp = projectCardMinWidthDp,
+                layoutConfig =
+                    ProjectListLayoutConfig(
+                        workspaceLayoutMode = workspaceLayoutMode,
+                        projectCardMinWidthDp = projectCardMinWidthDp,
+                    ),
             )
         is WorkspaceLocation.ChapterTree ->
             Box(modifier = Modifier.fillMaxSize()) {
@@ -418,6 +459,7 @@ private fun WideLayoutContent(
     (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
     ),
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
+    onContinueRecentEdit: (edit: RecentEdit) -> Unit,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -428,9 +470,13 @@ private fun WideLayoutContent(
                 appState = appState,
                 workspaceActions = projectListActions,
                 onSelectProject = onSelectProject,
+                onContinueRecentEdit = onContinueRecentEdit,
                 modifier = modifier.fillMaxSize(),
-                workspaceLayoutMode = WorkspaceLayoutMode.WORKBENCH,
-                projectCardMinWidthDp = projectCardMinWidthDp,
+                layoutConfig =
+                    ProjectListLayoutConfig(
+                        workspaceLayoutMode = WorkspaceLayoutMode.WORKBENCH,
+                        projectCardMinWidthDp = projectCardMinWidthDp,
+                    ),
             )
         is WorkspaceLocation.ChapterTree ->
             Box(modifier = modifier.fillMaxSize()) {
@@ -481,9 +527,13 @@ private fun WideLayoutContent(
                     appState = appState,
                     workspaceActions = projectListActions,
                     onSelectProject = onSelectProject,
+                    onContinueRecentEdit = onContinueRecentEdit,
                     modifier = modifier.fillMaxSize(),
-                    workspaceLayoutMode = WorkspaceLayoutMode.WORKBENCH,
-                    projectCardMinWidthDp = projectCardMinWidthDp,
+                    layoutConfig =
+                        ProjectListLayoutConfig(
+                            workspaceLayoutMode = WorkspaceLayoutMode.WORKBENCH,
+                            projectCardMinWidthDp = projectCardMinWidthDp,
+                        ),
                 )
             }
     }

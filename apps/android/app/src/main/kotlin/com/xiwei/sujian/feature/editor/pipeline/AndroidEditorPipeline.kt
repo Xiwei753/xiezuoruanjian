@@ -422,6 +422,15 @@ class AndroidEditorPipeline private constructor(
             return PipelineOutput.NeedReload
         }
 
+        // #630 评论12 项3: 语义 no-op 出口 — 光标/选区确实完全没变的 CURSOR_ONLY
+        // 不创建视觉事务。条件同时满足时直接返回，不 capture snapshot、不 planner、
+        // 不 prepareAndSubmit、不 timeline。但仍需同步 mirror 状态。
+        if (isCursorOnlyNoOp(result)) {
+            editPipeline.applyEditResult(result)
+            layoutRuntime.onMirrorContentChanged(result.displayPatches)
+            return PipelineOutput.Edited(result, source)
+        }
+
         recordEditTransaction(result)
 
         visualRuntime.prepareAndSubmit(
@@ -476,6 +485,11 @@ class AndroidEditorPipeline private constructor(
         }
         if (result.displayPatches.isEmpty() && result.baseRevision != mirror.getRevision()) {
             return PipelineOutput.NeedReload
+        }
+
+        // #630 评论12 项3: 语义 no-op 出口（同 applyEditResult）
+        if (isCursorOnlyNoOp(result)) {
+            return PipelineOutput.Edited(result, source)
         }
 
         visualRuntime.prepareAndSubmit(
@@ -1019,6 +1033,18 @@ class AndroidEditorPipeline private constructor(
     fun isSecretDisplayMode(): Boolean = layoutRuntime.isSecretDisplayMode()
 
     fun getCurrentProjection(): DisplayTextProjection = layoutRuntime.getCurrentProjection()
+
+    /**
+     * #630 评论12 项3: 语义 no-op 检测 — 光标/选区确实完全没变的 CURSOR_ONLY。
+     * 提取为独立方法以通过 detekt ComplexCondition 阈值。
+     */
+    private fun isCursorOnlyNoOp(result: EditResult): Boolean {
+        return result.displayPatches.isEmpty() &&
+            result.baseRevision == result.newRevision &&
+            result.oldSelectionStart == result.newSelectionStart &&
+            result.oldSelectionEnd == result.newSelectionEnd &&
+            result.visualIntent.isCursorOnly()
+    }
 
     fun setAnimationPolicy(policy: com.xiwei.sujian.feature.editor.visual.TextAnimationPolicy) {
         visualRuntime.setAnimationPolicy(policy)

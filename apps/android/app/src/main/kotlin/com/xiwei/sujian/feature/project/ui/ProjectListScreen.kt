@@ -44,6 +44,7 @@ import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.core.designsystem.theme.SujianDimensions
 import com.xiwei.sujian.feature.project.data.model.ProjectSummary
+import com.xiwei.sujian.feature.project.data.model.RecentEdit
 import androidx.compose.foundation.lazy.grid.items as gridItems
 
 /**
@@ -87,27 +88,26 @@ private fun ProjectCardWordCount(totalWordCount: Int) {
     )
 }
 
+/**
+ * #625 / #628：作品列表布局参数 — 打包传给 [ProjectListContent] 以避免超出门禁阈值。
+ */
+internal data class ProjectListLayoutConfig(
+    val workspaceLayoutMode: WorkspaceLayoutMode = WorkspaceLayoutMode.SINGLE_PANE,
+    val projectCardMinWidthDp: Float = 0f,
+)
+
 @Composable
 internal fun ProjectListContent(
     appState: WorkspaceAppState,
     workspaceActions: AndroidWorkspaceActionSpec,
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
+    /**
+     * #630 评论12 项2：最近编辑卡片点击时回调，携带完整 projectId + volumeId + chapterId。
+     * 不复用 onSelectProject — 最近编辑要继续到具体章节，不是进入章节树。
+     */
+    onContinueRecentEdit: (edit: RecentEdit) -> Unit,
     modifier: Modifier = Modifier,
-    /**
-     * #625 第二段 / #628 验收点 1：宽屏 grid 切换依据 — 来自 Rust `LayoutContractDto.workspaceLayoutMode`。
-     *
-     * #628 原则：不自己判断窗口尺寸 — 通过 layoutSpec.contract.workspaceLayoutMode 决定。
-     * SinglePane → LazyColumn（单列）；Workbench → LazyVerticalGrid（多列）。
-     * 默认 SinglePane（与窄窗口基线一致）。
-     */
-    workspaceLayoutMode: WorkspaceLayoutMode = WorkspaceLayoutMode.SINGLE_PANE,
-    /**
-     * #628 验收点 4：作品卡片最小宽度 — 来自 Rust `LayoutMetricsDto.projectCardMinWidthDp`。
-     *
-     * 仅在 [workspaceLayoutMode] 为 WORKBENCH 时使用（画 grid）。
-     * SinglePane 不画 grid，传 0f 即可（调用方约定）。
-     */
-    projectCardMinWidthDp: Float = 0f,
+    layoutConfig: ProjectListLayoutConfig = ProjectListLayoutConfig(),
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     // #625：菜单展开状态留在每张卡片本地（见 [ProjectCard]），
@@ -125,8 +125,8 @@ internal fun ProjectListContent(
         workspaceActions.primaryActions.firstOrNull { it.kind == WorkspaceActionKind.CreateProject }
     val projectMenuActions = workspaceActions.contextActions(WorkspaceActionTarget.Project)
 
-    // #628 原则：宽屏 grid 切换依据是 workspaceLayoutMode，不自己判断宽度。
-    val useWideGrid = workspaceLayoutMode != WorkspaceLayoutMode.SINGLE_PANE
+    // #628 原则：宽屏 grid 切换依据是 layoutConfig.workspaceLayoutMode，不自己判断宽度。
+    val useWideGrid = layoutConfig.workspaceLayoutMode != WorkspaceLayoutMode.SINGLE_PANE
 
     Box(modifier = modifier.fillMaxSize()) {
         if (appState.projectSummaries.isEmpty()) {
@@ -142,7 +142,7 @@ internal fun ProjectListContent(
             // projects 区块用 grid。当前简化：宽屏直接全部用 grid（recentEdits 较少）。
             // 卡片最小宽度来自 Rust LayoutMetrics.projectCardMinWidthDp。
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = projectCardMinWidthDp.dp),
+                columns = GridCells.Adaptive(minSize = layoutConfig.projectCardMinWidthDp.dp),
                 contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
                 horizontalArrangement = Arrangement.spacedBy(dims.space8),
                 verticalArrangement = Arrangement.spacedBy(dims.space8),
@@ -182,11 +182,14 @@ internal fun ProjectListContent(
                             modifier = Modifier.padding(bottom = dims.space8),
                         )
                     }
-                    items(appState.recentEdits) { edit ->
+                    items(
+                        items = appState.recentEdits,
+                        key = { it.projectId },
+                    ) { edit ->
                         // #625 项6：recentEdits 标题也来自 ProjectSummary 单数据源。
                         val summary = appState.projectSummaries.find { it.id == edit.projectId }
                         SujianCard(
-                            onClick = { onSelectProject(edit.projectId, summary?.title ?: "") },
+                            onClick = { onContinueRecentEdit(edit) },
                             modifier = Modifier.fillMaxWidth().padding(bottom = dims.space8),
                         ) {
                             Column(modifier = Modifier.padding(dims.space16)) {

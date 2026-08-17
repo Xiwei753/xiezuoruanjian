@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -27,6 +26,7 @@ import com.xiwei.sujian.app.navigation.SettingsSection
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
+import com.xiwei.sujian.core.designsystem.theme.SujianDimensions
 
 /**
  * 设置列表分组（手机列表按组呈现，组内每一项显示标题、说明或当前值与展开箭头）。
@@ -123,61 +123,79 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
         }
 
     Box(modifier = modifier.fillMaxSize()) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().testTag(SujianSemanticIds.SettingsScreen),
-            contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
-        ) {
-            // 设置页顶部紧凑全局搜索入口
-            item(key = "settings_search_entry") {
-                SettingsSearchEntry(onClick = {})
-            }
-            item(key = "settings_search_entry_bottom_spacer") {
-                Spacer(Modifier.height(dims.space16))
-            }
-            var firstGroupShown = false
-            SettingsGroup.entries.forEach { group ->
-                val categories = settingsCategories.filter { it.group == group }
-                if (categories.isEmpty()) return@forEach
-                if (firstGroupShown) {
-                    item(key = "settings_group_spacer_${group.name}") {
-                        Spacer(Modifier.height(dims.space16))
-                    }
+        SettingsLazyColumn(
+            vm = vm,
+            expansionState = expansionState,
+            dims = dims,
+        )
+        androidx.compose.material3.SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
+    }
+}
+
+/**
+ * 设置页扁平 LazyColumn — 从 SettingsRoute 提取以降低认知复杂度。
+ *
+ * #630 评论12 项1: 按 category 顺序交错注册 item，
+ * 一个 category 标题后面立刻插自己的展开项，再进入下一个 category。
+ */
+@Composable
+private fun SettingsLazyColumn(
+    vm: SettingsViewModel,
+    expansionState: SettingsExpansionState,
+    dims: SujianDimensions,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().testTag(SujianSemanticIds.SettingsScreen),
+        contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
+    ) {
+        // 设置页顶部紧凑全局搜索入口
+        item(key = "settings_search_entry") {
+            SettingsSearchEntry(onClick = {})
+        }
+        item(key = "settings_search_entry_bottom_spacer") {
+            Spacer(Modifier.height(dims.space16))
+        }
+        var firstGroupShown = false
+        SettingsGroup.entries.forEach { group ->
+            val categories = settingsCategories.filter { it.group == group }
+            if (categories.isEmpty()) return@forEach
+            if (firstGroupShown) {
+                item(key = "settings_group_spacer_${group.name}") {
+                    Spacer(Modifier.height(dims.space16))
                 }
-                firstGroupShown = true
-                item(key = "settings_group_${group.name}") {
-                    SettingsGroupHeader(title = stringResource(id = group.titleResId))
-                }
-                // #630 评论 5312333045 项3: 每个分类标题是独立 item，
-                // 展开后的字段也是独立 item（按 category section name 注册）。
-                itemsIndexed(categories, key = { _, category -> category.section.name }) { index, category ->
-                    SettingsGroupItemContainer(isLast = index == categories.lastIndex) {
+            }
+            firstGroupShown = true
+            item(key = "settings_group_${group.name}") {
+                SettingsGroupHeader(title = stringResource(id = group.titleResId))
+            }
+            categories.forEachIndexed { index, category ->
+                val isLastCategory = index == categories.lastIndex
+                val isExpanded = expansionState.isExpanded(category.section)
+                item(key = "settings_category_${category.section.name}") {
+                    SettingsGroupItemContainer(isLast = isLastCategory && !isExpanded) {
                         SettingsExpandableSection(
                             title = stringResource(id = category.titleResId),
                             summary = settingsCategorySummary(category),
                             value = settingsCategoryValue(category, vm),
-                            expanded = expansionState.isExpanded(category.section),
+                            expanded = isExpanded,
                             onExpandedChange = { isExpanded ->
                                 expansionState.setExpanded(category.section, isExpanded)
                             },
                         )
                     }
                 }
-                // 展开内容：每个分类作为独立 item 注册，不是 LazyColumn 的嵌套子项。
-                categories.forEach { category ->
-                    if (expansionState.isExpanded(category.section)) {
-                        item(key = "settings_expanded_${category.section.name}") {
-                            SettingsGroupItemContainer(isLast = false) {
-                                ExpandedSettingsContent(category = category, vm = vm)
-                            }
+                if (isExpanded) {
+                    item(key = "settings_expanded_${category.section.name}") {
+                        SettingsGroupItemContainer(isLast = isLastCategory) {
+                            ExpandedSettingsContent(category = category, vm = vm)
                         }
                     }
                 }
             }
         }
-        androidx.compose.material3.SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter),
-        )
     }
 }
 

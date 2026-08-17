@@ -18,8 +18,9 @@ type NavigationIntentKind = 'Pop' | 'ClearAndRebuild' | 'ReplacePath'
 
 interface NavigationIntent {
   readonly kind: NavigationIntentKind
-  // ReplacePath 时的目标路由名（Pop/ClearAndRebuild 不需要）
-  readonly targetPath?: string
+  // 用于去重的稳定 key。Pop='pop'，ReplacePath='replace:<targetKey>'，
+  // ClearAndRebuild 由调用方提供（不同 continuation payload 不能因为 kind 相同就吞掉）。
+  readonly dedupeKey: string
 }
 
 // AppNavigationHost — AppNavigation 的可外部访问入口。
@@ -50,9 +51,17 @@ export class AppNavigationHost {
   // unregisterLeaveGuard(token) 只注销自己注册的 guard。
   private leaveGuards: Map<number, () => Promise<boolean>> = new Map()
   private nextGuardToken: number = 1
+  // Issue #629 评论14 第2项：当前活跃守卫 lease。
+  // 新 Writing 注册时替换 active lease；unregisterLeaveGuard(token) 只有 token 等于当前 lease 才清掉。
+  // 这样旧实例迟到的 disappear 不会删新 guard，也不会在一次 pop 时把底下页面的 session 一起 close。
+  private activeGuardLease: { token: number; guard: () => Promise<boolean> } | null = null
   // Issue #629 评论14 第2项：导航事务串行队列。
-  // 每个 task 记录自己的 intent；不同 intent 串行排队，相同 intent + 相同目标复用。
+  // 去重同时检查 pendingTasks + activeTask（正在执行的任务不能从"可去重集合"里消失）。
   private pendingTasks: Array<{ intent: NavigationIntent; task: Promise<boolean>; resolve: (v: boolean) => void; execute: () => void }> = []
+  // Issue #629 评论14 第2项：正在执行的任务。
+  // processQueue 中 shift() 后执行期间，该 entry 仍在 activeTask 里，
+  // 新的相同 dedupeKey 的请求可以直接复用 activeTask 的 Promise。
+  private activeTask: { intent: NavigationIntent; task: Promise<boolean> } | null = null
   private isProcessingQueue: boolean = false
 
   static getInstance(): AppNavigationHost {
@@ -100,14 +109,18 @@ export class AppNavigationHost {
   // guard 返回 boolean：true 表示可以离开（保存成功），false 表示不能离开（保存失败）。
   registerLeaveGuard(guard: () => Promise<boolean>): number {
     const token: number = this.nextGuardToken++
-    this.leaveGuards.set(token, guard)
+    // Issue #629 评论14 第2项：新 Writing 注册时替换 active lease。
+    // host 只持有当前 active guard；旧实例迟到的 disappear 不会删新 guard。
+    this.activeGuardLease = { token, guard }
     return token
   }
 
   // Issue #629 评论14 第2项：注销离开守卫（按 token 精确注销）。
-  // 不再用固定字符串常量，避免旧实例误注销新实例的 guard。
+  // 只有 token 等于当前 active lease 才清掉，避免旧实例误注销新实例的 guard。
   unregisterLeaveGuard(token: number): void {
-    this.leaveGuards.delete(token)
+    if (this.activeGuardLease !== null && this.activeGuardLease.token === token) {
+      this.activeGuardLease = null
+    }
   }
 
   // Issue #629 评论14 第2项：串行导航事务队列。
@@ -117,11 +130,15 @@ export class AppNavigationHost {
     intent: NavigationIntent,
     execute: () => void
   ): Promise<boolean> {
-    // 检查是否有相同 intent + 相同目标的 task 正在排队（复用）
+    // Issue #629 评论14 第2项：去重同时检查 pendingTasks + activeTask。
+    // 正在执行的任务不能从"可去重集合"里消失，否则 shift() 后新请求查不到它会再入队导致 double pop。
     for (const entry of this.pendingTasks) {
-      if (entry.intent.kind === intent.kind && entry.intent.targetPath === intent.targetPath) {
+      if (entry.intent.dedupeKey === intent.dedupeKey) {
         return entry.task
       }
+    }
+    if (this.activeTask !== null && this.activeTask.intent.dedupeKey === intent.dedupeKey) {
+      return this.activeTask.task
     }
 
     // 创建新 task
@@ -143,15 +160,15 @@ export class AppNavigationHost {
 
     while (this.pendingTasks.length > 0) {
       const entry = this.pendingTasks.shift()!
+      // Issue #629 评论14 第2项：shift 后立即设置 activeTask，
+      // 使得新入队的相同 dedupeKey 请求可以复用正在执行的 Promise。
+      this.activeTask = { intent: entry.intent, task: entry.task }
       try {
-        // 执行所有注册的 leave guard（取最严格的：只要有一个 guard 返回 false 就阻止）
+        // Issue #629 评论14 第2项：只执行当前 active guard（不是遍历所有历史 guard）。
         let canLeave: boolean = true
-        for (const [token, guard] of this.leaveGuards) {
-          const ok: boolean = await guard()
-          if (!ok) {
-            canLeave = false
-            break
-          }
+        const lease = this.activeGuardLease
+        if (lease !== null) {
+          canLeave = await lease.guard()
         }
 
         if (canLeave) {
@@ -162,6 +179,11 @@ export class AppNavigationHost {
         }
       } catch (_e) {
         entry.resolve(false)
+      } finally {
+        // 执行完成后清除 activeTask
+        if (this.activeTask !== null && this.activeTask.task === entry.task) {
+          this.activeTask = null
+        }
       }
     }
 
@@ -171,7 +193,7 @@ export class AppNavigationHost {
   // Issue #629 评论14 第2项：安全的 pop。
   // 串行排队，guard 成功才 navPathStack.pop()；失败留在本页。
   safePop(): Promise<boolean> {
-    const intent: NavigationIntent = { kind: 'Pop' }
+    const intent: NavigationIntent = { kind: 'Pop', dedupeKey: 'pop' }
     return this.enqueueNavigation(intent, (): void => {
       if (this.navPathStack !== null) {
         this.navPathStack.pop()
@@ -182,16 +204,16 @@ export class AppNavigationHost {
   // Issue #629 评论14 第2项：安全的 clear + rebuild。
   // 串行排队，guard 成功才执行 rebuild（含 navPathStack.clear() + pushPath 重建）；
   // 失败保持当前页面，不清栈。
-  safeClearAndRebuild(rebuild: () => void): Promise<boolean> {
-    const intent: NavigationIntent = { kind: 'ClearAndRebuild' }
+  safeClearAndRebuild(dedupeKey: string, rebuild: () => void): Promise<boolean> {
+    const intent: NavigationIntent = { kind: 'ClearAndRebuild', dedupeKey }
     return this.enqueueNavigation(intent, rebuild)
   }
 
   // Issue #629 评论14 第2项：安全的 replace path。
   // 宽屏 Writing 左侧切章节统一走它：guard 成功才 replace 当前路由为新 Writing route；
   // 失败保持当前页面。
-  safeReplacePath(replace: () => void): Promise<boolean> {
-    const intent: NavigationIntent = { kind: 'ReplacePath' }
+  safeReplacePath(targetKey: string, replace: () => void): Promise<boolean> {
+    const intent: NavigationIntent = { kind: 'ReplacePath', dedupeKey: `replace:${targetKey}` }
     return this.enqueueNavigation(intent, replace)
   }
 }
@@ -220,7 +242,8 @@ export struct AppNavigation {
   // Issue #629 评论14 第2项：改用 safeClearAndRebuild，先调 leaveGuard（保存+关闭事务），
   // guard 成功才 clear + rebuild；失败保持当前页面，不清栈（不卸载活跃 WritingScreen 绕过保存）。
   private async applyContinuation(payload: ContinuationPayload): Promise<void> {
-    await AppNavigationHost.getInstance().safeClearAndRebuild((): void => {
+    const dedupeKey = `continuation:${payload.chapterId ?? ''}:${payload.projectId ?? ''}`
+    await AppNavigationHost.getInstance().safeClearAndRebuild(dedupeKey, (): void => {
       // 清栈到根后按 payload 重建。clear() 清空全部路由，再 push Home 作为根。
       this.navPathStack.clear()
       this.navPathStack.pushPath({ name: Routes.Home })
