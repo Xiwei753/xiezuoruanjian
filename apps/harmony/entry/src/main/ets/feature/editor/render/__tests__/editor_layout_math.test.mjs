@@ -11,6 +11,7 @@ import {
   layoutLines,
   hitTestPoint,
   nextCodePointBoundary,
+  buildLineCaretStops,
 } from '../editor_layout_math.ts'
 
 // 确定性 mock measureFn：每 UTF-16 code unit 10px。满足 measure('')===0 与单调不减。
@@ -154,6 +155,56 @@ test('端到端: emoji 点击命中完整 emoji 不切断', () => {
   const el = layoutLines('a😀b', 15, mockMeasure)
   const offset = hitTestPoint('a😀b', el, 20, 10, 25, mockMeasure)
   assert.equal('a😀b'.substring(offset, offset + 2), '😀')
+})
+
+// ── buildLineCaretStops ──
+// Issue #629 评论17 第4项：caret stop 生成下沉到 editor_layout_math.ts。
+test('buildLineCaretStops: 空行返回只有行首的 stop', () => {
+  const stops = buildLineCaretStops('abc', { start: 0, end: 0 }, mockMeasure)
+  assert.equal(stops.length, 1)
+  assert.equal(stops[0].utf16Offset, 0)
+  assert.equal(stops[0].x, 0)
+})
+test('buildLineCaretStops: ASCII 行生成每个 code point 边界的 stop', () => {
+  const stops = buildLineCaretStops('abc', { start: 0, end: 3 }, mockMeasure)
+  assert.equal(stops.length, 4) // 0, 1, 2, 3
+  assert.equal(stops[0].utf16Offset, 0)
+  assert.equal(stops[0].x, 0)
+  assert.equal(stops[1].utf16Offset, 1)
+  assert.equal(stops[1].x, 10)
+  assert.equal(stops[2].utf16Offset, 2)
+  assert.equal(stops[2].x, 20)
+  assert.equal(stops[3].utf16Offset, 3)
+  assert.equal(stops[3].x, 30)
+})
+test('buildLineCaretStops: 中文生成正确 stops', () => {
+  const stops = buildLineCaretStops('你好', { start: 0, end: 2 }, mockMeasure)
+  assert.equal(stops.length, 3) // 0, 1, 2
+  assert.equal(stops[0].utf16Offset, 0)
+  assert.equal(stops[1].utf16Offset, 1)
+  assert.equal(stops[2].utf16Offset, 2)
+})
+test('buildLineCaretStops: surrogate pair 不切断（emoji 两个 code unit 算一个 stop）', () => {
+  const stops = buildLineCaretStops('a😀b', { start: 0, end: 4 }, mockMeasure)
+  // stops: 0(a), 1(😀起始), 3(b), 4(行尾) — 跳过 offset 2（surrogate pair 低代理）
+  assert.equal(stops.length, 4)
+  assert.equal(stops[0].utf16Offset, 0)
+  assert.equal(stops[1].utf16Offset, 1)
+  assert.equal(stops[2].utf16Offset, 3)
+  assert.equal(stops[3].utf16Offset, 4)
+})
+test('buildLineCaretStops: 行内偏移（从行首开始测量）', () => {
+  // 'abc' 第二行 start=3 end=6，x 从 0 开始（相对于行首）
+  const stops = buildLineCaretStops('abc', { start: 3, end: 3 }, mockMeasure)
+  assert.equal(stops.length, 1)
+  assert.equal(stops[0].utf16Offset, 3)
+  assert.equal(stops[0].x, 0)
+})
+test('buildLineCaretStops: 行末 stop 的 x 等于行宽', () => {
+  const stops = buildLineCaretStops('你好世界', { start: 0, end: 2 }, mockMeasure)
+  // 最后一个 stop 在 offset=2，measureText('你好') = 20px
+  assert.equal(stops[stops.length - 1].utf16Offset, 2)
+  assert.equal(stops[stops.length - 1].x, 20)
 })
 
 console.log('---')

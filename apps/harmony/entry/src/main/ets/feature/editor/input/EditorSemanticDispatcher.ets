@@ -177,6 +177,8 @@ export class EditorSemanticDispatcher {
   private async executeCommand(cmd: SemanticEditCommand): Promise<ResultEnvelope<EditorEditResult>> {
     switch (cmd.kind) {
       case 'insertText':
+        // Issue #629 评论17 第2项：所有改变光标横向语义的命令重置 navTargetX。
+        this.navTargetX = -1
         return this.inputAdapter.onTextInput(cmd.text)
       case 'setSelection':
         // Issue #629 评论16 第2项：显式 setSelection 重置横向导航位置。
@@ -191,18 +193,32 @@ export class EditorSemanticDispatcher {
         this.navTargetX = -1
         return this.selectionController.selectAll()
       case 'imePreviewText':
+        // Issue #629 评论17 第2项：IME 预输入重置横向位置。
+        this.navTargetX = -1
         return this.executeImePreviewText(cmd.text)
       case 'imeCommitText':
+        // Issue #629 评论17 第2项：IME 提交重置横向位置。
+        this.navTargetX = -1
         return this.executeImeCommitText(cmd.text)
       case 'imeCancelPreview':
+        // Issue #629 评论17 第2项：IME 取消预输入重置横向位置。
+        this.navTargetX = -1
         return this.executeImeCancelPreview()
       case 'imeSetSelection':
+        // Issue #629 评论17 第2项：IME selection 重置横向位置。
+        this.navTargetX = -1
         return this.executeImeSetSelection(cmd.utf16Start, cmd.utf16End)
       case 'paste':
+        // Issue #629 评论17 第2项：粘贴重置横向位置。
+        this.navTargetX = -1
         return this.inputAdapter.onPaste(cmd.text)
       case 'graphemeBackspace':
+        // Issue #629 评论17 第2项：退格重置横向位置。
+        this.navTargetX = -1
         return this.executeGraphemeBackspace()
       case 'graphemeDelete':
+        // Issue #629 评论17 第2项：删除重置横向位置。
+        this.navTargetX = -1
         return this.executeGraphemeDelete()
       case 'graphemeLeft':
         // Issue #629 评论16 第2项：水平移动重置横向导航位置。
@@ -450,7 +466,9 @@ export class EditorSemanticDispatcher {
   // 之前排队输入一定先执行，之后新输入只能排在 clear 后面，不再有跨队列抢跑。
   // Issue #629 评论11 第1项补充：活跃 composition 先显式 cancel（不依赖 replace 顺手清除），
   // cancel 失败则不继续清空；replace 后 Core snapshot 非空则返回失败。
+  // Issue #629 评论17 第2项：清空文档重置横向位置。
   private async executeClearDocument(): Promise<ResultEnvelope<EditorEditResult>> {
+    this.navTargetX = -1
     let snap = this.coordinator.getSnapshot()
     if (!snap) {
       return this.noSession()
@@ -679,10 +697,18 @@ export class EditorSemanticDispatcher {
         break
       }
     }
-    if (extend) {
-      return this.executeImeSetSelection(anchorUtf16, targetOffset)
+    // Issue #629 评论17 第1项：Shift+Up/Down/Home/End 在 composition 活跃时
+    // 先 finish composition（preedit 提交进 committed text），再执行普通 selection。
+    // 不要把 extend 退化成移动 preedit cursor（Core composition 没有 selection range）。
+    if (!extend || anchorUtf16 === targetOffset) {
+      return this.executeImeSetSelection(targetOffset, targetOffset)
     }
-    return this.executeImeSetSelection(targetOffset, targetOffset)
+    const finishResult = await this.inputAdapter.finishActiveComposition()
+    if (!finishResult.success) {
+      return finishResult
+    }
+    // finish 后 committed text = 之前的 displayText，anchorUtf16/targetOffset 可直接做普通 selection。
+    return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
   }
 
   // Issue #629 评论11 第2项：注册行级导航解析器。

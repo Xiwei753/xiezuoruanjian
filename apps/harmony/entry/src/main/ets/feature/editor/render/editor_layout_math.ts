@@ -180,3 +180,39 @@ export function hitTestPoint(
   }
   return bounds[bestIdx]
 }
+
+// Issue #629 评论17 第4项：caret stop 生成下沉到 editor_layout_math.ts。
+// 与 hitTestPoint 共享同一套 code point 边界算法，鼠标 hit-test 和键盘垂直导航
+// 吃同一份算法，不两套折行/测宽。
+// 每个 code point 边界对应一个 { utf16Offset, x } 停靠点，
+// 供 LineNavigationResolver.getCaretX/getNearestOffsetAtX 消费。
+
+/** 行内光标停靠点：code point 边界 + 对应 x 坐标（px）。 */
+export interface CaretStop {
+  readonly utf16Offset: number
+  readonly x: number
+}
+
+/**
+ * 给定一行文本和 measureTextFn，生成该行所有 code point 边界的 caret stops。
+ * 每个 stop 包含 code point 边界的 UTF-16 offset 和从行首到该 offset 的测量宽度（px）。
+ * 不切断 surrogate pair（emoji 等 U+10000+ 字符的两个 code unit 算一个 stop）。
+ */
+export function buildLineCaretStops(
+  text: string,
+  line: LineRange,
+  measureTextFn: (s: string) => number,
+): CaretStop[] {
+  const stops: CaretStop[] = []
+  let i = line.start
+  while (i <= line.end) {
+    const x = measureTextFn(text.substring(line.start, i))
+    stops.push({ utf16Offset: i, x: x })
+    if (i >= line.end) {
+      break
+    }
+    // 下一个 code point 边界（不切断 surrogate pair）
+    i = nextCodePointBoundary(text, i)
+  }
+  return stops
+}

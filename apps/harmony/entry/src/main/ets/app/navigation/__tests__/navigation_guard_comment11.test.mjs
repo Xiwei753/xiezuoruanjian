@@ -183,6 +183,8 @@ await testAsync('safePop: 两个并发 safePop → guardCalls===1 且 popCalls.l
   host.registerLeaveGuard(async () => { guardCalls++; await sleep(20); return true })
   const p1 = host.safePop()
   const p2 = host.safePop()
+  // Issue #629 评论17 第3项：两个并发 safePop 必须复用同一个 Promise（不是值相同）。
+  assert.equal(p1, p2, '两个并发 safePop 必须复用同一个 Promise')
   const [ok1, ok2] = await Promise.all([p1, p2])
   // Issue #629 评论15 第6项：两个 safePop 同 dedupeKey 复用同一 task
   assert.equal(ok1, ok2, '两个 safePop 应返回相同 result')

@@ -42,6 +42,7 @@ import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
 import { LineNavigationResolver, LineLayoutState, NavigationLine, LineCaretStop } from '../selection/LineNavigationResolver'
+import { buildLineCaretStops } from '../render/editor_layout_math'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { KeyboardInputService, PlatformKeyEvent, SemanticKeyCommand } from '../../../platform/input/KeyboardInputService'
 import { PointerInputService, PlatformPointerEvent } from '../../../platform/input/PointerInputService'
@@ -210,30 +211,12 @@ export struct SujianEditor {
       // 身份来自 Core 编辑状态：revision + generation + compositionGeneration + displayText。
       // contentWidth/fontSize 决定折行但不属于编辑状态身份（评论15 第2项）。
       // executeLineNavigation 出队时验证此身份与当前 Core snapshot 匹配才用 lines 算目标。
-      // Issue #629 评论16 第2项：为每行生成 caretStops（code point 边界 + x 坐标），
-      // 供 Up/Down 保持横向位置、鼠标 hit-test 复用同一份算法。
+      // Issue #629 评论17 第4项：caret stop 生成下沉到 editor_layout_math.ts。
+      // 与 hitTestPoint 共享同一套 code point 边界算法，不两套折行/测宽。
       const navigationLines: NavigationLine[] = []
       for (const ll of result.lines) {
-        const stops: LineCaretStop[] = []
-        // 逐 code point 边界计算 x 坐标
-        let i = ll.startUtf16
-        while (i <= ll.endUtf16) {
-          const x = measureTextFn(result.text.substring(ll.startUtf16, i))
-          stops.push({ utf16Offset: i, x: x })
-          // 下一个 code point 边界（不切断 surrogate pair）
-          if (i >= result.text.length) {
-            break
-          }
-          const code = result.text.charCodeAt(i)
-          if (code >= 0xD800 && code <= 0xDBFF && i + 1 < result.text.length) {
-            const low = result.text.charCodeAt(i + 1)
-            if (low >= 0xDC00 && low <= 0xDFFF) {
-              i += 2
-              continue
-            }
-          }
-          i += 1
-        }
+        const lineRange = { start: ll.startUtf16, end: ll.endUtf16 }
+        const stops: LineCaretStop[] = buildLineCaretStops(result.text, lineRange, measureTextFn)
         navigationLines.push({
           startUtf16: ll.startUtf16,
           endUtf16: ll.endUtf16,
