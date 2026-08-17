@@ -93,6 +93,10 @@ export class EditorSemanticDispatcher {
   // Issue #629 评论11 第2项：行级导航解析器。由 SujianEditor 在 aboutToAppear 注册，
   // 行导航命令出队时基于最新 renderResult.lines 计算目标位置。
   private lineResolver: LineNavigationResolver | null = null
+  // Issue #629 评论16 第2项：Up/Down 导航保持横向位置。
+  // 上一次 lineUp/lineDown 时的 x 坐标（px），用于在目标行找最近的 caret stop。
+  // 有选区时 / lineHome/lineEnd 时重置为 -1（下次 Up/Down 回到行首/行尾）。
+  private navTargetX: number = -1
 
   constructor(inputAdapter: EditorInputAdapter, selectionController: SelectionController, coordinator: EditorSessionCoordinator) {
     this.inputAdapter = inputAdapter
@@ -175,10 +179,16 @@ export class EditorSemanticDispatcher {
       case 'insertText':
         return this.inputAdapter.onTextInput(cmd.text)
       case 'setSelection':
+        // Issue #629 评论16 第2项：显式 setSelection 重置横向导航位置。
+        this.navTargetX = -1
         return this.selectionController.onTap(cmd.utf16Offset)
       case 'dragSelect':
+        // Issue #629 评论16 第2项：drag select 重置横向导航位置。
+        this.navTargetX = -1
         return this.selectionController.onDragSelect(cmd.utf16Anchor, cmd.utf16Head)
       case 'selectAll':
+        // Issue #629 评论16 第2项：selectAll 重置横向导航位置。
+        this.navTargetX = -1
         return this.selectionController.selectAll()
       case 'imePreviewText':
         return this.executeImePreviewText(cmd.text)
@@ -195,8 +205,12 @@ export class EditorSemanticDispatcher {
       case 'graphemeDelete':
         return this.executeGraphemeDelete()
       case 'graphemeLeft':
+        // Issue #629 评论16 第2项：水平移动重置横向导航位置。
+        this.navTargetX = -1
         return this.executeGraphemeLeft(cmd.extend)
       case 'graphemeRight':
+        // Issue #629 评论16 第2项：水平移动重置横向导航位置。
+        this.navTargetX = -1
         return this.executeGraphemeRight(cmd.extend)
       case 'clearDocument':
         return this.executeClearDocument()
@@ -549,7 +563,9 @@ export class EditorSemanticDispatcher {
     return this.executeCommittedLineNavigation(direction, extend, finalState, latestCursorUtf16, latestAnchorUtf16)
   }
 
-  // Issue #629 评论15 第5项：committed text 上的行导航（无 composition）。
+  // Issue #629 评论15 第5项 + 评论16 第2项：committed text 上的行导航（无 composition）。
+  // Up/Down 保持横向位置：用 navTargetX 记忆上次 x 坐标，在目标行找最近的 caret stop。
+  // home/end 重置 navTargetX（下次 Up/Down 回到行首/行尾）。
   private executeCommittedLineNavigation(
     direction: 'up' | 'down' | 'home' | 'end',
     extend: boolean,
@@ -563,7 +579,12 @@ export class EditorSemanticDispatcher {
         if (targetLineIdx < 0) {
           return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
         }
-        const targetOffset = LineNavigationResolver.getLineStart(state, targetLineIdx)
+        // Issue #629 评论16 第2项：用 navTargetX 保持横向位置。
+        // 首次 Up/Down（navTargetX < 0）用当前光标的 x 坐标；后续用记忆的 x。
+        if (this.navTargetX < 0) {
+          this.navTargetX = LineNavigationResolver.getCaretX(state, cursorUtf16)
+        }
+        const targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         if (extend) {
           return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
         }
@@ -574,13 +595,19 @@ export class EditorSemanticDispatcher {
         if (targetLineIdx < 0) {
           return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
         }
-        const targetOffset = LineNavigationResolver.getLineStart(state, targetLineIdx)
+        // Issue #629 评论16 第2项：用 navTargetX 保持横向位置。
+        if (this.navTargetX < 0) {
+          this.navTargetX = LineNavigationResolver.getCaretX(state, cursorUtf16)
+        }
+        const targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         if (extend) {
           return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
         }
         return this.selectionController.onTap(targetOffset)
       }
       case 'home': {
+        // Issue #629 评论16 第2项：home 重置横向位置记忆。
+        this.navTargetX = -1
         const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, cursorUtf16)
         const targetOffset = lineIdx >= 0 ? LineNavigationResolver.getLineStart(state, lineIdx) : 0
         if (extend) {
@@ -589,6 +616,8 @@ export class EditorSemanticDispatcher {
         return this.selectionController.onTap(targetOffset)
       }
       case 'end': {
+        // Issue #629 评论16 第2项：end 重置横向位置记忆。
+        this.navTargetX = -1
         const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, cursorUtf16)
         const textUtf16Len = state.displayText.length
         const targetOffset = lineIdx >= 0 ? LineNavigationResolver.getLineEnd(state, lineIdx) : textUtf16Len
@@ -600,9 +629,10 @@ export class EditorSemanticDispatcher {
     }
   }
 
-  // Issue #629 评论15 第5项：composition 活跃时的行导航。
+  // Issue #629 评论15 第5项 + 评论16 第2项：composition 活跃时的行导航。
   // 行内移动：走 imeSetSelection 语义（更新 preedit cursor）。
   // 移出 composition 区域：先 finish composition，再走 imeSetSelection。
+  // Up/Down 同样保持横向位置。
   private executeImeLineNavigation(
     direction: 'up' | 'down' | 'home' | 'end',
     extend: boolean,
@@ -619,7 +649,10 @@ export class EditorSemanticDispatcher {
         if (targetLineIdx < 0) {
           return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
         }
-        targetOffset = LineNavigationResolver.getLineStart(state, targetLineIdx)
+        if (this.navTargetX < 0) {
+          this.navTargetX = LineNavigationResolver.getCaretX(state, cursorUtf16)
+        }
+        targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         break
       }
       case 'down': {
@@ -627,15 +660,20 @@ export class EditorSemanticDispatcher {
         if (targetLineIdx < 0) {
           return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
         }
-        targetOffset = LineNavigationResolver.getLineStart(state, targetLineIdx)
+        if (this.navTargetX < 0) {
+          this.navTargetX = LineNavigationResolver.getCaretX(state, cursorUtf16)
+        }
+        targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         break
       }
       case 'home': {
+        this.navTargetX = -1
         const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, cursorUtf16)
         targetOffset = lineIdx >= 0 ? LineNavigationResolver.getLineStart(state, lineIdx) : 0
         break
       }
       case 'end': {
+        this.navTargetX = -1
         const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, cursorUtf16)
         targetOffset = lineIdx >= 0 ? LineNavigationResolver.getLineEnd(state, lineIdx) : displaySnapshot.text.length
         break

@@ -25,13 +25,28 @@ export interface EditorLayoutIdentity {
   readonly displayText: string
 }
 
+// Issue #629 评论16 第2项：行导航光标停靠点。
+// 每个 code point 边界对应的 x 坐标（px），用于 Up/Down 保持横向位置。
+export interface LineCaretStop {
+  readonly utf16Offset: number
+  readonly x: number
+}
+
+// Issue #629 评论16 第2项：增强版行布局，包含光标停靠点。
+// SujianEditor.refreshRenderLayout() 用与正文渲染完全相同的 measureTextFn
+// 给每行生成 caret stops；鼠标 hit-test 和键盘垂直导航吃同一份算法。
+export interface NavigationLine extends LineLayout {
+  readonly caretStops: LineCaretStop[]
+}
+
 // 带身份的行布局状态。contentWidth/fontSize 保留在这里，因为它们确实决定折行。
 // 但它们不由 Dispatcher 猜，也不作为 Dispatcher 请求的目标 identity。
 // SujianEditor 发布时携带当前真实 contentWidth/fontSize。
+// Issue #629 评论16 第2项：lines 改为 NavigationLine[]（含 caretStops）。
 export interface LineLayoutState extends EditorLayoutIdentity {
   readonly contentWidth: number
   readonly fontSize: number
-  readonly lines: LineLayout[]
+  readonly lines: NavigationLine[]
 }
 
 // 等待条目：当 resolver 版本落后于 Core snapshot 时，行导航命令等待新版本。
@@ -137,18 +152,21 @@ export class LineNavigationResolver {
     return state.lines[lineIndex].endUtf16
   }
 
-  /** 找光标 UTF-16 offset 所在行号。返回 -1 表示无行信息。 */
+  /** 找光标 UTF-16 offset 所在行号。返回 -1 表示无行信息。
+   *  行末 offset 归到下一行（如果有的话），行首 offset 归到该行。
+   *  用半开区间 [start, end)，与 caretStops 中 offset=end 同时出现在两行时的 x=0 语义一致。
+   */
   static getCurrentLineIndex(state: LineLayoutState, cursorUtf16: number): number {
     if (state.lines.length === 0) {
       return -1
     }
     for (let i = 0; i < state.lines.length; i++) {
       const line = state.lines[i]
-      if (cursorUtf16 >= line.startUtf16 && cursorUtf16 <= line.endUtf16) {
+      if (cursorUtf16 >= line.startUtf16 && cursorUtf16 < line.endUtf16) {
         return i
       }
     }
-    // 越界时归最后一行
+    // cursor >= 最后一行的 endUtf16 归最后一行（光标在行尾）
     return state.lines.length - 1
   }
 
@@ -168,5 +186,77 @@ export class LineNavigationResolver {
       return -1
     }
     return currentIdx + 1
+  }
+
+  // Issue #629 评论16 第2项：纯函数 — 给定 UTF-16 offset，返回该 offset 在行内的 x 坐标（px）。
+  // 找 caretStops 中 utf16Offset 最接近（含等于）目标的停靠点，返回其 x。
+  static getCaretX(state: LineLayoutState, utf16Offset: number): number {
+    const lineIdx = this.getCurrentLineIndex(state, utf16Offset)
+    if (lineIdx < 0 || lineIdx >= state.lines.length) {
+      return 0
+    }
+    const line = state.lines[lineIdx]
+    const stops = line.caretStops
+    if (stops.length === 0) {
+      return 0
+    }
+    // caretStops 按 utf16Offset 单调递增，二分找最近的停靠点
+    let lo = 0
+    let hi = stops.length - 1
+    let bestIdx = 0
+    let bestDist = Math.abs(stops[0].utf16Offset - utf16Offset)
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2)
+      const dist = Math.abs(stops[mid].utf16Offset - utf16Offset)
+      if (dist < bestDist || (dist === bestDist && stops[mid].utf16Offset <= utf16Offset)) {
+        bestDist = dist
+        bestIdx = mid
+      }
+      if (stops[mid].utf16Offset < utf16Offset) {
+        lo = mid + 1
+      } else if (stops[mid].utf16Offset > utf16Offset) {
+        hi = mid - 1
+      } else {
+        break // exact match
+      }
+    }
+    return stops[bestIdx].x
+  }
+
+  // Issue #629 评论16 第2项：纯函数 — 给定行内 x 坐标（px），返回最近的 UTF-16 code unit offset。
+  // 与 editor_layout_math.hitTestPoint 同一算法（二分找最近 code point 边界），
+  // 但这里消费已经预计算好的 caretStops，不再需要 measureTextFn。
+  static getNearestOffsetAtX(state: LineLayoutState, lineIndex: number, x: number): number {
+    if (lineIndex < 0 || lineIndex >= state.lines.length) {
+      return 0
+    }
+    const line = state.lines[lineIndex]
+    const stops = line.caretStops
+    if (stops.length === 0) {
+      return line.startUtf16
+    }
+    // 二分找最后一个 x <= target 的停靠点
+    let lo = 0
+    let hi = stops.length - 1
+    let bestIdx = 0
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2)
+      if (stops[mid].x <= x) {
+        bestIdx = mid
+        lo = mid + 1
+      } else {
+        hi = mid - 1
+      }
+    }
+    // 候选：bestIdx（x <= target）和 bestIdx+1（x > target 或行尾）
+    if (bestIdx + 1 < stops.length) {
+      const leftX = stops[bestIdx].x
+      const rightX = stops[bestIdx + 1].x
+      if (x - leftX <= rightX - x) {
+        return stops[bestIdx].utf16Offset
+      }
+      return stops[bestIdx + 1].utf16Offset
+    }
+    return stops[bestIdx].utf16Offset
   }
 }

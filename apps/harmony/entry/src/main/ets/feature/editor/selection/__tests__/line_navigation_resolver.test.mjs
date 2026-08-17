@@ -3,6 +3,7 @@
 // - EditorLayoutIdentity = { revision, generation, compositionGeneration, displayText }
 // - 等待无 timeout，只有 cancelWait 和匹配布局发布两个出口
 // - 方法改为纯函数式 static，接收显式 state 参数
+// Issue #629 评论16 第2项：新增 NavigationLine/caretStops + getCaretX/getNearestOffsetAtX 测试。
 //
 // 运行：node line_navigation_resolver.test.mjs
 
@@ -74,8 +75,11 @@ class LineNavigationResolver {
     if (state.lines.length === 0) return -1
     for (let i = 0; i < state.lines.length; i++) {
       const line = state.lines[i]
-      if (cursorUtf16 >= line.startUtf16 && cursorUtf16 <= line.endUtf16) return i
+      // 行末 offset 归到下一行（如果有的话），这样行首 offset 归到该行。
+      // [start, end) 半开区间，与 caretStops 中 offset=end 同时出现在两行时的 x=0 语义一致。
+      if (cursorUtf16 >= line.startUtf16 && cursorUtf16 < line.endUtf16) return i
     }
+    // cursor >= 最后一行的 endUtf16 归最后一行（光标在行尾）
     return state.lines.length - 1
   }
   static getPreviousLineIndex(state, cursorUtf16) {
@@ -96,21 +100,67 @@ class LineNavigationResolver {
     if (lineIndex < 0 || lineIndex >= state.lines.length) return 0
     return state.lines[lineIndex].endUtf16
   }
+  // Issue #629 评论16 第2项：纯函数 — 给定 UTF-16 offset，返回该 offset 在行内的 x 坐标（px）。
+  static getCaretX(state, utf16Offset) {
+    const lineIdx = this.getCurrentLineIndex(state, utf16Offset)
+    if (lineIdx < 0 || lineIdx >= state.lines.length) return 0
+    const line = state.lines[lineIdx]
+    const stops = line.caretStops
+    if (!stops || stops.length === 0) return 0
+    let lo = 0, hi = stops.length - 1, bestIdx = 0
+    let bestDist = Math.abs(stops[0].utf16Offset - utf16Offset)
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2)
+      const dist = Math.abs(stops[mid].utf16Offset - utf16Offset)
+      if (dist < bestDist || (dist === bestDist && stops[mid].utf16Offset <= utf16Offset)) {
+        bestDist = dist
+        bestIdx = mid
+      }
+      if (stops[mid].utf16Offset < utf16Offset) lo = mid + 1
+      else if (stops[mid].utf16Offset > utf16Offset) hi = mid - 1
+      else break
+    }
+    return stops[bestIdx].x
+  }
+  // Issue #629 评论16 第2项：纯函数 — 给定行内 x 坐标，返回最近的 UTF-16 offset。
+  static getNearestOffsetAtX(state, lineIndex, x) {
+    if (lineIndex < 0 || lineIndex >= state.lines.length) return 0
+    const line = state.lines[lineIndex]
+    const stops = line.caretStops
+    if (!stops || stops.length === 0) return line.startUtf16
+    let lo = 0, hi = stops.length - 1, bestIdx = 0
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2)
+      if (stops[mid].x <= x) { bestIdx = mid; lo = mid + 1 }
+      else hi = mid - 1
+    }
+    if (bestIdx + 1 < stops.length) {
+      const leftX = stops[bestIdx].x
+      const rightX = stops[bestIdx + 1].x
+      if (x - leftX <= rightX - x) return stops[bestIdx].utf16Offset
+      return stops[bestIdx + 1].utf16Offset
+    }
+    return stops[bestIdx].utf16Offset
+  }
 }
 
-// 构造 mock lines：每行 5 个字符
-function mockLines(text) {
+// 构造 mock navigation lines：每行 5 个字符，每字符宽 10px
+function mockNavLines(text) {
   const lines = []
   let start = 0
   while (start < text.length) {
     const end = Math.min(start + 5, text.length)
-    lines.push({ startUtf16: start, endUtf16: end, y: 0, height: 20 })
+    const stops = []
+    for (let i = start; i <= end; i++) {
+      stops.push({ utf16Offset: i, x: (i - start) * 10 })
+    }
+    lines.push({ startUtf16: start, endUtf16: end, y: 0, height: 20, caretStops: stops })
     start = end
   }
   return lines
 }
 
-// 构造 layout state
+// 构造 layout state（使用 NavigationLine[]）
 function makeState(text, extra = {}) {
   return {
     revision: 1,
@@ -118,11 +168,13 @@ function makeState(text, extra = {}) {
     compositionGeneration: -1,
     contentWidth: 300,
     fontSize: 16,
-    lines: mockLines(text),
+    lines: mockNavLines(text),
     displayText: text,
     ...extra
   }
 }
+
+
 
 // 构造 identity
 function makeIdentity(text, extra = {}) {
@@ -281,14 +333,67 @@ test('等待返回 state 后目标计算必须使用该 state.lines', async () =
   r.updateLayout(makeState('old', { compositionGeneration: -1 }))
   const waitPromise = r.waitForLayout(makeIdentity('new', { compositionGeneration: -1 }))
   const newState = makeState('new', { compositionGeneration: -1, lines: [
-    { startUtf16: 0, endUtf16: 10, y: 0, height: 20 },
-    { startUtf16: 10, endUtf16: 20, y: 20, height: 20 }
+    { startUtf16: 0, endUtf16: 10, y: 0, height: 20, caretStops: [
+      { utf16Offset: 0, x: 0 }, { utf16Offset: 10, x: 100 }
+    ] },
+    { startUtf16: 10, endUtf16: 20, y: 20, height: 20, caretStops: [
+      { utf16Offset: 10, x: 0 }, { utf16Offset: 20, x: 100 }
+    ] }
   ]})
   setTimeout(() => r.updateLayout(newState), 50)
   const result = await waitPromise
   // 使用返回的 state 计算目标
   assert.equal(LineNavigationResolver.getLineStart(result, 1), 10)
   assert.equal(LineNavigationResolver.getLineEnd(result, 1), 20)
+})
+
+// ── Issue #629 评论16 第2项：getCaretX / getNearestOffsetAtX ──
+
+test('getCaretX: 找到光标所在行最近的 caret stop x', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  // cursor 在第 7 位（第二行第 3 个字符）
+  // 第二行 caretStops: offset 5→x=0, 6→x=10, 7→x=20, 8→x=30, 9→x=40, 10→x=50
+  const x = LineNavigationResolver.getCaretX(state, 7)
+  assert.equal(x, 20)
+})
+
+test('getCaretX: cursor 在行首返回 x=0', () => {
+  const state = makeState('aaaaabbbbb')
+  const x = LineNavigationResolver.getCaretX(state, 5)
+  assert.equal(x, 0)
+})
+
+test('getCaretX: cursor 在行末返回最后一个 stop 的 x', () => {
+  const state = makeState('aaaaabbbbb')
+  const x = LineNavigationResolver.getCaretX(state, 10)
+  assert.equal(x, 50)
+})
+
+test('getNearestOffsetAtX: 找目标行内最近的 code point 边界', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  // 第一行 caretStops: offset 0→x=0, 1→x=10, 2→x=20, 3→x=30, 4→x=40, 5→x=50
+  // x=25 → 最近是 offset 2 (x=20) 或 3 (x=30)，距离 5 和 5 相等，取左边界
+  const offset = LineNavigationResolver.getNearestOffsetAtX(state, 0, 25)
+  assert.equal(offset, 2)
+})
+
+test('getNearestOffsetAtX: x=0 → 行首', () => {
+  const state = makeState('aaaaabbbbb')
+  const offset = LineNavigationResolver.getNearestOffsetAtX(state, 0, 0)
+  assert.equal(offset, 0)
+})
+
+test('getNearestOffsetAtX: x 超过行宽 → 行末', () => {
+  const state = makeState('aaaaabbbbb')
+  const offset = LineNavigationResolver.getNearestOffsetAtX(state, 0, 1000)
+  assert.equal(offset, 5)
+})
+
+test('getNearestOffsetAtX: 第二行正确偏移', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  // 第二行 caretStops: offset 5→x=0, 6→x=10, 7→x=20, 8→x=30, 9→x=40, 10→x=50
+  const offset = LineNavigationResolver.getNearestOffsetAtX(state, 1, 35)
+  assert.equal(offset, 8)
 })
 
 console.log('---')

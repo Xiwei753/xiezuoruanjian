@@ -41,7 +41,7 @@ import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
-import { LineNavigationResolver, LineLayoutState } from '../selection/LineNavigationResolver'
+import { LineNavigationResolver, LineLayoutState, NavigationLine, LineCaretStop } from '../selection/LineNavigationResolver'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { KeyboardInputService, PlatformKeyEvent, SemanticKeyCommand } from '../../../platform/input/KeyboardInputService'
 import { PointerInputService, PlatformPointerEvent } from '../../../platform/input/PointerInputService'
@@ -52,7 +52,7 @@ import { KeyEvent, MouseEvent } from '@kit.InputKit'
 
 @Component
 export struct SujianEditor {
-  @Prop snapshot: EditorLayoutSnapshot | null = null
+  @Prop @Watch('onSnapshotChanged') snapshot: EditorLayoutSnapshot | null = null
   // IME 连接、输入/选区控制器、统一语义调度器由父组件注入；
   // SujianEditor 在获得/失去焦点时 attach/detach IME。
   // Issue #629 评论6 Part A：所有输入经 dispatcher 统一排队，不再直接调 inputAdapter/selectionController。
@@ -138,11 +138,22 @@ export struct SujianEditor {
     }
   }
 
-  aboutToUpdate(): void {
-    // Issue #629 评论11 第2项：snapshot 变化时先 refreshRender（无几何 fallback），
-    // 再 refreshRenderLayout（contentWidth > 0 时用已有宽度计算真实 lines + 更新 lineResolver 带身份）。
-    // 这样打完字后按 Up/Down/Home/End 不需要等 onAreaChange 才更新 lineResolver，
-    // resolver 的身份与当前 Core snapshot 匹配，executeLineNavigation 不会 STALE_LAYOUT。
+  // Issue #629 评论16 第1项：用 @Watch 监听 snapshot 变化替代 aboutToUpdate。
+  // aboutToUpdate 不是 OpenHarmony 官方生命周期回调（官方 V1 监听机制是 @Watch）。
+  // snapshot 前进时先 refreshRender（无几何 fallback），再 refreshRenderLayout
+  // （contentWidth > 0 时用已有宽度计算真实 lines + 更新 lineResolver 带身份）。
+  // 这样打完字后按 Up/Down/Home/End 不需要等 onAreaChange 才更新 lineResolver，
+  // resolver 的身份与当前 Core snapshot 匹配，executeLineNavigation 不会 STALE_LAYOUT。
+  private onSnapshotChanged(): void {
+    if (this.snapshot === null) {
+      this.lineResolver.cancelWait()
+      this.lineResolver.updateLayout(null)
+      this.renderResult = null
+      this.selectionRects = []
+      this.caretRect = null
+      this.compositionUnderlineRects = []
+      return
+    }
     this.refreshRender()
     this.refreshRenderLayout()
   }
@@ -199,6 +210,38 @@ export struct SujianEditor {
       // 身份来自 Core 编辑状态：revision + generation + compositionGeneration + displayText。
       // contentWidth/fontSize 决定折行但不属于编辑状态身份（评论15 第2项）。
       // executeLineNavigation 出队时验证此身份与当前 Core snapshot 匹配才用 lines 算目标。
+      // Issue #629 评论16 第2项：为每行生成 caretStops（code point 边界 + x 坐标），
+      // 供 Up/Down 保持横向位置、鼠标 hit-test 复用同一份算法。
+      const navigationLines: NavigationLine[] = []
+      for (const ll of result.lines) {
+        const stops: LineCaretStop[] = []
+        // 逐 code point 边界计算 x 坐标
+        let i = ll.startUtf16
+        while (i <= ll.endUtf16) {
+          const x = measureTextFn(result.text.substring(ll.startUtf16, i))
+          stops.push({ utf16Offset: i, x: x })
+          // 下一个 code point 边界（不切断 surrogate pair）
+          if (i >= result.text.length) {
+            break
+          }
+          const code = result.text.charCodeAt(i)
+          if (code >= 0xD800 && code <= 0xDBFF && i + 1 < result.text.length) {
+            const low = result.text.charCodeAt(i + 1)
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+              i += 2
+              continue
+            }
+          }
+          i += 1
+        }
+        navigationLines.push({
+          startUtf16: ll.startUtf16,
+          endUtf16: ll.endUtf16,
+          y: ll.y,
+          height: ll.height,
+          caretStops: stops
+        })
+      }
       const layoutState: LineLayoutState = {
         revision: snap.revision,
         generation: snap.generation,
@@ -206,7 +249,7 @@ export struct SujianEditor {
         displayText: snap.text,
         contentWidth: this.contentWidth,
         fontSize: snap.fontSize,
-        lines: result.lines
+        lines: navigationLines
       }
       this.lineResolver.updateLayout(layoutState)
     }
