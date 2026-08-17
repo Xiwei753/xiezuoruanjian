@@ -97,11 +97,39 @@ fun SettingsGroupItemContainer(
 }
 
 /**
- * 展开后字段组 — surfaceContainerHigh + [MaterialTheme.shapes.large]，
- * 标题 titleSmall/onSurfaceVariant，内容 16dp padding。
+ * 展开后字段组标题 — 仅渲染标题文字 + surfaceContainerHigh 表面色，
+ * 用于行级 LazyColumn：每个设置控件是独立 item，通过此标题行分组。
  *
  * 替代旧 SujianSection，避免"展开分类 padding + SujianSection 标题 + SujianCard padding"
  * 一层套一层；外层 padding 只保留一层。
+ */
+@Composable
+fun SettingsFieldGroupTitle(
+    title: String,
+    modifier: Modifier = Modifier,
+    semanticId: String? = null,
+) {
+    Surface(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .then(if (semanticId != null) Modifier.testTag(semanticId) else Modifier),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+        )
+    }
+}
+
+/**
+ * 展开后字段组 — surfaceContainerHigh + [MaterialTheme.shapes.large]，
+ * 标题 titleSmall/onSurfaceVariant，内容 16dp padding。
+ *
+ * 保留向后兼容：部分场景仍需将多个控件包在一个 item 里。
  */
 @Composable
 fun SettingsFieldGroup(

@@ -35,7 +35,9 @@ import com.xiwei.sujian.feature.editor.presentation.requestOpenChapter
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 写作工作区 — 「作品」一级入口的唯一内容。
@@ -159,51 +161,45 @@ internal fun ProjectWorkspaceScreen(
         }
     }
 
-    // #630 评论12 项2 + 评论13 项1：「继续写作」— 先在 IO 调度器解析真实章节标题，
+    // #630 评论12 项2 + 评论13 项1 + 评论15 项1：「继续写作」— 先在 IO 调度器解析真实章节标题，
     // 再传给 requestOpenChapter，避免空标题提交进 EditorViewModel 事务。
     val handleContinueRecentEdit: (RecentEdit) -> Unit = { edit ->
         coroutineScope.launch {
-            // 1. 先解析作品标题和章节标题（IO 调度器，避免阻塞主线程）
+            // 1. 作品标题来自内存，不阻塞主线程
             val projectTitle =
-                with(kotlinx.coroutines.Dispatchers.IO) {
-                    appState.projectSummaries.find { it.id == edit.projectId }?.title ?: ""
-                }
-            val chapterTitle =
-                with(kotlinx.coroutines.Dispatchers.IO) {
+                appState.projectSummaries.firstOrNull { it.id == edit.projectId }?.title.orEmpty()
+
+            // 2. 章节列表只读一次（IO 调度器），不重复读取
+            val chapter =
+                withContext(kotlinx.coroutines.Dispatchers.IO) {
                     projectRepository.getChapters(edit.projectId, edit.volumeId)
-                        ?.find { it.id == edit.chapterId }?.title ?: ""
+                        ?.firstOrNull { it.id == edit.chapterId }
                 }
 
-            // 2. 章节不存在时回退到作品章节树（不进入编辑器）
-            if (chapterTitle.isEmpty() &&
-                projectRepository.getChapters(edit.projectId, edit.volumeId)
-                    ?.none { it.id == edit.chapterId } == true
-            ) {
+            // 3. 章节不存在时回退到作品章节树（不进入编辑器）
+            if (chapter == null) {
                 appState.selectProject(edit.projectId, projectTitle)
                 appState.clearChapterSelection()
                 workspaceNavState.navigateToChapterTree(edit.projectId)
                 return@launch
             }
 
-            // 3. 用真实标题打开章节
+            // 4. 用真实标题打开章节
             val result =
                 editorViewModel.requestOpenChapter(
                     edit.projectId,
                     edit.volumeId,
                     edit.chapterId,
-                    chapterTitle,
+                    chapter.title,
                 )
             when (result) {
                 is ChapterSwitchResult.Success -> {
                     appState.selectProject(edit.projectId, projectTitle)
-                    appState.selectChapter(edit.volumeId, edit.chapterId, chapterTitle)
+                    appState.selectChapter(edit.volumeId, edit.chapterId, chapter.title)
                     workspaceNavState.navigateToEditor(edit.projectId, edit.volumeId, edit.chapterId)
                 }
-                is ChapterSwitchResult.SaveFailed,
-                is ChapterSwitchResult.LoadFailed,
-                ChapterSwitchResult.Stale,
-                -> {
-                    // 章节不存在时回退到作品章节树
+                is ChapterSwitchResult.LoadFailed -> {
+                    // 章节加载失败时回退到作品章节树
                     appState.selectProject(edit.projectId, projectTitle)
                     appState.clearChapterSelection()
                     workspaceNavState.navigateToChapterTree(edit.projectId)

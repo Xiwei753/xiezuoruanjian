@@ -6,10 +6,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
-import androidx.test.core.app.ApplicationProvider
-import com.xiwei.sujian.R
 import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
@@ -52,9 +49,6 @@ class SettingsUiGeometryTest {
 
     @Test
     fun syncSettings_doesNotRenderSecondSyncTitle() {
-        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        val syncCategoryTitle = context.getString(R.string.pref_category_sync)
-
         // #630 评论13: SyncSettings 现在是 LazyListScope 扩展函数，
         // 需要用 LazyColumn 包裹来测试。但测试目标已改变：
         // SyncSettings 不再渲染"同步"分类标题（标题由 SettingsRoute 唯一提供）。
