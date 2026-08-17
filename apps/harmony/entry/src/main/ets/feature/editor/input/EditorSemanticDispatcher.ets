@@ -44,6 +44,7 @@ import { SerialCommandQueue } from '../session/editor_patch_logic'
 import { TextOffsetMapper } from './TextOffsetMapper'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorTransactionCause, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
+import { LineNavigationResolver } from '../selection/LineNavigationResolver'
 
 // 语义命令类型：把物理键盘/IME/鼠标/触摸的输入统一成语义命令。
 // 出队执行时才读 Coordinator snapshot，避免并发命令拿到同一个旧 cursor/selection。
@@ -67,6 +68,17 @@ export type SemanticEditCommand =
   // Issue #629 评论8 第4项：IME 来源的 selection 语义命令（start/end 是 UTF-16 code unit offset，
   // 显示文本坐标）。composition 内外判断由本 Dispatcher 在唯一队列出队时做。
   | { kind: 'imeSetSelection'; utf16Start: number; utf16End: number }
+  // Issue #629 评论11 第1项：清空整篇文档的语义命令。
+  // 出队时读取最新 snapshot 计算 UTF-8 全文范围，调 coordinator.replace 清空。
+  // 保证之前的输入先执行，之后的新输入排在 clear 后面，不再有跨队列抢跑。
+  | { kind: 'clearDocument' }
+  // Issue #629 评论11 第2项：行级导航语义命令（不提前计算目标位置）。
+  // 出队时基于最新 Core snapshot + 最新行布局计算目标，再调 SelectionController。
+  // extend 为 true 时保持 anchor 不变（Shift+方向键扩展选区）。
+  | { kind: 'lineUp'; extend: boolean }
+  | { kind: 'lineDown'; extend: boolean }
+  | { kind: 'lineHome'; extend: boolean }
+  | { kind: 'lineEnd'; extend: boolean }
 
 export class EditorSemanticDispatcher {
   private inputAdapter: EditorInputAdapter
@@ -77,6 +89,9 @@ export class EditorSemanticDispatcher {
   private queue: SerialCommandQueue = new SerialCommandQueue()
   // Issue #629 评论8 第3项：close 开始后 sealed，拒绝新的普通输入命令（已排队命令仍可 drain）。
   private sealed: boolean = false
+  // Issue #629 评论11 第2项：行级导航解析器。由 SujianEditor 在 aboutToAppear 注册，
+  // 行导航命令出队时基于最新 renderResult.lines 计算目标位置。
+  private lineResolver: LineNavigationResolver | null = null
 
   constructor(inputAdapter: EditorInputAdapter, selectionController: SelectionController, coordinator: EditorSessionCoordinator) {
     this.inputAdapter = inputAdapter
@@ -182,6 +197,16 @@ export class EditorSemanticDispatcher {
         return this.executeGraphemeLeft(cmd.extend)
       case 'graphemeRight':
         return this.executeGraphemeRight(cmd.extend)
+      case 'clearDocument':
+        return this.executeClearDocument()
+      case 'lineUp':
+        return this.executeLineNavigation('up', cmd.extend)
+      case 'lineDown':
+        return this.executeLineNavigation('down', cmd.extend)
+      case 'lineHome':
+        return this.executeLineNavigation('home', cmd.extend)
+      case 'lineEnd':
+        return this.executeLineNavigation('end', cmd.extend)
     }
   }
 
@@ -402,6 +427,90 @@ export class EditorSemanticDispatcher {
       return nextResult as ResultEnvelope<EditorEditResult>
     }
     return this.coordinator.setSelection(nextResult.data, nextResult.data)
+  }
+
+  // Issue #629 评论11 第1项：清空整篇文档。
+  // 出队后读取最新 Core snapshot，计算 UTF-8 全文范围，调 coordinator.replace 清空。
+  // 保证之前的输入先执行（在本命令出队前已应用完），之后的新输入只能排在 clear 后面。
+  private async executeClearDocument(): Promise<ResultEnvelope<EditorEditResult>> {
+    const snap = this.coordinator.getSnapshot()
+    if (!snap) {
+      return this.noSession()
+    }
+    const fullText: string = snap.text
+    const utf8EndByte: number = TextOffsetMapper.utf16ToUtf8(fullText, fullText.length)
+    return this.coordinator.replace(
+      0, utf8EndByte, '', fullText, EditorTransactionCause.Programmatic
+    )
+  }
+
+  // Issue #629 评论11 第2项：行级导航（up/down/home/end）。
+  // 出队后基于最新 Core snapshot + 最新行布局（lineResolver）计算目标位置，
+  // 再调 SelectionController。不在入队前读旧布局。
+  private async executeLineNavigation(direction: 'up' | 'down' | 'home' | 'end', extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
+    const snap = this.coordinator.getSnapshot()
+    if (!snap) {
+      return this.noSession()
+    }
+    const resolver = this.lineResolver
+    if (!resolver) {
+      return this.noSession()
+    }
+    const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursor)
+    const anchorUtf16 = TextOffsetMapper.utf8ToUtf16(snap.text, snap.selectionAnchor)
+
+    switch (direction) {
+      case 'up': {
+        const targetLineIdx = resolver.getPreviousLineIndex(cursorUtf16)
+        if (targetLineIdx < 0) {
+          return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+        }
+        const targetOffset = resolver.getLineStart(targetLineIdx)
+        if (extend) {
+          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
+        }
+        return this.selectionController.onTap(targetOffset)
+      }
+      case 'down': {
+        const targetLineIdx = resolver.getNextLineIndex(cursorUtf16)
+        if (targetLineIdx < 0) {
+          return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+        }
+        const targetOffset = resolver.getLineStart(targetLineIdx)
+        if (extend) {
+          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
+        }
+        return this.selectionController.onTap(targetOffset)
+      }
+      case 'home': {
+        const lineIdx = resolver.getCurrentLineIndex(cursorUtf16)
+        const targetOffset = lineIdx >= 0 ? resolver.getLineStart(lineIdx) : 0
+        if (extend) {
+          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
+        }
+        return this.selectionController.onTap(targetOffset)
+      }
+      case 'end': {
+        const lineIdx = resolver.getCurrentLineIndex(cursorUtf16)
+        const textUtf16Len = snap.text.length
+        const targetOffset = lineIdx >= 0 ? resolver.getLineEnd(lineIdx) : textUtf16Len
+        if (extend) {
+          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
+        }
+        return this.selectionController.onTap(targetOffset)
+      }
+    }
+  }
+
+  // Issue #629 评论11 第2项：注册行级导航解析器。
+  // SujianEditor 在 aboutToAppear 时注册，提供最新 renderResult.lines 读取入口。
+  // 行导航命令出队时通过 resolver 计算目标位置（不在入队前读旧布局）。
+  registerLineResolver(resolver: LineNavigationResolver): void {
+    this.lineResolver = resolver
+  }
+
+  unregisterLineResolver(): void {
+    this.lineResolver = null
   }
 
   // flush: 等待所有排队命令完成（供页面退出/退后台事务用）

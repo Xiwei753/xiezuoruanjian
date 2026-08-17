@@ -41,6 +41,7 @@ import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
+import { LineNavigationResolver } from '../selection/LineNavigationResolver'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { KeyboardInputService, PlatformKeyEvent, SemanticKeyCommand } from '../../../platform/input/KeyboardInputService'
 import { PointerInputService, PlatformPointerEvent } from '../../../platform/input/PointerInputService'
@@ -88,12 +89,22 @@ export struct SujianEditor {
   private keyboardService: KeyboardInputService = KeyboardInputService.getInstance()
   private pointerService: PointerInputService = PointerInputService.getInstance()
   private stylusService: StylusInputService = StylusInputService.getInstance()
+  // Issue #629 评论11 第2项：行级导航解析器。
+  // SujianEditor 持有 renderResult，每次渲染结果更新后同步给 resolver。
+  // Dispatcher 行导航命令出队时通过 resolver 读取最新行布局计算目标位置。
+  private lineResolver: LineNavigationResolver = new LineNavigationResolver()
   // drag selection 状态：鼠标/触摸按下时记 anchor UTF-16 offset，move 时 drag select。
   private dragAnchorUtf16: number = -1
   private isDragging: boolean = false
 
   aboutToAppear(): void {
     this.refreshRender()
+    // Issue #629 评论11 第2项：注册行级导航解析器到 Dispatcher。
+    // SujianEditor 持有 renderResult；每次渲染更新后同步给 resolver。
+    // Dispatcher 行导航命令出队时通过 resolver 读最新行布局计算目标。
+    if (this.dispatcher) {
+      this.dispatcher.registerLineResolver(this.lineResolver)
+    }
     // Issue #629 评论6 Part C + 评论7 第4项：注册父子 viewport 恢复通道。
     // scrollTo 由 scroller.scrollTo 实现；getDimensions 返回当前真实 viewport/content 尺寸。
     // register 不立即消费 pending（尺寸可能为 0）；onAreaChange 拿到真实尺寸后
@@ -116,6 +127,10 @@ export struct SujianEditor {
   }
 
   aboutToDisappear(): void {
+    // Issue #629 评论11 第2项：注销行级导航解析器。
+    if (this.dispatcher) {
+      this.dispatcher.unregisterLineResolver()
+    }
     // Issue #629 评论6 Part C：注销父子 viewport 恢复通道。
     if (this.viewportController) {
       this.viewportController.unregister()
@@ -135,11 +150,14 @@ export struct SujianEditor {
       this.selectionRects = result.selectionRects
       this.caretRect = result.caretRect
       this.compositionUnderlineRects = result.compositionUnderlineRects
+      // Issue #629 评论11 第2项：渲染结果更新后同步给行级导航解析器。
+      this.lineResolver.updateLayout(result.lines)
     } else {
       this.renderResult = null
       this.selectionRects = []
       this.caretRect = null
       this.compositionUnderlineRects = []
+      this.lineResolver.updateLayout([])
     }
   }
 
@@ -164,6 +182,8 @@ export struct SujianEditor {
       this.selectionRects = result.selectionRects
       this.caretRect = result.caretRect
       this.compositionUnderlineRects = result.compositionUnderlineRects
+      // Issue #629 评论11 第2项：行布局更新后同步给行级导航解析器。
+      this.lineResolver.updateLayout(result.lines)
     }
   }
 
@@ -224,37 +244,19 @@ export struct SujianEditor {
     return this.snapshot.selectionAnchor !== this.snapshot.selectionHead
   }
 
-  // 找当前光标所在行号（用 renderResult.lines）。返回 -1 表示无行信息。
-  private currentLineIndex(): number {
-    if (!this.renderResult || this.renderResult.lines.length === 0) {
-      return -1
-    }
-    const cursor = this.currentCursorUtf16()
-    const lines: LineLayout[] = this.renderResult.lines
-    for (let i = 0; i < lines.length; i++) {
-      if (cursor >= lines[i].startUtf16 && cursor <= lines[i].endUtf16) {
-        return i
-      }
-    }
-    // 越界时归最后一行。
-    return lines.length - 1
-  }
-
   // ── 键盘语义命令分发 ──
   // 把 SemanticKeyCommand 转成语义命令经 EditorSemanticDispatcher 派发。
   // 原始 KeyEvent 不进 Rust；这里只派发语义命令。
   // Issue #629 评论6 Part A：所有输入经 dispatcher 统一排队，出队时才读 snapshot。
   // grapheme-based 导航（backspace/delete/arrowLeft/arrowRight）用 Core grapheme boundary（Part E），
   // 不再用 UTF-16 ±1 猜字符边界。
-  // arrowUp/arrowDown/home/end 是行级导航（不是 grapheme 导航），仍用 renderResult.lines 计算目标行，
-  // 但派发也经 dispatcher（setSelection/dragSelect）保证串行。
+  // Issue #629 评论11 第2项：arrowUp/arrowDown/home/end 改用语义命令 lineUp/lineDown/lineHome/lineEnd，
+  // 不在入队前读旧布局计算目标。出队时由 LineNavigationResolver 基于最新行布局计算。
   private dispatchKeyCommand(cmd: SemanticKeyCommand): void {
     if (!this.dispatcher || !this.snapshot) {
       return
     }
     const dispatcher: EditorSemanticDispatcher = this.dispatcher
-    const text: string = this.snapshot.text
-    const sel: [number, number] = this.currentSelectionUtf16()
     switch (cmd.kind) {
       case 'character':
         // insertText：由 EditorInputAdapter 判断当前是否有选区（有选区替换，空选区插入）
@@ -283,55 +285,24 @@ export struct SujianEditor {
         dispatcher.dispatchFireAndForget({ kind: 'graphemeRight', extend: cmd.extend })
         break
       case 'arrowUp': {
-        // 移到上一行开头（简化：不做列保持）。行级导航，不是 grapheme 导航。
-        const lineIdx = this.currentLineIndex()
-        if (lineIdx > 0 && this.renderResult) {
-          const targetLine = this.renderResult.lines[lineIdx - 1]
-          if (cmd.extend) {
-            dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: sel[0], utf16Head: targetLine.startUtf16 })
-          } else {
-            dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: targetLine.startUtf16 })
-          }
-        }
+        // Issue #629 评论11 第2项：行级导航改用语义命令 lineUp，
+        // 不在入队前读旧布局计算目标。出队时由 LineNavigationResolver 基于最新行布局计算。
+        dispatcher.dispatchFireAndForget({ kind: 'lineUp', extend: cmd.extend })
         break
       }
       case 'arrowDown': {
-        // 移到下一行开头。行级导航，不是 grapheme 导航。
-        const lineIdx = this.currentLineIndex()
-        if (lineIdx >= 0 && this.renderResult && lineIdx < this.renderResult.lines.length - 1) {
-          const targetLine = this.renderResult.lines[lineIdx + 1]
-          if (cmd.extend) {
-            dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: sel[0], utf16Head: targetLine.startUtf16 })
-          } else {
-            dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: targetLine.startUtf16 })
-          }
-        }
+        // Issue #629 评论11 第2项：行级导航改用语义命令 lineDown。
+        dispatcher.dispatchFireAndForget({ kind: 'lineDown', extend: cmd.extend })
         break
       }
       case 'home': {
-        // 行首（当前行 startUtf16）；无行信息时归 0。行级导航，不是 grapheme 导航。
-        const lineIdx = this.currentLineIndex()
-        const target: number = lineIdx >= 0 && this.renderResult
-          ? this.renderResult.lines[lineIdx].startUtf16
-          : 0
-        if (cmd.extend) {
-          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: sel[0], utf16Head: target })
-        } else {
-          dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: target })
-        }
+        // Issue #629 评论11 第2项：行级导航改用语义命令 lineHome。
+        dispatcher.dispatchFireAndForget({ kind: 'lineHome', extend: cmd.extend })
         break
       }
       case 'end': {
-        // 行末（当前行 endUtf16）；无行信息时归 text.length。行级导航，不是 grapheme 导航。
-        const lineIdx = this.currentLineIndex()
-        const target: number = lineIdx >= 0 && this.renderResult
-          ? this.renderResult.lines[lineIdx].endUtf16
-          : text.length
-        if (cmd.extend) {
-          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: sel[0], utf16Head: target })
-        } else {
-          dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: target })
-        }
+        // Issue #629 评论11 第2项：行级导航改用语义命令 lineEnd。
+        dispatcher.dispatchFireAndForget({ kind: 'lineEnd', extend: cmd.extend })
         break
       }
       case 'escape':

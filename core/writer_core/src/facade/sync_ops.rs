@@ -552,25 +552,41 @@ fn sync_error_category_to_message_key_string(code: &str) -> String {
         .to_string()
 }
 
-/// 聚合成功类终态（Issue #630 评论 5308439467 Part 3）。
+/// 聚合成功类终态（Issue #630 评论 5311102143）。
 ///
-/// 失败优先级为 0 时调用。按成功类优先级
-/// `BranchMissingRecovered > LatestWinsApplied > NoChanges > Success`
-/// 取最高的成功状态。协议错误状态不应到达此处（已由 `build_protocol_error_fields` 拦截）。
+/// 失败优先级为 0 时调用。用语义判断而非数字优先级：
+/// - `BranchMissingRecovered` 存在 → `BranchMissingRecovered`（最高）
+/// - `LatestWinsApplied` 存在 → `LatestWinsApplied`
+/// - 全部 `NoChanges` → `NoChanges`
+/// - 其余情况 → `Success`
+///
+/// 关键语义：`Success + NoChanges → Success`（有 target 实际上传/下载了）。
+/// 协议错误状态不应到达此处（已由 `build_protocol_error_fields` 拦截）。
 fn aggregate_success_status(
     targets: &[crate::sync::types::TargetSyncResult],
 ) -> crate::sync::SyncStatus {
-    let success_priority = targets
+    use crate::sync::SyncStatus;
+
+    if targets
         .iter()
-        .map(|t| full_sync_success_priority(&t.result.status))
-        .max()
-        .unwrap_or(1);
-    match success_priority {
-        4 => crate::sync::SyncStatus::BranchMissingRecovered,
-        3 => crate::sync::SyncStatus::LatestWinsApplied,
-        2 => crate::sync::SyncStatus::NoChanges,
-        _ => crate::sync::SyncStatus::Success,
+        .any(|t| matches!(t.result.status, SyncStatus::BranchMissingRecovered))
+    {
+        return SyncStatus::BranchMissingRecovered;
     }
+    if targets
+        .iter()
+        .any(|t| matches!(t.result.status, SyncStatus::LatestWinsApplied))
+    {
+        return SyncStatus::LatestWinsApplied;
+    }
+    if !targets.is_empty()
+        && targets
+            .iter()
+            .all(|t| matches!(t.result.status, SyncStatus::NoChanges))
+    {
+        return SyncStatus::NoChanges;
+    }
+    SyncStatus::Success
 }
 
 /// 单个 target 状态在聚合中的优先级（数字越大越需要用户处理）：
@@ -582,28 +598,6 @@ fn full_sync_status_priority(status: &crate::sync::SyncStatus) -> u8 {
         crate::sync::SyncStatus::Conflict | crate::sync::SyncStatus::PartialConflict => 2,
         crate::sync::SyncStatus::RecoverableError(_) => 1,
         _ => 0,
-    }
-}
-
-/// 成功类终态在聚合中的优先级（Issue #630 评论 5308439467 Part 3）。
-///
-/// 数字越大越优先保留：
-/// - `Success` = 1
-/// - `NoChanges` = 2
-/// - `LatestWinsApplied` = 3
-/// - `BranchMissingRecovered` = 4
-/// - `Syncing` / `Idle` / `ConfiguredNotTested` = 协议错误，不参与成功聚合
-///   （由 `aggregate_full_sync_result` 提前拦截生成 FatalError）
-/// - 错误类终态不调用此函数（仅在失败优先级为 0 时才聚合成功类）
-fn full_sync_success_priority(status: &crate::sync::SyncStatus) -> u8 {
-    match status {
-        crate::sync::SyncStatus::BranchMissingRecovered => 4,
-        crate::sync::SyncStatus::LatestWinsApplied => 3,
-        crate::sync::SyncStatus::NoChanges => 2,
-        crate::sync::SyncStatus::Success => 1,
-        // 协议错误状态不应到达此处；若到达，按最低优先级处理（Success），
-        // 真正的拦截在 aggregate_full_sync_result 开头。
-        _ => 1,
     }
 }
 

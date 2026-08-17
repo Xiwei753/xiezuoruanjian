@@ -9,7 +9,7 @@ import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserve
 import { EditorSessionCoordinator, EditorStateUpdate } from '../session/EditorSessionCoordinator'
 import { NativeEditorSessionBridge } from '../interop/NativeEditorSessionBridge'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
-import { EditorSessionSnapshot, EditorTransactionCause, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
+import { EditorSessionSnapshot, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
@@ -258,8 +258,10 @@ export struct WritingScreen {
         this.sessionOldText = savedText
       }
       // 7. 关闭编辑会话。Issue #629 评论9 第2项：先 closeAsync，成功后才 detach IME。
+      // Issue #629 评论11 第3项：close 必须 success===true && data===true 才算成功。
+      // 旧实现只判断 closeResult.success（FFI 返回 { success:true, data:false } 时会误当成功）。
       const closeResult = await this.coordinator.closeAsync()
-      if (!closeResult.success) {
+      if (!closeResult.success || closeResult.data !== true) {
         // close 失败：不 detach、不 pop；unseal 让用户继续编辑（不需要重新 attach IME）。
         this.dispatcher.unseal()
         return false
@@ -705,51 +707,31 @@ export struct WritingScreen {
     })
   }
 
-  // Issue #629 评论 5 第 4 节 + 评论9 第4项：清空正文必须是一条编辑事务，不在活跃 TextEditSession 外直接 clear 文件。
-  // 取 Coordinator 当前 snapshot，把 0..UTF8正文末尾 replace 为 ''，cause 用 Programmatic。
+  // Issue #629 评论 5 第 4 节 + 评论9 第4项 + 评论11 第1项：
+  // 清空正文必须走 Dispatcher 的 clearDocument 语义命令，不绕过队列直接 coordinator.replace。
+  // 这样之前的输入一定先执行，之后的新输入只能排在 clear 后面，不再有跨队列抢跑。
   // replace 成功后 state listener 自动回流空正文（content=''、hasUnsavedChanges=true）并按
   // editResult.contentDelta 实时更新 wordCount——doClearContent 不再单独算字数，走同一 listener 路径。
-  // 等 listener 回流后走同一套 saveChapter() 持久化。不直接 bridge.clearChapter()（会让磁盘正文和
-  // 编辑器正文拆成两份）。
+  // 等 listener 回流后走同一套 ensureSnapshotSaved('') 持久化。
   private async doClearContent() {
-    const snap = this.coordinator.getSnapshot()
-    if (!snap) {
+    if (!this.dispatcher) {
       this.lastSaveFailed = true
       this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.clear_failed').id)
       return
     }
-    // replace 阶段用 isSaving 保护，避免并发；replace 完成后释放，让 saveChapter 自己管 isSaving。
+    // dispatch clearDocument：命令进 Dispatcher 队列，保证之前的输入先执行。
+    // 出队后 Dispatcher 内部读取最新 Core snapshot 计算全文范围，调 coordinator.replace 清空。
     this.isSaving = true
-    let replaceOk: boolean = false
-    try {
-      // 把当前正文 0..末尾 replace 为 ''，cause=Programmatic。
-      // replace 的 byte offset 是 UTF-8；snap.text.length 是 UTF-16 code unit 数，
-      // 用 TextOffsetMapper.utf16ToUtf8 转成 UTF-8 byte 长度作为 replace 末尾。
-      const fullText: string = snap.text
-      const utf8EndByte: number = TextOffsetMapper.utf16ToUtf8(fullText, fullText.length)
-      const replaceResult = await this.coordinator.replace(
-        0, utf8EndByte, '', fullText, EditorTransactionCause.Programmatic
-      )
-      if (replaceResult.success && replaceResult.data) {
-        // state listener 已按 editResult.contentDelta 实时更新 wordCount（非空白字符增量），
-        // 并回流空正文（content=''、hasUnsavedChanges=true）。此处不再单独算字数。
-        replaceOk = true
-      }
-    } catch (err) {
-      replaceOk = false
-    }
+    const result = await this.dispatcher.dispatch({ kind: 'clearDocument' })
     this.isSaving = false
-    if (!replaceOk) {
+    if (!result.success) {
       this.lastSaveFailed = true
       this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.clear_failed').id)
       return
     }
-    // Issue #629 评论 5308748920 问题3：replace 成功后重读 Core snapshot 确认 text==''，
+    // Issue #629 评论 5308748920 问题3：clearDocument 成功后重读 Core snapshot 确认 text==''，
     // 再 ensureSnapshotSaved('')。只有这份空正文真的保存成功才显示"已清空"。
-    // 不直接 saveChapter()（可能复用旧 saveTask 把更早正文标成已保存）。
-    if (this.dispatcher) {
-      await this.dispatcher.flush()
-    }
+    await this.dispatcher.flush()
     await this.coordinator.whenIdle()
     const afterClear = this.coordinator.getSnapshot()
     if (afterClear === null || afterClear.text !== '') {

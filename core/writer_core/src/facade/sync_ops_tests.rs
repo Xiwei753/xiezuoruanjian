@@ -1122,6 +1122,7 @@ fn sync_result_with_status(status: SyncStatus) -> SyncResult {
 }
 
 /// 全部 target 返回 `NoChanges` → overall `NoChanges`（不再丢成普通 Success）。
+/// （Issue #630 评论 5311102143：`NoChanges + NoChanges -> NoChanges`）
 #[test]
 fn aggregate_all_no_changes_overall_is_no_changes() {
     let (_temp_dir, core) = new_core_with_projects();
@@ -1144,7 +1145,119 @@ fn aggregate_all_no_changes_overall_is_no_changes() {
     );
 }
 
+/// `Success + NoChanges -> Success`：有 target 实际上传/下载了，不能丢成 NoChanges。
+/// （Issue #630 评论 5311102143：修复 max() 把 NoChanges(2) 压过 Success(1) 的聚合错误）
+#[test]
+fn aggregate_success_plus_no_changes_is_success() {
+    let (_temp_dir, core) = new_core_with_projects();
+    let p1 = core.create_project("Project 1").expect("create project 1");
+
+    // app=NoChanges, project:p1=Success
+    let backend = MockBackend::new(MockOutcome::ok(sync_result_with_status(
+        SyncStatus::NoChanges,
+    )));
+    backend.set(
+        &format!("projects/{}", p1.id),
+        MockOutcome::ok(SyncResult::success()),
+    );
+
+    let config = test_config();
+    let secrets = SyncSecrets::default();
+    let result = core
+        .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+        .expect("full sync");
+
+    assert_eq!(
+        result.overall_status,
+        SyncStatus::Success,
+        "Success + NoChanges must aggregate to Success, not NoChanges; got {:?}",
+        result.overall_status
+    );
+}
+
+/// `Success + NoChanges -> Success`（反向顺序）：先 Success 后 NoChanges 也必须是 Success。
+#[test]
+fn aggregate_success_first_then_no_changes_is_success() {
+    let (_temp_dir, core) = new_core_with_projects();
+    let p1 = core.create_project("Project 1").expect("create project 1");
+
+    // app=Success, project:p1=NoChanges
+    let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
+    backend.set(
+        &format!("projects/{}", p1.id),
+        MockOutcome::ok(sync_result_with_status(SyncStatus::NoChanges)),
+    );
+
+    let config = test_config();
+    let secrets = SyncSecrets::default();
+    let result = core
+        .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+        .expect("full sync");
+
+    assert_eq!(
+        result.overall_status,
+        SyncStatus::Success,
+        "Success + NoChanges (reversed) must aggregate to Success; got {:?}",
+        result.overall_status
+    );
+}
+
+/// `Success + LatestWinsApplied -> LatestWinsApplied`：有 target 因最新赢家规则合并了变更。
+/// （Issue #630 评论 5311102143：`Success + LatestWinsApplied -> LatestWinsApplied`）
+#[test]
+fn aggregate_success_plus_latest_wins_applied_is_latest_wins_applied() {
+    let (_temp_dir, core) = new_core_with_projects();
+    let p1 = core.create_project("Project 1").expect("create project 1");
+
+    let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
+    backend.set(
+        &format!("projects/{}", p1.id),
+        MockOutcome::ok(sync_result_with_status(SyncStatus::LatestWinsApplied)),
+    );
+
+    let config = test_config();
+    let secrets = SyncSecrets::default();
+    let result = core
+        .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+        .expect("full sync");
+
+    assert_eq!(
+        result.overall_status,
+        SyncStatus::LatestWinsApplied,
+        "Success + LatestWinsApplied must aggregate to LatestWinsApplied; got {:?}",
+        result.overall_status
+    );
+}
+
+/// `Success + BranchMissingRecovered -> BranchMissingRecovered`：有 target 回退分支丢失恢复。
+/// （Issue #630 评论 5311102143：`Success + BranchMissingRecovered -> BranchMissingRecovered`）
+#[test]
+fn aggregate_success_plus_branch_missing_recovered_is_branch_missing_recovered() {
+    let (_temp_dir, core) = new_core_with_projects();
+    let p1 = core.create_project("Project 1").expect("create project 1");
+
+    let backend = MockBackend::new(MockOutcome::ok(SyncResult::success()));
+    backend.set(
+        &format!("projects/{}", p1.id),
+        MockOutcome::ok(sync_result_with_status(SyncStatus::BranchMissingRecovered)),
+    );
+
+    let config = test_config();
+    let secrets = SyncSecrets::default();
+    let result = core
+        .perform_full_sync_with_backend(&backend, &config, &secrets, false)
+        .expect("full sync");
+
+    assert_eq!(
+        result.overall_status,
+        SyncStatus::BranchMissingRecovered,
+        "Success + BranchMissingRecovered must aggregate to BranchMissingRecovered; got {:?}",
+        result.overall_status
+    );
+}
+
 /// 任一 `BranchMissingRecovered` + 其余 `Success` → overall `BranchMissingRecovered`。
+/// （Issue #630 评论 5311102143：`Success + BranchMissingRecovered -> BranchMissingRecovered`）
 #[test]
 fn aggregate_branch_missing_recovered_beats_success() {
     let (_temp_dir, core) = new_core_with_projects();

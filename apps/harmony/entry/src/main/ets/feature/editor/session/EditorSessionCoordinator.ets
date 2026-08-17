@@ -105,7 +105,9 @@ export class EditorSessionCoordinator {
     }
     const sid = this.state.sessionId
     const result = await this.bridge.close(sid)
-    if (result.success) {
+    // Issue #629 评论11 第3项：只有 success===true && data===true 才视为关闭成功。
+    // 旧实现只判断 success（FFI 返回 { success:true, data:false } 时会误清 state）。
+    if (result.success && result.data === true) {
       this.state = null
     }
     return result
