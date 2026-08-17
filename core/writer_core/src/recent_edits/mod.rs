@@ -88,6 +88,7 @@ pub fn get_recent_edits(app_data_root: &Path) -> Result<Vec<RecentEdit>> {
     }
     let content = fs::read_to_string(&recent_path)?;
     let edits: Vec<RecentEdit> = serde_json::from_str(&content).unwrap_or_default();
+    let edits = normalize_recent_edits(edits);
 
     cache.insert(app_data_root.to_path_buf(), edits.clone());
     Ok(edits)
@@ -120,8 +121,8 @@ pub fn record_recent_edit(
         }
     };
 
-    // Remove existing entry for same chapter if exists
-    edits.retain(|e| e.chapter_id != chapter_id);
+    // Remove existing entry for same project if exists
+    edits.retain(|e| e.project_id != project_id);
 
     // Add new entry at the beginning
     edits.insert(
@@ -137,7 +138,7 @@ pub fn record_recent_edit(
     // Keep only top MAX_RECENT_EDITS
     edits.truncate(MAX_RECENT_EDITS);
 
-    cache.insert(app_data_root.to_path_buf(), edits.to_vec());
+    cache.insert(app_data_root.to_path_buf(), edits.clone());
 
     // Debounce: only flush to disk at most once every RECENT_EDITS_FLUSH_INTERVAL.
     static LAST_FLUSH: OnceLock<Mutex<std::time::Instant>> = OnceLock::new();
@@ -167,6 +168,25 @@ pub fn flush_recent_edits(app_data_root: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// 对最近编辑列表去重：按 project_id 只保留时间最新的一条，然后截断。
+/// 用于磁盘加载旧数据时规范化，确保 MAX_RECENT_EDITS 的含义是"最近作品数"。
+fn normalize_recent_edits(edits: Vec<RecentEdit>) -> Vec<RecentEdit> {
+    let mut best: HashMap<String, RecentEdit> = HashMap::new();
+    for edit in edits {
+        match best.get(&edit.project_id) {
+            Some(existing) if existing.timestamp >= edit.timestamp => {}
+            _ => {
+                best.insert(edit.project_id.clone(), edit);
+            }
+        }
+    }
+    let mut result: Vec<RecentEdit> = best.into_values().collect();
+    // 按 timestamp 降序排序（最新的在前）
+    result.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    result.truncate(MAX_RECENT_EDITS);
+    result
 }
 
 #[cfg(test)]

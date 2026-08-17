@@ -225,6 +225,11 @@ class AndroidVisualPlanner(
                 fromHeight = newRev.cursorHeight
             }
 
+            // #630 评论 5312333045 项2: only animate cursor if geometry actually changed
+            val animateCursor =
+                visualIntent.coordinatedCursor.shouldAnimate &&
+                    (fromX != newRev.cursorX || fromY != newRev.cursorY || fromHeight != newRev.cursorHeight)
+
             cursorTransition =
                 PreparedVisualTransaction.CursorTransition(
                     fromX = fromX,
@@ -233,7 +238,7 @@ class AndroidVisualPlanner(
                     toX = newRev.cursorX,
                     toY = newRev.cursorY,
                     toHeight = newRev.cursorHeight,
-                    shouldAnimate = true,
+                    shouldAnimate = animateCursor,
                 )
         } else if (newRev != null) {
             cursorTransition =

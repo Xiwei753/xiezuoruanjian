@@ -240,7 +240,10 @@ class SujianEditorView
                         }
                     }
                     invalidate()
-                    if (pipeline.hasActiveAnimation()) {
+                    // #630 评论 5312333045 项2: only request animation frame when there is
+                    // actual visual animation (animated slices) or content patches to render.
+                    // No-change / selection-only outputs should not start a frame timeline.
+                    if (pipeline.hasActiveAnimation() || output.result.displayPatches.isNotEmpty()) {
                         requestAnimationFrame()
                     }
                 }

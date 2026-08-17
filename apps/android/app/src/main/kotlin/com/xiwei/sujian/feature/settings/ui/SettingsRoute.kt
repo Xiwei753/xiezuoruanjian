@@ -1,7 +1,6 @@
 package com.xiwei.sujian.feature.settings.ui
 
 import android.annotation.SuppressLint
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -92,13 +91,11 @@ val settingsCategories =
 /**
  * 设置一级 destination 的唯一内容 — 同页折叠面板。
  *
- * 每个分类是一个 [SettingsExpandableSection]：点击标题行切换展开/折叠，
- * 展开内容在行内用 [AnimatedVisibility] 呈现，不导航到子页面，
- * 不建立第二套页面导航状态。展开状态用 [rememberSaveable] 跨配置变更保留。
+ * 每个分类是一个标题 item + 展开后的字段 item。展开状态用 [rememberSaveable] 跨配置变更保留。
  *
- * 分组结构：`LazyColumn -> SettingsGroupHeader -> SettingsGroupItemContainer ->
- * SettingsExpandableSection -> expanded content`。分组外壳用 surfaceContainerLow，
- * 视觉上连续成外层大卡片，但 LazyColumn 仍一分类一个 item。
+ * #630 评论 5312333045 项3: 扁平 LazyColumn — 分类标题是一条 item，展开后的每个设置
+ * 分类也是独立 item，并且都有稳定 key。不再在 SettingsCategoryItem 里用
+ * content: @Composable () Unit 包住整个分类。
  *
  * context.getString 在协程 collect 回调中解析错误文案，无法用 stringResource，
  * 因此本文件带单规则 SuppressLint。
@@ -126,19 +123,14 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
         }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // #630 评论 5306659312 问题 B：页面级几何统一由 Route 管 —
-        // LazyColumn horizontal padding=space16 让外层 group 大卡左右留白，
-        // vertical=space8 留上下页边距；组间/搜索条与第一组之间用 Spacer(space16) 分档。
-        // 不在 SettingsGroupHeader/ItemContainer 内各自硬补左右 margin。
         LazyColumn(
             modifier = Modifier.fillMaxSize().testTag(SujianSemanticIds.SettingsScreen),
             contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
         ) {
-            // 设置页顶部紧凑全局搜索入口；#477 未接入时空动作，接入后只替换此回调。
+            // 设置页顶部紧凑全局搜索入口
             item(key = "settings_search_entry") {
                 SettingsSearchEntry(onClick = {})
             }
-            // 搜索条与第一组之间留一档纵向间距
             item(key = "settings_search_entry_bottom_spacer") {
                 Spacer(Modifier.height(dims.space16))
             }
@@ -146,7 +138,6 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
             SettingsGroup.entries.forEach { group ->
                 val categories = settingsCategories.filter { it.group == group }
                 if (categories.isEmpty()) return@forEach
-                // 不同 SettingsGroup 之间留一档纵向间距（第一组前不加，搜索条后已加）
                 if (firstGroupShown) {
                     item(key = "settings_group_spacer_${group.name}") {
                         Spacer(Modifier.height(dims.space16))
@@ -156,17 +147,29 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
                 item(key = "settings_group_${group.name}") {
                     SettingsGroupHeader(title = stringResource(id = group.titleResId))
                 }
+                // #630 评论 5312333045 项3: 每个分类标题是独立 item，
+                // 展开后的字段也是独立 item（按 category section name 注册）。
                 itemsIndexed(categories, key = { _, category -> category.section.name }) { index, category ->
                     SettingsGroupItemContainer(isLast = index == categories.lastIndex) {
-                        SettingsCategoryItem(
-                            category = category,
-                            vm = vm,
+                        SettingsExpandableSection(
+                            title = stringResource(id = category.titleResId),
+                            summary = settingsCategorySummary(category),
+                            value = settingsCategoryValue(category, vm),
                             expanded = expansionState.isExpanded(category.section),
                             onExpandedChange = { isExpanded ->
                                 expansionState.setExpanded(category.section, isExpanded)
                             },
-                            onIntent = vm::handleIntent,
                         )
+                    }
+                }
+                // 展开内容：每个分类作为独立 item 注册，不是 LazyColumn 的嵌套子项。
+                categories.forEach { category ->
+                    if (expansionState.isExpanded(category.section)) {
+                        item(key = "settings_expanded_${category.section.name}") {
+                            SettingsGroupItemContainer(isLast = false) {
+                                ExpandedSettingsContent(category = category, vm = vm)
+                            }
+                        }
                     }
                 }
             }
@@ -179,62 +182,47 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
 }
 
 /**
- * 单个设置分类的折叠面板项 — 从 [SettingsRoute] 中提取以控制函数长度与认知复杂度。
- *
- * #618 六：不再接收整份 [SettingsUiState]；头部当前值与展开内容分别只订阅
- * 本分类对应的 section state，其它分类的状态变化不会让本项重组。
+ * 展开后的设置内容 — 每个分类的内容作为独立的 LazyColumn item 渲染。
  */
 @Composable
-private fun SettingsCategoryItem(
+private fun ExpandedSettingsContent(
     category: SettingsCategory,
     vm: SettingsViewModel,
-    expanded: Boolean,
-    onExpandedChange: (Boolean) -> Unit,
-    onIntent: (SettingsIntent) -> Unit,
 ) {
-    SettingsExpandableSection(
-        title = stringResource(id = category.titleResId),
-        summary = settingsCategorySummary(category),
-        value = settingsCategoryValue(category, vm),
-        expanded = expanded,
-        onExpandedChange = onExpandedChange,
-        content = {
-            when (category.section) {
-                SettingsSection.Appearance -> {
-                    val state by vm.appearanceState.collectAsStateWithLifecycle()
-                    AppearanceSettings(state = state, onIntent = onIntent)
-                }
-                SettingsSection.Editor -> {
-                    val state by vm.editorState.collectAsStateWithLifecycle()
-                    EditorSettings(state = state, onIntent = onIntent)
-                }
-                SettingsSection.Save -> {
-                    val state by vm.saveState.collectAsStateWithLifecycle()
-                    SaveSettings(state = state, onIntent = onIntent)
-                }
-                SettingsSection.Sync -> {
-                    val state by vm.syncState.collectAsStateWithLifecycle()
-                    SyncSettings(state = state, onIntent = onIntent)
-                }
-                SettingsSection.Ai -> {
-                    val state by vm.aiState.collectAsStateWithLifecycle()
-                    AiSettings(state = state, onIntent = onIntent)
-                }
-                SettingsSection.Diagnostics -> {
-                    val state by vm.diagnosticsState.collectAsStateWithLifecycle()
-                    DiagnosticsSettings(state = state, onIntent = onIntent)
-                }
-                SettingsSection.Laboratory -> {
-                    val state by vm.laboratoryState.collectAsStateWithLifecycle()
-                    LaboratorySettings(state = state, onIntent = onIntent)
-                }
-                SettingsSection.About -> {
-                    val state by vm.aboutState.collectAsStateWithLifecycle()
-                    AboutSettings(state = state, onIntent = onIntent)
-                }
-            }
-        },
-    )
+    when (category.section) {
+        SettingsSection.Appearance -> {
+            val state by vm.appearanceState.collectAsStateWithLifecycle()
+            AppearanceSettings(state = state, onIntent = vm::handleIntent)
+        }
+        SettingsSection.Editor -> {
+            val state by vm.editorState.collectAsStateWithLifecycle()
+            EditorSettings(state = state, onIntent = vm::handleIntent)
+        }
+        SettingsSection.Save -> {
+            val state by vm.saveState.collectAsStateWithLifecycle()
+            SaveSettings(state = state, onIntent = vm::handleIntent)
+        }
+        SettingsSection.Sync -> {
+            val state by vm.syncState.collectAsStateWithLifecycle()
+            SyncSettings(state = state, onIntent = vm::handleIntent)
+        }
+        SettingsSection.Ai -> {
+            val state by vm.aiState.collectAsStateWithLifecycle()
+            AiSettings(state = state, onIntent = vm::handleIntent)
+        }
+        SettingsSection.Diagnostics -> {
+            val state by vm.diagnosticsState.collectAsStateWithLifecycle()
+            DiagnosticsSettings(state = state, onIntent = vm::handleIntent)
+        }
+        SettingsSection.Laboratory -> {
+            val state by vm.laboratoryState.collectAsStateWithLifecycle()
+            LaboratorySettings(state = state, onIntent = vm::handleIntent)
+        }
+        SettingsSection.About -> {
+            val state by vm.aboutState.collectAsStateWithLifecycle()
+            AboutSettings(state = state, onIntent = vm::handleIntent)
+        }
+    }
 }
 
 /**
@@ -259,7 +247,7 @@ private fun rememberSettingsSnackbarHost(vm: SettingsViewModel): androidx.compos
 
 /**
  * 设置列表项的功能说明（静态文案，不冒充状态）：
- * 与 [settingsCategoryValue] 的“真实当前值”独立展示，不再二选一。
+ * 与 [settingsCategoryValue] 的"真实当前值"独立展示，不再二选一。
  */
 @Composable
 internal fun settingsCategorySummary(category: SettingsCategory): String? =

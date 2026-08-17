@@ -64,18 +64,97 @@ fn test_record_recent_edit_limit_20() {
     let dir = tempdir().unwrap();
     let app_data_root = dir.path();
 
-    for i in 1..=25 {
+    // 20 different projects, each with one chapter
+    for i in 1..=20 {
+        let project_id = format!("proj_{}", i);
         let chapter_id = format!("ch_{}", i);
-        record_recent_edit(app_data_root, "proj_1", "vol_1", &chapter_id).unwrap();
+        record_recent_edit(app_data_root, &project_id, "vol_1", &chapter_id).unwrap();
     }
 
     let edits = get_recent_edits(app_data_root).unwrap();
-
     assert_eq!(edits.len(), 20);
+    // Most recent project is proj_20
+    assert_eq!(edits[0].project_id, "proj_20");
+    assert_eq!(edits[19].project_id, "proj_1");
 
-    assert_eq!(edits[0].chapter_id, "ch_25");
+    // Now edit proj_1's another chapter — should move to top, total still 20
+    record_recent_edit(app_data_root, "proj_1", "vol_1", "ch_1b").unwrap();
+    let edits = get_recent_edits(app_data_root).unwrap();
+    assert_eq!(edits.len(), 20);
+    assert_eq!(edits[0].project_id, "proj_1");
+    assert_eq!(edits[0].chapter_id, "ch_1b");
+}
 
-    assert_eq!(edits[19].chapter_id, "ch_6");
+/// #630 评论 5312333045 项1: 每个 project 只保留最后一次编辑的 chapter。
+#[test]
+fn test_record_recent_edit_per_project_dedup() {
+    let dir = tempdir().unwrap();
+    let app_data_root = dir.path();
+
+    // Record two chapters for same project
+    record_recent_edit(app_data_root, "p1", "v1", "c1").unwrap();
+    record_recent_edit(app_data_root, "p1", "v1", "c2").unwrap();
+
+    let edits = get_recent_edits(app_data_root).unwrap();
+    assert_eq!(edits.len(), 1, "same project should only have one entry");
+    assert_eq!(edits[0].project_id, "p1");
+    assert_eq!(edits[0].chapter_id, "c2", "latest chapter should be kept");
+}
+
+/// #630: normalize_recent_edits 在加载旧数据时也按 project_id 去重。
+#[test]
+fn test_normalize_on_load() {
+    let dir = tempdir().unwrap();
+    let app_data_root = dir.path();
+
+    // Write raw JSON with two entries for the same project
+    let raw = serde_json::to_string_pretty(&vec![
+        RecentEdit {
+            project_id: "p1".to_string(),
+            volume_id: "v1".to_string(),
+            chapter_id: "c1".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+        },
+        RecentEdit {
+            project_id: "p1".to_string(),
+            volume_id: "v1".to_string(),
+            chapter_id: "c2".to_string(),
+            timestamp: "2026-01-02T00:00:00Z".to_string(),
+        },
+    ])
+    .unwrap();
+    fs::write(app_data_root.join("recent_edits.json"), &raw).unwrap();
+
+    let edits = get_recent_edits(app_data_root).unwrap();
+    assert_eq!(edits.len(), 1, "normalize should deduplicate by project_id");
+    assert_eq!(edits[0].chapter_id, "c2", "latest timestamp wins");
+}
+
+/// #630: normalize 保留不同项目的条目。
+#[test]
+fn test_normalize_keeps_different_projects() {
+    let dir = tempdir().unwrap();
+    let app_data_root = dir.path();
+
+    let raw = serde_json::to_string_pretty(&vec![
+        RecentEdit {
+            project_id: "p1".to_string(),
+            volume_id: "v1".to_string(),
+            chapter_id: "c1".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+        },
+        RecentEdit {
+            project_id: "p2".to_string(),
+            volume_id: "v2".to_string(),
+            chapter_id: "c3".to_string(),
+            timestamp: "2026-01-02T00:00:00Z".to_string(),
+        },
+    ])
+    .unwrap();
+    fs::write(app_data_root.join("recent_edits.json"), &raw).unwrap();
+
+    let edits = get_recent_edits(app_data_root).unwrap();
+    assert_eq!(edits.len(), 2, "different projects should both be kept");
 }
 
 #[test]
