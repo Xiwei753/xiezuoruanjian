@@ -1,23 +1,10 @@
 import { Routes, WorkspaceRouteParams } from '../../../app/navigation/Routes'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { ProjectTree, VolumeTree, ChapterMeta, Project, ChapterContent, ChapterSaveReceipt } from '../../../corebridge/dto/ProjectDtos'
-import { LocalSettings } from '../../../corebridge/dto/SettingsDtos'
+import { ProjectTree, VolumeTree, ChapterMeta, Project } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ThemeUpdateParams } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
-import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
-import { WidthClass, ShellMode } from '../../../corebridge/dto/PlatformDtos'
-import { EditorSessionCoordinator, EditorStateUpdate } from '../../editor/session/EditorSessionCoordinator'
-import { NativeEditorSessionBridge } from '../../editor/interop/NativeEditorSessionBridge'
-import { EditorLayoutSnapshot } from '../../editor/render/EditorLayoutSnapshot'
-import { EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
-import { EditorInputAdapter } from '../../editor/input/EditorInputAdapter'
-import { SelectionController } from '../../editor/selection/SelectionController'
-import { HarmonyImeConnection } from '../../editor/input/HarmonyImeConnection'
-import { EditorSemanticDispatcher } from '../../editor/input/EditorSemanticDispatcher'
-import { SujianEditor } from '../../editor/ui/SujianEditor'
-import { EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 
@@ -27,6 +14,10 @@ const LEFT_PANEL_WIDTH: number = 320
 /** 分割线宽度 */
 const DIVIDER_WIDTH: number = 0.5
 
+// Issue #629 评论14 第1项：WorkspaceScreen 只保留项目/卷/章节浏览和目录操作。
+// 章节正文只有 WritingScreen 一个页面级 owner。
+// 删除所有 editor session/input/IME/save/wordCount/正文状态和 RightPanel() 内联写作区。
+// 章节点击无论窄屏还是宽屏都进入 Routes.Writing，不要因为 isTwoPane 就换另一套编辑事务。
 @Component
 export struct WorkspaceScreen {
   @Consume("navPathStack") navPathStack: NavPathStack
@@ -40,56 +31,10 @@ export struct WorkspaceScreen {
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State adaptiveState: AdaptiveState = getAdaptiveState()
 
-  // ── 右侧写作区状态（双栏模式） ──
-  @State selectedChapterId: string = ''
-  @State selectedChapterTitle: string = ''
-  @State selectedVolumeId: string = ''
-  @State content: string = ''
-  @State wordCount: number = 0
-  @State isEditorLoading: boolean = false
-  @State isSaving: boolean = false
-  @State editorErrorMessage: string = ''
-  @State saveMessage: string = ''
-  @State settings: LocalSettings = {
-    editorFontSize: 16,
-    editorLineSpacingMultiplier: 1.8,
-    themeMode: 'system',
-    autoSaveEnabled: true,
-    autoSaveDelayMs: 30000,
-    autoIndentEnabled: true,
-    autoIndentWidth: 2,
-    windowWidth: 0,
-    windowHeight: 0,
-    editorTypingAnimationEnabled: false,
-    editorSmoothCursorEnabled: false,
-    editorTypingAnimationDurationMs: 0,
-    editorSmoothCursorDurationMs: 0,
-    aiEnabled: false,
-    linuxQtSidebarWidth: 0,
-    linuxQtEditorWidth: 0
-  }
-  @State lastSavedContent: string = ''
-  @State hasUnsavedChanges: boolean = false
-  @State lastSaveFailed: boolean = false
-
-  @State sessionOldText: string = ''
-  @State sessionId: string = ''
-  @State sessionStartTime: number = 0
-  @State editorSnapshot: EditorLayoutSnapshot | null = null
-
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
-  private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
-  private autoSaveObserver: AutoSaveLifecycleObserver | null = null
-  private coordinator: EditorSessionCoordinator = new EditorSessionCoordinator(new NativeEditorSessionBridge())
-  private inputAdapter: EditorInputAdapter = new EditorInputAdapter(this.coordinator)
-  private selectionController: SelectionController = new SelectionController(this.coordinator)
-  private harmonyImeConnection: HarmonyImeConnection = new HarmonyImeConnection()
-  // Issue #629 评论6 Part A：统一语义输入调度器。
-  // 物理键盘/IME/鼠标/触摸都经此 dispatcher 排队，出队时才读 Coordinator snapshot。
-  private dispatcher: EditorSemanticDispatcher = new EditorSemanticDispatcher(this.inputAdapter, this.selectionController, this.coordinator)
 
   aboutToAppear() {
     const paramsArr = this.navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
@@ -103,15 +48,6 @@ export struct WorkspaceScreen {
     }
 
     const self = this
-    // 注册编辑会话状态监听器：open/编辑命令成功后回流 editorSnapshot/content/hasUnsaved/wordCount。
-    // Issue #629 评论9 第4项：listener 改 typed EditorStateUpdate{snapshot, editResult}。
-    this.coordinator.setStateListener((update: EditorStateUpdate) => {
-      const snap = update.snapshot
-      self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize)
-      self.content = snap.text
-      self.hasUnsavedChanges = snap.text !== self.lastSavedContent
-      self.wordCount = snap.text.length
-    })
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
       self.themeConfig = theme
     })
@@ -121,82 +57,10 @@ export struct WorkspaceScreen {
       self.adaptiveState = state
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
-
-    // Issue #629 评论6 Part G：退后台用 performBackgroundSave（flush+idle+save），
-    // 不只 saveChapter，避免最后几个字还在 dispatcher 队列里就 save 丢输入。
-    this.autoSaveObserver = new AutoSaveLifecycleObserver(
-      (): Promise<void> => this.performBackgroundSave(),
-      this.settings.autoSaveDelayMs
-    )
-    this.lifecycle.addObserver(this.autoSaveObserver)
-
-  }
-
-  // Issue #629 评论6 Part G：统一关闭事务（双栏模式）。
-  // flush input → await coordinator idle → save latest snapshot → detach IME → close session
-  // 禁止多套关闭流程。
-  private async performGracefulClose(): Promise<void> {
-    if (!this.adaptiveState.isTwoPane || !this.selectedChapterId) {
-      return
-    }
-    // 1. flush 语义调度器中排队的输入
-    if (this.dispatcher) {
-      await this.dispatcher.flush()
-    }
-    // 2. 等 coordinator 命令队列空闲
-    await this.coordinator.whenIdle()
-    // 3. 保存最新 snapshot
-    if (this.hasUnsavedChanges) {
-      await this.saveChapter()
-    } else if (this.sessionOldText !== this.content) {
-      // 没有未保存变更但有统计差异时，兜底上报一次
-      const deviceId = this.settings.statsDeviceId || 'unknown'
-      const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
-      this.bridge.processWritingEvent(
-        deviceId,
-        'harmony',
-        this.projectId,
-        this.selectedVolumeId,
-        this.selectedChapterId,
-        this.sessionOldText,
-        this.content,
-        durationSeconds,
-        this.sessionId
-      )
-    }
-    // 4. detach IME 连接
-    await this.harmonyImeConnection.detach()
-    // 5. 关闭编辑会话（等队列空闲后再 close）
-    await this.coordinator.closeAsync()
-  }
-
-  // Issue #629 评论6 Part G：退后台保存事务（双栏模式）。
-  // flush input → await coordinator idle → save latest snapshot
-  // 不 detach IME、不 close session。
-  private async performBackgroundSave(): Promise<void> {
-    if (!this.adaptiveState.isTwoPane || !this.selectedChapterId) {
-      return
-    }
-    if (this.dispatcher) {
-      await this.dispatcher.flush()
-    }
-    await this.coordinator.whenIdle()
-    if (this.hasUnsavedChanges) {
-      await this.saveChapter()
-    }
   }
 
   async aboutToDisappear() {
-    // 统一关闭事务：flush input → await coordinator idle → save → detach IME → close session
-    await this.performGracefulClose()
-
-    // 清除状态监听器，避免 close 后回调
-    this.coordinator.setStateListener(null)
-
     // 清理观察者
-    if (this.autoSaveObserver) {
-      this.lifecycle.removeObserver(this.autoSaveObserver)
-    }
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
     }
@@ -226,159 +90,6 @@ export struct WorkspaceScreen {
     } finally {
       this.isLoading = false
     }
-  }
-
-  // ── 双栏模式：章节编辑 ──
-
-  async loadChapter() {
-    if (!this.selectedChapterId) {
-      return
-    }
-
-    this.isEditorLoading = true
-    this.editorErrorMessage = ''
-
-    try {
-      const result = await this.bridge.loadChapter(this.selectedChapterId)
-      if (result.success && result.data) {
-        this.content = result.data.content
-        this.lastSavedContent = result.data.content
-        this.wordCount = result.data.meta.wordCount
-        this.hasUnsavedChanges = false
-        // 记录编辑前文本，用于写作统计
-        this.sessionOldText = result.data.content
-        this.sessionId = `hm-${this.selectedChapterId}-${Date.now()}`
-        this.sessionStartTime = Date.now()
-
-        // 打开编辑会话。open 成功后 listener 自动回流 editorSnapshot/content/hasUnsaved/wordCount。
-        // Issue #629 评论8 第5项：章节正文是持续编辑内容，传 isPersistent=true。
-        const openResult = await this.coordinator.open(this.selectedChapterId, result.data.content, true)
-        if (!openResult.success) {
-          this.editorErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
-        }
-      } else {
-        this.editorErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
-      }
-    } catch (err) {
-      this.editorErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter_detail').id)
-    } finally {
-      this.isEditorLoading = false
-    }
-  }
-
-  async loadSettings() {
-    try {
-      const result = await this.bridge.getLocalSettings()
-      if (result.success && result.data) {
-        this.settings = result.data
-        this.themeAdapter.updateFromSettings({
-          theme: result.data.themeMode,
-          fontSize: result.data.editorFontSize,
-          lineHeight: result.data.editorLineSpacingMultiplier
-        } as ThemeUpdateParams)
-
-        // 更新自动保存间隔
-        if (this.autoSaveObserver) {
-          this.lifecycle.removeObserver(this.autoSaveObserver)
-          this.autoSaveObserver = new AutoSaveLifecycleObserver(
-            (): Promise<void> => this.performBackgroundSave(),
-            this.settings.autoSaveDelayMs
-          )
-          this.lifecycle.addObserver(this.autoSaveObserver)
-        }
-      }
-    } catch (err) {
-      // 忽略设置加载错误
-    }
-  }
-
-  async saveChapter() {
-    if (this.isSaving || !this.hasUnsavedChanges || !this.selectedChapterId) {
-      return
-    }
-
-    this.isSaving = true
-    this.saveMessage = ''
-
-    try {
-      const result = await this.bridge.saveChapter(this.selectedChapterId, this.content)
-      if (result.success && result.data) {
-        // ── 保存成功后上报编辑事件 ──
-        if (this.sessionOldText !== this.content) {
-          const deviceId = this.settings.statsDeviceId || 'unknown'
-          const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
-          this.bridge.processWritingEvent(
-            deviceId,
-            'harmony',
-            this.projectId,
-            this.selectedVolumeId,
-            this.selectedChapterId,
-            this.sessionOldText,
-            this.content,
-            durationSeconds,
-            this.sessionId
-          )
-          // 重置 session，开始新的统计区间
-          this.sessionOldText = this.content
-          this.sessionId = `hm-${this.selectedChapterId}-${Date.now()}`
-          this.sessionStartTime = Date.now()
-        }
-
-        this.lastSavedContent = this.content
-        this.hasUnsavedChanges = false
-        this.lastSaveFailed = false
-        this.wordCount = result.data.wordCount
-        this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.saved').id)
-        setTimeout(() => {
-          this.saveMessage = ''
-        }, 2000)
-      } else {
-        this.lastSaveFailed = true
-        this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.save_failed').id)
-      }
-    } catch (err) {
-      this.lastSaveFailed = true
-      this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_save').id)
-    } finally {
-      this.isSaving = false
-    }
-  }
-
-  private getSaveStatusColor(): ResourceColor {
-    if (this.lastSaveFailed) return this.themeConfig.colors.error
-    if (this.isSaving) return this.themeConfig.colors.textSecondary
-    if (this.hasUnsavedChanges) return this.themeConfig.colors.secondary
-    return this.themeConfig.colors.success
-  }
-
-  // Issue #629 评论6 Part G：切章节走统一关闭事务（flush+idle+save+detach+close），
-  // 避免最后几个字还在队列里就切章节丢输入。
-  async selectChapter(chapterId: string, chapterTitle: string, volumeId: string) {
-    if (this.selectedChapterId) {
-      // flush dispatcher → 等 coordinator idle → save → detach IME → close session
-      if (this.dispatcher) {
-        await this.dispatcher.flush()
-      }
-      await this.coordinator.whenIdle()
-      if (this.hasUnsavedChanges) {
-        await this.saveChapter()
-        if (this.lastSaveFailed) {
-          // 保存失败，不切换章节
-          return
-        }
-      }
-      await this.harmonyImeConnection.detach()
-      await this.coordinator.closeAsync()
-    }
-    this.doSelectChapter(chapterId, chapterTitle, volumeId)
-  }
-
-  doSelectChapter(chapterId: string, chapterTitle: string, volumeId: string) {
-    this.selectedChapterId = chapterId
-    this.selectedChapterTitle = chapterTitle
-    this.selectedVolumeId = volumeId
-    this.loadChapter()
-    this.loadSettings()
   }
 
   // ── 目录操作 ──
@@ -446,20 +157,6 @@ export struct WorkspaceScreen {
     try {
       const result = await this.bridge.deleteChapter(chapterId)
       if (result.success) {
-        // 如果删除的是当前打开的章节，清空右侧
-        if (this.selectedChapterId === chapterId) {
-          // Issue #629 评论6 Part G：关闭当前编辑会话用 closeAsync（等队列空闲再 close）
-          this.coordinator.closeAsync().then(() => {})
-          this.editorSnapshot = null
-          this.selectedChapterId = ''
-          this.selectedChapterTitle = ''
-          this.selectedVolumeId = ''
-          this.content = ''
-          this.lastSavedContent = ''
-          this.sessionOldText = ''
-          this.hasUnsavedChanges = false
-          this.wordCount = 0
-        }
         this.loadProjectTree()
       }
     } catch (err) {
@@ -467,15 +164,29 @@ export struct WorkspaceScreen {
     }
   }
 
+  // Issue #629 评论14 第1项：章节点击统一进入 Routes.Writing，不再内联编辑。
+  // 窄屏和宽屏都走同一条导航路径，屏幕宽度变化只改布局，不换 TextEditSession owner。
+  private navigateToWriting(chapterId: string, chapterTitle: string, volumeId: string): void {
+    this.navPathStack.pushPath({
+      name: Routes.Writing,
+      param: {
+        chapterId: chapterId,
+        chapterTitle: chapterTitle,
+        projectId: this.projectId,
+        volumeId: volumeId
+      }
+    })
+  }
+
   // ========== 构建 UI ==========
 
   build() {
     Column() {
       if (this.adaptiveState.isTwoPane) {
-        // ── 双栏模式：左侧目录 + 右侧编辑区 ──
+        // ── 双栏模式：左侧目录 + 右侧写作入口提示 ──
         this.TwoPaneLayout()
       } else {
-        // ── 单栏模式：保持原有行为 ──
+        // ── 单栏模式 ──
         this.SinglePaneLayout()
       }
     }
@@ -500,8 +211,8 @@ export struct WorkspaceScreen {
         .height('100%')
         .backgroundColor(this.themeConfig.colors.divider)
 
-      // 右侧面板：写作区
-      this.RightPanel()
+      // 右侧面板：提示选择章节（不再内联编辑）
+      this.RightPanelPlaceholder()
     }
     .width('100%')
     .height('100%')
@@ -584,7 +295,7 @@ export struct WorkspaceScreen {
         Scroll() {
           Column() {
             ForEach(this.volumeTrees, (volumeTree: VolumeTree) => {
-              this.VolumeSectionForTwoPane(volumeTree)
+              this.VolumeSection(volumeTree)
             }, (volumeTree: VolumeTree) => volumeTree.volume.id)
           }
           .width('100%')
@@ -599,7 +310,7 @@ export struct WorkspaceScreen {
   }
 
   @Builder
-  VolumeSectionForTwoPane(volumeTree: VolumeTree) {
+  VolumeSection(volumeTree: VolumeTree) {
     Column() {
       // 卷头
       Row() {
@@ -646,9 +357,7 @@ export struct WorkspaceScreen {
               Column() {
                 Text(chapter.title)
                   .fontSize(14)
-                  .fontColor(this.selectedChapterId === chapter.id
-                    ? this.themeConfig.colors.primary
-                    : this.themeConfig.colors.textPrimary)
+                  .fontColor(this.themeConfig.colors.textPrimary)
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
 
@@ -659,13 +368,16 @@ export struct WorkspaceScreen {
               }
               .layoutWeight(1)
               .alignItems(HorizontalAlign.Start)
+
+              Image($r('sys.media.ohos_ic_public_arrow_right'))
+                .width(16)
+                .height(16)
+                .fillColor(this.themeConfig.colors.textHint)
+                .margin({ left: 8 })
             }
             .width('100%')
             .padding({ left: 28, right: 12, top: 8, bottom: 8 })
-            .backgroundColor(this.selectedChapterId === chapter.id
-              ? this.themeConfig.colors.divider
-              : 'transparent')
-            .onClick(() => this.selectChapter(chapter.id, chapter.title, volumeTree.volume.id))
+            .onClick(() => this.navigateToWriting(chapter.id, chapter.title, volumeTree.volume.id))
           }, (chapter: ChapterMeta) => chapter.id)
         }
       }
@@ -673,139 +385,19 @@ export struct WorkspaceScreen {
     .width('100%')
   }
 
+  // Issue #629 评论14 第1项：双栏右侧不再内联编辑，只显示提示。
+  // 章节点击统一 navigateToWriting()，由 WritingScreen 持有编辑会话。
   @Builder
-  RightPanel() {
+  RightPanelPlaceholder() {
     Column() {
-      if (!this.selectedChapterId) {
-        // 未选择章节：显示空状态提示
-        Column() {
-           Text($r('app.string.select_chapter_to_start'))
-            .fontSize(16)
-            .fontColor(this.themeConfig.colors.textHint)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        // 写作区头部
-        Row() {
-          Text(this.selectedChapterTitle)
-            .fontSize(18)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.themeConfig.colors.textPrimary)
-            .layoutWeight(1)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-          if (this.saveMessage) {
-            Text(this.saveMessage)
-              .fontSize(12)
-              .fontColor(this.getSaveStatusColor())
-              .margin({ right: 8 })
-          }
-
-           Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${this.wordCount}`))
-            .fontSize(12)
-            .fontColor(this.themeConfig.colors.textSecondary)
-            .margin({ right: 8 })
-
-          Button($r('app.string.save'))
-            .fontSize(14)
-            .height(32)
-            .backgroundColor(this.hasUnsavedChanges ? this.themeConfig.colors.primary : this.themeConfig.colors.divider)
-            .fontColor(this.hasUnsavedChanges ? this.themeConfig.colors.onPrimary : this.themeConfig.colors.textSecondary)
-            .enabled(!this.isSaving && this.hasUnsavedChanges)
-            .onClick(() => this.saveChapter())
-        }
-        .width('100%')
-        .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-        .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 20, bottom: 14 })
-
-        // 编辑区
-        if (this.isEditorLoading) {
-          Column() {
-            LoadingProgress()
-              .width(48)
-              .height(48)
-              .color(this.themeConfig.colors.primary)
-             Text($r('app.string.loading'))
-              .fontSize(14)
-              .fontColor(this.themeConfig.colors.textHint)
-              .margin({ top: 12 })
-            }
-            .width('100%')
-            .layoutWeight(1)
-            .justifyContent(FlexAlign.Center)
-          } else if (this.editorErrorMessage) {
-            Column() {
-              Text(this.editorErrorMessage)
-                .fontSize(16)
-                .fontColor(this.themeConfig.colors.error)
-                .margin({ bottom: 16 })
-
-              Button($r('app.string.retry'))
-              .onClick(() => this.loadChapter())
-              .backgroundColor(this.themeConfig.colors.primary)
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else {
-          Scroll() {
-            Column() {
-              // 自研写作区组件，消费 EditorLayoutSnapshot 静态渲染
-              // Issue #629 评论6 Part A+D：传 dispatcher（统一串行边界），删除 onSelectionTap（双 owner）。
-              SujianEditor({
-                snapshot: this.editorSnapshot,
-                harmonyImeConnection: this.harmonyImeConnection,
-                inputAdapter: this.inputAdapter,
-                selectionController: this.selectionController,
-                dispatcher: this.dispatcher
-              })
-                .width('100%')
-                .constraintSize({ minHeight: '100%' })
-            }
-            .width('100%')
-            .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-          }
-          .layoutWeight(1)
-          .scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.Spring)
-        }
-
-        // 底部工具栏
-        Row() {
-          if (this.settings.autoSaveEnabled) {
-             Text($r('app.string.auto_save'))
-               .fontSize(12)
-               .fontColor(this.themeConfig.colors.textHint)
-           }
-
-           Blank()
-
-           if (this.isSaving) {
-             Text($r('app.string.saving'))
-               .fontSize(12)
-               .fontColor(this.themeConfig.colors.textSecondary)
-           } else if (this.hasUnsavedChanges) {
-             Text($r('app.string.unsaved'))
-               .fontSize(12)
-               .fontColor(this.themeConfig.colors.secondary)
-           } else if (this.lastSaveFailed) {
-             Text($r('app.string.save_failed'))
-               .fontSize(12)
-               .fontColor(this.themeConfig.colors.error)
-           } else {
-             Text($r('app.string.saved'))
-              .fontSize(12)
-              .fontColor(this.themeConfig.colors.success)
-          }
-        }
-        .width('100%')
-        .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-        .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 10, bottom: 10 })
-        .backgroundColor(this.themeConfig.colors.background)
+      Column() {
+        Text($r('app.string.select_chapter_to_start'))
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textHint)
       }
+      .width('100%')
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Center)
     }
     .layoutWeight(1)
     .height('100%')
@@ -814,7 +406,7 @@ export struct WorkspaceScreen {
   }
 
   // ────────────────────────────────────────
-  // 单栏布局：保持原有行为
+  // 单栏布局
   // ────────────────────────────────────────
 
   @Builder
@@ -889,7 +481,7 @@ export struct WorkspaceScreen {
               this.EmptyState()
             } else {
               ForEach(this.volumeTrees, (volumeTree: VolumeTree) => {
-                this.VolumeSection(volumeTree)
+                this.SinglePaneVolumeSection(volumeTree)
               }, (volumeTree: VolumeTree) => volumeTree.volume.id)
             }
           }
@@ -931,7 +523,7 @@ export struct WorkspaceScreen {
   }
 
   @Builder
-  VolumeSection(volumeTree: VolumeTree) {
+  SinglePaneVolumeSection(volumeTree: VolumeTree) {
     Column() {
       // Volume header
       Row() {
@@ -1026,12 +618,7 @@ export struct WorkspaceScreen {
             .width('100%')
             .padding({ left: 16, right: 16, top: 12, bottom: 12 })
             .backgroundColor(this.themeConfig.colors.surface)
-            .onClick(() => {
-              this.navPathStack.pushPath({ name: Routes.Writing, param: { chapterId: chapter.id,
-                  chapterTitle: chapter.title,
-                  projectId: this.projectId,
-                  volumeId: volumeTree.volume.id } })
-            })
+            .onClick(() => this.navigateToWriting(chapter.id, chapter.title, volumeTree.volume.id))
           }, (chapter: ChapterMeta) => chapter.id)
         }
       }

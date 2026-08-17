@@ -1,56 +1,130 @@
 // LineNavigationResolver — 行级导航解析器。
-// Issue #629 评论11 第2项：Up/Down/Home/End 不再在入队前读旧布局计算目标位置。
+// Issue #629 评论11 第2项 + 评论14 第3项：
+// Up/Down/Home/End 不再在入队前读旧布局计算目标位置。
 // 行导航命令（lineUp/lineDown/lineHome/lineEnd）在 Dispatcher 唯一队列出队时
 // 通过此 resolver 基于"最新 Core snapshot + 最新行布局"计算目标。
 //
-// Issue #629 评论11 第2项补充：resolver 不只存裸 LineLayout[]，存带身份的布局状态
-// （revision + displayText + cursorUtf16 + lines）。身份必须对应 EditorLayoutSnapshot 的
-// 显示文本（composition 时显示文本和 committed snap.text 不是同一个坐标系）。
-// executeLineNavigation 出队时先验证 resolver identity 与当前 Core snapshot 匹配，
-// 不匹配时禁止拿旧 lines 算目标（返回 STALE_LAYOUT），避免 Core snapshot 已前进而
-// ArkUI 布局还没刷新时拿到混合坐标。
-//
-// 由 SujianEditor 持有 renderResult；EditorSemanticDispatcher 持有本 resolver。
-// SujianEditor 在 contentWidth > 0 后每次 snapshot/revision/composition 更新都直接
-// 基于当前宽度和 measureText 重新计算行布局，同步给 resolver（带身份）。
+// Issue #629 评论14 第3项：版本化 layout source。
+// - layout 不再只提供 matchesIdentity 返回 bool，而是版本化：
+//   每次 SujianEditor 新布局完成后发布新版本（versioned LayoutState）。
+//   executeLineNavigation 出队时如果 Core 已前进但 resolver 还是旧版本，
+//   不返回 STALE_LAYOUT 丢键，而是等待对应版本的 layout state 后再算目标。
+// - LineLayoutState 身份包含真正决定折行的东西：displayText + contentWidth + fontSize。
+//   cursorUtf16 不决定 lines，不拿它当行布局缓存身份。
+// - 组件被销毁/换 session 时通过 cancelWait() 显式取消等待。
 
 import { LineLayout } from '../render/editor_render_geometry'
 
 // 布局身份：标识当前 lines 对应哪个显示布局版本。
-// - revision：Core snapshot revision
-// - displayText：显示文本（composition 活跃时含 preedit，与 committed snap.text 可能不同）
-// - cursorUtf16：显示光标 UTF-16 offset（composition 活跃时是 displayCaret 投影）
+// cursorUtf16 不决定折行，不作为身份字段（Issue #629 评论14 第3项）。
+// contentWidth + fontSize 决定折行边界。
 export interface LineLayoutIdentity {
-  readonly revision: number
   readonly displayText: string
-  readonly cursorUtf16: number
+  readonly contentWidth: number
+  readonly fontSize: number
 }
 
 // 带身份的行布局状态。
 export interface LineLayoutState extends LineLayoutIdentity {
   readonly lines: LineLayout[]
+  // 单调递增版本号，用于等待机制。
+  readonly version: number
+}
+
+// 等待条目：当 resolver 版本落后于 Core snapshot 时，行导航命令等待新版本。
+interface Waiter {
+  readonly identity: LineLayoutIdentity
+  readonly resolve: (state: LineLayoutState | null) => void
+  readonly version: number
 }
 
 export class LineNavigationResolver {
   private state: LineLayoutState | null = null
+  private nextVersion: number = 1
+  // 等待列表：executeLineNavigation 出队时如果版本落后，注册 waiter 等待新布局。
+  private waiters: Waiter[] = []
 
   /** SujianEditor 在渲染结果更新后调用，同步最新行布局（带身份）。传 null 清空。 */
   updateLayout(state: LineLayoutState | null): void {
     this.state = state
+    // 唤醒匹配的 waiters
+    if (state !== null) {
+      this.resolveWaiters(state)
+    }
   }
 
   /**
-   * 验证当前布局身份是否与给定 (revision, displayText, cursorUtf16) 匹配。
-   * executeLineNavigation 出队时先调此方法；不匹配返回 false → STALE_LAYOUT。
-   * state 为 null 时返回 false（无布局信息）。
+   * Issue #629 评论14 第3项：等待匹配身份的 layout state。
+   * 如果当前 state 已匹配 identity，立即返回；否则注册 waiter 等待。
+   * 返回 Promise<LineLayoutState | null>，null 表示被取消（组件销毁/换 session）。
+   *
+   * 不加固定毫秒 timeout，也不退回入队前算目标。
    */
-  matchesIdentity(revision: number, displayText: string, cursorUtf16: number): boolean {
-    if (this.state === null) {
-      return false
+  waitForLayout(identity: LineLayoutIdentity, timeoutMs: number = 500): Promise<LineLayoutState | null> {
+    // 检查当前 state 是否已匹配
+    if (this.state !== null && this.matchesIdentity(this.state, identity)) {
+      return Promise.resolve(this.state)
     }
-    return this.state.revision === revision
-      && this.state.displayText === displayText
-      && this.state.cursorUtf16 === cursorUtf16
+
+    // 注册 waiter
+    return new Promise<LineLayoutState | null>((resolve) => {
+      const version: number = this.nextVersion
+      const waiter: Waiter = { identity, resolve, version }
+      this.waiters.push(waiter)
+
+      // 超时后取消等待（返回 null，调用方用当前最新 snapshot 兜底）
+      const timer: number = setTimeout(() => {
+        this.removeWaiter(waiter)
+        resolve(null)
+      }, timeoutMs) as unknown as number
+
+      // 清理 timer 的辅助：waiter resolve 后 clearTimeout
+      const originalResolve = waiter.resolve
+      const wrappedResolve = (state: LineLayoutState | null): void => {
+        clearTimeout(timer)
+        originalResolve(state)
+      }
+      waiter.resolve = wrappedResolve
+    })
+  }
+
+  /** 取消所有等待（组件销毁/换 session 时调用）。 */
+  cancelWait(): void {
+    for (const waiter of this.waiters) {
+      waiter.resolve(null)
+    }
+    this.waiters = []
+  }
+
+  private resolveWaiters(state: LineLayoutState): void {
+    const resolved: Waiter[] = []
+    for (const waiter of this.waiters) {
+      if (this.matchesIdentity(state, waiter.identity)) {
+        waiter.resolve(state)
+        resolved.push(waiter)
+      }
+    }
+    // 移除已 resolve 的 waiter
+    for (const w of resolved) {
+      this.removeWaiter(w)
+    }
+  }
+
+  private removeWaiter(waiter: Waiter): void {
+    const idx = this.waiters.indexOf(waiter)
+    if (idx >= 0) {
+      this.waiters.splice(idx, 1)
+    }
+  }
+
+  /**
+   * 验证给定 state 是否匹配 identity。
+   * 身份 = displayText + contentWidth + fontSize（不包含 cursorUtf16，因为 cursor 不决定折行）。
+   */
+  private matchesIdentity(state: LineLayoutState, identity: LineLayoutIdentity): boolean {
+    return state.displayText === identity.displayText
+      && state.contentWidth === identity.contentWidth
+      && state.fontSize === identity.fontSize
   }
 
   /** 返回当前行布局（只读引用）。state 为 null 时返回空数组。 */
