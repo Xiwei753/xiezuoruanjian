@@ -157,3 +157,38 @@ fun SettingsFieldGroup(
         }
     }
 }
+
+/**
+ * #630 评论15 项3：行级字段壳 — surfaceContainerHigh + 连续圆角，
+ * 让每个独立 Lazy item 在视觉上仍是一张高色阶字段卡。
+ *
+ * 首项只上圆角，中间矩形，末项只下圆角。颜色固定 surfaceContainerHigh，
+ * 与 SettingsFieldGroupTitle 共享同一色阶，形成：
+ * surface -> surfaceContainerLow -> surfaceContainer -> surfaceContainerHigh 字段层。
+ */
+private val FieldRowTopShape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
+private val FieldRowBottomShape = RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)
+private val FieldRowOnlyShape = RoundedCornerShape(12.dp)
+
+@Composable
+fun SettingsFieldRowContainer(
+    isFirst: Boolean = false,
+    isLast: Boolean = false,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val shape =
+        when {
+            isFirst && isLast -> FieldRowOnlyShape
+            isFirst -> FieldRowTopShape
+            isLast -> FieldRowBottomShape
+            else -> RectangleShape
+        }
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = shape,
+    ) {
+        content()
+    }
+}

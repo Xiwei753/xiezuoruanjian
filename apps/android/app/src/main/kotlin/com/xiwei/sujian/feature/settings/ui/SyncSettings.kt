@@ -29,247 +29,267 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 
 /**
  * #630 评论13/评论15: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
- * Sync 分类字段最多，每个字段独立 item 避免任一状态变化让整个同步面板重组。
+ * 使用 [SettingsFieldRowContainer] 的 isFirst/isLast 保持 M3 高色阶卡片视觉。
+ * 每个 item 只 collect 自己需要的 row-level StateFlow，避免整分类重组。
  */
 fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
     // ── 同步说明 ──
     item(key = "sync.description") {
         SettingsGroupItemContainer(isLast = false, isFirst = true) {
-            Text(
-                text = stringResource(id = R.string.sync_github_api_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.height(48.dp).padding(vertical = 8.dp),
-            )
+            SettingsFieldRowContainer(isFirst = true, isLast = false) {
+                Text(
+                    text = stringResource(id = R.string.sync_github_api_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.height(48.dp).padding(vertical = 8.dp),
+                )
+            }
         }
     }
 
     // ── 启用分组标题 ──
     item(key = "sync.enable_title") {
         SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_sync))
+            SettingsFieldRowContainer(isFirst = true, isLast = false) {
+                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_sync))
+            }
         }
     }
 
     // 启用同步开关
     item(key = "sync.enable_sync") {
-        val state by vm.syncState.collectAsStateWithLifecycle()
-        val syncConfig = state.syncConfig
+        val syncConfig by vm.syncConfigRow.collectAsStateWithLifecycle()
         SettingsGroupItemContainer(isLast = false) {
-            SujianSwitchRow(
-                title = stringResource(id = R.string.pref_enable_sync),
-                checked = syncConfig.enabled ?: false,
-                onCheckedChange = { checked ->
-                    vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(enabled = checked)))
-                },
-            )
+            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+                SujianSwitchRow(
+                    title = stringResource(id = R.string.pref_enable_sync),
+                    checked = syncConfig.enabled ?: false,
+                    onCheckedChange = { checked ->
+                        vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(enabled = checked)))
+                    },
+                )
+            }
         }
     }
 
     // 自动同步开关
     item(key = "sync.auto_sync") {
-        val state by vm.syncState.collectAsStateWithLifecycle()
-        val syncConfig = state.syncConfig
+        val syncConfig by vm.syncConfigRow.collectAsStateWithLifecycle()
         SettingsGroupItemContainer(isLast = true) {
-            SujianSwitchRow(
-                title = stringResource(id = R.string.pref_auto_sync),
-                checked = syncConfig.autoSync ?: false,
-                onCheckedChange = { checked ->
-                    vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(autoSync = checked)))
-                },
-                enabled = syncConfig.enabled ?: false,
-            )
+            SettingsFieldRowContainer(isFirst = false, isLast = true) {
+                SujianSwitchRow(
+                    title = stringResource(id = R.string.pref_auto_sync),
+                    checked = syncConfig.autoSync ?: false,
+                    onCheckedChange = { checked ->
+                        vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(autoSync = checked)))
+                    },
+                    enabled = syncConfig.enabled ?: false,
+                )
+            }
         }
     }
 
     // ── 凭据分组标题 ──
     item(key = "sync.credentials_title") {
         SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_sync_credentials))
+            SettingsFieldRowContainer(isFirst = true, isLast = false) {
+                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_sync_credentials))
+            }
         }
     }
 
     // 远程仓库地址
     item(key = "sync.remote_url") {
-        val state by vm.syncState.collectAsStateWithLifecycle()
-        val syncConfig = state.syncConfig
+        val syncConfig by vm.syncConfigRow.collectAsStateWithLifecycle()
         var remoteUrl by rememberSaveable { mutableStateOf(syncConfig.remoteUrl ?: "") }
         LaunchedEffect(syncConfig.remoteUrl) { remoteUrl = syncConfig.remoteUrl ?: "" }
         SettingsGroupItemContainer(isLast = false) {
-            SujianTextField(
-                value = remoteUrl,
-                onValueChange = {
-                    remoteUrl = it
-                    vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(remoteUrl = it)))
-                },
-                label = { Text(stringResource(id = R.string.pref_github_repo)) },
-                modifier = rememberFieldFocusModifier("sync_remote_url") { remoteUrl },
-                enabled = syncConfig.enabled ?: false,
-            )
+            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+                SujianTextField(
+                    value = remoteUrl,
+                    onValueChange = {
+                        remoteUrl = it
+                        vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(remoteUrl = it)))
+                    },
+                    label = { Text(stringResource(id = R.string.pref_github_repo)) },
+                    modifier = rememberFieldFocusModifier("sync_remote_url") { remoteUrl },
+                    enabled = syncConfig.enabled ?: false,
+                )
+            }
         }
     }
 
     // 分支
     item(key = "sync.branch") {
-        val state by vm.syncState.collectAsStateWithLifecycle()
-        val syncConfig = state.syncConfig
+        val syncConfig by vm.syncConfigRow.collectAsStateWithLifecycle()
         var branch by rememberSaveable { mutableStateOf(syncConfig.branch ?: "main") }
         LaunchedEffect(syncConfig.branch) { branch = syncConfig.branch ?: "main" }
         SettingsGroupItemContainer(isLast = false) {
-            SujianTextField(
-                value = branch,
-                onValueChange = {
-                    branch = it
-                    vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(branch = it)))
-                },
-                label = { Text(stringResource(id = R.string.pref_branch)) },
-                modifier = rememberFieldFocusModifier("sync_branch") { branch },
-                enabled = syncConfig.enabled ?: false,
-            )
+            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+                SujianTextField(
+                    value = branch,
+                    onValueChange = {
+                        branch = it
+                        vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(branch = it)))
+                    },
+                    label = { Text(stringResource(id = R.string.pref_branch)) },
+                    modifier = rememberFieldFocusModifier("sync_branch") { branch },
+                    enabled = syncConfig.enabled ?: false,
+                )
+            }
         }
     }
 
     // Token
     item(key = "sync.token") {
-        val state by vm.syncState.collectAsStateWithLifecycle()
-        val syncConfig = state.syncConfig
-        val syncSecrets = state.syncSecrets
+        val syncConfig by vm.syncConfigRow.collectAsStateWithLifecycle()
+        val syncSecrets by vm.syncSecretsRow.collectAsStateWithLifecycle()
         var token by rememberSaveable { mutableStateOf(syncSecrets.token ?: "") }
         LaunchedEffect(syncSecrets.token) { token = syncSecrets.token ?: "" }
         SettingsGroupItemContainer(isLast = true) {
-            SujianSecretTextField(
-                value = token,
-                onValueChange = {
-                    token = it
-                    vm.handleIntent(SettingsIntent.UpdateSyncSecrets(syncSecrets.copy(token = it.ifBlank { null })))
-                },
-                label = { Text(stringResource(id = R.string.pref_https_token)) },
-                modifier = rememberFieldFocusModifier("sync_token") { token },
-                enabled = syncConfig.enabled ?: false,
-            )
+            SettingsFieldRowContainer(isFirst = false, isLast = true) {
+                SujianSecretTextField(
+                    value = token,
+                    onValueChange = {
+                        token = it
+                        vm.handleIntent(SettingsIntent.UpdateSyncSecrets(syncSecrets.copy(token = it.ifBlank { null })))
+                    },
+                    label = { Text(stringResource(id = R.string.pref_https_token)) },
+                    modifier = rememberFieldFocusModifier("sync_token") { token },
+                    enabled = syncConfig.enabled ?: false,
+                )
+            }
         }
     }
 
     // ── 同步间隔 ──
     item(key = "sync.interval_title") {
         SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_sync_interval))
+            SettingsFieldRowContainer(isFirst = true, isLast = false) {
+                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_sync_interval))
+            }
         }
     }
 
     item(key = "sync.interval") {
-        val state by vm.syncState.collectAsStateWithLifecycle()
-        val syncConfig = state.syncConfig
+        val syncConfig by vm.syncConfigRow.collectAsStateWithLifecycle()
         var syncInterval by rememberSaveable { mutableFloatStateOf((syncConfig.syncIntervalSeconds ?: 300).toFloat()) }
-        LaunchedEffect(
-            syncConfig.syncIntervalSeconds,
-        ) { syncInterval = (syncConfig.syncIntervalSeconds ?: 300).toFloat() }
+        LaunchedEffect(syncConfig.syncIntervalSeconds) {
+            syncInterval = (syncConfig.syncIntervalSeconds ?: 300).toFloat()
+        }
         SettingsGroupItemContainer(isLast = true) {
-            SujianSlider(
-                title = stringResource(id = R.string.pref_sync_interval),
-                value = syncInterval,
-                onValueChange = { syncInterval = it },
-                onValueChangeFinished = {
-                    val seconds = syncInterval.toInt().coerceAtLeast(60)
-                    vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(syncIntervalSeconds = seconds)))
-                },
-                valueRange = 60f..3600f,
-                steps = 5,
-                valueFormatter = { v ->
-                    val minutes = (v / 60).toInt()
-                    if (minutes >= 1) "${minutes}min" else "${v.toInt()}s"
-                },
-                enabled = syncConfig.enabled ?: false,
-            )
+            SettingsFieldRowContainer(isFirst = false, isLast = true) {
+                SujianSlider(
+                    title = stringResource(id = R.string.pref_sync_interval),
+                    value = syncInterval,
+                    onValueChange = { syncInterval = it },
+                    onValueChangeFinished = {
+                        val seconds = syncInterval.toInt().coerceAtLeast(60)
+                        vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(syncIntervalSeconds = seconds)))
+                    },
+                    valueRange = 60f..3600f,
+                    steps = 5,
+                    valueFormatter = { v ->
+                        val minutes = (v / 60).toInt()
+                        if (minutes >= 1) "${minutes}min" else "${v.toInt()}s"
+                    },
+                    enabled = syncConfig.enabled ?: false,
+                )
+            }
         }
     }
 
     // ── 操作分组标题 ──
     item(key = "sync.actions_title") {
         SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_sync_actions))
+            SettingsFieldRowContainer(isFirst = true, isLast = false) {
+                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_sync_actions))
+            }
         }
     }
 
     // Dry run 按钮
     item(key = "sync.dry_run") {
-        val state by vm.syncState.collectAsStateWithLifecycle()
-        val syncConfig = state.syncConfig
-        val syncCapability = state.syncCapability
-        val anySyncRunning =
-            state.dryRunState == SyncCommandState.RUNNING ||
-                state.testConnectionState == SyncCommandState.RUNNING ||
-                state.performSyncState == SyncCommandState.RUNNING
+        val syncConfig by vm.syncConfigRow.collectAsStateWithLifecycle()
+        val capability by vm.syncCapabilityRow.collectAsStateWithLifecycle()
+        val testState by vm.syncTestConnectionRow.collectAsStateWithLifecycle()
+        val performState by vm.syncPerformSyncRow.collectAsStateWithLifecycle()
+        val dryRunState by vm.syncDryRunRow.collectAsStateWithLifecycle()
+        val anySyncRunning = testState == SyncCommandState.RUNNING || performState == SyncCommandState.RUNNING
         if (syncConfig.enabled == true) {
             SettingsGroupItemContainer(isLast = false) {
-                SujianOutlinedButton(
-                    text = stringResource(id = R.string.btn_dry_run),
-                    onClick = { vm.handleIntent(SettingsIntent.DryRun) },
-                    modifier = Modifier.fillMaxWidth(),
-                    loading = state.dryRunState == SyncCommandState.RUNNING,
-                    enabled = syncCapability.canRun && !anySyncRunning,
-                )
+                SettingsFieldRowContainer(isFirst = false, isLast = false) {
+                    SujianOutlinedButton(
+                        text = stringResource(id = R.string.btn_dry_run),
+                        onClick = { vm.handleIntent(SettingsIntent.DryRun) },
+                        modifier = Modifier.fillMaxWidth(),
+                        loading = dryRunState == SyncCommandState.RUNNING,
+                        enabled = capability.canRun && !anySyncRunning,
+                    )
+                }
             }
         }
     }
 
     // Test connection 按钮
     item(key = "sync.test_connection") {
-        val state by vm.syncState.collectAsStateWithLifecycle()
-        val syncConfig = state.syncConfig
-        val syncCapability = state.syncCapability
-        val anySyncRunning =
-            state.dryRunState == SyncCommandState.RUNNING ||
-                state.testConnectionState == SyncCommandState.RUNNING ||
-                state.performSyncState == SyncCommandState.RUNNING
+        val syncConfig by vm.syncConfigRow.collectAsStateWithLifecycle()
+        val capability by vm.syncCapabilityRow.collectAsStateWithLifecycle()
+        val testState by vm.syncTestConnectionRow.collectAsStateWithLifecycle()
+        val performState by vm.syncPerformSyncRow.collectAsStateWithLifecycle()
+        val anySyncRunning = testState == SyncCommandState.RUNNING || performState == SyncCommandState.RUNNING
         if (syncConfig.enabled == true) {
             SettingsGroupItemContainer(isLast = false) {
-                SujianOutlinedButton(
-                    text = stringResource(id = R.string.btn_test_connection),
-                    onClick = { vm.handleIntent(SettingsIntent.TestConnection) },
-                    modifier = Modifier.fillMaxWidth(),
-                    loading = state.testConnectionState == SyncCommandState.RUNNING,
-                    enabled = syncCapability.canRun && !anySyncRunning,
-                )
+                SettingsFieldRowContainer(isFirst = false, isLast = false) {
+                    SujianOutlinedButton(
+                        text = stringResource(id = R.string.btn_test_connection),
+                        onClick = { vm.handleIntent(SettingsIntent.TestConnection) },
+                        modifier = Modifier.fillMaxWidth(),
+                        loading = testState == SyncCommandState.RUNNING,
+                        enabled = capability.canRun && !anySyncRunning,
+                    )
+                }
             }
         }
     }
 
     // Perform sync 按钮
     item(key = "sync.perform_sync") {
-        val state by vm.syncState.collectAsStateWithLifecycle()
-        val syncConfig = state.syncConfig
-        val syncCapability = state.syncCapability
-        val anySyncRunning =
-            state.dryRunState == SyncCommandState.RUNNING ||
-                state.testConnectionState == SyncCommandState.RUNNING ||
-                state.performSyncState == SyncCommandState.RUNNING
+        val syncConfig by vm.syncConfigRow.collectAsStateWithLifecycle()
+        val capability by vm.syncCapabilityRow.collectAsStateWithLifecycle()
+        val testState by vm.syncTestConnectionRow.collectAsStateWithLifecycle()
+        val performState by vm.syncPerformSyncRow.collectAsStateWithLifecycle()
+        val anySyncRunning = testState == SyncCommandState.RUNNING || performState == SyncCommandState.RUNNING
         if (syncConfig.enabled == true) {
             SettingsGroupItemContainer(isLast = true) {
-                SujianOutlinedButton(
-                    text = stringResource(id = R.string.btn_perform_sync),
-                    onClick = { vm.handleIntent(SettingsIntent.PerformSync) },
-                    modifier = Modifier.fillMaxWidth(),
-                    loading = state.performSyncState == SyncCommandState.RUNNING,
-                    enabled = syncCapability.canRun && !anySyncRunning,
-                )
+                SettingsFieldRowContainer(isFirst = false, isLast = true) {
+                    SujianOutlinedButton(
+                        text = stringResource(id = R.string.btn_perform_sync),
+                        onClick = { vm.handleIntent(SettingsIntent.PerformSync) },
+                        modifier = Modifier.fillMaxWidth(),
+                        loading = performState == SyncCommandState.RUNNING,
+                        enabled = capability.canRun && !anySyncRunning,
+                    )
+                }
             }
         }
     }
 
     // 同步结果
     item(key = "sync.result") {
-        val state by vm.syncState.collectAsStateWithLifecycle()
-        val structured = state.syncResult
+        val resultPair by vm.syncResultRow.collectAsStateWithLifecycle()
+        val structured = resultPair.first
         if (structured != null) {
             SettingsGroupItemContainer(isLast = true) {
-                val isSuccess = structured.statusCode == "ok"
-                val displayResult = resolveStructuredResult(structured)
-                Text(
-                    text = displayResult,
-                    color = if (isSuccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                SettingsFieldRowContainer(isFirst = true, isLast = true) {
+                    val isSuccess = structured.statusCode == "ok"
+                    val displayResult = resolveStructuredResult(structured)
+                    Text(
+                        text = displayResult,
+                        color = if (isSuccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             }
         }
     }

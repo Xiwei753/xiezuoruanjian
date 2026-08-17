@@ -8,20 +8,34 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 
 /**
- * #630 评论13 项2: 扁平 LazyColumn — 向父 [LazyListScope] 注册行，
- * 每个 [SettingsFieldGroup] 是独立 item，有稳定 key。
+ * #630 评论13/评论15: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
+ * 使用 [SettingsFieldRowContainer] 的 isFirst/isLast 保持 M3 高色阶卡片视觉。
+ * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
  */
 fun LazyListScope.aiSettingsItems(vm: SettingsViewModel) {
-    item(key = "ai.enabled_group") {
+    // Note: availability check must happen inside item() because collectAsStateWithLifecycle
+    // requires @Composable context.
+    item(key = "ai.enabled_title") {
         val state by vm.aiState.collectAsStateWithLifecycle()
         if (!state.available) return@item
+        SettingsGroupItemContainer(isLast = false, isFirst = true) {
+            SettingsFieldRowContainer(isFirst = true, isLast = false) {
+                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_ai))
+            }
+        }
+    }
+
+    item(key = "ai.enabled") {
+        val state by vm.aiState.collectAsStateWithLifecycle()
+        if (!state.available) return@item
+        val checked by vm.aiEnabledRow.collectAsStateWithLifecycle()
         SettingsGroupItemContainer(isLast = true) {
-            SettingsFieldGroup(title = stringResource(id = R.string.pref_category_ai)) {
+            SettingsFieldRowContainer(isFirst = false, isLast = true) {
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_ai_enabled),
-                    checked = state.enabled,
-                    onCheckedChange = { checked ->
-                        vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(aiEnabled = checked) })
+                    checked = checked,
+                    onCheckedChange = { c ->
+                        vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(aiEnabled = c) })
                     },
                 )
             }

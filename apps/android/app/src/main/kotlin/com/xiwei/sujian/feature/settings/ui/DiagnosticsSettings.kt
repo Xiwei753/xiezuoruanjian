@@ -25,6 +25,8 @@ import kotlinx.coroutines.withContext
 
 /**
  * #630 评论13/评论15: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
+ * 使用 [SettingsFieldRowContainer] 的 isFirst/isLast 保持 M3 高色阶卡片视觉。
+ * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
  *
  * 结构拆分（detekt LongMethod 阈值 80）：
  * - [diagnosticsSwitchItem]：通用诊断开关 item（enabled / verbose 共享同一模式）
@@ -34,7 +36,9 @@ import kotlinx.coroutines.withContext
 fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
     item(key = "diagnostics.settings_title") {
         SettingsGroupItemContainer(isLast = false, isFirst = true) {
-            SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_diagnostics))
+            SettingsFieldRowContainer(isFirst = true, isLast = false) {
+                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_diagnostics))
+            }
         }
     }
 
@@ -67,7 +71,9 @@ fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
     item(key = "diagnostics.export") {
         val context = LocalContext.current
         SettingsGroupItemContainer(isLast = false) {
-            ExportDiagnosticsButton(context = context, modifier = Modifier.fillMaxWidth())
+            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+                ExportDiagnosticsButton(context = context, modifier = Modifier.fillMaxWidth())
+            }
         }
     }
 
@@ -76,12 +82,14 @@ fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
         val clearedText = stringResource(id = R.string.diagnostics_cleared)
         val clearFailedText = stringResource(id = R.string.diagnostics_clear_failed)
         SettingsGroupItemContainer(isLast = false) {
-            ClearLogsButton(
-                context = context,
-                clearedText = clearedText,
-                clearFailedText = clearFailedText,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+                ClearLogsButton(
+                    context = context,
+                    clearedText = clearedText,
+                    clearFailedText = clearFailedText,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 
@@ -89,11 +97,13 @@ fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
         val context = LocalContext.current
         val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
         SettingsGroupItemContainer(isLast = true) {
-            CopyDeviceInfoButton(
-                context = context,
-                copiedText = deviceInfoCopiedText,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            SettingsFieldRowContainer(isFirst = false, isLast = true) {
+                CopyDeviceInfoButton(
+                    context = context,
+                    copiedText = deviceInfoCopiedText,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 }
@@ -108,27 +118,31 @@ private fun LazyListScope.diagnosticsSwitchItem(
     switchEnabled: ((DiagnosticsSectionState) -> Boolean)? = null,
 ) {
     item(key = key) {
-        val state by vm.diagnosticsState.collectAsStateWithLifecycle()
+        val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
+        val verbose by vm.diagnosticsVerboseRow.collectAsStateWithLifecycle()
+        val state = DiagnosticsSectionState(enabled = enabled, verbose = verbose)
         SettingsGroupItemContainer(isLast = false) {
-            SujianSwitchRow(
-                title =
-                    stringResource(
-                        id =
-                            when (key) {
-                                "diagnostics.enabled" -> R.string.pref_diagnostics_enabled
-                                else -> R.string.pref_diagnostics_verbose
+            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+                SujianSwitchRow(
+                    title =
+                        stringResource(
+                            id =
+                                when (key) {
+                                    "diagnostics.enabled" -> R.string.pref_diagnostics_enabled
+                                    else -> R.string.pref_diagnostics_verbose
+                                },
+                        ),
+                    checked = isChecked(state),
+                    onCheckedChange = { checked ->
+                        vm.handleIntent(
+                            SettingsIntent.UpdateLocal { current ->
+                                onCheckedChange(checked, current)
                             },
-                    ),
-                checked = isChecked(state),
-                onCheckedChange = { checked ->
-                    vm.handleIntent(
-                        SettingsIntent.UpdateLocal { current ->
-                            onCheckedChange(checked, current)
-                        },
-                    )
-                },
-                enabled = switchEnabled?.invoke(state) ?: true,
-            )
+                        )
+                    },
+                    enabled = switchEnabled?.invoke(state) ?: true,
+                )
+            }
         }
     }
 }

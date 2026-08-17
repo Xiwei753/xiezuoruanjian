@@ -16,55 +16,63 @@ import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 
 /**
  * #630 评论13/评论15: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
+ * 使用 [SettingsFieldRowContainer] 的 isFirst/isLast 保持 M3 高色阶卡片视觉。
+ * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
  */
 fun LazyListScope.saveSettingsItems(vm: SettingsViewModel) {
     // ── 保存分组标题 ──
     item(key = "save.auto_title") {
         SettingsGroupItemContainer(isLast = false, isFirst = true) {
-            SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_save))
+            SettingsFieldRowContainer(isFirst = true, isLast = false) {
+                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_save))
+            }
         }
     }
 
     // 自动保存开关
     item(key = "save.auto_save") {
-        val state by vm.saveState.collectAsStateWithLifecycle()
+        val checked by vm.autoSaveRow.collectAsStateWithLifecycle()
         SettingsGroupItemContainer(isLast = false) {
-            SujianSwitchRow(
-                title = stringResource(id = R.string.pref_auto_save),
-                checked = state.autoSaveEnabled,
-                onCheckedChange = { checked ->
-                    vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(autoSaveEnabled = checked) })
-                },
-            )
+            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+                SujianSwitchRow(
+                    title = stringResource(id = R.string.pref_auto_save),
+                    checked = checked,
+                    onCheckedChange = { c ->
+                        vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(autoSaveEnabled = c) })
+                    },
+                )
+            }
         }
     }
 
     // 自动保存延迟
     item(key = "save.auto_save_delay") {
-        val state by vm.saveState.collectAsStateWithLifecycle()
-        var autoSaveDelay by rememberSaveable(state.autoSaveDelayMs / 1000f) {
-            mutableFloatStateOf(state.autoSaveDelayMs / 1000f)
+        val delayMs by vm.autoSaveDelayRow.collectAsStateWithLifecycle()
+        var autoSaveDelay by rememberSaveable(delayMs / 1000f) {
+            mutableFloatStateOf(delayMs / 1000f)
         }
         SettingsGroupItemContainer(isLast = true) {
-            SujianSlider(
-                title = stringResource(id = R.string.pref_auto_save_delay),
-                value = autoSaveDelay,
-                onValueChange = { autoSaveDelay = it },
-                onValueChangeFinished = {
-                    vm.handleIntent(
-                        SettingsIntent.UpdateLocal { it.copy(autoSaveDelayMs = (autoSaveDelay * 1000).toLong()) },
-                    )
-                },
-                valueRange = 1f..10f,
-                steps = 8,
-                valueLabel =
-                    pluralStringResource(
-                        id = R.plurals.auto_save_delay_seconds,
-                        autoSaveDelay.toInt(),
-                        autoSaveDelay.toInt(),
-                    ),
-                modifier = Modifier.fillMaxWidth(),
-            )
+            SettingsFieldRowContainer(isFirst = false, isLast = true) {
+                SujianSlider(
+                    title = stringResource(id = R.string.pref_auto_save_delay),
+                    value = autoSaveDelay,
+                    onValueChange = { autoSaveDelay = it },
+                    onValueChangeFinished = {
+                        vm.handleIntent(
+                            SettingsIntent.UpdateLocal { it.copy(autoSaveDelayMs = (autoSaveDelay * 1000).toLong()) },
+                        )
+                    },
+                    valueRange = 1f..10f,
+                    steps = 8,
+                    valueLabel =
+                        pluralStringResource(
+                            id = R.plurals.auto_save_delay_seconds,
+                            autoSaveDelay.toInt(),
+                            autoSaveDelay.toInt(),
+                        ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 }
