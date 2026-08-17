@@ -55,29 +55,41 @@ fun SettingsGroupHeader(
 }
 
 /**
- * 分组内单个分类项的容器 — 与 [SettingsGroupHeader] 同色，中间项直角，
- * 最后一项底部 28dp 圆角，视觉上与标题行拼成一张外层大卡片。
+ * 分组内单个分类项的容器 — 与 [SettingsGroupHeader] 同色，
+ * 首项顶部 28dp 圆角，末项底部 28dp 圆角，中间项直角，
+ * 视觉上与标题行拼成一张外层大卡片。
  *
- * LazyColumn 仍然是一分类一个 item，不把整个超长分组塞成一个巨型 Lazy item，
- * 但通过同色 + 拼接圆角让用户看到连续的外层卡片。
+ * 扁平 LazyColumn 场景：展开分类的字段拆成多个独立 item，
+ * 每个 item 通过 [isFirst]/[isLast] 控制圆角，保持同一张卡片视觉。
  *
  * @param isLast 是否为分组最后一项；决定底部圆角与底部 padding。
+ * @param isFirst 是否为展开分类的第一个 item；决定顶部圆角。
  */
 @Composable
 fun SettingsGroupItemContainer(
     isLast: Boolean,
     modifier: Modifier = Modifier,
+    isFirst: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    val shape = if (isLast) SettingsGroupBottomShape else RectangleShape
+    val shape =
+        when {
+            isFirst && isLast -> SettingsGroupTopShape // 展开分类只有一个 item
+            isFirst -> SettingsGroupTopShape
+            isLast -> SettingsGroupBottomShape
+            else -> RectangleShape
+        }
     val bottomPadding = if (isLast) 12.dp else 8.dp
+    val topPadding = if (isFirst && !isLast) 0.dp else 0.dp // isFirst 由上方 category header 间距处理
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = shape,
     ) {
         Column(
-            modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = bottomPadding),
+            modifier =
+                Modifier
+                    .padding(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding),
         ) {
             content()
         }
