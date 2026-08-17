@@ -105,12 +105,12 @@ internal class WorkspaceNavigator {
     val canNavigateBack: Boolean
         get() = _history.size > 1
 
-    suspend fun navigateTo(key: WorkspacePaneKey) {
+    fun navigateTo(key: WorkspacePaneKey) {
         _history.add(key)
     }
 
     /** 弹出一级业务历史；已在根页时返回 false。 */
-    suspend fun back(): Boolean {
+    fun back(): Boolean {
         if (!canNavigateBack) return false
         _history.removeAt(_history.size - 1)
         return true
@@ -125,7 +125,7 @@ internal class WorkspaceNavigator {
      * 保留入口签名以兼容 [com.xiwei.sujian.app.navigation.SujianWorkspaceBackEffects]
      * 的 PredictiveBackHandler 调用契约。
      */
-    suspend fun seekBack(
+    fun seekBack(
         @Suppress("UNUSED_PARAMETER") progress: Float,
     ) {
         // 业务级空实现 — 视觉过渡由 AnimatedContent 承担。
@@ -161,15 +161,15 @@ internal class ProjectNavigationState(
     val canNavigateBack: Boolean
         get() = navigator.canNavigateBack
 
-    suspend fun navigateToProjectList() {
+    fun navigateToProjectList() {
         navigator.navigateTo(WorkspacePaneKey.ProjectList)
     }
 
-    suspend fun navigateToChapterTree(projectId: String) {
+    fun navigateToChapterTree(projectId: String) {
         navigator.navigateTo(WorkspacePaneKey.ChapterTree(projectId))
     }
 
-    suspend fun navigateToEditor(
+    fun navigateToEditor(
         projectId: String,
         volumeId: String,
         chapterId: String,
@@ -178,10 +178,10 @@ internal class ProjectNavigationState(
     }
 
     /** 统一返回入口：弹出一级工作区导航；已在作品根页时返回 false。 */
-    suspend fun back(): Boolean = navigator.back()
+    fun back(): Boolean = navigator.back()
 
     /** 预测返回手势进度：把导航器 seek 到对应过渡进度；取消时传 0f 复位。 */
-    suspend fun seekBack(progress: Float) {
+    fun seekBack(progress: Float) {
         navigator.seekBack(progress)
     }
 }

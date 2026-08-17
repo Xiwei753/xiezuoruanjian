@@ -366,9 +366,9 @@ private fun SujianWorkspaceBackEffects(
  */
 internal suspend fun runPredictiveWorkspaceBack(
     progressFlow: kotlinx.coroutines.flow.Flow<androidx.activity.BackEventCompat>,
-    onSeekBack: suspend (Float) -> Unit,
+    onSeekBack: (Float) -> Unit,
     onFlushActiveDocument: suspend () -> Boolean,
-    onBack: suspend () -> Unit,
+    onBack: () -> Unit,
 ) {
     try {
         progressFlow.collect { event ->

@@ -5,7 +5,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -46,7 +45,7 @@ class PredictiveWorkspaceBackTest {
         var backCalls = 0
         var flushResult = true
 
-        suspend fun seekBack(progress: Float) {
+        fun seekBack(progress: Float) {
             seeks.add(progress)
         }
 
@@ -55,7 +54,7 @@ class PredictiveWorkspaceBackTest {
             return flushResult
         }
 
-        suspend fun back() {
+        fun back() {
             backCalls++
         }
     }
@@ -127,18 +126,9 @@ class PredictiveWorkspaceBackTest {
     fun cancellation_seeksBackToZeroAndRethrows() =
         runTest {
             val seeks = mutableListOf<Float>()
-            // 真实 suspension point：receive() 在已取消的 coroutine 里立即抛
-            // CancellationException；在 NonCancellable 里挂起等数据。
-            val seekZeroGate = Channel<Unit>(capacity = Channel.CONFLATED)
 
-            suspend fun seekBack(progress: Float) {
-                if (progress == 0f) {
-                    // 0f 复位需要真实挂起 — 模拟 navigator.seekBack(0f) 的 suspension。
-                    seekZeroGate.receive()
-                    seeks.add(0f)
-                } else {
-                    seeks.add(progress)
-                }
+            fun seekBack(progress: Float) {
+                seeks.add(progress)
             }
 
             // progress flow：发一个 progress 后挂起（不 complete），等外部 cancel。
@@ -154,7 +144,7 @@ class PredictiveWorkspaceBackTest {
                     try {
                         runPredictiveWorkspaceBack(
                             progressFlow = progressFlow,
-                            onSeekBack = { progress -> seekBack(progress) },
+                            onSeekBack = ::seekBack,
                             onFlushActiveDocument = { true },
                             onBack = { },
                         )
@@ -173,16 +163,10 @@ class PredictiveWorkspaceBackTest {
 
             // 真正 cancel child job — 模拟 Activity Compose PredictiveBackHandler 的 job.cancel()。
             job.cancel()
-            // 推进让 catch 块运行；修复后 onSeekBack(0f) 挂起在 receive()。
-            runCurrent()
-
-            // 送数据让 receive 完成（修复后 seeks 记录 0f；当前实现 receive 已抛
-            // CancellationException，send 无人接收但 CONFLATED 不阻塞）。
-            seekZeroGate.send(Unit)
+            // 推进让 catch 块运行。
             runCurrent()
 
             job.join()
-            seekZeroGate.close()
 
             assertTrue("手势取消必须重新抛出 CancellationException", rethrown != null)
             assertTrue(
