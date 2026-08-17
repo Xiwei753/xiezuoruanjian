@@ -140,7 +140,11 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
  *
  * #630 评论12 项1: 按 category 顺序交错注册 item，
  * 一个 category 标题后面立刻插自己的展开项，再进入下一个 category。
+ *
+ * LazyColumn 的 forEach + when 结构天然复杂，但每个分支都是独立的 item 注册，
+ * 无法进一步拆分而不破坏扁平 Lazy 的语义。
  */
+@Suppress("CognitiveComplexMethod")
 @Composable
 private fun SettingsLazyColumn(
     vm: SettingsViewModel,
@@ -181,64 +185,27 @@ private fun SettingsLazyColumn(
                             summary = settingsCategorySummary(category),
                             value = settingsCategoryValue(category, vm),
                             expanded = isExpanded,
-                            onExpandedChange = { isExpanded ->
-                                expansionState.setExpanded(category.section, isExpanded)
-                            },
+                            onExpandedChange = { expansionState.setExpanded(category.section, it) },
                         )
                     }
                 }
                 if (isExpanded) {
-                    item(key = "settings_expanded_${category.section.name}") {
-                        SettingsGroupItemContainer(isLast = isLastCategory) {
-                            ExpandedSettingsContent(category = category, vm = vm)
-                        }
+                    // #630 评论13 项2: 扁平 LazyColumn — 每个设置字段是独立 item，
+                    // 直接向父 LazyListScope 注册，不再包在 ExpandedSettingsContent 里。
+                    // 注意：collectAsStateWithLifecycle() 必须在 item 块内调用，
+                    // 因为 LazyListScope 扩展函数不是 @Composable 上下文。
+                    when (category.section) {
+                        SettingsSection.Appearance -> appearanceSettingsItems(vm)
+                        SettingsSection.Editor -> editorSettingsItems(vm)
+                        SettingsSection.Save -> saveSettingsItems(vm)
+                        SettingsSection.Sync -> syncSettingsItems(vm)
+                        SettingsSection.Ai -> aiSettingsItems(vm)
+                        SettingsSection.Diagnostics -> diagnosticsSettingsItems(vm)
+                        SettingsSection.Laboratory -> laboratorySettingsItems(vm)
+                        SettingsSection.About -> aboutSettingsItems(vm)
                     }
                 }
             }
-        }
-    }
-}
-
-/**
- * 展开后的设置内容 — 每个分类的内容作为独立的 LazyColumn item 渲染。
- */
-@Composable
-private fun ExpandedSettingsContent(
-    category: SettingsCategory,
-    vm: SettingsViewModel,
-) {
-    when (category.section) {
-        SettingsSection.Appearance -> {
-            val state by vm.appearanceState.collectAsStateWithLifecycle()
-            AppearanceSettings(state = state, onIntent = vm::handleIntent)
-        }
-        SettingsSection.Editor -> {
-            val state by vm.editorState.collectAsStateWithLifecycle()
-            EditorSettings(state = state, onIntent = vm::handleIntent)
-        }
-        SettingsSection.Save -> {
-            val state by vm.saveState.collectAsStateWithLifecycle()
-            SaveSettings(state = state, onIntent = vm::handleIntent)
-        }
-        SettingsSection.Sync -> {
-            val state by vm.syncState.collectAsStateWithLifecycle()
-            SyncSettings(state = state, onIntent = vm::handleIntent)
-        }
-        SettingsSection.Ai -> {
-            val state by vm.aiState.collectAsStateWithLifecycle()
-            AiSettings(state = state, onIntent = vm::handleIntent)
-        }
-        SettingsSection.Diagnostics -> {
-            val state by vm.diagnosticsState.collectAsStateWithLifecycle()
-            DiagnosticsSettings(state = state, onIntent = vm::handleIntent)
-        }
-        SettingsSection.Laboratory -> {
-            val state by vm.laboratoryState.collectAsStateWithLifecycle()
-            LaboratorySettings(state = state, onIntent = vm::handleIntent)
-        }
-        SettingsSection.About -> {
-            val state by vm.aboutState.collectAsStateWithLifecycle()
-            AboutSettings(state = state, onIntent = vm::handleIntent)
         }
     }
 }

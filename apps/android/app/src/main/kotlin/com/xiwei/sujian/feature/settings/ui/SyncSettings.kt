@@ -1,13 +1,12 @@
 package com.xiwei.sujian.feature.settings.ui
 
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -19,192 +18,183 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.component.SujianOutlinedButton
 import com.xiwei.sujian.core.designsystem.component.SujianSecretTextField
 import com.xiwei.sujian.core.designsystem.component.SujianSlider
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.designsystem.component.SujianTextField
-import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 
 /**
- * #630 评论 #1+#2：设置页同步区域只有一份 — 全量同步覆盖设置/星图/主题/全部作品。
- *
- * 编辑 [SettingsUiState.syncConfig]/[SettingsUiState.syncSecrets]，
- * 发送 [SettingsIntent.DryRun]/[SettingsIntent.TestConnection]/[SettingsIntent.PerformSync]。
- * 标题只出现一次（"同步"由 SettingsRoute 的 SettingsExpandableSection 提供），
- * 这里不再重复同名大标题；supporting text 说明同步范围与 GitHub API 限制。
- *
- * #630 评论 5306659312 问题 A：删除外层 SettingsSyncScope（已被全量同步方案淘汰的
- * "当前作品同步/应用数据同步"作用域容器），改用普通 Column 承载展开内容。
- * 需要给字段分层时用 SettingsFieldGroup，不再造第二个同步标题。
+ * #630 评论13 项2: 扁平 LazyColumn — 向父 [LazyListScope] 注册行，
+ * 每个 [SettingsFieldGroup] 是独立 item，有稳定 key。
  */
-@Composable
-fun SyncSettings(
-    state: SyncSectionState,
-    onIntent: (SettingsIntent) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val dims = LocalSujianDimensions.current
-    val syncConfig = state.syncConfig
-    val syncSecrets = state.syncSecrets
-    val syncCapability = state.syncCapability
-
-    var remoteUrl by rememberSaveable { mutableStateOf(syncConfig.remoteUrl ?: "") }
-    var branch by rememberSaveable { mutableStateOf(syncConfig.branch ?: "main") }
-    var token by rememberSaveable { mutableStateOf(syncSecrets.token ?: "") }
-    var syncInterval by rememberSaveable { mutableFloatStateOf((syncConfig.syncIntervalSeconds ?: 300).toFloat()) }
-
-    LaunchedEffect(syncConfig.remoteUrl) { remoteUrl = syncConfig.remoteUrl ?: "" }
-    LaunchedEffect(syncConfig.branch) { branch = syncConfig.branch ?: "main" }
-    LaunchedEffect(syncSecrets.token) { token = syncSecrets.token ?: "" }
-    LaunchedEffect(syncConfig.syncIntervalSeconds) { syncInterval = (syncConfig.syncIntervalSeconds ?: 300).toFloat() }
-
-    // #630 评论 5306659312 问题 A：外层不再用 SettingsSyncScope（会重复显示"同步"标题）。
-    // 同步分类标题已由 SettingsRoute 的 SettingsExpandableSection 显示一次，
-    // 展开内容直接用普通 Column 承载；需要给字段分层时用 SettingsFieldGroup。
-    Column(modifier = modifier.fillMaxWidth()) {
-        // supporting text：同步范围 + GitHub API 提示
-        Text(
-            text = stringResource(id = R.string.sync_github_api_hint),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = dims.space12),
-        )
-
-        // #595 四：同步 profile 读取失败 → 显示真实错误
-        if (state.syncProfileLoadState is SyncProfileLoadState.Failed) {
-            val failed = state.syncProfileLoadState
+fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
+    item(key = "sync.description") {
+        val state by vm.syncState.collectAsStateWithLifecycle()
+        SettingsGroupItemContainer(isLast = false, isFirst = true) {
             Text(
-                text = resolveSyncFailureMessage(failed.kind.messageKey()),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(bottom = dims.space8),
+                text = stringResource(id = R.string.sync_github_api_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.height(48.dp).padding(vertical = 8.dp),
             )
         }
-        if (!syncCapability.canRun && syncCapability.blockReasonCode != null) {
-            val blockMessage = resolveBlockMessage(syncCapability.blockReasonCode, syncCapability.blockMessageKey)
-            Text(
-                text = blockMessage,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(bottom = dims.space8),
+    }
+
+    item(key = "sync.enable_group") {
+        val state by vm.syncState.collectAsStateWithLifecycle()
+        val syncConfig = state.syncConfig
+
+        SettingsGroupItemContainer(isLast = false) {
+            SujianSwitchRow(
+                title = stringResource(id = R.string.pref_enable_sync),
+                checked = syncConfig.enabled ?: false,
+                onCheckedChange = { checked ->
+                    vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(enabled = checked)))
+                },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            SujianSwitchRow(
+                title = stringResource(id = R.string.pref_auto_sync),
+                checked = syncConfig.autoSync ?: false,
+                onCheckedChange = { checked ->
+                    vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(autoSync = checked)))
+                },
+                enabled = syncConfig.enabled ?: false,
             )
         }
-        if (state.secureStorageWarning != null) {
-            Text(
-                text = stringResource(id = R.string.sync_migration_warning),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(bottom = dims.space8),
+    }
+
+    item(key = "sync.credentials_group") {
+        val state by vm.syncState.collectAsStateWithLifecycle()
+        val syncConfig = state.syncConfig
+        val syncSecrets = state.syncSecrets
+        var remoteUrl by rememberSaveable { mutableStateOf(syncConfig.remoteUrl ?: "") }
+        var branch by rememberSaveable { mutableStateOf(syncConfig.branch ?: "main") }
+        var token by rememberSaveable { mutableStateOf(syncSecrets.token ?: "") }
+
+        LaunchedEffect(syncConfig.remoteUrl) { remoteUrl = syncConfig.remoteUrl ?: "" }
+        LaunchedEffect(syncConfig.branch) { branch = syncConfig.branch ?: "main" }
+        LaunchedEffect(syncSecrets.token) { token = syncSecrets.token ?: "" }
+
+        SettingsGroupItemContainer(isLast = false) {
+            SujianTextField(
+                value = remoteUrl,
+                onValueChange = {
+                    remoteUrl = it
+                    vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(remoteUrl = it)))
+                },
+                label = { Text(stringResource(id = R.string.pref_github_repo)) },
+                modifier = rememberFieldFocusModifier("sync_remote_url") { remoteUrl },
+                enabled = syncConfig.enabled ?: false,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            SujianTextField(
+                value = branch,
+                onValueChange = {
+                    branch = it
+                    vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(branch = it)))
+                },
+                label = { Text(stringResource(id = R.string.pref_branch)) },
+                modifier = rememberFieldFocusModifier("sync_branch") { branch },
+                enabled = syncConfig.enabled ?: false,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            SujianSecretTextField(
+                value = token,
+                onValueChange = {
+                    token = it
+                    vm.handleIntent(SettingsIntent.UpdateSyncSecrets(syncSecrets.copy(token = it.ifBlank { null })))
+                },
+                label = { Text(stringResource(id = R.string.pref_https_token)) },
+                modifier = rememberFieldFocusModifier("sync_token") { token },
+                enabled = syncConfig.enabled ?: false,
             )
         }
+    }
 
-        // 启用/自动同步
-        SujianSwitchRow(
-            title = stringResource(id = R.string.pref_enable_sync),
-            checked = syncConfig.enabled ?: false,
-            onCheckedChange = { checked ->
-                onIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(enabled = checked)))
-            },
-        )
-        Spacer(modifier = Modifier.height(dims.space8))
-        SujianSwitchRow(
-            title = stringResource(id = R.string.pref_auto_sync),
-            checked = syncConfig.autoSync ?: false,
-            onCheckedChange = { checked ->
-                onIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(autoSync = checked)))
-            },
-            enabled = syncConfig.enabled ?: false,
-        )
-        Spacer(modifier = Modifier.height(dims.space16))
+    item(key = "sync.interval_group") {
+        val state by vm.syncState.collectAsStateWithLifecycle()
+        val syncConfig = state.syncConfig
+        var syncInterval by rememberSaveable { mutableFloatStateOf((syncConfig.syncIntervalSeconds ?: 300).toFloat()) }
+        LaunchedEffect(
+            syncConfig.syncIntervalSeconds,
+        ) { syncInterval = (syncConfig.syncIntervalSeconds ?: 300).toFloat() }
 
-        // GitHub 仓库/分支/Token/间隔
-        SujianTextField(
-            value = remoteUrl,
-            onValueChange = {
-                remoteUrl = it
-                onIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(remoteUrl = it)))
-            },
-            label = { Text(stringResource(id = R.string.pref_github_repo)) },
-            modifier = rememberFieldFocusModifier("sync_remote_url") { remoteUrl },
-            enabled = syncConfig.enabled ?: false,
-        )
-        Spacer(modifier = Modifier.height(dims.space8))
-        SujianTextField(
-            value = branch,
-            onValueChange = {
-                branch = it
-                onIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(branch = it)))
-            },
-            label = { Text(stringResource(id = R.string.pref_branch)) },
-            modifier = rememberFieldFocusModifier("sync_branch") { branch },
-            enabled = syncConfig.enabled ?: false,
-        )
-        Spacer(modifier = Modifier.height(dims.space8))
-        SujianSecretTextField(
-            value = token,
-            onValueChange = {
-                token = it
-                onIntent(SettingsIntent.UpdateSyncSecrets(syncSecrets.copy(token = it.ifBlank { null })))
-            },
-            label = { Text(stringResource(id = R.string.pref_https_token)) },
-            modifier = rememberFieldFocusModifier("sync_token") { token },
-            enabled = syncConfig.enabled ?: false,
-        )
-        Spacer(modifier = Modifier.height(dims.space16))
-        SujianSlider(
-            title = stringResource(id = R.string.pref_sync_interval),
-            value = syncInterval,
-            onValueChange = { syncInterval = it },
-            onValueChangeFinished = {
-                val seconds = syncInterval.toInt().coerceAtLeast(60)
-                onIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(syncIntervalSeconds = seconds)))
-            },
-            valueRange = 60f..3600f,
-            steps = 5,
-            valueFormatter = { v ->
-                val minutes = (v / 60).toInt()
-                if (minutes >= 1) "${minutes}min" else "${v.toInt()}s"
-            },
-            enabled = syncConfig.enabled ?: false,
-        )
+        SettingsGroupItemContainer(isLast = false) {
+            SujianSlider(
+                title = stringResource(id = R.string.pref_sync_interval),
+                value = syncInterval,
+                onValueChange = { syncInterval = it },
+                onValueChangeFinished = {
+                    val seconds = syncInterval.toInt().coerceAtLeast(60)
+                    vm.handleIntent(SettingsIntent.UpdateSyncConfig(syncConfig.copy(syncIntervalSeconds = seconds)))
+                },
+                valueRange = 60f..3600f,
+                steps = 5,
+                valueFormatter = { v ->
+                    val minutes = (v / 60).toInt()
+                    if (minutes >= 1) "${minutes}min" else "${v.toInt()}s"
+                },
+                enabled = syncConfig.enabled ?: false,
+            )
+        }
+    }
 
-        // 检查/测试/立即同步
+    item(key = "sync.actions_group") {
+        val state by vm.syncState.collectAsStateWithLifecycle()
+        val syncConfig = state.syncConfig
+        val syncCapability = state.syncCapability
+        val structured = state.syncResult
+        val isLastItem = structured == null && syncConfig.enabled != true
+
         if (syncConfig.enabled == true) {
             val anySyncRunning =
                 state.dryRunState == SyncCommandState.RUNNING ||
                     state.testConnectionState == SyncCommandState.RUNNING ||
                     state.performSyncState == SyncCommandState.RUNNING
-            Spacer(modifier = Modifier.height(dims.space16))
-            SujianOutlinedButton(
-                text = stringResource(id = R.string.btn_dry_run),
-                onClick = { onIntent(SettingsIntent.DryRun) },
-                modifier = Modifier.fillMaxWidth(),
-                loading = state.dryRunState == SyncCommandState.RUNNING,
-                enabled = syncCapability.canRun && !anySyncRunning,
-            )
-            Spacer(modifier = Modifier.height(dims.space8))
-            SujianOutlinedButton(
-                text = stringResource(id = R.string.btn_test_connection),
-                onClick = { onIntent(SettingsIntent.TestConnection) },
-                modifier = Modifier.fillMaxWidth(),
-                loading = state.testConnectionState == SyncCommandState.RUNNING,
-                enabled = syncCapability.canRun && !anySyncRunning,
-            )
-            Spacer(modifier = Modifier.height(dims.space8))
-            SujianOutlinedButton(
-                text = stringResource(id = R.string.btn_perform_sync),
-                onClick = { onIntent(SettingsIntent.PerformSync) },
-                modifier = Modifier.fillMaxWidth(),
-                loading = state.performSyncState == SyncCommandState.RUNNING,
-                enabled = syncCapability.canRun && !anySyncRunning,
-            )
 
-            val structured = state.syncResult
-            if (structured != null) {
-                Spacer(modifier = Modifier.height(dims.space8))
+            SettingsGroupItemContainer(isLast = isLastItem) {
+                SujianOutlinedButton(
+                    text = stringResource(id = R.string.btn_dry_run),
+                    onClick = { vm.handleIntent(SettingsIntent.DryRun) },
+                    modifier = Modifier.fillMaxWidth(),
+                    loading = state.dryRunState == SyncCommandState.RUNNING,
+                    enabled = syncCapability.canRun && !anySyncRunning,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                SujianOutlinedButton(
+                    text = stringResource(id = R.string.btn_test_connection),
+                    onClick = { vm.handleIntent(SettingsIntent.TestConnection) },
+                    modifier = Modifier.fillMaxWidth(),
+                    loading = state.testConnectionState == SyncCommandState.RUNNING,
+                    enabled = syncCapability.canRun && !anySyncRunning,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                SujianOutlinedButton(
+                    text = stringResource(id = R.string.btn_perform_sync),
+                    onClick = { vm.handleIntent(SettingsIntent.PerformSync) },
+                    modifier = Modifier.fillMaxWidth(),
+                    loading = state.performSyncState == SyncCommandState.RUNNING,
+                    enabled = syncCapability.canRun && !anySyncRunning,
+                )
+            }
+        } else {
+            SettingsGroupItemContainer(isLast = true) {
+                Spacer(modifier = Modifier.height(0.dp))
+            }
+        }
+    }
+
+    item(key = "sync.result") {
+        val state by vm.syncState.collectAsStateWithLifecycle()
+        val structured = state.syncResult
+        if (structured != null) {
+            SettingsGroupItemContainer(isLast = true) {
                 val isSuccess = structured.statusCode == "ok"
                 val displayResult = resolveStructuredResult(structured)
                 Text(
@@ -217,7 +207,9 @@ fun SyncSettings(
     }
 }
 
-@Composable
+// 以下辅助函数保持不变
+
+@androidx.compose.runtime.Composable
 private fun resolveSyncFailureMessage(messageKey: String): String =
     when (messageKey) {
         "sync_retryable_network" -> stringResource(id = R.string.sync_retryable_network)
@@ -230,7 +222,7 @@ private fun resolveSyncFailureMessage(messageKey: String): String =
         else -> stringResource(id = R.string.sync_fatal)
     }
 
-@Composable
+@androidx.compose.runtime.Composable
 private fun resolveBlockMessage(
     blockReasonCode: String,
     blockMessageKey: String?,
@@ -245,7 +237,7 @@ private fun resolveBlockMessage(
     }
 }
 
-@Composable
+@androidx.compose.runtime.Composable
 private fun resolveStructuredResult(result: StructuredSyncResult): String {
     return when (result.messageKey) {
         "sync_dry_run_result" ->
@@ -303,7 +295,7 @@ private fun resolveStructuredResult(result: StructuredSyncResult): String {
     }
 }
 
-@Composable
+@androidx.compose.runtime.Composable
 private fun translateStatusComponent(value: String): String {
     return when (value) {
         "ok" -> stringResource(id = R.string.sync_diag_ok)
@@ -314,10 +306,8 @@ private fun translateStatusComponent(value: String): String {
 
 /**
  * Issue #612 五：设置字段焦点/提交诊断事件。
- * 获得焦点记录 fieldFocus(true)，失去焦点记录 fieldFocus(false) + fieldCommit(字符数, "blur")。
- * 用 wasFocused 防止初始组合（isFocused=false）产生噪声事件。
  */
-@Composable
+@androidx.compose.runtime.Composable
 private fun rememberFieldFocusModifier(
     fieldType: String,
     value: () -> String,
