@@ -62,8 +62,6 @@ export struct SujianEditor {
   dispatcher: EditorSemanticDispatcher | null = null
   // viewport 状态变化回调（供 WritingScreen 持续写入接续状态）。
   onViewportChange: ((state: EditorViewportState) => void) | null = null
-  // Issue #629 评论14 第3项：内容宽度变化回调（供 WritingScreen 更新 editorSnapshot 的 contentWidth）。
-  onContentWidthChange: ((width: number) => void) | null = null
   // Issue #629 评论6 Part C：父子 viewport 恢复通道。WritingScreen 持有 controller 实例并注入；
   // SujianEditor 在 aboutToAppear 注册 scrollTo + getDimensions，aboutToDisappear unregister。
   viewportController: EditorViewportController | null = null
@@ -129,7 +127,8 @@ export struct SujianEditor {
   }
 
   aboutToDisappear(): void {
-    // Issue #629 评论11 第2项：注销行级导航解析器。
+    // Issue #629 评论11 第2项 + 评论15 第3项：取消行导航等待 + 注销行级导航解析器。
+    this.lineResolver.cancelWait()
     if (this.dispatcher) {
       this.dispatcher.unregisterLineResolver()
     }
@@ -165,7 +164,8 @@ export struct SujianEditor {
       this.selectionRects = []
       this.caretRect = null
       this.compositionUnderlineRects = []
-      // snapshot 为 null 时清空 resolver（无文本无布局）。
+      // snapshot 为 null 时清空 resolver + 取消等待（无文本无布局）。
+      this.lineResolver.cancelWait()
       this.lineResolver.updateLayout(null)
     }
   }
@@ -195,11 +195,14 @@ export struct SujianEditor {
       this.selectionRects = result.selectionRects
       this.caretRect = result.caretRect
       this.compositionUnderlineRects = result.compositionUnderlineRects
-      // Issue #629 评论11 第2项 + 评论14 第3项：行布局更新后同步给行级导航解析器（带身份）。
-      // 身份来自 EditorLayoutSnapshot：displayText + contentWidth + fontSize（不包含 cursorUtf16，
-      // 因为 cursor 不决定折行）。executeLineNavigation 出队时验证此身份与当前 Core snapshot
-      // 匹配才用 lines 算目标。
+      // Issue #629 评论11 第2项 + 评论14 第3项 + 评论15 第3项：行布局更新后同步给行级导航解析器（带身份）。
+      // 身份来自 Core 编辑状态：revision + generation + compositionGeneration + displayText。
+      // contentWidth/fontSize 决定折行但不属于编辑状态身份（评论15 第2项）。
+      // executeLineNavigation 出队时验证此身份与当前 Core snapshot 匹配才用 lines 算目标。
       const layoutState: LineLayoutState = {
+        revision: snap.revision,
+        generation: snap.generation,
+        compositionGeneration: snap.compositionGeneration,
         displayText: snap.text,
         contentWidth: this.contentWidth,
         fontSize: snap.fontSize,
@@ -527,10 +530,6 @@ export struct SujianEditor {
               // （contentWidth/contentHeight），不是外层 Scroll 可视区域尺寸。
               this.contentWidth = Number(newArea.width)
               this.contentHeight = Number(newArea.height)
-              // Issue #629 评论14 第3项：通知 WritingScreen 更新 editorSnapshot 的 contentWidth。
-              if (this.onContentWidthChange) {
-                this.onContentWidthChange(this.contentWidth)
-              }
               // 内容尺寸已知后重新计算几何（选区/光标/composition 下划线）。
               this.refreshRenderLayout()
               // Issue #629 评论7 第4项：内容尺寸更新后通知 controller 重试消费 pending。

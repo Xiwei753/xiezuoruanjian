@@ -1,15 +1,14 @@
-// navigation_guard_comment11.test.mjs — Issue #629 评论11 第3项 + 评论14 第2项
+// navigation_guard_comment11.test.mjs — Issue #629 评论11 第3项 + 评论14 第2项 + 评论15 第6项
 // AppNavigationHost LeaveGuard + safePop/safeClearAndRebuild/safeReplacePath 幂等导航事务纯逻辑单测。
 //
-// 验证：
-//   1. 两个并发 safePop() 最终 popCalls.length === 1（幂等合并）
+// 验证（评论15 第6项 恢复强断言）：
+//   1. 两个并发 safePop() → guardCalls===1 且 popCalls.length===1
 //   2. guard 返回 false 时不 pop
-//   3. guard 返回 true 时 pop 一次
-//   4. safeClearAndRebuild guard 失败时不 clear
-//   5. unregisterLeaveGuard(token) 只注销自己 token 的 guard
-//   6. 不同 intent 串行排队（safePop 不会吞 safeClearAndRebuild）
-//   7. safeReplacePath guard 成功时执行 replace
-//   8. 多个 guard（多个 Writing 实例）：unregister(token A) 后 token B 仍存在
+//   3. safeClearAndRebuild guard 失败时不 clear
+//   4. activeGuardLease：旧 Writing token 注销后新 guard 仍在
+//   5. 不同 intent 串行排队（safePop 不会吞 safeClearAndRebuild）
+//   6. safeReplacePath：相同 targetKey 复用；不同 targetKey 串行执行
+//   7. Pop 正在执行时 ClearAndRebuild 入队，两个 intent 都执行且顺序稳定
 //
 // 运行：node navigation_guard_comment11.test.mjs
 
@@ -23,7 +22,7 @@ const testAsync = async (name, fn) => {
 }
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
-// MockNavPathStack：记录 pop/clear/pushPath 调用。
+// MockNavPathStack：记录 pop/clear/replacePath 调用。
 class MockNavPathStack {
   constructor() {
     this.popCalls = []
@@ -46,13 +45,17 @@ class MockNavPathStack {
 }
 
 // AppNavigationHost 纯逻辑镜像（与 AppNavigation.ets AppNavigationHost 对齐）。
-// Issue #629 评论14 第2项：token-based guard + 排队式导航事务。
+// Issue #629 评论14 第2项 + 评论15 第6项：
+// - activeGuardLease: 只持有当前 active guard，旧实例迟到的 disappear 不会删新 guard
+// - NavigationIntent dedupeKey: Pop='pop', ReplacePath='replace:<targetKey>', ClearAndRebuild 由调用方提供
+// - activeTask: 正在执行的任务仍在"可去重集合"里（shift 后不消失）
+// - 不同 intent 严格串行执行，不同 dedupeKey 不合并
 class AppNavigationHost {
   constructor() {
     this.navPathStack = null
-    this.leaveGuards = new Map()
-    this.nextGuardToken = 1
+    this.activeGuardLease = null
     this.pendingTasks = []
+    this.activeTask = null
     this.isProcessingQueue = false
   }
   register(navPathStack) {
@@ -63,18 +66,26 @@ class AppNavigationHost {
   }
   registerLeaveGuard(guard) {
     const token = this.nextGuardToken++
-    this.leaveGuards.set(token, guard)
+    // Issue #629 评论14 第2项：新 Writing 注册时替换 active lease
+    this.activeGuardLease = { token, guard }
     return token
   }
+  nextGuardToken = 1
   unregisterLeaveGuard(token) {
-    this.leaveGuards.delete(token)
+    // 只有 token 等于当前 active lease 才清掉
+    if (this.activeGuardLease !== null && this.activeGuardLease.token === token) {
+      this.activeGuardLease = null
+    }
   }
   enqueueNavigation(intent, execute) {
-    // 检查是否有相同 intent + 相同目标的 task 正在排队（复用）
+    // Issue #629 评论14 第2项 + 评论15 第6项：去重同时检查 pendingTasks + activeTask
     for (const entry of this.pendingTasks) {
-      if (entry.intent.kind === intent.kind && entry.intent.targetPath === intent.targetPath) {
+      if (entry.intent.dedupeKey === intent.dedupeKey) {
         return entry.task
       }
+    }
+    if (this.activeTask !== null && this.activeTask.intent.dedupeKey === intent.dedupeKey) {
+      return this.activeTask.task
     }
     let resolveTask
     const task = new Promise((resolve) => {
@@ -89,32 +100,48 @@ class AppNavigationHost {
     this.isProcessingQueue = true
     while (this.pendingTasks.length > 0) {
       const entry = this.pendingTasks.shift()
+      // shift 后立即设置 activeTask
+      this.activeTask = { intent: entry.intent, task: entry.task }
       try {
+        // Issue #629 评论14 第2项：只执行当前 active guard（不是遍历所有历史 guard）
         let canLeave = true
-        for (const [token, guard] of this.leaveGuards) {
-          const ok = await guard()
-          if (!ok) { canLeave = false; break }
+        const lease = this.activeGuardLease
+        if (lease !== null) {
+          canLeave = await lease.guard()
         }
-        if (canLeave) { entry.execute(); entry.resolve(true) }
-        else { entry.resolve(false) }
-      } catch (e) { entry.resolve(false) }
+        if (canLeave) {
+          entry.execute()
+          entry.resolve(true)
+        } else {
+          entry.resolve(false)
+        }
+      } catch (_e) {
+        entry.resolve(false)
+      } finally {
+        if (this.activeTask !== null && this.activeTask.task === entry.task) {
+          this.activeTask = null
+        }
+      }
     }
     this.isProcessingQueue = false
   }
   safePop() {
-    return this.enqueueNavigation({ kind: 'Pop' }, () => {
+    const intent = { kind: 'Pop', dedupeKey: 'pop' }
+    return this.enqueueNavigation(intent, () => {
       if (this.navPathStack !== null) this.navPathStack.pop()
     })
   }
-  safeClearAndRebuild(rebuild) {
-    return this.enqueueNavigation({ kind: 'ClearAndRebuild' }, rebuild)
+  safeClearAndRebuild(dedupeKey, rebuild) {
+    const intent = { kind: 'ClearAndRebuild', dedupeKey }
+    return this.enqueueNavigation(intent, rebuild)
   }
-  safeReplacePath(replace) {
-    return this.enqueueNavigation({ kind: 'ReplacePath' }, replace)
+  safeReplacePath(targetKey, replace) {
+    const intent = { kind: 'ReplacePath', dedupeKey: `replace:${targetKey}` }
+    return this.enqueueNavigation(intent, replace)
   }
 }
 
-console.log('navigation_guard_comment11 纯逻辑单测（Issue #629 评论11 第3项 + 评论14 第2项）')
+console.log('navigation_guard_comment11 纯逻辑单测（Issue #629 评论15 第6项恢复强断言）')
 console.log('---')
 
 await testAsync('safePop: 无 guard 时 pop 一次，返回 true', async () => {
@@ -148,7 +175,7 @@ await testAsync('safePop: guard 返回 false 时不 pop，返回 false', async (
   assert.equal(stack.popCalls.length, 0)
 })
 
-await testAsync('safePop: 两个并发 safePop 都完成且 guard 只调一次', async () => {
+await testAsync('safePop: 两个并发 safePop → guardCalls===1 且 popCalls.length===1（强断言）', async () => {
   const host = new AppNavigationHost()
   const stack = new MockNavPathStack()
   host.register(stack)
@@ -157,36 +184,40 @@ await testAsync('safePop: 两个并发 safePop 都完成且 guard 只调一次',
   const p1 = host.safePop()
   const p2 = host.safePop()
   const [ok1, ok2] = await Promise.all([p1, p2])
+  // Issue #629 评论15 第6项：两个 safePop 同 dedupeKey 复用同一 task
+  assert.equal(ok1, ok2, '两个 safePop 应返回相同 result')
   assert.equal(ok1, true)
-  assert.equal(ok2, true)
-  // Queue-based: each task runs guard separately, but both succeed
-  assert.ok(guardCalls >= 1, 'guard called at least once')
+  assert.equal(guardCalls, 1, 'guard 只调一次（dedup 合并）')
+  assert.equal(stack.popCalls.length, 1, 'pop 只执行一次（dedup 合并）')
 })
 
-await testAsync('不同 intent 不合并: safePop 和 safeClearAndRebuild 都执行', async () => {
+await testAsync('activeGuardLease: 旧 Writing token 注销后新 guard 仍在', async () => {
+  const host = new AppNavigationHost()
+  const stack = new MockNavPathStack()
+  host.register(stack)
+  const tokenA = host.registerLeaveGuard(async () => false)
+  const tokenB = host.registerLeaveGuard(async () => true)
+  host.unregisterLeaveGuard(tokenA)
+  assert.equal(host.activeGuardLease.token, tokenB, 'token B 仍是 active lease')
+  const ok = await host.safePop()
+  assert.equal(ok, true, 'token B 的 guard 返回 true，可以 pop')
+})
+
+await testAsync('不同 intent 不合并: safePop 和 safeClearAndRebuild 都执行且按顺序', async () => {
   const host = new AppNavigationHost()
   const stack = new MockNavPathStack()
   host.register(stack)
   host.registerLeaveGuard(async () => true)
-  const p1 = host.safePop()
-  const p2 = host.safeClearAndRebuild(() => { stack.clear(); stack.pushPath({ name: 'Home' }) })
+  const order = []
+  const p1 = host.safePop().then(ok => { order.push('pop'); return ok })
+  const p2 = host.safeClearAndRebuild('k', () => { order.push('clear'); stack.clear(); stack.pushPath({ name: 'Home' }) }).then(ok => { order.push('clearDone'); return ok })
   const [ok1, ok2] = await Promise.all([p1, p2])
   assert.equal(ok1, true, 'safePop 返回 true')
   assert.equal(ok2, true, 'safeClearAndRebuild 返回 true')
-  assert.ok(stack.popCalls.length >= 1, 'safePop 执行了 pop')
-  assert.ok(stack.clearCalls.length >= 1, 'safeClearAndRebuild 执行了 clear')
-})
-
-await testAsync('safeClearAndRebuild: guard 成功时执行 rebuild', async () => {
-  const host = new AppNavigationHost()
-  const stack = new MockNavPathStack()
-  host.register(stack)
-  host.registerLeaveGuard(async () => true)
-  let rebuildCalls = 0
-  const ok = await host.safeClearAndRebuild(() => { rebuildCalls++; stack.clear() })
-  assert.equal(ok, true)
-  assert.equal(rebuildCalls, 1)
-  assert.equal(stack.clearCalls.length, 1)
+  assert.equal(stack.popCalls.length, 1, 'pop 执行一次')
+  assert.equal(stack.clearCalls.length, 1, 'clear 执行一次')
+  // 顺序：pop 先入队先执行，clear 后入队后执行
+  assert.ok(order.indexOf('pop') < order.indexOf('clear'), 'pop 在 clear 之前执行')
 })
 
 await testAsync('safeClearAndRebuild: guard 失败时不 clear', async () => {
@@ -195,63 +226,64 @@ await testAsync('safeClearAndRebuild: guard 失败时不 clear', async () => {
   host.register(stack)
   host.registerLeaveGuard(async () => false)
   let rebuildCalls = 0
-  const ok = await host.safeClearAndRebuild(() => { rebuildCalls++; stack.clear() })
+  const ok = await host.safeClearAndRebuild('k', () => { rebuildCalls++; stack.clear() })
   assert.equal(ok, false)
   assert.equal(rebuildCalls, 0)
   assert.equal(stack.clearCalls.length, 0)
 })
 
-await testAsync('safeReplacePath: guard 成功时执行 replace', async () => {
+await testAsync('safeReplacePath: 相同 targetKey 复用同一 task', async () => {
   const host = new AppNavigationHost()
   const stack = new MockNavPathStack()
   host.register(stack)
   host.registerLeaveGuard(async () => true)
-  let replaceCalls = 0
-  const ok = await host.safeReplacePath(() => { replaceCalls++; stack.replacePath({ name: 'Writing' }) })
-  assert.equal(ok, true)
-  assert.equal(replaceCalls, 1)
-  assert.equal(stack.replacePathCalls.length, 1)
+  const p1 = host.safeReplacePath('ch1', () => { stack.replacePath({ name: 'Writing' }) })
+  const p2 = host.safeReplacePath('ch1', () => { stack.replacePath({ name: 'Writing' }) })
+  assert.equal(p1, p2, '相同 targetKey 复用 Promise')
+  const [ok1] = await Promise.all([p1, p2])
+  assert.equal(ok1, true)
+  assert.equal(stack.replacePathCalls.length, 1, 'replace 只执行一次')
 })
 
-await testAsync('safeReplacePath: guard 失败时不 replace', async () => {
+await testAsync('safeReplacePath: 不同 targetKey 串行执行两次，不互吞', async () => {
   const host = new AppNavigationHost()
   const stack = new MockNavPathStack()
   host.register(stack)
-  host.registerLeaveGuard(async () => false)
-  let replaceCalls = 0
-  const ok = await host.safeReplacePath(() => { replaceCalls++; stack.replacePath({ name: 'Writing' }) })
-  assert.equal(ok, false)
-  assert.equal(replaceCalls, 0)
+  host.registerLeaveGuard(async () => true)
+  const p1 = host.safeReplacePath('ch1', () => { stack.replacePath({ name: 'Writing', param: { chapterId: 'ch1' } }) })
+  const p2 = host.safeReplacePath('ch2', () => { stack.replacePath({ name: 'Writing', param: { chapterId: 'ch2' } }) })
+  const [ok1, ok2] = await Promise.all([p1, p2])
+  assert.equal(ok1, true)
+  assert.equal(ok2, true)
+  assert.equal(stack.replacePathCalls.length, 2, '两个不同 chapter 各执行一次 replace')
 })
 
-await testAsync('unregisterLeaveGuard(token): 只注销自己 token 的 guard', async () => {
+await testAsync('Pop 正在执行时 ClearAndRebuild 入队 → 两个都按顺序执行', async () => {
   const host = new AppNavigationHost()
   const stack = new MockNavPathStack()
   host.register(stack)
-  const tokenA = host.registerLeaveGuard(async () => false)
-  const tokenB = host.registerLeaveGuard(async () => true)
-  host.unregisterLeaveGuard(tokenA)
-  assert.equal(host.leaveGuards.has(tokenA), false)
-  assert.equal(host.leaveGuards.has(tokenB), true)
-  const ok = await host.safePop()
-  assert.equal(ok, true, 'token B 的 guard 返回 true，可以 pop')
+  let guardResolve = null
+  const guardPromise = new Promise((resolve) => { guardResolve = resolve })
+  host.registerLeaveGuard(async () => guardPromise)
+  const order = []
+  // 第一个 safePop 开始（guard 等待中）
+  const p1 = host.safePop().then(ok => { order.push('pop'); return ok })
+  await sleep(10)
+  // 第二个 safeClearAndRebuild 入队（不同 dedupeKey，不会被吞）
+  const p2 = host.safeClearAndRebuild('k', () => { order.push('clear'); stack.clear() }).then(ok => { order.push('clearDone'); return ok })
+  await sleep(10)
+  // 放行 guard
+  guardResolve(true)
+  await sleep(50)
+  // 等待两个都完成
+  await Promise.all([p1, p2])
+  assert.equal(stack.popCalls.length, 1)
+  assert.equal(stack.clearCalls.length, 1)
+  // 顺序：pop 先执行，clear 后执行
+  assert.ok(order.indexOf('pop') < order.indexOf('clear'), 'pop 在 clear 之前')
 })
 
-await testAsync('多个 guard: unregister(token A) 后 token B 仍存在', async () => {
-  const host = new AppNavigationHost()
-  const stack = new MockNavPathStack()
-  host.register(stack)
-  let guardACalls = 0
-  let guardBCalls = 0
-  const tokenA = host.registerLeaveGuard(async () => { guardACalls++; return true })
-  const tokenB = host.registerLeaveGuard(async () => { guardBCalls++; return true })
-  host.unregisterLeaveGuard(tokenA)
-  await host.safePop()
-  assert.equal(guardACalls, 0, 'guard A 被注销，不再调用')
-  assert.equal(guardBCalls, 1, 'guard B 仍存在，被调用')
-})
-
-await testAsync('guard 抛异常: 异常冒泡，task resolve false', async () => {
+await testAsync('guard 抛异常 → task resolve false', async () => {
   const host = new AppNavigationHost()
   const stack = new MockNavPathStack()
   host.register(stack)
@@ -267,6 +299,7 @@ await testAsync('unregisterLeaveGuard 后 safePop: 无 guard，直接 pop', asyn
   host.register(stack)
   const token = host.registerLeaveGuard(async () => false)
   host.unregisterLeaveGuard(token)
+  assert.equal(host.activeGuardLease, null, 'activeGuardLease 已清空')
   const ok = await host.safePop()
   assert.equal(ok, true)
   assert.equal(stack.popCalls.length, 1)

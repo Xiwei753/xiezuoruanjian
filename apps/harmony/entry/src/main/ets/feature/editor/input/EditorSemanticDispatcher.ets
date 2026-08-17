@@ -44,7 +44,7 @@ import { SerialCommandQueue } from '../session/editor_patch_logic'
 import { TextOffsetMapper } from './TextOffsetMapper'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorTransactionCause, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
-import { LineNavigationResolver } from '../selection/LineNavigationResolver'
+import { LineNavigationResolver, LineLayoutState } from '../selection/LineNavigationResolver'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 
 // 语义命令类型：把物理键盘/IME/鼠标/触摸的输入统一成语义命令。
@@ -470,12 +470,11 @@ export class EditorSemanticDispatcher {
     return replaceResult
   }
 
-  // Issue #629 评论14 第3项：行级导航（up/down/home/end）。
-  // 出队后基于最新 Core snapshot + 最新行布局（lineResolver）计算目标位置，
-  // 再调 SelectionController。不在入队前读旧布局。
-  // Issue #629 评论14 第3项：不再返回 STALE_LAYOUT 丢键。
-  // 如果 Core 已前进但 resolver 还是旧版本，等待对应 layout state 后再算目标。
-  // 等待超时或组件销毁时用当前最新 snapshot 兜底（不丢键）。
+  // Issue #629 评论14 第3项 + 评论15 第5项：行级导航（up/down/home/end）。
+  // 出队后基于最新 Core snapshot + 等待匹配编辑状态身份的行布局，计算目标位置。
+  // 不再返回 STALE_LAYOUT 丢键，也不设 timeout 兜底。
+  // 等待只能有两个出口：SujianEditor 发布匹配的布局，或 cancelWait（组件销毁/换 session）。
+  // composition 活跃时，行导航目标坐标是显示文本 UTF-16 坐标，复用 imeSetSelection 语义。
   private async executeLineNavigation(direction: 'up' | 'down' | 'home' | 'end', extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
@@ -485,75 +484,167 @@ export class EditorSemanticDispatcher {
     if (!resolver) {
       return this.noSession()
     }
-    // 构造显示布局身份：composition 活跃时 fromEditorSnapshot 把 text/cursor 投影到显示文本。
+    // Issue #629 评论15 第5项：构造编辑状态身份（不包含 contentWidth/fontSize）。
+    // EditorLayoutIdentity = { revision, generation, compositionGeneration, displayText }。
     const displaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+    const identity = {
+      revision: displaySnapshot.revision,
+      generation: displaySnapshot.generation,
+      compositionGeneration: displaySnapshot.compositionGeneration,
+      displayText: displaySnapshot.text
+    }
     const displayText: string = displaySnapshot.text
-    const cursorUtf16: number = TextOffsetMapper.utf8ToUtf16(displayText, displaySnapshot.cursorByteOffset)
-    const anchorUtf16: number = TextOffsetMapper.utf8ToUtf16(displayText, displaySnapshot.selectionAnchor)
-    // Issue #629 评论14 第3项：等待匹配身份的 layout state，不再返回 STALE_LAYOUT 丢键。
-    // 如果 resolver 当前版本已匹配，waitForLayout 立即返回；否则等待新版本。
-    // 超时 500ms 后返回 null，用当前最新 lines 兜底（至少不丢键）。
-    const layoutState = await resolver.waitForLayout({
-      displayText: displayText,
-      contentWidth: displaySnapshot.contentWidth,
-      fontSize: displaySnapshot.fontSize
-    }, 500)
+    // Issue #629 评论15 第5项：等待匹配身份的 layout state，不设 timeout。
+    const layoutState = await resolver.waitForLayout(identity)
+    // layoutState === null 表示被取消（组件销毁/换 session），直接结束。
+    if (layoutState === null) {
+      return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+    }
     // 等待后重新读 snapshot（布局更新期间 Core 可能已前进）。
     const latestSnap = this.coordinator.getSnapshot()
     if (!latestSnap) {
       return this.noSession()
     }
-
-    // 用最新 snapshot 的坐标（等待期间 Core 可能已前进）。
+    // Issue #629 评论15 第5项：用最新 snapshot 构造坐标，用等待到的 layoutState 计算目标。
+    // 如果 Core 又前进（identity 变了），重新以最新 identity 等待，不把旧 layout 和新 cursor 混用。
     const latestDisplaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(latestSnap)
-    const latestDisplayText: string = latestDisplaySnapshot.text
-    const latestCursorUtf16: number = TextOffsetMapper.utf8ToUtf16(latestDisplayText, latestDisplaySnapshot.cursorByteOffset)
-    const latestAnchorUtf16: number = TextOffsetMapper.utf8ToUtf16(latestDisplayText, latestDisplaySnapshot.selectionAnchor)
-    // 如果等待到了匹配的 layout state，用它；否则用当前最新 lines（超时兜底）。
-    const effectiveLines = layoutState !== null ? layoutState.lines : resolver.getLines()
-    // 临时设置 resolver 的 lines 为等待结果（或当前最新），然后计算目标。
-    // 注意：这里不修改 resolver.state，只是用 lines 做一次性计算。
+    const latestIdentity = {
+      revision: latestDisplaySnapshot.revision,
+      generation: latestDisplaySnapshot.generation,
+      compositionGeneration: latestDisplaySnapshot.compositionGeneration,
+      displayText: latestDisplaySnapshot.text
+    }
+    let finalState: LineLayoutState = layoutState
+    if (latestIdentity.revision !== identity.revision
+      || latestIdentity.generation !== identity.generation
+      || latestIdentity.compositionGeneration !== identity.compositionGeneration
+      || latestIdentity.displayText !== identity.displayText) {
+      // Core 前进了，重新等待最新 identity 的 layout。
+      const refreshedState = await resolver.waitForLayout(latestIdentity)
+      if (refreshedState === null) {
+        return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+      }
+      finalState = refreshedState
+      // 重新读最新 snapshot 计算坐标。
+      const finalSnap = this.coordinator.getSnapshot()
+      if (!finalSnap) {
+        return this.noSession()
+      }
+      const finalDisplaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(finalSnap)
+      const finalCursorUtf16: number = TextOffsetMapper.utf8ToUtf16(finalDisplaySnapshot.text, finalDisplaySnapshot.cursorByteOffset)
+      const finalAnchorUtf16: number = TextOffsetMapper.utf8ToUtf16(finalDisplaySnapshot.text, finalDisplaySnapshot.selectionAnchor)
+      // composition 活跃时走 imeSetSelection 语义。
+      if (finalSnap.composition !== null && finalSnap.composition !== undefined) {
+        return this.executeImeLineNavigation(direction, extend, finalState, finalCursorUtf16, finalAnchorUtf16, finalDisplaySnapshot)
+      }
+      return this.executeCommittedLineNavigation(direction, extend, finalState, finalCursorUtf16, finalAnchorUtf16)
+    }
+    // Core 未前进，用等待到的 finalState + 当前 snapshot 坐标。
+    const latestCursorUtf16: number = TextOffsetMapper.utf8ToUtf16(latestDisplaySnapshot.text, latestDisplaySnapshot.cursorByteOffset)
+    const latestAnchorUtf16: number = TextOffsetMapper.utf8ToUtf16(latestDisplaySnapshot.text, latestDisplaySnapshot.selectionAnchor)
+    // composition 活跃时走 imeSetSelection 语义。
+    if (latestSnap.composition !== null && latestSnap.composition !== undefined) {
+      return this.executeImeLineNavigation(direction, extend, finalState, latestCursorUtf16, latestAnchorUtf16, latestDisplaySnapshot)
+    }
+    return this.executeCommittedLineNavigation(direction, extend, finalState, latestCursorUtf16, latestAnchorUtf16)
+  }
+
+  // Issue #629 评论15 第5项：committed text 上的行导航（无 composition）。
+  private executeCommittedLineNavigation(
+    direction: 'up' | 'down' | 'home' | 'end',
+    extend: boolean,
+    state: LineLayoutState,
+    cursorUtf16: number,
+    anchorUtf16: number
+  ): Promise<ResultEnvelope<EditorEditResult>> {
     switch (direction) {
       case 'up': {
-        const targetLineIdx = resolver.getPreviousLineIndex(latestCursorUtf16)
+        const targetLineIdx = LineNavigationResolver.getPreviousLineIndex(state, cursorUtf16)
         if (targetLineIdx < 0) {
-          return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+          return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
         }
-        const targetOffset = resolver.getLineStart(targetLineIdx)
+        const targetOffset = LineNavigationResolver.getLineStart(state, targetLineIdx)
         if (extend) {
-          return this.selectionController.onDragSelect(latestAnchorUtf16, targetOffset)
+          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
         }
         return this.selectionController.onTap(targetOffset)
       }
       case 'down': {
-        const targetLineIdx = resolver.getNextLineIndex(latestCursorUtf16)
+        const targetLineIdx = LineNavigationResolver.getNextLineIndex(state, cursorUtf16)
         if (targetLineIdx < 0) {
-          return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+          return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
         }
-        const targetOffset = resolver.getLineStart(targetLineIdx)
+        const targetOffset = LineNavigationResolver.getLineStart(state, targetLineIdx)
         if (extend) {
-          return this.selectionController.onDragSelect(latestAnchorUtf16, targetOffset)
+          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
         }
         return this.selectionController.onTap(targetOffset)
       }
       case 'home': {
-        const lineIdx = resolver.getCurrentLineIndex(latestCursorUtf16)
-        const targetOffset = lineIdx >= 0 ? resolver.getLineStart(lineIdx) : 0
+        const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, cursorUtf16)
+        const targetOffset = lineIdx >= 0 ? LineNavigationResolver.getLineStart(state, lineIdx) : 0
         if (extend) {
-          return this.selectionController.onDragSelect(latestAnchorUtf16, targetOffset)
+          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
         }
         return this.selectionController.onTap(targetOffset)
       }
       case 'end': {
-        const lineIdx = resolver.getCurrentLineIndex(latestCursorUtf16)
-        const textUtf16Len = latestDisplayText.length
-        const targetOffset = lineIdx >= 0 ? resolver.getLineEnd(lineIdx) : textUtf16Len
+        const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, cursorUtf16)
+        const textUtf16Len = state.displayText.length
+        const targetOffset = lineIdx >= 0 ? LineNavigationResolver.getLineEnd(state, lineIdx) : textUtf16Len
         if (extend) {
-          return this.selectionController.onDragSelect(latestAnchorUtf16, targetOffset)
+          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
         }
         return this.selectionController.onTap(targetOffset)
       }
     }
+  }
+
+  // Issue #629 评论15 第5项：composition 活跃时的行导航。
+  // 行内移动：走 imeSetSelection 语义（更新 preedit cursor）。
+  // 移出 composition 区域：先 finish composition，再走 imeSetSelection。
+  private executeImeLineNavigation(
+    direction: 'up' | 'down' | 'home' | 'end',
+    extend: boolean,
+    state: LineLayoutState,
+    cursorUtf16: number,
+    anchorUtf16: number,
+    displaySnapshot: EditorLayoutSnapshot
+  ): Promise<ResultEnvelope<EditorEditResult>> {
+    // 计算目标行的 UTF-16 offset（基于 displayText 的坐标）。
+    let targetOffset: number = cursorUtf16
+    switch (direction) {
+      case 'up': {
+        const targetLineIdx = LineNavigationResolver.getPreviousLineIndex(state, cursorUtf16)
+        if (targetLineIdx < 0) {
+          return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
+        }
+        targetOffset = LineNavigationResolver.getLineStart(state, targetLineIdx)
+        break
+      }
+      case 'down': {
+        const targetLineIdx = LineNavigationResolver.getNextLineIndex(state, cursorUtf16)
+        if (targetLineIdx < 0) {
+          return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
+        }
+        targetOffset = LineNavigationResolver.getLineStart(state, targetLineIdx)
+        break
+      }
+      case 'home': {
+        const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, cursorUtf16)
+        targetOffset = lineIdx >= 0 ? LineNavigationResolver.getLineStart(state, lineIdx) : 0
+        break
+      }
+      case 'end': {
+        const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, cursorUtf16)
+        targetOffset = lineIdx >= 0 ? LineNavigationResolver.getLineEnd(state, lineIdx) : displaySnapshot.text.length
+        break
+      }
+    }
+    if (extend) {
+      return this.executeImeSetSelection(anchorUtf16, targetOffset)
+    }
+    return this.executeImeSetSelection(targetOffset, targetOffset)
   }
 
   // Issue #629 评论11 第2项：注册行级导航解析器。

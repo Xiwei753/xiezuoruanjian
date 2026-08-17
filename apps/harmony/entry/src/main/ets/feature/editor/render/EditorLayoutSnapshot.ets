@@ -5,6 +5,10 @@
 // 构造临时显示文本（committed text 的 [replaceByteStart, replaceByteEndExclusive) 替换为 preeditText），
 // compositionStart/End 设为 preedit 在显示文本中的 UTF-8 byte 范围。
 // 保存正文仍只取 committed text（snap.text），不把 preedit 写进文件。
+//
+// Issue #629 评论15 第2项：contentWidth 不属于 Core editor snapshot 的编辑状态身份。
+// 布局尺寸（contentWidth）属于 Harmony render/selection，不属于 Core editor snapshot。
+// 改为 Core 已有的 generation + compositionGeneration 作为编辑状态身份字段。
 
 import { EditorSessionSnapshot, EditorCompositionState } from '../../../corebridge/dto/EditorDtos'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
@@ -20,10 +24,12 @@ export class EditorLayoutSnapshot {
   // 字体大小（vp）。render 层做确定性命中测试时由 SujianEditor 传给 Text.fontSize
   // 和 getMeasureUtils().measureText，保证测量与渲染用同一字体度量。
   readonly fontSize: number
-  // Issue #629 评论14 第3项：contentWidth 用于行导航 resolver 身份匹配。
-  // SujianEditor 在 onAreaChange 中更新 contentWidth，刷新行布局时传给 LayoutSnapshot。
-  // 行导航命令出队时用此值判断布局版本是否匹配当前 Core snapshot。
-  readonly contentWidth: number
+  // Issue #629 评论15 第2项：编辑状态身份字段。
+  // generation + compositionGeneration 由 Core 维护，精确标识哪一次编辑状态。
+  // 行导航 resolver 用这些字段（加上 displayText）作为 layout identity，
+  // 而不是用 contentWidth（布局尺寸属于 Harmony render，不属于 Core 编辑状态）。
+  readonly generation: number
+  readonly compositionGeneration: number
 
   constructor(
     text: string,
@@ -34,7 +40,8 @@ export class EditorLayoutSnapshot {
     cursorByteOffset: number,
     revision: number,
     fontSize: number = 16,
-    contentWidth: number = 0
+    generation: number = 0,
+    compositionGeneration: number = -1
   ) {
     this.text = text
     this.selectionAnchor = selectionAnchor
@@ -44,7 +51,8 @@ export class EditorLayoutSnapshot {
     this.cursorByteOffset = cursorByteOffset
     this.revision = revision
     this.fontSize = fontSize
-    this.contentWidth = contentWidth
+    this.generation = generation
+    this.compositionGeneration = compositionGeneration
   }
 
   // 从 Core EditorSessionSnapshot 构造布局快照。
@@ -54,7 +62,8 @@ export class EditorLayoutSnapshot {
   //   compositionStart/End = preedit 在显示文本中的 UTF-8 byte 范围。
   // 无 composition 时：text = snap.text（committed text），compositionStart/End = null。
   // 保存正文仍只取 snap.text（committed text），不把 preedit 写进文件。
-  static fromEditorSnapshot(snap: EditorSessionSnapshot, fontSize?: number, contentWidth?: number): EditorLayoutSnapshot {
+  // Issue #629 评论15 第2项：不再接受 contentWidth 参数；用 generation/compositionGeneration 标识编辑状态。
+  static fromEditorSnapshot(snap: EditorSessionSnapshot, fontSize?: number): EditorLayoutSnapshot {
     const composition: EditorCompositionState | null = snap.composition
     if (composition === null || composition === undefined) {
       // 无 composition：显示文本 = committed text，compositionStart/End = null。
@@ -67,7 +76,8 @@ export class EditorLayoutSnapshot {
         snap.cursor,
         snap.revision,
         fontSize ?? 16,
-        contentWidth ?? 0
+        snap.generation ?? 0,
+        -1
       )
     }
     // 有 composition：构造临时显示文本。
@@ -101,7 +111,8 @@ export class EditorLayoutSnapshot {
       displayCaretByte,
       snap.revision,
       fontSize ?? 16,
-      contentWidth ?? 0
+      snap.generation ?? 0,
+      composition.generation ?? 0
     )
   }
 }

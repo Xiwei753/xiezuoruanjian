@@ -1,37 +1,43 @@
 // LineNavigationResolver — 行级导航解析器。
-// Issue #629 评论11 第2项 + 评论14 第3项：
+// Issue #629 评论11 第2项 + 评论14 第3项 + 评论15 第3项：
 // Up/Down/Home/End 不再在入队前读旧布局计算目标位置。
 // 行导航命令（lineUp/lineDown/lineHome/lineEnd）在 Dispatcher 唯一队列出队时
 // 通过此 resolver 基于"最新 Core snapshot + 最新行布局"计算目标。
 //
-// Issue #629 评论14 第3项：版本化 layout source。
-// - layout 不再只提供 matchesIdentity 返回 bool，而是版本化：
-//   每次 SujianEditor 新布局完成后发布新版本（versioned LayoutState）。
-//   executeLineNavigation 出队时如果 Core 已前进但 resolver 还是旧版本，
-//   不返回 STALE_LAYOUT 丢键，而是等待对应版本的 layout state 后再算目标。
-// - LineLayoutState 身份包含真正决定折行的东西：displayText + contentWidth + fontSize。
-//   cursorUtf16 不决定 lines，不拿它当行布局缓存身份。
-// - 组件被销毁/换 session 时通过 cancelWait() 显式取消等待。
+// Issue #629 评论15 第3项：彻底删除 500ms timeout。
+// - 等待只能有两个出口：SujianEditor 发布与目标编辑状态匹配的新布局；
+//   编辑器销毁/换 session 时 cancelWait()。
+// - EditorLayoutIdentity 包含 revision + generation + compositionGeneration + displayText，
+//   不再用 contentWidth/fontSize 作为身份字段（它们决定折行但不属于编辑状态身份）。
+// - 方法改为纯函数式：接收显式 state 参数，不再读取内部 mutable this.state。
+//   等待到的那一版 lines 才是真正被使用的。
 
 import { LineLayout } from '../render/editor_render_geometry'
 
-// 布局身份：标识当前 lines 对应哪个显示布局版本。
-// cursorUtf16 不决定折行，不作为身份字段（Issue #629 评论14 第3项）。
-// contentWidth + fontSize 决定折行边界。
-export interface LineLayoutIdentity {
+// Issue #629 评论15 第3项：布局身份 = 编辑状态身份。
+// revision + generation + compositionGeneration 精确对应 Core 编辑状态；
+// displayText 确保显示文本一致（composition 活跃时 committed text 与 display text 不同）。
+// contentWidth/fontSize 不在身份中——它们决定折行但不属于 Core 编辑状态身份。
+export interface EditorLayoutIdentity {
+  readonly revision: number
+  readonly generation: number
+  readonly compositionGeneration: number
   readonly displayText: string
-  readonly contentWidth: number
-  readonly fontSize: number
 }
 
-// 带身份的行布局状态。
-export interface LineLayoutState extends LineLayoutIdentity {
+// 带身份的行布局状态。contentWidth/fontSize 保留在这里，因为它们确实决定折行。
+// 但它们不由 Dispatcher 猜，也不作为 Dispatcher 请求的目标 identity。
+// SujianEditor 发布时携带当前真实 contentWidth/fontSize。
+export interface LineLayoutState extends EditorLayoutIdentity {
+  readonly contentWidth: number
+  readonly fontSize: number
   readonly lines: LineLayout[]
 }
 
 // 等待条目：当 resolver 版本落后于 Core snapshot 时，行导航命令等待新版本。
+// Issue #629 评论15 第3项：不加固定 timeout；resolve 只在匹配身份的布局发布或 cancelWait 时触发。
 interface Waiter {
-  identity: LineLayoutIdentity
+  identity: EditorLayoutIdentity
   resolve: (state: LineLayoutState | null) => void
 }
 
@@ -40,7 +46,7 @@ export class LineNavigationResolver {
   // 等待列表：executeLineNavigation 出队时如果版本落后，注册 waiter 等待新布局。
   private waiters: Waiter[] = []
 
-  /** SujianEditor 在渲染结果更新后调用，同步最新行布局（带身份）。传 null 清空。 */
+  /** SujianEditor 在渲染结果更新后调用，发布最新行布局（带身份）。传 null 清空。 */
   updateLayout(state: LineLayoutState | null): void {
     this.state = state
     // 唤醒匹配的 waiters
@@ -50,36 +56,25 @@ export class LineNavigationResolver {
   }
 
   /**
-   * Issue #629 评论14 第3项：等待匹配身份的 layout state。
+   * Issue #629 评论15 第3项：等待匹配编辑状态身份的 layout state。
    * 如果当前 state 已匹配 identity，立即返回；否则注册 waiter 等待。
    * 返回 Promise<LineLayoutState | null>，null 表示被取消（组件销毁/换 session）。
    *
    * 不加固定毫秒 timeout，也不退回入队前算目标。
+   * 等待只能有两个出口：
+   * 1. SujianEditor 发布与目标编辑状态匹配的新布局；
+   * 2. 编辑器销毁/换 session 时 cancelWait()。
    */
-  waitForLayout(identity: LineLayoutIdentity, timeoutMs: number = 500): Promise<LineLayoutState | null> {
+  waitForLayout(identity: EditorLayoutIdentity): Promise<LineLayoutState | null> {
     // 检查当前 state 是否已匹配
     if (this.state !== null && this.matchesIdentity(this.state, identity)) {
       return Promise.resolve(this.state)
     }
 
-    // 注册 waiter
+    // 注册 waiter（不设 timeout）
     return new Promise<LineLayoutState | null>((resolve) => {
       const waiter: Waiter = { identity, resolve }
       this.waiters.push(waiter)
-
-      // 超时后取消等待（返回 null，调用方用当前最新 snapshot 兜底）
-      const timer: number = setTimeout(() => {
-        this.removeWaiter(waiter)
-        resolve(null)
-      }, timeoutMs) as unknown as number
-
-      // 清理 timer 的辅助：waiter resolve 后 clearTimeout
-      const originalResolve = waiter.resolve
-      const wrappedResolve = (state: LineLayoutState | null): void => {
-        clearTimeout(timer)
-        originalResolve(state)
-      }
-      waiter.resolve = wrappedResolve
     })
   }
 
@@ -113,39 +108,53 @@ export class LineNavigationResolver {
   }
 
   /**
-   * 验证给定 state 是否匹配 identity。
-   * 身份 = displayText + contentWidth + fontSize（不包含 cursorUtf16，因为 cursor 不决定折行）。
+   * 验证给定 state 是否匹配编辑状态身份。
+   * 身份 = revision + generation + compositionGeneration + displayText。
    */
-  private matchesIdentity(state: LineLayoutState, identity: LineLayoutIdentity): boolean {
-    return state.displayText === identity.displayText
-      && state.contentWidth === identity.contentWidth
-      && state.fontSize === identity.fontSize
+  private matchesIdentity(state: LineLayoutState, identity: EditorLayoutIdentity): boolean {
+    return state.revision === identity.revision
+      && state.generation === identity.generation
+      && state.compositionGeneration === identity.compositionGeneration
+      && state.displayText === identity.displayText
   }
 
-  /** 返回当前行布局（只读引用）。state 为 null 时返回空数组。 */
-  getLines(): LineLayout[] {
-    return this.state === null ? [] : this.state.lines
+  // Issue #629 评论15 第3项：所有方法改为纯函数式，接收显式 state 参数。
+  // 不再读取内部 mutable this.state，等待到的那一版 lines 才是真正被使用的。
+
+  /** 指定行的行首 UTF-16 offset。行号越界时返回 0。 */
+  static getLineStart(state: LineLayoutState, lineIndex: number): number {
+    if (lineIndex < 0 || lineIndex >= state.lines.length) {
+      return 0
+    }
+    return state.lines[lineIndex].startUtf16
   }
 
-  /** 找当前光标 UTF-16 offset 所在行号。返回 -1 表示无行信息。 */
-  getCurrentLineIndex(cursorUtf16: number): number {
-    const lines = this.getLines()
-    if (lines.length === 0) {
+  /** 指定行的行末 UTF-16 offset。行号越界时返回 0。 */
+  static getLineEnd(state: LineLayoutState, lineIndex: number): number {
+    if (lineIndex < 0 || lineIndex >= state.lines.length) {
+      return 0
+    }
+    return state.lines[lineIndex].endUtf16
+  }
+
+  /** 找光标 UTF-16 offset 所在行号。返回 -1 表示无行信息。 */
+  static getCurrentLineIndex(state: LineLayoutState, cursorUtf16: number): number {
+    if (state.lines.length === 0) {
       return -1
     }
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
+    for (let i = 0; i < state.lines.length; i++) {
+      const line = state.lines[i]
       if (cursorUtf16 >= line.startUtf16 && cursorUtf16 <= line.endUtf16) {
         return i
       }
     }
     // 越界时归最后一行
-    return lines.length - 1
+    return state.lines.length - 1
   }
 
   /** 上一行行号。已在第一行时返回 -1。 */
-  getPreviousLineIndex(cursorUtf16: number): number {
-    const currentIdx = this.getCurrentLineIndex(cursorUtf16)
+  static getPreviousLineIndex(state: LineLayoutState, cursorUtf16: number): number {
+    const currentIdx = this.getCurrentLineIndex(state, cursorUtf16)
     if (currentIdx <= 0) {
       return -1
     }
@@ -153,30 +162,11 @@ export class LineNavigationResolver {
   }
 
   /** 下一行行号。已在最后一行时返回 -1。 */
-  getNextLineIndex(cursorUtf16: number): number {
-    const lines = this.getLines()
-    const currentIdx = this.getCurrentLineIndex(cursorUtf16)
-    if (currentIdx < 0 || currentIdx >= lines.length - 1) {
+  static getNextLineIndex(state: LineLayoutState, cursorUtf16: number): number {
+    const currentIdx = this.getCurrentLineIndex(state, cursorUtf16)
+    if (currentIdx < 0 || currentIdx >= state.lines.length - 1) {
       return -1
     }
     return currentIdx + 1
-  }
-
-  /** 指定行的行首 UTF-16 offset。行号越界时返回 0。 */
-  getLineStart(lineIndex: number): number {
-    const lines = this.getLines()
-    if (lineIndex < 0 || lineIndex >= lines.length) {
-      return 0
-    }
-    return lines[lineIndex].startUtf16
-  }
-
-  /** 指定行的行末 UTF-16 offset。行号越界时返回 0。 */
-  getLineEnd(lineIndex: number): number {
-    const lines = this.getLines()
-    if (lineIndex < 0 || lineIndex >= lines.length) {
-      return 0
-    }
-    return lines[lineIndex].endUtf16
   }
 }

@@ -25,7 +25,6 @@ import { EditorViewportState } from '../render/EditorViewportState'
 import { EditorViewportController } from '../render/EditorViewportController'
 import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
-import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
 
 @Component
@@ -73,9 +72,6 @@ export struct WritingScreen {
   @State sessionStartTime: number = 0
   @State adaptiveState: AdaptiveState = getAdaptiveState()
   @State editorSnapshot: EditorLayoutSnapshot | null = null
-  // Issue #629 评论14 第3项：当前内容宽度，由 SujianEditor 回调更新。
-  // 用于构造 EditorLayoutSnapshot 时传递 contentWidth（行导航 resolver 身份匹配）。
-  @State contentWidthForSnapshot: number = 0
   // Issue #629 评论14 第1项：宽屏双栏模式下的目录数据。
   // WritingScreen 在宽屏模式下持有 ChapterTreePane，需要加载项目树。
   @State volumeTrees: VolumeTree[] = []
@@ -86,7 +82,6 @@ export struct WritingScreen {
   @State currentViewport: EditorViewportState | null = null
 
   private bridge: IWriterCoreBridge = getBridge()
-  private projectBridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
   private autoSaveObserver: AutoSaveLifecycleObserver | null = null
@@ -156,7 +151,7 @@ export struct WritingScreen {
     // Core 已 Applied 只是平台 patch 失败时 recovery 后 editResult=本次 result.data，仍按 contentDelta 更新。
     this.coordinator.setStateListener((update: EditorStateUpdate) => {
       const snap = update.snapshot
-      self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize, self.contentWidthForSnapshot)
+      self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize)
       self.content = snap.text
       self.hasUnsavedChanges = snap.text !== self.lastSavedContent
       // 实时字数：消费 editResult.contentDelta（Core 非空白字符增量）
@@ -600,7 +595,7 @@ export struct WritingScreen {
     const host = AppNavigationHost.getInstance()
     const targetKey = `writing:${this.projectId}:${volumeId}:${chapterId}`
     await host.safeReplacePath(targetKey, () => {
-      this.navPathStack.replace({
+      this.navPathStack.replacePath({
         name: Routes.Writing,
         param: {
           chapterId: chapterId,
@@ -1051,15 +1046,6 @@ export struct WritingScreen {
           onViewportChange: (state: EditorViewportState): void => {
             this.currentViewport = state
             this.updateContinuationState()
-          },
-          // Issue #629 评论14 第3项：内容宽度变化时更新 editorSnapshot 的 contentWidth。
-          onContentWidthChange: (width: number): void => {
-            this.contentWidthForSnapshot = width
-            // 重新构造带正确 contentWidth 的 editorSnapshot（供行导航 resolver 身份匹配）。
-            const snap = this.coordinator.getSnapshot()
-            if (snap) {
-              this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, this.settings.editorFontSize, width)
-            }
           }
         })
           .width('100%')
