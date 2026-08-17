@@ -43,16 +43,14 @@ class SettingsViewModelTest {
     @Test
     fun `handleIntent UpdateSyncConfig updates uiState syncConfig`() {
         val vm = createVm()
-        val config = com.xiwei.sujian.feature.sync.data.model.SyncConfig(autoSync = true)
-        vm.handleIntent(SettingsIntent.UpdateSyncConfig(config))
+        vm.handleIntent(SettingsIntent.UpdateSyncConfig { copy(autoSync = true) })
         assertEquals(true, vm.uiState.value.syncConfig.autoSync)
     }
 
     @Test
     fun `handleIntent UpdateSyncSecrets updates uiState syncSecrets`() {
         val vm = createVm()
-        val secrets = com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "test-token")
-        vm.handleIntent(SettingsIntent.UpdateSyncSecrets(secrets))
+        vm.handleIntent(SettingsIntent.UpdateSyncSecrets { copy(token = "test-token") })
         assertEquals("test-token", vm.uiState.value.syncSecrets.token)
     }
 
@@ -88,11 +86,7 @@ class SettingsViewModelTest {
         )
         vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(experimentalFullscreenMode = true) })
         vm.handleIntent(SettingsIntent.UpdateFontSize(20f))
-        vm.handleIntent(
-            SettingsIntent.UpdateSyncConfig(
-                com.xiwei.sujian.feature.sync.data.model.SyncConfig(enabled = true),
-            ),
-        )
+        vm.handleIntent(SettingsIntent.UpdateSyncConfig { copy(enabled = true) })
         awaitUntil(
             predicate = { laboratoryValues.last().immersiveFullscreen },
             message = "laboratory state must emit the new value",
@@ -216,7 +210,7 @@ class SettingsViewModelTest {
                 autoSync = false,
                 remoteUrl = "https://unit.example/repo.git",
             )
-        vm.handleIntent(SettingsIntent.UpdateSyncConfig(config))
+        vm.handleIntent(SettingsIntent.UpdateSyncConfig { config })
         // 保存并同步必须走 SaveAndRunSync 串行事务（保存队列屏障），并结束在明确终态：
         // 未配置 → 失败；不允许绕过保存队列或停留在 RUNNING/IDLE（#592）。
         vm.handleIntent(SettingsIntent.PerformSync)

@@ -32,12 +32,7 @@ class AppSyncSettingsViewModelTest {
     @Test
     fun `UpdateSyncConfig updates uiState syncConfig`() {
         val vm = createVm()
-        val config =
-            com.xiwei.sujian.feature.sync.data.model.SyncConfig(
-                enabled = true,
-                remoteUrl = REMOTE_URL,
-            )
-        vm.handleIntent(SettingsIntent.UpdateSyncConfig(config))
+        vm.handleIntent(SettingsIntent.UpdateSyncConfig { copy(enabled = true, remoteUrl = REMOTE_URL) })
         assertEquals(true, vm.uiState.value.syncConfig.enabled)
         assertEquals(REMOTE_URL, vm.uiState.value.syncConfig.remoteUrl)
     }
@@ -45,8 +40,7 @@ class AppSyncSettingsViewModelTest {
     @Test
     fun `UpdateSyncSecrets updates uiState syncSecrets`() {
         val vm = createVm()
-        val secrets = com.xiwei.sujian.feature.sync.data.model.SyncSecrets(token = "sync-token")
-        vm.handleIntent(SettingsIntent.UpdateSyncSecrets(secrets))
+        vm.handleIntent(SettingsIntent.UpdateSyncSecrets { copy(token = "sync-token") })
         assertEquals("sync-token", vm.uiState.value.syncSecrets.token)
     }
 

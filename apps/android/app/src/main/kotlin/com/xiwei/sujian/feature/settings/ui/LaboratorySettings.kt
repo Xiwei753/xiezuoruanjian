@@ -13,18 +13,10 @@ import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
  * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
  */
 fun LazyListScope.laboratorySettingsItems(vm: SettingsViewModel) {
-    item(key = "laboratory.fullscreen_title") {
-        SettingsGroupItemContainer(isLast = false, isFirst = true) {
-            SettingsFieldRowContainer(isFirst = true, isLast = false) {
-                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_laboratory))
-            }
-        }
-    }
-
     item(key = "laboratory.fullscreen") {
         val checked by vm.immersiveFullscreenRow.collectAsStateWithLifecycle()
-        SettingsGroupItemContainer(isLast = true) {
-            SettingsFieldRowContainer(isFirst = false, isLast = true) {
+        SettingsGroupItemContainer(isLast = true, isFirst = true) {
+            SettingsFieldRowContainer(isFirst = true, isLast = true) {
                 SujianSwitchRow(
                     title = stringResource(id = R.string.lab_fullscreen_immersive),
                     checked = checked,

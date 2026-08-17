@@ -20,23 +20,11 @@ import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
  * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
  */
 fun LazyListScope.editorSettingsItems(vm: SettingsViewModel) {
-    // ── 编辑器基础分组标题 ──
-    item(key = "editor.basic_title") {
-        SettingsGroupItemContainer(isLast = false, isFirst = true) {
-            SettingsFieldRowContainer(isFirst = true, isLast = false) {
-                SettingsFieldGroupTitle(
-                    title = stringResource(id = R.string.pref_category_editor),
-                    semanticId = SujianSemanticIds.SettingsEditorSection,
-                )
-            }
-        }
-    }
-
     // 自动缩进开关
     item(key = "editor.auto_indent") {
         val checked by vm.autoIndentRow.collectAsStateWithLifecycle()
         SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+            SettingsFieldRowContainer(isFirst = true, isLast = false) {
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_auto_indent),
                     checked = checked,

@@ -34,14 +34,6 @@ import kotlinx.coroutines.withContext
  * - [ClearLogsButton]、[ExportDiagnosticsButton]：已有独立 Composable
  */
 fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
-    item(key = "diagnostics.settings_title") {
-        SettingsGroupItemContainer(isLast = false, isFirst = true) {
-            SettingsFieldRowContainer(isFirst = true, isLast = false) {
-                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_diagnostics))
-            }
-        }
-    }
-
     diagnosticsSwitchItem(
         key = "diagnostics.enabled",
         vm = vm,

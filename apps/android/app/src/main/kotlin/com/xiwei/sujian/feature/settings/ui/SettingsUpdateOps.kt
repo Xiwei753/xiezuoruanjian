@@ -12,18 +12,24 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** 更新同步配置 — 入队 SyncConfig 保存命令。 */
-internal fun SettingsViewModel.updateSyncConfig(config: com.xiwei.sujian.feature.sync.data.model.SyncConfig) {
-    _uiState.update { it.copy(syncConfig = config) }
+internal fun SettingsViewModel.updateSyncConfig(transform: SyncConfigTransform) {
+    val newConfig = _uiState.value.syncConfig.transform()
+    _uiState.update { it.copy(syncConfig = newConfig) }
     saveChannel.trySend(
-        SettingsViewModel.QueueItem.Save(SettingsSaveCommand.SyncConfig(config, ++syncConfigRevision)),
+        SettingsViewModel.QueueItem.Save(
+            SettingsSaveCommand.SyncConfig(newConfig, ++syncConfigRevision),
+        ),
     )
 }
 
 /** 更新同步凭据 — 入队 SyncSecrets 保存命令。 */
-internal fun SettingsViewModel.updateSyncSecrets(secrets: com.xiwei.sujian.feature.sync.data.model.SyncSecrets) {
-    _uiState.update { it.copy(syncSecrets = secrets) }
+internal fun SettingsViewModel.updateSyncSecrets(transform: SyncSecretsTransform) {
+    val newSecrets = _uiState.value.syncSecrets.transform()
+    _uiState.update { it.copy(syncSecrets = newSecrets) }
     saveChannel.trySend(
-        SettingsViewModel.QueueItem.Save(SettingsSaveCommand.SyncSecrets(secrets, ++syncSecretsRevision)),
+        SettingsViewModel.QueueItem.Save(
+            SettingsSaveCommand.SyncSecrets(newSecrets, ++syncSecretsRevision),
+        ),
     )
 }
 
