@@ -145,6 +145,7 @@ class LineNavigationResolver {
 }
 
 // 构造 mock navigation lines：每行 5 个字符，每字符宽 10px
+// Issue #629 评论18：LineLayout 含 breakKind + caretStops
 function mockNavLines(text) {
   const lines = []
   let start = 0
@@ -154,7 +155,9 @@ function mockNavLines(text) {
     for (let i = start; i <= end; i++) {
       stops.push({ utf16Offset: i, x: (i - start) * 10 })
     }
-    lines.push({ startUtf16: start, endUtf16: end, y: 0, height: 20, caretStops: stops })
+    const isLast = end === text.length
+    const breakKind = isLast ? 'endOfText' : 'softWrap'
+    lines.push({ startUtf16: start, endUtf16: end, y: 0, height: 20, breakKind, caretStops: stops })
     start = end
   }
   return lines

@@ -1,10 +1,16 @@
 // EditorRenderBackend — 编辑器静态渲染后端。
 // 输入只能是 EditorLayoutSnapshot。先做静态文本、选区、composition 下划线、光标和命中测试。
 // 动画层以后新增 motion 消费同一份 snapshot，不改输入层和 session 层。
+//
+// Issue #629 评论18：统一 layout source。
+// - layoutLines 返回 LineRange[]（含 breakKind：SoftWrap / HardBreak / EndOfText）
+// - toLineLayouts 返回 LineLayout[]（含 breakKind + caretStops）
+// - hitTestByPoint 返回 VisualCaretPosition（含 CaretAffinity）
+// - computeCaretRect 消费 VisualCaretPosition，不再自己扫描 cursor <= line.end
 
 import { EditorLayoutSnapshot } from './EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
-import { layoutLines, hitTestPoint } from './editor_layout_math'
+import { layoutLines, hitTestPoint, CaretAffinity, VisualCaretPosition } from './editor_layout_types'
 import {
   toLineLayouts,
   computeSelectionRects,
@@ -25,8 +31,6 @@ export interface EditorRenderResult {
   cursorUtf16: number
   revision: number
   // 静态渲染几何。render() 不填（默认空/null），renderLayout() 填。
-  // lines: 每行文本布局（含 y/height）；selectionRects: 选区背景矩形列表；
-  // caretRect: 静态光标矩形（不闪烁）；compositionUnderlineRects: composition 下划线矩形列表。
   lines: LineLayout[]
   selectionRects: SelectionRect[]
   caretRect: CaretRect | null
@@ -35,15 +39,7 @@ export interface EditorRenderResult {
 
 export class EditorRenderBackend {
   // 把 byte offset snapshot 转成 UTF-16 offset 渲染结果（ArkUI Text 用 UTF-16）。
-  // EditorLayoutSnapshot 中 selectionAnchor/selectionHead/compositionStart/compositionEnd/cursorByteOffset
-  // 均为 UTF-8 byte offset，必须经 TextOffsetMapper.utf8ToUtf16 转成 UTF-16 code unit offset 后再交给渲染层。
-  // 本方法不含几何信息（lines/selectionRects/caretRect/compositionUnderlineRects 为空/null），
-  // 用于不需要几何的场景；需要几何时用 renderLayout。
-  //
-  // #629 评论6 Part B：compositionStart/End 由 EditorLayoutSnapshot.fromEditorSnapshot
-  // 从 Core composition 状态构造（preedit 在显示文本中的 UTF-8 byte 范围）。
-  // 本方法把它们转成 UTF-16 offset，renderLayout 再用 computeCompositionUnderlineRects
-  // 计算下划线矩形。无 composition 时 compositionStart/End 为 null，下划线矩形为空。
+  // 不含几何信息（lines/selectionRects/caretRect/compositionUnderlineRects 为空/null）。
   static render(snapshot: EditorLayoutSnapshot): EditorRenderResult {
     const text = snapshot.text
     return {
@@ -67,14 +63,8 @@ export class EditorRenderBackend {
 
   // 完整静态渲染：在 render() 基础上计算行布局/选区/光标/composition 下划线几何。
   //
-  // - containerWidth: 实际容器宽度（px，来自 onAreaChange）。
-  // - textHeight: 实际文本渲染总高度（px，来自 onAreaChange）；行高 = textHeight / lines.length。
-  // - measureTextFn: 真实文本测量函数（px 单行宽度），生产由 SujianEditor 注入
-  //   getUIContext().getMeasureUtils().measureText；测试注入确定性 mock。
-  //
-  // 几何计算委托 editor_render_geometry 的纯函数，保证可单测。
-  // 折行用 measureTextFn 逐 code point 二分测宽度（与 Text 的 WordBreak.BREAK_ALL 一致）。
-  // 选区/光标/composition 下划线是静态显示能力，不是动画：不做闪烁/平滑移动/淡入淡出。
+  // Issue #629 评论18：layoutLines 返回 breakKind，toLineLayouts 把 breakKind + caretStops
+  // 一起带进 LineLayout。hitTestByPoint 返回 VisualCaretPosition。
   static renderLayout(
     snapshot: EditorLayoutSnapshot,
     containerWidth: number,
@@ -85,7 +75,7 @@ export class EditorRenderBackend {
     const text = base.text
     const lines = layoutLines(text, containerWidth, measureTextFn)
     const lineSpacingPx = lines.length > 0 ? textHeight / lines.length : 0
-    const lineLayouts = toLineLayouts(lines, lineSpacingPx)
+    const lineLayouts = toLineLayouts(lines, lineSpacingPx, text, measureTextFn)
     const selStart = Math.min(base.selectionStartUtf16, base.selectionEndUtf16)
     const selEnd = Math.max(base.selectionStartUtf16, base.selectionEndUtf16)
     const selectionRects = computeSelectionRects(text, lines, lineSpacingPx, selStart, selEnd, measureTextFn)
@@ -113,9 +103,7 @@ export class EditorRenderBackend {
     }
   }
 
-  // 命中测试：给定 UTF-16 offset，返回是否在选区内。
-  // snapshot 的 selectionAnchor/selectionHead 是 byte offset，先转成 UTF-16 offset 再与 utf16Offset 比较，
-  // 避免混用两种 offset 语义导致中文等非 ASCII 文本命中判断错位。
+  // offset 命中测试（无坐标）。
   static hitTest(snapshot: EditorLayoutSnapshot, utf16Offset: number): 'before' | 'inside' | 'after' {
     const text = snapshot.text
     const anchorUtf16 = TextOffsetMapper.utf8ToUtf16(text, snapshot.selectionAnchor)
@@ -127,17 +115,9 @@ export class EditorRenderBackend {
     return 'inside'
   }
 
-  // 坐标命中测试：给定触摸坐标 (touchX, touchY)（px，相对组件左上）和实际容器尺寸，
-  // 返回命中的 UTF-16 code unit offset。命中逻辑归本方法（Issue #629 第 5 节）。
-  //
-  // - containerWidth: 实际容器宽度（px，来自 onAreaChange）。
-  // - textHeight: 实际文本渲染总高度（px，来自 onAreaChange）；行高 = textHeight / lines.length。
-  // - measureTextFn: 真实文本测量函数（px 单行宽度），生产由 SujianEditor 注入
-  //   getUIContext().getMeasureUtils().measureText；测试注入确定性 mock。
-  //
-  // 折行用 measureTextFn 逐 code point 二分测宽度（与 Text 的 WordBreak.BREAK_ALL 一致），
-  // 不切断 surrogate pair；行号用 textHeight/lines.length 算（不依赖字体 density）。
-  // 返回的 UTF-16 offset 由 SelectionController.onTap 经 TextOffsetMapper.utf16ToUtf8 转 byte offset。
+  // 坐标命中测试：返回 VisualCaretPosition（含 CaretAffinity）。
+  // Issue #629 评论18：hitTestPoint 现在使用 buildLineCaretStops + offsetForHorizontal，
+  // 不再自己二分字符边界；返回 VisualCaretPosition 区分 soft-wrap 上下行。
   static hitTestByPoint(
     snapshot: EditorLayoutSnapshot,
     containerWidth: number,
@@ -145,7 +125,7 @@ export class EditorRenderBackend {
     touchX: number,
     touchY: number,
     measureTextFn: (s: string) => number,
-  ): number {
+  ): VisualCaretPosition {
     const text = snapshot.text
     const lines = layoutLines(text, containerWidth, measureTextFn)
     const lineSpacingPx = lines.length > 0 ? textHeight / lines.length : 0

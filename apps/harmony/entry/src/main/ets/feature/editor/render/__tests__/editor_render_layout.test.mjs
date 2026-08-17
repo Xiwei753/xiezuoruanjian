@@ -7,7 +7,7 @@
 // 运行：node --experimental-strip-types editor_render_layout.test.mjs
 
 import { strict as assert } from 'node:assert'
-import { layoutLines } from '../editor_layout_math.ts'
+import { layoutLines, LineBreakKind, CaretAffinity } from '../editor_layout_math.ts'
 import {
   toLineLayouts,
   computeSelectionRects,
@@ -39,27 +39,35 @@ test('常量: UNDERLINE_HEIGHT_PX === 2', () => {
 })
 
 // ── toLineLayouts ──
+// Issue #629 评论18：toLineLayouts 现在返回 LineLayout[]（含 breakKind + caretStops）。
 test('toLineLayouts: 空数组返回 []', () => {
-  assert.deepEqual(toLineLayouts([], 20), [])
+  assert.deepEqual(toLineLayouts([], 20, '', mockMeasure), [])
 })
-test('toLineLayouts: 单行 y=0 height=lineSpacing', () => {
-  const ls = toLineLayouts([{ start: 0, end: 3 }], 20)
-  assert.deepEqual(ls, [{ startUtf16: 0, endUtf16: 3, y: 0, height: 20 }])
+test('toLineLayouts: 单行 y=0 height=lineSpacing 含 breakKind + caretStops', () => {
+  const ls = toLineLayouts([{ start: 0, end: 3, breakKind: LineBreakKind.EndOfText }], 20, 'abc', mockMeasure)
+  assert.equal(ls.length, 1)
+  assert.equal(ls[0].startUtf16, 0)
+  assert.equal(ls[0].endUtf16, 3)
+  assert.equal(ls[0].y, 0)
+  assert.equal(ls[0].height, 20)
+  assert.equal(ls[0].breakKind, LineBreakKind.EndOfText)
+  assert.ok(Array.isArray(ls[0].caretStops))
+  assert.ok(ls[0].caretStops.length >= 2) // 至少行首 + 行尾
 })
 test('toLineLayouts: 多行 y = i * lineSpacing', () => {
-  const ls = toLineLayouts([{ start: 0, end: 2 }, { start: 2, end: 4 }, { start: 4, end: 6 }], 20)
-  assert.deepEqual(ls, [
-    { startUtf16: 0, endUtf16: 2, y: 0, height: 20 },
-    { startUtf16: 2, endUtf16: 4, y: 20, height: 20 },
-    { startUtf16: 4, endUtf16: 6, y: 40, height: 20 },
-  ])
+  const lines = layoutLines('abcdef', 25, mockMeasure)
+  const ls = toLineLayouts(lines, 20, 'abcdef', mockMeasure)
+  assert.equal(ls.length, 3)
+  assert.equal(ls[0].y, 0)
+  assert.equal(ls[1].y, 20)
+  assert.equal(ls[2].y, 40)
 })
 test('toLineLayouts: lineSpacingPx<=0 退化 y=0 height=0', () => {
-  const ls = toLineLayouts([{ start: 0, end: 2 }, { start: 2, end: 4 }], 0)
-  assert.deepEqual(ls, [
-    { startUtf16: 0, endUtf16: 2, y: 0, height: 0 },
-    { startUtf16: 2, endUtf16: 4, y: 0, height: 0 },
-  ])
+  const lines = layoutLines('abcdef', 1000, mockMeasure)
+  const ls = toLineLayouts(lines, 0, 'abcdef', mockMeasure)
+  assert.equal(ls.length, 1)
+  assert.equal(ls[0].y, 0)
+  assert.equal(ls[0].height, 0)
 })
 
 // ── computeSelectionRects ──
@@ -147,12 +155,28 @@ test('computeCaretRect: 光标在行尾（单行）', () => {
   const caret = computeCaretRect('abcdef', lines, 20, 6, mockMeasure)
   assert.deepEqual(caret, { x: 60, y: 0, width: CARET_WIDTH_PX, height: 20 })
 })
-test('computeCaretRect: 多行光标在行尾归到该行', () => {
-  // text='abcdef' 容器 25px → 3 行 [0,2)[2,4)[4,6)
-  // cursor=2 → line.end=2>=2 归到行0，x=measure('ab')=20, y=0
-  const lines = layoutLines('abcdef', 25, mockMeasure)
-  const caret = computeCaretRect('abcdef', lines, 20, 2, mockMeasure)
-  assert.deepEqual(caret, { x: 20, y: 0, width: CARET_WIDTH_PX, height: 20 })
+test('computeCaretRect: soft-wrap 边界 Upstream → 上一行尾', () => {
+  // text='abcdef' 容器 30px → 2 行 [0,3) [3,6)
+  // cursor=3 在 soft-wrap 边界：Upstream → 行0 末尾，x=measure('abc')=30, y=0
+  const lines = layoutLines('abcdef', 30, mockMeasure)
+  const caret = computeCaretRect('abcdef', lines, 20, 3, mockMeasure, CaretAffinity.Upstream)
+  assert.deepEqual(caret, { x: 30, y: 0, width: CARET_WIDTH_PX, height: 20 })
+})
+test('computeCaretRect: soft-wrap 边界 Downstream → 下一行首', () => {
+  // cursor=3 在 soft-wrap 边界：Downstream → 行1 首，x=0, y=20
+  const lines = layoutLines('abcdef', 30, mockMeasure)
+  const caret = computeCaretRect('abcdef', lines, 20, 3, mockMeasure, CaretAffinity.Downstream)
+  assert.deepEqual(caret, { x: 0, y: 20, width: CARET_WIDTH_PX, height: 20 })
+})
+test('computeCaretRect: hard break 两侧 offset 不同不靠 affinity', () => {
+  // text='a\nb' 容器 1000px → 2 行 [0,1 HardBreak] [2,3 EndOfText]
+  // cursor=1 → 行0 末尾，x=measure('a')=10
+  const lines = layoutLines('a\nb', 1000, mockMeasure)
+  const caret = computeCaretRect('a\nb', lines, 20, 1, mockMeasure)
+  assert.deepEqual(caret, { x: 10, y: 0, width: CARET_WIDTH_PX, height: 20 })
+  // cursor=2 → 行1 首，x=0
+  const caret2 = computeCaretRect('a\nb', lines, 20, 2, mockMeasure)
+  assert.deepEqual(caret2, { x: 0, y: 20, width: CARET_WIDTH_PX, height: 20 })
 })
 test('computeCaretRect: 多行光标在行中归到对应行', () => {
   // cursor=3 → line.end=4>=3 归到行1，x=measure(text.substring(2,3))=measure('c')=10, y=20

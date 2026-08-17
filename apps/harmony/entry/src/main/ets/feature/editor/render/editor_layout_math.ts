@@ -1,27 +1,57 @@
-// editor_layout_math.ts — 编辑器折行与命中测试的纯数学模块。
+// editor_layout_math.ts — 编辑器折行、命中测试与布局类型的纯数学模块。
 //
+// Issue #629 评论18：统一 layout source。
+// 所有 offset↔x 算法、行导航、命中测试、光标渲染共享同一套类型和纯函数。
 // 不依赖 ArkUI / EditorLayoutSnapshot，只依赖 string/number/Array。
-// 生产由 EditorRenderBackend.hitTestByPoint 调用：
-//   - measureTextFn 注入 @ohos.measure 的真实文本测量（返回 px 单行宽度）；
-//   - containerWidth 注入 onAreaChange 的实际容器宽度（px）；
-//   - lineSpacingPx 注入 onAreaChange 实际渲染高度 / lines.length（px）。
-// 测试由 Node 单测（editor_layout_math.test.mjs）注入确定性 mock measureFn，
-// 验证折行/命中的数学性质（多行、自动折行、Unicode 坐标命中、surrogate pair 不切断）。
+//
+// 三个核心概念：
+// 1. LineRange + LineBreakKind：一行的 UTF-16 code unit 范围 + 折行类型。
+// 2. CaretStop：行内 code point 边界 + x 坐标。由 buildLineCaretStops() 生成。
+// 3. VisualCaretPosition + CaretAffinity：soft-wrap 边界上的视觉光标位置。
 //
 // 所有 offset 是 UTF-16 code unit offset（ArkTS string.length 语义）。
-// 折行按 UTF-16 code point 推进，不切断 surrogate pair（emoji 等 U+10000+ 字符）。
-// 与 SujianEditor Text 组件的 WordBreak.BREAK_ALL（任意 code point 可断行）一致。
 
-/** 一行的 UTF-16 code unit 半开区间 [start, end)。 */
+// ── 类型定义 ──
+
+/** 行结束类型。 */
+export const LineBreakKind = {
+  SoftWrap: 'softWrap',
+  HardBreak: 'hardBreak',
+  EndOfText: 'endOfText'
+} as const
+export type LineBreakKind = typeof LineBreakKind[keyof typeof LineBreakKind]
+
+/** soft-wrap 边界上的光标亲和性。 */
+export const CaretAffinity = {
+  Upstream: 'upstream',
+  Downstream: 'downstream'
+} as const
+export type CaretAffinity = typeof CaretAffinity[keyof typeof CaretAffinity]
+
+/** 带亲和性的光标位置。 */
+export interface VisualCaretPosition {
+  readonly utf16Offset: number
+  readonly affinity: CaretAffinity
+}
+
+/** 一行的 UTF-16 code unit 范围 + 折行类型。 */
 export interface LineRange {
   readonly start: number
   readonly end: number
+  readonly breakKind: LineBreakKind
 }
+
+/** 行内光标停靠点：code point 边界 + 对应 x 坐标（px）。 */
+export interface CaretStop {
+  readonly utf16Offset: number
+  readonly x: number
+}
+
+// ── 纯函数 ──
 
 /**
  * 返回 code unit index i 后的下一个 code point 边界。
- * 若 i 处是 high surrogate (0xD800-0xDBFF) 且 i+1 是 low surrogate (0xDC00-0xDFFF)，
- * 返回 i+2（跳过代理对）；否则返回 i+1。i >= text.length 时返回 text.length。
+ * surrogate pair 推进 2，否则推进 1。i >= text.length 时返回 text.length。
  */
 export function nextCodePointBoundary(text: string, i: number): number {
   const n = text.length
@@ -42,19 +72,14 @@ export function nextCodePointBoundary(text: string, i: number): number {
 }
 
 /**
- * 折行：按 UTF-16 code point 推进，对每行二分找最大 end 使
- * measureTextFn(text.substring(start, end)) <= containerWidth。
+ * 折行：先按 `\n` 拆硬换行 segment，再对每个 segment 做软折行。
+ * `\n` 本身不进可见 line range；空行产生空行。
  *
- * 性质：
- * - 不切断 surrogate pair：每行 end 总落在 code point 边界。
- * - 单个 code point 宽度超过 containerWidth 时独占一行（至少推进一个 code point）。
- * - containerWidth <= 0 时每行一个 code point（退化但确定）。
- * - 空文本返回 []。
- * - 行区间首尾相接：lines[k].end === lines[k+1].start，lines[0].start === 0，
- *   lines[last].end === text.length。
- *
- * measureTextFn 必须满足：measureTextFn('') === 0，且子串宽度随长度单调不减
- * （用于二分正确性）。生产用 @ohos.measure.measureText 满足此性质。
+ * - 空文本返回 [{ start: 0, end: 0, breakKind: EndOfText }]
+ * - 硬换行时不共享 offset：上一行 end 在 `\n` 前，下一行 start = end + 1。
+ * - 软折行时共享 offset：{ start: a, end: b, SoftWrap } / { start: b, end: c, EndOfText }
+ * - surrogate pair 不切断。
+ * - containerWidth <= 0 时每个 code point 一行（退化但确定）。
  */
 export function layoutLines(
   text: string,
@@ -63,56 +88,160 @@ export function layoutLines(
 ): LineRange[] {
   const n = text.length
   if (n === 0) {
-    return []
+    return [{ start: 0, end: 0, breakKind: LineBreakKind.EndOfText }]
   }
-  // 预计算所有 code point 边界（code unit index），二分在这些边界上做。
-  const bounds: number[] = [0]
-  let i = 0
-  while (i < n) {
-    i = nextCodePointBoundary(text, i)
-    bounds.push(i)
-  }
-  // bounds = [0, b1, b2, ..., n]，共 (codePointCount + 1) 个元素。
-  const lines: LineRange[] = []
-  let startIdx = 0
-  const lastIdx = bounds.length - 1
-  while (startIdx < lastIdx) {
-    const lineStart = bounds[startIdx]
-    // 二分找最大 endIdx (startIdx < endIdx <= lastIdx) 使
-    // measureTextFn(text.substring(lineStart, bounds[endIdx])) <= containerWidth。
-    // 至少放一个 code point：bestIdx = startIdx + 1（即使宽度超 containerWidth 也强制放）。
-    let lo = startIdx + 1
-    let hi = lastIdx
-    let bestIdx = startIdx + 1
-    while (lo <= hi) {
-      const mid = Math.floor((lo + hi) / 2)
-      const w = measureTextFn(text.substring(lineStart, bounds[mid]))
-      if (w <= containerWidth) {
-        bestIdx = mid
-        lo = mid + 1
-      } else {
-        hi = mid - 1
-      }
+
+  // 按 \n 拆硬换行 segment
+  const segments: { start: number; end: number }[] = []
+  let segStart = 0
+  for (let i = 0; i < n; i++) {
+    if (text.charCodeAt(i) === 0x0A) {
+      segments.push({ start: segStart, end: i })
+      segStart = i + 1
     }
-    lines.push({ start: lineStart, end: bounds[bestIdx] })
-    startIdx = bestIdx
   }
+  segments.push({ start: segStart, end: n })
+
+  const lines: LineRange[] = []
+  const allBounds: number[] = [0]
+  let bi = 0
+  while (bi < n) {
+    bi = nextCodePointBoundary(text, bi)
+    allBounds.push(bi)
+  }
+
+  for (let s = 0; s < segments.length; s++) {
+    const seg = segments[s]
+    const isLastSegment = s === segments.length - 1
+
+    if (seg.start === seg.end) {
+      lines.push({ start: seg.start, end: seg.end, breakKind: isLastSegment ? LineBreakKind.EndOfText : LineBreakKind.HardBreak })
+      continue
+    }
+
+    const segBounds: number[] = allBounds.filter(b => b >= seg.start && b <= seg.end)
+    if (segBounds.length === 0) {
+      continue
+    }
+
+    let pos = 0
+    const lastPos = segBounds.length - 1
+
+    while (pos < lastPos) {
+      const lineStart = segBounds[pos]
+      let lo = pos + 1
+      let hi = lastPos
+      let bestIdx = pos + 1
+      while (lo <= hi) {
+        const mid = Math.floor((lo + hi) / 2)
+        const w = measureTextFn(text.substring(lineStart, segBounds[mid]))
+        if (w <= containerWidth) {
+          bestIdx = mid
+          lo = mid + 1
+        } else {
+          hi = mid - 1
+        }
+      }
+      const lineEnd = segBounds[bestIdx]
+      const isLastLineInSeg = bestIdx === lastPos
+      const breakKind: LineBreakKind = isLastLineInSeg
+        ? (isLastSegment ? LineBreakKind.EndOfText : LineBreakKind.HardBreak)
+        : LineBreakKind.SoftWrap
+      lines.push({ start: lineStart, end: lineEnd, breakKind })
+      pos = bestIdx
+    }
+  }
+
   return lines
 }
 
 /**
- * 命中测试：根据 touchY 算行号，在该行内根据 touchX 找最接近的 code point 边界。
- *
- * 性质：
- * - lines 为空返回 0。
- * - touchY < 0 clamp 到第 0 行；touchY 超过最后一行 clamp 到最后一行。
- * - touchX < 0 clamp 到行首；touchX 超过行宽 clamp 到行尾。
- * - 返回 UTF-16 code unit offset，总落在 code point 边界（不切断 surrogate pair）。
- * - lineSpacingPx <= 0 时按第 0 行处理（仅 x 方向命中）。
- *
- * lineSpacingPx 是每行实际高度（px），由调用方用实际渲染高度 / lines.length 算出，
- * 不依赖字体 density，保证与 Text 组件实际渲染行高一致。
+ * 给定一行文本和 measureTextFn，生成该行所有 code point 边界的 caret stops。
  */
+export function buildLineCaretStops(
+  text: string,
+  line: { start: number; end: number },
+  measureTextFn: (s: string) => number,
+): CaretStop[] {
+  const stops: CaretStop[] = []
+  let i = line.start
+  while (i <= line.end) {
+    const x = measureTextFn(text.substring(line.start, i))
+    stops.push({ utf16Offset: i, x })
+    if (i >= line.end) {
+      break
+    }
+    i = nextCodePointBoundary(text, i)
+  }
+  return stops
+}
+
+/** 纯函数：给定 caret stops 和 UTF-16 offset，返回该 offset 的 x 坐标（px）。 */
+export function horizontalForOffset(stops: CaretStop[], utf16Offset: number): number {
+  if (stops.length === 0) {
+    return 0
+  }
+  let lo = 0, hi = stops.length - 1, bestIdx = 0
+  let bestDist = Math.abs(stops[0].utf16Offset - utf16Offset)
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2)
+    const dist = Math.abs(stops[mid].utf16Offset - utf16Offset)
+    if (dist < bestDist || (dist === bestDist && stops[mid].utf16Offset <= utf16Offset)) {
+      bestDist = dist
+      bestIdx = mid
+    }
+    if (stops[mid].utf16Offset < utf16Offset) { lo = mid + 1 }
+    else if (stops[mid].utf16Offset > utf16Offset) { hi = mid - 1 }
+    else { break }
+  }
+  return stops[bestIdx].x
+}
+
+/** 纯函数：给定 caret stops 和 x 坐标，返回最近的 UTF-16 code unit offset。 */
+export function offsetForHorizontal(stops: CaretStop[], x: number): number {
+  if (stops.length === 0) {
+    return 0
+  }
+  let lo = 0, hi = stops.length - 1, bestIdx = 0
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (stops[mid].x <= x) { bestIdx = mid; lo = mid + 1 }
+    else { hi = mid - 1 }
+  }
+  if (bestIdx + 1 < stops.length) {
+    const leftX = stops[bestIdx].x
+    const rightX = stops[bestIdx + 1].x
+    if (x - leftX <= rightX - x) {
+      return stops[bestIdx].utf16Offset
+    }
+    return stops[bestIdx + 1].utf16Offset
+  }
+  return stops[bestIdx].utf16Offset
+}
+
+/** 纯函数：根据 UTF-16 offset 和 lines 的 breakKind，返回 visual line index。 */
+export function resolveVisualLineIndex(
+  lines: LineRange[],
+  position: { utf16Offset: number; affinity: CaretAffinity }
+): number {
+  if (lines.length === 0) {
+    return 0
+  }
+  const { utf16Offset: offset, affinity } = position
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (offset >= line.start && offset < line.end) { return i }
+    if (offset === line.end) {
+      if (line.breakKind === LineBreakKind.SoftWrap) {
+        return affinity === CaretAffinity.Upstream ? i : i + 1
+      }
+      return i
+    }
+  }
+  return lines.length - 1
+}
+
+/** 命中测试：根据 touchX/touchY 找命中的 UTF-16 offset + CaretAffinity。 */
 export function hitTestPoint(
   text: string,
   lines: LineRange[],
@@ -120,99 +249,23 @@ export function hitTestPoint(
   touchX: number,
   touchY: number,
   measureTextFn: (s: string) => number,
-): number {
+): VisualCaretPosition {
   if (lines.length === 0) {
-    return 0
+    return { utf16Offset: 0, affinity: CaretAffinity.Downstream }
   }
-  // 行号
-  let lineIndex: number
-  if (lineSpacingPx > 0) {
-    lineIndex = Math.floor(touchY / lineSpacingPx)
-  } else {
-    lineIndex = 0
-  }
-  if (lineIndex < 0) {
-    lineIndex = 0
-  }
-  if (lineIndex > lines.length - 1) {
-    lineIndex = lines.length - 1
-  }
+  let lineIndex = lineSpacingPx > 0 ? Math.floor(touchY / lineSpacingPx) : 0
+  if (lineIndex < 0) { lineIndex = 0 }
+  if (lineIndex > lines.length - 1) { lineIndex = lines.length - 1 }
+
   const line = lines[lineIndex]
-  if (line.end <= line.start) {
-    return line.start
-  }
-  // 预计算该行 code point 边界
-  const bounds: number[] = [line.start]
-  let i = line.start
-  while (i < line.end) {
-    const next = nextCodePointBoundary(text, i)
-    const clamped = next > line.end ? line.end : next
-    bounds.push(clamped)
-    i = clamped
-  }
-  // bounds = [line.start, ..., line.end]，该行内 code point 边界。
-  // 二分找最大 idx 使 measureTextFn(text.substring(line.start, bounds[idx])) <= touchX。
-  let lo = 1
-  let hi = bounds.length - 1
-  let bestIdx = 0
-  while (lo <= hi) {
-    const mid = Math.floor((lo + hi) / 2)
-    const w = measureTextFn(text.substring(line.start, bounds[mid]))
-    if (w <= touchX) {
-      bestIdx = mid
-      lo = mid + 1
-    } else {
-      hi = mid - 1
-    }
-  }
-  // bestIdx 是使左边界宽度 <= touchX 的最大边界。
-  // 候选：bounds[bestIdx]（左边界，宽度 <= touchX）和 bounds[bestIdx+1]（右边界，宽度 > touchX 或行尾）。
-  // 选离 touchX 更近的边界。
-  if (bestIdx + 1 < bounds.length) {
-    const leftOffset = bounds[bestIdx]
-    const rightOffset = bounds[bestIdx + 1]
-    const leftW = bestIdx === 0 ? 0 : measureTextFn(text.substring(line.start, leftOffset))
-    const rightW = measureTextFn(text.substring(line.start, rightOffset))
-    if (touchX - leftW <= rightW - touchX) {
-      return leftOffset
-    }
-    return rightOffset
-  }
-  return bounds[bestIdx]
-}
+  const stops = buildLineCaretStops(text, line, measureTextFn)
+  const offset = offsetForHorizontal(stops, touchX)
 
-// Issue #629 评论17 第4项：caret stop 生成下沉到 editor_layout_math.ts。
-// 与 hitTestPoint 共享同一套 code point 边界算法，鼠标 hit-test 和键盘垂直导航
-// 吃同一份算法，不两套折行/测宽。
-// 每个 code point 边界对应一个 { utf16Offset, x } 停靠点，
-// 供 LineNavigationResolver.getCaretX/getNearestOffsetAtX 消费。
-
-/** 行内光标停靠点：code point 边界 + 对应 x 坐标（px）。 */
-export interface CaretStop {
-  readonly utf16Offset: number
-  readonly x: number
-}
-
-/**
- * 给定一行文本和 measureTextFn，生成该行所有 code point 边界的 caret stops。
- * 每个 stop 包含 code point 边界的 UTF-16 offset 和从行首到该 offset 的测量宽度（px）。
- * 不切断 surrogate pair（emoji 等 U+10000+ 字符的两个 code unit 算一个 stop）。
- */
-export function buildLineCaretStops(
-  text: string,
-  line: LineRange,
-  measureTextFn: (s: string) => number,
-): CaretStop[] {
-  const stops: CaretStop[] = []
-  let i = line.start
-  while (i <= line.end) {
-    const x = measureTextFn(text.substring(line.start, i))
-    stops.push({ utf16Offset: i, x: x })
-    if (i >= line.end) {
-      break
-    }
-    // 下一个 code point 边界（不切断 surrogate pair）
-    i = nextCodePointBoundary(text, i)
+  let affinity = CaretAffinity.Downstream
+  if (offset === line.end && line.breakKind === LineBreakKind.SoftWrap) {
+    const lineY = lineIndex * lineSpacingPx
+    const lineMidY = lineY + lineSpacingPx / 2
+    affinity = touchY < lineMidY ? CaretAffinity.Upstream : CaretAffinity.Downstream
   }
-  return stops
+  return { utf16Offset: offset, affinity }
 }

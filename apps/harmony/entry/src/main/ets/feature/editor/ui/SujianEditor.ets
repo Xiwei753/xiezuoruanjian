@@ -41,8 +41,8 @@ import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
-import { LineNavigationResolver, LineLayoutState, NavigationLine, LineCaretStop } from '../selection/LineNavigationResolver'
-import { buildLineCaretStops } from '../render/editor_layout_math'
+import { LineNavigationResolver, LineLayoutState, NavigationLine } from '../selection/LineNavigationResolver'
+import type { VisualCaretPosition, CaretAffinity, CaretStop } from '../render/editor_layout_math'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { KeyboardInputService, PlatformKeyEvent, SemanticKeyCommand } from '../../../platform/input/KeyboardInputService'
 import { PointerInputService, PlatformPointerEvent } from '../../../platform/input/PointerInputService'
@@ -213,18 +213,10 @@ export struct SujianEditor {
       // executeLineNavigation 出队时验证此身份与当前 Core snapshot 匹配才用 lines 算目标。
       // Issue #629 评论17 第4项：caret stop 生成下沉到 editor_layout_math.ts。
       // 与 hitTestPoint 共享同一套 code point 边界算法，不两套折行/测宽。
-      const navigationLines: NavigationLine[] = []
-      for (const ll of result.lines) {
-        const lineRange = { start: ll.startUtf16, end: ll.endUtf16 }
-        const stops: LineCaretStop[] = buildLineCaretStops(result.text, lineRange, measureTextFn)
-        navigationLines.push({
-          startUtf16: ll.startUtf16,
-          endUtf16: ll.endUtf16,
-          y: ll.y,
-          height: ll.height,
-          caretStops: stops
-        })
-      }
+      // Issue #629 评论18：不再需要手动拼 NavigationLine。
+      // EditorRenderBackend.renderLayout() 已返回 LineLayout[]（含 breakKind + caretStops），
+      // NavigationLine = LineLayout（类型别名），直接使用 result.lines 即可。
+      const navigationLines: NavigationLine[] = result.lines
       const layoutState: LineLayoutState = {
         revision: snap.revision,
         generation: snap.generation,
@@ -238,14 +230,11 @@ export struct SujianEditor {
     }
   }
 
-  // 命中测试：给定触摸/鼠标坐标 (px, 相对内容左上)，返回命中的 UTF-16 code unit offset。
-  // 坐标已扣除滚动偏移（onTouch/onMouse 给的是相对组件左上的坐标，内容在 Scroll 里滚动，
-  // 需要加上 scrollOffset 才是内容坐标系）。但 ArkUI Touch/Mouse 事件的 x/y 是相对组件左上，
-  // Scroll 滚动后内容偏移，hitTestByPoint 期望内容坐标系坐标。
-  // 此处用 scroller.currentOffset() 获取当前滚动偏移，把事件坐标加上偏移转成内容坐标。
-  private hitTestContent(contentX: number, contentY: number): number {
+  // Issue #629 评论18：命中测试返回 VisualCaretPosition（含 CaretAffinity）。
+  // soft-wrap 边界上半点击返回 Upstream（上一行尾），下半返回 Downstream（下一行首）。
+  private hitTestContent(contentX: number, contentY: number): VisualCaretPosition {
     if (!this.snapshot || !this.renderResult || this.contentWidth <= 0) {
-      return 0
+      return { utf16Offset: 0, affinity: CaretAffinity.Downstream }
     }
     const snap = this.snapshot
     const measureUtils = this.getUIContext().getMeasureUtils()
@@ -376,21 +365,22 @@ export struct SujianEditor {
     const ev: PlatformPointerEvent = this.pointerService.normalizeMouseEvent(raw)
     // 把视口坐标转成内容坐标。
     const contentCoord: [number, number] = this.viewportToContent(ev.x, ev.y)
-    const hitUtf16: number = this.hitTestContent(contentCoord[0], contentCoord[1])
+    // Issue #629 评论18：hitTestContent 返回 VisualCaretPosition。
+    const hitPos: VisualCaretPosition = this.hitTestContent(contentCoord[0], contentCoord[1])
     switch (ev.action) {
       case 'down':
         if (ev.button === 0) {
-          // 左键按下：记 anchor，开始 potential drag。
-          this.dragAnchorUtf16 = hitUtf16
+          // 左键按下：记 anchor position，开始 potential drag。
+          this.dragAnchorUtf16 = hitPos.utf16Offset
           this.isDragging = true
           // 先设光标（单击位置）；move 时改 drag select。经 dispatcher 派发保证串行。
-          dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: hitUtf16 })
+          dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: hitPos.utf16Offset })
         }
         break
       case 'move':
         if (this.isDragging) {
           // 拖动选区：anchor 不变，head 跟随当前位置。经 dispatcher 派发。
-          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: this.dragAnchorUtf16, utf16Head: hitUtf16 })
+          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: this.dragAnchorUtf16, utf16Head: hitPos.utf16Offset })
         }
         break
       case 'up':
@@ -423,7 +413,8 @@ export struct SujianEditor {
     const touch = event.touches[0]
     // 把视口坐标转成内容坐标。
     const contentCoord: [number, number] = this.viewportToContent(touch.x, touch.y)
-    const hitUtf16: number = this.hitTestContent(contentCoord[0], contentCoord[1])
+    // Issue #629 评论18：hitTestContent 返回 VisualCaretPosition。
+    const hitPos: VisualCaretPosition = this.hitTestContent(contentCoord[0], contentCoord[1])
 
     // 笔事件识别：toolType 非 0（TIP=0 是手指，ERASER=1 是橡皮擦，其他是笔尖）。
     // 由 StylusInputService 归一化后按触控选择/书写区交互处理，原始 stylus event 不进 Core。
@@ -436,23 +427,23 @@ export struct SujianEditor {
     switch (event.type) {
       case TouchType.Down:
         // 按下：记 anchor，开始 potential drag。
-        this.dragAnchorUtf16 = hitUtf16
+        this.dragAnchorUtf16 = hitPos.utf16Offset
         this.isDragging = true
         break
       case TouchType.Move:
         // 拖动选区：anchor 不变，head 跟随当前位置。经 dispatcher 派发。
-        if (this.isDragging && this.dragAnchorUtf16 !== hitUtf16) {
-          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: this.dragAnchorUtf16, utf16Head: hitUtf16 })
+        if (this.isDragging && this.dragAnchorUtf16 !== hitPos.utf16Offset) {
+          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: this.dragAnchorUtf16, utf16Head: hitPos.utf16Offset })
         }
         break
       case TouchType.Up:
         if (this.isDragging) {
-          if (this.dragAnchorUtf16 === hitUtf16) {
+          if (this.dragAnchorUtf16 === hitPos.utf16Offset) {
             // 单击（down 和 up 同位置）：只经 dispatcher 发一次 selection（Part D：删除重复 onSelectionTap）。
-            dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: hitUtf16 })
+            dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: hitPos.utf16Offset })
             // 通知 IME 当前选区（光标位置）
             if (this.harmonyImeConnection) {
-              this.harmonyImeConnection.notifySelection(hitUtf16, hitUtf16).then(() => {})
+              this.harmonyImeConnection.notifySelection(hitPos.utf16Offset, hitPos.utf16Offset).then(() => {})
             }
           }
           // 拖动选区（anchor != head）已在 Move 时通过 dragSelect 派发，Up 时保持。
