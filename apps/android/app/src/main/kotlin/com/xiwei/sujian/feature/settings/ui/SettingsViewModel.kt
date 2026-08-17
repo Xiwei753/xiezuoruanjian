@@ -213,6 +213,77 @@ class SettingsViewModel(
                 ),
             )
 
+    // #630 评论15 项2：行级状态投影 — 每个 Lazy item 只 collect 自己那份最小字段，
+    // 避免任一字段变化导致同分类所有可见 item 重组。
+    // 统一 helper：selector 从 SettingsUiState 提取 T，distinctUntilChanged 过滤重复。
+    private fun <T> rowFlow(
+        initial: T,
+        selector: (SettingsUiState) -> T,
+    ): StateFlow<T> =
+        uiState.map(selector).distinctUntilChanged()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, initial)
+
+    // ── Appearance 行级 ──
+    val appearanceModeRow =
+        rowFlow(_uiState.value.settings.appearanceMode) { it.settings.appearanceMode }
+    val colorSourceRow =
+        rowFlow(_uiState.value.settings.colorSource) { it.settings.colorSource }
+    val fontSizeRow = rowFlow(_uiState.value.fontSize) { it.fontSize }
+    val lineSpacingRow =
+        rowFlow(_uiState.value.settings.editorLineSpacingMultiplier) { it.settings.editorLineSpacingMultiplier }
+
+    // ── Editor 行级 ──
+    val autoIndentRow =
+        rowFlow(_uiState.value.settings.autoIndentEnabled) { it.settings.autoIndentEnabled }
+    val autoIndentWidthRow =
+        rowFlow(_uiState.value.settings.autoIndentWidth) { it.settings.autoIndentWidth }
+    val typingAnimationRow =
+        rowFlow(_uiState.value.settings.editorTypingAnimationEnabled) { it.settings.editorTypingAnimationEnabled }
+    val typingAnimationDurationRow =
+        rowFlow(_uiState.value.settings.editorTypingAnimationDurationMs) { it.settings.editorTypingAnimationDurationMs }
+    val smoothCursorRow =
+        rowFlow(_uiState.value.settings.editorSmoothCursorEnabled) { it.settings.editorSmoothCursorEnabled }
+    val smoothCursorDurationRow =
+        rowFlow(_uiState.value.settings.editorSmoothCursorDurationMs) { it.settings.editorSmoothCursorDurationMs }
+
+    // ── Save 行级 ──
+    val autoSaveRow =
+        rowFlow(_uiState.value.settings.autoSaveEnabled) { it.settings.autoSaveEnabled }
+    val autoSaveDelayRow =
+        rowFlow(_uiState.value.settings.autoSaveDelayMs) { it.settings.autoSaveDelayMs }
+
+    // ── Sync 行级 ──
+    val syncConfigRow =
+        rowFlow(_uiState.value.syncConfig) { it.syncConfig }
+    val syncSecretsRow =
+        rowFlow(_uiState.value.syncSecrets) { it.syncSecrets }
+    val syncCapabilityRow =
+        rowFlow(_uiState.value.syncCapability) { it.syncCapability }
+    val syncTestConnectionRow =
+        rowFlow(_uiState.value.testConnectionState) { it.testConnectionState }
+    val syncPerformSyncRow =
+        rowFlow(_uiState.value.performSyncState) { it.performSyncState }
+    val syncDryRunRow =
+        rowFlow(_uiState.value.dryRunState) { it.dryRunState }
+    val syncResultRow =
+        rowFlow(
+            Pair(_uiState.value.syncResult, _uiState.value.syncProfileLoadState),
+        ) { Pair(it.syncResult, it.syncProfileLoadState) }
+
+    // ── Ai 行级 ──
+    val aiEnabledRow =
+        rowFlow(_uiState.value.settings.aiEnabled) { it.settings.aiEnabled }
+
+    // ── Diagnostics 行级 ──
+    val diagnosticsEnabledRow =
+        rowFlow(_uiState.value.settings.diagnosticsEnabled) { it.settings.diagnosticsEnabled }
+    val diagnosticsVerboseRow =
+        rowFlow(_uiState.value.settings.diagnosticsVerbose) { it.settings.diagnosticsVerbose }
+
+    // ── Laboratory 行级 ──
+    val immersiveFullscreenRow =
+        rowFlow(_uiState.value.settings.experimentalFullscreenMode) { it.settings.experimentalFullscreenMode }
+
     internal sealed interface QueueItem {
         data class Save(val command: SettingsSaveCommand) : QueueItem
 

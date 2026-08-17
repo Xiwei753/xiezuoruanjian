@@ -198,11 +198,14 @@ internal fun ProjectWorkspaceScreen(
                     appState.selectChapter(edit.volumeId, edit.chapterId, chapter.title)
                     workspaceNavState.navigateToEditor(edit.projectId, edit.volumeId, edit.chapterId)
                 }
-                is ChapterSwitchResult.SaveFailed,
-                is ChapterSwitchResult.LoadFailed,
-                ChapterSwitchResult.Stale,
-                -> {
-                    // 章节保存失败/加载失败/过期时回退到作品章节树
+                // #630 评论15 项1：Stale 表示已被更新的打开请求替代，
+                // 必须零 UI 副作用直接 return，避免和新请求的导航抢位。
+                ChapterSwitchResult.Stale -> return@launch
+                // #630 评论15 项1：SaveFailed 时章节切换事务已恢复旧 session/旧 UI，
+                // 调用层不能再强制切 project + 清 chapter，保持原状态。
+                is ChapterSwitchResult.SaveFailed -> return@launch
+                // #630 评论15 项1：只有目标 LoadFailed（章节已删除）才回到该作品章节树。
+                is ChapterSwitchResult.LoadFailed -> {
                     appState.selectProject(edit.projectId, projectTitle)
                     appState.clearChapterSelection()
                     workspaceNavState.navigateToChapterTree(edit.projectId)
