@@ -15,6 +15,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
+// detekt StringLiteralDuplication：反射类名在多处 Class.forName 复用，提取为文件级常量。
+private const val SETTINGS_SURFACES_KT_CLASS_NAME = "com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt"
+
 /**
  * #630 评论 5324547885 项1：设置页三层语义结构测试。
  *
@@ -37,7 +40,7 @@ class SettingsSurfacesStructureTest {
     fun settingsFieldRowContainer_isNotSurface() {
         // SettingsFieldRowContainer 现在是纯 Box/Column，不再创建 Surface。
         // 通过反射确认 SettingsFieldRowContainer 函数存在且不包含 Surface 调用。
-        val fileClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt")
+        val fileClass = Class.forName(SETTINGS_SURFACES_KT_CLASS_NAME)
         val methods = fileClass.declaredMethods
         val hasFieldRowContainer = methods.any { it.name == "SettingsFieldRowContainer" }
         assertNotNull(
@@ -50,7 +53,7 @@ class SettingsSurfacesStructureTest {
     fun settingsFieldGroupTitle_hasNoOwnSurface() {
         // SettingsFieldGroupTitle 不再套自己的 Surface；标题属于 SettingsExpandedRowContainer
         // 的 inner High surface 内部。通过反射确认函数存在（编译通过即证明无 Surface 嵌套错误）。
-        val fileClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt")
+        val fileClass = Class.forName(SETTINGS_SURFACES_KT_CLASS_NAME)
         val methods = fileClass.declaredMethods
         val hasFieldGroupTitle = methods.any { it.name == "SettingsFieldGroupTitle" }
         assertNotNull(
@@ -62,7 +65,7 @@ class SettingsSurfacesStructureTest {
     @Test
     fun settingsExpandedRowContainer_exists() {
         // 新增的 SettingsExpandedRowContainer 函数应存在。
-        val fileClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt")
+        val fileClass = Class.forName(SETTINGS_SURFACES_KT_CLASS_NAME)
         val methods = fileClass.declaredMethods
         val hasExpandedRowContainer = methods.any { it.name == "SettingsExpandedRowContainer" }
         assertNotNull(
@@ -74,7 +77,7 @@ class SettingsSurfacesStructureTest {
     @Test
     fun settingsExpandedItemModifier_exists() {
         // LazyItemScope.settingsExpandedItemModifier 扩展函数应存在。
-        val fileClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt")
+        val fileClass = Class.forName(SETTINGS_SURFACES_KT_CLASS_NAME)
         val methods = fileClass.declaredMethods
         val hasModifier = methods.any { it.name == "settingsExpandedItemModifier" }
         assertNotNull(
@@ -223,7 +226,7 @@ class SettingsSurfacesStructureTest {
 
     @Test
     fun settingsGroupItemContainer_stillExists() {
-        val fileClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt")
+        val fileClass = Class.forName(SETTINGS_SURFACES_KT_CLASS_NAME)
         val methods = fileClass.declaredMethods
         val hasGroupItemContainer = methods.any { it.name == "SettingsGroupItemContainer" }
         assertNotNull(
@@ -236,7 +239,7 @@ class SettingsSurfacesStructureTest {
 
     @Test
     fun settingsSyncScope_isRemoved() {
-        val fileClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt")
+        val fileClass = Class.forName(SETTINGS_SURFACES_KT_CLASS_NAME)
         val methods = fileClass.declaredMethods
         val hasSyncScope = methods.any { it.name == "SettingsSyncScope" }
         assertFalse(

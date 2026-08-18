@@ -6,6 +6,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+// detekt StringLiteralDuplication：测试夹具 UUID 在多处复用，提取为文件级常量。
+private const val FIXTURE_PROJECT_UUID_9EE6701D = "9ee6701d-24f5-4716-9e9c-55f2802fd12a"
+
 /**
  * #630 评论5323353678：窄屏 LazyColumn 跨区块 key 唯一性回归测试。
  *
@@ -24,7 +27,7 @@ import org.junit.Test
 class ProjectListKeyUniquenessTest {
     @Test
     fun recentEditKey_hasRecentPrefix() {
-        val edit = makeRecentEdit("9ee6701d-24f5-4716-9e9c-55f2802fd12a")
+        val edit = makeRecentEdit(FIXTURE_PROJECT_UUID_9EE6701D)
         assertEquals(
             "recent:9ee6701d-24f5-4716-9e9c-55f2802fd12a",
             recentEditItemKey(edit),
@@ -33,7 +36,7 @@ class ProjectListKeyUniquenessTest {
 
     @Test
     fun projectItemKey_hasProjectPrefix() {
-        val summary = makeProjectSummary("9ee6701d-24f5-4716-9e9c-55f2802fd12a")
+        val summary = makeProjectSummary(FIXTURE_PROJECT_UUID_9EE6701D)
         assertEquals(
             "project:9ee6701d-24f5-4716-9e9c-55f2802fd12a",
             projectItemKey(summary),
@@ -42,7 +45,7 @@ class ProjectListKeyUniquenessTest {
 
     @Test
     fun sameProjectInBothSections_keysAreDifferent() {
-        val projectId = "9ee6701d-24f5-4716-9e9c-55f2802fd12a"
+        val projectId = FIXTURE_PROJECT_UUID_9EE6701D
         val edit = makeRecentEdit(projectId)
         val summary = makeProjectSummary(projectId)
 
