@@ -95,9 +95,10 @@ export struct SujianEditor {
   // SujianEditor 持有 renderResult，每次渲染结果更新后同步给 resolver。
   // Dispatcher 行导航命令出队时通过 resolver 读取最新行布局计算目标位置。
   private lineResolver: LineNavigationResolver = new LineNavigationResolver()
-  // Issue #629 评论18：当前 visual caret affinity（来自 SelectionController 的命中测试）。
-  // renderLayout 消费此值，保证光标在 soft-wrap 边界上渲染正确。
-  @State currentVisualCaretAffinity: CaretAffinity = CaretAffinity.Downstream
+  // Issue #629 R7：不再缓存 visual caret affinity。
+  // SelectionController.getVisualCaret(cursorUtf16) 是唯一 owner，
+  // refreshRenderLayout() 每次按当前 snapshot cursor 从 owner 取，
+  // 不再有第二份状态。
   // drag selection 状态：鼠标/触摸按下时记 anchor UTF-16 offset，move 时 drag select。
   private dragAnchorUtf16: number = -1
   private isDragging: boolean = false
@@ -110,15 +111,10 @@ export struct SujianEditor {
     if (this.dispatcher) {
       this.dispatcher.registerLineResolver(this.lineResolver)
     }
-    // Issue #629 评论18：订阅 SelectionController 的 visual caret，
-    // 用 affinity 驱动 renderLayout 光标渲染。
+    // Issue #629 R7：订阅 SelectionController visual caret 变化，只触发重新布局。
+    // 不再缓存 affinity——refreshRenderLayout() 每次从 owner 按当前 cursor 取。
     if (this.selectionController) {
-      this.selectionController.registerVisualCaretListener((pos: VisualCaretPosition | null) => {
-        if (pos !== null) {
-          this.currentVisualCaretAffinity = pos.affinity
-        } else {
-          this.currentVisualCaretAffinity = CaretAffinity.Downstream
-        }
+      this.selectionController.registerVisualCaretListener((_pos: VisualCaretPosition | null) => {
         this.refreshRenderLayout()
       })
     }
@@ -217,14 +213,21 @@ export struct SujianEditor {
       const measureTextFn = (s: string): number => {
         return measureUtils.measureText({ textContent: s, fontSize: snap.fontSize })
       }
+      // Issue #629 R7：每次从 SelectionController（唯一 owner）取当前 cursor 的 visual position。
+      // offset 不匹配时 getVisualCaret 返回默认 Downstream，
+      // 消除 snapshot 前进后旧 affinity 残留的双状态问题。
+      const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(
+        snap.text,
+        snap.cursorByteOffset,
+      )
+      const visualCaret = this.selectionController?.getVisualCaret(cursorUtf16)
+        ?? { utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream }
       const result = EditorRenderBackend.renderLayout(
         snap,
         this.contentWidth,
         this.contentHeight,
         measureTextFn,
-        // Issue #629 评论18：传入 visualCaretAffinity，
-        // 保证光标渲染与命中测试使用同一 affinity。
-        this.currentVisualCaretAffinity,
+        visualCaret.affinity,
       )
       this.renderResult = result
       this.selectionRects = result.selectionRects
@@ -403,7 +406,8 @@ export struct SujianEditor {
       case 'move':
         if (this.isDragging) {
           // 拖动选区：anchor 不变，head 跟随当前位置。经 dispatcher 派发。
-          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: this.dragAnchorUtf16, utf16Head: hitPos.utf16Offset })
+          // Issue #629 R7：鼠标拖选发完整 VisualCaretPosition（含 affinity），与触摸统一。
+          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: this.dragAnchorUtf16, head: hitPos })
         }
         break
       case 'up':

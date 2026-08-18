@@ -238,25 +238,47 @@ test('hitTestPoint: lineSpacingPx<=0 按第 0 行处理', () => {
   assert.equal(result.utf16Offset, 0)
 })
 
-// ── Issue #629 评论18：soft-wrap affinity 测试 ──
-test('hitTestPoint: soft-wrap 上半点击返回 Upstream', () => {
+// ── Issue #629 R7-C item4：soft-wrap affinity 测试 ──
+// touchY 已选定 lineIndex，命中该行 soft-wrap 末尾恒为 Upstream；下一行 start 自然 Downstream。
+test('hitTestPoint: soft-wrap 末尾 touchY 在行上半 → Upstream', () => {
   // 'abcdef' → 软折 2 行：[0,3] [3,6]，每行 20px
   const lines = layoutLines('abcdef', 30, mockMeasure)
   assert.equal(lines.length, 2)
   assert.equal(lines[0].breakKind, LineBreakKind.SoftWrap)
-  // 点击第 0 行上半区域（touchY=5，x=28 接近行尾 offset=3，x=30）
-  // offset=3 在 soft-wrap 边界：touchY<行中点(10) → Upstream
+  // touchY=5 → lineIndex=0，x=28 接近行尾 offset=3 → Upstream
   const resultUp = hitTestPoint('abcdef', lines, 20, 28, 5, mockMeasure)
   assert.equal(resultUp.utf16Offset, 3)
   assert.equal(resultUp.affinity, CaretAffinity.Upstream)
 })
-test('hitTestPoint: soft-wrap 下半点击返回 Downstream', () => {
+test('hitTestPoint: soft-wrap 末尾 touchY 在行下半仍返回 Upstream（不再按上/下半区分）', () => {
   const lines = layoutLines('abcdef', 30, mockMeasure)
-  // 点击第 0 行下半区域（touchY=15，x=28 接近行尾 offset=3）
-  // offset=3 在 soft-wrap 边界：touchY>=行中点(10) → Downstream
+  // touchY=15 → lineIndex=0（行 y=0..20），x=28 接近行尾 offset=3
+  // 命中的是第 0 行 soft-wrap 末尾 → 恒为 Upstream
   const resultDown = hitTestPoint('abcdef', lines, 20, 28, 15, mockMeasure)
   assert.equal(resultDown.utf16Offset, 3)
-  assert.equal(resultDown.affinity, CaretAffinity.Downstream)
+  assert.equal(resultDown.affinity, CaretAffinity.Upstream)
+})
+test('hitTestPoint: soft-wrap 下一行 start 返回 Downstream', () => {
+  const lines = layoutLines('abcdef', 30, mockMeasure)
+  // touchY=25 → lineIndex=1（行 y=20..40），x=5 → offset=3（第 1 行行首）
+  // 命中的是 soft-wrap 后第 1 行行首 → Downstream
+  const result = hitTestPoint('abcdef', lines, 20, 5, 25, mockMeasure)
+  assert.equal(result.utf16Offset, 3)
+  assert.equal(result.affinity, CaretAffinity.Downstream)
+})
+test('hitTestPoint: 同一 soft-wrap offset 上下半命中终点都 Upstream', () => {
+  // 回归测试：旧实现按上/下半区分导致 touchY 在下半时返回 Downstream。
+  // 新实现：touchY 已选定 lineIndex，命中该行 soft-wrap 末尾恒为 Upstream。
+  const lines = layoutLines('abcdef', 30, mockMeasure)
+  assert.equal(lines.length, 2)
+  // touchY=2 → lineIndex=0，x=30 → offset=3 → Upstream
+  const r1 = hitTestPoint('abcdef', lines, 20, 30, 2, mockMeasure)
+  assert.equal(r1.utf16Offset, 3)
+  assert.equal(r1.affinity, CaretAffinity.Upstream)
+  // touchY=18 → lineIndex=0（行 y=0..20），x=30 → offset=3 → Upstream
+  const r2 = hitTestPoint('abcdef', lines, 20, 30, 18, mockMeasure)
+  assert.equal(r2.utf16Offset, 3)
+  assert.equal(r2.affinity, CaretAffinity.Upstream)
 })
 test('hitTestPoint: hard break 两侧 offset 不同，不靠 affinity', () => {
   // 'a\nb' → [0,1 HardBreak] [2,3 EndOfText]
@@ -383,6 +405,176 @@ test('resolveVisualLineIndex: hard break offset=2 → 第 1 行（行首）', ()
   const lines = layoutLines('a\nb', 1000, mockMeasure)
   // offset=2 是 'b' 的起始，归第 1 行
   assert.equal(resolveVisualLineIndex(lines, { utf16Offset: 2, affinity: CaretAffinity.Downstream }), 1)
+})
+
+// ── Issue #629 R7-C：多换行/空行/代理对/组合字符回归测试 ──
+test('layoutLines: 连续多换行产生多个空 visual line', () => {
+  const lines = layoutLines('a\n\n\nb', 1000, mockMeasure)
+  assert.equal(lines.length, 4)
+  assert.equal(lines[0].start, 0)
+  assert.equal(lines[0].end, 1)
+  assert.equal(lines[0].breakKind, LineBreakKind.HardBreak)
+  assert.equal(lines[1].start, 2)
+  assert.equal(lines[1].end, 2)
+  assert.equal(lines[1].breakKind, LineBreakKind.HardBreak)
+  assert.equal(lines[2].start, 3)
+  assert.equal(lines[2].end, 3)
+  assert.equal(lines[2].breakKind, LineBreakKind.HardBreak)
+  assert.equal(lines[3].start, 4)
+  assert.equal(lines[3].end, 5)
+  assert.equal(lines[3].breakKind, LineBreakKind.EndOfText)
+})
+test('layoutLines: 多个硬换行段各自独立软折行', () => {
+  // 'abcdef\nghijkl' 容器 25px → 'abcdef' 软折 3 行 + 'ghijkl' 软折 3 行 = 6 行
+  const lines = layoutLines('abcdef\nghijkl', 25, mockMeasure)
+  assert.equal(lines.length, 6)
+  // 第一段: [0,2 SoftWrap] [2,4 SoftWrap] [4,6 HardBreak]
+  assert.equal(lines[0].start, 0)
+  assert.equal(lines[0].end, 2)
+  assert.equal(lines[0].breakKind, LineBreakKind.SoftWrap)
+  assert.equal(lines[1].start, 2)
+  assert.equal(lines[1].end, 4)
+  assert.equal(lines[1].breakKind, LineBreakKind.SoftWrap)
+  assert.equal(lines[2].start, 4)
+  assert.equal(lines[2].end, 6)
+  assert.equal(lines[2].breakKind, LineBreakKind.HardBreak)
+  // 第二段: [7,9 SoftWrap] [9,11 SoftWrap] [11,13 EndOfText]（文本总长 13）
+  assert.equal(lines[3].start, 7)
+  assert.equal(lines[3].end, 9)
+  assert.equal(lines[3].breakKind, LineBreakKind.SoftWrap)
+  assert.equal(lines[4].start, 9)
+  assert.equal(lines[4].end, 11)
+  assert.equal(lines[4].breakKind, LineBreakKind.SoftWrap)
+  assert.equal(lines[5].start, 11)
+  assert.equal(lines[5].end, 13)
+  assert.equal(lines[5].breakKind, LineBreakKind.EndOfText)
+})
+test('layoutLines: 代理对跨硬换行不切断', () => {
+  // '😀\n😀' → ['😀'] (offset 0-2) + ['😀'] (offset 3-5)
+  const lines = layoutLines('😀\n😀', 1000, mockMeasure)
+  assert.equal(lines.length, 2)
+  assert.equal(lines[0].start, 0)
+  assert.equal(lines[0].end, 2)
+  assert.equal(lines[0].breakKind, LineBreakKind.HardBreak)
+  assert.equal(lines[1].start, 3)
+  assert.equal(lines[1].end, 5)
+  assert.equal(lines[1].breakKind, LineBreakKind.EndOfText)
+})
+test('layoutLines: 组合字符序列硬换行正确处理', () => {
+  // e\u0301 (e + combining acute) = 2 UTF-16 units
+  const lines = layoutLines('e\u0301\nbc', 1000, mockMeasure)
+  assert.equal(lines.length, 2)
+  assert.equal(lines[0].start, 0)
+  assert.equal(lines[0].end, 2)
+  assert.equal(lines[0].breakKind, LineBreakKind.HardBreak)
+  assert.equal(lines[1].start, 3)
+  assert.equal(lines[1].end, 5)
+  assert.equal(lines[1].breakKind, LineBreakKind.EndOfText)
+})
+test('hitTestPoint: 多换行文本各行列首/尾正确命中', () => {
+  const lines = layoutLines('a\nb\nc', 1000, mockMeasure)
+  assert.equal(lines.length, 3)
+  // 第 0 行行尾
+  const r0 = hitTestPoint('a\nb\nc', lines, 20, 8, 5, mockMeasure)
+  assert.equal(r0.utf16Offset, 1)
+  // 第 1 行行首
+  const r1 = hitTestPoint('a\nb\nc', lines, 20, 5, 25, mockMeasure)
+  assert.equal(r1.utf16Offset, 2)
+  // 第 1 行行尾
+  const r1e = hitTestPoint('a\nb\nc', lines, 20, 8, 25, mockMeasure)
+  assert.equal(r1e.utf16Offset, 3)
+  // 第 2 行行首
+  const r2 = hitTestPoint('a\nb\nc', lines, 20, 5, 45, mockMeasure)
+  assert.equal(r2.utf16Offset, 4)
+})
+test('hitTestPoint: 空行行首命中正确', () => {
+  // 'a\n\nb' → [0,1 HardBreak] [2,2 HardBreak] [3,4 EndOfText]
+  const lines = layoutLines('a\n\nb', 1000, mockMeasure)
+  assert.equal(lines.length, 3)
+  // 第 1 行是空行 (start=2, end=2)，touchY=25 → lineIndex=1
+  const r = hitTestPoint('a\n\nb', lines, 20, 0, 25, mockMeasure)
+  assert.equal(r.utf16Offset, 2)
+  assert.equal(r.affinity, CaretAffinity.Downstream)
+})
+test('hitTestPoint: 空行 hit-test + caret stops 只有一个 stop', () => {
+  const lines = layoutLines('a\n\nb', 1000, mockMeasure)
+  // 空行 [2,2] 应只有一个 caret stop (offset=2, x=0)
+  const stops = buildLineCaretStops('a\n\nb', lines[1], mockMeasure)
+  assert.equal(stops.length, 1)
+  assert.equal(stops[0].utf16Offset, 2)
+  assert.equal(stops[0].x, 0)
+})
+test('hitTestPoint: soft-wrap 上一行末尾与下一行行首同一 offset 返回正确 affinity', () => {
+  // 'abcdef' 容器 30px → [0,3 SoftWrap] [3,6 EndOfText]
+  const lines = layoutLines('abcdef', 30, mockMeasure)
+  assert.equal(lines.length, 2)
+  // 命中第 0 行行尾 (lineIndex=0, offset=3) → Upstream
+  const r0 = hitTestPoint('abcdef', lines, 20, 28, 5, mockMeasure)
+  assert.equal(r0.utf16Offset, 3)
+  assert.equal(r0.affinity, CaretAffinity.Upstream)
+  // 命中第 1 行行首 (lineIndex=1, offset=3) → Downstream
+  const r1 = hitTestPoint('abcdef', lines, 20, 5, 25, mockMeasure)
+  assert.equal(r1.utf16Offset, 3)
+  assert.equal(r1.affinity, CaretAffinity.Downstream)
+})
+
+// ── Issue #629 R7-C item5：layoutLines 复杂度结构性测试 ──
+// 防止 allBounds.filter(allBounds) 模式再次出现。
+// 策略：构造大量硬换行段，验证每段只生成自身范围的 bounds。
+test('layoutLines: 大量换行段输出行数与预期一致（结构正确性）', () => {
+  // 100 个段落，每段 10 字符，容器足够宽不软折 → 100 行 HardBreak + EndOfText
+  const segs = []
+  for (let i = 0; i < 100; i++) {
+    segs.push('a'.repeat(10))
+  }
+  const text = segs.join('\n')
+  const lines = layoutLines(text, 1000, mockMeasure)
+  // 最后一个段落是 EndOfText，其余都是 HardBreak
+  assert.equal(lines.length, 100)
+  for (let i = 0; i < 99; i++) {
+    assert.equal(lines[i].breakKind, LineBreakKind.HardBreak, `line ${i} should be HardBreak`)
+  }
+  assert.equal(lines[99].breakKind, LineBreakKind.EndOfText)
+  // 验证行区间不重叠且覆盖全文（\n 本身不进 line range）
+  let expected = 0
+  for (let i = 0; i < 100; i++) {
+    assert.equal(lines[i].start, expected, `line ${i} start`)
+    assert.equal(lines[i].end, expected + 10, `line ${i} end`)
+    expected += 10 + 1 // 10 字符 + 1 \n
+  }
+})
+test('layoutLines: 大量换行段软折行输出正确', () => {
+  // 50 个段落，每段 6 字符，容器 25px → 每段软折 3 行 = 150 行
+  const segs = []
+  for (let i = 0; i < 50; i++) {
+    segs.push('abcdef')
+  }
+  const text = segs.join('\n')
+  const lines = layoutLines(text, 25, mockMeasure)
+  assert.equal(lines.length, 150)
+  // 每 3 行一组：[SoftWrap] [SoftWrap] [HardBreak]，最后一组 [SoftWrap] [SoftWrap] [EndOfText]
+  for (let i = 0; i < 148; i++) {
+    const posInSeg = i % 3
+    if (posInSeg < 2) {
+      assert.equal(lines[i].breakKind, LineBreakKind.SoftWrap, `line ${i} should be SoftWrap`)
+    } else {
+      assert.equal(lines[i].breakKind, LineBreakKind.HardBreak, `line ${i} should be HardBreak`)
+    }
+  }
+  assert.equal(lines[149].breakKind, LineBreakKind.EndOfText)
+})
+test('layoutLines: 空行密集段不会导致 bounds 溢出', () => {
+  // '\n\n\n\n\n' → 5 个 HardBreak 空行 + 1 个 EndOfText 空行 = 6 行
+  const lines = layoutLines('\n'.repeat(5), 1000, mockMeasure)
+  assert.equal(lines.length, 6)
+  for (let i = 0; i < 5; i++) {
+    assert.equal(lines[i].start, i)
+    assert.equal(lines[i].end, i)
+    assert.equal(lines[i].breakKind, LineBreakKind.HardBreak)
+  }
+  assert.equal(lines[5].start, 5)
+  assert.equal(lines[5].end, 5)
+  assert.equal(lines[5].breakKind, LineBreakKind.EndOfText)
 })
 
 console.log('---')

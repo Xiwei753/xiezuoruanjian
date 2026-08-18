@@ -506,11 +506,13 @@ export class EditorSemanticDispatcher {
     return replaceResult
   }
 
-  // Issue #629 评论14 第3项 + 评论15 第5项：行级导航（up/down/home/end）。
+  // Issue #629 评论14 第3项 + 评论15 第5项 + R7 任务B：行级导航（up/down/home/end）。
   // 出队后基于最新 Core snapshot + 等待匹配编辑状态身份的行布局，计算目标位置。
   // 不再返回 STALE_LAYOUT 丢键，也不设 timeout 兜底。
   // 等待只能有两个出口：SujianEditor 发布匹配的布局，或 cancelWait（组件销毁/换 session）。
   // composition 活跃时，行导航目标坐标是显示文本 UTF-16 坐标，复用 imeSetSelection 语义。
+  // R7 任务B：从 SelectionController.getVisualCaret(cursorUtf16) 获取完整 VisualCaretPosition，
+  // 全程保留 position，不降回 number。目标走 onTap(targetPosition) / onDragSelect(anchor, targetPosition)。
   private async executeLineNavigation(direction: 'up' | 'down' | 'home' | 'end', extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
@@ -569,138 +571,153 @@ export class EditorSemanticDispatcher {
       const finalDisplaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(finalSnap)
       const finalCursorUtf16: number = TextOffsetMapper.utf8ToUtf16(finalDisplaySnapshot.text, finalDisplaySnapshot.cursorByteOffset)
       const finalAnchorUtf16: number = TextOffsetMapper.utf8ToUtf16(finalDisplaySnapshot.text, finalDisplaySnapshot.selectionAnchor)
+      // R7 任务B：从 SelectionController 获取完整 VisualCaretPosition（含 affinity）。
+      const currentPosition: VisualCaretPosition = this.selectionController.getVisualCaret(finalCursorUtf16)
       // composition 活跃时走 imeSetSelection 语义。
       if (finalSnap.composition !== null && finalSnap.composition !== undefined) {
-        return this.executeImeLineNavigation(direction, extend, finalState, finalCursorUtf16, finalAnchorUtf16, finalDisplaySnapshot)
+        return this.executeImeLineNavigation(direction, extend, finalState, currentPosition, finalAnchorUtf16, finalDisplaySnapshot)
       }
-      return this.executeCommittedLineNavigation(direction, extend, finalState, finalCursorUtf16, finalAnchorUtf16)
+      return this.executeCommittedLineNavigation(direction, extend, finalState, currentPosition, finalAnchorUtf16)
     }
     // Core 未前进，用等待到的 finalState + 当前 snapshot 坐标。
     const latestCursorUtf16: number = TextOffsetMapper.utf8ToUtf16(latestDisplaySnapshot.text, latestDisplaySnapshot.cursorByteOffset)
     const latestAnchorUtf16: number = TextOffsetMapper.utf8ToUtf16(latestDisplaySnapshot.text, latestDisplaySnapshot.selectionAnchor)
+    // R7 任务B：从 SelectionController 获取完整 VisualCaretPosition（含 affinity）。
+    const currentPosition: VisualCaretPosition = this.selectionController.getVisualCaret(latestCursorUtf16)
     // composition 活跃时走 imeSetSelection 语义。
     if (latestSnap.composition !== null && latestSnap.composition !== undefined) {
-      return this.executeImeLineNavigation(direction, extend, finalState, latestCursorUtf16, latestAnchorUtf16, latestDisplaySnapshot)
+      return this.executeImeLineNavigation(direction, extend, finalState, currentPosition, latestAnchorUtf16, latestDisplaySnapshot)
     }
-    return this.executeCommittedLineNavigation(direction, extend, finalState, latestCursorUtf16, latestAnchorUtf16)
+    return this.executeCommittedLineNavigation(direction, extend, finalState, currentPosition, latestAnchorUtf16)
   }
 
-  // Issue #629 评论15 第5项 + 评论16 第2项：committed text 上的行导航（无 composition）。
+  // Issue #629 评论15 第5项 + 评论16 第2项 + R7 任务B：committed text 上的行导航（无 composition）。
   // Up/Down 保持横向位置：用 navTargetX 记忆上次 x 坐标，在目标行找最近的 caret stop。
   // home/end 重置 navTargetX（下次 Up/Down 回到行首/行尾）。
+  // R7 任务B：全程消费/产出 VisualCaretPosition，不再降回 number。
   private executeCommittedLineNavigation(
     direction: 'up' | 'down' | 'home' | 'end',
     extend: boolean,
     state: LineLayoutState,
-    cursorUtf16: number,
+    currentPosition: VisualCaretPosition,
     anchorUtf16: number
   ): Promise<ResultEnvelope<EditorEditResult>> {
     switch (direction) {
       case 'up': {
-        const targetLineIdx = LineNavigationResolver.getPreviousLineIndex(state, cursorUtf16)
+        const targetLineIdx = LineNavigationResolver.getPreviousLineIndex(state, currentPosition)
         if (targetLineIdx < 0) {
           return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
         }
-        // Issue #629 评论16 第2项：用 navTargetX 保持横向位置。
-        // 首次 Up/Down（navTargetX < 0）用当前光标的 x 坐标；后续用记忆的 x。
         if (this.navTargetX < 0) {
-          this.navTargetX = LineNavigationResolver.getCaretX(state, cursorUtf16)
+          this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
         }
         const targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
+        const targetPosition = LineNavigationResolver.positionForOffsetInLine(state, targetLineIdx, targetOffset)
+        this.selectionController.rememberVisualCaret(targetPosition)
         if (extend) {
-          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
+          return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
         }
-        return this.selectionController.onTap(targetOffset)
+        return this.selectionController.onTap(targetPosition)
       }
       case 'down': {
-        const targetLineIdx = LineNavigationResolver.getNextLineIndex(state, cursorUtf16)
+        const targetLineIdx = LineNavigationResolver.getNextLineIndex(state, currentPosition)
         if (targetLineIdx < 0) {
           return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
         }
-        // Issue #629 评论16 第2项：用 navTargetX 保持横向位置。
         if (this.navTargetX < 0) {
-          this.navTargetX = LineNavigationResolver.getCaretX(state, cursorUtf16)
+          this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
         }
         const targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
+        const targetPosition = LineNavigationResolver.positionForOffsetInLine(state, targetLineIdx, targetOffset)
+        this.selectionController.rememberVisualCaret(targetPosition)
         if (extend) {
-          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
+          return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
         }
-        return this.selectionController.onTap(targetOffset)
+        return this.selectionController.onTap(targetPosition)
       }
       case 'home': {
-        // Issue #629 评论16 第2项：home 重置横向位置记忆。
         this.navTargetX = -1
-        const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, cursorUtf16)
+        const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, currentPosition)
         const targetOffset = lineIdx >= 0 ? LineNavigationResolver.getLineStart(state, lineIdx) : 0
+        const targetPosition = LineNavigationResolver.positionForOffsetInLine(state, lineIdx, targetOffset)
+        this.selectionController.rememberVisualCaret(targetPosition)
         if (extend) {
-          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
+          return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
         }
-        return this.selectionController.onTap(targetOffset)
+        return this.selectionController.onTap(targetPosition)
       }
       case 'end': {
-        // Issue #629 评论16 第2项：end 重置横向位置记忆。
         this.navTargetX = -1
-        const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, cursorUtf16)
+        const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, currentPosition)
         const textUtf16Len = state.displayText.length
         const targetOffset = lineIdx >= 0 ? LineNavigationResolver.getLineEnd(state, lineIdx) : textUtf16Len
+        const targetPosition = LineNavigationResolver.positionForOffsetInLine(state, lineIdx, targetOffset)
+        this.selectionController.rememberVisualCaret(targetPosition)
         if (extend) {
-          return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
+          return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
         }
-        return this.selectionController.onTap(targetOffset)
+        return this.selectionController.onTap(targetPosition)
       }
     }
   }
 
-  // Issue #629 评论15 第5项 + 评论16 第2项：composition 活跃时的行导航。
+  // Issue #629 评论15 第5项 + 评论16 第2项 + R7 任务B：composition 活跃时的行导航。
   // 行内移动：走 imeSetSelection 语义（更新 preedit cursor）。
   // 移出 composition 区域：先 finish composition，再走 imeSetSelection。
   // Up/Down 同样保持横向位置。
+  // R7 任务B：全程消费/产出 VisualCaretPosition，不再降回 number。
   private executeImeLineNavigation(
     direction: 'up' | 'down' | 'home' | 'end',
     extend: boolean,
     state: LineLayoutState,
-    cursorUtf16: number,
+    currentPosition: VisualCaretPosition,
     anchorUtf16: number,
     displaySnapshot: EditorLayoutSnapshot
   ): Promise<ResultEnvelope<EditorEditResult>> {
     // 计算目标行的 UTF-16 offset（基于 displayText 的坐标）。
-    let targetOffset: number = cursorUtf16
+    let targetOffset: number = currentPosition.utf16Offset
+    let targetLineIdx: number = -1
     switch (direction) {
       case 'up': {
-        const targetLineIdx = LineNavigationResolver.getPreviousLineIndex(state, cursorUtf16)
+        targetLineIdx = LineNavigationResolver.getPreviousLineIndex(state, currentPosition)
         if (targetLineIdx < 0) {
           return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
         }
         if (this.navTargetX < 0) {
-          this.navTargetX = LineNavigationResolver.getCaretX(state, cursorUtf16)
+          this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
         }
         targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         break
       }
       case 'down': {
-        const targetLineIdx = LineNavigationResolver.getNextLineIndex(state, cursorUtf16)
+        targetLineIdx = LineNavigationResolver.getNextLineIndex(state, currentPosition)
         if (targetLineIdx < 0) {
           return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
         }
         if (this.navTargetX < 0) {
-          this.navTargetX = LineNavigationResolver.getCaretX(state, cursorUtf16)
+          this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
         }
         targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         break
       }
       case 'home': {
         this.navTargetX = -1
-        const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, cursorUtf16)
-        targetOffset = lineIdx >= 0 ? LineNavigationResolver.getLineStart(state, lineIdx) : 0
+        targetLineIdx = LineNavigationResolver.getCurrentLineIndex(state, currentPosition)
+        targetOffset = targetLineIdx >= 0 ? LineNavigationResolver.getLineStart(state, targetLineIdx) : 0
         break
       }
       case 'end': {
         this.navTargetX = -1
-        const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, cursorUtf16)
-        targetOffset = lineIdx >= 0 ? LineNavigationResolver.getLineEnd(state, lineIdx) : displaySnapshot.text.length
+        targetLineIdx = LineNavigationResolver.getCurrentLineIndex(state, currentPosition)
+        targetOffset = targetLineIdx >= 0 ? LineNavigationResolver.getLineEnd(state, targetLineIdx) : displaySnapshot.text.length
         break
       }
     }
+    // R7 任务B：记忆目标 visual caret position（composition 路径也更新 affinity owner）。
+    const targetPosition = targetLineIdx >= 0
+      ? LineNavigationResolver.positionForOffsetInLine(state, targetLineIdx, targetOffset)
+      : { utf16Offset: targetOffset, affinity: CaretAffinity.Downstream }
+    this.selectionController.rememberVisualCaret(targetPosition)
     // Issue #629 评论17 第1项：Shift+Up/Down/Home/End 在 composition 活跃时
     // 先 finish composition（preedit 提交进 committed text），再执行普通 selection。
     // 不要把 extend 退化成移动 preedit cursor（Core composition 没有 selection range）。
@@ -712,7 +729,7 @@ export class EditorSemanticDispatcher {
       return finishResult
     }
     // finish 后 committed text = 之前的 displayText，anchorUtf16/targetOffset 可直接做普通 selection。
-    return this.selectionController.onDragSelect(anchorUtf16, targetOffset)
+    return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
   }
 
   // Issue #629 评论11 第2项：注册行级导航解析器。

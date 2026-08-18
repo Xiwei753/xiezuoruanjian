@@ -121,29 +121,26 @@ export class LineNavigationResolver {
   }
 
   /**
-   * Issue #629 评论18：用 resolveVisualLineIndex 找光标所在行。
-   * soft-wrap 边界上同一 offset 出现在两行时用 affinity 区分。
-   * 默认 affinity=Downstream：offset 在 soft-wrap 行末时归下一行。
+   * Issue #629 评论19 + R7 任务B：用 resolveVisualLineIndex 找光标所在行。
+   * 接受 VisualCaretPosition（含 affinity），不再写死 Downstream。
+   * soft-wrap 边界上同一 offset 出现在两行时用 affinity 区分：
+   *   Upstream → 归上一行（行末），Downstream → 归下一行（行首）。
    */
-  static getCurrentLineIndex(state: LineLayoutState, cursorUtf16: number): number {
+  static getCurrentLineIndex(state: LineLayoutState, position: VisualCaretPosition): number {
     if (state.lines.length === 0) {
       return -1
     }
-    // 构造 lines（LineRange[] with breakKind）供 resolveVisualLineIndex 消费。
     const lineRanges = state.lines.map(l => ({
       start: l.startUtf16,
       end: l.endUtf16,
       breakKind: l.breakKind,
     }))
-    return resolveVisualLineIndex(lineRanges, {
-      utf16Offset: cursorUtf16,
-      affinity: CaretAffinity.Downstream,
-    })
+    return resolveVisualLineIndex(lineRanges, position)
   }
 
   /** 上一行行号。已在第一行时返回 -1。 */
-  static getPreviousLineIndex(state: LineLayoutState, cursorUtf16: number): number {
-    const currentIdx = this.getCurrentLineIndex(state, cursorUtf16)
+  static getPreviousLineIndex(state: LineLayoutState, position: VisualCaretPosition): number {
+    const currentIdx = this.getCurrentLineIndex(state, position)
     if (currentIdx <= 0) {
       return -1
     }
@@ -151,8 +148,8 @@ export class LineNavigationResolver {
   }
 
   /** 下一行行号。已在最后一行时返回 -1。 */
-  static getNextLineIndex(state: LineLayoutState, cursorUtf16: number): number {
-    const currentIdx = this.getCurrentLineIndex(state, cursorUtf16)
+  static getNextLineIndex(state: LineLayoutState, position: VisualCaretPosition): number {
+    const currentIdx = this.getCurrentLineIndex(state, position)
     if (currentIdx < 0 || currentIdx >= state.lines.length - 1) {
       return -1
     }
@@ -160,16 +157,44 @@ export class LineNavigationResolver {
   }
 
   /**
-   * Issue #629 评论18：getCaretX 直接调用 horizontalForOffset（统一算法）。
-   * 不再各自实现二分。
+   * Issue #629 R7 任务B：纯函数 — 根据 offset 在指定行的 soft-wrap 边界位置，
+   * 返回正确的 VisualCaretPosition。
+   * 
+   * SoftWrap 起点（行首，来自上一行软折）：Downstream（光标在此行）。
+   * SoftWrap 终点（行末，折到下一行）：Upstream（光标归上一行末尾）。
+   * HardBreak / EndOfText 行末：Downstream。
    */
-  static getCaretX(state: LineLayoutState, utf16Offset: number): number {
-    const lineIdx = this.getCurrentLineIndex(state, utf16Offset)
+  static positionForOffsetInLine(state: LineLayoutState, lineIndex: number, utf16Offset: number): VisualCaretPosition {
+    if (lineIndex < 0 || lineIndex >= state.lines.length) {
+      return { utf16Offset, affinity: CaretAffinity.Downstream }
+    }
+    const line = state.lines[lineIndex]
+    // 行首：SoftWrap 起点 → Downstream（光标在此行开始处）。
+    if (utf16Offset === line.startUtf16) {
+      return { utf16Offset, affinity: CaretAffinity.Downstream }
+    }
+    // 行末：SoftWrap 终点 → Upstream（光标归上一行末尾）。
+    if (utf16Offset === line.endUtf16) {
+      if (line.breakKind === LineBreakKind.SoftWrap) {
+        return { utf16Offset, affinity: CaretAffinity.Upstream }
+      }
+      return { utf16Offset, affinity: CaretAffinity.Downstream }
+    }
+    // 其他位置：Downstream。
+    return { utf16Offset, affinity: CaretAffinity.Downstream }
+  }
+
+  /**
+   * Issue #629 R7 任务B：getCaretX 接受 VisualCaretPosition。
+   * 调用 horizontalForOffset（统一算法），不再各自实现二分。
+   */
+  static getCaretX(state: LineLayoutState, position: VisualCaretPosition): number {
+    const lineIdx = this.getCurrentLineIndex(state, position)
     if (lineIdx < 0 || lineIdx >= state.lines.length) {
       return 0
     }
     const stops = state.lines[lineIdx].caretStops
-    return horizontalForOffset(stops, utf16Offset)
+    return horizontalForOffset(stops, position.utf16Offset)
   }
 
   /**
