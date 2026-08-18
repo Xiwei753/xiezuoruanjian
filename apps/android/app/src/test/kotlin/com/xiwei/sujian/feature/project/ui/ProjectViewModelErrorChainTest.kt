@@ -146,7 +146,10 @@ class ProjectViewModelErrorChainTest {
      * 非 suspend 函数 — detekt SleepInsteadOfDelay 只检测 suspend 函数内的 Thread.sleep；
      * 真实 sleep 让真实 IO 线程获得 CPU，是确定性同步机制，不是协程等待。
      */
-    private fun kotlinx.coroutines.test.TestScope.settleSpin(times: Int, sleepMs: Long = 5) {
+    private fun kotlinx.coroutines.test.TestScope.settleSpin(
+        times: Int,
+        sleepMs: Long = 5,
+    ) {
         repeat(times) {
             runCurrent()
             Thread.sleep(sleepMs)

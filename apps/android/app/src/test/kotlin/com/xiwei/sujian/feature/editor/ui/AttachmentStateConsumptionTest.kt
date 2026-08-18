@@ -8,7 +8,7 @@ import org.junit.Test
 /**
  * #595 八：正文 Surface 渲染决策消费规范 [WindowBindingState] 的契约测试。
  *
- * WritingEditorSurface 用 [shouldShowEditor]（纯函数）消费会话层唯一规范状态机
+ * WritingEditorSurface 用 [editorSurfaceMode]（纯函数）消费会话层唯一规范状态机
  * [WindowBindingState]，决定显示编辑器还是预览：
  * - Attaching/Attached 且 windowId + targetId 都匹配 → 显示编辑器
  * - Committing/Cancelling 且 targetId 匹配 → 编辑器保持显示
@@ -26,7 +26,12 @@ class AttachmentStateConsumptionTest {
     fun attachedWithMatchingWindowAndTargetShowsEditor() {
         assertTrue(
             "Attached with matching window+target must show editor",
-            shouldShowEditor(WindowBindingState.Attached("w1", "t1", 7UL), "w1", "t1"),
+            editorSurfaceMode(
+                WindowBindingState.Attached("w1", "t1", 7UL),
+                "w1",
+                "t1",
+                isActivePane = false,
+            ) == EditorSurfaceMode.Editor,
         )
     }
 
@@ -34,7 +39,12 @@ class AttachmentStateConsumptionTest {
     fun attachedWithDifferentWindowShowsPreview() {
         assertFalse(
             "Attached from a different window must show preview — the current window has no bound view",
-            shouldShowEditor(WindowBindingState.Attached("w1", "t1", 7UL), "w2", "t1"),
+            editorSurfaceMode(
+                WindowBindingState.Attached("w1", "t1", 7UL),
+                "w2",
+                "t1",
+                isActivePane = false,
+            ) == EditorSurfaceMode.Editor,
         )
     }
 
@@ -42,7 +52,12 @@ class AttachmentStateConsumptionTest {
     fun attachedWithDifferentTargetShowsPreview() {
         assertFalse(
             "Attached with different target must show preview",
-            shouldShowEditor(WindowBindingState.Attached("w1", "t1", 7UL), "w1", "t2"),
+            editorSurfaceMode(
+                WindowBindingState.Attached("w1", "t1", 7UL),
+                "w1",
+                "t2",
+                isActivePane = false,
+            ) == EditorSurfaceMode.Editor,
         )
     }
 
@@ -50,7 +65,12 @@ class AttachmentStateConsumptionTest {
     fun attachingWithMatchingWindowAndTargetShowsEditor() {
         assertTrue(
             "Attaching with matching window+target must show editor",
-            shouldShowEditor(WindowBindingState.Attaching("w1", "t1", 7UL), "w1", "t1"),
+            editorSurfaceMode(
+                WindowBindingState.Attaching("w1", "t1", 7UL),
+                "w1",
+                "t1",
+                isActivePane = false,
+            ) == EditorSurfaceMode.Editor,
         )
     }
 
@@ -59,7 +79,12 @@ class AttachmentStateConsumptionTest {
         assertFalse(
             "Attaching from a different window (e.g. prepared pre-binding before the pane attaches) " +
                 "must show preview until the current window re-stamps its own Attaching",
-            shouldShowEditor(WindowBindingState.Attaching("w1", "t1", 7UL), "w2", "t1"),
+            editorSurfaceMode(
+                WindowBindingState.Attaching("w1", "t1", 7UL),
+                "w2",
+                "t1",
+                isActivePane = false,
+            ) == EditorSurfaceMode.Editor,
         )
     }
 
@@ -67,7 +92,12 @@ class AttachmentStateConsumptionTest {
     fun committingWithMatchingTargetKeepsEditorVisible() {
         assertTrue(
             "Committing with matching target must keep editor visible",
-            shouldShowEditor(WindowBindingState.Committing("t1", 7UL), "w1", "t1"),
+            editorSurfaceMode(
+                WindowBindingState.Committing("t1", 7UL),
+                "w1",
+                "t1",
+                isActivePane = false,
+            ) == EditorSurfaceMode.Editor,
         )
     }
 
@@ -75,7 +105,12 @@ class AttachmentStateConsumptionTest {
     fun cancellingWithMatchingTargetKeepsEditorVisible() {
         assertTrue(
             "Cancelling with matching target must keep editor visible",
-            shouldShowEditor(WindowBindingState.Cancelling("t1", 7UL), "w1", "t1"),
+            editorSurfaceMode(
+                WindowBindingState.Cancelling("t1", 7UL),
+                "w1",
+                "t1",
+                isActivePane = false,
+            ) == EditorSurfaceMode.Editor,
         )
     }
 
@@ -83,7 +118,12 @@ class AttachmentStateConsumptionTest {
     fun detachedShowsPreview() {
         assertFalse(
             "Detached must show preview",
-            shouldShowEditor(WindowBindingState.Detached("t1", 7UL, null), "w1", "t1"),
+            editorSurfaceMode(
+                WindowBindingState.Detached("t1", 7UL, null),
+                "w1",
+                "t1",
+                isActivePane = false,
+            ) == EditorSurfaceMode.Editor,
         )
     }
 
@@ -91,13 +131,21 @@ class AttachmentStateConsumptionTest {
     fun detachingShowsPreview() {
         assertFalse(
             "Detaching must show preview",
-            shouldShowEditor(WindowBindingState.Detaching(null), "w1", "t1"),
+            editorSurfaceMode(
+                WindowBindingState.Detaching(null),
+                "w1",
+                "t1",
+                isActivePane = false,
+            ) == EditorSurfaceMode.Editor,
         )
     }
 
     @Test
     fun idleShowsPreview() {
-        assertFalse("Idle must show preview", shouldShowEditor(WindowBindingState.Idle, "w1", "t1"))
+        assertFalse(
+            "Idle must show preview",
+            editorSurfaceMode(WindowBindingState.Idle, "w1", "t1", isActivePane = false) == EditorSurfaceMode.Editor,
+        )
     }
 
     // ── #624 评论16 问题3：confirmEditorAttached 只在真正 Attached 且 windowId+targetId 匹配时调用 ──

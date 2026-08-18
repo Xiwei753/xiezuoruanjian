@@ -134,6 +134,11 @@ fun WritingPane(
         inputs = EditorAttachInputs(uiState, sessionState, chapter),
     )
 
+    // #630 R12 首帧竞态：isActivePane 计算一次，复用于 shouldShowEditorForWritingPane
+    // 和 WritingEditorSurface — 同一帧内 showEditor 门控与 Surface 渲染决策用同一个布尔值，
+    // 避免 commitPreparedSession 提交新章节后 activeTargetId 仍为 null 的一帧里
+    // settingsReady=true 把 Surface 放进 Composition 但 isCurrentChapter 尚未落地。
+    val isActivePane = currentViewModel.isCurrentChapter(projectId, volumeId, chapterId)
     WritingPaneLayout(
         modifier = modifier,
         chapterTitle = chapterTitle,
@@ -146,8 +151,7 @@ fun WritingPane(
             shouldShowEditorForWritingPane(
                 loading = uiState.loading,
                 settingsReady = uiState.settingsReady,
-                isCurrentChapter =
-                    currentViewModel.isCurrentChapter(projectId, volumeId, chapterId),
+                isCurrentChapter = isActivePane,
             ),
     ) { editorModifier ->
         // #624 评论17 第2部分：Route 层收集 targetDecorationsVersionFlow 触发重排，
@@ -157,6 +161,7 @@ fun WritingPane(
         WritingEditorSurface(
             coordinator = coordinator,
             targetId = targetId,
+            isActivePane = isActivePane,
             modifier = editorModifier,
         )
     }

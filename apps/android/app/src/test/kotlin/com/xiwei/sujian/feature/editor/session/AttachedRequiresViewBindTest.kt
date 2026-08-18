@@ -2,7 +2,8 @@
 
 package com.xiwei.sujian.feature.editor.session
 
-import com.xiwei.sujian.feature.editor.ui.shouldShowEditor
+import com.xiwei.sujian.feature.editor.ui.EditorSurfaceMode
+import com.xiwei.sujian.feature.editor.ui.editorSurfaceMode
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -90,31 +91,39 @@ class AttachedRequiresViewBindTest {
         // Idle/Detaching/Detached 一律显示预览。
         val targetId = "t1"
         assertTrue(
-            com.xiwei.sujian.feature.editor.ui.shouldShowEditor(
+            editorSurfaceMode(
                 WindowBindingState.Attaching("w", targetId, 1UL),
                 "w",
                 targetId,
-            ),
+                isActivePane = false,
+            ) == EditorSurfaceMode.Editor,
         )
         assertTrue(
-            com.xiwei.sujian.feature.editor.ui.shouldShowEditor(
+            editorSurfaceMode(
                 WindowBindingState.Attached("w", targetId, 1UL),
                 "w",
                 targetId,
-            ),
+                isActivePane = false,
+            ) == EditorSurfaceMode.Editor,
         )
         assertFalse(
-            com.xiwei.sujian.feature.editor.ui.shouldShowEditor(WindowBindingState.Idle, "w", targetId),
+            editorSurfaceMode(WindowBindingState.Idle, "w", targetId, isActivePane = false) == EditorSurfaceMode.Editor,
         )
         assertFalse(
-            com.xiwei.sujian.feature.editor.ui.shouldShowEditor(WindowBindingState.Detaching(null), "w", targetId),
+            editorSurfaceMode(
+                WindowBindingState.Detaching(null),
+                "w",
+                targetId,
+                isActivePane = false,
+            ) == EditorSurfaceMode.Editor,
         )
         assertFalse(
-            com.xiwei.sujian.feature.editor.ui.shouldShowEditor(
+            editorSurfaceMode(
                 WindowBindingState.Detached(targetId, 1UL, null),
                 "w",
                 targetId,
-            ),
+                isActivePane = false,
+            ) == EditorSurfaceMode.Editor,
         )
     }
 

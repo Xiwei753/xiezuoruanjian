@@ -35,10 +35,10 @@ enum class EditorSurfaceMode {
 /**
  * #630 R12：正文 Surface 渲染决策 — 纯函数。
  *
- * 同时消费 bindingState 和 activeTargetId，规则：
+ * 同时消费 bindingState 和业务层传入的 isActivePane，规则：
  * - 当前窗口绑定该 target 且状态为 Attaching/Attached/Committing/Cancelling → [EditorSurfaceMode.Editor]。
- * - 非 activeTarget → [EditorSurfaceMode.Preview]。
- * - 是 activeTarget 但未进入真实 View（Idle/Detached/Detaching）→ [EditorSurfaceMode.Pending]，绝不 Preview。
+ * - isActivePane=false → [EditorSurfaceMode.Preview]。
+ * - isActivePane=true 但未进入真实 View（Idle/Detached/Detaching）→ [EditorSurfaceMode.Pending]，绝不 Preview。
  *
  * 旧 window 的 Attached 不得冒充当前 Editor：若 target 仍是 active → Pending，不画 Preview。
  */
@@ -46,9 +46,8 @@ fun editorSurfaceMode(
     bindingState: WindowBindingState,
     windowId: String,
     targetId: String,
-    activeTargetId: String?,
+    isActivePane: Boolean,
 ): EditorSurfaceMode {
-    val isActiveTarget = activeTargetId == targetId
     val editorMatch =
         when (bindingState) {
             is WindowBindingState.Attaching ->
@@ -64,7 +63,7 @@ fun editorSurfaceMode(
         }
     return when {
         editorMatch -> EditorSurfaceMode.Editor
-        isActiveTarget -> EditorSurfaceMode.Pending
+        isActivePane -> EditorSurfaceMode.Pending
         else -> EditorSurfaceMode.Preview
     }
 }
@@ -76,7 +75,7 @@ fun editorSurfaceMode(
  * AndroidView 的大小由父 Compose 布局直接决定（[Modifier.fillMaxSize]）,
  * 使用局部坐标，不再通过 boundsInWindow()、全屏 slot、graphicsLayer 追踪正文。
  *
- * #630 R12：渲染决策改为消费 [EditorSurfaceMode]，同时看 bindingState 和 activeTargetId：
+ * #630 R12：渲染决策改为消费 [EditorSurfaceMode]，同时看 bindingState 和业务层传入的 isActivePane：
  * - [EditorSurfaceMode.Editor]：显示 SujianEditorView（唯一正文 renderer）。
  * - [EditorSurfaceMode.Preview]：非活动 target → 显示 ReadonlyChapterPreview（只读预览）。
  * - [EditorSurfaceMode.Pending]：活动 target 但尚未进入真实 View → 保持空白，不用第二套 renderer。
@@ -90,6 +89,7 @@ fun editorSurfaceMode(
 fun WritingEditorSurface(
     coordinator: EditorWindowHost,
     targetId: String,
+    isActivePane: Boolean,
     modifier: Modifier = Modifier,
 ) {
     // #595 三：只收集会话层唯一 [sessionStateFlow]，从同一个快照读取 bindingState。
@@ -97,10 +97,9 @@ fun WritingEditorSurface(
     // bindingState / sessionId 永远来自同一个不可变快照，不会读到跨帧组合。
     val sessionState by coordinator.sessionStateFlow.collectAsStateWithLifecycle()
     val bindingState = sessionState.bindingState
-    val activeTargetId = sessionState.activeTargetId
-    // #630 R12：渲染决策同时消费 bindingState 和 activeTargetId —
+    // #630 R12：渲染决策同时消费 bindingState 和业务层传入的 isActivePane —
     // 活动章节从进入页面到稳定显示必须只有 SujianEditorView 一套正文 renderer。
-    val surfaceMode = editorSurfaceMode(bindingState, coordinator.windowId, targetId, activeTargetId)
+    val surfaceMode = editorSurfaceMode(bindingState, coordinator.windowId, targetId, isActivePane)
 
     val themeColors = EditorThemeAdapter.extractColors()
 
@@ -149,29 +148,6 @@ fun WritingEditorSurface(
         }
     }
 }
-
-/**
- * #595 八 / #630 R12: 正文 Surface 的渲染决策 — 窗口绑定状态机到 [EditorSurfaceMode] 的纯函数。
- *
- * 已被 [editorSurfaceMode] 取代，保留为向后兼容别名（内部调用 [editorSurfaceMode]）。
- *
- * - [WindowBindingState.Attaching]/[Attached]：窗口已绑定该 target → [EditorSurfaceMode.Editor]。
- *   #623 评论5：必须同时匹配 windowId + targetId — 残留自其他窗口的绑定
- *   （旧窗口 release 与新窗口附着之间的竞态）对新窗口不算已绑定。
- * - [WindowBindingState.Committing]/[Cancelling]：编辑事务收尾中，编辑器保持显示。
- * - [WindowBindingState.Idle]/[Detaching]/[Detached]：未绑定/已解绑。
- */
-fun shouldShowEditor(
-    bindingState: WindowBindingState,
-    windowId: String,
-    targetId: String,
-): Boolean =
-    editorSurfaceMode(
-        bindingState,
-        windowId,
-        targetId,
-        activeTargetId = null,
-    ) == EditorSurfaceMode.Editor
 
 /**
  * #624 评论16 问题3：confirmEditorAttached 的决策 — 只有 [WindowBindingState.Attached]
