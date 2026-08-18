@@ -163,6 +163,19 @@ class EditorViewModelChapterSwitchTest {
         )
     }
 
+    /**
+     * 等 initChapter 加载落定（loading=false）。
+     * 非 suspend 函数 — detekt SleepInsteadOfDelay 只检测 suspend 函数内的 Thread.sleep；
+     * 真实 sleep 让真实 IO 线程获得 CPU，是确定性同步机制，不是协程等待。
+     */
+    private fun awaitLoadingSettled(vm: EditorViewModel) {
+        var attempts = 0
+        while (vm.uiState.value.loading && attempts < 200) {
+            Thread.sleep(5)
+            attempts++
+        }
+    }
+
     @Test
     fun saveFailure_returnsSaveFailedAndKeepsCurrentChapter() =
         runTest {
@@ -286,11 +299,7 @@ class EditorViewModelChapterSwitchTest {
             val vm = createVm()
             vm.enterChapterForTest("p", "v", "a", "A")
             // 等 initChapter 的加载落定，保证事务起点是稳定状态。
-            var attempts = 0
-            while (vm.uiState.value.loading && attempts < 200) {
-                Thread.sleep(5)
-                attempts++
-            }
+            awaitLoadingSettled(vm)
             // 旧章节有非空正文 → 切换事务的“保存旧章节”阶段会调用保存端口。
             // initChapter 事务后 inputFrozen 保持 true（等待编辑器附着），
             // 测试环境无编辑器 — 显式确认附着以解除冻结，模拟真实附着。
@@ -378,11 +387,7 @@ class EditorViewModelChapterSwitchTest {
             vm.enterChapterForTest("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", "")
             // 等 initChapter 的加载落定（无 native 时必失败 → loading=false）。
-            var attempts = 0
-            while (vm.uiState.value.loading && attempts < 200) {
-                Thread.sleep(5)
-                attempts++
-            }
+            awaitLoadingSettled(vm)
             assertFalse("前置状态必须是已落定（loading=false）", vm.uiState.value.loading)
             val before = vm.uiState.value
 
@@ -858,11 +863,7 @@ class EditorViewModelChapterSwitchTest {
             vm.enterChapterForTest("p", "v", "a", "A")
             commitActiveSession(vm, "p", "v", "a", "")
             // enterChapterForTest 已置 loading=false；防御性等待落定。
-            var attempts = 0
-            while (vm.uiState.value.loading && attempts < 200) {
-                Thread.sleep(5)
-                attempts++
-            }
+            awaitLoadingSettled(vm)
             assertFalse("前置状态必须是已落定（loading=false）", vm.uiState.value.loading)
 
             // 切换到 B：旧章节 localDirty=false → 跳过保存 → 加载 B 失败（无 native）。

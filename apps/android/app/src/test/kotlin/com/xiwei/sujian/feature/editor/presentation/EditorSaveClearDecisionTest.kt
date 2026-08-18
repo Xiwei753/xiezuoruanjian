@@ -25,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
@@ -190,16 +191,34 @@ class EditorSaveClearDecisionTest {
 
     /**
      * 等真实 IO save actor 把 saveStatus 置成 SaveFailed。
-     * 轮询必须同时：yield() 推进测试调度器（跑 Main 上的 autosave 协程）+ 真实
+     * 轮询必须同时：runCurrent() 推进测试调度器（跑 Main 上的 autosave 协程）+ 真实
      * sleep 让 IO 线程获得 CPU（actor/FFI 调用是真实线程，不受虚拟时间控制）。
+     * 非 suspend 函数 — detekt SleepInsteadOfDelay 只检测 suspend 函数内的 Thread.sleep；
+     * 真实 sleep 是让真实 IO 线程获得 CPU 的确定性同步机制，不是协程等待。
      */
-    private suspend fun awaitSaveFailed() {
+    private fun kotlinx.coroutines.test.TestScope.awaitSaveFailed() {
         var spins = 0
         while (vm.uiState.value.saveStatus != SaveStatus.SaveFailed && spins < 2000) {
-            kotlinx.coroutines.yield()
+            runCurrent()
             Thread.sleep(2)
             spins++
         }
+        runCurrent()
+    }
+
+    /**
+     * 固定次数轮询驱动测试调度器（真实 IO 完成需要真实等待）。
+     * 非 suspend 函数 — detekt SleepInsteadOfDelay 只检测 suspend 函数内的 Thread.sleep；
+     * 真实 sleep 让真实 IO 线程获得 CPU，是确定性同步机制，不是协程等待。
+     */
+    private fun kotlinx.coroutines.test.TestScope.settleSpin(times: Int) {
+        var spins = 0
+        while (spins < times) {
+            runCurrent()
+            Thread.sleep(2)
+            spins++
+        }
+        runCurrent()
     }
 
     // ── requestSave：手动保存统一决策 ──
@@ -367,12 +386,7 @@ class EditorSaveClearDecisionTest {
 
             vm.scheduleAutoSave()
             // 等 debounce(0) + actor 处理窗口结束 — 若错误触发命令会落到 SaveFailed。
-            var spins = 0
-            while (spins < 500) {
-                kotlinx.coroutines.yield()
-                Thread.sleep(2)
-                spins++
-            }
+            settleSpin(500)
 
             assertEquals(
                 "snapshot 不可得时 autosave 必须保持 Unsaved，不得误触发 Clear",

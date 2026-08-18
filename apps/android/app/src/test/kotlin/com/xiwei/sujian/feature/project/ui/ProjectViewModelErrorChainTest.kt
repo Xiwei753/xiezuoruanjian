@@ -141,6 +141,19 @@ class ProjectViewModelErrorChainTest {
         assertTrue("条件必须在超时前满足", predicate())
     }
 
+    /**
+     * 固定次数轮询驱动调度器（真实 IO 完成需要真实等待）。
+     * 非 suspend 函数 — detekt SleepInsteadOfDelay 只检测 suspend 函数内的 Thread.sleep；
+     * 真实 sleep 让真实 IO 线程获得 CPU，是确定性同步机制，不是协程等待。
+     */
+    private fun kotlinx.coroutines.test.TestScope.settleSpin(times: Int, sleepMs: Long = 5) {
+        repeat(times) {
+            runCurrent()
+            Thread.sleep(sleepMs)
+        }
+        runCurrent()
+    }
+
     /** 收集 uiEvents 到 list，返回取消句柄。必须在发出事件前启动。
      *  用 Dispatchers.Unconfined scope 启动 collect，完全脱离 TestDispatcher —
      *  避免 StandardTestDispatcher 下 collect 协程的调度影响 refreshProject 的续体恢复。 */
@@ -167,11 +180,8 @@ class ProjectViewModelErrorChainTest {
             val (events, collectJob) = collectEvents(vm)
 
             vm.initialize("A", repo)
-            for (i in 0..200) {
-                runCurrent()
-                Thread.sleep(10)
-            }
-            runCurrent()
+            // 固定等待窗口让加载失败落定（isLoading=false）— 不带条件断言，保持原语义。
+            settleSpin(201, 10)
 
             // #617 评论九：getVolumes 抛 RepositoryException → refreshProject 失败：
             // isLoading=false，首次加载 volumes 为空时设 loadError，发 Error 事件。
@@ -179,11 +189,8 @@ class ProjectViewModelErrorChainTest {
             assertNotNull("首次加载失败必须设 loadError", vm.uiState.value.loadError)
             assertEquals(loadVolumesFailed, vm.uiState.value.loadError)
             assertTrue("volumes 不被覆盖为非空（首次无旧数据保持空）", vm.uiState.value.volumes.isEmpty())
-            for (i in 0..50) {
-                runCurrent()
-                Thread.sleep(5)
-            }
-            runCurrent()
+            // 固定等待窗口让 Error 事件发出 — 不带条件断言，保持原语义。
+            settleSpin(51, 5)
             assertTrue(mustEmitError, events.any { it is ProjectTreeUiEvent.Error })
             assertEquals(
                 loadVolumesFailed,

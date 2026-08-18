@@ -49,7 +49,7 @@ class PredictiveWorkspaceBackTest {
             seeks.add(progress)
         }
 
-        suspend fun flushActiveDocument(): Boolean {
+        fun flushActiveDocument(): Boolean {
             flushCalls++
             return flushResult
         }

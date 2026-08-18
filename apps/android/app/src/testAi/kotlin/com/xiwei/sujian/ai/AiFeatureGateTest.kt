@@ -18,7 +18,7 @@ import org.junit.Test
  */
 class AiFeatureGateTest {
     @Test
-    fun flavor_is_ai() {
+    fun flavorIsAi() {
         // BuildConfig.FLAVOR 由 AGP 按 flavorDimensions "ai" 生成，
         // ai 变体下值为 "ai"，noAi 变体下值为 "noAi"。
         assertTrue(
@@ -28,7 +28,7 @@ class AiFeatureGateTest {
     }
 
     @Test
-    fun flavor_is_not_noAi() {
+    fun flavorIsNotNoAi() {
         // 反向断言：防止 flavor 配置被错误地回退到 noAi。
         assertFalse(
             "AI flavor 不应等于 'noAi'，实际为 ${BuildConfig.FLAVOR}",

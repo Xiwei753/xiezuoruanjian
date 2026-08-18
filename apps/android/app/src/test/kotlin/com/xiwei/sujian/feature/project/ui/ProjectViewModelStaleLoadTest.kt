@@ -164,6 +164,24 @@ class ProjectViewModelStaleLoadTest {
         assertTrue("条件必须在超时前满足", predicate())
     }
 
+    /**
+     * 观察窗口：轮询驱动调度器，检测迟到写回是否落地（volumes 含 vA）。
+     * 非 suspend 函数 — detekt SleepInsteadOfDelay 只检测 suspend 函数内的 Thread.sleep；
+     * 真实 sleep 让真实 IO 线程获得 CPU，是确定性同步机制，不是协程等待。
+     * 返回观察期内 stale 数据是否落地。
+     */
+    private fun kotlinx.coroutines.test.TestScope.observeStaleLanded(vm: ProjectViewModel): Boolean {
+        var attempts = 0
+        var staleLanded = false
+        while (attempts < 400 && !staleLanded) {
+            runCurrent()
+            Thread.sleep(5)
+            attempts++
+            staleLanded = vm.uiState.value.volumes.any { it.id == "vA" }
+        }
+        return staleLanded
+    }
+
     @Test
     fun staleVolumesAndStats_mustNotOverwriteNewerProjectData() =
         runTest(mainDispatcherRule.dispatcher) {
@@ -215,14 +233,7 @@ class ProjectViewModelStaleLoadTest {
                 200,
                 vm.uiState.value.projectStats?.totalWordCount,
             )
-            var attempts = 0
-            var staleLanded = false
-            while (attempts < 400 && !staleLanded) {
-                runCurrent()
-                Thread.sleep(5)
-                attempts++
-                staleLanded = vm.uiState.value.volumes.any { it.id == "vA" }
-            }
+            val staleLanded = observeStaleLanded(vm)
             assertFalse("迟到的 A 卷数据不得覆盖 B 的章节树", staleLanded)
             assertEquals(
                 "B 的章节树必须保持",
