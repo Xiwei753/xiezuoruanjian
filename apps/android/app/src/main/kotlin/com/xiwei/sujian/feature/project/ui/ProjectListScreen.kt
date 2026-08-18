@@ -175,7 +175,9 @@ internal fun ProjectListContent(
                 modifier = Modifier.fillMaxSize(),
             ) {
                 if (appState.recentEdits.isNotEmpty()) {
-                    item {
+                    // #630 评论5323353678：同一 LazyColumn 跨区块 key 必须命名空间唯一，
+                    // 不能只用 projectId —— 同一作品会同时出现在 recentEdits 与 projectSummaries。
+                    item(key = "header:recent_edits") {
                         Text(
                             stringResource(id = R.string.recent_edits),
                             style = MaterialTheme.typography.titleSmall,
@@ -184,7 +186,7 @@ internal fun ProjectListContent(
                     }
                     items(
                         items = appState.recentEdits,
-                        key = { it.projectId },
+                        key = { edit -> "recent:${edit.projectId}" },
                     ) { edit ->
                         // #625 项6：recentEdits 标题也来自 ProjectSummary 单数据源。
                         val summary = appState.projectSummaries.find { it.id == edit.projectId }
@@ -204,7 +206,7 @@ internal fun ProjectListContent(
                             }
                         }
                     }
-                    item {
+                    item(key = "header:all_projects") {
                         Spacer(modifier = Modifier.height(dims.space16))
                         Text(
                             stringResource(id = R.string.all_projects),
@@ -213,7 +215,7 @@ internal fun ProjectListContent(
                         )
                     }
                 }
-                items(appState.projectSummaries, key = { it.id }) { summary ->
+                items(appState.projectSummaries, key = { summary -> "project:${summary.id}" }) { summary ->
                     ProjectCard(
                         summary = summary,
                         onSelect = { onSelectProject(summary.id, summary.title) },
