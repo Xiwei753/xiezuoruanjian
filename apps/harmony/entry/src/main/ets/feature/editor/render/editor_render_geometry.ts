@@ -83,11 +83,18 @@ export function toLineLayouts(
   return out
 }
 
-/** 计算选区矩形列表。 */
+/**
+ * 计算选区矩形列表。
+ *
+ * Issue #629 评论5324447292 item4: HardBreak 行的 LF 被 selection 覆盖时，
+ * 从当前行文字末端绘制到 contentWidth；空 hard line 的 LF 被选中时整行
+ * x=0,width=contentWidth；普通可见字符选区仍按 caret stops/measure。
+ */
 export function computeSelectionRects(
   text: string,
   lines: LineRange[],
   lineSpacingPx: number,
+  contentWidth: number,
   selStartUtf16: number,
   selEndUtf16: number,
   measureTextFn: (s: string) => number,
@@ -102,6 +109,33 @@ export function computeSelectionRects(
     const line = lines[i]
     const selStartInLine = Math.max(line.start, start)
     const selEndInLine = Math.min(line.end, end)
+    const hasVisibleText = selStartInLine < selEndInLine
+
+    if (line.breakKind === LineBreakKind.HardBreak) {
+      // 仍有可见文本被选中时画标准选区 rect（先画，保持从左到右渲染顺序）
+      if (hasVisibleText) {
+        const x = measureTextFn(text.substring(line.start, selStartInLine))
+        const w = measureTextFn(text.substring(selStartInLine, selEndInLine))
+        rects.push({ x, y: i * spacing, width: w, height: spacing })
+      }
+      // LF 位于 line.end（= line.start for empty hard line）。
+      // 条件: selection 区间覆盖 line.end → selStart <= line.end && selEnd > line.end
+      const lfCovered = start <= line.end && end > line.end
+      if (lfCovered) {
+        const isEmptyLine = line.start >= line.end
+        if (isEmptyLine) {
+          // 空 hard line: LF 被选中 → 整行 x=0, width=contentWidth
+          rects.push({ x: 0, y: i * spacing, width: contentWidth, height: spacing })
+        } else {
+          // 非空 hard line: LF 被选中 → 从文字末端画到 contentWidth
+          const x = measureTextFn(text.substring(line.start, line.end))
+          rects.push({ x, y: i * spacing, width: contentWidth - x, height: spacing })
+        }
+      }
+      continue
+    }
+
+    // SoftWrap / EndOfText: 标准选区 rect
     if (selStartInLine >= selEndInLine) { continue }
     const x = measureTextFn(text.substring(line.start, selStartInLine))
     const w = measureTextFn(text.substring(selStartInLine, selEndInLine))

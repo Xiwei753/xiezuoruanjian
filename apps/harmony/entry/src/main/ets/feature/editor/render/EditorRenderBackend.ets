@@ -83,7 +83,7 @@ export class EditorRenderBackend {
     const lineLayouts = toLineLayouts(lines, lineSpacingPx, text, measureTextFn)
     const selStart = Math.min(base.selectionStartUtf16, base.selectionEndUtf16)
     const selEnd = Math.max(base.selectionStartUtf16, base.selectionEndUtf16)
-    const selectionRects = computeSelectionRects(text, lines, lineSpacingPx, selStart, selEnd, measureTextFn)
+    const selectionRects = computeSelectionRects(text, lines, lineSpacingPx, containerWidth, selStart, selEnd, measureTextFn)
     const caretRect = computeCaretRect(text, lines, lineSpacingPx, base.cursorUtf16, measureTextFn, visualCaretAffinity)
     const compositionUnderlineRects = computeCompositionUnderlineRects(
       text,

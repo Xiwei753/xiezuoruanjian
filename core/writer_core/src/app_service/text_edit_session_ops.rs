@@ -557,6 +557,122 @@ impl super::WriterAppService {
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
 
+    // #629 R8: composition 专用 grapheme 语义操作。
+    // 只改 composition session 的 preeditText / preeditCursorUtf16 / generation；
+    // 不修改 committed 正文，不把 raw platform event 带入 Core。
+
+    pub fn text_edit_session_composition_move_grapheme_left(
+        &self,
+        session_id: u64,
+        composition_session_id: u64,
+        composition_generation: u64,
+        expected_revision: u64,
+    ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{
+            EditorRevision, EditorSessionGeneration, EditorSessionId,
+        };
+        use crate::editor::EditorCommand;
+        self.with_session_in_registry(session_id, |s| {
+            let result = s.kernel.apply(EditorCommand::CompositionMoveGraphemeLeft {
+                composition_session_id: match EditorSessionId::try_new(composition_session_id) {
+                    Ok(id) => id,
+                    Err(_) => return EditorEditResultDto::stale_fallback(),
+                },
+                composition_generation: EditorSessionGeneration::new(composition_generation),
+                expected_revision: EditorRevision::new(expected_revision),
+            });
+            let mut dto: EditorEditResultDto = result.into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
+        })
+        .unwrap_or_else(EditorEditResultDto::stale_fallback)
+    }
+
+    pub fn text_edit_session_composition_move_grapheme_right(
+        &self,
+        session_id: u64,
+        composition_session_id: u64,
+        composition_generation: u64,
+        expected_revision: u64,
+    ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{
+            EditorRevision, EditorSessionGeneration, EditorSessionId,
+        };
+        use crate::editor::EditorCommand;
+        self.with_session_in_registry(session_id, |s| {
+            let result = s.kernel.apply(EditorCommand::CompositionMoveGraphemeRight {
+                composition_session_id: match EditorSessionId::try_new(composition_session_id) {
+                    Ok(id) => id,
+                    Err(_) => return EditorEditResultDto::stale_fallback(),
+                },
+                composition_generation: EditorSessionGeneration::new(composition_generation),
+                expected_revision: EditorRevision::new(expected_revision),
+            });
+            let mut dto: EditorEditResultDto = result.into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
+        })
+        .unwrap_or_else(EditorEditResultDto::stale_fallback)
+    }
+
+    pub fn text_edit_session_composition_delete_grapheme_backward(
+        &self,
+        session_id: u64,
+        composition_session_id: u64,
+        composition_generation: u64,
+        expected_revision: u64,
+    ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{
+            EditorRevision, EditorSessionGeneration, EditorSessionId,
+        };
+        use crate::editor::EditorCommand;
+        self.with_session_in_registry(session_id, |s| {
+            let result = s
+                .kernel
+                .apply(EditorCommand::CompositionDeleteGraphemeBackward {
+                    composition_session_id: match EditorSessionId::try_new(composition_session_id) {
+                        Ok(id) => id,
+                        Err(_) => return EditorEditResultDto::stale_fallback(),
+                    },
+                    composition_generation: EditorSessionGeneration::new(composition_generation),
+                    expected_revision: EditorRevision::new(expected_revision),
+                });
+            let mut dto: EditorEditResultDto = result.into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
+        })
+        .unwrap_or_else(EditorEditResultDto::stale_fallback)
+    }
+
+    pub fn text_edit_session_composition_delete_grapheme_forward(
+        &self,
+        session_id: u64,
+        composition_session_id: u64,
+        composition_generation: u64,
+        expected_revision: u64,
+    ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{
+            EditorRevision, EditorSessionGeneration, EditorSessionId,
+        };
+        use crate::editor::EditorCommand;
+        self.with_session_in_registry(session_id, |s| {
+            let result = s
+                .kernel
+                .apply(EditorCommand::CompositionDeleteGraphemeForward {
+                    composition_session_id: match EditorSessionId::try_new(composition_session_id) {
+                        Ok(id) => id,
+                        Err(_) => return EditorEditResultDto::stale_fallback(),
+                    },
+                    composition_generation: EditorSessionGeneration::new(composition_generation),
+                    expected_revision: EditorRevision::new(expected_revision),
+                });
+            let mut dto: EditorEditResultDto = result.into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
+        })
+        .unwrap_or_else(EditorEditResultDto::stale_fallback)
+    }
+
     pub fn text_edit_session_set_animation_enabled(&self, session_id: u64, enabled: u8) {
         self.with_session_in_registry(session_id, |s| {
             s.kernel.set_animation_enabled(enabled != 0);

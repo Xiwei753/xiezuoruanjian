@@ -409,6 +409,429 @@ impl EditorKernel {
         })
     }
 
+    // #629 R8: composition 专用 grapheme 语义操作。
+    // 以下四个方法只改 composition session 的 preeditText / preeditCursorUtf16 / generation；
+    // 不修改 committed 正文，不把 raw platform event 带入 Core。
+    // grapheme 边界由 Core 的 unicode_segmentation 裁判。
+
+    pub(crate) fn apply_composition_move_grapheme_left(
+        &mut self,
+        composition_session_id: u64,
+        composition_generation: u64,
+        base_revision: EditorRevision,
+        old_cursor: Utf8ByteOffset,
+        old_selection: Utf8ByteRange,
+    ) -> EditorEditOutcome {
+        let session = match &mut self.composition_session {
+            Some(s)
+                if s.session_id.value() == composition_session_id
+                    && s.generation.value() == composition_generation
+                    && s.base_revision == base_revision =>
+            {
+                s
+            }
+            _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
+        };
+
+        let preedit = session.preedit_text.clone();
+        let cursor_utf16 = session.preedit_cursor_utf16.value();
+
+        // 将 UTF-16 cursor 转换为 UTF-8 byte offset
+        let cursor_byte = Self::utf16_to_byte_offset(&preedit, cursor_utf16);
+
+        if cursor_byte == 0 {
+            // 已在 preedit 最左端，no-op（但 generation 不变，直接返回）
+            let new_selection =
+                Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+            return EditorEditOutcome::Applied(EditorEditResult {
+                transaction_id: self.take_transaction_id(),
+                base_revision,
+                new_revision: self.revision,
+                display_patches: vec![],
+                old_selection_byte_range: old_selection,
+                new_selection_byte_range: new_selection,
+                visual_intent: EditorVisualIntent {
+                    cause: EditorTransactionCause::ImeComposition,
+                    operation_kind: EditorOperationKind::CompositionUpdate,
+                    old_affected_byte_ranges: vec![],
+                    new_affected_byte_ranges: vec![],
+                    animation_mode: AnimationMode::SystemSuppressed,
+                    duration_ms: 0,
+                    coordinated_cursor: CoordinatedCursor {
+                        old_offset: old_cursor,
+                        new_offset: self.cursor,
+                        should_animate: false,
+                    },
+                    offset_map: None,
+                },
+                content_delta: EditorContentDelta::default(),
+            });
+        }
+
+        // 在 preedit 文本中找到前一个 grapheme cluster 边界
+        let prev_boundary_byte = Self::previous_grapheme_boundary_on_str(&preedit, cursor_byte);
+        let new_cursor_utf16 = Self::byte_to_utf16_offset(&preedit, prev_boundary_byte);
+
+        session.preedit_cursor_utf16 = Utf16CodeUnitOffset::unchecked(new_cursor_utf16);
+        session.generation = session.generation.next();
+
+        let new_selection =
+            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        EditorEditOutcome::Applied(EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision: self.revision,
+            display_patches: vec![],
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent: EditorVisualIntent {
+                cause: EditorTransactionCause::ImeComposition,
+                operation_kind: EditorOperationKind::CompositionUpdate,
+                old_affected_byte_ranges: vec![],
+                new_affected_byte_ranges: vec![],
+                animation_mode: AnimationMode::SystemSuppressed,
+                duration_ms: 0,
+                coordinated_cursor: CoordinatedCursor {
+                    old_offset: old_cursor,
+                    new_offset: self.cursor,
+                    should_animate: false,
+                },
+                offset_map: None,
+            },
+            content_delta: EditorContentDelta::default(),
+        })
+    }
+
+    pub(crate) fn apply_composition_move_grapheme_right(
+        &mut self,
+        composition_session_id: u64,
+        composition_generation: u64,
+        base_revision: EditorRevision,
+        old_cursor: Utf8ByteOffset,
+        old_selection: Utf8ByteRange,
+    ) -> EditorEditOutcome {
+        let session = match &mut self.composition_session {
+            Some(s)
+                if s.session_id.value() == composition_session_id
+                    && s.generation.value() == composition_generation
+                    && s.base_revision == base_revision =>
+            {
+                s
+            }
+            _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
+        };
+
+        let preedit = session.preedit_text.clone();
+        let cursor_utf16 = session.preedit_cursor_utf16.value();
+        let preedit_utf16_len: usize = preedit.chars().map(|c| c.len_utf16()).sum();
+
+        if cursor_utf16 >= preedit_utf16_len {
+            // 已在 preedit 最右端，no-op
+            let new_selection =
+                Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+            return EditorEditOutcome::Applied(EditorEditResult {
+                transaction_id: self.take_transaction_id(),
+                base_revision,
+                new_revision: self.revision,
+                display_patches: vec![],
+                old_selection_byte_range: old_selection,
+                new_selection_byte_range: new_selection,
+                visual_intent: EditorVisualIntent {
+                    cause: EditorTransactionCause::ImeComposition,
+                    operation_kind: EditorOperationKind::CompositionUpdate,
+                    old_affected_byte_ranges: vec![],
+                    new_affected_byte_ranges: vec![],
+                    animation_mode: AnimationMode::SystemSuppressed,
+                    duration_ms: 0,
+                    coordinated_cursor: CoordinatedCursor {
+                        old_offset: old_cursor,
+                        new_offset: self.cursor,
+                        should_animate: false,
+                    },
+                    offset_map: None,
+                },
+                content_delta: EditorContentDelta::default(),
+            });
+        }
+
+        let cursor_byte = Self::utf16_to_byte_offset(&preedit, cursor_utf16);
+        let next_boundary_byte = Self::next_grapheme_boundary_on_str(&preedit, cursor_byte);
+        let new_cursor_utf16 = Self::byte_to_utf16_offset(&preedit, next_boundary_byte);
+
+        session.preedit_cursor_utf16 = Utf16CodeUnitOffset::unchecked(new_cursor_utf16);
+        session.generation = session.generation.next();
+
+        let new_selection =
+            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        EditorEditOutcome::Applied(EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision: self.revision,
+            display_patches: vec![],
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent: EditorVisualIntent {
+                cause: EditorTransactionCause::ImeComposition,
+                operation_kind: EditorOperationKind::CompositionUpdate,
+                old_affected_byte_ranges: vec![],
+                new_affected_byte_ranges: vec![],
+                animation_mode: AnimationMode::SystemSuppressed,
+                duration_ms: 0,
+                coordinated_cursor: CoordinatedCursor {
+                    old_offset: old_cursor,
+                    new_offset: self.cursor,
+                    should_animate: false,
+                },
+                offset_map: None,
+            },
+            content_delta: EditorContentDelta::default(),
+        })
+    }
+
+    pub(crate) fn apply_composition_delete_grapheme_backward(
+        &mut self,
+        composition_session_id: u64,
+        composition_generation: u64,
+        base_revision: EditorRevision,
+        old_cursor: Utf8ByteOffset,
+        old_selection: Utf8ByteRange,
+    ) -> EditorEditOutcome {
+        let session = match &mut self.composition_session {
+            Some(s)
+                if s.session_id.value() == composition_session_id
+                    && s.generation.value() == composition_generation
+                    && s.base_revision == base_revision =>
+            {
+                s
+            }
+            _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
+        };
+
+        let preedit = session.preedit_text.clone();
+        let cursor_utf16 = session.preedit_cursor_utf16.value();
+        let cursor_byte = Self::utf16_to_byte_offset(&preedit, cursor_utf16);
+
+        if cursor_byte == 0 {
+            // preedit 已空或光标在最左端，no-op
+            let new_selection =
+                Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+            return EditorEditOutcome::Applied(EditorEditResult {
+                transaction_id: self.take_transaction_id(),
+                base_revision,
+                new_revision: self.revision,
+                display_patches: vec![],
+                old_selection_byte_range: old_selection,
+                new_selection_byte_range: new_selection,
+                visual_intent: EditorVisualIntent {
+                    cause: EditorTransactionCause::ImeComposition,
+                    operation_kind: EditorOperationKind::CompositionUpdate,
+                    old_affected_byte_ranges: vec![],
+                    new_affected_byte_ranges: vec![],
+                    animation_mode: AnimationMode::SystemSuppressed,
+                    duration_ms: 0,
+                    coordinated_cursor: CoordinatedCursor {
+                        old_offset: old_cursor,
+                        new_offset: self.cursor,
+                        should_animate: false,
+                    },
+                    offset_map: None,
+                },
+                content_delta: EditorContentDelta::default(),
+            });
+        }
+
+        let prev_boundary_byte = Self::previous_grapheme_boundary_on_str(&preedit, cursor_byte);
+        // 删除 [prev_boundary_byte, cursor_byte) 区间的文本
+        let mut new_preedit =
+            String::with_capacity(preedit.len() - (cursor_byte - prev_boundary_byte));
+        new_preedit.push_str(&preedit[..prev_boundary_byte]);
+        new_preedit.push_str(&preedit[cursor_byte..]);
+
+        let new_cursor_utf16 = Self::byte_to_utf16_offset(&new_preedit, prev_boundary_byte);
+        session.preedit_text = new_preedit;
+        session.preedit_cursor_utf16 = Utf16CodeUnitOffset::unchecked(new_cursor_utf16);
+        session.generation = session.generation.next();
+
+        let new_selection =
+            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        EditorEditOutcome::Applied(EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision: self.revision,
+            display_patches: vec![],
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent: EditorVisualIntent {
+                cause: EditorTransactionCause::ImeComposition,
+                operation_kind: EditorOperationKind::CompositionUpdate,
+                old_affected_byte_ranges: vec![],
+                new_affected_byte_ranges: vec![],
+                animation_mode: AnimationMode::SystemSuppressed,
+                duration_ms: 0,
+                coordinated_cursor: CoordinatedCursor {
+                    old_offset: old_cursor,
+                    new_offset: self.cursor,
+                    should_animate: false,
+                },
+                offset_map: None,
+            },
+            content_delta: EditorContentDelta::default(),
+        })
+    }
+
+    pub(crate) fn apply_composition_delete_grapheme_forward(
+        &mut self,
+        composition_session_id: u64,
+        composition_generation: u64,
+        base_revision: EditorRevision,
+        old_cursor: Utf8ByteOffset,
+        old_selection: Utf8ByteRange,
+    ) -> EditorEditOutcome {
+        let session = match &mut self.composition_session {
+            Some(s)
+                if s.session_id.value() == composition_session_id
+                    && s.generation.value() == composition_generation
+                    && s.base_revision == base_revision =>
+            {
+                s
+            }
+            _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
+        };
+
+        let preedit = session.preedit_text.clone();
+        let cursor_utf16 = session.preedit_cursor_utf16.value();
+        let preedit_utf16_len: usize = preedit.chars().map(|c| c.len_utf16()).sum();
+
+        if cursor_utf16 >= preedit_utf16_len {
+            // preedit 已空或光标在最右端，no-op
+            let new_selection =
+                Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+            return EditorEditOutcome::Applied(EditorEditResult {
+                transaction_id: self.take_transaction_id(),
+                base_revision,
+                new_revision: self.revision,
+                display_patches: vec![],
+                old_selection_byte_range: old_selection,
+                new_selection_byte_range: new_selection,
+                visual_intent: EditorVisualIntent {
+                    cause: EditorTransactionCause::ImeComposition,
+                    operation_kind: EditorOperationKind::CompositionUpdate,
+                    old_affected_byte_ranges: vec![],
+                    new_affected_byte_ranges: vec![],
+                    animation_mode: AnimationMode::SystemSuppressed,
+                    duration_ms: 0,
+                    coordinated_cursor: CoordinatedCursor {
+                        old_offset: old_cursor,
+                        new_offset: self.cursor,
+                        should_animate: false,
+                    },
+                    offset_map: None,
+                },
+                content_delta: EditorContentDelta::default(),
+            });
+        }
+
+        let cursor_byte = Self::utf16_to_byte_offset(&preedit, cursor_utf16);
+        let next_boundary_byte = Self::next_grapheme_boundary_on_str(&preedit, cursor_byte);
+        // 删除 [cursor_byte, next_boundary_byte) 区间的文本
+        let mut new_preedit =
+            String::with_capacity(preedit.len() - (next_boundary_byte - cursor_byte));
+        new_preedit.push_str(&preedit[..cursor_byte]);
+        new_preedit.push_str(&preedit[next_boundary_byte..]);
+
+        let new_cursor_utf16 = Self::byte_to_utf16_offset(&new_preedit, cursor_byte);
+        session.preedit_text = new_preedit;
+        session.preedit_cursor_utf16 = Utf16CodeUnitOffset::unchecked(new_cursor_utf16);
+        session.generation = session.generation.next();
+
+        let new_selection =
+            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        EditorEditOutcome::Applied(EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision: self.revision,
+            display_patches: vec![],
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent: EditorVisualIntent {
+                cause: EditorTransactionCause::ImeComposition,
+                operation_kind: EditorOperationKind::CompositionUpdate,
+                old_affected_byte_ranges: vec![],
+                new_affected_byte_ranges: vec![],
+                animation_mode: AnimationMode::SystemSuppressed,
+                duration_ms: 0,
+                coordinated_cursor: CoordinatedCursor {
+                    old_offset: old_cursor,
+                    new_offset: self.cursor,
+                    should_animate: false,
+                },
+                offset_map: None,
+            },
+            content_delta: EditorContentDelta::default(),
+        })
+    }
+
+    // ── 辅助方法：对 &str 做 grapheme boundary 计算 ──
+
+    /// 对 `s` 的 UTF-8 byte slice `[0, byte_offset)` 求最后一个 grapheme cluster 的起始位置。
+    fn previous_grapheme_boundary_on_str(s: &str, byte_offset: usize) -> usize {
+        use unicode_segmentation::UnicodeSegmentation;
+        if byte_offset == 0 {
+            return 0;
+        }
+        if byte_offset > s.len() {
+            return s.len();
+        }
+        let prefix = &s[..byte_offset];
+        match prefix.graphemes(true).next_back() {
+            Some(g) => byte_offset - g.len(),
+            None => 0,
+        }
+    }
+
+    /// 对 `s` 从 `byte_offset` 开始求第一个 grapheme cluster 的结束位置。
+    fn next_grapheme_boundary_on_str(s: &str, byte_offset: usize) -> usize {
+        use unicode_segmentation::UnicodeSegmentation;
+        let len = s.len();
+        if byte_offset >= len {
+            return len;
+        }
+        let suffix = &s[byte_offset..];
+        match suffix.graphemes(true).next() {
+            Some(g) => byte_offset + g.len(),
+            None => len,
+        }
+    }
+
+    /// UTF-16 code unit offset → UTF-8 byte offset。
+    fn utf16_to_byte_offset(s: &str, utf16_offset: usize) -> usize {
+        let mut utf16_count = 0usize;
+        let mut byte_offset = 0usize;
+        for ch in s.chars() {
+            let ch_len_utf16 = ch.len_utf16();
+            if utf16_count + ch_len_utf16 > utf16_offset {
+                break;
+            }
+            utf16_count += ch_len_utf16;
+            byte_offset += ch.len_utf8();
+        }
+        byte_offset.min(s.len())
+    }
+
+    /// UTF-8 byte offset → UTF-16 code unit offset。
+    fn byte_to_utf16_offset(s: &str, byte_offset: usize) -> usize {
+        let mut utf16_count = 0usize;
+        let mut current_byte = 0usize;
+        for ch in s.chars() {
+            if current_byte >= byte_offset {
+                break;
+            }
+            current_byte += ch.len_utf8();
+            utf16_count += ch.len_utf16();
+        }
+        utf16_count
+    }
+
     /// #629 评论6 Part B：返回当前 composition 完整状态（preedit 文本 + replace range + cursor）。
     ///
     /// 返回元组字段顺序：

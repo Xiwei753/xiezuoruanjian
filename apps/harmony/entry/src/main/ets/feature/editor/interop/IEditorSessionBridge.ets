@@ -34,4 +34,11 @@ export interface IEditorSessionBridge {
   // 不再自己用 UTF-16 ±1 猜字符边界（避免切进组合附加符 / ZWJ emoji）。
   previousGraphemeBoundary(sessionId: number, byteOffset: number): Promise<ResultEnvelope<number>>
   nextGraphemeBoundary(sessionId: number, byteOffset: number): Promise<ResultEnvelope<number>>
+  // Issue #629 评论5324447292 第2项：composition 专用 grapheme 语义操作。
+  // 操作 Core 已持有的 preeditText + preeditCursorUtf16，不把 platform raw event 带进 Core，
+  // 不创建 Harmony 第二份 preedit；grapheme 边界由 Core 的 Unicode 逻辑裁判。
+  compositionMoveGraphemeLeft(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>>
+  compositionMoveGraphemeRight(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>>
+  compositionDeleteGraphemeBackward(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>>
+  compositionDeleteGraphemeForward(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>>
 }

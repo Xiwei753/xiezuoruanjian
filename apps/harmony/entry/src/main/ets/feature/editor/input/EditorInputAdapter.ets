@@ -196,6 +196,26 @@ export class EditorInputAdapter {
     return snap !== null && snap.composition !== null && snap.composition !== undefined
   }
 
+  // Issue #629 评论5324447292 第2项：composition 专用 grapheme 语义操作。
+  // 操作 Core 已持有的 preeditText + preeditCursorUtf16，不把 platform raw event 带进 Core，
+  // 不创建 Harmony 第二份 preedit；grapheme 边界由 Core 的 Unicode 逻辑裁判。
+  // 仅 composition 活跃时调用（由 Dispatcher 出队时判断）。
+  async compositionMoveGraphemeLeft(): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.coordinator.compositionMoveGraphemeLeft()
+  }
+
+  async compositionMoveGraphemeRight(): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.coordinator.compositionMoveGraphemeRight()
+  }
+
+  async compositionDeleteGraphemeBackward(): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.coordinator.compositionDeleteGraphemeBackward()
+  }
+
+  async compositionDeleteGraphemeForward(): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.coordinator.compositionDeleteGraphemeForward()
+  }
+
   // 当前光标的 UTF-16 code unit offset（供外部查询，如 HarmonyImeConnection 通知 IME 选区）。
   // Issue #629 评论 3：用 snap.cursor（而非 selectionHead）。
   getCurrentCursorUtf16(): number {

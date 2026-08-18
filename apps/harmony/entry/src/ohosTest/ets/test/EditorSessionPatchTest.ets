@@ -29,6 +29,7 @@ import {
   EditorEditOutcome,
   DisplayPatch,
   CompositionSession,
+  EditorCompositionState,
   EditorContentDelta,
   EditorVisualIntent,
   EditorTransactionCause
@@ -98,6 +99,56 @@ class MockEditorSessionBridge implements IEditorSessionBridge {
   }
   async cancelComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
     return { success: true, data: this.makeAppliedResult(), warnings: [], changedPaths: [], changedEntities: [] }
+  }
+  // #629 R8: composition 专用 grapheme 语义操作。
+  // mock 记录参数并模拟 Core 回填（generation+1、composition 状态透传）；
+  // compositionOpFailure=true 时返回失败信封，验证错误真实传播。
+  compositionMoveLeftCalls: Array<{ sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number }> = []
+  compositionMoveRightCalls: Array<{ sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number }> = []
+  compositionDeleteBackwardCalls: Array<{ sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number }> = []
+  compositionDeleteForwardCalls: Array<{ sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number }> = []
+  compositionOpFailure: boolean = false
+  // mock 当前 composition 状态（由测试设置）；composition 操作成功后 generation 递增并回写。
+  mockComposition: EditorCompositionState | null = null
+
+  private recordCompositionOp(
+    calls: Array<{ sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number }>,
+    sessionId: number,
+    compositionSessionId: number,
+    compositionGeneration: number,
+    expectedRevision: number
+  ): Promise<ResultEnvelope<EditorEditResult>> {
+    calls.push({ sessionId, compositionSessionId, compositionGeneration, expectedRevision })
+    if (this.compositionOpFailure) {
+      return Promise.resolve({
+        success: false,
+        errorCode: 'CORE_COMPOSITION_OP_FAILED',
+        userMessage: 'mock composition op failure',
+        warnings: [], changedPaths: [], changedEntities: []
+      })
+    }
+    // 模拟 Core 回填：generation 递增、composition 状态透传（ArkTS 不复制状态机，只透传）。
+    const nextGen: number = compositionGeneration + 1
+    if (this.mockComposition) {
+      this.mockComposition = Object.assign({}, this.mockComposition, { generation: nextGen }) as EditorCompositionState
+    }
+    const result: EditorEditResult = this.makeAppliedResult()
+    result.compositionSession = { sessionId: compositionSessionId, baseRevision: expectedRevision, generation: nextGen } as CompositionSession
+    result.composition = this.mockComposition
+    return Promise.resolve({ success: true, data: result, warnings: [], changedPaths: [], changedEntities: [] })
+  }
+
+  async compositionMoveGraphemeLeft(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.recordCompositionOp(this.compositionMoveLeftCalls, sessionId, compositionSessionId, compositionGeneration, expectedRevision)
+  }
+  async compositionMoveGraphemeRight(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.recordCompositionOp(this.compositionMoveRightCalls, sessionId, compositionSessionId, compositionGeneration, expectedRevision)
+  }
+  async compositionDeleteGraphemeBackward(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.recordCompositionOp(this.compositionDeleteBackwardCalls, sessionId, compositionSessionId, compositionGeneration, expectedRevision)
+  }
+  async compositionDeleteGraphemeForward(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.recordCompositionOp(this.compositionDeleteForwardCalls, sessionId, compositionSessionId, compositionGeneration, expectedRevision)
   }
   async getText(sessionId: number): Promise<ResultEnvelope<string>> {
     return { success: true, data: this.mockSnapshot.text, warnings: [], changedPaths: [], changedEntities: [] }
@@ -441,6 +492,88 @@ export default function editorSessionPatchTest() {
       expect(result.success).assertTrue()
       expect(bridge.createCalls.length).assertEqual(1)
       expect(bridge.createCalls[0].isPersistent).assertFalse()
+    })
+  })
+
+  // ── #629 R8：composition 专用 grapheme 语义操作桥接 ──
+  // 环境阻塞：无 hvigor/ohpm/SDK，需真实 HarmonyOS 环境运行。
+  // EditorInputAdapter.compositionMove/DeleteGrapheme* 从 Core snapshot 的 composition
+  // 读取 sessionId/generation，经 Coordinator 串行队列带 expectedRevision 调 bridge；
+  // 无 composition 时返回 NO_COMPOSITION 且不调 bridge；bridge 失败真实传播。
+  // committed 正文不变由 Core/FFI 层测试保证（此处只验证桥接参数与错误传播）。
+  describe('#629 R8 composition grapheme ops 桥接（环境阻塞：无 hvigor/ohpm/SDK）', () => {
+    const activeComposition: EditorCompositionState = {
+      sessionId: 7, baseRevision: 1, generation: 3,
+      replaceByteStart: 5, replaceByteEndExclusive: 5,
+      preeditText: '预输入', preeditCursorUtf16: 2
+    }
+
+    const setupComposition = (): { bridge: MockEditorSessionBridge, coordinator: EditorSessionCoordinator, adapter: EditorInputAdapter } => {
+      const bridge: MockEditorSessionBridge = new MockEditorSessionBridge()
+      bridge.mockSnapshot = {
+        text: 'committed', revision: 4, cursor: 5, selectionAnchor: 5, generation: 3,
+        chapterId: 'c1', composition: activeComposition
+      }
+      bridge.mockComposition = activeComposition
+      const coordinator: EditorSessionCoordinator = new EditorSessionCoordinator(bridge)
+      const adapter: EditorInputAdapter = new EditorInputAdapter(coordinator)
+      return { bridge, coordinator, adapter }
+    }
+
+    it('compositionMoveGraphemeLeft：从 snapshot 读 sessionId/generation，经 coordinator 带 revision 调 bridge', async () => {
+      const { bridge, coordinator, adapter } = setupComposition()
+      await coordinator.open('c1', 'committed', true)
+      const result = await adapter.compositionMoveGraphemeLeft()
+      expect(result.success).assertTrue()
+      expect(bridge.compositionMoveLeftCalls.length).assertEqual(1)
+      expect(bridge.compositionMoveLeftCalls[0].sessionId).assertEqual(1)
+      expect(bridge.compositionMoveLeftCalls[0].compositionSessionId).assertEqual(7)
+      expect(bridge.compositionMoveLeftCalls[0].compositionGeneration).assertEqual(3)
+      expect(bridge.compositionMoveLeftCalls[0].expectedRevision).assertEqual(4)
+      // 其余三个方向/删除方法不应被调用
+      expect(bridge.compositionMoveRightCalls.length).assertEqual(0)
+      expect(bridge.compositionDeleteBackwardCalls.length).assertEqual(0)
+      expect(bridge.compositionDeleteForwardCalls.length).assertEqual(0)
+    })
+
+    it('四种 composition grapheme 操作分别路由到对应 bridge 方法', async () => {
+      const { bridge, coordinator, adapter } = setupComposition()
+      await coordinator.open('c1', 'committed', true)
+      // 依次执行四种操作，每次都从更新后的 snapshot 取最新 generation（mock 每次 +1）
+      await adapter.compositionMoveGraphemeLeft()
+      await adapter.compositionMoveGraphemeRight()
+      await adapter.compositionDeleteGraphemeBackward()
+      await adapter.compositionDeleteGraphemeForward()
+      expect(bridge.compositionMoveLeftCalls.length).assertEqual(1)
+      expect(bridge.compositionMoveRightCalls.length).assertEqual(1)
+      expect(bridge.compositionDeleteBackwardCalls.length).assertEqual(1)
+      expect(bridge.compositionDeleteForwardCalls.length).assertEqual(1)
+      // generation 链式推进：第 2/3/4 次调用携带的 generation 来自上次结果回填（3→4→5→6）
+      expect(bridge.compositionMoveRightCalls[0].compositionGeneration).assertEqual(4)
+      expect(bridge.compositionDeleteBackwardCalls[0].compositionGeneration).assertEqual(5)
+      expect(bridge.compositionDeleteForwardCalls[0].compositionGeneration).assertEqual(6)
+    })
+
+    it('无 composition 时返回 NO_COMPOSITION 且不调 bridge', async () => {
+      const bridge: MockEditorSessionBridge = new MockEditorSessionBridge()
+      bridge.mockSnapshot = { text: 'committed', revision: 4, cursor: 5, selectionAnchor: 5, generation: 0, chapterId: 'c1', composition: null }
+      const coordinator: EditorSessionCoordinator = new EditorSessionCoordinator(bridge)
+      await coordinator.open('c1', 'committed', true)
+      const adapter: EditorInputAdapter = new EditorInputAdapter(coordinator)
+      const result = await adapter.compositionDeleteGraphemeBackward()
+      expect(result.success).assertFalse()
+      expect(result.errorCode).assertEqual('NO_COMPOSITION')
+      expect(bridge.compositionDeleteBackwardCalls.length).assertEqual(0)
+    })
+
+    it('bridge 失败真实传播（不吞错误、不伪造成功）', async () => {
+      const { bridge, coordinator, adapter } = setupComposition()
+      bridge.compositionOpFailure = true
+      await coordinator.open('c1', 'committed', true)
+      const result = await adapter.compositionMoveGraphemeRight()
+      expect(result.success).assertFalse()
+      expect(result.errorCode).assertEqual('CORE_COMPOSITION_OP_FAILED')
+      expect(bridge.compositionMoveRightCalls.length).assertEqual(1)
     })
   })
 }

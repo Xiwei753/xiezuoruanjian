@@ -58,6 +58,18 @@ impl EditorKernel {
             }
             | EditorCommand::CancelComposition {
                 expected_revision, ..
+            }
+            | EditorCommand::CompositionMoveGraphemeLeft {
+                expected_revision, ..
+            }
+            | EditorCommand::CompositionMoveGraphemeRight {
+                expected_revision, ..
+            }
+            | EditorCommand::CompositionDeleteGraphemeBackward {
+                expected_revision, ..
+            }
+            | EditorCommand::CompositionDeleteGraphemeForward {
+                expected_revision, ..
             } => {
                 if *expected_revision != base_revision {
                     return EditorEditOutcome::StaleRevision(self.stale_session_result());
@@ -221,6 +233,51 @@ impl EditorKernel {
                 composition_generation,
                 ..
             } => self.apply_cancel_composition(
+                composition_session_id.value(),
+                composition_generation.value(),
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
+            // #629 R8: composition 专用 grapheme 语义操作
+            EditorCommand::CompositionMoveGraphemeLeft {
+                composition_session_id,
+                composition_generation,
+                ..
+            } => self.apply_composition_move_grapheme_left(
+                composition_session_id.value(),
+                composition_generation.value(),
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
+            EditorCommand::CompositionMoveGraphemeRight {
+                composition_session_id,
+                composition_generation,
+                ..
+            } => self.apply_composition_move_grapheme_right(
+                composition_session_id.value(),
+                composition_generation.value(),
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
+            EditorCommand::CompositionDeleteGraphemeBackward {
+                composition_session_id,
+                composition_generation,
+                ..
+            } => self.apply_composition_delete_grapheme_backward(
+                composition_session_id.value(),
+                composition_generation.value(),
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
+            EditorCommand::CompositionDeleteGraphemeForward {
+                composition_session_id,
+                composition_generation,
+                ..
+            } => self.apply_composition_delete_grapheme_forward(
                 composition_session_id.value(),
                 composition_generation.value(),
                 base_revision,

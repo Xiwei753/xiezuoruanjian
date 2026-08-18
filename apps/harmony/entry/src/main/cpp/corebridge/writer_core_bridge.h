@@ -138,6 +138,14 @@ char* writer_core_editor_session_get_revision(uint64_t session_id);
 char* writer_core_editor_session_previous_grapheme_boundary(uint64_t session_id, uint32_t byte_offset);
 char* writer_core_editor_session_next_grapheme_boundary(uint64_t session_id, uint32_t byte_offset);
 
+// #629 R8: composition 专用 grapheme 语义操作。
+// 只改 composition session 的 preeditText / preeditCursorUtf16 / generation；
+// 不修改 committed 正文，不把 raw platform event 带入 Core。
+char* writer_core_editor_session_composition_move_grapheme_left(uint64_t session_id, uint64_t composition_session_id, uint64_t composition_generation, uint64_t expected_revision);
+char* writer_core_editor_session_composition_move_grapheme_right(uint64_t session_id, uint64_t composition_session_id, uint64_t composition_generation, uint64_t expected_revision);
+char* writer_core_editor_session_composition_delete_grapheme_backward(uint64_t session_id, uint64_t composition_session_id, uint64_t composition_generation, uint64_t expected_revision);
+char* writer_core_editor_session_composition_delete_grapheme_forward(uint64_t session_id, uint64_t composition_session_id, uint64_t composition_generation, uint64_t expected_revision);
+
 #ifdef __cplusplus
 }
 #endif

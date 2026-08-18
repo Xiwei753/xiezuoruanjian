@@ -99,8 +99,9 @@ export struct SujianEditor {
   // SelectionController.getVisualCaret(cursorUtf16) 是唯一 owner，
   // refreshRenderLayout() 每次按当前 snapshot cursor 从 owner 取，
   // 不再有第二份状态。
-  // drag selection 状态：鼠标/触摸按下时记 anchor UTF-16 offset，move 时 drag select。
-  private dragAnchorUtf16: number = -1
+  // Issue #629 评论5324447292 第1项：drag anchor 持有完整 VisualCaretPosition（含 affinity），
+  // 不丢弃命中测试的 soft-wrap 亲和性。
+  private dragAnchor: VisualCaretPosition | null = null
   private isDragging: boolean = false
 
   aboutToAppear(): void {
@@ -397,25 +398,22 @@ export struct SujianEditor {
       case 'down':
         if (ev.button === 0) {
           // 左键按下：记 anchor position，开始 potential drag。
-          this.dragAnchorUtf16 = hitPos.utf16Offset
+          this.dragAnchor = hitPos
           this.isDragging = true
-          // Issue #629 评论18：传入完整 VisualCaretPosition（含 affinity），不丢弃。
+          // Issue #629 评论5324447292 第1项：setSelection 走 executeDisplaySelection 统一入口。
           dispatcher.dispatchFireAndForget({ kind: 'setSelection', position: hitPos })
         }
         break
       case 'move':
-        if (this.isDragging) {
-          // 拖动选区：anchor 不变，head 跟随当前位置。经 dispatcher 派发。
-          // Issue #629 R7：鼠标拖选发完整 VisualCaretPosition（含 affinity），与触摸统一。
-          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: this.dragAnchorUtf16, head: hitPos })
+        if (this.isDragging && this.dragAnchor !== null) {
+          // 拖动选区：anchor 不变，head 跟随当前位置。传完整 VisualCaretPosition。
+          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', anchor: this.dragAnchor, head: hitPos })
         }
         break
       case 'up':
         if (this.isDragging) {
-          // 抬起结束 drag。如果 anchor == head（单击），setSelection 已在 down 时派发；
-          // 如果 anchor != head（拖动选区），dragSelect 已在 move 时派发。
           this.isDragging = false
-          this.dragAnchorUtf16 = -1
+          this.dragAnchor = null
         }
         break
       case 'wheel':
@@ -454,30 +452,27 @@ export struct SujianEditor {
     switch (event.type) {
       case TouchType.Down:
         // 按下：记 anchor，开始 potential drag。
-        this.dragAnchorUtf16 = hitPos.utf16Offset
+        this.dragAnchor = hitPos
         this.isDragging = true
         break
       case TouchType.Move:
-        // 拖动选区：anchor 不变，head 跟随当前位置。经 dispatcher 派发。
-        if (this.isDragging && this.dragAnchorUtf16 !== hitPos.utf16Offset) {
-          // Issue #629 评论18：传入完整 VisualCaretPosition（含 affinity）。
-          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: this.dragAnchorUtf16, head: hitPos })
+        // 拖动选区：anchor 不变，head 跟随当前位置。传完整 VisualCaretPosition。
+        if (this.isDragging && this.dragAnchor !== null && this.dragAnchor.utf16Offset !== hitPos.utf16Offset) {
+          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', anchor: this.dragAnchor, head: hitPos })
         }
         break
       case TouchType.Up:
         if (this.isDragging) {
-          if (this.dragAnchorUtf16 === hitPos.utf16Offset) {
-            // 单击（down 和 up 同位置）：只经 dispatcher 发一次 selection（Part D：删除重复 onSelectionTap）。
-            // Issue #629 评论18：传入完整 VisualCaretPosition（含 affinity）。
+          if (this.dragAnchor !== null && this.dragAnchor.utf16Offset === hitPos.utf16Offset) {
+            // 单击：只经 dispatcher 发一次 selection。
             dispatcher.dispatchFireAndForget({ kind: 'setSelection', position: hitPos })
             // 通知 IME 当前选区（光标位置）
             if (this.harmonyImeConnection) {
               this.harmonyImeConnection.notifySelection(hitPos.utf16Offset, hitPos.utf16Offset).then(() => {})
             }
           }
-          // 拖动选区（anchor != head）已在 Move 时通过 dragSelect 派发，Up 时保持。
           this.isDragging = false
-          this.dragAnchorUtf16 = -1
+          this.dragAnchor = null
         }
         break
       default:

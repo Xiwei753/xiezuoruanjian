@@ -185,6 +185,44 @@ export class NativeEditorSessionBridge implements IEditorSessionBridge {
     }
   }
 
+  // Issue #629 评论5324447292 第2项：composition 专用 grapheme 语义操作。
+  // 操作 Core 已持有的 preeditText + preeditCursorUtf16，不创建 Harmony 第二份 preedit。
+  async compositionMoveGraphemeLeft(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionCompositionMoveGraphemeLeft(sessionId, compositionSessionId, compositionGeneration, expectedRevision) as string
+      return this.core.parseEnvelope<EditorEditResult>(jsonStr)
+    } catch (e) {
+      return this.nativeError<EditorEditResult>(e)
+    }
+  }
+
+  async compositionMoveGraphemeRight(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionCompositionMoveGraphemeRight(sessionId, compositionSessionId, compositionGeneration, expectedRevision) as string
+      return this.core.parseEnvelope<EditorEditResult>(jsonStr)
+    } catch (e) {
+      return this.nativeError<EditorEditResult>(e)
+    }
+  }
+
+  async compositionDeleteGraphemeBackward(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionCompositionDeleteGraphemeBackward(sessionId, compositionSessionId, compositionGeneration, expectedRevision) as string
+      return this.core.parseEnvelope<EditorEditResult>(jsonStr)
+    } catch (e) {
+      return this.nativeError<EditorEditResult>(e)
+    }
+  }
+
+  async compositionDeleteGraphemeForward(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionCompositionDeleteGraphemeForward(sessionId, compositionSessionId, compositionGeneration, expectedRevision) as string
+      return this.core.parseEnvelope<EditorEditResult>(jsonStr)
+    } catch (e) {
+      return this.nativeError<EditorEditResult>(e)
+    }
+  }
+
   private nativeError<T>(e: unknown): ResultEnvelope<T> {
     return {
       success: false,

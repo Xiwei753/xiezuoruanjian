@@ -86,6 +86,29 @@ pub enum EditorCommand {
         composition_generation: EditorSessionGeneration,
         expected_revision: EditorRevision,
     },
+    // #629 R8: composition 专用 grapheme 语义操作。
+    // 只改 composition session 的 preeditText / preeditCursorUtf16 / generation；
+    // 不修改 committed 正文，不把 raw platform event 带入 Core。
+    CompositionMoveGraphemeLeft {
+        composition_session_id: EditorSessionId,
+        composition_generation: EditorSessionGeneration,
+        expected_revision: EditorRevision,
+    },
+    CompositionMoveGraphemeRight {
+        composition_session_id: EditorSessionId,
+        composition_generation: EditorSessionGeneration,
+        expected_revision: EditorRevision,
+    },
+    CompositionDeleteGraphemeBackward {
+        composition_session_id: EditorSessionId,
+        composition_generation: EditorSessionGeneration,
+        expected_revision: EditorRevision,
+    },
+    CompositionDeleteGraphemeForward {
+        composition_session_id: EditorSessionId,
+        composition_generation: EditorSessionGeneration,
+        expected_revision: EditorRevision,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

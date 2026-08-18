@@ -1714,4 +1714,565 @@ mod tests {
             "选区操作 offset_map 应为 None"
         );
     }
+
+    // ── #629 R8: composition grapheme semantic operation tests ──
+
+    fn begin_composition_at_end(kernel: &mut EditorKernel, text: &str) -> (u64, u64) {
+        let byte_len = text.len();
+        kernel
+            .apply(EditorCommand::BeginComposition {
+                replace_range: Utf8ByteRange::point(byte_len),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        let (sid, _rev, gen) = kernel.composition_session_info().unwrap();
+        (sid, gen)
+    }
+
+    fn update_preedit(
+        kernel: &mut EditorKernel,
+        sid: u64,
+        gen: u64,
+        preedit: &str,
+        cursor_utf16: usize,
+        expected_rev: u64,
+    ) -> u64 {
+        let outcome = kernel.apply(EditorCommand::UpdateComposition {
+            composition_session_id: EditorSessionId::new(sid),
+            composition_generation: EditorSessionGeneration::new(gen),
+            new_preedit_text: preedit.to_string(),
+            new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(cursor_utf16),
+            expected_revision: EditorRevision::new(expected_rev),
+        });
+        assert!(outcome.is_applied(), "update_composition 应成功");
+        outcome.into_result().new_revision.value()
+    }
+
+    #[test]
+    fn composition_session_flow_begin_update_move() {
+        // begin → update → move grapheme：session id 不变、base revision 不变、generation 递增。
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
+
+        let begin = kernel.apply(EditorCommand::BeginComposition {
+            replace_range: Utf8ByteRange::point(2),
+            expected_revision: EditorRevision::new(0),
+        });
+        assert!(begin.is_applied());
+        let (sid, base_rev, gen) = kernel.composition_session_info().unwrap();
+        assert_eq!(kernel.revision(), 0, "begin 不应改正文 revision");
+
+        let upd = kernel.apply(EditorCommand::UpdateComposition {
+            composition_session_id: EditorSessionId::new(sid),
+            composition_generation: EditorSessionGeneration::new(gen),
+            new_preedit_text: "cd".to_string(),
+            new_preedit_cursor_utf16: Utf16CodeUnitOffset::unchecked(2),
+            expected_revision: EditorRevision::new(base_rev),
+        });
+        assert!(upd.is_applied());
+        let (sid2, base_rev2, gen2) = kernel.composition_session_info().unwrap();
+        assert_eq!(sid2, sid, "session id 不应变化");
+        assert_eq!(base_rev2, base_rev, "base revision 不应变化");
+
+        let mov = kernel.apply(EditorCommand::CompositionMoveGraphemeLeft {
+            composition_session_id: EditorSessionId::new(sid2),
+            composition_generation: EditorSessionGeneration::new(gen2),
+            expected_revision: EditorRevision::new(base_rev2),
+        });
+        assert!(mov.is_applied());
+        let (sid3, base_rev3, gen3) = kernel.composition_session_info().unwrap();
+        assert_eq!(sid3, sid2, "move 不应新建 session");
+        assert_eq!(base_rev3, base_rev2, "move 不应改 base revision");
+        assert_eq!(gen3, gen2 + 1, "move 后 generation 应递增");
+        assert_eq!(kernel.revision(), 0, "move 不应改正文 revision");
+        assert_eq!(kernel.snapshot_text(), "ab", "move 不应改正文");
+    }
+
+    #[test]
+    fn composition_move_grapheme_left_ascii() {
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "ab");
+        let rev1 = update_preedit(&mut kernel, sid, gen, "cd", 2, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        let _result = kernel
+            .apply(EditorCommand::CompositionMoveGraphemeLeft {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        assert_eq!(kernel.snapshot_text(), "ab");
+        let (_, _, gen2) = kernel.composition_session_info().unwrap();
+        assert_eq!(gen2, gen1 + 1, "generation 应递增");
+    }
+
+    #[test]
+    fn composition_move_grapheme_right_ascii() {
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "ab");
+        let rev1 = update_preedit(&mut kernel, sid, gen, "cd", 0, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        let _result = kernel
+            .apply(EditorCommand::CompositionMoveGraphemeRight {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        assert_eq!(kernel.snapshot_text(), "ab");
+        let (_, _, gen2) = kernel.composition_session_info().unwrap();
+        assert_eq!(gen2, gen1 + 1, "generation 应递增");
+    }
+
+    #[test]
+    fn composition_delete_grapheme_backward_ascii() {
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "ab");
+        let rev1 = update_preedit(&mut kernel, sid, gen, "hello", 5, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel
+            .apply(EditorCommand::CompositionDeleteGraphemeBackward {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        assert_eq!(kernel.snapshot_text(), "ab");
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(snap.5, "hell", "preedit 应删除最后一个 grapheme");
+        assert_eq!(snap.6, 4, "preedit cursor 应回退");
+    }
+
+    #[test]
+    fn composition_delete_grapheme_forward_ascii() {
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "ab");
+        let rev1 = update_preedit(&mut kernel, sid, gen, "hello", 0, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel
+            .apply(EditorCommand::CompositionDeleteGraphemeForward {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        assert_eq!(kernel.snapshot_text(), "ab");
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(snap.5, "ello", "preedit 应删除第一个 grapheme");
+        assert_eq!(snap.6, 0, "preedit cursor 应保持");
+    }
+
+    #[test]
+    fn composition_move_left_at_boundary_noop() {
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "ab");
+        let rev1 = update_preedit(&mut kernel, sid, gen, "cd", 0, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        let _result = kernel
+            .apply(EditorCommand::CompositionMoveGraphemeLeft {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        assert_eq!(kernel.snapshot_text(), "ab");
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(snap.6, 0, "preedit cursor 不应变化");
+    }
+
+    #[test]
+    fn composition_move_right_at_boundary_noop() {
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "ab");
+        let rev1 = update_preedit(&mut kernel, sid, gen, "cd", 2, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        let _result = kernel
+            .apply(EditorCommand::CompositionMoveGraphemeRight {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        assert_eq!(kernel.snapshot_text(), "ab");
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(snap.6, 2, "preedit cursor 不应变化");
+    }
+
+    #[test]
+    fn composition_delete_backward_at_boundary_noop() {
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "ab");
+        let rev1 = update_preedit(&mut kernel, sid, gen, "cd", 0, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel
+            .apply(EditorCommand::CompositionDeleteGraphemeBackward {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        assert_eq!(kernel.snapshot_text(), "ab");
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(snap.5, "cd", "preedit 不应变化");
+        assert_eq!(snap.6, 0, "preedit cursor 不应变化");
+    }
+
+    #[test]
+    fn composition_delete_forward_at_boundary_noop() {
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "ab");
+        let rev1 = update_preedit(&mut kernel, sid, gen, "cd", 2, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel
+            .apply(EditorCommand::CompositionDeleteGraphemeForward {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        assert_eq!(kernel.snapshot_text(), "ab");
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(snap.5, "cd", "preedit 不应变化");
+        assert_eq!(snap.6, 2, "preedit cursor 不应变化");
+    }
+
+    #[test]
+    fn composition_move_grapheme_cjk() {
+        let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "你好");
+        let rev1 = update_preedit(&mut kernel, sid, gen, "世界", 2, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel
+            .apply(EditorCommand::CompositionMoveGraphemeLeft {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        assert_eq!(kernel.snapshot_text(), "你好");
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(snap.6, 1, "CJK move left: cursor 应从 2 移到 1");
+    }
+
+    #[test]
+    fn composition_delete_grapheme_cjk() {
+        let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "你好");
+        let rev1 = update_preedit(&mut kernel, sid, gen, "世界", 2, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel
+            .apply(EditorCommand::CompositionDeleteGraphemeBackward {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        assert_eq!(kernel.snapshot_text(), "你好");
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(snap.5, "世", "CJK delete backward: 应删除 界");
+        assert_eq!(snap.6, 1, "cursor 应回到 1");
+    }
+
+    #[test]
+    fn composition_move_emoji_zwj() {
+        let mut kernel = EditorKernel::with_text("pre".to_string(), 3).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "pre");
+        let family = "👨‍👩‍👧‍👦";
+        let rev1 = update_preedit(
+            &mut kernel,
+            sid,
+            gen,
+            family,
+            family.chars().map(|c| c.len_utf16()).sum::<usize>(),
+            0,
+        );
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel
+            .apply(EditorCommand::CompositionMoveGraphemeLeft {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        assert_eq!(kernel.snapshot_text(), "pre");
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(snap.6, 0, "ZWJ emoji move left: cursor 应移到 0");
+    }
+
+    #[test]
+    fn composition_delete_emoji_zwj() {
+        let mut kernel = EditorKernel::with_text("pre".to_string(), 3).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "pre");
+        let family = "👨‍👩‍👧‍👦";
+        let rev1 = update_preedit(
+            &mut kernel,
+            sid,
+            gen,
+            family,
+            family.chars().map(|c| c.len_utf16()).sum::<usize>(),
+            0,
+        );
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel
+            .apply(EditorCommand::CompositionDeleteGraphemeBackward {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        assert_eq!(kernel.snapshot_text(), "pre");
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(snap.5, "", "ZWJ emoji delete backward: preedit 应清空");
+        assert_eq!(snap.6, 0, "cursor 应为 0");
+    }
+
+    #[test]
+    fn composition_move_grapheme_combining_chars() {
+        // 分解序列 e + U+0301：两个 code point（UTF-16 2 units）是同一个 grapheme。
+        let mut kernel = EditorKernel::with_text("x".to_string(), 1).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "x");
+        let e_with_accent = "e\u{301}";
+        let rev1 = update_preedit(&mut kernel, sid, gen, e_with_accent, 2, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel
+            .apply(EditorCommand::CompositionMoveGraphemeLeft {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        assert_eq!(kernel.snapshot_text(), "x");
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(
+            snap.6, 0,
+            "combining char move left: 应跳过整个 grapheme（e+◌́）到 0，不能停在中间"
+        );
+    }
+
+    #[test]
+    fn composition_move_grapheme_combining_mid() {
+        // preedit = "aå̊b"（a + å+U+030A 组合 + b），UTF-16: a(1) å(1) U+030A(1) b(1) → 总长 4。
+        // cursor 在 3（b 前）左移一个 grapheme：应跳过 å̊ 整个组合停在 1（a 后），
+        // 不能停在 2/3（组合内部）。
+        let mut kernel = EditorKernel::with_text("".to_string(), 0).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "");
+        let preedit = "a\u{e5}\u{30a}b";
+        let rev1 = update_preedit(&mut kernel, sid, gen, preedit, 3, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel
+            .apply(EditorCommand::CompositionMoveGraphemeLeft {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(snap.5, preedit, "move 不改 preedit 文本");
+        assert_eq!(snap.6, 1, "左移应跳过整个组合停在 a 之后，不能停在组合内部");
+    }
+
+    #[test]
+    fn composition_delete_grapheme_backward_combining() {
+        // 删除 backward 应把 e + U+0301 整个 grapheme 一起删掉，不留孤立附加符。
+        let mut kernel = EditorKernel::with_text("".to_string(), 0).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "");
+        let e_with_accent = "e\u{301}";
+        let rev1 = update_preedit(&mut kernel, sid, gen, e_with_accent, 2, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel
+            .apply(EditorCommand::CompositionDeleteGraphemeBackward {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(snap.5, "", "combining delete backward: 应删除整个 grapheme");
+        assert_eq!(snap.6, 0, "cursor 应回到 0");
+    }
+
+    #[test]
+    fn composition_delete_grapheme_forward_combining() {
+        // 删除 forward 同样按 grapheme 边界：preedit = "xé̊y"，cursor 在 x 后，
+        // 应删除 é̊ 整个 grapheme（2 code points / 2 UTF-16 units）。
+        let mut kernel = EditorKernel::with_text("".to_string(), 0).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "");
+        let preedit = "x\u{e5}\u{30a}y";
+        let rev1 = update_preedit(&mut kernel, sid, gen, preedit, 1, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel
+            .apply(EditorCommand::CompositionDeleteGraphemeForward {
+                composition_session_id: EditorSessionId::new(sid),
+                composition_generation: EditorSessionGeneration::new(gen1),
+                expected_revision: EditorRevision::new(rev1),
+            })
+            .into_result();
+
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(
+            snap.5, "xy",
+            "combining delete forward: 应删除整个 grapheme"
+        );
+        assert_eq!(snap.6, 1, "cursor 应保持在 1");
+    }
+
+    #[test]
+    fn composition_generation_increments_on_move() {
+        let mut kernel = EditorKernel::with_text("".to_string(), 0).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "");
+        let rev1 = update_preedit(&mut kernel, sid, gen, "hello", 3, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel.apply(EditorCommand::CompositionMoveGraphemeLeft {
+            composition_session_id: EditorSessionId::new(sid),
+            composition_generation: EditorSessionGeneration::new(gen1),
+            expected_revision: EditorRevision::new(rev1),
+        });
+
+        let (_, _, gen2) = kernel.composition_session_info().unwrap();
+        assert_eq!(gen2, gen1 + 1, "move left 后 generation 应递增");
+
+        kernel.apply(EditorCommand::CompositionMoveGraphemeRight {
+            composition_session_id: EditorSessionId::new(sid),
+            composition_generation: EditorSessionGeneration::new(gen2),
+            expected_revision: EditorRevision::new(rev1),
+        });
+
+        let (_, _, gen3) = kernel.composition_session_info().unwrap();
+        assert_eq!(gen3, gen2 + 1, "move right 后 generation 应再递增");
+    }
+
+    #[test]
+    fn composition_stale_session_rejected() {
+        let mut kernel = EditorKernel::with_text("".to_string(), 0).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "");
+        let rev1 = update_preedit(&mut kernel, sid, gen, "hello", 5, 0);
+
+        let outcome = kernel.apply(EditorCommand::CompositionMoveGraphemeLeft {
+            composition_session_id: EditorSessionId::new(sid),
+            composition_generation: EditorSessionGeneration::new(gen + 999),
+            expected_revision: EditorRevision::new(rev1),
+        });
+        assert!(matches!(outcome, EditorEditOutcome::StaleRevision(_)));
+    }
+
+    #[test]
+    fn composition_committed_text_unchanged_after_all_ops() {
+        let mut kernel = EditorKernel::with_text("committed".to_string(), 9).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "committed");
+        let rev1 = update_preedit(&mut kernel, sid, gen, "预输入", 6, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel.apply(EditorCommand::CompositionMoveGraphemeLeft {
+            composition_session_id: EditorSessionId::new(sid),
+            composition_generation: EditorSessionGeneration::new(gen1),
+            expected_revision: EditorRevision::new(rev1),
+        });
+        assert_eq!(kernel.snapshot_text(), "committed", "move left 后正文不变");
+
+        let (_, _, gen2) = kernel.composition_session_info().unwrap();
+        kernel.apply(EditorCommand::CompositionDeleteGraphemeBackward {
+            composition_session_id: EditorSessionId::new(sid),
+            composition_generation: EditorSessionGeneration::new(gen2),
+            expected_revision: EditorRevision::new(rev1),
+        });
+        assert_eq!(
+            kernel.snapshot_text(),
+            "committed",
+            "delete backward 后正文不变"
+        );
+
+        let (_, _, gen3) = kernel.composition_session_info().unwrap();
+        kernel.apply(EditorCommand::CompositionMoveGraphemeRight {
+            composition_session_id: EditorSessionId::new(sid),
+            composition_generation: EditorSessionGeneration::new(gen3),
+            expected_revision: EditorRevision::new(rev1),
+        });
+        assert_eq!(kernel.snapshot_text(), "committed", "move right 后正文不变");
+
+        let (_, _, gen4) = kernel.composition_session_info().unwrap();
+        kernel.apply(EditorCommand::CompositionDeleteGraphemeForward {
+            composition_session_id: EditorSessionId::new(sid),
+            composition_generation: EditorSessionGeneration::new(gen4),
+            expected_revision: EditorRevision::new(rev1),
+        });
+        assert_eq!(
+            kernel.snapshot_text(),
+            "committed",
+            "delete forward 后正文不变"
+        );
+    }
+
+    #[test]
+    fn composition_move_surrogate_pair_emoji() {
+        let mut kernel = EditorKernel::with_text("".to_string(), 0).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "");
+        let emoji = "😀";
+        let rev1 = update_preedit(&mut kernel, sid, gen, emoji, 2, 0);
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+
+        kernel.apply(EditorCommand::CompositionMoveGraphemeLeft {
+            composition_session_id: EditorSessionId::new(sid),
+            composition_generation: EditorSessionGeneration::new(gen1),
+            expected_revision: EditorRevision::new(rev1),
+        });
+
+        let snap = kernel.composition_state().unwrap();
+        assert_eq!(snap.6, 0, "surrogate pair emoji move left: cursor 应移到 0");
+    }
+
+    #[test]
+    fn composition_revision_unchanged_after_composition_ops() {
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
+        let (sid, gen) = begin_composition_at_end(&mut kernel, "ab");
+        let rev1 = update_preedit(&mut kernel, sid, gen, "cd", 1, 0);
+        // composition 操作不改正文，revision 不递增
+        assert_eq!(kernel.revision(), 0, "begin + update 后 revision 不变");
+
+        let (_, _, gen1) = kernel.composition_session_info().unwrap();
+        kernel.apply(EditorCommand::CompositionMoveGraphemeLeft {
+            composition_session_id: EditorSessionId::new(sid),
+            composition_generation: EditorSessionGeneration::new(gen1),
+            expected_revision: EditorRevision::new(rev1),
+        });
+        assert_eq!(kernel.revision(), 0, "composition move 不应改 revision");
+
+        let (_, _, gen2) = kernel.composition_session_info().unwrap();
+        kernel.apply(EditorCommand::CompositionDeleteGraphemeBackward {
+            composition_session_id: EditorSessionId::new(sid),
+            composition_generation: EditorSessionGeneration::new(gen2),
+            expected_revision: EditorRevision::new(rev1),
+        });
+        assert_eq!(kernel.revision(), 0, "composition delete 不应改 revision");
+    }
 }

@@ -516,6 +516,98 @@ pub unsafe extern "C" fn writer_core_editor_session_next_grapheme_boundary(
     }
 }
 
+// #629 R8: composition 专用 grapheme 语义操作 FFI。
+// 只改 composition session 的 preeditText / preeditCursorUtf16 / generation；
+// 不修改 committed 正文，不把 raw platform event 带入 Core。
+
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_editor_session_composition_move_grapheme_left(
+    session_id: u64,
+    composition_session_id: u64,
+    composition_generation: u64,
+    expected_revision: u64,
+) -> *mut c_char {
+    match with_app_service(|svc| {
+        Ok(svc.text_edit_session_composition_move_grapheme_left(
+            session_id,
+            composition_session_id,
+            composition_generation,
+            expected_revision,
+        ))
+    }) {
+        Ok(dto) => ok_json(dto),
+        Err(e) => err_json("EDITOR_SESSION_ERROR", &e),
+    }
+}
+
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_editor_session_composition_move_grapheme_right(
+    session_id: u64,
+    composition_session_id: u64,
+    composition_generation: u64,
+    expected_revision: u64,
+) -> *mut c_char {
+    match with_app_service(|svc| {
+        Ok(svc.text_edit_session_composition_move_grapheme_right(
+            session_id,
+            composition_session_id,
+            composition_generation,
+            expected_revision,
+        ))
+    }) {
+        Ok(dto) => ok_json(dto),
+        Err(e) => err_json("EDITOR_SESSION_ERROR", &e),
+    }
+}
+
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_editor_session_composition_delete_grapheme_backward(
+    session_id: u64,
+    composition_session_id: u64,
+    composition_generation: u64,
+    expected_revision: u64,
+) -> *mut c_char {
+    match with_app_service(|svc| {
+        Ok(svc.text_edit_session_composition_delete_grapheme_backward(
+            session_id,
+            composition_session_id,
+            composition_generation,
+            expected_revision,
+        ))
+    }) {
+        Ok(dto) => ok_json(dto),
+        Err(e) => err_json("EDITOR_SESSION_ERROR", &e),
+    }
+}
+
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_editor_session_composition_delete_grapheme_forward(
+    session_id: u64,
+    composition_session_id: u64,
+    composition_generation: u64,
+    expected_revision: u64,
+) -> *mut c_char {
+    match with_app_service(|svc| {
+        Ok(svc.text_edit_session_composition_delete_grapheme_forward(
+            session_id,
+            composition_session_id,
+            composition_generation,
+            expected_revision,
+        ))
+    }) {
+        Ok(dto) => ok_json(dto),
+        Err(e) => err_json("EDITOR_SESSION_ERROR", &e),
+    }
+}
+
 #[cfg(test)]
 #[path = "editor_session_ops_tests.rs"]
 mod tests;

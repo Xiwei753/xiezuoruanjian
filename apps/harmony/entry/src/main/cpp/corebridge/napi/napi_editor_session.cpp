@@ -357,6 +357,66 @@ static napi_value NativeEditorSessionNextGraphemeBoundary(napi_env env, napi_cal
     return ReturnJsonString(env, writer_core_editor_session_next_grapheme_boundary(session_id, byte_offset));
 }
 
+// NativeEditorSessionCompositionMoveGraphemeLeft(session_id, composition_session_id, composition_generation, expected_revision)
+static napi_value NativeEditorSessionCompositionMoveGraphemeLeft(napi_env env, napi_callback_info info) {
+    size_t argc = 4;
+    napi_value args[4];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint64_t composition_session_id = arg_u64(env, args, argc, 1);
+    uint64_t composition_generation = arg_u64(env, args, argc, 2);
+    uint64_t expected_revision = arg_u64(env, args, argc, 3);
+
+    return ReturnJsonString(env,
+        writer_core_editor_session_composition_move_grapheme_left(session_id, composition_session_id, composition_generation, expected_revision));
+}
+
+// NativeEditorSessionCompositionMoveGraphemeRight(session_id, composition_session_id, composition_generation, expected_revision)
+static napi_value NativeEditorSessionCompositionMoveGraphemeRight(napi_env env, napi_callback_info info) {
+    size_t argc = 4;
+    napi_value args[4];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint64_t composition_session_id = arg_u64(env, args, argc, 1);
+    uint64_t composition_generation = arg_u64(env, args, argc, 2);
+    uint64_t expected_revision = arg_u64(env, args, argc, 3);
+
+    return ReturnJsonString(env,
+        writer_core_editor_session_composition_move_grapheme_right(session_id, composition_session_id, composition_generation, expected_revision));
+}
+
+// NativeEditorSessionCompositionDeleteGraphemeBackward(session_id, composition_session_id, composition_generation, expected_revision)
+static napi_value NativeEditorSessionCompositionDeleteGraphemeBackward(napi_env env, napi_callback_info info) {
+    size_t argc = 4;
+    napi_value args[4];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint64_t composition_session_id = arg_u64(env, args, argc, 1);
+    uint64_t composition_generation = arg_u64(env, args, argc, 2);
+    uint64_t expected_revision = arg_u64(env, args, argc, 3);
+
+    return ReturnJsonString(env,
+        writer_core_editor_session_composition_delete_grapheme_backward(session_id, composition_session_id, composition_generation, expected_revision));
+}
+
+// NativeEditorSessionCompositionDeleteGraphemeForward(session_id, composition_session_id, composition_generation, expected_revision)
+static napi_value NativeEditorSessionCompositionDeleteGraphemeForward(napi_env env, napi_callback_info info) {
+    size_t argc = 4;
+    napi_value args[4];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint64_t composition_session_id = arg_u64(env, args, argc, 1);
+    uint64_t composition_generation = arg_u64(env, args, argc, 2);
+    uint64_t expected_revision = arg_u64(env, args, argc, 3);
+
+    return ReturnJsonString(env,
+        writer_core_editor_session_composition_delete_grapheme_forward(session_id, composition_session_id, composition_generation, expected_revision));
+}
+
 // ── Editor Session property descriptors ──
 // 返回 new[] 的副本，调用方（napi_init.cpp Init）负责 delete[]。
 
@@ -381,6 +441,10 @@ napi_property_descriptor* getEditorSessionDescriptors(size_t* count) {
         {"nativeEditorSessionGetRevision",       nullptr, NativeEditorSessionGetRevision,       nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeEditorSessionPreviousGraphemeBoundary", nullptr, NativeEditorSessionPreviousGraphemeBoundary, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeEditorSessionNextGraphemeBoundary",     nullptr, NativeEditorSessionNextGraphemeBoundary,     nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeEditorSessionCompositionMoveGraphemeLeft",     nullptr, NativeEditorSessionCompositionMoveGraphemeLeft,     nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeEditorSessionCompositionMoveGraphemeRight",    nullptr, NativeEditorSessionCompositionMoveGraphemeRight,    nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeEditorSessionCompositionDeleteGraphemeBackward", nullptr, NativeEditorSessionCompositionDeleteGraphemeBackward, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeEditorSessionCompositionDeleteGraphemeForward",  nullptr, NativeEditorSessionCompositionDeleteGraphemeForward,  nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     *count = sizeof(kDesc) / sizeof(kDesc[0]);
     napi_property_descriptor* out = new napi_property_descriptor[*count];

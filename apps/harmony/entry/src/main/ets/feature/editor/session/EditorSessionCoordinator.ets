@@ -289,6 +289,56 @@ export class EditorSessionCoordinator {
     return this.bridge.nextGraphemeBoundary(sid, byteOffset)
   }
 
+  // Issue #629 评论5324447292 第2项：composition 专用 grapheme 语义操作。
+  // 操作 Core 已持有的 preeditText + preeditCursorUtf16，不创建 Harmony 第二份 preedit。
+  async compositionMoveGraphemeLeft(): Promise<ResultEnvelope<EditorEditResult>> {
+    if (!this.state) {
+      return this.noSession<EditorEditResult>()
+    }
+    const snap = this.state.snapshot
+    if (!snap.composition) {
+      return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
+    }
+    const comp = snap.composition
+    return this.enqueueEdit((sid, rev) => this.bridge.compositionMoveGraphemeLeft(sid, comp.sessionId, comp.generation, rev))
+  }
+
+  async compositionMoveGraphemeRight(): Promise<ResultEnvelope<EditorEditResult>> {
+    if (!this.state) {
+      return this.noSession<EditorEditResult>()
+    }
+    const snap = this.state.snapshot
+    if (!snap.composition) {
+      return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
+    }
+    const comp = snap.composition
+    return this.enqueueEdit((sid, rev) => this.bridge.compositionMoveGraphemeRight(sid, comp.sessionId, comp.generation, rev))
+  }
+
+  async compositionDeleteGraphemeBackward(): Promise<ResultEnvelope<EditorEditResult>> {
+    if (!this.state) {
+      return this.noSession<EditorEditResult>()
+    }
+    const snap = this.state.snapshot
+    if (!snap.composition) {
+      return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
+    }
+    const comp = snap.composition
+    return this.enqueueEdit((sid, rev) => this.bridge.compositionDeleteGraphemeBackward(sid, comp.sessionId, comp.generation, rev))
+  }
+
+  async compositionDeleteGraphemeForward(): Promise<ResultEnvelope<EditorEditResult>> {
+    if (!this.state) {
+      return this.noSession<EditorEditResult>()
+    }
+    const snap = this.state.snapshot
+    if (!snap.composition) {
+      return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
+    }
+    const comp = snap.composition
+    return this.enqueueEdit((sid, rev) => this.bridge.compositionDeleteGraphemeForward(sid, comp.sessionId, comp.generation, rev))
+  }
+
   // 队列状态（供测试/诊断；生产代码一般不查）。
   queueSize(): number {
     return this.commandQueue.size()

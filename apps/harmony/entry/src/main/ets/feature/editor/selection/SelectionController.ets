@@ -70,14 +70,15 @@ export class SelectionController {
     return result
   }
 
-  // Issue #629 评论18：拖动选区：anchor 是逻辑 offset，head 是 VisualCaretPosition（含 affinity）。
-  // 向后兼容：如果 head 是 number，按旧签名处理。
-  async onDragSelect(utf16Anchor: number, utf16Head: VisualCaretPosition | number): Promise<ResultEnvelope<EditorEditResult>> {
+  // Issue #629 评论18 + 评论5324447292 第1项：拖动选区：anchor/head 都是 VisualCaretPosition（含 affinity）。
+  // 向后兼容：如果参数是 number，按旧签名处理（默认 Downstream affinity）。
+  async onDragSelect(utf16Anchor: VisualCaretPosition | number, utf16Head: VisualCaretPosition | number): Promise<ResultEnvelope<EditorEditResult>> {
+    const anchorOffset = typeof utf16Anchor === 'number' ? utf16Anchor : utf16Anchor.utf16Offset
     const headOffset = typeof utf16Head === 'number' ? utf16Head : utf16Head.utf16Offset
     const headAffinity = typeof utf16Head === 'number' ? CaretAffinity.Downstream : utf16Head.affinity
     const text = this.coordinator.getSnapshot()?.text ?? ''
     const result = await this.coordinator.setSelection(
-      TextOffsetMapper.utf16ToUtf8(text, utf16Anchor),
+      TextOffsetMapper.utf16ToUtf8(text, anchorOffset),
       TextOffsetMapper.utf16ToUtf8(text, headOffset)
     )
     if (result.success) {

@@ -36,6 +36,21 @@
 // - 出队后判断 composition：无 composition 按普通 selection；有 composition 且 selection 在
 //   composition 显示区域内 → 换算成 preedit 内 preeditCursorUtf16 走 composition update；
 //   移出 composition 区域 → 同一 thunk 内先 finish 再普通 selection。
+//
+// Issue #629 评论5324447292 第1项：统一 executeDisplaySelection(display anchor, head)。
+// - display/committed 坐标分离：命中测试返回 display text（含 preedit）的 VisualCaretPosition。
+// - 无 composition：走 committed onTap/onDragSelect。
+// - 有 composition，collapsed target 在 preedit 内：更新 preedit cursor，成功后 owner 记忆。
+// - 有 composition，target 移出 preedit 或非空 drag：同一 thunk 先 finish composition，
+//   再以原 display UTF-16 坐标执行 committed selection（finish 后 committed == display，恒等映射）。
+//
+// Issue #629 评论5324447292 第2项：composition 活跃时 Left/Right/Backspace/Delete 路由到
+// Core composition grapheme API（composition_move_grapheme_left/right,
+// composition_delete_grapheme_backward/forward），不操作 committed text。
+// insertText/paste/selectAll/Enter 在同一 Dispatcher thunk 显式 finish composition 成功后执行。
+//
+// Issue #629 评论5324447292 第3项：删除 committed Up/Down/Home/End 在 Core 成功前的提前
+// rememberVisualCaret；成功出口唯一更新 owner。
 
 import { EditorInputAdapter } from './EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
@@ -59,7 +74,7 @@ export type SemanticEditCommand =
   // Issue #629 评论18：setSelection/dragSelect 接受 VisualCaretPosition（含 affinity），
   // 不丢弃命中测试的 soft-wrap 亲和性。
   | { kind: 'setSelection'; position: VisualCaretPosition }
-  | { kind: 'dragSelect'; utf16Anchor: number; head: VisualCaretPosition }
+  | { kind: 'dragSelect'; anchor: VisualCaretPosition; head: VisualCaretPosition }
   | { kind: 'selectAll' }
   | { kind: 'imePreviewText'; text: string }
   | { kind: 'imeCommitText'; text: string }
@@ -74,12 +89,8 @@ export type SemanticEditCommand =
   // 显示文本坐标）。composition 内外判断由本 Dispatcher 在唯一队列出队时做。
   | { kind: 'imeSetSelection'; utf16Start: number; utf16End: number }
   // Issue #629 评论11 第1项：清空整篇文档的语义命令。
-  // 出队时读取最新 snapshot 计算 UTF-8 全文范围，调 coordinator.replace 清空。
-  // 保证之前的输入先执行，之后的新输入排在 clear 后面，不再有跨队列抢跑。
   | { kind: 'clearDocument' }
-  // Issue #629 评论11 第2项：行级导航语义命令（不提前计算目标位置）。
-  // 出队时基于最新 Core snapshot + 最新行布局计算目标，再调 SelectionController。
-  // extend 为 true 时保持 anchor 不变（Shift+方向键扩展选区）。
+  // Issue #629 评论11 第2项：行级导航语义命令。
   | { kind: 'lineUp'; extend: boolean }
   | { kind: 'lineDown'; extend: boolean }
   | { kind: 'lineHome'; extend: boolean }
@@ -110,10 +121,6 @@ export class EditorSemanticDispatcher {
 
   /**
    * 派发一条语义命令。命令在出队执行时才读 Coordinator 最新 snapshot。
-   * 返回的 Promise 在命令完成时 resolve/reject，与命令结果一致。
-   *
-   * Issue #629 评论8 第3项：seal 后拒绝新的普通输入命令（返回 SEALED，不排队）。
-   * 已排队命令不受影响，仍可 drain（flush/whenIdle 照常）。
    */
   dispatch(cmd: SemanticEditCommand): Promise<ResultEnvelope<EditorEditResult>> {
     if (this.sealed) {
@@ -132,7 +139,6 @@ export class EditorSemanticDispatcher {
 
   /**
    * 派发一条语义命令，吞掉异常（用于 fire-and-forget 场景：物理键盘/鼠标/触摸）。
-   * 错误已由 EditorInputAdapter/Coordinator 处理（recover），不阻塞后续命令。
    */
   dispatchFireAndForget(cmd: SemanticEditCommand): void {
     this.dispatch(cmd).then(() => {}, (_e: Object) => {
@@ -141,8 +147,6 @@ export class EditorSemanticDispatcher {
   }
 
   // Issue #629 评论8 第3项：close 生命周期入口。
-  // seal：close 开始后拒绝新的普通输入命令（dispatch 返回 SEALED，不排队）。
-  // unseal：保存失败不离开时恢复输入（页面继续编辑）。
   seal(): void {
     this.sealed = true
   }
@@ -157,14 +161,6 @@ export class EditorSemanticDispatcher {
 
   /**
    * Issue #629 评论8 第3项：在 dispatcher 唯一队列里 finish 当前 composition。
-   *
-   * 出队时查 inputAdapter.isComposing()（读 Core snapshot.composition）：
-   * - 有 composition：用 Core snapshot 当前 preedit 调 onCompositionFinish(currentPreedit)
-   *   （确认原样提交，preedit 落进 committed 正文，随后的保存不会漏掉最后预输入）；
-   * - 没有 composition：no-op（返回 success）。
-   *
-   * 与普通输入不同：seal 后仍能入队——它是关闭链的一部分（seal → finishActiveComposition →
-   * drain → coordinator idle → 保存 → detach → close）。
    */
   finishActiveComposition(): Promise<ResultEnvelope<EditorEditResult>> {
     return this.queue.enqueue<ResultEnvelope<EditorEditResult>>(async () => {
@@ -175,61 +171,47 @@ export class EditorSemanticDispatcher {
     })
   }
 
-  // 出队后真正执行：此时 snapshot 已是最新（前一条命令已完成并更新 state）
-  // Issue #629 评论7 第2项：ime* 命令出队时查 inputAdapter.isComposing()（Core snapshot 驱动状态）
-  // 决定 begin/update/finish/cancel。事件顺序和 composition 状态判断属于同一条串行边界。
+  // ── 出队执行 ──
+
   private async executeCommand(cmd: SemanticEditCommand): Promise<ResultEnvelope<EditorEditResult>> {
     switch (cmd.kind) {
       case 'insertText':
-        // Issue #629 评论17 第2项：所有改变光标横向语义的命令重置 navTargetX。
         this.navTargetX = -1
-        return this.inputAdapter.onTextInput(cmd.text)
+        return this.executeFinishThenInsertText(cmd.text)
       case 'setSelection':
-        // Issue #629 评论16 第2项：显式 setSelection 重置横向导航位置。
         this.navTargetX = -1
-        return this.selectionController.onTap(cmd.position)
+        return this.executeDisplaySelection(cmd.position, cmd.position)
       case 'dragSelect':
-        // Issue #629 评论16 第2项：drag select 重置横向导航位置。
         this.navTargetX = -1
-        return this.selectionController.onDragSelect(cmd.utf16Anchor, cmd.head)
+        return this.executeDisplaySelection(cmd.anchor, cmd.head)
       case 'selectAll':
-        // Issue #629 评论16 第2项：selectAll 重置横向导航位置。
         this.navTargetX = -1
-        return this.selectionController.selectAll()
+        return this.executeFinishThenSelectAll()
       case 'imePreviewText':
-        // Issue #629 评论17 第2项：IME 预输入重置横向位置。
         this.navTargetX = -1
         return this.executeImePreviewText(cmd.text)
       case 'imeCommitText':
-        // Issue #629 评论17 第2项：IME 提交重置横向位置。
         this.navTargetX = -1
         return this.executeImeCommitText(cmd.text)
       case 'imeCancelPreview':
-        // Issue #629 评论17 第2项：IME 取消预输入重置横向位置。
         this.navTargetX = -1
         return this.executeImeCancelPreview()
       case 'imeSetSelection':
-        // Issue #629 评论17 第2项：IME selection 重置横向位置。
         this.navTargetX = -1
         return this.executeImeSetSelection(cmd.utf16Start, cmd.utf16End)
       case 'paste':
-        // Issue #629 评论17 第2项：粘贴重置横向位置。
         this.navTargetX = -1
-        return this.inputAdapter.onPaste(cmd.text)
+        return this.executeFinishThenPaste(cmd.text)
       case 'graphemeBackspace':
-        // Issue #629 评论17 第2项：退格重置横向位置。
         this.navTargetX = -1
         return this.executeGraphemeBackspace()
       case 'graphemeDelete':
-        // Issue #629 评论17 第2项：删除重置横向位置。
         this.navTargetX = -1
         return this.executeGraphemeDelete()
       case 'graphemeLeft':
-        // Issue #629 评论16 第2项：水平移动重置横向导航位置。
         this.navTargetX = -1
         return this.executeGraphemeLeft(cmd.extend)
       case 'graphemeRight':
-        // Issue #629 评论16 第2项：水平移动重置横向导航位置。
         this.navTargetX = -1
         return this.executeGraphemeRight(cmd.extend)
       case 'clearDocument':
@@ -245,29 +227,110 @@ export class EditorSemanticDispatcher {
     }
   }
 
-  // imePreviewText：出队时查 isComposing() 决定 begin+update 还是只 update。
-  // - 未开始 composition：await onCompositionBegin 成功后紧接 await onCompositionUpdate。
-  //   begin 失败时不 update（不让 update 读到 sessionId=0/generation=0）。
-  // - 已开始 composition：只 await onCompositionUpdate。
-  // 顺序执行（begin→update 在同一出队 thunk 内 await 串行），不派生新队列任务。
+  // ── Issue #629 评论5324447292 第1项：统一 executeDisplaySelection ──
+  // display/committed 坐标分离：命中测试返回 display text（含 preedit）的 VisualCaretPosition。
+  // - 无 composition：走 committed onTap/onDragSelect
+  // - 有 composition，collapsed target 在 preedit 内：更新 preedit cursor，成功后 owner 记忆
+  // - 有 composition，target 移出 preedit 或非空 drag：同一 thunk 先 finish composition，
+  //   再以原 display UTF-16 坐标执行 committed selection（finish 后恒等映射）
+  private async executeDisplaySelection(
+    anchor: VisualCaretPosition,
+    head: VisualCaretPosition,
+  ): Promise<ResultEnvelope<EditorEditResult>> {
+    const snap = this.coordinator.getSnapshot()
+    if (!snap) {
+      return this.noSession()
+    }
+
+    if (!this.inputAdapter.isComposing() || snap.composition === null || snap.composition === undefined) {
+      // 无 composition：直接走 committed selection。
+      const isRange = anchor.utf16Offset !== head.utf16Offset
+      if (isRange) {
+        return this.selectionController.onDragSelect(anchor, head)
+      }
+      return this.selectionController.onTap(head)
+    }
+
+    // 有 composition。
+    const comp = snap.composition
+    const committedText: string = snap.text
+    const compStartUtf16: number = TextOffsetMapper.utf8ToUtf16(committedText, comp.replaceByteStart)
+    const preeditUtf16Len: number = comp.preeditText.length
+    const compEndDisplay: number = compStartUtf16 + preeditUtf16Len
+
+    const isRange = anchor.utf16Offset !== head.utf16Offset
+    const targetOffset = head.utf16Offset
+    const targetInComposition = targetOffset >= compStartUtf16 && targetOffset <= compEndDisplay
+
+    if (!isRange && targetInComposition) {
+      // collapsed target 落在 preedit 显示区内：只更新 preedit cursor，不发 Core setSelection。
+      const preeditCursorUtf16: number = targetOffset - compStartUtf16
+      const updateResult = await this.inputAdapter.onCompositionUpdate(comp.preeditText, preeditCursorUtf16)
+      if (updateResult.success) {
+        // 成功后 owner 记忆目标 visual caret position。
+        this.selectionController.rememberVisualCaret(head)
+      }
+      return updateResult
+    }
+
+    // target 移出 preedit，或形成非空 drag selection：同一 thunk 先 finish composition。
+    const finishResult = await this.inputAdapter.finishActiveComposition()
+    if (!finishResult.success) {
+      return finishResult
+    }
+    // finish 后 committed text == 之前的 display text（prefix + preedit + suffix），
+    // 原 display UTF-16 坐标可直接作为 committed 坐标（恒等映射）。
+    if (isRange) {
+      return this.selectionController.onDragSelect(anchor, head)
+    }
+    return this.selectionController.onTap(head)
+  }
+
+  // ── Issue #629 评论5324447292 第2项：insertText/paste/selectAll 先 finish composition ──
+
+  private async executeFinishThenInsertText(text: string): Promise<ResultEnvelope<EditorEditResult>> {
+    if (this.inputAdapter.isComposing()) {
+      const finish = await this.inputAdapter.finishActiveComposition()
+      if (!finish.success) {
+        return finish
+      }
+    }
+    return this.inputAdapter.onTextInput(text)
+  }
+
+  private async executeFinishThenPaste(text: string): Promise<ResultEnvelope<EditorEditResult>> {
+    if (this.inputAdapter.isComposing()) {
+      const finish = await this.inputAdapter.finishActiveComposition()
+      if (!finish.success) {
+        return finish
+      }
+    }
+    return this.inputAdapter.onPaste(text)
+  }
+
+  private async executeFinishThenSelectAll(): Promise<ResultEnvelope<EditorEditResult>> {
+    if (this.inputAdapter.isComposing()) {
+      const finish = await this.inputAdapter.finishActiveComposition()
+      if (!finish.success) {
+        return finish
+      }
+    }
+    return this.selectionController.selectAll()
+  }
+
+  // ── imePreviewText ──
+
   private async executeImePreviewText(text: string): Promise<ResultEnvelope<EditorEditResult>> {
     if (!this.inputAdapter.isComposing()) {
-      // composition 开始：先 begin，成功后才 update。
       const beginResult = await this.inputAdapter.onCompositionBegin()
       if (!beginResult.success) {
-        // begin 失败：不 update。避免 update 读到 sessionId=0/generation=0。
         return beginResult
       }
-      // begin 成功后紧接 update（同一出队 thunk 内 await 串行）。
       return this.inputAdapter.onCompositionUpdate(text)
     }
-    // 已开始 composition：只 update。
     return this.inputAdapter.onCompositionUpdate(text)
   }
 
-  // imeCommitText：出队时查 isComposing() 决定 finish 还是普通插入。
-  // - 有 composition：await onCompositionFinish（composition commit）。
-  // - 无 composition：await onTextInput（普通文字插入）。
   private async executeImeCommitText(text: string): Promise<ResultEnvelope<EditorEditResult>> {
     if (this.inputAdapter.isComposing()) {
       return this.inputAdapter.onCompositionFinish(text)
@@ -275,37 +338,21 @@ export class EditorSemanticDispatcher {
     return this.inputAdapter.onTextInput(text)
   }
 
-  // imeCancelPreview：出队时查 isComposing() 决定 cancel 还是 no-op。
-  // - 有 composition：await onCompositionCancel。
-  // - 无 composition：no-op（返回 success）。
   private async executeImeCancelPreview(): Promise<ResultEnvelope<EditorEditResult>> {
     if (this.inputAdapter.isComposing()) {
       return this.inputAdapter.onCompositionCancel()
     }
-    // 无 composition：no-op（不设 data，调用方据此知道无编辑结果）
     return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
   }
 
-  /**
-   * Issue #629 评论8 第4项：IME selection 语义命令（出队执行）。
-   *
-   * start/end 是 IME 给的显示文本 UTF-16 code unit offset（composition 活跃时显示文本 =
-   * committed text 在 replace range 处插入 preedit 的投影）。出队后判断 composition：
-   *
-   * - 无 composition：按普通 selection 处理（与 setSelection/dragSelect 同语义）。
-   * - 有 composition 且 selection 完全落在 composition 显示区域内：把显示坐标换算成 preedit 内
-   *   preeditCursorUtf16，用当前 preedit 文本调 composition update，让 Core 更新
-   *   composition cursor/generation（不改 committed selection）。
-   * - selection 移出 composition 区域（含部分越界）：同一 thunk 内先 finish 当前 composition，
-   *   再把显示坐标映射到 committed 文本坐标，执行普通 selection。
-   */
+  // ── imeSetSelection ──
+
   private async executeImeSetSelection(utf16Start: number, utf16End: number): Promise<ResultEnvelope<EditorEditResult>> {
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
       return this.noSession()
     }
     if (!this.inputAdapter.isComposing() || snap.composition === null || snap.composition === undefined) {
-      // 无 composition：普通 selection（start/end 即 committed 文本坐标）。
       if (utf16Start === utf16End) {
         return this.selectionController.onTap(utf16Start)
       }
@@ -313,7 +360,6 @@ export class EditorSemanticDispatcher {
     }
     const comp = snap.composition
     const committedText: string = snap.text
-    // composition 显示区域（UTF-16）：[compStartUtf16, compStartUtf16 + preeditUtf16Len)
     const compStartUtf16: number = TextOffsetMapper.utf8ToUtf16(committedText, comp.replaceByteStart)
     const preeditUtf16Len: number = comp.preeditText.length
     const compEndDisplay: number = compStartUtf16 + preeditUtf16Len
@@ -321,40 +367,39 @@ export class EditorSemanticDispatcher {
     const end: number = Math.max(utf16Start, utf16End)
 
     if (start >= compStartUtf16 && end <= compEndDisplay) {
-      // selection 完全在 composition 显示区域内：换算成 preedit 内 cursor，走 composition update。
       const cursorInPreedit: number = end - compStartUtf16
-      // 同一 preedit 文本 + 新 cursor：Core 更新 composition cursor/generation。
       return this.inputAdapter.onCompositionUpdate(comp.preeditText, cursorInPreedit)
     }
 
-    // selection 移出 composition 区域：先 finish 当前 composition（preedit 提交进正文），
-    // 再执行普通 selection。整个过程仍在同一 dispatcher thunk 内顺序 await。
+    // selection 移出 composition 区域：先 finish 再普通 selection。
     const finishResult = await this.inputAdapter.finishActiveComposition()
     if (!finishResult.success) {
       return finishResult
     }
-    // finish 后 coordinator snapshot 已更新：finish 把 [replaceStart, replaceEnd) 替换为
-    // preedit，committed 正文恰好等于之前的显示文本（prefix + preedit + suffix）。
-    // 因此 IME 给的显示坐标就是 committed 文本坐标（恒等映射），直接按普通 selection 处理，
-    // 不再换算（旧公式 d - preeditLen + (end-start) 会把光标放错位置——它假设被替换区还在）。
+    // finish 后恒等映射。
     if (start === end) {
       return this.selectionController.onTap(start)
     }
     return this.selectionController.onDragSelect(start, end)
   }
 
-  // grapheme-based backspace: 用 Core previous_grapheme_boundary 找前一个 grapheme 边界
+  // ── Issue #629 评论5324447292 第2项：composition grapheme 操作 ──
+  // composition 活跃时 Left/Right/Backspace/Delete 路由到 Core composition grapheme API。
+
   private async executeGraphemeBackspace(): Promise<ResultEnvelope<EditorEditResult>> {
+    // composition 活跃时走 composition 专用 API。
+    if (this.inputAdapter.isComposing()) {
+      return this.inputAdapter.compositionDeleteGraphemeBackward()
+    }
+    // 无 composition：走 committed grapheme。
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
       return this.noSession()
     }
     const sel = this.inputAdapter.currentSelectionUtf8()
     if (sel.end > sel.start) {
-      // 有选区：删除整个选区
       return this.coordinator.delete(sel.start, sel.end, EditorTransactionCause.Delete)
     }
-    // 空选区：用 Core grapheme boundary 找前一个边界
     if (sel.start <= 0) {
       return { success: false, errorCode: 'NO_CHAR_TO_DELETE', warnings: [], changedPaths: [], changedEntities: [] }
     }
@@ -366,8 +411,12 @@ export class EditorSemanticDispatcher {
     return this.coordinator.delete(prevByte, sel.start, EditorTransactionCause.Delete)
   }
 
-  // grapheme-based delete: 用 Core next_grapheme_boundary 找后一个 grapheme 边界
   private async executeGraphemeDelete(): Promise<ResultEnvelope<EditorEditResult>> {
+    // composition 活跃时走 composition 专用 API。
+    if (this.inputAdapter.isComposing()) {
+      return this.inputAdapter.compositionDeleteGraphemeForward()
+    }
+    // 无 composition：走 committed grapheme。
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
       return this.noSession()
@@ -389,13 +438,6 @@ export class EditorSemanticDispatcher {
     return this.coordinator.delete(sel.start, nextByte, EditorTransactionCause.Delete)
   }
 
-  // Issue #629 R7 第3项修复：soft-wrap 边界上的 affinity 切换。
-  // Left/Right 在 soft-wrap 共享 offset 上的 affinity 切换：
-  // - 按 Left 且当前 affinity === Downstream：先切到同 offset 的 Upstream（不移动 offset）
-  // - 按 Right 且当前 affinity === Upstream：先切到同 offset 的 Downstream（不移动 offset）
-  // 只在非 extend、空选区路径调用。返回 handled=true 表示已处理（调用方直接返回 result），
-  // handled=false 表示未处理（调用方继续原 grapheme 移动逻辑）。
-  // 获取 layout 的逻辑与 executeLineNavigation 保持一致（identity 构造、waitForLayout、null 处理）。
   private async trySoftWrapAffinitySwitch(
     direction: 'left' | 'right',
   ): Promise<{ handled: boolean; result: ResultEnvelope<EditorEditResult> | null }> {
@@ -416,13 +458,10 @@ export class EditorSemanticDispatcher {
     }
     const layoutState = await resolver.waitForLayout(identity)
     if (layoutState === null) {
-      // 被取消（组件销毁/换 session），返回 success（与 executeLineNavigation 一致）
       return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
     }
     const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(displaySnapshot.text, displaySnapshot.cursorByteOffset)
     const currentPosition: VisualCaretPosition = this.selectionController.getVisualCaret(cursorUtf16)
-    // 检查 cursor 是否在 soft-wrap 边界：找 endUtf16 === cursorUtf16 且 breakKind === SoftWrap 的行。
-    // 不依赖 getCurrentLineIndex（它在 affinity=Downstream 时归下一行，下一行 breakKind 不是 SoftWrap）。
     let atSoftWrapEnd = false
     for (let i = 0; i < layoutState.lines.length; i++) {
       const l = layoutState.lines[i]
@@ -434,12 +473,10 @@ export class EditorSemanticDispatcher {
     if (!atSoftWrapEnd) {
       return { handled: false, result: null }
     }
-    // 按 Left 且当前 Downstream → 切 Upstream（不移动 offset，只更新视觉位置）
     if (direction === 'left' && currentPosition.affinity === CaretAffinity.Downstream) {
       this.selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: CaretAffinity.Upstream })
       return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
     }
-    // 按 Right 且当前 Upstream → 切 Downstream（不移动 offset，只更新视觉位置）
     if (direction === 'right' && currentPosition.affinity === CaretAffinity.Upstream) {
       this.selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream })
       return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
@@ -447,10 +484,14 @@ export class EditorSemanticDispatcher {
     return { handled: false, result: null }
   }
 
-  // grapheme-based left arrow: 用 Core previous_grapheme_boundary
-  // extend=true（shift+left）：保持 anchor，head 左移到前一个 grapheme 边界
-  // extend=false：有选区时移到选区开头（collapse），空选区时左移一个 grapheme
+  // composition 活跃时 Left/Right 走 composition grapheme API（不操作 committed text）。
   private async executeGraphemeLeft(extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
+    if (this.inputAdapter.isComposing()) {
+      // composition 活跃时 extend 不改变语义（Core composition 没有 selection range），
+      // 直接走 composition grapheme move left。
+      return this.inputAdapter.compositionMoveGraphemeLeft()
+    }
+    // 无 composition：走 committed grapheme。
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
       return this.noSession()
@@ -458,7 +499,6 @@ export class EditorSemanticDispatcher {
     const cursorByte = snap.cursor
     const anchorByte = snap.selectionAnchor
     if (extend) {
-      // shift+left: 保持 anchor，head 左移到前一个 grapheme 边界
       const headByte = snap.cursor
       if (headByte <= 0) {
         return this.coordinator.setSelection(anchorByte, 0)
@@ -469,13 +509,10 @@ export class EditorSemanticDispatcher {
       }
       return this.coordinator.setSelection(anchorByte, prevResult.data)
     }
-    // 非扩展：有选区时移到选区开头，空选区时左移一个 grapheme
     if (anchorByte !== cursorByte) {
       const selStart = Math.min(anchorByte, cursorByte)
       return this.coordinator.setSelection(selStart, selStart)
     }
-    // Issue #629 R7 第3项修复：soft-wrap 边界 affinity 切换（非 extend、空选区）。
-    // 在调用 previousGraphemeBoundary 之前，先检查是否需要切 affinity。
     const leftAffinitySwitch = await this.trySoftWrapAffinitySwitch('left')
     if (leftAffinitySwitch.handled) {
       return leftAffinitySwitch.result!
@@ -490,10 +527,12 @@ export class EditorSemanticDispatcher {
     return this.coordinator.setSelection(prevResult.data, prevResult.data)
   }
 
-  // grapheme-based right arrow: 用 Core next_grapheme_boundary
-  // extend=true（shift+right）：保持 anchor，head 右移到后一个 grapheme 边界
-  // extend=false：有选区时移到选区末尾（collapse），空选区时右移一个 grapheme
+  // composition 活跃时 Right 走 composition grapheme API。
   private async executeGraphemeRight(extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
+    if (this.inputAdapter.isComposing()) {
+      return this.inputAdapter.compositionMoveGraphemeRight()
+    }
+    // 无 composition：走 committed grapheme。
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
       return this.noSession()
@@ -503,7 +542,6 @@ export class EditorSemanticDispatcher {
     const cursorByte = snap.cursor
     const anchorByte = snap.selectionAnchor
     if (extend) {
-      // shift+right: 保持 anchor，head 右移到后一个 grapheme 边界
       const headByte = snap.cursor
       if (headByte >= textByteLen) {
         return this.coordinator.setSelection(anchorByte, textByteLen)
@@ -518,8 +556,6 @@ export class EditorSemanticDispatcher {
       const selEnd = Math.max(anchorByte, cursorByte)
       return this.coordinator.setSelection(selEnd, selEnd)
     }
-    // Issue #629 R7 第3项修复：soft-wrap 边界 affinity 切换（非 extend、空选区）。
-    // 在调用 nextGraphemeBoundary 之前，先检查是否需要切 affinity。
     const rightAffinitySwitch = await this.trySoftWrapAffinitySwitch('right')
     if (rightAffinitySwitch.handled) {
       return rightAffinitySwitch.result!
@@ -534,26 +570,19 @@ export class EditorSemanticDispatcher {
     return this.coordinator.setSelection(nextResult.data, nextResult.data)
   }
 
-  // Issue #629 评论11 第1项：清空整篇文档。
-  // 整个 clear thunk 自包含：读 snapshot → cancel 活跃 composition → replace 全文为空
-  // → 重新读 snapshot 确认空正文。下一条 Dispatcher 命令只能在这个 thunk 返回后执行，
-  // 之前排队输入一定先执行，之后新输入只能排在 clear 后面，不再有跨队列抢跑。
-  // Issue #629 评论11 第1项补充：活跃 composition 先显式 cancel（不依赖 replace 顺手清除），
-  // cancel 失败则不继续清空；replace 后 Core snapshot 非空则返回失败。
-  // Issue #629 评论17 第2项：清空文档重置横向位置。
+  // ── clearDocument ──
+
   private async executeClearDocument(): Promise<ResultEnvelope<EditorEditResult>> {
     this.navTargetX = -1
     let snap = this.coordinator.getSnapshot()
     if (!snap) {
       return this.noSession()
     }
-    // 有活跃 composition 时先 cancel：用户选择清空时不应保留 preedit。
     if (this.inputAdapter.isComposing()) {
       const cancelResult = await this.inputAdapter.onCompositionCancel()
       if (!cancelResult.success) {
         return cancelResult
       }
-      // cancel 后重新读 snapshot（composition 已清除，正文可能已变化）
       snap = this.coordinator.getSnapshot()
       if (!snap) {
         return this.noSession()
@@ -567,8 +596,6 @@ export class EditorSemanticDispatcher {
     if (!replaceResult.success) {
       return replaceResult
     }
-    // replace 成功后重新读 Core snapshot 确认正文为空。
-    // StaleRevision/Invalid* 或最终 snapshot 非空都视为清空失败。
     const afterClear = this.coordinator.getSnapshot()
     if (afterClear === null || afterClear.text !== '') {
       return { success: false, errorCode: 'CLEAR_NOT_EMPTY', warnings: [], changedPaths: [], changedEntities: [] }
@@ -576,13 +603,8 @@ export class EditorSemanticDispatcher {
     return replaceResult
   }
 
-  // Issue #629 评论14 第3项 + 评论15 第5项 + R7 任务B：行级导航（up/down/home/end）。
-  // 出队后基于最新 Core snapshot + 等待匹配编辑状态身份的行布局，计算目标位置。
-  // 不再返回 STALE_LAYOUT 丢键，也不设 timeout 兜底。
-  // 等待只能有两个出口：SujianEditor 发布匹配的布局，或 cancelWait（组件销毁/换 session）。
-  // composition 活跃时，行导航目标坐标是显示文本 UTF-16 坐标，复用 imeSetSelection 语义。
-  // R7 任务B：从 SelectionController.getVisualCaret(cursorUtf16) 获取完整 VisualCaretPosition，
-  // 全程保留 position，不降回 number。目标走 onTap(targetPosition) / onDragSelect(anchor, targetPosition)。
+  // ── 行级导航 ──
+
   private async executeLineNavigation(direction: 'up' | 'down' | 'home' | 'end', extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
@@ -592,8 +614,6 @@ export class EditorSemanticDispatcher {
     if (!resolver) {
       return this.noSession()
     }
-    // Issue #629 评论15 第5项：构造编辑状态身份（不包含 contentWidth/fontSize）。
-    // EditorLayoutIdentity = { revision, generation, compositionGeneration, displayText }。
     const displaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap)
     const identity = {
       revision: displaySnapshot.revision,
@@ -601,20 +621,14 @@ export class EditorSemanticDispatcher {
       compositionGeneration: displaySnapshot.compositionGeneration,
       displayText: displaySnapshot.text
     }
-    const displayText: string = displaySnapshot.text
-    // Issue #629 评论15 第5项：等待匹配身份的 layout state，不设 timeout。
     const layoutState = await resolver.waitForLayout(identity)
-    // layoutState === null 表示被取消（组件销毁/换 session），直接结束。
     if (layoutState === null) {
       return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
     }
-    // 等待后重新读 snapshot（布局更新期间 Core 可能已前进）。
     const latestSnap = this.coordinator.getSnapshot()
     if (!latestSnap) {
       return this.noSession()
     }
-    // Issue #629 评论15 第5项：用最新 snapshot 构造坐标，用等待到的 layoutState 计算目标。
-    // 如果 Core 又前进（identity 变了），重新以最新 identity 等待，不把旧 layout 和新 cursor 混用。
     const latestDisplaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(latestSnap)
     const latestIdentity = {
       revision: latestDisplaySnapshot.revision,
@@ -627,13 +641,11 @@ export class EditorSemanticDispatcher {
       || latestIdentity.generation !== identity.generation
       || latestIdentity.compositionGeneration !== identity.compositionGeneration
       || latestIdentity.displayText !== identity.displayText) {
-      // Core 前进了，重新等待最新 identity 的 layout。
       const refreshedState = await resolver.waitForLayout(latestIdentity)
       if (refreshedState === null) {
         return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
       }
       finalState = refreshedState
-      // 重新读最新 snapshot 计算坐标。
       const finalSnap = this.coordinator.getSnapshot()
       if (!finalSnap) {
         return this.noSession()
@@ -641,30 +653,23 @@ export class EditorSemanticDispatcher {
       const finalDisplaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(finalSnap)
       const finalCursorUtf16: number = TextOffsetMapper.utf8ToUtf16(finalDisplaySnapshot.text, finalDisplaySnapshot.cursorByteOffset)
       const finalAnchorUtf16: number = TextOffsetMapper.utf8ToUtf16(finalDisplaySnapshot.text, finalDisplaySnapshot.selectionAnchor)
-      // R7 任务B：从 SelectionController 获取完整 VisualCaretPosition（含 affinity）。
       const currentPosition: VisualCaretPosition = this.selectionController.getVisualCaret(finalCursorUtf16)
-      // composition 活跃时走 imeSetSelection 语义。
       if (finalSnap.composition !== null && finalSnap.composition !== undefined) {
         return this.executeImeLineNavigation(direction, extend, finalState, currentPosition, finalAnchorUtf16, finalDisplaySnapshot)
       }
       return this.executeCommittedLineNavigation(direction, extend, finalState, currentPosition, finalAnchorUtf16)
     }
-    // Core 未前进，用等待到的 finalState + 当前 snapshot 坐标。
     const latestCursorUtf16: number = TextOffsetMapper.utf8ToUtf16(latestDisplaySnapshot.text, latestDisplaySnapshot.cursorByteOffset)
     const latestAnchorUtf16: number = TextOffsetMapper.utf8ToUtf16(latestDisplaySnapshot.text, latestDisplaySnapshot.selectionAnchor)
-    // R7 任务B：从 SelectionController 获取完整 VisualCaretPosition（含 affinity）。
     const currentPosition: VisualCaretPosition = this.selectionController.getVisualCaret(latestCursorUtf16)
-    // composition 活跃时走 imeSetSelection 语义。
     if (latestSnap.composition !== null && latestSnap.composition !== undefined) {
       return this.executeImeLineNavigation(direction, extend, finalState, currentPosition, latestAnchorUtf16, latestDisplaySnapshot)
     }
     return this.executeCommittedLineNavigation(direction, extend, finalState, currentPosition, latestAnchorUtf16)
   }
 
-  // Issue #629 评论15 第5项 + 评论16 第2项 + R7 任务B：committed text 上的行导航（无 composition）。
-  // Up/Down 保持横向位置：用 navTargetX 记忆上次 x 坐标，在目标行找最近的 caret stop。
-  // home/end 重置 navTargetX（下次 Up/Down 回到行首/行尾）。
-  // R7 任务B：全程消费/产出 VisualCaretPosition，不再降回 number。
+  // Issue #629 评论5324447292 第3项：删除 committed Up/Down/Home/End 在 Core 成功前的提前
+  // rememberVisualCaret；成功出口唯一更新 owner。
   private executeCommittedLineNavigation(
     direction: 'up' | 'down' | 'home' | 'end',
     extend: boolean,
@@ -683,7 +688,7 @@ export class EditorSemanticDispatcher {
         }
         const targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         const targetPosition = LineNavigationResolver.positionForOffsetInLine(state, targetLineIdx, targetOffset)
-        this.selectionController.rememberVisualCaret(targetPosition)
+        // 不提前 rememberVisualCaret；onTap/onDragSelect 成功后 publishVisualCaret 唯一更新 owner。
         if (extend) {
           return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
         }
@@ -699,7 +704,6 @@ export class EditorSemanticDispatcher {
         }
         const targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         const targetPosition = LineNavigationResolver.positionForOffsetInLine(state, targetLineIdx, targetOffset)
-        this.selectionController.rememberVisualCaret(targetPosition)
         if (extend) {
           return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
         }
@@ -710,7 +714,6 @@ export class EditorSemanticDispatcher {
         const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, currentPosition)
         const targetOffset = lineIdx >= 0 ? LineNavigationResolver.getLineStart(state, lineIdx) : 0
         const targetPosition = LineNavigationResolver.positionForOffsetInLine(state, lineIdx, targetOffset)
-        this.selectionController.rememberVisualCaret(targetPosition)
         if (extend) {
           return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
         }
@@ -722,7 +725,6 @@ export class EditorSemanticDispatcher {
         const textUtf16Len = state.displayText.length
         const targetOffset = lineIdx >= 0 ? LineNavigationResolver.getLineEnd(state, lineIdx) : textUtf16Len
         const targetPosition = LineNavigationResolver.positionForOffsetInLine(state, lineIdx, targetOffset)
-        this.selectionController.rememberVisualCaret(targetPosition)
         if (extend) {
           return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
         }
@@ -731,11 +733,10 @@ export class EditorSemanticDispatcher {
     }
   }
 
-  // Issue #629 评论15 第5项 + 评论16 第2项 + R7 任务B：composition 活跃时的行导航。
-  // 行内移动：走 imeSetSelection 语义（更新 preedit cursor）。
-  // 移出 composition 区域：先 finish composition，再走 imeSetSelection。
-  // Up/Down 同样保持横向位置。
-  // R7 任务B：全程消费/产出 VisualCaretPosition，不再降回 number。
+  // Issue #629 评论5324447292 第1+3项：composition 活跃时行导航。
+  // 行内移动：复用 executeDisplaySelection 统一入口（preedit 内更新 preedit cursor；
+  // 移出 composition 区域：先 finish）。Up/Down 同样保持横向位置。
+  // 不提前 rememberVisualCaret；成功出口统一更新 owner。
   private executeImeLineNavigation(
     direction: 'up' | 'down' | 'home' | 'end',
     extend: boolean,
@@ -744,7 +745,6 @@ export class EditorSemanticDispatcher {
     anchorUtf16: number,
     displaySnapshot: EditorLayoutSnapshot
   ): Promise<ResultEnvelope<EditorEditResult>> {
-    // 计算目标行的 UTF-16 offset（基于 displayText 的坐标）。
     let targetOffset: number = currentPosition.utf16Offset
     let targetLineIdx: number = -1
     switch (direction) {
@@ -783,28 +783,25 @@ export class EditorSemanticDispatcher {
         break
       }
     }
-    // R7 任务B：记忆目标 visual caret position（composition 路径也更新 affinity owner）。
     const targetPosition = targetLineIdx >= 0
       ? LineNavigationResolver.positionForOffsetInLine(state, targetLineIdx, targetOffset)
       : { utf16Offset: targetOffset, affinity: CaretAffinity.Downstream }
-    this.selectionController.rememberVisualCaret(targetPosition)
-    // Issue #629 评论17 第1项：Shift+Up/Down/Home/End 在 composition 活跃时
-    // 先 finish composition（preedit 提交进 committed text），再执行普通 selection。
-    // 不要把 extend 退化成移动 preedit cursor（Core composition 没有 selection range）。
+    // 评论5324447292 第3项：不提前 rememberVisualCaret；复用 executeDisplaySelection 统一入口，
+    // 成功出口统一更新 owner（preedit 内 → onCompositionUpdate 成功后 rememberVisualCaret；
+    // 移出 preedit → finish 后 onTap(head)，保留 targetPosition 的 affinity，不用裸 number）。
     if (!extend || anchorUtf16 === targetOffset) {
-      return this.executeImeSetSelection(targetOffset, targetOffset)
+      return this.executeDisplaySelection(targetPosition, targetPosition)
     }
+    // Shift+Up/Down/Home/End：先 finish composition，再普通 selection。
     const finishResult = await this.inputAdapter.finishActiveComposition()
     if (!finishResult.success) {
       return finishResult
     }
-    // finish 后 committed text = 之前的 displayText，anchorUtf16/targetOffset 可直接做普通 selection。
     return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
   }
 
-  // Issue #629 评论11 第2项：注册行级导航解析器。
-  // SujianEditor 在 aboutToAppear 时注册，提供最新 renderResult.lines 读取入口。
-  // 行导航命令出队时通过 resolver 计算目标位置（不在入队前读旧布局）。
+  // ── 注册/注销 ──
+
   registerLineResolver(resolver: LineNavigationResolver): void {
     this.lineResolver = resolver
   }
@@ -813,12 +810,10 @@ export class EditorSemanticDispatcher {
     this.lineResolver = null
   }
 
-  // flush: 等待所有排队命令完成（供页面退出/退后台事务用）
   async flush(): Promise<void> {
     return this.queue.whenIdle()
   }
 
-  // 队列状态
   isIdle(): boolean {
     return this.queue.isIdle()
   }
