@@ -136,23 +136,4 @@ export class EditorRenderBackend {
     const lineSpacingPx = lines.length > 0 ? textHeight / lines.length : 0
     return hitTestPoint(text, lines, lineSpacingPx, touchX, touchY, measureTextFn)
   }
-
-  // Issue #629 评论18：hitTestByPoint 返回 VisualCaretPosition，
-  // 同时计算当前 cursor 的 VisualCaretPosition 供 renderLayout 使用。
-  static computeCurrentCaretPosition(
-    snapshot: EditorLayoutSnapshot,
-    containerWidth: number,
-    textHeight: number,
-    measureTextFn: (s: string) => number,
-  ): VisualCaretPosition {
-    const text = snapshot.text
-    const lines = layoutLines(text, containerWidth, measureTextFn)
-    if (lines.length === 0) {
-      return { utf16Offset: 0, affinity: CaretAffinity.Downstream }
-    }
-    // 用 resolveVisualLineIndex 找光标所在行，判断光标在 soft-wrap 边界时的 affinity。
-    // 但 renderLayout 默认 Upstream（光标在上一行尾），只有 hitTest 明确给了 Downstream 才改。
-    // 这里返回 Upstream 作为默认值，实际光标渲染通过 visualCaretAffinity 参数传入。
-    return { utf16Offset: 0, affinity: CaretAffinity.Upstream }
-  }
 }

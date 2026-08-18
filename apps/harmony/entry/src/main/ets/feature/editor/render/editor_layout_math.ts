@@ -72,6 +72,20 @@ export function nextCodePointBoundary(text: string, i: number): number {
 }
 
 /**
+ * Issue #629 R7-C item5: 为 [start, end) 区间生成 code point 边界列表。
+ * 每个 code point 只扫描一次，不再先构造全文 bounds 再 filter。
+ */
+function buildSegmentBounds(text: string, start: number, end: number): number[] {
+  const bounds: number[] = [start]
+  let i = start
+  while (i < end) {
+    i = Math.min(nextCodePointBoundary(text, i), end)
+    bounds.push(i)
+  }
+  return bounds
+}
+
+/**
  * 折行：先按 `\n` 拆硬换行 segment，再对每个 segment 做软折行。
  * `\n` 本身不进可见 line range；空行产生空行。
  *
@@ -102,13 +116,9 @@ export function layoutLines(
   }
   segments.push({ start: segStart, end: n })
 
+  // Issue #629 R7-C item5: 按 segment 就地生成 bounds，扫描 \n 时即时处理 [segStart,i)，
+  // 最后处理尾段。避免换行越多重复全文扫描的 allBounds + filter 结构。
   const lines: LineRange[] = []
-  const allBounds: number[] = [0]
-  let bi = 0
-  while (bi < n) {
-    bi = nextCodePointBoundary(text, bi)
-    allBounds.push(bi)
-  }
 
   for (let s = 0; s < segments.length; s++) {
     const seg = segments[s]
@@ -119,7 +129,7 @@ export function layoutLines(
       continue
     }
 
-    const segBounds: number[] = allBounds.filter(b => b >= seg.start && b <= seg.end)
+    const segBounds = buildSegmentBounds(text, seg.start, seg.end)
     if (segBounds.length === 0) {
       continue
     }
@@ -261,11 +271,11 @@ export function hitTestPoint(
   const stops = buildLineCaretStops(text, line, measureTextFn)
   const offset = offsetForHorizontal(stops, touchX)
 
+  // Issue #629 R7-C item4: touchY 已选定 lineIndex，命中该行 soft-wrap 末尾恒为 Upstream；
+  // 下一行 start 自然保持 Downstream。不再按同一行上/下半区分。
   let affinity = CaretAffinity.Downstream
   if (offset === line.end && line.breakKind === LineBreakKind.SoftWrap) {
-    const lineY = lineIndex * lineSpacingPx
-    const lineMidY = lineY + lineSpacingPx / 2
-    affinity = touchY < lineMidY ? CaretAffinity.Upstream : CaretAffinity.Downstream
+    affinity = CaretAffinity.Upstream
   }
   return { utf16Offset: offset, affinity }
 }

@@ -33,11 +33,21 @@ export class SelectionController {
   // Issue #629 评论18：获取当前 visual caret position。
   // 如果命中测试设置了 visualCaret，且 offset 匹配，返回带 affinity 的位置；
   // 否则返回默认 Downstream（普通键盘输入场景）。
+  // offset 不匹配时默认 Downstream 确保旧 affinity 不残留。
   getVisualCaret(cursorUtf16: number): VisualCaretPosition {
     if (this.visualCaret !== null && this.visualCaret.utf16Offset === cursorUtf16) {
       return this.visualCaret
     }
     return { utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream }
+  }
+
+  // Issue #629 R7：唯一 owner 语义——只更新/发布视觉位置，不重复发 Core selection。
+  // 用于 line navigation 等路径：导航已经通过 onTap/onDragSelect 发了 Core selection，
+  // 只需要把 head 的 VisualCaretPosition（含 affinity）记进 owner。
+  // composition/preedit 路径成功后也通过此方法记忆 visual caret position。
+  rememberVisualCaret(position: VisualCaretPosition): void {
+    this.visualCaret = position
+    this.visualCaretListener?.(position)
   }
 
   // Issue #629 评论18：发布 visual caret position（命中测试成功后调用）。

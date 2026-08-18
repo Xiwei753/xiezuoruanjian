@@ -70,27 +70,49 @@ class LineNavigationResolver {
       && state.compositionGeneration === identity.compositionGeneration
       && state.displayText === identity.displayText
   }
-  // 纯函数式静态方法
-  static getCurrentLineIndex(state, cursorUtf16) {
+  // R7 任务B：纯函数式静态方法 — 接受 VisualCaretPosition（含 affinity），不写死 Downstream。
+  // 与 production resolveVisualLineIndex 对齐。
+  static getCurrentLineIndex(state, position) {
     if (state.lines.length === 0) return -1
+    const { utf16Offset, affinity } = position
     for (let i = 0; i < state.lines.length; i++) {
       const line = state.lines[i]
-      // 行末 offset 归到下一行（如果有的话），这样行首 offset 归到该行。
-      // [start, end) 半开区间，与 caretStops 中 offset=end 同时出现在两行时的 x=0 语义一致。
-      if (cursorUtf16 >= line.startUtf16 && cursorUtf16 < line.endUtf16) return i
+      if (utf16Offset >= line.startUtf16 && utf16Offset < line.endUtf16) return i
+      if (utf16Offset === line.endUtf16) {
+        if (line.breakKind === 'softWrap') {
+          return affinity === 'upstream' ? i : i + 1
+        }
+        return i
+      }
     }
-    // cursor >= 最后一行的 endUtf16 归最后一行（光标在行尾）
     return state.lines.length - 1
   }
-  static getPreviousLineIndex(state, cursorUtf16) {
-    const idx = this.getCurrentLineIndex(state, cursorUtf16)
+  static getPreviousLineIndex(state, position) {
+    const idx = this.getCurrentLineIndex(state, position)
     if (idx <= 0) return -1
     return idx - 1
   }
-  static getNextLineIndex(state, cursorUtf16) {
-    const idx = this.getCurrentLineIndex(state, cursorUtf16)
+  static getNextLineIndex(state, position) {
+    const idx = this.getCurrentLineIndex(state, position)
     if (idx < 0 || idx >= state.lines.length - 1) return -1
     return idx + 1
+  }
+  // R7 任务B：纯函数 — 根据 offset 在指定行的 soft-wrap 边界位置，返回正确 affinity。
+  static positionForOffsetInLine(state, lineIndex, utf16Offset) {
+    if (lineIndex < 0 || lineIndex >= state.lines.length) {
+      return { utf16Offset, affinity: 'downstream' }
+    }
+    const line = state.lines[lineIndex]
+    if (utf16Offset === line.startUtf16) {
+      return { utf16Offset, affinity: 'downstream' }
+    }
+    if (utf16Offset === line.endUtf16) {
+      if (line.breakKind === 'softWrap') {
+        return { utf16Offset, affinity: 'upstream' }
+      }
+      return { utf16Offset, affinity: 'downstream' }
+    }
+    return { utf16Offset, affinity: 'downstream' }
   }
   static getLineStart(state, lineIndex) {
     if (lineIndex < 0 || lineIndex >= state.lines.length) return 0
@@ -100,24 +122,24 @@ class LineNavigationResolver {
     if (lineIndex < 0 || lineIndex >= state.lines.length) return 0
     return state.lines[lineIndex].endUtf16
   }
-  // Issue #629 评论16 第2项：纯函数 — 给定 UTF-16 offset，返回该 offset 在行内的 x 坐标（px）。
-  static getCaretX(state, utf16Offset) {
-    const lineIdx = this.getCurrentLineIndex(state, utf16Offset)
+  // R7 任务B：getCaretX 接受 VisualCaretPosition。
+  static getCaretX(state, position) {
+    const lineIdx = this.getCurrentLineIndex(state, position)
     if (lineIdx < 0 || lineIdx >= state.lines.length) return 0
     const line = state.lines[lineIdx]
     const stops = line.caretStops
     if (!stops || stops.length === 0) return 0
     let lo = 0, hi = stops.length - 1, bestIdx = 0
-    let bestDist = Math.abs(stops[0].utf16Offset - utf16Offset)
+    let bestDist = Math.abs(stops[0].utf16Offset - position.utf16Offset)
     while (lo <= hi) {
       const mid = Math.floor((lo + hi) / 2)
-      const dist = Math.abs(stops[mid].utf16Offset - utf16Offset)
-      if (dist < bestDist || (dist === bestDist && stops[mid].utf16Offset <= utf16Offset)) {
+      const dist = Math.abs(stops[mid].utf16Offset - position.utf16Offset)
+      if (dist < bestDist || (dist === bestDist && stops[mid].utf16Offset <= position.utf16Offset)) {
         bestDist = dist
         bestIdx = mid
       }
-      if (stops[mid].utf16Offset < utf16Offset) lo = mid + 1
-      else if (stops[mid].utf16Offset > utf16Offset) hi = mid - 1
+      if (stops[mid].utf16Offset < position.utf16Offset) lo = mid + 1
+      else if (stops[mid].utf16Offset > position.utf16Offset) hi = mid - 1
       else break
     }
     return stops[bestIdx].x
@@ -272,24 +294,24 @@ test('cancelWait: 取消所有等待 → 返回 null', async () => {
 
 // ── 纯函数式行导航（用显式 state）──
 
-test('getPreviousLineIndex: 返回上一行', () => {
+test('getPreviousLineIndex: 返回上一行（Downstream affinity）', () => {
   const state = makeState('aaaaabbbbbccccc')
-  assert.equal(LineNavigationResolver.getPreviousLineIndex(state, 7), 0)
+  assert.equal(LineNavigationResolver.getPreviousLineIndex(state, { utf16Offset: 7, affinity: 'downstream' }), 0)
 })
 
 test('getPreviousLineIndex: 已在第一行 → -1', () => {
   const state = makeState('aaaaabbbbb')
-  assert.equal(LineNavigationResolver.getPreviousLineIndex(state, 2), -1)
+  assert.equal(LineNavigationResolver.getPreviousLineIndex(state, { utf16Offset: 2, affinity: 'downstream' }), -1)
 })
 
-test('getNextLineIndex: 返回下一行', () => {
+test('getNextLineIndex: 返回下一行（Downstream affinity）', () => {
   const state = makeState('aaaaabbbbbccccc')
-  assert.equal(LineNavigationResolver.getNextLineIndex(state, 2), 1)
+  assert.equal(LineNavigationResolver.getNextLineIndex(state, { utf16Offset: 2, affinity: 'downstream' }), 1)
 })
 
 test('getNextLineIndex: 已在最后一行 → -1', () => {
   const state = makeState('aaaaabbbbb')
-  assert.equal(LineNavigationResolver.getNextLineIndex(state, 7), -1)
+  assert.equal(LineNavigationResolver.getNextLineIndex(state, { utf16Offset: 7, affinity: 'downstream' }), -1)
 })
 
 test('getLineStart: 返回行首 offset', () => {
@@ -302,9 +324,9 @@ test('getLineEnd: 返回行末 offset', () => {
   assert.equal(LineNavigationResolver.getLineEnd(state, 1), 10)
 })
 
-test('getCurrentLineIndex: 定位光标所在行', () => {
+test('getCurrentLineIndex: 定位光标所在行（Downstream affinity）', () => {
   const state = makeState('aaaaabbbbbccccc')
-  assert.equal(LineNavigationResolver.getCurrentLineIndex(state, 7), 1)
+  assert.equal(LineNavigationResolver.getCurrentLineIndex(state, { utf16Offset: 7, affinity: 'downstream' }), 1)
 })
 
 test('updateLayout(null): 清空 state', () => {
@@ -352,23 +374,21 @@ test('等待返回 state 后目标计算必须使用该 state.lines', async () =
 
 // ── Issue #629 评论16 第2项：getCaretX / getNearestOffsetAtX ──
 
-test('getCaretX: 找到光标所在行最近的 caret stop x', () => {
+test('getCaretX: 找到光标所在行最近的 caret stop x（接受 VisualCaretPosition）', () => {
   const state = makeState('aaaaabbbbbccccc')
-  // cursor 在第 7 位（第二行第 3 个字符）
-  // 第二行 caretStops: offset 5→x=0, 6→x=10, 7→x=20, 8→x=30, 9→x=40, 10→x=50
-  const x = LineNavigationResolver.getCaretX(state, 7)
+  const x = LineNavigationResolver.getCaretX(state, { utf16Offset: 7, affinity: 'downstream' })
   assert.equal(x, 20)
 })
 
-test('getCaretX: cursor 在行首返回 x=0', () => {
+test('getCaretX: cursor 在行首返回 x=0（接受 VisualCaretPosition）', () => {
   const state = makeState('aaaaabbbbb')
-  const x = LineNavigationResolver.getCaretX(state, 5)
+  const x = LineNavigationResolver.getCaretX(state, { utf16Offset: 5, affinity: 'downstream' })
   assert.equal(x, 0)
 })
 
-test('getCaretX: cursor 在行末返回最后一个 stop 的 x', () => {
+test('getCaretX: cursor 在行末返回最后一个 stop 的 x（接受 VisualCaretPosition）', () => {
   const state = makeState('aaaaabbbbb')
-  const x = LineNavigationResolver.getCaretX(state, 10)
+  const x = LineNavigationResolver.getCaretX(state, { utf16Offset: 10, affinity: 'downstream' })
   assert.equal(x, 50)
 })
 
@@ -397,6 +417,97 @@ test('getNearestOffsetAtX: 第二行正确偏移', () => {
   // 第二行 caretStops: offset 5→x=0, 6→x=10, 7→x=20, 8→x=30, 9→x=40, 10→x=50
   const offset = LineNavigationResolver.getNearestOffsetAtX(state, 1, 35)
   assert.equal(offset, 8)
+})
+
+// ── R7 任务B：positionForOffsetInLine 测试 ──
+
+test('positionForOffsetInLine: SoftWrap 起点（行首）→ Downstream', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  // 第二行 startUtf16=5, breakKind='softWrap'
+  const pos = LineNavigationResolver.positionForOffsetInLine(state, 1, 5)
+  assert.equal(pos.utf16Offset, 5)
+  assert.equal(pos.affinity, 'downstream')
+})
+
+test('positionForOffsetInLine: SoftWrap 终点（行末）→ Upstream', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  // 第一行 endUtf16=5, breakKind='softWrap'
+  const pos = LineNavigationResolver.positionForOffsetInLine(state, 0, 5)
+  assert.equal(pos.utf16Offset, 5)
+  assert.equal(pos.affinity, 'upstream')
+})
+
+test('positionForOffsetInLine: HardBreak 行末 → Downstream', () => {
+  const state = {
+    revision: 1, generation: 0, compositionGeneration: -1,
+    contentWidth: 300, fontSize: 16, displayText: 'abc\ndef',
+    lines: [
+      { startUtf16: 0, endUtf16: 3, y: 0, height: 20, breakKind: 'hardBreak',
+        caretStops: [{ utf16Offset: 0, x: 0 }, { utf16Offset: 3, x: 30 }] },
+      { startUtf16: 4, endUtf16: 7, y: 20, height: 20, breakKind: 'endOfText',
+        caretStops: [{ utf16Offset: 4, x: 0 }, { utf16Offset: 7, x: 30 }] }
+    ]
+  }
+  const pos = LineNavigationResolver.positionForOffsetInLine(state, 0, 3)
+  assert.equal(pos.utf16Offset, 3)
+  assert.equal(pos.affinity, 'downstream')
+})
+
+test('positionForOffsetInLine: EndOfText 行末 → Downstream', () => {
+  const state = makeState('aaaaabbbbb')
+  // 最后一行 endUtf16=10, breakKind='endOfText'
+  const pos = LineNavigationResolver.positionForOffsetInLine(state, 1, 10)
+  assert.equal(pos.utf16Offset, 10)
+  assert.equal(pos.affinity, 'downstream')
+})
+
+test('positionForOffsetInLine: 行中间位置 → Downstream', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  const pos = LineNavigationResolver.positionForOffsetInLine(state, 0, 3)
+  assert.equal(pos.utf16Offset, 3)
+  assert.equal(pos.affinity, 'downstream')
+})
+
+// ── R7 任务B：soft-wrap 边界上 affinity 区分行导航 ──
+
+test('getCurrentLineIndex: soft-wrap 行末 Upstream → 归上一行', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  // 第一行 endUtf16=5, breakKind='softWrap'
+  // Upstream at soft-wrap end → 归第一行（行末）
+  assert.equal(LineNavigationResolver.getCurrentLineIndex(state, { utf16Offset: 5, affinity: 'upstream' }), 0)
+})
+
+test('getCurrentLineIndex: soft-wrap 行末 Downstream → 归下一行', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  // 第一行 endUtf16=5, breakKind='softWrap'
+  // Downstream at soft-wrap end → 归第二行（行首）
+  assert.equal(LineNavigationResolver.getCurrentLineIndex(state, { utf16Offset: 5, affinity: 'downstream' }), 1)
+})
+
+test('getPreviousLineIndex: soft-wrap 行末 Upstream → 当前是行末，上一行是第一行之前', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  // Upstream at 5 → 归第一行（index 0），上一行不存在
+  assert.equal(LineNavigationResolver.getPreviousLineIndex(state, { utf16Offset: 5, affinity: 'upstream' }), -1)
+})
+
+test('getNextLineIndex: soft-wrap 行末 Downstream → 当前是第二行行首，下一行是第三行', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  // Downstream at 5 → 归第二行（index 1），下一行是第三行（index 2）
+  assert.equal(LineNavigationResolver.getNextLineIndex(state, { utf16Offset: 5, affinity: 'downstream' }), 2)
+})
+
+test('getCaretX: Upstream at soft-wrap end → 在第一行行末计算 x', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  // Upstream at 5 → 归第一行
+  const x = LineNavigationResolver.getCaretX(state, { utf16Offset: 5, affinity: 'upstream' })
+  assert.equal(x, 50) // 第一行最后一个 stop 的 x
+})
+
+test('getCaretX: Downstream at soft-wrap end → 在第二行行首计算 x', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  // Downstream at 5 → 归第二行
+  const x = LineNavigationResolver.getCaretX(state, { utf16Offset: 5, affinity: 'downstream' })
+  assert.equal(x, 0) // 第二行第一个 stop 的 x
 })
 
 console.log('---')
