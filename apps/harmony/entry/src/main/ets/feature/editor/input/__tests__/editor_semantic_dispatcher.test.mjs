@@ -18,6 +18,7 @@
 
 import { strict as assert } from 'node:assert'
 import { SerialCommandQueue } from '../../session/editor_patch_logic.ts'
+import { layoutLines, LineBreakKind, CaretAffinity } from '../../render/editor_layout_math.ts'
 
 let passed = 0
 const testAsync = async (name, fn) => {
@@ -1195,6 +1196,319 @@ await testAsync('评论9 第1项：begin→update→update→finish 全程从 sn
   await d.inputAdapter.onCompositionFinish('你好')
   assert.equal(d.coordinatorCalls.finishComposition[0].generation, 3, 'finish 用第二次 update 后的 generation=3')
   assert.equal(d.inputAdapter.isComposing(), false, 'finish 后 isComposing=false（snapshot.composition=null）')
+})
+
+// ════════════════════════════════════════════════════════════════════
+// ── Issue #629 R7 第3项修复：Left/Right soft-wrap affinity 切换 ──
+// 镜像 executeGraphemeLeft/executeGraphemeRight 的新逻辑（含 trySoftWrapAffinitySwitch）。
+// 用真实 layoutLines + resolveVisualLineIndex 算法，mock Coordinator/SelectionController。
+// ════════════════════════════════════════════════════════════════════
+
+function makeSoftWrapLayoutState(text, containerWidth) {
+  const mockMeasure = (s) => s.length * 10
+  const ranges = layoutLines(text, containerWidth, mockMeasure)
+  const lines = ranges.map((r, i) => ({
+    startUtf16: r.start,
+    endUtf16: r.end,
+    y: i * 20,
+    height: 20,
+    breakKind: r.breakKind,
+    caretStops: [],
+  }))
+  return {
+    revision: 1, generation: 0, compositionGeneration: -1,
+    contentWidth: containerWidth, fontSize: 16,
+    lines, displayText: text,
+  }
+}
+
+async function makeAffinitySwitchDispatcher() {
+  let snapshot = { text: '', cursor: 0, selectionAnchor: 0, revision: 1, generation: 0, compositionGeneration: -1 }
+  const queue = new SerialCommandQueue()
+  const coordinatorCalls = { setSelection: [], previousGraphemeBoundary: [], nextGraphemeBoundary: [] }
+  let visualCaret = null
+  const selectionController = {
+    getVisualCaret: (cursorUtf16) => {
+      if (visualCaret !== null && visualCaret.utf16Offset === cursorUtf16) return visualCaret
+      return { utf16Offset: cursorUtf16, affinity: 'downstream' }
+    },
+    rememberVisualCaret: (position) => { visualCaret = position },
+    setVisualCaretForTest: (pos) => { visualCaret = pos },
+    getVisualCaretState: () => visualCaret,
+  }
+  const coordinator = {
+    getSnapshot: () => snapshot,
+    setSelection: async (anchor, head) => {
+      coordinatorCalls.setSelection.push({ anchor, head })
+      snapshot = { ...snapshot, selectionAnchor: anchor, cursor: head }
+      return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+    },
+    previousGraphemeBoundary: async (byteOffset) => {
+      coordinatorCalls.previousGraphemeBoundary.push(byteOffset)
+      return { success: true, data: byteOffset - 1 }
+    },
+    nextGraphemeBoundary: async (byteOffset) => {
+      coordinatorCalls.nextGraphemeBoundary.push(byteOffset)
+      return { success: true, data: byteOffset + 1 }
+    },
+  }
+  let layoutState = null
+  const lineResolver = {
+    updateLayout: (state) => { layoutState = state },
+    waitForLayout: (identity) => {
+      if (layoutState !== null
+          && layoutState.revision === identity.revision
+          && layoutState.generation === identity.generation
+          && layoutState.compositionGeneration === identity.compositionGeneration
+          && layoutState.displayText === identity.displayText) {
+        return Promise.resolve(layoutState)
+      }
+      return Promise.resolve(null)
+    },
+  }
+  const trySoftWrapAffinitySwitch = async (direction) => {
+    if (!layoutState) return { handled: false, result: null }
+    const cursorUtf16 = snapshot.cursor
+    const currentPosition = selectionController.getVisualCaret(cursorUtf16)
+    let atSoftWrapEnd = false
+    for (let i = 0; i < layoutState.lines.length; i++) {
+      const l = layoutState.lines[i]
+      if (cursorUtf16 === l.endUtf16 && l.breakKind === 'softWrap') {
+        atSoftWrapEnd = true
+        break
+      }
+    }
+    if (!atSoftWrapEnd) return { handled: false, result: null }
+    if (direction === 'left' && currentPosition.affinity === 'downstream') {
+      selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: 'upstream' })
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+    }
+    if (direction === 'right' && currentPosition.affinity === 'upstream') {
+      selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: 'downstream' })
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+    }
+    return { handled: false, result: null }
+  }
+  const executeGraphemeLeft = async (extend) => {
+    const cursorByte = snapshot.cursor
+    const anchorByte = snapshot.selectionAnchor
+    if (extend) {
+      const headByte = snapshot.cursor
+      if (headByte <= 0) return coordinator.setSelection(anchorByte, 0)
+      const prevResult = await coordinator.previousGraphemeBoundary(headByte)
+      if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) return prevResult
+      return coordinator.setSelection(anchorByte, prevResult.data)
+    }
+    if (anchorByte !== cursorByte) {
+      const selStart = Math.min(anchorByte, cursorByte)
+      return coordinator.setSelection(selStart, selStart)
+    }
+    const affinitySwitch = await trySoftWrapAffinitySwitch('left')
+    if (affinitySwitch.handled) return affinitySwitch.result
+    if (cursorByte <= 0) return coordinator.setSelection(0, 0)
+    const prevResult = await coordinator.previousGraphemeBoundary(cursorByte)
+    if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) return prevResult
+    return coordinator.setSelection(prevResult.data, prevResult.data)
+  }
+  const executeGraphemeRight = async (extend) => {
+    const text = snapshot.text
+    const textByteLen = text.length
+    const cursorByte = snapshot.cursor
+    const anchorByte = snapshot.selectionAnchor
+    if (extend) {
+      const headByte = snapshot.cursor
+      if (headByte >= textByteLen) return coordinator.setSelection(anchorByte, textByteLen)
+      const nextResult = await coordinator.nextGraphemeBoundary(headByte)
+      if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) return nextResult
+      return coordinator.setSelection(anchorByte, nextResult.data)
+    }
+    if (anchorByte !== cursorByte) {
+      const selEnd = Math.max(anchorByte, cursorByte)
+      return coordinator.setSelection(selEnd, selEnd)
+    }
+    const affinitySwitch = await trySoftWrapAffinitySwitch('right')
+    if (affinitySwitch.handled) return affinitySwitch.result
+    if (cursorByte >= textByteLen) return coordinator.setSelection(textByteLen, textByteLen)
+    const nextResult = await coordinator.nextGraphemeBoundary(cursorByte)
+    if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) return nextResult
+    return coordinator.setSelection(nextResult.data, nextResult.data)
+  }
+  const dispatch = (cmd) => queue.enqueue(async () => {
+    switch (cmd.kind) {
+      case 'graphemeLeft': return executeGraphemeLeft(cmd.extend)
+      case 'graphemeRight': return executeGraphemeRight(cmd.extend)
+      default: return { success: true }
+    }
+  })
+  return {
+    dispatch, coordinator, selectionController, lineResolver, coordinatorCalls,
+    setSnapshot: (s) => { snapshot = { ...snapshot, ...s } },
+    getSnapshot: () => snapshot,
+  }
+}
+
+await testAsync('R7第3项: soft-wrap 边界 Upstream + Right -> 切 Downstream, cursor 不移动', async () => {
+  const d = await makeAffinitySwitchDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 3, selectionAnchor: 3 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'upstream' })
+  await d.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(d.getSnapshot().cursor, 3, 'cursor 不应移动')
+  assert.equal(d.coordinatorCalls.setSelection.length, 0, '不应调 setSelection')
+  const pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', 'affinity 应切到 Downstream')
+})
+
+await testAsync('R7第3项: soft-wrap 边界 Downstream + Left -> 切 Upstream, cursor 不移动', async () => {
+  const d = await makeAffinitySwitchDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 3, selectionAnchor: 3 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'downstream' })
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.getSnapshot().cursor, 3, 'cursor 不应移动')
+  assert.equal(d.coordinatorCalls.setSelection.length, 0, '不应调 setSelection')
+  const pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'upstream', 'affinity 应切到 Upstream')
+})
+
+await testAsync('R7第3项: 非 soft-wrap 边界 Left 正常移动到前一个 grapheme', async () => {
+  const d = await makeAffinitySwitchDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 4, selectionAnchor: 4 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 4, affinity: 'downstream' })
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.getSnapshot().cursor, 3, 'cursor 应移到 offset=3')
+  assert.equal(d.coordinatorCalls.setSelection.length, 1, '应调 setSelection')
+  assert.equal(d.coordinatorCalls.previousGraphemeBoundary.length, 1, '应调 previousGraphemeBoundary')
+})
+
+await testAsync('R7第3项: 非 soft-wrap 边界 Right 正常移动到后一个 grapheme', async () => {
+  const d = await makeAffinitySwitchDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 2, selectionAnchor: 2 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 2, affinity: 'downstream' })
+  await d.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(d.getSnapshot().cursor, 3, 'cursor 应移到 offset=3')
+  assert.equal(d.coordinatorCalls.setSelection.length, 1, '应调 setSelection')
+  assert.equal(d.coordinatorCalls.nextGraphemeBoundary.length, 1, '应调 nextGraphemeBoundary')
+})
+
+await testAsync('R7第3项: soft-wrap 边界 Upstream + Left -> 正常移动到前一个 grapheme', async () => {
+  const d = await makeAffinitySwitchDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 3, selectionAnchor: 3 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'upstream' })
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.getSnapshot().cursor, 2, 'cursor 应移到 offset=2')
+  assert.equal(d.coordinatorCalls.setSelection.length, 1, '应调 setSelection')
+  assert.equal(d.coordinatorCalls.previousGraphemeBoundary.length, 1, '应调 previousGraphemeBoundary')
+})
+
+await testAsync('R7第3项: soft-wrap 边界 Downstream + Right -> 正常移动到后一个 grapheme', async () => {
+  const d = await makeAffinitySwitchDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 3, selectionAnchor: 3 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'downstream' })
+  await d.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(d.getSnapshot().cursor, 4, 'cursor 应移到 offset=4')
+  assert.equal(d.coordinatorCalls.setSelection.length, 1, '应调 setSelection')
+  assert.equal(d.coordinatorCalls.nextGraphemeBoundary.length, 1, '应调 nextGraphemeBoundary')
+})
+
+await testAsync('R7第3项: shift+left 不触发 affinity 切换（走选区扩展逻辑）', async () => {
+  const d = await makeAffinitySwitchDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 3, selectionAnchor: 5 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'downstream' })
+  await d.dispatch({ kind: 'graphemeLeft', extend: true })
+  assert.equal(d.getSnapshot().cursor, 2, 'shift+left 应移 head 到 offset=2')
+  assert.equal(d.getSnapshot().selectionAnchor, 5, 'anchor 应保持 5')
+  assert.equal(d.coordinatorCalls.previousGraphemeBoundary.length, 1, '应调 previousGraphemeBoundary')
+  const pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', 'affinity 不应变')
+})
+
+await testAsync('R7第3项: shift+right 不触发 affinity 切换（走选区扩展逻辑）', async () => {
+  const d = await makeAffinitySwitchDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 3, selectionAnchor: 1 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'upstream' })
+  await d.dispatch({ kind: 'graphemeRight', extend: true })
+  assert.equal(d.getSnapshot().cursor, 4, 'shift+right 应移 head 到 offset=4')
+  assert.equal(d.getSnapshot().selectionAnchor, 1, 'anchor 应保持 1')
+  assert.equal(d.coordinatorCalls.nextGraphemeBoundary.length, 1, '应调 nextGraphemeBoundary')
+  const pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'upstream', 'affinity 不应变')
+})
+
+await testAsync('R7第3项: 有选区时 Left 不触发 affinity 切换（走 collapse）', async () => {
+  const d = await makeAffinitySwitchDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 5, selectionAnchor: 1 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 5, affinity: 'downstream' })
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.getSnapshot().cursor, 1, '有选区应 collapse 到选区开头 offset=1')
+  assert.equal(d.coordinatorCalls.setSelection.length, 1, '应调 setSelection')
+  assert.equal(d.coordinatorCalls.previousGraphemeBoundary.length, 0, '不应调 previousGraphemeBoundary')
+})
+
+await testAsync('R7第3项: lineResolver 未注册时 Left 走原逻辑（向后兼容）', async () => {
+  const d = await makeAffinitySwitchDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 3, selectionAnchor: 3 })
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'downstream' })
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.getSnapshot().cursor, 2, '无布局时走原逻辑移到 offset=2')
+  assert.equal(d.coordinatorCalls.previousGraphemeBoundary.length, 1, '应调 previousGraphemeBoundary')
+})
+
+await testAsync('R7第3项: 硬换行（非共享 offset）边界 Left/Right 不触发 affinity 切换，走原 grapheme 移动', async () => {
+  // 文本 'ab\ncd'，containerWidth=1000 足宽不软折。layoutLines 产生两行：
+  //   {start:0,end:2,breakKind:'hardBreak'}（'ab'）
+  //   {start:3,end:5,breakKind:'endOfText'}（'cd'，\n 在 offset 2 不进 line range）
+  // cursor=2 是硬换行边界：第一行 end=2 但 breakKind='hardBreak'（非 'softWrap'），
+  // 且第二行 start=3 ≠ 2 → 不共享 offset → trySoftWrapAffinitySwitch 不接管，走原 grapheme 移动。
+  const layout = makeSoftWrapLayoutState('ab\ncd', 1000)
+
+  // Left + Downstream：硬换行不切 affinity，走 previousGraphemeBoundary → offset=1
+  const dLeft = await makeAffinitySwitchDispatcher()
+  dLeft.setSnapshot({ text: 'ab\ncd', cursor: 2, selectionAnchor: 2 })
+  dLeft.lineResolver.updateLayout(layout)
+  dLeft.selectionController.setVisualCaretForTest({ utf16Offset: 2, affinity: 'downstream' })
+  await dLeft.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(dLeft.getSnapshot().cursor, 1, 'Left 应移到前一个 grapheme offset=1')
+  assert.equal(dLeft.coordinatorCalls.setSelection.length, 1, 'Left 应调一次 setSelection')
+  assert.equal(dLeft.coordinatorCalls.previousGraphemeBoundary.length, 1, 'Left 应调 previousGraphemeBoundary')
+  let pos = dLeft.selectionController.getVisualCaret(2)
+  assert.equal(pos.affinity, 'downstream', '硬换行不切 affinity，仍为 downstream')
+
+  // Right + Upstream：对称，硬换行不切 affinity，走 nextGraphemeBoundary → offset=3
+  const dRight = await makeAffinitySwitchDispatcher()
+  dRight.setSnapshot({ text: 'ab\ncd', cursor: 2, selectionAnchor: 2 })
+  dRight.lineResolver.updateLayout(layout)
+  dRight.selectionController.setVisualCaretForTest({ utf16Offset: 2, affinity: 'upstream' })
+  await dRight.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(dRight.getSnapshot().cursor, 3, 'Right 应移到后一个 grapheme offset=3')
+  assert.equal(dRight.coordinatorCalls.setSelection.length, 1, 'Right 应调一次 setSelection')
+  assert.equal(dRight.coordinatorCalls.nextGraphemeBoundary.length, 1, 'Right 应调 nextGraphemeBoundary')
+  pos = dRight.selectionController.getVisualCaret(2)
+  assert.equal(pos.affinity, 'upstream', '硬换行不切 affinity，仍为 upstream')
+})
+
+await testAsync('R7第3项: composition 进行中 soft-wrap affinity 切换是纯视觉操作，不调 setSelection 破坏 composition 正文', async () => {
+  // composition 进行中（compositionGeneration=5）。soft-wrap 边界 affinity 切换是纯视觉操作，
+  // 只调 selectionController.rememberVisualCaret 更新视觉 affinity，不调 setSelection（不破坏 composition 正文）。
+  const d = await makeAffinitySwitchDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 3, selectionAnchor: 3, compositionGeneration: 5 })
+  const layout = makeSoftWrapLayoutState('abcdef', 30)
+  layout.compositionGeneration = 5
+  d.lineResolver.updateLayout(layout)
+  // cursor=3 是 soft-wrap 边界（第一行 end=3 breakKind='softWrap'），affinity='upstream' + Right → 切 downstream
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'upstream' })
+  await d.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(d.getSnapshot().cursor, 3, 'composition 中不移动 cursor，不破坏 composition 正文')
+  assert.equal(d.coordinatorCalls.setSelection.length, 0, '不调 setSelection，不碰正文')
+  const pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', 'affinity 应切到 downstream（视觉位置仍更新）')
 })
 
 console.log('---')

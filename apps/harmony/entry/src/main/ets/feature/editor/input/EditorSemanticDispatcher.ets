@@ -46,7 +46,7 @@ import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorTransactionCause, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { LineNavigationResolver, LineLayoutState } from '../selection/LineNavigationResolver'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
-import { CaretAffinity } from '../render/editor_layout_math'
+import { CaretAffinity, LineBreakKind } from '../render/editor_layout_math'
 import type { VisualCaretPosition } from '../render/editor_layout_math'
 
 // 语义命令类型：把物理键盘/IME/鼠标/触摸的输入统一成语义命令。
@@ -389,6 +389,64 @@ export class EditorSemanticDispatcher {
     return this.coordinator.delete(sel.start, nextByte, EditorTransactionCause.Delete)
   }
 
+  // Issue #629 R7 第3项修复：soft-wrap 边界上的 affinity 切换。
+  // Left/Right 在 soft-wrap 共享 offset 上的 affinity 切换：
+  // - 按 Left 且当前 affinity === Downstream：先切到同 offset 的 Upstream（不移动 offset）
+  // - 按 Right 且当前 affinity === Upstream：先切到同 offset 的 Downstream（不移动 offset）
+  // 只在非 extend、空选区路径调用。返回 handled=true 表示已处理（调用方直接返回 result），
+  // handled=false 表示未处理（调用方继续原 grapheme 移动逻辑）。
+  // 获取 layout 的逻辑与 executeLineNavigation 保持一致（identity 构造、waitForLayout、null 处理）。
+  private async trySoftWrapAffinitySwitch(
+    direction: 'left' | 'right',
+  ): Promise<{ handled: boolean; result: ResultEnvelope<EditorEditResult> | null }> {
+    const resolver = this.lineResolver
+    if (!resolver) {
+      return { handled: false, result: null }
+    }
+    const snap = this.coordinator.getSnapshot()
+    if (!snap) {
+      return { handled: false, result: null }
+    }
+    const displaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+    const identity = {
+      revision: displaySnapshot.revision,
+      generation: displaySnapshot.generation,
+      compositionGeneration: displaySnapshot.compositionGeneration,
+      displayText: displaySnapshot.text,
+    }
+    const layoutState = await resolver.waitForLayout(identity)
+    if (layoutState === null) {
+      // 被取消（组件销毁/换 session），返回 success（与 executeLineNavigation 一致）
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+    }
+    const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(displaySnapshot.text, displaySnapshot.cursorByteOffset)
+    const currentPosition: VisualCaretPosition = this.selectionController.getVisualCaret(cursorUtf16)
+    // 检查 cursor 是否在 soft-wrap 边界：找 endUtf16 === cursorUtf16 且 breakKind === SoftWrap 的行。
+    // 不依赖 getCurrentLineIndex（它在 affinity=Downstream 时归下一行，下一行 breakKind 不是 SoftWrap）。
+    let atSoftWrapEnd = false
+    for (let i = 0; i < layoutState.lines.length; i++) {
+      const l = layoutState.lines[i]
+      if (cursorUtf16 === l.endUtf16 && l.breakKind === LineBreakKind.SoftWrap) {
+        atSoftWrapEnd = true
+        break
+      }
+    }
+    if (!atSoftWrapEnd) {
+      return { handled: false, result: null }
+    }
+    // 按 Left 且当前 Downstream → 切 Upstream（不移动 offset，只更新视觉位置）
+    if (direction === 'left' && currentPosition.affinity === CaretAffinity.Downstream) {
+      this.selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: CaretAffinity.Upstream })
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+    }
+    // 按 Right 且当前 Upstream → 切 Downstream（不移动 offset，只更新视觉位置）
+    if (direction === 'right' && currentPosition.affinity === CaretAffinity.Upstream) {
+      this.selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream })
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+    }
+    return { handled: false, result: null }
+  }
+
   // grapheme-based left arrow: 用 Core previous_grapheme_boundary
   // extend=true（shift+left）：保持 anchor，head 左移到前一个 grapheme 边界
   // extend=false：有选区时移到选区开头（collapse），空选区时左移一个 grapheme
@@ -415,6 +473,12 @@ export class EditorSemanticDispatcher {
     if (anchorByte !== cursorByte) {
       const selStart = Math.min(anchorByte, cursorByte)
       return this.coordinator.setSelection(selStart, selStart)
+    }
+    // Issue #629 R7 第3项修复：soft-wrap 边界 affinity 切换（非 extend、空选区）。
+    // 在调用 previousGraphemeBoundary 之前，先检查是否需要切 affinity。
+    const leftAffinitySwitch = await this.trySoftWrapAffinitySwitch('left')
+    if (leftAffinitySwitch.handled) {
+      return leftAffinitySwitch.result!
     }
     if (cursorByte <= 0) {
       return this.coordinator.setSelection(0, 0)
@@ -453,6 +517,12 @@ export class EditorSemanticDispatcher {
     if (anchorByte !== cursorByte) {
       const selEnd = Math.max(anchorByte, cursorByte)
       return this.coordinator.setSelection(selEnd, selEnd)
+    }
+    // Issue #629 R7 第3项修复：soft-wrap 边界 affinity 切换（非 extend、空选区）。
+    // 在调用 nextGraphemeBoundary 之前，先检查是否需要切 affinity。
+    const rightAffinitySwitch = await this.trySoftWrapAffinitySwitch('right')
+    if (rightAffinitySwitch.handled) {
+      return rightAffinitySwitch.result!
     }
     if (cursorByte >= textByteLen) {
       return this.coordinator.setSelection(textByteLen, textByteLen)
