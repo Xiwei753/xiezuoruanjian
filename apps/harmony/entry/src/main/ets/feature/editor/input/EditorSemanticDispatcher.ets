@@ -347,40 +347,13 @@ export class EditorSemanticDispatcher {
 
   // ── imeSetSelection ──
 
+  // Issue #629 R9 评论5326213302 第3项：删除旧 composition range 规则。
+  // start/end 包装成 VisualCaretPosition（IME 没给 affinity 时默认 Downstream），
+  // 统一调用 executeDisplaySelection。非空 range 不再压成单光标。
   private async executeImeSetSelection(utf16Start: number, utf16End: number): Promise<ResultEnvelope<EditorEditResult>> {
-    const snap = this.coordinator.getSnapshot()
-    if (!snap) {
-      return this.noSession()
-    }
-    if (!this.inputAdapter.isComposing() || snap.composition === null || snap.composition === undefined) {
-      if (utf16Start === utf16End) {
-        return this.selectionController.onTap(utf16Start)
-      }
-      return this.selectionController.onDragSelect(utf16Start, utf16End)
-    }
-    const comp = snap.composition
-    const committedText: string = snap.text
-    const compStartUtf16: number = TextOffsetMapper.utf8ToUtf16(committedText, comp.replaceByteStart)
-    const preeditUtf16Len: number = comp.preeditText.length
-    const compEndDisplay: number = compStartUtf16 + preeditUtf16Len
-    const start: number = Math.min(utf16Start, utf16End)
-    const end: number = Math.max(utf16Start, utf16End)
-
-    if (start >= compStartUtf16 && end <= compEndDisplay) {
-      const cursorInPreedit: number = end - compStartUtf16
-      return this.inputAdapter.onCompositionUpdate(comp.preeditText, cursorInPreedit)
-    }
-
-    // selection 移出 composition 区域：先 finish 再普通 selection。
-    const finishResult = await this.inputAdapter.finishActiveComposition()
-    if (!finishResult.success) {
-      return finishResult
-    }
-    // finish 后恒等映射。
-    if (start === end) {
-      return this.selectionController.onTap(start)
-    }
-    return this.selectionController.onDragSelect(start, end)
+    const anchor: VisualCaretPosition = { utf16Offset: utf16Start, affinity: CaretAffinity.Downstream }
+    const head: VisualCaretPosition = { utf16Offset: utf16End, affinity: CaretAffinity.Downstream }
+    return this.executeDisplaySelection(anchor, head)
   }
 
   // ── Issue #629 评论5324447292 第2项：composition grapheme 操作 ──
@@ -484,14 +457,13 @@ export class EditorSemanticDispatcher {
     return { handled: false, result: null }
   }
 
-  // composition 活跃时 Left/Right 走 composition grapheme API（不操作 committed text）。
-  private async executeGraphemeLeft(extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
-    if (this.inputAdapter.isComposing()) {
-      // composition 活跃时 extend 不改变语义（Core composition 没有 selection range），
-      // 直接走 composition grapheme move left。
-      return this.inputAdapter.compositionMoveGraphemeLeft()
-    }
-    // 无 composition：走 committed grapheme。
+  // ── Issue #629 R9 评论5326213302 第1+2项：
+  // 1. Shift+Left/Right composition 下先 finish 再走 committed helper（保留 extend=true）。
+  // 2. trySoftWrapAffinitySwitch 必须先于 composition 路由。
+  // 3. preedit 最左/最右继续同方向时 finish 后跨到 committed 正文。
+
+  /** 无 composition 时 Left 语义：collapse selection → affinity switch → grapheme move。 */
+  private async executeCommittedGraphemeLeft(extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
       return this.noSession()
@@ -527,12 +499,8 @@ export class EditorSemanticDispatcher {
     return this.coordinator.setSelection(prevResult.data, prevResult.data)
   }
 
-  // composition 活跃时 Right 走 composition grapheme API。
-  private async executeGraphemeRight(extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
-    if (this.inputAdapter.isComposing()) {
-      return this.inputAdapter.compositionMoveGraphemeRight()
-    }
-    // 无 composition：走 committed grapheme。
+  /** 无 composition 时 Right 语义：collapse selection → affinity switch → grapheme move。 */
+  private async executeCommittedGraphemeRight(extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
       return this.noSession()
@@ -568,6 +536,96 @@ export class EditorSemanticDispatcher {
       return nextResult as ResultEnvelope<EditorEditResult>
     }
     return this.coordinator.setSelection(nextResult.data, nextResult.data)
+  }
+
+  private async executeGraphemeLeft(extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
+    // 评论5326213302 第2项：trySoftWrapAffinitySwitch 必须先于 composition 路由。
+    // 在 composition 活跃时，soft-wrap affinity 切换仍然可能发生（preedit 内 soft-wrap 边界）。
+    // 先检查是否只需要切换 affinity，不需要 finish composition。
+    if (!extend) {
+      const affinitySwitch = await this.trySoftWrapAffinitySwitch('left')
+      if (affinitySwitch.handled) {
+        return affinitySwitch.result!
+      }
+    }
+
+    if (!this.inputAdapter.isComposing()) {
+      // 无 composition：走 committed grapheme。
+      return this.executeCommittedGraphemeLeft(extend)
+    }
+
+    // composition 活跃。
+    if (extend) {
+      // Shift+Left：composition 没有 selection range，不能退化成移动 preedit cursor。
+      // 先 finish composition 成功后，再走 committed helper 保留 extend=true。
+      const finishResult = await this.inputAdapter.finishActiveComposition()
+      if (!finishResult.success) {
+        return finishResult
+      }
+      return this.executeCommittedGraphemeLeft(true)
+    }
+
+    // 无 extend：先走 composition grapheme move。
+    // 如果 preedit cursor 已在最左端（compositionMoveGraphemeLeft 返回 no-op），
+    // 则 finish composition 后进入 committed Left。
+    const beforeCursor = this.coordinator.getSnapshot()?.composition?.preeditCursorUtf16 ?? 0
+    const moveResult = await this.inputAdapter.compositionMoveGraphemeLeft()
+    if (!moveResult.success) {
+      return moveResult
+    }
+    const afterCursor = this.coordinator.getSnapshot()?.composition?.preeditCursorUtf16 ?? 0
+    if (beforeCursor === afterCursor && beforeCursor <= 0) {
+      // preedit 最左端，继续 Left → finish 后进入 committed 正文
+      const finishResult = await this.inputAdapter.finishActiveComposition()
+      if (!finishResult.success) {
+        return finishResult
+      }
+      return this.executeCommittedGraphemeLeft(false)
+    }
+    return moveResult
+  }
+
+  private async executeGraphemeRight(extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
+    // 评论5326213302 第2项：trySoftWrapAffinitySwitch 必须先于 composition 路由。
+    if (!extend) {
+      const affinitySwitch = await this.trySoftWrapAffinitySwitch('right')
+      if (affinitySwitch.handled) {
+        return affinitySwitch.result!
+      }
+    }
+
+    if (!this.inputAdapter.isComposing()) {
+      return this.executeCommittedGraphemeRight(extend)
+    }
+
+    // composition 活跃。
+    if (extend) {
+      // Shift+Right：先 finish composition，再走 committed helper 保留 extend=true。
+      const finishResult = await this.inputAdapter.finishActiveComposition()
+      if (!finishResult.success) {
+        return finishResult
+      }
+      return this.executeCommittedGraphemeRight(true)
+    }
+
+    // 无 extend：先走 composition grapheme move。
+    const snap = this.coordinator.getSnapshot()
+    const preeditText = snap?.composition?.preeditText ?? ''
+    const beforeCursor = snap?.composition?.preeditCursorUtf16 ?? 0
+    const moveResult = await this.inputAdapter.compositionMoveGraphemeRight()
+    if (!moveResult.success) {
+      return moveResult
+    }
+    const afterCursor = this.coordinator.getSnapshot()?.composition?.preeditCursorUtf16 ?? 0
+    if (beforeCursor === afterCursor && beforeCursor >= preeditText.length) {
+      // preedit 最右端，继续 Right → finish 后进入 committed 正文
+      const finishResult = await this.inputAdapter.finishActiveComposition()
+      if (!finishResult.success) {
+        return finishResult
+      }
+      return this.executeCommittedGraphemeRight(false)
+    }
+    return moveResult
   }
 
   // ── clearDocument ──

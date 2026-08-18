@@ -45,13 +45,15 @@ function utf8ToUtf16(text, utf8Offset) {
     let charByteLen = 1
     if (code < 0x80) charByteLen = 1
     else if (code < 0x800) charByteLen = 2
-    else if (code >= 0xD800 && code <= 0xDBFF) { charByteLen = 4; i += 1 }
-    else charByteLen = 3
+    else if (code >= 0xD800 && code <= 0xDBFF) {
+      charByteLen = 4
+      i += 1 // skip low surrogate
+    } else charByteLen = 3
     if (byteLen + charByteLen > utf8Offset) return utf16Index
     byteLen += charByteLen
     utf16Index += (charByteLen === 4 ? 2 : 1)
   }
-  return utf16Index
+  return text.length
 }
 
 // CaretAffinity 枚举
@@ -371,18 +373,53 @@ async function makeFullDispatcher() {
     return coordinator.delete(sel.start, next.data, 'Delete')
   }
 
+  // Issue #629 R9：executeGraphemeLeft/Right 镜像新的 composition+Shift+左/右逻辑。
+  // Shift 时先 finish → committed helper；无 Shift 时 preedit 最左/最右继续同方向 → finish → committed。
   const executeGraphemeLeft = async (extend) => {
-    if (inputAdapter.isComposing()) {
-      return inputAdapter.compositionMoveGraphemeLeft()
+    if (!inputAdapter.isComposing()) {
+      return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
     }
-    return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
+    if (extend) {
+      const finishResult = await inputAdapter.finishActiveComposition()
+      if (!finishResult.success) return finishResult
+      callSequence.push('committedLeft:extend')
+      return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
+    }
+    const beforeCursor = snapshot.composition?.preeditCursorUtf16 ?? 0
+    const moveResult = await inputAdapter.compositionMoveGraphemeLeft()
+    if (!moveResult.success) return moveResult
+    const afterCursor = snapshot.composition?.preeditCursorUtf16 ?? 0
+    if (beforeCursor === afterCursor && beforeCursor <= 0) {
+      const finishResult = await inputAdapter.finishActiveComposition()
+      if (!finishResult.success) return finishResult
+      callSequence.push('committedLeft:noShift')
+      return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
+    }
+    return moveResult
   }
 
   const executeGraphemeRight = async (extend) => {
-    if (inputAdapter.isComposing()) {
-      return inputAdapter.compositionMoveGraphemeRight()
+    if (!inputAdapter.isComposing()) {
+      return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
     }
-    return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
+    if (extend) {
+      const finishResult = await inputAdapter.finishActiveComposition()
+      if (!finishResult.success) return finishResult
+      callSequence.push('committedRight:extend')
+      return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
+    }
+    const preeditText = snapshot.composition?.preeditText ?? ''
+    const beforeCursor = snapshot.composition?.preeditCursorUtf16 ?? 0
+    const moveResult = await inputAdapter.compositionMoveGraphemeRight()
+    if (!moveResult.success) return moveResult
+    const afterCursor = snapshot.composition?.preeditCursorUtf16 ?? 0
+    if (beforeCursor === afterCursor && beforeCursor >= preeditText.length) {
+      const finishResult = await inputAdapter.finishActiveComposition()
+      if (!finishResult.success) return finishResult
+      callSequence.push('committedRight:noShift')
+      return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
+    }
+    return moveResult
   }
 
   // ── 镜像 finish-then-execute ──
@@ -443,6 +480,12 @@ async function makeFullDispatcher() {
         case 'imeCommitText':
           if (inputAdapter.isComposing()) return inputAdapter.onCompositionFinish(cmd.text)
           return inputAdapter.onTextInput(cmd.text)
+        case 'imeSetSelection':
+          // Issue #629 R9：imeSetSelection 统一走 executeDisplaySelection
+          return executeDisplaySelection(
+            { utf16Offset: cmd.utf16Start, affinity: CaretAffinity.Downstream },
+            { utf16Offset: cmd.utf16End, affinity: CaretAffinity.Downstream }
+          )
         default:
           return { success: true, data: { outcome: 'applied' }, warnings: [], changedPaths: [], changedEntities: [] }
       }
@@ -613,7 +656,7 @@ await testAsync('composition 内 Delete → compositionDeleteGraphemeForward', a
   assert.equal(d.getSnapshot().composition.preeditText, '好')
 })
 
-await testAsync('composition 内 Left → compositionMoveGraphemeLeft', async () => {
+await testAsync('composition 内 Left（无 Shift）→ compositionMoveGraphemeLeft', async () => {
   const d = await makeFullDispatcher()
   d.setSnapshot({
     text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, selectionHead: 1,
@@ -625,7 +668,7 @@ await testAsync('composition 内 Left → compositionMoveGraphemeLeft', async ()
   assert.equal(d.getSnapshot().composition.preeditCursorUtf16, 1, 'preedit cursor 从 2 移到 1')
 })
 
-await testAsync('composition 内 Right → compositionMoveGraphemeRight', async () => {
+await testAsync('composition 内 Right（无 Shift）→ compositionMoveGraphemeRight', async () => {
   const d = await makeFullDispatcher()
   d.setSnapshot({
     text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, selectionHead: 1,
@@ -1065,6 +1108,179 @@ await testAsync('composition 内 Backspace 不改变 committed text', async () =
   assert.ok(d.getSnapshot().composition.preeditText.length < '你好'.length, 'preedit 应缩短')
   assert.equal(d.getSnapshot().composition.preeditCursorUtf16, 1, 'cursor 从 2 移到 1')
   assert.equal(d.getSnapshot().composition.preeditCursorUtf16, 1, 'preedit cursor 从 2 移到 1')
+})
+
+// ══════════════════════════════════════════════════════════════
+// 11. Shift+Left/Right 在 composition 下必须先 finish 再形成 selection
+// ══════════════════════════════════════════════════════════════
+
+await testAsync('Shift+Left 在 composition 下：先 finish → 再走 committed Left（extend=true）', async () => {
+  const d = await makeFullDispatcher()
+  // replace [0,1) 会把 "a" 替换为 preedit "你"，finish 后 text = "你b"
+  d.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, selectionHead: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 1 },
+  })
+  d.setComposing(true)
+  await d.dispatch({ kind: 'graphemeLeft', extend: true })
+  // 必须先 finish composition
+  assert.equal(d.calls.compositionFinish, 1, 'Shift+Left 必须先 finish composition')
+  // 然后走 committed Left（extend=true 时不应调 compositionMoveGraphemeLeft）
+  assert.equal(d.calls.compositionMoveGraphemeLeft, 0, 'Shift+Left 不应调 compositionMoveGraphemeLeft')
+  // 检查调用顺序：finishActive → compFinish → committedLeft:extend
+  const finishIdx = d.callSequence.indexOf('finishActive')
+  const committedLeftIdx = d.callSequence.indexOf('committedLeft:extend')
+  assert.ok(finishIdx < committedLeftIdx, 'finish 应在 committedLeft 之前')
+  // finish 提交 preedit "你" 替换 [0,1)，text 变成 "你b"
+  assert.equal(d.getSnapshot().text, '你b', 'finish 应提交 preedit 到正文')
+})
+
+await testAsync('Shift+Right 在 composition 下：先 finish → 再走 committed Right（extend=true）', async () => {
+  const d = await makeFullDispatcher()
+  d.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, selectionHead: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 0 },
+  })
+  d.setComposing(true)
+  await d.dispatch({ kind: 'graphemeRight', extend: true })
+  assert.equal(d.calls.compositionFinish, 1, 'Shift+Right 必须先 finish composition')
+  assert.equal(d.calls.compositionMoveGraphemeRight, 0, 'Shift+Right 不应调 compositionMoveGraphemeRight')
+  const finishIdx = d.callSequence.indexOf('finishActive')
+  const committedRightIdx = d.callSequence.indexOf('committedRight:extend')
+  assert.ok(finishIdx < committedRightIdx, 'finish 应在 committedRight 之前')
+  assert.equal(d.getSnapshot().text, '你b', 'finish 应提交 preedit 到正文')
+})
+
+await testAsync('Shift+Left 不能只改 preeditCursorUtf16，必须 finish 后走普通 selection', async () => {
+  const d = await makeFullDispatcher()
+  // replace [0,1) 会把 "a" 替换为 preedit "你好"，finish 后 text = "你好b"
+  d.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, selectionHead: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你好', preeditCursorUtf16: 2 },
+  })
+  d.setComposing(true)
+  await d.dispatch({ kind: 'graphemeLeft', extend: true })
+  // composition 必须被 finish，preedit 消失
+  assert.equal(d.getSnapshot().composition, null, 'Shift+Left 后 composition 应被 finish')
+  assert.equal(d.getSnapshot().text, '你好b', 'finish 提交 preedit 后 text 应包含 preedit')
+})
+
+// ══════════════════════════════════════════════════════════════
+// 12. preedit 最左/最右继续同方向 → finish → 跨到 committed 正文
+// ══════════════════════════════════════════════════════════════
+
+await testAsync('preedit 最左端按 Left：finish 后跨到 committed 正文', async () => {
+  const d = await makeFullDispatcher()
+  // replace [0,1) → finish 后 text = "你b"
+  d.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, selectionHead: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 0 },
+  })
+  d.setComposing(true)
+  // preedit cursor 已在 0（最左端），按 Left 应 finish → 进入 committed
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.getSnapshot().composition, null, 'composition 应被 finish')
+  assert.equal(d.getSnapshot().text, '你b', 'finish 应提交 preedit 到正文')
+  assert.equal(d.calls.compositionFinish, 1, '应 finish composition')
+  // 走了 committedLeft:noShift（finish 后再 Left）
+  const committedLeftIdx = d.callSequence.indexOf('committedLeft:noShift')
+  assert.ok(committedLeftIdx >= 0, '应走 committedLeft:noShift')
+})
+
+await testAsync('preedit 最右端按 Right：finish 后跨到 committed 正文', async () => {
+  const d = await makeFullDispatcher()
+  // replace [0,1) → finish 后 text = "你b"
+  d.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, selectionHead: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 1 },
+  })
+  d.setComposing(true)
+  // preedit cursor 已在 1（= preeditText.length，最右端），按 Right 应 finish → 进入 committed
+  await d.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(d.getSnapshot().composition, null, 'composition 应被 finish')
+  assert.equal(d.getSnapshot().text, '你b', 'finish 应提交 preedit 到正文')
+  assert.equal(d.calls.compositionFinish, 1, '应 finish composition')
+  const committedRightIdx = d.callSequence.indexOf('committedRight:noShift')
+  assert.ok(committedRightIdx >= 0, '应走 committedRight:noShift')
+})
+
+await testAsync('preedit 中间按 Left：不 finish，只移 preedit cursor', async () => {
+  const d = await makeFullDispatcher()
+  d.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, selectionHead: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你好', preeditCursorUtf16: 1 },
+  })
+  d.setComposing(true)
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.calls.compositionMoveGraphemeLeft, 1, '应调 compositionMoveGraphemeLeft')
+  assert.equal(d.getSnapshot().composition.preeditCursorUtf16, 0, 'preedit cursor 从 1 移到 0')
+  assert.equal(d.calls.compositionFinish, 0, '中间按 Left 不应 finish')
+})
+
+await testAsync('preedit 中间按 Right：不 finish，只移 preedit cursor', async () => {
+  const d = await makeFullDispatcher()
+  d.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, selectionHead: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你好', preeditCursorUtf16: 0 },
+  })
+  d.setComposing(true)
+  await d.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(d.calls.compositionMoveGraphemeRight, 1, '应调 compositionMoveGraphemeRight')
+  assert.equal(d.getSnapshot().composition.preeditCursorUtf16, 1, 'preedit cursor 从 0 移到 1')
+  assert.equal(d.calls.compositionFinish, 0, '中间按 Right 不应 finish')
+})
+
+// ══════════════════════════════════════════════════════════════
+// 13. imeSetSelection 统一走 executeDisplaySelection
+// ══════════════════════════════════════════════════════════════
+
+await testAsync('imeSetSelection 在 composition 内非空 range：finish + dragSelect（不压成单光标）', async () => {
+  const d = await makeFullDispatcher()
+  d.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, selectionHead: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你好', preeditCursorUtf16: 2 },
+  })
+  d.setComposing(true)
+  // imeSetSelection [0,2] — 非空 range，即使在 composition 内也要 finish + dragSelect
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 0, utf16End: 2 })
+  assert.equal(d.calls.compositionFinish, 1, '非空 range 必须 finish composition')
+  assert.equal(d.calls.onDragSelect, 1, '应走 dragSelect（不压成单光标）')
+})
+
+await testAsync('imeSetSelection collapsed 在 composition 内：走 composition update（不 finish）', async () => {
+  const d = await makeFullDispatcher()
+  d.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, selectionHead: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你好', preeditCursorUtf16: 2 },
+  })
+  d.setComposing(true)
+  // imeSetSelection [1,1] — collapsed 在 preedit 内
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 1, utf16End: 1 })
+  assert.equal(d.calls.compositionUpdate, 1, 'collapsed 在 preedit 内应走 compositionUpdate')
+  assert.equal(d.updateCalls[0].cursorUtf16, 1, 'preeditCursorUtf16 = 1')
+  assert.equal(d.calls.compositionFinish, 0, '不应 finish')
+})
+
+await testAsync('imeSetSelection 移出 composition：finish + onTap', async () => {
+  const d = await makeFullDispatcher()
+  d.setSnapshot({
+    text: 'ab', revision: 2, cursor: 1, selectionAnchor: 1, selectionHead: 1,
+    composition: { sessionId: 7, baseRevision: 0, generation: 3, replaceByteStart: 0, replaceByteEndExclusive: 1, preeditText: '你', preeditCursorUtf16: 1 },
+  })
+  d.setComposing(true)
+  // imeSetSelection [2,2] — collapsed 但移出 preedit
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 2, utf16End: 2 })
+  assert.equal(d.calls.compositionFinish, 1, '移出 preedit 应 finish')
+  assert.equal(d.calls.onTap, 1, '应走 onTap')
+})
+
+await testAsync('imeSetSelection 无 composition：直接走普通 selection', async () => {
+  const d = await makeFullDispatcher()
+  d.setSnapshot({ text: 'hello', revision: 0, cursor: 3, selectionAnchor: 3, selectionHead: 3, composition: null })
+  d.setComposing(false)
+  await d.dispatch({ kind: 'imeSetSelection', utf16Start: 1, utf16End: 4 })
+  assert.equal(d.calls.onDragSelect, 1, '无 composition 应走 dragSelect')
+  assert.deepEqual(d.dragSelectCalls[0], { anchor: 1, head: 4 })
 })
 
 // ══════════════════════════════════════════════════════════════

@@ -30,11 +30,14 @@ function makeMockCoordinator(initialText = 'hello', initialCursor = 2) {
     selectionAnchor: initialCursor,
     cursorByteOffset: initialCursor,
     selectionAnchor: initialCursor,
+    revision: 0,
+    generation: 0,
+    compositionGeneration: -1,
   }
   const calls = { setSelection: 0, selectionArgs: [] }
   return {
     getSnapshot: () => snapshot,
-    setSnapshot: (s) => { snapshot = s },
+    setSnapshot: (s) => { snapshot = { ...snapshot, ...s } },
     setSelection: async (anchorByte, headByte) => {
       calls.setSelection++
       calls.selectionArgs.push({ anchorByte, headByte })
@@ -47,12 +50,21 @@ function makeMockCoordinator(initialText = 'hello', initialCursor = 2) {
 
 // ── Mock SelectionController（镜像生产代码的核心逻辑） ──
 // 不依赖 ArkUI，纯逻辑验证 affinity owner 行为。
+// Issue #629 R9 评论5326213302 第4项：visualCaret 绑定 revision/generation/compositionGeneration+offset。
 function makeSelectionController(coordinator) {
   let visualCaret = null
+  let visualCaretRevision = -1
+  let visualCaretGeneration = -1
+  let visualCaretCompositionGeneration = -1
   let listenerCalls = []
   let coreSelectionCalls = []
 
-  const listener = (pos) => { listenerCalls.push(pos) }
+  const updateIdentity = () => {
+    const snap = coordinator.getSnapshot()
+    visualCaretRevision = snap?.revision ?? 0
+    visualCaretGeneration = snap?.generation ?? 0
+    visualCaretCompositionGeneration = snap?.compositionGeneration ?? -1
+  }
 
   return {
     registerVisualCaretListener: (l) => { l && listenerCalls.push('__registered__') },
@@ -60,10 +72,16 @@ function makeSelectionController(coordinator) {
     listenerCalls: () => listenerCalls,
     clearListenerCalls: () => { listenerCalls = [] },
 
-    // getVisualCaret：offset 匹配返回缓存，否则默认 Downstream
+    // getVisualCaret：offset + 身份都匹配返回缓存，否则默认 Downstream
     getVisualCaret: (cursorUtf16) => {
       if (visualCaret !== null && visualCaret.utf16Offset === cursorUtf16) {
-        return visualCaret
+        const snap = coordinator.getSnapshot()
+        if (snap !== null && snap !== undefined
+          && (snap.revision ?? 0) === visualCaretRevision
+          && (snap.generation ?? 0) === visualCaretGeneration
+          && (snap.compositionGeneration ?? -1) === visualCaretCompositionGeneration) {
+          return visualCaret
+        }
       }
       return { utf16Offset: cursorUtf16, affinity: 'downstream' }
     },
@@ -71,7 +89,17 @@ function makeSelectionController(coordinator) {
     // rememberVisualCaret：只更新/发布视觉位置，不发 Core selection
     rememberVisualCaret: (position) => {
       visualCaret = position
+      updateIdentity()
       listenerCalls.push({ type: 'visualCaret', position })
+    },
+
+    // invalidateVisualCaret：宽度变化时清除旧 hint
+    invalidateVisualCaret: () => {
+      visualCaret = null
+      visualCaretRevision = -1
+      visualCaretGeneration = -1
+      visualCaretCompositionGeneration = -1
+      listenerCalls.push({ type: 'invalidated' })
     },
 
     // onTap：发 Core selection + publishVisualCaret
@@ -83,6 +111,7 @@ function makeSelectionController(coordinator) {
       const result = await coordinator.setSelection(byteOffset, byteOffset)
       coreSelectionCalls.push({ kind: 'tap', byteOffset })
       visualCaret = { utf16Offset, affinity }
+      updateIdentity()
       listenerCalls.push({ type: 'visualCaret', position: { utf16Offset, affinity } })
       return result
     },
@@ -97,6 +126,7 @@ function makeSelectionController(coordinator) {
       const result = await coordinator.setSelection(anchorByte, headByte)
       coreSelectionCalls.push({ kind: 'dragSelect', anchorByte, headByte })
       visualCaret = { utf16Offset: headOffset, affinity: headAffinity }
+      updateIdentity()
       listenerCalls.push({ type: 'visualCaret', position: { utf16Offset: headOffset, affinity: headAffinity } })
       return result
     },
@@ -290,6 +320,73 @@ await testAsync('onDragSelect 向后兼容：head 是 number 时默认 Downstrea
   await ctrl.onDragSelect(1, 4)
   const pos = ctrl.getVisualCaret(4)
   assert.equal(pos.affinity, 'downstream', 'number head 应默认 Downstream')
+})
+
+// ══════════════════════════════════════════════════════════════
+// 16. committed forward delete cursor 不变 → 旧 hint 应失效
+// ══════════════════════════════════════════════════════════════
+
+await testAsync('committed forward delete cursor 不变：revision 前进后旧 hint 失效', async () => {
+  const coord = makeMockCoordinator('hello', 3)
+  const ctrl = makeSelectionController(coord)
+  // 先 remember 一个 Upstream at offset 3, revision=0
+  coord.setSnapshot({ text: 'hello', cursor: 3, selectionAnchor: 3, revision: 0, generation: 0, compositionGeneration: -1 })
+  ctrl.rememberVisualCaret({ utf16Offset: 3, affinity: 'upstream' })
+  assert.equal(ctrl.getVisualCaret(3).affinity, 'upstream', 'revision 匹配应返回 Upstream')
+  // 模拟 forward delete：cursor 不变但 revision 前进（delete 成功后 revision++）
+  coord.setSnapshot({ text: 'hllo', cursor: 3, selectionAnchor: 3, revision: 1, generation: 0, compositionGeneration: -1 })
+  // cursor 不变，但 revision 变了 → 旧 hint 应失效
+  const pos = ctrl.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', 'revision 变化后旧 Upstream 应失效')
+})
+
+// ══════════════════════════════════════════════════════════════
+// 17. composition forward delete cursor 不变 → 旧 hint 应失效
+// ══════════════════════════════════════════════════════════════
+
+await testAsync('composition forward delete cursor 不变：compositionGeneration 变化后旧 hint 失效', async () => {
+  const coord = makeMockCoordinator('hello', 3)
+  const ctrl = makeSelectionController(coord)
+  // composition 活跃时 remember visual caret
+  coord.setSnapshot({ text: 'hello', cursor: 3, selectionAnchor: 3, revision: 2, generation: 5, compositionGeneration: 3 })
+  ctrl.rememberVisualCaret({ utf16Offset: 3, affinity: 'upstream' })
+  assert.equal(ctrl.getVisualCaret(3).affinity, 'upstream', '身份匹配应返回 Upstream')
+  // composition forward delete：cursor 不变，但 compositionGeneration 前进
+  coord.setSnapshot({ text: 'hello', cursor: 3, selectionAnchor: 3, revision: 2, generation: 5, compositionGeneration: 4 })
+  const pos = ctrl.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', 'compositionGeneration 变化后旧 Upstream 应失效')
+})
+
+// ══════════════════════════════════════════════════════════════
+// 18. contentWidth 变化 → invalidateVisualCaret 清除旧 hint
+// ══════════════════════════════════════════════════════════════
+
+await testAsync('invalidateVisualCaret：宽度变化后旧 hint 失效', async () => {
+  const coord = makeMockCoordinator('hello', 3)
+  const ctrl = makeSelectionController(coord)
+  // remember 一个 Upstream
+  coord.setSnapshot({ text: 'hello', cursor: 3, selectionAnchor: 3, revision: 0, generation: 0, compositionGeneration: -1 })
+  ctrl.rememberVisualCaret({ utf16Offset: 3, affinity: 'upstream' })
+  assert.equal(ctrl.getVisualCaret(3).affinity, 'upstream')
+  // 模拟 contentWidth 变化 → invalidateVisualCaret
+  ctrl.invalidateVisualCaret()
+  // 同一 offset、同一身份 → 也应失效（因为 hint 被清空了）
+  const pos = ctrl.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', 'invalidateVisualCaret 后旧 hint 应失效')
+  // 验证 listener 收到 invalidated 通知
+  const invalidatedCalls = ctrl.listenerCalls().filter(c => c.type === 'invalidated')
+  assert.equal(invalidatedCalls.length, 1, '应收到 invalidated 通知')
+})
+
+await testAsync('invalidateVisualCaret 后新 hint 可以重新设置', async () => {
+  const coord = makeMockCoordinator('hello', 3)
+  const ctrl = makeSelectionController(coord)
+  ctrl.rememberVisualCaret({ utf16Offset: 3, affinity: 'upstream' })
+  ctrl.invalidateVisualCaret()
+  assert.equal(ctrl.getVisualCaret(3).affinity, 'downstream', 'invalidate 后默认 Downstream')
+  // 重新 remember
+  ctrl.rememberVisualCaret({ utf16Offset: 3, affinity: 'upstream' })
+  assert.equal(ctrl.getVisualCaret(3).affinity, 'upstream', '重新 remember 后返回 Upstream')
 })
 
 console.log(`\n✅ selection_controller_affinity_owner: ${passed} tests passed`)

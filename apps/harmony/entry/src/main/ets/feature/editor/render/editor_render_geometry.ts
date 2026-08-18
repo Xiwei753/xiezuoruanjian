@@ -128,8 +128,9 @@ export function computeSelectionRects(
           rects.push({ x: 0, y: i * spacing, width: contentWidth, height: spacing })
         } else {
           // 非空 hard line: LF 被选中 → 从文字末端画到 contentWidth
+          // Issue #629 R9：极端单 glyph 宽于容器时避免负数 width
           const x = measureTextFn(text.substring(line.start, line.end))
-          rects.push({ x, y: i * spacing, width: contentWidth - x, height: spacing })
+          rects.push({ x, y: i * spacing, width: Math.max(0, contentWidth - x), height: spacing })
         }
       }
       continue

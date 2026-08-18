@@ -569,8 +569,15 @@ export struct SujianEditor {
             .onAreaChange((_oldArea: Area, newArea: Area): void => {
               // Issue #629 评论6 Part C：Text onAreaChange 更新的是内层正文实际渲染尺寸
               // （contentWidth/contentHeight），不是外层 Scroll 可视区域尺寸。
+              const oldContentWidth = this.contentWidth
               this.contentWidth = Number(newArea.width)
               this.contentHeight = Number(newArea.height)
+              // Issue #629 R9 评论5326213302 第4项：内容宽度变化时失效旧 visual caret hint。
+              // 布局宽度变化不改 Core revision，但 soft-wrap 可能重新发生，旧 affinity 可能不再有效。
+              // 不给 SujianEditor 再加第二份 affinity 状态；invalidate 后 refreshRenderLayout 从 owner 重取。
+              if (this.contentWidth !== oldContentWidth && this.selectionController) {
+                this.selectionController.invalidateVisualCaret()
+              }
               // 内容尺寸已知后重新计算几何（选区/光标/composition 下划线）。
               this.refreshRenderLayout()
               // Issue #629 评论7 第4项：内容尺寸更新后通知 controller 重试消费 pending。
