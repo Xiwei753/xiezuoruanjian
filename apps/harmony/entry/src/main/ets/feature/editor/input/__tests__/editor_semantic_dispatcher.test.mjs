@@ -1511,5 +1511,202 @@ await testAsync('R7第3项: composition 进行中 soft-wrap affinity 切换是�
   assert.equal(pos.affinity, 'downstream', 'affinity 应切到 downstream（视觉位置仍更新）')
 })
 
+// ════════════════════════════════════════════════════════════════════
+// ── Issue #629 R10 评论5327548809 第2项：普通 Left/Right 只做一次 layout 检查 ──
+// 镜像生产代码顶层路由 executeGraphemeLeft/Right（composing && !extend 守卫）+
+// executeCommittedGraphemeLeft/Right（committed helper 内 trySoftWrapAffinitySwitch）。
+// 验证无 composition 无 Shift 时 trySoftWrapAffinitySwitch 只调一次（不是两次）。
+// ════════════════════════════════════════════════════════════════════
+
+async function makeTopLevelGraphemeDispatcher() {
+  let snapshot = { text: '', cursor: 0, selectionAnchor: 0, revision: 1, generation: 0, composition: null }
+  const queue = new SerialCommandQueue()
+  const coordinatorCalls = { setSelection: [], previousGraphemeBoundary: [], nextGraphemeBoundary: [] }
+  const affinitySwitchCalls = []
+  let composing = false
+  let visualCaret = null
+  const selectionController = {
+    getVisualCaret: (cursorUtf16) => {
+      if (visualCaret !== null && visualCaret.utf16Offset === cursorUtf16) return visualCaret
+      return { utf16Offset: cursorUtf16, affinity: 'downstream' }
+    },
+    rememberVisualCaret: (position) => { visualCaret = position },
+    setVisualCaretForTest: (pos) => { visualCaret = pos },
+    getVisualCaretState: () => visualCaret,
+  }
+  const coordinator = {
+    getSnapshot: () => snapshot,
+    setSelection: async (anchor, head) => {
+      coordinatorCalls.setSelection.push({ anchor, head })
+      snapshot = { ...snapshot, selectionAnchor: anchor, cursor: head }
+      return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+    },
+    previousGraphemeBoundary: async (byteOffset) => {
+      coordinatorCalls.previousGraphemeBoundary.push(byteOffset)
+      return { success: true, data: byteOffset - 1 }
+    },
+    nextGraphemeBoundary: async (byteOffset) => {
+      coordinatorCalls.nextGraphemeBoundary.push(byteOffset)
+      return { success: true, data: byteOffset + 1 }
+    },
+  }
+  let layoutState = null
+  const lineResolver = {
+    updateLayout: (state) => { layoutState = state },
+    waitForLayout: (identity) => Promise.resolve(layoutState),
+  }
+  const trySoftWrapAffinitySwitch = async (direction) => {
+    affinitySwitchCalls.push(direction)
+    if (!layoutState) return { handled: false, result: null }
+    const cursorUtf16 = snapshot.cursor
+    const currentPosition = selectionController.getVisualCaret(cursorUtf16)
+    let atSoftWrapEnd = false
+    for (let i = 0; i < layoutState.lines.length; i++) {
+      const l = layoutState.lines[i]
+      if (cursorUtf16 === l.endUtf16 && l.breakKind === 'softWrap') { atSoftWrapEnd = true; break }
+    }
+    if (!atSoftWrapEnd) return { handled: false, result: null }
+    if (direction === 'left' && currentPosition.affinity === 'downstream') {
+      selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: 'upstream' })
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+    }
+    if (direction === 'right' && currentPosition.affinity === 'upstream') {
+      selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: 'downstream' })
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+    }
+    return { handled: false, result: null }
+  }
+  // committed helper（含 trySoftWrapAffinitySwitch；composition finish 后进此处按新 identity 检查）
+  const executeCommittedGraphemeLeft = async (extend) => {
+    const cursorByte = snapshot.cursor
+    const anchorByte = snapshot.selectionAnchor
+    if (extend) {
+      const headByte = snapshot.cursor
+      if (headByte <= 0) return coordinator.setSelection(anchorByte, 0)
+      const prevResult = await coordinator.previousGraphemeBoundary(headByte)
+      if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) return prevResult
+      return coordinator.setSelection(anchorByte, prevResult.data)
+    }
+    if (anchorByte !== cursorByte) {
+      const selStart = Math.min(anchorByte, cursorByte)
+      return coordinator.setSelection(selStart, selStart)
+    }
+    const affinitySwitch = await trySoftWrapAffinitySwitch('left')
+    if (affinitySwitch.handled) return affinitySwitch.result
+    if (cursorByte <= 0) return coordinator.setSelection(0, 0)
+    const prevResult = await coordinator.previousGraphemeBoundary(cursorByte)
+    if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) return prevResult
+    return coordinator.setSelection(prevResult.data, prevResult.data)
+  }
+  const executeCommittedGraphemeRight = async (extend) => {
+    const text = snapshot.text
+    const textByteLen = text.length
+    const cursorByte = snapshot.cursor
+    const anchorByte = snapshot.selectionAnchor
+    if (extend) {
+      const headByte = snapshot.cursor
+      if (headByte >= textByteLen) return coordinator.setSelection(anchorByte, textByteLen)
+      const nextResult = await coordinator.nextGraphemeBoundary(headByte)
+      if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) return nextResult
+      return coordinator.setSelection(anchorByte, nextResult.data)
+    }
+    if (anchorByte !== cursorByte) {
+      const selEnd = Math.max(anchorByte, cursorByte)
+      return coordinator.setSelection(selEnd, selEnd)
+    }
+    const affinitySwitch = await trySoftWrapAffinitySwitch('right')
+    if (affinitySwitch.handled) return affinitySwitch.result
+    if (cursorByte >= textByteLen) return coordinator.setSelection(textByteLen, textByteLen)
+    const nextResult = await coordinator.nextGraphemeBoundary(cursorByte)
+    if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) return nextResult
+    return coordinator.setSelection(nextResult.data, nextResult.data)
+  }
+  // 顶层路由（镜像生产代码：composing && !extend 守卫）
+  const executeGraphemeLeft = async (extend) => {
+    const localComposing = composing
+    if (localComposing && !extend) {
+      const switched = await trySoftWrapAffinitySwitch('left')
+      if (switched.handled) return switched.result
+    }
+    if (!localComposing) return executeCommittedGraphemeLeft(extend)
+    // composition 分支（本测试聚焦顶层守卫；composition finish 后进 committed helper）
+    return executeCommittedGraphemeLeft(extend)
+  }
+  const executeGraphemeRight = async (extend) => {
+    const localComposing = composing
+    if (localComposing && !extend) {
+      const switched = await trySoftWrapAffinitySwitch('right')
+      if (switched.handled) return switched.result
+    }
+    if (!localComposing) return executeCommittedGraphemeRight(extend)
+    return executeCommittedGraphemeRight(extend)
+  }
+  const dispatch = (cmd) => queue.enqueue(async () => {
+    switch (cmd.kind) {
+      case 'graphemeLeft': return executeGraphemeLeft(cmd.extend)
+      case 'graphemeRight': return executeGraphemeRight(cmd.extend)
+      default: return { success: true }
+    }
+  })
+  return {
+    dispatch, coordinator, selectionController, lineResolver, coordinatorCalls,
+    affinitySwitchCalls: () => affinitySwitchCalls,
+    setComposing: (v) => { composing = v },
+    setSnapshot: (s) => { snapshot = { ...snapshot, ...s } },
+    getSnapshot: () => snapshot,
+  }
+}
+
+await testAsync('R10第2项: 无 composition 无 Shift Left 只调一次 trySoftWrapAffinitySwitch（不是两次）', async () => {
+  const d = await makeTopLevelGraphemeDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 4, selectionAnchor: 4 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 4, affinity: 'downstream' })
+  // 无 composition（composing=false），无 Shift（extend=false）
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.affinitySwitchCalls().length, 1, '无 composition 时顶层不预检查，只 committed helper 检查一次')
+  assert.equal(d.affinitySwitchCalls()[0], 'left')
+  assert.equal(d.getSnapshot().cursor, 3, 'cursor 应移到 offset=3')
+})
+
+await testAsync('R10第2项: 无 composition 无 Shift Right 只调一次 trySoftWrapAffinitySwitch（不是两次）', async () => {
+  const d = await makeTopLevelGraphemeDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 2, selectionAnchor: 2 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 2, affinity: 'downstream' })
+  await d.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(d.affinitySwitchCalls().length, 1, '无 composition 时顶层不预检查，只 committed helper 检查一次')
+  assert.equal(d.affinitySwitchCalls()[0], 'right')
+  assert.equal(d.getSnapshot().cursor, 3, 'cursor 应移到 offset=3')
+})
+
+await testAsync('R10第2项: composition 活跃 + soft-wrap 边界 → 顶层预检查 handled=true 直接返回，只调一次', async () => {
+  const d = await makeTopLevelGraphemeDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 3, selectionAnchor: 3 })
+  d.setComposing(true)
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'upstream' })
+  // composition 活跃 + Right + soft-wrap 边界 → 顶层预检查切 affinity，handled=true 直接返回
+  await d.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(d.affinitySwitchCalls().length, 1, 'composition 顶层预检查 handled=true 后直接返回，不进 committed helper')
+  assert.equal(d.affinitySwitchCalls()[0], 'right')
+  const pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', 'affinity 应切到 downstream')
+  assert.equal(d.getSnapshot().cursor, 3, 'cursor 不移动（纯视觉切换）')
+})
+
+await testAsync('R10第2项: composition 活跃但非 soft-wrap 边界 → 顶层预检查 + committed helper 各一次（共两次）', async () => {
+  const d = await makeTopLevelGraphemeDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 4, selectionAnchor: 4 })
+  d.setComposing(true)
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 4, affinity: 'downstream' })
+  // composition 活跃 + Left + 非 soft-wrap 边界 → 顶层预检查 handled=false，再进 committed helper 检查一次
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.affinitySwitchCalls().length, 2, 'composition 活跃时顶层预检查 + committed helper 各一次')
+  assert.equal(d.affinitySwitchCalls()[0], 'left')
+  assert.equal(d.affinitySwitchCalls()[1], 'left')
+})
+
 console.log('---')
 console.log(`✅ editor_semantic_dispatcher: ${passed} tests passed`)

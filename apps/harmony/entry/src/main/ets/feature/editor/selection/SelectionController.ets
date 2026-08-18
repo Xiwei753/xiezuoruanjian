@@ -9,19 +9,41 @@ import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { CaretAffinity } from '../render/editor_layout_math'
 import type { VisualCaretPosition } from '../render/editor_layout_math'
 
+// Issue #629 R10 评论5327548809 第1项：visual hint 绑定完整文本身份。
+// EditorSessionSnapshot 无顶层 compositionGeneration 字段，真实路径是 composition?.generation；
+// 且 Core 的新 composition session 会重新从初始 generation 开始，cancel/finish 后再 begin，
+// 若 revision 没变、cursor 又在同一 offset，仅比较 composition.generation 仍可能把上一次
+// composition 的 affinity 误认成当前 session。所以 compositionSessionId 必须一起存。
+interface VisualCaretIdentity {
+  readonly revision: number
+  readonly generation: number
+  readonly compositionSessionId: number
+  readonly compositionGeneration: number
+}
+
 export class SelectionController {
   private coordinator: EditorSessionCoordinator
-  // Issue #629 R9 评论5326213302 第4项：visual hint 绑定 revision/generation/compositionGeneration+offset。
-  // 文本身份或 composition generation 变化即失效，避免旧 affinity 跨 revision 残留。
+  // visual hint 绑定 revision/generation/compositionSessionId+compositionGeneration+offset。
+  // 文本身份或 composition session/generation 变化即失效，避免旧 affinity 跨 revision 残留。
   // 无命中时返回默认 Downstream。
   private visualCaret: VisualCaretPosition | null = null
-  private visualCaretRevision: number = -1
-  private visualCaretGeneration: number = -1
-  private visualCaretCompositionGeneration: number = -1
+  private visualCaretIdentity: VisualCaretIdentity | null = null
   private visualCaretListener: ((position: VisualCaretPosition | null) => void) | null = null
 
   constructor(coordinator: EditorSessionCoordinator) {
     this.coordinator = coordinator
+  }
+
+  // 从真实 EditorSessionSnapshot 算出当前 visual caret 身份。
+  // composition session id 在 snap.composition?.sessionId，generation 在 snap.composition?.generation。
+  private currentIdentity(): VisualCaretIdentity {
+    const snap = this.coordinator.getSnapshot()
+    return {
+      revision: snap?.revision ?? -1,
+      generation: snap?.generation ?? -1,
+      compositionSessionId: snap?.composition?.sessionId ?? 0,
+      compositionGeneration: snap?.composition?.generation ?? -1,
+    }
   }
 
   // Issue #629 评论18：注册 visual caret 监听器（SujianEditor 订阅后传 affinity 给 renderLayout）。
@@ -33,53 +55,44 @@ export class SelectionController {
     this.visualCaretListener = null
   }
 
-  // Issue #629 R9 评论5326213302 第4项：visual hint 绑定 revision/generation/compositionGeneration+offset。
-  // 只有身份（revision+generation+compositionGeneration）和 offset 都匹配时返回 hint，否则默认 Downstream。
-  // 这样 forward delete / composition forward delete / replace 等文本身份变化时旧 affinity 不残留。
+  // visual hint 绑定完整身份（revision+generation+compositionSessionId+compositionGeneration）+offset。
+  // 只有完整身份和 offset 都匹配时返回 hint，否则默认 Downstream。
+  // 这样 forward delete / composition forward delete / replace / composition session 切换等文本身份变化时旧 affinity 不残留。
   getVisualCaret(cursorUtf16: number): VisualCaretPosition {
-    if (this.visualCaret !== null
-      && this.visualCaret.utf16Offset === cursorUtf16
-      && this.coordinator.getSnapshot() !== null
-      && this.coordinator.getSnapshot() !== undefined) {
-      const snap = this.coordinator.getSnapshot()!
-      if ((snap.revision ?? 0) === this.visualCaretRevision
-        && (snap.generation ?? 0) === this.visualCaretGeneration
-        && (snap.compositionGeneration ?? -1) === this.visualCaretCompositionGeneration) {
+    if (this.visualCaret !== null && this.visualCaret.utf16Offset === cursorUtf16 && this.visualCaretIdentity !== null) {
+      const current = this.currentIdentity()
+      const saved = this.visualCaretIdentity
+      if (current.revision === saved.revision
+        && current.generation === saved.generation
+        && current.compositionSessionId === saved.compositionSessionId
+        && current.compositionGeneration === saved.compositionGeneration) {
         return this.visualCaret
       }
     }
     return { utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream }
   }
 
-  // Issue #629 R7 + R9：唯一 owner 语义——只更新/发布视觉位置，不重复发 Core selection。
-  // 从 Coordinator 当前 snapshot 记录身份（revision+generation+compositionGeneration），
-  // 保证文本身份或 composition generation 变化时旧 hint 自动失效。
+  // Issue #629 R7 + R10：唯一 owner 语义——只更新/发布视觉位置，不重复发 Core selection。
+  // 从 Coordinator 当前 snapshot 记录完整身份（revision+generation+compositionSessionId+compositionGeneration），
+  // 保证文本身份或 composition session/generation 变化时旧 hint 自动失效。
   rememberVisualCaret(position: VisualCaretPosition): void {
     this.visualCaret = position
-    const snap = this.coordinator.getSnapshot()
-    this.visualCaretRevision = snap?.revision ?? 0
-    this.visualCaretGeneration = snap?.generation ?? 0
-    this.visualCaretCompositionGeneration = snap?.compositionGeneration ?? -1
+    this.visualCaretIdentity = this.currentIdentity()
     this.visualCaretListener?.(position)
   }
 
-  // Issue #629 评论18 + R9：发布 visual caret position（命中测试成功后调用）。
+  // Issue #629 评论18 + R10：发布 visual caret position（命中测试成功后调用）。
   private publishVisualCaret(position: VisualCaretPosition): void {
     this.visualCaret = position
-    const snap = this.coordinator.getSnapshot()
-    this.visualCaretRevision = snap?.revision ?? 0
-    this.visualCaretGeneration = snap?.generation ?? 0
-    this.visualCaretCompositionGeneration = snap?.compositionGeneration ?? -1
+    this.visualCaretIdentity = this.currentIdentity()
     this.visualCaretListener?.(position)
   }
 
-  // Issue #629 R9 评论5326213302 第4项：宽度/字体变化调用 invalidateVisualCaret。
+  // Issue #629 R10：宽度/字体变化调用 invalidateVisualCaret。
   // 布局宽度变化不改 Core revision，但 soft-wrap 可能重新发生，旧 affinity 可能不再有效。
   invalidateVisualCaret(): void {
     this.visualCaret = null
-    this.visualCaretRevision = -1
-    this.visualCaretGeneration = -1
-    this.visualCaretCompositionGeneration = -1
+    this.visualCaretIdentity = null
     this.visualCaretListener?.(null)
   }
 

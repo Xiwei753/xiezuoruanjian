@@ -539,17 +539,17 @@ export class EditorSemanticDispatcher {
   }
 
   private async executeGraphemeLeft(extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
-    // 评论5326213302 第2项：trySoftWrapAffinitySwitch 必须先于 composition 路由。
-    // 在 composition 活跃时，soft-wrap affinity 切换仍然可能发生（preedit 内 soft-wrap 边界）。
-    // 先检查是否只需要切换 affinity，不需要 finish composition。
-    if (!extend) {
+    // Issue #629 R10 评论5327548809 第2项：只有 composition 活跃时才在进入 composition grapheme API 前做一次 affinity switch。
+    // 无 composition 时直接交给 committed helper（其内会按当前 identity 检查一次），避免普通 Left 重复检查两次。
+    const composing = this.inputAdapter.isComposing()
+    if (composing && !extend) {
       const affinitySwitch = await this.trySoftWrapAffinitySwitch('left')
       if (affinitySwitch.handled) {
         return affinitySwitch.result!
       }
     }
 
-    if (!this.inputAdapter.isComposing()) {
+    if (!composing) {
       // 无 composition：走 committed grapheme。
       return this.executeCommittedGraphemeLeft(extend)
     }
@@ -586,15 +586,16 @@ export class EditorSemanticDispatcher {
   }
 
   private async executeGraphemeRight(extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
-    // 评论5326213302 第2项：trySoftWrapAffinitySwitch 必须先于 composition 路由。
-    if (!extend) {
+    // Issue #629 R10 评论5327548809 第2项：只有 composition 活跃时才在进入 composition grapheme API 前做一次 affinity switch。
+    const composing = this.inputAdapter.isComposing()
+    if (composing && !extend) {
       const affinitySwitch = await this.trySoftWrapAffinitySwitch('right')
       if (affinitySwitch.handled) {
         return affinitySwitch.result!
       }
     }
 
-    if (!this.inputAdapter.isComposing()) {
+    if (!composing) {
       return this.executeCommittedGraphemeRight(extend)
     }
 
