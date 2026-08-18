@@ -19,6 +19,8 @@
 import { strict as assert } from 'node:assert'
 import { SerialCommandQueue } from '../../session/editor_patch_logic.ts'
 import { layoutLines, LineBreakKind, CaretAffinity, positionForHorizontalArrival } from '../../render/editor_layout_math.ts'
+// Issue #629 R11 评论5329310563：直接 import 生产 utf8ToUtf16（不再复制循环实现）。
+import { utf8ToUtf16 } from '../../input/text_offset_mapper.ts'
 
 let passed = 0
 const testAsync = async (name, fn) => {
@@ -575,30 +577,8 @@ await testAsync('评论7 第2+6项：imePreviewText → graphemeBackspace 串行
 //   - selection 移出 composition 区域（含部分越界）：同一 thunk 内先 finish 再普通 selection，
 //     显示坐标映射到 committed 文本坐标
 
-// UTF-16 code unit offset ↔ UTF-8 byte offset（与 TextOffsetMapper 对齐）
-function utf16ToUtf8(text, utf16Offset) {
-  if (utf16Offset <= 0) return 0
-  const limited = utf16Offset > text.length ? text.length : utf16Offset
-  return new TextEncoder().encode(text.substring(0, limited)).length
-}
-function utf8ToUtf16(text, utf8Offset) {
-  if (utf8Offset <= 0) return 0
-  let byteLen = 0
-  let utf16Index = 0
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i)
-    let charByteLen = 1
-    if (code < 0x80) charByteLen = 1
-    else if (code < 0x800) charByteLen = 2
-    else if (code >= 0xD800 && code <= 0xDBFF) { charByteLen = 4; i += 1 }
-    else charByteLen = 3
-    if (byteLen + charByteLen > utf8Offset) return utf16Index
-    byteLen += charByteLen
-    utf16Index += (charByteLen === 4 ? 2 : 1)
-  }
-  return utf16Index
-}
-
+// Issue #629 R11 评论5329310563：本地 utf16ToUtf8/utf8ToUtf16 复制实现已删除，
+// 改用从 text_offset_mapper.ts import 的生产函数（见文件顶部 import）。
 // makeImeSetSelectionDispatcher：镜像 EditorSemanticDispatcher.executeImeSetSelection。
 // mock inputAdapter（isComposing/onCompositionUpdate/finishActiveComposition）+
 // selectionController（onTap/onDragSelect）+ coordinator snapshot（text + composition）。
@@ -2143,74 +2123,35 @@ await testAsync('R11第4项: dispatcher 成功时通知 IME（对照：失败不
 })
 
 await testAsync('R11第4项: composition update 后 getCurrentDisplaySelectionUtf16 返回 preedit cursor 的 display 坐标', async () => {
+  // 验证生产 utf8ToUtf16 在 composition update 后的 display 坐标换算正确。
   // 模拟 EditorLayoutSnapshot.fromEditorSnapshot 的 projection：
   // 有 composition 时 displayText = before + preeditText + after,
   // selectionAnchor/Head = displayCaretByte = replaceByteStart + preeditCursorByte
-  const committedText = 'abc'
-  const composition = { sessionId: 1, baseRevision: 0, generation: 1, replaceByteStart: 1, replaceByteEndExclusive: 1, preeditText: '你好', preeditCursorUtf16: 2 }
   // displayText = 'a' + '你好' + 'bc' = 'a你好bc'
   // displayCaretByte = replaceByteStart + utf16ToUtf8(preeditText, preeditCursorUtf16)
   //   = 1 + utf8ByteLen('你好') = 1 + 6 = 7
-  // getCurrentDisplaySelectionUtf16: byte 7 → UTF-16 in 'a你好bc'
-  //   'a'=1byte, '你'=3byte(→utf16=1+1=2), '好'=3byte(→utf16=2+1=3), 'b' at byte 7 → utf16=3+1=4? 
-  //   实际：displayText='a你好bc', displayCaretByte=7
-  //   byte 0='a'(1), byte 1-3='你'(3), byte 4-6='好'(3), byte 7='b'
-  //   utf8ToUtf16('a你好bc', 7): 'a'=1byte→utf16=1, '你'=3bytes→utf16=2, '好'=3bytes→utf16=3, 'b' at byte7→utf16=4
-  // 所以 start=end=4
+  // 生产 utf8ToUtf16('a你好bc', 7) 应为 3（a=0,你=1,好=2,b=3）
   const displayText = 'a' + '你好' + 'bc'
   const preeditCursorByte = new TextEncoder().encode('你好').length // 6
   const displayCaretByte = 1 + preeditCursorByte // 7
-  // utf8ToUtf16
-  let byteLen = 0, utf16Idx = 0
-  for (let i = 0; i < displayText.length; i++) {
-    const code = displayText.charCodeAt(i)
-    let charByteLen = 1
-    if (code < 0x80) charByteLen = 1
-    else if (code < 0x800) charByteLen = 2
-    else if (code >= 0xD800 && code <= 0xDBFF) { charByteLen = 4; i += 1 }
-    else charByteLen = 3
-    if (byteLen + charByteLen > displayCaretByte) break
-    byteLen += charByteLen
-    utf16Idx += (charByteLen === 4 ? 2 : 1)
-  }
-  const expectedUtf16 = utf16Idx
-  // 模拟 getCurrentDisplaySelectionUtf16
-  const getCurrentDisplaySelectionUtf16 = () => ({ start: expectedUtf16, end: expectedUtf16 })
-  const sel = getCurrentDisplaySelectionUtf16()
-  assert.equal(sel.start, expectedUtf16, 'composition update 后 display selection start = preedit cursor 的 display UTF-16 坐标')
-  assert.equal(sel.end, expectedUtf16, 'composition update 后 display selection end = preedit cursor 的 display UTF-16 坐标')
-  // 验证具体值：displayText='a你好bc', displayCaretByte=7 → UTF-16 offset=4
+  // 用生产 utf8ToUtf16（从 text_offset_mapper.ts import），不再复制循环实现。
+  const expectedUtf16 = utf8ToUtf16(displayText, displayCaretByte)
+  // 验证具体值：displayText='a你好bc', displayCaretByte=7 → UTF-16 offset=3
   assert.equal(expectedUtf16, 3, 'displayText=a你好bc, byte 7 → UTF-16 offset 3 (a=0,你=1,好=2,b=3)')
 })
 
 await testAsync('R11第4项: composition finish 后 getCurrentDisplaySelectionUtf16 返回 committed cursor 的 UTF-16 坐标', async () => {
-  // composition finish 后 composition=null, text='abc你好', cursor=5 (byte)
+  // composition finish 后 composition=null, text='abc你好', cursor=6 (byte, '好' 之前)
   // displayText = committed text = 'abc你好'
-  // selectionAnchor/Head = snap.cursor = 5 (byte)
-  // UTF-16: 'abc'=3bytes→utf16=3, '你'=3bytes→utf16=4, '好' at byte 6... wait
-  // 'abc你好': byte 0-2='abc'(3), byte 3-5='你'(3), byte 6-8='好'(3)
-  // cursor=5 (byte) → 在 '你' 中间？不，cursor 应在 grapheme 边界
-  // 设 cursor=6 (byte, '好' 之前) → utf16=4
+  // selectionAnchor/Head = snap.cursor = 6 (byte)
+  // 生产 utf8ToUtf16('abc你好', 6) 应为 4（abc=3bytes→utf16=3, 你=3bytes→utf16=4, 6 在 '你' 之后）
   const committedText = 'abc你好'
   const cursorByte = 6 // '好' 之前
-  // utf8ToUtf16
-  let byteLen = 0, utf16Idx = 0
-  for (let i = 0; i < committedText.length; i++) {
-    const code = committedText.charCodeAt(i)
-    let charByteLen = 1
-    if (code < 0x80) charByteLen = 1
-    else if (code < 0x800) charByteLen = 2
-    else if (code >= 0xD800 && code <= 0xDBFF) { charByteLen = 4; i += 1 }
-    else charByteLen = 3
-    if (byteLen + charByteLen > cursorByte) break
-    byteLen += charByteLen
-    utf16Idx += (charByteLen === 4 ? 2 : 1)
-  }
-  const expectedUtf16 = utf16Idx
-  const getCurrentDisplaySelectionUtf16 = () => ({ start: expectedUtf16, end: expectedUtf16 })
-  const sel = getCurrentDisplaySelectionUtf16()
-  assert.equal(sel.start, 4, 'composition finish 后 cursor byte=6 → UTF-16 offset=4')
-  assert.equal(sel.end, 4, 'composition finish 后 display selection = committed cursor UTF-16 坐标')
+  // 用生产 utf8ToUtf16（从 text_offset_mapper.ts import），不再复制循环实现。
+  const expectedUtf16 = utf8ToUtf16(committedText, cursorByte)
+  // 保留原 sel.start/sel.end 两条断言语义：验证生产 utf8ToUtf16 计算结果 === 4
+  assert.equal(expectedUtf16, 4, 'composition finish 后 cursor byte=6 → UTF-16 offset=4')
+  assert.equal(expectedUtf16, 4, 'composition finish 后 display selection = committed cursor UTF-16 坐标')
 })
 
 await testAsync('R11第4项: 鼠标 down 和触摸 tap 在同一位置产生相同的 dispatch 命令和 IME 通知', async () => {

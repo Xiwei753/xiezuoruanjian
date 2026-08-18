@@ -614,7 +614,7 @@ export class EditorSemanticDispatcher {
     }
     const displaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap)
     const displayText = displaySnapshot.text
-    const textByteLen = TextOffsetMapper.utf8ToUtf8(displayText, displayText.length)
+    const textByteLen = TextOffsetMapper.utf16ToUtf8(displayText, displayText.length)
     const cursorByte = snap.cursor
     const anchorByte = snap.selectionAnchor
     if (extend) {
