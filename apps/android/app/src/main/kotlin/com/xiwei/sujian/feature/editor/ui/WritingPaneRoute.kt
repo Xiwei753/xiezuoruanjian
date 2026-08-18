@@ -138,7 +138,17 @@ fun WritingPane(
         modifier = modifier,
         chapterTitle = chapterTitle,
         uiState = uiState,
-        showEditor = !uiState.loading && currentViewModel.isCurrentChapter(projectId, volumeId, chapterId),
+        // #630 R12：showEditor 纳入 settingsReady 门控 —
+        // 设置未加载完时继续显示现有 loading UI，不提前进入正文 Surface。
+        // 即使 settingsReady=true 到 beginEdit/Attaching 间隔仍隔一帧，
+        // EditorSurfaceMode.Pending 保证这一帧不会画另一套正文 renderer。
+        showEditor =
+            shouldShowEditorForWritingPane(
+                loading = uiState.loading,
+                settingsReady = uiState.settingsReady,
+                isCurrentChapter =
+                    currentViewModel.isCurrentChapter(projectId, volumeId, chapterId),
+            ),
     ) { editorModifier ->
         // #624 评论17 第2部分：Route 层收集 targetDecorationsVersionFlow 触发重排，
         // Layout 层不自己 collect session/window flow。
@@ -251,6 +261,19 @@ fun editorAttachDecision(
         is WindowBindingState.Cancelling -> EditorAttachAction.Hold
         is WindowBindingState.Detaching -> EditorAttachAction.Hold
     }
+
+/**
+ * #630 评论 5329388516: WritingPane showEditor 门槛 — 纯函数。
+ *
+ * 只有 loading = false 且 settingsReady = true 且当前章节匹配（isCurrentChapter）
+ * 才进入正文 Surface；持久化设置没读完时继续显示现有 loading UI，
+ * 不提前进入正文 Surface（不会先被 ReadonlyChapterPreview 顶一帧）。
+ */
+internal fun shouldShowEditorForWritingPane(
+    loading: Boolean,
+    settingsReady: Boolean,
+    isCurrentChapter: Boolean,
+): Boolean = !loading && settingsReady && isCurrentChapter
 
 /**
  * #630 评论 5327560790: BeginEdit 门槛 — 纯函数。

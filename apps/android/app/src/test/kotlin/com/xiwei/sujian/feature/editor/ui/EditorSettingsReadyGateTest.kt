@@ -57,6 +57,56 @@ class EditorSettingsReadyGateTest {
         assertFalse("EditorUiState.settingsReady 默认应为 false", state.settingsReady)
     }
 
+    // ── 评论 5329388516: WritingPane showEditor 门槛（settingsReady gate）──
+
+    @Test
+    fun showEditorForPane_loadingTrue_returnsFalse() {
+        assertFalse(
+            "loading=true 时不应进入正文 Surface（继续显示 loading UI）",
+            shouldShowEditorForWritingPane(
+                loading = true,
+                settingsReady = true,
+                isCurrentChapter = true,
+            ),
+        )
+    }
+
+    @Test
+    fun showEditorForPane_settingsNotReady_returnsFalse() {
+        assertFalse(
+            "settingsReady=false 时不应进入正文 Surface（避免被预览顶帧）",
+            shouldShowEditorForWritingPane(
+                loading = false,
+                settingsReady = false,
+                isCurrentChapter = true,
+            ),
+        )
+    }
+
+    @Test
+    fun showEditorForPane_notCurrentChapter_returnsFalse() {
+        assertFalse(
+            "非当前章节时不应进入正文 Surface",
+            shouldShowEditorForWritingPane(
+                loading = false,
+                settingsReady = true,
+                isCurrentChapter = false,
+            ),
+        )
+    }
+
+    @Test
+    fun showEditorForPane_allReady_returnsTrue() {
+        assertTrue(
+            "loading=false 且 settingsReady=true 且当前章节时才进入正文 Surface",
+            shouldShowEditorForWritingPane(
+                loading = false,
+                settingsReady = true,
+                isCurrentChapter = true,
+            ),
+        )
+    }
+
     // ── 测试3: 非默认持久化设置首帧一次排版 ──
 
     @Test
