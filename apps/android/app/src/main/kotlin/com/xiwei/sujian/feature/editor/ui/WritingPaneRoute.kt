@@ -291,7 +291,20 @@ private fun WritingPaneEditorAttach(
             EditorAttachAction.BeginEdit -> {
                 if (!inputs.uiState.loading) {
                     coordinator.updateTargetText(targetId, inputs.uiState.content)
-                    coordinator.beginEdit(targetId, inputs.uiState.content.toByteArray(Charsets.UTF_8).size)
+                    // #630 评论 5326175206 项3: 首次正文 attach 必须显式携带 EditorTypography snapshot，
+                    // 不再靠 WritingPaneTypographySync 的 LaunchedEffect 竞态猜测谁先到。
+                    val typography =
+                        com.xiwei.sujian.feature.editor.window.EditorTypography(
+                            fontSizeSp = inputs.uiState.settings.fontSize,
+                            lineSpacingMultiplier = inputs.uiState.settings.lineSpacingMultiplier,
+                            autoIndentEnabled = inputs.uiState.settings.autoIndentEnabled,
+                            autoIndentWidth = inputs.uiState.settings.autoIndentWidth,
+                        )
+                    coordinator.beginEdit(
+                        targetId,
+                        inputs.uiState.content.toByteArray(Charsets.UTF_8).size,
+                        typography = typography,
+                    )
                 }
             }
             EditorAttachAction.Hold -> {
