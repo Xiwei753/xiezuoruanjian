@@ -42,7 +42,8 @@ import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
 import { LineNavigationResolver, LineLayoutState, NavigationLine } from '../selection/LineNavigationResolver'
-import type { VisualCaretPosition, CaretAffinity, CaretStop } from '../render/editor_layout_math'
+import { CaretAffinity } from '../render/editor_layout_math'
+import type { VisualCaretPosition, CaretStop } from '../render/editor_layout_math'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { KeyboardInputService, PlatformKeyEvent, SemanticKeyCommand } from '../../../platform/input/KeyboardInputService'
 import { PointerInputService, PlatformPointerEvent } from '../../../platform/input/PointerInputService'
@@ -94,6 +95,9 @@ export struct SujianEditor {
   // SujianEditor 持有 renderResult，每次渲染结果更新后同步给 resolver。
   // Dispatcher 行导航命令出队时通过 resolver 读取最新行布局计算目标位置。
   private lineResolver: LineNavigationResolver = new LineNavigationResolver()
+  // Issue #629 评论18：当前 visual caret affinity（来自 SelectionController 的命中测试）。
+  // renderLayout 消费此值，保证光标在 soft-wrap 边界上渲染正确。
+  @State currentVisualCaretAffinity: CaretAffinity = CaretAffinity.Downstream
   // drag selection 状态：鼠标/触摸按下时记 anchor UTF-16 offset，move 时 drag select。
   private dragAnchorUtf16: number = -1
   private isDragging: boolean = false
@@ -105,6 +109,18 @@ export struct SujianEditor {
     // Dispatcher 行导航命令出队时通过 resolver 读最新行布局计算目标。
     if (this.dispatcher) {
       this.dispatcher.registerLineResolver(this.lineResolver)
+    }
+    // Issue #629 评论18：订阅 SelectionController 的 visual caret，
+    // 用 affinity 驱动 renderLayout 光标渲染。
+    if (this.selectionController) {
+      this.selectionController.registerVisualCaretListener((pos: VisualCaretPosition | null) => {
+        if (pos !== null) {
+          this.currentVisualCaretAffinity = pos.affinity
+        } else {
+          this.currentVisualCaretAffinity = CaretAffinity.Downstream
+        }
+        this.refreshRenderLayout()
+      })
     }
     // Issue #629 评论6 Part C + 评论7 第4项：注册父子 viewport 恢复通道。
     // scrollTo 由 scroller.scrollTo 实现；getDimensions 返回当前真实 viewport/content 尺寸。
@@ -132,6 +148,10 @@ export struct SujianEditor {
     this.lineResolver.cancelWait()
     if (this.dispatcher) {
       this.dispatcher.unregisterLineResolver()
+    }
+    // Issue #629 评论18：注销 visual caret 监听器。
+    if (this.selectionController) {
+      this.selectionController.unregisterVisualCaretListener()
     }
     // Issue #629 评论6 Part C：注销父子 viewport 恢复通道。
     if (this.viewportController) {
@@ -202,6 +222,9 @@ export struct SujianEditor {
         this.contentWidth,
         this.contentHeight,
         measureTextFn,
+        // Issue #629 评论18：传入 visualCaretAffinity，
+        // 保证光标渲染与命中测试使用同一 affinity。
+        this.currentVisualCaretAffinity,
       )
       this.renderResult = result
       this.selectionRects = result.selectionRects
@@ -373,8 +396,8 @@ export struct SujianEditor {
           // 左键按下：记 anchor position，开始 potential drag。
           this.dragAnchorUtf16 = hitPos.utf16Offset
           this.isDragging = true
-          // 先设光标（单击位置）；move 时改 drag select。经 dispatcher 派发保证串行。
-          dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: hitPos.utf16Offset })
+          // Issue #629 评论18：传入完整 VisualCaretPosition（含 affinity），不丢弃。
+          dispatcher.dispatchFireAndForget({ kind: 'setSelection', position: hitPos })
         }
         break
       case 'move':
@@ -433,14 +456,16 @@ export struct SujianEditor {
       case TouchType.Move:
         // 拖动选区：anchor 不变，head 跟随当前位置。经 dispatcher 派发。
         if (this.isDragging && this.dragAnchorUtf16 !== hitPos.utf16Offset) {
-          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: this.dragAnchorUtf16, utf16Head: hitPos.utf16Offset })
+          // Issue #629 评论18：传入完整 VisualCaretPosition（含 affinity）。
+          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', utf16Anchor: this.dragAnchorUtf16, head: hitPos })
         }
         break
       case TouchType.Up:
         if (this.isDragging) {
           if (this.dragAnchorUtf16 === hitPos.utf16Offset) {
             // 单击（down 和 up 同位置）：只经 dispatcher 发一次 selection（Part D：删除重复 onSelectionTap）。
-            dispatcher.dispatchFireAndForget({ kind: 'setSelection', utf16Offset: hitPos.utf16Offset })
+            // Issue #629 评论18：传入完整 VisualCaretPosition（含 affinity）。
+            dispatcher.dispatchFireAndForget({ kind: 'setSelection', position: hitPos })
             // 通知 IME 当前选区（光标位置）
             if (this.harmonyImeConnection) {
               this.harmonyImeConnection.notifySelection(hitPos.utf16Offset, hitPos.utf16Offset).then(() => {})

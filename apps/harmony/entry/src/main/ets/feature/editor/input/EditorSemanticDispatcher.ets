@@ -46,6 +46,8 @@ import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorTransactionCause, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { LineNavigationResolver, LineLayoutState } from '../selection/LineNavigationResolver'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
+import { CaretAffinity } from '../render/editor_layout_math'
+import type { VisualCaretPosition } from '../render/editor_layout_math'
 
 // 语义命令类型：把物理键盘/IME/鼠标/触摸的输入统一成语义命令。
 // 出队执行时才读 Coordinator snapshot，避免并发命令拿到同一个旧 cursor/selection。
@@ -54,8 +56,10 @@ import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 // Issue #629 评论7 第6项：删除 {kind:'delete',direction}，软键盘删除统一 graphemeBackspace/graphemeDelete。
 export type SemanticEditCommand =
   | { kind: 'insertText'; text: string }
-  | { kind: 'setSelection'; utf16Offset: number }
-  | { kind: 'dragSelect'; utf16Anchor: number; utf16Head: number }
+  // Issue #629 评论18：setSelection/dragSelect 接受 VisualCaretPosition（含 affinity），
+  // 不丢弃命中测试的 soft-wrap 亲和性。
+  | { kind: 'setSelection'; position: VisualCaretPosition }
+  | { kind: 'dragSelect'; utf16Anchor: number; head: VisualCaretPosition }
   | { kind: 'selectAll' }
   | { kind: 'imePreviewText'; text: string }
   | { kind: 'imeCommitText'; text: string }
@@ -183,11 +187,11 @@ export class EditorSemanticDispatcher {
       case 'setSelection':
         // Issue #629 评论16 第2项：显式 setSelection 重置横向导航位置。
         this.navTargetX = -1
-        return this.selectionController.onTap(cmd.utf16Offset)
+        return this.selectionController.onTap(cmd.position)
       case 'dragSelect':
         // Issue #629 评论16 第2项：drag select 重置横向导航位置。
         this.navTargetX = -1
-        return this.selectionController.onDragSelect(cmd.utf16Anchor, cmd.utf16Head)
+        return this.selectionController.onDragSelect(cmd.utf16Anchor, cmd.head)
       case 'selectAll':
         // Issue #629 评论16 第2项：selectAll 重置横向导航位置。
         this.navTargetX = -1

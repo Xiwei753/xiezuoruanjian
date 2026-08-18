@@ -10,7 +10,7 @@
 // 坐标单位 px，相对组件左上角。
 
 import type { LineRange, VisualCaretPosition, CaretStop } from './editor_layout_math.ts'
-import { LineBreakKind, CaretAffinity } from './editor_layout_math.ts'
+import { LineBreakKind, CaretAffinity, nextCodePointBoundary, buildLineCaretStops, horizontalForOffset, offsetForHorizontal, resolveVisualLineIndex } from './editor_layout_math.ts'
 
 /** 选区矩形（px，相对组件左上）。 */
 export interface SelectionRect {
@@ -51,60 +51,8 @@ export const CARET_WIDTH_PX = 2
 /** composition 下划线高度（px）。 */
 export const UNDERLINE_HEIGHT_PX = 2
 
-// ── 函数定义（与 editor_layout_math.ts 共享同一套算法，不重复实现）──
-
-/**
- * 返回 code unit index i 后的下一个 code point 边界。
- * surrogate pair 推进 2，否则推进 1。
- */
-function nextCodePointBoundary(text: string, i: number): number {
-  const n = text.length
-  if (i >= n) { return n }
-  if (i < 0) { i = 0 }
-  const code = text.charCodeAt(i)
-  if (code >= 0xD800 && code <= 0xDBFF && i + 1 < n) {
-    const low = text.charCodeAt(i + 1)
-    if (low >= 0xDC00 && low <= 0xDFFF) { return i + 2 }
-  }
-  return i + 1
-}
-
-/** 给定一行文本，生成该行所有 code point 边界的 caret stops。 */
-function buildLineCaretStops(
-  text: string,
-  line: { start: number; end: number },
-  measureTextFn: (s: string) => number,
-): CaretStop[] {
-  const stops: CaretStop[] = []
-  let i = line.start
-  while (i <= line.end) {
-    const x = measureTextFn(text.substring(line.start, i))
-    stops.push({ utf16Offset: i, x })
-    if (i >= line.end) { break }
-    i = nextCodePointBoundary(text, i)
-  }
-  return stops
-}
-
-/** 根据 UTF-16 offset 和 lines 的 breakKind，返回 visual line index。 */
-function resolveVisualLineIndex(
-  lines: LineRange[],
-  position: { utf16Offset: number; affinity: CaretAffinity }
-): number {
-  if (lines.length === 0) { return 0 }
-  const { utf16Offset: offset, affinity } = position
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (offset >= line.start && offset < line.end) { return i }
-    if (offset === line.end) {
-      if (line.breakKind === LineBreakKind.SoftWrap) {
-        return affinity === CaretAffinity.Upstream ? i : i + 1
-      }
-      return i
-    }
-  }
-  return lines.length - 1
-}
+// Issue #629 评论18：所有 offset↔x 算法统一来自 editor_layout_math.ts。
+// 不再重复实现 nextCodePointBoundary / buildLineCaretStops / resolveVisualLineIndex。
 
 // ── 导出函数 ──
 
