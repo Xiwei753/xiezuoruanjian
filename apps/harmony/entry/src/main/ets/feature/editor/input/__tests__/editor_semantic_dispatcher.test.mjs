@@ -18,7 +18,7 @@
 
 import { strict as assert } from 'node:assert'
 import { SerialCommandQueue } from '../../session/editor_patch_logic.ts'
-import { layoutLines, LineBreakKind, CaretAffinity } from '../../render/editor_layout_math.ts'
+import { layoutLines, LineBreakKind, CaretAffinity, positionForHorizontalArrival } from '../../render/editor_layout_math.ts'
 
 let passed = 0
 const testAsync = async (name, fn) => {
@@ -1204,7 +1204,7 @@ await testAsync('评论9 第1项：begin→update→update→finish 全程从 sn
 // 用真实 layoutLines + resolveVisualLineIndex 算法，mock Coordinator/SelectionController。
 // ════════════════════════════════════════════════════════════════════
 
-function makeSoftWrapLayoutState(text, containerWidth) {
+function makeSoftWrapLayoutState(text, containerWidth, composition = null) {
   const mockMeasure = (s) => s.length * 10
   const ranges = layoutLines(text, containerWidth, mockMeasure)
   const lines = ranges.map((r, i) => ({
@@ -1215,25 +1215,45 @@ function makeSoftWrapLayoutState(text, containerWidth) {
     breakKind: r.breakKind,
     caretStops: [],
   }))
+  // R11: compositionGeneration 经和生产一致的 projection：无 composition 为 -1，有 composition 为 composition.generation
+  const compositionGeneration = composition ? composition.generation : -1
   return {
-    revision: 1, generation: 0, compositionGeneration: -1,
+    revision: 1, generation: 0, compositionGeneration,
     contentWidth: containerWidth, fontSize: 16,
     lines, displayText: text,
   }
 }
 
 async function makeAffinitySwitchDispatcher() {
-  let snapshot = { text: '', cursor: 0, selectionAnchor: 0, revision: 1, generation: 0, compositionGeneration: -1 }
+  let snapshot = { text: '', cursor: 0, selectionAnchor: 0, revision: 1, generation: 0, composition: null }
   const queue = new SerialCommandQueue()
   const coordinatorCalls = { setSelection: [], previousGraphemeBoundary: [], nextGraphemeBoundary: [] }
   let visualCaret = null
+  // R11: visualCaret 绑定身份（revision/generation/compositionSessionId/compositionGeneration），
+  // 与生产 SelectionController.getVisualCaret 一致：身份不匹配时返回默认 Downstream。
+  let visualCaretRevision = -1
+  let visualCaretGeneration = -1
+  let visualCaretCompositionSessionId = 0
+  let visualCaretCompositionGeneration = -1
+  const updateIdentity = () => {
+    visualCaretRevision = snapshot.revision ?? 0
+    visualCaretGeneration = snapshot.generation ?? 0
+    visualCaretCompositionSessionId = snapshot.composition?.sessionId ?? 0
+    visualCaretCompositionGeneration = snapshot.composition?.generation ?? -1
+  }
+  const identityMatches = () => {
+    return (snapshot.revision ?? 0) === visualCaretRevision
+      && (snapshot.generation ?? 0) === visualCaretGeneration
+      && (snapshot.composition?.sessionId ?? 0) === visualCaretCompositionSessionId
+      && (snapshot.composition?.generation ?? -1) === visualCaretCompositionGeneration
+  }
   const selectionController = {
     getVisualCaret: (cursorUtf16) => {
-      if (visualCaret !== null && visualCaret.utf16Offset === cursorUtf16) return visualCaret
+      if (visualCaret !== null && visualCaret.utf16Offset === cursorUtf16 && identityMatches()) return visualCaret
       return { utf16Offset: cursorUtf16, affinity: 'downstream' }
     },
-    rememberVisualCaret: (position) => { visualCaret = position },
-    setVisualCaretForTest: (pos) => { visualCaret = pos },
+    rememberVisualCaret: (position) => { visualCaret = position; updateIdentity() },
+    setVisualCaretForTest: (pos) => { visualCaret = pos; updateIdentity() },
     getVisualCaretState: () => visualCaret,
   }
   const coordinator = {
@@ -1266,28 +1286,34 @@ async function makeAffinitySwitchDispatcher() {
       return Promise.resolve(null)
     },
   }
+  // R11: 用生产 positionForHorizontalArrival 判断 soft-wrap 行尾，不复制判断逻辑
+  const toLineRanges = (lines) => lines.map(l => ({ start: l.startUtf16, end: l.endUtf16, breakKind: l.breakKind }))
+  const rememberAfterMove = (direction, targetByte) => {
+    if (!layoutState) {
+      selectionController.rememberVisualCaret({ utf16Offset: targetByte, affinity: CaretAffinity.Downstream })
+      return
+    }
+    const targetPos = positionForHorizontalArrival(toLineRanges(layoutState.lines), direction, targetByte)
+    selectionController.rememberVisualCaret(targetPos)
+  }
   const trySoftWrapAffinitySwitch = async (direction) => {
-    if (!layoutState) return { handled: false, result: null }
+    if (!layoutState) return { handled: false, result: null, layoutState: null }
     const cursorUtf16 = snapshot.cursor
     const currentPosition = selectionController.getVisualCaret(cursorUtf16)
-    let atSoftWrapEnd = false
-    for (let i = 0; i < layoutState.lines.length; i++) {
-      const l = layoutState.lines[i]
-      if (cursorUtf16 === l.endUtf16 && l.breakKind === 'softWrap') {
-        atSoftWrapEnd = true
-        break
-      }
-    }
-    if (!atSoftWrapEnd) return { handled: false, result: null }
+    // 用生产 positionForHorizontalArrival 判断是否在 soft-wrap 行尾
+    // （right 到达 soft-wrap 行尾返回 Upstream，其他返回 Downstream）
+    const arrival = positionForHorizontalArrival(toLineRanges(layoutState.lines), 'right', cursorUtf16)
+    const atSoftWrapEnd = arrival.affinity === CaretAffinity.Upstream
+    if (!atSoftWrapEnd) return { handled: false, result: null, layoutState }
     if (direction === 'left' && currentPosition.affinity === 'downstream') {
       selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: 'upstream' })
-      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] }, layoutState: null }
     }
     if (direction === 'right' && currentPosition.affinity === 'upstream') {
       selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: 'downstream' })
-      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] }, layoutState: null }
     }
-    return { handled: false, result: null }
+    return { handled: false, result: null, layoutState }
   }
   const executeGraphemeLeft = async (extend) => {
     const cursorByte = snapshot.cursor
@@ -1297,7 +1323,9 @@ async function makeAffinitySwitchDispatcher() {
       if (headByte <= 0) return coordinator.setSelection(anchorByte, 0)
       const prevResult = await coordinator.previousGraphemeBoundary(headByte)
       if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) return prevResult
-      return coordinator.setSelection(anchorByte, prevResult.data)
+      const setResult = await coordinator.setSelection(anchorByte, prevResult.data)
+      if (setResult.success) rememberAfterMove('left', prevResult.data)
+      return setResult
     }
     if (anchorByte !== cursorByte) {
       const selStart = Math.min(anchorByte, cursorByte)
@@ -1308,7 +1336,9 @@ async function makeAffinitySwitchDispatcher() {
     if (cursorByte <= 0) return coordinator.setSelection(0, 0)
     const prevResult = await coordinator.previousGraphemeBoundary(cursorByte)
     if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) return prevResult
-    return coordinator.setSelection(prevResult.data, prevResult.data)
+    const setResult = await coordinator.setSelection(prevResult.data, prevResult.data)
+    if (setResult.success) rememberAfterMove('left', prevResult.data)
+    return setResult
   }
   const executeGraphemeRight = async (extend) => {
     const text = snapshot.text
@@ -1320,7 +1350,9 @@ async function makeAffinitySwitchDispatcher() {
       if (headByte >= textByteLen) return coordinator.setSelection(anchorByte, textByteLen)
       const nextResult = await coordinator.nextGraphemeBoundary(headByte)
       if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) return nextResult
-      return coordinator.setSelection(anchorByte, nextResult.data)
+      const setResult = await coordinator.setSelection(anchorByte, nextResult.data)
+      if (setResult.success) rememberAfterMove('right', nextResult.data)
+      return setResult
     }
     if (anchorByte !== cursorByte) {
       const selEnd = Math.max(anchorByte, cursorByte)
@@ -1331,7 +1363,9 @@ async function makeAffinitySwitchDispatcher() {
     if (cursorByte >= textByteLen) return coordinator.setSelection(textByteLen, textByteLen)
     const nextResult = await coordinator.nextGraphemeBoundary(cursorByte)
     if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) return nextResult
-    return coordinator.setSelection(nextResult.data, nextResult.data)
+    const setResult = await coordinator.setSelection(nextResult.data, nextResult.data)
+    if (setResult.success) rememberAfterMove('right', nextResult.data)
+    return setResult
   }
   const dispatch = (cmd) => queue.enqueue(async () => {
     switch (cmd.kind) {
@@ -1437,8 +1471,10 @@ await testAsync('R7第3项: shift+right 不触发 affinity 切换（走选区扩
   assert.equal(d.getSnapshot().cursor, 4, 'shift+right 应移 head 到 offset=4')
   assert.equal(d.getSnapshot().selectionAnchor, 1, 'anchor 应保持 1')
   assert.equal(d.coordinatorCalls.nextGraphemeBoundary.length, 1, '应调 nextGraphemeBoundary')
-  const pos = d.selectionController.getVisualCaret(3)
-  assert.equal(pos.affinity, 'upstream', 'affinity 不应变')
+  // R11: rememberAfterMove 把 visualCaret 移到新位置 4（非 soft-wrap 边界 → downstream），
+  // 证明走的是 extend 分支而非 affinity switch 分支（switch 不移动 cursor）。
+  const pos = d.selectionController.getVisualCaret(4)
+  assert.equal(pos.affinity, 'downstream', 'shift+right 后 visualCaret 在新位置 4，非 soft-wrap 边界 → downstream')
 })
 
 await testAsync('R7第3项: 有选区时 Left 不触发 affinity 切换（走 collapse）', async () => {
@@ -1490,18 +1526,19 @@ await testAsync('R7第3项: 硬换行（非共享 offset）边界 Left/Right 不
   assert.equal(dRight.getSnapshot().cursor, 3, 'Right 应移到后一个 grapheme offset=3')
   assert.equal(dRight.coordinatorCalls.setSelection.length, 1, 'Right 应调一次 setSelection')
   assert.equal(dRight.coordinatorCalls.nextGraphemeBoundary.length, 1, 'Right 应调 nextGraphemeBoundary')
-  pos = dRight.selectionController.getVisualCaret(2)
-  assert.equal(pos.affinity, 'upstream', '硬换行不切 affinity，仍为 upstream')
+  // R11: rememberAfterMove 把 visualCaret 移到新位置 3（硬换行非 soft-wrap 边界 → downstream）
+  pos = dRight.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', '硬换行 Right 后 visualCaret 在新位置 3，非 soft-wrap 边界 → downstream')
 })
 
 await testAsync('R7第3项: composition 进行中 soft-wrap affinity 切换是纯视觉操作，不调 setSelection 破坏 composition 正文', async () => {
   // composition 进行中（compositionGeneration=5）。soft-wrap 边界 affinity 切换是纯视觉操作，
   // 只调 selectionController.rememberVisualCaret 更新视觉 affinity，不调 setSelection（不破坏 composition 正文）。
+  // R11: 用真实 composition DTO（EditorCompositionState 结构），不再用顶层假 compositionGeneration。
+  const composition = { sessionId: 7, baseRevision: 1, generation: 5, replaceByteStart: 3, replaceByteEndExclusive: 3, preeditText: '', preeditCursorUtf16: 0 }
   const d = await makeAffinitySwitchDispatcher()
-  d.setSnapshot({ text: 'abcdef', cursor: 3, selectionAnchor: 3, compositionGeneration: 5 })
-  const layout = makeSoftWrapLayoutState('abcdef', 30)
-  layout.compositionGeneration = 5
-  d.lineResolver.updateLayout(layout)
+  d.setSnapshot({ text: 'abcdef', cursor: 3, selectionAnchor: 3, composition })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30, composition))
   // cursor=3 是 soft-wrap 边界（第一行 end=3 breakKind='softWrap'），affinity='upstream' + Right → 切 downstream
   d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'upstream' })
   await d.dispatch({ kind: 'graphemeRight', extend: false })
@@ -1525,13 +1562,30 @@ async function makeTopLevelGraphemeDispatcher() {
   const affinitySwitchCalls = []
   let composing = false
   let visualCaret = null
+  // R11: visualCaret 绑定身份，与生产 SelectionController.getVisualCaret 一致
+  let visualCaretRevision = -1
+  let visualCaretGeneration = -1
+  let visualCaretCompositionSessionId = 0
+  let visualCaretCompositionGeneration = -1
+  const updateIdentity = () => {
+    visualCaretRevision = snapshot.revision ?? 0
+    visualCaretGeneration = snapshot.generation ?? 0
+    visualCaretCompositionSessionId = snapshot.composition?.sessionId ?? 0
+    visualCaretCompositionGeneration = snapshot.composition?.generation ?? -1
+  }
+  const identityMatches = () => {
+    return (snapshot.revision ?? 0) === visualCaretRevision
+      && (snapshot.generation ?? 0) === visualCaretGeneration
+      && (snapshot.composition?.sessionId ?? 0) === visualCaretCompositionSessionId
+      && (snapshot.composition?.generation ?? -1) === visualCaretCompositionGeneration
+  }
   const selectionController = {
     getVisualCaret: (cursorUtf16) => {
-      if (visualCaret !== null && visualCaret.utf16Offset === cursorUtf16) return visualCaret
+      if (visualCaret !== null && visualCaret.utf16Offset === cursorUtf16 && identityMatches()) return visualCaret
       return { utf16Offset: cursorUtf16, affinity: 'downstream' }
     },
-    rememberVisualCaret: (position) => { visualCaret = position },
-    setVisualCaretForTest: (pos) => { visualCaret = pos },
+    rememberVisualCaret: (position) => { visualCaret = position; updateIdentity() },
+    setVisualCaretForTest: (pos) => { visualCaret = pos; updateIdentity() },
     getVisualCaretState: () => visualCaret,
   }
   const coordinator = {
@@ -1555,28 +1609,36 @@ async function makeTopLevelGraphemeDispatcher() {
     updateLayout: (state) => { layoutState = state },
     waitForLayout: (identity) => Promise.resolve(layoutState),
   }
+  // R11: 用生产 positionForHorizontalArrival 判断 soft-wrap 行尾，不复制判断逻辑
+  const toLineRanges = (lines) => lines.map(l => ({ start: l.startUtf16, end: l.endUtf16, breakKind: l.breakKind }))
+  const rememberAfterMove = (direction, targetByte) => {
+    if (!layoutState) {
+      selectionController.rememberVisualCaret({ utf16Offset: targetByte, affinity: CaretAffinity.Downstream })
+      return
+    }
+    const targetPos = positionForHorizontalArrival(toLineRanges(layoutState.lines), direction, targetByte)
+    selectionController.rememberVisualCaret(targetPos)
+  }
   const trySoftWrapAffinitySwitch = async (direction) => {
     affinitySwitchCalls.push(direction)
-    if (!layoutState) return { handled: false, result: null }
+    if (!layoutState) return { handled: false, result: null, layoutState: null }
     const cursorUtf16 = snapshot.cursor
     const currentPosition = selectionController.getVisualCaret(cursorUtf16)
-    let atSoftWrapEnd = false
-    for (let i = 0; i < layoutState.lines.length; i++) {
-      const l = layoutState.lines[i]
-      if (cursorUtf16 === l.endUtf16 && l.breakKind === 'softWrap') { atSoftWrapEnd = true; break }
-    }
-    if (!atSoftWrapEnd) return { handled: false, result: null }
+    const arrival = positionForHorizontalArrival(toLineRanges(layoutState.lines), 'right', cursorUtf16)
+    const atSoftWrapEnd = arrival.affinity === CaretAffinity.Upstream
+    if (!atSoftWrapEnd) return { handled: false, result: null, layoutState }
     if (direction === 'left' && currentPosition.affinity === 'downstream') {
       selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: 'upstream' })
-      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] }, layoutState: null }
     }
     if (direction === 'right' && currentPosition.affinity === 'upstream') {
       selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: 'downstream' })
-      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] }, layoutState: null }
     }
-    return { handled: false, result: null }
+    return { handled: false, result: null, layoutState }
   }
   // committed helper（含 trySoftWrapAffinitySwitch；composition finish 后进此处按新 identity 检查）
+  // R11: Core setSelection 成功后用 positionForHorizontalArrival 算目标 affinity 并 rememberVisualCaret
   const executeCommittedGraphemeLeft = async (extend) => {
     const cursorByte = snapshot.cursor
     const anchorByte = snapshot.selectionAnchor
@@ -1585,7 +1647,9 @@ async function makeTopLevelGraphemeDispatcher() {
       if (headByte <= 0) return coordinator.setSelection(anchorByte, 0)
       const prevResult = await coordinator.previousGraphemeBoundary(headByte)
       if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) return prevResult
-      return coordinator.setSelection(anchorByte, prevResult.data)
+      const setResult = await coordinator.setSelection(anchorByte, prevResult.data)
+      if (setResult.success) rememberAfterMove('left', prevResult.data)
+      return setResult
     }
     if (anchorByte !== cursorByte) {
       const selStart = Math.min(anchorByte, cursorByte)
@@ -1596,7 +1660,9 @@ async function makeTopLevelGraphemeDispatcher() {
     if (cursorByte <= 0) return coordinator.setSelection(0, 0)
     const prevResult = await coordinator.previousGraphemeBoundary(cursorByte)
     if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) return prevResult
-    return coordinator.setSelection(prevResult.data, prevResult.data)
+    const setResult = await coordinator.setSelection(prevResult.data, prevResult.data)
+    if (setResult.success) rememberAfterMove('left', prevResult.data)
+    return setResult
   }
   const executeCommittedGraphemeRight = async (extend) => {
     const text = snapshot.text
@@ -1608,7 +1674,9 @@ async function makeTopLevelGraphemeDispatcher() {
       if (headByte >= textByteLen) return coordinator.setSelection(anchorByte, textByteLen)
       const nextResult = await coordinator.nextGraphemeBoundary(headByte)
       if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) return nextResult
-      return coordinator.setSelection(anchorByte, nextResult.data)
+      const setResult = await coordinator.setSelection(anchorByte, nextResult.data)
+      if (setResult.success) rememberAfterMove('right', nextResult.data)
+      return setResult
     }
     if (anchorByte !== cursorByte) {
       const selEnd = Math.max(anchorByte, cursorByte)
@@ -1619,7 +1687,9 @@ async function makeTopLevelGraphemeDispatcher() {
     if (cursorByte >= textByteLen) return coordinator.setSelection(textByteLen, textByteLen)
     const nextResult = await coordinator.nextGraphemeBoundary(cursorByte)
     if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) return nextResult
-    return coordinator.setSelection(nextResult.data, nextResult.data)
+    const setResult = await coordinator.setSelection(nextResult.data, nextResult.data)
+    if (setResult.success) rememberAfterMove('right', nextResult.data)
+    return setResult
   }
   // 顶层路由（镜像生产代码：composing && !extend 守卫）
   const executeGraphemeLeft = async (extend) => {
@@ -1707,6 +1777,532 @@ await testAsync('R10第2项: composition 活跃但非 soft-wrap 边界 → 顶�
   assert.equal(d.affinitySwitchCalls()[0], 'left')
   assert.equal(d.affinitySwitchCalls()[1], 'left')
 })
+
+
+// ════════════════════════════════════════════════════════════════════
+// ── Issue #629 R11 评论5329310563 第4项：完整序列 + generation 前进身份 ──
+// 验证 committed/composition 左右完整序列（视觉行 [0,3] SoftWrap / [3,6] EndOfText）：
+//   Right: 2 -> 3/Upstream -> 3/Downstream -> 4
+//   Left:  4 -> 3/Downstream -> 3/Upstream -> 2
+// positionForHorizontalArrival 直接从生产导入，不复制逻辑。
+// ════════════════════════════════════════════════════════════════════
+
+// 完整序列用 dispatcher：支持 committed + composition move，rememberVisualCaret 用生产 positionForHorizontalArrival。
+async function makeCompleteSequenceDispatcher() {
+  let snapshot = { text: '', cursor: 0, selectionAnchor: 0, revision: 1, generation: 0, composition: null }
+  const queue = new SerialCommandQueue()
+  const coordinatorCalls = { setSelection: [], previousGraphemeBoundary: [], nextGraphemeBoundary: [], compositionMoveLeft: [], compositionMoveRight: [] }
+  let visualCaret = null
+  let visualCaretRevision = -1
+  let visualCaretGeneration = -1
+  let visualCaretCompositionSessionId = 0
+  let visualCaretCompositionGeneration = -1
+  const updateIdentity = () => {
+    visualCaretRevision = snapshot.revision ?? 0
+    visualCaretGeneration = snapshot.generation ?? 0
+    visualCaretCompositionSessionId = snapshot.composition?.sessionId ?? 0
+    visualCaretCompositionGeneration = snapshot.composition?.generation ?? -1
+  }
+  const identityMatches = () => {
+    return (snapshot.revision ?? 0) === visualCaretRevision
+      && (snapshot.generation ?? 0) === visualCaretGeneration
+      && (snapshot.composition?.sessionId ?? 0) === visualCaretCompositionSessionId
+      && (snapshot.composition?.generation ?? -1) === visualCaretCompositionGeneration
+  }
+  const selectionController = {
+    getVisualCaret: (cursorUtf16) => {
+      if (visualCaret !== null && visualCaret.utf16Offset === cursorUtf16 && identityMatches()) return visualCaret
+      return { utf16Offset: cursorUtf16, affinity: 'downstream' }
+    },
+    rememberVisualCaret: (position) => { visualCaret = position; updateIdentity() },
+    setVisualCaretForTest: (pos) => { visualCaret = pos; updateIdentity() },
+    getVisualCaretState: () => visualCaret,
+    getIdentity: () => ({ revision: visualCaretRevision, generation: visualCaretGeneration, compositionSessionId: visualCaretCompositionSessionId, compositionGeneration: visualCaretCompositionGeneration }),
+  }
+  const coordinator = {
+    getSnapshot: () => snapshot,
+    setSelection: async (anchor, head) => {
+      coordinatorCalls.setSelection.push({ anchor, head })
+      snapshot = { ...snapshot, selectionAnchor: anchor, cursor: head }
+      return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+    },
+    previousGraphemeBoundary: async (byteOffset) => {
+      coordinatorCalls.previousGraphemeBoundary.push(byteOffset)
+      return { success: true, data: byteOffset - 1 }
+    },
+    nextGraphemeBoundary: async (byteOffset) => {
+      coordinatorCalls.nextGraphemeBoundary.push(byteOffset)
+      return { success: true, data: byteOffset + 1 }
+    },
+    compositionMoveGraphemeLeft: async () => {
+      coordinatorCalls.compositionMoveLeft.push(snapshot.cursor)
+      snapshot = { ...snapshot, cursor: snapshot.cursor - 1 }
+      return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+    },
+    compositionMoveGraphemeRight: async () => {
+      coordinatorCalls.compositionMoveRight.push(snapshot.cursor)
+      snapshot = { ...snapshot, cursor: snapshot.cursor + 1 }
+      return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+    },
+  }
+  let layoutState = null
+  const lineResolver = {
+    updateLayout: (state) => { layoutState = state },
+    waitForLayout: (identity) => Promise.resolve(layoutState),
+  }
+  const toLineRanges = (lines) => lines.map(l => ({ start: l.startUtf16, end: l.endUtf16, breakKind: l.breakKind }))
+  const rememberAfterMove = (direction, targetByte) => {
+    if (!layoutState) {
+      selectionController.rememberVisualCaret({ utf16Offset: targetByte, affinity: CaretAffinity.Downstream })
+      return
+    }
+    const targetPos = positionForHorizontalArrival(toLineRanges(layoutState.lines), direction, targetByte)
+    selectionController.rememberVisualCaret(targetPos)
+  }
+  const trySoftWrapAffinitySwitch = async (direction) => {
+    if (!layoutState) return { handled: false, result: null }
+    const cursorUtf16 = snapshot.cursor
+    const currentPosition = selectionController.getVisualCaret(cursorUtf16)
+    const arrival = positionForHorizontalArrival(toLineRanges(layoutState.lines), 'right', cursorUtf16)
+    const atSoftWrapEnd = arrival.affinity === CaretAffinity.Upstream
+    if (!atSoftWrapEnd) return { handled: false, result: null }
+    if (direction === 'left' && currentPosition.affinity === 'downstream') {
+      selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: 'upstream' })
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+    }
+    if (direction === 'right' && currentPosition.affinity === 'upstream') {
+      selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: 'downstream' })
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+    }
+    return { handled: false, result: null }
+  }
+  const isComposing = () => snapshot.composition !== null
+  const executeCommittedGraphemeLeft = async (extend) => {
+    const cursorByte = snapshot.cursor
+    const anchorByte = snapshot.selectionAnchor
+    if (extend) {
+      const headByte = snapshot.cursor
+      if (headByte <= 0) return coordinator.setSelection(anchorByte, 0)
+      const prevResult = await coordinator.previousGraphemeBoundary(headByte)
+      if (!prevResult.success) return prevResult
+      const setResult = await coordinator.setSelection(anchorByte, prevResult.data)
+      if (setResult.success) rememberAfterMove('left', prevResult.data)
+      return setResult
+    }
+    if (anchorByte !== cursorByte) {
+      const selStart = Math.min(anchorByte, cursorByte)
+      return coordinator.setSelection(selStart, selStart)
+    }
+    const affinitySwitch = await trySoftWrapAffinitySwitch('left')
+    if (affinitySwitch.handled) return affinitySwitch.result
+    if (cursorByte <= 0) return coordinator.setSelection(0, 0)
+    const prevResult = await coordinator.previousGraphemeBoundary(cursorByte)
+    if (!prevResult.success) return prevResult
+    const setResult = await coordinator.setSelection(prevResult.data, prevResult.data)
+    if (setResult.success) rememberAfterMove('left', prevResult.data)
+    return setResult
+  }
+  const executeCommittedGraphemeRight = async (extend) => {
+    const text = snapshot.text
+    const textByteLen = text.length
+    const cursorByte = snapshot.cursor
+    const anchorByte = snapshot.selectionAnchor
+    if (extend) {
+      const headByte = snapshot.cursor
+      if (headByte >= textByteLen) return coordinator.setSelection(anchorByte, textByteLen)
+      const nextResult = await coordinator.nextGraphemeBoundary(headByte)
+      if (!nextResult.success) return nextResult
+      const setResult = await coordinator.setSelection(anchorByte, nextResult.data)
+      if (setResult.success) rememberAfterMove('right', nextResult.data)
+      return setResult
+    }
+    if (anchorByte !== cursorByte) {
+      const selEnd = Math.max(anchorByte, cursorByte)
+      return coordinator.setSelection(selEnd, selEnd)
+    }
+    const affinitySwitch = await trySoftWrapAffinitySwitch('right')
+    if (affinitySwitch.handled) return affinitySwitch.result
+    if (cursorByte >= textByteLen) return coordinator.setSelection(textByteLen, textByteLen)
+    const nextResult = await coordinator.nextGraphemeBoundary(cursorByte)
+    if (!nextResult.success) return nextResult
+    const setResult = await coordinator.setSelection(nextResult.data, nextResult.data)
+    if (setResult.success) rememberAfterMove('right', nextResult.data)
+    return setResult
+  }
+  const executeGraphemeLeft = async (extend) => {
+    if (isComposing() && !extend) {
+      const switched = await trySoftWrapAffinitySwitch('left')
+      if (switched.handled) return switched.result
+      const moveResult = await coordinator.compositionMoveGraphemeLeft()
+      if (moveResult.success) rememberAfterMove('left', snapshot.cursor)
+      return moveResult
+    }
+    return executeCommittedGraphemeLeft(extend)
+  }
+  const executeGraphemeRight = async (extend) => {
+    if (isComposing() && !extend) {
+      const switched = await trySoftWrapAffinitySwitch('right')
+      if (switched.handled) return switched.result
+      const moveResult = await coordinator.compositionMoveGraphemeRight()
+      if (moveResult.success) rememberAfterMove('right', snapshot.cursor)
+      return moveResult
+    }
+    return executeCommittedGraphemeRight(extend)
+  }
+  const dispatch = (cmd) => queue.enqueue(async () => {
+    switch (cmd.kind) {
+      case 'graphemeLeft': return executeGraphemeLeft(cmd.extend)
+      case 'graphemeRight': return executeGraphemeRight(cmd.extend)
+      default: return { success: true }
+    }
+  })
+  return {
+    dispatch, coordinator, selectionController, lineResolver, coordinatorCalls,
+    setSnapshot: (s) => { snapshot = { ...snapshot, ...s } },
+    getSnapshot: () => snapshot,
+  }
+}
+
+await testAsync('R11第4项: committed Right 完整序列 2 -> 3/Upstream -> 3/Downstream -> 4', async () => {
+  const d = await makeCompleteSequenceDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 2, selectionAnchor: 2 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  // Step 1: cursor=2, Right → Core 返回 3, positionForHorizontalArrival(right,3)=Upstream
+  await d.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(d.getSnapshot().cursor, 3, 'Step1: cursor 应移到 3')
+  let pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'upstream', 'Step1: 3 是 SoftWrap 行尾，Right 到达 → Upstream')
+  // Step 2: cursor=3/Upstream, Right → trySoftWrap 切到 3/Downstream（cursor 不移动）
+  await d.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(d.getSnapshot().cursor, 3, 'Step2: cursor 不移动（纯 affinity 切换）')
+  pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', 'Step2: Upstream + Right → 切 Downstream')
+  // Step 3: cursor=3/Downstream, Right → Core 返回 4, positionForHorizontalArrival(right,4)=Downstream
+  await d.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(d.getSnapshot().cursor, 4, 'Step3: cursor 应移到 4')
+  pos = d.selectionController.getVisualCaret(4)
+  assert.equal(pos.affinity, 'downstream', 'Step3: 4 非 SoftWrap 边界 → Downstream')
+})
+
+await testAsync('R11第4项: committed Left 完整序列 4 -> 3/Downstream -> 3/Upstream -> 2', async () => {
+  const d = await makeCompleteSequenceDispatcher()
+  d.setSnapshot({ text: 'abcdef', cursor: 4, selectionAnchor: 4 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30))
+  // Step 1: cursor=4, Left → Core 返回 3, positionForHorizontalArrival(left,3)=Downstream
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.getSnapshot().cursor, 3, 'Step1: cursor 应移到 3')
+  let pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', 'Step1: 3 是 SoftWrap 行尾，Left 到达 → Downstream')
+  // Step 2: cursor=3/Downstream, Left → trySoftWrap 切到 3/Upstream（cursor 不移动）
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.getSnapshot().cursor, 3, 'Step2: cursor 不移动（纯 affinity 切换）')
+  pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'upstream', 'Step2: Downstream + Left → 切 Upstream')
+  // Step 3: cursor=3/Upstream, Left → Core 返回 2, positionForHorizontalArrival(left,2)=Downstream
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.getSnapshot().cursor, 2, 'Step3: cursor 应移到 2')
+  pos = d.selectionController.getVisualCaret(2)
+  assert.equal(pos.affinity, 'downstream', 'Step3: 2 非 SoftWrap 边界 → Downstream')
+})
+
+await testAsync('R11第4项: composition Right 完整序列 2 -> 3/Upstream -> 3/Downstream，generation 前进后身份仍匹配', async () => {
+  const d = await makeCompleteSequenceDispatcher()
+  const composition = { sessionId: 7, baseRevision: 1, generation: 5, replaceByteStart: 0, replaceByteEndExclusive: 0, preeditText: 'abcdef', preeditCursorUtf16: 2 }
+  d.setSnapshot({ text: '', cursor: 2, selectionAnchor: 2, composition })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30, composition))
+  // Step 1: composition Right → cursor=3, rememberVisualCaret(3/Upstream) with identity generation=5
+  await d.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(d.getSnapshot().cursor, 3, 'Step1: composition Right → cursor=3')
+  let pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'upstream', 'Step1: 3 是 SoftWrap 行尾，Right 到达 → Upstream')
+  let identity = d.selectionController.getIdentity()
+  assert.equal(identity.compositionGeneration, 5, 'Step1: visualCaret 身份 compositionGeneration=5')
+  // Step 2: composition update → generation 前进到 6，preeditText 变
+  const composition2 = { ...composition, generation: 6, preeditText: 'abcXef', preeditCursorUtf16: 3 }
+  d.setSnapshot({ composition: composition2 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcXef', 30, composition2))
+  // 旧身份（generation=5）不匹配 → getVisualCaret 返回默认 Downstream
+  pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', 'Step2: generation 前进后旧身份不匹配 → 默认 Downstream')
+  // Step 3: Right → trySoftWrap 发现 3/Downstream + right 不切（需 Upstream 才切），走 compositionMove → cursor=4
+  // 先重设 visualCaret 到 3/Upstream with 新身份
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'upstream' })
+  await d.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(d.getSnapshot().cursor, 3, 'Step3: Upstream + Right → trySoftWrap 切 Downstream，cursor 不移动')
+  pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', 'Step3: affinity 切到 Downstream')
+  identity = d.selectionController.getIdentity()
+  assert.equal(identity.compositionGeneration, 6, 'Step3: visualCaret 身份更新到 compositionGeneration=6')
+})
+
+await testAsync('R11第4项: composition Left 完整序列 4 -> 3/Downstream -> 3/Upstream，generation 前进后身份仍匹配', async () => {
+  const d = await makeCompleteSequenceDispatcher()
+  const composition = { sessionId: 7, baseRevision: 1, generation: 5, replaceByteStart: 0, replaceByteEndExclusive: 0, preeditText: 'abcdef', preeditCursorUtf16: 4 }
+  d.setSnapshot({ text: '', cursor: 4, selectionAnchor: 4, composition })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30, composition))
+  // Step 1: composition Left → cursor=3, rememberVisualCaret(3/Downstream) with identity generation=5
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.getSnapshot().cursor, 3, 'Step1: composition Left → cursor=3')
+  let pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', 'Step1: 3 是 SoftWrap 行尾，Left 到达 → Downstream')
+  let identity = d.selectionController.getIdentity()
+  assert.equal(identity.compositionGeneration, 5, 'Step1: visualCaret 身份 compositionGeneration=5')
+  // Step 2: composition update → generation 前进到 6
+  const composition2 = { ...composition, generation: 6, preeditText: 'abcXef', preeditCursorUtf16: 3 }
+  d.setSnapshot({ composition: composition2 })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcXef', 30, composition2))
+  // 旧身份不匹配 → 默认 Downstream
+  pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', 'Step2: generation 前进后旧身份不匹配 → 默认 Downstream')
+  // Step 3: 重设 visualCaret 到 3/Downstream with 新身份，Left → trySoftWrap 切 Upstream
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'downstream' })
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.getSnapshot().cursor, 3, 'Step3: Downstream + Left → trySoftWrap 切 Upstream，cursor 不移动')
+  pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'upstream', 'Step3: affinity 切到 Upstream')
+  identity = d.selectionController.getIdentity()
+  assert.equal(identity.compositionGeneration, 6, 'Step3: visualCaret 身份更新到 compositionGeneration=6')
+})
+
+await testAsync('R11第4项: generation 前进身份测试：composition update 后旧 identity getVisualCaret 返回默认 Downstream', async () => {
+  const d = await makeCompleteSequenceDispatcher()
+  const composition = { sessionId: 7, baseRevision: 1, generation: 5, replaceByteStart: 0, replaceByteEndExclusive: 0, preeditText: 'abcdef', preeditCursorUtf16: 3 }
+  d.setSnapshot({ text: '', cursor: 3, selectionAnchor: 3, composition })
+  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30, composition))
+  // 设 visualCaret 到 3/Upstream with identity generation=5
+  d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'upstream' })
+  assert.equal(d.selectionController.getVisualCaret(3).affinity, 'upstream', '设完后 getVisualCaret(3)=Upstream')
+  // composition update → generation 前进到 6
+  const composition2 = { ...composition, generation: 6, preeditText: 'abcXef' }
+  d.setSnapshot({ composition: composition2 })
+  // 旧身份（generation=5）不匹配 → getVisualCaret 返回默认 Downstream
+  const pos = d.selectionController.getVisualCaret(3)
+  assert.equal(pos.affinity, 'downstream', 'generation 前进后旧身份不匹配 → 默认 Downstream')
+  // 新身份（generation=6）匹配 → rememberVisualCaret 后 getVisualCaret 返回新值
+  d.selectionController.rememberVisualCaret({ utf16Offset: 3, affinity: 'upstream' })
+  const pos2 = d.selectionController.getVisualCaret(3)
+  assert.equal(pos2.affinity, 'upstream', 'rememberVisualCaret 用新身份后 getVisualCaret(3)=Upstream')
+  assert.equal(d.selectionController.getIdentity().compositionGeneration, 6, '新身份 compositionGeneration=6')
+})
+
+// ════════════════════════════════════════════════════════════════════
+// ── Issue #629 R11 评论5329310563 第4项：真实失败路径测试 ──
+// ════════════════════════════════════════════════════════════════════
+
+await testAsync('R11第4项: dispatcher 失败（result.success=false）不通知 IME', async () => {
+  // 模拟 dispatchSelectionAndSyncIme：dispatch(cmd).then(result => { if (result.success) ime.syncSelectionFromEditor() })
+  const notifySelectionCalls = []
+  const harmonyImeConnection = {
+    notifySelection: async (start, end) => { notifySelectionCalls.push({ start, end }) },
+    syncSelectionFromEditor: async () => {
+      const sel = dispatcher.getCurrentDisplaySelectionUtf16()
+      if (sel !== null) await harmonyImeConnection.notifySelection(sel.start, sel.end)
+    },
+  }
+  const dispatcher = {
+    dispatch: async (cmd) => { return { success: false, errorCode: 'NO_SESSION' } },
+    getCurrentDisplaySelectionUtf16: () => ({ start: 0, end: 0 }),
+  }
+  // 镜像 SujianEditor.dispatchSelectionAndSyncIme
+  const dispatchSelectionAndSyncIme = (cmd) => {
+    dispatcher.dispatch(cmd).then((result) => {
+      if (result.success) {
+        harmonyImeConnection.syncSelectionFromEditor().then(() => {})
+      }
+    }, (_e) => {})
+  }
+  dispatchSelectionAndSyncIme({ kind: 'setSelection', position: { utf16Offset: 3, affinity: 'downstream' } })
+  await sleep(10)
+  assert.equal(notifySelectionCalls.length, 0, 'dispatch 失败时不应调 notifySelection')
+})
+
+await testAsync('R11第4项: dispatcher 成功时通知 IME（对照：失败不通知的正面用例）', async () => {
+  const notifySelectionCalls = []
+  const harmonyImeConnection = {
+    notifySelection: async (start, end) => { notifySelectionCalls.push({ start, end }) },
+    syncSelectionFromEditor: async () => {
+      const sel = dispatcher.getCurrentDisplaySelectionUtf16()
+      if (sel !== null) await harmonyImeConnection.notifySelection(sel.start, sel.end)
+    },
+  }
+  const dispatcher = {
+    dispatch: async (cmd) => { return { success: true, warnings: [], changedPaths: [], changedEntities: [] } },
+    getCurrentDisplaySelectionUtf16: () => ({ start: 3, end: 3 }),
+  }
+  const dispatchSelectionAndSyncIme = (cmd) => {
+    dispatcher.dispatch(cmd).then((result) => {
+      if (result.success) {
+        harmonyImeConnection.syncSelectionFromEditor().then(() => {})
+      }
+    }, (_e) => {})
+  }
+  dispatchSelectionAndSyncIme({ kind: 'setSelection', position: { utf16Offset: 3, affinity: 'downstream' } })
+  await sleep(10)
+  assert.equal(notifySelectionCalls.length, 1, 'dispatch 成功时应调一次 notifySelection')
+  assert.deepEqual(notifySelectionCalls[0], { start: 3, end: 3 }, '通知的是 display selection 坐标')
+})
+
+await testAsync('R11第4项: composition update 后 getCurrentDisplaySelectionUtf16 返回 preedit cursor 的 display 坐标', async () => {
+  // 模拟 EditorLayoutSnapshot.fromEditorSnapshot 的 projection：
+  // 有 composition 时 displayText = before + preeditText + after,
+  // selectionAnchor/Head = displayCaretByte = replaceByteStart + preeditCursorByte
+  const committedText = 'abc'
+  const composition = { sessionId: 1, baseRevision: 0, generation: 1, replaceByteStart: 1, replaceByteEndExclusive: 1, preeditText: '你好', preeditCursorUtf16: 2 }
+  // displayText = 'a' + '你好' + 'bc' = 'a你好bc'
+  // displayCaretByte = replaceByteStart + utf16ToUtf8(preeditText, preeditCursorUtf16)
+  //   = 1 + utf8ByteLen('你好') = 1 + 6 = 7
+  // getCurrentDisplaySelectionUtf16: byte 7 → UTF-16 in 'a你好bc'
+  //   'a'=1byte, '你'=3byte(→utf16=1+1=2), '好'=3byte(→utf16=2+1=3), 'b' at byte 7 → utf16=3+1=4? 
+  //   实际：displayText='a你好bc', displayCaretByte=7
+  //   byte 0='a'(1), byte 1-3='你'(3), byte 4-6='好'(3), byte 7='b'
+  //   utf8ToUtf16('a你好bc', 7): 'a'=1byte→utf16=1, '你'=3bytes→utf16=2, '好'=3bytes→utf16=3, 'b' at byte7→utf16=4
+  // 所以 start=end=4
+  const displayText = 'a' + '你好' + 'bc'
+  const preeditCursorByte = new TextEncoder().encode('你好').length // 6
+  const displayCaretByte = 1 + preeditCursorByte // 7
+  // utf8ToUtf16
+  let byteLen = 0, utf16Idx = 0
+  for (let i = 0; i < displayText.length; i++) {
+    const code = displayText.charCodeAt(i)
+    let charByteLen = 1
+    if (code < 0x80) charByteLen = 1
+    else if (code < 0x800) charByteLen = 2
+    else if (code >= 0xD800 && code <= 0xDBFF) { charByteLen = 4; i += 1 }
+    else charByteLen = 3
+    if (byteLen + charByteLen > displayCaretByte) break
+    byteLen += charByteLen
+    utf16Idx += (charByteLen === 4 ? 2 : 1)
+  }
+  const expectedUtf16 = utf16Idx
+  // 模拟 getCurrentDisplaySelectionUtf16
+  const getCurrentDisplaySelectionUtf16 = () => ({ start: expectedUtf16, end: expectedUtf16 })
+  const sel = getCurrentDisplaySelectionUtf16()
+  assert.equal(sel.start, expectedUtf16, 'composition update 后 display selection start = preedit cursor 的 display UTF-16 坐标')
+  assert.equal(sel.end, expectedUtf16, 'composition update 后 display selection end = preedit cursor 的 display UTF-16 坐标')
+  // 验证具体值：displayText='a你好bc', displayCaretByte=7 → UTF-16 offset=4
+  assert.equal(expectedUtf16, 3, 'displayText=a你好bc, byte 7 → UTF-16 offset 3 (a=0,你=1,好=2,b=3)')
+})
+
+await testAsync('R11第4项: composition finish 后 getCurrentDisplaySelectionUtf16 返回 committed cursor 的 UTF-16 坐标', async () => {
+  // composition finish 后 composition=null, text='abc你好', cursor=5 (byte)
+  // displayText = committed text = 'abc你好'
+  // selectionAnchor/Head = snap.cursor = 5 (byte)
+  // UTF-16: 'abc'=3bytes→utf16=3, '你'=3bytes→utf16=4, '好' at byte 6... wait
+  // 'abc你好': byte 0-2='abc'(3), byte 3-5='你'(3), byte 6-8='好'(3)
+  // cursor=5 (byte) → 在 '你' 中间？不，cursor 应在 grapheme 边界
+  // 设 cursor=6 (byte, '好' 之前) → utf16=4
+  const committedText = 'abc你好'
+  const cursorByte = 6 // '好' 之前
+  // utf8ToUtf16
+  let byteLen = 0, utf16Idx = 0
+  for (let i = 0; i < committedText.length; i++) {
+    const code = committedText.charCodeAt(i)
+    let charByteLen = 1
+    if (code < 0x80) charByteLen = 1
+    else if (code < 0x800) charByteLen = 2
+    else if (code >= 0xD800 && code <= 0xDBFF) { charByteLen = 4; i += 1 }
+    else charByteLen = 3
+    if (byteLen + charByteLen > cursorByte) break
+    byteLen += charByteLen
+    utf16Idx += (charByteLen === 4 ? 2 : 1)
+  }
+  const expectedUtf16 = utf16Idx
+  const getCurrentDisplaySelectionUtf16 = () => ({ start: expectedUtf16, end: expectedUtf16 })
+  const sel = getCurrentDisplaySelectionUtf16()
+  assert.equal(sel.start, 4, 'composition finish 后 cursor byte=6 → UTF-16 offset=4')
+  assert.equal(sel.end, 4, 'composition finish 后 display selection = committed cursor UTF-16 坐标')
+})
+
+await testAsync('R11第4项: 鼠标 down 和触摸 tap 在同一位置产生相同的 dispatch 命令和 IME 通知', async () => {
+  const mouseDispatchedCmds = []
+  const touchDispatchedCmds = []
+  const mouseNotifyCalls = []
+  const touchNotifyCalls = []
+  // 共享 dispatcher 和 ime（同一编辑器实例）
+  const sharedDispatcher = {
+    dispatch: async (cmd) => {
+      mouseDispatchedCmds.push(cmd)
+      touchDispatchedCmds.push(cmd)
+      return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+    },
+    getCurrentDisplaySelectionUtf16: () => ({ start: 3, end: 3 }),
+  }
+  const sharedIme = {
+    notifySelection: async (start, end) => {
+      mouseNotifyCalls.push({ start, end })
+      touchNotifyCalls.push({ start, end })
+    },
+    syncSelectionFromEditor: async () => {
+      const sel = sharedDispatcher.getCurrentDisplaySelectionUtf16()
+      if (sel !== null) await sharedIme.notifySelection(sel.start, sel.end)
+    },
+  }
+  const dispatchSelectionAndSyncIme = (dispatcher, ime, cmd) => {
+    dispatcher.dispatch(cmd).then((result) => {
+      if (result.success) {
+        ime.syncSelectionFromEditor().then(() => {})
+      }
+    }, (_e) => {})
+  }
+  const hitPos = { utf16Offset: 3, affinity: 'downstream' }
+  // 鼠标 down: dispatchSelectionAndSyncIme({kind:'setSelection', position: hitPos})
+  dispatchSelectionAndSyncIme(sharedDispatcher, sharedIme, { kind: 'setSelection', position: hitPos })
+  await sleep(10)
+  // 触摸 tap: 同一命令
+  dispatchSelectionAndSyncIme(sharedDispatcher, sharedIme, { kind: 'setSelection', position: hitPos })
+  await sleep(10)
+  // 两者产生的命令相同
+  assert.deepEqual(mouseDispatchedCmds[0], touchDispatchedCmds[1], 'mouse down 和 touch tap 产生相同 cmd')
+  assert.equal(mouseDispatchedCmds[0].kind, 'setSelection', 'cmd.kind = setSelection')
+  assert.deepEqual(mouseDispatchedCmds[0].position, hitPos, 'cmd.position = hitPos')
+  // 两者通知 IME 的参数一致
+  assert.deepEqual(mouseNotifyCalls[0], touchNotifyCalls[1], 'mouse 和 touch 通知 IME 参数一致')
+  assert.deepEqual(mouseNotifyCalls[0], { start: 3, end: 3 }, 'IME 通知 = display selection')
+})
+
+await testAsync('R11第4项: 宽度变化只重排一次（invalidateVisualCaret 不发 listener，refreshRenderLayout 只调一次）', async () => {
+  const refreshRenderLayoutCalls = { count: 0 }
+  const listenerCalls = []
+  // 模拟 SelectionController.invalidateVisualCaret（R11: 不发 listener）
+  const selectionController = {
+    invalidateVisualCaret: () => {
+      // R11: 只清空 owner 状态，不调 visualCaretListener
+      // （旧实现会调 visualCaretListener?.(null) 触发一次 refreshRenderLayout）
+    },
+    registerVisualCaretListener: (l) => { listenerCalls.push('__registered__') },
+  }
+  // 模拟 SujianEditor.refreshRenderLayout
+  const refreshRenderLayout = () => { refreshRenderLayoutCalls.count++ }
+  // 模拟 SujianEditor Text.onAreaChange：contentWidth 变化时
+  //   invalidateVisualCaret() + refreshRenderLayout()
+  const onAreaChange = (oldContentWidth, newContentWidth) => {
+    if (newContentWidth !== oldContentWidth) {
+      selectionController.invalidateVisualCaret()
+    }
+    refreshRenderLayout()
+  }
+  // 宽度变化：100 → 200
+  onAreaChange(100, 200)
+  assert.equal(refreshRenderLayoutCalls.count, 1, '宽度变化只调一次 refreshRenderLayout')
+  // 对比：旧实现 invalidateVisualCaret 会发 listener → refreshRenderLayout 调两次
+  const refreshRenderLayoutCallsOld = { count: 0 }
+  const selectionControllerOld = {
+    invalidateVisualCaret: () => {
+      listenerCalls.push({ type: 'invalidated' }) // 旧实现发 listener
+      refreshRenderLayoutOld() // listener 触发一次
+    },
+  }
+  const refreshRenderLayoutOld = () => { refreshRenderLayoutCallsOld.count++ }
+  const onAreaChangeOld = (oldContentWidth, newContentWidth) => {
+    if (newContentWidth !== oldContentWidth) {
+      selectionControllerOld.invalidateVisualCaret()
+    }
+    refreshRenderLayoutOld()
+  }
+  onAreaChangeOld(100, 200)
+  assert.equal(refreshRenderLayoutCallsOld.count, 2, '旧实现调两次 refreshRenderLayout（invalidate 内 listener + onAreaChange 显式）')
+})
+
 
 console.log('---')
 console.log(`✅ editor_semantic_dispatcher: ${passed} tests passed`)

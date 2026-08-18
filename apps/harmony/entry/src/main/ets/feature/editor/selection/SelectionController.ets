@@ -88,12 +88,14 @@ export class SelectionController {
     this.visualCaretListener?.(position)
   }
 
-  // Issue #629 R10：宽度/字体变化调用 invalidateVisualCaret。
+  // Issue #629 R11 评论5329310563 第3项：宽度/字体变化调用 invalidateVisualCaret。
   // 布局宽度变化不改 Core revision，但 soft-wrap 可能重新发生，旧 affinity 可能不再有效。
+  // 只清空 owner 状态，不再触发 listener——宽度变化由 SujianEditor.onAreaChange 自己发起，
+  // 它在清空 hint 后显式 refreshRenderLayout() 一次即可，避免重复测量/折行两遍。
+  // rememberVisualCaret/publishVisualCaret 的 listener 保留，它们是真正的 visual position 变化。
   invalidateVisualCaret(): void {
     this.visualCaret = null
     this.visualCaretIdentity = null
-    this.visualCaretListener?.(null)
   }
 
   // Issue #629 评论18：点击命中接受完整 VisualCaretPosition（含 affinity）。

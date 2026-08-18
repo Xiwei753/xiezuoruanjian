@@ -73,6 +73,19 @@ export class HarmonyImeConnection {
     await this.notifySelection(utf16Offset, utf16Offset)
   }
 
+  // Issue #629 R11 评论5329310563 第2项：从 dispatcher 读当前 display selection 并通知 IME。
+  // 在 dispatch Promise resolve（命令已应用、snapshot 已更新）后调用，
+  // 避免拿原 hitPos 猜未来状态通知系统。已持有 dispatcher 字段，无循环依赖。
+  async syncSelectionFromEditor(): Promise<void> {
+    if (!this.dispatcher) {
+      return
+    }
+    const sel = this.dispatcher.getCurrentDisplaySelectionUtf16()
+    if (sel !== null) {
+      await this.notifySelection(sel.start, sel.end)
+    }
+  }
+
   private registerListeners(): void {
     this.controller.on('insertText', (text: string): void => { this.onInsertText(text) })
     this.controller.on('deleteText', (direction: inputMethod.DeleteDirection): void => { this.onDeleteText(direction) })

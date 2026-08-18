@@ -146,6 +146,24 @@ export class EditorSemanticDispatcher {
     })
   }
 
+  // Issue #629 R11 评论5329310563 第2项：只读查询当前 display selection（UTF-16 code unit offset）。
+  // 从 coordinator.getSnapshot() 构造 EditorLayoutSnapshot.fromEditorSnapshot(snap)，
+  // 把 selectionAnchor/selectionHead（byte）用 TextOffsetMapper.utf8ToUtf16 转 UTF-16 返回。
+  // composition 活跃时 fromEditorSnapshot 已投影到 displayText 坐标
+  // （selectionAnchor/Head === displayCaretByte），自然得到 preedit display 选区；无第二份 selection 状态。
+  // 鼠标/触摸 selection 命令在 dispatch Promise resolve（命令已应用、snapshot 已更新）后调用本方法，
+  // 再经 HarmonyImeConnection.syncSelectionFromEditor 通知 IME，避免拿原 hitPos 猜未来状态。
+  getCurrentDisplaySelectionUtf16(): { start: number; end: number } | null {
+    const snap = this.coordinator.getSnapshot()
+    if (!snap) {
+      return null
+    }
+    const displaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+    const start = TextOffsetMapper.utf8ToUtf16(displaySnapshot.text, displaySnapshot.selectionAnchor)
+    const end = TextOffsetMapper.utf8ToUtf16(displaySnapshot.text, displaySnapshot.selectionHead)
+    return { start, end }
+  }
+
   // Issue #629 评论8 第3项：close 生命周期入口。
   seal(): void {
     this.sealed = true
@@ -411,16 +429,77 @@ export class EditorSemanticDispatcher {
     return this.coordinator.delete(sel.start, nextByte, EditorTransactionCause.Delete)
   }
 
-  private async trySoftWrapAffinitySwitch(
-    direction: 'left' | 'right',
-  ): Promise<{ handled: boolean; result: ResultEnvelope<EditorEditResult> | null }> {
+  // Issue #629 R11 评论5329310563 第1项：抽出"等待当前 snapshot 对应的 layout state"，
+  // 供 executeCommittedGraphemeLeft/Right 的 extend 分支算目标 affinity 复用，
+  // 避免每个分支各自重复 identity 计算 + waitForLayout。
+  // resolver 或 snapshot 不可用时返回 null（调用方按默认 Downstream 兜底）。
+  private async waitForCurrentLayoutState(): Promise<LineLayoutState | null> {
     const resolver = this.lineResolver
     if (!resolver) {
-      return { handled: false, result: null }
+      return null
     }
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
-      return { handled: false, result: null }
+      return null
+    }
+    const displaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+    const identity = {
+      revision: displaySnapshot.revision,
+      generation: displaySnapshot.generation,
+      compositionGeneration: displaySnapshot.compositionGeneration,
+      displayText: displaySnapshot.text,
+    }
+    return resolver.waitForLayout(identity)
+  }
+
+  // Issue #629 R11 评论5329310563 第1项：水平 grapheme 移动到达 targetByte 后，
+  // 用 positionForHorizontalArrival 算目标 visual position 并 rememberVisualCaret。
+  // layoutState===null（resolver/snap 不可用或 waitForLayout cancel）时默认 Downstream。
+  private rememberVisualCaretAfterHorizontalMove(
+    layoutState: LineLayoutState | null,
+    direction: 'left' | 'right',
+    targetByte: number,
+    displayText: string,
+  ): void {
+    const targetUtf16 = TextOffsetMapper.utf8ToUtf16(displayText, targetByte)
+    if (layoutState === null) {
+      this.selectionController.rememberVisualCaret({ utf16Offset: targetUtf16, affinity: CaretAffinity.Downstream })
+      return
+    }
+    const targetPosition = LineNavigationResolver.positionForHorizontalArrival(layoutState, direction, targetUtf16)
+    this.selectionController.rememberVisualCaret(targetPosition)
+  }
+
+  // Issue #629 R11 评论5329310563 第1项：composition grapheme move 成功后用最新 snapshot 身份
+  // rememberVisualCaret。composition move 只改 preedit cursor 不改 preedit text，
+  // 本次 move 前拿到的行几何（layoutState）仍可用于判断目标 visual side；
+  // Core 成功后再用最新 snapshot 身份 rememberVisualCaret。
+  private rememberVisualCaretForCompositionMove(
+    layoutState: LineLayoutState | null,
+    direction: 'left' | 'right',
+  ): void {
+    const snap = this.coordinator.getSnapshot()
+    if (!snap) {
+      return
+    }
+    const displaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+    this.rememberVisualCaretAfterHorizontalMove(
+      layoutState, direction, displaySnapshot.cursorByteOffset, displaySnapshot.text
+    )
+  }
+
+  // Issue #629 R11 评论5329310563 第1项：返回 layoutState 供 handled=false 时复用，
+  // 避免同一按键再等第二次布局。handled=true（纯 affinity 切换）时 layoutState=null（不需要）。
+  private async trySoftWrapAffinitySwitch(
+    direction: 'left' | 'right',
+  ): Promise<{ handled: boolean; result: ResultEnvelope<EditorEditResult> | null; layoutState: LineLayoutState | null }> {
+    const resolver = this.lineResolver
+    if (!resolver) {
+      return { handled: false, result: null, layoutState: null }
+    }
+    const snap = this.coordinator.getSnapshot()
+    if (!snap) {
+      return { handled: false, result: null, layoutState: null }
     }
     const displaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap)
     const identity = {
@@ -431,7 +510,7 @@ export class EditorSemanticDispatcher {
     }
     const layoutState = await resolver.waitForLayout(identity)
     if (layoutState === null) {
-      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] }, layoutState: null }
     }
     const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(displaySnapshot.text, displaySnapshot.cursorByteOffset)
     const currentPosition: VisualCaretPosition = this.selectionController.getVisualCaret(cursorUtf16)
@@ -444,17 +523,17 @@ export class EditorSemanticDispatcher {
       }
     }
     if (!atSoftWrapEnd) {
-      return { handled: false, result: null }
+      return { handled: false, result: null, layoutState }
     }
     if (direction === 'left' && currentPosition.affinity === CaretAffinity.Downstream) {
       this.selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: CaretAffinity.Upstream })
-      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] }, layoutState: null }
     }
     if (direction === 'right' && currentPosition.affinity === CaretAffinity.Upstream) {
       this.selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream })
-      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] } }
+      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] }, layoutState: null }
     }
-    return { handled: false, result: null }
+    return { handled: false, result: null, layoutState }
   }
 
   // ── Issue #629 R9 评论5326213302 第1+2项：
@@ -463,23 +542,39 @@ export class EditorSemanticDispatcher {
   // 3. preedit 最左/最右继续同方向时 finish 后跨到 committed 正文。
 
   /** 无 composition 时 Left 语义：collapse selection → affinity switch → grapheme move。 */
+  // Issue #629 R11 评论5329310563 第1项：Core setSelection 成功后用 positionForHorizontalArrival
+  // 算目标 visual position 并 rememberVisualCaret，保留"这次移动刚好到达 soft-wrap 边界"的 affinity。
+  // extend=true 同样补：selection head 到达 soft-wrap 边界时 affinity 不能丢。
   private async executeCommittedGraphemeLeft(extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
       return this.noSession()
     }
+    const displaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+    const displayText = displaySnapshot.text
     const cursorByte = snap.cursor
     const anchorByte = snap.selectionAnchor
     if (extend) {
       const headByte = snap.cursor
       if (headByte <= 0) {
-        return this.coordinator.setSelection(anchorByte, 0)
+        const setResult = await this.coordinator.setSelection(anchorByte, 0)
+        if (setResult.success) {
+          // 0 永远不是 SoftWrap 行尾，Downstream。
+          this.selectionController.rememberVisualCaret({ utf16Offset: 0, affinity: CaretAffinity.Downstream })
+        }
+        return setResult
       }
+      // 拿 layoutState 用于算目标 affinity（extend 分支无 trySoftWrap，独立拿一次）。
+      const layoutState = await this.waitForCurrentLayoutState()
       const prevResult = await this.coordinator.previousGraphemeBoundary(headByte)
       if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) {
         return prevResult as ResultEnvelope<EditorEditResult>
       }
-      return this.coordinator.setSelection(anchorByte, prevResult.data)
+      const setResult = await this.coordinator.setSelection(anchorByte, prevResult.data)
+      if (setResult.success) {
+        this.rememberVisualCaretAfterHorizontalMove(layoutState, 'left', prevResult.data, displayText)
+      }
+      return setResult
     }
     if (anchorByte !== cursorByte) {
       const selStart = Math.min(anchorByte, cursorByte)
@@ -489,36 +584,60 @@ export class EditorSemanticDispatcher {
     if (leftAffinitySwitch.handled) {
       return leftAffinitySwitch.result!
     }
+    // 复用 trySoftWrap 已拿到的 layoutState，不再等第二次布局。
+    const layoutState = leftAffinitySwitch.layoutState
     if (cursorByte <= 0) {
-      return this.coordinator.setSelection(0, 0)
+      const setResult = await this.coordinator.setSelection(0, 0)
+      if (setResult.success) {
+        this.selectionController.rememberVisualCaret({ utf16Offset: 0, affinity: CaretAffinity.Downstream })
+      }
+      return setResult
     }
     const prevResult = await this.coordinator.previousGraphemeBoundary(cursorByte)
     if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) {
       return prevResult as ResultEnvelope<EditorEditResult>
     }
-    return this.coordinator.setSelection(prevResult.data, prevResult.data)
+    const setResult = await this.coordinator.setSelection(prevResult.data, prevResult.data)
+    if (setResult.success) {
+      this.rememberVisualCaretAfterHorizontalMove(layoutState, 'left', prevResult.data, displayText)
+    }
+    return setResult
   }
 
   /** 无 composition 时 Right 语义：collapse selection → affinity switch → grapheme move。 */
+  // Issue #629 R11 评论5329310563 第1项：Core setSelection 成功后用 positionForHorizontalArrival
+  // 算目标 visual position 并 rememberVisualCaret。extend=true 同样补。
   private async executeCommittedGraphemeRight(extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
       return this.noSession()
     }
-    const text = snap.text
-    const textByteLen = TextOffsetMapper.utf16ToUtf8(text, text.length)
+    const displaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap)
+    const displayText = displaySnapshot.text
+    const textByteLen = TextOffsetMapper.utf8ToUtf8(displayText, displayText.length)
     const cursorByte = snap.cursor
     const anchorByte = snap.selectionAnchor
     if (extend) {
       const headByte = snap.cursor
       if (headByte >= textByteLen) {
-        return this.coordinator.setSelection(anchorByte, textByteLen)
+        const setResult = await this.coordinator.setSelection(anchorByte, textByteLen)
+        if (setResult.success) {
+          // 文本末尾不是 SoftWrap 行尾（EndOfText），Downstream。
+          const endUtf16 = TextOffsetMapper.utf8ToUtf16(displayText, textByteLen)
+          this.selectionController.rememberVisualCaret({ utf16Offset: endUtf16, affinity: CaretAffinity.Downstream })
+        }
+        return setResult
       }
+      const layoutState = await this.waitForCurrentLayoutState()
       const nextResult = await this.coordinator.nextGraphemeBoundary(headByte)
       if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) {
         return nextResult as ResultEnvelope<EditorEditResult>
       }
-      return this.coordinator.setSelection(anchorByte, nextResult.data)
+      const setResult = await this.coordinator.setSelection(anchorByte, nextResult.data)
+      if (setResult.success) {
+        this.rememberVisualCaretAfterHorizontalMove(layoutState, 'right', nextResult.data, displayText)
+      }
+      return setResult
     }
     if (anchorByte !== cursorByte) {
       const selEnd = Math.max(anchorByte, cursorByte)
@@ -528,25 +647,39 @@ export class EditorSemanticDispatcher {
     if (rightAffinitySwitch.handled) {
       return rightAffinitySwitch.result!
     }
+    const layoutState = rightAffinitySwitch.layoutState
     if (cursorByte >= textByteLen) {
-      return this.coordinator.setSelection(textByteLen, textByteLen)
+      const setResult = await this.coordinator.setSelection(textByteLen, textByteLen)
+      if (setResult.success) {
+        const endUtf16 = TextOffsetMapper.utf8ToUtf16(displayText, textByteLen)
+        this.selectionController.rememberVisualCaret({ utf16Offset: endUtf16, affinity: CaretAffinity.Downstream })
+      }
+      return setResult
     }
     const nextResult = await this.coordinator.nextGraphemeBoundary(cursorByte)
     if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) {
       return nextResult as ResultEnvelope<EditorEditResult>
     }
-    return this.coordinator.setSelection(nextResult.data, nextResult.data)
+    const setResult = await this.coordinator.setSelection(nextResult.data, nextResult.data)
+    if (setResult.success) {
+      this.rememberVisualCaretAfterHorizontalMove(layoutState, 'right', nextResult.data, displayText)
+    }
+    return setResult
   }
 
   private async executeGraphemeLeft(extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
     // Issue #629 R10 评论5327548809 第2项：只有 composition 活跃时才在进入 composition grapheme API 前做一次 affinity switch。
     // 无 composition 时直接交给 committed helper（其内会按当前 identity 检查一次），避免普通 Left 重复检查两次。
+    // Issue #629 R11 评论5329310563 第1项：composition move 成功后用最新 snapshot 身份 rememberVisualCaret，
+    // 复用 trySoftWrap 已拿到的 layoutState（composition move 不改 preedit text，行几何不变）。
     const composing = this.inputAdapter.isComposing()
+    let compositionLayoutState: LineLayoutState | null = null
     if (composing && !extend) {
       const affinitySwitch = await this.trySoftWrapAffinitySwitch('left')
       if (affinitySwitch.handled) {
         return affinitySwitch.result!
       }
+      compositionLayoutState = affinitySwitch.layoutState
     }
 
     if (!composing) {
@@ -582,17 +715,23 @@ export class EditorSemanticDispatcher {
       }
       return this.executeCommittedGraphemeLeft(false)
     }
+    // 纯 composition move 成功：用最新 snapshot 身份 rememberVisualCaret。
+    // composition move 只改 preedit cursor 不改 preedit text，本次 move 前拿到的行几何仍可用于判断目标 visual side。
+    this.rememberVisualCaretForCompositionMove(compositionLayoutState, 'left')
     return moveResult
   }
 
   private async executeGraphemeRight(extend: boolean): Promise<ResultEnvelope<EditorEditResult>> {
     // Issue #629 R10 评论5327548809 第2项：只有 composition 活跃时才在进入 composition grapheme API 前做一次 affinity switch。
+    // Issue #629 R11 评论5329310563 第1项：composition move 成功后用最新 snapshot 身份 rememberVisualCaret。
     const composing = this.inputAdapter.isComposing()
+    let compositionLayoutState: LineLayoutState | null = null
     if (composing && !extend) {
       const affinitySwitch = await this.trySoftWrapAffinitySwitch('right')
       if (affinitySwitch.handled) {
         return affinitySwitch.result!
       }
+      compositionLayoutState = affinitySwitch.layoutState
     }
 
     if (!composing) {
@@ -626,6 +765,8 @@ export class EditorSemanticDispatcher {
       }
       return this.executeCommittedGraphemeRight(false)
     }
+    // 纯 composition move 成功：用最新 snapshot 身份 rememberVisualCaret。
+    this.rememberVisualCaretForCompositionMove(compositionLayoutState, 'right')
     return moveResult
   }
 

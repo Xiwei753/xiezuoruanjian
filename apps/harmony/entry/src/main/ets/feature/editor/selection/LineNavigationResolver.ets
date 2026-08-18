@@ -15,9 +15,10 @@ import {
   LineBreakKind,
   horizontalForOffset,
   offsetForHorizontal,
+  positionForHorizontalArrival,
   resolveVisualLineIndex,
 } from '../render/editor_layout_math'
-import type { CaretStop, VisualCaretPosition } from '../render/editor_layout_math'
+import type { CaretStop, LineRange, VisualCaretPosition } from '../render/editor_layout_math'
 
 // Issue #629 评论15 第3项：布局身份 = 编辑状态身份。
 // revision + generation + compositionGeneration 精确对应 Core 编辑状态；
@@ -182,6 +183,31 @@ export class LineNavigationResolver {
     }
     // 其他位置：Downstream。
     return { utf16Offset, affinity: CaretAffinity.Downstream }
+  }
+
+  /**
+   * Issue #629 R11 评论5329310563 第1项：水平方向 grapheme 移动到达目标 offset 时，
+   * 根据到达方向决定 soft-wrap 边界的 affinity。
+   *
+   * 与 positionForOffsetInLine 互补：positionForOffsetInLine 已知目标行号（行导航场景），
+   * 本方法只看目标 offset 是否落在 SoftWrap 行尾，按移动方向决定 affinity：
+   *   - Right 到达 SoftWrap 行尾 -> Upstream（光标归上一行末尾）
+   *   - Left 到达 SoftWrap 行尾  -> Downstream（光标归下一行行首）
+   *   - 其他位置 -> Downstream
+   *
+   * 内部委托 editor_layout_math.positionForHorizontalArrival 纯函数（可被 Node 测试直接导入）。
+   */
+  static positionForHorizontalArrival(
+    state: LineLayoutState,
+    direction: 'left' | 'right',
+    utf16Offset: number,
+  ): VisualCaretPosition {
+    const lineRanges: LineRange[] = state.lines.map((l: NavigationLine): LineRange => ({
+      start: l.startUtf16,
+      end: l.endUtf16,
+      breakKind: l.breakKind,
+    }))
+    return positionForHorizontalArrival(lineRanges, direction, utf16Offset)
   }
 
   /**

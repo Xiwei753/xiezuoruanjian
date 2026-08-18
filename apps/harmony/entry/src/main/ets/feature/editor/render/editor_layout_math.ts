@@ -279,3 +279,32 @@ export function hitTestPoint(
   }
   return { utf16Offset: offset, affinity }
 }
+
+
+/**
+ * Issue #629 R11 评论5329310563 第1项：水平方向 grapheme 移动到达目标 offset 时，
+ * 根据到达方向决定 soft-wrap 边界的 affinity。
+ *
+ * 规则：
+ *   目标 offset 是 SoftWrap 行尾（line.end === utf16Offset && breakKind === SoftWrap）：
+ *     - Right 到达 -> Upstream（光标归上一行末尾，下次 Right 才进到下一行行首）
+ *     - Left 到达  -> Downstream（光标归下一行行首，下次 Left 才退到上一行行尾）
+ *   其他位置 -> Downstream
+ *
+ * 这是 "这次移动刚好到达 soft-wrap 边界" 的出口，与 positionForOffsetInLine
+ * （行导航场景，已知目标行号）互补。纯函数，可被 Node .mjs 测试直接导入。
+ */
+export function positionForHorizontalArrival(
+  lines: LineRange[],
+  direction: 'left' | 'right',
+  utf16Offset: number,
+): VisualCaretPosition {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.breakKind === LineBreakKind.SoftWrap && line.end === utf16Offset) {
+      const affinity = direction === 'right' ? CaretAffinity.Upstream : CaretAffinity.Downstream
+      return { utf16Offset, affinity }
+    }
+  }
+  return { utf16Offset, affinity: CaretAffinity.Downstream }
+}

@@ -40,7 +40,7 @@ import { SelectionRect, CaretRect, CompositionUnderlineRect, LineLayout } from '
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
-import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
+import { EditorSemanticDispatcher, SemanticEditCommand } from '../input/EditorSemanticDispatcher'
 import { LineNavigationResolver, LineLayoutState, NavigationLine } from '../selection/LineNavigationResolver'
 import { CaretAffinity } from '../render/editor_layout_math'
 import type { VisualCaretPosition, CaretStop } from '../render/editor_layout_math'
@@ -382,13 +382,32 @@ export struct SujianEditor {
   }
 
   // ── 鼠标事件处理 ──
+  // Issue #629 R11 评论5329310563 第2项：鼠标/触摸 selection 命令统一走 dispatch 的 Promise，
+  // 成功后再从 dispatcher 查询最终 display selection 通知 IME。
+  // 不在 Core 完成前通知 IME（避免拿原 hitPos 猜未来状态），也不漏通知（result.success 时必通知）。
+  // dispatcher 失败（result.success=false）不通知 IME。
+  private dispatchSelectionAndSyncIme(cmd: SemanticEditCommand): void {
+    const dispatcher = this.dispatcher
+    if (!dispatcher) {
+      return
+    }
+    dispatcher.dispatch(cmd).then((result) => {
+      if (result.success) {
+        this.harmonyImeConnection?.syncSelectionFromEditor().then(() => {})
+      }
+    }, (_e: Object) => {
+      // 命令失败不阻塞后续；错误已由 Dispatcher/Coordinator 处理
+    })
+  }
+
   // 点击命中、按下拖动选区、抬起结束选择经 dispatcher 派发；滚轮由 Scroll 组件自动消费。
   // Issue #629 评论6 Part A：所有输入经 dispatcher 统一排队，不再直接调 SelectionController。
+  // Issue #629 R11 评论5329310563 第2项：mouse down/drag 走 dispatchSelectionAndSyncIme，
+  // 成功后查询最终 selection 再通知 IME（鼠标 selection 之前完全没通知 IME）。
   private handleMouseEvent(raw: MouseEvent): void {
     if (!this.snapshot || !this.renderResult || !this.dispatcher) {
       return
     }
-    const dispatcher: EditorSemanticDispatcher = this.dispatcher
     const ev: PlatformPointerEvent = this.pointerService.normalizeMouseEvent(raw)
     // 把视口坐标转成内容坐标。
     const contentCoord: [number, number] = this.viewportToContent(ev.x, ev.y)
@@ -401,13 +420,14 @@ export struct SujianEditor {
           this.dragAnchor = hitPos
           this.isDragging = true
           // Issue #629 评论5324447292 第1项：setSelection 走 executeDisplaySelection 统一入口。
-          dispatcher.dispatchFireAndForget({ kind: 'setSelection', position: hitPos })
+          // Issue #629 R11 评论5329310563 第2项：成功后查询最终 selection 再通知 IME。
+          this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: hitPos })
         }
         break
       case 'move':
         if (this.isDragging && this.dragAnchor !== null) {
           // 拖动选区：anchor 不变，head 跟随当前位置。传完整 VisualCaretPosition。
-          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', anchor: this.dragAnchor, head: hitPos })
+          this.dispatchSelectionAndSyncIme({ kind: 'dragSelect', anchor: this.dragAnchor, head: hitPos })
         }
         break
       case 'up':
@@ -429,12 +449,12 @@ export struct SujianEditor {
   // 复用现有 hit test，补真实 drag selection（TouchDown 记 anchor, TouchMove drag, TouchUp 结束）。
   // 笔事件（toolType != 0）由 StylusInputService 识别后按触控选择/书写区交互处理。
   // Issue #629 评论6 Part A+D：所有输入经 dispatcher 统一排队；删除重复 onSelectionTap prop（双 owner）。
-  // TouchUp 只经 dispatcher 发一次 selection（setSelection），完成后通知 IME。
+  // Issue #629 R11 评论5329310563 第2项：TouchUp/TouchMove drag 走 dispatchSelectionAndSyncIme，
+  // 成功后查询最终 selection 再通知 IME，不再 fire-and-forget 后立即用原 hitPos 通知。
   private handleTouchEvent(event: TouchEvent): void {
     if (!this.snapshot || !this.renderResult || !this.dispatcher) {
       return
     }
-    const dispatcher: EditorSemanticDispatcher = this.dispatcher
     const touch = event.touches[0]
     // 把视口坐标转成内容坐标。
     const contentCoord: [number, number] = this.viewportToContent(touch.x, touch.y)
@@ -458,18 +478,14 @@ export struct SujianEditor {
       case TouchType.Move:
         // 拖动选区：anchor 不变，head 跟随当前位置。传完整 VisualCaretPosition。
         if (this.isDragging && this.dragAnchor !== null && this.dragAnchor.utf16Offset !== hitPos.utf16Offset) {
-          dispatcher.dispatchFireAndForget({ kind: 'dragSelect', anchor: this.dragAnchor, head: hitPos })
+          this.dispatchSelectionAndSyncIme({ kind: 'dragSelect', anchor: this.dragAnchor, head: hitPos })
         }
         break
       case TouchType.Up:
         if (this.isDragging) {
           if (this.dragAnchor !== null && this.dragAnchor.utf16Offset === hitPos.utf16Offset) {
-            // 单击：只经 dispatcher 发一次 selection。
-            dispatcher.dispatchFireAndForget({ kind: 'setSelection', position: hitPos })
-            // 通知 IME 当前选区（光标位置）
-            if (this.harmonyImeConnection) {
-              this.harmonyImeConnection.notifySelection(hitPos.utf16Offset, hitPos.utf16Offset).then(() => {})
-            }
+            // 单击：经 dispatcher 发 selection，成功后查询最终 selection 再通知 IME。
+            this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: hitPos })
           }
           this.isDragging = false
           this.dragAnchor = null
