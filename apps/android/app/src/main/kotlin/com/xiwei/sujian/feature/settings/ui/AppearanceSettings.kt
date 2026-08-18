@@ -21,11 +21,15 @@ import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
  * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
  * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
-fun LazyListScope.appearanceSettingsItems(vm: SettingsViewModel) {
+fun LazyListScope.appearanceSettingsItems(
+    vm: SettingsViewModel,
+    closeOuterGroup: Boolean,
+) {
     // ── 主题分组标题 ──
     item(key = "appearance.theme_title", contentType = CONTENT_TYPE_EXPANDED_GROUP_TITLE) {
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = true,
                 lastInCategory = false,
                 firstInGroup = true,
@@ -41,6 +45,7 @@ fun LazyListScope.appearanceSettingsItems(vm: SettingsViewModel) {
         val mode by vm.appearanceModeRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -80,6 +85,7 @@ fun LazyListScope.appearanceSettingsItems(vm: SettingsViewModel) {
         val source by vm.colorSourceRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -136,6 +142,7 @@ fun LazyListScope.appearanceSettingsItems(vm: SettingsViewModel) {
     item(key = "appearance.font_title", contentType = CONTENT_TYPE_EXPANDED_GROUP_TITLE) {
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = true,
@@ -152,6 +159,7 @@ fun LazyListScope.appearanceSettingsItems(vm: SettingsViewModel) {
         var fontSize by rememberSaveable(currentFontSize) { mutableFloatStateOf(currentFontSize) }
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -178,6 +186,7 @@ fun LazyListScope.appearanceSettingsItems(vm: SettingsViewModel) {
         var lineSpacing by rememberSaveable(spacing) { mutableFloatStateOf(spacing) }
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = closeOuterGroup,
                 firstInCategory = false,
                 lastInCategory = true,
                 firstInGroup = false,

@@ -150,7 +150,30 @@ fun SettingsFieldGroupTitle(
 }
 
 /**
- * #630 评论 5324547885 项1: 展开内容行容器 — 三层语义中的"展开内容卡"。
+ * #630 评论 5327560790: 单个展开 item 的 closeOuterGroup 决策 — 纯函数。
+ *
+ * 仅当该分类是组内最后分类 且 该 item 是分类内最后展开 item 时才收口外层组。
+ *
+ * @param closeOuterGroup 该分类是否为所在 [SettingsGroup] 的最后一个分类
+ *        （由 [SettingsRoute] 按 `isLastCategory` 传入）。
+ * @param isLastItemOfCategory 该 item 是否为所在分类的最后一个展开 item。
+ */
+fun expandedItemClosesOuterGroup(
+    closeOuterGroup: Boolean,
+    isLastItemOfCategory: Boolean,
+): Boolean = closeOuterGroup && isLastItemOfCategory
+
+/**
+ * #630 评论 5327560790: 外层 Low 圆角决策 — 纯函数。
+ *
+ * 仅在整个 [SettingsGroup] 最后一行收口画底圆角，其余矩形；
+ * 展开内容永不画 [SettingsGroupTopShape]。
+ */
+fun settingsExpandedOuterShape(closeOuterGroup: Boolean): Shape =
+    if (closeOuterGroup) SettingsGroupBottomShape else RectangleShape
+
+/**
+ * #630 评论 5324547885 项1 / 评论 5327560790: 展开内容行容器 — 三层语义中的"展开内容卡"。
  *
  * 结构：外层 surfaceContainerLow 填满页面宽度（与分类标题同级大卡片），
  * 内部 surfaceContainerHigh 额外水平内缩（8dp），只在字段组的首行/末行圆角。
@@ -159,31 +182,33 @@ fun SettingsFieldGroupTitle(
  * 只有不同真实字段组间（如"主题"→"字体与排版"）保留 8dp 间距，
  * 露出中间的 Low 背景色。
  *
- * 外层 Low surface 的 28dp 圆角只在整个展开类别的首行和末行生效；
- * 中间行的外层是 plain rectangle，视觉上与 [SettingsGroupHeader] 拼成连续大卡片。
+ * #630 评论 5327560790: 外层 Low 的 28dp 圆角不再按"展开分类"收口，而是按整个
+ * [SettingsGroup] 收口 — 只有 [closeOuterGroup] = true 时才画 [SettingsGroupBottomShape]，
+ * 中间行一律 [RectangleShape]，视觉上与 [SettingsGroupHeader] 拼成连续大卡片。
+ * 展开内容永不画 [SettingsGroupTopShape]（整个组顶部圆角由 [SettingsGroupHeader] 负责）。
  * 显式 [shadowElevation] = 0.dp：静态分组不靠阴影分离。
  *
- * @param firstInCategory 该行是否为展开类别的第一个 item；控制外层 Low 圆角。
- * @param lastInCategory 该行是否为展开类别的最后一个 item；控制外层 Low 圆角。
+ * @param closeOuterGroup 该行是否需要为整个 [SettingsGroup] 画外层底圆角；
+ *        只有组内最后一个 category 的最后一个展开 item 才为 true。
  * @param firstInGroup 该行是否为字段组的第一行（通常对应标题行）；控制内层 High 圆角。
  * @param lastInGroup 该行是否为字段组的最后一行；控制内层 High 圆角。
+ * @param firstInCategory 该行是否为展开类别的第一个 item；控制字段组间 Low 间距。
+ * @param lastInCategory 该行是否为展开类别的最后一个 item；控制分类底部 Low 间距。
  */
+@Suppress("LongParameterList")
 @Composable
 fun SettingsExpandedRowContainer(
-    firstInCategory: Boolean,
-    lastInCategory: Boolean,
+    closeOuterGroup: Boolean,
     firstInGroup: Boolean,
     lastInGroup: Boolean,
+    firstInCategory: Boolean,
+    lastInCategory: Boolean,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
-    val outerShape =
-        when {
-            firstInCategory && lastInCategory -> SettingsGroupTopShape
-            firstInCategory -> SettingsGroupTopShape
-            lastInCategory -> SettingsGroupBottomShape
-            else -> RectangleShape
-        }
+    // #630 评论 5327560790: 外层 Low 圆角按整个 SettingsGroup 收口，不再按展开分类收口。
+    // 展开内容永远不画 SettingsGroupTopShape — 整个组顶部圆角由 SettingsGroupHeader 负责。
+    val outerShape = settingsExpandedOuterShape(closeOuterGroup)
 
     // #630 评论 5326175206 项1: firstInGroup 且非 firstInCategory 时，顶部留 8dp Low 背景色
     // 作为不同字段组间的真实组间距；category 最后一行底部也留 8dp Low padding。

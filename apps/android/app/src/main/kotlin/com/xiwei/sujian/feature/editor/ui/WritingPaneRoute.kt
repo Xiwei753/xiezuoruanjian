@@ -253,6 +253,32 @@ fun editorAttachDecision(
     }
 
 /**
+ * #630 评论 5327560790: BeginEdit 门槛 — 纯函数。
+ *
+ * 只有 loading = false 且 settingsReady = true 才允许构造 [EditorTypography] 并 beginEdit，
+ * 不用"默认值恰好存在"冒充已加载完成。
+ */
+internal fun shouldBeginEditForEditorAttach(
+    loading: Boolean,
+    settingsReady: Boolean,
+): Boolean = !loading && settingsReady
+
+/**
+ * #630 评论 5327560790: 从持久化 [EditorSettingsState] 构造首帧 [EditorTypography] — 纯函数。
+ *
+ * 首帧排版参数直接来自持久化权威设置，不再靠默认值或 ON_RESUME 后二次重排。
+ */
+internal fun editorTypographyFromSettings(
+    settings: EditorSettingsState,
+): com.xiwei.sujian.feature.editor.window.EditorTypography =
+    com.xiwei.sujian.feature.editor.window.EditorTypography(
+        fontSizeSp = settings.fontSize,
+        lineSpacingMultiplier = settings.lineSpacingMultiplier,
+        autoIndentEnabled = settings.autoIndentEnabled,
+        autoIndentWidth = settings.autoIndentWidth,
+    )
+
+/**
  * #595 一 / #624 评论17 问题2：编辑器附着 — 用 [editorAttachDecision] 纯函数决策，
  * 覆盖所有 WindowBindingState 分支。
  *
@@ -271,7 +297,7 @@ private fun WritingPaneEditorAttach(
     targetId: String,
     inputs: EditorAttachInputs,
 ) {
-    LaunchedEffect(targetId, inputs.uiState.loading, inputs.sessionState.bindingState) {
+    LaunchedEffect(targetId, inputs.uiState.loading, inputs.uiState.settingsReady, inputs.sessionState.bindingState) {
         if (!currentViewModel.isCurrentChapter(
                 inputs.chapter.projectId,
                 inputs.chapter.volumeId,
@@ -289,17 +315,12 @@ private fun WritingPaneEditorAttach(
                 // 等待 AndroidView factory/attachView() 推进到 Attached，不解除冻结。
             }
             EditorAttachAction.BeginEdit -> {
-                if (!inputs.uiState.loading) {
+                if (shouldBeginEditForEditorAttach(inputs.uiState.loading, inputs.uiState.settingsReady)) {
                     coordinator.updateTargetText(targetId, inputs.uiState.content)
-                    // #630 评论 5326175206 项3: 首次正文 attach 必须显式携带 EditorTypography snapshot，
-                    // 不再靠 WritingPaneTypographySync 的 LaunchedEffect 竞态猜测谁先到。
-                    val typography =
-                        com.xiwei.sujian.feature.editor.window.EditorTypography(
-                            fontSizeSp = inputs.uiState.settings.fontSize,
-                            lineSpacingMultiplier = inputs.uiState.settings.lineSpacingMultiplier,
-                            autoIndentEnabled = inputs.uiState.settings.autoIndentEnabled,
-                            autoIndentWidth = inputs.uiState.settings.autoIndentWidth,
-                        )
+                    // #630 评论 5326175206 项3 / 5327560790: 首次正文 attach 必须显式携带
+                    // EditorTypography snapshot（来自持久化权威设置），不再靠
+                    // WritingPaneTypographySync 的 LaunchedEffect 端态猜测谁先到。
+                    val typography = editorTypographyFromSettings(inputs.uiState.settings)
                     coordinator.beginEdit(
                         targetId,
                         inputs.uiState.content.toByteArray(Charsets.UTF_8).size,

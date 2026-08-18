@@ -17,13 +17,17 @@ import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
  * 评论 #16: 标题用 aiAvailableRow（只收 available），开关用 aiEnabledRow（只收 enabled），
  * 切 enabled 时标题不会重组。
  */
-fun LazyListScope.aiSettingsItems(vm: SettingsViewModel) {
+fun LazyListScope.aiSettingsItems(
+    vm: SettingsViewModel,
+    closeOuterGroup: Boolean,
+) {
     item(key = "ai.enabled", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val available by vm.aiAvailableRow.collectAsStateWithLifecycle()
         if (!available) return@item
         val checked by vm.aiEnabledRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = closeOuterGroup,
                 firstInCategory = true,
                 lastInCategory = true,
                 firstInGroup = true,

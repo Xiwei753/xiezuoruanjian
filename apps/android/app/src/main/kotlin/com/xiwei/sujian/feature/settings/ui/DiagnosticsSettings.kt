@@ -29,13 +29,17 @@ import kotlinx.coroutines.withContext
  * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
  * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
-fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
+fun LazyListScope.diagnosticsSettingsItems(
+    vm: SettingsViewModel,
+    closeOuterGroup: Boolean,
+) {
     // diagnostics.enabled：只 collect diagnosticsEnabledRow。
     // 关闭时同时把 diagnosticsVerbose 置 false，避免遗留 verbose 开关。
     item(key = "diagnostics.enabled", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = true,
                 lastInCategory = false,
                 firstInGroup = true,
@@ -69,6 +73,7 @@ fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
         val verbose by vm.diagnosticsVerboseRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -91,16 +96,20 @@ fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
         }
     }
 
-    diagnosticsActionItems(vm)
+    diagnosticsActionItems(vm, closeOuterGroup)
 }
 
 // ── 诊断动作按钮 item：导出 / 清空 / 复制设备信息 ──
 
-private fun LazyListScope.diagnosticsActionItems(vm: SettingsViewModel) {
+private fun LazyListScope.diagnosticsActionItems(
+    vm: SettingsViewModel,
+    closeOuterGroup: Boolean,
+) {
     item(key = "diagnostics.export", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val context = LocalContext.current
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = true,
@@ -117,6 +126,7 @@ private fun LazyListScope.diagnosticsActionItems(vm: SettingsViewModel) {
         val clearFailedText = stringResource(id = R.string.diagnostics_clear_failed)
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -137,6 +147,7 @@ private fun LazyListScope.diagnosticsActionItems(vm: SettingsViewModel) {
         val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = closeOuterGroup,
                 firstInCategory = false,
                 lastInCategory = true,
                 firstInGroup = false,

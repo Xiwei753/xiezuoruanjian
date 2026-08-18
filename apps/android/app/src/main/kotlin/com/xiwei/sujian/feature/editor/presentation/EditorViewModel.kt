@@ -152,6 +152,9 @@ class EditorViewModel(
         recentEditsRepo: RecentEditsRepository? = null,
         statsRepo: WritingStatsRepository? = null,
     ) {
+        // #630 评论 5327560790: 首次注入 SettingsRepository 后立刻启动一次初始设置读取，
+        // 不等 ON_RESUME 事件 — 保证首帧 typography snapshot 来自持久化权威设置。
+        val firstSettingsRepositoryAttach = _settingsRepository == null
         if (_projectRepository == null) _projectRepository = projectRepo
         if (_settingsRepository == null) _settingsRepository = settingsRepo
         if (syncRepo != null && _syncRepository == null) _syncRepository = syncRepo
@@ -164,6 +167,12 @@ class EditorViewModel(
         }
         if (sessionCoordinator != null && _sessionCoordinator !== sessionCoordinator) {
             _sessionCoordinator = sessionCoordinator
+        }
+        if (firstSettingsRepositoryAttach) {
+            viewModelScope.launch {
+                val snapshot = loadEditorSettingsSnapshot()
+                _uiState.value = _uiState.value.copy(settings = snapshot, settingsReady = true)
+            }
         }
         // #595 三/四：同步前统一 flush 活动正文（ActiveDocumentGate）。
         registerActiveDocumentGateIfNeeded()

@@ -88,6 +88,9 @@ data class EditorUiState(
     val errorMessage: String? = null,
     val editorEnabled: Boolean = true,
     val settings: EditorSettingsState = EditorSettingsState(),
+    // #630 评论 5327560790: 持久化设置已加载完成 — 不用"默认值恰好存在"冒充已加载。
+    // 只有 settingsReady = true 才允许构造 EditorTypography 并 beginEdit。
+    val settingsReady: Boolean = false,
 )
 
 sealed class EditorEvent {

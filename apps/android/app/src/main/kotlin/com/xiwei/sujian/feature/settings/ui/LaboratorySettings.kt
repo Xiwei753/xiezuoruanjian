@@ -14,11 +14,15 @@ import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
  * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
  * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
-fun LazyListScope.laboratorySettingsItems(vm: SettingsViewModel) {
+fun LazyListScope.laboratorySettingsItems(
+    vm: SettingsViewModel,
+    closeOuterGroup: Boolean,
+) {
     item(key = "laboratory.fullscreen", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val checked by vm.immersiveFullscreenRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = closeOuterGroup,
                 firstInCategory = true,
                 lastInCategory = true,
                 firstInGroup = true,

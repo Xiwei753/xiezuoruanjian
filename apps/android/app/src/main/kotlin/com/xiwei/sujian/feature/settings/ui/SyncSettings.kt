@@ -35,12 +35,16 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
  * 每个 item 只 collect 自己需要的 row-level StateFlow，避免整分类重组。
  * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
-fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
+fun LazyListScope.syncSettingsItems(
+    vm: SettingsViewModel,
+    closeOuterGroup: Boolean,
+) {
     // ── 同步说明 ──
     item(key = "sync.description", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val syncEnabledState by vm.syncEnabledRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = true,
                 lastInCategory = false,
                 firstInGroup = true,
@@ -61,6 +65,7 @@ fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
         val row by vm.syncEnabledRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -82,6 +87,7 @@ fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
         val row by vm.syncAutoSyncRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -103,6 +109,7 @@ fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
     item(key = "sync.credentials_title", contentType = CONTENT_TYPE_EXPANDED_GROUP_TITLE) {
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = true,
@@ -120,6 +127,7 @@ fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
         LaunchedEffect(row.remoteUrl) { remoteUrl = row.remoteUrl }
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -146,6 +154,7 @@ fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
         LaunchedEffect(row.branch) { branch = row.branch }
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -172,6 +181,7 @@ fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
         LaunchedEffect(row.token) { token = row.token }
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -195,6 +205,7 @@ fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
     item(key = "sync.interval_title", contentType = CONTENT_TYPE_EXPANDED_GROUP_TITLE) {
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = true,
@@ -211,6 +222,7 @@ fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
         LaunchedEffect(row.intervalSeconds) { syncInterval = row.intervalSeconds.toFloat() }
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -240,6 +252,7 @@ fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
     item(key = "sync.actions_title", contentType = CONTENT_TYPE_EXPANDED_GROUP_TITLE) {
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = true,
@@ -257,6 +270,7 @@ fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
         if (row.enabled) {
             SettingsExpandedItemContent {
                 SettingsExpandedRowContainer(
+                    closeOuterGroup = false,
                     firstInCategory = false,
                     lastInCategory = false,
                     firstInGroup = false,
@@ -281,6 +295,7 @@ fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
         if (row.enabled) {
             SettingsExpandedItemContent {
                 SettingsExpandedRowContainer(
+                    closeOuterGroup = false,
                     firstInCategory = false,
                     lastInCategory = false,
                     firstInGroup = false,
@@ -305,6 +320,7 @@ fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
         if (row.enabled) {
             SettingsExpandedItemContent {
                 SettingsExpandedRowContainer(
+                    closeOuterGroup = false,
                     firstInCategory = false,
                     lastInCategory = false,
                     firstInGroup = false,
@@ -329,6 +345,7 @@ fun LazyListScope.syncSettingsItems(vm: SettingsViewModel) {
         if (structured != null) {
             SettingsExpandedItemContent {
                 SettingsExpandedRowContainer(
+                    closeOuterGroup = closeOuterGroup,
                     firstInCategory = false,
                     lastInCategory = true,
                     firstInGroup = true,

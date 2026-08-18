@@ -284,9 +284,9 @@ class EditorWindowHost(
      * 首行缩进（开关 + 字符宽度）。设置变化后当前正文立即重排，不重建编辑 session。
      * 与 [applyMotionPolicy] 同为窗口层唯一设置写入点。
      *
-     * 最近一次排版设置缓存在窗口层（与 motion policy 存于会话层同源模式）：
-     * 设置先于 View 创建到达时，[createWindowView] 用缓存补齐新 View，
-     * 保证窗口重建后编辑器不回到默认字号/行距/缩进。
+     * 最近一次排版设置缓存在窗口层（与 motion policy 存于会话层同源模式）；
+     * 首次/换绑由 [performViewBind] 使用 [PendingViewBind.typography] 显式写入，
+     * 运行时改字号/行距由本方法更新当前活动 View 并刷新 lastTypography。
      */
     fun applyEditorTypography(
         fontSizeSp: Float,
@@ -679,8 +679,9 @@ class EditorWindowHost(
             // #630 C块：createWindowView 不再 applyPolicyToView — 真实 target 还没完成 bind，
             // 真正的策略只在 performViewBind() 根据 pending.targetId 应用一次。
             // 后续全局设置变化只走 applyMotionPolicy() 更新活动 View。
-            // #624 评论3/4：设置先于 View 创建到达时用缓存补齐字号/行距/首行缩进。
-            lastTypography?.let { applyTypographyToView(view, it) }
+            // #630 评论 5327560790: 删除 lastTypography 预写 — 首次 bind 已有显式
+            // pending.typography（performViewBind 先写排版参数再 attach snapshot），
+            // createWindowView 不应再抢先给空 View 套一次缓存排版。
             sharedEditorView = view
         }
     }

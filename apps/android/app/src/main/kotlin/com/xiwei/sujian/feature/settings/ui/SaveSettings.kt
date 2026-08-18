@@ -21,12 +21,16 @@ import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
  * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
  * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
-fun LazyListScope.saveSettingsItems(vm: SettingsViewModel) {
+fun LazyListScope.saveSettingsItems(
+    vm: SettingsViewModel,
+    closeOuterGroup: Boolean,
+) {
     // 自动保存开关
     item(key = "save.auto_save", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val checked by vm.autoSaveRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = true,
                 lastInCategory = false,
                 firstInGroup = true,
@@ -51,6 +55,7 @@ fun LazyListScope.saveSettingsItems(vm: SettingsViewModel) {
         }
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = closeOuterGroup,
                 firstInCategory = false,
                 lastInCategory = true,
                 firstInGroup = false,

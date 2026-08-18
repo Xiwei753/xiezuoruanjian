@@ -119,6 +119,7 @@ class SettingsSurfacesStructureTest {
     fun settingsExpandedRowContainer_rendersContent() {
         composeRule.setContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = true,
                 lastInCategory = true,
                 firstInGroup = true,
@@ -136,6 +137,7 @@ class SettingsSurfacesStructureTest {
         composeRule.setContent {
             Box(modifier = Modifier.width(300.dp).testTag("parent_box")) {
                 SettingsExpandedRowContainer(
+                    closeOuterGroup = false,
                     firstInCategory = true,
                     lastInCategory = true,
                     firstInGroup = true,

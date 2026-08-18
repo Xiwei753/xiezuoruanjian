@@ -21,12 +21,16 @@ import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
  * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
  * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
-fun LazyListScope.editorSettingsItems(vm: SettingsViewModel) {
+fun LazyListScope.editorSettingsItems(
+    vm: SettingsViewModel,
+    closeOuterGroup: Boolean,
+) {
     // 自动缩进开关
     item(key = "editor.auto_indent", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val checked by vm.autoIndentRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = true,
                 lastInCategory = false,
                 firstInGroup = true,
@@ -49,6 +53,7 @@ fun LazyListScope.editorSettingsItems(vm: SettingsViewModel) {
         var autoIndentWidth by rememberSaveable(width) { mutableFloatStateOf(width) }
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -74,6 +79,7 @@ fun LazyListScope.editorSettingsItems(vm: SettingsViewModel) {
     item(key = "editor.behavior_title", contentType = CONTENT_TYPE_EXPANDED_GROUP_TITLE) {
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = true,
@@ -89,6 +95,7 @@ fun LazyListScope.editorSettingsItems(vm: SettingsViewModel) {
         val checked by vm.typingAnimationRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -115,6 +122,7 @@ fun LazyListScope.editorSettingsItems(vm: SettingsViewModel) {
         }
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -146,6 +154,7 @@ fun LazyListScope.editorSettingsItems(vm: SettingsViewModel) {
         val checked by vm.smoothCursorRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = false,
                 firstInCategory = false,
                 lastInCategory = false,
                 firstInGroup = false,
@@ -171,6 +180,7 @@ fun LazyListScope.editorSettingsItems(vm: SettingsViewModel) {
         }
         SettingsExpandedItemContent {
             SettingsExpandedRowContainer(
+                closeOuterGroup = closeOuterGroup,
                 firstInCategory = false,
                 lastInCategory = true,
                 firstInGroup = false,

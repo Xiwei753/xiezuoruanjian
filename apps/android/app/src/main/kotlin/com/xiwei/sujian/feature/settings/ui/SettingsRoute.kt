@@ -224,14 +224,14 @@ private fun SettingsLazyColumn(
                     // 注意：collectAsStateWithLifecycle() 必须在 item 块内调用，
                     // 因为 LazyListScope 扩展函数不是 @Composable 上下文。
                     when (category.section) {
-                        SettingsSection.Appearance -> appearanceSettingsItems(vm)
-                        SettingsSection.Editor -> editorSettingsItems(vm)
-                        SettingsSection.Save -> saveSettingsItems(vm)
-                        SettingsSection.Sync -> syncSettingsItems(vm)
-                        SettingsSection.Ai -> aiSettingsItems(vm)
-                        SettingsSection.Diagnostics -> diagnosticsSettingsItems(vm)
-                        SettingsSection.Laboratory -> laboratorySettingsItems(vm)
-                        SettingsSection.About -> aboutSettingsItems(vm)
+                        SettingsSection.Appearance -> appearanceSettingsItems(vm, isLastCategory)
+                        SettingsSection.Editor -> editorSettingsItems(vm, isLastCategory)
+                        SettingsSection.Save -> saveSettingsItems(vm, isLastCategory)
+                        SettingsSection.Sync -> syncSettingsItems(vm, isLastCategory)
+                        SettingsSection.Ai -> aiSettingsItems(vm, isLastCategory)
+                        SettingsSection.Diagnostics -> diagnosticsSettingsItems(vm, isLastCategory)
+                        SettingsSection.Laboratory -> laboratorySettingsItems(vm, isLastCategory)
+                        SettingsSection.About -> aboutSettingsItems(vm, isLastCategory)
                     }
                 }
             }

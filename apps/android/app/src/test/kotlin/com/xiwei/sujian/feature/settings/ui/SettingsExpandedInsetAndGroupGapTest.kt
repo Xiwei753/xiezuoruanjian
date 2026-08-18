@@ -53,6 +53,7 @@ class SettingsExpandedInsetAndGroupGapTest {
         composeRule.setContent {
             Box(modifier = Modifier.testTag("root")) {
                 SettingsExpandedRowContainer(
+                    closeOuterGroup = false,
                     firstInCategory = false,
                     lastInCategory = false,
                     firstInGroup = true,
@@ -71,6 +72,7 @@ class SettingsExpandedInsetAndGroupGapTest {
         composeRule.setContent {
             Box(modifier = Modifier.testTag("root")) {
                 SettingsExpandedRowContainer(
+                    closeOuterGroup = false,
                     firstInCategory = false,
                     lastInCategory = true,
                     firstInGroup = false,
@@ -89,6 +91,7 @@ class SettingsExpandedInsetAndGroupGapTest {
         composeRule.setContent {
             Box(modifier = Modifier.testTag("root")) {
                 SettingsExpandedRowContainer(
+                    closeOuterGroup = false,
                     firstInCategory = true,
                     lastInCategory = false,
                     firstInGroup = true,
