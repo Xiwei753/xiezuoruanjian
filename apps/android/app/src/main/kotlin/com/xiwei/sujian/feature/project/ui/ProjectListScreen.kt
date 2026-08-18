@@ -47,6 +47,23 @@ import com.xiwei.sujian.feature.project.data.model.ProjectSummary
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
 import androidx.compose.foundation.lazy.grid.items as gridItems
 
+// region LazyColumn key functions — single source of truth for narrow-screen list keys.
+// Extracted as internal top-level so same-package JVM tests can call the exact production code.
+
+/** Header key for the recent edits section in the narrow-screen LazyColumn. */
+internal const val RECENT_EDITS_HEADER_KEY: String = "header:recent_edits"
+
+/** Header key for the all projects section in the narrow-screen LazyColumn. */
+internal const val ALL_PROJECTS_HEADER_KEY: String = "header:all_projects"
+
+/** Item key for a recent-edit card. Namespaced with recent: to avoid collision with project keys. */
+internal fun recentEditItemKey(edit: RecentEdit): String = "recent:${edit.projectId}"
+
+/** Item key for a project card in the narrow-screen list. Namespaced with project: to avoid collision with recent-edit keys. */
+internal fun projectItemKey(summary: ProjectSummary): String = "project:${summary.id}"
+
+// endregion
+
 /**
  * #625 项7：作品卡片字数格式化 — 纯函数，接收 i18n 格式串，便于单测。
  *
@@ -177,7 +194,7 @@ internal fun ProjectListContent(
                 if (appState.recentEdits.isNotEmpty()) {
                     // #630 评论5323353678：同一 LazyColumn 跨区块 key 必须命名空间唯一，
                     // 不能只用 projectId —— 同一作品会同时出现在 recentEdits 与 projectSummaries。
-                    item(key = "header:recent_edits") {
+                    item(key = RECENT_EDITS_HEADER_KEY) {
                         Text(
                             stringResource(id = R.string.recent_edits),
                             style = MaterialTheme.typography.titleSmall,
@@ -186,7 +203,7 @@ internal fun ProjectListContent(
                     }
                     items(
                         items = appState.recentEdits,
-                        key = { edit -> "recent:${edit.projectId}" },
+                        key = { edit -> recentEditItemKey(edit) },
                     ) { edit ->
                         // #625 项6：recentEdits 标题也来自 ProjectSummary 单数据源。
                         val summary = appState.projectSummaries.find { it.id == edit.projectId }
@@ -206,7 +223,7 @@ internal fun ProjectListContent(
                             }
                         }
                     }
-                    item(key = "header:all_projects") {
+                    item(key = ALL_PROJECTS_HEADER_KEY) {
                         Spacer(modifier = Modifier.height(dims.space16))
                         Text(
                             stringResource(id = R.string.all_projects),
@@ -215,7 +232,7 @@ internal fun ProjectListContent(
                         )
                     }
                 }
-                items(appState.projectSummaries, key = { summary -> "project:${summary.id}" }) { summary ->
+                items(appState.projectSummaries, key = { summary -> projectItemKey(summary) }) { summary ->
                     ProjectCard(
                         summary = summary,
                         onSelect = { onSelectProject(summary.id, summary.title) },
