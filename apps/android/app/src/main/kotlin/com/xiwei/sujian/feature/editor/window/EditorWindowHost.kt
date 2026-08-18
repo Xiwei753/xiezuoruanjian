@@ -272,14 +272,6 @@ class EditorWindowHost(
     }
 
     /**
-     * #630 C块：窗口绑定成功后唯一的"唤起活动 View 输入"入口。
-     * 只有 completeWindowAttach(...) == true 后调用，内部委托 [SujianEditorView.activateInput]。
-     */
-    private fun activateBoundView(view: SujianEditorView) {
-        view.post { view.activateInput() }
-    }
-
-    /**
      * #595 三：动画策略 StateFlow — 只读可观察的单一事实源（不可变）。
      * UI 生命周期感知地收集该值，[applyMotionPolicy] 原子更新全部字段。
      */
@@ -411,10 +403,10 @@ class EditorWindowHost(
                 sessionCoordinator.completeWindowAttach(windowId, targetId, bindInfo.sessionId)
             ) {
                 // #624 评论17 问题2：只有 completeWindowAttach==true（binding 仍是本次
-                // Attaching）才通知 EDITING + 唤起输入。旧 View 晚到直接丢弃。
-                // #630 C块：用唯一 activateBoundView 入口替代 requestFocus + showSoftInput。
+                // Attaching）才通知 EDITING。旧 View 晚到直接丢弃。
+                // #630 C块：completeWindowAttach 只表达 session/view 绑定完成，
+                // 不自动激活输入。activateInput 只从明确用户手势（如 handleTap）进入。
                 target.onEditingStateChanged?.invoke(EditingState.EDITING)
-                activateBoundView(view)
             } else {
                 // 绑定失败或 binding 已不属于本次 attach：回到 Detached/Idle，
                 // 不能留下没有 View 绑定的 Attached 状态。
@@ -718,11 +710,11 @@ class EditorWindowHost(
                 if (performViewBind(view, pending, target) &&
                     sessionCoordinator.completeWindowAttach(windowId, targetId, pending.sessionId)
                 ) {
-                    // #624 评论17 问题2：只有 completeWindowAttach==true 才通知 EDITING +
-                    // 唤起输入。旧 View 晚到直接丢弃，不得表现成绑定成功。
-                    // #630 C块：用唯一 activateBoundView 入口替代 requestFocus + showSoftInput。
+                    // #624 评论17 问题2：只有 completeWindowAttach==true 才通知 EDITING。
+                    // 旧 View 晚到直接丢弃，不得表现成绑定成功。
+                    // #630 C块：completeWindowAttach 只表达 session/view 绑定完成，
+                    // 不自动激活输入。activateInput 只从明确用户手势（如 handleTap）进入。
                     target.onEditingStateChanged?.invoke(EditingState.EDITING)
-                    activateBoundView(view)
                 } else {
                     // 绑定失败或 binding 已不属于本次 attach：回到 Detached/Idle，
                     // 不留下没有 View 绑定的 Attached 状态。

@@ -640,7 +640,8 @@ class SujianEditorView
             val offset = pipeline.getLayoutOffsetForHorizontal(line, x)
             val byteOffset = pipeline.utf16ToUtf8(offset)
             setSelectionTyped(byteOffset, byteOffset)
-            // #630 C块：明确用户手势 — 走唯一 activateInput 入口，不再走另一套 IME API。
+            // #630 C块：明确用户手势 — 更新 selection 后走唯一 activateInput 入口，
+            // 不从 attach/restore 隐式激活，也不破坏用户点击后输入。
             activateInput()
         }
 
@@ -970,9 +971,11 @@ class SujianEditorView
             applyProfileToPipeline(profile)
             pipeline.attachSnapshot(text, revision, cursorUtf8, selStartUtf8, selEndUtf8)
             // #630 C块 / 评论 5306659312 问题 C：attachSession 只装 bridge/profile/snapshot —
-            // 不再 requestFocus + restartInput。唤起 IME 由 EditorWindowHost 在
-            // completeWindowAttach==true 后调 activateInput() 统一处理；session 换绑时
-            // bindSessionInternal 已设 inputRestartPending，activateInput 据此按需 restartInput。
+            // 不 requestFocus、不 restartInput、不 show IME。首次打开章节只完成
+            // load → session → attach → restore/layout → 稳定正文，不自动弹键盘。
+            // 唤起 IME 只从明确用户手势（如 handleTap → activateInput）进入。
+            // session 换绑时 bindSessionInternal 已设 inputRestartPending，
+            // activateInput 据此按需 restartInput。
             return true
         }
 

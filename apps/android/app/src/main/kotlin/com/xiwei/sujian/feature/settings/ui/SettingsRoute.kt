@@ -1,6 +1,8 @@
 package com.xiwei.sujian.feature.settings.ui
 
 import android.annotation.SuppressLint
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -14,10 +16,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
@@ -122,7 +126,26 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
             SettingsExpansionState()
         }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    // #630 评论5324547885项3：Settings 自身绘制层动画 — 120~140ms alpha + translationY。
+    // 与 SujianTopLevelSwitchMotion 同路线：只动画 graphicsLayer，不改布局尺寸。
+    // 旧页（Works）由 noPageTransitionMetadata 直接退出，无双页 crossfade。
+    val entryAlpha = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        entryAlpha.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = 130),
+        )
+    }
+
+    Box(
+        modifier =
+            modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    alpha = entryAlpha.value
+                    translationY = (1f - entryAlpha.value) * 8.dp.toPx()
+                },
+    ) {
         SettingsLazyColumn(
             vm = vm,
             expansionState = expansionState,
@@ -156,10 +179,10 @@ private fun SettingsLazyColumn(
         contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
     ) {
         // 设置页顶部紧凑全局搜索入口
-        item(key = "settings_search_entry") {
+        item(key = "settings_search_entry", contentType = CONTENT_TYPE_SEARCH) {
             SettingsSearchEntry(onClick = {})
         }
-        item(key = "settings_search_entry_bottom_spacer") {
+        item(key = "settings_search_entry_bottom_spacer", contentType = CONTENT_TYPE_SPACER) {
             Spacer(Modifier.height(dims.space16))
         }
         var firstGroupShown = false
@@ -167,18 +190,18 @@ private fun SettingsLazyColumn(
             val categories = settingsCategories.filter { it.group == group }
             if (categories.isEmpty()) return@forEach
             if (firstGroupShown) {
-                item(key = "settings_group_spacer_${group.name}") {
+                item(key = "settings_group_spacer_${group.name}", contentType = CONTENT_TYPE_SPACER) {
                     Spacer(Modifier.height(dims.space16))
                 }
             }
             firstGroupShown = true
-            item(key = "settings_group_${group.name}") {
+            item(key = "settings_group_${group.name}", contentType = CONTENT_TYPE_GROUP_HEADER) {
                 SettingsGroupHeader(title = stringResource(id = group.titleResId))
             }
             categories.forEachIndexed { index, category ->
                 val isLastCategory = index == categories.lastIndex
                 val isExpanded = expansionState.isExpanded(category.section)
-                item(key = "settings_category_${category.section.name}") {
+                item(key = "settings_category_${category.section.name}", contentType = CONTENT_TYPE_CATEGORY_HEADER) {
                     SettingsGroupItemContainer(isLast = isLastCategory && !isExpanded) {
                         SettingsExpandableSection(
                             title = stringResource(id = category.titleResId),

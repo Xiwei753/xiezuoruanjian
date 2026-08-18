@@ -23,26 +23,24 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * #630 评论13/评论15/评论17: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
- * 使用 [SettingsFieldRowContainer] 的 isFirst/isLast 保持 M3 高色阶卡片视觉。
+ * #630 评论13/评论15/评论17/评论5324547885项2: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
+ * 使用 [SettingsExpandedRowContainer] 替代旧的 [SettingsGroupItemContainer] +
+ * [SettingsFieldRowContainer] 嵌套；展开内容在外层 Low 内缩 High 表面里连续拼接。
  * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
- *
- * 评论 #17 收口：`diagnostics.enabled` 与 `diagnostics.verbose` 拆为两个独立 item，
- * 不再共享 helper 同时 collect `diagnosticsEnabledRow + diagnosticsVerboseRow`，
- * 避免 `diagnosticsVerbose` 变化导致 `diagnostics.enabled` 行重组。
- *
- * 结构拆分（detekt LongMethod 阈值 80）：
- * - [diagnosticsActionItems]：导出 / 清空 / 复制设备信息三个独立 item
- * - [CopyDeviceInfoButton]：复制设备信息按钮（含 Clipboard 操作）
- * - [ClearLogsButton]、[ExportDiagnosticsButton]：已有独立 Composable
+ * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
 fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
     // diagnostics.enabled：只 collect diagnosticsEnabledRow。
     // 关闭时同时把 diagnosticsVerbose 置 false，避免遗留 verbose 开关。
-    item(key = "diagnostics.enabled") {
+    item(key = "diagnostics.enabled", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
-        SettingsGroupItemContainer(isLast = false, isFirst = true) {
-            SettingsFieldRowContainer(isFirst = true, isLast = false) {
+        SettingsExpandedItemContent {
+            SettingsExpandedRowContainer(
+                firstInCategory = true,
+                lastInCategory = false,
+                firstInGroup = true,
+                lastInGroup = false,
+            ) {
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_diagnostics_enabled),
                     checked = enabled,
@@ -66,11 +64,16 @@ fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
 
     // diagnostics.verbose：collect diagnosticsVerboseRow（决定 checked）+ diagnosticsEnabledRow（决定 enabled）。
     // 不订阅整分类 state，enabled 变化只更新本行可用性，不重组 diagnostics.enabled 行。
-    item(key = "diagnostics.verbose") {
+    item(key = "diagnostics.verbose", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
         val verbose by vm.diagnosticsVerboseRow.collectAsStateWithLifecycle()
-        SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+        SettingsExpandedItemContent {
+            SettingsExpandedRowContainer(
+                firstInCategory = false,
+                lastInCategory = false,
+                firstInGroup = false,
+                lastInGroup = true,
+            ) {
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_diagnostics_verbose),
                     checked = verbose,
@@ -94,21 +97,31 @@ fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
 // ── 诊断动作按钮 item：导出 / 清空 / 复制设备信息 ──
 
 private fun LazyListScope.diagnosticsActionItems(vm: SettingsViewModel) {
-    item(key = "diagnostics.export") {
+    item(key = "diagnostics.export", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val context = LocalContext.current
-        SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+        SettingsExpandedItemContent {
+            SettingsExpandedRowContainer(
+                firstInCategory = false,
+                lastInCategory = false,
+                firstInGroup = true,
+                lastInGroup = false,
+            ) {
                 ExportDiagnosticsButton(context = context, modifier = Modifier.fillMaxWidth())
             }
         }
     }
 
-    item(key = "diagnostics.clear") {
+    item(key = "diagnostics.clear", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val context = LocalContext.current
         val clearedText = stringResource(id = R.string.diagnostics_cleared)
         val clearFailedText = stringResource(id = R.string.diagnostics_clear_failed)
-        SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+        SettingsExpandedItemContent {
+            SettingsExpandedRowContainer(
+                firstInCategory = false,
+                lastInCategory = false,
+                firstInGroup = false,
+                lastInGroup = false,
+            ) {
                 ClearLogsButton(
                     context = context,
                     clearedText = clearedText,
@@ -119,11 +132,16 @@ private fun LazyListScope.diagnosticsActionItems(vm: SettingsViewModel) {
         }
     }
 
-    item(key = "diagnostics.copy_device_info") {
+    item(key = "diagnostics.copy_device_info", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val context = LocalContext.current
         val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
-        SettingsGroupItemContainer(isLast = true) {
-            SettingsFieldRowContainer(isFirst = false, isLast = true) {
+        SettingsExpandedItemContent {
+            SettingsExpandedRowContainer(
+                firstInCategory = false,
+                lastInCategory = true,
+                firstInGroup = false,
+                lastInGroup = true,
+            ) {
                 CopyDeviceInfoButton(
                     context = context,
                     copiedText = deviceInfoCopiedText,

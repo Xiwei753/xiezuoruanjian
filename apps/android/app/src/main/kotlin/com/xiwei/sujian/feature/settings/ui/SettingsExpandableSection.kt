@@ -6,6 +6,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.core.designsystem.component.SujianListItem
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 
@@ -17,6 +18,9 @@ import com.xiwei.sujian.core.designsystem.icon.SujianIcons
  *
  * #630 评论 5312333045 项3: 去掉 AnimatedVisibility(content) —
  * 展开内容已由父 LazyColumn 按 item 插入，不再把整个分类当成一个动画大块。
+ *
+ * #630 评论 5324547885 项1: 显式 shadowElevation = 0.dp —
+ * 静态设置分组不靠阴影分离，只靠 tonal surface。
  */
 @Composable
 fun SettingsExpandableSection(
@@ -30,6 +34,7 @@ fun SettingsExpandableSection(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = MaterialTheme.shapes.large,
+        shadowElevation = 0.dp,
     ) {
         SujianListItem(
             headline = title,

@@ -15,16 +15,23 @@ import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 
 /**
- * #630 评论13/评论15: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
- * 使用 [SettingsFieldRowContainer] 的 isFirst/isLast 保持 M3 高色阶卡片视觉。
+ * #630 评论13/评论15/评论5324547885项2: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
+ * 使用 [SettingsExpandedRowContainer] 替代旧的 [SettingsGroupItemContainer] +
+ * [SettingsFieldRowContainer] 嵌套；展开内容在外层 Low 内缩 High 表面里连续拼接。
  * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
+ * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
 fun LazyListScope.editorSettingsItems(vm: SettingsViewModel) {
     // 自动缩进开关
-    item(key = "editor.auto_indent") {
+    item(key = "editor.auto_indent", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val checked by vm.autoIndentRow.collectAsStateWithLifecycle()
-        SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldRowContainer(isFirst = true, isLast = false) {
+        SettingsExpandedItemContent {
+            SettingsExpandedRowContainer(
+                firstInCategory = true,
+                lastInCategory = false,
+                firstInGroup = true,
+                lastInGroup = false,
+            ) {
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_auto_indent),
                     checked = checked,
@@ -37,11 +44,16 @@ fun LazyListScope.editorSettingsItems(vm: SettingsViewModel) {
     }
 
     // 自动缩进宽度
-    item(key = "editor.auto_indent_width") {
+    item(key = "editor.auto_indent_width", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val width by vm.autoIndentWidthRow.collectAsStateWithLifecycle()
         var autoIndentWidth by rememberSaveable(width) { mutableFloatStateOf(width) }
-        SettingsGroupItemContainer(isLast = true) {
-            SettingsFieldRowContainer(isFirst = false, isLast = true) {
+        SettingsExpandedItemContent {
+            SettingsExpandedRowContainer(
+                firstInCategory = false,
+                lastInCategory = false,
+                firstInGroup = false,
+                lastInGroup = true,
+            ) {
                 SujianSlider(
                     title = stringResource(id = R.string.pref_auto_indent_width),
                     value = autoIndentWidth,
@@ -59,19 +71,29 @@ fun LazyListScope.editorSettingsItems(vm: SettingsViewModel) {
     }
 
     // ── 编辑器行为分组标题 ──
-    item(key = "editor.behavior_title") {
-        SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldRowContainer(isFirst = true, isLast = false) {
+    item(key = "editor.behavior_title", contentType = CONTENT_TYPE_EXPANDED_GROUP_TITLE) {
+        SettingsExpandedItemContent {
+            SettingsExpandedRowContainer(
+                firstInCategory = false,
+                lastInCategory = false,
+                firstInGroup = true,
+                lastInGroup = false,
+            ) {
                 SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_editor_behavior))
             }
         }
     }
 
     // 打字动画开关
-    item(key = "editor.typing_animation") {
+    item(key = "editor.typing_animation", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val checked by vm.typingAnimationRow.collectAsStateWithLifecycle()
-        SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+        SettingsExpandedItemContent {
+            SettingsExpandedRowContainer(
+                firstInCategory = false,
+                lastInCategory = false,
+                firstInGroup = false,
+                lastInGroup = false,
+            ) {
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_editor_typing_animation),
                     checked = checked,
@@ -85,14 +107,19 @@ fun LazyListScope.editorSettingsItems(vm: SettingsViewModel) {
     }
 
     // 打字动画时长
-    item(key = "editor.typing_duration") {
+    item(key = "editor.typing_duration", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val enabled by vm.typingAnimationRow.collectAsStateWithLifecycle()
         val durationMs by vm.typingAnimationDurationRow.collectAsStateWithLifecycle()
         var typingDuration by rememberSaveable(durationMs.toFloat()) {
             mutableFloatStateOf(durationMs.toFloat())
         }
-        SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+        SettingsExpandedItemContent {
+            SettingsExpandedRowContainer(
+                firstInCategory = false,
+                lastInCategory = false,
+                firstInGroup = false,
+                lastInGroup = false,
+            ) {
                 SujianSlider(
                     title = stringResource(id = R.string.pref_editor_typing_animation_duration),
                     value = typingDuration,
@@ -115,10 +142,15 @@ fun LazyListScope.editorSettingsItems(vm: SettingsViewModel) {
     }
 
     // 光标平滑开关
-    item(key = "editor.smooth_cursor") {
+    item(key = "editor.smooth_cursor", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val checked by vm.smoothCursorRow.collectAsStateWithLifecycle()
-        SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+        SettingsExpandedItemContent {
+            SettingsExpandedRowContainer(
+                firstInCategory = false,
+                lastInCategory = false,
+                firstInGroup = false,
+                lastInGroup = false,
+            ) {
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_editor_smooth_cursor),
                     checked = checked,
@@ -131,14 +163,19 @@ fun LazyListScope.editorSettingsItems(vm: SettingsViewModel) {
     }
 
     // 光标平滑时长
-    item(key = "editor.cursor_duration") {
+    item(key = "editor.cursor_duration", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val enabled by vm.smoothCursorRow.collectAsStateWithLifecycle()
         val durationMs by vm.smoothCursorDurationRow.collectAsStateWithLifecycle()
         var cursorDuration by rememberSaveable(durationMs.toFloat()) {
             mutableFloatStateOf(durationMs.toFloat())
         }
-        SettingsGroupItemContainer(isLast = true) {
-            SettingsFieldRowContainer(isFirst = false, isLast = true) {
+        SettingsExpandedItemContent {
+            SettingsExpandedRowContainer(
+                firstInCategory = false,
+                lastInCategory = true,
+                firstInGroup = false,
+                lastInGroup = true,
+            ) {
                 SujianSlider(
                     title = stringResource(id = R.string.pref_editor_smooth_cursor_duration),
                     value = cursorDuration,

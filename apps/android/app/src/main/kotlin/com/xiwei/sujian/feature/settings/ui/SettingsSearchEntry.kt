@@ -39,6 +39,7 @@ internal fun SettingsSearchEntry(
         modifier = modifier.fillMaxWidth().testTag("settings_search_entry"),
         shape = MaterialTheme.shapes.extraLarge,
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        shadowElevation = 0.dp,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = dims.space16, vertical = dims.space8),

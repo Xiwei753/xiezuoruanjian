@@ -15,16 +15,23 @@ import com.xiwei.sujian.core.designsystem.component.SujianSlider
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 
 /**
- * #630 评论13/评论15: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
- * 使用 [SettingsFieldRowContainer] 的 isFirst/isLast 保持 M3 高色阶卡片视觉。
+ * #630 评论13/评论15/评论5324547885项2: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
+ * 使用 [SettingsExpandedRowContainer] 替代旧的 [SettingsGroupItemContainer] +
+ * [SettingsFieldRowContainer] 嵌套；展开内容在外层 Low 内缩 High 表面里连续拼接。
  * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
+ * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
 fun LazyListScope.saveSettingsItems(vm: SettingsViewModel) {
     // 自动保存开关
-    item(key = "save.auto_save") {
+    item(key = "save.auto_save", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val checked by vm.autoSaveRow.collectAsStateWithLifecycle()
-        SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldRowContainer(isFirst = true, isLast = false) {
+        SettingsExpandedItemContent {
+            SettingsExpandedRowContainer(
+                firstInCategory = true,
+                lastInCategory = false,
+                firstInGroup = true,
+                lastInGroup = false,
+            ) {
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_auto_save),
                     checked = checked,
@@ -37,13 +44,18 @@ fun LazyListScope.saveSettingsItems(vm: SettingsViewModel) {
     }
 
     // 自动保存延迟
-    item(key = "save.auto_save_delay") {
+    item(key = "save.auto_save_delay", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
         val delayMs by vm.autoSaveDelayRow.collectAsStateWithLifecycle()
         var autoSaveDelay by rememberSaveable(delayMs / 1000f) {
             mutableFloatStateOf(delayMs / 1000f)
         }
-        SettingsGroupItemContainer(isLast = true) {
-            SettingsFieldRowContainer(isFirst = false, isLast = true) {
+        SettingsExpandedItemContent {
+            SettingsExpandedRowContainer(
+                firstInCategory = false,
+                lastInCategory = true,
+                firstInGroup = false,
+                lastInGroup = true,
+            ) {
                 SujianSlider(
                     title = stringResource(id = R.string.pref_auto_save_delay),
                     value = autoSaveDelay,

@@ -191,9 +191,11 @@ private fun rememberSujianEntryProvider(
                             NavEntry(key, metadata = noPageTransitionMetadata) { route ->
                                 StatsScreen()
                             }
-                        // Settings 保留全局 fade，不附加无动画 metadata
+                        // #630 评论5324547885项3: Settings 使用 noPageTransitionMetadata，
+                        // 禁止旧 Works + 新 Settings 双页 crossfade。
+                        // 过渡由 SettingsRoute 自身 graphicsLayer 绘制层动画提供。
                         is SujianRoute.Settings ->
-                            NavEntry(key) { route ->
+                            NavEntry(key, metadata = noPageTransitionMetadata) { route ->
                                 SettingsRoute()
                             }
                     }
