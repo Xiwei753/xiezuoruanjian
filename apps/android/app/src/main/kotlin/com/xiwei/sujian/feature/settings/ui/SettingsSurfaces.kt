@@ -3,7 +3,9 @@ package com.xiwei.sujian.feature.settings.ui
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,6 +41,11 @@ import androidx.compose.ui.unit.dp
  */
 private val SettingsGroupTopShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
 private val SettingsGroupBottomShape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp)
+
+// #630 评论 5326175206 项1: 横向内缩常量 — 单一来源，展开内容比分类标题再内缩 8dp
+private val SettingsCategoryInset = 12.dp
+private val SettingsExpandedExtraInset = 8.dp
+private val SettingsExpandedInset = SettingsCategoryInset + SettingsExpandedExtraInset
 
 /**
  * 分组标题行 — [Surface] 顶部 28dp 圆角、底部直角，标题放在容器里面。
@@ -102,7 +109,12 @@ fun SettingsGroupItemContainer(
         Column(
             modifier =
                 Modifier
-                    .padding(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding),
+                    .padding(
+                        start = SettingsCategoryInset,
+                        end = SettingsCategoryInset,
+                        top = topPadding,
+                        bottom = bottomPadding,
+                    ),
         ) {
             content()
         }
@@ -173,19 +185,34 @@ fun SettingsExpandedRowContainer(
             else -> RectangleShape
         }
 
+    // #630 评论 5326175206 项1: firstInGroup 且非 firstInCategory 时，顶部留 8dp Low 背景色
+    // 作为不同字段组间的真实组间距；category 最后一行底部也留 8dp Low padding。
+    val groupTopPadding =
+        if (firstInGroup && !firstInCategory) SettingsExpandedExtraInset else 0.dp
+    val categoryBottomPadding =
+        if (lastInCategory) SettingsExpandedExtraInset else 0.dp
+
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = outerShape,
         shadowElevation = 0.dp,
     ) {
-        Surface(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shape = expandedInnerShape(firstInGroup, lastInGroup),
-            shadowElevation = 0.dp,
-        ) {
-            content()
+        Column {
+            if (groupTopPadding > 0.dp) {
+                Spacer(modifier = Modifier.height(groupTopPadding))
+            }
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = SettingsExpandedInset),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = expandedInnerShape(firstInGroup, lastInGroup),
+                shadowElevation = 0.dp,
+            ) {
+                content()
+            }
+            if (categoryBottomPadding > 0.dp) {
+                Spacer(modifier = Modifier.height(categoryBottomPadding))
+            }
         }
     }
 }
@@ -194,7 +221,7 @@ fun SettingsExpandedRowContainer(
  * [SettingsExpandedRowContainer] 内层 High surface 的 shape。
  *
  * 字段组首行圆角上，末行圆角下，中间行 plain；组间间距由外层 Low surface 的
- * 8dp 水平 padding + 组间 padding 露出。
+ * [SettingsExpandedInset] 水平 padding + 组间 Low padding 露出。
  */
 private val ExpandedInnerTopShape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
 private val ExpandedInnerBottomShape = RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)
@@ -266,6 +293,11 @@ private val SettingsExpandedPlacementSpec:
     androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
     androidx.compose.animation.core.tween(durationMillis = 120)
 
+// #630 评论 5326175206 项2: 只负责 placement 的统一 wrapper — 旧 item 位移动画
+private val SettingsMovablePlacementSpec:
+    androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
+    androidx.compose.animation.core.tween(durationMillis = 120)
+
 /**
  * 展开字段统一动画包裹组件 — 在 LazyListScope extension 的 item {} 块内调用。
  *
@@ -286,6 +318,29 @@ fun LazyItemScope.SettingsExpandedItemContent(
                 fadeInSpec = SettingsExpandedFadeInSpec,
                 fadeOutSpec = SettingsExpandedFadeOutSpec,
                 placementSpec = SettingsExpandedPlacementSpec,
+            ),
+    ) {
+        content()
+    }
+}
+
+/**
+ * #630 评论 5326175206 项2: 只负责 placement 的统一 wrapper — 旧 item 位移动画。
+ *
+ * 给 group spacer、group header、category title 等会因展开/折叠位移的旧 item
+ * 提供 120ms placement 动画，不做 fade。
+ */
+@Composable
+fun LazyItemScope.SettingsMovableItemContent(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier =
+            modifier.animateItem(
+                fadeInSpec = null,
+                fadeOutSpec = null,
+                placementSpec = SettingsMovablePlacementSpec,
             ),
     ) {
         content()

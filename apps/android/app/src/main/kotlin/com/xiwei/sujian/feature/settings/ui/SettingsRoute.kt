@@ -191,25 +191,31 @@ private fun SettingsLazyColumn(
             if (categories.isEmpty()) return@forEach
             if (firstGroupShown) {
                 item(key = "settings_group_spacer_${group.name}", contentType = CONTENT_TYPE_SPACER) {
-                    Spacer(Modifier.height(dims.space16))
+                    SettingsMovableItemContent {
+                        Spacer(Modifier.height(dims.space16))
+                    }
                 }
             }
             firstGroupShown = true
             item(key = "settings_group_${group.name}", contentType = CONTENT_TYPE_GROUP_HEADER) {
-                SettingsGroupHeader(title = stringResource(id = group.titleResId))
+                SettingsMovableItemContent {
+                    SettingsGroupHeader(title = stringResource(id = group.titleResId))
+                }
             }
             categories.forEachIndexed { index, category ->
                 val isLastCategory = index == categories.lastIndex
                 val isExpanded = expansionState.isExpanded(category.section)
                 item(key = "settings_category_${category.section.name}", contentType = CONTENT_TYPE_CATEGORY_HEADER) {
-                    SettingsGroupItemContainer(isLast = isLastCategory && !isExpanded) {
-                        SettingsExpandableSection(
-                            title = stringResource(id = category.titleResId),
-                            summary = settingsCategorySummary(category),
-                            value = settingsCategoryValue(category, vm),
-                            expanded = isExpanded,
-                            onExpandedChange = { expansionState.setExpanded(category.section, it) },
-                        )
+                    SettingsMovableItemContent {
+                        SettingsGroupItemContainer(isLast = isLastCategory && !isExpanded) {
+                            SettingsExpandableSection(
+                                title = stringResource(id = category.titleResId),
+                                summary = settingsCategorySummary(category),
+                                value = settingsCategoryValue(category, vm),
+                                expanded = isExpanded,
+                                onExpandedChange = { expansionState.setExpanded(category.section, it) },
+                            )
+                        }
                     }
                 }
                 if (isExpanded) {

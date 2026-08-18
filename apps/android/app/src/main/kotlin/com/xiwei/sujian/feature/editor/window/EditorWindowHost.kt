@@ -87,6 +87,7 @@ class EditorWindowHost(
         val bridge: TextEditSessionBridge,
         val profile: TextEditorProfile,
         val snapshot: TargetSnapshot?,
+        val typography: EditorTypography?,
     )
 
     // #595 一：窗口坐标追踪（activeTargetGeometry/activeTargetTransform）已随根壳
@@ -343,13 +344,6 @@ class EditorWindowHost(
         sharedEditorView?.performRedo()
     }
 
-    private data class EditorTypography(
-        val fontSizeSp: Float,
-        val lineSpacingMultiplier: Float,
-        val autoIndentEnabled: Boolean,
-        val autoIndentWidth: Float,
-    )
-
     private var lastTypography: EditorTypography? = null
 
     // ── Edit operations (orchestrates session + window) ──
@@ -357,6 +351,7 @@ class EditorWindowHost(
     fun beginEdit(
         targetId: String,
         initialSelection: Int? = null,
+        typography: EditorTypography? = null,
     ): Boolean {
         // #592 三：业务已关闭（closeTarget）或未注册的 target 拒绝重新绑定 —
         // 防止导航离开正文的过渡期间 beginEdit 重新触发并复活已关闭的 session。
@@ -390,6 +385,7 @@ class EditorWindowHost(
                 bridge = bridge,
                 profile = bindInfo.profile,
                 snapshot = bindInfo.snapshot,
+                typography = typography ?: lastTypography,
             )
 
         // #595 三：如果 AndroidView.factory 已创建 View（重新绑定场景），直接在现有
@@ -471,6 +467,9 @@ class EditorWindowHost(
             Log.w(TAG, "performViewBind(${pending.targetId}): no active input lease — refusing bind")
             return false
         }
+        // #630 评论 5326175206 项3: 先配置 TextPaint/lineSpacing/indent，再 attach snapshot，
+        // 只生成一次正确排版。不要先 attach 默认排版再 applyLayoutConfig 二次重排。
+        pending.typography?.let { applyTypographyToView(view, it) }
         view.attachSession(
             sessionBridge = pending.bridge,
             profile = pending.profile,
@@ -952,3 +951,14 @@ class EditorWindowHost(
         )
     }
 }
+
+/**
+ * #630 评论 5326175206 项3: 排版快照 — 首次正文 attach 时必须显式携带，
+ * 不再靠两个 LaunchedEffect 竞态猜测谁先到。
+ */
+data class EditorTypography(
+    val fontSizeSp: Float,
+    val lineSpacingMultiplier: Float,
+    val autoIndentEnabled: Boolean,
+    val autoIndentWidth: Float,
+)
