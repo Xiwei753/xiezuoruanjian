@@ -1,7 +1,6 @@
 package com.xiwei.sujian.feature.settings.ui
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
