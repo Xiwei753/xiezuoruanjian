@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.dp
  * - 页面 surface
  * - 分组外壳 surfaceContainerLow（[SettingsGroupHeader] + [SettingsGroupItemContainer]）
  * - 可展开分类卡 surfaceContainer（[SettingsExpandableSection]）
- * - 展开后字段组 surfaceContainerHigh（[SettingsFieldGroup]）
+ * - 展开后字段组 surfaceContainerHigh（[SettingsFieldRowContainer]）
  * - 搜索入口 surfaceContainerHighest（[SettingsSearchEntry]）
  *
  * 层级靠 tonal surface 区分，不靠边框阴影，也不用 primary 文本充当分组层级。
@@ -122,39 +122,6 @@ fun SettingsFieldGroupTitle(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
         )
-    }
-}
-
-/**
- * 展开后字段组 — surfaceContainerHigh + [MaterialTheme.shapes.large]，
- * 标题 titleSmall/onSurfaceVariant，内容 16dp padding。
- *
- * 保留向后兼容：部分场景仍需将多个控件包在一个 item 里。
- */
-@Composable
-fun SettingsFieldGroup(
-    title: String,
-    modifier: Modifier = Modifier,
-    semanticId: String? = null,
-    content: @Composable () -> Unit,
-) {
-    Surface(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .then(if (semanticId != null) Modifier.testTag(semanticId) else Modifier),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = MaterialTheme.shapes.large,
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-            content()
-        }
     }
 }
 

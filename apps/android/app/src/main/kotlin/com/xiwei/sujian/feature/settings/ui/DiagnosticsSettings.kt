@@ -18,48 +18,82 @@ import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.diagnostics.DiagnosticsExporter
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
-import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * #630 评论13/评论15: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
+ * #630 评论13/评论15/评论17: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
  * 使用 [SettingsFieldRowContainer] 的 isFirst/isLast 保持 M3 高色阶卡片视觉。
  * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
  *
+ * 评论 #17 收口：`diagnostics.enabled` 与 `diagnostics.verbose` 拆为两个独立 item，
+ * 不再共享 helper 同时 collect `diagnosticsEnabledRow + diagnosticsVerboseRow`，
+ * 避免 `diagnosticsVerbose` 变化导致 `diagnostics.enabled` 行重组。
+ *
  * 结构拆分（detekt LongMethod 阈值 80）：
- * - [diagnosticsSwitchItem]：通用诊断开关 item（enabled / verbose 共享同一模式）
+ * - [diagnosticsActionItems]：导出 / 清空 / 复制设备信息三个独立 item
  * - [CopyDeviceInfoButton]：复制设备信息按钮（含 Clipboard 操作）
  * - [ClearLogsButton]、[ExportDiagnosticsButton]：已有独立 Composable
  */
 fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
-    diagnosticsSwitchItem(
-        key = "diagnostics.enabled",
-        vm = vm,
-        isChecked = { it.enabled },
-        onCheckedChange = { checked, current ->
-            DiagnosticsLogger.setEnabled(checked)
-            EditorEventRingBuffer.setEnabled(checked)
-            if (!checked) DiagnosticsLogger.setVerbose(false)
-            current.copy(
-                diagnosticsEnabled = checked,
-                diagnosticsVerbose = if (checked) current.diagnosticsVerbose else false,
-            )
-        },
-    )
+    // diagnostics.enabled：只 collect diagnosticsEnabledRow。
+    // 关闭时同时把 diagnosticsVerbose 置 false，避免遗留 verbose 开关。
+    item(key = "diagnostics.enabled") {
+        val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
+        SettingsGroupItemContainer(isLast = false, isFirst = true) {
+            SettingsFieldRowContainer(isFirst = true, isLast = false) {
+                SujianSwitchRow(
+                    title = stringResource(id = R.string.pref_diagnostics_enabled),
+                    checked = enabled,
+                    onCheckedChange = { checked ->
+                        DiagnosticsLogger.setEnabled(checked)
+                        EditorEventRingBuffer.setEnabled(checked)
+                        if (!checked) DiagnosticsLogger.setVerbose(false)
+                        vm.handleIntent(
+                            SettingsIntent.UpdateLocal { current ->
+                                current.copy(
+                                    diagnosticsEnabled = checked,
+                                    diagnosticsVerbose = if (checked) current.diagnosticsVerbose else false,
+                                )
+                            },
+                        )
+                    },
+                )
+            }
+        }
+    }
 
-    diagnosticsSwitchItem(
-        key = "diagnostics.verbose",
-        vm = vm,
-        isChecked = { it.verbose },
-        onCheckedChange = { checked, current ->
-            DiagnosticsLogger.setVerbose(checked)
-            current.copy(diagnosticsVerbose = checked)
-        },
-        switchEnabled = { it.enabled },
-    )
+    // diagnostics.verbose：collect diagnosticsVerboseRow（决定 checked）+ diagnosticsEnabledRow（决定 enabled）。
+    // 不订阅整分类 state，enabled 变化只更新本行可用性，不重组 diagnostics.enabled 行。
+    item(key = "diagnostics.verbose") {
+        val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
+        val verbose by vm.diagnosticsVerboseRow.collectAsStateWithLifecycle()
+        SettingsGroupItemContainer(isLast = false) {
+            SettingsFieldRowContainer(isFirst = false, isLast = false) {
+                SujianSwitchRow(
+                    title = stringResource(id = R.string.pref_diagnostics_verbose),
+                    checked = verbose,
+                    enabled = enabled,
+                    onCheckedChange = { checked ->
+                        DiagnosticsLogger.setVerbose(checked)
+                        vm.handleIntent(
+                            SettingsIntent.UpdateLocal { current ->
+                                current.copy(diagnosticsVerbose = checked)
+                            },
+                        )
+                    },
+                )
+            }
+        }
+    }
 
+    diagnosticsActionItems(vm)
+}
+
+// ── 诊断动作按钮 item：导出 / 清空 / 复制设备信息 ──
+
+private fun LazyListScope.diagnosticsActionItems(vm: SettingsViewModel) {
     item(key = "diagnostics.export") {
         val context = LocalContext.current
         SettingsGroupItemContainer(isLast = false) {
@@ -94,45 +128,6 @@ fun LazyListScope.diagnosticsSettingsItems(vm: SettingsViewModel) {
                     context = context,
                     copiedText = deviceInfoCopiedText,
                     modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        }
-    }
-}
-
-// ── 辅助 item：诊断开关（enabled / verbose 共享模式） ──
-
-private fun LazyListScope.diagnosticsSwitchItem(
-    key: String,
-    vm: SettingsViewModel,
-    isChecked: (DiagnosticsSectionState) -> Boolean,
-    onCheckedChange: (Boolean, LocalSettings) -> LocalSettings,
-    switchEnabled: ((DiagnosticsSectionState) -> Boolean)? = null,
-) {
-    item(key = key) {
-        val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
-        val verbose by vm.diagnosticsVerboseRow.collectAsStateWithLifecycle()
-        val state = DiagnosticsSectionState(enabled = enabled, verbose = verbose)
-        SettingsGroupItemContainer(isLast = false) {
-            SettingsFieldRowContainer(isFirst = false, isLast = false) {
-                SujianSwitchRow(
-                    title =
-                        stringResource(
-                            id =
-                                when (key) {
-                                    "diagnostics.enabled" -> R.string.pref_diagnostics_enabled
-                                    else -> R.string.pref_diagnostics_verbose
-                                },
-                        ),
-                    checked = isChecked(state),
-                    onCheckedChange = { checked ->
-                        vm.handleIntent(
-                            SettingsIntent.UpdateLocal { current ->
-                                onCheckedChange(checked, current)
-                            },
-                        )
-                    },
-                    enabled = switchEnabled?.invoke(state) ?: true,
                 )
             }
         }
