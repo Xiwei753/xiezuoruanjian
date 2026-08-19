@@ -1,6 +1,6 @@
 package com.xiwei.sujian.feature.editor.session
 
-// ! # 编辑器会话协调器类型声明（从 EditorSessionCoordinator �?分）
+// ! # 编辑器会话协调器类型声明（从 EditorSessionCoordinator 分）
 
 import androidx.compose.runtime.Immutable
 import com.xiwei.sujian.feature.editor.window.EditingState
@@ -34,17 +34,29 @@ sealed interface WindowBindingState {
 }
 
 /**
+ * 视口锚点 — 用逻辑位置（文本偏移 + 行内像素）保存滚动状态，
+ * 替代绝对像素（scrollX/scrollY）。在字体/字号/排版变化时仍能正确恢复。
+ *
+ * @property textOffsetUtf16 锚点文本偏移（UTF-16 码元）
+ * @property offsetWithinLinePx 锚点在行内的水平像素偏移（从行首算起）
+ */
+data class ViewportAnchor(
+    val textOffsetUtf16: Int,
+    val offsetWithinLinePx: Int,
+)
+
+/**
  * #592 三：业务级关闭原因 — 由 workspace 导航事件明确给出，不能从
  * DisposableEffect 推断业务对象是否结束。
  */
 enum class SessionCloseReason {
-/** 用户从正文返回章节列表/作品列表（workspace 导航离开 Editor 目的地）。 */
+    /** 用户从正文返回章节列表/作品列表（workspace 导航离开 Editor 目的地）。 */
     WORKSPACE_NAVIGATION,
 
-/** 章节切换（旧章节 session 关闭，新章节新建 session）。 */
+    /** 章节切换（旧章节 session 关闭，新章节新建 session）。 */
     CHAPTER_SWITCH,
 
-/** 章节/作品被删除。 */
+    /** 章节/作品被删除。 */
     DELETE,
 }
 
@@ -57,6 +69,7 @@ enum class SessionCloseReason {
 data class ProjectionSnapshot(
     val scrollX: Float = 0f,
     val scrollY: Float = 0f,
+    val viewportAnchor: ViewportAnchor? = null,
 )
 
 /**
@@ -123,7 +136,7 @@ sealed interface PreparedSessionMode {
     /**
      * Candidate swap — 既有持久 session 的 snapshot 正文与 initialText 不一致，
      * prepare 创建 candidate 装入 initialText，[oldSessionId] 记录被替换的旧 session。
-     * commit 成功后关闭旧 session；abort 只关闭 candidate。
+     * commit 成功后关闭旧 session；abort 只关闭 candidate（旧 session 原样保留，不恢复 previousRecord）。
      */
     data class Replacement(val oldSessionId: ULong) : PreparedSessionMode
 }

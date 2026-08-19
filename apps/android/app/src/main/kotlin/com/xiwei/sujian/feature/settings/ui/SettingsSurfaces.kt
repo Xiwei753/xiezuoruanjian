@@ -302,6 +302,9 @@ const val CONTENT_TYPE_EXPANDED_GROUP_TITLE = "expanded_group_title"
 /** Lazy item contentType 常量：展开后的设置字段行（surfaceContainerHigh） */
 const val CONTENT_TYPE_EXPANDED_FIELD = "expanded_field"
 
+/** Lazy item contentType 常量：展开后的字段组（surfaceContainerHigh） */
+const val CONTENT_TYPE_EXPANDED_FIELD_GROUP = "expanded_field_group"
+
 // ── Lazy item 展开动画 ──
 
 /**
@@ -384,3 +387,51 @@ fun LazyItemScope.settingsExpandedItemModifier(): Modifier =
         fadeOutSpec = tween(70),
         placementSpec = tween(120),
     )
+
+/**
+ * #631 字段组容器 — 一个真实字段组一个 High Surface item，组内多个字段普通布局。
+ *
+ * 结构：
+ * - 外层 surfaceContainerLow 与分类标题同级大卡片（与 [SettingsExpandedRowContainer] 一致）
+ * - 内层 surfaceContainerHigh 统一 16dp 内容内边距 + 12dp 圆角
+ * - 首行上圆角，末行下圆角，中间行直角
+ *
+ * 解决三个问题：
+ * 1. 性能：每个字段组只有一个 Lazy item，组内字段不做 animateItem，
+ *    普通滚动时没有 placement 动画持续参与布局
+ * 2. 视觉：字段组统一 16dp content padding、12dp 圆角，
+ *    标题、输入框、开关、滑块、按钮共用同一条内容起始线
+ * 3. M3 冲突：不要魔改 OutlinedTextField 本身，
+ *    由本容器统一提供内容内边距，输入框自然对齐到内容起始线
+ */
+@Composable
+fun SettingsFieldGroupContainer(
+    closeOuterGroup: Boolean,
+    firstInGroup: Boolean,
+    lastInGroup: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val outerShape = settingsExpandedOuterShape(closeOuterGroup)
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = outerShape,
+        shadowElevation = 0.dp,
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = SettingsExpandedInset),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = expandedInnerShape(firstInGroup, lastInGroup),
+            shadowElevation = 0.dp,
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+            ) {
+                content()
+            }
+        }
+    }
+}

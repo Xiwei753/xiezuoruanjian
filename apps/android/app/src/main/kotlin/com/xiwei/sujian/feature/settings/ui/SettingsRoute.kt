@@ -107,6 +107,11 @@ val settingsCategories =
 @SuppressLint("LocalContextGetResourceValueCall")
 @Composable
 fun SettingsRoute(modifier: Modifier = Modifier) {
+    val view = androidx.compose.ui.platform.LocalView.current
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        val holder = androidx.metrics.performance.PerformanceMetricsState.getHolderForHierarchy(view)
+        holder?.state?.putState("screen", "Settings")
+    }
     val deps = LocalSujianAppDependencies.current
     val vm: SettingsViewModel =
         viewModel(

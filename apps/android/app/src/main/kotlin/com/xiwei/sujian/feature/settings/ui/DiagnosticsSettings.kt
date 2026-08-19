@@ -23,28 +23,35 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * #630 评论13/评论15/评论17/评论5324547885项2: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
- * 使用 [SettingsExpandedRowContainer] 替代旧的 [SettingsGroupItemContainer] +
- * [SettingsFieldRowContainer] 嵌套；展开内容在外层 Low 内缩 High 表面里连续拼接。
- * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
+ * #631 字段组模式: 将原来的 5 个独立 item 合并为 2 个字段组 item。
+ *
+ * 诊断分组: 开关 + 详细开关
+ * 操作分组: 导出 + 清空 + 复制设备信息
+ *
+ * 使用 [SettingsFieldGroupContainer] 替代 [SettingsExpandedRowContainer]，
+ * 使用 [CONTENT_TYPE_EXPANDED_FIELD_GROUP] 作为 contentType。
+ * 每个字段组一个 item，组内多个字段普通布局（不做 animateItem）。
+ * 每个 item 只 collect 自己需要的 row-level StateFlow，避免整分类重组。
  * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
 fun LazyListScope.diagnosticsSettingsItems(
     vm: SettingsViewModel,
     closeOuterGroup: Boolean,
 ) {
-    // diagnostics.enabled：只 collect diagnosticsEnabledRow。
-    // 关闭时同时把 diagnosticsVerbose 置 false，避免遗留 verbose 开关。
-    item(key = "diagnostics.enabled", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
+    // ── 诊断分组（开关 + 详细开关）— 一个字段组 item ──
+    item(
+        key = "diagnostics.diagnostics_group",
+        contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP,
+    ) {
         val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
+        val verbose by vm.diagnosticsVerboseRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
+            SettingsFieldGroupContainer(
                 closeOuterGroup = false,
-                firstInCategory = true,
-                lastInCategory = false,
                 firstInGroup = true,
                 lastInGroup = false,
             ) {
+                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_diagnostics))
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_diagnostics_enabled),
                     checked = enabled,
@@ -62,23 +69,6 @@ fun LazyListScope.diagnosticsSettingsItems(
                         )
                     },
                 )
-            }
-        }
-    }
-
-    // diagnostics.verbose：collect diagnosticsVerboseRow（决定 checked）+ diagnosticsEnabledRow（决定 enabled）。
-    // 不订阅整分类 state，enabled 变化只更新本行可用性，不重组 diagnostics.enabled 行。
-    item(key = "diagnostics.verbose", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
-        val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
-        val verbose by vm.diagnosticsVerboseRow.collectAsStateWithLifecycle()
-        SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = false,
-                firstInCategory = false,
-                lastInCategory = false,
-                firstInGroup = false,
-                lastInGroup = true,
-            ) {
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_diagnostics_verbose),
                     checked = verbose,
@@ -96,6 +86,7 @@ fun LazyListScope.diagnosticsSettingsItems(
         }
     }
 
+    // ── 操作分组（导出 + 清空 + 复制设备信息）— 一个字段组 item ──
     diagnosticsActionItems(vm, closeOuterGroup)
 }
 
@@ -105,54 +96,30 @@ private fun LazyListScope.diagnosticsActionItems(
     vm: SettingsViewModel,
     closeOuterGroup: Boolean,
 ) {
-    item(key = "diagnostics.export", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
-        val context = LocalContext.current
+    item(
+        key = "diagnostics.actions_group",
+        contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP,
+    ) {
         SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = false,
-                firstInCategory = false,
-                lastInCategory = false,
+            SettingsFieldGroupContainer(
+                closeOuterGroup = closeOuterGroup,
                 firstInGroup = true,
-                lastInGroup = false,
+                lastInGroup = true,
             ) {
-                ExportDiagnosticsButton(context = context, modifier = Modifier.fillMaxWidth())
-            }
-        }
-    }
-
-    item(key = "diagnostics.clear", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
-        val context = LocalContext.current
-        val clearedText = stringResource(id = R.string.diagnostics_cleared)
-        val clearFailedText = stringResource(id = R.string.diagnostics_clear_failed)
-        SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = false,
-                firstInCategory = false,
-                lastInCategory = false,
-                firstInGroup = false,
-                lastInGroup = false,
-            ) {
+                val context = LocalContext.current
+                ExportDiagnosticsButton(
+                    context = context,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                val clearedText = stringResource(id = R.string.diagnostics_cleared)
+                val clearFailedText = stringResource(id = R.string.diagnostics_clear_failed)
                 ClearLogsButton(
                     context = context,
                     clearedText = clearedText,
                     clearFailedText = clearFailedText,
                     modifier = Modifier.fillMaxWidth(),
                 )
-            }
-        }
-    }
-
-    item(key = "diagnostics.copy_device_info", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
-        val context = LocalContext.current
-        val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
-        SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = closeOuterGroup,
-                firstInCategory = false,
-                lastInCategory = true,
-                firstInGroup = false,
-                lastInGroup = true,
-            ) {
+                val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
                 CopyDeviceInfoButton(
                     context = context,
                     copiedText = deviceInfoCopiedText,

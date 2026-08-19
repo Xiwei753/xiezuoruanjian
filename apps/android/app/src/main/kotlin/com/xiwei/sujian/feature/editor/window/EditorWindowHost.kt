@@ -18,6 +18,7 @@ import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.EditorSessionState
 import com.xiwei.sujian.feature.editor.session.ExternalResetResult
 import com.xiwei.sujian.feature.editor.session.ProjectionSnapshot
+import com.xiwei.sujian.feature.editor.session.ViewportAnchor
 import com.xiwei.sujian.feature.editor.session.SessionCloseReason
 import com.xiwei.sujian.feature.editor.session.SessionCommandPort
 import com.xiwei.sujian.feature.editor.session.SessionResetSource
@@ -69,6 +70,18 @@ class EditorWindowHost(
 ) : SessionCommandPort {
     /** #592 二：窗口标识 — 同一窗口内的 Compose onDispose 用它调用 detachWindowBinding。 */
     val windowId: String = "window:${System.identityHashCode(this)}"
+    private fun setEditorScreen(view: android.view.View) {
+        val holder = androidx.metrics.performance.PerformanceMetricsState.getHolderForHierarchy(view)
+        holder?.state?.putState("screen", "Editor")
+    }
+
+    private fun setEditorInteraction(interaction: String) {
+        sharedEditorView?.let { view ->
+            val holder = androidx.metrics.performance.PerformanceMetricsState.getHolderForHierarchy(view)
+            holder?.state?.putSingleFrameState("interaction", interaction)
+        }
+    }
+
 
     private val targets = mutableMapOf<String, EditableTextTarget>()
 
@@ -242,6 +255,7 @@ class EditorWindowHost(
         sessionCoordinator.applyMotionPolicy(policy)
         sharedEditorView?.let { view ->
             applyPolicyToView(view, activeTargetId)
+            setEditorInteraction("motion_policy_change")
         }
     }
 
@@ -302,6 +316,7 @@ class EditorWindowHost(
                 autoIndentWidth = autoIndentWidth,
             )
         sharedEditorView?.let { view -> applyTypographyToView(view, lastTypography!!) }
+        setEditorInteraction("typography_change")
     }
 
     private fun applyTypographyToView(
@@ -502,7 +517,23 @@ class EditorWindowHost(
         targetId: String,
     ) {
         val snapshot = sessionCoordinator.getProjectionSnapshot(targetId) ?: return
-        view.setScrollPosition(snapshot.scrollX, snapshot.scrollY)
+        val anchor = snapshot.viewportAnchor
+        if (anchor != null) {
+            // 优先使用逻辑锚点恢复：从文本偏移 + 行内像素推导滚动位置
+            val pipeline = view.getEditorPipeline()
+            val line = pipeline.getLayoutLineForOffset(anchor.textOffsetUtf16)
+            val lineTop = pipeline.getLayoutLineTop(line).toFloat()
+            // 锚点位置的主水平坐标 = 行首 + 行内偏移，直接用它作为 scrollX
+            val anchorPrimaryHorizontal = pipeline.getLayoutPrimaryHorizontal(anchor.textOffsetUtf16)
+            val scrollX = anchorPrimaryHorizontal
+            val scrollY = lineTop
+            // 写入 interaction 用于 JankStats
+            setEditorInteraction("viewport_restore")
+            view.setScrollPosition(scrollX, scrollY)
+        } else {
+            // 兼容旧快照：回退到绝对像素
+            view.setScrollPosition(snapshot.scrollX, snapshot.scrollY)
+        }
     }
 
     fun commitActiveEdit(): Boolean {
@@ -683,6 +714,7 @@ class EditorWindowHost(
             // pending.typography（performViewBind 先写排版参数再 attach snapshot），
             // createWindowView 不应再抢先给空 View 套一次缓存排版。
             sharedEditorView = view
+            setEditorScreen(view)
         }
     }
 
@@ -943,11 +975,29 @@ class EditorWindowHost(
      */
     private fun saveActiveTargetProjection(targetId: String) {
         val view = sharedEditorView ?: return
+        val pipeline = view.getEditorPipeline()
+        val scrollX = view.getScrollXPos()
+        val scrollY = view.getScrollYPos()
+        // 计算视口锚点：从当前滚动位置推导逻辑锚点（文本偏移 + 行内像素）
+        val anchorLine = pipeline.getLayoutLineForVertical(scrollY.toInt())
+        val anchorOffset = pipeline.getLayoutOffsetForHorizontal(anchorLine, scrollX)
+        // 行首偏移 = 该行起始位置的偏移量
+        val lineStartOffset = pipeline.getLayoutOffsetForHorizontal(anchorLine, 0f)
+        // 行首水平位置
+        val lineLeft = pipeline.getLayoutPrimaryHorizontal(lineStartOffset)
+        val offsetWithinLinePx = (scrollX - lineLeft).coerceAtLeast(0f)
+        val viewportAnchor = ViewportAnchor(
+            textOffsetUtf16 = anchorOffset,
+            offsetWithinLinePx = offsetWithinLinePx.toInt(),
+        )
+        // 写入 interaction 用于 JankStats
+        setEditorInteraction("viewport_save")
         sessionCoordinator.saveProjectionSnapshot(
             targetId,
             ProjectionSnapshot(
-                scrollX = view.getScrollXPos(),
-                scrollY = view.getScrollYPos(),
+                scrollX = scrollX,
+                scrollY = scrollY,
+                viewportAnchor = viewportAnchor,
             ),
         )
     }

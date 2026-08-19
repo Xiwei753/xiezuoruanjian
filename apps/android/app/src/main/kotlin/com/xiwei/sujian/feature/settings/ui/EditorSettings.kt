@@ -15,119 +15,90 @@ import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 
 /**
- * #630 评论13/评论15/评论5324547885项2: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
- * 使用 [SettingsExpandedRowContainer] 替代旧的 [SettingsGroupItemContainer] +
- * [SettingsFieldRowContainer] 嵌套；展开内容在外层 Low 内缩 High 表面里连续拼接。
- * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
+ * #631 字段组模式: 将原来的 6 个独立 item 合并为 2 个字段组 item。
+ *
+ * 自动缩进分组: 开关 + 宽度
+ * 编辑器行为分组: 标题 + 打字动画开关 + 打字动画时长 + 光标平滑开关 + 光标平滑时长
+ *
+ * 使用 [SettingsFieldGroupContainer] 替代 [SettingsExpandedRowContainer]，
+ * 使用 [CONTENT_TYPE_EXPANDED_FIELD_GROUP] 作为 contentType。
+ * 每个字段组一个 item，组内多个字段普通布局（不做 animateItem）。
+ * 每个 item 只 collect 自己需要的 row-level StateFlow，避免整分类重组。
  * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
 fun LazyListScope.editorSettingsItems(
     vm: SettingsViewModel,
     closeOuterGroup: Boolean,
 ) {
-    // 自动缩进开关
-    item(key = "editor.auto_indent", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
-        val checked by vm.autoIndentRow.collectAsStateWithLifecycle()
+    // ── 自动缩进分组（开关 + 宽度）— 一个字段组 item ──
+    item(
+        key = "editor.auto_indent_group",
+        contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP,
+    ) {
+        val autoIndentChecked by vm.autoIndentRow.collectAsStateWithLifecycle()
+        val autoIndentWidth by vm.autoIndentWidthRow.collectAsStateWithLifecycle()
+        var autoIndentWidthState by rememberSaveable(autoIndentWidth) { mutableFloatStateOf(autoIndentWidth) }
         SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
+            SettingsFieldGroupContainer(
                 closeOuterGroup = false,
-                firstInCategory = true,
-                lastInCategory = false,
                 firstInGroup = true,
                 lastInGroup = false,
             ) {
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_auto_indent),
-                    checked = checked,
+                    checked = autoIndentChecked,
                     onCheckedChange = { c ->
                         vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(autoIndentEnabled = c) })
                     },
                 )
-            }
-        }
-    }
-
-    // 自动缩进宽度
-    item(key = "editor.auto_indent_width", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
-        val width by vm.autoIndentWidthRow.collectAsStateWithLifecycle()
-        var autoIndentWidth by rememberSaveable(width) { mutableFloatStateOf(width) }
-        SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = false,
-                firstInCategory = false,
-                lastInCategory = false,
-                firstInGroup = false,
-                lastInGroup = true,
-            ) {
                 SujianSlider(
                     title = stringResource(id = R.string.pref_auto_indent_width),
-                    value = autoIndentWidth,
-                    onValueChange = { autoIndentWidth = it },
+                    value = autoIndentWidthState,
+                    onValueChange = { autoIndentWidthState = it },
                     onValueChangeFinished = {
-                        vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(autoIndentWidth = autoIndentWidth) })
+                        vm.handleIntent(
+                            SettingsIntent.UpdateLocal { it.copy(autoIndentWidth = autoIndentWidthState) },
+                        )
                     },
                     valueRange = 0f..8f,
                     steps = 15,
-                    valueLabel = stringResource(id = R.string.auto_indent_width_chars, autoIndentWidth),
+                    valueLabel = stringResource(id = R.string.auto_indent_width_chars, autoIndentWidthState.toInt()),
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
     }
 
-    // ── 编辑器行为分组标题 ──
-    item(key = "editor.behavior_title", contentType = CONTENT_TYPE_EXPANDED_GROUP_TITLE) {
+    // ── 编辑器行为分组（标题 + 打字动画开关 + 打字动画时长 + 光标平滑开关 + 光标平滑时长）— 一个字段组 item ──
+    item(
+        key = "editor.behavior_group",
+        contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP,
+    ) {
+        val typingAnimationChecked by vm.typingAnimationRow.collectAsStateWithLifecycle()
+        val typingAnimationDuration by vm.typingAnimationDurationRow.collectAsStateWithLifecycle()
+        var typingDuration by rememberSaveable(typingAnimationDuration.toFloat()) {
+            mutableFloatStateOf(typingAnimationDuration.toFloat())
+        }
+        val smoothCursorChecked by vm.smoothCursorRow.collectAsStateWithLifecycle()
+        val smoothCursorDuration by vm.smoothCursorDurationRow.collectAsStateWithLifecycle()
+        var cursorDuration by rememberSaveable(smoothCursorDuration.toFloat()) {
+            mutableFloatStateOf(smoothCursorDuration.toFloat())
+        }
         SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = false,
-                firstInCategory = false,
-                lastInCategory = false,
-                firstInGroup = true,
-                lastInGroup = false,
+            SettingsFieldGroupContainer(
+                closeOuterGroup = closeOuterGroup,
+                firstInGroup = false,
+                lastInGroup = true,
             ) {
                 SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_editor_behavior))
-            }
-        }
-    }
-
-    // 打字动画开关
-    item(key = "editor.typing_animation", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
-        val checked by vm.typingAnimationRow.collectAsStateWithLifecycle()
-        SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = false,
-                firstInCategory = false,
-                lastInCategory = false,
-                firstInGroup = false,
-                lastInGroup = false,
-            ) {
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_editor_typing_animation),
-                    checked = checked,
+                    checked = typingAnimationChecked,
                     onCheckedChange = { c ->
                         vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(editorTypingAnimationEnabled = c) })
                     },
                     semanticId = SujianSemanticIds.SettingsTypingAnimation,
                 )
-            }
-        }
-    }
-
-    // 打字动画时长
-    item(key = "editor.typing_duration", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
-        val enabled by vm.typingAnimationRow.collectAsStateWithLifecycle()
-        val durationMs by vm.typingAnimationDurationRow.collectAsStateWithLifecycle()
-        var typingDuration by rememberSaveable(durationMs.toFloat()) {
-            mutableFloatStateOf(durationMs.toFloat())
-        }
-        SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = false,
-                firstInCategory = false,
-                lastInCategory = false,
-                firstInGroup = false,
-                lastInGroup = false,
-            ) {
                 SujianSlider(
                     title = stringResource(id = R.string.pref_editor_typing_animation_duration),
                     value = typingDuration,
@@ -142,50 +113,16 @@ fun LazyListScope.editorSettingsItems(
                     valueRange = 30f..1000f,
                     steps = 96,
                     valueLabel = "${typingDuration.toInt()}ms",
-                    enabled = enabled,
+                    enabled = typingAnimationChecked,
                     modifier = Modifier.fillMaxWidth(),
                 )
-            }
-        }
-    }
-
-    // 光标平滑开关
-    item(key = "editor.smooth_cursor", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
-        val checked by vm.smoothCursorRow.collectAsStateWithLifecycle()
-        SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = false,
-                firstInCategory = false,
-                lastInCategory = false,
-                firstInGroup = false,
-                lastInGroup = false,
-            ) {
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_editor_smooth_cursor),
-                    checked = checked,
+                    checked = smoothCursorChecked,
                     onCheckedChange = { c ->
                         vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(editorSmoothCursorEnabled = c) })
                     },
                 )
-            }
-        }
-    }
-
-    // 光标平滑时长
-    item(key = "editor.cursor_duration", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
-        val enabled by vm.smoothCursorRow.collectAsStateWithLifecycle()
-        val durationMs by vm.smoothCursorDurationRow.collectAsStateWithLifecycle()
-        var cursorDuration by rememberSaveable(durationMs.toFloat()) {
-            mutableFloatStateOf(durationMs.toFloat())
-        }
-        SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = closeOuterGroup,
-                firstInCategory = false,
-                lastInCategory = true,
-                firstInGroup = false,
-                lastInGroup = true,
-            ) {
                 SujianSlider(
                     title = stringResource(id = R.string.pref_editor_smooth_cursor_duration),
                     value = cursorDuration,
@@ -200,7 +137,7 @@ fun LazyListScope.editorSettingsItems(
                     valueRange = 30f..1000f,
                     steps = 96,
                     valueLabel = "${cursorDuration.toInt()}ms",
-                    enabled = enabled,
+                    enabled = smoothCursorChecked,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }

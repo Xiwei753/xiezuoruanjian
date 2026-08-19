@@ -12,45 +12,37 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.component.SujianDropdownMenu
 import com.xiwei.sujian.core.designsystem.component.SujianSlider
-import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 
 /**
- * #630 评论13/评论15/评论5324547885项2: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
- * 使用 [SettingsExpandedRowContainer] 替代旧的 [SettingsGroupItemContainer] +
- * [SettingsFieldRowContainer] 嵌套；展开内容在外层 Low 内缩 High 表面里连续拼接。
- * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
+ * #631 字段组模式: 将原来的 6 个独立 item 合并为 2 个字段组 item。
+ *
+ * 主题分组: 标题 + 主题模式 + 颜色来源
+ * 字体与排版分组: 标题 + 字号 + 行距
+ *
+ * 使用 [SettingsFieldGroupContainer] 替代 [SettingsExpandedRowContainer]，
+ * 使用 [CONTENT_TYPE_EXPANDED_FIELD_GROUP] 作为 contentType。
+ * 每个字段组一个 item，组内多个字段普通布局（不做 animateItem）。
+ * 每个 item 只 collect 自己需要的 row-level StateFlow，避免整分类重组。
  * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
 fun LazyListScope.appearanceSettingsItems(
     vm: SettingsViewModel,
     closeOuterGroup: Boolean,
 ) {
-    // ── 主题分组标题 ──
-    item(key = "appearance.theme_title", contentType = CONTENT_TYPE_EXPANDED_GROUP_TITLE) {
+    // ── 主题分组（标题 + 主题模式 + 颜色来源）— 一个字段组 item ──
+    item(
+        key = "appearance.theme_group",
+        contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP,
+    ) {
+        val mode by vm.appearanceModeRow.collectAsStateWithLifecycle()
+        val source by vm.colorSourceRow.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
+            SettingsFieldGroupContainer(
                 closeOuterGroup = false,
-                firstInCategory = true,
-                lastInCategory = false,
                 firstInGroup = true,
                 lastInGroup = false,
             ) {
-                SettingsFieldGroupTitle(stringResource(id = R.string.pref_category_theme))
-            }
-        }
-    }
-
-    // 主题模式
-    item(key = "appearance.theme_mode", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
-        val mode by vm.appearanceModeRow.collectAsStateWithLifecycle()
-        SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = false,
-                firstInCategory = false,
-                lastInCategory = false,
-                firstInGroup = false,
-                lastInGroup = false,
-            ) {
+                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_theme))
                 SujianDropdownMenu(
                     label = stringResource(id = R.string.pref_theme_mode),
                     selectedIndex =
@@ -76,21 +68,6 @@ fun LazyListScope.appearanceSettingsItems(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
-            }
-        }
-    }
-
-    // 颜色来源
-    item(key = "appearance.color_source", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
-        val source by vm.colorSourceRow.collectAsStateWithLifecycle()
-        SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = false,
-                firstInCategory = false,
-                lastInCategory = false,
-                firstInGroup = false,
-                lastInGroup = true,
-            ) {
                 SujianDropdownMenu(
                     label = stringResource(id = R.string.pref_hint_color_theme),
                     selectedIndex =
@@ -138,33 +115,22 @@ fun LazyListScope.appearanceSettingsItems(
         }
     }
 
-    // ── 字体与排版分组标题 ──
-    item(key = "appearance.font_title", contentType = CONTENT_TYPE_EXPANDED_GROUP_TITLE) {
-        SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = false,
-                firstInCategory = false,
-                lastInCategory = false,
-                firstInGroup = true,
-                lastInGroup = false,
-            ) {
-                SettingsFieldGroupTitle(stringResource(id = R.string.pref_category_font_layout))
-            }
-        }
-    }
-
-    // 字号
-    item(key = "appearance.font_size", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
+    // ── 字体与排版分组（标题 + 字号 + 行距）— 一个字段组 item ──
+    item(
+        key = "appearance.font_group",
+        contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP,
+    ) {
         val currentFontSize by vm.fontSizeRow.collectAsStateWithLifecycle()
+        val spacing by vm.lineSpacingRow.collectAsStateWithLifecycle()
         var fontSize by rememberSaveable(currentFontSize) { mutableFloatStateOf(currentFontSize) }
+        var lineSpacing by rememberSaveable(spacing) { mutableFloatStateOf(spacing) }
         SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = false,
-                firstInCategory = false,
-                lastInCategory = false,
+            SettingsFieldGroupContainer(
+                closeOuterGroup = closeOuterGroup,
                 firstInGroup = false,
-                lastInGroup = false,
+                lastInGroup = true,
             ) {
+                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_font_layout))
                 SujianSlider(
                     title = stringResource(id = R.string.pref_font_size),
                     value = fontSize,
@@ -173,25 +139,9 @@ fun LazyListScope.appearanceSettingsItems(
                     valueRange = 12f..72f,
                     steps = 59,
                     valueLabel = "${fontSize.toInt()}sp",
-                    semanticId = SujianSemanticIds.SettingsFontSize,
+                    semanticId = com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds.SettingsFontSize,
                     modifier = Modifier.fillMaxWidth(),
                 )
-            }
-        }
-    }
-
-    // 行距
-    item(key = "appearance.line_spacing", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
-        val spacing by vm.lineSpacingRow.collectAsStateWithLifecycle()
-        var lineSpacing by rememberSaveable(spacing) { mutableFloatStateOf(spacing) }
-        SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = closeOuterGroup,
-                firstInCategory = false,
-                lastInCategory = true,
-                firstInGroup = false,
-                lastInGroup = true,
-            ) {
                 SujianSlider(
                     title = stringResource(id = R.string.pref_line_spacing),
                     value = lineSpacing,

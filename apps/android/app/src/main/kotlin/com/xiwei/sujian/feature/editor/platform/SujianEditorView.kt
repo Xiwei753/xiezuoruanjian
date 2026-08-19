@@ -761,6 +761,8 @@ class SujianEditorView
 
         fun getPipeline(): EditorCommandPort = pipeline
 
+        fun getEditorPipeline(): AndroidEditorPipeline = pipeline
+
         /**
          * #595 一 / #624 评论9：类型化本地编辑回调 — 传递轻量 [EditorAppliedEvent]。
          *

@@ -15,27 +15,37 @@ import com.xiwei.sujian.core.designsystem.component.SujianSlider
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 
 /**
- * #630 评论13/评论15/评论5324547885项2: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
- * 使用 [SettingsExpandedRowContainer] 替代旧的 [SettingsGroupItemContainer] +
- * [SettingsFieldRowContainer] 嵌套；展开内容在外层 Low 内缩 High 表面里连续拼接。
- * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
+ * #631 字段组模式: 将原来的 2 个独立 item 合并为 1 个字段组 item。
+ *
+ * 自动保存分组: 开关 + 延迟
+ *
+ * 使用 [SettingsFieldGroupContainer] 替代 [SettingsExpandedRowContainer]，
+ * 使用 [CONTENT_TYPE_EXPANDED_FIELD_GROUP] 作为 contentType。
+ * 每个字段组一个 item，组内多个字段普通布局（不做 animateItem）。
+ * 每个 item 只 collect 自己需要的 row-level StateFlow，避免整分类重组。
  * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
 fun LazyListScope.saveSettingsItems(
     vm: SettingsViewModel,
     closeOuterGroup: Boolean,
 ) {
-    // 自动保存开关
-    item(key = "save.auto_save", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
+    // ── 自动保存分组（开关 + 延迟）— 一个字段组 item ──
+    item(
+        key = "save.auto_save_group",
+        contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP,
+    ) {
         val checked by vm.autoSaveRow.collectAsStateWithLifecycle()
+        val delayMs by vm.autoSaveDelayRow.collectAsStateWithLifecycle()
+        var autoSaveDelay by rememberSaveable(delayMs / 1000f) {
+            mutableFloatStateOf(delayMs / 1000f)
+        }
         SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = false,
-                firstInCategory = true,
-                lastInCategory = false,
+            SettingsFieldGroupContainer(
+                closeOuterGroup = closeOuterGroup,
                 firstInGroup = true,
-                lastInGroup = false,
+                lastInGroup = true,
             ) {
+                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_save))
                 SujianSwitchRow(
                     title = stringResource(id = R.string.pref_auto_save),
                     checked = checked,
@@ -43,24 +53,6 @@ fun LazyListScope.saveSettingsItems(
                         vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(autoSaveEnabled = c) })
                     },
                 )
-            }
-        }
-    }
-
-    // 自动保存延迟
-    item(key = "save.auto_save_delay", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
-        val delayMs by vm.autoSaveDelayRow.collectAsStateWithLifecycle()
-        var autoSaveDelay by rememberSaveable(delayMs / 1000f) {
-            mutableFloatStateOf(delayMs / 1000f)
-        }
-        SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
-                closeOuterGroup = closeOuterGroup,
-                firstInCategory = false,
-                lastInCategory = true,
-                firstInGroup = false,
-                lastInGroup = true,
-            ) {
                 SujianSlider(
                     title = stringResource(id = R.string.pref_auto_save_delay),
                     value = autoSaveDelay,

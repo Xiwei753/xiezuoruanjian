@@ -99,61 +99,37 @@ class SettingsLazyColumnStructureTest {
 
     private fun appearanceSettingsItemKeys(): List<String> =
         listOf(
-            "appearance.theme_title",
-            "appearance.theme_mode",
-            "appearance.color_source",
-            "appearance.font_title",
-            "appearance.font_size",
-            "appearance.line_spacing",
+            "appearance.theme_group",
+            "appearance.font_group",
         )
 
     private fun editorSettingsItemKeys(): List<String> =
         listOf(
-            "editor.auto_indent",
-            "editor.auto_indent_width",
-            "editor.behavior_title",
-            "editor.typing_animation",
-            "editor.typing_duration",
-            "editor.smooth_cursor",
-            "editor.cursor_duration",
+            "editor.auto_indent_group",
+            "editor.behavior_group",
         )
 
     private fun saveSettingsItemKeys(): List<String> =
-        listOf(
-            "save.auto_save",
-            "save.auto_save_delay",
-        )
+        listOf("save.auto_save_group")
 
     private fun syncSettingsItemKeys(): List<String> =
         listOf(
-            "sync.description",
-            "sync.enable_sync",
-            "sync.auto_sync",
-            "sync.credentials_title",
-            "sync.remote_url",
-            "sync.branch",
-            "sync.token",
-            "sync.interval_title",
-            "sync.interval",
-            "sync.actions_title",
-            "sync.dry_run",
-            "sync.test_connection",
-            "sync.perform_sync",
-            "sync.result",
+            "sync.enable_group",
+            "sync.credentials_group",
+            "sync.interval_group",
+            "sync.actions_group",
+            "sync.result_group",
         )
 
-    private fun aiSettingsItemKeys(): List<String> = listOf("ai.enabled")
+    private fun aiSettingsItemKeys(): List<String> = listOf("ai.enabled_group")
 
     private fun diagnosticsSettingsItemKeys(): List<String> =
         listOf(
-            "diagnostics.enabled",
-            "diagnostics.verbose",
-            "diagnostics.export",
-            "diagnostics.clear",
-            "diagnostics.copy_device_info",
+            "diagnostics.enabled_group",
+            "diagnostics.actions_group",
         )
 
-    private fun laboratorySettingsItemKeys(): List<String> = listOf("laboratory.fullscreen")
+    private fun laboratorySettingsItemKeys(): List<String> = listOf("laboratory.fullscreen_group")
 
-    private fun aboutSettingsItemKeys(): List<String> = listOf("about.info_content")
+    private fun aboutSettingsItemKeys(): List<String> = listOf("about.info_content_group")
 }

@@ -14,22 +14,27 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.R
 
 /**
- * #630 评论13/评论15/评论5324547885项2: 行级 LazyColumn — 每个真实设置控件是独立 item，有稳定 key。
- * 使用 [SettingsExpandedRowContainer] 替代旧的 [SettingsGroupItemContainer] +
- * [SettingsFieldRowContainer] 嵌套；展开内容在外层 Low 内缩 High 表面里连续拼接。
+ * #631 字段组模式: 将原来的 1 个 item 改为字段组模式。
+ *
+ * 关于分组: 应用名称 + 作者 + 许可 + 数据根路径 + 版本信息
+ *
+ * 使用 [SettingsFieldGroupContainer] 替代 [SettingsExpandedRowContainer]，
+ * 使用 [CONTENT_TYPE_EXPANDED_FIELD_GROUP] 作为 contentType。
+ * 字段在同一个 High Surface 内普通布局。
  * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
 fun LazyListScope.aboutSettingsItems(
     vm: SettingsViewModel,
     closeOuterGroup: Boolean,
 ) {
-    item(key = "about.info_content", contentType = CONTENT_TYPE_EXPANDED_FIELD) {
+    item(
+        key = "about.info_group",
+        contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP,
+    ) {
         val state by vm.aboutState.collectAsStateWithLifecycle()
         SettingsExpandedItemContent {
-            SettingsExpandedRowContainer(
+            SettingsFieldGroupContainer(
                 closeOuterGroup = closeOuterGroup,
-                firstInCategory = true,
-                lastInCategory = true,
                 firstInGroup = true,
                 lastInGroup = true,
             ) {
