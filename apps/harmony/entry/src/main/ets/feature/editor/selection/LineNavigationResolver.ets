@@ -16,6 +16,7 @@ import {
   horizontalForOffset,
   offsetForHorizontal,
   positionForHorizontalArrival,
+  positionForOffsetInLine,
   resolveVisualLineIndex,
 } from '../render/editor_layout_math'
 import type { CaretStop, LineRange, VisualCaretPosition } from '../render/editor_layout_math'
@@ -157,24 +158,15 @@ export class LineNavigationResolver {
    * SoftWrap 终点（行末，折到下一行）：Upstream（光标归上一行末尾）。
    * HardBreak / EndOfText 行末：Downstream。
    */
+  // Issue #629 评论5358224312 第2项：委托 editor_layout_math.positionForOffsetInLine 纯函数。
+  // LineNavigationResolver.ets 只保留 waiter/state 和薄委托，不保留纯算法实现。
   static positionForOffsetInLine(state: LineLayoutState, lineIndex: number, utf16Offset: number): VisualCaretPosition {
-    if (lineIndex < 0 || lineIndex >= state.lines.length) {
-      return { utf16Offset, affinity: CaretAffinity.Downstream }
-    }
-    const line = state.lines[lineIndex]
-    // 行首：SoftWrap 起点 → Downstream（光标在此行开始处）。
-    if (utf16Offset === line.startUtf16) {
-      return { utf16Offset, affinity: CaretAffinity.Downstream }
-    }
-    // 行末：SoftWrap 终点 → Upstream（光标归上一行末尾）。
-    if (utf16Offset === line.endUtf16) {
-      if (line.breakKind === LineBreakKind.SoftWrap) {
-        return { utf16Offset, affinity: CaretAffinity.Upstream }
-      }
-      return { utf16Offset, affinity: CaretAffinity.Downstream }
-    }
-    // 其他位置：Downstream。
-    return { utf16Offset, affinity: CaretAffinity.Downstream }
+    const lineRanges: LineRange[] = state.lines.map((l: NavigationLine): LineRange => ({
+      start: l.startUtf16,
+      end: l.endUtf16,
+      breakKind: l.breakKind,
+    }))
+    return positionForOffsetInLine(lineRanges, lineIndex, utf16Offset)
   }
 
   /**

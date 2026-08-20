@@ -12,6 +12,14 @@
 import { strict as assert } from 'node:assert'
 // Issue #629 评论5357756359 第2项：直接 import 生产 matchesEditorLayoutIdentity，不再复制实现。
 import { matchesEditorLayoutIdentity } from '../editor_layout_identity.ts'
+// Issue #629 评论5358224312 第2项：直接 import 生产纯函数，不再复制算法实现。
+// 测试里的 LineNavigationResolver 纯算法 static 方法改为薄委托调用这些生产函数。
+import {
+  resolveVisualLineIndex,
+  horizontalForOffset,
+  offsetForHorizontal,
+  positionForOffsetInLine,
+} from '../../render/editor_layout_math.ts'
 
 let passed = 0
 const test = (name, fn) => {
@@ -28,6 +36,18 @@ const testAsync = async (name, fn) => {
 // ── 纯逻辑镜像：与 LineNavigationResolver.ets 对齐 ──
 // Issue #629 评论15 第3项：EditorLayoutIdentity = revision + generation + compositionGeneration + displayText。
 
+// Issue #629 评论5358224312 第2项：toLineRanges 把测试 NavigationLine[] 转成生产 LineRange[]，
+// 供生产纯函数（resolveVisualLineIndex / positionForOffsetInLine 等）消费。
+// NavigationLine = { startUtf16, endUtf16, breakKind, ... }，LineRange = { start, end, breakKind }。
+const toLineRanges = (lines) => lines.map(l => ({
+  start: l.startUtf16,
+  end: l.endUtf16,
+  breakKind: l.breakKind,
+}))
+
+// Issue #629 评论5358224312 第2项：LineNavigationResolver 只保留 waiter/state，
+// 纯算法 static 方法全部薄委托 editor_layout_math 生产函数，不再复制算法实现。
+// 这样生产 helper 改坏时测试会跟着红，不会出现"镜像测试仍绿"的假阳性。
 class LineNavigationResolver {
   constructor() {
     this.state = null
@@ -67,22 +87,11 @@ class LineNavigationResolver {
       if (idx >= 0) this.waiters.splice(idx, 1)
     }
   }
-  // R7 任务B：纯函数式静态方法 — 接受 VisualCaretPosition（含 affinity），不写死 Downstream。
-  // 与 production resolveVisualLineIndex 对齐。
+  // Issue #629 评论5358224312 第2项：薄委托生产 resolveVisualLineIndex。
+  // 保留 state.lines.length === 0 → -1 守卫，与 LineNavigationResolver.ets 生产语义一致。
   static getCurrentLineIndex(state, position) {
     if (state.lines.length === 0) return -1
-    const { utf16Offset, affinity } = position
-    for (let i = 0; i < state.lines.length; i++) {
-      const line = state.lines[i]
-      if (utf16Offset >= line.startUtf16 && utf16Offset < line.endUtf16) return i
-      if (utf16Offset === line.endUtf16) {
-        if (line.breakKind === 'softWrap') {
-          return affinity === 'upstream' ? i : i + 1
-        }
-        return i
-      }
-    }
-    return state.lines.length - 1
+    return resolveVisualLineIndex(toLineRanges(state.lines), position)
   }
   static getPreviousLineIndex(state, position) {
     const idx = this.getCurrentLineIndex(state, position)
@@ -94,22 +103,9 @@ class LineNavigationResolver {
     if (idx < 0 || idx >= state.lines.length - 1) return -1
     return idx + 1
   }
-  // R7 任务B：纯函数 — 根据 offset 在指定行的 soft-wrap 边界位置，返回正确 affinity。
+  // Issue #629 评论5358224312 第2项：薄委托生产 positionForOffsetInLine。
   static positionForOffsetInLine(state, lineIndex, utf16Offset) {
-    if (lineIndex < 0 || lineIndex >= state.lines.length) {
-      return { utf16Offset, affinity: 'downstream' }
-    }
-    const line = state.lines[lineIndex]
-    if (utf16Offset === line.startUtf16) {
-      return { utf16Offset, affinity: 'downstream' }
-    }
-    if (utf16Offset === line.endUtf16) {
-      if (line.breakKind === 'softWrap') {
-        return { utf16Offset, affinity: 'upstream' }
-      }
-      return { utf16Offset, affinity: 'downstream' }
-    }
-    return { utf16Offset, affinity: 'downstream' }
+    return positionForOffsetInLine(toLineRanges(state.lines), lineIndex, utf16Offset)
   }
   static getLineStart(state, lineIndex) {
     if (lineIndex < 0 || lineIndex >= state.lines.length) return 0
@@ -119,47 +115,21 @@ class LineNavigationResolver {
     if (lineIndex < 0 || lineIndex >= state.lines.length) return 0
     return state.lines[lineIndex].endUtf16
   }
-  // R7 任务B：getCaretX 接受 VisualCaretPosition。
+  // Issue #629 评论5358224312 第2项：薄委托生产 horizontalForOffset，不再复制二分。
   static getCaretX(state, position) {
     const lineIdx = this.getCurrentLineIndex(state, position)
     if (lineIdx < 0 || lineIdx >= state.lines.length) return 0
-    const line = state.lines[lineIdx]
-    const stops = line.caretStops
+    const stops = state.lines[lineIdx].caretStops
     if (!stops || stops.length === 0) return 0
-    let lo = 0, hi = stops.length - 1, bestIdx = 0
-    let bestDist = Math.abs(stops[0].utf16Offset - position.utf16Offset)
-    while (lo <= hi) {
-      const mid = Math.floor((lo + hi) / 2)
-      const dist = Math.abs(stops[mid].utf16Offset - position.utf16Offset)
-      if (dist < bestDist || (dist === bestDist && stops[mid].utf16Offset <= position.utf16Offset)) {
-        bestDist = dist
-        bestIdx = mid
-      }
-      if (stops[mid].utf16Offset < position.utf16Offset) lo = mid + 1
-      else if (stops[mid].utf16Offset > position.utf16Offset) hi = mid - 1
-      else break
-    }
-    return stops[bestIdx].x
+    return horizontalForOffset(stops, position.utf16Offset)
   }
-  // Issue #629 评论16 第2项：纯函数 — 给定行内 x 坐标，返回最近的 UTF-16 offset。
+  // Issue #629 评论5358224312 第2项：薄委托生产 offsetForHorizontal，不再复制二分。
   static getNearestOffsetAtX(state, lineIndex, x) {
     if (lineIndex < 0 || lineIndex >= state.lines.length) return 0
     const line = state.lines[lineIndex]
     const stops = line.caretStops
     if (!stops || stops.length === 0) return line.startUtf16
-    let lo = 0, hi = stops.length - 1, bestIdx = 0
-    while (lo <= hi) {
-      const mid = Math.floor((lo + hi) / 2)
-      if (stops[mid].x <= x) { bestIdx = mid; lo = mid + 1 }
-      else hi = mid - 1
-    }
-    if (bestIdx + 1 < stops.length) {
-      const leftX = stops[bestIdx].x
-      const rightX = stops[bestIdx + 1].x
-      if (x - leftX <= rightX - x) return stops[bestIdx].utf16Offset
-      return stops[bestIdx + 1].utf16Offset
-    }
-    return stops[bestIdx].utf16Offset
+    return offsetForHorizontal(stops, x)
   }
 }
 
@@ -533,6 +503,173 @@ test('getCaretX: Downstream at soft-wrap end → 在第二行行首计算 x', ()
   // Downstream at 5 → 归第二行
   const x = LineNavigationResolver.getCaretX(state, { utf16Offset: 5, affinity: 'downstream' })
   assert.equal(x, 0) // 第二行第一个 stop 的 x
+})
+
+// ── Issue #629 评论5358224312 第2项：直接测生产纯函数，确保生产路线被测 ──
+// 这些测试直接调用从 editor_layout_math.ts import 的生产函数，
+// 不经过 LineNavigationResolver wrapper，确保生产实现本身被覆盖。
+// 若生产 helper 改坏，这些测试会直接红，不会出现"镜像测试仍绿"的假阳性。
+
+test('生产 resolveVisualLineIndex: soft-wrap 行末 Upstream → 归本行', () => {
+  const lines = [
+    { start: 0, end: 5, breakKind: 'softWrap' },
+    { start: 5, end: 10, breakKind: 'endOfText' },
+  ]
+  assert.equal(resolveVisualLineIndex(lines, { utf16Offset: 5, affinity: 'upstream' }), 0)
+})
+
+test('生产 resolveVisualLineIndex: soft-wrap 行末 Downstream → 归下一行', () => {
+  const lines = [
+    { start: 0, end: 5, breakKind: 'softWrap' },
+    { start: 5, end: 10, breakKind: 'endOfText' },
+  ]
+  assert.equal(resolveVisualLineIndex(lines, { utf16Offset: 5, affinity: 'downstream' }), 1)
+})
+
+test('生产 resolveVisualLineIndex: offset 在行内 → 该行', () => {
+  const lines = [
+    { start: 0, end: 5, breakKind: 'softWrap' },
+    { start: 5, end: 10, breakKind: 'endOfText' },
+  ]
+  assert.equal(resolveVisualLineIndex(lines, { utf16Offset: 3, affinity: 'downstream' }), 0)
+  assert.equal(resolveVisualLineIndex(lines, { utf16Offset: 7, affinity: 'downstream' }), 1)
+})
+
+test('生产 resolveVisualLineIndex: 空行数组 → 0', () => {
+  assert.equal(resolveVisualLineIndex([], { utf16Offset: 0, affinity: 'downstream' }), 0)
+})
+
+test('生产 horizontalForOffset: 二分找到对应 stop 的 x', () => {
+  const stops = [
+    { utf16Offset: 0, x: 0 },
+    { utf16Offset: 1, x: 10 },
+    { utf16Offset: 2, x: 20 },
+    { utf16Offset: 3, x: 30 },
+  ]
+  assert.equal(horizontalForOffset(stops, 2), 20)
+  assert.equal(horizontalForOffset(stops, 0), 0)
+  assert.equal(horizontalForOffset(stops, 3), 30)
+})
+
+test('生产 horizontalForOffset: 空 stops → 0', () => {
+  assert.equal(horizontalForOffset([], 5), 0)
+})
+
+test('生产 offsetForHorizontal: 二分找到最近 offset（距离相等取左）', () => {
+  const stops = [
+    { utf16Offset: 0, x: 0 },
+    { utf16Offset: 1, x: 10 },
+    { utf16Offset: 2, x: 20 },
+    { utf16Offset: 3, x: 30 },
+  ]
+  // x=25 → 距 20 和 30 相等，取左 → offset 2
+  assert.equal(offsetForHorizontal(stops, 25), 2)
+  assert.equal(offsetForHorizontal(stops, 0), 0)
+  // x 超过最大 → 最后一个 offset
+  assert.equal(offsetForHorizontal(stops, 1000), 3)
+})
+
+test('生产 offsetForHorizontal: 空 stops → 0', () => {
+  assert.equal(offsetForHorizontal([], 5), 0)
+})
+
+test('生产 positionForOffsetInLine: SoftWrap 行末 → Upstream', () => {
+  const lines = [
+    { start: 0, end: 5, breakKind: 'softWrap' },
+    { start: 5, end: 10, breakKind: 'endOfText' },
+  ]
+  const pos = positionForOffsetInLine(lines, 0, 5)
+  assert.equal(pos.utf16Offset, 5)
+  assert.equal(pos.affinity, 'upstream')
+})
+
+test('生产 positionForOffsetInLine: SoftWrap 行首（下一行 start）→ Downstream', () => {
+  const lines = [
+    { start: 0, end: 5, breakKind: 'softWrap' },
+    { start: 5, end: 10, breakKind: 'endOfText' },
+  ]
+  const pos = positionForOffsetInLine(lines, 1, 5)
+  assert.equal(pos.utf16Offset, 5)
+  assert.equal(pos.affinity, 'downstream')
+})
+
+test('生产 positionForOffsetInLine: HardBreak 行末 → Downstream', () => {
+  const lines = [
+    { start: 0, end: 3, breakKind: 'hardBreak' },
+    { start: 4, end: 7, breakKind: 'endOfText' },
+  ]
+  const pos = positionForOffsetInLine(lines, 0, 3)
+  assert.equal(pos.affinity, 'downstream')
+})
+
+test('生产 positionForOffsetInLine: EndOfText 行末 → Downstream', () => {
+  const lines = [{ start: 0, end: 5, breakKind: 'endOfText' }]
+  const pos = positionForOffsetInLine(lines, 0, 5)
+  assert.equal(pos.affinity, 'downstream')
+})
+
+test('生产 positionForOffsetInLine: 行中间位置 → Downstream', () => {
+  const lines = [
+    { start: 0, end: 5, breakKind: 'softWrap' },
+    { start: 5, end: 10, breakKind: 'endOfText' },
+  ]
+  assert.equal(positionForOffsetInLine(lines, 0, 3).affinity, 'downstream')
+})
+
+test('生产 positionForOffsetInLine: 越界 lineIndex → Downstream', () => {
+  const lines = [{ start: 0, end: 5, breakKind: 'endOfText' }]
+  assert.equal(positionForOffsetInLine(lines, -1, 0).affinity, 'downstream')
+  assert.equal(positionForOffsetInLine(lines, 5, 0).affinity, 'downstream')
+})
+
+// ── 等价断言：测试 wrapper 走的就是生产函数，证明没有第二套算法 ──
+
+test('等价: wrapper getCurrentLineIndex === 生产 resolveVisualLineIndex（非空 lines）', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  const pos = { utf16Offset: 5, affinity: 'upstream' }
+  assert.equal(
+    LineNavigationResolver.getCurrentLineIndex(state, pos),
+    resolveVisualLineIndex(toLineRanges(state.lines), pos),
+  )
+  const pos2 = { utf16Offset: 5, affinity: 'downstream' }
+  assert.equal(
+    LineNavigationResolver.getCurrentLineIndex(state, pos2),
+    resolveVisualLineIndex(toLineRanges(state.lines), pos2),
+  )
+})
+
+test('等价: wrapper positionForOffsetInLine === 生产 positionForOffsetInLine', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  assert.deepEqual(
+    LineNavigationResolver.positionForOffsetInLine(state, 0, 5),
+    positionForOffsetInLine(toLineRanges(state.lines), 0, 5),
+  )
+  assert.deepEqual(
+    LineNavigationResolver.positionForOffsetInLine(state, 1, 5),
+    positionForOffsetInLine(toLineRanges(state.lines), 1, 5),
+  )
+})
+
+test('等价: wrapper getCaretX === 生产 horizontalForOffset（经 getCurrentLineIndex 定行）', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  const pos = { utf16Offset: 7, affinity: 'downstream' }
+  const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, pos)
+  assert.equal(
+    LineNavigationResolver.getCaretX(state, pos),
+    horizontalForOffset(state.lines[lineIdx].caretStops, pos.utf16Offset),
+  )
+})
+
+test('等价: wrapper getNearestOffsetAtX === 生产 offsetForHorizontal', () => {
+  const state = makeState('aaaaabbbbbccccc')
+  assert.equal(
+    LineNavigationResolver.getNearestOffsetAtX(state, 0, 25),
+    offsetForHorizontal(state.lines[0].caretStops, 25),
+  )
+  assert.equal(
+    LineNavigationResolver.getNearestOffsetAtX(state, 1, 35),
+    offsetForHorizontal(state.lines[1].caretStops, 35),
+  )
 })
 
 console.log('---')
