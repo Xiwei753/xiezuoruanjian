@@ -1815,14 +1815,34 @@ async function makeCompleteSequenceDispatcher() {
       return { success: true, data: byteOffset + 1 }
     },
     compositionMoveGraphemeLeft: async () => {
-      coordinatorCalls.compositionMoveLeft.push(snapshot.cursor)
-      snapshot = { ...snapshot, cursor: snapshot.cursor - 1 }
-      return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+      if (!snapshot.composition) return { success: false, errorCode: 'NO_COMPOSITION' };
+      const comp = snapshot.composition;
+      const newCursor = Math.max(0, comp.preeditCursorUtf16 - 1);
+      snapshot = {
+        ...snapshot,
+        composition: {
+          ...comp,
+          preeditCursorUtf16: newCursor,
+          generation: comp.generation + 1,
+        },
+      };
+      coordinatorCalls.compositionMoveLeft.push(comp.preeditCursorUtf16);
+      return { success: true, warnings: [], changedPaths: [], changedEntities: [] };
     },
     compositionMoveGraphemeRight: async () => {
-      coordinatorCalls.compositionMoveRight.push(snapshot.cursor)
-      snapshot = { ...snapshot, cursor: snapshot.cursor + 1 }
-      return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+      if (!snapshot.composition) return { success: false, errorCode: 'NO_COMPOSITION' };
+      const comp = snapshot.composition;
+      const newCursor = Math.min(comp.preeditText.length, comp.preeditCursorUtf16 + 1);
+      snapshot = {
+        ...snapshot,
+        composition: {
+          ...comp,
+          preeditCursorUtf16: newCursor,
+          generation: comp.generation + 1,
+        },
+      };
+      coordinatorCalls.compositionMoveRight.push(comp.preeditCursorUtf16);
+      return { success: true, warnings: [], changedPaths: [], changedEntities: [] };
     },
   }
   let layoutState = null

@@ -447,6 +447,7 @@ export class EditorSemanticDispatcher {
       revision: displaySnapshot.revision,
       generation: displaySnapshot.generation,
       compositionGeneration: displaySnapshot.compositionGeneration,
+      compositionSessionId: displaySnapshot.compositionSessionId,
       displayText: displaySnapshot.text,
     }
     return resolver.waitForLayout(identity)
@@ -506,6 +507,7 @@ export class EditorSemanticDispatcher {
       revision: displaySnapshot.revision,
       generation: displaySnapshot.generation,
       compositionGeneration: displaySnapshot.compositionGeneration,
+      compositionSessionId: displaySnapshot.compositionSessionId,
       displayText: displaySnapshot.text,
     }
     const layoutState = await resolver.waitForLayout(identity)
@@ -819,6 +821,7 @@ export class EditorSemanticDispatcher {
       revision: displaySnapshot.revision,
       generation: displaySnapshot.generation,
       compositionGeneration: displaySnapshot.compositionGeneration,
+      compositionSessionId: displaySnapshot.compositionSessionId,
       displayText: displaySnapshot.text
     }
     const layoutState = await resolver.waitForLayout(identity)
@@ -840,6 +843,7 @@ export class EditorSemanticDispatcher {
     if (latestIdentity.revision !== identity.revision
       || latestIdentity.generation !== identity.generation
       || latestIdentity.compositionGeneration !== identity.compositionGeneration
+      || latestIdentity.compositionSessionId !== identity.compositionSessionId
       || latestIdentity.displayText !== identity.displayText) {
       const refreshedState = await resolver.waitForLayout(latestIdentity)
       if (refreshedState === null) {
