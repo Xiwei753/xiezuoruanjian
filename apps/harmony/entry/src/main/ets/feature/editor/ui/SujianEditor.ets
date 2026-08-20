@@ -248,6 +248,7 @@ export struct SujianEditor {
         revision: snap.revision,
         generation: snap.generation,
         compositionGeneration: snap.compositionGeneration,
+        compositionSessionId: snap.compositionSessionId,
         displayText: snap.text,
         contentWidth: this.contentWidth,
         fontSize: snap.fontSize,

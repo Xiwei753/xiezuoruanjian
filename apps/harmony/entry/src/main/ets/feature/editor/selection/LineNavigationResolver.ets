@@ -21,12 +21,14 @@ import {
 import type { CaretStop, LineRange, VisualCaretPosition } from '../render/editor_layout_math'
 
 // Issue #629 评论15 第3项：布局身份 = 编辑状态身份。
-// revision + generation + compositionGeneration 精确对应 Core 编辑状态；
+// revision + generation + compositionGeneration + compositionSessionId 精确对应 Core 编辑状态；
 // displayText 确保显示文本一致。
+// Issue #629 R11 评论5329310563 第1项：增加 compositionSessionId，避免 session A 的旧布局被误认成 session B。
 export interface EditorLayoutIdentity {
   readonly revision: number
   readonly generation: number
   readonly compositionGeneration: number
+  readonly compositionSessionId: number
   readonly displayText: string
 }
 
@@ -100,6 +102,7 @@ export class LineNavigationResolver {
     return state.revision === identity.revision
       && state.generation === identity.generation
       && state.compositionGeneration === identity.compositionGeneration
+      && state.compositionSessionId === identity.compositionSessionId
       && state.displayText === identity.displayText
   }
 

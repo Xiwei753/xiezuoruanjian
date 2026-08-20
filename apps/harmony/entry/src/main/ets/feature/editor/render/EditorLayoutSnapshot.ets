@@ -30,6 +30,11 @@ export class EditorLayoutSnapshot {
   // 而不是用 contentWidth（布局尺寸属于 Harmony render，不属于 Core 编辑状态）。
   readonly generation: number
   readonly compositionGeneration: number
+  // Issue #629 R11 评论5329310563 第1项：compositionSessionId 由 Core 分配，
+  // 每次 BeginComposition 都会重新编号。普通 begin composition 不会改 committed revision，
+  // 所以 revision + generation + compositionGeneration 可能把 session A 的旧布局误认成 session B。
+  // 必须把 compositionSessionId 一起加入 layout identity。
+  readonly compositionSessionId: number
 
   constructor(
     text: string,
@@ -41,7 +46,8 @@ export class EditorLayoutSnapshot {
     revision: number,
     fontSize: number = 16,
     generation: number = 0,
-    compositionGeneration: number = -1
+    compositionGeneration: number = -1,
+    compositionSessionId: number = 0
   ) {
     this.text = text
     this.selectionAnchor = selectionAnchor
@@ -53,6 +59,7 @@ export class EditorLayoutSnapshot {
     this.fontSize = fontSize
     this.generation = generation
     this.compositionGeneration = compositionGeneration
+    this.compositionSessionId = compositionSessionId
   }
 
   // 从 Core EditorSessionSnapshot 构造布局快照。
@@ -77,7 +84,8 @@ export class EditorLayoutSnapshot {
         snap.revision,
         fontSize ?? 16,
         snap.generation ?? 0,
-        -1
+        -1,
+        0
       )
     }
     // 有 composition：构造临时显示文本。
@@ -112,7 +120,8 @@ export class EditorLayoutSnapshot {
       snap.revision,
       fontSize ?? 16,
       snap.generation ?? 0,
-      composition.generation ?? 0
+      composition.generation ?? 0,
+      composition.sessionId
     )
   }
 }
