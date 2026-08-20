@@ -1861,7 +1861,10 @@ async function makeCompleteSequenceDispatcher() {
   }
   const trySoftWrapAffinitySwitch = async (direction) => {
     if (!layoutState) return { handled: false, result: null }
-    const cursorUtf16 = snapshot.cursor
+    // Issue #629 评论5357756359 第1项：composition 活跃时 display caret 是 preeditCursorUtf16，不是 committed cursor。
+    const cursorUtf16 = snapshot.composition !== null
+      ? snapshot.composition.preeditCursorUtf16
+      : snapshot.cursor
     const currentPosition = selectionController.getVisualCaret(cursorUtf16)
     const arrival = positionForHorizontalArrival(toLineRanges(layoutState.lines), 'right', cursorUtf16)
     const atSoftWrapEnd = arrival.affinity === CaretAffinity.Upstream
@@ -1934,7 +1937,8 @@ async function makeCompleteSequenceDispatcher() {
       const switched = await trySoftWrapAffinitySwitch('left')
       if (switched.handled) return switched.result
       const moveResult = await coordinator.compositionMoveGraphemeLeft()
-      if (moveResult.success) rememberAfterMove('left', snapshot.cursor)
+      // Issue #629 评论5357756359 第1项：composition move 后 display caret 是 preeditCursorUtf16，不是 committed cursor。
+      if (moveResult.success) rememberAfterMove('left', snapshot.composition.preeditCursorUtf16)
       return moveResult
     }
     return executeCommittedGraphemeLeft(extend)
@@ -1944,7 +1948,8 @@ async function makeCompleteSequenceDispatcher() {
       const switched = await trySoftWrapAffinitySwitch('right')
       if (switched.handled) return switched.result
       const moveResult = await coordinator.compositionMoveGraphemeRight()
-      if (moveResult.success) rememberAfterMove('right', snapshot.cursor)
+      // Issue #629 评论5357756359 第1项：composition move 后 display caret 是 preeditCursorUtf16，不是 committed cursor。
+      if (moveResult.success) rememberAfterMove('right', snapshot.composition.preeditCursorUtf16)
       return moveResult
     }
     return executeCommittedGraphemeRight(extend)
@@ -2005,63 +2010,92 @@ await testAsync('R11第4项: committed Left 完整序列 4 -> 3/Downstream -> 3/
   assert.equal(pos.affinity, 'downstream', 'Step3: 2 非 SoftWrap 边界 → Downstream')
 })
 
-await testAsync('R11第4项: composition Right 完整序列 2 -> 3/Upstream -> 3/Downstream，generation 前进后身份仍匹配', async () => {
+// ── Issue #629 评论5357756359 第1项：composition 连续真实序列 ──
+// composition move 后 committed cursor 不变，变化的是 preeditCursorUtf16；
+// 真正 move 才增加 generation；纯 affinity switch 不增加；
+// SelectionController identity 使用 move 后的新 generation/sessionId。
+
+await testAsync('评论5357756359 第1项: composition Right 连续真实序列 preeditCursor 2→3→3→4，committed cursor 不变', async () => {
   const d = await makeCompleteSequenceDispatcher()
+  // 初始：preeditText='abcdef', preeditCursorUtf16=2, generation=5, sessionId=7
+  // committed cursor=2（composition move 不改 committed cursor）
   const composition = { sessionId: 7, baseRevision: 1, generation: 5, replaceByteStart: 0, replaceByteEndExclusive: 0, preeditText: 'abcdef', preeditCursorUtf16: 2 }
   d.setSnapshot({ text: '', cursor: 2, selectionAnchor: 2, composition })
   d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30, composition))
-  // Step 1: composition Right → cursor=3, rememberVisualCaret(3/Upstream) with identity generation=5
+  const committedCursorBefore = d.getSnapshot().cursor
+
+  // Step 1: preeditCursor 2 / gen5 → Core move Right → preeditCursor 3 / gen6 / 3-Upstream
   await d.dispatch({ kind: 'graphemeRight', extend: false })
-  assert.equal(d.getSnapshot().cursor, 3, 'Step1: composition Right → cursor=3')
+  assert.equal(d.getSnapshot().cursor, committedCursorBefore, 'Step1: committed cursor 不因 composition move 改变')
+  assert.equal(d.getSnapshot().composition.preeditCursorUtf16, 3, 'Step1: preeditCursorUtf16=3')
+  assert.equal(d.getSnapshot().composition.generation, 6, 'Step1: generation 5→6（真正 move 才增加）')
   let pos = d.selectionController.getVisualCaret(3)
   assert.equal(pos.affinity, 'upstream', 'Step1: 3 是 SoftWrap 行尾，Right 到达 → Upstream')
   let identity = d.selectionController.getIdentity()
-  assert.equal(identity.compositionGeneration, 5, 'Step1: visualCaret 身份 compositionGeneration=5')
-  // Step 2: composition update → generation 前进到 6，preeditText 变
-  const composition2 = { ...composition, generation: 6, preeditText: 'abcXef', preeditCursorUtf16: 3 }
-  d.setSnapshot({ composition: composition2 })
-  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcXef', 30, composition2))
-  // 旧身份（generation=5）不匹配 → getVisualCaret 返回默认 Downstream
-  pos = d.selectionController.getVisualCaret(3)
-  assert.equal(pos.affinity, 'downstream', 'Step2: generation 前进后旧身份不匹配 → 默认 Downstream')
-  // Step 3: Right → trySoftWrap 发现 3/Downstream + right 不切（需 Upstream 才切），走 compositionMove → cursor=4
-  // 先重设 visualCaret 到 3/Upstream with 新身份
-  d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'upstream' })
+  assert.equal(identity.compositionGeneration, 6, 'Step1: identity compositionGeneration=6（move 后新 generation）')
+  assert.equal(identity.compositionSessionId, 7, 'Step1: identity compositionSessionId=7')
+
+  // Step 2: preeditCursor 3 / gen6 / 3-Upstream → 再 Right 只切 affinity → preeditCursor 3 / gen6 / 3-Downstream
   await d.dispatch({ kind: 'graphemeRight', extend: false })
-  assert.equal(d.getSnapshot().cursor, 3, 'Step3: Upstream + Right → trySoftWrap 切 Downstream，cursor 不移动')
+  assert.equal(d.getSnapshot().cursor, committedCursorBefore, 'Step2: committed cursor 仍不变')
+  assert.equal(d.getSnapshot().composition.preeditCursorUtf16, 3, 'Step2: preeditCursorUtf16 仍=3（纯 affinity switch 不 move）')
+  assert.equal(d.getSnapshot().composition.generation, 6, 'Step2: generation 仍=6（纯 affinity switch 不增加 generation）')
   pos = d.selectionController.getVisualCaret(3)
-  assert.equal(pos.affinity, 'downstream', 'Step3: affinity 切到 Downstream')
+  assert.equal(pos.affinity, 'downstream', 'Step2: Upstream + Right → 切 Downstream')
   identity = d.selectionController.getIdentity()
-  assert.equal(identity.compositionGeneration, 6, 'Step3: visualCaret 身份更新到 compositionGeneration=6')
+  assert.equal(identity.compositionGeneration, 6, 'Step2: identity compositionGeneration 仍=6')
+
+  // Step 3: preeditCursor 3 / gen6 / 3-Downstream → 再 Right → preeditCursor 4 / gen7 / 4-Downstream
+  await d.dispatch({ kind: 'graphemeRight', extend: false })
+  assert.equal(d.getSnapshot().cursor, committedCursorBefore, 'Step3: committed cursor 仍不变')
+  assert.equal(d.getSnapshot().composition.preeditCursorUtf16, 4, 'Step3: preeditCursorUtf16=4')
+  assert.equal(d.getSnapshot().composition.generation, 7, 'Step3: generation 6→7（真正 move 才增加）')
+  pos = d.selectionController.getVisualCaret(4)
+  assert.equal(pos.affinity, 'downstream', 'Step3: 4 非 SoftWrap 边界 → Downstream')
+  identity = d.selectionController.getIdentity()
+  assert.equal(identity.compositionGeneration, 7, 'Step3: identity compositionGeneration=7')
+  assert.equal(identity.compositionSessionId, 7, 'Step3: identity compositionSessionId=7')
 })
 
-await testAsync('R11第4项: composition Left 完整序列 4 -> 3/Downstream -> 3/Upstream，generation 前进后身份仍匹配', async () => {
+await testAsync('评论5357756359 第1项: composition Left 连续真实序列 preeditCursor 4→3→3→2，committed cursor 不变', async () => {
   const d = await makeCompleteSequenceDispatcher()
+  // 初始：preeditText='abcdef', preeditCursorUtf16=4, generation=5, sessionId=7
   const composition = { sessionId: 7, baseRevision: 1, generation: 5, replaceByteStart: 0, replaceByteEndExclusive: 0, preeditText: 'abcdef', preeditCursorUtf16: 4 }
   d.setSnapshot({ text: '', cursor: 4, selectionAnchor: 4, composition })
   d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcdef', 30, composition))
-  // Step 1: composition Left → cursor=3, rememberVisualCaret(3/Downstream) with identity generation=5
+  const committedCursorBefore = d.getSnapshot().cursor
+
+  // Step 1: preeditCursor 4 / gen5 → Core move Left → preeditCursor 3 / gen6 / 3-Downstream
   await d.dispatch({ kind: 'graphemeLeft', extend: false })
-  assert.equal(d.getSnapshot().cursor, 3, 'Step1: composition Left → cursor=3')
+  assert.equal(d.getSnapshot().cursor, committedCursorBefore, 'Step1: committed cursor 不因 composition move 改变')
+  assert.equal(d.getSnapshot().composition.preeditCursorUtf16, 3, 'Step1: preeditCursorUtf16=3')
+  assert.equal(d.getSnapshot().composition.generation, 6, 'Step1: generation 5→6（真正 move 才增加）')
   let pos = d.selectionController.getVisualCaret(3)
   assert.equal(pos.affinity, 'downstream', 'Step1: 3 是 SoftWrap 行尾，Left 到达 → Downstream')
   let identity = d.selectionController.getIdentity()
-  assert.equal(identity.compositionGeneration, 5, 'Step1: visualCaret 身份 compositionGeneration=5')
-  // Step 2: composition update → generation 前进到 6
-  const composition2 = { ...composition, generation: 6, preeditText: 'abcXef', preeditCursorUtf16: 3 }
-  d.setSnapshot({ composition: composition2 })
-  d.lineResolver.updateLayout(makeSoftWrapLayoutState('abcXef', 30, composition2))
-  // 旧身份不匹配 → 默认 Downstream
-  pos = d.selectionController.getVisualCaret(3)
-  assert.equal(pos.affinity, 'downstream', 'Step2: generation 前进后旧身份不匹配 → 默认 Downstream')
-  // Step 3: 重设 visualCaret 到 3/Downstream with 新身份，Left → trySoftWrap 切 Upstream
-  d.selectionController.setVisualCaretForTest({ utf16Offset: 3, affinity: 'downstream' })
+  assert.equal(identity.compositionGeneration, 6, 'Step1: identity compositionGeneration=6')
+  assert.equal(identity.compositionSessionId, 7, 'Step1: identity compositionSessionId=7')
+
+  // Step 2: preeditCursor 3 / gen6 / 3-Downstream → 再 Left 只切 affinity → preeditCursor 3 / gen6 / 3-Upstream
   await d.dispatch({ kind: 'graphemeLeft', extend: false })
-  assert.equal(d.getSnapshot().cursor, 3, 'Step3: Downstream + Left → trySoftWrap 切 Upstream，cursor 不移动')
+  assert.equal(d.getSnapshot().cursor, committedCursorBefore, 'Step2: committed cursor 仍不变')
+  assert.equal(d.getSnapshot().composition.preeditCursorUtf16, 3, 'Step2: preeditCursorUtf16 仍=3（纯 affinity switch 不 move）')
+  assert.equal(d.getSnapshot().composition.generation, 6, 'Step2: generation 仍=6（纯 affinity switch 不增加）')
   pos = d.selectionController.getVisualCaret(3)
-  assert.equal(pos.affinity, 'upstream', 'Step3: affinity 切到 Upstream')
+  assert.equal(pos.affinity, 'upstream', 'Step2: Downstream + Left → 切 Upstream')
   identity = d.selectionController.getIdentity()
-  assert.equal(identity.compositionGeneration, 6, 'Step3: visualCaret 身份更新到 compositionGeneration=6')
+  assert.equal(identity.compositionGeneration, 6, 'Step2: identity compositionGeneration 仍=6')
+
+  // Step 3: preeditCursor 3 / gen6 / 3-Upstream → 再 Left → preeditCursor 2 / gen7 / 2-Downstream
+  await d.dispatch({ kind: 'graphemeLeft', extend: false })
+  assert.equal(d.getSnapshot().cursor, committedCursorBefore, 'Step3: committed cursor 仍不变')
+  assert.equal(d.getSnapshot().composition.preeditCursorUtf16, 2, 'Step3: preeditCursorUtf16=2')
+  assert.equal(d.getSnapshot().composition.generation, 7, 'Step3: generation 6→7（真正 move 才增加）')
+  pos = d.selectionController.getVisualCaret(2)
+  assert.equal(pos.affinity, 'downstream', 'Step3: 2 非 SoftWrap 边界 → Downstream')
+  identity = d.selectionController.getIdentity()
+  assert.equal(identity.compositionGeneration, 7, 'Step3: identity compositionGeneration=7')
+  assert.equal(identity.compositionSessionId, 7, 'Step3: identity compositionSessionId=7')
 })
 
 await testAsync('R11第4项: generation 前进身份测试：composition update 后旧 identity getVisualCaret 返回默认 Downstream', async () => {

@@ -1,13 +1,17 @@
 // line_navigation_resolver.test.mjs — LineNavigationResolver 纯逻辑单测。
 // Issue #629 评论15 第3项：彻底重写，对齐新接口。
-// - EditorLayoutIdentity = { revision, generation, compositionGeneration, displayText }
+// - EditorLayoutIdentity = { revision, generation, compositionGeneration, compositionSessionId, displayText }
 // - 等待无 timeout，只有 cancelWait 和匹配布局发布两个出口
 // - 方法改为纯函数式 static，接收显式 state 参数
 // Issue #629 评论16 第2项：新增 NavigationLine/caretStops + getCaretX/getNearestOffsetAtX 测试。
+// Issue #629 评论5357756359 第2项：直接 import 生产 matchesEditorLayoutIdentity，不再复制实现；
+// 补 compositionSessionId 测试。
 //
 // 运行：node line_navigation_resolver.test.mjs
 
 import { strict as assert } from 'node:assert'
+// Issue #629 评论5357756359 第2项：直接 import 生产 matchesEditorLayoutIdentity，不再复制实现。
+import { matchesEditorLayoutIdentity } from '../editor_layout_identity.ts'
 
 let passed = 0
 const test = (name, fn) => {
@@ -37,7 +41,7 @@ class LineNavigationResolver {
   }
   // Issue #629 评论15 第3项：不设 timeout，只靠匹配布局发布或 cancelWait 退出。
   waitForLayout(identity) {
-    if (this.state !== null && this.matchesIdentity(this.state, identity)) {
+    if (this.state !== null && matchesEditorLayoutIdentity(this.state, identity)) {
       return Promise.resolve(this.state)
     }
     return new Promise((resolve) => {
@@ -53,7 +57,7 @@ class LineNavigationResolver {
   resolveWaiters(state) {
     const resolved = []
     for (const waiter of this.waiters) {
-      if (this.matchesIdentity(state, waiter.identity)) {
+      if (matchesEditorLayoutIdentity(state, waiter.identity)) {
         waiter.resolve(state)
         resolved.push(waiter)
       }
@@ -62,13 +66,6 @@ class LineNavigationResolver {
       const idx = this.waiters.indexOf(w)
       if (idx >= 0) this.waiters.splice(idx, 1)
     }
-  }
-  matchesIdentity(state, identity) {
-    if (state === null) return false
-    return state.revision === identity.revision
-      && state.generation === identity.generation
-      && state.compositionGeneration === identity.compositionGeneration
-      && state.displayText === identity.displayText
   }
   // R7 任务B：纯函数式静态方法 — 接受 VisualCaretPosition（含 affinity），不写死 Downstream。
   // 与 production resolveVisualLineIndex 对齐。
@@ -191,6 +188,7 @@ function makeState(text, extra = {}) {
     revision: 1,
     generation: 0,
     compositionGeneration: -1,
+    compositionSessionId: 0,
     contentWidth: 300,
     fontSize: 16,
     lines: mockNavLines(text),
@@ -207,6 +205,7 @@ function makeIdentity(text, extra = {}) {
     revision: 1,
     generation: 0,
     compositionGeneration: -1,
+    compositionSessionId: 0,
     displayText: text,
     ...extra
   }
@@ -217,46 +216,72 @@ console.log('---')
 
 // ── matchesIdentity（新版：revision + generation + compositionGeneration + displayText）──
 
-test('matchesIdentity: state 为 null → false', () => {
-  const r = new LineNavigationResolver()
-  assert.equal(r.matchesIdentity(null, makeIdentity('abc')), false)
-})
-
 test('matchesIdentity: 全字段匹配 → true', () => {
   const r = new LineNavigationResolver()
   r.updateLayout(makeState('abc'))
-  assert.equal(r.matchesIdentity(r.state, makeIdentity('abc')), true)
+  assert.equal(matchesEditorLayoutIdentity(r.state, makeIdentity('abc')), true)
 })
 
 test('matchesIdentity: revision 不同 → false', () => {
   const r = new LineNavigationResolver()
   r.updateLayout(makeState('abc'))
-  assert.equal(r.matchesIdentity(r.state, makeIdentity('abc', { revision: 2 })), false)
+  assert.equal(matchesEditorLayoutIdentity(r.state, makeIdentity('abc', { revision: 2 })), false)
 })
 
 test('matchesIdentity: generation 不同 → false', () => {
   const r = new LineNavigationResolver()
   r.updateLayout(makeState('abc'))
-  assert.equal(r.matchesIdentity(r.state, makeIdentity('abc', { generation: 1 })), false)
+  assert.equal(matchesEditorLayoutIdentity(r.state, makeIdentity('abc', { generation: 1 })), false)
 })
 
 test('matchesIdentity: compositionGeneration 不同 → false', () => {
   const r = new LineNavigationResolver()
   r.updateLayout(makeState('abc'))
-  assert.equal(r.matchesIdentity(r.state, makeIdentity('abc', { compositionGeneration: 5 })), false)
+  assert.equal(matchesEditorLayoutIdentity(r.state, makeIdentity('abc', { compositionGeneration: 5 })), false)
 })
 
 test('matchesIdentity: displayText 不同 → false', () => {
   const r = new LineNavigationResolver()
   r.updateLayout(makeState('abc'))
-  assert.equal(r.matchesIdentity(r.state, makeIdentity('abd')), false)
+  assert.equal(matchesEditorLayoutIdentity(r.state, makeIdentity('abd')), false)
 })
 
 test('matchesIdentity: contentWidth/fontSize 不影响匹配（不属于编辑状态身份）', () => {
   const r = new LineNavigationResolver()
   r.updateLayout(makeState('abc'))
   // 同一编辑状态但不同 contentWidth → 仍然匹配（因为 contentWidth 不在 identity 中）
-  assert.equal(r.matchesIdentity(r.state, makeIdentity('abc')), true)
+  assert.equal(matchesEditorLayoutIdentity(r.state, makeIdentity('abc')), true)
+})
+
+// ── Issue #629 评论5357756359 第2项：compositionSessionId 测试 ──
+
+test('matchesEditorLayoutIdentity: 全字段相同（含 compositionSessionId）→ true', () => {
+  const state = makeState('abc')
+  assert.equal(matchesEditorLayoutIdentity(state, makeIdentity('abc')), true)
+})
+
+test('matchesEditorLayoutIdentity: 仅 compositionSessionId 不同 → false', () => {
+  const state = makeState('abc')
+  assert.equal(matchesEditorLayoutIdentity(state, makeIdentity('abc', { compositionSessionId: 1 })), false)
+})
+
+testAsync('waitForLayout: session A waiter 不被 session B layout 错误 resolve', async () => {
+  const r = new LineNavigationResolver()
+  // 当前布局是 session B（compositionSessionId=2）
+  r.updateLayout(makeState('abc', { compositionSessionId: 2 }))
+  // 等待 session A（compositionSessionId=1）的布局
+  const waitPromise = r.waitForLayout(makeIdentity('abc', { compositionSessionId: 1 }))
+  // session B 的布局不应 resolve session A 的 waiter
+  // 等一小段时间确认 waiter 未被 resolve
+  let resolved = false
+  waitPromise.then((result) => { if (result !== null) resolved = true })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.equal(resolved, false, 'session B layout 不应 resolve session A waiter')
+  // 发布真正 session A 的布局
+  r.updateLayout(makeState('abc', { compositionSessionId: 1 }))
+  const result = await waitPromise
+  assert.notEqual(result, null, '发布 session A layout 后 waiter 被 resolve')
+  assert.equal(result.compositionSessionId, 1)
 })
 
 // ── waitForLayout（无 timeout）──

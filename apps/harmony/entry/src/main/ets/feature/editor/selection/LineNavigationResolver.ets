@@ -19,18 +19,9 @@ import {
   resolveVisualLineIndex,
 } from '../render/editor_layout_math'
 import type { CaretStop, LineRange, VisualCaretPosition } from '../render/editor_layout_math'
-
-// Issue #629 评论15 第3项：布局身份 = 编辑状态身份。
-// revision + generation + compositionGeneration + compositionSessionId 精确对应 Core 编辑状态；
-// displayText 确保显示文本一致。
-// Issue #629 R11 评论5329310563 第1项：增加 compositionSessionId，避免 session A 的旧布局被误认成 session B。
-export interface EditorLayoutIdentity {
-  readonly revision: number
-  readonly generation: number
-  readonly compositionGeneration: number
-  readonly compositionSessionId: number
-  readonly displayText: string
-}
+// Issue #629 评论5357756359 第2项：EditorLayoutIdentity / matchesEditorLayoutIdentity 提取到独立生产文件，
+// LineNavigationResolver.ets 和测试都复用同一份 helper，消除测试中的复制实现。
+import { EditorLayoutIdentity, matchesEditorLayoutIdentity } from './editor_layout_identity'
 
 // Issue #629 评论18：NavigationLine 直接复用 LineLayout（已含 breakKind + caretStops）。
 // 不再自己定义 LineCaretStop / NavigationLine。
@@ -98,12 +89,10 @@ export class LineNavigationResolver {
     }
   }
 
+  // Issue #629 评论5357756359 第2项：委托生产 helper（editor_layout_identity）。
+  // LineLayoutState extends EditorLayoutIdentity，所以 state 可直接传给 matchesEditorLayoutIdentity。
   private matchesIdentity(state: LineLayoutState, identity: EditorLayoutIdentity): boolean {
-    return state.revision === identity.revision
-      && state.generation === identity.generation
-      && state.compositionGeneration === identity.compositionGeneration
-      && state.compositionSessionId === identity.compositionSessionId
-      && state.displayText === identity.displayText
+    return matchesEditorLayoutIdentity(state, identity)
   }
 
   // ── 纯函数式静态方法 ──
