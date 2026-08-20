@@ -13,6 +13,60 @@ import org.junit.Test
  * - Settings NavEntry 使用 noPageTransitionMetadata。
  */
 class SettingsLazyColumnStructureTest {
+    // ── SettingsRoute JankStats interaction markers（评论25 项2） ──
+
+    @Test
+    fun settingsRoute_observesScrollInProgressForInteraction() {
+        val source = settingsRouteSource()
+        assertTrue(
+            "SettingsRoute must observe listState.isScrollInProgress",
+            source.contains("listState.isScrollInProgress") &&
+                source.contains("settings_scroll"),
+        )
+    }
+
+    @Test
+    fun settingsRoute_hasExpandCollapseInteractionMarkers() {
+        val source = settingsRouteSource()
+        assertTrue(
+            "SettingsRoute must mark settings_expand on expand",
+            source.contains("settings_expand"),
+        )
+        assertTrue(
+            "SettingsRoute must mark settings_collapse on collapse",
+            source.contains("settings_collapse"),
+        )
+    }
+
+    @Test
+    fun settingsRoute_lazyColumnUsesListState() {
+        val source = settingsRouteSource()
+        assertTrue(
+            "SettingsLazyColumn must accept listState parameter",
+            source.contains("listState: androidx.compose.foundation.lazy.LazyListState") ||
+                source.contains("listState: LazyListState"),
+        )
+        assertTrue(
+            "LazyColumn must receive state = listState",
+            source.contains("state = listState"),
+        )
+    }
+
+    @Test
+    fun settingsRoute_screenMetricsStateSetToSettings() {
+        val source = settingsRouteSource()
+        assertTrue(
+            "SettingsRoute must set PerformanceMetricsState screen=Settings",
+            source.contains("putState") &&
+                source.contains("\"screen\"") &&
+                source.contains("\"Settings\""),
+        )
+    }
+
+    private fun settingsRouteSource(): String =
+        java.io.File(
+            "src/main/kotlin/com/xiwei/sujian/feature/settings/ui/SettingsRoute.kt",
+        ).readText()
     // ── contentType 常量值验证 ──
 
     @Test
