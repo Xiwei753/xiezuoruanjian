@@ -314,4 +314,5 @@
     <string name="sync_diag_ok">正常</string>
     <string name="sync_diag_fail">异常</string>
     <string name="sync_block_not_ready">同步未就绪</string>
+    <string name="sync_block_already_running">同步正在进行中</string>
 </resources>

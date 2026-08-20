@@ -65,10 +65,12 @@ enum class SessionCloseReason {
  * Rect/Transform 或 Compose mutableState。窗口层在销毁/附着时读写。
  * #595 九：仅保留滚动位置（配置变化/返回重进时恢复 View 滚动），
  * 字体/主题/视口等视觉配置由 Compose 主题和 profile 权威提供，不再保存。
+ *
+ * #630 R14：用逻辑视口锚点替代绝对 scrollX/scrollY 像素。
+ * 不再保存绝对像素，只保存 [viewportAnchor]；窗口层恢复时用文本偏移 + 行内像素
+ * 找回新布局中的滚动位置，避免字体/字号/排版变化时同一绝对 Y 不再对应同一段文字。
  */
 data class ProjectionSnapshot(
-    val scrollX: Float = 0f,
-    val scrollY: Float = 0f,
     val viewportAnchor: ViewportAnchor? = null,
 )
 

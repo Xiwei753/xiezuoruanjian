@@ -23,16 +23,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * #631 字段组模式: 将原来的 5 个独立 item 合并为 2 个字段组 item。
+ * #630 R14 字段组模式：将原来的 5 个独立 item 合并为 2 个字段组 item。
  *
  * 诊断分组: 开关 + 详细开关
  * 操作分组: 导出 + 清空 + 复制设备信息
  *
- * 使用 [SettingsFieldGroupContainer] 替代 [SettingsExpandedRowContainer]，
- * 使用 [CONTENT_TYPE_EXPANDED_FIELD_GROUP] 作为 contentType。
- * 每个字段组一个 item，组内多个字段普通布局（不做 animateItem）。
+ * 使用 [SettingsExpandedGroupContainer] 统一 16dp content padding、12dp 圆角。
+ * 每个字段组一个 item，组内多个字段普通布局。
  * 每个 item 只 collect 自己需要的 row-level StateFlow，避免整分类重组。
- * 展开字段使用 [SettingsExpandedItemContent] 统一 fadeIn100/fadeOut70/placement120。
  */
 fun LazyListScope.diagnosticsSettingsItems(
     vm: SettingsViewModel,
@@ -45,44 +43,42 @@ fun LazyListScope.diagnosticsSettingsItems(
     ) {
         val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
         val verbose by vm.diagnosticsVerboseRow.collectAsStateWithLifecycle()
-        SettingsExpandedItemContent {
-            SettingsFieldGroupContainer(
-                closeOuterGroup = false,
-                firstInGroup = true,
-                lastInGroup = false,
-            ) {
-                SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_diagnostics))
-                SujianSwitchRow(
-                    title = stringResource(id = R.string.pref_diagnostics_enabled),
-                    checked = enabled,
-                    onCheckedChange = { checked ->
-                        DiagnosticsLogger.setEnabled(checked)
-                        EditorEventRingBuffer.setEnabled(checked)
-                        if (!checked) DiagnosticsLogger.setVerbose(false)
-                        vm.handleIntent(
-                            SettingsIntent.UpdateLocal { current ->
-                                current.copy(
-                                    diagnosticsEnabled = checked,
-                                    diagnosticsVerbose = if (checked) current.diagnosticsVerbose else false,
-                                )
-                            },
-                        )
-                    },
-                )
-                SujianSwitchRow(
-                    title = stringResource(id = R.string.pref_diagnostics_verbose),
-                    checked = verbose,
-                    enabled = enabled,
-                    onCheckedChange = { checked ->
-                        DiagnosticsLogger.setVerbose(checked)
-                        vm.handleIntent(
-                            SettingsIntent.UpdateLocal { current ->
-                                current.copy(diagnosticsVerbose = checked)
-                            },
-                        )
-                    },
-                )
-            }
+        SettingsExpandedGroupContainer(
+            closeOuterGroup = false,
+            firstInGroup = true,
+            lastInGroup = false,
+        ) {
+            SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_diagnostics))
+            SujianSwitchRow(
+                title = stringResource(id = R.string.pref_diagnostics_enabled),
+                checked = enabled,
+                onCheckedChange = { checked ->
+                    DiagnosticsLogger.setEnabled(checked)
+                    EditorEventRingBuffer.setEnabled(checked)
+                    if (!checked) DiagnosticsLogger.setVerbose(false)
+                    vm.handleIntent(
+                        SettingsIntent.UpdateLocal { current ->
+                            current.copy(
+                                diagnosticsEnabled = checked,
+                                diagnosticsVerbose = if (checked) current.diagnosticsVerbose else false,
+                            )
+                        },
+                    )
+                },
+            )
+            SujianSwitchRow(
+                title = stringResource(id = R.string.pref_diagnostics_verbose),
+                checked = verbose,
+                enabled = enabled,
+                onCheckedChange = { checked ->
+                    DiagnosticsLogger.setVerbose(checked)
+                    vm.handleIntent(
+                        SettingsIntent.UpdateLocal { current ->
+                            current.copy(diagnosticsVerbose = checked)
+                        },
+                    )
+                },
+            )
         }
     }
 
@@ -100,32 +96,30 @@ private fun LazyListScope.diagnosticsActionItems(
         key = "diagnostics.actions_group",
         contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP,
     ) {
-        SettingsExpandedItemContent {
-            SettingsFieldGroupContainer(
-                closeOuterGroup = closeOuterGroup,
-                firstInGroup = true,
-                lastInGroup = true,
-            ) {
-                val context = LocalContext.current
-                ExportDiagnosticsButton(
-                    context = context,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                val clearedText = stringResource(id = R.string.diagnostics_cleared)
-                val clearFailedText = stringResource(id = R.string.diagnostics_clear_failed)
-                ClearLogsButton(
-                    context = context,
-                    clearedText = clearedText,
-                    clearFailedText = clearFailedText,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
-                CopyDeviceInfoButton(
-                    context = context,
-                    copiedText = deviceInfoCopiedText,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+        SettingsExpandedGroupContainer(
+            closeOuterGroup = closeOuterGroup,
+            firstInGroup = true,
+            lastInGroup = true,
+        ) {
+            val context = LocalContext.current
+            ExportDiagnosticsButton(
+                context = context,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            val clearedText = stringResource(id = R.string.diagnostics_cleared)
+            val clearFailedText = stringResource(id = R.string.diagnostics_clear_failed)
+            ClearLogsButton(
+                context = context,
+                clearedText = clearedText,
+                clearFailedText = clearFailedText,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
+            CopyDeviceInfoButton(
+                context = context,
+                copiedText = deviceInfoCopiedText,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

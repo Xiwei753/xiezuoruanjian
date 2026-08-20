@@ -510,30 +510,22 @@ class EditorWindowHost(
 
     /**
      * #592 三：重新附着窗口后恢复投影保存的滚动位置（配置变化/返回重进时）。
-     * 会话层保存的是纯数据 scrollX/scrollY，这里应用到当前窗口的 View。
+     * 会话层保存的是逻辑视口锚点，这里应用到当前窗口的 View。
      */
     private fun restoreProjectionScroll(
         view: SujianEditorView,
         targetId: String,
     ) {
         val snapshot = sessionCoordinator.getProjectionSnapshot(targetId) ?: return
-        val anchor = snapshot.viewportAnchor
-        if (anchor != null) {
-            // 优先使用逻辑锚点恢复：从文本偏移 + 行内像素推导滚动位置
-            val pipeline = view.getEditorPipeline()
-            val line = pipeline.getLayoutLineForOffset(anchor.textOffsetUtf16)
-            val lineTop = pipeline.getLayoutLineTop(line).toFloat()
-            // 锚点位置的主水平坐标 = 行首 + 行内偏移，直接用它作为 scrollX
-            val anchorPrimaryHorizontal = pipeline.getLayoutPrimaryHorizontal(anchor.textOffsetUtf16)
-            val scrollX = anchorPrimaryHorizontal
-            val scrollY = lineTop
-            // 写入 interaction 用于 JankStats
-            setEditorInteraction("viewport_restore")
-            view.setScrollPosition(scrollX, scrollY)
-        } else {
-            // 兼容旧快照：回退到绝对像素
-            view.setScrollPosition(snapshot.scrollX, snapshot.scrollY)
-        }
+        val anchor = snapshot.viewportAnchor ?: return
+        // 从文本偏移 + 行内像素推导滚动位置
+        val pipeline = view.getEditorPipeline()
+        val line = pipeline.getLayoutLineForOffset(anchor.textOffsetUtf16)
+        val lineTop = pipeline.getLayoutLineTop(line).toFloat()
+        val anchorPrimaryHorizontal = pipeline.getLayoutPrimaryHorizontal(anchor.textOffsetUtf16)
+        // 写入 interaction 用于 JankStats
+        setEditorInteraction("viewport_restore")
+        view.restoreViewportSnapshot(anchor)
     }
 
     fun commitActiveEdit(): Boolean {
@@ -995,8 +987,6 @@ class EditorWindowHost(
         sessionCoordinator.saveProjectionSnapshot(
             targetId,
             ProjectionSnapshot(
-                scrollX = scrollX,
-                scrollY = scrollY,
                 viewportAnchor = viewportAnchor,
             ),
         )

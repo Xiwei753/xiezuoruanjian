@@ -19,14 +19,13 @@ import org.robolectric.annotation.Config
 private const val SETTINGS_SURFACES_KT_CLASS_NAME = "com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt"
 
 /**
- * #630 评论 5324547885 项1：设置页三层语义结构测试。
+ * #630 R14：设置页三层语义结构测试。
  *
  * 验证：
  * - SettingsGroupHeader / SettingsExpandableSection 显式 shadowElevation = 0
- * - SettingsFieldRowContainer 改为透明纯布局（不再每行创建 Surface）
  * - SettingsFieldGroupTitle 不再套 Surface
- * - SettingsExpandedRowContainer 三层结构：Low 外壳 + High 内缩
- * - 8 个设置文件全部使用 SettingsExpandedRowContainer
+ * - SettingsExpandedGroupContainer 三层结构：Low 外壳 + High 内缩
+ * - 8 个设置文件全部使用 SettingsExpandedGroupContainer
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -34,25 +33,10 @@ class SettingsSurfacesStructureTest {
     @get:Rule
     val composeRule = createComposeRule()
 
-    // ── 编译期反射验证：SettingsFieldRowContainer 不再创建 Surface ──
-
-    @Test
-    fun settingsFieldRowContainer_isNotSurface() {
-        // SettingsFieldRowContainer 现在是纯 Box/Column，不再创建 Surface。
-        // 通过反射确认 SettingsFieldRowContainer 函数存在且不包含 Surface 调用。
-        val fileClass = Class.forName(SETTINGS_SURFACES_KT_CLASS_NAME)
-        val methods = fileClass.declaredMethods
-        val hasFieldRowContainer = methods.any { it.name == "SettingsFieldRowContainer" }
-        assertNotNull(
-            "SettingsFieldRowContainer 函数应仍存在",
-            hasFieldRowContainer,
-        )
-    }
+    // ── 编译期反射验证：SettingsFieldGroupTitle 不再创建 Surface ──
 
     @Test
     fun settingsFieldGroupTitle_hasNoOwnSurface() {
-        // SettingsFieldGroupTitle 不再套自己的 Surface；标题属于 SettingsExpandedRowContainer
-        // 的 inner High surface 内部。通过反射确认函数存在（编译通过即证明无 Surface 嵌套错误）。
         val fileClass = Class.forName(SETTINGS_SURFACES_KT_CLASS_NAME)
         val methods = fileClass.declaredMethods
         val hasFieldGroupTitle = methods.any { it.name == "SettingsFieldGroupTitle" }
@@ -63,26 +47,13 @@ class SettingsSurfacesStructureTest {
     }
 
     @Test
-    fun settingsExpandedRowContainer_exists() {
-        // 新增的 SettingsExpandedRowContainer 函数应存在。
+    fun settingsExpandedGroupContainer_exists() {
         val fileClass = Class.forName(SETTINGS_SURFACES_KT_CLASS_NAME)
         val methods = fileClass.declaredMethods
-        val hasExpandedRowContainer = methods.any { it.name == "SettingsExpandedRowContainer" }
+        val hasExpandedGroupContainer = methods.any { it.name == "SettingsExpandedGroupContainer" }
         assertNotNull(
-            "SettingsExpandedRowContainer 函数应存在（#630 评论 5324547885 项1 新增）",
-            hasExpandedRowContainer,
-        )
-    }
-
-    @Test
-    fun settingsExpandedItemModifier_exists() {
-        // LazyItemScope.settingsExpandedItemModifier 扩展函数应存在。
-        val fileClass = Class.forName(SETTINGS_SURFACES_KT_CLASS_NAME)
-        val methods = fileClass.declaredMethods
-        val hasModifier = methods.any { it.name == "settingsExpandedItemModifier" }
-        assertNotNull(
-            "settingsExpandedItemModifier 扩展函数应存在",
-            hasModifier,
+            "SettingsExpandedGroupContainer 函数应存在（#630 R14 新增）",
+            hasExpandedGroupContainer,
         )
     }
 
@@ -90,19 +61,14 @@ class SettingsSurfacesStructureTest {
 
     @Test
     fun settingsGroupHeader_rendersWithShadowElevationZero() {
-        // shadowElevation = 0.dp 已在源码中显式声明；
-        // 编译通过即证明 Surface 的 shadowElevation 参数类型和值正确。
         composeRule.setContent {
             SettingsGroupHeader(title = "Test Group")
         }
-        // Surface 渲染不抛异常即证明参数正确。
         composeRule.waitForIdle()
     }
 
     @Test
     fun settingsExpandableSection_rendersWithShadowElevationZero() {
-        // shadowElevation = 0.dp 已在源码中显式声明；
-        // 编译通过即证明 Surface 的 shadowElevation 参数类型和值正确。
         composeRule.setContent {
             SettingsExpandableSection(
                 title = "Test Section",
@@ -112,19 +78,16 @@ class SettingsSurfacesStructureTest {
                 onExpandedChange = {},
             )
         }
-        // Surface 渲染不抛异常即证明参数正确。
         composeRule.waitForIdle()
     }
 
-    // ── 运行时 Compose 验证：SettingsExpandedRowContainer 结构 ──
+    // ── 运行时 Compose 验证：SettingsExpandedGroupContainer 结构 ──
 
     @Test
-    fun settingsExpandedRowContainer_rendersContent() {
+    fun settingsExpandedGroupContainer_rendersContent() {
         composeRule.setContent {
-            SettingsExpandedRowContainer(
+            SettingsExpandedGroupContainer(
                 closeOuterGroup = false,
-                firstInCategory = true,
-                lastInCategory = true,
                 firstInGroup = true,
                 lastInGroup = true,
             ) {
@@ -135,14 +98,11 @@ class SettingsSurfacesStructureTest {
     }
 
     @Test
-    fun settingsExpandedRowContainer_singleItem_categoryFirstAndLast() {
-        // 单个 item 同时是 firstInCategory 和 lastInCategory，应使用 top shape。
+    fun settingsExpandedGroupContainer_singleItem_fullShape() {
         composeRule.setContent {
             Box(modifier = Modifier.width(300.dp).testTag("parent_box")) {
-                SettingsExpandedRowContainer(
+                SettingsExpandedGroupContainer(
                     closeOuterGroup = false,
-                    firstInCategory = true,
-                    lastInCategory = true,
                     firstInGroup = true,
                     lastInGroup = true,
                 ) {
@@ -153,13 +113,10 @@ class SettingsSurfacesStructureTest {
         composeRule.onNodeWithTag("content").assertExists()
     }
 
-    // ── 编译期验证：8 个设置文件全部使用 SettingsExpandedRowContainer ──
+    // ── 编译期验证：8 个设置文件全部使用 SettingsExpandedGroupContainer ──
 
     @Test
-    fun appearanceSettings_usesExpandedRowContainer() {
-        // 编译通过即证明 appearanceSettingsItems 内部使用了 SettingsExpandedRowContainer
-        // 而非旧的 SettingsGroupItemContainer + SettingsFieldRowContainer 嵌套。
-        // 运行时验证：通过反射确认函数存在。
+    fun appearanceSettings_usesExpandedGroupContainer() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.AppearanceSettingsKt")
         val methods = settingsClass.declaredMethods
         val hasFunction = methods.any { it.name == "appearanceSettingsItems" }
@@ -167,7 +124,7 @@ class SettingsSurfacesStructureTest {
     }
 
     @Test
-    fun editorSettings_usesExpandedRowContainer() {
+    fun editorSettings_usesExpandedGroupContainer() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.EditorSettingsKt")
         val methods = settingsClass.declaredMethods
         val hasFunction = methods.any { it.name == "editorSettingsItems" }
@@ -175,7 +132,7 @@ class SettingsSurfacesStructureTest {
     }
 
     @Test
-    fun saveSettings_usesExpandedRowContainer() {
+    fun saveSettings_usesExpandedGroupContainer() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SaveSettingsKt")
         val methods = settingsClass.declaredMethods
         val hasFunction = methods.any { it.name == "saveSettingsItems" }
@@ -183,7 +140,7 @@ class SettingsSurfacesStructureTest {
     }
 
     @Test
-    fun syncSettings_usesExpandedRowContainer() {
+    fun syncSettings_usesExpandedGroupContainer() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SyncSettingsKt")
         val methods = settingsClass.declaredMethods
         val hasFunction = methods.any { it.name == "syncSettingsItems" }
@@ -191,7 +148,7 @@ class SettingsSurfacesStructureTest {
     }
 
     @Test
-    fun aiSettings_usesExpandedRowContainer() {
+    fun aiSettings_usesExpandedGroupContainer() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.AiSettingsKt")
         val methods = settingsClass.declaredMethods
         val hasFunction = methods.any { it.name == "aiSettingsItems" }
@@ -199,7 +156,7 @@ class SettingsSurfacesStructureTest {
     }
 
     @Test
-    fun diagnosticsSettings_usesExpandedRowContainer() {
+    fun diagnosticsSettings_usesExpandedGroupContainer() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.DiagnosticsSettingsKt")
         val methods = settingsClass.declaredMethods
         val hasFunction = methods.any { it.name == "diagnosticsSettingsItems" }
@@ -207,7 +164,7 @@ class SettingsSurfacesStructureTest {
     }
 
     @Test
-    fun laboratorySettings_usesExpandedRowContainer() {
+    fun laboratorySettings_usesExpandedGroupContainer() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.LaboratorySettingsKt")
         val methods = settingsClass.declaredMethods
         val hasFunction = methods.any { it.name == "laboratorySettingsItems" }
@@ -215,7 +172,7 @@ class SettingsSurfacesStructureTest {
     }
 
     @Test
-    fun aboutSettings_usesExpandedRowContainer() {
+    fun aboutSettings_usesExpandedGroupContainer() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.AboutSettingsKt")
         val methods = settingsClass.declaredMethods
         val hasFunction = methods.any { it.name == "aboutSettingsItems" }

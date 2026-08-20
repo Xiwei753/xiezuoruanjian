@@ -23,6 +23,7 @@ import com.xiwei.sujian.feature.editor.pipeline.PipelineOutput
 import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
 import com.xiwei.sujian.feature.editor.session.EditorContentDelta
 import com.xiwei.sujian.feature.editor.session.EditorOperationKind
+import com.xiwei.sujian.feature.editor.session.ViewportAnchor
 import com.xiwei.sujian.feature.editor.session.NewlinePolicy
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.toEditorOperationKind
@@ -342,6 +343,37 @@ class SujianEditorView
                 scrollY = lineBottom - viewHeight + paddingTop
             }
             scrollY = scrollY.coerceIn(0f, maxScrollY)
+            invalidate()
+        }
+
+        /**
+         * #630 R14：捕获当前视口的逻辑锚点 — 从滚动位置推导文本偏移 + 行内像素。
+         * 窗口层在 detach/配置变化前调用，用于后续 restoreViewportSnapshot 恢复。
+         */
+        fun captureViewportSnapshot(): ViewportAnchor {
+            val currentScrollX = scrollX
+            val currentScrollY = scrollY
+            val anchorLine = pipeline.getLayoutLineForVertical(currentScrollY.toInt())
+            val anchorOffset = pipeline.getLayoutOffsetForHorizontal(anchorLine, currentScrollX)
+            val lineStartOffset = pipeline.getLayoutOffsetForHorizontal(anchorLine, 0f)
+            val lineLeft = pipeline.getLayoutPrimaryHorizontal(lineStartOffset)
+            val offsetWithinLinePx = (currentScrollX - lineLeft).coerceAtLeast(0f)
+            return ViewportAnchor(
+                textOffsetUtf16 = anchorOffset,
+                offsetWithinLinePx = offsetWithinLinePx.toInt(),
+            )
+        }
+
+        /**
+         * #630 R14：从逻辑锚点恢复滚动位置 — 文本偏移 + 行内像素 → scrollX/scrollY。
+         * 布局尚未就绪时由后续 updateMaxScroll 收敛。
+         */
+        fun restoreViewportSnapshot(anchor: ViewportAnchor) {
+            val line = pipeline.getLayoutLineForOffset(anchor.textOffsetUtf16)
+            val lineTop = pipeline.getLayoutLineTop(line).toFloat()
+            val anchorPrimaryHorizontal = pipeline.getLayoutPrimaryHorizontal(anchor.textOffsetUtf16)
+            scrollX = anchorPrimaryHorizontal.coerceAtLeast(0f)
+            scrollY = lineTop.coerceIn(0f, maxScrollY)
             invalidate()
         }
 

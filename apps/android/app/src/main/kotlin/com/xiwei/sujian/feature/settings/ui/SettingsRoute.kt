@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -31,6 +33,9 @@ import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.core.designsystem.theme.SujianDimensions
+
+/** JankStats PerformanceMetricsState key for interaction context (settings_scroll / settings_expand / settings_collapse). */
+private const val SETTINGS_JANK_INTERACTION_KEY = "interaction"
 
 /**
  * 设置列表分组（手机列表按组呈现，组内每一项显示标题、说明或当前值与展开箭头）。
@@ -142,6 +147,25 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
         )
     }
 
+    // #630 评论25 项2：Settings 页 JankStats interaction 上下文。
+    // 滚动开始/结束时写 settings_scroll；展开/折叠时写 settings_expand/settings_collapse。
+    val listState = rememberLazyListState()
+    val isScrolling by remember {
+        derivedStateOf { listState.isScrollInProgress }
+    }
+    LaunchedEffect(isScrolling) {
+        val holder =
+            androidx.metrics.performance.PerformanceMetricsState
+                .getHolderForHierarchy(view)
+        holder?.state?.let { state ->
+            if (isScrolling) {
+                state.putState(SETTINGS_JANK_INTERACTION_KEY, "settings_scroll")
+            } else {
+                state.removeState(SETTINGS_JANK_INTERACTION_KEY)
+            }
+        }
+    }
+
     Box(
         modifier =
             modifier
@@ -155,6 +179,13 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
             vm = vm,
             expansionState = expansionState,
             dims = dims,
+            listState = listState,
+            onInteraction = { interaction ->
+                val holder =
+                    androidx.metrics.performance.PerformanceMetricsState
+                        .getHolderForHierarchy(view)
+                holder?.state?.putSingleFrameState(SETTINGS_JANK_INTERACTION_KEY, interaction)
+            },
         )
         androidx.compose.material3.SnackbarHost(
             hostState = snackbarHostState,
@@ -172,14 +203,18 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
  * LazyColumn 的 forEach + when 结构天然复杂，但每个分支都是独立的 item 注册，
  * 无法进一步拆分而不破坏扁平 Lazy 的语义。
  */
-@Suppress("CognitiveComplexMethod")
+@Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod")
 @Composable
 private fun SettingsLazyColumn(
     vm: SettingsViewModel,
     expansionState: SettingsExpansionState,
     dims: SujianDimensions,
+    listState: androidx.compose.foundation.lazy.LazyListState =
+        androidx.compose.foundation.lazy.rememberLazyListState(),
+    onInteraction: (String) -> Unit = {},
 ) {
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize().testTag(SujianSemanticIds.SettingsScreen),
         contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
     ) {
@@ -196,31 +231,30 @@ private fun SettingsLazyColumn(
             if (categories.isEmpty()) return@forEach
             if (firstGroupShown) {
                 item(key = "settings_group_spacer_${group.name}", contentType = CONTENT_TYPE_SPACER) {
-                    SettingsMovableItemContent {
-                        Spacer(Modifier.height(dims.space16))
-                    }
+                    Spacer(Modifier.height(dims.space16))
                 }
             }
             firstGroupShown = true
             item(key = "settings_group_${group.name}", contentType = CONTENT_TYPE_GROUP_HEADER) {
-                SettingsMovableItemContent {
-                    SettingsGroupHeader(title = stringResource(id = group.titleResId))
-                }
+                SettingsGroupHeader(title = stringResource(id = group.titleResId))
             }
             categories.forEachIndexed { index, category ->
                 val isLastCategory = index == categories.lastIndex
                 val isExpanded = expansionState.isExpanded(category.section)
                 item(key = "settings_category_${category.section.name}", contentType = CONTENT_TYPE_CATEGORY_HEADER) {
-                    SettingsMovableItemContent {
-                        SettingsGroupItemContainer(isLast = isLastCategory && !isExpanded) {
-                            SettingsExpandableSection(
-                                title = stringResource(id = category.titleResId),
-                                summary = settingsCategorySummary(category),
-                                value = settingsCategoryValue(category, vm),
-                                expanded = isExpanded,
-                                onExpandedChange = { expansionState.setExpanded(category.section, it) },
-                            )
-                        }
+                    SettingsGroupItemContainer(isLast = isLastCategory && !isExpanded) {
+                        SettingsExpandableSection(
+                            title = stringResource(id = category.titleResId),
+                            summary = settingsCategorySummary(category),
+                            value = settingsCategoryValue(category, vm),
+                            expanded = isExpanded,
+                            onExpandedChange = { newValue ->
+                                expansionState.setExpanded(category.section, newValue)
+                                onInteraction(
+                                    if (newValue) "settings_expand" else "settings_collapse",
+                                )
+                            },
+                        )
                     }
                 }
                 if (isExpanded) {

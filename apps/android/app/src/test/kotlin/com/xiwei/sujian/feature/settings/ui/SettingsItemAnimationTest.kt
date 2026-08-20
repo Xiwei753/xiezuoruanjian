@@ -18,12 +18,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * #630 评论 5326175206 项2: Lazy item 动画 wrapper 测试。
+ * #630 R14: 设置页 Lazy item 结构测试。
  *
- * - SettingsMovableItemContent: 只做 placement 120ms，无 fade
- * - SettingsExpandedItemContent: fade + placement（fadeIn 100/fadeOut 70/placement 120）
- * - 旧 item（group spacer/header/category title）使用 SettingsMovableItemContent
- * - 新字段继续使用 SettingsExpandedItemContent
+ * R14 删除了旧的 animateItem wrapper（SettingsMovableItemContent / SettingsExpandedItemContent），
+ * 设置列表正常滚动时不需要任何 item placement 动画。
+ * 测试验证 SettingsExpandedGroupContainer 和 contentType 常量存在。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -32,71 +31,48 @@ class SettingsItemAnimationTest {
     val composeRule = createComposeRule()
 
     @Test
-    fun movableItemContent_exists() {
+    fun expandedGroupContainer_exists() {
         val fileClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt")
         val methods = fileClass.declaredMethods
-        val hasMovable = methods.any { it.name == "SettingsMovableItemContent" }
-        assertNotNull("SettingsMovableItemContent 应存在", hasMovable)
+        val hasExpanded = methods.any { it.name == "SettingsExpandedGroupContainer" }
+        assertNotNull("SettingsExpandedGroupContainer 应存在", hasExpanded)
     }
 
     @Test
-    fun expandedItemContent_exists() {
+    fun contentTypeConstants_exist() {
         val fileClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt")
-        val methods = fileClass.declaredMethods
-        val hasExpanded = methods.any { it.name == "SettingsExpandedItemContent" }
-        assertNotNull("SettingsExpandedItemContent 应存在", hasExpanded)
+        val fields = fileClass.declaredFields
+        val hasSearch = fields.any { it.name == "CONTENT_TYPE_SEARCH" }
+        val hasSpacer = fields.any { it.name == "CONTENT_TYPE_SPACER" }
+        val hasGroupHeader = fields.any { it.name == "CONTENT_TYPE_GROUP_HEADER" }
+        val hasCategoryHeader = fields.any { it.name == "CONTENT_TYPE_CATEGORY_HEADER" }
+        val hasFieldGroup = fields.any { it.name == "CONTENT_TYPE_EXPANDED_FIELD_GROUP" }
+        assertNotNull("CONTENT_TYPE_SEARCH 应存在", hasSearch)
+        assertNotNull("CONTENT_TYPE_SPACER 应存在", hasSpacer)
+        assertNotNull("CONTENT_TYPE_GROUP_HEADER 应存在", hasGroupHeader)
+        assertNotNull("CONTENT_TYPE_CATEGORY_HEADER 应存在", hasCategoryHeader)
+        assertNotNull("CONTENT_TYPE_EXPANDED_FIELD_GROUP 应存在", hasFieldGroup)
     }
 
     @Test
-    fun movableItemContent_rendersContent() {
+    fun expandedGroupContainer_rendersContent() {
         composeRule.setContent {
             Box(modifier = Modifier.testTag("root")) {
-                androidx.compose.foundation.lazy.LazyColumn {
-                    item {
-                        SettingsMovableItemContent {
-                            Box(
-                                modifier =
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .height(48.dp)
-                                        .testTag("movable_content"),
-                            ) {}
-                        }
-                    }
+                SettingsExpandedGroupContainer(
+                    closeOuterGroup = false,
+                    firstInGroup = true,
+                    lastInGroup = true,
+                ) {
+                    Box(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("group_content"),
+                    ) {}
                 }
             }
         }
-        composeRule.onNodeWithTag("movable_content").assertExists()
-    }
-
-    @Test
-    fun expandedItemContent_rendersContent() {
-        composeRule.setContent {
-            Box(modifier = Modifier.testTag("root")) {
-                androidx.compose.foundation.lazy.LazyColumn {
-                    item {
-                        SettingsExpandedItemContent {
-                            Box(
-                                modifier =
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .height(48.dp)
-                                        .testTag("expanded_content"),
-                            ) {}
-                        }
-                    }
-                }
-            }
-        }
-        composeRule.onNodeWithTag("expanded_content").assertExists()
-    }
-
-    @Test
-    fun movableItemModifier_exists() {
-        // settingsExpandedItemModifier 备选 modifier 仍存在
-        val fileClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt")
-        val methods = fileClass.declaredMethods
-        val hasModifier = methods.any { it.name == "settingsExpandedItemModifier" }
-        assertNotNull("settingsExpandedItemModifier 应存在", hasModifier)
+        composeRule.onNodeWithTag("group_content").assertExists()
     }
 }
