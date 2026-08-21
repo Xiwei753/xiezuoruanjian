@@ -2,18 +2,22 @@
 // Issue #629 评论21：删除测试镜像，复用生产实现。
 // - LineLayoutStore：状态/等待核心，来自 line_layout_store.ts
 // - matchesEditorLayoutIdentity：身份匹配，来自 editor_layout_identity.ts
-// - resolveVisualLineIndex / horizontalForOffset / offsetForHorizontal：纯函数，来自 editor_layout_math.ts
+// - resolveVisualLineIndex / horizontalForOffset / offsetForHorizontal / positionForOffsetInLine：纯函数，来自 editor_layout_math.ts
+// Issue #629 评论5358224312 第2项：直接测生产纯函数，确保生产路线被测。
+// - 等待无 timeout，只有 cancelAll 和匹配布局发布两个出口
+// - 方法改为纯函数式 static，接收显式 state 参数
+// Issue #629 评论5357756359 第2项：补 compositionSessionId 测试。
 //
 // 运行：node line_navigation_resolver.test.mjs
 
 import { strict as assert } from 'node:assert'
-
 import { LineLayoutStore } from '../line_layout_store.ts'
 import { matchesEditorLayoutIdentity } from '../editor_layout_identity.ts'
 import {
   resolveVisualLineIndex,
   horizontalForOffset,
   offsetForHorizontal,
+  positionForOffsetInLine,
   CaretAffinity,
   LineBreakKind,
 } from '../../render/editor_layout_math.ts'
@@ -164,6 +168,27 @@ testAsync('LineLayoutStore: compositionSessionId 不同 → 不能复用旧布�
   const result = await waitPromise
   assert.notEqual(result, null)
   assert.equal(result.compositionSessionId, 2)
+})
+
+// Issue #629 评论5357756359 第2项：session A/B waiter 隔离测试（改用生产 LineLayoutStore）。
+// 验证 session B 的布局不会错误 resolve session A 的 waiter。
+testAsync('LineLayoutStore: session A waiter 不被 session B layout 错误 resolve', async () => {
+  const store = new LineLayoutStore()
+  // 当前布局是 session B（compositionSessionId=2）
+  store.update(makeState('abc', { compositionSessionId: 2 }))
+  // 等待 session A（compositionSessionId=1）的布局
+  const waitPromise = store.waitFor(makeIdentity('abc', { compositionSessionId: 1 }))
+  // session B 的布局不应 resolve session A 的 waiter
+  // 等一小段时间确认 waiter 未被 resolve
+  let resolved = false
+  waitPromise.then((result) => { if (result !== null) resolved = true })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.equal(resolved, false, 'session B layout 不应 resolve session A waiter')
+  // 发布真正 session A 的布局
+  store.update(makeState('abc', { compositionSessionId: 1 }))
+  const result = await waitPromise
+  assert.notEqual(result, null, '发布 session A layout 后 waiter 被 resolve')
+  assert.equal(result.compositionSessionId, 1)
 })
 
 testAsync('LineLayoutStore: 等待返回 state 后目标计算必须使用该 state.lines', async () => {
@@ -322,10 +347,10 @@ test('offsetForHorizontal: 第二行正确偏移', () => {
   assert.equal(offset, 8)
 })
 
-// ── positionForOffsetInLine（生产函数：通过 LineNavigationResolver 静态方法）──
-// 这些测试验证 soft-wrap affinity 逻辑，需要 LineNavigationResolver 的 static 方法。
+// ── positionForOffsetInLine（生产函数：soft-wrap affinity 逻辑）──
+// 这些测试验证 soft-wrap affinity 逻辑，直接调用生产 positionForOffsetInLine。
 // 因为无法在 Node 中实例化 .ets，但 static 方法只依赖 LineLayoutState，
-// 直接用 mockNavLines 构造等价 state 测试 resolveVisualLineIndex 的行为。
+// 直接用 mockNavLines 构造等价 state 测试生产函数的行为。
 
 test('SoftWrap 起点（行首）→ Downstream', () => {
   const lines = [{ start: 0, end: 5, breakKind: 'softWrap' }, { start: 5, end: 10, breakKind: 'endOfText' }]
@@ -374,6 +399,123 @@ test('positionForHorizontalArrival: 非 SoftWrap 行尾 → Downstream', () => {
   const lines = [{ start: 0, end: 5, breakKind: 'hardBreak' }, { start: 5, end: 10, breakKind: 'endOfText' }]
   const pos = positionForHorizontalArrival(lines, 'right', 5)
   assert.equal(pos.affinity, CaretAffinity.Downstream)
+})
+
+// ── Issue #629 评论5358224312 第2项：直接测生产纯函数，确保生产路线被测 ──
+// 这些测试直接调用从 editor_layout_math.ts import 的生产函数，
+// 不经过任何 wrapper，确保生产实现本身被覆盖。
+// 若生产 helper 改坏，这些测试会直接红，不会出现"镜像测试仍绿"的假阳性。
+
+test('生产 resolveVisualLineIndex: soft-wrap 行末 Upstream → 归本行', () => {
+  const lines = [
+    { start: 0, end: 5, breakKind: 'softWrap' },
+    { start: 5, end: 10, breakKind: 'endOfText' },
+  ]
+  assert.equal(resolveVisualLineIndex(lines, { utf16Offset: 5, affinity: 'upstream' }), 0)
+})
+
+test('生产 resolveVisualLineIndex: soft-wrap 行末 Downstream → 归下一行', () => {
+  const lines = [
+    { start: 0, end: 5, breakKind: 'softWrap' },
+    { start: 5, end: 10, breakKind: 'endOfText' },
+  ]
+  assert.equal(resolveVisualLineIndex(lines, { utf16Offset: 5, affinity: 'downstream' }), 1)
+})
+
+test('生产 resolveVisualLineIndex: offset 在行内 → 该行', () => {
+  const lines = [
+    { start: 0, end: 5, breakKind: 'softWrap' },
+    { start: 5, end: 10, breakKind: 'endOfText' },
+  ]
+  assert.equal(resolveVisualLineIndex(lines, { utf16Offset: 3, affinity: 'downstream' }), 0)
+  assert.equal(resolveVisualLineIndex(lines, { utf16Offset: 7, affinity: 'downstream' }), 1)
+})
+
+test('生产 resolveVisualLineIndex: 空行数组 → 0', () => {
+  assert.equal(resolveVisualLineIndex([], { utf16Offset: 0, affinity: 'downstream' }), 0)
+})
+
+test('生产 horizontalForOffset: 二分找到对应 stop 的 x', () => {
+  const stops = [
+    { utf16Offset: 0, x: 0 },
+    { utf16Offset: 1, x: 10 },
+    { utf16Offset: 2, x: 20 },
+    { utf16Offset: 3, x: 30 },
+  ]
+  assert.equal(horizontalForOffset(stops, 2), 20)
+  assert.equal(horizontalForOffset(stops, 0), 0)
+  assert.equal(horizontalForOffset(stops, 3), 30)
+})
+
+test('生产 horizontalForOffset: 空 stops → 0', () => {
+  assert.equal(horizontalForOffset([], 5), 0)
+})
+
+test('生产 offsetForHorizontal: 二分找到最近 offset（距离相等取左）', () => {
+  const stops = [
+    { utf16Offset: 0, x: 0 },
+    { utf16Offset: 1, x: 10 },
+    { utf16Offset: 2, x: 20 },
+    { utf16Offset: 3, x: 30 },
+  ]
+  // x=25 → 距 20 和 30 相等，取左 → offset 2
+  assert.equal(offsetForHorizontal(stops, 25), 2)
+  assert.equal(offsetForHorizontal(stops, 0), 0)
+  // x 超过最大 → 最后一个 offset
+  assert.equal(offsetForHorizontal(stops, 1000), 3)
+})
+
+test('生产 offsetForHorizontal: 空 stops → 0', () => {
+  assert.equal(offsetForHorizontal([], 5), 0)
+})
+
+test('生产 positionForOffsetInLine: SoftWrap 行末 → Upstream', () => {
+  const lines = [
+    { start: 0, end: 5, breakKind: 'softWrap' },
+    { start: 5, end: 10, breakKind: 'endOfText' },
+  ]
+  const pos = positionForOffsetInLine(lines, 0, 5)
+  assert.equal(pos.utf16Offset, 5)
+  assert.equal(pos.affinity, 'upstream')
+})
+
+test('生产 positionForOffsetInLine: SoftWrap 行首（下一行 start）→ Downstream', () => {
+  const lines = [
+    { start: 0, end: 5, breakKind: 'softWrap' },
+    { start: 5, end: 10, breakKind: 'endOfText' },
+  ]
+  const pos = positionForOffsetInLine(lines, 1, 5)
+  assert.equal(pos.utf16Offset, 5)
+  assert.equal(pos.affinity, 'downstream')
+})
+
+test('生产 positionForOffsetInLine: HardBreak 行末 → Downstream', () => {
+  const lines = [
+    { start: 0, end: 3, breakKind: 'hardBreak' },
+    { start: 4, end: 7, breakKind: 'endOfText' },
+  ]
+  const pos = positionForOffsetInLine(lines, 0, 3)
+  assert.equal(pos.affinity, 'downstream')
+})
+
+test('生产 positionForOffsetInLine: EndOfText 行末 → Downstream', () => {
+  const lines = [{ start: 0, end: 5, breakKind: 'endOfText' }]
+  const pos = positionForOffsetInLine(lines, 0, 5)
+  assert.equal(pos.affinity, 'downstream')
+})
+
+test('生产 positionForOffsetInLine: 行中间位置 → Downstream', () => {
+  const lines = [
+    { start: 0, end: 5, breakKind: 'softWrap' },
+    { start: 5, end: 10, breakKind: 'endOfText' },
+  ]
+  assert.equal(positionForOffsetInLine(lines, 0, 3).affinity, 'downstream')
+})
+
+test('生产 positionForOffsetInLine: 越界 lineIndex → Downstream', () => {
+  const lines = [{ start: 0, end: 5, breakKind: 'endOfText' }]
+  assert.equal(positionForOffsetInLine(lines, -1, 0).affinity, 'downstream')
+  assert.equal(positionForOffsetInLine(lines, 5, 0).affinity, 'downstream')
 })
 
 console.log('---')
