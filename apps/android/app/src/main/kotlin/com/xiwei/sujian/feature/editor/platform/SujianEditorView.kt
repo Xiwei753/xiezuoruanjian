@@ -23,9 +23,9 @@ import com.xiwei.sujian.feature.editor.pipeline.PipelineOutput
 import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
 import com.xiwei.sujian.feature.editor.session.EditorContentDelta
 import com.xiwei.sujian.feature.editor.session.EditorOperationKind
-import com.xiwei.sujian.feature.editor.session.ViewportAnchor
 import com.xiwei.sujian.feature.editor.session.NewlinePolicy
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
+import com.xiwei.sujian.feature.editor.session.ViewportAnchor
 import com.xiwei.sujian.feature.editor.session.toEditorOperationKind
 import com.xiwei.sujian.feature.editor.session.toSessionDelta
 import com.xiwei.sujian.feature.editor.window.WindowDisplayFrameClock
@@ -60,6 +60,8 @@ class SujianEditorView
         private var scrollX: Float = 0f
         private var scrollY: Float = 0f
         private var maxScrollY: Float = 0f
+        private var pendingViewportAnchor: ViewportAnchor? = null
+        private var scrollInteractionActive: Boolean = false
 
         fun getScrollXPos(): Float = scrollX
 
@@ -292,7 +294,7 @@ class SujianEditorView
         fun getText(): String = pipeline.getText()
 
         /**
-         * #624 评论3：排版设置原子入口 — 一次更新 TextPaint / runtime config，
+         * #630 R14：排版设置原子入口 — 一次更新 TextPaint / runtime config，
          * 最后只推进一次布局。字号、行距、首行缩进（开关 + 字符宽度）由
          * [EditorWindowHost.applyEditorTypography] 持续应用到当前共享 View；
          * 设置变化后当前正文立即重排，不重建编辑 session。
@@ -307,7 +309,11 @@ class SujianEditorView
             this.lineSpacingMultiplier = lineSpacingMultiplier
             pipeline.setLineSpacingMultiplier(lineSpacingMultiplier)
             pipeline.setFirstLineIndent(firstLineIndentEnabled, firstLineIndentWidthChars)
-            updateLayoutConfig()
+            // #631：字号/行距/缩进变化也保住当前视口
+            reflowPreservingViewport {
+                val contentWidth = (width - paddingLeft - paddingRight).coerceAtLeast(1)
+                pipeline.updateLayout(contentWidth.toFloat())
+            }
         }
 
         private var lineSpacingMultiplier: Float = 1.0f
@@ -347,34 +353,85 @@ class SujianEditorView
         }
 
         /**
-         * #630 R14：捕获当前视口的逻辑锚点 — 从滚动位置推导文本偏移 + 行内像素。
+         * #630 R14：捕获当前视口的逻辑锚点 — 从滚动位置推导文本偏移 + 行内纵向比例。
          * 窗口层在 detach/配置变化前调用，用于后续 restoreViewportSnapshot 恢复。
+         * 使用相对行高比例而非绝对像素，使字号/行距变化后仍能恢复到同一视觉位置。
          */
         fun captureViewportSnapshot(): ViewportAnchor {
-            val currentScrollX = scrollX
             val currentScrollY = scrollY
             val anchorLine = pipeline.getLayoutLineForVertical(currentScrollY.toInt())
-            val anchorOffset = pipeline.getLayoutOffsetForHorizontal(anchorLine, currentScrollX)
-            val lineStartOffset = pipeline.getLayoutOffsetForHorizontal(anchorLine, 0f)
-            val lineLeft = pipeline.getLayoutPrimaryHorizontal(lineStartOffset)
-            val offsetWithinLinePx = (currentScrollX - lineLeft).coerceAtLeast(0f)
+            val anchorOffset = pipeline.getLayoutLineStart(anchorLine)
+            val lineTop = pipeline.getLayoutLineTop(anchorLine).toFloat()
+            val lineBottom = pipeline.getLayoutLineBottom(anchorLine).toFloat()
+            val lineHeight = (lineBottom - lineTop).coerceAtLeast(1f)
+            val fraction = ((currentScrollY - lineTop) / lineHeight).coerceIn(0f, 1f)
             return ViewportAnchor(
                 textOffsetUtf16 = anchorOffset,
-                offsetWithinLinePx = offsetWithinLinePx.toInt(),
+                offsetWithinLineFraction = fraction,
             )
         }
 
         /**
-         * #630 R14：从逻辑锚点恢复滚动位置 — 文本偏移 + 行内像素 → scrollX/scrollY。
-         * 布局尚未就绪时由后续 updateMaxScroll 收敛。
+         * #631：布局尚未就绪时捕获锚点的 null 版本 — 供 reflowPreservingViewport 使用。
+         */
+        private fun captureViewportSnapshotOrNull(): ViewportAnchor? {
+            if (width - paddingLeft - paddingRight <= 0 || height <= 0) return null
+            if (pipeline.getLayout() == null) return null
+            return captureViewportSnapshot()
+        }
+
+        /**
+         * #630 R14 / #631：从逻辑锚点恢复滚动位置。
+         * 如果布局尚未就绪，锚点被暂存到 pendingViewportAnchor，
+         * 等 updateLayoutConfig() 在真实 measure/layout 后自动恢复。
          */
         fun restoreViewportSnapshot(anchor: ViewportAnchor) {
-            val line = pipeline.getLayoutLineForOffset(anchor.textOffsetUtf16)
+            pendingViewportAnchor = anchor
+            applyPendingViewportAnchorIfReady()
+        }
+
+        /**
+         * #631：待处理锚点的延迟恢复 — 只在真实尺寸和 Layout 就绪后才落到 scrollY。
+         */
+        private fun applyPendingViewportAnchorIfReady() {
+            val anchor = pendingViewportAnchor ?: return
+            if (width - paddingLeft - paddingRight <= 0 || height <= 0) return
+            if (pipeline.getLayout() == null) return
+
+            pendingViewportAnchor = null
+            restoreViewportAnchorNow(anchor)
+        }
+
+        /**
+         * #631：真正改 scrollY 的逻辑 — 从文本偏移 + 行内纵向比例恢复。
+         */
+        private fun restoreViewportAnchorNow(anchor: ViewportAnchor) {
+            val safeOffset = anchor.textOffsetUtf16.coerceIn(0, pipeline.getLengthUtf16())
+            val line = pipeline.getLayoutLineForOffset(safeOffset)
             val lineTop = pipeline.getLayoutLineTop(line).toFloat()
-            val anchorPrimaryHorizontal = pipeline.getLayoutPrimaryHorizontal(anchor.textOffsetUtf16)
-            scrollX = anchorPrimaryHorizontal.coerceAtLeast(0f)
-            scrollY = lineTop.coerceIn(0f, maxScrollY)
+            val lineBottom = pipeline.getLayoutLineBottom(line).toFloat()
+            val lineHeight = (lineBottom - lineTop).coerceAtLeast(1f)
+
+            scrollX = 0f
+            val restoredScrollY = lineTop + lineHeight * anchor.offsetWithinLineFraction
+            scrollY = restoredScrollY.coerceIn(0f, maxScrollY)
             invalidate()
+        }
+
+        /**
+         * #631：统一的重排保视口 helper — 捕获当前逻辑锚点，执行重排，
+         * 再用新 Layout 恢复同一锚点。宽度/字号/行距/缩进变化共用此路径。
+         */
+        private inline fun reflowPreservingViewport(block: () -> Unit) {
+            val anchor = captureViewportSnapshotOrNull()
+            block()
+            updateMaxScroll()
+            if (anchor != null) {
+                pendingViewportAnchor = anchor
+                applyPendingViewportAnchorIfReady()
+            } else {
+                scrollY = scrollY.coerceIn(0f, maxScrollY)
+            }
         }
 
         fun replaceRange(
@@ -430,7 +487,7 @@ class SujianEditorView
             oldh: Int,
         ) {
             super.onSizeChanged(w, h, oldw, oldh)
-            // #630 C块：宽、高分开处理。IME 打开/关闭主要改变高度，宽度真变了才走正文重排。
+            // #630 C块 / #631：宽、高分开处理。IME 打开/关闭主要改变高度，宽度真变了才走正文重排。
             // 高度变化时只更新 viewport 范围并 clamp scrollY，不重排整章、不 scrollToSelection。
             if (w > 0) {
                 val contentWidth = (w - paddingLeft - paddingRight).coerceAtLeast(1)
@@ -438,7 +495,10 @@ class SujianEditorView
                 val heightChanged = h != oldh
                 if (widthChanged) {
                     lastContentWidthPx = contentWidth
-                    updateLayoutConfig()
+                    // #631：宽度变化重排时保住当前视口锚点
+                    reflowPreservingViewport {
+                        pipeline.updateLayout(contentWidth.toFloat())
+                    }
                 } else if (heightChanged) {
                     updateMaxScroll()
                     scrollY = scrollY.coerceIn(0f, maxScrollY)
@@ -460,9 +520,12 @@ class SujianEditorView
         }
 
         private fun updateLayoutConfig() {
-            pipeline.updateLayout((width - paddingLeft - paddingRight).coerceAtLeast(1).toFloat())
+            val contentWidth = width - paddingLeft - paddingRight
+            if (contentWidth <= 0 || height <= 0) return
+            pipeline.updateLayout(contentWidth.toFloat())
             updateMaxScroll()
             scrollY = scrollY.coerceIn(0f, maxScrollY)
+            applyPendingViewportAnchorIfReady()
             invalidate()
         }
         // 已用预分配 ArrayList 减少 onDraw 分配；完全消除需改 drawFrame 接口（List<Pair> → IntArray），
@@ -1134,6 +1197,9 @@ class SujianEditorView
             onCancelRequested = null
             kernelBridge = null
             isSessionBound = false
+            isDragging = false
+            scrollInteractionActive = false
+            pendingViewportAnchor = null
             clearFocus()
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             imm?.hideSoftInputFromWindow(windowToken, 0)
@@ -1165,6 +1231,9 @@ class SujianEditorView
             scrollX = 0f
             scrollY = 0f
             maxScrollY = 0f
+            pendingViewportAnchor = null
+            isDragging = false
+            scrollInteractionActive = false
             searchHighlights = emptyList()
             pipeline.resetForReuse()
             invalidate()

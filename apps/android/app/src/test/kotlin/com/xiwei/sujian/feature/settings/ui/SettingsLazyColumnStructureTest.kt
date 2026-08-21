@@ -54,12 +54,14 @@ class SettingsLazyColumnStructureTest {
 
     @Test
     fun settingsRoute_screenMetricsStateSetToSettings() {
-        val source = settingsRouteSource()
+        val navSuiteSource =
+            java.io.File(
+                "src/main/kotlin/com/xiwei/sujian/app/navigation/SujianNavigationSuite.kt",
+            ).readText()
         assertTrue(
-            "SettingsRoute must set PerformanceMetricsState screen=Settings",
-            source.contains("putState") &&
-                source.contains("\"screen\"") &&
-                source.contains("\"Settings\""),
+            "SujianNavigationSuite must set screen=Settings for Settings route",
+            navSuiteSource.contains("resolveScreenState") &&
+                navSuiteSource.contains("\"Settings\""),
         )
     }
 

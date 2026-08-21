@@ -482,7 +482,7 @@ fun SujianNavigationSuite(
         topLevelBackStack.addTopLevel(destination)
     }
 
-    SujianJankInteractionClearEffect(currentTopDestination)
+    SujianJankInteractionClearEffect(currentRoute, currentTopDestination, workspaceNavState)
     SujianProcessStateEffect(currentTopDestination, appState, syncState)
 
     val navContext =
@@ -566,16 +566,25 @@ internal fun resolveTopLevelSwitchInteraction(
         "top_level_switch"
     }
 
-/** Issue #612 四 / #614：用 PerformanceMetricsState 写 screen/interaction 上下文。
+/** Issue #612 四 / #614 / #631 comment 5364514035 item 5：用 PerformanceMetricsState 写 screen/interaction 上下文。
+ * screen 值综合 currentRoute 与 workspaceNavState.currentLocation：
+ * - Settings 路由 → "Settings"
+ * - Works 路由 + Editor 位置 → "Editor"
+ * - 其余（Works/StarMap/Stats）→ 顶栏目的地名称
  * 一级 tab 无整页动画，interaction 只标记当前切换帧（putSingleFrameState），不再 delay+remove。 */
 @Composable
-private fun SujianJankInteractionClearEffect(currentTopDestination: SujianDestination) {
+private fun SujianJankInteractionClearEffect(
+    currentRoute: SujianRoute,
+    currentTopDestination: SujianDestination,
+    workspaceNavState: ProjectNavigationState,
+) {
     val view = androidx.compose.ui.platform.LocalView.current
     var previousTopDestination by remember { mutableStateOf<SujianDestination?>(null) }
-    LaunchedEffect(currentTopDestination) {
+    LaunchedEffect(currentRoute, workspaceNavState.currentLocation) {
         val holder = androidx.metrics.performance.PerformanceMetricsState.getHolderForHierarchy(view)
         val state = holder?.state
-        state?.putState("screen", currentTopDestination.name)
+        val screenValue = resolveScreenState(currentRoute, currentTopDestination, workspaceNavState)
+        state?.putState("screen", screenValue)
         val interaction =
             resolveTopLevelSwitchInteraction(previousTopDestination, currentTopDestination)
         previousTopDestination = currentTopDestination
@@ -584,6 +593,22 @@ private fun SujianJankInteractionClearEffect(currentTopDestination: SujianDestin
         state?.putSingleFrameState("interaction", interaction)
     }
 }
+
+/**
+ * Issue #631 comment 5364514035 item 5：screen 值的唯一计算点。
+ * EditorWindowHost 不再持有 screen，SettingsRoute 不再写 screen，全部由此函数决定。
+ */
+internal fun resolveScreenState(
+    currentRoute: SujianRoute,
+    currentTopDestination: SujianDestination,
+    workspaceNavState: ProjectNavigationState,
+): String =
+    when {
+        currentRoute is SujianRoute.Settings -> "Settings"
+        currentRoute is SujianRoute.Works &&
+            workspaceNavState.currentLocation is WorkspaceLocation.Editor -> "Editor"
+        else -> currentTopDestination.name
+    }
 
 /**
  * Issue #612 三、3.2：进程状态摘要唯一写入点。

@@ -13,9 +13,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -33,6 +33,7 @@ import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.core.designsystem.theme.SujianDimensions
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 /** JankStats PerformanceMetricsState key for interaction context (settings_scroll / settings_expand / settings_collapse). */
 private const val SETTINGS_JANK_INTERACTION_KEY = "interaction"
@@ -113,10 +114,7 @@ val settingsCategories =
 @Composable
 fun SettingsRoute(modifier: Modifier = Modifier) {
     val view = androidx.compose.ui.platform.LocalView.current
-    androidx.compose.runtime.LaunchedEffect(Unit) {
-        val holder = androidx.metrics.performance.PerformanceMetricsState.getHolderForHierarchy(view)
-        holder?.state?.putState("screen", "Settings")
-    }
+    // #631: screen 标记移至 SujianNavigationSuite，SettingsRoute 不再写 screen。
     val deps = LocalSujianAppDependencies.current
     val vm: SettingsViewModel =
         viewModel(
@@ -147,22 +145,26 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
         )
     }
 
-    // #630 评论25 项2：Settings 页 JankStats interaction 上下文。
-    // 滚动开始/结束时写 settings_scroll；展开/折叠时写 settings_expand/settings_collapse。
+    // #630 评论25 项2 / #631：Settings 页 JankStats interaction 上下文。
+    // 用 snapshotFlow 追踪滚动状态，finally 里确保 removeState 防止泄漏。
     val listState = rememberLazyListState()
-    val isScrolling by remember {
-        derivedStateOf { listState.isScrollInProgress }
-    }
-    LaunchedEffect(isScrolling) {
-        val holder =
+    LaunchedEffect(view, listState) {
+        val state =
             androidx.metrics.performance.PerformanceMetricsState
                 .getHolderForHierarchy(view)
-        holder?.state?.let { state ->
-            if (isScrolling) {
-                state.putState(SETTINGS_JANK_INTERACTION_KEY, "settings_scroll")
-            } else {
-                state.removeState(SETTINGS_JANK_INTERACTION_KEY)
-            }
+                ?.state
+        try {
+            snapshotFlow { listState.isScrollInProgress }
+                .distinctUntilChanged()
+                .collect { scrolling ->
+                    if (scrolling) {
+                        state?.putState(SETTINGS_JANK_INTERACTION_KEY, "settings_scroll")
+                    } else {
+                        state?.removeState(SETTINGS_JANK_INTERACTION_KEY)
+                    }
+                }
+        } finally {
+            state?.removeState(SETTINGS_JANK_INTERACTION_KEY)
         }
     }
 
