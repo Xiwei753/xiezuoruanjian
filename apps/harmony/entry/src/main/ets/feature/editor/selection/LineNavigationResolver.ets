@@ -2,6 +2,8 @@
 // Issue #629 评论21：删除自有 state/waiters/resolveWaiters/matchesIdentity，
 // 委托 LineLayoutStore 管理状态和等待；EditorLayoutIdentity 来自共享 .ts。
 // 行导航纯函数继续委托 editor_layout_math.ts。
+// Issue #629 评论5358224312 第2项：positionForOffsetInLine 也委托 editor_layout_math 纯函数，
+// LineNavigationResolver.ets 只保留 waiter/state 薄委托，不保留纯算法实现。
 
 import { LineLayout } from '../render/editor_render_geometry'
 import {
@@ -10,6 +12,7 @@ import {
   horizontalForOffset,
   offsetForHorizontal,
   positionForHorizontalArrival,
+  positionForOffsetInLine,
   resolveVisualLineIndex,
 } from '../render/editor_layout_math'
 import type { CaretStop, LineRange, VisualCaretPosition } from '../render/editor_layout_math'
@@ -104,21 +107,15 @@ export class LineNavigationResolver {
    * Issue #629 R7 任务B：纯函数 — 根据 offset 在指定行的 soft-wrap 边界位置，
    * 返回正确的 VisualCaretPosition。
    */
+  // Issue #629 评论5358224312 第2项：委托 editor_layout_math.positionForOffsetInLine 纯函数。
+  // LineNavigationResolver.ets 只保留 waiter/state 薄委托，不保留纯算法实现。
   static positionForOffsetInLine(state: LineLayoutState, lineIndex: number, utf16Offset: number): VisualCaretPosition {
-    if (lineIndex < 0 || lineIndex >= state.lines.length) {
-      return { utf16Offset, affinity: CaretAffinity.Downstream }
-    }
-    const line = state.lines[lineIndex]
-    if (utf16Offset === line.startUtf16) {
-      return { utf16Offset, affinity: CaretAffinity.Downstream }
-    }
-    if (utf16Offset === line.endUtf16) {
-      if (line.breakKind === LineBreakKind.SoftWrap) {
-        return { utf16Offset, affinity: CaretAffinity.Upstream }
-      }
-      return { utf16Offset, affinity: CaretAffinity.Downstream }
-    }
-    return { utf16Offset, affinity: CaretAffinity.Downstream }
+    const lineRanges: LineRange[] = state.lines.map((l: NavigationLine): LineRange => ({
+      start: l.startUtf16,
+      end: l.endUtf16,
+      breakKind: l.breakKind,
+    }))
+    return positionForOffsetInLine(lineRanges, lineIndex, utf16Offset)
   }
 
   /**

@@ -308,3 +308,38 @@ export function positionForHorizontalArrival(
   }
   return { utf16Offset, affinity: CaretAffinity.Downstream }
 }
+
+/**
+ * 纯函数：根据 UTF-16 offset 在指定行的 soft-wrap 边界位置，返回正确 affinity。
+ *
+ * SoftWrap 起点（行首，来自上一行软折）：Downstream（光标在此行）。
+ * SoftWrap 终点（行末，折到下一行）：Upstream（光标归上一行末尾）。
+ * HardBreak / EndOfText 行末：Downstream。
+ *
+ * Issue #629 评论5358224312 第2项：从 LineNavigationResolver.ets 下沉到纯 .ts，
+ * 可被 Node .mjs 测试直接 import。与 positionForHorizontalArrival 互补：
+ * positionForHorizontalArrival 已知移动方向，本函数已知目标行号（行导航场景）。
+ */
+export function positionForOffsetInLine(
+  lines: LineRange[],
+  lineIndex: number,
+  utf16Offset: number,
+): VisualCaretPosition {
+  if (lineIndex < 0 || lineIndex >= lines.length) {
+    return { utf16Offset, affinity: CaretAffinity.Downstream }
+  }
+  const line = lines[lineIndex]
+  // 行首：SoftWrap 起点 → Downstream（光标在此行开始处）。
+  if (utf16Offset === line.start) {
+    return { utf16Offset, affinity: CaretAffinity.Downstream }
+  }
+  // 行末：SoftWrap 终点 → Upstream（光标归上一行末尾）。
+  if (utf16Offset === line.end) {
+    if (line.breakKind === LineBreakKind.SoftWrap) {
+      return { utf16Offset, affinity: CaretAffinity.Upstream }
+    }
+    return { utf16Offset, affinity: CaretAffinity.Downstream }
+  }
+  // 其他位置：Downstream。
+  return { utf16Offset, affinity: CaretAffinity.Downstream }
+}
