@@ -34,15 +34,16 @@ sealed interface WindowBindingState {
 }
 
 /**
- * 视口锚点 — 用逻辑位置（文本偏移 + 行内像素）保存滚动状态，
- * 替代绝对像素（scrollX/scrollY）。在字体/字号/排版变化时仍能正确恢复。
+ * 视口锚点 — 用逻辑位置（文本偏移 + 行内相对比例）保存滚动状态，
+ * 替代绝对像素（scrollX/scrollY）。在字体/字号/行距变化时仍能正确恢复，
+ * 因为恢复时用新行高乘以 fraction，不依赖旧布局的绝对像素。
  *
  * @property textOffsetUtf16 锚点文本偏移（UTF-16 码元）
- * @property offsetWithinLinePx 锚点在行内的水平像素偏移（从行首算起）
+ * @property offsetWithinLineFraction 锚点在行内的纵向相对比例（0.0 = 行顶, 1.0 = 行底）
  */
 data class ViewportAnchor(
     val textOffsetUtf16: Int,
-    val offsetWithinLinePx: Int,
+    val offsetWithinLineFraction: Float,
 )
 
 /**

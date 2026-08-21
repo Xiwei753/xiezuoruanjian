@@ -18,7 +18,6 @@ import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.EditorSessionState
 import com.xiwei.sujian.feature.editor.session.ExternalResetResult
 import com.xiwei.sujian.feature.editor.session.ProjectionSnapshot
-import com.xiwei.sujian.feature.editor.session.ViewportAnchor
 import com.xiwei.sujian.feature.editor.session.SessionCloseReason
 import com.xiwei.sujian.feature.editor.session.SessionCommandPort
 import com.xiwei.sujian.feature.editor.session.SessionResetSource
@@ -70,18 +69,27 @@ class EditorWindowHost(
 ) : SessionCommandPort {
     /** #592 二：窗口标识 — 同一窗口内的 Compose onDispose 用它调用 detachWindowBinding。 */
     val windowId: String = "window:${System.identityHashCode(this)}"
-    private fun setEditorScreen(view: android.view.View) {
-        val holder = androidx.metrics.performance.PerformanceMetricsState.getHolderForHierarchy(view)
-        holder?.state?.putState("screen", "Editor")
-    }
 
-    private fun setEditorInteraction(interaction: String) {
+    private fun beginEditorInteraction(value: String) {
         sharedEditorView?.let { view ->
             val holder = androidx.metrics.performance.PerformanceMetricsState.getHolderForHierarchy(view)
-            holder?.state?.putSingleFrameState("interaction", interaction)
+            holder?.state?.putState(EDITOR_INTERACTION_KEY, value)
         }
     }
 
+    private fun endEditorInteraction() {
+        sharedEditorView?.let { view ->
+            val holder = androidx.metrics.performance.PerformanceMetricsState.getHolderForHierarchy(view)
+            holder?.state?.removeState(EDITOR_INTERACTION_KEY)
+        }
+    }
+
+    private fun markEditorSingleFrame(value: String) {
+        sharedEditorView?.let { view ->
+            val holder = androidx.metrics.performance.PerformanceMetricsState.getHolderForHierarchy(view)
+            holder?.state?.putSingleFrameState(EDITOR_INTERACTION_KEY, value)
+        }
+    }
 
     private val targets = mutableMapOf<String, EditableTextTarget>()
 
@@ -255,7 +263,7 @@ class EditorWindowHost(
         sessionCoordinator.applyMotionPolicy(policy)
         sharedEditorView?.let { view ->
             applyPolicyToView(view, activeTargetId)
-            setEditorInteraction("motion_policy_change")
+            markEditorSingleFrame("motion_policy_change")
         }
     }
 
@@ -316,7 +324,7 @@ class EditorWindowHost(
                 autoIndentWidth = autoIndentWidth,
             )
         sharedEditorView?.let { view -> applyTypographyToView(view, lastTypography!!) }
-        setEditorInteraction("typography_change")
+        markEditorSingleFrame("typography_change")
     }
 
     private fun applyTypographyToView(
@@ -438,6 +446,7 @@ class EditorWindowHost(
      */
     companion object {
         private const val TAG = "EditorWindowHost"
+        private const val EDITOR_INTERACTION_KEY = "editor_interaction"
 
         fun constraintFor(profile: TextEditorProfile?): TargetMotionConstraint {
             if (profile == null) return TargetMotionConstraint()
@@ -518,13 +527,7 @@ class EditorWindowHost(
     ) {
         val snapshot = sessionCoordinator.getProjectionSnapshot(targetId) ?: return
         val anchor = snapshot.viewportAnchor ?: return
-        // 从文本偏移 + 行内像素推导滚动位置
-        val pipeline = view.getEditorPipeline()
-        val line = pipeline.getLayoutLineForOffset(anchor.textOffsetUtf16)
-        val lineTop = pipeline.getLayoutLineTop(line).toFloat()
-        val anchorPrimaryHorizontal = pipeline.getLayoutPrimaryHorizontal(anchor.textOffsetUtf16)
-        // 写入 interaction 用于 JankStats
-        setEditorInteraction("viewport_restore")
+        markEditorSingleFrame("viewport_restore")
         view.restoreViewportSnapshot(anchor)
     }
 
@@ -705,8 +708,8 @@ class EditorWindowHost(
             // #630 评论 5327560790: 删除 lastTypography 预写 — 首次 bind 已有显式
             // pending.typography（performViewBind 先写排版参数再 attach snapshot），
             // createWindowView 不应再抢先给空 View 套一次缓存排版。
+            // #631: screen 标记移至 SujianNavigationSuite，createWindowView 不再写 screen。
             sharedEditorView = view
-            setEditorScreen(view)
         }
     }
 
@@ -951,6 +954,7 @@ class EditorWindowHost(
     }
 
     private fun clearActiveCallbacks() {
+        endEditorInteraction()
         sharedEditorView?.let { view ->
             view.onLocalEdit = null
             view.onExternalEdit = null
@@ -967,23 +971,8 @@ class EditorWindowHost(
      */
     private fun saveActiveTargetProjection(targetId: String) {
         val view = sharedEditorView ?: return
-        val pipeline = view.getEditorPipeline()
-        val scrollX = view.getScrollXPos()
-        val scrollY = view.getScrollYPos()
-        // 计算视口锚点：从当前滚动位置推导逻辑锚点（文本偏移 + 行内像素）
-        val anchorLine = pipeline.getLayoutLineForVertical(scrollY.toInt())
-        val anchorOffset = pipeline.getLayoutOffsetForHorizontal(anchorLine, scrollX)
-        // 行首偏移 = 该行起始位置的偏移量
-        val lineStartOffset = pipeline.getLayoutOffsetForHorizontal(anchorLine, 0f)
-        // 行首水平位置
-        val lineLeft = pipeline.getLayoutPrimaryHorizontal(lineStartOffset)
-        val offsetWithinLinePx = (scrollX - lineLeft).coerceAtLeast(0f)
-        val viewportAnchor = ViewportAnchor(
-            textOffsetUtf16 = anchorOffset,
-            offsetWithinLinePx = offsetWithinLinePx.toInt(),
-        )
-        // 写入 interaction 用于 JankStats
-        setEditorInteraction("viewport_save")
+        val viewportAnchor = view.captureViewportSnapshot()
+        markEditorSingleFrame("viewport_save")
         sessionCoordinator.saveProjectionSnapshot(
             targetId,
             ProjectionSnapshot(

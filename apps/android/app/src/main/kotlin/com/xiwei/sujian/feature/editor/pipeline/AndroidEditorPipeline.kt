@@ -832,6 +832,11 @@ class AndroidEditorPipeline private constructor(
         return layout.getLineForOffset(offsetUtf16)
     }
 
+    fun getLayoutLineStart(line: Int): Int {
+        val layout = layoutRuntime.getLayout() ?: return 0
+        return layout.getLineStart(line)
+    }
+
     fun getLayoutPrimaryHorizontal(offsetUtf16: Int): Float {
         val layout = layoutRuntime.getLayout() ?: return 0f
         return layout.getPrimaryHorizontal(offsetUtf16)

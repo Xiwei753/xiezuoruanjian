@@ -160,7 +160,9 @@ fun LazyListScope.syncSettingsItems(
     item(key = "sync.actions_group", contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP) {
         val actionsRow by vm.syncActionsRow.collectAsStateWithLifecycle()
         val resultPair by vm.syncResultRow.collectAsStateWithLifecycle()
-        val anySyncRunning = actionsRow.test == SyncCommandState.RUNNING || actionsRow.perform == SyncCommandState.RUNNING
+        val anySyncRunning =
+            actionsRow.test == SyncCommandState.RUNNING ||
+                actionsRow.perform == SyncCommandState.RUNNING
         SettingsExpandedGroupContainer(
             closeOuterGroup = closeOuterGroup,
             firstInGroup = false,
