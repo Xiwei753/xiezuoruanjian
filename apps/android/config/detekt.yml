@@ -275,6 +275,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/AndroidTextAnimationEngine.kt"
       # --- UI状态/工作台测试 ---
       - "**/kotlin/com/xiwei/sujian/app/SujianAppState.kt"
+      # --- 测试：设置页 LazyColumn 结构契约测试，基线已有 23 个函数（#632 前已存在） ---
+      - "**/kotlin/com/xiwei/sujian/feature/settings/ui/SettingsLazyColumnStructureTest.kt"
   StringLiteralDuplication:
     active: true
     threshold: 3

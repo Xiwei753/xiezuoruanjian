@@ -8,20 +8,18 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 
 /**
- * #630 R14 字段组模式 — 一个真实字段组一个 High Surface item，组内多个字段普通布局。
- * 使用 [SettingsExpandedGroupContainer] 统一 16dp content padding、12dp 圆角。
- * 每个 item 只 collect 自己的 row-level StateFlow，避免整分类重组。
+ * #632 评论 5377052579：实验室设置 — 每个重控件一个 Lazy item。
+ * 用 [SettingsExpandedFieldContainer] 渲染，[ExpandedFieldPosition.Only] 表示字段组只有一个 item。
  */
 fun LazyListScope.laboratorySettingsItems(
     vm: SettingsViewModel,
     closeOuterGroup: Boolean,
 ) {
-    item(key = "laboratory.fullscreen", contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP) {
+    item(key = "laboratory.fullscreen", contentType = CONTENT_TYPE_SWITCH) {
         val checked by vm.immersiveFullscreenRow.collectAsStateWithLifecycle()
-        SettingsExpandedGroupContainer(
+        SettingsExpandedFieldContainer(
+            position = ExpandedFieldPosition.Only,
             closeOuterGroup = closeOuterGroup,
-            firstInGroup = true,
-            lastInGroup = true,
         ) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.lab_fullscreen_immersive),

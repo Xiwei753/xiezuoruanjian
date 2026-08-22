@@ -65,6 +65,12 @@ sealed class VolumeChapterListItem {
 }
 
 /**
+ * #632：章树层级缩进 — 章节和空卷提示都是卷的子级，整条行向内缩一层，
+ * 让选中背景、字数、⋮ 一起成为"章节这一层"，而不是只缩标题文字。
+ */
+private val ChapterHierarchyInset = 16.dp
+
+/**
  * #625：把 [WorkspaceActionSpec.kind] 映射到菜单项文字资源 id。
  * 不属于卷/章节 Context 契约的 kind 返回 null，调用方跳过渲染。
  */
@@ -299,6 +305,9 @@ internal fun ChapterTreeContent(
                                             },
                                         ),
                                     volumeId = item.volumeId,
+                                    // #632：整条 ChapterRow 向内缩一层，
+                                    // 选中背景、字数、⋮ 一起成为"章节这一层"。
+                                    modifier = Modifier.padding(start = ChapterHierarchyInset),
                                 )
                             }
                             is VolumeChapterListItem.EmptyChapterHint -> {
@@ -317,6 +326,8 @@ internal fun ChapterTreeContent(
                                                 volume?.title.orEmpty(),
                                             )
                                     },
+                                    // #632：空卷提示也是卷的子级，向内缩一层。
+                                    modifier = Modifier.padding(start = ChapterHierarchyInset),
                                 )
                             }
                         }
@@ -536,18 +547,21 @@ internal fun ChapterRow(
 /**
  * 空卷提示行（#610 评论四）：真实消费 CreateChapter + Volume + EmptyState 槽位 —
  * 契约声明了"空态新建章节"动作，这里就必须画出来，不能只有文字。
+ *
+ * #632：空卷提示也是卷的子级，调用方通过 [modifier] 传入向内缩一层的 padding。
  */
 @Composable
 private fun EmptyChapterHint(
     volumeId: String,
     hasCreateChapter: Boolean,
     onCreateChapter: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Row(
         modifier =
-            Modifier
+            modifier
                 .fillMaxWidth()
-                .padding(start = 48.dp, top = 4.dp, bottom = 4.dp, end = 8.dp),
+                .padding(top = 4.dp, bottom = 4.dp, end = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {

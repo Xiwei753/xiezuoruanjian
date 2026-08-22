@@ -8,22 +8,20 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 
 /**
- * #630 R14 合并字段组 — 一个真实字段组一个 High Surface item，组内多个字段普通布局。
- * 使用 [SettingsExpandedGroupContainer] 统一 16dp content padding、12dp 圆角。
- * 每个 item 只 collect 自己需要的 row-level StateFlow，避免整分类重组。
+ * #632 评论 5377052579：AI 设置 — 每个重控件一个 Lazy item。
+ * 用 [SettingsExpandedFieldContainer] 渲染，[ExpandedFieldPosition.Only] 表示字段组只有一个 item。
  */
 fun LazyListScope.aiSettingsItems(
     vm: SettingsViewModel,
     closeOuterGroup: Boolean,
 ) {
-    item(key = "ai.enabled_group", contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP) {
+    item(key = "ai.enabled", contentType = CONTENT_TYPE_SWITCH) {
         val available by vm.aiAvailableRow.collectAsStateWithLifecycle()
         if (!available) return@item
         val checked by vm.aiEnabledRow.collectAsStateWithLifecycle()
-        SettingsExpandedGroupContainer(
+        SettingsExpandedFieldContainer(
+            position = ExpandedFieldPosition.Only,
             closeOuterGroup = closeOuterGroup,
-            firstInGroup = true,
-            lastInGroup = true,
         ) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_ai_enabled),

@@ -23,32 +23,35 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * #630 R14 字段组模式：将原来的 5 个独立 item 合并为 2 个字段组 item。
+ * #632 评论 5377052579：诊断设置 — 每个重控件一个 Lazy item。
  *
- * 诊断分组: 开关 + 详细开关
+ * 诊断分组: 标题 + 开关 + 详细开关
  * 操作分组: 导出 + 清空 + 复制设备信息
  *
- * 使用 [SettingsExpandedGroupContainer] 统一 16dp content padding、12dp 圆角。
- * 每个字段组一个 item，组内多个字段普通布局。
- * 每个 item 只 collect 自己需要的 row-level StateFlow，避免整分类重组。
+ * 用 [SettingsExpandedFieldContainer] + [ExpandedFieldPosition] 让同一字段组的
+ * 多个 item 视觉上连成一张大卡。每个 item 只 collect 自己需要的 row-level StateFlow。
  */
 fun LazyListScope.diagnosticsSettingsItems(
     vm: SettingsViewModel,
     closeOuterGroup: Boolean,
 ) {
-    // ── 诊断分组（开关 + 详细开关）— 一个字段组 item ──
-    item(
-        key = "diagnostics.diagnostics_group",
-        contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP,
-    ) {
-        val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
-        val verbose by vm.diagnosticsVerboseRow.collectAsStateWithLifecycle()
-        SettingsExpandedGroupContainer(
+    // ── 诊断分组（标题 + 开关 + 详细开关）— 每个 item 独立 ──
+
+    item(key = "diagnostics.title", contentType = CONTENT_TYPE_FIELD_TITLE) {
+        SettingsExpandedFieldContainer(
+            position = ExpandedFieldPosition.First,
             closeOuterGroup = false,
-            firstInGroup = true,
-            lastInGroup = false,
         ) {
             SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_diagnostics))
+        }
+    }
+
+    item(key = "diagnostics.enabled", contentType = CONTENT_TYPE_SWITCH) {
+        val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
+        SettingsExpandedFieldContainer(
+            position = ExpandedFieldPosition.Middle,
+            closeOuterGroup = false,
+        ) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_diagnostics_enabled),
                 checked = enabled,
@@ -66,6 +69,16 @@ fun LazyListScope.diagnosticsSettingsItems(
                     )
                 },
             )
+        }
+    }
+
+    item(key = "diagnostics.verbose", contentType = CONTENT_TYPE_SWITCH) {
+        val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
+        val verbose by vm.diagnosticsVerboseRow.collectAsStateWithLifecycle()
+        SettingsExpandedFieldContainer(
+            position = ExpandedFieldPosition.Last,
+            closeOuterGroup = false,
+        ) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_diagnostics_verbose),
                 checked = verbose,
@@ -82,39 +95,54 @@ fun LazyListScope.diagnosticsSettingsItems(
         }
     }
 
-    // ── 操作分组（导出 + 清空 + 复制设备信息）— 一个字段组 item ──
+    // ── 操作分组（导出 + 清空 + 复制设备信息）— 每个 item 独立 ──
+
     diagnosticsActionItems(vm, closeOuterGroup)
 }
 
-// ── 诊断动作按钮 item：导出 / 清空 / 复制设备信息 ──
+// ── 诊断动作按钮 item：导出 / 清空 / 复制设备信息 — 每个按钮独立 item ──
 
 private fun LazyListScope.diagnosticsActionItems(
     vm: SettingsViewModel,
     closeOuterGroup: Boolean,
 ) {
-    item(
-        key = "diagnostics.actions_group",
-        contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP,
-    ) {
-        SettingsExpandedGroupContainer(
-            closeOuterGroup = closeOuterGroup,
-            firstInGroup = true,
-            lastInGroup = true,
+    item(key = "diagnostics.actions.export", contentType = CONTENT_TYPE_BUTTON) {
+        val context = LocalContext.current
+        SettingsExpandedFieldContainer(
+            position = ExpandedFieldPosition.First,
+            closeOuterGroup = false,
         ) {
-            val context = LocalContext.current
             ExportDiagnosticsButton(
                 context = context,
                 modifier = Modifier.fillMaxWidth(),
             )
-            val clearedText = stringResource(id = R.string.diagnostics_cleared)
-            val clearFailedText = stringResource(id = R.string.diagnostics_clear_failed)
+        }
+    }
+
+    item(key = "diagnostics.actions.clear", contentType = CONTENT_TYPE_BUTTON) {
+        val context = LocalContext.current
+        val clearedText = stringResource(id = R.string.diagnostics_cleared)
+        val clearFailedText = stringResource(id = R.string.diagnostics_clear_failed)
+        SettingsExpandedFieldContainer(
+            position = ExpandedFieldPosition.Middle,
+            closeOuterGroup = false,
+        ) {
             ClearLogsButton(
                 context = context,
                 clearedText = clearedText,
                 clearFailedText = clearFailedText,
                 modifier = Modifier.fillMaxWidth(),
             )
-            val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
+        }
+    }
+
+    item(key = "diagnostics.actions.copy_device_info", contentType = CONTENT_TYPE_BUTTON) {
+        val context = LocalContext.current
+        val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
+        SettingsExpandedFieldContainer(
+            position = ExpandedFieldPosition.Last,
+            closeOuterGroup = closeOuterGroup,
+        ) {
             CopyDeviceInfoButton(
                 context = context,
                 copiedText = deviceInfoCopiedText,
