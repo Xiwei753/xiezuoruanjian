@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -16,16 +17,15 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 // detekt StringLiteralDuplication：反射类名在多处 Class.forName 复用，提取为文件级常量。
-private const val SETTINGS_SURFACES_KT_CLASS_NAME = "com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt"
+private const val SETTINGS_CONTAINERS_KT_CLASS_NAME = "com.xiwei.sujian.feature.settings.ui.SettingsContainersKt"
 
 /**
- * #630 R14：设置页三层语义结构测试。
+ * #633 评论 5379618506：设置页新三层语义结构测试。
  *
  * 验证：
- * - SettingsGroupHeader / SettingsExpandableSection 显式 shadowElevation = 0
- * - SettingsFieldGroupTitle 不再套 Surface
- * - SettingsExpandedGroupContainer 三层结构：Low 外壳 + High 内缩
- * - 8 个设置文件全部使用 SettingsExpandedGroupContainer
+ * - SettingsGroupHeader / SettingsFieldGroupTitle 存在
+ * - SettingsExpandedShell / SettingsInnerCard 三层结构：Low 外壳 + High 内卡
+ * - 8 个设置文件全部提供 @Composable XxxSettingsContent(vm)
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -33,64 +33,57 @@ class SettingsSurfacesStructureTest {
     @get:Rule
     val composeRule = createComposeRule()
 
-    // ── 编译期反射验证：SettingsFieldGroupTitle 不再创建 Surface ──
+    // ── 编译期反射验证：新视觉原语存在 ──
 
     @Test
-    fun settingsFieldGroupTitle_hasNoOwnSurface() {
-        val fileClass = Class.forName(SETTINGS_SURFACES_KT_CLASS_NAME)
+    fun settingsFieldGroupTitle_exists() {
+        val fileClass = Class.forName(SETTINGS_CONTAINERS_KT_CLASS_NAME)
         val methods = fileClass.declaredMethods
         val hasFieldGroupTitle = methods.any { it.name == "SettingsFieldGroupTitle" }
         assertNotNull(
-            "SettingsFieldGroupTitle 函数应仍存在",
+            "SettingsFieldGroupTitle 函数应存在",
             hasFieldGroupTitle,
         )
     }
 
     @Test
-    fun settingsExpandedGroupContainer_exists() {
-        val fileClass = Class.forName(SETTINGS_SURFACES_KT_CLASS_NAME)
+    fun settingsExpandedShell_exists() {
+        val fileClass = Class.forName(SETTINGS_CONTAINERS_KT_CLASS_NAME)
         val methods = fileClass.declaredMethods
-        val hasExpandedGroupContainer = methods.any { it.name == "SettingsExpandedGroupContainer" }
+        val hasExpandedShell = methods.any { it.name == "SettingsExpandedShell" }
         assertNotNull(
-            "SettingsExpandedGroupContainer 函数应存在（#630 R14 新增）",
-            hasExpandedGroupContainer,
+            "SettingsExpandedShell 函数应存在",
+            hasExpandedShell,
+        )
+    }
+
+    @Test
+    fun settingsInnerCard_exists() {
+        val fileClass = Class.forName(SETTINGS_CONTAINERS_KT_CLASS_NAME)
+        val methods = fileClass.declaredMethods
+        val hasInnerCard = methods.any { it.name == "SettingsInnerCard" }
+        assertNotNull(
+            "SettingsInnerCard 函数应存在",
+            hasInnerCard,
         )
     }
 
     // ── 运行时 Compose 验证：shadowElevation = 0 ──
 
     @Test
-    fun settingsGroupHeader_rendersWithShadowElevationZero() {
+    fun settingsGroupHeader_renders() {
         composeRule.setContent {
             SettingsGroupHeader(title = "Test Group")
         }
         composeRule.waitForIdle()
     }
 
-    @Test
-    fun settingsExpandableSection_rendersWithShadowElevationZero() {
-        composeRule.setContent {
-            SettingsExpandableSection(
-                title = "Test Section",
-                summary = "Test summary",
-                value = null,
-                expanded = false,
-                onExpandedChange = {},
-            )
-        }
-        composeRule.waitForIdle()
-    }
-
-    // ── 运行时 Compose 验证：SettingsExpandedGroupContainer 结构 ──
+    // ── 运行时 Compose 验证：SettingsExpandedShell / SettingsInnerCard 结构 ──
 
     @Test
-    fun settingsExpandedGroupContainer_rendersContent() {
+    fun settingsExpandedShell_rendersContent() {
         composeRule.setContent {
-            SettingsExpandedGroupContainer(
-                closeOuterGroup = false,
-                firstInGroup = true,
-                lastInGroup = true,
-            ) {
+            SettingsExpandedShell(closesGroup = false) {
                 Box(modifier = Modifier.testTag("expanded_content")) {}
             }
         }
@@ -98,14 +91,10 @@ class SettingsSurfacesStructureTest {
     }
 
     @Test
-    fun settingsExpandedGroupContainer_singleItem_fullShape() {
+    fun settingsInnerCard_rendersContent() {
         composeRule.setContent {
             Box(modifier = Modifier.width(300.dp).testTag("parent_box")) {
-                SettingsExpandedGroupContainer(
-                    closeOuterGroup = false,
-                    firstInGroup = true,
-                    lastInGroup = true,
-                ) {
+                SettingsInnerCard {
                     Box(modifier = Modifier.testTag("content")) {}
                 }
             }
@@ -113,95 +102,93 @@ class SettingsSurfacesStructureTest {
         composeRule.onNodeWithTag("content").assertExists()
     }
 
-    // ── 编译期验证：8 个设置文件全部使用 SettingsExpandedGroupContainer ──
+    // ── 编译期验证：8 个设置文件全部提供 @Composable XxxSettingsContent(vm) ──
 
     @Test
-    fun appearanceSettings_usesExpandedGroupContainer() {
+    fun appearanceSettingsContent_exists() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.AppearanceSettingsKt")
         val methods = settingsClass.declaredMethods
-        val hasFunction = methods.any { it.name == "appearanceSettingsItems" }
-        assertNotNull("appearanceSettingsItems 函数应存在", hasFunction)
+        val hasFunction = methods.any { it.name == "AppearanceSettingsContent" }
+        assertTrue("AppearanceSettingsContent 函数应存在", hasFunction)
     }
 
     @Test
-    fun editorSettings_usesExpandedGroupContainer() {
+    fun editorSettingsContent_exists() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.EditorSettingsKt")
         val methods = settingsClass.declaredMethods
-        val hasFunction = methods.any { it.name == "editorSettingsItems" }
-        assertNotNull("editorSettingsItems 函数应存在", hasFunction)
+        val hasFunction = methods.any { it.name == "EditorSettingsContent" }
+        assertTrue("EditorSettingsContent 函数应存在", hasFunction)
     }
 
     @Test
-    fun saveSettings_usesExpandedGroupContainer() {
+    fun saveSettingsContent_exists() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SaveSettingsKt")
         val methods = settingsClass.declaredMethods
-        val hasFunction = methods.any { it.name == "saveSettingsItems" }
-        assertNotNull("saveSettingsItems 函数应存在", hasFunction)
+        val hasFunction = methods.any { it.name == "SaveSettingsContent" }
+        assertTrue("SaveSettingsContent 函数应存在", hasFunction)
     }
 
     @Test
-    fun syncSettings_usesExpandedGroupContainer() {
+    fun syncSettingsContent_exists() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SyncSettingsKt")
         val methods = settingsClass.declaredMethods
-        val hasFunction = methods.any { it.name == "syncSettingsItems" }
-        assertNotNull("syncSettingsItems 函数应存在", hasFunction)
+        val hasFunction = methods.any { it.name == "SyncSettingsContent" }
+        assertTrue("SyncSettingsContent 函数应存在", hasFunction)
     }
 
     @Test
-    fun aiSettings_usesExpandedGroupContainer() {
+    fun aiSettingsContent_exists() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.AiSettingsKt")
         val methods = settingsClass.declaredMethods
-        val hasFunction = methods.any { it.name == "aiSettingsItems" }
-        assertNotNull("aiSettingsItems 函数应存在", hasFunction)
+        val hasFunction = methods.any { it.name == "AiSettingsContent" }
+        assertTrue("AiSettingsContent 函数应存在", hasFunction)
     }
 
     @Test
-    fun diagnosticsSettings_usesExpandedGroupContainer() {
+    fun diagnosticsSettingsContent_exists() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.DiagnosticsSettingsKt")
         val methods = settingsClass.declaredMethods
-        val hasFunction = methods.any { it.name == "diagnosticsSettingsItems" }
-        assertNotNull("diagnosticsSettingsItems 函数应存在", hasFunction)
+        val hasFunction = methods.any { it.name == "DiagnosticsSettingsContent" }
+        assertTrue("DiagnosticsSettingsContent 函数应存在", hasFunction)
     }
 
     @Test
-    fun laboratorySettings_usesExpandedGroupContainer() {
+    fun laboratorySettingsContent_exists() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.LaboratorySettingsKt")
         val methods = settingsClass.declaredMethods
-        val hasFunction = methods.any { it.name == "laboratorySettingsItems" }
-        assertNotNull("laboratorySettingsItems 函数应存在", hasFunction)
+        val hasFunction = methods.any { it.name == "LaboratorySettingsContent" }
+        assertTrue("LaboratorySettingsContent 函数应存在", hasFunction)
     }
 
     @Test
-    fun aboutSettings_usesExpandedGroupContainer() {
+    fun aboutSettingsContent_exists() {
         val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.AboutSettingsKt")
         val methods = settingsClass.declaredMethods
-        val hasFunction = methods.any { it.name == "aboutSettingsItems" }
-        assertNotNull("aboutSettingsItems 函数应存在", hasFunction)
+        val hasFunction = methods.any { it.name == "AboutSettingsContent" }
+        assertTrue("AboutSettingsContent 函数应存在", hasFunction)
     }
 
-    // ── 验证 SettingsGroupItemContainer 仍存在（只包分类标题） ──
+    // ── 验证旧的 SettingsSurfaces.kt 已删除 ──
 
     @Test
-    fun settingsGroupItemContainer_stillExists() {
-        val fileClass = Class.forName(SETTINGS_SURFACES_KT_CLASS_NAME)
-        val methods = fileClass.declaredMethods
-        val hasGroupItemContainer = methods.any { it.name == "SettingsGroupItemContainer" }
-        assertNotNull(
-            "SettingsGroupItemContainer 应仍存在（只包分类标题）",
-            hasGroupItemContainer,
+    fun settingsSurfacesKt_isRemoved() {
+        val exists =
+            runCatching { Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt") }
+                .isSuccess
+        assertFalse(
+            "SettingsSurfacesKt 应已删除（#633 评论 5379618506）",
+            exists,
         )
     }
 
-    // ── 验证旧的 SettingsSyncScope 已删除 ──
-
     @Test
-    fun settingsSyncScope_isRemoved() {
-        val fileClass = Class.forName(SETTINGS_SURFACES_KT_CLASS_NAME)
-        val methods = fileClass.declaredMethods
-        val hasSyncScope = methods.any { it.name == "SettingsSyncScope" }
+    fun settingsExpandableSectionKt_isRemoved() {
+        val exists =
+            runCatching { Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsExpandableSectionKt") }
+                .isSuccess
         assertFalse(
-            "SettingsSyncScope 函数应已从 SettingsSurfaces 删除",
-            hasSyncScope,
+            "SettingsExpandableSectionKt 应已删除（#633 评论 5379618506）",
+            exists,
         )
     }
 }

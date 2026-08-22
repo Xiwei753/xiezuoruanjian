@@ -2,7 +2,7 @@ package com.xiwei.sujian.feature.settings.ui
 
 import android.widget.Toast
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -23,138 +23,77 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * #632 评论 5377052579：诊断设置 — 每个重控件一个 Lazy item。
+ * #633 评论 5379618506：诊断设置 — 一个逻辑字段组 = 一张 High 内卡。
  *
- * 诊断分组: 标题 + 开关 + 详细开关
- * 操作分组: 导出 + 清空 + 复制设备信息
- *
- * 用 [SettingsExpandedFieldContainer] + [ExpandedFieldPosition] 让同一字段组的
- * 多个 item 视觉上连成一张大卡。每个 item 只 collect 自己需要的 row-level StateFlow。
+ * 诊断分组: 标题 + 开关 + 详细开关（一张 SettingsInnerCard）
+ * 操作分组: 导出 + 清空 + 复制设备信息（一张 SettingsInnerCard）
  */
-fun LazyListScope.diagnosticsSettingsItems(
-    vm: SettingsViewModel,
-    closeOuterGroup: Boolean,
-) {
-    // ── 诊断分组（标题 + 开关 + 详细开关）— 每个 item 独立 ──
+@Composable
+fun DiagnosticsSettingsContent(vm: SettingsViewModel) {
+    val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
+    val verbose by vm.diagnosticsVerboseRow.collectAsStateWithLifecycle()
 
-    item(key = "diagnostics.title", contentType = CONTENT_TYPE_FIELD_TITLE) {
-        SettingsExpandedFieldContainer(
-            position = ExpandedFieldPosition.First,
-            closeOuterGroup = false,
-        ) {
-            SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_diagnostics))
-        }
+    SettingsInnerCard {
+        SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_diagnostics))
+        SujianSwitchRow(
+            title = stringResource(id = R.string.pref_diagnostics_enabled),
+            checked = enabled,
+            onCheckedChange = { checked ->
+                DiagnosticsLogger.setEnabled(checked)
+                EditorEventRingBuffer.setEnabled(checked)
+                if (!checked) DiagnosticsLogger.setVerbose(false)
+                vm.handleIntent(
+                    SettingsIntent.UpdateLocal { current ->
+                        current.copy(
+                            diagnosticsEnabled = checked,
+                            diagnosticsVerbose = if (checked) current.diagnosticsVerbose else false,
+                        )
+                    },
+                )
+            },
+        )
+        SujianSwitchRow(
+            title = stringResource(id = R.string.pref_diagnostics_verbose),
+            checked = verbose,
+            enabled = enabled,
+            onCheckedChange = { checked ->
+                DiagnosticsLogger.setVerbose(checked)
+                vm.handleIntent(
+                    SettingsIntent.UpdateLocal { current ->
+                        current.copy(diagnosticsVerbose = checked)
+                    },
+                )
+            },
+        )
     }
 
-    item(key = "diagnostics.enabled", contentType = CONTENT_TYPE_SWITCH) {
-        val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
-        SettingsExpandedFieldContainer(
-            position = ExpandedFieldPosition.Middle,
-            closeOuterGroup = false,
-        ) {
-            SujianSwitchRow(
-                title = stringResource(id = R.string.pref_diagnostics_enabled),
-                checked = enabled,
-                onCheckedChange = { checked ->
-                    DiagnosticsLogger.setEnabled(checked)
-                    EditorEventRingBuffer.setEnabled(checked)
-                    if (!checked) DiagnosticsLogger.setVerbose(false)
-                    vm.handleIntent(
-                        SettingsIntent.UpdateLocal { current ->
-                            current.copy(
-                                diagnosticsEnabled = checked,
-                                diagnosticsVerbose = if (checked) current.diagnosticsVerbose else false,
-                            )
-                        },
-                    )
-                },
-            )
-        }
-    }
+    val context = LocalContext.current
+    val clearedText = stringResource(id = R.string.diagnostics_cleared)
+    val clearFailedText = stringResource(id = R.string.diagnostics_clear_failed)
+    val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
 
-    item(key = "diagnostics.verbose", contentType = CONTENT_TYPE_SWITCH) {
-        val enabled by vm.diagnosticsEnabledRow.collectAsStateWithLifecycle()
-        val verbose by vm.diagnosticsVerboseRow.collectAsStateWithLifecycle()
-        SettingsExpandedFieldContainer(
-            position = ExpandedFieldPosition.Last,
-            closeOuterGroup = false,
-        ) {
-            SujianSwitchRow(
-                title = stringResource(id = R.string.pref_diagnostics_verbose),
-                checked = verbose,
-                enabled = enabled,
-                onCheckedChange = { checked ->
-                    DiagnosticsLogger.setVerbose(checked)
-                    vm.handleIntent(
-                        SettingsIntent.UpdateLocal { current ->
-                            current.copy(diagnosticsVerbose = checked)
-                        },
-                    )
-                },
-            )
-        }
-    }
-
-    // ── 操作分组（导出 + 清空 + 复制设备信息）— 每个 item 独立 ──
-
-    diagnosticsActionItems(vm, closeOuterGroup)
-}
-
-// ── 诊断动作按钮 item：导出 / 清空 / 复制设备信息 — 每个按钮独立 item ──
-
-private fun LazyListScope.diagnosticsActionItems(
-    vm: SettingsViewModel,
-    closeOuterGroup: Boolean,
-) {
-    item(key = "diagnostics.actions.export", contentType = CONTENT_TYPE_BUTTON) {
-        val context = LocalContext.current
-        SettingsExpandedFieldContainer(
-            position = ExpandedFieldPosition.First,
-            closeOuterGroup = false,
-        ) {
-            ExportDiagnosticsButton(
-                context = context,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-    }
-
-    item(key = "diagnostics.actions.clear", contentType = CONTENT_TYPE_BUTTON) {
-        val context = LocalContext.current
-        val clearedText = stringResource(id = R.string.diagnostics_cleared)
-        val clearFailedText = stringResource(id = R.string.diagnostics_clear_failed)
-        SettingsExpandedFieldContainer(
-            position = ExpandedFieldPosition.Middle,
-            closeOuterGroup = false,
-        ) {
-            ClearLogsButton(
-                context = context,
-                clearedText = clearedText,
-                clearFailedText = clearFailedText,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-    }
-
-    item(key = "diagnostics.actions.copy_device_info", contentType = CONTENT_TYPE_BUTTON) {
-        val context = LocalContext.current
-        val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
-        SettingsExpandedFieldContainer(
-            position = ExpandedFieldPosition.Last,
-            closeOuterGroup = closeOuterGroup,
-        ) {
-            CopyDeviceInfoButton(
-                context = context,
-                copiedText = deviceInfoCopiedText,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+    SettingsInnerCard {
+        ExportDiagnosticsButton(
+            context = context,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        ClearLogsButton(
+            context = context,
+            clearedText = clearedText,
+            clearFailedText = clearFailedText,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        CopyDeviceInfoButton(
+            context = context,
+            copiedText = deviceInfoCopiedText,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
 // ── 按钮 Composable ──
 
-@androidx.compose.runtime.Composable
+@Composable
 private fun CopyDeviceInfoButton(
     context: android.content.Context,
     copiedText: String,
@@ -178,7 +117,7 @@ private fun CopyDeviceInfoButton(
 /**
  * Issue #612 收口：清空日志按钮。
  */
-@androidx.compose.runtime.Composable
+@Composable
 private fun ClearLogsButton(
     context: android.content.Context,
     clearedText: String,
@@ -215,7 +154,7 @@ private fun ClearLogsButton(
 /**
  * Issue #612 收口：导出按钮。
  */
-@androidx.compose.runtime.Composable
+@Composable
 private fun ExportDiagnosticsButton(
     context: android.content.Context,
     modifier: Modifier = Modifier,

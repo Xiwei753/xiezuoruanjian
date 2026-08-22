@@ -1,16 +1,17 @@
 package com.xiwei.sujian.feature.settings.ui
 
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #630 R14：验证 Settings LazyColumn 的 contentType、key 唯一性
- * 以及 Settings 导航使用 noPageTransitionMetadata（无双页 crossfade）。
+ * #633 评论 5379618506：设置页 Column+verticalScroll 结构测试。
  *
- * - contentType 常量值正确；
- * - 所有稳定 item 的 key 在同一分类内唯一（无 LazyColumn key 冲突）；
- * - Settings NavEntry 使用 noPageTransitionMetadata。
+ * 旧的 LazyColumn/item/key/contentType 结构已替换为 Column+verticalScroll。
+ * 一个 category = 一个 SettingsExpandableCategory（独占 Transition+AnimatedVisibility）。
+ *
+ * 验证：
+ * - SettingsRoute 使用 rememberScrollState + verticalScroll（不再用 LazyColumn）；
+ * - Settings 导航使用 noPageTransitionMetadata（无双页 crossfade）。
  */
 class SettingsLazyColumnStructureTest {
     // ── SettingsRoute JankStats interaction markers（评论25 项2） ──
@@ -19,36 +20,35 @@ class SettingsLazyColumnStructureTest {
     fun settingsRoute_observesScrollInProgressForInteraction() {
         val source = settingsRouteSource()
         assertTrue(
-            "SettingsRoute must observe listState.isScrollInProgress",
-            source.contains("listState.isScrollInProgress") &&
+            "SettingsRoute must observe scrollState.isScrollInProgress",
+            source.contains("scrollState.isScrollInProgress") &&
                 source.contains("settings_scroll"),
         )
     }
 
     @Test
-    fun settingsRoute_hasExpandCollapseInteractionMarkers() {
+    fun settingsRoute_usesColumnWithVerticalScroll() {
         val source = settingsRouteSource()
         assertTrue(
-            "SettingsRoute must mark settings_expand on expand",
-            source.contains("settings_expand"),
+            "SettingsRoute must use rememberScrollState",
+            source.contains("rememberScrollState"),
         )
         assertTrue(
-            "SettingsRoute must mark settings_collapse on collapse",
-            source.contains("settings_collapse"),
+            "SettingsRoute must use verticalScroll",
+            source.contains("verticalScroll"),
         )
     }
 
     @Test
-    fun settingsRoute_lazyColumnUsesListState() {
+    fun settingsRoute_doesNotUseLazyColumn() {
         val source = settingsRouteSource()
         assertTrue(
-            "SettingsLazyColumn must accept listState parameter",
-            source.contains("listState: androidx.compose.foundation.lazy.LazyListState") ||
-                source.contains("listState: LazyListState"),
+            "SettingsRoute must not use LazyColumn",
+            !source.contains("LazyColumn"),
         )
         assertTrue(
-            "LazyColumn must receive state = listState",
-            source.contains("state = listState"),
+            "SettingsRoute must not use rememberLazyListState",
+            !source.contains("rememberLazyListState"),
         )
     }
 
@@ -69,65 +69,71 @@ class SettingsLazyColumnStructureTest {
         java.io.File(
             "src/main/kotlin/com/xiwei/sujian/feature/settings/ui/SettingsRoute.kt",
         ).readText()
-    // ── contentType 常量值验证 ──
+
+    // ── 8 个设置内容文件应提供 @Composable XxxSettingsContent(vm) ──
 
     @Test
-    fun contentTypeConstants_haveExpectedValues() {
-        assertEquals("search", CONTENT_TYPE_SEARCH)
-        assertEquals("spacer", CONTENT_TYPE_SPACER)
-        assertEquals("group_header", CONTENT_TYPE_GROUP_HEADER)
-        assertEquals("category_header", CONTENT_TYPE_CATEGORY_HEADER)
-        assertEquals("expanded_field_group", CONTENT_TYPE_EXPANDED_FIELD_GROUP)
-    }
-
-    // ── key 唯一性验证（每个分类展开后的 item key 互不重复） ──
-
-    @Test
-    fun appearanceItemKeys_areUnique() {
-        val keys = appearanceSettingsItemKeys()
-        assertEquals("Appearance item keys must be unique", keys.size, keys.toSet().size)
+    fun appearanceSettingsContent_exists() {
+        val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.AppearanceSettingsKt")
+        val methods = settingsClass.declaredMethods
+        val hasFunction = methods.any { it.name == "AppearanceSettingsContent" }
+        assertTrue("AppearanceSettingsContent 函数应存在", hasFunction)
     }
 
     @Test
-    fun editorItemKeys_areUnique() {
-        val keys = editorSettingsItemKeys()
-        assertEquals("Editor item keys must be unique", keys.size, keys.toSet().size)
+    fun editorSettingsContent_exists() {
+        val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.EditorSettingsKt")
+        val methods = settingsClass.declaredMethods
+        val hasFunction = methods.any { it.name == "EditorSettingsContent" }
+        assertTrue("EditorSettingsContent 函数应存在", hasFunction)
     }
 
     @Test
-    fun saveItemKeys_areUnique() {
-        val keys = saveSettingsItemKeys()
-        assertEquals("Save item keys must be unique", keys.size, keys.toSet().size)
+    fun saveSettingsContent_exists() {
+        val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SaveSettingsKt")
+        val methods = settingsClass.declaredMethods
+        val hasFunction = methods.any { it.name == "SaveSettingsContent" }
+        assertTrue("SaveSettingsContent 函数应存在", hasFunction)
     }
 
     @Test
-    fun syncItemKeys_areUnique() {
-        val keys = syncSettingsItemKeys()
-        assertEquals("Sync item keys must be unique", keys.size, keys.toSet().size)
+    fun syncSettingsContent_exists() {
+        val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SyncSettingsKt")
+        val methods = settingsClass.declaredMethods
+        val hasFunction = methods.any { it.name == "SyncSettingsContent" }
+        assertTrue("SyncSettingsContent 函数应存在", hasFunction)
     }
 
     @Test
-    fun aiItemKeys_areUnique() {
-        val keys = aiSettingsItemKeys()
-        assertEquals("Ai item keys must be unique", keys.size, keys.toSet().size)
+    fun aiSettingsContent_exists() {
+        val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.AiSettingsKt")
+        val methods = settingsClass.declaredMethods
+        val hasFunction = methods.any { it.name == "AiSettingsContent" }
+        assertTrue("AiSettingsContent 函数应存在", hasFunction)
     }
 
     @Test
-    fun diagnosticsItemKeys_areUnique() {
-        val keys = diagnosticsSettingsItemKeys()
-        assertEquals("Diagnostics item keys must be unique", keys.size, keys.toSet().size)
+    fun diagnosticsSettingsContent_exists() {
+        val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.DiagnosticsSettingsKt")
+        val methods = settingsClass.declaredMethods
+        val hasFunction = methods.any { it.name == "DiagnosticsSettingsContent" }
+        assertTrue("DiagnosticsSettingsContent 函数应存在", hasFunction)
     }
 
     @Test
-    fun laboratoryItemKeys_areUnique() {
-        val keys = laboratorySettingsItemKeys()
-        assertEquals("Laboratory item keys must be unique", keys.size, keys.toSet().size)
+    fun laboratorySettingsContent_exists() {
+        val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.LaboratorySettingsKt")
+        val methods = settingsClass.declaredMethods
+        val hasFunction = methods.any { it.name == "LaboratorySettingsContent" }
+        assertTrue("LaboratorySettingsContent 函数应存在", hasFunction)
     }
 
     @Test
-    fun aboutItemKeys_areUnique() {
-        val keys = aboutSettingsItemKeys()
-        assertEquals("About item keys must be unique", keys.size, keys.toSet().size)
+    fun aboutSettingsContent_exists() {
+        val settingsClass = Class.forName("com.xiwei.sujian.feature.settings.ui.AboutSettingsKt")
+        val methods = settingsClass.declaredMethods
+        val hasFunction = methods.any { it.name == "AboutSettingsContent" }
+        assertTrue("AboutSettingsContent 函数应存在", hasFunction)
     }
 
     // ── Settings 导航使用 noPageTransitionMetadata（无双页 crossfade） ──
@@ -144,40 +150,4 @@ class SettingsLazyColumnStructureTest {
                 source.contains("noPageTransitionMetadata"),
         )
     }
-
-    // ── 辅助：提取各分类的 item key 列表 ──
-
-    private fun appearanceSettingsItemKeys(): List<String> =
-        listOf(
-            "appearance.theme_group",
-            "appearance.font_group",
-        )
-
-    private fun editorSettingsItemKeys(): List<String> =
-        listOf(
-            "editor.auto_indent_group",
-            "editor.behavior_group",
-        )
-
-    private fun saveSettingsItemKeys(): List<String> = listOf("save.auto_save_group")
-
-    private fun syncSettingsItemKeys(): List<String> =
-        listOf(
-            "sync.general_group",
-            "sync.credentials_group",
-            "sync.interval_group",
-            "sync.actions_group",
-        )
-
-    private fun aiSettingsItemKeys(): List<String> = listOf("ai.enabled_group")
-
-    private fun diagnosticsSettingsItemKeys(): List<String> =
-        listOf(
-            "diagnostics.diagnostics_group",
-            "diagnostics.actions_group",
-        )
-
-    private fun laboratorySettingsItemKeys(): List<String> = listOf("laboratory.fullscreen")
-
-    private fun aboutSettingsItemKeys(): List<String> = listOf("about.info_group")
 }

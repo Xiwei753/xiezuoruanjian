@@ -18,11 +18,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * #630 R14: 展开内容横向内缩 20dp + 字段组间 gap 测试。
+ * #633 评论 5379618506：设置页新视觉原语结构测试。
  *
- * - SettingsCategoryInset = 12.dp（分类标题内缩）
- * - SettingsExpandedInset = 20.dp（展开 High 内容内缩）
- * - SettingsExpandedGroupContainer: 字段组容器
+ * 验证 [SettingsExpandedShell] / [SettingsInnerCard] 渲染内容，
+ * 替代旧的 SettingsExpandedGroupContainer / SettingsGroupItemContainer 测试。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -31,26 +30,10 @@ class SettingsExpandedInsetAndGroupGapTest {
     val composeRule = createComposeRule()
 
     @Test
-    fun settingsExpandedInsetConstant_exists() {
-        val fileClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt")
-        val fields = fileClass.declaredFields
-        val hasCategoryInset = fields.any { it.name.contains("SettingsCategoryInset") }
-        val hasExpandedExtraInset = fields.any { it.name.contains("SettingsExpandedExtraInset") }
-        val hasExpandedInset = fields.any { it.name.contains("SettingsExpandedInset") }
-        assertTrue("SettingsCategoryInset 应存在", hasCategoryInset)
-        assertTrue("SettingsExpandedExtraInset 应存在", hasExpandedExtraInset)
-        assertTrue("SettingsExpandedInset 应存在", hasExpandedInset)
-    }
-
-    @Test
-    fun settingsExpandedGroupContainer_rendersContent() {
+    fun settingsExpandedShell_rendersContent() {
         composeRule.setContent {
             Box(modifier = Modifier.testTag("root")) {
-                SettingsExpandedGroupContainer(
-                    closeOuterGroup = false,
-                    firstInGroup = true,
-                    lastInGroup = false,
-                ) {
+                SettingsExpandedShell(closesGroup = false) {
                     Box(modifier = Modifier.fillMaxWidth().height(48.dp).testTag("content")) {}
                 }
             }
@@ -59,14 +42,10 @@ class SettingsExpandedInsetAndGroupGapTest {
     }
 
     @Test
-    fun settingsExpandedGroupContainer_lastInGroup_rendersBottomShape() {
+    fun settingsExpandedShell_closesGroup_rendersContent() {
         composeRule.setContent {
             Box(modifier = Modifier.testTag("root")) {
-                SettingsExpandedGroupContainer(
-                    closeOuterGroup = true,
-                    firstInGroup = false,
-                    lastInGroup = true,
-                ) {
+                SettingsExpandedShell(closesGroup = true) {
                     Box(modifier = Modifier.fillMaxWidth().height(48.dp).testTag("content")) {}
                 }
             }
@@ -75,14 +54,10 @@ class SettingsExpandedInsetAndGroupGapTest {
     }
 
     @Test
-    fun settingsExpandedGroupContainer_singleItem_fullShape() {
+    fun settingsInnerCard_rendersContent() {
         composeRule.setContent {
             Box(modifier = Modifier.testTag("root")) {
-                SettingsExpandedGroupContainer(
-                    closeOuterGroup = false,
-                    firstInGroup = true,
-                    lastInGroup = true,
-                ) {
+                SettingsInnerCard {
                     Box(modifier = Modifier.fillMaxWidth().height(48.dp).testTag("content")) {}
                 }
             }
@@ -91,12 +66,15 @@ class SettingsExpandedInsetAndGroupGapTest {
     }
 
     @Test
-    fun settingsGroupItemContainer_usesCategoryInset() {
-        composeRule.setContent {
-            SettingsGroupItemContainer(isLast = true) {
-                Box(modifier = Modifier.testTag("category_content")) {}
-            }
-        }
-        composeRule.onNodeWithTag("category_content").assertExists()
+    fun settingsContainersKt_exists() {
+        // 验证新的 SettingsContainersKt 文件已加载
+        val fileClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsContainersKt")
+        val methods = fileClass.declaredMethods
+        val hasShell = methods.any { it.name == "SettingsExpandedShell" }
+        val hasInnerCard = methods.any { it.name == "SettingsInnerCard" }
+        val hasHeader = methods.any { it.name == "SettingsGroupHeader" }
+        assertTrue("SettingsExpandedShell 应存在", hasShell)
+        assertTrue("SettingsInnerCard 应存在", hasInnerCard)
+        assertTrue("SettingsGroupHeader 应存在", hasHeader)
     }
 }
