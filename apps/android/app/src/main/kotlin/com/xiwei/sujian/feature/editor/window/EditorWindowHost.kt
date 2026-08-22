@@ -316,14 +316,19 @@ class EditorWindowHost(
         autoIndentEnabled: Boolean,
         autoIndentWidth: Float,
     ) {
-        lastTypography =
+        // #632 评论 5378239827 项3: 幂等 — EditorTypography 是 data class，== 可用。
+        // 排版参数未变时不重排、不推进单帧标记，避免切章时 LaunchedEffect 重复触发
+        // 无意义的 View 重排。
+        val next =
             EditorTypography(
                 fontSizeSp = fontSizeSp,
                 lineSpacingMultiplier = lineSpacingMultiplier,
                 autoIndentEnabled = autoIndentEnabled,
                 autoIndentWidth = autoIndentWidth,
             )
-        sharedEditorView?.let { view -> applyTypographyToView(view, lastTypography!!) }
+        if (next == lastTypography) return
+        lastTypography = next
+        sharedEditorView?.let { applyTypographyToView(it, next) }
         markEditorSingleFrame("typography_change")
     }
 

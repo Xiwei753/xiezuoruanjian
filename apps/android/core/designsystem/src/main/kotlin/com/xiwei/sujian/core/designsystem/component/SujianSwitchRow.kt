@@ -1,29 +1,26 @@
 package com.xiwei.sujian.core.designsystem.component
 
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.unit.dp
-import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 
+/**
+ * 开关行 — 复用 [SujianListItem] 的行几何（最小行高、padding、文字基线），
+ * 避免设置页开关和普通列表项出现两套行高。
+ *
+ * - headline = title
+ * - supportingText = supportingText
+ * - leadingIcon = icon
+ * - trailingContent = Switch(checked, onCheckedChange = null, enabled)
+ * - 外层点击/开关语义由整行 toggleable(role = Role.Switch) 保留
+ * - semanticId 加在最外层 modifier
+ */
 @Composable
 fun SujianSwitchRow(
     title: String,
@@ -35,10 +32,9 @@ fun SujianSwitchRow(
     enabled: Boolean = true,
     semanticId: String? = null,
 ) {
-    val dimensions = LocalSujianDimensions.current
-    Row(
+    SujianListItem(
+        headline = title,
         modifier = modifier
-            .fillMaxWidth()
             .then(if (semanticId != null) Modifier.testTag(semanticId) else Modifier)
             .toggleable(
                 value = checked,
@@ -49,39 +45,15 @@ fun SujianSwitchRow(
             .semantics {
                 stateDescription = if (checked) "已开启" else "已关闭"
             },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (icon != null) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(dimensions.iconSizeMedium),
-                tint = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+        supportingText = supportingText,
+        leadingIcon = icon,
+        trailingContent = {
+            Switch(
+                checked = checked,
+                onCheckedChange = null,
+                enabled = enabled,
             )
-            Spacer(modifier = Modifier.size(16.dp))
-        }
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-            )
-            if (supportingText != null) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = supportingText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-                )
-            }
-        }
-        Switch(
-            checked = checked,
-            onCheckedChange = null,
-            enabled = enabled,
-        )
-    }
+        },
+        enabled = enabled,
+    )
 }

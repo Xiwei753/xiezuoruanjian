@@ -266,9 +266,12 @@ suspend fun EditorViewModel.requestOpenChapter(
     chapterId: String,
     chapterTitle: String,
 ): ChapterSwitchResult {
+    // #632 评论 5378239827 项4: 按 ChapterSwitchKey 进入 gate —
+    // 同目标 join（已有 in-flight 请求直接 await），不同目标 latest-wins。
+    val key = ChapterSwitchGate.ChapterSwitchKey(projectId, volumeId, chapterId)
     return when (
         val gate =
-            chapterSwitchGate.runLatest { isLatest ->
+            chapterSwitchGate.runChapterSwitch(key) { isLatest ->
                 switchChapterLocked(isLatest, projectId, volumeId, chapterId, chapterTitle)
             }
     ) {
