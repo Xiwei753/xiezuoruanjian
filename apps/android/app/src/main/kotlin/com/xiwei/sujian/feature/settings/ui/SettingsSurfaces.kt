@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
  */
 private val SettingsGroupTopShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
 private val SettingsGroupBottomShape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp)
+private val SettingsGroupFullShape = RoundedCornerShape(28.dp)
 
 // #630 评论 5326175206 项1: 横向内缩常量 — 单一来源，展开内容比分类标题再内缩 8dp
 private val SettingsCategoryInset = 12.dp
@@ -234,6 +235,81 @@ fun SettingsExpandedGroupContainer(
     }
 }
 
+// ── 字段级容器（#632 评论 5377052579） ──
+
+/**
+ * #632：一个重控件 = 一个 Lazy item 的位置标记。
+ *
+ * 同一字段组内的多个 item 通过 [ExpandedFieldPosition] 连成一组视觉：
+ * - [Only]：字段组只有一个 item，内层 High 全圆角。
+ * - [First]：字段组第一个 item，内层 High 顶部圆角。
+ * - [Middle]：字段组中间 item，内层 High 直角。
+ * - [Last]：字段组最后一个 item，内层 High 底部圆角。
+ */
+enum class ExpandedFieldPosition { Only, First, Middle, Last }
+
+/**
+ * #632 评论 5377052579：字段级容器 — 每个重控件（TextField/SecretTextField/Slider/Button/SwitchRow）
+ * 都是自己的 Lazy item，用 [position] 控制圆角让同一字段组的多个 item 视觉上连成一张大卡。
+ *
+ * 结构（与 [SettingsExpandedGroupContainer] 一致的双层 Surface）：
+ * - 外层 surfaceContainerLow：整个字段组的背景，[position] = First 画顶部 28dp 圆角，
+ *   [position] = Last 且 [closeOuterGroup] 画底部 28dp 圆角，中间直角。
+ * - 内层 surfaceContainerHigh：每个 item 自己的内容背景，[position] 决定 12dp 圆角。
+ *
+ * 关键区别（避免评论 5369981532 的"逐行小圆角卡"问题）：
+ * - 错误：每个控件 firstInGroup=true, lastInGroup=true → 每个都是全圆角小卡。
+ * - 正确：每个控件用 First/Middle/Last → 圆角无缝连接成一张大卡。
+ *
+ * @param position 该 item 在字段组中的位置，决定内外层圆角。
+ * @param closeOuterGroup 该 item 是否需要为整个 [SettingsGroup] 画外层底圆角
+ *        （仅 [ExpandedFieldPosition.Last] 或 [ExpandedFieldPosition.Only] 时生效）。
+ */
+@Composable
+fun SettingsExpandedFieldContainer(
+    position: ExpandedFieldPosition,
+    closeOuterGroup: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val outerShape =
+        when (position) {
+            ExpandedFieldPosition.Only -> if (closeOuterGroup) SettingsGroupFullShape else SettingsGroupTopShape
+            ExpandedFieldPosition.First -> SettingsGroupTopShape
+            ExpandedFieldPosition.Last -> if (closeOuterGroup) SettingsGroupBottomShape else RectangleShape
+            ExpandedFieldPosition.Middle -> RectangleShape
+        }
+    val innerShape =
+        when (position) {
+            ExpandedFieldPosition.Only -> ExpandedGroupFullShape
+            ExpandedFieldPosition.First -> ExpandedGroupTopShape
+            ExpandedFieldPosition.Last -> ExpandedGroupBottomShape
+            ExpandedFieldPosition.Middle -> RectangleShape
+        }
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = outerShape,
+        shadowElevation = 0.dp,
+    ) {
+        Surface(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = SettingsExpandedInset),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = innerShape,
+            shadowElevation = 0.dp,
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+            ) {
+                content()
+            }
+        }
+    }
+}
+
 // ── Lazy item content type constants ──
 
 /** Lazy item contentType 常量：搜索入口 */
@@ -250,3 +326,23 @@ const val CONTENT_TYPE_CATEGORY_HEADER = "category_header"
 
 /** Lazy item contentType 常量：展开后的字段组（surfaceContainerHigh） */
 const val CONTENT_TYPE_EXPANDED_FIELD_GROUP = "expanded_field_group"
+
+// ── #632 评论 5377052579：细粒度 contentType，不再所有展开内容都叫 expanded_field_group ──
+
+/** Lazy item contentType 常量：字段组小标题 */
+const val CONTENT_TYPE_FIELD_TITLE = "field_title"
+
+/** Lazy item contentType 常量：开关行 */
+const val CONTENT_TYPE_SWITCH = "switch"
+
+/** Lazy item contentType 常量：文本输入框 */
+const val CONTENT_TYPE_TEXT_FIELD = "text_field"
+
+/** Lazy item contentType 常量：滑块 */
+const val CONTENT_TYPE_SLIDER = "slider"
+
+/** Lazy item contentType 常量：按钮 */
+const val CONTENT_TYPE_BUTTON = "button"
+
+/** Lazy item contentType 常量：结果文本 */
+const val CONTENT_TYPE_RESULT = "result"

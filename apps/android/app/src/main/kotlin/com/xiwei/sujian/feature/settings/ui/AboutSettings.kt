@@ -14,26 +14,23 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.R
 
 /**
- * #630 R14 字段组模式：将原来的 1 个 item 改为字段组模式。
+ * #632 评论 5377052579：关于设置 — 全是轻 Text，无重控件，保留为单个 item。
+ * 用 [SettingsExpandedFieldContainer] 渲染，[ExpandedFieldPosition.Only] 表示字段组只有一个 item。
  *
  * 关于分组: 应用名称 + 作者 + 许可 + 数据根路径 + 版本信息
- *
- * 使用 [SettingsExpandedGroupContainer] 统一 16dp content padding、12dp 圆角。
- * 字段在同一个 High Surface 内普通布局。
  */
 fun LazyListScope.aboutSettingsItems(
     vm: SettingsViewModel,
     closeOuterGroup: Boolean,
 ) {
     item(
-        key = "about.info_group",
-        contentType = CONTENT_TYPE_EXPANDED_FIELD_GROUP,
+        key = "about.info",
+        contentType = CONTENT_TYPE_RESULT,
     ) {
         val state by vm.aboutState.collectAsStateWithLifecycle()
-        SettingsExpandedGroupContainer(
+        SettingsExpandedFieldContainer(
+            position = ExpandedFieldPosition.Only,
             closeOuterGroup = closeOuterGroup,
-            firstInGroup = true,
-            lastInGroup = true,
         ) {
             androidx.compose.foundation.layout.Column(
                 modifier = Modifier.height(IntrinsicSize.Min),
