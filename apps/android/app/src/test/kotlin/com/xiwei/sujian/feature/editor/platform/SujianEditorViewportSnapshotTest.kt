@@ -340,16 +340,24 @@ class SujianEditorViewportSnapshotTest {
     }
 
     private fun SujianEditorView.readPendingViewportAnchor(): ViewportAnchor? {
-        val field = SujianEditorView::class.java.getDeclaredField("pendingViewportAnchor")
-        field.isAccessible = true
+        // #633 评论 5379618506：scrollY/pendingInitialAnchor 已迁移到 EditorViewportController。
+        // 通过 viewport 字段间接访问 controller 的 pendingInitialAnchor。
+        val viewportField = SujianEditorView::class.java.getDeclaredField("viewport")
+        viewportField.isAccessible = true
+        val controller = viewportField.get(this)
+        val anchorField = EditorViewportController::class.java.getDeclaredField("pendingInitialAnchor")
+        anchorField.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        return field.get(this) as? ViewportAnchor
+        return anchorField.get(controller) as? ViewportAnchor
     }
 
     private fun SujianEditorView.setScrollYForTest(value: Float) {
-        val field = SujianEditorView::class.java.getDeclaredField("scrollY")
-        field.isAccessible = true
-        field.setFloat(this, value)
+        // #633 评论 5379618506：scrollY 已迁移到 EditorViewportController。
+        // 通过 viewport 字段拿到 controller，用 setScrollYUnclamped 绕过 maxScrollY 夹取。
+        val viewportField = SujianEditorView::class.java.getDeclaredField("viewport")
+        viewportField.isAccessible = true
+        val controller = viewportField.get(this) as EditorViewportController
+        controller.setScrollYUnclamped(value)
     }
 
     @Suppress("TooManyFunctions")

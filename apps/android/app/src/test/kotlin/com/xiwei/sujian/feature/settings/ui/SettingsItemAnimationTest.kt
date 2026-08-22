@@ -11,6 +11,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -18,11 +19,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * #630 R14: 设置页 Lazy item 结构测试。
+ * #633 评论 5379618506：设置页新结构测试。
  *
- * R14 删除了旧的 animateItem wrapper（SettingsMovableItemContent / SettingsExpandedItemContent），
- * 设置列表正常滚动时不需要任何 item placement 动画。
- * 测试验证 SettingsExpandedGroupContainer 和 contentType 常量存在。
+ * R14 删除了旧的 animateItem wrapper；#633 进一步删除了 First/Middle/Last 拼卡模型。
+ * 新结构：一个 category = 一个 Transition + 一个 AnimatedVisibility（在 SettingsExpandableCategory 内），
+ * 一个逻辑字段组 = 一张 SettingsInnerCard。不再有 CONTENT_TYPE_* 常量（Column+verticalScroll 不需要）。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -31,38 +32,18 @@ class SettingsItemAnimationTest {
     val composeRule = createComposeRule()
 
     @Test
-    fun expandedGroupContainer_exists() {
-        val fileClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt")
+    fun settingsExpandableCategory_exists() {
+        val fileClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsExpandableCategoryKt")
         val methods = fileClass.declaredMethods
-        val hasExpanded = methods.any { it.name == "SettingsExpandedGroupContainer" }
-        assertNotNull("SettingsExpandedGroupContainer 应存在", hasExpanded)
+        val hasCategory = methods.any { it.name == "SettingsExpandableCategory" }
+        assertNotNull("SettingsExpandableCategory 应存在", hasCategory)
     }
 
     @Test
-    fun contentTypeConstants_exist() {
-        val fileClass = Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt")
-        val fields = fileClass.declaredFields
-        val hasSearch = fields.any { it.name == "CONTENT_TYPE_SEARCH" }
-        val hasSpacer = fields.any { it.name == "CONTENT_TYPE_SPACER" }
-        val hasGroupHeader = fields.any { it.name == "CONTENT_TYPE_GROUP_HEADER" }
-        val hasCategoryHeader = fields.any { it.name == "CONTENT_TYPE_CATEGORY_HEADER" }
-        val hasFieldGroup = fields.any { it.name == "CONTENT_TYPE_EXPANDED_FIELD_GROUP" }
-        assertNotNull("CONTENT_TYPE_SEARCH 应存在", hasSearch)
-        assertNotNull("CONTENT_TYPE_SPACER 应存在", hasSpacer)
-        assertNotNull("CONTENT_TYPE_GROUP_HEADER 应存在", hasGroupHeader)
-        assertNotNull("CONTENT_TYPE_CATEGORY_HEADER 应存在", hasCategoryHeader)
-        assertNotNull("CONTENT_TYPE_EXPANDED_FIELD_GROUP 应存在", hasFieldGroup)
-    }
-
-    @Test
-    fun expandedGroupContainer_rendersContent() {
+    fun settingsInnerCard_rendersContent() {
         composeRule.setContent {
             Box(modifier = Modifier.testTag("root")) {
-                SettingsExpandedGroupContainer(
-                    closeOuterGroup = false,
-                    firstInGroup = true,
-                    lastInGroup = true,
-                ) {
+                SettingsInnerCard {
                     Box(
                         modifier =
                             Modifier
@@ -74,5 +55,33 @@ class SettingsItemAnimationTest {
             }
         }
         composeRule.onNodeWithTag("group_content").assertExists()
+    }
+
+    @Test
+    fun settingsExpandedShell_rendersContent() {
+        composeRule.setContent {
+            Box(modifier = Modifier.testTag("root")) {
+                SettingsExpandedShell(closesGroup = true) {
+                    Box(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("shell_content"),
+                    ) {}
+                }
+            }
+        }
+        composeRule.onNodeWithTag("shell_content").assertExists()
+    }
+
+    @Test
+    fun contentTypeConstants_areRemoved() {
+        // CONTENT_TYPE_* 常量已随 SettingsSurfaces.kt 删除（Column+verticalScroll 不需要 contentType）。
+        // 验证 SettingsSurfacesKt 类不存在。
+        val exists =
+            runCatching { Class.forName("com.xiwei.sujian.feature.settings.ui.SettingsSurfacesKt") }
+                .isSuccess
+        assertTrue("SettingsSurfacesKt 应已删除", !exists)
     }
 }

@@ -57,15 +57,14 @@ class SujianEditorView
             )
         private val inputAdapter = AndroidInputAdapter(pipeline.mirror, pipeline) { pipeline.getCurrentProjection() }
 
-        private var scrollX: Float = 0f
-        private var scrollY: Float = 0f
-        private var maxScrollY: Float = 0f
-        private var pendingViewportAnchor: ViewportAnchor? = null
+        // #633 评论 5379618506：viewport 唯一拥有者 — scrollX/scrollY/maxScrollY/pendingInitialAnchor
+        // 不再由 View 并行持有，统一经 EditorViewportController 方法读写。
+        private val viewport = EditorViewportController()
         private var scrollInteractionActive: Boolean = false
 
-        fun getScrollXPos(): Float = scrollX
+        fun getScrollXPos(): Float = viewport.scrollX
 
-        fun getScrollYPos(): Float = scrollY
+        fun getScrollYPos(): Float = viewport.scrollY
 
         /**
          * #592 三：窗口重建/重绑定时恢复会话层投影保存的滚动位置。
@@ -75,8 +74,7 @@ class SujianEditorView
             sx: Float,
             sy: Float,
         ) {
-            scrollX = sx.coerceAtLeast(0f)
-            scrollY = sy.coerceAtLeast(0f)
+            viewport.setScroll(sx, sy)
             invalidate()
         }
 
@@ -110,7 +108,7 @@ class SujianEditorView
             inputAdapter.onPipelineOutput = { output: PipelineOutput -> handlePipelineOutput(output) }
             inputAdapter.onCompositionVisualUpdate = {
                 updateMaxScroll()
-                scrollY = scrollY.coerceIn(0f, maxScrollY)
+                viewport.clamp()
                 invalidate()
                 if (pipeline.hasActiveAnimation()) {
                     requestAnimationFrame()
@@ -203,7 +201,7 @@ class SujianEditorView
             when (output) {
                 is PipelineOutput.Edited -> {
                     updateMaxScroll()
-                    scrollY = scrollY.coerceIn(0f, maxScrollY)
+                    viewport.clamp()
                     if (!suppressContentCallback &&
                         (output.result.isApplied() || output.result.isNoChange())
                     ) {
@@ -341,14 +339,14 @@ class SujianEditorView
             val lineTop = pipeline.getLayoutLineTop(line).toFloat()
             val lineBottom = pipeline.getLayoutLineBottom(line).toFloat()
             val viewHeight = height.toFloat()
-            val contentTop = scrollY - paddingTop
+            val contentTop = viewport.scrollY - paddingTop
             val contentBottom = contentTop + viewHeight
             if (lineTop < contentTop) {
-                scrollY = lineTop + paddingTop
+                viewport.setScrollYUnclamped(lineTop + paddingTop)
             } else if (lineBottom > contentBottom) {
-                scrollY = lineBottom - viewHeight + paddingTop
+                viewport.setScrollYUnclamped(lineBottom - viewHeight + paddingTop)
             }
-            scrollY = scrollY.coerceIn(0f, maxScrollY)
+            viewport.clamp()
             invalidate()
         }
 
@@ -358,7 +356,7 @@ class SujianEditorView
          * 使用相对行高比例而非绝对像素，使字号/行距变化后仍能恢复到同一视觉位置。
          */
         fun captureViewportSnapshot(): ViewportAnchor {
-            val currentScrollY = scrollY
+            val currentScrollY = viewport.scrollY
             val anchorLine = pipeline.getLayoutLineForVertical(currentScrollY.toInt())
             val anchorOffset = pipeline.getLayoutLineStart(anchorLine)
             val lineTop = pipeline.getLayoutLineTop(anchorLine).toFloat()
@@ -386,7 +384,7 @@ class SujianEditorView
          * 等 updateLayoutConfig() 在真实 measure/layout 后自动恢复。
          */
         fun restoreViewportSnapshot(anchor: ViewportAnchor) {
-            pendingViewportAnchor = anchor
+            viewport.queueInitialRestore(anchor)
             applyPendingViewportAnchorIfReady()
         }
 
@@ -394,11 +392,10 @@ class SujianEditorView
          * #631：待处理锚点的延迟恢复 — 只在真实尺寸和 Layout 就绪后才落到 scrollY。
          */
         private fun applyPendingViewportAnchorIfReady() {
-            val anchor = pendingViewportAnchor ?: return
             if (width - paddingLeft - paddingRight <= 0 || height <= 0) return
             if (pipeline.getLayout() == null) return
 
-            pendingViewportAnchor = null
+            val anchor = viewport.consumeInitialRestoreIfReady(layoutReady = true) ?: return
             restoreViewportAnchorNow(anchor)
         }
 
@@ -412,9 +409,9 @@ class SujianEditorView
             val lineBottom = pipeline.getLayoutLineBottom(line).toFloat()
             val lineHeight = (lineBottom - lineTop).coerceAtLeast(1f)
 
-            scrollX = 0f
+            viewport.setScrollX(0f)
             val restoredScrollY = lineTop + lineHeight * anchor.offsetWithinLineFraction
-            scrollY = restoredScrollY.coerceIn(0f, maxScrollY)
+            viewport.setScrollY(restoredScrollY)
             invalidate()
         }
 
@@ -427,10 +424,10 @@ class SujianEditorView
             block()
             updateMaxScroll()
             if (anchor != null) {
-                pendingViewportAnchor = anchor
+                viewport.queueInitialRestore(anchor)
                 applyPendingViewportAnchorIfReady()
             } else {
-                scrollY = scrollY.coerceIn(0f, maxScrollY)
+                viewport.clamp()
             }
         }
 
@@ -487,21 +484,33 @@ class SujianEditorView
             oldh: Int,
         ) {
             super.onSizeChanged(w, h, oldw, oldh)
-            // #630 C块 / #631：宽、高分开处理。IME 打开/关闭主要改变高度，宽度真变了才走正文重排。
-            // 高度变化时只更新 viewport 范围并 clamp scrollY，不重排整章、不 scrollToSelection。
-            if (w > 0) {
-                val contentWidth = (w - paddingLeft - paddingRight).coerceAtLeast(1)
-                val widthChanged = contentWidth != lastContentWidthPx
-                val heightChanged = h != oldh
-                if (widthChanged) {
-                    lastContentWidthPx = contentWidth
-                    // #631：宽度变化重排时保住当前视口锚点
-                    reflowPreservingViewport {
-                        pipeline.updateLayout(contentWidth.toFloat())
+            // #633 评论 5379618506：三分支处理 — 首次 attach / 宽度变化 / 高度变化。
+            // 首次 attach 只恢复一次逻辑锚点；宽度变化 capture→reflow→restore；
+            // 只有高度变化只 updateMaxScroll+clamp，不 capture/reflow/restore。
+            val newContentWidth = (w - paddingLeft - paddingRight).coerceAtLeast(1)
+            val oldContentWidth = (oldw - paddingLeft - paddingRight).coerceAtLeast(1)
+            when {
+                oldw == 0 || oldh == 0 -> {
+                    // 首次 attach：更新布局 + maxScroll，尝试恢复一次排队的初始锚点。
+                    if (w > 0 && h > 0) {
+                        lastContentWidthPx = newContentWidth
+                        pipeline.updateLayout(newContentWidth.toFloat())
+                        updateMaxScroll()
+                        applyPendingViewportAnchorIfReady()
+                        invalidate()
                     }
-                } else if (heightChanged) {
+                }
+                newContentWidth != oldContentWidth -> {
+                    lastContentWidthPx = newContentWidth
+                    // 宽度变化重排时保住当前视口锚点
+                    reflowPreservingViewport {
+                        pipeline.updateLayout(newContentWidth.toFloat())
+                    }
+                }
+                h != oldh -> {
+                    // IME / 系统栏 / 窗口高度变化：只改变可见高度。
                     updateMaxScroll()
-                    scrollY = scrollY.coerceIn(0f, maxScrollY)
+                    viewport.clamp()
                     invalidate()
                 }
             }
@@ -511,12 +520,13 @@ class SujianEditorView
 
         private fun updateMaxScroll() {
             val layoutOverflow = pipeline.getLayoutMaxScrollY(height)
-            maxScrollY =
+            viewport.updateMaxScroll(
                 if (layoutOverflow > 0f) {
                     layoutOverflow + paddingTop + paddingBottom
                 } else {
                     0f
-                }
+                },
+            )
         }
 
         private fun updateLayoutConfig() {
@@ -524,7 +534,7 @@ class SujianEditorView
             if (contentWidth <= 0 || height <= 0) return
             pipeline.updateLayout(contentWidth.toFloat())
             updateMaxScroll()
-            scrollY = scrollY.coerceIn(0f, maxScrollY)
+            viewport.clamp()
             applyPendingViewportAnchorIfReady()
             invalidate()
         }
@@ -543,8 +553,8 @@ class SujianEditorView
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             canvas.withTranslation(
-                (paddingLeft - scrollX).toFloat(),
-                (paddingTop - scrollY).toFloat(),
+                (paddingLeft - viewport.scrollX).toFloat(),
+                (paddingTop - viewport.scrollY).toFloat(),
             ) {
                 searchHighlightsUtf16Buffer.clear()
                 for ((startUtf8, endUtf8) in searchHighlights) {
@@ -556,9 +566,17 @@ class SujianEditorView
                 val frameTimeNanos = pendingFrameTimeNanos
                 if (frameTimeNanos != Long.MIN_VALUE) {
                     pendingFrameTimeNanos = Long.MIN_VALUE
-                    pipeline.drawFrame(canvas, searchHighlightsUtf16, width, height, scrollX, scrollY, frameTimeNanos)
+                    pipeline.drawFrame(
+                        canvas,
+                        searchHighlightsUtf16,
+                        width,
+                        height,
+                        viewport.scrollX,
+                        viewport.scrollY,
+                        frameTimeNanos,
+                    )
                 } else {
-                    pipeline.drawFrame(canvas, searchHighlightsUtf16, width, height, scrollX, scrollY)
+                    pipeline.drawFrame(canvas, searchHighlightsUtf16, width, height, viewport.scrollX, viewport.scrollY)
                 }
             }
         }
@@ -691,29 +709,29 @@ class SujianEditorView
             if (!isSessionBound) return false
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    touchDownX = event.x + scrollX - paddingLeft
-                    touchDownY = event.y + scrollY - paddingTop
+                    touchDownX = event.x + viewport.scrollX - paddingLeft
+                    touchDownY = event.y + viewport.scrollY - paddingTop
                     isDragging = false
                     requestFocus()
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = event.x + scrollX - paddingLeft - touchDownX
-                    val dy = event.y + scrollY - paddingTop - touchDownY
+                    val dx = event.x + viewport.scrollX - paddingLeft - touchDownX
+                    val dy = event.y + viewport.scrollY - paddingTop - touchDownY
                     if (!isDragging && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
                         isDragging = true
                     }
                     if (isDragging && currentProfile.verticalScroll) {
-                        scrollY = (scrollY - dy).coerceIn(0f, maxScrollY)
-                        touchDownX = event.x + scrollX - paddingLeft
-                        touchDownY = event.y + scrollY - paddingTop
+                        viewport.adjustScrollY(-dy)
+                        touchDownX = event.x + viewport.scrollX - paddingLeft
+                        touchDownY = event.y + viewport.scrollY - paddingTop
                         invalidate()
                     }
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!isDragging) {
-                        handleTap(event.x + scrollX - paddingLeft, event.y + scrollY - paddingTop)
+                        handleTap(event.x + viewport.scrollX - paddingLeft, event.y + viewport.scrollY - paddingTop)
                         performClick()
                     }
                     isDragging = false
@@ -1005,10 +1023,10 @@ class SujianEditorView
                 android.view.inputmethod.CursorAnchorInfo.Builder()
                     .setSelectionRange(cursorUtf16, cursorUtf16)
                     .setInsertionMarkerLocation(
-                        x + paddingLeft - scrollX,
-                        lineTop.toFloat() + paddingTop - scrollY,
-                        lineBottom.toFloat() + paddingTop - scrollY,
-                        lineBottom.toFloat() + paddingTop - scrollY,
+                        x + paddingLeft - viewport.scrollX,
+                        lineTop.toFloat() + paddingTop - viewport.scrollY,
+                        lineBottom.toFloat() + paddingTop - viewport.scrollY,
+                        lineBottom.toFloat() + paddingTop - viewport.scrollY,
                         android.view.inputmethod.CursorAnchorInfo.FLAG_HAS_VISIBLE_REGION,
                     )
                     .build()
@@ -1199,7 +1217,7 @@ class SujianEditorView
             isSessionBound = false
             isDragging = false
             scrollInteractionActive = false
-            pendingViewportAnchor = null
+            viewport.clearPendingAnchor()
             clearFocus()
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             imm?.hideSoftInputFromWindow(windowToken, 0)
@@ -1228,10 +1246,7 @@ class SujianEditorView
          * switches from one EditableTextTarget to another without recreating the full pipeline.
          */
         fun resetForReuse() {
-            scrollX = 0f
-            scrollY = 0f
-            maxScrollY = 0f
-            pendingViewportAnchor = null
+            viewport.reset()
             isDragging = false
             scrollInteractionActive = false
             searchHighlights = emptyList()
