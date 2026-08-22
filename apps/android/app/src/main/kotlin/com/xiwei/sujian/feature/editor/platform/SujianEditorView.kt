@@ -107,8 +107,10 @@ class SujianEditorView
             inputAdapter.setHostView(this)
             inputAdapter.onPipelineOutput = { output: PipelineOutput -> handlePipelineOutput(output) }
             inputAdapter.onCompositionVisualUpdate = {
+                // #633 评论 5380870691：preedit 也可能把显示光标推到可视区外，
+                // 同样只根据当前新 layout + 当前光标做最小滚动，不 restore anchor / 不 reflow。
                 updateMaxScroll()
-                viewport.clamp()
+                ensureSelectionVisible()
                 invalidate()
                 if (pipeline.hasActiveAnimation()) {
                     requestAnimationFrame()
@@ -201,7 +203,14 @@ class SujianEditorView
             when (output) {
                 is PipelineOutput.Edited -> {
                     updateMaxScroll()
-                    viewport.clamp()
+                    // #633 评论 5380870691：正文输入/删除（displayPatches 非空）后，
+                    // 只有光标出可视区时才做最小 scrollToSelection()，不恢复旧 anchor。
+                    // selection-only / no-change（displayPatches 空）只 clamp 旧 scrollY。
+                    if (output.result.displayPatches.isNotEmpty()) {
+                        ensureSelectionVisible()
+                    } else {
+                        viewport.clamp()
+                    }
                     if (!suppressContentCallback &&
                         (output.result.isApplied() || output.result.isNoChange())
                     ) {
@@ -331,22 +340,33 @@ class SujianEditorView
             setSelectionTyped(start, end)
         }
 
-        fun scrollToSelection() {
+        // #633 评论 5380870691：正文输入/删除后，光标跑出可视区时做最小跟随滚动。
+        // 从 scrollToSelection() 抽出的私有 helper — 只根据当前新 layout + 当前光标
+        // 做最小滚动，不负责 invalidate()，不 capture/restore anchor，不触发 reflow。
+        // 宽度/字号/行距变化继续走 reflowPreservingViewport()，纯高度变化继续只
+        // updateMaxScroll + clamp。
+        private fun ensureSelectionVisible() {
             val cursorUtf16 = pipeline.getDisplayCursorUtf16()
             val layoutTextLen = pipeline.getLengthUtf16()
             if (cursorUtf16 < 0 || cursorUtf16 > layoutTextLen) return
+
             val line = pipeline.getLayoutLineForOffset(cursorUtf16)
             val lineTop = pipeline.getLayoutLineTop(line).toFloat()
             val lineBottom = pipeline.getLayoutLineBottom(line).toFloat()
             val viewHeight = height.toFloat()
             val contentTop = viewport.scrollY - paddingTop
             val contentBottom = contentTop + viewHeight
+
             if (lineTop < contentTop) {
                 viewport.setScrollYUnclamped(lineTop + paddingTop)
             } else if (lineBottom > contentBottom) {
                 viewport.setScrollYUnclamped(lineBottom - viewHeight + paddingTop)
             }
             viewport.clamp()
+        }
+
+        fun scrollToSelection() {
+            ensureSelectionVisible()
             invalidate()
         }
 
