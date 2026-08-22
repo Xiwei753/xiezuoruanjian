@@ -1,5 +1,6 @@
 package com.xiwei.sujian.core.designsystem.component
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -10,10 +11,12 @@ import androidx.compose.ui.Modifier
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 
 /**
- * #625：锚定溢出菜单触发器 + Material3 [DropdownMenu] 容器。
+ * #625/#632：锚定溢出菜单触发器 + Material3 [DropdownMenu] 容器。
  *
- * 触发按钮（`MoreVert`）与 [DropdownMenu] 在同一组合位置一起画 —
- * 菜单锚定到按钮左下角，不再用页面级 Dialog 居中弹出。
+ * 触发按钮（`MoreVert`）与 [DropdownMenu] 同处一个紧尺寸 [Box] —
+ * 两者共用同一布局坐标系，菜单锚定到按钮左下角，不再用页面级 Dialog 居中弹出，
+ * 也不依赖外层 Row/卡片的位置。`modifier` 放在外层 [Box]，让 [Box] 的几何范围
+ * 就是触发控件这一小块；调用方无需各自计算 [androidx.compose.ui.unit.DpOffset]。
  *
  * 本组件只负责触发与展开容器：
  * - [expanded] 由调用方（行/卡片）持有，避免页面级单例状态互相覆盖；
@@ -30,20 +33,21 @@ fun SujianOverflowMenu(
     contentDescription: String = "",
     content: @Composable () -> Unit,
 ) {
-    IconButton(
-        onClick = { onExpandedChange(!expanded) },
-        modifier = modifier,
-    ) {
-        Icon(
-            imageVector = SujianIcons.MoreVert,
-            contentDescription = contentDescription,
-        )
-    }
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = { onExpandedChange(false) },
-    ) {
-        content()
+    Box(modifier = modifier) {
+        IconButton(
+            onClick = { onExpandedChange(!expanded) },
+        ) {
+            Icon(
+                imageVector = SujianIcons.MoreVert,
+                contentDescription = contentDescription,
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { onExpandedChange(false) },
+        ) {
+            content()
+        }
     }
 }
 
