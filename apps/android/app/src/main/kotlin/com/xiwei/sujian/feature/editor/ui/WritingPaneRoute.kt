@@ -84,7 +84,9 @@ fun WritingPane(
     // 生产动画链：设置状态 → Editor Host → 输入事务 → 动画协调器 → 真实 VSync 渲染。
     WritingPaneMotionPolicySync(coordinator, uiState.settings, chapterId)
     // #624 评论3/4：字号/行距/首行缩进 → Editor Host → 当前共享 View 立即重排。
-    WritingPaneTypographySync(coordinator, uiState.settings, chapterId)
+    // #632 评论 5378239827 项3: 去掉 chapterId key — applyEditorTypography 已幂等，
+    // 切章不应用重排排版设置；LaunchedEffect 只依赖排版参数本身。
+    WritingPaneTypographySync(coordinator, uiState.settings)
     WritingPaneSettingsReload(viewModel, targetId)
 
     // #595 一：章节切换收口 — 宿主已用 requestOpenChapter 预提交章节
@@ -415,19 +417,21 @@ private fun WritingPaneMotionPolicySync(
 }
 
 /** 排版设置链：字号/行距/首行缩进设置 → Editor Host → 当前共享编辑器 View。
- * 设置变化后当前正文立即重排，不重建编辑 session（#624 评论3）。 */
+ * 设置变化后当前正文立即重排，不重建编辑 session（#624 评论3）。
+ *
+ * #632 评论 5378239827 项3: 去掉 chapterId key — applyEditorTypography 已幂等
+ * （EditorTypography data class == 比较），切章不重排排版设置；
+ * LaunchedEffect 只依赖排版参数本身。 */
 @Composable
 private fun WritingPaneTypographySync(
     coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
     settings: EditorSettingsState,
-    chapterId: String,
 ) {
     LaunchedEffect(
         settings.fontSize,
         settings.lineSpacingMultiplier,
         settings.autoIndentEnabled,
         settings.autoIndentWidth,
-        chapterId,
     ) {
         coordinator.applyEditorTypography(
             fontSizeSp = settings.fontSize,

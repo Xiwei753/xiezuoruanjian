@@ -1,5 +1,6 @@
 package com.xiwei.sujian.feature.editor.presentation
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicLong
@@ -13,13 +14,22 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * 修复：
  * - [runLatest] 串行执行；请求进入时递增 [AtomicLong]，在锁内校验自己是否仍是最新；
- * - 事务执行期间通过 [isLatest] 回调在每个可见提交边界（保存后 / 加载后 /
- *   session 预准备后 / 最终提交前）重新校验 — 过期请求必须回滚临时状态后返回
- *   [Result.Stale]，不得提交任何可见状态；
+ * - 事务执行期间通过 [isLatest] 回调在每个可见提交边界重新校验 — 过期请求必须回滚
+ *   临时状态后返回 [Result.Stale]，不得提交任何可见状态；
  * - 事务返回后 [runLatest] 再次校验 — 即使事务代码漏检，过期事务的结果也不会
  *   以 Completed 形式被调用方消费（调用方不得导航）；
  * - 请求执行期间被取消时，锁由 [Mutex.withLock] 自动释放，事务由调用方负责
  *   恢复旧状态（见 EditorViewModel.switchChapterLocked）。
+ *
+ * #632 评论 5378239827 项4：恢复"同目标 join、不同目标 latest-wins"的入口合并。
+ * [runChapterSwitch] 按 [ChapterSwitchKey] 合并：
+ * - 同 key 已有 in-flight 请求 → 直接 await 现有 deferred，不再执行第二次事务；
+ * - 不同 key → 仍走 [runLatest] counter（latest-wins）；
+ * - 首个同 key 请求执行完后 complete deferred；
+ * - CancellationException 用 deferred.cancel(e) 后重抛；
+ * - 普通异常用 deferred.completeExceptionally(e) 后重抛；
+ * - finally 里在 inFlightMutex.withLock 中删除当前 key，且只在 map 里仍是当前
+ *   deferred 时删除，避免旧请求误删后来的同 key 请求。
  *
  * 线程安全由 Mutex + AtomicLong 保证，无 unsafe、无并行状态机。
  */
@@ -53,6 +63,60 @@ class ChapterSwitchGate {
                 Result.Stale
             } else {
                 Result.Completed(value)
+            }
+        }
+    }
+
+    // #632 评论 5378239827 项4：同目标 join 的入口合并。
+
+    /** 章节切换请求的目标 key — 同 key 请求共享同一个 in-flight 事务。 */
+    data class ChapterSwitchKey(
+        val projectId: String,
+        val volumeId: String,
+        val chapterId: String,
+    )
+
+    private val inFlightMutex = Mutex()
+    private val inFlight =
+        mutableMapOf<ChapterSwitchKey, CompletableDeferred<Result<ChapterSwitchResult>>>()
+
+    /**
+     * 按 [ChapterSwitchKey] 合并章节切换请求：
+     * - 同 key 已有 in-flight 请求 → 直接 await 现有 deferred；
+     * - 不同 key → 走 [runLatest]（latest-wins）。
+     *
+     * 首个同 key 请求执行完后 complete deferred；CancellationException 用
+     * deferred.cancel(e) 后重抛；普通异常用 deferred.completeExceptionally(e) 后重抛；
+     * finally 里在 inFlightMutex.withLock 中删除当前 key，且只在 map 里仍是当前
+     * deferred 时删除。
+     */
+    suspend fun runChapterSwitch(
+        key: ChapterSwitchKey,
+        request: suspend (isLatest: () -> Boolean) -> ChapterSwitchResult,
+    ): Result<ChapterSwitchResult> {
+        // 同 key join：已有 in-flight 请求时直接 await。
+        val existing = inFlightMutex.withLock { inFlight[key] }
+        if (existing != null) return existing.await()
+
+        // 首个同 key 请求：创建 deferred 并登记。
+        val deferred = CompletableDeferred<Result<ChapterSwitchResult>>()
+        inFlightMutex.withLock { inFlight[key] = deferred }
+        try {
+            val result = runLatest(request)
+            deferred.complete(result)
+            return result
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            deferred.cancel(e)
+            throw e
+        } catch (e: Exception) {
+            deferred.completeExceptionally(e)
+            throw e
+        } finally {
+            inFlightMutex.withLock {
+                // 只在 map 里仍是当前 deferred 时删除，避免旧请求误删后来的同 key 请求。
+                if (inFlight[key] === deferred) {
+                    inFlight.remove(key)
+                }
             }
         }
     }
