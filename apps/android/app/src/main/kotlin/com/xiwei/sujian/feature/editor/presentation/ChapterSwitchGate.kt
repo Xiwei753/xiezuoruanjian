@@ -31,6 +31,13 @@ import java.util.concurrent.atomic.AtomicLong
  * - finally 里在 inFlightMutex.withLock 中删除当前 key，且只在 map 里仍是当前
  *   deferred 时删除，避免旧请求误删后来的同 key 请求。
  *
+ * #632 评论 5378641437：修同目标 join 的真实并发竞态。旧实现把"查已有 inFlight"
+ * 和"登记新 deferred"拆成两次 inFlightMutex.withLock，中间解锁 — 两个同 key 请求
+ * 可同时在第一次加锁里读到 null，各自创建 deferred 互相覆盖，最后两个都继续执行
+ * runLatest(request)，"同章节只做一次 Repository IO / session prepare"的目标仍可能
+ * 失效。修复：把 get-or-put 合成一次临界区，明确 owner/joiner；joiner 拿到 shared
+ * deferred 后立刻释放锁再 await，不在持有 inFlightMutex 时 await。
+ *
  * 线程安全由 Mutex + AtomicLong 保证，无 unsafe、无并行状态机。
  */
 class ChapterSwitchGate {
@@ -85,6 +92,11 @@ class ChapterSwitchGate {
      * - 同 key 已有 in-flight 请求 → 直接 await 现有 deferred；
      * - 不同 key → 走 [runLatest]（latest-wins）。
      *
+     * #632 评论 5378641437：get-or-put 在一次 inFlightMutex 临界区内完成，明确
+     * owner/joiner — 两个同 key 并发请求不可能各自创建 deferred 互相覆盖后都执行
+     * 事务。joiner 拿到 shared deferred 后立刻释放锁再 await，不在持有 inFlightMutex
+     * 时 await。
+     *
      * 首个同 key 请求执行完后 complete deferred；CancellationException 用
      * deferred.cancel(e) 后重抛；普通异常用 deferred.completeExceptionally(e) 后重抛；
      * finally 里在 inFlightMutex.withLock 中删除当前 key，且只在 map 里仍是当前
@@ -94,27 +106,39 @@ class ChapterSwitchGate {
         key: ChapterSwitchKey,
         request: suspend (isLatest: () -> Boolean) -> ChapterSwitchResult,
     ): Result<ChapterSwitchResult> {
-        // 同 key join：已有 in-flight 请求时直接 await。
-        val existing = inFlightMutex.withLock { inFlight[key] }
-        if (existing != null) return existing.await()
+        // #632 评论 5378641437：查已有 + 登记自己合成一次临界区，原子 get-or-put。
+        // 旧实现两次 withLock 之间解锁，两个同 key 请求可都读到 null 后各自创建
+        // deferred 互相覆盖，最后两个都执行 runLatest(request)。
+        val candidate = CompletableDeferred<Result<ChapterSwitchResult>>()
+        val (owner, shared) =
+            inFlightMutex.withLock {
+                val existing = inFlight[key]
+                if (existing != null) {
+                    false to existing
+                } else {
+                    inFlight[key] = candidate
+                    true to candidate
+                }
+            }
 
-        // 首个同 key 请求：创建 deferred 并登记。
-        val deferred = CompletableDeferred<Result<ChapterSwitchResult>>()
-        inFlightMutex.withLock { inFlight[key] = deferred }
+        // joiner：拿到 shared deferred 后已释放 inFlightMutex，再 await。
+        if (!owner) return shared.await()
+
+        // owner：执行事务，完成后 complete candidate。
         try {
             val result = runLatest(request)
-            deferred.complete(result)
+            candidate.complete(result)
             return result
         } catch (e: kotlinx.coroutines.CancellationException) {
-            deferred.cancel(e)
+            candidate.cancel(e)
             throw e
         } catch (e: Exception) {
-            deferred.completeExceptionally(e)
+            candidate.completeExceptionally(e)
             throw e
         } finally {
             inFlightMutex.withLock {
                 // 只在 map 里仍是当前 deferred 时删除，避免旧请求误删后来的同 key 请求。
-                if (inFlight[key] === deferred) {
+                if (inFlight[key] === candidate) {
                     inFlight.remove(key)
                 }
             }
