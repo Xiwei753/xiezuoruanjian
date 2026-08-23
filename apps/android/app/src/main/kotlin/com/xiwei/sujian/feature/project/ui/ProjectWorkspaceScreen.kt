@@ -1,9 +1,5 @@
 package com.xiwei.sujian.feature.project.ui
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,6 +8,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -44,7 +41,7 @@ import kotlinx.coroutines.withContext
  *
  * #625 第二段 / #628 验收点 1：根据 [AndroidLayoutSpec.contract.workspaceLayoutMode]
  * （**不自己判断窗口尺寸**）+ [WorkspaceLocation] 决定画什么：
- * - **窄屏**（SinglePane）：只画当前业务位置（AnimatedContent 切换）；
+ * - **窄屏**（SinglePane）：只画当前业务位置（key 切换，无动画）；
  * - **大屏**（Workbench）：
  *   - ProjectList 位置 → [ProjectListContent]（grid）；
  *   - ChapterTree 位置 → [ChapterTreeContent] + 占位；
@@ -300,19 +297,16 @@ internal fun ProjectWorkspaceScreen(
             modifier = modifier,
         )
     } else {
-        // 窄屏（SinglePane）：只画当前业务位置（AnimatedContent 切换）。
-        AnimatedContent(
-            targetState = location,
-            transitionSpec = { EnterTransition.None togetherWith ExitTransition.None },
-            modifier = modifier,
-            label = "workspace-single-pane",
-        ) { targetLocation ->
+        // #635 评论 5384780619：窄屏（SinglePane）— 没有动画就不套 AnimatedContent，
+        // 直接 key(location) 切业务页面，避免章节树旧内容和编辑器新内容在切换帧
+        // 里同时存在。
+        key(location) {
             SinglePaneContent(
                 appState = appState,
                 workspaceNavState = workspaceNavState,
                 projectListActions = projectListActions,
                 projectWorkspaceActions = projectWorkspaceActions,
-                location = targetLocation,
+                location = location,
                 workspaceLayoutMode = workspaceLayoutMode,
                 projectCardMinWidthDp = projectCardMinWidthDp,
                 currentProjectId = currentProjectId,
@@ -366,6 +360,7 @@ internal fun ProjectWorkspaceScreen(
                         }
                     }
                 },
+                modifier = modifier,
             )
         }
     }
@@ -395,6 +390,7 @@ private fun SinglePaneContent(
     onChapterSwitchFailed: (
     (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
     ),
+    modifier: Modifier = Modifier,
 ) {
     when (location) {
         is WorkspaceLocation.ProjectList ->
@@ -403,7 +399,7 @@ private fun SinglePaneContent(
                 workspaceActions = projectListActions,
                 onSelectProject = onSelectProject,
                 onContinueRecentEdit = onContinueRecentEdit,
-                modifier = Modifier.fillMaxSize(),
+                modifier = modifier.fillMaxSize(),
                 layoutConfig =
                     ProjectListLayoutConfig(
                         workspaceLayoutMode = workspaceLayoutMode,
@@ -411,7 +407,7 @@ private fun SinglePaneContent(
                     ),
             )
         is WorkspaceLocation.ChapterTree ->
-            Box(modifier = Modifier.fillMaxSize()) {
+            Box(modifier = modifier.fillMaxSize()) {
                 if (currentProjectId != null) {
                     ChapterTreeContent(
                         projectId = currentProjectId,
@@ -426,7 +422,7 @@ private fun SinglePaneContent(
         is WorkspaceLocation.Editor ->
             Box(
                 modifier =
-                    Modifier
+                    modifier
                         .fillMaxSize()
                         .background(MaterialTheme.colorScheme.background),
             ) {

@@ -143,7 +143,6 @@ fun WritingPane(
     val isActivePane = currentViewModel.isCurrentChapter(projectId, volumeId, chapterId)
     WritingPaneLayout(
         modifier = modifier,
-        chapterTitle = chapterTitle,
         uiState = uiState,
         // #630 R12：showEditor 纳入 settingsReady 门控 —
         // 设置未加载完时继续显示现有 loading UI，不提前进入正文 Surface。
