@@ -75,7 +75,9 @@ class AndroidRenderRuntime(
         val hasAnimatedContent =
             transaction != null &&
                 (transaction.animatedSlices.isNotEmpty() || transaction.blockShifts.isNotEmpty())
-        val useAnimatedPath = hasAnimatedContent || (transaction?.coordinated == true && transaction.cursorTransition?.shouldAnimate == true)
+        val useAnimatedPath =
+            hasAnimatedContent ||
+                (transaction?.coordinated == true && transaction.cursorTransition?.shouldAnimate == true)
 
         if (useAnimatedPath) {
             textRenderer.drawSearchHighlights(

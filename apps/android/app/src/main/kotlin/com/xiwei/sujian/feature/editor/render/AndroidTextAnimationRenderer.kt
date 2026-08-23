@@ -50,7 +50,8 @@ class AndroidTextAnimationRenderer {
                     val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * localProgress
                     val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * localProgress
                     val currentRight = fromRect.right + (slice.destinationRect.right - fromRect.right) * localProgress
-                    val currentBottom = fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * localProgress
+                    val currentBottom =
+                        fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * localProgress
                     val currentDest = android.graphics.RectF(currentLeft, currentTop, currentRight, currentBottom)
                     canvas.drawBitmap(bitmap, slice.sourceRect, currentDest, slicePaint)
                 }

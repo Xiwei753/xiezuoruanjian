@@ -8,13 +8,13 @@ interface AnimationTimeSource {
     fun nowNanos(): Long
 
     /**
-     * #637 评论 5386066978 项4：最近一次真实 VSync 帧的 **animation time**，
-     * 只给当前屏幕帧、rebase、pause/resume 使用。
+     * #637 评论 5386066978 项4 + 评论 5386301277 项2：最近一次真实 VSync 帧的
+     * **animation time**，只给当前屏幕帧、rebase、pause/resume 使用。
      *
      * 语义收紧：这必须是本帧真正用于渲染的 animation timestamp（API 33+ 从
-     * `Choreographer.FrameData.getFrameTimeNanos()` 读取，API 30–32 从
-     * `FrameCallback.doFrame` 读取）。rebase、pause/resume、draw 全部消费
-     * 同一套时间基准，不混用 frame time 和 wall clock。
+     * `Choreographer.FrameData.getPreferredFrameTimeline().getExpectedPresentationTimeNanos()`
+     * 读取，不取 `getFrameTimeNanos()`；API 30–32 从 `FrameCallback.doFrame` 读取）。
+     * rebase、pause/resume、draw 全部消费同一套时间基准，不混用 frame time 和 wall clock。
      *
      * 未收到过帧时返回 null。
      */
@@ -23,7 +23,8 @@ interface AnimationTimeSource {
 
 class ChoreographerAnimationTimeSource : AnimationTimeSource {
     /**
-     * #637 评论 5386066978 项4：缓存字段语义收紧为"本帧 animation time"。
+     * #637 评论 5386066978 项4 + 评论 5386301277 项2：缓存字段语义收紧为
+     * "本帧 animation time"（preferred frame timeline 的 expected presentation time）。
      * 由 [onFrameTimeNanos] 在每个 VSync 帧更新，rebase/pause/resume/draw 统一消费。
      */
     @Volatile

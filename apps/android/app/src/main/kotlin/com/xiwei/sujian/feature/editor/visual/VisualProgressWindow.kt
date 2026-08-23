@@ -58,11 +58,9 @@ data class VisualProgressWindow(
         return VisualProgressWindow(start = 0f, end = 1f - f)
     }
 
-    private companion object {
-        const val MIN_SPAN = 0.0001f
-    }
-
     companion object {
+        private const val MIN_SPAN = 0.0001f
+
         /** 完整窗口 [0, 1] — 新事务首次播放时使用，map(progress) = progress。 */
         val Full = VisualProgressWindow(start = 0f, end = 1f)
     }

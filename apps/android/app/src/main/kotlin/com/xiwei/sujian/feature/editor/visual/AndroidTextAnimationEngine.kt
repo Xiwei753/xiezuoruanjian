@@ -186,6 +186,11 @@ class AndroidTextAnimationEngine(
             } else {
                 preparedAnimation
             }
+        // #637 评论 5386301277 项1：hasTextMotion 只计算一次，事务级 coordinated
+        // 和是否创建独立 cursorTimeline 共用同一判断，不在不同分支重复计算。
+        val hasTextMotion =
+            preparedAnimation.animatedSlices.isNotEmpty() ||
+                preparedAnimation.blockShifts.isNotEmpty()
         val oldTransaction = activeTransaction
         val newOwner = SnapshotOwner.OwnedByTransaction(preparedAnimation.transactionId)
 
@@ -239,10 +244,11 @@ class AndroidTextAnimationEngine(
             // consecutive inputs would grow ownedSnapshotIds unboundedly until the final
             // transaction completes.
             val preciseOwnedIds = (preparedAnimation.ownedSnapshotIds - unreferencedNewIds) + inheritedIds
-            activeTransaction = effectiveTransaction.copy(
-                ownedSnapshotIds = preciseOwnedIds,
-                coordinated = coordinatedEnabled && hasTextMotion,
-            )
+            activeTransaction =
+                effectiveTransaction.copy(
+                    ownedSnapshotIds = preciseOwnedIds,
+                    coordinated = coordinatedEnabled && hasTextMotion,
+                )
             timeline?.complete()
             cursorTimeline?.complete()
             // 连续输入重基：新事务在旧事务完成前接管，旧快照所有权转移给新事务。
@@ -252,14 +258,14 @@ class AndroidTextAnimationEngine(
             )
         } else {
             val preciseOwnedIds = preparedAnimation.ownedSnapshotIds - unreferencedNewIds
-            activeTransaction = effectiveTransaction.copy(
-                ownedSnapshotIds = preciseOwnedIds,
-                coordinated = coordinatedEnabled && hasTextMotion,
-            )
+            activeTransaction =
+                effectiveTransaction.copy(
+                    ownedSnapshotIds = preciseOwnedIds,
+                    coordinated = coordinatedEnabled && hasTextMotion,
+                )
         }
 
         timeline = AnimationTimeline(preparedAnimation.durationMs, submittedAtMs)
-        val hasTextMotion = preparedAnimation.animatedSlices.isNotEmpty() || preparedAnimation.blockShifts.isNotEmpty()
         cursorTimeline =
             if (effectiveCursorTransition?.shouldAnimate == true && preparedAnimation.durationMs > 0L) {
                 if (coordinatedEnabled && hasTextMotion) {
@@ -522,10 +528,6 @@ class AndroidTextAnimationEngine(
         // #637 评论 5386066978 项3：用事务级 coordinated 标记，不靠引擎级设置反推。
         val tx = activeTransaction
         if (tx != null && tx.coordinated) return false
-        val ctl = cursorTimeline
-        if (ctl != null && ctl.getState() != TransactionState.Completed) return true
-        return false
-    }
         val ctl = cursorTimeline
         if (ctl != null && ctl.getState() != TransactionState.Completed) return true
         return false

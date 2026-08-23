@@ -10,10 +10,13 @@ import android.view.Choreographer
  * 监听者（动画事务锚定、完成判定）。不允许存在测试专用手动时钟分支 — 动画必须
  * 由真实帧驱动。
  *
- * #637 评论 5386066978 项4：帧脉冲 + 动画时间抽象。
+ * #637 评论 5386066978 项4 + 评论 5386301277 项2：帧脉冲 + 动画时间抽象。
  * - API 33+ 使用 [Choreographer.postVsyncCallback] + [Choreographer.FrameData]：
- *   `FrameData.getFrameTimeNanos()` 是官方用于动画的 timestamp，在 late frame 后
- *   不会像 `FrameCallback.doFrame` 那样直接向前跳产生 jank。
+ *   动画时间取 `FrameData.getPreferredFrameTimeline().getExpectedPresentationTimeNanos()`，
+ *   不取 `FrameData.getFrameTimeNanos()`。Android 官方明确写了 `frameTimeNanos`
+ *   不应再用于动画，late frame 后会让动画直接向前跳产生 jank；preferred frame
+ *   timeline 的 expected presentation time 才是 AOSP 自己用于推进 animation clocks
+ *   的值。
  * - API 30–32 保留 [Choreographer.postFrameCallback] 兼容实现（项目 minSdk=30）。
  * - [requestFrame] 仍只允许挂一个 pending callback，不让每个 listener 自己注册。
  */
@@ -70,23 +73,37 @@ class WindowDisplayFrameClock(
     }
 
     /**
-     * API 33+ 实现：用 [Choreographer.postVsyncCallback] + [Choreographer.FrameData]，
-     * 从 `FrameData.getFrameTimeNanos()` 读取官方动画时间。
+     * API 33+ 实现：用 [Choreographer.postVsyncCallback] + [Choreographer.FrameData]。
+     *
+     * #637 评论 5386301277 项2：
+     * - `postVsyncCallback(callback)` 返回 Unit，公开 API 没有 `VsyncCallbackToken`；
+     *   `removeVsyncCallback()` 接收原来的 [Choreographer.VsyncCallback] 对象。因此
+     *   必须保存 callback 本身，不能用 token。
+     * - 动画时间取 `FrameData.getPreferredFrameTimeline().getExpectedPresentationTimeNanos()`，
+     *   不取 `FrameData.getFrameTimeNanos()`。Android 官方明确写了 `frameTimeNanos`
+     *   不应再用于动画，late frame 后会让动画直接向前跳产生 jank；AOSP 自己的
+     *   `Choreographer.getExpectedPresentationTimeNanos()` 也是从 preferred frame
+     *   timeline 取这个值，并注明它应当用于推进 animation clocks。
      */
     class VsyncChoreographerPoster(private val choreographer: Choreographer) : FrameCallbackPoster {
-        private val tokens = mutableMapOf<FramePulseCallback, Choreographer.VsyncCallbackToken>()
+        private val callbacks =
+            mutableMapOf<FramePulseCallback, Choreographer.VsyncCallback>()
 
         override fun postFramePulse(callback: FramePulseCallback) {
-            val token =
-                choreographer.postVsyncCallback { frameData ->
-                    callback.onFramePulse(frameData.frameTimeNanos)
+            val vsyncCallback =
+                Choreographer.VsyncCallback { frameData ->
+                    callbacks.remove(callback)
+                    callback.onFramePulse(
+                        frameData.preferredFrameTimeline.expectedPresentationTimeNanos,
+                    )
                 }
-            tokens[callback] = token
+            callbacks[callback] = vsyncCallback
+            choreographer.postVsyncCallback(vsyncCallback)
         }
 
         override fun removeFramePulse(callback: FramePulseCallback) {
-            val token = tokens.remove(callback) ?: return
-            choreographer.removeVsyncCallback(token)
+            val vsyncCallback = callbacks.remove(callback) ?: return
+            choreographer.removeVsyncCallback(vsyncCallback)
         }
     }
 

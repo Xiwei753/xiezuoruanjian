@@ -2,6 +2,8 @@ package com.xiwei.sujian.feature.editor.session
 
 import com.xiwei.sujian.feature.editor.window.WindowDisplayFrameClock
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -25,6 +27,7 @@ class SingleFrameDriveTest {
         var postedCount = 0
         var removedCount = 0
         var lastPostedCallback: WindowDisplayFrameClock.FramePulseCallback? = null
+        var lastRemovedCallback: WindowDisplayFrameClock.FramePulseCallback? = null
 
         override fun postFramePulse(callback: WindowDisplayFrameClock.FramePulseCallback) {
             postedCount++
@@ -33,6 +36,7 @@ class SingleFrameDriveTest {
 
         override fun removeFramePulse(callback: WindowDisplayFrameClock.FramePulseCallback) {
             removedCount++
+            lastRemovedCallback = callback
         }
     }
 
@@ -172,5 +176,72 @@ class SingleFrameDriveTest {
         assertEquals("removeListener 后不得再推进", 1, listener.frameCount)
 
         clock.release()
+    }
+
+    /**
+     * #637 评论 5386301277 项2：时间源语义 — onFramePulse 收到的 animation time
+     * （来自 preferredFrameTimeline.expectedPresentationTimeNanos）必须原样透传给
+     * listener，不得被 clock 截断、取整或替换成 wall clock。
+     */
+    @Test
+    fun onFramePulse_animationTimePropagatesToListenerUnchanged() {
+        val poster = FakeFrameCallbackPoster()
+        val clock = WindowDisplayFrameClock(poster)
+        val listener = CountingListener(needsFrameProvider = { false })
+        clock.addListener(listener)
+        clock.requestFrame()
+
+        // 模拟 VsyncCallback 从 preferredFrameTimeline.expectedPresentationTimeNanos
+        // 传下来的值（任意 monotonic nanos，包括 late frame 后的跳跃值）。
+        val animationTimeNanos = 9_876_543_210L
+        poster.lastPostedCallback!!.onFramePulse(animationTimeNanos)
+        assertEquals(
+            "onFramePulse 的 animation time 必须原样透传给 listener",
+            animationTimeNanos,
+            listener.lastFrameTimeNanos,
+        )
+
+        clock.release()
+    }
+
+    /**
+     * #637 评论 5386301277 项2：callback 移除语义 — stop 必须调用 removeFramePulse，
+     * 且传给 removeFramePulse 的就是之前 postFramePulse 注册的同一个 callback 实例。
+     */
+    @Test
+    fun stop_removesExactlyThePreviouslyPostedCallback() {
+        val poster = FakeFrameCallbackPoster()
+        val clock = WindowDisplayFrameClock(poster)
+        clock.requestFrame()
+        val posted = poster.lastPostedCallback
+        assertNotNull("requestFrame 必须 post 一个 callback", posted)
+
+        clock.stop()
+        assertEquals("stop 必须 remove 一次", 1, poster.removedCount)
+        assertSame(
+            "removeFramePulse 必须收到之前 postFramePulse 的同一个 callback 实例",
+            posted,
+            poster.lastRemovedCallback,
+        )
+    }
+
+    /**
+     * #637 评论 5386301277 项2：callback 保存语义 — requestFrame 期间只保留一个
+     * pending callback；onFramePulse 触发后 callbackPosted 复位，可重新 post。
+     */
+    @Test
+    fun callbackPosted_resetsAfterPulseAndAllowsRepost() {
+        val poster = FakeFrameCallbackPoster()
+        val clock = WindowDisplayFrameClock(poster)
+        clock.requestFrame()
+        assertEquals(1, poster.postedCount)
+
+        // 第一帧触发
+        poster.lastPostedCallback!!.onFramePulse(1_000L)
+        // callbackPosted 复位后可再次 post
+        clock.requestFrame()
+        assertEquals("onFramePulse 后 callbackPosted 必须复位，允许重新 post", 2, poster.postedCount)
+
+        clock.stop()
     }
 }
