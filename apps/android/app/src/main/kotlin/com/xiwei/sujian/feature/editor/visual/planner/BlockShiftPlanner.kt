@@ -23,10 +23,11 @@ class BlockShiftPlanner {
                     }
                 if (exactMatchIdx != null) {
                     usedRebaseIndices.add(exactMatchIdx)
-                    // #637 评论 5386066978 项2：continuation 窗口。
+                    // #637 评论 5386573878：continuation 窗口 — 直接消费旧帧保存的
+                    // remainingFraction，连续 rebase 不会反复减速。
                     val window =
-                        VisualProgressWindow.Full.continued(
-                            rebaseSnapshot.blockShiftStates[exactMatchIdx].localProgress,
+                        VisualProgressWindow.fromRemainingFraction(
+                            rebaseSnapshot.blockShiftStates[exactMatchIdx].remainingFraction,
                         )
                     shift.copy(
                         deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[exactMatchIdx].currentTranslateY,
@@ -42,8 +43,8 @@ class BlockShiftPlanner {
                     if (matchIdx != null) {
                         usedRebaseIndices.add(matchIdx)
                         val window =
-                            VisualProgressWindow.Full.continued(
-                                rebaseSnapshot.blockShiftStates[matchIdx].localProgress,
+                            VisualProgressWindow.fromRemainingFraction(
+                                rebaseSnapshot.blockShiftStates[matchIdx].remainingFraction,
                             )
                         shift.copy(
                             deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[matchIdx].currentTranslateY,
@@ -65,8 +66,8 @@ class BlockShiftPlanner {
                 if (matchIdx != null) {
                     usedRebaseIndices.add(matchIdx)
                     val window =
-                        VisualProgressWindow.Full.continued(
-                            rebaseSnapshot.blockShiftStates[matchIdx].localProgress,
+                        VisualProgressWindow.fromRemainingFraction(
+                            rebaseSnapshot.blockShiftStates[matchIdx].remainingFraction,
                         )
                     shift.copy(
                         deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[matchIdx].currentTranslateY,

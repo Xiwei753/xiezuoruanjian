@@ -491,7 +491,7 @@ class AndroidTextAnimationEngine(
                 state = TransactionState.Pending,
                 sliceVisualStates = sliceStates,
                 cursorRect = cursorRect,
-                cursorLocalProgress = 0f,
+                cursorRemainingFraction = 1f,
                 blockShiftStates = blockStates,
             )
         }
@@ -500,16 +500,17 @@ class AndroidTextAnimationEngine(
         val sliceStates = computeSliceVisualStates(transaction, p)
         val cursorRect = computeCurrentCursorRect(transaction, cursorProgress)
         val blockStates = computeBlockShiftVisualStates(transaction, p)
-        // #637 评论 5386066978 项2：保存光标已映射后的 local progress，供 rebase
-        // continuation 计算新事务的 cursorTransition.progressWindow。
-        val cursorLocalProgress =
-            transaction.cursorTransition?.progressWindow?.map(cursorProgress) ?: 0f
+        // #637 评论 5386573878：保存光标在当前帧之后还剩多少基准时长，
+        // 供 rebase continuation 用 fromRemainingFraction 直接消费，
+        // 连续 rebase 不会反复减速。
+        val cursorRemainingFraction =
+            transaction.cursorTransition?.progressWindow?.remainingFractionAt(cursorProgress) ?: 1f
         return VisualFrameSnapshot(
             progress = p,
             state = state,
             sliceVisualStates = sliceStates,
             cursorRect = cursorRect,
-            cursorLocalProgress = cursorLocalProgress,
+            cursorRemainingFraction = cursorRemainingFraction,
             blockShiftStates = blockStates,
         )
     }
@@ -701,6 +702,9 @@ class AndroidTextAnimationEngine(
             // #637 评论 5386066978 项2：localProgress 由 progressWindow.map 得到，
             // 位置/alpha/reveal 都用 localProgress 插值，与 renderer 一致。
             val localProgress = slice.progressWindow.map(progress)
+            // #637 评论 5386573878：保存当前帧之后还剩多少基准时长，
+            // rebase continuation 用 fromRemainingFraction 直接消费。
+            val remainingFraction = slice.progressWindow.remainingFractionAt(progress)
             val fromRect = slice.fromDestinationRect ?: slice.destinationRect
             val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * localProgress
             val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * localProgress
@@ -726,7 +730,7 @@ class AndroidTextAnimationEngine(
                 destinationRight = slice.destinationRect.right,
                 destinationBottom = slice.destinationRect.bottom,
                 revealFraction = revealFraction,
-                localProgress = localProgress,
+                remainingFraction = remainingFraction,
             )
         }
     }
@@ -815,6 +819,8 @@ class AndroidTextAnimationEngine(
             // #637 评论 5386066978 项2：localProgress 由 progressWindow.map 得到，
             // currentTranslateY = deltaY * (localProgress - 1)，与 renderer 一致。
             val localProgress = shift.progressWindow.map(progress)
+            // #637 评论 5386573878：保存当前帧之后还剩多少基准时长。
+            val remainingFraction = shift.progressWindow.remainingFractionAt(progress)
             val currentTranslateY = shift.deltaY * (localProgress - 1f)
             BlockShiftVisualState(
                 startLineIndex = shift.startLineIndex,
@@ -823,7 +829,7 @@ class AndroidTextAnimationEngine(
                 endUtf8Exclusive = shift.endUtf8Exclusive,
                 currentTranslateY = currentTranslateY,
                 targetTranslateY = 0f,
-                localProgress = localProgress,
+                remainingFraction = remainingFraction,
             )
         }
     }

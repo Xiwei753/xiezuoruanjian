@@ -71,6 +71,7 @@ class RebasePlannerTest {
         role: SliceRole,
         revealFraction: Float? = null,
         currentAlpha: Float = 1f,
+        remainingFraction: Float = 1f,
     ): SliceVisualState {
         return SliceVisualState(
             snapshotId = 1L,
@@ -90,6 +91,7 @@ class RebasePlannerTest {
             destinationRight = 100f,
             destinationBottom = 20f,
             revealFraction = revealFraction,
+            remainingFraction = remainingFraction,
         )
     }
 
@@ -371,5 +373,198 @@ class RebasePlannerTest {
         val continued = result[0]
         assertEquals("角色应保持 Delete", SliceRole.Delete, continued.role)
         assertTrue("无 cluster 时 revealSpec 应为 null（alpha 回退）", continued.revealSpec == null)
+    }
+
+    /**
+     * #637 评论 5386573878：applyRebaseState 用 rebaseState.remainingFraction 构造
+     * continuation 窗口，不再从 localProgress 重新推。
+     *
+     * 旧帧保存 remainingFraction = 0.4（剩 40ms）。rebase 后新事务窗口 end = 0.4。
+     */
+    @Test
+    fun applyRebaseState_usesRemainingFractionForContinuationWindow() {
+        val slice = makeAnimatedSlice(SliceRole.Move)
+        val rebaseState =
+            makeSliceVisualState(
+                role = SliceRole.Move,
+                currentAlpha = 1f,
+                remainingFraction = 0.4f,
+            )
+
+        val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
+
+        assertEquals(0f, rebased.progressWindow.start, 0f)
+        assertEquals("continuation 窗口 end 应取自 remainingFraction", 0.4f, rebased.progressWindow.end, 0.001f)
+    }
+
+    /**
+     * #637 评论 5386573878：未匹配 Delete continuation 也用 remainingFraction。
+     */
+    @Test
+    fun unmatchedDeleteContinuation_usesRemainingFractionForWindow() {
+        val deleteState =
+            makeSliceVisualState(
+                role = SliceRole.Delete,
+                revealFraction = 0.5f,
+                currentAlpha = 0.5f,
+                remainingFraction = 0.3f,
+            )
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 0.5f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(deleteState),
+            )
+
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = emptyMap(),
+            )
+
+        assertEquals(1, result.size)
+        assertEquals(0.3f, result[0].progressWindow.end, 0.001f)
+    }
+
+    /**
+     * #637 评论 5386573878：映射成功的 Insert continuation 重建 spec 为
+     * progressStart=0/progressEnd=1/initialFraction=当前 revealFraction。
+     *
+     * 多 cluster/run 的 reveal 本来可能有非 [0,1] 子窗口（这里 progressStart=0.3,
+     * progressEnd=0.7）。rebase 后外层 progress 从 0 重新开始，继续沿用旧
+     * progressStart 会先停一段再继续。重建为 [0,1] 后从新事务第一帧就继续运动。
+     */
+    @Test
+    fun mappedInsertRebase_rebuildsSpecToFullWindowProgress() {
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Insert,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 10, 20),
+                destinationRect = RectF(0f, 0f, 100f, 20f),
+                startAlpha = 1f,
+                endAlpha = 1f,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                revealSpec =
+                    TextRevealSpec(
+                        mode = TextRevealMode.REVEAL,
+                        anchorX = 0f,
+                        boundaryFromX = 0f,
+                        boundaryToX = 100f,
+                        progressStart = 0.3f,
+                        progressEnd = 0.7f,
+                        initialFraction = 0f,
+                    ),
+            )
+        val rebaseState =
+            makeSliceVisualState(
+                role = SliceRole.Insert,
+                revealFraction = 0.4f,
+                remainingFraction = 0.5f,
+            )
+
+        val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
+
+        assertNotNull("mapped Insert rebase 应携带重建后的 revealSpec", rebased.revealSpec)
+        val spec = rebased.revealSpec!!
+        assertEquals("progressStart 应重建为 0f", 0f, spec.progressStart, 0f)
+        assertEquals("progressEnd 应重建为 1f", 1f, spec.progressEnd, 0f)
+        assertEquals("initialFraction 应取自旧帧 revealFraction", 0.4f, spec.initialFraction, 0.0001f)
+        // 从新事务第一帧（localProgress=0）就继续运动，不重新等待旧 progressStart。
+        val fractionAtFirstFrame = spec.fraction(0f)
+        assertEquals(
+            "第一帧 revealFraction 应等于 initialFraction，不停在 0",
+            0.4f,
+            fractionAtFirstFrame,
+            0.0001f,
+        )
+        val fractionAtMid = spec.fraction(0.5f)
+        assertEquals(
+            "中点应线性插值到 0.7",
+            0.7f,
+            fractionAtMid,
+            0.0001f,
+        )
+        assertEquals("末帧应完成", 1f, spec.fraction(1f), 0.0001f)
+    }
+
+    /**
+     * #637 评论 5386573878：映射成功的 Delete continuation 同样重建 spec 为 [0,1]。
+     */
+    @Test
+    fun mappedDeleteRebase_rebuildsSpecToFullWindowProgress() {
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Delete,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 10, 20),
+                destinationRect = RectF(0f, 0f, 100f, 20f),
+                startAlpha = 1f,
+                endAlpha = 0f,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                revealSpec =
+                    TextRevealSpec(
+                        mode = TextRevealMode.SWALLOW,
+                        anchorX = 0f,
+                        boundaryFromX = 100f,
+                        boundaryToX = 0f,
+                        progressStart = 0.2f,
+                        progressEnd = 0.8f,
+                        initialFraction = 0f,
+                    ),
+            )
+        val rebaseState =
+            makeSliceVisualState(
+                role = SliceRole.Delete,
+                revealFraction = 0.6f,
+                remainingFraction = 0.4f,
+            )
+
+        val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
+
+        assertNotNull(rebased.revealSpec)
+        val spec = rebased.revealSpec!!
+        assertEquals(0f, spec.progressStart, 0f)
+        assertEquals(1f, spec.progressEnd, 0f)
+        assertEquals(0.6f, spec.initialFraction, 0.0001f)
+        assertEquals("第一帧继续运动，不重新等待旧 progressStart", 0.6f, spec.fraction(0f), 0.0001f)
+    }
+
+    /**
+     * #637 评论 5386573878：双重 rebase 端到端 — remainingFraction 在两次 rebase 后
+     * 保持 0.4 → 0.2，不会像旧 localProgress 方案变 0.4 → 0.5。
+     *
+     * 第一次 rebase：旧帧 remainingFraction=0.4 → 新窗口 [0, 0.4]。
+     * 新事务走到 global 0.2 后再次 rebase：remainingFractionAt(0.2) = 0.2。
+     */
+    @Test
+    fun doubleRebase_remainingFractionDoesNotReinflate() {
+        val slice = makeAnimatedSlice(SliceRole.Move)
+        // 第一次 rebase：旧帧剩 0.4
+        val rebaseState1 =
+            makeSliceVisualState(
+                role = SliceRole.Move,
+                currentAlpha = 1f,
+                remainingFraction = 0.4f,
+            )
+        val rebased1 = planner.applyRebaseState(slice, rebaseState1, emptyMap())
+        assertEquals(0.4f, rebased1.progressWindow.end, 0.001f)
+
+        // 新事务走到 global 0.2，窗口 [0, 0.4] 的 remainingFractionAt(0.2) = 0.2
+        val remainingAfterSecond = rebased1.progressWindow.remainingFractionAt(0.2f)
+        assertEquals("第二次 rebase 必须剩 0.2，不能变 0.5", 0.2f, remainingAfterSecond, 0.001f)
+
+        // 第二次 rebase
+        val rebaseState2 =
+            makeSliceVisualState(
+                role = SliceRole.Move,
+                currentAlpha = 1f,
+                remainingFraction = remainingAfterSecond,
+            )
+        val rebased2 = planner.applyRebaseState(slice, rebaseState2, emptyMap())
+        assertEquals(0.2f, rebased2.progressWindow.end, 0.001f)
     }
 }
