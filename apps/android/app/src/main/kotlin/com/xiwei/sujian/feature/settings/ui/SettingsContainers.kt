@@ -76,26 +76,22 @@ fun SettingsGroupHeader(
 }
 
 /**
- * #633 评论 5379618506：展开外壳 — 永远没有上圆角。
+ * #633 评论 5379618506 / #635 评论 5385740370：展开外壳 —
+ * 永远 [RectangleShape]，不决定整组外轮廓。
  *
- * 只有它本身也是整个 SettingsGroup 最后一块时（[closesGroup] = true），才画底圆角。
+ * 外轮廓（包括整组底圆角）由 [SettingsExpandableCategory] 的最外层 Surface 唯一拥有。
+ * 展开壳只负责 Low 背景、padding 和 High 内卡间距。
  * 内部用 Column + spacedBy(8dp) 统一产生内卡间距，不再靠每个 item 自己拼圆角。
- *
- * @param closesGroup 该展开外壳是否为整个 [SettingsGroup] 的最后一块（决定底圆角）
  */
 @Composable
 fun SettingsExpandedShell(
-    closesGroup: Boolean,
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val outerShape =
-        if (closesGroup) SettingsGroupBottomShape else RectangleShape
-
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = outerShape,
+        shape = RectangleShape,
         shadowElevation = 0.dp,
     ) {
         Column(

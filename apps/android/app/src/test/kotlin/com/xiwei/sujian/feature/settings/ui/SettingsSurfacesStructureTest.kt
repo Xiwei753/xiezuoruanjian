@@ -83,7 +83,7 @@ class SettingsSurfacesStructureTest {
     @Test
     fun settingsExpandedShell_rendersContent() {
         composeRule.setContent {
-            SettingsExpandedShell(closesGroup = false) {
+            SettingsExpandedShell {
                 Box(modifier = Modifier.testTag("expanded_content")) {}
             }
         }
