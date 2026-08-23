@@ -230,6 +230,14 @@ class AndroidVisualPlanner(
                 visualIntent.coordinatedCursor.shouldAnimate &&
                     (fromX != newRev.cursorX || fromY != newRev.cursorY || fromHeight != newRev.cursorHeight)
 
+            // #637 评论 5386066978 项2：rebase continuation 窗口 — 旧帧光标已走
+            // cursorLocalProgress，新事务只播放剩余部分，已走部分不重新计时。
+            val cursorWindow =
+                if (rebaseSnapshot != null && rebaseSnapshot.cursorRect != null) {
+                    VisualProgressWindow.Full.continued(rebaseSnapshot.cursorLocalProgress)
+                } else {
+                    VisualProgressWindow.Full
+                }
             cursorTransition =
                 PreparedVisualTransaction.CursorTransition(
                     fromX = fromX,
@@ -239,6 +247,7 @@ class AndroidVisualPlanner(
                     toY = newRev.cursorY,
                     toHeight = newRev.cursorHeight,
                     shouldAnimate = animateCursor,
+                    progressWindow = cursorWindow,
                 )
         } else if (newRev != null) {
             cursorTransition =

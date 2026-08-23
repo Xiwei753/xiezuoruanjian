@@ -44,7 +44,7 @@ class ParagraphStyleProjection {
         widthChars: Float,
         textPaint: TextPaint,
     ) {
-        removeParagraphIndentSpans(text, 0, text.length)
+        removeAllParagraphIndentSpans(text)
         if (!enabled || widthChars <= 0f) return
         applyParagraphIndent(text, 0, text.length, firstLineIndentPx(textPaint, widthChars))
     }
@@ -54,6 +54,11 @@ class ParagraphStyleProjection {
      * 区域终点所在段落终点）内的全部首行缩进 span，再重新应用该区域内每个
      * 段落起点的缩进。区域外的 span 原样保留 — 普通按键（段落内部增删字符）
      * 不经过本方法，不产生任何 span 抖动。
+     *
+     * #637 评论 5386066978 项1：空文本不再提前 return。正文从 1 个字符删到 0 时，
+     * 原 `FirstLineIndentSpan` 会随 Editable 收缩成 0..0，必须在这里清掉，
+     * 否则下一帧 `AffectedLineCapture` 会从残留 span 得到一次缩进、再手工补一次，
+     * 形成两倍缩进。
      */
     fun resyncParagraphIndent(
         text: Spannable,
@@ -62,7 +67,11 @@ class ParagraphStyleProjection {
         enabled: Boolean,
         firstLinePx: Float,
     ) {
-        if (regionStart < 0 || regionEnd < regionStart || text.length == 0) return
+        if (regionStart < 0 || regionEnd < regionStart) return
+        if (text.isEmpty()) {
+            removeAllParagraphIndentSpans(text)
+            return
+        }
         val start = paragraphStartOf(text, regionStart.coerceAtMost(text.length))
         // 纯删除（regionStart == regionEnd）时被删字符位于该位置，扩展一位以覆盖
         // 合并后的整个段落；否则从变更区域的末尾继续到所在段落终点。
@@ -79,9 +88,22 @@ class ParagraphStyleProjection {
         applyParagraphIndent(text, start, end, firstLinePx)
     }
 
+    /**
+     * #637 评论 5386066978 项1：移除整篇文本的全部首行缩进 span — 整篇重载、
+     * 关闭缩进、删空正文共用同一 helper。直接从整个 Spannable 取
+     * [FirstLineIndentSpan] 并逐个 [Spannable.removeSpan]，不因 start == end == 0
+     * 提前跳过（塌缩成 0..0 的 span 也必须清掉）。
+     */
+    fun removeAllParagraphIndentSpans(text: Spannable) {
+        val spans = text.getSpans(0, text.length, FirstLineIndentSpan::class.java)
+        for (span in spans) {
+            text.removeSpan(span)
+        }
+    }
+
     /** 移除整篇文本的全部首行缩进 span。 */
     fun clearParagraphIndent(text: Spannable) {
-        removeParagraphIndentSpans(text, 0, text.length)
+        removeAllParagraphIndentSpans(text)
     }
 
     /** 全角字符宽度 × 字符数 = 首行缩进像素。用典型全角字符 `中` 度量。 */

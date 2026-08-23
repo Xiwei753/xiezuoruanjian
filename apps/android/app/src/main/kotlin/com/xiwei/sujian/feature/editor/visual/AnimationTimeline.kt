@@ -147,6 +147,11 @@ data class VisualFrameSnapshot(
      *  [CursorTransition.fromX/fromY/fromHeight] from the on-screen position rather than
      *  the old logical endpoint — preventing cursor jumps during rapid consecutive input. */
     val cursorRect: android.graphics.RectF? = null,
+    /** #637 评论 5386066978 项2：光标已映射后的 local progress
+     *  （cursorTransition.progressWindow.map(cursorProgress)）。rebase continuation
+     *  用它计算新事务的 cursorTransition.progressWindow.end = 1 - cursorLocalProgress，
+     *  让光标已走部分不重新计时，与文字 slice 保持同一运动速度。 */
+    val cursorLocalProgress: Float = 0f,
     /** Current visual state of block shifts at [progress]. Used by rebase so that the next
      *  transaction's BlockShift starts from the on-screen translateY rather than the full
      *  -deltaY — preventing suffix blocks from jumping back to the old position during
@@ -172,6 +177,10 @@ data class BlockShiftVisualState(
     /** Always 0 — the animation's final state is the new layout with no translation.
      *  Included for API symmetry with [SliceVisualState.destinationLeft/Top/Right/Bottom]. */
     val targetTranslateY: Float,
+    /** #637 评论 5386066978 项2：本 BlockShift 已映射后的 local progress
+     *  （progressWindow.map(globalProgress)）。rebase continuation 用它计算
+     *  新事务的 progressWindow.end = 1 - localProgress，让已走部分不重新计时。 */
+    val localProgress: Float = 0f,
 )
 
 data class SliceVisualState(
@@ -200,4 +209,8 @@ data class SliceVisualState(
      *  Used by rebase to set the next transaction's revealSpec.initialFraction
      *  so the animation continues from the on-screen position. */
     val revealFraction: Float? = null,
+    /** #637 评论 5386066978 项2：本 slice 已映射后的 local progress
+     *  （progressWindow.map(globalProgress)）。rebase continuation 用它计算
+     *  新事务的 progressWindow.end = 1 - localProgress，让已走部分不重新计时。 */
+    val localProgress: Float = 0f,
 )

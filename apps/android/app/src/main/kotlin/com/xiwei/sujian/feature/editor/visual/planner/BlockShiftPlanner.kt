@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.editor.visual.planner
 
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot
+import com.xiwei.sujian.feature.editor.visual.VisualProgressWindow
 
 class BlockShiftPlanner {
     fun applyRebaseToBlockShifts(
@@ -22,7 +23,15 @@ class BlockShiftPlanner {
                     }
                 if (exactMatchIdx != null) {
                     usedRebaseIndices.add(exactMatchIdx)
-                    shift.copy(deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[exactMatchIdx].currentTranslateY)
+                    // #637 评论 5386066978 项2：continuation 窗口。
+                    val window =
+                        VisualProgressWindow.Full.continued(
+                            rebaseSnapshot.blockShiftStates[exactMatchIdx].localProgress,
+                        )
+                    shift.copy(
+                        deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[exactMatchIdx].currentTranslateY,
+                        progressWindow = window,
+                    )
                 } else {
                     val matchIdx =
                         findBlockShiftRebaseByLineIndex(
@@ -32,7 +41,14 @@ class BlockShiftPlanner {
                         )
                     if (matchIdx != null) {
                         usedRebaseIndices.add(matchIdx)
-                        shift.copy(deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[matchIdx].currentTranslateY)
+                        val window =
+                            VisualProgressWindow.Full.continued(
+                                rebaseSnapshot.blockShiftStates[matchIdx].localProgress,
+                            )
+                        shift.copy(
+                            deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[matchIdx].currentTranslateY,
+                            progressWindow = window,
+                        )
                     } else {
                         shift
                     }
@@ -48,7 +64,14 @@ class BlockShiftPlanner {
                     )
                 if (matchIdx != null) {
                     usedRebaseIndices.add(matchIdx)
-                    shift.copy(deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[matchIdx].currentTranslateY)
+                    val window =
+                        VisualProgressWindow.Full.continued(
+                            rebaseSnapshot.blockShiftStates[matchIdx].localProgress,
+                        )
+                    shift.copy(
+                        deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[matchIdx].currentTranslateY,
+                        progressWindow = window,
+                    )
                 } else {
                     shift
                 }

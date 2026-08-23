@@ -18,6 +18,12 @@ data class PreparedVisualTransaction(
     val durationMs: Long,
     val blockShifts: List<BlockShift> = emptyList(),
     val operationKind: EditorOperationKindDto = EditorOperationKindDto.INSERT,
+    /** #637 评论 5386066978 项3：本事务是否协同文字与光标。
+     *  submit 时由引擎根据 coordinatedEnabled && hasTextMotion 设置；渲染/终态
+     *  判断用这个事务级标记，不靠是否存在独立 cursorTimeline 反推。
+     *  coordinated=true 时文字和光标共用同一个 visual completion（同一 timeline
+     *  progress、同一 frame timestamp），textFinished == cursorFinished。 */
+    val coordinated: Boolean = false,
 ) {
     data class StaticPatch(
         val newSnapshotId: Long,
@@ -58,6 +64,10 @@ data class PreparedVisualTransaction(
         /** Reveal/swallow spec for Insert/Delete slices. null for Move/Crossfade/Static.
          *  When non-null, the renderer uses clip-rect drawing instead of alpha. */
         val revealSpec: TextRevealSpec? = null,
+        /** #637 评论 5386066978 项2：本 slice 在事务内的剩余时间窗口。
+         *  新事务首次播放为 [VisualProgressWindow.Full]；rebase continuation 时
+         *  end = 1 - consumedFraction，让已走部分不重新计时。 */
+        val progressWindow: VisualProgressWindow = VisualProgressWindow.Full,
     )
 
     data class SelectionDecoration(
@@ -79,6 +89,10 @@ data class PreparedVisualTransaction(
         val toY: Float,
         val toHeight: Float,
         val shouldAnimate: Boolean,
+        /** #637 评论 5386066978 项2：光标过渡的剩余时间窗口。
+         *  rebase continuation 时 end = 1 - consumedFraction，让光标已走部分
+         *  不重新计时，与文字 slice 保持同一运动速度。 */
+        val progressWindow: VisualProgressWindow = VisualProgressWindow.Full,
     )
 
     /**
@@ -130,6 +144,10 @@ data class PreparedVisualTransaction(
          *  cover different document regions after hard-break insertion/deletion, which
          *  would produce incorrect deltaY adjustments and visible jumps in the suffix text. */
         val endUtf8Exclusive: Int = -1,
+        /** #637 评论 5386066978 项2：BlockShift 的剩余时间窗口。
+         *  rebase continuation 时 end = 1 - consumedFraction，让后缀块已走部分
+         *  不重新计时，保持匀速。 */
+        val progressWindow: VisualProgressWindow = VisualProgressWindow.Full,
     )
 }
 

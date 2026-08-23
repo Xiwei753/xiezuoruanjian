@@ -231,4 +231,61 @@ class AffectedLayoutRevisionTest {
         assertEquals("合段后 span 端点自动跟随到文末", 0, text.getSpanStart(span))
         assertEquals(4, text.getSpanEnd(span))
     }
+
+    /**
+     * #637 评论 5386066978 项1：正文从 1 个字符删到 0 后，cursorX 必须等于
+     * 首行缩进像素（与随后输入第一个字符前的起点一致），不得出现双倍缩进。
+     *
+     * 旧路径：resyncParagraphIndent 在 text.length==0 时直接 return，不清塌缩成
+     * 0..0 的 span → Layout.getPrimaryHorizontal(0) 已含一次缩进，
+     * AffectedLineCapture 再手工补一次 → cursorX = 2 × indentPx。
+     * 修复后：resyncParagraphIndent 清掉塌缩 span → Layout.getPrimaryHorizontal(0)=0，
+     * hasFirstLineIndentSpanAt=false → 手工补一次 → cursorX = indentPx。
+     */
+    @Test
+    fun deleteToEmpty_cursorXEqualsSingleIndentNotDouble() {
+        val (mirror, engine) = newEngine("字")
+        engine.setFirstLineIndent(true, 2f)
+        engine.requestLayout()
+        val indentPx = engine.getFirstLineIndentPxForTest()
+        assertTrue("缩进像素必须为正", indentPx > 0f)
+
+        // 删掉最后一个字符 → 正文为空，原 span 塌缩成 0..0。
+        mirror.getSpannable().delete(0, 1)
+        assertEquals("", mirror.getText())
+        // onMirrorContentChanged 触发 resyncParagraphIndent 清掉塌缩 span。
+        engine.onMirrorContentChanged(
+            DisplayTextProjection.identity(mirror.getText()),
+            listOf(
+                DisplayPatch(
+                    baseRevision = 0L,
+                    newRevision = 1L,
+                    replaceByteStart = 0,
+                    replaceByteEndExclusive = 3,
+                    insertedText = "",
+                    resultingSelectionStart = 0,
+                    resultingSelectionEnd = 0,
+                ),
+            ),
+        )
+        // 塌缩 span 必须已被清掉。
+        assertTrue(
+            "删空后不得残留 0..0 FirstLineIndentSpan",
+            mirror.getSpannable().getSpans(0, 0, FirstLineIndentSpan::class.java).isEmpty(),
+        )
+
+        val rev =
+            engine.captureAffectedRevision(
+                editStartUtf8 = 0,
+                editEndUtf8 = 0,
+                includeNextParagraph = false,
+            )!!
+
+        assertEquals(
+            "删空后 cursorX 必须等于单倍首行缩进（与输入首字符前起点一致），不得双倍",
+            indentPx,
+            rev.cursorX,
+            0.5f,
+        )
+    }
 }

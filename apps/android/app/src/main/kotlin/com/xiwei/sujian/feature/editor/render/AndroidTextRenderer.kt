@@ -102,9 +102,14 @@ class AndroidTextRenderer(
             }
             drawSearchHighlightsUnshifted(canvas, layout, shiftedHighlights)
         }
-        val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
-        for ((deltaY, group) in groupedByDeltaY) {
-            val currentDeltaY = deltaY * (progress - 1f)
+        // #637 评论 5386066978 项2：按 (deltaY, progressWindow) 分组，同一组共用
+        // currentDeltaY = deltaY * (localProgress - 1f)。localProgress 由该组
+        // progressWindow.map(progress) 得到，rebase continuation 时已走部分不重新计时。
+        val groupedByDeltaYAndWindow = blockShifts.groupBy { it.deltaY to it.progressWindow }
+        for ((key, group) in groupedByDeltaYAndWindow) {
+            val (deltaY, window) = key
+            val localProgress = window.map(progress)
+            val currentDeltaY = deltaY * (localProgress - 1f)
             val groupLineRange =
                 group.flatMap {
                         shift ->
@@ -171,9 +176,11 @@ class AndroidTextRenderer(
             }
             drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
         }
-        val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
-        for ((deltaY, group) in groupedByDeltaY) {
-            val currentDeltaY = deltaY * (progress - 1f)
+        val groupedByDeltaYAndWindow = blockShifts.groupBy { it.deltaY to it.progressWindow }
+        for ((key, group) in groupedByDeltaYAndWindow) {
+            val (deltaY, window) = key
+            val localProgress = window.map(progress)
+            val currentDeltaY = deltaY * (localProgress - 1f)
             val groupLineRange =
                 group.flatMap {
                         shift ->
@@ -270,16 +277,18 @@ class AndroidTextRenderer(
             }
             layout.draw(canvas)
         }
-        // Group by deltaY so that all paragraphs shifting by the same amount share one
+        // Group by (deltaY, progressWindow) so that all paragraphs shifting by the same
+        // amount AND sharing the same rebase continuation window share one
         // canvas.save/translate/clip/draw/restore cycle. After mergeAdjacentBlockShifts,
         // most edits produce a single group (all suffix paragraphs shift by the same deltaY),
         // so this typically results in one additional layout.draw() call per frame.
-        // Multiple groups are rare (different deltaY values arise only when paragraphs
-        // with different line heights shift by different amounts after an edit that
-        // changes the number of visual lines in the edit paragraph).
-        val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
-        for ((deltaY, group) in groupedByDeltaY) {
-            val currentDeltaY = deltaY * (progress - 1f)
+        // #637 评论 5386066978 项2：localProgress = window.map(progress)，rebase
+        // continuation 时已走部分不重新计时。
+        val groupedByDeltaYAndWindow = blockShifts.groupBy { it.deltaY to it.progressWindow }
+        for ((key, group) in groupedByDeltaYAndWindow) {
+            val (deltaY, window) = key
+            val localProgress = window.map(progress)
+            val currentDeltaY = deltaY * (localProgress - 1f)
             canvas.withTranslation(0f, currentDeltaY) {
                 val clipPath = Path()
                 for (shift in group) {
@@ -322,9 +331,11 @@ class AndroidTextRenderer(
             }
             drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
         }
-        val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
-        for ((deltaY, group) in groupedByDeltaY) {
-            val currentDeltaY = deltaY * (progress - 1f)
+        val groupedByDeltaYAndWindow = blockShifts.groupBy { it.deltaY to it.progressWindow }
+        for ((key, group) in groupedByDeltaYAndWindow) {
+            val (deltaY, window) = key
+            val localProgress = window.map(progress)
+            val currentDeltaY = deltaY * (localProgress - 1f)
             val groupLineRange =
                 group.flatMap {
                         shift ->

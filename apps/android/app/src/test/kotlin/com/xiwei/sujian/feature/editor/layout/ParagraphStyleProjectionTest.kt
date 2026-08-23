@@ -166,4 +166,44 @@ class ParagraphStyleProjectionTest {
         assertEquals(6, projection.paragraphStartOf(text, 6))
         assertEquals(6, projection.paragraphStartOf(text, 7))
     }
+
+    /**
+     * #637 评论 5386066978 项1：正文从 1 个字符删到 0 后，原 FirstLineIndentSpan
+     * 会随 Editable 收缩成 0..0。resyncParagraphIndent 必须清掉这个塌缩 span，
+     * 不能留下 0..0 的残留 — 否则下一帧 AffectedLineCapture 会从残留 span 得到
+     * 一次缩进、再手工补一次，形成两倍缩进。
+     */
+    @Test
+    fun resyncParagraphIndent_afterDeleteToEmpty_removesCollapsedZeroZeroSpan() {
+        val text = SpannableStringBuilder("字")
+        projection.applyFirstLineIndent(text, true, 2f, paint)
+        assertEquals("删空前应有 1 个 span", 1, text.getSpans(0, text.length, FirstLineIndentSpan::class.java).size)
+
+        // 删掉最后一个字符 → 正文为空，原 span 塌缩成 0..0。
+        text.delete(0, 1)
+        assertEquals("删后正文为空", "", text.toString())
+
+        projection.resyncParagraphIndent(text, 0, 0, true, paint.measureText("中") * 2f)
+
+        val remaining = text.getSpans(0, text.length, FirstLineIndentSpan::class.java)
+        assertTrue("删空后不得残留任何 FirstLineIndentSpan（包括 0..0）", remaining.isEmpty())
+    }
+
+    /**
+     * #637 评论 5386066978 项1：removeAllParagraphIndentSpans 是整篇重载、关闭缩进、
+     * 删空正文共用的 helper，不因 start == end == 0 提前跳过 — 塌缩成 0..0 的 span
+     * 也必须清掉。
+     */
+    @Test
+    fun removeAllParagraphIndentSpans_clearsCollapsedZeroZeroSpan() {
+        val text = SpannableStringBuilder("字")
+        projection.applyFirstLineIndent(text, true, 2f, paint)
+        text.delete(0, 1)
+        assertEquals("删后正文为空，span 塌缩成 0..0", 0, text.length)
+        assertEquals("塌缩 span 仍存在", 1, text.getSpans(0, 0, FirstLineIndentSpan::class.java).size)
+
+        projection.removeAllParagraphIndentSpans(text)
+
+        assertTrue("塌缩 0..0 span 必须被清掉", text.getSpans(0, 0, FirstLineIndentSpan::class.java).isEmpty())
+    }
 }

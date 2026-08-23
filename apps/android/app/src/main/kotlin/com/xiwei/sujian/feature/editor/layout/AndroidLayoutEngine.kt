@@ -289,7 +289,22 @@ class AndroidLayoutEngine(
         }
         if (patches.isEmpty()) return
         val text = mirror.getSpannable()
-        if (text.isEmpty()) return
+        if (text.isEmpty()) {
+            // #637 评论 5386066978 项1：正文从 1 个字符删到 0 时，原
+            // FirstLineIndentSpan 会随 Editable 收缩成 0..0。这里必须调用
+            // resyncParagraphIndent 清掉塌缩 span（它在空文本时先
+            // removeAllParagraphIndentSpans 再 return），否则下一帧
+            // AffectedLineCapture 会从残留 span 得到一次缩进、再手工补一次，
+            // 形成两倍缩进。
+            paragraphStyle.resyncParagraphIndent(
+                text,
+                0,
+                0,
+                firstLineIndentEnabled,
+                currentFirstLineIndentPx(),
+            )
+            return
+        }
 
         var regionStart = Int.MAX_VALUE
         var regionEnd = -1
