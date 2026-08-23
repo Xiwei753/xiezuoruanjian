@@ -120,4 +120,19 @@ internal class EditorViewportController {
     fun clearPendingAnchor() {
         pendingInitialAnchor = null
     }
+
+    /**
+     * #633 评论 5383643046：开始绑定新 target 的原子入口。
+     *
+     * 重置旧 target 的 scrollX/scrollY/maxScrollY/pendingInitialAnchor/initialRestoreConsumed，
+     * 再接收可选逻辑锚点。target rebind 时 scroll/range/pending 必须作为一组一起重置，
+     * 不能只 clearPendingAnchor 而留旧 scroll。
+     */
+    fun beginTarget(anchor: ViewportAnchor?) {
+        scrollX = 0f
+        scrollY = 0f
+        maxScrollY = 0f
+        pendingInitialAnchor = anchor
+        initialRestoreConsumed = false
+    }
 }

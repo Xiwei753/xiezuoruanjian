@@ -26,9 +26,14 @@ import uniffi.writer_core.EditorTransactionCauseDto
  * - reflowPreservingViewport（applyLayoutConfig 字号/行距变化）保住锚点；
  * - 字号变化后同一 fraction 对应不同 scrollY（行高变了）。
  */
+@Suppress("TooManyFunctions")
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SujianEditorViewportSnapshotTest {
+    private companion object {
+        const val VIEWPORT_FIELD_NAME = "viewport"
+    }
+
     private val longText = "测试文本，这是一段很长的内容用来产生多行排版。\n".repeat(80)
 
     private lateinit var view: SujianEditorView
@@ -83,7 +88,7 @@ class SujianEditorViewportSnapshotTest {
     fun restoreViewportSnapshot_defersWhenDimensionsZero() {
         val anchor = ViewportAnchor(textOffsetUtf16 = 50, offsetWithinLineFraction = 0.5f)
 
-        view.restoreViewportSnapshot(anchor)
+        view.bindViewportSnapshot(anchor)
 
         // 尺寸未就绪 → pendingViewportAnchor 应被暂存，scrollY 不变
         assertEquals("尺寸未就绪时 scrollY 不得改变", 0f, view.getScrollYPos(), 0.01f)
@@ -100,7 +105,7 @@ class SujianEditorViewportSnapshotTest {
         val anchorCopy = anchor.copy()
 
         // Layout 已就绪 → restoreViewportSnapshot 立即恢复，不暂存
-        view.restoreViewportSnapshot(anchorCopy)
+        view.bindViewportSnapshot(anchorCopy)
 
         assertNull("layout 已就绪时 pending 不得暂存", view.readPendingViewportAnchor())
         assertTrue("scrollY 应被恢复（>0）", view.getScrollYPos() > 0f)
@@ -145,7 +150,7 @@ class SujianEditorViewportSnapshotTest {
 
         // 先让尺寸有效但 layout null → pending 暂存
         measureAndLayout(width = 800, height = 1200)
-        view.restoreViewportSnapshot(anchor)
+        view.bindViewportSnapshot(anchor)
 
         // triggerLayout 让 pipeline.getLayout() 非 null
         triggerLayout()
@@ -308,6 +313,118 @@ class SujianEditorViewportSnapshotTest {
         assertEquals("copy 保留 fraction", 0.5f, c.offsetWithinLineFraction, 0.001f)
     }
 
+    // ── 9. #633 评论 5383643046：bindViewportSnapshot(null) 不继承旧 scroll ──
+
+    @Test
+    fun bindViewportSnapshot_nullAnchor_doesNotInheritOldScroll() {
+        measureAndLayout(width = 800, height = 1200)
+        triggerLayout()
+
+        // 先滚动到一个非零位置（模拟旧章节 A 的 scroll）
+        view.setScrollYForTest(500f)
+        assertTrue("前置：旧 scrollY 应为非零", view.getScrollYPos() > 0f)
+
+        // 切到无 anchor 的新 target — 不应继承 A 的 scroll
+        view.bindViewportSnapshot(null)
+
+        assertEquals(
+            "bindViewportSnapshot(null) 后 scrollY 必须归零，不继承旧章节 scroll",
+            0f,
+            view.getScrollYPos(),
+            0.01f,
+        )
+        // maxScrollY 被 beginTarget 重置为 0 后由 updateLayoutConfig 重新计算，
+        // 必须是有限非负值（不继承旧章节的脏值，而是基于新 target 重新算出）
+        assertTrue(
+            "bindViewportSnapshot(null) 后 maxScrollY 应为非负有限值",
+            view.getMaxScrollYForTest() >= 0f,
+        )
+    }
+
+    @Test
+    fun bindViewportSnapshot_nullAnchor_doesNotInheritOldMaxScroll() {
+        measureAndLayout(width = 800, height = 1200)
+        triggerLayout()
+
+        // 先让 A 产生一个非零 maxScrollY
+        val oldMaxScroll = view.getMaxScrollYForTest()
+        assertTrue("前置：长文本应产生非零 maxScrollY", oldMaxScroll > 0f)
+
+        // 直接通过反射调用 viewport.beginTarget(null) 验证 maxScrollY 被重置为 0
+        // （bindViewportSnapshot 内部会立即 updateLayoutConfig 重新计算，
+        //   这里单独验证 beginTarget 的重置契约）
+        view.invokeBeginTarget(null)
+
+        assertEquals(
+            "beginTarget(null) 后 maxScrollY 必须被重置为 0（updateLayoutConfig 重新计算前）",
+            0f,
+            view.getMaxScrollYForTest(),
+            0.01f,
+        )
+    }
+
+    @Test
+    fun bindViewportSnapshot_withAnchor_restoresOnlyOnce() {
+        measureAndLayout(width = 800, height = 1200)
+        triggerLayout()
+
+        // 先滚动到一个位置，捕获锚点
+        view.setScrollYForTest(600f)
+        val anchor = view.captureViewportSnapshot()
+
+        // bindViewportSnapshot(anchor) 恢复一次
+        view.bindViewportSnapshot(anchor)
+        val scrollYAfterFirstRestore = view.getScrollYPos()
+        assertTrue("第一次恢复后 scrollY 应 > 0", scrollYAfterFirstRestore > 0f)
+
+        // 再调用一次 updateLayoutConfig — consume-once 语义，scrollY 不应再次跳变
+        invokeUpdateLayoutConfig(view)
+        val scrollYAfterSecondUpdate = view.getScrollYPos()
+
+        assertEquals(
+            "consume-once：第二次 updateLayoutConfig 不应再次恢复 anchor",
+            scrollYAfterFirstRestore,
+            scrollYAfterSecondUpdate,
+            0.01f,
+        )
+        // pending 应已被消费
+        assertNull(
+            "anchor 恢复后 pending 应被消费",
+            view.readPendingViewportAnchor(),
+        )
+    }
+
+    @Test
+    fun bindViewportSnapshot_nullAnchor_minimalSelectionVisible() {
+        measureAndLayout(width = 800, height = 1200)
+        triggerLayout()
+
+        // 设置光标在文本中间
+        val midOffset = longText.length / 2
+        val midByteOffset = longText.substring(0, midOffset).toByteArray(Charsets.UTF_8).size
+        view.setSelectionRange(midByteOffset, midByteOffset)
+
+        // 模拟旧章节的 scroll — 滚到一个大位置
+        view.setScrollYForTest(900f)
+        val oldScroll = view.getScrollYPos()
+
+        // 切到无 anchor 的新 target
+        view.bindViewportSnapshot(null)
+        val newScroll = view.getScrollYPos()
+
+        // scrollY 不应等于旧章节的 scroll
+        assertTrue(
+            "bindViewportSnapshot(null) 后 scrollY 不应继承旧章节 scroll",
+            newScroll < oldScroll,
+        )
+        // 光标行应在可视区内（ensureSelectionVisible 执行后的最小可见位置）
+        // 新 scrollY 应在 [0, maxScrollY] 范围内
+        assertTrue(
+            "new scrollY 应在有效范围 [0, maxScrollY]",
+            newScroll >= 0f && newScroll <= view.getMaxScrollYForTest(),
+        )
+    }
+
     // ── Helpers ──
 
     /** 用真实 measure+layout 设置 View 的 width/height。 */
@@ -342,7 +459,7 @@ class SujianEditorViewportSnapshotTest {
     private fun SujianEditorView.readPendingViewportAnchor(): ViewportAnchor? {
         // #633 评论 5379618506：scrollY/pendingInitialAnchor 已迁移到 EditorViewportController。
         // 通过 viewport 字段间接访问 controller 的 pendingInitialAnchor。
-        val viewportField = SujianEditorView::class.java.getDeclaredField("viewport")
+        val viewportField = SujianEditorView::class.java.getDeclaredField(VIEWPORT_FIELD_NAME)
         viewportField.isAccessible = true
         val controller = viewportField.get(this)
         val anchorField = EditorViewportController::class.java.getDeclaredField("pendingInitialAnchor")
@@ -354,10 +471,34 @@ class SujianEditorViewportSnapshotTest {
     private fun SujianEditorView.setScrollYForTest(value: Float) {
         // #633 评论 5379618506：scrollY 已迁移到 EditorViewportController。
         // 通过 viewport 字段拿到 controller，用 setScrollYUnclamped 绕过 maxScrollY 夹取。
-        val viewportField = SujianEditorView::class.java.getDeclaredField("viewport")
+        val viewportField = SujianEditorView::class.java.getDeclaredField(VIEWPORT_FIELD_NAME)
         viewportField.isAccessible = true
         val controller = viewportField.get(this) as EditorViewportController
         controller.setScrollYUnclamped(value)
+    }
+
+    private fun SujianEditorView.getMaxScrollYForTest(): Float {
+        // #633 评论 5383643046：读取 EditorViewportController.maxScrollY 用于断言。
+        val viewportField = SujianEditorView::class.java.getDeclaredField(VIEWPORT_FIELD_NAME)
+        viewportField.isAccessible = true
+        val controller = viewportField.get(this) as EditorViewportController
+        val maxField = EditorViewportController::class.java.getDeclaredField("maxScrollY")
+        maxField.isAccessible = true
+        return maxField.get(controller) as Float
+    }
+
+    private fun SujianEditorView.invokeBeginTarget(anchor: ViewportAnchor?) {
+        // #633 评论 5383643046：直接调用 viewport.beginTarget 验证重置契约。
+        val viewportField = SujianEditorView::class.java.getDeclaredField(VIEWPORT_FIELD_NAME)
+        viewportField.isAccessible = true
+        val controller = viewportField.get(this) as EditorViewportController
+        val method =
+            EditorViewportController::class.java.getDeclaredMethod(
+                "beginTarget",
+                ViewportAnchor::class.java,
+            )
+        method.isAccessible = true
+        method.invoke(controller, anchor)
     }
 
     @Suppress("TooManyFunctions")

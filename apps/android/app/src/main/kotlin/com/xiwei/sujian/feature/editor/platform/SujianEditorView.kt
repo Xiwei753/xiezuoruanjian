@@ -66,18 +66,6 @@ class SujianEditorView
 
         fun getScrollYPos(): Float = viewport.scrollY
 
-        /**
-         * #592 三：窗口重建/重绑定时恢复会话层投影保存的滚动位置。
-         * 滚动值先夹到有效范围，布局尚未就绪时由后续 updateMaxScroll 收敛。
-         */
-        fun setScrollPosition(
-            sx: Float,
-            sy: Float,
-        ) {
-            viewport.setScroll(sx, sy)
-            invalidate()
-        }
-
         private var searchHighlights: List<Pair<Int, Int>> = emptyList()
 
         // 预分配以避免 onDraw 中每帧分配（DrawAllocation）。
@@ -399,13 +387,26 @@ class SujianEditorView
         }
 
         /**
-         * #630 R14 / #631：从逻辑锚点恢复滚动位置。
-         * 如果布局尚未就绪，锚点被暂存到 pendingViewportAnchor，
-         * 等 updateLayoutConfig() 在真实 measure/layout 后自动恢复。
+         * #630 R14 / #631 / #633 评论 5383643046：新 target 视口交接入口。
+         *
+         * 先经 [EditorViewportController.beginTarget] 清掉旧 target 的
+         * scrollX/scrollY/maxScrollY/pending/restore-consumed，再按当前真实宽高
+         * 重新 updateLayoutConfig。
+         *
+         * - 有 anchor：经现有 pending + consume-once 路径恢复一次（updateLayoutConfig
+         *   内部 applyPendingViewportAnchorIfReady 会消费锚点）。
+         * - 无 anchor：从新 target 自己的初始视口（scroll=0）开始，再只做一次最小
+         *   ensureSelectionVisible，不继承旧章节的 scroll。
+         *
+         * reflowPreservingViewport 继续使用 capture→reflow→restore 路径，不走此入口。
          */
-        fun restoreViewportSnapshot(anchor: ViewportAnchor) {
-            viewport.queueInitialRestore(anchor)
-            applyPendingViewportAnchorIfReady()
+        fun bindViewportSnapshot(anchor: ViewportAnchor?) {
+            viewport.beginTarget(anchor)
+            updateLayoutConfig()
+            if (anchor == null) {
+                ensureSelectionVisible()
+                invalidate()
+            }
         }
 
         /**

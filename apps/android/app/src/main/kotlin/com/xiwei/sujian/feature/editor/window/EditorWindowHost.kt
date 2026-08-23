@@ -530,10 +530,16 @@ class EditorWindowHost(
         view: SujianEditorView,
         targetId: String,
     ) {
-        val snapshot = sessionCoordinator.getProjectionSnapshot(targetId) ?: return
-        val anchor = snapshot.viewportAnchor ?: return
-        markEditorSingleFrame("viewport_restore")
-        view.restoreViewportSnapshot(anchor)
+        val anchor =
+            sessionCoordinator
+                .getProjectionSnapshot(targetId)
+                ?.viewportAnchor
+
+        view.bindViewportSnapshot(anchor)
+
+        if (anchor != null) {
+            markEditorSingleFrame("viewport_restore")
+        }
     }
 
     fun commitActiveEdit(): Boolean {
