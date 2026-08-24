@@ -7,6 +7,7 @@ import com.xiwei.sujian.feature.editor.visual.SliceVisualState
 import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
 import com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot
+import com.xiwei.sujian.feature.editor.visual.VisualProgressWindow
 import uniffi.writer_core.RebaseSliceMappingDto
 
 class RebasePlanner {
@@ -89,6 +90,10 @@ class RebasePlanner {
                     } else {
                         null
                     }
+                // #637 评论 5386573878：continuation 窗口 — 直接消费旧帧保存的
+                // remainingFraction（当前帧之后还剩多少基准时长），不再从 localProgress
+                // 重新推，连续 rebase 不会反复减速。
+                val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
                 result.add(
                     PreparedVisualTransaction.AnimatedSlice(
                         role = state.role,
@@ -106,6 +111,7 @@ class RebasePlanner {
                         clusterByteStart = state.clusterByteStart,
                         clusterByteEndExclusive = state.clusterByteEndExclusive,
                         revealSpec = continueRevealSpec,
+                        progressWindow = continuedWindow,
                     ),
                 )
             } else if (state.role == SliceRole.Move) {
@@ -124,6 +130,7 @@ class RebasePlanner {
                         state.destinationBottom,
                     )
                 if (currentRect != destRect || state.currentAlpha < 0.99f) {
+                    val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
                     result.add(
                         PreparedVisualTransaction.AnimatedSlice(
                             role = SliceRole.Move,
@@ -135,6 +142,7 @@ class RebasePlanner {
                             fromDestinationRect = currentRect,
                             clusterByteStart = state.clusterByteStart,
                             clusterByteEndExclusive = state.clusterByteEndExclusive,
+                            progressWindow = continuedWindow,
                         ),
                     )
                 }
@@ -158,6 +166,7 @@ class RebasePlanner {
                         SliceRole.Insert, SliceRole.CrossfadeNew, SliceRole.Move -> 1f
                         else -> state.currentAlpha
                     }
+                val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
                 result.add(
                     PreparedVisualTransaction.AnimatedSlice(
                         role = state.role,
@@ -169,6 +178,7 @@ class RebasePlanner {
                         fromDestinationRect = currentRect,
                         clusterByteStart = state.clusterByteStart,
                         clusterByteEndExclusive = state.clusterByteEndExclusive,
+                        progressWindow = continuedWindow,
                     ),
                 )
             }
@@ -190,38 +200,75 @@ class RebasePlanner {
                 rebaseState.currentRight,
                 rebaseState.currentBottom,
             )
+        // #637 评论 5386573878：rebase continuation 窗口 — 直接消费旧帧保存的
+        // remainingFraction，不再从 localProgress 重新推，连续 rebase 不会反复减速。
+        val continuedWindow = VisualProgressWindow.fromRemainingFraction(rebaseState.remainingFraction)
         return when (slice.role) {
             SliceRole.Move -> {
                 slice.copy(
                     snapshot = snapshot,
                     fromDestinationRect = fromRect,
                     startAlpha = rebaseState.currentAlpha,
+                    progressWindow = continuedWindow,
                 )
             }
             SliceRole.Insert -> {
-                val updatedSpec = slice.revealSpec?.copy(initialFraction = rebaseState.revealFraction ?: 0f)
+                // #637 评论 5386573878：映射成功的 Insert continuation 重建 spec 为
+                // progressStart=0/progressEnd=1/initialFraction=当前 revealFraction。
+                // 多 cluster/run 的 reveal 本来可能有非 [0,1] 子窗口；rebase 后外层
+                // progress 从 0 重新开始，继续沿用旧 progressStart 会先停一段再继续。
+                // 剩余时长交给外层 VisualProgressWindow 控制，与未映射 Delete 统一。
+                val updatedSpec =
+                    slice.revealSpec?.let { spec ->
+                        spec.copy(
+                            progressStart = 0f,
+                            progressEnd = 1f,
+                            initialFraction = rebaseState.revealFraction ?: 0f,
+                        )
+                    }
                 if (rebaseState.role == SliceRole.Move) {
                     slice.copy(
                         snapshot = snapshot,
                         startAlpha = rebaseState.currentAlpha,
                         fromDestinationRect = fromRect,
                         revealSpec = updatedSpec,
+                        progressWindow = continuedWindow,
                     )
                 } else {
-                    slice.copy(snapshot = snapshot, startAlpha = rebaseState.currentAlpha, revealSpec = updatedSpec)
+                    slice.copy(
+                        snapshot = snapshot,
+                        startAlpha = rebaseState.currentAlpha,
+                        revealSpec = updatedSpec,
+                        progressWindow = continuedWindow,
+                    )
                 }
             }
             SliceRole.Delete -> {
-                val updatedSpec = slice.revealSpec?.copy(initialFraction = rebaseState.revealFraction ?: 0f)
+                // #637 评论 5386573878：同 Insert，重建 spec 为 [0,1] 子窗口，
+                // initialFraction=当前 revealFraction，剩余时长交给外层窗口控制。
+                val updatedSpec =
+                    slice.revealSpec?.let { spec ->
+                        spec.copy(
+                            progressStart = 0f,
+                            progressEnd = 1f,
+                            initialFraction = rebaseState.revealFraction ?: 0f,
+                        )
+                    }
                 slice.copy(
                     snapshot = snapshot,
                     startAlpha = rebaseState.currentAlpha,
                     endAlpha = 0f,
                     revealSpec = updatedSpec,
+                    progressWindow = continuedWindow,
                 )
             }
             SliceRole.CrossfadeOld -> {
-                slice.copy(snapshot = snapshot, startAlpha = rebaseState.currentAlpha, endAlpha = 0f)
+                slice.copy(
+                    snapshot = snapshot,
+                    startAlpha = rebaseState.currentAlpha,
+                    endAlpha = 0f,
+                    progressWindow = continuedWindow,
+                )
             }
             SliceRole.CrossfadeNew -> {
                 if (rebaseState.role == SliceRole.Move) {
@@ -229,9 +276,14 @@ class RebasePlanner {
                         snapshot = snapshot,
                         startAlpha = rebaseState.currentAlpha,
                         fromDestinationRect = fromRect,
+                        progressWindow = continuedWindow,
                     )
                 } else {
-                    slice.copy(snapshot = snapshot, startAlpha = rebaseState.currentAlpha)
+                    slice.copy(
+                        snapshot = snapshot,
+                        startAlpha = rebaseState.currentAlpha,
+                        progressWindow = continuedWindow,
+                    )
                 }
             }
             SliceRole.Static -> slice

@@ -148,15 +148,13 @@ class AndroidVisualRuntime(
         val progress = animationEngine.getTimelineProgress(frameTimeMs)
         val cursorProgress = animationEngine.getCursorProgress(frameTimeMs)
         animationEngine.markFirstVisibleFrame(frameTimeMs)
-        // #595 五：文字轨和光标轨分别判断终态。
-        // 文字完成后用静态新布局继续绘制，但光标仍在同一个 View 和 FrameClock 中
-        // 平滑移动到终点；只有文字轨和光标轨都结束，整个视觉事务才进入终态。
+        // #637 评论 5386066978 项3：coordinated=true 时文字和光标共用同一个 visual
+        // completion — textFinished == cursorFinished，由同一 timeline progress 决定。
+        // 不出现"最新静态文字 + 旧动画光标"：文字切静态当且仅当光标也切静态。
+        // coordinated=false 才允许 textFinished/cursorFinished 分开（独立 cursorTimeline）。
         val textFinished = animationEngine.isTextTimelineCompleted(frameTimeMs)
         val cursorFinished = animationEngine.isCursorTimelineCompleted(frameTimeMs)
         val transactionComplete = transaction != null && textFinished && cursorFinished
-        // 文字完成后不渲染文字切片（避免 double-draw），但光标仍可继续动画。
-        // #595 五：cursorTransition 独立于文字切片 — 文字轨结束/抑制（CursorOnly）时
-        // 静态文字路径仍能绘制平滑光标；光标轨结束才置 null（回到静态光标）。
         val renderTransaction = if (textFinished) null else transaction
         val renderCursorTransition =
             if (cursorFinished) {

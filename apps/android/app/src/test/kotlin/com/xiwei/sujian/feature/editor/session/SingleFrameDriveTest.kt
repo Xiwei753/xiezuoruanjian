@@ -1,8 +1,9 @@
 package com.xiwei.sujian.feature.editor.session
 
-import android.view.Choreographer
 import com.xiwei.sujian.feature.editor.window.WindowDisplayFrameClock
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -10,10 +11,14 @@ import org.junit.Test
  * #595 七：单一 VSync 帧驱动行为测试 — 用假 [WindowDisplayFrameClock.FrameCallbackPoster]
  * 驱动一帧并确认只更新一次。
  *
+ * #637 评论 5386066978 项4：FrameCallbackPoster 已改为帧脉冲 + 动画时间抽象
+ * （postFramePulse/removeFramePulse + FramePulseCallback）。本测试用假 poster
+ * 驱动，不依赖真实 Choreographer。
+ *
  * 静态结构约束（字段/方法存在性）已移入
  * [com.xiwei.sujian.arch.EditorFrameClockArchitectureTest]；本文件只保留运行时行为：
- * - requestFrame 后 poster 收到一次 postFrameCallback；
- * - doFrame 推进所有 listener 一次，needsFrame=true 时自动请求下一帧，false 时不请求；
+ * - requestFrame 后 poster 收到一次 postFramePulse；
+ * - onFramePulse 推进所有 listener 一次，needsFrame=true 时自动请求下一帧，false 时不请求；
  * - stop/release 后不再 post。
  */
 class SingleFrameDriveTest {
@@ -21,15 +26,17 @@ class SingleFrameDriveTest {
     private class FakeFrameCallbackPoster : WindowDisplayFrameClock.FrameCallbackPoster {
         var postedCount = 0
         var removedCount = 0
-        var lastPostedCallback: Choreographer.FrameCallback? = null
+        var lastPostedCallback: WindowDisplayFrameClock.FramePulseCallback? = null
+        var lastRemovedCallback: WindowDisplayFrameClock.FramePulseCallback? = null
 
-        override fun postFrameCallback(callback: Choreographer.FrameCallback) {
+        override fun postFramePulse(callback: WindowDisplayFrameClock.FramePulseCallback) {
             postedCount++
             lastPostedCallback = callback
         }
 
-        override fun removeFrameCallback(callback: Choreographer.FrameCallback) {
+        override fun removeFramePulse(callback: WindowDisplayFrameClock.FramePulseCallback) {
             removedCount++
+            lastRemovedCallback = callback
         }
     }
 
@@ -52,21 +59,18 @@ class SingleFrameDriveTest {
     fun requestFrame_postsAtMostOnceUntilFrameFires() {
         val poster = FakeFrameCallbackPoster()
         val clock = WindowDisplayFrameClock(poster)
-        // 初始无 post。
         assertEquals(0, poster.postedCount)
 
         clock.requestFrame()
         assertEquals("requestFrame 必须 post 一次", 1, poster.postedCount)
 
-        // 已 post 但未 doFrame 时，再次 requestFrame 不得重复 post（去抖）。
         clock.requestFrame()
         clock.requestFrame()
         assertEquals("callbackPosted 期间不得重复 post", 1, poster.postedCount)
 
-        // doFrame 后 callbackPosted 复位，可再次 post。
-        poster.lastPostedCallback!!.doFrame(1_000_000L)
+        poster.lastPostedCallback!!.onFramePulse(1_000_000L)
         clock.requestFrame()
-        assertEquals("doFrame 后可再次 post", 2, poster.postedCount)
+        assertEquals("onFramePulse 后可再次 post", 2, poster.postedCount)
 
         clock.stop()
     }
@@ -79,14 +83,12 @@ class SingleFrameDriveTest {
         val listener = CountingListener(needsFrameProvider = { false })
         clock.addListener(listener)
         clock.requestFrame()
-        assertEquals("listener 在 doFrame 前不得被调用", 0, listener.frameCount)
+        assertEquals("listener 在 onFramePulse 前不得被调用", 0, listener.frameCount)
 
-        // 单次 doFrame 推进 listener 恰好一次。
-        poster.lastPostedCallback!!.doFrame(42_000_000L)
-        assertEquals("doFrame 必须推进 listener 恰好一次", 1, listener.frameCount)
+        poster.lastPostedCallback!!.onFramePulse(42_000_000L)
+        assertEquals("onFramePulse 必须推进 listener 恰好一次", 1, listener.frameCount)
         assertEquals(42_000_000L, listener.lastFrameTimeNanos)
 
-        // listener.needsFrame()=false → 不请求下一帧。
         assertEquals("needsFrame=false 时不得自动请求下一帧", 1, poster.postedCount)
 
         clock.release()
@@ -104,8 +106,7 @@ class SingleFrameDriveTest {
         clock.requestFrame()
         assertEquals(1, poster.postedCount)
 
-        // 任一 listener needsFrame=true → doFrame 自动请求下一帧。
-        poster.lastPostedCallback!!.doFrame(100L)
+        poster.lastPostedCallback!!.onFramePulse(100L)
         assertEquals("needsFrame=true 时必须自动请求下一帧", 2, poster.postedCount)
         assertEquals(1, needsMore.frameCount)
         assertEquals(1, done.frameCount)
@@ -121,9 +122,8 @@ class SingleFrameDriveTest {
         assertEquals(1, poster.postedCount)
 
         clock.stop()
-        assertTrue("stop 必须 removeFrameCallback", poster.removedCount >= 1)
+        assertTrue("stop 必须 removeFramePulse", poster.removedCount >= 1)
 
-        // stop 后 requestFrame 可重新 post（callbackPosted 已复位）。
         val before = poster.postedCount
         clock.requestFrame()
         assertEquals("stop 后可重新 requestFrame", before + 1, poster.postedCount)
@@ -138,11 +138,9 @@ class SingleFrameDriveTest {
         clock.requestFrame()
 
         clock.release()
-        assertTrue("release 必须 removeFrameCallback", poster.removedCount >= 1)
+        assertTrue("release 必须 removeFramePulse", poster.removedCount >= 1)
 
-        // release 后 listener 已清除 — 即使 doFrame 也不会推进。
-        // （lastPostedCallback 仍指向已 remove 的 callback，调用它不应推进已移除的 listener。）
-        poster.lastPostedCallback?.doFrame(1L)
+        poster.lastPostedCallback?.onFramePulse(1L)
         assertEquals("release 后 listener 不得被推进", 0, listener.frameCount)
     }
 
@@ -156,7 +154,7 @@ class SingleFrameDriveTest {
         clock.addListener(listener)
         clock.addListener(listener)
         clock.requestFrame()
-        poster.lastPostedCallback!!.doFrame(1L)
+        poster.lastPostedCallback!!.onFramePulse(1L)
         assertEquals("重复 addListener 不得重复推进", 1, listener.frameCount)
 
         clock.release()
@@ -169,14 +167,81 @@ class SingleFrameDriveTest {
         val listener = CountingListener(needsFrameProvider = { false })
         clock.addListener(listener)
         clock.requestFrame()
-        poster.lastPostedCallback!!.doFrame(1L)
+        poster.lastPostedCallback!!.onFramePulse(1L)
         assertEquals(1, listener.frameCount)
 
         clock.removeListener(listener)
         clock.requestFrame()
-        poster.lastPostedCallback!!.doFrame(2L)
+        poster.lastPostedCallback!!.onFramePulse(2L)
         assertEquals("removeListener 后不得再推进", 1, listener.frameCount)
 
         clock.release()
+    }
+
+    /**
+     * #637 评论 5386301277 项2：时间源语义 — onFramePulse 收到的 animation time
+     * （来自 preferredFrameTimeline.expectedPresentationTimeNanos）必须原样透传给
+     * listener，不得被 clock 截断、取整或替换成 wall clock。
+     */
+    @Test
+    fun onFramePulse_animationTimePropagatesToListenerUnchanged() {
+        val poster = FakeFrameCallbackPoster()
+        val clock = WindowDisplayFrameClock(poster)
+        val listener = CountingListener(needsFrameProvider = { false })
+        clock.addListener(listener)
+        clock.requestFrame()
+
+        // 模拟 VsyncCallback 从 preferredFrameTimeline.expectedPresentationTimeNanos
+        // 传下来的值（任意 monotonic nanos，包括 late frame 后的跳跃值）。
+        val animationTimeNanos = 9_876_543_210L
+        poster.lastPostedCallback!!.onFramePulse(animationTimeNanos)
+        assertEquals(
+            "onFramePulse 的 animation time 必须原样透传给 listener",
+            animationTimeNanos,
+            listener.lastFrameTimeNanos,
+        )
+
+        clock.release()
+    }
+
+    /**
+     * #637 评论 5386301277 项2：callback 移除语义 — stop 必须调用 removeFramePulse，
+     * 且传给 removeFramePulse 的就是之前 postFramePulse 注册的同一个 callback 实例。
+     */
+    @Test
+    fun stop_removesExactlyThePreviouslyPostedCallback() {
+        val poster = FakeFrameCallbackPoster()
+        val clock = WindowDisplayFrameClock(poster)
+        clock.requestFrame()
+        val posted = poster.lastPostedCallback
+        assertNotNull("requestFrame 必须 post 一个 callback", posted)
+
+        clock.stop()
+        assertEquals("stop 必须 remove 一次", 1, poster.removedCount)
+        assertSame(
+            "removeFramePulse 必须收到之前 postFramePulse 的同一个 callback 实例",
+            posted,
+            poster.lastRemovedCallback,
+        )
+    }
+
+    /**
+     * #637 评论 5386301277 项2：callback 保存语义 — requestFrame 期间只保留一个
+     * pending callback；onFramePulse 触发后 callbackPosted 复位，可重新 post。
+     */
+    @Test
+    fun callbackPosted_resetsAfterPulseAndAllowsRepost() {
+        val poster = FakeFrameCallbackPoster()
+        val clock = WindowDisplayFrameClock(poster)
+        clock.requestFrame()
+        assertEquals(1, poster.postedCount)
+
+        // 第一帧触发
+        poster.lastPostedCallback!!.onFramePulse(1_000L)
+        // callbackPosted 复位后可再次 post
+        clock.requestFrame()
+        assertEquals("onFramePulse 后 callbackPosted 必须复位，允许重新 post", 2, poster.postedCount)
+
+        clock.stop()
     }
 }

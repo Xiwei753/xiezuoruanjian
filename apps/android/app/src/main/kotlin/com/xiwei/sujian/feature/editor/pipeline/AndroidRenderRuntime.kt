@@ -69,7 +69,17 @@ class AndroidRenderRuntime(
 
         textRenderer.drawBackground(canvas)
 
-        if (transaction != null && (transaction.animatedSlices.isNotEmpty() || transaction.blockShifts.isNotEmpty())) {
+        // #637 评论 5386066978 项3：coordinated=true 时文字和光标必须来自同一视觉帧。
+        // 强制走 animated path（画同一事务的 text+cursor），不落入"最新静态文字 +
+        // 旧动画光标"的 static 分支。coordinated=false 才允许文字静态、光标动画分开。
+        val hasAnimatedContent =
+            transaction != null &&
+                (transaction.animatedSlices.isNotEmpty() || transaction.blockShifts.isNotEmpty())
+        val useAnimatedPath =
+            hasAnimatedContent ||
+                (transaction?.coordinated == true && transaction.cursorTransition?.shouldAnimate == true)
+
+        if (useAnimatedPath) {
             textRenderer.drawSearchHighlights(
                 canvas,
                 layout,

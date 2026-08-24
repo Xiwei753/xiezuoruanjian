@@ -18,6 +18,12 @@ data class PreparedVisualTransaction(
     val durationMs: Long,
     val blockShifts: List<BlockShift> = emptyList(),
     val operationKind: EditorOperationKindDto = EditorOperationKindDto.INSERT,
+    /** #637 评论 5386066978 项3：本事务是否协同文字与光标。
+     *  submit 时由引擎根据 coordinatedEnabled && hasTextMotion 设置；渲染/终态
+     *  判断用这个事务级标记，不靠是否存在独立 cursorTimeline 反推。
+     *  coordinated=true 时文字和光标共用同一个 visual completion（同一 timeline
+     *  progress、同一 frame timestamp），textFinished == cursorFinished。 */
+    val coordinated: Boolean = false,
 ) {
     data class StaticPatch(
         val newSnapshotId: Long,
@@ -58,6 +64,10 @@ data class PreparedVisualTransaction(
         /** Reveal/swallow spec for Insert/Delete slices. null for Move/Crossfade/Static.
          *  When non-null, the renderer uses clip-rect drawing instead of alpha. */
         val revealSpec: TextRevealSpec? = null,
+        /** #637 评论 5386066978 项2：本 slice 在事务内的剩余时间窗口。
+         *  新事务首次播放为 [VisualProgressWindow.Full]；rebase continuation 时
+         *  end = 1 - consumedFraction，让已走部分不重新计时。 */
+        val progressWindow: VisualProgressWindow = VisualProgressWindow.Full,
     )
 
     data class SelectionDecoration(
@@ -79,7 +89,31 @@ data class PreparedVisualTransaction(
         val toY: Float,
         val toHeight: Float,
         val shouldAnimate: Boolean,
-    )
+        /** #637 评论 5386066978 项2：光标过渡的剩余时间窗口。
+         *  rebase continuation 时 end = 1 - consumedFraction，让光标已走部分
+         *  不重新计时，与文字 slice 保持同一运动速度。 */
+        val progressWindow: VisualProgressWindow = VisualProgressWindow.Full,
+    ) {
+        /**
+         * #637 评论 5389230907：给定全局事务 [globalProgress]，返回当前光标 RectF。
+         *
+         * 单一事实来源 — renderer (`AndroidTextAnimationRenderer.drawAnimatedCursor`)
+         * 和 engine (`AndroidTextAnimationEngine.computeCurrentCursorRect`) 都调用
+         * 这个 helper，避免两边各维护一份插值公式导致 rebase 后 progressWindow
+         * 不一致（renderer 用 localProgress 画在 0.5 处，engine 却用全局 progress=0.2
+         * 记成更靠后的位置，下一次 rebase 光标回跳）。
+         *
+         * 几何：先 [VisualProgressWindow.map] 得到 localProgress，再线性插值
+         * X/Y/height；宽度固定 2px（视觉光标条宽，不来自布局）。
+         */
+        fun rectAt(globalProgress: Float): android.graphics.RectF {
+            val localProgress = progressWindow.map(globalProgress)
+            val currentX = fromX + (toX - fromX) * localProgress
+            val currentY = fromY + (toY - fromY) * localProgress
+            val currentHeight = fromHeight + (toHeight - fromHeight) * localProgress
+            return android.graphics.RectF(currentX, currentY, currentX + 2f, currentY + currentHeight)
+        }
+    }
 
     /**
      * Block-level vertical shift for a contiguous range of paragraphs after the edit
@@ -130,6 +164,10 @@ data class PreparedVisualTransaction(
          *  cover different document regions after hard-break insertion/deletion, which
          *  would produce incorrect deltaY adjustments and visible jumps in the suffix text. */
         val endUtf8Exclusive: Int = -1,
+        /** #637 评论 5386066978 项2：BlockShift 的剩余时间窗口。
+         *  rebase continuation 时 end = 1 - consumedFraction，让后缀块已走部分
+         *  不重新计时，保持匀速。 */
+        val progressWindow: VisualProgressWindow = VisualProgressWindow.Full,
     )
 }
 

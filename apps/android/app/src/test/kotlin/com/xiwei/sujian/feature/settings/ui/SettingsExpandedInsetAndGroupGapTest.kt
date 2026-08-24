@@ -33,19 +33,7 @@ class SettingsExpandedInsetAndGroupGapTest {
     fun settingsExpandedShell_rendersContent() {
         composeRule.setContent {
             Box(modifier = Modifier.testTag("root")) {
-                SettingsExpandedShell(closesGroup = false) {
-                    Box(modifier = Modifier.fillMaxWidth().height(48.dp).testTag("content")) {}
-                }
-            }
-        }
-        composeRule.onNodeWithTag("content").assertExists()
-    }
-
-    @Test
-    fun settingsExpandedShell_closesGroup_rendersContent() {
-        composeRule.setContent {
-            Box(modifier = Modifier.testTag("root")) {
-                SettingsExpandedShell(closesGroup = true) {
+                SettingsExpandedShell {
                     Box(modifier = Modifier.fillMaxWidth().height(48.dp).testTag("content")) {}
                 }
             }

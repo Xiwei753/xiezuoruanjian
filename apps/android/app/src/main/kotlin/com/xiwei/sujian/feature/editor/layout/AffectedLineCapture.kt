@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.editor.layout
 
 import android.text.Layout
+import android.text.Spanned
 import android.text.TextUtils
 import com.xiwei.sujian.feature.editor.projection.DisplayTextMirror
 import com.xiwei.sujian.feature.editor.projection.DisplayTextProjection
@@ -209,8 +210,16 @@ internal class AffectedLineCapture {
         // 返回段落 span，避免误继承上一段样式）。该空段落的光标显示 X 手动补上
         // 首行缩进；用户输入第一个字符后，真实段落 span 接管，光标重新完全由
         // Layout geometry 给出。不往正文塞空格或零宽字符。
-        if (params.firstLineIndentEnabled && params.firstLineIndentWidthChars > 0f &&
-            cursorAtEmptyTrailingParagraph(layoutText, cursorDisplayUtf16)
+        //
+        // #637 评论 5386066978 项1：补之前先看当前位置是否已经存在
+        // `FirstLineIndentSpan`（删空正文这一帧 Layout 可能已从残留 span 得到
+        // 一次缩进，或 `ParagraphStyleProjection.resyncParagraphIndent` 已清掉
+        // 残塌缩 span 后 Layout 还在过渡）。已有就信 Layout，只有缺失时才手工
+        // 补一次 — 避免空正文光标 = Layout 缩进 + 手工缩进 = 两倍缩进。
+        val firstLineIndentActive = params.firstLineIndentEnabled && params.firstLineIndentWidthChars > 0f
+        if (firstLineIndentActive &&
+            cursorAtEmptyTrailingParagraph(layoutText, cursorDisplayUtf16) &&
+            !hasFirstLineIndentSpanAt(l, cursorDisplayUtf16)
         ) {
             cursorX += params.firstLineIndentPx
         }
@@ -250,5 +259,31 @@ internal class AffectedLineCapture {
     ): Boolean {
         if (cursorDisplayUtf16 != layoutText.length) return false
         return layoutText.isEmpty() || layoutText[cursorDisplayUtf16 - 1] == '\n'
+    }
+
+    /**
+     * #637 评论 5386066978 项1：当前位置是否已存在 [FirstLineIndentSpan]。
+     *
+     * 用 `Spanned.getSpans` 查询光标所在行范围的 paragraph span。
+     * AOSP 对尾部空段落（start == end && start > 0）不返回任何段落 span，
+     * 所以这种情况下返回 false — 调用方据此决定是否手工补一次缩进。
+     * 对非空段落（包括刚删空但 span 尚未塌缩/清除的过渡帧）返回 true，
+     * 让调用方信 Layout，不再叠加手工缩进。
+     */
+    private fun hasFirstLineIndentSpanAt(
+        layout: Layout,
+        cursorDisplayUtf16: Int,
+    ): Boolean {
+        if (cursorDisplayUtf16 < 0 || cursorDisplayUtf16 > layout.text.length) return false
+        val line = layout.getLineForOffset(cursorDisplayUtf16)
+        if (line < 0 || line >= layout.lineCount) return false
+        val lineStart = layout.getLineStart(line)
+        val lineEnd = layout.getLineEnd(line)
+        // 尾部空段落（start == end）：AOSP getParagraphSpans 不返回任何段落 span，
+        // 与之对齐返回 false，让调用方手工补一次缩进。
+        if (lineStart == lineEnd) return false
+        val spanned = layout.text as? Spanned ?: return false
+        val spans = spanned.getSpans(lineStart, lineEnd, FirstLineIndentSpan::class.java)
+        return spans.isNotEmpty()
     }
 }

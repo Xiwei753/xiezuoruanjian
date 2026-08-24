@@ -292,6 +292,17 @@ class EditorWindowHost(
         view.setCoordinatedAnimationEnabled(effective.coordinated)
         view.setReduceMotion(effective.reduceMotion)
         view.setKernelAnimationEnabled(effective.textEnabled || effective.cursorEnabled)
+        // #637 评论 5386066978 项5：effective policy 变化时只记录一次结构化日志，
+        // 至少包含 text/textMs/cursor/cursorMs/coordinated/reduceMotion；不要每帧刷。
+        if (effective != lastLoggedMotionPolicy) {
+            lastLoggedMotionPolicy = effective
+            Log.i(
+                "editor.motion_policy",
+                "text=${effective.textEnabled} textMs=${effective.textDurationMillis} " +
+                    "cursor=${effective.cursorEnabled} cursorMs=${effective.cursorDurationMillis} " +
+                    "coordinated=${effective.coordinated} reduceMotion=${effective.reduceMotion}",
+            )
+        }
     }
 
     /**
@@ -330,6 +341,13 @@ class EditorWindowHost(
         lastTypography = next
         sharedEditorView?.let { applyTypographyToView(it, next) }
         markEditorSingleFrame("typography_change")
+        // #637 评论 5386066978 项5：值变化时记录结构化 editor.typography 日志，
+        // 至少包含 fontSizeSp/lineSpacing/firstLineIndent/indentChars。
+        Log.i(
+            "editor.typography",
+            "fontSizeSp=${next.fontSizeSp} lineSpacing=${next.lineSpacingMultiplier} " +
+                "firstLineIndent=${next.autoIndentEnabled} indentChars=${next.autoIndentWidth}",
+        )
     }
 
     private fun applyTypographyToView(
@@ -373,6 +391,9 @@ class EditorWindowHost(
     }
 
     private var lastTypography: EditorTypography? = null
+
+    // #637 评论 5386066978 项5：上次记录的 effective motion policy — 只在变化时记录日志。
+    private var lastLoggedMotionPolicy: EditorMotionPolicy? = null
 
     // ── Edit operations (orchestrates session + window) ──
 

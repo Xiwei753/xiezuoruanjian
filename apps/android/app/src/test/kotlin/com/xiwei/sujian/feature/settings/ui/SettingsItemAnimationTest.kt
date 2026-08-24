@@ -61,7 +61,7 @@ class SettingsItemAnimationTest {
     fun settingsExpandedShell_rendersContent() {
         composeRule.setContent {
             Box(modifier = Modifier.testTag("root")) {
-                SettingsExpandedShell(closesGroup = true) {
+                SettingsExpandedShell {
                     Box(
                         modifier =
                             Modifier

@@ -147,6 +147,12 @@ data class VisualFrameSnapshot(
      *  [CursorTransition.fromX/fromY/fromHeight] from the on-screen position rather than
      *  the old logical endpoint — preventing cursor jumps during rapid consecutive input. */
     val cursorRect: android.graphics.RectF? = null,
+    /** #637 评论 5386573878：光标在当前帧之后还剩多少基准时长（fraction）。
+     *  由 cursorTransition.progressWindow.remainingFractionAt(cursorProgress) 算出。
+     *  rebase continuation 用 [VisualProgressWindow.fromRemainingFraction] 直接消费，
+     *  连续 rebase 不会反复减速（旧 localProgress 会在旧 window [0,0.4] 走到 0.2 时
+     *  得 0.5，下一次又放大回 50ms；remainingFraction 得 0.2，保持 20ms）。 */
+    val cursorRemainingFraction: Float = 1f,
     /** Current visual state of block shifts at [progress]. Used by rebase so that the next
      *  transaction's BlockShift starts from the on-screen translateY rather than the full
      *  -deltaY — preventing suffix blocks from jumping back to the old position during
@@ -172,6 +178,10 @@ data class BlockShiftVisualState(
     /** Always 0 — the animation's final state is the new layout with no translation.
      *  Included for API symmetry with [SliceVisualState.destinationLeft/Top/Right/Bottom]. */
     val targetTranslateY: Float,
+    /** #637 评论 5386573878：本 BlockShift 在当前帧之后还剩多少基准时长（fraction）。
+     *  由 progressWindow.remainingFractionAt(globalProgress) 算出。rebase continuation
+     *  用 [VisualProgressWindow.fromRemainingFraction] 直接消费，连续 rebase 保持匀速。 */
+    val remainingFraction: Float = 1f,
 )
 
 data class SliceVisualState(
@@ -200,4 +210,10 @@ data class SliceVisualState(
      *  Used by rebase to set the next transaction's revealSpec.initialFraction
      *  so the animation continues from the on-screen position. */
     val revealFraction: Float? = null,
+    /** #637 评论 5386573878：本 slice 在当前帧之后还剩多少基准时长（fraction）。
+     *  由 progressWindow.remainingFractionAt(globalProgress) 算出。rebase continuation
+     *  用 [VisualProgressWindow.fromRemainingFraction] 直接消费，连续 rebase 不会
+     *  反复减速（旧 localProgress 会在旧 window [0,0.4] 走到 0.2 时得 0.5，下一次
+     *  又放大回 50ms；remainingFraction 得 0.2，保持 20ms）。 */
+    val remainingFraction: Float = 1f,
 )

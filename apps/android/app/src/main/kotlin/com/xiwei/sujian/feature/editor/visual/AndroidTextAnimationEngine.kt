@@ -186,6 +186,11 @@ class AndroidTextAnimationEngine(
             } else {
                 preparedAnimation
             }
+        // #637 评论 5386301277 项1：hasTextMotion 只计算一次，事务级 coordinated
+        // 和是否创建独立 cursorTimeline 共用同一判断，不在不同分支重复计算。
+        val hasTextMotion =
+            preparedAnimation.animatedSlices.isNotEmpty() ||
+                preparedAnimation.blockShifts.isNotEmpty()
         val oldTransaction = activeTransaction
         val newOwner = SnapshotOwner.OwnedByTransaction(preparedAnimation.transactionId)
 
@@ -239,7 +244,11 @@ class AndroidTextAnimationEngine(
             // consecutive inputs would grow ownedSnapshotIds unboundedly until the final
             // transaction completes.
             val preciseOwnedIds = (preparedAnimation.ownedSnapshotIds - unreferencedNewIds) + inheritedIds
-            activeTransaction = effectiveTransaction.copy(ownedSnapshotIds = preciseOwnedIds)
+            activeTransaction =
+                effectiveTransaction.copy(
+                    ownedSnapshotIds = preciseOwnedIds,
+                    coordinated = coordinatedEnabled && hasTextMotion,
+                )
             timeline?.complete()
             cursorTimeline?.complete()
             // 连续输入重基：新事务在旧事务完成前接管，旧快照所有权转移给新事务。
@@ -249,11 +258,14 @@ class AndroidTextAnimationEngine(
             )
         } else {
             val preciseOwnedIds = preparedAnimation.ownedSnapshotIds - unreferencedNewIds
-            activeTransaction = effectiveTransaction.copy(ownedSnapshotIds = preciseOwnedIds)
+            activeTransaction =
+                effectiveTransaction.copy(
+                    ownedSnapshotIds = preciseOwnedIds,
+                    coordinated = coordinatedEnabled && hasTextMotion,
+                )
         }
 
         timeline = AnimationTimeline(preparedAnimation.durationMs, submittedAtMs)
-        val hasTextMotion = preparedAnimation.animatedSlices.isNotEmpty() || preparedAnimation.blockShifts.isNotEmpty()
         cursorTimeline =
             if (effectiveCursorTransition?.shouldAnimate == true && preparedAnimation.durationMs > 0L) {
                 if (coordinatedEnabled && hasTextMotion) {
@@ -474,11 +486,19 @@ class AndroidTextAnimationEngine(
             val sliceStates = computeSliceVisualStates(transaction, 0f)
             val cursorRect = computeCurrentCursorRect(transaction, 0f)
             val blockStates = computeBlockShiftVisualStates(transaction, 0f)
+            // #637 评论 5389230907：Pending 分支不能写死 1f。若本事务本身就是上一次
+            // rebase 的 continuation（cursor window 已经是 [0, 0.4]），在第一帧真正
+            // 画出来之前再次 rebase 时，必须仍剩 0.4，不能恢复成 Full。slice 和
+            // BlockShift 在 Pending 分支已通过 compute...(transaction, 0f) 保留自己的
+            // window，cursor 也用 remainingFractionAt(0f) 保持一致。
+            val cursorRemainingFraction =
+                transaction.cursorTransition?.progressWindow?.remainingFractionAt(0f) ?: 1f
             return VisualFrameSnapshot(
                 progress = 0f,
                 state = TransactionState.Pending,
                 sliceVisualStates = sliceStates,
                 cursorRect = cursorRect,
+                cursorRemainingFraction = cursorRemainingFraction,
                 blockShiftStates = blockStates,
             )
         }
@@ -487,11 +507,17 @@ class AndroidTextAnimationEngine(
         val sliceStates = computeSliceVisualStates(transaction, p)
         val cursorRect = computeCurrentCursorRect(transaction, cursorProgress)
         val blockStates = computeBlockShiftVisualStates(transaction, p)
+        // #637 评论 5386573878：保存光标在当前帧之后还剩多少基准时长，
+        // 供 rebase continuation 用 fromRemainingFraction 直接消费，
+        // 连续 rebase 不会反复减速。
+        val cursorRemainingFraction =
+            transaction.cursorTransition?.progressWindow?.remainingFractionAt(cursorProgress) ?: 1f
         return VisualFrameSnapshot(
             progress = p,
             state = state,
             sliceVisualStates = sliceStates,
             cursorRect = cursorRect,
+            cursorRemainingFraction = cursorRemainingFraction,
             blockShiftStates = blockStates,
         )
     }
@@ -507,12 +533,9 @@ class AndroidTextAnimationEngine(
         if (activeTransaction == null) return false
         val tl = timeline
         if (tl != null && tl.getState() != TransactionState.Completed) return true
-        // 协同模式下有文字事务时不检查独立 cursorTimeline（它不存在）
+        // #637 评论 5386066978 项3：用事务级 coordinated 标记，不靠引擎级设置反推。
         val tx = activeTransaction
-        if (tx != null) {
-            val hasTextMotion = tx.animatedSlices.isNotEmpty() || tx.blockShifts.isNotEmpty()
-            if (coordinatedEnabled && hasTextMotion) return false
-        }
+        if (tx != null && tx.coordinated) return false
         val ctl = cursorTimeline
         if (ctl != null && ctl.getState() != TransactionState.Completed) return true
         return false
@@ -584,8 +607,8 @@ class AndroidTextAnimationEngine(
      */
     fun getCursorProgress(frameTimeMs: Long): Float? {
         val tx = activeTransaction ?: return null
-        val hasTextMotion = tx.animatedSlices.isNotEmpty() || tx.blockShifts.isNotEmpty()
-        return if (coordinatedEnabled && hasTextMotion) {
+        // #637 评论 5386066978 项3：用事务级 coordinated 标记。
+        return if (tx.coordinated) {
             timeline?.progress(frameTimeMs)
         } else {
             getCursorTimelineProgress(frameTimeMs)
@@ -603,12 +626,10 @@ class AndroidTextAnimationEngine(
      */
     fun isCursorTimelineCompleted(frameTimeMs: Long): Boolean {
         val tx = activeTransaction
-        if (tx != null) {
-            val hasTextMotion = tx.animatedSlices.isNotEmpty() || tx.blockShifts.isNotEmpty()
-            if (coordinatedEnabled && hasTextMotion) {
-                // 协同模式：光标跟随主 timeline
-                return isTimelineCompleted(frameTimeMs)
-            }
+        if (tx != null && tx.coordinated) {
+            // #637 评论 5386066978 项3：协同模式光标跟随主 timeline，
+            // textFinished == cursorFinished，不会出现文字已静态、光标仍动画。
+            return isTimelineCompleted(frameTimeMs)
         }
         val ctl = cursorTimeline ?: return true
         return ctl.isCompleted(frameTimeMs)
@@ -685,13 +706,19 @@ class AndroidTextAnimationEngine(
         progress: Float,
     ): List<SliceVisualState> {
         return transaction.animatedSlices.map { slice ->
+            // #637 评论 5386066978 项2：localProgress 由 progressWindow.map 得到，
+            // 位置/alpha/reveal 都用 localProgress 插值，与 renderer 一致。
+            val localProgress = slice.progressWindow.map(progress)
+            // #637 评论 5386573878：保存当前帧之后还剩多少基准时长，
+            // rebase continuation 用 fromRemainingFraction 直接消费。
+            val remainingFraction = slice.progressWindow.remainingFractionAt(progress)
             val fromRect = slice.fromDestinationRect ?: slice.destinationRect
-            val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * progress
-            val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * progress
-            val currentRight = fromRect.right + (slice.destinationRect.right - fromRect.right) * progress
-            val currentBottom = fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * progress
-            val currentAlpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * progress
-            val revealFraction = slice.revealSpec?.fraction(progress)
+            val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * localProgress
+            val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * localProgress
+            val currentRight = fromRect.right + (slice.destinationRect.right - fromRect.right) * localProgress
+            val currentBottom = fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * localProgress
+            val currentAlpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
+            val revealFraction = slice.revealSpec?.fraction(localProgress)
             SliceVisualState(
                 snapshotId = slice.snapshot?.snapshotId ?: -1L,
                 role = slice.role,
@@ -710,6 +737,7 @@ class AndroidTextAnimationEngine(
                 destinationRight = slice.destinationRect.right,
                 destinationBottom = slice.destinationRect.bottom,
                 revealFraction = revealFraction,
+                remainingFraction = remainingFraction,
             )
         }
     }
@@ -748,7 +776,13 @@ class AndroidTextAnimationEngine(
 
     /**
      * Interpolate the cursor rectangle from [CursorTransition] at [progress].
-     * Width is hardcoded to 2px (visual cursor bar width, not derived from layout).
+     *
+     * #637 评论 5389230907：必须与 renderer 使用同一份几何计算 — 调用
+     * [CursorTransition.rectAt]，先 [VisualProgressWindow.map] 得到 localProgress
+     * 再插值。旧实现直接用全局 progress 插值，在 rebase continuation
+     * （progressWindow=[0,0.4]）时与本事务 progress=0.2 对应的 renderer
+     * localProgress=0.5 不一致，captureFrame 记成更靠后的位置，下一次 rebase
+     * 光标回跳。
      */
     private fun computeCurrentCursorRect(
         transaction: PreparedVisualTransaction,
@@ -756,10 +790,7 @@ class AndroidTextAnimationEngine(
     ): android.graphics.RectF? {
         val ct = transaction.cursorTransition ?: return null
         if (!ct.shouldAnimate) return null
-        val currentX = ct.fromX + (ct.toX - ct.fromX) * progress
-        val currentY = ct.fromY + (ct.toY - ct.fromY) * progress
-        val currentHeight = ct.fromHeight + (ct.toHeight - ct.fromHeight) * progress
-        return android.graphics.RectF(currentX, currentY, currentX + 2f, currentY + currentHeight)
+        return ct.rectAt(progress)
     }
 
     /**
@@ -795,7 +826,12 @@ class AndroidTextAnimationEngine(
         progress: Float,
     ): List<BlockShiftVisualState> {
         return transaction.blockShifts.map { shift ->
-            val currentTranslateY = shift.deltaY * (progress - 1f)
+            // #637 评论 5386066978 项2：localProgress 由 progressWindow.map 得到，
+            // currentTranslateY = deltaY * (localProgress - 1)，与 renderer 一致。
+            val localProgress = shift.progressWindow.map(progress)
+            // #637 评论 5386573878：保存当前帧之后还剩多少基准时长。
+            val remainingFraction = shift.progressWindow.remainingFractionAt(progress)
+            val currentTranslateY = shift.deltaY * (localProgress - 1f)
             BlockShiftVisualState(
                 startLineIndex = shift.startLineIndex,
                 endLineIndexExclusive = shift.endLineIndexExclusive,
@@ -803,6 +839,7 @@ class AndroidTextAnimationEngine(
                 endUtf8Exclusive = shift.endUtf8Exclusive,
                 currentTranslateY = currentTranslateY,
                 targetTranslateY = 0f,
+                remainingFraction = remainingFraction,
             )
         }
     }

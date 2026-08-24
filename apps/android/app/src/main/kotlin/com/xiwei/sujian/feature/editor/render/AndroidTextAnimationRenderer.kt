@@ -21,6 +21,9 @@ class AndroidTextAnimationRenderer {
         for (slice in transaction.animatedSlices) {
             val snapshot = slice.snapshot ?: continue
             val bitmap = snapshot.bitmap ?: continue
+            // #637 评论 5386066978 项2：每个 slice 先把全局 progress 映射到
+            // 本 slice 的 local progress（rebase continuation 时已走部分不重新计时）。
+            val localProgress = slice.progressWindow.map(progress)
 
             when (slice.role) {
                 SliceRole.Move -> {
@@ -41,24 +44,25 @@ class AndroidTextAnimationRenderer {
                     //     throughout the animation) because the text content is unchanged — only
                     //     its position transitions. Alpha variation would imply content change,
                     //     which contradicts the Move invariant (same shaping identity).
-                    val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * progress
+                    val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
                     slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
                     val fromRect = slice.fromDestinationRect ?: slice.destinationRect
-                    val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * progress
-                    val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * progress
-                    val currentRight = fromRect.right + (slice.destinationRect.right - fromRect.right) * progress
-                    val currentBottom = fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * progress
+                    val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * localProgress
+                    val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * localProgress
+                    val currentRight = fromRect.right + (slice.destinationRect.right - fromRect.right) * localProgress
+                    val currentBottom =
+                        fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * localProgress
                     val currentDest = android.graphics.RectF(currentLeft, currentTop, currentRight, currentBottom)
                     canvas.drawBitmap(bitmap, slice.sourceRect, currentDest, slicePaint)
                 }
                 SliceRole.Insert, SliceRole.Delete -> {
-                    drawRevealSlice(canvas, bitmap, slice, progress)
+                    drawRevealSlice(canvas, bitmap, slice, localProgress)
                 }
                 // CrossfadeOld/CrossfadeNew/Static: position does not change during
                 // animation — only alpha varies. The bitmap is drawn at its final destination
                 // with interpolated alpha; no positional interpolation is needed.
                 SliceRole.CrossfadeOld, SliceRole.CrossfadeNew, SliceRole.Static -> {
-                    val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * progress
+                    val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
                     slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
                     canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, slicePaint)
                 }
@@ -148,6 +152,13 @@ class AndroidTextAnimationRenderer {
     /**
      * #595 五：按独立光标过渡几何绘制动画光标 — 供静态文字路径（文字轨结束或
      * CursorOnly 抑制）在光标轨未结束时继续绘制平滑光标。
+     *
+     * #637 评论 5386066978 项2：先映射 [transition.progressWindow] 再插值，
+     * rebase continuation 时光标已走部分不重新计时。
+     *
+     * #637 评论 5389230907：几何计算调用 [CursorTransition.rectAt] — 与
+     * [AndroidTextAnimationEngine.computeCurrentCursorRect] 共用同一份实现，
+     * 不会再次漂移。
      */
     fun drawAnimatedCursor(
         canvas: Canvas,
@@ -157,11 +168,8 @@ class AndroidTextAnimationRenderer {
     ) {
         if (!transition.shouldAnimate) return
 
-        val currentX = transition.fromX + (transition.toX - transition.fromX) * progress
-        val currentY = transition.fromY + (transition.toY - transition.fromY) * progress
-        val currentHeight = transition.fromHeight + (transition.toHeight - transition.fromHeight) * progress
-
-        canvas.drawRect(currentX, currentY, currentX + 2f, currentY + currentHeight, cursorPaint)
+        val rect = transition.rectAt(progress)
+        canvas.drawRect(rect.left, rect.top, rect.right, rect.bottom, cursorPaint)
     }
 
     /**
