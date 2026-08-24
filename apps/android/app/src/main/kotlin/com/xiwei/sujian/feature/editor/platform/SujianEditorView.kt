@@ -354,18 +354,28 @@ class SujianEditorView
         // 宽度/字号/行距变化继续走 reflowPreservingViewport()，纯高度变化继续只
         // updateMaxScroll + clamp。
         // #638：只用 pipeline.getStaticCursorRect()，视觉光标在 onFrame 中处理。
+        // #638 评论 5395990973：ensureSelectionVisible 走静态光标路径，事务已完成，
+        // 允许直接夹到最终 maxScrollY。
         private fun ensureSelectionVisible() {
-            val staticCursorRect = pipeline.getStaticCursorRect()
-            if (staticCursorRect != null) {
-                ensureRectVisible(staticCursorRect)
+            pipeline.getStaticCursorRect()?.let {
+                ensureRectVisible(it, clampToFinalRange = true)
             }
         }
 
         /**
          * #638：通用 ensureRectVisible — 用给定 Rect 判断是否滚入可视区。
          * 视觉光标和静态光标共用此逻辑。
+         *
+         * #638 评论 5395990973：增加 [clampToFinalRange] 控制 clamp 时机。
+         * 视觉事务进行中（onFrame 用视觉光标）传 false — 事务进行中允许 scrollY
+         * 暂时高于新 Layout 的最终 maxScrollY，只跟当前视觉光标走，避免下一帧
+         * 立刻夹到新布局终点导致整体跳动。事务完成后 onFrame 走静态分支、
+         * 以及 ensureSelectionVisible 路径传 true — 此时才做最终 clamp。
          */
-        private fun ensureRectVisible(rect: android.graphics.RectF) {
+        private fun ensureRectVisible(
+            rect: android.graphics.RectF,
+            clampToFinalRange: Boolean,
+        ) {
             val viewHeight = height.toFloat()
             val contentTop = viewport.scrollY - paddingTop
             val contentBottom = contentTop + viewHeight
@@ -376,7 +386,10 @@ class SujianEditorView
             } else if (rect.bottom > contentBottom) {
                 viewport.setScrollYUnclamped(rect.bottom - viewHeight + paddingTop)
             }
-            viewport.clamp()
+
+            if (clampToFinalRange) {
+                viewport.clamp()
+            }
 
             // #638：只在一次视觉事务首次导致 scroll target 改变时记录 viewportRetarget，
             // 按 transactionId 去重，绝不能每帧刷。
@@ -668,9 +681,17 @@ class SujianEditorView
             // #638：同一 frame time 取 pipeline visual cursor Rect，经通用 ensureRectVisible
             // 判断可见性。视觉事务进行中用视觉光标，完成后回退到静态光标。
             // 不要在 View 插值。
-            val visualRect = pipeline.getVisualCursorRect(frameTimeMs) ?: pipeline.getStaticCursorRect()
+            // #638 评论 5395990973：事务进行中（视觉光标非空）不夹到最终 maxScrollY，
+            // 只跟视觉光标走；事务完成后视觉光标回到 null，同一 onFrame 走静态分支
+            // 并做最终 clamp。不要用 Elvis 把两条路揉在一起，否则静态分支会继承
+            // 视觉分支的 clamp 策略。
+            val visualRect = pipeline.getVisualCursorRect(frameTimeMs)
             if (visualRect != null) {
-                ensureRectVisible(visualRect)
+                ensureRectVisible(visualRect, clampToFinalRange = false)
+            } else {
+                pipeline.getStaticCursorRect()?.let {
+                    ensureRectVisible(it, clampToFinalRange = true)
+                }
             }
             invalidate()
         }

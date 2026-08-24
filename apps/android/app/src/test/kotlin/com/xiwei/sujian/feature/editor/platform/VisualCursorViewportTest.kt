@@ -296,6 +296,57 @@ class VisualCursorViewportTest {
         assertEquals("rect 已在可视区内，scrollY 不应改变", 100.0, viewport.scrollY.toDouble(), 0.001)
     }
 
+    /**
+     * #638 评论 5395990973：真实场景 — 视觉事务进行中（旧 layout scrollY=1000，
+     * 新 layout maxScrollY=800）视觉帧不能立刻夹到 800，否则 clampNow=false
+     * 到第一帧就失效；事务完成切静态光标后才允许最终 clamp 到 800。
+     *
+     * 链路：
+     * 1. handlePipelineOutputInternal 用 updateMaxScroll(max, clampNow=false) 不夹取
+     * 2. onFrame → ensureRectVisible(visualRect, clampToFinalRange=false) 不夹取
+     * 3. 事务完成 → onFrame → ensureRectVisible(staticRect, clampToFinalRange=true) 夹到 800
+     */
+    @Test
+    fun visualFrame_doesNotClampDuringTransaction_thenClampsOnStatic() {
+        val viewport = getViewportController()
+        // 先把 maxScrollY 抬到 1200，让 setScroll(0, 1000) 不被夹；
+        // 再 updateMaxScroll(800, clampNow=false) 模拟新 layout 高度变短。
+        setMaxScrollY(viewport, 1200f)
+        viewport.setScroll(x = 0f, y = 1000f)
+        viewport.updateMaxScroll(max = 800f, clampNow = false)
+        assertEquals("视觉事务前 maxScrollY 应更新为 800", 800.0, getMaxScrollY(viewport).toDouble(), 0.001)
+        assertEquals("scrollY 不应被夹取（仍为 1000）", 1000.0, viewport.scrollY.toDouble(), 0.001)
+
+        // 构造一个在当前 viewport（scrollY=1000, viewHeight=600, paddingTop=view.paddingTop）
+        // 内可见的视觉光标 Rect。contentTop = 1000 - paddingTop, contentBottom = contentTop + 600。
+        val paddingTop = view.paddingTop.toFloat()
+        val contentTop = viewport.scrollY - paddingTop
+        val contentBottom = contentTop + view.height.toFloat()
+        val visualRect =
+            RectF(
+                0f,
+                contentTop + 100f,
+                2f,
+                contentTop + 120f,
+            )
+        assertTrue("视觉光标应在可视区内", visualRect.top >= contentTop && visualRect.bottom <= contentBottom)
+
+        // 视觉帧：clampToFinalRange=false，scrollY 必须仍是 1000（不夹到 800）
+        invokeEnsureRectVisible(visualRect, clampToFinalRange = false)
+        assertEquals("视觉事务进行中 scrollY 不应被夹取（仍为 1000）", 1000.0, viewport.scrollY.toDouble(), 0.001)
+
+        // 事务完成切静态：clampToFinalRange=true，scrollY 应夹到新 maxScrollY=800
+        val staticRect =
+            RectF(
+                0f,
+                contentTop + 100f,
+                2f,
+                contentTop + 120f,
+            )
+        invokeEnsureRectVisible(staticRect, clampToFinalRange = true)
+        assertEquals("静态帧应将 scrollY 夹到新 maxScrollY=800", 800.0, viewport.scrollY.toDouble(), 0.001)
+    }
+
     // ── Helpers ──
 
     private fun getViewportController(): EditorViewportController {
@@ -337,6 +388,24 @@ class VisualCursorViewportTest {
         val method = SujianEditorView::class.java.getDeclaredMethod("ensureSelectionVisible")
         method.isAccessible = true
         method.invoke(view)
+    }
+
+    /**
+     * #638 评论 5395990973：反射调用 SujianEditorView.ensureRectVisible(RectF, Boolean)
+     * 真实代码路径，验证 clampToFinalRange 控制是否做最终 clamp。
+     */
+    private fun invokeEnsureRectVisible(
+        rect: RectF,
+        clampToFinalRange: Boolean,
+    ) {
+        val method =
+            SujianEditorView::class.java.getDeclaredMethod(
+                "ensureRectVisible",
+                android.graphics.RectF::class.java,
+                Boolean::class.javaPrimitiveType,
+            )
+        method.isAccessible = true
+        method.invoke(view, rect, clampToFinalRange)
     }
 
     /**
