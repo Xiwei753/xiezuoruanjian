@@ -46,6 +46,10 @@ class VisualCursorViewportTest {
     private lateinit var view: SujianEditorView
     private lateinit var engine: AndroidTextAnimationEngine
 
+    private companion object {
+        private const val VISUAL_CURSOR_RECT_NOT_NULL = "视觉光标 Rect 不应为 null"
+    }
+
     @Before
     fun setUp() {
         view = SujianEditorView(ApplicationProvider.getApplicationContext())
@@ -104,19 +108,19 @@ class VisualCursorViewportTest {
 
         // 在 100ms（progress=0.5），视觉光标应在 y=250
         val visualRect = engine.currentVisualCursorRect(100L)
-        assertNotNull("视觉光标 Rect 不应为 null", visualRect)
+        assertNotNull(VISUAL_CURSOR_RECT_NOT_NULL, visualRect)
         assertEquals("视觉光标 left 应为 0", 0.0, visualRect!!.left.toDouble(), 0.001)
         assertEquals("视觉光标 top 应为 250 (0 + 500*0.5)", 250.0, visualRect!!.top.toDouble(), 0.001)
         assertEquals("视觉光标 bottom 应为 270", 270.0, visualRect!!.bottom.toDouble(), 0.001)
 
         // 在 0ms（progress=0），视觉光标应在 y=0
         val rectAt0 = engine.currentVisualCursorRect(0L)
-        assertNotNull("视觉光标 Rect 不应为 null", rectAt0)
+        assertNotNull(VISUAL_CURSOR_RECT_NOT_NULL, rectAt0)
         assertEquals("视觉光标 top 应为 0", 0.0, rectAt0!!.top.toDouble(), 0.001)
 
         // 在 200ms（progress=1），视觉光标应在 y=500
         val rectAt200 = engine.currentVisualCursorRect(200L)
-        assertNotNull("视觉光标 Rect 不应为 null", rectAt200)
+        assertNotNull(VISUAL_CURSOR_RECT_NOT_NULL, rectAt200)
         assertEquals("视觉光标 top 应为 500", 500.0, rectAt200!!.top.toDouble(), 0.001)
     }
 
@@ -357,6 +361,7 @@ class VisualCursorViewportTest {
     }
 }
 
+@Suppress("TooManyFunctions")
 private class RecordingBridge : EditorKernelBridge {
     override fun insert(
         byteOffset: Int,
