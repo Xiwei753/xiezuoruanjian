@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.editor.window
 import android.content.Context
 import android.graphics.Rect
 import android.util.Log
+import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.feature.editor.interop.TextEditSessionBridge
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
@@ -296,11 +297,13 @@ class EditorWindowHost(
         // 至少包含 text/textMs/cursor/cursorMs/coordinated/reduceMotion；不要每帧刷。
         if (effective != lastLoggedMotionPolicy) {
             lastLoggedMotionPolicy = effective
-            Log.i(
-                "editor.motion_policy",
-                "text=${effective.textEnabled} textMs=${effective.textDurationMillis} " +
-                    "cursor=${effective.cursorEnabled} cursorMs=${effective.cursorDurationMillis} " +
-                    "coordinated=${effective.coordinated} reduceMotion=${effective.reduceMotion}",
+            DiagnosticsEvents.editorMotionPolicy(
+                textEnabled = effective.textEnabled,
+                textMs = effective.textDurationMillis,
+                cursorEnabled = effective.cursorEnabled,
+                cursorMs = effective.cursorDurationMillis,
+                coordinated = effective.coordinated,
+                reduceMotion = effective.reduceMotion,
             )
         }
     }
@@ -343,10 +346,11 @@ class EditorWindowHost(
         markEditorSingleFrame("typography_change")
         // #637 评论 5386066978 项5：值变化时记录结构化 editor.typography 日志，
         // 至少包含 fontSizeSp/lineSpacing/firstLineIndent/indentChars。
-        Log.i(
-            "editor.typography",
-            "fontSizeSp=${next.fontSizeSp} lineSpacing=${next.lineSpacingMultiplier} " +
-                "firstLineIndent=${next.autoIndentEnabled} indentChars=${next.autoIndentWidth}",
+        DiagnosticsEvents.editorTypography(
+            fontSizeSp = next.fontSizeSp,
+            lineSpacing = next.lineSpacingMultiplier,
+            firstLineIndent = next.autoIndentEnabled,
+            indentChars = next.autoIndentWidth,
         )
     }
 
