@@ -440,6 +440,157 @@ class DiagnosticsEventsNewEventsTest {
         DiagnosticsEvents.navTopLevelSwitch("Works", "StarMap")
         assertTrue(EditorEventRingBuffer.getSnapshot().isEmpty())
     }
+
+    // ── #638 结构化持久编辑器诊断 ──────────────────────────────
+
+    @Test
+    fun editorMotionPolicyRecordsAllFields() {
+        DiagnosticsEvents.editorMotionPolicy(
+            textEnabled = true,
+            textMs = 100L,
+            cursorEnabled = true,
+            cursorMs = 80L,
+            coordinated = true,
+            reduceMotion = false,
+        )
+        val snapshot = EditorEventRingBuffer.getSnapshot()
+        assertEquals(1, snapshot.size)
+        val event = snapshot[0]
+        assertEquals("editor.motion_policy", event["event"])
+        assertEquals(true, event["textEnabled"])
+        assertEquals(100L, event["textMs"])
+        assertEquals(true, event["cursorEnabled"])
+        assertEquals(80L, event["cursorMs"])
+        assertEquals(true, event["coordinated"])
+        assertEquals(false, event["reduceMotion"])
+        assertNotNull(event["ts"])
+    }
+
+    @Test
+    fun editorMotionPolicyDoesNotRecordSensitiveContent() {
+        DiagnosticsEvents.editorMotionPolicy(
+            textEnabled = true,
+            textMs = 100L,
+            cursorEnabled = true,
+            cursorMs = 80L,
+            coordinated = true,
+            reduceMotion = false,
+        )
+        val event = EditorEventRingBuffer.getSnapshot()[0]
+        // 确认不含敏感内容字段（正文/密码/token 等）
+        assertNull(event["content"])
+        assertNull(event["body"])
+        assertNull(event["token"])
+        assertNull(event["password"])
+    }
+
+    @Test
+    fun editorTypographyRecordsAllFields() {
+        DiagnosticsEvents.editorTypography(
+            fontSizeSp = 18.5f,
+            lineSpacing = 1.6f,
+            firstLineIndent = true,
+            indentChars = 2.0f,
+        )
+        val snapshot = EditorEventRingBuffer.getSnapshot()
+        assertEquals(1, snapshot.size)
+        val event = snapshot[0]
+        assertEquals("editor.typography", event["event"])
+        assertEquals(18.5f, event["fontSizeSp"])
+        assertEquals(1.6f, event["lineSpacing"])
+        assertEquals(true, event["firstLineIndent"])
+        assertEquals(2.0f, event["indentChars"])
+        assertNotNull(event["ts"])
+    }
+
+    @Test
+    fun editorTypographyRedactSensitiveFields() {
+        DiagnosticsEvents.editorTypography(
+            fontSizeSp = 16f,
+            lineSpacing = 1.5f,
+            firstLineIndent = false,
+            indentChars = 0f,
+        )
+        val event = EditorEventRingBuffer.getSnapshot()[0]
+        assertNull(event["text"])
+        assertNull(event["content"])
+        assertNull(event["body"])
+    }
+
+    @Test
+    fun viewportRetargetRecordsAllFields() {
+        DiagnosticsEvents.viewportRetarget(
+            transactionId = 12345L,
+            fromY = 100.5f,
+            toY = 500.0f,
+            maxY = 2000.0f,
+            reason = "scroll",
+        )
+        val snapshot = EditorEventRingBuffer.getSnapshot()
+        assertEquals(1, snapshot.size)
+        val event = snapshot[0]
+        assertEquals("editor.viewport_retarget", event["event"])
+        assertEquals(12345L, event["transaction"])
+        assertEquals(100.5f, event["fromY"])
+        assertEquals(500.0f, event["toY"])
+        assertEquals(2000.0f, event["maxY"])
+        assertEquals("scroll", event["reason"])
+        assertNotNull(event["ts"])
+    }
+
+    @Test
+    fun viewportRetargetRedactSensitiveFields() {
+        DiagnosticsEvents.viewportRetarget(
+            transactionId = 1L,
+            fromY = 0f,
+            toY = 100f,
+            maxY = 500f,
+            reason = "scroll",
+        )
+        val event = EditorEventRingBuffer.getSnapshot()[0]
+        assertNull(event["text"])
+        assertNull(event["content"])
+        assertNull(event["body"])
+    }
+
+    @Test
+    fun animationRebaseStateRecordsAllFields() {
+        DiagnosticsEvents.animationRebaseState(
+            oldTransactionId = 100L,
+            newTransactionId = 101L,
+            deleteSlices = 5,
+            cursorRemaining = 12,
+            minSliceRemaining = 0,
+            maxSliceRemaining = 50,
+        )
+        val snapshot = EditorEventRingBuffer.getSnapshot()
+        assertEquals(1, snapshot.size)
+        val event = snapshot[0]
+        assertEquals("editor.animation_rebase_state", event["event"])
+        assertEquals(100L, event["oldTransaction"])
+        assertEquals(101L, event["newTransaction"])
+        assertEquals(5, event["deleteSlices"])
+        assertEquals(12, event["cursorRemaining"])
+        assertEquals(0, event["minSliceRemaining"])
+        assertEquals(50, event["maxSliceRemaining"])
+        assertNotNull(event["ts"])
+    }
+
+    @Test
+    fun animationRebaseStateRedactSensitiveFields() {
+        DiagnosticsEvents.animationRebaseState(
+            oldTransactionId = 1L,
+            newTransactionId = 2L,
+            deleteSlices = 0,
+            cursorRemaining = 10,
+            minSliceRemaining = 0,
+            maxSliceRemaining = 10,
+        )
+        val event = EditorEventRingBuffer.getSnapshot()[0]
+        assertNull(event["text"])
+        assertNull(event["content"])
+        assertNull(event["body"])
+    }
 }
 
 /**

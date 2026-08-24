@@ -216,6 +216,89 @@ object DiagnosticsEvents {
 
     fun animationPolicy(policy: String) = record("editor.animation.policy", "policy" to policy)
 
+    // ── 编辑器运动/排版策略（#637 评论 5386066978 项5）──────────
+
+    /**
+     * 编辑器运动策略 — 记录 text/cursor/协同/降级与各自时长，不记录正文或 glyph。
+     * 只在 effective policy 变化时记录一次，不要每帧刷。
+     * 注意：字段名 textEnabled/cursorEnabled 避免与 SENSITIVE_KEYS 中 "text" 冲突。
+     */
+    fun editorMotionPolicy(
+        textEnabled: Boolean,
+        textMs: Long,
+        cursorEnabled: Boolean,
+        cursorMs: Long,
+        coordinated: Boolean,
+        reduceMotion: Boolean,
+    ) = record(
+        "editor.motion_policy",
+        "textEnabled" to textEnabled,
+        "textMs" to textMs,
+        "cursorEnabled" to cursorEnabled,
+        "cursorMs" to cursorMs,
+        "coordinated" to coordinated,
+        "reduceMotion" to reduceMotion,
+    )
+
+    /**
+     * 编辑器排版设置 — 记录字号/行距/首行缩进开关与字符宽度，不记录正文内容。
+     * 只在值变化时记录一次。
+     */
+    fun editorTypography(
+        fontSizeSp: Float,
+        lineSpacing: Float,
+        firstLineIndent: Boolean,
+        indentChars: Float,
+    ) = record(
+        "editor.typography",
+        "fontSizeSp" to fontSizeSp,
+        "lineSpacing" to lineSpacing,
+        "firstLineIndent" to firstLineIndent,
+        "indentChars" to indentChars,
+    )
+
+    // ── 视口/重基接线（#638 结构化持久诊断）─────────────────────
+
+    /**
+     * 视口重定向 — 记录 transaction/起止 Y/最大 Y/原因，不记录正文或 glyph。
+     * 供 viewport/rebase 接线调用方使用。
+     */
+    fun viewportRetarget(
+        transactionId: Long,
+        fromY: Float,
+        toY: Float,
+        maxY: Float,
+        reason: String,
+    ) = record(
+        "editor.viewport_retarget",
+        "transaction" to transactionId,
+        "fromY" to fromY,
+        "toY" to toY,
+        "maxY" to maxY,
+        "reason" to reason,
+    )
+
+    /**
+     * 动画重基状态 — 记录新旧 transaction/删除 slice 数/光标剩余与 slice 范围。
+     * 不记录正文、glyph 或 preedit 内容。
+     */
+    fun animationRebaseState(
+        oldTransactionId: Long,
+        newTransactionId: Long,
+        deleteSlices: Int,
+        cursorRemaining: Int,
+        minSliceRemaining: Int,
+        maxSliceRemaining: Int,
+    ) = record(
+        "editor.animation_rebase_state",
+        "oldTransaction" to oldTransactionId,
+        "newTransaction" to newTransactionId,
+        "deleteSlices" to deleteSlices,
+        "cursorRemaining" to cursorRemaining,
+        "minSliceRemaining" to minSliceRemaining,
+        "maxSliceRemaining" to maxSliceRemaining,
+    )
+
     // ── 设置 ─────────────────────────────────────────────────────
 
     fun settingsSaved(
