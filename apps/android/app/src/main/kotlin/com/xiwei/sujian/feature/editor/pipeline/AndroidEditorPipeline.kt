@@ -236,6 +236,15 @@ class AndroidEditorPipeline private constructor(
 
     fun isAnimationPaused(): Boolean = visualRuntime.isAnimationPaused()
 
+    /**
+     * #638：获取当前活跃事务 ID。
+     *
+     * 供 viewportRetarget 调用方按 transactionId 去重，避免每帧重复记录。
+     * API 前置：origin/fix/issue-638-diagnostics 合入后可调用
+     * DiagnosticsEvents.viewportRetarget。
+     */
+    fun getCurrentTransactionId(): Long? = visualRuntime.getCurrentTransactionId()
+
     fun loadText(
         text: String,
         cursorUtf8: Int,
@@ -1075,5 +1084,32 @@ class AndroidEditorPipeline private constructor(
             bgColor,
             searchHighlightColor,
         )
+    }
+
+    /**
+     * #638：获取当前帧的视觉光标 Rect。
+     *
+     * 委托给 [AndroidVisualRuntime.currentVisualCursorRect(frameTimeMs)]，
+     * 无活跃事务/光标未动画时返回 null（表示应使用静态光标）。
+     */
+    fun getVisualCursorRect(frameTimeMs: Long): android.graphics.RectF? =
+        visualRuntime.currentVisualCursorRect(frameTimeMs)
+
+    /**
+     * #638：获取静态光标矩形。
+     *
+     * 用现有 layoutRuntime/layout + getDisplayCursorUtf16/getLayoutLineForOffset/
+     * getLayoutLineTop/getLayoutLineBottom 生成静态光标矩形。
+     * 无活跃事务/光标未动画时回退到此静态位置。
+     */
+    fun getStaticCursorRect(): android.graphics.RectF? {
+        val cursorUtf16 = getDisplayCursorUtf16()
+        val layoutTextLen = getLengthUtf16()
+        if (cursorUtf16 < 0 || cursorUtf16 > layoutTextLen) return null
+        val layout = getLayout() ?: return null
+        val line = getLayoutLineForOffset(cursorUtf16)
+        val lineTop = getLayoutLineTop(line).toFloat()
+        val lineBottom = getLayoutLineBottom(line).toFloat()
+        return android.graphics.RectF(0f, lineTop, 2f, lineBottom)
     }
 }

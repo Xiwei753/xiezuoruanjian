@@ -53,8 +53,22 @@ internal class EditorViewportController {
      * 更新最大纵向滚动范围。若当前 scrollY 超出新范围则夹回。
      */
     fun updateMaxScroll(max: Float) {
+        updateMaxScroll(max, clampNow = true)
+    }
+
+    /**
+     * 更新最大纵向滚动范围。
+     *
+     * @param max 新的最大纵向滚动范围
+     * @param clampNow true 时立即夹取 scrollY 到新范围；false 时只更新 maxScrollY，
+     *                 留给调用方在动画完成/最终确定后再夹取（#638 视觉事务时序）。
+     */
+    fun updateMaxScroll(
+        max: Float,
+        clampNow: Boolean,
+    ) {
         maxScrollY = max.coerceAtLeast(0f)
-        if (scrollY > maxScrollY) scrollY = maxScrollY
+        if (clampNow && scrollY > maxScrollY) scrollY = maxScrollY
     }
 
     /**

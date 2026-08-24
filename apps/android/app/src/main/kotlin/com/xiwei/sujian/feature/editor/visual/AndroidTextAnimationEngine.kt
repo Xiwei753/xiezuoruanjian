@@ -256,6 +256,44 @@ class AndroidTextAnimationEngine(
                 oldTransaction.transactionId,
                 preparedAnimation.transactionId,
             )
+            val deleteSlices = preparedAnimation.animatedSlices.count { it.role == SliceRole.Delete }
+            val cursorRemaining = if (preparedAnimation.cursorTransition?.shouldAnimate == true) 1 else 0
+            val allEnds = buildList<Float> {
+                preparedAnimation.animatedSlices.forEach { it.progressWindow.end.takeIf { it > 0f }?.let { add(it) } }
+                preparedAnimation.cursorTransition?.progressWindow?.end?.takeIf { it > 0f }?.let { add(it) }
+                preparedAnimation.blockShifts.forEach { it.progressWindow.end.takeIf { it > 0f }?.let { add(it) } }
+            }
+            val minSliceRemaining = if (allEnds.isNotEmpty()) (allEnds.min() * 100).toInt() else 0
+            val maxSliceRemaining = if (allEnds.isNotEmpty()) (allEnds.max() * 100).toInt() else 0
+            // Sibling integration prerequisite：origin/fix/issue-638-diagnostics 合入后
+            // DiagnosticsEvents.animationRebaseState 可用。本分支 standalone 编译时
+            // 用反射守卫，合入 sibling 后自动生效。
+            try {
+                val cls = Class.forName(
+                    "com.xiwei.sujian.core.diagnostics.DiagnosticsEvents",
+                )
+                val method = cls.getDeclaredMethod(
+                    "animationRebaseState",
+                    Long::class.javaPrimitiveType,
+                    Long::class.javaPrimitiveType,
+                    Int::class.javaPrimitiveType,
+                    Int::class.javaPrimitiveType,
+                    Int::class.javaPrimitiveType,
+                    Int::class.javaPrimitiveType,
+                )
+                val instance = cls.getDeclaredField("INSTANCE").get(null)
+                method.invoke(
+                    instance,
+                    oldTransaction.transactionId,
+                    preparedAnimation.transactionId,
+                    deleteSlices,
+                    cursorRemaining,
+                    minSliceRemaining,
+                    maxSliceRemaining,
+                )
+            } catch (_: Exception) {
+                // sibling API not yet merged — no-op
+            }
         } else {
             val preciseOwnedIds = preparedAnimation.ownedSnapshotIds - unreferencedNewIds
             activeTransaction =
@@ -645,6 +683,20 @@ class AndroidTextAnimationEngine(
      */
     fun isTransactionCompleted(frameTimeMs: Long): Boolean {
         return isTextTimelineCompleted(frameTimeMs) && isCursorTimelineCompleted(frameTimeMs)
+    }
+
+    /**
+     * #638：获取当前帧的视觉光标 Rect。
+     *
+     * 复用 [CursorTransition.rectAt] 的几何计算，与 renderer 完全一致。
+     * 无活跃事务、光标未动画、光标轨已完成时返回 null（表示应使用静态光标）。
+     */
+    fun currentVisualCursorRect(frameTimeMs: Long): android.graphics.RectF? {
+        val transaction = activeTransaction ?: return null
+        val ct = transaction.cursorTransition ?: return null
+        if (!ct.shouldAnimate) return null
+        val cursorProgress = getCursorProgress(frameTimeMs) ?: return null
+        return ct.rectAt(cursorProgress)
     }
 
     /**
