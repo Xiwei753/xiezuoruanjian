@@ -5,6 +5,7 @@ members = [
     "core/writer_uniffi",
     "platform/rust/linux",
     "platform/rust/android",
+    "platform/rust/harmony",
     "apps/Linux_qt",
 ]
 resolver = "2"

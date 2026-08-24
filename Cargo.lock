@@ -4030,6 +4030,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "writer-platform-harmony"
+version = "0.1.0"
+dependencies = [
+ "writer_core",
+]
+
+[[package]]
 name = "writer-platform-linux"
 version = "0.1.0"
 dependencies = [

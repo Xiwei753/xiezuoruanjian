@@ -1,0 +1,16 @@
+[package]
+name = "writer-platform-harmony"
+version = "0.1.0"
+edition = "2021"
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+
+[dependencies]
+writer_core = { path = "../../../core/writer_core", features = ["harmony-ffi"] }
