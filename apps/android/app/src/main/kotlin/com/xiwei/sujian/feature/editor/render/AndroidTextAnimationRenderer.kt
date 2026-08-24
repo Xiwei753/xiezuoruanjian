@@ -173,44 +173,8 @@ class AndroidTextAnimationRenderer {
     }
 
     /**
-     * Collect the destination regions of animated slices for static text hole-punching.
-     *
-     * Only "appearing" roles (Insert, Move, CrossfadeNew) punch holes in the static
-     * new-layout text. These slices draw new-layout content at [slice.destinationRect],
-     * so the static renderer must not also draw there (double-rendering).
-     *
-     * "Disappearing" roles (Delete, CrossfadeOld) do NOT punch holes. Their
-     * [slice.destinationRect] is the *old* position; the new layout may have shifted
-     * text there that must remain visible behind the fading-out slice. Punching a hole
-     * would hide that shifted text, creating a gap once the fade completes.
-     *
-     * Constraint: each region must be as small as possible — ideally the exact cluster
-     * bounding box. For Move slices, ONLY [slice.destinationRect] (the target position)
-     * punches a hole — [slice.fromDestinationRect] (the source/pre-move position) is NOT
-     * punched because the new layout's text there should remain visible and will be
-     * gradually revealed as the slice slides away.
-     *
-     * DO NOT merge fromDestinationRect and destinationRect into a single bounding rect.
-     * For cross-line Moves, the source and target can be on different visual lines; their
-     * axis-aligned bounding rect would cover nearly two full lines, erasing non-animated
-     * text in between during the animation. Each position must remain an independent hole.
-     */
-    @Deprecated("Use computeStaticSuppressionRegions with progress for Delete SWALLOW support", ReplaceWith("computeStaticSuppressionRegions(transaction, progress)"))
-    fun computeAnimatedSliceRegions(transaction: PreparedVisualTransaction): List<android.graphics.RectF> {
-        val regions = mutableListOf<android.graphics.RectF>()
-        for (slice in transaction.animatedSlices) {
-            if (slice.role == SliceRole.Delete || slice.role == SliceRole.CrossfadeOld) continue
-            val srcRect = slice.sourceRect
-            if (srcRect.width() <= 0 || srcRect.height() <= 0) continue
-            regions.add(android.graphics.RectF(slice.destinationRect))
-        }
-        return regions
-    }
-
-    /**
      * #638: Compute static suppression regions for hole-punching at [progress].
      *
-     * Replaces [computeAnimatedSliceRegions] to handle Delete SWALLOW correctly:
      * - Insert/Move/CrossfadeNew/Static: suppress [slice.destinationRect] (new-layout content).
      * - CrossfadeOld: alpha-mixed, NOT suppressed (no hole).
      * - Delete + SWALLOW: suppress only the currently visible portion via

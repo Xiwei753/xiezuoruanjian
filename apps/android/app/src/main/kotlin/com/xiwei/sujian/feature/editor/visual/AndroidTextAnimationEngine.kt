@@ -257,43 +257,27 @@ class AndroidTextAnimationEngine(
                 preparedAnimation.transactionId,
             )
             val deleteSlices = preparedAnimation.animatedSlices.count { it.role == SliceRole.Delete }
-            val cursorRemaining = if (preparedAnimation.cursorTransition?.shouldAnimate == true) 1 else 0
+            val cursorRemaining =
+                if (preparedAnimation.cursorTransition?.shouldAnimate == true) {
+                    preparedAnimation.cursorTransition.progressWindow.end
+                } else {
+                    0f
+                }
             val allEnds = buildList<Float> {
                 preparedAnimation.animatedSlices.forEach { it.progressWindow.end.takeIf { it > 0f }?.let { add(it) } }
                 preparedAnimation.cursorTransition?.progressWindow?.end?.takeIf { it > 0f }?.let { add(it) }
                 preparedAnimation.blockShifts.forEach { it.progressWindow.end.takeIf { it > 0f }?.let { add(it) } }
             }
-            val minSliceRemaining = if (allEnds.isNotEmpty()) (allEnds.min() * 100).toInt() else 0
-            val maxSliceRemaining = if (allEnds.isNotEmpty()) (allEnds.max() * 100).toInt() else 0
-            // Sibling integration prerequisite：origin/fix/issue-638-diagnostics 合入后
-            // DiagnosticsEvents.animationRebaseState 可用。本分支 standalone 编译时
-            // 用反射守卫，合入 sibling 后自动生效。
-            try {
-                val cls = Class.forName(
-                    "com.xiwei.sujian.core.diagnostics.DiagnosticsEvents",
-                )
-                val method = cls.getDeclaredMethod(
-                    "animationRebaseState",
-                    Long::class.javaPrimitiveType,
-                    Long::class.javaPrimitiveType,
-                    Int::class.javaPrimitiveType,
-                    Int::class.javaPrimitiveType,
-                    Int::class.javaPrimitiveType,
-                    Int::class.javaPrimitiveType,
-                )
-                val instance = cls.getDeclaredField("INSTANCE").get(null)
-                method.invoke(
-                    instance,
-                    oldTransaction.transactionId,
-                    preparedAnimation.transactionId,
-                    deleteSlices,
-                    cursorRemaining,
-                    minSliceRemaining,
-                    maxSliceRemaining,
-                )
-            } catch (_: Exception) {
-                // sibling API not yet merged — no-op
-            }
+            val minSliceRemaining = if (allEnds.isNotEmpty()) allEnds.min() else 0f
+            val maxSliceRemaining = if (allEnds.isNotEmpty()) allEnds.max() else 0f
+            com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.animationRebaseState(
+                oldTransaction.transactionId,
+                preparedAnimation.transactionId,
+                deleteSlices,
+                cursorRemaining,
+                minSliceRemaining,
+                maxSliceRemaining,
+            )
         } else {
             val preciseOwnedIds = preparedAnimation.ownedSnapshotIds - unreferencedNewIds
             activeTransaction =

@@ -262,9 +262,12 @@ object DiagnosticsEvents {
     /**
      * 视口重定向 — 记录 transaction/起止 Y/最大 Y/原因，不记录正文或 glyph。
      * 供 viewport/rebase 接线调用方使用。
+     *
+     * [transactionId] 为 nullable：无活跃视觉事务（静态光标触发的视口调整）时
+     * 传 null，事件中不写入 transaction 字段；有活跃事务时传事务 ID 用于按事务去重。
      */
     fun viewportRetarget(
-        transactionId: Long,
+        transactionId: Long?,
         fromY: Float,
         toY: Float,
         maxY: Float,
@@ -281,14 +284,17 @@ object DiagnosticsEvents {
     /**
      * 动画重基状态 — 记录新旧 transaction/删除 slice 数/光标剩余与 slice 范围。
      * 不记录正文、glyph 或 preedit 内容。
+     *
+     * cursorRemaining/minSliceRemaining/maxSliceRemaining 记录 remainingFraction
+     * 的 Float（0.0–1.0），不是 Int 或百分比猜测。
      */
     fun animationRebaseState(
         oldTransactionId: Long,
         newTransactionId: Long,
         deleteSlices: Int,
-        cursorRemaining: Int,
-        minSliceRemaining: Int,
-        maxSliceRemaining: Int,
+        cursorRemaining: Float,
+        minSliceRemaining: Float,
+        maxSliceRemaining: Float,
     ) = record(
         "editor.animation_rebase_state",
         "oldTransaction" to oldTransactionId,

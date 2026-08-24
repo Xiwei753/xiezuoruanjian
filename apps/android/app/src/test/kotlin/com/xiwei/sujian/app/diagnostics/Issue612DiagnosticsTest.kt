@@ -559,9 +559,9 @@ class DiagnosticsEventsNewEventsTest {
             oldTransactionId = 100L,
             newTransactionId = 101L,
             deleteSlices = 5,
-            cursorRemaining = 12,
-            minSliceRemaining = 0,
-            maxSliceRemaining = 50,
+            cursorRemaining = 0.12f,
+            minSliceRemaining = 0f,
+            maxSliceRemaining = 0.5f,
         )
         val snapshot = EditorEventRingBuffer.getSnapshot()
         assertEquals(1, snapshot.size)
@@ -570,9 +570,9 @@ class DiagnosticsEventsNewEventsTest {
         assertEquals(100L, event["oldTransaction"])
         assertEquals(101L, event["newTransaction"])
         assertEquals(5, event["deleteSlices"])
-        assertEquals(12, event["cursorRemaining"])
-        assertEquals(0, event["minSliceRemaining"])
-        assertEquals(50, event["maxSliceRemaining"])
+        assertEquals(0.12f, event["cursorRemaining"])
+        assertEquals(0f, event["minSliceRemaining"])
+        assertEquals(0.5f, event["maxSliceRemaining"])
         assertNotNull(event["ts"])
     }
 
@@ -582,14 +582,127 @@ class DiagnosticsEventsNewEventsTest {
             oldTransactionId = 1L,
             newTransactionId = 2L,
             deleteSlices = 0,
-            cursorRemaining = 10,
-            minSliceRemaining = 0,
-            maxSliceRemaining = 10,
+            cursorRemaining = 0.1f,
+            minSliceRemaining = 0f,
+            maxSliceRemaining = 0.1f,
         )
         val event = EditorEventRingBuffer.getSnapshot()[0]
         assertNull(event["text"])
         assertNull(event["content"])
         assertNull(event["body"])
+    }
+}
+
+/**
+ * Issue #638：真实 DiagnosticsLogger → PersistentLogWriter 持久链路最小测试。
+ *
+ * 验证 viewportRetarget 事件经 DiagnosticsEvents.record → DiagnosticsLogger.i
+ * → PersistentLogWriter.enqueue 完整链路落盘，且日志文件不含正文内容。
+ * 不记正文、glyph、preedit；只记录事件类型、transaction/起止 Y/最大 Y/原因。
+ */
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [34])
+class DiagnosticsPersistenceChainTest {
+    private lateinit var context: android.content.Context
+
+    @org.junit.Before
+    fun setUp() {
+        context = androidx.test.core.app.ApplicationProvider.getApplicationContext()
+        com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer.setEnabled(true)
+        com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer.clear()
+        com.xiwei.sujian.core.diagnostics.DiagnosticsLogger.init(context, isEnabled = true, isVerbose = false)
+        com.xiwei.sujian.core.diagnostics.PersistentLogWriter.flushBlocking()
+        com.xiwei.sujian.core.diagnostics.PersistentLogWriter.clearLogs()
+    }
+
+    @org.junit.After
+    fun tearDown() {
+        com.xiwei.sujian.core.diagnostics.PersistentLogWriter.flushBlocking()
+        com.xiwei.sujian.core.diagnostics.PersistentLogWriter.clearLogs()
+        com.xiwei.sujian.core.diagnostics.PersistentLogWriter.setEnabled(false)
+        com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer.setEnabled(false)
+    }
+
+    @Test
+    fun viewportRetargetEventPersistsToLogFile() {
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.viewportRetarget(
+            transactionId = 12345L,
+            fromY = 100.5f,
+            toY = 500.0f,
+            maxY = 2000.0f,
+            reason = "ensureRectVisible",
+        )
+        val flushed = com.xiwei.sujian.core.diagnostics.PersistentLogWriter.flushBlocking()
+        org.junit.Assert.assertTrue("flushBlocking must return true", flushed)
+
+        val logFiles = com.xiwei.sujian.core.diagnostics.PersistentLogWriter.getLogFiles()
+        org.junit.Assert.assertTrue("must have at least one log file", logFiles.isNotEmpty())
+
+        val content = logFiles[0].readText(Charsets.UTF_8)
+        org.junit.Assert.assertTrue(
+            "log file must contain viewport_retarget event",
+            content.contains("editor.viewport_retarget"),
+        )
+        org.junit.Assert.assertTrue(
+            "log file must contain transaction=12345",
+            content.contains("transaction=12345"),
+        )
+        org.junit.Assert.assertTrue(
+            "log file must contain fromY=100.5",
+            content.contains("fromY=100.5"),
+        )
+        org.junit.Assert.assertFalse(
+            "log file must NOT contain any content field",
+            content.contains("content="),
+        )
+        org.junit.Assert.assertFalse(
+            "log file must NOT contain any text field",
+            content.contains("text="),
+        )
+        org.junit.Assert.assertFalse(
+            "log file must NOT contain body field",
+            content.contains("body="),
+        )
+    }
+
+    @Test
+    fun viewportRetargetWithNullTransactionIdPersistsWithoutTransactionField() {
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.viewportRetarget(
+            transactionId = null,
+            fromY = 0f,
+            toY = 100f,
+            maxY = 500f,
+            reason = "scroll",
+        )
+        val flushed = com.xiwei.sujian.core.diagnostics.PersistentLogWriter.flushBlocking()
+        org.junit.Assert.assertTrue(flushed)
+
+        val logFiles = com.xiwei.sujian.core.diagnostics.PersistentLogWriter.getLogFiles()
+        val content = logFiles[0].readText(Charsets.UTF_8)
+        org.junit.Assert.assertTrue(content.contains("editor.viewport_retarget"))
+        org.junit.Assert.assertTrue(content.contains("transaction=null"))
+    }
+
+    @Test
+    fun animationRebaseStatePersistsRemainingFractionAsFloat() {
+        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.animationRebaseState(
+            oldTransactionId = 100L,
+            newTransactionId = 101L,
+            deleteSlices = 3,
+            cursorRemaining = 0.75f,
+            minSliceRemaining = 0.25f,
+            maxSliceRemaining = 0.75f,
+        )
+        val flushed = com.xiwei.sujian.core.diagnostics.PersistentLogWriter.flushBlocking()
+        org.junit.Assert.assertTrue(flushed)
+
+        val logFiles = com.xiwei.sujian.core.diagnostics.PersistentLogWriter.getLogFiles()
+        val content = logFiles[0].readText(Charsets.UTF_8)
+        org.junit.Assert.assertTrue(content.contains("editor.animation_rebase_state"))
+        org.junit.Assert.assertTrue(content.contains("cursorRemaining=0.75"))
+        org.junit.Assert.assertTrue(content.contains("minSliceRemaining=0.25"))
+        org.junit.Assert.assertTrue(content.contains("maxSliceRemaining=0.75"))
+        org.junit.Assert.assertFalse(content.contains("content="))
     }
 }
 

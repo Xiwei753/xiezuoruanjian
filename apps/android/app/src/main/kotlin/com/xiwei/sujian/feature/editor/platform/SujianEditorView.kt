@@ -380,39 +380,17 @@ class SujianEditorView
 
             // #638：只在一次视觉事务首次导致 scroll target 改变时记录 viewportRetarget，
             // 按 transactionId 去重，绝不能每帧刷。
-            // API 前置：origin/fix/issue-638-diagnostics 合入后可调用
-            // DiagnosticsEvents.viewportRetarget。
-            // Sibling integration prerequisite：本分支 standalone 编译时该 API 不存在，
-            // 用反射守卫，合入 sibling 后自动生效。
             if (viewport.scrollY != oldScrollY) {
                 val txId = pipeline.getCurrentTransactionId()
                 if (txId != null && txId != lastRetargetTransactionId) {
                     lastRetargetTransactionId = txId
-                    val maxY = viewport.maxScrollY
-                    try {
-                        val cls = Class.forName(
-                            "com.xiwei.sujian.core.diagnostics.DiagnosticsEvents",
-                        )
-                        val method = cls.getDeclaredMethod(
-                            "viewportRetarget",
-                            Long::class.javaPrimitiveType,
-                            Float::class.javaPrimitiveType,
-                            Float::class.javaPrimitiveType,
-                            Float::class.javaPrimitiveType,
-                            String::class.java,
-                        )
-                        val instance = cls.getDeclaredField("INSTANCE").get(null)
-                        method.invoke(
-                            instance,
-                            txId,
-                            oldScrollY,
-                            viewport.scrollY,
-                            maxY,
-                            "ensureRectVisible",
-                        )
-                    } catch (_: Exception) {
-                        // sibling API not yet merged — no-op
-                    }
+                    com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.viewportRetarget(
+                        transactionId = txId,
+                        fromY = oldScrollY,
+                        toY = viewport.scrollY,
+                        maxY = viewport.maxScrollY,
+                        reason = "ensureRectVisible",
+                    )
                 }
             }
         }

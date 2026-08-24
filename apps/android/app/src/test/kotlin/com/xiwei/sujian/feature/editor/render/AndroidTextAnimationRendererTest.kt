@@ -202,8 +202,8 @@ class AndroidTextAnimationRendererTest {
     // #638: computeStaticSuppressionRegions 测试 — 验证 Delete SWALLOW 按当前帧可见区域 suppress
 
     /**
-     * 旧逻辑：computeAnimatedSliceRegions 完全排除 Delete，导致双绘。
-     * 新逻辑：computeStaticSuppressionRegions(progress) 应包含 Delete SWALLOW 在 progress=0 时的完整区域。
+     * #638：computeStaticSuppressionRegions(progress) 应包含 Delete SWALLOW
+     * 在 progress=0 时的完整区域。旧实现完全排除 Delete 导致双绘，已删除。
      */
     @Test
     fun computeStaticSuppressionRegions_includesDeleteSwallowAtProgressZero() {
@@ -240,11 +240,7 @@ class AndroidTextAnimationRendererTest {
             durationMs = 300L
         )
 
-        // 旧逻辑：computeAnimatedSliceRegions 会跳过 Delete，返回空列表
-        val oldRegions = renderer.computeAnimatedSliceRegions(transaction)
-        assertTrue("旧逻辑应排除 Delete，返回空列表", oldRegions.isEmpty())
-
-        // 新逻辑：computeStaticSuppressionRegions(0f) 应返回完整 destination
+        // computeStaticSuppressionRegions(0f) 应返回完整 destination
         val newRegions = renderer.computeStaticSuppressionRegions(transaction, 0f)
         assertEquals("progress=0 时应 suppress 完整 Delete 区域", 1, newRegions.size)
         assertEquals(100f, newRegions[0].left, eps)
