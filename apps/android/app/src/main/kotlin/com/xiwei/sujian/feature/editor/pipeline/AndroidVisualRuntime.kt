@@ -128,6 +128,42 @@ class AndroidVisualRuntime(
 
     fun isAnimationPaused(): Boolean = animationEngine.isPaused()
 
+    /**
+     * #638：获取当前帧的视觉光标 Rect。
+     *
+     * 委托给 [AndroidTextAnimationEngine.currentVisualCursorRect]，
+     * 无活跃事务/光标未动画时返回 null（表示应使用静态光标）。
+     */
+    fun currentVisualCursorRect(frameTimeMs: Long): android.graphics.RectF? =
+        animationEngine.currentVisualCursorRect(frameTimeMs)
+
+    /**
+     * #638：获取当前活跃事务 ID。
+     *
+     * 无活跃事务时返回 null。供 viewportRetarget 调用方按 transactionId 去重，
+     * 避免每帧重复记录。API 前置：origin/fix/issue-638-diagnostics 合入后
+     * 可调用 DiagnosticsEvents.viewportRetarget。
+     */
+    fun getCurrentTransactionId(): Long? =
+        animationEngine.getActiveTransaction()?.transactionId
+
+    /**
+     * #638：获取静态光标矩形。
+     *
+     * 查询当前 layout 和光标位置，生成静态光标矩形。
+     * 无活跃事务/光标未动画时回退到此静态位置。
+     */
+    fun getStaticCursorRect(
+        layout: android.text.Layout,
+        cursorUtf16: Int,
+    ): android.graphics.RectF? {
+        if (cursorUtf16 < 0 || cursorUtf16 > layout.text.length) return null
+        val line = layout.getLineForOffset(cursorUtf16)
+        val lineTop = layout.getLineTop(line).toFloat()
+        val lineBottom = layout.getLineBottom(line).toFloat()
+        return android.graphics.RectF(0f, lineTop, 2f, lineBottom)
+    }
+
     fun tick(
         frameTimeMs: Long,
         layout: android.text.Layout?,

@@ -62,6 +62,11 @@ class SujianEditorView
         private val viewport = EditorViewportController()
         private var scrollInteractionActive: Boolean = false
 
+        // #638：按 transactionId 去重 viewportRetarget 记录，绝不能每帧刷。
+        // API 前置：origin/fix/issue-638-diagnostics 合入后可调用
+        // DiagnosticsEvents.viewportRetarget。
+        private var lastRetargetTransactionId: Long? = null
+
         fun getScrollXPos(): Float = viewport.scrollX
 
         fun getScrollYPos(): Float = viewport.scrollY
@@ -190,14 +195,29 @@ class SujianEditorView
         ) {
             when (output) {
                 is PipelineOutput.Edited -> {
-                    updateMaxScroll()
-                    // #633 评论 5380870691：正文输入/删除（displayPatches 非空）后，
-                    // 只有光标出可视区时才做最小 scrollToSelection()，不恢复旧 anchor。
-                    // selection-only / no-change（displayPatches 空）只 clamp 旧 scrollY。
-                    if (output.result.displayPatches.isNotEmpty()) {
-                        ensureSelectionVisible()
+                    // #638：有视觉事务时仅更新最终 max scroll，不立即夹取。
+                    // 动画进行中 scrollY 可能暂时超出新范围，等动画完成/onFrame 再最终 clamp。
+                    val hasVisualAnimation = pipeline.hasActiveAnimation()
+                    val layoutOverflow = pipeline.getLayoutMaxScrollY(height)
+                    val maxScroll = if (layoutOverflow > 0f) {
+                        layoutOverflow + paddingTop + paddingBottom
                     } else {
-                        viewport.clamp()
+                        0f
+                    }
+                    if (hasVisualAnimation) {
+                        // 有活动视觉事务：只更新 max scroll 不夹取，onFrame 用视觉光标处理可见性。
+                        viewport.updateMaxScroll(maxScroll, clampNow = false)
+                    } else {
+                        // 无活动视觉事务：static ensure + final clamp。
+                        viewport.updateMaxScroll(maxScroll, clampNow = true)
+                        // #633 评论 5380870691：正文输入/删除（displayPatches 非空）后，
+                        // 只有光标出可视区时才做最小 scrollToSelection()，不恢复旧 anchor。
+                        // selection-only / no-change（displayPatches 空）只 clamp 旧 scrollY。
+                        if (output.result.displayPatches.isNotEmpty()) {
+                            ensureSelectionVisible()
+                        } else {
+                            viewport.clamp()
+                        }
                     }
                     if (!suppressContentCallback &&
                         (output.result.isApplied() || output.result.isNoChange())
@@ -333,24 +353,68 @@ class SujianEditorView
         // 做最小滚动，不负责 invalidate()，不 capture/restore anchor，不触发 reflow。
         // 宽度/字号/行距变化继续走 reflowPreservingViewport()，纯高度变化继续只
         // updateMaxScroll + clamp。
+        // #638：只用 pipeline.getStaticCursorRect()，视觉光标在 onFrame 中处理。
         private fun ensureSelectionVisible() {
-            val cursorUtf16 = pipeline.getDisplayCursorUtf16()
-            val layoutTextLen = pipeline.getLengthUtf16()
-            if (cursorUtf16 < 0 || cursorUtf16 > layoutTextLen) return
+            val staticCursorRect = pipeline.getStaticCursorRect()
+            if (staticCursorRect != null) {
+                ensureRectVisible(staticCursorRect)
+            }
+        }
 
-            val line = pipeline.getLayoutLineForOffset(cursorUtf16)
-            val lineTop = pipeline.getLayoutLineTop(line).toFloat()
-            val lineBottom = pipeline.getLayoutLineBottom(line).toFloat()
+        /**
+         * #638：通用 ensureRectVisible — 用给定 Rect 判断是否滚入可视区。
+         * 视觉光标和静态光标共用此逻辑。
+         */
+        private fun ensureRectVisible(rect: android.graphics.RectF) {
             val viewHeight = height.toFloat()
             val contentTop = viewport.scrollY - paddingTop
             val contentBottom = contentTop + viewHeight
+            val oldScrollY = viewport.scrollY
 
-            if (lineTop < contentTop) {
-                viewport.setScrollYUnclamped(lineTop + paddingTop)
-            } else if (lineBottom > contentBottom) {
-                viewport.setScrollYUnclamped(lineBottom - viewHeight + paddingTop)
+            if (rect.top < contentTop) {
+                viewport.setScrollYUnclamped(rect.top + paddingTop)
+            } else if (rect.bottom > contentBottom) {
+                viewport.setScrollYUnclamped(rect.bottom - viewHeight + paddingTop)
             }
             viewport.clamp()
+
+            // #638：只在一次视觉事务首次导致 scroll target 改变时记录 viewportRetarget，
+            // 按 transactionId 去重，绝不能每帧刷。
+            // API 前置：origin/fix/issue-638-diagnostics 合入后可调用
+            // DiagnosticsEvents.viewportRetarget。
+            // Sibling integration prerequisite：本分支 standalone 编译时该 API 不存在，
+            // 用反射守卫，合入 sibling 后自动生效。
+            if (viewport.scrollY != oldScrollY) {
+                val txId = pipeline.getCurrentTransactionId()
+                if (txId != null && txId != lastRetargetTransactionId) {
+                    lastRetargetTransactionId = txId
+                    val maxY = viewport.maxScrollY
+                    try {
+                        val cls = Class.forName(
+                            "com.xiwei.sujian.core.diagnostics.DiagnosticsEvents",
+                        )
+                        val method = cls.getDeclaredMethod(
+                            "viewportRetarget",
+                            Long::class.javaPrimitiveType,
+                            Float::class.javaPrimitiveType,
+                            Float::class.javaPrimitiveType,
+                            Float::class.javaPrimitiveType,
+                            String::class.java,
+                        )
+                        val instance = cls.getDeclaredField("INSTANCE").get(null)
+                        method.invoke(
+                            instance,
+                            txId,
+                            oldScrollY,
+                            viewport.scrollY,
+                            maxY,
+                            "ensureRectVisible",
+                        )
+                    } catch (_: Exception) {
+                        // sibling API not yet merged — no-op
+                    }
+                }
+            }
         }
 
         fun scrollToSelection() {
@@ -621,7 +685,15 @@ class SujianEditorView
             // repeats these transitions idempotently, so the animation state does not depend
             // on when the invalidate-driven draw is actually delivered (a delayed vsync must
             // not re-anchor or postpone completion of the animation).
-            pipeline.onFrameTick(frameTimeNanos / 1_000_000)
+            val frameTimeMs = frameTimeNanos / 1_000_000
+            pipeline.onFrameTick(frameTimeMs)
+            // #638：同一 frame time 取 pipeline visual cursor Rect，经通用 ensureRectVisible
+            // 判断可见性。视觉事务进行中用视觉光标，完成后回退到静态光标。
+            // 不要在 View 插值。
+            val visualRect = pipeline.getVisualCursorRect(frameTimeMs) ?: pipeline.getStaticCursorRect()
+            if (visualRect != null) {
+                ensureRectVisible(visualRect)
+            }
             invalidate()
         }
 
