@@ -93,7 +93,27 @@ data class PreparedVisualTransaction(
          *  rebase continuation 时 end = 1 - consumedFraction，让光标已走部分
          *  不重新计时，与文字 slice 保持同一运动速度。 */
         val progressWindow: VisualProgressWindow = VisualProgressWindow.Full,
-    )
+    ) {
+        /**
+         * #637 评论 5389230907：给定全局事务 [globalProgress]，返回当前光标 RectF。
+         *
+         * 单一事实来源 — renderer (`AndroidTextAnimationRenderer.drawAnimatedCursor`)
+         * 和 engine (`AndroidTextAnimationEngine.computeCurrentCursorRect`) 都调用
+         * 这个 helper，避免两边各维护一份插值公式导致 rebase 后 progressWindow
+         * 不一致（renderer 用 localProgress 画在 0.5 处，engine 却用全局 progress=0.2
+         * 记成更靠后的位置，下一次 rebase 光标回跳）。
+         *
+         * 几何：先 [VisualProgressWindow.map] 得到 localProgress，再线性插值
+         * X/Y/height；宽度固定 2px（视觉光标条宽，不来自布局）。
+         */
+        fun rectAt(globalProgress: Float): android.graphics.RectF {
+            val localProgress = progressWindow.map(globalProgress)
+            val currentX = fromX + (toX - fromX) * localProgress
+            val currentY = fromY + (toY - fromY) * localProgress
+            val currentHeight = fromHeight + (toHeight - fromHeight) * localProgress
+            return android.graphics.RectF(currentX, currentY, currentX + 2f, currentY + currentHeight)
+        }
+    }
 
     /**
      * Block-level vertical shift for a contiguous range of paragraphs after the edit

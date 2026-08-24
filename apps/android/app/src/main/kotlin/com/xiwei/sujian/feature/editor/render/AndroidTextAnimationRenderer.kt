@@ -155,6 +155,10 @@ class AndroidTextAnimationRenderer {
      *
      * #637 评论 5386066978 项2：先映射 [transition.progressWindow] 再插值，
      * rebase continuation 时光标已走部分不重新计时。
+     *
+     * #637 评论 5389230907：几何计算调用 [CursorTransition.rectAt] — 与
+     * [AndroidTextAnimationEngine.computeCurrentCursorRect] 共用同一份实现，
+     * 不会再次漂移。
      */
     fun drawAnimatedCursor(
         canvas: Canvas,
@@ -164,12 +168,8 @@ class AndroidTextAnimationRenderer {
     ) {
         if (!transition.shouldAnimate) return
 
-        val localProgress = transition.progressWindow.map(progress)
-        val currentX = transition.fromX + (transition.toX - transition.fromX) * localProgress
-        val currentY = transition.fromY + (transition.toY - transition.fromY) * localProgress
-        val currentHeight = transition.fromHeight + (transition.toHeight - transition.fromHeight) * localProgress
-
-        canvas.drawRect(currentX, currentY, currentX + 2f, currentY + currentHeight, cursorPaint)
+        val rect = transition.rectAt(progress)
+        canvas.drawRect(rect.left, rect.top, rect.right, rect.bottom, cursorPaint)
     }
 
     /**

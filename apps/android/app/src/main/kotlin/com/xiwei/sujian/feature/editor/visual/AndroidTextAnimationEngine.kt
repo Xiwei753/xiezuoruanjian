@@ -486,12 +486,19 @@ class AndroidTextAnimationEngine(
             val sliceStates = computeSliceVisualStates(transaction, 0f)
             val cursorRect = computeCurrentCursorRect(transaction, 0f)
             val blockStates = computeBlockShiftVisualStates(transaction, 0f)
+            // #637 评论 5389230907：Pending 分支不能写死 1f。若本事务本身就是上一次
+            // rebase 的 continuation（cursor window 已经是 [0, 0.4]），在第一帧真正
+            // 画出来之前再次 rebase 时，必须仍剩 0.4，不能恢复成 Full。slice 和
+            // BlockShift 在 Pending 分支已通过 compute...(transaction, 0f) 保留自己的
+            // window，cursor 也用 remainingFractionAt(0f) 保持一致。
+            val cursorRemainingFraction =
+                transaction.cursorTransition?.progressWindow?.remainingFractionAt(0f) ?: 1f
             return VisualFrameSnapshot(
                 progress = 0f,
                 state = TransactionState.Pending,
                 sliceVisualStates = sliceStates,
                 cursorRect = cursorRect,
-                cursorRemainingFraction = 1f,
+                cursorRemainingFraction = cursorRemainingFraction,
                 blockShiftStates = blockStates,
             )
         }
@@ -769,7 +776,13 @@ class AndroidTextAnimationEngine(
 
     /**
      * Interpolate the cursor rectangle from [CursorTransition] at [progress].
-     * Width is hardcoded to 2px (visual cursor bar width, not derived from layout).
+     *
+     * #637 评论 5389230907：必须与 renderer 使用同一份几何计算 — 调用
+     * [CursorTransition.rectAt]，先 [VisualProgressWindow.map] 得到 localProgress
+     * 再插值。旧实现直接用全局 progress 插值，在 rebase continuation
+     * （progressWindow=[0,0.4]）时与本事务 progress=0.2 对应的 renderer
+     * localProgress=0.5 不一致，captureFrame 记成更靠后的位置，下一次 rebase
+     * 光标回跳。
      */
     private fun computeCurrentCursorRect(
         transaction: PreparedVisualTransaction,
@@ -777,10 +790,7 @@ class AndroidTextAnimationEngine(
     ): android.graphics.RectF? {
         val ct = transaction.cursorTransition ?: return null
         if (!ct.shouldAnimate) return null
-        val currentX = ct.fromX + (ct.toX - ct.fromX) * progress
-        val currentY = ct.fromY + (ct.toY - ct.fromY) * progress
-        val currentHeight = ct.fromHeight + (ct.toHeight - ct.fromHeight) * progress
-        return android.graphics.RectF(currentX, currentY, currentX + 2f, currentY + currentHeight)
+        return ct.rectAt(progress)
     }
 
     /**
