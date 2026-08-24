@@ -95,7 +95,8 @@ class AndroidRenderRuntime(
                 frame.blockShifts,
                 frame.progress,
             )
-            val animatedRegions = animationRenderer.computeAnimatedSliceRegions(transaction)
+            // #638: 用 computeStaticSuppressionRegions 传入 progress，让 Delete SWALLOW 按当前帧可见区域 suppress
+            val animatedRegions = animationRenderer.computeStaticSuppressionRegions(transaction, frame.progress)
             textRenderer.drawStaticTextWithHoles(canvas, layout, animatedRegions, frame.blockShifts, frame.progress)
             animationRenderer.drawAnimatedSlices(canvas, transaction, frame.progress)
             textRenderer.drawPreeditUnderline(

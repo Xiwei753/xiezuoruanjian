@@ -195,6 +195,7 @@ class AndroidTextAnimationRenderer {
      * axis-aligned bounding rect would cover nearly two full lines, erasing non-animated
      * text in between during the animation. Each position must remain an independent hole.
      */
+    @Deprecated("Use computeStaticSuppressionRegions with progress for Delete SWALLOW support", ReplaceWith("computeStaticSuppressionRegions(transaction, progress)"))
     fun computeAnimatedSliceRegions(transaction: PreparedVisualTransaction): List<android.graphics.RectF> {
         val regions = mutableListOf<android.graphics.RectF>()
         for (slice in transaction.animatedSlices) {
@@ -202,6 +203,50 @@ class AndroidTextAnimationRenderer {
             val srcRect = slice.sourceRect
             if (srcRect.width() <= 0 || srcRect.height() <= 0) continue
             regions.add(android.graphics.RectF(slice.destinationRect))
+        }
+        return regions
+    }
+
+    /**
+     * #638: Compute static suppression regions for hole-punching at [progress].
+     *
+     * Replaces [computeAnimatedSliceRegions] to handle Delete SWALLOW correctly:
+     * - Insert/Move/CrossfadeNew/Static: suppress [slice.destinationRect] (new-layout content).
+     * - CrossfadeOld: alpha-mixed, NOT suppressed (no hole).
+     * - Delete + SWALLOW: suppress only the currently visible portion via
+     *   [computeRevealClipRect]. The destination is the old position; new layout text
+     *   may have shifted there, so we only hide pixels the Delete slice still occupies.
+     *
+     * This ensures the same pixel is never double-rendered in the same frame:
+     * static text with holes renders the new layout minus suppressed regions, then
+     * animated slices draw on top. For Delete SWALLOW, the visible shrink-away region
+     * is suppressed from the static draw, so the old snapshot doesn't overlap new text.
+     */
+    fun computeStaticSuppressionRegions(
+        transaction: PreparedVisualTransaction,
+        progress: Float,
+    ): List<android.graphics.RectF> {
+        val regions = mutableListOf<android.graphics.RectF>()
+        for (slice in transaction.animatedSlices) {
+            val srcRect = slice.sourceRect
+            if (srcRect.width() <= 0 || srcRect.height() <= 0) continue
+
+            when (slice.role) {
+                SliceRole.Insert, SliceRole.Move, SliceRole.CrossfadeNew, SliceRole.Static -> {
+                    regions.add(android.graphics.RectF(slice.destinationRect))
+                }
+                SliceRole.Delete -> {
+                    val revealSpec = slice.revealSpec ?: continue
+                    val localProgress = slice.progressWindow.map(progress)
+                    val clipRect = computeRevealClipRect(slice.destinationRect, revealSpec, localProgress)
+                    if (clipRect != null) {
+                        regions.add(clipRect)
+                    }
+                }
+                SliceRole.CrossfadeOld -> {
+                    // CrossfadeOld uses alpha blending over the new layout — no hole.
+                }
+            }
         }
         return regions
     }
