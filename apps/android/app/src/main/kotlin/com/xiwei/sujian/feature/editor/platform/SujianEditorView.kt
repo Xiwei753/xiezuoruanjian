@@ -98,7 +98,7 @@ class SujianEditorView
                 // #638 评论 5411376945：composition 视觉更新走与普通编辑同一视口同步入口，
                 // 不再绕过 beginViewportVisualTransition 直接 updateMaxScroll/ensureSelectionVisible。
                 // composition 已有 active animation 时，统一入口会让 viewport 作为视觉事务一部分过渡。
-                syncViewportAfterVisualMutation(contentChanged = true)
+                syncViewportAfterVisualMutation(ensureCursorVisible = true)
                 invalidate()
             }
             id = R.id.editor_content
@@ -190,7 +190,7 @@ class SujianEditorView
                     // #638 评论 5411376945：普通编辑走统一视口同步入口，
                     // 不再各自维护一份 viewport 后处理。
                     val contentChanged = output.result.displayPatches.isNotEmpty()
-                    syncViewportAfterVisualMutation(contentChanged)
+                    syncViewportAfterVisualMutation(ensureCursorVisible = contentChanged)
                     if (!suppressContentCallback &&
                         (output.result.isApplied() || output.result.isNoChange())
                     ) {
@@ -257,6 +257,9 @@ class SujianEditorView
                         "cursor=${pipeline.getCursorUtf8()}",
                 )
                 updateLayoutConfig()
+                // #638 评论 5412016997：reload 成功后不能只 updateMaxScroll + clamp —
+                // 最终静态 cursor 可能已在可视区外，落一次 ensureSelectionVisible。
+                ensureSelectionVisible()
                 // #624 评论11 第1项：reloadFromKernel 只是 Android mirror 与同一个 Rust
                 // session 重新对齐，不是一次正文编辑 — 不得伪造整章插入 delta。
                 // 事件必须是 contentChanged=false + 空 contentDelta + cause=LOAD：
@@ -355,10 +358,12 @@ class SujianEditorView
          *
          * - 有活动视觉事务：viewport 作为视觉事务一部分连续过渡（beginViewportVisualTransition），
          *   并请求下一帧推进。
-         * - 无活动视觉事务：静态夹取 maxScrollY；contentChanged=true 时做最小 ensureSelectionVisible，
-         *   contentChanged=false 时只 clamp 旧 scrollY。
+         * - 无活动视觉事务：静态夹取 maxScrollY；ensureCursorVisible=true 时做最小 ensureSelectionVisible，
+         *   ensureCursorVisible=false 时只 clamp 旧 scrollY。
+         * #638 评论 5412016997：参数语义收正 — ensureCursorVisible 不再兼任"正文是否改过"，
+         * 只表示静态分支是否需要把最终静态光标落回可视区。
          */
-        private fun syncViewportAfterVisualMutation(contentChanged: Boolean) {
+        private fun syncViewportAfterVisualMutation(ensureCursorVisible: Boolean) {
             val layoutOverflow = pipeline.getLayoutMaxScrollY(height)
             val maxScroll =
                 if (layoutOverflow > 0f) {
@@ -372,7 +377,11 @@ class SujianEditorView
                 requestAnimationFrame()
             } else {
                 viewport.updateMaxScroll(maxScroll, clampNow = true)
-                if (contentChanged) ensureSelectionVisible() else viewport.clamp()
+                if (ensureCursorVisible) {
+                    ensureSelectionVisible()
+                } else {
+                    viewport.clamp()
+                }
             }
         }
 
@@ -1036,7 +1045,9 @@ class SujianEditorView
                 // #638 评论 5411376945：engine 从 Active 直接变 Idle，同步取消视口过渡，
                 // 再走一次静态 viewport 同步把 maxScrollY 和 scrollY 落到合法位置。
                 viewport.cancelVisualTransition()
-                syncViewportAfterVisualMutation(contentChanged = false)
+                // #638 评论 5412016997：cancel 后切静态不能只 clamp — viewport 可能停在过渡中间，
+                // 最终静态 cursor 可能已在可视区外。传 ensureCursorVisible=true 落一次静态光标。
+                syncViewportAfterVisualMutation(ensureCursorVisible = true)
                 invalidate()
             }
             // #595 四: 不在此切换 kernel animation_enabled — 它在 Rust 同时控制文字动画模式
@@ -1249,7 +1260,12 @@ class SujianEditorView
             kernelBridge = sessionBridge
             currentProfile = profile
             pipeline.attachSnapshot(text, revision, cursorUtf8, selStartUtf8, selEndUtf8)
+            // #638 评论 5412016997：attachSnapshot 内部 resetAfterLoad() 会 cancel engine（visualRuntime.cancel()），
+            // 但 viewport.visualTransition 仍残留 — 同一 session 外部内容重置后下一笔输入会把已死亡的旧
+            // transition 当成连续 rebase。这里同步取消视口过渡，再落一次静态 cursor。
+            viewport.cancelVisualTransition()
             updateLayoutConfig()
+            ensureSelectionVisible()
             invalidate()
         }
 
