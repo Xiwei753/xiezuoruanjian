@@ -322,15 +322,15 @@ class VisualCursorViewportTest {
         viewport.beginOrRebaseVisualTransition(transactionId = 1L, targetScrollY = 800f)
 
         // progress=0：scrollY 应为 1000（起点）
-        viewport.applyVisualFrame(0f)
+        viewport.applyVisualFrame(transactionId = 1L, 0f)
         assertEquals("progress=0 scrollY 应为 1000（起点）", 1000.0, viewport.scrollY.toDouble(), 0.001)
 
         // progress=0.5：scrollY 应约为 900（线性插值）
-        viewport.applyVisualFrame(0.5f)
+        viewport.applyVisualFrame(transactionId = 1L, 0.5f)
         assertEquals("progress=0.5 scrollY 应约为 900", 900.0, viewport.scrollY.toDouble(), 0.001)
 
         // progress=1：scrollY 应为 800（终点）
-        viewport.applyVisualFrame(1f)
+        viewport.applyVisualFrame(transactionId = 1L, 1f)
         assertEquals("progress=1 scrollY 应为 800（终点）", 800.0, viewport.scrollY.toDouble(), 0.001)
 
         // 事务完成收尾过渡
@@ -359,14 +359,14 @@ class VisualCursorViewportTest {
         // 第一笔事务：fromScrollY=1000, toScrollY=800
         viewport.beginOrRebaseVisualTransition(transactionId = 1L, targetScrollY = 800f)
         // 走到一半：scrollY=900, lastRemainingFraction=0.5
-        viewport.applyVisualFrame(0.5f)
+        viewport.applyVisualFrame(transactionId = 1L, 0.5f)
         assertEquals("第一笔事务 progress=0.5 scrollY 应为 900", 900.0, viewport.scrollY.toDouble(), 0.001)
         val scrollYAtHandoff = viewport.scrollY
 
         // 新事务接管（连续 rebase）：fromScrollY 应为当前 scrollY（900），不跳回旧起点 1000
         viewport.beginOrRebaseVisualTransition(transactionId = 2L, targetScrollY = 800f)
         // 新事务第一帧（progress=0）：scrollY 应从当前 scrollY 继续（900），不跳回 1000
-        viewport.applyVisualFrame(0f)
+        viewport.applyVisualFrame(transactionId = 2L, 0f)
         assertEquals(
             "连续 rebase 新事务第一帧 scrollY 应从当前 scrollY 继续（$scrollYAtHandoff），不跳回旧起点 1000",
             scrollYAtHandoff.toDouble(),
@@ -376,9 +376,63 @@ class VisualCursorViewportTest {
 
         // 新事务用 fromRemainingFraction(0.5) 构造 progressWindow=[0, 0.5]，
         // 剩余路程在 progress=0.5 内完成（不拉满完整时长）。
-        // applyVisualFrame(0.5f) → local = map(0.5) = 1f → scrollY = 800
-        viewport.applyVisualFrame(0.5f)
+        // applyVisualFrame(transactionId = 2L, 0.5f) → local = map(0.5) = 1f → scrollY = 800
+        viewport.applyVisualFrame(transactionId = 2L, 0.5f)
         assertEquals("连续 rebase 剩余路程在 progress=0.5 内完成，scrollY 应为 800", 800.0, viewport.scrollY.toDouble(), 0.001)
+    }
+
+    /**
+     * #638 评论 5411376945：cancelVisualTransition 清掉视觉过渡状态，
+     * 后续 applyVisualFrame 是 no-op（scrollY 保留当前值，不落到 toScrollY）。
+     *
+     * 与 endVisualTransition 的区别：end 是事务正常跑到终点（scrollY 落到 toScrollY），
+     * cancel 是事务被外部取消（scrollY 保留当前值，由调用方后续静态同步夹到合法范围）。
+     */
+    @Test
+    fun cancelVisualTransition_clearsTransition_makesApplyVisualFrameNoOp() {
+        val viewport = getViewportController()
+        setMaxScrollY(viewport, 1200f)
+        viewport.setScroll(x = 0f, y = 1000f)
+        viewport.updateMaxScroll(max = 800f, clampNow = false)
+
+        // 建立视口视觉过渡：fromScrollY=1000, toScrollY=800
+        viewport.beginOrRebaseVisualTransition(transactionId = 1L, targetScrollY = 800f)
+        // 走到一半：scrollY=900
+        viewport.applyVisualFrame(transactionId = 1L, 0.5f)
+        assertEquals("cancel 前 progress=0.5 scrollY 应为 900", 900.0, viewport.scrollY.toDouble(), 0.001)
+        assertEquals("cancel 前 hasVisualTransition 应为 true", true, viewport.hasVisualTransition())
+
+        // 取消视口过渡 — scrollY 保留当前值（900），不落到 toScrollY
+        viewport.cancelVisualTransition()
+        assertEquals("cancelVisualTransition 后 scrollY 应保留当前值 900", 900.0, viewport.scrollY.toDouble(), 0.001)
+        assertEquals("cancel 后 hasVisualTransition 应为 false", false, viewport.hasVisualTransition())
+
+        // 后续 applyVisualFrame 是 no-op（无活跃过渡），scrollY 仍为 900
+        viewport.applyVisualFrame(transactionId = 1L, 1f)
+        assertEquals("cancel 后 applyVisualFrame 应为 no-op，scrollY 仍为 900", 900.0, viewport.scrollY.toDouble(), 0.001)
+    }
+
+    /**
+     * #638 评论 5411376945：applyVisualFrame 传入不匹配的 transactionId 时不推进 scrollY，
+     * 避免生命周期漏洞让旧 viewport transition 吃到新事务的 progress。
+     */
+    @Test
+    fun applyVisualFrame_ignoresMismatchedTransactionId() {
+        val viewport = getViewportController()
+        setMaxScrollY(viewport, 1200f)
+        viewport.setScroll(x = 0f, y = 1000f)
+        viewport.updateMaxScroll(max = 800f, clampNow = false)
+
+        // 建立视口视觉过渡：transactionId=1, fromScrollY=1000, toScrollY=800
+        viewport.beginOrRebaseVisualTransition(transactionId = 1L, targetScrollY = 800f)
+
+        // 传入不匹配的 transactionId=2 — 应为 no-op，scrollY 仍为 1000
+        viewport.applyVisualFrame(transactionId = 2L, 0.5f)
+        assertEquals("不匹配的 transactionId 应为 no-op，scrollY 仍为 1000", 1000.0, viewport.scrollY.toDouble(), 0.001)
+
+        // 传入匹配的 transactionId=1 — 正常推进到 900
+        viewport.applyVisualFrame(transactionId = 1L, 0.5f)
+        assertEquals("匹配的 transactionId 应正常推进，scrollY 应为 900", 900.0, viewport.scrollY.toDouble(), 0.001)
     }
 
     // ── Helpers ──

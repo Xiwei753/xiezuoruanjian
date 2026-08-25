@@ -167,14 +167,20 @@ internal class EditorViewportController {
     }
 
     /**
-     * #638 评论 5403756824：用当前帧的全局事务 progress 推进视口 scrollY。
+     * #638 评论 5411376945：用当前帧的全局事务 progress 推进视口 scrollY。
      *
+     * [transactionId] 必须与当前 [visualTransition] 的 transactionId 一致才推进，
+     * 避免生命周期漏洞让旧 viewport transition 吃到新事务的 progress。
      * scrollY = fromScrollY + (toScrollY - fromScrollY) * progressWindow.map(globalProgress)。
      * 同时保存本帧之后的 remainingFraction，供下一次 rebase 用。
-     * 无活跃过渡时是 no-op。
+     * 无活跃过渡 / 事务 ID 不匹配时是 no-op。
      */
-    fun applyVisualFrame(globalProgress: Float) {
+    fun applyVisualFrame(
+        transactionId: Long,
+        globalProgress: Float,
+    ) {
         val tx = visualTransition ?: return
+        if (tx.transactionId != transactionId) return
         val local = tx.progressWindow.map(globalProgress)
         scrollY = tx.fromScrollY + (tx.toScrollY - tx.fromScrollY) * local
         lastRemainingFraction = tx.progressWindow.remainingFractionAt(globalProgress)
@@ -189,6 +195,18 @@ internal class EditorViewportController {
     fun endVisualTransition() {
         val tx = visualTransition ?: return
         scrollY = tx.toScrollY
+        visualTransition = null
+        lastRemainingFraction = 1f
+    }
+
+    /**
+     * #638 评论 5411376945：取消视口视觉过渡。
+     *
+     * engine 被 cancel/reload 时调用 — 丢弃事务状态，不偷偷改正文/布局。
+     * 与 [endVisualTransition] 的区别：end 是事务正常跑到终点（scrollY 落到 toScrollY），
+     * cancel 是事务被外部取消（scrollY 保留当前值，由调用方后续静态同步夹到合法范围）。
+     */
+    fun cancelVisualTransition() {
         visualTransition = null
         lastRemainingFraction = 1f
     }
