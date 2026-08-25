@@ -6,6 +6,17 @@ import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
 import com.xiwei.sujian.feature.editor.projection.VisualIntent
 
 /**
+ * #638 评论 5403756824：本帧视觉事务状态 — 只读入口。
+ *
+ * 用当前主 timeline 的同一个 frameTimeMs 计算 [progress]，供 viewport 跟整笔视觉事务走。
+ * 不让 View 自己猜动画时间，也不只暴露 cursor progress。
+ */
+data class VisualFrameClockState(
+    val transactionId: Long,
+    val progress: Float,
+)
+
+/**
  * Unified owner of the Android text animation runtime.
  *
  * Holds [AndroidVisualPlanner], [AnimationTimeline], [VisualResourceStore], and the current
@@ -262,9 +273,10 @@ class AndroidTextAnimationEngine(
             // cursorRemaining 字段。用 remainingFractionAt(0f) 代替 .end — 字段语义是
             // remainingFraction，数据结构允许非零 start，当前 continuation 恰好 start=0
             // 时两者相同但不应依赖此巧合。
-            val sliceRemaining = preparedAnimation.animatedSlices.map {
-                it.progressWindow.remainingFractionAt(0f)
-            }
+            val sliceRemaining =
+                preparedAnimation.animatedSlices.map {
+                    it.progressWindow.remainingFractionAt(0f)
+                }
             val cursorRemaining =
                 preparedAnimation.cursorTransition
                     ?.takeIf { it.shouldAnimate }
@@ -684,6 +696,22 @@ class AndroidTextAnimationEngine(
         if (!ct.shouldAnimate) return null
         val cursorProgress = getCursorProgress(frameTimeMs) ?: return null
         return ct.rectAt(cursorProgress)
+    }
+
+    /**
+     * #638 评论 5403756824：本帧视觉事务状态 — 用当前主 timeline 的同一个 frameTimeMs
+     * 计算 progress，供 viewport 跟整笔视觉事务走。
+     *
+     * 无活跃事务、主 timeline 不存在或已完成时返回 null（表示应走静态分支）。
+     * 用主 timeline progress（协同模式下光标跟随主 timeline，非协同模式 viewport
+     * 仍按主事务整体进度过渡，光标独立轨由 currentVisualCursorRect 单独处理）。
+     */
+    fun currentVisualFrameClockState(frameTimeMs: Long): VisualFrameClockState? {
+        val transaction = activeTransaction ?: return null
+        val tl = timeline ?: return null
+        if (tl.getState() == TransactionState.Completed) return null
+        val progress = tl.progress(frameTimeMs)
+        return VisualFrameClockState(transaction.transactionId, progress)
     }
 
     /**

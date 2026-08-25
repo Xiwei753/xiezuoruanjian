@@ -100,6 +100,8 @@ complexity:
       # --- 工作区/手机端 ---
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectWorkspaceScreen.kt"
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/VolumeChapterTree.kt"
+      # --- 编辑器动画引擎：多阶段动画调度，与 CognitiveComplexMethod 排除一致（#638） ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/AndroidTextAnimationEngine.kt"
   LongMethod:
     active: true
     threshold: 80
@@ -121,6 +123,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/InsertDeletePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/MoveCrossfadePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlanner.kt"
+      # --- 编辑器动画引擎：多阶段动画调度，与 CognitiveComplexMethod 排除一致（#638） ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/AndroidTextAnimationEngine.kt"
       # --- 平台安全 ---
       - "**/kotlin/com/xiwei/sujian/core/interop/security/AndroidKeystoreSecureStorage.kt"
       # --- UI测试 ---
@@ -153,6 +157,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/pipeline/AndroidEditorPipeline.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/AffectedLayoutPlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/InsertDeletePlanner.kt"
+      # --- 编辑器动画引擎：多阶段动画调度，与 CognitiveComplexMethod 排除一致（#638） ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/AndroidTextAnimationEngine.kt"
       # --- 工作台Reducer大类 ---
       # --- 测试：章节切换契约测试，多场景断言（预先存在的大类，HEAD 839 行已超 500） ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/presentation/EditorViewModelChapterSwitchTest.kt"
