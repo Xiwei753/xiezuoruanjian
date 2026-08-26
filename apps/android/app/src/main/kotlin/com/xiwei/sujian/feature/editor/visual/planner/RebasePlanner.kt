@@ -175,19 +175,35 @@ class RebasePlanner {
                 // cluster）Insert 不继续（落入最后的 else 不产生 slice）—— Insert 无
                 // cluster 几何无法重建 reveal，不应强行画，与 Delete continuation 无
                 // cluster 时回退 alpha 的语义不同。
+                //
+                // #639 评论 5424613367 问题1：caret 几何来自 snapshot 的
+                // visualRectInDocument，当前 destinationRect 是 currentRect（可能在
+                // from/destination 中间）。先按
+                // dx = currentRect.left - matchedCluster.visualRectInDocument.left 平移
+                // caret 坐标到 currentRect 坐标系，renderer 的 dx=0 不会再平移，reveal
+                // 裁剪线与 bitmap 位置一致。
+                val currentRect =
+                    android.graphics.RectF(
+                        state.currentLeft,
+                        state.currentTop,
+                        state.currentRight,
+                        state.currentBottom,
+                    )
+                val (shiftedAnchorX, shiftedBoundaryFromX, shiftedBoundaryToX) =
+                    TextRevealGeometry.shiftClusterCaretGeometry(
+                        matchedCluster.visualRectInDocument,
+                        matchedCluster.caretStartX,
+                        matchedCluster.caretEndX,
+                        currentRect,
+                        TextRevealMode.REVEAL,
+                    )
                 val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
                 result.add(
                     PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
                         snapshot = snapshot,
                         sourceRect = matchedCluster.sourceRectInLineImage,
-                        destinationRect =
-                            android.graphics.RectF(
-                                state.currentLeft,
-                                state.currentTop,
-                                state.currentRight,
-                                state.currentBottom,
-                            ),
+                        destinationRect = currentRect,
                         startAlpha = 1f,
                         endAlpha = 1f,
                         clusterByteStart = state.clusterByteStart,
@@ -195,9 +211,9 @@ class RebasePlanner {
                         revealSpec =
                             TextRevealSpec(
                                 mode = TextRevealMode.REVEAL,
-                                anchorX = matchedCluster.caretStartX,
-                                boundaryFromX = matchedCluster.caretStartX,
-                                boundaryToX = matchedCluster.caretEndX,
+                                anchorX = shiftedAnchorX,
+                                boundaryFromX = shiftedBoundaryFromX,
+                                boundaryToX = shiftedBoundaryToX,
                                 progressStart = 0f,
                                 progressEnd = 1f,
                                 initialFraction = state.revealFraction,
@@ -381,7 +397,7 @@ class RebasePlanner {
      *
      * 旧 Insert 只 reveal 到一半时，rebase 成 CrossfadeOld 不能把半个字突然变成完整字
      * 再淡出。用旧 snapshot 匹配 cluster 的 caretStartX/caretEndX + rebaseState.revealFraction
-     * 经 [TextRevealGeometry.computeRevealClipRect] 算出冻结的 clip rect。
+     * 经 [TextRevealGeometry.computeClusterRevealClipRect] 算出冻结的 clip rect。
      *
      * - 旧 snapshot 优先从 [snapshotLookup] 按 [rebaseState.snapshotId] 取，fallback
      *   用传入的 [fallbackSnapshot]（即新 slice 自己的 snapshot）。
@@ -389,8 +405,12 @@ class RebasePlanner {
      *   在旧 snapshot 的 clusters 里匹配。
      * - destination 用旧 Insert 的 currentRect（[rebaseState.currentLeft/Top/Right/Bottom]），
      *   即当前屏幕真实位置。
-     * - mode = REVEAL，anchorX = cluster.caretStartX，boundaryFromX = cluster.caretStartX，
-     *   boundaryToX = cluster.caretEndX — 与 CaretRevealPlanner Insert REVEAL spec 一致。
+     * - mode = REVEAL，与 CaretRevealPlanner Insert REVEAL spec 一致。
+     *
+     * #639 评论 5424613367 问题1：caret 几何来自旧 snapshot 的 visualRectInDocument，
+     * 当前 destination 是 currentRect（旧 Insert 可能正在 from/destination 中间）。
+     * 用 [TextRevealGeometry.computeClusterRevealClipRect] 统一平移，与未匹配 Insert
+     * continuation 共用同一份平移公式。
      *
      * 返回 null 的条件：revealFraction 为 null（旧 slice 不是 reveal 动画）、
      * 找不到旧 snapshot、找不到匹配 cluster。此时 renderer 画完整 bitmap 不裁剪
@@ -415,12 +435,16 @@ class RebasePlanner {
                 rebaseState.currentRight,
                 rebaseState.currentBottom,
             )
-        return TextRevealGeometry.computeRevealClipRect(
-            destination,
-            TextRevealMode.REVEAL,
-            cluster.caretStartX,
+        // #639 评论 5424613367 问题1：caret 几何来自旧 snapshot 的 visualRectInDocument，
+        // 当前 destination 是 currentRect（旧 Insert 可能正在 from/destination 中间）。
+        // 用 TextRevealGeometry.computeClusterRevealClipRect 统一平移，与未匹配 Insert
+        // continuation 共用同一份平移公式。
+        return TextRevealGeometry.computeClusterRevealClipRect(
+            cluster.visualRectInDocument,
             cluster.caretStartX,
             cluster.caretEndX,
+            destination,
+            TextRevealMode.REVEAL,
             fraction,
         )
     }

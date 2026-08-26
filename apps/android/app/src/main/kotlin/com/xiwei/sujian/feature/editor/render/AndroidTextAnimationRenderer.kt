@@ -210,7 +210,11 @@ class AndroidTextAnimationRenderer {
     /**
      * #638: Compute static suppression regions for hole-punching at [progress].
      *
-     * - Insert/Move/CrossfadeNew/Static: suppress [slice.destinationRect] (new-layout content).
+     * - Insert/Move/CrossfadeNew/Static: suppress [slice.destinationRect] (new-layout
+     *   content). 静态底图里的完整字始终在 destinationRect（新 Layout 中完整静态像素
+     *   的位置），不在正在移动的 currentRect。在 currentRect 挖洞会让 destinationRect
+     *   的静态完整字没被 suppress → 双影。renderer / captureFrame 仍用
+     *   visualDestinationRectAt(progress) 画动画像素，这里是静态底图去重，两者语义不同。
      * - CrossfadeOld: alpha-mixed, NOT suppressed (no hole).
      * - Delete + SWALLOW: suppress only the currently visible portion via
      *   [computeRevealClipRect]. The destination is the old position; new layout text
@@ -231,13 +235,13 @@ class AndroidTextAnimationRenderer {
             if (srcRect.width() <= 0 || srcRect.height() <= 0) continue
 
             when (slice.role) {
-                // #639 评论 5422606865 问题2：Insert 现在画在 currentRect
-                // （visualDestinationRectAt），suppression 也用 currentRect 挖洞，
-                // 否则静态布局挖的洞和动画画的位置不重合。
-                SliceRole.Insert -> {
-                    regions.add(android.graphics.RectF(slice.visualDestinationRectAt(progress)))
-                }
-                SliceRole.Move, SliceRole.CrossfadeNew, SliceRole.Static -> {
+                // #639 评论 5424613367 问题2：Insert/Move/CrossfadeNew/Static 的静态底图
+                // suppression 用 destinationRect（新 Layout 中完整静态像素的位置），不用
+                // currentRect（动画当前几何）。静态底图里的完整字始终在 destinationRect，
+                // 在 currentRect 挖洞会让 destinationRect 的静态完整字没被 suppress → 双影。
+                // renderer / captureFrame 仍用 visualDestinationRectAt(progress) 画动画像素，
+                // 这里是静态底图去重，两者语义不同。
+                SliceRole.Insert, SliceRole.Move, SliceRole.CrossfadeNew, SliceRole.Static -> {
                     regions.add(android.graphics.RectF(slice.destinationRect))
                 }
                 SliceRole.Delete -> {

@@ -683,15 +683,19 @@ class AndroidTextAnimationRendererTest {
     }
 
     /**
-     * #639 评论 5422606865 问题2 端到端：Insert 带 fromDestinationRect（rebase 把
-     * Insert 接到旧 Move 当前位置）时，renderer 的 drawRevealSlice 画在 currentRect
-     * （visualDestinationRectAt），reveal clip 几何随 currentRect 平移。
+     * #639 评论 5424613367 问题2：Insert 带 fromDestinationRect（rebase 把 Insert 接到
+     * 旧 Move 当前位置）时，computeStaticSuppressionRegions 的 Insert suppression 必须用
+     * destinationRect（新 Layout 中完整静态像素的位置），不能用 currentRect
+     * （visualDestinationRectAt）。
      *
-     * 验证：computeStaticSuppressionRegions 对 Insert 返回 currentRect（与 renderer
-     * 画的位置一致），不再返回 destinationRect。
+     * 静态底图里的完整字始终在 destinationRect。若用 currentRect 挖洞，destinationRect
+     * 位置的静态完整字没被 suppress，会与动画字同时出现 → 双影/"新位置先亮出来"。
+     *
+     * 验证：任意 progress 下，Insert suppression 都等于 destinationRect，
+     * 静态新 Layout 的最终字不会提前露出来。
      */
     @Test
-    fun computeStaticSuppressionRegions_insertWithFromDestinationRectUsesCurrentRect() {
+    fun computeStaticSuppressionRegions_insertSuppressesDestinationRect() {
         val from = RectF(0f, 0f, 100f, 20f)
         val dest = RectF(50f, 30f, 150f, 50f)
         val slice =
@@ -719,24 +723,21 @@ class AndroidTextAnimationRendererTest {
                 durationMs = 300L,
             )
 
-        // progress=0.5 → currentRect 是 from 与 dest 的中点
-        val expectedCurrent = slice.visualDestinationRectAt(0.5f)
-        val regions = renderer.computeStaticSuppressionRegions(transaction, 0.5f)
-        assertEquals("Insert 应 suppress 1 个区域", 1, regions.size)
-        assertEquals(
-            "Insert suppression 应为 currentRect（visualDestinationRectAt），不是 destinationRect",
-            expectedCurrent.left,
-            regions[0].left,
-            eps,
-        )
-        assertEquals(expectedCurrent.top, regions[0].top, eps)
-        assertEquals(expectedCurrent.right, regions[0].right, eps)
-        assertEquals(expectedCurrent.bottom, regions[0].bottom, eps)
-        // 锁住：不是 destinationRect
-        assertTrue(
-            "Insert suppression 不应是 destinationRect.left=${dest.left}，当前=${regions[0].left}",
-            kotlin.math.abs(regions[0].left - dest.left) > eps,
-        )
+        // 任意 progress 下，Insert suppression 必须是 destinationRect，
+        // 静态新 Layout 的完整字在 destinationRect，挖洞防止双影。
+        for (progress in listOf(0f, 0.25f, 0.5f, 0.75f, 1f)) {
+            val regions = renderer.computeStaticSuppressionRegions(transaction, progress)
+            assertEquals("Insert 应 suppress 1 个区域 (progress=$progress)", 1, regions.size)
+            assertEquals(
+                "Insert suppression 应为 destinationRect，不是 currentRect (progress=$progress)",
+                dest.left,
+                regions[0].left,
+                eps,
+            )
+            assertEquals(dest.top, regions[0].top, eps)
+            assertEquals(dest.right, regions[0].right, eps)
+            assertEquals(dest.bottom, regions[0].bottom, eps)
+        }
     }
 
     /**
