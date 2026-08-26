@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.editor.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -30,7 +31,7 @@ internal fun WritingPaneLayout(
     showEditor: Boolean,
     editorContent: @Composable (Modifier) -> Unit,
 ) {
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(modifier = modifier.fillMaxSize().imePadding()) {
         if (showEditor) {
             editorContent(Modifier.fillMaxSize())
         } else {
@@ -44,10 +45,12 @@ internal fun WritingPaneLayout(
 
         // #635 评论 5384780619：保存状态/字数只做 overlay，
         // 不再插在正文上面参与 Column 高度计算。
+        // #639 评论 5419182722：状态带固定在右下角（BottomEnd），
+        // 整个写作区消费 IME inset，避免被输入法遮挡。
         WritingStatusOverlay(
             saveStatus = uiState.saveStatus,
             wordCount = uiState.wordCount,
-            modifier = Modifier.align(Alignment.TopEnd),
+            modifier = Modifier.align(Alignment.BottomEnd),
         )
     }
 }

@@ -115,6 +115,11 @@ class RebasePlanner {
                     ),
                 )
             } else if (state.role == SliceRole.Move) {
+                // #639 评论 5419182722：跨视觉行的保留字符已不再生成 SliceRole.Move
+                // （MoveCrossfadePlanner.appendRetainedTransition 跨行落成
+                // CrossfadeOld+CrossfadeNew）。此分支只处理同线 Move 的 rebase 续播，
+                // 不会把上一帧跨行 Move 映射成下一帧新跨行 Move。跨行字符的 continuation
+                // 走 CrossfadeOld/CrossfadeNew 分支，只续 alpha，位置钉死在布局坐标。
                 val currentRect =
                     android.graphics.RectF(
                         state.currentLeft,

@@ -105,8 +105,16 @@ class SujianEditorView
             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
             isFocusable = true
             isFocusableInTouchMode = true
-            val contentInset = (16 * context.resources.displayMetrics.density).toInt()
-            setPadding(contentInset, contentInset, contentInset, contentInset)
+            // #639 评论 5419182722：padding 从 dimens.xml 读取，底部留一条固定
+            // 安全带（editor_status_band_height）给状态带 overlay，避免内容被遮挡。
+            val contentInset = resources.getDimensionPixelSize(R.dimen.editor_content_inset)
+            val statusBand = resources.getDimensionPixelSize(R.dimen.editor_status_band_height)
+            setPadding(
+                contentInset,
+                contentInset,
+                contentInset,
+                contentInset + statusBand,
+            )
         }
 
         fun insertText(

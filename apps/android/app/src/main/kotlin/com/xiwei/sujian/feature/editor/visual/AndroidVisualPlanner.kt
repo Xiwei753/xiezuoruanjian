@@ -1,5 +1,6 @@
 package com.xiwei.sujian.feature.editor.visual
 
+import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
 import com.xiwei.sujian.feature.editor.layout.AffectedLayoutRevision
 import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
 import com.xiwei.sujian.feature.editor.projection.VisualIntent
@@ -87,6 +88,8 @@ class AndroidVisualPlanner(
         val animatedSlices = mutableListOf<PreparedVisualTransaction.AnimatedSlice>()
         var cursorTransition: PreparedVisualTransaction.CursorTransition? = null
         var blockShifts = listOf<PreparedVisualTransaction.BlockShift>()
+        var affectedOldLineIndices: Set<Int> = emptySet()
+        var affectedNewLineIndices: Set<Int> = emptySet()
 
         val oldRev = oldRevision
         val newRev = newRevision
@@ -94,8 +97,8 @@ class AndroidVisualPlanner(
         if (oldRev != null && newRev != null) {
             val affectedResult =
                 affectedLayoutPlanner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRev, newRev)
-            val affectedOldLineIndices = affectedResult.oldLineIndices
-            val affectedNewLineIndices = affectedResult.newLineIndices
+            affectedOldLineIndices = affectedResult.oldLineIndices
+            affectedNewLineIndices = affectedResult.newLineIndices
             blockShifts = affectedResult.blockShifts
             val mode = parseAnimationMode(visualIntent.animationMode)
 
@@ -120,7 +123,10 @@ class AndroidVisualPlanner(
                         },
                         affectedLayoutPlanner.buildOffsetMapper(visualIntent),
                     )
-                    moveCrossfadePlanner.addMoveSlicesForShiftedClustersCrossLine(
+                    // #639 评论 5419182722：自动折行 Core 看不到 \n，仍走 Glyph/Cluster；
+                    // 平台 Layout 才拥有视觉行真值。保留字符 reflow 由 addRetainedReflowSlices
+                    // 按 old/new AndroidLineSnapshot.lineIndex 决定是否跨行。
+                    moveCrossfadePlanner.addRetainedReflowSlices(
                         preCapturedOldSnapshots, preCapturedNewSnapshots,
                         visualIntent, oldRev, newRev,
                         snapshotPlanner.collectExcludedNewByteRanges(animatedSlices),
@@ -149,7 +155,9 @@ class AndroidVisualPlanner(
                         },
                         affectedLayoutPlanner.buildOffsetMapper(visualIntent),
                     )
-                    moveCrossfadePlanner.addMoveSlicesForShiftedClustersCrossLine(
+                    // #639 评论 5419182722：Run 动画同样走 addRetainedReflowSlices，
+                    // 跨行由 old/new lineIndex 决定，不再生成跨行 Move。
+                    moveCrossfadePlanner.addRetainedReflowSlices(
                         preCapturedOldSnapshots, preCapturedNewSnapshots,
                         visualIntent, oldRev, newRev,
                         snapshotPlanner.collectExcludedNewByteRanges(animatedSlices),
@@ -335,6 +343,20 @@ class AndroidVisualPlanner(
         for (patch in staticPatches) {
             referencedSnapshotIds.add(patch.newSnapshotId)
         }
+
+        // #639 评论 5419182722：reflow 规划诊断 — 记录真实 visual line 变化与
+        // slice 角色分布，不再只记 rebase age。不记录正文。
+        val sameLineMoves = finalSlices.count { it.role == SliceRole.Move }
+        val crossLineCrossfades =
+            finalSlices.count { it.role == SliceRole.CrossfadeOld || it.role == SliceRole.CrossfadeNew }
+        DiagnosticsEvents.editorReflowPlan(
+            transactionId = transactionKey,
+            oldAffectedLines = affectedOldLineIndices.size,
+            newAffectedLines = affectedNewLineIndices.size,
+            sameLineMoves = sameLineMoves,
+            crossLineCrossfades = crossLineCrossfades,
+            suffixBlockShift = finalBlockShifts.isNotEmpty(),
+        )
 
         return PreparedVisualTransaction(
             transactionId = transactionKey,

@@ -305,6 +305,34 @@ object DiagnosticsEvents {
         "maxSliceRemaining" to maxSliceRemaining,
     )
 
+    /**
+     * #639 评论 5419182722：reflow 规划诊断 — 一次事务一条，记录真实 visual line
+     * 变化与 slice 角色分布，不再只记 rebase age。从 AndroidVisualPlanner.prepare()
+     * 规划完成后写入。不记录正文。
+     *
+     * - [oldAffectedLines]/[newAffectedLines]：受影响视觉行数（old/new 侧）。
+     * - [sameLineMoves]：同视觉行位置插值 slice 数（SliceRole.Move）。
+     * - [crossLineCrossfades]：跨视觉行 Crossfade pair slice 数
+     *   （SliceRole.CrossfadeOld + SliceRole.CrossfadeNew）。
+     * - [suffixBlockShift]：是否生成了稳定后缀 block shift。
+     */
+    fun editorReflowPlan(
+        transactionId: Long,
+        oldAffectedLines: Int,
+        newAffectedLines: Int,
+        sameLineMoves: Int,
+        crossLineCrossfades: Int,
+        suffixBlockShift: Boolean,
+    ) = record(
+        "editor.reflow_plan",
+        "transaction" to transactionId,
+        "oldAffectedLines" to oldAffectedLines,
+        "newAffectedLines" to newAffectedLines,
+        "sameLineMoves" to sameLineMoves,
+        "crossLineCrossfades" to crossLineCrossfades,
+        "suffixBlockShift" to suffixBlockShift,
+    )
+
     // ── 设置 ─────────────────────────────────────────────────────
 
     fun settingsSaved(

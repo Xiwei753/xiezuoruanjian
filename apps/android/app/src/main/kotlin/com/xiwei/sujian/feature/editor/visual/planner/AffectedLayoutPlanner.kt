@@ -64,6 +64,11 @@ class AffectedLayoutPlanner {
      * 覆盖（[AffectedLayoutRevision.StableSuffixAnchor] 已由布局引擎按
      * `getLineForOffset()` 在编辑前后分别定位）。deltaY 为 0 或锚点不可信时
      * 不生成 shift — 后缀保持静态新布局位置。
+     *
+     * #639 评论 5419182722：BlockShift 只负责真正没改内容的后缀，不参与当前正在
+     * 自动折行/手动拆段的那一段 — 当前段的 visual lines 已由 old/new snapshots
+     * 负责（MoveCrossfadePlanner.appendRetainedTransition）。不新增按 lineIndex
+     * 最近邻猜 block 的逻辑，保持 StableSuffixAnchor 语义。
      */
     internal fun buildSuffixBlockShift(
         oldRevision: AffectedLayoutRevision?,
