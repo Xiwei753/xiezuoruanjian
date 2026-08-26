@@ -273,6 +273,8 @@ complexity:
       # --- #639 评论 5422606865：rebase 一致性测试多场景断言，函数数超 20 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/render/AndroidTextAnimationRendererTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/TextEditorProfileTest.kt"
+      # --- #639 评论 5424986783：rebase continuation 几何判断测试多场景，函数数超 20 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlannerTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/platform/SujianEditorView.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/input/AndroidInputAdapter.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/input/FakeInputCommandPort.kt"

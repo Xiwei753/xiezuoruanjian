@@ -13,6 +13,33 @@ import uniffi.writer_core.RebaseSliceMappingDto
 
 class RebasePlanner {
     /**
+     * #639 评论 5424986783：rebase continuation 应按 [SliceVisualState.currentRect]
+     * 与 [destinationRectOf] 的实际几何关系判断 slice 是否还有位置运动，而非按旧
+     * [SliceRole] 判断。连续 rebase（Move → Insert/CrossfadeNew 后再次 rebase）时
+     * 旧 role 已变成 Insert/CrossfadeNew，但 currentRect 仍在 from→destination 中间，
+     * 必须继承 fromRect 才不跳变。这三个 helper 把几何判断收成一处，避免分散重复。
+     */
+    private fun currentRectOf(state: SliceVisualState): android.graphics.RectF =
+        android.graphics.RectF(
+            state.currentLeft,
+            state.currentTop,
+            state.currentRight,
+            state.currentBottom,
+        )
+
+    private fun destinationRectOf(state: SliceVisualState): android.graphics.RectF =
+        android.graphics.RectF(
+            state.destinationLeft,
+            state.destinationTop,
+            state.destinationRight,
+            state.destinationBottom,
+        )
+
+    /** currentRect != destinationRect → slice 仍有位置运动未走完。 */
+    private fun hasRemainingPositionMotion(state: SliceVisualState): Boolean =
+        currentRectOf(state) != destinationRectOf(state)
+
+    /**
      * #606: 将 Core 计算的旧→新逻辑 slice 对应关系应用到新事务的 animated slices。
      *
      * 旧→新 slice 的逻辑对应关系由 Core（`compute_rebase_slice_mappings`）
@@ -169,32 +196,29 @@ class RebasePlanner {
                 // → 快速连续输入"半个字突然变成完整字"。
                 // 这里看 revealFraction 而非 currentAlpha：只要 reveal 还没走完（<0.99）
                 // 且能从 snapshot 找到匹配 cluster 重建 caret 几何，就继续把当前可见
-                // 部分 reveal 到完整。destinationRect 用 currentRect（slice 在当前位置
-                // 继续reveal 完，不移动到别的位置）；fromDestinationRect 保持 null
-                // （未匹配 Insert 没有位置移动）。matchedCluster 为 null 时（找不到
-                // cluster）Insert 不继续（落入最后的 else 不产生 slice）—— Insert 无
-                // cluster 几何无法重建 reveal，不应强行画，与 Delete continuation 无
-                // cluster 时回退 alpha 的语义不同。
+                // 部分 reveal 到完整。matchedCluster 为 null 时（找不到 cluster）Insert
+                // 不继续（落入最后的 else 不产生 slice）—— Insert 无 cluster 几何无法
+                // 重建 reveal，不应强行画，与 Delete continuation 无 cluster 时回退
+                // alpha 的语义不同。
+                //
+                // #639 评论 5424986783：未映射 moving Insert 也要保留旧状态真实终点。
+                // 当前 currentRect 可能在 from→destination 中间（上一轮 Move → Insert
+                // 产生），原代码把 destinationRect=currentRect、fromDestinationRect=null
+                // 会强行截断剩余位置移动。改为 destinationRect=state.destinationRect、
+                // fromDestinationRect=currentRect（当有位置差时），位置和 reveal 同时继续。
                 //
                 // #639 评论 5424613367 问题1：caret 几何来自 snapshot 的
-                // visualRectInDocument，当前 destinationRect 是 currentRect（可能在
-                // from/destination 中间）。先按
-                // dx = currentRect.left - matchedCluster.visualRectInDocument.left 平移
-                // caret 坐标到 currentRect 坐标系，renderer 的 dx=0 不会再平移，reveal
-                // 裁剪线与 bitmap 位置一致。
-                val currentRect =
-                    android.graphics.RectF(
-                        state.currentLeft,
-                        state.currentTop,
-                        state.currentRight,
-                        state.currentBottom,
-                    )
+                // visualRectInDocument，按 matchedCluster.visualRectInDocument →
+                // state.destinationRect 建 spec，renderer 再根据当前 progress 自动
+                // 平移到 currentRect。
+                val currentRect = currentRectOf(state)
+                val destRect = destinationRectOf(state)
                 val (shiftedAnchorX, shiftedBoundaryFromX, shiftedBoundaryToX) =
                     TextRevealGeometry.shiftClusterCaretGeometry(
                         matchedCluster.visualRectInDocument,
                         matchedCluster.caretStartX,
                         matchedCluster.caretEndX,
-                        currentRect,
+                        destRect,
                         TextRevealMode.REVEAL,
                     )
                 val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
@@ -203,9 +227,10 @@ class RebasePlanner {
                         role = SliceRole.Insert,
                         snapshot = snapshot,
                         sourceRect = matchedCluster.sourceRectInLineImage,
-                        destinationRect = currentRect,
+                        destinationRect = destRect,
                         startAlpha = 1f,
                         endAlpha = 1f,
+                        fromDestinationRect = if (currentRect != destRect) currentRect else null,
                         clusterByteStart = state.clusterByteStart,
                         clusterByteEndExclusive = state.clusterByteEndExclusive,
                         revealSpec =
@@ -221,7 +246,7 @@ class RebasePlanner {
                         progressWindow = continuedWindow,
                     ),
                 )
-            } else if (!isFadingOut && state.currentAlpha < 0.99f) {
+            } else if (!isFadingOut && (state.currentAlpha < 0.99f || hasRemainingPositionMotion(state))) {
                 val currentRect =
                     android.graphics.RectF(
                         state.currentLeft,
@@ -242,6 +267,10 @@ class RebasePlanner {
                         else -> state.currentAlpha
                     }
                 val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
+                // #639 评论 5424986783：未映射 CrossfadeNew（或其他非淡出 slice）
+                // 在 alpha 已完成但位置未走完时也继续位置移动。条件已在分支入口加入
+                // hasRemainingPositionMotion(state)。fromDestinationRect 按几何判断：
+                // 有位置差时 = currentRect，否则 null（退化为纯 alpha 续播）。
                 result.add(
                     PreparedVisualTransaction.AnimatedSlice(
                         role = state.role,
@@ -250,7 +279,7 @@ class RebasePlanner {
                         destinationRect = originalDestRect,
                         startAlpha = state.currentAlpha,
                         endAlpha = endAlpha,
-                        fromDestinationRect = currentRect,
+                        fromDestinationRect = if (currentRect != originalDestRect) currentRect else null,
                         clusterByteStart = state.clusterByteStart,
                         clusterByteEndExclusive = state.clusterByteEndExclusive,
                         progressWindow = continuedWindow,
@@ -301,22 +330,18 @@ class RebasePlanner {
                             initialFraction = rebaseState.revealFraction ?: 0f,
                         )
                     }
-                if (rebaseState.role == SliceRole.Move) {
-                    slice.copy(
-                        snapshot = snapshot,
-                        startAlpha = rebaseState.currentAlpha,
-                        fromDestinationRect = fromRect,
-                        revealSpec = updatedSpec,
-                        progressWindow = continuedWindow,
-                    )
-                } else {
-                    slice.copy(
-                        snapshot = snapshot,
-                        startAlpha = rebaseState.currentAlpha,
-                        revealSpec = updatedSpec,
-                        progressWindow = continuedWindow,
-                    )
-                }
+                // #639 评论 5424986783：按几何判断而非旧 SliceRole 判断位置运动。
+                // 连续 rebase（Move → Insert 后再次 rebase）时旧 role 已变成 Insert，
+                // 但 currentRect 仍在 from→destination 中间，必须继承 fromRect 才不跳变。
+                // fromRect != slice.destinationRect → 还有位置运动 → fromDestinationRect = fromRect；
+                // 相同则为 null（退化为原有行为，无位置插值）。
+                slice.copy(
+                    snapshot = snapshot,
+                    startAlpha = rebaseState.currentAlpha,
+                    fromDestinationRect = if (fromRect != slice.destinationRect) fromRect else null,
+                    revealSpec = updatedSpec,
+                    progressWindow = continuedWindow,
+                )
             }
             SliceRole.Delete -> {
                 // #637 评论 5386573878：同 Insert，重建 spec 为 [0,1] 子窗口，
@@ -373,20 +398,16 @@ class RebasePlanner {
                 }
             }
             SliceRole.CrossfadeNew -> {
-                if (rebaseState.role == SliceRole.Move) {
-                    slice.copy(
-                        snapshot = snapshot,
-                        startAlpha = rebaseState.currentAlpha,
-                        fromDestinationRect = fromRect,
-                        progressWindow = continuedWindow,
-                    )
-                } else {
-                    slice.copy(
-                        snapshot = snapshot,
-                        startAlpha = rebaseState.currentAlpha,
-                        progressWindow = continuedWindow,
-                    )
-                }
+                // #639 评论 5424986783：按几何判断而非旧 SliceRole 判断位置运动。
+                // 连续 rebase（Move → CrossfadeNew 后再次 rebase）时旧 role 已变成
+                // CrossfadeNew，但 currentRect 仍在 from→destination 中间，必须继承
+                // fromRect 才不跳变。与 Insert 分支同构。
+                slice.copy(
+                    snapshot = snapshot,
+                    startAlpha = rebaseState.currentAlpha,
+                    fromDestinationRect = if (fromRect != slice.destinationRect) fromRect else null,
+                    progressWindow = continuedWindow,
+                )
             }
             SliceRole.Static -> slice
         }
