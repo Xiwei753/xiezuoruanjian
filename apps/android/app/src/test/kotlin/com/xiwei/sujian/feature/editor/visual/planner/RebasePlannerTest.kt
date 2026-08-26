@@ -85,11 +85,14 @@ class RebasePlannerTest {
     @Test
     fun unmatchedDeleteWithRevealFractionBelowThresholdContinuesInNewTransaction() {
         // 未匹配的 Delete slice 在 revealFraction < 0.99 时继续在新事务中吞完
+        // #639 评论 5427183226：修复后按三条视觉轨续播，Delete 的 targetAlpha=0f
+        // （淡出到 0），currentAlpha=0.5 → alphaRemaining=true → 继续。
         val deleteState =
             makeSliceVisualState(
                 role = SliceRole.Delete,
                 revealFraction = 0.5f,
                 currentAlpha = 0.5f,
+                targetAlpha = 0f,
             )
         val rebaseSnapshot =
             VisualFrameSnapshot(
@@ -148,12 +151,16 @@ class RebasePlannerTest {
 
     @Test
     fun backwardCompatibleUnmatchedDeleteWithAlphaAboveThresholdContinues() {
-        // 向后兼容：无 revealFraction 但 currentAlpha > 0.01 时仍继续
+        // #639 评论 5427183226：修复后按三条视觉轨续播。Delete 的 targetAlpha=0f
+        // （淡出到 0），currentAlpha=0.5 → alphaRemaining=true → 继续。
+        // 旧格式状态（targetAlpha 默认=currentAlpha）不会触发 alpha 续播，这是预期 —
+        // 新格式 computeSliceVisualStates 会正确保存 targetAlpha=slice.endAlpha。
         val deleteState =
             makeSliceVisualState(
                 role = SliceRole.Delete,
                 revealFraction = null,
                 currentAlpha = 0.5f,
+                targetAlpha = 0f,
             )
         val rebaseSnapshot =
             VisualFrameSnapshot(
@@ -258,6 +265,7 @@ class RebasePlannerTest {
 
     /**
      * #605 评论3 反向: 无 cluster snapshot 时回退 alpha（向后兼容）。
+     * #639 评论 5427183226：修复后按三条视觉轨续播，Delete 的 targetAlpha=0f。
      */
     @Test
     fun unmatchedDeleteWithRevealFractionButNoClusterFallsBackToAlpha() {
@@ -266,6 +274,7 @@ class RebasePlannerTest {
                 role = SliceRole.Delete,
                 revealFraction = 0.5f,
                 currentAlpha = 0.5f,
+                targetAlpha = 0f,
             )
         val rebaseSnapshot =
             VisualFrameSnapshot(
@@ -311,6 +320,7 @@ class RebasePlannerTest {
 
     /**
      * #637 评论 5386573878：未匹配 Delete continuation 也用 remainingFraction。
+     * #639 评论 5427183226：修复后按三条视觉轨续播，Delete 的 targetAlpha=0f。
      */
     @Test
     fun unmatchedDeleteContinuation_usesRemainingFractionForWindow() {
@@ -320,6 +330,7 @@ class RebasePlannerTest {
                 revealFraction = 0.5f,
                 currentAlpha = 0.5f,
                 remainingFraction = 0.3f,
+                targetAlpha = 0f,
             )
         val rebaseSnapshot =
             VisualFrameSnapshot(
@@ -892,6 +903,7 @@ class RebasePlannerTest {
             revealFraction: Float? = null,
             currentAlpha: Float = 1f,
             remainingFraction: Float = 1f,
+            targetAlpha: Float = currentAlpha,
         ): SliceVisualState {
             return SliceVisualState(
                 snapshotId = 1L,
@@ -910,6 +922,7 @@ class RebasePlannerTest {
                 destinationTop = 0f,
                 destinationRight = 100f,
                 destinationBottom = 20f,
+                targetAlpha = targetAlpha,
                 revealFraction = revealFraction,
                 remainingFraction = remainingFraction,
             )

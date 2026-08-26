@@ -205,6 +205,20 @@ data class SliceVisualState(
     val destinationTop: Float = currentTop,
     val destinationRight: Float = currentRight,
     val destinationBottom: Float = currentBottom,
+    /** #639 评论 5427183226 缺口1：本 slice 在 line bitmap 中的 source crop。
+     *  从 active slice.sourceRect 原样保存，未映射 continuation 优先用这份 sourceRect，
+     *  不再退到 snapshot.sourceRect（整行 bitmap 的 source crop）。
+     *  null 仅作旧状态兼容 fallback（旧 SliceVisualState 没这字段）。 */
+    val sourceRect: android.graphics.Rect? = null,
+    /** #639 评论 5427183226 缺口2：本 slice 的目标 alpha（active slice.endAlpha）。
+     *  rebase 未映射 continuation 用 abs(currentAlpha - targetAlpha) > EPS 判断 alpha 轨
+     *  是否还有剩余，不再按 SliceRole 猜。默认 currentAlpha 保持向后兼容（旧状态没这字段
+     *  时退化为"alpha 已完成"）。 */
+    val targetAlpha: Float = currentAlpha,
+    /** #639 评论 5427183226 缺口2：本 slice 的 reveal 模式（REVEAL/SWALLOW）。
+     *  从 active slice.revealSpec?.mode 原样保存，未映射 continuation 用 state.revealMode +
+     *  state.revealFraction + caretRevealGeometry 重建 revealSpec，不再只认 Insert/Delete。 */
+    val revealMode: TextRevealMode? = null,
     /** Current reveal fraction for Insert/Delete slices with revealSpec.
      *  null for Move/Crossfade/Static slices or slices without revealSpec.
      *  Used by rebase to set the next transaction's revealSpec.initialFraction
@@ -216,6 +230,11 @@ data class SliceVisualState(
      *  反复减速（旧 localProgress 会在旧 window [0,0.4] 走到 0.2 时得 0.5，下一次
      *  又放大回 50ms；remainingFraction 得 0.2，保持 20ms）。 */
     val remainingFraction: Float = 1f,
+    /** #639 评论 5427183226 缺口2：rebase 冻结的 document-space clip rect。
+     *  从 active slice.fixedRevealClipRect 原样保存。旧 Insert -> CrossfadeOld 冻结出来
+     *  的半截 clip，下一次 mapped/unmapped rebase 后不再消失。renderer 把 fixed clip 提到
+     *  drawOrthogonalSlice 正交化，优先级 fixedRevealClipRect > revealSpec clip > no clip。 */
+    val fixedRevealClipRect: android.graphics.RectF? = null,
     /** #639 评论 5425871530 第二部分：本 slice 的 caret/reveal 几何，从 active slice
      *  直接复制进来，把外观状态一起带进下一次 rebase。
      *

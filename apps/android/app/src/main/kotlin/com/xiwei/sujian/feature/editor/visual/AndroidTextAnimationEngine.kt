@@ -807,8 +807,16 @@ class AndroidTextAnimationEngine(
                 destinationTop = slice.destinationRect.top,
                 destinationRight = slice.destinationRect.right,
                 destinationBottom = slice.destinationRect.bottom,
+                // #639 评论 5427183226：SliceVisualState 必须是"上一帧实际画出来的
+                // 完整 slice 状态"。把 sourceRect/targetAlpha/revealMode/revealFraction/
+                // fixedRevealClipRect/caretRevealGeometry 一次性收进来，未映射 continuation
+                // 不再退到 snapshot.sourceRect，appearance 轨跨第二次 rebase 不再丢状态。
+                sourceRect = android.graphics.Rect(slice.sourceRect),
+                targetAlpha = slice.endAlpha,
+                revealMode = slice.revealSpec?.mode,
                 revealFraction = revealFraction,
                 remainingFraction = remainingFraction,
+                fixedRevealClipRect = slice.fixedRevealClipRect?.let { android.graphics.RectF(it) },
                 caretRevealGeometry = slice.caretRevealGeometry,
             )
         }

@@ -8,6 +8,7 @@ import com.xiwei.sujian.feature.editor.visual.SliceVisualState
 import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -371,7 +372,248 @@ class RebasePlannerCrossRoleReproTest {
                     0.001f,
                 )
             }
+            // #639 评论 5427183226 缺口1：synthetic run continuation 的 sourceRect 应是
+            // 原 AnimatedSlice.sourceRect（合并后的几个字 Rect(0,0,30,20)），不是整行
+            // snapshot.sourceRect = Rect(0,0,300,20)。
+            val expectedSourceRect = Rect(0, 0, 30, 20)
+            val wholeLineSourceRect = snapshotLookup.getValue(1L).sourceRect
+            assertEquals(
+                "synthetic run continuation 的 sourceRect 应是原 AnimatedSlice.sourceRect" +
+                    "（合并后的几个字 $expectedSourceRect），实际 ${continued.sourceRect}。" +
+                    "修复前会退到整行 snapshot.sourceRect = $wholeLineSourceRect，把整行 bitmap 压进 run 的 destinationRect。",
+                expectedSourceRect,
+                continued.sourceRect,
+            )
+            assertNotEquals(
+                "synthetic run continuation 的 sourceRect 不应等于整行 snapshot.sourceRect",
+                wholeLineSourceRect,
+                continued.sourceRect,
+            )
         }
+    }
+
+    // ---- #639 评论 5427183226：跨第二次 rebase appearance 轨续播 ----
+
+    /**
+     * #639 评论 5427183226 缺口2：跨第二次 rebase appearance 轨续播。
+     *
+     * 由 Insert -> Move 产生、仍有 revealFraction=0.5 的 Move，连续两次未映射 rebase
+     * 后应仍然保留 revealSpec（reveal 轨不丢）。修复前：第一次 rebase 后 role=Move
+     * 进 buildMoveContinuation 丢 revealSpec，第二次 rebase 时 revealFraction 已丢。
+     * 修复后：按三条视觉轨续播，revealRemaining=true → 重建 revealSpec。
+     */
+    @Test
+    fun repro6_crossSecondRebaseMoveWithRevealShouldKeepRevealAcrossTwoRebases() {
+        val fromRect = RectF(0f, 0f, 100f, 20f)
+        val destRect = RectF(50f, 0f, 150f, 20f)
+        // 第一次 rebase 的 state：role=Move, revealFraction=0.5, revealMode=REVEAL
+        val state1 =
+            SliceVisualState(
+                snapshotId = 1L,
+                role = SliceRole.Move,
+                lineIndex = 0,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                currentLeft = fromRect.left,
+                currentTop = fromRect.top,
+                currentRight = fromRect.right,
+                currentBottom = fromRect.bottom,
+                currentAlpha = 1f,
+                destinationLeft = destRect.left,
+                destinationTop = destRect.top,
+                destinationRight = destRect.right,
+                destinationBottom = destRect.bottom,
+                sourceRect = Rect(0, 0, 10, 20),
+                targetAlpha = 1f,
+                revealMode = TextRevealMode.REVEAL,
+                revealFraction = 0.5f,
+                remainingFraction = 1f,
+                caretRevealGeometry =
+                    PreparedVisualTransaction.CaretRevealGeometry(
+                        visualRect = destRect,
+                        caretStartX = destRect.left,
+                        caretEndX = destRect.right,
+                    ),
+            )
+        val rebaseSnapshot1 =
+            com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot(
+                progress = 0.5f,
+                state = com.xiwei.sujian.feature.editor.visual.TransactionState.Rendering,
+                sliceVisualStates = listOf(state1),
+            )
+
+        // 第一次未映射 rebase
+        val result1 =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot1,
+                snapshotLookup = emptyMap(),
+            )
+        assertTrue(
+            "第一次 rebase：带 revealFraction=0.5 的 Move 未映射时应产生 continuation",
+            result1.isNotEmpty(),
+        )
+        assertNotNull(
+            "第一次 rebase：continuation 应携带 revealSpec（reveal 轨不丢）",
+            result1[0].revealSpec,
+        )
+
+        // 模拟 computeSliceVisualStates 从 result1[0] 保存新的 SliceVisualState
+        // （localProgress=0 → revealFraction = initialFraction = 0.5）
+        val slice1 = result1[0]
+        val state2 =
+            SliceVisualState(
+                snapshotId = slice1.snapshot?.snapshotId ?: -1L,
+                role = slice1.role,
+                lineIndex = 0,
+                clusterByteStart = slice1.clusterByteStart,
+                clusterByteEndExclusive = slice1.clusterByteEndExclusive,
+                currentLeft = slice1.destinationRect.left,
+                currentTop = slice1.destinationRect.top,
+                currentRight = slice1.destinationRect.right,
+                currentBottom = slice1.destinationRect.bottom,
+                currentAlpha = slice1.startAlpha,
+                destinationLeft = slice1.destinationRect.left,
+                destinationTop = slice1.destinationRect.top,
+                destinationRight = slice1.destinationRect.right,
+                destinationBottom = slice1.destinationRect.bottom,
+                sourceRect = Rect(slice1.sourceRect),
+                targetAlpha = slice1.endAlpha,
+                revealMode = slice1.revealSpec?.mode,
+                revealFraction = slice1.revealSpec?.initialFraction,
+                remainingFraction = 1f,
+                fixedRevealClipRect = slice1.fixedRevealClipRect?.let { RectF(it) },
+                caretRevealGeometry = slice1.caretRevealGeometry,
+            )
+        val rebaseSnapshot2 =
+            com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot(
+                progress = 0.5f,
+                state = com.xiwei.sujian.feature.editor.visual.TransactionState.Rendering,
+                sliceVisualStates = listOf(state2),
+            )
+
+        // 第二次未映射 rebase
+        val result2 =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot2,
+                snapshotLookup = emptyMap(),
+            )
+        assertTrue(
+            "第二次 rebase：跨第二次 rebase 后 appearance 轨应仍产生 continuation",
+            result2.isNotEmpty(),
+        )
+        assertNotNull(
+            "第二次 rebase：跨第二次 rebase 后 revealSpec 应仍存在（reveal 轨不丢）",
+            result2[0].revealSpec,
+        )
+    }
+
+    /**
+     * #639 评论 5427183226 缺口2：Delete 同时带 reveal 和 alpha 淡出，跨第二次 rebase
+     * 后 startAlpha 应保持当前 alpha，不被抬回 1。
+     */
+    @Test
+    fun repro7_crossSecondRebaseDeleteWithRevealAndFadingAlphaShouldKeepAlpha() {
+        val rect = RectF(0f, 0f, 100f, 20f)
+        val state1 =
+            SliceVisualState(
+                snapshotId = 1L,
+                role = SliceRole.Delete,
+                lineIndex = 0,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                currentLeft = rect.left,
+                currentTop = rect.top,
+                currentRight = rect.right,
+                currentBottom = rect.bottom,
+                currentAlpha = 0.4f,
+                destinationLeft = rect.left,
+                destinationTop = rect.top,
+                destinationRight = rect.right,
+                destinationBottom = rect.bottom,
+                sourceRect = Rect(0, 0, 10, 20),
+                targetAlpha = 0f,
+                revealMode = com.xiwei.sujian.feature.editor.visual.TextRevealMode.SWALLOW,
+                revealFraction = 0.5f,
+                remainingFraction = 1f,
+                caretRevealGeometry =
+                    PreparedVisualTransaction.CaretRevealGeometry(
+                        visualRect = rect,
+                        caretStartX = rect.left,
+                        caretEndX = rect.right,
+                    ),
+            )
+        val rebaseSnapshot1 =
+            com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot(
+                progress = 0.5f,
+                state = com.xiwei.sujian.feature.editor.visual.TransactionState.Rendering,
+                sliceVisualStates = listOf(state1),
+            )
+
+        val result1 =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot1,
+                snapshotLookup = emptyMap(),
+            )
+        assertTrue(result1.isNotEmpty())
+        assertEquals(
+            "第一次 rebase：Delete 带 reveal + alpha 淡出时 startAlpha 应保持 0.4",
+            0.4f,
+            result1[0].startAlpha,
+            0.001f,
+        )
+
+        // 模拟第二次 rebase：从 result1[0] 保存新 state（currentAlpha 走到 0.3）
+        val slice1 = result1[0]
+        val state2 =
+            SliceVisualState(
+                snapshotId = slice1.snapshot?.snapshotId ?: -1L,
+                role = slice1.role,
+                lineIndex = 0,
+                clusterByteStart = slice1.clusterByteStart,
+                clusterByteEndExclusive = slice1.clusterByteEndExclusive,
+                currentLeft = slice1.destinationRect.left,
+                currentTop = slice1.destinationRect.top,
+                currentRight = slice1.destinationRect.right,
+                currentBottom = slice1.destinationRect.bottom,
+                currentAlpha = 0.3f,
+                destinationLeft = slice1.destinationRect.left,
+                destinationTop = slice1.destinationRect.top,
+                destinationRight = slice1.destinationRect.right,
+                destinationBottom = slice1.destinationRect.bottom,
+                sourceRect = Rect(slice1.sourceRect),
+                targetAlpha = slice1.endAlpha,
+                revealMode = slice1.revealSpec?.mode,
+                revealFraction = 0.6f,
+                remainingFraction = 1f,
+                fixedRevealClipRect = slice1.fixedRevealClipRect?.let { RectF(it) },
+                caretRevealGeometry = slice1.caretRevealGeometry,
+            )
+        val rebaseSnapshot2 =
+            com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot(
+                progress = 0.5f,
+                state = com.xiwei.sujian.feature.editor.visual.TransactionState.Rendering,
+                sliceVisualStates = listOf(state2),
+            )
+
+        val result2 =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot2,
+                snapshotLookup = emptyMap(),
+            )
+        assertTrue(
+            "第二次 rebase：Delete 带 reveal + alpha 淡出应仍产生 continuation",
+            result2.isNotEmpty(),
+        )
+        assertEquals(
+            "第二次 rebase：startAlpha 应保持当前 alpha=0.3，不被抬回 1",
+            0.3f,
+            result2[0].startAlpha,
+            0.001f,
+        )
     }
 
     /** repro5 的测试数据构造：synthetic run rebaseSnapshot + snapshotLookup。 */
@@ -469,6 +711,11 @@ class RebasePlannerCrossRoleReproTest {
             destinationTop = rect.top,
             destinationRight = rect.right,
             destinationBottom = rect.bottom,
+            // #639 评论 5427183226 缺口1：synthetic run 的 sourceRect 是合并后的几个字
+            // Rect(0,0,30,20)，不是整行 snapshot.sourceRect = Rect(0,0,300,20)。
+            sourceRect = Rect(0, 0, 30, 20),
+            targetAlpha = 1f,
+            revealMode = TextRevealMode.REVEAL,
             revealFraction = 0.4f,
             remainingFraction = 1f,
             caretRevealGeometry =
