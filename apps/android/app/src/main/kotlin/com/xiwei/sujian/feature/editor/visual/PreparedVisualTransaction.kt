@@ -68,6 +68,16 @@ data class PreparedVisualTransaction(
          *  新事务首次播放为 [VisualProgressWindow.Full]；rebase continuation 时
          *  end = 1 - consumedFraction，让已走部分不重新计时。 */
         val progressWindow: VisualProgressWindow = VisualProgressWindow.Full,
+        /** #639 评论 5420317382：rebase 专用的固定裁剪 fraction。
+         *
+         *  旧 Insert 可能只 reveal 到一半，rebase 成 CrossfadeOld 时不能把半个字
+         *  突然变成完整字再淡出。`RebasePlanner` 在旧状态有 `revealFraction` 时
+         *  写进此字段；`AndroidTextAnimationRenderer` 画 CrossfadeOld 时若此值
+         *  非空，先按原 cluster 的 reveal 几何裁到这个固定 fraction，再做 alpha 淡出。
+         *  本次 CrossfadeOld 期间 fraction 保持不动，只让 alpha 变化。
+         *  不拿 [TextRevealSpec.initialFraction] 硬凑，因为 [TextRevealSpec.fraction]
+         *  会继续向 1 推，不是"冻结当前可见部分"。 */
+        val fixedRevealFraction: Float? = null,
     )
 
     data class SelectionDecoration(

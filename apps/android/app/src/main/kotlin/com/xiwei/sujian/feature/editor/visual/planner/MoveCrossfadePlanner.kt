@@ -9,6 +9,19 @@ import com.xiwei.sujian.feature.editor.visual.SliceRole
 
 class MoveCrossfadePlanner {
     /**
+     * #639 评论 5420317382：reflow 规划真实统计 — 在 [appendRetainedTransition]
+     * 做出判断的那一刻累计，不从最终 slice 角色反推。
+     *
+     * - [sameLineMoves]：只有 `sameShape && oldLineIndex == newLineIndex && positionChanged` 时 +1。
+     * - [crossLinePairs]：只有 `oldLineIndex != newLineIndex` 时 +1（一对 CrossfadeOld+CrossfadeNew 计为 1）。
+     *   同行 shaping 变化虽然也生成 Crossfade pair，但不计入跨行数。
+     */
+    data class ReflowPlanStats(
+        var sameLineMoves: Int = 0,
+        var crossLinePairs: Int = 0,
+    )
+
+    /**
      * #639 评论 5419182722：自动折行（Core 看不到 `\n`，仍走 Glyph/Cluster/Run）
      * 的保留字符 reflow 规划。匹配成功后统一委托 [appendRetainedTransition]：
      * 同视觉行且形状不变 → SliceRole.Move 位置插值；跨视觉行或形状变化 →
@@ -25,7 +38,8 @@ class MoveCrossfadePlanner {
         excludedOldByteRanges: Set<Pair<Int, Int>>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         offsetMapper: (Int) -> Int?,
-    ) {
+    ): ReflowPlanStats {
+        val stats = ReflowPlanStats()
         val allOldClusters = mutableListOf<Pair<LineClusterSnapshot, Pair<Int, AndroidLineSnapshot>>>()
         for ((lineIdx, snapshot) in allOldSnapshots) {
             for (cluster in snapshot.clusters) {
@@ -101,9 +115,11 @@ class MoveCrossfadePlanner {
                     newSnapshot = newInfo.second,
                     newLineIndex = newInfo.first,
                     out = animatedSlices,
+                    stats = stats,
                 )
             }
         }
+        return stats
     }
 
     fun planLineReflowAnimation(
@@ -118,7 +134,8 @@ class MoveCrossfadePlanner {
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         createSnapshotFromRevision: (LayoutRevisionSource, Int, Boolean) -> AndroidLineSnapshot?,
         offsetMapper: (Int) -> Int?,
-    ) {
+    ): ReflowPlanStats {
+        val stats = ReflowPlanStats()
         val affectedOldParagraphIds = mutableSetOf<Int>()
         val affectedNewParagraphIds = mutableSetOf<Int>()
         for (lineIndex in affectedOldLineIndices) {
@@ -202,6 +219,7 @@ class MoveCrossfadePlanner {
                     newSnapshot = newSnapshot,
                     newLineIndex = newLineIndex,
                     out = animatedSlices,
+                    stats = stats,
                 )
             }
         }
@@ -239,6 +257,7 @@ class MoveCrossfadePlanner {
                 ),
             )
         }
+        return stats
     }
 
     /**
@@ -262,6 +281,7 @@ class MoveCrossfadePlanner {
         newSnapshot: AndroidLineSnapshot,
         newLineIndex: Int,
         out: MutableList<PreparedVisualTransaction.AnimatedSlice>,
+        stats: ReflowPlanStats,
     ) {
         val sameShape =
             oldCluster.shapingIdentityConfident &&
@@ -275,6 +295,9 @@ class MoveCrossfadePlanner {
 
         // 只有还在同一条视觉行里的保留字符才允许做位置插值。
         if (sameShape && oldLineIndex == newLineIndex) {
+            // #639 评论 5420317382：真实统计 — 只有 sameShape && 同行 && 位置变化
+            // 才计为 sameLineMove。
+            stats.sameLineMoves++
             out.add(
                 PreparedVisualTransaction.AnimatedSlice(
                     role = SliceRole.Move,
@@ -293,6 +316,12 @@ class MoveCrossfadePlanner {
 
         // 一旦跨视觉行，不从右上角斜着飞到左下角。
         // 旧位置退场，新位置进场；两者都固定在各自 Layout 真值坐标。
+        // #639 评论 5420317382：真实统计 — 只有 oldLineIndex != newLineIndex
+        // 才计为跨行 pair（一对 CrossfadeOld+CrossfadeNew 计为 1）。同行 shaping
+        // 变化虽然也生成 Crossfade pair，但不计入跨行数。
+        if (oldLineIndex != newLineIndex) {
+            stats.crossLinePairs++
+        }
         out.add(
             PreparedVisualTransaction.AnimatedSlice(
                 role = SliceRole.CrossfadeOld,

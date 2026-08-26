@@ -492,3 +492,166 @@ fn rebase_slice_mapping_serializes_camel_case() {
     assert!(json.contains("\"continuation\":\"end\""));
     assert!(json.contains("\"reason\":\"noMapping\""));
 }
+
+// ── #639 评论 5420317382 修复后验证测试 ─────────────────────────────
+
+/// #639 评论 5420317382 问题 1 修复后验证：旧 Move slice rebase 到新
+/// CrossfadeOld+CrossfadeNew pair 时，Core 应把旧 Move 映射到 CrossfadeOld
+/// （index 0）而非 CrossfadeNew（index 1）。
+///
+/// 修复前：`compatible_rebase_roles()` 把 Move/Insert/CrossfadeNew 全当成同一
+/// 出现态，`try_match_slice` 跳过不兼容的 CrossfadeOld，命中 CrossfadeNew →
+/// 旧 Move 映射到 CrossfadeNew (index 1)，`RebasePlanner` 把旧 Move 的
+/// currentAlpha(==1) 填给新 CrossfadeNew 的 startAlpha → 新位置字直接全亮，
+/// 同时配对 CrossfadeOld 在旧位置继续淡出 → 闪一下/跳一下。
+///
+/// 修复后：`compute_rebase_slice_mappings` 对同一 byte range 存在 Crossfade
+/// pair 时，旧 emergence role（Move/Insert/CrossfadeNew）优先映射到 CrossfadeOld，
+/// 配对 CrossfadeNew 不接旧状态（保持 startAlpha=0 在新 Layout 自己淡入）。
+#[test]
+fn repro_639_comment_5420317382_move_rebased_to_crossfade_new_not_crossfade_old() {
+    // 旧事务：1 个 Move slice（同行位置插值，currentAlpha 通常 == 1）
+    let old_roles = [AnimatedSliceRole::Move];
+    let old_ranges = [(5, 8)];
+
+    // 新事务：跨视觉行 pair — CrossfadeOld（旧位置淡出）+ CrossfadeNew（新位置淡入）
+    // 两者 byte range 相同（同一逻辑字符，只是跨行/形状变化）
+    let new_roles = [
+        AnimatedSliceRole::CrossfadeOld,
+        AnimatedSliceRole::CrossfadeNew,
+    ];
+    let new_ranges = [(5, 8), (5, 8)];
+
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: None,
+    });
+
+    // 修复后断言：旧 Move 映射到新 slice index 0（CrossfadeOld），
+    // 而非 index 1（CrossfadeNew）。旧出现态从当前位置退场，新位置自己淡入。
+    assert_eq!(mappings.len(), 1, "旧 Move 应恰好匹配到一个新 slice");
+    assert_eq!(
+        mappings[0].old_slice_index, 0,
+        "旧 slice index 应为 0（唯一的旧 Move）"
+    );
+    // 修复后：new_slice_index == 0（CrossfadeOld），而非 1（CrossfadeNew）
+    assert_eq!(
+        mappings[0].new_slice_index, 0,
+        "修复后 #639 评论 5420317382 问题 1：旧 Move 应映射到 CrossfadeOld (index 0) \
+         而非 CrossfadeNew (index 1)，从当前位置退场，新位置自己淡入"
+    );
+    assert_eq!(
+        mappings[0].reason,
+        RebaseReason::SameByteRange,
+        "byte range 相同 → SameByteRange"
+    );
+    // 新 slice 1（CrossfadeNew）未被任何旧 slice 匹配 → 保持新规划 startAlpha=0，
+    // 在新 Layout 自己淡入，不会突然全亮。
+    let matched_new_indices: std::collections::HashSet<usize> =
+        mappings.iter().map(|m| m.new_slice_index).collect();
+    assert!(
+        matched_new_indices.contains(&0),
+        "CrossfadeOld (index 0) 被旧 Move 匹配，从当前位置退场"
+    );
+    assert!(
+        !matched_new_indices.contains(&1),
+        "CrossfadeNew (index 1) 未被匹配，保持 startAlpha=0 在新 Layout 自己淡入"
+    );
+}
+
+/// #639 评论 5420317382 问题 1 修复后验证：Crossfade pair 优先映射 + 没有 pair
+/// 时现有 continuation 规则保留。
+///
+/// 修复后行为：
+/// 1. 旧 Move/Insert/CrossfadeNew → 新 CrossfadeOld+CrossfadeNew pair：优先映射到
+///    CrossfadeOld，CrossfadeNew 不接旧状态。
+/// 2. 没有 pair 时，旧 Move → 新单独 CrossfadeNew 仍兼容（现有 continuation 保留）。
+/// 3. 旧 CrossfadeNew → 新单独 Move 仍兼容（现有 continuation 保留）。
+#[test]
+fn repro_639_comment_5420317382_move_and_crossfade_new_treated_as_same_emergence_class() {
+    // 修复后 1：旧 Move → 新 CrossfadeOld+CrossfadeNew pair → 优先映射到 CrossfadeOld
+    let mappings_move_to_pair = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &[AnimatedSliceRole::Move],
+        old_slice_byte_ranges: &[(0, 3)],
+        new_slice_roles: &[
+            AnimatedSliceRole::CrossfadeOld,
+            AnimatedSliceRole::CrossfadeNew,
+        ],
+        new_slice_byte_ranges: &[(0, 3), (0, 3)],
+        offset_map: None,
+    });
+    assert_eq!(
+        mappings_move_to_pair.len(),
+        1,
+        "旧 Move 应映射到 pair 中的一个 slice"
+    );
+    assert_eq!(
+        mappings_move_to_pair[0].new_slice_index, 0,
+        "修复后：旧 Move 优先映射到 CrossfadeOld (index 0)，而非 CrossfadeNew (index 1)"
+    );
+
+    // 修复后 2：旧 Insert → 新 CrossfadeOld+CrossfadeNew pair → 优先映射到 CrossfadeOld
+    let mappings_insert_to_pair = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &[AnimatedSliceRole::Insert],
+        old_slice_byte_ranges: &[(0, 3)],
+        new_slice_roles: &[
+            AnimatedSliceRole::CrossfadeOld,
+            AnimatedSliceRole::CrossfadeNew,
+        ],
+        new_slice_byte_ranges: &[(0, 3), (0, 3)],
+        offset_map: None,
+    });
+    assert_eq!(
+        mappings_insert_to_pair.len(),
+        1,
+        "旧 Insert 应映射到 pair 中的一个 slice"
+    );
+    assert_eq!(
+        mappings_insert_to_pair[0].new_slice_index, 0,
+        "修复后：旧 Insert 优先映射到 CrossfadeOld (index 0)"
+    );
+
+    // 修复后 3：没有 pair 时，旧 Move → 新单独 CrossfadeNew 仍兼容（现有规则保留）
+    let mappings_move_to_new = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &[AnimatedSliceRole::Move],
+        old_slice_byte_ranges: &[(0, 3)],
+        new_slice_roles: &[AnimatedSliceRole::CrossfadeNew],
+        new_slice_byte_ranges: &[(0, 3)],
+        offset_map: None,
+    });
+    assert_eq!(
+        mappings_move_to_new.len(),
+        1,
+        "没有 pair 时：compatible_rebase_roles(CrossfadeNew, Move) == true，旧 Move 可映射到新 CrossfadeNew（现有 continuation 保留）"
+    );
+
+    // 修复后 4：没有 pair 时，旧 CrossfadeNew → 新单独 Move 仍兼容（现有规则保留）
+    let mappings_new_to_move = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &[AnimatedSliceRole::CrossfadeNew],
+        old_slice_byte_ranges: &[(0, 3)],
+        new_slice_roles: &[AnimatedSliceRole::Move],
+        new_slice_byte_ranges: &[(0, 3)],
+        offset_map: None,
+    });
+    assert_eq!(
+        mappings_new_to_move.len(),
+        1,
+        "没有 pair 时：compatible_rebase_roles(Move, CrossfadeNew) == true，旧 CrossfadeNew 可映射到新 Move（现有 continuation 保留）"
+    );
+
+    // 对照组：旧 Move → 新单独 CrossfadeOld（没有配对 CrossfadeNew）→ 不兼容
+    let mappings_move_to_old = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &[AnimatedSliceRole::Move],
+        old_slice_byte_ranges: &[(0, 3)],
+        new_slice_roles: &[AnimatedSliceRole::CrossfadeOld],
+        new_slice_byte_ranges: &[(0, 3)],
+        offset_map: None,
+    });
+    assert!(
+        mappings_move_to_old.is_empty(),
+        "对照：compatible_rebase_roles(CrossfadeOld, Move) == false，旧 Move 不可映射到单独的 CrossfadeOld"
+    );
+}

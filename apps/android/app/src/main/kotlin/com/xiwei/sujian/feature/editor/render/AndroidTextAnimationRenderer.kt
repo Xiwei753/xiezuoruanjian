@@ -58,10 +58,44 @@ class AndroidTextAnimationRenderer {
                 SliceRole.Insert, SliceRole.Delete -> {
                     drawRevealSlice(canvas, bitmap, slice, localProgress)
                 }
-                // CrossfadeOld/CrossfadeNew/Static: position does not change during
-                // animation — only alpha varies. The bitmap is drawn at its final destination
-                // with interpolated alpha; no positional interpolation is needed.
-                SliceRole.CrossfadeOld, SliceRole.CrossfadeNew, SliceRole.Static -> {
+                // CrossfadeOld: position does not change during animation — only alpha varies.
+                // #639 评论 5420317382：若 fixedRevealFraction 非空（旧 Insert 只 reveal
+                // 到一半被 rebase 成 CrossfadeOld），先按原 cluster 的 reveal 几何裁到这个
+                // 固定 fraction，再做 alpha 淡出。fraction 在本次 CrossfadeOld 期间保持不动，
+                // 只让 alpha 变化，不把半个字突然变成完整字再淡出。
+                SliceRole.CrossfadeOld -> {
+                    val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
+                    slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
+                    val fixedFraction = slice.fixedRevealFraction
+                    if (fixedFraction != null && fixedFraction > 0f && fixedFraction < 1f) {
+                        val srcWidth = slice.sourceRect.width()
+                        val visibleSrcRight =
+                            slice.sourceRect.left + (srcWidth * fixedFraction).toInt()
+                        val clipSrc =
+                            android.graphics.Rect(
+                                slice.sourceRect.left,
+                                slice.sourceRect.top,
+                                visibleSrcRight,
+                                slice.sourceRect.bottom,
+                            )
+                        val destWidth = slice.destinationRect.width()
+                        val visibleDestRight = slice.destinationRect.left + destWidth * fixedFraction
+                        val clipDest =
+                            android.graphics.RectF(
+                                slice.destinationRect.left,
+                                slice.destinationRect.top,
+                                visibleDestRight,
+                                slice.destinationRect.bottom,
+                            )
+                        canvas.drawBitmap(bitmap, clipSrc, clipDest, slicePaint)
+                    } else {
+                        canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, slicePaint)
+                    }
+                }
+                // CrossfadeNew/Static: position does not change during animation — only alpha
+                // varies. The bitmap is drawn at its final destination with interpolated alpha;
+                // no positional interpolation is needed.
+                SliceRole.CrossfadeNew, SliceRole.Static -> {
                     val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
                     slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
                     canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, slicePaint)

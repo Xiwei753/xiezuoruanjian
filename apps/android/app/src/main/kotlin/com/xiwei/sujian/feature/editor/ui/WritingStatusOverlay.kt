@@ -35,9 +35,13 @@ internal fun WritingStatusOverlay(
     val dims = LocalSujianDimensions.current
     val statusSemanticValue = saveStatus.semanticValue()
     val statusText = saveStatus.displayText()
+    // #639 评论 5420317382：水平/垂直 padding 提到 Row 自己身上一次，子 Text
+    // 不再各自带 horizontal space16 padding，避免状态、点号、字数之间各夹额外 16dp
+    // 空隙，视觉上紧凑呈现 "已保存 · 123 字"。空状态仍不生成空 Text。
     Row(
         modifier =
             modifier
+                .padding(horizontal = dims.space16, vertical = dims.space4)
                 .testTag(SujianSemanticIds.EditorSaveStatus)
                 .semantics { this.stateDescription = statusSemanticValue },
     ) {
@@ -45,21 +49,18 @@ internal fun WritingStatusOverlay(
             Text(
                 text = statusText,
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = dims.space16, vertical = dims.space4),
             )
         }
         if (statusText.isNotEmpty() && wordCount > 0) {
             Text(
                 text = " · ",
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(vertical = dims.space4),
             )
         }
         if (wordCount > 0) {
             Text(
                 stringResource(R.string.word_count_format, wordCount),
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = dims.space16, vertical = dims.space4),
             )
         }
     }

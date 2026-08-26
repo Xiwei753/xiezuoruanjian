@@ -311,9 +311,11 @@ object DiagnosticsEvents {
      * 规划完成后写入。不记录正文。
      *
      * - [oldAffectedLines]/[newAffectedLines]：受影响视觉行数（old/new 侧）。
-     * - [sameLineMoves]：同视觉行位置插值 slice 数（SliceRole.Move）。
-     * - [crossLineCrossfades]：跨视觉行 Crossfade pair slice 数
-     *   （SliceRole.CrossfadeOld + SliceRole.CrossfadeNew）。
+     * - [sameLineMoves]：同视觉行位置插值 slice 数（SliceRole.Move），只有
+     *   sameShape && 同行 && 位置变化才计入。
+     * - [crossLineCrossfadePairs]：真正跨视觉行的 Crossfade pair 数（一对
+     *   CrossfadeOld + CrossfadeNew 计为 1），只有 oldLineIndex != newLineIndex
+     *   才计入。同行 shaping 变化、fallback Crossfade、rebase continuation 不计入。
      * - [suffixBlockShift]：是否生成了稳定后缀 block shift。
      */
     fun editorReflowPlan(
@@ -321,7 +323,7 @@ object DiagnosticsEvents {
         oldAffectedLines: Int,
         newAffectedLines: Int,
         sameLineMoves: Int,
-        crossLineCrossfades: Int,
+        crossLineCrossfadePairs: Int,
         suffixBlockShift: Boolean,
     ) = record(
         "editor.reflow_plan",
@@ -329,7 +331,7 @@ object DiagnosticsEvents {
         "oldAffectedLines" to oldAffectedLines,
         "newAffectedLines" to newAffectedLines,
         "sameLineMoves" to sameLineMoves,
-        "crossLineCrossfades" to crossLineCrossfades,
+        "crossLineCrossfadePairs" to crossLineCrossfadePairs,
         "suffixBlockShift" to suffixBlockShift,
     )
 

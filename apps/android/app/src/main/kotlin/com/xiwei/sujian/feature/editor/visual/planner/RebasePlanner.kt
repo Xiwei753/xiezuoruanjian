@@ -268,12 +268,33 @@ class RebasePlanner {
                 )
             }
             SliceRole.CrossfadeOld -> {
-                slice.copy(
-                    snapshot = snapshot,
-                    startAlpha = rebaseState.currentAlpha,
-                    endAlpha = 0f,
-                    progressWindow = continuedWindow,
-                )
+                // #639 评论 5420317382：CrossfadeOld 接到旧 Move/CrossfadeNew/Insert
+                // 状态时，必须从当前屏幕真实位置退场。fromRect 就是
+                // SliceVisualState.currentLeft/currentTop/currentRight/currentBottom，
+                // 不退回上一笔事务的逻辑起点，也不用新事务的最终位置。
+                // 旧 Insert 可能只 reveal 到一半，把当前裁剪状态（revealFraction）
+                // 一起保留到 fixedRevealFraction，renderer 画 CrossfadeOld 时冻结
+                // 当前可见部分，只让 alpha 变化。
+                if (rebaseState.role == SliceRole.Move ||
+                    rebaseState.role == SliceRole.CrossfadeNew ||
+                    rebaseState.role == SliceRole.Insert
+                ) {
+                    slice.copy(
+                        snapshot = snapshot,
+                        destinationRect = fromRect,
+                        startAlpha = rebaseState.currentAlpha,
+                        endAlpha = 0f,
+                        fixedRevealFraction = rebaseState.revealFraction,
+                        progressWindow = continuedWindow,
+                    )
+                } else {
+                    slice.copy(
+                        snapshot = snapshot,
+                        startAlpha = rebaseState.currentAlpha,
+                        endAlpha = 0f,
+                        progressWindow = continuedWindow,
+                    )
+                }
             }
             SliceRole.CrossfadeNew -> {
                 if (rebaseState.role == SliceRole.Move) {

@@ -621,32 +621,128 @@ fn try_match_slice(
     None
 }
 
+/// #639 评论 5420317382：判断旧 slice 角色是否属于"当前屏幕上已经可见的新出现文字"。
+///
+/// 这些角色在遇到新 `CrossfadeOld + CrossfadeNew` pair 时，应优先映射到
+/// **CrossfadeOld**（从当前位置退场），而非 CrossfadeNew（新位置淡入）。
+/// 否则旧 Move 的 `currentAlpha`（通常 == 1）会被填给新 CrossfadeNew 的
+/// `startAlpha`，新位置字直接全亮，同时配对 CrossfadeOld 在旧位置继续淡出
+/// → 闪一下/跳一下。
+fn is_emergence_role(role: AnimatedSliceRole) -> bool {
+    matches!(
+        role,
+        AnimatedSliceRole::Move | AnimatedSliceRole::Insert | AnimatedSliceRole::CrossfadeNew
+    )
+}
+
+/// #639 评论 5420317382：对新事务中的 `CrossfadeOld + CrossfadeNew` pair 建索引。
+///
+/// 返回 `byte_range → (crossfade_old_index, crossfade_new_index)` 的映射，
+/// 用于优先把旧 Move/Insert/CrossfadeNew 映射到 CrossfadeOld。一对 pair 必须共享
+/// 同一 byte range（同一逻辑字符，只是跨行/形状变化）。
+///
+/// 若同一 byte range 出现多个 CrossfadeOld 或 CrossfadeNew，取第一个（与
+/// `try_match_slice` 的"第一个兼容"语义一致）。
+fn build_crossfade_pair_index(
+    new_slice_roles: &[AnimatedSliceRole],
+    new_slice_byte_ranges: &[(usize, usize)],
+) -> std::collections::HashMap<(usize, usize), (usize, usize)> {
+    use AnimatedSliceRole::*;
+    let mut old_by_range: std::collections::HashMap<(usize, usize), usize> =
+        std::collections::HashMap::new();
+    let mut new_by_range: std::collections::HashMap<(usize, usize), usize> =
+        std::collections::HashMap::new();
+    for (idx, (role, &range)) in new_slice_roles
+        .iter()
+        .zip(new_slice_byte_ranges.iter())
+        .enumerate()
+    {
+        match *role {
+            CrossfadeOld => {
+                old_by_range.entry(range).or_insert(idx);
+            }
+            CrossfadeNew => {
+                new_by_range.entry(range).or_insert(idx);
+            }
+            _ => {}
+        }
+    }
+    let mut pairs = std::collections::HashMap::new();
+    for (range, &old_idx) in &old_by_range {
+        if let Some(&new_idx) = new_by_range.get(range) {
+            pairs.insert(*range, (old_idx, new_idx));
+        }
+    }
+    pairs
+}
+
 /// #606: 计算旧事务逻辑 slice → 新事务逻辑 slice 的对应关系。
 ///
 /// 平台无关的唯一事实来源 — Android `RebasePlanner` 不再自己匹配，
 /// 直接消费此结果。
 ///
-/// 匹配规则见 [try_match_slice]（SameByteRange → OffsetMapMatched 优先级）。
+/// 匹配规则（按优先级）：
+/// 1. #639 评论 5420317382：旧 Move/Insert/CrossfadeNew 是"当前屏幕上已经可见
+///    的新出现文字"。若新事务对同一 byte range（先 SameByteRange，再 OffsetMap）
+///    存在 `CrossfadeOld + CrossfadeNew` pair，优先映射到 **CrossfadeOld**
+///    （从当前位置退场）；配对 CrossfadeNew 不接旧状态，保持新规划的
+///    `startAlpha = 0` 在新 Layout 自己淡入。
+/// 2. 没有 Crossfade pair 时，走 [try_match_slice] 的现有 Move→Move、
+///    Insert→Insert/CrossfadeNew 等普通 continuation 规则。
+///
 /// 每个新 slice 至多被一个旧 slice 匹配（`used_new` 去重），
 /// 避免多旧 slice 接续同一新 slice 造成 progress 抢占。
 /// 匹配依据只使用 byte range/OffsetMap/角色兼容（平台无关），不使用像素坐标。
 pub fn compute_rebase_slice_mappings(input: SliceMatchInput) -> Vec<RebaseSliceMapping> {
     let mut mappings = Vec::new();
     let mut used_new = std::collections::HashSet::new();
+    let crossfade_pairs =
+        build_crossfade_pair_index(input.new_slice_roles, input.new_slice_byte_ranges);
     for (old_idx, (old_role, &(old_start, old_end))) in input
         .old_slice_roles
         .iter()
         .zip(input.old_slice_byte_ranges.iter())
         .enumerate()
     {
-        if let Some((new_idx, reason)) = try_match_slice(
-            *old_role,
-            (old_start, old_end),
-            input.new_slice_roles,
-            input.new_slice_byte_ranges,
-            &used_new,
-            input.offset_map,
-        ) {
+        // #639 评论 5420317382：优先把旧 emergence role 映射到 Crossfade pair 的
+        // CrossfadeOld，避免旧 Move 的 currentAlpha 被填给新 CrossfadeNew。
+        let mut matched: Option<(usize, RebaseReason)> = None;
+        if is_emergence_role(*old_role) {
+            // 先按 SameByteRange 找 pair
+            if let Some(&(crossfade_old_idx, _)) = crossfade_pairs.get(&(old_start, old_end)) {
+                if !used_new.contains(&crossfade_old_idx) {
+                    matched = Some((crossfade_old_idx, RebaseReason::SameByteRange));
+                }
+            }
+            // 再按 OffsetMap 找 pair
+            if matched.is_none() {
+                if let Some(map) = input.offset_map {
+                    if let Some((mapped_start, mapped_end)) =
+                        map.map_old_range_to_new(old_start, old_end)
+                    {
+                        if let Some(&(crossfade_old_idx, _)) =
+                            crossfade_pairs.get(&(mapped_start, mapped_end))
+                        {
+                            if !used_new.contains(&crossfade_old_idx) {
+                                matched = Some((crossfade_old_idx, RebaseReason::OffsetMapMatched));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 没有 Crossfade pair 时，走现有普通 continuation 规则
+        if matched.is_none() {
+            matched = try_match_slice(
+                *old_role,
+                (old_start, old_end),
+                input.new_slice_roles,
+                input.new_slice_byte_ranges,
+                &used_new,
+                input.offset_map,
+            );
+        }
+        if let Some((new_idx, reason)) = matched {
             mappings.push(RebaseSliceMapping {
                 old_slice_index: old_idx,
                 new_slice_index: new_idx,
