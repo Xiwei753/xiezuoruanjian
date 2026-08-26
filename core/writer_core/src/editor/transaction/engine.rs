@@ -635,17 +635,32 @@ fn is_emergence_role(role: AnimatedSliceRole) -> bool {
     )
 }
 
-/// #639 评论 5420317382：对新事务中的 `CrossfadeOld + CrossfadeNew` pair 建索引。
+/// #639 评论 5421085782：对新事务中的 `CrossfadeOld + CrossfadeNew` pair 建索引。
 ///
-/// 返回 `byte_range → (crossfade_old_index, crossfade_new_index)` 的映射，
-/// 用于优先把旧 Move/Insert/CrossfadeNew 映射到 CrossfadeOld。一对 pair 必须共享
-/// 同一 byte range（同一逻辑字符，只是跨行/形状变化）。
+/// 返回 `old_side_byte_range → (crossfade_old_index, crossfade_new_index)` 的映射，
+/// 用于优先把旧 Move/Insert/CrossfadeNew 映射到 CrossfadeOld。**索引键始终是
+/// CrossfadeOld 的 old-side byte range**（CrossfadeOld.range 本身就是 old 文档坐标），
+/// 这样 `compute_rebase_slice_mappings` 的旧活动 slice（也在 old 文档坐标）一次
+/// 查询即可命中，不需要再做二次 OffsetMap 映射。
+///
+/// 配对规则：对每个 CrossfadeOld，先用 `offset_map.map_old_range_to_new(old_range)`
+/// 把 old-side range 映射到 new-side range，再按这个 new-side range 在
+/// `new_by_range` 里找 CrossfadeNew。若 `offset_map` 为 `None`、映射返回 `None`
+/// 或映射后范围与 CrossfadeOld.range 相同（映射不变），则 fallback 按同 range
+/// 在 `new_by_range` 里找。
+///
+/// 这修复了 #639 评论 5421085782 问题1：插字/回车时保留字符的 old range
+/// （例如 [30,33)）被 OffsetMap 平移到 new range（例如 [33,36)），CrossfadeOld.range
+/// （old 坐标）与 CrossfadeNew.range（new 坐标）不同，旧实现要求两者相同才能配对，
+/// 导致 pair 建不出来，旧 Move 掉回 `try_match_slice` 接到 CrossfadeNew，新位置
+/// 突然全亮。
 ///
 /// 若同一 byte range 出现多个 CrossfadeOld 或 CrossfadeNew，取第一个（与
 /// `try_match_slice` 的"第一个兼容"语义一致）。
 fn build_crossfade_pair_index(
     new_slice_roles: &[AnimatedSliceRole],
     new_slice_byte_ranges: &[(usize, usize)],
+    offset_map: Option<&OffsetMap>,
 ) -> std::collections::HashMap<(usize, usize), (usize, usize)> {
     use AnimatedSliceRole::*;
     let mut old_by_range: std::collections::HashMap<(usize, usize), usize> =
@@ -668,9 +683,19 @@ fn build_crossfade_pair_index(
         }
     }
     let mut pairs = std::collections::HashMap::new();
-    for (range, &old_idx) in &old_by_range {
-        if let Some(&new_idx) = new_by_range.get(range) {
-            pairs.insert(*range, (old_idx, new_idx));
+    for (&old_range, &old_idx) in old_by_range.iter() {
+        // #639 评论 5421085782：CrossfadeOld.range 是 old 文档坐标，
+        // CrossfadeNew.range 是 new 文档坐标。用 OffsetMap 把 old-side range
+        // 映射到 new-side range 后再找 CrossfadeNew。映射不变/无 OffsetMap
+        // 时 fallback 按同 range（保留旧实现语义作为子集）。
+        let new_lookup_range = match offset_map {
+            Some(map) => map
+                .map_old_range_to_new(old_range.0, old_range.1)
+                .unwrap_or(old_range),
+            None => old_range,
+        };
+        if let Some(&new_idx) = new_by_range.get(&new_lookup_range) {
+            pairs.insert(old_range, (old_idx, new_idx));
         }
     }
     pairs
@@ -682,11 +707,13 @@ fn build_crossfade_pair_index(
 /// 直接消费此结果。
 ///
 /// 匹配规则（按优先级）：
-/// 1. #639 评论 5420317382：旧 Move/Insert/CrossfadeNew 是"当前屏幕上已经可见
-///    的新出现文字"。若新事务对同一 byte range（先 SameByteRange，再 OffsetMap）
-///    存在 `CrossfadeOld + CrossfadeNew` pair，优先映射到 **CrossfadeOld**
-///    （从当前位置退场）；配对 CrossfadeNew 不接旧状态，保持新规划的
-///    `startAlpha = 0` 在新 Layout 自己淡入。
+/// 1. #639 评论 5421085782：旧 Move/Insert/CrossfadeNew 是"当前屏幕上已经可见
+///    的新出现文字"。若新事务存在 `CrossfadeOld + CrossfadeNew` pair，且 pair
+///    索引键（CrossfadeOld 的 old-side range）与旧 slice 的 byte range 相同，
+///    优先映射到 **CrossfadeOld**（从当前位置退场）；配对 CrossfadeNew 不接旧
+///    状态，保持新规划的 `startAlpha = 0` 在新 Layout 自己淡入。pair 索引键
+///    已是 old-side 坐标，旧 slice 也在 old 坐标，一次查询即可命中，不需要
+///    二次 OffsetMap 映射。
 /// 2. 没有 Crossfade pair 时，走 [try_match_slice] 的现有 Move→Move、
 ///    Insert→Insert/CrossfadeNew 等普通 continuation 规则。
 ///
@@ -696,40 +723,30 @@ fn build_crossfade_pair_index(
 pub fn compute_rebase_slice_mappings(input: SliceMatchInput) -> Vec<RebaseSliceMapping> {
     let mut mappings = Vec::new();
     let mut used_new = std::collections::HashSet::new();
-    let crossfade_pairs =
-        build_crossfade_pair_index(input.new_slice_roles, input.new_slice_byte_ranges);
+    let crossfade_pairs = build_crossfade_pair_index(
+        input.new_slice_roles,
+        input.new_slice_byte_ranges,
+        input.offset_map,
+    );
     for (old_idx, (old_role, &(old_start, old_end))) in input
         .old_slice_roles
         .iter()
         .zip(input.old_slice_byte_ranges.iter())
         .enumerate()
     {
-        // #639 评论 5420317382：优先把旧 emergence role 映射到 Crossfade pair 的
+        // #639 评论 5421085782：优先把旧 emergence role 映射到 Crossfade pair 的
         // CrossfadeOld，避免旧 Move 的 currentAlpha 被填给新 CrossfadeNew。
+        // pair 索引键已是 CrossfadeOld 的 old-side range，旧 slice 也在 old 坐标，
+        // 一次查询即可命中。
         let mut matched: Option<(usize, RebaseReason)> = None;
         if is_emergence_role(*old_role) {
-            // 先按 SameByteRange 找 pair
-            if let Some(&(crossfade_old_idx, _)) = crossfade_pairs.get(&(old_start, old_end)) {
-                if !used_new.contains(&crossfade_old_idx) {
-                    matched = Some((crossfade_old_idx, RebaseReason::SameByteRange));
-                }
-            }
-            // 再按 OffsetMap 找 pair
-            if matched.is_none() {
-                if let Some(map) = input.offset_map {
-                    if let Some((mapped_start, mapped_end)) =
-                        map.map_old_range_to_new(old_start, old_end)
-                    {
-                        if let Some(&(crossfade_old_idx, _)) =
-                            crossfade_pairs.get(&(mapped_start, mapped_end))
-                        {
-                            if !used_new.contains(&crossfade_old_idx) {
-                                matched = Some((crossfade_old_idx, RebaseReason::OffsetMapMatched));
-                            }
-                        }
-                    }
-                }
-            }
+            // #639 评论 5421085782：pair 索引键已是 CrossfadeOld 的 old-side range，
+            // 旧 slice 也在 old 坐标，一次查询即可命中。filter 跳过已被其他旧 slice
+            // 占用的 pair（used_new 去重），避免多旧 slice 接续同一新 slice。
+            matched = crossfade_pairs
+                .get(&(old_start, old_end))
+                .filter(|&&(idx, _)| !used_new.contains(&idx))
+                .map(|&(idx, _)| (idx, RebaseReason::SameByteRange));
         }
         // 没有 Crossfade pair 时，走现有普通 continuation 规则
         if matched.is_none() {

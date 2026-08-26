@@ -655,3 +655,67 @@ fn repro_639_comment_5420317382_move_and_crossfade_new_treated_as_same_emergence
         "对照：compatible_rebase_roles(CrossfadeOld, Move) == false，旧 Move 不可映射到单独的 CrossfadeOld"
     );
 }
+
+/// #639 评论 5421085782 问题1 复现：`build_crossfade_pair_index` 只在
+/// `CrossfadeOld.range == CrossfadeNew.range` 时才认成一对。但 CrossfadeOld.range
+/// 是 old 文档坐标、CrossfadeNew.range 是 new 文档坐标，被 OffsetMap 平移后不同
+/// （例如插字/回车后保留字符 old [30,33) → new [33,36)）。pair 建不出来 →
+/// `compute_rebase_slice_mappings` 掉回 `try_match_slice`，旧 Move 经
+/// OffsetMap 映射后接到 **CrossfadeNew**（新位置），而非期望的 CrossfadeOld
+/// （从旧位置退场）。这会让旧 Move 的 currentAlpha 被填给新 CrossfadeNew 的
+/// startAlpha，新位置字突然全亮，上一轮修的"新位置突然全亮"漏洞仍存在。
+///
+/// 此测试断言**期望行为**（旧 Move → CrossfadeOld），当前实现因 pair 建不出来
+/// 会把旧 Move 映射到 CrossfadeNew，测试失败，暴露漏洞。
+#[test]
+fn compute_rebase_slice_mappings_crossfade_pair_offset_mapped_old_to_new() {
+    // 场景：在 byte offset 30 处插字，后面保留的 3 字符 cluster 从 old [30,33)
+    // 平移到 new [33,36)。新事务为这一对生成 CrossfadeOld(range=[30,33)，old 坐标)
+    // + CrossfadeNew(range=[33,36)，new 坐标)。旧事务的 slice 是 Move(range=[30,33)，
+    // old 坐标，emergence role)。
+    let old_roles = [AnimatedSliceRole::Move];
+    let old_ranges = [(30, 33)];
+    let new_roles = [
+        AnimatedSliceRole::CrossfadeOld,
+        AnimatedSliceRole::CrossfadeNew,
+    ];
+    // CrossfadeOld.range 是 old 坐标 [30,33)；CrossfadeNew.range 是 new 坐标 [33,36)。
+    // 两者不同 → build_crossfade_pair_index 配对失败。
+    let new_ranges = [(30, 33), (33, 36)];
+    // OffsetMap 把 old [30,33) 映射到 new [33,36)（保留字符整体平移 3 字节）。
+    let offset_map = OffsetMap {
+        entries: vec![crate::editor::OffsetMapEntry {
+            old_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(30),
+            new_byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(33),
+            length: 3,
+            kind: crate::editor::OffsetMapKind::Shifted,
+        }],
+    };
+    let mappings = compute_rebase_slice_mappings(SliceMatchInput {
+        old_slice_roles: &old_roles,
+        old_slice_byte_ranges: &old_ranges,
+        new_slice_roles: &new_roles,
+        new_slice_byte_ranges: &new_ranges,
+        offset_map: Some(&offset_map),
+    });
+
+    // 期望：旧 Move 映射到 CrossfadeOld（new_slice_index == 0），从旧位置退场。
+    // 当前实现：pair 建不出来 → 掉回 try_match_slice → 旧 Move 经 OffsetMap 映射
+    // 后接到 CrossfadeNew（new_slice_index == 1），新位置突然全亮。
+    assert_eq!(
+        mappings.len(),
+        1,
+        "旧 Move 应映射到 Crossfade pair 中的一个 slice"
+    );
+    assert_eq!(
+        mappings[0].old_slice_index, 0,
+        "旧 slice index 应为 0（唯一一个旧 Move）"
+    );
+    assert_eq!(
+        mappings[0].new_slice_index, 0,
+        "旧 Move 应映射到 CrossfadeOld（new_slice_index == 0，从旧位置退场）。\
+         当前实现因 build_crossfade_pair_index 要求 CrossfadeOld.range == CrossfadeNew.range\
+         而建不出 pair，掉回 try_match_slice 后旧 Move 经 OffsetMap 映射接到 CrossfadeNew\
+         （new_slice_index == 1），新位置突然全亮 — 这正是 #639 评论 5421085782 问题1。"
+    );
+}

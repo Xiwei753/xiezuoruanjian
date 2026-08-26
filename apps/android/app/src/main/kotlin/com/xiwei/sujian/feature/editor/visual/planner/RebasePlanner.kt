@@ -4,6 +4,7 @@ import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 import com.xiwei.sujian.feature.editor.visual.SliceVisualState
+import com.xiwei.sujian.feature.editor.visual.TextRevealGeometry
 import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
 import com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot
@@ -268,23 +269,29 @@ class RebasePlanner {
                 )
             }
             SliceRole.CrossfadeOld -> {
-                // #639 评论 5420317382：CrossfadeOld 接到旧 Move/CrossfadeNew/Insert
+                // #639 评论 5421085782 问题2：CrossfadeOld 接到旧 Move/CrossfadeNew/Insert
                 // 状态时，必须从当前屏幕真实位置退场。fromRect 就是
                 // SliceVisualState.currentLeft/currentTop/currentRight/currentBottom，
                 // 不退回上一笔事务的逻辑起点，也不用新事务的最终位置。
-                // 旧 Insert 可能只 reveal 到一半，把当前裁剪状态（revealFraction）
-                // 一起保留到 fixedRevealFraction，renderer 画 CrossfadeOld 时冻结
-                // 当前可见部分，只让 alpha 变化。
+                // 旧 Insert 可能只 reveal 到一半，把当前裁剪状态用真实 caret reveal
+                // 几何（cluster.caretStartX/caretEndX + revealFraction）算成
+                // document-space clip rect 存入 fixedRevealClipRect，renderer 画
+                // CrossfadeOld 时 clipRect(fixedRevealClipRect) 后画完整 bitmap，
+                // 冻结当前可见部分，只让 alpha 变化。这与正常 Insert/Delete 的
+                // computeRevealClipRect 共用同一份几何（TextRevealGeometry），
+                // 字形 overhang 和 RTL 都自动正确，不再用 bitmap 宽度比例近似。
                 if (rebaseState.role == SliceRole.Move ||
                     rebaseState.role == SliceRole.CrossfadeNew ||
                     rebaseState.role == SliceRole.Insert
                 ) {
+                    val fixedRevealClipRect =
+                        computeFixedRevealClipRect(rebaseState, snapshotLookup, snapshot)
                     slice.copy(
                         snapshot = snapshot,
                         destinationRect = fromRect,
                         startAlpha = rebaseState.currentAlpha,
                         endAlpha = 0f,
-                        fixedRevealFraction = rebaseState.revealFraction,
+                        fixedRevealClipRect = fixedRevealClipRect,
                         progressWindow = continuedWindow,
                     )
                 } else {
@@ -314,5 +321,54 @@ class RebasePlanner {
             }
             SliceRole.Static -> slice
         }
+    }
+
+    /**
+     * #639 评论 5421085782 问题2：为 CrossfadeOld 算 rebase 冻结的 document-space clip rect。
+     *
+     * 旧 Insert 只 reveal 到一半时，rebase 成 CrossfadeOld 不能把半个字突然变成完整字
+     * 再淡出。用旧 snapshot 匹配 cluster 的 caretStartX/caretEndX + rebaseState.revealFraction
+     * 经 [TextRevealGeometry.computeRevealClipRect] 算出冻结的 clip rect。
+     *
+     * - 旧 snapshot 优先从 [snapshotLookup] 按 [rebaseState.snapshotId] 取，fallback
+     *   用传入的 [fallbackSnapshot]（即新 slice 自己的 snapshot）。
+     * - cluster 用 [rebaseState.clusterByteStart]/[rebaseState.clusterByteEndExclusive]
+     *   在旧 snapshot 的 clusters 里匹配。
+     * - destination 用旧 Insert 的 currentRect（[rebaseState.currentLeft/Top/Right/Bottom]），
+     *   即当前屏幕真实位置。
+     * - mode = REVEAL，anchorX = cluster.caretStartX，boundaryFromX = cluster.caretStartX，
+     *   boundaryToX = cluster.caretEndX — 与 CaretRevealPlanner Insert REVEAL spec 一致。
+     *
+     * 返回 null 的条件：revealFraction 为 null（旧 slice 不是 reveal 动画）、
+     * 找不到旧 snapshot、找不到匹配 cluster。此时 renderer 画完整 bitmap 不裁剪
+     * （fallback 到旧 CrossfadeOld 行为）。
+     */
+    private fun computeFixedRevealClipRect(
+        rebaseState: SliceVisualState,
+        snapshotLookup: Map<Long, AndroidLineSnapshot>,
+        fallbackSnapshot: AndroidLineSnapshot?,
+    ): android.graphics.RectF? {
+        val fraction = rebaseState.revealFraction ?: return null
+        val oldSnapshot = snapshotLookup[rebaseState.snapshotId] ?: fallbackSnapshot ?: return null
+        val cluster =
+            oldSnapshot.clusters.firstOrNull {
+                it.documentByteStart == rebaseState.clusterByteStart &&
+                    it.documentByteEndExclusive == rebaseState.clusterByteEndExclusive
+            } ?: return null
+        val destination =
+            android.graphics.RectF(
+                rebaseState.currentLeft,
+                rebaseState.currentTop,
+                rebaseState.currentRight,
+                rebaseState.currentBottom,
+            )
+        return TextRevealGeometry.computeRevealClipRect(
+            destination,
+            TextRevealMode.REVEAL,
+            cluster.caretStartX,
+            cluster.caretStartX,
+            cluster.caretEndX,
+            fraction,
+        )
     }
 }

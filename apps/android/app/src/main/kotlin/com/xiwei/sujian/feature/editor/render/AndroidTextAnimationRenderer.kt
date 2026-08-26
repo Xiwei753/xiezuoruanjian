@@ -4,7 +4,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
-import com.xiwei.sujian.feature.editor.visual.TextRevealMode
+import com.xiwei.sujian.feature.editor.visual.TextRevealGeometry
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
 
 class AndroidTextAnimationRenderer {
@@ -59,35 +59,23 @@ class AndroidTextAnimationRenderer {
                     drawRevealSlice(canvas, bitmap, slice, localProgress)
                 }
                 // CrossfadeOld: position does not change during animation — only alpha varies.
-                // #639 评论 5420317382：若 fixedRevealFraction 非空（旧 Insert 只 reveal
-                // 到一半被 rebase 成 CrossfadeOld），先按原 cluster 的 reveal 几何裁到这个
-                // 固定 fraction，再做 alpha 淡出。fraction 在本次 CrossfadeOld 期间保持不动，
-                // 只让 alpha 变化，不把半个字突然变成完整字再淡出。
+                // #639 评论 5421085782 问题2：若 fixedRevealClipRect 非空（旧 Insert 只
+                // reveal 到一半被 rebase 成 CrossfadeOld），canvas.save()+clipRect(冻结的
+                // document-space clip rect)+drawBitmap(完整 bitmap, sourceRect,
+                // destinationRect)+restoreToCount()，再做 alpha 淂出。clip rect 在本次
+                // CrossfadeOld 期间保持不动，只让 alpha 变化，不把半个字突然变成完整字
+                // 再淡出。clip rect 用真实 caret reveal 几何（TextRevealGeometry）算出，
+                // 与正常 Insert/Delete 的 computeRevealClipRect 共用同一份几何 — 字形
+                // overhang 和 RTL 都自动正确，不再用 bitmap 宽度比例近似。
                 SliceRole.CrossfadeOld -> {
                     val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
                     slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
-                    val fixedFraction = slice.fixedRevealFraction
-                    if (fixedFraction != null && fixedFraction > 0f && fixedFraction < 1f) {
-                        val srcWidth = slice.sourceRect.width()
-                        val visibleSrcRight =
-                            slice.sourceRect.left + (srcWidth * fixedFraction).toInt()
-                        val clipSrc =
-                            android.graphics.Rect(
-                                slice.sourceRect.left,
-                                slice.sourceRect.top,
-                                visibleSrcRight,
-                                slice.sourceRect.bottom,
-                            )
-                        val destWidth = slice.destinationRect.width()
-                        val visibleDestRight = slice.destinationRect.left + destWidth * fixedFraction
-                        val clipDest =
-                            android.graphics.RectF(
-                                slice.destinationRect.left,
-                                slice.destinationRect.top,
-                                visibleDestRight,
-                                slice.destinationRect.bottom,
-                            )
-                        canvas.drawBitmap(bitmap, clipSrc, clipDest, slicePaint)
+                    val fixedClip = slice.fixedRevealClipRect
+                    if (fixedClip != null) {
+                        val save = canvas.save()
+                        canvas.clipRect(fixedClip)
+                        canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, slicePaint)
+                        canvas.restoreToCount(save)
                     } else {
                         canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, slicePaint)
                     }
@@ -133,13 +121,12 @@ class AndroidTextAnimationRenderer {
     /**
      * Compute the clip rect for reveal/swallow animation at [globalProgress].
      *
+     * #639 评论 5421085782 问题2：纯几何部分抽到 [TextRevealGeometry.computeRevealClipRect]，
+     * 正常 Insert/Delete renderer 和 rebase 冻结（CrossfadeOld 的 fixedRevealClipRect）
+     * 共用同一份几何，不再有第二套"按 bitmap 宽度乘 fraction"的近似。
+     *
      * REVEAL: fraction=0 -> null (not visible), fraction=1 -> full destination.
      * SWALLOW: fraction=0 -> full destination, fraction=1 -> null (not visible).
-     *
-     * The clip rect is the intersection of [destination] with the region between
-     * [spec.anchorX] and the interpolated boundary position. This ensures only
-     * the visible portion of the glyph is drawn, while overhang at fraction=1
-     * is fully shown (returns complete destination, not clipped to caret X).
      */
     fun computeRevealClipRect(
         destination: android.graphics.RectF,
@@ -147,30 +134,14 @@ class AndroidTextAnimationRenderer {
         globalProgress: Float,
     ): android.graphics.RectF? {
         val fraction = spec.fraction(globalProgress)
-        return when (spec.mode) {
-            TextRevealMode.REVEAL -> {
-                if (fraction <= 0f) return null
-                if (fraction >= 1f) return android.graphics.RectF(destination)
-                val boundary = spec.boundaryFromX + (spec.boundaryToX - spec.boundaryFromX) * fraction
-                val left = kotlin.math.min(spec.anchorX, boundary)
-                val right = kotlin.math.max(spec.anchorX, boundary)
-                val clipLeft = kotlin.math.max(left, destination.left)
-                val clipRight = kotlin.math.min(right, destination.right)
-                if (clipRight <= clipLeft) return null
-                android.graphics.RectF(clipLeft, destination.top, clipRight, destination.bottom)
-            }
-            TextRevealMode.SWALLOW -> {
-                if (fraction >= 1f) return null
-                if (fraction <= 0f) return android.graphics.RectF(destination)
-                val boundary = spec.boundaryFromX + (spec.boundaryToX - spec.boundaryFromX) * fraction
-                val left = kotlin.math.min(spec.anchorX, boundary)
-                val right = kotlin.math.max(spec.anchorX, boundary)
-                val clipLeft = kotlin.math.max(left, destination.left)
-                val clipRight = kotlin.math.min(right, destination.right)
-                if (clipRight <= clipLeft) return null
-                android.graphics.RectF(clipLeft, destination.top, clipRight, destination.bottom)
-            }
-        }
+        return TextRevealGeometry.computeRevealClipRect(
+            destination,
+            spec.mode,
+            spec.anchorX,
+            spec.boundaryFromX,
+            spec.boundaryToX,
+            fraction,
+        )
     }
 
     fun drawAnimatedCursor(

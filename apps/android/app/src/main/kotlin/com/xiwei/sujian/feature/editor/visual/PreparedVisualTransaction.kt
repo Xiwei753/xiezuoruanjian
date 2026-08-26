@@ -68,16 +68,23 @@ data class PreparedVisualTransaction(
          *  新事务首次播放为 [VisualProgressWindow.Full]；rebase continuation 时
          *  end = 1 - consumedFraction，让已走部分不重新计时。 */
         val progressWindow: VisualProgressWindow = VisualProgressWindow.Full,
-        /** #639 评论 5420317382：rebase 专用的固定裁剪 fraction。
+        /** #639 评论 5421085782 问题2：rebase 专用的固定裁剪 rect（document-space）。
          *
          *  旧 Insert 可能只 reveal 到一半，rebase 成 CrossfadeOld 时不能把半个字
-         *  突然变成完整字再淡出。`RebasePlanner` 在旧状态有 `revealFraction` 时
-         *  写进此字段；`AndroidTextAnimationRenderer` 画 CrossfadeOld 时若此值
-         *  非空，先按原 cluster 的 reveal 几何裁到这个固定 fraction，再做 alpha 淡出。
-         *  本次 CrossfadeOld 期间 fraction 保持不动，只让 alpha 变化。
+         *  突然变成完整字再淡出。`RebasePlanner` 在旧状态有 `revealFraction` 且能从
+         *  旧 snapshot 找到匹配 cluster 时，用 cluster 的 caretStartX/caretEndX +
+         *  revealFraction 经 [TextRevealGeometry.computeRevealClipRect] 算出
+         *  document-space clip rect，写进此字段；`AndroidTextAnimationRenderer`
+         *  画 CrossfadeOld 时若此值非空，canvas.save()+clipRect(fixedRevealClipRect)
+         *  +drawBitmap(完整 bitmap, sourceRect, destinationRect)+restoreToCount()，
+         *  再做 alpha 淡出。本次 CrossfadeOld 期间 clip rect 保持不动，只让 alpha 变化。
+         *
+         *  这与正常 Insert/Delete 的 [computeRevealClipRect] 共用同一份 caret reveal
+         *  几何，不再有第二套"按 bitmap 宽度乘 fraction"的近似 — 字形 overhang
+         *  （bitmap 宽度 > caret 宽度）和 RTL（caret 从右往左 reveal）都自动正确。
          *  不拿 [TextRevealSpec.initialFraction] 硬凑，因为 [TextRevealSpec.fraction]
          *  会继续向 1 推，不是"冻结当前可见部分"。 */
-        val fixedRevealFraction: Float? = null,
+        val fixedRevealClipRect: android.graphics.RectF? = null,
     )
 
     data class SelectionDecoration(

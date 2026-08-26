@@ -4,6 +4,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
+import com.xiwei.sujian.feature.editor.visual.TextRevealGeometry
 import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
 import org.junit.Assert.assertEquals
@@ -433,5 +434,123 @@ class AndroidTextAnimationRendererTest {
 
         val newRegions = renderer.computeStaticSuppressionRegions(transaction, 0.5f)
         assertEquals("Insert/Move/CrossfadeNew 都应 suppress", 3, newRegions.size)
+    }
+
+    // #639 评论 5421085782 问题2 复现
+
+    /**
+     * #639 评论 5421085782 问题2 验证（修复后）：CrossfadeOld 的 fixedRevealClipRect
+     * 用真实 caret reveal 几何（TextRevealGeometry）算，与 CaretRevealPlanner 的
+     * Insert REVEAL spec 语义一致，不再用 bitmap 宽度比例从左裁剪。
+     *
+     * 场景：cluster caretStartX=10, caretEndX=90（reveal 边界在 10..90），
+     * destination 宽度 100（字形 overhang 让 bitmap 比 caret 宽），revealFraction=0.5。
+     *
+     * 修复后 fixedRevealClipRect（TextRevealGeometry REVEAL，anchorX=10,
+     * boundary 10→90, fraction=0.5 → boundary=50 → clip [10,50)）。
+     * 旧实现按 bitmap 宽度比例从左裁 [0,50) — left 偏移 10px。
+     *
+     * 测试断言：fixedRevealClipRect == 期望 caret 几何 [10,50)，
+     * 且 != 旧 bitmap 宽度比例 [0,50)（锁住不回退）。
+     */
+    @Test
+    fun crossfadeOldFixedRevealFractionMatchesCaretRevealGeometry() {
+        val caretStartX = 10f
+        val caretEndX = 90f
+        val destination = RectF(0f, 0f, 100f, 20f)
+        val fixedFraction = 0.5f
+
+        // 修复后：RebasePlanner.computeFixedRevealClipRect 用 TextRevealGeometry 算
+        // document-space clip rect（mode=REVEAL, anchorX=caretStartX,
+        // boundaryFromX=caretStartX, boundaryToX=caretEndX, fraction=revealFraction）。
+        val fixedRevealClipRect =
+            TextRevealGeometry.computeRevealClipRect(
+                destination,
+                TextRevealMode.REVEAL,
+                caretStartX,
+                caretStartX,
+                caretEndX,
+                fixedFraction,
+            ) ?: error("fixedRevealClipRect 在 fraction=0.5 不应为 null")
+
+        // 期望：LTR caret reveal 几何 anchorX=10, boundary 10→90, fraction=0.5
+        // → boundary=50 → clip [10,50)。
+        assertEquals(
+            "CrossfadeOld fixedRevealClipRect left 应为 caretStartX=10（caret 几何），\
+             不应是旧 bitmap 宽度比例 left=0 — #639 评论 5421085782 问题2 已修复。",
+            caretStartX,
+            fixedRevealClipRect.left,
+            eps,
+        )
+        assertEquals(
+            "CrossfadeOld fixedRevealClipRect right 应为 50（caret 几何 boundary=10+(90-10)*0.5）。",
+            50f,
+            fixedRevealClipRect.right,
+            eps,
+        )
+
+        // 锁住：不再用 bitmap 宽度比例裁剪（旧实现 [0,50)，left=0）。
+        val oldBitmapClipLeft = destination.left
+        assertTrue(
+            "CrossfadeOld 不应再用 bitmap 宽度比例 left=0；当前 fixedRevealClipRect.left=${fixedRevealClipRect.left}",
+            kotlin.math.abs(fixedRevealClipRect.left - oldBitmapClipLeft) > eps,
+        )
+    }
+
+    /**
+     * #639 评论 5421085782 问题2 验证（修复后，RTL）：CrossfadeOld 的 fixedRevealClipRect
+     * 用真实 caret reveal 几何，RTL 时 caret 从右往左 reveal，clip 从右往左裁。
+     *
+     * 场景：RTL cluster caretStartX=90, caretEndX=10（reveal 从右往左），
+     * destination 宽度 100，revealFraction=0.5。
+     *
+     * 修复后 fixedRevealClipRect（TextRevealGeometry REVEAL，anchorX=90,
+     * boundary 90→10, fraction=0.5 → boundary=50 → clip [50,90)）。
+     * 旧实现按 bitmap 宽度比例从左裁 [0,50) — RTL 直接裁反。
+     *
+     * 测试断言：fixedRevealClipRect == 期望 caret 几何 [50,90)，
+     * 且 != 旧 bitmap 宽度比例 [0,50)（锁住 RTL 不裁反）。
+     */
+    @Test
+    fun crossfadeOldFixedRevealFractionMatchesCaretRevealGeometryRtl() {
+        val caretStartX = 90f
+        val caretEndX = 10f
+        val destination = RectF(0f, 0f, 100f, 20f)
+        val fixedFraction = 0.5f
+
+        // 修复后：RebasePlanner.computeFixedRevealClipRect 用 TextRevealGeometry 算
+        // document-space clip rect（RTL：anchorX=90, boundary 90→10）。
+        val fixedRevealClipRect =
+            TextRevealGeometry.computeRevealClipRect(
+                destination,
+                TextRevealMode.REVEAL,
+                caretStartX,
+                caretStartX,
+                caretEndX,
+                fixedFraction,
+            ) ?: error("RTL fixedRevealClipRect 在 fraction=0.5 不应为 null")
+
+        // 期望：RTL caret reveal 几何 anchorX=90, boundary 90→10, fraction=0.5
+        // → boundary=50 → left=min(90,50)=50, right=max(90,50)=90 → clip [50,90)。
+        assertEquals(
+            "RTL CrossfadeOld fixedRevealClipRect left 应为 50（caret 几何 boundary=90+(10-90)*0.5），\
+             不应是旧 bitmap 宽度比例 left=0 — #639 评论 5421085782 问题2 RTL 已修复。",
+            50f,
+            fixedRevealClipRect.left,
+            eps,
+        )
+        assertEquals(
+            "RTL CrossfadeOld fixedRevealClipRect right 应为 90（caret anchorX=90）。",
+            90f,
+            fixedRevealClipRect.right,
+            eps,
+        )
+
+        // 锁住：不再用 bitmap 宽度比例从左裁（旧实现 [0,50)，RTL 裁反）。
+        val oldBitmapClipRight = destination.left + destination.width() * fixedFraction
+        assertTrue(
+            "RTL CrossfadeOld 不应再用 bitmap 宽度比例 right=50；当前 fixedRevealClipRect.right=${fixedRevealClipRect.right}",
+            kotlin.math.abs(fixedRevealClipRect.right - oldBitmapClipRight) > eps,
+        )
     }
 }
