@@ -14,7 +14,6 @@ import com.xiwei.sujian.feature.editor.visual.VisualProgressWindow
 import com.xiwei.sujian.feature.editor.visual.VisualResourceStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -42,7 +41,6 @@ import uniffi.writer_core.EditorTransactionCauseDto
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class VisualCursorViewportTest {
-
     private lateinit var view: SujianEditorView
     private lateinit var engine: AndroidTextAnimationEngine
 
@@ -53,12 +51,13 @@ class VisualCursorViewportTest {
     @Before
     fun setUp() {
         view = SujianEditorView(ApplicationProvider.getApplicationContext())
-        engine = AndroidTextAnimationEngine(
-            AndroidVisualPlanner(),
-            VisualResourceStore(),
-            ChoreographerAnimationTimeSource(),
-            TransactionIdSource(),
-        )
+        engine =
+            AndroidTextAnimationEngine(
+                AndroidVisualPlanner(),
+                VisualResourceStore(),
+                ChoreographerAnimationTimeSource(),
+                TransactionIdSource(),
+            )
         view.attachSession(
             sessionBridge = RecordingBridge(),
             profile = TextEditorProfile.DocumentBody,
@@ -296,6 +295,146 @@ class VisualCursorViewportTest {
         assertEquals("rect 已在可视区内，scrollY 不应改变", 100.0, viewport.scrollY.toDouble(), 0.001)
     }
 
+    /**
+     * #638 评论 5403756824：viewport 事务级过渡 — 锁“没有终点跳变”。
+     *
+     * 旧 layout scrollY=1000，新 layout maxScrollY=800，viewport 从 1000 连续过渡到 800：
+     * - progress=0：1000
+     * - progress=0.5：约 900
+     * - progress=1：800
+     * - 随后切静态再 clamp()，仍然必须是 800，前后差值为 0。
+     *
+     * 旧测试把 1000→800 的终点跳变锁定为“正确”行为，正好锁定 Issue #638 要消除的缺陷。
+     * 此测试反过来锁 viewport 作为视觉事务一部分连续过渡，终点帧不跳。
+     */
+    @Test
+    fun visualFrame_doesNotClampDuringTransaction_thenClampsOnStatic() {
+        val viewport = getViewportController()
+        // 先把 maxScrollY 抬到 1200，让 setScroll(0, 1000) 不被夹；
+        // 再 updateMaxScroll(800, clampNow=false) 模拟新 layout 高度变短。
+        setMaxScrollY(viewport, 1200f)
+        viewport.setScroll(x = 0f, y = 1000f)
+        viewport.updateMaxScroll(max = 800f, clampNow = false)
+        assertEquals("视觉事务前 maxScrollY 应更新为 800", 800.0, getMaxScrollY(viewport).toDouble(), 0.001)
+        assertEquals("scrollY 不应被夹取（仍为 1000）", 1000.0, viewport.scrollY.toDouble(), 0.001)
+
+        // 建立视口视觉过渡：fromScrollY=1000, toScrollY=800
+        viewport.beginOrRebaseVisualTransition(transactionId = 1L, targetScrollY = 800f)
+
+        // progress=0：scrollY 应为 1000（起点）
+        viewport.applyVisualFrame(transactionId = 1L, 0f)
+        assertEquals("progress=0 scrollY 应为 1000（起点）", 1000.0, viewport.scrollY.toDouble(), 0.001)
+
+        // progress=0.5：scrollY 应约为 900（线性插值）
+        viewport.applyVisualFrame(transactionId = 1L, 0.5f)
+        assertEquals("progress=0.5 scrollY 应约为 900", 900.0, viewport.scrollY.toDouble(), 0.001)
+
+        // progress=1：scrollY 应为 800（终点）
+        viewport.applyVisualFrame(transactionId = 1L, 1f)
+        assertEquals("progress=1 scrollY 应为 800（终点）", 800.0, viewport.scrollY.toDouble(), 0.001)
+
+        // 事务完成收尾过渡
+        viewport.endVisualTransition()
+        val scrollYAfterEnd = viewport.scrollY
+        assertEquals("endVisualTransition 后 scrollY 应为 800", 800.0, scrollYAfterEnd.toDouble(), 0.001)
+
+        // 随后切静态再 clamp()，仍然必须是 800，前后差值为 0
+        viewport.clamp()
+        assertEquals("静态 clamp 后 scrollY 应仍为 800（no-op）", 800.0, viewport.scrollY.toDouble(), 0.001)
+        assertEquals("静态 clamp 前后差值应为 0", 0.0, (viewport.scrollY - scrollYAfterEnd).toDouble(), 0.001)
+    }
+
+    /**
+     * #638 评论 5403756824：连续 rebase — 旧 viewport 过渡走到一半后新事务接管，
+     * 新事务第一帧必须从当前屏幕 scrollY 继续，不能跳回旧起点，也不能把剩余路程
+     * 重新拉满完整时长。
+     */
+    @Test
+    fun visualTransition_continuousRebase_continuesFromCurrentScrollY() {
+        val viewport = getViewportController()
+        setMaxScrollY(viewport, 1200f)
+        viewport.setScroll(x = 0f, y = 1000f)
+        viewport.updateMaxScroll(max = 800f, clampNow = false)
+
+        // 第一笔事务：fromScrollY=1000, toScrollY=800
+        viewport.beginOrRebaseVisualTransition(transactionId = 1L, targetScrollY = 800f)
+        // 走到一半：scrollY=900, lastRemainingFraction=0.5
+        viewport.applyVisualFrame(transactionId = 1L, 0.5f)
+        assertEquals("第一笔事务 progress=0.5 scrollY 应为 900", 900.0, viewport.scrollY.toDouble(), 0.001)
+        val scrollYAtHandoff = viewport.scrollY
+
+        // 新事务接管（连续 rebase）：fromScrollY 应为当前 scrollY（900），不跳回旧起点 1000
+        viewport.beginOrRebaseVisualTransition(transactionId = 2L, targetScrollY = 800f)
+        // 新事务第一帧（progress=0）：scrollY 应从当前 scrollY 继续（900），不跳回 1000
+        viewport.applyVisualFrame(transactionId = 2L, 0f)
+        assertEquals(
+            "连续 rebase 新事务第一帧 scrollY 应从当前 scrollY 继续（$scrollYAtHandoff），不跳回旧起点 1000",
+            scrollYAtHandoff.toDouble(),
+            viewport.scrollY.toDouble(),
+            0.001,
+        )
+
+        // 新事务用 fromRemainingFraction(0.5) 构造 progressWindow=[0, 0.5]，
+        // 剩余路程在 progress=0.5 内完成（不拉满完整时长）。
+        // applyVisualFrame(transactionId = 2L, 0.5f) → local = map(0.5) = 1f → scrollY = 800
+        viewport.applyVisualFrame(transactionId = 2L, 0.5f)
+        assertEquals("连续 rebase 剩余路程在 progress=0.5 内完成，scrollY 应为 800", 800.0, viewport.scrollY.toDouble(), 0.001)
+    }
+
+    /**
+     * #638 评论 5411376945：cancelVisualTransition 清掉视觉过渡状态，
+     * 后续 applyVisualFrame 是 no-op（scrollY 保留当前值，不落到 toScrollY）。
+     *
+     * 与 endVisualTransition 的区别：end 是事务正常跑到终点（scrollY 落到 toScrollY），
+     * cancel 是事务被外部取消（scrollY 保留当前值，由调用方后续静态同步夹到合法范围）。
+     */
+    @Test
+    fun cancelVisualTransition_clearsTransition_makesApplyVisualFrameNoOp() {
+        val viewport = getViewportController()
+        setMaxScrollY(viewport, 1200f)
+        viewport.setScroll(x = 0f, y = 1000f)
+        viewport.updateMaxScroll(max = 800f, clampNow = false)
+
+        // 建立视口视觉过渡：fromScrollY=1000, toScrollY=800
+        viewport.beginOrRebaseVisualTransition(transactionId = 1L, targetScrollY = 800f)
+        // 走到一半：scrollY=900
+        viewport.applyVisualFrame(transactionId = 1L, 0.5f)
+        assertEquals("cancel 前 progress=0.5 scrollY 应为 900", 900.0, viewport.scrollY.toDouble(), 0.001)
+        assertEquals("cancel 前 hasVisualTransition 应为 true", true, viewport.hasVisualTransition())
+
+        // 取消视口过渡 — scrollY 保留当前值（900），不落到 toScrollY
+        viewport.cancelVisualTransition()
+        assertEquals("cancelVisualTransition 后 scrollY 应保留当前值 900", 900.0, viewport.scrollY.toDouble(), 0.001)
+        assertEquals("cancel 后 hasVisualTransition 应为 false", false, viewport.hasVisualTransition())
+
+        // 后续 applyVisualFrame 是 no-op（无活跃过渡），scrollY 仍为 900
+        viewport.applyVisualFrame(transactionId = 1L, 1f)
+        assertEquals("cancel 后 applyVisualFrame 应为 no-op，scrollY 仍为 900", 900.0, viewport.scrollY.toDouble(), 0.001)
+    }
+
+    /**
+     * #638 评论 5411376945：applyVisualFrame 传入不匹配的 transactionId 时不推进 scrollY，
+     * 避免生命周期漏洞让旧 viewport transition 吃到新事务的 progress。
+     */
+    @Test
+    fun applyVisualFrame_ignoresMismatchedTransactionId() {
+        val viewport = getViewportController()
+        setMaxScrollY(viewport, 1200f)
+        viewport.setScroll(x = 0f, y = 1000f)
+        viewport.updateMaxScroll(max = 800f, clampNow = false)
+
+        // 建立视口视觉过渡：transactionId=1, fromScrollY=1000, toScrollY=800
+        viewport.beginOrRebaseVisualTransition(transactionId = 1L, targetScrollY = 800f)
+
+        // 传入不匹配的 transactionId=2 — 应为 no-op，scrollY 仍为 1000
+        viewport.applyVisualFrame(transactionId = 2L, 0.5f)
+        assertEquals("不匹配的 transactionId 应为 no-op，scrollY 仍为 1000", 1000.0, viewport.scrollY.toDouble(), 0.001)
+
+        // 传入匹配的 transactionId=1 — 正常推进到 900
+        viewport.applyVisualFrame(transactionId = 1L, 0.5f)
+        assertEquals("匹配的 transactionId 应正常推进，scrollY 应为 900", 900.0, viewport.scrollY.toDouble(), 0.001)
+    }
+
     // ── Helpers ──
 
     private fun getViewportController(): EditorViewportController {
@@ -304,21 +443,14 @@ class VisualCursorViewportTest {
         return field.get(view) as EditorViewportController
     }
 
-    private fun measureAndLayout(width: Int, height: Int) {
+    private fun measureAndLayout(
+        width: Int,
+        height: Int,
+    ) {
         val widthSpec = MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY)
         val heightSpec = MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY)
         view.measure(widthSpec, heightSpec)
         view.layout(0, 0, view.measuredWidth, view.measuredHeight)
-    }
-
-    private fun setScrollYForTest(value: Float) {
-        val viewport = getViewportController()
-        viewport.setScrollYUnclamped(value)
-    }
-
-    private fun getScrollYPos(): Float {
-        val viewport = getViewportController()
-        return viewport.scrollY
     }
 
     private fun getMaxScrollY(viewport: EditorViewportController): Float {
@@ -327,16 +459,13 @@ class VisualCursorViewportTest {
         return field.get(viewport) as Float
     }
 
-    private fun setMaxScrollY(viewport: EditorViewportController, value: Float) {
+    private fun setMaxScrollY(
+        viewport: EditorViewportController,
+        value: Float,
+    ) {
         val field = EditorViewportController::class.java.getDeclaredField("maxScrollY")
         field.isAccessible = true
         field.set(viewport, value)
-    }
-
-    private fun invokeEnsureSelectionVisible() {
-        val method = SujianEditorView::class.java.getDeclaredMethod("ensureSelectionVisible")
-        method.isAccessible = true
-        method.invoke(view)
     }
 
     /**

@@ -6,6 +6,17 @@ import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
 import com.xiwei.sujian.feature.editor.projection.VisualIntent
 
 /**
+ * #638 评论 5403756824：本帧视觉事务状态 — 只读入口。
+ *
+ * 用当前主 timeline 的同一个 frameTimeMs 计算 [progress]，供 viewport 跟整笔视觉事务走。
+ * 不让 View 自己猜动画时间，也不只暴露 cursor progress。
+ */
+data class VisualFrameClockState(
+    val transactionId: Long,
+    val progress: Float,
+)
+
+/**
  * Unified owner of the Android text animation runtime.
  *
  * Holds [AndroidVisualPlanner], [AnimationTimeline], [VisualResourceStore], and the current
@@ -257,19 +268,23 @@ class AndroidTextAnimationEngine(
                 preparedAnimation.transactionId,
             )
             val deleteSlices = preparedAnimation.animatedSlices.count { it.role == SliceRole.Delete }
-            val cursorRemaining =
-                if (preparedAnimation.cursorTransition?.shouldAnimate == true) {
-                    preparedAnimation.cursorTransition.progressWindow.end
-                } else {
-                    0f
+            // #638 评论 5395990973：minSliceRemaining/maxSliceRemaining 字段语义是
+            // slice remainingFraction 范围，只从 animatedSlices 计算；cursor 已有独立
+            // cursorRemaining 字段。用 remainingFractionAt(0f) 代替 .end — 字段语义是
+            // remainingFraction，数据结构允许非零 start，当前 continuation 恰好 start=0
+            // 时两者相同但不应依赖此巧合。
+            val sliceRemaining =
+                preparedAnimation.animatedSlices.map {
+                    it.progressWindow.remainingFractionAt(0f)
                 }
-            val allEnds = buildList<Float> {
-                preparedAnimation.animatedSlices.forEach { it.progressWindow.end.takeIf { it > 0f }?.let { add(it) } }
-                preparedAnimation.cursorTransition?.progressWindow?.end?.takeIf { it > 0f }?.let { add(it) }
-                preparedAnimation.blockShifts.forEach { it.progressWindow.end.takeIf { it > 0f }?.let { add(it) } }
-            }
-            val minSliceRemaining = if (allEnds.isNotEmpty()) allEnds.min() else 0f
-            val maxSliceRemaining = if (allEnds.isNotEmpty()) allEnds.max() else 0f
+            val cursorRemaining =
+                preparedAnimation.cursorTransition
+                    ?.takeIf { it.shouldAnimate }
+                    ?.progressWindow
+                    ?.remainingFractionAt(0f)
+                    ?: 0f
+            val minSliceRemaining = if (sliceRemaining.isNotEmpty()) sliceRemaining.min() else 0f
+            val maxSliceRemaining = if (sliceRemaining.isNotEmpty()) sliceRemaining.max() else 0f
             com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.animationRebaseState(
                 oldTransaction.transactionId,
                 preparedAnimation.transactionId,
@@ -681,6 +696,22 @@ class AndroidTextAnimationEngine(
         if (!ct.shouldAnimate) return null
         val cursorProgress = getCursorProgress(frameTimeMs) ?: return null
         return ct.rectAt(cursorProgress)
+    }
+
+    /**
+     * #638 评论 5403756824：本帧视觉事务状态 — 用当前主 timeline 的同一个 frameTimeMs
+     * 计算 progress，供 viewport 跟整笔视觉事务走。
+     *
+     * 无活跃事务、主 timeline 不存在或已完成时返回 null（表示应走静态分支）。
+     * 用主 timeline progress（协同模式下光标跟随主 timeline，非协同模式 viewport
+     * 仍按主事务整体进度过渡，光标独立轨由 currentVisualCursorRect 单独处理）。
+     */
+    fun currentVisualFrameClockState(frameTimeMs: Long): VisualFrameClockState? {
+        val transaction = activeTransaction ?: return null
+        val tl = timeline ?: return null
+        if (tl.getState() == TransactionState.Completed) return null
+        val progress = tl.progress(frameTimeMs)
+        return VisualFrameClockState(transaction.transactionId, progress)
     }
 
     /**

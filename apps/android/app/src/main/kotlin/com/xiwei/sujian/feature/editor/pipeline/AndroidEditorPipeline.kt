@@ -16,6 +16,7 @@ import com.xiwei.sujian.feature.editor.visual.AndroidVisualPlanner
 import com.xiwei.sujian.feature.editor.visual.RebaseMappingProvider
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 import com.xiwei.sujian.feature.editor.visual.SliceRoleAndByteRange
+import com.xiwei.sujian.feature.editor.visual.VisualFrameClockState
 import uniffi.writer_core.AnimatedSliceRoleDto
 import uniffi.writer_core.EditorTransactionCauseDto
 import uniffi.writer_core.OffsetMapDto
@@ -1094,6 +1095,15 @@ class AndroidEditorPipeline private constructor(
      */
     fun getVisualCursorRect(frameTimeMs: Long): android.graphics.RectF? =
         visualRuntime.currentVisualCursorRect(frameTimeMs)
+
+    /**
+     * #638 评论 5403756824：本帧视觉事务状态 — 委托给
+     * [AndroidVisualRuntime.currentVisualFrameClockState]，
+     * 供 View.onFrame 先读 frame state 再让 viewport 用同一个 progress 推进。
+     * 无活跃事务/主 timeline 已完成时返回 null（表示应走静态分支）。
+     */
+    fun getVisualFrameClockState(frameTimeMs: Long): VisualFrameClockState? =
+        visualRuntime.currentVisualFrameClockState(frameTimeMs)
 
     /**
      * #638：获取静态光标矩形。

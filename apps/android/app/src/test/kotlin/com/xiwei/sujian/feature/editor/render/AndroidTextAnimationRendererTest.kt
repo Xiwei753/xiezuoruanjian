@@ -6,7 +6,6 @@ import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
-import com.xiwei.sujian.feature.editor.visual.VisualProgressWindow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -208,37 +207,40 @@ class AndroidTextAnimationRendererTest {
     @Test
     fun computeStaticSuppressionRegions_includesDeleteSwallowAtProgressZero() {
         val dest = RectF(100f, 50f, 200f, 70f)
-        val spec = TextRevealSpec(
-            mode = TextRevealMode.SWALLOW,
-            anchorX = 100f,
-            boundaryFromX = 200f,
-            boundaryToX = 100f,
-            progressStart = 0f,
-            progressEnd = 1f,
-            initialFraction = 0f
-        )
-        val slice = PreparedVisualTransaction.AnimatedSlice(
-            role = SliceRole.Delete,
-            snapshot = null,
-            sourceRect = Rect(0, 0, 100, 20),
-            destinationRect = dest,
-            startAlpha = 1f,
-            endAlpha = 0f,
-            revealSpec = spec
-        )
-        val transaction = PreparedVisualTransaction(
-            transactionId = 1L,
-            oldRevision = null,
-            newRevision = null,
-            staticPatches = emptyList(),
-            animatedSlices = listOf(slice),
-            ownedSnapshotIds = emptySet(),
-            referencedSnapshotIds = emptySet(),
-            selectionDecoration = null,
-            preeditDecoration = null,
-            cursorTransition = null,
-            durationMs = 300L
-        )
+        val spec =
+            TextRevealSpec(
+                mode = TextRevealMode.SWALLOW,
+                anchorX = 100f,
+                boundaryFromX = 200f,
+                boundaryToX = 100f,
+                progressStart = 0f,
+                progressEnd = 1f,
+                initialFraction = 0f,
+            )
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Delete,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = dest,
+                startAlpha = 1f,
+                endAlpha = 0f,
+                revealSpec = spec,
+            )
+        val transaction =
+            PreparedVisualTransaction(
+                transactionId = 1L,
+                oldRevision = null,
+                newRevision = null,
+                staticPatches = emptyList(),
+                animatedSlices = listOf(slice),
+                ownedSnapshotIds = emptySet(),
+                referencedSnapshotIds = emptySet(),
+                selectionDecoration = null,
+                preeditDecoration = null,
+                cursorTransition = null,
+                durationMs = 300L,
+            )
 
         // computeStaticSuppressionRegions(0f) 应返回完整 destination
         val newRegions = renderer.computeStaticSuppressionRegions(transaction, 0f)
@@ -255,37 +257,40 @@ class AndroidTextAnimationRendererTest {
     @Test
     fun computeStaticSuppressionRegions_suppressHalfOfDeleteSwallowAtProgressHalf() {
         val dest = RectF(100f, 50f, 200f, 70f)
-        val spec = TextRevealSpec(
-            mode = TextRevealMode.SWALLOW,
-            anchorX = 100f,
-            boundaryFromX = 200f,
-            boundaryToX = 100f,
-            progressStart = 0f,
-            progressEnd = 1f,
-            initialFraction = 0f
-        )
-        val slice = PreparedVisualTransaction.AnimatedSlice(
-            role = SliceRole.Delete,
-            snapshot = null,
-            sourceRect = Rect(0, 0, 100, 20),
-            destinationRect = dest,
-            startAlpha = 1f,
-            endAlpha = 0f,
-            revealSpec = spec
-        )
-        val transaction = PreparedVisualTransaction(
-            transactionId = 1L,
-            oldRevision = null,
-            newRevision = null,
-            staticPatches = emptyList(),
-            animatedSlices = listOf(slice),
-            ownedSnapshotIds = emptySet(),
-            referencedSnapshotIds = emptySet(),
-            selectionDecoration = null,
-            preeditDecoration = null,
-            cursorTransition = null,
-            durationMs = 300L
-        )
+        val spec =
+            TextRevealSpec(
+                mode = TextRevealMode.SWALLOW,
+                anchorX = 100f,
+                boundaryFromX = 200f,
+                boundaryToX = 100f,
+                progressStart = 0f,
+                progressEnd = 1f,
+                initialFraction = 0f,
+            )
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Delete,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = dest,
+                startAlpha = 1f,
+                endAlpha = 0f,
+                revealSpec = spec,
+            )
+        val transaction =
+            PreparedVisualTransaction(
+                transactionId = 1L,
+                oldRevision = null,
+                newRevision = null,
+                staticPatches = emptyList(),
+                animatedSlices = listOf(slice),
+                ownedSnapshotIds = emptySet(),
+                referencedSnapshotIds = emptySet(),
+                selectionDecoration = null,
+                preeditDecoration = null,
+                cursorTransition = null,
+                durationMs = 300L,
+            )
 
         val newRegions = renderer.computeStaticSuppressionRegions(transaction, 0.5f)
         assertEquals("progress=0.5 时应 suppress 一半 Delete 区域", 1, newRegions.size)
@@ -302,37 +307,40 @@ class AndroidTextAnimationRendererTest {
     @Test
     fun computeStaticSuppressionRegions_returnsEmptyForDeleteSwallowAtProgressOne() {
         val dest = RectF(100f, 50f, 200f, 70f)
-        val spec = TextRevealSpec(
-            mode = TextRevealMode.SWALLOW,
-            anchorX = 100f,
-            boundaryFromX = 200f,
-            boundaryToX = 100f,
-            progressStart = 0f,
-            progressEnd = 1f,
-            initialFraction = 0f
-        )
-        val slice = PreparedVisualTransaction.AnimatedSlice(
-            role = SliceRole.Delete,
-            snapshot = null,
-            sourceRect = Rect(0, 0, 100, 20),
-            destinationRect = dest,
-            startAlpha = 1f,
-            endAlpha = 0f,
-            revealSpec = spec
-        )
-        val transaction = PreparedVisualTransaction(
-            transactionId = 1L,
-            oldRevision = null,
-            newRevision = null,
-            staticPatches = emptyList(),
-            animatedSlices = listOf(slice),
-            ownedSnapshotIds = emptySet(),
-            referencedSnapshotIds = emptySet(),
-            selectionDecoration = null,
-            preeditDecoration = null,
-            cursorTransition = null,
-            durationMs = 300L
-        )
+        val spec =
+            TextRevealSpec(
+                mode = TextRevealMode.SWALLOW,
+                anchorX = 100f,
+                boundaryFromX = 200f,
+                boundaryToX = 100f,
+                progressStart = 0f,
+                progressEnd = 1f,
+                initialFraction = 0f,
+            )
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Delete,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = dest,
+                startAlpha = 1f,
+                endAlpha = 0f,
+                revealSpec = spec,
+            )
+        val transaction =
+            PreparedVisualTransaction(
+                transactionId = 1L,
+                oldRevision = null,
+                newRevision = null,
+                staticPatches = emptyList(),
+                animatedSlices = listOf(slice),
+                ownedSnapshotIds = emptySet(),
+                referencedSnapshotIds = emptySet(),
+                selectionDecoration = null,
+                preeditDecoration = null,
+                cursorTransition = null,
+                durationMs = 300L,
+            )
 
         val newRegions = renderer.computeStaticSuppressionRegions(transaction, 1f)
         assertTrue("progress=1 时应返回空列表（Delete 已完全消失）", newRegions.isEmpty())
@@ -344,27 +352,29 @@ class AndroidTextAnimationRendererTest {
     @Test
     fun computeStaticSuppressionRegions_doesNotSuppressCrossfadeOld() {
         val dest = RectF(100f, 50f, 200f, 70f)
-        val slice = PreparedVisualTransaction.AnimatedSlice(
-            role = SliceRole.CrossfadeOld,
-            snapshot = null,
-            sourceRect = Rect(0, 0, 100, 20),
-            destinationRect = dest,
-            startAlpha = 1f,
-            endAlpha = 0f
-        )
-        val transaction = PreparedVisualTransaction(
-            transactionId = 1L,
-            oldRevision = null,
-            newRevision = null,
-            staticPatches = emptyList(),
-            animatedSlices = listOf(slice),
-            ownedSnapshotIds = emptySet(),
-            referencedSnapshotIds = emptySet(),
-            selectionDecoration = null,
-            preeditDecoration = null,
-            cursorTransition = null,
-            durationMs = 300L
-        )
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.CrossfadeOld,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = dest,
+                startAlpha = 1f,
+                endAlpha = 0f,
+            )
+        val transaction =
+            PreparedVisualTransaction(
+                transactionId = 1L,
+                oldRevision = null,
+                newRevision = null,
+                staticPatches = emptyList(),
+                animatedSlices = listOf(slice),
+                ownedSnapshotIds = emptySet(),
+                referencedSnapshotIds = emptySet(),
+                selectionDecoration = null,
+                preeditDecoration = null,
+                cursorTransition = null,
+                durationMs = 300L,
+            )
 
         val newRegions = renderer.computeStaticSuppressionRegions(transaction, 0.5f)
         assertTrue("CrossfadeOld 不应 suppress 任何区域", newRegions.isEmpty())
@@ -378,44 +388,48 @@ class AndroidTextAnimationRendererTest {
         val dest1 = RectF(0f, 0f, 100f, 20f)
         val dest2 = RectF(0f, 20f, 100f, 40f)
         val dest3 = RectF(0f, 40f, 100f, 60f)
-        val insertSlice = PreparedVisualTransaction.AnimatedSlice(
-            role = SliceRole.Insert,
-            snapshot = null,
-            sourceRect = Rect(0, 0, 100, 20),
-            destinationRect = dest1,
-            startAlpha = 1f,
-            endAlpha = 1f
-        )
-        val moveSlice = PreparedVisualTransaction.AnimatedSlice(
-            role = SliceRole.Move,
-            snapshot = null,
-            sourceRect = Rect(0, 0, 100, 20),
-            destinationRect = dest2,
-            startAlpha = 1f,
-            endAlpha = 1f,
-            fromDestinationRect = RectF(0f, 0f, 100f, 20f)
-        )
-        val crossfadeNewSlice = PreparedVisualTransaction.AnimatedSlice(
-            role = SliceRole.CrossfadeNew,
-            snapshot = null,
-            sourceRect = Rect(0, 0, 100, 20),
-            destinationRect = dest3,
-            startAlpha = 0f,
-            endAlpha = 1f
-        )
-        val transaction = PreparedVisualTransaction(
-            transactionId = 1L,
-            oldRevision = null,
-            newRevision = null,
-            staticPatches = emptyList(),
-            animatedSlices = listOf(insertSlice, moveSlice, crossfadeNewSlice),
-            ownedSnapshotIds = emptySet(),
-            referencedSnapshotIds = emptySet(),
-            selectionDecoration = null,
-            preeditDecoration = null,
-            cursorTransition = null,
-            durationMs = 300L
-        )
+        val insertSlice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Insert,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = dest1,
+                startAlpha = 1f,
+                endAlpha = 1f,
+            )
+        val moveSlice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Move,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = dest2,
+                startAlpha = 1f,
+                endAlpha = 1f,
+                fromDestinationRect = RectF(0f, 0f, 100f, 20f),
+            )
+        val crossfadeNewSlice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.CrossfadeNew,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = dest3,
+                startAlpha = 0f,
+                endAlpha = 1f,
+            )
+        val transaction =
+            PreparedVisualTransaction(
+                transactionId = 1L,
+                oldRevision = null,
+                newRevision = null,
+                staticPatches = emptyList(),
+                animatedSlices = listOf(insertSlice, moveSlice, crossfadeNewSlice),
+                ownedSnapshotIds = emptySet(),
+                referencedSnapshotIds = emptySet(),
+                selectionDecoration = null,
+                preeditDecoration = null,
+                cursorTransition = null,
+                durationMs = 300L,
+            )
 
         val newRegions = renderer.computeStaticSuppressionRegions(transaction, 0.5f)
         assertEquals("Insert/Move/CrossfadeNew 都应 suppress", 3, newRegions.size)

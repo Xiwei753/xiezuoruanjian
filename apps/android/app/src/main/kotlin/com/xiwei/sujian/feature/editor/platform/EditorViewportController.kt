@@ -1,6 +1,26 @@
 package com.xiwei.sujian.feature.editor.platform
 
 import com.xiwei.sujian.feature.editor.session.ViewportAnchor
+import com.xiwei.sujian.feature.editor.visual.VisualProgressWindow
+
+/**
+ * #638 评论 5403756824：视口事务级视觉过渡状态。
+ *
+ * viewport 作为视觉事务的一部分连续过渡，而非“动画期间不 clamp、结束后一次性 clamp”。
+ * [fromScrollY] 是事务开始时屏幕真实 scrollY，[toScrollY] 是按新 Layout + 静态 cursor
+ * + 新 maxScrollY 算出的最终合法 scrollY。每帧用 [progressWindow].map(globalProgress)
+ * 把全局事务 progress 映射到本过渡的 local progress，线性插值 scrollY。
+ *
+ * - 第一次事务用 [VisualProgressWindow.Full]。
+ * - 连续 rebase 时用上一帧保存的 [remainingFraction] 构造
+ *   [VisualProgressWindow.fromRemainingFraction]，不能把 viewport 剩余路程重新摊满完整时长。
+ */
+internal data class ViewportVisualTransition(
+    val transactionId: Long,
+    val fromScrollY: Float,
+    val toScrollY: Float,
+    val progressWindow: VisualProgressWindow = VisualProgressWindow.Full,
+)
 
 /**
  * #633 评论 5379618506：编辑器视口唯一拥有者。
@@ -23,6 +43,11 @@ internal class EditorViewportController {
 
     private var pendingInitialAnchor: ViewportAnchor? = null
     private var initialRestoreConsumed: Boolean = false
+
+    // #638 评论 5403756824：当前视口视觉过渡 + 最后一次 remainingFraction。
+    // viewport 跟整笔视觉事务走，逐帧用 applyVisualFrame 推进 scrollY。
+    private var visualTransition: ViewportVisualTransition? = null
+    private var lastRemainingFraction: Float = 1f
 
     /**
      * 首次 attach 时排队等待恢复的逻辑锚点。
@@ -118,6 +143,85 @@ internal class EditorViewportController {
     }
 
     /**
+     * #638 评论 5403756824：开始或重基视口视觉过渡。
+     *
+     * [targetScrollY] 是按新 Layout + 静态 cursor + 新 maxScrollY 算出的最终合法 scrollY。
+     * [fromScrollY] 取当前屏幕真实 scrollY，保证过渡起点连续、不跳回旧起点。
+     *
+     * - 首次过渡（visualTransition == null）用 [VisualProgressWindow.Full]。
+     * - 连续 rebase（visualTransition != null）用上一帧保存的 [lastRemainingFraction]
+     *   构造 [VisualProgressWindow.fromRemainingFraction]，不把剩余路程重新摊满完整时长。
+     */
+    fun beginOrRebaseVisualTransition(
+        transactionId: Long,
+        targetScrollY: Float,
+    ) {
+        val fromScrollY = scrollY
+        val window =
+            if (visualTransition == null) {
+                VisualProgressWindow.Full
+            } else {
+                VisualProgressWindow.fromRemainingFraction(lastRemainingFraction)
+            }
+        visualTransition = ViewportVisualTransition(transactionId, fromScrollY, targetScrollY, window)
+    }
+
+    /**
+     * #638 评论 5411376945：用当前帧的全局事务 progress 推进视口 scrollY。
+     *
+     * [transactionId] 必须与当前 [visualTransition] 的 transactionId 一致才推进，
+     * 避免生命周期漏洞让旧 viewport transition 吃到新事务的 progress。
+     * scrollY = fromScrollY + (toScrollY - fromScrollY) * progressWindow.map(globalProgress)。
+     * 同时保存本帧之后的 remainingFraction，供下一次 rebase 用。
+     * 无活跃过渡 / 事务 ID 不匹配时是 no-op。
+     */
+    fun applyVisualFrame(
+        transactionId: Long,
+        globalProgress: Float,
+    ) {
+        val tx = visualTransition ?: return
+        if (tx.transactionId != transactionId) return
+        val local = tx.progressWindow.map(globalProgress)
+        scrollY = tx.fromScrollY + (tx.toScrollY - tx.fromScrollY) * local
+        lastRemainingFraction = tx.progressWindow.remainingFractionAt(globalProgress)
+    }
+
+    /**
+     * #638 评论 5403756824：事务完成后收尾视口过渡。
+     *
+     * 确保 scrollY == toScrollY（终点帧 applyVisualFrame(1f) 已设，此处兜底），
+     * 清掉过渡状态，重置 lastRemainingFraction。下一帧静态 clamp() 应为 no-op。
+     */
+    fun endVisualTransition() {
+        val tx = visualTransition ?: return
+        scrollY = tx.toScrollY
+        visualTransition = null
+        lastRemainingFraction = 1f
+    }
+
+    /**
+     * #638 评论 5411376945：取消视口视觉过渡。
+     *
+     * engine 被 cancel/reload 时调用 — 丢弃事务状态，不偷偷改正文/布局。
+     * 与 [endVisualTransition] 的区别：end 是事务正常跑到终点（scrollY 落到 toScrollY），
+     * cancel 是事务被外部取消（scrollY 保留当前值，由调用方后续静态同步夹到合法范围）。
+     */
+    fun cancelVisualTransition() {
+        visualTransition = null
+        lastRemainingFraction = 1f
+    }
+
+    /**
+     * #638 评论 5403756824：是否有活跃视口视觉过渡。
+     */
+    fun hasVisualTransition(): Boolean = visualTransition != null
+
+    /**
+     * #638 评论 5403756824：当前视口视觉过渡的 transactionId（无过渡时 null）。
+     */
+    fun currentVisualTransitionTransactionId(): Long? = visualTransition?.transactionId
+
+    /**
      * 重置全部视口状态（resetForReuse / unbindSession 用）。
      */
     fun reset() {
@@ -126,6 +230,8 @@ internal class EditorViewportController {
         maxScrollY = 0f
         pendingInitialAnchor = null
         initialRestoreConsumed = false
+        visualTransition = null
+        lastRemainingFraction = 1f
     }
 
     /**
@@ -148,5 +254,7 @@ internal class EditorViewportController {
         maxScrollY = 0f
         pendingInitialAnchor = anchor
         initialRestoreConsumed = false
+        visualTransition = null
+        lastRemainingFraction = 1f
     }
 }

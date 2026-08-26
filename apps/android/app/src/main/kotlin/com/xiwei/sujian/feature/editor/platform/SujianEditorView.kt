@@ -62,11 +62,6 @@ class SujianEditorView
         private val viewport = EditorViewportController()
         private var scrollInteractionActive: Boolean = false
 
-        // #638：按 transactionId 去重 viewportRetarget 记录，绝不能每帧刷。
-        // API 前置：origin/fix/issue-638-diagnostics 合入后可调用
-        // DiagnosticsEvents.viewportRetarget。
-        private var lastRetargetTransactionId: Long? = null
-
         fun getScrollXPos(): Float = viewport.scrollX
 
         fun getScrollYPos(): Float = viewport.scrollY
@@ -100,14 +95,11 @@ class SujianEditorView
             inputAdapter.setHostView(this)
             inputAdapter.onPipelineOutput = { output: PipelineOutput -> handlePipelineOutput(output) }
             inputAdapter.onCompositionVisualUpdate = {
-                // #633 评论 5380870691：preedit 也可能把显示光标推到可视区外，
-                // 同样只根据当前新 layout + 当前光标做最小滚动，不 restore anchor / 不 reflow。
-                updateMaxScroll()
-                ensureSelectionVisible()
+                // #638 评论 5411376945：composition 视觉更新走与普通编辑同一视口同步入口，
+                // 不再绕过 beginViewportVisualTransition 直接 updateMaxScroll/ensureSelectionVisible。
+                // composition 已有 active animation 时，统一入口会让 viewport 作为视觉事务一部分过渡。
+                syncViewportAfterVisualMutation(ensureCursorVisible = true)
                 invalidate()
-                if (pipeline.hasActiveAnimation()) {
-                    requestAnimationFrame()
-                }
             }
             id = R.id.editor_content
             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
@@ -195,30 +187,10 @@ class SujianEditorView
         ) {
             when (output) {
                 is PipelineOutput.Edited -> {
-                    // #638：有视觉事务时仅更新最终 max scroll，不立即夹取。
-                    // 动画进行中 scrollY 可能暂时超出新范围，等动画完成/onFrame 再最终 clamp。
-                    val hasVisualAnimation = pipeline.hasActiveAnimation()
-                    val layoutOverflow = pipeline.getLayoutMaxScrollY(height)
-                    val maxScroll = if (layoutOverflow > 0f) {
-                        layoutOverflow + paddingTop + paddingBottom
-                    } else {
-                        0f
-                    }
-                    if (hasVisualAnimation) {
-                        // 有活动视觉事务：只更新 max scroll 不夹取，onFrame 用视觉光标处理可见性。
-                        viewport.updateMaxScroll(maxScroll, clampNow = false)
-                    } else {
-                        // 无活动视觉事务：static ensure + final clamp。
-                        viewport.updateMaxScroll(maxScroll, clampNow = true)
-                        // #633 评论 5380870691：正文输入/删除（displayPatches 非空）后，
-                        // 只有光标出可视区时才做最小 scrollToSelection()，不恢复旧 anchor。
-                        // selection-only / no-change（displayPatches 空）只 clamp 旧 scrollY。
-                        if (output.result.displayPatches.isNotEmpty()) {
-                            ensureSelectionVisible()
-                        } else {
-                            viewport.clamp()
-                        }
-                    }
+                    // #638 评论 5411376945：普通编辑走统一视口同步入口，
+                    // 不再各自维护一份 viewport 后处理。
+                    val contentChanged = output.result.displayPatches.isNotEmpty()
+                    syncViewportAfterVisualMutation(ensureCursorVisible = contentChanged)
                     if (!suppressContentCallback &&
                         (output.result.isApplied() || output.result.isNoChange())
                     ) {
@@ -227,7 +199,6 @@ class SujianEditorView
                         // Core EditorEditResultDto.contentDelta 真值（Unicode scalar 计数），
                         // 不再从 patch 的 UTF-8 byte 长度推算 deletedChars。
                         val source = output.source
-                        val contentChanged = output.result.displayPatches.isNotEmpty()
                         val contentDelta = output.result.contentDelta.toSessionDelta()
                         val event =
                             EditorAppliedEvent(
@@ -276,6 +247,9 @@ class SujianEditorView
 
         private fun reloadFromKernel() {
             if (pipeline.reloadFromKernel()) {
+                // #638 评论 5411376945：reload 内部已取消视觉事务，同步取消视口过渡；
+                // 后续 updateLayoutConfig 会 updateMaxScroll + clamp 把 scrollY 落到合法位置。
+                viewport.cancelVisualTransition()
                 // #624 评论11 第1项：日志不再输出整章正文 — 只留长度/revision/cursor。
                 android.util.Log.w(
                     "SujianEditorInput",
@@ -283,6 +257,9 @@ class SujianEditorView
                         "cursor=${pipeline.getCursorUtf8()}",
                 )
                 updateLayoutConfig()
+                // #638 评论 5412016997：reload 成功后不能只 updateMaxScroll + clamp —
+                // 最终静态 cursor 可能已在可视区外，落一次 ensureSelectionVisible。
+                ensureSelectionVisible()
                 // #624 评论11 第1项：reloadFromKernel 只是 Android mirror 与同一个 Rust
                 // session 重新对齐，不是一次正文编辑 — 不得伪造整章插入 delta。
                 // 事件必须是 contentChanged=false + 空 contentDelta + cause=LOAD：
@@ -354,44 +331,128 @@ class SujianEditorView
         // 宽度/字号/行距变化继续走 reflowPreservingViewport()，纯高度变化继续只
         // updateMaxScroll + clamp。
         // #638：只用 pipeline.getStaticCursorRect()，视觉光标在 onFrame 中处理。
+        // #638 评论 5395990973：ensureSelectionVisible 走静态光标路径，事务已完成，
+        // 允许直接夹到最终 maxScrollY。
         private fun ensureSelectionVisible() {
-            val staticCursorRect = pipeline.getStaticCursorRect()
-            if (staticCursorRect != null) {
-                ensureRectVisible(staticCursorRect)
+            val staticRect = pipeline.getStaticCursorRect() ?: return
+            val oldScrollY = viewport.scrollY
+            ensureRectVisible(staticRect, clampToFinalRange = true)
+            // #638 评论 5403756824：viewportRetarget 日志在 target 建立时刻写一次。
+            // ensureSelectionVisible 只在选择变化时调（非逐帧），此处写日志合理。
+            if (viewport.scrollY != oldScrollY) {
+                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.viewportRetarget(
+                    transactionId = pipeline.getCurrentTransactionId(),
+                    fromY = oldScrollY,
+                    toY = viewport.scrollY,
+                    maxY = viewport.maxScrollY,
+                    reason = "ensureSelectionVisible",
+                )
+            }
+        }
+
+        /**
+         * #638 评论 5411376945：视觉变更后统一的视口同步入口。
+         *
+         * 普通编辑（PipelineOutput.Edited）和 IME composition 视觉更新都只调这个入口，
+         * 不再各自维护一份 viewport 后处理。
+         *
+         * - 有活动视觉事务：viewport 作为视觉事务一部分连续过渡（beginViewportVisualTransition），
+         *   并请求下一帧推进。
+         * - 无活动视觉事务：静态夹取 maxScrollY；ensureCursorVisible=true 时做最小 ensureSelectionVisible，
+         *   ensureCursorVisible=false 时只 clamp 旧 scrollY。
+         * #638 评论 5412016997：参数语义收正 — ensureCursorVisible 不再兼任"正文是否改过"，
+         * 只表示静态分支是否需要把最终静态光标落回可视区。
+         */
+        private fun syncViewportAfterVisualMutation(ensureCursorVisible: Boolean) {
+            val layoutOverflow = pipeline.getLayoutMaxScrollY(height)
+            val maxScroll =
+                if (layoutOverflow > 0f) {
+                    layoutOverflow + paddingTop + paddingBottom
+                } else {
+                    0f
+                }
+
+            if (pipeline.hasActiveAnimation()) {
+                beginViewportVisualTransition(maxScroll)
+                requestAnimationFrame()
+            } else {
+                viewport.updateMaxScroll(maxScroll, clampNow = true)
+                if (ensureCursorVisible) {
+                    ensureSelectionVisible()
+                } else {
+                    viewport.clamp()
+                }
+            }
+        }
+
+        /**
+         * #638 评论 5403756824：建立视口视觉过渡。
+         *
+         * 只更新最终 maxScrollY 不夹取当前 scrollY，再用静态最终 cursor + 新 maxScrollY
+         * 算最终合法 targetScrollY，调 [EditorViewportController.beginOrRebaseVisualTransition]。
+         * fromScrollY = 当前屏幕真实 scrollY（在 beginOrRebase 内取），保证起点连续不跳。
+         * viewportRetarget 日志在 target 建立/重基时刻写一次，不在逐帧 applyVisualFrame 刷。
+         */
+        private fun beginViewportVisualTransition(maxScroll: Float) {
+            viewport.updateMaxScroll(maxScroll, clampNow = false)
+            val txId = pipeline.getCurrentTransactionId() ?: return
+            val staticRect = pipeline.getStaticCursorRect()
+            val rawTarget =
+                if (staticRect != null) {
+                    computeTargetScrollYForRect(staticRect)
+                } else {
+                    viewport.scrollY
+                }
+            val targetScrollY = rawTarget.coerceIn(0f, viewport.maxScrollY)
+            val oldScrollY = viewport.scrollY
+            viewport.beginOrRebaseVisualTransition(txId, targetScrollY)
+            if (targetScrollY != oldScrollY) {
+                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.viewportRetarget(
+                    transactionId = txId,
+                    fromY = oldScrollY,
+                    toY = targetScrollY,
+                    maxY = viewport.maxScrollY,
+                    reason = "beginVisualTransition",
+                )
+            }
+        }
+
+        /**
+         * #638 评论 5403756824：计算给定 Rect 对应的目标 scrollY（不实际设置 scrollY）。
+         * [ensureRectVisible] 和 [handlePipelineOutputInternal] 共用此逻辑。
+         * 真正的逐帧过渡交给 [EditorViewportController]，ensureRectVisible 只负责算目标。
+         */
+        private fun computeTargetScrollYForRect(rect: android.graphics.RectF): Float {
+            val viewHeight = height.toFloat()
+            val contentTop = viewport.scrollY - paddingTop
+            val contentBottom = contentTop + viewHeight
+            return when {
+                rect.top < contentTop -> rect.top + paddingTop
+                rect.bottom > contentBottom -> rect.bottom - viewHeight + paddingTop
+                else -> viewport.scrollY
             }
         }
 
         /**
          * #638：通用 ensureRectVisible — 用给定 Rect 判断是否滚入可视区。
          * 视觉光标和静态光标共用此逻辑。
+         *
+         * #638 评论 5403756824：ensureRectVisible 不再承担动画插值，只负责计算目标 scrollY
+         * 并设置（静态分支用）。逐帧视觉过渡由 [EditorViewportController.applyVisualFrame] 完成。
+         * viewportRetarget 日志移到 target 建立时刻（handlePipelineOutputInternal /
+         * ensureSelectionVisible），不在逐帧 ensureRectVisible 刷。
          */
-        private fun ensureRectVisible(rect: android.graphics.RectF) {
-            val viewHeight = height.toFloat()
-            val contentTop = viewport.scrollY - paddingTop
-            val contentBottom = contentTop + viewHeight
-            val oldScrollY = viewport.scrollY
-
-            if (rect.top < contentTop) {
-                viewport.setScrollYUnclamped(rect.top + paddingTop)
-            } else if (rect.bottom > contentBottom) {
-                viewport.setScrollYUnclamped(rect.bottom - viewHeight + paddingTop)
+        private fun ensureRectVisible(
+            rect: android.graphics.RectF,
+            clampToFinalRange: Boolean,
+        ) {
+            val targetScrollY = computeTargetScrollYForRect(rect)
+            if (targetScrollY != viewport.scrollY) {
+                viewport.setScrollYUnclamped(targetScrollY)
             }
-            viewport.clamp()
 
-            // #638：只在一次视觉事务首次导致 scroll target 改变时记录 viewportRetarget，
-            // 按 transactionId 去重，绝不能每帧刷。
-            if (viewport.scrollY != oldScrollY) {
-                val txId = pipeline.getCurrentTransactionId()
-                if (txId != null && txId != lastRetargetTransactionId) {
-                    lastRetargetTransactionId = txId
-                    com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.viewportRetarget(
-                        transactionId = txId,
-                        fromY = oldScrollY,
-                        toY = viewport.scrollY,
-                        maxY = viewport.maxScrollY,
-                        reason = "ensureRectVisible",
-                    )
-                }
+            if (clampToFinalRange) {
+                viewport.clamp()
             }
         }
 
@@ -659,18 +720,25 @@ class SujianEditorView
                 pendingResume = false
                 pipeline.resumeAnimation(frameTimeNanos / 1_000_000)
             }
-            // Advance timeline state at dispatch time (anchor + completion). The draw below
-            // repeats these transitions idempotently, so the animation state does not depend
-            // on when the invalidate-driven draw is actually delivered (a delayed vsync must
-            // not re-anchor or postpone completion of the animation).
             val frameTimeMs = frameTimeNanos / 1_000_000
+            // #638 评论 5403756824：先读本帧视觉事务状态，让 viewport 用同一个 progress 推进，
+            // 然后再 onFrameTick 让事务进入 Completed。终点帧先把 viewport 推到最终位置，
+            // 再完成事务；下一帧静态 clamp() 应为 no-op，不再跳 200px。
+            // viewport 现在是视觉事务的一部分连续过渡，而非“动画期间不 clamp、结束后一次性 clamp”。
+            val frameState = pipeline.getVisualFrameClockState(frameTimeMs)
+            if (frameState != null) {
+                viewport.applyVisualFrame(frameState.transactionId, frameState.progress)
+            }
             pipeline.onFrameTick(frameTimeMs)
-            // #638：同一 frame time 取 pipeline visual cursor Rect，经通用 ensureRectVisible
-            // 判断可见性。视觉事务进行中用视觉光标，完成后回退到静态光标。
-            // 不要在 View 插值。
-            val visualRect = pipeline.getVisualCursorRect(frameTimeMs) ?: pipeline.getStaticCursorRect()
-            if (visualRect != null) {
-                ensureRectVisible(visualRect)
+            // 事务在本帧完成时收尾视口过渡（确保 scrollY == toScrollY，清过渡状态）。
+            if (frameState != null && !pipeline.hasActiveAnimation()) {
+                viewport.endVisualTransition()
+            }
+            // 无视觉事务时走静态分支：用静态光标 + 最终 clamp。
+            if (frameState == null) {
+                pipeline.getStaticCursorRect()?.let {
+                    ensureRectVisible(it, clampToFinalRange = true)
+                }
             }
             invalidate()
         }
@@ -974,6 +1042,13 @@ class SujianEditorView
             pipeline.setTypingAnimationDurationMs(durationMs)
             if (!enabled) {
                 pipeline.cancelActiveTransaction()
+                // #638 评论 5411376945：engine 从 Active 直接变 Idle，同步取消视口过渡，
+                // 再走一次静态 viewport 同步把 maxScrollY 和 scrollY 落到合法位置。
+                viewport.cancelVisualTransition()
+                // #638 评论 5412016997：cancel 后切静态不能只 clamp — viewport 可能停在过渡中间，
+                // 最终静态 cursor 可能已在可视区外。传 ensureCursorVisible=true 落一次静态光标。
+                syncViewportAfterVisualMutation(ensureCursorVisible = true)
+                invalidate()
             }
             // #595 四: 不在此切换 kernel animation_enabled — 它在 Rust 同时控制文字动画模式
             // 和 CoordinatedCursor.should_animate。kernel animation_enabled 由
@@ -1185,7 +1260,12 @@ class SujianEditorView
             kernelBridge = sessionBridge
             currentProfile = profile
             pipeline.attachSnapshot(text, revision, cursorUtf8, selStartUtf8, selEndUtf8)
+            // #638 评论 5412016997：attachSnapshot 内部 resetAfterLoad() 会 cancel engine（visualRuntime.cancel()），
+            // 但 viewport.visualTransition 仍残留 — 同一 session 外部内容重置后下一笔输入会把已死亡的旧
+            // transition 当成连续 rebase。这里同步取消视口过渡，再落一次静态 cursor。
+            viewport.cancelVisualTransition()
             updateLayoutConfig()
+            ensureSelectionVisible()
             invalidate()
         }
 
@@ -1278,6 +1358,9 @@ class SujianEditorView
         ) {
             if (!isSessionBound) return
             pipeline.cancelActiveTransaction()
+            // #638 评论 5411376945：unbind 马上换 target，只清视口过渡状态，
+            // 后续 target bind（beginTarget）自己重建 viewport。
+            viewport.cancelVisualTransition()
             inputAdapter.invalidateCompositionSession()
             inputAdapter.onPerformEditorAction = null
             onLocalEdit = null
@@ -1354,6 +1437,9 @@ class SujianEditorView
         fun softResetForPersistentCommit() {
             if (inputAdapter.isComposing()) {
                 pipeline.cancelActiveTransaction()
+                // #638 评论 5411376945：取消 composition 动画事务时同步取消视口过渡。
+                // 后续 invalidateCompositionSession → onCompositionVisualUpdate 会走统一静态同步。
+                viewport.cancelVisualTransition()
             }
             inputAdapter.invalidateCompositionSession()
         }

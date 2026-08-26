@@ -6,8 +6,15 @@ import com.xiwei.sujian.feature.editor.projection.VisualIntent
 import com.xiwei.sujian.feature.editor.visual.AndroidTextAnimationEngine
 import com.xiwei.sujian.feature.editor.visual.AndroidVisualPlanner
 import com.xiwei.sujian.feature.editor.visual.TextAnimationPolicy
+import com.xiwei.sujian.feature.editor.visual.VisualFrameClockState
 import com.xiwei.sujian.feature.editor.visual.VisualResourceStore
 
+/**
+ * #638 评论 5403756824：委托类，函数数由 [AndroidTextAnimationEngine] 契约决定，
+ * 每个公开方法对应一个 engine 委托。TooManyFunctions 阈值因新增
+ * currentVisualFrameClockState 委托刚好达到 20，此处显式 suppress 并说明理由。
+ */
+@Suppress("TooManyFunctions")
 class AndroidVisualRuntime(
     private val visualPlanner: AndroidVisualPlanner,
     private val animationEngine: AndroidTextAnimationEngine,
@@ -138,14 +145,21 @@ class AndroidVisualRuntime(
         animationEngine.currentVisualCursorRect(frameTimeMs)
 
     /**
+     * #638 评论 5403756824：本帧视觉事务状态 — 委托给
+     * [AndroidTextAnimationEngine.currentVisualFrameClockState]，
+     * 供 viewport 跟整笔视觉事务走。无活跃事务/主 timeline 已完成时返回 null。
+     */
+    fun currentVisualFrameClockState(frameTimeMs: Long): VisualFrameClockState? =
+        animationEngine.currentVisualFrameClockState(frameTimeMs)
+
+    /**
      * #638：获取当前活跃事务 ID。
      *
      * 无活跃事务时返回 null。供 viewportRetarget 调用方按 transactionId 去重，
      * 避免每帧重复记录。API 前置：origin/fix/issue-638-diagnostics 合入后
      * 可调用 DiagnosticsEvents.viewportRetarget。
      */
-    fun getCurrentTransactionId(): Long? =
-        animationEngine.getActiveTransaction()?.transactionId
+    fun getCurrentTransactionId(): Long? = animationEngine.getActiveTransaction()?.transactionId
 
     /**
      * #638：获取静态光标矩形。
