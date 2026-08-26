@@ -162,6 +162,9 @@ complexity:
       # --- 工作台Reducer大类 ---
       # --- 测试：章节切换契约测试，多场景断言（预先存在的大类，HEAD 839 行已超 500） ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/presentation/EditorViewModelChapterSwitchTest.kt"
+      # --- #639 评论 5422606865：rebase 一致性测试多场景断言，行数超 500 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlannerTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/render/AndroidTextAnimationRendererTest.kt"
   LongParameterList:
     active: true
     functionThreshold: 7
@@ -267,6 +270,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/ui/AnimatedTextSemanticsTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/presentation/EditorViewModelChapterSwitchTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/window/EditorWindowHost.kt"
+      # --- #639 评论 5422606865：rebase 一致性测试多场景断言，函数数超 20 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/render/AndroidTextAnimationRendererTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/TextEditorProfileTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/platform/SujianEditorView.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/input/AndroidInputAdapter.kt"

@@ -73,6 +73,15 @@ class RebasePlanner {
                 matchedCluster?.sourceRectInLineImage
                     ?: snapshot?.sourceRect
                     ?: android.graphics.Rect(0, 0, 0, 0)
+            // #639 评论 5422606865 问题1：未匹配 Insert continuation 条件。
+            // Insert 的 reveal 动画不靠 alpha（startAlpha/endAlpha 一直是 1），
+            // 专门看 revealFraction：还没走完（<0.99）且能从 snapshot 找到匹配 cluster
+            // 重建 caret 几何时继续。提取成局部变量避免 detekt ComplexCondition。
+            val shouldContinueInsertReveal =
+                state.role == SliceRole.Insert &&
+                    state.revealFraction != null &&
+                    state.revealFraction < 0.99f &&
+                    matchedCluster != null
             if (isFadingOut && shouldContinue) {
                 // #605 评论3: 正在 SWALLOW 中的未匹配 Delete slice 必须继续用 clip swallow 吞完，
                 // 不能退回 alpha 淡出（那正是 #605 要消除的视觉语义）。只有当无法从 snapshot
@@ -152,6 +161,50 @@ class RebasePlanner {
                         ),
                     )
                 }
+            } else if (shouldContinueInsertReveal) {
+                // #639 评论 5422606865 问题1：未匹配的半截 Insert 不能被直接丢掉。
+                // Insert 的 reveal 动画不靠 alpha（startAlpha/endAlpha 一直是 1），
+                // 所以 isFadingOut=false、currentAlpha=1 时上面的 alpha 分支进不去，
+                // 三个分支都落空 → Insert 被丢弃 → 下一事务静态布局直接画出完整字符
+                // → 快速连续输入"半个字突然变成完整字"。
+                // 这里看 revealFraction 而非 currentAlpha：只要 reveal 还没走完（<0.99）
+                // 且能从 snapshot 找到匹配 cluster 重建 caret 几何，就继续把当前可见
+                // 部分 reveal 到完整。destinationRect 用 currentRect（slice 在当前位置
+                // 继续reveal 完，不移动到别的位置）；fromDestinationRect 保持 null
+                // （未匹配 Insert 没有位置移动）。matchedCluster 为 null 时（找不到
+                // cluster）Insert 不继续（落入最后的 else 不产生 slice）—— Insert 无
+                // cluster 几何无法重建 reveal，不应强行画，与 Delete continuation 无
+                // cluster 时回退 alpha 的语义不同。
+                val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
+                result.add(
+                    PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Insert,
+                        snapshot = snapshot,
+                        sourceRect = matchedCluster.sourceRectInLineImage,
+                        destinationRect =
+                            android.graphics.RectF(
+                                state.currentLeft,
+                                state.currentTop,
+                                state.currentRight,
+                                state.currentBottom,
+                            ),
+                        startAlpha = 1f,
+                        endAlpha = 1f,
+                        clusterByteStart = state.clusterByteStart,
+                        clusterByteEndExclusive = state.clusterByteEndExclusive,
+                        revealSpec =
+                            TextRevealSpec(
+                                mode = TextRevealMode.REVEAL,
+                                anchorX = matchedCluster.caretStartX,
+                                boundaryFromX = matchedCluster.caretStartX,
+                                boundaryToX = matchedCluster.caretEndX,
+                                progressStart = 0f,
+                                progressEnd = 1f,
+                                initialFraction = state.revealFraction,
+                            ),
+                        progressWindow = continuedWindow,
+                    ),
+                )
             } else if (!isFadingOut && state.currentAlpha < 0.99f) {
                 val currentRect =
                     android.graphics.RectF(

@@ -85,7 +85,30 @@ data class PreparedVisualTransaction(
          *  不拿 [TextRevealSpec.initialFraction] 硬凑，因为 [TextRevealSpec.fraction]
          *  会继续向 1 推，不是"冻结当前可见部分"。 */
         val fixedRevealClipRect: android.graphics.RectF? = null,
-    )
+    ) {
+        /**
+         * #639 评论 5422606865 问题2：当前视觉几何的单一入口。
+         *
+         * renderer 和 engine.computeSliceVisualStates 都调用这一份，保证 captureFrame
+         * 记录的 slice 位置就是 renderer 真正画在屏幕上的位置。fromDestinationRect 非 null
+         * 时（rebase 把 Insert/CrossfadeNew 接到旧 Move 当前位置）做位置插值，否则返回
+         * destinationRect（alpha-only 动画）。
+         *
+         * 几何：先 [VisualProgressWindow.map] 得到 localProgress，再从 from→destination
+         * 线性插值四条边。fromDestinationRect 为 null 时 from=destinationRect，插值
+         * 退化为常量 destinationRect，与原有 alpha-only 行为完全一致。
+         */
+        fun visualDestinationRectAt(globalProgress: Float): android.graphics.RectF {
+            val p = progressWindow.map(globalProgress)
+            val from = fromDestinationRect ?: destinationRect
+            return android.graphics.RectF(
+                from.left + (destinationRect.left - from.left) * p,
+                from.top + (destinationRect.top - from.top) * p,
+                from.right + (destinationRect.right - from.right) * p,
+                from.bottom + (destinationRect.bottom - from.bottom) * p,
+            )
+        }
+    }
 
     data class SelectionDecoration(
         val startUtf16: Int,

@@ -567,4 +567,200 @@ class RebasePlannerTest {
         val rebased2 = planner.applyRebaseState(slice, rebaseState2, emptyMap())
         assertEquals(0.2f, rebased2.progressWindow.end, 0.001f)
     }
+
+    // #639 评论 5422606865 问题1：未匹配的半截 Insert 不能被直接丢掉
+
+    /**
+     * 构造带 cluster 的 AndroidLineSnapshot，供未匹配 Insert continuation 测试使用。
+     * cluster 的 byte range 与 makeSliceVisualState 默认值一致（0..1），
+     * caretStartX=0, caretEndX=100，与 destinationRect=(0,0,100,20) 对齐。
+     */
+    private fun makeSnapshotWithCluster(snapshotId: Long = 1L): AndroidLineSnapshot {
+        val cluster =
+            LineClusterSnapshot(
+                clusterId = 0L,
+                documentByteStart = 0,
+                documentByteEndExclusive = 1,
+                documentUtf16Start = 0,
+                documentUtf16EndExclusive = 1,
+                sourceRectInLineImage = Rect(0, 0, 10, 20),
+                visualRectInDocument = RectF(0f, 0f, 100f, 20f),
+                shapingFingerprint = "fp",
+                shapingIdentityConfident = true,
+                caretStartX = 0f,
+                caretEndX = 100f,
+            )
+        return AndroidLineSnapshot(
+            snapshotId = snapshotId,
+            bitmap = null,
+            lineIndex = 0,
+            sourceRect = Rect(0, 0, 100, 20),
+            destinationRect = RectF(0f, 0f, 100f, 20f),
+            clusters = listOf(cluster),
+            documentByteStart = 0,
+            documentByteEndExclusive = 10,
+            documentUtf16Start = 0,
+            documentUtf16EndExclusive = 10,
+            baseline = 16f,
+            lineHeight = 20f,
+        )
+    }
+
+    /**
+     * #639 评论 5422606865 问题1：未匹配的半截 Insert（revealFraction=0.5,
+     * currentAlpha=1f）必须继续在新事务中 reveal 完，不能被直接丢掉。
+     *
+     * 修复前：Insert 的 reveal 动画不靠 alpha（startAlpha/endAlpha 一直是 1），
+     * isFadingOut=false、currentAlpha=1 时三个分支都进不去 → Insert 被丢弃
+     * → 下一事务静态布局直接画出完整字符 → 快速连续输入"半个字突然变成完整字"。
+     *
+     * 修复后：专门看 revealFraction 的 Insert continuation 分支保留半截 Insert，
+     * 用 REVEAL spec 从当前 revealFraction 继续 reveal 到完整。
+     */
+    @Test
+    fun unmatchedInsertWithRevealFractionBelowThresholdContinuesInNewTransaction() {
+        val snapshot = makeSnapshotWithCluster()
+        val insertState =
+            makeSliceVisualState(
+                role = SliceRole.Insert,
+                revealFraction = 0.5f,
+                currentAlpha = 1f,
+            )
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 0.5f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(insertState),
+            )
+
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = mapOf(1L to snapshot),
+            )
+
+        assertEquals(
+            "revealFraction=0.5 的未匹配 Insert 应继续在新事务中 reveal 完",
+            1,
+            result.size,
+        )
+        val continued = result[0]
+        assertEquals("继续 reveal 的 slice 角色应保持 Insert", SliceRole.Insert, continued.role)
+        assertNotNull(
+            "延续 slice 必须携带 revealSpec（REVEAL 模式，从当前 fraction 继续）",
+            continued.revealSpec,
+        )
+        val spec = continued.revealSpec!!
+        assertEquals("revealSpec 模式应为 REVEAL", TextRevealMode.REVEAL, spec.mode)
+        assertEquals(
+            "Insert continuation initialFraction 应取自旧帧 revealFraction",
+            0.5f,
+            spec.initialFraction,
+            0.0001f,
+        )
+        assertEquals("Insert continuation startAlpha 固定 1f", 1f, continued.startAlpha, 0.001f)
+        assertEquals("Insert continuation endAlpha 固定 1f", 1f, continued.endAlpha, 0.001f)
+        assertEquals(
+            "anchorX 应为 cluster caretStartX（reveal 起点）",
+            0f,
+            spec.anchorX,
+            0.001f,
+        )
+        assertEquals(
+            "boundaryFromX 应为 cluster caretStartX",
+            0f,
+            spec.boundaryFromX,
+            0.001f,
+        )
+        assertEquals(
+            "boundaryToX 应为 cluster caretEndX（reveal 终点）",
+            100f,
+            spec.boundaryToX,
+            0.001f,
+        )
+        // destinationRect 应为 currentRect（slice 在当前位置继续 reveal 完，不移动）
+        assertEquals(0f, continued.destinationRect.left, 0.001f)
+        assertEquals(0f, continued.destinationRect.top, 0.001f)
+        assertEquals(100f, continued.destinationRect.right, 0.001f)
+        assertEquals(20f, continued.destinationRect.bottom, 0.001f)
+        // fromDestinationRect 应为 null（未匹配 Insert 没有位置移动）
+        assertTrue(
+            "未匹配 Insert continuation 的 fromDestinationRect 应为 null",
+            continued.fromDestinationRect == null,
+        )
+        // sourceRect 应为 matchedCluster.sourceRectInLineImage
+        assertEquals(
+            "sourceRect 应取自 matchedCluster.sourceRectInLineImage",
+            Rect(0, 0, 10, 20),
+            continued.sourceRect,
+        )
+    }
+
+    /**
+     * #639 评论 5422606865 问题1 反向：revealFraction >= 0.99 时未匹配 Insert 不继续
+     * （reveal 已接近完成，不需要再续）。
+     */
+    @Test
+    fun unmatchedInsertWithRevealFractionAtOrAboveThresholdStops() {
+        val snapshot = makeSnapshotWithCluster()
+        val insertState =
+            makeSliceVisualState(
+                role = SliceRole.Insert,
+                revealFraction = 1.0f,
+                currentAlpha = 1f,
+            )
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 1.0f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(insertState),
+            )
+
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = mapOf(1L to snapshot),
+            )
+
+        assertTrue(
+            "revealFraction=1.0 的未匹配 Insert 已接近完成，不应继续",
+            result.isEmpty(),
+        )
+    }
+
+    /**
+     * #639 评论 5422606865 问题1 反向：matchedCluster 为 null（找不到 cluster）时
+     * 未匹配 Insert 不继续。Insert 无 cluster 几何无法重建 reveal，不应强行画
+     * （与 Delete continuation 无 cluster 时回退 alpha 的语义不同）。
+     */
+    @Test
+    fun unmatchedInsertWithoutMatchedClusterDoesNotContinue() {
+        // snapshotLookup 为空 → matchedCluster 必为 null
+        val insertState =
+            makeSliceVisualState(
+                role = SliceRole.Insert,
+                revealFraction = 0.5f,
+                currentAlpha = 1f,
+            )
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 0.5f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(insertState),
+            )
+
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = emptyMap(),
+            )
+
+        assertTrue(
+            "无 matchedCluster 时未匹配 Insert 不应继续（无法重建 reveal 几何）",
+            result.isEmpty(),
+        )
+    }
 }

@@ -46,17 +46,17 @@ class AndroidTextAnimationRenderer {
                     //     which contradicts the Move invariant (same shaping identity).
                     val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
                     slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
-                    val fromRect = slice.fromDestinationRect ?: slice.destinationRect
-                    val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * localProgress
-                    val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * localProgress
-                    val currentRight = fromRect.right + (slice.destinationRect.right - fromRect.right) * localProgress
-                    val currentBottom =
-                        fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * localProgress
-                    val currentDest = android.graphics.RectF(currentLeft, currentTop, currentRight, currentBottom)
+                    // #639 评论 5422606865 问题2：位置插值统一走 visualDestinationRectAt，
+                    // 与 engine.computeSliceVisualStates 共用同一份几何，captureFrame
+                    // 记录的位置就是 renderer 真正画在屏幕上的位置。
+                    val currentDest = slice.visualDestinationRectAt(progress)
                     canvas.drawBitmap(bitmap, slice.sourceRect, currentDest, slicePaint)
                 }
                 SliceRole.Insert, SliceRole.Delete -> {
-                    drawRevealSlice(canvas, bitmap, slice, localProgress)
+                    // #639 评论 5422606865 问题2：drawRevealSlice 改为接收全局 progress，
+                    // 内部用 visualDestinationRectAt 算 currentRect，支持 fromDestinationRect
+                    // 非 null 时（rebase 把 Insert 接到旧 Move 当前位置）的位置插值。
+                    drawRevealSlice(canvas, bitmap, slice, progress)
                 }
                 // CrossfadeOld: position does not change during animation — only alpha varies.
                 // #639 评论 5421085782 问题2：若 fixedRevealClipRect 非空（旧 Insert 只
@@ -83,10 +83,15 @@ class AndroidTextAnimationRenderer {
                 // CrossfadeNew/Static: position does not change during animation — only alpha
                 // varies. The bitmap is drawn at its final destination with interpolated alpha;
                 // no positional interpolation is needed.
+                // #639 评论 5422606865 问题2：CrossfadeNew 也走 visualDestinationRectAt，
+                // rebase 把 CrossfadeNew 接到旧 Move 当前位置时位置插值与 engine 一致。
+                // Static 的 fromDestinationRect 总是 null，visualDestinationRectAt 返回
+                // destinationRect，无变化。
                 SliceRole.CrossfadeNew, SliceRole.Static -> {
                     val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
                     slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
-                    canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, slicePaint)
+                    val currentRect = slice.visualDestinationRectAt(progress)
+                    canvas.drawBitmap(bitmap, slice.sourceRect, currentRect, slicePaint)
                 }
             }
         }
@@ -96,25 +101,50 @@ class AndroidTextAnimationRenderer {
      * Draw an Insert/Delete slice using clip-rect reveal/swallow animation.
      * Falls back to alpha-based drawing when [slice.revealSpec] is null
      * (e.g. whole-line fallback without cluster caret geometry).
+     *
+     * #639 评论 5422606865 问题2：接收全局 [globalProgress]，内部用
+     * [PreparedVisualTransaction.AnimatedSlice.visualDestinationRectAt] 算 currentRect，
+     * bitmap 画在 currentRect。当 fromDestinationRect 非 null（rebase 把 Insert 接到
+     * 旧 Move 当前位置）时，reveal clip 几何随 currentRect 平移：anchorX/boundaryFromX/
+     * boundaryToX 同步加 (currentRect.left - destinationRect.left)，再交给
+     * [TextRevealGeometry]。fromDestinationRect 为 null 时 currentRect==destinationRect、
+     * dx=0，行为与之前完全一致。
      */
     private fun drawRevealSlice(
         canvas: Canvas,
         bitmap: android.graphics.Bitmap,
         slice: PreparedVisualTransaction.AnimatedSlice,
-        progress: Float,
+        globalProgress: Float,
     ) {
         val spec = slice.revealSpec
+        val currentRect = slice.visualDestinationRectAt(globalProgress)
         if (spec != null) {
-            val clipRect = computeRevealClipRect(slice.destinationRect, spec, progress) ?: return
+            val localProgress = slice.progressWindow.map(globalProgress)
+            val fraction = spec.fraction(localProgress)
+            // #639 评论 5422606865 问题2：当 fromDestinationRect 非 null（rebase 把
+            // Insert 接到旧 Move 当前位置）时，bitmap 画在 currentRect，reveal clip 几何
+            // 随 currentRect 平移：anchorX/boundaryFromX/boundaryToX 同步加
+            // currentRect.left - destinationRect.left，再交给 TextRevealGeometry。
+            val dx = currentRect.left - slice.destinationRect.left
+            val clipRect =
+                TextRevealGeometry.computeRevealClipRect(
+                    currentRect,
+                    spec.mode,
+                    spec.anchorX + dx,
+                    spec.boundaryFromX + dx,
+                    spec.boundaryToX + dx,
+                    fraction,
+                ) ?: return
             val save = canvas.save()
             canvas.clipRect(clipRect)
             slicePaint.alpha = 255
-            canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, slicePaint)
+            canvas.drawBitmap(bitmap, slice.sourceRect, currentRect, slicePaint)
             canvas.restoreToCount(save)
         } else {
-            val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * progress
+            val localProgress = slice.progressWindow.map(globalProgress)
+            val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
             slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
-            canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, slicePaint)
+            canvas.drawBitmap(bitmap, slice.sourceRect, currentRect, slicePaint)
         }
     }
 
@@ -201,13 +231,33 @@ class AndroidTextAnimationRenderer {
             if (srcRect.width() <= 0 || srcRect.height() <= 0) continue
 
             when (slice.role) {
-                SliceRole.Insert, SliceRole.Move, SliceRole.CrossfadeNew, SliceRole.Static -> {
+                // #639 评论 5422606865 问题2：Insert 现在画在 currentRect
+                // （visualDestinationRectAt），suppression 也用 currentRect 挖洞，
+                // 否则静态布局挖的洞和动画画的位置不重合。
+                SliceRole.Insert -> {
+                    regions.add(android.graphics.RectF(slice.visualDestinationRectAt(progress)))
+                }
+                SliceRole.Move, SliceRole.CrossfadeNew, SliceRole.Static -> {
                     regions.add(android.graphics.RectF(slice.destinationRect))
                 }
                 SliceRole.Delete -> {
                     val revealSpec = slice.revealSpec ?: continue
+                    // #639 评论 5422606865 问题2：clipRect 基于 currentRect 和平移后的
+                    // spec，与 drawRevealSlice 一致，suppression 挖的洞就是 renderer
+                    // 实际画的位置。
+                    val currentRect = slice.visualDestinationRectAt(progress)
                     val localProgress = slice.progressWindow.map(progress)
-                    val clipRect = computeRevealClipRect(slice.destinationRect, revealSpec, localProgress)
+                    val fraction = revealSpec.fraction(localProgress)
+                    val dx = currentRect.left - slice.destinationRect.left
+                    val clipRect =
+                        TextRevealGeometry.computeRevealClipRect(
+                            currentRect,
+                            revealSpec.mode,
+                            revealSpec.anchorX + dx,
+                            revealSpec.boundaryFromX + dx,
+                            revealSpec.boundaryToX + dx,
+                            fraction,
+                        )
                     if (clipRect != null) {
                         regions.add(clipRect)
                     }

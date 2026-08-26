@@ -779,11 +779,15 @@ class AndroidTextAnimationEngine(
             // #637 评论 5386573878：保存当前帧之后还剩多少基准时长，
             // rebase continuation 用 fromRemainingFraction 直接消费。
             val remainingFraction = slice.progressWindow.remainingFractionAt(progress)
-            val fromRect = slice.fromDestinationRect ?: slice.destinationRect
-            val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * localProgress
-            val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * localProgress
-            val currentRight = fromRect.right + (slice.destinationRect.right - fromRect.right) * localProgress
-            val currentBottom = fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * localProgress
+            // #639 评论 5422606865 问题2：currentRect 统一走 visualDestinationRectAt，
+            // 与 renderer 共用同一份几何，captureFrame 记录的位置就是 renderer 真正
+            // 画在屏幕上的位置。fromDestinationRect 非 null 时做位置插值，否则返回
+            // destinationRect（alpha-only 动画）。
+            val currentRect = slice.visualDestinationRectAt(progress)
+            val currentLeft = currentRect.left
+            val currentTop = currentRect.top
+            val currentRight = currentRect.right
+            val currentBottom = currentRect.bottom
             val currentAlpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
             val revealFraction = slice.revealSpec?.fraction(localProgress)
             SliceVisualState(

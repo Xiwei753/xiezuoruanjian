@@ -476,8 +476,8 @@ class AndroidTextAnimationRendererTest {
         // 期望：LTR caret reveal 几何 anchorX=10, boundary 10→90, fraction=0.5
         // → boundary=50 → clip [10,50)。
         assertEquals(
-            "CrossfadeOld fixedRevealClipRect left 应为 caretStartX=10（caret 几何），\
-             不应是旧 bitmap 宽度比例 left=0 — #639 评论 5421085782 问题2 已修复。",
+            "CrossfadeOld fixedRevealClipRect left 应为 caretStartX=10（caret 几何），" +
+                "不应是旧 bitmap 宽度比例 left=0 — #639 评论 5421085782 问题2 已修复。",
             caretStartX,
             fixedRevealClipRect.left,
             eps,
@@ -533,8 +533,8 @@ class AndroidTextAnimationRendererTest {
         // 期望：RTL caret reveal 几何 anchorX=90, boundary 90→10, fraction=0.5
         // → boundary=50 → left=min(90,50)=50, right=max(90,50)=90 → clip [50,90)。
         assertEquals(
-            "RTL CrossfadeOld fixedRevealClipRect left 应为 50（caret 几何 boundary=90+(10-90)*0.5），\
-             不应是旧 bitmap 宽度比例 left=0 — #639 评论 5421085782 问题2 RTL 已修复。",
+            "RTL CrossfadeOld fixedRevealClipRect left 应为 50（caret 几何 boundary=90+(10-90)*0.5），" +
+                "不应是旧 bitmap 宽度比例 left=0 — #639 评论 5421085782 问题2 RTL 已修复。",
             50f,
             fixedRevealClipRect.left,
             eps,
@@ -552,5 +552,259 @@ class AndroidTextAnimationRendererTest {
             "RTL CrossfadeOld 不应再用 bitmap 宽度比例 right=50；当前 fixedRevealClipRect.right=${fixedRevealClipRect.right}",
             kotlin.math.abs(fixedRevealClipRect.right - oldBitmapClipRight) > eps,
         )
+    }
+
+    // #639 评论 5422606865 问题2：visualDestinationRectAt 几何一致性测试
+
+    /**
+     * #639 评论 5422606865 问题2：visualDestinationRectAt 是当前视觉几何的单一入口。
+     * renderer 和 engine.computeSliceVisualStates 都调用这一份，保证 captureFrame
+     * 记录的 slice 位置就是 renderer 真正画在屏幕上的位置。
+     *
+     * 这组测试锁住 visualDestinationRectAt 的几何契约：
+     * - fromDestinationRect=null → 返回 destinationRect（任意 progress）
+     * - fromDestinationRect=fromRect, progress=0 → 返回 fromRect
+     * - fromDestinationRect=fromRect, progress=1 → 返回 destinationRect
+     * - fromDestinationRect=fromRect, progress=0.5 → 返回中点
+     * - progressWindow 非 Full 时正确 map
+     */
+
+    private fun makeSliceForGeometry(
+        destinationRect: RectF,
+        fromDestinationRect: RectF? = null,
+        progressWindow: com.xiwei.sujian.feature.editor.visual.VisualProgressWindow =
+            com.xiwei.sujian.feature.editor.visual.VisualProgressWindow.Full,
+        role: SliceRole = SliceRole.Insert,
+    ): PreparedVisualTransaction.AnimatedSlice {
+        return PreparedVisualTransaction.AnimatedSlice(
+            role = role,
+            snapshot = null,
+            sourceRect = Rect(0, 0, 10, 20),
+            destinationRect = destinationRect,
+            startAlpha = 1f,
+            endAlpha = 1f,
+            fromDestinationRect = fromDestinationRect,
+            progressWindow = progressWindow,
+        )
+    }
+
+    /**
+     * fromDestinationRect=null → 返回 destinationRect（任意 progress）。
+     * 这是 alpha-only 动画的常见情况，行为应与原有完全一致。
+     */
+    @Test
+    fun visualDestinationRectAt_nullFromReturnsDestinationForAnyProgress() {
+        val dest = RectF(10f, 20f, 110f, 40f)
+        val slice = makeSliceForGeometry(destinationRect = dest, fromDestinationRect = null)
+        for (p in listOf(0f, 0.25f, 0.5f, 0.75f, 1f)) {
+            val r = slice.visualDestinationRectAt(p)
+            assertEquals("progress=$p left", dest.left, r.left, eps)
+            assertEquals("progress=$p top", dest.top, r.top, eps)
+            assertEquals("progress=$p right", dest.right, r.right, eps)
+            assertEquals("progress=$p bottom", dest.bottom, r.bottom, eps)
+        }
+    }
+
+    /**
+     * fromDestinationRect=fromRect, progress=0 → 返回 fromRect。
+     * 动画起点：slice 在旧 Move 当前位置（fromRect）。
+     */
+    @Test
+    fun visualDestinationRectAt_progressZeroReturnsFromRect() {
+        val from = RectF(0f, 0f, 100f, 20f)
+        val dest = RectF(50f, 30f, 150f, 50f)
+        val slice = makeSliceForGeometry(destinationRect = dest, fromDestinationRect = from)
+        val r = slice.visualDestinationRectAt(0f)
+        assertEquals(from.left, r.left, eps)
+        assertEquals(from.top, r.top, eps)
+        assertEquals(from.right, r.right, eps)
+        assertEquals(from.bottom, r.bottom, eps)
+    }
+
+    /**
+     * fromDestinationRect=fromRect, progress=1 → 返回 destinationRect。
+     * 动画终点：slice 到达自己的最终位置。
+     */
+    @Test
+    fun visualDestinationRectAt_progressOneReturnsDestinationRect() {
+        val from = RectF(0f, 0f, 100f, 20f)
+        val dest = RectF(50f, 30f, 150f, 50f)
+        val slice = makeSliceForGeometry(destinationRect = dest, fromDestinationRect = from)
+        val r = slice.visualDestinationRectAt(1f)
+        assertEquals(dest.left, r.left, eps)
+        assertEquals(dest.top, r.top, eps)
+        assertEquals(dest.right, r.right, eps)
+        assertEquals(dest.bottom, r.bottom, eps)
+    }
+
+    /**
+     * fromDestinationRect=fromRect, progress=0.5 → 返回 from 与 destination 的中点。
+     * 线性插值四条边。
+     */
+    @Test
+    fun visualDestinationRectAt_progressHalfReturnsMidpoint() {
+        val from = RectF(0f, 0f, 100f, 20f)
+        val dest = RectF(50f, 30f, 150f, 50f)
+        val slice = makeSliceForGeometry(destinationRect = dest, fromDestinationRect = from)
+        val r = slice.visualDestinationRectAt(0.5f)
+        assertEquals((from.left + dest.left) / 2f, r.left, eps)
+        assertEquals((from.top + dest.top) / 2f, r.top, eps)
+        assertEquals((from.right + dest.right) / 2f, r.right, eps)
+        assertEquals((from.bottom + dest.bottom) / 2f, r.bottom, eps)
+    }
+
+    /**
+     * progressWindow 非 Full 时正确 map：窗口 [0, 0.4]，
+     * globalProgress=0.2 → localProgress=0.5 → 返回 from 与 dest 的中点。
+     */
+    @Test
+    fun visualDestinationRectAt_nonFullProgressWindowMapsCorrectly() {
+        val from = RectF(0f, 0f, 100f, 20f)
+        val dest = RectF(50f, 30f, 150f, 50f)
+        val window = com.xiwei.sujian.feature.editor.visual.VisualProgressWindow(start = 0f, end = 0.4f)
+        val slice =
+            makeSliceForGeometry(
+                destinationRect = dest,
+                fromDestinationRect = from,
+                progressWindow = window,
+            )
+        // globalProgress=0.2 → localProgress=0.5 → 中点
+        val r = slice.visualDestinationRectAt(0.2f)
+        assertEquals((from.left + dest.left) / 2f, r.left, eps)
+        assertEquals((from.top + dest.top) / 2f, r.top, eps)
+        assertEquals((from.right + dest.right) / 2f, r.right, eps)
+        assertEquals((from.bottom + dest.bottom) / 2f, r.bottom, eps)
+        // globalProgress=0.4 → localProgress=1 → dest
+        val rEnd = slice.visualDestinationRectAt(0.4f)
+        assertEquals(dest.left, rEnd.left, eps)
+        assertEquals(dest.top, rEnd.top, eps)
+        assertEquals(dest.right, rEnd.right, eps)
+        assertEquals(dest.bottom, rEnd.bottom, eps)
+    }
+
+    /**
+     * #639 评论 5422606865 问题2 端到端：Insert 带 fromDestinationRect（rebase 把
+     * Insert 接到旧 Move 当前位置）时，renderer 的 drawRevealSlice 画在 currentRect
+     * （visualDestinationRectAt），reveal clip 几何随 currentRect 平移。
+     *
+     * 验证：computeStaticSuppressionRegions 对 Insert 返回 currentRect（与 renderer
+     * 画的位置一致），不再返回 destinationRect。
+     */
+    @Test
+    fun computeStaticSuppressionRegions_insertWithFromDestinationRectUsesCurrentRect() {
+        val from = RectF(0f, 0f, 100f, 20f)
+        val dest = RectF(50f, 30f, 150f, 50f)
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Insert,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = dest,
+                startAlpha = 1f,
+                endAlpha = 1f,
+                fromDestinationRect = from,
+            )
+        val transaction =
+            PreparedVisualTransaction(
+                transactionId = 1L,
+                oldRevision = null,
+                newRevision = null,
+                staticPatches = emptyList(),
+                animatedSlices = listOf(slice),
+                ownedSnapshotIds = emptySet(),
+                referencedSnapshotIds = emptySet(),
+                selectionDecoration = null,
+                preeditDecoration = null,
+                cursorTransition = null,
+                durationMs = 300L,
+            )
+
+        // progress=0.5 → currentRect 是 from 与 dest 的中点
+        val expectedCurrent = slice.visualDestinationRectAt(0.5f)
+        val regions = renderer.computeStaticSuppressionRegions(transaction, 0.5f)
+        assertEquals("Insert 应 suppress 1 个区域", 1, regions.size)
+        assertEquals(
+            "Insert suppression 应为 currentRect（visualDestinationRectAt），不是 destinationRect",
+            expectedCurrent.left,
+            regions[0].left,
+            eps,
+        )
+        assertEquals(expectedCurrent.top, regions[0].top, eps)
+        assertEquals(expectedCurrent.right, regions[0].right, eps)
+        assertEquals(expectedCurrent.bottom, regions[0].bottom, eps)
+        // 锁住：不是 destinationRect
+        assertTrue(
+            "Insert suppression 不应是 destinationRect.left=${dest.left}，当前=${regions[0].left}",
+            kotlin.math.abs(regions[0].left - dest.left) > eps,
+        )
+    }
+
+    /**
+     * #639 评论 5422606865 问题2 端到端：Delete 带 fromDestinationRect 时，
+     * computeStaticSuppressionRegions 的 clipRect 基于 currentRect 和平移后的 spec，
+     * 与 drawRevealSlice 一致。
+     *
+     * 场景：from=(0,0,100,20), dest=(50,30,150,50), SWALLOW anchorX=0, boundary 100→0,
+     * progress=0.5 → currentRect 中点 (25,15,125,35), localProgress=0.5, fraction=0.5,
+     * dx=currentRect.left-dest.left=25-50=-25, 平移后 anchorX=-25, boundaryFromX=75,
+     * boundaryToX=-25, boundary=75+(−25−75)*0.5=25, left=min(-25,25)=-25,
+     * right=max(-25,25)=25, clipLeft=max(-25,25)=25, clipRight=min(25,125)=25 →
+     * clipRight<=clipLeft → null（空交集）。
+     *
+     * 换一组让交集非空：from=(0,0,100,20), dest=(10,0,110,20)（小偏移）,
+     * SWALLOW anchorX=0, boundary 100→0, progress=0.5 →
+     * currentRect=(5,0,105,20), dx=5-10=-5, anchorX=-5, boundaryFromX=95, boundaryToX=-5,
+     * fraction=0.5 → boundary=95+(-5-95)*0.5=45, left=min(-5,45)=-5, right=max(-5,45)=45,
+     * clipLeft=max(-5,5)=5, clipRight=min(45,105)=45 → clipRect=(5,0,45,20)。
+     */
+    @Test
+    fun computeStaticSuppressionRegions_deleteWithFromDestinationRectUsesCurrentRect() {
+        val from = RectF(0f, 0f, 100f, 20f)
+        val dest = RectF(10f, 0f, 110f, 20f)
+        val spec =
+            TextRevealSpec(
+                mode = TextRevealMode.SWALLOW,
+                anchorX = 0f,
+                boundaryFromX = 100f,
+                boundaryToX = 0f,
+                progressStart = 0f,
+                progressEnd = 1f,
+                initialFraction = 0f,
+            )
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Delete,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = dest,
+                startAlpha = 1f,
+                endAlpha = 0f,
+                fromDestinationRect = from,
+                revealSpec = spec,
+            )
+        val transaction =
+            PreparedVisualTransaction(
+                transactionId = 1L,
+                oldRevision = null,
+                newRevision = null,
+                staticPatches = emptyList(),
+                animatedSlices = listOf(slice),
+                ownedSnapshotIds = emptySet(),
+                referencedSnapshotIds = emptySet(),
+                selectionDecoration = null,
+                preeditDecoration = null,
+                cursorTransition = null,
+                durationMs = 300L,
+            )
+
+        // progress=0.5 → currentRect=(5,0,105,20), dx=-5
+        // 平移后 anchorX=-5, boundary 95→-5, fraction=0.5 → boundary=45
+        // left=-5, right=45, clipLeft=max(-5,5)=5, clipRight=min(45,105)=45
+        val regions = renderer.computeStaticSuppressionRegions(transaction, 0.5f)
+        assertEquals("Delete 应 suppress 1 个区域", 1, regions.size)
+        assertEquals(5f, regions[0].left, eps)
+        assertEquals(0f, regions[0].top, eps)
+        assertEquals(45f, regions[0].right, eps)
+        assertEquals(20f, regions[0].bottom, eps)
     }
 }
