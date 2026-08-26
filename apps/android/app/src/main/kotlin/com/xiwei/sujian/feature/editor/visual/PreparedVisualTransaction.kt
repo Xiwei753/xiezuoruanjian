@@ -64,6 +64,21 @@ data class PreparedVisualTransaction(
         /** Reveal/swallow spec for Insert/Delete slices. null for Move/Crossfade/Static.
          *  When non-null, the renderer uses clip-rect drawing instead of alpha. */
         val revealSpec: TextRevealSpec? = null,
+        /** #639 评论 5425871530 第一部分：本 slice 的 caret/reveal 几何，与 [role] 无关。
+         *
+         *  planner 创建 slice 时把对应 cluster/run 的 [LineClusterSnapshot.visualRectInDocument]
+         *  + [LineClusterSnapshot.caretStartX] + [LineClusterSnapshot.caretEndX] 直接写进来。
+         *  rebase 时不再从 [AndroidLineSnapshot.clusters] 按 byte range 反查 — 这同时修掉
+         *  RunAnimation 的真实漏洞：[InsertDeletePlanner.groupClustersIntoRuns] 多字 run
+         *  创建 synthetic [LineClusterSnapshot]，但合并对象不在原始
+         *  [AndroidLineSnapshot.clusters] 里，按 byte range 反查必然找不到。
+         *
+         *  - 新位置 slice（Insert/CrossfadeNew/Move 的 newCluster）：写 new cluster 的几何。
+         *  - 旧位置 slice（Delete/CrossfadeOld/Move 的 oldCluster）：写 old cluster 的几何。
+         *
+         *  rebase 用 [SliceVisualState.caretRevealGeometry] 把外观状态一起带进下一次 rebase，
+         *  不再依赖 snapshot.clusters 精确反查。 */
+        val caretRevealGeometry: CaretRevealGeometry? = null,
         /** #637 评论 5386066978 项2：本 slice 在事务内的剩余时间窗口。
          *  新事务首次播放为 [VisualProgressWindow.Full]；rebase continuation 时
          *  end = 1 - consumedFraction，让已走部分不重新计时。 */
@@ -208,6 +223,28 @@ data class PreparedVisualTransaction(
          *  rebase continuation 时 end = 1 - consumedFraction，让后缀块已走部分
          *  不重新计时，保持匀速。 */
         val progressWindow: VisualProgressWindow = VisualProgressWindow.Full,
+    )
+
+    /**
+     * #639 评论 5425871530 第一部分：slice 自带的 caret/reveal 几何。
+     *
+     * 轻 role rebase 外观续播要闭环，slice 必须自己持有 caret 几何，不能 rebase 时再从
+     * [AndroidLineSnapshot.clusters] 按 byte range 反查 — RunAnimation 的 synthetic run
+     * 不在原始 clusters 里，反查必然失败。
+     *
+     * - [visualRect]：cluster/run 在 document-space 的 visualRect（来自
+     *   [LineClusterSnapshot.visualRectInDocument]）。
+     * - [caretStartX]/[caretEndX]：cluster/run 的 logical caret X（来自
+     *   [LineClusterSnapshot.caretStartX]/[caretEndX]）。
+     *
+     * rebase 时 [RebasePlanner] 直接消费这份几何重建 REVEAL continuation，不再按
+     * [SliceRole] 分支处理；renderer 三条轨（位置/alpha/reveal）正交绘制也用这份几何
+     * 算 clip，不再按 role 决定是否裁剪。
+     */
+    data class CaretRevealGeometry(
+        val visualRect: android.graphics.RectF,
+        val caretStartX: Float,
+        val caretEndX: Float,
     )
 }
 

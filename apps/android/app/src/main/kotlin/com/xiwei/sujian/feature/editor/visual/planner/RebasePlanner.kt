@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.editor.visual.planner
 
 import com.xiwei.sujian.feature.editor.layout.AndroidLineSnapshot
+import com.xiwei.sujian.feature.editor.layout.LineClusterSnapshot
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 import com.xiwei.sujian.feature.editor.visual.SliceVisualState
@@ -79,216 +80,251 @@ class RebasePlanner {
 
         for ((stateIdx, state) in rebaseSnapshot.sliceVisualStates.withIndex()) {
             if (stateIdx in usedRebaseIndices) continue
-            val isFadingOut = state.role == SliceRole.Delete || state.role == SliceRole.CrossfadeOld
-            val shouldContinue =
-                if (state.revealFraction != null) {
-                    state.revealFraction < 0.99f
-                } else {
-                    state.currentAlpha > 0.01f
-                }
-            val snapshot = snapshotLookup[state.snapshotId]
-            val matchedCluster =
-                if (snapshot != null) {
-                    snapshot.clusters.firstOrNull {
-                        it.documentByteStart == state.clusterByteStart &&
-                            it.documentByteEndExclusive == state.clusterByteEndExclusive
-                    }
-                } else {
-                    null
-                }
-            val sourceRect =
-                matchedCluster?.sourceRectInLineImage
-                    ?: snapshot?.sourceRect
-                    ?: android.graphics.Rect(0, 0, 0, 0)
-            // #639 评论 5422606865 问题1：未匹配 Insert continuation 条件。
-            // Insert 的 reveal 动画不靠 alpha（startAlpha/endAlpha 一直是 1），
-            // 专门看 revealFraction：还没走完（<0.99）且能从 snapshot 找到匹配 cluster
-            // 重建 caret 几何时继续。提取成局部变量避免 detekt ComplexCondition。
-            val shouldContinueInsertReveal =
-                state.role == SliceRole.Insert &&
-                    state.revealFraction != null &&
-                    state.revealFraction < 0.99f &&
-                    matchedCluster != null
-            if (isFadingOut && shouldContinue) {
-                // #605 评论3: 正在 SWALLOW 中的未匹配 Delete slice 必须继续用 clip swallow 吞完，
-                // 不能退回 alpha 淡出（那正是 #605 要消除的视觉语义）。只有当无法从 snapshot
-                // 重建 cluster caret 几何时才回退 alpha（向后兼容无 cluster 数据的旧快照）。
-                val continueRevealSpec =
-                    if (state.role == SliceRole.Delete && state.revealFraction != null && matchedCluster != null) {
-                        TextRevealSpec(
-                            mode = TextRevealMode.SWALLOW,
-                            anchorX = matchedCluster.caretStartX,
-                            boundaryFromX = matchedCluster.caretEndX,
-                            boundaryToX = matchedCluster.caretStartX,
-                            progressStart = 0f,
-                            progressEnd = 1f,
-                            initialFraction = state.revealFraction,
-                        )
-                    } else {
-                        null
-                    }
-                // #637 评论 5386573878：continuation 窗口 — 直接消费旧帧保存的
-                // remainingFraction（当前帧之后还剩多少基准时长），不再从 localProgress
-                // 重新推，连续 rebase 不会反复减速。
-                val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
-                result.add(
-                    PreparedVisualTransaction.AnimatedSlice(
-                        role = state.role,
-                        snapshot = snapshot,
-                        sourceRect = sourceRect,
-                        destinationRect =
-                            android.graphics.RectF(
-                                state.currentLeft,
-                                state.currentTop,
-                                state.currentRight,
-                                state.currentBottom,
-                            ),
-                        startAlpha = if (continueRevealSpec != null) 1f else state.currentAlpha,
-                        endAlpha = if (continueRevealSpec != null) 1f else 0f,
-                        clusterByteStart = state.clusterByteStart,
-                        clusterByteEndExclusive = state.clusterByteEndExclusive,
-                        revealSpec = continueRevealSpec,
-                        progressWindow = continuedWindow,
-                    ),
-                )
-            } else if (state.role == SliceRole.Move) {
-                // #639 评论 5419182722：跨视觉行的保留字符已不再生成 SliceRole.Move
-                // （MoveCrossfadePlanner.appendRetainedTransition 跨行落成
-                // CrossfadeOld+CrossfadeNew）。此分支只处理同线 Move 的 rebase 续播，
-                // 不会把上一帧跨行 Move 映射成下一帧新跨行 Move。跨行字符的 continuation
-                // 走 CrossfadeOld/CrossfadeNew 分支，只续 alpha，位置钉死在布局坐标。
-                val currentRect =
-                    android.graphics.RectF(
-                        state.currentLeft,
-                        state.currentTop,
-                        state.currentRight,
-                        state.currentBottom,
-                    )
-                val destRect =
-                    android.graphics.RectF(
-                        state.destinationLeft,
-                        state.destinationTop,
-                        state.destinationRight,
-                        state.destinationBottom,
-                    )
-                if (currentRect != destRect || state.currentAlpha < 0.99f) {
-                    val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
-                    result.add(
-                        PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.Move,
-                            snapshot = snapshot,
-                            sourceRect = sourceRect,
-                            destinationRect = destRect,
-                            startAlpha = state.currentAlpha,
-                            endAlpha = 1f,
-                            fromDestinationRect = currentRect,
-                            clusterByteStart = state.clusterByteStart,
-                            clusterByteEndExclusive = state.clusterByteEndExclusive,
-                            progressWindow = continuedWindow,
-                        ),
-                    )
-                }
-            } else if (shouldContinueInsertReveal) {
-                // #639 评论 5422606865 问题1：未匹配的半截 Insert 不能被直接丢掉。
-                // Insert 的 reveal 动画不靠 alpha（startAlpha/endAlpha 一直是 1），
-                // 所以 isFadingOut=false、currentAlpha=1 时上面的 alpha 分支进不去，
-                // 三个分支都落空 → Insert 被丢弃 → 下一事务静态布局直接画出完整字符
-                // → 快速连续输入"半个字突然变成完整字"。
-                // 这里看 revealFraction 而非 currentAlpha：只要 reveal 还没走完（<0.99）
-                // 且能从 snapshot 找到匹配 cluster 重建 caret 几何，就继续把当前可见
-                // 部分 reveal 到完整。matchedCluster 为 null 时（找不到 cluster）Insert
-                // 不继续（落入最后的 else 不产生 slice）—— Insert 无 cluster 几何无法
-                // 重建 reveal，不应强行画，与 Delete continuation 无 cluster 时回退
-                // alpha 的语义不同。
-                //
-                // #639 评论 5424986783：未映射 moving Insert 也要保留旧状态真实终点。
-                // 当前 currentRect 可能在 from→destination 中间（上一轮 Move → Insert
-                // 产生），原代码把 destinationRect=currentRect、fromDestinationRect=null
-                // 会强行截断剩余位置移动。改为 destinationRect=state.destinationRect、
-                // fromDestinationRect=currentRect（当有位置差时），位置和 reveal 同时继续。
-                //
-                // #639 评论 5424613367 问题1：caret 几何来自 snapshot 的
-                // visualRectInDocument，按 matchedCluster.visualRectInDocument →
-                // state.destinationRect 建 spec，renderer 再根据当前 progress 自动
-                // 平移到 currentRect。
-                val currentRect = currentRectOf(state)
-                val destRect = destinationRectOf(state)
-                val (shiftedAnchorX, shiftedBoundaryFromX, shiftedBoundaryToX) =
-                    TextRevealGeometry.shiftClusterCaretGeometry(
-                        matchedCluster.visualRectInDocument,
-                        matchedCluster.caretStartX,
-                        matchedCluster.caretEndX,
-                        destRect,
-                        TextRevealMode.REVEAL,
-                    )
-                val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
-                result.add(
-                    PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Insert,
-                        snapshot = snapshot,
-                        sourceRect = matchedCluster.sourceRectInLineImage,
-                        destinationRect = destRect,
-                        startAlpha = 1f,
-                        endAlpha = 1f,
-                        fromDestinationRect = if (currentRect != destRect) currentRect else null,
-                        clusterByteStart = state.clusterByteStart,
-                        clusterByteEndExclusive = state.clusterByteEndExclusive,
-                        revealSpec =
-                            TextRevealSpec(
-                                mode = TextRevealMode.REVEAL,
-                                anchorX = shiftedAnchorX,
-                                boundaryFromX = shiftedBoundaryFromX,
-                                boundaryToX = shiftedBoundaryToX,
-                                progressStart = 0f,
-                                progressEnd = 1f,
-                                initialFraction = state.revealFraction,
-                            ),
-                        progressWindow = continuedWindow,
-                    ),
-                )
-            } else if (!isFadingOut && (state.currentAlpha < 0.99f || hasRemainingPositionMotion(state))) {
-                val currentRect =
-                    android.graphics.RectF(
-                        state.currentLeft,
-                        state.currentTop,
-                        state.currentRight,
-                        state.currentBottom,
-                    )
-                val originalDestRect =
-                    android.graphics.RectF(
-                        state.destinationLeft,
-                        state.destinationTop,
-                        state.destinationRight,
-                        state.destinationBottom,
-                    )
-                val endAlpha =
-                    when (state.role) {
-                        SliceRole.Insert, SliceRole.CrossfadeNew, SliceRole.Move -> 1f
-                        else -> state.currentAlpha
-                    }
-                val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
-                // #639 评论 5424986783：未映射 CrossfadeNew（或其他非淡出 slice）
-                // 在 alpha 已完成但位置未走完时也继续位置移动。条件已在分支入口加入
-                // hasRemainingPositionMotion(state)。fromDestinationRect 按几何判断：
-                // 有位置差时 = currentRect，否则 null（退化为纯 alpha 续播）。
-                result.add(
-                    PreparedVisualTransaction.AnimatedSlice(
-                        role = state.role,
-                        snapshot = snapshot,
-                        sourceRect = sourceRect,
-                        destinationRect = originalDestRect,
-                        startAlpha = state.currentAlpha,
-                        endAlpha = endAlpha,
-                        fromDestinationRect = if (currentRect != originalDestRect) currentRect else null,
-                        clusterByteStart = state.clusterByteStart,
-                        clusterByteEndExclusive = state.clusterByteEndExclusive,
-                        progressWindow = continuedWindow,
-                    ),
-                )
-            }
+            handleUnmappedRebaseState(state, snapshotLookup, result)
         }
 
         return result
+    }
+
+    /**
+     * #639 评论 5425871530 第四部分：处理未映射旧 slice 的 appearance continuation。
+     *
+     * 从 [applyRebaseToSlices] 提取，降低嵌套深度。按旧 slice 的 role 和当前外观状态
+     * 决定是否继续动画，直接消费 [SliceVisualState.caretRevealGeometry] + revealFraction，
+     * 不再反查 snapshot.clusters（synthetic run 也能继续）。
+     */
+    private fun handleUnmappedRebaseState(
+        state: SliceVisualState,
+        snapshotLookup: Map<Long, AndroidLineSnapshot>,
+        result: MutableList<PreparedVisualTransaction.AnimatedSlice>,
+    ) {
+        val isFadingOut = state.role == SliceRole.Delete || state.role == SliceRole.CrossfadeOld
+        val shouldContinue =
+            if (state.revealFraction != null) {
+                state.revealFraction < 0.99f
+            } else {
+                state.currentAlpha > 0.01f
+            }
+        val snapshot = snapshotLookup[state.snapshotId]
+        // matchedCluster 仅作向后兼容 fallback（旧快照没有 caretRevealGeometry 时从 snapshot 反查）。
+        val matchedCluster =
+            if (snapshot != null && state.caretRevealGeometry == null) {
+                snapshot.clusters.firstOrNull {
+                    it.documentByteStart == state.clusterByteStart &&
+                        it.documentByteEndExclusive == state.clusterByteEndExclusive
+                }
+            } else {
+                null
+            }
+        val sourceRect =
+            matchedCluster?.sourceRectInLineImage
+                ?: snapshot?.sourceRect
+                ?: android.graphics.Rect(0, 0, 0, 0)
+        val hasCaretGeometry = state.caretRevealGeometry != null || matchedCluster != null
+        val shouldContinueInsertReveal =
+            state.role == SliceRole.Insert &&
+                state.revealFraction != null &&
+                state.revealFraction < 0.99f &&
+                hasCaretGeometry
+        if (isFadingOut && shouldContinue) {
+            result.add(buildFadingOutContinuation(state, snapshot, sourceRect, matchedCluster, hasCaretGeometry))
+        } else if (state.role == SliceRole.Move) {
+            buildMoveContinuation(state, snapshot, sourceRect)?.let { result.add(it) }
+        } else if (shouldContinueInsertReveal) {
+            result.add(buildInsertRevealContinuation(state, snapshot, sourceRect, matchedCluster))
+        } else if (!isFadingOut && (state.currentAlpha < 0.99f || hasRemainingPositionMotion(state))) {
+            result.add(buildAlphaOrPositionContinuation(state, snapshot, sourceRect))
+        }
+    }
+
+    /** #605 评论3 + #639 评论 5425871530：未匹配 Delete/CrossfadeOld continuation。 */
+    private fun buildFadingOutContinuation(
+        state: SliceVisualState,
+        snapshot: AndroidLineSnapshot?,
+        sourceRect: android.graphics.Rect,
+        matchedCluster: LineClusterSnapshot?,
+        hasCaretGeometry: Boolean,
+    ): PreparedVisualTransaction.AnimatedSlice {
+        val continueRevealSpec =
+            if (state.role == SliceRole.Delete && state.revealFraction != null && hasCaretGeometry) {
+                val (caretStart, caretEnd) =
+                    if (state.caretRevealGeometry != null) {
+                        Pair(state.caretRevealGeometry.caretStartX, state.caretRevealGeometry.caretEndX)
+                    } else {
+                        Pair(matchedCluster!!.caretStartX, matchedCluster.caretEndX)
+                    }
+                TextRevealSpec(
+                    mode = TextRevealMode.SWALLOW,
+                    anchorX = caretStart,
+                    boundaryFromX = caretEnd,
+                    boundaryToX = caretStart,
+                    progressStart = 0f,
+                    progressEnd = 1f,
+                    initialFraction = state.revealFraction,
+                )
+            } else {
+                null
+            }
+        val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
+        return PreparedVisualTransaction.AnimatedSlice(
+            role = state.role,
+            snapshot = snapshot,
+            sourceRect = sourceRect,
+            destinationRect =
+                android.graphics.RectF(
+                    state.currentLeft,
+                    state.currentTop,
+                    state.currentRight,
+                    state.currentBottom,
+                ),
+            startAlpha = if (continueRevealSpec != null) 1f else state.currentAlpha,
+            endAlpha = if (continueRevealSpec != null) 1f else 0f,
+            clusterByteStart = state.clusterByteStart,
+            clusterByteEndExclusive = state.clusterByteEndExclusive,
+            revealSpec = continueRevealSpec,
+            caretRevealGeometry = state.caretRevealGeometry,
+            progressWindow = continuedWindow,
+        )
+    }
+
+    /** #639 评论 5419182722：未匹配 Move continuation（同线 Move rebase 续播）。 */
+    private fun buildMoveContinuation(
+        state: SliceVisualState,
+        snapshot: AndroidLineSnapshot?,
+        sourceRect: android.graphics.Rect,
+    ): PreparedVisualTransaction.AnimatedSlice? {
+        val currentRect =
+            android.graphics.RectF(
+                state.currentLeft,
+                state.currentTop,
+                state.currentRight,
+                state.currentBottom,
+            )
+        val destRect =
+            android.graphics.RectF(
+                state.destinationLeft,
+                state.destinationTop,
+                state.destinationRight,
+                state.destinationBottom,
+            )
+        if (currentRect != destRect || state.currentAlpha < 0.99f) {
+            val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
+            return PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Move,
+                snapshot = snapshot,
+                sourceRect = sourceRect,
+                destinationRect = destRect,
+                startAlpha = state.currentAlpha,
+                endAlpha = 1f,
+                fromDestinationRect = currentRect,
+                clusterByteStart = state.clusterByteStart,
+                clusterByteEndExclusive = state.clusterByteEndExclusive,
+                caretRevealGeometry = state.caretRevealGeometry,
+                progressWindow = continuedWindow,
+            )
+        }
+        return null
+    }
+
+    /** #639 评论 5422606865 + 5425871530：未匹配半截 Insert reveal continuation。 */
+    private fun buildInsertRevealContinuation(
+        state: SliceVisualState,
+        snapshot: AndroidLineSnapshot?,
+        sourceRect: android.graphics.Rect,
+        matchedCluster: LineClusterSnapshot?,
+    ): PreparedVisualTransaction.AnimatedSlice {
+        val currentRect = currentRectOf(state)
+        val destRect = destinationRectOf(state)
+        // caret 几何优先用 state.caretRevealGeometry，fallback 用 matchedCluster。
+        val visualRect: android.graphics.RectF
+        val caretStartX: Float
+        val caretEndX: Float
+        val revealSourceRect: android.graphics.Rect
+        if (state.caretRevealGeometry != null) {
+            val g = state.caretRevealGeometry
+            visualRect = g.visualRect
+            caretStartX = g.caretStartX
+            caretEndX = g.caretEndX
+            revealSourceRect = sourceRect
+        } else {
+            visualRect = matchedCluster!!.visualRectInDocument
+            caretStartX = matchedCluster.caretStartX
+            caretEndX = matchedCluster.caretEndX
+            revealSourceRect = matchedCluster.sourceRectInLineImage
+        }
+        val (shiftedAnchorX, shiftedBoundaryFromX, shiftedBoundaryToX) =
+            TextRevealGeometry.shiftClusterCaretGeometry(
+                visualRect,
+                caretStartX,
+                caretEndX,
+                destRect,
+                TextRevealMode.REVEAL,
+            )
+        val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
+        return PreparedVisualTransaction.AnimatedSlice(
+            role = SliceRole.Insert,
+            snapshot = snapshot,
+            sourceRect = revealSourceRect,
+            destinationRect = destRect,
+            startAlpha = 1f,
+            endAlpha = 1f,
+            fromDestinationRect = if (currentRect != destRect) currentRect else null,
+            clusterByteStart = state.clusterByteStart,
+            clusterByteEndExclusive = state.clusterByteEndExclusive,
+            revealSpec =
+                TextRevealSpec(
+                    mode = TextRevealMode.REVEAL,
+                    anchorX = shiftedAnchorX,
+                    boundaryFromX = shiftedBoundaryFromX,
+                    boundaryToX = shiftedBoundaryToX,
+                    progressStart = 0f,
+                    progressEnd = 1f,
+                    initialFraction = state.revealFraction!!,
+                ),
+            caretRevealGeometry = state.caretRevealGeometry,
+            progressWindow = continuedWindow,
+        )
+    }
+
+    /** #639 评论 5424986783：未匹配 CrossfadeNew/其他非淡出 slice 的 alpha/位置续播。 */
+    private fun buildAlphaOrPositionContinuation(
+        state: SliceVisualState,
+        snapshot: AndroidLineSnapshot?,
+        sourceRect: android.graphics.Rect,
+    ): PreparedVisualTransaction.AnimatedSlice {
+        val currentRect =
+            android.graphics.RectF(
+                state.currentLeft,
+                state.currentTop,
+                state.currentRight,
+                state.currentBottom,
+            )
+        val originalDestRect =
+            android.graphics.RectF(
+                state.destinationLeft,
+                state.destinationTop,
+                state.destinationRight,
+                state.destinationBottom,
+            )
+        val endAlpha =
+            when (state.role) {
+                SliceRole.Insert, SliceRole.CrossfadeNew, SliceRole.Move -> 1f
+                else -> state.currentAlpha
+            }
+        val continuedWindow = VisualProgressWindow.fromRemainingFraction(state.remainingFraction)
+        return PreparedVisualTransaction.AnimatedSlice(
+            role = state.role,
+            snapshot = snapshot,
+            sourceRect = sourceRect,
+            destinationRect = originalDestRect,
+            startAlpha = state.currentAlpha,
+            endAlpha = endAlpha,
+            fromDestinationRect = if (currentRect != originalDestRect) currentRect else null,
+            clusterByteStart = state.clusterByteStart,
+            clusterByteEndExclusive = state.clusterByteEndExclusive,
+            caretRevealGeometry = state.caretRevealGeometry,
+            progressWindow = continuedWindow,
+        )
     }
 
     fun applyRebaseState(
@@ -307,61 +343,17 @@ class RebasePlanner {
         // #637 评论 5386573878：rebase continuation 窗口 — 直接消费旧帧保存的
         // remainingFraction，不再从 localProgress 重新推，连续 rebase 不会反复减速。
         val continuedWindow = VisualProgressWindow.fromRemainingFraction(rebaseState.remainingFraction)
+        // #639 评论 5425871530 第四部分：统一做 appearance continuation，不再按 slice.role
+        // 分支处理外观状态。逻辑按"旧屏幕当前外观"决定，而不是按旧 role：
+        // - 旧 state 有 revealFraction：说明当前屏幕是裁到一半的字。无论新 role 是 Insert /
+        //   Move / CrossfadeNew，都给新 slice 重建一个 REVEAL continuation，
+        //   initialFraction = old revealFraction，geometry 用新 slice 自己的
+        //   caretRevealGeometry，位置继续走 fromRect -> destinationRect。
+        // - 旧 state 没有 revealFraction：说明当前不是 clip reveal。新 slice 不应凭空启动
+        //   reveal。即使新 role 是 Insert，也要把 planner 原本的 revealSpec 清掉，继续
+        //   startAlpha = old currentAlpha -> endAlpha = 1。
         return when (slice.role) {
-            SliceRole.Move -> {
-                slice.copy(
-                    snapshot = snapshot,
-                    fromDestinationRect = fromRect,
-                    startAlpha = rebaseState.currentAlpha,
-                    progressWindow = continuedWindow,
-                )
-            }
-            SliceRole.Insert -> {
-                // #637 评论 5386573878：映射成功的 Insert continuation 重建 spec 为
-                // progressStart=0/progressEnd=1/initialFraction=当前 revealFraction。
-                // 多 cluster/run 的 reveal 本来可能有非 [0,1] 子窗口；rebase 后外层
-                // progress 从 0 重新开始，继续沿用旧 progressStart 会先停一段再继续。
-                // 剩余时长交给外层 VisualProgressWindow 控制，与未映射 Delete 统一。
-                val updatedSpec =
-                    slice.revealSpec?.let { spec ->
-                        spec.copy(
-                            progressStart = 0f,
-                            progressEnd = 1f,
-                            initialFraction = rebaseState.revealFraction ?: 0f,
-                        )
-                    }
-                // #639 评论 5424986783：按几何判断而非旧 SliceRole 判断位置运动。
-                // 连续 rebase（Move → Insert 后再次 rebase）时旧 role 已变成 Insert，
-                // 但 currentRect 仍在 from→destination 中间，必须继承 fromRect 才不跳变。
-                // fromRect != slice.destinationRect → 还有位置运动 → fromDestinationRect = fromRect；
-                // 相同则为 null（退化为原有行为，无位置插值）。
-                slice.copy(
-                    snapshot = snapshot,
-                    startAlpha = rebaseState.currentAlpha,
-                    fromDestinationRect = if (fromRect != slice.destinationRect) fromRect else null,
-                    revealSpec = updatedSpec,
-                    progressWindow = continuedWindow,
-                )
-            }
-            SliceRole.Delete -> {
-                // #637 评论 5386573878：同 Insert，重建 spec 为 [0,1] 子窗口，
-                // initialFraction=当前 revealFraction，剩余时长交给外层窗口控制。
-                val updatedSpec =
-                    slice.revealSpec?.let { spec ->
-                        spec.copy(
-                            progressStart = 0f,
-                            progressEnd = 1f,
-                            initialFraction = rebaseState.revealFraction ?: 0f,
-                        )
-                    }
-                slice.copy(
-                    snapshot = snapshot,
-                    startAlpha = rebaseState.currentAlpha,
-                    endAlpha = 0f,
-                    revealSpec = updatedSpec,
-                    progressWindow = continuedWindow,
-                )
-            }
+            SliceRole.Static -> slice
             SliceRole.CrossfadeOld -> {
                 // #639 评论 5421085782 问题2：CrossfadeOld 接到旧 Move/CrossfadeNew/Insert
                 // 状态时，必须从当前屏幕真实位置退场。fromRect 就是
@@ -397,19 +389,90 @@ class RebasePlanner {
                     )
                 }
             }
-            SliceRole.CrossfadeNew -> {
-                // #639 评论 5424986783：按几何判断而非旧 SliceRole 判断位置运动。
-                // 连续 rebase（Move → CrossfadeNew 后再次 rebase）时旧 role 已变成
-                // CrossfadeNew，但 currentRect 仍在 from→destination 中间，必须继承
-                // fromRect 才不跳变。与 Insert 分支同构。
+            SliceRole.Delete -> {
+                // #637 评论 5386573878：同 Insert，重建 spec 为 [0,1] 子窗口，
+                // initialFraction=当前 revealFraction，剩余时长交给外层窗口控制。
+                val updatedSpec =
+                    slice.revealSpec?.let { spec ->
+                        spec.copy(
+                            progressStart = 0f,
+                            progressEnd = 1f,
+                            initialFraction = rebaseState.revealFraction ?: 0f,
+                        )
+                    }
                 slice.copy(
                     snapshot = snapshot,
                     startAlpha = rebaseState.currentAlpha,
-                    fromDestinationRect = if (fromRect != slice.destinationRect) fromRect else null,
+                    endAlpha = 0f,
+                    revealSpec = updatedSpec,
                     progressWindow = continuedWindow,
                 )
             }
-            SliceRole.Static -> slice
+            // #639 评论 5425871530 第四部分：Insert / Move / CrossfadeNew 统一做
+            // appearance continuation，不再按新 role 分支处理。
+            SliceRole.Insert, SliceRole.Move, SliceRole.CrossfadeNew -> {
+                // #639 评论 5424986783：按几何判断而非旧 SliceRole 判断位置运动。
+                // Move 保持原有行为：总是设置 fromDestinationRect = fromRect（即使
+                // fromRect == destinationRect，visualDestinationRectAt 退化为常量
+                // destinationRect，效果与 null 完全一致，但保持 RebaseSliceMappingTest
+                // 的契约）。Insert/CrossfadeNew 用几何判断：有位置差时 = fromRect，
+                // 否则 null（退化为纯 alpha 续播）。
+                val fromDest =
+                    if (slice.role == SliceRole.Move) {
+                        fromRect
+                    } else {
+                        if (fromRect != slice.destinationRect) fromRect else null
+                    }
+                if (rebaseState.revealFraction != null) {
+                    // 旧 state 有 revealFraction：重建 REVEAL continuation。
+                    // geometry 优先用新 slice 自己的 caretRevealGeometry；fallback 用
+                    // rebaseState.caretRevealGeometry（旧 state 携带的几何）；再 fallback
+                    // 用 slice.destinationRect 构造简单几何（whole-line 或测试场景）。
+                    val geometry = slice.caretRevealGeometry ?: rebaseState.caretRevealGeometry
+                    val (visualRect, caretStartX, caretEndX) =
+                        if (geometry != null) {
+                            Triple(geometry.visualRect, geometry.caretStartX, geometry.caretEndX)
+                        } else {
+                            Triple(slice.destinationRect, slice.destinationRect.left, slice.destinationRect.right)
+                        }
+                    val (shiftedAnchorX, shiftedBoundaryFromX, shiftedBoundaryToX) =
+                        TextRevealGeometry.shiftClusterCaretGeometry(
+                            visualRect,
+                            caretStartX,
+                            caretEndX,
+                            slice.destinationRect,
+                            TextRevealMode.REVEAL,
+                        )
+                    val revealSpec =
+                        TextRevealSpec(
+                            mode = TextRevealMode.REVEAL,
+                            anchorX = shiftedAnchorX,
+                            boundaryFromX = shiftedBoundaryFromX,
+                            boundaryToX = shiftedBoundaryToX,
+                            progressStart = 0f,
+                            progressEnd = 1f,
+                            initialFraction = rebaseState.revealFraction,
+                        )
+                    slice.copy(
+                        snapshot = snapshot,
+                        startAlpha = rebaseState.currentAlpha,
+                        fromDestinationRect = fromDest,
+                        revealSpec = revealSpec,
+                        progressWindow = continuedWindow,
+                    )
+                } else {
+                    // 旧 state 没有 revealFraction：新 slice 不应凭空启动 reveal。
+                    // 即使新 role 是 Insert，也要把 planner 原本的 revealSpec 清掉，
+                    // 继续 startAlpha = old currentAlpha -> endAlpha = 1。
+                    slice.copy(
+                        snapshot = snapshot,
+                        startAlpha = rebaseState.currentAlpha,
+                        fromDestinationRect = fromDest,
+                        revealSpec = null,
+                        progressWindow = continuedWindow,
+                    )
+                }
+            }
         }
     }
 
@@ -443,12 +506,6 @@ class RebasePlanner {
         fallbackSnapshot: AndroidLineSnapshot?,
     ): android.graphics.RectF? {
         val fraction = rebaseState.revealFraction ?: return null
-        val oldSnapshot = snapshotLookup[rebaseState.snapshotId] ?: fallbackSnapshot ?: return null
-        val cluster =
-            oldSnapshot.clusters.firstOrNull {
-                it.documentByteStart == rebaseState.clusterByteStart &&
-                    it.documentByteEndExclusive == rebaseState.clusterByteEndExclusive
-            } ?: return null
         val destination =
             android.graphics.RectF(
                 rebaseState.currentLeft,
@@ -456,6 +513,26 @@ class RebasePlanner {
                 rebaseState.currentRight,
                 rebaseState.currentBottom,
             )
+        // #639 评论 5425871530 第四部分：caret 几何优先用 rebaseState.caretRevealGeometry
+        // （slice 自带，不依赖 snapshot.clusters 反查 — synthetic run 也能继续），
+        // fallback 用旧 snapshot 的 matchedCluster（向后兼容旧快照）。
+        if (rebaseState.caretRevealGeometry != null) {
+            val g = rebaseState.caretRevealGeometry
+            return TextRevealGeometry.computeClusterRevealClipRect(
+                g.visualRect,
+                g.caretStartX,
+                g.caretEndX,
+                destination,
+                TextRevealMode.REVEAL,
+                fraction,
+            )
+        }
+        val oldSnapshot = snapshotLookup[rebaseState.snapshotId] ?: fallbackSnapshot ?: return null
+        val cluster =
+            oldSnapshot.clusters.firstOrNull {
+                it.documentByteStart == rebaseState.clusterByteStart &&
+                    it.documentByteEndExclusive == rebaseState.clusterByteEndExclusive
+            } ?: return null
         // #639 评论 5424613367 问题1：caret 几何来自旧 snapshot 的 visualRectInDocument，
         // 当前 destination 是 currentRect（旧 Insert 可能正在 from/destination 中间）。
         // 用 TextRevealGeometry.computeClusterRevealClipRect 统一平移，与未匹配 Insert

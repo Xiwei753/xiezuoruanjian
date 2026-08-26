@@ -13,6 +13,7 @@ import com.xiwei.sujian.feature.editor.visual.TransactionState
 import com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -46,15 +47,16 @@ class RebasePlannerReproTest {
             endAlpha = 1f,
             clusterByteStart = 0,
             clusterByteEndExclusive = 1,
-            revealSpec = TextRevealSpec(
-                mode = TextRevealMode.REVEAL,
-                anchorX = destinationRect.left,
-                boundaryFromX = destinationRect.left,
-                boundaryToX = destinationRect.right,
-                progressStart = 0f,
-                progressEnd = 1f,
-                initialFraction = 0f,
-            ),
+            revealSpec =
+                TextRevealSpec(
+                    mode = TextRevealMode.REVEAL,
+                    anchorX = destinationRect.left,
+                    boundaryFromX = destinationRect.left,
+                    boundaryToX = destinationRect.right,
+                    progressStart = 0f,
+                    progressEnd = 1f,
+                    initialFraction = 0f,
+                ),
         )
     }
 
@@ -110,19 +112,20 @@ class RebasePlannerReproTest {
         caretEndX: Float,
         snapshotId: Long = 1L,
     ): AndroidLineSnapshot {
-        val cluster = LineClusterSnapshot(
-            clusterId = 0L,
-            documentByteStart = 0,
-            documentByteEndExclusive = 1,
-            documentUtf16Start = 0,
-            documentUtf16EndExclusive = 1,
-            sourceRectInLineImage = Rect(0, 0, 10, 20),
-            visualRectInDocument = visualRectInDocument,
-            shapingFingerprint = "fp",
-            shapingIdentityConfident = true,
-            caretStartX = caretStartX,
-            caretEndX = caretEndX,
-        )
+        val cluster =
+            LineClusterSnapshot(
+                clusterId = 0L,
+                documentByteStart = 0,
+                documentByteEndExclusive = 1,
+                documentUtf16Start = 0,
+                documentUtf16EndExclusive = 1,
+                sourceRectInLineImage = Rect(0, 0, 10, 20),
+                visualRectInDocument = visualRectInDocument,
+                shapingFingerprint = "fp",
+                shapingIdentityConfident = true,
+                caretStartX = caretStartX,
+                caretEndX = caretEndX,
+            )
         return AndroidLineSnapshot(
             snapshotId = snapshotId,
             bitmap = null,
@@ -157,13 +160,14 @@ class RebasePlannerReproTest {
         val currentRect = RectF(0f, 0f, 100f, 20f)
         val destRect = RectF(200f, 0f, 300f, 20f)
         val slice = makeInsertSlice(destRect)
-        val rebaseState = makeMovingState(
-            role = SliceRole.Insert,
-            currentRect = currentRect,
-            destinationRect = destRect,
-            currentAlpha = 1f,
-            revealFraction = 0.5f,
-        )
+        val rebaseState =
+            makeMovingState(
+                role = SliceRole.Insert,
+                currentRect = currentRect,
+                destinationRect = destRect,
+                currentAlpha = 1f,
+                revealFraction = 0.5f,
+            )
 
         val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
 
@@ -193,12 +197,13 @@ class RebasePlannerReproTest {
         val currentRect = RectF(0f, 0f, 100f, 20f)
         val destRect = RectF(200f, 0f, 300f, 20f)
         val slice = makeCrossfadeNewSlice(destRect)
-        val rebaseState = makeMovingState(
-            role = SliceRole.CrossfadeNew,
-            currentRect = currentRect,
-            destinationRect = destRect,
-            currentAlpha = 1f,
-        )
+        val rebaseState =
+            makeMovingState(
+                role = SliceRole.CrossfadeNew,
+                currentRect = currentRect,
+                destinationRect = destRect,
+                currentAlpha = 1f,
+            )
 
         val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
 
@@ -231,29 +236,33 @@ class RebasePlannerReproTest {
     fun repro3_unmatchedMovingInsert_continuesPositionTowardDestination() {
         val currentRect = RectF(100f, 0f, 200f, 20f)
         val destRect = RectF(200f, 0f, 300f, 20f)
-        val snapshot = makeSnapshotWithCluster(
-            visualRectInDocument = currentRect,
-            caretStartX = 100f,
-            caretEndX = 200f,
-        )
-        val insertState = makeMovingState(
-            role = SliceRole.Insert,
-            currentRect = currentRect,
-            destinationRect = destRect,
-            currentAlpha = 1f,
-            revealFraction = 0.5f,
-        )
-        val rebaseSnapshot = VisualFrameSnapshot(
-            progress = 0.5f,
-            state = TransactionState.Rendering,
-            sliceVisualStates = listOf(insertState),
-        )
+        val snapshot =
+            makeSnapshotWithCluster(
+                visualRectInDocument = currentRect,
+                caretStartX = 100f,
+                caretEndX = 200f,
+            )
+        val insertState =
+            makeMovingState(
+                role = SliceRole.Insert,
+                currentRect = currentRect,
+                destinationRect = destRect,
+                currentAlpha = 1f,
+                revealFraction = 0.5f,
+            )
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 0.5f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(insertState),
+            )
 
-        val result = planner.applyRebaseToSlices(
-            newSlices = emptyList(),
-            rebaseSnapshot = rebaseSnapshot,
-            snapshotLookup = mapOf(1L to snapshot),
-        )
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = mapOf(1L to snapshot),
+            )
 
         assertTrue(
             "未映射 moving Insert（currentRect!=destinationRect, revealFraction<1）应继续，不应被丢弃",
@@ -306,24 +315,27 @@ class RebasePlannerReproTest {
     fun repro4_unmatchedMovingCrossfadeNewWithAlphaOne_continuesPosition() {
         val currentRect = RectF(100f, 0f, 200f, 20f)
         val destRect = RectF(200f, 0f, 300f, 20f)
-        val crossfadeNewState = makeMovingState(
-            role = SliceRole.CrossfadeNew,
-            currentRect = currentRect,
-            destinationRect = destRect,
-            currentAlpha = 1.0f,
-            revealFraction = null,
-        )
-        val rebaseSnapshot = VisualFrameSnapshot(
-            progress = 0.5f,
-            state = TransactionState.Rendering,
-            sliceVisualStates = listOf(crossfadeNewState),
-        )
+        val crossfadeNewState =
+            makeMovingState(
+                role = SliceRole.CrossfadeNew,
+                currentRect = currentRect,
+                destinationRect = destRect,
+                currentAlpha = 1.0f,
+                revealFraction = null,
+            )
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 0.5f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(crossfadeNewState),
+            )
 
-        val result = planner.applyRebaseToSlices(
-            newSlices = emptyList(),
-            rebaseSnapshot = rebaseSnapshot,
-            snapshotLookup = emptyMap(),
-        )
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = emptyMap(),
+            )
 
         assertTrue(
             "未映射 moving CrossfadeNew（currentAlpha==1 但 currentRect!=destinationRect）不应被丢弃，" +
@@ -356,5 +368,168 @@ class RebasePlannerReproTest {
     companion object {
         private const val FROM_DEST_LEFT_MSG = "fromDestinationRect.left 应为 currentRect.left"
         private const val FROM_DEST_RIGHT_MSG = "fromDestinationRect.right 应为 currentRect.right"
+    }
+
+    // ===== #639 评论 5425871530 第五部分：跨 role rebase 外观续播锁住测试 =====
+
+    /**
+     * Move(full) -> Insert：旧 Move 无 revealFraction（字完整可见），新 Insert 不应凭空
+     * 启动 reveal，应清掉 revealSpec，继续 startAlpha = old currentAlpha=1 -> endAlpha = 1。
+     * 锁住修复后行为，防止回归到 initialFraction = revealFraction ?: 0f = 0f 的 buggy 逻辑。
+     */
+    @Test
+    fun crossRole_moveToInsert_shouldClearRevealSpecAndContinueAlpha() {
+        val rect = RectF(0f, 0f, 100f, 20f)
+        val slice = makeInsertSlice(rect)
+        val rebaseState =
+            SliceVisualState(
+                snapshotId = 1L,
+                role = SliceRole.Move,
+                lineIndex = 0,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                currentLeft = rect.left,
+                currentTop = rect.top,
+                currentRight = rect.right,
+                currentBottom = rect.bottom,
+                currentAlpha = 1f,
+                destinationLeft = rect.left,
+                destinationTop = rect.top,
+                destinationRight = rect.right,
+                destinationBottom = rect.bottom,
+                revealFraction = null,
+            )
+        val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
+        assertNull("Move -> Insert：应清掉 revealSpec", rebased.revealSpec)
+        assertEquals(1f, rebased.startAlpha, 0.001f)
+    }
+
+    /**
+     * CrossfadeNew(alpha=0.4) -> Insert：旧 CrossfadeNew 无 revealFraction，新 Insert 不应
+     * 凭空启动 reveal，应清掉 revealSpec，继续 startAlpha = 0.4 -> endAlpha = 1。
+     */
+    @Test
+    fun crossRole_crossfadeNewToInsert_shouldClearRevealSpecAndContinueAlpha() {
+        val rect = RectF(0f, 0f, 100f, 20f)
+        val slice = makeInsertSlice(rect)
+        val rebaseState =
+            SliceVisualState(
+                snapshotId = 1L,
+                role = SliceRole.CrossfadeNew,
+                lineIndex = 0,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                currentLeft = rect.left,
+                currentTop = rect.top,
+                currentRight = rect.right,
+                currentBottom = rect.bottom,
+                currentAlpha = 0.4f,
+                destinationLeft = rect.left,
+                destinationTop = rect.top,
+                destinationRight = rect.right,
+                destinationBottom = rect.bottom,
+                revealFraction = null,
+            )
+        val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
+        assertNull("CrossfadeNew -> Insert：应清掉 revealSpec", rebased.revealSpec)
+        assertEquals(0.4f, rebased.startAlpha, 0.001f)
+    }
+
+    /**
+     * Insert(reveal=0.4) -> Move：旧 Insert 有 revealFraction=0.4，新 Move 应重建
+     * REVEAL continuation，initialFraction = 0.4。锁住修复后行为，防止回归到
+     * 只继承 currentAlpha=1 不携带 reveal 续播信息的 buggy 逻辑。
+     */
+    @Test
+    fun crossRole_insertToMove_shouldRebuildRevealContinuation() {
+        val rect = RectF(0f, 0f, 100f, 20f)
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Move,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 10, 20),
+                destinationRect = rect,
+                startAlpha = 1f,
+                endAlpha = 1f,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                caretRevealGeometry =
+                    PreparedVisualTransaction.CaretRevealGeometry(
+                        visualRect = rect,
+                        caretStartX = 0f,
+                        caretEndX = 100f,
+                    ),
+            )
+        val rebaseState =
+            SliceVisualState(
+                snapshotId = 1L,
+                role = SliceRole.Insert,
+                lineIndex = 0,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                currentLeft = rect.left,
+                currentTop = rect.top,
+                currentRight = rect.right,
+                currentBottom = rect.bottom,
+                currentAlpha = 1f,
+                destinationLeft = rect.left,
+                destinationTop = rect.top,
+                destinationRight = rect.right,
+                destinationBottom = rect.bottom,
+                revealFraction = 0.4f,
+            )
+        val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
+        assertNotNull("Insert -> Move：应重建 revealSpec", rebased.revealSpec)
+        if (rebased.revealSpec != null) {
+            assertEquals(0.4f, rebased.revealSpec!!.initialFraction, 0.001f)
+        }
+    }
+
+    /**
+     * Insert(reveal=0.4) -> CrossfadeNew：同 Insert -> Move，应重建 REVEAL continuation。
+     */
+    @Test
+    fun crossRole_insertToCrossfadeNew_shouldRebuildRevealContinuation() {
+        val rect = RectF(0f, 0f, 100f, 20f)
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.CrossfadeNew,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 10, 20),
+                destinationRect = rect,
+                startAlpha = 1f,
+                endAlpha = 1f,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                caretRevealGeometry =
+                    PreparedVisualTransaction.CaretRevealGeometry(
+                        visualRect = rect,
+                        caretStartX = 0f,
+                        caretEndX = 100f,
+                    ),
+            )
+        val rebaseState =
+            SliceVisualState(
+                snapshotId = 1L,
+                role = SliceRole.Insert,
+                lineIndex = 0,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                currentLeft = rect.left,
+                currentTop = rect.top,
+                currentRight = rect.right,
+                currentBottom = rect.bottom,
+                currentAlpha = 1f,
+                destinationLeft = rect.left,
+                destinationTop = rect.top,
+                destinationRight = rect.right,
+                destinationBottom = rect.bottom,
+                revealFraction = 0.4f,
+            )
+        val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
+        assertNotNull("Insert -> CrossfadeNew：应重建 revealSpec", rebased.revealSpec)
+        if (rebased.revealSpec != null) {
+            assertEquals(0.4f, rebased.revealSpec!!.initialFraction, 0.001f)
+        }
     }
 }

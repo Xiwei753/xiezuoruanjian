@@ -808,4 +808,77 @@ class AndroidTextAnimationRendererTest {
         assertEquals(45f, regions[0].right, eps)
         assertEquals(20f, regions[0].bottom, eps)
     }
+
+    /**
+     * #639 评论 54258715307 第五部分：renderer 三条轨正交绘制 —
+     * revealSpec + alpha + fromDestinationRect 同时存在时，computeStaticSuppressionRegions
+     * 的 Insert suppression 仍用 destinationRect（静态底图去重），不在 currentRect 挖洞。
+     *
+     * 这锁住三条轨可以同时工作：
+     * - 位置轨：fromDestinationRect 非 null → currentRect != destinationRect。
+     * - alpha 轨：startAlpha=0.4, endAlpha=1（CrossfadeNew -> Insert 的 alpha 续播）。
+     * - reveal 轨：revealSpec 非 null（Insert 有 reveal spec）。
+     *
+     * suppression 语义：Insert/Move/CrossfadeNew/Static 的静态底图 suppression 用
+     * destinationRect（新 Layout 中完整静态像素的位置），不用 currentRect。renderer 仍用
+     * visualDestinationRectAt(progress) 画动画像素，这里是静态底图去重，两者语义不同。
+     */
+    @Test
+    fun computeStaticSuppressionRegions_insertWithRevealSpecAlphaAndFromDestinationRectUsesDestinationRect() {
+        val destRect = RectF(100f, 0f, 200f, 20f)
+        val fromRect = RectF(50f, 0f, 150f, 20f) // fromDestinationRect != destinationRect
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Insert,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = destRect,
+                // alpha 续播（CrossfadeNew -> Insert）
+                startAlpha = 0.4f,
+                endAlpha = 1f,
+                // 位置轨
+                fromDestinationRect = fromRect,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                revealSpec =
+                    TextRevealSpec(
+                        mode = TextRevealMode.REVEAL,
+                        anchorX = 100f,
+                        boundaryFromX = 100f,
+                        boundaryToX = 200f,
+                        progressStart = 0f,
+                        progressEnd = 1f,
+                        initialFraction = 0f,
+                    ),
+                // reveal 轨
+            )
+        val transaction =
+            PreparedVisualTransaction(
+                transactionId = 1L,
+                oldRevision = null,
+                newRevision = null,
+                staticPatches = emptyList(),
+                animatedSlices = listOf(slice),
+                ownedSnapshotIds = emptySet(),
+                referencedSnapshotIds = emptySet(),
+                selectionDecoration = null,
+                preeditDecoration = null,
+                cursorTransition = null,
+                durationMs = 100L,
+            )
+
+        // progress=0.5 → currentRect=(75,0,175,20)（from→dest 插值）
+        // 但 suppression 应该用 destinationRect=(100,0,200,20)，不用 currentRect
+        val regions = renderer.computeStaticSuppressionRegions(transaction, 0.5f)
+        assertEquals("Insert 应 suppress 1 个区域", 1, regions.size)
+        assertEquals(
+            "suppression 应用 destinationRect.left=100，不用 currentRect.left=75",
+            100f,
+            regions[0].left,
+            eps,
+        )
+        assertEquals(0f, regions[0].top, eps)
+        assertEquals(200f, regions[0].right, eps)
+        assertEquals(20f, regions[0].bottom, eps)
+    }
 }

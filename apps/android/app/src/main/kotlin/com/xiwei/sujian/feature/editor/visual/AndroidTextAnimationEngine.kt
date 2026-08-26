@@ -809,6 +809,7 @@ class AndroidTextAnimationEngine(
                 destinationBottom = slice.destinationRect.bottom,
                 revealFraction = revealFraction,
                 remainingFraction = remainingFraction,
+                caretRevealGeometry = slice.caretRevealGeometry,
             )
         }
     }

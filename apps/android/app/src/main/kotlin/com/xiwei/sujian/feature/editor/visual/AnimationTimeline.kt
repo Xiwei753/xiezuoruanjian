@@ -216,4 +216,11 @@ data class SliceVisualState(
      *  反复减速（旧 localProgress 会在旧 window [0,0.4] 走到 0.2 时得 0.5，下一次
      *  又放大回 50ms；remainingFraction 得 0.2，保持 20ms）。 */
     val remainingFraction: Float = 1f,
+    /** #639 评论 5425871530 第二部分：本 slice 的 caret/reveal 几何，从 active slice
+     *  直接复制进来，把外观状态一起带进下一次 rebase。
+     *
+     *  rebase 时 [RebasePlanner] 直接消费这份几何重建 REVEAL continuation，不再从
+     *  [AndroidLineSnapshot.clusters] 按 byte range 反查 — 这同时修掉 RunAnimation
+     *  synthetic run 不在原始 clusters 里的漏洞。 */
+    val caretRevealGeometry: PreparedVisualTransaction.CaretRevealGeometry? = null,
 )

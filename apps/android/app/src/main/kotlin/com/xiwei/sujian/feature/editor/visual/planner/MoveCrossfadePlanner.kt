@@ -8,6 +8,14 @@ import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 
 class MoveCrossfadePlanner {
+    /** #639 评论 5425871530 第一部分：从 cluster 构造 [PreparedVisualTransaction.CaretRevealGeometry]。 */
+    private fun caretGeometryOf(cluster: LineClusterSnapshot): PreparedVisualTransaction.CaretRevealGeometry =
+        PreparedVisualTransaction.CaretRevealGeometry(
+            visualRect = cluster.visualRectInDocument,
+            caretStartX = cluster.caretStartX,
+            caretEndX = cluster.caretEndX,
+        )
+
     /**
      * #639 评论 5420317382：reflow 规划真实统计 — 在 [appendRetainedTransition]
      * 做出判断的那一刻累计，不从最终 slice 角色反推。
@@ -309,6 +317,7 @@ class MoveCrossfadePlanner {
                     endAlpha = 1f,
                     clusterByteStart = newCluster.documentByteStart,
                     clusterByteEndExclusive = newCluster.documentByteEndExclusive,
+                    caretRevealGeometry = caretGeometryOf(newCluster),
                 ),
             )
             return
@@ -332,6 +341,7 @@ class MoveCrossfadePlanner {
                 endAlpha = 0f,
                 clusterByteStart = oldCluster.documentByteStart,
                 clusterByteEndExclusive = oldCluster.documentByteEndExclusive,
+                caretRevealGeometry = caretGeometryOf(oldCluster),
             ),
         )
         out.add(
@@ -344,6 +354,7 @@ class MoveCrossfadePlanner {
                 endAlpha = 1f,
                 clusterByteStart = newCluster.documentByteStart,
                 clusterByteEndExclusive = newCluster.documentByteEndExclusive,
+                caretRevealGeometry = caretGeometryOf(newCluster),
             ),
         )
     }

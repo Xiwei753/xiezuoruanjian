@@ -25,49 +25,25 @@ class AndroidTextAnimationRenderer {
             // 本 slice 的 local progress（rebase continuation 时已走部分不重新计时）。
             val localProgress = slice.progressWindow.map(progress)
 
+            // #639 评论 5425871530 第三部分：位置、alpha、reveal 三条轨正交绘制。
+            // 不再按 SliceRole 分支决定是否裁剪 — 所有 role 都走同一个入口：
+            // 1. 位置轨：所有 role 都用 visualDestinationRectAt(progress) 得到 currentRect。
+            // 2. alpha 轨：所有 role 都按 startAlpha -> endAlpha 算当前 alpha。
+            // 3. reveal 轨：revealSpec != null 时不管 role 都按 TextRevealGeometry 算 clip；
+            //    clip 为 null 就不画。有 reveal clip 时仍然使用当前 alpha，不强制 alpha=255。
+            // fixedRevealClipRect 仍保留给 CrossfadeOld 的"冻结当前半截字再淡出"，
+            // 优先级高于普通 revealSpec。
             when (slice.role) {
-                SliceRole.Move -> {
-                    // fromDestinationRect is the pre-move position; destinationRect is the
-                    // post-move position. For cross-line Moves these can be on different lines;
-                    // the interpolation moves the bitmap smoothly between them.
-                    //
-                    // sourceRect is always from the NEW layout's Bitmap (the slice's snapshot
-                    // belongs to the new revision). This is correct because:
-                    // (a) The new Bitmap contains the actual glyph pixels at the destination
-                    //     position — the old Bitmap may have different sub-pixel rendering or
-                    //     font fallback.
-                    // (b) Move is only generated when shapingIdentityConfident is true on BOTH
-                    //     old and new clusters, meaning the glyph pixels are visually identical.
-                    //     Using the new Bitmap therefore produces no visual difference from using
-                    //     the old Bitmap, while avoiding the need to store both snapshots.
-                    // (c) Move slices always have startAlpha = endAlpha = 1f (fully opaque
-                    //     throughout the animation) because the text content is unchanged — only
-                    //     its position transitions. Alpha variation would imply content change,
-                    //     which contradicts the Move invariant (same shaping identity).
-                    val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
-                    slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
-                    // #639 评论 5422606865 问题2：位置插值统一走 visualDestinationRectAt，
-                    // 与 engine.computeSliceVisualStates 共用同一份几何，captureFrame
-                    // 记录的位置就是 renderer 真正画在屏幕上的位置。
-                    val currentDest = slice.visualDestinationRectAt(progress)
-                    canvas.drawBitmap(bitmap, slice.sourceRect, currentDest, slicePaint)
-                }
-                SliceRole.Insert, SliceRole.Delete -> {
-                    // #639 评论 5422606865 问题2：drawRevealSlice 改为接收全局 progress，
-                    // 内部用 visualDestinationRectAt 算 currentRect，支持 fromDestinationRect
-                    // 非 null 时（rebase 把 Insert 接到旧 Move 当前位置）的位置插值。
-                    drawRevealSlice(canvas, bitmap, slice, progress)
-                }
-                // CrossfadeOld: position does not change during animation — only alpha varies.
-                // #639 评论 5421085782 问题2：若 fixedRevealClipRect 非空（旧 Insert 只
-                // reveal 到一半被 rebase 成 CrossfadeOld），canvas.save()+clipRect(冻结的
-                // document-space clip rect)+drawBitmap(完整 bitmap, sourceRect,
-                // destinationRect)+restoreToCount()，再做 alpha 淂出。clip rect 在本次
-                // CrossfadeOld 期间保持不动，只让 alpha 变化，不把半个字突然变成完整字
-                // 再淡出。clip rect 用真实 caret reveal 几何（TextRevealGeometry）算出，
-                // 与正常 Insert/Delete 的 computeRevealClipRect 共用同一份几何 — 字形
-                // overhang 和 RTL 都自动正确，不再用 bitmap 宽度比例近似。
                 SliceRole.CrossfadeOld -> {
+                    // CrossfadeOld: position does not change during animation — only alpha varies.
+                    // #639 评论 5421085782 问题2：若 fixedRevealClipRect 非空（旧 Insert 只
+                    // reveal 到一半被 rebase 成 CrossfadeOld），canvas.save()+clipRect(冻结的
+                    // document-space clip rect)+drawBitmap(完整 bitmap, sourceRect,
+                    // destinationRect)+restoreToCount()，再做 alpha 淂出。clip rect 在本次
+                    // CrossfadeOld 期间保持不动，只让 alpha 变化，不把半个字突然变成完整字
+                    // 再淡出。clip rect 用真实 caret reveal 几何（TextRevealGeometry）算出，
+                    // 与正常 Insert/Delete 的 computeRevealClipRect 共用同一份几何 — 字形
+                    // overhang 和 RTL 都自动正确，不再用 bitmap 宽度比例近似。
                     val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
                     slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
                     val fixedClip = slice.fixedRevealClipRect
@@ -80,46 +56,48 @@ class AndroidTextAnimationRenderer {
                         canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, slicePaint)
                     }
                 }
-                // CrossfadeNew/Static: position does not change during animation — only alpha
-                // varies. The bitmap is drawn at its final destination with interpolated alpha;
-                // no positional interpolation is needed.
-                // #639 评论 5422606865 问题2：CrossfadeNew 也走 visualDestinationRectAt，
-                // rebase 把 CrossfadeNew 接到旧 Move 当前位置时位置插值与 engine 一致。
-                // Static 的 fromDestinationRect 总是 null，visualDestinationRectAt 返回
-                // destinationRect，无变化。
-                SliceRole.CrossfadeNew, SliceRole.Static -> {
-                    val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
-                    slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
-                    val currentRect = slice.visualDestinationRectAt(progress)
-                    canvas.drawBitmap(bitmap, slice.sourceRect, currentRect, slicePaint)
+                // #639 评论 5425871530 第三部分：Move / Insert / Delete / CrossfadeNew / Static
+                // 统一走 drawOrthogonalSlice — 三条轨正交绘制，不再按 role 分支。
+                // - 位置轨：visualDestinationRectAt(progress)（fromDestinationRect 非 null 时插值）。
+                // - alpha 轨：startAlpha -> endAlpha 线性插值。
+                // - reveal 轨：revealSpec != null 时算 clip，clip 为 null 不画；有 clip 时
+                //   仍用当前 alpha（不强制 255），让 CrossfadeNew(alpha=0.4) -> Insert 的
+                //   alpha 续播不被 reveal clip 吞掉。
+                SliceRole.Move, SliceRole.Insert, SliceRole.Delete,
+                SliceRole.CrossfadeNew, SliceRole.Static,
+                -> {
+                    drawOrthogonalSlice(canvas, bitmap, slice, progress, localProgress)
                 }
             }
         }
     }
 
     /**
-     * Draw an Insert/Delete slice using clip-rect reveal/swallow animation.
-     * Falls back to alpha-based drawing when [slice.revealSpec] is null
-     * (e.g. whole-line fallback without cluster caret geometry).
+     * #639 评论 5425871530 第三部分：位置、alpha、reveal 三条轨正交绘制。
      *
-     * #639 评论 5422606865 问题2：接收全局 [globalProgress]，内部用
-     * [PreparedVisualTransaction.AnimatedSlice.visualDestinationRectAt] 算 currentRect，
-     * bitmap 画在 currentRect。当 fromDestinationRect 非 null（rebase 把 Insert 接到
-     * 旧 Move 当前位置）时，reveal clip 几何随 currentRect 平移：anchorX/boundaryFromX/
-     * boundaryToX 同步加 (currentRect.left - destinationRect.left)，再交给
-     * [TextRevealGeometry]。fromDestinationRect 为 null 时 currentRect==destinationRect、
-     * dx=0，行为与之前完全一致。
+     * 所有 role（Move/Insert/Delete/CrossfadeNew/Static）共用这一个入口：
+     * 1. 位置轨：[PreparedVisualTransaction.AnimatedSlice.visualDestinationRectAt] 得到 currentRect。
+     * 2. alpha 轨：startAlpha -> endAlpha 线性插值。
+     * 3. reveal 轨：revealSpec != null 时按 [TextRevealGeometry] 算 clip；clip 为 null 不画。
+     *    有 reveal clip 时仍然使用当前 alpha，不强制 alpha=255 — 这修掉场景2
+     *    （CrossfadeNew alpha=0.4 -> Insert 的 alpha 续播被 reveal clip 吞掉）。
+     *
+     * revealSpec 为 null 时退化为纯位置+alpha 绘制（原有 Move/CrossfadeNew/Static 行为）。
+     * fromDestinationRect 为 null 时 currentRect==destinationRect，位置轨退化为常量。
      */
-    private fun drawRevealSlice(
+    private fun drawOrthogonalSlice(
         canvas: Canvas,
         bitmap: android.graphics.Bitmap,
         slice: PreparedVisualTransaction.AnimatedSlice,
         globalProgress: Float,
+        localProgress: Float,
     ) {
-        val spec = slice.revealSpec
         val currentRect = slice.visualDestinationRectAt(globalProgress)
+        val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
+        slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
+
+        val spec = slice.revealSpec
         if (spec != null) {
-            val localProgress = slice.progressWindow.map(globalProgress)
             val fraction = spec.fraction(localProgress)
             // #639 评论 5422606865 问题2：当 fromDestinationRect 非 null（rebase 把
             // Insert 接到旧 Move 当前位置）时，bitmap 画在 currentRect，reveal clip 几何
@@ -137,13 +115,12 @@ class AndroidTextAnimationRenderer {
                 ) ?: return
             val save = canvas.save()
             canvas.clipRect(clipRect)
-            slicePaint.alpha = 255
+            // #639 评论 5425871530 第三部分：有 reveal clip 时仍然使用当前 alpha，
+            // 不强制 slicePaint.alpha = 255。这修掉场景2（CrossfadeNew alpha=0.4 -> Insert
+            // 的 alpha 续播被 reveal clip 吞掉）。
             canvas.drawBitmap(bitmap, slice.sourceRect, currentRect, slicePaint)
             canvas.restoreToCount(save)
         } else {
-            val localProgress = slice.progressWindow.map(globalProgress)
-            val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
-            slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
             canvas.drawBitmap(bitmap, slice.sourceRect, currentRect, slicePaint)
         }
     }
