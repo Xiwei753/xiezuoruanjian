@@ -131,9 +131,10 @@ class RebasePlanner {
         // revealRemaining 只在能重建 revealSpec 时才算剩余（需要 caret 几何）。
         val revealRemaining =
             state.revealFraction != null && state.revealFraction < 0.99f && hasCaretGeometry
-        val fixedClipActive = state.fixedRevealClipRect != null
-        // 任一轨未完成就重建同一 role 的 continuation。
-        if (!positionRemaining && !alphaRemaining && !revealRemaining && !fixedClipActive) {
+        // #639 评论 5428952431 缺陷3：fixed clip 只是裁剪修饰，不是 liveness 轨。
+        // 只要 position/alpha/reveal 三条真正的时间轨有任意一条还没结束，continuation 就继续携带 fixed clip；
+        // 三条都结束，fixed clip 一起销毁。否则会留下透明 slice 继续挖静态正文。
+        if (!positionRemaining && !alphaRemaining && !revealRemaining) {
             return
         }
         result.add(
@@ -292,8 +293,17 @@ class RebasePlanner {
         // alpha 轨：继续旧 currentAlpha -> targetAlpha，不硬抬 alpha、不写死 endAlpha=0f。
         // 普通 Delete 仍能保持 alpha 1 -> 1 + SWALLOW（targetAlpha=1），由 CrossfadeOld 映射
         // 过来的 Delete 如果已经是 alpha .4 -> 0，下一次 rebase 不会变回 1。
+        // #639 评论 5428952431 缺陷1：CrossfadeOld 的 target 必须来自新语义（alpha -> 0），
+        // 当前状态才来自旧 state。旧 SliceVisualState 决定新事务第一帧的当前视觉状态
+        // （currentRect/currentAlpha/reveal/fixedClip/suppression）；新 slice 决定逻辑终点语义。
+        // CrossfadeOld 是"旧像素必须退出"的目标语义，endAlpha 必须是 0。startAlpha 永远取旧 currentAlpha。
         val startAlpha = rebaseState.currentAlpha
-        val endAlpha = rebaseState.targetAlpha
+        val endAlpha =
+            if (slice.role == SliceRole.CrossfadeOld) {
+                0f
+            } else {
+                rebaseState.targetAlpha
+            }
 
         // reveal 轨 + fixed clip：
         // - 旧 state 有 fixedRevealClipRect：原样继承（冻结半截字继续）。
@@ -311,7 +321,11 @@ class RebasePlanner {
         val revealSpec: TextRevealSpec?
 
         if (rebaseState.fixedRevealClipRect != null) {
-            fixedRevealClipRect = android.graphics.RectF(rebaseState.fixedRevealClipRect)
+            // #639 评论 5428952431 缺陷2：mapped rebase 前先把旧 raw clip 归一化成
+            // 当前屏幕真实 clip（effectiveOldClip），避免第二次带 base 的 mapped rebase
+            // 把之前累计的平移清零。
+            val effectiveOldClip = effectiveFixedClipAt(rebaseState, oldCurrentRect)
+            fixedRevealClipRect = effectiveOldClip
             revealSpec =
                 if (sliceUsesRevealSpec && rebaseState.revealFraction != null) {
                     rebuildMappedRevealSpec(slice, rebaseState)
@@ -324,6 +338,8 @@ class RebasePlanner {
                 fixedRevealClipRect = null
             } else {
                 revealSpec = null
+                // fresh computeFixedRevealClipRect 算出来的本来就是 oldCurrentRect 上的真实 clip，
+                // 也走同样的 base 规则（下面 fixedClipBaseRect 会按 fromDestinationRect 决定）。
                 fixedRevealClipRect = computeFixedRevealClipRect(rebaseState, snapshotLookup, snapshot)
             }
         } else {
@@ -331,13 +347,17 @@ class RebasePlanner {
             revealSpec = null
         }
 
-        // #639 评论 5427812180 缺陷5：fixedClipBaseRect。
-        // mapped 后若位置会移动（fromDestinationRect != null）且 fixedRevealClipRect != null，
-        // base = oldCurrentRect（renderer 每帧用 currentRect - base 平移 fixedRevealClipRect，
-        // 让 clip 跟 bitmap 一起移动，不钉在绝对坐标）。否则继承旧 state 的 fixedClipBaseRect。
+        // #639 评论 5428952431 缺陷2：mapped fixed clip 先归一化成 effective clip 再建立新 base。
+        // 如果这次还会从 oldCurrentRect -> new destination 移动（fromDestinationRect != null）：
+        //   fixedRevealClipRect = effectiveOldClip（已归一化），fixedClipBaseRect = oldCurrentRect。
+        // 如果这次位置不再移动：
+        //   fixedRevealClipRect = effectiveOldClip（已归一化），fixedClipBaseRect = null。
+        // unmapped continuation 继续原轨时保留 raw clip + old base，不需要归一化（在 buildVisualContinuation 中处理）。
         val fixedClipBaseRect: android.graphics.RectF? =
             if (fixedRevealClipRect != null && fromDestinationRect != null) {
                 oldCurrentRect
+            } else if (fixedRevealClipRect != null) {
+                null
             } else {
                 rebaseState.fixedClipBaseRect?.let { android.graphics.RectF(it) }
             }
@@ -407,6 +427,28 @@ class RebasePlanner {
             progressStart = 0f,
             progressEnd = 1f,
             initialFraction = fraction,
+        )
+    }
+
+    /**
+     * #639 评论 5428952431 缺陷2：计算 state 在 currentRect 位置下的 effective document-space fixed clip。
+     *
+     * mapped rebase 前先把旧 raw clip 归一化成当前屏幕真实 clip，避免第二次带 base 的
+     * mapped rebase 把之前累计的平移清零。base 为 null 表示 raw clip 已是绝对坐标。
+     */
+    private fun effectiveFixedClipAt(
+        state: SliceVisualState,
+        currentRect: android.graphics.RectF,
+    ): android.graphics.RectF? {
+        val raw = state.fixedRevealClipRect ?: return null
+        val base = state.fixedClipBaseRect ?: return android.graphics.RectF(raw)
+        val dx = currentRect.left - base.left
+        val dy = currentRect.top - base.top
+        return android.graphics.RectF(
+            raw.left + dx,
+            raw.top + dy,
+            raw.right + dx,
+            raw.bottom + dy,
         )
     }
 

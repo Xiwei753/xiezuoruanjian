@@ -63,7 +63,11 @@ class RebaseSliceMappingTest {
         )
     }
 
-    /** 构造一个 SliceVisualState，[revealFraction] 默认为 null 以测试向后兼容。 */
+    /** 构造一个 SliceVisualState，[revealFraction] 默认为 null 以测试向后兼容。
+     *  #639 评论 5428952431：补默认 caretRevealGeometry，使有 revealFraction 的 state
+     *  能正确触发 revealRemaining（handleUnmappedRebaseState 要求 hasCaretGeometry 才算
+     *  reveal 剩余）。否则 applyRebaseToSlicesNoMappingKeepsNewSliceAndContinuesOld 期望
+     *  旧 slice 继续动画但 revealRemaining=false 导致不产生 continuation。 */
     private fun makeSliceVisualState(
         role: SliceRole,
         revealFraction: Float? = null,
@@ -87,6 +91,12 @@ class RebaseSliceMappingTest {
             destinationRight = 100f,
             destinationBottom = 20f,
             revealFraction = revealFraction,
+            caretRevealGeometry =
+                PreparedVisualTransaction.CaretRevealGeometry(
+                    visualRect = RectF(0f, 0f, 100f, 20f),
+                    caretStartX = 0f,
+                    caretEndX = 100f,
+                ),
         )
     }
 

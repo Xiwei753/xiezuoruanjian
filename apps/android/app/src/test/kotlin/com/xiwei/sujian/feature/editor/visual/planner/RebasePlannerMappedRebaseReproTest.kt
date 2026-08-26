@@ -2,11 +2,14 @@ package com.xiwei.sujian.feature.editor.visual.planner
 
 import android.graphics.Rect
 import android.graphics.RectF
+import com.xiwei.sujian.feature.editor.render.AndroidTextAnimationRenderer
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 import com.xiwei.sujian.feature.editor.visual.SliceVisualState
+import com.xiwei.sujian.feature.editor.visual.StaticSuppressionMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
+import com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -101,6 +104,8 @@ class RebasePlannerMappedRebaseReproTest {
         revealMode: TextRevealMode? = null,
         revealFraction: Float? = null,
         fixedRevealClipRect: RectF? = null,
+        fixedClipBaseRect: RectF? = null,
+        staticSuppressionMode: com.xiwei.sujian.feature.editor.visual.StaticSuppressionMode? = null,
     ): SliceVisualState {
         return SliceVisualState(
             snapshotId = 1L,
@@ -130,6 +135,8 @@ class RebasePlannerMappedRebaseReproTest {
                     caretStartX = rect.left,
                     caretEndX = rect.right,
                 ),
+            staticSuppressionMode = staticSuppressionMode,
+            fixedClipBaseRect = fixedClipBaseRect,
         )
     }
 
@@ -278,6 +285,100 @@ class RebasePlannerMappedRebaseReproTest {
             "Delete -> CrossfadeOld：新 CrossfadeOld startAlpha 应继承旧 currentAlpha=1f",
             1f,
             rebased.startAlpha,
+            0.001f,
+        )
+        // #639 评论 5428952431 缺陷1：CrossfadeOld 的 endAlpha 必须是 0f（"旧像素必须退出"的目标语义），
+        // 不能继承旧 Delete 的 targetAlpha=1f。否则旧像素永远不会淡出消失。
+        assertEquals(
+            "Delete -> CrossfadeOld：新 CrossfadeOld endAlpha 必须是 0f（旧像素必须退出），" +
+                "实际 endAlpha=${rebased.endAlpha} → CrossfadeOld 永远不淡出，旧像素残留",
+            0f,
+            rebased.endAlpha,
+            0.001f,
+        )
+    }
+
+    // ---- 场景 2b：Move(targetAlpha=1) -> CrossfadeOld，startAlpha=1, endAlpha=0 ----
+
+    /**
+     * #639 评论 5428952431 缺陷1：旧 Move（currentAlpha=1, targetAlpha=1，Move 不淡出）
+     * rebase 成新 CrossfadeOld。
+     *
+     * 期望：startAlpha 继承旧 currentAlpha=1（当前屏幕真实 alpha），endAlpha=0f
+     * （CrossfadeOld 是"旧像素必须退出"的目标语义，必须来自新 slice 而非旧 targetAlpha）。
+     * 旧 targetAlpha=1 不能被继承成 endAlpha，否则 Move -> CrossfadeOld 后旧像素永远不淡出。
+     */
+    @Test
+    fun repro2b_moveToCrossfadeOld_endAlphaShouldBeZeroNotInheritMoveTargetAlpha() {
+        val rect = RectF(0f, 0f, 100f, 20f)
+        // 新 slice 是 CrossfadeOld（旧像素必须退出）；旧 state 是 Move（alpha 保持 1，不淡出）
+        val crossfadeOldSlice = makeCrossfadeOldSlice(rect)
+        val rebaseState =
+            makeRebaseState(
+                role = SliceRole.Move,
+                rect = rect,
+                currentAlpha = 1f,
+                targetAlpha = 1f,
+            )
+
+        val rebased = planner.applyRebaseState(crossfadeOldSlice, rebaseState, emptyMap())
+
+        // startAlpha 应继承旧 currentAlpha=1
+        assertEquals(
+            "Move -> CrossfadeOld：新 CrossfadeOld startAlpha 应继承旧 currentAlpha=1f",
+            1f,
+            rebased.startAlpha,
+            0.001f,
+        )
+        // endAlpha 必须是 0f（CrossfadeOld 目标语义），不能继承旧 Move targetAlpha=1f
+        assertEquals(
+            "Move -> CrossfadeOld：新 CrossfadeOld endAlpha 必须是 0f（旧像素必须退出），" +
+                "实际 endAlpha=${rebased.endAlpha} → 继承了旧 Move targetAlpha=1f，旧像素永远不淡出",
+            0f,
+            rebased.endAlpha,
+            0.001f,
+        )
+    }
+
+    // ---- 场景 2c：Insert(reveal=0.4,targetAlpha=1) -> CrossfadeOld，fixed clip 非空且 endAlpha=0 ----
+
+    /**
+     * #639 评论 5428952431 缺陷1：旧 Insert reveal 到 40%（revealMode=REVEAL, revealFraction=0.4），
+     * currentAlpha=1, targetAlpha=1（Insert 不淡出）。rebase 成新 CrossfadeOld。
+     *
+     * 期望：新 CrossfadeOld 应携带 fixedRevealClipRect（冻结旧 Insert 的半 reveal 可见部分），
+     * 且 endAlpha=0f（CrossfadeOld 目标语义），不能继承旧 Insert targetAlpha=1f。
+     */
+    @Test
+    fun repro2c_insertToCrossfadeOld_fixedClipNonEmptyAndEndAlphaZero() {
+        val rect = RectF(0f, 0f, 100f, 20f)
+        // 新 slice 是 CrossfadeOld（旧像素必须退出）；旧 state 是 Insert（reveal 到 0.4，alpha 保持 1）
+        val crossfadeOldSlice = makeCrossfadeOldSlice(rect)
+        val rebaseState =
+            makeRebaseState(
+                role = SliceRole.Insert,
+                rect = rect,
+                currentAlpha = 1f,
+                targetAlpha = 1f,
+                revealMode = TextRevealMode.REVEAL,
+                revealFraction = 0.4f,
+            )
+
+        val rebased = planner.applyRebaseState(crossfadeOldSlice, rebaseState, emptyMap())
+
+        // 新 CrossfadeOld 应携带 fixedRevealClipRect 冻结旧 Insert 的半 reveal 可见部分
+        assertNotNull(
+            "Insert -> CrossfadeOld：旧 Insert reveal 到 0.4，新 CrossfadeOld 应携带 " +
+                "fixedRevealClipRect 冻结半 reveal 可见部分，实际 fixedRevealClipRect=null → " +
+                "新事务第一帧画完整字再淡出，旧帧半 reveal 的字瞬间补全 → 闪",
+            rebased.fixedRevealClipRect,
+        )
+        // endAlpha 必须是 0f（CrossfadeOld 目标语义），不能继承旧 Insert targetAlpha=1f
+        assertEquals(
+            "Insert -> CrossfadeOld：新 CrossfadeOld endAlpha 必须是 0f（旧像素必须退出），" +
+                "实际 endAlpha=${rebased.endAlpha} → 继承了旧 Insert targetAlpha=1f，旧像素永远不淡出",
+            0f,
+            rebased.endAlpha,
             0.001f,
         )
     }
@@ -593,5 +694,182 @@ class RebasePlannerMappedRebaseReproTest {
                 "destinationRect=${rebased.destinationRect} → 位置跳变",
             reflectsOldRect,
         )
+    }
+
+    // ---- 场景 7：第二次带 base 的 mapped rebase 不应把之前累计的平移清零 ----
+
+    /**
+     * #639 评论 5428952431 缺陷2：mapped fixed clip 先归一化成 effective clip 再建立新 base。
+     *
+     * 场景：旧 state 已带 raw fixedRevealClipRect=[0,60] 和 fixedClipBaseRect=[0,100]，
+     * currentRect=[50,150]。rebase 前 effective clip = raw + (currentRect.left - base.left)
+     * = [0,60] + (50-0) = [50,110]。再 mapped 到 destination=[200,300]。
+     *
+     * 期望（修复后）：新事务 progress=0 时 renderer/suppression 算出的 effective clip
+     * 仍必须是 [50,110]，不能因为第二次 mapped rebase 把之前累计的平移清零。
+     *
+     * 当前 buggy：mapped rebase 直接继承旧 raw fixedRevealClipRect=[0,60] 和旧
+     * fixedClipBaseRect=[0,100]，新 base=oldCurrentRect=[50,150]，renderer progress=0:
+     * effectiveClip = [0,60] + (50-50) = [0,60] → 平移丢失。
+     *
+     * 通过 AndroidTextAnimationRenderer.computeStaticSuppressionRegions(transaction, 0f) 验证。
+     */
+    @Test
+    fun repro7_secondMappedRebaseWithBaseShouldNotResetAccumulatedTranslation() {
+        val renderer = AndroidTextAnimationRenderer()
+        // 旧 state：raw clip=[0,60], base=[0,100], currentRect=[50,150]
+        // rebase 前 effective clip = [0,60] + (50-0) = [50,110]
+        val currentRect = RectF(50f, 0f, 150f, 20f) // left=50, right=150
+        val newDestRect = RectF(200f, 0f, 300f, 20f) // mapped 到新 destination
+        val rebaseState =
+            makeRebaseState(
+                role = SliceRole.CrossfadeOld,
+                rect = currentRect,
+                currentAlpha = 0.5f,
+                targetAlpha = 0f,
+                fixedRevealClipRect = RectF(0f, 0f, 60f, 20f), // raw clip left=0, right=60
+                fixedClipBaseRect = RectF(0f, 0f, 100f, 20f), // old base left=0, right=100
+                staticSuppressionMode = StaticSuppressionMode.VISIBLE_CLIP,
+            )
+
+        val slice = makeCrossfadeOldSlice(newDestRect)
+        val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
+
+        // rebased 应携带 fixedRevealClipRect（归一化后的 effective clip）
+        assertNotNull(
+            "第二次 mapped rebase：rebased slice 应携带 fixedRevealClipRect，实际=null",
+            rebased.fixedRevealClipRect,
+        )
+
+        // 构造 transaction，通过 renderer 验证 progress=0 时的 effective clip
+        val transaction =
+            PreparedVisualTransaction(
+                transactionId = 1L,
+                oldRevision = null,
+                newRevision = null,
+                staticPatches = emptyList(),
+                animatedSlices = listOf(rebased),
+                ownedSnapshotIds = emptySet(),
+                referencedSnapshotIds = emptySet(),
+                selectionDecoration = null,
+                preeditDecoration = null,
+                cursorTransition = null,
+                durationMs = 300L,
+            )
+        val regions = renderer.computeStaticSuppressionRegions(transaction, 0f)
+
+        // 应返回一个 region，且 effective clip = [50,110]（不因第二次 mapped rebase 清零平移）
+        assertTrue(
+            "第二次 mapped rebase：computeStaticSuppressionRegions 应返回非空 region，" +
+                "实际 regions=$regions → VISIBLE_CLIP 分支未生效",
+            regions.isNotEmpty(),
+        )
+        if (regions.isNotEmpty()) {
+            val region = regions[0]
+            assertEquals(
+                "第二次 mapped rebase：effective clip.left 应为 50f（rebase 前 effective clip [50,110]），" +
+                    "实际 left=${region.left} → 第二次 mapped rebase 把累计平移清零",
+                50f,
+                region.left,
+                0.001f,
+            )
+            assertEquals(
+                "第二次 mapped rebase：effective clip.right 应为 110f（rebase 前 effective clip [50,110]），" +
+                    "实际 right=${region.right} → 第二次 mapped rebase 把累计平移清零",
+                110f,
+                region.right,
+                0.001f,
+            )
+        }
+    }
+
+    // ---- 场景 8：unmapped fixed clip + alpha 0->0，不应产生 continuation ----
+
+    /**
+     * #639 评论 5428952431 缺陷3：fixed clip 只是裁剪修饰，不是 liveness 轨。
+     *
+     * 场景：旧 state 带 fixedRevealClipRect，但 alpha 已完成（currentAlpha=0, targetAlpha=0）、
+     * position 已完成（currentRect==destinationRect）、reveal 已完成（revealFraction=null）。
+     *
+     * 期望（修复后）：unmapped result 应为空（不产生 continuation）。fixed clip 不单独
+     * 维持 slice 存活，否则会留下透明 slice 继续挖静态正文。
+     *
+     * 当前 buggy：fixedClipActive = state.fixedRevealClipRect != null = true，
+     * !positionRemaining && !alphaRemaining && !revealRemaining && !fixedClipActive = false，
+     * 产生 continuation → 透明 slice 继续挖静态正文。
+     */
+    @Test
+    fun repro8_unmappedFixedClipWithAlphaDone_shouldNotProduceContinuation() {
+        val rect = RectF(0f, 0f, 100f, 20f)
+        val state =
+            makeRebaseState(
+                role = SliceRole.CrossfadeOld,
+                rect = rect,
+                currentAlpha = 0f,
+                targetAlpha = 0f,
+                fixedRevealClipRect = RectF(0f, 0f, 60f, 20f),
+                staticSuppressionMode = StaticSuppressionMode.VISIBLE_CLIP,
+            )
+        val snapshot =
+            VisualFrameSnapshot(
+                progress = 1f,
+                state = com.xiwei.sujian.feature.editor.visual.TransactionState.Rendering,
+                sliceVisualStates = listOf(state),
+            )
+
+        val result = planner.applyRebaseToSlices(emptyList(), snapshot, emptyMap(), emptyList())
+
+        assertTrue(
+            "unmapped fixed clip + alpha 0->0：不应产生 continuation（fixed clip 不是 liveness 轨），" +
+                "实际 result.size=${result.size} → 留下透明 slice 继续挖静态正文",
+            result.isEmpty(),
+        )
+    }
+
+    // ---- 场景 9：unmapped fixed clip + alpha 0.5->0，应 continuation 并保留 fixed clip ----
+
+    /**
+     * #639 评论 5428952431 缺陷3：fixed clip 只是裁剪修饰，不是 liveness 轨。
+     *
+     * 场景：旧 state 带 fixedRevealClipRect，alpha 未完成（currentAlpha=0.5, targetAlpha=0）、
+     * position 已完成、reveal 已完成。
+     *
+     * 期望（修复后）：仍应 continuation（alphaRemaining=true），并保留 fixedRevealClipRect。
+     * fixed clip 跟随 alpha 轨一起存活，alpha 轨结束后一起销毁。
+     */
+    @Test
+    fun repro9_unmappedFixedClipWithAlphaRemaining_shouldProduceContinuationWithFixedClip() {
+        val rect = RectF(0f, 0f, 100f, 20f)
+        val fixedClip = RectF(0f, 0f, 60f, 20f)
+        val state =
+            makeRebaseState(
+                role = SliceRole.CrossfadeOld,
+                rect = rect,
+                currentAlpha = 0.5f,
+                targetAlpha = 0f,
+                fixedRevealClipRect = fixedClip,
+                staticSuppressionMode = StaticSuppressionMode.VISIBLE_CLIP,
+            )
+        val snapshot =
+            VisualFrameSnapshot(
+                progress = 0.5f,
+                state = com.xiwei.sujian.feature.editor.visual.TransactionState.Rendering,
+                sliceVisualStates = listOf(state),
+            )
+
+        val result = planner.applyRebaseToSlices(emptyList(), snapshot, emptyMap(), emptyList())
+
+        assertTrue(
+            "unmapped fixed clip + alpha 0.5->0：应产生 continuation（alphaRemaining=true），" +
+                "实际 result.size=${result.size} → alpha 未完成但 continuation 丢失",
+            result.isNotEmpty(),
+        )
+        if (result.isNotEmpty()) {
+            assertNotNull(
+                "unmapped fixed clip + alpha 0.5->0：continuation 应保留 fixedRevealClipRect，" +
+                    "实际 fixedRevealClipRect=null → fixed clip 在 alpha 继续时丢失",
+                result[0].fixedRevealClipRect,
+            )
+        }
     }
 }
