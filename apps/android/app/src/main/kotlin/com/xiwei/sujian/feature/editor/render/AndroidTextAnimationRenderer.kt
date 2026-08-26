@@ -3,9 +3,10 @@ package com.xiwei.sujian.feature.editor.render
 import android.graphics.Canvas
 import android.graphics.Paint
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
-import com.xiwei.sujian.feature.editor.visual.SliceRole
+import com.xiwei.sujian.feature.editor.visual.StaticSuppressionMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealGeometry
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
+import com.xiwei.sujian.feature.editor.visual.defaultStaticSuppressionModeForRole
 
 class AndroidTextAnimationRenderer {
     private val slicePaint =
@@ -67,8 +68,12 @@ class AndroidTextAnimationRenderer {
         // #639 评论 5427183226：优先级 fixedRevealClipRect > revealSpec clip > no clip。
         val fixedClip = slice.fixedRevealClipRect
         if (fixedClip != null) {
+            // #639 评论 5427812180 缺陷5：fixedClipBaseRect 非 null 时，fixedRevealClipRect
+            // 是相对于 baseRect 的 document-space clip。每帧用 currentRect - baseRect 平移，
+            // 让 clip 跟 bitmap 一起移动（mapped rebase 后位置插值时 clip 不钉在绝对坐标）。
+            val effectiveClip = computeEffectiveFixedClip(fixedClip, slice.fixedClipBaseRect, currentRect)
             val save = canvas.save()
-            canvas.clipRect(fixedClip)
+            canvas.clipRect(effectiveClip)
             canvas.drawBitmap(bitmap, slice.sourceRect, currentRect, slicePaint)
             canvas.restoreToCount(save)
             return
@@ -188,22 +193,27 @@ class AndroidTextAnimationRenderer {
             val srcRect = slice.sourceRect
             if (srcRect.width() <= 0 || srcRect.height() <= 0) continue
 
-            when (slice.role) {
-                // #639 评论 5424613367 问题2：Insert/Move/CrossfadeNew/Static 的静态底图
-                // suppression 用 destinationRect（新 Layout 中完整静态像素的位置），不用
-                // currentRect（动画当前几何）。静态底图里的完整字始终在 destinationRect，
-                // 在 currentRect 挖洞会让 destinationRect 的静态完整字没被 suppress → 双影。
-                // renderer / captureFrame 仍用 visualDestinationRectAt(progress) 画动画像素，
-                // 这里是静态底图去重，两者语义不同。
-                SliceRole.Insert, SliceRole.Move, SliceRole.CrossfadeNew, SliceRole.Static -> {
+            // #639 评论 5427812180 缺陷4：按 slice.staticSuppressionMode 判断，不再 when(slice.role)。
+            // mapped rebase 继续旧视觉轨后 role 和"静态底图怎么挖洞"会不一致，所以 suppression
+            // 必须按独立 mode。slice.staticSuppressionMode == null 时按 role fallback（向后兼容）。
+            val mode = slice.staticSuppressionMode ?: defaultStaticSuppressionModeForRole(slice.role)
+            when (mode) {
+                StaticSuppressionMode.NONE -> { }
+                StaticSuppressionMode.DESTINATION_RECT -> {
+                    // #639 评论 5424613367 问题2：Insert/Move/CrossfadeNew/Static 的静态底图
+                    // suppression 用 destinationRect（新 Layout 中完整静态像素的位置），不用
+                    // currentRect（动画当前几何）。静态底图里的完整字始终在 destinationRect，
+                    // 在 currentRect 挖洞会让 destinationRect 的静态完整字没被 suppress → 双影。
                     regions.add(android.graphics.RectF(slice.destinationRect))
                 }
-                SliceRole.Delete -> {
+                StaticSuppressionMode.VISIBLE_CLIP -> {
                     // #639 评论 5427183226：Delete 携带 fixed clip 时 suppress fixed clip，
                     // 不能因为 revealSpec == null 就 continue 跳过 — 否则静态底图双影。
                     val fixedClip = slice.fixedRevealClipRect
                     if (fixedClip != null) {
-                        regions.add(android.graphics.RectF(fixedClip))
+                        // #639 评论 5427812180 缺陷5：fixedClipBaseRect 非 null 时按 currentRect 平移。
+                        val currentRect = slice.visualDestinationRectAt(progress)
+                        regions.add(computeEffectiveFixedClip(fixedClip, slice.fixedClipBaseRect, currentRect))
                         continue
                     }
                     val revealSpec = slice.revealSpec ?: continue
@@ -227,11 +237,32 @@ class AndroidTextAnimationRenderer {
                         regions.add(clipRect)
                     }
                 }
-                SliceRole.CrossfadeOld -> {
-                    // CrossfadeOld uses alpha blending over the new layout — no hole.
-                }
             }
         }
         return regions
+    }
+
+    /**
+     * #639 评论 5427812180 缺陷5：计算 effective document-space fixed clip rect。
+     *
+     * [fixedClip] 是相对于 [baseRect] 的 document-space clip。每帧用
+     * currentRect - baseRect 平移，让 clip 跟 bitmap 一起移动（mapped rebase 后
+     * 位置插值时 clip 不钉在绝对坐标）。[baseRect] 为 null 表示 [fixedClip] 是绝对
+     * document-space（位置不动或未 mapped），原样返回。
+     */
+    private fun computeEffectiveFixedClip(
+        fixedClip: android.graphics.RectF,
+        baseRect: android.graphics.RectF?,
+        currentRect: android.graphics.RectF,
+    ): android.graphics.RectF {
+        if (baseRect == null) return android.graphics.RectF(fixedClip)
+        val dx = currentRect.left - baseRect.left
+        val dy = currentRect.top - baseRect.top
+        return android.graphics.RectF(
+            fixedClip.left + dx,
+            fixedClip.top + dy,
+            fixedClip.right + dx,
+            fixedClip.bottom + dy,
+        )
     }
 }

@@ -100,6 +100,30 @@ data class PreparedVisualTransaction(
          *  不拿 [TextRevealSpec.initialFraction] 硬凑，因为 [TextRevealSpec.fraction]
          *  会继续向 1 推，不是"冻结当前可见部分"。 */
         val fixedRevealClipRect: android.graphics.RectF? = null,
+        /** #639 评论 5427812180 缺陷4：本 slice 的静态底图 suppression 模式，与 [role] 正交。
+         *
+         *  planner 初次创建时按 role 设定（[defaultStaticSuppressionModeForRole]）；
+         *  mapped/unmapped rebase continuation 都继续旧 [SliceVisualState.staticSuppressionMode]，
+         *  不因新 role 变了瞬间切换底图 ownership。renderer [computeStaticSuppressionRegions]
+         *  改按此字段判断，不再 when(slice.role)。
+         *
+         *  - [StaticSuppressionMode.NONE]：不 suppress（底图画完整字，动画 slice alpha 混合）。
+         *  - [StaticSuppressionMode.DESTINATION_RECT]：suppress [destinationRect]（新 Layout 完整静态像素位置）。
+         *  - [StaticSuppressionMode.VISIBLE_CLIP]：suppress 当前可见 clip（有 fixedRevealClipRect 用 fixed clip，
+         *    否则有 revealSpec 算当前 reveal clip，否则无 suppression）。
+         *
+         *  null 仅作向后兼容 fallback（旧 slice 没这字段时 renderer 按 role 推断）。 */
+        val staticSuppressionMode: StaticSuppressionMode? = null,
+        /** #639 评论 5427812180 缺陷5：fixed clip 的 base rect（mapped 时的旧 currentRect）。
+         *
+         *  [fixedRevealClipRect] 是相对于 [fixedClipBaseRect] 的 document-space clip。
+         *  mapped rebase 后若 slice 位置会移动（fromDestinationRect != null），
+         *  renderer 每帧用 currentRect - fixedClipBaseRect 平移 fixedRevealClipRect，
+         *  让 clip 跟 bitmap 一起移动，不钉在绝对坐标。
+         *
+         *  null 表示 fixedRevealClipRect 是绝对 document-space（位置不动或未 mapped）。
+         *  unmapped continuation 原样继承旧 state 的 fixedClipBaseRect。 */
+        val fixedClipBaseRect: android.graphics.RectF? = null,
     ) {
         /**
          * #639 评论 5422606865 问题2：当前视觉几何的单一入口。
@@ -261,6 +285,37 @@ enum class SliceRole {
     CrossfadeOld,
     CrossfadeNew,
     Static,
+}
+
+/** #639 评论 5427812180 缺陷4：静态底图 suppression 模式，与 [SliceRole] 正交。
+ *
+ *  mapped rebase 继续旧视觉轨后 role 和"静态底图怎么挖洞"会不一致，所以 suppression
+ *  不能按 [SliceRole] 判断，必须按独立 mode。planner 初次创建时按 role 设定
+ *  （[defaultStaticSuppressionModeForRole]），continuation 继承旧 state 的 mode。 */
+enum class StaticSuppressionMode {
+    /** 不 suppress：底图画完整字，动画 slice alpha 混合（CrossfadeOld 语义）。 */
+    NONE,
+
+    /** suppress [PreparedVisualTransaction.AnimatedSlice.destinationRect]（新 Layout 完整静态像素位置）。 */
+    DESTINATION_RECT,
+
+    /** suppress 当前可见 clip：有 fixedRevealClipRect 用 fixed clip，否则有 revealSpec 算当前 reveal clip。 */
+    VISIBLE_CLIP,
+}
+
+/** #639 评论 5427812180 缺陷4：按 [SliceRole] 推断默认 [StaticSuppressionMode]。
+ *
+ *  planner 初次创建 slice 时调用，mapped/unmapped continuation 继承旧 state 的 mode
+ *  而非重新按 role 推断。renderer fallback（slice.staticSuppressionMode == null 时）也用此函数。 */
+fun defaultStaticSuppressionModeForRole(role: SliceRole): StaticSuppressionMode {
+    return when (role) {
+        SliceRole.Insert, SliceRole.Move, SliceRole.CrossfadeNew, SliceRole.Static ->
+            StaticSuppressionMode.DESTINATION_RECT
+        SliceRole.Delete ->
+            StaticSuppressionMode.VISIBLE_CLIP
+        SliceRole.CrossfadeOld ->
+            StaticSuppressionMode.NONE
+    }
 }
 
 /** Lifecycle states of a visual transaction. Only Rendering/Paused produce frames. */

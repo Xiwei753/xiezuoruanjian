@@ -818,6 +818,11 @@ class AndroidTextAnimationEngine(
                 remainingFraction = remainingFraction,
                 fixedRevealClipRect = slice.fixedRevealClipRect?.let { android.graphics.RectF(it) },
                 caretRevealGeometry = slice.caretRevealGeometry,
+                // #639 评论 5427812180 缺陷4/5：staticSuppressionMode 和 fixedClipBaseRect
+                // 一次性收进来，mapped/unmapped continuation 继续旧 state 的 suppression mode
+                // 和 fixed clip base rect，不因新 role 变了瞬间切换底图 ownership 或丢 clip base。
+                staticSuppressionMode = slice.staticSuppressionMode ?: defaultStaticSuppressionModeForRole(slice.role),
+                fixedClipBaseRect = slice.fixedClipBaseRect?.let { android.graphics.RectF(it) },
             )
         }
     }

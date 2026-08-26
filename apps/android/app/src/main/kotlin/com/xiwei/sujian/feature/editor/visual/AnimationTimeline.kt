@@ -242,4 +242,12 @@ data class SliceVisualState(
      *  [AndroidLineSnapshot.clusters] 按 byte range 反查 — 这同时修掉 RunAnimation
      *  synthetic run 不在原始 clusters 里的漏洞。 */
     val caretRevealGeometry: PreparedVisualTransaction.CaretRevealGeometry? = null,
+    /** #639 评论 5427812180 缺陷4：本 slice 的静态底图 suppression 模式，从 active slice
+     *  原样保存（slice.staticSuppressionMode ?: defaultStaticSuppressionModeForRole(slice.role)）。
+     *  mapped/unmapped continuation 继续此 mode，不因新 role 变了瞬间切换底图 ownership。 */
+    val staticSuppressionMode: StaticSuppressionMode? = null,
+    /** #639 评论 5427812180 缺陷5：fixed clip 的 base rect，从 active slice.fixedClipBaseRect 原样保存。
+     *  mapped rebase 后若 slice 位置会移动，renderer 每帧用 currentRect - fixedClipBaseRect 平移
+     *  fixedRevealClipRect，让 clip 跟 bitmap 一起移动。 */
+    val fixedClipBaseRect: android.graphics.RectF? = null,
 )

@@ -10,6 +10,7 @@ import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
 import com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot
 import com.xiwei.sujian.feature.editor.visual.VisualProgressWindow
+import com.xiwei.sujian.feature.editor.visual.defaultStaticSuppressionModeForRole
 import uniffi.writer_core.RebaseSliceMappingDto
 
 class RebasePlanner {
@@ -192,6 +193,10 @@ class RebasePlanner {
             fixedRevealClipRect = state.fixedRevealClipRect?.let { android.graphics.RectF(it) },
             caretRevealGeometry = state.caretRevealGeometry,
             progressWindow = continuedWindow,
+            // #639 评论 5427812180 缺陷4/5：unmapped continuation 继续旧 state 的
+            // staticSuppressionMode 和 fixedClipBaseRect，不因 role 变了瞬间切换底图 ownership。
+            staticSuppressionMode = state.staticSuppressionMode,
+            fixedClipBaseRect = state.fixedClipBaseRect?.let { android.graphics.RectF(it) },
         )
     }
 
@@ -254,7 +259,7 @@ class RebasePlanner {
         snapshotLookup: Map<Long, AndroidLineSnapshot> = emptyMap(),
     ): PreparedVisualTransaction.AnimatedSlice {
         val snapshot = slice.snapshot ?: snapshotLookup[rebaseState.snapshotId]
-        val fromRect =
+        val oldCurrentRect =
             android.graphics.RectF(
                 rebaseState.currentLeft,
                 rebaseState.currentTop,
@@ -264,137 +269,145 @@ class RebasePlanner {
         // #637 评论 5386573878：rebase continuation 窗口 — 直接消费旧帧保存的
         // remainingFraction，不再从 localProgress 重新推，连续 rebase 不会反复减速。
         val continuedWindow = VisualProgressWindow.fromRemainingFraction(rebaseState.remainingFraction)
-        // #639 评论 5425871530 第四部分：统一做 appearance continuation，不再按 slice.role
-        // 分支处理外观状态。逻辑按"旧屏幕当前外观"决定，而不是按旧 role：
-        // - 旧 state 有 revealFraction：说明当前屏幕是裁到一半的字。无论新 role 是 Insert /
-        //   Move / CrossfadeNew，都给新 slice 重建一个 REVEAL continuation，
-        //   initialFraction = old revealFraction，geometry 用新 slice 自己的
-        //   caretRevealGeometry，位置继续走 fromRect -> destinationRect。
-        // - 旧 state 没有 revealFraction：说明当前不是 clip reveal。新 slice 不应凭空启动
-        //   reveal。即使新 role 是 Insert，也要把 planner 原本的 revealSpec 清掉，继续
-        //   startAlpha = old currentAlpha -> endAlpha = 1。
-        return when (slice.role) {
-            SliceRole.Static -> slice
-            SliceRole.CrossfadeOld -> {
-                // #639 评论 5421085782 问题2：CrossfadeOld 接到旧 Move/CrossfadeNew/Insert
-                // 状态时，必须从当前屏幕真实位置退场。fromRect 就是
-                // SliceVisualState.currentLeft/currentTop/currentRight/currentBottom，
-                // 不退回上一笔事务的逻辑起点，也不用新事务的最终位置。
-                // 旧 Insert 可能只 reveal 到一半，把当前裁剪状态用真实 caret reveal
-                // 几何（cluster.caretStartX/caretEndX + revealFraction）算成
-                // document-space clip rect 存入 fixedRevealClipRect，renderer 画
-                // CrossfadeOld 时 clipRect(fixedRevealClipRect) 后画完整 bitmap，
-                // 冻结当前可见部分，只让 alpha 变化。这与正常 Insert/Delete 的
-                // computeRevealClipRect 共用同一份几何（TextRevealGeometry），
-                // 字形 overhang 和 RTL 都自动正确，不再用 bitmap 宽度比例近似。
-                if (rebaseState.role == SliceRole.Move ||
-                    rebaseState.role == SliceRole.CrossfadeNew ||
-                    rebaseState.role == SliceRole.Insert
-                ) {
-                    val fixedRevealClipRect =
-                        computeFixedRevealClipRect(rebaseState, snapshotLookup, snapshot)
-                    slice.copy(
-                        snapshot = snapshot,
-                        destinationRect = fromRect,
-                        startAlpha = rebaseState.currentAlpha,
-                        endAlpha = 0f,
-                        fixedRevealClipRect = fixedRevealClipRect,
-                        progressWindow = continuedWindow,
-                    )
+
+        // #639 评论 5427812180 缺陷3：统一 mapped visual continuation。
+        // mapped rebase 继续旧事务当前正在播放的视觉轨，不是重新启动新 SliceRole 默认视觉轨。
+        // 新 slice 提供逻辑终点（role/snapshot/sourceRect/destinationRect/clusterByteRange/
+        // caretRevealGeometry），旧 SliceVisualState 提供当前屏幕真实视觉状态
+        // （currentRect/currentAlpha/targetAlpha/revealMode/revealFraction/fixedRevealClipRect/
+        // caretRevealGeometry/remainingFraction）。
+        // Static 不参与动画，原样返回。
+        if (slice.role == SliceRole.Static) return slice
+
+        // 位置轨：有位置差时 fromDestinationRect = oldCurrentRect，否则 null。
+        // Move 保持原有行为：总是设置 fromDestinationRect（即使相等，visualDestinationRectAt
+        // 退化为常量 destinationRect，效果与 null 完全一致，但保持 RebaseSliceMappingTest 契约）。
+        val fromDestinationRect =
+            if (slice.role == SliceRole.Move) {
+                oldCurrentRect
+            } else {
+                if (oldCurrentRect != slice.destinationRect) oldCurrentRect else null
+            }
+
+        // alpha 轨：继续旧 currentAlpha -> targetAlpha，不硬抬 alpha、不写死 endAlpha=0f。
+        // 普通 Delete 仍能保持 alpha 1 -> 1 + SWALLOW（targetAlpha=1），由 CrossfadeOld 映射
+        // 过来的 Delete 如果已经是 alpha .4 -> 0，下一次 rebase 不会变回 1。
+        val startAlpha = rebaseState.currentAlpha
+        val endAlpha = rebaseState.targetAlpha
+
+        // reveal 轨 + fixed clip：
+        // - 旧 state 有 fixedRevealClipRect：原样继承（冻结半截字继续）。
+        //   如果新 slice 用 revealSpec（Delete/Insert/Move/CrossfadeNew）且旧 state 也有 revealFraction，
+        //   继续 revealSpec（initialFraction=旧 revealFraction）；否则 revealSpec=null。
+        // - 旧 state 无 fixedRevealClipRect 但有 revealFraction（正在播放 reveal/swallow）：
+        //   - 新 slice 用 revealSpec（Delete/Insert/Move/CrossfadeNew）：继续 revealSpec，
+        //     initialFraction=旧 revealFraction。Move/CrossfadeNew 也继续 revealSpec 保持半截可见。
+        //   - 新 slice 是 CrossfadeOld（不用 revealSpec，用 alpha 淡出）：算 fixedRevealClipRect 冻结。
+        // - 旧 state 都没有：revealSpec=null, fixedRevealClipRect=null。
+        // CrossfadeOld 不用 revealSpec（alpha 混合语义），其他非 Static role 都可以继续 revealSpec。
+        val sliceUsesRevealSpec = slice.role != SliceRole.CrossfadeOld
+
+        val fixedRevealClipRect: android.graphics.RectF?
+        val revealSpec: TextRevealSpec?
+
+        if (rebaseState.fixedRevealClipRect != null) {
+            fixedRevealClipRect = android.graphics.RectF(rebaseState.fixedRevealClipRect)
+            revealSpec =
+                if (sliceUsesRevealSpec && rebaseState.revealFraction != null) {
+                    rebuildMappedRevealSpec(slice, rebaseState)
                 } else {
-                    slice.copy(
-                        snapshot = snapshot,
-                        startAlpha = rebaseState.currentAlpha,
-                        endAlpha = 0f,
-                        progressWindow = continuedWindow,
-                    )
+                    null
                 }
+        } else if (rebaseState.revealFraction != null) {
+            if (sliceUsesRevealSpec) {
+                revealSpec = rebuildMappedRevealSpec(slice, rebaseState)
+                fixedRevealClipRect = null
+            } else {
+                revealSpec = null
+                fixedRevealClipRect = computeFixedRevealClipRect(rebaseState, snapshotLookup, snapshot)
             }
-            SliceRole.Delete -> {
-                // #637 评论 5386573878：同 Insert，重建 spec 为 [0,1] 子窗口，
-                // initialFraction=当前 revealFraction，剩余时长交给外层窗口控制。
-                val updatedSpec =
-                    slice.revealSpec?.let { spec ->
-                        spec.copy(
-                            progressStart = 0f,
-                            progressEnd = 1f,
-                            initialFraction = rebaseState.revealFraction ?: 0f,
-                        )
-                    }
-                slice.copy(
-                    snapshot = snapshot,
-                    startAlpha = rebaseState.currentAlpha,
-                    endAlpha = 0f,
-                    revealSpec = updatedSpec,
-                    progressWindow = continuedWindow,
-                )
-            }
-            // #639 评论 5425871530 第四部分：Insert / Move / CrossfadeNew 统一做
-            // appearance continuation，不再按新 role 分支处理。
-            SliceRole.Insert, SliceRole.Move, SliceRole.CrossfadeNew -> {
-                // #639 评论 5424986783：按几何判断而非旧 SliceRole 判断位置运动。
-                // Move 保持原有行为：总是设置 fromDestinationRect = fromRect（即使
-                // fromRect == destinationRect，visualDestinationRectAt 退化为常量
-                // destinationRect，效果与 null 完全一致，但保持 RebaseSliceMappingTest
-                // 的契约）。Insert/CrossfadeNew 用几何判断：有位置差时 = fromRect，
-                // 否则 null（退化为纯 alpha 续播）。
-                val fromDest =
-                    if (slice.role == SliceRole.Move) {
-                        fromRect
-                    } else {
-                        if (fromRect != slice.destinationRect) fromRect else null
-                    }
-                if (rebaseState.revealFraction != null) {
-                    // 旧 state 有 revealFraction：重建 REVEAL continuation。
-                    // geometry 优先用新 slice 自己的 caretRevealGeometry；fallback 用
-                    // rebaseState.caretRevealGeometry（旧 state 携带的几何）；再 fallback
-                    // 用 slice.destinationRect 构造简单几何（whole-line 或测试场景）。
-                    val geometry = slice.caretRevealGeometry ?: rebaseState.caretRevealGeometry
-                    val (visualRect, caretStartX, caretEndX) =
-                        if (geometry != null) {
-                            Triple(geometry.visualRect, geometry.caretStartX, geometry.caretEndX)
-                        } else {
-                            Triple(slice.destinationRect, slice.destinationRect.left, slice.destinationRect.right)
-                        }
-                    val (shiftedAnchorX, shiftedBoundaryFromX, shiftedBoundaryToX) =
-                        TextRevealGeometry.shiftClusterCaretGeometry(
-                            visualRect,
-                            caretStartX,
-                            caretEndX,
-                            slice.destinationRect,
-                            TextRevealMode.REVEAL,
-                        )
-                    val revealSpec =
-                        TextRevealSpec(
-                            mode = TextRevealMode.REVEAL,
-                            anchorX = shiftedAnchorX,
-                            boundaryFromX = shiftedBoundaryFromX,
-                            boundaryToX = shiftedBoundaryToX,
-                            progressStart = 0f,
-                            progressEnd = 1f,
-                            initialFraction = rebaseState.revealFraction,
-                        )
-                    slice.copy(
-                        snapshot = snapshot,
-                        startAlpha = rebaseState.currentAlpha,
-                        fromDestinationRect = fromDest,
-                        revealSpec = revealSpec,
-                        progressWindow = continuedWindow,
-                    )
-                } else {
-                    // 旧 state 没有 revealFraction：新 slice 不应凭空启动 reveal。
-                    // 即使新 role 是 Insert，也要把 planner 原本的 revealSpec 清掉，
-                    // 继续 startAlpha = old currentAlpha -> endAlpha = 1。
-                    slice.copy(
-                        snapshot = snapshot,
-                        startAlpha = rebaseState.currentAlpha,
-                        fromDestinationRect = fromDest,
-                        revealSpec = null,
-                        progressWindow = continuedWindow,
-                    )
-                }
-            }
+        } else {
+            fixedRevealClipRect = null
+            revealSpec = null
         }
+
+        // #639 评论 5427812180 缺陷5：fixedClipBaseRect。
+        // mapped 后若位置会移动（fromDestinationRect != null）且 fixedRevealClipRect != null，
+        // base = oldCurrentRect（renderer 每帧用 currentRect - base 平移 fixedRevealClipRect，
+        // 让 clip 跟 bitmap 一起移动，不钉在绝对坐标）。否则继承旧 state 的 fixedClipBaseRect。
+        val fixedClipBaseRect: android.graphics.RectF? =
+            if (fixedRevealClipRect != null && fromDestinationRect != null) {
+                oldCurrentRect
+            } else {
+                rebaseState.fixedClipBaseRect?.let { android.graphics.RectF(it) }
+            }
+
+        // #639 评论 5427812180 缺陷4：staticSuppressionMode 继续旧 state，
+        // 不因新 role 变了瞬间切换底图 ownership。旧 state 没有时按旧 role 推断（向后兼容）。
+        val staticSuppressionMode =
+            rebaseState.staticSuppressionMode
+                ?: defaultStaticSuppressionModeForRole(rebaseState.role)
+
+        return slice.copy(
+            snapshot = snapshot,
+            startAlpha = startAlpha,
+            endAlpha = endAlpha,
+            fromDestinationRect = fromDestinationRect,
+            revealSpec = revealSpec,
+            fixedRevealClipRect = fixedRevealClipRect,
+            fixedClipBaseRect = fixedClipBaseRect,
+            staticSuppressionMode = staticSuppressionMode,
+            progressWindow = continuedWindow,
+        )
+    }
+
+    /**
+     * #639 评论 5427812180 缺陷3：用旧 state 的 revealMode + revealFraction + 新 slice 的
+     * caretRevealGeometry 重建 mapped revealSpec。mode 优先用旧 state.revealMode（继续
+     * 旧事务正在播放的 reveal/swallow），geometry 优先用新 slice.caretRevealGeometry
+     * （新位置几何），fallback 用旧 state.caretRevealGeometry。
+     */
+    private fun rebuildMappedRevealSpec(
+        slice: PreparedVisualTransaction.AnimatedSlice,
+        rebaseState: SliceVisualState,
+    ): TextRevealSpec? {
+        val fraction = rebaseState.revealFraction ?: return null
+        // #639 评论 5427812180 缺陷3：mode 优先用旧 state.revealMode（继续旧事务正在播放
+        // 的 reveal/swallow），fallback 按 rebaseState.role 推断（向后兼容旧快照没存 revealMode）。
+        val mode =
+            rebaseState.revealMode
+                ?: when (rebaseState.role) {
+                    SliceRole.Delete -> TextRevealMode.SWALLOW
+                    SliceRole.Insert, SliceRole.Move, SliceRole.CrossfadeNew -> TextRevealMode.REVEAL
+                    else -> return null
+                }
+        // geometry 优先用新 slice.caretRevealGeometry（新位置几何），fallback 用
+        // rebaseState.caretRevealGeometry（旧 state 携带的几何），再 fallback 用
+        // slice.destinationRect 构造简单几何（whole-line 或测试场景）。
+        val geometry = slice.caretRevealGeometry ?: rebaseState.caretRevealGeometry
+        val (visualRect, caretStartX, caretEndX) =
+            if (geometry != null) {
+                Triple(geometry.visualRect, geometry.caretStartX, geometry.caretEndX)
+            } else {
+                Triple(slice.destinationRect, slice.destinationRect.left, slice.destinationRect.right)
+            }
+        val (shiftedAnchorX, shiftedBoundaryFromX, shiftedBoundaryToX) =
+            TextRevealGeometry.shiftClusterCaretGeometry(
+                visualRect,
+                caretStartX,
+                caretEndX,
+                slice.destinationRect,
+                mode,
+            )
+        return TextRevealSpec(
+            mode = mode,
+            anchorX = shiftedAnchorX,
+            boundaryFromX = shiftedBoundaryFromX,
+            boundaryToX = shiftedBoundaryToX,
+            progressStart = 0f,
+            progressEnd = 1f,
+            initialFraction = fraction,
+        )
     }
 
     /**
@@ -437,6 +450,10 @@ class RebasePlanner {
         // #639 评论 5425871530 第四部分：caret 几何优先用 rebaseState.caretRevealGeometry
         // （slice 自带，不依赖 snapshot.clusters 反查 — synthetic run 也能继续），
         // fallback 用旧 snapshot 的 matchedCluster（向后兼容旧快照）。
+        // #639 评论 5427812180 缺陷2：mode 用 rebaseState.revealMode（继续旧事务正在播放
+        // 的 reveal/swallow），不再写死 REVEAL — 旧 Delete SWALLOW -> CrossfadeOld 冻结
+        // 时用 SWALLOW 几何，旧 Insert REVEAL -> CrossfadeOld 冻结时用 REVEAL 几何。
+        val mode = rebaseState.revealMode ?: TextRevealMode.REVEAL
         if (rebaseState.caretRevealGeometry != null) {
             val g = rebaseState.caretRevealGeometry
             return TextRevealGeometry.computeClusterRevealClipRect(
@@ -444,7 +461,7 @@ class RebasePlanner {
                 g.caretStartX,
                 g.caretEndX,
                 destination,
-                TextRevealMode.REVEAL,
+                mode,
                 fraction,
             )
         }
@@ -463,7 +480,7 @@ class RebasePlanner {
             cluster.caretStartX,
             cluster.caretEndX,
             destination,
-            TextRevealMode.REVEAL,
+            mode,
             fraction,
         )
     }
