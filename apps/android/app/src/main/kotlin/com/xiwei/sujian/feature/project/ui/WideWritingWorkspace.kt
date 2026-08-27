@@ -268,13 +268,14 @@ internal fun WideWritingWorkspace(
                 modifier = Modifier.layoutId(LayoutSlotId.EDITOR),
             )
         },
-        measurePolicy = wideWorkspaceMeasurePolicy(
-            compositionMode = compositionMode,
-            workbenchPlan = workbenchPlan,
-            density = density,
-            presentationVisible = documentState.presentationVisible,
-            fallbackSafeBounds = fallbackSafeBounds,
-        ),
+        measurePolicy =
+            wideWorkspaceMeasurePolicy(
+                compositionMode = compositionMode,
+                workbenchPlan = workbenchPlan,
+                density = density,
+                presentationVisible = documentState.presentationVisible,
+                fallbackSafeBounds = fallbackSafeBounds,
+            ),
     )
 }
 
@@ -614,8 +615,8 @@ private fun MeasureScope.measureAndPlaceSinglePaneWithTopBar(
 ): MeasureResult {
     val byId = measurables.associateBy { it.layoutId as? LayoutSlotId }
     val topBarMeasurable = byId[LayoutSlotId.SINGLE_PANE_TOP_BAR]
-    val editorMeasurable = byId[LayoutSlotId.EDITOR]
-        ?: return layout(constraints.maxWidth, constraints.maxHeight) {}
+    val editorMeasurable =
+        byId[LayoutSlotId.EDITOR] ?: return layout(constraints.maxWidth, constraints.maxHeight) {}
 
     val rootBounds =
         workbenchPlan
