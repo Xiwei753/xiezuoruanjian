@@ -44,6 +44,9 @@ import com.xiwei.sujian.feature.editor.ui.theme.EditorThemeAdapter
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 
 /**
  * #592 一/四：窗口层宿主 — 每个 Activity/窗口创建一份，持有全部窗口/渲染对象：
@@ -149,14 +152,44 @@ class EditorWindowHost(
     fun isPresentationReady(targetId: String): Boolean = readinessGate.isReady(targetId)
 
     /**
-     * #640 B：等待指定 target 的 presentation 就绪（suspend），replacement-aware。
+     * #640 评论 5441010318 项2：等待指定 target 的 presentation 就绪（suspend）。
      *
-     * 返回 true 仅当当前 active target 的当前几何 ready 命中此 target；
-     * target 被另一个 bind 替代、失效、关闭（[presentationReadyGeneration] 偏离）时
-     * 立即返回 false，不会让 [first] 永久等不到。
+     * 等待逻辑直接订阅两条真实 StateFlow：[presentationReady]（几何 ready）和
+     * [sessionStateFlow]（active target）。session active target 一变就重新计算，
+     * 不依赖 ready 流碰巧再发一次，也不靠轮询闭包观察 session 状态。
+     *
+     * 返回 true 仅当当前几何 ready 命中此 target（含 widthPx > 0 && heightPx > 0 守卫）；
+     * session active target 已不等于此 target 时立即返回 false，不会让 [first] 永久等不到。
      */
     suspend fun awaitPresentationReady(targetId: String): Boolean =
-        readinessGate.awaitPresentationReady(targetId)
+        combine(
+            presentationReady,
+            sessionStateFlow,
+        ) { ready, session ->
+            when {
+                ready != null && ready.targetId == targetId &&
+                    ready.widthPx > 0 && ready.heightPx > 0 -> true
+                session.activeTargetId != targetId -> false
+                else -> null
+            }
+        }
+            .filterNotNull()
+            .first()
+
+    // #640 评论 5441010318 项3：测试驱动 — 直接发布/失效 presentation-ready 几何，
+    // 绕过 View layout callback，让 EditorPresentationHostTest 能聚焦验证
+    // awaitPresentationReady 的 combine(presentationReady, sessionStateFlow) 行为。
+    internal fun publishPresentationReadyForTest(
+        targetId: String,
+        widthPx: Int,
+        heightPx: Int,
+    ) {
+        readinessGate.publishReady(targetId, widthPx, heightPx)
+    }
+
+    internal fun invalidatePresentationGeometryForTest() {
+        readinessGate.invalidateGeometry()
+    }
 
     /** #640 A.7/B：使旧 presentation-ready 失效并推进代次（target 替换/关闭/解绑时）。 */
     private fun invalidatePresentationReady() {

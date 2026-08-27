@@ -3,21 +3,21 @@ package com.xiwei.sujian.feature.editor.window
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.first
 
 /**
  * #640 B：presentation-ready 几何状态闸门 — 纯 Kotlin seam，可单测。
  *
- * 封装 (ready, generation) 两个 StateFlow + replacement-aware await 逻辑。
+ * #640 评论 5441010318 项2：本类只负责 ready 状态管理（publish/invalidate/isReady），
+ * 不再实现 await 逻辑 — await 已上移到 [EditorWindowHost.awaitPresentationReady]，
+ * 改用 combine(presentationReady, sessionStateFlow) 同时订阅两条真实 StateFlow，
+ * 让 session active target 一变就重新计算，不依赖 ready 流碰巧再发一次。
+ *
  * [EditorWindowHost] 持有唯一实例并委托 ready 状态管理给它；不引入第二套状态源 —
  * ready/generation 的唯一写入点在此类，EditorWindowHost 仅通过本类公开方法驱动。
  *
  * - [publishReady]：View layout 就绪时发布带当前真实几何的 ready。
  * - [invalidateGeometry]：尺寸变化时先使旧几何 ready 失效（不推进代次，同一 target）。
  * - [invalidateAndAdvance]：target 替换/关闭/解绑/窗口释放时使旧 ready 失效并推进代次。
- * - [awaitPresentationReady]：replacement-aware，代次偏离立即返回 false，不会永久挂住。
  */
 internal class PresentationReadinessGate {
     private val _ready = MutableStateFlow<EditorPresentationReady?>(null)
@@ -65,29 +65,5 @@ internal class PresentationReadinessGate {
             _ready.value = null
         }
         _generation.value = _generation.value + 1L
-    }
-
-    /**
-     * Replacement-aware await：返回 true 仅当当前几何 ready 命中此 target；
-     * 代次偏离（target 被替换/关闭）时立即返回 false，不会让 [first] 永久等不到。
-     */
-    suspend fun awaitPresentationReady(targetId: String): Boolean {
-        val startGeneration = _generation.value
-        _ready.value?.let { r ->
-            if (r.targetId == targetId && r.widthPx > 0 && r.heightPx > 0 &&
-                _generation.value == startGeneration
-            ) {
-                return true
-            }
-        }
-        if (_generation.value != startGeneration) return false
-        return combine(_ready, _generation) { ready, gen ->
-            when {
-                gen != startGeneration -> false
-                ready != null && ready.targetId == targetId &&
-                    ready.widthPx > 0 && ready.heightPx > 0 -> true
-                else -> null
-            }
-        }.filterNotNull().first()
     }
 }
