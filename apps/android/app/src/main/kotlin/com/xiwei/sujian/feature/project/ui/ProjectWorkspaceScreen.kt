@@ -192,13 +192,11 @@ internal fun ProjectWorkspaceScreen(
 
     // #640 A.8/A.9：章节切换失败回滚回调 — remember 稳定，供窄屏/宽屏/host 共用。
     val onChapterSwitchFailed: (
-        (
-            oldProjectId: String,
-            oldVolumeId: String?,
-            oldChapterId: String?,
-            oldChapterTitle: String,
-        ) -> Unit
-    ) =
+        oldProjectId: String,
+        oldVolumeId: String?,
+        oldChapterId: String?,
+        oldChapterTitle: String,
+    ) -> Unit =
         remember(appState, coroutineScope, workspaceNavState) {
             { oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String ->
                 if (oldVolumeId != null && oldChapterId != null) {

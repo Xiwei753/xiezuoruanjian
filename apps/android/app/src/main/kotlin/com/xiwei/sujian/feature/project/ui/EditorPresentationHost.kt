@@ -114,9 +114,7 @@ internal fun compactEditorChrome(presentationVisible: Boolean): CompactEditorChr
  * 根 host 不经过 outer top bar/NavigationRail。plan null 或 Editor bounds 空 → null
  * （调用方回落 fillMaxSize，无遮挡信息）。
  */
-internal fun resolveWideEditorBounds(
-    workbenchPlan: AndroidWorkbenchLayoutPlan?,
-): AndroidLayoutRect? {
+internal fun resolveWideEditorBounds(workbenchPlan: AndroidWorkbenchLayoutPlan?): AndroidLayoutRect? {
     if (workbenchPlan == null) return null
     val bounds = workbenchPlan.placementFor(AndroidWorkbenchRole.EDITOR)?.bounds ?: return null
     if (bounds.isEmpty) return null
