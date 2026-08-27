@@ -33,6 +33,7 @@ import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.app.presentation.contract.PresentationContractBridge
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
+import com.xiwei.sujian.app.presentation.layout.physicalSafeBounds
 import com.xiwei.sujian.app.presentation.layout.rememberAndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.layout.rememberAndroidWorkbenchPlanState
 import com.xiwei.sujian.app.presentation.layout.rememberAndroidWorkbenchViewportFrame
@@ -481,6 +482,10 @@ fun SujianNavigationSuite(
     // #640 评论 5443789509：把稳定系统 UI（systemBars + displayCutout）的 safe viewport 放到
     // planner 输入前，Rust 看到的 (0,0) 是稳定安全工作区左上角；plan 返回后再 offsetBy 平移回物理坐标。
     val workbenchViewportFrame = rememberAndroidWorkbenchViewportFrame(layoutSpec.viewport)
+    // #640 评论 5444584755：物理安全矩形（plan 有无都共用）。workbenchPlan == null（resolver 失败）时
+    // wide SinglePane / EditorOnly 用它作 fallback，不再回落整个 constraints（物理窗口 (0,0)），
+    // 避免 TopAppBar 从 (0,0) 开始、正文只躲 IME 不躲 status bar / display cutout / navigation bar。
+    val workbenchSafeBounds = workbenchViewportFrame.physicalSafeBounds
     val workbenchPlanner = rememberWorkbenchLayoutPlanner(workbenchViewportFrame, workbenchResolver)
 
     // #628 评论 5301021120 02:59:39Z 版：pane 收起状态 + Rust workbench plan 统一在
@@ -709,6 +714,7 @@ fun SujianNavigationSuite(
             isWideLayout = layoutSpec.workspaceLayoutMode.isWideLayout(),
             presentationVisible = isEditorLocation,
             workbenchPlan = workbenchPlanState.workbenchPlan,
+            workbenchSafeBounds = workbenchSafeBounds,
             compactEditorTopBar = compactEditorTopBar,
             wideSinglePaneTopBar = wideSinglePaneTopBar,
             wideDeps = wideDeps,

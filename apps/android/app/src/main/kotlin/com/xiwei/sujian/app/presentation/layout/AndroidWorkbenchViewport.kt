@@ -109,3 +109,28 @@ internal fun rememberAndroidWorkbenchViewportFrame(rawViewport: WindowViewportDt
         resolveSafeWorkbenchViewport(rawViewport, leftDp, topDp, rightDp, bottomDp)
     }
 }
+
+/**
+ * #640 评论 5444584755：[AndroidWorkbenchViewportFrame] 对应的物理安全矩形（dp）。
+ *
+ * safe frame 把稳定系统 UI（systemBars + displayCutout）裁掉后得到 safe viewport，
+ * [originXDp]/[originYDp] 是安全区左上角相对物理窗口的偏移。本属性把 safe viewport
+ * 还原成物理窗口坐标系下的安全矩形（left=originXDp, top=originYDp,
+ * right=originXDp+width, bottom=originYDp+height），供 wide SinglePane / EditorOnly
+ * 在 `workbenchPlan == null`（resolver 失败）时作为统一 fallback：
+ * - plan 非空且 Editor bounds 非空 → 用 Rust plan 的 Editor bounds；
+ * - plan null 或 bounds 空 → 用本矩形，不再回落整个 constraints（物理窗口 (0,0)）。
+ *
+ * plan 有无都共用同一份物理安全矩形，避免 resolver 失败时 TopAppBar 从物理窗口 (0,0)
+ * 开始、正文只躲 IME 不躲 status bar / display cutout / navigation bar 的第二套坐标系。
+ *
+ * 纯属性（无 Compose 副作用），同包 internal，[AndroidLayoutRect] 在同包不需 import。
+ */
+internal val AndroidWorkbenchViewportFrame.physicalSafeBounds: AndroidLayoutRect
+    get() =
+        AndroidLayoutRect(
+            leftDp = originXDp,
+            topDp = originYDp,
+            rightDp = originXDp + viewport.widthDp,
+            bottomDp = originYDp + viewport.heightDp,
+        )

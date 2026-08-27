@@ -319,6 +319,12 @@ internal data class EditorPresentationCallbacks(
  * windowInsets 让 TopAppBar 自己处理 top system inset）与 [wideSinglePaneTopBar]（wide SinglePane，
  * 顶部已由 safe workbench frame 处理，传 `WindowInsets(0,0,0,0)` 避免二次避让）两个参数。
  *
+ * #640 评论 5444584755：[workbenchSafeBounds] 是 safe frame 对应的物理安全矩形（dp），
+ * plan 有无都共用。wide SinglePane / EditorOnly 在 `workbenchPlan == null`（resolver 失败）或
+ * Editor bounds 空时用它作 fallback，不再回落整个 constraints（物理窗口 (0,0)），避免
+ * TopAppBar 从 (0,0) 开始、正文只躲 IME 不躲 status bar / display cutout / navigation bar。
+ * compact 分支不使用它（compact 用 compactEditorInsets + TopAppBar 默认 windowInsets）。
+ *
  * 不新建第二 ViewModel、第二 requestOpenChapter 或第二状态源 — wide 回调由调用方
  * （ProjectWorkspaceScreen 经 SujianNavContext 上传）提供。
  */
@@ -328,6 +334,7 @@ internal fun EditorPresentationHost(
     isWideLayout: Boolean,
     presentationVisible: Boolean,
     workbenchPlan: AndroidWorkbenchLayoutPlan?,
+    workbenchSafeBounds: AndroidLayoutRect,
     compactEditorTopBar: @Composable () -> Unit,
     wideSinglePaneTopBar: @Composable () -> Unit,
     wideDeps: WideWorkspaceDeps?,
@@ -402,6 +409,7 @@ internal fun EditorPresentationHost(
                 layoutState = layoutState,
                 callbacks = callbacks,
                 singlePaneTopBar = wideSinglePaneTopBar,
+                fallbackSafeBounds = workbenchSafeBounds,
                 modifier = modifier.fillMaxSize(),
             )
         }

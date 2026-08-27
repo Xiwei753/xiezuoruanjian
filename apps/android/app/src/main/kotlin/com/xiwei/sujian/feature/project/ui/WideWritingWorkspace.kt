@@ -181,12 +181,14 @@ internal fun resolveWideWorkspaceCompositionMode(
  * [resolveWideWorkspaceCompositionMode] 决策（AndroidView 不重建的前提）保证。
  */
 
+@Suppress("LongParameterList") // #640 评论 5444584755：7 参数达 threshold，函数级 suppress（既有先例）
 @Composable
 internal fun WideWritingWorkspace(
     deps: WideWorkspaceDeps,
     documentState: WideWorkspaceDocumentState,
     layoutState: WideWorkspaceLayoutState,
     callbacks: WideWorkspaceCallbacks,
+    fallbackSafeBounds: AndroidLayoutRect,
     singlePaneTopBar: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -271,6 +273,7 @@ internal fun WideWritingWorkspace(
             workbenchPlan = workbenchPlan,
             density = density,
             presentationVisible = documentState.presentationVisible,
+            fallbackSafeBounds = fallbackSafeBounds,
         ),
     )
 }
@@ -494,12 +497,18 @@ private fun WorkbenchChromeContentSlots(
  *
  * EditorPane 始终是 layoutId=EDITOR 的 slot，call site 不变；切换 compositionMode 只改变 place 策略,
  * 不重建 AndroidView。
+ *
+ * #640 评论 5444584755：[fallbackSafeBounds] 是 safe frame 对应的物理安全矩形（dp），
+ * plan 有无都共用。SINGLE_PANE_WITH_TOP_BAR / EDITOR_ONLY_PREWARM（以及 FULL_WORKBENCH
+ * 但 plan null 的退化分支）在 `workbenchPlan == null` 或 Editor bounds 空时用它作 fallback，
+ * 不再回落整个 constraints（物理窗口 (0,0)）。FULL_WORKBENCH + plan 非空走七角色 bounds，不需要它。
  */
 private fun wideWorkspaceMeasurePolicy(
     compositionMode: WideWorkspaceCompositionMode,
     workbenchPlan: AndroidWorkbenchLayoutPlan?,
     density: Density,
     presentationVisible: Boolean,
+    fallbackSafeBounds: AndroidLayoutRect,
 ): MeasurePolicy =
     MeasurePolicy { measurables, constraints ->
         when (compositionMode) {
@@ -512,7 +521,7 @@ private fun wideWorkspaceMeasurePolicy(
                         density,
                     )
                 } else {
-                    measureAndPlaceEditorOnly(measurables, constraints, workbenchPlan, density)
+                    measureAndPlaceEditorOnly(measurables, constraints, workbenchPlan, density, fallbackSafeBounds)
                 }
             }
             WideWorkspaceCompositionMode.SINGLE_PANE_WITH_TOP_BAR ->
@@ -522,9 +531,10 @@ private fun wideWorkspaceMeasurePolicy(
                     workbenchPlan,
                     density,
                     presentationVisible,
+                    fallbackSafeBounds,
                 )
             WideWorkspaceCompositionMode.EDITOR_ONLY_PREWARM ->
-                measureAndPlaceEditorOnly(measurables, constraints, workbenchPlan, density)
+                measureAndPlaceEditorOnly(measurables, constraints, workbenchPlan, density, fallbackSafeBounds)
         }
     }
 
@@ -532,45 +542,45 @@ private fun wideWorkspaceMeasurePolicy(
  * #640 评论 5441849412 问题2：EDITOR_ONLY measure + place — 只 place Editor slot。
  *
  * 按 Rust [AndroidWorkbenchLayoutPlan] 的 EDITOR 角色 bounds measure/place Editor；
- * plan null 或 Editor bounds 空 → 回落 fillMaxSize（无遮挡信息）。
+ * plan null 或 Editor bounds 空 → 回落 [fallbackSafeBounds]（safe frame 物理安全矩形）。
  * 不能 `fillMaxSize()` 当 bounds 可用时：遇到横向/竖向 separating hinge 时全窗口铺满会让正文
  * 重新跨过遮挡。与 Workbench 模式用同一套 bounds 语义。
+ *
+ * #640 评论 5444584755：fallback 不再回落整个 constraints（物理窗口 (0,0)），改用
+ * [fallbackSafeBounds] — safe frame 已裁掉稳定系统栏/刘海，避免 TopAppBar 从 (0,0) 开始、
+ * 正文只躲 IME 不躲 status bar / display cutout / navigation bar。统一一条 dp→px 路径，
+ * 不再有 if/else 两分支或第二套 fillMaxSize() 坐标系。
  */
 private fun MeasureScope.measureAndPlaceEditorOnly(
     measurables: List<Measurable>,
     constraints: Constraints,
     workbenchPlan: AndroidWorkbenchLayoutPlan?,
     density: Density,
+    fallbackSafeBounds: AndroidLayoutRect,
 ): MeasureResult {
     val editorMeasurable =
         measurables.firstOrNull { (it.layoutId as? LayoutSlotId) == LayoutSlotId.EDITOR }
             ?: return layout(constraints.maxWidth, constraints.maxHeight) {}
-    val editorBounds = workbenchPlan?.placementFor(AndroidWorkbenchRole.EDITOR)?.bounds
-    return if (editorBounds != null && !editorBounds.isEmpty) {
-        with(density) {
-            val pxWidth = editorBounds.widthDp.dp.roundToPx()
-            val pxHeight = editorBounds.heightDp.dp.roundToPx()
-            val placeable =
-                editorMeasurable.measure(
-                    constraints.copy(
-                        minWidth = pxWidth,
-                        maxWidth = pxWidth,
-                        minHeight = pxHeight,
-                        maxHeight = pxHeight,
-                    ),
-                )
-            layout(constraints.maxWidth, constraints.maxHeight) {
-                placeable.place(
-                    editorBounds.leftDp.dp.roundToPx(),
-                    editorBounds.topDp.dp.roundToPx(),
-                )
-            }
-        }
-    } else {
-        // 桥失败（null）或 Editor bounds 空 → 本地占满，无遮挡信息。
-        val placeable = editorMeasurable.measure(constraints)
+    val editorBounds =
+        workbenchPlan?.placementFor(AndroidWorkbenchRole.EDITOR)?.bounds?.takeUnless { it.isEmpty }
+            ?: fallbackSafeBounds
+    return with(density) {
+        val pxWidth = editorBounds.widthDp.dp.roundToPx()
+        val pxHeight = editorBounds.heightDp.dp.roundToPx()
+        val placeable =
+            editorMeasurable.measure(
+                constraints.copy(
+                    minWidth = pxWidth,
+                    maxWidth = pxWidth,
+                    minHeight = pxHeight,
+                    maxHeight = pxHeight,
+                ),
+            )
         layout(constraints.maxWidth, constraints.maxHeight) {
-            placeable.place(0, 0)
+            placeable.place(
+                editorBounds.leftDp.dp.roundToPx(),
+                editorBounds.topDp.dp.roundToPx(),
+            )
         }
     }
 }
@@ -579,7 +589,7 @@ private fun MeasureScope.measureAndPlaceEditorOnly(
  * #640 评论 5443102488：SINGLE_PANE_WITH_TOP_BAR measure + place — 在 Rust Editor free-region 内测量 top bar + body。
  *
  * root region = Rust [AndroidWorkbenchLayoutPlan] 的 EDITOR 角色 bounds（plan 非空且 bounds 非空），
- * 否则回落整个 constraints（plan=null 桥失败）。在 root region 内：
+ * 否则回落 [fallbackSafeBounds]（safe frame 物理安全矩形）。在 root region 内：
  * - 测量 singlePaneTopBar（width = root width，height unconstrained）取其实际高度；
  * - body height = root height - top bar height（钳到非负）；
  * - place top bar 在 (root.left, root.top)（仅 presentationVisible=true）；
@@ -588,6 +598,11 @@ private fun MeasureScope.measureAndPlaceEditorOnly(
  * hidden 与 visible 的 body bounds 完全相同（top bar 始终测量，只 place 随 visible 切换），
  * visible 切换不触发 SujianEditorView onSizeChanged，ready 一次成立后稳定。
  * EditorPane 仍是 layoutId=EDITOR 的 slot，call site 不变。
+ *
+ * #640 评论 5444584755：fallback 不再回落整个 constraints（物理窗口 (0,0)），改用
+ * [fallbackSafeBounds] — safe frame 已裁掉稳定系统栏/刘海，避免 TopAppBar 从 (0,0) 开始、
+ * 正文只躲 IME 不躲 status bar / display cutout / navigation bar。统一一条 dp→px 路径，
+ * 不再有 if/else 两分支或第二套 constraints 坐标系。
  */
 private fun MeasureScope.measureAndPlaceSinglePaneWithTopBar(
     measurables: List<Measurable>,
@@ -595,29 +610,26 @@ private fun MeasureScope.measureAndPlaceSinglePaneWithTopBar(
     workbenchPlan: AndroidWorkbenchLayoutPlan?,
     density: Density,
     presentationVisible: Boolean,
+    fallbackSafeBounds: AndroidLayoutRect,
 ): MeasureResult {
     val byId = measurables.associateBy { it.layoutId as? LayoutSlotId }
     val topBarMeasurable = byId[LayoutSlotId.SINGLE_PANE_TOP_BAR]
     val editorMeasurable = byId[LayoutSlotId.EDITOR]
         ?: return layout(constraints.maxWidth, constraints.maxHeight) {}
 
-    val editorBounds = workbenchPlan?.placementFor(AndroidWorkbenchRole.EDITOR)?.bounds
+    val rootBounds =
+        workbenchPlan
+            ?.placementFor(AndroidWorkbenchRole.EDITOR)
+            ?.bounds
+            ?.takeUnless { it.isEmpty }
+            ?: fallbackSafeBounds
     val rootRegion =
-        if (editorBounds != null && !editorBounds.isEmpty) {
-            with(density) {
-                SinglePaneRootRegion(
-                    leftPx = editorBounds.leftDp.dp.roundToPx(),
-                    topPx = editorBounds.topDp.dp.roundToPx(),
-                    widthPx = editorBounds.widthDp.dp.roundToPx(),
-                    heightPx = editorBounds.heightDp.dp.roundToPx(),
-                )
-            }
-        } else {
+        with(density) {
             SinglePaneRootRegion(
-                leftPx = 0,
-                topPx = 0,
-                widthPx = constraints.maxWidth,
-                heightPx = constraints.maxHeight,
+                leftPx = rootBounds.leftDp.dp.roundToPx(),
+                topPx = rootBounds.topDp.dp.roundToPx(),
+                widthPx = rootBounds.widthDp.dp.roundToPx(),
+                heightPx = rootBounds.heightDp.dp.roundToPx(),
             )
         }
 
