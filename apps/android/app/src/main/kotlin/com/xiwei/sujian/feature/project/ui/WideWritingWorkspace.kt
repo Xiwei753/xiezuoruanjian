@@ -3,7 +3,6 @@ package com.xiwei.sujian.feature.project.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -37,6 +36,7 @@ import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
+import com.xiwei.sujian.feature.editor.ui.theme.editorSurfaceBackgroundColor
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 
 /**
@@ -117,7 +117,44 @@ internal data class WideWorkspaceLayoutState(
  * @param layoutState 导航套件层统一解析的 Rust workbench plan + pane 收起状态 + 收起回调
  *   （plan = null 表示桥失败，按单栏 Editor 处理）。收起左栏/右栏后由导航套件层重新 resolve，
  *   Rust 重新给 Editor 更大 bounds，中央 SujianEditorHost 仍是同一个实例，只改变测量/放置。
+  */
+
+/**
+ * 大屏工作台组合模式（#640 C）— [resolveWideWorkspaceCompositionMode] 的返回值。
+ *
+ * - [EDITOR_ONLY]：只组合/测量唯一 EditorPane，按 Rust Editor bounds measure/place；
+ *   绝不组合 WorkbenchToolbarSlots/toolbar、第二份 ChapterTreeContent、syncStatusRepository
+ *   collector、WritingToolRail、WritingToolPane。
+ * - [FULL_WORKBENCH]：presentationVisible=true 且 plan=WORKBENCH，组合完整 Workbench shell。
  */
+internal enum class WideWorkspaceCompositionMode {
+    EDITOR_ONLY,
+    FULL_WORKBENCH,
+}
+
+/**
+ * 大屏工作台组合模式决策（#640 C）— 纯函数，无 Compose 副作用，可单测。
+ *
+ * 隐藏阶段（presentationVisible=false）即使 plan 是 WORKBENCH 也只组合/测量唯一 EditorPane，
+ * 不进入完整 Workbench shell（避免隐藏阶段预热 toolbar / 第二份 ChapterTree / sync collector /
+ * ToolRail / ToolPane）。plan=null（桥失败）或 mode=SINGLE_PANE 同样只画 EditorPane。
+ *
+ * 保留 Rust workbench plan 的 Editor bounds 语义：EDITOR_ONLY 分支仍由调用方按
+ * [AndroidWorkbenchLayoutPlan.placementFor]([AndroidWorkbenchRole.EDITOR]) 取 bounds place，
+ * 不用延时/alpha/GONE 或另一个 editor/state source。
+ */
+internal fun resolveWideWorkspaceCompositionMode(
+    workbenchPlan: AndroidWorkbenchLayoutPlan?,
+    presentationVisible: Boolean,
+): WideWorkspaceCompositionMode {
+    if (!presentationVisible) return WideWorkspaceCompositionMode.EDITOR_ONLY
+    if (workbenchPlan == null) return WideWorkspaceCompositionMode.EDITOR_ONLY
+    if (workbenchPlan.mode == AndroidResolvedWorkspaceMode.SINGLE_PANE) {
+        return WideWorkspaceCompositionMode.EDITOR_ONLY
+    }
+    return WideWorkspaceCompositionMode.FULL_WORKBENCH
+}
+
 @Composable
 internal fun WideWritingWorkspace(
     deps: WideWorkspaceDeps,
@@ -135,8 +172,15 @@ internal fun WideWritingWorkspace(
 
     // #628 评论 5301021120 02:59:39Z 版：plan 由导航套件层统一解析（外层顶栏归属必须消费
     // 同一份 Rust 最终 mode），本组件不再自行 resolve。
-    // plan == null（桥失败）或 mode == SINGLE_PANE（放不下最小 workbench）→ 单栏 Editor。
-    if (workbenchPlan == null || workbenchPlan.mode == AndroidResolvedWorkspaceMode.SINGLE_PANE) {
+    // #640 C：presentationVisible=false 时即使 plan=WORKBENCH 也只组合/测量唯一 EditorPane，
+    // 不进入完整 Workbench shell（避免隐藏阶段预热）。决策由纯函数 [resolveWideWorkspaceCompositionMode]
+    // 统一表达，生产分支与单测共用同一逻辑。
+    val compositionMode =
+        resolveWideWorkspaceCompositionMode(
+            workbenchPlan = workbenchPlan,
+            presentationVisible = documentState.presentationVisible,
+        )
+    if (compositionMode == WideWorkspaceCompositionMode.EDITOR_ONLY) {
         // 按 Rust 返回的 Editor bounds measure/place，不能 fillMaxSize()：
         // 遇到横向/竖向 separating hinge 时，fillMaxSize 会让正文重新跨过遮挡。
         val editorBounds = workbenchPlan?.placementFor(AndroidWorkbenchRole.EDITOR)?.bounds
@@ -148,13 +192,16 @@ internal fun WideWritingWorkspace(
                 if (editorBounds != null && !editorBounds.isEmpty) {
                     modifier.editorAtBounds(editorBounds, density)
                 } else {
-                    // 桥失败（null）时 Rust bounds 不可用，只能本地占满——没有任何遮挡信息。
+                    // 桥失败（null）或隐藏阶段 Rust bounds 不可用时本地占满——没有任何遮挡信息。
                     modifier.fillMaxSize()
                 },
         )
         return
     }
-    val bounds = WorkbenchBounds.fromPlan(workbenchPlan)
+    // FULL_WORKBENCH：helper 保证 workbenchPlan != null && mode == WORKBENCH。
+    // requireNotNull 恢复非空类型（helper 不变量；不引入 !! / 另一个 state source）。
+    val resolvedPlan = requireNotNull(workbenchPlan)
+    val bounds = WorkbenchBounds.fromPlan(resolvedPlan)
     val density = LocalDensity.current
     val slotState =
         WorkbenchSlotState(
@@ -480,7 +527,7 @@ private fun EditorPane(
     Box(
         modifier =
             modifier
-                .background(MaterialTheme.colorScheme.background),
+                .background(editorSurfaceBackgroundColor()),
     ) {
         if (documentState.currentChapterId != null && documentState.currentVolumeId != null) {
             SujianEditorHost(
