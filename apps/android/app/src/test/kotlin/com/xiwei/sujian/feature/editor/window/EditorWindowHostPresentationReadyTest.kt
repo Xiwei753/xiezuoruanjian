@@ -54,16 +54,17 @@ class EditorWindowHostPresentationReadyTest {
     }
 
     @Test
-    fun awaitPresentationReady_returnsBoolean_false_whenTargetClosedBeforeReady() = runTest(UnconfinedTestDispatcher()) {
-        val host = createHost()
-        val target = EditableTextTarget("chapter-body:p:v:c-a", TextEditorProfile.DocumentBody, isPersistent = true)
-        host.registerTarget(target)
-        val deferred = async { host.awaitPresentationReady(target.targetId) }
-        delay(10)
-        // 业务关闭 target → invalidateTarget → generation 推进 → await 快速 false
-        host.closeTarget(target.targetId, SessionCloseReason.WORKSPACE_NAVIGATION)
-        assertFalse(deferred.await())
-    }
+    fun awaitPresentationReady_returnsBoolean_false_whenTargetClosedBeforeReady() =
+        runTest(UnconfinedTestDispatcher()) {
+            val host = createHost()
+            val target = EditableTextTarget("chapter-body:p:v:c-a", TextEditorProfile.DocumentBody, isPersistent = true)
+            host.registerTarget(target)
+            val deferred = async { host.awaitPresentationReady(target.targetId) }
+            delay(10)
+            // 业务关闭 target → invalidateTarget → generation 推进 → await 快速 false
+            host.closeTarget(target.targetId, SessionCloseReason.WORKSPACE_NAVIGATION)
+            assertFalse(deferred.await())
+        }
 
     @Test
     fun closeTarget_advancesGeneration_evenWhenReadyWasNull() {
@@ -99,17 +100,18 @@ class EditorWindowHostPresentationReadyTest {
     }
 
     @Test
-    fun awaitPresentationReady_returnsTrue_whenGeometryPublishedViaReadyFlow() = runTest(UnconfinedTestDispatcher()) {
-        val host = createHost()
-        val target = EditableTextTarget("chapter-body:p:v:c-a", TextEditorProfile.DocumentBody, isPersistent = true)
-        host.registerTarget(target)
-        // 直接通过公开 presentationReady StateFlow 验证类型契约：
-        // 初始 null，几何发布后携带 EditorPresentationReady(targetId, w, h)。
-        assertEquals(null, host.presentationReady.value)
-        assertEquals(0L, host.presentationReadyGeneration.value)
-        // isPresentationReady 含几何检查
-        assertFalse(host.isPresentationReady(target.targetId))
-    }
+    fun awaitPresentationReady_returnsTrue_whenGeometryPublishedViaReadyFlow() =
+        runTest(UnconfinedTestDispatcher()) {
+            val host = createHost()
+            val target = EditableTextTarget("chapter-body:p:v:c-a", TextEditorProfile.DocumentBody, isPersistent = true)
+            host.registerTarget(target)
+            // 直接通过公开 presentationReady StateFlow 验证类型契约：
+            // 初始 null，几何发布后携带 EditorPresentationReady(targetId, w, h)。
+            assertEquals(null, host.presentationReady.value)
+            assertEquals(0L, host.presentationReadyGeneration.value)
+            // isPresentationReady 含几何检查
+            assertFalse(host.isPresentationReady(target.targetId))
+        }
 
     @Test
     fun presentationReadyStateFlow_exposesEditorPresentationReadyGeometryType() {
@@ -131,12 +133,13 @@ class EditorWindowHostPresentationReadyTest {
         // （Continuation 恢复类型），不是 primitive boolean。验证存在带 Continuation 参数
         // 的 suspend bridge 且返回 Object，即证明这是 suspend Boolean 而非 Unit/非 suspend。
         val methods = EditorWindowHost::class.java.declaredMethods
-        val suspendBridge = methods.find {
-            it.name == "awaitPresentationReady" &&
-                it.parameterTypes.size == 2 &&
-                it.parameterTypes[0] == java.lang.String::class.java &&
-                it.parameterTypes[1] == kotlin.coroutines.Continuation::class.java
-        }
+        val suspendBridge =
+            methods.find {
+                it.name == "awaitPresentationReady" &&
+                    it.parameterTypes.size == 2 &&
+                    it.parameterTypes[0] == java.lang.String::class.java &&
+                    it.parameterTypes[1] == kotlin.coroutines.Continuation::class.java
+            }
         assertNotNull("awaitPresentationReady suspend bridge (String, Continuation) 应存在", suspendBridge)
         assertEquals(
             "suspend Boolean 的 JVM bridge 返回 Object（Continuation 恢复类型），不是 primitive boolean",
