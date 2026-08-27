@@ -15,10 +15,10 @@ import org.junit.Test
  * placement 决策由纯函数 [resolveEditorPresentationHostMode] 统一表达，生产 host 与单测共用。
  *
  * - target null → HIDDEN（不组合，不遮盖 ProjectList/ChapterTree）；
- * - 窄屏 → COMPACT_EDITOR（SinglePaneEditorLayer，最终 Editor chrome，无 bottom NavigationBar）；
- * - 宽屏 + presentationVisible=false → WIDE_EDITOR_ONLY（EditorPane-only，不进完整 Workbench shell）；
+ * - 窄屏 → COMPACT_SINGLE_PANE（SinglePaneEditorLayer，最终 Editor chrome，无 bottom NavigationBar）；
+ * - 宽屏 + plan=WORKBENCH + presentationVisible=false → WIDE_WORKBENCH_PREWARM（只预热 Editor rect，不进完整 Workbench shell）；
  * - 宽屏 + presentationVisible=true + plan=WORKBENCH → WIDE_FULL_WORKBENCH；
- * - 宽屏 + plan=null/SINGLE_PANE → WIDE_EDITOR_ONLY。
+ * - 宽屏 + plan=null/SINGLE_PANE → WIDE_SINGLE_PANE（在 Rust Editor free-region 内测量 singlePaneTopBar + body）。
  */
 class EditorPresentationHostPlacementTest {
     private val target =
@@ -59,7 +59,7 @@ class EditorPresentationHostPlacementTest {
     @Test
     fun compact_targetNotNull_returnsCompactEditor() {
         assertEquals(
-            EditorPresentationHostMode.COMPACT_EDITOR,
+            EditorPresentationHostMode.COMPACT_SINGLE_PANE,
             resolveEditorPresentationHostMode(
                 target = target,
                 isWideLayout = false,
@@ -72,7 +72,7 @@ class EditorPresentationHostPlacementTest {
     @Test
     fun compact_targetNotNull_returnsCompactEditor_evenWhenVisible() {
         assertEquals(
-            EditorPresentationHostMode.COMPACT_EDITOR,
+            EditorPresentationHostMode.COMPACT_SINGLE_PANE,
             resolveEditorPresentationHostMode(
                 target = target,
                 isWideLayout = false,
@@ -83,9 +83,9 @@ class EditorPresentationHostPlacementTest {
     }
 
     @Test
-    fun wide_hidden_presentationVisibleFalse_returnsEditorOnly() {
+    fun wide_hidden_workbenchPlan_returnsWorkbenchPrewarm() {
         assertEquals(
-            EditorPresentationHostMode.WIDE_EDITOR_ONLY,
+            EditorPresentationHostMode.WIDE_WORKBENCH_PREWARM,
             resolveEditorPresentationHostMode(
                 target = target,
                 isWideLayout = true,
@@ -109,9 +109,9 @@ class EditorPresentationHostPlacementTest {
     }
 
     @Test
-    fun wide_visible_singlePanePlan_returnsEditorOnly() {
+    fun wide_visible_singlePanePlan_returnsWideSinglePane() {
         assertEquals(
-            EditorPresentationHostMode.WIDE_EDITOR_ONLY,
+            EditorPresentationHostMode.WIDE_SINGLE_PANE,
             resolveEditorPresentationHostMode(
                 target = target,
                 isWideLayout = true,
@@ -122,14 +122,40 @@ class EditorPresentationHostPlacementTest {
     }
 
     @Test
-    fun wide_visible_nullPlan_returnsEditorOnly() {
+    fun wide_visible_nullPlan_returnsWideSinglePane() {
         assertEquals(
-            EditorPresentationHostMode.WIDE_EDITOR_ONLY,
+            EditorPresentationHostMode.WIDE_SINGLE_PANE,
             resolveEditorPresentationHostMode(
                 target = target,
                 isWideLayout = true,
                 workbenchPlan = null,
                 presentationVisible = true,
+            ),
+        )
+    }
+
+    @Test
+    fun wide_hidden_singlePanePlan_returnsWideSinglePane() {
+        assertEquals(
+            EditorPresentationHostMode.WIDE_SINGLE_PANE,
+            resolveEditorPresentationHostMode(
+                target = target,
+                isWideLayout = true,
+                workbenchPlan = workbenchPlan(AndroidResolvedWorkspaceMode.SINGLE_PANE),
+                presentationVisible = false,
+            ),
+        )
+    }
+
+    @Test
+    fun wide_hidden_nullPlan_returnsWideSinglePane() {
+        assertEquals(
+            EditorPresentationHostMode.WIDE_SINGLE_PANE,
+            resolveEditorPresentationHostMode(
+                target = target,
+                isWideLayout = true,
+                workbenchPlan = null,
+                presentationVisible = false,
             ),
         )
     }

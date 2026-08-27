@@ -2,10 +2,10 @@ package com.xiwei.sujian.feature.project.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -25,23 +25,27 @@ import com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode
  * 预热与显示共用同一 AndroidView。target null 不组合；target 非空从预热开始持有唯一编辑器。
  *
  * - [HIDDEN]：target null，不组合，不遮盖 ProjectList/ChapterTree；
- * - [COMPACT_EDITOR]：窄屏，SinglePaneEditorLayer，最终 Editor chrome，无 bottom NavigationBar；
- * - [WIDE_EDITOR_ONLY]：宽屏 EditorPane-only（预热或 plan 非 WORKBENCH），按 Rust Editor bounds；
- * - [WIDE_FULL_WORKBENCH]：宽屏完整 Workbench shell（presentationVisible=true 且 plan=WORKBENCH）。
+ * - [COMPACT_SINGLE_PANE]：窄屏，SinglePaneEditorLayer，最终 Editor chrome，无 bottom NavigationBar；
+ * - [WIDE_SINGLE_PANE]：宽屏 plan=null/SINGLE_PANE，在 Rust Editor free-region 内测量
+ *   singlePaneTopBar + body（top bar 是否 place 由 presentationVisible 决定，body 尺寸 hidden/visible 完全一致）；
+ * - [WIDE_WORKBENCH_PREWARM]：宽屏 plan=WORKBENCH + hidden，只组合/测量唯一 EditorPane 按 Rust Editor bounds
+ *   （不塞 top bar、不进 Workbench shell），预热 Editor rect；
+ * - [WIDE_FULL_WORKBENCH]：宽屏 plan=WORKBENCH + visible，完整 Workbench shell。
  */
 internal enum class EditorPresentationHostMode {
     HIDDEN,
-    COMPACT_EDITOR,
-    WIDE_EDITOR_ONLY,
+    COMPACT_SINGLE_PANE,
+    WIDE_SINGLE_PANE,
+    WIDE_WORKBENCH_PREWARM,
     WIDE_FULL_WORKBENCH,
 }
 
 /**
  * #640 A：host placement 决策 — 纯函数，无 Compose 副作用，可单测。
  *
- * target null → HIDDEN。窄屏（!isWideLayout）→ COMPACT_EDITOR。
- * 宽屏复用 [resolveWideWorkspaceCompositionMode]：EDITOR_ONLY → WIDE_EDITOR_ONLY，
- * FULL_WORKBENCH → WIDE_FULL_WORKBENCH。
+ * target null → HIDDEN。窄屏（!isWideLayout）→ COMPACT_SINGLE_PANE。
+ * 宽屏复用 [resolveWideWorkspaceCompositionMode]：SINGLE_PANE_WITH_TOP_BAR → WIDE_SINGLE_PANE，
+ * EDITOR_ONLY_PREWARM → WIDE_WORKBENCH_PREWARM，FULL_WORKBENCH → WIDE_FULL_WORKBENCH。
  */
 internal fun resolveEditorPresentationHostMode(
     target: PreparedEditorTarget?,
@@ -50,14 +54,15 @@ internal fun resolveEditorPresentationHostMode(
     presentationVisible: Boolean,
 ): EditorPresentationHostMode {
     if (target == null) return EditorPresentationHostMode.HIDDEN
-    if (!isWideLayout) return EditorPresentationHostMode.COMPACT_EDITOR
+    if (!isWideLayout) return EditorPresentationHostMode.COMPACT_SINGLE_PANE
     val compositionMode =
         resolveWideWorkspaceCompositionMode(
             workbenchPlan = workbenchPlan,
             presentationVisible = presentationVisible,
         )
     return when (compositionMode) {
-        WideWorkspaceCompositionMode.EDITOR_ONLY -> EditorPresentationHostMode.WIDE_EDITOR_ONLY
+        WideWorkspaceCompositionMode.SINGLE_PANE_WITH_TOP_BAR -> EditorPresentationHostMode.WIDE_SINGLE_PANE
+        WideWorkspaceCompositionMode.EDITOR_ONLY_PREWARM -> EditorPresentationHostMode.WIDE_WORKBENCH_PREWARM
         WideWorkspaceCompositionMode.FULL_WORKBENCH -> EditorPresentationHostMode.WIDE_FULL_WORKBENCH
     }
 }
@@ -264,64 +269,22 @@ internal fun resolveWideEditorBounds(workbenchPlan: AndroidWorkbenchLayoutPlan?)
 }
 
 /**
- * #640 评论 5441849412 问题3：Editor host inset 消费策略 — 纯函数，无 Compose 副作用，可单测。
+ * #640 评论 5443102488：compact host inset 消费 Modifier — 只取 safeDrawing 的 Horizontal + Bottom。
  *
- * host 提到 [SujianNavigationSuite] 的 Scaffold 外（与 SujianNavScaffoldContent 作为稳定 sibling）后，
- * 原来的 `Scaffold(contentWindowInsets = WindowInsets.safeDrawing)` 的 innerPadding 包不到 host。
- * 项目启用 `enableEdgeToEdge()` + `adjustResize`：edge-to-edge 下 adjustResize 只让应用收到 IME inset，
- * 内容仍必须明确处理 inset。inset 必须由 host 唯一拥有一次，不加回 WritingPaneLayout.imePadding。
- *
- * - [consumesIme]：true — IME 在 host 层唯一消费一次，Editor 可用高度只减少一次；
- * - [consumesNavigationBars]：true — 底部 navigationBars（IME 出现时被覆盖，windowInsetsPadding 取 max）；
- * - [consumesDisplayCutout]：true — 横向 displayCutout（折叠屏铰链/刘海）；
- * - [consumesTopStatusBar]：false — 顶部 statusBars 由 compact top bar / Workbench toolbar 自己处理，
- *   host 不重复消费 top inset。
- *
- * 锁住不变量：IME 出现时 Editor 可用高度只减少一次（不是 0 次，也不是 2 次）。
- */
-internal data class EditorHostInsetPolicy(
-    val consumesIme: Boolean,
-    val consumesNavigationBars: Boolean,
-    val consumesDisplayCutout: Boolean,
-    val consumesTopStatusBar: Boolean,
-)
-
-/**
- * #640 评论 5441849412 问题3：Editor host inset 消费策略决策 — 纯函数，无 Compose 副作用，可单测。
- *
- * 唯一 owner：IME + 底部 navigationBars + 横向 displayCutout；不消费 top statusBars。
- */
-internal fun resolveEditorHostInsetPolicy(): EditorHostInsetPolicy =
-    EditorHostInsetPolicy(
-        consumesIme = true,
-        consumesNavigationBars = true,
-        consumesDisplayCutout = true,
-        consumesTopStatusBar = false,
-    )
-
-/**
- * #640 评论 5441849412 问题3 / 5442422507：host 层唯一 inset 消费 Modifier —
- * **仅 compact host** 由 [EditorPresentationHost] 应用。
- *
- * 严格按 [resolveEditorHostInsetPolicy] 决策消费：IME 只在此处消费一次，
- * 不加回 WritingPaneLayout.imePadding。多个 windowInsetsPadding 叠加时 Compose 自动处理重叠
- * （每个 inset padding 只消费未被前一个 padding 消费的部分），不会重复消费 IME。
- *
- * #640 评论 5442422507：**wide host 不再套本 padding**。Rust workbench plan 按整窗尺寸算
- * slot bounds（绝对窗口坐标），host 先 windowInsetsPadding 缩小会让 measureAndPlaceWorkbench
- * 把子项撑回原尺寸、伸进 IME。wide slot 内容改用 `fitInside(WindowInsetsRulers.SafeDrawing.current)`
- * 在 slot 内部 reposition 到 safe region（绝对窗口位置，绕过 ancestor consumption）。
+ * WindowInsets.safeDrawing 官方定义包含 system bars + display cutout + IME。只取 Horizontal + Bottom 后：
+ * - IME / navigation bar / 左右 cutout 由 host 处理一次；
+ * - 顶部 status bar / top cutout 完全留给 TopAppBar 默认 windowInsets（Material3 1.4.0 TopAppBar
+ *   默认处理 top + horizontal system insets 并已包含 displayCutout），host 不重复消费顶部；
+ * - 不再维护 consumesIme/consumesNavigationBars/consumesDisplayCutout/consumesTopStatusBar 四个布尔，
+ *   语义与实现一致，不会把整个 displayCutout 四边 padding 导致顶部刘海被算两次。
  */
 @Composable
-private fun editorHostInsetPadding(policy: EditorHostInsetPolicy): Modifier {
-    val imeInsets = WindowInsets.ime
-    val navBarInsets = WindowInsets.navigationBars
-    val cutoutInsets = WindowInsets.displayCutout
-    return Modifier
-        .then(if (policy.consumesIme) Modifier.windowInsetsPadding(imeInsets) else Modifier)
-        .then(if (policy.consumesNavigationBars) Modifier.windowInsetsPadding(navBarInsets) else Modifier)
-        .then(if (policy.consumesDisplayCutout) Modifier.windowInsetsPadding(cutoutInsets) else Modifier)
-}
+private fun Modifier.compactEditorInsets(): Modifier =
+    windowInsetsPadding(
+        WindowInsets.safeDrawing.only(
+            WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
+        ),
+    )
 
 /**
  * #640 A：EditorPresentationCallbacks — 由 ProjectWorkspaceScreen 构造并上传给 suite，
@@ -345,11 +308,12 @@ internal data class EditorPresentationCallbacks(
  * 预热与显示共用同一 AndroidView：切换 location 只 INVISIBLE 到 VISIBLE，不重建 View。
  *
  * - target null → 不组合（HIDDEN）；
- * - 窄屏 visible → [compactTopBar] + [SinglePaneEditorLayer]（最终 Editor chrome，无 bottom NavigationBar）；
+ * - 窄屏 visible → [singlePaneTopBar] + [SinglePaneEditorLayer]（最终 Editor chrome，无 bottom NavigationBar）；
  *   host 在 Scaffold 外，自己画最终 top bar，不经过 ChapterTree Scaffold 的 innerPadding；
  * - 窄屏 hidden → [SinglePaneEditorLayer]（背景透明，不画 top bar，不遮盖 ProjectList/ChapterTree）；
  * - 宽屏 → [WideWritingWorkspace]（内部按 [resolveWideWorkspaceCompositionMode] 决定
- *   EDITOR_ONLY 或 FULL_WORKBENCH，按 Rust Editor bounds measure/place）。
+ *   SINGLE_PANE_WITH_TOP_BAR / EDITOR_ONLY_PREWARM / FULL_WORKBENCH 三种 wide 模式，按 Rust Editor bounds
+ *   measure/place）。EditorPane 在 WideWritingWorkspace 唯一 call site，三种 wide 模式切换不重建 AndroidView。
  *
  * 不新建第二 ViewModel、第二 requestOpenChapter 或第二状态源 — wide 回调由调用方
  * （ProjectWorkspaceScreen 经 SujianNavContext 上传）提供。
@@ -360,7 +324,7 @@ internal fun EditorPresentationHost(
     isWideLayout: Boolean,
     presentationVisible: Boolean,
     workbenchPlan: AndroidWorkbenchLayoutPlan?,
-    compactTopBar: @Composable () -> Unit,
+    singlePaneTopBar: @Composable () -> Unit,
     wideDeps: WideWorkspaceDeps?,
     wideLayoutState: WideWorkspaceLayoutState?,
     wideCallbacks: WideWorkspaceCallbacks?,
@@ -380,18 +344,17 @@ internal fun EditorPresentationHost(
     val currentTarget = target ?: return
 
     when (mode) {
-        EditorPresentationHostMode.COMPACT_EDITOR -> {
-            // #640：compact host 在 hidden 和 visible 使用完全相同的 measured body bounds。
-            // 始终测量 compactTopBar 作为 top-bar placeable，正文 y/height 为 root 去掉 top-bar 实际测量高度；
+        EditorPresentationHostMode.COMPACT_SINGLE_PANE -> {
+            // #640 评论 5443102488：compact host 在 hidden 和 visible 使用完全相同的 measured body bounds。
+            // 始终测量 singlePaneTopBar 作为 top-bar placeable，正文 y/height 为 root 去掉 top-bar 实际测量高度；
             // presentationVisible=false 时只不 place top-bar（保留其测量占位），不遮盖章节树；
             // presentationVisible=true 才 place top-bar。host 在 Scaffold 外，无 bottom NavigationBar,
             // 不经过 ChapterTree Scaffold 的 innerPadding。View 只 INVISIBLE 到 VISIBLE，不重建。
-            // #640 评论 5441849412 问题3：compact host 在 Scaffold 外，inset 由 host 唯一拥有一次。
-            // IME 只在此处消费一次，不加回 WritingPaneLayout.imePadding。
-            // top statusBars 不消费（compact top bar 自己处理顶部系统栏）。
+            // inset 由 compactEditorInsets 唯一拥有一次：只取 safeDrawing 的 Horizontal + Bottom，
+            // 顶部 status bar / top cutout 留给 TopAppBar 默认 windowInsets，不重复消费顶部。
             CompactEditorMeasureLayout(
                 presentationVisible = presentationVisible,
-                topBar = compactTopBar,
+                topBar = singlePaneTopBar,
                 body = {
                     SinglePaneEditorLayer(
                         target = currentTarget,
@@ -400,24 +363,22 @@ internal fun EditorPresentationHost(
                         modifier = Modifier.fillMaxSize(),
                     )
                 },
-                modifier =
-                    modifier
-                        .fillMaxSize()
-                        .then(editorHostInsetPadding(resolveEditorHostInsetPolicy())),
+                modifier = modifier.fillMaxSize().compactEditorInsets(),
             )
         }
-        EditorPresentationHostMode.WIDE_EDITOR_ONLY,
+        EditorPresentationHostMode.WIDE_SINGLE_PANE,
+        EditorPresentationHostMode.WIDE_WORKBENCH_PREWARM,
         EditorPresentationHostMode.WIDE_FULL_WORKBENCH,
         -> {
             // 宽屏：WideWritingWorkspace 内部用 resolveWideWorkspaceCompositionMode 决定
-            // EDITOR_ONLY（预热/plan 非 WORKBENCH）或 FULL_WORKBENCH（可见+WORKBENCH）。
-            // host 只传 target 构造的 documentState + presentationVisible，不重建 View。
-            // 宽屏 top bar 由 Scaffold 画（SinglePane Editor）或 Workbench toolbar 自己画（FULL_WORKBENCH）。
-            // #640 评论 5442422507：wide host 不在此消费 inset padding。Rust plan 按整窗尺寸算 Editor/slot
-            // bounds（绝对窗口坐标），若 host 先用 windowInsetsPadding 缩小，measureAndPlaceWorkbench 又把
-            // 子项撑回原尺寸，子 View 会伸进 IME/system bar。wide slot 内容用 fitInside(SafeDrawing.current)
-            // 在 slot 内部把内容 reposition 到 safe region（绝对窗口位置，绕过 ancestor consumption），
-            // plan 仍是唯一布局决策，Android 只处理系统 UI 遮挡。
+            // SINGLE_PANE_WITH_TOP_BAR（plan=null/SINGLE_PANE，在 Rust Editor free-region 内测量
+            // singlePaneTopBar + body）/ EDITOR_ONLY_PREWARM（plan=WORKBENCH+hidden，只预热 Editor rect）
+            // / FULL_WORKBENCH（plan=WORKBENCH+visible，完整 Workbench shell）。
+            // EditorPane 在 WideWritingWorkspace 唯一 call site，三种 wide 模式切换不重建 AndroidView。
+            // #640 评论 5442422507：wide host 不在此消费 inset padding。Rust plan 按整窗尺寸算 slot bounds，
+            // slot 内容用 fitInside(SafeDrawing.current) 在 slot 内部 reposition 到 safe region。
+            // #640 评论 5443102488：wide single-pane 的顶栏由 WideWritingWorkspace 在 Rust Editor free-region
+            // 内部测量（singlePaneTopBar 参数），不再让外层 Scaffold 画顶栏。
             val deps = wideDeps ?: return
             val layoutState = wideLayoutState ?: return
             val callbacks = wideCallbacks ?: return
@@ -434,6 +395,7 @@ internal fun EditorPresentationHost(
                 documentState = documentState,
                 layoutState = layoutState,
                 callbacks = callbacks,
+                singlePaneTopBar = singlePaneTopBar,
                 modifier = modifier.fillMaxSize(),
             )
         }

@@ -24,7 +24,7 @@ import org.robolectric.annotation.Config
 /**
  * #640 评论 5442422507：wide slot `fitInside(WindowInsetsRulers.SafeDrawing.current)` 真实 bounds 收缩测试。
  *
- * 根因：wide host 不再套 `editorHostInsetPadding`（Rust plan 按整窗尺寸算 slot bounds，host 先
+ * 根因：wide host 不套 compact inset padding（Rust plan 按整窗尺寸算 slot bounds，host 先
  * windowInsetsPadding 缩小会让 measureAndPlaceWorkbench 把子项撑回原尺寸、伸进 IME/system bar）。
  * wide slot 内容改用 `fitInside(SafeDrawing.current)` 在 slot 内部把内容 reposition 到 safe region
  * （systemBars + displayCutout + IME），用绝对窗口位置绕过 ancestor consumption。

@@ -31,7 +31,6 @@ import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.app.presentation.contract.PresentationContractBridge
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
-import com.xiwei.sujian.app.presentation.layout.AndroidResolvedWorkspaceMode
 import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
 import com.xiwei.sujian.app.presentation.layout.rememberAndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.layout.rememberAndroidWorkbenchPlanState
@@ -601,13 +600,9 @@ fun SujianNavigationSuite(
     }
 
     // #628 评论 5301021120 02:59:39Z 版：外层顶栏归属必须消费同一份 Rust 最终模式。
-    // #640 A：窄屏 Editor 由 host 接管 top bar，Scaffold 不画（isCompactEditor）。
-    val isWorkbenchWriting =
-        isEditorLocation &&
-            layoutSpec.workspaceLayoutMode == com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode.WORKBENCH &&
-            workbenchPlanState.workbenchPlan?.mode == AndroidResolvedWorkspaceMode.WORKBENCH
-    val isCompactEditor = isEditorLocation && !layoutSpec.workspaceLayoutMode.isWideLayout()
-    val showOuterTopBar = !isCompactEditor && !isWorkbenchWriting
+    // #640 评论 5443102488：Editor 位置的顶栏全部归 EditorPresentationHost，
+    // Scaffold 不再给任何 Editor 画顶栏（showOuterTopBar=!isEditorLocation）。
+    val showOuterTopBar = !isEditorLocation
 
     // #640 A：Editor 位置 Scaffold container 透明，让 host（sibling 上层）透出；
     // 非 Editor 位置用 colorScheme.background。
@@ -625,8 +620,9 @@ fun SujianNavigationSuite(
             snackbarHostState = snackbarHostState,
         )
 
-    // #640 A：窄屏 host 的最终 top bar — 由 suite 用 topBarInfo 构造，host visible 时画。
-    val compactTopBar: @Composable () -> Unit = {
+    // #640 评论 5443102488：Editor 位置的顶栏全部归 EditorPresentationHost，Scaffold 不再给任何 Editor 画顶栏
+    // （showOuterTopBar=!isEditorLocation）。这个 top bar 同时给 compact 和 wide-single-pane 用。
+    val singlePaneTopBar: @Composable () -> Unit = {
         com.xiwei.sujian.core.designsystem.component.SujianTopAppBar(
             title = topBarInfo.title,
             navigationIcon = topBarInfo.navigationIcon,
@@ -694,7 +690,7 @@ fun SujianNavigationSuite(
             isWideLayout = layoutSpec.workspaceLayoutMode.isWideLayout(),
             presentationVisible = isEditorLocation,
             workbenchPlan = workbenchPlanState.workbenchPlan,
-            compactTopBar = compactTopBar,
+            singlePaneTopBar = singlePaneTopBar,
             wideDeps = wideDeps,
             wideLayoutState = wideLayoutState,
             wideCallbacks = wideCallbacks,

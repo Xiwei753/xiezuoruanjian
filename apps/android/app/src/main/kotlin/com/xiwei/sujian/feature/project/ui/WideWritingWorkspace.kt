@@ -123,37 +123,49 @@ internal data class WideWorkspaceLayoutState(
 /**
  * 大屏工作台组合模式（#640 C）— [resolveWideWorkspaceCompositionMode] 的返回值。
  *
- * - [EDITOR_ONLY]：只组合/测量唯一 EditorPane，按 Rust Editor bounds measure/place；
- *   绝不组合 WorkbenchToolbarSlots/toolbar、第二份 ChapterTreeContent、syncStatusRepository
- *   collector、WritingToolRail、WritingToolPane。
- * - [FULL_WORKBENCH]：presentationVisible=true 且 plan=WORKBENCH，组合完整 Workbench shell。
+ * - [SINGLE_PANE_WITH_TOP_BAR]：plan=null/SINGLE_PANE，在 Rust Editor free-region 内测量
+ *   singlePaneTopBar + EditorPane body，top bar 是否 place 由 presentationVisible 决定，
+ *   body 尺寸 hidden/visible 完全一致；
+ * - [EDITOR_ONLY_PREWARM]：plan=WORKBENCH + hidden，只组合/测量唯一 EditorPane 按 Rust Editor bounds，
+ *   不塞 top bar、不进 Workbench shell；
+ * - [FULL_WORKBENCH]：plan=WORKBENCH + visible，完整 Workbench shell。
+ *
+ * EditorPane 始终在 [WideWritingWorkspace] 唯一 call site（layoutId=EDITOR），三种模式切换不重建 AndroidView。
  */
 internal enum class WideWorkspaceCompositionMode {
-    EDITOR_ONLY,
+    SINGLE_PANE_WITH_TOP_BAR,
+    EDITOR_ONLY_PREWARM,
     FULL_WORKBENCH,
 }
 
 /**
  * 大屏工作台组合模式决策（#640 C）— 纯函数，无 Compose 副作用，可单测。
  *
- * 隐藏阶段（presentationVisible=false）即使 plan 是 WORKBENCH 也只组合/测量唯一 EditorPane，
- * 不进入完整 Workbench shell（避免隐藏阶段预热 toolbar / 第二份 ChapterTree / sync collector /
- * ToolRail / ToolPane）。plan=null（桥失败）或 mode=SINGLE_PANE 同样只画 EditorPane。
+ * - plan=null/SINGLE_PANE → SINGLE_PANE_WITH_TOP_BAR（无论 hidden/visible，在 Rust Editor free-region
+ *   内测量 singlePaneTopBar + EditorPane body）；
+ * - plan=WORKBENCH + hidden → EDITOR_ONLY_PREWARM（只组合/测量唯一 EditorPane 按 Rust Editor bounds，
+ *   不进入完整 Workbench shell，避免隐藏阶段预热 toolbar / 第二份 ChapterTree / sync collector /
+ *   ToolRail / ToolPane）；
+ * - plan=WORKBENCH + visible → FULL_WORKBENCH（完整 Workbench shell）。
  *
- * 保留 Rust workbench plan 的 Editor bounds 语义：EDITOR_ONLY 分支仍由调用方按
- * [AndroidWorkbenchLayoutPlan.placementFor]([AndroidWorkbenchRole.EDITOR]) 取 bounds place，
+ * EditorPane 始终在 [WideWritingWorkspace] 唯一 call site（layoutId=EDITOR），三种模式切换不重建 AndroidView。
+ * 保留 Rust workbench plan 的 Editor bounds 语义：EDITOR_ONLY_PREWARM/SINGLE_PANE_WITH_TOP_BAR 分支仍由
+ * 调用方按 [AndroidWorkbenchLayoutPlan.placementFor]([AndroidWorkbenchRole.EDITOR]) 取 bounds place，
  * 不用延时/alpha/GONE 或另一个 editor/state source。
  */
 internal fun resolveWideWorkspaceCompositionMode(
     workbenchPlan: AndroidWorkbenchLayoutPlan?,
     presentationVisible: Boolean,
 ): WideWorkspaceCompositionMode {
-    if (!presentationVisible) return WideWorkspaceCompositionMode.EDITOR_ONLY
-    if (workbenchPlan == null) return WideWorkspaceCompositionMode.EDITOR_ONLY
-    if (workbenchPlan.mode == AndroidResolvedWorkspaceMode.SINGLE_PANE) {
-        return WideWorkspaceCompositionMode.EDITOR_ONLY
+    val isSinglePanePlan =
+        workbenchPlan == null ||
+            workbenchPlan.mode == AndroidResolvedWorkspaceMode.SINGLE_PANE
+    if (isSinglePanePlan) return WideWorkspaceCompositionMode.SINGLE_PANE_WITH_TOP_BAR
+    return if (presentationVisible) {
+        WideWorkspaceCompositionMode.FULL_WORKBENCH
+    } else {
+        WideWorkspaceCompositionMode.EDITOR_ONLY_PREWARM
     }
-    return WideWorkspaceCompositionMode.FULL_WORKBENCH
 }
 
 /**
@@ -175,6 +187,7 @@ internal fun WideWritingWorkspace(
     documentState: WideWorkspaceDocumentState,
     layoutState: WideWorkspaceLayoutState,
     callbacks: WideWorkspaceCallbacks,
+    singlePaneTopBar: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val workbenchPlan = layoutState.workbenchPlan
@@ -233,8 +246,18 @@ internal fun WideWritingWorkspace(
                     bounds = workbenchBounds,
                 )
             }
+            // #640 评论 5443102488：single-pane top bar slot — 只在 SINGLE_PANE_WITH_TOP_BAR 时组合。
+            // measure policy 在 Rust Editor free-region 内测量 top bar + body（body = region - top bar height）；
+            // presentationVisible=false 时只不 place top bar，body 尺寸与 visible 完全一致（不触发 onSizeChanged）。
+            // EditorPane 仍在下面唯一 call site，top bar 是 sibling slot，不移动 Editor 本身。
+            if (compositionMode == WideWorkspaceCompositionMode.SINGLE_PANE_WITH_TOP_BAR) {
+                Box(modifier = Modifier.layoutId(LayoutSlotId.SINGLE_PANE_TOP_BAR)) {
+                    singlePaneTopBar?.invoke()
+                }
+            }
             // 唯一 EditorPane — 始终在同一个 call site，layoutId=EDITOR。
-            // EDITOR_ONLY：measure policy 按 Rust Editor bounds place（或 fillMaxSize 回落）。
+            // SINGLE_PANE_WITH_TOP_BAR：measure policy 按 Rust Editor region 测量 body（region - top bar）。
+            // EDITOR_ONLY_PREWARM：measure policy 按 Rust Editor bounds place（无 top bar）。
             // FULL_WORKBENCH：measure policy 按七角色 bounds place。
             // 切换 compositionMode 不改变 EditorPane 的 call site，AndroidView 不重建。
             EditorPane(
@@ -247,6 +270,7 @@ internal fun WideWritingWorkspace(
             compositionMode = compositionMode,
             workbenchPlan = workbenchPlan,
             density = density,
+            presentationVisible = documentState.presentationVisible,
         ),
     )
 }
@@ -257,6 +281,7 @@ private enum class LayoutSlotId {
     TOOLBAR_CENTER,
     TOOLBAR_TRAILING,
     CHAPTER_NAVIGATION,
+    SINGLE_PANE_TOP_BAR,
     EDITOR,
     TOOL_PANE,
     TOOL_RAIL,
@@ -372,9 +397,9 @@ private fun WorkbenchToolbarSlots(
     onRedo: () -> Unit,
     syncState: com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState,
 ) {
-    // #640 评论 5442422507：slot 根节点占 Rust rect（layoutId 被 measure policy 取），
-    // fitInside 在节点内部把内容 reposition 到 safe region（绕过 ancestor consumption）。
-    val safeDrawingRulers = WindowInsetsRulers.SafeDrawing.current
+    // #640 评论 5443102488：fitInside 已移到各 toolbar composable 内部的 Row/content 上
+    // （Surface 保持完整 Rust rect 画背景，内容避开 safe region，符合 Material3 TopAppBar
+    // "背景画到系统栏、内容避开系统栏"原则）。slot 根节点只挂 layoutId 给 measure policy 取。
     WritingToolbarLeadingGroup(
         showBack = deps.chrome.showBack,
         chapterTreeCollapsed = state.chapterTreeCollapsed,
@@ -385,10 +410,10 @@ private fun WorkbenchToolbarSlots(
                 onRedo = onRedo,
                 onToggleChapterTree = state.onToggleChapterTree,
             ),
-        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_LEADING).fitInside(safeDrawingRulers),
+        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_LEADING),
     )
     WritingToolbarCenterSlot(
-        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_CENTER).fitInside(safeDrawingRulers),
+        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_CENTER),
     )
     WritingToolbarTrailingGroup(
         actions = deps.chrome.actions,
@@ -399,7 +424,7 @@ private fun WorkbenchToolbarSlots(
                 onSearch = callbacks.onSearch,
                 onSettings = callbacks.onSettings,
             ),
-        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_TRAILING).fitInside(safeDrawingRulers),
+        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_TRAILING),
     )
 }
 
@@ -464,8 +489,8 @@ private fun WorkbenchChromeContentSlots(
  * #640 评论 5441849412 问题2：构造 wide workspace measure policy — 按 [compositionMode] 分发。
  *
  * - FULL_WORKBENCH + plan 非空：按七角色 bounds measure/place 所有 slot（含 Editor）；
- * - EDITOR_ONLY（预热/plan 非 WORKBENCH/桥失败）：只按 Rust Editor bounds measure/place Editor slot,
- *   其他 chrome slot 不组合。
+ * - SINGLE_PANE_WITH_TOP_BAR：在 Rust Editor free-region 内测量 singlePaneTopBar + Editor body；
+ * - EDITOR_ONLY_PREWARM：只按 Rust Editor bounds measure/place Editor slot，其他 chrome slot 不组合。
  *
  * EditorPane 始终是 layoutId=EDITOR 的 slot，call site 不变；切换 compositionMode 只改变 place 策略,
  * 不重建 AndroidView。
@@ -474,17 +499,32 @@ private fun wideWorkspaceMeasurePolicy(
     compositionMode: WideWorkspaceCompositionMode,
     workbenchPlan: AndroidWorkbenchLayoutPlan?,
     density: Density,
+    presentationVisible: Boolean,
 ): MeasurePolicy =
     MeasurePolicy { measurables, constraints ->
-        if (compositionMode == WideWorkspaceCompositionMode.FULL_WORKBENCH && workbenchPlan != null) {
-            measureAndPlaceWorkbench(
-                measurables,
-                constraints,
-                WorkbenchBounds.fromPlan(workbenchPlan),
-                density,
-            )
-        } else {
-            measureAndPlaceEditorOnly(measurables, constraints, workbenchPlan, density)
+        when (compositionMode) {
+            WideWorkspaceCompositionMode.FULL_WORKBENCH -> {
+                if (workbenchPlan != null) {
+                    measureAndPlaceWorkbench(
+                        measurables,
+                        constraints,
+                        WorkbenchBounds.fromPlan(workbenchPlan),
+                        density,
+                    )
+                } else {
+                    measureAndPlaceEditorOnly(measurables, constraints, workbenchPlan, density)
+                }
+            }
+            WideWorkspaceCompositionMode.SINGLE_PANE_WITH_TOP_BAR ->
+                measureAndPlaceSinglePaneWithTopBar(
+                    measurables,
+                    constraints,
+                    workbenchPlan,
+                    density,
+                    presentationVisible,
+                )
+            WideWorkspaceCompositionMode.EDITOR_ONLY_PREWARM ->
+                measureAndPlaceEditorOnly(measurables, constraints, workbenchPlan, density)
         }
     }
 
@@ -534,6 +574,90 @@ private fun MeasureScope.measureAndPlaceEditorOnly(
         }
     }
 }
+
+/**
+ * #640 评论 5443102488：SINGLE_PANE_WITH_TOP_BAR measure + place — 在 Rust Editor free-region 内测量 top bar + body。
+ *
+ * root region = Rust [AndroidWorkbenchLayoutPlan] 的 EDITOR 角色 bounds（plan 非空且 bounds 非空），
+ * 否则回落整个 constraints（plan=null 桥失败）。在 root region 内：
+ * - 测量 singlePaneTopBar（width = root width，height unconstrained）取其实际高度；
+ * - body height = root height - top bar height（钳到非负）；
+ * - place top bar 在 (root.left, root.top)（仅 presentationVisible=true）；
+ * - place EditorPane body 在 (root.left, root.top + topBarHeight)。
+ *
+ * hidden 与 visible 的 body bounds 完全相同（top bar 始终测量，只 place 随 visible 切换），
+ * visible 切换不触发 SujianEditorView onSizeChanged，ready 一次成立后稳定。
+ * EditorPane 仍是 layoutId=EDITOR 的 slot，call site 不变。
+ */
+private fun MeasureScope.measureAndPlaceSinglePaneWithTopBar(
+    measurables: List<Measurable>,
+    constraints: Constraints,
+    workbenchPlan: AndroidWorkbenchLayoutPlan?,
+    density: Density,
+    presentationVisible: Boolean,
+): MeasureResult {
+    val byId = measurables.associateBy { it.layoutId as? LayoutSlotId }
+    val topBarMeasurable = byId[LayoutSlotId.SINGLE_PANE_TOP_BAR]
+    val editorMeasurable = byId[LayoutSlotId.EDITOR]
+        ?: return layout(constraints.maxWidth, constraints.maxHeight) {}
+
+    val editorBounds = workbenchPlan?.placementFor(AndroidWorkbenchRole.EDITOR)?.bounds
+    val rootRegion =
+        if (editorBounds != null && !editorBounds.isEmpty) {
+            with(density) {
+                SinglePaneRootRegion(
+                    leftPx = editorBounds.leftDp.dp.roundToPx(),
+                    topPx = editorBounds.topDp.dp.roundToPx(),
+                    widthPx = editorBounds.widthDp.dp.roundToPx(),
+                    heightPx = editorBounds.heightDp.dp.roundToPx(),
+                )
+            }
+        } else {
+            SinglePaneRootRegion(
+                leftPx = 0,
+                topPx = 0,
+                widthPx = constraints.maxWidth,
+                heightPx = constraints.maxHeight,
+            )
+        }
+
+    val topBarPlaceable =
+        topBarMeasurable?.measure(
+            constraints.copy(
+                minWidth = rootRegion.widthPx,
+                maxWidth = rootRegion.widthPx,
+                minHeight = 0,
+                maxHeight = Constraints.Infinity,
+            ),
+        )
+    val topBarHeight = (topBarPlaceable?.height ?: 0).coerceIn(0, rootRegion.heightPx)
+    val bodyHeight = (rootRegion.heightPx - topBarHeight).coerceAtLeast(0)
+
+    val editorPlaceable =
+        editorMeasurable.measure(
+            constraints.copy(
+                minWidth = rootRegion.widthPx,
+                maxWidth = rootRegion.widthPx,
+                minHeight = bodyHeight,
+                maxHeight = bodyHeight,
+            ),
+        )
+
+    return layout(constraints.maxWidth, constraints.maxHeight) {
+        if (presentationVisible) {
+            topBarPlaceable?.place(rootRegion.leftPx, rootRegion.topPx)
+        }
+        editorPlaceable.place(rootRegion.leftPx, rootRegion.topPx + topBarHeight)
+    }
+}
+
+/** single-pane root region（px）— 提取以降低 [measureAndPlaceSinglePaneWithTopBar] 圈复杂度。 */
+private data class SinglePaneRootRegion(
+    val leftPx: Int,
+    val topPx: Int,
+    val widthPx: Int,
+    val heightPx: Int,
+)
 
 /**
  * 构造 workbench measure policy — 提取以降低 [wideWorkspaceMeasurePolicy] 行数。

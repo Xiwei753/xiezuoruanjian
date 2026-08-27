@@ -18,20 +18,21 @@ import org.junit.Test
  * hierarchy 改变时 View 会被丢弃并重新 factory。所以平板/大屏仍是"预热一个 View，显示时再造一个 View"。
  *
  * 重构后 EditorPane 始终在 [WideWritingWorkspace] 的 Layout content 唯一 call site（layoutId=EDITOR），
- * 切换 compositionMode 只增删 Workbench chrome slot，不移动 Editor 本身。
+ * 切换 compositionMode 只增删 Workbench chrome slot / single-pane top bar slot，不移动 Editor 本身。
  *
- * #640 评论 5442422507：EditorPane 唯一 call site 由源码结构保证（EditorPane 始终在同一 call site，
- * 不在 EDITOR_ONLY/FULL_WORKBENCH 两分支各自创建）。不再用纯函数 identity 锁此不变量
+ * #640 评论 5442422507 / 5443102488：EditorPane 唯一 call site 由源码结构保证（EditorPane 始终在同一 call site，
+ * 不在 EDITOR_ONLY_PREWARM/SINGLE_PANE_WITH_TOP_BAR/FULL_WORKBENCH 三分支各自创建）。不再用纯函数 identity 锁此不变量
  * （[WideEditorSlotIdentity]/[resolveWideEditorSlotIdentity] 已删除 — 纯测试专用生产逻辑，
  * 无生产消费者，"自己证明自己"）。本测改为锁 [resolveWideWorkspaceCompositionMode] 决策
- * （hidden→EDITOR_ONLY、visible+WORKBENCH→FULL_WORKBENCH 等），这是 AndroidView 不重建的前提：
- * compositionMode 决策正确 + EditorPane 在唯一 call site（源码结构）→ 切换不重建 View。
+ * （hidden+WORKBENCH→EDITOR_ONLY_PREWARM、visible+WORKBENCH→FULL_WORKBENCH、plan=null/SINGLE_PANE→SINGLE_PANE_WITH_TOP_BAR 等），
+ * 这是 AndroidView 不重建的前提：compositionMode 决策正确 + EditorPane 在唯一 call site（源码结构）
+ * → 三种 wide 模式切换不重建 View。
  */
 class EditorPresentationWideIdentityTest {
     @Test
     fun hiddenToVisible_presenterVisibleFalseToTrue_slotIdentityUnchanged() {
         // 模拟 presentationVisible=false → true 切换（plan=WORKBENCH）。
-        // 预热阶段（hidden）：compositionMode=EDITOR_ONLY。
+        // 预热阶段（hidden）：compositionMode=EDITOR_ONLY_PREWARM。
         val workbenchPlan = workbenchPlan(AndroidResolvedWorkspaceMode.WORKBENCH)
         val hiddenMode =
             resolveWideWorkspaceCompositionMode(
@@ -46,8 +47,8 @@ class EditorPresentationWideIdentityTest {
             )
 
         assertEquals(
-            "hidden 阶段 compositionMode 必须为 EDITOR_ONLY（不进入完整 Workbench shell）",
-            WideWorkspaceCompositionMode.EDITOR_ONLY,
+            "hidden 阶段 compositionMode 必须为 EDITOR_ONLY_PREWARM（不进入完整 Workbench shell，只预热 Editor rect）",
+            WideWorkspaceCompositionMode.EDITOR_ONLY_PREWARM,
             hiddenMode,
         )
         assertEquals(
@@ -75,8 +76,8 @@ class EditorPresentationWideIdentityTest {
             )
 
         assertEquals(
-            "plan=SINGLE_PANE 时 compositionMode 必须为 EDITOR_ONLY（fallback 不进 Workbench shell）",
-            WideWorkspaceCompositionMode.EDITOR_ONLY,
+            "plan=SINGLE_PANE 时 compositionMode 必须为 SINGLE_PANE_WITH_TOP_BAR（在 Rust Editor free-region 内测量 top bar + body）",
+            WideWorkspaceCompositionMode.SINGLE_PANE_WITH_TOP_BAR,
             singlePaneMode,
         )
         assertEquals(
@@ -101,8 +102,8 @@ class EditorPresentationWideIdentityTest {
             )
 
         assertEquals(
-            "plan=null（桥失败）时 compositionMode 必须为 EDITOR_ONLY",
-            WideWorkspaceCompositionMode.EDITOR_ONLY,
+            "plan=null（桥失败）时 compositionMode 必须为 SINGLE_PANE_WITH_TOP_BAR",
+            WideWorkspaceCompositionMode.SINGLE_PANE_WITH_TOP_BAR,
             nullPlanMode,
         )
         assertEquals(

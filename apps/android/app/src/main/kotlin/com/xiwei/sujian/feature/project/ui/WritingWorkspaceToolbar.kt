@@ -3,12 +3,14 @@ package com.xiwei.sujian.feature.project.ui
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fitInside
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.WindowInsetsRulers
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.presentation.screen.SujianChromeAction
@@ -46,11 +48,18 @@ internal fun WritingToolbarLeadingGroup(
     callbacks: WritingToolbarLeadingCallbacks,
     modifier: Modifier = Modifier,
 ) {
+    // #640 评论 5443102488：Surface 占 Rust toolbar slot 完整 rect（背景画到系统栏），
+    // fitInside(SafeDrawing) 挂在内部 Row 上让内容避开 safe region（状态栏/刘海/IME），
+    // 不缩掉 toolbar 背景，避免状态栏区域露出下面透明 Scaffold。
+    val safeDrawingRulers = WindowInsetsRulers.SafeDrawing.current
     Surface(
         modifier = modifier,
         color = MaterialTheme.colorScheme.surface,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fitInside(safeDrawingRulers),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             if (showBack) {
                 SujianIconButton(
                     onClick = callbacks.onBack,
@@ -89,12 +98,14 @@ internal fun WritingToolbarLeadingGroup(
 /** 中组 — 正文工具区域 content slot（空时不放伪按钮）。 */
 @Composable
 internal fun WritingToolbarCenterSlot(modifier: Modifier = Modifier) {
+    // #640 评论 5443102488：Surface 占完整 rect，fitInside 挂在内部 Box 上。
+    val safeDrawingRulers = WindowInsetsRulers.SafeDrawing.current
     Surface(
         modifier = modifier,
         color = Color.Transparent,
     ) {
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().fitInside(safeDrawingRulers),
             contentAlignment = Alignment.Center,
         ) {
             // 当前无真实正文工具功能，保持空 slot（不放"点了没反应"的假按钮）。
@@ -117,11 +128,16 @@ internal fun WritingToolbarTrailingGroup(
     callbacks: WritingToolbarTrailingCallbacks,
     modifier: Modifier = Modifier,
 ) {
+    // #640 评论 5443102488：Surface 占 Rust toolbar slot 完整 rect，fitInside 挂在内部 Row 上。
+    val safeDrawingRulers = WindowInsetsRulers.SafeDrawing.current
     Surface(
         modifier = modifier,
         color = MaterialTheme.colorScheme.surface,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fitInside(safeDrawingRulers),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             actions.forEach { action ->
                 WritingToolbarTrailingAction(
                     action = action,
