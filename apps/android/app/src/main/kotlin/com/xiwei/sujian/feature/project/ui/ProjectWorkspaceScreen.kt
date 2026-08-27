@@ -25,6 +25,7 @@ import com.xiwei.sujian.feature.editor.presentation.requestOpenChapter
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -167,6 +168,55 @@ internal fun ProjectWorkspaceScreen(
         }
     }
 
+    fun openChapter(
+        projectId: String,
+        projectTitle: String,
+        volumeId: String,
+        chapterId: String,
+        chapterTitle: String,
+        onLoadFailed: (() -> Unit)? = null,
+    ) {
+            coroutineScope.launch {
+                val requestId = ++navigationRequestId
+                val result =
+                    editorViewModel.requestOpenChapter(
+                        projectId,
+                        volumeId,
+                        chapterId,
+                        chapterTitle,
+                    )
+                when (result) {
+                    is ChapterSwitchResult.Success -> {
+                        val target =
+                            PreparedEditorTarget(
+                                projectId = projectId,
+                                volumeId = volumeId,
+                                chapterId = chapterId,
+                                chapterTitle = chapterTitle,
+                            )
+                        preparedEditorTarget = target
+                        editorHost?.awaitPresentationReady(target.targetId)
+                        currentCoroutineContext().ensureActive()
+                        if (navigationRequestId == requestId && preparedEditorTarget == target) {
+                            appState.selectProject(projectId, projectTitle)
+                            appState.selectChapter(volumeId, chapterId, chapterTitle)
+                            workspaceNavState.navigateToEditor(projectId, volumeId, chapterId)
+                        }
+                    }
+                    is ChapterSwitchResult.SaveFailed,
+                    ChapterSwitchResult.Stale,
+                    -> {
+                        // 错误提示已由 ViewModel 事件（toast）发出。
+                    }
+                    is ChapterSwitchResult.LoadFailed -> {
+                        if (navigationRequestId == requestId) {
+                            onLoadFailed?.invoke()
+                        }
+                    }
+                }
+            }
+    }
+
     // #640 A.8/A.9：章节切换失败回滚回调 — 提取为共享变量，供窄屏和宽屏共用。
     val onChapterSwitchFailed: (
         (
@@ -213,53 +263,11 @@ internal fun ProjectWorkspaceScreen(
                 return@launch
             }
 
-            // 4. 用真实标题打开章节
-            val requestId = ++navigationRequestId
-            val result =
-                editorViewModel.requestOpenChapter(
-                    edit.projectId,
-                    edit.volumeId,
-                    edit.chapterId,
-                    chapter.title,
-                )
-            when (result) {
-                is ChapterSwitchResult.Success -> {
-                    // #640 A.8：先设 preparedEditorTarget（让稳定层提前 layout），
-                    // 再 awaitPresentationReady，再校验 target 未过期，最后 navigateToEditor。
-                    val target =
-                        PreparedEditorTarget(
-                            projectId = edit.projectId,
-                            volumeId = edit.volumeId,
-                            chapterId = edit.chapterId,
-                            chapterTitle = chapter.title,
-                        )
-                    if (isWideLayout) {
-                        appState.selectProject(edit.projectId, projectTitle)
-                        appState.selectChapter(edit.volumeId, edit.chapterId, chapter.title)
-                        workspaceNavState.navigateToEditor(edit.projectId, edit.volumeId, edit.chapterId)
-                    } else {
-                        preparedEditorTarget = target
-                        editorHost?.awaitPresentationReady(target.targetId)
-                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                        if (navigationRequestId == requestId && preparedEditorTarget == target) {
-                            appState.selectProject(edit.projectId, projectTitle)
-                            appState.selectChapter(edit.volumeId, edit.chapterId, chapter.title)
-                            workspaceNavState.navigateToEditor(edit.projectId, edit.volumeId, edit.chapterId)
-                        }
-                    }
-                }
-                // #630 评论15 项1：Stale 表示已被更新的打开请求替代，
-                // 必须零 UI 副作用直接 return，避免和新请求的导航抢位。
-                ChapterSwitchResult.Stale -> return@launch
-                // #630 评论15 项1：SaveFailed 时章节切换事务已恢复旧 session/旧 UI，
-                // 调用层不能再强制切 project + 清 chapter，保持原状态。
-                is ChapterSwitchResult.SaveFailed -> return@launch
-                // #630 评论15 项1：只有目标 LoadFailed（章节已删除）才回到该作品章节树。
-                is ChapterSwitchResult.LoadFailed -> {
-                    appState.selectProject(edit.projectId, projectTitle)
-                    appState.clearChapterSelection()
-                    workspaceNavState.navigateToChapterTree(edit.projectId)
-                }
+            // 4. 用真实标题走统一章节打开流程
+            openChapter(edit.projectId, projectTitle, edit.volumeId, edit.chapterId, chapter.title) {
+                appState.selectProject(edit.projectId, projectTitle)
+                appState.clearChapterSelection()
+                workspaceNavState.navigateToChapterTree(edit.projectId)
             }
         }
     }
@@ -289,7 +297,6 @@ internal fun ProjectWorkspaceScreen(
             currentChapterId = currentChapterId,
             currentChapterTitle = currentChapterTitle,
             projectRepository = projectRepository,
-            editorViewModel = editorViewModel,
             projectCardMinWidthDp = projectCardMinWidthDp,
             workbenchLayoutState = workbenchLayoutState,
             onTopLevelSettings = onTopLevelSettings,
@@ -304,30 +311,12 @@ internal fun ProjectWorkspaceScreen(
             },
             onContinueRecentEdit = handleContinueRecentEdit,
             onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                if (currentProjectId != null) {
-                    coroutineScope.launch {
-                        val result =
-                            editorViewModel.requestOpenChapter(
-                                currentProjectId,
-                                volumeId,
-                                chapterId,
-                                chapterTitle,
-                            )
-                        when (result) {
-                            is ChapterSwitchResult.Success -> {
-                                appState.selectChapter(volumeId, chapterId, chapterTitle)
-                                workspaceNavState.navigateToEditor(currentProjectId, volumeId, chapterId)
-                            }
-                            is ChapterSwitchResult.SaveFailed,
-                            is ChapterSwitchResult.LoadFailed,
-                            ChapterSwitchResult.Stale,
-                            -> {
-                                // 错误提示已由 ViewModel 事件（toast）发出。
-                            }
-                        }
-                    }
+                currentProjectId?.let { projectId ->
+                    val projectTitle = appState.projectSummaries.firstOrNull { it.id == projectId }?.title.orEmpty()
+                    openChapter(projectId, projectTitle, volumeId, chapterId, chapterTitle)
                 }
             },
+            preparedEditorTarget = preparedEditorTarget,
             onBack = {
                 coroutineScope.launch { workspaceNavState.guardedBack() }
             },
@@ -367,47 +356,13 @@ internal fun ProjectWorkspaceScreen(
                     onContinueRecentEdit = handleContinueRecentEdit,
                     onSelectChapter = { volumeId, chapterId, chapterTitle ->
                         if (currentProjectId != null) {
-                            coroutineScope.launch {
-                                val requestId = ++navigationRequestId
-                                val result =
-                                    editorViewModel.requestOpenChapter(
-                                        currentProjectId,
-                                        volumeId,
-                                        chapterId,
-                                        chapterTitle,
-                                    )
-                                when (result) {
-                                    is ChapterSwitchResult.Success -> {
-                                        // 先设 preparedEditorTarget，让稳定层提前 layout；
-                                        // presentation 就绪后只提交仍是最新请求的导航。
-                                        val target =
-                                            PreparedEditorTarget(
-                                                projectId = currentProjectId,
-                                                volumeId = volumeId,
-                                                chapterId = chapterId,
-                                                chapterTitle = chapterTitle,
-                                            )
-                                        preparedEditorTarget = target
-                                        editorHost?.awaitPresentationReady(target.targetId)
-                                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                                        // 校验：协程未取消 + preparedEditorTarget 仍是当前 target + 请求仍是最新
-                                        if (navigationRequestId == requestId &&
-                                            preparedEditorTarget?.projectId == currentProjectId &&
-                                            preparedEditorTarget?.volumeId == volumeId &&
-                                            preparedEditorTarget?.chapterId == chapterId
-                                        ) {
-                                            appState.selectChapter(volumeId, chapterId, chapterTitle)
-                                            workspaceNavState.navigateToEditor(currentProjectId, volumeId, chapterId)
-                                        }
-                                    }
-                                    is ChapterSwitchResult.SaveFailed,
-                                    is ChapterSwitchResult.LoadFailed,
-                                    ChapterSwitchResult.Stale,
-                                    -> {
-                                        // 错误提示已由 ViewModel 事件（toast）发出；零导航副作用。
-                                    }
-                                }
-                            }
+                            openChapter(
+                                currentProjectId,
+                                appState.projectSummaries.firstOrNull { it.id == currentProjectId }?.title.orEmpty(),
+                                volumeId,
+                                chapterId,
+                                chapterTitle,
+                            )
                         }
                     },
                     modifier = Modifier.fillMaxSize(),
@@ -487,7 +442,6 @@ private fun WideLayoutContent(
     currentChapterId: String?,
     currentChapterTitle: String,
     projectRepository: com.xiwei.sujian.feature.project.data.ProjectRepository,
-    editorViewModel: EditorViewModel,
     projectCardMinWidthDp: Float,
     workbenchLayoutState: WideWorkspaceLayoutState,
     onTopLevelSettings: () -> Unit,
@@ -504,24 +458,60 @@ private fun WideLayoutContent(
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     onContinueRecentEdit: (edit: RecentEdit) -> Unit,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
+    preparedEditorTarget: PreparedEditorTarget?,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    when (location) {
-        is WorkspaceLocation.ProjectList ->
+    val documentProjectId = preparedEditorTarget?.projectId ?: currentProjectId
+
+    Box(modifier = modifier.fillMaxSize()) {
+        // 唯一的宽屏编辑器 slot 在非 Editor 位置也保留，作为后台预热宿主。
+        documentProjectId?.let { projectId ->
+            WideWritingWorkspace(
+                deps =
+                    WideWorkspaceDeps(
+                        appState = appState,
+                        projectRepository = projectRepository,
+                        projectWorkspaceActions = projectWorkspaceActions,
+                        chrome = chrome,
+                    ),
+                documentState =
+                    WideWorkspaceDocumentState(
+                        currentProjectId = projectId,
+                        currentVolumeId = preparedEditorTarget?.volumeId ?: currentVolumeId,
+                        currentChapterId = preparedEditorTarget?.chapterId ?: currentChapterId,
+                        currentChapterTitle = preparedEditorTarget?.chapterTitle ?: currentChapterTitle,
+                        presentationVisible = location is WorkspaceLocation.Editor,
+                    ),
+                layoutState = workbenchLayoutState,
+                callbacks =
+                    WideWorkspaceCallbacks(
+                        onBack = onBack,
+                        onSync = onTopLevelSync,
+                        onSearch = onTopLevelSearch,
+                        onSettings = onTopLevelSettings,
+                        onChapterSwitch = onSelectChapter,
+                        onChapterSwitchFailed = onChapterSwitchFailed,
+                    ),
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        when (location) {
+            is WorkspaceLocation.ProjectList ->
             ProjectListContent(
                 appState = appState,
                 workspaceActions = projectListActions,
                 onSelectProject = onSelectProject,
                 onContinueRecentEdit = onContinueRecentEdit,
-                modifier = modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize(),
                 layoutConfig =
                     ProjectListLayoutConfig(
                         workspaceLayoutMode = WorkspaceLayoutMode.WORKBENCH,
                         projectCardMinWidthDp = projectCardMinWidthDp,
                     ),
             )
-        is WorkspaceLocation.ChapterTree ->
+            is WorkspaceLocation.ChapterTree ->
             Box(modifier = modifier.fillMaxSize()) {
                 if (currentProjectId != null) {
                     ChapterTreeContent(
@@ -534,50 +524,7 @@ private fun WideLayoutContent(
                     )
                 }
             }
-        is WorkspaceLocation.Editor ->
-            if (currentProjectId != null) {
-                WideWritingWorkspace(
-                    deps =
-                        WideWorkspaceDeps(
-                            appState = appState,
-                            projectRepository = projectRepository,
-                            projectWorkspaceActions = projectWorkspaceActions,
-                            chrome = chrome,
-                        ),
-                    documentState =
-                        WideWorkspaceDocumentState(
-                            currentProjectId = currentProjectId,
-                            currentVolumeId = currentVolumeId,
-                            currentChapterId = currentChapterId,
-                            currentChapterTitle = currentChapterTitle,
-                        ),
-                    editorViewModel = editorViewModel,
-                    layoutState = workbenchLayoutState,
-                    callbacks =
-                        WideWorkspaceCallbacks(
-                            onBack = onBack,
-                            onSync = onTopLevelSync,
-                            onSearch = onTopLevelSearch,
-                            onSettings = onTopLevelSettings,
-                            onChapterSwitchFailed = onChapterSwitchFailed,
-                        ),
-                    modifier = modifier.fillMaxSize(),
-                )
-            } else {
-                // currentProjectId 为 null 但 location 是 Editor — 不可能发生，
-                // 但稳妥起见回退到 ProjectList。
-                ProjectListContent(
-                    appState = appState,
-                    workspaceActions = projectListActions,
-                    onSelectProject = onSelectProject,
-                    onContinueRecentEdit = onContinueRecentEdit,
-                    modifier = modifier.fillMaxSize(),
-                    layoutConfig =
-                        ProjectListLayoutConfig(
-                            workspaceLayoutMode = WorkspaceLayoutMode.WORKBENCH,
-                            projectCardMinWidthDp = projectCardMinWidthDp,
-                        ),
-                )
-            }
+            is WorkspaceLocation.Editor -> Unit
+        }
     }
 }

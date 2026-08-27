@@ -10,7 +10,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -36,14 +35,9 @@ import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
 import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchRole
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
-import com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult
-import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
-import com.xiwei.sujian.feature.editor.presentation.requestOpenChapter
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
 import com.xiwei.sujian.feature.project.data.ProjectRepository
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
 
 /**
  * 大屏写作工作台依赖 — 打包传递，避免函数参数超出门禁阈值。
@@ -63,6 +57,7 @@ internal data class WideWorkspaceDocumentState(
     val currentVolumeId: String?,
     val currentChapterId: String?,
     val currentChapterTitle: String,
+    val presentationVisible: Boolean = true,
 )
 
 /**
@@ -73,6 +68,7 @@ internal data class WideWorkspaceCallbacks(
     val onSync: () -> Unit,
     val onSearch: () -> Unit,
     val onSettings: () -> Unit,
+    val onChapterSwitch: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
     val onChapterSwitchFailed: (
         (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
     )? = null,
@@ -126,7 +122,6 @@ internal data class WideWorkspaceLayoutState(
 internal fun WideWritingWorkspace(
     deps: WideWorkspaceDeps,
     documentState: WideWorkspaceDocumentState,
-    editorViewModel: EditorViewModel,
     layoutState: WideWorkspaceLayoutState,
     callbacks: WideWorkspaceCallbacks,
     modifier: Modifier = Modifier,
@@ -176,7 +171,6 @@ internal fun WideWritingWorkspace(
             WorkbenchSlots(
                 deps = deps,
                 documentState = documentState,
-                editorViewModel = editorViewModel,
                 callbacks = callbacks,
                 state = slotState,
                 bounds = bounds,
@@ -261,12 +255,10 @@ private data class WorkbenchSlotState(
 private fun WorkbenchSlots(
     deps: WideWorkspaceDeps,
     documentState: WideWorkspaceDocumentState,
-    editorViewModel: EditorViewModel,
     callbacks: WideWorkspaceCallbacks,
     state: WorkbenchSlotState,
     bounds: WorkbenchBounds,
 ) {
-    val coroutineScope = rememberCoroutineScope()
     val editorWindowHost = LocalEditorWindowHost.current
     val onUndo: () -> Unit = { editorWindowHost?.performUndo() }
     val onRedo: () -> Unit = { editorWindowHost?.performRedo() }
@@ -291,8 +283,6 @@ private fun WorkbenchSlots(
         callbacks = callbacks,
         env =
             WorkbenchContentEnv(
-                editorViewModel = editorViewModel,
-                coroutineScope = coroutineScope,
                 tools = tools,
                 toolPaneContent = toolPaneContent,
             ),
@@ -341,8 +331,6 @@ private fun WorkbenchToolbarSlots(
  * Content slot 所需的编辑环境 — 打包传递，避免函数参数超出门禁阈值。
  */
 private data class WorkbenchContentEnv(
-    val editorViewModel: EditorViewModel,
-    val coroutineScope: CoroutineScope,
     val tools: List<WritingToolItem>,
     val toolPaneContent: (@Composable () -> Unit)?,
 )
@@ -365,18 +353,7 @@ private fun WorkbenchContentSlots(
             projectId = documentState.currentProjectId,
             projectRepository = deps.projectRepository,
             workspaceActions = deps.projectWorkspaceActions,
-            onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                ChapterSelectContext(
-                    coroutineScope = env.coroutineScope,
-                    editorViewModel = env.editorViewModel,
-                    appState = deps.appState,
-                    projectId = documentState.currentProjectId,
-                ).handleChapterSelect(
-                    volumeId = volumeId,
-                    chapterId = chapterId,
-                    chapterTitle = chapterTitle,
-                )
-            },
+            onSelectChapter = callbacks.onChapterSwitch,
             onError = deps.appState::reportWorkspaceError,
             modifier = Modifier.layoutId(LayoutSlotId.CHAPTER_NAVIGATION),
         )
@@ -489,50 +466,6 @@ private fun MeasureScope.measureAndPlaceWorkbench(
     }
 
 /**
- * 章节选择事务上下文 — 打包传递，避免函数参数超出门禁阈值。
- */
-private data class ChapterSelectContext(
-    val coroutineScope: CoroutineScope,
-    val editorViewModel: EditorViewModel,
-    val appState: SujianAppState,
-    val projectId: String,
-)
-
-/**
- * 章节选择事务 — 提取以降低 [WideWritingWorkspace] 认知复杂度。
- * 复用 ProjectWorkspaceScreen 的章节切换事务入口 — 事务成功后才提交业务选择。
- *
- * 宽屏章节树已经拥有稳定的 EditorPane 生命周期，选择事务成功后直接提交选择；
- * 导航进入 Editor 后由该 pane 完成绑定，不能等待当前尚未组合的 target。
- */
-private fun ChapterSelectContext.handleChapterSelect(
-    volumeId: String,
-    chapterId: String,
-    chapterTitle: String,
-) {
-    coroutineScope.launch {
-        val result =
-            editorViewModel.requestOpenChapter(
-                projectId,
-                volumeId,
-                chapterId,
-                chapterTitle,
-            )
-        when (result) {
-            is ChapterSwitchResult.Success -> {
-                appState.selectChapter(volumeId, chapterId, chapterTitle)
-            }
-            is ChapterSwitchResult.SaveFailed,
-            is ChapterSwitchResult.LoadFailed,
-            ChapterSwitchResult.Stale,
-            -> {
-                // 错误提示已由 ViewModel 事件（toast）发出。
-            }
-        }
-    }
-}
-
-/**
  * 正文编辑器面板 — 提取以降低 [WideWritingWorkspace] 认知复杂度。
  * 复用 [SujianEditorHost]，不创建第二个编辑器。
  */
@@ -557,6 +490,7 @@ private fun EditorPane(
                 chapterTitle = documentState.currentChapterTitle,
                 modifier = Modifier.fillMaxSize(),
                 onChapterSwitchFailed = onChapterSwitchFailed,
+                presentationVisible = documentState.presentationVisible,
             )
         } else {
             Box(
