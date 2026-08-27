@@ -11,6 +11,7 @@ import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
 import com.xiwei.sujian.feature.editor.visual.VisualFrameSnapshot
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -998,5 +999,189 @@ class RebasePlannerMappedRebaseReproTest {
                 result[0].fixedRevealClipRect,
             )
         }
+    }
+
+    // ---- 场景 10：Move(DESTINATION_RECT) -> CrossfadeOld，staticSuppressionMode 应翻成 NONE ----
+
+    /**
+     * #639 评论 5433981610：旧 Move 的默认 staticSuppressionMode 是 DESTINATION_RECT
+     * （Move 负责 suppress 新位置的静态字）。Core pair-aware mapping 把旧 Move 接到
+     * CrossfadeOld 时，视觉 ownership 已翻面成"旧侧覆盖层"，suppression 必须翻成 NONE。
+     *
+     * 期望：rebased staticSuppressionMode == NONE；renderer 的 suppression regions 不能
+     * 包含 oldCurrentRect（否则 renderer 会在旧位置挖静态洞，旁边文字被切掉/闪空块）。
+     */
+    @Test
+    fun repro10_moveToCrossfadeOld_suppressionModeShouldFlipToNone() {
+        val oldCurrentRect = RectF(50f, 0f, 150f, 20f)
+        val newDestRect = RectF(200f, 0f, 300f, 20f)
+
+        val slice = makeCrossfadeOldSlice(newDestRect)
+        val rebaseState =
+            makeRebaseState(
+                role = SliceRole.Move,
+                rect = oldCurrentRect,
+                currentAlpha = 1f,
+                targetAlpha = 1f,
+                staticSuppressionMode = StaticSuppressionMode.DESTINATION_RECT,
+            )
+
+        val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
+
+        // staticSuppressionMode 必须翻成 NONE
+        assertEquals(
+            "Move(DESTINATION_RECT) -> CrossfadeOld：staticSuppressionMode 必须翻成 NONE，" +
+                "实际=${rebased.staticSuppressionMode} → renderer 会在 oldCurrentRect 挖静态洞",
+            StaticSuppressionMode.NONE,
+            rebased.staticSuppressionMode,
+        )
+
+        // renderer 的 suppression regions 不能包含 oldCurrentRect
+        val renderer = AndroidTextAnimationRenderer()
+        val transaction =
+            PreparedVisualTransaction(
+                transactionId = 1L,
+                oldRevision = null,
+                newRevision = null,
+                staticPatches = emptyList(),
+                animatedSlices = listOf(rebased),
+                ownedSnapshotIds = emptySet(),
+                referencedSnapshotIds = emptySet(),
+                selectionDecoration = null,
+                preeditDecoration = null,
+                cursorTransition = null,
+                durationMs = 300L,
+            )
+        val regions = renderer.computeStaticSuppressionRegions(transaction, 0f)
+        val containsOldRect =
+            regions.any { r ->
+                kotlin.math.abs(r.left - oldCurrentRect.left) < 0.01f &&
+                    kotlin.math.abs(r.right - oldCurrentRect.right) < 0.01f
+            }
+        assertFalse(
+            "Move(DESTINATION_RECT) -> CrossfadeOld：suppression regions 不能包含 oldCurrentRect=$oldCurrentRect，" +
+                "实际 regions=$regions → renderer 在旧位置挖静态洞，旁边文字被切掉",
+            containsOldRect,
+        )
+    }
+
+    // ---- 场景 11：Insert(reveal=0.4, DESTINATION_RECT) -> CrossfadeOld(fixedClip)，NONE ----
+
+    /**
+     * #639 评论 5433981610：旧 Insert reveal 到 40%，默认 staticSuppressionMode 是
+     * DESTINATION_RECT。Core pair-aware mapping 接到 CrossfadeOld 后，视觉 ownership 翻面，
+     * suppression 必须翻成 NONE。fixed clip 仍存在、位置仍锁死。
+     *
+     * 期望：fixed clip 仍存在、位置仍锁死在 oldCurrentRect、staticSuppressionMode == NONE；
+     * renderer 画冻结半截旧字淡出，但不能在旧位置挖静态洞。
+     */
+    @Test
+    fun repro11_insertRevealingToCrossfadeOld_suppressionModeShouldFlipToNoneFixedClipPreserved() {
+        val oldCurrentRect = RectF(30f, 0f, 130f, 20f)
+        val newDestRect = RectF(200f, 0f, 300f, 20f)
+
+        val slice = makeCrossfadeOldSlice(newDestRect)
+        val rebaseState =
+            makeRebaseState(
+                role = SliceRole.Insert,
+                rect = oldCurrentRect,
+                currentAlpha = 1f,
+                targetAlpha = 1f,
+                revealMode = TextRevealMode.REVEAL,
+                revealFraction = 0.4f,
+                staticSuppressionMode = StaticSuppressionMode.DESTINATION_RECT,
+            )
+
+        val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
+
+        // fixed clip 仍存在（冻结旧 Insert 的半 reveal 可见部分）
+        assertNotNull(
+            "Insert(reveal=0.4, DESTINATION_RECT) -> CrossfadeOld：fixedRevealClipRect 应存在",
+            rebased.fixedRevealClipRect,
+        )
+        // 位置仍锁死在 oldCurrentRect
+        assertEquals(
+            "Insert -> CrossfadeOld：destinationRect.left 必须锁在 oldCurrentRect.left=30f",
+            oldCurrentRect.left,
+            rebased.destinationRect.left,
+            0.001f,
+        )
+        assertEquals(
+            "Insert -> CrossfadeOld：fromDestinationRect 必须为 null（原地退场）",
+            null,
+            rebased.fromDestinationRect,
+        )
+        // staticSuppressionMode 必须翻成 NONE
+        assertEquals(
+            "Insert(DESTINATION_RECT) -> CrossfadeOld：staticSuppressionMode 必须翻成 NONE，" +
+                "实际=${rebased.staticSuppressionMode} → renderer 会在旧位置挖静态洞",
+            StaticSuppressionMode.NONE,
+            rebased.staticSuppressionMode,
+        )
+
+        // renderer 的 suppression regions 不能包含 oldCurrentRect
+        val renderer = AndroidTextAnimationRenderer()
+        val transaction =
+            PreparedVisualTransaction(
+                transactionId = 1L,
+                oldRevision = null,
+                newRevision = null,
+                staticPatches = emptyList(),
+                animatedSlices = listOf(rebased),
+                ownedSnapshotIds = emptySet(),
+                referencedSnapshotIds = emptySet(),
+                selectionDecoration = null,
+                preeditDecoration = null,
+                cursorTransition = null,
+                durationMs = 300L,
+            )
+        val regions = renderer.computeStaticSuppressionRegions(transaction, 0f)
+        val containsOldRect =
+            regions.any { r ->
+                kotlin.math.abs(r.left - oldCurrentRect.left) < 0.01f &&
+                    kotlin.math.abs(r.right - oldCurrentRect.right) < 0.01f
+            }
+        assertFalse(
+            "Insert(DESTINATION_RECT) -> CrossfadeOld：suppression regions 不能包含 oldCurrentRect=$oldCurrentRect，" +
+                "实际 regions=$regions → renderer 在旧位置挖静态洞",
+            containsOldRect,
+        )
+    }
+
+    // ---- 场景 12：Delete(VISIBLE_CLIP) -> CrossfadeOld，仍保持 VISIBLE_CLIP ----
+
+    /**
+     * #639 评论 5433981610：旧 Delete 的默认 staticSuppressionMode 是 VISIBLE_CLIP。
+     * Delete -> CrossfadeOld 不是 emergence role -> CrossfadeOld 翻面路径，
+     * suppression 必须保持 VISIBLE_CLIP（吞字 ownership 连续性）。
+     *
+     * 期望：staticSuppressionMode 仍为 VISIBLE_CLIP，确认这次修正没有把上一轮的
+     * Delete/CrossfadeOld ownership 连续性改坏。
+     */
+    @Test
+    fun repro12_deleteToCrossfadeOld_suppressionModeShouldStayVisibleClip() {
+        val rect = RectF(0f, 0f, 100f, 20f)
+
+        val slice = makeCrossfadeOldSlice(rect)
+        val rebaseState =
+            makeRebaseState(
+                role = SliceRole.Delete,
+                rect = rect,
+                currentAlpha = 1f,
+                targetAlpha = 1f,
+                revealMode = TextRevealMode.SWALLOW,
+                revealFraction = 0.4f,
+                staticSuppressionMode = StaticSuppressionMode.VISIBLE_CLIP,
+            )
+
+        val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
+
+        // Delete 不是 emergence role，suppression 必须保持 VISIBLE_CLIP
+        assertEquals(
+            "Delete(VISIBLE_CLIP) -> CrossfadeOld：staticSuppressionMode 必须保持 VISIBLE_CLIP，" +
+                "实际=${rebased.staticSuppressionMode} → 这次修正把 Delete/CrossfadeOld ownership 连续性改坏了",
+            StaticSuppressionMode.VISIBLE_CLIP,
+            rebased.staticSuppressionMode,
+        )
     }
 }

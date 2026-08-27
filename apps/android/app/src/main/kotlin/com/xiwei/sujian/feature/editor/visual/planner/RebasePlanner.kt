@@ -5,6 +5,7 @@ import com.xiwei.sujian.feature.editor.layout.LineClusterSnapshot
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
 import com.xiwei.sujian.feature.editor.visual.SliceVisualState
+import com.xiwei.sujian.feature.editor.visual.StaticSuppressionMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealGeometry
 import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
@@ -254,6 +255,13 @@ class RebasePlanner {
         )
     }
 
+    /** #639 评论 5433981610：emergence role 是 Move/Insert/CrossfadeNew，
+     *  Core pair-aware mapping 会把它们特殊接到 CrossfadeOld。 */
+    private fun isEmergenceRole(role: SliceRole): Boolean =
+        role == SliceRole.Move ||
+            role == SliceRole.Insert ||
+            role == SliceRole.CrossfadeNew
+
     fun applyRebaseState(
         slice: PreparedVisualTransaction.AnimatedSlice,
         rebaseState: SliceVisualState,
@@ -374,11 +382,19 @@ class RebasePlanner {
                 rebaseState.fixedClipBaseRect?.let { android.graphics.RectF(it) }
             }
 
-        // #639 评论 5427812180 缺陷4：staticSuppressionMode 继续旧 state，
-        // 不因新 role 变了瞬间切换底图 ownership。旧 state 没有时按旧 role 推断（向后兼容）。
+        // #639 评论 5433981610：pair-aware mapping 翻面时 staticSuppressionMode 必须跟着翻。
+        // 旧 Move/Insert/CrossfadeNew（emergence role）被 Core 特殊接到 CrossfadeOld 时，
+        // 视觉 ownership 已从"新侧替代静态字"翻成"旧侧覆盖层"，suppression 必须是 NONE，
+        // 不能机械继承旧 role 的 DESTINATION_RECT（否则 renderer 会在 oldCurrentRect 挖洞）。
+        // Delete -> CrossfadeOld 继续旧 VISIBLE_CLIP（吞字 ownership 连续性），
+        // CrossfadeOld -> Delete 继续旧 NONE，同类 emergence 互相 mapped 继续旧 mode。
         val staticSuppressionMode =
-            rebaseState.staticSuppressionMode
-                ?: defaultStaticSuppressionModeForRole(rebaseState.role)
+            if (slice.role == SliceRole.CrossfadeOld && isEmergenceRole(rebaseState.role)) {
+                StaticSuppressionMode.NONE
+            } else {
+                rebaseState.staticSuppressionMode
+                    ?: defaultStaticSuppressionModeForRole(rebaseState.role)
+            }
 
         return slice.copy(
             snapshot = snapshot,
