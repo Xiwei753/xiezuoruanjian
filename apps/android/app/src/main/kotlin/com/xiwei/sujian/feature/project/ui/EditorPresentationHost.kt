@@ -300,11 +300,17 @@ internal fun resolveEditorHostInsetPolicy(): EditorHostInsetPolicy =
     )
 
 /**
- * #640 评论 5441849412 问题3：host 层唯一 inset 消费 Modifier — 由 [EditorPresentationHost] 应用。
+ * #640 评论 5441849412 问题3 / 5442422507：host 层唯一 inset 消费 Modifier —
+ * **仅 compact host** 由 [EditorPresentationHost] 应用。
  *
  * 严格按 [resolveEditorHostInsetPolicy] 决策消费：IME 只在此处消费一次，
  * 不加回 WritingPaneLayout.imePadding。多个 windowInsetsPadding 叠加时 Compose 自动处理重叠
  * （每个 inset padding 只消费未被前一个 padding 消费的部分），不会重复消费 IME。
+ *
+ * #640 评论 5442422507：**wide host 不再套本 padding**。Rust workbench plan 按整窗尺寸算
+ * slot bounds（绝对窗口坐标），host 先 windowInsetsPadding 缩小会让 measureAndPlaceWorkbench
+ * 把子项撑回原尺寸、伸进 IME。wide slot 内容改用 `fitInside(WindowInsetsRulers.SafeDrawing.current)`
+ * 在 slot 内部 reposition 到 safe region（绝对窗口位置，绕过 ancestor consumption）。
  */
 @Composable
 private fun editorHostInsetPadding(policy: EditorHostInsetPolicy): Modifier {
@@ -373,11 +379,6 @@ internal fun EditorPresentationHost(
     if (mode == EditorPresentationHostMode.HIDDEN) return
     val currentTarget = target ?: return
 
-    // #640 评论 5441849412 问题3：host 提到 Scaffold 外后，inset 由 host 唯一拥有一次。
-    // IME 只在此处消费一次，不加回 WritingPaneLayout.imePadding。
-    // top statusBars 不消费（compact top bar / Workbench toolbar 自己处理顶部系统栏）。
-    val hostModifier = modifier.fillMaxSize().then(editorHostInsetPadding(resolveEditorHostInsetPolicy()))
-
     when (mode) {
         EditorPresentationHostMode.COMPACT_EDITOR -> {
             // #640：compact host 在 hidden 和 visible 使用完全相同的 measured body bounds。
@@ -385,7 +386,9 @@ internal fun EditorPresentationHost(
             // presentationVisible=false 时只不 place top-bar（保留其测量占位），不遮盖章节树；
             // presentationVisible=true 才 place top-bar。host 在 Scaffold 外，无 bottom NavigationBar,
             // 不经过 ChapterTree Scaffold 的 innerPadding。View 只 INVISIBLE 到 VISIBLE，不重建。
-            // inset 由 hostModifier 唯一消费（IME/navigationBars/displayCutout），top bar 不重复消费 top。
+            // #640 评论 5441849412 问题3：compact host 在 Scaffold 外，inset 由 host 唯一拥有一次。
+            // IME 只在此处消费一次，不加回 WritingPaneLayout.imePadding。
+            // top statusBars 不消费（compact top bar 自己处理顶部系统栏）。
             CompactEditorMeasureLayout(
                 presentationVisible = presentationVisible,
                 topBar = compactTopBar,
@@ -397,7 +400,10 @@ internal fun EditorPresentationHost(
                         modifier = Modifier.fillMaxSize(),
                     )
                 },
-                modifier = hostModifier,
+                modifier =
+                    modifier
+                        .fillMaxSize()
+                        .then(editorHostInsetPadding(resolveEditorHostInsetPolicy())),
             )
         }
         EditorPresentationHostMode.WIDE_EDITOR_ONLY,
@@ -407,7 +413,11 @@ internal fun EditorPresentationHost(
             // EDITOR_ONLY（预热/plan 非 WORKBENCH）或 FULL_WORKBENCH（可见+WORKBENCH）。
             // host 只传 target 构造的 documentState + presentationVisible，不重建 View。
             // 宽屏 top bar 由 Scaffold 画（SinglePane Editor）或 Workbench toolbar 自己画（FULL_WORKBENCH）。
-            // inset 由 hostModifier 唯一消费（IME/navigationBars/displayCutout），不重复消费 top。
+            // #640 评论 5442422507：wide host 不在此消费 inset padding。Rust plan 按整窗尺寸算 Editor/slot
+            // bounds（绝对窗口坐标），若 host 先用 windowInsetsPadding 缩小，measureAndPlaceWorkbench 又把
+            // 子项撑回原尺寸，子 View 会伸进 IME/system bar。wide slot 内容用 fitInside(SafeDrawing.current)
+            // 在 slot 内部把内容 reposition 到 safe region（绝对窗口位置，绕过 ancestor consumption），
+            // plan 仍是唯一布局决策，Android 只处理系统 UI 遮挡。
             val deps = wideDeps ?: return
             val layoutState = wideLayoutState ?: return
             val callbacks = wideCallbacks ?: return
@@ -424,7 +434,7 @@ internal fun EditorPresentationHost(
                 documentState = documentState,
                 layoutState = layoutState,
                 callbacks = callbacks,
-                modifier = hostModifier,
+                modifier = modifier.fillMaxSize(),
             )
         }
         EditorPresentationHostMode.HIDDEN -> return

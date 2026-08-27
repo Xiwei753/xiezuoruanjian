@@ -6,11 +6,10 @@ import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
 import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchPlacement
 import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchRole
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #640 评论 5441849412 问题2：宽屏 Editor slot call site 唯一性回归测试。
+ * #640 评论 5441849412 问题2 / 5442422507：宽屏 Editor slot call site 唯一性回归测试。
  *
  * 根因：之前宽屏隐藏预热走 `WideWritingWorkspace → EDITOR_ONLY → EditorPane → AndroidView`；
  * 导航显示 Workbench 后变成 `WideWritingWorkspace → FULL_WORKBENCH → Layout → WorkbenchSlots →
@@ -21,41 +20,14 @@ import org.junit.Test
  * 重构后 EditorPane 始终在 [WideWritingWorkspace] 的 Layout content 唯一 call site（layoutId=EDITOR），
  * 切换 compositionMode 只增删 Workbench chrome slot，不移动 Editor 本身。
  *
- * 本测锁住不变量：
- * - EDITOR_ONLY 和 FULL_WORKBENCH 的 [WideEditorSlotIdentity.layoutIdKey] 相同（call site 不变）；
- * - [WideEditorSlotIdentity.isUniqueCallSite] 恒 true（EditorPane 不在 if 分支里各自创建）；
- * - presentationVisible=false → true、plan=WORKBENCH 前后 Editor slot identity 不变 → AndroidView 不重建。
+ * #640 评论 5442422507：EditorPane 唯一 call site 由源码结构保证（EditorPane 始终在同一 call site，
+ * 不在 EDITOR_ONLY/FULL_WORKBENCH 两分支各自创建）。不再用纯函数 identity 锁此不变量
+ * （[WideEditorSlotIdentity]/[resolveWideEditorSlotIdentity] 已删除 — 纯测试专用生产逻辑，
+ * 无生产消费者，"自己证明自己"）。本测改为锁 [resolveWideWorkspaceCompositionMode] 决策
+ * （hidden→EDITOR_ONLY、visible+WORKBENCH→FULL_WORKBENCH 等），这是 AndroidView 不重建的前提：
+ * compositionMode 决策正确 + EditorPane 在唯一 call site（源码结构）→ 切换不重建 View。
  */
 class EditorPresentationWideIdentityTest {
-    @Test
-    fun editorOnly_slotIdentity_isEditorAndUnique() {
-        val identity =
-            resolveWideEditorSlotIdentity(WideWorkspaceCompositionMode.EDITOR_ONLY)
-        assertEquals("Editor slot layoutIdKey 必须恒为 EDITOR", "EDITOR", identity.layoutIdKey)
-        assertTrue("Editor slot 必须在唯一 call site", identity.isUniqueCallSite)
-    }
-
-    @Test
-    fun fullWorkbench_slotIdentity_isEditorAndUnique() {
-        val identity =
-            resolveWideEditorSlotIdentity(WideWorkspaceCompositionMode.FULL_WORKBENCH)
-        assertEquals("Editor slot layoutIdKey 必须恒为 EDITOR", "EDITOR", identity.layoutIdKey)
-        assertTrue("Editor slot 必须在唯一 call site", identity.isUniqueCallSite)
-    }
-
-    @Test
-    fun editorOnly_andFullWorkbench_slotIdentity_identical() {
-        val editorOnlyIdentity =
-            resolveWideEditorSlotIdentity(WideWorkspaceCompositionMode.EDITOR_ONLY)
-        val fullWorkbenchIdentity =
-            resolveWideEditorSlotIdentity(WideWorkspaceCompositionMode.FULL_WORKBENCH)
-        assertEquals(
-            "EDITOR_ONLY 和 FULL_WORKBENCH 的 Editor slot identity 必须完全相同（call site 不变）",
-            editorOnlyIdentity,
-            fullWorkbenchIdentity,
-        )
-    }
-
     @Test
     fun hiddenToVisible_presenterVisibleFalseToTrue_slotIdentityUnchanged() {
         // 模拟 presentationVisible=false → true 切换（plan=WORKBENCH）。
@@ -66,23 +38,15 @@ class EditorPresentationWideIdentityTest {
                 workbenchPlan = workbenchPlan,
                 presentationVisible = false,
             )
-        val hiddenIdentity = resolveWideEditorSlotIdentity(hiddenMode)
-
         // 显示阶段（visible）：compositionMode=FULL_WORKBENCH。
         val visibleMode =
             resolveWideWorkspaceCompositionMode(
                 workbenchPlan = workbenchPlan,
                 presentationVisible = true,
             )
-        val visibleIdentity = resolveWideEditorSlotIdentity(visibleMode)
 
         assertEquals(
-            "presentationVisible=false→true 切换后 Editor slot identity 必须不变（AndroidView 不重建）",
-            hiddenIdentity,
-            visibleIdentity,
-        )
-        assertEquals(
-            "hidden 阶段 compositionMode 必须为 EDITOR_ONLY",
+            "hidden 阶段 compositionMode 必须为 EDITOR_ONLY（不进入完整 Workbench shell）",
             WideWorkspaceCompositionMode.EDITOR_ONLY,
             hiddenMode,
         )
@@ -110,13 +74,15 @@ class EditorPresentationWideIdentityTest {
                 presentationVisible = true,
             )
 
-        val singlePaneIdentity = resolveWideEditorSlotIdentity(singlePaneMode)
-        val workbenchIdentity = resolveWideEditorSlotIdentity(workbenchMode)
-
         assertEquals(
-            "plan SINGLE_PANE→WORKBENCH 切换后 Editor slot identity 必须不变（AndroidView 不重建）",
-            singlePaneIdentity,
-            workbenchIdentity,
+            "plan=SINGLE_PANE 时 compositionMode 必须为 EDITOR_ONLY（fallback 不进 Workbench shell）",
+            WideWorkspaceCompositionMode.EDITOR_ONLY,
+            singlePaneMode,
+        )
+        assertEquals(
+            "plan=WORKBENCH + visible 时 compositionMode 必须为 FULL_WORKBENCH",
+            WideWorkspaceCompositionMode.FULL_WORKBENCH,
+            workbenchMode,
         )
     }
 
@@ -134,13 +100,15 @@ class EditorPresentationWideIdentityTest {
                 presentationVisible = true,
             )
 
-        val nullPlanIdentity = resolveWideEditorSlotIdentity(nullPlanMode)
-        val workbenchIdentity = resolveWideEditorSlotIdentity(workbenchMode)
-
         assertEquals(
-            "plan null→WORKBENCH 切换后 Editor slot identity 必须不变（AndroidView 不重建）",
-            nullPlanIdentity,
-            workbenchIdentity,
+            "plan=null（桥失败）时 compositionMode 必须为 EDITOR_ONLY",
+            WideWorkspaceCompositionMode.EDITOR_ONLY,
+            nullPlanMode,
+        )
+        assertEquals(
+            "plan=WORKBENCH + visible 时 compositionMode 必须为 FULL_WORKBENCH",
+            WideWorkspaceCompositionMode.FULL_WORKBENCH,
+            workbenchMode,
         )
     }
 

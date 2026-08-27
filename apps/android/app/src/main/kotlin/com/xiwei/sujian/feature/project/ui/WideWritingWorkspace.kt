@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.project.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fitInside
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -18,6 +19,7 @@ import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.MeasurePolicy
 import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
+import androidx.compose.ui.layout.WindowInsetsRulers
 import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -155,35 +157,17 @@ internal fun resolveWideWorkspaceCompositionMode(
 }
 
 /**
- * #640 评论 5441849412 问题2：宽屏 Editor slot identity 决策 — 纯函数，无 Compose 副作用，可单测。
+ * #640 评论 5441849412 问题2 / 5442422507：EditorPane 唯一 call site 由源码结构保证。
  *
- * EditorPane 始终在唯一 call site（layoutId=EDITOR），不随 [compositionMode] 切换。
  * 之前 EDITOR_ONLY/FULL_WORKBENCH 两分支各自创建 EditorPane，是两个 call site，
- * Compose composable 实例由 call site 识别 → AndroidView 被丢弃重建。
- * 重构后 EditorPane 始终在 [WideWritingWorkspace] 的 Layout content 唯一 call site，
+ * Compose composable 实例由 call site 识别 → AndroidView 被丢弃重建。重构后 EditorPane
+ * 始终在 [WideWritingWorkspace] 的 Layout content 唯一 call site（layoutId=EDITOR），
  * 切换 compositionMode 只增删 Workbench chrome slot，不移动 Editor 本身。
  *
- * 本函数记录 Editor slot 的稳定 identity key，锁住"EditorPane 始终在同一 call site"不变量：
- * - [layoutIdKey] 恒为 "EDITOR"（两种 compositionMode 相同）；
- * - [isUniqueCallSite] 恒为 true（EditorPane 不在 if 分支里各自创建）。
+ * 不再用纯函数 identity 锁此不变量（纯函数 self-proving，无生产消费者）— 由源码结构
+ * （EditorPane 始终在同一 call site）和 [EditorPresentationWideIdentityTest] 锁
+ * [resolveWideWorkspaceCompositionMode] 决策（AndroidView 不重建的前提）保证。
  */
-internal data class WideEditorSlotIdentity(
-    val layoutIdKey: String,
-    val isUniqueCallSite: Boolean,
-)
-
-/**
- * #640 评论 5441849412 问题2：宽屏 Editor slot identity 决策 — 纯函数，可单测。
- *
- * 两种 compositionMode 返回相同 identity → call site 不变 → AndroidView 不重建。
- */
-internal fun resolveWideEditorSlotIdentity(
-    compositionMode: WideWorkspaceCompositionMode,
-): WideEditorSlotIdentity =
-    WideEditorSlotIdentity(
-        layoutIdKey = "EDITOR",
-        isUniqueCallSite = true,
-    )
 
 @Composable
 internal fun WideWritingWorkspace(
@@ -388,6 +372,9 @@ private fun WorkbenchToolbarSlots(
     onRedo: () -> Unit,
     syncState: com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState,
 ) {
+    // #640 评论 5442422507：slot 根节点占 Rust rect（layoutId 被 measure policy 取），
+    // fitInside 在节点内部把内容 reposition 到 safe region（绕过 ancestor consumption）。
+    val safeDrawingRulers = WindowInsetsRulers.SafeDrawing.current
     WritingToolbarLeadingGroup(
         showBack = deps.chrome.showBack,
         chapterTreeCollapsed = state.chapterTreeCollapsed,
@@ -398,10 +385,10 @@ private fun WorkbenchToolbarSlots(
                 onRedo = onRedo,
                 onToggleChapterTree = state.onToggleChapterTree,
             ),
-        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_LEADING),
+        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_LEADING).fitInside(safeDrawingRulers),
     )
     WritingToolbarCenterSlot(
-        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_CENTER),
+        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_CENTER).fitInside(safeDrawingRulers),
     )
     WritingToolbarTrailingGroup(
         actions = deps.chrome.actions,
@@ -412,7 +399,7 @@ private fun WorkbenchToolbarSlots(
                 onSearch = callbacks.onSearch,
                 onSettings = callbacks.onSettings,
             ),
-        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_TRAILING),
+        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_TRAILING).fitInside(safeDrawingRulers),
     )
 }
 
@@ -437,6 +424,11 @@ private fun WorkbenchChromeContentSlots(
     callbacks: WideWorkspaceCallbacks,
     env: WorkbenchContentEnv,
 ) {
+    // #640 评论 5442422507：slot 根节点占 Rust rect（layoutId 被 measure policy 取），
+    // fitInside 在节点内部把内容 reposition 到 safe region（绕过 ancestor consumption）。
+    // 不改 ChapterTreeContent/WritingToolPane/WritingToolRail 内部 — ChapterTreeContent 有窄屏
+    // 调用方（ProjectWorkspaceScreen.kt），改内部会 double-inset。
+    val safeDrawingRulers = WindowInsetsRulers.SafeDrawing.current
     // 章节树：用户主动收起时不画（bounds 由 plan 决定，收起通过 visibility 重算 plan）。
     if (!state.chapterTreeCollapsed && bounds.chapterNav != null && !bounds.chapterNav.isEmpty) {
         ChapterTreeContent(
@@ -445,7 +437,7 @@ private fun WorkbenchChromeContentSlots(
             workspaceActions = deps.projectWorkspaceActions,
             onSelectChapter = callbacks.onChapterSwitch,
             onError = deps.appState::reportWorkspaceError,
-            modifier = Modifier.layoutId(LayoutSlotId.CHAPTER_NAVIGATION),
+            modifier = Modifier.layoutId(LayoutSlotId.CHAPTER_NAVIGATION).fitInside(safeDrawingRulers),
         )
     }
     // EditorPane 不在此处 — 在 WideWritingWorkspace 顶层唯一 call site（layoutId=EDITOR），
@@ -454,7 +446,7 @@ private fun WorkbenchChromeContentSlots(
     if (!state.toolPaneCollapsed && bounds.toolPane != null && !bounds.toolPane.isEmpty) {
         WritingToolPane(
             content = env.toolPaneContent,
-            modifier = Modifier.layoutId(LayoutSlotId.TOOL_PANE),
+            modifier = Modifier.layoutId(LayoutSlotId.TOOL_PANE).fitInside(safeDrawingRulers),
         )
     }
     // 工具栏图标列（始终画）。
@@ -464,7 +456,7 @@ private fun WorkbenchChromeContentSlots(
         onSelect = state.onSelectTool,
         onTogglePane = state.onToggleToolPane,
         paneCollapsed = state.toolPaneCollapsed,
-        modifier = Modifier.layoutId(LayoutSlotId.TOOL_RAIL),
+        modifier = Modifier.layoutId(LayoutSlotId.TOOL_RAIL).fitInside(safeDrawingRulers),
     )
 }
 
@@ -597,6 +589,12 @@ private fun MeasureScope.measureAndPlaceWorkbench(
  *
  * #640 A.4：预热阶段（presentationVisible=false）背景透明，不画 opaque editor surface；
  * 可见阶段用共享 editorSurfaceBackgroundColor，不用 MaterialTheme colorScheme background。
+ *
+ * #640 评论 5442422507：外层 Box 占 Rust Editor rect（layoutId 被 measure policy 取，按 Rust rect
+ * measure/place）。SujianEditorHost / select-chapter 提示在内层用
+ * `fitInside(WindowInsetsRulers.SafeDrawing.current)` 把内容 reposition 到 safe region
+ * （systemBars + displayCutout + IME），用绝对窗口位置绕过 ancestor consumption。
+ * plan 仍是唯一布局决策，Android 只处理系统 UI 遮挡。
  */
 @Composable
 private fun EditorPane(
@@ -617,19 +615,22 @@ private fun EditorPane(
             modifier
                 .background(background),
     ) {
+        // #640 评论 5442422507：fitInside 在 slot 内部把内容收进 safe region，
+        // 不靠 host inset padding（host 不缩，plan 按整窗坐标算 bounds）。
+        val safeDrawingRulers = WindowInsetsRulers.SafeDrawing.current
         if (documentState.currentChapterId != null && documentState.currentVolumeId != null) {
             SujianEditorHost(
                 projectId = documentState.currentProjectId,
                 volumeId = documentState.currentVolumeId,
                 chapterId = documentState.currentChapterId,
                 chapterTitle = documentState.currentChapterTitle,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().fitInside(safeDrawingRulers),
                 onChapterSwitchFailed = onChapterSwitchFailed,
                 presentationVisible = documentState.presentationVisible,
             )
         } else {
             Box(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().fitInside(safeDrawingRulers),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(stringResource(id = R.string.select_chapter_to_write))
