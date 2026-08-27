@@ -855,8 +855,10 @@ class RebasePlannerMappedRebaseReproTest {
                 rect = currentRect,
                 currentAlpha = 0.5f,
                 targetAlpha = 0f,
-                fixedRevealClipRect = RectF(0f, 0f, 60f, 20f), // raw clip left=0, right=60
-                fixedClipBaseRect = RectF(0f, 0f, 100f, 20f), // old base left=0, right=100
+                // raw clip left=0, right=60
+                fixedRevealClipRect = RectF(0f, 0f, 60f, 20f),
+                // old base left=0, right=100
+                fixedClipBaseRect = RectF(0f, 0f, 100f, 20f),
                 staticSuppressionMode = StaticSuppressionMode.VISIBLE_CLIP,
             )
 

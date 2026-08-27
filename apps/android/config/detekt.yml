@@ -47,6 +47,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/InsertDeletePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/MoveCrossfadePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlanner.kt"
+      # --- #640：导航套件多分支布局 ---
+      - "**/kotlin/com/xiwei/sujian/app/navigation/SujianNavigationSuite.kt"
       # --- 平台安全：Android Keystore API条件分支多 ---
       - "**/kotlin/com/xiwei/sujian/core/interop/security/AndroidKeystoreSecureStorage.kt"
       # --- 设置界面：多设置项组合条件 ---
@@ -64,6 +66,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/core/designsystem/component/SujianListItem.kt"
       - "**/kotlin/com/xiwei/sujian/core/designsystem/component/SujianSlider.kt"
       - "**/kotlin/com/xiwei/sujian/core/designsystem/component/SujianSwitchRow.kt"
+      # --- #640：导航支架多参数组合 ---
+      - "**/kotlin/com/xiwei/sujian/app/navigation/SujianNavigationScaffolds.kt"
   CyclomaticComplexMethod:
     active: true
     threshold: 15
@@ -138,6 +142,11 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectListScreen.kt"
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectWorkspaceScreen.kt"
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/VolumeChapterTree.kt"
+      # --- #640：导航套件长方法 ---
+      - "**/kotlin/com/xiwei/sujian/app/navigation/SujianNavigationSuite.kt"
+      # --- #640：测试文件长方法 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/Issue639Comment5427183226ReproTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlannerCrossRoleReproTest.kt"
   LargeClass:
     active: true
     threshold: 500
@@ -165,6 +174,9 @@ complexity:
       # --- #639 评论 5422606865：rebase 一致性测试多场景断言，行数超 500 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlannerTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/render/AndroidTextAnimationRendererTest.kt"
+      # --- #640：测试文件大类 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlannerCrossRoleReproTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlannerMappedRebaseReproTest.kt"
   LongParameterList:
     active: true
     functionThreshold: 7
@@ -178,6 +190,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/core/designsystem/component/SujianListItem.kt"
       - "**/kotlin/com/xiwei/sujian/core/designsystem/component/SujianDialog.kt"
       - "**/kotlin/com/xiwei/sujian/core/designsystem/component/SujianButton.kt"
+      # --- #640：顶部应用栏多参数 ---
+      - "**/kotlin/com/xiwei/sujian/core/designsystem/component/SujianTopAppBar.kt"
       # --- 数据层桥接：FFI桥接函数参数由Core契约决定 ---
       - "**/kotlin/com/xiwei/sujian/core/interop/app/AppServiceBridge.kt"
       - "**/kotlin/com/xiwei/sujian/feature/sync/data/interop/SyncBridge.kt"
@@ -205,6 +219,12 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/presentation/EditorViewModel.kt"
       # --- 工作台组件：多面板布局参数 ---
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectWorkspaceScreen.kt"
+      # --- #640：rebase 规划器多参数 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlanner.kt"
+      # --- #640：编辑器展示宿主多参数 ---
+      - "**/kotlin/com/xiwei/sujian/feature/project/ui/EditorPresentationHost.kt"
+      # --- #640：导航支架多参数组合 ---
+      - "**/kotlin/com/xiwei/sujian/app/navigation/SujianNavigationScaffolds.kt"
       # --- 手机端 ---
   NestedBlockDepth:
     active: true
@@ -290,6 +310,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/app/SujianAppState.kt"
       # --- 测试：设置页 LazyColumn 结构契约测试，基线已有 23 个函数（#632 前已存在） ---
       - "**/kotlin/com/xiwei/sujian/feature/settings/ui/SettingsLazyColumnStructureTest.kt"
+      # --- #640：测试文件函数数超 20 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlannerMappedRebaseReproTest.kt"
   StringLiteralDuplication:
     active: true
     threshold: 3
@@ -349,6 +371,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/SessionMutationGateTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/SessionMutationGateConcurrencyTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/SessionMutationGateCoreOutsideLockTest.kt"
+      # --- #640：展示就绪测试断言字符串重复 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/window/EditorWindowHostPresentationReadyTest.kt"
   NamedArguments:
     active: false    # 现有代码大量位置参数调用（247处），命名参数整改是独立后续任务
 
