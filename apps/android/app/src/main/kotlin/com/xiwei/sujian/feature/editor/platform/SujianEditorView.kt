@@ -91,6 +91,29 @@ class SujianEditorView
 
         fun getThemeBackgroundColor(): Int = _themeBackgroundColor
 
+        // #640 A.6：一次性 presentation-ready callback — 真实 width/height > 0 且 pipeline layout != null 时触发
+        private var onPresentationLayoutReady: (() -> Unit)? = null
+
+        /**
+         * #640 A.6：注册一次性 presentation-ready callback。
+         * 保存 callback 并立即尝试 dispatch；若 layout 已就绪则立即触发，
+         * 否则等到 onSizeChanged/updateLayoutConfig/applyLayoutConfig 末尾触发。
+         * 回调只触发一次。
+         */
+        fun whenPresentationLayoutReady(callback: () -> Unit) {
+            onPresentationLayoutReady = callback
+            dispatchPresentationReadyIfPossible()
+        }
+
+        /** #640 A.6：触发 presentation-ready callback（一次性），清掉 callback 防止重复触发。 */
+        private fun dispatchPresentationReadyIfPossible() {
+            if (width > 0 && height > 0 && pipeline.getLayout() != null) {
+                val callback = onPresentationLayoutReady ?: return
+                onPresentationLayoutReady = null
+                callback()
+            }
+        }
+
         init {
             inputAdapter.setHostView(this)
             inputAdapter.onPipelineOutput = { output: PipelineOutput -> handlePipelineOutput(output) }
@@ -314,6 +337,8 @@ class SujianEditorView
                 val contentWidth = (width - paddingLeft - paddingRight).coerceAtLeast(1)
                 pipeline.updateLayout(contentWidth.toFloat())
             }
+            // #640 A.6：排版配置更新后可能首次就绪，触发 presentation-ready callback
+            dispatchPresentationReadyIfPossible()
         }
 
         private var lineSpacingMultiplier: Float = 1.0f
@@ -359,6 +384,12 @@ class SujianEditorView
         }
 
         /**
+         * #640 B.12：统一的内容 viewport 高度 — 真实正文可用高度。
+         * 所有 max scroll/cursor-visible 用此真实正文 viewport 高度。
+         */
+        private fun contentViewportHeightPx(): Float = (height - paddingTop - paddingBottom).coerceAtLeast(0).toFloat()
+
+        /**
          * #638 评论 5411376945：视觉变更后统一的视口同步入口。
          *
          * 普通编辑（PipelineOutput.Edited）和 IME composition 视觉更新都只调这个入口，
@@ -370,15 +401,11 @@ class SujianEditorView
          *   ensureCursorVisible=false 时只 clamp 旧 scrollY。
          * #638 评论 5412016997：参数语义收正 — ensureCursorVisible 不再兼任"正文是否改过"，
          * 只表示静态分支是否需要把最终静态光标落回可视区。
+         * #640 B.12：直接用 pipeline.getLayoutMaxScrollY(contentViewportHeightPx())，
+         * 删除旧的 getLayoutMaxScrollY(height)+overflow+padding 的不连续算法。
          */
         private fun syncViewportAfterVisualMutation(ensureCursorVisible: Boolean) {
-            val layoutOverflow = pipeline.getLayoutMaxScrollY(height)
-            val maxScroll =
-                if (layoutOverflow > 0f) {
-                    layoutOverflow + paddingTop + paddingBottom
-                } else {
-                    0f
-                }
+            val maxScroll = pipeline.getLayoutMaxScrollY(contentViewportHeightPx())
 
             if (pipeline.hasActiveAnimation()) {
                 beginViewportVisualTransition(maxScroll)
@@ -429,14 +456,14 @@ class SujianEditorView
          * #638 评论 5403756824：计算给定 Rect 对应的目标 scrollY（不实际设置 scrollY）。
          * [ensureRectVisible] 和 [handlePipelineOutputInternal] 共用此逻辑。
          * 真正的逐帧过渡交给 [EditorViewportController]，ensureRectVisible 只负责算目标。
+         * #640 B.12：用 contentHeight，document 区间 scrollY..scrollY+contentHeight；
+         * 上方 rect.top，下方 rect.bottom-contentHeight，正常当前 scrollY，最后现有 clamp/coerceIn。
          */
         private fun computeTargetScrollYForRect(rect: android.graphics.RectF): Float {
-            val viewHeight = height.toFloat()
-            val contentTop = viewport.scrollY - paddingTop
-            val contentBottom = contentTop + viewHeight
+            val contentHeight = contentViewportHeightPx()
             return when {
-                rect.top < contentTop -> rect.top + paddingTop
-                rect.bottom > contentBottom -> rect.bottom - viewHeight + paddingTop
+                rect.top < viewport.scrollY -> rect.top
+                rect.bottom > viewport.scrollY + contentHeight -> rect.bottom - contentHeight
                 else -> viewport.scrollY
             }
         }
@@ -630,6 +657,8 @@ class SujianEditorView
                         updateMaxScroll()
                         applyPendingViewportAnchorIfReady()
                         invalidate()
+                        // #640 A.6：首次真实尺寸就绪后触发 presentation-ready callback
+                        dispatchPresentationReadyIfPossible()
                     }
                 }
                 newContentWidth != oldContentWidth -> {
@@ -646,19 +675,20 @@ class SujianEditorView
                     invalidate()
                 }
             }
+            if (w > 0 && h > 0) {
+                dispatchPresentationReadyIfPossible()
+            }
         }
 
         private var lastContentWidthPx: Int = 0
 
+        /**
+         * #640 B.12：更新 max scroll — 用统一的 contentViewportHeightPx()。
+         * Pipeline 不知道 padding，所以直接传 contentViewportHeightPx()。
+         */
         private fun updateMaxScroll() {
-            val layoutOverflow = pipeline.getLayoutMaxScrollY(height)
-            viewport.updateMaxScroll(
-                if (layoutOverflow > 0f) {
-                    layoutOverflow + paddingTop + paddingBottom
-                } else {
-                    0f
-                },
-            )
+            val maxScroll = pipeline.getLayoutMaxScrollY(contentViewportHeightPx())
+            viewport.updateMaxScroll(maxScroll)
         }
 
         private fun updateLayoutConfig() {
@@ -669,6 +699,8 @@ class SujianEditorView
             viewport.clamp()
             applyPendingViewportAnchorIfReady()
             invalidate()
+            // #640 A.6：布局配置更新后可能首次就绪，触发 presentation-ready callback
+            dispatchPresentationReadyIfPossible()
         }
         // 已用预分配 ArrayList 减少 onDraw 分配；完全消除需改 drawFrame 接口（List<Pair> → IntArray），
         // 超出 lint 清理范围。搜索高亮通常少量项，剩余 Pair 分配可忽略。
@@ -1364,6 +1396,7 @@ class SujianEditorView
         fun unbindSession(
             @Suppress("UNUSED_PARAMETER") reason: String,
         ) {
+            onPresentationLayoutReady = null
             if (!isSessionBound) return
             pipeline.cancelActiveTransaction()
             // #638 评论 5411376945：unbind 马上换 target，只清视口过渡状态，

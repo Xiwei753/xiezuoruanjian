@@ -2,7 +2,6 @@ package com.xiwei.sujian.feature.editor.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -20,21 +19,28 @@ import com.xiwei.sujian.feature.editor.presentation.EditorUiState
  * 编辑器表面由 [editorContent] slot 提供 — Route 层负责收集
  * targetDecorationsVersionFlow 后注入 WritingEditorSurface(coordinator, targetId, modifier)。
  *
- * #595 一：输入窗口防护 — 只有 ViewModel 当前已提交章节（showEditor=true）
- * 才显示编辑器；切换事务提交后、导航落地前，旧 pane 不显示 View、
- * 不安装输入回调，旧章节最后一次输入不可能写进新章节。
+ * 编辑器 slot 始终组合；[showEditor] 只决定 loading overlay 是否显示。
+ * [presentationVisible] 只决定 loading/status overlay 是否进入展示层，
+ * 编辑器 View 自身的可见性由 WritingEditorSurface 管理。
+ *
+ * #640 B.11：删除正文自己的 imePadding — IME 只由 Scaffold 消费，
+ * 根 Box 回到 fillMaxSize()，状态带跟随正文真实可用高度。
  */
 @Composable
 internal fun WritingPaneLayout(
     modifier: Modifier,
     uiState: EditorUiState,
     showEditor: Boolean,
+    presentationVisible: Boolean = true,
     editorContent: @Composable (Modifier) -> Unit,
 ) {
-    Box(modifier = modifier.fillMaxSize().imePadding()) {
-        if (showEditor) {
-            editorContent(Modifier.fillMaxSize())
-        } else {
+    Box(modifier = modifier.fillMaxSize()) {
+        // #640 B.11：只要 target 有效就必须始终组合 editorContent；
+        // showEditor 只控制 loading overlay，不再作为 AndroidView 存在门控。
+        // 编辑器可见性由 presentationVisible && isPresentationReady 控制 View.INVISIBLE/VISIBLE。
+        editorContent(Modifier.fillMaxSize())
+
+        if (presentationVisible && !showEditor) {
             Box(
                 Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
@@ -46,11 +52,13 @@ internal fun WritingPaneLayout(
         // #635 评论 5384780619：保存状态/字数只做 overlay，
         // 不再插在正文上面参与 Column 高度计算。
         // #639 评论 5419182722：状态带固定在右下角（BottomEnd），
-        // 整个写作区消费 IME inset，避免被输入法遮挡。
-        WritingStatusOverlay(
-            saveStatus = uiState.saveStatus,
-            wordCount = uiState.wordCount,
-            modifier = Modifier.align(Alignment.BottomEnd),
-        )
+        // IME 消费由 Scaffold 统一处理（#640 B.11）。
+        if (presentationVisible) {
+            WritingStatusOverlay(
+                saveStatus = uiState.saveStatus,
+                wordCount = uiState.wordCount,
+                modifier = Modifier.align(Alignment.BottomEnd),
+            )
+        }
     }
 }

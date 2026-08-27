@@ -3,10 +3,12 @@ package com.xiwei.sujian.feature.editor.platform
 import android.view.View.MeasureSpec
 import androidx.test.core.app.ApplicationProvider
 import com.xiwei.sujian.feature.editor.interop.EditorKernelBridge
+import com.xiwei.sujian.feature.editor.pipeline.AndroidEditorPipeline
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.ViewportAnchor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -425,6 +427,37 @@ class SujianEditorViewportSnapshotTest {
         )
     }
 
+    // ── 10. Issue #640 B.12：内容 viewport 高度与纯高度变化 ──
+
+    @Test
+    fun heightOnlyChange_updatesContentViewportMaxWithoutReflow() {
+        measureAndLayout(width = 800, height = 1200)
+        triggerLayout()
+
+        val layoutBefore = view.getLayoutForTest()
+        val maxScrollBefore = view.getMaxScrollYForTest()
+        assertEquals(
+            "#640 B.12：maxScrollY 必须是 layout 高度减正文可用 viewport 高度",
+            expectedMaxScrollY(layoutBefore),
+            maxScrollBefore,
+            0.01f,
+        )
+
+        // 宽度不变的纯高度变化不得触发文本重新排版，但 maxScrollY 必须跟随 viewport 更新。
+        measureAndLayout(width = 800, height = 600)
+
+        val layoutAfter = view.getLayoutForTest()
+        val maxScrollAfter = view.getMaxScrollYForTest()
+        assertSame("#640 B.12：纯高度变化不得重建 layout", layoutBefore, layoutAfter)
+        assertEquals(
+            "#640 B.12：高度变化后 maxScrollY 必须使用新的正文可用 viewport 高度",
+            expectedMaxScrollY(layoutAfter),
+            maxScrollAfter,
+            0.01f,
+        )
+        assertTrue("#640 B.12：缩小 content viewport 后 maxScrollY 应增大", maxScrollAfter > maxScrollBefore)
+    }
+
     // ── Helpers ──
 
     /** 用真实 measure+layout 设置 View 的 width/height。 */
@@ -486,6 +519,19 @@ class SujianEditorViewportSnapshotTest {
         maxField.isAccessible = true
         return maxField.get(controller) as Float
     }
+
+    private fun SujianEditorView.getLayoutForTest(): android.text.Layout {
+        val pipelineField = SujianEditorView::class.java.getDeclaredField("pipeline")
+        pipelineField.isAccessible = true
+        val pipeline = pipelineField.get(this) as AndroidEditorPipeline
+        return pipeline.getLayout()!!
+    }
+
+    private fun expectedMaxScrollY(layout: android.text.Layout): Float =
+        (
+            layout.height.toFloat() -
+                (view.height - view.paddingTop - view.paddingBottom).coerceAtLeast(0).toFloat()
+        ).coerceAtLeast(0f)
 
     private fun SujianEditorView.invokeBeginTarget(anchor: ViewportAnchor?) {
         // #633 评论 5383643046：直接调用 viewport.beginTarget 验证重置契约。

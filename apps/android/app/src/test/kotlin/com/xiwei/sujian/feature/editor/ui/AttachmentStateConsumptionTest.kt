@@ -31,7 +31,7 @@ class AttachmentStateConsumptionTest {
                 "w1",
                 "t1",
                 isActivePane = false,
-            ) == EditorSurfaceMode.Editor,
+            ) == EditorSurfaceMode.EditorHost,
         )
     }
 
@@ -44,7 +44,7 @@ class AttachmentStateConsumptionTest {
                 "w2",
                 "t1",
                 isActivePane = false,
-            ) == EditorSurfaceMode.Editor,
+            ) == EditorSurfaceMode.EditorHost,
         )
     }
 
@@ -57,7 +57,7 @@ class AttachmentStateConsumptionTest {
                 "w1",
                 "t2",
                 isActivePane = false,
-            ) == EditorSurfaceMode.Editor,
+            ) == EditorSurfaceMode.EditorHost,
         )
     }
 
@@ -70,7 +70,7 @@ class AttachmentStateConsumptionTest {
                 "w1",
                 "t1",
                 isActivePane = false,
-            ) == EditorSurfaceMode.Editor,
+            ) == EditorSurfaceMode.EditorHost,
         )
     }
 
@@ -84,7 +84,7 @@ class AttachmentStateConsumptionTest {
                 "w2",
                 "t1",
                 isActivePane = false,
-            ) == EditorSurfaceMode.Editor,
+            ) == EditorSurfaceMode.EditorHost,
         )
     }
 
@@ -97,7 +97,7 @@ class AttachmentStateConsumptionTest {
                 "w1",
                 "t1",
                 isActivePane = false,
-            ) == EditorSurfaceMode.Editor,
+            ) == EditorSurfaceMode.EditorHost,
         )
     }
 
@@ -110,7 +110,7 @@ class AttachmentStateConsumptionTest {
                 "w1",
                 "t1",
                 isActivePane = false,
-            ) == EditorSurfaceMode.Editor,
+            ) == EditorSurfaceMode.EditorHost,
         )
     }
 
@@ -123,7 +123,7 @@ class AttachmentStateConsumptionTest {
                 "w1",
                 "t1",
                 isActivePane = false,
-            ) == EditorSurfaceMode.Editor,
+            ) == EditorSurfaceMode.EditorHost,
         )
     }
 
@@ -136,7 +136,7 @@ class AttachmentStateConsumptionTest {
                 "w1",
                 "t1",
                 isActivePane = false,
-            ) == EditorSurfaceMode.Editor,
+            ) == EditorSurfaceMode.EditorHost,
         )
     }
 
@@ -144,7 +144,12 @@ class AttachmentStateConsumptionTest {
     fun idleShowsPreview() {
         assertFalse(
             "Idle must show preview",
-            editorSurfaceMode(WindowBindingState.Idle, "w1", "t1", isActivePane = false) == EditorSurfaceMode.Editor,
+            editorSurfaceMode(
+                WindowBindingState.Idle,
+                "w1",
+                "t1",
+                isActivePane = false,
+            ) == EditorSurfaceMode.EditorHost,
         )
     }
 

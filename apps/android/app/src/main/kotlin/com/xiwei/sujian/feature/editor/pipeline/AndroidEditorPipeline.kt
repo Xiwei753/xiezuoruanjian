@@ -806,9 +806,13 @@ class AndroidEditorPipeline private constructor(
         return boundary - offset
     }
 
-    fun getLayoutMaxScrollY(viewHeight: Int): Float {
+    /**
+     * #640 B.12：返回 layout 高度与内容 viewport 高度的差值（Pipeline 不知道 padding）。
+     * 参数改为 Float 以匹配 contentViewportHeightPx() 的返回类型。
+     */
+    fun getLayoutMaxScrollY(contentViewportHeightPx: Float): Float {
         val layout = layoutRuntime.getLayout() ?: return 0f
-        return (layout.height - viewHeight).coerceAtLeast(0).toFloat()
+        return (layout.height.toFloat() - contentViewportHeightPx).coerceAtLeast(0f)
     }
 
     /** 当前排版实例（只读查询）— 测试与宿主可验证 DynamicLayout 复用契约（#624 评论7）。 */

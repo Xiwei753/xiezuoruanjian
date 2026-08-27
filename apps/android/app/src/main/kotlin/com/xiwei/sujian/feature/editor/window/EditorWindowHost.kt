@@ -43,6 +43,8 @@ import com.xiwei.sujian.feature.editor.session.resetPersistentSession
 import com.xiwei.sujian.feature.editor.ui.theme.EditorThemeAdapter
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 
 /**
  * #592 一/四：窗口层宿主 — 每个 Activity/窗口创建一份，持有全部窗口/渲染对象：
@@ -139,6 +141,43 @@ class EditorWindowHost(
     val targetDecorationsVersion: Long get() = sessionCoordinator.targetDecorationsVersion
     val lastCommittedText: String? get() = sessionCoordinator.lastCommittedText
 
+    // #640 A.7：presentation-ready 状态 — 记录哪个 target 的 layout 已就绪
+    private val _presentationReadyTargetId = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val presentationReadyTargetId: StateFlow<String?> = _presentationReadyTargetId.asStateFlow()
+
+    /** #640 A.7：检查指定 target 的 presentation 是否已就绪。 */
+    fun isPresentationReady(targetId: String): Boolean = _presentationReadyTargetId.value == targetId
+
+    /** #640 A.7：等待指定 target 的 presentation 就绪（suspend）。 */
+    suspend fun awaitPresentationReady(targetId: String) {
+        _presentationReadyTargetId.first { value -> value == targetId }
+    }
+
+    /** #640 A.7：注册 presentation-ready callback，确认 target 仍 active 且 binding 为 Attached。 */
+    private fun registerPresentationReadyCallback(
+        bindingWindowId: String,
+        targetId: String,
+    ) {
+        val view = sharedEditorView ?: return
+        // #640 A.7：用 whenPresentationLayoutReady 一次性 API，不再直接 property 赋值
+        view.whenPresentationLayoutReady {
+            // #640 A.7：callback 必须确认 target 仍 active 且 binding Attached 才设置
+            if (isPresentationReadyBinding(bindingWindowId, targetId)) {
+                _presentationReadyTargetId.value = targetId
+            }
+        }
+    }
+
+    private fun isPresentationReadyBinding(
+        bindingWindowId: String,
+        targetId: String,
+    ): Boolean {
+        if (activeTargetId != targetId) return false
+        val attached = windowBindingState as? WindowBindingState.Attached ?: return false
+        if (attached.windowId != bindingWindowId) return false
+        return attached.targetId == targetId
+    }
+
     /** #592 四：窗口层回调 — 非活动 target 命令执行后通知业务层。 */
     var onTargetContentChanged: ((targetId: String, newText: String) -> Unit)? = null
 
@@ -178,6 +217,10 @@ class EditorWindowHost(
         // #595 三：解绑必须清除 pendingViewBind — 否则下一个窗口的 View 会用
         // 已关闭/已释放的 session bridge 执行绑定。
         pendingViewBind = null
+        // #640 A.7：只清理被解绑 target，避免旧 onDispose 清掉新 target 的 ready 状态。
+        if (_presentationReadyTargetId.value == targetId) {
+            _presentationReadyTargetId.value = null
+        }
         sessionCoordinator.detachWindowBinding(windowId, targetId)
     }
 
@@ -196,6 +239,10 @@ class EditorWindowHost(
         targets.remove(targetId)
         // #595 三：业务关闭同样清除 pendingViewBind，防止 attachView 绑定已关闭的 session。
         pendingViewBind = null
+        // #640 A.7：只清理被关闭 target，避免旧 onDispose 清掉新 target 的 ready 状态。
+        if (_presentationReadyTargetId.value == targetId) {
+            _presentationReadyTargetId.value = null
+        }
         sessionCoordinator.closeTarget(targetId, reason)
     }
 
@@ -421,6 +468,9 @@ class EditorWindowHost(
             targets[oldActiveId]?.onEditingStateChanged?.invoke(EditingState.REBINDING)
         }
         val target = targets[targetId] ?: return false
+        // #640 A.7：开始每个新 target bind 先清 _presentationReadyTargetId —
+        // 旧 target 的 ready 状态不得冒充新 target。
+        _presentationReadyTargetId.value = null
         // #595 四：新建 session 的初始正文来自窗口层 target（Compose 唯一正文来源），
         // 会话层不再维护 targetTexts 第二份正文缓存。
         val bindInfo =
@@ -456,6 +506,8 @@ class EditorWindowHost(
                 // #630 C块：completeWindowAttach 只表达 session/view 绑定完成，
                 // 不自动激活输入。activateInput 只从明确用户手势（如 handleTap）进入。
                 target.onEditingStateChanged?.invoke(EditingState.EDITING)
+                // #640 A.7：绑定成功后注册 presentation-ready callback
+                registerPresentationReadyCallback(windowId, targetId)
             } else {
                 // 绑定失败或 binding 已不属于本次 attach：回到 Detached/Idle，
                 // 不能留下没有 View 绑定的 Attached 状态。
@@ -778,6 +830,8 @@ class EditorWindowHost(
                     // #630 C块：completeWindowAttach 只表达 session/view 绑定完成，
                     // 不自动激活输入。activateInput 只从明确用户手势（如 handleTap）进入。
                     target.onEditingStateChanged?.invoke(EditingState.EDITING)
+                    // #640 A.7：绑定成功后注册 presentation-ready callback
+                    registerPresentationReadyCallback(windowId, targetId)
                 } else {
                     // 绑定失败或 binding 已不属于本次 attach：回到 Detached/Idle，
                     // 不留下没有 View 绑定的 Attached 状态。
@@ -807,6 +861,10 @@ class EditorWindowHost(
         clearActiveCallbacks()
         view.unbindSession("compose_release")
         view.setFrameClock(null)
+        // #640 A.7：只清理被 detach 的 target，避免旧 onDispose 清掉新 target 的 ready 状态。
+        if (_presentationReadyTargetId.value == targetId) {
+            _presentationReadyTargetId.value = null
+        }
         // 调用会话层的窗口解绑，把当前绑定明确推进到 Detached。
         // 持久正文 session 只解除窗口绑定，不关闭 Rust session。
         sessionCoordinator.detachWindowBinding(windowId, targetId)
@@ -815,13 +873,14 @@ class EditorWindowHost(
 
     /**
      * #595 三：AndroidView.update — 应用主题和几何更新到 View。
+     * #640 A.7：不再无条件把 View 设 VISIBLE — 展示链由 WritingEditorSurface
+     * 的 presentationVisible && isPresentationReady 控制，避免 updateView 与 Surface 可见性决策分裂。
      */
     fun updateView(
         view: SujianEditorView,
         themeColors: com.xiwei.sujian.feature.editor.ui.theme.EditorThemeColors,
     ) {
         EditorThemeAdapter.applyToView(view, themeColors)
-        view.visibility = android.view.View.VISIBLE
         if (view.width > 0 && view.height > 0) {
             updateHostGeometry(view.width.toFloat(), view.height.toFloat())
         }
@@ -863,6 +922,8 @@ class EditorWindowHost(
         // 与 detachView 一致清除 pendingViewBind，避免残留的 session 绑定参数
         // 被后续复用。
         pendingViewBind = null
+        // #640 A.7：窗口释放时清掉 presentation-ready 状态
+        _presentationReadyTargetId.value = null
         if (activeId != null) {
             sessionCoordinator.detachWindowBinding(windowId, activeId)
         }
@@ -882,6 +943,7 @@ class EditorWindowHost(
             view.release()
         }
         sharedEditorView = null
+        _presentationReadyTargetId.value = null
         windowFrameClock.release()
         sessionCoordinator.releaseHost()
     }

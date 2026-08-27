@@ -4,6 +4,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import com.xiwei.sujian.feature.editor.platform.SujianEditorView
 
@@ -24,15 +25,16 @@ object EditorThemeAdapter {
     @Composable
     fun extractColors(): EditorThemeColors {
         val colorScheme = MaterialTheme.colorScheme
-        return remember(colorScheme) {
-            val textColor = colorScheme.onSurface
-            val cursorColor = colorScheme.primary
-            val backgroundColor = colorScheme.surfaceContainerLowest
-            val borderColor = colorScheme.outline
-            val helperTextColor = colorScheme.onSurfaceVariant
-            val selectedTextColor = colorScheme.onPrimaryContainer
-            val preeditTextColor = colorScheme.onSurface
+        val textColor = colorScheme.onSurface
+        val cursorColor = colorScheme.primary
+        val borderColor = colorScheme.outline
+        val helperTextColor = colorScheme.onSurfaceVariant
+        val selectedTextColor = colorScheme.onPrimaryContainer
+        val preeditTextColor = colorScheme.onSurface
+        // #640 A.4：调用共享 composable editorSurfaceBackgroundColor()，不直接用 colorScheme.surfaceContainerLowest
+        val backgroundColor: Color = editorSurfaceBackgroundColor()
 
+        return remember(colorScheme) {
             EditorThemeColors(
                 text = textColor.toArgb(),
                 cursor = cursorColor.toArgb(),

@@ -96,7 +96,7 @@ class AttachedRequiresViewBindTest {
                 "w",
                 targetId,
                 isActivePane = false,
-            ) == EditorSurfaceMode.Editor,
+            ) == EditorSurfaceMode.EditorHost,
         )
         assertTrue(
             editorSurfaceMode(
@@ -104,10 +104,15 @@ class AttachedRequiresViewBindTest {
                 "w",
                 targetId,
                 isActivePane = false,
-            ) == EditorSurfaceMode.Editor,
+            ) == EditorSurfaceMode.EditorHost,
         )
         assertFalse(
-            editorSurfaceMode(WindowBindingState.Idle, "w", targetId, isActivePane = false) == EditorSurfaceMode.Editor,
+            editorSurfaceMode(
+                WindowBindingState.Idle,
+                "w",
+                targetId,
+                isActivePane = false,
+            ) == EditorSurfaceMode.EditorHost,
         )
         assertFalse(
             editorSurfaceMode(
@@ -115,7 +120,7 @@ class AttachedRequiresViewBindTest {
                 "w",
                 targetId,
                 isActivePane = false,
-            ) == EditorSurfaceMode.Editor,
+            ) == EditorSurfaceMode.EditorHost,
         )
         assertFalse(
             editorSurfaceMode(
@@ -123,7 +128,7 @@ class AttachedRequiresViewBindTest {
                 "w",
                 targetId,
                 isActivePane = false,
-            ) == EditorSurfaceMode.Editor,
+            ) == EditorSurfaceMode.EditorHost,
         )
     }
 

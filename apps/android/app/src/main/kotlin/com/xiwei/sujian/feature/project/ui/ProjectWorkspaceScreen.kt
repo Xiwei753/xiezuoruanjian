@@ -1,24 +1,17 @@
 package com.xiwei.sujian.feature.project.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.xiwei.sujian.R
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
@@ -30,9 +23,8 @@ import com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult
 import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
 import com.xiwei.sujian.feature.editor.presentation.requestOpenChapter
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
-import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -41,7 +33,7 @@ import kotlinx.coroutines.withContext
  *
  * #625 第二段 / #628 验收点 1：根据 [AndroidLayoutSpec.contract.workspaceLayoutMode]
  * （**不自己判断窗口尺寸**）+ [WorkspaceLocation] 决定画什么：
- * - **窄屏**（SinglePane）：只画当前业务位置（key 切换，无动画）；
+ * - **窄屏**（SinglePane）：只画当前业务位置（稳定 Box + SinglePaneEditorLayer 承载编辑器，无动画）；
  * - **大屏**（Workbench）：
  *   - ProjectList 位置 → [ProjectListContent]（grid）；
  *   - ChapterTree 位置 → [ChapterTreeContent] + 占位；
@@ -83,6 +75,8 @@ internal fun ProjectWorkspaceScreen(
     val context = LocalContext.current
     val deps = LocalSujianAppDependencies.current
     val projectRepository = deps.projectRepository
+    val workspaceLayoutMode = layoutSpec.workspaceLayoutMode
+    val isWideLayout = workspaceLayoutMode != WorkspaceLayoutMode.SINGLE_PANE
 
     // #628 评论 5301021120 02:59:39Z 版：plan + pane 收起状态打包传给工作台，
     // 避免 WideWritingWorkspace 参数超出门禁阈值。
@@ -127,8 +121,8 @@ internal fun ProjectWorkspaceScreen(
     // 回退到作品列表时清 project 选择；进入正文不清除任何选择。
     // #624 评论12 第1项：离开正文的保存已由 guardedBack（ActiveDocumentGate
     // flush）在导航提交前完成 — 这里不再补保存。
+    val location = workspaceNavState.currentLocation
     LaunchedEffect(workspaceNavState.currentLocation) {
-        val location = workspaceNavState.currentLocation
         val previous = lastWorkspaceLocation
         lastWorkspaceLocation = location
         val previousEditor = previous as? WorkspaceLocation.Editor
@@ -158,6 +152,44 @@ internal fun ProjectWorkspaceScreen(
         }
     }
 
+    // #640 A.1/A.8：窄屏预准备的编辑器 target — 在 requestOpenChapter 成功后、awaitPresentationReady 之前设置，
+    // 让 SinglePaneEditorLayer 提前进入组合并 layout，但 View.INVISIBLE。
+    // 导航到 Editor 后 presentationVisible=true，View 立即可见，无首帧跳动。
+    // 返回非 Editor（章节树/作品列表）时清空，释放编辑器层。
+    var preparedEditorTarget by remember {
+        mutableStateOf<PreparedEditorTarget?>(null)
+    }
+    var navigationRequestId by remember { mutableStateOf(0L) }
+    LaunchedEffect(location) {
+        if (location !is WorkspaceLocation.Editor) {
+            preparedEditorTarget = null
+            navigationRequestId++
+        }
+    }
+
+    // #640 A.8/A.9：章节切换失败回滚回调 — 提取为共享变量，供窄屏和宽屏共用。
+    val onChapterSwitchFailed: (
+        (
+            oldProjectId: String,
+            oldVolumeId: String?,
+            oldChapterId: String?,
+            oldChapterTitle: String,
+        ) -> Unit
+    ) =
+        { oldProjectId, oldVolumeId, oldChapterId, oldChapterTitle ->
+            if (oldVolumeId != null && oldChapterId != null) {
+                appState.selectChapter(oldVolumeId, oldChapterId, oldChapterTitle)
+                coroutineScope.launch {
+                    workspaceNavState.navigateToEditor(oldProjectId, oldVolumeId, oldChapterId)
+                }
+            } else {
+                appState.clearChapterSelection()
+                coroutineScope.launch {
+                    workspaceNavState.guardedBack()
+                }
+            }
+        }
+
     // #630 评论12 项2 + 评论13 项1 + 评论15 项1：「继续写作」— 先在 IO 调度器解析真实章节标题，
     // 再传给 requestOpenChapter，避免空标题提交进 EditorViewModel 事务。
     val handleContinueRecentEdit: (RecentEdit) -> Unit = { edit ->
@@ -182,6 +214,7 @@ internal fun ProjectWorkspaceScreen(
             }
 
             // 4. 用真实标题打开章节
+            val requestId = ++navigationRequestId
             val result =
                 editorViewModel.requestOpenChapter(
                     edit.projectId,
@@ -191,9 +224,29 @@ internal fun ProjectWorkspaceScreen(
                 )
             when (result) {
                 is ChapterSwitchResult.Success -> {
-                    appState.selectProject(edit.projectId, projectTitle)
-                    appState.selectChapter(edit.volumeId, edit.chapterId, chapter.title)
-                    workspaceNavState.navigateToEditor(edit.projectId, edit.volumeId, edit.chapterId)
+                    // #640 A.8：先设 preparedEditorTarget（让稳定层提前 layout），
+                    // 再 awaitPresentationReady，再校验 target 未过期，最后 navigateToEditor。
+                    val target =
+                        PreparedEditorTarget(
+                            projectId = edit.projectId,
+                            volumeId = edit.volumeId,
+                            chapterId = edit.chapterId,
+                            chapterTitle = chapter.title,
+                        )
+                    if (isWideLayout) {
+                        appState.selectProject(edit.projectId, projectTitle)
+                        appState.selectChapter(edit.volumeId, edit.chapterId, chapter.title)
+                        workspaceNavState.navigateToEditor(edit.projectId, edit.volumeId, edit.chapterId)
+                    } else {
+                        preparedEditorTarget = target
+                        editorHost?.awaitPresentationReady(target.targetId)
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                        if (navigationRequestId == requestId && preparedEditorTarget == target) {
+                            appState.selectProject(edit.projectId, projectTitle)
+                            appState.selectChapter(edit.volumeId, edit.chapterId, chapter.title)
+                            workspaceNavState.navigateToEditor(edit.projectId, edit.volumeId, edit.chapterId)
+                        }
+                    }
                 }
                 // #630 评论15 项1：Stale 表示已被更新的打开请求替代，
                 // 必须零 UI 副作用直接 return，避免和新请求的导航抢位。
@@ -218,14 +271,10 @@ internal fun ProjectWorkspaceScreen(
 
     // #628 原则：窗口尺寸→布局决策唯一在 Rust — 通过 layoutSpec.workspaceLayoutMode。
     // 契约缺失（桥失败/空契约）时 fallback 到 SinglePane（与窄窗口基线一致）。
-    val workspaceLayoutMode = layoutSpec.workspaceLayoutMode
-    val isWideLayout = workspaceLayoutMode != WorkspaceLayoutMode.SINGLE_PANE
     // #628 验收点 4：作品卡片最小宽度来自 Rust LayoutMetrics.projectCardMinWidthDp。
     // isWideLayout=true 时 contract 必非 null（workspaceLayoutMode 缺失回落 SINGLE_PANE），
     // 因此 projectCardMinWidthDp 必非 null；SinglePane 时不画 grid，传 0f 占位。
     val projectCardMinWidthDp = layoutSpec.contract?.metrics?.projectCardMinWidthDp ?: 0f
-
-    val location = workspaceNavState.currentLocation
 
     if (isWideLayout) {
         WideLayoutContent(
@@ -246,19 +295,7 @@ internal fun ProjectWorkspaceScreen(
             onTopLevelSettings = onTopLevelSettings,
             onTopLevelSearch = onTopLevelSearch,
             onTopLevelSync = onTopLevelSync,
-            onChapterSwitchFailed = { oldProjectId, oldVolumeId, oldChapterId, oldChapterTitle ->
-                if (oldVolumeId != null && oldChapterId != null) {
-                    appState.selectChapter(oldVolumeId, oldChapterId, oldChapterTitle)
-                    coroutineScope.launch {
-                        workspaceNavState.navigateToEditor(oldProjectId, oldVolumeId, oldChapterId)
-                    }
-                } else {
-                    appState.clearChapterSelection()
-                    coroutineScope.launch {
-                        workspaceNavState.guardedBack()
-                    }
-                }
-            },
+            onChapterSwitchFailed = onChapterSwitchFailed,
             onSelectProject = { projectId, projectTitle ->
                 appState.selectProject(projectId, projectTitle)
                 coroutineScope.launch {
@@ -297,77 +334,94 @@ internal fun ProjectWorkspaceScreen(
             modifier = modifier,
         )
     } else {
-        // #635 评论 5384780619：窄屏（SinglePane）— 没有动画就不套 AnimatedContent，
-        // 直接 key(location) 切业务页面，避免章节树旧内容和编辑器新内容在切换帧
-        // 里同时存在。
-        key(location) {
-            SinglePaneContent(
-                appState = appState,
-                workspaceNavState = workspaceNavState,
-                projectListActions = projectListActions,
-                projectWorkspaceActions = projectWorkspaceActions,
-                location = location,
-                workspaceLayoutMode = workspaceLayoutMode,
-                projectCardMinWidthDp = projectCardMinWidthDp,
-                currentProjectId = currentProjectId,
-                currentVolumeId = currentVolumeId,
-                currentChapterId = currentChapterId,
-                currentChapterTitle = currentChapterTitle,
-                projectRepository = projectRepository,
-                editorViewModel = editorViewModel,
-                onSelectProject = { projectId, projectTitle ->
-                    appState.selectProject(projectId, projectTitle)
-                    coroutineScope.launch {
-                        workspaceNavState.navigateToChapterTree(projectId)
-                    }
-                },
-                onContinueRecentEdit = handleContinueRecentEdit,
-                onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                    if (currentProjectId != null) {
+        // #640 A.1：窄屏稳定 Box — preparedEditorTarget 非空时 SinglePaneEditorLayer 永远在同一 slot，
+        // ProjectList/ChapterTree 在上层可见；隐藏 Editor View 仍 layout 但不可绘制/不可触摸；
+        // 不用 alpha/GONE/AnimatedVisibility。
+        Box(modifier = modifier.fillMaxSize()) {
+            // 稳定层：预准备 target 非空时始终在组合中（预热阶段不可见，Editor 时立即可见）
+            preparedEditorTarget?.let { target ->
+                SinglePaneEditorLayer(
+                    target = target,
+                    presentationVisible = location is WorkspaceLocation.Editor,
+                    onChapterSwitchFailed = onChapterSwitchFailed,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+
+            // 上层：非 Editor 时显示业务页面（Editor 时隐藏，不占 slot）
+            if (location !is WorkspaceLocation.Editor) {
+                SinglePaneContent(
+                    appState = appState,
+                    workspaceNavState = workspaceNavState,
+                    projectListActions = projectListActions,
+                    projectWorkspaceActions = projectWorkspaceActions,
+                    location = location,
+                    workspaceLayoutMode = workspaceLayoutMode,
+                    projectCardMinWidthDp = projectCardMinWidthDp,
+                    onSelectProject = { projectId, projectTitle ->
+                        appState.selectProject(projectId, projectTitle)
                         coroutineScope.launch {
-                            val result =
-                                editorViewModel.requestOpenChapter(
-                                    currentProjectId,
-                                    volumeId,
-                                    chapterId,
-                                    chapterTitle,
-                                )
-                            when (result) {
-                                is ChapterSwitchResult.Success -> {
-                                    appState.selectChapter(volumeId, chapterId, chapterTitle)
-                                    workspaceNavState.navigateToEditor(currentProjectId, volumeId, chapterId)
-                                }
-                                is ChapterSwitchResult.SaveFailed,
-                                is ChapterSwitchResult.LoadFailed,
-                                ChapterSwitchResult.Stale,
-                                -> {
-                                    // 错误提示已由 ViewModel 事件（toast）发出。
+                            workspaceNavState.navigateToChapterTree(projectId)
+                        }
+                    },
+                    onContinueRecentEdit = handleContinueRecentEdit,
+                    onSelectChapter = { volumeId, chapterId, chapterTitle ->
+                        if (currentProjectId != null) {
+                            coroutineScope.launch {
+                                val requestId = ++navigationRequestId
+                                val result =
+                                    editorViewModel.requestOpenChapter(
+                                        currentProjectId,
+                                        volumeId,
+                                        chapterId,
+                                        chapterTitle,
+                                    )
+                                when (result) {
+                                    is ChapterSwitchResult.Success -> {
+                                        // 先设 preparedEditorTarget，让稳定层提前 layout；
+                                        // presentation 就绪后只提交仍是最新请求的导航。
+                                        val target =
+                                            PreparedEditorTarget(
+                                                projectId = currentProjectId,
+                                                volumeId = volumeId,
+                                                chapterId = chapterId,
+                                                chapterTitle = chapterTitle,
+                                            )
+                                        preparedEditorTarget = target
+                                        editorHost?.awaitPresentationReady(target.targetId)
+                                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                                        // 校验：协程未取消 + preparedEditorTarget 仍是当前 target + 请求仍是最新
+                                        if (navigationRequestId == requestId &&
+                                            preparedEditorTarget?.projectId == currentProjectId &&
+                                            preparedEditorTarget?.volumeId == volumeId &&
+                                            preparedEditorTarget?.chapterId == chapterId
+                                        ) {
+                                            appState.selectChapter(volumeId, chapterId, chapterTitle)
+                                            workspaceNavState.navigateToEditor(currentProjectId, volumeId, chapterId)
+                                        }
+                                    }
+                                    is ChapterSwitchResult.SaveFailed,
+                                    is ChapterSwitchResult.LoadFailed,
+                                    ChapterSwitchResult.Stale,
+                                    -> {
+                                        // 错误提示已由 ViewModel 事件（toast）发出；零导航副作用。
+                                    }
                                 }
                             }
                         }
-                    }
-                },
-                onChapterSwitchFailed = { oldProjectId, oldVolumeId, oldChapterId, oldChapterTitle ->
-                    if (oldVolumeId != null && oldChapterId != null) {
-                        appState.selectChapter(oldVolumeId, oldChapterId, oldChapterTitle)
-                        coroutineScope.launch {
-                            workspaceNavState.navigateToEditor(oldProjectId, oldVolumeId, oldChapterId)
-                        }
-                    } else {
-                        appState.clearChapterSelection()
-                        coroutineScope.launch {
-                            workspaceNavState.guardedBack()
-                        }
-                    }
-                },
-                modifier = modifier,
-            )
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
     }
 }
 
 /**
- * 窄屏（SinglePane）内容 — 只画当前业务位置。
+ * 窄屏（SinglePane）业务内容 — 只画 ProjectList/ChapterTree（Editor 由 [SinglePaneEditorLayer] 稳定承载）。
+ *
+ * #640 A.1：Editor 分支已删除 — 编辑器现在由稳定 Box 中的 SinglePaneEditorLayer 统一承载，
+ * 不再按 location 切换；本函数只负责非 Editor 业务页面。
  */
 @Composable
 private fun SinglePaneContent(
@@ -378,72 +432,38 @@ private fun SinglePaneContent(
     location: WorkspaceLocation,
     workspaceLayoutMode: WorkspaceLayoutMode,
     projectCardMinWidthDp: Float,
-    currentProjectId: String?,
-    currentVolumeId: String?,
-    currentChapterId: String?,
-    currentChapterTitle: String,
-    projectRepository: com.xiwei.sujian.feature.project.data.ProjectRepository,
-    editorViewModel: EditorViewModel,
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     onContinueRecentEdit: (edit: RecentEdit) -> Unit,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
-    onChapterSwitchFailed: (
-    (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
-    ),
     modifier: Modifier = Modifier,
 ) {
-    when (location) {
-        is WorkspaceLocation.ProjectList ->
-            ProjectListContent(
-                appState = appState,
-                workspaceActions = projectListActions,
-                onSelectProject = onSelectProject,
-                onContinueRecentEdit = onContinueRecentEdit,
-                modifier = modifier.fillMaxSize(),
-                layoutConfig =
-                    ProjectListLayoutConfig(
-                        workspaceLayoutMode = workspaceLayoutMode,
-                        projectCardMinWidthDp = projectCardMinWidthDp,
-                    ),
-            )
-        is WorkspaceLocation.ChapterTree ->
-            Box(modifier = modifier.fillMaxSize()) {
-                if (currentProjectId != null) {
-                    ChapterTreeContent(
-                        projectId = currentProjectId,
-                        projectRepository = projectRepository,
-                        workspaceActions = projectWorkspaceActions,
-                        onSelectChapter = onSelectChapter,
-                        onError = appState::reportWorkspaceError,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
+    if (location is WorkspaceLocation.ProjectList) {
+        ProjectListContent(
+            appState = appState,
+            workspaceActions = projectListActions,
+            onSelectProject = onSelectProject,
+            onContinueRecentEdit = onContinueRecentEdit,
+            modifier = modifier.fillMaxSize(),
+            layoutConfig =
+                ProjectListLayoutConfig(
+                    workspaceLayoutMode = workspaceLayoutMode,
+                    projectCardMinWidthDp = projectCardMinWidthDp,
+                ),
+        )
+    } else {
+        Box(modifier = modifier.fillMaxSize()) {
+            val projectId = appState.currentProjectId
+            if (projectId != null) {
+                ChapterTreeContent(
+                    projectId = projectId,
+                    projectRepository = LocalSujianAppDependencies.current.projectRepository,
+                    workspaceActions = projectWorkspaceActions,
+                    onSelectChapter = onSelectChapter,
+                    onError = appState::reportWorkspaceError,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
-        is WorkspaceLocation.Editor ->
-            Box(
-                modifier =
-                    modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background),
-            ) {
-                if (currentProjectId != null && currentChapterId != null && currentVolumeId != null) {
-                    SujianEditorHost(
-                        projectId = currentProjectId,
-                        volumeId = currentVolumeId,
-                        chapterId = currentChapterId,
-                        chapterTitle = currentChapterTitle,
-                        modifier = Modifier.fillMaxSize(),
-                        onChapterSwitchFailed = onChapterSwitchFailed,
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(stringResource(id = R.string.select_chapter_to_write))
-                    }
-                }
-            }
+        }
     }
 }
 
@@ -474,7 +494,12 @@ private fun WideLayoutContent(
     onTopLevelSearch: () -> Unit,
     onTopLevelSync: () -> Unit,
     onChapterSwitchFailed: (
-    (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
+        (
+            oldProjectId: String,
+            oldVolumeId: String?,
+            oldChapterId: String?,
+            oldChapterTitle: String,
+        ) -> Unit
     ),
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     onContinueRecentEdit: (edit: RecentEdit) -> Unit,

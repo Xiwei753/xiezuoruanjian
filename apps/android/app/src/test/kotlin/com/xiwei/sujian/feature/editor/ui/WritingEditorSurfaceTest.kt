@@ -7,21 +7,22 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * #630 R12：editorSurfaceMode 纯函数决策测试 —
- * 覆盖活动/非活动 pane + 各种 bindingState 组合，验证双 renderer 切换已修复。
+ * #640 A.3：editorSurfaceMode 纯函数决策测试 —
+ * 活动 target 始终组合 AndroidView（EditorHost），用 View.INVISIBLE 控制可见性。
  *
  * 活动章节从进入页面到稳定显示必须只有 SujianEditorView 一套正文 renderer。
- * - isActivePane=true + Idle/Detached → Pending（不是 Preview）；
- * - isActivePane=true + 匹配 Attaching/Attached → Editor；
- * - isActivePane=false + Idle/Detached → Preview；
- * - 旧 window Attached + isActivePane=true → Pending（不冒充当前 Editor，不画 Preview）。
+ * - isActivePane=true → EditorHost（始终组合 AndroidView，用 View.INVISIBLE 控制可见性）；
+ * - isActivePane=false + 匹配 Attaching/Attached/Committing/Cancelling → EditorHost；
+ * - isActivePane=false + Idle/Detached/Detaching → Preview。
  */
 class WritingEditorSurfaceTest {
+    // ── active + 任意 bindingState → EditorHost（始终组合 AndroidView）──
+
     @Test
-    fun activeTarget_idle_returnsPending() {
+    fun activeTarget_idle_returnsEditorHost() {
         assertEquals(
-            "活动 target 且 Idle → Pending，绝不用第二套正文 renderer",
-            EditorSurfaceMode.Pending,
+            "活动 target 且 Idle → EditorHost，始终组合 AndroidView",
+            EditorSurfaceMode.EditorHost,
             editorSurfaceMode(
                 bindingState = WindowBindingState.Idle,
                 windowId = "w1",
@@ -32,10 +33,10 @@ class WritingEditorSurfaceTest {
     }
 
     @Test
-    fun activeTarget_detached_returnsPending() {
+    fun activeTarget_detached_returnsEditorHost() {
         assertEquals(
-            "活动 target 且 Detached → Pending，绝不用第二套正文 renderer",
-            EditorSurfaceMode.Pending,
+            "活动 target 且 Detached → EditorHost，始终组合 AndroidView",
+            EditorSurfaceMode.EditorHost,
             editorSurfaceMode(
                 bindingState = WindowBindingState.Detached("t1", 5UL, null),
                 windowId = "w1",
@@ -46,10 +47,10 @@ class WritingEditorSurfaceTest {
     }
 
     @Test
-    fun activeTarget_detaching_returnsPending() {
+    fun activeTarget_detaching_returnsEditorHost() {
         assertEquals(
-            "活动 target 且 Detaching → Pending",
-            EditorSurfaceMode.Pending,
+            "活动 target 且 Detaching → EditorHost",
+            EditorSurfaceMode.EditorHost,
             editorSurfaceMode(
                 bindingState = WindowBindingState.Detaching(null),
                 windowId = "w1",
@@ -59,13 +60,11 @@ class WritingEditorSurfaceTest {
         )
     }
 
-    // ── active + 匹配 Attaching/Attached → Editor ──
-
     @Test
-    fun activeTarget_matchingAttaching_returnsEditor() {
+    fun activeTarget_matchingAttaching_returnsEditorHost() {
         assertEquals(
-            "活动 target + 匹配窗口 Attaching → Editor",
-            EditorSurfaceMode.Editor,
+            "活动 target + 匹配窗口 Attaching → EditorHost",
+            EditorSurfaceMode.EditorHost,
             editorSurfaceMode(
                 bindingState = WindowBindingState.Attaching("w1", "t1", 5UL),
                 windowId = "w1",
@@ -76,10 +75,10 @@ class WritingEditorSurfaceTest {
     }
 
     @Test
-    fun activeTarget_matchingAttached_returnsEditor() {
+    fun activeTarget_matchingAttached_returnsEditorHost() {
         assertEquals(
-            "活动 target + 匹配窗口 Attached → Editor",
-            EditorSurfaceMode.Editor,
+            "活动 target + 匹配窗口 Attached → EditorHost",
+            EditorSurfaceMode.EditorHost,
             editorSurfaceMode(
                 bindingState = WindowBindingState.Attached("w1", "t1", 5UL),
                 windowId = "w1",
@@ -90,10 +89,10 @@ class WritingEditorSurfaceTest {
     }
 
     @Test
-    fun activeTarget_matchingCommitting_returnsEditor() {
+    fun activeTarget_matchingCommitting_returnsEditorHost() {
         assertEquals(
-            "活动 target + Committing（targetId 匹配）→ Editor",
-            EditorSurfaceMode.Editor,
+            "活动 target + Committing（targetId 匹配）→ EditorHost",
+            EditorSurfaceMode.EditorHost,
             editorSurfaceMode(
                 bindingState = WindowBindingState.Committing("t1", 5UL),
                 windowId = "w1",
@@ -104,10 +103,10 @@ class WritingEditorSurfaceTest {
     }
 
     @Test
-    fun activeTarget_matchingCancelling_returnsEditor() {
+    fun activeTarget_matchingCancelling_returnsEditorHost() {
         assertEquals(
-            "活动 target + Cancelling（targetId 匹配）→ Editor",
-            EditorSurfaceMode.Editor,
+            "活动 target + Cancelling（targetId 匹配）→ EditorHost",
+            EditorSurfaceMode.EditorHost,
             editorSurfaceMode(
                 bindingState = WindowBindingState.Cancelling("t1", 5UL),
                 windowId = "w1",
@@ -117,7 +116,7 @@ class WritingEditorSurfaceTest {
         )
     }
 
-    // ── 非 active + Idle/Detached → Preview ──
+    // ── 非 active + Idle/Detached/Detaching → Preview ──
 
     @Test
     fun inactiveTarget_idle_returnsPreview() {
@@ -161,13 +160,13 @@ class WritingEditorSurfaceTest {
         )
     }
 
-    // ── 旧 window Attached + active → Pending（不冒充当前 Editor，不画 Preview）──
+    // ── 旧 window Attached/Attaching + active → EditorHost（不冒充当前 EditorHost，始终组合 AndroidView）──
 
     @Test
-    fun oldWindowAttached_activeTarget_returnsPending() {
+    fun oldWindowAttached_activeTarget_returnsEditorHost() {
         assertEquals(
-            "旧窗口 Attached 但 target 仍是 active → Pending，不冒充当前 Editor",
-            EditorSurfaceMode.Pending,
+            "旧窗口 Attached 但 target 仍是 active → EditorHost，不冒充当前 EditorHost",
+            EditorSurfaceMode.EditorHost,
             editorSurfaceMode(
                 bindingState = WindowBindingState.Attached("oldWindow", "t1", 5UL),
                 windowId = "w1",
@@ -178,10 +177,10 @@ class WritingEditorSurfaceTest {
     }
 
     @Test
-    fun oldWindowAttaching_activeTarget_returnsPending() {
+    fun oldWindowAttaching_activeTarget_returnsEditorHost() {
         assertEquals(
-            "旧窗口 Attaching 但 target 仍是 active → Pending，不冒充当前 Editor",
-            EditorSurfaceMode.Pending,
+            "旧窗口 Attaching 但 target 仍是 active → EditorHost，不冒充当前 EditorHost",
+            EditorSurfaceMode.EditorHost,
             editorSurfaceMode(
                 bindingState = WindowBindingState.Attaching("oldWindow", "t1", 5UL),
                 windowId = "w1",
@@ -205,7 +204,7 @@ class WritingEditorSurfaceTest {
         )
     }
 
-    // ── isActivePane=false 时的退化（精确绑定态仍优先 → Editor）──
+    // ── isActivePane=false 时的退化（精确绑定态仍优先 → EditorHost）──
 
     @Test
     fun nullActiveTarget_idle_returnsPreview() {
@@ -222,10 +221,10 @@ class WritingEditorSurfaceTest {
     }
 
     @Test
-    fun nullActiveTarget_matchingAttached_returnsEditor() {
+    fun nullActiveTarget_matchingAttached_returnsEditorHost() {
         assertEquals(
-            "isActivePane=false + 匹配 Attached → Editor（精确绑定态优先于 isActivePane）",
-            EditorSurfaceMode.Editor,
+            "isActivePane=false + 匹配 Attached → EditorHost（精确绑定态优先于 isActivePane）",
+            EditorSurfaceMode.EditorHost,
             editorSurfaceMode(
                 bindingState = WindowBindingState.Attached("w1", "t1", 5UL),
                 windowId = "w1",
@@ -235,13 +234,13 @@ class WritingEditorSurfaceTest {
         )
     }
 
-    // ── Committing/Cancelling 对其他 target → Pending（若 active）或 Preview ──
+    // ── Committing/Cancelling 对其他 target → EditorHost（若 active）或 Preview ──
 
     @Test
-    fun committing_otherTarget_active_returnsPending() {
+    fun committing_otherTarget_active_returnsEditorHost() {
         assertEquals(
-            "Committing targetId 不匹配 + 活动 → Pending",
-            EditorSurfaceMode.Pending,
+            "Committing targetId 不匹配 + 活动 → EditorHost",
+            EditorSurfaceMode.EditorHost,
             editorSurfaceMode(
                 bindingState = WindowBindingState.Committing("otherTarget", 5UL),
                 windowId = "w1",

@@ -501,6 +501,9 @@ private data class ChapterSelectContext(
 /**
  * 章节选择事务 — 提取以降低 [WideWritingWorkspace] 认知复杂度。
  * 复用 ProjectWorkspaceScreen 的章节切换事务入口 — 事务成功后才提交业务选择。
+ *
+ * 宽屏章节树已经拥有稳定的 EditorPane 生命周期，选择事务成功后直接提交选择；
+ * 导航进入 Editor 后由该 pane 完成绑定，不能等待当前尚未组合的 target。
  */
 private fun ChapterSelectContext.handleChapterSelect(
     volumeId: String,

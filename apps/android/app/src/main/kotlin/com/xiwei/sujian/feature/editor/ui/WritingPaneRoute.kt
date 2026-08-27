@@ -47,8 +47,12 @@ import com.xiwei.sujian.feature.editor.window.EditableTextTarget
  * #595 一：输入窗口防护 — 只有 ViewModel 当前已提交章节（isCurrentChapter）
  * 才显示编辑器；切换事务提交后、导航落地前，旧 pane 不显示 View、
  * 不安装输入回调，旧章节最后一次输入不可能写进新章节。
+ *
+ * #640 A.5：新增 presentationVisible — 控制编辑器 View 可见性，
+ * 该值绝不参与 session current/beginEdit/attach 业务判断。
  */
 @Composable
+@Suppress("LongParameterList")
 fun WritingPane(
     projectId: String,
     volumeId: String,
@@ -63,6 +67,8 @@ fun WritingPane(
     onChapterSwitchFailed: (
         (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
     )? = null,
+    /** #640 A.5：presentationVisible — 控制编辑器 View 的可见性，不参与 session 业务判断。 */
+    presentationVisible: Boolean = true,
 ) {
     val context = LocalContext.current
     val deps = LocalSujianAppDependencies.current
@@ -147,13 +153,15 @@ fun WritingPane(
         // #630 R12：showEditor 纳入 settingsReady 门控 —
         // 设置未加载完时继续显示现有 loading UI，不提前进入正文 Surface。
         // 即使 settingsReady=true 到 beginEdit/Attaching 间隔仍隔一帧，
-        // EditorSurfaceMode.Pending 保证这一帧不会画另一套正文 renderer。
+        // #640 A.3：AndroidView 已始终组合（EditorSurfaceMode.EditorHost），
+        // 用 View.INVISIBLE 控制可见性。
         showEditor =
             shouldShowEditorForWritingPane(
                 loading = uiState.loading,
                 settingsReady = uiState.settingsReady,
                 isCurrentChapter = isActivePane,
             ),
+        presentationVisible = presentationVisible,
     ) { editorModifier ->
         // #624 评论17 第2部分：Route 层收集 targetDecorationsVersionFlow 触发重排，
         // Layout 层不自己 collect session/window flow。
@@ -164,6 +172,7 @@ fun WritingPane(
             targetId = targetId,
             isActivePane = isActivePane,
             modifier = editorModifier,
+            presentationVisible = presentationVisible,
         )
     }
 }
