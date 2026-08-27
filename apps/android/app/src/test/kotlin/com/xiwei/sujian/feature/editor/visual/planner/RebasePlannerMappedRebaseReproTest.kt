@@ -656,43 +656,170 @@ class RebasePlannerMappedRebaseReproTest {
         )
     }
 
-    // ---- 场景 6b：mapped CrossfadeOld destination 改变时，第一帧从旧 currentRect 开始 ----
+    // ---- 场景 6b：mapped CrossfadeOld 位置必须锁死在 oldCurrentRect，禁止移动 ----
 
     /**
-     * 补充：CrossfadeOld 的 fromDestinationRect 在旧 role=Move/CrossfadeNew/Insert 时
-     * 会设置（line 298 destinationRect = fromRect），但旧 role=Delete 走 else 不设置。
-     * mapped CrossfadeOld destination 改变时也应从旧 currentRect 开始。
+     * #639 评论 5433268179：旧 Move(currentRect=[50,150]) rebase 成 CrossfadeOld。
+     *
+     * CrossfadeOld 是"旧像素原地退场"，位置必须锁在 rebase 当下的 oldCurrentRect，
+     * 禁止旧字从旧行斜飞到新行。新 planner 的 CrossfadeOld.destinationRect 被忽略。
+     *
+     * 断言：
+     * - destinationRect == oldCurrentRect
+     * - fromDestinationRect == null
+     * - visualDestinationRectAt(0f) == oldCurrentRect
+     * - visualDestinationRectAt(0.5f) == oldCurrentRect
+     * - visualDestinationRectAt(1f) == oldCurrentRect
+     * - startAlpha == old currentAlpha
+     * - endAlpha == 0f
      */
     @Test
-    fun repro6b_mappedCrossfadeOldDestinationChanged_firstFrameShouldStartFromOldCurrentRect() {
-        val oldRect = RectF(0f, 0f, 100f, 20f)
-        val newDestRect = RectF(200f, 0f, 300f, 20f)
+    fun repro6b_mappedCrossfadeOldDestinationChanged_positionLockedAtOldCurrentRect() {
+        val oldCurrentRect = RectF(50f, 0f, 150f, 20f)
+        val newPlannerDestRect = RectF(100f, 0f, 200f, 20f)
 
-        val slice = makeCrossfadeOldSlice(newDestRect)
+        // 旧 Move 正在从 [0,100] 移动到 [50,150]，当前在 [50,150]
+        val slice = makeCrossfadeOldSlice(newPlannerDestRect)
         val rebaseState =
             makeRebaseState(
-                role = SliceRole.Delete,
-                rect = oldRect,
+                role = SliceRole.Move,
+                rect = oldCurrentRect,
+                currentAlpha = 0.8f,
+                targetAlpha = 1f,
+            )
+
+        val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
+
+        // destinationRect 必须锁在 oldCurrentRect，不能是新 planner 的 destination
+        assertEquals(
+            "CrossfadeOld destinationRect.left 必须锁在 oldCurrentRect.left=50f",
+            oldCurrentRect.left,
+            rebased.destinationRect.left,
+            0.001f,
+        )
+        assertEquals(
+            "CrossfadeOld destinationRect.right 必须锁在 oldCurrentRect.right=150f",
+            oldCurrentRect.right,
+            rebased.destinationRect.right,
+            0.001f,
+        )
+        // fromDestinationRect 必须为 null（禁止位置运动）
+        assertEquals(
+            "CrossfadeOld fromDestinationRect 必须为 null（原地退场，禁止移动）",
+            null,
+            rebased.fromDestinationRect,
+        )
+        // visualDestinationRectAt 在所有 progress 都必须是 oldCurrentRect
+        assertEquals(
+            "CrossfadeOld visualDestinationRectAt(0f) 必须是 oldCurrentRect",
+            oldCurrentRect.left,
+            rebased.visualDestinationRectAt(0f).left,
+            0.001f,
+        )
+        assertEquals(
+            "CrossfadeOld visualDestinationRectAt(0.5f) 必须是 oldCurrentRect",
+            oldCurrentRect.left,
+            rebased.visualDestinationRectAt(0.5f).left,
+            0.001f,
+        )
+        assertEquals(
+            "CrossfadeOld visualDestinationRectAt(1f) 必须是 oldCurrentRect",
+            oldCurrentRect.left,
+            rebased.visualDestinationRectAt(1f).left,
+            0.001f,
+        )
+        // alpha 轨：startAlpha 继承旧 currentAlpha，endAlpha=0f
+        assertEquals(
+            "CrossfadeOld startAlpha 应继承旧 currentAlpha=0.8f",
+            0.8f,
+            rebased.startAlpha,
+            0.001f,
+        )
+        assertEquals(
+            "CrossfadeOld endAlpha 必须是 0f",
+            0f,
+            rebased.endAlpha,
+            0.001f,
+        )
+    }
+
+    // ---- 场景 6c：Insert(reveal=0.4) -> CrossfadeOld，fixed clip 稳定不移动 ----
+
+    /**
+     * #639 评论 5433268179：旧 Insert 正在 reveal 到 40%，currentRect 正在从 from 移动到
+     * destination 中间。rebase 成 CrossfadeOld 后：
+     *
+     * - 位置锁在 oldCurrentRect（原地退场）
+     * - fixed clip 第一帧必须是 rebase 当下的 effective clip
+     * - progress 0 / 0.5 / 1 的 effective fixed clip 坐标都不变
+     * - 只允许 alpha 下降，不允许 clip/bitmap 继续平移
+     */
+    @Test
+    fun repro6c_insertRevealingToCrossfadeOld_fixedClipStableNoMovement() {
+        val oldCurrentRect = RectF(30f, 0f, 130f, 20f)
+        val newPlannerDestRect = RectF(200f, 0f, 300f, 20f)
+
+        val slice = makeCrossfadeOldSlice(newPlannerDestRect)
+        val rebaseState =
+            makeRebaseState(
+                role = SliceRole.Insert,
+                rect = oldCurrentRect,
                 currentAlpha = 1f,
                 targetAlpha = 1f,
-                revealMode = TextRevealMode.SWALLOW,
+                revealMode = TextRevealMode.REVEAL,
                 revealFraction = 0.4f,
             )
 
         val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
 
-        // CrossfadeOld 分支旧 role=Move/CrossfadeNew/Insert 时设 destinationRect=fromRect，
-        // 但旧 role=Delete 走 else 不设。mapped destination 改变时应从旧 currentRect 开始。
-        // 注意：CrossfadeOld 的 destinationRect 在 fixed clip 分支被设成 fromRect（line 298），
-        // 这里验证 fromDestinationRect 或 destinationRect 反映旧 currentRect。
-        val reflectsOldRect =
-            rebased.fromDestinationRect != null ||
-                (rebased.destinationRect.left == oldRect.left && rebased.destinationRect.right == oldRect.right)
-        assertTrue(
-            "mapped CrossfadeOld destination 改变：第一帧应从旧 currentRect=oldRect 开始，" +
-                "实际 fromDestinationRect=${rebased.fromDestinationRect}, " +
-                "destinationRect=${rebased.destinationRect} → 位置跳变",
-            reflectsOldRect,
+        // 位置锁在 oldCurrentRect
+        assertEquals(
+            "Insert->CrossfadeOld destinationRect.left 必须锁在 oldCurrentRect.left=30f",
+            oldCurrentRect.left,
+            rebased.destinationRect.left,
+            0.001f,
+        )
+        assertEquals(
+            "Insert->CrossfadeOld destinationRect.right 必须锁在 oldCurrentRect.right=130f",
+            oldCurrentRect.right,
+            rebased.destinationRect.right,
+            0.001f,
+        )
+        assertEquals(
+            "Insert->CrossfadeOld fromDestinationRect 必须为 null",
+            null,
+            rebased.fromDestinationRect,
+        )
+        // fixed clip 必须存在（冻结旧 Insert 的半 reveal 可见部分）
+        assertNotNull(
+            "Insert->CrossfadeOld 应携带 fixedRevealClipRect 冻结半 reveal 可见部分",
+            rebased.fixedRevealClipRect,
+        )
+        // fixedClipBaseRect 必须为 null（CrossfadeOld 不移动，不需要 base）
+        assertEquals(
+            "Insert->CrossfadeOld fixedClipBaseRect 必须为 null（不移动）",
+            null,
+            rebased.fixedClipBaseRect,
+        )
+        // visualDestinationRectAt 在所有 progress 都必须是 oldCurrentRect
+        assertEquals(
+            "Insert->CrossfadeOld visualDestinationRectAt(0.5f) 必须是 oldCurrentRect",
+            oldCurrentRect.left,
+            rebased.visualDestinationRectAt(0.5f).left,
+            0.001f,
+        )
+        // alpha 轨：startAlpha=1f（继承旧 currentAlpha），endAlpha=0f
+        assertEquals(
+            "Insert->CrossfadeOld startAlpha 应继承旧 currentAlpha=1f",
+            1f,
+            rebased.startAlpha,
+            0.001f,
+        )
+        assertEquals(
+            "Insert->CrossfadeOld endAlpha 必须是 0f",
+            0f,
+            rebased.endAlpha,
+            0.001f,
         )
     }
 

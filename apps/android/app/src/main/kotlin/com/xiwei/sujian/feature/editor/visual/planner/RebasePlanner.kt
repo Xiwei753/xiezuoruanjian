@@ -280,15 +280,27 @@ class RebasePlanner {
         // Static 不参与动画，原样返回。
         if (slice.role == SliceRole.Static) return slice
 
-        // 位置轨：有位置差时 fromDestinationRect = oldCurrentRect，否则 null。
-        // Move 保持原有行为：总是设置 fromDestinationRect（即使相等，visualDestinationRectAt
-        // 退化为常量 destinationRect，效果与 null 完全一致，但保持 RebaseSliceMappingTest 契约）。
-        val fromDestinationRect =
-            if (slice.role == SliceRole.Move) {
-                oldCurrentRect
-            } else {
-                if (oldCurrentRect != slice.destinationRect) oldCurrentRect else null
-            }
+        // #639 评论 5433268179：mapped CrossfadeOld 必须原地退场，位置锁在 rebase 当下
+        // 的 oldCurrentRect，禁止旧字从旧行斜飞到新行。destinationRect 和 fromDestinationRect
+        // 都指向 oldCurrentRect，visualDestinationRectAt 退化为常量。
+        // 其他 role 保持原有行为：Move 总是设 fromDestinationRect，其余有位置差时设。
+        val mappedDestinationRect: android.graphics.RectF
+        val fromDestinationRect: android.graphics.RectF?
+
+        if (slice.role == SliceRole.CrossfadeOld) {
+            mappedDestinationRect = android.graphics.RectF(oldCurrentRect)
+            fromDestinationRect = null
+        } else {
+            mappedDestinationRect = android.graphics.RectF(slice.destinationRect)
+            fromDestinationRect =
+                if (slice.role == SliceRole.Move) {
+                    android.graphics.RectF(oldCurrentRect)
+                } else if (oldCurrentRect != mappedDestinationRect) {
+                    android.graphics.RectF(oldCurrentRect)
+                } else {
+                    null
+                }
+        }
 
         // alpha 轨：继续旧 currentAlpha -> targetAlpha，不硬抬 alpha、不写死 endAlpha=0f。
         // 普通 Delete 仍能保持 alpha 1 -> 1 + SWALLOW（targetAlpha=1），由 CrossfadeOld 映射
@@ -370,6 +382,7 @@ class RebasePlanner {
 
         return slice.copy(
             snapshot = snapshot,
+            destinationRect = mappedDestinationRect,
             startAlpha = startAlpha,
             endAlpha = endAlpha,
             fromDestinationRect = fromDestinationRect,
