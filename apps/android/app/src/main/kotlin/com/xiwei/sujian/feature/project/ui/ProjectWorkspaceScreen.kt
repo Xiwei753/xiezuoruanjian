@@ -24,6 +24,7 @@ import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
 import com.xiwei.sujian.feature.editor.presentation.requestOpenChapter
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
@@ -161,6 +162,8 @@ internal fun ProjectWorkspaceScreen(
         mutableStateOf<PreparedEditorTarget?>(null)
     }
     var navigationRequestId by remember { mutableStateOf(0L) }
+    // #640 B：唯一 openChapterJob — 新请求 cancel 旧请求，旧请求不得被旧 target 抢导航。
+    var openChapterJob by remember { mutableStateOf<Job?>(null) }
     LaunchedEffect(location) {
         if (location !is WorkspaceLocation.Editor) {
             preparedEditorTarget = null
@@ -176,45 +179,53 @@ internal fun ProjectWorkspaceScreen(
         chapterTitle: String,
         onLoadFailed: (() -> Unit)? = null,
     ) {
-            coroutineScope.launch {
-                val requestId = ++navigationRequestId
-                val result =
-                    editorViewModel.requestOpenChapter(
-                        projectId,
-                        volumeId,
-                        chapterId,
-                        chapterTitle,
-                    )
-                when (result) {
-                    is ChapterSwitchResult.Success -> {
-                        val target =
-                            PreparedEditorTarget(
-                                projectId = projectId,
-                                volumeId = volumeId,
-                                chapterId = chapterId,
-                                chapterTitle = chapterTitle,
-                            )
-                        preparedEditorTarget = target
-                        editorHost?.awaitPresentationReady(target.targetId)
-                        currentCoroutineContext().ensureActive()
-                        if (navigationRequestId == requestId && preparedEditorTarget == target) {
-                            appState.selectProject(projectId, projectTitle)
-                            appState.selectChapter(volumeId, chapterId, chapterTitle)
-                            workspaceNavState.navigateToEditor(projectId, volumeId, chapterId)
+            // #640 B：新请求 cancel 旧请求 — 旧 awaitPresentationReady 被 cancel，
+            // 不会在旧 target ready 后抢导航。
+            openChapterJob?.cancel()
+            openChapterJob =
+                coroutineScope.launch {
+                    val requestId = ++navigationRequestId
+                    val result =
+                        editorViewModel.requestOpenChapter(
+                            projectId,
+                            volumeId,
+                            chapterId,
+                            chapterTitle,
+                        )
+                    when (result) {
+                        is ChapterSwitchResult.Success -> {
+                            val target =
+                                PreparedEditorTarget(
+                                    projectId = projectId,
+                                    volumeId = volumeId,
+                                    chapterId = chapterId,
+                                    chapterTitle = chapterTitle,
+                                )
+                            preparedEditorTarget = target
+                            // #640 B：replacement-aware Boolean await —
+                            // target 被另一个 bind 替代/失效/关闭时立即返回 false，
+                            // 不让 first 永久挂住。false 时直接 return，不导航。
+                            val ready = editorHost?.awaitPresentationReady(target.targetId) ?: true
+                            if (!ready) return@launch
+                            currentCoroutineContext().ensureActive()
+                            if (navigationRequestId == requestId && preparedEditorTarget == target) {
+                                appState.selectProject(projectId, projectTitle)
+                                appState.selectChapter(volumeId, chapterId, chapterTitle)
+                                workspaceNavState.navigateToEditor(projectId, volumeId, chapterId)
+                            }
                         }
-                    }
-                    is ChapterSwitchResult.SaveFailed,
-                    ChapterSwitchResult.Stale,
-                    -> {
-                        // 错误提示已由 ViewModel 事件（toast）发出。
-                    }
-                    is ChapterSwitchResult.LoadFailed -> {
-                        if (navigationRequestId == requestId) {
-                            onLoadFailed?.invoke()
+                        is ChapterSwitchResult.SaveFailed,
+                        ChapterSwitchResult.Stale,
+                        -> {
+                            // 错误提示已由 ViewModel 事件（toast）发出。
+                        }
+                        is ChapterSwitchResult.LoadFailed -> {
+                            if (navigationRequestId == requestId) {
+                                onLoadFailed?.invoke()
+                            }
                         }
                     }
                 }
-            }
     }
 
     // #640 A.8/A.9：章节切换失败回滚回调 — 提取为共享变量，供窄屏和宽屏共用。

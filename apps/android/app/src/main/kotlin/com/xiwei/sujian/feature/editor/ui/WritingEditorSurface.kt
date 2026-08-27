@@ -90,8 +90,8 @@ fun WritingEditorSurface(
     // bindingState / sessionId 永远来自同一个不可变快照，不会读到跨帧组合。
     val sessionState by coordinator.sessionStateFlow.collectAsStateWithLifecycle()
     val bindingState = sessionState.bindingState
-    // #640 A.7：收集 presentationReadyTargetId — StateFlow 更新触发 AndroidView.update 的可见性重组
-    val readyTargetId by coordinator.presentationReadyTargetId.collectAsStateWithLifecycle()
+    // #640 B：收集 presentationReady 几何 — StateFlow 更新触发 AndroidView.update 的可见性重组
+    val presentationReady by coordinator.presentationReady.collectAsStateWithLifecycle()
     // #630 R12：渲染决策同时消费 bindingState 和业务层传入的 isActivePane —
     // 活动章节从进入页面到稳定显示必须只有 SujianEditorView 一套正文 renderer。
     val surfaceMode = editorSurfaceMode(bindingState, coordinator.windowId, targetId, isActivePane)
@@ -120,9 +120,11 @@ fun WritingEditorSurface(
                         // #640 A.3：统一主题和 visibility = VISIBLE 仅当 presentationVisible && isPresentationReady
                         // 否则 INVISIBLE；绝不用 alpha/动画假隐藏。
                         // presentationVisible 不参与 session 业务判断（#640 A.5）。
-                        // #640 A.7：用 readyTargetId（已收集为 State）触发 recomposition，
-                        // 避免 StateFlow 更新不触发 AndroidView.update 的可见性重组。
-                        val isReady = readyTargetId == targetId
+                        // #640 B：用 presentationReady 几何（已收集为 State）触发 recomposition，
+                        // 当前几何 ready 命中此 target 才 VISIBLE。
+                        val isReady = presentationReady?.let { r ->
+                            r.targetId == targetId && r.widthPx > 0 && r.heightPx > 0
+                        } ?: false
                         view.visibility =
                             if (presentationVisible && isReady) {
                                 android.view.View.VISIBLE

@@ -44,7 +44,6 @@ import com.xiwei.sujian.feature.editor.ui.theme.EditorThemeAdapter
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 
 /**
  * #592 一/四：窗口层宿主 — 每个 Activity/窗口创建一份，持有全部窗口/渲染对象：
@@ -141,16 +140,27 @@ class EditorWindowHost(
     val targetDecorationsVersion: Long get() = sessionCoordinator.targetDecorationsVersion
     val lastCommittedText: String? get() = sessionCoordinator.lastCommittedText
 
-    // #640 A.7：presentation-ready 状态 — 记录哪个 target 的 layout 已就绪
-    private val _presentationReadyTargetId = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
-    val presentationReadyTargetId: StateFlow<String?> = _presentationReadyTargetId.asStateFlow()
+    // #640 B：presentation-ready 几何状态闸门 — 唯一 ready/generation 写入点。
+    private val readinessGate = PresentationReadinessGate()
+    val presentationReady: StateFlow<EditorPresentationReady?> = readinessGate.ready
+    val presentationReadyGeneration: StateFlow<Long> = readinessGate.generation
 
-    /** #640 A.7：检查指定 target 的 presentation 是否已就绪。 */
-    fun isPresentationReady(targetId: String): Boolean = _presentationReadyTargetId.value == targetId
+    /** #640 A.7：检查指定 target 的 presentation 是否已就绪（含几何）。 */
+    fun isPresentationReady(targetId: String): Boolean = readinessGate.isReady(targetId)
 
-    /** #640 A.7：等待指定 target 的 presentation 就绪（suspend）。 */
-    suspend fun awaitPresentationReady(targetId: String) {
-        _presentationReadyTargetId.first { value -> value == targetId }
+    /**
+     * #640 B：等待指定 target 的 presentation 就绪（suspend），replacement-aware。
+     *
+     * 返回 true 仅当当前 active target 的当前几何 ready 命中此 target；
+     * target 被另一个 bind 替代、失效、关闭（[presentationReadyGeneration] 偏离）时
+     * 立即返回 false，不会让 [first] 永久等不到。
+     */
+    suspend fun awaitPresentationReady(targetId: String): Boolean =
+        readinessGate.awaitPresentationReady(targetId)
+
+    /** #640 A.7/B：使旧 presentation-ready 失效并推进代次（target 替换/关闭/解绑时）。 */
+    private fun invalidatePresentationReady() {
+        readinessGate.invalidateAndAdvance()
     }
 
     /** #640 A.7：注册 presentation-ready callback，确认 target 仍 active 且 binding 为 Attached。 */
@@ -159,13 +169,20 @@ class EditorWindowHost(
         targetId: String,
     ) {
         val view = sharedEditorView ?: return
-        // #640 A.7：用 whenPresentationLayoutReady 一次性 API，不再直接 property 赋值
-        view.whenPresentationLayoutReady {
-            // #640 A.7：callback 必须确认 target 仍 active 且 binding Attached 才设置
+        // #640 B：几何 callback — View 在 layout 就绪时传递真实 width/height，
+        // 在尺寸变化时先通知失效。Host 在 callback 中确认 target 仍 active 且 binding Attached。
+        view.onPresentationGeometryInvalidated = {
             if (isPresentationReadyBinding(bindingWindowId, targetId)) {
-                _presentationReadyTargetId.value = targetId
+                readinessGate.invalidateGeometry()
             }
         }
+        view.onPresentationGeometryReady = { widthPx, heightPx ->
+            if (isPresentationReadyBinding(bindingWindowId, targetId)) {
+                readinessGate.publishReady(targetId, widthPx, heightPx)
+            }
+        }
+        // 立即尝试 dispatch 一次（View 可能已 layout 就绪）。
+        view.dispatchPresentationReadyIfPossible()
     }
 
     private fun isPresentationReadyBinding(
@@ -217,10 +234,9 @@ class EditorWindowHost(
         // #595 三：解绑必须清除 pendingViewBind — 否则下一个窗口的 View 会用
         // 已关闭/已释放的 session bridge 执行绑定。
         pendingViewBind = null
-        // #640 A.7：只清理被解绑 target，避免旧 onDispose 清掉新 target 的 ready 状态。
-        if (_presentationReadyTargetId.value == targetId) {
-            _presentationReadyTargetId.value = null
-        }
+        // #640 B：解绑使旧 await 立即返回 false，即使 ready 当前为 null（target 尚未发布 ready）。
+        // invalidateTarget 只清属于此 target 的 ready 并推进代次，不误伤新 target 的 ready。
+        readinessGate.invalidateTarget(targetId)
         sessionCoordinator.detachWindowBinding(windowId, targetId)
     }
 
@@ -239,10 +255,9 @@ class EditorWindowHost(
         targets.remove(targetId)
         // #595 三：业务关闭同样清除 pendingViewBind，防止 attachView 绑定已关闭的 session。
         pendingViewBind = null
-        // #640 A.7：只清理被关闭 target，避免旧 onDispose 清掉新 target 的 ready 状态。
-        if (_presentationReadyTargetId.value == targetId) {
-            _presentationReadyTargetId.value = null
-        }
+        // #640 B：业务关闭使旧 await 立即返回 false，即使 ready 当前为 null（target 尚未发布 ready）。
+        // invalidateTarget 只清属于此 target 的 ready 并推进代次，不误伤新 target 的 ready。
+        readinessGate.invalidateTarget(targetId)
         sessionCoordinator.closeTarget(targetId, reason)
     }
 
@@ -468,9 +483,9 @@ class EditorWindowHost(
             targets[oldActiveId]?.onEditingStateChanged?.invoke(EditingState.REBINDING)
         }
         val target = targets[targetId] ?: return false
-        // #640 A.7：开始每个新 target bind 先清 _presentationReadyTargetId —
-        // 旧 target 的 ready 状态不得冒充新 target。
-        _presentationReadyTargetId.value = null
+        // #640 B：开始每个新 target bind 先使旧 ready 失效并推进代次 —
+        // 旧 target 的 awaitPresentationReady 快速返回 false，不会永久挂住。
+        invalidatePresentationReady()
         // #595 四：新建 session 的初始正文来自窗口层 target（Compose 唯一正文来源），
         // 会话层不再维护 targetTexts 第二份正文缓存。
         val bindInfo =
@@ -861,10 +876,9 @@ class EditorWindowHost(
         clearActiveCallbacks()
         view.unbindSession("compose_release")
         view.setFrameClock(null)
-        // #640 A.7：只清理被 detach 的 target，避免旧 onDispose 清掉新 target 的 ready 状态。
-        if (_presentationReadyTargetId.value == targetId) {
-            _presentationReadyTargetId.value = null
-        }
+        // #640 B：detachView 使旧 await 立即返回 false，即使 ready 当前为 null。
+        // invalidateTarget 只清属于此 target 的 ready 并推进代次，不误伤新 target 的 ready。
+        readinessGate.invalidateTarget(targetId)
         // 调用会话层的窗口解绑，把当前绑定明确推进到 Detached。
         // 持久正文 session 只解除窗口绑定，不关闭 Rust session。
         sessionCoordinator.detachWindowBinding(windowId, targetId)
@@ -922,8 +936,8 @@ class EditorWindowHost(
         // 与 detachView 一致清除 pendingViewBind，避免残留的 session 绑定参数
         // 被后续复用。
         pendingViewBind = null
-        // #640 A.7：窗口释放时清掉 presentation-ready 状态
-        _presentationReadyTargetId.value = null
+        // #640 B：窗口释放使旧 ready 失效并推进代次。
+        invalidatePresentationReady()
         if (activeId != null) {
             sessionCoordinator.detachWindowBinding(windowId, activeId)
         }
@@ -943,7 +957,8 @@ class EditorWindowHost(
             view.release()
         }
         sharedEditorView = null
-        _presentationReadyTargetId.value = null
+        // #640 B：releaseHost 使旧 ready 失效并推进代次。
+        invalidatePresentationReady()
         windowFrameClock.release()
         sessionCoordinator.releaseHost()
     }
@@ -1089,4 +1104,21 @@ data class EditorTypography(
     val lineSpacingMultiplier: Float,
     val autoIndentEnabled: Boolean,
     val autoIndentWidth: Float,
+)
+
+/**
+ * #640 B：presentation-ready 几何状态 — 不可伪造的 (targetId, widthPx, heightPx) 三元组。
+ *
+ * [EditorWindowHost.presentationReady] 在 View 真实 layout 就绪（width>0 && height>0 &&
+ * pipeline layout != null）后发布带当前真实几何的值；尺寸变化时先发布 null（旧几何失效），
+ * 新尺寸下完成 layout/maxScroll/viewport restore 后才发布新几何。
+ *
+ * [EditorWindowHost.awaitPresentationReady] 返回 true 仅当当前 active target 的当前几何
+ * ready 命中此 target；target 被替换/关闭时（[EditorWindowHost.presentationReadyGeneration]
+ * 偏离）立即返回 false。
+ */
+data class EditorPresentationReady(
+    val targetId: String,
+    val widthPx: Int,
+    val heightPx: Int,
 )

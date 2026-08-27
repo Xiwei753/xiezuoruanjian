@@ -91,27 +91,26 @@ class SujianEditorView
 
         fun getThemeBackgroundColor(): Int = _themeBackgroundColor
 
-        // #640 A.6：一次性 presentation-ready callback — 真实 width/height > 0 且 pipeline layout != null 时触发
-        private var onPresentationLayoutReady: (() -> Unit)? = null
+        // #640 B：presentation-ready 几何 callback — 持久，每次 layout 就绪时触发带真实 width/height。
+        // 由 EditorWindowHost.registerPresentationReadyCallback 注册；
+        // onSizeChanged 尺寸变化时先触发 onPresentationGeometryInvalidated，完成新 layout/maxScroll/
+        // viewport restore 后再触发 onPresentationGeometryReady。
+        var onPresentationGeometryReady: ((widthPx: Int, heightPx: Int) -> Unit)? = null
+        var onPresentationGeometryInvalidated: (() -> Unit)? = null
 
         /**
-         * #640 A.6：注册一次性 presentation-ready callback。
-         * 保存 callback 并立即尝试 dispatch；若 layout 已就绪则立即触发，
-         * 否则等到 onSizeChanged/updateLayoutConfig/applyLayoutConfig 末尾触发。
-         * 回调只触发一次。
+         * #640 B：触发 presentation-ready callback（持久），带当前真实 width/height。
+         * width>0 && height>0 && pipeline layout != null 时触发。
          */
-        fun whenPresentationLayoutReady(callback: () -> Unit) {
-            onPresentationLayoutReady = callback
-            dispatchPresentationReadyIfPossible()
+        fun dispatchPresentationReadyIfPossible() {
+            if (width > 0 && height > 0 && pipeline.getLayout() != null) {
+                onPresentationGeometryReady?.invoke(width, height)
+            }
         }
 
-        /** #640 A.6：触发 presentation-ready callback（一次性），清掉 callback 防止重复触发。 */
-        private fun dispatchPresentationReadyIfPossible() {
-            if (width > 0 && height > 0 && pipeline.getLayout() != null) {
-                val callback = onPresentationLayoutReady ?: return
-                onPresentationLayoutReady = null
-                callback()
-            }
+        /** #640 B：通知 Host 旧几何已失效（尺寸变化开始时触发）。 */
+        private fun notifyPresentationGeometryInvalidated() {
+            onPresentationGeometryInvalidated?.invoke()
         }
 
         init {
@@ -662,17 +661,25 @@ class SujianEditorView
                     }
                 }
                 newContentWidth != oldContentWidth -> {
+                    // #640 B：宽度变化先使旧几何 ready 失效，Host 把 View 设 INVISIBLE。
+                    notifyPresentationGeometryInvalidated()
                     lastContentWidthPx = newContentWidth
                     // 宽度变化重排时保住当前视口锚点
                     reflowPreservingViewport {
                         pipeline.updateLayout(newContentWidth.toFloat())
                     }
+                    // #640 B：新尺寸下 layout/maxScroll/viewport restore 完成后发布新几何 ready。
+                    dispatchPresentationReadyIfPossible()
                 }
                 h != oldh -> {
+                    // #640 B：高度变化先使旧几何 ready 失效。
+                    notifyPresentationGeometryInvalidated()
                     // IME / 系统栏 / 窗口高度变化：只改变可见高度。
                     updateMaxScroll()
                     viewport.clamp()
                     invalidate()
+                    // #640 B：新高度下 maxScroll/clamp 完成后发布新几何 ready。
+                    dispatchPresentationReadyIfPossible()
                 }
             }
             if (w > 0 && h > 0) {
@@ -1396,7 +1403,8 @@ class SujianEditorView
         fun unbindSession(
             @Suppress("UNUSED_PARAMETER") reason: String,
         ) {
-            onPresentationLayoutReady = null
+            onPresentationGeometryReady = null
+            onPresentationGeometryInvalidated = null
             if (!isSessionBound) return
             pipeline.cancelActiveTransaction()
             // #638 评论 5411376945：unbind 马上换 target，只清视口过渡状态，
