@@ -59,9 +59,23 @@ class EditorWindowHostPresentationReadyTest {
             val host = createHost()
             val target = EditableTextTarget("chapter-body:p:v:c-a", TextEditorProfile.DocumentBody, isPersistent = true)
             host.registerTarget(target)
+            // #640 评论 5441849412 问题1：先设置 session 逻辑身份 targetId=A，让 await(A) 进入
+            // 等待（不提前结束）。await 现在用 session.targetId 判断过期；若不设置 targetId，
+            // session.targetId=null != A，await(A) 会在 closeTarget 之前就立即 false，测试无法
+            // 真正卡住 close 唤醒路径。
+            host.sessionCoordinator.mutateSession {
+                sessionState = sessionState.copy(targetId = target.targetId)
+            }
+            assertEquals(target.targetId, host.sessionStateFlow.value.targetId)
             val deferred = async { host.awaitPresentationReady(target.targetId) }
             delay(10)
-            // 业务关闭 target → invalidateTarget → generation 推进 → await 快速 false
+            // closeTarget 之前：session.targetId=A, ready=null → await(A) 继续等，不提前 false
+            assertFalse(
+                "closeTarget 之前 await(A) 不应提前完成",
+                deferred.isCompleted,
+            )
+            // 业务关闭 target → closeTarget 重置 sessionState（targetId=null）→
+            // session.targetId=null != A → await 快速 false（同时 invalidateTarget 推进 generation）
             host.closeTarget(target.targetId, SessionCloseReason.WORKSPACE_NAVIGATION)
             assertFalse(deferred.await())
         }

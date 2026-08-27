@@ -1,7 +1,12 @@
 package com.xiwei.sujian.feature.project.ui
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.Layout
@@ -259,6 +264,60 @@ internal fun resolveWideEditorBounds(workbenchPlan: AndroidWorkbenchLayoutPlan?)
 }
 
 /**
+ * #640 评论 5441849412 问题3：Editor host inset 消费策略 — 纯函数，无 Compose 副作用，可单测。
+ *
+ * host 提到 [SujianNavigationSuite] 的 Scaffold 外（与 SujianNavScaffoldContent 作为稳定 sibling）后，
+ * 原来的 `Scaffold(contentWindowInsets = WindowInsets.safeDrawing)` 的 innerPadding 包不到 host。
+ * 项目启用 `enableEdgeToEdge()` + `adjustResize`：edge-to-edge 下 adjustResize 只让应用收到 IME inset，
+ * 内容仍必须明确处理 inset。inset 必须由 host 唯一拥有一次，不加回 WritingPaneLayout.imePadding。
+ *
+ * - [consumesIme]：true — IME 在 host 层唯一消费一次，Editor 可用高度只减少一次；
+ * - [consumesNavigationBars]：true — 底部 navigationBars（IME 出现时被覆盖，windowInsetsPadding 取 max）；
+ * - [consumesDisplayCutout]：true — 横向 displayCutout（折叠屏铰链/刘海）；
+ * - [consumesTopStatusBar]：false — 顶部 statusBars 由 compact top bar / Workbench toolbar 自己处理，
+ *   host 不重复消费 top inset。
+ *
+ * 锁住不变量：IME 出现时 Editor 可用高度只减少一次（不是 0 次，也不是 2 次）。
+ */
+internal data class EditorHostInsetPolicy(
+    val consumesIme: Boolean,
+    val consumesNavigationBars: Boolean,
+    val consumesDisplayCutout: Boolean,
+    val consumesTopStatusBar: Boolean,
+)
+
+/**
+ * #640 评论 5441849412 问题3：Editor host inset 消费策略决策 — 纯函数，无 Compose 副作用，可单测。
+ *
+ * 唯一 owner：IME + 底部 navigationBars + 横向 displayCutout；不消费 top statusBars。
+ */
+internal fun resolveEditorHostInsetPolicy(): EditorHostInsetPolicy =
+    EditorHostInsetPolicy(
+        consumesIme = true,
+        consumesNavigationBars = true,
+        consumesDisplayCutout = true,
+        consumesTopStatusBar = false,
+    )
+
+/**
+ * #640 评论 5441849412 问题3：host 层唯一 inset 消费 Modifier — 由 [EditorPresentationHost] 应用。
+ *
+ * 严格按 [resolveEditorHostInsetPolicy] 决策消费：IME 只在此处消费一次，
+ * 不加回 WritingPaneLayout.imePadding。多个 windowInsetsPadding 叠加时 Compose 自动处理重叠
+ * （每个 inset padding 只消费未被前一个 padding 消费的部分），不会重复消费 IME。
+ */
+@Composable
+private fun editorHostInsetPadding(policy: EditorHostInsetPolicy): Modifier {
+    val imeInsets = WindowInsets.ime
+    val navBarInsets = WindowInsets.navigationBars
+    val cutoutInsets = WindowInsets.displayCutout
+    return Modifier
+        .then(if (policy.consumesIme) Modifier.windowInsetsPadding(imeInsets) else Modifier)
+        .then(if (policy.consumesNavigationBars) Modifier.windowInsetsPadding(navBarInsets) else Modifier)
+        .then(if (policy.consumesDisplayCutout) Modifier.windowInsetsPadding(cutoutInsets) else Modifier)
+}
+
+/**
  * #640 A：EditorPresentationCallbacks — 由 ProjectWorkspaceScreen 构造并上传给 suite，
  * 供 EditorPresentationHost 宽屏 WideWritingWorkspace 的章节树/toolbar 使用。
  *
@@ -314,13 +373,19 @@ internal fun EditorPresentationHost(
     if (mode == EditorPresentationHostMode.HIDDEN) return
     val currentTarget = target ?: return
 
+    // #640 评论 5441849412 问题3：host 提到 Scaffold 外后，inset 由 host 唯一拥有一次。
+    // IME 只在此处消费一次，不加回 WritingPaneLayout.imePadding。
+    // top statusBars 不消费（compact top bar / Workbench toolbar 自己处理顶部系统栏）。
+    val hostModifier = modifier.fillMaxSize().then(editorHostInsetPadding(resolveEditorHostInsetPolicy()))
+
     when (mode) {
         EditorPresentationHostMode.COMPACT_EDITOR -> {
             // #640：compact host 在 hidden 和 visible 使用完全相同的 measured body bounds。
             // 始终测量 compactTopBar 作为 top-bar placeable，正文 y/height 为 root 去掉 top-bar 实际测量高度；
             // presentationVisible=false 时只不 place top-bar（保留其测量占位），不遮盖章节树；
-            // presentationVisible=true 才 place top-bar。host 在 Scaffold 外，无 bottom NavigationBar，
+            // presentationVisible=true 才 place top-bar。host 在 Scaffold 外，无 bottom NavigationBar,
             // 不经过 ChapterTree Scaffold 的 innerPadding。View 只 INVISIBLE 到 VISIBLE，不重建。
+            // inset 由 hostModifier 唯一消费（IME/navigationBars/displayCutout），top bar 不重复消费 top。
             CompactEditorMeasureLayout(
                 presentationVisible = presentationVisible,
                 topBar = compactTopBar,
@@ -332,7 +397,7 @@ internal fun EditorPresentationHost(
                         modifier = Modifier.fillMaxSize(),
                     )
                 },
-                modifier = modifier.fillMaxSize(),
+                modifier = hostModifier,
             )
         }
         EditorPresentationHostMode.WIDE_EDITOR_ONLY,
@@ -342,6 +407,7 @@ internal fun EditorPresentationHost(
             // EDITOR_ONLY（预热/plan 非 WORKBENCH）或 FULL_WORKBENCH（可见+WORKBENCH）。
             // host 只传 target 构造的 documentState + presentationVisible，不重建 View。
             // 宽屏 top bar 由 Scaffold 画（SinglePane Editor）或 Workbench toolbar 自己画（FULL_WORKBENCH）。
+            // inset 由 hostModifier 唯一消费（IME/navigationBars/displayCutout），不重复消费 top。
             val deps = wideDeps ?: return
             val layoutState = wideLayoutState ?: return
             val callbacks = wideCallbacks ?: return
@@ -358,7 +424,7 @@ internal fun EditorPresentationHost(
                 documentState = documentState,
                 layoutState = layoutState,
                 callbacks = callbacks,
-                modifier = modifier.fillMaxSize(),
+                modifier = hostModifier,
             )
         }
         EditorPresentationHostMode.HIDDEN -> return

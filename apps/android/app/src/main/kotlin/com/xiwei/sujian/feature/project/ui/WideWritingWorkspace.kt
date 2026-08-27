@@ -18,7 +18,6 @@ import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.MeasurePolicy
 import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -155,6 +154,37 @@ internal fun resolveWideWorkspaceCompositionMode(
     return WideWorkspaceCompositionMode.FULL_WORKBENCH
 }
 
+/**
+ * #640 评论 5441849412 问题2：宽屏 Editor slot identity 决策 — 纯函数，无 Compose 副作用，可单测。
+ *
+ * EditorPane 始终在唯一 call site（layoutId=EDITOR），不随 [compositionMode] 切换。
+ * 之前 EDITOR_ONLY/FULL_WORKBENCH 两分支各自创建 EditorPane，是两个 call site，
+ * Compose composable 实例由 call site 识别 → AndroidView 被丢弃重建。
+ * 重构后 EditorPane 始终在 [WideWritingWorkspace] 的 Layout content 唯一 call site，
+ * 切换 compositionMode 只增删 Workbench chrome slot，不移动 Editor 本身。
+ *
+ * 本函数记录 Editor slot 的稳定 identity key，锁住"EditorPane 始终在同一 call site"不变量：
+ * - [layoutIdKey] 恒为 "EDITOR"（两种 compositionMode 相同）；
+ * - [isUniqueCallSite] 恒为 true（EditorPane 不在 if 分支里各自创建）。
+ */
+internal data class WideEditorSlotIdentity(
+    val layoutIdKey: String,
+    val isUniqueCallSite: Boolean,
+)
+
+/**
+ * #640 评论 5441849412 问题2：宽屏 Editor slot identity 决策 — 纯函数，可单测。
+ *
+ * 两种 compositionMode 返回相同 identity → call site 不变 → AndroidView 不重建。
+ */
+internal fun resolveWideEditorSlotIdentity(
+    compositionMode: WideWorkspaceCompositionMode,
+): WideEditorSlotIdentity =
+    WideEditorSlotIdentity(
+        layoutIdKey = "EDITOR",
+        isUniqueCallSite = true,
+    )
+
 @Composable
 internal fun WideWritingWorkspace(
     deps: WideWorkspaceDeps,
@@ -172,7 +202,7 @@ internal fun WideWritingWorkspace(
 
     // #628 评论 5301021120 02:59:39Z 版：plan 由导航套件层统一解析（外层顶栏归属必须消费
     // 同一份 Rust 最终 mode），本组件不再自行 resolve。
-    // #640 C：presentationVisible=false 时即使 plan=WORKBENCH 也只组合/测量唯一 EditorPane，
+    // #640 C：presentationVisible=false 时即使 plan=WORKBENCH 也只组合/测量唯一 EditorPane,
     // 不进入完整 Workbench shell（避免隐藏阶段预热）。决策由纯函数 [resolveWideWorkspaceCompositionMode]
     // 统一表达，生产分支与单测共用同一逻辑。
     val compositionMode =
@@ -180,29 +210,19 @@ internal fun WideWritingWorkspace(
             workbenchPlan = workbenchPlan,
             presentationVisible = documentState.presentationVisible,
         )
-    if (compositionMode == WideWorkspaceCompositionMode.EDITOR_ONLY) {
-        // 按 Rust 返回的 Editor bounds measure/place，不能 fillMaxSize()：
-        // 遇到横向/竖向 separating hinge 时，fillMaxSize 会让正文重新跨过遮挡。
-        val editorBounds = workbenchPlan?.placementFor(AndroidWorkbenchRole.EDITOR)?.bounds
-        val density = LocalDensity.current
-        EditorPane(
-            documentState = documentState,
-            onChapterSwitchFailed = callbacks.onChapterSwitchFailed,
-            modifier =
-                if (editorBounds != null && !editorBounds.isEmpty) {
-                    modifier.editorAtBounds(editorBounds, density)
-                } else {
-                    // 桥失败（null）或隐藏阶段 Rust bounds 不可用时本地占满——没有任何遮挡信息。
-                    modifier.fillMaxSize()
-                },
-        )
-        return
-    }
-    // FULL_WORKBENCH：helper 保证 workbenchPlan != null && mode == WORKBENCH。
-    // requireNotNull 恢复非空类型（helper 不变量；不引入 !! / 另一个 state source）。
-    val resolvedPlan = requireNotNull(workbenchPlan)
-    val bounds = WorkbenchBounds.fromPlan(resolvedPlan)
     val density = LocalDensity.current
+
+    // #640 评论 5441849412 问题2：EditorPane 始终在唯一 call site（layoutId=EDITOR），
+    // 不在 EDITOR_ONLY/FULL_WORKBENCH 两分支各自创建。切换 compositionMode 只增删 Workbench chrome slot,
+    // 不移动 Editor 本身 — Compose composable 实例由 call site 识别，call site 不变则 AndroidView 不重建。
+    val isFullWorkbench =
+        compositionMode == WideWorkspaceCompositionMode.FULL_WORKBENCH && workbenchPlan != null
+    val workbenchBounds =
+        if (isFullWorkbench) {
+            WorkbenchBounds.fromPlan(requireNotNull(workbenchPlan))
+        } else {
+            null
+        }
     val slotState =
         WorkbenchSlotState(
             chapterTreeCollapsed = chapterTreeCollapsed,
@@ -212,18 +232,38 @@ internal fun WideWritingWorkspace(
             onToggleToolPane = layoutState.onToggleToolPane,
             onSelectTool = { id -> selectedToolId = id },
         )
+
+    // 始终用同一个 Layout；EditorPane 始终是 layoutId=EDITOR 的 slot，唯一 call site。
+    // measure policy 按 compositionMode 选 place 策略，但 EditorPane composable 实例不变。
     Layout(
         modifier = modifier.fillMaxSize(),
         content = {
-            WorkbenchSlots(
-                deps = deps,
+            // Workbench chrome slots — 只在 FULL_WORKBENCH 时组合（toolbar/chapter tree/tool pane/rail）。
+            // 不创建 EditorPane — EditorPane 在下面唯一 call site。
+            if (isFullWorkbench && workbenchBounds != null) {
+                WorkbenchChromeSlots(
+                    deps = deps,
+                    documentState = documentState,
+                    callbacks = callbacks,
+                    state = slotState,
+                    bounds = workbenchBounds,
+                )
+            }
+            // 唯一 EditorPane — 始终在同一个 call site，layoutId=EDITOR。
+            // EDITOR_ONLY：measure policy 按 Rust Editor bounds place（或 fillMaxSize 回落）。
+            // FULL_WORKBENCH：measure policy 按七角色 bounds place。
+            // 切换 compositionMode 不改变 EditorPane 的 call site，AndroidView 不重建。
+            EditorPane(
                 documentState = documentState,
-                callbacks = callbacks,
-                state = slotState,
-                bounds = bounds,
+                onChapterSwitchFailed = callbacks.onChapterSwitchFailed,
+                modifier = Modifier.layoutId(LayoutSlotId.EDITOR),
             )
         },
-        measurePolicy = workbenchMeasurePolicy(bounds, density),
+        measurePolicy = wideWorkspaceMeasurePolicy(
+            compositionMode = compositionMode,
+            workbenchPlan = workbenchPlan,
+            density = density,
+        ),
     )
 }
 
@@ -296,10 +336,12 @@ private data class WorkbenchSlotState(
 )
 
 /**
- * 七角色 slot 内容 — 提取以降低 [WideWritingWorkspace] 行数。
+ * #640 评论 5441849412 问题2：Workbench chrome slot 内容（不含 EditorPane）— 提取以降低
+ * [WideWritingWorkspace] 行数。EditorPane 在 [WideWritingWorkspace] 顶层唯一 call site，
+ * 不在此处创建，避免 EDITOR_ONLY/FULL_WORKBENCH 两分支各自创建导致 AndroidView 重建。
  */
 @Composable
-private fun WorkbenchSlots(
+private fun WorkbenchChromeSlots(
     deps: WideWorkspaceDeps,
     documentState: WideWorkspaceDocumentState,
     callbacks: WideWorkspaceCallbacks,
@@ -322,7 +364,7 @@ private fun WorkbenchSlots(
         onRedo = onRedo,
         syncState = syncState,
     )
-    WorkbenchContentSlots(
+    WorkbenchChromeContentSlots(
         deps = deps,
         documentState = documentState,
         state = state,
@@ -336,7 +378,7 @@ private fun WorkbenchSlots(
     )
 }
 
-/** Toolbar 三组 slot — 提取以降低 [WorkbenchSlots] 行数。 */
+/** Toolbar 三组 slot — 提取以降低 [WorkbenchChromeSlots] 行数。 */
 @Composable
 private fun WorkbenchToolbarSlots(
     deps: WideWorkspaceDeps,
@@ -383,10 +425,11 @@ private data class WorkbenchContentEnv(
 )
 
 /**
- * Content 四角色 slot — 提取以降低 [WorkbenchSlots] 行数。
+ * #640 评论 5441849412 问题2：Workbench chrome content slot（章节树/工具面板/工具栏图标列）—
+ * 不含 EditorPane。EditorPane 在 [WideWritingWorkspace] 顶层唯一 call site（layoutId=EDITOR）。
  */
 @Composable
-private fun WorkbenchContentSlots(
+private fun WorkbenchChromeContentSlots(
     deps: WideWorkspaceDeps,
     documentState: WideWorkspaceDocumentState,
     state: WorkbenchSlotState,
@@ -405,12 +448,8 @@ private fun WorkbenchContentSlots(
             modifier = Modifier.layoutId(LayoutSlotId.CHAPTER_NAVIGATION),
         )
     }
-    // 正文编辑器（复用 SujianEditorHost，不创建第二个；始终在组合中，bounds 由 plan 决定）。
-    EditorPane(
-        documentState = documentState,
-        onChapterSwitchFailed = callbacks.onChapterSwitchFailed,
-        modifier = Modifier.layoutId(LayoutSlotId.EDITOR),
-    )
+    // EditorPane 不在此处 — 在 WideWritingWorkspace 顶层唯一 call site（layoutId=EDITOR），
+    // 避免 EDITOR_ONLY/FULL_WORKBENCH 切换时 AndroidView 重建。
     // 工具面板（用户主动收起时不画）。
     if (!state.toolPaneCollapsed && bounds.toolPane != null && !bounds.toolPane.isEmpty) {
         WritingToolPane(
@@ -430,42 +469,82 @@ private fun WorkbenchContentSlots(
 }
 
 /**
- * SinglePane 退化：按 Rust 返回的 Editor bounds measure/place（#628 评论 5301021120 02:59:39Z 版）。
+ * #640 评论 5441849412 问题2：构造 wide workspace measure policy — 按 [compositionMode] 分发。
  *
- * 不能 `fillMaxSize()`：遇到横向/竖向 separating hinge 时，全窗口铺满会让正文
- * 重新跨过遮挡。这里与 Workbench 模式用同一套 bounds 语义 — 子级按 bounds 尺寸
- * 测量、按 bounds 偏移放置，Editor 只占 Rust 算好的最大连续安全 free-region。
+ * - FULL_WORKBENCH + plan 非空：按七角色 bounds measure/place 所有 slot（含 Editor）；
+ * - EDITOR_ONLY（预热/plan 非 WORKBENCH/桥失败）：只按 Rust Editor bounds measure/place Editor slot,
+ *   其他 chrome slot 不组合。
+ *
+ * EditorPane 始终是 layoutId=EDITOR 的 slot，call site 不变；切换 compositionMode 只改变 place 策略,
+ * 不重建 AndroidView。
  */
-private fun Modifier.editorAtBounds(
-    bounds: AndroidLayoutRect,
+private fun wideWorkspaceMeasurePolicy(
+    compositionMode: WideWorkspaceCompositionMode,
+    workbenchPlan: AndroidWorkbenchLayoutPlan?,
     density: Density,
-): Modifier =
-    this.then(
-        Modifier.layout { measurable, constraints ->
-            with(density) {
-                val pxWidth = bounds.widthDp.dp.roundToPx()
-                val pxHeight = bounds.heightDp.dp.roundToPx()
-                val placeable =
-                    measurable.measure(
-                        constraints.copy(
-                            minWidth = pxWidth,
-                            maxWidth = pxWidth,
-                            minHeight = pxHeight,
-                            maxHeight = pxHeight,
-                        ),
-                    )
-                layout(constraints.maxWidth, constraints.maxHeight) {
-                    placeable.place(
-                        bounds.leftDp.dp.roundToPx(),
-                        bounds.topDp.dp.roundToPx(),
-                    )
-                }
-            }
-        },
-    )
+): MeasurePolicy =
+    MeasurePolicy { measurables, constraints ->
+        if (compositionMode == WideWorkspaceCompositionMode.FULL_WORKBENCH && workbenchPlan != null) {
+            measureAndPlaceWorkbench(
+                measurables,
+                constraints,
+                WorkbenchBounds.fromPlan(workbenchPlan),
+                density,
+            )
+        } else {
+            measureAndPlaceEditorOnly(measurables, constraints, workbenchPlan, density)
+        }
+    }
 
 /**
- * 构造 workbench measure policy — 提取以降低 [WideWritingWorkspace] 行数。
+ * #640 评论 5441849412 问题2：EDITOR_ONLY measure + place — 只 place Editor slot。
+ *
+ * 按 Rust [AndroidWorkbenchLayoutPlan] 的 EDITOR 角色 bounds measure/place Editor；
+ * plan null 或 Editor bounds 空 → 回落 fillMaxSize（无遮挡信息）。
+ * 不能 `fillMaxSize()` 当 bounds 可用时：遇到横向/竖向 separating hinge 时全窗口铺满会让正文
+ * 重新跨过遮挡。与 Workbench 模式用同一套 bounds 语义。
+ */
+private fun MeasureScope.measureAndPlaceEditorOnly(
+    measurables: List<Measurable>,
+    constraints: Constraints,
+    workbenchPlan: AndroidWorkbenchLayoutPlan?,
+    density: Density,
+): MeasureResult {
+    val editorMeasurable =
+        measurables.firstOrNull { (it.layoutId as? LayoutSlotId) == LayoutSlotId.EDITOR }
+            ?: return layout(constraints.maxWidth, constraints.maxHeight) {}
+    val editorBounds = workbenchPlan?.placementFor(AndroidWorkbenchRole.EDITOR)?.bounds
+    return if (editorBounds != null && !editorBounds.isEmpty) {
+        with(density) {
+            val pxWidth = editorBounds.widthDp.dp.roundToPx()
+            val pxHeight = editorBounds.heightDp.dp.roundToPx()
+            val placeable =
+                editorMeasurable.measure(
+                    constraints.copy(
+                        minWidth = pxWidth,
+                        maxWidth = pxWidth,
+                        minHeight = pxHeight,
+                        maxHeight = pxHeight,
+                    ),
+                )
+            layout(constraints.maxWidth, constraints.maxHeight) {
+                placeable.place(
+                    editorBounds.leftDp.dp.roundToPx(),
+                    editorBounds.topDp.dp.roundToPx(),
+                )
+            }
+        }
+    } else {
+        // 桥失败（null）或 Editor bounds 空 → 本地占满，无遮挡信息。
+        val placeable = editorMeasurable.measure(constraints)
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            placeable.place(0, 0)
+        }
+    }
+}
+
+/**
+ * 构造 workbench measure policy — 提取以降低 [wideWorkspaceMeasurePolicy] 行数。
  * Android 只做 dp→px 和 place，不判断 hinge 在左还是右。
  */
 private fun workbenchMeasurePolicy(

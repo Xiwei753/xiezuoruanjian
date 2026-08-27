@@ -152,14 +152,23 @@ class EditorWindowHost(
     fun isPresentationReady(targetId: String): Boolean = readinessGate.isReady(targetId)
 
     /**
-     * #640 评论 5441010318 项2：等待指定 target 的 presentation 就绪（suspend）。
+     * #640 评论 5441010318 项2 / 评论 5441849412 问题1：等待指定 target 的 presentation 就绪（suspend）。
      *
      * 等待逻辑直接订阅两条真实 StateFlow：[presentationReady]（几何 ready）和
-     * [sessionStateFlow]（active target）。session active target 一变就重新计算，
+     * [sessionStateFlow]（session 身份）。session 逻辑身份（targetId）一变就重新计算，
      * 不依赖 ready 流碰巧再发一次，也不靠轮询闭包观察 session 状态。
      *
      * 返回 true 仅当当前几何 ready 命中此 target（含 widthPx > 0 && heightPx > 0 守卫）；
-     * session active target 已不等于此 target 时立即返回 false，不会让 [first] 永久等不到。
+     * session 逻辑身份（targetId）已不等于此 target 时立即返回 false，不会让 [first] 永久等不到。
+     *
+     * #640 评论 5441849412 问题1：过期判断用 [EditorSessionState.targetId]（逻辑 session 身份），
+     * 不能用 [EditorSessionState.activeTargetId]。commitPreparedSession 在章节 B 提交成功后
+     * 故意把 B 放成 targetId=B, bindingState=Detached(B), activeTargetId=null，然后页面才提交
+     * PreparedEditorTarget(B)，AndroidView 才开始 bind。真实打开流程里 awaitPresentationReady(B)
+     * 第一次 combine 很可能看到 ready=null, session.targetId=B, session.activeTargetId=null，
+     * 若用 activeTargetId 判断会立刻返回 false，把"B 还没 attach"误判成"B 已经过期"。
+     * 用 targetId 判断后 Detached(B) -> Attaching(B) -> Attached(B) 整段都会继续等；真正切成 C
+     * 或关闭 B 时 session.targetId 才变化，旧 B 等待才返回 false。
      */
     suspend fun awaitPresentationReady(targetId: String): Boolean =
         combine(
@@ -169,7 +178,7 @@ class EditorWindowHost(
             when {
                 ready != null && ready.targetId == targetId &&
                     ready.widthPx > 0 && ready.heightPx > 0 -> true
-                session.activeTargetId != targetId -> false
+                session.targetId != targetId -> false
                 else -> null
             }
         }
