@@ -71,6 +71,39 @@ internal fun shouldNavigateAfterReady(
 ): Boolean = isReady && currentTarget == requestedTarget
 
 /**
+ * #640：从已恢复的 appState 字段构造 restore target — 纯函数，无 Compose 副作用，可单测。
+ *
+ * 冷启动/深链/进程恢复场景：rememberSujianWorkspaceNavState 可从 appState 三元 ID 恢复到
+ * WorkspaceLocation.Editor，但此时没有 ProjectWorkspaceScreen.openChapter 点击来提交 target，
+ * 于是 EditorPresentationHost target=null 不组合，直接空白。
+ *
+ * 本 helper 从 appState.currentProjectId/currentProjectTitle/currentVolumeId/currentChapterId/
+ * currentChapterTitle 构造 [PreparedEditorTarget]，让稳定 host 组合；现有 WritingPane/
+ * SujianEditorHost 的正常 beginEdit/attach/loading 职责无预热恢复。
+ *
+ * - 完整恢复 IDs（project/volume/chapter 都非 null）→ 产生正确 target；
+ * - 缺任一 ID → 返回 null（不构造半截 target）；
+ * - 普通 click handoff 语义不变 — click 路径仍走 requestOpenChapter -> target submit，
+ *   不调用本 helper。restore target 与同字段 click target 结构相同，host 可无缝切换不重建 View。
+ */
+internal fun restorePreparedEditorTarget(
+    projectId: String?,
+    projectTitle: String,
+    volumeId: String?,
+    chapterId: String?,
+    chapterTitle: String,
+): PreparedEditorTarget? {
+    if (projectId == null || volumeId == null || chapterId == null) return null
+    return PreparedEditorTarget(
+        projectId = projectId,
+        projectTitle = projectTitle,
+        volumeId = volumeId,
+        chapterId = chapterId,
+        chapterTitle = chapterTitle,
+    )
+}
+
+/**
  * #640 A：窄屏 host 最终 chrome — 背景决策。
  *
  * - [TRANSPARENT]：presentationVisible=false，预热阶段不画 opaque editor surface；

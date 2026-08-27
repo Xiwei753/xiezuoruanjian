@@ -58,6 +58,7 @@ import com.xiwei.sujian.feature.project.ui.buildInitialHistory
 import com.xiwei.sujian.feature.project.ui.deriveRestoreDestination
 import com.xiwei.sujian.feature.project.ui.guardedBack
 import com.xiwei.sujian.feature.project.ui.isWideLayout
+import com.xiwei.sujian.feature.project.ui.restorePreparedEditorTarget
 import com.xiwei.sujian.feature.project.ui.shouldNavigateAfterReady
 import com.xiwei.sujian.feature.settings.ui.SettingsRoute
 import com.xiwei.sujian.feature.starmap.ui.StarMapPlaceholderScreen
@@ -311,6 +312,52 @@ private fun rememberSujianWorkspaceNavState(appState: SujianAppState): ProjectNa
     return remember { ProjectNavigationState(navigator) }
 }
 
+/**
+ * #640：会话恢复/深链 restore target effect — 已恢复到 Editor 但 lifted preparedEditorTargetState
+ * 仍 null 时，从 appState 字段构造 restore target，让稳定 host 组合。
+ *
+ * rememberSujianWorkspaceNavState 可从 appState 三元 ID 恢复到 WorkspaceLocation.Editor，
+ * 但此时没有 ProjectWorkspaceScreen.openChapter 点击提交 target，host target=null 不组合，
+ * 冷启动/深链/进程恢复直接空白。
+ *
+ * - 只在 [isEditorLocation] 且 state null 时初始化一次；
+ * - 不调用 onPreparedEditorTargetChanged（不触发 awaitPresentationReady +
+ *   selectProject/selectChapter/navigateToEditor — 恢复路径 appState 已是这些值、
+ *   navigator 已在 Editor 位置，重复 navigate 会污染历史栈）；
+ * - 不调用 requestOpenChapter（不创建第二 editor/state source）；
+ * - 现有 WritingPane/SujianEditorHost 的正常 beginEdit/attach/loading 职责无预热恢复；
+ * - presentationVisible=isEditorLocation=true，AndroidView 仍由 geometry-ready gate 控制
+ *   INVISIBLE/VISIBLE，未 ready 时沿现有 WritingPaneLayout loading overlay 工作。
+ */
+@Composable
+private fun restorePreparedEditorTargetEffect(
+    isEditorLocation: Boolean,
+    appState: SujianAppState,
+    preparedEditorTargetState: androidx.compose.runtime.MutableState<PreparedEditorTarget?>,
+) {
+    LaunchedEffect(
+        isEditorLocation,
+        appState.currentProjectId,
+        appState.currentVolumeId,
+        appState.currentChapterId,
+        appState.currentProjectTitle,
+        appState.currentChapterTitle,
+    ) {
+        if (!isEditorLocation || preparedEditorTargetState.value != null) return@LaunchedEffect
+        val restored =
+            restorePreparedEditorTarget(
+                projectId = appState.currentProjectId,
+                projectTitle = appState.currentProjectTitle,
+                volumeId = appState.currentVolumeId,
+                chapterId = appState.currentChapterId,
+                chapterTitle = appState.currentChapterTitle,
+            )
+        if (restored != null) {
+            preparedEditorTargetState.value = restored
+        }
+    }
+}
+
 /** 工作区返回处理 — 系统返回/预测返回（正文→章节树→作品列表）。
  * NavDisplay 只在全局栈可弹出（如设置页）时处理返回；Works 根时由这里接管。
  *
@@ -523,6 +570,13 @@ fun SujianNavigationSuite(
             onPreparedEditorTargetChanged(null)
         }
     }
+    // #640：会话恢复/深链 — 已恢复到 Editor 但 preparedEditorTargetState 仍 null 时，
+    // 从 appState 字段构造 restore target，让稳定 host 组合。详见 [restorePreparedEditorTargetEffect]。
+    restorePreparedEditorTargetEffect(
+        isEditorLocation = isEditorLocation,
+        appState = appState,
+        preparedEditorTargetState = preparedEditorTargetState,
+    )
 
     val navContext =
         SujianNavContext(
