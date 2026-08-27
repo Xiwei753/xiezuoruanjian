@@ -779,11 +779,15 @@ class AndroidTextAnimationEngine(
             // #637 评论 5386573878：保存当前帧之后还剩多少基准时长，
             // rebase continuation 用 fromRemainingFraction 直接消费。
             val remainingFraction = slice.progressWindow.remainingFractionAt(progress)
-            val fromRect = slice.fromDestinationRect ?: slice.destinationRect
-            val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * localProgress
-            val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * localProgress
-            val currentRight = fromRect.right + (slice.destinationRect.right - fromRect.right) * localProgress
-            val currentBottom = fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * localProgress
+            // #639 评论 5422606865 问题2：currentRect 统一走 visualDestinationRectAt，
+            // 与 renderer 共用同一份几何，captureFrame 记录的位置就是 renderer 真正
+            // 画在屏幕上的位置。fromDestinationRect 非 null 时做位置插值，否则返回
+            // destinationRect（alpha-only 动画）。
+            val currentRect = slice.visualDestinationRectAt(progress)
+            val currentLeft = currentRect.left
+            val currentTop = currentRect.top
+            val currentRight = currentRect.right
+            val currentBottom = currentRect.bottom
             val currentAlpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * localProgress
             val revealFraction = slice.revealSpec?.fraction(localProgress)
             SliceVisualState(
@@ -803,8 +807,22 @@ class AndroidTextAnimationEngine(
                 destinationTop = slice.destinationRect.top,
                 destinationRight = slice.destinationRect.right,
                 destinationBottom = slice.destinationRect.bottom,
+                // #639 评论 5427183226：SliceVisualState 必须是"上一帧实际画出来的
+                // 完整 slice 状态"。把 sourceRect/targetAlpha/revealMode/revealFraction/
+                // fixedRevealClipRect/caretRevealGeometry 一次性收进来，未映射 continuation
+                // 不再退到 snapshot.sourceRect，appearance 轨跨第二次 rebase 不再丢状态。
+                sourceRect = android.graphics.Rect(slice.sourceRect),
+                targetAlpha = slice.endAlpha,
+                revealMode = slice.revealSpec?.mode,
                 revealFraction = revealFraction,
                 remainingFraction = remainingFraction,
+                fixedRevealClipRect = slice.fixedRevealClipRect?.let { android.graphics.RectF(it) },
+                caretRevealGeometry = slice.caretRevealGeometry,
+                // #639 评论 5427812180 缺陷4/5：staticSuppressionMode 和 fixedClipBaseRect
+                // 一次性收进来，mapped/unmapped continuation 继续旧 state 的 suppression mode
+                // 和 fixed clip base rect，不因新 role 变了瞬间切换底图 ownership 或丢 clip base。
+                staticSuppressionMode = slice.staticSuppressionMode ?: defaultStaticSuppressionModeForRole(slice.role),
+                fixedClipBaseRect = slice.fixedClipBaseRect?.let { android.graphics.RectF(it) },
             )
         }
     }

@@ -17,10 +17,11 @@
 // 也是 NAPI 桥接层可调用的 `writer_core_*` 函数清单。
 #[allow(unused_imports)]
 pub use writer_core::ffi::{
-    app_state_ops::*, editor_session_ops::*, layout_ops::*, project_ops::*,
-    screen_policy_ops::*, search_ops::*, settings_ops::*, starmap_ops::*,
-    sync_ops::*, writing_stats_ops::*,
+    app_state_ops::*, editor_session_ops::*, layout_ops::*, project_ops::*, screen_policy_ops::*,
+    search_ops::*, settings_ops::*, starmap_ops::*, sync_ops::*, writing_stats_ops::*,
 };
 #[allow(unused_imports)]
-pub use writer_core::ffi::{writer_core_free_string, writer_core_get_last_error,
-    writer_core_get_load_status, writer_core_init};
+pub use writer_core::ffi::{
+    writer_core_free_string, writer_core_get_last_error, writer_core_get_load_status,
+    writer_core_init,
+};

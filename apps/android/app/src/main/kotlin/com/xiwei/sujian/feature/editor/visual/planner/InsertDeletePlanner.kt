@@ -10,6 +10,14 @@ import com.xiwei.sujian.feature.editor.visual.SliceRole
 class InsertDeletePlanner {
     private val caretRevealPlanner = CaretRevealPlanner()
 
+    /** #639 评论 5425871530 第一部分：从 cluster 构造 [PreparedVisualTransaction.CaretRevealGeometry]。 */
+    private fun caretGeometryOf(cluster: LineClusterSnapshot): PreparedVisualTransaction.CaretRevealGeometry =
+        PreparedVisualTransaction.CaretRevealGeometry(
+            visualRect = cluster.visualRectInDocument,
+            caretStartX = cluster.caretStartX,
+            caretEndX = cluster.caretEndX,
+        )
+
     fun planClusterLevelAnimation(
         visualIntent: VisualIntent,
         oldRev: LayoutRevisionSource,
@@ -68,6 +76,7 @@ class InsertDeletePlanner {
                         clusterByteStart = cluster.documentByteStart,
                         clusterByteEndExclusive = cluster.documentByteEndExclusive,
                         revealSpec = plan.spec,
+                        caretRevealGeometry = caretGeometryOf(cluster),
                     ),
                 )
             }
@@ -106,6 +115,7 @@ class InsertDeletePlanner {
                         clusterByteStart = cluster.documentByteStart,
                         clusterByteEndExclusive = cluster.documentByteEndExclusive,
                         revealSpec = plan.spec,
+                        caretRevealGeometry = caretGeometryOf(cluster),
                     ),
                 )
             }
@@ -165,6 +175,7 @@ class InsertDeletePlanner {
                         clusterByteStart = cluster.documentByteStart,
                         clusterByteEndExclusive = cluster.documentByteEndExclusive,
                         revealSpec = plan.spec,
+                        caretRevealGeometry = caretGeometryOf(cluster),
                     ),
                 )
             }
@@ -198,6 +209,7 @@ class InsertDeletePlanner {
                         clusterByteStart = cluster.documentByteStart,
                         clusterByteEndExclusive = cluster.documentByteEndExclusive,
                         revealSpec = plan.spec,
+                        caretRevealGeometry = caretGeometryOf(cluster),
                     ),
                 )
             }
@@ -393,6 +405,7 @@ class InsertDeletePlanner {
                             fromDestinationRect = oldCluster.visualRectInDocument,
                             clusterByteStart = newCluster.documentByteStart,
                             clusterByteEndExclusive = newCluster.documentByteEndExclusive,
+                            caretRevealGeometry = caretGeometryOf(newCluster),
                         ),
                     )
                 } else {
@@ -406,6 +419,7 @@ class InsertDeletePlanner {
                             endAlpha = 0f,
                             clusterByteStart = oldCluster.documentByteStart,
                             clusterByteEndExclusive = oldCluster.documentByteEndExclusive,
+                            caretRevealGeometry = caretGeometryOf(oldCluster),
                         ),
                     )
                     animatedSlices.add(
@@ -418,6 +432,7 @@ class InsertDeletePlanner {
                             endAlpha = 1f,
                             clusterByteStart = newCluster.documentByteStart,
                             clusterByteEndExclusive = newCluster.documentByteEndExclusive,
+                            caretRevealGeometry = caretGeometryOf(newCluster),
                         ),
                     )
                 }
@@ -579,6 +594,7 @@ class InsertDeletePlanner {
                             fromDestinationRect = oldCluster.visualRectInDocument,
                             clusterByteStart = newCluster.documentByteStart,
                             clusterByteEndExclusive = newCluster.documentByteEndExclusive,
+                            caretRevealGeometry = caretGeometryOf(newCluster),
                         ),
                     )
                 } else {
@@ -592,6 +608,7 @@ class InsertDeletePlanner {
                             endAlpha = 0f,
                             clusterByteStart = oldCluster.documentByteStart,
                             clusterByteEndExclusive = oldCluster.documentByteEndExclusive,
+                            caretRevealGeometry = caretGeometryOf(oldCluster),
                         ),
                     )
                     animatedSlices.add(
@@ -604,6 +621,7 @@ class InsertDeletePlanner {
                             endAlpha = 1f,
                             clusterByteStart = newCluster.documentByteStart,
                             clusterByteEndExclusive = newCluster.documentByteEndExclusive,
+                            caretRevealGeometry = caretGeometryOf(newCluster),
                         ),
                     )
                 }

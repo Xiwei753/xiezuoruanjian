@@ -35,66 +35,6 @@ import org.robolectric.annotation.Config
 class RebasePlannerTest {
     private val planner = RebasePlanner()
 
-    /**
-     * 构造一个带 revealSpec 的 AnimatedSlice。
-     * [initialFraction] 用于验证 rebase 后是否被正确覆盖。
-     */
-    private fun makeAnimatedSlice(
-        role: SliceRole,
-        initialFraction: Float = 0f,
-        revealMode: TextRevealMode = TextRevealMode.REVEAL,
-    ): PreparedVisualTransaction.AnimatedSlice {
-        return PreparedVisualTransaction.AnimatedSlice(
-            role = role,
-            snapshot = null,
-            sourceRect = Rect(0, 0, 10, 20),
-            destinationRect = RectF(0f, 0f, 100f, 20f),
-            startAlpha = 1f,
-            endAlpha = 1f,
-            clusterByteStart = 0,
-            clusterByteEndExclusive = 1,
-            revealSpec =
-                TextRevealSpec(
-                    mode = revealMode,
-                    anchorX = 0f,
-                    boundaryFromX = 0f,
-                    boundaryToX = 100f,
-                    progressStart = 0f,
-                    progressEnd = 1f,
-                    initialFraction = initialFraction,
-                ),
-        )
-    }
-
-    /** 构造一个 SliceVisualState，[revealFraction] 默认为 null 以测试向后兼容。 */
-    private fun makeSliceVisualState(
-        role: SliceRole,
-        revealFraction: Float? = null,
-        currentAlpha: Float = 1f,
-        remainingFraction: Float = 1f,
-    ): SliceVisualState {
-        return SliceVisualState(
-            snapshotId = 1L,
-            role = role,
-            lineIndex = 0,
-            documentByteStart = 0,
-            documentByteEndExclusive = 10,
-            clusterByteStart = 0,
-            clusterByteEndExclusive = 1,
-            currentLeft = 0f,
-            currentTop = 0f,
-            currentRight = 100f,
-            currentBottom = 20f,
-            currentAlpha = currentAlpha,
-            destinationLeft = 0f,
-            destinationTop = 0f,
-            destinationRight = 100f,
-            destinationBottom = 20f,
-            revealFraction = revealFraction,
-            remainingFraction = remainingFraction,
-        )
-    }
-
     @Test
     fun insertRebaseCarriesOldRevealFractionIntoInitialFraction() {
         // Insert slice rebase 时 revealSpec.initialFraction = old revealFraction
@@ -145,11 +85,14 @@ class RebasePlannerTest {
     @Test
     fun unmatchedDeleteWithRevealFractionBelowThresholdContinuesInNewTransaction() {
         // 未匹配的 Delete slice 在 revealFraction < 0.99 时继续在新事务中吞完
+        // #639 评论 5427183226：修复后按三条视觉轨续播，Delete 的 targetAlpha=0f
+        // （淡出到 0），currentAlpha=0.5 → alphaRemaining=true → 继续。
         val deleteState =
             makeSliceVisualState(
                 role = SliceRole.Delete,
                 revealFraction = 0.5f,
                 currentAlpha = 0.5f,
+                targetAlpha = 0f,
             )
         val rebaseSnapshot =
             VisualFrameSnapshot(
@@ -208,12 +151,16 @@ class RebasePlannerTest {
 
     @Test
     fun backwardCompatibleUnmatchedDeleteWithAlphaAboveThresholdContinues() {
-        // 向后兼容：无 revealFraction 但 currentAlpha > 0.01 时仍继续
+        // #639 评论 5427183226：修复后按三条视觉轨续播。Delete 的 targetAlpha=0f
+        // （淡出到 0），currentAlpha=0.5 → alphaRemaining=true → 继续。
+        // 旧格式状态（targetAlpha 默认=currentAlpha）不会触发 alpha 续播，这是预期 —
+        // 新格式 computeSliceVisualStates 会正确保存 targetAlpha=slice.endAlpha。
         val deleteState =
             makeSliceVisualState(
                 role = SliceRole.Delete,
                 revealFraction = null,
                 currentAlpha = 0.5f,
+                targetAlpha = 0f,
             )
         val rebaseSnapshot =
             VisualFrameSnapshot(
@@ -277,35 +224,7 @@ class RebasePlannerTest {
      */
     @Test
     fun unmatchedDeleteWithRevealFractionContinuesAsClipSwallow() {
-        val cluster =
-            LineClusterSnapshot(
-                clusterId = 0L,
-                documentByteStart = 0,
-                documentByteEndExclusive = 1,
-                documentUtf16Start = 0,
-                documentUtf16EndExclusive = 1,
-                sourceRectInLineImage = Rect(0, 0, 10, 20),
-                visualRectInDocument = RectF(0f, 0f, 100f, 20f),
-                shapingFingerprint = "fp",
-                shapingIdentityConfident = true,
-                caretStartX = 0f,
-                caretEndX = 100f,
-            )
-        val snapshot =
-            AndroidLineSnapshot(
-                snapshotId = 1L,
-                bitmap = null,
-                lineIndex = 0,
-                sourceRect = Rect(0, 0, 100, 20),
-                destinationRect = RectF(0f, 0f, 100f, 20f),
-                clusters = listOf(cluster),
-                documentByteStart = 0,
-                documentByteEndExclusive = 10,
-                documentUtf16Start = 0,
-                documentUtf16EndExclusive = 10,
-                baseline = 16f,
-                lineHeight = 20f,
-            )
+        val snapshot = makeSnapshotWithCluster()
         val deleteState =
             makeSliceVisualState(
                 role = SliceRole.Delete,
@@ -346,6 +265,7 @@ class RebasePlannerTest {
 
     /**
      * #605 评论3 反向: 无 cluster snapshot 时回退 alpha（向后兼容）。
+     * #639 评论 5427183226：修复后按三条视觉轨续播，Delete 的 targetAlpha=0f。
      */
     @Test
     fun unmatchedDeleteWithRevealFractionButNoClusterFallsBackToAlpha() {
@@ -354,6 +274,7 @@ class RebasePlannerTest {
                 role = SliceRole.Delete,
                 revealFraction = 0.5f,
                 currentAlpha = 0.5f,
+                targetAlpha = 0f,
             )
         val rebaseSnapshot =
             VisualFrameSnapshot(
@@ -399,6 +320,7 @@ class RebasePlannerTest {
 
     /**
      * #637 评论 5386573878：未匹配 Delete continuation 也用 remainingFraction。
+     * #639 评论 5427183226：修复后按三条视觉轨续播，Delete 的 targetAlpha=0f。
      */
     @Test
     fun unmatchedDeleteContinuation_usesRemainingFractionForWindow() {
@@ -408,6 +330,7 @@ class RebasePlannerTest {
                 revealFraction = 0.5f,
                 currentAlpha = 0.5f,
                 remainingFraction = 0.3f,
+                targetAlpha = 0f,
             )
         val rebaseSnapshot =
             VisualFrameSnapshot(
@@ -566,5 +489,531 @@ class RebasePlannerTest {
             )
         val rebased2 = planner.applyRebaseState(slice, rebaseState2, emptyMap())
         assertEquals(0.2f, rebased2.progressWindow.end, 0.001f)
+    }
+
+    // #639 评论 5422606865 问题1：未匹配的半截 Insert 不能被直接丢掉
+
+    /**
+     * #639 评论 5422606865 问题1：未匹配的半截 Insert（revealFraction=0.5,
+     * currentAlpha=1f）必须继续在新事务中 reveal 完，不能被直接丢掉。
+     *
+     * 修复前：Insert 的 reveal 动画不靠 alpha（startAlpha/endAlpha 一直是 1），
+     * isFadingOut=false、currentAlpha=1 时三个分支都进不去 → Insert 被丢弃
+     * → 下一事务静态布局直接画出完整字符 → 快速连续输入"半个字突然变成完整字"。
+     *
+     * 修复后：专门看 revealFraction 的 Insert continuation 分支保留半截 Insert，
+     * 用 REVEAL spec 从当前 revealFraction 继续 reveal 到完整。
+     */
+    @Test
+    fun unmatchedInsertWithRevealFractionBelowThresholdContinuesInNewTransaction() {
+        val snapshot = makeSnapshotWithCluster()
+        val insertState =
+            makeSliceVisualState(
+                role = SliceRole.Insert,
+                revealFraction = 0.5f,
+                currentAlpha = 1f,
+            )
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 0.5f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(insertState),
+            )
+
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = mapOf(1L to snapshot),
+            )
+
+        assertEquals(
+            "revealFraction=0.5 的未匹配 Insert 应继续在新事务中 reveal 完",
+            1,
+            result.size,
+        )
+        val continued = result[0]
+        assertEquals("继续 reveal 的 slice 角色应保持 Insert", SliceRole.Insert, continued.role)
+        assertNotNull(
+            "延续 slice 必须携带 revealSpec（REVEAL 模式，从当前 fraction 继续）",
+            continued.revealSpec,
+        )
+        val spec = continued.revealSpec!!
+        assertEquals("revealSpec 模式应为 REVEAL", TextRevealMode.REVEAL, spec.mode)
+        assertEquals(
+            "Insert continuation initialFraction 应取自旧帧 revealFraction",
+            0.5f,
+            spec.initialFraction,
+            0.0001f,
+        )
+        assertEquals("Insert continuation startAlpha 固定 1f", 1f, continued.startAlpha, 0.001f)
+        assertEquals("Insert continuation endAlpha 固定 1f", 1f, continued.endAlpha, 0.001f)
+        assertEquals(
+            "anchorX 应为 cluster caretStartX（reveal 起点）",
+            0f,
+            spec.anchorX,
+            0.001f,
+        )
+        assertEquals(
+            "boundaryFromX 应为 cluster caretStartX",
+            0f,
+            spec.boundaryFromX,
+            0.001f,
+        )
+        assertEquals(
+            "boundaryToX 应为 cluster caretEndX（reveal 终点）",
+            100f,
+            spec.boundaryToX,
+            0.001f,
+        )
+        // destinationRect 应为 currentRect（slice 在当前位置继续 reveal 完，不移动）
+        assertEquals(0f, continued.destinationRect.left, 0.001f)
+        assertEquals(0f, continued.destinationRect.top, 0.001f)
+        assertEquals(100f, continued.destinationRect.right, 0.001f)
+        assertEquals(20f, continued.destinationRect.bottom, 0.001f)
+        // fromDestinationRect 应为 null（未匹配 Insert 没有位置移动）
+        assertTrue(
+            "未匹配 Insert continuation 的 fromDestinationRect 应为 null",
+            continued.fromDestinationRect == null,
+        )
+        // sourceRect 应为 matchedCluster.sourceRectInLineImage
+        assertEquals(
+            "sourceRect 应取自 matchedCluster.sourceRectInLineImage",
+            Rect(0, 0, 10, 20),
+            continued.sourceRect,
+        )
+    }
+
+    /**
+     * #639 评论 5422606865 问题1 反向：revealFraction >= 0.99 时未匹配 Insert 不继续
+     * （reveal 已接近完成，不需要再续）。
+     */
+    @Test
+    fun unmatchedInsertWithRevealFractionAtOrAboveThresholdStops() {
+        val snapshot = makeSnapshotWithCluster()
+        val insertState =
+            makeSliceVisualState(
+                role = SliceRole.Insert,
+                revealFraction = 1.0f,
+                currentAlpha = 1f,
+            )
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 1.0f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(insertState),
+            )
+
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = mapOf(1L to snapshot),
+            )
+
+        assertTrue(
+            "revealFraction=1.0 的未匹配 Insert 已接近完成，不应继续",
+            result.isEmpty(),
+        )
+    }
+
+    /**
+     * #639 评论 5422606865 问题1 反向：matchedCluster 为 null（找不到 cluster）时
+     * 未匹配 Insert 不继续。Insert 无 cluster 几何无法重建 reveal，不应强行画
+     * （与 Delete continuation 无 cluster 时回退 alpha 的语义不同）。
+     */
+    @Test
+    fun unmatchedInsertWithoutMatchedClusterDoesNotContinue() {
+        // snapshotLookup 为空 → matchedCluster 必为 null
+        val insertState =
+            makeSliceVisualState(
+                role = SliceRole.Insert,
+                revealFraction = 0.5f,
+                currentAlpha = 1f,
+            )
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 0.5f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(insertState),
+            )
+
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = emptyMap(),
+            )
+
+        assertTrue(
+            "无 matchedCluster 时未匹配 Insert 不应继续（无法重建 reveal 几何）",
+            result.isEmpty(),
+        )
+    }
+
+    // #639 评论 5424986783：rebase continuation 按几何判断而非旧 SliceRole 判断位置运动
+
+    /**
+     * #639 评论 5424986783 问题1：映射成功的 Insert 在旧 role 已是 Insert（上一轮
+     * Move → Insert 后再次 rebase）时，必须按几何判断继承 fromDestinationRect。
+     *
+     * 场景：rebaseState.role=Insert, currentRect=(0,0,100,20) != destinationRect=(200,0,300,20)。
+     * 期望：rebased.fromDestinationRect == currentRect，新 Insert 从当前屏幕位置继续
+     * 移动到新 destination，不跳变。
+     *
+     * 修复前：rebaseState.role == Insert != Move，走 else 不设置 fromDestinationRect → null → 跳变。
+     */
+    @Test
+    fun mappedInsertRebase_carriesCurrentRectWhenOldRoleIsInsert() {
+        val currentRect = RectF(0f, 0f, 100f, 20f)
+        val destRect = RectF(200f, 0f, 300f, 20f)
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Insert,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 10, 20),
+                destinationRect = destRect,
+                startAlpha = 1f,
+                endAlpha = 1f,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                revealSpec =
+                    TextRevealSpec(
+                        mode = TextRevealMode.REVEAL,
+                        anchorX = destRect.left,
+                        boundaryFromX = destRect.left,
+                        boundaryToX = destRect.right,
+                        progressStart = 0f,
+                        progressEnd = 1f,
+                        initialFraction = 0f,
+                    ),
+            )
+        val rebaseState =
+            makeMovingSliceVisualState(
+                role = SliceRole.Insert,
+                currentRect = currentRect,
+                destinationRect = destRect,
+                currentAlpha = 1f,
+                revealFraction = 0.5f,
+            )
+
+        val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
+
+        assertNotNull(
+            "映射成功的 Insert（旧 role=Insert, currentRect!=destinationRect）应继承 fromDestinationRect",
+            rebased.fromDestinationRect,
+        )
+        assertEquals(FROM_DEST_LEFT_MSG, 0f, rebased.fromDestinationRect!!.left, 0.001f)
+        assertEquals(FROM_DEST_RIGHT_MSG, 100f, rebased.fromDestinationRect!!.right, 0.001f)
+    }
+
+    /**
+     * #639 评论 5424986783 问题2：映射成功的 CrossfadeNew 在旧 role 已是 CrossfadeNew
+     * 时，必须按几何判断继承 fromDestinationRect。
+     *
+     * 场景：rebaseState.role=CrossfadeNew, currentRect != destinationRect。
+     * 期望：rebased.fromDestinationRect == currentRect。
+     *
+     * 修复前：rebaseState.role == CrossfadeNew != Move，不设置 fromDestinationRect → 跳变。
+     */
+    @Test
+    fun mappedCrossfadeNewRebase_carriesCurrentRectWhenOldRoleIsCrossfadeNew() {
+        val currentRect = RectF(0f, 0f, 100f, 20f)
+        val destRect = RectF(200f, 0f, 300f, 20f)
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.CrossfadeNew,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 10, 20),
+                destinationRect = destRect,
+                startAlpha = 1f,
+                endAlpha = 1f,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+            )
+        val rebaseState =
+            makeMovingSliceVisualState(
+                role = SliceRole.CrossfadeNew,
+                currentRect = currentRect,
+                destinationRect = destRect,
+                currentAlpha = 1f,
+            )
+
+        val rebased = planner.applyRebaseState(slice, rebaseState, emptyMap())
+
+        assertNotNull(
+            "映射成功的 CrossfadeNew（旧 role=CrossfadeNew, currentRect!=destinationRect）应继承 fromDestinationRect",
+            rebased.fromDestinationRect,
+        )
+        assertEquals(FROM_DEST_LEFT_MSG, 0f, rebased.fromDestinationRect!!.left, 0.001f)
+        assertEquals(FROM_DEST_RIGHT_MSG, 100f, rebased.fromDestinationRect!!.right, 0.001f)
+    }
+
+    /**
+     * #639 评论 5424986783 问题3（Insert）：未映射 moving Insert 在 currentRect !=
+     * destinationRect 且 revealFraction < 1 时，必须同时继续位置和 reveal。
+     *
+     * 期望：destinationRect == state.destinationRect（保留真实终点），
+     * fromDestinationRect == currentRect（继续位置移动）。
+     *
+     * 修复前：shouldContinueInsertReveal 分支把 destinationRect=currentRect、
+     * fromDestinationRect=null，强行截断剩余位置移动。
+     */
+    @Test
+    fun unmatchedMovingInsert_continuesPositionTowardDestination() {
+        val currentRect = RectF(100f, 0f, 200f, 20f)
+        val destRect = RectF(200f, 0f, 300f, 20f)
+        val snapshot = makeSnapshotWithClusterAt(currentRect, 100f, 200f)
+        val insertState =
+            makeMovingSliceVisualState(
+                role = SliceRole.Insert,
+                currentRect = currentRect,
+                destinationRect = destRect,
+                currentAlpha = 1f,
+                revealFraction = 0.5f,
+            )
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 0.5f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(insertState),
+            )
+
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = mapOf(1L to snapshot),
+            )
+
+        assertTrue("未映射 moving Insert 应继续，不应被丢弃", result.isNotEmpty())
+        val continued = result[0]
+        assertEquals(
+            "destinationRect.left 应为 state.destinationRect.left（保留真实终点）",
+            200f,
+            continued.destinationRect.left,
+            0.001f,
+        )
+        assertEquals(
+            "destinationRect.right 应为 state.destinationRect.right",
+            300f,
+            continued.destinationRect.right,
+            0.001f,
+        )
+        assertNotNull(
+            "fromDestinationRect 应为 currentRect（继续位置移动）",
+            continued.fromDestinationRect,
+        )
+        assertEquals(FROM_DEST_LEFT_MSG, 100f, continued.fromDestinationRect!!.left, 0.001f)
+    }
+
+    /**
+     * #639 评论 5424986783 问题3（CrossfadeNew）：未映射 moving CrossfadeNew 在
+     * currentAlpha == 1 但 currentRect != destinationRect 时不能被丢掉。
+     *
+     * 期望：result 非空，fromDestinationRect == currentRect，
+     * destinationRect == state.destinationRect。
+     *
+     * 修复前：currentAlpha=1.0 不满足 !isFadingOut && currentAlpha < 0.99f，
+     * 也不满足其他续播分支 → CrossfadeNew 被直接丢弃，剩余位置移动丢失。
+     */
+    @Test
+    fun unmatchedMovingCrossfadeNewWithAlphaOne_continuesPosition() {
+        val currentRect = RectF(100f, 0f, 200f, 20f)
+        val destRect = RectF(200f, 0f, 300f, 20f)
+        val crossfadeNewState =
+            makeMovingSliceVisualState(
+                role = SliceRole.CrossfadeNew,
+                currentRect = currentRect,
+                destinationRect = destRect,
+                currentAlpha = 1.0f,
+                revealFraction = null,
+            )
+        val rebaseSnapshot =
+            VisualFrameSnapshot(
+                progress = 0.5f,
+                state = TransactionState.Rendering,
+                sliceVisualStates = listOf(crossfadeNewState),
+            )
+
+        val result =
+            planner.applyRebaseToSlices(
+                newSlices = emptyList(),
+                rebaseSnapshot = rebaseSnapshot,
+                snapshotLookup = emptyMap(),
+            )
+
+        assertTrue(
+            "未映射 moving CrossfadeNew（currentAlpha==1 但 currentRect!=destinationRect）不应被丢弃",
+            result.isNotEmpty(),
+        )
+        val continued = result[0]
+        assertEquals(
+            "destinationRect.left 应为 state.destinationRect.left",
+            200f,
+            continued.destinationRect.left,
+            0.001f,
+        )
+        assertNotNull(
+            "fromDestinationRect 应为 currentRect",
+            continued.fromDestinationRect,
+        )
+        assertEquals(FROM_DEST_LEFT_MSG, 100f, continued.fromDestinationRect!!.left, 0.001f)
+    }
+
+    companion object {
+        // #639 评论 5424986783：rebase continuation 断言消息常量（避免 StringLiteralDuplication）
+        private const val FROM_DEST_LEFT_MSG = "fromDestinationRect.left 应为 currentRect.left"
+        private const val FROM_DEST_RIGHT_MSG = "fromDestinationRect.right 应为 currentRect.right"
+
+        /**
+         * 构造一个带 revealSpec 的 AnimatedSlice。
+         * [initialFraction] 用于验证 rebase 后是否被正确覆盖。
+         */
+        private fun makeAnimatedSlice(
+            role: SliceRole,
+            initialFraction: Float = 0f,
+            revealMode: TextRevealMode = TextRevealMode.REVEAL,
+        ): PreparedVisualTransaction.AnimatedSlice {
+            return PreparedVisualTransaction.AnimatedSlice(
+                role = role,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 10, 20),
+                destinationRect = RectF(0f, 0f, 100f, 20f),
+                startAlpha = 1f,
+                endAlpha = 1f,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                revealSpec =
+                    TextRevealSpec(
+                        mode = revealMode,
+                        anchorX = 0f,
+                        boundaryFromX = 0f,
+                        boundaryToX = 100f,
+                        progressStart = 0f,
+                        progressEnd = 1f,
+                        initialFraction = initialFraction,
+                    ),
+            )
+        }
+
+        /** 构造一个 SliceVisualState，[revealFraction] 默认为 null 以测试向后兼容。 */
+        private fun makeSliceVisualState(
+            role: SliceRole,
+            revealFraction: Float? = null,
+            currentAlpha: Float = 1f,
+            remainingFraction: Float = 1f,
+            targetAlpha: Float = currentAlpha,
+        ): SliceVisualState {
+            return SliceVisualState(
+                snapshotId = 1L,
+                role = role,
+                lineIndex = 0,
+                documentByteStart = 0,
+                documentByteEndExclusive = 10,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                currentLeft = 0f,
+                currentTop = 0f,
+                currentRight = 100f,
+                currentBottom = 20f,
+                currentAlpha = currentAlpha,
+                destinationLeft = 0f,
+                destinationTop = 0f,
+                destinationRight = 100f,
+                destinationBottom = 20f,
+                targetAlpha = targetAlpha,
+                revealFraction = revealFraction,
+                remainingFraction = remainingFraction,
+            )
+        }
+
+        /**
+         * 构造带 cluster 的 AndroidLineSnapshot，cluster 的 byte range 与
+         * [makeSliceVisualState] 默认值一致（0..1），
+         * caretStartX=0, caretEndX=100，与 destinationRect=(0,0,100,20) 对齐。
+         */
+        private fun makeSnapshotWithCluster(snapshotId: Long = 1L): AndroidLineSnapshot {
+            return makeSnapshotWithClusterAt(
+                visualRectInDocument = RectF(0f, 0f, 100f, 20f),
+                caretStartX = 0f,
+                caretEndX = 100f,
+                snapshotId = snapshotId,
+            )
+        }
+
+        /**
+         * 构造带 cluster 的 AndroidLineSnapshot，cluster 的 visualRectInDocument
+         * 和 caret 几何可参数化。供需要 currentRect != (0,0,100,20) 的测试使用。
+         */
+        private fun makeSnapshotWithClusterAt(
+            visualRectInDocument: RectF,
+            caretStartX: Float,
+            caretEndX: Float,
+            snapshotId: Long = 1L,
+        ): AndroidLineSnapshot {
+            val cluster =
+                LineClusterSnapshot(
+                    clusterId = 0L,
+                    documentByteStart = 0,
+                    documentByteEndExclusive = 1,
+                    documentUtf16Start = 0,
+                    documentUtf16EndExclusive = 1,
+                    sourceRectInLineImage = Rect(0, 0, 10, 20),
+                    visualRectInDocument = visualRectInDocument,
+                    shapingFingerprint = "fp",
+                    shapingIdentityConfident = true,
+                    caretStartX = caretStartX,
+                    caretEndX = caretEndX,
+                )
+            return AndroidLineSnapshot(
+                snapshotId = snapshotId,
+                bitmap = null,
+                lineIndex = 0,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = visualRectInDocument,
+                clusters = listOf(cluster),
+                documentByteStart = 0,
+                documentByteEndExclusive = 10,
+                documentUtf16Start = 0,
+                documentUtf16EndExclusive = 10,
+                baseline = 16f,
+                lineHeight = 20f,
+            )
+        }
+
+        /**
+         * 构造 currentRect != destinationRect 的 SliceVisualState，模拟"正在移动的
+         * Insert/CrossfadeNew"（上一轮 Move → Insert/CrossfadeNew 产生，位置仍在途中）。
+         * 与 [makeSliceVisualState]（默认 currentRect == destinationRect）互补。
+         */
+        private fun makeMovingSliceVisualState(
+            role: SliceRole,
+            currentRect: RectF,
+            destinationRect: RectF,
+            currentAlpha: Float = 1f,
+            revealFraction: Float? = null,
+        ): SliceVisualState {
+            return SliceVisualState(
+                snapshotId = 1L,
+                role = role,
+                lineIndex = 0,
+                documentByteStart = 0,
+                documentByteEndExclusive = 10,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                currentLeft = currentRect.left,
+                currentTop = currentRect.top,
+                currentRight = currentRect.right,
+                currentBottom = currentRect.bottom,
+                currentAlpha = currentAlpha,
+                destinationLeft = destinationRect.left,
+                destinationTop = destinationRect.top,
+                destinationRight = destinationRect.right,
+                destinationBottom = destinationRect.bottom,
+                revealFraction = revealFraction,
+                remainingFraction = 1f,
+            )
+        }
     }
 }

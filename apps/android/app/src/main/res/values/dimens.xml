@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="editor_content_inset">16dp</dimen>
+    <dimen name="editor_status_band_height">40dp</dimen>
+</resources>

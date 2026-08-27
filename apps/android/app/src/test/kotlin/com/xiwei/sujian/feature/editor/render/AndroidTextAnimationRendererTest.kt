@@ -4,6 +4,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import com.xiwei.sujian.feature.editor.visual.PreparedVisualTransaction
 import com.xiwei.sujian.feature.editor.visual.SliceRole
+import com.xiwei.sujian.feature.editor.visual.TextRevealGeometry
 import com.xiwei.sujian.feature.editor.visual.TextRevealMode
 import com.xiwei.sujian.feature.editor.visual.TextRevealSpec
 import org.junit.Assert.assertEquals
@@ -433,5 +434,451 @@ class AndroidTextAnimationRendererTest {
 
         val newRegions = renderer.computeStaticSuppressionRegions(transaction, 0.5f)
         assertEquals("Insert/Move/CrossfadeNew 都应 suppress", 3, newRegions.size)
+    }
+
+    // #639 评论 5421085782 问题2 复现
+
+    /**
+     * #639 评论 5421085782 问题2 验证（修复后）：CrossfadeOld 的 fixedRevealClipRect
+     * 用真实 caret reveal 几何（TextRevealGeometry）算，与 CaretRevealPlanner 的
+     * Insert REVEAL spec 语义一致，不再用 bitmap 宽度比例从左裁剪。
+     *
+     * 场景：cluster caretStartX=10, caretEndX=90（reveal 边界在 10..90），
+     * destination 宽度 100（字形 overhang 让 bitmap 比 caret 宽），revealFraction=0.5。
+     *
+     * 修复后 fixedRevealClipRect（TextRevealGeometry REVEAL，anchorX=10,
+     * boundary 10→90, fraction=0.5 → boundary=50 → clip [10,50)）。
+     * 旧实现按 bitmap 宽度比例从左裁 [0,50) — left 偏移 10px。
+     *
+     * 测试断言：fixedRevealClipRect == 期望 caret 几何 [10,50)，
+     * 且 != 旧 bitmap 宽度比例 [0,50)（锁住不回退）。
+     */
+    @Test
+    fun crossfadeOldFixedRevealFractionMatchesCaretRevealGeometry() {
+        val caretStartX = 10f
+        val caretEndX = 90f
+        val destination = RectF(0f, 0f, 100f, 20f)
+        val fixedFraction = 0.5f
+
+        // 修复后：RebasePlanner.computeFixedRevealClipRect 用 TextRevealGeometry 算
+        // document-space clip rect（mode=REVEAL, anchorX=caretStartX,
+        // boundaryFromX=caretStartX, boundaryToX=caretEndX, fraction=revealFraction）。
+        val fixedRevealClipRect =
+            TextRevealGeometry.computeRevealClipRect(
+                destination,
+                TextRevealMode.REVEAL,
+                caretStartX,
+                caretStartX,
+                caretEndX,
+                fixedFraction,
+            ) ?: error("fixedRevealClipRect 在 fraction=0.5 不应为 null")
+
+        // 期望：LTR caret reveal 几何 anchorX=10, boundary 10→90, fraction=0.5
+        // → boundary=50 → clip [10,50)。
+        assertEquals(
+            "CrossfadeOld fixedRevealClipRect left 应为 caretStartX=10（caret 几何），" +
+                "不应是旧 bitmap 宽度比例 left=0 — #639 评论 5421085782 问题2 已修复。",
+            caretStartX,
+            fixedRevealClipRect.left,
+            eps,
+        )
+        assertEquals(
+            "CrossfadeOld fixedRevealClipRect right 应为 50（caret 几何 boundary=10+(90-10)*0.5）。",
+            50f,
+            fixedRevealClipRect.right,
+            eps,
+        )
+
+        // 锁住：不再用 bitmap 宽度比例裁剪（旧实现 [0,50)，left=0）。
+        val oldBitmapClipLeft = destination.left
+        assertTrue(
+            "CrossfadeOld 不应再用 bitmap 宽度比例 left=0；当前 fixedRevealClipRect.left=${fixedRevealClipRect.left}",
+            kotlin.math.abs(fixedRevealClipRect.left - oldBitmapClipLeft) > eps,
+        )
+    }
+
+    /**
+     * #639 评论 5421085782 问题2 验证（修复后，RTL）：CrossfadeOld 的 fixedRevealClipRect
+     * 用真实 caret reveal 几何，RTL 时 caret 从右往左 reveal，clip 从右往左裁。
+     *
+     * 场景：RTL cluster caretStartX=90, caretEndX=10（reveal 从右往左），
+     * destination 宽度 100，revealFraction=0.5。
+     *
+     * 修复后 fixedRevealClipRect（TextRevealGeometry REVEAL，anchorX=90,
+     * boundary 90→10, fraction=0.5 → boundary=50 → clip [50,90)）。
+     * 旧实现按 bitmap 宽度比例从左裁 [0,50) — RTL 直接裁反。
+     *
+     * 测试断言：fixedRevealClipRect == 期望 caret 几何 [50,90)，
+     * 且 != 旧 bitmap 宽度比例 [0,50)（锁住 RTL 不裁反）。
+     */
+    @Test
+    fun crossfadeOldFixedRevealFractionMatchesCaretRevealGeometryRtl() {
+        val caretStartX = 90f
+        val caretEndX = 10f
+        val destination = RectF(0f, 0f, 100f, 20f)
+        val fixedFraction = 0.5f
+
+        // 修复后：RebasePlanner.computeFixedRevealClipRect 用 TextRevealGeometry 算
+        // document-space clip rect（RTL：anchorX=90, boundary 90→10）。
+        val fixedRevealClipRect =
+            TextRevealGeometry.computeRevealClipRect(
+                destination,
+                TextRevealMode.REVEAL,
+                caretStartX,
+                caretStartX,
+                caretEndX,
+                fixedFraction,
+            ) ?: error("RTL fixedRevealClipRect 在 fraction=0.5 不应为 null")
+
+        // 期望：RTL caret reveal 几何 anchorX=90, boundary 90→10, fraction=0.5
+        // → boundary=50 → left=min(90,50)=50, right=max(90,50)=90 → clip [50,90)。
+        assertEquals(
+            "RTL CrossfadeOld fixedRevealClipRect left 应为 50（caret 几何 boundary=90+(10-90)*0.5），" +
+                "不应是旧 bitmap 宽度比例 left=0 — #639 评论 5421085782 问题2 RTL 已修复。",
+            50f,
+            fixedRevealClipRect.left,
+            eps,
+        )
+        assertEquals(
+            "RTL CrossfadeOld fixedRevealClipRect right 应为 90（caret anchorX=90）。",
+            90f,
+            fixedRevealClipRect.right,
+            eps,
+        )
+
+        // 锁住：不再用 bitmap 宽度比例从左裁（旧实现 [0,50)，RTL 裁反）。
+        val oldBitmapClipRight = destination.left + destination.width() * fixedFraction
+        assertTrue(
+            "RTL CrossfadeOld 不应再用 bitmap 宽度比例 right=50；当前 fixedRevealClipRect.right=${fixedRevealClipRect.right}",
+            kotlin.math.abs(fixedRevealClipRect.right - oldBitmapClipRight) > eps,
+        )
+    }
+
+    // #639 评论 5422606865 问题2：visualDestinationRectAt 几何一致性测试
+
+    /**
+     * #639 评论 5422606865 问题2：visualDestinationRectAt 是当前视觉几何的单一入口。
+     * renderer 和 engine.computeSliceVisualStates 都调用这一份，保证 captureFrame
+     * 记录的 slice 位置就是 renderer 真正画在屏幕上的位置。
+     *
+     * 这组测试锁住 visualDestinationRectAt 的几何契约：
+     * - fromDestinationRect=null → 返回 destinationRect（任意 progress）
+     * - fromDestinationRect=fromRect, progress=0 → 返回 fromRect
+     * - fromDestinationRect=fromRect, progress=1 → 返回 destinationRect
+     * - fromDestinationRect=fromRect, progress=0.5 → 返回中点
+     * - progressWindow 非 Full 时正确 map
+     */
+
+    private fun makeSliceForGeometry(
+        destinationRect: RectF,
+        fromDestinationRect: RectF? = null,
+        progressWindow: com.xiwei.sujian.feature.editor.visual.VisualProgressWindow =
+            com.xiwei.sujian.feature.editor.visual.VisualProgressWindow.Full,
+        role: SliceRole = SliceRole.Insert,
+    ): PreparedVisualTransaction.AnimatedSlice {
+        return PreparedVisualTransaction.AnimatedSlice(
+            role = role,
+            snapshot = null,
+            sourceRect = Rect(0, 0, 10, 20),
+            destinationRect = destinationRect,
+            startAlpha = 1f,
+            endAlpha = 1f,
+            fromDestinationRect = fromDestinationRect,
+            progressWindow = progressWindow,
+        )
+    }
+
+    /**
+     * fromDestinationRect=null → 返回 destinationRect（任意 progress）。
+     * 这是 alpha-only 动画的常见情况，行为应与原有完全一致。
+     */
+    @Test
+    fun visualDestinationRectAt_nullFromReturnsDestinationForAnyProgress() {
+        val dest = RectF(10f, 20f, 110f, 40f)
+        val slice = makeSliceForGeometry(destinationRect = dest, fromDestinationRect = null)
+        for (p in listOf(0f, 0.25f, 0.5f, 0.75f, 1f)) {
+            val r = slice.visualDestinationRectAt(p)
+            assertEquals("progress=$p left", dest.left, r.left, eps)
+            assertEquals("progress=$p top", dest.top, r.top, eps)
+            assertEquals("progress=$p right", dest.right, r.right, eps)
+            assertEquals("progress=$p bottom", dest.bottom, r.bottom, eps)
+        }
+    }
+
+    /**
+     * fromDestinationRect=fromRect, progress=0 → 返回 fromRect。
+     * 动画起点：slice 在旧 Move 当前位置（fromRect）。
+     */
+    @Test
+    fun visualDestinationRectAt_progressZeroReturnsFromRect() {
+        val from = RectF(0f, 0f, 100f, 20f)
+        val dest = RectF(50f, 30f, 150f, 50f)
+        val slice = makeSliceForGeometry(destinationRect = dest, fromDestinationRect = from)
+        val r = slice.visualDestinationRectAt(0f)
+        assertEquals(from.left, r.left, eps)
+        assertEquals(from.top, r.top, eps)
+        assertEquals(from.right, r.right, eps)
+        assertEquals(from.bottom, r.bottom, eps)
+    }
+
+    /**
+     * fromDestinationRect=fromRect, progress=1 → 返回 destinationRect。
+     * 动画终点：slice 到达自己的最终位置。
+     */
+    @Test
+    fun visualDestinationRectAt_progressOneReturnsDestinationRect() {
+        val from = RectF(0f, 0f, 100f, 20f)
+        val dest = RectF(50f, 30f, 150f, 50f)
+        val slice = makeSliceForGeometry(destinationRect = dest, fromDestinationRect = from)
+        val r = slice.visualDestinationRectAt(1f)
+        assertEquals(dest.left, r.left, eps)
+        assertEquals(dest.top, r.top, eps)
+        assertEquals(dest.right, r.right, eps)
+        assertEquals(dest.bottom, r.bottom, eps)
+    }
+
+    /**
+     * fromDestinationRect=fromRect, progress=0.5 → 返回 from 与 destination 的中点。
+     * 线性插值四条边。
+     */
+    @Test
+    fun visualDestinationRectAt_progressHalfReturnsMidpoint() {
+        val from = RectF(0f, 0f, 100f, 20f)
+        val dest = RectF(50f, 30f, 150f, 50f)
+        val slice = makeSliceForGeometry(destinationRect = dest, fromDestinationRect = from)
+        val r = slice.visualDestinationRectAt(0.5f)
+        assertEquals((from.left + dest.left) / 2f, r.left, eps)
+        assertEquals((from.top + dest.top) / 2f, r.top, eps)
+        assertEquals((from.right + dest.right) / 2f, r.right, eps)
+        assertEquals((from.bottom + dest.bottom) / 2f, r.bottom, eps)
+    }
+
+    /**
+     * progressWindow 非 Full 时正确 map：窗口 [0, 0.4]，
+     * globalProgress=0.2 → localProgress=0.5 → 返回 from 与 dest 的中点。
+     */
+    @Test
+    fun visualDestinationRectAt_nonFullProgressWindowMapsCorrectly() {
+        val from = RectF(0f, 0f, 100f, 20f)
+        val dest = RectF(50f, 30f, 150f, 50f)
+        val window = com.xiwei.sujian.feature.editor.visual.VisualProgressWindow(start = 0f, end = 0.4f)
+        val slice =
+            makeSliceForGeometry(
+                destinationRect = dest,
+                fromDestinationRect = from,
+                progressWindow = window,
+            )
+        // globalProgress=0.2 → localProgress=0.5 → 中点
+        val r = slice.visualDestinationRectAt(0.2f)
+        assertEquals((from.left + dest.left) / 2f, r.left, eps)
+        assertEquals((from.top + dest.top) / 2f, r.top, eps)
+        assertEquals((from.right + dest.right) / 2f, r.right, eps)
+        assertEquals((from.bottom + dest.bottom) / 2f, r.bottom, eps)
+        // globalProgress=0.4 → localProgress=1 → dest
+        val rEnd = slice.visualDestinationRectAt(0.4f)
+        assertEquals(dest.left, rEnd.left, eps)
+        assertEquals(dest.top, rEnd.top, eps)
+        assertEquals(dest.right, rEnd.right, eps)
+        assertEquals(dest.bottom, rEnd.bottom, eps)
+    }
+
+    /**
+     * #639 评论 5424613367 问题2：Insert 带 fromDestinationRect（rebase 把 Insert 接到
+     * 旧 Move 当前位置）时，computeStaticSuppressionRegions 的 Insert suppression 必须用
+     * destinationRect（新 Layout 中完整静态像素的位置），不能用 currentRect
+     * （visualDestinationRectAt）。
+     *
+     * 静态底图里的完整字始终在 destinationRect。若用 currentRect 挖洞，destinationRect
+     * 位置的静态完整字没被 suppress，会与动画字同时出现 → 双影/"新位置先亮出来"。
+     *
+     * 验证：任意 progress 下，Insert suppression 都等于 destinationRect，
+     * 静态新 Layout 的最终字不会提前露出来。
+     */
+    @Test
+    fun computeStaticSuppressionRegions_insertSuppressesDestinationRect() {
+        val from = RectF(0f, 0f, 100f, 20f)
+        val dest = RectF(50f, 30f, 150f, 50f)
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Insert,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = dest,
+                startAlpha = 1f,
+                endAlpha = 1f,
+                fromDestinationRect = from,
+            )
+        val transaction =
+            PreparedVisualTransaction(
+                transactionId = 1L,
+                oldRevision = null,
+                newRevision = null,
+                staticPatches = emptyList(),
+                animatedSlices = listOf(slice),
+                ownedSnapshotIds = emptySet(),
+                referencedSnapshotIds = emptySet(),
+                selectionDecoration = null,
+                preeditDecoration = null,
+                cursorTransition = null,
+                durationMs = 300L,
+            )
+
+        // 任意 progress 下，Insert suppression 必须是 destinationRect，
+        // 静态新 Layout 的完整字在 destinationRect，挖洞防止双影。
+        for (progress in listOf(0f, 0.25f, 0.5f, 0.75f, 1f)) {
+            val regions = renderer.computeStaticSuppressionRegions(transaction, progress)
+            assertEquals("Insert 应 suppress 1 个区域 (progress=$progress)", 1, regions.size)
+            assertEquals(
+                "Insert suppression 应为 destinationRect，不是 currentRect (progress=$progress)",
+                dest.left,
+                regions[0].left,
+                eps,
+            )
+            assertEquals(dest.top, regions[0].top, eps)
+            assertEquals(dest.right, regions[0].right, eps)
+            assertEquals(dest.bottom, regions[0].bottom, eps)
+        }
+    }
+
+    /**
+     * #639 评论 5422606865 问题2 端到端：Delete 带 fromDestinationRect 时，
+     * computeStaticSuppressionRegions 的 clipRect 基于 currentRect 和平移后的 spec，
+     * 与 drawRevealSlice 一致。
+     *
+     * 场景：from=(0,0,100,20), dest=(50,30,150,50), SWALLOW anchorX=0, boundary 100→0,
+     * progress=0.5 → currentRect 中点 (25,15,125,35), localProgress=0.5, fraction=0.5,
+     * dx=currentRect.left-dest.left=25-50=-25, 平移后 anchorX=-25, boundaryFromX=75,
+     * boundaryToX=-25, boundary=75+(−25−75)*0.5=25, left=min(-25,25)=-25,
+     * right=max(-25,25)=25, clipLeft=max(-25,25)=25, clipRight=min(25,125)=25 →
+     * clipRight<=clipLeft → null（空交集）。
+     *
+     * 换一组让交集非空：from=(0,0,100,20), dest=(10,0,110,20)（小偏移）,
+     * SWALLOW anchorX=0, boundary 100→0, progress=0.5 →
+     * currentRect=(5,0,105,20), dx=5-10=-5, anchorX=-5, boundaryFromX=95, boundaryToX=-5,
+     * fraction=0.5 → boundary=95+(-5-95)*0.5=45, left=min(-5,45)=-5, right=max(-5,45)=45,
+     * clipLeft=max(-5,5)=5, clipRight=min(45,105)=45 → clipRect=(5,0,45,20)。
+     */
+    @Test
+    fun computeStaticSuppressionRegions_deleteWithFromDestinationRectUsesCurrentRect() {
+        val from = RectF(0f, 0f, 100f, 20f)
+        val dest = RectF(10f, 0f, 110f, 20f)
+        val spec =
+            TextRevealSpec(
+                mode = TextRevealMode.SWALLOW,
+                anchorX = 0f,
+                boundaryFromX = 100f,
+                boundaryToX = 0f,
+                progressStart = 0f,
+                progressEnd = 1f,
+                initialFraction = 0f,
+            )
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Delete,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = dest,
+                startAlpha = 1f,
+                endAlpha = 0f,
+                fromDestinationRect = from,
+                revealSpec = spec,
+            )
+        val transaction =
+            PreparedVisualTransaction(
+                transactionId = 1L,
+                oldRevision = null,
+                newRevision = null,
+                staticPatches = emptyList(),
+                animatedSlices = listOf(slice),
+                ownedSnapshotIds = emptySet(),
+                referencedSnapshotIds = emptySet(),
+                selectionDecoration = null,
+                preeditDecoration = null,
+                cursorTransition = null,
+                durationMs = 300L,
+            )
+
+        // progress=0.5 → currentRect=(5,0,105,20), dx=-5
+        // 平移后 anchorX=-5, boundary 95→-5, fraction=0.5 → boundary=45
+        // left=-5, right=45, clipLeft=max(-5,5)=5, clipRight=min(45,105)=45
+        val regions = renderer.computeStaticSuppressionRegions(transaction, 0.5f)
+        assertEquals("Delete 应 suppress 1 个区域", 1, regions.size)
+        assertEquals(5f, regions[0].left, eps)
+        assertEquals(0f, regions[0].top, eps)
+        assertEquals(45f, regions[0].right, eps)
+        assertEquals(20f, regions[0].bottom, eps)
+    }
+
+    /**
+     * #639 评论 54258715307 第五部分：renderer 三条轨正交绘制 —
+     * revealSpec + alpha + fromDestinationRect 同时存在时，computeStaticSuppressionRegions
+     * 的 Insert suppression 仍用 destinationRect（静态底图去重），不在 currentRect 挖洞。
+     *
+     * 这锁住三条轨可以同时工作：
+     * - 位置轨：fromDestinationRect 非 null → currentRect != destinationRect。
+     * - alpha 轨：startAlpha=0.4, endAlpha=1（CrossfadeNew -> Insert 的 alpha 续播）。
+     * - reveal 轨：revealSpec 非 null（Insert 有 reveal spec）。
+     *
+     * suppression 语义：Insert/Move/CrossfadeNew/Static 的静态底图 suppression 用
+     * destinationRect（新 Layout 中完整静态像素的位置），不用 currentRect。renderer 仍用
+     * visualDestinationRectAt(progress) 画动画像素，这里是静态底图去重，两者语义不同。
+     */
+    @Test
+    fun computeStaticSuppressionRegions_insertWithRevealSpecAlphaAndFromDestinationRectUsesDestinationRect() {
+        val destRect = RectF(100f, 0f, 200f, 20f)
+        val fromRect = RectF(50f, 0f, 150f, 20f) // fromDestinationRect != destinationRect
+        val slice =
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Insert,
+                snapshot = null,
+                sourceRect = Rect(0, 0, 100, 20),
+                destinationRect = destRect,
+                // alpha 续播（CrossfadeNew -> Insert）
+                startAlpha = 0.4f,
+                endAlpha = 1f,
+                // 位置轨
+                fromDestinationRect = fromRect,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 1,
+                revealSpec =
+                    TextRevealSpec(
+                        mode = TextRevealMode.REVEAL,
+                        anchorX = 100f,
+                        boundaryFromX = 100f,
+                        boundaryToX = 200f,
+                        progressStart = 0f,
+                        progressEnd = 1f,
+                        initialFraction = 0f,
+                    ),
+                // reveal 轨
+            )
+        val transaction =
+            PreparedVisualTransaction(
+                transactionId = 1L,
+                oldRevision = null,
+                newRevision = null,
+                staticPatches = emptyList(),
+                animatedSlices = listOf(slice),
+                ownedSnapshotIds = emptySet(),
+                referencedSnapshotIds = emptySet(),
+                selectionDecoration = null,
+                preeditDecoration = null,
+                cursorTransition = null,
+                durationMs = 100L,
+            )
+
+        // progress=0.5 → currentRect=(75,0,175,20)（from→dest 插值）
+        // 但 suppression 应该用 destinationRect=(100,0,200,20)，不用 currentRect
+        val regions = renderer.computeStaticSuppressionRegions(transaction, 0.5f)
+        assertEquals("Insert 应 suppress 1 个区域", 1, regions.size)
+        assertEquals(
+            "suppression 应用 destinationRect.left=100，不用 currentRect.left=75",
+            100f,
+            regions[0].left,
+            eps,
+        )
+        assertEquals(0f, regions[0].top, eps)
+        assertEquals(200f, regions[0].right, eps)
+        assertEquals(20f, regions[0].bottom, eps)
     }
 }

@@ -64,11 +64,90 @@ data class PreparedVisualTransaction(
         /** Reveal/swallow spec for Insert/Delete slices. null for Move/Crossfade/Static.
          *  When non-null, the renderer uses clip-rect drawing instead of alpha. */
         val revealSpec: TextRevealSpec? = null,
+        /** #639 评论 5425871530 第一部分：本 slice 的 caret/reveal 几何，与 [role] 无关。
+         *
+         *  planner 创建 slice 时把对应 cluster/run 的 [LineClusterSnapshot.visualRectInDocument]
+         *  + [LineClusterSnapshot.caretStartX] + [LineClusterSnapshot.caretEndX] 直接写进来。
+         *  rebase 时不再从 [AndroidLineSnapshot.clusters] 按 byte range 反查 — 这同时修掉
+         *  RunAnimation 的真实漏洞：[InsertDeletePlanner.groupClustersIntoRuns] 多字 run
+         *  创建 synthetic [LineClusterSnapshot]，但合并对象不在原始
+         *  [AndroidLineSnapshot.clusters] 里，按 byte range 反查必然找不到。
+         *
+         *  - 新位置 slice（Insert/CrossfadeNew/Move 的 newCluster）：写 new cluster 的几何。
+         *  - 旧位置 slice（Delete/CrossfadeOld/Move 的 oldCluster）：写 old cluster 的几何。
+         *
+         *  rebase 用 [SliceVisualState.caretRevealGeometry] 把外观状态一起带进下一次 rebase，
+         *  不再依赖 snapshot.clusters 精确反查。 */
+        val caretRevealGeometry: CaretRevealGeometry? = null,
         /** #637 评论 5386066978 项2：本 slice 在事务内的剩余时间窗口。
          *  新事务首次播放为 [VisualProgressWindow.Full]；rebase continuation 时
          *  end = 1 - consumedFraction，让已走部分不重新计时。 */
         val progressWindow: VisualProgressWindow = VisualProgressWindow.Full,
-    )
+        /** #639 评论 5421085782 问题2：rebase 专用的固定裁剪 rect（document-space）。
+         *
+         *  旧 Insert 可能只 reveal 到一半，rebase 成 CrossfadeOld 时不能把半个字
+         *  突然变成完整字再淡出。`RebasePlanner` 在旧状态有 `revealFraction` 且能从
+         *  旧 snapshot 找到匹配 cluster 时，用 cluster 的 caretStartX/caretEndX +
+         *  revealFraction 经 [TextRevealGeometry.computeRevealClipRect] 算出
+         *  document-space clip rect，写进此字段；`AndroidTextAnimationRenderer`
+         *  画 CrossfadeOld 时若此值非空，canvas.save()+clipRect(fixedRevealClipRect)
+         *  +drawBitmap(完整 bitmap, sourceRect, destinationRect)+restoreToCount()，
+         *  再做 alpha 淡出。本次 CrossfadeOld 期间 clip rect 保持不动，只让 alpha 变化。
+         *
+         *  这与正常 Insert/Delete 的 [computeRevealClipRect] 共用同一份 caret reveal
+         *  几何，不再有第二套"按 bitmap 宽度乘 fraction"的近似 — 字形 overhang
+         *  （bitmap 宽度 > caret 宽度）和 RTL（caret 从右往左 reveal）都自动正确。
+         *  不拿 [TextRevealSpec.initialFraction] 硬凑，因为 [TextRevealSpec.fraction]
+         *  会继续向 1 推，不是"冻结当前可见部分"。 */
+        val fixedRevealClipRect: android.graphics.RectF? = null,
+        /** #639 评论 5427812180 缺陷4：本 slice 的静态底图 suppression 模式，与 [role] 正交。
+         *
+         *  planner 初次创建时按 role 设定（[defaultStaticSuppressionModeForRole]）；
+         *  mapped/unmapped rebase continuation 都继续旧 [SliceVisualState.staticSuppressionMode]，
+         *  不因新 role 变了瞬间切换底图 ownership。renderer [computeStaticSuppressionRegions]
+         *  改按此字段判断，不再 when(slice.role)。
+         *
+         *  - [StaticSuppressionMode.NONE]：不 suppress（底图画完整字，动画 slice alpha 混合）。
+         *  - [StaticSuppressionMode.DESTINATION_RECT]：suppress [destinationRect]（新 Layout 完整静态像素位置）。
+         *  - [StaticSuppressionMode.VISIBLE_CLIP]：suppress 当前可见 clip（有 fixedRevealClipRect 用 fixed clip，
+         *    否则有 revealSpec 算当前 reveal clip，否则无 suppression）。
+         *
+         *  null 仅作向后兼容 fallback（旧 slice 没这字段时 renderer 按 role 推断）。 */
+        val staticSuppressionMode: StaticSuppressionMode? = null,
+        /** #639 评论 5427812180 缺陷5：fixed clip 的 base rect（mapped 时的旧 currentRect）。
+         *
+         *  [fixedRevealClipRect] 是相对于 [fixedClipBaseRect] 的 document-space clip。
+         *  mapped rebase 后若 slice 位置会移动（fromDestinationRect != null），
+         *  renderer 每帧用 currentRect - fixedClipBaseRect 平移 fixedRevealClipRect，
+         *  让 clip 跟 bitmap 一起移动，不钉在绝对坐标。
+         *
+         *  null 表示 fixedRevealClipRect 是绝对 document-space（位置不动或未 mapped）。
+         *  unmapped continuation 原样继承旧 state 的 fixedClipBaseRect。 */
+        val fixedClipBaseRect: android.graphics.RectF? = null,
+    ) {
+        /**
+         * #639 评论 5422606865 问题2：当前视觉几何的单一入口。
+         *
+         * renderer 和 engine.computeSliceVisualStates 都调用这一份，保证 captureFrame
+         * 记录的 slice 位置就是 renderer 真正画在屏幕上的位置。fromDestinationRect 非 null
+         * 时（rebase 把 Insert/CrossfadeNew 接到旧 Move 当前位置）做位置插值，否则返回
+         * destinationRect（alpha-only 动画）。
+         *
+         * 几何：先 [VisualProgressWindow.map] 得到 localProgress，再从 from→destination
+         * 线性插值四条边。fromDestinationRect 为 null 时 from=destinationRect，插值
+         * 退化为常量 destinationRect，与原有 alpha-only 行为完全一致。
+         */
+        fun visualDestinationRectAt(globalProgress: Float): android.graphics.RectF {
+            val p = progressWindow.map(globalProgress)
+            val from = fromDestinationRect ?: destinationRect
+            return android.graphics.RectF(
+                from.left + (destinationRect.left - from.left) * p,
+                from.top + (destinationRect.top - from.top) * p,
+                from.right + (destinationRect.right - from.right) * p,
+                from.bottom + (destinationRect.bottom - from.bottom) * p,
+            )
+        }
+    }
 
     data class SelectionDecoration(
         val startUtf16: Int,
@@ -169,6 +248,28 @@ data class PreparedVisualTransaction(
          *  不重新计时，保持匀速。 */
         val progressWindow: VisualProgressWindow = VisualProgressWindow.Full,
     )
+
+    /**
+     * #639 评论 5425871530 第一部分：slice 自带的 caret/reveal 几何。
+     *
+     * 轻 role rebase 外观续播要闭环，slice 必须自己持有 caret 几何，不能 rebase 时再从
+     * [AndroidLineSnapshot.clusters] 按 byte range 反查 — RunAnimation 的 synthetic run
+     * 不在原始 clusters 里，反查必然失败。
+     *
+     * - [visualRect]：cluster/run 在 document-space 的 visualRect（来自
+     *   [LineClusterSnapshot.visualRectInDocument]）。
+     * - [caretStartX]/[caretEndX]：cluster/run 的 logical caret X（来自
+     *   [LineClusterSnapshot.caretStartX]/[caretEndX]）。
+     *
+     * rebase 时 [RebasePlanner] 直接消费这份几何重建 REVEAL continuation，不再按
+     * [SliceRole] 分支处理；renderer 三条轨（位置/alpha/reveal）正交绘制也用这份几何
+     * 算 clip，不再按 role 决定是否裁剪。
+     */
+    data class CaretRevealGeometry(
+        val visualRect: android.graphics.RectF,
+        val caretStartX: Float,
+        val caretEndX: Float,
+    )
 }
 
 /** Animation slice roles.
@@ -184,6 +285,37 @@ enum class SliceRole {
     CrossfadeOld,
     CrossfadeNew,
     Static,
+}
+
+/** #639 评论 5427812180 缺陷4：静态底图 suppression 模式，与 [SliceRole] 正交。
+ *
+ *  mapped rebase 继续旧视觉轨后 role 和"静态底图怎么挖洞"会不一致，所以 suppression
+ *  不能按 [SliceRole] 判断，必须按独立 mode。planner 初次创建时按 role 设定
+ *  （[defaultStaticSuppressionModeForRole]），continuation 继承旧 state 的 mode。 */
+enum class StaticSuppressionMode {
+    /** 不 suppress：底图画完整字，动画 slice alpha 混合（CrossfadeOld 语义）。 */
+    NONE,
+
+    /** suppress [PreparedVisualTransaction.AnimatedSlice.destinationRect]（新 Layout 完整静态像素位置）。 */
+    DESTINATION_RECT,
+
+    /** suppress 当前可见 clip：有 fixedRevealClipRect 用 fixed clip，否则有 revealSpec 算当前 reveal clip。 */
+    VISIBLE_CLIP,
+}
+
+/** #639 评论 5427812180 缺陷4：按 [SliceRole] 推断默认 [StaticSuppressionMode]。
+ *
+ *  planner 初次创建 slice 时调用，mapped/unmapped continuation 继承旧 state 的 mode
+ *  而非重新按 role 推断。renderer fallback（slice.staticSuppressionMode == null 时）也用此函数。 */
+fun defaultStaticSuppressionModeForRole(role: SliceRole): StaticSuppressionMode {
+    return when (role) {
+        SliceRole.Insert, SliceRole.Move, SliceRole.CrossfadeNew, SliceRole.Static ->
+            StaticSuppressionMode.DESTINATION_RECT
+        SliceRole.Delete ->
+            StaticSuppressionMode.VISIBLE_CLIP
+        SliceRole.CrossfadeOld ->
+            StaticSuppressionMode.NONE
+    }
 }
 
 /** Lifecycle states of a visual transaction. Only Rendering/Paused produce frames. */
