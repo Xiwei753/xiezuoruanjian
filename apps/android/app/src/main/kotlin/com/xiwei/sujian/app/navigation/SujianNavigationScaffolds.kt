@@ -71,6 +71,7 @@ private fun SujianCompactNavScaffold(
     topBarInfo: SujianTopBarInfo,
     showTopBar: Boolean,
     snackbarHostState: SnackbarHostState,
+    containerColor: androidx.compose.ui.graphics.Color,
     bottomBar: @Composable () -> Unit,
     navDisplayContent: @Composable () -> Unit,
 ) {
@@ -95,7 +96,7 @@ private fun SujianCompactNavScaffold(
                 SujianSnackbar(data = data)
             }
         },
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = containerColor,
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { innerPadding ->
         Box(
@@ -149,6 +150,7 @@ private fun SujianWideNavScaffold(
     topBarInfo: SujianTopBarInfo,
     showTopBar: Boolean,
     snackbarHostState: SnackbarHostState,
+    containerColor: androidx.compose.ui.graphics.Color,
     rail: (@Composable () -> Unit)?,
     navDisplayContent: @Composable () -> Unit,
 ) {
@@ -172,7 +174,7 @@ private fun SujianWideNavScaffold(
                 SujianSnackbar(data = data)
             }
         },
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = containerColor,
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { innerPadding ->
         Row(
@@ -221,6 +223,7 @@ internal fun SujianNavScaffoldContent(
     scaffoldChrome: SujianNavScaffoldChrome,
     selection: SujianTopLevelSelection,
     navDisplayContent: @Composable () -> Unit,
+    containerColor: androidx.compose.ui.graphics.Color,
 ) {
     if (layoutSpec.useBottomNavigation) {
         SujianCompactNavScaffold(
@@ -228,6 +231,7 @@ internal fun SujianNavScaffoldContent(
             topBarInfo = scaffoldChrome.topBarInfo,
             showTopBar = scaffoldChrome.showOuterTopBar,
             snackbarHostState = scaffoldChrome.snackbarHostState,
+            containerColor = containerColor,
             // #597 正文一：进入正文后隐藏底栏；设置页从顶栏进入，也不再显示底栏。
             bottomBar =
                 if (chrome.showPrimaryNavigation) {
@@ -247,6 +251,7 @@ internal fun SujianNavScaffoldContent(
             topBarInfo = scaffoldChrome.topBarInfo,
             showTopBar = scaffoldChrome.showOuterTopBar,
             snackbarHostState = scaffoldChrome.snackbarHostState,
+            containerColor = containerColor,
             // #597 正文一：宽窗口同一套规则 — Settings/Editor 不创建 NavigationRail。
             rail =
                 if (chrome.showPrimaryNavigation) {

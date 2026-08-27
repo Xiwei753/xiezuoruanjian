@@ -515,6 +515,9 @@ private fun MeasureScope.measureAndPlaceWorkbench(
 /**
  * 正文编辑器面板 — 提取以降低 [WideWritingWorkspace] 认知复杂度。
  * 复用 [SujianEditorHost]，不创建第二个编辑器。
+ *
+ * #640 A.4：预热阶段（presentationVisible=false）背景透明，不画 opaque editor surface；
+ * 可见阶段用共享 editorSurfaceBackgroundColor，不用 MaterialTheme colorScheme background。
  */
 @Composable
 private fun EditorPane(
@@ -524,10 +527,16 @@ private fun EditorPane(
         (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
     )? = null,
 ) {
+    val background =
+        if (documentState.presentationVisible) {
+            editorSurfaceBackgroundColor()
+        } else {
+            androidx.compose.ui.graphics.Color.Transparent
+        }
     Box(
         modifier =
             modifier
-                .background(editorSurfaceBackgroundColor()),
+                .background(background),
     ) {
         if (documentState.currentChapterId != null && documentState.currentVolumeId != null) {
             SujianEditorHost(

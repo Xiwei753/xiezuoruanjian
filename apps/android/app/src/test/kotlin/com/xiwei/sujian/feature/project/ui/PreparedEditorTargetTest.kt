@@ -6,7 +6,7 @@ import org.junit.Test
 class PreparedEditorTargetTest {
     @Test
     fun targetId_isStableForSameChapterAndChangesForDifferentChapter() {
-        val first = PreparedEditorTarget("project", "volume", "chapter-a", "A")
+        val first = PreparedEditorTarget("project", "Title", "volume", "chapter-a", "A")
         val sameChapterWithUpdatedTitle = first.copy(chapterTitle = "Updated A")
         val second = first.copy(chapterId = "chapter-b")
 

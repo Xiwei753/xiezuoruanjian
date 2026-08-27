@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
 import com.xiwei.sujian.feature.editor.ui.theme.editorSurfaceBackgroundColor
 
@@ -21,6 +22,8 @@ import com.xiwei.sujian.feature.editor.ui.theme.editorSurfaceBackgroundColor
  * 预热阶段（location 非 Editor）View 已 layout 但不可见，切换到 Editor 时零首帧跳动。
  *
  * #640 A.1：新建稳定 layer；PreparedEditorTarget 需可被新文件使用（internal 合理放置）。
+ * #640 A.4：预热阶段（presentationVisible=false）背景透明，不画 opaque editor surface；
+ * 可见阶段用共享 editorSurfaceBackgroundColor，不用 MaterialTheme colorScheme background。
  */
 @Composable
 internal fun SinglePaneEditorLayer(
@@ -32,9 +35,15 @@ internal fun SinglePaneEditorLayer(
     )? = null,
 ) {
     val currentOnFailed by rememberUpdatedState(onChapterSwitchFailed)
+    val background =
+        if (presentationVisible) {
+            editorSurfaceBackgroundColor()
+        } else {
+            Color.Transparent
+        }
 
     Surface(
-        color = editorSurfaceBackgroundColor(),
+        color = background,
         modifier = modifier.fillMaxSize(),
     ) {
         SujianEditorHost(
@@ -56,9 +65,13 @@ internal fun SinglePaneEditorLayer(
  * 让 SinglePaneEditorLayer 提前进入组合并 layout，但 View.INVISIBLE。
  * 导航到 Editor 后 presentationVisible=true，View 立即可见，无首帧跳动。
  * 离开 Editor（location 非 Editor）时清空，释放编辑器层。
+ *
+ * #640 A：[projectTitle] 由 suite 层 await+navigate 消费（selectProject 需要）；
+ * target 自带全部 navigate 所需字段，handoff 后不再回查 ProjectWorkspaceScreen。
  */
 data class PreparedEditorTarget(
     val projectId: String,
+    val projectTitle: String,
     val volumeId: String,
     val chapterId: String,
     val chapterTitle: String,
