@@ -43,7 +43,6 @@ import com.xiwei.sujian.feature.editor.session.resetPersistentSession
 import com.xiwei.sujian.feature.editor.ui.theme.EditorThemeAdapter
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first

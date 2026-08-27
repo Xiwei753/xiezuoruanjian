@@ -118,21 +118,21 @@ internal data class WideWorkspaceLayoutState(
  * @param layoutState 导航套件层统一解析的 Rust workbench plan + pane 收起状态 + 收起回调
  *   （plan = null 表示桥失败，按单栏 Editor 处理）。收起左栏/右栏后由导航套件层重新 resolve，
  *   Rust 重新给 Editor 更大 bounds，中央 SujianEditorHost 仍是同一个实例，只改变测量/放置。
-  */
-
-/**
- * 大屏工作台组合模式（#640 C）— [resolveWideWorkspaceCompositionMode] 的返回值。
- *
- * - [SINGLE_PANE_WITH_TOP_BAR]：plan=null/SINGLE_PANE，在 Rust Editor free-region 内测量
- *   singlePaneTopBar + EditorPane body，top bar 是否 place 由 presentationVisible 决定，
- *   body 尺寸 hidden/visible 完全一致；
- * - [EDITOR_ONLY_PREWARM]：plan=WORKBENCH + hidden，只组合/测量唯一 EditorPane 按 Rust Editor bounds，
- *   不塞 top bar、不进 Workbench shell；
- * - [FULL_WORKBENCH]：plan=WORKBENCH + visible，完整 Workbench shell。
- *
- * EditorPane 始终在 [WideWritingWorkspace] 唯一 call site（layoutId=EDITOR），三种模式切换不重建 AndroidView。
  */
+
 internal enum class WideWorkspaceCompositionMode {
+    /**
+     * 大屏工作台组合模式（#640 C）— [resolveWideWorkspaceCompositionMode] 的返回值。
+     *
+     * - [SINGLE_PANE_WITH_TOP_BAR]：plan=null/SINGLE_PANE，在 Rust Editor free-region 内测量
+     *   singlePaneTopBar + EditorPane body，top bar 是否 place 由 presentationVisible 决定，
+     *   body 尺寸 hidden/visible 完全一致；
+     * - [EDITOR_ONLY_PREWARM]：plan=WORKBENCH + hidden，只组合/测量唯一 EditorPane 按 Rust Editor bounds，
+     *   不塞 top bar、不进 Workbench shell；
+     * - [FULL_WORKBENCH]：plan=WORKBENCH + visible，完整 Workbench shell。
+     *
+     * EditorPane 始终在 [WideWritingWorkspace] 唯一 call site（layoutId=EDITOR），三种模式切换不重建 AndroidView。
+     */
     SINGLE_PANE_WITH_TOP_BAR,
     EDITOR_ONLY_PREWARM,
     FULL_WORKBENCH,

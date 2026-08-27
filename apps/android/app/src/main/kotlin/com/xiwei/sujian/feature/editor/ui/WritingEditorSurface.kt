@@ -122,9 +122,10 @@ fun WritingEditorSurface(
                         // presentationVisible 不参与 session 业务判断（#640 A.5）。
                         // #640 B：用 presentationReady 几何（已收集为 State）触发 recomposition，
                         // 当前几何 ready 命中此 target 才 VISIBLE。
-                        val isReady = presentationReady?.let { r ->
-                            r.targetId == targetId && r.widthPx > 0 && r.heightPx > 0
-                        } ?: false
+                        val isReady =
+                            presentationReady?.let { r ->
+                                r.targetId == targetId && r.widthPx > 0 && r.heightPx > 0
+                            } ?: false
                         view.visibility =
                             if (presentationVisible && isReady) {
                                 android.view.View.VISIBLE

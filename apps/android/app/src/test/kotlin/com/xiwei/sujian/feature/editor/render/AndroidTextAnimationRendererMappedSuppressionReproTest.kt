@@ -217,7 +217,11 @@ class AndroidTextAnimationRendererMappedSuppressionReproTest {
                 staticSuppressionMode = StaticSuppressionMode.VISIBLE_CLIP,
             )
 
-        val regionsCrossfadeOld = renderer.computeStaticSuppressionRegions(makeTransaction(listOf(crossfadeOldSlice)), 0f)
+        val regionsCrossfadeOld =
+            renderer.computeStaticSuppressionRegions(
+                makeTransaction(listOf(crossfadeOldSlice)),
+                0f,
+            )
         val regionsDelete = renderer.computeStaticSuppressionRegions(makeTransaction(listOf(deleteSlice)), 0f)
 
         // 两个视觉状态相同的 slice，suppression 结果应一致（都 suppress fixedClip 或都不 suppress）

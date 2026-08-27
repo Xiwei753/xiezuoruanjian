@@ -140,8 +140,13 @@ class RebasePlanner {
         }
         result.add(
             buildVisualContinuation(
-                state, snapshot, sourceRect, matchedCluster, hasCaretGeometry,
-                positionRemaining, revealRemaining,
+                state,
+                snapshot,
+                sourceRect,
+                matchedCluster,
+                hasCaretGeometry,
+                positionRemaining,
+                revealRemaining,
             ),
         )
     }
