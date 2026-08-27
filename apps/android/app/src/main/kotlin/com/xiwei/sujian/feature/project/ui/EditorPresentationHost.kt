@@ -1,8 +1,13 @@
 package com.xiwei.sujian.feature.project.ui
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.MeasurePolicy
+import androidx.compose.ui.layout.layoutId
+import androidx.compose.ui.unit.Constraints
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutRect
 import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
 import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchRole
@@ -108,6 +113,105 @@ internal fun compactEditorChrome(presentationVisible: Boolean): CompactEditorChr
     )
 
 /**
+ * #640：compact host body geometry — 纯函数，无 Compose 副作用，可单测。
+ *
+ * Issue 640 核心要求：预热 ready 必须在最终 Editor chrome 的真实 bounds。
+ * compact host 在 hidden 和 visible 两种状态必须使用完全相同的 measured body bounds：
+ * 正文 placeable 的 y/height 为 root 去掉 top-bar 实际测量高度。
+ *
+ * 本函数不接收 [presentationVisible] — 因此 hidden 与 visible 的 body bounds 必然相同，
+ * visible 切换不会触发 [SujianEditorView] 的 onSizeChanged，ready 一次成立后稳定。
+ * 生产 [CompactEditorMeasureLayout] 与单测共用本函数。
+ */
+internal data class CompactEditorBodyGeometry(
+    val bodyTopPx: Int,
+    val bodyHeightPx: Int,
+)
+
+/**
+ * #640：compact host body geometry 决策 — 纯函数，无 Compose 副作用，可单测。
+ *
+ * body top = top-bar 实际测量高度（钳到 [0, root]）；body height = root - body top。
+ * 负输入与 top-bar 超过 root 均钳到安全范围，body height 恒非负。
+ */
+internal fun resolveCompactEditorBodyGeometry(
+    rootHeightPx: Int,
+    topBarHeightPx: Int,
+): CompactEditorBodyGeometry {
+    val safeRoot = rootHeightPx.coerceAtLeast(0)
+    val safeTopBar = topBarHeightPx.coerceIn(0, safeRoot)
+    return CompactEditorBodyGeometry(
+        bodyTopPx = safeTopBar,
+        bodyHeightPx = safeRoot - safeTopBar,
+    )
+}
+
+/** #640：compact measure layout slot 标识 — 用于自定义 Layout 中按 layoutId 取 placeable。 */
+private enum class CompactLayoutSlotId {
+    TOP_BAR,
+    BODY,
+}
+
+/**
+ * #640：compact host 稳定 measure layout — 始终测量 top-bar 与 body，仅 top-bar 的 place 随 visible 切换。
+ *
+ * - top-bar 始终用 unconstrained height 测量，取其实际 intrinsic height；
+ * - body 始终用 `height = root - top-bar.measuredHeight` 测量并 place 在 `(0, top-bar.measuredHeight)`；
+ * - `presentationVisible=false` 时只不 place top-bar（保留其测量占位），不遮盖章节树；
+ * - `presentationVisible=true` 时 place top-bar 在 `(0, 0)`。
+ *
+ * 不使用 alpha 假隐藏、AnimatedVisibility、GONE、固定 56/64 dp 或 delay/awaitFrame。
+ * body bounds 由 [resolveCompactEditorBodyGeometry] 统一表达，hidden 与 visible 完全相同。
+ */
+@Composable
+internal fun CompactEditorMeasureLayout(
+    presentationVisible: Boolean,
+    topBar: @Composable () -> Unit,
+    body: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Layout(
+        content = {
+            Box(modifier = Modifier.layoutId(CompactLayoutSlotId.TOP_BAR)) { topBar() }
+            Box(modifier = Modifier.layoutId(CompactLayoutSlotId.BODY)) { body() }
+        },
+        modifier = modifier,
+        measurePolicy = compactEditorMeasurePolicy(presentationVisible),
+    )
+}
+
+/**
+ * 构造 compact measure policy — 提取以降低 [CompactEditorMeasureLayout] 圈复杂度。
+ */
+private fun compactEditorMeasurePolicy(presentationVisible: Boolean): MeasurePolicy =
+    MeasurePolicy { measurables, constraints ->
+        val byId = measurables.associateBy { it.layoutId as CompactLayoutSlotId }
+        val topBarPlaceable =
+            byId[CompactLayoutSlotId.TOP_BAR]?.measure(
+                constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity),
+            )
+        val topBarHeight = topBarPlaceable?.height ?: 0
+        val geometry =
+            resolveCompactEditorBodyGeometry(
+                rootHeightPx = constraints.maxHeight,
+                topBarHeightPx = topBarHeight,
+            )
+        val bodyPlaceable =
+            byId[CompactLayoutSlotId.BODY]?.measure(
+                constraints.copy(
+                    minHeight = geometry.bodyHeightPx,
+                    maxHeight = geometry.bodyHeightPx,
+                ),
+            )
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            if (presentationVisible) {
+                topBarPlaceable?.place(0, 0)
+            }
+            bodyPlaceable?.place(0, geometry.bodyTopPx)
+        }
+    }
+
+/**
  * #640 A：宽屏 host Editor bounds 解析 — 纯函数，可单测。
  *
  * 直接取 Rust [AndroidWorkbenchLayoutPlan] 的 EDITOR 角色 bounds；
@@ -179,27 +283,24 @@ internal fun EditorPresentationHost(
 
     when (mode) {
         EditorPresentationHostMode.COMPACT_EDITOR -> {
-            if (presentationVisible) {
-                // #640 A：窄屏 visible — 最终 top bar + 正文。host 在 Scaffold 外自己画 top bar，
-                // 不经过 ChapterTree Scaffold 的 innerPadding，绝不有 bottom NavigationBar。
-                androidx.compose.foundation.layout.Column(modifier = modifier.fillMaxSize()) {
-                    compactTopBar()
+            // #640：compact host 在 hidden 和 visible 使用完全相同的 measured body bounds。
+            // 始终测量 compactTopBar 作为 top-bar placeable，正文 y/height 为 root 去掉 top-bar 实际测量高度；
+            // presentationVisible=false 时只不 place top-bar（保留其测量占位），不遮盖章节树；
+            // presentationVisible=true 才 place top-bar。host 在 Scaffold 外，无 bottom NavigationBar，
+            // 不经过 ChapterTree Scaffold 的 innerPadding。View 只 INVISIBLE 到 VISIBLE，不重建。
+            CompactEditorMeasureLayout(
+                presentationVisible = presentationVisible,
+                topBar = compactTopBar,
+                body = {
                     SinglePaneEditorLayer(
                         target = currentTarget,
-                        presentationVisible = true,
+                        presentationVisible = presentationVisible,
                         onChapterSwitchFailed = onChapterSwitchFailed,
                         modifier = Modifier.fillMaxSize(),
                     )
-                }
-            } else {
-                // #640 A.4：预热阶段背景透明，不画 top bar，不画 opaque editor surface/Compose shell。
-                SinglePaneEditorLayer(
-                    target = currentTarget,
-                    presentationVisible = false,
-                    onChapterSwitchFailed = onChapterSwitchFailed,
-                    modifier = modifier.fillMaxSize(),
-                )
-            }
+                },
+                modifier = modifier.fillMaxSize(),
+            )
         }
         EditorPresentationHostMode.WIDE_EDITOR_ONLY,
         EditorPresentationHostMode.WIDE_FULL_WORKBENCH,
