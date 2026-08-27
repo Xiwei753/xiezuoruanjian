@@ -32,19 +32,26 @@ import uniffi.writer_core.WorkspaceLayoutModeDto
  * 用当前 viewport + visibility 请求 Rust workbench plan，按 plan 放 slot。
  * Android 只做 dp→px 和 place，不再判断 hinge 在左还是右、不决定角色挪到哪一侧。
  *
- * 调用链（#628 评论第 4 节）：
+ * #640 评论 5443789509：planner 输入改为 [AndroidWorkbenchViewportFrame]（safe viewport），
+ * Rust 看到的 (0,0) 是稳定安全工作区左上角；plan 返回后再 `offsetBy` 平移回物理窗口坐标。
+ *
+ * 调用链（#628 评论第 4 节 / #640 评论 5443789509）：
  * ```text
  * Android LocalWindowInfo.containerDpSize + AospFoldFeatureInfo.bounds
  *         ↓
- * WindowViewportDto(width, height, occlusions)
+ * WindowViewportDto(width, height, occlusions)  // 原始物理窗口
  *         ↓
- * Rust presentation/layout (breakpoints/metrics/resolver)
+ * rememberAndroidWorkbenchViewportFrame  // 裁 systemBars + displayCutout
  *         ↓
- * LayoutContractDto / WorkbenchLayoutPlanDto
+ * AndroidWorkbenchViewportFrame(originXDp, originYDp, safeViewport)
  *         ↓
- * AndroidLayoutAdapter
+ * Rust presentation/layout (breakpoints/metrics/resolver)  // (0,0) = safe 左上角
  *         ↓
- * AndroidLayoutSpec / AndroidWorkbenchLayoutPlan (contract + 便捷视图)
+ * WorkbenchLayoutPlanDto  // safe 坐标系
+ *         ↓
+ * offsetBy(originXDp, originYDp)  // 平移回物理窗口
+ *         ↓
+ * AndroidWorkbenchLayoutPlan (contract + 便捷视图，物理坐标)
  * ```
  */
 @Composable
@@ -162,28 +169,37 @@ internal fun interface AndroidWorkbenchLayoutPlanner {
 }
 
 /**
- * #628 评论 5301021120 问题1：在 presentation/layout 层构造 [AndroidWorkbenchLayoutPlanner]。
+ * #628 评论 5301021120 问题1 / #640 评论 5443789509：在 presentation/layout 层构造 [AndroidWorkbenchLayoutPlanner]。
  *
- * remember(viewport, workbenchResolver) 捕获当前窗口几何与 UniFFI resolver；返回的 lambda 把
- * [AndroidWorkbenchVisibility] 转 [WorkbenchVisibilityDto] 调 resolver 再 toAndroidWorkbenchLayoutPlan()。
- * 窗口变化时 viewport 更新 → planner 重建；visibility 变化时调用方 remember(planner, visibility) 重算。
+ * 第一个参数从原始 `WindowViewportDto` 改为 [AndroidWorkbenchViewportFrame]：Rust 看到的 (0,0)
+ * 已是稳定安全工作区左上角（systemBars + displayCutout 已裁掉），`toolbar_height_dp=64` 真的是
+ * 完整 64dp 内容高度。planner 用 `frame.viewport`（safe viewport）算 plan，返回 Android 后再
+ * `offsetBy(frame.originXDp, frame.originYDp)` 整体平移回物理窗口坐标；`measureAndPlaceWorkbench`
+ * 仍只按 plan 放 slot，不需自己猜状态栏高度。
+ *
+ * remember(frame, workbenchResolver) 捕获当前 safe frame 与 UniFFI resolver；返回的 lambda 把
+ * [AndroidWorkbenchVisibility] 转 [WorkbenchVisibilityDto] 调 resolver 再 `toAndroidWorkbenchLayoutPlan()`
+ * 后 `offsetBy` 平移。窗口变化时 frame 更新 → planner 重建；visibility 变化时调用方
+ * remember(planner, visibility) 重算。
  *
  * 放在 presentation/layout 层以避免 UI 层（app/navigation、feature/project/ui）直接引用 uniffi DTO
  * （架构门禁 ui-no-uniffi-jna-bridge / presentation-contract-layer）。
  */
 @Composable
 internal fun rememberWorkbenchLayoutPlanner(
-    viewport: WindowViewportDto,
+    frame: AndroidWorkbenchViewportFrame,
     workbenchResolver: (WindowViewportDto, WorkbenchVisibilityDto) -> WorkbenchLayoutPlanDto?,
 ): AndroidWorkbenchLayoutPlanner =
-    remember(viewport, workbenchResolver) {
+    remember(frame, workbenchResolver) {
         AndroidWorkbenchLayoutPlanner { visibility ->
             val visibilityDto =
                 WorkbenchVisibilityDto(
                     chapterNavigationVisible = visibility.chapterNavigationVisible,
                     toolPaneVisible = visibility.toolPaneVisible,
                 )
-            workbenchResolver(viewport, visibilityDto)?.toAndroidWorkbenchLayoutPlan()
+            workbenchResolver(frame.viewport, visibilityDto)
+                ?.toAndroidWorkbenchLayoutPlan()
+                ?.offsetBy(frame.originXDp, frame.originYDp)
         }
     }
 
@@ -282,6 +298,38 @@ internal data class AndroidLayoutRect(
     val heightDp: Float get() = (bottomDp - topDp).coerceAtLeast(0f)
     val isEmpty: Boolean get() = widthDp <= 0f || heightDp <= 0f
 }
+
+/**
+ * #640 评论 5443789509：把 safe 坐标系的 rect 平移回物理窗口坐标。
+ *
+ * Rust planner 用 safe viewport（(0,0) = 稳定安全工作区左上角）算出 plan 后，
+ * Android 用 [AndroidWorkbenchViewportFrame.originXDp]/[AndroidWorkbenchViewportFrame.originYDp]
+ * 把每个 placement 的 bounds 整体加 (dx, dy) 平移回物理窗口坐标系。
+ */
+private fun AndroidLayoutRect.offsetBy(
+    dx: Float,
+    dy: Float,
+): AndroidLayoutRect =
+    AndroidLayoutRect(
+        leftDp = leftDp + dx,
+        topDp = topDp + dy,
+        rightDp = rightDp + dx,
+        bottomDp = bottomDp + dy,
+    )
+
+/**
+ * #640 评论 5443789509：把 plan 的所有 placement bounds 整体平移回物理窗口坐标。
+ *
+ * mode 不变（WORKBENCH/SINGLE_PANE 是产品模式，与坐标系无关）。
+ */
+private fun AndroidWorkbenchLayoutPlan.offsetBy(
+    dx: Float,
+    dy: Float,
+): AndroidWorkbenchLayoutPlan =
+    copy(
+        placements =
+            placements.map { it.copy(bounds = it.bounds.offsetBy(dx, dy)) },
+    )
 
 /** 单个角色的放置 — 角色与其最终 bounds（dp）。 */
 internal data class AndroidWorkbenchPlacement(

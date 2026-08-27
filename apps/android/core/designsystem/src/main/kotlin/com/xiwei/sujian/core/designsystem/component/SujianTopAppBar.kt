@@ -2,6 +2,7 @@ package com.xiwei.sujian.core.designsystem.component
 
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -28,6 +29,14 @@ fun SujianTopAppBar(
     actions: @Composable () -> Unit = {},
     /** 顶栏容器背景色。写作区（#597）传 [Color.Transparent]，背景透出正文层。 */
     containerColor: Color = MaterialTheme.colorScheme.surface,
+    /**
+     * 顶栏 window insets（#640 评论 5443789509）。
+     *
+     * - compact 单栏：用默认 [TopAppBarDefaults.windowInsets]，让 Material3 自己处理 top system inset；
+     * - wide SinglePane：顶部已由 safe workbench frame（systemBars + displayCutout）处理，
+     *   传 `WindowInsets(0, 0, 0, 0)` 避免二次避让（plan 已把 toolbar rect 放到安全区下方）。
+     */
+    windowInsets: WindowInsets = TopAppBarDefaults.windowInsets,
 ) {
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     TopAppBar(
@@ -53,5 +62,6 @@ fun SujianTopAppBar(
             navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
             actionIconContentColor = MaterialTheme.colorScheme.onSurface,
         ),
+        windowInsets = windowInsets,
     )
 }

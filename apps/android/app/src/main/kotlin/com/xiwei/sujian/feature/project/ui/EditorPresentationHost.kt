@@ -308,12 +308,16 @@ internal data class EditorPresentationCallbacks(
  * 预热与显示共用同一 AndroidView：切换 location 只 INVISIBLE 到 VISIBLE，不重建 View。
  *
  * - target null → 不组合（HIDDEN）；
- * - 窄屏 visible → [singlePaneTopBar] + [SinglePaneEditorLayer]（最终 Editor chrome，无 bottom NavigationBar）；
+ * - 窄屏 visible → [compactEditorTopBar] + [SinglePaneEditorLayer]（最终 Editor chrome，无 bottom NavigationBar）；
  *   host 在 Scaffold 外，自己画最终 top bar，不经过 ChapterTree Scaffold 的 innerPadding；
  * - 窄屏 hidden → [SinglePaneEditorLayer]（背景透明，不画 top bar，不遮盖 ProjectList/ChapterTree）；
  * - 宽屏 → [WideWritingWorkspace]（内部按 [resolveWideWorkspaceCompositionMode] 决定
  *   SINGLE_PANE_WITH_TOP_BAR / EDITOR_ONLY_PREWARM / FULL_WORKBENCH 三种 wide 模式，按 Rust Editor bounds
  *   measure/place）。EditorPane 在 WideWritingWorkspace 唯一 call site，三种 wide 模式切换不重建 AndroidView。
+ *
+ * #640 评论 5443789509：顶栏 lambda 拆成 [compactEditorTopBar]（compact 单栏，用 Material3 默认
+ * windowInsets 让 TopAppBar 自己处理 top system inset）与 [wideSinglePaneTopBar]（wide SinglePane，
+ * 顶部已由 safe workbench frame 处理，传 `WindowInsets(0,0,0,0)` 避免二次避让）两个参数。
  *
  * 不新建第二 ViewModel、第二 requestOpenChapter 或第二状态源 — wide 回调由调用方
  * （ProjectWorkspaceScreen 经 SujianNavContext 上传）提供。
@@ -324,7 +328,8 @@ internal fun EditorPresentationHost(
     isWideLayout: Boolean,
     presentationVisible: Boolean,
     workbenchPlan: AndroidWorkbenchLayoutPlan?,
-    singlePaneTopBar: @Composable () -> Unit,
+    compactEditorTopBar: @Composable () -> Unit,
+    wideSinglePaneTopBar: @Composable () -> Unit,
     wideDeps: WideWorkspaceDeps?,
     wideLayoutState: WideWorkspaceLayoutState?,
     wideCallbacks: WideWorkspaceCallbacks?,
@@ -346,7 +351,7 @@ internal fun EditorPresentationHost(
     when (mode) {
         EditorPresentationHostMode.COMPACT_SINGLE_PANE -> {
             // #640 评论 5443102488：compact host 在 hidden 和 visible 使用完全相同的 measured body bounds。
-            // 始终测量 singlePaneTopBar 作为 top-bar placeable，正文 y/height 为 root 去掉 top-bar 实际测量高度；
+            // 始终测量 compactEditorTopBar 作为 top-bar placeable，正文 y/height 为 root 去掉 top-bar 实际测量高度；
             // presentationVisible=false 时只不 place top-bar（保留其测量占位），不遮盖章节树；
             // presentationVisible=true 才 place top-bar。host 在 Scaffold 外，无 bottom NavigationBar,
             // 不经过 ChapterTree Scaffold 的 innerPadding。View 只 INVISIBLE 到 VISIBLE，不重建。
@@ -354,7 +359,7 @@ internal fun EditorPresentationHost(
             // 顶部 status bar / top cutout 留给 TopAppBar 默认 windowInsets，不重复消费顶部。
             CompactEditorMeasureLayout(
                 presentationVisible = presentationVisible,
-                topBar = singlePaneTopBar,
+                topBar = compactEditorTopBar,
                 body = {
                     SinglePaneEditorLayer(
                         target = currentTarget,
@@ -375,10 +380,11 @@ internal fun EditorPresentationHost(
             // singlePaneTopBar + body）/ EDITOR_ONLY_PREWARM（plan=WORKBENCH+hidden，只预热 Editor rect）
             // / FULL_WORKBENCH（plan=WORKBENCH+visible，完整 Workbench shell）。
             // EditorPane 在 WideWritingWorkspace 唯一 call site，三种 wide 模式切换不重建 AndroidView。
-            // #640 评论 5442422507：wide host 不在此消费 inset padding。Rust plan 按整窗尺寸算 slot bounds，
-            // slot 内容用 fitInside(SafeDrawing.current) 在 slot 内部 reposition 到 safe region。
+            // #640 评论 5443789509：wide host 不在此消费稳定 inset padding。稳定系统栏/刘海/折叠遮挡
+            // 已由 workbench safe frame 在 planner 输入前裁掉，Rust plan 的 slot rect 已在安全区内；
+            // IME 由 EditorPane 自己用 WindowInsetsRulers.Ime.current 动态处理。
             // #640 评论 5443102488：wide single-pane 的顶栏由 WideWritingWorkspace 在 Rust Editor free-region
-            // 内部测量（singlePaneTopBar 参数），不再让外层 Scaffold 画顶栏。
+            // 内部测量（wideSinglePaneTopBar 参数），不再让外层 Scaffold 画顶栏。
             val deps = wideDeps ?: return
             val layoutState = wideLayoutState ?: return
             val callbacks = wideCallbacks ?: return
@@ -395,7 +401,7 @@ internal fun EditorPresentationHost(
                 documentState = documentState,
                 layoutState = layoutState,
                 callbacks = callbacks,
-                singlePaneTopBar = singlePaneTopBar,
+                singlePaneTopBar = wideSinglePaneTopBar,
                 modifier = modifier.fillMaxSize(),
             )
         }

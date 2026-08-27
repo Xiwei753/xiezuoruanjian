@@ -449,11 +449,11 @@ private fun WorkbenchChromeContentSlots(
     callbacks: WideWorkspaceCallbacks,
     env: WorkbenchContentEnv,
 ) {
-    // #640 评论 5442422507：slot 根节点占 Rust rect（layoutId 被 measure policy 取），
-    // fitInside 在节点内部把内容 reposition 到 safe region（绕过 ancestor consumption）。
-    // 不改 ChapterTreeContent/WritingToolPane/WritingToolRail 内部 — ChapterTreeContent 有窄屏
-    // 调用方（ProjectWorkspaceScreen.kt），改内部会 double-inset。
-    val safeDrawingRulers = WindowInsetsRulers.SafeDrawing.current
+    // #640 评论 5443789509：slot 根节点占 Rust rect（layoutId 被 measure policy 取）。
+    // 稳定系统栏（systemBars + displayCutout）已由 workbench safe frame 在 planner 输入前
+    // 裁掉，Rust plan 的 slot rect 已在安全区内；slot 内不再 fitInside(SafeDrawing)，
+    // 避免二次避让。不改 ChapterTreeContent/WritingToolPane/WritingToolRail 内部 —
+    // ChapterTreeContent 有窄屏调用方（ProjectWorkspaceScreen.kt），改内部会 double-inset。
     // 章节树：用户主动收起时不画（bounds 由 plan 决定，收起通过 visibility 重算 plan）。
     if (!state.chapterTreeCollapsed && bounds.chapterNav != null && !bounds.chapterNav.isEmpty) {
         ChapterTreeContent(
@@ -462,7 +462,7 @@ private fun WorkbenchChromeContentSlots(
             workspaceActions = deps.projectWorkspaceActions,
             onSelectChapter = callbacks.onChapterSwitch,
             onError = deps.appState::reportWorkspaceError,
-            modifier = Modifier.layoutId(LayoutSlotId.CHAPTER_NAVIGATION).fitInside(safeDrawingRulers),
+            modifier = Modifier.layoutId(LayoutSlotId.CHAPTER_NAVIGATION),
         )
     }
     // EditorPane 不在此处 — 在 WideWritingWorkspace 顶层唯一 call site（layoutId=EDITOR），
@@ -471,7 +471,7 @@ private fun WorkbenchChromeContentSlots(
     if (!state.toolPaneCollapsed && bounds.toolPane != null && !bounds.toolPane.isEmpty) {
         WritingToolPane(
             content = env.toolPaneContent,
-            modifier = Modifier.layoutId(LayoutSlotId.TOOL_PANE).fitInside(safeDrawingRulers),
+            modifier = Modifier.layoutId(LayoutSlotId.TOOL_PANE),
         )
     }
     // 工具栏图标列（始终画）。
@@ -481,7 +481,7 @@ private fun WorkbenchChromeContentSlots(
         onSelect = state.onSelectTool,
         onTogglePane = state.onToggleToolPane,
         paneCollapsed = state.toolPaneCollapsed,
-        modifier = Modifier.layoutId(LayoutSlotId.TOOL_RAIL).fitInside(safeDrawingRulers),
+        modifier = Modifier.layoutId(LayoutSlotId.TOOL_RAIL),
     )
 }
 
@@ -714,11 +714,12 @@ private fun MeasureScope.measureAndPlaceWorkbench(
  * #640 A.4：预热阶段（presentationVisible=false）背景透明，不画 opaque editor surface；
  * 可见阶段用共享 editorSurfaceBackgroundColor，不用 MaterialTheme colorScheme background。
  *
- * #640 评论 5442422507：外层 Box 占 Rust Editor rect（layoutId 被 measure policy 取，按 Rust rect
+ * #640 评论 5442422507 / 5443789509：外层 Box 占 Rust Editor rect（layoutId 被 measure policy 取，按 Rust rect
  * measure/place）。SujianEditorHost / select-chapter 提示在内层用
- * `fitInside(WindowInsetsRulers.SafeDrawing.current)` 把内容 reposition 到 safe region
- * （systemBars + displayCutout + IME），用绝对窗口位置绕过 ancestor consumption。
- * plan 仍是唯一布局决策，Android 只处理系统 UI 遮挡。
+ * `fitInside(WindowInsetsRulers.Ime.current)` 把内容收进 IME 上方。
+ * 稳定系统栏（systemBars + displayCutout）/ 折叠遮挡已由 workbench safe frame + Rust plan
+ * 处理（slot rect 已在安全区内）；IME 由 Editor 自己用 `Ime.current` 动态处理，键盘出现只改变
+ * Editor 实际可用高度，不重算 Rust workbench plan。plan 仍是唯一布局决策。
  */
 @Composable
 private fun EditorPane(
@@ -739,22 +740,23 @@ private fun EditorPane(
             modifier
                 .background(background),
     ) {
-        // #640 评论 5442422507：fitInside 在 slot 内部把内容收进 safe region，
-        // 不靠 host inset padding（host 不缩，plan 按整窗坐标算 bounds）。
-        val safeDrawingRulers = WindowInsetsRulers.SafeDrawing.current
+        // #640 评论 5443789509：fitInside(Ime.current) 在 slot 内部把内容收进 IME 上方。
+        // 稳定系统栏/刘海/折叠遮挡由 workbench safe frame + Rust plan 处理（slot rect 已在安全区），
+        // IME 由 Editor 自己动态处理，键盘出现只改变 Editor 实际可用高度，不重算 Rust workbench plan。
+        val imeRulers = WindowInsetsRulers.Ime.current
         if (documentState.currentChapterId != null && documentState.currentVolumeId != null) {
             SujianEditorHost(
                 projectId = documentState.currentProjectId,
                 volumeId = documentState.currentVolumeId,
                 chapterId = documentState.currentChapterId,
                 chapterTitle = documentState.currentChapterTitle,
-                modifier = Modifier.fillMaxSize().fitInside(safeDrawingRulers),
+                modifier = Modifier.fillMaxSize().fitInside(imeRulers),
                 onChapterSwitchFailed = onChapterSwitchFailed,
                 presentationVisible = documentState.presentationVisible,
             )
         } else {
             Box(
-                modifier = Modifier.fillMaxSize().fitInside(safeDrawingRulers),
+                modifier = Modifier.fillMaxSize().fitInside(imeRulers),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(stringResource(id = R.string.select_chapter_to_write))

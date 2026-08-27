@@ -5,6 +5,7 @@ import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.SnackbarHostState
@@ -34,6 +35,7 @@ import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
 import com.xiwei.sujian.app.presentation.layout.rememberAndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.layout.rememberAndroidWorkbenchPlanState
+import com.xiwei.sujian.app.presentation.layout.rememberAndroidWorkbenchViewportFrame
 import com.xiwei.sujian.app.presentation.layout.rememberWorkbenchLayoutPlanner
 import com.xiwei.sujian.app.presentation.screen.AndroidChromePolicy
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
@@ -476,7 +478,10 @@ fun SujianNavigationSuite(
     val resolver = PresentationContractBridge.layoutContractResolver(deps.appServiceBridge)
     val workbenchResolver = PresentationContractBridge.workbenchLayoutResolver(deps.appServiceBridge)
     val layoutSpec = rememberAndroidLayoutSpec(foldingFeatures, resolver)
-    val workbenchPlanner = rememberWorkbenchLayoutPlanner(layoutSpec.viewport, workbenchResolver)
+    // #640 评论 5443789509：把稳定系统 UI（systemBars + displayCutout）的 safe viewport 放到
+    // planner 输入前，Rust 看到的 (0,0) 是稳定安全工作区左上角；plan 返回后再 offsetBy 平移回物理坐标。
+    val workbenchViewportFrame = rememberAndroidWorkbenchViewportFrame(layoutSpec.viewport)
+    val workbenchPlanner = rememberWorkbenchLayoutPlanner(workbenchViewportFrame, workbenchResolver)
 
     // #628 评论 5301021120 02:59:39Z 版：pane 收起状态 + Rust workbench plan 统一在
     // 导航套件层持有/解析（外层顶栏归属必须消费同一份 Rust 最终 mode）。
@@ -620,15 +625,29 @@ fun SujianNavigationSuite(
             snackbarHostState = snackbarHostState,
         )
 
-    // #640 评论 5443102488：Editor 位置的顶栏全部归 EditorPresentationHost，Scaffold 不再给任何 Editor 画顶栏
-    // （showOuterTopBar=!isEditorLocation）。这个 top bar 同时给 compact 和 wide-single-pane 用。
-    val singlePaneTopBar: @Composable () -> Unit = {
+    // #640 评论 5443789509：Editor 位置的顶栏全部归 EditorPresentationHost，Scaffold 不再给任何 Editor 画顶栏
+    // （showOuterTopBar=!isEditorLocation）。顶栏 lambda 拆成两个：
+    // - compactEditorTopBar：compact 单栏，用 Material3 默认 windowInsets 让 TopAppBar 自己处理 top system inset；
+    // - wideSinglePaneTopBar：wide SinglePane，顶部已由 safe workbench frame 处理，传 WindowInsets(0,0,0,0) 避免二次避让。
+    val compactEditorTopBar: @Composable () -> Unit = {
         com.xiwei.sujian.core.designsystem.component.SujianTopAppBar(
             title = topBarInfo.title,
             navigationIcon = topBarInfo.navigationIcon,
             onNavigationClick = topBarInfo.onNavigationClick,
             actions = topBarInfo.actions,
             containerColor = topBarInfo.containerColor,
+        )
+    }
+    // wide SinglePane 的顶部已由 safe workbench frame（systemBars + displayCutout）处理，
+    // 传 WindowInsets(0, 0, 0, 0) 避免二次避让（plan 已把 toolbar rect 放到安全区下方）。
+    val wideSinglePaneTopBar: @Composable () -> Unit = {
+        com.xiwei.sujian.core.designsystem.component.SujianTopAppBar(
+            title = topBarInfo.title,
+            navigationIcon = topBarInfo.navigationIcon,
+            onNavigationClick = topBarInfo.onNavigationClick,
+            actions = topBarInfo.actions,
+            containerColor = topBarInfo.containerColor,
+            windowInsets = WindowInsets(0, 0, 0, 0),
         )
     }
 
@@ -690,7 +709,8 @@ fun SujianNavigationSuite(
             isWideLayout = layoutSpec.workspaceLayoutMode.isWideLayout(),
             presentationVisible = isEditorLocation,
             workbenchPlan = workbenchPlanState.workbenchPlan,
-            singlePaneTopBar = singlePaneTopBar,
+            compactEditorTopBar = compactEditorTopBar,
+            wideSinglePaneTopBar = wideSinglePaneTopBar,
             wideDeps = wideDeps,
             wideLayoutState = wideLayoutState,
             wideCallbacks = wideCallbacks,

@@ -3,14 +3,12 @@ package com.xiwei.sujian.feature.project.ui
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fitInside
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.WindowInsetsRulers
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.presentation.screen.SujianChromeAction
@@ -26,6 +24,11 @@ import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
  * #628 评论 5301021120 第 4 步：删除整体的 `WritingWorkspaceToolbar`（被 WideWritingWorkspace
  * 的自定义 Compose Layout 按 plan 放 slot 替代，不加 fallback/兼容旁路）。
  * 三组容器暴露为 internal，供 WideWritingWorkspace 直接按 bounds 放置。
+ *
+ * #640 评论 5443789509：稳定系统栏（systemBars + displayCutout）已由 workbench safe frame
+ * 在 planner 输入前裁掉，Rust plan 的 toolbar rect 已在安全区内；toolbar slot 内不再
+ * `fitInside(SafeDrawing)`，避免二次避让。IME 不在 toolbar 出现，无需处理。
+ * Surface 仍占完整 Rust rect 画背景（背景画到系统栏由 safe frame 保证不露出透明 Scaffold）。
  *
  * - 左组：返回 + 撤销 + 重做 + 章节栏收起/展开（用户主动收起，不按设备尺寸自动收）；
  * - 中组：WritingToolbarCenterSlot 正文工具区域 content slot，当前无真实功能时保持空 slot；
@@ -48,16 +51,14 @@ internal fun WritingToolbarLeadingGroup(
     callbacks: WritingToolbarLeadingCallbacks,
     modifier: Modifier = Modifier,
 ) {
-    // #640 评论 5443102488：Surface 占 Rust toolbar slot 完整 rect（背景画到系统栏），
-    // fitInside(SafeDrawing) 挂在内部 Row 上让内容避开 safe region（状态栏/刘海/IME），
-    // 不缩掉 toolbar 背景，避免状态栏区域露出下面透明 Scaffold。
-    val safeDrawingRulers = WindowInsetsRulers.SafeDrawing.current
+    // #640 评论 5443789509：Surface 占 Rust toolbar slot 完整 rect 画背景；
+    // 稳定系统栏已由 workbench safe frame + Rust plan 处理，toolbar slot 内不再
+    // fitInside，避免二次避让。IME 不在 toolbar 出现，无需处理。
     Surface(
         modifier = modifier,
         color = MaterialTheme.colorScheme.surface,
     ) {
         Row(
-            modifier = Modifier.fitInside(safeDrawingRulers),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (showBack) {
@@ -98,14 +99,14 @@ internal fun WritingToolbarLeadingGroup(
 /** 中组 — 正文工具区域 content slot（空时不放伪按钮）。 */
 @Composable
 internal fun WritingToolbarCenterSlot(modifier: Modifier = Modifier) {
-    // #640 评论 5443102488：Surface 占完整 rect，fitInside 挂在内部 Box 上。
-    val safeDrawingRulers = WindowInsetsRulers.SafeDrawing.current
+    // #640 评论 5443789509：Surface 占完整 rect 画背景；稳定系统栏由 safe frame 处理，
+    // 内部 Box 不再 fitInside，避免二次避让。
     Surface(
         modifier = modifier,
         color = Color.Transparent,
     ) {
         Box(
-            modifier = Modifier.fillMaxSize().fitInside(safeDrawingRulers),
+            modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center,
         ) {
             // 当前无真实正文工具功能，保持空 slot（不放"点了没反应"的假按钮）。
@@ -128,14 +129,13 @@ internal fun WritingToolbarTrailingGroup(
     callbacks: WritingToolbarTrailingCallbacks,
     modifier: Modifier = Modifier,
 ) {
-    // #640 评论 5443102488：Surface 占 Rust toolbar slot 完整 rect，fitInside 挂在内部 Row 上。
-    val safeDrawingRulers = WindowInsetsRulers.SafeDrawing.current
+    // #640 评论 5443789509：Surface 占 Rust toolbar slot 完整 rect 画背景；
+    // 稳定系统栏已由 workbench safe frame + Rust plan 处理，内部 Row 不再 fitInside。
     Surface(
         modifier = modifier,
         color = MaterialTheme.colorScheme.surface,
     ) {
         Row(
-            modifier = Modifier.fitInside(safeDrawingRulers),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             actions.forEach { action ->
