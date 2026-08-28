@@ -22,12 +22,7 @@ import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
 import com.xiwei.sujian.feature.editor.visual.ComposeTextAnimationOverlay
 
 /**
- * #640 A.3：活动 target 从首帧组合唯一 AndroidView，
- * 用 View.INVISIBLE（不是 GONE/alpha/AnimatedVisibility）控制可见性。
- * 非活动 target 显示只读预览。
- *
- * #641：[EditorSurfaceMode.EditorHost] 现由 state-based [BasicTextField] 渲染，
- * 不再使用 [AndroidView]([SujianEditorView])。该枚举仍供路由层决定画编辑器还是只读预览。
+ * #641 评论1 第3节：活动/非活动 target 渲染模式。
  */
 enum class EditorSurfaceMode {
     /** 当前窗口绑定该 target 且状态为 Attaching/Attached/Committing/Cancelling → 真实编辑器。 */
@@ -38,9 +33,9 @@ enum class EditorSurfaceMode {
 }
 
 /**
- * #640 A.3：正文 Surface 渲染决策 — 纯函数。
+ * #641 评论1 第3节：正文 Surface 渲染决策 — 纯函数。
  *
- * 活动 target 始终组合编辑器（EditorSurfaceMode.EditorHost），
+ * 活动 target 画真实编辑器（EditorSurfaceMode.EditorHost），
  * 非活动 target 显示只读预览（EditorSurfaceMode.Preview）。
  */
 fun editorSurfaceMode(
@@ -72,10 +67,10 @@ fun editorSurfaceMode(
 /**
  * #641 评论1 第3节：正文 Surface — 唯一一个 state-based [BasicTextField]。
  *
- * 删除 `AndroidView(SujianEditorView)` 整段。Android Foundation [BasicTextField]
- * 负责实时输入、composition、selection、光标语义、软换行、命中测试和滚动；
- * Rust Core 继续负责文档事务与持久化；素笺自己的文字/光标动画只消费系统最终
- * [TextLayoutResult] 做显示，不再拥有或修改编辑器几何。
+ * Android Foundation [BasicTextField] 负责实时输入、composition、selection、
+ * 光标语义、软换行、命中测试和滚动；Rust Core 继续负责文档事务与持久化；
+ * 素笺自己的文字/光标动画只消费系统最终 [TextLayoutResult] 做显示，
+ * 不再拥有或修改编辑器几何。
  *
  * 注意：**不要把整个 BasicTextField 正文设成透明。** 正常文字、selection、composition
  * 都继续由系统正常画。只有当前正在动画的 UTF-16 range 通过 [OutputTransformation]

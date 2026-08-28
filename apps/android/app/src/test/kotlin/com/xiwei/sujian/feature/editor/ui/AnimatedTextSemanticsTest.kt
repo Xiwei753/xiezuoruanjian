@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.editor.ui
 
 import androidx.compose.ui.text.TextRange
+import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

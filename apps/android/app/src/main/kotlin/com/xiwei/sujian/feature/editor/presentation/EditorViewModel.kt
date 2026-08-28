@@ -52,6 +52,7 @@ package com.xiwei.sujian.feature.editor.presentation
 // ! 计数器；新旧判断由会话层 reducer 按版本锚点 + localDirty 完成。
 
 import android.app.Application
+import androidx.compose.ui.text.TextRange
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
@@ -60,9 +61,17 @@ import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.app.state.ActiveDocumentGate
+import com.xiwei.sujian.core.interop.app.AppServiceBridge
+import com.xiwei.sujian.feature.editor.input.CommitResult
+import com.xiwei.sujian.feature.editor.input.CommittedTextEdit
+import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
+import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
+import com.xiwei.sujian.feature.editor.interop.TextEditSessionBridge
 import com.xiwei.sujian.feature.editor.session.DocumentSaveReceiptTracker
+import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.TargetDocumentFact
+import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
@@ -93,6 +102,19 @@ class EditorViewModel(
     internal var _chapterRepository: ChapterRepository? = null
     internal var _recentEditsRepository: RecentEditsRepository? = null
     internal var _statsRepository: WritingStatsRepository? = null
+
+    /**
+     * #641 评论1 第2节：AppServiceBridge — bridge 的 commitToCore lambda 需要
+     * 经 [TextEditSessionBridge] 调 Rust Core replace。由 [initialize] 注入。
+     */
+    internal var _appServiceBridge: AppServiceBridge? = null
+
+    /**
+     * #641 评论1 第2节：ViewModel 拥有的 TextFieldState bridge 映射 —
+     * 按 targetId 生命周期创建/释放，不每次重组重新创建。
+     * WritingPane 通过 [bridgeForTarget] 消费同一实例。
+     */
+    private val _bridges = mutableMapOf<String, EditorTextFieldStateBridge>()
 
     internal val projectRepository: ProjectRepository
         get() =
@@ -151,6 +173,7 @@ class EditorViewModel(
         chapterRepo: ChapterRepository? = null,
         recentEditsRepo: RecentEditsRepository? = null,
         statsRepo: WritingStatsRepository? = null,
+        appServiceBridge: AppServiceBridge? = null,
     ) {
         // #630 评论 5327560790: 首次注入 SettingsRepository 后立刻启动一次初始设置读取，
         // 不等 ON_RESUME 事件 — 保证首帧 typography snapshot 来自持久化权威设置。
@@ -167,6 +190,9 @@ class EditorViewModel(
         }
         if (sessionCoordinator != null && _sessionCoordinator !== sessionCoordinator) {
             _sessionCoordinator = sessionCoordinator
+        }
+        if (appServiceBridge != null) {
+            _appServiceBridge = appServiceBridge
         }
         if (firstSettingsRepositoryAttach) {
             viewModelScope.launch {
@@ -369,12 +395,157 @@ class EditorViewModel(
         }
     }
 
+    /**
+     * #641 评论1 第2节：获取或创建 target 对应的 [EditorTextFieldStateBridge]。
+     * bridge 按 targetId 生命周期稳定存活于 ViewModel，不每次重组重建。
+     *
+     * 初始 selection 来自 Core/session 的真实 UTF-8 selection 经
+     * [TextOffsetUtils.utf16TextRangeForUtf8] 转成 UTF-16，不用无条件 TextRange(0,0)。
+     *
+     * [commitToCore] lambda 内统一 UTF-16→UTF-8（replace offset）和
+     * UTF-8→UTF-16（rejection selection），不再把 byte offset 当 Compose offset。
+     */
+    fun bridgeForTarget(
+        targetId: String,
+        initialText: String,
+    ): EditorTextFieldStateBridge {
+        _bridges[targetId]?.let { return it }
+
+        val coordinator = _sessionCoordinator
+        val bridge = _appServiceBridge
+        if (coordinator == null || bridge == null) {
+            return _bridges.getOrPut(targetId) {
+                EditorTextFieldStateBridge(
+                    initialText = initialText,
+                    initialSelection = TextRange(0, 0),
+                    commitToCore = { _ -> CommitResult.Accepted },
+                )
+            }
+        }
+
+        val snapshot = coordinator.queryTargetSnapshot(targetId)
+        val initialSelection =
+            if (snapshot != null) {
+                TextOffsetUtils.utf16TextRangeForUtf8(
+                    snapshot.text,
+                    snapshot.selectionAnchorUtf8,
+                    snapshot.selectionHeadUtf8,
+                )
+            } else {
+                TextRange(0, 0)
+            }
+        val effectiveInitialText = snapshot?.text ?: initialText
+
+        val commitToCore: (CommittedTextEdit) -> CommitResult = { edit ->
+            commitEditToCore(targetId, coordinator, bridge, edit)
+        }
+
+        return _bridges.getOrPut(targetId) {
+            EditorTextFieldStateBridge(
+                initialText = effectiveInitialText,
+                initialSelection = initialSelection,
+                commitToCore = commitToCore,
+            )
+        }
+    }
+
+    /**
+     * #641 评论1 第2节：bridge commitToCore 实现 — UTF-16→UTF-8 偏移转换后调
+     * Core replace，成功时 applyLocalEdit 推进 session，失败时回退到权威正文。
+     * 从 [bridgeForTarget] 提取以控制方法长度与认知复杂度。
+     */
+    private fun commitEditToCore(
+        targetId: String,
+        coordinator: EditorSessionCoordinator,
+        bridge: AppServiceBridge,
+        edit: CommittedTextEdit,
+    ): CommitResult {
+        val lease = coordinator.currentInputLease()
+        if (lease == null || lease.targetId != targetId) {
+            return CommitResult.Rejected(edit.oldText, edit.selection)
+        }
+        val byteStart = TextOffsetUtils.utf8OffsetForCharIndex(edit.oldText, edit.replaceStart)
+        val byteEndExclusive = TextOffsetUtils.utf8OffsetForCharIndex(edit.oldText, edit.replaceEndExclusive)
+        val kernelBridge = TextEditSessionBridge(bridge, lease.sessionId)
+        val currentSnapshot = coordinator.queryTargetSnapshot(targetId)
+        val expectedRevision = currentSnapshot?.revision ?: 0L
+        val result =
+            kernelBridge.replace(
+                byteStart = byteStart,
+                byteEndExclusive = byteEndExclusive,
+                replacementText = edit.newText,
+                originalText = edit.oldText,
+                cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+                expectedRevision = expectedRevision,
+            )
+        if (result != null) {
+            coordinator.applyLocalEdit(
+                EditorDocumentUpdate.LocalInput(
+                    targetId = targetId,
+                    revision = result.newRevision.toLong(),
+                    transactionId = result.transactionId.toLong(),
+                    selectionAnchorUtf8 = result.newSelectionStart.toInt(),
+                    selectionHeadUtf8 = result.newSelectionEnd.toInt(),
+                    lease = lease,
+                    contentChanged = result.displayPatches.isNotEmpty(),
+                ),
+            )
+            return CommitResult.Accepted
+        }
+        val fallbackText = currentSnapshot?.text ?: edit.oldText
+        val fallbackSelection =
+            if (currentSnapshot != null) {
+                TextOffsetUtils.utf16TextRangeForUtf8(
+                    fallbackText,
+                    currentSnapshot.selectionAnchorUtf8,
+                    currentSnapshot.selectionHeadUtf8,
+                )
+            } else {
+                edit.selection
+            }
+        return CommitResult.Rejected(fallbackText, fallbackSelection)
+    }
+
+    /**
+     * #641 评论1 第2节：切章节/返回时在 save/close 前调用 bridge.flushForClose，
+     * 即使 IME 仍有 composition 也先把屏幕最终内容提交给 Core。
+     */
+    fun flushBridgeForClose(targetId: String) {
+        _bridges[targetId]?.flushForClose()
+    }
+
+    /**
+     * #641 评论1 第2节：外部同步/撤销/重载事实成功时把权威正文写回 bridge state。
+     * UTF-8 selection 经 [TextOffsetUtils.utf16TextRangeForUtf8] 转成 UTF-16。
+     * composition 时不得覆盖（由调用方在 composition == null 时才调用）。
+     */
+    fun applyAuthoritativeToBridge(
+        targetId: String,
+        text: String,
+        selectionUtf8Anchor: Int,
+        selectionUtf8Head: Int,
+    ) {
+        val bridge = _bridges[targetId] ?: return
+        val utf16Selection = TextOffsetUtils.utf16TextRangeForUtf8(text, selectionUtf8Anchor, selectionUtf8Head)
+        bridge.applyAuthoritativeText(text, utf16Selection)
+    }
+
+    /** #641：释放 target 对应的 bridge（章节关闭/session 销毁时）。 */
+    fun releaseBridge(targetId: String) {
+        _bridges.remove(targetId)
+    }
+
+    /** #641：获取 target 对应的 bridge（已存在时返回，否则 null）— 供 WritingPane 消费。 */
+    fun existingBridgeForTarget(targetId: String): EditorTextFieldStateBridge? = _bridges[targetId]
+
     override fun onCleared() {
         super.onCleared()
         syncObserverJob?.cancel()
         autoSaveJob?.cancel()
         statsRefreshJob?.cancel()
         saveCommandChannel.close()
+        // #641：释放所有 ViewModel 拥有的 TextFieldState bridge。
+        _bridges.clear()
         // #595 四：只关闭自己的 gate 注册 — 新实例的 flusher 不被旧实例清除。
         gateRegistration?.close()
         gateRegistration = null
@@ -408,6 +579,9 @@ class EditorViewModel(
     fun finishWorkspaceClose(targetId: String) {
         val session = currentSession ?: return
         if (chapterTargetId(session.projectId, session.volumeId, session.chapterId) != targetId) return
+        // #641：关闭前 flush bridge（IME composition 上屏内容提交给 Core）。
+        flushBridgeForClose(targetId)
+        releaseBridge(targetId)
         currentSession = null
         autoSaveJob?.cancel()
         saveCommandChannel.close()
@@ -448,6 +622,7 @@ class EditorViewModel(
                 deps.chapterRepository,
                 deps.recentEditsRepository,
                 deps.statsRepository,
+                deps.appServiceBridge,
             )
             return vm as T
         }

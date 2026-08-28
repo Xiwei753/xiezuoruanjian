@@ -400,9 +400,13 @@ def rule_input_layer_pure() -> list[Finding]:
     )
     # #641：EditorTextFieldStateBridge 持有 TextFieldState（androidx.compose.foundation.text.input）
     # 和 TextRange（androidx.compose.ui.text）— 这是系统实时输入状态，允许 Compose 依赖。
+    # TextOffsetUtils 持有 TextRange 用于 UTF-8↔UTF-16 偏移转换，同样允许。
     findings = [
         f for f in findings
-        if not (f.path == "feature/editor/input/EditorTextFieldStateBridge.kt")
+        if f.path not in {
+            "feature/editor/input/EditorTextFieldStateBridge.kt",
+            "feature/editor/input/TextOffsetUtils.kt",
+        }
     ]
     findings += scan_prefix_with_allowed(
         APP_SRC,
@@ -1270,18 +1274,52 @@ EDITOR_PRESENTATION_FORBIDDEN = (
 
 def rule_editor_presentation_pure() -> list[Finding]:
     """#624 评论17 第1/3部分：feature/editor/presentation 不得依赖
-    Compose/View/editor platform/render/input/layout/ui/visual/motion/window。
+    Compose/View/editor platform/render/layout/ui/visual/motion/window。
 
     presentation 只承载 ViewModel/状态机/协程事务，Compose 表面留在 ui 层
     （WritingPane/WritingEditorSurface 等）。这条规则保护从 ui 包迁出的
     EditorViewModel/EditorViewModelTypes/Editor*Ops/ChapterSwitchGate/
     TargetDocumentUpdateBus 不会把 Compose/View/平台依赖带进新包。
+
+    #641：EditorViewModel 现拥有 EditorTextFieldStateBridge（TextFieldState），
+    Android 官方推荐把 TextFieldState 提升到 ViewModel。允许 presentation → input
+    依赖，且 EditorViewModel.kt 允许引用 bridge 所需的 Compose text input /
+    ui.text.TextRange / runtime.Stable；其余 Compose UI 框架仍禁止。
     """
-    return scan_forbidden(
+    forbidden = [r for r in EDITOR_PRESENTATION_FORBIDDEN if r != "com.xiwei.sujian.feature.editor.input"]
+    findings = scan_forbidden(
         APP_SRC,
         "/feature/editor/presentation/",
-        EDITOR_PRESENTATION_FORBIDDEN,
+        forbidden,
     )
+
+    # #641: EditorViewModel.kt 允许引用 bridge 所需的 Compose text input / text types，
+    # 其余 Compose UI 框架（material3/animation/layout/draw 等）仍禁止。
+    # substring 匹配使 androidx.compose.foundation 命中 androidx.compose.foundation.text.input，
+    # 需对 EditorViewModel.kt 精细重扫。
+    bridge_owner = "feature/editor/presentation/EditorViewModel.kt"
+    bridge_allowed_prefixes = (
+        "androidx.compose.foundation.text.input",
+        "androidx.compose.ui.text.TextRange",
+        "androidx.compose.runtime.Stable",
+    )
+    findings = [f for f in findings if f.path != bridge_owner]
+    vm_path = APP_SRC / "feature" / "editor" / "presentation" / "EditorViewModel.kt"
+    if vm_path.exists():
+        for lineno, raw in enumerate(
+            effective_lines(vm_path.read_text(encoding="utf-8")), 1
+        ):
+            for hit in references(raw, forbidden):
+                if any(allowed in raw for allowed in bridge_allowed_prefixes):
+                    continue
+                findings.append(
+                    Finding(
+                        path=bridge_owner,
+                        line=lineno,
+                        message=f"禁止引用 {hit}",
+                    )
+                )
+    return findings
 
 
 PRESENTATION_CONTRACT_DTO_WHITELIST = [

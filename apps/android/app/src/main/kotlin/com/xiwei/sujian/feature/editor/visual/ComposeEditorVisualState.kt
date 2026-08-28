@@ -8,10 +8,22 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
+ * #641 评论1 第4/5节：Core 返回的视觉意图 — 受影响的 UTF-16 range 和动画类型。
+ * 从 Core display patch / VisualIntent 映射，offset 是 UTF-16（已由调用方从
+ * UTF-8 byte 转换），不再用 byte 作为 Compose offset。
+ */
+data class EditorVisualIntent(
+    val affectedRanges: List<TextRange>,
+    val kind: Kind,
+) {
+    enum class Kind { Insert, Delete, Move, Cursor }
+}
+
+/**
  * #641 评论1 第4/5节：Compose 显示层视觉状态 — 保存上一份和当前一份
- * [ComposeLayoutSnapshot]，根据 Core 的 VisualIntent 算受影响 UTF-16 range。
+ * [ComposeLayoutSnapshot]，根据 Core 的 [EditorVisualIntent] 算受影响 UTF-16 range。
  *
- * 动画层只“画”，绝不能再改变 viewport / selection / IME 几何。
+ * 动画层只"画"，绝不能再改变 viewport / selection / IME 几何。
  * [onAuthoritativeLayout] 由 [BasicTextField] 的 `onTextLayout` 回调调用，
  * 把系统最终 [TextLayoutResult] 记录为权威布局，不反向修改输入。
  */
@@ -39,6 +51,10 @@ class ComposeEditorVisualState(
     private val _drawsVisualCursor = MutableStateFlow(initialDrawsVisualCursor)
     val drawsVisualCursor: StateFlow<Boolean> = _drawsVisualCursor.asStateFlow()
 
+    /** 当前活跃的视觉意图 — 供 overlay 读取动画类型。 */
+    private val _activeIntent = MutableStateFlow<EditorVisualIntent?>(null)
+    val activeIntent: StateFlow<EditorVisualIntent?> = _activeIntent.asStateFlow()
+
     /**
      * #641 评论1 第5节：系统给出权威布局 — 只记录，不修改输入几何。
      * 动画层据此算受影响 range，但不 scrollTo、不改 selection、不改 editor height。
@@ -50,6 +66,28 @@ class ComposeEditorVisualState(
     ) {
         previousSnapshot = currentSnapshot
         currentSnapshot = ComposeLayoutSnapshot(result, selection, scrollY)
+    }
+
+    /**
+     * #641 评论1 第5节：Core 给出视觉意图 — 设置受影响 UTF-16 range 和动画类型。
+     * overlay 据此画动画过程。range 已是 UTF-16（调用方从 Core UTF-8 转换）。
+     */
+    fun onVisualIntent(intent: EditorVisualIntent) {
+        _activeIntent.value = intent
+        _hiddenRanges.value = intent.affectedRanges.filter { it.start < it.end }
+        if (intent.kind == EditorVisualIntent.Kind.Cursor) {
+            _drawsVisualCursor.value = true
+        }
+    }
+
+    /**
+     * #641 评论1 第5节：动画结束 — 清 hiddenRanges，系统正文马上可见。
+     * 由 overlay 的动画完成回调调用。
+     */
+    fun clearAnimation() {
+        _hiddenRanges.value = emptyList()
+        _activeIntent.value = null
+        _drawsVisualCursor.value = false
     }
 
     /** 当前布局快照 — 供 overlay 读取 bounding box。 */

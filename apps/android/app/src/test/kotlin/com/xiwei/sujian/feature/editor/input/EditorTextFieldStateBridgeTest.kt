@@ -1,7 +1,6 @@
 package com.xiwei.sujian.feature.editor.input
 
 import androidx.compose.ui.text.TextRange
-import com.xiwei.sujian.feature.editor.ui.TextOffsetUtils
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -25,6 +24,10 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class EditorTextFieldStateBridgeTest {
+    companion object {
+        private const val AUTHORITATIVE_TEXT = "同步新正文"
+    }
+
     @Test
     fun computeSingleReplace_pureInsert_hasEmptyCommonPrefixAndSuffix() {
         val edit =
@@ -201,11 +204,11 @@ class EditorTextFieldStateBridgeTest {
                 commitToCore = { CommitResult.Accepted },
             )
 
-        bridge.applyAuthoritativeText("同步新正文", TextRange(0, 0))
+        bridge.applyAuthoritativeText(AUTHORITATIVE_TEXT, TextRange(0, 0))
 
-        assertEquals("同步新正文", bridge.state.text.toString())
+        assertEquals(AUTHORITATIVE_TEXT, bridge.state.text.toString())
         assertEquals(TextRange(0, 0), bridge.state.selection)
-        assertEquals("mirror 跟随权威正文", "同步新正文", bridge.mirroredText)
+        assertEquals("mirror 跟随权威正文", AUTHORITATIVE_TEXT, bridge.mirroredText)
     }
 
     @Test

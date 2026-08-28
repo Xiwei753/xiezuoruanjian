@@ -33,7 +33,7 @@ import kotlinx.coroutines.withContext
  *
  * #625 第二段 / #628 验收点 1：根据 [AndroidLayoutSpec.contract.workspaceLayoutMode]
  * （**不自己判断窗口尺寸**）+ [WorkspaceLocation] 决定画什么：
- * - **窄屏**（SinglePane）：只画当前业务位置（稳定 Box + SinglePaneEditorLayer 承载编辑器，无动画）；
+ * - **窄屏**（SinglePane）：只画当前业务位置（稳定 Box 承载编辑器，无动画）；
  * - **大屏**（Workbench）：
  *   - ProjectList 位置 → [ProjectListContent]（grid）；
  *   - ChapterTree 位置 → [ChapterTreeContent] + 占位；
@@ -244,7 +244,7 @@ internal fun ProjectWorkspaceScreen(
     val projectCardMinWidthDp = layoutSpec.contract?.metrics?.projectCardMinWidthDp ?: 0f
 
     if (isWideLayout) {
-        // #640 A：宽屏只画 ProjectList/ChapterTree；Editor 由 EditorPresentationHost（suite sibling）接管。
+        // #641：宽屏 Editor 位置直接画 WideWritingWorkspace（WorkspaceLocation.Editor 分支）。
         WideLayoutContent(
             appState = appState,
             projectListActions = projectListActions,
@@ -271,7 +271,7 @@ internal fun ProjectWorkspaceScreen(
             modifier = modifier,
         )
     } else {
-        // #640 A：窄屏只画 ProjectList/ChapterTree；Editor 由 EditorPresentationHost（suite sibling）接管。
+        // #641：窄屏 Editor 位置直接画 SujianEditorHost（WorkspaceLocation.Editor 分支）。
         SinglePaneContent(
             appState = appState,
             projectListActions = projectListActions,

@@ -494,11 +494,11 @@ fun SujianNavigationSuite(
     }
 
     // #628 评论 5301021120 02:59:39Z 版：外层顶栏归属必须消费同一份 Rust 最终模式。
-    // #640 评论 5443102488：Editor 位置的顶栏全部归 EditorPresentationHost，
+    // #641：Editor 位置的顶栏全部归 Editor composable，
     // Scaffold 不再给任何 Editor 画顶栏（showOuterTopBar=!isEditorLocation）。
     val showOuterTopBar = !isEditorLocation
 
-    // #640 A：Editor 位置 Scaffold container 透明，让 host（sibling 上层）透出；
+    // #641：Editor 位置 Scaffold container 透明，让 Editor composable 透出；
     // 非 Editor 位置用 colorScheme.background。
     val scaffoldContainerColor =
         if (isEditorLocation) {

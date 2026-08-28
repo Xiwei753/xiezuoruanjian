@@ -34,7 +34,7 @@ import java.util.concurrent.locks.ReentrantLock
  * #592 一/四：#595 四：会话层协调器 — 只管理 Rust session、正文/选区纯数据快照、
  * Undo/Redo 所属 session、活动目标、窗口绑定状态机与编辑事务。
  *
- * 不持有 View、Activity、Choreographer、WindowDisplayFrameClock、窗口几何、
+ * 不持有 View、Activity、Choreographer、窗口几何、
  * Compose mutableState、TextPaint、TargetDisplayRuntime。
  * 由 Activity 级 ViewModel 持有，跨配置变化存活；窗口/渲染对象全部在
  * [EditorWindowHost]（窗口层）。

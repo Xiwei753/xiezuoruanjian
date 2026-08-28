@@ -27,7 +27,6 @@ import com.xiwei.sujian.feature.editor.session.SessionResetSource
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.session.applyExternalContentFact
-import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.editor.session.consumePendingExternalFact
 import com.xiwei.sujian.feature.editor.session.shouldApplyExternalContent
 import com.xiwei.sujian.feature.editor.session.storePendingExternalFact
@@ -49,7 +48,7 @@ import com.xiwei.sujian.feature.editor.window.EditableTextTarget
  * 才显示编辑器；切换事务提交后、导航落地前，旧 pane 不显示 View、
  * 不安装输入回调，旧章节最后一次输入不可能写进新章节。
  *
- * #641：正文 UI 由 state-based [BasicTextField] 接管，不再有 presentationVisible —
+ * #641：正文 UI 由 state-based [BasicTextField] 接管 —
  * 编辑器只在 WorkspaceLocation.Editor 真正存在，离开 Composition 自动收起 IME。
  */
 @Composable
@@ -163,6 +162,7 @@ fun WritingPane(
     ) { editorModifier ->
         WritingPaneEditorContent(
             coordinator = coordinator,
+            viewModel = currentViewModel,
             targetId = targetId,
             isActivePane = isActivePane,
             sessionState = sessionState,
@@ -177,31 +177,59 @@ fun WritingPane(
  * 非活动 → 只读预览。从 [WritingPane] 提取以控制函数长度。
  */
 @Composable
+@Suppress("LongParameterList")
 private fun WritingPaneEditorContent(
     coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
+    viewModel: EditorViewModel,
     targetId: String,
     isActivePane: Boolean,
     sessionState: com.xiwei.sujian.feature.editor.session.EditorSessionState,
     uiState: com.xiwei.sujian.feature.editor.presentation.EditorUiState,
     modifier: Modifier,
 ) {
-    val deps = LocalSujianAppDependencies.current
-    // #624 评论17 第2部分：Route 层收集 targetDecorationsVersionFlow 触发重排，
-    // Layout 层不自己 collect session/window flow。
     @Suppress("UNUSED_EXPRESSION")
     (coordinator.targetDecorationsVersionFlow.collectAsStateWithLifecycle().value)
     val surfaceMode = editorSurfaceMode(sessionState.bindingState, coordinator.windowId, targetId, isActivePane)
     when (surfaceMode) {
         EditorSurfaceMode.EditorHost -> {
-            val bridge =
-                rememberEditorTextFieldBridge(
-                    coordinator = coordinator,
-                    appServiceBridge = deps.appServiceBridge,
-                    targetId = targetId,
-                    initialText = uiState.content,
-                    bindingState = sessionState.bindingState,
-                )
+            // #641 评论1 第2节：bridge 由 EditorViewModel 拥有，按 targetId 生命周期
+            // 稳定存活，不每次重组重新创建。初始 selection 来自 Core/session UTF-8 → UTF-16。
+            val bridge = viewModel.bridgeForTarget(targetId, uiState.content)
             val visualState = remember { com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState() }
+
+            // #641 评论1 第2节：观察 TextFieldState 快照，提交已完成的文本变化给 Core。
+            // IME composing 中间态不提交（bridge.onInputSnapshot 内部判断）。
+            androidx.compose.runtime.LaunchedEffect(bridge) {
+                androidx.compose.runtime.snapshotFlow {
+                    com.xiwei.sujian.feature.editor.input.EditorInputSnapshot(
+                        text = bridge.state.text.toString(),
+                        selection = bridge.state.selection,
+                        composition = bridge.state.composition,
+                    )
+                }.collect(bridge::onInputSnapshot)
+            }
+
+            // #641：undo/redo 后 session 正文变化时把权威正文写回 bridge（UTF-8→UTF-16）。
+            // composition 期间不覆盖（bridge.applyAuthoritativeText 会重置 IME buffer）。
+            val lastCommittedText by coordinator.lastCommittedTextFlow.collectAsStateWithLifecycle()
+            androidx.compose.runtime.LaunchedEffect(targetId, lastCommittedText) {
+                val committed = lastCommittedText
+                if (committed != null &&
+                    committed != bridge.mirroredText &&
+                    bridge.state.composition == null
+                ) {
+                    val snapshot = coordinator.queryTargetSnapshot(targetId)
+                    if (snapshot != null && snapshot.text != bridge.mirroredText) {
+                        viewModel.applyAuthoritativeToBridge(
+                            targetId,
+                            snapshot.text,
+                            snapshot.selectionAnchorUtf8,
+                            snapshot.selectionHeadUtf8,
+                        )
+                    }
+                }
+            }
+
             WritingEditorSurface(
                 bridge = bridge,
                 visualState = visualState,
@@ -445,6 +473,7 @@ private fun rememberWritingPaneViewModel(
             deps.syncRepository,
             deps.syncStatusRepository,
             coordinator.sessionCoordinator,
+            appServiceBridge = deps.appServiceBridge,
         )
     }
     return viewModel
@@ -631,33 +660,8 @@ private suspend fun handleExternalDocumentFact(
     fact: com.xiwei.sujian.feature.editor.session.TargetDocumentFact,
 ) {
     when (val decision = coordinator.sessionCoordinator.shouldApplyExternalContent(fact)) {
-        ExternalContentDecision.Apply -> {
-            val resetResult =
-                coordinator.resetPersistentSession(
-                    targetId,
-                    fact.text,
-                    fact.text.toByteArray(Charsets.UTF_8).size,
-                    SessionResetSource.EXTERNAL,
-                )
-            if (resetResult is com.xiwei.sujian.feature.editor.session.ExternalResetResult.Success &&
-                coordinator.activeTargetId != targetId
-            ) {
-                coordinator.beginEdit(targetId)
-            }
-            if (resetResult is com.xiwei.sujian.feature.editor.session.ExternalResetResult.Success) {
-                // #595 五：仅 Core reset 成功才一次性提交会话事实与 UI —
-                // reset 失败时保持旧正文与旧版本，不得推进任何状态（旧实现
-                // 无条件推进导致 Rust session/SessionStore/ViewModel 三份分裂）。
-                coordinator.sessionCoordinator.applyExternalContentFact(fact)
-                // #624 评论17 问题3：真正 Apply 提交版本后清除未解决事实。
-                coordinator.sessionCoordinator.consumePendingExternalFact(targetId)
-                if (fact.origin == com.xiwei.sujian.feature.editor.session.DocumentFactOrigin.SYNC_MERGED) {
-                    // #595 三：同步合并同时更新 ViewModel 正文/hash/保存状态/字数 —
-                    // 磁盘、Rust session、ViewModel 三方保持一致。
-                    viewModel.applyExternalContentToUi(targetId, fact.text, fact.sourceVersion.contentHash)
-                }
-            }
-        }
+        ExternalContentDecision.Apply ->
+            applyExternalDocumentFact(coordinator, viewModel, targetId, fact)
         ExternalContentDecision.IgnoreSameContent -> {
             // 正文已一致 — 只记录版本事实（幂等）。
             coordinator.sessionCoordinator.applyExternalContentFact(fact)
@@ -694,6 +698,53 @@ private suspend fun handleExternalDocumentFact(
 }
 
 /**
+ * #595 一/二：Apply 分支执行 — Core reset + 会话事实提交 + bridge 同步 + ViewModel 同步。
+ * 从 [handleExternalDocumentFact] 提取以控制 Cognitive Complexity。
+ */
+private suspend fun applyExternalDocumentFact(
+    coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
+    viewModel: EditorViewModel,
+    targetId: String,
+    fact: com.xiwei.sujian.feature.editor.session.TargetDocumentFact,
+) {
+    val resetResult =
+        coordinator.resetPersistentSession(
+            targetId,
+            fact.text,
+            fact.text.toByteArray(Charsets.UTF_8).size,
+            SessionResetSource.EXTERNAL,
+        )
+    if (resetResult is com.xiwei.sujian.feature.editor.session.ExternalResetResult.Success &&
+        coordinator.activeTargetId != targetId
+    ) {
+        coordinator.beginEdit(targetId)
+    }
+    if (resetResult !is com.xiwei.sujian.feature.editor.session.ExternalResetResult.Success) return
+    // #595 五：仅 Core reset 成功才一次性提交会话事实与 UI —
+    // reset 失败时保持旧正文与旧版本，不得推进任何状态（旧实现
+    // 无条件推进导致 Rust session/SessionStore/ViewModel 三份分裂）。
+    coordinator.sessionCoordinator.applyExternalContentFact(fact)
+    // #624 评论17 问题3：真正 Apply 提交版本后清除未解决事实。
+    coordinator.sessionCoordinator.consumePendingExternalFact(targetId)
+    // #641 评论1 第2节：外部权威正文写回 bridge state（UTF-8→UTF-16）。
+    // composition 时由 bridge 内部处理（不覆盖正在编辑的 buffer）。
+    val snapshot = coordinator.queryTargetSnapshot(targetId)
+    if (snapshot != null) {
+        viewModel.applyAuthoritativeToBridge(
+            targetId,
+            fact.text,
+            snapshot.selectionAnchorUtf8,
+            snapshot.selectionHeadUtf8,
+        )
+    }
+    if (fact.origin == com.xiwei.sujian.feature.editor.session.DocumentFactOrigin.SYNC_MERGED) {
+        // #595 三：同步合并同时更新 ViewModel 正文/hash/保存状态/字数 —
+        // 磁盘、Rust session、ViewModel 三方保持一致。
+        viewModel.applyExternalContentToUi(targetId, fact.text, fact.sourceVersion.contentHash)
+    }
+}
+
+/**
  * #624 评论17 问题5：reapply fact 的 IgnoreReplay/IgnoreOlder 消费 pending
  * （外部状态已对齐/本地更新，冲突已解决）。正常 fact 不消费（可能消费无关 pending）。
  * 提取为独立函数以控制 [handleExternalDocumentFact] 的 Cognitive Complexity。
@@ -710,94 +761,8 @@ private fun consumePendingForReapplyIfApplicable(
 }
 
 /**
- * #641 评论1 第2节：[EditorTextFieldStateBridge] 创建 — 持有 [TextFieldState]，
- * 把 Android 已提交的文本变化转成现有 Core 事务，复用
- * [EditorSessionCoordinator.applyLocalEdit] 的 dirty/revision/autosave/统计链。
- *
- * bridge 按 (targetId, bindingState) remember — session 重新绑定时重建，
- * 外部权威正文（同步/撤销/重载）经 resetPersistentSession 后 session 重附着，
- * bridge 以新正文初始化。不每次重组重建。
+ * #641 评论1 第2节：[EditorTextFieldStateBridge] 现由 [EditorViewModel] 拥有
+ * （[EditorViewModel.bridgeForTarget]），按 targetId 生命周期稳定存活，
+ * 不每次重组重建。初始 selection 来自 Core/session UTF-8 → UTF-16。
+ * commitToCore lambda 内统一 UTF-16→UTF-8 / UTF-8→UTF-16 偏移转换。
  */
-@Composable
-private fun rememberEditorTextFieldBridge(
-    coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
-    appServiceBridge: com.xiwei.sujian.core.interop.app.AppServiceBridge,
-    targetId: String,
-    initialText: String,
-    bindingState: com.xiwei.sujian.feature.editor.session.WindowBindingState,
-): com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge {
-    val commitToCore: (
-        com.xiwei.sujian.feature.editor.input.CommittedTextEdit,
-    ) -> com.xiwei.sujian.feature.editor.input.CommitResult =
-        remember(coordinator, appServiceBridge, targetId) {
-            { edit ->
-                val lease = coordinator.sessionCoordinator.currentInputLease()
-                if (lease == null || lease.targetId != targetId) {
-                    com.xiwei.sujian.feature.editor.input.CommitResult.Rejected(edit.oldText, edit.selection)
-                } else {
-                    val byteStart = edit.oldText.substring(0, edit.replaceStart).toByteArray(Charsets.UTF_8).size
-                    val byteEndExclusive =
-                        edit.oldText.substring(0, edit.replaceEndExclusive).toByteArray(Charsets.UTF_8).size
-                    val kernelBridge =
-                        com.xiwei.sujian.feature.editor.interop.TextEditSessionBridge(appServiceBridge, lease.sessionId)
-                    val snapshot = coordinator.queryTargetSnapshot(targetId)
-                    val expectedRevision = snapshot?.revision ?: 0L
-                    val result =
-                        kernelBridge.replace(
-                            byteStart = byteStart,
-                            byteEndExclusive = byteEndExclusive,
-                            replacementText = edit.newText,
-                            originalText = edit.oldText,
-                            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
-                            expectedRevision = expectedRevision,
-                        )
-                    if (result != null) {
-                        coordinator.sessionCoordinator.applyLocalEdit(
-                            com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate.LocalInput(
-                                targetId = targetId,
-                                revision = result.newRevision.toLong(),
-                                transactionId = result.transactionId.toLong(),
-                                selectionAnchorUtf8 = result.newSelectionStart.toInt(),
-                                selectionHeadUtf8 = result.newSelectionEnd.toInt(),
-                                lease = lease,
-                                contentChanged = result.displayPatches.isNotEmpty(),
-                            ),
-                        )
-                        com.xiwei.sujian.feature.editor.input.CommitResult.Accepted
-                    } else {
-                        val fallbackText = snapshot?.text ?: edit.oldText
-                        com.xiwei.sujian.feature.editor.input.CommitResult.Rejected(
-                            fallbackText,
-                            androidx.compose.ui.text.TextRange(
-                                (snapshot?.selectionAnchorUtf8 ?: 0).coerceAtLeast(0),
-                                (snapshot?.selectionHeadUtf8 ?: 0).coerceAtLeast(0),
-                            ),
-                        )
-                    }
-                }
-            }
-        }
-
-    val bridge =
-        remember(targetId, bindingState) {
-            com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge(
-                initialText = initialText,
-                initialSelection = androidx.compose.ui.text.TextRange(0, 0),
-                commitToCore = commitToCore,
-            )
-        }
-
-    // #641 评论1 第2节：观察 TextFieldState 快照，提交已完成的文本变化给 Core。
-    // IME composing 中间态不提交（bridge.onInputSnapshot 内部判断）。
-    androidx.compose.runtime.LaunchedEffect(bridge) {
-        androidx.compose.runtime.snapshotFlow {
-            com.xiwei.sujian.feature.editor.input.EditorInputSnapshot(
-                text = bridge.state.text.toString(),
-                selection = bridge.state.selection,
-                composition = bridge.state.composition,
-            )
-        }.collect(bridge::onInputSnapshot)
-    }
-
-    return bridge
-}
