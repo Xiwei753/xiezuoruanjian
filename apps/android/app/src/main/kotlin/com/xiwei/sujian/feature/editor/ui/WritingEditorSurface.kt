@@ -17,6 +17,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
+import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
 import com.xiwei.sujian.feature.editor.visual.ComposeTextAnimationOverlay
@@ -76,23 +77,51 @@ fun editorSurfaceMode(
  * 都继续由系统正常画。只有当前正在动画的 UTF-16 range 通过 [OutputTransformation]
  * 临时变透明，overlay 只补画这些 range；动画完成立刻从 `hiddenRanges` 删除，
  * 系统正文已经在最终位置，不会再跳一次。
+ *
+ * #641 评论 问题4b：[inputEnabled] 是 [EditorViewModel.inputFrozen] 之外的第二层门控 —
+ * BasicTextField 的 readOnly = !inputEnabled，章节切换冻结期间禁止 IME 写入 TextFieldState。
  */
 @Composable
+@Suppress("LongParameterList")
 fun WritingEditorSurface(
     bridge: EditorTextFieldStateBridge,
     visualState: ComposeEditorVisualState,
     textStyle: TextStyle,
     textColor: Color,
     cursorColor: Color,
+    inputEnabled: Boolean,
+    /**
+     * #641 评论 问题6e：搜索高亮 UTF-16 ranges —
+     * 由 [WritingPaneEditorContent] 从 target decorations 的 UTF-8 ranges 转换而来。
+     * 当前先添加参数和 OutputTransformation 框架，实际高亮 ranges 暂传空列表。
+     */
+    searchHighlights: List<TextRange> = emptyList(),
+    /** 搜索高亮背景色，默认用 [androidx.compose.material3.MaterialTheme] 的 secondaryContainer。 */
+    searchHighlightColor: Color =
+        androidx.compose.material3.MaterialTheme.colorScheme.secondaryContainer,
     modifier: Modifier = Modifier,
 ) {
     val scrollState = rememberScrollState()
     val hiddenRanges by visualState.hiddenRanges.collectAsStateWithLifecycle()
     val drawsVisualCursor by visualState.drawsVisualCursor.collectAsStateWithLifecycle()
 
+    // #641 评论 问题6e：搜索高亮接回 OutputTransformation —
+    // 先画搜索高亮（背景色），再画动画隐藏 range（透明）。
+    // 搜索高亮 ranges 已是 UTF-16（由 WritingPaneEditorContent 转换）。
     val outputTransformation =
-        remember(hiddenRanges) {
+        remember(hiddenRanges, searchHighlights, searchHighlightColor) {
             OutputTransformation {
+                // 搜索高亮 — 背景色标记匹配区间。
+                searchHighlights.forEach { range ->
+                    if (range.start < range.end && range.end <= length) {
+                        addStyle(
+                            SpanStyle(background = searchHighlightColor),
+                            range.start,
+                            range.end,
+                        )
+                    }
+                }
+                // 动画隐藏 range — 透明（overlay 只补画这些 range）。
                 hiddenRanges.forEach { range ->
                     if (range.start < range.end && range.end <= length) {
                         addStyle(
@@ -112,6 +141,7 @@ fun WritingEditorSurface(
                 Modifier
                     .fillMaxSize()
                     .testTag(com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds.EditorContent),
+            readOnly = !inputEnabled,
             lineLimits = TextFieldLineLimits.MultiLine(),
             scrollState = scrollState,
             textStyle = textStyle.copy(color = textColor),
@@ -137,6 +167,7 @@ fun WritingEditorSurface(
             visualState = visualState,
             scrollY = scrollState.value,
             textColor = textColor,
+            cursorColor = cursorColor,
             modifier = Modifier.fillMaxSize(),
         )
     }

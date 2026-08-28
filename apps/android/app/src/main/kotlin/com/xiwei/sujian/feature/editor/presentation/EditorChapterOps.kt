@@ -292,7 +292,7 @@ fun EditorViewModel.isCurrentChapter(
 fun EditorViewModel.confirmEditorAttached(targetId: String) {
     val s = currentSession ?: return
     if (targetId == chapterTargetId(s.projectId, s.volumeId, s.chapterId)) {
-        inputFrozen = false
+        setInputFrozen(false)
     }
 }
 
@@ -466,7 +466,7 @@ private fun EditorViewModel.rollbackAfterLoadFailure(
 ) {
     currentSession = oldSession
     _uiState.value = oldUiState.copy(loading = false)
-    inputFrozen = false
+    setInputFrozen(false)
 }
 
 /** #595 一：章节切换事务上下文（旧状态用于失败回滚，isLatest 为可见提交边界检查）。 */
@@ -512,7 +512,7 @@ private suspend fun EditorViewModel.switchSaveOldChapter(
             _uiState.value = ctx.oldUiState.copy(loading = false, saveStatus = SaveStatus.SaveFailed)
             saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
             startSaveActor()
-            inputFrozen = false
+            setInputFrozen(false)
             return ChapterSwitchResult.SaveFailed(oldSession)
         }
     }
@@ -732,7 +732,7 @@ suspend fun EditorViewModel.switchChapterLocked(
         return ChapterSwitchResult.Success(oldSession)
     }
 
-    inputFrozen = true
+    setInputFrozen(true)
     var preparedHandle: com.xiwei.sujian.feature.editor.session.PreparedSessionHandle? = null
     try {
         // #595 一/转场：切换章节时同步置 loading — 在旧章节保存完成前就隐藏编辑器。
@@ -781,7 +781,7 @@ fun EditorViewModel.restoreAfterSwitch(
     saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
     startSaveActor()
     scheduleAutoSave()
-    inputFrozen = false
+    setInputFrozen(false)
 }
 
 fun EditorViewModel.rollbackPreparedSession(handle: com.xiwei.sujian.feature.editor.session.PreparedSessionHandle) {

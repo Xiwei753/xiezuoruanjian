@@ -7,8 +7,27 @@ import com.xiwei.sujian.feature.editor.projection.ChapterPreviewState
 import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 import com.xiwei.sujian.feature.editor.window.EditingState
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+
+/**
+ * #641 评论 问题7a：Core undo/redo 后的权威编辑器快照 —
+ * 由 [EditorSessionHost.performUndo]/[performRedo] 在 applyUndoRestored 之后
+ * 查询 Core snapshot 并发布到 [EditorSessionHost.authoritativeEditorSnapshots]。
+ *
+ * UI 层（WritingPaneEditorContent）按 targetId 过滤收集，把权威正文写回
+ * [com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge]，
+ * 解决 undo/redo 没有可靠地把新正文送回 TextFieldState 的问题。
+ */
+data class AuthoritativeEditorSnapshot(
+    val targetId: String,
+    val text: String,
+    val revision: Long,
+    val selectionAnchorUtf8: Int,
+    val selectionHeadUtf8: Int,
+)
 
 /**
  * #641 评论1 第7节：编辑会话宿主 — 真正的 session owner。
@@ -32,6 +51,23 @@ class EditorSessionHost(
     val lastCommittedTextFlow: StateFlow<String?> get() = sessionCoordinator.lastCommittedTextFlow
     val motionPolicyFlow: StateFlow<EditorMotionPolicy> get() = sessionCoordinator.motionPolicyFlow
     val chapterSavedSignal: SharedFlow<ChapterSavedSignal> get() = sessionCoordinator.chapterSavedSignal
+
+    /**
+     * #641 评论 问题7a：Core undo/redo 后的权威编辑器快照流。
+     *
+     * [performUndo]/[performRedo] 在 [EditorSessionCoordinator.applyUndoRestored] 之后
+     * 查询 Core snapshot 并 tryEmit 到此流。UI 层按 targetId 过滤收集，
+     * 把权威正文写回 TextFieldState（composition 期间不覆盖，沿用 pending/conflict 规则）。
+     *
+     * SharedFlow 配 16 buffer 防止快速连续 undo/redo 丢事件；replay=0 不缓存历史，
+     * 新 collector 只收后续事件（attach 时已用 queryTargetSnapshot 同步当前正文）。
+     */
+    private val _authoritativeEditorSnapshots =
+        MutableSharedFlow<AuthoritativeEditorSnapshot>(
+            extraBufferCapacity = 16,
+        )
+    val authoritativeEditorSnapshots: SharedFlow<AuthoritativeEditorSnapshot> =
+        _authoritativeEditorSnapshots.asSharedFlow()
 
     val activeTargetId: String? get() = sessionCoordinator.activeTargetId
     val editingState: EditingState get() = sessionCoordinator.editingState
@@ -96,6 +132,9 @@ class EditorSessionHost(
     /**
      * #625 评论项3：撤销 — 经 [TextEditSessionBridge] 调 Rust undo，
      * 结果经 [EditorSessionCoordinator.applyUndoRestored] 送入会话层 reducer。
+     *
+     * #641 评论 问题7b：applyUndoRestored 后查询 Core snapshot 并发布到
+     * [_authoritativeEditorSnapshots]，UI 层收集后把权威正文写回 TextFieldState。
      */
     fun performUndo() {
         val lease = sessionCoordinator.currentInputLease() ?: return
@@ -114,10 +153,24 @@ class EditorSessionHost(
                 contentChanged = result.displayPatches.isNotEmpty(),
             ),
         )
+        // #641 评论 问题7b：发布 undo 后的权威正文给 UI 层
+        sessionCoordinator.queryTargetSnapshot(lease.targetId)?.let { updated ->
+            _authoritativeEditorSnapshots.tryEmit(
+                AuthoritativeEditorSnapshot(
+                    targetId = lease.targetId,
+                    text = updated.text,
+                    revision = updated.revision,
+                    selectionAnchorUtf8 = updated.selectionAnchorUtf8,
+                    selectionHeadUtf8 = updated.selectionHeadUtf8,
+                ),
+            )
+        }
     }
 
     /**
      * #625 评论项3：重做 — 同 [performUndo]。
+     *
+     * #641 评论 问题7b：与 [performUndo] 同样在 applyUndoRestored 后发布权威正文。
      */
     fun performRedo() {
         val lease = sessionCoordinator.currentInputLease() ?: return
@@ -136,6 +189,18 @@ class EditorSessionHost(
                 contentChanged = result.displayPatches.isNotEmpty(),
             ),
         )
+        // #641 评论 问题7b：发布 redo 后的权威正文给 UI 层
+        sessionCoordinator.queryTargetSnapshot(lease.targetId)?.let { updated ->
+            _authoritativeEditorSnapshots.tryEmit(
+                AuthoritativeEditorSnapshot(
+                    targetId = lease.targetId,
+                    text = updated.text,
+                    revision = updated.revision,
+                    selectionAnchorUtf8 = updated.selectionAnchorUtf8,
+                    selectionHeadUtf8 = updated.selectionHeadUtf8,
+                ),
+            )
+        }
     }
 
     /**

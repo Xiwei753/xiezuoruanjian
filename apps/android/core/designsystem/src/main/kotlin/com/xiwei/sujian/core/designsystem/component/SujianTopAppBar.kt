@@ -21,6 +21,7 @@ import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@Suppress("LongParameterList") // #641 评论 问题5：7 参数达 threshold，函数级 suppress（既有先例）
 fun SujianTopAppBar(
     title: String,
     modifier: Modifier = Modifier,

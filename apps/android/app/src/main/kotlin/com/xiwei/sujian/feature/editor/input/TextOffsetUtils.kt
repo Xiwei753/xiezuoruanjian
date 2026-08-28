@@ -73,6 +73,24 @@ object TextOffsetUtils {
         return i
     }
 
+    /**
+     * #641 评论 问题1a：UTF-8 byte offset → UTF-16 code-unit index 的统一入口。
+     *
+     * 先按 UTF-8 byte 长度做范围校验（不是 String.length 的 UTF-16 code-unit 数），
+     * 越界返回 null；合法时委托给 [utf16OffsetForUtf8Byte]。
+     *
+     * 调用方不再写 `if (utf8Offset in 0..text.length)` 这种把 byte offset 和
+     * UTF-16 length 混比的错误守卫。
+     */
+    fun utf16OffsetForUtf8ByteOrNull(
+        text: String,
+        utf8ByteOffset: Int,
+    ): Int? {
+        val byteLength = text.encodeToByteArray().size
+        if (utf8ByteOffset !in 0..byteLength) return null
+        return utf16OffsetForUtf8Byte(text, utf8ByteOffset)
+    }
+
     private fun utf8SpanByteLength(
         chars: CharArray,
         index: Int,

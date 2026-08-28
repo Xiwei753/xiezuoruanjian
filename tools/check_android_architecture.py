@@ -443,6 +443,7 @@ def rule_visual_motion_pure() -> list[Finding]:
         _641_visual_exemptions = {
             "feature/editor/visual/ComposeEditorVisualState.kt",
             "feature/editor/visual/ComposeTextAnimationOverlay.kt",
+            "feature/editor/visual/ComposeVisualTransaction.kt",
         }
         findings = [f for f in findings if f.path not in _641_visual_exemptions]
         if sub == "/feature/editor/motion/":

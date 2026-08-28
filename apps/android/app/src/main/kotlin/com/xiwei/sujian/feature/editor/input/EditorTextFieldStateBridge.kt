@@ -123,6 +123,9 @@ class EditorTextFieldStateBridge(
 /**
  * #641 评论1 第2节：共同前缀 + 共同后缀算一次连续 replace。
  * offset 是 UTF-16。
+ *
+ * #641 评论 问题1b：共同前缀/后缀与 replace 端点都按 Unicode code point 边界对齐，
+ * 不把 emoji/CJK 之外的 supplementary plane 字符（surrogate pair）拆在 high/low 中间。
  */
 internal fun computeSingleReplace(
     oldText: String,
@@ -133,14 +136,31 @@ internal fun computeSingleReplace(
     val commonSuffix = commonSuffixLength(oldText, newText, commonPrefix)
     val replaceStart = commonPrefix
     val replaceEndExclusive = oldText.length - commonSuffix
+    // 确保 replaceStart 和 replaceEndExclusive 不落在 surrogate pair 中间
+    val safeStart = safeCodePointBoundary(oldText, replaceStart)
+    val safeEnd = safeCodePointBoundary(oldText, replaceEndExclusive)
     val insertedText = newText.substring(commonPrefix, newText.length - commonSuffix)
     return CommittedTextEdit(
         oldText = oldText,
-        replaceStart = replaceStart,
-        replaceEndExclusive = replaceEndExclusive,
+        replaceStart = safeStart,
+        replaceEndExclusive = safeEnd,
         newText = insertedText,
         selection = selection,
     )
+}
+
+/**
+ * #641 评论 问题1b：把 [index] 校正到 Unicode code point 边界。
+ * 若 [index] 落在 low surrogate 上（即 surrogate pair 中间），回退到 high surrogate。
+ * 边界 0 / text.length 直接返回。
+ */
+private fun safeCodePointBoundary(
+    text: String,
+    index: Int,
+): Int {
+    if (index <= 0 || index >= text.length) return index
+    // 如果 index 落在 low surrogate 上，回退到 high surrogate
+    return if (text[index].isLowSurrogate()) index - 1 else index
 }
 
 private fun commonPrefixLength(
@@ -150,6 +170,8 @@ private fun commonPrefixLength(
     val min = minOf(a.length, b.length)
     var i = 0
     while (i < min && a[i] == b[i]) i++
+    // 校正到 code point 边界：如果 i 落在 low surrogate 上，回退到 high surrogate
+    if (i > 0 && i < a.length && a[i].isLowSurrogate()) i--
     return i
 }
 
@@ -163,5 +185,8 @@ private fun commonSuffixLength(
     val min = minOf(aRemain, bRemain)
     var i = 0
     while (i < min && a[a.length - 1 - i] == b[b.length - 1 - i]) i++
+    // 校正到 code point 边界：如果 a[a.length - i] 是 high surrogate
+    // （即 i 落在 surrogate pair 中间），回退
+    if (i > 0 && a.length - i > 0 && a[a.length - i].isHighSurrogate()) i--
     return i
 }

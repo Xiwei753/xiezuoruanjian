@@ -311,6 +311,24 @@ class EditorViewModel(
     @Volatile
     internal var inputFrozen = false
 
+    /**
+     * #641 评论 问题4a：可观察的输入启用状态 — 与 [inputFrozen] 同步，
+     * 切章冻结时 false，真正 attached/回滚后 true。
+     *
+     * BasicTextField 的 readOnly = !inputEnabled，作为 inputFrozen 之外的第二层门控，
+     * 防止新的 state-based BasicTextField 在 inputFrozen 仍为 true 的窗口内
+     * 直接把 IME 输入写进 TextFieldState。
+     */
+    private val _inputEnabled = MutableStateFlow(true)
+    val inputEnabled: StateFlow<Boolean> = _inputEnabled.asStateFlow()
+
+    /** #641 评论 问题4a：统一入口 — 同步更新 [inputFrozen] 与 [_inputEnabled]。 */
+    @JvmName("updateInputFrozenSync")
+    internal fun setInputFrozen(value: Boolean) {
+        inputFrozen = value
+        _inputEnabled.value = !value
+    }
+
     // #624 评论17 问题3：SyncMergeEmitDedup 已删除 — 发射端不维护 lastEmittedHash。
 
     // #595 一：章节切换串行门 — 同一时间只允许一个切换事务执行；
@@ -482,6 +500,23 @@ class EditorViewModel(
         bridge: AppServiceBridge,
         edit: CommittedTextEdit,
     ): CommitResult {
+        // #641 评论 问题4d：第二层 frozen 守卫 — 章节切换期间 inputFrozen=true，
+        // 即使 BasicTextField 的 readOnly 门控失效（重组时序/状态竞争），
+        // 也不把输入写进 Core。读取权威 Core snapshot 返回 Rejected，
+        // 由 EditorTextFieldStateBridge.applyAuthoritativeText 把 TextFieldState 拉回权威正文。
+        if (inputFrozen) {
+            val frozenSnapshot = coordinator.queryTargetSnapshot(targetId)
+            if (frozenSnapshot != null) {
+                return CommitResult.Rejected(
+                    frozenSnapshot.text,
+                    TextOffsetUtils.utf16TextRangeForUtf8(
+                        frozenSnapshot.text,
+                        frozenSnapshot.selectionAnchorUtf8,
+                        frozenSnapshot.selectionHeadUtf8,
+                    ),
+                )
+            }
+        }
         val lease = coordinator.currentInputLease()
         if (lease == null || lease.targetId != targetId) {
             return CommitResult.Rejected(edit.oldText, edit.selection)

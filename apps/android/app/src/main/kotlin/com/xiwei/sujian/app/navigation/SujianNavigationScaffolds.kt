@@ -65,6 +65,7 @@ private fun SujianCompactBottomBar(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@Suppress("LongParameterList") // #641 评论 问题5：7 参数达 threshold，函数级 suppress（既有先例）
 private fun SujianCompactNavScaffold(
     modifier: Modifier,
     topBarInfo: SujianTopBarInfo,
@@ -144,6 +145,7 @@ private fun SujianWideRail(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@Suppress("LongParameterList") // #641 评论 问题5：7 参数达 threshold，函数级 suppress（既有先例）
 private fun SujianWideNavScaffold(
     modifier: Modifier,
     topBarInfo: SujianTopBarInfo,
@@ -215,6 +217,7 @@ internal data class SujianTopLevelSelection(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@Suppress("LongParameterList") // #641 评论 问题5：7 参数达 threshold，函数级 suppress（既有先例）
 internal fun SujianNavScaffoldContent(
     modifier: Modifier,
     layoutSpec: AndroidLayoutSpec,

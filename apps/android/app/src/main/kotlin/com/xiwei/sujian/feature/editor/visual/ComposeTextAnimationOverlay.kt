@@ -1,6 +1,6 @@
 package com.xiwei.sujian.feature.editor.visual
 
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
@@ -13,7 +13,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
@@ -23,7 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
- * #641 评论1 第5节：动画 overlay — 只"画"，绝不能再改变 viewport / selection / IME 几何。
+ * #641 评论1 第5节 / 问题3：动画 overlay — 只"画"，绝不能再改变 viewport / selection / IME 几何。
  *
  * 绘制规则：
  * - 新文字：从当前 [TextLayoutResult] 取 bounding box，当前 range 已被
@@ -33,8 +33,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * - 视觉光标：从 `oldResult.getCursorRect(oldSelection.end)` 插值到
  *   `newResult.getCursorRect(newSelection.end)`，按 progress 插值 x/y/width/height。
  *
- * 绘制受影响 range 时，不用 `TextMeasurer` 再排一次。对同一份 [TextLayoutResult]
- * 做 `clipRect + drawText(result)`。一个 range 跨多行就按真实 layout 的行段拆成多个 clip rect。
+ * #641 评论 问题3：
+ * - duration 来自 [com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy]（不再写死 200ms）；
+ * - 用 [Animatable] 手动控制动画，transaction id 变化时重新建立正确起点；
+ * - 新事务到来时先物化当前视觉帧作为下一事务起点，再 rebase；
+ * - retained move 处理自动折行时被挤到下一行的"保留文字"；
+ * - 用 `getPathForRange` 替代整行 clip，同一行没参与动画的文字不会被 overlay 再画一遍；
+ * - cursor 颜色吃 [cursorColor]，同一帧只画一次 cursor（不再闪烁叠加）。
  *
  * 动画通过 Compose animation progress 只改变 alpha/translate/绘制，
  * 不 scrollTo、不改 selection/IME/height/viewport。动画结束清 hiddenRanges，
@@ -42,31 +47,50 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  *
  * #641 评论1 第3节：overlay 文字颜色不能硬编码成与正文不一致的黑色，
  * 必须从 [WritingEditorSurface] 传入当前 textColor/字体 style。
+ *
+ * @param cursorColor 视觉光标颜色 — 从主题 role 注入，不再硬编码蓝色。
  */
 @Composable
+@Suppress("LongParameterList")
 fun ComposeTextAnimationOverlay(
     visualState: ComposeEditorVisualState,
     scrollY: Int,
     textColor: Color,
+    cursorColor: Color,
     modifier: Modifier = Modifier,
 ) {
     val hiddenRanges by visualState.hiddenRanges.collectAsStateWithLifecycle()
     val activeIntent by visualState.activeIntent.collectAsStateWithLifecycle()
+    val activeTransaction by visualState.activeTransaction.collectAsStateWithLifecycle()
     val cursorSnapshotValue by visualState.visualCursorSnapshot.collectAsStateWithLifecycle()
     val density = LocalDensity.current
     val cursorSnapshot = remember(cursorSnapshotValue) { cursorSnapshotValue }
 
-    val hasAnimation = hiddenRanges.isNotEmpty() || activeIntent != null
+    val transactionId = activeTransaction?.id ?: 0L
+    val durationMillis = activeTransaction?.durationMillis ?: 0L
 
-    val progress by animateFloatAsState(
-        targetValue = if (hasAnimation) 1f else 0f,
-        animationSpec = tween(durationMillis = ANIMATION_DURATION_MS),
-        label = "editorVisualAnimation",
-    )
+    // #641 评论 问题3：用 Animatable 手动控制动画 —
+    // transaction id 变化时 snapTo(0f) 重新建立正确起点，再 animateTo(1f)。
+    // 不再用 animateFloatAsState(target=1f)，连续输入时不会为新事务重新建立正确起点。
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(transactionId) {
+        if (transactionId > 0L && durationMillis > 0L) {
+            progress.snapTo(0f)
+            progress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = durationMillis.toInt()),
+            )
+        }
+    }
+    val progressValue = progress.value
+
+    val hasAnimation =
+        activeTransaction != null &&
+            (hiddenRanges.isNotEmpty() || activeIntent?.cursor?.animate == true)
 
     // 动画结束清 hiddenRanges，系统正文马上可见。
-    LaunchedEffect(hasAnimation, progress) {
-        if (hasAnimation && progress >= 1f) {
+    LaunchedEffect(transactionId, progressValue) {
+        if (transactionId > 0L && progressValue >= 1f) {
             visualState.clearAnimation()
         }
     }
@@ -79,48 +103,85 @@ fun ComposeTextAnimationOverlay(
                     val current = visualState.currentLayout() ?: return@drawBehind
                     val previous = visualState.previousLayout()
                     val intent = activeIntent ?: return@drawBehind
+                    val transaction = activeTransaction ?: return@drawBehind
 
-                    drawAnimatedRanges(
+                    drawVisualTransaction(
                         currentResult = current.result,
                         previousResult = previous?.result,
-                        hiddenRanges = hiddenRanges,
-                        intent = intent,
-                        progress = progress,
+                        transaction = transaction,
+                        textKind = intent.textKind,
+                        cursorAnimate = intent.cursor?.animate == true,
+                        progress = progressValue,
                         scrollY = scrollY,
                         textColor = textColor,
+                        cursorColor = cursorColor,
+                        cursorSnapshot = cursorSnapshot,
+                        density = density,
                     )
-
-                    // 视觉光标：按 progress 从 old cursor rect 插值到 new cursor rect。
-                    if (intent.kind == EditorVisualIntent.Kind.Cursor && cursorSnapshot != null) {
-                        drawVisualCursor(
-                            snapshot = cursorSnapshot,
-                            progress = progress,
-                            scrollY = scrollY,
-                            density = density,
-                        )
-                    }
                 },
     )
 }
 
-private const val ANIMATION_DURATION_MS = 200
+/**
+ * #641 评论 问题3：绘制视觉动画事务 — 提取以降低 [ComposeTextAnimationOverlay] 的认知复杂度。
+ */
+@Suppress("LongParameterList")
+private fun DrawScope.drawVisualTransaction(
+    currentResult: TextLayoutResult,
+    previousResult: TextLayoutResult?,
+    transaction: ComposeVisualTransaction,
+    textKind: TextVisualKind,
+    cursorAnimate: Boolean,
+    progress: Float,
+    scrollY: Int,
+    textColor: Color,
+    cursorColor: Color,
+    cursorSnapshot: VisualCursorSnapshot?,
+    density: androidx.compose.ui.unit.Density,
+) {
+    drawAnimatedRanges(
+        currentResult = currentResult,
+        previousResult = previousResult,
+        oldRanges = transaction.oldRanges,
+        newRanges = transaction.newRanges,
+        retainedMoves = transaction.retainedMoves,
+        textKind = textKind,
+        progress = progress,
+        scrollY = scrollY,
+        textColor = textColor,
+    )
 
-/** 视觉光标颜色 — 与当前设计系统一致（可随 text style 注入）。 */
-private val VisualCursorColor = Color(0xFF1A73E8)
+    // 视觉光标：按 progress 从 old cursor rect 插值到 new cursor rect。
+    // #641 评论 问题2：只要 cursor?.animate == true 就画（不管 textKind）。
+    // #641 评论 问题3：同一帧只画一次 cursor（不再闪烁叠加）。
+    if (cursorAnimate && cursorSnapshot != null) {
+        drawVisualCursor(
+            snapshot = cursorSnapshot,
+            progress = progress,
+            scrollY = scrollY,
+            density = density,
+            cursorColor = cursorColor,
+        )
+    }
+}
 
 /** 视觉光标宽度（dp）。 */
 private val VisualCursorWidthDp: Dp = 2.dp
 
 /**
- * #641 评论1 第5节：视觉光标插值绘制 — 从 [oldCursorRect] 按 progress 插值到
- * [newCursorRect]。光标宽度/高度随 rect 插值，颜色固定为设计系统色。
+ * #641 评论1 第5节 / 问题3：视觉光标插值绘制 — 从 [oldCursorRect] 按 progress 插值到
+ * [newCursorRect]。光标宽度/高度随 rect 插值，颜色从 [cursorColor] 注入。
  * BasicTextField 的 cursorBrush 在动画期间透明，动画结束 clearAnimation 后恢复。
+ *
+ * #641 评论 问题3：同一帧只画一次 cursor — 删除 progress >= 0.85f 时的闪烁叠加。
  */
+@Suppress("LongParameterList")
 private fun DrawScope.drawVisualCursor(
     snapshot: VisualCursorSnapshot,
     progress: Float,
     scrollY: Int,
     density: androidx.compose.ui.unit.Density,
+    cursorColor: Color,
 ) {
     val oldRect = snapshot.oldCursorRect
     val newRect = snapshot.newCursorRect
@@ -141,20 +202,10 @@ private fun DrawScope.drawVisualCursor(
     if (cursorRight <= 0f || cursorLeft >= size.width) return
 
     drawRect(
-        color = VisualCursorColor,
+        color = cursorColor,
         topLeft = Offset(cursorLeft, cursorTop),
         size = Size(cursorRight - cursorLeft, cursorBottom - cursorTop),
     )
-
-    // 闪烁：progress 接近 1 时淡出，提示动画即将结束。
-    if (progress >= 0.85f) {
-        val fadeAlpha = 1f - (progress - 0.85f) / 0.15f
-        drawRect(
-            color = VisualCursorColor.copy(alpha = fadeAlpha),
-            topLeft = Offset(cursorLeft, cursorTop),
-            size = Size(cursorRight - cursorLeft, cursorBottom - cursorTop),
-        )
-    }
 }
 
 /** 线性插值 helper。 */
@@ -165,60 +216,11 @@ private fun lerp(
 ): Float = a + (b - a) * t.coerceIn(0f, 1f)
 
 /**
- * #641 评论1 第5节：对同一份 [TextLayoutResult] 做 `clipRect + drawText(result)`。
- * 一个 range 跨多行就按真实 layout 的行段拆成多个 clip rect。
+ * #641 评论1 第5节 / 问题3：对同一份 [TextLayoutResult] 做 `clipPath + drawText(result)`。
  *
- * #641 评论1 第3节：overlay 文字颜色不能硬编码成与正文不一致的黑色，
- * 必须从 [WritingEditorSurface] 传入当前 textColor。
- */
-@Suppress("LongParameterList")
-private fun DrawScope.drawAnimatedRanges(
-    currentResult: TextLayoutResult,
-    previousResult: TextLayoutResult?,
-    hiddenRanges: List<TextRange>,
-    intent: EditorVisualIntent,
-    progress: Float,
-    scrollY: Int,
-    textColor: Color,
-) {
-    when (intent.kind) {
-        EditorVisualIntent.Kind.Insert -> {
-            val alpha = progress
-            for (range in hiddenRanges) {
-                drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
-            }
-        }
-        EditorVisualIntent.Kind.Delete -> {
-            val alpha = 1f - progress
-            val result = previousResult ?: currentResult
-            for (range in hiddenRanges) {
-                drawRangeText(result, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
-            }
-        }
-        EditorVisualIntent.Kind.Move -> {
-            // Move：从 previous layout 的 old range 位置淡出，
-            // 从 current layout 的 new range 位置淡入。
-            // 若 previous layout 缺失，则只在 current 位置淡入。
-            val alpha = progress
-            if (previousResult != null) {
-                for (range in hiddenRanges) {
-                    drawRangeText(previousResult, range, alpha = 1f - alpha, scrollY = scrollY, textColor = textColor)
-                }
-            }
-            for (range in hiddenRanges) {
-                drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
-            }
-        }
-        EditorVisualIntent.Kind.Cursor -> {
-            // 视觉光标由 drawVisualCursor 单独绘制（基于 cursorSnapshot 插值）。
-        }
-    }
-}
-
-/**
- * #641：按真实 layout 的行段拆成多个 clip rect，对每个行段做
- * `clipRect + drawText(layoutResult)`。drawText 使用同一份 [TextLayoutResult]，
- * 不用 TextMeasurer 再排一次。
+ * #641 评论 问题3：用 `getPathForRange` 替代整行 clip —
+ * 同一行没参与动画的文字不会被 overlay 再画一遍。
+ * 官方 API：`TextLayoutResult.getPathForRange(start, end)` 返回 Path，用 `clipPath` 裁剪。
  *
  * #641 评论1 第3节：overlay 文字颜色不能硬编码成与正文不一致的黑色，
  * 必须从 [WritingEditorSurface] 传入当前 textColor。
@@ -232,26 +234,114 @@ private fun DrawScope.drawRangeText(
 ) {
     if (range.start >= range.end) return
     if (range.end > result.layoutInput.text.length) return
-    val startLine = result.getLineForOffset(range.start)
-    val endLine = result.getLineForOffset(range.end)
-    for (line in startLine..endLine) {
-        val lineTop = result.getLineTop(line) - scrollY
-        val lineBottom = result.getLineBottom(line) - scrollY
-        val lineLeft = result.getLineLeft(line)
-        val lineRight = result.getLineRight(line)
-        if (lineBottom <= 0f || lineTop >= size.height) continue
-        clipRect(
-            left = lineLeft,
-            top = lineTop,
-            right = lineRight,
-            bottom = lineBottom,
-        ) {
-            drawText(
-                textLayoutResult = result,
-                color = textColor,
-                topLeft = Offset(0f, -scrollY.toFloat()),
+    val path = result.getPathForRange(range.start, range.end)
+    clipPath(path) {
+        drawText(
+            textLayoutResult = result,
+            color = textColor,
+            topLeft = Offset(0f, -scrollY.toFloat()),
+            alpha = alpha,
+        )
+    }
+}
+
+/**
+ * #641 评论1 第5节 / 问题3：绘制受影响 range 的动画过程。
+ *
+ * #641 评论 问题3：
+ * - Insert：用 newRanges，从 current layout 淡入。
+ * - Delete：用 oldRanges，从 previous layout 淡出。
+ * - Move：用 oldRanges 从 previous layout 淡出 + newRanges 从 current layout 淡入；
+ *   retained moves 处理自动折行时被挤到下一行的"保留文字"。
+ * - None：不画文字动画。
+ *
+ * #641 评论1 第3节：overlay 文字颜色不能硬编码成与正文不一致的黑色，
+ * 必须从 [WritingEditorSurface] 传入当前 textColor。
+ */
+@Suppress("LongParameterList")
+private fun DrawScope.drawAnimatedRanges(
+    currentResult: TextLayoutResult,
+    previousResult: TextLayoutResult?,
+    oldRanges: List<TextRange>,
+    newRanges: List<TextRange>,
+    retainedMoves: List<RetainedMove>,
+    textKind: TextVisualKind,
+    progress: Float,
+    scrollY: Int,
+    textColor: Color,
+) {
+    when (textKind) {
+        TextVisualKind.Insert -> {
+            val alpha = progress
+            for (range in newRanges) {
+                drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
+            }
+        }
+        TextVisualKind.Delete -> {
+            val alpha = 1f - progress
+            val result = previousResult ?: currentResult
+            for (range in oldRanges) {
+                drawRangeText(result, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
+            }
+        }
+        TextVisualKind.Move -> {
+            // Move：从 previous layout 的 old range 位置淡出，
+            // 从 current layout 的 new range 位置淡入。
+            // 若 previous layout 缺失，则只在 current 位置淡入。
+            val alpha = progress
+            if (previousResult != null) {
+                for (range in oldRanges) {
+                    drawRangeText(previousResult, range, alpha = 1f - alpha, scrollY = scrollY, textColor = textColor)
+                }
+            }
+            for (range in newRanges) {
+                drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
+            }
+            // #641 评论 问题3：retained moves — 被挤到下一行的"保留文字"。
+            drawRetainedMoves(
+                previousResult = previousResult,
+                currentResult = currentResult,
+                retainedMoves = retainedMoves,
                 alpha = alpha,
+                scrollY = scrollY,
+                textColor = textColor,
             )
         }
+        TextVisualKind.None -> {
+            // 没有文字动画（如 CURSOR_ONLY 事务）。
+        }
+    }
+}
+
+/**
+ * #641 评论 问题3：绘制 retained moves — 被挤到下一行的"保留文字"。
+ * 提取以降低 [drawAnimatedRanges] 的认知复杂度。
+ */
+@Suppress("LongParameterList")
+private fun DrawScope.drawRetainedMoves(
+    previousResult: TextLayoutResult?,
+    currentResult: TextLayoutResult,
+    retainedMoves: List<RetainedMove>,
+    alpha: Float,
+    scrollY: Int,
+    textColor: Color,
+) {
+    for (move in retainedMoves) {
+        if (previousResult != null) {
+            drawRangeText(
+                previousResult,
+                move.oldRange,
+                alpha = 1f - alpha,
+                scrollY = scrollY,
+                textColor = textColor,
+            )
+        }
+        drawRangeText(
+            currentResult,
+            move.newRange,
+            alpha = alpha,
+            scrollY = scrollY,
+            textColor = textColor,
+        )
     }
 }

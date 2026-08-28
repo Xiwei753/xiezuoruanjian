@@ -2,10 +2,11 @@ package com.xiwei.sujian.feature.project.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -15,12 +16,14 @@ import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import com.xiwei.sujian.app.SujianAppState
+import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutRect
 import com.xiwei.sujian.app.presentation.layout.AndroidResolvedWorkspaceMode
 import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
 import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchRole
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
 import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
+import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 
@@ -282,6 +285,11 @@ private data class WorkbenchSlotState(
 
 /**
  * 大屏工作台 chrome slots — 只在 FULL_WORKBENCH 时组合。
+ *
+ * #641 评论 问题5e：恢复 df6791f1 之前的真实 UI — WritingToolbarLeadingGroup /
+ * WritingToolbarCenterSlot / WritingToolbarTrailingGroup / ChapterTreeContent /
+ * WritingToolPane / WritingToolRail。中央 EditorPane 仍走新的 BasicTextField 路线
+ * （SujianEditorHost → WritingPane → BasicTextField），不恢复旧 EditorPresentationHost。
  */
 @Composable
 private fun WorkbenchChromeSlots(
@@ -291,28 +299,68 @@ private fun WorkbenchChromeSlots(
     state: WorkbenchSlotState,
     bounds: WorkbenchBounds,
 ) {
-    // 顶部工具栏三组独立容器
-    Box(modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_LEADING)) {
-        Text("Toolbar Leading")
+    val editorWindowHost = LocalEditorWindowHost.current
+    val onUndo: () -> Unit = { editorWindowHost?.performUndo() }
+    val onRedo: () -> Unit = { editorWindowHost?.performRedo() }
+    val appDeps = LocalSujianAppDependencies.current
+    val syncState by appDeps.syncStatusRepository.state.collectAsState()
+    val tools = remember { emptyList<WritingToolItem>() }
+    val toolPaneContent: (@Composable () -> Unit)? = null
+
+    // 顶部工具栏三组独立容器 — 复用既有 WritingWorkspaceToolbar.kt 中的真实组件。
+    WritingToolbarLeadingGroup(
+        showBack = deps.chrome?.showBack ?: false,
+        chapterTreeCollapsed = state.chapterTreeCollapsed,
+        callbacks =
+            WritingToolbarLeadingCallbacks(
+                onBack = callbacks.onBack,
+                onUndo = onUndo,
+                onRedo = onRedo,
+                onToggleChapterTree = state.onToggleChapterTree,
+            ),
+        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_LEADING),
+    )
+    WritingToolbarCenterSlot(
+        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_CENTER),
+    )
+    WritingToolbarTrailingGroup(
+        actions = deps.chrome?.actions ?: emptyList(),
+        syncState = syncState,
+        callbacks =
+            WritingToolbarTrailingCallbacks(
+                onSync = callbacks.onSync,
+                onSearch = callbacks.onSearch,
+                onSettings = callbacks.onSettings,
+            ),
+        modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_TRAILING),
+    )
+    // 章节导航 — 用户主动收起时不画（bounds 由 plan 决定，收起通过 visibility 重算 plan）。
+    if (!state.chapterTreeCollapsed && bounds.chapterNav != null && !bounds.chapterNav.isEmpty) {
+        ChapterTreeContent(
+            projectId = documentState.currentProjectId,
+            projectRepository = deps.projectRepository,
+            workspaceActions = deps.projectWorkspaceActions,
+            onSelectChapter = callbacks.onChapterSwitch,
+            onError = deps.appState::reportWorkspaceError,
+            modifier = Modifier.layoutId(LayoutSlotId.CHAPTER_NAVIGATION),
+        )
     }
-    Box(modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_CENTER)) {
-        Text("Toolbar Center")
+    // 工具面板（用户主动收起时不画）。
+    if (!state.toolPaneCollapsed && bounds.toolPane != null && !bounds.toolPane.isEmpty) {
+        WritingToolPane(
+            content = toolPaneContent,
+            modifier = Modifier.layoutId(LayoutSlotId.TOOL_PANE),
+        )
     }
-    Box(modifier = Modifier.layoutId(LayoutSlotId.TOOLBAR_TRAILING)) {
-        Text("Toolbar Trailing")
-    }
-    // 章节导航
-    Box(modifier = Modifier.layoutId(LayoutSlotId.CHAPTER_NAVIGATION)) {
-        Text("Chapter Navigation")
-    }
-    // 工具面板
-    Box(modifier = Modifier.layoutId(LayoutSlotId.TOOL_PANE)) {
-        Text("Tool Pane")
-    }
-    // 工具栏
-    Box(modifier = Modifier.layoutId(LayoutSlotId.TOOL_RAIL)) {
-        Text("Tool Rail")
-    }
+    // 工具栏图标列（始终画）。
+    WritingToolRail(
+        tools = tools,
+        selectedToolId = state.selectedToolId,
+        onSelect = state.onSelectTool,
+        onTogglePane = state.onToggleToolPane,
+        paneCollapsed = state.toolPaneCollapsed,
+        modifier = Modifier.layoutId(LayoutSlotId.TOOL_RAIL),
+    )
 }
 
 /**

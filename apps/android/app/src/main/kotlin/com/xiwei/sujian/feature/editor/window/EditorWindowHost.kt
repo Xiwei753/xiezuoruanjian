@@ -7,6 +7,7 @@ import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import com.xiwei.sujian.feature.editor.motion.TargetMotionConstraint
 import com.xiwei.sujian.feature.editor.projection.ChapterPreviewState
 import com.xiwei.sujian.feature.editor.session.AnimationPolicy
+import com.xiwei.sujian.feature.editor.session.AuthoritativeEditorSnapshot
 import com.xiwei.sujian.feature.editor.session.ChapterSavedSignal
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.EditorSessionHost
@@ -49,6 +50,13 @@ class EditorWindowHost(
     val lastCommittedTextFlow: StateFlow<String?> get() = sessionHost.lastCommittedTextFlow
     val motionPolicyFlow: StateFlow<EditorMotionPolicy> get() = sessionHost.motionPolicyFlow
     val chapterSavedSignal: SharedFlow<ChapterSavedSignal> get() = sessionHost.chapterSavedSignal
+
+    /**
+     * #641 评论 问题7c：转发 [EditorSessionHost.authoritativeEditorSnapshots] —
+     * UI 层（WritingPaneEditorContent）通过 EditorWindowHost 收集 undo/redo 后的权威正文。
+     */
+    val authoritativeEditorSnapshots: SharedFlow<AuthoritativeEditorSnapshot>
+        get() = sessionHost.authoritativeEditorSnapshots
 
     val activeTargetId: String? get() = sessionHost.activeTargetId
     val editingState: EditingState get() = sessionHost.editingState

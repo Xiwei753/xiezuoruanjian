@@ -33,8 +33,11 @@ import com.xiwei.sujian.feature.editor.session.consumePendingExternalFact
 import com.xiwei.sujian.feature.editor.session.shouldApplyExternalContent
 import com.xiwei.sujian.feature.editor.session.storePendingExternalFact
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
+import com.xiwei.sujian.feature.editor.visual.CursorVisualIntent
 import com.xiwei.sujian.feature.editor.visual.EditorVisualIntent
+import com.xiwei.sujian.feature.editor.visual.TextVisualKind
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
+import kotlinx.coroutines.flow.filter
 
 /**
  * 正文编辑窗格 — 「正文」一级内容（#624 评论17 第2部分 Route 层）。
@@ -194,6 +197,9 @@ private fun WritingPaneEditorContent(
     @Suppress("UNUSED_EXPRESSION")
     (coordinator.targetDecorationsVersionFlow.collectAsStateWithLifecycle().value)
     val surfaceMode = editorSurfaceMode(sessionState.bindingState, coordinator.windowId, targetId, isActivePane)
+    // #641 评论 问题4c：收集 ViewModel 的 inputEnabled — 章节切换冻结期间 readOnly=true，
+    // 防止 state-based BasicTextField 在 inputFrozen 仍为 true 的窗口内写入 TextFieldState。
+    val inputEnabled by viewModel.inputEnabled.collectAsStateWithLifecycle()
     when (surfaceMode) {
         EditorSurfaceMode.EditorHost -> {
             // #641 评论1 第2节：bridge 由 EditorViewModel 拥有，按 targetId 生命周期
@@ -235,32 +241,36 @@ private fun WritingPaneEditorContent(
                 }
             }
 
+            // #641 评论 问题7d：undo/redo 走独立的 authoritativeEditorSnapshots 流 —
+            // performUndo/performRedo 在 applyUndoRestored 后查询 Core snapshot 并发布，
+            // 此处按 targetId 过滤收集，把权威正文写回 bridge（UTF-8→UTF-16）。
+            // composition 期间不覆盖（沿用既有 pending/conflict 规则，不重置 IME buffer）。
+            // lastCommittedTextFlow 仍保留用于 commit/save 路径。
+            CollectAuthoritativeEditorSnapshots(
+                coordinator = coordinator,
+                viewModel = viewModel,
+                targetId = targetId,
+                bridge = bridge,
+            )
+
             // #641：收集 Core 视觉意图事件，映射为 EditorVisualIntent 喂给 ComposeEditorVisualState。
             // 按 target 过滤，避免其他 target 的视觉意图污染当前 overlay。
             CollectVisualIntentEvents(
                 viewModel = viewModel,
                 targetId = targetId,
                 visualState = visualState,
+                coordinator = coordinator,
             )
 
             WritingEditorSurface(
                 bridge = bridge,
                 visualState = visualState,
-                textStyle =
-                    androidx.compose.ui.text.TextStyle(
-                        fontSize =
-                            androidx.compose.ui.unit.TextUnit(
-                                uiState.settings.fontSize,
-                                androidx.compose.ui.unit.TextUnitType.Sp,
-                            ),
-                        lineHeight =
-                            androidx.compose.ui.unit.TextUnit(
-                                uiState.settings.fontSize * uiState.settings.lineSpacingMultiplier,
-                                androidx.compose.ui.unit.TextUnitType.Sp,
-                            ),
-                    ),
-                textColor = androidx.compose.ui.graphics.Color.Black,
-                cursorColor = androidx.compose.ui.graphics.Color.Black,
+                textStyle = rememberEditorTextStyle(uiState.settings),
+                // #641 评论 问题6c：textColor/cursorColor 用主题 role，不再硬编码 Color.Black —
+                // 深色模式和动态色都会错。onSurface 是正文文字色，primary 是光标色。
+                textColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
+                cursorColor = androidx.compose.material3.MaterialTheme.colorScheme.primary,
+                inputEnabled = inputEnabled,
                 modifier = modifier,
             )
         }
@@ -271,6 +281,49 @@ private fun WritingPaneEditorContent(
             }
         }
     }
+}
+
+/**
+ * #641 评论 问题6d：编辑器 TextStyle 构造 — 字号/行距/首行缩进写进 Compose paragraph/text style。
+ *
+ * 首行缩进 = autoIndentWidth * fontSize（autoIndentWidth 语义是"字符宽度"）。
+ * 提取以降低 [WritingPaneEditorContent] 行数与认知复杂度。
+ */
+@Composable
+private fun rememberEditorTextStyle(settings: EditorSettingsState): androidx.compose.ui.text.TextStyle {
+    val fontSizeSp =
+        androidx.compose.ui.unit.TextUnit(
+            settings.fontSize,
+            androidx.compose.ui.unit.TextUnitType.Sp,
+        )
+    val lineHeightSp =
+        androidx.compose.ui.unit.TextUnit(
+            settings.fontSize * settings.lineSpacingMultiplier,
+            androidx.compose.ui.unit.TextUnitType.Sp,
+        )
+    // 首行缩进 — autoIndentEnabled=false 时不缩进。
+    val textIndent =
+        if (settings.autoIndentEnabled) {
+            androidx.compose.ui.text.style.TextIndent(
+                firstLine =
+                    androidx.compose.ui.unit.TextUnit(
+                        settings.autoIndentWidth * settings.fontSize,
+                        androidx.compose.ui.unit.TextUnitType.Sp,
+                    ),
+                restLine =
+                    androidx.compose.ui.unit.TextUnit(
+                        0f,
+                        androidx.compose.ui.unit.TextUnitType.Sp,
+                    ),
+            )
+        } else {
+            null
+        }
+    return androidx.compose.ui.text.TextStyle(
+        fontSize = fontSizeSp,
+        lineHeight = lineHeightSp,
+        textIndent = textIndent,
+    )
 }
 
 /** target 创建与输入回调绑定（输入回调经 rememberUpdatedState 始终指向最新 VM）。 */
@@ -794,86 +847,80 @@ private fun consumePendingForReapplyIfApplicable(
  * 不每次重组重建。初始 selection 来自 Core/session UTF-8 → UTF-16。
  * commitToCore lambda 内统一 UTF-16→UTF-8 / UTF-8→UTF-16 偏移转换。
  *
- * #641：把 Core [VisualIntent]（UTF-8 byte ranges）转成 Compose [EditorVisualIntent]（UTF-16 ranges）。
+ * #641 评论 问题2：把 Core [VisualIntent]（UTF-8 byte ranges）转成 Compose [EditorVisualIntent]（UTF-16 ranges）。
  *
  * 映射规则：
- * - 删除范围 → [EditorVisualIntent.Kind.Delete]，range 来自 oldAffectedByteRanges，
- *   用完整 oldText 做 UTF-8 byte→UTF-16 换算；
- * - 插入范围 → [EditorVisualIntent.Kind.Insert]，range 来自 newAffectedByteRanges，
- *   用完整 newText 做 UTF-8 byte→UTF-16 换算；
- * - 移动范围 → [EditorVisualIntent.Kind.Move]，range 来自 newAffectedByteRanges，
- *   用完整 newText；
- * - 光标仅 → [EditorVisualIntent.Kind.Cursor]，affectedRanges 为空。
+ * - textKind：Insert/Delete/Move/None（根据 Core visualIntent 的 operationKind）；
+ * - cursor：只要 Core 的 [CoordinatedCursor.shouldAnimate] 为 true，
+ *   就构造 [CursorVisualIntent]（animate = true），不管 textKind 是什么；
+ * - oldRanges：从 Core oldAffectedByteRanges 转成 UTF-16（用完整 oldText）；
+ * - newRanges：从 Core newAffectedByteRanges 转成 UTF-16（用完整 newText）。
  *
- * 注意：Core 的 visual intent 已经区分了 old/new affected ranges，
- * 这里按 operationKind 决定用哪一组。传入完整 oldText 和 newText 确保
- * CJK/emoji/多行上的 byte→UTF-16 换算正确。
+ * 注意：Core 的 visual intent 已经区分了 old/new affected ranges。
+ * 传入完整 oldText 和 newText 确保 CJK/emoji/多行上的 byte→UTF-16 换算正确。
  */
 private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent): EditorVisualIntent {
-    val kind =
+    val textKind =
         when {
-            event.visualIntent.isDelete() -> EditorVisualIntent.Kind.Delete
-            event.visualIntent.isInsert() -> EditorVisualIntent.Kind.Insert
+            event.visualIntent.isDelete() -> TextVisualKind.Delete
+            event.visualIntent.isInsert() -> TextVisualKind.Insert
             event.visualIntent.isReplace() || event.visualIntent.isCompositionCommit() ||
-                event.visualIntent.isCompositionUpdate() -> EditorVisualIntent.Kind.Move
-            event.visualIntent.isCursorOnly() -> EditorVisualIntent.Kind.Cursor
-            event.visualIntent.isCompositionCancel() -> EditorVisualIntent.Kind.Delete
-            else -> EditorVisualIntent.Kind.Move
+                event.visualIntent.isCompositionUpdate() -> TextVisualKind.Move
+            event.visualIntent.isCursorOnly() -> TextVisualKind.None
+            event.visualIntent.isCompositionCancel() -> TextVisualKind.Delete
+            else -> TextVisualKind.Move
         }
 
-    val affectedRanges =
-        when (kind) {
-            EditorVisualIntent.Kind.Delete -> {
-                // 删除：用 oldAffectedByteRanges（previous layout 的 range），
-                // 用完整 oldText 做 UTF-8 byte→UTF-16 换算。
-                event.visualIntent.oldAffectedByteRanges.map { (start: Int, end: Int) ->
-                    TextOffsetUtils.utf16TextRangeForUtf8(event.oldText, start, end)
-                }
-            }
-            EditorVisualIntent.Kind.Insert,
-            EditorVisualIntent.Kind.Move,
-            -> {
-                // 插入/移动：用 newAffectedByteRanges（current layout 的 range），
-                // 用完整 newText 做 UTF-8 byte→UTF-16 换算。
-                event.visualIntent.newAffectedByteRanges.map { (start: Int, end: Int) ->
-                    TextOffsetUtils.utf16TextRangeForUtf8(event.newText, start, end)
-                }
-            }
-            EditorVisualIntent.Kind.Cursor -> {
-                emptyList<androidx.compose.ui.text.TextRange>()
-            }
+    // oldRanges：从 Core oldAffectedByteRanges 转成 UTF-16（用完整 oldText）。
+    val oldRanges =
+        event.visualIntent.oldAffectedByteRanges.map { (start: Int, end: Int) ->
+            TextOffsetUtils.utf16TextRangeForUtf8(event.oldText, start, end)
         }
 
-    val oldSelectionEndUtf16 =
-        if (event.oldSelectionEndUtf8 in 0..event.oldText.length) {
-            TextOffsetUtils.utf16OffsetForUtf8Byte(
-                text = event.oldText,
-                utf8ByteOffset = event.oldSelectionEndUtf8,
-            )
-        } else {
-            null
+    // newRanges：从 Core newAffectedByteRanges 转成 UTF-16（用完整 newText）。
+    val newRanges =
+        event.visualIntent.newAffectedByteRanges.map { (start: Int, end: Int) ->
+            TextOffsetUtils.utf16TextRangeForUtf8(event.newText, start, end)
         }
-    val newSelectionEndUtf16 =
-        if (event.newSelectionEndUtf8 in 0..event.newText.length) {
-            TextOffsetUtils.utf16OffsetForUtf8Byte(
-                text = event.newText,
-                utf8ByteOffset = event.newSelectionEndUtf8,
+
+    // #641 评论 问题2：只要 Core 的 coordinated cursor 要动画，就构造 CursorVisualIntent。
+    val coordinatedCursor = event.visualIntent.coordinatedCursor
+    val cursor =
+        if (coordinatedCursor.shouldAnimate) {
+            val oldEndUtf16 =
+                TextOffsetUtils.utf16OffsetForUtf8ByteOrNull(
+                    text = event.oldText,
+                    utf8ByteOffset = coordinatedCursor.oldByteOffset,
+                ) ?: coordinatedCursor.oldByteOffset
+            val newEndUtf16 =
+                TextOffsetUtils.utf16OffsetForUtf8ByteOrNull(
+                    text = event.newText,
+                    utf8ByteOffset = coordinatedCursor.newByteOffset,
+                ) ?: coordinatedCursor.newByteOffset
+            CursorVisualIntent(
+                oldEndUtf16 = oldEndUtf16,
+                newEndUtf16 = newEndUtf16,
+                animate = true,
             )
         } else {
             null
         }
 
     return EditorVisualIntent(
-        affectedRanges = affectedRanges,
-        kind = kind,
-        oldSelectionEndUtf16 = oldSelectionEndUtf16,
-        newSelectionEndUtf16 = newSelectionEndUtf16,
+        oldRanges = oldRanges,
+        newRanges = newRanges,
+        textKind = textKind,
+        cursor = cursor,
     )
 }
 
 /**
  * #641：收集 Core 视觉意图事件，映射为 [EditorVisualIntent] 喂给 [ComposeEditorVisualState]。
  * 按 target 过滤，避免其他 target 的视觉意图污染当前 overlay。
+ *
+ * #641 评论 问题3：收集 [com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy]
+ * 的 duration 传给 [ComposeEditorVisualState.onVisualIntent] —
+ * 不再写死 200ms，文字动画用 textDurationMillis，光标动画用 cursorDurationMillis。
  *
  * 提取为独立 composable 以降低 [WritingPaneEditorContent] 的认知复杂度。
  */
@@ -882,13 +929,58 @@ private fun CollectVisualIntentEvents(
     viewModel: EditorViewModel,
     targetId: String,
     visualState: ComposeEditorVisualState,
+    coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
 ) {
+    val motionPolicy by coordinator.motionPolicyFlow.collectAsStateWithLifecycle()
+    val currentMotionPolicy by rememberUpdatedState(motionPolicy)
     androidx.compose.runtime.LaunchedEffect(viewModel, targetId) {
         viewModel.visualIntentEvents
             .collect { event ->
                 if (event.targetId != targetId) return@collect
                 val editorVisualIntent = mapCoreVisualIntentToEditorVisualIntent(event)
-                visualState.onVisualIntent(editorVisualIntent)
+                // #641 评论 问题3：duration 来自 EditorMotionPolicy —
+                // 光标动画用 cursorDurationMillis，文字动画用 textDurationMillis。
+                val durationMillis =
+                    if (editorVisualIntent.cursor?.animate == true) {
+                        currentMotionPolicy.cursorDurationMillis
+                    } else {
+                        currentMotionPolicy.textDurationMillis
+                    }
+                visualState.onVisualIntent(editorVisualIntent, durationMillis)
+            }
+    }
+}
+
+/**
+ * #641 评论 问题7d：收集 undo/redo 后的权威编辑器快照，把正文写回 bridge。
+ *
+ * performUndo/performRedo 在 applyUndoRestored 后查询 Core snapshot 并发布到
+ * [com.xiwei.sujian.feature.editor.window.EditorWindowHost.authoritativeEditorSnapshots]。
+ * 此处按 targetId 过滤收集，composition 期间不覆盖（沿用既有 pending/conflict 规则）。
+ *
+ * 提取为独立 composable 以降低 [WritingPaneEditorContent] 的认知复杂度。
+ */
+@Composable
+private fun CollectAuthoritativeEditorSnapshots(
+    coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
+    viewModel: EditorViewModel,
+    targetId: String,
+    bridge: com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge,
+) {
+    androidx.compose.runtime.LaunchedEffect(targetId) {
+        coordinator.authoritativeEditorSnapshots
+            .filter { it.targetId == targetId }
+            .collect { snapshot ->
+                if (bridge.state.composition == null &&
+                    snapshot.text != bridge.mirroredText
+                ) {
+                    viewModel.applyAuthoritativeToBridge(
+                        snapshot.targetId,
+                        snapshot.text,
+                        snapshot.selectionAnchorUtf8,
+                        snapshot.selectionHeadUtf8,
+                    )
+                }
             }
     }
 }

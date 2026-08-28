@@ -118,6 +118,7 @@ private data class SujianNavContext(
     val projectWorkspaceActions: AndroidWorkspaceActionSpec,
     val layoutSpec: AndroidLayoutSpec,
     val workbenchPlan: AndroidWorkbenchLayoutPlan?,
+    val workbenchSafeBounds: com.xiwei.sujian.app.presentation.layout.AndroidLayoutRect,
     val chapterTreeCollapsed: Boolean,
     val toolPaneCollapsed: Boolean,
     val onToggleChapterTree: () -> Unit,
@@ -206,6 +207,9 @@ private fun rememberSujianEntryProvider(
 /**
  * #625 第二段：Works 路由的 NavEntry — 提取以降低 [rememberSujianEntryProvider] 认知复杂度。
  * ProjectWorkspaceScreen 消费 layoutSpec 与 chrome — 大屏 Editor 位置画 WideWritingWorkspace。
+ *
+ * #641 评论 问题5：把 workbenchPlan/safeBounds/pane 收起/chrome 打包成 WorkbenchPresentationState
+ * 传给 ProjectWorkspaceScreen，避免 WideLayoutContent Editor 分支再用 null/空函数让 plan 永远走 single-pane。
  */
 private fun rememberWorksEntry(
     key: SujianRoute.Works,
@@ -214,12 +218,23 @@ private fun rememberWorksEntry(
     deps: SujianAppDependencies,
 ): NavEntry<NavKey> =
     NavEntry(key, metadata = noPageTransitionMetadata) { route ->
+        val workbenchPresentation =
+            com.xiwei.sujian.feature.project.ui.WorkbenchPresentationState(
+                plan = context.workbenchPlan,
+                safeBounds = context.workbenchSafeBounds,
+                chapterTreeCollapsed = context.chapterTreeCollapsed,
+                toolPaneCollapsed = context.toolPaneCollapsed,
+                onToggleChapterTree = context.onToggleChapterTree,
+                onToggleToolPane = context.onToggleToolPane,
+                chrome = context.chrome,
+            )
         ProjectWorkspaceScreen(
             appState = context.appState,
             workspaceNavState = context.workspaceNavState,
             projectListActions = context.projectListActions,
             projectWorkspaceActions = context.projectWorkspaceActions,
             layoutSpec = context.layoutSpec,
+            workbenchPresentation = workbenchPresentation,
         )
     }
 
@@ -474,44 +489,26 @@ fun SujianNavigationSuite(
             workspaceNavState.currentLocation is WorkspaceLocation.Editor
 
     val navContext =
-        SujianNavContext(
+        rememberSujianNavContext(
             appState = appState,
             workspaceNavState = workspaceNavState,
             projectListActions = projectListActions,
             projectWorkspaceActions = projectWorkspaceActions,
             layoutSpec = layoutSpec,
-            workbenchPlan = workbenchPlanState.workbenchPlan,
-            chapterTreeCollapsed = workbenchPlanState.chapterTreeCollapsed,
-            toolPaneCollapsed = workbenchPlanState.toolPaneCollapsed,
-            onToggleChapterTree = workbenchPlanState.onToggleChapterTree,
-            onToggleToolPane = workbenchPlanState.onToggleToolPane,
+            workbenchSafeBounds = workbenchSafeBounds,
+            workbenchPlanState = workbenchPlanState,
             chrome = chrome,
         )
-    val navDisplayContent: @Composable () -> Unit = {
-        SujianTopLevelSwitchMotion(currentTopDestination) {
-            SujianNavDisplayContent(topLevelBackStack, navContext, deps, syncState)
-        }
-    }
-
-    // #628 评论 5301021120 02:59:39Z 版：外层顶栏归属必须消费同一份 Rust 最终模式。
-    // #641：Editor 位置的顶栏全部归 Editor composable，
-    // Scaffold 不再给任何 Editor 画顶栏（showOuterTopBar=!isEditorLocation）。
-    val showOuterTopBar = !isEditorLocation
-
-    // #641：Editor 位置 Scaffold container 透明，让 Editor composable 透出；
-    // 非 Editor 位置用 colorScheme.background。
-    val scaffoldContainerColor =
-        if (isEditorLocation) {
-            androidx.compose.ui.graphics.Color.Transparent
-        } else {
-            androidx.compose.material3.MaterialTheme.colorScheme.background
-        }
-
-    val scaffoldChrome =
-        SujianNavScaffoldChrome(
+    val scaffoldState =
+        rememberSujianNavScaffoldState(
+            isEditorLocation = isEditorLocation,
             topBarInfo = topBarInfo,
-            showOuterTopBar = showOuterTopBar,
             snackbarHostState = snackbarHostState,
+            currentTopDestination = currentTopDestination,
+            topLevelBackStack = topLevelBackStack,
+            navContext = navContext,
+            deps = deps,
+            syncState = syncState,
         )
 
     androidx.compose.foundation.layout.Box(modifier = modifier) {
@@ -519,13 +516,96 @@ fun SujianNavigationSuite(
             modifier = Modifier.fillMaxSize(),
             layoutSpec = layoutSpec,
             chrome = chrome,
-            scaffoldChrome = scaffoldChrome,
+            scaffoldChrome = scaffoldState.scaffoldChrome,
             selection = SujianTopLevelSelection(currentTopDestination, onTopLevelSelected),
-            navDisplayContent = navDisplayContent,
-            containerColor = scaffoldContainerColor,
+            navDisplayContent = scaffoldState.navDisplayContent,
+            containerColor = scaffoldState.containerColor,
         )
     }
 }
+
+/**
+ * #641 评论 问题5：构造 [SujianNavContext] — 提取以降低 [SujianNavigationSuite] 行数。
+ */
+@Composable
+@Suppress("LongParameterList") // #641 评论 问题5：8 参数达 threshold，函数级 suppress（既有先例）
+private fun rememberSujianNavContext(
+    appState: SujianAppState,
+    workspaceNavState: ProjectNavigationState,
+    projectListActions: AndroidWorkspaceActionSpec,
+    projectWorkspaceActions: AndroidWorkspaceActionSpec,
+    layoutSpec: AndroidLayoutSpec,
+    workbenchSafeBounds: com.xiwei.sujian.app.presentation.layout.AndroidLayoutRect,
+    workbenchPlanState: com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchPlanState,
+    chrome: SujianChromeSpec,
+): SujianNavContext =
+    SujianNavContext(
+        appState = appState,
+        workspaceNavState = workspaceNavState,
+        projectListActions = projectListActions,
+        projectWorkspaceActions = projectWorkspaceActions,
+        layoutSpec = layoutSpec,
+        workbenchPlan = workbenchPlanState.workbenchPlan,
+        workbenchSafeBounds = workbenchSafeBounds,
+        chapterTreeCollapsed = workbenchPlanState.chapterTreeCollapsed,
+        toolPaneCollapsed = workbenchPlanState.toolPaneCollapsed,
+        onToggleChapterTree = workbenchPlanState.onToggleChapterTree,
+        onToggleToolPane = workbenchPlanState.onToggleToolPane,
+        chrome = chrome,
+    )
+
+/**
+ * #641 评论 问题5：构造外层 Scaffold 状态（chrome/containerColor/navDisplayContent）—
+ * 提取以降低 [SujianNavigationSuite] 行数。
+ */
+@Composable
+@Suppress("LongParameterList") // #641 评论 问题5：8 参数达 threshold，函数级 suppress（既有先例）
+private fun rememberSujianNavScaffoldState(
+    isEditorLocation: Boolean,
+    topBarInfo: SujianTopBarInfo,
+    snackbarHostState: SnackbarHostState,
+    currentTopDestination: SujianDestination,
+    topLevelBackStack: SujianTopLevelBackStack,
+    navContext: SujianNavContext,
+    deps: SujianAppDependencies,
+    syncState: com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState,
+): SujianNavScaffoldState {
+    val navDisplayContent: @Composable () -> Unit = {
+        SujianTopLevelSwitchMotion(currentTopDestination) {
+            SujianNavDisplayContent(topLevelBackStack, navContext, deps, syncState)
+        }
+    }
+    // #628 评论 5301021120 02:59:39Z 版：外层顶栏归属必须消费同一份 Rust 最终模式。
+    // #641：Editor 位置的顶栏全部归 Editor composable，
+    // Scaffold 不再给任何 Editor 画顶栏（showOuterTopBar=!isEditorLocation）。
+    val showOuterTopBar = !isEditorLocation
+    // #641：Editor 位置 Scaffold container 透明，让 Editor composable 透出；
+    // 非 Editor 位置用 colorScheme.background。
+    val containerColor =
+        if (isEditorLocation) {
+            androidx.compose.ui.graphics.Color.Transparent
+        } else {
+            androidx.compose.material3.MaterialTheme.colorScheme.background
+        }
+    val scaffoldChrome =
+        SujianNavScaffoldChrome(
+            topBarInfo = topBarInfo,
+            showOuterTopBar = showOuterTopBar,
+            snackbarHostState = snackbarHostState,
+        )
+    return SujianNavScaffoldState(
+        navDisplayContent = navDisplayContent,
+        containerColor = containerColor,
+        scaffoldChrome = scaffoldChrome,
+    )
+}
+
+/** 外层 Scaffold 状态打包 — 提取以降低 [SujianNavigationSuite] 行数。 */
+private data class SujianNavScaffoldState(
+    val navDisplayContent: @Composable () -> Unit,
+    val containerColor: androidx.compose.ui.graphics.Color,
+    val scaffoldChrome: SujianNavScaffoldChrome,
+)
 
 /** #614：收集 ViewModel 抛出的 UI 事件，错误走 Snackbar 展示。 */
 @Composable
