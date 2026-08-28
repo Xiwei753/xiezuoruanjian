@@ -27,6 +27,7 @@ import com.xiwei.sujian.feature.editor.session.SessionResetSource
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.session.applyExternalContentFact
+import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.editor.session.consumePendingExternalFact
 import com.xiwei.sujian.feature.editor.session.shouldApplyExternalContent
 import com.xiwei.sujian.feature.editor.session.storePendingExternalFact
@@ -48,8 +49,8 @@ import com.xiwei.sujian.feature.editor.window.EditableTextTarget
  * 才显示编辑器；切换事务提交后、导航落地前，旧 pane 不显示 View、
  * 不安装输入回调，旧章节最后一次输入不可能写进新章节。
  *
- * #640 A.5：新增 presentationVisible — 控制编辑器 View 可见性，
- * 该值绝不参与 session current/beginEdit/attach 业务判断。
+ * #641：正文 UI 由 state-based [BasicTextField] 接管，不再有 presentationVisible —
+ * 编辑器只在 WorkspaceLocation.Editor 真正存在，离开 Composition 自动收起 IME。
  */
 @Composable
 @Suppress("LongParameterList")
@@ -67,8 +68,6 @@ fun WritingPane(
     onChapterSwitchFailed: (
         (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
     )? = null,
-    /** #640 A.5：presentationVisible — 控制编辑器 View 的可见性，不参与 session 业务判断。 */
-    presentationVisible: Boolean = true,
 ) {
     val context = LocalContext.current
     val deps = LocalSujianAppDependencies.current
@@ -162,16 +161,74 @@ fun WritingPane(
                 isCurrentChapter = isActivePane,
             ),
     ) { editorModifier ->
-        // #624 评论17 第2部分：Route 层收集 targetDecorationsVersionFlow 触发重排，
-        // Layout 层不自己 collect session/window flow。
-        @Suppress("UNUSED_EXPRESSION")
-        (coordinator.targetDecorationsVersionFlow.collectAsStateWithLifecycle().value)
-        WritingEditorSurface(
+        WritingPaneEditorContent(
             coordinator = coordinator,
             targetId = targetId,
             isActivePane = isActivePane,
+            sessionState = sessionState,
+            uiState = uiState,
             modifier = editorModifier,
         )
+    }
+}
+
+/**
+ * #641：正文内容渲染 — 活动 target → [WritingEditorSurface]([BasicTextField])；
+ * 非活动 → 只读预览。从 [WritingPane] 提取以控制函数长度。
+ */
+@Composable
+private fun WritingPaneEditorContent(
+    coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
+    targetId: String,
+    isActivePane: Boolean,
+    sessionState: com.xiwei.sujian.feature.editor.session.EditorSessionState,
+    uiState: com.xiwei.sujian.feature.editor.presentation.EditorUiState,
+    modifier: Modifier,
+) {
+    val deps = LocalSujianAppDependencies.current
+    // #624 评论17 第2部分：Route 层收集 targetDecorationsVersionFlow 触发重排，
+    // Layout 层不自己 collect session/window flow。
+    @Suppress("UNUSED_EXPRESSION")
+    (coordinator.targetDecorationsVersionFlow.collectAsStateWithLifecycle().value)
+    val surfaceMode = editorSurfaceMode(sessionState.bindingState, coordinator.windowId, targetId, isActivePane)
+    when (surfaceMode) {
+        EditorSurfaceMode.EditorHost -> {
+            val bridge =
+                rememberEditorTextFieldBridge(
+                    coordinator = coordinator,
+                    appServiceBridge = deps.appServiceBridge,
+                    targetId = targetId,
+                    initialText = uiState.content,
+                    bindingState = sessionState.bindingState,
+                )
+            val visualState = remember { com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState() }
+            WritingEditorSurface(
+                bridge = bridge,
+                visualState = visualState,
+                textStyle =
+                    androidx.compose.ui.text.TextStyle(
+                        fontSize =
+                            androidx.compose.ui.unit.TextUnit(
+                                uiState.settings.fontSize,
+                                androidx.compose.ui.unit.TextUnitType.Sp,
+                            ),
+                        lineHeight =
+                            androidx.compose.ui.unit.TextUnit(
+                                uiState.settings.fontSize * uiState.settings.lineSpacingMultiplier,
+                                androidx.compose.ui.unit.TextUnitType.Sp,
+                            ),
+                    ),
+                textColor = androidx.compose.ui.graphics.Color.Black,
+                cursorColor = androidx.compose.ui.graphics.Color.Black,
+                modifier = modifier,
+            )
+        }
+        EditorSurfaceMode.Preview -> {
+            val previewState = coordinator.getChapterPreviewState(targetId)
+            if (previewState != null && previewState.text.isNotEmpty()) {
+                com.xiwei.sujian.feature.editor.ui.ReadonlyChapterPreview(previewState = previewState)
+            }
+        }
     }
 }
 
@@ -348,20 +405,13 @@ private fun WritingPaneEditorAttach(
                 currentViewModel.confirmEditorAttached(targetId)
             }
             EditorAttachAction.Wait -> {
-                // 等待 AndroidView factory/attachView() 推进到 Attached，不解除冻结。
+                // 等待 session 绑定推进到 Attached，不解除冻结。
             }
             EditorAttachAction.BeginEdit -> {
                 if (shouldBeginEditForEditorAttach(inputs.uiState.loading, inputs.uiState.settingsReady)) {
-                    coordinator.updateTargetText(targetId, inputs.uiState.content)
-                    // #630 评论 5326175206 项3 / 5327560790: 首次正文 attach 必须显式携带
-                    // EditorTypography snapshot（来自持久化权威设置），不再靠
-                    // WritingPaneTypographySync 的 LaunchedEffect 端态猜测谁先到。
-                    val typography = editorTypographyFromSettings(inputs.uiState.settings)
-                    coordinator.beginEdit(
-                        targetId,
-                        inputs.uiState.content.toByteArray(Charsets.UTF_8).size,
-                        typography = typography,
-                    )
+                    // #641：正文由 BasicTextField(TextFieldState) 接管，不再 updateTargetText；
+                    // beginEdit 只预准备 Rust session，排版由 Compose 层直接应用。
+                    coordinator.beginEdit(targetId)
                 }
             }
             EditorAttachAction.Hold -> {
@@ -592,7 +642,7 @@ private suspend fun handleExternalDocumentFact(
             if (resetResult is com.xiwei.sujian.feature.editor.session.ExternalResetResult.Success &&
                 coordinator.activeTargetId != targetId
             ) {
-                coordinator.beginEdit(targetId, fact.text.toByteArray(Charsets.UTF_8).size)
+                coordinator.beginEdit(targetId)
             }
             if (resetResult is com.xiwei.sujian.feature.editor.session.ExternalResetResult.Success) {
                 // #595 五：仅 Core reset 成功才一次性提交会话事实与 UI —
@@ -657,4 +707,97 @@ private fun consumePendingForReapplyIfApplicable(
     if (shouldConsumePendingAfterFact(decision, fact.isReapply)) {
         coordinator.sessionCoordinator.consumePendingExternalFact(targetId)
     }
+}
+
+/**
+ * #641 评论1 第2节：[EditorTextFieldStateBridge] 创建 — 持有 [TextFieldState]，
+ * 把 Android 已提交的文本变化转成现有 Core 事务，复用
+ * [EditorSessionCoordinator.applyLocalEdit] 的 dirty/revision/autosave/统计链。
+ *
+ * bridge 按 (targetId, bindingState) remember — session 重新绑定时重建，
+ * 外部权威正文（同步/撤销/重载）经 resetPersistentSession 后 session 重附着，
+ * bridge 以新正文初始化。不每次重组重建。
+ */
+@Composable
+private fun rememberEditorTextFieldBridge(
+    coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
+    appServiceBridge: com.xiwei.sujian.core.interop.app.AppServiceBridge,
+    targetId: String,
+    initialText: String,
+    bindingState: com.xiwei.sujian.feature.editor.session.WindowBindingState,
+): com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge {
+    val commitToCore: (
+        com.xiwei.sujian.feature.editor.input.CommittedTextEdit,
+    ) -> com.xiwei.sujian.feature.editor.input.CommitResult =
+        remember(coordinator, appServiceBridge, targetId) {
+            { edit ->
+                val lease = coordinator.sessionCoordinator.currentInputLease()
+                if (lease == null || lease.targetId != targetId) {
+                    com.xiwei.sujian.feature.editor.input.CommitResult.Rejected(edit.oldText, edit.selection)
+                } else {
+                    val byteStart = edit.oldText.substring(0, edit.replaceStart).toByteArray(Charsets.UTF_8).size
+                    val byteEndExclusive =
+                        edit.oldText.substring(0, edit.replaceEndExclusive).toByteArray(Charsets.UTF_8).size
+                    val kernelBridge =
+                        com.xiwei.sujian.feature.editor.interop.TextEditSessionBridge(appServiceBridge, lease.sessionId)
+                    val snapshot = coordinator.queryTargetSnapshot(targetId)
+                    val expectedRevision = snapshot?.revision ?: 0L
+                    val result =
+                        kernelBridge.replace(
+                            byteStart = byteStart,
+                            byteEndExclusive = byteEndExclusive,
+                            replacementText = edit.newText,
+                            originalText = edit.oldText,
+                            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+                            expectedRevision = expectedRevision,
+                        )
+                    if (result != null) {
+                        coordinator.sessionCoordinator.applyLocalEdit(
+                            com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate.LocalInput(
+                                targetId = targetId,
+                                revision = result.newRevision.toLong(),
+                                transactionId = result.transactionId.toLong(),
+                                selectionAnchorUtf8 = result.newSelectionStart.toInt(),
+                                selectionHeadUtf8 = result.newSelectionEnd.toInt(),
+                                lease = lease,
+                                contentChanged = result.displayPatches.isNotEmpty(),
+                            ),
+                        )
+                        com.xiwei.sujian.feature.editor.input.CommitResult.Accepted
+                    } else {
+                        val fallbackText = snapshot?.text ?: edit.oldText
+                        com.xiwei.sujian.feature.editor.input.CommitResult.Rejected(
+                            fallbackText,
+                            androidx.compose.ui.text.TextRange(
+                                (snapshot?.selectionAnchorUtf8 ?: 0).coerceAtLeast(0),
+                                (snapshot?.selectionHeadUtf8 ?: 0).coerceAtLeast(0),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+    val bridge =
+        remember(targetId, bindingState) {
+            com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge(
+                initialText = initialText,
+                initialSelection = androidx.compose.ui.text.TextRange(0, 0),
+                commitToCore = commitToCore,
+            )
+        }
+
+    // #641 评论1 第2节：观察 TextFieldState 快照，提交已完成的文本变化给 Core。
+    // IME composing 中间态不提交（bridge.onInputSnapshot 内部判断）。
+    androidx.compose.runtime.LaunchedEffect(bridge) {
+        androidx.compose.runtime.snapshotFlow {
+            com.xiwei.sujian.feature.editor.input.EditorInputSnapshot(
+                text = bridge.state.text.toString(),
+                selection = bridge.state.selection,
+                composition = bridge.state.composition,
+            )
+        }.collect(bridge::onInputSnapshot)
+    }
+
+    return bridge
 }

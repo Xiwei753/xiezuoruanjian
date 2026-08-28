@@ -261,7 +261,10 @@ private data class WorkbenchBounds(
                 LayoutSlotId.TOOL_RAIL to { b -> b.toolRail ?: EMPTY_RECT },
             )
 
-        fun get(bounds: WorkbenchBounds, slotId: LayoutSlotId): AndroidLayoutRect = slotBoundsMap[slotId]?.invoke(bounds) ?: EMPTY_RECT
+        fun get(
+            bounds: WorkbenchBounds,
+            slotId: LayoutSlotId,
+        ): AndroidLayoutRect = slotBoundsMap[slotId]?.invoke(bounds) ?: EMPTY_RECT
     }
 }
 

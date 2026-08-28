@@ -14,10 +14,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
+import com.xiwei.sujian.app.presentation.layout.AndroidLayoutRect
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
-import com.xiwei.sujian.app.presentation.layout.AndroidLayoutRect
 import com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult
 import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
 import com.xiwei.sujian.feature.editor.presentation.requestOpenChapter
@@ -313,7 +313,12 @@ private fun SinglePaneContent(
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     onContinueRecentEdit: (edit: RecentEdit) -> Unit,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
-    onChapterSwitchFailed: (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit,
+    onChapterSwitchFailed: (
+        oldProjectId: String,
+        oldVolumeId: String?,
+        oldChapterId: String?,
+        oldChapterTitle: String,
+    ) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when (location) {
@@ -373,7 +378,12 @@ private fun WideLayoutContent(
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     onContinueRecentEdit: (edit: RecentEdit) -> Unit,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
-    onChapterSwitchFailed: (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit,
+    onChapterSwitchFailed: (
+        oldProjectId: String,
+        oldVolumeId: String?,
+        oldChapterId: String?,
+        oldChapterTitle: String,
+    ) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when (location) {

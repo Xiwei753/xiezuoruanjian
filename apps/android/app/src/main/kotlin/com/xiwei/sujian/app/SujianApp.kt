@@ -73,8 +73,6 @@ private fun rememberSujianWindowHost(
                 context.applicationContext,
                 sessionCoordinator,
                 deps.appServiceBridge,
-                com.xiwei.sujian.feature.editor.visual.ChoreographerAnimationTimeSource(),
-                com.xiwei.sujian.feature.editor.visual.TransactionIdSource(),
             )
         }
     DisposableEffect(windowCoordinator) {

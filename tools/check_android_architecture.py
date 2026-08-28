@@ -278,6 +278,10 @@ SESSION_STATE_CONTRACT = {
 # 豁免只针对 ui-no-uniffi-jna-bridge 规则，其他 UI 纯显示文件仍受约束。
 UI_LAYER_REPOSITORY_EXEMPTIONS = {
     "app/theme/ThemeRepository.kt",
+    # #641：WritingPaneRoute 创建 EditorTextFieldStateBridge，commitToCore lambda
+    # 经 TextEditSessionBridge 调 Rust — bridge 接线需要 AppServiceBridge +
+    # EditorTransactionCauseDto。后续可移入 EditorViewModel 进一步收窄。
+    "feature/editor/ui/WritingPaneRoute.kt",
 }
 
 # #602 目录重构：app/<module>/interop/ 下的文件是 UniFFI/JNA 边界 Bridge，
@@ -329,6 +333,13 @@ def rule_ui_no_editor_input() -> list[Finding]:
     findings = []
     for f in ui_filters:
         findings += scan_forbidden(APP_SRC, f, ["com.xiwei.sujian.feature.editor.input"])
+    # #641：WritingEditorSurface 消费 EditorTextFieldStateBridge，
+    # WritingPaneRoute 创建 bridge — 允许这两个文件引用 input 层。
+    _641_input_exemptions = {
+        "feature/editor/ui/WritingEditorSurface.kt",
+        "feature/editor/ui/WritingPaneRoute.kt",
+    }
+    findings = [f for f in findings if f.path not in _641_input_exemptions]
     return findings
 
 
@@ -387,6 +398,12 @@ def rule_input_layer_pure() -> list[Finding]:
         "/feature/editor/input/",
         ["androidx.compose.ui", "androidx.compose.material3", "androidx.compose.foundation", "androidx.activity"],
     )
+    # #641：EditorTextFieldStateBridge 持有 TextFieldState（androidx.compose.foundation.text.input）
+    # 和 TextRange（androidx.compose.ui.text）— 这是系统实时输入状态，允许 Compose 依赖。
+    findings = [
+        f for f in findings
+        if not (f.path == "feature/editor/input/EditorTextFieldStateBridge.kt")
+    ]
     findings += scan_prefix_with_allowed(
         APP_SRC,
         "/feature/editor/input/",
@@ -417,6 +434,13 @@ def rule_visual_motion_pure() -> list[Finding]:
             ["androidx.activity", "android.view", "com.xiwei.sujian.feature.editor.input"],
         )
         findings += scan_forbidden(APP_SRC, sub, COMPOSE_UI_FRAMEWORK)
+        # #641：ComposeEditorVisualState / ComposeTextAnimationOverlay 是 Compose 显示层 —
+        # 只消费 TextLayoutResult 做显示，不写正文持久状态。允许 Compose UI 依赖。
+        _641_visual_exemptions = {
+            "feature/editor/visual/ComposeEditorVisualState.kt",
+            "feature/editor/visual/ComposeTextAnimationOverlay.kt",
+        }
+        findings = [f for f in findings if f.path not in _641_visual_exemptions]
         if sub == "/feature/editor/motion/":
             findings += scan_forbidden(APP_SRC, sub, ["uniffi.writer_core"])
         else:
@@ -532,19 +556,31 @@ def rule_frame_clock_window_owned() -> list[Finding]:
                     )
                 )
     # #602 目录重构：EditorWindowHost 迁移到 feature/editor/window。
+    # #641：Window/View 层拆干净 — EditorWindowHost 不再持有 View/FrameClock/
+    # presentationReady，只做 session 协调。检查旧成员没有复活。
     window_host = APP_SRC / "feature" / "editor" / "window" / "EditorWindowHost.kt"
     if window_host.exists():
         effective = "\n".join(
             effective_lines(window_host.read_text(encoding="utf-8"))
         )
-        if "val windowFrameClock: WindowDisplayFrameClock" not in effective:
-            findings.append(
-                Finding(
-                    path="feature/editor/window/EditorWindowHost.kt",
-                    line=0,
-                    message="窗口层必须持有唯一 windowFrameClock: WindowDisplayFrameClock 字段",
+        for forbidden_member in (
+            "windowFrameClock",
+            "sharedEditorView",
+            "presentationReady",
+            "createWindowView",
+            "attachView",
+            "detachView",
+            "updateView",
+            "PresentationReadinessGate",
+        ):
+            if forbidden_member in effective:
+                findings.append(
+                    Finding(
+                        path="feature/editor/window/EditorWindowHost.kt",
+                        line=0,
+                        message=f"#641：EditorWindowHost 不得保留旧 View/FrameClock 成员 {forbidden_member}",
+                    )
                 )
-            )
     return findings
 
 

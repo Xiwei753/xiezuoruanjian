@@ -16,8 +16,6 @@ fun SujianEditorHost(
     onChapterSwitchFailed: (
         (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
     )? = null,
-    /** #640 A.5：presentationVisible — 控制编辑器 View 的可见性，不参与 session 业务判断。 */
-    presentationVisible: Boolean = true,
 ) {
     WritingPane(
         projectId = projectId,
@@ -26,6 +24,5 @@ fun SujianEditorHost(
         chapterTitle = chapterTitle,
         modifier = modifier.fillMaxSize(),
         onChapterSwitchFailed = onChapterSwitchFailed,
-        presentationVisible = presentationVisible,
     )
 }

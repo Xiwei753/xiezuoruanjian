@@ -2,20 +2,32 @@ package com.xiwei.sujian.feature.editor.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.OutputTransformation
+import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
-import com.xiwei.sujian.feature.editor.ui.theme.EditorThemeAdapter
-import com.xiwei.sujian.feature.editor.window.EditorWindowHost
+import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
+import com.xiwei.sujian.feature.editor.visual.ComposeTextAnimationOverlay
 
 /**
  * #640 A.3：活动 target 从首帧组合唯一 AndroidView，
  * 用 View.INVISIBLE（不是 GONE/alpha/AnimatedVisibility）控制可见性。
  * 非活动 target 显示只读预览。
+ *
+ * #641：[EditorSurfaceMode.EditorHost] 现由 state-based [BasicTextField] 渲染，
+ * 不再使用 [AndroidView]([SujianEditorView])。该枚举仍供路由层决定画编辑器还是只读预览。
  */
 enum class EditorSurfaceMode {
     /** 当前窗口绑定该 target 且状态为 Attaching/Attached/Committing/Cancelling → 真实编辑器。 */
@@ -28,8 +40,7 @@ enum class EditorSurfaceMode {
 /**
  * #640 A.3：正文 Surface 渲染决策 — 纯函数。
  *
- * 活动 target 始终组合 AndroidView（EditorSurfaceMode.EditorHost），
- * 用 View.INVISIBLE 控制可见性，不画第二套正文 renderer。
+ * 活动 target 始终组合编辑器（EditorSurfaceMode.EditorHost），
  * 非活动 target 显示只读预览（EditorSurfaceMode.Preview）。
  */
 fun editorSurfaceMode(
@@ -53,105 +64,85 @@ fun editorSurfaceMode(
         }
     return when {
         editorMatch -> EditorSurfaceMode.EditorHost
-        isActivePane -> EditorSurfaceMode.EditorHost // #640：活动 target 始终组合 AndroidView
+        isActivePane -> EditorSurfaceMode.EditorHost
         else -> EditorSurfaceMode.Preview
     }
 }
 
 /**
- * #595 一：正文编辑器宿主 — 在 [WritingPane] 的正文 Box 内直接持有
- * [AndroidView]([SujianEditorView])。
+ * #641 评论1 第3节：正文 Surface — 唯一一个 state-based [BasicTextField]。
  *
- * AndroidView 的大小由父 Compose 布局直接决定（[Modifier.fillMaxSize]）,
- * 使用局部坐标，不再通过 boundsInWindow()、全屏 slot、graphicsLayer 追踪正文。
+ * 删除 `AndroidView(SujianEditorView)` 整段。Android Foundation [BasicTextField]
+ * 负责实时输入、composition、selection、光标语义、软换行、命中测试和滚动；
+ * Rust Core 继续负责文档事务与持久化；素笺自己的文字/光标动画只消费系统最终
+ * [TextLayoutResult] 做显示，不再拥有或修改编辑器几何。
  *
- * #630 R12：渲染决策改为消费 [EditorSurfaceMode]，同时看 bindingState 和业务层传入的 isActivePane：
- * - [EditorSurfaceMode.EditorHost]：显示 SujianEditorView（唯一正文 renderer）。
- * - [EditorSurfaceMode.Preview]：非活动 target → 显示 ReadonlyChapterPreview（只读预览）。
- *
- * #595 八/十一：直接消费规范窗口绑定状态机 [WindowBindingState]（会话层唯一事实源），
- * 用生命周期感知收集 [collectAsStateWithLifecycle] 观察 bindingStateFlow；
- * 不再存在第二套 EditorAttachmentState 派生类型。临时失焦（动画暂停）不会改变
- * binding 状态 — Attached 时编辑器始终显示，暂停/恢复由 View 内部处理。
- *
- * #640 A.5：新增 presentationVisible — 控制编辑器 View 可见性，不参与 session 业务判断。
+ * 注意：**不要把整个 BasicTextField 正文设成透明。** 正常文字、selection、composition
+ * 都继续由系统正常画。只有当前正在动画的 UTF-16 range 通过 [OutputTransformation]
+ * 临时变透明，overlay 只补画这些 range；动画完成立刻从 `hiddenRanges` 删除，
+ * 系统正文已经在最终位置，不会再跳一次。
  */
 @Composable
 fun WritingEditorSurface(
-    coordinator: EditorWindowHost,
-    targetId: String,
-    isActivePane: Boolean,
+    bridge: EditorTextFieldStateBridge,
+    visualState: ComposeEditorVisualState,
+    textStyle: TextStyle,
+    textColor: Color,
+    cursorColor: Color,
     modifier: Modifier = Modifier,
-    /** #640 A.5：presentationVisible — 控制编辑器 View 的可见性，不参与 session 业务判断。 */
-    presentationVisible: Boolean = true,
 ) {
-    // #595 三：只收集会话层唯一 [sessionStateFlow]，从同一个快照读取 bindingState。
-    // 三个独立 stateIn 派生流已删除 — 同一帧内 activeTargetId / editingState /
-    // bindingState / sessionId 永远来自同一个不可变快照，不会读到跨帧组合。
-    val sessionState by coordinator.sessionStateFlow.collectAsStateWithLifecycle()
-    val bindingState = sessionState.bindingState
-    // #640 B：收集 presentationReady 几何 — StateFlow 更新触发 AndroidView.update 的可见性重组
-    val presentationReady by coordinator.presentationReady.collectAsStateWithLifecycle()
-    // #630 R12：渲染决策同时消费 bindingState 和业务层传入的 isActivePane —
-    // 活动章节从进入页面到稳定显示必须只有 SujianEditorView 一套正文 renderer。
-    val surfaceMode = editorSurfaceMode(bindingState, coordinator.windowId, targetId, isActivePane)
+    val scrollState = rememberScrollState()
+    val hiddenRanges by visualState.hiddenRanges.collectAsStateWithLifecycle()
+    val drawsVisualCursor by visualState.drawsVisualCursor.collectAsStateWithLifecycle()
 
-    val themeColors = EditorThemeAdapter.extractColors()
-
-    Box(modifier = modifier) {
-        when (surfaceMode) {
-            EditorSurfaceMode.EditorHost -> {
-                // #595 三：AndroidView 正式拥有 View 生命周期 —
-                // factory 用传入的 Context 创建 View（Compose 官方模型），
-                // 不返回宿主提前创建、长期缓存的 View。
-                // 普通正文 Surface 不是 Lazy 列表 View 池复用场景，删除 onReset。
-                // onRelease 完整解绑双向引用、InputConnection、FrameClock 和 callback。
-                // #640 A.3：活动 target 始终组合 AndroidView，
-                // 用 View.INVISIBLE（不是 GONE/alpha/AnimatedVisibility）控制可见性。
-                AndroidView(
-                    factory = { ctx ->
-                        val view = coordinator.createWindowView(ctx)
-                        coordinator.attachView(coordinator.windowId, targetId, view)
-                        EditorThemeAdapter.applyToView(view, themeColors)
-                        view
-                    },
-                    update = { view ->
-                        coordinator.updateView(view, themeColors)
-                        // #640 A.3：统一主题和 visibility = VISIBLE 仅当 presentationVisible && isPresentationReady
-                        // 否则 INVISIBLE；绝不用 alpha/动画假隐藏。
-                        // presentationVisible 不参与 session 业务判断（#640 A.5）。
-                        // #640 B：用 presentationReady 几何（已收集为 State）触发 recomposition，
-                        // 当前几何 ready 命中此 target 才 VISIBLE。
-                        val isReady =
-                            presentationReady?.let { r ->
-                                r.targetId == targetId && r.widthPx > 0 && r.heightPx > 0
-                            } ?: false
-                        view.visibility =
-                            if (presentationVisible && isReady) {
-                                android.view.View.VISIBLE
-                            } else {
-                                android.view.View.INVISIBLE
-                            }
-                    },
-                    onRelease = { view ->
-                        coordinator.detachView(coordinator.windowId, targetId, view)
-                        view.release()
-                    },
-                    modifier =
-                        Modifier
-                            .fillMaxSize()
-                            // #597 九：正文出现的稳定语义 ID（页面测试不靠文本找正文）。
-                            .testTag(com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds.EditorContent),
-                )
-            }
-            EditorSurfaceMode.Preview -> {
-                // #595 九 / #630 R12：非活动章节 → 只读预览（ReadonlyChapterPreview）。
-                val previewState = coordinator.getChapterPreviewState(targetId)
-                if (previewState != null && previewState.text.isNotEmpty()) {
-                    com.xiwei.sujian.feature.editor.ui.ReadonlyChapterPreview(previewState = previewState)
+    val outputTransformation =
+        remember(hiddenRanges) {
+            OutputTransformation {
+                hiddenRanges.forEach { range ->
+                    if (range.start < range.end && range.end <= length) {
+                        addStyle(
+                            SpanStyle(color = Color.Transparent),
+                            range.start,
+                            range.end,
+                        )
+                    }
                 }
             }
         }
+
+    Box(modifier = modifier) {
+        BasicTextField(
+            state = bridge.state,
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .testTag(com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds.EditorContent),
+            lineLimits = TextFieldLineLimits.MultiLine(),
+            scrollState = scrollState,
+            textStyle = textStyle.copy(color = textColor),
+            outputTransformation = outputTransformation,
+            cursorBrush =
+                if (drawsVisualCursor) {
+                    SolidColor(Color.Transparent)
+                } else {
+                    SolidColor(cursorColor)
+                },
+            onTextLayout = { getResult ->
+                getResult()?.let { result ->
+                    visualState.onAuthoritativeLayout(
+                        result = result,
+                        selection = bridge.state.selection,
+                        scrollY = scrollState.value,
+                    )
+                }
+            },
+        )
+
+        ComposeTextAnimationOverlay(
+            visualState = visualState,
+            scrollY = scrollState.value,
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 
@@ -159,8 +150,8 @@ fun WritingEditorSurface(
  * #624 评论16 问题3：confirmEditorAttached 的决策 — 只有 [WindowBindingState.Attached]
  * 且 windowId + targetId 都匹配才返回 true。
  *
- * - Attached 且匹配 → true（真正 View 已绑定，解除输入冻结）；
- * - Attaching → false（等待 AndroidView factory/attachView() 推进到 Attached，不解除冻结）；
+ * - Attached 且匹配 → true（真正编辑器已绑定，解除输入冻结）；
+ * - Attaching → false（等待推进到 Attached，不解除冻结）；
  * - Idle/Detached → false（beginEdit 发起绑定，不解除冻结）；
  * - Attached 但 windowId/targetId 不匹配 → false（残留自其他窗口的绑定）。
  */

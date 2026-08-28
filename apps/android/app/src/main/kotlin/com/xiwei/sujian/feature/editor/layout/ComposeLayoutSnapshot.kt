@@ -25,15 +25,12 @@ data class ComposeLayoutSnapshot(
  * #641 评论1 第5节：视觉光标矩形 — 从真实 [TextLayoutResult] 取，
  * 不再由动画层或 View 自行推算。
  */
-fun ComposeLayoutSnapshot.cursorRect(): Rect =
-    result.getCursorRect(selection.end)
+fun ComposeLayoutSnapshot.cursorRect(): Rect = result.getCursorRect(selection.end)
 
 /**
  * #641 评论1 第4节：行信息访问 — 直接转发 [TextLayoutResult]，
  * 不缓存第二份行段。
  */
-fun ComposeLayoutSnapshot.lineForOffset(offset: Int): Int =
-    result.getLineForOffset(offset)
+fun ComposeLayoutSnapshot.lineForOffset(offset: Int): Int = result.getLineForOffset(offset)
 
-fun ComposeLayoutSnapshot.boundingBox(offset: Int): Rect =
-    result.getBoundingBox(offset)
+fun ComposeLayoutSnapshot.boundingBox(offset: Int): Rect = result.getBoundingBox(offset)
