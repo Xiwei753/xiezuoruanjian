@@ -136,6 +136,7 @@ fun WritingEditorSurface(
         ComposeTextAnimationOverlay(
             visualState = visualState,
             scrollY = scrollState.value,
+            textColor = textColor,
             modifier = Modifier.fillMaxSize(),
         )
     }

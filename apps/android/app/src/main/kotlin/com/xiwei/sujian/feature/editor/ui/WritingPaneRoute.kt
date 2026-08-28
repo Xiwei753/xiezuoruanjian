@@ -701,6 +701,11 @@ private suspend fun handleExternalDocumentFact(
 /**
  * #595 一/二：Apply 分支执行 — Core reset + 会话事实提交 + bridge 同步 + ViewModel 同步。
  * 从 [handleExternalDocumentFact] 提取以控制 Cognitive Complexity。
+ *
+ * #641 评论1 第2节：composition 活跃时不得覆盖 TextFieldState。
+ * 先检测 ViewModel-owned bridge 的 composition；composition 活跃时只调用既有
+ * [storePendingExternalFact]/冲突通知并返回，不 reset、不覆盖 TextFieldState；
+ * composition 结束后的 snapshot/既有链再应用 pending。
  */
 private suspend fun applyExternalDocumentFact(
     coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
@@ -708,6 +713,16 @@ private suspend fun applyExternalDocumentFact(
     targetId: String,
     fact: com.xiwei.sujian.feature.editor.session.TargetDocumentFact,
 ) {
+    // #641：composition 活跃时暂存外部事实，等 composition 结束后再应用。
+    // 不得在 IME 正在编辑 buffer 时 reset Core 并覆盖 TextFieldState。
+    if (viewModel.isBridgeComposing(targetId)) {
+        coordinator.sessionCoordinator.storePendingExternalFact(targetId, fact)
+        if (fact.origin == com.xiwei.sujian.feature.editor.session.DocumentFactOrigin.SYNC_MERGED) {
+            viewModel.notifySyncMergeConflict()
+        }
+        return
+    }
+
     val resetResult =
         coordinator.resetPersistentSession(
             targetId,
@@ -728,7 +743,7 @@ private suspend fun applyExternalDocumentFact(
     // #624 评论17 问题3：真正 Apply 提交版本后清除未解决事实。
     coordinator.sessionCoordinator.consumePendingExternalFact(targetId)
     // #641 评论1 第2节：外部权威正文写回 bridge state（UTF-8→UTF-16）。
-    // composition 时由 bridge 内部处理（不覆盖正在编辑的 buffer）。
+    // composition 已由上方守卫处理，此处 bridge 一定不在 composing 态。
     val snapshot = coordinator.queryTargetSnapshot(targetId)
     if (snapshot != null) {
         viewModel.applyAuthoritativeToBridge(

@@ -411,6 +411,10 @@ class EditorViewModel(
      * [onVisualIntent] 回调：Core 提交成功后把 UTF-8 display patch / visual intent
      * 转成 UTF-16 [EditorVisualIntent] 喂给当前 [ComposeEditorVisualState]。
      * 删除范围用 previous layout，插入/移动用 current layout。
+     *
+     * #641 评论1 第3节：移除 no-op 成功 fallback — coordinator/appServiceBridge 为空时
+     * 不得返回假 Accepted bridge（把未提交到 Core 的输入伪装 Accepted）。
+     * 依赖由初始化保证；调用方必须等待真实注入。
      */
     fun bridgeForTarget(
         targetId: String,
@@ -419,17 +423,18 @@ class EditorViewModel(
     ): EditorTextFieldStateBridge {
         _bridges[targetId]?.let { return it }
 
-        val coordinator = _sessionCoordinator
-        val bridge = _appServiceBridge
-        if (coordinator == null || bridge == null) {
-            return _bridges.getOrPut(targetId) {
-                EditorTextFieldStateBridge(
-                    initialText = initialText,
-                    initialSelection = TextRange(0, 0),
-                    commitToCore = { _ -> CommitResult.Accepted },
+        val coordinator =
+            _sessionCoordinator
+                ?: error(
+                    "EditorViewModel.bridgeForTarget: sessionCoordinator 未注入 " +
+                        "— 必须通过 Factory(SujianAppDependencies) 创建，依赖由初始化保证",
                 )
-            }
-        }
+        val bridge =
+            _appServiceBridge
+                ?: error(
+                    "EditorViewModel.bridgeForTarget: appServiceBridge 未注入 " +
+                        "— 必须通过 Factory(SujianAppDependencies) 创建，依赖由初始化保证",
+                )
 
         val snapshot = coordinator.queryTargetSnapshot(targetId)
         val initialSelection =
@@ -461,6 +466,10 @@ class EditorViewModel(
      * #641 评论1 第2节：bridge commitToCore 实现 — UTF-16→UTF-8 偏移转换后调
      * Core replace，成功时 applyLocalEdit 推进 session，失败时回退到权威正文。
      * 从 [bridgeForTarget] 提取以控制方法长度与认知复杂度。
+     *
+     * 注意：Core 的 newAffectedByteRanges 在 CJK/emoji/多行上依赖完整 newText
+     * 做 UTF-8 byte→UTF-16 换算；displayPatches.firstOrNull()?.insertedText 只是
+     * 插入片段，不是完整正文，会导致 range 错位。必须用完整 old/new 文本。
      */
     private fun commitEditToCore(
         targetId: String,
@@ -500,12 +509,18 @@ class EditorViewModel(
                 ),
             )
             // #641：Core 返回 visual intent — 转成 UTF-16 喂给 ComposeEditorVisualState。
+            // 必须用完整 old/new 文本：删除范围用完整 oldText，插入/移动范围用完整 newText。
             if (visualState != null) {
                 val editResult = com.xiwei.sujian.feature.editor.projection.EditResult.fromDto(result)
+                val fullNewText =
+                    buildString {
+                        append(edit.oldText.substring(0, edit.replaceStart))
+                        append(edit.newText)
+                        append(edit.oldText.substring(edit.replaceEndExclusive))
+                    }
                 mapVisualIntentToCompose(
-                    committedText =
-                        editResult.displayPatches.firstOrNull()?.insertedText
-                            ?: edit.oldText,
+                    oldText = edit.oldText,
+                    newText = fullNewText,
                     visualIntent = editResult.visualIntent,
                     visualState = visualState,
                 )
@@ -531,16 +546,23 @@ class EditorViewModel(
      * [EditorVisualIntent] 并喂给 [ComposeEditorVisualState]。
      *
      * 映射规则：
-     * - 删除范围 → [EditorVisualIntent.Kind.Delete]，range 来自 oldAffectedByteRanges；
-     * - 插入范围 → [EditorVisualIntent.Kind.Insert]，range 来自 newAffectedByteRanges；
-     * - 移动范围 → [EditorVisualIntent.Kind.Move]，range 来自 newAffectedByteRanges；
+     * - 删除范围 → [EditorVisualIntent.Kind.Delete]，range 来自 oldAffectedByteRanges，
+     *   用完整 oldText 做 UTF-8 byte→UTF-16 换算（Core 的 oldAffectedByteRanges 是
+     *   相对于旧正文的 byte offset）；
+     * - 插入范围 → [EditorVisualIntent.Kind.Insert]，range 来自 newAffectedByteRanges，
+     *   用完整 newText 做 UTF-8 byte→UTF-16 换算（Core 的 newAffectedByteRanges 是
+     *   相对于新正文的 byte offset）；
+     * - 移动范围 → [EditorVisualIntent.Kind.Move]，range 来自 newAffectedByteRanges，
+     *   用完整 newText；
      * - 光标仅 → [EditorVisualIntent.Kind.Cursor]，affectedRanges 为空。
      *
      * 注意：Core 的 visual intent 已经区分了 old/new affected ranges，
-     * 这里按 operationKind 决定用哪一组。
+     * 这里按 operationKind 决定用哪一组。传入完整 oldText 和 newText 确保
+     * CJK/emoji/多行上的 byte→UTF-16 换算正确。
      */
     private fun mapVisualIntentToCompose(
-        committedText: String,
+        oldText: String,
+        newText: String,
         visualIntent: com.xiwei.sujian.feature.editor.projection.VisualIntent,
         visualState: ComposeEditorVisualState,
     ) {
@@ -558,17 +580,19 @@ class EditorViewModel(
         val affectedRanges =
             when (kind) {
                 EditorVisualIntent.Kind.Delete -> {
-                    // 删除：用 oldAffectedByteRanges（previous layout 的 range）。
+                    // 删除：用 oldAffectedByteRanges（previous layout 的 range），
+                    // 用完整 oldText 做 UTF-8 byte→UTF-16 换算。
                     visualIntent.oldAffectedByteRanges.map { (start: Int, end: Int) ->
-                        TextOffsetUtils.utf16TextRangeForUtf8(committedText, start, end)
+                        TextOffsetUtils.utf16TextRangeForUtf8(oldText, start, end)
                     }
                 }
                 EditorVisualIntent.Kind.Insert,
                 EditorVisualIntent.Kind.Move,
                 -> {
-                    // 插入/移动：用 newAffectedByteRanges（current layout 的 range）。
+                    // 插入/移动：用 newAffectedByteRanges（current layout 的 range），
+                    // 用完整 newText 做 UTF-8 byte→UTF-16 换算。
                     visualIntent.newAffectedByteRanges.map { (start: Int, end: Int) ->
-                        TextOffsetUtils.utf16TextRangeForUtf8(committedText, start, end)
+                        TextOffsetUtils.utf16TextRangeForUtf8(newText, start, end)
                     }
                 }
                 EditorVisualIntent.Kind.Cursor -> {
@@ -615,6 +639,15 @@ class EditorViewModel(
 
     /** #641：获取 target 对应的 bridge（已存在时返回，否则 null）— 供 WritingPane 消费。 */
     fun existingBridgeForTarget(targetId: String): EditorTextFieldStateBridge? = _bridges[targetId]
+
+    /**
+     * #641 评论1 第2节：判断指定 target 的 bridge 是否处于 IME composition 中间态。
+     * 供外部事实（同步/撤销/重载）路径在 composition 活跃时暂存 pending，
+     * 不覆盖输入法正在编辑的 buffer。
+     */
+    fun isBridgeComposing(targetId: String): Boolean {
+        return _bridges[targetId]?.state?.composition != null
+    }
 
     override fun onCleared() {
         super.onCleared()

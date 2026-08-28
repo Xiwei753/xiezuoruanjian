@@ -39,11 +39,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * 动画通过 Compose animation progress 只改变 alpha/translate/绘制，
  * 不 scrollTo、不改 selection/IME/height/viewport。动画结束清 hiddenRanges，
  * 系统正文马上可见。
+ *
+ * #641 评论1 第3节：overlay 文字颜色不能硬编码成与正文不一致的黑色，
+ * 必须从 [WritingEditorSurface] 传入当前 textColor/字体 style。
  */
 @Composable
 fun ComposeTextAnimationOverlay(
     visualState: ComposeEditorVisualState,
     scrollY: Int,
+    textColor: Color,
     modifier: Modifier = Modifier,
 ) {
     val hiddenRanges by visualState.hiddenRanges.collectAsStateWithLifecycle()
@@ -69,31 +73,33 @@ fun ComposeTextAnimationOverlay(
 
     Box(
         modifier =
-            modifier.drawBehind {
-                if (!hasAnimation) return@drawBehind
-                val current = visualState.currentLayout() ?: return@drawBehind
-                val previous = visualState.previousLayout()
-                val intent = activeIntent ?: return@drawBehind
+            modifier
+                .drawBehind {
+                    if (!hasAnimation) return@drawBehind
+                    val current = visualState.currentLayout() ?: return@drawBehind
+                    val previous = visualState.previousLayout()
+                    val intent = activeIntent ?: return@drawBehind
 
-                drawAnimatedRanges(
-                    currentResult = current.result,
-                    previousResult = previous?.result,
-                    hiddenRanges = hiddenRanges,
-                    intent = intent,
-                    progress = progress,
-                    scrollY = scrollY,
-                )
-
-                // 视觉光标：按 progress 从 old cursor rect 插值到 new cursor rect。
-                if (intent.kind == EditorVisualIntent.Kind.Cursor && cursorSnapshot != null) {
-                    drawVisualCursor(
-                        snapshot = cursorSnapshot,
+                    drawAnimatedRanges(
+                        currentResult = current.result,
+                        previousResult = previous?.result,
+                        hiddenRanges = hiddenRanges,
+                        intent = intent,
                         progress = progress,
                         scrollY = scrollY,
-                        density = density,
+                        textColor = textColor,
                     )
-                }
-            },
+
+                    // 视觉光标：按 progress 从 old cursor rect 插值到 new cursor rect。
+                    if (intent.kind == EditorVisualIntent.Kind.Cursor && cursorSnapshot != null) {
+                        drawVisualCursor(
+                            snapshot = cursorSnapshot,
+                            progress = progress,
+                            scrollY = scrollY,
+                            density = density,
+                        )
+                    }
+                },
     )
 }
 
@@ -161,7 +167,11 @@ private fun lerp(
 /**
  * #641 评论1 第5节：对同一份 [TextLayoutResult] 做 `clipRect + drawText(result)`。
  * 一个 range 跨多行就按真实 layout 的行段拆成多个 clip rect。
+ *
+ * #641 评论1 第3节：overlay 文字颜色不能硬编码成与正文不一致的黑色，
+ * 必须从 [WritingEditorSurface] 传入当前 textColor。
  */
+@Suppress("LongParameterList")
 private fun DrawScope.drawAnimatedRanges(
     currentResult: TextLayoutResult,
     previousResult: TextLayoutResult?,
@@ -169,19 +179,20 @@ private fun DrawScope.drawAnimatedRanges(
     intent: EditorVisualIntent,
     progress: Float,
     scrollY: Int,
+    textColor: Color,
 ) {
     when (intent.kind) {
         EditorVisualIntent.Kind.Insert -> {
             val alpha = progress
             for (range in hiddenRanges) {
-                drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY)
+                drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
             }
         }
         EditorVisualIntent.Kind.Delete -> {
             val alpha = 1f - progress
             val result = previousResult ?: currentResult
             for (range in hiddenRanges) {
-                drawRangeText(result, range, alpha = alpha, scrollY = scrollY)
+                drawRangeText(result, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
             }
         }
         EditorVisualIntent.Kind.Move -> {
@@ -191,11 +202,11 @@ private fun DrawScope.drawAnimatedRanges(
             val alpha = progress
             if (previousResult != null) {
                 for (range in hiddenRanges) {
-                    drawRangeText(previousResult, range, alpha = 1f - alpha, scrollY = scrollY)
+                    drawRangeText(previousResult, range, alpha = 1f - alpha, scrollY = scrollY, textColor = textColor)
                 }
             }
             for (range in hiddenRanges) {
-                drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY)
+                drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
             }
         }
         EditorVisualIntent.Kind.Cursor -> {
@@ -208,12 +219,16 @@ private fun DrawScope.drawAnimatedRanges(
  * #641：按真实 layout 的行段拆成多个 clip rect，对每个行段做
  * `clipRect + drawText(layoutResult)`。drawText 使用同一份 [TextLayoutResult]，
  * 不用 TextMeasurer 再排一次。
+ *
+ * #641 评论1 第3节：overlay 文字颜色不能硬编码成与正文不一致的黑色，
+ * 必须从 [WritingEditorSurface] 传入当前 textColor。
  */
 private fun DrawScope.drawRangeText(
     result: TextLayoutResult,
     range: TextRange,
     alpha: Float,
     scrollY: Int,
+    textColor: Color,
 ) {
     if (range.start >= range.end) return
     if (range.end > result.layoutInput.text.length) return
@@ -233,7 +248,7 @@ private fun DrawScope.drawRangeText(
         ) {
             drawText(
                 textLayoutResult = result,
-                color = Color.Black,
+                color = textColor,
                 topLeft = Offset(0f, -scrollY.toFloat()),
                 alpha = alpha,
             )

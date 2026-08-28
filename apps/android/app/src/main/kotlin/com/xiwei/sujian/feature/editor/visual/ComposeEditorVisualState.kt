@@ -78,6 +78,11 @@ class ComposeEditorVisualState(
     /**
      * #641 评论1 第5节：系统给出权威布局 — 只记录，不修改输入几何。
      * 动画层据此算受影响 range，但不 scrollTo、不改 selection、不改 editor height。
+     *
+     * #641 评论1 第5节：onVisualIntent 时机 — commit 时 currentSnapshot 可能还是旧 layout。
+     * 在新 layout 到达后，若当前活跃 intent 是 Cursor，重新构建 cursor snapshot
+     * （用新的 currentSnapshot 作为 newCursorRect，旧的 previousSnapshot 作为 oldCursorRect），
+     * 避免 commit 时两份 rect 都是旧 layout。
      */
     fun onAuthoritativeLayout(
         result: TextLayoutResult,
@@ -86,6 +91,10 @@ class ComposeEditorVisualState(
     ) {
         previousSnapshot = currentSnapshot
         currentSnapshot = ComposeLayoutSnapshot(result, selection, scrollY)
+        // 新 layout 到达后，若当前活跃 intent 是 Cursor，重新构建 cursor snapshot。
+        if (_activeIntent.value?.kind == EditorVisualIntent.Kind.Cursor) {
+            buildCursorSnapshot()?.let { _visualCursorSnapshot.update { it } }
+        }
     }
 
     /**
