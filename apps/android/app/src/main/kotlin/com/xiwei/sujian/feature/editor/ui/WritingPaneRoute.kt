@@ -844,9 +844,30 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
             }
         }
 
+    val oldSelectionEndUtf16 =
+        if (event.oldSelectionEndUtf8 in 0..event.oldText.length) {
+            TextOffsetUtils.utf16OffsetForUtf8Byte(
+                text = event.oldText,
+                utf8ByteOffset = event.oldSelectionEndUtf8,
+            )
+        } else {
+            null
+        }
+    val newSelectionEndUtf16 =
+        if (event.newSelectionEndUtf8 in 0..event.newText.length) {
+            TextOffsetUtils.utf16OffsetForUtf8Byte(
+                text = event.newText,
+                utf8ByteOffset = event.newSelectionEndUtf8,
+            )
+        } else {
+            null
+        }
+
     return EditorVisualIntent(
         affectedRanges = affectedRanges,
         kind = kind,
+        oldSelectionEndUtf16 = oldSelectionEndUtf16,
+        newSelectionEndUtf16 = newSelectionEndUtf16,
     )
 }
 

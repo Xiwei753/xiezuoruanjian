@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.update
 data class EditorVisualIntent(
     val affectedRanges: List<TextRange>,
     val kind: Kind,
+    val oldSelectionEndUtf16: Int? = null,
+    val newSelectionEndUtf16: Int? = null,
 ) {
     enum class Kind { Insert, Delete, Move, Cursor }
 }
@@ -137,13 +139,16 @@ class ComposeEditorVisualState(
     private fun buildCursorSnapshot(): VisualCursorSnapshot? {
         val prev = previousSnapshot ?: return null
         val curr = currentSnapshot ?: return null
-        val oldCursorRect = prev.result.getCursorRect(prev.selection.end)
-        val newCursorRect = curr.result.getCursorRect(curr.selection.end)
+        val intent = _activeIntent.value
+        val oldSelectionEnd = intent?.oldSelectionEndUtf16 ?: prev.selection.end
+        val newSelectionEnd = intent?.newSelectionEndUtf16 ?: curr.selection.end
+        val oldCursorRect = prev.result.getCursorRect(oldSelectionEnd)
+        val newCursorRect = curr.result.getCursorRect(newSelectionEnd)
         return VisualCursorSnapshot(
             oldCursorRect = oldCursorRect,
             newCursorRect = newCursorRect,
-            oldSelectionEnd = prev.selection.end,
-            newSelectionEnd = curr.selection.end,
+            oldSelectionEnd = oldSelectionEnd,
+            newSelectionEnd = newSelectionEnd,
         )
     }
 
