@@ -194,8 +194,9 @@ private fun WritingPaneEditorContent(
         EditorSurfaceMode.EditorHost -> {
             // #641 评论1 第2节：bridge 由 EditorViewModel 拥有，按 targetId 生命周期
             // 稳定存活，不每次重组重新创建。初始 selection 来自 Core/session UTF-8 → UTF-16。
-            val bridge = viewModel.bridgeForTarget(targetId, uiState.content)
+            // visualState 传给 bridge，使 Core 返回的 visual intent 能转成 UTF-16 喂给视觉层。
             val visualState = remember { com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState() }
+            val bridge = viewModel.bridgeForTarget(targetId, uiState.content, visualState)
 
             // #641 评论1 第2节：观察 TextFieldState 快照，提交已完成的文本变化给 Core。
             // IME composing 中间态不提交（bridge.onInputSnapshot 内部判断）。

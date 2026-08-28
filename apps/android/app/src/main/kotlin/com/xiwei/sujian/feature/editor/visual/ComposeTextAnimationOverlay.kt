@@ -6,15 +6,20 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.drawText
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
@@ -26,7 +31,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * - 删除文字：保留上一份 [TextLayoutResult]，按旧 range 的 bounding box 画旧布局；
  * - 同行移动/自动折行/手动换行：old/new 坐标分别来自前后两份真实 [TextLayoutResult]；
  * - 视觉光标：从 `oldResult.getCursorRect(oldSelection.end)` 插值到
- *   `newResult.getCursorRect(newSelection.end)`。
+ *   `newResult.getCursorRect(newSelection.end)`，按 progress 插值 x/y/width/height。
  *
  * 绘制受影响 range 时，不用 `TextMeasurer` 再排一次。对同一份 [TextLayoutResult]
  * 做 `clipRect + drawText(result)`。一个 range 跨多行就按真实 layout 的行段拆成多个 clip rect。
@@ -43,6 +48,9 @@ fun ComposeTextAnimationOverlay(
 ) {
     val hiddenRanges by visualState.hiddenRanges.collectAsStateWithLifecycle()
     val activeIntent by visualState.activeIntent.collectAsStateWithLifecycle()
+    val cursorSnapshotValue by visualState.visualCursorSnapshot.collectAsStateWithLifecycle()
+    val density = LocalDensity.current
+    val cursorSnapshot = remember(cursorSnapshotValue) { cursorSnapshotValue }
 
     val hasAnimation = hiddenRanges.isNotEmpty() || activeIntent != null
 
@@ -75,11 +83,80 @@ fun ComposeTextAnimationOverlay(
                     progress = progress,
                     scrollY = scrollY,
                 )
+
+                // 视觉光标：按 progress 从 old cursor rect 插值到 new cursor rect。
+                if (intent.kind == EditorVisualIntent.Kind.Cursor && cursorSnapshot != null) {
+                    drawVisualCursor(
+                        snapshot = cursorSnapshot,
+                        progress = progress,
+                        scrollY = scrollY,
+                        density = density,
+                    )
+                }
             },
     )
 }
 
 private const val ANIMATION_DURATION_MS = 200
+
+/** 视觉光标颜色 — 与当前设计系统一致（可随 text style 注入）。 */
+private val VisualCursorColor = Color(0xFF1A73E8)
+
+/** 视觉光标宽度（dp）。 */
+private val VisualCursorWidthDp: Dp = 2.dp
+
+/**
+ * #641 评论1 第5节：视觉光标插值绘制 — 从 [oldCursorRect] 按 progress 插值到
+ * [newCursorRect]。光标宽度/高度随 rect 插值，颜色固定为设计系统色。
+ * BasicTextField 的 cursorBrush 在动画期间透明，动画结束 clearAnimation 后恢复。
+ */
+private fun DrawScope.drawVisualCursor(
+    snapshot: VisualCursorSnapshot,
+    progress: Float,
+    scrollY: Int,
+    density: androidx.compose.ui.unit.Density,
+) {
+    val oldRect = snapshot.oldCursorRect
+    val newRect = snapshot.newCursorRect
+
+    val interpolatedLeft = lerp(oldRect.left, newRect.left, progress)
+    val interpolatedTop = lerp(oldRect.top, newRect.top, progress)
+    val interpolatedBottom = lerp(oldRect.bottom, newRect.bottom, progress)
+    val interpolatedWidth = lerp(oldRect.width, newRect.width, progress)
+
+    val cursorWidth = density.run { VisualCursorWidthDp.toPx() }
+    val cursorLeft = interpolatedLeft - cursorWidth / 2
+    val cursorRight = cursorLeft + maxOf(cursorWidth, interpolatedWidth)
+
+    val cursorTop = interpolatedTop - scrollY.toFloat()
+    val cursorBottom = interpolatedBottom - scrollY.toFloat()
+
+    if (cursorBottom <= 0f || cursorTop >= size.height) return
+    if (cursorRight <= 0f || cursorLeft >= size.width) return
+
+    drawRect(
+        color = VisualCursorColor,
+        topLeft = Offset(cursorLeft, cursorTop),
+        size = Size(cursorRight - cursorLeft, cursorBottom - cursorTop),
+    )
+
+    // 闪烁：progress 接近 1 时淡出，提示动画即将结束。
+    if (progress >= 0.85f) {
+        val fadeAlpha = 1f - (progress - 0.85f) / 0.15f
+        drawRect(
+            color = VisualCursorColor.copy(alpha = fadeAlpha),
+            topLeft = Offset(cursorLeft, cursorTop),
+            size = Size(cursorRight - cursorLeft, cursorBottom - cursorTop),
+        )
+    }
+}
+
+/** 线性插值 helper。 */
+private fun lerp(
+    a: Float,
+    b: Float,
+    t: Float,
+): Float = a + (b - a) * t.coerceIn(0f, 1f)
 
 /**
  * #641 评论1 第5节：对同一份 [TextLayoutResult] 做 `clipRect + drawText(result)`。
@@ -108,15 +185,21 @@ private fun DrawScope.drawAnimatedRanges(
             }
         }
         EditorVisualIntent.Kind.Move -> {
-            val alpha = 1f
+            // Move：从 previous layout 的 old range 位置淡出，
+            // 从 current layout 的 new range 位置淡入。
+            // 若 previous layout 缺失，则只在 current 位置淡入。
+            val alpha = progress
+            if (previousResult != null) {
+                for (range in hiddenRanges) {
+                    drawRangeText(previousResult, range, alpha = 1f - alpha, scrollY = scrollY)
+                }
+            }
             for (range in hiddenRanges) {
                 drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY)
             }
         }
         EditorVisualIntent.Kind.Cursor -> {
-            // 视觉光标由 BasicTextField 的 cursorBrush 管理；
-            // overlay 不额外画光标（cursorBrush 已设为透明时系统不画，
-            // 动画结束后 clearAnimation 恢复系统光标）。
+            // 视觉光标由 drawVisualCursor 单独绘制（基于 cursorSnapshot 插值）。
         }
     }
 }

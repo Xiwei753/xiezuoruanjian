@@ -67,11 +67,14 @@ import com.xiwei.sujian.feature.editor.input.CommittedTextEdit
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
 import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.interop.TextEditSessionBridge
+import com.xiwei.sujian.feature.editor.projection.VisualIntent
 import com.xiwei.sujian.feature.editor.session.DocumentSaveReceiptTracker
 import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.TargetDocumentFact
 import com.xiwei.sujian.feature.editor.session.applyLocalEdit
+import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
+import com.xiwei.sujian.feature.editor.visual.EditorVisualIntent
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
@@ -404,10 +407,15 @@ class EditorViewModel(
      *
      * [commitToCore] lambda 内统一 UTF-16→UTF-8（replace offset）和
      * UTF-8→UTF-16（rejection selection），不再把 byte offset 当 Compose offset。
+     *
+     * [onVisualIntent] 回调：Core 提交成功后把 UTF-8 display patch / visual intent
+     * 转成 UTF-16 [EditorVisualIntent] 喂给当前 [ComposeEditorVisualState]。
+     * 删除范围用 previous layout，插入/移动用 current layout。
      */
     fun bridgeForTarget(
         targetId: String,
         initialText: String,
+        visualState: ComposeEditorVisualState? = null,
     ): EditorTextFieldStateBridge {
         _bridges[targetId]?.let { return it }
 
@@ -437,7 +445,7 @@ class EditorViewModel(
         val effectiveInitialText = snapshot?.text ?: initialText
 
         val commitToCore: (CommittedTextEdit) -> CommitResult = { edit ->
-            commitEditToCore(targetId, coordinator, bridge, edit)
+            commitEditToCore(targetId, coordinator, bridge, edit, visualState)
         }
 
         return _bridges.getOrPut(targetId) {
@@ -459,6 +467,7 @@ class EditorViewModel(
         coordinator: EditorSessionCoordinator,
         bridge: AppServiceBridge,
         edit: CommittedTextEdit,
+        visualState: ComposeEditorVisualState?,
     ): CommitResult {
         val lease = coordinator.currentInputLease()
         if (lease == null || lease.targetId != targetId) {
@@ -490,6 +499,17 @@ class EditorViewModel(
                     contentChanged = result.displayPatches.isNotEmpty(),
                 ),
             )
+            // #641：Core 返回 visual intent — 转成 UTF-16 喂给 ComposeEditorVisualState。
+            if (visualState != null) {
+                val editResult = com.xiwei.sujian.feature.editor.projection.EditResult.fromDto(result)
+                mapVisualIntentToCompose(
+                    committedText =
+                        editResult.displayPatches.firstOrNull()?.insertedText
+                            ?: edit.oldText,
+                    visualIntent = editResult.visualIntent,
+                    visualState = visualState,
+                )
+            }
             return CommitResult.Accepted
         }
         val fallbackText = currentSnapshot?.text ?: edit.oldText
@@ -504,6 +524,64 @@ class EditorViewModel(
                 edit.selection
             }
         return CommitResult.Rejected(fallbackText, fallbackSelection)
+    }
+
+    /**
+     * #641 评论1 第2节：把 Core 返回的 [VisualIntent] 转成 Compose UTF-16
+     * [EditorVisualIntent] 并喂给 [ComposeEditorVisualState]。
+     *
+     * 映射规则：
+     * - 删除范围 → [EditorVisualIntent.Kind.Delete]，range 来自 oldAffectedByteRanges；
+     * - 插入范围 → [EditorVisualIntent.Kind.Insert]，range 来自 newAffectedByteRanges；
+     * - 移动范围 → [EditorVisualIntent.Kind.Move]，range 来自 newAffectedByteRanges；
+     * - 光标仅 → [EditorVisualIntent.Kind.Cursor]，affectedRanges 为空。
+     *
+     * 注意：Core 的 visual intent 已经区分了 old/new affected ranges，
+     * 这里按 operationKind 决定用哪一组。
+     */
+    private fun mapVisualIntentToCompose(
+        committedText: String,
+        visualIntent: com.xiwei.sujian.feature.editor.projection.VisualIntent,
+        visualState: ComposeEditorVisualState,
+    ) {
+        val kind =
+            when {
+                visualIntent.isDelete() -> EditorVisualIntent.Kind.Delete
+                visualIntent.isInsert() -> EditorVisualIntent.Kind.Insert
+                visualIntent.isReplace() || visualIntent.isCompositionCommit() || visualIntent.isCompositionUpdate() ->
+                    EditorVisualIntent.Kind.Move
+                visualIntent.isCursorOnly() -> EditorVisualIntent.Kind.Cursor
+                visualIntent.isCompositionCancel() -> EditorVisualIntent.Kind.Delete
+                else -> EditorVisualIntent.Kind.Move
+            }
+
+        val affectedRanges =
+            when (kind) {
+                EditorVisualIntent.Kind.Delete -> {
+                    // 删除：用 oldAffectedByteRanges（previous layout 的 range）。
+                    visualIntent.oldAffectedByteRanges.map { (start: Int, end: Int) ->
+                        TextOffsetUtils.utf16TextRangeForUtf8(committedText, start, end)
+                    }
+                }
+                EditorVisualIntent.Kind.Insert,
+                EditorVisualIntent.Kind.Move,
+                -> {
+                    // 插入/移动：用 newAffectedByteRanges（current layout 的 range）。
+                    visualIntent.newAffectedByteRanges.map { (start: Int, end: Int) ->
+                        TextOffsetUtils.utf16TextRangeForUtf8(committedText, start, end)
+                    }
+                }
+                EditorVisualIntent.Kind.Cursor -> {
+                    emptyList<TextRange>()
+                }
+            }
+
+        visualState.onVisualIntent(
+            EditorVisualIntent(
+                affectedRanges = affectedRanges,
+                kind = kind,
+            ),
+        )
     }
 
     /**
@@ -565,11 +643,12 @@ class EditorViewModel(
      * #624 评论12 第1项：workspace 离开正文后的业务关闭收口。
      *
      * 由 [com.xiwei.sujian.feature.project.ui.ProjectWorkspaceScreen] 的 location
-     * observer 在导航成功离开 Editor 后调用（离开前的保存已由 guardedBack →
-     * ActiveDocumentGate flush 在导航提交前完成）。Rust session 已经由
-     * [com.xiwei.sujian.feature.editor.window.EditorWindowHost.closeTarget] 关闭，
-     * 这里清空 ViewModel 的章节身份：
+     * observer 在导航成功离开 Editor 后调用：
+     * 1. 先 [flushBridgeForClose] 把屏幕最终内容（含 IME composition 上屏）提交给 Core；
+     * 2. 再 [releaseBridge] 移除 bridge；
+     * 3. 然后调用方（ProjectWorkspaceScreen）调用 [closeTarget] 关闭 Rust session。
      *
+     * 清空 ViewModel 的章节身份：
      * - `currentSession = null` — 从章节树再点 A，switchChapterLocked 不再命中
      *   "相同章节直接 Success" 的 no-op，会走完整重新加载；点 B 也不会把已关闭
      *   的 A 当 oldSession 去拿活动 lease（拿不到 → 误报 SaveFailed）；

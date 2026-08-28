@@ -109,11 +109,14 @@ internal fun ProjectWorkspaceScreen(
         if (previousEditor != null && location !is WorkspaceLocation.Editor) {
             val targetId =
                 "chapter-body:${previousEditor.projectId}:${previousEditor.volumeId}:${previousEditor.chapterId}"
+            // #641：flush 必须在 closeTarget 之前 — 先把屏幕最终内容（含 IME composition
+            // 上屏）提交给 Core，再关闭 Rust session。closeTarget 后 session 失效，
+            // flush 再调用 kernelBridge.replace 会失败。
+            editorViewModel.finishWorkspaceClose(targetId)
             editorHost?.closeTarget(
                 targetId,
                 com.xiwei.sujian.feature.editor.session.SessionCloseReason.WORKSPACE_NAVIGATION,
             )
-            editorViewModel.finishWorkspaceClose(targetId)
         }
         when (location) {
             is WorkspaceLocation.ProjectList -> {
