@@ -1,7 +1,6 @@
 package com.xiwei.sujian.feature.editor.session
 
 import androidx.compose.runtime.Immutable
-import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import uniffi.writer_core.EditorContentDeltaDto
 import uniffi.writer_core.EditorTransactionCauseDto
 

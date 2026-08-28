@@ -367,9 +367,6 @@ style:
     active: true
   ObjectLiteralToLambda:
     active: true
-    excludes:
-      # Choreographer.FrameCallback 是 Android 抽象类（非 SAM 接口），Kotlin 不支持 lambda 转换
-      - "**/kotlin/com/xiwei/sujian/feature/editor/window/WindowDisplayFrameClock.kt"
   UnnecessaryParentheses:
     active: false    # 现有代码大量括号用于可读性（动画/位运算），整改代价大
   UntilInsteadOfRangeTo:

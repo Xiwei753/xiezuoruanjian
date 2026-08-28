@@ -1038,6 +1038,50 @@ def rule_deleted_types_stay_deleted() -> list[Finding]:
                         message="渲染方不得读 UI 模型交互状态字段（#617 评论八：展开/选中从 expandedVolumeIds/selectedChapterId 派生）",
                     )
                 )
+    # #641：旧 View 输入/排版/viewport/FrameClock/pipeline/visual/render/layout/projection
+    # 死代码闭包已删除，不得复活。
+    deleted_641_types = [
+        "SujianEditorView", "EditorViewportController",
+        "AndroidInputAdapter", "AndroidInputConnection", "InputCursorMapper",
+        "DisplayTextMirror", "DisplayTextProjection", "TextOffsetIndex",
+        "AndroidEditorPipeline", "EditPipeline", "EditorCommandPort", "FrameRenderInput",
+        "AndroidLayoutEngine", "AndroidLineSnapshot", "AndroidLineSnapshotBuilder",
+        "AffectedLayoutRevision", "AffectedLineCapture", "AndroidLayoutRevision",
+        "FirstLineIndentSpan", "ParagraphStyleProjection",
+        "AndroidTextAnimationRenderer", "AndroidTextRenderer", "EditorFrameComposer",
+        "AndroidTextAnimationEngine", "AndroidVisualPlanner",
+        "AnimationTimeline", "AnimationTimeSource", "CaptureMethod", "ColorDistance",
+        "PreparedVisualTransaction", "RebaseMappingProvider",
+        "TextRevealGeometry", "TextRevealSpec", "VisualProgressWindow", "VisualResourceStore",
+        "VisualTrackState",
+        "AffectedLayoutPlanner", "BlockShiftPlanner", "CaretRevealPlanner",
+        "InsertDeletePlanner", "MoveCrossfadePlanner", "RebasePlanner", "SnapshotPlanner",
+        "WindowDisplayFrameClock",
+    ]
+    for path in collect_kt_files(APP_SRC, "/feature/editor/"):
+        effective = "\n".join(effective_lines(path.read_text(encoding="utf-8")))
+        for deleted_type in deleted_641_types:
+            if re.search(rf"\b(class|interface|data class|object|enum class)\s+{deleted_type}\b", effective):
+                findings.append(
+                    Finding(
+                        path=str(path.relative_to(APP_SRC)),
+                        line=0,
+                        message=f"{deleted_type} 必须保持删除（#641：旧 View 输入/排版/viewport/pipeline 死代码闭包）",
+                    )
+                )
+    # EditorEditSource 不得在 platform 包复活（已迁移到 session 包）
+    platform_edit_source = APP_SRC / "feature" / "editor" / "platform"
+    if platform_edit_source.exists():
+        for path in collect_kt_files(platform_edit_source, ""):
+            effective = "\n".join(effective_lines(path.read_text(encoding="utf-8")))
+            if re.search(r"\b(enum class|class|object)\s+EditorEditSource\b", effective):
+                findings.append(
+                    Finding(
+                        path=str(path.relative_to(APP_SRC)),
+                        line=0,
+                        message="EditorEditSource 不得在 platform 包复活（#641：已迁移到 session 包）",
+                    )
+                )
     return findings
 
 
@@ -1103,16 +1147,6 @@ def rule_source_contracts() -> list[Finding]:
 
     sync_bridge = APP_SRC / "feature" / "sync" / "data" / "interop" / "SyncBridge.kt"
     require(sync_bridge, r"fun\s+clearSyncSecretsOverride\s*\(", "SyncBridge.clearSyncSecretsOverride")
-
-    engine = APP_SRC / "feature" / "editor" / "visual" / "AndroidTextAnimationEngine.kt"
-    require(engine, r"fun\s+submitCursorOnlyTransaction\s*\(", "AndroidTextAnimationEngine.submitCursorOnlyTransaction")
-
-    # #602 目录重构：SujianEditorView 在 feature/editor/platform。
-    view = APP_SRC / "feature" / "editor" / "platform" / "SujianEditorView.kt"
-    require(view, r"fun\s+setKernelAnimationEnabled\s*\(", "SujianEditorView.setKernelAnimationEnabled(Boolean)")
-
-    frame_input = APP_SRC / "feature" / "editor" / "pipeline" / "FrameRenderInput.kt"
-    require(frame_input, r"cursorTransition\b", "FrameRenderInput.cursorTransition 字段（与文字事务解耦）")
 
     preview = APP_SRC / "feature" / "editor" / "projection" / "ChapterPreviewState.kt"
     if preview.exists():

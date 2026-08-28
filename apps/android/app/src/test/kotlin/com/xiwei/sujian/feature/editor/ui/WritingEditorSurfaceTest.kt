@@ -7,11 +7,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * #640 A.3：editorSurfaceMode 纯函数决策测试 —
- * 活动 target 始终组合 AndroidView（EditorHost），用 View.INVISIBLE 控制可见性。
+ * #641：editorSurfaceMode 纯函数决策测试 —
+ * 活动章节用 BasicTextField 作为唯一正文输入/排版/光标，动画只做显示层。
  *
- * 活动章节从进入页面到稳定显示必须只有 SujianEditorView 一套正文 renderer。
- * - isActivePane=true → EditorHost（始终组合 AndroidView，用 View.INVISIBLE 控制可见性）；
+ * - isActivePane=true → EditorHost（BasicTextField + ComposeTextAnimationOverlay）；
  * - isActivePane=false + 匹配 Attaching/Attached/Committing/Cancelling → EditorHost；
  * - isActivePane=false + Idle/Detached/Detaching → Preview。
  */

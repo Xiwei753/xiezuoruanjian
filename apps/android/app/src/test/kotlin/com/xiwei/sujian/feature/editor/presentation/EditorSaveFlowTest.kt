@@ -3,13 +3,13 @@ package com.xiwei.sujian.feature.editor.presentation
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
-import com.xiwei.sujian.feature.editor.platform.EditorEditSource
 import com.xiwei.sujian.feature.editor.session.ChapterContentSavePort
 import com.xiwei.sujian.feature.editor.session.ChapterSavedSignal
 import com.xiwei.sujian.feature.editor.session.DocumentVersion
 import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
 import com.xiwei.sujian.feature.editor.session.EditorContentDelta
 import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
+import com.xiwei.sujian.feature.editor.session.EditorEditSource
 import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
