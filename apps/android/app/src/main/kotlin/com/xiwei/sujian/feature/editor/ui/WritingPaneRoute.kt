@@ -13,6 +13,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
+import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.presentation.EditorSettingsState
 import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
 import com.xiwei.sujian.feature.editor.presentation.applyExternalContentToUi
@@ -22,6 +23,7 @@ import com.xiwei.sujian.feature.editor.presentation.notifySyncMergeConflict
 import com.xiwei.sujian.feature.editor.presentation.onEditorApplied
 import com.xiwei.sujian.feature.editor.presentation.reloadSettings
 import com.xiwei.sujian.feature.editor.presentation.shouldConsumePendingAfterFact
+import com.xiwei.sujian.feature.editor.session.CoreVisualIntentEvent
 import com.xiwei.sujian.feature.editor.session.ExternalContentDecision
 import com.xiwei.sujian.feature.editor.session.SessionResetSource
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
@@ -30,6 +32,8 @@ import com.xiwei.sujian.feature.editor.session.applyExternalContentFact
 import com.xiwei.sujian.feature.editor.session.consumePendingExternalFact
 import com.xiwei.sujian.feature.editor.session.shouldApplyExternalContent
 import com.xiwei.sujian.feature.editor.session.storePendingExternalFact
+import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
+import com.xiwei.sujian.feature.editor.visual.EditorVisualIntent
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 
 /**
@@ -194,9 +198,9 @@ private fun WritingPaneEditorContent(
         EditorSurfaceMode.EditorHost -> {
             // #641 评论1 第2节：bridge 由 EditorViewModel 拥有，按 targetId 生命周期
             // 稳定存活，不每次重组重新创建。初始 selection 来自 Core/session UTF-8 → UTF-16。
-            // visualState 传给 bridge，使 Core 返回的 visual intent 能转成 UTF-16 喂给视觉层。
-            val visualState = remember { com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState() }
-            val bridge = viewModel.bridgeForTarget(targetId, uiState.content, visualState)
+            // visualState 在 UI 层创建 — presentation 层不得依赖 feature.editor.visual。
+            val visualState = remember { ComposeEditorVisualState() }
+            val bridge = viewModel.bridgeForTarget(targetId, uiState.content)
 
             // #641 评论1 第2节：观察 TextFieldState 快照，提交已完成的文本变化给 Core。
             // IME composing 中间态不提交（bridge.onInputSnapshot 内部判断）。
@@ -230,6 +234,14 @@ private fun WritingPaneEditorContent(
                     }
                 }
             }
+
+            // #641：收集 Core 视觉意图事件，映射为 EditorVisualIntent 喂给 ComposeEditorVisualState。
+            // 按 target 过滤，避免其他 target 的视觉意图污染当前 overlay。
+            CollectVisualIntentEvents(
+                viewModel = viewModel,
+                targetId = targetId,
+                visualState = visualState,
+            )
 
             WritingEditorSurface(
                 bridge = bridge,
@@ -781,4 +793,81 @@ private fun consumePendingForReapplyIfApplicable(
  * （[EditorViewModel.bridgeForTarget]），按 targetId 生命周期稳定存活，
  * 不每次重组重建。初始 selection 来自 Core/session UTF-8 → UTF-16。
  * commitToCore lambda 内统一 UTF-16→UTF-8 / UTF-8→UTF-16 偏移转换。
+ *
+ * #641：把 Core [VisualIntent]（UTF-8 byte ranges）转成 Compose [EditorVisualIntent]（UTF-16 ranges）。
+ *
+ * 映射规则：
+ * - 删除范围 → [EditorVisualIntent.Kind.Delete]，range 来自 oldAffectedByteRanges，
+ *   用完整 oldText 做 UTF-8 byte→UTF-16 换算；
+ * - 插入范围 → [EditorVisualIntent.Kind.Insert]，range 来自 newAffectedByteRanges，
+ *   用完整 newText 做 UTF-8 byte→UTF-16 换算；
+ * - 移动范围 → [EditorVisualIntent.Kind.Move]，range 来自 newAffectedByteRanges，
+ *   用完整 newText；
+ * - 光标仅 → [EditorVisualIntent.Kind.Cursor]，affectedRanges 为空。
+ *
+ * 注意：Core 的 visual intent 已经区分了 old/new affected ranges，
+ * 这里按 operationKind 决定用哪一组。传入完整 oldText 和 newText 确保
+ * CJK/emoji/多行上的 byte→UTF-16 换算正确。
  */
+private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent): EditorVisualIntent {
+    val kind =
+        when {
+            event.visualIntent.isDelete() -> EditorVisualIntent.Kind.Delete
+            event.visualIntent.isInsert() -> EditorVisualIntent.Kind.Insert
+            event.visualIntent.isReplace() || event.visualIntent.isCompositionCommit() ||
+                event.visualIntent.isCompositionUpdate() -> EditorVisualIntent.Kind.Move
+            event.visualIntent.isCursorOnly() -> EditorVisualIntent.Kind.Cursor
+            event.visualIntent.isCompositionCancel() -> EditorVisualIntent.Kind.Delete
+            else -> EditorVisualIntent.Kind.Move
+        }
+
+    val affectedRanges =
+        when (kind) {
+            EditorVisualIntent.Kind.Delete -> {
+                // 删除：用 oldAffectedByteRanges（previous layout 的 range），
+                // 用完整 oldText 做 UTF-8 byte→UTF-16 换算。
+                event.visualIntent.oldAffectedByteRanges.map { (start: Int, end: Int) ->
+                    TextOffsetUtils.utf16TextRangeForUtf8(event.oldText, start, end)
+                }
+            }
+            EditorVisualIntent.Kind.Insert,
+            EditorVisualIntent.Kind.Move,
+            -> {
+                // 插入/移动：用 newAffectedByteRanges（current layout 的 range），
+                // 用完整 newText 做 UTF-8 byte→UTF-16 换算。
+                event.visualIntent.newAffectedByteRanges.map { (start: Int, end: Int) ->
+                    TextOffsetUtils.utf16TextRangeForUtf8(event.newText, start, end)
+                }
+            }
+            EditorVisualIntent.Kind.Cursor -> {
+                emptyList<androidx.compose.ui.text.TextRange>()
+            }
+        }
+
+    return EditorVisualIntent(
+        affectedRanges = affectedRanges,
+        kind = kind,
+    )
+}
+
+/**
+ * #641：收集 Core 视觉意图事件，映射为 [EditorVisualIntent] 喂给 [ComposeEditorVisualState]。
+ * 按 target 过滤，避免其他 target 的视觉意图污染当前 overlay。
+ *
+ * 提取为独立 composable 以降低 [WritingPaneEditorContent] 的认知复杂度。
+ */
+@Composable
+private fun CollectVisualIntentEvents(
+    viewModel: EditorViewModel,
+    targetId: String,
+    visualState: ComposeEditorVisualState,
+) {
+    androidx.compose.runtime.LaunchedEffect(viewModel, targetId) {
+        viewModel.visualIntentEvents
+            .collect { event ->
+                if (event.targetId != targetId) return@collect
+                val editorVisualIntent = mapCoreVisualIntentToEditorVisualIntent(event)
+                visualState.onVisualIntent(editorVisualIntent)
+            }
+    }
+}

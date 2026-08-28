@@ -148,3 +148,30 @@ fun statsCountsFor(
                 deletedChars = delta.deletedChars,
             )
     }
+
+/**
+ * #641：Core 视觉意图事件 — presentation/session 层发布的纯数据事件，
+ * 不含 Compose/visual 依赖。UI 层（WritingPaneEditorContent）收集后，
+ * 用 TextOffsetUtils 把 Core old/new UTF-8 ranges 转成 UTF-16 EditorVisualIntent，
+ * 调用 ComposeEditorVisualState.onVisualIntent。
+ *
+ * 设计目的：解耦 EditorViewModel 与 feature.editor.visual。
+ * EditorViewModel 不能直接依赖 ComposeEditorVisualState/EditorVisualIntent，
+ * 但 commitToCore 成功后必须把 Core 返回的 visual intent 传到 UI 层。
+ *
+ * @param targetId 目标章节 ID，供 UI 层按 target 过滤。
+ * @param oldText 提交前的完整正文（UTF-8），用于 oldAffectedByteRanges → UTF-16 换算。
+ * @param newText 提交后的完整正文（UTF-8），用于 newAffectedByteRanges → UTF-16 换算。
+ * @param visualIntent Core 返回的视觉意图（projection 层，纯数据）。
+ * @param oldSelectionEndUtf8 提交前光标位置（UTF-8），用于 cursor rect 插值。
+ * @param newSelectionEndUtf8 提交后光标位置（UTF-8），用于 cursor rect 插值。
+ */
+@Immutable
+data class CoreVisualIntentEvent(
+    val targetId: String,
+    val oldText: String,
+    val newText: String,
+    val visualIntent: com.xiwei.sujian.feature.editor.projection.VisualIntent,
+    val oldSelectionEndUtf8: Int,
+    val newSelectionEndUtf8: Int,
+)

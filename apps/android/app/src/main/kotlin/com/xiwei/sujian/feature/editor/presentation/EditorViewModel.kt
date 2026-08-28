@@ -67,14 +67,12 @@ import com.xiwei.sujian.feature.editor.input.CommittedTextEdit
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
 import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.interop.TextEditSessionBridge
-import com.xiwei.sujian.feature.editor.projection.VisualIntent
+import com.xiwei.sujian.feature.editor.session.CoreVisualIntentEvent
 import com.xiwei.sujian.feature.editor.session.DocumentSaveReceiptTracker
 import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.TargetDocumentFact
 import com.xiwei.sujian.feature.editor.session.applyLocalEdit
-import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
-import com.xiwei.sujian.feature.editor.visual.EditorVisualIntent
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
@@ -242,6 +240,13 @@ class EditorViewModel(
     internal val _events = Channel<EditorEvent>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
 
+    // #641：Core 视觉意图事件通道 — presentation/session 层发布的纯数据事件，
+    // 不含 Compose/visual 依赖。UI 层（WritingPaneEditorContent）收集后，
+    // 用 TextOffsetUtils 把 Core old/new UTF-8 ranges 转成 UTF-16 EditorVisualIntent，
+    // 调用 ComposeEditorVisualState.onVisualIntent。
+    internal val _visualIntentEvents = Channel<CoreVisualIntentEvent>(Channel.BUFFERED)
+    val visualIntentEvents = _visualIntentEvents.receiveAsFlow()
+
     // #595 二：Repository 真实来源的正文文档事实流 — 按 target 分区的最新事实
     // 总线（带 replay 语义：新 collector 立即拿到该 target 的当前文档事实）。
     internal val documentUpdateBus = TargetDocumentUpdateBus()
@@ -408,18 +413,18 @@ class EditorViewModel(
      * [commitToCore] lambda 内统一 UTF-16→UTF-8（replace offset）和
      * UTF-8→UTF-16（rejection selection），不再把 byte offset 当 Compose offset。
      *
-     * [onVisualIntent] 回调：Core 提交成功后把 UTF-8 display patch / visual intent
-     * 转成 UTF-16 [EditorVisualIntent] 喂给当前 [ComposeEditorVisualState]。
-     * 删除范围用 previous layout，插入/移动用 current layout。
-     *
      * #641 评论1 第3节：移除 no-op 成功 fallback — coordinator/appServiceBridge 为空时
      * 不得返回假 Accepted bridge（把未提交到 Core 的输入伪装 Accepted）。
      * 依赖由初始化保证；调用方必须等待真实注入。
+     *
+     * #641 架构门禁：移除 visualState 参数 — presentation 层不得依赖
+     * feature.editor.visual。Core 返回的视觉意图改由 [CoreVisualIntentEvent]
+     * 发布到事件通道，UI 层（WritingPaneEditorContent）收集后映射为
+     * [EditorVisualIntent] 喂给 [ComposeEditorVisualState]。
      */
     fun bridgeForTarget(
         targetId: String,
         initialText: String,
-        visualState: ComposeEditorVisualState? = null,
     ): EditorTextFieldStateBridge {
         _bridges[targetId]?.let { return it }
 
@@ -450,7 +455,7 @@ class EditorViewModel(
         val effectiveInitialText = snapshot?.text ?: initialText
 
         val commitToCore: (CommittedTextEdit) -> CommitResult = { edit ->
-            commitEditToCore(targetId, coordinator, bridge, edit, visualState)
+            commitEditToCore(targetId, coordinator, bridge, edit)
         }
 
         return _bridges.getOrPut(targetId) {
@@ -476,7 +481,6 @@ class EditorViewModel(
         coordinator: EditorSessionCoordinator,
         bridge: AppServiceBridge,
         edit: CommittedTextEdit,
-        visualState: ComposeEditorVisualState?,
     ): CommitResult {
         val lease = coordinator.currentInputLease()
         if (lease == null || lease.targetId != targetId) {
@@ -508,21 +512,26 @@ class EditorViewModel(
                     contentChanged = result.displayPatches.isNotEmpty(),
                 ),
             )
-            // #641：Core 返回 visual intent — 转成 UTF-16 喂给 ComposeEditorVisualState。
+            // #641：Core 返回视觉意图 — 发布纯数据事件到通道，UI 层（WritingPaneEditorContent）
+            // 收集后映射为 EditorVisualIntent 喂给 ComposeEditorVisualState。
             // 必须用完整 old/new 文本：删除范围用完整 oldText，插入/移动范围用完整 newText。
-            if (visualState != null) {
-                val editResult = com.xiwei.sujian.feature.editor.projection.EditResult.fromDto(result)
-                val fullNewText =
-                    buildString {
-                        append(edit.oldText.substring(0, edit.replaceStart))
-                        append(edit.newText)
-                        append(edit.oldText.substring(edit.replaceEndExclusive))
-                    }
-                mapVisualIntentToCompose(
-                    oldText = edit.oldText,
-                    newText = fullNewText,
-                    visualIntent = editResult.visualIntent,
-                    visualState = visualState,
+            val editResult = com.xiwei.sujian.feature.editor.projection.EditResult.fromDto(result)
+            val fullNewText =
+                buildString {
+                    append(edit.oldText.substring(0, edit.replaceStart))
+                    append(edit.newText)
+                    append(edit.oldText.substring(edit.replaceEndExclusive))
+                }
+            viewModelScope.launch {
+                _visualIntentEvents.send(
+                    CoreVisualIntentEvent(
+                        targetId = targetId,
+                        oldText = edit.oldText,
+                        newText = fullNewText,
+                        visualIntent = editResult.visualIntent,
+                        oldSelectionEndUtf8 = result.oldSelectionEnd.toInt(),
+                        newSelectionEndUtf8 = result.newSelectionEnd.toInt(),
+                    ),
                 )
             }
             return CommitResult.Accepted
@@ -539,73 +548,6 @@ class EditorViewModel(
                 edit.selection
             }
         return CommitResult.Rejected(fallbackText, fallbackSelection)
-    }
-
-    /**
-     * #641 评论1 第2节：把 Core 返回的 [VisualIntent] 转成 Compose UTF-16
-     * [EditorVisualIntent] 并喂给 [ComposeEditorVisualState]。
-     *
-     * 映射规则：
-     * - 删除范围 → [EditorVisualIntent.Kind.Delete]，range 来自 oldAffectedByteRanges，
-     *   用完整 oldText 做 UTF-8 byte→UTF-16 换算（Core 的 oldAffectedByteRanges 是
-     *   相对于旧正文的 byte offset）；
-     * - 插入范围 → [EditorVisualIntent.Kind.Insert]，range 来自 newAffectedByteRanges，
-     *   用完整 newText 做 UTF-8 byte→UTF-16 换算（Core 的 newAffectedByteRanges 是
-     *   相对于新正文的 byte offset）；
-     * - 移动范围 → [EditorVisualIntent.Kind.Move]，range 来自 newAffectedByteRanges，
-     *   用完整 newText；
-     * - 光标仅 → [EditorVisualIntent.Kind.Cursor]，affectedRanges 为空。
-     *
-     * 注意：Core 的 visual intent 已经区分了 old/new affected ranges，
-     * 这里按 operationKind 决定用哪一组。传入完整 oldText 和 newText 确保
-     * CJK/emoji/多行上的 byte→UTF-16 换算正确。
-     */
-    private fun mapVisualIntentToCompose(
-        oldText: String,
-        newText: String,
-        visualIntent: com.xiwei.sujian.feature.editor.projection.VisualIntent,
-        visualState: ComposeEditorVisualState,
-    ) {
-        val kind =
-            when {
-                visualIntent.isDelete() -> EditorVisualIntent.Kind.Delete
-                visualIntent.isInsert() -> EditorVisualIntent.Kind.Insert
-                visualIntent.isReplace() || visualIntent.isCompositionCommit() || visualIntent.isCompositionUpdate() ->
-                    EditorVisualIntent.Kind.Move
-                visualIntent.isCursorOnly() -> EditorVisualIntent.Kind.Cursor
-                visualIntent.isCompositionCancel() -> EditorVisualIntent.Kind.Delete
-                else -> EditorVisualIntent.Kind.Move
-            }
-
-        val affectedRanges =
-            when (kind) {
-                EditorVisualIntent.Kind.Delete -> {
-                    // 删除：用 oldAffectedByteRanges（previous layout 的 range），
-                    // 用完整 oldText 做 UTF-8 byte→UTF-16 换算。
-                    visualIntent.oldAffectedByteRanges.map { (start: Int, end: Int) ->
-                        TextOffsetUtils.utf16TextRangeForUtf8(oldText, start, end)
-                    }
-                }
-                EditorVisualIntent.Kind.Insert,
-                EditorVisualIntent.Kind.Move,
-                -> {
-                    // 插入/移动：用 newAffectedByteRanges（current layout 的 range），
-                    // 用完整 newText 做 UTF-8 byte→UTF-16 换算。
-                    visualIntent.newAffectedByteRanges.map { (start: Int, end: Int) ->
-                        TextOffsetUtils.utf16TextRangeForUtf8(newText, start, end)
-                    }
-                }
-                EditorVisualIntent.Kind.Cursor -> {
-                    emptyList<TextRange>()
-                }
-            }
-
-        visualState.onVisualIntent(
-            EditorVisualIntent(
-                affectedRanges = affectedRanges,
-                kind = kind,
-            ),
-        )
     }
 
     /**
