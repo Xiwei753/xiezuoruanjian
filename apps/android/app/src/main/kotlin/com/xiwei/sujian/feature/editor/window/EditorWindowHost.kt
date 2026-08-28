@@ -88,6 +88,13 @@ class EditorWindowHost(
 
     fun getChapterPreviewState(targetId: String): ChapterPreviewState? = sessionHost.getChapterPreviewState(targetId)
 
+    /**
+     * #641 评论 5457777142 问题7：暴露 [TargetDecorations] 给 UI 层 —
+     * 供 [com.xiwei.sujian.feature.editor.ui.WritingPaneEditorContent] 读取搜索高亮。
+     */
+    fun getTargetDecorations(targetId: String): TargetDecorations? =
+        sessionHost.sessionCoordinator.getTargetDecorations(targetId)
+
     fun applyMotionPolicy(policy: EditorMotionPolicy) = sessionHost.applyMotionPolicy(policy)
 
     /**

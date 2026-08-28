@@ -440,10 +440,14 @@ def rule_visual_motion_pure() -> list[Finding]:
         findings += scan_forbidden(APP_SRC, sub, COMPOSE_UI_FRAMEWORK)
         # #641：ComposeEditorVisualState / ComposeTextAnimationOverlay 是 Compose 显示层 —
         # 只消费 TextLayoutResult 做显示，不写正文持久状态。允许 Compose UI 依赖。
+        # #641 评论 5457777142 问题2：ComposeVisualFrame 是纯显示数据类，
+        # 引用 androidx.compose.ui.geometry.Offset/Rect 和 androidx.compose.ui.text.TextRange，
+        # 与 ComposeVisualTransaction 同类，加入豁免。
         _641_visual_exemptions = {
             "feature/editor/visual/ComposeEditorVisualState.kt",
             "feature/editor/visual/ComposeTextAnimationOverlay.kt",
             "feature/editor/visual/ComposeVisualTransaction.kt",
+            "feature/editor/visual/ComposeVisualFrame.kt",
         }
         findings = [f for f in findings if f.path not in _641_visual_exemptions]
         if sub == "/feature/editor/motion/":

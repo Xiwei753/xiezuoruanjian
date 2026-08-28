@@ -82,6 +82,7 @@ internal fun ProjectWorkspaceScreen(
     projectWorkspaceActions: AndroidWorkspaceActionSpec,
     layoutSpec: AndroidLayoutSpec,
     workbenchPresentation: WorkbenchPresentationState?,
+    editorCallbacks: EditorWorkspaceCallbacks? = null,
     modifier: Modifier = Modifier,
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -297,6 +298,7 @@ internal fun ProjectWorkspaceScreen(
             },
             onBack = { coroutineScope.launch { workspaceNavState.guardedBack() } },
             onChapterSwitchFailed = onChapterSwitchFailed,
+            editorCallbacks = editorCallbacks,
             modifier = modifier,
         )
     } else {
@@ -326,6 +328,7 @@ internal fun ProjectWorkspaceScreen(
             },
             onBack = { coroutineScope.launch { workspaceNavState.guardedBack() } },
             onChapterSwitchFailed = onChapterSwitchFailed,
+            editorCallbacks = editorCallbacks,
             modifier = modifier.fillMaxSize(),
         )
     }
@@ -352,6 +355,7 @@ private fun SinglePaneContent(
         oldChapterId: String?,
         oldChapterTitle: String,
     ) -> Unit,
+    editorCallbacks: EditorWorkspaceCallbacks? = null,
     modifier: Modifier = Modifier,
 ) {
     when (location) {
@@ -392,9 +396,9 @@ private fun SinglePaneContent(
                 chapterId = location.chapterId,
                 chapterTitle = appState.currentChapterTitle,
                 onBack = onBack,
-                onSearch = { },
-                onSync = { },
-                onSettings = { },
+                onSearch = editorCallbacks?.onSearch ?: {},
+                onSync = editorCallbacks?.onSync ?: {},
+                onSettings = editorCallbacks?.onSettings ?: {},
                 onChapterSwitchFailed = onChapterSwitchFailed,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -425,6 +429,7 @@ private fun WideLayoutContent(
         oldChapterId: String?,
         oldChapterTitle: String,
     ) -> Unit,
+    editorCallbacks: EditorWorkspaceCallbacks? = null,
     modifier: Modifier = Modifier,
 ) {
     when (location) {
@@ -478,12 +483,12 @@ private fun WideLayoutContent(
                     )
                 }
             val callbacks =
-                remember(onBack, onSelectChapter, onChapterSwitchFailed) {
+                remember(onBack, onSelectChapter, onChapterSwitchFailed, editorCallbacks) {
                     WideWorkspaceCallbacks(
                         onBack = onBack,
-                        onSync = {},
-                        onSearch = {},
-                        onSettings = {},
+                        onSync = editorCallbacks?.onSync ?: {},
+                        onSearch = editorCallbacks?.onSearch ?: {},
+                        onSettings = editorCallbacks?.onSettings ?: {},
                         onChapterSwitch = onSelectChapter,
                         onChapterSwitchFailed = onChapterSwitchFailed,
                     )

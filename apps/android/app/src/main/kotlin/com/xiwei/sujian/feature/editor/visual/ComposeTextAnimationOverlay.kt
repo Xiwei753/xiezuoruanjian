@@ -10,6 +10,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -21,9 +22,11 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 
 /**
- * #641 评论1 第5节 / 问题3：动画 overlay — 只"画"，绝不能再改变 viewport / selection / IME 几何。
+ * #641 评论1 第5节 / 问题3 + 评论 5457777142 问题2/问题4：动画 overlay —
+ * 只"画"，绝不能再改变 viewport / selection / IME 几何。
  *
  * 绘制规则：
  * - 新文字：从当前 [TextLayoutResult] 取 bounding box，当前 range 已被
@@ -33,13 +36,25 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * - 视觉光标：从 `oldResult.getCursorRect(oldSelection.end)` 插值到
  *   `newResult.getCursorRect(newSelection.end)`，按 progress 插值 x/y/width/height。
  *
- * #641 评论 问题3：
- * - duration 来自 [com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy]（不再写死 200ms）；
+ * #641 评论 问题3 + 评论 5457777142 问题2：
+ * - duration 来自 [EditorMotionPolicy]（不再写死 200ms）；
  * - 用 [Animatable] 手动控制动画，transaction id 变化时重新建立正确起点；
- * - 新事务到来时先物化当前视觉帧作为下一事务起点，再 rebase；
- * - retained move 处理自动折行时被挤到下一行的"保留文字"；
+ * - 新事务到来时若 [ComposeVisualTransaction.startFrame] 非空，
+ *   从 startFrame 对应的 progress 开始动画，而不是 `snapTo(0f)`；
+ * - retained move 用 old/new `getPathForRange()` 的 bounds 算 dx/dy，
+ *   按 progress 插值 translate，而不是 crossfade 冒充 move；
  * - 用 `getPathForRange` 替代整行 clip，同一行没参与动画的文字不会被 overlay 再画一遍；
  * - cursor 颜色吃 [cursorColor]，同一帧只画一次 cursor（不再闪烁叠加）。
+ *
+ * #641 评论 5457777142 问题4：双 timeline。
+ * - [EditorMotionPolicy.coordinated] = true：一个 timeline（textDurationMillis），
+ *   cursor 共用主 timeline；
+ * - [EditorMotionPolicy.coordinated] = false：textProgress + cursorProgress 两个 timeline；
+ * - CURSOR_ONLY（textKind = None 且 cursor.animate = true）单独用 cursorDurationMillis；
+ * - reduceMotion / textEnabled / cursorEnabled 在这一层一次性落实：
+ *   textEnabled=false 时不画文字动画（直接显示最终态）；
+ *   cursorEnabled=false 时不画视觉光标（用系统光标）；
+ *   reduceMotion=true 时全静态。
  *
  * 动画通过 Compose animation progress 只改变 alpha/translate/绘制，
  * 不 scrollTo、不改 selection/IME/height/viewport。动画结束清 hiddenRanges，
@@ -51,7 +66,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * @param cursorColor 视觉光标颜色 — 从主题 role 注入，不再硬编码蓝色。
  */
 @Composable
-@Suppress("LongParameterList")
+@Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod", "CognitiveComplexMethod")
 fun ComposeTextAnimationOverlay(
     visualState: ComposeEditorVisualState,
     scrollY: Int,
@@ -67,30 +82,83 @@ fun ComposeTextAnimationOverlay(
     val cursorSnapshot = remember(cursorSnapshotValue) { cursorSnapshotValue }
 
     val transactionId = activeTransaction?.id ?: 0L
-    val durationMillis = activeTransaction?.durationMillis ?: 0L
+    val motionPolicy = activeTransaction?.motionPolicy ?: EditorMotionPolicy()
 
-    // #641 评论 问题3：用 Animatable 手动控制动画 —
-    // transaction id 变化时 snapTo(0f) 重新建立正确起点，再 animateTo(1f)。
-    // 不再用 animateFloatAsState(target=1f)，连续输入时不会为新事务重新建立正确起点。
-    val progress = remember { Animatable(0f) }
+    // #641 评论 5457777142 问题4：根据 motionPolicy 决定 timeline 数量。
+    // coordinated=true：一个 textProgress，cursor 共用；
+    // coordinated=false：textProgress + cursorProgress 两个 timeline；
+    // CURSOR_ONLY（textKind=None 且 cursor.animate=true）单独用 cursorDurationMillis。
+    val isCursorOnly =
+        activeIntent?.textKind == TextVisualKind.None && activeIntent?.cursor?.animate == true
+    val useSingleTimeline = motionPolicy.coordinated || isCursorOnly
+    val textEnabled = motionPolicy.textEnabled && !isCursorOnly
+    val cursorEnabled = motionPolicy.cursorEnabled
+
+    val textDurationMillis =
+        if (isCursorOnly) {
+            motionPolicy.cursorDurationMillis
+        } else {
+            motionPolicy.textDurationMillis
+        }
+    val cursorDurationMillis = motionPolicy.cursorDurationMillis
+
+    // #641 评论 问题3 + 5457777142 问题2：用 Animatable 手动控制动画 —
+    // transaction id 变化时若 startFrame 非空，从 startFrame 对应的 progress 开始；
+    // 否则 snapTo(0f)。不再用 animateFloatAsState(target=1f)。
+    val textProgress = remember { Animatable(0f) }
+    val cursorProgress = remember { Animatable(0f) }
+    val startFrame = activeTransaction?.startFrame
+    val startProgress = if (startFrame != null) estimateStartProgress(startFrame) else 0f
+
     LaunchedEffect(transactionId) {
-        if (transactionId > 0L && durationMillis > 0L) {
-            progress.snapTo(0f)
-            progress.animateTo(
+        if (transactionId > 0L && textDurationMillis > 0L && textEnabled) {
+            textProgress.snapTo(startProgress)
+            textProgress.animateTo(
                 targetValue = 1f,
-                animationSpec = tween(durationMillis = durationMillis.toInt()),
+                animationSpec = tween(durationMillis = textDurationMillis.toInt()),
             )
+        } else if (transactionId > 0L && !textEnabled) {
+            // textEnabled=false：直接显示最终态。
+            textProgress.snapTo(1f)
         }
     }
-    val progressValue = progress.value
+    LaunchedEffect(transactionId) {
+        val shouldAnimateCursor =
+            transactionId > 0L && cursorDurationMillis > 0L && cursorEnabled &&
+                activeIntent?.cursor?.animate == true && !useSingleTimeline
+        if (shouldAnimateCursor) {
+            cursorProgress.snapTo(startProgress)
+            cursorProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = cursorDurationMillis.toInt()),
+            )
+        } else if (useSingleTimeline) {
+            // coordinated=true 或 CURSOR_ONLY：cursor 共用 textProgress。
+            cursorProgress.snapTo(textProgress.value)
+        }
+    }
+    val textProgressValue = textProgress.value
+    val cursorProgressValue =
+        if (useSingleTimeline) textProgressValue else cursorProgress.value
 
-    val hasAnimation =
-        activeTransaction != null &&
-            (hiddenRanges.isNotEmpty() || activeIntent?.cursor?.animate == true)
+    // 报告当前 progress 给 visualState，供下一事务物化 startFrame。
+    LaunchedEffect(transactionId, textProgressValue) {
+        if (transactionId > 0L) {
+            visualState.reportProgress(textProgressValue)
+        }
+    }
+
+    val hasTextAnimation =
+        activeTransaction != null && textEnabled &&
+            (hiddenRanges.isNotEmpty() || activeIntent?.textKind != TextVisualKind.None)
+    val hasCursorAnimation =
+        activeTransaction != null && cursorEnabled &&
+            activeIntent?.cursor?.animate == true
+    val hasAnimation = hasTextAnimation || hasCursorAnimation
 
     // 动画结束清 hiddenRanges，系统正文马上可见。
-    LaunchedEffect(transactionId, progressValue) {
-        if (transactionId > 0L && progressValue >= 1f) {
+    LaunchedEffect(transactionId, textProgressValue, cursorProgressValue) {
+        if (transactionId > 0L && textProgressValue >= 1f && cursorProgressValue >= 1f) {
             visualState.clearAnimation()
         }
     }
@@ -110,20 +178,35 @@ fun ComposeTextAnimationOverlay(
                         previousResult = previous?.result,
                         transaction = transaction,
                         textKind = intent.textKind,
-                        cursorAnimate = intent.cursor?.animate == true,
-                        progress = progressValue,
+                        cursorAnimate = intent.cursor?.animate == true && cursorEnabled,
+                        textProgress = textProgressValue,
+                        cursorProgress = cursorProgressValue,
                         scrollY = scrollY,
                         textColor = textColor,
                         cursorColor = cursorColor,
                         cursorSnapshot = cursorSnapshot,
                         density = density,
+                        textEnabled = textEnabled,
                     )
                 },
     )
 }
 
 /**
- * #641 评论 问题3：绘制视觉动画事务 — 提取以降低 [ComposeTextAnimationOverlay] 的认知复杂度。
+ * #641 评论 5457777142 问题2：从 startFrame 估算起始 progress。
+ *
+ * startFrame.slices 的平均 alpha 反映旧事务画到哪了。
+ * 没有 slice 时返回 0f。
+ */
+private fun estimateStartProgress(frame: ComposeVisualFrame): Float {
+    if (frame.slices.isEmpty()) return 0f
+    val avgAlpha = frame.slices.map { it.alpha }.average().toFloat()
+    return avgAlpha.coerceIn(0f, 1f)
+}
+
+/**
+ * #641 评论 问题3 + 5457777142 问题2/问题4：绘制视觉动画事务 —
+ * 提取以降低 [ComposeTextAnimationOverlay] 的认知复杂度。
  */
 @Suppress("LongParameterList")
 private fun DrawScope.drawVisualTransaction(
@@ -132,32 +215,37 @@ private fun DrawScope.drawVisualTransaction(
     transaction: ComposeVisualTransaction,
     textKind: TextVisualKind,
     cursorAnimate: Boolean,
-    progress: Float,
+    textProgress: Float,
+    cursorProgress: Float,
     scrollY: Int,
     textColor: Color,
     cursorColor: Color,
     cursorSnapshot: VisualCursorSnapshot?,
     density: androidx.compose.ui.unit.Density,
+    textEnabled: Boolean,
 ) {
-    drawAnimatedRanges(
-        currentResult = currentResult,
-        previousResult = previousResult,
-        oldRanges = transaction.oldRanges,
-        newRanges = transaction.newRanges,
-        retainedMoves = transaction.retainedMoves,
-        textKind = textKind,
-        progress = progress,
-        scrollY = scrollY,
-        textColor = textColor,
-    )
+    if (textEnabled) {
+        drawAnimatedRanges(
+            currentResult = currentResult,
+            previousResult = previousResult,
+            oldRanges = transaction.oldRanges,
+            newRanges = transaction.newRanges,
+            retainedMoves = transaction.retainedMoves,
+            textKind = textKind,
+            progress = textProgress,
+            scrollY = scrollY,
+            textColor = textColor,
+        )
+    }
 
-    // 视觉光标：按 progress 从 old cursor rect 插值到 new cursor rect。
+    // 视觉光标：按 cursorProgress 从 old cursor rect 插值到 new cursor rect。
     // #641 评论 问题2：只要 cursor?.animate == true 就画（不管 textKind）。
     // #641 评论 问题3：同一帧只画一次 cursor（不再闪烁叠加）。
+    // #641 评论 5457777142 问题4：cursor 用 cursorProgress（coordinated=false 时独立 timeline）。
     if (cursorAnimate && cursorSnapshot != null) {
         drawVisualCursor(
             snapshot = cursorSnapshot,
-            progress = progress,
+            progress = cursorProgress,
             scrollY = scrollY,
             density = density,
             cursorColor = cursorColor,
@@ -246,7 +334,7 @@ private fun DrawScope.drawRangeText(
 }
 
 /**
- * #641 评论1 第5节 / 问题3：绘制受影响 range 的动画过程。
+ * #641 评论1 第5节 / 问题3 + 5457777142 问题2：绘制受影响 range 的动画过程。
  *
  * #641 评论 问题3：
  * - Insert：用 newRanges，从 current layout 淡入。
@@ -297,12 +385,14 @@ private fun DrawScope.drawAnimatedRanges(
             for (range in newRanges) {
                 drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
             }
-            // #641 评论 问题3：retained moves — 被挤到下一行的"保留文字"。
+            // #641 评论 问题3 + 5457777142 问题2：retained moves —
+            // 被挤到下一行的"保留文字"，用 old/new getPathForRange() 的 bounds 算 dx/dy，
+            // 按 progress 插值 translate，而不是 crossfade 冒充 move。
             drawRetainedMoves(
                 previousResult = previousResult,
                 currentResult = currentResult,
                 retainedMoves = retainedMoves,
-                alpha = alpha,
+                progress = progress,
                 scrollY = scrollY,
                 textColor = textColor,
             )
@@ -314,7 +404,11 @@ private fun DrawScope.drawAnimatedRanges(
 }
 
 /**
- * #641 评论 问题3：绘制 retained moves — 被挤到下一行的"保留文字"。
+ * #641 评论 问题3 + 5457777142 问题2：绘制 retained moves —
+ * 被挤到下一行的"保留文字"。
+ *
+ * 真实现：用 old/new `getPathForRange()` 的 bounds 算 dx/dy，
+ * 按 progress 插值 translate，而不是 crossfade 冒充 move。
  * 提取以降低 [drawAnimatedRanges] 的认知复杂度。
  */
 @Suppress("LongParameterList")
@@ -322,26 +416,66 @@ private fun DrawScope.drawRetainedMoves(
     previousResult: TextLayoutResult?,
     currentResult: TextLayoutResult,
     retainedMoves: List<RetainedMove>,
-    alpha: Float,
+    progress: Float,
     scrollY: Int,
     textColor: Color,
 ) {
     for (move in retainedMoves) {
-        if (previousResult != null) {
-            drawRangeText(
-                previousResult,
-                move.oldRange,
-                alpha = 1f - alpha,
-                scrollY = scrollY,
-                textColor = textColor,
-            )
-        }
-        drawRangeText(
-            currentResult,
-            move.newRange,
-            alpha = alpha,
+        // old bounds（previous layout）和 new bounds（current layout）。
+        val oldBounds = safePathBounds(previousResult, move.oldRange) ?: continue
+        val newBounds = safePathBounds(currentResult, move.newRange) ?: continue
+        val dx = lerp(oldBounds.left, newBounds.left, progress) - newBounds.left
+        val dy = lerp(oldBounds.top, newBounds.top, progress) - newBounds.top
+        // 按 translate 画 current layout 的 newRange，alpha=1（retained 文字全程可见）。
+        drawTranslatedRangeText(
+            result = currentResult,
+            range = move.newRange,
+            translate = Offset(dx, dy),
+            alpha = 1f,
             scrollY = scrollY,
             textColor = textColor,
+        )
+    }
+}
+
+/** 安全获取 path bounds — result 为 null 或 range 无效时返回 null。 */
+private fun safePathBounds(
+    result: TextLayoutResult?,
+    range: TextRange,
+): Rect? {
+    if (result == null) return null
+    if (range.start >= range.end) return null
+    if (range.end > result.layoutInput.text.length) return null
+    return try {
+        result.getPathForRange(range.start, range.end).getBounds()
+    } catch (_: Throwable) {
+        null
+    }
+}
+
+/**
+ * #641 评论 5457777142 问题2：按 translate 偏移绘制一段 range 文字。
+ * 用 `clipPath` 裁剪该 range，再 `drawText` 时加上 translate 偏移。
+ */
+@Suppress("LongParameterList")
+private fun DrawScope.drawTranslatedRangeText(
+    result: TextLayoutResult,
+    range: TextRange,
+    translate: Offset,
+    alpha: Float,
+    scrollY: Int,
+    textColor: Color,
+) {
+    if (range.start >= range.end) return
+    if (range.end > result.layoutInput.text.length) return
+    if (alpha <= 0f) return
+    val path = result.getPathForRange(range.start, range.end)
+    clipPath(path) {
+        drawText(
+            textLayoutResult = result,
+            color = textColor,
+            topLeft = Offset(translate.x, translate.y - scrollY.toFloat()),
+            alpha = alpha,
         )
     }
 }

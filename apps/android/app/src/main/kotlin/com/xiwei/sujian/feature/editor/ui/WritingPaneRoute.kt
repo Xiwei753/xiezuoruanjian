@@ -262,6 +262,19 @@ private fun WritingPaneEditorContent(
                 coordinator = coordinator,
             )
 
+            // #641 评论 5457777142 问题7：搜索高亮接回生产链 —
+            // 从 TargetDecorations.searchHighlightsUtf8 读取，用当前权威正文转成 UTF-16，
+            // 传给 WritingEditorSurface。不再永远默认空列表。
+            val decorations = coordinator.getTargetDecorations(targetId)
+            val authoritativeText = bridge.mirroredText
+            val searchHighlightsUtf16 =
+                decorations?.searchHighlightsUtf8?.map { (start, end) ->
+                    val r =
+                        com.xiwei.sujian.feature.editor.input.TextOffsetUtils
+                            .utf16TextRangeForUtf8(authoritativeText, start, end)
+                    com.xiwei.sujian.feature.editor.projection.TextRange(r.start, r.end)
+                } ?: emptyList()
+
             WritingEditorSurface(
                 bridge = bridge,
                 visualState = visualState,
@@ -271,6 +284,7 @@ private fun WritingPaneEditorContent(
                 textColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
                 cursorColor = androidx.compose.material3.MaterialTheme.colorScheme.primary,
                 inputEnabled = inputEnabled,
+                searchHighlights = searchHighlightsUtf16,
                 modifier = modifier,
             )
         }
@@ -883,7 +897,10 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
             TextOffsetUtils.utf16TextRangeForUtf8(event.newText, start, end)
         }
 
-    // #641 评论 问题2：只要 Core 的 coordinated cursor 要动画，就构造 CursorVisualIntent。
+    // #641 评论 问题2 + 评论 5457777142 问题1：只要 Core 的 coordinated cursor 要动画，
+    // 就构造 CursorVisualIntent。byte→UTF-16 换算必须用 `utf16OffsetForUtf8ByteOrNull`：
+    // 若返回 null（byte offset 越界或落在多字节字符中间），**不**把 UTF-8 byte offset
+    // 当成 UTF-16 offset fallback（那会错位），而是直接放弃这次视觉光标（cursor = null）。
     val coordinatedCursor = event.visualIntent.coordinatedCursor
     val cursor =
         if (coordinatedCursor.shouldAnimate) {
@@ -891,17 +908,21 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
                 TextOffsetUtils.utf16OffsetForUtf8ByteOrNull(
                     text = event.oldText,
                     utf8ByteOffset = coordinatedCursor.oldByteOffset,
-                ) ?: coordinatedCursor.oldByteOffset
+                )
             val newEndUtf16 =
                 TextOffsetUtils.utf16OffsetForUtf8ByteOrNull(
                     text = event.newText,
                     utf8ByteOffset = coordinatedCursor.newByteOffset,
-                ) ?: coordinatedCursor.newByteOffset
-            CursorVisualIntent(
-                oldEndUtf16 = oldEndUtf16,
-                newEndUtf16 = newEndUtf16,
-                animate = true,
-            )
+                )
+            if (oldEndUtf16 != null && newEndUtf16 != null) {
+                CursorVisualIntent(
+                    oldEndUtf16 = oldEndUtf16,
+                    newEndUtf16 = newEndUtf16,
+                    animate = true,
+                )
+            } else {
+                null
+            }
         } else {
             null
         }
@@ -918,9 +939,16 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
  * #641：收集 Core 视觉意图事件，映射为 [EditorVisualIntent] 喂给 [ComposeEditorVisualState]。
  * 按 target 过滤，避免其他 target 的视觉意图污染当前 overlay。
  *
- * #641 评论 问题3：收集 [com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy]
- * 的 duration 传给 [ComposeEditorVisualState.onVisualIntent] —
- * 不再写死 200ms，文字动画用 textDurationMillis，光标动画用 cursorDurationMillis。
+ * #641 评论 问题3 + 评论 5457777142 问题4：收集
+ * [com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy] 的 effective 策略
+ * 传给 [ComposeEditorVisualState.onVisualIntent] —
+ * 不再写死 200ms，也不再提前压成一个 `durationMillis`。
+ * overlay 根据 [com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy.coordinated]
+ * 决定一条还是两条 timeline：
+ * - coordinated=true：一个 timeline（textDurationMillis），cursor 共用；
+ * - coordinated=false：textProgress + cursorProgress 两个 timeline；
+ * - CURSOR_ONLY：单独用 cursorDurationMillis。
+ * reduceMotion / textEnabled / cursorEnabled 也在 overlay 那一层一次性落实。
  *
  * 提取为独立 composable 以降低 [WritingPaneEditorContent] 的认知复杂度。
  */
@@ -938,48 +966,70 @@ private fun CollectVisualIntentEvents(
             .collect { event ->
                 if (event.targetId != targetId) return@collect
                 val editorVisualIntent = mapCoreVisualIntentToEditorVisualIntent(event)
-                // #641 评论 问题3：duration 来自 EditorMotionPolicy —
-                // 光标动画用 cursorDurationMillis，文字动画用 textDurationMillis。
-                val durationMillis =
-                    if (editorVisualIntent.cursor?.animate == true) {
-                        currentMotionPolicy.cursorDurationMillis
-                    } else {
-                        currentMotionPolicy.textDurationMillis
-                    }
-                visualState.onVisualIntent(editorVisualIntent, durationMillis)
+                // #641 评论 5457777142 问题4：把 effective EditorMotionPolicy 放进 transaction，
+                // overlay 据此决定 text/cursor 两条 timeline、reduceMotion、textEnabled、cursorEnabled。
+                visualState.onVisualIntent(editorVisualIntent, currentMotionPolicy.effective())
             }
     }
 }
 
 /**
- * #641 评论 问题7d：收集 undo/redo 后的权威编辑器快照，把正文写回 bridge。
+ * #641 评论 问题7d + 评论 5457777142 问题5：收集 undo/redo 后的权威编辑器快照，把正文写回 bridge。
  *
  * performUndo/performRedo 在 applyUndoRestored 后查询 Core snapshot 并发布到
  * [com.xiwei.sujian.feature.editor.window.EditorWindowHost.authoritativeEditorSnapshots]。
- * 此处按 targetId 过滤收集，composition 期间不覆盖（沿用既有 pending/conflict 规则）。
+ *
+ * #641 评论 5457777142 问题5：composition 期间不丢权威快照。
+ * - composition == null：立即 [EditorViewModel.applyAuthoritativeToBridge]；
+ * - composition != null：覆盖保存该 target 最新 pending snapshot
+ *   （[EditorViewModel.storePendingAuthoritativeSnapshot]），等 composition 结束再应用；
+ * - 同时观察 `snapshotFlow { bridge.state.composition }`，
+ *   从非 null 变成 null 时取出该 target 最新 pending snapshot 并应用。
  *
  * 提取为独立 composable 以降低 [WritingPaneEditorContent] 的认知复杂度。
  */
 @Composable
+@Suppress("CognitiveComplexMethod")
 private fun CollectAuthoritativeEditorSnapshots(
     coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
     viewModel: EditorViewModel,
     targetId: String,
     bridge: com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge,
 ) {
+    // 收到 undo/redo snapshot：composition==null 立即应用，composition!=null 暂存。
     androidx.compose.runtime.LaunchedEffect(targetId) {
         coordinator.authoritativeEditorSnapshots
             .filter { it.targetId == targetId }
             .collect { snapshot ->
-                if (bridge.state.composition == null &&
-                    snapshot.text != bridge.mirroredText
-                ) {
-                    viewModel.applyAuthoritativeToBridge(
-                        snapshot.targetId,
-                        snapshot.text,
-                        snapshot.selectionAnchorUtf8,
-                        snapshot.selectionHeadUtf8,
-                    )
+                if (bridge.state.composition == null) {
+                    if (snapshot.text != bridge.mirroredText) {
+                        viewModel.applyAuthoritativeToBridge(
+                            snapshot.targetId,
+                            snapshot.text,
+                            snapshot.selectionAnchorUtf8,
+                            snapshot.selectionHeadUtf8,
+                        )
+                    }
+                } else {
+                    viewModel.storePendingAuthoritativeSnapshot(snapshot)
+                }
+            }
+    }
+    // composition 从非 null 变成 null 时应用 pending snapshot。
+    androidx.compose.runtime.LaunchedEffect(targetId, bridge) {
+        androidx.compose.runtime.snapshotFlow { bridge.state.composition }
+            .collect { composition ->
+                if (composition == null) {
+                    viewModel.consumePendingAuthoritativeSnapshot(targetId)?.let { snapshot ->
+                        if (snapshot.text != bridge.mirroredText) {
+                            viewModel.applyAuthoritativeToBridge(
+                                snapshot.targetId,
+                                snapshot.text,
+                                snapshot.selectionAnchorUtf8,
+                                snapshot.selectionHeadUtf8,
+                            )
+                        }
+                    }
                 }
             }
     }

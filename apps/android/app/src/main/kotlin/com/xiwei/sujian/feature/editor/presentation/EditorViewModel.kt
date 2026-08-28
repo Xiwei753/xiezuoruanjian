@@ -89,6 +89,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 
+@Suppress("TooManyFunctions")
 class EditorViewModel(
     application: Application,
 ) : AndroidViewModel(application) {
@@ -608,6 +609,28 @@ class EditorViewModel(
         val utf16Selection = TextOffsetUtils.utf16TextRangeForUtf8(text, selectionUtf8Anchor, selectionUtf8Head)
         bridge.applyAuthoritativeText(text, utf16Selection)
     }
+
+    /**
+     * #641 评论 5457777142 问题5：IME composition 期间到达的 undo/redo 权威快照 —
+     * 暂存到 [pendingAuthoritativeSnapshots]，等 composition 从非 null 变成 null 时
+     * 由 [consumePendingAuthoritativeSnapshot] 取出应用。
+     *
+     * 不覆盖输入法正在编辑的 buffer，避免 undo/redo 期间丢权威正文。
+     * 同一 target 多次暂存只保留最新一份（latest-wins）。
+     */
+    private val pendingAuthoritativeSnapshots =
+        mutableMapOf<String, com.xiwei.sujian.feature.editor.session.AuthoritativeEditorSnapshot>()
+
+    fun storePendingAuthoritativeSnapshot(
+        snapshot: com.xiwei.sujian.feature.editor.session.AuthoritativeEditorSnapshot,
+    ) {
+        pendingAuthoritativeSnapshots[snapshot.targetId] = snapshot
+    }
+
+    fun consumePendingAuthoritativeSnapshot(
+        targetId: String,
+    ): com.xiwei.sujian.feature.editor.session.AuthoritativeEditorSnapshot? =
+        pendingAuthoritativeSnapshots.remove(targetId)
 
     /** #641：释放 target 对应的 bridge（章节关闭/session 销毁时）。 */
     fun releaseBridge(targetId: String) {

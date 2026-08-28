@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.text.TextRange
+import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -37,14 +38,17 @@ class ComposeEditorVisualStateTest {
                 textKind = TextVisualKind.Insert,
                 cursor = null,
             ),
-            durationMillis = 100L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         assertEquals(listOf(TextRange(0, 3)), state.hiddenRanges.value)
         assertEquals(TextVisualKind.Insert, state.activeIntent.value?.textKind)
     }
 
     @Test
-    fun onVisualIntent_delete_setsHiddenRanges() {
+    fun onVisualIntent_delete_doesNotHideOldRanges() {
+        // #641 评论 5457777142 问题3:Delete 不把 deleted oldRange 放进 hiddenRanges —
+        // OutputTransformation 作用的是新正文,oldRange 在新正文里可能指向其他字符。
+        // 删除字符只从 previous TextLayoutResult 由 overlay 画旧字离场。
         val state = ComposeEditorVisualState()
         state.onVisualIntent(
             EditorVisualIntent(
@@ -53,9 +57,9 @@ class ComposeEditorVisualStateTest {
                 textKind = TextVisualKind.Delete,
                 cursor = null,
             ),
-            durationMillis = 100L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
-        assertEquals(listOf(TextRange(5, 10)), state.hiddenRanges.value)
+        assertTrue("Delete 不隐藏 oldRanges", state.hiddenRanges.value.isEmpty())
     }
 
     @Test
@@ -68,7 +72,7 @@ class ComposeEditorVisualStateTest {
                 textKind = TextVisualKind.None,
                 cursor = CursorVisualIntent(oldEndUtf16 = 0, newEndUtf16 = 1, animate = true),
             ),
-            durationMillis = 80L,
+            motionPolicy = EditorMotionPolicy(cursorDurationMillis = 80L),
         )
         assertTrue("cursor animate=true 设 drawsVisualCursor", state.drawsVisualCursor.value)
     }
@@ -84,7 +88,7 @@ class ComposeEditorVisualStateTest {
                 textKind = TextVisualKind.Insert,
                 cursor = CursorVisualIntent(oldEndUtf16 = 0, newEndUtf16 = 1, animate = true),
             ),
-            durationMillis = 100L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         assertTrue("Insert + cursor animate=true 设 drawsVisualCursor", state.drawsVisualCursor.value)
     }
@@ -99,7 +103,7 @@ class ComposeEditorVisualStateTest {
                 textKind = TextVisualKind.Insert,
                 cursor = null,
             ),
-            durationMillis = 100L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         assertEquals("空 range 被过滤", listOf(TextRange(5, 8)), state.hiddenRanges.value)
     }
@@ -114,11 +118,11 @@ class ComposeEditorVisualStateTest {
                 textKind = TextVisualKind.Insert,
                 cursor = null,
             ),
-            durationMillis = 100L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         val firstId = state.activeTransaction.value?.id
         assertEquals("首个事务 ID 为 1", 1L, firstId)
-        assertEquals("事务 duration 正确", 100L, state.activeTransaction.value?.durationMillis)
+        assertEquals("事务 motionPolicy 正确", 100L, state.activeTransaction.value?.motionPolicy?.textDurationMillis)
 
         state.onVisualIntent(
             EditorVisualIntent(
@@ -127,11 +131,11 @@ class ComposeEditorVisualStateTest {
                 textKind = TextVisualKind.Insert,
                 cursor = null,
             ),
-            durationMillis = 200L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 200L),
         )
         val secondId = state.activeTransaction.value?.id
         assertEquals("第二个事务 ID 为 2", 2L, secondId)
-        assertEquals("事务 duration 更新", 200L, state.activeTransaction.value?.durationMillis)
+        assertEquals("事务 motionPolicy 更新", 200L, state.activeTransaction.value?.motionPolicy?.textDurationMillis)
     }
 
     @Test
@@ -144,7 +148,7 @@ class ComposeEditorVisualStateTest {
                 textKind = TextVisualKind.Insert,
                 cursor = null,
             ),
-            durationMillis = 100L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         state.clearAnimation()
         assertTrue("clearAnimation 后无 hiddenRanges", state.hiddenRanges.value.isEmpty())
@@ -163,7 +167,7 @@ class ComposeEditorVisualStateTest {
                 textKind = TextVisualKind.None,
                 cursor = CursorVisualIntent(oldEndUtf16 = 0, newEndUtf16 = 1, animate = true),
             ),
-            durationMillis = 80L,
+            motionPolicy = EditorMotionPolicy(cursorDurationMillis = 80L),
         )
         assertTrue(state.drawsVisualCursor.value)
         state.clearAnimation()

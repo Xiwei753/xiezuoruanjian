@@ -45,6 +45,7 @@ import com.xiwei.sujian.app.state.ActiveDocumentGate
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.platform.window.AospFoldFeatureInfo
+import com.xiwei.sujian.feature.project.ui.EditorWorkspaceCallbacks
 import com.xiwei.sujian.feature.project.ui.ProjectNavigationState
 import com.xiwei.sujian.feature.project.ui.ProjectWorkspaceScreen
 import com.xiwei.sujian.feature.project.ui.WorkspaceLocation
@@ -55,8 +56,10 @@ import com.xiwei.sujian.feature.settings.ui.SettingsRoute
 import com.xiwei.sujian.feature.starmap.ui.StarMapPlaceholderScreen
 import com.xiwei.sujian.feature.stats.ui.StatsScreen
 import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
+import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 enum class SujianDestination(
@@ -173,14 +176,27 @@ private fun rememberSujianEntryProvider(
     topLevelBackStack: SujianTopLevelBackStack,
     deps: SujianAppDependencies,
     syncState: com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState,
-): (NavKey) -> NavEntry<NavKey> =
-    remember(context) {
+): (NavKey) -> NavEntry<NavKey> {
+    // #641 评论 5457777142 问题6：在 Composable 层创建 EditorWorkspaceCallbacks —
+    // 由导航套件层注入同步/设置/搜索回调，不让 project UI 反向依赖 navigation route 类型。
+    // rememberCoroutineScope 必须在 Composable 里调用，所以回调创建在这里而不是 rememberWorksEntry。
+    val coroutineScope = rememberCoroutineScope()
+    val editorCallbacks =
+        remember(coroutineScope, deps, topLevelBackStack) {
+            EditorWorkspaceCallbacks(
+                onSync = { coroutineScope.launch { deps.syncCoordinator.runFullSync(SyncTrigger.Manual) } },
+                onSettings = { topLevelBackStack.add(SujianRoute.Settings) },
+                // 后续 #477 实现全局搜索入口
+                onSearch = { },
+            )
+        }
+    return remember(context, editorCallbacks) {
         { key: NavKey ->
             when (key) {
                 is SujianRoute ->
                     when (key) {
                         is SujianRoute.Works ->
-                            rememberWorksEntry(key, context, topLevelBackStack, deps)
+                            rememberWorksEntry(key, context, topLevelBackStack, deps, editorCallbacks)
                         is SujianRoute.StarMap ->
                             NavEntry(key, metadata = noPageTransitionMetadata) { route ->
                                 StarMapPlaceholderScreen(
@@ -203,6 +219,7 @@ private fun rememberSujianEntryProvider(
             }
         }
     }
+}
 
 /**
  * #625 第二段：Works 路由的 NavEntry — 提取以降低 [rememberSujianEntryProvider] 认知复杂度。
@@ -216,6 +233,7 @@ private fun rememberWorksEntry(
     context: SujianNavContext,
     topLevelBackStack: SujianTopLevelBackStack,
     deps: SujianAppDependencies,
+    editorCallbacks: EditorWorkspaceCallbacks,
 ): NavEntry<NavKey> =
     NavEntry(key, metadata = noPageTransitionMetadata) { route ->
         val workbenchPresentation =
@@ -235,6 +253,7 @@ private fun rememberWorksEntry(
             projectWorkspaceActions = context.projectWorkspaceActions,
             layoutSpec = context.layoutSpec,
             workbenchPresentation = workbenchPresentation,
+            editorCallbacks = editorCallbacks,
         )
     }
 

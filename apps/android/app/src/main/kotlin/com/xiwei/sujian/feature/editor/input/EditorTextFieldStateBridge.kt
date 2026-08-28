@@ -121,72 +121,60 @@ class EditorTextFieldStateBridge(
 }
 
 /**
- * #641 评论1 第2节：共同前缀 + 共同后缀算一次连续 replace。
+ * #641 评论1 第2节 + 评论 5457777142 问题1：共同前缀 + 共同后缀算一次连续 replace。
  * offset 是 UTF-16。
  *
- * #641 评论 问题1b：共同前缀/后缀与 replace 端点都按 Unicode code point 边界对齐，
- * 不把 emoji/CJK 之外的 supplementary plane 字符（surrogate pair）拆在 high/low 中间。
+ * 关键：共同前缀/后缀与 replace 端点都按 Unicode code point 边界推进，
+ * 直接用 `Character.codePointAt` / `Character.codePointBefore` + `Character.charCount`
+ * 在 code point 粒度上比较，**不**在 Char 数量算完后再补 `safeCodePointBoundary()`。
+ * 这样 emoji/supplementary plane 字符（surrogate pair）不会被拆在 high/low 中间，
+ * 也不会出现旧 `commonSuffixLength` 把 `a😀` → `b😀` 的共同后缀从 2 错减成 1 的问题。
  */
+private data class ReplaceBounds(
+    val oldStart: Int,
+    val oldEnd: Int,
+    val newStart: Int,
+    val newEnd: Int,
+)
+
+private fun computeReplaceBounds(
+    oldText: String,
+    newText: String,
+): ReplaceBounds {
+    var oldStart = 0
+    var newStart = 0
+    while (oldStart < oldText.length && newStart < newText.length) {
+        val oldCp = Character.codePointAt(oldText, oldStart)
+        val newCp = Character.codePointAt(newText, newStart)
+        if (oldCp != newCp) break
+        oldStart += Character.charCount(oldCp)
+        newStart += Character.charCount(newCp)
+    }
+
+    var oldEnd = oldText.length
+    var newEnd = newText.length
+    while (oldEnd > oldStart && newEnd > newStart) {
+        val oldCp = Character.codePointBefore(oldText, oldEnd)
+        val newCp = Character.codePointBefore(newText, newEnd)
+        if (oldCp != newCp) break
+        oldEnd -= Character.charCount(oldCp)
+        newEnd -= Character.charCount(newCp)
+    }
+
+    return ReplaceBounds(oldStart, oldEnd, newStart, newEnd)
+}
+
 internal fun computeSingleReplace(
     oldText: String,
     newText: String,
     selection: TextRange,
 ): CommittedTextEdit {
-    val commonPrefix = commonPrefixLength(oldText, newText)
-    val commonSuffix = commonSuffixLength(oldText, newText, commonPrefix)
-    val replaceStart = commonPrefix
-    val replaceEndExclusive = oldText.length - commonSuffix
-    // 确保 replaceStart 和 replaceEndExclusive 不落在 surrogate pair 中间
-    val safeStart = safeCodePointBoundary(oldText, replaceStart)
-    val safeEnd = safeCodePointBoundary(oldText, replaceEndExclusive)
-    val insertedText = newText.substring(commonPrefix, newText.length - commonSuffix)
+    val bounds = computeReplaceBounds(oldText, newText)
     return CommittedTextEdit(
         oldText = oldText,
-        replaceStart = safeStart,
-        replaceEndExclusive = safeEnd,
-        newText = insertedText,
+        replaceStart = bounds.oldStart,
+        replaceEndExclusive = bounds.oldEnd,
+        newText = newText.substring(bounds.newStart, bounds.newEnd),
         selection = selection,
     )
-}
-
-/**
- * #641 评论 问题1b：把 [index] 校正到 Unicode code point 边界。
- * 若 [index] 落在 low surrogate 上（即 surrogate pair 中间），回退到 high surrogate。
- * 边界 0 / text.length 直接返回。
- */
-private fun safeCodePointBoundary(
-    text: String,
-    index: Int,
-): Int {
-    if (index <= 0 || index >= text.length) return index
-    // 如果 index 落在 low surrogate 上，回退到 high surrogate
-    return if (text[index].isLowSurrogate()) index - 1 else index
-}
-
-private fun commonPrefixLength(
-    a: String,
-    b: String,
-): Int {
-    val min = minOf(a.length, b.length)
-    var i = 0
-    while (i < min && a[i] == b[i]) i++
-    // 校正到 code point 边界：如果 i 落在 low surrogate 上，回退到 high surrogate
-    if (i > 0 && i < a.length && a[i].isLowSurrogate()) i--
-    return i
-}
-
-private fun commonSuffixLength(
-    a: String,
-    b: String,
-    prefixLen: Int,
-): Int {
-    val aRemain = a.length - prefixLen
-    val bRemain = b.length - prefixLen
-    val min = minOf(aRemain, bRemain)
-    var i = 0
-    while (i < min && a[a.length - 1 - i] == b[b.length - 1 - i]) i++
-    // 校正到 code point 边界：如果 a[a.length - i] 是 high surrogate
-    // （即 i 落在 surrogate pair 中间），回退
-    if (i > 0 && a.length - i > 0 && a[a.length - i].isHighSurrogate()) i--
-    return i
 }
