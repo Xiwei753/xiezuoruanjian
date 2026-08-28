@@ -13,7 +13,7 @@ import androidx.compose.runtime.Immutable
  * ```
  *
  * 随后一次性传给 Rust session animation_enabled / duration、
- * AndroidTextAnimationEngine、SujianEditorView。
+ * [ComposeEditorVisualState] / [ComposeTextAnimationOverlay]。
  *
  * `applyProfileToPipeline()` 只处理 input type、行数、选择、复制粘贴、换行等
  * profile 内容，不再直接写动画开关。

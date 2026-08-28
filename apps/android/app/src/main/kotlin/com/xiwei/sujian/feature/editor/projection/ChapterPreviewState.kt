@@ -5,8 +5,9 @@ import androidx.compose.runtime.Immutable
 /**
  * #595 九：非活动章节预览的纯静态状态 — 不含动画引擎、Bitmap 或 VisualRuntime。
  *
- * 活动编辑只有 [com.xiwei.sujian.feature.editor.platform.SujianEditorView] 持有动画 runtime
- * 和 Bitmap 资源。非活动预览只需不可变的预览数据和静态 layout。
+ * #641：活动编辑由 [WritingEditorSurface] 的 state-based [BasicTextField] 持有
+ * 输入/排版，动画由 [ComposeEditorVisualState] 消费 [TextLayoutResult] 做显示。
+ * 非活动预览只需不可变的预览数据和静态 layout。
  */
 @Immutable
 data class ChapterPreviewState(

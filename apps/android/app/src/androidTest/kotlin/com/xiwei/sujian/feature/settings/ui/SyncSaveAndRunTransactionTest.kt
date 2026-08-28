@@ -22,8 +22,9 @@ import org.junit.runner.RunWith
  *
  * 使用真实 Core 工作区（TestDependenciesRule），config 经 Core 持久化往返。
  *
- * #600 评论 #3：同步配置已改为 per-project，测试需创建作品并设为活动作品，
- * 用 projectId 调用 loadSyncConfig。
+ * #630 评论 #1+#2：同步配置只有一份 — 全量同步覆盖设置/星图/主题/全部作品，
+ * 不再区分作品级与应用级两套 UI 状态/Intent/SaveCommand。测试已迁移到当前
+ * 单一同步配置 API：UpdateSyncConfig(transform) / performSyncState / loadSyncConfig()。
  */
 @RunWith(AndroidJUnit4::class)
 class SyncSaveAndRunTransactionTest {
@@ -58,9 +59,9 @@ class SyncSaveAndRunTransactionTest {
 
         // 同一批次进入保存队列：旧配置编辑 → 保存并同步（捕获旧值）→ 更新为新配置。
         instrumentation.runOnMainSync {
-            vm!!.handleIntent(SettingsIntent.UpdateProjectSyncConfig(configA))
+            vm!!.handleIntent(SettingsIntent.UpdateSyncConfig { configA })
             vm!!.handleIntent(SettingsIntent.PerformSync)
-            vm!!.handleIntent(SettingsIntent.UpdateProjectSyncConfig(configB))
+            vm!!.handleIntent(SettingsIntent.UpdateSyncConfig { configB })
         }
 
         awaitTerminalState(instrumentation, vm!!)
@@ -68,9 +69,9 @@ class SyncSaveAndRunTransactionTest {
         assertEquals(
             "未配置同步时事务必须以失败终态结束，不允许停留在 RUNNING/IDLE",
             SyncCommandState.FAILURE,
-            vm!!.uiState.value.projectPerformSyncState,
+            vm!!.uiState.value.performSyncState,
         )
-        val persisted = session.deps.syncRepository.loadSyncConfig(projectData.projectId)
+        val persisted = session.deps.syncRepository.loadSyncConfig()
         assertEquals(
             "事务不得用捕获的旧值反向覆盖排队中的更新版本（#592）",
             "https://b.example/repo.git",
@@ -103,17 +104,17 @@ class SyncSaveAndRunTransactionTest {
                 )
         }
         instrumentation.runOnMainSync {
-            vm!!.handleIntent(SettingsIntent.UpdateProjectSyncConfig(config))
+            vm!!.handleIntent(SettingsIntent.UpdateSyncConfig { config })
             vm!!.handleIntent(SettingsIntent.PerformSync)
         }
 
         awaitTerminalState(instrumentation, vm!!)
 
-        assertEquals(SyncCommandState.FAILURE, vm!!.uiState.value.projectPerformSyncState)
+        assertEquals(SyncCommandState.FAILURE, vm!!.uiState.value.performSyncState)
         assertEquals(
             "无并发新编辑时事务必须保存捕获 revision 对应的配置",
             "https://c.example/repo.git",
-            session.deps.syncRepository.loadSyncConfig(projectData.projectId).remoteUrl,
+            session.deps.syncRepository.loadSyncConfig().remoteUrl,
         )
     }
 
@@ -125,13 +126,13 @@ class SyncSaveAndRunTransactionTest {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             instrumentation.waitForIdleSync()
-            val state = vm.uiState.value.projectPerformSyncState
+            val state = vm.uiState.value.performSyncState
             if (state == SyncCommandState.SUCCESS || state == SyncCommandState.FAILURE) return
             Thread.sleep(50)
         }
         fail(
             "SaveAndRunSync transaction did not reach terminal state within ${timeoutMs}ms; " +
-                "state=${vm.uiState.value.projectPerformSyncState}",
+                "state=${vm.uiState.value.performSyncState}",
         )
     }
 }

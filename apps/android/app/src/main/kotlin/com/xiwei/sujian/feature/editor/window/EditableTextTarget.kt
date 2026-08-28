@@ -89,9 +89,10 @@ data class Transform2D(
 /**
  * Lifecycle states of the shared editing host within the coordinator.
  *
- * Per #541: the shared [SujianEditorView] transitions through these states as the
- * coordinator binds, rebinds, commits, or cancels editing targets. Only EDITING produces
- * an active InputConnection; all other states either prepare or tear down the session.
+ * Per #541: the editing host transitions through these states as the
+ * coordinator binds, rebinds, commits, or cancels editing targets. #641 后正文
+ * 由 state-based [BasicTextField]([TextFieldState]) 渲染，不再有传统 View
+ * InputConnection；只有 EDITING 产生活动输入，其余状态准备或拆除 session。
  *
  * State transitions:
  * - IDLE → BINDING (beginEdit called)

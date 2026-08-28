@@ -353,9 +353,9 @@ open class EditorSessionCoordinator(
     /**
      * #595 一：应用本地 IME/键盘编辑 — 更新唯一 SessionState，不触发 reset。
      *
-     * 由 [EditorWindowHost.installContentCallback] 在 SujianEditorView 产生
-     * EditResult 后调用。revision/transactionId 来自 Rust EditResult，
-     * selectionAnchor/Head 来自 pipeline mirror（真实选区）。
+     * #641：由 [EditorTextFieldStateBridge] 在 IME 提交（composition 结束）后产生
+     * EditResult 时调用。revision/transactionId 来自 Rust EditResult，
+     * selectionAnchor/Head 来自 [TextFieldState]（真实选区）。
      * #595 二：本地输入置 localDirty=true（存在未落盘编辑），
      * 外部版本不得直接 reset 覆盖。
      * #595 四：sessionId 从 store 记录读取 — 非持久 target 同样有 sessionId。

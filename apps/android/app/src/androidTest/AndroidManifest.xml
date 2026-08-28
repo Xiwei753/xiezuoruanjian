@@ -2,46 +2,15 @@
 <!--
   androidTest 源集专属 Manifest（只打进 test APK com.xiwei.sujian.test，绝不进入生产 APK）。
 
-  声明仓库内确定性测试 IME：完整 IME 测试通过真实系统绑定路径
-  （InputMethodService → InputConnection → adapter → kernel）驱动编辑器。
-
-  注意：
-  - android:permission="android.permission.BIND_INPUT_METHOD" 是系统把该 service
-    当作输入法绑定（IME 绑定方只有系统）的必要声明。
-  - android:name=".testime.TestInputMethodService" 相对 test APK 包名
-    com.xiwei.sujian.test 解析为 com.xiwei.sujian.test.testime.TestInputMethodService，
-    与 adb shell ime enable/set 与 startService 使用的 component id
-    com.xiwei.sujian.test/.testime.TestInputMethodService 一致。
-  - API 34 起 targetSdk>=34 的 IME 还必须声明 <meta-data android:name="android.view.im">
-    （指向 xml/method）；缺失时 InputMethodInfo 构造抛 XmlPullParserException
-    （logcat: "No android.view.im meta-data"），ime list 不会注册该服务。
+  #641：旧确定性测试 IME（TestInputMethodService / TestImeCommandService）只服务
+  已删除的 EditorImeInputTest（旧 SujianEditorView + InputConnection + AndroidInputAdapter
+  路径）。正文输入边界已改为 state-based BasicTextField(TextFieldState)，instrumented
+  测试通过 Compose semantics（testTag = editor.content）驱动，不再需要 test IME service。
+  对应的 TestImeCommands / TestInputMethodService / TestImeCommandService / res/xml/method
+  已一并删除。
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <application>
-        <service
-            android:name=".testime.TestInputMethodService"
-            android:exported="true"
-            android:permission="android.permission.BIND_INPUT_METHOD"
-            android:label="Sujian Test IME">
-            <intent-filter>
-                <action android:name="android.view.InputMethod" />
-            </intent-filter>
-            <meta-data
-                android:name="android.view.im"
-                android:resource="@xml/method" />
-        </service>
+    <application />
 
-        <!--
-          Command relay for the test IME. The IME service above must be
-          BIND_INPUT_METHOD-protected to be recognized by the system, but that
-          protection also blocks startService from the app process (verified
-          on API 34: "Requires permission android.permission.BIND_INPUT_METHOD").
-          The relay carries no permission so the test process can start it; it
-          forwards commands to the bound IME instance in the same process.
-        -->
-        <service
-            android:name=".testime.TestImeCommandService"
-            android:exported="true" />
-    </application>
 </manifest>

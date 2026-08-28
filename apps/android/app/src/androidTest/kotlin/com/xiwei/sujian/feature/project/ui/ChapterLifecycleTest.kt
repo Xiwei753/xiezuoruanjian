@@ -1,20 +1,17 @@
 package com.xiwei.sujian.feature.project.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.v2.AndroidComposeTestRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.espresso.Espresso
-import androidx.test.espresso.matcher.ViewMatchers
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
-import com.xiwei.sujian.support.EditorCommitTextAction
-import com.xiwei.sujian.support.EditorViewAssertions
 import com.xiwei.sujian.support.RestartableMainActivityRule
 import com.xiwei.sujian.support.TestSession
 import org.junit.Assert.assertEquals
@@ -174,8 +171,7 @@ class ChapterLifecycleTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterAId)).performClick()
         waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterAId, "正文隔离A")
 
-        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-            .perform(EditorCommitTextAction.commitText("正文-A"))
+        composeTestRule.onNodeWithTag(SujianSemanticIds.EditorContent).performTextInput("正文-A")
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
         Espresso.closeSoftKeyboard()
@@ -185,11 +181,9 @@ class ChapterLifecycleTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterBId)).performClick()
         waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterBId, "正文隔离B")
 
-        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-            .check(EditorViewAssertions.hasDisplayText(""))
+        composeTestRule.onNodeWithTag(SujianSemanticIds.EditorContent).assertTextEquals("")
 
-        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-            .perform(EditorCommitTextAction.commitText("正文-B"))
+        composeTestRule.onNodeWithTag(SujianSemanticIds.EditorContent).performTextInput("正文-B")
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
         Espresso.closeSoftKeyboard()
@@ -199,8 +193,7 @@ class ChapterLifecycleTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterAId)).performClick()
         waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterAId, "正文隔离A")
 
-        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-            .check(EditorViewAssertions.hasDisplayText("正文-A"))
+        composeTestRule.onNodeWithTag(SujianSemanticIds.EditorContent).assertTextEquals("正文-A")
 
         val coordinator = session.deps.coordinator
         val targetIdA = "chapter-body:${testData.projectId}:${testData.volumeId}:$chapterAId"
@@ -217,8 +210,7 @@ class ChapterLifecycleTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterBId)).performClick()
         waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterBId, "正文隔离B")
 
-        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-            .check(EditorViewAssertions.hasDisplayText("正文-B"))
+        composeTestRule.onNodeWithTag(SujianSemanticIds.EditorContent).assertTextEquals("正文-B")
 
         val targetIdB = "chapter-body:${testData.projectId}:${testData.volumeId}:$chapterBId"
         assertEquals(
@@ -236,11 +228,11 @@ class ChapterLifecycleTest {
         expectedContent: String? = null,
     ) {
         val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
-        ComposeWait.waitForEspressoViewCondition(
+        ComposeWait.waitForTag(
             composeTestRule,
-            EditorViewAssertions.isEditorReady(),
+            SujianSemanticIds.EditorContent,
             timeoutMs = 15_000,
-        ) { "Editor did not become ready for chapter $chapterId" }
+        )
 
         var lastTargetId: String? = null
         ComposeWait.waitUntil(composeTestRule, {
@@ -254,8 +246,7 @@ class ChapterLifecycleTest {
         composeTestRule.onNodeWithText(expectedTitle).assertIsDisplayed()
 
         if (expectedContent != null) {
-            Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-                .check(EditorViewAssertions.hasDisplayText(expectedContent))
+            composeTestRule.onNodeWithTag(SujianSemanticIds.EditorContent).assertTextEquals(expectedContent)
         }
     }
 

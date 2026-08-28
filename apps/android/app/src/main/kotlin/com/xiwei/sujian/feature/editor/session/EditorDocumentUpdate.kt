@@ -76,8 +76,8 @@ sealed interface EditorDocumentUpdate {
     /**
      * #595 二：撤销/恢复后正文变更事件。
      *
-     * 由 [EditorWindowHost] 在 SujianEditorView.performUndo/performRedo 产生
-     * EditResult 后发出（PipelineOutput 携带来源，无可变侧信道）。
+     * #641：由 [EditorWindowHost] 在撤销/恢复产生 EditResult 后发出
+     * （PipelineOutput 携带来源，无可变侧信道）。
      * 撤销/恢复是本地发起的操作，revision 来自 Rust EditResult，
      * 但来源被类型化以区分于普通本地输入。
      */

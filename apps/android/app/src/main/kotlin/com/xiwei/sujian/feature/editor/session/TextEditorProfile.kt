@@ -3,13 +3,13 @@ package com.xiwei.sujian.feature.editor.session
 /**
  * Composable configuration for an editable text target's input and display behavior.
  *
- * Per #541: profile determines how the shared [SujianEditorView] configures itself for a
+ * Per #541: profile determines how the editing host configures itself for a
  * given target — it does NOT determine where the text is saved (that is the domain command's
  * responsibility). Multiple targets can share the same profile (e.g. project title and chapter
  * title both use [ShortTitle]) while committing to different domain objects.
  *
- * Profile is applied to the pipeline via [SujianEditorView.applyProfileToPipeline] on each
- * [bindSession] call, so switching targets reconfigures the shared host entirely.
+ * #641：profile 由 [WritingEditorSurface] 的 state-based [BasicTextField] 在每次
+ * [bindSession] 时应用，切换 target 会完全重配置编辑器。
  */
 data class TextEditorProfile(
     val singleLine: Boolean = false,

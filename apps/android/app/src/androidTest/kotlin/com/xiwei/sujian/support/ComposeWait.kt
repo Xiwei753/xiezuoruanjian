@@ -53,33 +53,6 @@ object ComposeWait {
         })
     }
 
-    fun waitForEspressoViewCondition(
-        rule: ComposeTestRule,
-        viewAssertion: androidx.test.espresso.ViewAssertion,
-        timeoutMs: Long = 15_000L,
-        message: () -> String,
-    ) {
-        var lastDiagnostic = "no result yet"
-        waitUntil(rule, {
-            try {
-                androidx.test.espresso.Espresso.onView(
-                    androidx.test.espresso.matcher.ViewMatchers.withId(
-                        com.xiwei.sujian.R.id.editor_content,
-                    ),
-                ).check(viewAssertion)
-                true
-            } catch (e: AssertionError) {
-                lastDiagnostic = e.message ?: "assertion failed"
-                false
-            } catch (e: Exception) {
-                lastDiagnostic = "${e.javaClass.simpleName}: ${e.message}"
-                false
-            }
-        }, timeoutMs, diagnostic = {
-            "${message()}. Last diagnostic: $lastDiagnostic"
-        })
-    }
-
     fun waitUntil(
         rule: ComposeTestRule,
         condition: () -> Boolean,
