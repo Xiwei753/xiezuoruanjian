@@ -4,12 +4,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -19,10 +17,12 @@ import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
 import com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
+import com.xiwei.sujian.app.presentation.layout.AndroidLayoutRect
 import com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult
 import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
 import com.xiwei.sujian.feature.editor.presentation.requestOpenChapter
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
+import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -60,8 +60,6 @@ internal fun ProjectWorkspaceScreen(
     projectListActions: AndroidWorkspaceActionSpec,
     projectWorkspaceActions: AndroidWorkspaceActionSpec,
     layoutSpec: AndroidLayoutSpec,
-    onPreparedEditorTargetChanged: (PreparedEditorTarget?) -> Unit,
-    onEditorCallbacksChanged: (EditorPresentationCallbacks) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -134,12 +132,9 @@ internal fun ProjectWorkspaceScreen(
         }
     }
 
-    // #640 A：preparedEditorTarget state 已上移到 SujianNavigationSuite（唯一 Compose 状态源）。
-    // 本组件只保留 requestOpenChapter 串行化（navigationRequestId/openChapterJob），
-    // 成功后通过 onPreparedEditorTargetChanged 提交 target；suite 接管 awaitPresentationReady + navigate。
+    // requestOpenChapter 串行化（navigationRequestId/openChapterJob）
     var navigationRequestId by remember { mutableStateOf(0L) }
     var openChapterJob by remember { mutableStateOf<Job?>(null) }
-    val onPreparedEditorTargetChangedRef = rememberUpdatedState(onPreparedEditorTargetChanged)
     val openChapter: (
         projectId: String,
         projectTitle: String,
@@ -148,9 +143,9 @@ internal fun ProjectWorkspaceScreen(
         chapterTitle: String,
         onLoadFailed: (() -> Unit)?,
     ) -> Unit =
-        remember(coroutineScope, editorViewModel, editorHost) {
+        remember(coroutineScope, editorViewModel, editorHost, appState, workspaceNavState) {
             { projectId, projectTitle, volumeId, chapterId, chapterTitle, onLoadFailed ->
-                // #640 B：新请求 cancel 旧请求 — 旧 requestOpenChapter 被 cancel。
+                // 新请求 cancel 旧请求 — 旧 requestOpenChapter 被 cancel。
                 openChapterJob?.cancel()
                 openChapterJob =
                     coroutineScope.launch {
@@ -164,16 +159,10 @@ internal fun ProjectWorkspaceScreen(
                             )
                         when (result) {
                             is ChapterSwitchResult.Success -> {
-                                val target =
-                                    PreparedEditorTarget(
-                                        projectId = projectId,
-                                        projectTitle = projectTitle,
-                                        volumeId = volumeId,
-                                        chapterId = chapterId,
-                                        chapterTitle = chapterTitle,
-                                    )
-                                // #640 A：只提交 target；suite 接管 awaitPresentationReady + navigate。
-                                onPreparedEditorTargetChangedRef.value(target)
+                                // requestOpenChapter 成功后直接选择 project/chapter 并导航到 Editor
+                                appState.selectProject(projectId, projectTitle)
+                                appState.selectChapter(volumeId, chapterId, chapterTitle)
+                                workspaceNavState.navigateToEditor(projectId, volumeId, chapterId)
                             }
                             is ChapterSwitchResult.SaveFailed,
                             ChapterSwitchResult.Stale,
@@ -190,7 +179,7 @@ internal fun ProjectWorkspaceScreen(
             }
         }
 
-    // #640 A.8/A.9：章节切换失败回滚回调 — remember 稳定，供窄屏/宽屏/host 共用。
+    // 章节切换失败回滚回调 — remember 稳定，供窄屏/宽屏共用。
     val onChapterSwitchFailed: (
         oldProjectId: String,
         oldVolumeId: String?,
@@ -212,31 +201,6 @@ internal fun ProjectWorkspaceScreen(
                 }
             }
         }
-
-    // #640 A：宽屏章节切换回调 — remember 稳定，上传给 host 供 WideWritingWorkspace 章节树使用。
-    val onChapterSwitch: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit =
-        remember(appState, openChapter) {
-            { volumeId: String, chapterId: String, chapterTitle: String ->
-                appState.currentProjectId?.let { projectId ->
-                    val projectTitle =
-                        appState.projectSummaries.firstOrNull { it.id == projectId }?.title.orEmpty()
-                    openChapter(projectId, projectTitle, volumeId, chapterId, chapterTitle, null)
-                }
-            }
-        }
-
-    // #640 A：EditorPresentationCallbacks — remember 稳定后 SideEffect 上传给 suite，
-    // 供 EditorPresentationHost 宽屏 WideWritingWorkspace 使用。不新建第二 ViewModel/状态源。
-    val editorCallbacks =
-        remember(onChapterSwitch, onChapterSwitchFailed) {
-            EditorPresentationCallbacks(
-                onChapterSwitch = onChapterSwitch,
-                onChapterSwitchFailed = onChapterSwitchFailed,
-            )
-        }
-    SideEffect {
-        onEditorCallbacksChanged(editorCallbacks)
-    }
 
     // #630 评论12 项2 + 评论13 项1 + 评论15 项1：「继续写作」— 先在 IO 调度器解析真实章节标题，
     // 再传给 requestOpenChapter，避免空标题提交进 EditorViewModel 事务。
@@ -296,7 +260,14 @@ internal fun ProjectWorkspaceScreen(
                 }
             },
             onContinueRecentEdit = handleContinueRecentEdit,
-            onSelectChapter = onChapterSwitch,
+            onSelectChapter = { volumeId, chapterId, chapterTitle ->
+                appState.currentProjectId?.let { projectId ->
+                    val projectTitle =
+                        appState.projectSummaries.firstOrNull { it.id == projectId }?.title.orEmpty()
+                    openChapter(projectId, projectTitle, volumeId, chapterId, chapterTitle, null)
+                }
+            },
+            onChapterSwitchFailed = onChapterSwitchFailed,
             modifier = modifier,
         )
     } else {
@@ -315,16 +286,21 @@ internal fun ProjectWorkspaceScreen(
                 }
             },
             onContinueRecentEdit = handleContinueRecentEdit,
-            onSelectChapter = onChapterSwitch,
+            onSelectChapter = { volumeId, chapterId, chapterTitle ->
+                appState.currentProjectId?.let { projectId ->
+                    val projectTitle =
+                        appState.projectSummaries.firstOrNull { it.id == projectId }?.title.orEmpty()
+                    openChapter(projectId, projectTitle, volumeId, chapterId, chapterTitle, null)
+                }
+            },
+            onChapterSwitchFailed = onChapterSwitchFailed,
             modifier = modifier.fillMaxSize(),
         )
     }
 }
 
 /**
- * 窄屏（SinglePane）业务内容 — 只画 ProjectList/ChapterTree。
- *
- * #640 A：Editor 由 EditorPresentationHost（suite sibling）接管，本函数 Editor 位置留空。
+ * 窄屏（SinglePane）业务内容 — 画 ProjectList/ChapterTree/Editor。
  */
 @Composable
 private fun SinglePaneContent(
@@ -337,6 +313,7 @@ private fun SinglePaneContent(
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     onContinueRecentEdit: (edit: RecentEdit) -> Unit,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
+    onChapterSwitchFailed: (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when (location) {
@@ -368,15 +345,21 @@ private fun SinglePaneContent(
                 }
             }
         is WorkspaceLocation.Editor -> {
-            // #640 A：Editor 由 EditorPresentationHost（suite sibling）接管，此处留空。
+            // Editor 位置直接绘制 SujianEditorHost
+            SujianEditorHost(
+                projectId = location.projectId,
+                volumeId = location.volumeId,
+                chapterId = location.chapterId,
+                chapterTitle = appState.currentChapterTitle,
+                modifier = Modifier.fillMaxSize(),
+                onChapterSwitchFailed = onChapterSwitchFailed,
+            )
         }
     }
 }
 
 /**
- * 大屏（Workbench）业务内容 — 只画 ProjectList/ChapterTree。
- *
- * #640 A：Editor 由 EditorPresentationHost（suite sibling）接管，Editor 位置留空。
+ * 大屏（Workbench）业务内容 — 只画 ProjectList/ChapterTree/Editor。
  */
 @Composable
 private fun WideLayoutContent(
@@ -390,6 +373,7 @@ private fun WideLayoutContent(
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     onContinueRecentEdit: (edit: RecentEdit) -> Unit,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
+    onChapterSwitchFailed: (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when (location) {
@@ -420,7 +404,51 @@ private fun WideLayoutContent(
                 }
             }
         is WorkspaceLocation.Editor -> {
-            // #640 A：Editor 由 EditorPresentationHost（suite sibling）接管，此处留空。
+            // 大屏 Editor 位置直接绘制 WideWritingWorkspace
+            val deps =
+                remember(appState, projectRepository, projectWorkspaceActions) {
+                    WideWorkspaceDeps(
+                        appState = appState,
+                        projectRepository = projectRepository,
+                        projectWorkspaceActions = projectWorkspaceActions,
+                        chrome = null,
+                    )
+                }
+            val layoutState =
+                remember {
+                    WideWorkspaceLayoutState(
+                        workbenchPlan = null,
+                        chapterTreeCollapsed = false,
+                        toolPaneCollapsed = false,
+                        onToggleChapterTree = {},
+                        onToggleToolPane = {},
+                    )
+                }
+            val callbacks =
+                remember(onSelectChapter, onChapterSwitchFailed) {
+                    WideWorkspaceCallbacks(
+                        onBack = { },
+                        onSync = {},
+                        onSearch = {},
+                        onSettings = {},
+                        onChapterSwitch = onSelectChapter,
+                        onChapterSwitchFailed = onChapterSwitchFailed,
+                    )
+                }
+            WideWritingWorkspace(
+                deps = deps,
+                documentState =
+                    WideWorkspaceDocumentState(
+                        currentProjectId = location.projectId,
+                        currentVolumeId = location.volumeId,
+                        currentChapterId = location.chapterId,
+                        currentChapterTitle = appState.currentChapterTitle,
+                    ),
+                layoutState = layoutState,
+                callbacks = callbacks,
+                fallbackSafeBounds = AndroidLayoutRect(0f, 0f, 0f, 0f),
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 }

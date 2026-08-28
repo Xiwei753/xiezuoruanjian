@@ -161,7 +161,6 @@ fun WritingPane(
                 settingsReady = uiState.settingsReady,
                 isCurrentChapter = isActivePane,
             ),
-        presentationVisible = presentationVisible,
     ) { editorModifier ->
         // #624 评论17 第2部分：Route 层收集 targetDecorationsVersionFlow 触发重排，
         // Layout 层不自己 collect session/window flow。
@@ -172,7 +171,6 @@ fun WritingPane(
             targetId = targetId,
             isActivePane = isActivePane,
             modifier = editorModifier,
-            presentationVisible = presentationVisible,
         )
     }
 }

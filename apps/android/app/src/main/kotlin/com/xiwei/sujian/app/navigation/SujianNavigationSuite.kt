@@ -5,7 +5,6 @@ import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.SnackbarHostState
@@ -46,32 +45,18 @@ import com.xiwei.sujian.app.state.ActiveDocumentGate
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.platform.window.AospFoldFeatureInfo
-import com.xiwei.sujian.feature.project.ui.EditorPresentationCallbacks
-import com.xiwei.sujian.feature.project.ui.EditorPresentationHost
-import com.xiwei.sujian.feature.project.ui.PreparedEditorTarget
 import com.xiwei.sujian.feature.project.ui.ProjectNavigationState
 import com.xiwei.sujian.feature.project.ui.ProjectWorkspaceScreen
-import com.xiwei.sujian.feature.project.ui.WideWorkspaceCallbacks
-import com.xiwei.sujian.feature.project.ui.WideWorkspaceDeps
-import com.xiwei.sujian.feature.project.ui.WideWorkspaceLayoutState
 import com.xiwei.sujian.feature.project.ui.WorkspaceLocation
 import com.xiwei.sujian.feature.project.ui.WorkspaceNavigator
 import com.xiwei.sujian.feature.project.ui.buildInitialHistory
 import com.xiwei.sujian.feature.project.ui.deriveRestoreDestination
-import com.xiwei.sujian.feature.project.ui.guardedBack
-import com.xiwei.sujian.feature.project.ui.isWideLayout
-import com.xiwei.sujian.feature.project.ui.restorePreparedEditorTarget
-import com.xiwei.sujian.feature.project.ui.shouldNavigateAfterReady
 import com.xiwei.sujian.feature.settings.ui.SettingsRoute
 import com.xiwei.sujian.feature.starmap.ui.StarMapPlaceholderScreen
 import com.xiwei.sujian.feature.stats.ui.StatsScreen
 import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
-import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 enum class SujianDestination(
@@ -138,8 +123,6 @@ private data class SujianNavContext(
     val onToggleChapterTree: () -> Unit,
     val onToggleToolPane: () -> Unit,
     val chrome: SujianChromeSpec,
-    val onPreparedEditorTargetChanged: (com.xiwei.sujian.feature.project.ui.PreparedEditorTarget?) -> Unit,
-    val onEditorCallbacksChanged: (com.xiwei.sujian.feature.project.ui.EditorPresentationCallbacks) -> Unit,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -237,8 +220,6 @@ private fun rememberWorksEntry(
             projectListActions = context.projectListActions,
             projectWorkspaceActions = context.projectWorkspaceActions,
             layoutSpec = context.layoutSpec,
-            onPreparedEditorTargetChanged = context.onPreparedEditorTargetChanged,
-            onEditorCallbacksChanged = context.onEditorCallbacksChanged,
         )
     }
 
@@ -312,52 +293,6 @@ private fun rememberSujianWorkspaceNavState(appState: SujianAppState): ProjectNa
         navigator.replaceInitialHistory(initialHistory)
     }
     return remember { ProjectNavigationState(navigator) }
-}
-
-/**
- * #640：会话恢复/深链 restore target effect — 已恢复到 Editor 但 lifted preparedEditorTargetState
- * 仍 null 时，从 appState 字段构造 restore target，让稳定 host 组合。
- *
- * rememberSujianWorkspaceNavState 可从 appState 三元 ID 恢复到 WorkspaceLocation.Editor，
- * 但此时没有 ProjectWorkspaceScreen.openChapter 点击提交 target，host target=null 不组合，
- * 冷启动/深链/进程恢复直接空白。
- *
- * - 只在 [isEditorLocation] 且 state null 时初始化一次；
- * - 不调用 onPreparedEditorTargetChanged（不触发 awaitPresentationReady +
- *   selectProject/selectChapter/navigateToEditor — 恢复路径 appState 已是这些值、
- *   navigator 已在 Editor 位置，重复 navigate 会污染历史栈）；
- * - 不调用 requestOpenChapter（不创建第二 editor/state source）；
- * - 现有 WritingPane/SujianEditorHost 的正常 beginEdit/attach/loading 职责无预热恢复；
- * - presentationVisible=isEditorLocation=true，AndroidView 仍由 geometry-ready gate 控制
- *   INVISIBLE/VISIBLE，未 ready 时沿现有 WritingPaneLayout loading overlay 工作。
- */
-@Composable
-private fun restorePreparedEditorTargetEffect(
-    isEditorLocation: Boolean,
-    appState: SujianAppState,
-    preparedEditorTargetState: androidx.compose.runtime.MutableState<PreparedEditorTarget?>,
-) {
-    LaunchedEffect(
-        isEditorLocation,
-        appState.currentProjectId,
-        appState.currentVolumeId,
-        appState.currentChapterId,
-        appState.currentProjectTitle,
-        appState.currentChapterTitle,
-    ) {
-        if (!isEditorLocation || preparedEditorTargetState.value != null) return@LaunchedEffect
-        val restored =
-            restorePreparedEditorTarget(
-                projectId = appState.currentProjectId,
-                projectTitle = appState.currentProjectTitle,
-                volumeId = appState.currentVolumeId,
-                chapterId = appState.currentChapterId,
-                chapterTitle = appState.currentChapterTitle,
-            )
-        if (restored != null) {
-            preparedEditorTargetState.value = restored
-        }
-    }
 }
 
 /** 工作区返回处理 — 系统返回/预测返回（正文→章节树→作品列表）。
@@ -534,58 +469,9 @@ fun SujianNavigationSuite(
     SujianJankInteractionClearEffect(currentRoute, currentTopDestination, workspaceNavState)
     SujianProcessStateEffect(currentTopDestination, appState, syncState)
 
-    // #640 A：preparedEditorTarget 唯一 Compose 状态源 — 由 suite 持有，和 SujianNavScaffoldContent
-    // 作为稳定 sibling。预热与显示共用同一 AndroidView，切换 location 只 INVISIBLE 到 VISIBLE。
-    val preparedEditorTargetState = remember { mutableStateOf<PreparedEditorTarget?>(null) }
-    val awaitJobState = remember { mutableStateOf<Job?>(null) }
-    val editorCallbacksState = remember { mutableStateOf<EditorPresentationCallbacks?>(null) }
-    val suiteCoroutineScope = rememberCoroutineScope()
-    val editorHost = com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost.current
-
-    val onPreparedEditorTargetChanged: (PreparedEditorTarget?) -> Unit =
-        remember(suiteCoroutineScope, editorHost, appState, workspaceNavState) {
-            { target: PreparedEditorTarget? ->
-                preparedEditorTargetState.value = target
-                if (target != null) {
-                    // #640 A：suite 接管 awaitPresentationReady + navigate。
-                    // replacement-aware：target 被替换/清空时 shouldNavigateAfterReady 返回 false。
-                    awaitJobState.value?.cancel()
-                    awaitJobState.value =
-                        suiteCoroutineScope.launch {
-                            val ready = editorHost?.awaitPresentationReady(target.targetId) ?: true
-                            if (!shouldNavigateAfterReady(preparedEditorTargetState.value, target, ready)) {
-                                return@launch
-                            }
-                            kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                            appState.selectProject(target.projectId, target.projectTitle)
-                            appState.selectChapter(target.volumeId, target.chapterId, target.chapterTitle)
-                            workspaceNavState.navigateToEditor(target.projectId, target.volumeId, target.chapterId)
-                        }
-                } else {
-                    awaitJobState.value?.cancel()
-                }
-            }
-        }
-    val onEditorCallbacksChanged: (EditorPresentationCallbacks) -> Unit =
-        remember { { callbacks: EditorPresentationCallbacks -> editorCallbacksState.value = callbacks } }
-
-    val preparedEditorTarget = preparedEditorTargetState.value
     val isEditorLocation =
         currentRoute is SujianRoute.Works &&
             workspaceNavState.currentLocation is WorkspaceLocation.Editor
-    // #640 A：非 Editor 清空 target，释放编辑器层；使旧 await 失效（不提前选 chapter）。
-    LaunchedEffect(currentRoute, workspaceNavState.currentLocation) {
-        if (!isEditorLocation) {
-            onPreparedEditorTargetChanged(null)
-        }
-    }
-    // #640：会话恢复/深链 — 已恢复到 Editor 但 preparedEditorTargetState 仍 null 时，
-    // 从 appState 字段构造 restore target，让稳定 host 组合。详见 [restorePreparedEditorTargetEffect]。
-    restorePreparedEditorTargetEffect(
-        isEditorLocation = isEditorLocation,
-        appState = appState,
-        preparedEditorTargetState = preparedEditorTargetState,
-    )
 
     val navContext =
         SujianNavContext(
@@ -600,8 +486,6 @@ fun SujianNavigationSuite(
             onToggleChapterTree = workbenchPlanState.onToggleChapterTree,
             onToggleToolPane = workbenchPlanState.onToggleToolPane,
             chrome = chrome,
-            onPreparedEditorTargetChanged = onPreparedEditorTargetChanged,
-            onEditorCallbacksChanged = onEditorCallbacksChanged,
         )
     val navDisplayContent: @Composable () -> Unit = {
         SujianTopLevelSwitchMotion(currentTopDestination) {
@@ -630,75 +514,6 @@ fun SujianNavigationSuite(
             snackbarHostState = snackbarHostState,
         )
 
-    // #640 评论 5443789509：Editor 位置的顶栏全部归 EditorPresentationHost，Scaffold 不再给任何 Editor 画顶栏
-    // （showOuterTopBar=!isEditorLocation）。顶栏 lambda 拆成两个：
-    // - compactEditorTopBar：compact 单栏，用 Material3 默认 windowInsets 让 TopAppBar 自己处理 top system inset；
-    // - wideSinglePaneTopBar：wide SinglePane，顶部已由 safe workbench frame 处理，传 WindowInsets(0,0,0,0) 避免二次避让。
-    val compactEditorTopBar: @Composable () -> Unit = {
-        com.xiwei.sujian.core.designsystem.component.SujianTopAppBar(
-            title = topBarInfo.title,
-            navigationIcon = topBarInfo.navigationIcon,
-            onNavigationClick = topBarInfo.onNavigationClick,
-            actions = topBarInfo.actions,
-            containerColor = topBarInfo.containerColor,
-        )
-    }
-    // wide SinglePane 的顶部已由 safe workbench frame（systemBars + displayCutout）处理，
-    // 传 WindowInsets(0, 0, 0, 0) 避免二次避让（plan 已把 toolbar rect 放到安全区下方）。
-    val wideSinglePaneTopBar: @Composable () -> Unit = {
-        com.xiwei.sujian.core.designsystem.component.SujianTopAppBar(
-            title = topBarInfo.title,
-            navigationIcon = topBarInfo.navigationIcon,
-            onNavigationClick = topBarInfo.onNavigationClick,
-            actions = topBarInfo.actions,
-            containerColor = topBarInfo.containerColor,
-            windowInsets = WindowInsets(0, 0, 0, 0),
-        )
-    }
-
-    // #640 A：宽屏 host 的 deps/layoutState/callbacks — 不新建第二 ViewModel/状态源。
-    val wideDeps =
-        WideWorkspaceDeps(
-            appState = appState,
-            projectRepository = deps.projectRepository,
-            projectWorkspaceActions = projectWorkspaceActions,
-            chrome = chrome,
-        )
-    val wideLayoutState =
-        WideWorkspaceLayoutState(
-            workbenchPlan = workbenchPlanState.workbenchPlan,
-            chapterTreeCollapsed = workbenchPlanState.chapterTreeCollapsed,
-            toolPaneCollapsed = workbenchPlanState.toolPaneCollapsed,
-            onToggleChapterTree = workbenchPlanState.onToggleChapterTree,
-            onToggleToolPane = workbenchPlanState.onToggleToolPane,
-        )
-    val editorCallbacks = editorCallbacksState.value
-    val wideCallbacks =
-        if (editorCallbacks != null) {
-            WideWorkspaceCallbacks(
-                onBack = { suiteCoroutineScope.launch { workspaceNavState.guardedBack() } },
-                onSync = {
-                    suiteCoroutineScope.launch {
-                        deps.syncCoordinator.runFullSync(
-                            com.xiwei.sujian.feature.sync.data.model.SyncTrigger.Manual,
-                        )
-                    }
-                },
-                onSearch = { },
-                onSettings = {
-                    editorHost?.dismissImeForNavigation()
-                    topLevelBackStack.add(SujianRoute.Settings)
-                },
-                onChapterSwitch = editorCallbacks.onChapterSwitch,
-                onChapterSwitchFailed = editorCallbacks.onChapterSwitchFailed,
-            )
-        } else {
-            null
-        }
-
-    // #640 A：稳定 sibling — host 后画（上层），Scaffold 先画（底层）。
-    // 预热时 host 透明，Scaffold 的 ProjectList/ChapterTree 透出；
-    // 显示时 host 的 Editor 遮盖 Scaffold（container 透明 + navDisplayContent Editor 位置空）。
     androidx.compose.foundation.layout.Box(modifier = modifier) {
         SujianNavScaffoldContent(
             modifier = Modifier.fillMaxSize(),
@@ -708,20 +523,6 @@ fun SujianNavigationSuite(
             selection = SujianTopLevelSelection(currentTopDestination, onTopLevelSelected),
             navDisplayContent = navDisplayContent,
             containerColor = scaffoldContainerColor,
-        )
-        EditorPresentationHost(
-            target = preparedEditorTarget,
-            isWideLayout = layoutSpec.workspaceLayoutMode.isWideLayout(),
-            presentationVisible = isEditorLocation,
-            workbenchPlan = workbenchPlanState.workbenchPlan,
-            workbenchSafeBounds = workbenchSafeBounds,
-            compactEditorTopBar = compactEditorTopBar,
-            wideSinglePaneTopBar = wideSinglePaneTopBar,
-            wideDeps = wideDeps,
-            wideLayoutState = wideLayoutState,
-            wideCallbacks = wideCallbacks,
-            onChapterSwitchFailed = editorCallbacks?.onChapterSwitchFailed,
-            modifier = Modifier.fillMaxSize(),
         )
     }
 }
