@@ -932,6 +932,7 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
         newRanges = newRanges,
         textKind = textKind,
         cursor = cursor,
+        newTextLength = event.newText.length,
     )
 }
 
@@ -966,25 +967,30 @@ private fun CollectVisualIntentEvents(
             .collect { event ->
                 if (event.targetId != targetId) return@collect
                 val editorVisualIntent = mapCoreVisualIntentToEditorVisualIntent(event)
-                // #641 评论 5457777142 问题4：把 effective EditorMotionPolicy 放进 transaction，
-                // overlay 据此决定 text/cursor 两条 timeline、reduceMotion、textEnabled、cursorEnabled。
-                visualState.onVisualIntent(editorVisualIntent, currentMotionPolicy.effective())
+                // #641 评论 5457777142 问题4 + 评论 5458283021 问题3c：
+                // 把原始 EditorMotionPolicy 传给 onVisualIntent，
+                // onVisualIntent 内部调用 effective() 算 hasTextAnimation/hasCursorAnimation，
+                // 提前落实到视觉状态（hiddenRanges/drawsVisualCursor）。
+                visualState.onVisualIntent(editorVisualIntent, currentMotionPolicy)
             }
     }
 }
 
 /**
- * #641 评论 问题7d + 评论 5457777142 问题5：收集 undo/redo 后的权威编辑器快照，把正文写回 bridge。
+ * #641 评论 问题7d + 评论 5457777142 问题5 + 评论 5458283021 问题4：收集 undo/redo 后的权威编辑器快照，把正文写回 bridge。
  *
  * performUndo/performRedo 在 applyUndoRestored 后查询 Core snapshot 并发布到
  * [com.xiwei.sujian.feature.editor.window.EditorWindowHost.authoritativeEditorSnapshots]。
  *
- * #641 评论 5457777142 问题5：composition 期间不丢权威快照。
- * - composition == null：立即 [EditorViewModel.applyAuthoritativeToBridge]；
- * - composition != null：覆盖保存该 target 最新 pending snapshot
- *   （[EditorViewModel.storePendingAuthoritativeSnapshot]），等 composition 结束再应用；
- * - 同时观察 `snapshotFlow { bridge.state.composition }`，
- *   从非 null 变成 null 时取出该 target 最新 pending snapshot 并应用。
+ * #641 评论 5458283021 问题4：单一串行 collector —
+ * 不再用两个独立 collector 竞争。pending authoritative 事实收进
+ * [com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge]，
+ * 由同一个 `snapshotFlow { EditorInputSnapshot }.collect(bridge::onInputSnapshot)` 决定顺序：
+ * 1. composition != null：不提交（IME 正在编辑 buffer），暂存 pending 到 bridge。
+ * 2. composition 刚结束且存在 pending：bridge.onInputSnapshot 先 applyAuthoritativeText 消费 pending，不提交本地 diff。
+ * 3. 没 pending 才 commitIfNeeded。
+ * 删除了独立的 `snapshotFlow { bridge.state.composition }.collect` collector，
+ * 避免两个 collector 同时唤醒无顺序保证导致刚撤销内容又提交一次。
  *
  * 提取为独立 composable 以降低 [WritingPaneEditorContent] 的认知复杂度。
  */
@@ -996,7 +1002,9 @@ private fun CollectAuthoritativeEditorSnapshots(
     targetId: String,
     bridge: com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge,
 ) {
-    // 收到 undo/redo snapshot：composition==null 立即应用，composition!=null 暂存。
+    // 收到 undo/redo snapshot：composition==null 立即应用，composition!=null 暂存到 bridge。
+    // #641 评论 5458283021 问题4：pending 存到 bridge（而非 viewModel），
+    // 由单一 onInputSnapshot 串行入口消费，不再用独立 composition collector 竞争。
     androidx.compose.runtime.LaunchedEffect(targetId) {
         coordinator.authoritativeEditorSnapshots
             .filter { it.targetId == targetId }
@@ -1011,25 +1019,14 @@ private fun CollectAuthoritativeEditorSnapshots(
                         )
                     }
                 } else {
-                    viewModel.storePendingAuthoritativeSnapshot(snapshot)
-                }
-            }
-    }
-    // composition 从非 null 变成 null 时应用 pending snapshot。
-    androidx.compose.runtime.LaunchedEffect(targetId, bridge) {
-        androidx.compose.runtime.snapshotFlow { bridge.state.composition }
-            .collect { composition ->
-                if (composition == null) {
-                    viewModel.consumePendingAuthoritativeSnapshot(targetId)?.let { snapshot ->
-                        if (snapshot.text != bridge.mirroredText) {
-                            viewModel.applyAuthoritativeToBridge(
-                                snapshot.targetId,
-                                snapshot.text,
-                                snapshot.selectionAnchorUtf8,
-                                snapshot.selectionHeadUtf8,
-                            )
-                        }
-                    }
+                    // composition 活跃：暂存 pending 到 bridge（UTF-8→UTF-16 转换）。
+                    val utf16Selection =
+                        com.xiwei.sujian.feature.editor.input.TextOffsetUtils.utf16TextRangeForUtf8(
+                            snapshot.text,
+                            snapshot.selectionAnchorUtf8,
+                            snapshot.selectionHeadUtf8,
+                        )
+                    bridge.storePendingAuthoritative(snapshot.text, utf16Selection)
                 }
             }
     }

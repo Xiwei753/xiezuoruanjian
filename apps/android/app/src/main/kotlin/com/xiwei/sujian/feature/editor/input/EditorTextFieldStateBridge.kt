@@ -65,10 +65,49 @@ class EditorTextFieldStateBridge(
 
     private var committedMirror: String = initialText
 
+    /**
+     * #641 评论 5458283021 问题4：pending authoritative snapshot —
+     * Undo/Redo 后 Core 的权威正文在 IME composition 期间到达时暂存于此，
+     * 等 composition 结束后由同一个 [onInputSnapshot] 串行入口决定顺序：
+     * 先 applyAuthoritativeText 消费 pending，本次不提交本地 diff。
+     * 不再用两个独立 collector 竞争。
+     */
+    private var pendingAuthoritative: Pair<String, TextRange>? = null
+
+    /**
+     * #641 评论 5458283021 问题4：单一串行入口 —
+     * 由唯一的 `snapshotFlow { EditorInputSnapshot }.collect(bridge::onInputSnapshot)` 驱动。
+     *
+     * 顺序：
+     * 1. composition != null：不提交（IME 正在编辑 buffer）。
+     * 2. composition 刚结束且存在 pending authoritative：先 [applyAuthoritativeText] 消费 pending，
+     *    本次不提交本地 diff（避免把刚撤销的内容又提交一次）。
+     * 3. 没 pending 才 [commitIfNeeded]。
+     */
     fun onInputSnapshot(snapshot: EditorInputSnapshot) {
         if (snapshot.composition != null) return
+        val pending = pendingAuthoritative
+        if (pending != null) {
+            pendingAuthoritative = null
+            applyAuthoritativeText(pending.first, pending.second)
+            return
+        }
         commitIfNeeded(snapshot.text, snapshot.selection)
     }
+
+    /**
+     * #641 评论 5458283021 问题4：暂存 pending authoritative snapshot（UTF-16 text + selection）。
+     * 由 authoritativeEditorSnapshots collector 在 composition 活跃时调用。
+     */
+    fun storePendingAuthoritative(
+        text: String,
+        selection: TextRange,
+    ) {
+        pendingAuthoritative = Pair(text, selection)
+    }
+
+    /** #641 评论 5458283021 问题4：是否存在 pending authoritative snapshot。 */
+    fun hasPendingAuthoritative(): Boolean = pendingAuthoritative != null
 
     /**
      * 切章节/返回时，即使 IME 仍有 composition，也先把屏幕上的最终内容提交给 Core，
