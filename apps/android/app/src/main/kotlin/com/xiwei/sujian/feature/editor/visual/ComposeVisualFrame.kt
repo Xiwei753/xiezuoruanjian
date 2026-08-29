@@ -19,12 +19,19 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  * @param cursorRect 物化时的 cursor rect。
  * @param cursorAlpha 物化时的 cursor alpha。
  * @param suppressedCurrentRanges 物化时由 overlay 接管的 current text ranges。
+ * @param ownedOldRanges #641 评论 5460373035 问题2：startFrame 接管的旧正文 range —
+ *   这些 range 已由 startFrame 的 fading slice 绘制，新事务 oldRanges 必须用
+ *   [ComposeEditorVisualState.subtractRanges] 减掉它们，避免新 Delete/Move 路径
+ *   重复以 alpha=1.0 画一遍导致闪烁（B 插入 a 只淡入到 0.5，C 立刻删除 a 时
+ *   C 的 replace 覆盖 [0,1)，overlap 生成 fading slice 保留 B 当前 alpha=0.5，
+ *   同时把 [0,1) 计进 ownedOldRanges，C.oldRanges 减掉它后不再以 1.0 重画）。
  */
 data class ComposeVisualFrame(
     val slices: List<RebasedTextSlice>,
     val cursorRect: Rect? = null,
     val cursorAlpha: Float = 1f,
     val suppressedCurrentRanges: List<TextRange> = emptyList(),
+    val ownedOldRanges: List<TextRange> = emptyList(),
 )
 
 /**

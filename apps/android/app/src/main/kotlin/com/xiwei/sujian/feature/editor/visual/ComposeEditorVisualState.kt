@@ -477,6 +477,10 @@ class ComposeEditorVisualState(
      * 不再在本方法内部调 materializeStartFrame — 避免物化时读到下一事务的 cursor snapshot。
      * 创建 [ComposeVisualTransaction] 时带上 textKind = intent.textKind，
      * 供下一笔事务的 materializeStartFrame 物化 oldRanges/newRanges。
+     *
+     * #641 评论 5460373035 问题2：用 effectiveOldRanges = subtractRanges(intent.oldRanges, startFrame.ownedOldRanges)。
+     * startFrame 已接管的 old range 从本事务 oldRanges 减掉 — 同一段旧文字永远只由一条绘制路径拥有：
+     * 上一帧如果还只显示到 0.5，就从 0.5 继续淡出；不会被新 Delete/Move 路径重复以 1.0 画一遍。
      */
     private fun buildAndActivateTransaction(
         intent: EditorVisualIntent,
@@ -484,12 +488,20 @@ class ComposeEditorVisualState(
         retainedMoves: List<RetainedMove>,
         startFrame: ComposeVisualFrame?,
     ) {
+        // #641 评论 5460373035 问题2：startFrame 已接管的 old range 从本事务 oldRanges 减掉。
+        // 同一段旧文字永远只由一条绘制路径拥有：上一帧如果还只显示到 0.5，就从 0.5 继续淡出；
+        // 不会被新 Delete/Move 路径重复以 1.0 画一遍。
+        val effectiveOldRanges =
+            subtractRanges(
+                intent.oldRanges,
+                startFrame?.ownedOldRanges.orEmpty(),
+            )
         val transaction =
             ComposeVisualTransaction(
                 id = intent.transactionId,
                 oldLayout = previousSnapshot,
                 newLayout = currentSnapshot,
-                oldRanges = intent.oldRanges,
+                oldRanges = effectiveOldRanges,
                 newRanges = intent.newRanges,
                 retainedMoves = retainedMoves,
                 textKind = intent.textKind,
@@ -517,6 +529,10 @@ class ComposeEditorVisualState(
      *   到"这一帧真实状态"，避免从 A 当初冻结的 sourceAlpha/sourceTranslate 重新起跑。
      * #641 评论 5460160958 问题4：targetRange 切成 prefix/suffix 时 sourceRange 成对切分，
      *   不再让两个新 slice 都拿整段 source bounds 当起点。
+     * #641 评论 5460373035 问题2：splitRebasedSliceThroughReplace 现在返回 [SplitRebasedResult]，
+     *   overlap 部分不再丢弃而是生成 fading slice + ownedOldRange。本方法聚合所有 split 的
+     *   ownedOldRanges 计入返回 frame 的 [ComposeVisualFrame.ownedOldRanges]，
+     *   供下一事务 [buildAndActivateTransaction] 用 [subtractRanges] 从 intent.oldRanges 减掉。
      *
      * 如果没有旧事务或 text/cursor/rebase 三条 progress 都已到 1f，返回 null。
      */
@@ -540,7 +556,9 @@ class ComposeEditorVisualState(
         // #641 评论 5460233781 问题2：materializeRebasedSlice 可能返回 null（fading alpha<=0 丢弃），
         // 用 mapNotNull 过滤掉 null，避免完全透明的 slice 累积在 startFrame.slices 里。
         val materializedOlder =
-            prevStartFrame?.slices?.mapNotNull { materializeRebasedSlice(it, prev.newLayout, rebaseProgress) } ?: emptyList()
+            prevStartFrame?.slices?.mapNotNull {
+                materializeRebasedSlice(it, prev.newLayout, rebaseProgress)
+            } ?: emptyList()
 
         // currentSlices / retainedSlices 是当前事务按 textProgress 生成的，已是当前状态，不再按 rebaseProgress 物化。
         val currentSlices = collectCurrentSlicesAsRebased(prev, textProgress)
@@ -548,21 +566,24 @@ class ComposeEditorVisualState(
 
         // #641 评论 5460160958 问题2+问题4：统一用 nextReplaceBounds 把所有 surviving targetRange
         // 从 prev new text 映射到这次 new text，成对切分 sourceRange + targetRange。
+        // #641 评论 5460373035 问题2：聚合所有 split 的 ownedOldRanges 计入返回 frame，
+        // 供下一事务 [buildAndActivateTransaction] 从 intent.oldRanges 减掉。
         val allSlices = materializedOlder + currentSlices + retainedSlices
-        val mappedSlices =
-            if (nextReplaceBounds == null) {
-                allSlices
-            } else {
-                buildList {
-                    for (slice in allSlices) {
-                        if (slice.targetRange == null) {
-                            add(slice)
-                        } else {
-                            addAll(splitRebasedSliceThroughReplace(slice, nextReplaceBounds))
-                        }
-                    }
+        val mappedSlices = mutableListOf<RebasedTextSlice>()
+        val ownedOldRanges = mutableListOf<TextRange>()
+        if (nextReplaceBounds == null) {
+            mappedSlices.addAll(allSlices)
+        } else {
+            for (slice in allSlices) {
+                if (slice.targetRange == null) {
+                    mappedSlices.add(slice)
+                } else {
+                    val split = splitRebasedSliceThroughReplace(slice, nextReplaceBounds)
+                    mappedSlices.addAll(split.slices)
+                    ownedOldRanges.addAll(split.ownedOldRanges)
                 }
             }
+        }
 
         val cursorRect = materializeCursorRect(prev, cursorProgress)
         val cursorAlpha = if (prev.cursor?.animate == true) 1f else 0f
@@ -572,6 +593,7 @@ class ComposeEditorVisualState(
             cursorRect = cursorRect,
             cursorAlpha = cursorAlpha,
             suppressedCurrentRanges = _hiddenRanges.value,
+            ownedOldRanges = ownedOldRanges,
         )
     }
 
@@ -750,51 +772,84 @@ class ComposeEditorVisualState(
     }
 
     /**
+     * #641 评论 5460373035 问题2：splitRebasedSliceThroughReplace 的返回 —
+     * surviving prefix/suffix slices + 被 replace overlap 接管的 old-text ranges。
+     * ownedOldRanges 计进 startFrame.ownedOldRanges，新事务 oldRanges 用
+     * [subtractRanges] 减掉，避免新 Delete/Move 路径重复以 alpha=1.0 画一遍。
+     */
+    private data class SplitRebasedResult(
+        val slices: List<RebasedTextSlice>,
+        val ownedOldRanges: List<TextRange>,
+    )
+
+    /**
      * #641 评论 5460160958 问题4：surviving slice 通过下一事务 replace 边界切分时，
      * sourceRange 和 targetRange 成对切分，不再让 prefix/suffix 都拿整段 source bounds 当起点。
      *
      * 前提：surviving slice 表示同一逻辑文本，sourceRange 长度应等于 oldTarget 长度。
      * 若长度不等（不应发生），不静默复制整段——结束该 surviving 映射，按旧画面离场处理：
-     * 返回 listOf(slice.copy(targetRange = null))。
+     * 返回 SplitRebasedResult(listOf(slice.copy(targetRange = null)), emptyList())。
      *
      * - prefix 部分（target 在 [0, b.oldStart) 里，位置不变）：
      *   newTarget = [oldTarget.start, prefixEnd)，newSource = [sourceRange.start, sourceRange.start + len)。
      * - suffix 部分（target 在 [b.oldEnd, ...) 里，平移 delta）：
      *   newTarget = [suffixStart + delta, oldTarget.end + delta)，
      *   newSource = [sourceRange.end - len, sourceRange.end)。
-     * - 跨越 replace 区域的部分不存活，丢弃。
+     * - #641 评论 5460373035 问题2：overlap 部分（target 与 [b.oldStart, b.oldEnd) 重叠）不丢弃。
+     *   让 startFrame 继续拥有当前视觉状态，生成 targetRange = null 的 fading slice，
+     *   保留当前 sourceAlpha/sourceTranslate，从当前 alpha 往 0 走。
+     *   同时把 overlap 的 old-text range 计进 [SplitRebasedResult.ownedOldRanges]，
+     *   新事务 oldRanges 用 [subtractRanges] 减掉这段，避免新 Delete/Move 路径重复以 1.0 画一遍。
      */
     private fun splitRebasedSliceThroughReplace(
         slice: RebasedTextSlice,
         b: VisualReplaceBounds,
-    ): List<RebasedTextSlice> {
-        val oldTarget = slice.targetRange ?: return listOf(slice)
+    ): SplitRebasedResult {
+        val oldTarget = slice.targetRange ?: return SplitRebasedResult(listOf(slice), emptyList())
         val sourceRange = slice.sourceRange
         // 前提：surviving slice 表示同一逻辑文本，sourceRange 长度应等于 oldTarget 长度。
         // 若不等，不要静默复制整段——结束该 surviving 映射，按旧画面离场处理。
         if ((sourceRange.end - sourceRange.start) != (oldTarget.end - oldTarget.start)) {
-            return listOf(slice.copy(targetRange = null))
+            return SplitRebasedResult(listOf(slice.copy(targetRange = null)), emptyList())
         }
-        return buildList {
-            // prefix 部分（target 在 [0, b.oldStart) 里，位置不变）
-            val prefixEnd = minOf(oldTarget.end, b.oldStart)
-            if (oldTarget.start < prefixEnd) {
-                val len = prefixEnd - oldTarget.start
-                val newTarget = TextRange(oldTarget.start, prefixEnd)
-                val newSource = TextRange(sourceRange.start, sourceRange.start + len)
-                add(slice.copy(sourceRange = newSource, targetRange = newTarget))
-            }
-            // suffix 部分（target 在 [b.oldEnd, ...) 里，平移 delta）
-            val suffixStart = maxOf(oldTarget.start, b.oldEnd)
-            if (suffixStart < oldTarget.end) {
-                val delta = b.newEnd - b.oldEnd
-                val newTarget = TextRange(suffixStart + delta, oldTarget.end + delta)
-                val len = oldTarget.end - suffixStart
-                val newSource = TextRange(sourceRange.end - len, sourceRange.end)
-                add(slice.copy(sourceRange = newSource, targetRange = newTarget))
-            }
-            // 跨越 replace 区域的部分不存活，丢弃。
+        val outSlices = mutableListOf<RebasedTextSlice>()
+        val ownedOldRanges = mutableListOf<TextRange>()
+        // prefix 部分（target 在 [0, b.oldStart) 里，位置不变）
+        val prefixEnd = minOf(oldTarget.end, b.oldStart)
+        if (oldTarget.start < prefixEnd) {
+            val len = prefixEnd - oldTarget.start
+            val newTarget = TextRange(oldTarget.start, prefixEnd)
+            val newSource = TextRange(sourceRange.start, sourceRange.start + len)
+            outSlices.add(slice.copy(sourceRange = newSource, targetRange = newTarget))
         }
+        // #641 评论 5460373035 问题2：overlap 部分（target 与 [b.oldStart, b.oldEnd) 重叠）不丢弃。
+        // 让 startFrame 继续拥有当前视觉状态，生成 targetRange = null 的 fading slice，
+        // 保留当前 sourceAlpha/sourceTranslate，从当前 alpha 往 0 走。
+        // 同时把 overlap 的 old-text range 计进 ownedOldRanges，新事务 oldRanges 减掉这段，
+        // 避免新 Delete/Move 路径重复以 1.0 画一遍。
+        val overlapStart = maxOf(oldTarget.start, b.oldStart)
+        val overlapEnd = minOf(oldTarget.end, b.oldEnd)
+        if (overlapStart < overlapEnd) {
+            val sourceOffset = overlapStart - oldTarget.start
+            val len = overlapEnd - overlapStart
+            val overlapSource =
+                TextRange(
+                    sourceRange.start + sourceOffset,
+                    sourceRange.start + sourceOffset + len,
+                )
+            outSlices.add(slice.copy(sourceRange = overlapSource, targetRange = null))
+            ownedOldRanges.add(TextRange(overlapStart, overlapEnd))
+        }
+        // suffix 部分（target 在 [b.oldEnd, ...) 里，平移 delta）
+        val suffixStart = maxOf(oldTarget.start, b.oldEnd)
+        if (suffixStart < oldTarget.end) {
+            val delta = b.newEnd - b.oldEnd
+            val newTarget = TextRange(suffixStart + delta, oldTarget.end + delta)
+            val len = oldTarget.end - suffixStart
+            val newSource = TextRange(sourceRange.end - len, sourceRange.end)
+            outSlices.add(slice.copy(sourceRange = newSource, targetRange = newTarget))
+        }
+        return SplitRebasedResult(outSlices, ownedOldRanges)
     }
 
     /**

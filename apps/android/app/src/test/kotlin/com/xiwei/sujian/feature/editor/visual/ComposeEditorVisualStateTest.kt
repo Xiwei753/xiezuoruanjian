@@ -478,13 +478,14 @@ class ComposeEditorVisualStateTest {
         val layout = ComposeLayoutSnapshot(layouts[0], TextRange(5, 5), 0)
 
         // 构造 surviving slice 带 sourceTranslate = (10, 5)（非零，模拟 retained move slice）
-        val slice = RebasedTextSlice(
-            sourceLayout = layout,
-            sourceRange = TextRange(0, 2),
-            sourceTranslate = Offset(10f, 5f),
-            sourceAlpha = 1f,
-            targetRange = TextRange(0, 2),
-        )
+        val slice =
+            RebasedTextSlice(
+                sourceLayout = layout,
+                sourceRange = TextRange(0, 2),
+                sourceTranslate = Offset(10f, 5f),
+                sourceAlpha = 1f,
+                targetRange = TextRange(0, 2),
+            )
 
         // 用反射调 private materializeRebasedSlice
         val state = ComposeEditorVisualState()
@@ -528,13 +529,14 @@ class ComposeEditorVisualStateTest {
         val layout = ComposeLayoutSnapshot(layouts[0], TextRange(5, 5), 0)
 
         // 构造 fading slice（targetRange=null）且 sourceAlpha=0
-        val slice = RebasedTextSlice(
-            sourceLayout = layout,
-            sourceRange = TextRange(0, 2),
-            sourceTranslate = Offset.Zero,
-            sourceAlpha = 0f,
-            targetRange = null,
-        )
+        val slice =
+            RebasedTextSlice(
+                sourceLayout = layout,
+                sourceRange = TextRange(0, 2),
+                sourceTranslate = Offset.Zero,
+                sourceAlpha = 0f,
+                targetRange = null,
+            )
 
         val state = ComposeEditorVisualState()
         val method =
@@ -550,6 +552,175 @@ class ComposeEditorVisualStateTest {
         assertNull(
             "sourceAlpha=0 的 fading slice 即使 rebaseProgress=0 也应被丢弃（返回 null）",
             result,
+        )
+    }
+
+    /**
+     * #641 评论 5460373035 问题2：被下一笔 replace/delete 覆盖的"正在淡入文字"不应突然亮回 100% 再淡出。
+     *
+     * 端到端场景：B 插入 a（alpha 只到 0.5）→ C 删除 a（replace 覆盖 [0,1)）。
+     * - B 是 Insert，newRanges=[0,1)（"ab" 里的 "a"），textProgress=0.5 → a 只淡入到 alpha=0.5。
+     * - C 是 Delete，oldRanges=[0,1)（"ab" 里被删除的 "a"），replaceBounds=(0,1,0,0)。
+     * - materializeStartFrame(B, 0.5, ...) 调 splitRebasedSliceThroughReplace(B 的 surviving slice, C.replaceBounds)：
+     *   overlap 部分（target [0,1) 与 C 的 [0,1) 完全重叠）不丢弃，生成 fading slice 保留 B 当前 alpha=0.5，
+     *   同时把 [0,1) 计进 ownedOldRanges。
+     * - buildAndActivateTransaction(C, ...) 用 effectiveOldRanges = subtractRanges([0,1), [0,1)) = 空。
+     *
+     * 验证：
+     * 1. C.startFrame.slices 含 fading slice（targetRange==null），其 sourceAlpha 应 ≈0.5（保留 B 的当前 alpha，不是 1.0）。
+     * 2. C.startFrame.ownedOldRanges 含 TextRange(0,1)。
+     * 3. C.oldRanges 不含 TextRange(0,1)（effectiveOldRanges = subtractRanges([0,1), [0,1)) = 空）。
+     *
+     * 若旧实现（overlap 丢弃 + 直接用 intent.oldRanges），C.startFrame 不含 fading slice，
+     * C.oldRanges = [0,1) → C 的 Delete 路径从 alpha=1.0 画一遍 → 0.5→1.0→淡出 闪烁。
+     */
+    @Test
+    fun ownedOldRanges_overlapFadingSliceKeptAndSubtractedFromOldRanges() {
+        val layouts = captureLayouts("b", "ab", "b")
+        val state = ComposeEditorVisualState()
+
+        // 第一份 layout 到达 → previous=null, current=layout("b")
+        state.onAuthoritativeLayout(layouts[0], TextRange(1, 1), 0)
+        // 第二份 layout 到达（插入 "a" 后）→ previous=layout("b"), current=layout("ab")
+        state.onAuthoritativeLayout(layouts[1], TextRange(2, 2), 0)
+
+        // 第一笔 Insert 事务（B 插入 "a" at 0）— B.oldLayout=layout("b"), B.newLayout=layout("ab")
+        state.onVisualIntent(
+            EditorVisualIntent(
+                oldRanges = emptyList(),
+                newRanges = listOf(TextRange(0, 1)),
+                textKind = TextVisualKind.Insert,
+                cursor = null,
+                newTextLength = 2,
+                expectedNewText = "ab",
+                replaceBounds = VisualReplaceBounds(oldStart = 0, oldEnd = 0, newStart = 0, newEnd = 1),
+            ),
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
+        )
+
+        // B 的 "a" 只淡入到 alpha=0.5
+        state.reportProgress(textProgress = 0.5f, cursorProgress = 0.5f, rebaseProgress = 0f)
+
+        // 第三份 layout 到达（删除 "a" 后）→ previous=layout("ab"), current=layout("b")
+        state.onAuthoritativeLayout(layouts[2], TextRange(1, 1), 0)
+
+        // 第二笔 Delete 事务（C 删除 "a"）— C.oldLayout=layout("ab"), C.newLayout=layout("b")
+        // C.replaceBounds=(0,1,0,0)：旧正文 "ab" 删除 [0,1) 的 "a"，新正文 "b"
+        state.onVisualIntent(
+            EditorVisualIntent(
+                oldRanges = listOf(TextRange(0, 1)),
+                newRanges = emptyList(),
+                textKind = TextVisualKind.Delete,
+                cursor = null,
+                newTextLength = 1,
+                expectedNewText = "b",
+                replaceBounds = VisualReplaceBounds(oldStart = 0, oldEnd = 1, newStart = 0, newEnd = 0),
+            ),
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
+        )
+
+        val cTransaction = state.activeTransaction.value
+        val cStartFrame = cTransaction?.startFrame
+        assertTrue("C 应有 startFrame（B 还在跑）", cStartFrame != null)
+
+        // 验证 1：C.startFrame.slices 含 fading slice（targetRange==null），sourceAlpha ≈ 0.5
+        val fadingSlices = cStartFrame?.slices?.filter { it.targetRange == null } ?: emptyList()
+        assertTrue(
+            "C.startFrame 应含 fading slice（B 的 surviving slice 被 C replace overlap 接管）",
+            fadingSlices.isNotEmpty(),
+        )
+        assertTrue(
+            "C.startFrame fading slice sourceAlpha 应 ≈ 0.5（保留 B 当前 alpha，不是 1.0）",
+            fadingSlices.any { kotlin.math.abs(it.sourceAlpha - 0.5f) < 0.01f },
+        )
+
+        // 验证 2：C.startFrame.ownedOldRanges 含 TextRange(0,1)
+        val ownedOldRanges = cStartFrame?.ownedOldRanges ?: emptyList()
+        assertTrue(
+            "C.startFrame.ownedOldRanges 应含 TextRange(0,1)",
+            ownedOldRanges.any { it.start == 0 && it.end == 1 },
+        )
+
+        // 验证 3：C.oldRanges 不含 TextRange(0,1)（effectiveOldRanges = subtractRanges([0,1), [0,1)) = 空）
+        val cOldRanges = cTransaction?.oldRanges ?: emptyList()
+        assertFalse(
+            "C.oldRanges 不应含 TextRange(0,1)（已被 startFrame.ownedOldRanges 减掉）",
+            cOldRanges.any { it.start == 0 && it.end == 1 },
+        )
+    }
+
+    /**
+     * #641 评论 5460373035 问题2 对照：无 overlap 时 ownedOldRanges 为空，oldRanges 不变。
+     *
+     * 场景：B 插入 a（alpha=0.5）→ C 在不重叠位置插入 c。
+     * - B 是 Insert，newRanges=[0,1)（"ab" 里的 "a"）。
+     * - C 是 Insert，newRanges=[2,3)（"abc" 里的 "c"），replaceBounds=(2,2,2,3)。
+     * - B 的 surviving slice targetRange=[0,1) 与 C 的 replace [2,2) 无 overlap →
+     *   splitRebasedSliceThroughReplace 只生成 prefix（位置不变），ownedOldRanges 为空。
+     *
+     * 验证：
+     * 1. C.startFrame.ownedOldRanges 为空（无 overlap）。
+     * 2. C.oldRanges 不变（C 是 Insert，oldRanges 本来就是空，effectiveOldRanges 也是空）。
+     */
+    @Test
+    fun ownedOldRanges_noOverlap_oldRangesUnchanged() {
+        val layouts = captureLayouts("b", "ab", "abc")
+        val state = ComposeEditorVisualState()
+
+        // 第一份 layout 到达 → previous=null, current=layout("b")
+        state.onAuthoritativeLayout(layouts[0], TextRange(1, 1), 0)
+        // 第二份 layout 到达（插入 "a" 后）→ previous=layout("b"), current=layout("ab")
+        state.onAuthoritativeLayout(layouts[1], TextRange(2, 2), 0)
+
+        // 第一笔 Insert 事务（B 插入 "a" at 0）
+        state.onVisualIntent(
+            EditorVisualIntent(
+                oldRanges = emptyList(),
+                newRanges = listOf(TextRange(0, 1)),
+                textKind = TextVisualKind.Insert,
+                cursor = null,
+                newTextLength = 2,
+                expectedNewText = "ab",
+                replaceBounds = VisualReplaceBounds(oldStart = 0, oldEnd = 0, newStart = 0, newEnd = 1),
+            ),
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
+        )
+
+        // B 的 "a" 只淡入到 alpha=0.5
+        state.reportProgress(textProgress = 0.5f, cursorProgress = 0.5f, rebaseProgress = 0f)
+
+        // 第三份 layout 到达（插入 "c" 后）→ previous=layout("ab"), current=layout("abc")
+        state.onAuthoritativeLayout(layouts[2], TextRange(3, 3), 0)
+
+        // 第二笔 Insert 事务（C 插入 "c" at 2，不与 B 的 [0,1) 重叠）
+        state.onVisualIntent(
+            EditorVisualIntent(
+                oldRanges = emptyList(),
+                newRanges = listOf(TextRange(2, 3)),
+                textKind = TextVisualKind.Insert,
+                cursor = null,
+                newTextLength = 3,
+                expectedNewText = "abc",
+                replaceBounds = VisualReplaceBounds(oldStart = 2, oldEnd = 2, newStart = 2, newEnd = 3),
+            ),
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
+        )
+
+        val cTransaction = state.activeTransaction.value
+        val cStartFrame = cTransaction?.startFrame
+
+        // 验证 1：C.startFrame.ownedOldRanges 为空（无 overlap）
+        val ownedOldRanges = cStartFrame?.ownedOldRanges ?: emptyList()
+        assertTrue(
+            "C.startFrame.ownedOldRanges 应为空（B 的 [0,1) 与 C 的 replace [2,2) 无 overlap）",
+            ownedOldRanges.isEmpty(),
+        )
+
+        // 验证 2：C.oldRanges 不变（C 是 Insert，oldRanges 本来就是空）
+        val cOldRanges = cTransaction?.oldRanges ?: emptyList()
+        assertTrue(
+            "C.oldRanges 应为空（C 是 Insert，oldRanges 本来就是空，未被减）",
+            cOldRanges.isEmpty(),
         )
     }
 
