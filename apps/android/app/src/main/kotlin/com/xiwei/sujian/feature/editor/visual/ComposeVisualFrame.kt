@@ -35,14 +35,45 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  * 直接覆盖成自己的 ranges，而应包含 currentOwnedNewRanges + currentRetainedNewRanges +
  * frozenStartFrame.suppressedCurrentRanges，避免快速输入时上一笔尚未结束的 frozen 文字
  * 突然恢复 100% 再和 frozen frame 叠一层。默认 emptyList() 保持向后兼容。
+ *
+ * #641 评论 5459754425 第1项：rebase 起点 + 目标模型 —
+ * 把 frozen 文字 slice 改成"起点 + 目标"，物化新 startFrame 时必须先把
+ * 当前屏幕已经画出来的全部内容 flatten。
+ * 对仍然存在于当前正文的 slice，[targetRange] 映射到当前 new text 后，
+ * 绘制要从 frozen 状态插值到当前最终 layout（alpha = lerp(sourceAlpha, 1f, rebaseProgress)）。
+ * 对只属于旧画面的 slice，targetRange = null，alpha = lerp(sourceAlpha, 0f, rebaseProgress)。
+ *
+ * [rebasedSlices] 是 flatten 后的 rebase 切片，按"起点 + 目标"模型绘制。
+ * [slices] 是旧的 VisualFrameSlice 列表，保留向后兼容。
  */
 data class ComposeVisualFrame(
     val sourceOldLayout: ComposeLayoutSnapshot? = null,
     val sourceNewLayout: ComposeLayoutSnapshot? = null,
     val slices: List<VisualFrameSlice>,
+    val rebasedSlices: List<RebasedTextSlice> = emptyList(),
     val cursorRect: Rect? = null,
     val cursorAlpha: Float = 1f,
     val suppressedCurrentRanges: List<TextRange> = emptyList(),
+)
+
+/**
+ * #641 评论 5459754425 第1项：rebase 起点 + 目标模型 —
+ * 把 frozen 文字 slice 改成"起点 + 目标"，物化新 startFrame 时必须先把
+ * 当前屏幕已经画出来的全部内容 flatten。
+ *
+ * @param sourceLayout 该 slice 来自哪份 layout（old 或 new）。
+ * @param sourceRange 该 slice 在 sourceLayout 中的 UTF-16 range。
+ * @param sourceTranslate 当前 translate 偏移（相对 sourceLayout 原位置）。
+ * @param sourceAlpha 当前 alpha。
+ * @param targetRange 该 slice 在当前 new text 中的目标 range — null = 这段只属于旧画面，最终应消失。
+ *   非 null 时，绘制要从 frozen 状态插值到当前最终 layout（alpha = lerp(sourceAlpha, 1f, rebaseProgress)）。
+ */
+data class RebasedTextSlice(
+    val sourceLayout: ComposeLayoutSnapshot,
+    val sourceRange: TextRange,
+    val sourceTranslate: Offset,
+    val sourceAlpha: Float,
+    val targetRange: TextRange?,
 )
 
 /**

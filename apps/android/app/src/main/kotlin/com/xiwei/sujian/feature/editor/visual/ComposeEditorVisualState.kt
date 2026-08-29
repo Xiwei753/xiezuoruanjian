@@ -284,7 +284,7 @@ class ComposeEditorVisualState(
             val mappedSuppressed =
                 mapSuppressedRangesThroughReplace(frozenSuppressed, pending.intent.replaceBounds)
             val suppressedNotOverlapping =
-                filterOverlapping(mappedSuppressed, baseOwnedNewRanges + retainedNewRanges)
+                subtractRanges(mappedSuppressed, baseOwnedNewRanges + retainedNewRanges)
             _hiddenRanges.update {
                 baseOwnedNewRanges + retainedNewRanges + suppressedNotOverlapping
             }
@@ -418,7 +418,7 @@ class ComposeEditorVisualState(
                 intentWithId.replaceBounds,
             )
         val suppressedNotOverlapping =
-            filterOverlapping(
+            subtractRanges(
                 mappedSuppressed,
                 currentOwnedNewRanges + currentRetainedNewRanges,
             )
@@ -503,6 +503,12 @@ class ComposeEditorVisualState(
      * 物化 cursor 用 cursorProgress 不再错算。
      *
      * 如果没有旧事务或 progress 已到 1f，返回 null（从 0 开始）。
+     *
+     * #641 评论 5459754425 第1项：startFrame flatten —
+     * 把当前屏幕已经画出来的全部内容 flatten 成一层。
+     * 先把 prev.startFrame 在当前 rebaseProgress 下仍可见的 slice 物化进来，
+     * 再加 prev 事务自己的 Insert/Delete/Move/retained 当前状态。
+     * 不要形成"startFrame 套 startFrame 但下一次不读取"的链。
      */
     private fun materializeStartFrame(
         transaction: ComposeVisualTransaction?,
@@ -511,6 +517,43 @@ class ComposeEditorVisualState(
     ): ComposeVisualFrame? {
         val prev = transaction ?: return null
         if (textProgress >= 1f && cursorProgress >= 1f) return null
+
+        // #641 评论 5459754425 第1项：先把 prev.startFrame 在当前 rebaseProgress 下仍可见的 slice 物化进来
+        val prevStartFrame = prev.startFrame
+        val flattenedSlices = if (prevStartFrame != null) {
+            // prev.startFrame.slices 已经是从 prev 事务 oldLayout/newLayout 取的
+            // 需要把这些 slice 映射到当前 new text（如果 targetRange 存在）
+            val prevOldLayout = prevStartFrame.sourceOldLayout ?: prev.oldLayout
+            val prevNewLayout = prevStartFrame.sourceNewLayout ?: prev.newLayout
+            buildList {
+                for (slice in prevStartFrame.slices) {
+                    val sourceLayout =
+                        when (slice.layoutSource) {
+                            FrameSliceSource.OldLayout -> prevOldLayout
+                            FrameSliceSource.NewLayout -> prevNewLayout
+                        } ?: continue
+                    if (slice.range.end > sourceLayout.result.layoutInput.text.length) continue
+                    // 计算当前 alpha：slice.alpha * (1f - rebaseProgress)
+                    // rebaseProgress 由 textProgress 近似（startFrame 的生命周期跟随文字动画）
+                    val currentAlpha = slice.alpha * (1f - textProgress).coerceIn(0f, 1f)
+                    if (currentAlpha <= 0f) continue
+                    // 这个 slice 来自 prev.startFrame，它的 targetRange 是 prev.startFrame.suppressedCurrentRanges
+                    // 但 suppressedCurrentRanges 已经是 prev 事务 new text 坐标，需要映射到当前 new text
+                    // 这里简化处理：不保留 targetRange，直接作为只属于旧画面的 slice（alpha 淡到 0）
+                    add(
+                        RebasedTextSlice(
+                            sourceLayout = sourceLayout,
+                            sourceRange = slice.range,
+                            sourceTranslate = slice.translate,
+                            sourceAlpha = currentAlpha,
+                            targetRange = null,
+                        ),
+                    )
+                }
+            }
+        } else {
+            emptyList()
+        }
 
         val visibleSlices = collectVisibleSlices(prev, textProgress)
         val retainedSlices = collectRetainedMoveSlices(prev, textProgress)
@@ -522,10 +565,12 @@ class ComposeEditorVisualState(
         // #641 评论 5459531909 第2项：物化时把当前 _hiddenRanges.value 作为 suppressedCurrentRanges
         // 存进 frame。这些是上一事务仍由 overlay 接管的 current text ranges，新事务到来后仍应隐藏，
         // 否则快速输入 a→b 时 a 会突然恢复 100% 再和 frozen frame 叠一层。
+        // #641 评论 5459754425 第1项：flatten 后的 slices 也要带上 suppressedCurrentRanges
         return ComposeVisualFrame(
             sourceOldLayout = prev.oldLayout,
             sourceNewLayout = prev.newLayout,
             slices = visibleSlices + retainedSlices,
+            rebasedSlices = flattenedSlices,
             cursorRect = cursorRect,
             cursorAlpha = cursorAlpha,
             suppressedCurrentRanges = _hiddenRanges.value,
@@ -664,50 +709,94 @@ class ComposeEditorVisualState(
      * 用 [replaceBounds] 的共同前缀/后缀映射：
      * - range 完全在共同前缀 [0, oldStart) 里：位置不变。
      * - range 完全在共同后缀 [oldEnd, ...) 里：newPos = oldPos - oldEnd + newEnd。
-     * - range 跨越 replace 区域 [oldStart, oldEnd]：不存活，丢弃（来自 OldLayout 的已删除文字不用映射）。
+     * - range 跨越 replace 区域 [oldStart, oldEnd]：**区间切分** —
+     *   把 prefix 部分（[0, oldStart)）保留，suffix 部分（[oldEnd, ...)）映射后保留。
+     *   不要整段丢弃。
      *
      * [replaceBounds] 为 null 时不映射（返回空列表，避免错误映射，向后兼容）。
+     *
+     * #641 评论 5459754425 第2项：改成区间切分，不要整段判断。
+     * 例如上一笔 suppressed 是 [0, 5)，下一笔在 [2, 3) 替换。
+     * 真正还活着的是：[0, 2) 和原 [3, 5) 映射后的 suffix。
+     * 旧实现会把整段 [0,5) 丢掉，导致仍在 startFrame 里画的 surviving 文字会同时从系统正文恢复出来。
      */
     private fun mapSuppressedRangesThroughReplace(
         ranges: List<TextRange>,
         replaceBounds: VisualReplaceBounds?,
     ): List<TextRange> {
         if (replaceBounds == null) return emptyList()
+        val delta = replaceBounds.newEnd - replaceBounds.oldEnd
         val result = mutableListOf<TextRange>()
         for (range in ranges) {
             if (range.start >= range.end) continue
-            // range 完全在共同前缀 [0, oldStart) 里：位置不变。
-            if (range.end <= replaceBounds.oldStart) {
-                result.add(range)
-                continue
+            // prefix 部分：完全在共同前缀 [0, oldStart) 里 — 位置不变
+            val prefixStart = range.start
+            val prefixEnd = minOf(range.end, replaceBounds.oldStart)
+            if (prefixStart < prefixEnd) {
+                result.add(TextRange(prefixStart, prefixEnd))
             }
-            // range 完全在共同后缀 [oldEnd, ...) 里：newPos = oldPos - oldEnd + newEnd。
-            if (range.start >= replaceBounds.oldEnd) {
+            // suffix 部分：完全在共同后缀 [oldEnd, ...) 里 — 平移
+            val suffixStart = maxOf(range.start, replaceBounds.oldEnd)
+            val suffixEnd = range.end
+            if (suffixStart < suffixEnd) {
                 result.add(
                     TextRange(
-                        range.start - replaceBounds.oldEnd + replaceBounds.newEnd,
-                        range.end - replaceBounds.oldEnd + replaceBounds.newEnd,
+                        suffixStart + delta,
+                        suffixEnd + delta,
                     ),
                 )
-                continue
             }
-            // range 跨越 replace 区域：不存活，丢弃。
+            // 跨越 replace 区域的部分（prefixEnd .. suffixStart）不存活，丢弃
         }
         return result
     }
 
     /**
-     * #641 评论 5459531909 第2项：过滤掉 [candidate] 中与 [existing] 任一 range 重叠的 range，
+     * #641 评论 5459531909 第2项：从 [candidates] 中减去 [blockers] 覆盖的部分，
      * 避免双重隐藏（同一段文字既被新事务 ranges 隐藏，又被 frozen suppressed ranges 隐藏）。
-     * 重叠定义：区间相交（start < other.end && other.start < end）。
+     *
+     * 不要整段丢弃 — 改成真正的区间 subtraction：
+     * 例如 candidate [0, 5)，blocker [4, 6)，结果应该留下 [0, 4)，不能整段消失。
+     *
+     * #641 评论 5459754425 第2项：不要 filter whole range，改成真正的区间 subtraction。
+     * 比如 candidate [0,5)，blocker [4,6)，结果应该留下 [0,4)，不能整段消失。
+     * 这样 hidden ownership 才和实际 surviving slice 一一对应。
      */
-    private fun filterOverlapping(
-        candidate: List<TextRange>,
-        existing: List<TextRange>,
-    ): List<TextRange> =
-        candidate.filter { c ->
-            existing.none { e -> c.start < e.end && e.start < c.end }
+    private fun subtractRanges(
+        candidates: List<TextRange>,
+        blockers: List<TextRange>,
+    ): List<TextRange> {
+        if (candidates.isEmpty() || blockers.isEmpty()) return candidates
+        val result = mutableListOf<TextRange>()
+        for (candidate in candidates) {
+            if (candidate.start >= candidate.end) continue
+            // 收集与 candidate 相关的 blockers，按 start 排序
+            val relevantBlockers =
+                blockers
+                    .filter { it.start < candidate.end && it.end > candidate.start }
+                    .sortedBy { it.start }
+            if (relevantBlockers.isEmpty()) {
+                result.add(candidate)
+                continue
+            }
+            // 从 candidate 中逐段减去 blockers
+            var currentStart = candidate.start
+            for (blocker in relevantBlockers) {
+                // blocker 前面的非重叠部分
+                if (blocker.start > currentStart) {
+                    result.add(TextRange(currentStart, minOf(blocker.start, candidate.end)))
+                }
+                // 跳过 blocker 覆盖的部分
+                currentStart = maxOf(currentStart, blocker.end)
+                if (currentStart >= candidate.end) break
+            }
+            // 最后一个 blocker 后面的非重叠部分
+            if (currentStart < candidate.end) {
+                result.add(TextRange(currentStart, candidate.end))
+            }
         }
+        return result
+    }
 
     /** 线性插值 helper。 */
     private fun lerpFloat(

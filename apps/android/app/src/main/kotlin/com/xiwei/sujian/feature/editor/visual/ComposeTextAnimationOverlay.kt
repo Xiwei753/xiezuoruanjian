@@ -288,6 +288,7 @@ private fun DrawScope.drawVisualTransaction(
                 alpha = startLayerAlpha,
                 scrollY = scrollY,
                 textColor = textColor,
+                currentResult = currentResult,
             )
         }
     }
@@ -343,15 +344,23 @@ private fun DrawScope.drawVisualTransaction(
  * #641 评论 5459531909 第3项：cursor 部分已删除 — cursor 永远只画一根，
  * 统一由 [drawVisualCursor] 从 cursorStartRect 插值到 newCursorRect。
  * 本函数只画 startFrame 的文字 slice（按 alpha 淡出），不再画 cursor。
+ *
+ * #641 评论 5459754425 第1项：rebase 起点 + 目标模型 —
+ * 对仍然存在于当前正文的 slice（targetRange != null），绘制要从 frozen 状态插值到当前最终 layout：
+ * - alpha = lerp(sourceAlpha, 1f, rebaseProgress)
+ * - position = lerp(sourcePosition, targetPosition, rebaseProgress)
+ * 对只属于旧画面的 slice（targetRange == null），alpha = lerp(sourceAlpha, 0f, rebaseProgress)。
  */
 private fun DrawScope.drawStartFrameLayer(
     startFrame: ComposeVisualFrame,
     alpha: Float,
     scrollY: Int,
     textColor: Color,
+    currentResult: TextLayoutResult?,
 ) {
     val oldResult = startFrame.sourceOldLayout?.result
     val newResult = startFrame.sourceNewLayout?.result
+    // 先画旧的 VisualFrameSlice（向后兼容）
     for (slice in startFrame.slices) {
         val result =
             when (slice.layoutSource) {
@@ -367,6 +376,50 @@ private fun DrawScope.drawStartFrameLayer(
             scrollY = scrollY,
             textColor = textColor,
         )
+    }
+    // #641 评论 5459754425 第1项：画新的 RebasedTextSlice
+    // 注意：这里使用 currentResult（当前事务的 newLayout）作为 target layout
+    // 因为 rebaseProgress 是当前事务的进度
+    for (slice in startFrame.rebasedSlices) {
+        if (slice.sourceRange.end > slice.sourceLayout.result.layoutInput.text.length) continue
+        val targetRange = slice.targetRange
+        if (targetRange != null) {
+            // 仍然存在于当前正文的 slice：从 frozen 状态插值到当前最终 layout
+            val targetResult = currentResult ?: continue
+            if (targetRange.end > targetResult.layoutInput.text.length) continue
+            // 计算 source 和 target 的 bounds
+            val sourceBounds = safePathBounds(slice.sourceLayout.result, slice.sourceRange) ?: continue
+            val targetBounds = safePathBounds(targetResult, targetRange) ?: continue
+            // 插值 alpha 和 position
+            val interpolatedAlpha = lerp(slice.sourceAlpha, 1f, alpha)
+            val currentX = lerp(sourceBounds.left + slice.sourceTranslate.x, targetBounds.left, alpha)
+            val currentY = lerp(sourceBounds.top + slice.sourceTranslate.y, targetBounds.top, alpha)
+            val translate =
+                Offset(
+                    currentX - targetBounds.left,
+                    currentY - targetBounds.top,
+                )
+            drawTranslatedRangeText(
+                result = targetResult,
+                range = targetRange,
+                translate = translate,
+                alpha = interpolatedAlpha,
+                scrollY = scrollY,
+                textColor = textColor,
+            )
+        } else {
+            // 只属于旧画面的 slice：alpha 淡到 0
+            val interpolatedAlpha = lerp(slice.sourceAlpha, 0f, alpha)
+            if (interpolatedAlpha <= 0f) continue
+            drawTranslatedRangeText(
+                result = slice.sourceLayout.result,
+                range = slice.sourceRange,
+                translate = slice.sourceTranslate,
+                alpha = interpolatedAlpha,
+                scrollY = scrollY,
+                textColor = textColor,
+            )
+        }
     }
     // #641 评论 5459531909 第3项：删除 startFrame 里单独淡出的 drawStartFrameCursor 路径。
     // cursor 起点统一由 drawVisualCursor 从 cursorStartRect
