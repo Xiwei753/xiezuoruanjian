@@ -537,8 +537,10 @@ class ComposeEditorVisualState(
         // 多代 flatten 不能直接用 A 当初冻结的 sourceAlpha/sourceTranslate 重新起跑——
         // 若 B 的 rebase 跑到 50%，A 的旧 slice 屏幕上的 alpha/位置已在 source 和 B target 中间，
         // C 到来时新 startFrame 应从 B 当前 50% 真实画面继续。
+        // #641 评论 5460233781 问题2：materializeRebasedSlice 可能返回 null（fading alpha<=0 丢弃），
+        // 用 mapNotNull 过滤掉 null，避免完全透明的 slice 累积在 startFrame.slices 里。
         val materializedOlder =
-            prevStartFrame?.slices?.map { materializeRebasedSlice(it, prev.newLayout, rebaseProgress) } ?: emptyList()
+            prevStartFrame?.slices?.mapNotNull { materializeRebasedSlice(it, prev.newLayout, rebaseProgress) } ?: emptyList()
 
         // currentSlices / retainedSlices 是当前事务按 textProgress 生成的，已是当前状态，不再按 rebaseProgress 物化。
         val currentSlices = collectCurrentSlicesAsRebased(prev, textProgress)
@@ -690,9 +692,17 @@ class ComposeEditorVisualState(
      *
      * - [slice.targetRange] == null（fading）：alpha = lerp(sourceAlpha, 0f, rebaseProgress)，
      *   其余保持不变（继续从原位置淡出）。
+     *   #641 评论 5460233781 问题2：alpha <= 0 时返回 null 丢弃——
+     *   完全透明的 slice 不可见，但会累积在 startFrame.slices 里，浪费且可能影响后续 rebase 逻辑。
      * - [slice.targetRange] != null（surviving）：alpha = lerp(sourceAlpha, 1f, rebaseProgress)，
-     *   位置从 source bounds 插值到 target bounds，重新锚定到 [currentLayout]。
+     *   位置从 source bounds + sourceTranslate 插值到 target bounds，重新锚定到 [currentLayout]。
+     *   #641 评论 5460233781 问题2：用 source bounds + sourceTranslate 与 target bounds 算当前 x/y——
+     *   slice.sourceTranslate 表示该 slice 在 source layout 原位置基础上的额外偏移
+     *   （例如 retained move slice 在 [collectRetainedMoveSlicesAsRebased] 里就带非零 translate）。
+     *   不加 sourceTranslate 会让带偏移的 slice 物化位置错，导致快速连续输入时画面跳变。
      *   [currentLayout] 为 null 或 bounds 无效时只更新 alpha。
+     *
+     * 返回 null 表示该 slice 应被丢弃（fading alpha 已降到 0）。
      *
      * @param currentLayout 上一事务（B）的 newLayout — surviving slice 的 target 在这份 layout 里。
      */
@@ -700,12 +710,15 @@ class ComposeEditorVisualState(
         slice: RebasedTextSlice,
         currentLayout: ComposeLayoutSnapshot?,
         rebaseProgress: Float,
-    ): RebasedTextSlice {
+    ): RebasedTextSlice? {
         val sourceAlpha = slice.sourceAlpha
         val targetRange = slice.targetRange
         if (targetRange == null) {
             // fading：从原位置继续淡出，alpha 向 0 收敛。
+            // #641 评论 5460233781 问题2：alpha <= 0 的 fading slice 直接丢弃——
+            // 完全透明的 slice 不可见，但会累积在 startFrame.slices 里，浪费且可能影响后续 rebase 逻辑。
             val currentAlpha = lerpFloat(sourceAlpha, 0f, rebaseProgress)
+            if (currentAlpha <= 0f) return null
             return slice.copy(sourceAlpha = currentAlpha)
         }
         // surviving：alpha 向 1 收敛。
@@ -718,8 +731,12 @@ class ComposeEditorVisualState(
         if (sourceBounds == null || targetBounds == null) {
             return slice.copy(sourceAlpha = currentAlpha)
         }
-        val currentX = lerpFloat(sourceBounds.left, targetBounds.left, rebaseProgress)
-        val currentY = lerpFloat(sourceBounds.top, targetBounds.top, rebaseProgress)
+        // #641 评论 5460233781 问题2：用 source bounds + sourceTranslate 与 target bounds 算当前 x/y。
+        // slice.sourceTranslate 表示该 slice 在 source layout 原位置基础上的额外偏移
+        // （例如 retained move slice 在 collectRetainedMoveSlicesAsRebased 里就带非零 translate）。
+        // 不加 sourceTranslate 会让带偏移的 slice 物化位置错，导致快速连续输入时画面跳变。
+        val currentX = lerpFloat(sourceBounds.left + slice.sourceTranslate.x, targetBounds.left, rebaseProgress)
+        val currentY = lerpFloat(sourceBounds.top + slice.sourceTranslate.y, targetBounds.top, rebaseProgress)
         // 重新锚定到 currentLayout：sourceLayout=currentLayout、sourceRange=targetRange，
         // sourceTranslate = currentPos - targetBounds 原点
         // （绘制时 targetBounds.left/top + translate = currentPos）。
