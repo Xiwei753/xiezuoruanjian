@@ -938,6 +938,9 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
         textKind = textKind,
         cursor = cursor,
         newTextLength = event.newText.length,
+        // #641 评论 5459531909 第1项：传完整新正文，layout 关联改用正文一致判断，
+        // 不再只看长度（i→W、候选等长替换、自动纠错长度相同但布局可能不同）。
+        expectedNewText = event.newText,
         replaceBounds = replaceBounds,
     )
 }

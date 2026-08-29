@@ -28,6 +28,13 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  * slice 绘制时会从当前（新）事务 layout 取字，画面错乱。drawStartFrameLayer 只读
  * [sourceOldLayout] / [sourceNewLayout]，不用当前 transaction 的 oldLayout/newLayout。
  * 默认 null 保持向后兼容。
+ *
+ * #641 评论 5459531909 第2项：frozen startFrame 必须继续拥有当前正文的抑制范围。
+ * [suppressedCurrentRanges] 记录物化时上一事务仍由 overlay 接管、在新事务里仍应隐藏的
+ * current text ranges（已映射到新事务的 new text 坐标）。新事务的 _hiddenRanges 不能
+ * 直接覆盖成自己的 ranges，而应包含 currentOwnedNewRanges + currentRetainedNewRanges +
+ * frozenStartFrame.suppressedCurrentRanges，避免快速输入时上一笔尚未结束的 frozen 文字
+ * 突然恢复 100% 再和 frozen frame 叠一层。默认 emptyList() 保持向后兼容。
  */
 data class ComposeVisualFrame(
     val sourceOldLayout: ComposeLayoutSnapshot? = null,
@@ -35,6 +42,7 @@ data class ComposeVisualFrame(
     val slices: List<VisualFrameSlice>,
     val cursorRect: Rect? = null,
     val cursorAlpha: Float = 1f,
+    val suppressedCurrentRanges: List<TextRange> = emptyList(),
 )
 
 /**

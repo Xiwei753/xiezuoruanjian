@@ -30,13 +30,23 @@ import kotlinx.coroutines.flow.update
  * 否则保存 pending，等 onAuthoritativeLayout 到达后再用确定的 old/new layout 生成
  * ComposeVisualTransaction 和 retained moves。
  *
+ * #641 评论 5459531909 第1项：layout 关联不能再只看长度。
+ * [newTextLength] 只能区分"长度不同"的事务，但 `i → W`、候选等长替换、自动纠错
+ * 都可能长度相同而布局不同。新增 [expectedNewText] 保存完整新正文，
+ * [ComposeEditorVisualState.canComputeRetainedNow] / [applyPendingRetainedMoves]
+ * 改成比较 `result.layoutInput.text.text == expectedNewText` 才认这份 layout。
+ * [newTextLength] 保留向后兼容（= expectedNewText.length），但不再作为唯一身份。
+ *
  * @param transactionId 事务 ID — 由 [ComposeEditorVisualState.onVisualIntent] 内部分配，
  *   调用方可设为 0L。overlay 据此判断是否需要重新启动动画。
  * @param oldRanges 旧受影响 UTF-16 ranges — 删除动画用（来自 Core oldAffectedByteRanges）。
  * @param newRanges 新受影响 UTF-16 ranges — 插入/移动动画用（来自 Core newAffectedByteRanges）。
  * @param textKind 文字动画类型。
  * @param cursor 光标视觉意图 — null 表示不画视觉光标。
- * @param newTextLength 新正文 UTF-16 长度 — 用于两阶段关联 onAuthoritativeLayout。
+ * @param newTextLength 新正文 UTF-16 长度 — 保留向后兼容，由 [expectedNewText].length 推导。
+ * @param expectedNewText #641 评论 5459531909 第1项：完整新正文（UTF-16 String）—
+ *   layout 关联判断改用 `result.layoutInput.text.text == expectedNewText`，
+ *   不再只比较长度。默认空字符串保持现有测试构造兼容。
  * @param replaceBounds #641 评论 5458880786 问题2a：明确的 replace 边界（UTF-16）—
  *   retained reflow 用它算 prefix/suffix，不再从空 oldRanges/newRanges 猜。
  *   null 表示未提供（向后兼容，fallback 到 oldRanges/newRanges 推断）。
@@ -48,6 +58,7 @@ data class EditorVisualIntent(
     val textKind: TextVisualKind,
     val cursor: CursorVisualIntent?,
     val newTextLength: Int = 0,
+    val expectedNewText: String = "",
     val replaceBounds: VisualReplaceBounds? = null,
 )
 
@@ -244,7 +255,10 @@ class ComposeEditorVisualState(
      */
     private fun applyPendingRetainedMoves(result: TextLayoutResult) {
         val pending = pendingVisualIntent ?: return
-        if (result.layoutInput.text.length != pending.intent.newTextLength) return
+        // #641 评论 5459531909 第1项：layout 关联改成正文一致才认这份 layout。
+        // 旧实现只比较 newTextLength，`i → W`、候选等长替换、自动纠错都会长度相同
+        // 但布局不同，导致把上一笔的 layout 错当成这笔的 new layout。
+        if (result.layoutInput.text.text != pending.intent.expectedNewText) return
         pendingVisualIntent = null
         val retainedMoves = computeRetainedMoves(pending.intent)
         val active = _activeTransaction.value ?: return
@@ -262,7 +276,18 @@ class ComposeEditorVisualState(
                 ).filter { it.start < it.end }
             val retainedNewRanges =
                 retainedMoves.map { it.newRange }.filter { it.start < it.end }
-            _hiddenRanges.update { baseOwnedNewRanges + retainedNewRanges }
+            // #641 评论 5459531909 第2项：补算 retainedMoves 后仍要保留 frozenStartFrame.suppressedCurrentRanges。
+            // active.startFrame 就是 onVisualIntent 时传入的 frozenStartFrame，
+            // suppressedCurrentRanges 仍是上一事务 new text（= 本次 old text）坐标，需映射到本次 new text。
+            val frozenSuppressed =
+                active.startFrame?.suppressedCurrentRanges ?: emptyList()
+            val mappedSuppressed =
+                mapSuppressedRangesThroughReplace(frozenSuppressed, pending.intent.replaceBounds)
+            val suppressedNotOverlapping =
+                filterOverlapping(mappedSuppressed, baseOwnedNewRanges + retainedNewRanges)
+            _hiddenRanges.update {
+                baseOwnedNewRanges + retainedNewRanges + suppressedNotOverlapping
+            }
         }
         _activeTransaction.update {
             it?.copy(
@@ -348,7 +373,7 @@ class ComposeEditorVisualState(
         // 需要隐藏的是当前正文里由 overlay 接管的范围：
         // Insert/Move 的 newRanges、retained move 的 newRange。
         // #641 评论 5458283021 问题3c：只在 hasTextAnimation 时设置 hiddenRanges。
-        val hiddenRanges =
+        val currentOwnedNewRanges =
             if (hasTextAnimation) {
                 (
                     when (intentWithId.textKind) {
@@ -361,7 +386,45 @@ class ComposeEditorVisualState(
             } else {
                 emptyList()
             }
-        _hiddenRanges.update { hiddenRanges }
+
+        // #641 评论 5458283021 问题2a：两阶段 retained reflow。
+        // transaction 立即创建（overlay 能立即开始画文字动画、hiddenRanges 生效），
+        // 只是 retainedMoves 初始为 emptyList，等 onAuthoritativeLayout 到达后
+        // 用确定的 old/new layout 补算 retainedMoves。
+        // 若 currentSnapshot 已就绪且 text 长度匹配 newTextLength，立即算 retainedMoves。
+        val currentSnapshotLocal = currentSnapshot
+        // #641 评论 5459531909 第1项：layout 关联改成正文一致 —
+        // 只看长度会被等长替换（i→W、候选、自动纠错）骗过，错把旧 layout 当新 layout。
+        val canComputeRetainedNow =
+            currentSnapshotLocal != null &&
+                currentSnapshotLocal.result.layoutInput.text.text == intentWithId.expectedNewText
+        val retainedMoves =
+            if (canComputeRetainedNow) {
+                computeRetainedMoves(intentWithId)
+            } else {
+                emptyList()
+            }
+
+        val currentRetainedNewRanges =
+            retainedMoves.map { it.newRange }.filter { it.start < it.end }
+        // #641 评论 5459531909 第2项：frozen startFrame 保留抑制范围。
+        // 新事务 _hiddenRanges 不能直接覆盖成自己的 ranges，而应包含
+        // currentOwnedNewRanges + currentRetainedNewRanges + frozenStartFrame.suppressedCurrentRanges。
+        // suppressedCurrentRanges 先用 replaceBounds 映射到本次 new text，再过滤掉与新 ranges 重叠的，
+        // 避免双重隐藏。这样快速输入 a→b 时 a 不会突然恢复 100% 再和 frozen frame 叠一层。
+        val mappedSuppressed =
+            mapSuppressedRangesThroughReplace(
+                frozenStartFrame?.suppressedCurrentRanges ?: emptyList(),
+                intentWithId.replaceBounds,
+            )
+        val suppressedNotOverlapping =
+            filterOverlapping(
+                mappedSuppressed,
+                currentOwnedNewRanges + currentRetainedNewRanges,
+            )
+        _hiddenRanges.update {
+            currentOwnedNewRanges + currentRetainedNewRanges + suppressedNotOverlapping
+        }
 
         // #641 评论 问题2 + 评论 5458283021 问题3c：只要 cursor?.animate == true 且
         // hasCursorAnimation，就画视觉光标。reduceMotion/cursorEnabled=false 时不画。
@@ -373,21 +436,6 @@ class ComposeEditorVisualState(
             _visualCursorSnapshot.update { null }
         }
 
-        // #641 评论 5458283021 问题2a：两阶段 retained reflow。
-        // transaction 立即创建（overlay 能立即开始画文字动画、hiddenRanges 生效），
-        // 只是 retainedMoves 初始为 emptyList，等 onAuthoritativeLayout 到达后
-        // 用确定的 old/new layout 补算 retainedMoves。
-        // 若 currentSnapshot 已就绪且 text 长度匹配 newTextLength，立即算 retainedMoves。
-        val currentSnapshotLocal = currentSnapshot
-        val canComputeRetainedNow =
-            currentSnapshotLocal != null &&
-                currentSnapshotLocal.result.layoutInput.text.length == intentWithId.newTextLength
-        val retainedMoves =
-            if (canComputeRetainedNow) {
-                computeRetainedMoves(intentWithId)
-            } else {
-                emptyList()
-            }
         buildAndActivateTransaction(
             intent = intentWithId,
             motionPolicy = effective,
@@ -471,12 +519,16 @@ class ComposeEditorVisualState(
 
         // #641 评论 5458880786 问题1b：带上 sourceOldLayout/sourceNewLayout —
         // 冻结上一事务的 layout，drawStartFrameLayer 只读这两份，不用当前事务的 oldLayout/newLayout。
+        // #641 评论 5459531909 第2项：物化时把当前 _hiddenRanges.value 作为 suppressedCurrentRanges
+        // 存进 frame。这些是上一事务仍由 overlay 接管的 current text ranges，新事务到来后仍应隐藏，
+        // 否则快速输入 a→b 时 a 会突然恢复 100% 再和 frozen frame 叠一层。
         return ComposeVisualFrame(
             sourceOldLayout = prev.oldLayout,
             sourceNewLayout = prev.newLayout,
             slices = visibleSlices + retainedSlices,
             cursorRect = cursorRect,
             cursorAlpha = cursorAlpha,
+            suppressedCurrentRanges = _hiddenRanges.value,
         )
     }
 
@@ -530,6 +582,13 @@ class ComposeEditorVisualState(
     /**
      * 旧事务的 retainedMoves：当前 translate 按 [textProgress] 插值 old→new bounds，
      * 来自 NewLayout，alpha=1（retained 文字全程可见）。
+     *
+     * #641 评论 5459531909 第4项：translate 改成 delta（相对 source layout 原位置的偏移）。
+     * 旧实现用 [estimateTranslate] 返回绝对坐标（path bounds 的 left/top），
+     * 而 [drawTranslatedRangeText] 把 translate 当相对偏移再加一次，位置会翻倍。
+     * 统一约定 [VisualFrameSlice.translate] 永远是"相对 source layout 原位置的偏移"：
+     * `translate = Offset(currentX - newBounds.left, currentY - newBounds.top)`，
+     * 其中 `currentX = lerp(oldBounds.left, newBounds.left, textProgress)`。
      */
     private fun collectRetainedMoveSlices(
         prev: ComposeVisualTransaction,
@@ -539,15 +598,22 @@ class ComposeEditorVisualState(
         val currLayout = prev.newLayout
         val slices = mutableListOf<VisualFrameSlice>()
         for (move in prev.retainedMoves) {
-            val oldTranslate = estimateTranslate(prevLayout, move.oldRange)
-            val newTranslate = estimateTranslate(currLayout, move.newRange)
-            val dx = lerpFloat(oldTranslate.x, newTranslate.x, textProgress)
-            val dy = lerpFloat(oldTranslate.y, newTranslate.y, textProgress)
+            val oldBounds = prevLayout?.let { safePathBounds(it.result, move.oldRange) }
+            val newBounds = currLayout?.let { safePathBounds(it.result, move.newRange) }
+            // #641 评论 5459531909 第4项：bounds 无效时跳过（不画这个 slice）。
+            if (oldBounds == null || newBounds == null) continue
+            val currentX = lerpFloat(oldBounds.left, newBounds.left, textProgress)
+            val currentY = lerpFloat(oldBounds.top, newBounds.top, textProgress)
+            val translate =
+                Offset(
+                    currentX - newBounds.left,
+                    currentY - newBounds.top,
+                )
             slices.add(
                 VisualFrameSlice(
                     range = move.newRange,
                     layoutSource = FrameSliceSource.NewLayout,
-                    translate = Offset(dx, dy),
+                    translate = translate,
                     alpha = 1f,
                 ),
             )
@@ -592,21 +658,56 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * 估算某 range 在某 layout 下的 translate（相对原点）。
-     * 用 `getPathForRange` 的 bounds 左上角作为该 range 的位置。
-     * layout 缺失时返回 [Offset.Zero]。
+     * #641 评论 5459531909 第2项：把上一事务的 suppressedCurrentRanges（在上一事务 new text
+     * = 本次 old text 坐标）映射到本次 new text 坐标。
+     *
+     * 用 [replaceBounds] 的共同前缀/后缀映射：
+     * - range 完全在共同前缀 [0, oldStart) 里：位置不变。
+     * - range 完全在共同后缀 [oldEnd, ...) 里：newPos = oldPos - oldEnd + newEnd。
+     * - range 跨越 replace 区域 [oldStart, oldEnd]：不存活，丢弃（来自 OldLayout 的已删除文字不用映射）。
+     *
+     * [replaceBounds] 为 null 时不映射（返回空列表，避免错误映射，向后兼容）。
      */
-    private fun estimateTranslate(
-        layout: ComposeLayoutSnapshot?,
-        range: TextRange,
-    ): Offset {
-        if (layout == null) return Offset.Zero
-        if (range.start >= range.end) return Offset.Zero
-        if (range.end > layout.result.layoutInput.text.length) return Offset.Zero
-        val path = layout.result.getPathForRange(range.start, range.end)
-        val bounds = path.getBounds()
-        return Offset(bounds.left, bounds.top)
+    private fun mapSuppressedRangesThroughReplace(
+        ranges: List<TextRange>,
+        replaceBounds: VisualReplaceBounds?,
+    ): List<TextRange> {
+        if (replaceBounds == null) return emptyList()
+        val result = mutableListOf<TextRange>()
+        for (range in ranges) {
+            if (range.start >= range.end) continue
+            // range 完全在共同前缀 [0, oldStart) 里：位置不变。
+            if (range.end <= replaceBounds.oldStart) {
+                result.add(range)
+                continue
+            }
+            // range 完全在共同后缀 [oldEnd, ...) 里：newPos = oldPos - oldEnd + newEnd。
+            if (range.start >= replaceBounds.oldEnd) {
+                result.add(
+                    TextRange(
+                        range.start - replaceBounds.oldEnd + replaceBounds.newEnd,
+                        range.end - replaceBounds.oldEnd + replaceBounds.newEnd,
+                    ),
+                )
+                continue
+            }
+            // range 跨越 replace 区域：不存活，丢弃。
+        }
+        return result
     }
+
+    /**
+     * #641 评论 5459531909 第2项：过滤掉 [candidate] 中与 [existing] 任一 range 重叠的 range，
+     * 避免双重隐藏（同一段文字既被新事务 ranges 隐藏，又被 frozen suppressed ranges 隐藏）。
+     * 重叠定义：区间相交（start < other.end && other.start < end）。
+     */
+    private fun filterOverlapping(
+        candidate: List<TextRange>,
+        existing: List<TextRange>,
+    ): List<TextRange> =
+        candidate.filter { c ->
+            existing.none { e -> c.start < e.end && e.start < c.end }
+        }
 
     /** 线性插值 helper。 */
     private fun lerpFloat(
@@ -741,6 +842,32 @@ class ComposeEditorVisualState(
                         mergedDy = dy
                         merging = true
                     }
+                } else {
+                    // #641 评论 5459531909 第4项：稳定段（!topChanged && !leftChanged）—
+                    // 先 flush 当前合并段，再 merging=false，
+                    // 不让后面的稳定文字也被并进前一个移动段。
+                    if (merging) {
+                        result.add(
+                            RetainedMove(
+                                oldRange = TextRange(mergedOldStart, oldPos),
+                                newRange = TextRange(mergedNewStart, newPos),
+                            ),
+                        )
+                        merging = false
+                    }
+                }
+            } else {
+                // #641 评论 5459531909 第4项：old/new bounds 无效 —
+                // 先 flush 当前合并段，再 merging=false，
+                // 不让无效段打断已有合并段的连续性，也不让无效段被并进合并段。
+                if (merging) {
+                    result.add(
+                        RetainedMove(
+                            oldRange = TextRange(mergedOldStart, oldPos),
+                            newRange = TextRange(mergedNewStart, newPos),
+                        ),
+                    )
+                    merging = false
                 }
             }
             oldPos = segEnd

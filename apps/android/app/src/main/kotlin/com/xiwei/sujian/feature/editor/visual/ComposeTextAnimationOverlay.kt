@@ -256,8 +256,6 @@ private fun DrawScope.drawVisualTransaction(
                 alpha = startLayerAlpha,
                 scrollY = scrollY,
                 textColor = textColor,
-                cursorColor = cursorColor,
-                density = density,
             )
         }
     }
@@ -276,13 +274,21 @@ private fun DrawScope.drawVisualTransaction(
         )
     }
 
-    // 视觉光标：按 cursorProgress 从 old cursor rect 插值到 new cursor rect。
+    // 视觉光标：按 cursorProgress 从 cursorStartRect 插值到 newCursorRect。
     // #641 评论 问题2：只要 cursor?.animate == true 就画（不管 textKind）。
     // #641 评论 问题3：同一帧只画一次 cursor（不再闪烁叠加）。
     // #641 评论 5457777142 问题4：cursor 用 cursorProgress（coordinated=false 时独立 timeline）。
+    // #641 评论 5459531909 第3项：cursor 永远只画一根 —
+    // cursorStartRect 来自 startFrame?.cursorRect（frozen 中间位置）?: snapshot?.oldCursorRect，
+    // 同一个 drawVisualCursor 从 startRect 插值到 newRect。CURSOR_ONLY 同样走 cursor timeline，
+    // 不因 textEnabled=false 跳过（cursor 绘制条件只看 cursorAnimate，不看 textEnabled）。
     if (cursorAnimate && cursorSnapshot != null) {
+        val cursorStartRect =
+            transaction.startFrame?.cursorRect
+                ?: cursorSnapshot.oldCursorRect
         drawVisualCursor(
-            snapshot = cursorSnapshot,
+            startRect = cursorStartRect,
+            newRect = cursorSnapshot.newCursorRect,
             progress = cursorProgress,
             scrollY = scrollY,
             density = density,
@@ -301,16 +307,16 @@ private fun DrawScope.drawVisualTransaction(
  * （物化时冻结的上一事务 layout），不用当前 transaction 的 oldLayout/newLayout —
  * 新事务的 onAuthoritativeLayout 会替换 active transaction 的 oldLayout/newLayout，
  * 若仍指向 transaction.oldLayout/newLayout，slice 会从当前（新）事务 layout 取字，画面错乱。
- * 同时画 startFrame.cursorRect（按 alpha 淡出），让 cursor 真正参与第一帧。
+ *
+ * #641 评论 5459531909 第3项：cursor 部分已删除 — cursor 永远只画一根，
+ * 统一由 [drawVisualCursor] 从 cursorStartRect 插值到 newCursorRect。
+ * 本函数只画 startFrame 的文字 slice（按 alpha 淡出），不再画 cursor。
  */
-@Suppress("LongParameterList")
 private fun DrawScope.drawStartFrameLayer(
     startFrame: ComposeVisualFrame,
     alpha: Float,
     scrollY: Int,
     textColor: Color,
-    cursorColor: Color,
-    density: androidx.compose.ui.unit.Density,
 ) {
     val oldResult = startFrame.sourceOldLayout?.result
     val newResult = startFrame.sourceNewLayout?.result
@@ -330,75 +336,46 @@ private fun DrawScope.drawStartFrameLayer(
             textColor = textColor,
         )
     }
-    // #641 评论 5458880786 问题1e：画 startFrame 的 cursor，让 cursor 真正参与第一帧。
-    // 抽成 [drawStartFrameCursor] 降低 drawStartFrameLayer 圈复杂度。
-    val cursorRect = startFrame.cursorRect
-    if (cursorRect != null && startFrame.cursorAlpha > 0f) {
-        drawStartFrameCursor(
-            cursorRect = cursorRect,
-            cursorAlpha = startFrame.cursorAlpha,
-            alpha = alpha,
-            scrollY = scrollY,
-            cursorColor = cursorColor,
-            density = density,
-        )
-    }
+    // #641 评论 5459531909 第3项：删除 startFrame 里单独淡出的 drawStartFrameCursor 路径。
+    // cursor 起点统一由 drawVisualCursor 从 cursorStartRect
+    // （startFrame?.cursorRect ?: snapshot?.oldCursorRect）插值到 newCursorRect，
+    // 每帧只画这一根 cursor。startFrame 文字层仍按 alpha 淡出（上面 for 循环保留）。
 }
 
-/**
- * #641 评论 5458880786 问题1e：绘制 startFrame 的 cursor（按 alpha 淡出）—
- * 抽取以降低 [drawStartFrameLayer] 圈复杂度。边界条件拆成 verticalInBounds / horizontalInBounds
- * 降低 ComplexCondition（每个 if 条件数 ≤ 3）。
- */
-@Suppress("LongParameterList")
-private fun DrawScope.drawStartFrameCursor(
-    cursorRect: Rect,
-    cursorAlpha: Float,
-    alpha: Float,
-    scrollY: Int,
-    cursorColor: Color,
-    density: androidx.compose.ui.unit.Density,
-) {
-    val cursorWidth = density.run { VisualCursorWidthDp.toPx() }
-    val top = cursorRect.top - scrollY.toFloat()
-    val bottom = cursorRect.bottom - scrollY.toFloat()
-    val verticalInBounds = bottom > 0f && top < size.height
-    val horizontalInBounds = cursorRect.right > 0f && cursorRect.left < size.width
-    if (verticalInBounds && horizontalInBounds) {
-        drawRect(
-            color = cursorColor,
-            topLeft = Offset(cursorRect.left - cursorWidth / 2f, top),
-            size = Size(maxOf(cursorWidth, cursorRect.width), bottom - top),
-            alpha = cursorAlpha * alpha,
-        )
-    }
-}
+// #641 评论 5458880786 问题1e：原 drawStartFrameCursor 已删除。
+// #641 评论 5459531909 第3项：cursor 永远只画一根 —
+// startFrame 的 cursor 不再单独淡出，统一由 [drawVisualCursor] 从 cursorStartRect
+// （startFrame?.cursorRect ?: snapshot?.oldCursorRect）插值到 newCursorRect。
 
 /** 视觉光标宽度（dp）。 */
 private val VisualCursorWidthDp: Dp = 2.dp
 
 /**
- * #641 评论1 第5节 / 问题3：视觉光标插值绘制 — 从 [oldCursorRect] 按 progress 插值到
- * [newCursorRect]。光标宽度/高度随 rect 插值，颜色从 [cursorColor] 注入。
+ * #641 评论1 第5节 / 问题3：视觉光标插值绘制 — 从 [startRect] 按 progress 插值到
+ * [newRect]。光标宽度/高度随 rect 插值，颜色从 [cursorColor] 注入。
  * BasicTextField 的 cursorBrush 在动画期间透明，动画结束 clearAnimation 后恢复。
  *
  * #641 评论 问题3：同一帧只画一次 cursor — 删除 progress >= 0.85f 时的闪烁叠加。
+ *
+ * #641 评论 5459531909 第3项：cursor 永远只画一根 —
+ * [startRect] 来自 `transaction.startFrame?.cursorRect ?: cursorSnapshot.oldCursorRect`
+ * （frozen 中间位置或旧 cursor 位置），同一个 [drawVisualCursor] 从 startRect 插值到 newRect。
+ * 不再有单独淡出的 drawStartFrameCursor 路径。CURSOR_ONLY 同样走 cursor timeline，
+ * 从 frozen cursor 中间位置继续，不因 textEnabled=false 跳过。
  */
 @Suppress("LongParameterList")
 private fun DrawScope.drawVisualCursor(
-    snapshot: VisualCursorSnapshot,
+    startRect: Rect,
+    newRect: Rect,
     progress: Float,
     scrollY: Int,
     density: androidx.compose.ui.unit.Density,
     cursorColor: Color,
 ) {
-    val oldRect = snapshot.oldCursorRect
-    val newRect = snapshot.newCursorRect
-
-    val interpolatedLeft = lerp(oldRect.left, newRect.left, progress)
-    val interpolatedTop = lerp(oldRect.top, newRect.top, progress)
-    val interpolatedBottom = lerp(oldRect.bottom, newRect.bottom, progress)
-    val interpolatedWidth = lerp(oldRect.width, newRect.width, progress)
+    val interpolatedLeft = lerp(startRect.left, newRect.left, progress)
+    val interpolatedTop = lerp(startRect.top, newRect.top, progress)
+    val interpolatedBottom = lerp(startRect.bottom, newRect.bottom, progress)
+    val interpolatedWidth = lerp(startRect.width, newRect.width, progress)
 
     val cursorWidth = density.run { VisualCursorWidthDp.toPx() }
     val cursorLeft = interpolatedLeft - cursorWidth / 2
