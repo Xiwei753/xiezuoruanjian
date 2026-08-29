@@ -39,6 +39,9 @@ data class RetainedMove(
  * @param oldRanges 旧受影响 UTF-16 ranges — 删除动画用。
  * @param newRanges 新受影响 UTF-16 ranges — 插入/移动动画用。
  * @param retainedMoves 被挤到下一行的"保留文字"的 old/new range。
+ * @param textKind 文字动画类型 — #641 评论 5458880786 问题1a：[ComposeEditorVisualState.materializeStartFrame]
+ *   需要知道上一事务的 textKind 才能物化 oldRanges/newRanges（Delete 淡出 oldRanges、Move 淡出 oldRanges+淡入 newRanges、
+ *   Insert 淡入 newRanges）。默认 [TextVisualKind.None] 保持向后兼容。
  * @param cursor 光标视觉意图 — animate=true 时 overlay 插值画视觉光标。
  * @param startFrame 上一事务物化出的视觉帧 — 新事务从该帧对应的 progress 开始，
  *   而不是 `snapTo(0f)`。null 表示从 0 开始。
@@ -52,6 +55,7 @@ data class ComposeVisualTransaction(
     val oldRanges: List<TextRange>,
     val newRanges: List<TextRange>,
     val retainedMoves: List<RetainedMove>,
+    val textKind: TextVisualKind = TextVisualKind.None,
     val cursor: CursorVisualIntent?,
     val startFrame: ComposeVisualFrame?,
     val motionPolicy: EditorMotionPolicy,

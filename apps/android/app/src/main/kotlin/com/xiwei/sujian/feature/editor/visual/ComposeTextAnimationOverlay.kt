@@ -105,14 +105,18 @@ fun ComposeTextAnimationOverlay(
     // #641 评论 问题3 + 5457777142 问题2：用 Animatable 手动控制动画 —
     // transaction id 变化时若 startFrame 非空，从 startFrame 对应的 progress 开始；
     // 否则 snapTo(0f)。不再用 animateFloatAsState(target=1f)。
+    // #641 评论 5458880786 问题1f：不再用 estimateStartProgress 把 frame 降维成平均 alpha —
+    // textProgress / cursorProgress 始终从 0f 开始。startFrame 层在 drawVisualTransaction 里
+    // 用 alpha = 1 - textProgress 淡出（已有逻辑），新事务层按 textProgress 画（已有 drawAnimatedRanges）。
+    // 这样 t=0 画 100% frozen startFrame，t=1 画 100% 新事务最终态。
+    // cursor 同理：cursorProgress 从 0f 开始，startFrame.cursorRect 在 drawStartFrameLayer 里
+    // 按 startLayerAlpha = 1 - textProgress 淡出，新事务 cursor 在 drawVisualCursor 里按 cursorProgress 画。
     val textProgress = remember { Animatable(0f) }
     val cursorProgress = remember { Animatable(0f) }
-    val startFrame = activeTransaction?.startFrame
-    val startProgress = if (startFrame != null) estimateStartProgress(startFrame) else 0f
 
     LaunchedEffect(transactionId) {
         if (transactionId > 0L && textDurationMillis > 0L && textEnabled) {
-            textProgress.snapTo(startProgress)
+            textProgress.snapTo(0f)
             textProgress.animateTo(
                 targetValue = 1f,
                 animationSpec = tween(durationMillis = textDurationMillis.toInt()),
@@ -130,7 +134,7 @@ fun ComposeTextAnimationOverlay(
             transactionId > 0L && cursorDurationMillis > 0L && cursorEnabled &&
                 activeIntent?.cursor?.animate == true && (isCursorOnly || !useSingleTimeline)
         if (shouldAnimateCursor) {
-            cursorProgress.snapTo(startProgress)
+            cursorProgress.snapTo(0f)
             cursorProgress.animateTo(
                 targetValue = 1f,
                 animationSpec = tween(durationMillis = cursorDurationMillis.toInt()),
@@ -210,18 +214,6 @@ fun ComposeTextAnimationOverlay(
 }
 
 /**
- * #641 评论 5457777142 问题2：从 startFrame 估算起始 progress。
- *
- * startFrame.slices 的平均 alpha 反映旧事务画到哪了。
- * 没有 slice 时返回 0f。
- */
-private fun estimateStartProgress(frame: ComposeVisualFrame): Float {
-    if (frame.slices.isEmpty()) return 0f
-    val avgAlpha = frame.slices.map { it.alpha }.average().toFloat()
-    return avgAlpha.coerceIn(0f, 1f)
-}
-
-/**
  * #641 评论 问题3 + 5457777142 问题2/问题4 + 评论 5458283021 问题1b：绘制视觉动画事务 —
  * 提取以降低 [ComposeTextAnimationOverlay] 的认知复杂度。
  *
@@ -229,6 +221,9 @@ private fun estimateStartProgress(frame: ComposeVisualFrame): Float {
  * 先按 startFrame.slices 的真实数据（layoutSource/range/translate/alpha）画起始画面层，
  * alpha 随 textProgress 淡出。不再把 frame 降维成一个平均 progress —
  * 上一帧的具体文字位置、retained translate、cursor rect 都被使用。
+ *
+ * #641 评论 5458880786 问题1f：删除 estimateStartProgress — textProgress/cursorProgress 从 0f 开始，
+ * startFrame 层用 alpha = 1 - textProgress 淡出，新事务层按 textProgress 画。
  */
 @Suppress("LongParameterList")
 private fun DrawScope.drawVisualTransaction(
@@ -249,17 +244,20 @@ private fun DrawScope.drawVisualTransaction(
     // #641 评论 5458283021 问题1b：startFrame 起始画面层 —
     // 用 startFrame.slices 的真实数据画，alpha 随 textProgress 淡出。
     // 新事务的第一帧（textProgress≈0）先按这些数据画，再插值到新 transaction 的目标几何。
+    // #641 评论 5458880786 问题1e：drawStartFrameLayer 只读 startFrame.sourceOldLayout/sourceNewLayout，
+    // 不用当前 transaction 的 oldLayout/newLayout（新事务 onAuthoritativeLayout 已替换它们）。
+    // 同时画 startFrame.cursorRect，让 cursor 真正参与第一帧。
     val startFrame = transaction.startFrame
     if (startFrame != null && textEnabled) {
         val startLayerAlpha = (1f - textProgress).coerceIn(0f, 1f)
         if (startLayerAlpha > 0f) {
             drawStartFrameLayer(
                 startFrame = startFrame,
-                previousResult = previousResult,
-                currentResult = currentResult,
                 alpha = startLayerAlpha,
                 scrollY = scrollY,
                 textColor = textColor,
+                cursorColor = cursorColor,
+                density = density,
             )
         }
     }
@@ -296,23 +294,31 @@ private fun DrawScope.drawVisualTransaction(
 /**
  * #641 评论 5458283021 问题1b：绘制 startFrame 起始画面层 —
  * 用 startFrame.slices 的真实数据（layoutSource/range/translate/alpha）画。
- * 每个 slice 用 [VisualFrameSlice.layoutSource] 从 previousResult/currentResult 取对应 layout。
+ * 每个 slice 用 [VisualFrameSlice.layoutSource] 从 sourceOldLayout/sourceNewLayout 取对应 layout。
  * 不再把 frame 降维成一个平均 progress。
+ *
+ * #641 评论 5458880786 问题1e：layout 只读 [ComposeVisualFrame.sourceOldLayout] / [ComposeVisualFrame.sourceNewLayout]
+ * （物化时冻结的上一事务 layout），不用当前 transaction 的 oldLayout/newLayout —
+ * 新事务的 onAuthoritativeLayout 会替换 active transaction 的 oldLayout/newLayout，
+ * 若仍指向 transaction.oldLayout/newLayout，slice 会从当前（新）事务 layout 取字，画面错乱。
+ * 同时画 startFrame.cursorRect（按 alpha 淡出），让 cursor 真正参与第一帧。
  */
 @Suppress("LongParameterList")
 private fun DrawScope.drawStartFrameLayer(
     startFrame: ComposeVisualFrame,
-    previousResult: TextLayoutResult?,
-    currentResult: TextLayoutResult,
     alpha: Float,
     scrollY: Int,
     textColor: Color,
+    cursorColor: Color,
+    density: androidx.compose.ui.unit.Density,
 ) {
+    val oldResult = startFrame.sourceOldLayout?.result
+    val newResult = startFrame.sourceNewLayout?.result
     for (slice in startFrame.slices) {
         val result =
             when (slice.layoutSource) {
-                FrameSliceSource.OldLayout -> previousResult ?: continue
-                FrameSliceSource.NewLayout -> currentResult
+                FrameSliceSource.OldLayout -> oldResult ?: continue
+                FrameSliceSource.NewLayout -> newResult ?: continue
             }
         if (slice.range.end > result.layoutInput.text.length) continue
         drawTranslatedRangeText(
@@ -322,6 +328,48 @@ private fun DrawScope.drawStartFrameLayer(
             alpha = slice.alpha * alpha,
             scrollY = scrollY,
             textColor = textColor,
+        )
+    }
+    // #641 评论 5458880786 问题1e：画 startFrame 的 cursor，让 cursor 真正参与第一帧。
+    // 抽成 [drawStartFrameCursor] 降低 drawStartFrameLayer 圈复杂度。
+    val cursorRect = startFrame.cursorRect
+    if (cursorRect != null && startFrame.cursorAlpha > 0f) {
+        drawStartFrameCursor(
+            cursorRect = cursorRect,
+            cursorAlpha = startFrame.cursorAlpha,
+            alpha = alpha,
+            scrollY = scrollY,
+            cursorColor = cursorColor,
+            density = density,
+        )
+    }
+}
+
+/**
+ * #641 评论 5458880786 问题1e：绘制 startFrame 的 cursor（按 alpha 淡出）—
+ * 抽取以降低 [drawStartFrameLayer] 圈复杂度。边界条件拆成 verticalInBounds / horizontalInBounds
+ * 降低 ComplexCondition（每个 if 条件数 ≤ 3）。
+ */
+@Suppress("LongParameterList")
+private fun DrawScope.drawStartFrameCursor(
+    cursorRect: Rect,
+    cursorAlpha: Float,
+    alpha: Float,
+    scrollY: Int,
+    cursorColor: Color,
+    density: androidx.compose.ui.unit.Density,
+) {
+    val cursorWidth = density.run { VisualCursorWidthDp.toPx() }
+    val top = cursorRect.top - scrollY.toFloat()
+    val bottom = cursorRect.bottom - scrollY.toFloat()
+    val verticalInBounds = bottom > 0f && top < size.height
+    val horizontalInBounds = cursorRect.right > 0f && cursorRect.left < size.width
+    if (verticalInBounds && horizontalInBounds) {
+        drawRect(
+            color = cursorColor,
+            topLeft = Offset(cursorRect.left - cursorWidth / 2f, top),
+            size = Size(maxOf(cursorWidth, cursorRect.width), bottom - top),
+            alpha = cursorAlpha * alpha,
         )
     }
 }
@@ -467,21 +515,25 @@ private fun DrawScope.drawAnimatedRanges(
             for (range in newRanges) {
                 drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
             }
-            // #641 评论 问题3 + 5457777142 问题2：retained moves —
-            // 被挤到下一行的"保留文字"，用 old/new getPathForRange() 的 bounds 算 dx/dy，
-            // 按 progress 插值 translate，而不是 crossfade 冒充 move。
-            drawRetainedMoves(
-                previousResult = previousResult,
-                currentResult = currentResult,
-                retainedMoves = retainedMoves,
-                progress = progress,
-                scrollY = scrollY,
-                textColor = textColor,
-            )
+            // #641 评论 5458880786 问题2f：drawRetainedMoves 移到 when 块之后，
+            // Insert/Delete/Move 都画（自动折行最常见是 Insert 挤到下一行 / Delete 拉回上一行）。
         }
         TextVisualKind.None -> {
             // 没有文字动画（如 CURSOR_ONLY 事务）。
         }
+    }
+    // #641 评论 5458880786 问题2f：retained move 不只 Move 才画 —
+    // 自动折行最常见是 Insert（挤到下一行）/Delete（拉回上一行），Insert/Delete/Move 都需要画 retained move，
+    // 否则被挤到新位置的保留文字会重影（hiddenRanges 隐藏了新位置，但 overlay 没画 old→new 位移过渡）。
+    if (textKind != TextVisualKind.None) {
+        drawRetainedMoves(
+            previousResult = previousResult,
+            currentResult = currentResult,
+            retainedMoves = retainedMoves,
+            progress = progress,
+            scrollY = scrollY,
+            textColor = textColor,
+        )
     }
 }
 

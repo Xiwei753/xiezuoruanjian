@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.editor.visual
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
+import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 
 /**
  * #641 评论 5457777142 问题2 + 评论 5458283021 问题1b：视觉帧 —
@@ -20,8 +21,17 @@ import androidx.compose.ui.text.TextRange
  * 每个 slice 至少要知道它来自哪份 layout、range、当前 translate、当前 alpha。
  * overlay 新 transaction 的第一帧先按这些数据画，再插值到新 transaction 的目标几何。
  * 不要把 frame 再降维成一个平均 progress。
+ *
+ * #641 评论 5458880786 问题1b：新增 [sourceOldLayout] / [sourceNewLayout] —
+ * 物化时冻结上一事务的 oldLayout/newLayout。新事务的 onAuthoritativeLayout 会替换
+ * active transaction 的 oldLayout/newLayout，若 startFrame 仍指向 transaction.oldLayout/newLayout，
+ * slice 绘制时会从当前（新）事务 layout 取字，画面错乱。drawStartFrameLayer 只读
+ * [sourceOldLayout] / [sourceNewLayout]，不用当前 transaction 的 oldLayout/newLayout。
+ * 默认 null 保持向后兼容。
  */
 data class ComposeVisualFrame(
+    val sourceOldLayout: ComposeLayoutSnapshot? = null,
+    val sourceNewLayout: ComposeLayoutSnapshot? = null,
     val slices: List<VisualFrameSlice>,
     val cursorRect: Rect? = null,
     val cursorAlpha: Float = 1f,

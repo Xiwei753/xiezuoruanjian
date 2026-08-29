@@ -37,6 +37,9 @@ import kotlinx.coroutines.flow.update
  * @param textKind 文字动画类型。
  * @param cursor 光标视觉意图 — null 表示不画视觉光标。
  * @param newTextLength 新正文 UTF-16 长度 — 用于两阶段关联 onAuthoritativeLayout。
+ * @param replaceBounds #641 评论 5458880786 问题2a：明确的 replace 边界（UTF-16）—
+ *   retained reflow 用它算 prefix/suffix，不再从空 oldRanges/newRanges 猜。
+ *   null 表示未提供（向后兼容，fallback 到 oldRanges/newRanges 推断）。
  */
 data class EditorVisualIntent(
     val transactionId: Long = 0L,
@@ -45,6 +48,28 @@ data class EditorVisualIntent(
     val textKind: TextVisualKind,
     val cursor: CursorVisualIntent?,
     val newTextLength: Int = 0,
+    val replaceBounds: VisualReplaceBounds? = null,
+)
+
+/**
+ * #641 评论 5458880786 问题2a：明确的 replace 边界（UTF-16）—
+ * 供 [ComposeEditorVisualState.computeRetainedMoves] 算共同前缀/后缀。
+ *
+ * 一次 replace 把 oldText[oldStart..oldEnd) 替换成 newText[newStart..newEnd)，
+ * 共同前缀 0..oldStart ↔ 0..newStart，共同后缀 oldEnd..oldText.length ↔ newEnd..newText.length。
+ * retained reflow 用确定边界算 suffix 起点，不再从空 oldRanges/newRanges 猜（oldRanges 为空时
+ * 旧实现 oldSuffixStart=0 错把整段当前缀）。
+ *
+ * @param oldStart 旧正文 replace 起点（UTF-16）。
+ * @param oldEnd 旧正文 replace 终点（exclusive，UTF-16）。
+ * @param newStart 新正文 replace 起点（UTF-16）。
+ * @param newEnd 新正文 replace 终点（exclusive，UTF-16）。
+ */
+data class VisualReplaceBounds(
+    val oldStart: Int,
+    val oldEnd: Int,
+    val newStart: Int,
+    val newEnd: Int,
 )
 
 /**
@@ -202,26 +227,49 @@ class ComposeEditorVisualState(
         if (_activeIntent.value?.cursor?.animate == true) {
             buildCursorSnapshot()?.let { _visualCursorSnapshot.update { it } }
         }
-        // #641 评论 5458283021 问题2a：两阶段 — pending visual intent 在新 layout 到达后补算 retainedMoves。
-        // 不创建新 transaction（transaction 已在 onVisualIntent 立即创建），
-        // 只更新当前 activeTransaction 的 retainedMoves + oldLayout/newLayout。
-        val pending = pendingVisualIntent
-        if (pending != null) {
-            val newLayoutTextLen = result.layoutInput.text.length
-            if (newLayoutTextLen == pending.intent.newTextLength) {
-                pendingVisualIntent = null
-                val retainedMoves = computeRetainedMoves(pending.intent)
-                val active = _activeTransaction.value
-                if (active != null && active.id == pending.intent.transactionId) {
-                    _activeTransaction.update {
-                        it?.copy(
-                            oldLayout = previousSnapshot,
-                            newLayout = currentSnapshot,
-                            retainedMoves = retainedMoves,
-                        )
+        // #641 评论 5458283021 问题2a + 评论 5458880786 问题2e：pending visual intent 补算 retainedMoves
+        // + 同步 hiddenRanges。抽成 [applyPendingRetainedMoves] 降低 onAuthoritativeLayout 嵌套深度。
+        applyPendingRetainedMoves(result)
+    }
+
+    /**
+     * #641 评论 5458283021 问题2a：两阶段 — pending visual intent 在新 layout 到达后补算 retainedMoves。
+     * 不创建新 transaction（transaction 已在 onVisualIntent 立即创建），
+     * 只更新当前 activeTransaction 的 retainedMoves + oldLayout/newLayout。
+     *
+     * #641 评论 5458880786 问题2e：补算 retainedMoves 后同步更新 _hiddenRanges —
+     * retained 文字在新位置仍可见，overlay 再画一份会重影。base owned newRanges 由当前
+     * activeIntent 的 textKind 决定（Insert/Move 的 newRanges，Delete 为空），加上 retainedMoves 的 newRange。
+     * 只在 hasTextAnimation 时才隐藏（reduceMotion 时不隐藏）。
+     */
+    private fun applyPendingRetainedMoves(result: TextLayoutResult) {
+        val pending = pendingVisualIntent ?: return
+        if (result.layoutInput.text.length != pending.intent.newTextLength) return
+        pendingVisualIntent = null
+        val retainedMoves = computeRetainedMoves(pending.intent)
+        val active = _activeTransaction.value ?: return
+        if (active.id != pending.intent.transactionId) return
+        val effective = active.motionPolicy.effective()
+        val hasText = effective.textEnabled && pending.intent.textKind != TextVisualKind.None
+        if (hasText) {
+            val baseOwnedNewRanges =
+                (
+                    when (pending.intent.textKind) {
+                        TextVisualKind.Insert -> pending.intent.newRanges
+                        TextVisualKind.Move -> pending.intent.newRanges
+                        else -> emptyList()
                     }
-                }
-            }
+                ).filter { it.start < it.end }
+            val retainedNewRanges =
+                retainedMoves.map { it.newRange }.filter { it.start < it.end }
+            _hiddenRanges.update { baseOwnedNewRanges + retainedNewRanges }
+        }
+        _activeTransaction.update {
+            it?.copy(
+                oldLayout = previousSnapshot,
+                newLayout = currentSnapshot,
+                retainedMoves = retainedMoves,
+            )
         }
     }
 
@@ -271,6 +319,19 @@ class ComposeEditorVisualState(
         val newId = currentTransactionId + 1
         currentTransactionId = newId
         val intentWithId = intent.copy(transactionId = newId)
+
+        // #641 评论 5458880786 问题1d：先冻结上一事务当前帧（用当前 cursorSnapshot / progress），
+        // 再切 _activeIntent / 新 cursor snapshot。之前先切 _activeIntent 再 buildCursorSnapshot
+        // 再 buildAndActivateTransaction(materializeStartFrame)，materializeStartFrame 读
+        // _visualCursorSnapshot.value 时可能已拿到下一事务的 cursor snapshot，物化出错误起点。
+        val runningTransaction = _activeTransaction.value
+        val frozenStartFrame =
+            materializeStartFrame(
+                transaction = runningTransaction,
+                textProgress = _currentTextProgress.value,
+                cursorProgress = _currentCursorProgress.value,
+            )
+
         _activeIntent.update { intentWithId }
 
         // #641 评论 5458283021 问题3c：把 policy 提前落实到视觉状态。
@@ -331,6 +392,7 @@ class ComposeEditorVisualState(
             intent = intentWithId,
             motionPolicy = effective,
             retainedMoves = retainedMoves,
+            startFrame = frozenStartFrame,
         )
         // 若不能立即算 retainedMoves，保存 pending 等 onAuthoritativeLayout 补算。
         if (!canComputeRetainedNow) {
@@ -347,24 +409,18 @@ class ComposeEditorVisualState(
      * #641 评论 5458283021 问题1a：rebase 不再慢一笔 —
      * 直接读 [_activeTransaction]（当前正在跑的事务）物化 startFrame，
      * 不再用 previousTransaction 滞后缓存。
+     *
+     * #641 评论 5458880786 问题1d：startFrame 由 [onVisualIntent] 提前物化传入，
+     * 不再在本方法内部调 materializeStartFrame — 避免物化时读到下一事务的 cursor snapshot。
+     * 创建 [ComposeVisualTransaction] 时带上 textKind = intent.textKind，
+     * 供下一笔事务的 materializeStartFrame 物化 oldRanges/newRanges。
      */
     private fun buildAndActivateTransaction(
         intent: EditorVisualIntent,
         motionPolicy: EditorMotionPolicy,
         retainedMoves: List<RetainedMove>,
+        startFrame: ComposeVisualFrame?,
     ) {
-        // #641 评论 问题3 + 评论 5457777142 问题2：创建视觉动画事务。
-        // 如果旧事务还在跑，先用旧 transaction + 当前 progress 物化 ComposeVisualFrame，
-        // 再把它作为新事务的 startFrame。
-        // #641 评论 5458283021 问题1a：直接读 _activeTransaction.value（当前正在跑的事务），
-        // 不再用 previousTransaction 滞后缓存。
-        val runningTransaction = _activeTransaction.value
-        val startFrame =
-            materializeStartFrame(
-                transaction = runningTransaction,
-                textProgress = _currentTextProgress.value,
-                cursorProgress = _currentCursorProgress.value,
-            )
         val transaction =
             ComposeVisualTransaction(
                 id = intent.transactionId,
@@ -373,6 +429,7 @@ class ComposeEditorVisualState(
                 oldRanges = intent.oldRanges,
                 newRanges = intent.newRanges,
                 retainedMoves = retainedMoves,
+                textKind = intent.textKind,
                 cursor = intent.cursor,
                 startFrame = startFrame,
                 motionPolicy = motionPolicy,
@@ -407,22 +464,80 @@ class ComposeEditorVisualState(
         val prev = transaction ?: return null
         if (textProgress >= 1f && cursorProgress >= 1f) return null
 
-        val slices = mutableListOf<VisualFrameSlice>()
-        // 旧事务的 newRanges：当前 alpha = textProgress，translate = 0，来自 newLayout。
-        for (range in prev.newRanges) {
-            if (range.start >= range.end) continue
-            slices.add(
+        val visibleSlices = collectVisibleSlices(prev, textProgress)
+        val retainedSlices = collectRetainedMoveSlices(prev, textProgress)
+        val cursorRect = materializeCursorRect(prev, cursorProgress)
+        val cursorAlpha = if (prev.cursor?.animate == true) 1f else 0f
+
+        // #641 评论 5458880786 问题1b：带上 sourceOldLayout/sourceNewLayout —
+        // 冻结上一事务的 layout，drawStartFrameLayer 只读这两份，不用当前事务的 oldLayout/newLayout。
+        return ComposeVisualFrame(
+            sourceOldLayout = prev.oldLayout,
+            sourceNewLayout = prev.newLayout,
+            slices = visibleSlices + retainedSlices,
+            cursorRect = cursorRect,
+            cursorAlpha = cursorAlpha,
+        )
+    }
+
+    /**
+     * #641 评论 5458880786 问题1c：按 [prev.textKind] 物化所有当前屏幕仍可见的 slice。
+     * 之前只收 prev.newRanges + retainedMoves，没收 Delete/Move 淡出的 oldRanges，
+     * 导致删除/移动动画中途被打断时旧字瞬间消失。
+     * - Delete：oldRanges 从 OldLayout 淡出（alpha = 1 - textProgress）。
+     * - Move：oldRanges 从 OldLayout 淡出 + newRanges 从 NewLayout 淡入。
+     * - Insert：newRanges 从 NewLayout 淡入（alpha = textProgress）。
+     * - None：无文字 slice。
+     */
+    private fun collectVisibleSlices(
+        prev: ComposeVisualTransaction,
+        textProgress: Float,
+    ): List<VisualFrameSlice> =
+        when (prev.textKind) {
+            TextVisualKind.Delete ->
+                fadeSlices(prev.oldRanges, FrameSliceSource.OldLayout, 1f - textProgress)
+            TextVisualKind.Move ->
+                fadeSlices(prev.oldRanges, FrameSliceSource.OldLayout, 1f - textProgress) +
+                    fadeSlices(prev.newRanges, FrameSliceSource.NewLayout, textProgress)
+            TextVisualKind.Insert ->
+                fadeSlices(prev.newRanges, FrameSliceSource.NewLayout, textProgress)
+            TextVisualKind.None -> emptyList()
+        }
+
+    /**
+     * 把 [ranges] 里有效段（start < end）物化成 [VisualFrameSlice]，
+     * alpha = [alphaRaw].coerceIn(0,1)，translate = Zero。供 [collectVisibleSlices] 复用，
+     * 消除 Delete/Move/Insert 分支里重复的 for + if continue + add 模式以降低认知复杂度。
+     */
+    private fun fadeSlices(
+        ranges: List<TextRange>,
+        source: FrameSliceSource,
+        alphaRaw: Float,
+    ): List<VisualFrameSlice> {
+        val alpha = alphaRaw.coerceIn(0f, 1f)
+        return ranges
+            .filter { it.start < it.end }
+            .map { range ->
                 VisualFrameSlice(
                     range = range,
-                    layoutSource = FrameSliceSource.NewLayout,
+                    layoutSource = source,
                     translate = Offset.Zero,
-                    alpha = textProgress,
-                ),
-            )
-        }
-        // 旧事务的 retainedMoves：当前 translate 按 textProgress 插值 old→new bounds
+                    alpha = alpha,
+                )
+            }
+    }
+
+    /**
+     * 旧事务的 retainedMoves：当前 translate 按 [textProgress] 插值 old→new bounds，
+     * 来自 NewLayout，alpha=1（retained 文字全程可见）。
+     */
+    private fun collectRetainedMoveSlices(
+        prev: ComposeVisualTransaction,
+        textProgress: Float,
+    ): List<VisualFrameSlice> {
         val prevLayout = prev.oldLayout
         val currLayout = prev.newLayout
+        val slices = mutableListOf<VisualFrameSlice>()
         for (move in prev.retainedMoves) {
             val oldTranslate = estimateTranslate(prevLayout, move.oldRange)
             val newTranslate = estimateTranslate(currLayout, move.newRange)
@@ -437,46 +552,43 @@ class ComposeEditorVisualState(
                 ),
             )
         }
+        return slices
+    }
 
-        // cursor rect：按 cursorProgress 插值 old→new
+    /**
+     * cursor rect：按 [cursorProgress] 插值 old→new。无 cursor 动画时返回 null。
+     */
+    private fun materializeCursorRect(
+        prev: ComposeVisualTransaction,
+        cursorProgress: Float,
+    ): Rect? {
         val cursorSnapshot = _visualCursorSnapshot.value
-        val cursorRect =
-            if (cursorSnapshot != null && prev.cursor?.animate == true) {
-                val left =
-                    lerpFloat(
-                        cursorSnapshot.oldCursorRect.left,
-                        cursorSnapshot.newCursorRect.left,
-                        cursorProgress,
-                    )
-                val top =
-                    lerpFloat(
-                        cursorSnapshot.oldCursorRect.top,
-                        cursorSnapshot.newCursorRect.top,
-                        cursorProgress,
-                    )
-                val right =
-                    lerpFloat(
-                        cursorSnapshot.oldCursorRect.right,
-                        cursorSnapshot.newCursorRect.right,
-                        cursorProgress,
-                    )
-                val bottom =
-                    lerpFloat(
-                        cursorSnapshot.oldCursorRect.bottom,
-                        cursorSnapshot.newCursorRect.bottom,
-                        cursorProgress,
-                    )
-                Rect(left, top, right, bottom)
-            } else {
-                null
-            }
-        val cursorAlpha = if (prev.cursor?.animate == true) 1f else 0f
-
-        return ComposeVisualFrame(
-            slices = slices,
-            cursorRect = cursorRect,
-            cursorAlpha = cursorAlpha,
-        )
+        if (cursorSnapshot == null || prev.cursor?.animate != true) return null
+        val left =
+            lerpFloat(
+                cursorSnapshot.oldCursorRect.left,
+                cursorSnapshot.newCursorRect.left,
+                cursorProgress,
+            )
+        val top =
+            lerpFloat(
+                cursorSnapshot.oldCursorRect.top,
+                cursorSnapshot.newCursorRect.top,
+                cursorProgress,
+            )
+        val right =
+            lerpFloat(
+                cursorSnapshot.oldCursorRect.right,
+                cursorSnapshot.newCursorRect.right,
+                cursorProgress,
+            )
+        val bottom =
+            lerpFloat(
+                cursorSnapshot.oldCursorRect.bottom,
+                cursorSnapshot.newCursorRect.bottom,
+                cursorProgress,
+            )
+        return Rect(left, top, right, bottom)
     }
 
     /**
@@ -553,12 +665,12 @@ class ComposeEditorVisualState(
 
         // 用 old/new affected ranges 推断 replace 边界。
         // 共同前缀 = oldRanges.start 之前；共同后缀 = oldRanges.end 之后。
-        val oldAffectedEnd = intent.oldRanges.maxOfOrNull { it.end } ?: 0
-        val newAffectedEnd = intent.newRanges.maxOfOrNull { it.end } ?: 0
-
-        // 共同后缀起点（old 正文里）= oldAffectedEnd；在新正文里 = newAffectedEnd。
-        val oldSuffixStart = oldAffectedEnd
-        val newSuffixStart = newAffectedEnd
+        // #641 评论 5458880786 问题2c：优先用 intent.replaceBounds（明确边界）—
+        // 旧实现用 oldRanges.maxOfOrNull 推断，oldRanges 为空时 oldSuffixStart=0 错把整段当前缀。
+        // 有 replaceBounds 时用确定边界，没有时才 fallback（向后兼容测试里没传 replaceBounds 的情况）。
+        val replaceBounds = intent.replaceBounds
+        val oldSuffixStart = replaceBounds?.oldEnd ?: (intent.oldRanges.maxOfOrNull { it.end } ?: 0)
+        val newSuffixStart = replaceBounds?.newEnd ?: (intent.newRanges.maxOfOrNull { it.end } ?: 0)
 
         val oldText = prev.result.layoutInput.text
         val newText = curr.result.layoutInput.text
@@ -582,15 +694,16 @@ class ComposeEditorVisualState(
             val oldLine = prev.result.getLineForOffset(oldPos)
             val oldLineEnd = prev.result.getLineEnd(oldLine)
             // 段结束 = min(oldLineEnd, oldTextLen)，确保是 code-point 边界。
-            // 若 oldLineEnd 落在 surrogate pair 中间（理论上不会），回退到前一个 char。
+            // #641 评论 5458880786 问题2d：只判断"边界左边 high、右边 low" —
+            // 旧实现用 codePointBefore + charCount==2 判断，codePointBefore 返回 supplementary、
+            // charCount==2 说明 segEnd 在 surrogate pair 后面，本来合法，减 1 反而移进中间。
+            // 只有 segEnd-1 是 high surrogate、segEnd 是 low surrogate 时才需要回退到 high 前。
             var segEnd = minOf(oldLineEnd, oldTextLen)
-            if (segEnd > oldPos && segEnd < oldTextLen) {
-                val cpBefore = Character.codePointBefore(oldText, segEnd)
-                val cpCount = Character.charCount(cpBefore)
-                if (cpCount == 2 && segEnd > oldPos + 1) {
-                    // segEnd 落在 surrogate pair 中间，回退到 high surrogate 前。
-                    segEnd -= 1
-                }
+            if (segEnd in 1 until oldTextLen &&
+                oldText[segEnd - 1].isHighSurrogate() &&
+                oldText[segEnd].isLowSurrogate()
+            ) {
+                segEnd -= 1
             }
             if (segEnd <= oldPos) segEnd = oldPos + 1
 

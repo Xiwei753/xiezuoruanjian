@@ -36,6 +36,7 @@ import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
 import com.xiwei.sujian.feature.editor.visual.CursorVisualIntent
 import com.xiwei.sujian.feature.editor.visual.EditorVisualIntent
 import com.xiwei.sujian.feature.editor.visual.TextVisualKind
+import com.xiwei.sujian.feature.editor.visual.VisualReplaceBounds
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 import kotlinx.coroutines.flow.filter
 
@@ -927,12 +928,59 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
             null
         }
 
+    // #641 评论 5458880786 问题2b：用 oldText/newText 做 code-point-safe diff 算 replaceBounds —
+    // retained reflow 用确定边界算 prefix/suffix，不再从空 oldRanges/newRanges 猜。
+    val replaceBounds = computeVisualReplaceBounds(event.oldText, event.newText)
+
     return EditorVisualIntent(
         oldRanges = oldRanges,
         newRanges = newRanges,
         textKind = textKind,
         cursor = cursor,
         newTextLength = event.newText.length,
+        replaceBounds = replaceBounds,
+    )
+}
+
+/**
+ * #641 评论 5458880786 问题2b：用 oldText/newText 做 code-point-safe diff 算 [VisualReplaceBounds] —
+ * 共同前缀 + 共同后缀算出最小 replace 边界，offset 是 UTF-16。
+ *
+ * 和 [com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge] 里 computeReplaceBounds
+ * 同样的 codePointAt/codePointBefore + charCount 逻辑，保证 emoji/supplementary plane 字符
+ * （surrogate pair）不会被拆在 high/low 中间。
+ * retained mapping 固定：prefix 0..oldStart ↔ 0..newStart，
+ * suffix oldEnd..oldText.length ↔ newEnd..newText.length。
+ */
+private fun computeVisualReplaceBounds(
+    oldText: String,
+    newText: String,
+): VisualReplaceBounds {
+    var oldStart = 0
+    var newStart = 0
+    while (oldStart < oldText.length && newStart < newText.length) {
+        val oldCp = Character.codePointAt(oldText, oldStart)
+        val newCp = Character.codePointAt(newText, newStart)
+        if (oldCp != newCp) break
+        oldStart += Character.charCount(oldCp)
+        newStart += Character.charCount(newCp)
+    }
+
+    var oldEnd = oldText.length
+    var newEnd = newText.length
+    while (oldEnd > oldStart && newEnd > newStart) {
+        val oldCp = Character.codePointBefore(oldText, oldEnd)
+        val newCp = Character.codePointBefore(newText, newEnd)
+        if (oldCp != newCp) break
+        oldEnd -= Character.charCount(oldCp)
+        newEnd -= Character.charCount(newCp)
+    }
+
+    return VisualReplaceBounds(
+        oldStart = oldStart,
+        oldEnd = oldEnd,
+        newStart = newStart,
+        newEnd = newEnd,
     )
 }
 

@@ -83,16 +83,26 @@ class EditorTextFieldStateBridge(
      * 2. composition 刚结束且存在 pending authoritative：先 [applyAuthoritativeText] 消费 pending，
      *    本次不提交本地 diff（避免把刚撤销的内容又提交一次）。
      * 3. 没 pending 才 [commitIfNeeded]。
+     *
+     * #641 评论 5458880786 问题3：pending 消费逻辑提取为 [consumePendingAuthoritativeIfAny]，
+     * [flushForClose] 也复用，避免切章节/返回时把旧 composition 文本重新 commit 回 Core、覆盖 Undo。
      */
     fun onInputSnapshot(snapshot: EditorInputSnapshot) {
         if (snapshot.composition != null) return
-        val pending = pendingAuthoritative
-        if (pending != null) {
-            pendingAuthoritative = null
-            applyAuthoritativeText(pending.first, pending.second)
-            return
-        }
+        if (consumePendingAuthoritativeIfAny()) return
         commitIfNeeded(snapshot.text, snapshot.selection)
+    }
+
+    /**
+     * #641 评论 5458880786 问题3：消费 pending authoritative snapshot —
+     * 若存在 pending（Undo/Redo 在 composition 期间到达的权威正文），应用之并清空 pending，返回 true；
+     * 否则返回 false。供 [onInputSnapshot] 和 [flushForClose] 共用同一条串行消费路径。
+     */
+    private fun consumePendingAuthoritativeIfAny(): Boolean {
+        val pending = pendingAuthoritative ?: return false
+        pendingAuthoritative = null
+        applyAuthoritativeText(pending.first, pending.second)
+        return true
     }
 
     /**
@@ -112,8 +122,13 @@ class EditorTextFieldStateBridge(
     /**
      * 切章节/返回时，即使 IME 仍有 composition，也先把屏幕上的最终内容提交给 Core，
      * 再走现有 save/close，不能丢掉候选上屏前的内容。
+     *
+     * #641 评论 5458880786 问题3：先消费 pending authoritative —
+     * Undo/Redo 在 composition 期间到达会暂存 pending，flushForClose 若直接 commitIfNeeded
+     * 会把旧 composition 文本重新 commit 回 Core，覆盖 Undo。先消费 pending 保证权威正文优先落地。
      */
     fun flushForClose() {
+        if (consumePendingAuthoritativeIfAny()) return
         commitIfNeeded(state.text.toString(), state.selection)
     }
 
