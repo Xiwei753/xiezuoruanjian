@@ -59,4 +59,11 @@ data class ComposeVisualTransaction(
     val cursor: CursorVisualIntent?,
     val startFrame: ComposeVisualFrame?,
     val motionPolicy: EditorMotionPolicy,
+    /**
+     * #641 评论 5459896691 第2项：本次事务的 replace 边界 —
+     * 物化下一事务的 startFrame 时，用来把当前 frame 的 rebasedSlices
+     * 从本次 new text 坐标映射到下一次 new text 坐标。
+     * null 表示无 replace 边界（向后兼容）。
+     */
+    val startFrameReplaceBounds: VisualReplaceBounds? = null,
 )

@@ -199,6 +199,15 @@ class ComposeEditorVisualState(
     val currentCursorProgress: StateFlow<Float> = _currentCursorProgress.asStateFlow()
 
     /**
+     * #641 评论 5459896691 第1项：overlay 报告的 rebaseProgress —
+     * 控制 startFrame 文字层淡出的独立 timeline。
+     * CURSOR_ONLY 打断文字动画时 textProgress snapTo(1f)，但 rebaseProgress 可能还在中途，
+     * 此时 materializeStartFrame 不能仅凭 text/cursor >= 1f 就认为无视觉帧可冻结。
+     */
+    private val _currentRebaseProgress = MutableStateFlow(0f)
+    val currentRebaseProgress: StateFlow<Float> = _currentRebaseProgress.asStateFlow()
+
+    /**
      * #641 评论 5458283021 问题2a：pending visual intent — onVisualIntent 保存，
      * 等 onAuthoritativeLayout 到达对应 new layout 后才生成 ComposeVisualTransaction
      * 和 retained moves（两阶段 retained reflow）。
@@ -355,6 +364,7 @@ class ComposeEditorVisualState(
                 transaction = runningTransaction,
                 textProgress = _currentTextProgress.value,
                 cursorProgress = _currentCursorProgress.value,
+                rebaseProgress = _currentRebaseProgress.value,
             )
 
         _activeIntent.update { intentWithId }
@@ -481,96 +491,54 @@ class ComposeEditorVisualState(
                 cursor = intent.cursor,
                 startFrame = startFrame,
                 motionPolicy = motionPolicy,
+                startFrameReplaceBounds = intent.replaceBounds,
             )
         _activeTransaction.update { transaction }
     }
 
     /**
-     * #641 评论 5457777142 问题2 + 评论 5458283021 问题1a/1b/1c：物化当前视觉帧作为新事务的 start_frame。
+     * #641 评论 5459754425 + 评论 5459896691：物化当前视觉帧作为新事务的 start_frame。
      *
-     * 用旧 transaction + 当前 progress 算出每个 slice 当前的 translate/alpha、
-     * cursor 当前的 rect/alpha。新事务从该帧对应的 progress 开始，
-     * 而不是 `snapTo(0f)`。
+     * 每次物化都把当前屏幕正在显示的所有内容 flatten 成一层新的扁平 [ComposeVisualFrame]，
+     * 每个 [RebasedTextSlice] 携带自己的 sourceLayout。不再形成 startFrame 套 startFrame 的链。
      *
-     * #641 评论 5458283021 问题1a：直接接收 [transaction]（当前正在跑的事务），
-     * 不再读 previousTransaction 滞后缓存。
+     * #641 评论 5458283021 问题1a：直接接收 [transaction]（当前正在跑的事务）。
+     * #641 评论 5458283021 问题1c：分别接收 [textProgress] / [cursorProgress]。
+     * #641 评论 5459896691 第1项：增加 [rebaseProgress] — 三条 timeline 都结束才算无视觉帧。
      *
-     * #641 评论 5458283021 问题1b：每个 slice 携带 [FrameSliceSource] 标识，
-     * overlay 据此从 transaction.oldLayout/newLayout 取真实 [TextLayoutResult] 画第一帧，
-     * 不再降维成平均 alpha。
-     *
-     * #641 评论 5458283021 问题1c：分别接收 [textProgress] / [cursorProgress]，
-     * 物化 cursor 用 cursorProgress 不再错算。
-     *
-     * 如果没有旧事务或 progress 已到 1f，返回 null（从 0 开始）。
-     *
-     * #641 评论 5459754425 第1项：startFrame flatten —
-     * 把当前屏幕已经画出来的全部内容 flatten 成一层。
-     * 先把 prev.startFrame 在当前 rebaseProgress 下仍可见的 slice 物化进来，
-     * 再加 prev 事务自己的 Insert/Delete/Move/retained 当前状态。
-     * 不要形成"startFrame 套 startFrame 但下一次不读取"的链。
+     * 如果没有旧事务或 text/cursor/rebase 三条 progress 都已到 1f，返回 null。
      */
     private fun materializeStartFrame(
         transaction: ComposeVisualTransaction?,
         textProgress: Float,
         cursorProgress: Float,
+        rebaseProgress: Float,
     ): ComposeVisualFrame? {
         val prev = transaction ?: return null
-        if (textProgress >= 1f && cursorProgress >= 1f) return null
+        // #641 评论 5459896691 第1项：三条当前实际存在的 timeline 都结束才算没有视觉帧。
+        // CURSOR_ONLY 场景 textProgress=1/cursorProgress=1 但 rebaseProgress 可能还在中途。
+        if (textProgress >= 1f && cursorProgress >= 1f && rebaseProgress >= 1f) return null
 
-        // #641 评论 5459754425 第1项：先把 prev.startFrame 在当前 rebaseProgress 下仍可见的 slice 物化进来
+        // #641 评论 5459754425 第1项 + 评论 5459896691 第2项：
+        // flatten 所有正在显示的内容成一层新的扁平 frame。
+        // prev.startFrame 的 rebasedSlices 已是扁平的，通过 replaceBounds 映射到当前坐标；
+        // prev 自己的 Insert/Delete/Move/retained 按当前 textProgress 物化。
+        // 不再形成 startFrame → startFrame → startFrame 的链。
         val prevStartFrame = prev.startFrame
-        val flattenedSlices = if (prevStartFrame != null) {
-            // prev.startFrame.slices 已经是从 prev 事务 oldLayout/newLayout 取的
-            // 需要把这些 slice 映射到当前 new text（如果 targetRange 存在）
-            val prevOldLayout = prevStartFrame.sourceOldLayout ?: prev.oldLayout
-            val prevNewLayout = prevStartFrame.sourceNewLayout ?: prev.newLayout
-            buildList {
-                for (slice in prevStartFrame.slices) {
-                    val sourceLayout =
-                        when (slice.layoutSource) {
-                            FrameSliceSource.OldLayout -> prevOldLayout
-                            FrameSliceSource.NewLayout -> prevNewLayout
-                        } ?: continue
-                    if (slice.range.end > sourceLayout.result.layoutInput.text.length) continue
-                    // 计算当前 alpha：slice.alpha * (1f - rebaseProgress)
-                    // rebaseProgress 由 textProgress 近似（startFrame 的生命周期跟随文字动画）
-                    val currentAlpha = slice.alpha * (1f - textProgress).coerceIn(0f, 1f)
-                    if (currentAlpha <= 0f) continue
-                    // 这个 slice 来自 prev.startFrame，它的 targetRange 是 prev.startFrame.suppressedCurrentRanges
-                    // 但 suppressedCurrentRanges 已经是 prev 事务 new text 坐标，需要映射到当前 new text
-                    // 这里简化处理：不保留 targetRange，直接作为只属于旧画面的 slice（alpha 淡到 0）
-                    add(
-                        RebasedTextSlice(
-                            sourceLayout = sourceLayout,
-                            sourceRange = slice.range,
-                            sourceTranslate = slice.translate,
-                            sourceAlpha = currentAlpha,
-                            targetRange = null,
-                        ),
-                    )
-                }
+        val flattenedOlder =
+            if (prevStartFrame != null) {
+                flattenRebasedThroughReplace(prevStartFrame.slices, prev.startFrameReplaceBounds)
+            } else {
+                emptyList()
             }
-        } else {
-            emptyList()
-        }
 
-        val visibleSlices = collectVisibleSlices(prev, textProgress)
-        val retainedSlices = collectRetainedMoveSlices(prev, textProgress)
+        val currentSlices = collectCurrentSlicesAsRebased(prev, textProgress)
+        val retainedSlices = collectRetainedMoveSlicesAsRebased(prev, textProgress)
         val cursorRect = materializeCursorRect(prev, cursorProgress)
         val cursorAlpha = if (prev.cursor?.animate == true) 1f else 0f
 
-        // #641 评论 5458880786 问题1b：带上 sourceOldLayout/sourceNewLayout —
-        // 冻结上一事务的 layout，drawStartFrameLayer 只读这两份，不用当前事务的 oldLayout/newLayout。
-        // #641 评论 5459531909 第2项：物化时把当前 _hiddenRanges.value 作为 suppressedCurrentRanges
-        // 存进 frame。这些是上一事务仍由 overlay 接管的 current text ranges，新事务到来后仍应隐藏，
-        // 否则快速输入 a→b 时 a 会突然恢复 100% 再和 frozen frame 叠一层。
-        // #641 评论 5459754425 第1项：flatten 后的 slices 也要带上 suppressedCurrentRanges
         return ComposeVisualFrame(
-            sourceOldLayout = prev.oldLayout,
-            sourceNewLayout = prev.newLayout,
-            slices = visibleSlices + retainedSlices,
-            rebasedSlices = flattenedSlices,
+            slices = flattenedOlder + currentSlices + retainedSlices,
             cursorRect = cursorRect,
             cursorAlpha = cursorAlpha,
             suppressedCurrentRanges = _hiddenRanges.value,
@@ -578,74 +546,66 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * #641 评论 5458880786 问题1c：按 [prev.textKind] 物化所有当前屏幕仍可见的 slice。
-     * 之前只收 prev.newRanges + retainedMoves，没收 Delete/Move 淡出的 oldRanges，
-     * 导致删除/移动动画中途被打断时旧字瞬间消失。
-     * - Delete：oldRanges 从 OldLayout 淡出（alpha = 1 - textProgress）。
-     * - Move：oldRanges 从 OldLayout 淡出 + newRanges 从 NewLayout 淡入。
-     * - Insert：newRanges 从 NewLayout 淡入（alpha = textProgress）。
-     * - None：无文字 slice。
+     * #641 评论 5459896691 第2项：按 [prev.textKind] 物化当前屏幕仍可见的 slice 为 [RebasedTextSlice]。
+     * 每个 slice 携带自己的 sourceLayout（prev 的 oldLayout/newLayout），targetRange 为 null（只属于当前事务画面）。
      */
-    private fun collectVisibleSlices(
+    private fun collectCurrentSlicesAsRebased(
         prev: ComposeVisualTransaction,
         textProgress: Float,
-    ): List<VisualFrameSlice> =
+    ): List<RebasedTextSlice> =
         when (prev.textKind) {
             TextVisualKind.Delete ->
-                fadeSlices(prev.oldRanges, FrameSliceSource.OldLayout, 1f - textProgress)
+                rebasedSlices(prev.oldRanges, prev.oldLayout, 1f - textProgress)
             TextVisualKind.Move ->
-                fadeSlices(prev.oldRanges, FrameSliceSource.OldLayout, 1f - textProgress) +
-                    fadeSlices(prev.newRanges, FrameSliceSource.NewLayout, textProgress)
+                rebasedSlices(prev.oldRanges, prev.oldLayout, 1f - textProgress) +
+                    rebasedSlices(prev.newRanges, prev.newLayout, textProgress)
             TextVisualKind.Insert ->
-                fadeSlices(prev.newRanges, FrameSliceSource.NewLayout, textProgress)
+                rebasedSlices(prev.newRanges, prev.newLayout, textProgress)
             TextVisualKind.None -> emptyList()
         }
 
     /**
-     * 把 [ranges] 里有效段（start < end）物化成 [VisualFrameSlice]，
-     * alpha = [alphaRaw].coerceIn(0,1)，translate = Zero。供 [collectVisibleSlices] 复用，
-     * 消除 Delete/Move/Insert 分支里重复的 for + if continue + add 模式以降低认知复杂度。
+     * 把 [ranges] 里有效段物化成 [RebasedTextSlice]，alpha = [alphaRaw].coerceIn(0,1)。
+     * [layout] 为 null 时跳过（无法绘制）。targetRange = null 表示只属于当前事务画面。
      */
-    private fun fadeSlices(
+    private fun rebasedSlices(
         ranges: List<TextRange>,
-        source: FrameSliceSource,
+        layout: ComposeLayoutSnapshot?,
         alphaRaw: Float,
-    ): List<VisualFrameSlice> {
+    ): List<RebasedTextSlice> {
+        if (layout == null) return emptyList()
         val alpha = alphaRaw.coerceIn(0f, 1f)
         return ranges
-            .filter { it.start < it.end }
+            .filter { it.start < it.end && it.end <= layout.result.layoutInput.text.length }
             .map { range ->
-                VisualFrameSlice(
-                    range = range,
-                    layoutSource = source,
-                    translate = Offset.Zero,
-                    alpha = alpha,
+                RebasedTextSlice(
+                    sourceLayout = layout,
+                    sourceRange = range,
+                    sourceTranslate = Offset.Zero,
+                    sourceAlpha = alpha,
+                    targetRange = null,
                 )
             }
     }
 
     /**
-     * 旧事务的 retainedMoves：当前 translate 按 [textProgress] 插值 old→new bounds，
-     * 来自 NewLayout，alpha=1（retained 文字全程可见）。
+     * 旧事务的 retainedMoves → [RebasedTextSlice]。
+     * translate 按 [textProgress] 插值 old→new bounds，alpha=1。
+     * targetRange = null（retained 文字的离场由新事务自己处理）。
      *
-     * #641 评论 5459531909 第4项：translate 改成 delta（相对 source layout 原位置的偏移）。
-     * 旧实现用 [estimateTranslate] 返回绝对坐标（path bounds 的 left/top），
-     * 而 [drawTranslatedRangeText] 把 translate 当相对偏移再加一次，位置会翻倍。
-     * 统一约定 [VisualFrameSlice.translate] 永远是"相对 source layout 原位置的偏移"：
-     * `translate = Offset(currentX - newBounds.left, currentY - newBounds.top)`，
-     * 其中 `currentX = lerp(oldBounds.left, newBounds.left, textProgress)`。
+     * #641 评论 5459531909 第4项：translate = delta（相对 source layout 原位置的偏移）。
      */
-    private fun collectRetainedMoveSlices(
+    private fun collectRetainedMoveSlicesAsRebased(
         prev: ComposeVisualTransaction,
         textProgress: Float,
-    ): List<VisualFrameSlice> {
+    ): List<RebasedTextSlice> {
         val prevLayout = prev.oldLayout
         val currLayout = prev.newLayout
-        val slices = mutableListOf<VisualFrameSlice>()
+        if (currLayout == null) return emptyList()
+        val slices = mutableListOf<RebasedTextSlice>()
         for (move in prev.retainedMoves) {
             val oldBounds = prevLayout?.let { safePathBounds(it.result, move.oldRange) }
-            val newBounds = currLayout?.let { safePathBounds(it.result, move.newRange) }
-            // #641 评论 5459531909 第4项：bounds 无效时跳过（不画这个 slice）。
+            val newBounds = safePathBounds(currLayout.result, move.newRange)
             if (oldBounds == null || newBounds == null) continue
             val currentX = lerpFloat(oldBounds.left, newBounds.left, textProgress)
             val currentY = lerpFloat(oldBounds.top, newBounds.top, textProgress)
@@ -655,16 +615,76 @@ class ComposeEditorVisualState(
                     currentY - newBounds.top,
                 )
             slices.add(
-                VisualFrameSlice(
-                    range = move.newRange,
-                    layoutSource = FrameSliceSource.NewLayout,
-                    translate = translate,
-                    alpha = 1f,
+                RebasedTextSlice(
+                    sourceLayout = currLayout,
+                    sourceRange = move.newRange,
+                    sourceTranslate = translate,
+                    sourceAlpha = 1f,
+                    targetRange = null,
                 ),
             )
         }
         return slices
     }
+
+    /**
+     * #641 评论 5459896691 第2项：把上一事务 frame 的扁平 rebasedSlices 通过 replaceBounds
+     * 映射到当前 new text 坐标。仍存活的 slice（原 targetRange != null 且映射后仍有效）
+     * 保留 targetRange；被 replace 区域覆盖的 slice（原 targetRange != null 但映射后失效）
+     * 改为 targetRange = null（离场淡出）；原 targetRange == null 的 slice 保持 null。
+     *
+     * 每个 slice 的 sourceLayout/sourceRange/sourceTranslate/sourceAlpha 保持不变（冻结时的状态），
+     * 只更新 targetRange 到新坐标。
+     */
+    private fun flattenRebasedThroughReplace(
+        slices: List<RebasedTextSlice>,
+        replaceBounds: VisualReplaceBounds?,
+    ): List<RebasedTextSlice> {
+        if (replaceBounds == null) {
+            return slices.map { it.copy(targetRange = null) }
+        }
+        return buildList {
+            for (slice in slices) {
+                val oldTarget = slice.targetRange
+                if (oldTarget == null) {
+                    add(slice)
+                } else {
+                    val mapped = mapRangeThroughReplace(oldTarget, replaceBounds)
+                    if (mapped.isEmpty()) {
+                        add(slice.copy(targetRange = null))
+                    } else {
+                        for (range in mapped) {
+                            add(slice.copy(targetRange = range))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * #641 评论 5459896691 第4项：把单个 range 通过 replace 边界映射，
+     * 返回 0~2 个存活区间。区间切分，不整段丢弃。
+     *
+     * prefix 部分（在 [0, oldStart) 里）：位置不变。
+     * suffix 部分（在 [oldEnd, ...) 里）：平移 delta。
+     * 跨越 replace 区域的部分丢弃。
+     */
+    private fun mapRangeThroughReplace(
+        range: TextRange,
+        b: VisualReplaceBounds,
+    ): List<TextRange> =
+        buildList {
+            val prefixEnd = minOf(range.end, b.oldStart)
+            if (range.start < prefixEnd) {
+                add(TextRange(range.start, prefixEnd))
+            }
+            val suffixStart = maxOf(range.start, b.oldEnd)
+            if (suffixStart < range.end) {
+                val delta = b.newEnd - b.oldEnd
+                add(TextRange(suffixStart + delta, range.end + delta))
+            }
+        }
 
     /**
      * cursor rect：按 [cursorProgress] 插值 old→new。无 cursor 动画时返回 null。
@@ -1000,9 +1020,11 @@ class ComposeEditorVisualState(
     fun reportProgress(
         textProgress: Float,
         cursorProgress: Float,
+        rebaseProgress: Float,
     ) {
         _currentTextProgress.update { textProgress }
         _currentCursorProgress.update { cursorProgress }
+        _currentRebaseProgress.update { rebaseProgress }
     }
 
     /**
@@ -1017,6 +1039,7 @@ class ComposeEditorVisualState(
         _activeTransaction.update { null }
         _currentTextProgress.update { 0f }
         _currentCursorProgress.update { 0f }
+        _currentRebaseProgress.update { 0f }
         pendingVisualIntent = null
     }
 

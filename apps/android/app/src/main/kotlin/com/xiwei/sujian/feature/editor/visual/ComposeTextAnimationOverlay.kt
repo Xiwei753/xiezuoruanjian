@@ -173,11 +173,12 @@ fun ComposeTextAnimationOverlay(
 
     // #641 评论 5458283021 问题1c：分别报告 textProgress / cursorProgress 给 visualState，
     // 供下一事务物化 startFrame。coordinated=false 时 cursor 用 cursorProgress 不再错算。
-    LaunchedEffect(transactionId, textProgressValue, cursorProgressValue) {
+    LaunchedEffect(transactionId, textProgressValue, cursorProgressValue, rebaseProgressValue) {
         if (transactionId > 0L) {
             visualState.reportProgress(
                 textProgress = textProgressValue,
                 cursorProgress = cursorProgressValue,
+                rebaseProgress = rebaseProgressValue,
             )
         }
     }
@@ -238,20 +239,11 @@ fun ComposeTextAnimationOverlay(
 }
 
 /**
- * #641 评论 问题3 + 5457777142 问题2/问题4 + 评论 5458283021 问题1b：绘制视觉动画事务 —
+ * #641 评论 5459896691：绘制视觉动画事务 —
  * 提取以降低 [ComposeTextAnimationOverlay] 的认知复杂度。
  *
- * #641 评论 5458283021 问题1b：如果 [ComposeVisualTransaction.startFrame] 非空，
- * 先按 startFrame.slices 的真实数据（layoutSource/range/translate/alpha）画起始画面层，
- * alpha 随独立 rebaseProgress 淡出（不再用 textProgress）。不再把 frame 降维成一个平均 progress —
- * 上一帧的具体文字位置、retained translate、cursor rect 都被使用。
- *
- * #641 评论 5459271770 问题3：startFrame 文字层淡出用独立 rebaseProgress，
- * 不依赖当前 textEnabled/textKind — CURSOR_ONLY 打断文字动画时 textEnabled=false、
- * textProgress snapTo(1f)，但 startFrame 仍应平滑淡出，不能瞬间扔掉 frozen 文字。
- *
- * #641 评论 5458880786 问题1f：删除 estimateStartProgress — textProgress/cursorProgress 从 0f 开始,
- * startFrame 层用 alpha = 1 - rebaseProgress 淡出，新事务层按 textProgress 画。
+ * startFrame 层用独立 rebaseProgress 控制 alpha/position 插值，
+ * 不依赖当前 textEnabled/textKind。
  */
 @Suppress("LongParameterList")
 private fun DrawScope.drawVisualTransaction(
@@ -270,27 +262,19 @@ private fun DrawScope.drawVisualTransaction(
     textEnabled: Boolean,
     rebaseProgress: Float,
 ) {
-    // #641 评论 5458283021 问题1b：startFrame 起始画面层 —
-    // 用 startFrame.slices 的真实数据画，alpha 随 textProgress 淡出。
-    // 新事务的第一帧（textProgress≈0）先按这些数据画，再插值到新 transaction 的目标几何。
-    // #641 评论 5458880786 问题1e：drawStartFrameLayer 只读 startFrame.sourceOldLayout/sourceNewLayout，
-    // 不用当前 transaction 的 oldLayout/newLayout（新事务 onAuthoritativeLayout 已替换它们）。
-    // 同时画 startFrame.cursorRect，让 cursor 真正参与第一帧。
-    // #641 评论 5459271770 问题3：startFrame 文字层生命周期不依赖当前 textEnabled —
-    // 它表示上一事务已经画出来的事实。CURSOR_ONLY 打断文字动画时 textEnabled=false，
-    // 但 startFrame 仍应平滑淡出，不能瞬间扔掉。用独立 rebaseProgress 控制 alpha。
+    // #641 评论 5459896691 第2项+第3项：startFrame 起始画面层 —
+    // 所有 slice 都是 RebasedTextSlice，每个携带自己的 sourceLayout。
+    // surviving slice（targetRange != null）：alpha 从 sourceAlpha 插值到 1，position 插值到 target。
+    // fading slice（targetRange == null）：alpha 从 sourceAlpha 淡到 0。
     val startFrame = transaction.startFrame
     if (startFrame != null && startFrame.slices.isNotEmpty()) {
-        val startLayerAlpha = (1f - rebaseProgress).coerceIn(0f, 1f)
-        if (startLayerAlpha > 0f) {
-            drawStartFrameLayer(
-                startFrame = startFrame,
-                alpha = startLayerAlpha,
-                scrollY = scrollY,
-                textColor = textColor,
-                currentResult = currentResult,
-            )
-        }
+        drawStartFrameLayer(
+            startFrame = startFrame,
+            rebaseProgress = rebaseProgress,
+            scrollY = scrollY,
+            textColor = textColor,
+            currentResult = currentResult,
+        )
     }
 
     if (textEnabled) {
@@ -331,69 +315,40 @@ private fun DrawScope.drawVisualTransaction(
 }
 
 /**
- * #641 评论 5458283021 问题1b：绘制 startFrame 起始画面层 —
- * 用 startFrame.slices 的真实数据（layoutSource/range/translate/alpha）画。
- * 每个 slice 用 [VisualFrameSlice.layoutSource] 从 sourceOldLayout/sourceNewLayout 取对应 layout。
- * 不再把 frame 降维成一个平均 progress。
+ * #641 评论 5459896691 第2项+第3项：绘制 startFrame 起始画面层 —
+ * 所有 slice 都是 [RebasedTextSlice]，每个携带自己的 sourceLayout。
  *
- * #641 评论 5458880786 问题1e：layout 只读 [ComposeVisualFrame.sourceOldLayout] / [ComposeVisualFrame.sourceNewLayout]
- * （物化时冻结的上一事务 layout），不用当前 transaction 的 oldLayout/newLayout —
- * 新事务的 onAuthoritativeLayout 会替换 active transaction 的 oldLayout/newLayout，
- * 若仍指向 transaction.oldLayout/newLayout，slice 会从当前（新）事务 layout 取字，画面错乱。
+ * - surviving slice（targetRange != null）：从 frozen 状态插值到当前最终 layout，
+ *   alpha = lerp(sourceAlpha, 1f, rebaseProgress)，
+ *   position = lerp(sourcePosition, targetPosition, rebaseProgress)。
+ *   系统正文保持隐藏直到 rebase=1，此时 overlay 已和系统最终态完全一致，释放后不跳。
+ * - fading slice（targetRange == null）：alpha = lerp(sourceAlpha, 0f, rebaseProgress)。
  *
- * #641 评论 5459531909 第3项：cursor 部分已删除 — cursor 永远只画一根，
- * 统一由 [drawVisualCursor] 从 cursorStartRect 插值到 newCursorRect。
- * 本函数只画 startFrame 的文字 slice（按 alpha 淡出），不再画 cursor。
- *
- * #641 评论 5459754425 第1项：rebase 起点 + 目标模型 —
- * 对仍然存在于当前正文的 slice（targetRange != null），绘制要从 frozen 状态插值到当前最终 layout：
- * - alpha = lerp(sourceAlpha, 1f, rebaseProgress)
- * - position = lerp(sourcePosition, targetPosition, rebaseProgress)
- * 对只属于旧画面的 slice（targetRange == null），alpha = lerp(sourceAlpha, 0f, rebaseProgress)。
+ * cursor 由 [drawVisualCursor] 统一绘制，本函数不画 cursor。
  */
 private fun DrawScope.drawStartFrameLayer(
     startFrame: ComposeVisualFrame,
-    alpha: Float,
+    rebaseProgress: Float,
     scrollY: Int,
     textColor: Color,
     currentResult: TextLayoutResult?,
 ) {
-    val oldResult = startFrame.sourceOldLayout?.result
-    val newResult = startFrame.sourceNewLayout?.result
-    // 先画旧的 VisualFrameSlice（向后兼容）
     for (slice in startFrame.slices) {
-        val result =
-            when (slice.layoutSource) {
-                FrameSliceSource.OldLayout -> oldResult ?: continue
-                FrameSliceSource.NewLayout -> newResult ?: continue
-            }
-        if (slice.range.end > result.layoutInput.text.length) continue
-        drawTranslatedRangeText(
-            result = result,
-            range = slice.range,
-            translate = slice.translate,
-            alpha = slice.alpha * alpha,
-            scrollY = scrollY,
-            textColor = textColor,
-        )
-    }
-    // #641 评论 5459754425 第1项：画新的 RebasedTextSlice
-    // 注意：这里使用 currentResult（当前事务的 newLayout）作为 target layout
-    // 因为 rebaseProgress 是当前事务的进度
-    for (slice in startFrame.rebasedSlices) {
-        if (slice.sourceRange.end > slice.sourceLayout.result.layoutInput.text.length) continue
+        val sourceResult = slice.sourceLayout.result
+        if (slice.sourceRange.end > sourceResult.layoutInput.text.length) continue
         val targetRange = slice.targetRange
         if (targetRange != null) {
-            // 仍然存在于当前正文的 slice：从 frozen 状态插值到当前最终 layout
+            // 仍存活：从 frozen 状态插值到当前最终 layout
             val targetResult = currentResult ?: continue
             if (targetRange.end > targetResult.layoutInput.text.length) continue
-            // 计算 source 和 target 的 bounds
-            val sourceBounds = safePathBounds(slice.sourceLayout.result, slice.sourceRange) ?: continue
+            val sourceBounds = safePathBounds(sourceResult, slice.sourceRange) ?: continue
             val targetBounds = safePathBounds(targetResult, targetRange) ?: continue
-            // 插值 alpha 和 position
-            val interpolatedAlpha = lerp(slice.sourceAlpha, 1f, alpha)
-            val currentX = lerp(sourceBounds.left + slice.sourceTranslate.x, targetBounds.left, alpha)
-            val currentY = lerp(sourceBounds.top + slice.sourceTranslate.y, targetBounds.top, alpha)
+            val interpolatedAlpha = lerp(slice.sourceAlpha, 1f, rebaseProgress)
+            if (interpolatedAlpha <= 0f) continue
+            val currentX =
+                lerp(sourceBounds.left + slice.sourceTranslate.x, targetBounds.left, rebaseProgress)
+            val currentY =
+                lerp(sourceBounds.top + slice.sourceTranslate.y, targetBounds.top, rebaseProgress)
             val translate =
                 Offset(
                     currentX - targetBounds.left,
@@ -408,11 +363,11 @@ private fun DrawScope.drawStartFrameLayer(
                 textColor = textColor,
             )
         } else {
-            // 只属于旧画面的 slice：alpha 淡到 0
-            val interpolatedAlpha = lerp(slice.sourceAlpha, 0f, alpha)
+            // 只属于旧画面：alpha 淡到 0
+            val interpolatedAlpha = lerp(slice.sourceAlpha, 0f, rebaseProgress)
             if (interpolatedAlpha <= 0f) continue
             drawTranslatedRangeText(
-                result = slice.sourceLayout.result,
+                result = sourceResult,
                 range = slice.sourceRange,
                 translate = slice.sourceTranslate,
                 alpha = interpolatedAlpha,
@@ -421,10 +376,6 @@ private fun DrawScope.drawStartFrameLayer(
             )
         }
     }
-    // #641 评论 5459531909 第3项：删除 startFrame 里单独淡出的 drawStartFrameCursor 路径。
-    // cursor 起点统一由 drawVisualCursor 从 cursorStartRect
-    // （startFrame?.cursorRect ?: snapshot?.oldCursorRect）插值到 newCursorRect，
-    // 每帧只画这一根 cursor。startFrame 文字层仍按 alpha 淡出（上面 for 循环保留）。
 }
 
 // #641 评论 5458880786 问题1e：原 drawStartFrameCursor 已删除。

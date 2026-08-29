@@ -6,67 +6,42 @@ import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 
 /**
- * #641 评论 5457777142 问题2 + 评论 5458283021 问题1b：视觉帧 —
- * overlay 当前已经画到哪里的纯显示数据。
+ * #641 评论 5459754425 + 评论 5459896691 第2项：视觉帧 —
+ * overlay 当前已经画到哪里的纯显示数据。所有 slice 扁平保存，
+ * 每个 slice 携带自己的 [sourceLayout]，不再受"一帧只能有 old/new 两份 layout"限制。
  *
  * 新事务到来时先用旧 transaction + 当前 progress 物化本帧，
- * 再把它作为新事务的 [ComposeVisualTransaction.startFrame]，
- * 避免 `progress=0` 生硬重开或直接覆盖旧事务。
+ * 再把它作为新事务的 [ComposeVisualTransaction.startFrame]。
+ * 每次物化都把当前屏幕正在显示的所有内容 flatten 成一层新 frame，
+ * 不再形成 startFrame → startFrame → startFrame 的链。
  *
- * 这是纯显示数据：range、当前 translate、当前 alpha、当前 cursor rect、
- * 以及每个 slice 来自哪份 layout（old/new）。
- * 不持有 [androidx.compose.ui.text.TextLayoutResult] 引用，不写正文业务状态。
- *
- * #641 评论 5458283021 问题1b：frame 必须能保存下一笔真正需要继续画的来源布局和 slice。
- * 每个 slice 至少要知道它来自哪份 layout、range、当前 translate、当前 alpha。
- * overlay 新 transaction 的第一帧先按这些数据画，再插值到新 transaction 的目标几何。
- * 不要把 frame 再降维成一个平均 progress。
- *
- * #641 评论 5458880786 问题1b：新增 [sourceOldLayout] / [sourceNewLayout] —
- * 物化时冻结上一事务的 oldLayout/newLayout。新事务的 onAuthoritativeLayout 会替换
- * active transaction 的 oldLayout/newLayout，若 startFrame 仍指向 transaction.oldLayout/newLayout，
- * slice 绘制时会从当前（新）事务 layout 取字，画面错乱。drawStartFrameLayer 只读
- * [sourceOldLayout] / [sourceNewLayout]，不用当前 transaction 的 oldLayout/newLayout。
- * 默认 null 保持向后兼容。
- *
- * #641 评论 5459531909 第2项：frozen startFrame 必须继续拥有当前正文的抑制范围。
- * [suppressedCurrentRanges] 记录物化时上一事务仍由 overlay 接管、在新事务里仍应隐藏的
- * current text ranges（已映射到新事务的 new text 坐标）。新事务的 _hiddenRanges 不能
- * 直接覆盖成自己的 ranges，而应包含 currentOwnedNewRanges + currentRetainedNewRanges +
- * frozenStartFrame.suppressedCurrentRanges，避免快速输入时上一笔尚未结束的 frozen 文字
- * 突然恢复 100% 再和 frozen frame 叠一层。默认 emptyList() 保持向后兼容。
- *
- * #641 评论 5459754425 第1项：rebase 起点 + 目标模型 —
- * 把 frozen 文字 slice 改成"起点 + 目标"，物化新 startFrame 时必须先把
- * 当前屏幕已经画出来的全部内容 flatten。
- * 对仍然存在于当前正文的 slice，[targetRange] 映射到当前 new text 后，
- * 绘制要从 frozen 状态插值到当前最终 layout（alpha = lerp(sourceAlpha, 1f, rebaseProgress)）。
- * 对只属于旧画面的 slice，targetRange = null，alpha = lerp(sourceAlpha, 0f, rebaseProgress)。
- *
- * [rebasedSlices] 是 flatten 后的 rebase 切片，按"起点 + 目标"模型绘制。
- * [slices] 是旧的 VisualFrameSlice 列表，保留向后兼容。
+ * @param slices 扁平的 rebase slice 列表 — 每个 slice 携带自己的 sourceLayout。
+ * @param cursorRect 物化时的 cursor rect。
+ * @param cursorAlpha 物化时的 cursor alpha。
+ * @param suppressedCurrentRanges 物化时由 overlay 接管的 current text ranges。
  */
 data class ComposeVisualFrame(
-    val sourceOldLayout: ComposeLayoutSnapshot? = null,
-    val sourceNewLayout: ComposeLayoutSnapshot? = null,
-    val slices: List<VisualFrameSlice>,
-    val rebasedSlices: List<RebasedTextSlice> = emptyList(),
+    val slices: List<RebasedTextSlice>,
     val cursorRect: Rect? = null,
     val cursorAlpha: Float = 1f,
     val suppressedCurrentRanges: List<TextRange> = emptyList(),
 )
 
 /**
- * #641 评论 5459754425 第1项：rebase 起点 + 目标模型 —
- * 把 frozen 文字 slice 改成"起点 + 目标"，物化新 startFrame 时必须先把
- * 当前屏幕已经画出来的全部内容 flatten。
+ * #641 评论 5459754425 第1项 + 评论 5459896691 第2项：rebase 起点 + 目标模型 —
+ * 每个 slice 携带自己的 [sourceLayout]，A/B/C 任意多次 rebase 都能扁平保存。
  *
- * @param sourceLayout 该 slice 来自哪份 layout（old 或 new）。
- * @param sourceRange 该 slice 在 sourceLayout 中的 UTF-16 range。
- * @param sourceTranslate 当前 translate 偏移（相对 sourceLayout 原位置）。
+ * 对仍存活的 slice（[targetRange] != null）：alpha = lerp(sourceAlpha, 1f, rebaseProgress)，
+ *   position 从 source 位置插值到 target 位置。
+ * 对只属于旧画面的 slice（[targetRange] == null）：alpha = lerp(sourceAlpha, 0f, rebaseProgress)。
+ *
+ * @param sourceLayout 该 slice 来自哪份 layout — 冻结时的 [ComposeLayoutSnapshot]。
+ * @param sourceRange 该 slice 在 [sourceLayout] 中的 UTF-16 range。
+ * @param sourceTranslate 当前 translate 偏移（相对 [sourceLayout] 原位置）。
  * @param sourceAlpha 当前 alpha。
- * @param targetRange 该 slice 在当前 new text 中的目标 range — null = 这段只属于旧画面，最终应消失。
- *   非 null 时，绘制要从 frozen 状态插值到当前最终 layout（alpha = lerp(sourceAlpha, 1f, rebaseProgress)）。
+ * @param targetRange 该 slice 在当前 new text 中的目标 range —
+ *   null = 这段只属于旧画面，最终应消失；
+ *   非 null = 仍存活，绘制时从 frozen 状态插值到当前最终 layout。
  */
 data class RebasedTextSlice(
     val sourceLayout: ComposeLayoutSnapshot,
@@ -75,32 +50,3 @@ data class RebasedTextSlice(
     val sourceAlpha: Float,
     val targetRange: TextRange?,
 )
-
-/**
- * #641 评论 5457777142 问题2 + 评论 5458283021 问题1b：单个视觉帧 slice —
- * 一段受影响文字在某一时刻的显示状态。
- *
- * @param range 该 slice 对应的 UTF-16 range（old 或 new，由 [layoutSource] 决定）。
- * @param layoutSource 该 slice 来自哪份 layout — [FrameSliceSource.OldLayout] 取
- *   [ComposeVisualTransaction.oldLayout]，[FrameSliceSource.NewLayout] 取
- *   [ComposeVisualTransaction.newLayout]。overlay 据此从 transaction 取真实
- *   [androidx.compose.ui.text.TextLayoutResult] 画第一帧，不降维成平均 alpha。
- * @param translate 当前 translate 偏移（用于 retained move 位移插值）。
- * @param alpha 当前 alpha（用于淡入/淡出插值）。
- */
-data class VisualFrameSlice(
-    val range: TextRange,
-    val layoutSource: FrameSliceSource,
-    val translate: Offset,
-    val alpha: Float,
-)
-
-/**
- * #641 评论 5458283021 问题1b：视觉帧 slice 的来源布局标识。
- *
- * - [OldLayout]：该 slice 来自 [ComposeVisualTransaction.oldLayout]（previous layout），
- *   overlay 画第一帧时从 transaction.oldLayout 取 [androidx.compose.ui.text.TextLayoutResult]。
- * - [NewLayout]：该 slice 来自 [ComposeVisualTransaction.newLayout]（current layout），
- *   overlay 画第一帧时从 transaction.newLayout 取 [androidx.compose.ui.text.TextLayoutResult]。
- */
-enum class FrameSliceSource { OldLayout, NewLayout }

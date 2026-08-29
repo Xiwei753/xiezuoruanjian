@@ -346,8 +346,9 @@ class ComposeEditorVisualStateTest {
     @Test
     fun reportProgress_updatesInternalState() {
         val state = ComposeEditorVisualState()
-        state.reportProgress(textProgress = 0.5f, cursorProgress = 0.3f)
+        state.reportProgress(textProgress = 0.5f, cursorProgress = 0.3f, rebaseProgress = 0.7f)
         assertEquals(0.5f, state.currentTextProgress.value)
         assertEquals(0.3f, state.currentCursorProgress.value)
+        assertEquals(0.7f, state.currentRebaseProgress.value)
     }
 }
