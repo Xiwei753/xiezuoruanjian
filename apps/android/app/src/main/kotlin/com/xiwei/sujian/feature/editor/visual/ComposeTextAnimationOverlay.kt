@@ -113,6 +113,11 @@ fun ComposeTextAnimationOverlay(
     // 按 startLayerAlpha = 1 - textProgress 淡出，新事务 cursor 在 drawVisualCursor 里按 cursorProgress 画。
     val textProgress = remember { Animatable(0f) }
     val cursorProgress = remember { Animatable(0f) }
+    // #641 评论 5459271770 问题3：startFrame 文字层独立 rebase timeline —
+    // CURSOR_ONLY 打断文字动画时 textEnabled=false、textProgress snapTo(1f)，
+    // 若 startFrame 淡出仍用 textProgress，frozen 文字会瞬间消失。
+    // rebaseProgress 专门控制 startFrame 文字层淡出，不依赖当前 textKind/textEnabled。
+    val rebaseProgress = remember { Animatable(0f) }
 
     LaunchedEffect(transactionId) {
         if (transactionId > 0L && textDurationMillis > 0L && textEnabled) {
@@ -147,6 +152,21 @@ fun ComposeTextAnimationOverlay(
             cursorProgress.snapTo(1f)
         }
     }
+    // #641 评论 5459271770 问题3：rebaseProgress 从 0→1 独立动画，
+    // 只要新事务的 startFrame 有文字 slice 就跑，不管当前 textKind 是不是 None。
+    LaunchedEffect(transactionId) {
+        val startFrameHasSlices = activeTransaction?.startFrame?.slices?.isNotEmpty() == true
+        if (transactionId > 0L && startFrameHasSlices && textDurationMillis > 0L) {
+            rebaseProgress.snapTo(0f)
+            rebaseProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = textDurationMillis.toInt()),
+            )
+        } else if (transactionId > 0L) {
+            rebaseProgress.snapTo(1f)
+        }
+    }
+    val rebaseProgressValue = rebaseProgress.value
     val textProgressValue = textProgress.value
     val cursorProgressValue =
         if (useSingleTimeline) textProgressValue else cursorProgress.value
@@ -168,17 +188,20 @@ fun ComposeTextAnimationOverlay(
     val hasCursorAnimation =
         activeTransaction != null && cursorEnabled &&
             activeIntent?.cursor?.animate == true
-    val hasAnimation = hasTextAnimation || hasCursorAnimation
+    val startFrameHasSlices = activeTransaction?.startFrame?.slices?.isNotEmpty() == true
+    val hasRebaseAnimation = activeTransaction != null && startFrameHasSlices && rebaseProgressValue < 1f
+    val hasAnimation = hasTextAnimation || hasCursorAnimation || hasRebaseAnimation
 
     // #641 评论 5458283021 问题3b：动画结束清 hiddenRanges，系统正文马上可见。
     // 完成条件只等待真正存在的 timeline —
     // 无 text 动画时 textDone=true，无 cursor 动画时 cursorDone=true，
     // 不再硬要求 cursorProgress>=1 导致 hiddenRanges 永远不清。
-    LaunchedEffect(transactionId, textProgressValue, cursorProgressValue) {
+    LaunchedEffect(transactionId, textProgressValue, cursorProgressValue, rebaseProgressValue) {
         if (transactionId > 0L) {
             val textDone = !hasTextAnimation || textProgressValue >= 1f
             val cursorDone = !hasCursorAnimation || cursorProgressValue >= 1f
-            if (textDone && cursorDone) {
+            val rebaseDone = !hasRebaseAnimation || rebaseProgressValue >= 1f
+            if (textDone && cursorDone && rebaseDone) {
                 visualState.clearAnimation()
             }
         }
@@ -208,6 +231,7 @@ fun ComposeTextAnimationOverlay(
                         cursorSnapshot = cursorSnapshot,
                         density = density,
                         textEnabled = textEnabled,
+                        rebaseProgress = rebaseProgressValue,
                     )
                 },
     )
@@ -219,11 +243,15 @@ fun ComposeTextAnimationOverlay(
  *
  * #641 评论 5458283021 问题1b：如果 [ComposeVisualTransaction.startFrame] 非空，
  * 先按 startFrame.slices 的真实数据（layoutSource/range/translate/alpha）画起始画面层，
- * alpha 随 textProgress 淡出。不再把 frame 降维成一个平均 progress —
+ * alpha 随独立 rebaseProgress 淡出（不再用 textProgress）。不再把 frame 降维成一个平均 progress —
  * 上一帧的具体文字位置、retained translate、cursor rect 都被使用。
  *
- * #641 评论 5458880786 问题1f：删除 estimateStartProgress — textProgress/cursorProgress 从 0f 开始，
- * startFrame 层用 alpha = 1 - textProgress 淡出，新事务层按 textProgress 画。
+ * #641 评论 5459271770 问题3：startFrame 文字层淡出用独立 rebaseProgress，
+ * 不依赖当前 textEnabled/textKind — CURSOR_ONLY 打断文字动画时 textEnabled=false、
+ * textProgress snapTo(1f)，但 startFrame 仍应平滑淡出，不能瞬间扔掉 frozen 文字。
+ *
+ * #641 评论 5458880786 问题1f：删除 estimateStartProgress — textProgress/cursorProgress 从 0f 开始,
+ * startFrame 层用 alpha = 1 - rebaseProgress 淡出，新事务层按 textProgress 画。
  */
 @Suppress("LongParameterList")
 private fun DrawScope.drawVisualTransaction(
@@ -240,6 +268,7 @@ private fun DrawScope.drawVisualTransaction(
     cursorSnapshot: VisualCursorSnapshot?,
     density: androidx.compose.ui.unit.Density,
     textEnabled: Boolean,
+    rebaseProgress: Float,
 ) {
     // #641 评论 5458283021 问题1b：startFrame 起始画面层 —
     // 用 startFrame.slices 的真实数据画，alpha 随 textProgress 淡出。
@@ -247,9 +276,12 @@ private fun DrawScope.drawVisualTransaction(
     // #641 评论 5458880786 问题1e：drawStartFrameLayer 只读 startFrame.sourceOldLayout/sourceNewLayout，
     // 不用当前 transaction 的 oldLayout/newLayout（新事务 onAuthoritativeLayout 已替换它们）。
     // 同时画 startFrame.cursorRect，让 cursor 真正参与第一帧。
+    // #641 评论 5459271770 问题3：startFrame 文字层生命周期不依赖当前 textEnabled —
+    // 它表示上一事务已经画出来的事实。CURSOR_ONLY 打断文字动画时 textEnabled=false，
+    // 但 startFrame 仍应平滑淡出，不能瞬间扔掉。用独立 rebaseProgress 控制 alpha。
     val startFrame = transaction.startFrame
-    if (startFrame != null && textEnabled) {
-        val startLayerAlpha = (1f - textProgress).coerceIn(0f, 1f)
+    if (startFrame != null && startFrame.slices.isNotEmpty()) {
+        val startLayerAlpha = (1f - rebaseProgress).coerceIn(0f, 1f)
         if (startLayerAlpha > 0f) {
             drawStartFrameLayer(
                 startFrame = startFrame,
