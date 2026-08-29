@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.editor.input
 
 import androidx.compose.ui.text.TextRange
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -26,6 +27,9 @@ import org.robolectric.annotation.Config
 class EditorTextFieldStateBridgeTest {
     companion object {
         private const val AUTHORITATIVE_TEXT = "同步新正文"
+        private const val UNDO_RESTORED_TEXT = "撤销后正文"
+        private const val UNDO_RESTORED_SHORT = "撤销后"
+        private const val MIRROR_FOLLOWS_AUTHORITY = "mirror 跟随权威正文"
     }
 
     @Test
@@ -208,7 +212,7 @@ class EditorTextFieldStateBridgeTest {
 
         assertEquals(AUTHORITATIVE_TEXT, bridge.state.text.toString())
         assertEquals(TextRange(0, 0), bridge.state.selection)
-        assertEquals("mirror 跟随权威正文", AUTHORITATIVE_TEXT, bridge.mirroredText)
+        assertEquals(MIRROR_FOLLOWS_AUTHORITY, AUTHORITATIVE_TEXT, bridge.mirroredText)
     }
 
     @Test
@@ -236,7 +240,7 @@ class EditorTextFieldStateBridgeTest {
 
         assertEquals("Core 拒绝后 state 回退到权威正文", "权威正文", bridge.state.text.toString())
         assertEquals(TextRange(4, 4), bridge.state.selection)
-        assertEquals("mirror 跟随权威正文", "权威正文", bridge.mirroredText)
+        assertEquals(MIRROR_FOLLOWS_AUTHORITY, "权威正文", bridge.mirroredText)
     }
 
     @Test
@@ -278,5 +282,88 @@ class EditorTextFieldStateBridgeTest {
         assertEquals(TextRange(1, 1), bridge.state.selection)
         assertEquals("初始", bridge.mirroredText)
         assertNull("初始无 composition", bridge.state.composition)
+    }
+
+    /**
+     * #641 评论 5458880786 问题3：flushForClose 必须先消费 pending authoritative —
+     * Undo 在 composition 期间到达会暂存 pending，flushForClose 若直接 commitIfNeeded
+     * 会把旧 composition 文本重新 commit 回 Core，覆盖 Undo。
+     */
+    @Test
+    fun flushForClose_withPendingAuthoritative_appliesPendingInsteadOfComposing() {
+        val committedEdits = mutableListOf<CommittedTextEdit>()
+        val bridge =
+            EditorTextFieldStateBridge(
+                initialText = "原始正文",
+                initialSelection = TextRange(4, 4),
+                commitToCore = { edit ->
+                    committedEdits += edit
+                    CommitResult.Accepted
+                },
+            )
+
+        // 模拟 IME composition 活跃期间用户输入。
+        bridge.state.edit {
+            replace(0, length, "原始正文候选")
+            this.selection = TextRange(6, 6)
+        }
+        bridge.onInputSnapshot(
+            EditorInputSnapshot(
+                text = bridge.state.text.toString(),
+                selection = bridge.state.selection,
+                composition = TextRange(4, 6),
+            ),
+        )
+        assertTrue("composition 期间不应提交", committedEdits.isEmpty())
+
+        // Undo 在 composition 期间到达，Core 权威正文变为"撤销后正文"。
+        // bridge 暂存 pending（composition 仍活跃）。
+        bridge.storePendingAuthoritative(UNDO_RESTORED_TEXT, TextRange(4, 4))
+        assertTrue("pending 已存", bridge.hasPendingAuthoritative())
+
+        // flushForClose 必须先消费 pending authoritative，不把旧 composition 文本提交回 Core。
+        bridge.flushForClose()
+
+        assertEquals("flushForClose 后正文应为撤销后正文", UNDO_RESTORED_TEXT, bridge.state.text.toString())
+        assertEquals(MIRROR_FOLLOWS_AUTHORITY, UNDO_RESTORED_TEXT, bridge.mirroredText)
+        // 不应有 committedEdits（pending authoritative 直接 apply，不走 commitToCore）。
+        assertTrue("pending authoritative 不走 commitToCore", committedEdits.isEmpty())
+        assertFalse("pending 已消费", bridge.hasPendingAuthoritative())
+    }
+
+    /**
+     * #641 评论 5458880786 问题3：onInputSnapshot 也先消费 pending authoritative —
+     * composition 结束后第一个 snapshot 应先应用 pending，不提交本地 diff。
+     */
+    @Test
+    fun onInputSnapshot_afterCompositionEnd_withPending_appliesPendingFirst() {
+        val committedEdits = mutableListOf<CommittedTextEdit>()
+        val bridge =
+            EditorTextFieldStateBridge(
+                initialText = "原始",
+                initialSelection = TextRange(2, 2),
+                commitToCore = { edit ->
+                    committedEdits += edit
+                    CommitResult.Accepted
+                },
+            )
+
+        // composition 期间 Undo 到达，暂存 pending。
+        bridge.storePendingAuthoritative(UNDO_RESTORED_SHORT, TextRange(3, 3))
+        assertTrue(bridge.hasPendingAuthoritative())
+
+        // composition 结束后的第一个 snapshot — 应先消费 pending，不提交本地 diff。
+        bridge.onInputSnapshot(
+            EditorInputSnapshot(
+                text = UNDO_RESTORED_SHORT,
+                selection = TextRange(3, 3),
+                composition = null,
+            ),
+        )
+
+        assertEquals("正文应为撤销后", UNDO_RESTORED_SHORT, bridge.state.text.toString())
+        assertEquals(MIRROR_FOLLOWS_AUTHORITY, UNDO_RESTORED_SHORT, bridge.mirroredText)
+        assertTrue("pending 消费后不走 commitToCore", committedEdits.isEmpty())
+        assertFalse("pending 已消费", bridge.hasPendingAuthoritative())
     }
 }
