@@ -546,8 +546,13 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * #641 评论 5459896691 第2项：按 [prev.textKind] 物化当前屏幕仍可见的 slice 为 [RebasedTextSlice]。
-     * 每个 slice 携带自己的 sourceLayout（prev 的 oldLayout/newLayout），targetRange 为 null（只属于当前事务画面）。
+     * #641 评论 5459896691 第2项 + 评论 5460070064 第3项：
+     * 按 [prev.textKind] 物化当前屏幕仍可见的 slice 为 [RebasedTextSlice]。
+     *
+     * surviving slice（Insert/Move newRanges — 在当前 new text 里仍存在）：
+     *   targetRange = range 自身，下一笔 flatten 时通过 replaceBounds 映射到新坐标。
+     * fading slice（Delete oldRanges / Move oldRanges — 只属于旧画面）：
+     *   targetRange = null，rebase 期间淡出。
      */
     private fun collectCurrentSlicesAsRebased(
         prev: ComposeVisualTransaction,
@@ -555,23 +560,28 @@ class ComposeEditorVisualState(
     ): List<RebasedTextSlice> =
         when (prev.textKind) {
             TextVisualKind.Delete ->
-                rebasedSlices(prev.oldRanges, prev.oldLayout, 1f - textProgress)
+                // oldRanges 在当前 new text 里不存在 → fading
+                rebasedSlices(prev.oldRanges, prev.oldLayout, 1f - textProgress, targetRange = null)
             TextVisualKind.Move ->
-                rebasedSlices(prev.oldRanges, prev.oldLayout, 1f - textProgress) +
-                    rebasedSlices(prev.newRanges, prev.newLayout, textProgress)
+                // oldRanges → fading（旧位置消失）；newRanges → surviving（新位置仍在当前正文）
+                rebasedSlices(prev.oldRanges, prev.oldLayout, 1f - textProgress, targetRange = null) +
+                    survivingRebasedSlices(prev.newRanges, prev.newLayout, textProgress)
             TextVisualKind.Insert ->
-                rebasedSlices(prev.newRanges, prev.newLayout, textProgress)
+                // newRanges 在当前 new text 里存在 → surviving
+                survivingRebasedSlices(prev.newRanges, prev.newLayout, textProgress)
             TextVisualKind.None -> emptyList()
         }
 
     /**
      * 把 [ranges] 里有效段物化成 [RebasedTextSlice]，alpha = [alphaRaw].coerceIn(0,1)。
-     * [layout] 为 null 时跳过（无法绘制）。targetRange = null 表示只属于当前事务画面。
+     * [layout] 为 null 时跳过（无法绘制）。
+     * [targetRange] = null 表示只属于旧画面（rebase 期间淡出）。
      */
     private fun rebasedSlices(
         ranges: List<TextRange>,
         layout: ComposeLayoutSnapshot?,
         alphaRaw: Float,
+        targetRange: TextRange?,
     ): List<RebasedTextSlice> {
         if (layout == null) return emptyList()
         val alpha = alphaRaw.coerceIn(0f, 1f)
@@ -583,17 +593,32 @@ class ComposeEditorVisualState(
                     sourceRange = range,
                     sourceTranslate = Offset.Zero,
                     sourceAlpha = alpha,
-                    targetRange = null,
+                    targetRange = targetRange,
                 )
             }
     }
 
     /**
+     * #641 评论 5460070064 第3项：surviving slice — targetRange = range 自身（在当前正文里仍存在）。
+     * 下一笔 flatten 时通过 replaceBounds 映射到新坐标，若被 replace 删除则变成 null（淡出）。
+     */
+    private fun survivingRebasedSlices(
+        ranges: List<TextRange>,
+        layout: ComposeLayoutSnapshot?,
+        alphaRaw: Float,
+    ): List<RebasedTextSlice> =
+        rebasedSlices(ranges, layout, alphaRaw, targetRange = null).map { slice ->
+            // targetRange = sourceRange（在当前 new text 坐标中同位置存活）
+            slice.copy(targetRange = slice.sourceRange)
+        }
+
+    /**
      * 旧事务的 retainedMoves → [RebasedTextSlice]。
      * translate 按 [textProgress] 插值 old→new bounds，alpha=1。
-     * targetRange = null（retained 文字的离场由新事务自己处理）。
      *
      * #641 评论 5459531909 第4项：translate = delta（相对 source layout 原位置的偏移）。
+     * #641 评论 5460070064 第3项：retained 文字在当前 new text 里仍存在 → surviving。
+     *   targetRange = move.newRange（在当前正文中的位置），下一笔 flatten 通过 replaceBounds 映射。
      */
     private fun collectRetainedMoveSlicesAsRebased(
         prev: ComposeVisualTransaction,
@@ -620,7 +645,7 @@ class ComposeEditorVisualState(
                     sourceRange = move.newRange,
                     sourceTranslate = translate,
                     sourceAlpha = 1f,
-                    targetRange = null,
+                    targetRange = move.newRange, // surviving: 在当前正文里仍存在
                 ),
             )
         }
@@ -628,20 +653,25 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * #641 评论 5459896691 第2项：把上一事务 frame 的扁平 rebasedSlices 通过 replaceBounds
-     * 映射到当前 new text 坐标。仍存活的 slice（原 targetRange != null 且映射后仍有效）
-     * 保留 targetRange；被 replace 区域覆盖的 slice（原 targetRange != null 但映射后失效）
-     * 改为 targetRange = null（离场淡出）；原 targetRange == null 的 slice 保持 null。
+     * #641 评论 5459896691 第2项 + 评论 5460070064 第3项：
+     * 把上一事务 frame 的扁平 rebasedSlices 通过 replaceBounds 映射到当前 new text 坐标。
+     * 仍存活的 slice（原 targetRange != null 且映射后仍有效）保留 targetRange；
+     * 被 replace 区域覆盖的 slice（原 targetRange != null 但映射后失效）改为 targetRange = null（离场淡出）；
+     * 原 targetRange == null 的 slice 保持 null。
      *
      * 每个 slice 的 sourceLayout/sourceRange/sourceTranslate/sourceAlpha 保持不变（冻结时的状态），
      * 只更新 targetRange 到新坐标。
+     *
+     * #641 评论 5460070064 第3项：replaceBounds 为 null 时保留原有 targetRange，不要一律置 null。
+     * 原 targetRange != null 的 surviving slice 在没有新 replace 信息时应继续存活。
      */
     private fun flattenRebasedThroughReplace(
         slices: List<RebasedTextSlice>,
         replaceBounds: VisualReplaceBounds?,
     ): List<RebasedTextSlice> {
         if (replaceBounds == null) {
-            return slices.map { it.copy(targetRange = null) }
+            // 无 replace 边界 — 保留原有 targetRange（surviving slice 继续存活，fading slice 继续淡出）
+            return slices
         }
         return buildList {
             for (slice in slices) {
