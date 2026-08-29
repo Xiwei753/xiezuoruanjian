@@ -358,6 +358,10 @@ class ComposeEditorVisualState(
         // 再切 _activeIntent / 新 cursor snapshot。之前先切 _activeIntent 再 buildCursorSnapshot
         // 再 buildAndActivateTransaction(materializeStartFrame)，materializeStartFrame 读
         // _visualCursorSnapshot.value 时可能已拿到下一事务的 cursor snapshot，物化出错误起点。
+        //
+        // #641 评论 5460160958 问题2：frozenStartFrame 马上要交给本事务（C）绘制，
+        // surviving targetRange 必须是 C 的 new text 坐标，因此用 incoming 的
+        // intentWithId.replaceBounds 映射，而不是上一事务（B）自己的 replaceBounds。
         val runningTransaction = _activeTransaction.value
         val frozenStartFrame =
             materializeStartFrame(
@@ -365,6 +369,7 @@ class ComposeEditorVisualState(
                 textProgress = _currentTextProgress.value,
                 cursorProgress = _currentCursorProgress.value,
                 rebaseProgress = _currentRebaseProgress.value,
+                nextReplaceBounds = intentWithId.replaceBounds,
             )
 
         _activeIntent.update { intentWithId }
@@ -491,7 +496,6 @@ class ComposeEditorVisualState(
                 cursor = intent.cursor,
                 startFrame = startFrame,
                 motionPolicy = motionPolicy,
-                startFrameReplaceBounds = intent.replaceBounds,
             )
         _activeTransaction.update { transaction }
     }
@@ -506,6 +510,14 @@ class ComposeEditorVisualState(
      * #641 评论 5458283021 问题1c：分别接收 [textProgress] / [cursorProgress]。
      * #641 评论 5459896691 第1项：增加 [rebaseProgress] — 三条 timeline 都结束才算无视觉帧。
      *
+     * #641 评论 5460160958 问题2：增加 [nextReplaceBounds] — frozenStartFrame 马上要交给本事务（C）
+     *   绘制，surviving targetRange 必须是 C 的 new text 坐标，因此用 incoming 的 replaceBounds
+     *   映射，而不是上一事务（B）自己的 replaceBounds（已删除 ComposeVisualTransaction.startFrameReplaceBounds）。
+     * #641 评论 5460160958 问题3：flatten 旧 startFrame 前先按当前 [rebaseProgress] 物化每个 slice
+     *   到"这一帧真实状态"，避免从 A 当初冻结的 sourceAlpha/sourceTranslate 重新起跑。
+     * #641 评论 5460160958 问题4：targetRange 切成 prefix/suffix 时 sourceRange 成对切分，
+     *   不再让两个新 slice 都拿整段 source bounds 当起点。
+     *
      * 如果没有旧事务或 text/cursor/rebase 三条 progress 都已到 1f，返回 null。
      */
     private fun materializeStartFrame(
@@ -513,32 +525,48 @@ class ComposeEditorVisualState(
         textProgress: Float,
         cursorProgress: Float,
         rebaseProgress: Float,
+        nextReplaceBounds: VisualReplaceBounds?,
     ): ComposeVisualFrame? {
         val prev = transaction ?: return null
         // #641 评论 5459896691 第1项：三条当前实际存在的 timeline 都结束才算没有视觉帧。
         // CURSOR_ONLY 场景 textProgress=1/cursorProgress=1 但 rebaseProgress 可能还在中途。
         if (textProgress >= 1f && cursorProgress >= 1f && rebaseProgress >= 1f) return null
 
-        // #641 评论 5459754425 第1项 + 评论 5459896691 第2项：
-        // flatten 所有正在显示的内容成一层新的扁平 frame。
-        // prev.startFrame 的 rebasedSlices 已是扁平的，通过 replaceBounds 映射到当前坐标；
-        // prev 自己的 Insert/Delete/Move/retained 按当前 textProgress 物化。
-        // 不再形成 startFrame → startFrame → startFrame 的链。
         val prevStartFrame = prev.startFrame
-        val flattenedOlder =
-            if (prevStartFrame != null) {
-                flattenRebasedThroughReplace(prevStartFrame.slices, prev.startFrameReplaceBounds)
-            } else {
-                emptyList()
-            }
+        // #641 评论 5460160958 问题3：先按当前 rebaseProgress 物化旧 startFrame slice 到"这一帧真实状态"。
+        // 多代 flatten 不能直接用 A 当初冻结的 sourceAlpha/sourceTranslate 重新起跑——
+        // 若 B 的 rebase 跑到 50%，A 的旧 slice 屏幕上的 alpha/位置已在 source 和 B target 中间，
+        // C 到来时新 startFrame 应从 B 当前 50% 真实画面继续。
+        val materializedOlder =
+            prevStartFrame?.slices?.map { materializeRebasedSlice(it, prev.newLayout, rebaseProgress) } ?: emptyList()
 
+        // currentSlices / retainedSlices 是当前事务按 textProgress 生成的，已是当前状态，不再按 rebaseProgress 物化。
         val currentSlices = collectCurrentSlicesAsRebased(prev, textProgress)
         val retainedSlices = collectRetainedMoveSlicesAsRebased(prev, textProgress)
+
+        // #641 评论 5460160958 问题2+问题4：统一用 nextReplaceBounds 把所有 surviving targetRange
+        // 从 prev new text 映射到这次 new text，成对切分 sourceRange + targetRange。
+        val allSlices = materializedOlder + currentSlices + retainedSlices
+        val mappedSlices =
+            if (nextReplaceBounds == null) {
+                allSlices
+            } else {
+                buildList {
+                    for (slice in allSlices) {
+                        if (slice.targetRange == null) {
+                            add(slice)
+                        } else {
+                            addAll(splitRebasedSliceThroughReplace(slice, nextReplaceBounds))
+                        }
+                    }
+                }
+            }
+
         val cursorRect = materializeCursorRect(prev, cursorProgress)
         val cursorAlpha = if (prev.cursor?.animate == true) 1f else 0f
 
         return ComposeVisualFrame(
-            slices = flattenedOlder + currentSlices + retainedSlices,
+            slices = mappedSlices,
             cursorRect = cursorRect,
             cursorAlpha = cursorAlpha,
             suppressedCurrentRanges = _hiddenRanges.value,
@@ -645,7 +673,8 @@ class ComposeEditorVisualState(
                     sourceRange = move.newRange,
                     sourceTranslate = translate,
                     sourceAlpha = 1f,
-                    targetRange = move.newRange, // surviving: 在当前正文里仍存在
+                    // surviving: 在当前正文里仍存在
+                    targetRange = move.newRange,
                 ),
             )
         }
@@ -653,68 +682,103 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * #641 评论 5459896691 第2项 + 评论 5460070064 第3项：
-     * 把上一事务 frame 的扁平 rebasedSlices 通过 replaceBounds 映射到当前 new text 坐标。
-     * 仍存活的 slice（原 targetRange != null 且映射后仍有效）保留 targetRange；
-     * 被 replace 区域覆盖的 slice（原 targetRange != null 但映射后失效）改为 targetRange = null（离场淡出）；
-     * 原 targetRange == null 的 slice 保持 null。
+     * #641 评论 5460160958 问题3：按当前 [rebaseProgress] 物化单个 [RebasedTextSlice] 到"这一帧真实状态"。
      *
-     * 每个 slice 的 sourceLayout/sourceRange/sourceTranslate/sourceAlpha 保持不变（冻结时的状态），
-     * 只更新 targetRange 到新坐标。
+     * 多代 flatten 不能直接用 A 当初冻结的 sourceAlpha/sourceTranslate 重新起跑——
+     * 若 B 的 rebase 跑到 50%，A 的旧 slice 屏幕上的 alpha/位置已在 source 和 B target 中间，
+     * C 到来时新 startFrame 应从 B 当前 50% 真实画面继续。
      *
-     * #641 评论 5460070064 第3项：replaceBounds 为 null 时保留原有 targetRange，不要一律置 null。
-     * 原 targetRange != null 的 surviving slice 在没有新 replace 信息时应继续存活。
+     * - [slice.targetRange] == null（fading）：alpha = lerp(sourceAlpha, 0f, rebaseProgress)，
+     *   其余保持不变（继续从原位置淡出）。
+     * - [slice.targetRange] != null（surviving）：alpha = lerp(sourceAlpha, 1f, rebaseProgress)，
+     *   位置从 source bounds 插值到 target bounds，重新锚定到 [currentLayout]。
+     *   [currentLayout] 为 null 或 bounds 无效时只更新 alpha。
+     *
+     * @param currentLayout 上一事务（B）的 newLayout — surviving slice 的 target 在这份 layout 里。
      */
-    private fun flattenRebasedThroughReplace(
-        slices: List<RebasedTextSlice>,
-        replaceBounds: VisualReplaceBounds?,
-    ): List<RebasedTextSlice> {
-        if (replaceBounds == null) {
-            // 无 replace 边界 — 保留原有 targetRange（surviving slice 继续存活，fading slice 继续淡出）
-            return slices
+    private fun materializeRebasedSlice(
+        slice: RebasedTextSlice,
+        currentLayout: ComposeLayoutSnapshot?,
+        rebaseProgress: Float,
+    ): RebasedTextSlice {
+        val sourceAlpha = slice.sourceAlpha
+        val targetRange = slice.targetRange
+        if (targetRange == null) {
+            // fading：从原位置继续淡出，alpha 向 0 收敛。
+            val currentAlpha = lerpFloat(sourceAlpha, 0f, rebaseProgress)
+            return slice.copy(sourceAlpha = currentAlpha)
         }
-        return buildList {
-            for (slice in slices) {
-                val oldTarget = slice.targetRange
-                if (oldTarget == null) {
-                    add(slice)
-                } else {
-                    val mapped = mapRangeThroughReplace(oldTarget, replaceBounds)
-                    if (mapped.isEmpty()) {
-                        add(slice.copy(targetRange = null))
-                    } else {
-                        for (range in mapped) {
-                            add(slice.copy(targetRange = range))
-                        }
-                    }
-                }
-            }
+        // surviving：alpha 向 1 收敛。
+        val currentAlpha = lerpFloat(sourceAlpha, 1f, rebaseProgress)
+        if (currentLayout == null) {
+            return slice.copy(sourceAlpha = currentAlpha)
         }
+        val sourceBounds = safePathBounds(slice.sourceLayout.result, slice.sourceRange)
+        val targetBounds = safePathBounds(currentLayout.result, targetRange)
+        if (sourceBounds == null || targetBounds == null) {
+            return slice.copy(sourceAlpha = currentAlpha)
+        }
+        val currentX = lerpFloat(sourceBounds.left, targetBounds.left, rebaseProgress)
+        val currentY = lerpFloat(sourceBounds.top, targetBounds.top, rebaseProgress)
+        // 重新锚定到 currentLayout：sourceLayout=currentLayout、sourceRange=targetRange，
+        // sourceTranslate = currentPos - targetBounds 原点
+        // （绘制时 targetBounds.left/top + translate = currentPos）。
+        return RebasedTextSlice(
+            sourceLayout = currentLayout,
+            sourceRange = targetRange,
+            sourceTranslate = Offset(currentX - targetBounds.left, currentY - targetBounds.top),
+            sourceAlpha = currentAlpha,
+            targetRange = targetRange,
+        )
     }
 
     /**
-     * #641 评论 5459896691 第4项：把单个 range 通过 replace 边界映射，
-     * 返回 0~2 个存活区间。区间切分，不整段丢弃。
+     * #641 评论 5460160958 问题4：surviving slice 通过下一事务 replace 边界切分时，
+     * sourceRange 和 targetRange 成对切分，不再让 prefix/suffix 都拿整段 source bounds 当起点。
      *
-     * prefix 部分（在 [0, oldStart) 里）：位置不变。
-     * suffix 部分（在 [oldEnd, ...) 里）：平移 delta。
-     * 跨越 replace 区域的部分丢弃。
+     * 前提：surviving slice 表示同一逻辑文本，sourceRange 长度应等于 oldTarget 长度。
+     * 若长度不等（不应发生），不静默复制整段——结束该 surviving 映射，按旧画面离场处理：
+     * 返回 listOf(slice.copy(targetRange = null))。
+     *
+     * - prefix 部分（target 在 [0, b.oldStart) 里，位置不变）：
+     *   newTarget = [oldTarget.start, prefixEnd)，newSource = [sourceRange.start, sourceRange.start + len)。
+     * - suffix 部分（target 在 [b.oldEnd, ...) 里，平移 delta）：
+     *   newTarget = [suffixStart + delta, oldTarget.end + delta)，
+     *   newSource = [sourceRange.end - len, sourceRange.end)。
+     * - 跨越 replace 区域的部分不存活，丢弃。
      */
-    private fun mapRangeThroughReplace(
-        range: TextRange,
+    private fun splitRebasedSliceThroughReplace(
+        slice: RebasedTextSlice,
         b: VisualReplaceBounds,
-    ): List<TextRange> =
-        buildList {
-            val prefixEnd = minOf(range.end, b.oldStart)
-            if (range.start < prefixEnd) {
-                add(TextRange(range.start, prefixEnd))
-            }
-            val suffixStart = maxOf(range.start, b.oldEnd)
-            if (suffixStart < range.end) {
-                val delta = b.newEnd - b.oldEnd
-                add(TextRange(suffixStart + delta, range.end + delta))
-            }
+    ): List<RebasedTextSlice> {
+        val oldTarget = slice.targetRange ?: return listOf(slice)
+        val sourceRange = slice.sourceRange
+        // 前提：surviving slice 表示同一逻辑文本，sourceRange 长度应等于 oldTarget 长度。
+        // 若不等，不要静默复制整段——结束该 surviving 映射，按旧画面离场处理。
+        if ((sourceRange.end - sourceRange.start) != (oldTarget.end - oldTarget.start)) {
+            return listOf(slice.copy(targetRange = null))
         }
+        return buildList {
+            // prefix 部分（target 在 [0, b.oldStart) 里，位置不变）
+            val prefixEnd = minOf(oldTarget.end, b.oldStart)
+            if (oldTarget.start < prefixEnd) {
+                val len = prefixEnd - oldTarget.start
+                val newTarget = TextRange(oldTarget.start, prefixEnd)
+                val newSource = TextRange(sourceRange.start, sourceRange.start + len)
+                add(slice.copy(sourceRange = newSource, targetRange = newTarget))
+            }
+            // suffix 部分（target 在 [b.oldEnd, ...) 里，平移 delta）
+            val suffixStart = maxOf(oldTarget.start, b.oldEnd)
+            if (suffixStart < oldTarget.end) {
+                val delta = b.newEnd - b.oldEnd
+                val newTarget = TextRange(suffixStart + delta, oldTarget.end + delta)
+                val len = oldTarget.end - suffixStart
+                val newSource = TextRange(sourceRange.end - len, sourceRange.end)
+                add(slice.copy(sourceRange = newSource, targetRange = newTarget))
+            }
+            // 跨越 replace 区域的部分不存活，丢弃。
+        }
+    }
 
     /**
      * cursor rect：按 [cursorProgress] 插值 old→new。无 cursor 动画时返回 null。
