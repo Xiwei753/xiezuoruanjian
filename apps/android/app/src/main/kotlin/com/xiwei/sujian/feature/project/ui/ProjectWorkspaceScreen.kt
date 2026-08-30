@@ -138,7 +138,7 @@ internal fun ProjectWorkspaceScreen(
             editorViewModel.finishWorkspaceClose(targetId)
             editorHost?.closeTarget(
                 targetId,
-                com.xiwei.sujian.feature.editor.session.SessionCloseReason.WORKSPACE_NAVIGATION,
+                com.xiwei.sujian.feature.editor.projection.SessionCloseReason.WORKSPACE_NAVIGATION,
             )
         }
         when (location) {

@@ -118,7 +118,7 @@ class WindowRebindIdentityTest {
         targetId: String,
         sessionId: ULong,
     ) {
-        val target = EditableTextTarget(targetId, isPersistent = true).apply { updateText("hello") }
+        val target = EditableTextTarget(targetId, isPersistent = true)
         coordinator.registerTarget(target)
         coordinator.store.put(
             EditorSessionRecord(targetId = targetId, sessionId = sessionId, persistent = true),

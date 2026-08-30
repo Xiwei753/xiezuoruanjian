@@ -9,12 +9,12 @@ import com.xiwei.sujian.feature.editor.projection.ChapterPreviewState
 import com.xiwei.sujian.feature.editor.session.AnimationPolicy
 import com.xiwei.sujian.feature.editor.session.AuthoritativeEditorSnapshot
 import com.xiwei.sujian.feature.editor.session.ChapterSavedSignal
+import com.xiwei.sujian.feature.editor.session.EditorInputLease
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.EditorSessionHost
 import com.xiwei.sujian.feature.editor.session.EditorSessionState
 import com.xiwei.sujian.feature.editor.session.ExternalResetResult
-import com.xiwei.sujian.feature.editor.session.ProjectionSnapshot
-import com.xiwei.sujian.feature.editor.session.SessionCloseReason
+import com.xiwei.sujian.feature.editor.projection.SessionCloseReason
 import com.xiwei.sujian.feature.editor.session.SessionCommandPort
 import com.xiwei.sujian.feature.editor.session.SessionResetSource
 import com.xiwei.sujian.feature.editor.session.TargetCommand

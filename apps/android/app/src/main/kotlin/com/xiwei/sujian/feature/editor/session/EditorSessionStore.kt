@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.editor.session
 
 import androidx.compose.runtime.Immutable
+import com.xiwei.sujian.feature.editor.projection.ProjectionSnapshot
 
 /**
  * #595 四：按 target 保存完整状态的会话记录 — 会话层唯一的持久事实存储。

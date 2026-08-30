@@ -1,7 +1,6 @@
 package com.xiwei.sujian.feature.editor.layout
 
 import androidx.compose.foundation.ScrollState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -10,7 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
-import com.xiwei.sujian.feature.editor.session.ViewportAnchor
+import com.xiwei.sujian.feature.editor.projection.ViewportAnchor
 
 /**
  * #641 评论1 第4节：排版层只认 [BasicTextField] 给出的 [TextLayoutResult]。
@@ -62,13 +61,15 @@ class EditorViewportState(
     /**
      * #644 评论 5462826712 第4节：系统给出权威布局时调用。
      * 有 pending anchor 时只恢复一次。
+     *
+     * @return 需要 scrollTo 的 Y 值；null 表示无需恢复。调用方用 coroutine scope 调 scrollTo。
      */
-    fun onLayout(result: TextLayoutResult) {
+    fun onLayout(result: TextLayoutResult): Int? {
         latestLayout = result
-        val anchor = pendingAnchor ?: return
-        if (restoredForCurrentAnchor) return
+        val anchor = pendingAnchor ?: return null
+        if (restoredForCurrentAnchor) return null
         restoredForCurrentAnchor = true
-        restoreFromAnchor(result, anchor)
+        return restoreFromAnchor(result, anchor)
     }
 
     /**
@@ -94,28 +95,29 @@ class EditorViewportState(
 
     /**
      * #644 评论 5462826712 第4节：用新 layout 反算滚动位置。
+     *
+     * @return 需要 scrollTo 的 Y 值；null 表示 anchor 无效。
      */
-    private fun restoreFromAnchor(layout: TextLayoutResult, anchor: ViewportAnchor) {
+    private fun restoreFromAnchor(layout: TextLayoutResult, anchor: ViewportAnchor): Int? {
         val line = layout.getLineForOffset(anchor.textOffsetUtf16)
         val lineTop = layout.getLineTop(line)
         val lineBottom = layout.getLineBottom(line)
         val lineHeight = lineBottom - lineTop
         val y = (lineTop + lineHeight * anchor.offsetWithinLineFraction).toInt()
-        val clampedY = y.coerceIn(0, scrollState.maxValue)
-        scrollState.scrollTo(clampedY)
+        return y.coerceIn(0, scrollState.maxValue)
     }
 }
 
 /**
  * #644 评论 5462826712 第4节：remember EditorViewportState —
- * 内部让 ScrollState 也跟 targetId 一起新建，不能 target 换了只换 wrapper。
+ * ScrollState 也跟 targetId 一起新建，不能 target 换了只换 wrapper。
  */
 @Composable
 fun rememberEditorViewportState(
     targetId: String,
     initialAnchor: ViewportAnchor?,
 ): EditorViewportState {
-    val scrollState = rememberScrollState()
+    val scrollState = remember(targetId) { ScrollState(0) }
     return remember(targetId) {
         EditorViewportState(
             scrollState = scrollState,

@@ -8,6 +8,7 @@ import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -21,6 +22,7 @@ import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
 import com.xiwei.sujian.feature.editor.visual.ComposeTextAnimationOverlay
+import kotlinx.coroutines.launch
 
 /**
  * #641 评论1 第3节：活动/非活动 target 渲染模式。
@@ -101,6 +103,7 @@ fun WritingEditorSurface(
 ) {
     val hiddenRanges by visualState.hiddenRanges.collectAsStateWithLifecycle()
     val drawsVisualCursor by visualState.drawsVisualCursor.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
 
     val outputTransformation =
         remember(hiddenRanges, searchHighlights, searchHighlightColor) {
@@ -150,7 +153,10 @@ fun WritingEditorSurface(
                     // 1. viewportState.onLayout(result) — 有 pending anchor 时只恢复一次
                     // 2. visualState.onAuthoritativeLayout(...) — 动画只消费最终布局
                     // 3. onSurfaceReady() — attach 成功才算输入 surface ready
-                    viewportState.onLayout(result)
+                    val restoreY = viewportState.onLayout(result)
+                    if (restoreY != null) {
+                        scope.launch { viewportState.scrollState.scrollTo(restoreY) }
+                    }
                     visualState.onAuthoritativeLayout(
                         result = result,
                         selection = bridge.state.selection,

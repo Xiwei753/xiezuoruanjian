@@ -4,9 +4,9 @@ package com.xiwei.sujian.feature.editor.session
 
 import com.xiwei.sujian.feature.editor.ui.EditorSurfaceMode
 import com.xiwei.sujian.feature.editor.ui.editorSurfaceMode
-import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,21 +15,16 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * #644 评论 5462826712 第3节：编辑器 Surface 绑定状态守卫契约测试。
+ * #644 评论 5467821839 第6节：编辑器 Surface 绑定状态守卫契约测试。
  *
- * 旧缺陷：beginEdit 在尚无 Android View 时保存 pendingViewBind 后立即调用
- * completeWindowAttach，WindowBindingState 提前进入 Attached，此时 View、
- * InputConnection、session bridge 都尚未绑定；绑定失败也不会回到 Detached/Idle。
- *
- * 修复：Attached 只能从 Attaching 进入（completeWindowAttach 状态守卫）；
- * 绑定失败/导航取消回到 Detached/Idle。本测试验证状态机守卫的纯逻辑行为。
+ * 生产入口已改成 Compose [attachSurface]；本测试直接构造/推进到 Attaching，
+ * 验证 attachSurface 只能做 Attaching → Attached；覆盖 window、target、session
+ * 任一不匹配返回 null，以及同一 Attached 幂等返回当前 lease。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class EditorSurfaceBindingStateTest {
     private fun createCoordinator(): EditorSessionCoordinator {
-        // 测试环境无 native：session 创建返回 NotLoaded → prepareSessionForEdit 返回 null，
-        // 状态必须回到 Idle（绝不进入没有 View 的 Attached）。
         return EditorSessionCoordinator(
             com.xiwei.sujian.core.interop.app.AppServiceBridge(
                 com.xiwei.sujian.core.interop.app.WriterAppServiceHolder(
@@ -40,55 +35,171 @@ class EditorSurfaceBindingStateTest {
         )
     }
 
-    @Test
-    fun completeWindowAttach_fromIdle_isRejected() {
-        val coordinator = createCoordinator()
-        coordinator.completeWindowAttach("w1", "t1", 1UL)
-        assertEquals(
-            "completeWindowAttach must NOT transition from Idle to Attached (#595 三)",
-            WindowBindingState.Idle,
-            coordinator.windowBindingState,
-        )
-        assertNull(coordinator.activeTargetId)
+    private fun setSessionState(
+        coordinator: EditorSessionCoordinator,
+        state: EditorSessionState,
+    ) {
+        val field = EditorSessionCoordinator::class.java.getDeclaredField("_sessionStateFlow")
+        field.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val flow = field.get(coordinator) as kotlinx.coroutines.flow.MutableStateFlow<EditorSessionState>
+        flow.value = state
     }
 
     @Test
-    fun completeWindowAttach_fromDetached_isRejected() {
+    fun attachSurface_fromIdle_returnsNull() {
         val coordinator = createCoordinator()
-        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
-        coordinator.registerTarget(target)
-        // 模拟：会话存在但窗口未绑定（Detached）。
-        // 无法创建真实 session（无 native），直接用状态机验证守卫：
-        // 手动进入 Detached 后 completeWindowAttach 必须被拒绝。
-        val detached = WindowBindingState.Detached("t1", 99UL, null)
-        setWindowBindingState(coordinator, detached)
-        coordinator.completeWindowAttach("w1", "t1", 99UL)
-        assertEquals(
-            "completeWindowAttach must NOT transition from Detached to Attached",
-            detached,
-            coordinator.windowBindingState,
+        val lease = coordinator.attachSurface("w1", "t1")
+        assertNull("attachSurface from Idle must return null", lease)
+        assertEquals(WindowBindingState.Idle, coordinator.sessionStateFlow.value.bindingState)
+    }
+
+    @Test
+    fun attachSurface_fromAttaching_withMatchingParams_returnsLeaseAndTransitionsToAttached() {
+        val coordinator = createCoordinator()
+        val sessionId = 42UL
+        setSessionState(
+            coordinator,
+            EditorSessionState(
+                sessionId = sessionId,
+                activeTargetId = "t1",
+                bindingState = WindowBindingState.Attaching("w1", "t1", sessionId),
+            ),
+        )
+        val lease = coordinator.attachSurface("w1", "t1")
+        assertNotNull("attachSurface with matching params must return lease", lease)
+        assertEquals("t1", lease!!.targetId)
+        assertEquals(sessionId, lease.sessionId)
+        val binding = coordinator.sessionStateFlow.value.bindingState
+        assertTrue("Must transition to Attached", binding is WindowBindingState.Attached)
+        val attached = binding as WindowBindingState.Attached
+        assertEquals("w1", attached.windowId)
+        assertEquals("t1", attached.targetId)
+        assertEquals(sessionId, attached.sessionId)
+    }
+
+    @Test
+    fun attachSurface_fromAttaching_withWrongWindowId_returnsNull() {
+        val coordinator = createCoordinator()
+        val sessionId = 42UL
+        setSessionState(
+            coordinator,
+            EditorSessionState(
+                sessionId = sessionId,
+                activeTargetId = "t1",
+                bindingState = WindowBindingState.Attaching("w1", "t1", sessionId),
+            ),
+        )
+        val lease = coordinator.attachSurface("w2", "t1")
+        assertNull("attachSurface with wrong windowId must return null", lease)
+        assertTrue(
+            "Must stay in Attaching",
+            coordinator.sessionStateFlow.value.bindingState is WindowBindingState.Attaching,
         )
     }
 
     @Test
-    fun prepareSessionForEdit_failure_returnsToIdleNotAttached() {
+    fun attachSurface_fromAttaching_withWrongTargetId_returnsNull() {
         val coordinator = createCoordinator()
-        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
-        coordinator.registerTarget(target)
-
-        val bindInfo = coordinator.prepareSessionForEdit("t1", "hello", 5, "w1")
-        assertNull("Session creation must fail without native — bindInfo null", bindInfo)
-        assertEquals(
-            "Failed binding must leave window state Idle, never Attached without a View",
-            WindowBindingState.Idle,
-            coordinator.windowBindingState,
+        val sessionId = 42UL
+        setSessionState(
+            coordinator,
+            EditorSessionState(
+                sessionId = sessionId,
+                activeTargetId = "t1",
+                bindingState = WindowBindingState.Attaching("w1", "t1", sessionId),
+            ),
         )
+        val lease = coordinator.attachSurface("w1", "t2")
+        assertNull("attachSurface with wrong targetId must return null", lease)
+        assertTrue(
+            "Must stay in Attaching",
+            coordinator.sessionStateFlow.value.bindingState is WindowBindingState.Attaching,
+        )
+    }
+
+    @Test
+    fun attachSurface_fromAttaching_withWrongSessionId_returnsNull() {
+        val coordinator = createCoordinator()
+        val sessionId = 42UL
+        setSessionState(
+            coordinator,
+            EditorSessionState(
+                sessionId = sessionId,
+                activeTargetId = "t1",
+                bindingState = WindowBindingState.Attaching("w1", "t1", sessionId),
+            ),
+        )
+        // Change sessionId in state to simulate stale Attaching
+        setSessionState(
+            coordinator,
+            EditorSessionState(
+                sessionId = 99UL,
+                activeTargetId = "t1",
+                bindingState = WindowBindingState.Attaching("w1", "t1", sessionId),
+            ),
+        )
+        val lease = coordinator.attachSurface("w1", "t1")
+        assertNull("attachSurface with mismatched sessionId must return null", lease)
+    }
+
+    @Test
+    fun attachSurface_fromAttaching_withZeroSessionId_returnsNull() {
+        val coordinator = createCoordinator()
+        setSessionState(
+            coordinator,
+            EditorSessionState(
+                sessionId = 0UL,
+                activeTargetId = "t1",
+                bindingState = WindowBindingState.Attaching("w1", "t1", 0UL),
+            ),
+        )
+        val lease = coordinator.attachSurface("w1", "t1")
+        assertNull("attachSurface with sessionId=0 must return null", lease)
+    }
+
+    @Test
+    fun attachSurface_fromAttached_isIdempotent_returnsCurrentLease() {
+        val coordinator = createCoordinator()
+        val sessionId = 42UL
+        setSessionState(
+            coordinator,
+            EditorSessionState(
+                sessionId = sessionId,
+                activeTargetId = "t1",
+                editingState = EditingState.EDITING,
+                bindingState = WindowBindingState.Attached("w1", "t1", sessionId),
+            ),
+        )
+        val lease = coordinator.attachSurface("w1", "t1")
+        assertNotNull("attachSurface from Attached must return lease (idempotent)", lease)
+        assertEquals("t1", lease!!.targetId)
+        assertEquals(sessionId, lease.sessionId)
+        assertTrue(
+            "Must stay Attached",
+            coordinator.sessionStateFlow.value.bindingState is WindowBindingState.Attached,
+        )
+    }
+
+    @Test
+    fun attachSurface_fromAttached_withWrongSession_returnsNull() {
+        val coordinator = createCoordinator()
+        val sessionId = 42UL
+        setSessionState(
+            coordinator,
+            EditorSessionState(
+                sessionId = 99UL,
+                activeTargetId = "t1",
+                editingState = EditingState.EDITING,
+                bindingState = WindowBindingState.Attached("w1", "t1", sessionId),
+            ),
+        )
+        val lease = coordinator.attachSurface("w1", "t1")
+        assertNull("attachSurface with mismatched sessionId on Attached must return null", lease)
     }
 
     @Test
     fun shouldShowEditor_requiresAttachingOrAttached() {
-        // 渲染决策：只有 Attaching/Attached（及收尾状态）显示编辑器；
-        // Idle/Detaching/Detached 一律显示预览。
         val targetId = "t1"
         assertTrue(
             editorSurfaceMode(
@@ -130,30 +241,5 @@ class EditorSurfaceBindingStateTest {
                 isActivePane = false,
             ) == EditorSurfaceMode.EditorHost,
         )
-    }
-
-    @Test
-    fun beginEdit_failure_neverLeavesAttachedState() {
-        val coordinator = createCoordinator()
-        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
-        coordinator.registerTarget(target)
-        coordinator.prepareSessionForEdit("t1", "hello", 5, "w1")
-        // 无 native：session 创建失败 → 状态必须保持 Idle。
-        // （回归保护：旧实现即使 session 创建失败也会在 beginEdit 里提前
-        //   completeWindowAttach 进入 Attached。）
-        assertEquals(WindowBindingState.Idle, coordinator.windowBindingState)
-    }
-
-    private fun setWindowBindingState(
-        coordinator: EditorSessionCoordinator,
-        state: WindowBindingState,
-    ) {
-        // #595 三：_windowBindingStateFlow 已改为从 _sessionStateFlow 派生，
-        // 通过 _sessionStateFlow.copy(bindingState = state) 设置。
-        val field = EditorSessionCoordinator::class.java.getDeclaredField("_sessionStateFlow")
-        field.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        val flow = field.get(coordinator) as kotlinx.coroutines.flow.MutableStateFlow<EditorSessionState>
-        flow.value = flow.value.copy(bindingState = state)
     }
 }

@@ -2,6 +2,7 @@
 
 package com.xiwei.sujian.feature.editor.session
 
+import com.xiwei.sujian.feature.editor.projection.SessionCloseReason
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull

@@ -59,6 +59,57 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// #644 评论 5467821839 第7节：一次返回作品的全部卷 + 章节 + 统计。
+    ///
+    /// Android `ProjectViewModel` 不再逐卷调 `list_chapters`，
+    /// 而是一次拿到完整快照，减少 FFI 调用次数和中间状态不一致窗口。
+    pub fn get_project_workspace_snapshot(
+        &self,
+        project_id: &str,
+    ) -> ApiResult<ProjectWorkspaceSnapshotDto> {
+        let core = self.core();
+        let project: ProjectDto = core
+            .list_projects()
+            .map_err(WriterError::from)?
+            .into_iter()
+            .find(|p| p.id == project_id)
+            .map(Into::into)
+            .ok_or(WriterError::ProjectNotFound)?;
+
+        let stats: ProjectStatsDto = core
+            .get_project_stats(project_id)
+            .map(Into::into)
+            .unwrap_or(ProjectStatsDto {
+                total_word_count: 0,
+                volume_count: 0,
+                chapter_count: 0,
+            });
+
+        let volumes = core
+            .list_volumes(project_id)
+            .map_err(WriterError::from)?;
+
+        let mut volume_snapshots = Vec::with_capacity(volumes.len());
+        for vol in volumes {
+            let chapters = core
+                .list_chapters(project_id, &vol.id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(Into::into)
+                .collect();
+            volume_snapshots.push(VolumeWithChaptersDto {
+                volume: vol.into(),
+                chapters,
+            });
+        }
+
+        Ok(ProjectWorkspaceSnapshotDto {
+            project,
+            stats,
+            volumes: volume_snapshots,
+        })
+    }
+
     pub fn rename_project(&self, project_id: &str, new_title: &str) -> ApiResult<bool> {
         self.core().rename_project(project_id, new_title)?;
         let entry = crate::search::extractor::extract_project_title_entry(project_id, new_title);

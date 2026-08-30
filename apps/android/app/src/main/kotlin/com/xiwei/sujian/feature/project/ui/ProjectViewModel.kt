@@ -190,35 +190,31 @@ class ProjectViewModel(
     ): Result<ProjectSnapshot> =
         withContext(Dispatchers.IO) {
             try {
-                val volumes =
-                    repo.getVolumes(projectId).map { vol ->
-                        VolumeUiModel(
-                            id = vol.id,
-                            title = vol.title,
-                            chapters =
-                                repo.getChapters(projectId, vol.id).map { ch ->
-                                    ChapterUiModel(
-                                        id = ch.id,
-                                        title = ch.title,
-                                        wordCount = ch.wordCount,
-                                    )
-                                },
-                        )
-                    }
-                val stats =
-                    repo.getProjectStats(projectId)?.let {
-                        ProjectStatsUiModel(
-                            totalWordCount = it.totalWordCount,
-                            volumeCount = it.volumeCount,
-                            chapterCount = it.chapterCount,
-                        )
-                    }
+                // #644 评论 5467821839 第7节：一次 FFI 调用拿到完整快照，
+                // 不再逐卷调 getVolumes + getChapters + getProjectStats。
+                val snapshot = repo.getProjectWorkspaceSnapshot(projectId)
+                val volumes = snapshot.volumes.map { vwc ->
+                    VolumeUiModel(
+                        id = vwc.volume.id,
+                        title = vwc.volume.title,
+                        chapters = vwc.chapters.map { ch ->
+                            ChapterUiModel(
+                                id = ch.id,
+                                title = ch.title,
+                                wordCount = ch.wordCount,
+                            )
+                        },
+                    )
+                }
+                val stats = ProjectStatsUiModel(
+                    totalWordCount = snapshot.stats.totalWordCount,
+                    volumeCount = snapshot.stats.volumeCount,
+                    chapterCount = snapshot.stats.chapterCount,
+                )
                 Result.success(ProjectSnapshot(volumes, stats))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // 只把可恢复的业务/IO 异常转成失败结果；Error（OOM 等）按 JVM 语义
-                // 向上传播，不得伪装成"读取失败"数据错误。
                 Result.failure(e)
             }
         }

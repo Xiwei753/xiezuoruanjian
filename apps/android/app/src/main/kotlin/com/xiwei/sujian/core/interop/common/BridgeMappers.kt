@@ -7,6 +7,8 @@ import com.xiwei.sujian.feature.project.data.model.ProjectStats
 import com.xiwei.sujian.feature.project.data.model.ProjectSummary
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
 import com.xiwei.sujian.feature.project.data.model.Volume
+import com.xiwei.sujian.feature.project.data.model.VolumeWithChapters
+import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import com.xiwei.sujian.feature.settings.data.model.SyncableSettings
 import com.xiwei.sujian.feature.stats.data.model.ChapterWritingStatsItem
@@ -73,6 +75,8 @@ import uniffi.writer_core.SyncableSettingsDto
 import uniffi.writer_core.TargetSyncPlanDto
 import uniffi.writer_core.TargetSyncResultDto
 import uniffi.writer_core.VolumeDto
+import uniffi.writer_core.VolumeWithChaptersDto
+import uniffi.writer_core.ProjectWorkspaceSnapshotDto
 import uniffi.writer_core.WriterException
 import uniffi.writer_core.WritingStatsSummaryDto
 
@@ -165,6 +169,19 @@ internal fun ChapterMetaDto.toModel() =
         wordCount = wordCount.toInt(),
         hash = hash,
         note = note,
+    )
+
+internal fun VolumeWithChaptersDto.toModel() =
+    VolumeWithChapters(
+        volume = volume.toModel(),
+        chapters = chapters.map { it.toModel() },
+    )
+
+internal fun ProjectWorkspaceSnapshotDto.toModel() =
+    ProjectWorkspaceSnapshot(
+        project = project.toModel(),
+        stats = stats.toModel(),
+        volumes = volumes.map { it.toModel() },
     )
 
 internal fun ChapterContentDto.toModel() = ChapterOpenResult(meta.toModel(), content)
