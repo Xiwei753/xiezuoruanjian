@@ -2,7 +2,6 @@ package com.xiwei.sujian.feature.editor.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
@@ -17,6 +16,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
+import com.xiwei.sujian.feature.editor.layout.EditorViewportState
 import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
@@ -80,38 +80,31 @@ fun editorSurfaceMode(
  *
  * #641 评论 问题4b：[inputEnabled] 是 [EditorViewModel.inputFrozen] 之外的第二层门控 —
  * BasicTextField 的 readOnly = !inputEnabled，章节切换冻结期间禁止 IME 写入 TextFieldState。
+ *
+ * #644 评论 5462826712 第2节：viewportState 管滚动/视口，onSurfaceReady 完成 attach。
  */
 @Composable
 @Suppress("LongParameterList")
 fun WritingEditorSurface(
     bridge: EditorTextFieldStateBridge,
     visualState: ComposeEditorVisualState,
+    viewportState: EditorViewportState,
     textStyle: TextStyle,
     textColor: Color,
     cursorColor: Color,
     inputEnabled: Boolean,
-    /**
-     * #641 评论 问题6e：搜索高亮 UTF-16 ranges —
-     * 由 [WritingPaneEditorContent] 从 target decorations 的 UTF-8 ranges 转换而来。
-     * 当前先添加参数和 OutputTransformation 框架，实际高亮 ranges 暂传空列表。
-     */
+    onSurfaceReady: () -> Boolean,
     searchHighlights: List<TextRange> = emptyList(),
-    /** 搜索高亮背景色，默认用 [androidx.compose.material3.MaterialTheme] 的 secondaryContainer。 */
     searchHighlightColor: Color =
         androidx.compose.material3.MaterialTheme.colorScheme.secondaryContainer,
     modifier: Modifier = Modifier,
 ) {
-    val scrollState = rememberScrollState()
     val hiddenRanges by visualState.hiddenRanges.collectAsStateWithLifecycle()
     val drawsVisualCursor by visualState.drawsVisualCursor.collectAsStateWithLifecycle()
 
-    // #641 评论 问题6e：搜索高亮接回 OutputTransformation —
-    // 先画搜索高亮（背景色），再画动画隐藏 range（透明）。
-    // 搜索高亮 ranges 已是 UTF-16（由 WritingPaneEditorContent 转换）。
     val outputTransformation =
         remember(hiddenRanges, searchHighlights, searchHighlightColor) {
             OutputTransformation {
-                // 搜索高亮 — 背景色标记匹配区间。
                 searchHighlights.forEach { range ->
                     if (range.start < range.end && range.end <= length) {
                         addStyle(
@@ -121,7 +114,6 @@ fun WritingEditorSurface(
                         )
                     }
                 }
-                // 动画隐藏 range — 透明（overlay 只补画这些 range）。
                 hiddenRanges.forEach { range ->
                     if (range.start < range.end && range.end <= length) {
                         addStyle(
@@ -143,7 +135,7 @@ fun WritingEditorSurface(
                     .testTag(com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds.EditorContent),
             readOnly = !inputEnabled,
             lineLimits = TextFieldLineLimits.MultiLine(),
-            scrollState = scrollState,
+            scrollState = viewportState.scrollState,
             textStyle = textStyle.copy(color = textColor),
             outputTransformation = outputTransformation,
             cursorBrush =
@@ -154,18 +146,24 @@ fun WritingEditorSurface(
                 },
             onTextLayout = { getResult ->
                 getResult()?.let { result ->
+                    // #644 评论 5462826712 第2节：顺序固定为
+                    // 1. viewportState.onLayout(result) — 有 pending anchor 时只恢复一次
+                    // 2. visualState.onAuthoritativeLayout(...) — 动画只消费最终布局
+                    // 3. onSurfaceReady() — attach 成功才算输入 surface ready
+                    viewportState.onLayout(result)
                     visualState.onAuthoritativeLayout(
                         result = result,
                         selection = bridge.state.selection,
-                        scrollY = scrollState.value,
+                        scrollY = viewportState.scrollState.value,
                     )
+                    onSurfaceReady()
                 }
             },
         )
 
         ComposeTextAnimationOverlay(
             visualState = visualState,
-            scrollY = scrollState.value,
+            scrollY = viewportState.scrollState.value,
             textColor = textColor,
             cursorColor = cursorColor,
             modifier = Modifier.fillMaxSize(),

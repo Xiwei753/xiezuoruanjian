@@ -163,20 +163,26 @@ class EditorWindowHost(
 
     /**
      * #592 二：窗口销毁时完整释放，但保留 Rust 会话。
+     *
+     * #644 评论 5462826712 第5节：删除 ProjectionSnapshot(viewportAnchor = null) 写入。
+     * release 只负责 detach；真实 viewport 已由 Compose surface 在 dispose 时保存。
      */
     fun releaseWindow() {
         val activeId = activeTargetId
         if (activeId != null) {
-            sessionHost.saveProjectionSnapshot(
-                activeId,
-                ProjectionSnapshot(viewportAnchor = null),
-            )
             sessionHost.detachWindowBinding(windowId, activeId)
         }
     }
 
     /** Activity 永久结束 — 释放窗口和全部会话。 */
     fun releaseHost() = sessionHost.releaseHost()
+
+    /**
+     * #644 评论 5462826712 第1节：Compose Surface 附着 —
+     * 窗口层用自己的 windowId 完成 binding；UI 不知道 sessionId。
+     */
+    fun attachSurface(targetId: String): EditorInputLease? =
+        sessionHost.attachSurface(windowId, targetId)
 
     companion object {
         private const val TAG = "EditorWindowHost"

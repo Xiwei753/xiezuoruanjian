@@ -129,7 +129,6 @@ fun WritingPane(
             currentViewModel = currentViewModel,
             coordinator = coordinator,
             targetId = targetId,
-            content = uiState.content,
         )
 
     // #595 二：按 target 分区的最新文档事实流（带 replay）— 新 collector 立即
@@ -183,6 +182,9 @@ fun WritingPane(
 /**
  * #641：正文内容渲染 — 活动 target → [WritingEditorSurface]([BasicTextField])；
  * 非活动 → 只读预览。从 [WritingPane] 提取以控制函数长度。
+ *
+ * #644 评论 5462826712 第2/4/5/6节：viewportState 管滚动/视口，visualState 按 target 隔离，
+ * DisposableEffect 保存真实 anchor，onSurfaceReady 完成 attach。
  */
 @Composable
 @Suppress("LongParameterList")
@@ -198,19 +200,33 @@ private fun WritingPaneEditorContent(
     @Suppress("UNUSED_EXPRESSION")
     (coordinator.targetDecorationsVersionFlow.collectAsStateWithLifecycle().value)
     val surfaceMode = editorSurfaceMode(sessionState.bindingState, coordinator.windowId, targetId, isActivePane)
-    // #641 评论 问题4c：收集 ViewModel 的 inputEnabled — 章节切换冻结期间 readOnly=true，
-    // 防止 state-based BasicTextField 在 inputFrozen 仍为 true 的窗口内写入 TextFieldState。
     val inputEnabled by viewModel.inputEnabled.collectAsStateWithLifecycle()
     when (surfaceMode) {
         EditorSurfaceMode.EditorHost -> {
-            // #641 评论1 第2节：bridge 由 EditorViewModel 拥有，按 targetId 生命周期
-            // 稳定存活，不每次重组重新创建。初始 selection 来自 Core/session UTF-8 → UTF-16。
-            // visualState 在 UI 层创建 — presentation 层不得依赖 feature.editor.visual。
-            val visualState = remember { ComposeEditorVisualState() }
             val bridge = viewModel.bridgeForTarget(targetId, uiState.content)
 
+            // #644 评论 5462826712 第4节：viewportState 管滚动/视口
+            val projection = coordinator.sessionCoordinator.getProjectionSnapshot(targetId)
+            val viewportState = com.xiwei.sujian.feature.editor.layout.rememberEditorViewportState(
+                targetId = targetId,
+                initialAnchor = projection?.viewportAnchor,
+            )
+
+            // #644 评论 5462826712 第6节：visualState 按 target 隔离
+            val visualState = remember(targetId) { ComposeEditorVisualState() }
+
+            // #644 评论 5462826712 第5节：退出当前 target 时保存真实 anchor
+            DisposableEffect(targetId, viewportState) {
+                onDispose {
+                    val anchor = viewportState.snapshotAnchor()
+                    coordinator.sessionCoordinator.saveProjectionSnapshot(
+                        targetId,
+                        com.xiwei.sujian.feature.editor.session.ProjectionSnapshot(anchor),
+                    )
+                }
+            }
+
             // #641 评论1 第2节：观察 TextFieldState 快照，提交已完成的文本变化给 Core。
-            // IME composing 中间态不提交（bridge.onInputSnapshot 内部判断）。
             androidx.compose.runtime.LaunchedEffect(bridge) {
                 androidx.compose.runtime.snapshotFlow {
                     com.xiwei.sujian.feature.editor.input.EditorInputSnapshot(
@@ -222,7 +238,6 @@ private fun WritingPaneEditorContent(
             }
 
             // #641：undo/redo 后 session 正文变化时把权威正文写回 bridge（UTF-8→UTF-16）。
-            // composition 期间不覆盖（bridge.applyAuthoritativeText 会重置 IME buffer）。
             val lastCommittedText by coordinator.lastCommittedTextFlow.collectAsStateWithLifecycle()
             androidx.compose.runtime.LaunchedEffect(targetId, lastCommittedText) {
                 val committed = lastCommittedText
@@ -242,11 +257,6 @@ private fun WritingPaneEditorContent(
                 }
             }
 
-            // #641 评论 问题7d：undo/redo 走独立的 authoritativeEditorSnapshots 流 —
-            // performUndo/performRedo 在 applyUndoRestored 后查询 Core snapshot 并发布，
-            // 此处按 targetId 过滤收集，把权威正文写回 bridge（UTF-8→UTF-16）。
-            // composition 期间不覆盖（沿用既有 pending/conflict 规则，不重置 IME buffer）。
-            // lastCommittedTextFlow 仍保留用于 commit/save 路径。
             CollectAuthoritativeEditorSnapshots(
                 coordinator = coordinator,
                 viewModel = viewModel,
@@ -254,8 +264,6 @@ private fun WritingPaneEditorContent(
                 bridge = bridge,
             )
 
-            // #641：收集 Core 视觉意图事件，映射为 EditorVisualIntent 喂给 ComposeEditorVisualState。
-            // 按 target 过滤，避免其他 target 的视觉意图污染当前 overlay。
             CollectVisualIntentEvents(
                 viewModel = viewModel,
                 targetId = targetId,
@@ -263,9 +271,6 @@ private fun WritingPaneEditorContent(
                 coordinator = coordinator,
             )
 
-            // #641 评论 5457777142 问题7：搜索高亮接回生产链 —
-            // 从 TargetDecorations.searchHighlightsUtf8 读取，用当前权威正文转成 UTF-16，
-            // 传给 WritingEditorSurface。不再永远默认空列表。
             val decorations = coordinator.getTargetDecorations(targetId)
             val authoritativeText = bridge.mirroredText
             val searchHighlightsUtf16 =
@@ -276,15 +281,20 @@ private fun WritingPaneEditorContent(
                     com.xiwei.sujian.feature.editor.projection.TextRange(r.start, r.end)
                 } ?: emptyList()
 
+            // #644 评论 5462826712 第2节：onSurfaceReady 回调 — attach 成功才算输入 surface ready
             WritingEditorSurface(
                 bridge = bridge,
                 visualState = visualState,
+                viewportState = viewportState,
                 textStyle = rememberEditorTextStyle(uiState.settings),
-                // #641 评论 问题6c：textColor/cursorColor 用主题 role，不再硬编码 Color.Black —
-                // 深色模式和动态色都会错。onSurface 是正文文字色，primary 是光标色。
                 textColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
                 cursorColor = androidx.compose.material3.MaterialTheme.colorScheme.primary,
                 inputEnabled = inputEnabled,
+                onSurfaceReady = {
+                    val lease = coordinator.attachSurface(targetId) ?: return@WritingEditorSurface false
+                    viewModel.confirmEditorAttached(targetId, lease)
+                    true
+                },
                 searchHighlights = searchHighlightsUtf16,
                 modifier = modifier,
             )
@@ -341,31 +351,29 @@ private fun rememberEditorTextStyle(settings: EditorSettingsState): androidx.com
     )
 }
 
-/** target 创建与输入回调绑定（输入回调经 rememberUpdatedState 始终指向最新 VM）。 */
+/**
+ * target 创建与输入回调绑定（输入回调经 rememberUpdatedState 始终指向最新 VM）。
+ *
+ * #644 评论 5462826712 第8节：去掉 content 参数。target 注册只做：
+ * 身份/profile/persistent/onEditorApplied/commit/cancel，不再 updateText(content)。
+ */
 @Composable
 private fun rememberWritingPaneTarget(
     currentViewModel: EditorViewModel,
     coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
     targetId: String,
-    content: String,
 ): EditableTextTarget {
     val target =
         remember(targetId) {
             EditableTextTarget(targetId = targetId)
         }
-    // #624 评论9：热路径不再传整章 String — onTextChanged/onCommit 已删除，
-    // 改用 onEditorApplied 接轻量 EditorAppliedEvent（保存调度/统计/字数增量）。
     target.onEditorApplied = { event ->
         currentViewModel.onEditorApplied(event)
     }
-    // commit/cancel 仍由 EditorWindowHost 的 onCommitRequested/onCancelRequested
-    // 触发 commitActiveEdit/cancelActiveEdit；target.onCommit/onCancel 不再走
-    // 整章 String 热路径。
     target.onCommit = { }
     target.onCancel = {}
     target.updateProfile(TextEditorProfile.DocumentBody)
     target.updatePersistent(true)
-    target.updateText(content)
 
     DisposableEffect(targetId) {
         coordinator.registerTarget(target)
@@ -398,19 +406,15 @@ private fun WritingPaneEditorAttachSync(
 }
 
 /**
- * #624 评论17 问题2：编辑器附着决策 — 纯函数，覆盖所有 WindowBindingState 分支。
+ * #644 评论 5462826712 第3节：编辑器附着决策 — 纯函数，只保留 BeginEdit 和 Hold。
  *
- * - [EditorAttachAction.Confirm]：Attached 且 window/target 匹配 → confirmEditorAttached；
- * - [EditorAttachAction.Wait]：Attaching 且 window/target 匹配 → 等待 AndroidView factory；
- * - [EditorAttachAction.BeginEdit]：Idle/Detached 或 Attaching/Attached 属于旧窗口
- *   → beginEdit，让 session 层 restamp 到当前窗口；
- * - [EditorAttachAction.Hold]：Committing/Cancelling/Detaching → 不发起新绑定。
+ * - [EditorAttachAction.BeginEdit]：Idle/Detached/Attaching 或 Attached 属于别的 window/target；
+ * - [EditorAttachAction.Hold]：当前 window + target 已经 Attaching/Attached，或 Committing/Cancelling/Detaching。
+ *
+ * 删除 Confirm 和"等待 AndroidView factory"的 Wait 语义。
+ * Attached 后解除冻结已经由 surface-ready 回调和 lease 完成。
  */
 sealed interface EditorAttachAction {
-    data object Confirm : EditorAttachAction
-
-    data object Wait : EditorAttachAction
-
     data object BeginEdit : EditorAttachAction
 
     data object Hold : EditorAttachAction
@@ -424,13 +428,13 @@ fun editorAttachDecision(
     when (bindingState) {
         is WindowBindingState.Attached ->
             if (bindingState.windowId == windowId && bindingState.targetId == targetId) {
-                EditorAttachAction.Confirm
+                EditorAttachAction.Hold
             } else {
                 EditorAttachAction.BeginEdit
             }
         is WindowBindingState.Attaching ->
             if (bindingState.windowId == windowId && bindingState.targetId == targetId) {
-                EditorAttachAction.Wait
+                EditorAttachAction.Hold
             } else {
                 EditorAttachAction.BeginEdit
             }
@@ -481,16 +485,11 @@ internal fun editorTypographyFromSettings(
     )
 
 /**
- * #595 一 / #624 评论17 问题2：编辑器附着 — 用 [editorAttachDecision] 纯函数决策，
- * 覆盖所有 WindowBindingState 分支。
+ * #644 评论 5462826712 第3节：编辑器附着 — 用 [editorAttachDecision] 纯函数决策。
  *
- * #624 评论17 问题2：删除 "prepared" 假窗口后，绑定状态机为
- * Detached → Attaching(realWindowId) → Attached(realWindowId)。
- * - Attached 且 windowId/targetId 都匹配 → Confirm（confirmEditorAttached）；
- * - Attaching 且 windowId/targetId 都匹配 → Wait（等待 attachView 推进到 Attached）；
- * - Attaching/Attached 属于旧 window → BeginEdit（restamp 到新窗口）；
- * - Idle/Detached → BeginEdit；
- * - Committing/Cancelling/Detaching → Hold（等待当前事务结束）。
+ * 只保留 BeginEdit 和 Hold 两类动作。
+ * Attached 后解除冻结已经由 surface-ready 回调和 lease 完成，
+ * 不要再由另一个 LaunchedEffect 第二次 confirm。
  */
 @Composable
 private fun WritingPaneEditorAttach(
@@ -510,21 +509,13 @@ private fun WritingPaneEditorAttach(
         }
         val binding = inputs.sessionState.bindingState
         when (editorAttachDecision(binding, coordinator.windowId, targetId)) {
-            EditorAttachAction.Confirm -> {
-                currentViewModel.confirmEditorAttached(targetId)
-            }
-            EditorAttachAction.Wait -> {
-                // 等待 session 绑定推进到 Attached，不解除冻结。
-            }
             EditorAttachAction.BeginEdit -> {
                 if (shouldBeginEditForEditorAttach(inputs.uiState.loading, inputs.uiState.settingsReady)) {
-                    // #641：正文由 BasicTextField(TextFieldState) 接管，不再 updateTargetText；
-                    // beginEdit 只预准备 Rust session，排版由 Compose 层直接应用。
                     coordinator.beginEdit(targetId)
                 }
             }
             EditorAttachAction.Hold -> {
-                // Committing/Cancelling/Detaching — 不发起新绑定。
+                // 当前 window + target 已经 Attaching/Attached，或 Committing/Cancelling/Detaching。
             }
         }
     }

@@ -15,7 +15,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * #595 三：Attached 必须表示真实 View 已绑定 — 状态机守卫契约测试。
+ * #644 评论 5462826712 第3节：编辑器 Surface 绑定状态守卫契约测试。
  *
  * 旧缺陷：beginEdit 在尚无 Android View 时保存 pendingViewBind 后立即调用
  * completeWindowAttach，WindowBindingState 提前进入 Attached，此时 View、
@@ -26,7 +26,7 @@ import org.robolectric.annotation.Config
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
-class AttachedRequiresViewBindTest {
+class EditorSurfaceBindingStateTest {
     private fun createCoordinator(): EditorSessionCoordinator {
         // 测试环境无 native：session 创建返回 NotLoaded → prepareSessionForEdit 返回 null，
         // 状态必须回到 Idle（绝不进入没有 View 的 Attached）。
