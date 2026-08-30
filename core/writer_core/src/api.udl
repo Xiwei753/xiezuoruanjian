@@ -69,6 +69,19 @@ dictionary ChapterMetaDto {
     string? note;
 };
 
+// #644 评论 5467821839 第7节：卷及其章节 — 一次跨 FFI 返回的卷 + 章节列表。
+dictionary VolumeWithChaptersDto {
+    VolumeDto volume;
+    sequence<ChapterMetaDto> chapters;
+};
+
+// #644 评论 5467821839 第7节：作品工作区快照 — 一次跨 FFI 返回全部卷 + 章节 + 统计。
+dictionary ProjectWorkspaceSnapshotDto {
+    ProjectDto project;
+    ProjectStatsDto stats;
+    sequence<VolumeWithChaptersDto> volumes;
+};
+
 dictionary ChapterContentDto {
     ChapterMetaDto meta;
     string content;
@@ -1055,6 +1068,10 @@ interface WriterAppService {
 
     [Throws=WriterError]
     ProjectStatsDto get_project_stats(string project_id);
+
+    // #644 评论 5467821839 第7节：一次返回作品的全部卷 + 章节 + 统计快照。
+    [Throws=WriterError]
+    ProjectWorkspaceSnapshotDto get_project_workspace_snapshot(string project_id);
 
     [Throws=WriterError]
     boolean rename_project(string project_id, string new_title);

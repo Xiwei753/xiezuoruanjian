@@ -4,6 +4,7 @@ package com.xiwei.sujian.feature.editor.session
 
 import com.xiwei.sujian.feature.editor.ui.EditorSurfaceMode
 import com.xiwei.sujian.feature.editor.ui.editorSurfaceMode
+import com.xiwei.sujian.feature.editor.window.EditingState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull

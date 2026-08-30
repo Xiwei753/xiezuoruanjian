@@ -140,6 +140,7 @@ class EditorViewModelInjectionTest {
     fun confirmEditorAttached_onlyUnfreezesCurrentChapter() {
         val app = RuntimeEnvironment.getApplication()
         val bridge = createBridge()
+        val coordinator = EditorSessionCoordinator(bridge)
         val vm = EditorViewModel(app)
         vm.initialize(
             ProjectRepository(app, bridge),
@@ -148,13 +149,15 @@ class EditorViewModelInjectionTest {
             chapterRepo = ChapterRepository(app, bridge),
             recentEditsRepo = RecentEditsRepository(app, bridge),
             statsRepo = WritingStatsRepository(bridge.statsBridge, statsWriterScope()),
+            sessionCoordinator = coordinator,
         )
         vm.enterChapterForTest("p", "v", "a", "A")
 
         // 未提交章节的 target 调用 confirmEditorAttached → no-op（不解除冻结）。
-        vm.confirmEditorAttached("chapter-body:p:v:other")
+        val lease = coordinator.currentInputLease()!!
+        vm.confirmEditorAttached("chapter-body:p:v:other", lease)
         // 当前章节 target → 解除（此时无冻结，幂等）。
-        vm.confirmEditorAttached("chapter-body:p:v:a")
+        vm.confirmEditorAttached("chapter-body:p:v:a", lease)
         // #624 评论9：热路径走 onEditorApplied（不传整章 String）。
         vm.onEditorApplied(
             EditorAppliedEvent(

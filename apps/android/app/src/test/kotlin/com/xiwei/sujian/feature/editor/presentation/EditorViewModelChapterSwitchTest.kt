@@ -254,7 +254,7 @@ class EditorViewModelChapterSwitchTest {
             assertEquals("LoadFailed 必须携带请求章节 key", ChapterKey("p", "v", "b"), failed.requested)
             assertFalse("加载失败后 loading 必须恢复 false", vm.uiState.value.loading)
             assertEquals(
-                "#595 一：加载失败必须回退标题到旧章节 — 不能让 UI 停留在“新标题 + 旧正文”分裂态",
+                "#595 一：加载失败必须回退标题到旧章节 — 不能让 UI 停留在「新标题 + 旧正文」分裂态",
                 "A",
                 vm.uiState.value.chapterTitle,
             )
@@ -300,10 +300,11 @@ class EditorViewModelChapterSwitchTest {
             vm.enterChapterForTest("p", "v", "a", "A")
             // 等 initChapter 的加载落定，保证事务起点是稳定状态。
             awaitLoadingSettled(vm)
-            // 旧章节有非空正文 → 切换事务的“保存旧章节”阶段会调用保存端口。
+            // 旧章节有非空正文 → 切换事务的"保存旧章节"阶段会调用保存端口。
             // initChapter 事务后 inputFrozen 保持 true（等待编辑器附着），
             // 测试环境无编辑器 — 显式确认附着以解除冻结，模拟真实附着。
-            vm.confirmEditorAttached(vm.chapterTargetId("p", "v", "a"))
+            val lease = fakeCoordinator.currentInputLease()!!
+            vm.confirmEditorAttached(vm.chapterTargetId("p", "v", "a"), lease)
             vm._uiState.value = vm._uiState.value.copy(content = "正文A")
             commitActiveSession(vm, "p", "v", "a", "正文A")
             markLocalDirty(vm, "p", "v", "a")

@@ -184,11 +184,13 @@ internal fun WritingPaneEditorAttachSync(
 }
 
 /**
- * #644 评论 5462826712 第3节：编辑器附着决策 — 纯函数，只保留 BeginEdit 和 Hold。
+ * #644 评论 5462826712 第3节：编辑器附着决策 — 纯函数。
  */
 sealed interface EditorAttachAction {
     data object BeginEdit : EditorAttachAction
     data object Hold : EditorAttachAction
+    data object Confirm : EditorAttachAction
+    data object Wait : EditorAttachAction
 }
 
 fun editorAttachDecision(
@@ -199,13 +201,13 @@ fun editorAttachDecision(
     when (bindingState) {
         is WindowBindingState.Attached ->
             if (bindingState.windowId == windowId && bindingState.targetId == targetId) {
-                EditorAttachAction.Hold
+                EditorAttachAction.Confirm
             } else {
                 EditorAttachAction.BeginEdit
             }
         is WindowBindingState.Attaching ->
             if (bindingState.windowId == windowId && bindingState.targetId == targetId) {
-                EditorAttachAction.Hold
+                EditorAttachAction.Wait
             } else {
                 EditorAttachAction.BeginEdit
             }
@@ -241,6 +243,14 @@ private fun WritingPaneEditorAttach(
                 if (shouldBeginEditForEditorAttach(inputs.uiState.loading, inputs.uiState.settingsReady)) {
                     coordinator.beginEdit(targetId)
                 }
+            }
+            EditorAttachAction.Confirm -> {
+                val lease = coordinator.attachSurface(targetId)
+                if (lease != null) {
+                    currentViewModel.confirmEditorAttached(targetId, lease)
+                }
+            }
+            EditorAttachAction.Wait -> {
             }
             EditorAttachAction.Hold -> {
             }
