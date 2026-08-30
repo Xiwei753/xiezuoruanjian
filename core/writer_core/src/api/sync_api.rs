@@ -12,7 +12,7 @@ impl WriterCoreApi {
     /// 详见 `crate::sync::legacy_migration`。失败时返回 `WriterError`；
     /// 冲突时返回 `NeedsReconfigure`（非 Err），由 UI 引导用户重选全局仓库。
     pub fn migrate_legacy_sync_profile(&self) -> ApiResult<LegacyMigrationOutcomeDto> {
-        self.core()
+        self.core_write()
             .migrate_legacy_sync_profile()
             .map(Into::into)
             .map_err(Into::into)
@@ -27,7 +27,7 @@ impl WriterCoreApi {
         &self,
         metadata: Vec<LegacyProfileMetadataDto>,
     ) -> ApiResult<LegacyMigrationOutcomeDto> {
-        self.core()
+        self.core_write()
             .migrate_legacy_sync_profile_with_metadata(
                 &metadata.into_iter().map(Into::into).collect::<Vec<_>>(),
             )
@@ -37,7 +37,7 @@ impl WriterCoreApi {
 
     /// 加载全局同步配置。
     pub fn load_sync_config(&self) -> ApiResult<SyncConfigDto> {
-        self.core()
+        self.core_read()
             .load_sync_config()
             .map(Into::into)
             .map_err(Into::into)
@@ -45,15 +45,20 @@ impl WriterCoreApi {
 
     /// 保存全局同步配置。成功返回 true。
     pub fn save_sync_config(&self, config: SyncConfigDto) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .save_sync_config(&config.into())
             .map(|_| true)
             .map_err(Into::into)
     }
 
     /// 加载全局同步密钥（token 等）。
+    /// #644 评论 5462823517 第1节：先查 API 层 override snapshot，
+    /// 没有再短暂 core_read 从 secure storage/file 读取。
     pub fn load_sync_secrets(&self) -> ApiResult<SyncSecretsDto> {
-        self.core()
+        if let Some(secrets) = self.secrets_override_snapshot() {
+            return Ok(secrets.into());
+        }
+        self.core_read()
             .load_sync_secrets()
             .map(Into::into)
             .map_err(Into::into)
@@ -61,21 +66,22 @@ impl WriterCoreApi {
 
     /// 保存全局同步密钥。成功返回 true。
     pub fn save_sync_secrets(&self, secrets: SyncSecretsDto) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .save_sync_secrets(&secrets.into())
             .map(|_| true)
             .map_err(Into::into)
     }
 
-    /// #592 五：设置进程级 secrets override。
+    /// #592 五 / #644 评论 5462823517 第1节：设置进程级 secrets override。
+    /// 直接写 API 层 Mutex，不再透传到 facade::WriterCore。
     pub fn set_sync_secrets_override(&self, secrets: SyncSecretsDto) -> ApiResult<()> {
-        self.core().set_secrets_override(Some(secrets.into()));
+        self.set_secrets_override(Some(secrets.into()));
         Ok(())
     }
 
-    /// #595 十：清除进程级 secrets override。
+    /// #595 十 / #644 评论 5462823517 第1节：清除进程级 secrets override。
     pub fn clear_sync_secrets_override(&self) -> ApiResult<()> {
-        self.core().set_secrets_override(None);
+        self.set_secrets_override(None);
         Ok(())
     }
 
@@ -85,7 +91,7 @@ impl WriterCoreApi {
         generation: u64,
         secrets: SyncSecretsDto,
     ) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .save_sync_secrets_for_generation(generation, &secrets.into())
             .map(|_| true)
             .map_err(Into::into)
@@ -96,7 +102,7 @@ impl WriterCoreApi {
         &self,
         generation: u64,
     ) -> ApiResult<Option<SyncSecretsDto>> {
-        self.core()
+        self.core_read()
             .load_sync_secrets_for_generation(generation)
             .map(|opt| opt.map(Into::into))
             .map_err(Into::into)
@@ -104,14 +110,14 @@ impl WriterCoreApi {
 
     /// #595 五：删除指定 generation 的安全存储凭据。
     pub fn delete_sync_secrets_for_generation(&self, generation: u64) -> ApiResult<()> {
-        self.core()
+        self.core_write()
             .delete_sync_secrets_for_generation(generation)
             .map_err(Into::into)
     }
 
     /// Project target 同步状态。
     pub fn load_sync_state(&self, project_id: &str) -> ApiResult<SyncStateDto> {
-        self.core()
+        self.core_read()
             .load_sync_state(project_id)
             .map(Into::into)
             .map_err(Into::into)
@@ -119,7 +125,7 @@ impl WriterCoreApi {
 
     /// App target 同步状态。
     pub fn load_app_sync_state(&self) -> ApiResult<SyncStateDto> {
-        self.core()
+        self.core_read()
             .load_app_sync_state()
             .map(Into::into)
             .map_err(Into::into)
@@ -127,7 +133,7 @@ impl WriterCoreApi {
 
     /// 保存 App target 同步状态。
     pub fn save_app_sync_state(&self, state: SyncStateDto) -> ApiResult<()> {
-        self.core()
+        self.core_write()
             .save_app_sync_state(&state.into())
             .map_err(Into::into)
     }
@@ -137,7 +143,7 @@ impl WriterCoreApi {
     /// 读取 `<app_data_root>/app-meta/sync/full_state.local.json`。
     /// 文件不存在或 JSON 损坏时返回 None，不报错。
     pub fn load_full_sync_state(&self) -> ApiResult<Option<FullSyncStateDto>> {
-        self.core()
+        self.core_read()
             .load_full_sync_state()
             .map(|opt| opt.map(Into::into))
             .map_err(Into::into)
@@ -149,7 +155,7 @@ impl WriterCoreApi {
     /// `RecoverableError("previous_full_sync_interrupted")`；其它终态不动。
     /// 只能在新 Core/WriterAppService 实例启动时执行一次。
     pub fn recover_interrupted_full_sync_state(&self) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .recover_interrupted_full_sync_state()
             .map_err(Into::into)
     }
@@ -171,7 +177,7 @@ impl WriterCoreApi {
         failed_target: String,
     ) -> ApiResult<()> {
         let parsed = super::types::sync_status_from_wire(&status);
-        self.core()
+        self.core_write()
             .record_full_sync_preflight_failure(parsed, &failed_target)
             .map_err(Into::into)
     }
@@ -181,7 +187,7 @@ impl WriterCoreApi {
         &self,
         config: SyncConfigDto,
     ) -> ApiResult<FullSyncDiagnosticsResultDto> {
-        self.core()
+        self.core_write()
             .perform_full_sync_diagnostics(&config.into())
             .map(Into::into)
             .map_err(Into::into)
@@ -192,27 +198,47 @@ impl WriterCoreApi {
         &self,
         config: SyncConfigDto,
     ) -> ApiResult<FullSyncDryRunResultDto> {
-        self.core()
+        self.core_write()
             .perform_full_sync_dry_run(&config.into())
             .map(Into::into)
             .map_err(Into::into)
     }
 
-    /// 全量同步 — 先 App target，再所有 Project target，共享同一份 config / secrets。
+    /// 全量同步 — 三段式：Prepare（短写锁）→ Transfer（不持锁）→ Commit（短写锁）。
+    ///
+    /// #644 评论 5467821839 第7节：网络阶段完全不持 Core 锁，
+    /// 避免全量同步期间阻塞所有读操作。
     pub fn perform_full_sync(
         &self,
         config: SyncConfigDto,
         force_sync: bool,
     ) -> ApiResult<FullSyncResultDto> {
-        self.core()
-            .perform_full_sync(&config.into(), force_sync)
-            .map(Into::into)
-            .map_err(Into::into)
+        let sync_config: crate::sync::SyncConfig = config.into();
+
+        // Phase 1: Prepare（短写锁）— 写 Syncing、加载 secrets、枚举 targets、创建 backend。
+        let (plan, backend) = {
+            let core = self.core_write();
+            let plan = core.prepare_full_sync(&sync_config, force_sync)?;
+            let backend = core.create_sync_backend_for_plan(&sync_config)?;
+            (plan, backend)
+        };
+        // 写锁已释放。
+
+        // Phase 2: Transfer（不持锁）— 网络 + 本地文件读写。
+        let transfer_result = crate::sync::full_sync::run_transfer(backend.as_ref(), &plan);
+
+        // Phase 3: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引。
+        let result = {
+            let core = self.core_write();
+            core.commit_full_sync(transfer_result)
+        };
+
+        Ok(result.into())
     }
 
     /// 冲突解决：保留本地版本。
     pub fn resolve_conflict_keep_local(&self, project_id: &str, path: &str) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .resolve_conflict_keep_local(project_id, path)
             .map(|_| true)
             .map_err(Into::into)
@@ -220,7 +246,7 @@ impl WriterCoreApi {
 
     /// 冲突解决：采用远端版本。
     pub fn resolve_conflict_take_remote(&self, project_id: &str, path: &str) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .resolve_conflict_take_remote(project_id, path)
             .map(|_| true)
             .map_err(Into::into)
@@ -228,7 +254,7 @@ impl WriterCoreApi {
 
     /// 冲突解决：标记为已合并。
     pub fn resolve_conflict_mark_merged(&self, project_id: &str, path: &str) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .resolve_conflict_mark_merged(project_id, path)
             .map(|_| true)
             .map_err(Into::into)

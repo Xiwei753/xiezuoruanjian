@@ -9,6 +9,12 @@ import com.xiwei.sujian.feature.editor.session.EditorContentDelta
 import com.xiwei.sujian.feature.editor.session.EditorEditSource
 import com.xiwei.sujian.feature.editor.session.EditorOperationKind
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
+import com.xiwei.sujian.feature.editor.session.PreparedSessionHandle
+import com.xiwei.sujian.feature.editor.session.PreparedSessionMode
+import com.xiwei.sujian.feature.editor.session.TargetSnapshot
+import com.xiwei.sujian.feature.editor.session.TextEditorProfile
+import com.xiwei.sujian.feature.editor.session.activateAttachedForTest
+import com.xiwei.sujian.feature.editor.session.commitPreparedSession
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
@@ -152,6 +158,23 @@ class EditorViewModelInjectionTest {
             sessionCoordinator = coordinator,
         )
         vm.enterChapterForTest("p", "v", "a", "A")
+
+        // 先建立 coordinator session（设置 activeTargetId），让 currentInputLease() 可用。
+        // enterChapterForTest 只设置 ViewModel currentSession，不设置 coordinator 的
+        // activeTargetId — 需 registerTargetMeta + commitPreparedSession + activateAttachedForTest
+        // 完整建立 session（与 EditorViewModelChapterSwitchTest.commitActiveSession 同构）。
+        val targetId = vm.chapterTargetId("p", "v", "a")
+        coordinator.registerTargetMeta(targetId, TextEditorProfile.DocumentBody, persistent = true)
+        coordinator.commitPreparedSession(
+            PreparedSessionHandle(
+                targetId = targetId,
+                sessionId = 1UL,
+                snapshot = TargetSnapshot("", 0, 0L, 0, 0),
+                mode = PreparedSessionMode.Created,
+                previousRecord = null,
+            ),
+        )
+        coordinator.activateAttachedForTest(targetId)
 
         // 未提交章节的 target 调用 confirmEditorAttached → no-op（不解除冻结）。
         val lease = coordinator.currentInputLease()!!

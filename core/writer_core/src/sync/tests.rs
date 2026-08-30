@@ -3631,16 +3631,17 @@ mod tests {
 
     #[test]
     fn test_tree_404_must_not_be_silently_treated_as_empty() {
-        // Verify that the lww.rs source code does NOT silently treat tree 404 as empty remote.
+        // Verify that the lww source code does NOT silently treat tree 404 as empty remote.
         // After the fix, tree 404 should trigger a ref check before deciding.
-        let source = include_str!("lww.rs");
+        // #644 评论 5462823517 第3节：lww.rs 已拆成 lww/ 目录，编排逻辑在 lww/mod.rs。
+        let source = include_str!("lww/mod.rs");
         // The old code had: `else if tree_status.as_u16() != 404 { return Err(...) }`
         // which silently let 404 fall through to empty remote_tree_files.
         // The new code should have a `tree_status.as_u16() == 404` branch that
         // calls /git/ref/heads/{branch} to diagnose.
         assert!(
             source.contains("tree_status == 404") || source.contains("tree_status.as_u16() == 404"),
-            "lww.rs must have an explicit tree 404 branch that diagnoses the cause"
+            "lww/mod.rs must have an explicit tree 404 branch that diagnoses the cause"
         );
         assert!(
             source.contains("ref_url") && source.contains("git/ref/heads/"),

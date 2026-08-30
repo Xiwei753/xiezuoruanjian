@@ -15,8 +15,14 @@ pub struct WriterCoreApi {
     pub(crate) projects_root: PathBuf,
     pub(crate) sync_transport: Option<writer_platform_api::SyncTransportFactory>,
     pub(crate) secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
+    /// #644 评论 5462823517 第1节：API 层唯一的进程级 secrets override。
+    /// facade::WriterCore 不再持有自己的 secrets_override，避免两份状态漂移。
     secrets_override: std::sync::Mutex<Option<crate::sync::SyncSecrets>>,
-    core_instance: std::sync::Mutex<WriterCore>,
+    /// #644 评论 5462823517 第1节：Mutex → RwLock。
+    /// 纯读取（项目/卷/章/统计/设置读取）用 [Self::core_read]；
+    /// 会修改本地文件或 Core 运行状态的操作用 [Self::core_write]。
+    /// 全量同步三段式（Prepare/Transfer/Commit）在 Transfer 阶段完全不持锁。
+    core_instance: std::sync::RwLock<WriterCore>,
 }
 
 impl WriterCoreApi {
@@ -28,7 +34,7 @@ impl WriterCoreApi {
             sync_transport: None,
             secure_storage: None,
             secrets_override: std::sync::Mutex::new(None),
-            core_instance: std::sync::Mutex::new(core),
+            core_instance: std::sync::RwLock::new(core),
         }
     }
 
@@ -45,7 +51,7 @@ impl WriterCoreApi {
             sync_transport: Some(transport_factory),
             secure_storage: None,
             secrets_override: std::sync::Mutex::new(None),
-            core_instance: std::sync::Mutex::new(core),
+            core_instance: std::sync::RwLock::new(core),
         }
     }
 
@@ -67,27 +73,66 @@ impl WriterCoreApi {
             sync_transport: sync_transport_factory,
             secure_storage,
             secrets_override: std::sync::Mutex::new(None),
-            core_instance: std::sync::Mutex::new(core),
+            core_instance: std::sync::RwLock::new(core),
         }
     }
 
+    /// #644 评论 5462823517 第1节：API 层 secrets override 唯一入口。
+    /// 直接写 API 层 Mutex，不再透传到 facade::WriterCore.secrets_override。
     pub fn set_secrets_override(&self, secrets: Option<crate::sync::SyncSecrets>) {
         if let Ok(mut guard) = self.secrets_override.lock() {
             *guard = secrets;
         }
     }
 
-    pub(crate) fn core(&self) -> std::sync::MutexGuard<'_, WriterCore> {
-        self.core_instance.lock().unwrap_or_else(|e| e.into_inner())
+    /// #644 评论 5462823517 第1节：API 层 secrets override 快照。
+    /// 语义：API override 有值就 clone；没有就短暂 [Self::core_read] 从
+    /// secure storage/file 读取，然后立即释放 guard。网络阶段不持锁。
+    pub(crate) fn secrets_override_snapshot(&self) -> Option<crate::sync::SyncSecrets> {
+        if let Some(s) = self
+            .secrets_override
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+        {
+            return Some(s);
+        }
+        let core = self.core_read();
+        core.load_sync_secrets()
+            .ok()
+            .filter(|s| s.token.is_some())
+    }
+
+    /// #644 评论 5462823517 第1节：API 层是否已显式设置 override。
+    pub(crate) fn has_secrets_override(&self) -> bool {
+        self.secrets_override
+            .lock()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false)
+    }
+
+    /// #644 评论 5462823517 第1节：读锁 — 纯读取操作用这个。
+    /// 网络阶段（full_sync Transfer）不持任何 Core 锁。
+    pub(crate) fn core_read(&self) -> std::sync::RwLockReadGuard<'_, WriterCore> {
+        self.core_instance
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// #644 评论 5462823517 第1节：写锁 — 会修改本地文件或 Core 运行状态的操作用这个。
+    pub(crate) fn core_write(&self) -> std::sync::RwLockWriteGuard<'_, WriterCore> {
+        self.core_instance
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     pub(crate) fn enqueue_search_index_update(&self, update: crate::search::SearchIndexUpdate) {
-        let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
+        let core = self.core_write();
         core.enqueue_search_index_update(update);
     }
 
     pub(crate) fn remove_search_index_by_prefix(&self, prefix: &str) {
-        let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
+        let core = self.core_write();
         core.remove_search_index_by_prefix(prefix);
     }
 
@@ -98,7 +143,7 @@ impl WriterCoreApi {
         limit: usize,
         cursor: Option<&str>,
     ) -> Vec<crate::search::SearchResult> {
-        let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
+        let core = self.core_read();
         core.global_search(query, scope, limit, cursor)
     }
 
@@ -106,13 +151,13 @@ impl WriterCoreApi {
         &self,
         project_id: Option<&str>,
     ) -> crate::error::Result<crate::search::SearchIndexStatus> {
-        let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
+        let core = self.core_write();
         core.flush_all_starmap_stores()?;
         core.rebuild_search_index(project_id)
     }
 
     pub(crate) fn search_service_status(&self) -> crate::search::SearchIndexStatus {
-        let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
+        let core = self.core_read();
         core.get_search_index_status()
     }
 

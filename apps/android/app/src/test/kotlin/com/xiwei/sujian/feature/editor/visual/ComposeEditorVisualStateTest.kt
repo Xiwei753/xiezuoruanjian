@@ -487,17 +487,8 @@ class ComposeEditorVisualStateTest {
                 targetRange = TextRange(0, 2),
             )
 
-        // 用反射调 private materializeRebasedSlice
-        val state = ComposeEditorVisualState()
-        val method =
-            ComposeEditorVisualState::class.java.getDeclaredMethod(
-                "materializeRebasedSlice",
-                RebasedTextSlice::class.java,
-                ComposeLayoutSnapshot::class.java,
-                Float::class.javaPrimitiveType,
-            )
-        method.isAccessible = true
-        val result = method.invoke(state, slice, layout, 0.5f) as RebasedTextSlice
+        // #644 评论 5467821839 第5节：materializeRebasedSlice 已抽到 ComposeVisualRebase 纯函数。
+        val result = ComposeVisualRebase.materializeRebasedSlice(slice, layout, 0.5f) as RebasedTextSlice
 
         // sourceBounds = targetBounds（同一 layout 同一 range [0,2]）→ left=L, top=T
         // 新实现：currentX = lerp(L + 10, L, 0.5) = L + 5
@@ -538,17 +529,9 @@ class ComposeEditorVisualStateTest {
                 targetRange = null,
             )
 
-        val state = ComposeEditorVisualState()
-        val method =
-            ComposeEditorVisualState::class.java.getDeclaredMethod(
-                "materializeRebasedSlice",
-                RebasedTextSlice::class.java,
-                ComposeLayoutSnapshot::class.java,
-                Float::class.javaPrimitiveType,
-            )
-        method.isAccessible = true
+        // #644 评论 5467821839 第5节：materializeRebasedSlice 已抽到 ComposeVisualRebase 纯函数。
         // rebaseProgress=0：currentAlpha = lerp(0, 0, 0) = 0 <= 0 → return null
-        val result = method.invoke(state, slice, layout, 0f)
+        val result = ComposeVisualRebase.materializeRebasedSlice(slice, layout, 0f)
         assertNull(
             "sourceAlpha=0 的 fading slice 即使 rebaseProgress=0 也应被丢弃（返回 null）",
             result,

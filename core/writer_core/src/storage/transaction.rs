@@ -51,10 +51,14 @@ pub struct TransactionEntry {
 
 /// 多文件保存事务。
 ///
-/// 生命周期：`new` → `add_file`×N → `commit`。
+/// 生命周期：`new` → `add_file`/`add_bytes`×N → `commit`。
 /// `Drop` 只在 `committed == true` 时清理事务目录；未提交的事务留给 `recover_pending_transactions`。
+///
+/// #644 评论 5462823517 第4节：内部字段/参数名 `target_root`（原 `project_root`）—
+/// full sync Commit 用这一套 staging + manifest + rename 提交，target_root 可以是
+/// 任意根（project root / app-data root / staging root），不限于 project。
 pub struct SaveTransaction {
-    project_root: PathBuf,
+    target_root: PathBuf,
     transaction_id: String,
     tx_dir: PathBuf,
     entries: Vec<TransactionEntry>,
@@ -62,11 +66,11 @@ pub struct SaveTransaction {
 }
 
 impl SaveTransaction {
-    pub fn new(project_root: &Path) -> Self {
+    pub fn new(target_root: &Path) -> Self {
         let transaction_id = Uuid::new_v4().to_string();
-        let tx_dir = project_root.join(TRANSACTIONS_DIR).join(&transaction_id);
+        let tx_dir = target_root.join(TRANSACTIONS_DIR).join(&transaction_id);
         Self {
-            project_root: project_root.to_path_buf(),
+            target_root: target_root.to_path_buf(),
             transaction_id,
             tx_dir,
             entries: Vec::new(),
@@ -78,17 +82,24 @@ impl SaveTransaction {
         &self.transaction_id
     }
 
-    pub fn add_file(&mut self, target_relative: &str, content: &str) -> Result<()> {
+    /// #644 评论 5462823517 第4节：原子写入字节内容到事务暂存区。
+    /// `add_file(&str)` 转成 bytes 后委托本方法。full sync Commit 用本方法提交
+    /// staging 里已就绪的字节内容，不新建第二套 SyncTransaction。
+    pub fn add_bytes(&mut self, target_relative: &str, content: &[u8]) -> Result<()> {
         fs::create_dir_all(&self.tx_dir)?;
         let idx = self.entries.len();
         let staging_filename = format!("file_{}", idx);
         let staging_path = self.tx_dir.join(&staging_filename);
-        crate::storage::atomic_write_string(&staging_path, content)?;
+        crate::storage::atomic_write_bytes(&staging_path, content)?;
         self.entries.push(TransactionEntry {
             staging_filename,
             target_relative: target_relative.to_string(),
         });
         Ok(())
+    }
+
+    pub fn add_file(&mut self, target_relative: &str, content: &str) -> Result<()> {
+        self.add_bytes(target_relative, content.as_bytes())
     }
 
     #[allow(
@@ -120,7 +131,7 @@ impl SaveTransaction {
         let mut created_dirs = std::collections::HashSet::new();
         for entry in &self.entries {
             let staging_path = self.tx_dir.join(&entry.staging_filename);
-            let target_path = self.project_root.join(&entry.target_relative);
+            let target_path = self.target_root.join(&entry.target_relative);
             if let Some(parent) = target_path.parent() {
                 if !created_dirs.contains(parent) {
                     fs::create_dir_all(parent)?;
@@ -173,8 +184,8 @@ impl Drop for SaveTransaction {
     clippy::cast_lossless,
     deprecated
 )]
-pub fn recover_pending_transactions(project_root: &Path) -> Vec<TransactionRecovery> {
-    let tx_base = project_root.join(TRANSACTIONS_DIR);
+pub fn recover_pending_transactions(target_root: &Path) -> Vec<TransactionRecovery> {
+    let tx_base = target_root.join(TRANSACTIONS_DIR);
     if !tx_base.exists() {
         return Vec::new();
     }
@@ -228,7 +239,7 @@ pub fn recover_pending_transactions(project_root: &Path) -> Vec<TransactionRecov
         for tx_entry in &manifest.entries {
             let staging_path = tx_dir.join(&tx_entry.staging_filename);
             if staging_path.exists() {
-                let target_path = project_root.join(&tx_entry.target_relative);
+                let target_path = target_root.join(&tx_entry.target_relative);
                 if let Some(parent) = target_path.parent() {
                     if !created_dirs.contains(parent) && fs::create_dir_all(parent).is_ok() {
                         created_dirs.insert(parent.to_path_buf());

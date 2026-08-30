@@ -162,7 +162,7 @@ fn test_app_sync_state_independent_from_project_sync_state() {
     proj_state.last_sync_time = Some(1_111_111_111);
     proj_state.last_synced_commit = Some("proj-commit".to_string());
     // load_sync_state 返回 DTO，但 save 不在 API 层暴露——通过 core 直接保存。
-    api.core()
+    api.core_write()
         .save_sync_state(pid, &proj_state.clone().into())
         .unwrap();
 
@@ -196,7 +196,7 @@ fn test_record_full_sync_preflight_failure_wire_mapping() {
     let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
 
     // 上一次整体成功（旧绿灯）
-    api.core()
+    api.core_write()
         .save_full_sync_state(&FullSyncState {
             overall_status: SyncStatus::Success,
             last_attempt_time: Some(1000),

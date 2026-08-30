@@ -63,7 +63,9 @@ pub struct WriterCore {
     pub(crate) stats_api: OnceLock<StatsApi>,
     pub(crate) sync_transport: Option<writer_platform_api::SyncTransportFactory>,
     pub(crate) secure_storage: Option<Arc<dyn writer_platform_api::SecureStorage>>,
-    pub(crate) secrets_override: Option<crate::sync::SyncSecrets>,
+    /// #644 评论 5462823517 第1节：删除 facade 层 secrets_override —
+    /// 进程级 override 唯一存在于 `api::service::WriterCoreApi.secrets_override`，
+    /// 避免两份状态漂移。
     pub(crate) search_service: std::sync::Mutex<SearchIndexService>,
     pub(crate) starmap_stores: std::sync::Mutex<HashMap<String, StarMapStore>>,
 }
@@ -82,7 +84,6 @@ impl WriterCore {
             stats_api: OnceLock::new(),
             sync_transport: None,
             secure_storage: None,
-            secrets_override: None,
             search_service: std::sync::Mutex::new(SearchIndexService::new()),
             starmap_stores: std::sync::Mutex::new(HashMap::new()),
         }

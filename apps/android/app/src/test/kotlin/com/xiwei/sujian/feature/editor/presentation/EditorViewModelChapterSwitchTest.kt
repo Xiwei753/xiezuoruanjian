@@ -301,12 +301,15 @@ class EditorViewModelChapterSwitchTest {
             // 等 initChapter 的加载落定，保证事务起点是稳定状态。
             awaitLoadingSettled(vm)
             // 旧章节有非空正文 → 切换事务的"保存旧章节"阶段会调用保存端口。
+            vm._uiState.value = vm._uiState.value.copy(content = "正文A")
+            // 先建立 coordinator session（设置 activeTargetId），让 currentInputLease() 可用。
+            // commitActiveSession 已设置 EDITING 状态；confirmEditorAttached 在其后调用
+            // 解除 inputFrozen，顺序调整不影响测试语义。
+            commitActiveSession(vm, "p", "v", "a", "正文A")
             // initChapter 事务后 inputFrozen 保持 true（等待编辑器附着），
             // 测试环境无编辑器 — 显式确认附着以解除冻结，模拟真实附着。
             val lease = fakeCoordinator.currentInputLease()!!
             vm.confirmEditorAttached(vm.chapterTargetId("p", "v", "a"), lease)
-            vm._uiState.value = vm._uiState.value.copy(content = "正文A")
-            commitActiveSession(vm, "p", "v", "a", "正文A")
             markLocalDirty(vm, "p", "v", "a")
 
             // #597：可控保存端口 — 保存 A 时挂起，为取消制造确定性挂起点

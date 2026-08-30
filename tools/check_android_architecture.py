@@ -338,6 +338,9 @@ def rule_ui_no_editor_input() -> list[Finding]:
     _641_input_exemptions = {
         "feature/editor/ui/WritingEditorSurface.kt",
         "feature/editor/ui/WritingPaneRoute.kt",
+        # #644 评论 5467821839 第5节：从 WritingPaneRoute 拆出的 effect 收集，
+        # 同样需要 TextOffsetUtils 做 UTF-8↔UTF-16 转换，与 WritingPaneRoute 同类。
+        "feature/editor/ui/WritingPaneEffects.kt",
     }
     findings = [f for f in findings if f.path not in _641_input_exemptions]
     return findings
@@ -448,6 +451,11 @@ def rule_visual_motion_pure() -> list[Finding]:
             "feature/editor/visual/ComposeTextAnimationOverlay.kt",
             "feature/editor/visual/ComposeVisualTransaction.kt",
             "feature/editor/visual/ComposeVisualFrame.kt",
+            # #644 评论 5467821839 第5节：从 ComposeEditorVisualState 拆出的纯计算/
+            # 数据类，引用 androidx.compose.ui.geometry.Rect / TextLayoutResult 做显示，
+            # 与 ComposeVisualFrame 同类，不写正文持久状态。
+            "feature/editor/visual/ComposeVisualRebase.kt",
+            "feature/editor/visual/EditorVisualModels.kt",
         }
         findings = [f for f in findings if f.path not in _641_visual_exemptions]
         if sub == "/feature/editor/motion/":

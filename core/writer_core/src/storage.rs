@@ -24,6 +24,14 @@ use uuid::Uuid;
 /// 流程：创建临时文件 → 写入 → fsync 临时文件 → rename 替换目标文件 → fsync 父目录（Unix）。
 /// 这是 Core 层所有文件写入的唯一入口。
 pub fn atomic_write_string(path: &Path, content: &str) -> Result<()> {
+    atomic_write_bytes(path, content.as_bytes())
+}
+
+/// #644 评论 ?5462823517 第4节：原子写入字节到文件。
+///
+/// 与 [atomic_write_string] 同一流程，但接收任意字节（full sync staging 提交
+/// 二进制文件、非 UTF-8 内容时使用）。`add_file(&str)` 转成 bytes 后委托本函数。
+pub fn atomic_write_bytes(path: &Path, content: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -33,7 +41,7 @@ pub fn atomic_write_string(path: &Path, content: &str) -> Result<()> {
     let write_and_sync_tmp = || -> Result<()> {
         let file = File::create(&tmp_path)?;
         let mut writer = BufWriter::new(file);
-        writer.write_all(content.as_bytes())?;
+        writer.write_all(content)?;
         writer.flush()?;
         let file = writer.into_inner().map_err(|e| e.into_error())?;
         file.sync_all()?;

@@ -90,9 +90,9 @@ impl super::WriterCore {
         clippy::type_complexity
     )]
     pub fn load_sync_secrets(&self) -> crate::error::Result<crate::sync::SyncSecrets> {
-        if let Some(ref override_secrets) = self.secrets_override {
-            return Ok(override_secrets.clone());
-        }
+        // #644 评论 5462823517 第1节：facade 不再持有 secrets_override。
+        // 进程级 override 由 api::service::WriterCoreApi.secrets_override_snapshot() 统一提供，
+        // 同步编排层（full_sync）在 Prepare 阶段取 snapshot 后传入。
         const GLOBAL_KEY: &str = "sync_token_global";
         if let Some(ref storage) = self.secure_storage {
             if let Ok(Some(bytes)) = storage.get_secret(GLOBAL_KEY) {
@@ -116,15 +116,6 @@ impl super::WriterCore {
             return Ok(file_secrets);
         }
         self.load_sync_secrets_from_file()
-    }
-
-    /// #592 五：进程级 secrets override — 一次同步操作只使用同一份 snapshot 的凭据。
-    pub fn set_secrets_override(&mut self, secrets: Option<crate::sync::SyncSecrets>) {
-        self.secrets_override = secrets;
-    }
-
-    pub(crate) fn has_secrets_override(&self) -> bool {
-        self.secrets_override.is_some()
     }
 
     /// #592 五：按 generation 保存凭据到安全存储（key: sync_token_global_g{N}）。

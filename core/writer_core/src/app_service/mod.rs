@@ -441,8 +441,8 @@ mod tests {
         };
         svc.set_sync_secrets_override(secrets)
             .expect("set override");
-        assert!(svc.api.core().has_secrets_override());
+        assert!(svc.api.has_secrets_override());
         svc.clear_sync_secrets_override().expect("clear override");
-        assert!(!svc.api.core().has_secrets_override());
+        assert!(!svc.api.has_secrets_override());
     }
 }

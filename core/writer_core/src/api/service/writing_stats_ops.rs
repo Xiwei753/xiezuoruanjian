@@ -7,7 +7,7 @@ impl WriterCoreApi {
         end_date: &str,
     ) -> ApiResult<String> {
         let value = self
-            .core()
+            .core_write()
             .get_writing_stats_summary(start_date, end_date)
             .map_err(WriterError::from)?;
         Self::json_string(&value)
@@ -19,7 +19,7 @@ impl WriterCoreApi {
         end_date: &str,
     ) -> ApiResult<String> {
         let value = self
-            .core()
+            .core_write()
             .get_writing_stats_by_project(start_date, end_date)
             .map_err(WriterError::from)?;
         Self::json_string(&value)
@@ -31,7 +31,7 @@ impl WriterCoreApi {
         end_date: &str,
     ) -> ApiResult<String> {
         let value = self
-            .core()
+            .core_write()
             .get_writing_stats_by_chapter(start_date, end_date)
             .map_err(WriterError::from)?;
         Self::json_string(&value)
@@ -43,7 +43,7 @@ impl WriterCoreApi {
         end_date: &str,
     ) -> ApiResult<String> {
         let value = self
-            .core()
+            .core_write()
             .get_writing_stats_by_device(start_date, end_date)
             .map_err(WriterError::from)?;
         Self::json_string(&value)
@@ -56,14 +56,14 @@ impl WriterCoreApi {
         bucket_minutes: u32,
     ) -> ApiResult<String> {
         let value = self
-            .core()
+            .core_write()
             .get_writing_speed_curve(start_date, end_date, bucket_minutes)
             .map_err(WriterError::from)?;
         Self::json_string(&value)
     }
 
     pub fn calculate_word_count(&self, text: &str) -> u32 {
-        self.core().calculate_word_count(text)
+        self.core_write().calculate_word_count(text)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -79,7 +79,7 @@ impl WriterCoreApi {
         duration_seconds: u32,
         session_id: &str,
     ) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .process_writing_event(
                 device_id,
                 platform,
@@ -143,7 +143,7 @@ impl WriterCoreApi {
                 )
             };
 
-        self.core()
+        self.core_write()
             .record_writing_event(
                 device_id,
                 &platform,
@@ -203,7 +203,7 @@ impl WriterCoreApi {
                 .to_string()
         };
 
-        self.core()
+        self.core_write()
             .record_writing_event(
                 device_id,
                 platform,
@@ -224,7 +224,7 @@ impl WriterCoreApi {
     }
 
     pub fn flush_writing_stats(&self) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .flush_writing_stats()
             .map(|_| true)
             .map_err(WriterError::from)
@@ -236,7 +236,7 @@ impl WriterCoreApi {
         end_date: &str,
     ) -> ApiResult<crate::api::types::WritingStatsSummaryDto> {
         let value = self
-            .core()
+            .core_write()
             .get_writing_stats_summary(start_date, end_date)
             .map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
@@ -248,7 +248,7 @@ impl WriterCoreApi {
         end_date: &str,
     ) -> ApiResult<crate::api::types::ProjectStatsSummaryDto> {
         let value = self
-            .core()
+            .core_write()
             .get_writing_stats_by_project(start_date, end_date)
             .map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
@@ -260,7 +260,7 @@ impl WriterCoreApi {
         end_date: &str,
     ) -> ApiResult<crate::api::types::ChapterStatsSummaryDto> {
         let value = self
-            .core()
+            .core_write()
             .get_writing_stats_by_chapter(start_date, end_date)
             .map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
@@ -272,7 +272,7 @@ impl WriterCoreApi {
         end_date: &str,
     ) -> ApiResult<crate::api::types::DeviceStatsSummaryDto> {
         let value = self
-            .core()
+            .core_write()
             .get_writing_stats_by_device(start_date, end_date)
             .map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
@@ -285,7 +285,7 @@ impl WriterCoreApi {
         bucket_minutes: u32,
     ) -> ApiResult<crate::api::types::SpeedCurveSummaryDto> {
         let value = self
-            .core()
+            .core_write()
             .get_writing_speed_curve(start_date, end_date, bucket_minutes)
             .map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)

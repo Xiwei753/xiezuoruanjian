@@ -158,6 +158,124 @@ impl super::WriterCore {
         self.perform_full_sync_with_backend(backend.as_ref(), config, &secrets, force_sync)
     }
 
+    /// #644 评论 5467821839 第7节：三段式全量同步 — Prepare 阶段（短写锁内调用）。
+    ///
+    /// 写 `Syncing` 状态、加载 secrets 快照、枚举 targets、算出每个 target 的
+    /// `local_root`，产出 [`crate::sync::full_sync::FullSyncPlan`]（owned，不依赖 core）。
+    /// 调用方在 API 层持写锁调用本方法，拿到 plan 后释放锁，再调
+    /// [`crate::sync::full_sync::run_transfer`]。
+    ///
+    /// transport 初始化失败时返回 Err（已持久化失败状态）。
+    /// `list_projects` 失败时返回 Err（已持久化失败状态）。
+    pub fn prepare_full_sync(
+        &self,
+        config: &crate::sync::SyncConfig,
+        force_sync: bool,
+    ) -> crate::error::Result<crate::sync::full_sync::FullSyncPlan> {
+        use crate::sync::full_sync::{FullSyncPlan, PlannedTarget};
+
+        self.persist_full_sync_started();
+
+        let secrets = self.load_sync_secrets().unwrap_or_default();
+
+        let projects = match self.list_projects() {
+            Ok(projects) => projects,
+            Err(err) => {
+                let msg = err.to_string();
+                self.persist_full_sync_early_failure(
+                    crate::sync::SyncStatus::RecoverableError(msg),
+                    "global",
+                );
+                return Err(err);
+            }
+        };
+
+        let mut targets = Vec::new();
+        let app_target = crate::sync::types::SyncTarget::app();
+        targets.push(PlannedTarget {
+            target: app_target,
+            local_root: self.app_data_root.clone(),
+            target_kind: "app".to_string(),
+            project_id: None,
+        });
+
+        for project in &projects {
+            let target = crate::sync::types::SyncTarget::project(&project.id);
+            targets.push(PlannedTarget {
+                target,
+                local_root: self.project_root(&project.id),
+                target_kind: "project".to_string(),
+                project_id: Some(project.id.clone()),
+            });
+        }
+
+        Ok(FullSyncPlan {
+            secrets,
+            config: config.clone(),
+            force_sync,
+            targets,
+        })
+    }
+
+    /// #644 评论 5467821839 第7节：三段式全量同步 — 创建 backend（Prepare 阶段、写锁内）。
+    ///
+    /// transport 初始化失败时返回 Err（已持久化失败状态）。
+    pub fn create_sync_backend_for_plan(
+        &self,
+        config: &crate::sync::SyncConfig,
+    ) -> crate::error::Result<Box<dyn crate::sync::SyncBackend>> {
+        let backend_type = crate::sync::resolved_backend_type(config);
+        if let Some(transport) = self.sync_transport.as_ref() {
+            match transport() {
+                Ok(t) => Ok(crate::sync::create_sync_backend_with_transport(&backend_type, t)),
+                Err(e) => {
+                    let err = crate::sync::full_sync::transport_init_failure_error(
+                        &e.category,
+                        &e.message,
+                    );
+                    let status = crate::sync::full_sync::error_to_persist_status(&err);
+                    self.persist_full_sync_early_failure(status, "preflight");
+                    Err(err)
+                }
+            }
+        } else {
+            Ok(crate::sync::create_sync_backend(&backend_type))
+        }
+    }
+
+    /// #644 评论 5467821839 第7节：三段式全量同步 — Commit 阶段（短写锁内调用）。
+    ///
+    /// 聚合 [`crate::sync::full_sync::FullSyncTransferResult`] → `FullSyncResult`，
+    /// 原子写终态 `FullSyncState`，成功类重建搜索索引。
+    pub fn commit_full_sync(
+        &self,
+        transfer_result: crate::sync::full_sync::FullSyncTransferResult,
+    ) -> crate::sync::types::FullSyncResult {
+        let result =
+            crate::sync::full_sync::aggregate_full_sync_result(transfer_result.targets);
+
+        let previous_state = self.load_full_sync_state().unwrap_or(None);
+        let new_state = crate::sync::full_sync_state::FullSyncState::from_result_and_previous(
+            &result,
+            previous_state.as_ref(),
+            now_epoch_seconds(),
+        );
+        if let Err(e) = self.save_full_sync_state(&new_state) {
+            log::warn!("Failed to persist full sync state: {e}");
+        }
+
+        if matches!(
+            result.overall_status,
+            crate::sync::SyncStatus::Success | crate::sync::SyncStatus::LatestWinsApplied
+        ) {
+            if let Err(e) = self.rebuild_search_index(None) {
+                log::warn!("Failed to rebuild search index after full sync: {e}");
+            }
+        }
+
+        result
+    }
+
     /// 内部：用给定 backend 执行全量同步。
     ///
     /// `perform_full_sync` 创建 backend 后委托到此方法；测试通过此方法注入 mock backend。
