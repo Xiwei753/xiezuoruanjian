@@ -821,8 +821,19 @@ fn apply_staging_commits_for_targets(
                     git_plan_ref,
                 ) {
                     Ok(()) => {
-                        // Git finalize 成功，清理事务目录。
+                        // #644 评论 5482310913 问题1：先 tx.finish() 把文件+Git 事务
+                        // 正式收口，再清理 owner marker。
+                        // 这样崩溃窗口分析：
+                        // - crash 在 tx.finish() 前：marker 还在，恢复知道这个 repo
+                        //   是本轮创建的。
+                        // - crash 在 tx.finish() 后、marker 删除前：事务已成功，
+                        //   只会留下一个无害 marker，下次顺手清理即可。
                         tx.finish();
+                        if let Some(plan) = git_plan_ref {
+                            crate::sync::git_commit::cleanup_repo_create_owner_marker(
+                                live_root, plan,
+                            );
+                        }
                         target_conflicts.push(plan.conflict);
                         target_results.push(TargetCommitResult::Ok);
                         run.cleanup();

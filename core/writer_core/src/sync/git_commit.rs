@@ -676,6 +676,28 @@ pub enum GitFinalizeError {
     ConcurrentMetadataChanged { reason: String },
 }
 
+/// #644 评论 5482310913 问题3：Git finalize rollback 的明确结果。
+///
+/// `rollback_git_finalize` 不再返回 `Result<()>`，而是 `Result<GitRollbackOutcome>`，
+/// 让上层 `rollback_full_sync_transaction` 能区分"已安全回滚，可继续恢复文件 backup"
+/// 与"检测到并发变更或事务已成功，不能继续回滚文件"。
+///
+/// - `Reverted`：所有 index/ref 反向 CAS 都完整成功，上层可恢复文件 backup。
+/// - `ConcurrentChanged`：repo_create ownership 不匹配（外部仓库）等无法证明归属的情况。
+///   保留 transaction，不继续改 live 文件。上层应返回 Err 让 `recover_pending_transactions`
+///   保留事务目录给下次恢复。
+/// - `RepoInstallCommitted`：NotGitRepo 已完成 owner-matched `.git` rename。
+///   按 commit-point 逻辑收尾，不再把文件回滚成旧版。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitRollbackOutcome {
+    /// 所有 index/ref 反向 CAS 都完整成功，上层可恢复文件 backup。
+    Reverted,
+    /// repo_create ownership 不匹配 / 外部仓库，保留 transaction 不继续改 live 文件。
+    ConcurrentChanged,
+    /// NotGitRepo 已完成 owner-matched `.git` rename，按 commit-point 逻辑收尾。
+    RepoInstallCommitted,
+}
+
 /// #644 评论 5475805198 第2节：应用 Git metadata 变更到 live。
 ///
 /// 在 `SaveTransaction.commit()` 成功后调用。失败时自动 rollback Git metadata。
@@ -716,19 +738,55 @@ pub fn commit_git_finalize(
                     "commit_git_finalize: finalize failed ({}), rolling back Git metadata",
                     e
                 );
-                if let Err(rb_err) = rollback_git_finalize(live_root, snapshot, plan) {
-                    let rb_msg = rb_err.to_string();
-                    log::warn!(
-                        "commit_git_finalize: rollback also failed: {} (original error: {})",
-                        rb_msg,
-                        e
-                    );
-                    return Err(GitFinalizeError::RollbackFailed {
-                        finalize: e.to_string(),
-                        rollback: rb_msg,
-                    });
+                match rollback_git_finalize(live_root, snapshot, plan) {
+                    Ok(GitRollbackOutcome::Reverted) => {
+                        // Git metadata 已回滚，上层可继续回滚文件。
+                        return Err(e);
+                    }
+                    Ok(GitRollbackOutcome::ConcurrentChanged) => {
+                        // 检测到并发变更，保留 transaction 给下次恢复。
+                        let rb_msg = "rollback detected concurrent change, transaction preserved"
+                            .to_string();
+                        log::warn!(
+                            "commit_git_finalize: rollback saw concurrent change: {} \
+                             (original error: {})",
+                            rb_msg,
+                            e
+                        );
+                        return Err(GitFinalizeError::RollbackFailed {
+                            finalize: e.to_string(),
+                            rollback: rb_msg,
+                        });
+                    }
+                    Ok(GitRollbackOutcome::RepoInstallCommitted) => {
+                        // marker 匹配说明 rename 已发生，状态与 finalize 失败矛盾，
+                        // 保留 transaction 给下次恢复。
+                        let rb_msg =
+                            "rollback saw repo install committed, state inconsistent".to_string();
+                        log::warn!(
+                            "commit_git_finalize: rollback saw repo install committed: {} \
+                             (original error: {})",
+                            rb_msg,
+                            e
+                        );
+                        return Err(GitFinalizeError::RollbackFailed {
+                            finalize: e.to_string(),
+                            rollback: rb_msg,
+                        });
+                    }
+                    Err(rb_err) => {
+                        let rb_msg = rb_err.to_string();
+                        log::warn!(
+                            "commit_git_finalize: rollback also failed: {} (original error: {})",
+                            rb_msg,
+                            e
+                        );
+                        return Err(GitFinalizeError::RollbackFailed {
+                            finalize: e.to_string(),
+                            rollback: rb_msg,
+                        });
+                    }
                 }
-                return Err(e);
             }
         }
     }
@@ -744,25 +802,63 @@ pub fn commit_git_finalize(
 ///
 /// #644 评论 5480360027 修复点 4：更新型 ref rollback 用 `reference_matching`
 /// 反向 CAS，不再用 `force=true` 的 `reference()`。
+///
+/// #644 评论 5482310913 问题2/3：
+/// - 问题2：`plan.repo_create=true` 时，**第一件事**先判 live `.git` ownership，
+///   marker 不匹配 → 返回 `ConcurrentChanged`，不碰 index/lock/refs。
+/// - 问题3：返回 `Result<GitRollbackOutcome>`。index/ref CAS miss（真正并发新状态）
+///   返回 `Err`，让上层 `rollback_full_sync_transaction` 保留 transaction 不回滚文件。
 #[allow(clippy::too_many_lines, clippy::excessive_nesting)]
 pub fn rollback_git_finalize(
     live_root: &Path,
     snapshot: &GitMetadataSnapshot,
     plan: &GitFinalizePlan,
-) -> Result<()> {
+) -> Result<GitRollbackOutcome> {
     crate::storage::git_runtime::ensure_initialized()?;
 
-    // 1. Rollback index — only if plan says we would write it.
-    //    CAS: only restore if current index still matches what we planned to write.
+    // 1. #644 评论 5482310913 问题2：repo_create=true 时先判 ownership，再碰 index/refs。
+    //    外部仓库的 index/lock/refs 一字节都不能碰。
+    if plan.repo_create {
+        let live_git = live_root.join(".git");
+        if !live_git.exists() {
+            // 本轮 repo install 没发生（rename 前崩溃）。清理本轮对应的 tmp_git
+            //（基于 repo_create_owner 命名，无需扫猜）。然后回滚文件。
+            if let Some(owner) = &plan.repo_create_owner {
+                let tmp_git = live_root.join(format!(".git.sujian-tmp-{}", owner));
+                if tmp_git.exists() {
+                    let _ = fs::remove_dir_all(&tmp_git);
+                }
+            }
+            return Ok(GitRollbackOutcome::Reverted);
+        }
+        let marker_path = live_git.join(".sujian-sync-owner");
+        let marker_matches = match (&plan.repo_create_owner, marker_path.exists()) {
+            (Some(expected), true) => match fs::read_to_string(&marker_path) {
+                Ok(content) => content == *expected,
+                Err(_) => false,
+            },
+            _ => false,
+        };
+        if !marker_matches {
+            // #644 评论 5482310913 问题2：marker 不匹配 → 外部创建的仓库。
+            // 不碰 index/lock/refs，不继续回滚 live 文件，保留 transaction 给下次恢复。
+            log::warn!(
+                "rollback_git_finalize: repo_create=true but live .git owner marker \
+                 missing or mismatched — treating as externally created, NOT touching \
+                 index/lock/refs"
+            );
+            return Ok(GitRollbackOutcome::ConcurrentChanged);
+        }
+        // marker 匹配 → 本轮创建的 .git，删除它回到 finalize 前状态。
+        fs::remove_dir_all(&live_git)?;
+        return Ok(GitRollbackOutcome::Reverted);
+    }
+
+    // 2. repo_create=false：index + refs rollback。
     //    #644 评论 5481496190 问题2：同时处理可能残留的 .git/index.lock。
     //    install_index_with_lock 用 lockfile rename 模型，崩溃窗口是：
     //    - lock 写完但 rename 未完成 → lock 拋留，index 未变（仍是旧内容）。
     //    - rename 完成 → lock 已消失，index 是新内容。
-    //    rollback 恢复 index 时：
-    //    - index 是新内容（CAS 命中）→ 本轮 install 已完成 rename，恢复 snapshot.index。
-    //    - index 不是新内容但 lock 存在 → 本轮 install 的崩溃窗口（lock 写完 rename 未完成），
-    //      清理残留 lock（lock 是本轮创建的，index 未变无需恢复）。
-    //    - index 不是新内容且 lock 不存在 → 别的进程改了 index，跳过。
     if let Some(expected_hash) = plan.new_index_sha256 {
         let index_path = live_root.join(".git").join("index");
         let lock_path = live_root.join(".git").join("index.lock");
@@ -775,7 +871,7 @@ pub fn rollback_git_finalize(
         };
 
         if index_is_ours {
-            // 本轮 install 已完成 rename（index 是新内容），恢复 snapshot.index。
+            // CAS 命中：本轮 install 已完成 rename（index 是新内容），恢复 snapshot.index。
             match &snapshot.index {
                 IndexSnapshot::Bytes(original_bytes) => {
                     crate::storage::atomic_write_bytes(&index_path, original_bytes)?;
@@ -791,57 +887,30 @@ pub fn rollback_git_finalize(
                 let _ = fs::remove_file(&lock_path);
             }
         } else if lock_path.exists() {
-            // index 不是新内容但 lock 存在 → 本轮 install 的崩溃窗口
-            // （lock 写完但 rename 未完成，index 仍是旧内容）。
-            // 清理残留 lock（lock 是本轮创建的，index 未变无需恢复）。
-            // 注意：如果 index 也不是旧内容（snapshot.index），说明有并发修改，
-            // 但 lock 是我们 create_new 的，别人无法同时创建，所以 lock 一定是我们的。
+            // index 不是新内容但 lock 存在 → lockfile rename 模型下 lock 是本轮
+            // create_new 独占创建的（别人无法同时创建），属于本轮 install 的崩溃窗口
+            //（lock 写完但 rename 未完成，index 仍是旧内容）。
+            // 清理残留 lock，index 未变无需恢复。
             let _ = fs::remove_file(&lock_path);
             log::warn!(
                 "rollback_git_finalize: cleaned stale index.lock left by crashed install \
-                 (index unchanged, lock was ours)"
+                 (index unchanged, lock was ours by create_new exclusivity)"
             );
         } else {
-            log::warn!(
-                "rollback_git_finalize: index changed since we wrote it (CAS miss), \
-                 skipping index rollback to avoid overwriting concurrent changes"
-            );
+            // #644 评论 5482310913 问题3：index CAS miss 且 lock 不存在 → 真正并发修改
+            //（既不是 snapshot.index 也不是 plan.new_index_sha256）。
+            // 返回 Err 让上层保留 transaction，不继续回滚文件。
+            return Err(crate::Error::Io(std::io::Error::other(
+                "rollback_git_finalize: index CAS miss (concurrent modification, \
+                 current matches neither snapshot.index nor plan.new_index_sha256) — \
+                 refusing to continue rollback to preserve transaction for next recovery",
+            )));
         }
-    }
-
-    // 2. Rollback repo creation — only if plan says we would create it.
-    //    #644 评论 5481496190 问题3：只有 owner marker 匹配才删除 live .git。
-    //    marker 不存在或不匹配 → 外部创建的仓库，不能删。
-    //    场景：manifest 落盘（repo_create=true）→ 进程在 rename 前崩溃
-    //    → 用户/别的进程 git init → recovery 看到 repo_create=true + .git exists。
-    //    此时 .git 没有 owner marker（或 marker 不匹配），是外部创建的，不能删。
-    if plan.repo_create {
-        let live_git = live_root.join(".git");
-        if !live_git.exists() {
-            return Ok(());
-        }
-        let marker_path = live_git.join(".sujian-sync-owner");
-        let marker_matches = match (&plan.repo_create_owner, marker_path.exists()) {
-            (Some(expected), true) => match fs::read_to_string(&marker_path) {
-                Ok(content) => content == *expected,
-                Err(_) => false,
-            },
-            _ => false,
-        };
-        if !marker_matches {
-            log::warn!(
-                "rollback_git_finalize: repo_create=true but live .git owner marker \
-                 missing or mismatched — treating as externally created, NOT removing"
-            );
-            return Ok(());
-        }
-        fs::remove_dir_all(&live_git)?;
-        return Ok(());
     }
 
     // 3. Rollback refs — CAS-based: only restore if current value == what we wrote.
     if plan.ref_plans.is_empty() {
-        return Ok(());
+        return Ok(GitRollbackOutcome::Reverted);
     }
 
     let live_repo = git2::Repository::open(live_root).map_err(|e| {
@@ -864,7 +933,6 @@ pub fn rollback_git_finalize(
         match (&old_oid_str, current) {
             // Ref was created by us (DidNotExist -> new_oid).
             // Only delete if it still equals what we wrote.
-            // Reference::delete() 本身会在 "lookup 后 ref 又变化" 时报错，可以继续用。
             (None, Ok(current_ref)) => {
                 if current_ref.target() == Some(new_oid) {
                     // Still our value — safe to delete.
@@ -876,11 +944,13 @@ pub fn rollback_git_finalize(
                         )))
                     })?;
                 } else {
-                    log::warn!(
-                        "rollback_git_finalize: {} changed since we wrote it (CAS miss), \
-                         skipping deletion to avoid overwriting concurrent changes",
-                        ref_name
-                    );
+                    // #644 评论 5482310913 问题3：ref CAS miss → 真正并发新状态。
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "rollback_git_finalize: ref {} CAS miss (current != new_oid {}) — \
+                         concurrent modification, refusing to continue rollback to preserve \
+                         transaction",
+                        ref_name, new_oid
+                    ))));
                 }
             }
             (None, Err(e)) if e.code() == git2::ErrorCode::NotFound => {
@@ -894,13 +964,7 @@ pub fn rollback_git_finalize(
             }
 
             // Ref was updated by us (old_oid -> new_oid).
-            // #644 评论 5480360027 修复点 4：用反向 CAS `reference_matching`，
-            // current != new_oid 时 git2 返回 Modified，绝不 force 覆盖。
-            //
-            // 注意：libgit2 的 `reference_path_available` 在 force=false 时对已存在
-            // ref 直接返回 EEXISTS，current_id 的 CAS 检查不会被执行。因此必须用
-            // force=true 让 libgit2 能更新已存在的 ref，current_id 参数提供 CAS 保护：
-            // 当前值 != new_oid 时返回 EMODIFIED，只有当前值 == new_oid 才写 old_oid。
+            // #644 评论 5480360027 修复点 4：用反向 CAS `reference_matching`。
             (Some(old_oid_str), Ok(current_ref)) => {
                 if current_ref.target() == Some(new_oid) {
                     let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
@@ -910,8 +974,6 @@ pub fn rollback_git_finalize(
                         )))
                     })?;
                     // 反向 CAS：只有 current == new_oid 时才写 old_oid。
-                    // force=true 让 libgit2 能更新已存在的 ref；
-                    // current_id=new_oid 提供 CAS 保护，current != new_oid 时返回 EMODIFIED。
                     live_repo
                         .reference_matching(
                             ref_name,
@@ -927,16 +989,18 @@ pub fn rollback_git_finalize(
                             )))
                         })?;
                 } else {
-                    log::warn!(
-                        "rollback_git_finalize: {} changed since we wrote it (CAS miss), \
-                         skipping restore to avoid overwriting concurrent changes",
-                        ref_name
-                    );
+                    // #644 评论 5482310913 问题3：ref CAS miss → 真正并发新状态。
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "rollback_git_finalize: ref {} CAS miss (current != new_oid {}) — \
+                         concurrent modification, refusing to continue rollback to preserve \
+                         transaction",
+                        ref_name, new_oid
+                    ))));
                 }
             }
             (Some(_), Err(e)) if e.code() == git2::ErrorCode::NotFound => {
                 // Ref was deleted by someone else after we wrote it.
-                // Don't recreate it — the deletion is a newer change.
+                // Don't recreate it — the deletion is a newer change。
                 log::warn!(
                     "rollback_git_finalize: {} was deleted by concurrent process, \
                      skipping restore",
@@ -952,7 +1016,7 @@ pub fn rollback_git_finalize(
         }
     }
 
-    Ok(())
+    Ok(GitRollbackOutcome::Reverted)
 }
 
 /// #644 评论 5475805198 第2节：崩溃恢复。
@@ -993,13 +1057,34 @@ pub fn recover_git_finalize(
                     "recover_git_finalize: finalize failed ({}), rolling back Git metadata",
                     e
                 );
-                rollback_git_finalize(live_root, snapshot, plan).map_err(|rb_err| {
-                    GitFinalizeError::RollbackFailed {
+                match rollback_git_finalize(live_root, snapshot, plan) {
+                    Ok(GitRollbackOutcome::Reverted) => {
+                        // Git metadata 已回滚，上层可继续回滚文件。
+                        Err(e)
+                    }
+                    Ok(GitRollbackOutcome::ConcurrentChanged) => {
+                        // 检测到并发变更，保留 transaction 给下次恢复。
+                        Err(GitFinalizeError::ConcurrentMetadataChanged {
+                            reason: format!(
+                                "rollback detected concurrent change during recovery (original finalize error: {})",
+                                e
+                            ),
+                        })
+                    }
+                    Ok(GitRollbackOutcome::RepoInstallCommitted) => {
+                        // #644 评论 5482310913 问题2：marker 匹配说明 rename 已发生，
+                        // .git 已完整安装，事务已成功，按 commit-point 逻辑收尾。
+                        log::info!(
+                            "recover_git_finalize: rollback saw repo install committed \
+                             (owner-matched .git rename completed), treating tx as successful"
+                        );
+                        Ok(())
+                    }
+                    Err(rb_err) => Err(GitFinalizeError::RollbackFailed {
                         finalize: e.to_string(),
                         rollback: rb_err.to_string(),
-                    }
-                })?;
-                Err(e)
+                    }),
+                }
             }
         },
     }
@@ -1032,6 +1117,23 @@ pub fn try_commit_git_finalize(
         )));
     };
     commit_git_finalize(live_root, staging_root, state, snap, plan)
+}
+
+/// #644 评论 5482310913 问题1：成功收尾时清理 owner marker。
+///
+/// `finalize_not_git_repo` rename 成功后**不再立即删除** `.sujian-sync-owner`，
+/// 而是推迟到上层 `tx.finish()` 之后调用本函数。这样：
+/// - crash 在 `tx.finish()` 前：marker 还在，恢复知道这个 repo 是本轮创建的。
+/// - crash 在 `tx.finish()` 后、marker 删除前：事务已成功，只会留下一个无害 marker，
+///   下次顺手清理即可。
+///
+/// `plan.repo_create_owner` 为 `None` 时是 no-op（非 NotGitRepo 路径）。
+/// marker 不存在时也是 no-op（已清理或从未创建）。
+pub fn cleanup_repo_create_owner_marker(live_root: &Path, plan: &GitFinalizePlan) {
+    if plan.repo_create_owner.is_some() {
+        let marker_path = live_root.join(".git").join(".sujian-sync-owner");
+        let _ = fs::remove_file(&marker_path);
+    }
 }
 
 // ── 内部 finalize 实现 ──
@@ -1146,8 +1248,13 @@ fn finalize_not_git_repo(
     let staging_git = staging_root.join(".git");
     let live_git = live_root.join(".git");
 
-    // #644 评论 5475805198 第4节：RAII 守卫，任何返回路径都删除临时目录。
-    let tmp_id = uuid::Uuid::new_v4().to_string();
+    // #644 评论 5482310913 问题2：tmp_git 目录名基于 repo_create_owner，
+    // 使恢复时能精准清理本轮 tmp repo，不用扫猜。
+    // owner 为 None 时（旧 plan 兼容）回退到随机 uuid。
+    let tmp_id = plan
+        .repo_create_owner
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let tmp_git = live_root.join(format!(".git.sujian-tmp-{}", tmp_id));
     let mut _guard = TmpDirGuard::new(tmp_git.clone());
 
@@ -1189,14 +1296,16 @@ fn finalize_not_git_repo(
     // 不需要 index lock（live 还没有 .git）。
     update_live_index(&tmp_repo, staging_repo, new_oid)?;
 
-    // #644 评论 5481496190 问题3：在 rename 前写入 owner marker 到 tmp_git。
+    // #644 评论 5481496190 问题3 + #644 评论 5482310913 问题1：
+    // 在 rename 前写入 owner marker 到 tmp_git。
+    // #644 评论 5482310913 问题1：marker 写入用 atomic_write_bytes（含 fsync 文件 +
+    // fsync 父目录），保证 marker 是 durable ownership fact，不能只 fs::write。
     // rename 后 marker 跟着进入 live .git。rollback 只有 marker 匹配才删除 live .git。
     // marker 文件名 .sujian-sync-owner，内容是 plan.repo_create_owner（uuid）。
     if let Some(owner) = &plan.repo_create_owner {
         let marker_path = _guard.path().join(".sujian-sync-owner");
-        fs::write(&marker_path, owner).map_err(|e| {
-            GitFinalizeError::FinalizeFailed(crate::Error::Io(e))
-        })?;
+        crate::storage::atomic_write_bytes(&marker_path, owner.as_bytes())
+            .map_err(GitFinalizeError::FinalizeFailed)?;
     }
 
     // #644 评论 5478237852 问题1：live .git 在 rename 前已出现，返回 ConcurrentMetadataChanged，
@@ -1225,14 +1334,12 @@ fn finalize_not_git_repo(
         )));
     }
 
-    // #644 评论 5481496190 问题3：rename 成功后删除 owner marker。
-    // 如果删除前崩溃，marker 拋留，下次恢复时 rollback 会看到 marker 匹配并删除 .git
-    //（这是对的，因为本轮 finalize 没完成）。下次正常 finalize 会重新生成 marker 覆盖。
-    if plan.repo_create_owner.is_some() {
-        let marker_path = live_git.join(".sujian-sync-owner");
-        let _ = fs::remove_file(&marker_path);
-    }
-
+    // #644 评论 5482310913 问题1：rename 成功后**不要删除** owner marker。
+    // marker 删除推迟到上层 `tx.finish()` 之后（由 `cleanup_repo_create_owner_marker` 负责）。
+    // 崩溃窗口分析：
+    // - crash 在 tx.finish() 前：marker 还在，恢复知道这个 repo 是本轮创建的。
+    // - crash 在 tx.finish() 后、marker 删除前：事务已成功，只会留下一个无害 marker，
+    //   下次顺手清理即可。
     Ok(())
 }
 
@@ -1539,8 +1646,7 @@ fn install_index_with_lock(
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(GitFinalizeError::ConcurrentMetadataChanged {
-                reason: "index.lock exists: concurrent git process is writing index"
-                    .to_string(),
+                reason: "index.lock exists: concurrent git process is writing index".to_string(),
             });
         }
         Err(e) => return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e))),

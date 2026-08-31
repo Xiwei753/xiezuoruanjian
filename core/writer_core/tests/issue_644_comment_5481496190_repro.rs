@@ -47,9 +47,7 @@ fn make_detached_repo_with_two_commits(live: &Path) -> (git2::Oid, git2::Oid) {
     index.write().unwrap();
     let tree1_oid = index.write_tree().unwrap();
     let tree1 = repo.find_tree(tree1_oid).unwrap();
-    let old_oid = repo
-        .commit(None, &sig, &sig, "init", &tree1, &[])
-        .unwrap();
+    let old_oid = repo.commit(None, &sig, &sig, "init", &tree1, &[]).unwrap();
     drop(tree1);
 
     // commit 2 (new_oid), parent = old_oid
@@ -270,7 +268,8 @@ fn verify_problem2_lockfile_rename_recovers_stale_lock() {
         // 后续 git index write 应成功（lock 已清理）。
         let repo2 = git2::Repository::open(&live).unwrap();
         let mut idx = repo2.index().unwrap();
-        idx.write().expect("subsequent index write must succeed after lock cleanup");
+        idx.write()
+            .expect("subsequent index write must succeed after lock cleanup");
     }
 
     // ── 场景 2：rename 后 crash（index 是新内容，lock 已消失） ──
@@ -340,11 +339,22 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
     let sig = git2::Signature::now("external", "external@example.com").unwrap();
     fs::write(live.join("external.txt"), "external data").unwrap();
     let mut index = external_repo.index().unwrap();
-    index.add_path(std::path::Path::new("external.txt")).unwrap();
+    index
+        .add_path(std::path::Path::new("external.txt"))
+        .unwrap();
     index.write().unwrap();
-    let tree = external_repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let tree = external_repo
+        .find_tree(index.write_tree().unwrap())
+        .unwrap();
     let external_commit_oid = external_repo
-        .commit(Some("refs/heads/main"), &sig, &sig, "external init", &tree, &[])
+        .commit(
+            Some("refs/heads/main"),
+            &sig,
+            &sig,
+            "external init",
+            &tree,
+            &[],
+        )
         .unwrap();
 
     // ── 场景 A：plan.repo_create_owner = None（旧 plan 或外部创建）→ .git 保留 ──
@@ -493,7 +503,9 @@ fn verify_problem4_concurrent_metadata_changed_no_rollback() {
     s_index.add_path(std::path::Path::new("a.txt")).unwrap();
     s_index.add_path(std::path::Path::new("b.txt")).unwrap();
     s_index.write().unwrap();
-    let s_tree = staging_repo.find_tree(s_index.write_tree().unwrap()).unwrap();
+    let s_tree = staging_repo
+        .find_tree(s_index.write_tree().unwrap())
+        .unwrap();
     let staging_commit_oid = staging_repo
         .commit(None, &sig, &sig, "staging init", &s_tree, &[])
         .unwrap();
@@ -523,9 +535,7 @@ fn verify_problem4_concurrent_metadata_changed_no_rollback() {
 
     // 模拟并发：在调用 commit_git_finalize 前，把 detached HEAD 从 old_oid 推到 new_oid。
     let live_repo_for_concurrent = git2::Repository::open(&live).unwrap();
-    live_repo_for_concurrent
-        .set_head_detached(new_oid)
-        .unwrap();
+    live_repo_for_concurrent.set_head_detached(new_oid).unwrap();
 
     // 调用 commit_git_finalize。
     // 修复后正确行为：verify_git_metadata_unchanged 发现 HEAD 从 old_oid 变成 new_oid，

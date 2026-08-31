@@ -458,17 +458,43 @@ fn rollback_full_sync_transaction(
         // 统一调用 rollback_git_finalize，让 repo_existed 决定恢复还是删除。
         // #644 评论 5480360027：使用 write-ahead plan 做 rollback，
         // 不再依赖 mutation_log（旧 manifest 反序列化时 plan 为 default，rollback 是 no-op）。
+        // #644 评论 5482310913 问题3：rollback_git_finalize 返回 GitRollbackOutcome，
+        // 区分 Reverted / ConcurrentChanged / RepoInstallCommitted。
         let _seed_state = git_rec.seed_state.to_seed_state().map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
                 "rollback_full_sync_transaction: invalid seed state: {}",
                 e
             )))
         })?;
-        crate::sync::git_commit::rollback_git_finalize(
+        let outcome = crate::sync::git_commit::rollback_git_finalize(
             target_root,
             &git_rec.metadata_snapshot,
             &git_rec.plan,
         )?;
+        match outcome {
+            crate::sync::git_commit::GitRollbackOutcome::Reverted => {
+                // Git metadata 已回滚，继续恢复文件 backup（下方逻辑）。
+            }
+            crate::sync::git_commit::GitRollbackOutcome::ConcurrentChanged => {
+                // #644 评论 5482310913 问题3：检测到并发变更，保留 transaction，
+                // 不恢复文件 backup，不删除 transaction 目录，返回 Err 让上层
+                // `recover_pending_transactions` 保留事务给下次恢复。
+                return Err(crate::Error::Io(std::io::Error::other(
+                    "rollback_full_sync_transaction: git rollback detected concurrent \
+                     change (ownership mismatch or external repo), preserving transaction \
+                     for next recovery",
+                )));
+            }
+            crate::sync::git_commit::GitRollbackOutcome::RepoInstallCommitted => {
+                // #644 评论 5482310913 问题2：NotGitRepo 已完成 owner-matched .git rename。
+                // 按 commit-point 逻辑收尾：不回滚文件（文件已是新版），标记 Finished
+                // 并清理 transaction 目录。
+                let manifest_path = tx_dir.join(MANIFEST_FILENAME);
+                write_manifest_phase_static(&manifest_path, TransactionPhase::Finished, manifest)?;
+                fs::remove_dir_all(tx_dir)?;
+                return Ok(());
+            }
+        }
     }
 
     // 2. 回滚 live 文件（用 backup_entries）。
