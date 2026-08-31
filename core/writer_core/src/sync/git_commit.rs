@@ -214,6 +214,7 @@ pub fn prepare_git_finalize(
     })?;
 
     // 捕获 HEAD 快照。
+    // #644 评论 5478237852 问题3：只有 NotFound 映射为 DidNotExist，其它错误向上传。
     let head = match live_repo.find_reference("HEAD") {
         Ok(head_ref) => {
             if let Some(sym_target) = head_ref.symbolic_target() {
@@ -228,7 +229,12 @@ pub fn prepare_git_finalize(
                 RefSnapshot::DidNotExist
             }
         }
-        Err(_) => RefSnapshot::DidNotExist,
+        Err(e) if e.code() == git2::ErrorCode::NotFound => RefSnapshot::DidNotExist,
+        Err(e) => {
+            return Err(crate::Error::Io(std::io::Error::other(format!(
+                "prepare_git_finalize: failed to find HEAD reference: {e}"
+            ))));
+        }
     };
 
     // 捕获 index 快照。
@@ -253,36 +259,55 @@ pub fn prepare_git_finalize(
         GitSeedState::NotGitRepo => String::new(),
     };
     if !head_ref.is_empty() && head_ref != "HEAD" {
-        let snap = snapshot_ref(&live_repo, &head_ref);
+        let snap = snapshot_ref(&live_repo, &head_ref)?;
         refs.insert(head_ref, snap);
     }
 
     // 2. live 已有的 remote refs。
-    if let Ok(live_refs) = live_repo.references() {
-        for reference in live_refs.flatten() {
+    // #644 评论 5478237852 问题3：references() 获取失败直接返回 Err，不要 flatten 吞掉错误。
+    let live_refs = live_repo.references().map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "prepare_git_finalize: failed to iterate live references: {e}"
+        )))
+    })?;
+    for reference in live_refs {
+        let reference = reference.map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "prepare_git_finalize: live reference iterator error: {e}"
+            )))
+        })?;
+        let Some(name) = reference.name() else {
+            continue;
+        };
+        if !name.starts_with("refs/remotes/") {
+            continue;
+        }
+        refs.insert(name.to_string(), snapshot_ref_from_repo_ref(&reference));
+    }
+
+    // 3. staging 将要写入的 remote refs（live 不存在的显式记录 DidNotExist）。
+    // #644 评论 5478237852 问题3：staging repo 不存在是正常情况（staging 可能没有 .git），
+    // 不报错，只是没有 remote refs 可收集。
+    if let Ok(staging_repo) = git2::Repository::open(staging_root) {
+        let staging_refs = staging_repo.references().map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "prepare_git_finalize: failed to iterate staging references: {e}"
+            )))
+        })?;
+        for reference in staging_refs {
+            let reference = reference.map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "prepare_git_finalize: staging reference iterator error: {e}"
+                )))
+            })?;
             let Some(name) = reference.name() else {
                 continue;
             };
             if !name.starts_with("refs/remotes/") {
                 continue;
             }
-            refs.insert(name.to_string(), snapshot_ref_from_repo_ref(&reference));
-        }
-    }
-
-    // 3. staging 将要写入的 remote refs（live 不存在的显式记录 DidNotExist）。
-    if let Ok(staging_repo) = git2::Repository::open(staging_root) {
-        if let Ok(staging_refs) = staging_repo.references() {
-            for reference in staging_refs.flatten() {
-                let Some(name) = reference.name() else {
-                    continue;
-                };
-                if !name.starts_with("refs/remotes/") {
-                    continue;
-                }
-                refs.entry(name.to_string())
-                    .or_insert(RefSnapshot::DidNotExist);
-            }
+            refs.entry(name.to_string())
+                .or_insert(RefSnapshot::DidNotExist);
         }
     }
 
@@ -310,10 +335,15 @@ fn snapshot_ref_from_repo_ref(reference: &git2::Reference<'_>) -> RefSnapshot {
 }
 
 /// 按 ref 名在 repo 中查找并构造快照。
-fn snapshot_ref(repo: &git2::Repository, ref_name: &str) -> RefSnapshot {
+/// #644 评论 5478237852 问题3：只有 git2::ErrorCode::NotFound 可以映射为 DidNotExist，
+/// 其它错误（IO 损坏、锁错误、backend 错误）全部向上传。
+fn snapshot_ref(repo: &git2::Repository, ref_name: &str) -> std::result::Result<RefSnapshot, crate::Error> {
     match repo.find_reference(ref_name) {
-        Ok(reference) => snapshot_ref_from_repo_ref(&reference),
-        Err(_) => RefSnapshot::DidNotExist,
+        Ok(reference) => Ok(snapshot_ref_from_repo_ref(&reference)),
+        Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(RefSnapshot::DidNotExist),
+        Err(e) => Err(crate::Error::Io(std::io::Error::other(format!(
+            "snapshot_ref: failed to find reference {ref_name}: {e}"
+        )))),
     }
 }
 
@@ -1028,7 +1058,7 @@ fn verify_git_metadata_unchanged(
     })?;
 
     // 1. 校验 HEAD。
-    let current_head = read_ref_snapshot(&live_repo, "HEAD");
+    let current_head = read_ref_snapshot(&live_repo, "HEAD")?;
     if !ref_snapshot_eq(&current_head, &snapshot.head) {
         return Err(GitFinalizeError::ConcurrentMetadataChanged {
             reason: format!(
@@ -1040,7 +1070,7 @@ fn verify_git_metadata_unchanged(
 
     // 2. 校验目标 branch ref。
     if !head_ref.is_empty() && head_ref != "HEAD" {
-        let current_branch = read_ref_snapshot(&live_repo, head_ref);
+        let current_branch = read_ref_snapshot(&live_repo, head_ref)?;
         let snapshot_branch = snapshot
             .refs
             .get(head_ref)
@@ -1076,7 +1106,7 @@ fn verify_git_metadata_unchanged(
         if !ref_name.starts_with("refs/remotes/") {
             continue;
         }
-        let current = read_ref_snapshot(&live_repo, ref_name);
+        let current = read_ref_snapshot(&live_repo, ref_name)?;
         if !ref_snapshot_eq(&current, ref_snapshot) {
             return Err(GitFinalizeError::ConcurrentMetadataChanged {
                 reason: format!(
@@ -1091,10 +1121,14 @@ fn verify_git_metadata_unchanged(
 }
 
 /// 读取 ref 的当前快照。
-fn read_ref_snapshot(repo: &git2::Repository, ref_name: &str) -> RefSnapshot {
+/// #644 评论 5478237852 问题3：返回 Result，只有 NotFound 映射为 DidNotExist。
+fn read_ref_snapshot(repo: &git2::Repository, ref_name: &str) -> std::result::Result<RefSnapshot, crate::Error> {
     match repo.find_reference(ref_name) {
-        Ok(r) => snapshot_ref_from_repo_ref(&r),
-        Err(_) => RefSnapshot::DidNotExist,
+        Ok(r) => Ok(snapshot_ref_from_repo_ref(&r)),
+        Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(RefSnapshot::DidNotExist),
+        Err(e) => Err(crate::Error::Io(std::io::Error::other(format!(
+            "read_ref_snapshot: failed to read reference {ref_name}: {e}"
+        )))),
     }
 }
 
