@@ -75,7 +75,7 @@ pub(super) fn save_conflict_copy(
 /// - tree 404 + ref 200 → 空仓库，返回空 map
 /// - tree 404 + ref 404 + repo 200 → 分支不存在
 /// - tree 404 + ref 404 + repo 401/403 → 权限不足
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::excessive_nesting)]
 pub(super) fn fetch_remote_tree(
     transport: &dyn SyncTransport,
     api_base: &str,
@@ -265,6 +265,7 @@ pub(super) fn fetch_remote_manifest(
 /// 并行下载 pending_take_remote 列表中的文件。
 ///
 /// 返回 `Vec<(path, Option<content>)>`，`None` 表示远端文件缺失。
+#[allow(clippy::excessive_nesting, clippy::type_complexity)]
 pub(super) fn download_pending_take_remote(
     sync_root: &Path,
     transport: &dyn SyncTransport,
@@ -346,6 +347,7 @@ pub(super) fn move_to_trash(sync_root: &Path, paths: &[String]) {
 ///
 /// 使用 rayon 并行线程池，每个文件先写入临时文件（带随机后缀），再 rename 替换目标文件，
 /// 保证下载中断不会留下半写入文件。
+#[allow(clippy::excessive_nesting)]
 pub(super) fn download_remote_files(
     sync_root: &Path,
     transport: &dyn SyncTransport,
@@ -393,6 +395,7 @@ pub(super) fn download_remote_files(
 ///
 /// GitHub API 要求 serial PUT 以避免 SHA 冲突，每个 PUT 需要携带远端文件的当前 SHA（若存在），
 /// 实现幂等的 create-or-update。
+#[allow(clippy::too_many_arguments)]
 pub(super) fn upload_local_files(
     sync_root: &Path,
     transport: &dyn SyncTransport,

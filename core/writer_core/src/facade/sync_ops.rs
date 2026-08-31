@@ -327,9 +327,10 @@ impl super::WriterCore {
                     }
                     Err(e) => {
                         // 持久化失败：target 进入 RecoverableError，下次同步可重试
-                        target.result.status = crate::sync::SyncStatus::RecoverableError(
-                            format!("staging_conflict_persist_failed: {}", e),
-                        );
+                        target.result.status = crate::sync::SyncStatus::RecoverableError(format!(
+                            "staging_conflict_persist_failed: {}",
+                            e
+                        ));
                         target.result.error =
                             Some(format!("failed to persist staging conflicts: {}", e));
                     }

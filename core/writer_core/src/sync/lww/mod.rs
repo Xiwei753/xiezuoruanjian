@@ -34,9 +34,12 @@ mod manifest;
 mod transfer;
 
 // #644 评论 5462823517 第3节：从 lww.rs 抽出的子模块，保持 pub/pub(crate) 接口不变。
-// re-export 保持原 lww.rs 的 pub(crate) 接口。
+// #644 评论 5473789298 第3节：纯分类/比较提升为 sync::content_class（始终可用），
+// 这里 re-export 保持原 lww.rs 的 pub(crate) 接口，让旧测试 `crate::sync::lww::*` 仍可用。
 #[allow(unused_imports)]
-pub(crate) use compare::{classify_content_path, is_document_content_path, ContentClass};
+pub(crate) use crate::sync::content_class::{
+    classify_content_path, is_document_content_path, ContentClass,
+};
 use compare::{resolve_path_decision, PathDecision};
 use manifest::{build_local_records, build_remote_records, lww_record_time, SYNC_MANIFEST_PATH};
 use transfer::{

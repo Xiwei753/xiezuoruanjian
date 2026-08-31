@@ -126,78 +126,6 @@ impl StagingRun {
         Ok(())
     }
 
-    /// #644 评论 5473551127 第2节：Git 后端的隔离 staging — 保留仓库身份。
-    ///
-    /// 如果 live 已是 Git repo，用 `git clone --local` 创建 staging 副本，
-    /// 保留 HEAD、index、remote、历史（`--local` 让 clone 共享对象数据库，零拷贝优化）。
-    /// 如果 live 本来不是 repo，先 `git init`，再 seed 业务文件。
-    ///
-    /// 与 `seed_from_live` 的区别：不跳过 `.git/`，让 staging 成为完整 Git repo，
-    /// `SyncService::perform_sync` 在 staging 里能正确判断 `has_repo=true`。
-    pub fn seed_from_live_as_git_repo(&self, live_root: &Path) -> Result<()> {
-        let staging_root = self.staging_root();
-        let has_git = live_root.join(".git").exists();
-
-        if has_git {
-            // live 已是 Git repo：clone --local 保留仓库身份。
-            // git clone --local 会创建硬链接共享对象数据库（同文件系统时），
-            // 比完整复制快且节省空间。
-            let status = std::process::Command::new("git")
-                .args([
-                    "clone",
-                    "--local",
-                    "--no-checkout",
-                    live_root.to_str().unwrap_or(""),
-                    staging_root.to_str().unwrap_or(""),
-                ])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-            match status {
-                Ok(s) if s.success() => {
-                    // checkout HEAD 到 worktree（--no-checkout 只克隆了 .git）
-                    let checkout_status = std::process::Command::new("git")
-                        .args(["checkout", "HEAD", "--", "."])
-                        .current_dir(&staging_root)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status();
-                    if let Ok(s) = checkout_status {
-                        if !s.success() {
-                            // checkout 失败（可能 unborn HEAD），回退到文件级 seed
-                            log::warn!(
-                                "git checkout HEAD failed in staging, falling back to file seed"
-                            );
-                            self.seed_from_live(live_root)?;
-                        }
-                    }
-                }
-                _ => {
-                    // clone 失败，回退到文件级 seed + git init
-                    log::warn!("git clone --local failed, falling back to git init + file seed");
-                    self.seed_from_live(live_root)?;
-                    // 在 staging 里初始化 git repo，让 has_repo 检测通过
-                    let _ = std::process::Command::new("git")
-                        .args(["init"])
-                        .current_dir(&staging_root)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status();
-                }
-            }
-        } else {
-            // live 不是 repo：先 seed 文件，再 git init
-            self.seed_from_live(live_root)?;
-            let _ = std::process::Command::new("git")
-                .args(["init"])
-                .current_dir(&staging_root)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-        }
-        Ok(())
-    }
-
     /// 三方比较生成 commit plan。
     ///
     /// #644 评论 5473105049 第2节：按 `base ∪ staging` 的路径全集做真正的三方比较，
@@ -207,31 +135,31 @@ impl StagingRun {
     /// - `local` = 现在 live（`live_root` 下）
     /// - `incoming` = Transfer 后 staging（[Self::staging_root] 下）
     ///
-    /// 三方决策：
-    /// - `local == base && incoming != base` → Apply incoming（含 incoming=None 的删除）
-    /// - `incoming == base` → KeepLocal（远端没变）
-    /// - `local == incoming` → NoOp（内容相同，无需操作）
-    /// - 其它 → Conflict
+    /// #644 评论 5473789298 第3节：按 [`ContentClass`] 分类决策，不再统一字节比较：
+    /// - [`ContentClass::UserTextDocument`]：走 [`three_way_resolve`]，
+    ///   `BothChanged` → [`StagingConflict`]；其余按 NoOp/KeepLocal/Apply。
+    /// - [`ContentClass::Metadata`] / [`ContentClass::GeneratedCache`]：LWW 简化
+    ///   （staging commit 无时间戳，远端获胜）。双方都改时 Apply incoming，**不**产生冲突。
+    /// - [`ContentClass::LocalOnly`]：跳过（同步引擎自己的 state/manifest，不冒充正文冲突）。
     ///
     /// `incoming=None`（远端删除）+ `local==base` → [CommitAction::Delete]。
-    /// `incoming=None` + `local!=base` → Conflict（本地改了、远端删了）。
+    /// `incoming=None` + `local!=base`（UserTextDocument）→ Conflict（本地改了、远端删了）。
     #[allow(clippy::excessive_nesting)]
     pub fn compute_commit_plan(&self, live_root: &Path) -> Result<CommitPlan> {
+        use crate::sync::content_class::{
+            classify_content_path, is_document_content_path, three_way_resolve, ContentClass,
+        };
+
         let staging_root = self.staging_root();
         let base_root = self.base_root();
         let mut plan = CommitPlan::default();
 
-        // 收集 base ∪ staging 的路径全集
-        let base_paths = if base_root.exists() {
-            list_relative_paths(&base_root)?
-        } else {
-            Vec::new()
-        };
-        let staging_paths = if staging_root.exists() {
-            list_relative_paths(&staging_root)?
-        } else {
-            Vec::new()
-        };
+        // 收集 base ∪ staging 的路径全集。
+        // #644 评论 5473789298 第2节：base 和 staging 都走 list_commit_candidate_paths，
+        // 排除 `.git/`、`full-sync-staging/`、`app-meta/transactions/`，
+        // 不让 Git 元数据被当成正文比较。
+        let base_paths = list_commit_candidate_paths(&base_root)?;
+        let staging_paths = list_commit_candidate_paths(&staging_root)?;
         let mut all_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         for p in &base_paths {
             all_paths.insert(p.clone());
@@ -241,6 +169,14 @@ impl StagingRun {
         }
 
         for rel in all_paths {
+            let rel_str = rel.to_string_lossy().to_string();
+
+            // #644 评论 5473789298 第3节：LocalOnly 是同步引擎自己的 state/manifest，
+            // 不进入 commit plan 的 apply/conflict。
+            if classify_content_path(&rel_str) == ContentClass::LocalOnly {
+                continue;
+            }
+
             let base_path = base_root.join(&rel);
             let live_path = live_root.join(&rel);
             let staging_path = staging_root.join(&rel);
@@ -265,34 +201,46 @@ impl StagingRun {
             let incoming_eq_base = opt_bytes_eq(&incoming, &base);
             let local_eq_incoming = opt_bytes_eq(&local, &incoming);
 
-            if incoming_eq_base {
-                // 远端没变，保留 local。
-                plan.keep_local.push(rel);
-            } else if local_eq_base {
-                // local 没动，安全应用 incoming。
-                match incoming {
-                    Some(content) => {
-                        plan.apply.push(CommitAction::Apply {
+            if is_document_content_path(&rel_str) {
+                // 正文：走 three_way_resolve，BothChanged 才冲突。
+                let base_hash = md5_hex(&base);
+                let local_hash = md5_hex(&local);
+                let incoming_hash = md5_hex(&incoming);
+                match three_way_resolve(&base_hash, &local_hash, &incoming_hash) {
+                    crate::sync::content_class::ThreeWayResult::NoConflict => {
+                        plan.noop.push(rel);
+                    }
+                    crate::sync::content_class::ThreeWayResult::LocalChanged => {
+                        // local 改了，incoming==base 没变 → 保留 local。
+                        plan.keep_local.push(rel);
+                    }
+                    crate::sync::content_class::ThreeWayResult::RemoteChanged => {
+                        // incoming 改了，local==base 没变 → Apply incoming。
+                        apply_incoming(&mut plan, rel, incoming);
+                    }
+                    crate::sync::content_class::ThreeWayResult::BothChanged => {
+                        plan.conflict.push(StagingConflict {
                             rel_path: rel,
-                            content,
+                            base_hash,
+                            local_hash,
+                            incoming_hash,
                         });
                     }
-                    None => {
-                        // 远端删除，local 没改 → 删除本地文件
-                        plan.apply.push(CommitAction::Delete { rel_path: rel });
-                    }
                 }
-            } else if local_eq_incoming {
-                // 内容相同，无需操作。
-                plan.noop.push(rel);
             } else {
-                // 两边都改（或 base 不存在且 local 已改），三方冲突。
-                plan.conflict.push(StagingConflict {
-                    rel_path: rel,
-                    base_hash: md5_hex(&base),
-                    local_hash: md5_hex(&local),
-                    incoming_hash: md5_hex(&incoming),
-                });
+                // #644 评论 5473789298 第3节：Metadata/GeneratedCache 走 LWW 简化——
+                // staging commit 没有时间戳，双方都改时取 incoming（远端获胜，
+                // full sync 语义是拉取远端更新），不产生冲突。
+                if incoming_eq_base {
+                    plan.keep_local.push(rel);
+                } else if local_eq_base {
+                    apply_incoming(&mut plan, rel, incoming);
+                } else if local_eq_incoming {
+                    plan.noop.push(rel);
+                } else {
+                    // 双方都改 → Apply incoming（LWW 远端获胜）。
+                    apply_incoming(&mut plan, rel, incoming);
+                }
             }
         }
         Ok(plan)
@@ -332,7 +280,11 @@ pub fn prepare_staging_runs(
         // #644 评论 5473551127 第2节：按 backend 类型选择对应 seed 方式。
         match backend_type {
             crate::sync::types::BackendType::Git => {
-                run.seed_from_live_as_git_repo(&planned.target_live_root)?;
+                // #644 评论 5473789298 第1节：Git 专属 staging 移到 git_staging.rs。
+                crate::sync::git_staging::seed_from_live_as_git_repo(
+                    &run,
+                    &planned.target_live_root,
+                )?;
             }
             crate::sync::types::BackendType::GithubApi => {
                 run.seed_from_live(&planned.target_live_root)?;
@@ -397,6 +349,25 @@ fn opt_bytes_eq(a: &Option<Vec<u8>>, b: &Option<Vec<u8>>) -> bool {
     }
 }
 
+/// #644 评论 5473789298 第3节：把 incoming 内容推入 plan.apply。
+///
+/// `incoming = Some` → [`CommitAction::Apply`]；`incoming = None`（远端删除）→
+/// [`CommitAction::Delete`]。UserTextDocument 的 RemoteChanged 和
+/// Metadata/GeneratedCache 的 LWW 远端获胜都走这条路径。
+fn apply_incoming(plan: &mut CommitPlan, rel: PathBuf, incoming: Option<Vec<u8>>) {
+    match incoming {
+        Some(content) => {
+            plan.apply.push(CommitAction::Apply {
+                rel_path: rel,
+                content,
+            });
+        }
+        None => {
+            plan.apply.push(CommitAction::Delete { rel_path: rel });
+        }
+    }
+}
+
 /// 计算字节内容的 MD5 hex 摘要。`None`（文件不存在）返回空字符串。
 fn md5_hex(content: &Option<Vec<u8>>) -> String {
     match content {
@@ -410,16 +381,6 @@ fn md5_hex(content: &Option<Vec<u8>>) -> String {
     }
 }
 
-/// 递归列出 `root` 下所有文件的相对路径。
-fn list_relative_paths(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    if !root.exists() {
-        return Ok(out);
-    }
-    walk(root, root, &mut out)?;
-    Ok(out)
-}
-
 /// 递归列出 live root 下所有需要参与同步的文件相对路径。
 ///
 /// 跳过 `.git/`、`full-sync-staging/`（避免递归复制 staging 自身）、
@@ -429,27 +390,34 @@ fn list_live_file_paths(live_root: &Path) -> Result<Vec<PathBuf>> {
     if !live_root.exists() {
         return Ok(out);
     }
-    walk_live(live_root, live_root, &mut out)?;
+    walk_commit_candidates(live_root, live_root, &mut out)?;
     Ok(out)
 }
 
-fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            walk(root, &path, out)?;
-        } else {
-            if let Ok(rel) = path.strip_prefix(root) {
-                out.push(rel.to_path_buf());
-            }
-        }
+/// #644 评论 5473789298 第2节：列出 base/staging 下参与 commit 比较的候选路径。
+///
+/// 与 [`list_live_file_paths`] 共用同一套跳过规则，确保 base/staging/live
+/// 三方比较只看同步业务文件，不会把 `.git/`、`full-sync-staging/`、
+/// `app-meta/transactions/` 当成正文比较。
+///
+/// `CommitAction` / `StagingConflict` 永远不会出现被跳过的路径。
+fn list_commit_candidate_paths(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    if !root.exists() {
+        return Ok(out);
     }
-    Ok(())
+    walk_commit_candidates(root, root, &mut out)?;
+    Ok(out)
 }
 
+/// 递归遍历 `dir`，跳过同步引擎内部目录，把文件相对 `root` 的路径推入 `out`。
+///
+/// 跳过规则（与 live 扫描、commit candidate 共用同一套）：
+/// - `.git/`：Git 仓库元数据，不是用户内容；
+/// - `full-sync-staging/`：staging run 自身，避免递归；
+/// - `app-meta/transactions/`：事务暂存目录，commit 中间态。
 #[allow(clippy::excessive_nesting)]
-fn walk_live(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+fn walk_commit_candidates(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -464,7 +432,7 @@ fn walk_live(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
                     continue;
                 }
             }
-            walk_live(root, &path, out)?;
+            walk_commit_candidates(root, &path, out)?;
         } else {
             if let Ok(rel) = path.strip_prefix(root) {
                 out.push(rel.to_path_buf());
@@ -614,14 +582,16 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let live = tmp.path().join("live");
         fs::create_dir_all(&live).unwrap();
-        fs::write(live.join("f.txt"), "base").unwrap();
+        // #644 评论 5473789298 第3节：UserTextDocument 双方都改才冲突。
+        // 用 note.md（正文类）而非 .txt（GeneratedCache 走 LWW 不冲突）。
+        fs::write(live.join("note.md"), "base").unwrap();
 
         let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
-        run.build_base_snapshot_from_live(&live, &[PathBuf::from("f.txt")])
+        run.build_base_snapshot_from_live(&live, &[PathBuf::from("note.md")])
             .unwrap();
         // local 改了（atomic_write rename 替换，base 保留旧 inode）。
-        crate::storage::atomic_write_string(&live.join("f.txt"), "local-changed").unwrap();
-        fs::write(run.staging_root().join("f.txt"), "incoming-changed").unwrap();
+        crate::storage::atomic_write_string(&live.join("note.md"), "local-changed").unwrap();
+        fs::write(run.staging_root().join("note.md"), "incoming-changed").unwrap();
 
         let plan = run.compute_commit_plan(&live).unwrap();
         assert_eq!(plan.conflict.len(), 1);
@@ -671,13 +641,15 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let live = tmp.path().join("live");
         fs::create_dir_all(&live).unwrap();
-        fs::write(live.join("f.txt"), "base").unwrap();
+        // #644 评论 5473789298 第3节：UserTextDocument local 改了 + 远端删除 → 冲突。
+        // 用 note.md（正文类）而非 .txt（GeneratedCache 走 LWW：Apply Delete 不冲突）。
+        fs::write(live.join("note.md"), "base").unwrap();
 
         let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
-        run.build_base_snapshot_from_live(&live, &[PathBuf::from("f.txt")])
+        run.build_base_snapshot_from_live(&live, &[PathBuf::from("note.md")])
             .unwrap();
-        // local 改了，远端删除（staging 没有 f.txt）。
-        crate::storage::atomic_write_string(&live.join("f.txt"), "local-changed").unwrap();
+        // local 改了，远端删除（staging 没有 note.md）。
+        crate::storage::atomic_write_string(&live.join("note.md"), "local-changed").unwrap();
 
         let plan = run.compute_commit_plan(&live).unwrap();
         // local!=base, incoming=None → local!=incoming → Conflict

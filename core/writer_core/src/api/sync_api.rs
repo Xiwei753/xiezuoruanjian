@@ -257,10 +257,8 @@ impl WriterCoreApi {
                     };
                     // record_full_sync_preflight_failure 是 pub API，
                     // persist_full_sync_early_failure 是 pub(super) 不可从 api 层调用。
-                    let _ = self.record_full_sync_preflight_failure(
-                        status_str,
-                        "staging_seed".to_string(),
-                    );
+                    let _ = self
+                        .record_full_sync_preflight_failure(status_str, "staging_seed".to_string());
                     return Err(err.into());
                 }
             };
