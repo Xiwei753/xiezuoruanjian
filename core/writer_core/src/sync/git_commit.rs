@@ -641,8 +641,7 @@ fn finalize_git_repo_metadata_inner(
             &staging_odb,
             new_oid,
             &branch_name,
-        )
-        .map_err(GitFinalizeError::FinalizeFailed),
+        ),
         GitSeedState::Unborn { head_ref } => finalize_unborn(
             live_root,
             &staging_repo,
@@ -671,6 +670,8 @@ fn finalize_git_repo_metadata_inner(
 ///
 /// #644 评论 5475413230 第2节：原子性改进。
 /// #644 评论 5475805198 第4节：RAII 守卫保证临时目录清理。
+/// #644 评论 5478237852 问题1：返回 `GitFinalizeError` 而非 `crate::Error`，
+/// 使 `ConcurrentMetadataChanged` 能向上传播，避免 rollback 删除别人刚创建的 `.git`。
 fn finalize_not_git_repo(
     live_root: &Path,
     staging_root: &Path,
@@ -678,7 +679,7 @@ fn finalize_not_git_repo(
     staging_odb: &git2::Odb,
     new_oid: git2::Oid,
     branch_name: &str,
-) -> Result<()> {
+) -> std::result::Result<(), GitFinalizeError> {
     let staging_git = staging_root.join(".git");
     let live_git = live_root.join(".git");
 
@@ -703,10 +704,12 @@ fn finalize_not_git_repo(
     import_missing_objects(staging_odb, &tmp_odb)?;
 
     if !tmp_odb.exists(new_oid) {
-        return Err(crate::Error::Io(std::io::Error::other(format!(
-            "finalize_not_git_repo: new_oid {} not found in tmp after import",
-            new_oid
-        ))));
+        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+            std::io::Error::other(format!(
+                "finalize_not_git_repo: new_oid {} not found in tmp after import",
+                new_oid
+            )),
+        )));
     }
 
     let ref_name = format!("refs/heads/{}", branch_name);
@@ -721,21 +724,29 @@ fn finalize_not_git_repo(
 
     update_live_index(&tmp_repo, staging_repo, new_oid)?;
 
+    // #644 评论 5478237852 问题1：live .git 在 rename 前已出现，返回 ConcurrentMetadataChanged，
+    // 不能进入 metadata rollback（否则会删除别人刚创建的 .git）。
     if live_git.exists() {
-        return Err(crate::Error::Io(std::io::Error::other(
-            "finalize_not_git_repo: live .git appeared during finalize (concurrent modification)",
-        )));
+        return Err(GitFinalizeError::ConcurrentMetadataChanged {
+            reason: "live .git appeared during finalize (concurrent git init)".to_string(),
+        });
     }
 
     // 成功：rename 临时目录到 .git，取消守卫自动删除。
     let guard_path = _guard.disarm();
-    fs::rename(&guard_path, &live_git).map_err(|e| {
-        // rename 失败，手动清理。
+    if let Err(e) = fs::rename(&guard_path, &live_git) {
+        // #644 评论 5478237852 问题1：rename 失败可能是因为目标在检查后又被并发创建。
+        // 再次检查目标 .git，如果存在则属于并发出现，返回 ConcurrentMetadataChanged。
         let _ = fs::remove_dir_all(&guard_path);
-        crate::Error::Io(std::io::Error::other(format!(
-            "finalize_not_git_repo: rename tmp -> .git failed: {e}"
-        )))
-    })?;
+        if live_git.exists() {
+            return Err(GitFinalizeError::ConcurrentMetadataChanged {
+                reason: "live .git appeared during rename (concurrent git init)".to_string(),
+            });
+        }
+        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+            std::io::Error::other(format!("finalize_not_git_repo: rename tmp -> .git failed: {e}")),
+        )));
+    }
 
     Ok(())
 }
