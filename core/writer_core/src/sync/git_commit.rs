@@ -822,11 +822,93 @@ pub fn commit_git_finalize(
     Ok(())
 }
 
+/// #644 评论 5485518160 修改点 2：`index_lock_owner=None` 旧 manifest 迁移判定结果。
+///
+/// 当 `plan.new_index_sha256.is_some()` 且 `plan.index_lock_owner.is_none()` 时，
+/// 恢复入口（`rollback_full_sync_transaction`）在调用 `rollback_git_finalize` 之前
+/// 用 `check_index_lock_owner_migration` 判断磁盘状态，决定如何处理：
+pub enum IndexLockOwnerMigration {
+    /// canonical `.git/index.lock` 已存在。不知道是谁的，不能 terminalize transaction，
+    /// 返回 Err 保留 tx_dir。
+    LockExists,
+    /// 没有 `index.lock` 且 current index == snapshot.index（old）。index 这一步
+    /// 本来就没发生，安全按 AlreadyReverted 继续（无需补 owner，直接让
+    /// rollback_git_finalize 走 current==old 分支）。
+    AlreadyReverted,
+    /// 没有 `index.lock` 且 current index == new（plan.new_index_sha256 命中）。
+    /// 生成新的 owner UUID，调用方应先原子写回 manifest.git_finalize.plan.index_lock_owner
+    /// 并 fsync，再进入反向 rollback（此时 plan.index_lock_owner 已是 Some，
+    /// rollback_git_finalize 的 current==new 分支能拿到 owner）。
+    MigrateToNewOwner(String),
+    /// current 既不是 old 也不是 new。并发修改，返回 Err 保留事务。
+    ConcurrentModification,
+}
+
+impl std::fmt::Debug for IndexLockOwnerMigration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LockExists => write!(f, "LockExists"),
+            Self::AlreadyReverted => write!(f, "AlreadyReverted"),
+            Self::MigrateToNewOwner(_) => write!(f, "MigrateToNewOwner(<uuid>)"),
+            Self::ConcurrentModification => write!(f, "ConcurrentModification"),
+        }
+    }
+}
+
+/// #644 评论 5485518160 修改点 2：检查 `index_lock_owner=None` 旧 manifest 的迁移判定。
+///
+/// 读 live `.git/index`、`.git/index.lock`，根据磁盘状态返回迁移决策。
+/// 调用方（`rollback_full_sync_transaction`）负责持久化新 owner 到 manifest。
+pub fn check_index_lock_owner_migration(
+    live_root: &Path,
+    snapshot: &GitMetadataSnapshot,
+    plan: &GitFinalizePlan,
+) -> Result<IndexLockOwnerMigration> {
+    let git_dir = live_root.join(".git");
+    let lock_path = git_dir.join("index.lock");
+    let index_path = git_dir.join("index");
+
+    // canonical index.lock 已存在：不知道是谁的，不能 terminalize。
+    if lock_path.exists() {
+        return Ok(IndexLockOwnerMigration::LockExists);
+    }
+
+    // 没有 index.lock，读 current index。
+    let current_index = if index_path.exists() {
+        let bytes = fs::read(&index_path)?;
+        IndexSnapshot::Bytes(bytes)
+    } else {
+        IndexSnapshot::Missing
+    };
+
+    // 先判 current == old（snapshot.index）。
+    if index_snapshot_eq(&current_index, &snapshot.index) {
+        return Ok(IndexLockOwnerMigration::AlreadyReverted);
+    }
+
+    // 再判 current == new（plan.new_index_sha256）。
+    if let Some(expected_hash) = plan.new_index_sha256 {
+        let current_is_new = match &current_index {
+            IndexSnapshot::Bytes(b) => sha256_bytes(b) == expected_hash,
+            IndexSnapshot::Missing => false,
+        };
+        if current_is_new {
+            // 生成新的 owner UUID，调用方负责持久化到 manifest。
+            return Ok(IndexLockOwnerMigration::MigrateToNewOwner(
+                uuid::Uuid::new_v4().to_string(),
+            ));
+        }
+    }
+
+    // current 既不是 old 也不是 new → 并发修改。
+    Ok(IndexLockOwnerMigration::ConcurrentModification)
+}
+
 /// #644 评论 5480360027：CAS-based rollback，根据 plan 的 old_oid/new_oid 做反向 CAS。
 ///
 /// 恢复时根据当前值判断某一步是否真的发生：
-/// - current == new_oid → 这一步已执行，反向 CAS 回 old_oid；
-/// - current == old_oid → 这一步没执行，无需 rollback；
+/// - current == new_oid → 这步已执行，反向 CAS 回 old_oid；
+/// - current == old_oid → 这步没执行，无需 rollback；
 /// - 两者都不是 → 有并发新状态，不能覆盖。
 ///
 /// #644 评论 5480360027 修复点 4：更新型 ref rollback 用 `reference_matching`
@@ -880,6 +962,9 @@ pub fn rollback_git_finalize(
         }
         // marker 匹配 → 本轮创建的 .git，删除它回到 finalize 前状态。
         fs::remove_dir_all(&live_git)?;
+        // #644 评论 5485518160 修改点 3：remove_dir_all 后必须 fsync live_root
+        //（.git 的父目录），持久化 .git 目录项删除，之后才能返回 Reverted。
+        crate::storage::sync_parent(&live_git)?;
         return Ok(GitRollbackOutcome::Reverted);
     }
 
@@ -911,6 +996,11 @@ pub fn rollback_git_finalize(
             // .git/index.lock + .git/index.sujian-<owner>，二者同一 inode。
             // 若 lock 属于本轮（与 owner_file 同 inode）→ 清理 lock + owner_file；
             // 若 lock 不属于本轮（并发 Git 进程）→ 不碰，保留 no-op。
+            // #644 评论 5485518160 修改点 2：迁移入口已保证进入 rollback_git_finalize 时
+            // 若 new_index_sha256.is_some() 则 owner 必为 Some（除非 current==old 且无
+            // lock 的安全 no-op 路径）。owner=None 且有 stale lock → 未知归属，返回 Err
+            // 保留事务（不能留永久 lock）。
+            let mut cleaned_stale_lock = false;
             if let Some(owner) = &plan.index_lock_owner {
                 let owner_file = live_root
                     .join(".git")
@@ -921,10 +1011,30 @@ pub fn rollback_git_finalize(
                 {
                     let _ = fs::remove_file(&lock_path);
                     let _ = fs::remove_file(&owner_file);
+                    cleaned_stale_lock = true;
                 } else if owner_file.exists() {
                     // owner_file 存在但 lock 不存在或不属于本轮：清理孤立的 owner_file。
                     let _ = fs::remove_file(&owner_file);
+                    cleaned_stale_lock = true;
                 }
+            } else if lock_path.exists() {
+                // #644 评论 5485518160 修改点 2：owner=None 但 stale lock 存在。
+                // 迁移入口应已处理 owner=None 情况，到达这里说明 lock 是未知的
+                //（可能外部 Git 进程），不能留永久 lock 也不能删别人的 lock，
+                // 返回 Err 保留事务给下次恢复。
+                return Err(crate::Error::Io(std::io::Error::other(
+                    "rollback_git_finalize: current == snapshot.index but \
+                     plan.index_lock_owner is None and stale index.lock exists — \
+                     cannot determine lock ownership, refusing to delete external \
+                     lock or leave permanent lock, preserving transaction for next \
+                     recovery",
+                )));
+            }
+            // #644 评论 5485518160 修改点 3：清理 stale lock/owner 后必须 sync_dir(.git)，
+            // 持久化目录项删除，之后才能让 transaction 进入 terminal phase。
+            if cleaned_stale_lock {
+                let git_dir = live_root.join(".git");
+                crate::storage::sync_dir(&git_dir)?;
             }
         } else {
             // current != old，检查是否 == new（plan.new_index_sha256）。
@@ -1411,6 +1521,10 @@ fn finalize_not_git_repo(
         )));
     }
 
+    // #644 评论 5485518160 修改点 3：rename 成功后必须 fsync live_root（.git 的父目录），
+    // 持久化 .git 目录项，之后才能返回 finalize success。
+    crate::storage::sync_parent(&live_git).map_err(GitFinalizeError::FinalizeFailed)?;
+
     // #644 评论 5482310913 问题1：rename 成功后**不要删除** owner marker。
     // marker 删除推迟到上层 `tx.finish()` 之后（由 `cleanup_repo_create_owner_marker` 负责）。
     // 崩溃窗口分析：
@@ -1634,10 +1748,26 @@ fn finalize_existing(
                         )),
                     )));
                 }
+                // HEAD 仍是 symbolic 且 target == head_ref：允许继续。
+            } else {
+                // #644 评论 5485518160 修改点 4：HEAD detached（无 sym_target）必须返回
+                // FinalizeFailed（**不是** ConcurrentMetadataChanged，因为本轮已经可能
+                // 写过 index/remote refs，需要走现有 rollback，不能标成"nothing written"）。
+                // verify_git_metadata_unchanged 是在 index/remote refs 写入之前做的，
+                // 用户/外部 Git 可在 preflight 后把 HEAD detach。此时 index 已换、remote
+                // refs 已改，post-check 看到 detached 也接受的话，只要旧 branch 仍是
+                // base_oid，reference_matching(head_ref, ...) 仍会成功，full sync 偷偷
+                // 推进用户已离开的 branch。收紧为 detached → FinalizeFailed，理由说明
+                // "HEAD detached after preflight: index/refs may already be written,
+                // must rollback"。
+                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                    std::io::Error::other(
+                        "finalize_existing: HEAD detached after preflight: index/refs \
+                         may already be written, must rollback (refusing to advance \
+                         head_ref on a branch the user has left via detach)",
+                    ),
+                )));
             }
-            // HEAD 是 detached（无 sym_target）时不报错，继续用 reference_matching 做 CAS。
-            // finalize_existing 的语义是更新 head_ref，HEAD 是否 symbolic 由 reference_matching
-            // 的 CAS 保护（current != base_oid 时返回 EMODIFIED）。
         }
         Err(e) if e.code() == git2::ErrorCode::NotFound => {
             return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
@@ -1798,7 +1928,11 @@ fn same_file_id(a: &Path, b: &Path) -> bool {
 ///
 /// 关键不变量：ownership 是磁盘事实（hard_link 产生的同一 inode + owner 文件名），
 /// 不依赖 `Drop` 有没有机会执行。
-struct OwnedIndexLock {
+///
+/// #644 评论 5485518160 修改点 1：`acquire` 改为"恢复已有 ownership → 再创建新 ownership"
+/// 两段状态机。owner 文件首次创建用 `OpenOptions::create_new(true)`，绝不 truncate
+/// 已存在 owner 文件（避免 rollback 时 `File::create` 把 live index truncate）。
+pub struct OwnedIndexLock {
     lock_path: PathBuf,
     owner_file: PathBuf,
     /// `true` 表示已成功 commit（lock 已 rename/remove 走），`drop` 只清理 owner_file。
@@ -1806,25 +1940,120 @@ struct OwnedIndexLock {
     disarmed: bool,
 }
 
+/// #644 评论 5485518160 修改点 1：`OwnedIndexLock::acquire` 的返回类型。
+///
+/// 区分"新获取的锁（未提交，需调用方 commit）"和"上次已提交的锁（调用方应跳过 commit）"。
+/// `AlreadyCommitted` 表示磁盘状态显示上一次 `commit_rename`/`commit_delete` 已完成
+/// （owner_file 与 live index 同 inode 且 index.lock 不存在），调用方应把 lock 视为
+/// 已 disarm，不再 commit，直接依据 current index 的 old/new 状态继续恢复。
+pub enum AcquireOutcome {
+    /// 新获取的锁，调用方需在适当时机调用 `commit_rename`/`commit_delete`。
+    NewlyAcquired(OwnedIndexLock),
+    /// 上次 acquire 后已成功 commit（rename/delete 已完成），调用方应跳过 commit。
+    AlreadyCommitted,
+}
+
 impl OwnedIndexLock {
-    /// 写 `prepared_file`（owner_file）含 `prepared_bytes`，fsync 文件 + 父目录，
-    /// 然后 `hard_link` 到 `lock_path` 获取 canonical Git lock。
+    /// #644 评论 5485518160 修改点 1：恢复已有 ownership → 再创建新 ownership 的两段状态机。
     ///
-    /// `lock_path` 已存在 → `AlreadyExists` → 返回 `ConcurrentMetadataChanged`，
-    /// 清理刚创建的 owner_file，绝不碰已存在的 lock（外部 Git 进程可能正在用）。
-    fn acquire(
+    /// ## Phase 1：检查磁盘崩溃状态
+    ///
+    /// owner_file = `.git/index.sujian-<owner>`，lock_path = `.git/index.lock`，
+    /// index_path = `.git/index`。根据三者 inode 关系判断上一次 acquire/commit
+    /// 死在哪一步：
+    ///
+    /// - **State 1（已拿锁未 rename）**：owner_file 与 index.lock 同 inode，且 index
+    ///   不是这个 inode。说明上次 acquire 已成功但 commit_rename 未执行。这个 lock
+    ///   是本事务自己的 → 删除 lock + owner，fsync `.git`，fall through 到 Phase 2
+    ///   重新 acquire。
+    /// - **State 2（已 commit）**：owner_file 与 index 同 inode、index.lock 不存在。
+    ///   说明上次 `rename(lock -> index)` 已提交。**绝不能打开 owner_file**（避免
+    ///   truncate live index）；只删除 owner 这个多余目录项并 fsync `.git`，返回
+    ///   `AlreadyCommitted`，让调用方跳过 commit。
+    /// - **State 3（孤立 prepared file）**：owner_file 单独存在且不与 index 同 inode，
+    ///   index.lock 不存在。删除 owner，fsync `.git`，fall through 到 Phase 2 重新 acquire。
+    /// - **State 4（归属未知/外部 Git）**：index.lock 存在但 owner_file 不存在，或者
+    ///   owner_file 存在但与 index.lock inode 不匹配。返回 `ConcurrentMetadataChanged`，
+    ///   保留事务，绝不碰 lock。
+    ///
+    /// ## Phase 2：新建 ownership
+    ///
+    /// owner 文件首次创建用 `OpenOptions::new().write(true).create_new(true)`，
+    /// 绝不 truncate 已存在 owner 文件。fsync 文件 + 父目录后 `hard_link` 到
+    /// `lock_path` 获取 canonical Git lock。lock 已存在 → `ConcurrentMetadataChanged`，
+    /// 清理刚创建的 owner_file，绝不碰已存在的 lock。
+    pub fn acquire(
         git_dir: &Path,
         owner: &str,
         prepared_bytes: &[u8],
-    ) -> std::result::Result<Self, GitFinalizeError> {
+    ) -> std::result::Result<AcquireOutcome, GitFinalizeError> {
         use std::io::Write;
 
         let owner_file = git_dir.join(format!("index.sujian-{}", owner));
         let lock_path = git_dir.join("index.lock");
+        let index_path = git_dir.join("index");
 
-        // 1. 写 owner_file（prepared file）含 prepared_bytes，fsync 文件 + 父目录。
+        // ── Phase 1：检查磁盘崩溃状态 ──
+        if owner_file.exists() {
+            let owner_eq_lock = lock_path.exists() && same_file_id(&owner_file, &lock_path);
+            let owner_eq_index = index_path.exists() && same_file_id(&owner_file, &index_path);
+
+            if owner_eq_lock && !owner_eq_index {
+                // State 1：上次已拿锁但还没 rename。lock 是本事务自己的。
+                // 删除 lock + owner，fsync .git，fall through 到 Phase 2 重新 acquire。
+                fs::remove_file(&lock_path)
+                    .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+                fs::remove_file(&owner_file)
+                    .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+                crate::storage::sync_dir(git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
+            } else if owner_eq_index && !lock_path.exists() {
+                // State 2：上次 rename(lock -> index) 已提交。
+                // 绝不能打开 owner_file（会 truncate live index）；只删除 owner 这个
+                // 多余目录项并 fsync .git，返回 AlreadyCommitted。
+                fs::remove_file(&owner_file)
+                    .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+                crate::storage::sync_dir(git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
+                return Ok(AcquireOutcome::AlreadyCommitted);
+            } else if lock_path.exists() && !owner_eq_lock {
+                // State 4（owner_file 存在但与 index.lock inode 不匹配）：
+                // 归属未知/外部 Git，返回 ConcurrentMetadataChanged，绝不碰 lock。
+                return Err(GitFinalizeError::ConcurrentMetadataChanged {
+                    reason: "index.lock exists but inode does not match owner_file: \
+                             concurrent git process is writing index"
+                        .to_string(),
+                });
+            } else if !owner_eq_index && !lock_path.exists() {
+                // State 3：owner_file 单独存在且不与 index 同 inode，index.lock 不存在。
+                // 孤立 prepared file，删除 owner，fsync .git，fall through 到 Phase 2。
+                fs::remove_file(&owner_file)
+                    .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+                crate::storage::sync_dir(git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
+            } else {
+                // 剩余状态：owner_eq_lock && owner_eq_index（三者同一 inode，异常状态），
+                // 或 owner_eq_index && lock_path.exists() && !owner_eq_lock
+                //（index 是本轮的但 lock 是外部的）。保守返回 Err，绝不碰任何文件。
+                return Err(GitFinalizeError::ConcurrentMetadataChanged {
+                    reason: "acquire: ambiguous crash state — owner_file, index.lock, \
+                             index have unexpected inode relationship, refusing to \
+                             touch any file"
+                        .to_string(),
+                });
+            }
+        } else if lock_path.exists() {
+            // State 4（owner_file 不存在但 index.lock 存在）：归属未知/外部 Git。
+            return Err(GitFinalizeError::ConcurrentMetadataChanged {
+                reason: "index.lock exists but owner_file missing: concurrent git \
+                         process is writing index"
+                    .to_string(),
+            });
+        }
+
+        // ── Phase 2：新建 ownership（create_new，绝不 truncate 已存在文件）──
         {
-            let mut f = std::fs::File::create(&owner_file)
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&owner_file)
                 .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
             f.write_all(prepared_bytes)
                 .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
@@ -1835,13 +2064,13 @@ impl OwnedIndexLock {
         }
         crate::storage::sync_parent(&owner_file).map_err(GitFinalizeError::FinalizeFailed)?;
 
-        // 2. hard_link(owner_file, lock_path)。lock 已存在 → EEXIST → ConcurrentMetadataChanged。
+        // hard_link(owner_file, lock_path)。lock 已存在 → EEXIST → ConcurrentMetadataChanged。
         match std::fs::hard_link(&owner_file, &lock_path) {
-            Ok(()) => Ok(Self {
+            Ok(()) => Ok(AcquireOutcome::NewlyAcquired(Self {
                 lock_path,
                 owner_file,
                 disarmed: false,
-            }),
+            })),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 let _ = fs::remove_file(&owner_file);
                 Err(GitFinalizeError::ConcurrentMetadataChanged {
@@ -1858,7 +2087,10 @@ impl OwnedIndexLock {
 
     /// 提交（Bytes 路径）：`rename lock → index`（原子提交 + 释放锁）。
     /// 成功后 `disarm`，`drop` 只清理 owner_file。
-    fn commit_rename(&mut self, index_path: &Path) -> std::result::Result<(), GitFinalizeError> {
+    pub fn commit_rename(
+        &mut self,
+        index_path: &Path,
+    ) -> std::result::Result<(), GitFinalizeError> {
         fs::rename(&self.lock_path, index_path)
             .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
         crate::storage::sync_parent(index_path).map_err(GitFinalizeError::FinalizeFailed)?;
@@ -1867,7 +2099,10 @@ impl OwnedIndexLock {
     }
 
     /// 提交（Missing 路径）：删除 index，然后删除 lock，每步 fsync 父目录。
-    fn commit_delete(&mut self, index_path: &Path) -> std::result::Result<(), GitFinalizeError> {
+    pub fn commit_delete(
+        &mut self,
+        index_path: &Path,
+    ) -> std::result::Result<(), GitFinalizeError> {
         fs::remove_file(index_path)
             .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
         crate::storage::sync_parent(index_path).map_err(GitFinalizeError::FinalizeFailed)?;
@@ -1920,7 +2155,17 @@ fn install_index_with_lock(
     let index_path = git_dir.join("index");
 
     // 2. OwnedIndexLock::acquire：写 prepared file + hard_link 到 lock。
-    let mut lock = OwnedIndexLock::acquire(&git_dir, owner, &target_index_bytes)?;
+    //    #644 评论 5485518160 修改点 1：acquire 返回 AcquireOutcome。
+    //    - NewlyAcquired：拿到新锁，继续 CAS 检查 + commit。
+    //    - AlreadyCommitted：上次 commit_rename 已完成（index 已是目标状态），
+    //      跳过 CAS 检查和 commit，直接返回 Ok（index 已是目标状态）。
+    let mut lock = match OwnedIndexLock::acquire(&git_dir, owner, &target_index_bytes)? {
+        AcquireOutcome::NewlyAcquired(lock) => lock,
+        AcquireOutcome::AlreadyCommitted => {
+            // 上次 commit_rename 已完成，index 已是目标状态，无需再 commit。
+            return Ok(());
+        }
+    };
 
     // 3. 拿到锁后重新读取 live index，确认仍等于 snapshot.index。
     let current_index = if index_path.exists() {
@@ -1970,6 +2215,10 @@ fn rollback_index_via_lockfile(
 ) -> Result<()> {
     // 1. OwnedIndexLock::acquire：写 prepared file（snapshot.index 旧字节）+ hard_link 到 lock。
     //    lock 已存在 → ConcurrentMetadataChanged（绝不删别人的 lock）。
+    //    #644 评论 5485518160 修改点 1：acquire 返回 AcquireOutcome。
+    //    - NewlyAcquired：拿到新锁，继续 CAS 复验 + commit。
+    //    - AlreadyCommitted：上次反向 commit_rename/commit_delete 已完成
+    //      （index 已恢复到 snapshot.index），跳过 commit，直接返回 Ok。
     let git_dir = index_path.parent().ok_or_else(|| {
         crate::Error::Io(std::io::Error::other(
             "rollback_git_finalize: index_path has no parent (.git dir)",
@@ -1980,7 +2229,7 @@ fn rollback_index_via_lockfile(
         IndexSnapshot::Missing => &[],
     };
     let mut lock =
-        OwnedIndexLock::acquire(git_dir, owner, prepared_bytes).map_err(|e| match e {
+        match OwnedIndexLock::acquire(git_dir, owner, prepared_bytes).map_err(|e| match e {
             GitFinalizeError::ConcurrentMetadataChanged { reason } => {
                 crate::Error::Io(std::io::Error::other(format!(
                     "rollback_git_finalize: index.lock exists — refusing to delete external \
@@ -1993,7 +2242,13 @@ fn rollback_index_via_lockfile(
             GitFinalizeError::RollbackFailed { .. } => crate::Error::Io(std::io::Error::other(
                 "rollback_git_finalize: unexpected RollbackFailed from OwnedIndexLock::acquire",
             )),
-        })?;
+        })? {
+            AcquireOutcome::NewlyAcquired(lock) => lock,
+            AcquireOutcome::AlreadyCommitted => {
+                // 上次反向 commit 已完成（index 已恢复到 snapshot.index），无需再 commit。
+                return Ok(());
+            }
+        };
     // lock_path 仅用于诊断/一致性检查，确认 OwnedIndexLock 用的 lock 路径与调用方一致。
     debug_assert_eq!(lock_path, &git_dir.join("index.lock"));
 
@@ -2336,6 +2591,11 @@ fn sync_remote_refs(
 }
 
 /// 更新 live 的 index 为 staging HEAD 对应的 tree（不 checkout 工作区）。
+///
+/// #644 评论 5485518160 修改点 3：libgit2 默认不 fsync gitdir（
+/// `GIT_OPT_ENABLE_FSYNC_GITDIR` 默认 disabled），git2 crate 0.20.4 也未暴露
+/// 该选项绑定。为确保 tmp `.git` 的 index metadata 已同步，在
+/// `live_index.write()` 后显式 fsync index 文件 + 父目录。
 fn update_live_index(
     live_repo: &git2::Repository,
     staging_repo: &git2::Repository,
@@ -2368,6 +2628,16 @@ fn update_live_index(
         )))
     })?;
 
+    // #644 评论 5485518160 修改点 3：libgit2 默认不 fsync gitdir，显式 fsync
+    // index 文件 + 父目录（.git），保证 index 内容和目录项持久可见。
+    let index_path = live_repo.path().join("index");
+    if index_path.exists() {
+        let index_file = std::fs::File::open(&index_path)?;
+        index_file.sync_all()?;
+        drop(index_file);
+        crate::storage::sync_parent(&index_path)?;
+    }
+
     Ok(())
 }
 
@@ -2380,6 +2650,11 @@ fn sha256_bytes(data: &[u8]) -> [u8; 32] {
 }
 
 /// 递归复制目录（用于复制 .git/）。
+///
+/// #644 评论 5485518160 修改点 3：durable recursive copy。
+/// 普通文件 copy 后对目标文件 `sync_all` + 目标父目录 `sync_dir`（复用
+/// `crate::storage::durable_copy_file`）。每层目录 bottom-up `sync_dir`
+///（递归返回后 sync 当前 dst 目录），保证目录项持久可见。
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
@@ -2389,9 +2664,12 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
         if src_path.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
-            fs::copy(&src_path, &dst_path)?;
+            // #644 评论 5485518160 修改点 3：durable copy — copy 后 fsync 文件 + 父目录。
+            crate::storage::durable_copy_file(&src_path, &dst_path)?;
         }
     }
+    // bottom-up：递归返回后 sync 当前 dst 目录，持久化目录项。
+    crate::storage::sync_dir(dst)?;
     Ok(())
 }
 

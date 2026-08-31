@@ -5,6 +5,14 @@
 //! 本模块在 Android target 上一次性关闭 owner validation；其他 target 保持默认。
 //!
 //! 初始化通过 `OnceLock` 保证只执行一次，线程安全。
+//!
+//! #644 评论 5485518160 修改点 3：libgit2 的 `GIT_OPT_ENABLE_FSYNC_GITDIR` 默认
+//! disabled，git2 crate 0.20.4 未暴露该选项绑定（已确认源码无 `set_fsync_gitdir`）。
+//! 因此本模块无法在 `configure()` 里统一开启 fsync-gitdir。作为替代，
+//! `sync::git_commit::update_live_index` 在 `live_index.write()` 后显式 fsync
+//! index 文件 + 父目录（.git），保证 tmp `.git` 的 index metadata 已同步。
+//! NotGitRepo 路径的 `copy_dir_recursive` 也已改为 durable recursive copy
+//!（copy 后 fsync 文件 + 父目录，每层目录 bottom-up fsync）。
 
 use std::sync::OnceLock;
 

@@ -226,10 +226,11 @@ fn verify_problem2_lockfile_rename_recovers_stale_lock() {
 
     // ── 场景 1：rename 前 crash（lock 写完但 rename 未完成） ──
     // index 仍是旧内容，lock 存在（包含新内容或部分）。
-    // #644 评论 5483239422 问题3 新语义：rollback 走三态判断，current == old(snapshot)
-    // → no-op，**不碰 lock**（不凭文件名判断 lock 是自己的，绝不删别人的 lock）。
-    // lock 拋留是保守选择——宁可拋留等显式清理/下次 forward install，也不冒险删
-    // 属于另一个 Git 进程的 lock。
+    // #644 评论 5485518160 修改点 2：当 plan.index_lock_owner=None 且 stale lock 存在时，
+    // rollback_git_finalize 不能确定 lock 归属。旧语义是 no-op + 保留 lock（成功），
+    // 但这会留下永久 .git/index.lock。新语义：返回 Err 保留 transaction，让上层
+    // 迁移入口（rollback_full_sync_transaction）处理或下次恢复重试。
+    // lock 仍存在（绝不碰别人的 lock），index 仍保持旧内容。
     {
         // 恢复初始状态：index = old, 无 lock。
         writer_core::storage::atomic_write_bytes(&index_path, &old_index_bytes).unwrap();
@@ -253,15 +254,21 @@ fn verify_problem2_lockfile_rename_recovers_stale_lock() {
             index_lock_owner: None,
         };
 
-        // 新语义：current == old → no-op，返回 Ok，不碰 lock。
-        rollback_git_finalize(&live, &snapshot, &plan).unwrap();
+        // #644 评论 5485518160 修改点 2：未知 stale lock 应该保留 transaction
+        //（rollback 返回 Err），而不是 rollback 成功但留下 lock。
+        let result = rollback_git_finalize(&live, &snapshot, &plan);
+        assert!(
+            result.is_err(),
+            "FIX VERIFIED (#644 评论 5485518160 修改点 2): rollback_git_finalize with \
+             index_lock_owner=None and stale index.lock returns Err — cannot determine \
+             lock ownership, preserving transaction for next recovery instead of \
+             succeeding with a permanent lock left behind"
+        );
 
-        // 新语义（#644 评论 5483239422 问题3）：lock 仍存在。
-        // rollback 绝不删 lock（不凭文件名判断是自己的）。
+        // lock 仍存在（绝不碰别人的 lock）。
         assert!(
             lock_path.exists(),
-            "FIX VERIFIED (#644 评论 5483239422 问题3): rollback_git_finalize does NOT \
-             delete index.lock — current == snapshot.index → no-op, lock preserved \
+            "rollback_git_finalize must NOT delete index.lock when ownership is unknown \
              (refusing to delete potentially external git process lock)"
         );
 

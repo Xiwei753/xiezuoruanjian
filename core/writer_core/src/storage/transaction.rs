@@ -495,6 +495,7 @@ impl Drop for SaveTransaction {
 /// - 任意一步失败 → 返回 Err → 保留 manifest + backup + transaction 目录
 ///
 /// 不吞错，给下次恢复留机会。
+#[allow(clippy::too_many_lines, clippy::excessive_nesting)]
 fn rollback_full_sync_transaction(
     tx_dir: &Path,
     target_root: &Path,
@@ -514,10 +515,68 @@ fn rollback_full_sync_transaction(
                 e
             )))
         })?;
+
+        // #644 评论 5485518160 修改点 2：index_lock_owner=None 旧 manifest 迁移。
+        // 在调用 rollback_git_finalize 之前，当 new_index_sha256.is_some() 且
+        // index_lock_owner.is_none() 时，做迁移判定（读 live .git/index、.git/index.lock）。
+        // 迁移入口先把新事实持久化到 manifest，再进入反向 rollback。
+        let migrated_plan: Option<crate::sync::git_commit::GitFinalizePlan> =
+            if git_rec.plan.new_index_sha256.is_some() && git_rec.plan.index_lock_owner.is_none() {
+                let migration = crate::sync::git_commit::check_index_lock_owner_migration(
+                    target_root,
+                    &git_rec.metadata_snapshot,
+                    &git_rec.plan,
+                )?;
+                match migration {
+                    crate::sync::git_commit::IndexLockOwnerMigration::LockExists => {
+                        // canonical index.lock 已存在：不知道是谁的，不能 terminalize。
+                        return Err(crate::Error::Io(std::io::Error::other(
+                            "rollback_full_sync_transaction: index.lock exists but \
+                             plan.index_lock_owner is None — cannot determine lock \
+                             ownership, preserving transaction for next recovery",
+                        )));
+                    }
+                    crate::sync::git_commit::IndexLockOwnerMigration::AlreadyReverted => {
+                        // current == old，index 这一步没发生，安全继续。
+                        // 用原 plan（owner=None），rollback_git_finalize 走 current==old 分支。
+                        None
+                    }
+                    crate::sync::git_commit::IndexLockOwnerMigration::MigrateToNewOwner(owner) => {
+                        // current == new，生成新 owner，先原子写回 manifest 并 fsync，
+                        // 再进入反向 rollback（plan.index_lock_owner 已是 Some）。
+                        let mut new_plan = git_rec.plan.clone();
+                        new_plan.index_lock_owner = Some(owner);
+                        let mut new_manifest = manifest.clone();
+                        // manifest.clone() 保留了 git_finalize = Some(...)（外层
+                        // if let Some(ref git_rec) = manifest.git_finalize 已保证）。
+                        if let Some(git_finalize) = new_manifest.git_finalize.as_mut() {
+                            git_finalize.plan = new_plan.clone();
+                        }
+                        let manifest_path = tx_dir.join(MANIFEST_FILENAME);
+                        let json = serde_json::to_string_pretty(&new_manifest)?;
+                        crate::storage::atomic_write_string(&manifest_path, &json)?;
+                        Some(new_plan)
+                    }
+                    crate::sync::git_commit::IndexLockOwnerMigration::ConcurrentModification => {
+                        // current 既不是 old 也不是 new → 并发修改。
+                        return Err(crate::Error::Io(std::io::Error::other(
+                            "rollback_full_sync_transaction: index CAS miss during \
+                             index_lock_owner migration (current matches neither \
+                             snapshot.index nor plan.new_index_sha256) — concurrent \
+                             modification, preserving transaction for next recovery",
+                        )));
+                    }
+                }
+            } else {
+                None
+            };
+        let plan_for_rollback: &crate::sync::git_commit::GitFinalizePlan =
+            migrated_plan.as_ref().unwrap_or(&git_rec.plan);
+
         let outcome = crate::sync::git_commit::rollback_git_finalize(
             target_root,
             &git_rec.metadata_snapshot,
-            &git_rec.plan,
+            plan_for_rollback,
         )?;
         match outcome {
             crate::sync::git_commit::GitRollbackOutcome::Reverted => {
