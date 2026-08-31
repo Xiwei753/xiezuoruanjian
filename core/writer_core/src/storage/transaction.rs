@@ -200,7 +200,8 @@ impl SaveTransaction {
 
     /// #644 评论 5476546134 第2节：设置 Git finalize 崩溃恢复记录。
     ///
-    /// 写入 manifest，使重启后能独立从 live + transaction 目录完成恢复。
+    /// 必须在 `commit()` 之前调用，使 recovery record 与 manifest 一起原子写入。
+    /// 写入 manifest 供重启后独立恢复。
     pub fn set_git_finalize_recovery(
         &mut self,
         record: crate::sync::git_commit::GitFinalizeRecoveryRecord,
@@ -434,6 +435,73 @@ impl Drop for SaveTransaction {
     }
 }
 
+/// #644 评论 5476546134 第3节：统一回滚 full-sync 事务入口。
+///
+/// 满足：
+/// - Git rollback 成功 AND 文件 rollback 成功 → phase=RolledBack → cleanup
+/// - 任意一步失败 → 返回 Err → 保留 manifest + backup + transaction 目录
+///
+/// 不吞错，给下次恢复留机会。
+fn rollback_full_sync_transaction(
+    tx_dir: &Path,
+    target_root: &Path,
+    manifest: &TransactionManifest,
+) -> Result<()> {
+    // 1. 回滚 Git metadata（如果有 recovery record）。
+    if let Some(ref git_rec) = manifest.git_finalize {
+        // #644 评论 5476546134 第3节：删除 NotGitRepo 特判，
+        // 统一调用 rollback_git_finalize，让 repo_existed 决定恢复还是删除。
+        let _seed_state = git_rec.seed_state.to_seed_state().map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "rollback_full_sync_transaction: invalid seed state: {}",
+                e
+            )))
+        })?;
+        crate::sync::git_commit::rollback_git_finalize(
+            target_root,
+            &git_rec.metadata_snapshot,
+        )?;
+    }
+
+    // 2. 回滚 live 文件（用 backup_entries）。
+    let backup_dir = tx_dir.join("backup");
+    for entry in &manifest.backup_entries {
+        match entry {
+            BackupEntry::RestoreFile {
+                target_relative,
+                backup_filename,
+            } => {
+                let target_path = target_root.join(target_relative);
+                let backup_path = backup_dir.join(backup_filename);
+                if backup_path.exists() {
+                    if let Some(parent) = target_path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::copy(&backup_path, &target_path)?;
+                }
+            }
+            BackupEntry::RemoveCreated { target_relative } => {
+                let target_path = target_root.join(target_relative);
+                if target_path.exists() {
+                    fs::remove_file(&target_path)?;
+                }
+            }
+        }
+    }
+
+    // 3. 清理备份目录。
+    let _ = fs::remove_dir_all(&backup_dir);
+
+    // 4. 标记 RolledBack。
+    let manifest_path = tx_dir.join(MANIFEST_FILENAME);
+    write_manifest_phase_static(&manifest_path, TransactionPhase::RolledBack, manifest)?;
+
+    // 5. 清理事务目录。
+    fs::remove_dir_all(tx_dir)?;
+
+    Ok(())
+}
+
 /// #644 评论 5476546134 第2节：静态版本的 manifest phase 更新，供恢复流程使用。
 ///
 /// 恢复时没有 `SaveTransaction` 实例，需要直接操作 manifest 文件。
@@ -530,77 +598,25 @@ pub fn recover_pending_transactions(
                     // #644 评论 5476546134 第2节：有 git_finalize recovery record 时，
                     // 直接回滚到同步前状态（Git metadata + live 文件），不尝试向前完成。
                     // 下一次正常 full sync 重新跑。
-                    if let Some(ref git_rec) = manifest.git_finalize {
+                    if manifest.git_finalize.is_some() {
                         log::warn!(
-                            "[transaction] found FilesCommittedPendingGit tx={}, \
-                             rolling back with git_finalize recovery record",
+                            "[transaction] found FilesCommittedPendingGit tx={}, rolling back",
                             manifest.transaction_id
                         );
-                        // 1. 回滚 Git metadata。
-                        if let Ok(seed_state) = git_rec.seed_state.to_seed_state() {
-                            if !matches!(
-                                seed_state,
-                                crate::sync::git_staging::GitSeedState::NotGitRepo
-                            ) {
-                                if let Err(e) = crate::sync::git_commit::rollback_git_finalize(
-                                    target_root,
-                                    &git_rec.metadata_snapshot,
-                                ) {
-                                    log::warn!(
-                                        "[transaction] git metadata rollback failed for tx={}: {}",
-                                        manifest.transaction_id,
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                        // 2. 回滚 live 文件（用 backup_entries）。
-                        let backup_dir = tx_dir.join("backup");
-                        for entry in &manifest.backup_entries {
-                            match entry {
-                                BackupEntry::RestoreFile {
-                                    target_relative,
-                                    backup_filename,
-                                } => {
-                                    let target_path = target_root.join(target_relative);
-                                    let backup_path = backup_dir.join(backup_filename);
-                                    if backup_path.exists() {
-                                        if let Some(parent) = target_path.parent() {
-                                            let _ = fs::create_dir_all(parent);
-                                        }
-                                        if let Err(e) = fs::copy(&backup_path, &target_path) {
-                                            log::warn!(
-                                                "[transaction] backup restore failed for {}: {}",
-                                                target_relative,
-                                                e
-                                            );
-                                        }
-                                    }
-                                }
-                                BackupEntry::RemoveCreated { target_relative } => {
-                                    let target_path = target_root.join(target_relative);
-                                    if target_path.exists() {
-                                        if let Err(e) = fs::remove_file(&target_path) {
-                                            if e.kind() != std::io::ErrorKind::NotFound {
-                                                log::warn!(
-                                                    "[transaction] remove created file failed for {}: {}",
-                                                    target_relative, e
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // 3. 标记 RolledBack 并清理。
-                        let _ = fs::remove_dir_all(&backup_dir);
-                        let manifest_path = tx_dir.join(MANIFEST_FILENAME);
-                        let _ = write_manifest_phase_static(
-                            &manifest_path,
-                            TransactionPhase::RolledBack,
+                        // #644 评论 5476546134 第3/4节：统一回滚入口，不吞错。
+                        if let Err(e) = rollback_full_sync_transaction(
+                            &tx_dir,
+                            target_root,
                             &manifest,
-                        );
-                        let _ = fs::remove_dir_all(&tx_dir);
+                        ) {
+                            log::warn!(
+                                "[transaction] rollback_full_sync_transaction failed for tx={}: {}",
+                                manifest.transaction_id,
+                                e
+                            );
+                            // #644 评论 5476546134 第4节：失败保留事务目录，给下次恢复机会。
+                            continue;
+                        }
                         continue;
                     }
 
@@ -619,7 +635,32 @@ pub fn recover_pending_transactions(
                     continue;
                 }
                 TransactionPhase::Prepared => {
-                    // 事务中断在 Prepared 阶段，尝试恢复 rename。
+                    // #644 评论 5476546134 第2节：区分两类事务的 Prepared 阶段语义。
+                    // - 有 git_finalize recovery record：backup_mode + Git finalize 事务，
+                    //   应该回滚（不尝试向前完成），下一次 full-sync 重跑。
+                    // - 无 git_finalize：普通保存事务，继续重放 rename。
+                    if manifest.git_finalize.is_some() {
+                        log::warn!(
+                            "[transaction] found Prepared tx={} with git_finalize, rolling back",
+                            manifest.transaction_id
+                        );
+                        // #644 评论 5476546134 第3/4节：统一回滚入口，不吞错。
+                        if let Err(e) = rollback_full_sync_transaction(
+                            &tx_dir,
+                            target_root,
+                            &manifest,
+                        ) {
+                            log::warn!(
+                                "[transaction] rollback_full_sync_transaction failed for tx={}: {}",
+                                manifest.transaction_id,
+                                e
+                            );
+                            // #644 评论 5476546134 第4节：失败保留事务目录，给下次恢复机会。
+                            continue;
+                        }
+                        continue;
+                    }
+                    // 事务中断在 Prepared 阶段（无 git_finalize），尝试恢复 rename。
                 }
             }
         } else {

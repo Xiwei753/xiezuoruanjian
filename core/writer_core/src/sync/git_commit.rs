@@ -234,7 +234,9 @@ pub fn prepare_git_finalize(
     // 捕获 index 快照。
     let index_path = live_root.join(".git").join("index");
     let index = if index_path.exists() {
-        IndexSnapshot::Bytes(fs::read(&index_path).unwrap_or_default())
+        // #644 评论 5476546134 第4节：读取失败不能伪造"空 index"，
+        // 直接 ? 返回错误。snapshot 本身就是回滚事实，不能降级。
+        IndexSnapshot::Bytes(fs::read(&index_path)?)
     } else {
         IndexSnapshot::Missing
     };
@@ -315,16 +317,35 @@ fn snapshot_ref(repo: &git2::Repository, ref_name: &str) -> RefSnapshot {
     }
 }
 
+// ── Git finalize 错误类型 ──
+
+/// #644 评论 5476546134 第4节：Git finalize 错误类型，区分 finalize 失败和 rollback 失败。
+///
+/// 上层遇到 `RollbackFailed` 时不能把 transaction 清掉，必须保留给下次恢复。
+#[derive(Debug, thiserror::Error)]
+pub enum GitFinalizeError {
+    #[error("finalize failed: {0}")]
+    FinalizeFailed(#[from] crate::Error),
+    #[error("finalize failed ({finalize}), rollback also failed: {rollback}")]
+    RollbackFailed {
+        finalize: String,
+        rollback: String,
+    },
+}
+
 /// #644 评论 5475805198 第2节：应用 Git metadata 变更到 live。
 ///
 /// 在 `SaveTransaction.commit()` 成功后调用。失败时自动 rollback Git metadata。
 /// 成功后调用方应调用 `SaveTransaction::finish()` 清理事务。
+///
+/// #644 评论 5476546134 第4节：返回 `GitFinalizeError`，区分 finalize 失败和 rollback 失败。
+/// 上层遇到 `RollbackFailed` 时必须保留 transaction 目录。
 pub fn commit_git_finalize(
     live_root: &Path,
     staging_root: &Path,
     seed_state: &GitSeedState,
     snapshot: &GitMetadataSnapshot,
-) -> Result<()> {
+) -> std::result::Result<(), GitFinalizeError> {
     // 调用内部 finalize，失败时 rollback Git metadata。
     if let Err(e) = finalize_git_repo_metadata_inner(live_root, staging_root, seed_state) {
         log::warn!(
@@ -332,13 +353,18 @@ pub fn commit_git_finalize(
             e
         );
         if let Err(rb_err) = rollback_git_finalize(live_root, snapshot) {
+            let rb_msg = rb_err.to_string();
             log::warn!(
                 "commit_git_finalize: rollback also failed: {} (original error: {})",
-                rb_err,
+                rb_msg,
                 e
             );
+            return Err(GitFinalizeError::RollbackFailed {
+                finalize: e.to_string(),
+                rollback: rb_msg,
+            });
         }
-        return Err(e);
+        return Err(GitFinalizeError::FinalizeFailed(e));
     }
     Ok(())
 }
@@ -496,19 +522,26 @@ pub fn recover_git_finalize(
 }
 
 /// 包装函数，供 `sync_ops.rs` 调用。
+///
+/// #644 评论 5476546134 第4节：返回 `GitFinalizeError`，上层遇到 `RollbackFailed`
+/// 时必须保留 transaction 目录。
 pub fn try_commit_git_finalize(
     live_root: &Path,
     staging_root: &Path,
     seed_state: Option<&GitSeedState>,
     snapshot: Option<&GitMetadataSnapshot>,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<(), GitFinalizeError> {
     let Some(state) = seed_state else {
         return Ok(());
     };
     let Some(snap) = snapshot else {
-        return Err("missing GitMetadataSnapshot for Git backend".to_string());
+        return Err(GitFinalizeError::FinalizeFailed(
+            crate::Error::Io(std::io::Error::other(
+                "missing GitMetadataSnapshot for Git backend",
+            )),
+        ));
     };
-    commit_git_finalize(live_root, staging_root, state, snap).map_err(|e| e.to_string())
+    commit_git_finalize(live_root, staging_root, state, snap)
 }
 
 // ── 内部 finalize 实现 ──

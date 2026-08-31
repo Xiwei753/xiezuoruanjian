@@ -757,11 +757,26 @@ fn apply_staging_commits_for_targets(
                     None
                 };
 
+                // #644 评论 5476546134 第1节：在 apply_commit_plan_to_live 之前
+                // 构造 recovery record，传入后与 manifest 一起原子写入。
+                let git_finalize_recovery = if let (Some(snap), Some(seed_state)) = (&git_snapshot, run.git_seed_state()) {
+                    Some(crate::sync::git_commit::GitFinalizeRecoveryRecord {
+                        seed_state:
+                            crate::sync::git_commit::SerializableGitSeedState::from_seed_state(
+                                seed_state,
+                            ),
+                        metadata_snapshot: snap.clone(),
+                    })
+                } else {
+                    None
+                };
+
                 let mut tx = match apply_commit_plan_to_live(
                     live_root,
                     &plan.content_actions,
                     &plan.engine_state_actions,
                     needs_git_finalize,
+                    git_finalize_recovery,
                 ) {
                     Ok(tx) => tx,
                     Err(e) => {
@@ -774,48 +789,51 @@ fn apply_staging_commits_for_targets(
                     }
                 };
 
-                // #644 评论 5476546134 第2节：设置 git_finalize recovery record，
-                // 写入 manifest 供崩溃恢复使用。
-                if let (Some(snap), Some(seed_state)) = (&git_snapshot, run.git_seed_state()) {
-                    tx.set_git_finalize_recovery(
-                        crate::sync::git_commit::GitFinalizeRecoveryRecord {
-                            seed_state:
-                                crate::sync::git_commit::SerializableGitSeedState::from_seed_state(
-                                    seed_state,
-                                ),
-                            metadata_snapshot: snap.clone(),
-                        },
-                    );
-                }
-
                 // #644 评论 5475805198 第2节：Git finalize 使用 git_commit 模块。
                 // 失败时自动 rollback Git metadata + SaveTransaction rollback。
-                if let Err(e) = crate::sync::git_commit::try_commit_git_finalize(
+                use crate::sync::git_commit::GitFinalizeError;
+                match crate::sync::git_commit::try_commit_git_finalize(
                     live_root,
                     &run.staging_root(),
                     run.git_seed_state(),
                     git_snapshot.as_ref(),
                 ) {
-                    // Git finalize 失败 → rollback 文件。
-                    if let Err(rb_err) = tx.rollback() {
-                        log::warn!(
-                            "Staging commit: git finalize failed AND rollback failed: {} / {}",
-                            e,
-                            rb_err
-                        );
+                    Ok(()) => {
+                        // Git finalize 成功，清理事务目录。
+                        tx.finish();
+                        target_conflicts.push(plan.conflict);
+                        target_results.push(TargetCommitResult::Ok);
+                        run.cleanup();
                     }
-                    let msg = format!("git repo-metadata finalize failed: {}", e);
-                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-                    target_results.push(TargetCommitResult::Failed(msg));
-                    target_conflicts.push(Vec::new());
-                    run.cleanup();
-                    continue;
+                    Err(GitFinalizeError::FinalizeFailed(e)) => {
+                        // Git finalize 失败但 rollback 成功 → 回滚文件。
+                        if let Err(rb_err) = tx.rollback() {
+                            log::warn!(
+                                "Staging commit: git finalize failed AND tx rollback failed: {} / {}",
+                                e,
+                                rb_err
+                            );
+                        }
+                        let msg = format!("git repo-metadata finalize failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                    }
+                    Err(GitFinalizeError::RollbackFailed { finalize, rollback }) => {
+                        // Git finalize 失败且 rollback 也失败 → 保留事务目录给下次恢复。
+                        // #644 评论 5476546134 第4节：不清理 tx，保留给下次恢复。
+                        let msg = format!(
+                            "git repo-metadata finalize failed AND rollback failed: finalize={} rollback={}",
+                            finalize, rollback
+                        );
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        // 不调用 tx.rollback() 和 run.cleanup()，保留事务目录。
+                        // Drop 会清理 staging，但 tx_dir 保留给恢复流程。
+                    }
                 }
-                // Git finalize 成功，清理事务目录。
-                tx.finish();
-                target_conflicts.push(plan.conflict);
-                target_results.push(TargetCommitResult::Ok);
-                run.cleanup();
             }
             TargetCommitMode::ConflictMetadataOnly => {
                 let live_root = run.target_live_root();
@@ -869,6 +887,7 @@ fn apply_staging_commits_for_targets(
                     &safe_content_actions,
                     &plan.engine_state_actions,
                     false,
+                    None,
                 )
                 .map(|_tx| ())
                 {
@@ -959,11 +978,15 @@ fn target_commit_mode(status: &crate::sync::SyncStatus) -> TargetCommitMode {
 ///
 /// #644 评论 5475110422 第3节：`backup_mode` 为 true 时，SaveTransaction 在 commit 前
 /// 备份被覆盖/删除的旧文件，使调用方能在 Git finalize 失败时 rollback。
+///
+/// #644 评论 5476546134 第1节：`git_finalize_recovery` 必须在 `commit()` 之前传入，
+/// 使 recovery record 与 manifest 一起原子写入。
 fn apply_commit_plan_to_live(
     live_root: &std::path::Path,
     content_actions: &[crate::sync::staging::CommitAction],
     engine_state_actions: &[crate::sync::staging::CommitAction],
     backup_mode: bool,
+    git_finalize_recovery: Option<crate::sync::git_commit::GitFinalizeRecoveryRecord>,
 ) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
     if content_actions.is_empty() && engine_state_actions.is_empty() {
         return Ok(crate::storage::transaction::SaveTransaction::new(live_root));
@@ -971,6 +994,11 @@ fn apply_commit_plan_to_live(
     let mut tx = crate::storage::transaction::SaveTransaction::new(live_root);
     if backup_mode {
         tx.enable_backup_mode();
+    }
+    // #644 评论 5476546134 第1节：在 commit() 之前设置 recovery record，
+    // 使 manifest 原子写入包含 git_finalize 字段。
+    if let Some(record) = git_finalize_recovery {
+        tx.set_git_finalize_recovery(record);
     }
     // engine_state 先入事务（state/manifest 先就绪，再写用户内容）。
     for action in engine_state_actions {
