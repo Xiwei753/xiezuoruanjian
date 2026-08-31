@@ -39,12 +39,19 @@ pub struct StagingRun {
     /// 仅 Git backend 有值；GithubApi backend 保持 None。
     /// `None` 只表示本 target 根本不是 Git backend。
     git_seed_state: Option<crate::sync::git_staging::GitSeedState>,
+    /// #644 评论 5476546134 第5节：resolved backend type，
+    /// 不再靠 `git_seed_state.is_some()` 间接猜 backend。
+    backend_type: crate::sync::types::BackendType,
 }
 
 impl StagingRun {
     /// 创建隔离 run 目录。`parent` 通常在 app-data 下（不进 live project root），
     /// 避免被 scanner 当成作品文件。`target_live_root` 记录 Commit 阶段要写回的 live 根。
-    pub fn create(parent: &Path, target_live_root: PathBuf) -> Result<Self> {
+    pub fn create(
+        parent: &Path,
+        target_live_root: PathBuf,
+        backend_type: crate::sync::types::BackendType,
+    ) -> Result<Self> {
         let run_id = Uuid::new_v4().to_string();
         let run_root = parent.join("full-sync-staging").join(&run_id);
         fs::create_dir_all(run_root.join(BASE_SUBDIR))?;
@@ -54,6 +61,7 @@ impl StagingRun {
             run_id,
             target_live_root,
             git_seed_state: None,
+            backend_type,
         })
     }
 
@@ -169,7 +177,11 @@ impl StagingRun {
     ///
     /// `incoming=None`（远端删除）+ `local==base` → [CommitAction::Delete]。
     /// `incoming=None` + `local!=base`（UserTextDocument）→ Conflict（本地改了、远端删了）。
-    #[allow(clippy::excessive_nesting, clippy::too_many_lines, clippy::cognitive_complexity)]
+    #[allow(
+        clippy::excessive_nesting,
+        clippy::too_many_lines,
+        clippy::cognitive_complexity
+    )]
     pub fn compute_commit_plan(&self, live_root: &Path) -> Result<CommitPlan> {
         use crate::sync::content_class::{
             classify_content_path, is_document_content_path, resolve_lww, three_way_resolve,
@@ -197,22 +209,24 @@ impl StagingRun {
         // GithubApi backend 的 Transfer 阶段会写入 manifest；
         // Git backend 不产生 manifest，此映射为空，回退到 mtime-based LWW。
         //
-        // #644 评论 5475805198 第4节：
-        // - manifest 不存在：Git backend 允许（mtime fallback），
-        //   GithubApi backend 记警告但不阻断。
-        // - manifest 存在但解析失败：GithubApi 直接 Err（manifest 是事实来源），
-        //   Git backend 警告 + mtime fallback（manifest 不是 Git 的决策依据）。
-        let is_git_backend = self.git_seed_state.is_some();
+        // #644 评论 5475805198 第4节 + #644 评论 5476546134 第5节：
+        // - Git backend：manifest 不存在 → mtime fallback；解析失败 → warn + mtime fallback。
+        // - GithubApi backend：manifest 不存在 → Err；解析失败 → Err。
+        //   manifest 是 GithubApi 的事实来源，坏了就应该让 target 失败。
+        let is_git_backend = matches!(self.backend_type, crate::sync::types::BackendType::Git);
         let staging_manifest = match read_staging_manifest(&staging_root) {
             Ok(Some(map)) => map,
             Ok(None) => {
-                if !is_git_backend {
-                    log::warn!(
-                        "compute_commit_plan: non-Git backend but no manifest.sync.json, \
-                         LWW falling back to mtime-based comparison"
-                    );
+                if is_git_backend {
+                    // Git backend：manifest 不是决策依据，mtime fallback。
+                    std::collections::HashMap::new()
+                } else {
+                    // GithubApi backend：manifest 不存在是错误。
+                    return Err(crate::Error::Io(std::io::Error::other(
+                        "compute_commit_plan: GithubApi backend but no manifest.sync.json, \
+                         cannot proceed without LWW metadata",
+                    )));
                 }
-                std::collections::HashMap::new()
             }
             Err(e) => {
                 if is_git_backend {
@@ -222,17 +236,14 @@ impl StagingRun {
                          Git backend falling back to mtime-based LWW",
                         e
                     );
+                    std::collections::HashMap::new()
                 } else {
-                    // 非 Git backend（GithubApi 或未知）：manifest 是事实来源，
-                    // 解析失败记录警告。不阻断 commit plan（EngineState 路径仍正常），
-                    // 但 LWW 退化为 mtime-based。
-                    log::warn!(
-                        "compute_commit_plan: manifest parse failed ({}), \
-                         LWW falling back to mtime-based comparison",
+                    // GithubApi backend：manifest 是事实来源，解析失败直接 Err。
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "compute_commit_plan: GithubApi manifest parse failed: {}",
                         e
-                    );
+                    ))));
                 }
-                std::collections::HashMap::new()
             }
         };
 
@@ -357,8 +368,13 @@ impl StagingRun {
                     //
                     // #644 评论 5475110422 第4节：delete 时从 tombstones 查找 deleted_at。
                     // 若本地 delete 无 tombstone 记录，跳过此路径（不参与 LWW）。
-                    let local_rec =
-                        build_local_lww_record(live_root, &rel, &local, &live_device_id, &live_tombstones);
+                    let local_rec = build_local_lww_record(
+                        live_root,
+                        &rel,
+                        &local,
+                        &live_device_id,
+                        &live_tombstones,
+                    );
                     let Some(local_rec) = local_rec else {
                         // 本地 delete 无 tombstone → 无法确定删除时间，
                         // 保留本地（不覆盖），下次同步时应补 tombstone。
@@ -430,7 +446,11 @@ pub fn prepare_staging_runs(
     let mut staging_runs: Vec<StagingRun> = Vec::new();
 
     for planned in &mut plan.targets {
-        let mut run = StagingRun::create(&plan.app_data_root, planned.target_live_root.clone())?;
+        let mut run = StagingRun::create(
+            &plan.app_data_root,
+            planned.target_live_root.clone(),
+            backend_type.clone(),
+        )?;
         // #644 评论 5473401065 第2节：seed 失败必须传播，不能继续拿半成品 staging。
         // #644 评论 5473551127 第2节：按 backend 类型选择对应 seed 方式。
         match backend_type {
@@ -870,7 +890,8 @@ mod tests {
     fn staging_run_create_and_cleanup() {
         let tmp = TempDir::new().unwrap();
         let live = tmp.path().join("live");
-        let run = StagingRun::create(tmp.path(), live).unwrap();
+        let run = StagingRun::create(tmp.path(), live, crate::sync::types::BackendType::GithubApi)
+            .unwrap();
         assert!(run.base_root().exists());
         assert!(run.staging_root().exists());
         run.cleanup();
@@ -886,7 +907,12 @@ mod tests {
         fs::create_dir_all(live.join("sub")).unwrap();
         fs::write(live.join("sub/b.txt"), "world").unwrap();
 
-        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+        let run = StagingRun::create(
+            tmp.path(),
+            live.clone(),
+            crate::sync::types::BackendType::GithubApi,
+        )
+        .unwrap();
         run.build_base_snapshot_from_live(
             &live,
             &[
@@ -915,7 +941,12 @@ mod tests {
         fs::create_dir_all(&live).unwrap();
         fs::write(live.join("f.txt"), "base").unwrap();
 
-        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+        let run = StagingRun::create(
+            tmp.path(),
+            live.clone(),
+            crate::sync::types::BackendType::Git,
+        )
+        .unwrap();
         run.build_base_snapshot_from_live(&live, &[PathBuf::from("f.txt")])
             .unwrap();
         // local 仍是 base（没动），incoming 改了。
@@ -934,7 +965,12 @@ mod tests {
         fs::create_dir_all(&live).unwrap();
         fs::write(live.join("f.txt"), "base").unwrap();
 
-        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+        let run = StagingRun::create(
+            tmp.path(),
+            live.clone(),
+            crate::sync::types::BackendType::Git,
+        )
+        .unwrap();
         run.build_base_snapshot_from_live(&live, &[PathBuf::from("f.txt")])
             .unwrap();
         // local 改了（走 atomic_write rename 替换，hard-link 的 base 保留旧 inode），
@@ -961,7 +997,12 @@ mod tests {
         fs::create_dir_all(live.join("app-meta/transactions/tx1")).unwrap();
         fs::write(live.join("app-meta/transactions/tx1/staged"), "tmp").unwrap();
 
-        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+        let run = StagingRun::create(
+            tmp.path(),
+            live.clone(),
+            crate::sync::types::BackendType::GithubApi,
+        )
+        .unwrap();
         run.seed_from_live(&live).unwrap();
 
         // base 有业务文件
@@ -998,7 +1039,12 @@ mod tests {
         // 用 note.md（正文类）而非 .txt（GeneratedCache 走 LWW 不冲突）。
         fs::write(live.join("note.md"), "base").unwrap();
 
-        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+        let run = StagingRun::create(
+            tmp.path(),
+            live.clone(),
+            crate::sync::types::BackendType::Git,
+        )
+        .unwrap();
         run.build_base_snapshot_from_live(&live, &[PathBuf::from("note.md")])
             .unwrap();
         // local 改了（atomic_write rename 替换，base 保留旧 inode）。
@@ -1018,7 +1064,12 @@ mod tests {
         fs::create_dir_all(&live).unwrap();
         fs::write(live.join("f.txt"), "base").unwrap();
 
-        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+        let run = StagingRun::create(
+            tmp.path(),
+            live.clone(),
+            crate::sync::types::BackendType::Git,
+        )
+        .unwrap();
         run.build_base_snapshot_from_live(&live, &[PathBuf::from("f.txt")])
             .unwrap();
         // 远端删除：staging 中没有 f.txt（incoming=None），local 没改。
@@ -1041,7 +1092,12 @@ mod tests {
         fs::create_dir_all(&live).unwrap();
         // live 没有 f.txt（local=None），base 也没有（base=None）。
         // staging 有 f.txt（incoming=Some）。
-        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+        let run = StagingRun::create(
+            tmp.path(),
+            live.clone(),
+            crate::sync::types::BackendType::Git,
+        )
+        .unwrap();
         // base 为空（没有 build_base_snapshot）
         fs::write(run.staging_root().join("f.txt"), "new-from-remote").unwrap();
 
@@ -1060,7 +1116,12 @@ mod tests {
         // 用 note.md（正文类）而非 .txt（GeneratedCache 走 LWW：Apply Delete 不冲突）。
         fs::write(live.join("note.md"), "base").unwrap();
 
-        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+        let run = StagingRun::create(
+            tmp.path(),
+            live.clone(),
+            crate::sync::types::BackendType::Git,
+        )
+        .unwrap();
         run.build_base_snapshot_from_live(&live, &[PathBuf::from("note.md")])
             .unwrap();
         // local 改了，远端删除（staging 没有 note.md）。

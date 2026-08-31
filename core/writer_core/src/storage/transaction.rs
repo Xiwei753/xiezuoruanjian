@@ -49,6 +49,11 @@ pub struct TransactionManifest {
     /// 旧 manifest 中无此字段时反序列化为空 Vec（向后兼容）。
     #[serde(default)]
     pub backup_entries: Vec<BackupEntry>,
+    /// #644 评论 5476546134 第2节：Git finalize 崩溃恢复记录。
+    /// 仅 backup_mode 且需要 Git finalize 时有值。
+    /// 旧 manifest 中无此字段时反序列化为 None（向后兼容）。
+    #[serde(default)]
+    pub git_finalize: Option<crate::sync::git_commit::GitFinalizeRecoveryRecord>,
 }
 
 fn default_phase() -> TransactionPhase {
@@ -126,6 +131,9 @@ pub struct SaveTransaction {
     /// #644 评论 5475413230 第1节：backup_mode 时 commit 不再 cleanup，
     /// 必须等 Git finalize 完成后由调用方显式调用 `finish()` 清理。
     finished: bool,
+    /// #644 评论 5476546134 第2节：Git finalize 崩溃恢复记录。
+    /// 写入 manifest 供重启后独立恢复。
+    git_finalize_recovery: Option<crate::sync::git_commit::GitFinalizeRecoveryRecord>,
 }
 
 impl SaveTransaction {
@@ -141,6 +149,7 @@ impl SaveTransaction {
             backup_mode: false,
             backed_up_files: Vec::new(),
             finished: false,
+            git_finalize_recovery: None,
         }
     }
 
@@ -189,6 +198,16 @@ impl SaveTransaction {
         self.backup_mode = true;
     }
 
+    /// #644 评论 5476546134 第2节：设置 Git finalize 崩溃恢复记录。
+    ///
+    /// 写入 manifest，使重启后能独立从 live + transaction 目录完成恢复。
+    pub fn set_git_finalize_recovery(
+        &mut self,
+        record: crate::sync::git_commit::GitFinalizeRecoveryRecord,
+    ) {
+        self.git_finalize_recovery = Some(record);
+    }
+
     /// #644 评论 5475110422 第3节 + #644 评论 5475413230 第1节 +
     /// #644 评论 5475805198 第1节：
     /// 回滚 commit 写入的文件变更，更新 manifest phase 为 RolledBack 并清理事务目录。
@@ -200,7 +219,11 @@ impl SaveTransaction {
     ///   其它 IO 错误返回 `Err`。
     ///
     /// 恢复完成后更新 phase 并清理事务目录。
-    #[allow(clippy::too_many_lines, clippy::cognitive_complexity, clippy::excessive_nesting)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting
+    )]
     pub fn rollback(&mut self) -> Result<()> {
         if !self.committed || !self.backup_mode {
             return Ok(());
@@ -266,68 +289,77 @@ impl SaveTransaction {
             return Ok(());
         }
 
-        // #644 评论 5475805198 第1节：写入 manifest，phase=Prepared。
-        // 供崩溃恢复判断事务进度。
+        // #644 评论 5476546134 第3节：backup_mode 时先完成全部备份，不改 live。
+        // 备份信息 + git_finalize recovery record 一次原子写入 manifest。
+        // manifest 持久化成功后，才开始 rename/delete live 文件。
+        if self.backup_mode {
+            let backup_dir = self.tx_dir.join("backup");
+            fs::create_dir_all(&backup_dir)?;
+
+            for (idx, entry) in self.entries.iter().enumerate() {
+                let target_path = self.target_root.join(&entry.target_relative);
+                // 备份被覆盖或被删除的旧文件。
+                if target_path.exists() {
+                    let backup_name = format!("backup_{}", idx);
+                    fs::copy(&target_path, backup_dir.join(&backup_name))?;
+                    self.backed_up_files.push(BackupEntry::RestoreFile {
+                        target_relative: entry.target_relative.clone(),
+                        backup_filename: backup_name,
+                    });
+                } else {
+                    self.backed_up_files.push(BackupEntry::RemoveCreated {
+                        target_relative: entry.target_relative.clone(),
+                    });
+                }
+            }
+
+            // 原子写入 Prepared + backup_entries + git_finalize recovery record。
+            let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
+            self.write_manifest_phase(&manifest_path, TransactionPhase::Prepared)?;
+
+            // 现在才开始 rename/delete live 文件。
+            let mut created_dirs = std::collections::HashSet::new();
+            for entry in &self.entries {
+                let target_path = self.target_root.join(&entry.target_relative);
+                if entry.is_delete {
+                    match fs::remove_file(&target_path) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(crate::Error::Io(e)),
+                    }
+                } else {
+                    let staging_path = self.tx_dir.join(&entry.staging_filename);
+                    if let Some(parent) = target_path.parent() {
+                        if !created_dirs.contains(parent) {
+                            fs::create_dir_all(parent)?;
+                            created_dirs.insert(parent.to_path_buf());
+                        }
+                    }
+                    fs::rename(&staging_path, &target_path)?;
+                }
+            }
+
+            // rename 全部完成后更新 phase。
+            self.write_manifest_phase(&manifest_path, TransactionPhase::FilesCommittedPendingGit)?;
+            self.committed = true;
+            // backup_mode 时不在 commit 内 cleanup。
+            return Ok(());
+        }
+
+        // 非 backup_mode：原有逻辑。
         let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
         self.write_manifest_phase(&manifest_path, TransactionPhase::Prepared)?;
 
-        // 逐个 rename 暂存文件到最终目标路径（write）或删除目标文件（delete）。
-        // rename 在同一文件系统上是原子的，但跨 N 个文件不保证原子性；
-        // phase 在全部 rename 完成后才更新，恢复时据此判断。
-        //
-        // #644 评论 5475110422 第3节：backup_mode 时先备份旧文件，支持 rollback。
-        let backup_dir = if self.backup_mode {
-            let dir = self.tx_dir.join("backup");
-            fs::create_dir_all(&dir)?;
-            Some(dir)
-        } else {
-            None
-        };
-
         let mut created_dirs = std::collections::HashSet::new();
-        for (idx, entry) in self.entries.iter().enumerate() {
+        for entry in &self.entries {
             let target_path = self.target_root.join(&entry.target_relative);
             if entry.is_delete {
-                // #644 评论 5475110422 第3节 + #644 评论 5475413230 第1节：
-                // 备份要删除的旧文件，用 BackupEntry 替代空字符串哨兵。
-                if let Some(ref bdir) = backup_dir {
-                    if target_path.exists() {
-                        let backup_name = format!("backup_{}", idx);
-                        fs::copy(&target_path, bdir.join(&backup_name))?;
-                        self.backed_up_files.push(BackupEntry::RestoreFile {
-                            target_relative: entry.target_relative.clone(),
-                            backup_filename: backup_name,
-                        });
-                    } else {
-                        self.backed_up_files.push(BackupEntry::RemoveCreated {
-                            target_relative: entry.target_relative.clone(),
-                        });
-                    }
-                }
-                // #644 评论 5473401065 第3节：NotFound 视为幂等成功；
-                // 其它 IO 错误直接向上传播，不能假装删除成功。
                 match fs::remove_file(&target_path) {
                     Ok(()) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) => return Err(crate::Error::Io(e)),
                 }
             } else {
-                // #644 评论 5475110422 第3节 + #644 评论 5475413230 第1节：
-                // 备份要被覆盖的旧文件，用 BackupEntry 替代空字符串哨兵。
-                if let Some(ref bdir) = backup_dir {
-                    if target_path.exists() {
-                        let backup_name = format!("backup_{}", idx);
-                        fs::copy(&target_path, bdir.join(&backup_name))?;
-                        self.backed_up_files.push(BackupEntry::RestoreFile {
-                            target_relative: entry.target_relative.clone(),
-                            backup_filename: backup_name,
-                        });
-                    } else {
-                        self.backed_up_files.push(BackupEntry::RemoveCreated {
-                            target_relative: entry.target_relative.clone(),
-                        });
-                    }
-                }
                 let staging_path = self.tx_dir.join(&entry.staging_filename);
                 if let Some(parent) = target_path.parent() {
                     if !created_dirs.contains(parent) {
@@ -339,23 +371,9 @@ impl SaveTransaction {
             }
         }
 
-        // #644 评论 5475805198 第1节：rename 全部完成后更新 manifest phase。
-        // backup_mode → FilesCommittedPendingGit（等待 Git finalize）；
-        // 非 backup_mode → FilesCommitted（无需 Git finalize）。
-        let phase = if self.backup_mode {
-            TransactionPhase::FilesCommittedPendingGit
-        } else {
-            TransactionPhase::FilesCommitted
-        };
-        self.write_manifest_phase(&manifest_path, phase)?;
-
+        self.write_manifest_phase(&manifest_path, TransactionPhase::FilesCommitted)?;
         self.committed = true;
-
-        // #644 评论 5475413230 第1节：backup_mode 时不在 commit 内 cleanup。
-        // 备份必须保留到 Git finalize 完成，由调用方显式调用 finish()。
-        if !self.backup_mode {
-            self.cleanup();
-        }
+        self.cleanup();
         Ok(())
     }
 
@@ -363,11 +381,9 @@ impl SaveTransaction {
     ///
     /// 读取现有 manifest（若存在），更新 phase 和 backup_entries，原子写回。
     /// manifest 不存在时（理论上不应发生）创建最小 manifest。
-    fn write_manifest_phase(
-        &self,
-        manifest_path: &Path,
-        phase: TransactionPhase,
-    ) -> Result<()> {
+    ///
+    /// #644 评论 5476546134 第2节：同时写入 git_finalize recovery record。
+    fn write_manifest_phase(&self, manifest_path: &Path, phase: TransactionPhase) -> Result<()> {
         let mut manifest = if manifest_path.exists() {
             let content = fs::read_to_string(manifest_path)?;
             serde_json::from_str::<TransactionManifest>(&content).unwrap_or_else(|_| {
@@ -377,6 +393,7 @@ impl SaveTransaction {
                     entries: self.entries.clone(),
                     phase: TransactionPhase::Prepared,
                     backup_entries: Vec::new(),
+                    git_finalize: None,
                 }
             })
         } else {
@@ -386,10 +403,14 @@ impl SaveTransaction {
                 entries: self.entries.clone(),
                 phase: TransactionPhase::Prepared,
                 backup_entries: Vec::new(),
+                git_finalize: None,
             }
         };
         manifest.phase = phase;
         manifest.backup_entries = self.backed_up_files.clone();
+        if self.git_finalize_recovery.is_some() {
+            manifest.git_finalize = self.git_finalize_recovery.clone();
+        }
         let json = serde_json::to_string_pretty(&manifest)?;
         crate::storage::atomic_write_string(manifest_path, &json)?;
         Ok(())
@@ -411,6 +432,21 @@ impl Drop for SaveTransaction {
             self.cleanup();
         }
     }
+}
+
+/// #644 评论 5476546134 第2节：静态版本的 manifest phase 更新，供恢复流程使用。
+///
+/// 恢复时没有 `SaveTransaction` 实例，需要直接操作 manifest 文件。
+fn write_manifest_phase_static(
+    manifest_path: &Path,
+    phase: TransactionPhase,
+    existing: &TransactionManifest,
+) -> Result<()> {
+    let mut manifest = existing.clone();
+    manifest.phase = phase;
+    let json = serde_json::to_string_pretty(&manifest)?;
+    crate::storage::atomic_write_string(manifest_path, &json)?;
+    Ok(())
 }
 
 /// 扫描事务目录，恢复未完成的事务。
@@ -491,10 +527,87 @@ pub fn recover_pending_transactions(
                 }
                 TransactionPhase::FilesCommittedPendingGit => {
                     // #644 评论 5475805198 第1节：文件已 commit，Git finalize 未完成。
-                    // 返回给调用方处理（完成 Git finalize 或回滚文件）。
+                    // #644 评论 5476546134 第2节：有 git_finalize recovery record 时，
+                    // 直接回滚到同步前状态（Git metadata + live 文件），不尝试向前完成。
+                    // 下一次正常 full sync 重新跑。
+                    if let Some(ref git_rec) = manifest.git_finalize {
+                        log::warn!(
+                            "[transaction] found FilesCommittedPendingGit tx={}, \
+                             rolling back with git_finalize recovery record",
+                            manifest.transaction_id
+                        );
+                        // 1. 回滚 Git metadata。
+                        if let Ok(seed_state) = git_rec.seed_state.to_seed_state() {
+                            if !matches!(
+                                seed_state,
+                                crate::sync::git_staging::GitSeedState::NotGitRepo
+                            ) {
+                                if let Err(e) = crate::sync::git_commit::rollback_git_finalize(
+                                    target_root,
+                                    &git_rec.metadata_snapshot,
+                                ) {
+                                    log::warn!(
+                                        "[transaction] git metadata rollback failed for tx={}: {}",
+                                        manifest.transaction_id,
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                        // 2. 回滚 live 文件（用 backup_entries）。
+                        let backup_dir = tx_dir.join("backup");
+                        for entry in &manifest.backup_entries {
+                            match entry {
+                                BackupEntry::RestoreFile {
+                                    target_relative,
+                                    backup_filename,
+                                } => {
+                                    let target_path = target_root.join(target_relative);
+                                    let backup_path = backup_dir.join(backup_filename);
+                                    if backup_path.exists() {
+                                        if let Some(parent) = target_path.parent() {
+                                            let _ = fs::create_dir_all(parent);
+                                        }
+                                        if let Err(e) = fs::copy(&backup_path, &target_path) {
+                                            log::warn!(
+                                                "[transaction] backup restore failed for {}: {}",
+                                                target_relative,
+                                                e
+                                            );
+                                        }
+                                    }
+                                }
+                                BackupEntry::RemoveCreated { target_relative } => {
+                                    let target_path = target_root.join(target_relative);
+                                    if target_path.exists() {
+                                        if let Err(e) = fs::remove_file(&target_path) {
+                                            if e.kind() != std::io::ErrorKind::NotFound {
+                                                log::warn!(
+                                                    "[transaction] remove created file failed for {}: {}",
+                                                    target_relative, e
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // 3. 标记 RolledBack 并清理。
+                        let _ = fs::remove_dir_all(&backup_dir);
+                        let manifest_path = tx_dir.join(MANIFEST_FILENAME);
+                        let _ = write_manifest_phase_static(
+                            &manifest_path,
+                            TransactionPhase::RolledBack,
+                            &manifest,
+                        );
+                        let _ = fs::remove_dir_all(&tx_dir);
+                        continue;
+                    }
+
+                    // 旧格式：无 git_finalize recovery record，返回给调用方处理。
                     log::warn!(
                         "[transaction] found FilesCommittedPendingGit tx={}, \
-                         needs Git recovery",
+                         no git_finalize record, needs manual Git recovery",
                         manifest.transaction_id
                     );
                     pending_git.push(PendingGitTransactionRecovery {
@@ -684,6 +797,7 @@ mod tests {
             entries: tx.entries.clone(),
             phase: TransactionPhase::Prepared,
             backup_entries: Vec::new(),
+            git_finalize: None,
         };
         let manifest_json = serde_json::to_string_pretty(&manifest).unwrap();
         fs::write(tx_dir.join(MANIFEST_FILENAME), &manifest_json).unwrap();
@@ -726,6 +840,7 @@ mod tests {
             }],
             phase: TransactionPhase::Prepared,
             backup_entries: Vec::new(),
+            git_finalize: None,
         };
         let manifest_json = serde_json::to_string_pretty(&manifest).unwrap();
         fs::write(tx_dir.join(MANIFEST_FILENAME), &manifest_json).unwrap();

@@ -224,7 +224,12 @@ mod tests {
         fs::write(live.join("a.txt"), "hello").unwrap();
         fs::write(live.join("sub/b.md"), "world").unwrap();
 
-        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+        let run = StagingRun::create(
+            tmp.path(),
+            live.clone(),
+            crate::sync::types::BackendType::Git,
+        )
+        .unwrap();
         let result = seed_from_live_as_git_repo(&run, &live).unwrap();
         // 非 repo → 返回 NotGitRepo
         assert!(matches!(result, GitSeedState::NotGitRepo));
@@ -266,7 +271,12 @@ mod tests {
         fs::write(live.join("a.txt"), "working-dirty").unwrap();
         fs::write(live.join("untracked.md"), "untracked").unwrap();
 
-        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+        let run = StagingRun::create(
+            tmp.path(),
+            live.clone(),
+            crate::sync::types::BackendType::Git,
+        )
+        .unwrap();
         let seed_state = seed_from_live_as_git_repo(&run, &live).unwrap();
         // repo → 返回 Existing
         assert!(matches!(seed_state, GitSeedState::Existing { .. }));
@@ -298,7 +308,12 @@ mod tests {
         // 在 live 里建 git repo 但不提交（unborn）
         let _repo = git2::Repository::init(&live).unwrap();
 
-        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+        let run = StagingRun::create(
+            tmp.path(),
+            live.clone(),
+            crate::sync::types::BackendType::Git,
+        )
+        .unwrap();
         let seed_state = seed_from_live_as_git_repo(&run, &live).unwrap();
         // unborn → 返回 Unborn
         assert!(matches!(seed_state, GitSeedState::Unborn { .. }));

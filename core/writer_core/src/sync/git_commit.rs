@@ -33,7 +33,8 @@ use crate::sync::git_staging::GitSeedState;
 
 // ── 快照类型 ──
 
-/// #644 评论 5475805198 第2节：单个引用的快照。
+/// #644 评论 5475805198 第2节 + #644 评论 5476546134 第4节：
+/// 单个引用的快照。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RefSnapshot {
     /// 引用不存在（finalize 会创建它）。
@@ -44,20 +45,105 @@ pub enum RefSnapshot {
     Symbolic { target: String },
 }
 
-/// #644 评论 5475805198 第2节：finalize 前的 Git metadata 快照。
+/// #644 评论 5476546134 第4节：index 快照。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum IndexSnapshot {
+    /// index 文件不存在。
+    Missing,
+    /// index 文件的原始字节。
+    Bytes(Vec<u8>),
+}
+
+/// #644 评论 5475805198 第2节 + #644 评论 5476546134 第4节：
+/// finalize 前的 Git metadata 快照。
 ///
 /// 供崩溃恢复使用：进程在 `SaveTransaction.commit()` 和 `commit_git_finalize()`
 /// 之间退出时，下次启动可通过本快照完成或回滚 Git metadata。
+///
+/// #644 评论 5476546134 第4节：不再混用 `head_snapshot + head_ref`。
+/// `head` 只对应 HEAD 引用本身；`refs` 记录所有本轮会修改的 branch/remote refs。
+/// rollback 按 ref 名逐项恢复/删除，所有错误直接 `?` 传播。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitMetadataSnapshot {
-    /// HEAD 是 symbolic 还是 detached、原目标。
-    pub head_snapshot: RefSnapshot,
-    /// 原 index 的原始字节（`None` 表示 index 不存在）。
-    pub original_index_bytes: Option<Vec<u8>>,
-    /// 本轮会改的 head_ref（branch ref 或 HEAD）。
-    pub head_ref: String,
-    /// 本轮会改的 `refs/remotes/*` 以及它们原来的状态。
-    pub remote_ref_snapshots: Vec<(String, RefSnapshot)>,
+    /// HEAD 引用的快照（symbolic 或 detached）。
+    pub head: RefSnapshot,
+    /// 所有本轮会修改的 branch/remote refs 的快照。
+    /// key = ref 名（如 `refs/heads/main`、`refs/remotes/origin/main`）。
+    /// value = finalize 前的状态（`DidNotExist` 表示 finalize 会新建）。
+    pub refs: std::collections::BTreeMap<String, RefSnapshot>,
+    /// index 快照。
+    pub index: IndexSnapshot,
+    /// finalize 前 live 是否已是 Git repo。
+    pub repo_existed: bool,
+}
+
+/// #644 评论 5476546134 第2节：Git finalize 崩溃恢复记录。
+///
+/// 写入 `TransactionManifest.git_finalize`，使重启后能独立从 live + transaction 目录
+/// 完成恢复，不依赖可能残缺的 staging run。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitFinalizeRecoveryRecord {
+    /// seed 时记录的 live Git 仓库状态（序列化友好版本）。
+    pub seed_state: SerializableGitSeedState,
+    /// finalize 前的 Git metadata 快照。
+    pub metadata_snapshot: GitMetadataSnapshot,
+}
+
+/// #644 评论 5476546134 第2节：`GitSeedState` 的序列化友好版本。
+///
+/// `git2::Oid` 不实现 `Serialize/Deserialize`，用 hex 字符串存储。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SerializableGitSeedState {
+    NotGitRepo,
+    Unborn { head_ref: String },
+    Existing { head_ref: String, head_oid: String },
+    Detached { head_oid: String },
+}
+
+impl SerializableGitSeedState {
+    /// 从 `GitSeedState` 转换。
+    pub fn from_seed_state(state: &crate::sync::git_staging::GitSeedState) -> Self {
+        use crate::sync::git_staging::GitSeedState;
+        match state {
+            GitSeedState::NotGitRepo => Self::NotGitRepo,
+            GitSeedState::Unborn { head_ref } => Self::Unborn {
+                head_ref: head_ref.clone(),
+            },
+            GitSeedState::Existing { head_ref, head_oid } => Self::Existing {
+                head_ref: head_ref.clone(),
+                head_oid: head_oid.to_string(),
+            },
+            GitSeedState::Detached { head_oid } => Self::Detached {
+                head_oid: head_oid.to_string(),
+            },
+        }
+    }
+
+    /// 还原为 `GitSeedState`。
+    pub fn to_seed_state(
+        &self,
+    ) -> std::result::Result<crate::sync::git_staging::GitSeedState, String> {
+        use crate::sync::git_staging::GitSeedState;
+        match self {
+            Self::NotGitRepo => Ok(GitSeedState::NotGitRepo),
+            Self::Unborn { head_ref } => Ok(GitSeedState::Unborn {
+                head_ref: head_ref.clone(),
+            }),
+            Self::Existing { head_ref, head_oid } => {
+                let oid =
+                    git2::Oid::from_str(head_oid).map_err(|e| format!("invalid head_oid: {e}"))?;
+                Ok(GitSeedState::Existing {
+                    head_ref: head_ref.clone(),
+                    head_oid: oid,
+                })
+            }
+            Self::Detached { head_oid } => {
+                let oid =
+                    git2::Oid::from_str(head_oid).map_err(|e| format!("invalid head_oid: {e}"))?;
+                Ok(GitSeedState::Detached { head_oid: oid })
+            }
+        }
+    }
 }
 
 // ── RAII 临时目录守卫 ──
@@ -65,6 +151,7 @@ pub struct GitMetadataSnapshot {
 /// #644 评论 5475805198 第4节：RAII 守卫，保证临时目录在 drop 时删除。
 struct TmpDirGuard(Option<PathBuf>);
 
+#[allow(clippy::expect_used)]
 impl TmpDirGuard {
     fn new(path: PathBuf) -> Self {
         Self(Some(path))
@@ -91,20 +178,30 @@ impl Drop for TmpDirGuard {
 
 // ── 公共 API ──
 
-/// #644 评论 5475805198 第2节：捕获 finalize 前的 Git metadata 快照。
+/// #644 评论 5475805198 第2节 + #644 评论 5476546134 第4节：
+/// 捕获 finalize 前的 Git metadata 快照。
 ///
 /// 在 `SaveTransaction.commit()` 之前调用，快照写入 manifest 供崩溃恢复。
+///
+/// #644 评论 5476546134 第4节：重写快照模型——
+/// - `head`：只对应 HEAD 引用本身（symbolic / detached）。
+/// - `refs`：所有本轮会修改的 branch/remote refs，包括 staging 将要写入的
+///   `refs/remotes/*`（live 不存在的显式记录 `DidNotExist`）。
+/// - `index`：`IndexSnapshot::Missing` 或 `IndexSnapshot::Bytes`。
+/// - `repo_existed`：finalize 前 live 是否已是 Git repo。
+#[allow(clippy::excessive_nesting)]
 pub fn prepare_git_finalize(
     live_root: &Path,
     seed_state: &GitSeedState,
+    staging_root: &Path,
 ) -> Result<GitMetadataSnapshot> {
     // NotGitRepo 时返回最小快照，不尝试打开 repo。
     if matches!(seed_state, GitSeedState::NotGitRepo) {
         return Ok(GitMetadataSnapshot {
-            head_snapshot: RefSnapshot::DidNotExist,
-            original_index_bytes: None,
-            head_ref: String::new(),
-            remote_ref_snapshots: Vec::new(),
+            head: RefSnapshot::DidNotExist,
+            refs: std::collections::BTreeMap::new(),
+            index: IndexSnapshot::Missing,
+            repo_existed: false,
         });
     }
 
@@ -117,7 +214,7 @@ pub fn prepare_git_finalize(
     })?;
 
     // 捕获 HEAD 快照。
-    let head_snapshot = match live_repo.find_reference("HEAD") {
+    let head = match live_repo.find_reference("HEAD") {
         Ok(head_ref) => {
             if let Some(sym_target) = head_ref.symbolic_target() {
                 RefSnapshot::Symbolic {
@@ -136,13 +233,16 @@ pub fn prepare_git_finalize(
 
     // 捕获 index 快照。
     let index_path = live_root.join(".git").join("index");
-    let original_index_bytes = if index_path.exists() {
-        Some(fs::read(&index_path).unwrap_or_default())
+    let index = if index_path.exists() {
+        IndexSnapshot::Bytes(fs::read(&index_path).unwrap_or_default())
     } else {
-        None
+        IndexSnapshot::Missing
     };
 
-    // 确定 head_ref。
+    // 收集所有本轮会修改的 refs。
+    let mut refs = std::collections::BTreeMap::new();
+
+    // 1. head_ref（branch ref 或 detached HEAD）。
     let head_ref = match seed_state {
         GitSeedState::Unborn { head_ref } | GitSeedState::Existing { head_ref, .. } => {
             head_ref.clone()
@@ -150,38 +250,69 @@ pub fn prepare_git_finalize(
         GitSeedState::Detached { .. } => "HEAD".to_string(),
         GitSeedState::NotGitRepo => String::new(),
     };
+    if !head_ref.is_empty() && head_ref != "HEAD" {
+        let snap = snapshot_ref(&live_repo, &head_ref);
+        refs.insert(head_ref, snap);
+    }
 
-    // 捕获 remote refs 快照。
-    let mut remote_ref_snapshots = Vec::new();
-    if let Ok(refs) = live_repo.references() {
-        for reference in refs.flatten() {
+    // 2. live 已有的 remote refs。
+    if let Ok(live_refs) = live_repo.references() {
+        for reference in live_refs.flatten() {
             let Some(name) = reference.name() else {
                 continue;
             };
             if !name.starts_with("refs/remotes/") {
                 continue;
             }
-            let snapshot = if let Some(oid) = reference.target() {
-                RefSnapshot::Existed {
-                    oid: oid.to_string(),
+            refs.insert(name.to_string(), snapshot_ref_from_repo_ref(&reference));
+        }
+    }
+
+    // 3. staging 将要写入的 remote refs（live 不存在的显式记录 DidNotExist）。
+    if let Ok(staging_repo) = git2::Repository::open(staging_root) {
+        if let Ok(staging_refs) = staging_repo.references() {
+            for reference in staging_refs.flatten() {
+                let Some(name) = reference.name() else {
+                    continue;
+                };
+                if !name.starts_with("refs/remotes/") {
+                    continue;
                 }
-            } else if let Some(sym) = reference.symbolic_target() {
-                RefSnapshot::Symbolic {
-                    target: sym.to_string(),
-                }
-            } else {
-                RefSnapshot::DidNotExist
-            };
-            remote_ref_snapshots.push((name.to_string(), snapshot));
+                refs.entry(name.to_string())
+                    .or_insert(RefSnapshot::DidNotExist);
+            }
         }
     }
 
     Ok(GitMetadataSnapshot {
-        head_snapshot,
-        original_index_bytes,
-        head_ref,
-        remote_ref_snapshots,
+        head,
+        refs,
+        index,
+        repo_existed: true,
     })
+}
+
+/// 从 git2 Reference 构造 RefSnapshot。
+fn snapshot_ref_from_repo_ref(reference: &git2::Reference<'_>) -> RefSnapshot {
+    if let Some(oid) = reference.target() {
+        RefSnapshot::Existed {
+            oid: oid.to_string(),
+        }
+    } else if let Some(sym) = reference.symbolic_target() {
+        RefSnapshot::Symbolic {
+            target: sym.to_string(),
+        }
+    } else {
+        RefSnapshot::DidNotExist
+    }
+}
+
+/// 按 ref 名在 repo 中查找并构造快照。
+fn snapshot_ref(repo: &git2::Repository, ref_name: &str) -> RefSnapshot {
+    match repo.find_reference(ref_name) {
+        Ok(reference) => snapshot_ref_from_repo_ref(&reference),
+        Err(_) => RefSnapshot::DidNotExist,
+    }
 }
 
 /// #644 评论 5475805198 第2节：应用 Git metadata 变更到 live。
@@ -203,7 +334,8 @@ pub fn commit_git_finalize(
         if let Err(rb_err) = rollback_git_finalize(live_root, snapshot) {
             log::warn!(
                 "commit_git_finalize: rollback also failed: {} (original error: {})",
-                rb_err, e
+                rb_err,
+                e
             );
         }
         return Err(e);
@@ -211,11 +343,38 @@ pub fn commit_git_finalize(
     Ok(())
 }
 
-/// #644 评论 5475805198 第2节：从快照回滚 Git metadata。
+/// #644 评论 5475805198 第2节 + #644 评论 5476546134 第4节：
+/// 从快照回滚 Git metadata。
 ///
 /// 恢复 HEAD、index、refs 到快照时的状态。
+/// #644 评论 5476546134 第4节：所有错误直接 `?` 传播，不再吞掉。
+#[allow(clippy::too_many_lines, clippy::excessive_nesting)]
 pub fn rollback_git_finalize(live_root: &Path, snapshot: &GitMetadataSnapshot) -> Result<()> {
     crate::storage::git_runtime::ensure_initialized()?;
+
+    // 恢复 index。
+    match &snapshot.index {
+        IndexSnapshot::Bytes(bytes) => {
+            let index_path = live_root.join(".git").join("index");
+            crate::storage::atomic_write_bytes(&index_path, bytes)?;
+        }
+        IndexSnapshot::Missing => {
+            // index 原本不存在。如果 finalize 新建了 index，删除它。
+            let index_path = live_root.join(".git").join("index");
+            if index_path.exists() {
+                fs::remove_file(&index_path)?;
+            }
+        }
+    }
+
+    // 如果 repo 原本不存在，rollback 需要删除 .git 目录。
+    if !snapshot.repo_existed {
+        let live_git = live_root.join(".git");
+        if live_git.exists() {
+            fs::remove_dir_all(&live_git)?;
+        }
+        return Ok(());
+    }
 
     let live_repo = git2::Repository::open(live_root).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
@@ -223,65 +382,82 @@ pub fn rollback_git_finalize(live_root: &Path, snapshot: &GitMetadataSnapshot) -
         )))
     })?;
 
-    // 恢复 index。
-    if let Some(ref index_bytes) = snapshot.original_index_bytes {
-        let index_path = live_root.join(".git").join("index");
-        crate::storage::atomic_write_bytes(&index_path, index_bytes)?;
-    }
-
-    // 恢复 head_ref。
-    match &snapshot.head_snapshot {
+    // 恢复 HEAD。
+    match &snapshot.head {
         RefSnapshot::DidNotExist => {
-            // head_ref 不应存在，删除。
-            if let Ok(mut reference) = live_repo.find_reference(&snapshot.head_ref) {
-                let _ = reference.delete();
+            // HEAD 不应存在（理论上不会发生，Git repo 必有 HEAD）。
+            if let Ok(mut reference) = live_repo.find_reference("HEAD") {
+                reference.delete().map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "rollback_git_finalize: delete HEAD: {e}"
+                    )))
+                })?;
             }
         }
         RefSnapshot::Existed { oid } => {
-            if let Ok(oid) = git2::Oid::from_str(oid) {
-                let _ = live_repo.reference(
-                    &snapshot.head_ref,
-                    oid,
-                    true,
-                    "rollback: restore head ref",
-                );
-            }
+            let oid = git2::Oid::from_str(oid).map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "rollback_git_finalize: invalid HEAD oid: {e}"
+                )))
+            })?;
+            live_repo
+                .reference("HEAD", oid, true, "rollback: restore HEAD")
+                .map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "rollback_git_finalize: restore HEAD: {e}"
+                    )))
+                })?;
         }
         RefSnapshot::Symbolic { target } => {
-            let _ = live_repo.reference_symbolic(
-                &snapshot.head_ref,
-                target,
-                true,
-                "rollback: restore head ref",
-            );
+            live_repo
+                .reference_symbolic("HEAD", target, true, "rollback: restore HEAD")
+                .map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "rollback_git_finalize: restore HEAD symbolic: {e}"
+                    )))
+                })?;
         }
     }
 
-    // 恢复 remote refs。
-    for (ref_name, ref_snapshot) in &snapshot.remote_ref_snapshots {
+    // 恢复所有 refs。
+    for (ref_name, ref_snapshot) in &snapshot.refs {
         match ref_snapshot {
             RefSnapshot::DidNotExist => {
+                // finalize 新建了此 ref，删除。
                 if let Ok(mut reference) = live_repo.find_reference(ref_name) {
-                    let _ = reference.delete();
+                    reference.delete().map_err(|e| {
+                        crate::Error::Io(std::io::Error::other(format!(
+                            "rollback_git_finalize: delete {}: {e}",
+                            ref_name
+                        )))
+                    })?;
                 }
             }
             RefSnapshot::Existed { oid } => {
-                if let Ok(oid) = git2::Oid::from_str(oid) {
-                    let _ = live_repo.reference(
-                        ref_name,
-                        oid,
-                        true,
-                        "rollback: restore remote ref",
-                    );
-                }
+                let oid = git2::Oid::from_str(oid).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "rollback_git_finalize: invalid oid for {}: {e}",
+                        ref_name
+                    )))
+                })?;
+                live_repo
+                    .reference(ref_name, oid, true, "rollback: restore ref")
+                    .map_err(|e| {
+                        crate::Error::Io(std::io::Error::other(format!(
+                            "rollback_git_finalize: restore {}: {e}",
+                            ref_name
+                        )))
+                    })?;
             }
             RefSnapshot::Symbolic { target } => {
-                let _ = live_repo.reference_symbolic(
-                    ref_name,
-                    target,
-                    true,
-                    "rollback: restore remote ref",
-                );
+                live_repo
+                    .reference_symbolic(ref_name, target, true, "rollback: restore ref")
+                    .map_err(|e| {
+                        crate::Error::Io(std::io::Error::other(format!(
+                            "rollback_git_finalize: restore {} symbolic: {e}",
+                            ref_name
+                        )))
+                    })?;
             }
         }
     }
@@ -379,15 +555,25 @@ fn finalize_git_repo_metadata_inner(
     };
 
     match seed_state {
-        GitSeedState::NotGitRepo => {
-            finalize_not_git_repo(live_root, staging_root, &staging_repo, &staging_odb, new_oid, &branch_name)
-        }
+        GitSeedState::NotGitRepo => finalize_not_git_repo(
+            live_root,
+            staging_root,
+            &staging_repo,
+            &staging_odb,
+            new_oid,
+            &branch_name,
+        ),
         GitSeedState::Unborn { head_ref } => {
             finalize_unborn(live_root, &staging_repo, &staging_odb, new_oid, head_ref)
         }
-        GitSeedState::Existing { head_ref, head_oid } => {
-            finalize_existing(live_root, &staging_repo, &staging_odb, new_oid, head_ref, *head_oid)
-        }
+        GitSeedState::Existing { head_ref, head_oid } => finalize_existing(
+            live_root,
+            &staging_repo,
+            &staging_odb,
+            new_oid,
+            head_ref,
+            *head_oid,
+        ),
         GitSeedState::Detached { head_oid } => {
             finalize_detached(live_root, &staging_repo, &staging_odb, new_oid, *head_oid)
         }
@@ -665,10 +851,7 @@ fn finalize_detached(
 // ── 内部辅助函数（从 git_staging.rs 移入） ──
 
 /// 从 staging ODB 导入 live ODB 缺失的对象。
-fn import_missing_objects(
-    staging_odb: &git2::Odb,
-    live_odb: &git2::Odb,
-) -> Result<()> {
+fn import_missing_objects(staging_odb: &git2::Odb, live_odb: &git2::Odb) -> Result<()> {
     let mut missing_oids: Vec<git2::Oid> = Vec::new();
     staging_odb
         .foreach(|oid| {
@@ -702,10 +885,7 @@ fn import_missing_objects(
 }
 
 /// 同步 staging 的 remote-tracking refs 到 live。
-fn sync_remote_refs(
-    live_repo: &git2::Repository,
-    staging_repo: &git2::Repository,
-) -> Result<()> {
+fn sync_remote_refs(live_repo: &git2::Repository, staging_repo: &git2::Repository) -> Result<()> {
     if let Ok(staging_refs) = staging_repo.references() {
         for reference in staging_refs.flatten() {
             let Some(name) = reference.name() else {
@@ -718,7 +898,12 @@ fn sync_remote_refs(
                 continue;
             };
             live_repo
-                .reference(name, target, true, "sync: update remote-tracking ref from staging")
+                .reference(
+                    name,
+                    target,
+                    true,
+                    "sync: update remote-tracking ref from staging",
+                )
                 .map_err(|e| {
                     crate::Error::Io(std::io::Error::other(format!(
                         "sync_remote_refs: update {} failed: {}",
@@ -793,10 +978,14 @@ mod tests {
         let live = tmp.path().join("live");
         fs::create_dir_all(&live).unwrap();
 
-        let snapshot = prepare_git_finalize(&live, &GitSeedState::NotGitRepo).unwrap();
-        assert!(matches!(snapshot.head_snapshot, RefSnapshot::DidNotExist));
-        assert!(snapshot.original_index_bytes.is_none());
-        assert!(snapshot.head_ref.is_empty());
+        let staging = tmp.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+
+        let snapshot = prepare_git_finalize(&live, &GitSeedState::NotGitRepo, &staging).unwrap();
+        assert!(matches!(snapshot.head, RefSnapshot::DidNotExist));
+        assert!(snapshot.refs.is_empty());
+        assert!(matches!(snapshot.index, IndexSnapshot::Missing));
+        assert!(!snapshot.repo_existed);
     }
 
     #[test]
@@ -807,12 +996,16 @@ mod tests {
         fs::create_dir_all(&live).unwrap();
         let _repo = git2::Repository::init(&live).unwrap();
 
+        let staging = tmp.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+
         let seed = GitSeedState::Unborn {
             head_ref: "refs/heads/main".to_string(),
         };
-        let snapshot = prepare_git_finalize(&live, &seed).unwrap();
-        assert!(matches!(snapshot.head_snapshot, RefSnapshot::Symbolic { .. }));
-        assert_eq!(snapshot.head_ref, "refs/heads/main");
+        let snapshot = prepare_git_finalize(&live, &seed, &staging).unwrap();
+        assert!(matches!(snapshot.head, RefSnapshot::Symbolic { .. }));
+        assert!(snapshot.refs.contains_key("refs/heads/main"));
+        assert!(snapshot.repo_existed);
     }
 
     #[test]
@@ -834,14 +1027,18 @@ mod tests {
             .commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
             .unwrap();
 
+        let staging = tmp.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+
         let seed = GitSeedState::Existing {
             head_ref: "refs/heads/main".to_string(),
             head_oid: commit_oid,
         };
-        let snapshot = prepare_git_finalize(&live, &seed).unwrap();
-        assert!(matches!(snapshot.head_snapshot, RefSnapshot::Symbolic { .. }));
-        assert!(snapshot.original_index_bytes.is_some());
-        assert_eq!(snapshot.head_ref, "refs/heads/main");
+        let snapshot = prepare_git_finalize(&live, &seed, &staging).unwrap();
+        assert!(matches!(snapshot.head, RefSnapshot::Symbolic { .. }));
+        assert!(matches!(snapshot.index, IndexSnapshot::Bytes(_)));
+        assert!(snapshot.refs.contains_key("refs/heads/main"));
+        assert!(snapshot.repo_existed);
     }
 
     #[test]
@@ -862,12 +1059,18 @@ mod tests {
         repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
             .unwrap();
 
+        let staging = tmp.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+
         let seed = GitSeedState::Existing {
             head_ref: "refs/heads/main".to_string(),
             head_oid: git2::Oid::zero(),
         };
-        let snapshot = prepare_git_finalize(&live, &seed).unwrap();
-        let original_index = snapshot.original_index_bytes.clone().unwrap();
+        let snapshot = prepare_git_finalize(&live, &seed, &staging).unwrap();
+        let original_index = match &snapshot.index {
+            IndexSnapshot::Bytes(b) => b.clone(),
+            _ => panic!("expected IndexSnapshot::Bytes"),
+        };
 
         // 修改 index。
         fs::write(live.join("b.txt"), "new").unwrap();
