@@ -715,27 +715,41 @@ fn apply_staging_commits_for_targets(
                         continue;
                     }
                 };
-                // Full 模式：content + engine_state 一起写回 live。
-                if let Err(e) = apply_commit_plan_to_live(
+                // #644 评论 5475110422 第3节：Git backend 时启用 backup_mode，
+                // 使 SaveTransaction commit 后能在 Git finalize 失败时 rollback。
+                let needs_git_finalize = run.git_seed_state().is_some();
+                let mut tx = match apply_commit_plan_to_live(
                     live_root,
                     &plan.content_actions,
                     &plan.engine_state_actions,
+                    needs_git_finalize,
                 ) {
-                    let msg = format!("apply_commit_plan_to_live failed: {}", e);
-                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-                    target_results.push(TargetCommitResult::Failed(msg));
-                    target_conflicts.push(Vec::new());
-                    run.cleanup();
-                    continue;
-                }
-                // #644 评论 5474772497 第1节：Git 专属 finalize —
-                // 把 staging 的 HEAD/refs/objects/index 同步回 live。
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        let msg = format!("apply_commit_plan_to_live failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                        continue;
+                    }
+                };
+                // #644 评论 5474772497 第1节 + #644 评论 5475110422 第1/3节：
+                // Git 专属 finalize — 把 staging 的 HEAD/refs/objects/index 同步回 live。
                 // 仅 Full 模式（成功类终态）调用；Conflict 不推进 live ref。
+                // 若 finalize 失败且 backup_mode，rollback SaveTransaction。
                 if let Err(e) = crate::sync::git_staging::try_finalize_git_repo_metadata(
                     live_root,
                     &run.staging_root(),
-                    run.base_head_oid(),
+                    run.git_seed_state(),
                 ) {
+                    // #644 评论 5475110422 第3节：Git finalize 失败 → rollback 文件。
+                    if let Err(rb_err) = tx.rollback() {
+                        log::warn!(
+                            "Staging commit: git finalize failed AND rollback failed: {} / {}",
+                            e, rb_err
+                        );
+                    }
                     let msg = format!("git repo-metadata finalize failed: {}", e);
                     log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                     target_results.push(TargetCommitResult::Failed(msg));
@@ -798,7 +812,10 @@ fn apply_staging_commits_for_targets(
                     live_root,
                     &safe_content_actions,
                     &plan.engine_state_actions,
-                ) {
+                    false,
+                )
+                .map(|_tx| ())
+                {
                     let msg = format!("apply_commit_plan_to_live failed: {}", e);
                     log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                     target_results.push(TargetCommitResult::Failed(msg));
@@ -883,15 +900,22 @@ fn target_commit_mode(status: &crate::sync::SyncStatus) -> TargetCommitMode {
 ///
 /// #644 评论 5474166587 问题1：content_actions + engine_state_actions 用同一个
 /// `SaveTransaction` 一次写回，不另起第二套保存路径。
+///
+/// #644 评论 5475110422 第3节：`backup_mode` 为 true 时，SaveTransaction 在 commit 前
+/// 备份被覆盖/删除的旧文件，使调用方能在 Git finalize 失败时 rollback。
 fn apply_commit_plan_to_live(
     live_root: &std::path::Path,
     content_actions: &[crate::sync::staging::CommitAction],
     engine_state_actions: &[crate::sync::staging::CommitAction],
-) -> crate::error::Result<()> {
+    backup_mode: bool,
+) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
     if content_actions.is_empty() && engine_state_actions.is_empty() {
-        return Ok(());
+        return Ok(crate::storage::transaction::SaveTransaction::new(live_root));
     }
     let mut tx = crate::storage::transaction::SaveTransaction::new(live_root);
+    if backup_mode {
+        tx.enable_backup_mode();
+    }
     // engine_state 先入事务（state/manifest 先就绪，再写用户内容）。
     for action in engine_state_actions {
         match action {
@@ -917,7 +941,8 @@ fn apply_commit_plan_to_live(
             }
         }
     }
-    tx.commit()
+    tx.commit()?;
+    Ok(tx)
 }
 
 /// 当前 Unix 秒 — 全量同步持久状态统一时间源。

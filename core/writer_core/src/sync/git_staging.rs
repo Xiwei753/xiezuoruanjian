@@ -25,6 +25,26 @@ use std::path::Path;
 use crate::error::Result;
 use crate::sync::staging::StagingRun;
 
+/// #644 评论 5475110422 第1节：live 在 seed 时的 Git 仓库状态。
+///
+/// `Option<String>` 无法区分"非 Git backend"、"unborn repo"、"已有提交的 repo"三种语义。
+/// 本枚举让 finalize 阶段对每种状态走正确的路径。
+#[derive(Debug, Clone)]
+pub enum GitSeedState {
+    /// live 不是 Git repo（没有 `.git/`）。staging 保持非 repo。
+    NotGitRepo,
+    /// live 是 Git repo 但 HEAD 是 unborn（`git init` 后尚未提交）。
+    /// `head_ref` 是 symbolic HEAD 的目标引用名（如 `refs/heads/main`）。
+    Unborn { head_ref: String },
+    /// live 是 Git repo 且 HEAD 指向一个已存在的 commit。
+    /// `head_ref` 是当前分支引用名，`head_oid` 是 seed 时的 HEAD OID，
+    /// 供 finalize 做 compare-and-swap。
+    Existing {
+        head_ref: String,
+        head_oid: git2::Oid,
+    },
+}
+
 /// 临时 clone 目录名（位于 `run_root` 下，与 `base/`、`staging/` 同级）。
 const GIT_REPO_TMP_SUBDIR: &str = "git-repo";
 
@@ -37,9 +57,9 @@ const GIT_REPO_TMP_SUBDIR: &str = "git-repo";
 ///
 /// # 返回
 ///
-/// - `Ok(None)`：live 不是 Git repo，staging 保持非 repo。
-/// - `Ok(Some(oid_hex))`：live 是 Git repo，seed 成功，返回 live 当前 HEAD 的
-///   hex OID（供 [`finalize_git_repo_metadata`] 做 compare-and-swap）。
+/// - `Ok(GitSeedState::NotGitRepo)`：live 不是 Git repo，staging 保持非 repo。
+/// - `Ok(GitSeedState::Unborn { .. })`：live 是 Git repo 但 HEAD 是 unborn。
+/// - `Ok(GitSeedState::Existing { .. })`：live 是 Git repo 且 HEAD 指向已有 commit。
 ///
 /// # 错误
 ///
@@ -47,26 +67,43 @@ const GIT_REPO_TMP_SUBDIR: &str = "git-repo";
 /// - live 是 Git repo 但 `git2` clone 失败 → 直接返回 `Err`，**不回退**到
 ///   `file seed + git init`（那会丢掉历史/remote/HEAD）；
 /// - 把 `.git/` 从临时目录移到 staging 失败 → 返回 `Err`。
-pub fn seed_from_live_as_git_repo(run: &StagingRun, live_root: &Path) -> Result<Option<String>> {
+pub fn seed_from_live_as_git_repo(run: &StagingRun, live_root: &Path) -> Result<GitSeedState> {
     // 1. 先把 live 当前工作区复制进 base/ 和 staging/。这才是同步基线。
     run.seed_from_live(live_root)?;
 
     // 2. live 不是 Git repo 时，保持 staging 非 repo，不伪造 git init。
     if !live_root.join(".git").exists() {
-        return Ok(None);
+        return Ok(GitSeedState::NotGitRepo);
     }
 
-    // 3. live 是 Git repo：记录 seed 时的 HEAD OID，供 finalize 做 CAS。
+    // 3. live 是 Git repo：记录 seed 时的 HEAD 状态，供 finalize 决定路径。
     let live_repo = git2::Repository::open(live_root).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "failed to open live git repo: {e}"
         )))
     })?;
-    let base_head_oid = live_repo
-        .head()
-        .ok()
-        .and_then(|head| head.target())
-        .map(|oid| oid.to_string());
+    let seed_state = match live_repo.head() {
+        Ok(head) => {
+            let head_ref = head
+                .shorthand()
+                .unwrap_or("main")
+                .to_string();
+            let ref_name = format!("refs/heads/{}", head_ref);
+            match head.target() {
+                Some(oid) => GitSeedState::Existing {
+                    head_ref: ref_name,
+                    head_oid: oid,
+                },
+                None => GitSeedState::Unborn { head_ref: ref_name },
+            }
+        }
+        Err(_) => {
+            // HEAD 不存在或无法解析 — 视为 unborn。
+            GitSeedState::Unborn {
+                head_ref: "refs/heads/main".to_string(),
+            }
+        }
+    };
 
     // 4. 用 git2 把仓库元数据克隆到临时目录。
     let live_root_str = live_root.to_str().ok_or_else(|| {
@@ -120,21 +157,26 @@ pub fn seed_from_live_as_git_repo(run: &StagingRun, live_root: &Path) -> Result<
     // 6. 清理临时 clone 的其余内容（worktree 文件，只保留了 .git）。
     let _ = fs::remove_dir_all(&temp_clone_dir);
 
-    Ok(base_head_oid)
+    Ok(seed_state)
 }
 
-/// #644 评论 5474772497 第1节：Git 专属 finalize — 同步 live 的仓库元数据。
+/// #644 评论 5474772497 第1节 + #644 评论 5475110422 第1/2节：
+/// Git 专属 finalize — 同步 live 的仓库元数据。
 ///
 /// Transfer 完成后，staging repo 里有新的 objects、HEAD、refs、index，
 /// 但 live 的 `.git` 仍然是 seed 时的旧状态。本函数把 staging 的仓库元数据
 /// 同步回 live，但**不 checkout 工作区**（用户正在写的正文不会被覆盖）。
 ///
-/// 步骤：
-/// 1. 从 staging 读取同步后的 HEAD、当前分支、remote refs；
-/// 2. 把 staging 新产生且 live ODB 缺失的 objects 导入 live ODB；
-/// 3. 用 compare-and-swap 语义更新 live 当前分支 ref
-///    （`update_ref` 校验 old OID = seed 时的 base HEAD）；
-/// 4. 把 live index 重建为同步后 HEAD tree（不 checkout 工作区）。
+/// #644 评论 5475110422 第1节：按 `GitSeedState` 分三条路径：
+/// - `NotGitRepo`：Transfer 成功后，从 staging 初始化 live 的 `.git`，
+///   导入 objects，创建 branch/HEAD/origin/remote-tracking refs/index。
+/// - `Unborn`：确认 live 仍是 unborn symbolic HEAD 后创建同步后的 branch ref。
+/// - `Existing`：走 compare-and-swap 更新 live 当前分支 ref。
+///
+/// #644 评论 5475110422 第2节：object 导入和 ref 更新失败不再被 `let _` 吞掉。
+/// 先收集缺失 OID，再逐个 read→write，任一步失败直接 Err。
+/// 所有 objects 导入成功后才允许更新任何 live ref。
+/// ref 更新前确认 `live_odb.exists(new_oid)`，不存在直接失败。
 ///
 /// 仅在 `TargetCommitMode::Full`（成功类终态）时调用。
 /// Conflict/PartialConflict 不推进 live 当前分支到未完成 merge 状态。
@@ -147,7 +189,7 @@ pub fn seed_from_live_as_git_repo(run: &StagingRun, live_root: &Path) -> Result<
 pub fn finalize_git_repo_metadata(
     live_root: &Path,
     staging_root: &Path,
-    base_head_oid_hex: &str,
+    seed_state: &GitSeedState,
 ) -> Result<()> {
     crate::storage::git_runtime::ensure_initialized()?;
 
@@ -157,11 +199,6 @@ pub fn finalize_git_repo_metadata(
         return Ok(());
     }
 
-    let live_repo = git2::Repository::open(live_root).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "finalize: failed to open live repo: {e}"
-        )))
-    })?;
     let staging_repo = git2::Repository::open(staging_root).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "finalize: failed to open staging repo: {e}"
@@ -180,41 +217,251 @@ pub fn finalize_git_repo_metadata(
         ))
     })?;
 
-    // 1. 把 staging 新产生且 live ODB 缺失的 objects 导入 live ODB。
     let staging_odb = staging_repo.odb().map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!("finalize: staging odb: {e}")))
     })?;
-    let live_odb = live_repo
-        .odb()
-        .map_err(|e| crate::Error::Io(std::io::Error::other(format!("finalize: live odb: {e}"))))?;
 
+    // 读取 staging 的当前分支名。
+    let branch_name = if let Some(name) = staging_head.shorthand() {
+        name.to_string()
+    } else {
+        "main".to_string()
+    };
+
+    match seed_state {
+        GitSeedState::NotGitRepo => {
+            // #644 评论 5475110422 第1节：live 原本不是 Git repo。
+            // Transfer 成功后，staging 有完整的 .git/（clone 或 init+commit+push）。
+            // 需要把 staging 的 .git/ 复制到 live，让 live 成为真正的 Git repo。
+            finalize_not_git_repo(live_root, staging_root, &staging_repo, &staging_odb, new_oid, &branch_name)
+        }
+        GitSeedState::Unborn { head_ref } => {
+            // #644 评论 5475110422 第1节：live 是 unborn repo。
+            // 导入 objects，创建 branch ref 指向 new_oid。
+            finalize_unborn(live_root, &staging_repo, &staging_odb, new_oid, head_ref)
+        }
+        GitSeedState::Existing { head_ref, head_oid } => {
+            // 已有提交的 repo：导入新 objects，CAS 更新 ref。
+            finalize_existing(live_root, &staging_repo, &staging_odb, new_oid, head_ref, *head_oid)
+        }
+    }
+}
+
+/// finalize 路径 1：live 原本不是 Git repo。
+///
+/// 把 staging 的 `.git/` 完整复制到 live，然后导入 staging 新产生的 objects，
+/// 更新 HEAD/refs/index。
+fn finalize_not_git_repo(
+    live_root: &Path,
+    staging_root: &Path,
+    staging_repo: &git2::Repository,
+    staging_odb: &git2::Odb,
+    new_oid: git2::Oid,
+    branch_name: &str,
+) -> Result<()> {
+    // 把 staging 的 .git/ 复制到 live。
+    let staging_git = staging_root.join(".git");
+    let live_git = live_root.join(".git");
+    if live_git.exists() {
+        // 极端情况：seed 时没有 .git，但 Transfer 期间被外部创建了。
+        // 仍然覆盖，因为 staging 的 .git 是同步后的权威状态。
+        fs::remove_dir_all(&live_git)?;
+    }
+    copy_dir_recursive(&staging_git, &live_git)?;
+
+    // 打开 live repo（刚复制了 .git/），导入 staging 中可能新增的 objects。
+    let live_repo = git2::Repository::open(live_root).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "finalize_not_git_repo: open live repo: {e}"
+        )))
+    })?;
+    let live_odb = live_repo.odb().map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "finalize_not_git_repo: live odb: {e}"
+        )))
+    })?;
+
+    import_missing_objects(staging_odb, &live_odb)?;
+
+    // 确认 new_oid 在 live 中存在。
+    if !live_odb.exists(new_oid) {
+        return Err(crate::Error::Io(std::io::Error::other(format!(
+            "finalize_not_git_repo: new_oid {} not found in live after import",
+            new_oid
+        ))));
+    }
+
+    // 更新 branch ref。
+    let ref_name = format!("refs/heads/{}", branch_name);
+    live_repo
+        .reference(&ref_name, new_oid, true, "sync: init branch from staging")
+        .map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "finalize_not_git_repo: update-ref {} failed: {}",
+                ref_name, e
+            )))
+        })?;
+
+    // 更新 index。
+    update_live_index(&live_repo, staging_repo, new_oid)?;
+
+    Ok(())
+}
+
+/// finalize 路径 2：live 是 unborn repo。
+///
+/// 导入 staging objects，创建 branch ref 指向 new_oid。
+fn finalize_unborn(
+    live_root: &Path,
+    staging_repo: &git2::Repository,
+    staging_odb: &git2::Odb,
+    new_oid: git2::Oid,
+    head_ref: &str,
+) -> Result<()> {
+    let live_repo = git2::Repository::open(live_root).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "finalize_unborn: open live repo: {e}"
+        )))
+    })?;
+    let live_odb = live_repo.odb().map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "finalize_unborn: live odb: {e}"
+        )))
+    })?;
+
+    import_missing_objects(staging_odb, &live_odb)?;
+
+    if !live_odb.exists(new_oid) {
+        return Err(crate::Error::Io(std::io::Error::other(format!(
+            "finalize_unborn: new_oid {} not found in live after import",
+            new_oid
+        ))));
+    }
+
+    // 创建 branch ref（unborn repo 没有这个 ref）。
+    live_repo
+        .reference(head_ref, new_oid, false, "sync: create branch from staging")
+        .map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "finalize_unborn: create-ref {} failed: {}",
+                head_ref, e
+            )))
+        })?;
+
+    // 同步 remote-tracking refs。
+    sync_remote_refs(&live_repo, staging_repo)?;
+
+    // 更新 index。
+    update_live_index(&live_repo, staging_repo, new_oid)?;
+
+    Ok(())
+}
+
+/// finalize 路径 3：live 已有提交的 repo（原有 CAS 逻辑）。
+///
+/// 导入 staging objects，CAS 更新 branch ref，同步 remote refs，更新 index。
+fn finalize_existing(
+    live_root: &Path,
+    staging_repo: &git2::Repository,
+    staging_odb: &git2::Odb,
+    new_oid: git2::Oid,
+    head_ref: &str,
+    base_oid: git2::Oid,
+) -> Result<()> {
+    let live_repo = git2::Repository::open(live_root).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "finalize_existing: open live repo: {e}"
+        )))
+    })?;
+    let live_odb = live_repo.odb().map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "finalize_existing: live odb: {e}"
+        )))
+    })?;
+
+    // #644 评论 5475110422 第2节：先导入所有缺失 objects，任一步失败直接 Err。
+    import_missing_objects(staging_odb, &live_odb)?;
+
+    // 确认 new_oid 在 live 中存在。
+    if !live_odb.exists(new_oid) {
+        return Err(crate::Error::Io(std::io::Error::other(format!(
+            "finalize_existing: new_oid {} not found in live after import",
+            new_oid
+        ))));
+    }
+
+    // 同步 remote-tracking refs。
+    sync_remote_refs(&live_repo, staging_repo)?;
+
+    // CAS 更新 live 当前分支 ref。
+    live_repo
+        .reference_matching(
+            head_ref,
+            new_oid,
+            false,
+            base_oid,
+            "sync: finalize git repo metadata after full sync",
+        )
+        .map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "finalize_existing: update-ref {} failed (CAS old={} new={}): {}",
+                head_ref, base_oid, new_oid, e
+            )))
+        })?;
+
+    // 更新 index。
+    update_live_index(&live_repo, staging_repo, new_oid)?;
+
+    Ok(())
+}
+
+/// #644 评论 5475110422 第2节：从 staging ODB 导入 live ODB 缺失的对象。
+///
+/// 先收集缺失 OID，再逐个 read→write，任一步失败直接 Err。
+/// 不再用 `let _` 吞掉写入错误。
+fn import_missing_objects(
+    staging_odb: &git2::Odb,
+    live_odb: &git2::Odb,
+) -> Result<()> {
+    let mut missing_oids: Vec<git2::Oid> = Vec::new();
     staging_odb
         .foreach(|oid| {
-            if live_odb.exists(*oid) {
-                return true; // live 已有此对象，跳过。
-            }
-            // 从 staging 读取对象，写入 live ODB。
-            if let Ok(obj) = staging_odb.read(*oid) {
-                let _ = live_odb.write(obj.kind(), obj.data());
+            if !live_odb.exists(*oid) {
+                missing_oids.push(*oid);
             }
             true
         })
         .map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
-                "finalize: object import foreach: {e}"
+                "import_missing_objects: foreach: {e}"
             )))
         })?;
 
-    // 2. 读取 staging 的当前分支名和 remote refs。
-    let branch_name = if let Some(name) = staging_head.shorthand() {
-        name.to_string()
-    } else {
-        // HEAD 是 detached — 用 "main" 兜底。
-        "main".to_string()
-    };
+    for oid in &missing_oids {
+        let obj = staging_odb.read(*oid).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "import_missing_objects: read {}: {}",
+                oid, e
+            )))
+        })?;
+        live_odb.write(obj.kind(), obj.data()).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "import_missing_objects: write {}: {}",
+                oid, e
+            )))
+        })?;
+    }
 
-    // 3. 把 staging 的 remote-tracking refs 同步到 live。
-    //    staging clone 自 live，Transfer 可能更新了 refs/remotes/origin/*。
+    Ok(())
+}
+
+/// #644 评论 5475110422 第2节：同步 staging 的 remote-tracking refs 到 live。
+///
+/// 失败直接 Err，不再用 `let _` 吞掉。
+fn sync_remote_refs(
+    live_repo: &git2::Repository,
+    staging_repo: &git2::Repository,
+) -> Result<()> {
     if let Ok(staging_refs) = staging_repo.references() {
         for reference in staging_refs.flatten() {
             let Some(name) = reference.name() else {
@@ -226,83 +473,86 @@ pub fn finalize_git_repo_metadata(
             let Some(target) = reference.target() else {
                 continue;
             };
-            // 直接覆盖 live 的 remote-tracking ref（不需要 CAS）。
-            let _ = live_repo.reference(
-                name,
-                target,
-                true, // force
-                "sync: update remote-tracking ref from staging",
-            );
+            live_repo
+                .reference(name, target, true, "sync: update remote-tracking ref from staging")
+                .map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "sync_remote_refs: update {} failed: {}",
+                        name, e
+                    )))
+                })?;
         }
     }
+    Ok(())
+}
 
-    // 4. 用 compare-and-swap 语义更新 live 当前分支 ref。
-    //    只允许 old OID 仍等于 seed 时的 base HEAD（reference_matching 语义）。
-    let base_oid = git2::Oid::from_str(base_head_oid_hex).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "finalize: invalid base_head_oid: {e}"
-        )))
-    })?;
-    let ref_name = format!("refs/heads/{}", branch_name);
-    live_repo
-        .reference_matching(
-            &ref_name,
-            new_oid,
-            false, // force=false
-            base_oid,
-            "sync: finalize git repo metadata after full sync",
-        )
-        .map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "finalize: update-ref {} failed (CAS old={} new={}): {}",
-                ref_name, base_oid, new_oid, e
-            )))
-        })?;
-
-    // 5. 把 live index 重建为同步后 HEAD tree（不 checkout 工作区）。
-    //    这样 live 的 index 与新 HEAD 一致，用户继续写的正文表现为 dirty worktree。
+/// 更新 live 的 index 为 staging HEAD 对应的 tree（不 checkout 工作区）。
+fn update_live_index(
+    live_repo: &git2::Repository,
+    staging_repo: &git2::Repository,
+    new_oid: git2::Oid,
+) -> Result<()> {
     let new_commit = staging_repo.find_commit(new_oid).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
-            "finalize: find new commit: {e}"
+            "update_live_index: find commit: {e}"
         )))
     })?;
     let new_tree = new_commit.tree().map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
-            "finalize: find new tree: {e}"
+            "update_live_index: find tree: {e}"
         )))
     })?;
 
     let mut live_index = live_repo.index().map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
-            "finalize: get live index: {e}"
+            "update_live_index: get index: {e}"
         )))
     })?;
     live_index.read_tree(&new_tree).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
-            "finalize: index read_tree: {e}"
+            "update_live_index: read_tree: {e}"
         )))
     })?;
     live_index.write().map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!("finalize: index write: {e}")))
+        crate::Error::Io(std::io::Error::other(format!(
+            "update_live_index: write: {e}"
+        )))
     })?;
 
     Ok(())
 }
 
-/// #644 评论 5474772497 第1节：Git repo-metadata finalize 的结果包装。
+/// 递归复制目录（用于复制 .git/）。
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
+/// Git repo-metadata finalize 的结果包装。
 ///
 /// 供 `apply_staging_commits_for_targets` 在 Full 模式下调用，
 /// 失败时转为 `TargetCommitResult::Failed`。
 pub fn try_finalize_git_repo_metadata(
     live_root: &Path,
     staging_root: &Path,
-    base_head_oid_hex: Option<&str>,
+    seed_state: Option<&GitSeedState>,
 ) -> std::result::Result<(), String> {
-    let Some(oid_hex) = base_head_oid_hex else {
-        // 非 Git backend（base_head_oid 为 None），无需 finalize。
+    let Some(state) = seed_state else {
+        // 非 Git backend（seed_state 为 None），无需 finalize。
         return Ok(());
     };
-    finalize_git_repo_metadata(live_root, staging_root, oid_hex).map_err(|e| e.to_string())
+    finalize_git_repo_metadata(live_root, staging_root, state).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -322,8 +572,8 @@ mod tests {
 
         let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
         let result = seed_from_live_as_git_repo(&run, &live).unwrap();
-        // 非 repo → 返回 None
-        assert!(result.is_none());
+        // 非 repo → 返回 NotGitRepo
+        assert!(matches!(result, GitSeedState::NotGitRepo));
 
         // base/staging 有业务文件
         assert_eq!(
@@ -363,10 +613,9 @@ mod tests {
         fs::write(live.join("untracked.md"), "untracked").unwrap();
 
         let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
-        let base_oid = seed_from_live_as_git_repo(&run, &live).unwrap();
-        // repo → 返回 Some(oid_hex)
-        assert!(base_oid.is_some());
-        assert!(!base_oid.as_ref().unwrap().is_empty());
+        let seed_state = seed_from_live_as_git_repo(&run, &live).unwrap();
+        // repo → 返回 Existing
+        assert!(matches!(seed_state, GitSeedState::Existing { .. }));
 
         // staging worktree 是 live 当前工作区（含未提交修改），不是 HEAD 的 checkout
         assert_eq!(
@@ -381,5 +630,26 @@ mod tests {
         assert!(run.staging_root().join(".git").exists());
         // 临时目录已清理
         assert!(!run.run_root().join("git-repo").exists());
+    }
+
+    /// live 是 unborn Git repo：seed_from_live_as_git_repo 返回 Unborn。
+    #[test]
+    fn git_staging_unborn_repo_returns_unborn() {
+        crate::storage::git_runtime::ensure_initialized().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let live = tmp.path().join("live");
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("a.txt"), "not committed yet").unwrap();
+
+        // 在 live 里建 git repo 但不提交（unborn）
+        let _repo = git2::Repository::init(&live).unwrap();
+
+        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+        let seed_state = seed_from_live_as_git_repo(&run, &live).unwrap();
+        // unborn → 返回 Unborn
+        assert!(matches!(seed_state, GitSeedState::Unborn { .. }));
+
+        // staging 拿到了 .git/ 元数据
+        assert!(run.staging_root().join(".git").exists());
     }
 }

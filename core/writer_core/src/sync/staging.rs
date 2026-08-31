@@ -34,10 +34,11 @@ pub struct StagingRun {
     /// Commit 阶段需要知道这个 staging run 对应的 live root，
     /// 才能调 `compute_commit_plan(live_root)` 做三方比较并把变更写回 live。
     target_live_root: PathBuf,
-    /// #644 评论 5474772497 第1节：seed 时记录 live 的 HEAD OID，
-    /// 供 Git repo-metadata finalize 做 compare-and-swap 更新 live ref。
+    /// #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
+    /// seed 时记录的 live Git 仓库状态。
     /// 仅 Git backend 有值；GithubApi backend 保持 None。
-    base_head_oid: Option<String>,
+    /// `None` 只表示本 target 根本不是 Git backend。
+    git_seed_state: Option<crate::sync::git_staging::GitSeedState>,
 }
 
 impl StagingRun {
@@ -52,7 +53,7 @@ impl StagingRun {
             run_root,
             run_id,
             target_live_root,
-            base_head_oid: None,
+            git_seed_state: None,
         })
     }
 
@@ -69,15 +70,17 @@ impl StagingRun {
         &self.target_live_root
     }
 
-    /// #644 评论 5474772497 第1节：seed 时记录的 live HEAD OID。
+    /// #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
+    /// seed 时记录的 live Git 仓库状态。
     /// 仅 Git backend 有值；GithubApi backend 保持 None。
-    pub fn base_head_oid(&self) -> Option<&str> {
-        self.base_head_oid.as_deref()
+    pub fn git_seed_state(&self) -> Option<&crate::sync::git_staging::GitSeedState> {
+        self.git_seed_state.as_ref()
     }
 
-    /// #644 评论 5474772497 第1节：设置 seed 时记录的 live HEAD OID。
-    pub fn set_base_head_oid(&mut self, oid: String) {
-        self.base_head_oid = Some(oid);
+    /// #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
+    /// 设置 seed 时记录的 live Git 仓库状态。
+    pub fn set_git_seed_state(&mut self, state: crate::sync::git_staging::GitSeedState) {
+        self.git_seed_state = Some(state);
     }
 
     /// staging 子目录（Transfer 阶段写入远端内容的目标）。
@@ -181,10 +184,19 @@ impl StagingRun {
         // 退化为纯时间戳比较（仍优于固定 remote-wins）。
         let live_device_id = read_live_device_id(live_root).unwrap_or_default();
 
+        // #644 评论 5475110422 第4节：加载 live 的 SyncState，获取 tombstones。
+        // delete 参与 LWW 时需要 tombstones 里的 deleted_at 时间戳。
+        let live_sync_state = read_live_sync_state(live_root);
+        let live_tombstones = live_sync_state
+            .as_ref()
+            .map(|s| s.tombstones.clone())
+            .unwrap_or_default();
+
         // #644 评论 5474772497 第2节：读取 staging 的 manifest.sync.json，
         // 获取远端文件的真实 LWW 元数据（updated_at_ms、device_id、op）。
         // GithubApi backend 的 Transfer 阶段会写入 manifest；
         // Git backend 不产生 manifest，此映射为空，回退到 mtime-based LWW。
+        // #644 评论 5475110422 第4节：manifest 存在但解析失败时记录警告并退化。
         let staging_manifest = read_staging_manifest(&staging_root);
 
         // 收集 base ∪ staging 的路径全集。
@@ -305,15 +317,35 @@ impl StagingRun {
                     // #644 评论 5474772497 第2节：本地侧用 live 文件 hash + mtime + device_id；
                     // 远端侧优先从 staging manifest 读取真实 LWW 元数据
                     // （updated_at_ms、device_id、op），回退到 mtime-based。
+                    //
+                    // #644 评论 5475110422 第4节：delete 时从 tombstones 查找 deleted_at。
+                    // 若本地 delete 无 tombstone 记录，跳过此路径（不参与 LWW）。
                     let local_rec =
-                        build_local_lww_record(live_root, &rel, &local, &live_device_id);
+                        build_local_lww_record(live_root, &rel, &local, &live_device_id, &live_tombstones);
+                    let Some(local_rec) = local_rec else {
+                        // 本地 delete 无 tombstone → 无法确定删除时间，
+                        // 保留本地（不覆盖），下次同步时应补 tombstone。
+                        plan.keep_local.push(rel);
+                        continue;
+                    };
                     let rel_str = rel.to_string_lossy().to_string();
                     let remote_rec = if let Some(manifest_rec) = staging_manifest.get(&rel_str) {
                         build_remote_lww_record_from_manifest(manifest_rec, &incoming)
                     } else {
                         // manifest 中无此路径（Git backend 或 manifest 缺失），
-                        // 回退到 mtime-based LWW。
-                        build_local_lww_record(&staging_root, &rel, &incoming, "remote")
+                        // 回退到 mtime-based LWW。远端侧不需要 tombstones。
+                        build_local_lww_record(&staging_root, &rel, &incoming, "remote", &[])
+                            .unwrap_or_else(|| {
+                                // 远端 delete 无 tombstone → 用当前时间兜底。
+                                use crate::sync::content_class::LwwRecord;
+                                LwwRecord {
+                                    content_hash: String::new(),
+                                    updated_at_ms: 0,
+                                    deleted_at_ms: Some(0),
+                                    device_id: "remote".to_string(),
+                                    op: "delete".to_string(),
+                                }
+                            })
                     };
                     match resolve_lww(&local_rec, &remote_rec) {
                         LwwWinner::Remote => {
@@ -367,15 +399,13 @@ pub fn prepare_staging_runs(
         match backend_type {
             crate::sync::types::BackendType::Git => {
                 // #644 评论 5473789298 第1节：Git 专属 staging 移到 git_staging.rs。
-                // #644 评论 5474772497 第1节：seed 返回 live 的 base HEAD OID，
-                // 供 finalize 做 compare-and-swap 更新 live ref。
-                let base_head_oid = crate::sync::git_staging::seed_from_live_as_git_repo(
+                // #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
+                // seed 返回 live 的 GitSeedState，供 finalize 决定路径。
+                let seed_state = crate::sync::git_staging::seed_from_live_as_git_repo(
                     &run,
                     &planned.target_live_root,
                 )?;
-                if let Some(oid) = base_head_oid {
-                    run.set_base_head_oid(oid);
-                }
+                run.set_git_seed_state(seed_state);
             }
             crate::sync::types::BackendType::GithubApi => {
                 run.seed_from_live(&planned.target_live_root)?;
@@ -548,36 +578,47 @@ fn apply_incoming(
 ///
 /// 读取文件 mtime 作为 `updated_at_ms`；`op` 按内容是否存在决定（Some → upsert，
 /// None → delete）。`device_id` 用 live 的 device_id。
+///
+/// #644 评论 5475110422 第4节：delete 时从 `tombstones` 查找 `deleted_at`，
+/// 不再固定写 0。若 tombstones 中无记录，返回 `None`（调用方应报错或补 tombstone）。
 fn build_local_lww_record(
     root: &Path,
     rel: &Path,
     content: &Option<Vec<u8>>,
     device_id: &str,
-) -> crate::sync::content_class::LwwRecord {
+    tombstones: &[crate::sync::types::Tombstone],
+) -> Option<crate::sync::content_class::LwwRecord> {
     use crate::sync::content_class::LwwRecord;
 
-    let (content_hash, op, updated_at_ms) = match content {
+    let rel_str = rel.to_string_lossy().to_string();
+
+    let (content_hash, op, updated_at_ms, deleted_at_ms) = match content {
         Some(bytes) => {
             let hash = md5_hex(&Some(bytes.clone()));
             let mtime = read_mtime_ms(root, rel).unwrap_or(0);
-            (hash, "upsert", mtime)
+            (hash, "upsert", mtime, None)
         }
-        None => (String::new(), "delete", 0),
+        None => {
+            // #644 评论 5475110422 第4节：从 tombstones 查找删除时间。
+            let tombstone = tombstones.iter().find(|t| t.original_path == rel_str);
+            if let Some(ts) = tombstone {
+                let deleted_at = ts.deleted_at * 1000; // tombstone.deleted_at 是秒，LWW 用毫秒
+                (String::new(), "delete", deleted_at, Some(deleted_at))
+            } else {
+                // 没有 tombstone 记录 → 无法确定删除时间。
+                // 返回 None 让调用方处理（跳过或报错），不默默写 0。
+                return None;
+            }
+        }
     };
 
-    let deleted_at_ms = if op == "delete" {
-        Some(updated_at_ms)
-    } else {
-        None
-    };
-
-    LwwRecord {
+    Some(LwwRecord {
         content_hash,
         updated_at_ms,
         deleted_at_ms,
         device_id: device_id.to_string(),
         op: op.to_string(),
-    }
+    })
 }
 
 /// #644 评论 5474772497 第2节：staging manifest 中的文件记录（JSON 反序列化用）。
@@ -598,28 +639,44 @@ struct ManifestRecord {
 
 /// #644 评论 5474772497 第2节：从 staging 的 manifest.sync.json 读取远端 LWW 记录。
 ///
-/// 返回 `path → ManifestRecord` 映射。manifest 不存在或解析失败时返回空映射
+/// 返回 `path → ManifestRecord` 映射。manifest 不存在时返回空映射
 /// （Git backend 不会产生 manifest，此时回退到 mtime-based LWW）。
-fn read_staging_manifest(staging_root: &Path) -> std::collections::HashMap<String, ManifestRecord> {
+///
+/// #644 评论 5475110422 第4节：manifest 存在但解析失败时记录警告并返回空映射。
+/// 不直接 Err，因为 manifest.sync.json 同时也是 EngineState 文件（原始字节写回 live），
+/// parse 失败不应阻止 EngineState 路径。LWW 侧退化为 mtime-based 比较。
+fn read_staging_manifest(
+    staging_root: &Path,
+) -> std::collections::HashMap<String, ManifestRecord> {
     let manifest_path = staging_root.join("app-meta/sync/manifest.sync.json");
     if !manifest_path.exists() {
         return std::collections::HashMap::new();
     }
     let Ok(content) = std::fs::read_to_string(&manifest_path) else {
+        log::warn!("read_staging_manifest: failed to read manifest.sync.json");
         return std::collections::HashMap::new();
     };
     #[derive(serde::Deserialize)]
     struct ManifestContainer {
         files: Vec<ManifestRecord>,
     }
-    let Ok(container) = serde_json::from_str::<ManifestContainer>(&content) else {
-        return std::collections::HashMap::new();
-    };
-    container
-        .files
-        .into_iter()
-        .map(|r| (r.path.clone(), r))
-        .collect()
+    match serde_json::from_str::<ManifestContainer>(&content) {
+        Ok(container) => container
+            .files
+            .into_iter()
+            .map(|r| (r.path.clone(), r))
+            .collect(),
+        Err(e) => {
+            // #644 评论 5475110422 第4节：manifest 存在但解析失败 → 警告 + 空映射。
+            // LWW 退化为 mtime-based；EngineState 路径仍正常工作（读原始字节）。
+            log::warn!(
+                "read_staging_manifest: manifest.sync.json parse error ({}), \
+                 LWW falling back to mtime-based comparison",
+                e
+            );
+            std::collections::HashMap::new()
+        }
+    }
 }
 
 /// #644 评论 5474772497 第2节：从 manifest 记录构造远端侧 LWW 记录。
@@ -675,6 +732,19 @@ fn read_live_device_id(live_root: &Path) -> Option<String> {
     } else {
         Some(state.device_id)
     }
+}
+
+/// #644 评论 5475110422 第4节：读取 live 的完整 SyncState。
+///
+/// 用于获取 tombstones（delete 的 deleted_at 时间戳）。
+/// 读取失败时返回 None。
+fn read_live_sync_state(live_root: &Path) -> Option<crate::sync::types::SyncState> {
+    let state_path = live_root.join("app-meta/sync/state.local.json");
+    if !state_path.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&state_path).ok()?;
+    serde_json::from_str(&content).ok()
 }
 
 /// 计算字节内容的 MD5 hex 摘要。`None`（文件不存在）返回空字符串。

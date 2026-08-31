@@ -68,6 +68,13 @@ pub struct SaveTransaction {
     tx_dir: PathBuf,
     entries: Vec<TransactionEntry>,
     committed: bool,
+    /// #644 评论 5475110422 第3节：备份模式标志。
+    /// 为 `true` 时，commit 前先把被覆盖/删除的旧文件备份到 `tx_dir/backup/`，
+    /// 使 `rollback()` 能恢复到 commit 前的状态。
+    backup_mode: bool,
+    /// #644 评论 5475110422 第3节：commit 时备份的旧文件列表。
+    /// `(target_relative, backup_filename)` — 用于 rollback 恢复。
+    backed_up_files: Vec<(String, String)>,
 }
 
 impl SaveTransaction {
@@ -80,6 +87,8 @@ impl SaveTransaction {
             tx_dir,
             entries: Vec::new(),
             committed: false,
+            backup_mode: false,
+            backed_up_files: Vec::new(),
         }
     }
 
@@ -118,6 +127,45 @@ impl SaveTransaction {
         });
     }
 
+    /// #644 评论 5475110422 第3节：启用备份模式。
+    ///
+    /// commit 前先把被覆盖/删除的旧文件备份到事务目录下的 `backup/` 子目录，
+    /// 使 `rollback()` 能恢复到 commit 前的状态。
+    /// 用于 Git finalize 原子性：先提交 SaveTransaction，再更新 Git ref/index；
+    /// 若 Git finalize 失败，rollback 恢复文件到旧版本。
+    pub fn enable_backup_mode(&mut self) {
+        self.backup_mode = true;
+    }
+
+    /// #644 评论 5475110422 第3节：回滚 commit 写入的文件变更。
+    ///
+    /// 仅在 `backup_mode` 且已 `commit` 后调用有效。
+    /// 把备份的旧文件恢复到 target_root，删除新写入的文件。
+    /// 恢复完成后清理备份目录。
+    pub fn rollback(&mut self) -> Result<()> {
+        if !self.committed || !self.backup_mode {
+            return Ok(());
+        }
+        let backup_dir = self.tx_dir.join("backup");
+        for (target_rel, backup_name) in &self.backed_up_files {
+            let target_path = self.target_root.join(target_rel);
+            let backup_path = backup_dir.join(backup_name);
+            if backup_path.exists() {
+                // 旧文件存在 → 恢复它。
+                if let Some(parent) = target_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&backup_path, &target_path)?;
+            } else {
+                // 旧文件不存在 → commit 新建了它，rollback 应删除。
+                let _ = fs::remove_file(&target_path);
+            }
+        }
+        // 清理备份目录。
+        let _ = fs::remove_dir_all(&backup_dir);
+        Ok(())
+    }
+
     #[allow(
         clippy::too_many_lines,
         clippy::cognitive_complexity,
@@ -144,10 +192,33 @@ impl SaveTransaction {
         // 逐个 rename 暂存文件到最终目标路径（write）或删除目标文件（delete）。
         // rename 在同一文件系统上是原子的，但跨 N 个文件不保证原子性；
         // committed 标记在全部 rename 完成后才写入，恢复时据此判断。
+        //
+        // #644 评论 5475110422 第3节：backup_mode 时先备份旧文件，支持 rollback。
+        let backup_dir = if self.backup_mode {
+            let dir = self.tx_dir.join("backup");
+            fs::create_dir_all(&dir)?;
+            Some(dir)
+        } else {
+            None
+        };
+
         let mut created_dirs = std::collections::HashSet::new();
-        for entry in &self.entries {
+        for (idx, entry) in self.entries.iter().enumerate() {
             let target_path = self.target_root.join(&entry.target_relative);
             if entry.is_delete {
+                // #644 评论 5475110422 第3节：备份要删除的旧文件。
+                if let Some(ref bdir) = backup_dir {
+                    if target_path.exists() {
+                        let backup_name = format!("backup_{}", idx);
+                        fs::copy(&target_path, bdir.join(&backup_name))?;
+                        self.backed_up_files
+                            .push((entry.target_relative.clone(), backup_name));
+                    } else {
+                        // 旧文件不存在 → 记录空备份标记（rollback 时删除新文件）。
+                        self.backed_up_files
+                            .push((entry.target_relative.clone(), String::new()));
+                    }
+                }
                 // #644 评论 5473401065 第3节：NotFound 视为幂等成功；
                 // 其它 IO 错误直接向上传播，不能假装删除成功。
                 match fs::remove_file(&target_path) {
@@ -156,6 +227,19 @@ impl SaveTransaction {
                     Err(e) => return Err(crate::Error::Io(e)),
                 }
             } else {
+                // #644 评论 5475110422 第3节：备份要被覆盖的旧文件。
+                if let Some(ref bdir) = backup_dir {
+                    if target_path.exists() {
+                        let backup_name = format!("backup_{}", idx);
+                        fs::copy(&target_path, bdir.join(&backup_name))?;
+                        self.backed_up_files
+                            .push((entry.target_relative.clone(), backup_name));
+                    } else {
+                        // 旧文件不存在 → 记录空备份标记。
+                        self.backed_up_files
+                            .push((entry.target_relative.clone(), String::new()));
+                    }
+                }
                 let staging_path = self.tx_dir.join(&entry.staging_filename);
                 if let Some(parent) = target_path.parent() {
                     if !created_dirs.contains(parent) {
