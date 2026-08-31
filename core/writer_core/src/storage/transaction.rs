@@ -148,8 +148,13 @@ impl SaveTransaction {
         for entry in &self.entries {
             let target_path = self.target_root.join(&entry.target_relative);
             if entry.is_delete {
-                // 删除操作：直接删除目标文件（不存在时忽略）
-                let _ = fs::remove_file(&target_path);
+                // #644 评论 5473401065 第3节：NotFound 视为幂等成功；
+                // 其它 IO 错误直接向上传播，不能假装删除成功。
+                match fs::remove_file(&target_path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(crate::Error::Io(e)),
+                }
             } else {
                 let staging_path = self.tx_dir.join(&entry.staging_filename);
                 if let Some(parent) = target_path.parent() {
@@ -259,10 +264,25 @@ pub fn recover_pending_transactions(target_root: &Path) -> Vec<TransactionRecove
 
         for tx_entry in &manifest.entries {
             if tx_entry.is_delete {
-                // 恢复删除操作：直接删除目标文件
+                // #644 评论 5473401065 第3节：NotFound 记 recovered（幂等）；
+                // 其它错误记 missing_files + 日志，不能假装 recovered。
                 let target_path = target_root.join(&tx_entry.target_relative);
-                let _ = fs::remove_file(&target_path);
-                recovered_files.push(tx_entry.target_relative.clone());
+                match fs::remove_file(&target_path) {
+                    Ok(()) => {
+                        recovered_files.push(tx_entry.target_relative.clone());
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        recovered_files.push(tx_entry.target_relative.clone());
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[transaction] recovery delete failed: {}: {}",
+                            tx_entry.target_relative,
+                            e
+                        );
+                        missing_files.push(tx_entry.target_relative.clone());
+                    }
+                }
             } else {
                 let staging_path = tx_dir.join(&tx_entry.staging_filename);
                 if staging_path.exists() {

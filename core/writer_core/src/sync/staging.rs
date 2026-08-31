@@ -215,7 +215,12 @@ impl StagingRun {
                 plan.noop.push(rel);
             } else {
                 // 两边都改（或 base 不存在且 local 已改），三方冲突。
-                plan.conflict.push(rel);
+                plan.conflict.push(StagingConflict {
+                    rel_path: rel,
+                    base_hash: md5_hex(&base),
+                    local_hash: md5_hex(&local),
+                    incoming_hash: md5_hex(&incoming),
+                });
             }
         }
         Ok(plan)
@@ -225,6 +230,33 @@ impl StagingRun {
     pub fn cleanup(&self) {
         let _ = fs::remove_dir_all(&self.run_root);
     }
+}
+
+/// #644 评论 5473401065 第1/2节：在**无 Core 锁**状态下创建并 seed 所有 staging runs。
+///
+/// 纯函数，不依赖 `WriterCore`，可在无锁状态下调用。
+/// 对每个 target 创建 `StagingRun`，然后调 `seed_from_live` 从 live 初始化
+/// base snapshot + staging clone。
+///
+/// #644 评论 5473401065 第2节：seed 失败**不再**被 `log::warn!` 吞掉。
+/// 任何一个 target 的 seed 失败都意味着该 target 的 staging 是半成品，
+/// 不能拿来做三方比较。seed 失败直接返回 Err，让调用方终止本次 full sync。
+///
+/// 成功后 `plan.targets[*].staging_root` 被填充为对应 staging 目录。
+pub fn prepare_staging_runs(
+    plan: &mut crate::sync::full_sync::FullSyncPlan,
+) -> crate::error::Result<Vec<StagingRun>> {
+    let mut staging_runs: Vec<StagingRun> = Vec::new();
+
+    for planned in &mut plan.targets {
+        let run = StagingRun::create(&plan.app_data_root, planned.target_live_root.clone())?;
+        // #644 评论 5473401065 第2节：seed 失败必须传播，不能继续拿半成品 staging。
+        run.seed_from_live(&planned.target_live_root)?;
+        planned.staging_root = Some(run.staging_root());
+        staging_runs.push(run);
+    }
+
+    Ok(staging_runs)
 }
 
 impl Drop for StagingRun {
@@ -244,7 +276,20 @@ pub struct CommitPlan {
     /// local==incoming，内容相同，无需操作。
     pub noop: Vec<PathBuf>,
     /// 两边都改，三方冲突（正文走三方合并语义，metadata 走 LWW，由调用方决定）。
-    pub conflict: Vec<PathBuf>,
+    /// #644 评论 5473401065 第4节：用 `StagingConflict` 替代 `PathBuf`，
+    /// 保留 base/local/incoming 哈希，让 Commit 阶段能映射成 `SyncConflict` 并持久化。
+    pub conflict: Vec<StagingConflict>,
+}
+
+/// #644 评论 5473401065 第4节：三方冲突的完整信息。
+///
+/// 保留 `rel_path` + 三方哈希，Commit 阶段映射成 `SyncConflict` 时不再丢失信息。
+#[derive(Debug, Clone)]
+pub struct StagingConflict {
+    pub rel_path: PathBuf,
+    pub base_hash: String,
+    pub local_hash: String,
+    pub incoming_hash: String,
 }
 
 /// 单个文件的 commit 动作。
@@ -263,6 +308,19 @@ fn opt_bytes_eq(a: &Option<Vec<u8>>, b: &Option<Vec<u8>>) -> bool {
         (Some(a), Some(b)) => a == b,
         (None, None) => true,
         _ => false,
+    }
+}
+
+/// 计算字节内容的 MD5 hex 摘要。`None`（文件不存在）返回空字符串。
+fn md5_hex(content: &Option<Vec<u8>>) -> String {
+    match content {
+        Some(bytes) => {
+            use std::io::Write;
+            let mut hasher = md5::Context::new();
+            hasher.write_all(bytes).ok();
+            format!("{:x}", hasher.compute())
+        }
+        None => String::new(),
     }
 }
 

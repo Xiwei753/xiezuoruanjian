@@ -206,10 +206,13 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// 全量同步 — 三段式：Prepare（短写锁）→ Transfer（不持锁）→ Commit（短写锁）。
+    /// 全量同步 — 四段式：Prepare（短写锁）→ Seed staging（不持锁）→ Transfer（不持锁）→ Commit（短写锁）。
     ///
     /// #644 评论 5467821839 第7节：网络阶段完全不持 Core 锁，
     /// 避免全量同步期间阻塞所有读操作。
+    ///
+    /// #644 评论 5473401065 第1节：staging seed（磁盘扫描/复制）也移出写锁，
+    /// 避免冷启动读取卷章被同步 Prepare 卡住。
     pub fn perform_full_sync(
         &self,
         config: SyncConfigDto,
@@ -220,19 +223,25 @@ impl WriterCoreApi {
         // Snapshot secrets before acquiring core_write（避免持锁期间回调 override）。
         let secrets = self.secrets_override_snapshot().unwrap_or_default();
 
-        // Phase 1: Prepare（短写锁）— 写 Syncing、枚举 targets、创建 backend + staging runs。
-        let (plan, backend, staging_runs) = {
+        // Phase 1: Prepare（短写锁）— 写 Syncing、枚举 targets、创建 backend。
+        // 不创建/seed staging runs（#644 评论 5473401065 第1节）。
+        let (mut plan, backend) = {
             let core = self.core_write();
-            let (plan, staging_runs) = core.prepare_full_sync(&sync_config, force_sync, secrets)?;
+            let plan = core.prepare_full_sync(&sync_config, force_sync, secrets)?;
             let backend = core.create_sync_backend_for_plan(&sync_config)?;
-            (plan, backend, staging_runs)
+            (plan, backend)
         };
         // 写锁已释放。
 
-        // Phase 2: Transfer（不持锁）— 网络 + 本地文件读写。
+        // Phase 2: Seed staging（不持锁）— 磁盘扫描/复制，创建隔离 staging 目录。
+        // #644 评论 5473401065 第2节：seed 失败直接终止本次同步，不继续拿半成品。
+        // prepare_staging_runs 是纯函数，不依赖 WriterCore，无需持锁。
+        let staging_runs = crate::sync::staging::prepare_staging_runs(&mut plan)?;
+
+        // Phase 3: Transfer（不持锁）— 网络 + 本地文件读写。
         let transfer_result = crate::sync::full_sync::run_transfer(backend.as_ref(), &plan);
 
-        // Phase 3: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引、清理 staging。
+        // Phase 4: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引、清理 staging。
         let result = {
             let core = self.core_write();
             core.commit_full_sync(transfer_result, staging_runs)

@@ -166,10 +166,11 @@ impl super::WriterCore {
     /// #644 评论 5467821839 第7节：三段式全量同步 — Prepare 阶段（短写锁内调用）。
     ///
     /// 写 `Syncing` 状态、枚举 targets、算出每个 target 的 `local_root`，
-    /// 为每个 target 创建 [`crate::sync::staging::StagingRun`]（隔离 staging 目录），
-    /// 产出 [`crate::sync::full_sync::FullSyncPlan`]（owned，不依赖 core）和 staging runs。
-    /// 调用方在 API 层持写锁调用本方法，拿到 plan + staging_runs 后释放锁，再调
-    /// [`crate::sync::full_sync::run_transfer`]。
+    /// 产出 [`crate::sync::full_sync::FullSyncPlan`]（owned，不依赖 core）。
+    ///
+    /// #644 评论 5473401065 第1节：**不在**写锁内创建或 seed `StagingRun`。
+    /// seed 涉及磁盘扫描/复制，会把"短写锁"变成"磁盘长锁"，阻塞冷启动卷章读取。
+    /// staging 的创建和 seed 移到 `prepare_staging_runs`，在无锁状态下执行。
     ///
     /// `secrets` 由调用方传入（API 层已 snapshot override），不再内部加载。
     ///
@@ -180,12 +181,8 @@ impl super::WriterCore {
         config: &crate::sync::SyncConfig,
         force_sync: bool,
         secrets: crate::sync::SyncSecrets,
-    ) -> crate::error::Result<(
-        crate::sync::full_sync::FullSyncPlan,
-        Vec<crate::sync::staging::StagingRun>,
-    )> {
+    ) -> crate::error::Result<crate::sync::full_sync::FullSyncPlan> {
         use crate::sync::full_sync::{FullSyncPlan, PlannedTarget};
-        use crate::sync::staging::StagingRun;
 
         self.persist_full_sync_started();
 
@@ -202,57 +199,39 @@ impl super::WriterCore {
         };
 
         let mut targets = Vec::new();
-        let mut staging_runs: Vec<StagingRun> = Vec::new();
 
-        // App target
+        // App target — 只生成 plan，不创建 staging
         let app_target = crate::sync::types::SyncTarget::app();
-        let app_staging = StagingRun::create(&self.app_data_root, self.app_data_root.clone())?;
-        // #644 评论 5473105049 第1节：Prepare 时从 live 完整初始化 staging，
-        // 包括 base snapshot + staging clone + sync state/manifest 复制。
-        if let Err(e) = app_staging.seed_from_live(&self.app_data_root) {
-            log::warn!("Staging seed_from_live failed for app target: {}", e);
-        }
         targets.push(PlannedTarget {
             target: app_target,
             local_root: self.app_data_root.clone(),
-            staging_root: Some(app_staging.staging_root()),
+            staging_root: None, // prepare_staging_runs 会填充
             target_kind: "app".to_string(),
             project_id: None,
+            target_live_root: self.app_data_root.clone(),
         });
-        staging_runs.push(app_staging);
 
-        // Project targets
+        // Project targets — 只生成 plan，不创建 staging
         for project in &projects {
             let target = crate::sync::types::SyncTarget::project(&project.id);
             let project_local_root = self.project_root(&project.id);
-            let project_staging =
-                StagingRun::create(&self.app_data_root, project_local_root.clone())?;
-            if let Err(e) = project_staging.seed_from_live(&project_local_root) {
-                log::warn!(
-                    "Staging seed_from_live failed for project {}: {}",
-                    project.id,
-                    e
-                );
-            }
             targets.push(PlannedTarget {
                 target,
                 local_root: project_local_root.clone(),
-                staging_root: Some(project_staging.staging_root()),
+                staging_root: None, // prepare_staging_runs 会填充
                 target_kind: "project".to_string(),
                 project_id: Some(project.id.clone()),
+                target_live_root: project_local_root,
             });
-            staging_runs.push(project_staging);
         }
 
-        Ok((
-            FullSyncPlan {
-                secrets,
-                config: config.clone(),
-                force_sync,
-                targets,
-            },
-            staging_runs,
-        ))
+        Ok(FullSyncPlan {
+            secrets,
+            config: config.clone(),
+            force_sync,
+            targets,
+            app_data_root: self.app_data_root.clone(),
+        })
     }
 
     /// #644 评论 5467821839 第7节：三段式全量同步 — 创建 backend（Prepare 阶段、写锁内）。
@@ -293,6 +272,11 @@ impl super::WriterCore {
     /// #644 评论 5473105049 第3节：逐 target 判断 — 只有该 target 的 Transfer 结果
     /// 属于允许提交的终态，才计算/应用它的 commit plan；失败 target 直接丢弃 staging。
     ///
+    /// #644 评论 5473401065 第4节：三方冲突不再只改 overall_status。
+    /// 冲突按 target 保留完整元数据（rel_path + base/local/incoming hash），
+    /// 映射成 `SyncConflict` 写入对应 target 的 `SyncResult.conflicts`，
+    /// 同时持久化到该 target live root 的 `SyncState.conflicts/conflicted_files`。
+    ///
     /// `staging_runs` 来自 Prepare 阶段，与 `transfer_result.targets` 按索引对应；
     /// commit 完成后显式 cleanup（`Drop` 也会兜底）。
     #[allow(clippy::excessive_nesting)]
@@ -322,22 +306,67 @@ impl super::WriterCore {
             }
         }
 
-        let mut result = crate::sync::full_sync::aggregate_full_sync_result(targets);
+        // #644 评论 5473401065 第4节：三方冲突按 target 映射成 SyncConflict，
+        // 写入对应 target 的 SyncResult.conflicts + SyncState。
+        for (idx, target_conflicts) in commit_outcome.target_conflicts.iter().enumerate() {
+            if target_conflicts.is_empty() {
+                continue;
+            }
+            if let Some(target) = targets.get_mut(idx) {
+                let now_ts = now_epoch_seconds();
+                for sc in target_conflicts {
+                    let sync_conflict = crate::sync::types::SyncConflict {
+                        local_path: sc.rel_path.to_string_lossy().to_string(),
+                        remote_path: format!(
+                            "{}{}",
+                            target.remote_prefix,
+                            sc.rel_path.to_string_lossy()
+                        ),
+                        local_hash: sc.local_hash.clone(),
+                        remote_hash: sc.incoming_hash.clone(),
+                        base_hash: sc.base_hash.clone(),
+                        created_at: now_ts,
+                        description: format!(
+                            "three-way conflict: both local and remote changed {}",
+                            sc.rel_path.display()
+                        ),
+                    };
+                    target.result.conflicts.push(sync_conflict);
+                }
+                // target 有冲突时状态改为 Conflict
+                target.result.status = crate::sync::SyncStatus::Conflict;
 
-        // 三方冲突追加到结果中。
-        if !commit_outcome.conflicts.is_empty() {
-            log::warn!(
-                "Staging commit: {} three-way conflict(s): {:?}",
-                commit_outcome.conflicts.len(),
-                commit_outcome.conflicts
-            );
-            if !matches!(
-                result.overall_status,
-                crate::sync::SyncStatus::FatalError(_)
-            ) {
-                result.overall_status = crate::sync::SyncStatus::PartialConflict;
+                // 持久化到该 target live root 的 SyncState
+                let live_root = &staging_runs[idx].target_live_root();
+                if let Ok(mut state) = crate::sync::SyncService::load_sync_state(live_root) {
+                    for sc in target_conflicts {
+                        let rel_str = sc.rel_path.to_string_lossy().to_string();
+                        state.conflicted_files.insert(rel_str.clone());
+                        state.conflicts.push(crate::sync::types::SyncConflict {
+                            local_path: rel_str.clone(),
+                            remote_path: format!(
+                                "{}{}",
+                                target.remote_prefix,
+                                sc.rel_path.to_string_lossy()
+                            ),
+                            local_hash: sc.local_hash.clone(),
+                            remote_hash: sc.incoming_hash.clone(),
+                            base_hash: sc.base_hash.clone(),
+                            created_at: now_ts,
+                            description: format!(
+                                "three-way conflict: both local and remote changed {}",
+                                sc.rel_path.display()
+                            ),
+                        });
+                    }
+                    if let Err(e) = crate::sync::SyncService::save_sync_state(live_root, &state) {
+                        log::warn!("Failed to persist staging conflicts to SyncState: {e}");
+                    }
+                }
             }
         }
+
+        let result = crate::sync::full_sync::aggregate_full_sync_result(targets);
 
         let previous_state = self.load_full_sync_state().unwrap_or(None);
         let new_state = crate::sync::full_sync_state::FullSyncState::from_result_and_previous(
@@ -654,13 +683,16 @@ impl super::WriterCore {
 /// #644 评论 5473105049 第4节：commit IO 失败通过 `TargetCommitResult` 向上传播，
 /// 不能只 `log::warn!` 吞掉。
 ///
+/// #644 评论 5473401065 第4节：冲突按 target 保留 `StagingConflict`（含三方哈希），
+/// 不再只做全局路径列表。
+///
 /// `staging_runs` 与 `transfer_targets` 按索引对应。
-/// 返回每个 target 的 commit 结果 + 全局冲突列表。
+/// 返回每个 target 的 commit 结果 + 每个 target 的冲突列表。
 fn apply_staging_commits_for_targets(
     staging_runs: &[crate::sync::staging::StagingRun],
     transfer_targets: &[crate::sync::types::TargetSyncResult],
 ) -> StagingCommitOutcome {
-    let mut conflicts: Vec<String> = Vec::new();
+    let mut target_conflicts: Vec<Vec<crate::sync::staging::StagingConflict>> = Vec::new();
     let mut target_results: Vec<TargetCommitResult> = Vec::new();
 
     for (idx, run) in staging_runs.iter().enumerate() {
@@ -678,6 +710,7 @@ fn apply_staging_commits_for_targets(
                 run.run_id()
             );
             target_results.push(TargetCommitResult::Skipped);
+            target_conflicts.push(Vec::new());
             run.cleanup();
             continue;
         }
@@ -689,6 +722,7 @@ fn apply_staging_commits_for_targets(
                 let msg = format!("compute_commit_plan failed: {}", e);
                 log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                 target_results.push(TargetCommitResult::Failed(msg));
+                target_conflicts.push(Vec::new());
                 run.cleanup();
                 continue;
             }
@@ -697,19 +731,18 @@ fn apply_staging_commits_for_targets(
             let msg = format!("apply_commit_plan_to_live failed: {}", e);
             log::warn!("Staging commit: {} for run {}", msg, run.run_id());
             target_results.push(TargetCommitResult::Failed(msg));
+            target_conflicts.push(Vec::new());
             run.cleanup();
             continue;
         }
-        for conflict_path in &plan.conflict {
-            conflicts.push(conflict_path.to_string_lossy().to_string());
-        }
+        target_conflicts.push(plan.conflict);
         target_results.push(TargetCommitResult::Ok);
         run.cleanup();
     }
 
     StagingCommitOutcome {
         target_results,
-        conflicts,
+        target_conflicts,
     }
 }
 
@@ -726,7 +759,8 @@ enum TargetCommitResult {
 /// staging commit 阶段的汇总结果。
 struct StagingCommitOutcome {
     target_results: Vec<TargetCommitResult>,
-    conflicts: Vec<String>,
+    /// #644 评论 5473401065 第4节：冲突按 target 保留，不再只做全局路径列表。
+    target_conflicts: Vec<Vec<crate::sync::staging::StagingConflict>>,
 }
 
 /// 判断 transfer 结果状态是否允许提交 staging 到 live。

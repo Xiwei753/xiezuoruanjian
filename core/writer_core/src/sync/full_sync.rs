@@ -37,6 +37,9 @@ pub struct FullSyncPlan {
     pub config: SyncConfig,
     pub force_sync: bool,
     pub targets: Vec<PlannedTarget>,
+    /// #644 评论 5473401065 第1节：app_data_root 供 API 层在无锁状态下
+    /// 调用 `prepare_staging_runs` 时传给 `StagingRun::create`。
+    pub app_data_root: PathBuf,
 }
 
 /// 单个 target 的执行计划 — target 元数据 + 本地根 + 分类标签。
@@ -50,6 +53,9 @@ pub struct PlannedTarget {
     /// `"app"` 或 `"project"`，用于 `TargetSyncResult.target_kind`。
     pub target_kind: String,
     pub project_id: Option<String>,
+    /// #644 评论 5473401065 第1节：target 对应的 live root，
+    /// 供 `prepare_staging_runs` 在无锁状态下创建 staging 时使用。
+    pub target_live_root: PathBuf,
 }
 
 /// Transfer 阶段产出 — 各 target 的 `SyncResult`，待 Commit 聚合。
