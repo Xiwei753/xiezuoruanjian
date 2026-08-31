@@ -250,6 +250,7 @@ fn verify_problem2_lockfile_rename_recovers_stale_lock() {
             new_index_sha256: Some(sha256_bytes(&new_index_bytes)),
             ref_plans: vec![],
             repo_create_owner: None,
+            index_lock_owner: None,
         };
 
         // 新语义：current == old → no-op，返回 Ok，不碰 lock。
@@ -291,6 +292,7 @@ fn verify_problem2_lockfile_rename_recovers_stale_lock() {
             new_index_sha256: Some(sha256_bytes(&new_index_bytes)),
             ref_plans: vec![],
             repo_create_owner: None,
+            index_lock_owner: Some(uuid::Uuid::new_v4().to_string()),
         };
 
         rollback_git_finalize(&live, &snapshot, &plan).unwrap();
@@ -370,6 +372,7 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
             new_index_sha256: None,
             ref_plans: vec![],
             repo_create_owner: None, // 无 owner marker → 外部仓库
+            index_lock_owner: None,
         };
 
         rollback_git_finalize(&live, &snapshot, &plan).unwrap();
@@ -395,6 +398,7 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
             new_index_sha256: None,
             ref_plans: vec![],
             repo_create_owner: Some(uuid::Uuid::new_v4().to_string()),
+            index_lock_owner: None,
         };
         // live .git 没有 .sujian-sync-owner marker（外部创建的）。
 
@@ -428,6 +432,7 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
             new_index_sha256: None,
             ref_plans: vec![],
             repo_create_owner: Some(uuid::Uuid::new_v4().to_string()), // 不同的 uuid
+            index_lock_owner: None,
         };
 
         rollback_git_finalize(&live, &snapshot, &plan).unwrap();
@@ -456,6 +461,7 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
             new_index_sha256: None,
             ref_plans: vec![],
             repo_create_owner: Some(owner), // 匹配的 uuid
+            index_lock_owner: None,
         };
 
         rollback_git_finalize(&live, &snapshot, &plan).unwrap();
@@ -531,6 +537,7 @@ fn verify_problem4_concurrent_metadata_changed_no_rollback() {
             new_oid.to_string(),
         )],
         repo_create_owner: None,
+        index_lock_owner: None,
     };
 
     // 模拟并发：在调用 commit_git_finalize 前，把 detached HEAD 从 old_oid 推到 new_oid。

@@ -127,6 +127,15 @@ pub struct GitFinalizePlan {
     /// 避免误删外部后来创建的仓库。正常 finalize 完成后删除 marker。
     #[serde(default)]
     pub repo_create_owner: Option<String>,
+    /// #644 评论 5484539222 缺陷1：index.lock 持久 ownership 的 owner uuid。
+    /// 在 prepare 阶段生成（当 `new_index_sha256.is_some()` 时），随 manifest 落盘。
+    /// finalize/rollback 用 `OwnedIndexLock` 在 `.git/index.sujian-<owner>` 生成 prepared file，
+    /// `hard_link` 到 `.git/index.lock` 获取 canonical Git lock（同一 inode）。
+    /// 恢复时比较 lock 与 owner_file 的 inode 判断 ownership：属于本轮才清理，
+    /// 不属于本轮（并发 Git 进程）绝不碰。即使进程被 SIGKILL，Drop 不执行，
+    /// 磁盘上 owner_file + lock 仍在，恢复时可通过 inode 比较判断归属。
+    #[serde(default)]
+    pub index_lock_owner: Option<String>,
 }
 
 /// #644 评论 5478237852 问题2：旧 mutation journal 字段，保留向后兼容。
@@ -532,7 +541,16 @@ fn build_finalize_plan(
             new_index_sha256: None,
             ref_plans: Vec::new(),
             repo_create_owner: new_repo_create_owner(seed_state),
+            index_lock_owner: None,
         });
+    };
+
+    // #644 评论 5484539222 缺陷1：当本轮会写 index（new_index_sha256.is_some()）时，
+    // 生成 index_lock_owner uuid，供 OwnedIndexLock 做持久 ownership。
+    let index_lock_owner = if staging_plan.new_index_sha256.is_some() {
+        Some(uuid::Uuid::new_v4().to_string())
+    } else {
+        None
     };
 
     let mut ref_plans: Vec<(String, Option<String>, String)> = Vec::new();
@@ -540,11 +558,16 @@ fn build_finalize_plan(
     match seed_state {
         GitSeedState::NotGitRepo => {
             // NotGitRepo 路径：创建 refs/heads/<branch>。
-            let branch_name = if staging_plan.staging_branch_name.is_empty() {
-                "main"
-            } else {
-                &staging_plan.staging_branch_name
-            };
+            // #644 评论 5484539222 缺陷3c：删掉 main fallback。
+            // 按 build_staging_plan 的新不变量，只要有 staging_head_oid，
+            // branch name 就必须已经解析成功；保留 main fallback 只会把真正的状态错误藏起来。
+            if staging_plan.staging_branch_name.is_empty() {
+                return Err(crate::Error::Io(std::io::Error::other(
+                    "build_finalize_plan: NotGitRepo path requires non-empty \
+                     staging_branch_name, refusing to fallback to \"main\"",
+                )));
+            }
+            let branch_name = &staging_plan.staging_branch_name;
             let ref_name = format!("refs/heads/{}", branch_name);
             ref_plans.push((ref_name, None, new_oid_str.clone()));
         }
@@ -613,6 +636,7 @@ fn build_finalize_plan(
         new_index_sha256: staging_plan.new_index_sha256,
         ref_plans,
         repo_create_owner: new_repo_create_owner(seed_state),
+        index_lock_owner,
     })
 }
 
@@ -860,11 +884,12 @@ pub fn rollback_git_finalize(
     }
 
     // 2. repo_create=false：index + refs rollback。
-    //    #644 评论 5483239422 问题2/3：三态幂等 + lockfile 反向提交边界。
-    //    - current == old(snapshot.index) → AlreadyReverted / no-op
+    //    #644 评论 5483239422 问题2/3 + #644 评论 5484539222 缺陷1：
+    //    三态幂等 + lockfile 反向提交边界 + 持久 ownership。
+    //    - current == old(snapshot.index) → AlreadyReverted / no-op，但需清理本轮 stale lock
     //    - current == new(plan.new_index_sha256) → 反向恢复（lockfile 反向提交）
     //    - 其它 → ConcurrentChanged (Err)
-    //    反向恢复用 create_new(true) 自己获取 .git/index.lock，lock 已存在 → Err，
+    //    反向恢复用 OwnedIndexLock（hard_link），lock 已存在且不属于本轮 → Err，
     //    绝不删别人的 lock（与 forward install_index_with_lock 同语义）。
     if let Some(expected_hash) = plan.new_index_sha256 {
         let index_path = live_root.join(".git").join("index");
@@ -881,7 +906,26 @@ pub fn rollback_git_finalize(
         // 三态判断：先判 old（AlreadyReverted），再判 new（需反向恢复），其它并发失败。
         if index_snapshot_eq(&current_index, &snapshot.index) {
             // current == old(snapshot.index) → 第一次 rollback 已恢复，no-op。
-            // 不碰 index，不碰 lock（lock 若存在属于别的 Git 进程）。
+            // #644 评论 5484539222 缺陷1：但需检测并清理本轮的 stale lock。
+            // forward install 中途被 SIGKILL（acquire 后、commit_rename 前）会残留
+            // .git/index.lock + .git/index.sujian-<owner>，二者同一 inode。
+            // 若 lock 属于本轮（与 owner_file 同 inode）→ 清理 lock + owner_file；
+            // 若 lock 不属于本轮（并发 Git 进程）→ 不碰，保留 no-op。
+            if let Some(owner) = &plan.index_lock_owner {
+                let owner_file = live_root
+                    .join(".git")
+                    .join(format!("index.sujian-{}", owner));
+                if lock_path.exists()
+                    && owner_file.exists()
+                    && same_file_id(&lock_path, &owner_file)
+                {
+                    let _ = fs::remove_file(&lock_path);
+                    let _ = fs::remove_file(&owner_file);
+                } else if owner_file.exists() {
+                    // owner_file 存在但 lock 不存在或不属于本轮：清理孤立的 owner_file。
+                    let _ = fs::remove_file(&owner_file);
+                }
+            }
         } else {
             // current != old，检查是否 == new（plan.new_index_sha256）。
             let current_is_new = match &current_index {
@@ -897,13 +941,25 @@ pub fn rollback_git_finalize(
                 )));
             }
             // current == new(plan) → 需要反向恢复到 snapshot.index。
-            // 走 lockfile 反向提交边界（与 forward install_index_with_lock 同语义）：
-            // 1. create_new(true) 自己获取 .git/index.lock；lock 已存在 → Err，绝不删。
+            // 走 OwnedIndexLock 反向提交边界（与 forward install_index_with_lock 同语义）：
+            // 1. acquire（hard_link）自己获取 .git/index.lock；lock 已存在且不属于本轮 → Err，绝不删。
             // 2. 拿到锁后重新读 index 确认仍 == new。
-            // 3. 把 snapshot.index 旧字节写进自己持有的 lock，fsync，rename(index.lock -> index)。
-            // #644 评论 5483920624 问题2：把 expected_new_sha256 传进去，
-            // 让函数在拿锁后复验 live index hash 仍等于 expected new。
-            rollback_index_via_lockfile(&index_path, &lock_path, expected_hash, &snapshot.index)?;
+            // 3. Bytes 路径 commit_rename（rename lock → index）；Missing 路径 commit_delete。
+            // #644 评论 5484539222 缺陷1：用 plan.index_lock_owner 做持久 ownership。
+            let owner = plan.index_lock_owner.as_deref().ok_or_else(|| {
+                crate::Error::Io(std::io::Error::other(
+                    "rollback_git_finalize: plan.index_lock_owner is None but \
+                     new_index_sha256 is Some — cannot acquire OwnedIndexLock without owner \
+                     (plan was generated by older code without persistent index lock ownership)",
+                ))
+            })?;
+            rollback_index_via_lockfile(
+                &index_path,
+                &lock_path,
+                expected_hash,
+                &snapshot.index,
+                owner,
+            )?;
         }
     }
 
@@ -1382,7 +1438,7 @@ fn finalize_unborn(
     new_oid: git2::Oid,
     head_ref: &str,
     snapshot: &GitMetadataSnapshot,
-    _plan: &GitFinalizePlan,
+    plan: &GitFinalizePlan,
 ) -> std::result::Result<(), GitFinalizeError> {
     let live_repo = git2::Repository::open(live_root).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
@@ -1410,10 +1466,22 @@ fn finalize_unborn(
     // 校验失败返回 ConcurrentMetadataChanged，不触发 rollback。
     verify_git_metadata_unchanged(live_root, snapshot, head_ref)?;
 
-    // #644 评论 5480360027 修复点 3：index 原生锁边界。
-    // 先在临时目录生成目标 index，获取 .git/index.lock，
+    // #644 评论 5480360027 修复点 3 + #644 评论 5484539222 缺陷1：index 原生锁边界 + 持久 ownership。
+    // 先在临时目录生成目标 index，获取 .git/index.lock（OwnedIndexLock hard_link），
     // 拿到锁后重新读取 live index 确认仍等于 snapshot，一致才原子安装。
-    install_index_with_lock(live_root, &live_repo, staging_repo, new_oid, snapshot)?;
+    let index_lock_owner = plan.index_lock_owner.as_deref().ok_or_else(|| {
+        GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
+            "finalize_unborn: plan.index_lock_owner is None but new_index_sha256 is Some",
+        )))
+    })?;
+    install_index_with_lock(
+        live_root,
+        &live_repo,
+        staging_repo,
+        new_oid,
+        snapshot,
+        index_lock_owner,
+    )?;
 
     // #644 评论 5480360027 修复点 5：sync_remote_refs 严格错误传播。
     sync_remote_refs(&live_repo, staging_repo, &snapshot.refs)?;
@@ -1446,13 +1514,31 @@ fn finalize_unborn(
     }
 
     // 确认目标 branch ref 仍不存在（unborn 状态未变）。
-    if live_repo.find_reference(head_ref).is_ok() {
-        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-            std::io::Error::other(format!(
-                "finalize_unborn: branch ref {} already exists (concurrent modification)",
-                head_ref
-            )),
-        )));
+    // #644 评论 5484539222 缺陷3b：严格 match find_reference 返回。
+    // - Ok(_)：branch 已存在（concurrent modification），按 "already exists" 逻辑处理。
+    // - Err(NotFound)：只有这里才表示 ref 不存在，继续创建。
+    // - 其它 Err：直接返回 finalize failure，不继续。
+    match live_repo.find_reference(head_ref) {
+        Ok(_) => {
+            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                std::io::Error::other(format!(
+                    "finalize_unborn: branch ref {} already exists (concurrent modification)",
+                    head_ref
+                )),
+            )));
+        }
+        Err(e) if e.code() == git2::ErrorCode::NotFound => {
+            // branch 不存在，继续创建。
+        }
+        Err(e) => {
+            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                std::io::Error::other(format!(
+                    "finalize_unborn: find_reference({}) failed with non-NotFound error: {} \
+                     — refusing to create ref on possibly corrupted refdb",
+                    head_ref, e
+                )),
+            )));
+        }
     }
 
     live_repo
@@ -1484,7 +1570,7 @@ fn finalize_existing(
     head_ref: &str,
     base_oid: git2::Oid,
     snapshot: &GitMetadataSnapshot,
-    _plan: &GitFinalizePlan,
+    plan: &GitFinalizePlan,
 ) -> std::result::Result<(), GitFinalizeError> {
     let live_repo = git2::Repository::open(live_root).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
@@ -1512,24 +1598,64 @@ fn finalize_existing(
     // 校验失败返回 ConcurrentMetadataChanged，不触发 rollback。
     verify_git_metadata_unchanged(live_root, snapshot, head_ref)?;
 
-    // #644 评论 5480360027 修复点 3：index 原生锁边界。
-    install_index_with_lock(live_root, &live_repo, staging_repo, new_oid, snapshot)?;
+    // #644 评论 5480360027 修复点 3 + #644 评论 5484539222 缺陷1：index 原生锁边界 + 持久 ownership。
+    let index_lock_owner = plan.index_lock_owner.as_deref().ok_or_else(|| {
+        GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
+            "finalize_existing: plan.index_lock_owner is None but new_index_sha256 is Some",
+        )))
+    })?;
+    install_index_with_lock(
+        live_root,
+        &live_repo,
+        staging_repo,
+        new_oid,
+        snapshot,
+        index_lock_owner,
+    )?;
 
     // #644 评论 5480360027 修复点 5：sync_remote_refs 严格错误传播。
     sync_remote_refs(&live_repo, staging_repo, &snapshot.refs)?;
 
-    // #644 评论 5475805198 第3节：确认 HEAD 仍指向 seed 时同一个 branch。
+    // #644 评论 5475805198 第3节 + #644 评论 5484539222 缺陷3a：确认 HEAD 仍指向 seed 时同一个 branch。
     // 防止用户切换到别的 branch 后还偷偷更新旧 branch。
-    if let Ok(raw_head) = live_repo.find_reference("HEAD") {
-        if let Some(sym_target) = raw_head.symbolic_target() {
-            if sym_target != head_ref {
-                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-                    std::io::Error::other(format!(
-                        "finalize_existing: HEAD now points to {} but seed was {}",
-                        sym_target, head_ref
-                    )),
-                )));
+    // 严格 match find_reference("HEAD") 返回：
+    // - Ok(raw_head)：按当前真实状态处理（校验 sym_target == head_ref）。
+    // - Err(NotFound)：HEAD 不存在（unborn 或被并发删），返回 finalize failure，
+    //   绝不静默跳过（旧代码 if let Ok 把 IO/refdb 损坏错误跳过）。
+    // - 其它 Err：直接返回 finalize failure，进入已经存在的 rollback 路径。
+    match live_repo.find_reference("HEAD") {
+        Ok(raw_head) => {
+            if let Some(sym_target) = raw_head.symbolic_target() {
+                if sym_target != head_ref {
+                    return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                        std::io::Error::other(format!(
+                            "finalize_existing: HEAD now points to {} but seed was {}",
+                            sym_target, head_ref
+                        )),
+                    )));
+                }
             }
+            // HEAD 是 detached（无 sym_target）时不报错，继续用 reference_matching 做 CAS。
+            // finalize_existing 的语义是更新 head_ref，HEAD 是否 symbolic 由 reference_matching
+            // 的 CAS 保护（current != base_oid 时返回 EMODIFIED）。
+        }
+        Err(e) if e.code() == git2::ErrorCode::NotFound => {
+            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                std::io::Error::other(format!(
+                    "finalize_existing: HEAD reference not found (unborn or deleted): {} \
+                     — refusing to finalize on repo without HEAD",
+                    e
+                )),
+            )));
+        }
+        Err(e) => {
+            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                std::io::Error::other(format!(
+                    "finalize_existing: find_reference(\"HEAD\") failed with non-NotFound \
+                     error: {} — refusing to finalize on possibly corrupted refdb",
+                    e
+                )),
+            )));
         }
     }
 
@@ -1574,7 +1700,7 @@ fn finalize_detached(
     new_oid: git2::Oid,
     base_oid: git2::Oid,
     snapshot: &GitMetadataSnapshot,
-    _plan: &GitFinalizePlan,
+    plan: &GitFinalizePlan,
 ) -> std::result::Result<(), GitFinalizeError> {
     let live_repo = git2::Repository::open(live_root).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
@@ -1602,9 +1728,21 @@ fn finalize_detached(
     // #644 评论 5481496190 问题4：ConcurrentMetadataChanged 原样向上传播，不降级。
     verify_git_metadata_unchanged(live_root, snapshot, "HEAD")?;
 
-    // #644 评论 5480360027 修复点 3：index 原生锁边界。
+    // #644 评论 5480360027 修复点 3 + #644 评论 5484539222 缺陷1：index 原生锁边界 + 持久 ownership。
     // #644 评论 5481496190 问题4：ConcurrentMetadataChanged 原样向上传播，不降级。
-    install_index_with_lock(live_root, &live_repo, staging_repo, new_oid, snapshot)?;
+    let index_lock_owner = plan.index_lock_owner.as_deref().ok_or_else(|| {
+        GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
+            "finalize_detached: plan.index_lock_owner is None but new_index_sha256 is Some",
+        )))
+    })?;
+    install_index_with_lock(
+        live_root,
+        &live_repo,
+        staging_repo,
+        new_oid,
+        snapshot,
+        index_lock_owner,
+    )?;
 
     // #644 评论 5475805198 第3节：使用 reference_matching 做真正的 CAS。
     // #644 评论 5481496190 问题1：force=true 让 libgit2 能更新已存在的 HEAD，
@@ -1629,52 +1767,162 @@ fn finalize_detached(
 
 // ── 内部辅助函数（从 git_staging.rs 移入） ──
 
-/// #644 评论 5480360027 修复点 3 + #644 评论 5481496190 问题2：index 原生锁边界。
+/// #644 评论 5484539222 缺陷1：比较两个路径是否指向同一文件实体（同一 inode/file-id）。
 ///
-/// 流程（lockfile rename 模型，单一写入链）：
+/// 用于判断 `.git/index.lock` 是否属于本轮（与 `.git/index.sujian-<owner>` 同一 inode）。
+/// Unix 上用 `(st_dev, st_ino)` 比较；非 Unix 上回退到文件大小 + 修改时间比较
+///（项目无 Windows 客户端，回退仅保证编译通过）。
+fn same_file_id(a: &Path, b: &Path) -> bool {
+    let (meta_a, meta_b) = match (fs::metadata(a), fs::metadata(b)) {
+        (Ok(ma), Ok(mb)) => (ma, mb),
+        _ => return false,
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        meta_a.ino() == meta_b.ino() && meta_a.dev() == meta_b.dev()
+    }
+    #[cfg(not(unix))]
+    {
+        meta_a.len() == meta_b.len() && meta_a.modified() == meta_b.modified()
+    }
+}
+
+/// #644 评论 5484539222 缺陷1：持久 ownership 的 index lock。
+///
+/// 通过 `hard_link(prepared_file, .git/index.lock)` 获取 canonical Git lock。
+/// `prepared_file`（`.git/index.sujian-<owner>`）与 `index.lock` 是同一文件实体
+///（同一 inode）。进程被 SIGKILL 时 Rust `Drop` 不执行，但磁盘上 `prepared_file`
+/// 与 `index.lock` 都在，恢复时通过 `same_file_id` 比较 inode 即可判断 lock 是否
+/// 属于本轮：属于才清理/继续回滚；不属于（并发 Git 进程）绝不碰。
+///
+/// 关键不变量：ownership 是磁盘事实（hard_link 产生的同一 inode + owner 文件名），
+/// 不依赖 `Drop` 有没有机会执行。
+struct OwnedIndexLock {
+    lock_path: PathBuf,
+    owner_file: PathBuf,
+    /// `true` 表示已成功 commit（lock 已 rename/remove 走），`drop` 只清理 owner_file。
+    /// `false` 表示未 commit（出错路径），`drop` 清理 lock + owner_file。
+    disarmed: bool,
+}
+
+impl OwnedIndexLock {
+    /// 写 `prepared_file`（owner_file）含 `prepared_bytes`，fsync 文件 + 父目录，
+    /// 然后 `hard_link` 到 `lock_path` 获取 canonical Git lock。
+    ///
+    /// `lock_path` 已存在 → `AlreadyExists` → 返回 `ConcurrentMetadataChanged`，
+    /// 清理刚创建的 owner_file，绝不碰已存在的 lock（外部 Git 进程可能正在用）。
+    fn acquire(
+        git_dir: &Path,
+        owner: &str,
+        prepared_bytes: &[u8],
+    ) -> std::result::Result<Self, GitFinalizeError> {
+        use std::io::Write;
+
+        let owner_file = git_dir.join(format!("index.sujian-{}", owner));
+        let lock_path = git_dir.join("index.lock");
+
+        // 1. 写 owner_file（prepared file）含 prepared_bytes，fsync 文件 + 父目录。
+        {
+            let mut f = std::fs::File::create(&owner_file)
+                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+            f.write_all(prepared_bytes)
+                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+            f.flush()
+                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+            f.sync_all()
+                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+        }
+        crate::storage::sync_parent(&owner_file).map_err(GitFinalizeError::FinalizeFailed)?;
+
+        // 2. hard_link(owner_file, lock_path)。lock 已存在 → EEXIST → ConcurrentMetadataChanged。
+        match std::fs::hard_link(&owner_file, &lock_path) {
+            Ok(()) => Ok(Self {
+                lock_path,
+                owner_file,
+                disarmed: false,
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let _ = fs::remove_file(&owner_file);
+                Err(GitFinalizeError::ConcurrentMetadataChanged {
+                    reason: "index.lock exists: concurrent git process is writing index"
+                        .to_string(),
+                })
+            }
+            Err(e) => {
+                let _ = fs::remove_file(&owner_file);
+                Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))
+            }
+        }
+    }
+
+    /// 提交（Bytes 路径）：`rename lock → index`（原子提交 + 释放锁）。
+    /// 成功后 `disarm`，`drop` 只清理 owner_file。
+    fn commit_rename(&mut self, index_path: &Path) -> std::result::Result<(), GitFinalizeError> {
+        fs::rename(&self.lock_path, index_path)
+            .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+        crate::storage::sync_parent(index_path).map_err(GitFinalizeError::FinalizeFailed)?;
+        self.disarmed = true;
+        Ok(())
+    }
+
+    /// 提交（Missing 路径）：删除 index，然后删除 lock，每步 fsync 父目录。
+    fn commit_delete(&mut self, index_path: &Path) -> std::result::Result<(), GitFinalizeError> {
+        fs::remove_file(index_path)
+            .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+        crate::storage::sync_parent(index_path).map_err(GitFinalizeError::FinalizeFailed)?;
+        fs::remove_file(&self.lock_path)
+            .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+        crate::storage::sync_parent(&self.lock_path).map_err(GitFinalizeError::FinalizeFailed)?;
+        self.disarmed = true;
+        Ok(())
+    }
+}
+
+impl Drop for OwnedIndexLock {
+    fn drop(&mut self) {
+        if !self.disarmed {
+            // 未 commit（出错路径）：清理 lock（如果还在）。
+            let _ = fs::remove_file(&self.lock_path);
+        }
+        // 始终清理 owner_file（commit 成功后 lock 已处理，owner_file 无用；
+        // 未 commit 时 owner_file 也应清理不留垃圾）。
+        let _ = fs::remove_file(&self.owner_file);
+    }
+}
+
+/// #644 评论 5480360027 修复点 3 + #644 评论 5481496190 问题2 +
+/// #644 评论 5484539222 缺陷1：index 原生锁边界 + 持久 ownership。
+///
+/// 流程（OwnedIndexLock hard_link 模型）：
 /// 1. 在 staging repo 的 .git 目录下生成目标 index 字节（对应 staging HEAD 的 tree）。
-/// 2. 获取 live `.git/index.lock` 独占锁（Git 原生 index lock 约定路径）。
+/// 2. 用 `OwnedIndexLock::acquire` 在 `.git/index.sujian-<owner>` 写入目标 index 字节
+///    （fsync 文件 + 父目录），然后 `hard_link` 到 `.git/index.lock` 获取 canonical Git lock。
+///    lock 已存在 → `ConcurrentMetadataChanged`，绝不碰别人的 lock。
 /// 3. 拿到锁后重新读取 live index，确认仍等于 snapshot.index。
-/// 4. 仍一致才把目标 index 字节直接写入 lock 文件，fsync 后 rename lock → index。
-///    rename 成功即提交并释放锁（lock 不再存在，index 是新内容）。
+/// 4. 仍一致才 `commit_rename`（rename lock → index，原子提交 + 释放锁）。
 /// 5. 不一致直接返回 `ConcurrentMetadataChanged`，不允许覆盖。
 ///
-/// #644 评论 5481496190 问题2：不再用 IndexLockGuard（空 lock 文件）+
-/// atomic_write_bytes(index) 双写入链。旧模型崩溃窗口在 atomic_write 完成后、
-/// Drop 删除 lock 前，新 index 已写入但空 .git/index.lock 永久残留。新模型
-/// 把内容直接写进 lock 文件，rename lock → index 作为提交和解锁，消除崩溃窗口：
-/// - rename 前 crash：lock 拋留但 index 未变，rollback 清理 lock 即可。
-/// - rename 后 crash：lock 已消失，index 已更新，无需清理。
+/// #644 评论 5484539222 缺陷1：ownership 是磁盘事实（hard_link 同一 inode + owner 文件名），
+/// 即使进程被 SIGKILL，Drop 不执行，恢复时也能通过 `same_file_id` 比较 inode 判断 lock 归属。
 fn install_index_with_lock(
     live_root: &Path,
     _live_repo: &git2::Repository,
     staging_repo: &git2::Repository,
     new_oid: git2::Oid,
     snapshot: &GitMetadataSnapshot,
+    owner: &str,
 ) -> std::result::Result<(), GitFinalizeError> {
-    use std::io::Write;
-
     // 1. 在 staging .git 目录下生成目标 index 字节。
     let target_index_bytes = generate_target_index_bytes(staging_repo, new_oid)?;
 
-    // 2. 获取 live .git/index.lock 独占锁（create_new，文件已存在返回并发错误）。
-    let lock_path = live_root.join(".git").join("index.lock");
-    let mut lock_file = match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock_path)
-    {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Err(GitFinalizeError::ConcurrentMetadataChanged {
-                reason: "index.lock exists: concurrent git process is writing index".to_string(),
-            });
-        }
-        Err(e) => return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e))),
-    };
+    let git_dir = live_root.join(".git");
+    let index_path = git_dir.join("index");
+
+    // 2. OwnedIndexLock::acquire：写 prepared file + hard_link 到 lock。
+    let mut lock = OwnedIndexLock::acquire(&git_dir, owner, &target_index_bytes)?;
 
     // 3. 拿到锁后重新读取 live index，确认仍等于 snapshot.index。
-    let index_path = live_root.join(".git").join("index");
     let current_index = if index_path.exists() {
         let bytes = fs::read(&index_path)
             .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
@@ -1683,62 +1931,34 @@ fn install_index_with_lock(
         IndexSnapshot::Missing
     };
     if !index_snapshot_eq(&current_index, &snapshot.index) {
-        // CAS 失败：清理我们创建的 lock 并返回 ConcurrentMetadataChanged。
-        let _ = fs::remove_file(&lock_path);
+        // CAS 失败：返回 ConcurrentMetadataChanged。
+        // lock 由 OwnedIndexLock::drop 清理（disarmed=false → 清理 lock + owner_file）。
         return Err(GitFinalizeError::ConcurrentMetadataChanged {
             reason: "index changed between verify and acquire of index.lock".to_string(),
         });
     }
 
-    // 4. 把目标 index 字节直接写入 lock 文件，fsync 后 rename lock → index。
-    //    写入或 rename 失败时清理 lock，不留半写入状态。
-    if let Err(e) = lock_file.write_all(&target_index_bytes) {
-        let _ = fs::remove_file(&lock_path);
-        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e)));
-    }
-    if let Err(e) = lock_file.flush() {
-        let _ = fs::remove_file(&lock_path);
-        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e)));
-    }
-    if let Err(e) = lock_file.sync_all() {
-        let _ = fs::remove_file(&lock_path);
-        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e)));
-    }
-    drop(lock_file);
-
-    // rename lock → index（原子提交 + 释放锁）。
-    if let Err(e) = fs::rename(&lock_path, &index_path) {
-        let _ = fs::remove_file(&lock_path);
-        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e)));
-    }
-
-    // fsync 父目录持久化目录项（Unix）。
-    #[cfg(unix)]
-    {
-        let git_dir = live_root.join(".git");
-        let dir = std::fs::File::open(&git_dir)
-            .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-        dir.sync_all()
-            .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-    }
+    // 4. commit_rename：rename lock → index（原子提交 + 释放锁）。
+    lock.commit_rename(&index_path)?;
 
     Ok(())
 }
 
-/// #644 评论 5483239422 问题3 + #644 评论 5483920624 问题2/3：
-/// rollback index 的 lockfile 反向提交边界。
+/// #644 评论 5483239422 问题3 + #644 评论 5483920624 问题2/3 +
+/// #644 评论 5484539222 缺陷1：rollback index 的 lockfile 反向提交边界 + 持久 ownership。
 ///
-/// 与 forward `install_index_with_lock` 同语义，但方向相反：把 snapshot.index 的
-/// 旧字节写回 live index。关键安全约束：
-/// 1. 用 `create_new(true)` 自己获取 `.git/index.lock`。lock 已存在 → 返回 Err，
-///    **绝不删别人的 lock**（外部 Git 进程可能正在用）。
+/// 与 forward `install_index_with_lock` 同语义（共用 `OwnedIndexLock`），但方向相反：
+/// 把 snapshot.index 的旧字节写回 live index。关键安全约束：
+/// 1. 用 `OwnedIndexLock::acquire` 在 `.git/index.sujian-<owner>` 写入 snapshot.index 旧字节，
+///    `hard_link` 到 `.git/index.lock` 获取 canonical Git lock。lock 已存在 →
+///    `ConcurrentMetadataChanged`，绝不删别人的 lock（外部 Git 进程可能正在用）。
 /// 2. 拿到锁后重新读 index 确认仍等于 `expected_new_sha256`（调用方已确认
-///    current==new，但拿锁期间可能被并发改掉，需复验）。不等则删除自己刚创建的
-///    lock 并返回 Err（并发变化，保留 transaction）。
-/// 3. 把 snapshot.index 旧字节写进自己持有的 lock，fsync，rename(index.lock -> index)。
-///    只有 rename 成功才 disarm RAII guard；任何写/flush/fsync/复验失败自动删自己的 lock。
-/// 4. snapshot.index == Missing 时：持锁 → 验证 hash → 删除 index → fsync → drop lock
-///    （由 guard 清理）。**不**先释放锁再删 index。
+///    current==new，但拿锁期间可能被并发改掉，需复验）。不等则返回 Err
+///    （并发变化，保留 transaction；lock 由 OwnedIndexLock::drop 清理）。
+/// 3. Bytes 路径：`commit_rename`（rename lock → index，原子恢复 + 释放锁）。
+///    Missing 路径：`commit_delete`（删 index → 删 lock，每步 fsync 父目录）。
+/// 4. ownership 是磁盘事实（hard_link 同一 inode），即使 SIGKILL 后 Drop 不执行，
+///    恢复时也能通过 `same_file_id` 比较 inode 判断 lock 归属。
 ///
 /// 调用方已保证进入此函数前 `current_index == new`（plan.new_index_sha256 命中）。
 fn rollback_index_via_lockfile(
@@ -1746,47 +1966,40 @@ fn rollback_index_via_lockfile(
     lock_path: &Path,
     expected_new_sha256: [u8; 32],
     snapshot_index: &IndexSnapshot,
+    owner: &str,
 ) -> Result<()> {
-    use std::io::Write;
-
-    // 1. 自己获取 .git/index.lock 独占锁。lock 已存在 → Err，绝不删。
-    let mut lock_file = match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(lock_path)
-    {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Err(crate::Error::Io(std::io::Error::other(
-                "rollback_git_finalize: index.lock exists — refusing to delete external \
-                 git process lock; concurrent git operation in progress, preserving \
-                 transaction for next recovery",
-            )));
-        }
-        Err(e) => return Err(crate::Error::Io(e)),
+    // 1. OwnedIndexLock::acquire：写 prepared file（snapshot.index 旧字节）+ hard_link 到 lock。
+    //    lock 已存在 → ConcurrentMetadataChanged（绝不删别人的 lock）。
+    let git_dir = index_path.parent().ok_or_else(|| {
+        crate::Error::Io(std::io::Error::other(
+            "rollback_git_finalize: index_path has no parent (.git dir)",
+        ))
+    })?;
+    let prepared_bytes: &[u8] = match snapshot_index {
+        IndexSnapshot::Bytes(b) => b,
+        IndexSnapshot::Missing => &[],
     };
-
-    // #644 评论 5483920624 问题3：RAII guard 只清理本轮自己创建的 lock。
-    // 只有 rename(lock -> index) 成功才 disarm()。任何写/flush/fsync/复验失败
-    // 自动删自己的 lock，不留陈旧 lock 卡住下次 Git 操作。
-    struct LockGuard<'a>(&'a Path, bool);
-    impl<'a> LockGuard<'a> {
-        fn disarm(&mut self) {
-            self.1 = true;
-        }
-    }
-    impl<'a> Drop for LockGuard<'a> {
-        fn drop(&mut self) {
-            if !self.1 {
-                let _ = fs::remove_file(self.0);
+    let mut lock =
+        OwnedIndexLock::acquire(git_dir, owner, prepared_bytes).map_err(|e| match e {
+            GitFinalizeError::ConcurrentMetadataChanged { reason } => {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "rollback_git_finalize: index.lock exists — refusing to delete external \
+                     git process lock; concurrent git operation in progress ({}), preserving \
+                     transaction for next recovery",
+                    reason
+                )))
             }
-        }
-    }
-    let mut lock_guard = LockGuard(lock_path, false);
+            GitFinalizeError::FinalizeFailed(inner) => inner,
+            GitFinalizeError::RollbackFailed { .. } => crate::Error::Io(std::io::Error::other(
+                "rollback_git_finalize: unexpected RollbackFailed from OwnedIndexLock::acquire",
+            )),
+        })?;
+    // lock_path 仅用于诊断/一致性检查，确认 OwnedIndexLock 用的 lock 路径与调用方一致。
+    debug_assert_eq!(lock_path, &git_dir.join("index.lock"));
 
     // 2. 拿到锁后重新读 live index，计算 SHA-256，确认仍等于 expected_new_sha256。
-    //    若被并发改掉（current != expected_new），删除自己刚创建的 lock 后返回 Err
-    //    （guard 自动清理）。
+    //    若被并发改掉（current != expected_new），返回 Err
+    //    （lock 由 OwnedIndexLock::drop 清理：disarmed=false → 清理 lock + owner_file）。
     let current_index = if index_path.exists() {
         let bytes = fs::read(index_path)?;
         IndexSnapshot::Bytes(bytes)
@@ -1804,42 +2017,31 @@ fn rollback_index_via_lockfile(
         )));
     }
 
-    // 3. 把 snapshot.index 旧字节写进自己持有的 lock，fsync，rename(index.lock -> index)。
+    // 3. 提交：Bytes 路径 commit_rename，Missing 路径 commit_delete。
     match snapshot_index {
-        IndexSnapshot::Bytes(original_bytes) => {
-            lock_file
-                .write_all(original_bytes)
-                .map_err(crate::Error::Io)?;
-            lock_file.flush().map_err(crate::Error::Io)?;
-            lock_file.sync_all().map_err(crate::Error::Io)?;
-            drop(lock_file);
-            // rename lock → index（原子提交 + 释放锁）。成功才 disarm guard。
-            if let Err(e) = fs::rename(lock_path, index_path) {
-                return Err(crate::Error::Io(e));
-            }
-            lock_guard.disarm();
+        IndexSnapshot::Bytes(_) => {
+            lock.commit_rename(index_path).map_err(|e| match e {
+                GitFinalizeError::FinalizeFailed(inner) => inner,
+                GitFinalizeError::ConcurrentMetadataChanged { reason } => {
+                    crate::Error::Io(std::io::Error::other(reason))
+                }
+                GitFinalizeError::RollbackFailed { .. } => crate::Error::Io(std::io::Error::other(
+                    "rollback_git_finalize: unexpected RollbackFailed from commit_rename",
+                )),
+            })?;
         }
         IndexSnapshot::Missing => {
-            // #644 评论 5483920624 问题3：Missing 路径必须在持有自己 lock 期间完成：
-            // 重新验证 current==expected new（上方已完成）→ 删除 index → fsync .git
-            // → 最后删除自己的 lock（由 guard 清理）。
-            // **不**先 drop(lock_file) 再 remove_file(lock_path) 再 remove_file(index_path)。
-            drop(lock_file);
-            fs::remove_file(index_path).map_err(|e| {
-                crate::Error::Io(std::io::Error::other(format!(
-                    "rollback_git_finalize: failed to remove index after acquiring lock: {e}"
-                )))
+            // #644 评论 5483920624 问题3：Missing 路径在持有自己 lock 期间完成：
+            // 重新验证 current==expected new（上方已完成）→ 删 index → 删 lock → fsync 父目录。
+            lock.commit_delete(index_path).map_err(|e| match e {
+                GitFinalizeError::FinalizeFailed(inner) => inner,
+                GitFinalizeError::ConcurrentMetadataChanged { reason } => {
+                    crate::Error::Io(std::io::Error::other(reason))
+                }
+                GitFinalizeError::RollbackFailed { .. } => crate::Error::Io(std::io::Error::other(
+                    "rollback_git_finalize: unexpected RollbackFailed from commit_delete",
+                )),
             })?;
-            // guard 在函数返回时 drop，清理自己的 lock。
-        }
-    }
-
-    // 4. fsync 父目录持久化目录项（Unix）。
-    #[cfg(unix)]
-    {
-        if let Some(parent) = index_path.parent() {
-            let dir = std::fs::File::open(parent).map_err(crate::Error::Io)?;
-            dir.sync_all().map_err(crate::Error::Io)?;
         }
     }
 
@@ -2322,6 +2524,7 @@ mod tests {
 
         // Rollback 应恢复原始 index。
         // #644 评论 5480360027：CAS-based rollback 使用 write-ahead plan。
+        // #644 评论 5484539222 缺陷1：rollback 反向恢复路径需要 index_lock_owner 做 OwnedIndexLock。
         let plan = GitFinalizePlan {
             repo_create: false,
             new_index_sha256: Some(sha256_bytes(
@@ -2329,6 +2532,7 @@ mod tests {
             )),
             ref_plans: Vec::new(),
             repo_create_owner: None,
+            index_lock_owner: Some(uuid::Uuid::new_v4().to_string()),
         };
         rollback_git_finalize(&live, &snapshot, &plan).unwrap();
         let restored_index = fs::read(live.join(".git").join("index")).unwrap();
@@ -2433,7 +2637,14 @@ mod tests {
         };
         let staging_head = staging_repo.head().unwrap();
         let new_oid = staging_head.target().unwrap();
-        let result = install_index_with_lock(&live, &repo, &staging_repo, new_oid, &snapshot);
+        let result = install_index_with_lock(
+            &live,
+            &repo,
+            &staging_repo,
+            new_oid,
+            &snapshot,
+            "test-owner",
+        );
         assert!(matches!(
             result,
             Err(GitFinalizeError::ConcurrentMetadataChanged { .. })
@@ -2510,6 +2721,7 @@ mod tests {
                 new_oid.to_string(),
             )],
             repo_create_owner: None,
+            index_lock_owner: None,
         };
 
         // rollback 应成功（current == new_oid，反向 CAS 回 old_oid）。
@@ -2618,6 +2830,7 @@ mod tests {
             new_index_sha256: Some(new_index_hash),
             ref_plans: Vec::new(),
             repo_create_owner: None,
+            index_lock_owner: None,
         };
 
         // 第二次 rollback：current index == original (== snapshot.index)。
@@ -2714,6 +2927,7 @@ mod tests {
                 new_oid.to_string(),
             )],
             repo_create_owner: None,
+            index_lock_owner: None,
         };
 
         // 第二次 rollback：current ref == old_oid (== snapshot ref)。
@@ -2785,6 +2999,9 @@ mod tests {
             new_index_sha256: Some(new_index_hash),
             ref_plans: Vec::new(),
             repo_create_owner: None,
+            // #644 评论 5484539222 缺陷1：反向恢复路径需要 owner 做 OwnedIndexLock。
+            // acquire 时检测到外部 lock 已存在 → ConcurrentMetadataChanged，不删外部 lock。
+            index_lock_owner: Some(uuid::Uuid::new_v4().to_string()),
         };
 
         // rollback：current index == new_index，index_is_ours = true。

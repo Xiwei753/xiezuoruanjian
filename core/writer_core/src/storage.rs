@@ -70,20 +70,45 @@ pub fn atomic_write_bytes(path: &Path, content: &[u8]) -> Result<()> {
         return Err(e.into());
     }
 
-    #[allow(unused_variables)]
-    if let Some(parent) = path.parent() {
-        #[cfg(unix)]
-        {
-            let parent_path = if parent.as_os_str().is_empty() {
-                Path::new(".")
-            } else {
-                parent
-            };
-            let dir = File::open(parent_path)?;
-            dir.sync_all()?;
-        }
-    }
+    sync_parent(path)?;
+    Ok(())
+}
 
+/// #644 评论 5484539222 缺陷2：fsync 目录（持久化目录项）。
+///
+/// Unix 上对目录 handle 调 `sync_all` 持久化目录项（rename/unlink/create 的结果）。
+/// Windows 上 `sync_all` 对目录 handle 是合法但通常为 no-op，保留调用以统一代码路径。
+/// 目录不存在视为成功（调用方可能尚未创建子目录）。
+pub fn sync_dir(path: &Path) -> Result<()> {
+    let path = if path.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        path
+    };
+    let dir = File::open(path)?;
+    dir.sync_all()?;
+    Ok(())
+}
+
+/// #644 评论 5484539222 缺陷2：fsync `path` 的父目录。
+///
+/// `path` 无父目录（根路径）时为 no-op。
+pub fn sync_parent(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        sync_dir(parent)?;
+    }
+    Ok(())
+}
+
+/// #644 评论 5484539222 缺陷2：durable copy — copy 后对目标文件 + 目标父目录 fsync。
+///
+/// 与 `atomic_write_bytes` 的 fsync 做法对齐：文件内容 `sync_all` + 父目录 `sync_all`
+/// 持久化目录项。供 `transaction.rs` 的 backup/rollback 路径使用，替代裸 `fs::copy`。
+pub fn durable_copy_file(src: &Path, dst: &Path) -> Result<()> {
+    fs::copy(src, dst)?;
+    let f = File::open(dst)?;
+    f.sync_all()?;
+    sync_parent(dst)?;
     Ok(())
 }
 

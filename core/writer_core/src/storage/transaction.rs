@@ -241,7 +241,8 @@ impl SaveTransaction {
                     if let Some(parent) = target_path.parent() {
                         fs::create_dir_all(parent)?;
                     }
-                    fs::copy(&backup_path, &target_path)?;
+                    // #644 评论 5484539222 缺陷2：durable copy + fsync 父目录。
+                    crate::storage::durable_copy_file(&backup_path, &target_path)?;
                 }
                 BackupEntry::RemoveCreated { target_relative } => {
                     let target_path = self.target_root.join(target_relative);
@@ -249,6 +250,9 @@ impl SaveTransaction {
                         if e.kind() != std::io::ErrorKind::NotFound {
                             return Err(crate::Error::Io(e));
                         }
+                    } else {
+                        // #644 评论 5484539222 缺陷2：remove 后 fsync 父目录持久化目录项。
+                        crate::storage::sync_parent(&target_path)?;
                     }
                 }
             }
@@ -317,7 +321,11 @@ impl SaveTransaction {
                 // 备份被覆盖或被删除的旧文件。
                 if target_path.exists() {
                     let backup_name = format!("backup_{}", idx);
-                    fs::copy(&target_path, backup_dir.join(&backup_name))?;
+                    // #644 评论 5484539222 缺陷2：durable copy（copy + fsync backup 文件 + 父目录）。
+                    crate::storage::durable_copy_file(
+                        &target_path,
+                        &backup_dir.join(&backup_name),
+                    )?;
                     self.backed_up_files.push(BackupEntry::RestoreFile {
                         target_relative: entry.target_relative.clone(),
                         backup_filename: backup_name,
@@ -329,6 +337,10 @@ impl SaveTransaction {
                 }
             }
 
+            // #644 评论 5484539222 缺陷2：所有 backup entry 完成后 fsync backup/ 目录，
+            // 持久化 backup 目录项，再允许写 Prepared phase。
+            crate::storage::sync_dir(&backup_dir)?;
+
             // 原子写入 Prepared + backup_entries + git_finalize recovery record。
             let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
             self.write_manifest_phase(&manifest_path, TransactionPhase::Prepared)?;
@@ -339,7 +351,10 @@ impl SaveTransaction {
                 let target_path = self.target_root.join(&entry.target_relative);
                 if entry.is_delete {
                     match fs::remove_file(&target_path) {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            // #644 评论 5484539222 缺陷2：remove 后 fsync 父目录。
+                            crate::storage::sync_parent(&target_path)?;
+                        }
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                         Err(e) => return Err(crate::Error::Io(e)),
                     }
@@ -352,6 +367,9 @@ impl SaveTransaction {
                         }
                     }
                     fs::rename(&staging_path, &target_path)?;
+                    // #644 评论 5484539222 缺陷2：rename 后 fsync 目标父目录持久化目录项。
+                    // staging 文件已由 atomic_write_bytes fsync，rename 原子，但目录项需 fsync 父目录。
+                    crate::storage::sync_parent(&target_path)?;
                 }
             }
 
@@ -371,7 +389,10 @@ impl SaveTransaction {
             let target_path = self.target_root.join(&entry.target_relative);
             if entry.is_delete {
                 match fs::remove_file(&target_path) {
-                    Ok(()) => {}
+                    Ok(()) => {
+                        // #644 评论 5484539222 缺陷2：remove 后 fsync 父目录。
+                        crate::storage::sync_parent(&target_path)?;
+                    }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) => return Err(crate::Error::Io(e)),
                 }
@@ -384,6 +405,8 @@ impl SaveTransaction {
                     }
                 }
                 fs::rename(&staging_path, &target_path)?;
+                // #644 评论 5484539222 缺陷2：rename 后 fsync 目标父目录。
+                crate::storage::sync_parent(&target_path)?;
             }
         }
 
@@ -547,12 +570,15 @@ fn rollback_full_sync_transaction(
                 if let Some(parent) = target_path.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                fs::copy(&backup_path, &target_path)?;
+                // #644 评论 5484539222 缺陷2：durable copy + fsync 父目录。
+                crate::storage::durable_copy_file(&backup_path, &target_path)?;
             }
             BackupEntry::RemoveCreated { target_relative } => {
                 let target_path = target_root.join(target_relative);
                 if target_path.exists() {
                     fs::remove_file(&target_path)?;
+                    // #644 评论 5484539222 缺陷2：remove 后 fsync 父目录。
+                    crate::storage::sync_parent(&target_path)?;
                 }
             }
         }
@@ -796,6 +822,16 @@ pub fn recover_pending_transactions(
                 let target_path = target_root.join(&tx_entry.target_relative);
                 match fs::remove_file(&target_path) {
                     Ok(()) => {
+                        // #644 评论 5484539222 缺陷2：remove 后 fsync 父目录。
+                        if let Err(e) = crate::storage::sync_parent(&target_path) {
+                            log::warn!(
+                                "[transaction] recovery delete sync_parent failed: {}: {}",
+                                tx_entry.target_relative,
+                                e
+                            );
+                            missing_files.push(tx_entry.target_relative.clone());
+                            continue;
+                        }
                         recovered_files.push(tx_entry.target_relative.clone());
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -820,7 +856,20 @@ pub fn recover_pending_transactions(
                         }
                     }
                     match fs::rename(&staging_path, &target_path) {
-                        Ok(()) => recovered_files.push(tx_entry.target_relative.clone()),
+                        Ok(()) => {
+                            // #644 评论 5484539222 缺陷2：rename 后 fsync 目标父目录。
+                            if let Err(e) = crate::storage::sync_parent(&target_path) {
+                                log::warn!(
+                                    "[transaction] recovery rename sync_parent failed: {} -> {}: {}",
+                                    tx_entry.staging_filename,
+                                    tx_entry.target_relative,
+                                    e
+                                );
+                                missing_files.push(tx_entry.target_relative.clone());
+                                continue;
+                            }
+                            recovered_files.push(tx_entry.target_relative.clone());
+                        }
                         Err(e) => {
                             log::warn!(
                                 "[transaction] recovery rename failed: {} -> {}: {}",
