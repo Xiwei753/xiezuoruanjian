@@ -31,17 +31,24 @@ const STAGING_SUBDIR: &str = "staging";
 pub struct StagingRun {
     run_root: PathBuf,
     run_id: String,
+    /// Commit 阶段需要知道这个 staging run 对应的 live root，
+    /// 才能调 `compute_commit_plan(live_root)` 做三方比较并把变更写回 live。
+    target_live_root: PathBuf,
 }
 
 impl StagingRun {
     /// 创建隔离 run 目录。`parent` 通常在 app-data 下（不进 live project root），
-    /// 避免被 scanner 当成作品文件。
-    pub fn create(parent: &Path) -> Result<Self> {
+    /// 避免被 scanner 当成作品文件。`target_live_root` 记录 Commit 阶段要写回的 live 根。
+    pub fn create(parent: &Path, target_live_root: PathBuf) -> Result<Self> {
         let run_id = Uuid::new_v4().to_string();
         let run_root = parent.join("full-sync-staging").join(&run_id);
         fs::create_dir_all(run_root.join(BASE_SUBDIR))?;
         fs::create_dir_all(run_root.join(STAGING_SUBDIR))?;
-        Ok(Self { run_root, run_id })
+        Ok(Self {
+            run_root,
+            run_id,
+            target_live_root,
+        })
     }
 
     pub fn run_root(&self) -> &Path {
@@ -50,6 +57,11 @@ impl StagingRun {
 
     pub fn run_id(&self) -> &str {
         &self.run_id
+    }
+
+    /// Commit 阶段要写回的 live root。
+    pub fn target_live_root(&self) -> &Path {
+        &self.target_live_root
     }
 
     /// staging 子目录（Transfer 阶段写入远端内容的目标）。
@@ -223,7 +235,8 @@ mod tests {
     #[test]
     fn staging_run_create_and_cleanup() {
         let tmp = TempDir::new().unwrap();
-        let run = StagingRun::create(tmp.path()).unwrap();
+        let live = tmp.path().join("live");
+        let run = StagingRun::create(tmp.path(), live).unwrap();
         assert!(run.base_root().exists());
         assert!(run.staging_root().exists());
         run.cleanup();
@@ -239,7 +252,7 @@ mod tests {
         fs::create_dir_all(live.join("sub")).unwrap();
         fs::write(live.join("sub/b.txt"), "world").unwrap();
 
-        let run = StagingRun::create(tmp.path()).unwrap();
+        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
         run.build_base_snapshot_from_live(
             &live,
             &[
@@ -268,7 +281,7 @@ mod tests {
         fs::create_dir_all(&live).unwrap();
         fs::write(live.join("f.txt"), "base").unwrap();
 
-        let run = StagingRun::create(tmp.path()).unwrap();
+        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
         run.build_base_snapshot_from_live(&live, &[PathBuf::from("f.txt")])
             .unwrap();
         // local 仍是 base（没动），incoming 改了。
@@ -287,7 +300,7 @@ mod tests {
         fs::create_dir_all(&live).unwrap();
         fs::write(live.join("f.txt"), "base").unwrap();
 
-        let run = StagingRun::create(tmp.path()).unwrap();
+        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
         run.build_base_snapshot_from_live(&live, &[PathBuf::from("f.txt")])
             .unwrap();
         // local 改了（走 atomic_write rename 替换，hard-link 的 base 保留旧 inode），
@@ -308,7 +321,7 @@ mod tests {
         fs::create_dir_all(&live).unwrap();
         fs::write(live.join("f.txt"), "base").unwrap();
 
-        let run = StagingRun::create(tmp.path()).unwrap();
+        let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
         run.build_base_snapshot_from_live(&live, &[PathBuf::from("f.txt")])
             .unwrap();
         // local 改了（atomic_write rename 替换，base 保留旧 inode）。

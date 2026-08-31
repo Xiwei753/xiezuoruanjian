@@ -203,7 +203,7 @@ impl super::WriterCore {
 
         // App target
         let app_target = crate::sync::types::SyncTarget::app();
-        let app_staging = StagingRun::create(&self.app_data_root)?;
+        let app_staging = StagingRun::create(&self.app_data_root, self.app_data_root.clone())?;
         targets.push(PlannedTarget {
             target: app_target,
             local_root: self.app_data_root.clone(),
@@ -217,7 +217,7 @@ impl super::WriterCore {
         for project in &projects {
             let target = crate::sync::types::SyncTarget::project(&project.id);
             let project_local_root = self.project_root(&project.id);
-            let project_staging = StagingRun::create(&self.app_data_root)?;
+            let project_staging = StagingRun::create(&self.app_data_root, project_local_root.clone())?;
             targets.push(PlannedTarget {
                 target,
                 local_root: project_local_root.clone(),
@@ -270,20 +270,31 @@ impl super::WriterCore {
     /// 聚合 [`crate::sync::full_sync::FullSyncTransferResult`] → `FullSyncResult`，
     /// 原子写终态 `FullSyncState`，成功类重建搜索索引。
     ///
+    /// #644 评论 5472584126 第1节：staging run 的三方 commit 逻辑正式接入。
+    /// 对每个 staging run 调 `compute_commit_plan(live_root)`，把 Apply 变更通过
+    /// `SaveTransaction::add_bytes()` + `commit()` 写回 live，记录冲突。
+    ///
     /// `staging_runs` 来自 Prepare 阶段；commit 完成后显式 cleanup（`Drop` 也会兜底）。
     pub fn commit_full_sync(
         &self,
         transfer_result: crate::sync::full_sync::FullSyncTransferResult,
         staging_runs: Vec<crate::sync::staging::StagingRun>,
     ) -> crate::sync::types::FullSyncResult {
-        // Commit 阶段：对每个 staging run 计算 commit plan 并应用变更。
-        // 当前实现：staging run 的三方 commit 逻辑由调用方按需扩展；
-        // 此处先 cleanup staging runs，后续可接入 compute_commit_plan + SaveTransaction。
-        for run in &staging_runs {
-            run.cleanup();
-        }
+        let staging_conflicts = apply_staging_commits(&staging_runs);
 
-        let result = crate::sync::full_sync::aggregate_full_sync_result(transfer_result.targets);
+        let mut result = crate::sync::full_sync::aggregate_full_sync_result(transfer_result.targets);
+
+        // 三方冲突追加到结果中。
+        if !staging_conflicts.is_empty() {
+            log::warn!(
+                "Staging commit: {} three-way conflict(s): {:?}",
+                staging_conflicts.len(),
+                staging_conflicts
+            );
+            if !matches!(result.overall_status, crate::sync::SyncStatus::FatalError(_)) {
+                result.overall_status = crate::sync::SyncStatus::PartialConflict;
+            }
+        }
 
         let previous_state = self.load_full_sync_state().unwrap_or(None);
         let new_state = crate::sync::full_sync_state::FullSyncState::from_result_and_previous(
@@ -591,6 +602,55 @@ impl super::WriterCore {
             crate::sync::create_sync_backend(&backend_type)
         };
         backend.diagnose(config, secrets)
+    }
+}
+
+/// #644 评论 5472584126 第1节：对每个 staging run 计算三方 commit plan 并应用变更到 live。
+///
+/// 返回三方冲突的路径列表。Apply 变更通过 `SaveTransaction` 原子写回 live root。
+fn apply_staging_commits(staging_runs: &[crate::sync::staging::StagingRun]) -> Vec<String> {
+    let mut conflicts: Vec<String> = Vec::new();
+    for run in staging_runs {
+        let live_root = run.target_live_root();
+        let plan = match run.compute_commit_plan(live_root) {
+            Ok(plan) => plan,
+            Err(e) => {
+                log::warn!(
+                    "Staging commit: compute_commit_plan failed for {}: {}",
+                    run.run_id(),
+                    e
+                );
+                run.cleanup();
+                continue;
+            }
+        };
+        apply_commit_plan_to_live(live_root, &plan.apply);
+        for conflict_path in &plan.conflict {
+            conflicts.push(conflict_path.to_string_lossy().to_string());
+        }
+        run.cleanup();
+    }
+    conflicts
+}
+
+/// 把 commit plan 中的 Apply 变更通过 SaveTransaction 写回 live root。
+fn apply_commit_plan_to_live(
+    live_root: &std::path::Path,
+    actions: &[crate::sync::staging::CommitAction],
+) {
+    if actions.is_empty() {
+        return;
+    }
+    let mut tx = crate::storage::transaction::SaveTransaction::new(live_root);
+    for action in actions {
+        let crate::sync::staging::CommitAction::Apply { rel_path, content } = action;
+        let rel_str = rel_path.to_string_lossy();
+        if let Err(e) = tx.add_bytes(&rel_str, content) {
+            log::warn!("Staging commit: failed to add_bytes for {}: {}", rel_str, e);
+        }
+    }
+    if let Err(e) = tx.commit() {
+        log::warn!("Staging commit: transaction commit failed: {}", e);
     }
 }
 
