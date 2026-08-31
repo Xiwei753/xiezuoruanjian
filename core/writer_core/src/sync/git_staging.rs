@@ -29,12 +29,15 @@ use crate::sync::staging::StagingRun;
 ///
 /// `Option<String>` 无法区分"非 Git backend"、"unborn repo"、"已有提交的 repo"三种语义。
 /// 本枚举让 finalize 阶段对每种状态走正确的路径。
+///
+/// #644 评论 5475413230 第3节：`Unborn` 保存 symbolic HEAD 的真实目标（如
+/// `refs/heads/master`），不再猜 `refs/heads/main`。`Detached` 处理 detached HEAD。
 #[derive(Debug, Clone)]
 pub enum GitSeedState {
     /// live 不是 Git repo（没有 `.git/`）。staging 保持非 repo。
     NotGitRepo,
     /// live 是 Git repo 但 HEAD 是 unborn（`git init` 后尚未提交）。
-    /// `head_ref` 是 symbolic HEAD 的目标引用名（如 `refs/heads/main`）。
+    /// `head_ref` 是 symbolic HEAD 的真实目标引用名（如 `refs/heads/main`）。
     Unborn { head_ref: String },
     /// live 是 Git repo 且 HEAD 指向一个已存在的 commit。
     /// `head_ref` 是当前分支引用名，`head_oid` 是 seed 时的 HEAD OID，
@@ -43,6 +46,10 @@ pub enum GitSeedState {
         head_ref: String,
         head_oid: git2::Oid,
     },
+    /// #644 评论 5475413230 第3节：live 是 Git repo 但 HEAD 是 detached。
+    /// `head_oid` 是 detached HEAD 指向的 commit OID。
+    /// finalize 时不能伪造分支名，应明确拒绝或特殊处理。
+    Detached { head_oid: git2::Oid },
 }
 
 /// 临时 clone 目录名（位于 `run_root` 下，与 `base/`、`staging/` 同级）。
@@ -82,26 +89,65 @@ pub fn seed_from_live_as_git_repo(run: &StagingRun, live_root: &Path) -> Result<
             "failed to open live git repo: {e}"
         )))
     })?;
+    // #644 评论 5475413230 第3节：从 HEAD 读真实目标，不猜 main。
+    // unborn 的 HEAD 仍然是 symbolic ref，可能指向 main、master 或其它分支。
+    //
+    // 注意：git2 的 HEAD 在首次 commit 后可能变成 direct reference
+    // （symbolic_target() == None），但仍然是分支 HEAD（is_branch() == true），
+    // 不是 detached HEAD。只有 is_branch() == false 且有 target OID 时才是真正的
+    // detached HEAD。
     let seed_state = match live_repo.head() {
         Ok(head) => {
-            let head_ref = head
-                .shorthand()
-                .unwrap_or("main")
-                .to_string();
-            let ref_name = format!("refs/heads/{}", head_ref);
-            match head.target() {
-                Some(oid) => GitSeedState::Existing {
-                    head_ref: ref_name,
-                    head_oid: oid,
-                },
-                None => GitSeedState::Unborn { head_ref: ref_name },
+            if let Some(sym_target) = head.symbolic_target() {
+                // HEAD 是 symbolic ref（如 "ref: refs/heads/main\n"）。
+                let ref_name = sym_target.to_string();
+                match head.target() {
+                    Some(oid) => GitSeedState::Existing {
+                        head_ref: ref_name,
+                        head_oid: oid,
+                    },
+                    None => GitSeedState::Unborn { head_ref: ref_name },
+                }
+            } else if head.is_branch() {
+                // #644 评论 5475413230 第3节：HEAD 是 direct reference 但是分支
+                // （git2 在 commit 后可能把 symbolic ref 变成 direct ref）。
+                // 用 shorthand() 获取分支名，构造完整 ref 名。
+                let shorthand = head.shorthand().unwrap_or("main");
+                let ref_name = format!("refs/heads/{}", shorthand);
+                match head.target() {
+                    Some(oid) => GitSeedState::Existing {
+                        head_ref: ref_name,
+                        head_oid: oid,
+                    },
+                    None => GitSeedState::Unborn { head_ref: ref_name },
+                }
+            } else if let Some(oid) = head.target() {
+                // #644 评论 5475413230 第3节：真正的 detached HEAD —
+                // 不是分支，直接指向一个 commit OID。不能伪造分支名。
+                GitSeedState::Detached { head_oid: oid }
+            } else {
+                // HEAD 存在但既无 symbolic target 也无 direct target — 视为 unborn。
+                GitSeedState::Unborn {
+                    head_ref: "refs/heads/main".to_string(),
+                }
             }
         }
         Err(_) => {
             // HEAD 不存在或无法解析 — 视为 unborn。
-            GitSeedState::Unborn {
-                head_ref: "refs/heads/main".to_string(),
-            }
+            // 尝试读取 .git/HEAD 文件获取真实目标。
+            let head_file = live_root.join(".git").join("HEAD");
+            let head_ref = if let Ok(content) = fs::read_to_string(&head_file) {
+                // 格式: "ref: refs/heads/master\n"
+                let trimmed = content.trim();
+                if let Some(rest) = trimmed.strip_prefix("ref: ") {
+                    rest.to_string()
+                } else {
+                    "refs/heads/main".to_string()
+                }
+            } else {
+                "refs/heads/main".to_string()
+            };
+            GitSeedState::Unborn { head_ref }
         }
     };
 
@@ -244,13 +290,20 @@ pub fn finalize_git_repo_metadata(
             // 已有提交的 repo：导入新 objects，CAS 更新 ref。
             finalize_existing(live_root, &staging_repo, &staging_odb, new_oid, head_ref, *head_oid)
         }
+        GitSeedState::Detached { head_oid } => {
+            // #644 评论 5475413230 第3节：detached HEAD — 不能伪造分支名。
+            // 用 CAS 更新 HEAD 直接指向 new_oid（保持 detached 状态）。
+            finalize_detached(live_root, &staging_repo, &staging_odb, new_oid, *head_oid)
+        }
     }
 }
 
 /// finalize 路径 1：live 原本不是 Git repo。
 ///
-/// 把 staging 的 `.git/` 完整复制到 live，然后导入 staging 新产生的 objects，
-/// 更新 HEAD/refs/index。
+/// #644 评论 5475413230 第2节：原子性改进。
+/// 把 staging `.git` 先完整复制到 `live_root/.git.sujian-tmp-<uuid>`，
+/// 全部成功后再次确认 live `.git` 仍不存在，再同文件系统 rename 成 `.git`；
+/// 如果 `.git` 已经出现，直接返回并发修改错误，不能删掉覆盖。
 fn finalize_not_git_repo(
     live_root: &Path,
     staging_root: &Path,
@@ -259,43 +312,43 @@ fn finalize_not_git_repo(
     new_oid: git2::Oid,
     branch_name: &str,
 ) -> Result<()> {
-    // 把 staging 的 .git/ 复制到 live。
     let staging_git = staging_root.join(".git");
     let live_git = live_root.join(".git");
-    if live_git.exists() {
-        // 极端情况：seed 时没有 .git，但 Transfer 期间被外部创建了。
-        // 仍然覆盖，因为 staging 的 .git 是同步后的权威状态。
-        fs::remove_dir_all(&live_git)?;
-    }
-    copy_dir_recursive(&staging_git, &live_git)?;
 
-    // 打开 live repo（刚复制了 .git/），导入 staging 中可能新增的 objects。
-    let live_repo = git2::Repository::open(live_root).map_err(|e| {
+    // #644 评论 5475413230 第2节：先复制到临时目录，不直接覆盖 live .git。
+    let tmp_id = uuid::Uuid::new_v4().to_string();
+    let tmp_git = live_root.join(format!(".git.sujian-tmp-{}", tmp_id));
+    copy_dir_recursive(&staging_git, &tmp_git)?;
+
+    // 导入 staging 中可能新增的 objects 到临时 .git。
+    let tmp_repo = git2::Repository::open(&tmp_git).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
-            "finalize_not_git_repo: open live repo: {e}"
+            "finalize_not_git_repo: open tmp repo: {e}"
         )))
     })?;
-    let live_odb = live_repo.odb().map_err(|e| {
+    let tmp_odb = tmp_repo.odb().map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
-            "finalize_not_git_repo: live odb: {e}"
+            "finalize_not_git_repo: tmp odb: {e}"
         )))
     })?;
 
-    import_missing_objects(staging_odb, &live_odb)?;
+    import_missing_objects(staging_odb, &tmp_odb)?;
 
-    // 确认 new_oid 在 live 中存在。
-    if !live_odb.exists(new_oid) {
+    // 确认 new_oid 在 tmp 中存在。
+    if !tmp_odb.exists(new_oid) {
+        let _ = fs::remove_dir_all(&tmp_git);
         return Err(crate::Error::Io(std::io::Error::other(format!(
-            "finalize_not_git_repo: new_oid {} not found in live after import",
+            "finalize_not_git_repo: new_oid {} not found in tmp after import",
             new_oid
         ))));
     }
 
     // 更新 branch ref。
     let ref_name = format!("refs/heads/{}", branch_name);
-    live_repo
+    tmp_repo
         .reference(&ref_name, new_oid, true, "sync: init branch from staging")
         .map_err(|e| {
+            let _ = fs::remove_dir_all(&tmp_git);
             crate::Error::Io(std::io::Error::other(format!(
                 "finalize_not_git_repo: update-ref {} failed: {}",
                 ref_name, e
@@ -303,14 +356,34 @@ fn finalize_not_git_repo(
         })?;
 
     // 更新 index。
-    update_live_index(&live_repo, staging_repo, new_oid)?;
+    update_live_index(&tmp_repo, staging_repo, new_oid).inspect_err(|_| {
+        let _ = fs::remove_dir_all(&tmp_git);
+    })?;
+
+    // #644 评论 5475413230 第2节：再次确认 live .git 仍不存在（并发安全）。
+    if live_git.exists() {
+        let _ = fs::remove_dir_all(&tmp_git);
+        return Err(crate::Error::Io(std::io::Error::other(
+            "finalize_not_git_repo: live .git appeared during finalize (concurrent modification)",
+        )));
+    }
+
+    // 同文件系统 rename 原子生效。
+    fs::rename(&tmp_git, &live_git).map_err(|e| {
+        let _ = fs::remove_dir_all(&tmp_git);
+        crate::Error::Io(std::io::Error::other(format!(
+            "finalize_not_git_repo: rename tmp -> .git failed: {e}"
+        )))
+    })?;
 
     Ok(())
 }
 
 /// finalize 路径 2：live 是 unborn repo。
 ///
-/// 导入 staging objects，创建 branch ref 指向 new_oid。
+/// #644 评论 5475413230 第2节：原子性改进。
+/// 导入 objects，准备 index，最后才创建 branch ref。
+/// 如果 index 准备失败，不留下已创建的 ref。
 fn finalize_unborn(
     live_root: &Path,
     staging_repo: &git2::Repository,
@@ -329,6 +402,7 @@ fn finalize_unborn(
         )))
     })?;
 
+    // 1. 导入 objects（孤儿 object 不影响语义，可以先做）。
     import_missing_objects(staging_odb, &live_odb)?;
 
     if !live_odb.exists(new_oid) {
@@ -338,7 +412,24 @@ fn finalize_unborn(
         ))));
     }
 
-    // 创建 branch ref（unborn repo 没有这个 ref）。
+    // 2. 准备 index（在创建 ref 之前）。
+    update_live_index(&live_repo, staging_repo, new_oid)?;
+
+    // 3. 同步 remote-tracking refs（在创建 branch ref 之前，失败可安全回退）。
+    sync_remote_refs(&live_repo, staging_repo)?;
+
+    // 4. 最后创建 branch ref（这是关键的原子步骤）。
+    //    确认 live HEAD 仍然指向同一个 ref（unborn 状态未变）。
+    if let Ok(current_head) = live_repo.head() {
+        if let Some(sym_target) = current_head.symbolic_target() {
+            if sym_target != head_ref {
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "finalize_unborn: HEAD changed from {} to {} during finalize",
+                    head_ref, sym_target
+                ))));
+            }
+        }
+    }
     live_repo
         .reference(head_ref, new_oid, false, "sync: create branch from staging")
         .map_err(|e| {
@@ -348,18 +439,15 @@ fn finalize_unborn(
             )))
         })?;
 
-    // 同步 remote-tracking refs。
-    sync_remote_refs(&live_repo, staging_repo)?;
-
-    // 更新 index。
-    update_live_index(&live_repo, staging_repo, new_oid)?;
-
     Ok(())
 }
 
 /// finalize 路径 3：live 已有提交的 repo（原有 CAS 逻辑）。
 ///
-/// 导入 staging objects，CAS 更新 branch ref，同步 remote refs，更新 index。
+/// #644 评论 5475413230 第2节：原子性改进。
+/// 导入 objects，准备 index，最后才做 CAS 更新 branch ref。
+/// CAS 是关键的原子步骤；index/remote refs 在 CAS 之前完成，
+/// 失败时不会推进 branch ref。
 fn finalize_existing(
     live_root: &Path,
     staging_repo: &git2::Repository,
@@ -379,7 +467,7 @@ fn finalize_existing(
         )))
     })?;
 
-    // #644 评论 5475110422 第2节：先导入所有缺失 objects，任一步失败直接 Err。
+    // 1. 导入所有缺失 objects（孤儿 object 不影响语义）。
     import_missing_objects(staging_odb, &live_odb)?;
 
     // 确认 new_oid 在 live 中存在。
@@ -390,10 +478,13 @@ fn finalize_existing(
         ))));
     }
 
-    // 同步 remote-tracking refs。
+    // 2. 准备 index（在 CAS 之前，失败不会推进 ref）。
+    update_live_index(&live_repo, staging_repo, new_oid)?;
+
+    // 3. 同步 remote-tracking refs（在 CAS 之前，失败不会推进 branch ref）。
     sync_remote_refs(&live_repo, staging_repo)?;
 
-    // CAS 更新 live 当前分支 ref。
+    // 4. CAS 更新 live 当前分支 ref（最后执行，这是关键的原子步骤）。
     live_repo
         .reference_matching(
             head_ref,
@@ -409,8 +500,58 @@ fn finalize_existing(
             )))
         })?;
 
-    // 更新 index。
+    Ok(())
+}
+
+/// finalize 路径 4：live 是 detached HEAD。
+///
+/// #644 评论 5475413230 第3节：detached HEAD 不能伪造分支名。
+/// 用 CAS 更新 HEAD 直接指向 new_oid（保持 detached 状态）。
+fn finalize_detached(
+    live_root: &Path,
+    staging_repo: &git2::Repository,
+    staging_odb: &git2::Odb,
+    new_oid: git2::Oid,
+    base_oid: git2::Oid,
+) -> Result<()> {
+    let live_repo = git2::Repository::open(live_root).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "finalize_detached: open live repo: {e}"
+        )))
+    })?;
+    let live_odb = live_repo.odb().map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "finalize_detached: live odb: {e}"
+        )))
+    })?;
+
+    // 1. 导入 objects。
+    import_missing_objects(staging_odb, &live_odb)?;
+
+    if !live_odb.exists(new_oid) {
+        return Err(crate::Error::Io(std::io::Error::other(format!(
+            "finalize_detached: new_oid {} not found in live after import",
+            new_oid
+        ))));
+    }
+
+    // 2. 准备 index。
     update_live_index(&live_repo, staging_repo, new_oid)?;
+
+    // 3. CAS 更新 HEAD 直接指向 new_oid（保持 detached 状态）。
+    live_repo
+        .reference(
+            "HEAD",
+            new_oid,
+            true,
+            "sync: finalize detached HEAD after full sync",
+        )
+        .map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "finalize_detached: update HEAD failed (old={} new={}): {}",
+                base_oid, new_oid, e
+            )))
+        })?;
 
     Ok(())
 }

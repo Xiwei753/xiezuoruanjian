@@ -738,6 +738,9 @@ fn apply_staging_commits_for_targets(
                 // Git 专属 finalize — 把 staging 的 HEAD/refs/objects/index 同步回 live。
                 // 仅 Full 模式（成功类终态）调用；Conflict 不推进 live ref。
                 // 若 finalize 失败且 backup_mode，rollback SaveTransaction。
+                //
+                // #644 评论 5475413230 第1节：finalize 成功后必须调用 tx.finish()
+                // 清理事务目录（backup_mode 时 commit 不再自动 cleanup）。
                 if let Err(e) = crate::sync::git_staging::try_finalize_git_repo_metadata(
                     live_root,
                     &run.staging_root(),
@@ -757,6 +760,8 @@ fn apply_staging_commits_for_targets(
                     run.cleanup();
                     continue;
                 }
+                // #644 评论 5475413230 第1节：Git finalize 成功，清理事务目录。
+                tx.finish();
                 target_conflicts.push(plan.conflict);
                 target_results.push(TargetCommitResult::Ok);
                 run.cleanup();

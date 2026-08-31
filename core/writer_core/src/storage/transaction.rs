@@ -54,6 +54,22 @@ pub struct TransactionEntry {
     pub is_delete: bool,
 }
 
+/// #644 评论 5475413230 第1节：备份条目，替代空字符串哨兵。
+///
+/// `String::new()` 表示"旧文件不存在"时，`backup_dir.join("")` 就是 backup 目录本身，
+/// `exists()` 为 true，随后 `fs::copy(目录, 文件)` 会失败。
+/// 用明确枚举消除歧义。
+#[derive(Debug, Clone)]
+pub enum BackupEntry {
+    /// 旧文件存在，rollback 时从备份恢复。
+    RestoreFile {
+        target_relative: String,
+        backup_filename: String,
+    },
+    /// 旧文件不存在（commit 新建了它），rollback 时删除。
+    RemoveCreated { target_relative: String },
+}
+
 /// 多文件保存事务。
 ///
 /// 生命周期：`new` → `add_file`/`add_bytes`×N → `commit`。
@@ -72,9 +88,12 @@ pub struct SaveTransaction {
     /// 为 `true` 时，commit 前先把被覆盖/删除的旧文件备份到 `tx_dir/backup/`，
     /// 使 `rollback()` 能恢复到 commit 前的状态。
     backup_mode: bool,
-    /// #644 评论 5475110422 第3节：commit 时备份的旧文件列表。
-    /// `(target_relative, backup_filename)` — 用于 rollback 恢复。
-    backed_up_files: Vec<(String, String)>,
+    /// #644 评论 5475110422 第3节 + #644 评论 5475413230 第1节：
+    /// commit 时备份的旧文件列表。用 `BackupEntry` 枚举替代空字符串哨兵。
+    backed_up_files: Vec<BackupEntry>,
+    /// #644 评论 5475413230 第1节：backup_mode 时 commit 不再 cleanup，
+    /// 必须等 Git finalize 完成后由调用方显式调用 `finish()` 清理。
+    finished: bool,
 }
 
 impl SaveTransaction {
@@ -89,6 +108,7 @@ impl SaveTransaction {
             committed: false,
             backup_mode: false,
             backed_up_files: Vec::new(),
+            finished: false,
         }
     }
 
@@ -137,33 +157,58 @@ impl SaveTransaction {
         self.backup_mode = true;
     }
 
-    /// #644 评论 5475110422 第3节：回滚 commit 写入的文件变更。
+    /// #644 评论 5475110422 第3节 + #644 评论 5475413230 第1节：
+    /// 回滚 commit 写入的文件变更。
     ///
     /// 仅在 `backup_mode` 且已 `commit` 后调用有效。
-    /// 把备份的旧文件恢复到 target_root，删除新写入的文件。
+    /// 按 `BackupEntry` 明确恢复旧文件或删除本次新建文件。
+    /// - `RestoreFile`：从备份恢复旧文件。
+    /// - `RemoveCreated`：删除 commit 新建的文件；只有 `NotFound` 视为成功，
+    ///   其它 IO 错误返回 `Err`。
+    ///
     /// 恢复完成后清理备份目录。
+    #[allow(clippy::too_many_lines, clippy::cognitive_complexity, clippy::excessive_nesting)]
     pub fn rollback(&mut self) -> Result<()> {
         if !self.committed || !self.backup_mode {
             return Ok(());
         }
         let backup_dir = self.tx_dir.join("backup");
-        for (target_rel, backup_name) in &self.backed_up_files {
-            let target_path = self.target_root.join(target_rel);
-            let backup_path = backup_dir.join(backup_name);
-            if backup_path.exists() {
-                // 旧文件存在 → 恢复它。
-                if let Some(parent) = target_path.parent() {
-                    fs::create_dir_all(parent)?;
+        for entry in &self.backed_up_files {
+            match entry {
+                BackupEntry::RestoreFile {
+                    target_relative,
+                    backup_filename,
+                } => {
+                    let target_path = self.target_root.join(target_relative);
+                    let backup_path = backup_dir.join(backup_filename);
+                    if let Some(parent) = target_path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::copy(&backup_path, &target_path)?;
                 }
-                fs::copy(&backup_path, &target_path)?;
-            } else {
-                // 旧文件不存在 → commit 新建了它，rollback 应删除。
-                let _ = fs::remove_file(&target_path);
+                BackupEntry::RemoveCreated { target_relative } => {
+                    let target_path = self.target_root.join(target_relative);
+                    if let Err(e) = fs::remove_file(&target_path) {
+                        if e.kind() != std::io::ErrorKind::NotFound {
+                            return Err(crate::Error::Io(e));
+                        }
+                    }
+                }
             }
         }
         // 清理备份目录。
         let _ = fs::remove_dir_all(&backup_dir);
         Ok(())
+    }
+
+    /// #644 评论 5475413230 第1节：Git finalize 成功后调用，清理事务目录。
+    ///
+    /// `backup_mode` 时 `commit()` 不再自动 cleanup；调用方必须在 Git finalize
+    /// 完成后显式调用 `finish()`。非 backup_mode 时 `commit()` 已 cleanup，
+    /// `finish()` 是空操作。
+    pub fn finish(&mut self) {
+        self.finished = true;
+        self.cleanup();
     }
 
     #[allow(
@@ -206,17 +251,20 @@ impl SaveTransaction {
         for (idx, entry) in self.entries.iter().enumerate() {
             let target_path = self.target_root.join(&entry.target_relative);
             if entry.is_delete {
-                // #644 评论 5475110422 第3节：备份要删除的旧文件。
+                // #644 评论 5475110422 第3节 + #644 评论 5475413230 第1节：
+                // 备份要删除的旧文件，用 BackupEntry 替代空字符串哨兵。
                 if let Some(ref bdir) = backup_dir {
                     if target_path.exists() {
                         let backup_name = format!("backup_{}", idx);
                         fs::copy(&target_path, bdir.join(&backup_name))?;
-                        self.backed_up_files
-                            .push((entry.target_relative.clone(), backup_name));
+                        self.backed_up_files.push(BackupEntry::RestoreFile {
+                            target_relative: entry.target_relative.clone(),
+                            backup_filename: backup_name,
+                        });
                     } else {
-                        // 旧文件不存在 → 记录空备份标记（rollback 时删除新文件）。
-                        self.backed_up_files
-                            .push((entry.target_relative.clone(), String::new()));
+                        self.backed_up_files.push(BackupEntry::RemoveCreated {
+                            target_relative: entry.target_relative.clone(),
+                        });
                     }
                 }
                 // #644 评论 5473401065 第3节：NotFound 视为幂等成功；
@@ -227,17 +275,20 @@ impl SaveTransaction {
                     Err(e) => return Err(crate::Error::Io(e)),
                 }
             } else {
-                // #644 评论 5475110422 第3节：备份要被覆盖的旧文件。
+                // #644 评论 5475110422 第3节 + #644 评论 5475413230 第1节：
+                // 备份要被覆盖的旧文件，用 BackupEntry 替代空字符串哨兵。
                 if let Some(ref bdir) = backup_dir {
                     if target_path.exists() {
                         let backup_name = format!("backup_{}", idx);
                         fs::copy(&target_path, bdir.join(&backup_name))?;
-                        self.backed_up_files
-                            .push((entry.target_relative.clone(), backup_name));
+                        self.backed_up_files.push(BackupEntry::RestoreFile {
+                            target_relative: entry.target_relative.clone(),
+                            backup_filename: backup_name,
+                        });
                     } else {
-                        // 旧文件不存在 → 记录空备份标记。
-                        self.backed_up_files
-                            .push((entry.target_relative.clone(), String::new()));
+                        self.backed_up_files.push(BackupEntry::RemoveCreated {
+                            target_relative: entry.target_relative.clone(),
+                        });
                     }
                 }
                 let staging_path = self.tx_dir.join(&entry.staging_filename);
@@ -256,7 +307,12 @@ impl SaveTransaction {
         let _ = fs::write(&commit_marker, b"ok");
 
         self.committed = true;
-        self.cleanup();
+
+        // #644 评论 5475413230 第1节：backup_mode 时不在 commit 内 cleanup。
+        // 备份必须保留到 Git finalize 完成，由调用方显式调用 finish()。
+        if !self.backup_mode {
+            self.cleanup();
+        }
         Ok(())
     }
 
@@ -267,9 +323,12 @@ impl SaveTransaction {
 
 impl Drop for SaveTransaction {
     fn drop(&mut self) {
-        // 只在已提交时清理。未提交的事务目录留给 recover_pending_transactions 处理，
-        // 避免在 Drop 中意外删除可能需要恢复的暂存文件。
-        if self.committed {
+        // #644 评论 5475413230 第1节：backup_mode 时 commit 不再自动 cleanup。
+        // 只在以下情况清理：
+        // - 非 backup_mode 且已 committed（原有行为）
+        // - 已 finish()（finished == true）
+        // backup_mode + committed 但未 finish 时，保留事务目录供 rollback 使用。
+        if self.finished || (self.committed && !self.backup_mode) {
             self.cleanup();
         }
     }
