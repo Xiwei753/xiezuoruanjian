@@ -10,7 +10,8 @@ impl WriterCoreApi {
     }
 
     pub fn save_local_settings(&self, settings: LocalSettingsDto) -> ApiResult<bool> {
-        self.core_write().save_local_settings(&settings.clone().into())?;
+        self.core_write()
+            .save_local_settings(&settings.clone().into())?;
         let body = serde_json::to_string(&settings).unwrap_or_default();
         let entry = crate::search::extractor::extract_setting_entry("local", &body);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {

@@ -18,7 +18,6 @@ import com.xiwei.sujian.feature.editor.presentation.applyExternalContentToUi
 import com.xiwei.sujian.feature.editor.presentation.confirmEditorAttached
 import com.xiwei.sujian.feature.editor.presentation.isCurrentChapter
 import com.xiwei.sujian.feature.editor.presentation.notifySyncMergeConflict
-import com.xiwei.sujian.feature.editor.presentation.onEditorApplied
 import com.xiwei.sujian.feature.editor.presentation.reloadSettings
 import com.xiwei.sujian.feature.editor.presentation.shouldConsumePendingAfterFact
 import com.xiwei.sujian.feature.editor.session.CoreVisualIntentEvent
@@ -188,8 +187,11 @@ internal fun WritingPaneEditorAttachSync(
  */
 sealed interface EditorAttachAction {
     data object BeginEdit : EditorAttachAction
+
     data object Hold : EditorAttachAction
+
     data object Confirm : EditorAttachAction
+
     data object Wait : EditorAttachAction
 }
 

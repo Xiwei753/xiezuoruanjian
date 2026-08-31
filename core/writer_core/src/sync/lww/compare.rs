@@ -101,7 +101,11 @@ pub(crate) fn is_document_content_path(path: &str) -> bool {
 /// - 三路比较仅用于 UserTextDocument；Metadata/GeneratedCache 走 LWW 时间戳决胜。
 /// - LWW 决胜不变量：时间戳较大方获胜；时间戳相同时按 device_id 字典序决胜
 ///   （字典序较大的 device_id 获胜），保证双方独立计算结果一致。
-pub(super) fn three_way_resolve(base_hash: &str, local_hash: &str, remote_hash: &str) -> ThreeWayResult {
+pub(super) fn three_way_resolve(
+    base_hash: &str,
+    local_hash: &str,
+    remote_hash: &str,
+) -> ThreeWayResult {
     if local_hash == remote_hash {
         return ThreeWayResult::NoConflict;
     }

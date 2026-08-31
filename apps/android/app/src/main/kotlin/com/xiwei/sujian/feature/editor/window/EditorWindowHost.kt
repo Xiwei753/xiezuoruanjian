@@ -6,6 +6,7 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import com.xiwei.sujian.feature.editor.motion.TargetMotionConstraint
 import com.xiwei.sujian.feature.editor.projection.ChapterPreviewState
+import com.xiwei.sujian.feature.editor.projection.SessionCloseReason
 import com.xiwei.sujian.feature.editor.session.AnimationPolicy
 import com.xiwei.sujian.feature.editor.session.AuthoritativeEditorSnapshot
 import com.xiwei.sujian.feature.editor.session.ChapterSavedSignal
@@ -14,7 +15,6 @@ import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.EditorSessionHost
 import com.xiwei.sujian.feature.editor.session.EditorSessionState
 import com.xiwei.sujian.feature.editor.session.ExternalResetResult
-import com.xiwei.sujian.feature.editor.projection.SessionCloseReason
 import com.xiwei.sujian.feature.editor.session.SessionCommandPort
 import com.xiwei.sujian.feature.editor.session.SessionResetSource
 import com.xiwei.sujian.feature.editor.session.TargetCommand
@@ -181,8 +181,7 @@ class EditorWindowHost(
      * #644 评论 5462826712 第1节：Compose Surface 附着 —
      * 窗口层用自己的 windowId 完成 binding；UI 不知道 sessionId。
      */
-    fun attachSurface(targetId: String): EditorInputLease? =
-        sessionHost.attachSurface(windowId, targetId)
+    fun attachSurface(targetId: String): EditorInputLease? = sessionHost.attachSurface(windowId, targetId)
 
     companion object {
         private const val TAG = "EditorWindowHost"

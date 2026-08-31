@@ -15,8 +15,11 @@ import androidx.lifecycle.SavedStateHandle
 import com.xiwei.sujian.core.interop.common.RepositoryException
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
+import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.ProjectStats
+import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
 import com.xiwei.sujian.feature.project.data.model.Volume
+import com.xiwei.sujian.feature.project.data.model.VolumeWithChapters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -94,6 +97,19 @@ class ProjectViewModelErrorChainTest {
         ): List<ChapterMeta> = emptyList()
 
         override fun getProjectStats(projectId: String): ProjectStats = stats[projectId] ?: ProjectStats(0, 0, 0)
+
+        // #644 评论 5467821839：ProjectViewModel 已改为一次调用 getProjectWorkspaceSnapshot
+        // 读取完整快照，fake 必须 override 该入口 — 否则会落到真实 Bridge 上抛
+        // RepositoryException(NativeUnavailable)。getVolumesException 仍作为快照读取
+        // 失败的注入点，保持"首次加载失败"语义。
+        override fun getProjectWorkspaceSnapshot(projectId: String): ProjectWorkspaceSnapshot {
+            getVolumesException?.let { throw it }
+            val project = Project(projectId, projectId, testTimestamp, testTimestamp)
+            val projectStats = stats[projectId] ?: ProjectStats(0, 0, 0)
+            val volumesWithChapters =
+                volumes[projectId].orEmpty().map { VolumeWithChapters(it, emptyList()) }
+            return ProjectWorkspaceSnapshot(project, projectStats, volumesWithChapters)
+        }
 
         override fun createVolume(
             projectId: String,

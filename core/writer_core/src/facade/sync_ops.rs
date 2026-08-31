@@ -227,7 +227,10 @@ impl super::WriterCore {
         let backend_type = crate::sync::resolved_backend_type(config);
         if let Some(transport) = self.sync_transport.as_ref() {
             match transport() {
-                Ok(t) => Ok(crate::sync::create_sync_backend_with_transport(&backend_type, t)),
+                Ok(t) => Ok(crate::sync::create_sync_backend_with_transport(
+                    &backend_type,
+                    t,
+                )),
                 Err(e) => {
                     let err = crate::sync::full_sync::transport_init_failure_error(
                         &e.category,
@@ -251,8 +254,7 @@ impl super::WriterCore {
         &self,
         transfer_result: crate::sync::full_sync::FullSyncTransferResult,
     ) -> crate::sync::types::FullSyncResult {
-        let result =
-            crate::sync::full_sync::aggregate_full_sync_result(transfer_result.targets);
+        let result = crate::sync::full_sync::aggregate_full_sync_result(transfer_result.targets);
 
         let previous_state = self.load_full_sync_state().unwrap_or(None);
         let new_state = crate::sync::full_sync_state::FullSyncState::from_result_and_previous(

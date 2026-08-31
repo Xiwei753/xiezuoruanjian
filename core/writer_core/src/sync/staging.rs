@@ -180,10 +180,7 @@ pub struct CommitPlan {
 #[derive(Debug)]
 pub enum CommitAction {
     /// 把 `content` 写到 `rel_path`（相对 target_root）。
-    Apply {
-        rel_path: PathBuf,
-        content: Vec<u8>,
-    },
+    Apply { rel_path: PathBuf, content: Vec<u8> },
 }
 
 /// 递归列出 `root` 下所有文件的相对路径。

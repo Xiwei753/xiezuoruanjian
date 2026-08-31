@@ -85,7 +85,10 @@ fn get_starmap_project_id(api: &WriterCoreApi, starmap_id: &str) -> Option<Strin
 
 impl WriterCoreApi {
     pub fn list_starmaps_json(&self) -> ApiResult<String> {
-        let value = self.core_write().list_starmaps().map_err(WriterError::from)?;
+        let value = self
+            .core_write()
+            .list_starmaps()
+            .map_err(WriterError::from)?;
         Self::json_string(&value)
     }
 
@@ -176,7 +179,8 @@ impl WriterCoreApi {
     }
 
     pub fn delete_starmap_embed(&self, starmap_id: &str, instance_id: &str) -> ApiResult<bool> {
-        self.core_write().delete_starmap_embed(starmap_id, instance_id)?;
+        self.core_write()
+            .delete_starmap_embed(starmap_id, instance_id)?;
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
             object_id: format!("starmap_embed:{}:{}", starmap_id, instance_id),

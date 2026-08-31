@@ -3,8 +3,6 @@ package com.xiwei.sujian.feature.editor.session
 // ! # 编辑器会话协调器类型声明（从 EditorSessionCoordinator 分）
 
 import androidx.compose.runtime.Immutable
-import com.xiwei.sujian.feature.editor.projection.ProjectionSnapshot
-import com.xiwei.sujian.feature.editor.projection.ViewportAnchor
 import com.xiwei.sujian.feature.editor.window.EditingState
 
 sealed interface WindowBindingState {

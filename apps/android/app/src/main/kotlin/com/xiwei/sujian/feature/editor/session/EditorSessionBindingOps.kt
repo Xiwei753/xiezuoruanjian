@@ -2,6 +2,29 @@ package com.xiwei.sujian.feature.editor.session
 
 import com.xiwei.sujian.feature.editor.window.EditingState
 
+private fun WindowBindingState.Attached.isSameAttachment(
+    windowId: String,
+    targetId: String,
+    currentSessionId: ULong?,
+): Boolean =
+    this.windowId == windowId &&
+        this.targetId == targetId &&
+        currentSessionId != null &&
+        this.sessionId == currentSessionId
+
+private fun isNotAttachingOrMismatch(
+    current: WindowBindingState,
+    windowId: String,
+    targetId: String,
+    currentSessionId: ULong?,
+): Boolean =
+    current !is WindowBindingState.Attaching ||
+        current.windowId != windowId ||
+        current.targetId != targetId ||
+        currentSessionId == null ||
+        current.sessionId != currentSessionId ||
+        current.sessionId == 0UL
+
 /**
  * #644 评论 5462826712 第1节：窗口绑定状态转换 — 从 [EditorSessionCoordinator] 抽取。
  *
@@ -20,30 +43,23 @@ fun EditorSessionCoordinator.attachSurface(
 
         // 已经是同一个 Attached — 幂等返回当前 lease（也校验 sessionId 一致）
         if (current is WindowBindingState.Attached &&
-            current.windowId == windowId &&
-            current.targetId == targetId &&
-            currentSessionId != null &&
-            current.sessionId == currentSessionId
+            current.isSameAttachment(windowId, targetId, currentSessionId)
         ) {
             return@mutateSession EditorInputLease(
                 targetId = targetId,
-                sessionId = currentSessionId,
+                sessionId = currentSessionId!!,
                 epoch = leaseEpoch,
             )
         }
 
         // 必须是 Attaching 且 windowId/targetId/sessionId 全部匹配
-        if (current !is WindowBindingState.Attaching ||
-            current.windowId != windowId ||
-            current.targetId != targetId ||
-            currentSessionId == null ||
-            current.sessionId != currentSessionId ||
-            current.sessionId == 0UL
-        ) {
+        if (isNotAttachingOrMismatch(current, windowId, targetId, currentSessionId)) {
             return@mutateSession null
         }
 
-        val sessionId = current.sessionId
+        // 此时 current 一定是 Attaching（isNotAttachingOrMismatch 返回 false）
+        val attaching = current as? WindowBindingState.Attaching ?: return@mutateSession null
+        val sessionId = attaching.sessionId
         // 推进到 Attached
         sessionState =
             sessionState.copy(

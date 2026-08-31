@@ -18,8 +18,11 @@ package com.xiwei.sujian.feature.project.ui
 import androidx.lifecycle.SavedStateHandle
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
+import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.ProjectStats
+import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
 import com.xiwei.sujian.feature.project.data.model.Volume
+import com.xiwei.sujian.feature.project.data.model.VolumeWithChapters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -135,6 +138,33 @@ class ProjectViewModelStaleLoadTest {
             await(statsGates[projectId])
             if (projectId == "A") statsAReturned.set(true)
             return statsMap[projectId] ?: ProjectStats(0, 0, 0)
+        }
+
+        // #644 评论 5467821839：ProjectViewModel 已改为一次调用 getProjectWorkspaceSnapshot
+        // 读取完整快照，fake 必须 override 该入口 — 否则会落到真实 Bridge 上抛
+        // RepositoryException(NativeUnavailable)。门闩与进入/返回标记按原
+        // getVolumes → getChapters → getProjectStats 顺序在单次调用内串行触发，
+        // 保持测试的确定性同步语义（A 的卷栅栏先阻塞，放行后到章节栅栏，再放行到
+        // 统计栅栏；secondVolumeGate 仍只阻塞"第二次"快照读取）。
+        override fun getProjectWorkspaceSnapshot(projectId: String): ProjectWorkspaceSnapshot {
+            if (projectId == "A") volumeAEntered.set(true)
+            volumeCallCount++
+            if (secondVolumeGate != null && volumeCallCount == 2) {
+                if (projectId == "A") secondVolumeAEntered.set(true)
+                await(secondVolumeGate)
+            } else {
+                await(volumeGates[projectId])
+            }
+            if (projectId == "A") chapterAEntered.set(true)
+            await(chapterGates[projectId])
+            if (projectId == "A") chapterAReturned.set(true)
+            await(statsGates[projectId])
+            if (projectId == "A") statsAReturned.set(true)
+            val project = Project(projectId, projectId, testTimestamp, testTimestamp)
+            val projectStats = statsMap[projectId] ?: ProjectStats(0, 0, 0)
+            val volumesWithChapters =
+                volumes[projectId].orEmpty().map { VolumeWithChapters(it, emptyList()) }
+            return ProjectWorkspaceSnapshot(project, projectStats, volumesWithChapters)
         }
 
         /** #617 评论九：override createVolume 返回成功 — 不再依赖"native 未加载失败被吞掉"。 */

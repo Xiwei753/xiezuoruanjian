@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
@@ -21,7 +22,21 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  * rebase 物化、split、subtract、retained moves 的完整算法搬自原
  * [ComposeEditorVisualState]，逻辑不变，只把对 mutable state 的依赖改成显式参数。
  */
+@Suppress("LargeClass", "TooManyFunctions")
 internal object ComposeVisualRebase {
+    /**
+     * 物化 start_frame 的参数 — 提取以降低 [materializeStartFrame] 参数列表长度。
+     */
+    data class MaterializeStartFrameParams(
+        val transaction: ComposeVisualTransaction?,
+        val textProgress: Float,
+        val cursorProgress: Float,
+        val rebaseProgress: Float,
+        val nextReplaceBounds: VisualReplaceBounds?,
+        val hiddenRanges: List<TextRange>,
+        val cursorSnapshot: VisualCursorSnapshot?,
+    )
+
     /**
      * #641 评论 5459754425 + 评论 5459896691：物化当前视觉帧作为新事务的 start_frame。
      *
@@ -47,15 +62,14 @@ internal object ComposeVisualRebase {
      *
      * 如果没有旧事务或 text/cursor/rebase 三条 progress 都已到 1f，返回 null。
      */
-    fun materializeStartFrame(
-        transaction: ComposeVisualTransaction?,
-        textProgress: Float,
-        cursorProgress: Float,
-        rebaseProgress: Float,
-        nextReplaceBounds: VisualReplaceBounds?,
-        hiddenRanges: List<TextRange>,
-        cursorSnapshot: VisualCursorSnapshot?,
-    ): ComposeVisualFrame? {
+    fun materializeStartFrame(params: MaterializeStartFrameParams): ComposeVisualFrame? {
+        val transaction = params.transaction
+        val textProgress = params.textProgress
+        val cursorProgress = params.cursorProgress
+        val rebaseProgress = params.rebaseProgress
+        val nextReplaceBounds = params.nextReplaceBounds
+        val hiddenRanges = params.hiddenRanges
+        val cursorSnapshot = params.cursorSnapshot
         val prev = transaction ?: return null
         // #641 评论 5459896691 第1项：三条当前实际存在的 timeline 都结束才算没有视觉帧。
         if (textProgress >= 1f && cursorProgress >= 1f && rebaseProgress >= 1f) return null
@@ -232,8 +246,18 @@ internal object ComposeVisualRebase {
             return slice.copy(sourceAlpha = currentAlpha)
         }
         // #641 评论 5460233781 问题2：用 source bounds + sourceTranslate 与 target bounds 算当前 x/y。
-        val currentX = lerpFloat(sourceBounds.left + slice.sourceTranslate.x, targetBounds.left, rebaseProgress)
-        val currentY = lerpFloat(sourceBounds.top + slice.sourceTranslate.y, targetBounds.top, rebaseProgress)
+        val currentX =
+            lerpFloat(
+                sourceBounds.left + slice.sourceTranslate.x,
+                targetBounds.left,
+                rebaseProgress,
+            )
+        val currentY =
+            lerpFloat(
+                sourceBounds.top + slice.sourceTranslate.y,
+                targetBounds.top,
+                rebaseProgress,
+            )
         return RebasedTextSlice(
             sourceLayout = currentLayout,
             sourceRange = targetRange,
@@ -392,28 +416,33 @@ internal object ComposeVisualRebase {
         blockers: List<TextRange>,
     ): List<TextRange> {
         if (candidates.isEmpty() || blockers.isEmpty()) return candidates
+        return candidates.flatMap { candidate -> subtractCandidate(candidate, blockers) }
+    }
+
+    /**
+     * 从单个 candidate 中减去 blockers 覆盖的部分 — 提取以降低 [subtractRanges] 认知复杂度。
+     */
+    private fun subtractCandidate(
+        candidate: TextRange,
+        blockers: List<TextRange>,
+    ): List<TextRange> {
+        if (candidate.start >= candidate.end) return emptyList()
+        val relevantBlockers =
+            blockers
+                .filter { it.start < candidate.end && it.end > candidate.start }
+                .sortedBy { it.start }
+        if (relevantBlockers.isEmpty()) return listOf(candidate)
         val result = mutableListOf<TextRange>()
-        for (candidate in candidates) {
-            if (candidate.start >= candidate.end) continue
-            val relevantBlockers =
-                blockers
-                    .filter { it.start < candidate.end && it.end > candidate.start }
-                    .sortedBy { it.start }
-            if (relevantBlockers.isEmpty()) {
-                result.add(candidate)
-                continue
+        var currentStart = candidate.start
+        for (blocker in relevantBlockers) {
+            if (blocker.start > currentStart) {
+                result.add(TextRange(currentStart, minOf(blocker.start, candidate.end)))
             }
-            var currentStart = candidate.start
-            for (blocker in relevantBlockers) {
-                if (blocker.start > currentStart) {
-                    result.add(TextRange(currentStart, minOf(blocker.start, candidate.end)))
-                }
-                currentStart = maxOf(currentStart, blocker.end)
-                if (currentStart >= candidate.end) break
-            }
-            if (currentStart < candidate.end) {
-                result.add(TextRange(currentStart, candidate.end))
-            }
+            currentStart = maxOf(currentStart, blocker.end)
+            if (currentStart >= candidate.end) break
+        }
+        if (currentStart < candidate.end) {
+            result.add(TextRange(currentStart, candidate.end))
         }
         return result
     }
@@ -476,7 +505,6 @@ internal object ComposeVisualRebase {
      * [previousSnapshot] / [currentSnapshot] 由调用方传入，本函数不访问 mutable state。
      * 如果任一 layout 缺失，返回空列表。
      */
-    @Suppress("CyclomaticComplexMethod", "CognitiveComplexMethod", "NestedBlockDepth")
     fun computeRetainedMoves(
         intent: EditorVisualIntent,
         previousSnapshot: ComposeLayoutSnapshot?,
@@ -487,102 +515,255 @@ internal object ComposeVisualRebase {
         val curr = currentSnapshot ?: return emptyList()
 
         val replaceBounds = intent.replaceBounds
-        val oldSuffixStart = replaceBounds?.oldEnd ?: (intent.oldRanges.maxOfOrNull { it.end } ?: 0)
-        val newSuffixStart = replaceBounds?.newEnd ?: (intent.newRanges.maxOfOrNull { it.end } ?: 0)
+        val oldSuffixStart =
+            replaceBounds?.oldEnd ?: (intent.oldRanges.maxOfOrNull { it.end } ?: 0)
+        val newSuffixStart =
+            replaceBounds?.newEnd ?: (intent.newRanges.maxOfOrNull { it.end } ?: 0)
 
         val oldText = prev.result.layoutInput.text
         val newText = curr.result.layoutInput.text
         val oldTextLen = oldText.length
         val newTextLen = newText.length
 
+        if (oldSuffixStart >= oldTextLen || newSuffixStart >= newTextLen) return emptyList()
+
+        val ctx =
+            RetainedMovesContext(
+                prev = prev,
+                curr = curr,
+                oldText = oldText,
+                newText = newText,
+                oldTextLen = oldTextLen,
+                newTextLen = newTextLen,
+                oldSuffixStart = oldSuffixStart,
+                newSuffixStart = newSuffixStart,
+            )
+        return computeRetainedMovesLoop(ctx)
+    }
+
+    /**
+     * Retained moves 计算上下文 — 封装循环中不变的参数，降低函数参数数量。
+     */
+    data class RetainedMovesContext(
+        val prev: ComposeLayoutSnapshot,
+        val curr: ComposeLayoutSnapshot,
+        val oldText: AnnotatedString,
+        val newText: AnnotatedString,
+        val oldTextLen: Int,
+        val newTextLen: Int,
+        val oldSuffixStart: Int,
+        val newSuffixStart: Int,
+    )
+
+    /**
+     * 计算 retained moves 的主循环 — 提取以降低 [computeRetainedMoves] 长度。
+     */
+    fun computeRetainedMovesLoop(ctx: RetainedMovesContext): List<RetainedMove> {
         val result = mutableListOf<RetainedMove>()
-        if (oldSuffixStart >= oldTextLen || newSuffixStart >= newTextLen) return result
+        var oldPos = ctx.oldSuffixStart
+        val mergeState = MergeState()
 
-        var oldPos = oldSuffixStart
-        var mergedOldStart = -1
-        var mergedNewStart = -1
-        var mergedDx = 0f
-        var mergedDy = 0f
-        var merging = false
-        while (oldPos < oldTextLen) {
-            val oldLine = prev.result.getLineForOffset(oldPos)
-            val oldLineEnd = prev.result.getLineEnd(oldLine)
-            var segEnd = minOf(oldLineEnd, oldTextLen)
-            if (segEnd in 1 until oldTextLen &&
-                oldText[segEnd - 1].isHighSurrogate() &&
-                oldText[segEnd].isLowSurrogate()
-            ) {
-                segEnd -= 1
-            }
-            if (segEnd <= oldPos) segEnd = oldPos + 1
+        while (oldPos < ctx.oldTextLen) {
+            val moveResult = processRetainedMoveSegment(ctx, oldPos)
+            val newPos = oldPos - ctx.oldSuffixStart + ctx.newSuffixStart
+            oldPos = updateMoveResult(result, moveResult, mergeState, oldPos, newPos)
+        }
 
-            val newPos = oldPos - oldSuffixStart + newSuffixStart
-            val newSegEnd = segEnd - oldSuffixStart + newSuffixStart
-            if (newSegEnd > newTextLen) break
+        flushPendingMove(result, mergeState, oldPos, ctx)
+        return result
+    }
 
+    /**
+     * 合并状态 — 用于跟踪连续的 retained move 合并。
+     */
+    class MergeState {
+        var mergedOldStart: Int = -1
+        var mergedNewStart: Int = -1
+        var mergedDx: Float = 0f
+        var mergedDy: Float = 0f
+        var merging: Boolean = false
+    }
+
+    /**
+     * 处理单个 retained move 段 — 提取以降低 [computeRetainedMovesLoop] 复杂度。
+     */
+    data class RetainedMoveSegmentResult(
+        val segEnd: Int,
+        val oldBounds: Rect?,
+        val newBounds: Rect?,
+    )
+
+    fun processRetainedMoveSegment(
+        ctx: RetainedMovesContext,
+        oldPos: Int,
+    ): RetainedMoveSegmentResult {
+        val oldLine = ctx.prev.result.getLineForOffset(oldPos)
+        val oldLineEnd = ctx.prev.result.getLineEnd(oldLine)
+        var segEnd = minOf(oldLineEnd, ctx.oldTextLen)
+        if (segEnd in 1 until ctx.oldTextLen &&
+            ctx.oldText[segEnd - 1].isHighSurrogate() &&
+            ctx.oldText[segEnd].isLowSurrogate()
+        ) {
+            segEnd -= 1
+        }
+        if (segEnd <= oldPos) segEnd = oldPos + 1
+
+        val newPos = oldPos - ctx.oldSuffixStart + ctx.newSuffixStart
+        val newSegEnd = segEnd - ctx.oldSuffixStart + ctx.newSuffixStart
+
+        return if (newSegEnd > ctx.newTextLen) {
+            RetainedMoveSegmentResult(segEnd, null, null)
+        } else {
             val oldRange = TextRange(oldPos, segEnd)
             val newRange = TextRange(newPos, newSegEnd)
-            val oldBounds = safePathBounds(prev.result, oldRange)
-            val newBounds = safePathBounds(curr.result, newRange)
-
-            if (oldBounds != null && newBounds != null) {
-                val dx = newBounds.left - oldBounds.left
-                val dy = newBounds.top - oldBounds.top
-                val topChanged = kotlin.math.abs(dy) > 1f
-                val leftChanged = kotlin.math.abs(dx) > 1f
-                if (topChanged || leftChanged) {
-                    if (merging && kotlin.math.abs(dx - mergedDx) <= 1f && kotlin.math.abs(dy - mergedDy) <= 1f) {
-                        // 位移向量一致，继续合并。
-                    } else {
-                        if (merging) {
-                            result.add(
-                                RetainedMove(
-                                    oldRange = TextRange(mergedOldStart, oldPos),
-                                    newRange = TextRange(mergedNewStart, newPos),
-                                ),
-                            )
-                        }
-                        mergedOldStart = oldPos
-                        mergedNewStart = newPos
-                        mergedDx = dx
-                        mergedDy = dy
-                        merging = true
-                    }
-                } else {
-                    if (merging) {
-                        result.add(
-                            RetainedMove(
-                                oldRange = TextRange(mergedOldStart, oldPos),
-                                newRange = TextRange(mergedNewStart, newPos),
-                            ),
-                        )
-                        merging = false
-                    }
-                }
-            } else {
-                if (merging) {
-                    result.add(
-                        RetainedMove(
-                            oldRange = TextRange(mergedOldStart, oldPos),
-                            newRange = TextRange(mergedNewStart, newPos),
-                        ),
-                    )
-                    merging = false
-                }
-            }
-            oldPos = segEnd
+            val oldBounds = safePathBounds(ctx.prev.result, oldRange)
+            val newBounds = safePathBounds(ctx.curr.result, newRange)
+            RetainedMoveSegmentResult(segEnd, oldBounds, newBounds)
         }
-        if (merging) {
-            val newPos = oldPos - oldSuffixStart + newSuffixStart
-            if (newPos <= newTextLen) {
+    }
+
+    /**
+     * 更新 move 结果并返回下一个 oldPos — 提取以降低 [computeRetainedMovesLoop] 复杂度。
+     *
+     * @param oldPos 当前段在 old text 中的起始位置，作为合并起点/终点边界。
+     * @param newPos 当前段在 new text 中的起始位置，作为合并起点/终点边界。
+     */
+    fun updateMoveResult(
+        result: MutableList<RetainedMove>,
+        segmentResult: RetainedMoveSegmentResult,
+        mergeState: MergeState,
+        oldPos: Int,
+        newPos: Int,
+    ): Int {
+        val segEnd = segmentResult.segEnd
+        val oldBounds = segmentResult.oldBounds
+        val newBounds = segmentResult.newBounds
+
+        if (oldBounds != null && newBounds != null) {
+            handleBoundsChanged(result, oldPos, oldBounds, newBounds, mergeState, newPos)
+        } else {
+            handleBoundsNull(result, oldPos, mergeState, newPos)
+        }
+        return segEnd
+    }
+
+    /** 处理 bounds 变化的情况 — 提取以降低 [updateMoveResult] 复杂度。 */
+    private fun handleBoundsChanged(
+        result: MutableList<RetainedMove>,
+        oldPos: Int,
+        oldBounds: Rect,
+        newBounds: Rect,
+        mergeState: MergeState,
+        newPos: Int,
+    ) {
+        val dx = newBounds.left - oldBounds.left
+        val dy = newBounds.top - oldBounds.top
+        val topChanged = kotlin.math.abs(dy) > 1f
+        val leftChanged = kotlin.math.abs(dx) > 1f
+        if (topChanged || leftChanged) {
+            handlePositionChanged(result, oldPos, dx, dy, mergeState, newPos)
+        } else {
+            handlePositionUnchanged(result, oldPos, mergeState, newPos)
+        }
+    }
+
+    /** 处理位置变化 — 提取以降低 [handleBoundsChanged] 复杂度。 */
+    private fun handlePositionChanged(
+        result: MutableList<RetainedMove>,
+        oldPos: Int,
+        dx: Float,
+        dy: Float,
+        mergeState: MergeState,
+        newPos: Int,
+    ) {
+        if (mergeState.merging &&
+            kotlin.math.abs(dx - mergeState.mergedDx) <= 1f &&
+            kotlin.math.abs(dy - mergeState.mergedDy) <= 1f
+        ) {
+            // 位移向量一致，继续合并。
+        } else if (mergeState.merging) {
+            finishCurrentMerge(result, oldPos, mergeState, newPos)
+            startNewMerge(oldPos, dx, dy, mergeState, newPos)
+        } else {
+            startNewMerge(oldPos, dx, dy, mergeState, newPos)
+        }
+    }
+
+    /** 处理位置未变化 — 提取以降低 [handleBoundsChanged] 复杂度。 */
+    private fun handlePositionUnchanged(
+        result: MutableList<RetainedMove>,
+        oldPos: Int,
+        mergeState: MergeState,
+        newPos: Int,
+    ) {
+        if (mergeState.merging) {
+            finishCurrentMerge(result, oldPos, mergeState, newPos)
+            mergeState.merging = false
+        }
+    }
+
+    /** 处理 bounds 为 null 的情况 — 提取以降低 [updateMoveResult] 复杂度。 */
+    private fun handleBoundsNull(
+        result: MutableList<RetainedMove>,
+        oldPos: Int,
+        mergeState: MergeState,
+        newPos: Int,
+    ) {
+        if (mergeState.merging) {
+            finishCurrentMerge(result, oldPos, mergeState, newPos)
+            mergeState.merging = false
+        }
+    }
+
+    /** 完成当前合并 — 提取以降低 [updateMoveResult] 复杂度。 */
+    private fun finishCurrentMerge(
+        result: MutableList<RetainedMove>,
+        oldPos: Int,
+        mergeState: MergeState,
+        newPos: Int,
+    ) {
+        result.add(
+            RetainedMove(
+                oldRange = TextRange(mergeState.mergedOldStart, oldPos),
+                newRange = TextRange(mergeState.mergedNewStart, newPos),
+            ),
+        )
+    }
+
+    /** 开始新合并 — 提取以降低 [updateMoveResult] 复杂度。 */
+    private fun startNewMerge(
+        oldPos: Int,
+        dx: Float,
+        dy: Float,
+        mergeState: MergeState,
+        newPos: Int,
+    ) {
+        mergeState.mergedOldStart = oldPos
+        mergeState.mergedNewStart = newPos
+        mergeState.mergedDx = dx
+        mergeState.mergedDy = dy
+        mergeState.merging = true
+    }
+
+    /**
+     * 刷新 pending move — 提取以降低 [computeRetainedMovesLoop] 复杂度。
+     */
+    fun flushPendingMove(
+        result: MutableList<RetainedMove>,
+        mergeState: MergeState,
+        oldPos: Int,
+        ctx: RetainedMovesContext,
+    ) {
+        if (mergeState.merging) {
+            val newPos = oldPos - ctx.oldSuffixStart + ctx.newSuffixStart
+            if (newPos <= ctx.newTextLen) {
                 result.add(
                     RetainedMove(
-                        oldRange = TextRange(mergedOldStart, oldPos),
-                        newRange = TextRange(mergedNewStart, newPos),
+                        oldRange = TextRange(mergeState.mergedOldStart, oldPos),
+                        newRange = TextRange(mergeState.mergedNewStart, newPos),
                     ),
                 )
             }
         }
-        return result
     }
 }

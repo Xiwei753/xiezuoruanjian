@@ -98,9 +98,7 @@ impl WriterCoreApi {
             return Some(s);
         }
         let core = self.core_read();
-        core.load_sync_secrets()
-            .ok()
-            .filter(|s| s.token.is_some())
+        core.load_sync_secrets().ok().filter(|s| s.token.is_some())
     }
 
     /// #644 评论 5462823517 第1节：API 层是否已显式设置 override。
@@ -114,9 +112,7 @@ impl WriterCoreApi {
     /// #644 评论 5462823517 第1节：读锁 — 纯读取操作用这个。
     /// 网络阶段（full_sync Transfer）不持任何 Core 锁。
     pub(crate) fn core_read(&self) -> std::sync::RwLockReadGuard<'_, WriterCore> {
-        self.core_instance
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
+        self.core_instance.read().unwrap_or_else(|e| e.into_inner())
     }
 
     /// #644 评论 5462823517 第1节：写锁 — 会修改本地文件或 Core 运行状态的操作用这个。

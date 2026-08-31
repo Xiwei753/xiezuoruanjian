@@ -193,24 +193,27 @@ class ProjectViewModel(
                 // #644 评论 5467821839 第7节：一次 FFI 调用拿到完整快照，
                 // 不再逐卷调 getVolumes + getChapters + getProjectStats。
                 val snapshot = repo.getProjectWorkspaceSnapshot(projectId)
-                val volumes = snapshot.volumes.map { vwc ->
-                    VolumeUiModel(
-                        id = vwc.volume.id,
-                        title = vwc.volume.title,
-                        chapters = vwc.chapters.map { ch ->
-                            ChapterUiModel(
-                                id = ch.id,
-                                title = ch.title,
-                                wordCount = ch.wordCount,
-                            )
-                        },
+                val volumes =
+                    snapshot.volumes.map { vwc ->
+                        VolumeUiModel(
+                            id = vwc.volume.id,
+                            title = vwc.volume.title,
+                            chapters =
+                                vwc.chapters.map { ch ->
+                                    ChapterUiModel(
+                                        id = ch.id,
+                                        title = ch.title,
+                                        wordCount = ch.wordCount,
+                                    )
+                                },
+                        )
+                    }
+                val stats =
+                    ProjectStatsUiModel(
+                        totalWordCount = snapshot.stats.totalWordCount,
+                        volumeCount = snapshot.stats.volumeCount,
+                        chapterCount = snapshot.stats.chapterCount,
                     )
-                }
-                val stats = ProjectStatsUiModel(
-                    totalWordCount = snapshot.stats.totalWordCount,
-                    volumeCount = snapshot.stats.volumeCount,
-                    chapterCount = snapshot.stats.chapterCount,
-                )
                 Result.success(ProjectSnapshot(volumes, stats))
             } catch (e: CancellationException) {
                 throw e

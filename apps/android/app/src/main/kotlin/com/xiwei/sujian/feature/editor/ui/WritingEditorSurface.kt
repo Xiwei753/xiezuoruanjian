@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
@@ -22,7 +23,26 @@ import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
 import com.xiwei.sujian.feature.editor.visual.ComposeTextAnimationOverlay
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import androidx.compose.ui.text.TextRange as ComposeTextRange
+
+/** 正文编辑器内容参数 — 提取以降低 [WritingEditorContent] 参数列表长度。 */
+data class WritingEditorContentParams(
+    val bridge: EditorTextFieldStateBridge,
+    val visualState: ComposeEditorVisualState,
+    val viewportState: EditorViewportState,
+    val textStyle: TextStyle,
+    val textColor: Color,
+    val cursorColor: Color,
+    val inputEnabled: Boolean,
+    val onSurfaceReady: () -> Boolean,
+    val hiddenRanges: List<ComposeTextRange>,
+    val drawsVisualCursor: Boolean,
+    val searchHighlights: List<TextRange>,
+    val searchHighlightColor: Color,
+    val modifier: Modifier,
+)
 
 /**
  * #641 评论1 第3节：活动/非活动 target 渲染模式。
@@ -103,6 +123,45 @@ fun WritingEditorSurface(
 ) {
     val hiddenRanges by visualState.hiddenRanges.collectAsStateWithLifecycle()
     val drawsVisualCursor by visualState.drawsVisualCursor.collectAsStateWithLifecycle()
+
+    WritingEditorContent(
+        params =
+            WritingEditorContentParams(
+                bridge = bridge,
+                visualState = visualState,
+                viewportState = viewportState,
+                textStyle = textStyle,
+                textColor = textColor,
+                cursorColor = cursorColor,
+                inputEnabled = inputEnabled,
+                onSurfaceReady = onSurfaceReady,
+                hiddenRanges = hiddenRanges,
+                drawsVisualCursor = drawsVisualCursor,
+                searchHighlights = searchHighlights,
+                searchHighlightColor = searchHighlightColor,
+                modifier = modifier,
+            ),
+    )
+}
+
+/**
+ * 正文编辑器内容 — 提取以降低 [WritingEditorSurface] 的认知复杂度。
+ */
+@Composable
+private fun WritingEditorContent(params: WritingEditorContentParams) {
+    val bridge = params.bridge
+    val visualState = params.visualState
+    val viewportState = params.viewportState
+    val textStyle = params.textStyle
+    val textColor = params.textColor
+    val cursorColor = params.cursorColor
+    val inputEnabled = params.inputEnabled
+    val onSurfaceReady = params.onSurfaceReady
+    val hiddenRanges = params.hiddenRanges
+    val drawsVisualCursor = params.drawsVisualCursor
+    val searchHighlights = params.searchHighlights
+    val searchHighlightColor = params.searchHighlightColor
+    val modifier = params.modifier
     val scope = rememberCoroutineScope()
 
     val outputTransformation =
@@ -149,20 +208,14 @@ fun WritingEditorSurface(
                 },
             onTextLayout = { getResult ->
                 getResult()?.let { result ->
-                    // #644 评论 5462826712 第2节：顺序固定为
-                    // 1. viewportState.onLayout(result) — 有 pending anchor 时只恢复一次
-                    // 2. visualState.onAuthoritativeLayout(...) — 动画只消费最终布局
-                    // 3. onSurfaceReady() — attach 成功才算输入 surface ready
-                    val restoreY = viewportState.onLayout(result)
-                    if (restoreY != null) {
-                        scope.launch { viewportState.scrollState.scrollTo(restoreY) }
-                    }
-                    visualState.onAuthoritativeLayout(
+                    onTextLayoutResult(
                         result = result,
-                        selection = bridge.state.selection,
-                        scrollY = viewportState.scrollState.value,
+                        viewportState = viewportState,
+                        visualState = visualState,
+                        bridge = bridge,
+                        scope = scope,
+                        onSurfaceReady = onSurfaceReady,
                     )
-                    onSurfaceReady()
                 }
             },
         )
@@ -175,6 +228,29 @@ fun WritingEditorSurface(
             modifier = Modifier.fillMaxSize(),
         )
     }
+}
+
+/**
+ * 处理 TextLayoutResult — 提取以降低认知复杂度。
+ */
+private fun onTextLayoutResult(
+    result: TextLayoutResult,
+    viewportState: EditorViewportState,
+    visualState: ComposeEditorVisualState,
+    bridge: EditorTextFieldStateBridge,
+    scope: CoroutineScope,
+    onSurfaceReady: () -> Boolean,
+) {
+    val restoreY = viewportState.onLayout(result)
+    if (restoreY != null) {
+        scope.launch { viewportState.scrollState.scrollTo(restoreY) }
+    }
+    visualState.onAuthoritativeLayout(
+        result = result,
+        selection = bridge.state.selection,
+        scrollY = viewportState.scrollState.value,
+    )
+    onSurfaceReady()
 }
 
 /**

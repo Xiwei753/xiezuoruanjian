@@ -14,7 +14,6 @@ import com.xiwei.sujian.feature.editor.presentation.confirmEditorAttached
 import com.xiwei.sujian.feature.editor.presentation.isCurrentChapter
 import com.xiwei.sujian.feature.editor.presentation.onEditorApplied
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
-import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 
@@ -158,51 +157,24 @@ private fun WritingPaneEditorContent(
             val bridge = viewModel.bridgeForTarget(targetId, uiState.content)
 
             val projection = coordinator.sessionCoordinator.getProjectionSnapshot(targetId)
-            val viewportState = com.xiwei.sujian.feature.editor.layout.rememberEditorViewportState(
-                targetId = targetId,
-                initialAnchor = projection?.viewportAnchor,
-            )
+            val viewportState =
+                com.xiwei.sujian.feature.editor.layout.rememberEditorViewportState(
+                    targetId = targetId,
+                    initialAnchor = projection?.viewportAnchor,
+                )
 
             val visualState = remember(targetId) { ComposeEditorVisualState() }
 
-            androidx.compose.runtime.DisposableEffect(targetId, viewportState) {
-                onDispose {
-                    val anchor = viewportState.snapshotAnchor()
-                    coordinator.sessionCoordinator.saveProjectionSnapshot(
-                        targetId,
-                        com.xiwei.sujian.feature.editor.projection.ProjectionSnapshot(anchor),
-                    )
-                }
-            }
+            SetupViewportSnapshot(targetId, viewportState, coordinator)
 
-            androidx.compose.runtime.LaunchedEffect(bridge) {
-                androidx.compose.runtime.snapshotFlow {
-                    com.xiwei.sujian.feature.editor.input.EditorInputSnapshot(
-                        text = bridge.state.text.toString(),
-                        selection = bridge.state.selection,
-                        composition = bridge.state.composition,
-                    )
-                }.collect(bridge::onInputSnapshot)
-            }
+            SetupInputSnapshotCollector(bridge)
 
-            val lastCommittedText by coordinator.lastCommittedTextFlow.collectAsStateWithLifecycle()
-            androidx.compose.runtime.LaunchedEffect(targetId, lastCommittedText) {
-                val committed = lastCommittedText
-                if (committed != null &&
-                    committed != bridge.mirroredText &&
-                    bridge.state.composition == null
-                ) {
-                    val snapshot = coordinator.queryTargetSnapshot(targetId)
-                    if (snapshot != null && snapshot.text != bridge.mirroredText) {
-                        viewModel.applyAuthoritativeToBridge(
-                            targetId,
-                            snapshot.text,
-                            snapshot.selectionAnchorUtf8,
-                            snapshot.selectionHeadUtf8,
-                        )
-                    }
-                }
-            }
+            SetupCommittedTextCollector(
+                targetId = targetId,
+                coordinator = coordinator,
+                viewModel = viewModel,
+                bridge = bridge,
+            )
 
             CollectAuthoritativeEditorSnapshots(
                 coordinator = coordinator,
@@ -218,15 +190,7 @@ private fun WritingPaneEditorContent(
                 coordinator = coordinator,
             )
 
-            val decorations = coordinator.getTargetDecorations(targetId)
-            val authoritativeText = bridge.mirroredText
-            val searchHighlightsUtf16 =
-                decorations?.searchHighlightsUtf8?.map { (start, end) ->
-                    val r =
-                        com.xiwei.sujian.feature.editor.input.TextOffsetUtils
-                            .utf16TextRangeForUtf8(authoritativeText, start, end)
-                    com.xiwei.sujian.feature.editor.projection.TextRange(r.start, r.end)
-                } ?: emptyList()
+            val searchHighlightsUtf16 = collectSearchHighlightsUtf16(coordinator, targetId, bridge)
 
             WritingEditorSurface(
                 bridge = bridge,
@@ -255,10 +219,97 @@ private fun WritingPaneEditorContent(
 }
 
 /**
+ * 设置 viewport snapshot 保存 — 提取以降低 [WritingPaneEditorContent] 长度。
+ */
+@Composable
+private fun SetupViewportSnapshot(
+    targetId: String,
+    viewportState: com.xiwei.sujian.feature.editor.layout.EditorViewportState,
+    coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
+) {
+    androidx.compose.runtime.DisposableEffect(targetId, viewportState) {
+        onDispose {
+            val anchor = viewportState.snapshotAnchor()
+            coordinator.sessionCoordinator.saveProjectionSnapshot(
+                targetId,
+                com.xiwei.sujian.feature.editor.projection.ProjectionSnapshot(anchor),
+            )
+        }
+    }
+}
+
+/**
+ * 设置 input snapshot 收集器 — 提取以降低 [WritingPaneEditorContent] 长度。
+ */
+@Composable
+private fun SetupInputSnapshotCollector(bridge: com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge) {
+    androidx.compose.runtime.LaunchedEffect(bridge) {
+        androidx.compose.runtime.snapshotFlow {
+            com.xiwei.sujian.feature.editor.input.EditorInputSnapshot(
+                text = bridge.state.text.toString(),
+                selection = bridge.state.selection,
+                composition = bridge.state.composition,
+            )
+        }.collect(bridge::onInputSnapshot)
+    }
+}
+
+/**
+ * 设置 committed text 收集器 — 提取以降低 [WritingPaneEditorContent] 长度。
+ */
+@Composable
+private fun SetupCommittedTextCollector(
+    targetId: String,
+    coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
+    viewModel: com.xiwei.sujian.feature.editor.presentation.EditorViewModel,
+    bridge: com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge,
+) {
+    val lastCommittedText by coordinator.lastCommittedTextFlow.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(targetId, lastCommittedText) {
+        val committed = lastCommittedText
+        if (committed != null &&
+            committed != bridge.mirroredText &&
+            bridge.state.composition == null
+        ) {
+            val snapshot = coordinator.queryTargetSnapshot(targetId)
+            if (snapshot != null && snapshot.text != bridge.mirroredText) {
+                viewModel.applyAuthoritativeToBridge(
+                    targetId,
+                    snapshot.text,
+                    snapshot.selectionAnchorUtf8,
+                    snapshot.selectionHeadUtf8,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 收集 UTF-16 搜索高亮 — 提取以降低 [WritingPaneEditorContent] 长度。
+ */
+@Composable
+private fun collectSearchHighlightsUtf16(
+    coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
+    targetId: String,
+    bridge: com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge,
+): List<com.xiwei.sujian.feature.editor.projection.TextRange> {
+    val decorations = coordinator.getTargetDecorations(targetId)
+    val authoritativeText = bridge.mirroredText
+    return decorations?.searchHighlightsUtf8?.map { (start, end) ->
+        val r =
+            com.xiwei.sujian.feature.editor.input.TextOffsetUtils
+                .utf16TextRangeForUtf8(authoritativeText, start, end)
+        com.xiwei.sujian.feature.editor.projection.TextRange(r.start, r.end)
+    } ?: emptyList()
+}
+
+/**
  * #641 评论 问题6d：编辑器 TextStyle 构造 — 字号/行距/首行缩进写进 Compose paragraph/text style。
  */
 @Composable
-private fun rememberEditorTextStyle(settings: com.xiwei.sujian.feature.editor.presentation.EditorSettingsState): androidx.compose.ui.text.TextStyle {
+private fun rememberEditorTextStyle(
+    settings: com.xiwei.sujian.feature.editor.presentation.EditorSettingsState,
+): androidx.compose.ui.text.TextStyle {
     val fontSizeSp =
         androidx.compose.ui.unit.TextUnit(
             settings.fontSize,
@@ -313,7 +364,7 @@ private fun rememberWritingPaneTarget(
         currentViewModel.onEditorApplied(event)
     }
     target.onCommit = { }
-    target.onCancel = {}
+    target.onCancel = { }
     target.updateProfile(TextEditorProfile.DocumentBody)
     target.updatePersistent(true)
 

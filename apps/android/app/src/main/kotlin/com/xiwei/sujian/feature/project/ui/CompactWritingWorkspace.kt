@@ -58,9 +58,10 @@ internal fun CompactWritingWorkspace(
                 volumeId = volumeId,
                 chapterId = chapterId,
                 chapterTitle = chapterTitle,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
                 onChapterSwitchFailed = onChapterSwitchFailed,
             )
         }

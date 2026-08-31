@@ -3,7 +3,6 @@ package com.xiwei.sujian.feature.editor.layout
 import androidx.compose.foundation.ScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Rect
@@ -82,11 +81,12 @@ class EditorViewportState(
         val textOffsetUtf16 = layout.getLineStart(line)
         val lineTop = layout.getLineTop(line)
         val lineBottom = layout.getLineBottom(line)
-        val fraction = if (lineBottom > lineTop) {
-            ((scrollY - lineTop) / (lineBottom - lineTop)).coerceIn(0f, 1f)
-        } else {
-            0f
-        }
+        val fraction =
+            if (lineBottom > lineTop) {
+                ((scrollY - lineTop) / (lineBottom - lineTop)).coerceIn(0f, 1f)
+            } else {
+                0f
+            }
         return ViewportAnchor(
             textOffsetUtf16 = textOffsetUtf16,
             offsetWithinLineFraction = fraction,
@@ -98,7 +98,10 @@ class EditorViewportState(
      *
      * @return 需要 scrollTo 的 Y 值；null 表示 anchor 无效。
      */
-    private fun restoreFromAnchor(layout: TextLayoutResult, anchor: ViewportAnchor): Int? {
+    private fun restoreFromAnchor(
+        layout: TextLayoutResult,
+        anchor: ViewportAnchor,
+    ): Int? {
         val line = layout.getLineForOffset(anchor.textOffsetUtf16)
         val lineTop = layout.getLineTop(line)
         val lineBottom = layout.getLineBottom(line)

@@ -85,9 +85,7 @@ impl WriterCoreApi {
                 chapter_count: 0,
             });
 
-        let volumes = core
-            .list_volumes(project_id)
-            .map_err(WriterError::from)?;
+        let volumes = core.list_volumes(project_id).map_err(WriterError::from)?;
 
         let mut volume_snapshots = Vec::with_capacity(volumes.len());
         for vol in volumes {

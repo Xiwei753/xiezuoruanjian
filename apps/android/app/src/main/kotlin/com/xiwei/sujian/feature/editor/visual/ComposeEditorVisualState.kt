@@ -213,13 +213,15 @@ class ComposeEditorVisualState(
         val runningTransaction = _activeTransaction.value
         val frozenStartFrame =
             ComposeVisualRebase.materializeStartFrame(
-                transaction = runningTransaction,
-                textProgress = _currentTextProgress.value,
-                cursorProgress = _currentCursorProgress.value,
-                rebaseProgress = _currentRebaseProgress.value,
-                nextReplaceBounds = intentWithId.replaceBounds,
-                hiddenRanges = _hiddenRanges.value,
-                cursorSnapshot = _visualCursorSnapshot.value,
+                ComposeVisualRebase.MaterializeStartFrameParams(
+                    transaction = runningTransaction,
+                    textProgress = _currentTextProgress.value,
+                    cursorProgress = _currentCursorProgress.value,
+                    rebaseProgress = _currentRebaseProgress.value,
+                    nextReplaceBounds = intentWithId.replaceBounds,
+                    hiddenRanges = _hiddenRanges.value,
+                    cursorSnapshot = _visualCursorSnapshot.value,
+                ),
             )
 
         _activeIntent.update { intentWithId }

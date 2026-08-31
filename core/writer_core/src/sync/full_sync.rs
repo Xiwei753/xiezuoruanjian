@@ -255,9 +255,7 @@ pub fn transport_init_failure_error(category: &str, message: &str) -> crate::Err
         SyncErrorCategory::GithubNetworkFailed
         | SyncErrorCategory::DnsFailed
         | SyncErrorCategory::TlsFailed
-        | SyncErrorCategory::NetworkProbeFailed => {
-            crate::Error::SyncNetworkUnavailable { reason }
-        }
+        | SyncErrorCategory::NetworkProbeFailed => crate::Error::SyncNetworkUnavailable { reason },
         SyncErrorCategory::ApiRateLimited => crate::Error::SyncRateLimited {
             retry_after_secs: 0,
         },
@@ -299,7 +297,8 @@ fn build_protocol_error_fields(targets: &[TargetSyncResult]) -> Option<ProtocolE
     {
         return None;
     }
-    let overall_status = SyncStatus::FatalError("invalid_target_status_for_aggregation".to_string());
+    let overall_status =
+        SyncStatus::FatalError("invalid_target_status_for_aggregation".to_string());
     let dominant = targets
         .iter()
         .find(|t| is_protocol_error_status(&t.result.status));

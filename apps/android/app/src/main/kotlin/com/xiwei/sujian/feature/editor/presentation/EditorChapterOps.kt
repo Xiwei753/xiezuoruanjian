@@ -295,7 +295,10 @@ fun EditorViewModel.isCurrentChapter(
  * 除了当前章节身份，还必须调用 session coordinator 的 isInputLeaseCurrent(lease, targetId)。
  * 只有 lease 仍然属于当前 target/session/epoch 才 setInputFrozen(false)。
  */
-fun EditorViewModel.confirmEditorAttached(targetId: String, lease: com.xiwei.sujian.feature.editor.session.EditorInputLease) {
+fun EditorViewModel.confirmEditorAttached(
+    targetId: String,
+    lease: com.xiwei.sujian.feature.editor.session.EditorInputLease,
+) {
     val s = currentSession ?: return
     if (targetId == chapterTargetId(s.projectId, s.volumeId, s.chapterId)) {
         val coordinator = _sessionCoordinator ?: return
