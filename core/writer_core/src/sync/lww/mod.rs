@@ -19,18 +19,15 @@
 //! - 远端删除的文件移至 `app-meta/sync/trash/` 而非直接删除，防止同步异常导致数据丢失。
 //! - 下载使用 atomic rename（先写 .tmp 再 rename），保证中断不会留下半写入文件。
 
-use crate::sync::github_api_client::{
-    github_delete_content_serial, github_get_content, github_put_content_serial,
-};
+use crate::sync::github_api_client::github_get_content;
 use crate::sync::scanner::scan_for_sync;
 use crate::sync::types::{
     FirstSyncMode, ManifestFileRecord, SyncConfig, SyncConflict, SyncKind, SyncManifest,
     SyncResult, SyncSecrets, SyncState, SyncStatus,
 };
 use crate::sync::SyncService;
-use rayon::prelude::*;
 use std::path::Path;
-use writer_platform_api::{HttpRequest, SyncTransport};
+use writer_platform_api::SyncTransport;
 
 mod compare;
 mod manifest;
@@ -43,7 +40,10 @@ mod transfer;
 pub(crate) use compare::{classify_content_path, is_document_content_path, ContentClass};
 use compare::{three_way_resolve, ThreeWayResult};
 use manifest::{lww_record_time, SYNC_MANIFEST_PATH};
-use transfer::{save_conflict_copy, sync_download_pool};
+use transfer::{
+    delete_remote_files, download_pending_take_remote, download_remote_files, fetch_remote_manifest,
+    fetch_remote_tree, move_to_trash, save_conflict_copy, upload_local_files, upload_manifest,
+};
 
 /// 执行 LWW 同步 — 入口函数。
 ///
@@ -233,171 +233,12 @@ fn execute_lww_sync_attempt(
         "[sync] github_api step=正在拉取远端清单 remote_prefix={}",
         remote_prefix
     );
-    let tree_url = format!("{}/git/trees/{}?recursive=1", api_base, config.branch);
-    let tree_request = HttpRequest {
-        method: "GET".to_string(),
-        url: tree_url,
-        headers: vec![
-            ("Authorization".to_string(), format!("Bearer {}", token)),
-            ("User-Agent".to_string(), "WriterApp/1.0".to_string()),
-            (
-                "Accept".to_string(),
-                "application/vnd.github+json".to_string(),
-            ),
-        ],
-        body: None,
-    };
-    let tree_resp =
-        transport
-            .execute(tree_request)
-            .map_err(|e| crate::Error::SyncNetworkUnavailable {
-                reason: format!("{}: {}", e.category, e.message),
-            })?;
-
-    let mut remote_tree_files = std::collections::HashMap::new();
-    let tree_status = tree_resp.status;
-    let tree_body = String::from_utf8(tree_resp.body).unwrap_or_default();
-    if tree_status == 200 {
-        let json: serde_json::Value =
-            serde_json::from_str(&tree_body).map_err(|e| crate::Error::SyncGithubApiError {
-                category: "api_error".to_string(),
-                context: format!("invalid tree json: {}", e),
-                status: 0,
-                body_preview: String::new(),
-            })?;
-        if json["truncated"].as_bool().unwrap_or(false) {
-            return Err(crate::Error::SyncGithubApiError {
-                category: "api_error".to_string(),
-                context: "GitHub tree response truncated, repository is too large".to_string(),
-                status: 0,
-                body_preview: String::new(),
-            });
-        }
-        if let Some(tree) = json["tree"].as_array() {
-            let prefix_with_slash = format!("{}/", remote_prefix);
-            for item in tree {
-                if item["type"].as_str() == Some("blob") {
-                    if let (Some(path), Some(sha)) = (item["path"].as_str(), item["sha"].as_str()) {
-                        // 只保留以 remote_prefix/ 开头的远端路径，剥掉前缀后作为本地 relative path。
-                        if let Some(local_path) = path.strip_prefix(&prefix_with_slash) {
-                            remote_tree_files.insert(local_path.to_string(), sha.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    } else if tree_status == 404 {
-        let ref_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
-        let ref_request = HttpRequest {
-            method: "GET".to_string(),
-            url: ref_url,
-            headers: vec![
-                ("Authorization".to_string(), format!("Bearer {}", token)),
-                ("User-Agent".to_string(), "WriterApp/1.0".to_string()),
-                (
-                    "Accept".to_string(),
-                    "application/vnd.github+json".to_string(),
-                ),
-            ],
-            body: None,
-        };
-        let ref_resp =
-            transport
-                .execute(ref_request)
-                .map_err(|e| crate::Error::SyncNetworkUnavailable {
-                    reason: format!("{}: {}", e.category, e.message),
-                })?;
-        let ref_status = ref_resp.status;
-        if ref_status == 200 {
-            // 仓库和分支都存在，tree 404 说明是空仓库，remote_tree_files 保持为空
-            log::debug!(
-                "[sync] tree 404 but ref 200: branch {} exists with empty tree, treating as empty remote",
-                config.branch
-            );
-        } else if ref_status == 404 {
-            let repo_request = HttpRequest {
-                method: "GET".to_string(),
-                url: api_base.to_string(),
-                headers: vec![
-                    ("Authorization".to_string(), format!("Bearer {}", token)),
-                    ("User-Agent".to_string(), "WriterApp/1.0".to_string()),
-                    (
-                        "Accept".to_string(),
-                        "application/vnd.github+json".to_string(),
-                    ),
-                ],
-                body: None,
-            };
-            let repo_resp = transport.execute(repo_request).map_err(|e| {
-                crate::Error::SyncNetworkUnavailable {
-                    reason: format!("{}: {}", e.category, e.message),
-                }
-            })?;
-            let repo_status = repo_resp.status;
-            if repo_status == 200 {
-                // 仓库可访问但分支不存在
-                return Err(crate::Error::SyncRemoteBranchNotFound {
-                    detail: format!("branch '{}' not found in repository", config.branch),
-                });
-            } else if repo_status == 401 || repo_status == 403 {
-                return Err(crate::Error::SyncGithubApiError {
-                    category: "repo_not_found_or_no_permission".to_string(),
-                    context: "token lacks access to repository".to_string(),
-                    status: repo_status,
-                    body_preview: String::new(),
-                });
-            } else {
-                return Err(crate::Error::SyncGithubApiError {
-                    category: "repo_not_found_or_no_permission".to_string(),
-                    context: "repository not found or inaccessible".to_string(),
-                    status: repo_status,
-                    body_preview: String::new(),
-                });
-            }
-        } else if ref_status == 401 || ref_status == 403 {
-            return Err(crate::Error::SyncGithubApiError {
-                category: "repo_not_found_or_no_permission".to_string(),
-                context: "authentication failed or token lacks permission".to_string(),
-                status: ref_status,
-                body_preview: String::new(),
-            });
-        } else {
-            return Err(crate::Error::SyncGithubApiError {
-                category: "repo_not_found_or_no_permission".to_string(),
-                context: format!("unexpected HTTP {} when checking ref", ref_status),
-                status: ref_status,
-                body_preview: String::new(),
-            });
-        }
-    } else {
-        return Err(crate::sync::github_api_client::github_api_error(
-            "get recursive tree",
-            tree_status,
-            tree_body,
-        ));
-    }
+    let remote_tree_files =
+        fetch_remote_tree(transport, api_base, token, &config.branch, remote_prefix)?;
 
     let remote_manifest_path = format!("{}/{}", remote_prefix, SYNC_MANIFEST_PATH);
-    let mut remote_manifest = SyncManifest::default();
-    if remote_tree_files.contains_key(SYNC_MANIFEST_PATH) {
-        if let Some((content_bytes, _)) = github_get_content(
-            transport,
-            api_base,
-            token,
-            &config.branch,
-            &remote_manifest_path,
-        )? {
-            remote_manifest =
-                serde_json::from_slice::<SyncManifest>(&content_bytes).map_err(|e| {
-                    crate::Error::SyncGithubApiError {
-                        category: "api_error".to_string(),
-                        context: format!("invalid remote manifest: {}", e),
-                        status: 0,
-                        body_preview: String::new(),
-                    }
-                })?;
-        }
-    }
+    let remote_manifest =
+        fetch_remote_manifest(transport, api_base, token, &config.branch, remote_prefix, &remote_tree_files)?;
 
     log::debug!("[sync] github_api step=正在比较本地和远端");
     let local_entries = scan_for_sync(sync_root, scope)?;
@@ -558,52 +399,17 @@ fn execute_lww_sync_attempt(
             state.pending_take_remote.len()
         );
         let pending_paths: Vec<String> = state.pending_take_remote.iter().cloned().collect();
-        let download_pool = sync_download_pool(pending_paths.len())?;
-        let pending_results: crate::Result<Vec<_>> = download_pool.install(|| {
-            pending_paths
-                .par_iter()
-                .map(|path| {
-                    let remote_path = format!("{}/{}", remote_prefix, path);
-                    let remote = github_get_content(
-                        transport,
-                        api_base,
-                        token,
-                        &config.branch,
-                        &remote_path,
-                    )?;
-                    let Some((content, _sha)) = remote else {
-                        return Ok((path.clone(), None));
-                    };
+        let pending_results = download_pending_take_remote(
+            sync_root,
+            transport,
+            api_base,
+            token,
+            &config.branch,
+            remote_prefix,
+            &pending_paths,
+        )?;
 
-                    let full_path = sync_root.join(path);
-                    if let Some(parent) = full_path.parent() {
-                        std::fs::create_dir_all(parent).map_err(|e| {
-                            crate::Error::Io(std::io::Error::other(format!(
-                                "create pending_take_remote dir {}: {}",
-                                path, e
-                            )))
-                        })?;
-                    }
-                    let tmp_path =
-                        full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
-                    std::fs::write(&tmp_path, &content).map_err(|e| {
-                        crate::Error::Io(std::io::Error::other(format!(
-                            "write pending_take_remote {}: {}",
-                            path, e
-                        )))
-                    })?;
-                    std::fs::rename(&tmp_path, &full_path).map_err(|e| {
-                        crate::Error::Io(std::io::Error::other(format!(
-                            "rename pending_take_remote {}: {}",
-                            path, e
-                        )))
-                    })?;
-                    Ok((path.clone(), Some(content)))
-                })
-                .collect()
-        });
-
-        for (path, content) in pending_results? {
+        for (path, content) in pending_results {
             if let Some(content) = content {
                 let hash = format!("{:x}", md5::compute(&content));
                 state.known_files.insert(path.clone(), hash);
@@ -869,72 +675,23 @@ fn execute_lww_sync_attempt(
         }
     }
 
-    for path in &to_delete_local {
-        // 远端已删除的文件移至 trash 目录而非直接删除，
-        // 防止同步异常时用户数据丢失。trash 文件名格式：
-        // {timestamp}_{uuid}_{original_filename}
-        //
-        // 不变量：远端删除操作只在本地文件与远端记录一致（三路 NoConflict/RemoteChanged，
-        // 或 LWW 远端获胜）时执行。冲突路径不会进入 to_delete_local。
-        let full_path = sync_root.join(path);
-        if full_path.exists() {
-            let filename = full_path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            let trash_dir = sync_root.join("app-meta/sync/trash");
-            let _ = std::fs::create_dir_all(&trash_dir);
-            let trash_path = trash_dir.join(format!(
-                "{}_{}_{}",
-                chrono::Utc::now().timestamp_millis(),
-                uuid::Uuid::new_v4(),
-                filename
-            ));
-            // rename 失败时静默忽略：文件可能被其他进程占用或权限不足。
-            // 后果是本地文件残留，但 manifest 已记录远端删除，下次同步时
-            // 该文件会被视为本地新增（local-only），不会静默丢失用户数据。
-            let _ = std::fs::rename(&full_path, &trash_path);
-        }
-    }
+    // 远端已删除的文件移至 trash 目录而非直接删除，
+    // 防止同步异常时用户数据丢失。
+    //
+    // 不变量：远端删除操作只在本地文件与远端记录一致（三路 NoConflict/RemoteChanged，
+    // 或 LWW 远端获胜）时执行。冲突路径不会进入 to_delete_local。
+    move_to_trash(sync_root, &to_delete_local);
 
     log::debug!("[sync] github_api step=download newer remote files");
-    // 下载使用 rayon 并行线程池，线程数取 min(文件数, MAX_PARALLEL_DOWNLOADS)。
-    // 每个文件先写入临时文件（带随机后缀），再 rename 替换目标文件，
-    // 保证下载中断不会留下半写入文件。
-    if !to_download.is_empty() {
-        let download_pool = sync_download_pool(to_download.len())?;
-        let download_result: crate::Result<()> = download_pool.install(|| {
-            to_download.par_iter().try_for_each(|path| {
-                let remote_path = format!("{}/{}", remote_prefix, path);
-                let Some((content, _sha)) =
-                    github_get_content(transport, api_base, token, &config.branch, &remote_path)?
-                else {
-                    return Err(crate::Error::SyncGithubApiError {
-                        category: "api_error".to_string(),
-                        context: format!("remote file missing while downloading {}", path),
-                        status: 0,
-                        body_preview: String::new(),
-                    });
-                };
-                let full_path = sync_root.join(path);
-                if let Some(parent) = full_path.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| {
-                        crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e)))
-                    })?;
-                }
-                let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
-                std::fs::write(&tmp_path, content).map_err(|e| {
-                    crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e)))
-                })?;
-                std::fs::rename(tmp_path, &full_path).map_err(|e| {
-                    crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e)))
-                })?;
-                Ok(())
-            })
-        });
-        download_result?;
-    }
+    download_remote_files(
+        sync_root,
+        transport,
+        api_base,
+        token,
+        &config.branch,
+        remote_prefix,
+        &to_download,
+    )?;
 
     // 清除超过 30 天的 delete 墓碑记录，避免 manifest 无限膨胀。
     // 墓碑保留 30 天是为了让远端设备有足够时间拉取删除信息。
@@ -958,48 +715,35 @@ fn execute_lww_sync_attempt(
         .map_err(|e| crate::Error::Io(std::io::Error::other(format!("write manifest: {}", e))))?;
 
     log::debug!("[sync] github_api step=正在上传本地较新文件");
-    // 上传串行执行（GitHub API 要求 serial PUT 以避免 SHA 冲突），
-    // 每个 PUT 需要携带远端文件的当前 SHA（若存在），实现幂等的 create-or-update。
-    for path in &to_upload {
-        let full_path = sync_root.join(path);
-        if !full_path.exists() {
-            continue;
-        }
-        let content = std::fs::read(&full_path).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!("read {}: {}", path, e)))
-        })?;
-        let remote_path = format!("{}/{}", remote_prefix, path);
-        github_put_content_serial(
-            transport,
-            api_base,
-            token,
-            &config.branch,
-            &remote_path,
-            &content,
-            remote_tree_files.get(path).cloned(),
-        )?;
-    }
+    upload_local_files(
+        sync_root,
+        transport,
+        api_base,
+        token,
+        &config.branch,
+        remote_prefix,
+        &to_upload,
+        &remote_tree_files,
+    )?;
 
-    for path in &local_deletes_count {
-        let remote_path = format!("{}/{}", remote_prefix, path);
-        github_delete_content_serial(
-            transport,
-            api_base,
-            token,
-            &config.branch,
-            &remote_path,
-            remote_tree_files.get(path).cloned(),
-        )?;
-    }
+    delete_remote_files(
+        transport,
+        api_base,
+        token,
+        &config.branch,
+        remote_prefix,
+        &local_deletes_count,
+        &remote_tree_files,
+    )?;
 
-    github_put_content_serial(
+    upload_manifest(
         transport,
         api_base,
         token,
         &config.branch,
         &remote_manifest_path,
-        manifest_json.as_bytes(),
-        remote_tree_files.get(SYNC_MANIFEST_PATH).cloned(),
+        &manifest_json,
+        &remote_tree_files,
     )?;
 
     for conflict in &doc_conflicts {

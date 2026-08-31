@@ -79,11 +79,7 @@ impl WriterCoreApi {
         let stats: ProjectStatsDto = core
             .get_project_stats(project_id)
             .map(Into::into)
-            .unwrap_or(ProjectStatsDto {
-                total_word_count: 0,
-                volume_count: 0,
-                chapter_count: 0,
-            });
+            .map_err(WriterError::from)?;
 
         let volumes = core.list_volumes(project_id).map_err(WriterError::from)?;
 
@@ -91,7 +87,7 @@ impl WriterCoreApi {
         for vol in volumes {
             let chapters = core
                 .list_chapters(project_id, &vol.id)
-                .unwrap_or_default()
+                .map_err(WriterError::from)?
                 .into_iter()
                 .map(Into::into)
                 .collect();

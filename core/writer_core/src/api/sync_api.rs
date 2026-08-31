@@ -187,8 +187,9 @@ impl WriterCoreApi {
         &self,
         config: SyncConfigDto,
     ) -> ApiResult<FullSyncDiagnosticsResultDto> {
+        let secrets = self.secrets_override_snapshot().unwrap_or_default();
         self.core_write()
-            .perform_full_sync_diagnostics(&config.into())
+            .perform_full_sync_diagnostics(&config.into(), &secrets)
             .map(Into::into)
             .map_err(Into::into)
     }
@@ -198,8 +199,9 @@ impl WriterCoreApi {
         &self,
         config: SyncConfigDto,
     ) -> ApiResult<FullSyncDryRunResultDto> {
+        let secrets = self.secrets_override_snapshot().unwrap_or_default();
         self.core_write()
-            .perform_full_sync_dry_run(&config.into())
+            .perform_full_sync_dry_run(&config.into(), &secrets)
             .map(Into::into)
             .map_err(Into::into)
     }
@@ -215,22 +217,25 @@ impl WriterCoreApi {
     ) -> ApiResult<FullSyncResultDto> {
         let sync_config: crate::sync::SyncConfig = config.into();
 
-        // Phase 1: Prepare（短写锁）— 写 Syncing、加载 secrets、枚举 targets、创建 backend。
-        let (plan, backend) = {
+        // Snapshot secrets before acquiring core_write（避免持锁期间回调 override）。
+        let secrets = self.secrets_override_snapshot().unwrap_or_default();
+
+        // Phase 1: Prepare（短写锁）— 写 Syncing、枚举 targets、创建 backend + staging runs。
+        let (plan, backend, staging_runs) = {
             let core = self.core_write();
-            let plan = core.prepare_full_sync(&sync_config, force_sync)?;
+            let (plan, staging_runs) = core.prepare_full_sync(&sync_config, force_sync, secrets)?;
             let backend = core.create_sync_backend_for_plan(&sync_config)?;
-            (plan, backend)
+            (plan, backend, staging_runs)
         };
         // 写锁已释放。
 
         // Phase 2: Transfer（不持锁）— 网络 + 本地文件读写。
         let transfer_result = crate::sync::full_sync::run_transfer(backend.as_ref(), &plan);
 
-        // Phase 3: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引。
+        // Phase 3: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引、清理 staging。
         let result = {
             let core = self.core_write();
-            core.commit_full_sync(transfer_result)
+            core.commit_full_sync(transfer_result, staging_runs)
         };
 
         Ok(result.into())

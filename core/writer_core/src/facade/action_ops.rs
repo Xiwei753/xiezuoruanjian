@@ -198,7 +198,8 @@ impl super::WriterCore {
             }
             "sync.plan.preview" => {
                 let config = self.load_sync_config()?;
-                let plan_result = self.perform_full_sync_dry_run(&config);
+                let secrets = self.load_sync_secrets().unwrap_or_default();
+                let plan_result = self.perform_full_sync_dry_run(&config, &secrets);
                 match plan_result {
                     Ok(plan) => Ok(ActionResult {
                         success: true,

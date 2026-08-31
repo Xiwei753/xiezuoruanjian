@@ -15,7 +15,6 @@ import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import com.xiwei.sujian.feature.editor.presentation.EditorSettingsState
 import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
 import com.xiwei.sujian.feature.editor.presentation.applyExternalContentToUi
-import com.xiwei.sujian.feature.editor.presentation.confirmEditorAttached
 import com.xiwei.sujian.feature.editor.presentation.isCurrentChapter
 import com.xiwei.sujian.feature.editor.presentation.notifySyncMergeConflict
 import com.xiwei.sujian.feature.editor.presentation.reloadSettings
@@ -171,7 +170,7 @@ internal data class EditorAttachInputs(
     val chapter: ChapterRef,
 )
 
-/** 编辑器附着（beginEdit / confirmEditorAttached）。 */
+/** 编辑器附着（beginEdit）。 */
 @Composable
 internal fun WritingPaneEditorAttachSync(
     currentViewModel: EditorViewModel,
@@ -189,10 +188,6 @@ sealed interface EditorAttachAction {
     data object BeginEdit : EditorAttachAction
 
     data object Hold : EditorAttachAction
-
-    data object Confirm : EditorAttachAction
-
-    data object Wait : EditorAttachAction
 }
 
 fun editorAttachDecision(
@@ -203,13 +198,13 @@ fun editorAttachDecision(
     when (bindingState) {
         is WindowBindingState.Attached ->
             if (bindingState.windowId == windowId && bindingState.targetId == targetId) {
-                EditorAttachAction.Confirm
+                EditorAttachAction.Hold
             } else {
                 EditorAttachAction.BeginEdit
             }
         is WindowBindingState.Attaching ->
             if (bindingState.windowId == windowId && bindingState.targetId == targetId) {
-                EditorAttachAction.Wait
+                EditorAttachAction.Hold
             } else {
                 EditorAttachAction.BeginEdit
             }
@@ -246,15 +241,8 @@ private fun WritingPaneEditorAttach(
                     coordinator.beginEdit(targetId)
                 }
             }
-            EditorAttachAction.Confirm -> {
-                val lease = coordinator.attachSurface(targetId)
-                if (lease != null) {
-                    currentViewModel.confirmEditorAttached(targetId, lease)
-                }
-            }
-            EditorAttachAction.Wait -> {
-            }
             EditorAttachAction.Hold -> {
+                // do nothing - attach is confirmed only by WritingEditorSurface.onSurfaceReady()
             }
         }
     }

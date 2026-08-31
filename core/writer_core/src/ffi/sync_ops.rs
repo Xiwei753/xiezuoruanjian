@@ -84,8 +84,9 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
 pub unsafe extern "C" fn writer_core_full_sync_dry_run() -> *mut c_char {
     match with_core(|core| {
         let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+        let secrets = core.load_sync_secrets().unwrap_or_default();
         let plan = core
-            .perform_full_sync_dry_run(&config)
+            .perform_full_sync_dry_run(&config, &secrets)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&plan).unwrap_or_default())
     }) {
@@ -102,8 +103,9 @@ pub unsafe extern "C" fn writer_core_full_sync_dry_run() -> *mut c_char {
 pub unsafe extern "C" fn writer_core_full_sync_diagnostics() -> *mut c_char {
     match with_core(|core| {
         let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+        let secrets = core.load_sync_secrets().unwrap_or_default();
         let diag = core
-            .perform_full_sync_diagnostics(&config)
+            .perform_full_sync_diagnostics(&config, &secrets)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&diag).unwrap_or_default())
     }) {

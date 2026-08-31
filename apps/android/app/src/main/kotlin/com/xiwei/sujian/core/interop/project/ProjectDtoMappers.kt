@@ -1,5 +1,5 @@
 // #644 评论 5467821839 第7节：project/volume/chapter DTO mapper 独立文件，从 BridgeMappers.kt 抽出。
-package com.xiwei.sujian.core.interop.common
+package com.xiwei.sujian.core.interop.project
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.ChapterOpenResult
 import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt

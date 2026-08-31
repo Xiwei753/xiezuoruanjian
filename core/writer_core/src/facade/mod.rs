@@ -344,7 +344,8 @@ mod tests {
 
         let _project = core.create_project("Test Project").unwrap();
         let config = core.load_sync_config().unwrap();
-        let plan = core.perform_full_sync_dry_run(&config).unwrap();
+        let secrets = core.load_sync_secrets().unwrap_or_default();
+        let plan = core.perform_full_sync_dry_run(&config, &secrets).unwrap();
         // App target + 1 Project target，两个 target 都无文件需上传
         assert!(plan
             .targets

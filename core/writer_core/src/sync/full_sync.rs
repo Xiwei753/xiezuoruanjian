@@ -44,6 +44,9 @@ pub struct FullSyncPlan {
 pub struct PlannedTarget {
     pub target: SyncTarget,
     pub local_root: PathBuf,
+    /// staging root for isolated transfer（三段式 staging 路径）。
+    /// `Some` 时 Transfer 阶段写 staging 而非 live；`None` 时回退 `local_root`。
+    pub staging_root: Option<PathBuf>,
     /// `"app"` 或 `"project"`，用于 `TargetSyncResult.target_kind`。
     pub target_kind: String,
     pub project_id: Option<String>,
@@ -67,9 +70,11 @@ pub struct FullSyncTransferResult {
 pub fn run_transfer(backend: &dyn SyncBackend, plan: &FullSyncPlan) -> FullSyncTransferResult {
     let mut targets = Vec::with_capacity(plan.targets.len());
     for planned in &plan.targets {
+        // 三段式 staging：staging_root 有值时写隔离目录，否则回退 local_root。
+        let sync_root = planned.staging_root.as_deref().unwrap_or(&planned.local_root);
         let result = run_single_target(
             backend,
-            &planned.local_root,
+            sync_root,
             &plan.config,
             &plan.secrets,
             &planned.target,

@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.stats.data.interop
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.toModel
+import com.xiwei.sujian.core.interop.project.toModel
 import com.xiwei.sujian.feature.project.data.model.ProjectStats
 import com.xiwei.sujian.feature.stats.data.model.ChapterWritingStatsSummary
 import com.xiwei.sujian.feature.stats.data.model.DeviceWritingStatsSummary

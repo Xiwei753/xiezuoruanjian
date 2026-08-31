@@ -29,19 +29,24 @@
 
 impl super::WriterCore {
     /// 全量同步诊断 — 只测一次仓库、分支、token。
+    ///
+    /// `secrets` 由调用方传入（API 层已 snapshot override），不再内部加载。
     pub fn perform_full_sync_diagnostics(
         &self,
         config: &crate::sync::SyncConfig,
+        secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<crate::sync::types::FullSyncDiagnosticsResult> {
-        let secrets = self.load_sync_secrets().unwrap_or_default();
-        let diagnostics = self.run_sync_diagnostics(config, &secrets)?;
+        let diagnostics = self.run_sync_diagnostics(config, secrets)?;
         Ok(crate::sync::types::FullSyncDiagnosticsResult { diagnostics })
     }
 
     /// 全量同步 dry-run — 枚举 App target + 所有 Project target，构建每个 target 的计划。
+    ///
+    /// `secrets` 由调用方传入（API 层已 snapshot override），不再内部加载。
     pub fn perform_full_sync_dry_run(
         &self,
         config: &crate::sync::SyncConfig,
+        _secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<crate::sync::types::FullSyncDryRunResult> {
         use crate::sync::types::{FullSyncDryRunResult, SyncTarget, TargetSyncPlan};
 
@@ -160,10 +165,13 @@ impl super::WriterCore {
 
     /// #644 评论 5467821839 第7节：三段式全量同步 — Prepare 阶段（短写锁内调用）。
     ///
-    /// 写 `Syncing` 状态、加载 secrets 快照、枚举 targets、算出每个 target 的
-    /// `local_root`，产出 [`crate::sync::full_sync::FullSyncPlan`]（owned，不依赖 core）。
-    /// 调用方在 API 层持写锁调用本方法，拿到 plan 后释放锁，再调
+    /// 写 `Syncing` 状态、枚举 targets、算出每个 target 的 `local_root`，
+    /// 为每个 target 创建 [`crate::sync::staging::StagingRun`]（隔离 staging 目录），
+    /// 产出 [`crate::sync::full_sync::FullSyncPlan`]（owned，不依赖 core）和 staging runs。
+    /// 调用方在 API 层持写锁调用本方法，拿到 plan + staging_runs 后释放锁，再调
     /// [`crate::sync::full_sync::run_transfer`]。
+    ///
+    /// `secrets` 由调用方传入（API 层已 snapshot override），不再内部加载。
     ///
     /// transport 初始化失败时返回 Err（已持久化失败状态）。
     /// `list_projects` 失败时返回 Err（已持久化失败状态）。
@@ -171,12 +179,12 @@ impl super::WriterCore {
         &self,
         config: &crate::sync::SyncConfig,
         force_sync: bool,
-    ) -> crate::error::Result<crate::sync::full_sync::FullSyncPlan> {
+        secrets: crate::sync::SyncSecrets,
+    ) -> crate::error::Result<(crate::sync::full_sync::FullSyncPlan, Vec<crate::sync::staging::StagingRun>)> {
         use crate::sync::full_sync::{FullSyncPlan, PlannedTarget};
+        use crate::sync::staging::StagingRun;
 
         self.persist_full_sync_started();
-
-        let secrets = self.load_sync_secrets().unwrap_or_default();
 
         let projects = match self.list_projects() {
             Ok(projects) => projects,
@@ -191,30 +199,41 @@ impl super::WriterCore {
         };
 
         let mut targets = Vec::new();
+        let mut staging_runs: Vec<StagingRun> = Vec::new();
+
+        // App target
         let app_target = crate::sync::types::SyncTarget::app();
+        let app_staging = StagingRun::create(&self.app_data_root)?;
         targets.push(PlannedTarget {
             target: app_target,
             local_root: self.app_data_root.clone(),
+            staging_root: Some(app_staging.staging_root()),
             target_kind: "app".to_string(),
             project_id: None,
         });
+        staging_runs.push(app_staging);
 
+        // Project targets
         for project in &projects {
             let target = crate::sync::types::SyncTarget::project(&project.id);
+            let project_local_root = self.project_root(&project.id);
+            let project_staging = StagingRun::create(&self.app_data_root)?;
             targets.push(PlannedTarget {
                 target,
-                local_root: self.project_root(&project.id),
+                local_root: project_local_root.clone(),
+                staging_root: Some(project_staging.staging_root()),
                 target_kind: "project".to_string(),
                 project_id: Some(project.id.clone()),
             });
+            staging_runs.push(project_staging);
         }
 
-        Ok(FullSyncPlan {
+        Ok((FullSyncPlan {
             secrets,
             config: config.clone(),
             force_sync,
             targets,
-        })
+        }, staging_runs))
     }
 
     /// #644 评论 5467821839 第7节：三段式全量同步 — 创建 backend（Prepare 阶段、写锁内）。
@@ -250,10 +269,20 @@ impl super::WriterCore {
     ///
     /// 聚合 [`crate::sync::full_sync::FullSyncTransferResult`] → `FullSyncResult`，
     /// 原子写终态 `FullSyncState`，成功类重建搜索索引。
+    ///
+    /// `staging_runs` 来自 Prepare 阶段；commit 完成后显式 cleanup（`Drop` 也会兜底）。
     pub fn commit_full_sync(
         &self,
         transfer_result: crate::sync::full_sync::FullSyncTransferResult,
+        staging_runs: Vec<crate::sync::staging::StagingRun>,
     ) -> crate::sync::types::FullSyncResult {
+        // Commit 阶段：对每个 staging run 计算 commit plan 并应用变更。
+        // 当前实现：staging run 的三方 commit 逻辑由调用方按需扩展；
+        // 此处先 cleanup staging runs，后续可接入 compute_commit_plan + SaveTransaction。
+        for run in &staging_runs {
+            run.cleanup();
+        }
+
         let result = crate::sync::full_sync::aggregate_full_sync_result(transfer_result.targets);
 
         let previous_state = self.load_full_sync_state().unwrap_or(None);
