@@ -41,6 +41,18 @@ pub struct TransactionManifest {
     pub transaction_id: String,
     pub created_at_ms: i64,
     pub entries: Vec<TransactionEntry>,
+    /// #644 评论 5475805198 第1节：事务生命周期阶段。
+    /// 旧 manifest 中无此字段时反序列化为 `FilesCommitted`（向后兼容）。
+    #[serde(default = "default_phase")]
+    pub phase: TransactionPhase,
+    /// #644 评论 5475805198 第1节：backup 模式的备份条目，写入 manifest 供崩溃恢复。
+    /// 旧 manifest 中无此字段时反序列化为空 Vec（向后兼容）。
+    #[serde(default)]
+    pub backup_entries: Vec<BackupEntry>,
+}
+
+fn default_phase() -> TransactionPhase {
+    TransactionPhase::FilesCommitted
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,12 +66,32 @@ pub struct TransactionEntry {
     pub is_delete: bool,
 }
 
+/// #644 评论 5475805198 第1节：事务生命周期阶段。
+///
+/// 写入 manifest，供崩溃恢复判断事务进度：
+/// - `Prepared`：manifest 已写入，文件尚未 rename。
+/// - `FilesCommitted`：所有 rename 完成，无需 Git finalize（非 backup_mode）。
+/// - `FilesCommittedPendingGit`：rename 完成，等待 Git metadata finalize。
+/// - `Finished`：Git finalize 成功，可以清理。
+/// - `RolledBack`：rollback 已执行，可以清理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionPhase {
+    Prepared,
+    FilesCommitted,
+    FilesCommittedPendingGit,
+    Finished,
+    RolledBack,
+}
+
 /// #644 评论 5475413230 第1节：备份条目，替代空字符串哨兵。
 ///
 /// `String::new()` 表示"旧文件不存在"时，`backup_dir.join("")` 就是 backup 目录本身，
 /// `exists()` 为 true，随后 `fs::copy(目录, 文件)` 会失败。
 /// 用明确枚举消除歧义。
-#[derive(Debug, Clone)]
+///
+/// #644 评论 5475805198 第1节：可序列化，写入 manifest 供崩溃恢复使用。
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BackupEntry {
     /// 旧文件存在，rollback 时从备份恢复。
     RestoreFile {
@@ -157,8 +189,9 @@ impl SaveTransaction {
         self.backup_mode = true;
     }
 
-    /// #644 评论 5475110422 第3节 + #644 评论 5475413230 第1节：
-    /// 回滚 commit 写入的文件变更。
+    /// #644 评论 5475110422 第3节 + #644 评论 5475413230 第1节 +
+    /// #644 评论 5475805198 第1节：
+    /// 回滚 commit 写入的文件变更，更新 manifest phase 为 RolledBack 并清理事务目录。
     ///
     /// 仅在 `backup_mode` 且已 `commit` 后调用有效。
     /// 按 `BackupEntry` 明确恢复旧文件或删除本次新建文件。
@@ -166,7 +199,7 @@ impl SaveTransaction {
     /// - `RemoveCreated`：删除 commit 新建的文件；只有 `NotFound` 视为成功，
     ///   其它 IO 错误返回 `Err`。
     ///
-    /// 恢复完成后清理备份目录。
+    /// 恢复完成后更新 phase 并清理事务目录。
     #[allow(clippy::too_many_lines, clippy::cognitive_complexity, clippy::excessive_nesting)]
     pub fn rollback(&mut self) -> Result<()> {
         if !self.committed || !self.backup_mode {
@@ -198,15 +231,24 @@ impl SaveTransaction {
         }
         // 清理备份目录。
         let _ = fs::remove_dir_all(&backup_dir);
+        // #644 评论 5475805198 第1节：更新 manifest phase 为 RolledBack 并清理。
+        let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
+        let _ = self.write_manifest_phase(&manifest_path, TransactionPhase::RolledBack);
+        self.finished = true;
+        self.cleanup();
         Ok(())
     }
 
-    /// #644 评论 5475413230 第1节：Git finalize 成功后调用，清理事务目录。
+    /// #644 评论 5475413230 第1节 + #644 评论 5475805198 第1节：
+    /// Git finalize 成功后调用，更新 manifest phase 为 Finished 并清理事务目录。
     ///
     /// `backup_mode` 时 `commit()` 不再自动 cleanup；调用方必须在 Git finalize
     /// 完成后显式调用 `finish()`。非 backup_mode 时 `commit()` 已 cleanup，
     /// `finish()` 是空操作。
     pub fn finish(&mut self) {
+        // #644 评论 5475805198 第1节：更新 manifest phase 为 Finished。
+        let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
+        let _ = self.write_manifest_phase(&manifest_path, TransactionPhase::Finished);
         self.finished = true;
         self.cleanup();
     }
@@ -224,19 +266,14 @@ impl SaveTransaction {
             return Ok(());
         }
 
-        // 写入 manifest：记录暂存文件名 → 目标相对路径的映射，供崩溃恢复使用
-        let manifest = TransactionManifest {
-            transaction_id: self.transaction_id.clone(),
-            created_at_ms: chrono::Utc::now().timestamp_millis(),
-            entries: self.entries.clone(),
-        };
-        let manifest_json = serde_json::to_string_pretty(&manifest)?;
+        // #644 评论 5475805198 第1节：写入 manifest，phase=Prepared。
+        // 供崩溃恢复判断事务进度。
         let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
-        crate::storage::atomic_write_string(&manifest_path, &manifest_json)?;
+        self.write_manifest_phase(&manifest_path, TransactionPhase::Prepared)?;
 
         // 逐个 rename 暂存文件到最终目标路径（write）或删除目标文件（delete）。
         // rename 在同一文件系统上是原子的，但跨 N 个文件不保证原子性；
-        // committed 标记在全部 rename 完成后才写入，恢复时据此判断。
+        // phase 在全部 rename 完成后才更新，恢复时据此判断。
         //
         // #644 评论 5475110422 第3节：backup_mode 时先备份旧文件，支持 rollback。
         let backup_dir = if self.backup_mode {
@@ -302,9 +339,15 @@ impl SaveTransaction {
             }
         }
 
-        // committed 标记是事务完成的唯一判据：存在即表示所有 rename 已成功
-        let commit_marker = self.tx_dir.join(COMMIT_MARKER);
-        let _ = fs::write(&commit_marker, b"ok");
+        // #644 评论 5475805198 第1节：rename 全部完成后更新 manifest phase。
+        // backup_mode → FilesCommittedPendingGit（等待 Git finalize）；
+        // 非 backup_mode → FilesCommitted（无需 Git finalize）。
+        let phase = if self.backup_mode {
+            TransactionPhase::FilesCommittedPendingGit
+        } else {
+            TransactionPhase::FilesCommitted
+        };
+        self.write_manifest_phase(&manifest_path, phase)?;
 
         self.committed = true;
 
@@ -313,6 +356,42 @@ impl SaveTransaction {
         if !self.backup_mode {
             self.cleanup();
         }
+        Ok(())
+    }
+
+    /// #644 评论 5475805198 第1节：更新 manifest 中的 phase 字段。
+    ///
+    /// 读取现有 manifest（若存在），更新 phase 和 backup_entries，原子写回。
+    /// manifest 不存在时（理论上不应发生）创建最小 manifest。
+    fn write_manifest_phase(
+        &self,
+        manifest_path: &Path,
+        phase: TransactionPhase,
+    ) -> Result<()> {
+        let mut manifest = if manifest_path.exists() {
+            let content = fs::read_to_string(manifest_path)?;
+            serde_json::from_str::<TransactionManifest>(&content).unwrap_or_else(|_| {
+                TransactionManifest {
+                    transaction_id: self.transaction_id.clone(),
+                    created_at_ms: chrono::Utc::now().timestamp_millis(),
+                    entries: self.entries.clone(),
+                    phase: TransactionPhase::Prepared,
+                    backup_entries: Vec::new(),
+                }
+            })
+        } else {
+            TransactionManifest {
+                transaction_id: self.transaction_id.clone(),
+                created_at_ms: chrono::Utc::now().timestamp_millis(),
+                entries: self.entries.clone(),
+                phase: TransactionPhase::Prepared,
+                backup_entries: Vec::new(),
+            }
+        };
+        manifest.phase = phase;
+        manifest.backup_entries = self.backed_up_files.clone();
+        let json = serde_json::to_string_pretty(&manifest)?;
+        crate::storage::atomic_write_string(manifest_path, &json)?;
         Ok(())
     }
 
@@ -336,10 +415,16 @@ impl Drop for SaveTransaction {
 
 /// 扫描事务目录，恢复未完成的事务。
 ///
+/// #644 评论 5475805198 第1节：基于 manifest phase 的状态机恢复。
+///
 /// 判定逻辑：
-/// - `committed` 标记存在 → 事务已成功完成，清理目录
-/// - `manifest.json` 存在但无 `committed` → 中断的事务，尝试将暂存文件 rename 到目标
+/// - manifest 存在且 phase 为 `FilesCommitted`/`Finished`/`RolledBack` → 清理目录
+/// - manifest 存在且 phase 为 `FilesCommittedPendingGit` → 返回 `PendingGitRecovery`
+/// - manifest 存在且 phase 为 `Prepared` → 尝试将暂存文件 rename 到目标
+/// - 旧格式：`committed` 标记存在 → 清理目录（向后兼容）
 /// - 两者都不存在 → 无效目录，清理
+///
+/// 返回 `(常规恢复列表, 待 Git finalize 的恢复列表)`。
 // TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::too_many_lines,
@@ -353,16 +438,19 @@ impl Drop for SaveTransaction {
     clippy::cast_lossless,
     deprecated
 )]
-pub fn recover_pending_transactions(target_root: &Path) -> Vec<TransactionRecovery> {
+pub fn recover_pending_transactions(
+    target_root: &Path,
+) -> (Vec<TransactionRecovery>, Vec<PendingGitTransactionRecovery>) {
     let tx_base = target_root.join(TRANSACTIONS_DIR);
     if !tx_base.exists() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
     let mut results = Vec::new();
+    let mut pending_git = Vec::new();
     let entries = match fs::read_dir(&tx_base) {
         Ok(e) => e,
-        Err(_) => return Vec::new(),
+        Err(_) => return (Vec::new(), Vec::new()),
     };
 
     for entry in entries {
@@ -375,18 +463,65 @@ pub fn recover_pending_transactions(target_root: &Path) -> Vec<TransactionRecove
             continue;
         }
 
-        let commit_marker = tx_dir.join(COMMIT_MARKER);
-        if commit_marker.exists() {
-            let _ = fs::remove_dir_all(&tx_dir);
-            continue;
-        }
-
         let manifest_path = tx_dir.join(MANIFEST_FILENAME);
-        if !manifest_path.exists() {
+
+        // #644 评论 5475805198 第1节：优先读 manifest 获取 phase。
+        if manifest_path.exists() {
+            let manifest: TransactionManifest = match fs::read_to_string(&manifest_path) {
+                Ok(s) => match serde_json::from_str(&s) {
+                    Ok(m) => m,
+                    Err(_) => {
+                        let _ = fs::remove_dir_all(&tx_dir);
+                        continue;
+                    }
+                },
+                Err(_) => {
+                    let _ = fs::remove_dir_all(&tx_dir);
+                    continue;
+                }
+            };
+
+            match manifest.phase {
+                TransactionPhase::FilesCommitted
+                | TransactionPhase::Finished
+                | TransactionPhase::RolledBack => {
+                    // 事务已完成，清理目录。
+                    let _ = fs::remove_dir_all(&tx_dir);
+                    continue;
+                }
+                TransactionPhase::FilesCommittedPendingGit => {
+                    // #644 评论 5475805198 第1节：文件已 commit，Git finalize 未完成。
+                    // 返回给调用方处理（完成 Git finalize 或回滚文件）。
+                    log::warn!(
+                        "[transaction] found FilesCommittedPendingGit tx={}, \
+                         needs Git recovery",
+                        manifest.transaction_id
+                    );
+                    pending_git.push(PendingGitTransactionRecovery {
+                        transaction_id: manifest.transaction_id.clone(),
+                        manifest,
+                        target_root: target_root.to_path_buf(),
+                        tx_dir: tx_dir.clone(),
+                    });
+                    continue;
+                }
+                TransactionPhase::Prepared => {
+                    // 事务中断在 Prepared 阶段，尝试恢复 rename。
+                }
+            }
+        } else {
+            // 无 manifest：检查旧格式 committed marker（向后兼容）。
+            let commit_marker = tx_dir.join(COMMIT_MARKER);
+            if commit_marker.exists() {
+                let _ = fs::remove_dir_all(&tx_dir);
+                continue;
+            }
+            // 无 manifest 也无 committed marker → 无效目录。
             let _ = fs::remove_dir_all(&tx_dir);
             continue;
         }
 
+        // Prepared 阶段恢复：重放 rename。
         let manifest: TransactionManifest = match fs::read_to_string(&manifest_path) {
             Ok(s) => match serde_json::from_str(&s) {
                 Ok(m) => m,
@@ -469,7 +604,7 @@ pub fn recover_pending_transactions(target_root: &Path) -> Vec<TransactionRecove
         });
     }
 
-    results
+    (results, pending_git)
 }
 
 #[derive(Debug)]
@@ -477,6 +612,17 @@ pub struct TransactionRecovery {
     pub transaction_id: String,
     pub recovered_files: Vec<String>,
     pub missing_files: Vec<String>,
+}
+
+/// #644 评论 5475805198 第1节：FilesCommittedPendingGit 状态的事务恢复信息。
+///
+/// 文件已 commit 到 live，但 Git metadata finalize 尚未完成。
+/// 调用方需要决定：完成 Git finalize 或回滚文件。
+pub struct PendingGitTransactionRecovery {
+    pub transaction_id: String,
+    pub manifest: TransactionManifest,
+    pub target_root: PathBuf,
+    pub tx_dir: PathBuf,
 }
 
 #[cfg(test)]
@@ -536,6 +682,8 @@ mod tests {
             transaction_id: tx.transaction_id().to_string(),
             created_at_ms: chrono::Utc::now().timestamp_millis(),
             entries: tx.entries.clone(),
+            phase: TransactionPhase::Prepared,
+            backup_entries: Vec::new(),
         };
         let manifest_json = serde_json::to_string_pretty(&manifest).unwrap();
         fs::write(tx_dir.join(MANIFEST_FILENAME), &manifest_json).unwrap();
@@ -553,10 +701,11 @@ mod tests {
             .unwrap();
         }
 
-        let recovered = recover_pending_transactions(ws);
+        let (recovered, pending) = recover_pending_transactions(ws);
         assert_eq!(recovered.len(), 1);
         assert_eq!(recovered[0].recovered_files.len(), 2);
         assert!(recovered[0].missing_files.is_empty());
+        assert!(pending.is_empty());
     }
 
     #[test]
@@ -575,14 +724,17 @@ mod tests {
                 target_relative: "projects/p1/volumes/v1/chapters/c1/chapter.md".to_string(),
                 is_delete: false,
             }],
+            phase: TransactionPhase::Prepared,
+            backup_entries: Vec::new(),
         };
         let manifest_json = serde_json::to_string_pretty(&manifest).unwrap();
         fs::write(tx_dir.join(MANIFEST_FILENAME), &manifest_json).unwrap();
 
-        let recovered = recover_pending_transactions(ws);
+        let (recovered, pending) = recover_pending_transactions(ws);
         assert_eq!(recovered.len(), 1);
         assert_eq!(recovered[0].recovered_files.len(), 0);
         assert_eq!(recovered[0].missing_files.len(), 1);
+        assert!(pending.is_empty());
     }
 
     #[test]

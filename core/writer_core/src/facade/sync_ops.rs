@@ -674,7 +674,7 @@ impl super::WriterCore {
 ///
 /// `staging_runs` 与 `transfer_targets` 按索引对应。
 /// 返回每个 target 的 commit 结果 + 每个 target 的冲突列表。
-#[allow(clippy::excessive_nesting, clippy::too_many_lines)]
+#[allow(clippy::excessive_nesting, clippy::too_many_lines, clippy::cognitive_complexity)]
 fn apply_staging_commits_for_targets(
     staging_runs: &[crate::sync::staging::StagingRun],
     transfer_targets: &[crate::sync::types::TargetSyncResult],
@@ -734,19 +734,47 @@ fn apply_staging_commits_for_targets(
                         continue;
                     }
                 };
-                // #644 评论 5474772497 第1节 + #644 评论 5475110422 第1/3节：
-                // Git 专属 finalize — 把 staging 的 HEAD/refs/objects/index 同步回 live。
-                // 仅 Full 模式（成功类终态）调用；Conflict 不推进 live ref。
-                // 若 finalize 失败且 backup_mode，rollback SaveTransaction。
-                //
-                // #644 评论 5475413230 第1节：finalize 成功后必须调用 tx.finish()
-                // 清理事务目录（backup_mode 时 commit 不再自动 cleanup）。
-                if let Err(e) = crate::sync::git_staging::try_finalize_git_repo_metadata(
+                // #644 评论 5475805198 第2节：捕获 Git metadata 快照（在 commit 之前）。
+                let git_snapshot = if needs_git_finalize {
+                    let seed_state = match run.git_seed_state() {
+                        Some(s) => s,
+                        None => {
+                            // needs_git_finalize 为 true 时 git_seed_state 不应为 None。
+                            let msg = "git_seed_state missing despite needs_git_finalize=true";
+                            log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                            target_results.push(TargetCommitResult::Failed(msg.to_string()));
+                            target_conflicts.push(Vec::new());
+                            run.cleanup();
+                            continue;
+                        }
+                    };
+                    match crate::sync::git_commit::prepare_git_finalize(
+                        live_root,
+                        seed_state,
+                    ) {
+                        Ok(snap) => Some(snap),
+                        Err(e) => {
+                            let msg = format!("prepare_git_finalize failed: {}", e);
+                            log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                            target_results.push(TargetCommitResult::Failed(msg));
+                            target_conflicts.push(Vec::new());
+                            run.cleanup();
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                // #644 评论 5475805198 第2节：Git finalize 使用 git_commit 模块。
+                // 失败时自动 rollback Git metadata + SaveTransaction rollback。
+                if let Err(e) = crate::sync::git_commit::try_commit_git_finalize(
                     live_root,
                     &run.staging_root(),
                     run.git_seed_state(),
+                    git_snapshot.as_ref(),
                 ) {
-                    // #644 评论 5475110422 第3节：Git finalize 失败 → rollback 文件。
+                    // Git finalize 失败 → rollback 文件。
                     if let Err(rb_err) = tx.rollback() {
                         log::warn!(
                             "Staging commit: git finalize failed AND rollback failed: {} / {}",
@@ -760,7 +788,7 @@ fn apply_staging_commits_for_targets(
                     run.cleanup();
                     continue;
                 }
-                // #644 评论 5475413230 第1节：Git finalize 成功，清理事务目录。
+                // Git finalize 成功，清理事务目录。
                 tx.finish();
                 target_conflicts.push(plan.conflict);
                 target_results.push(TargetCommitResult::Ok);

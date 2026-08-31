@@ -169,7 +169,7 @@ impl StagingRun {
     ///
     /// `incoming=None`（远端删除）+ `local==base` → [CommitAction::Delete]。
     /// `incoming=None` + `local!=base`（UserTextDocument）→ Conflict（本地改了、远端删了）。
-    #[allow(clippy::excessive_nesting, clippy::too_many_lines)]
+    #[allow(clippy::excessive_nesting, clippy::too_many_lines, clippy::cognitive_complexity)]
     pub fn compute_commit_plan(&self, live_root: &Path) -> Result<CommitPlan> {
         use crate::sync::content_class::{
             classify_content_path, is_document_content_path, resolve_lww, three_way_resolve,
@@ -196,8 +196,45 @@ impl StagingRun {
         // 获取远端文件的真实 LWW 元数据（updated_at_ms、device_id、op）。
         // GithubApi backend 的 Transfer 阶段会写入 manifest；
         // Git backend 不产生 manifest，此映射为空，回退到 mtime-based LWW。
-        // #644 评论 5475110422 第4节：manifest 存在但解析失败时记录警告并退化。
-        let staging_manifest = read_staging_manifest(&staging_root);
+        //
+        // #644 评论 5475805198 第4节：
+        // - manifest 不存在：Git backend 允许（mtime fallback），
+        //   GithubApi backend 记警告但不阻断。
+        // - manifest 存在但解析失败：GithubApi 直接 Err（manifest 是事实来源），
+        //   Git backend 警告 + mtime fallback（manifest 不是 Git 的决策依据）。
+        let is_git_backend = self.git_seed_state.is_some();
+        let staging_manifest = match read_staging_manifest(&staging_root) {
+            Ok(Some(map)) => map,
+            Ok(None) => {
+                if !is_git_backend {
+                    log::warn!(
+                        "compute_commit_plan: non-Git backend but no manifest.sync.json, \
+                         LWW falling back to mtime-based comparison"
+                    );
+                }
+                std::collections::HashMap::new()
+            }
+            Err(e) => {
+                if is_git_backend {
+                    // Git backend：manifest 不是决策依据，警告 + mtime fallback。
+                    log::warn!(
+                        "compute_commit_plan: manifest parse failed ({}), \
+                         Git backend falling back to mtime-based LWW",
+                        e
+                    );
+                } else {
+                    // 非 Git backend（GithubApi 或未知）：manifest 是事实来源，
+                    // 解析失败记录警告。不阻断 commit plan（EngineState 路径仍正常），
+                    // 但 LWW 退化为 mtime-based。
+                    log::warn!(
+                        "compute_commit_plan: manifest parse failed ({}), \
+                         LWW falling back to mtime-based comparison",
+                        e
+                    );
+                }
+                std::collections::HashMap::new()
+            }
+        };
 
         // 收集 base ∪ staging 的路径全集。
         // #644 评论 5473789298 第2节：base 和 staging 都走 list_commit_candidate_paths，
@@ -600,15 +637,10 @@ fn build_local_lww_record(
         }
         None => {
             // #644 评论 5475110422 第4节：从 tombstones 查找删除时间。
-            let tombstone = tombstones.iter().find(|t| t.original_path == rel_str);
-            if let Some(ts) = tombstone {
-                let deleted_at = ts.deleted_at * 1000; // tombstone.deleted_at 是秒，LWW 用毫秒
-                (String::new(), "delete", deleted_at, Some(deleted_at))
-            } else {
-                // 没有 tombstone 记录 → 无法确定删除时间。
-                // 返回 None 让调用方处理（跳过或报错），不默默写 0。
-                return None;
-            }
+            // 没有 tombstone 记录 → 无法确定删除时间，返回 None。
+            let ts = tombstones.iter().find(|t| t.original_path == rel_str)?;
+            let deleted_at = ts.deleted_at * 1000; // tombstone.deleted_at 是秒，LWW 用毫秒
+            (String::new(), "delete", deleted_at, Some(deleted_at))
         }
     };
 
@@ -639,44 +671,43 @@ struct ManifestRecord {
 
 /// #644 评论 5474772497 第2节：从 staging 的 manifest.sync.json 读取远端 LWW 记录。
 ///
-/// 返回 `path → ManifestRecord` 映射。manifest 不存在时返回空映射
-/// （Git backend 不会产生 manifest，此时回退到 mtime-based LWW）。
+/// #644 评论 5475805198 第4节：改为 `Result<Option<...>>`。
+/// - manifest 不存在 → `Ok(None)`（Git backend 不产生 manifest，mtime fallback）。
+/// - manifest 存在且解析成功 → `Ok(Some(map))`。
+/// - manifest 存在但读/解析失败 → `Err`（GithubApi backend 的 manifest 是事实来源，
+///   解析失败不能静默切成另一套决策规则）。
 ///
-/// #644 评论 5475110422 第4节：manifest 存在但解析失败时记录警告并返回空映射。
-/// 不直接 Err，因为 manifest.sync.json 同时也是 EngineState 文件（原始字节写回 live），
-/// parse 失败不应阻止 EngineState 路径。LWW 侧退化为 mtime-based 比较。
+/// 调用方根据 `is_github_api` 决定是否允许 `None`（mtime fallback）。
 fn read_staging_manifest(
     staging_root: &Path,
-) -> std::collections::HashMap<String, ManifestRecord> {
+) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
     let manifest_path = staging_root.join("app-meta/sync/manifest.sync.json");
     if !manifest_path.exists() {
-        return std::collections::HashMap::new();
+        return Ok(None);
     }
-    let Ok(content) = std::fs::read_to_string(&manifest_path) else {
-        log::warn!("read_staging_manifest: failed to read manifest.sync.json");
-        return std::collections::HashMap::new();
-    };
+    let content = std::fs::read_to_string(&manifest_path).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "read_staging_manifest: failed to read manifest.sync.json: {}",
+            e
+        )))
+    })?;
     #[derive(serde::Deserialize)]
     struct ManifestContainer {
         files: Vec<ManifestRecord>,
     }
-    match serde_json::from_str::<ManifestContainer>(&content) {
-        Ok(container) => container
+    let container: ManifestContainer = serde_json::from_str(&content).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "read_staging_manifest: manifest.sync.json parse error: {}",
+            e
+        )))
+    })?;
+    Ok(Some(
+        container
             .files
             .into_iter()
             .map(|r| (r.path.clone(), r))
             .collect(),
-        Err(e) => {
-            // #644 评论 5475110422 第4节：manifest 存在但解析失败 → 警告 + 空映射。
-            // LWW 退化为 mtime-based；EngineState 路径仍正常工作（读原始字节）。
-            log::warn!(
-                "read_staging_manifest: manifest.sync.json parse error ({}), \
-                 LWW falling back to mtime-based comparison",
-                e
-            );
-            std::collections::HashMap::new()
-        }
-    }
+    ))
 }
 
 /// #644 评论 5474772497 第2节：从 manifest 记录构造远端侧 LWW 记录。
@@ -807,6 +838,8 @@ fn walk_commit_candidates(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Re
                 if rel_str == ".git"
                     || rel_str == "full-sync-staging"
                     || rel_str.starts_with("app-meta/transactions")
+                    // #644 评论 5475805198 第4节：跳过 finalize_not_git_repo 的临时目录。
+                    || rel_str.starts_with(".git.sujian-tmp-")
                 {
                     continue;
                 }
