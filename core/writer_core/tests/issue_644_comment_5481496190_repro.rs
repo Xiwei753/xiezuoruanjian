@@ -226,7 +226,10 @@ fn verify_problem2_lockfile_rename_recovers_stale_lock() {
 
     // ── 场景 1：rename 前 crash（lock 写完但 rename 未完成） ──
     // index 仍是旧内容，lock 存在（包含新内容或部分）。
-    // rollback 应清理 lock，index 保持旧内容（无需恢复）。
+    // #644 评论 5483239422 问题3 新语义：rollback 走三态判断，current == old(snapshot)
+    // → no-op，**不碰 lock**（不凭文件名判断 lock 是自己的，绝不删别人的 lock）。
+    // lock 拋留是保守选择——宁可拋留等显式清理/下次 forward install，也不冒险删
+    // 属于另一个 Git 进程的 lock。
     {
         // 恢复初始状态：index = old, 无 lock。
         writer_core::storage::atomic_write_bytes(&index_path, &old_index_bytes).unwrap();
@@ -249,27 +252,24 @@ fn verify_problem2_lockfile_rename_recovers_stale_lock() {
             repo_create_owner: None,
         };
 
+        // 新语义：current == old → no-op，返回 Ok，不碰 lock。
         rollback_git_finalize(&live, &snapshot, &plan).unwrap();
 
-        // 修复后正确行为：lock 被清理。
+        // 新语义（#644 评论 5483239422 问题3）：lock 仍存在。
+        // rollback 绝不删 lock（不凭文件名判断是自己的）。
         assert!(
-            !lock_path.exists(),
-            "FIX VERIFIED: rollback_git_finalize cleaned stale .git/index.lock \
-             (lockfile rename model: crash before rename → lock cleaned)"
+            lock_path.exists(),
+            "FIX VERIFIED (#644 评论 5483239422 问题3): rollback_git_finalize does NOT \
+             delete index.lock — current == snapshot.index → no-op, lock preserved \
+             (refusing to delete potentially external git process lock)"
         );
 
-        // index 保持旧内容（无需恢复，因为 rename 未发生）。
+        // index 保持旧内容（no-op，无需恢复）。
         let current_index = fs::read(&index_path).unwrap();
         assert_eq!(
             current_index, old_index_bytes,
-            "index should remain at old content (rename never happened)"
+            "index should remain at old content (no-op, current == snapshot.index)"
         );
-
-        // 后续 git index write 应成功（lock 已清理）。
-        let repo2 = git2::Repository::open(&live).unwrap();
-        let mut idx = repo2.index().unwrap();
-        idx.write()
-            .expect("subsequent index write must succeed after lock cleanup");
     }
 
     // ── 场景 2：rename 后 crash（index 是新内容，lock 已消失） ──

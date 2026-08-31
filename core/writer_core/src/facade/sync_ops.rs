@@ -821,22 +821,42 @@ fn apply_staging_commits_for_targets(
                     git_plan_ref,
                 ) {
                     Ok(()) => {
-                        // #644 评论 5482310913 问题1：先 tx.finish() 把文件+Git 事务
-                        // 正式收口，再清理 owner marker。
-                        // 这样崩溃窗口分析：
+                        // #644 评论 5482310913 问题1 + #644 评论 5483239422 问题1：
+                        // 先 tx.finish() 把文件+Git 事务正式收口。只有 finish 成功
+                        // （Finished phase 已持久化）后才清理 owner marker。
+                        // finish 失败时保留 tx_dir + marker，记为 Failed，下次恢复重试。
+                        // 崩溃窗口分析：
                         // - crash 在 tx.finish() 前：marker 还在，恢复知道这个 repo
                         //   是本轮创建的。
                         // - crash 在 tx.finish() 后、marker 删除前：事务已成功，
                         //   只会留下一个无害 marker，下次顺手清理即可。
-                        tx.finish();
-                        if let Some(plan) = git_plan_ref {
-                            crate::sync::git_commit::cleanup_repo_create_owner_marker(
-                                live_root, plan,
-                            );
+                        match tx.finish() {
+                            Ok(()) => {
+                                if let Some(plan) = git_plan_ref {
+                                    crate::sync::git_commit::cleanup_repo_create_owner_marker(
+                                        live_root, plan,
+                                    );
+                                }
+                                target_conflicts.push(plan.conflict);
+                                target_results.push(TargetCommitResult::Ok);
+                                run.cleanup();
+                            }
+                            Err(e) => {
+                                // #644 评论 5483239422 问题1：finish 失败——Finished
+                                // phase 未持久化。不删 owner marker，不 cleanup tx_dir，
+                                // 保留事务给下次恢复重试。
+                                let msg = format!(
+                                    "git finalize succeeded but tx.finish() failed to persist \
+                                     Finished phase: {} — preserving tx_dir and owner marker \
+                                     for next recovery",
+                                    e
+                                );
+                                log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                                target_results.push(TargetCommitResult::Failed(msg));
+                                target_conflicts.push(Vec::new());
+                                // 不调用 run.cleanup()，保留 staging + tx_dir 给恢复流程。
+                            }
                         }
-                        target_conflicts.push(plan.conflict);
-                        target_results.push(TargetCommitResult::Ok);
-                        run.cleanup();
                     }
                     Err(GitFinalizeError::FinalizeFailed(e)) => {
                         // Git finalize 失败但 rollback 成功 → 回滚文件。

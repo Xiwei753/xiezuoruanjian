@@ -855,56 +855,48 @@ pub fn rollback_git_finalize(
     }
 
     // 2. repo_create=false：index + refs rollback。
-    //    #644 评论 5481496190 问题2：同时处理可能残留的 .git/index.lock。
-    //    install_index_with_lock 用 lockfile rename 模型，崩溃窗口是：
-    //    - lock 写完但 rename 未完成 → lock 拋留，index 未变（仍是旧内容）。
-    //    - rename 完成 → lock 已消失，index 是新内容。
+    //    #644 评论 5483239422 问题2/3：三态幂等 + lockfile 反向提交边界。
+    //    - current == old(snapshot.index) → AlreadyReverted / no-op
+    //    - current == new(plan.new_index_sha256) → 反向恢复（lockfile 反向提交）
+    //    - 其它 → ConcurrentChanged (Err)
+    //    反向恢复用 create_new(true) 自己获取 .git/index.lock，lock 已存在 → Err，
+    //    绝不删别人的 lock（与 forward install_index_with_lock 同语义）。
     if let Some(expected_hash) = plan.new_index_sha256 {
         let index_path = live_root.join(".git").join("index");
         let lock_path = live_root.join(".git").join("index.lock");
 
-        let index_is_ours = if index_path.exists() {
-            let current_bytes = fs::read(&index_path)?;
-            sha256_bytes(&current_bytes) == expected_hash
+        // 读取当前 index 字节（不存在视为 Missing）。
+        let current_index = if index_path.exists() {
+            let bytes = fs::read(&index_path)?;
+            IndexSnapshot::Bytes(bytes)
         } else {
-            false
+            IndexSnapshot::Missing
         };
 
-        if index_is_ours {
-            // CAS 命中：本轮 install 已完成 rename（index 是新内容），恢复 snapshot.index。
-            match &snapshot.index {
-                IndexSnapshot::Bytes(original_bytes) => {
-                    crate::storage::atomic_write_bytes(&index_path, original_bytes)?;
-                }
-                IndexSnapshot::Missing => {
-                    if index_path.exists() {
-                        fs::remove_file(&index_path)?;
-                    }
-                }
-            }
-            // 恢复后清理可能残留的 lock（本轮崩溃窗口的 lock，index 已恢复）。
-            if lock_path.exists() {
-                let _ = fs::remove_file(&lock_path);
-            }
-        } else if lock_path.exists() {
-            // index 不是新内容但 lock 存在 → lockfile rename 模型下 lock 是本轮
-            // create_new 独占创建的（别人无法同时创建），属于本轮 install 的崩溃窗口
-            //（lock 写完但 rename 未完成，index 仍是旧内容）。
-            // 清理残留 lock，index 未变无需恢复。
-            let _ = fs::remove_file(&lock_path);
-            log::warn!(
-                "rollback_git_finalize: cleaned stale index.lock left by crashed install \
-                 (index unchanged, lock was ours by create_new exclusivity)"
-            );
+        // 三态判断：先判 old（AlreadyReverted），再判 new（需反向恢复），其它并发失败。
+        if index_snapshot_eq(&current_index, &snapshot.index) {
+            // current == old(snapshot.index) → 第一次 rollback 已恢复，no-op。
+            // 不碰 index，不碰 lock（lock 若存在属于别的 Git 进程）。
         } else {
-            // #644 评论 5482310913 问题3：index CAS miss 且 lock 不存在 → 真正并发修改
-            //（既不是 snapshot.index 也不是 plan.new_index_sha256）。
-            // 返回 Err 让上层保留 transaction，不继续回滚文件。
-            return Err(crate::Error::Io(std::io::Error::other(
-                "rollback_git_finalize: index CAS miss (concurrent modification, \
-                 current matches neither snapshot.index nor plan.new_index_sha256) — \
-                 refusing to continue rollback to preserve transaction for next recovery",
-            )));
+            // current != old，检查是否 == new（plan.new_index_sha256）。
+            let current_is_new = match &current_index {
+                IndexSnapshot::Bytes(b) => sha256_bytes(b) == expected_hash,
+                IndexSnapshot::Missing => false,
+            };
+            if !current_is_new {
+                // current 既不是 old 也不是 new → 真正并发修改。
+                return Err(crate::Error::Io(std::io::Error::other(
+                    "rollback_git_finalize: index CAS miss (concurrent modification, \
+                     current matches neither snapshot.index nor plan.new_index_sha256) — \
+                     refusing to continue rollback to preserve transaction for next recovery",
+                )));
+            }
+            // current == new(plan) → 需要反向恢复到 snapshot.index。
+            // 走 lockfile 反向提交边界（与 forward install_index_with_lock 同语义）：
+            // 1. create_new(true) 自己获取 .git/index.lock；lock 已存在 → Err，绝不删。
+            // 2. 拿到锁后重新读 index 确认仍 == new。
+            // 3. 把 snapshot.index 旧字节写进自己持有的 lock，fsync，rename(index.lock -> index)。
+            rollback_index_via_lockfile(&index_path, &lock_path, &snapshot.index)?;
         }
     }
 
@@ -931,8 +923,10 @@ pub fn rollback_git_finalize(
         let current = live_repo.find_reference(ref_name);
 
         match (&old_oid_str, current) {
-            // Ref was created by us (DidNotExist -> new_oid).
-            // Only delete if it still equals what we wrote.
+            // ref(old=None): finalize 会新建 ref。
+            // - current absent → no-op（AlreadyReverted 或从未创建）
+            // - current == new → delete（反向）
+            // - current == 其它 → ConcurrentChanged (Err)
             (None, Ok(current_ref)) => {
                 if current_ref.target() == Some(new_oid) {
                     // Still our value — safe to delete.
@@ -944,7 +938,8 @@ pub fn rollback_git_finalize(
                         )))
                     })?;
                 } else {
-                    // #644 评论 5482310913 问题3：ref CAS miss → 真正并发新状态。
+                    // #644 评论 5482310913 问题3 + #644 评论 5483239422 问题2：
+                    // ref CAS miss → 真正并发新状态。
                     return Err(crate::Error::Io(std::io::Error::other(format!(
                         "rollback_git_finalize: ref {} CAS miss (current != new_oid {}) — \
                          concurrent modification, refusing to continue rollback to preserve \
@@ -963,17 +958,22 @@ pub fn rollback_git_finalize(
                 ))));
             }
 
-            // Ref was updated by us (old_oid -> new_oid).
-            // #644 评论 5480360027 修复点 4：用反向 CAS `reference_matching`。
+            // ref(old=Some): finalize 会更新 ref old_oid -> new_oid。
+            // #644 评论 5483239422 问题2：三态幂等。
+            // - current == old → no-op（第一次 rollback 已反向 CAS 回 old，或本轮 finalize 未执行）
+            // - current == new → 反向 CAS 回 old（reference_matching expected=new, write=old）
+            // - current == 其它 / NotFound → ConcurrentChanged (Err)
             (Some(old_oid_str), Ok(current_ref)) => {
-                if current_ref.target() == Some(new_oid) {
-                    let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
-                        crate::Error::Io(std::io::Error::other(format!(
-                            "rollback_git_finalize: invalid old_oid for {}: {e}",
-                            ref_name
-                        )))
-                    })?;
-                    // 反向 CAS：只有 current == new_oid 时才写 old_oid。
+                let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "rollback_git_finalize: invalid old_oid for {}: {e}",
+                        ref_name
+                    )))
+                })?;
+                if current_ref.target() == Some(old_oid) {
+                    // current == old → no-op（AlreadyReverted 或本轮 finalize 未执行）。
+                } else if current_ref.target() == Some(new_oid) {
+                    // current == new → 反向 CAS：只有 current == new_oid 时才写 old_oid。
                     live_repo
                         .reference_matching(
                             ref_name,
@@ -989,23 +989,32 @@ pub fn rollback_git_finalize(
                             )))
                         })?;
                 } else {
-                    // #644 评论 5482310913 问题3：ref CAS miss → 真正并发新状态。
+                    // current 既不是 old 也不是 new → 真正并发新状态。
                     return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "rollback_git_finalize: ref {} CAS miss (current != new_oid {}) — \
-                         concurrent modification, refusing to continue rollback to preserve \
-                         transaction",
-                        ref_name, new_oid
+                        "rollback_git_finalize: ref {} CAS miss (current matches neither \
+                         old_oid {} nor new_oid {}) — concurrent modification, refusing to \
+                         continue rollback to preserve transaction",
+                        ref_name, old_oid, new_oid
                     ))));
                 }
             }
-            (Some(_), Err(e)) if e.code() == git2::ErrorCode::NotFound => {
-                // Ref was deleted by someone else after we wrote it.
-                // Don't recreate it — the deletion is a newer change。
-                log::warn!(
-                    "rollback_git_finalize: {} was deleted by concurrent process, \
-                     skipping restore",
-                    ref_name
-                );
+            (Some(old_oid_str), Err(e)) if e.code() == git2::ErrorCode::NotFound => {
+                // #644 评论 5483239422 问题2：ref(old=Some) 但当前 NotFound。
+                // old 存在过，finalize 应把它从 old 改到 new，现在 ref 消失了，
+                // 说明被并发进程删除——不能重建（重建会覆盖并发的删除意图）。
+                // 返回 Err 让上层保留 transaction。
+                let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "rollback_git_finalize: invalid old_oid for {}: {e}",
+                        ref_name
+                    )))
+                })?;
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "rollback_git_finalize: ref {} was deleted by concurrent process \
+                     (expected old_oid {} or new_oid {}) — refusing to recreate to preserve \
+                     concurrent deletion, transaction retained for next recovery",
+                    ref_name, old_oid, new_oid
+                ))));
             }
             (Some(_), Err(e)) => {
                 return Err(crate::Error::Io(std::io::Error::other(format!(
@@ -1699,6 +1708,92 @@ fn install_index_with_lock(
             .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
         dir.sync_all()
             .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+    }
+
+    Ok(())
+}
+
+/// #644 评论 5483239422 问题3：rollback index 的 lockfile 反向提交边界。
+///
+/// 与 forward `install_index_with_lock` 同语义，但方向相反：把 snapshot.index 的
+/// 旧字节写回 live index。关键安全约束：
+/// 1. 用 `create_new(true)` 自己获取 `.git/index.lock`。lock 已存在 → 返回 Err，
+///    **绝不删别人的 lock**（外部 Git 进程可能正在用）。
+/// 2. 拿到锁后重新读 index 确认仍等于 new（调用方已确认 current==new，但拿锁期间
+///    可能被并发改掉，需复验）。
+/// 3. 把 snapshot.index 旧字节写进自己持有的 lock，fsync，rename(index.lock -> index)。
+/// 4. snapshot.index == Missing 时：拿到锁后确认 index 仍存在，删除 index 文件。
+///
+/// 调用方已保证进入此函数前 `current_index == new`（plan.new_index_sha256 命中）。
+fn rollback_index_via_lockfile(
+    index_path: &Path,
+    lock_path: &Path,
+    snapshot_index: &IndexSnapshot,
+) -> Result<()> {
+    use std::io::Write;
+
+    // 1. 自己获取 .git/index.lock 独占锁。lock 已存在 → Err，绝不删。
+    let mut lock_file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(lock_path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(crate::Error::Io(std::io::Error::other(
+                "rollback_git_finalize: index.lock exists — refusing to delete external \
+                 git process lock; concurrent git operation in progress, preserving \
+                 transaction for next recovery",
+            )));
+        }
+        Err(e) => return Err(crate::Error::Io(e)),
+    };
+
+    // 2. 拿到锁后重新读 index，确认仍存在（调用方已确认 == new，拿锁期间未被并发删掉）。
+    //    若被并发删掉，清理自己的 lock 后返回 Err。
+    if !index_path.exists() {
+        let _ = fs::remove_file(lock_path);
+        return Err(crate::Error::Io(std::io::Error::other(
+            "rollback_git_finalize: index disappeared after acquiring lock (concurrent \
+             modification) — cleaned our lock, preserving transaction for next recovery",
+        )));
+    }
+
+    // 3. 把 snapshot.index 旧字节写进自己持有的 lock，fsync，rename(index.lock -> index)。
+    match snapshot_index {
+        IndexSnapshot::Bytes(original_bytes) => {
+            lock_file
+                .write_all(original_bytes)
+                .map_err(crate::Error::Io)?;
+            lock_file.flush().map_err(crate::Error::Io)?;
+            lock_file.sync_all().map_err(crate::Error::Io)?;
+            drop(lock_file);
+            // rename lock → index（原子提交 + 释放锁）。
+            if let Err(e) = fs::rename(lock_path, index_path) {
+                let _ = fs::remove_file(lock_path);
+                return Err(crate::Error::Io(e));
+            }
+        }
+        IndexSnapshot::Missing => {
+            // snapshot.index 不存在：finalize 前无 index，rollback 应删除 live index。
+            drop(lock_file);
+            // 先删自己的 lock，再删 index（index 不存在是终态，无需 rename）。
+            let _ = fs::remove_file(lock_path);
+            fs::remove_file(index_path).map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "rollback_git_finalize: failed to remove index after acquiring lock: {e}"
+                )))
+            })?;
+        }
+    }
+
+    // 4. fsync 父目录持久化目录项（Unix）。
+    #[cfg(unix)]
+    {
+        if let Some(parent) = index_path.parent() {
+            let dir = std::fs::File::open(parent).map_err(crate::Error::Io)?;
+            dir.sync_all().map_err(crate::Error::Io)?;
+        }
     }
 
     Ok(())
@@ -2419,5 +2514,242 @@ mod tests {
         // snapshot 是最小快照。
         assert!(!snapshot.repo_existed);
         assert!(matches!(snapshot.index, IndexSnapshot::Missing));
+    }
+
+    /// #644 评论 5483239422 问题2：Git rollback 不幂等。
+    ///
+    /// 复现策略：构造 live repo，index 已被第一次 rollback 恢复成 snapshot.index（old），
+    /// plan.new_index_sha256 指向 new_index（不同于当前）。第二次调用
+    /// `rollback_git_finalize` 应 no-op（current == old → AlreadyReverted）。
+    /// - 当前行为：`index_is_ours = (current == new)` 为 false，lock 不存在，
+    ///   走 `else` 分支返回 Err（index CAS miss），事务永久卡死。
+    /// - 预期行为：current == old(snapshot) → no-op，返回 Ok(Reverted)。
+    ///
+    /// 此测试断言预期行为（第二次 rollback 应成功），当前代码下断言失败。
+    #[test]
+    fn rollback_should_be_idempotent_when_index_already_reverted() {
+        crate::storage::git_runtime::ensure_initialized().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let live = tmp.path().join("live");
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("a.txt"), "hello").unwrap();
+
+        let repo = git2::Repository::init(&live).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("test", "test@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+
+        // original index bytes（snapshot.index）
+        let original_index = fs::read(live.join(".git").join("index")).unwrap();
+
+        // 修改 index 得到 new_index（plan.new）
+        fs::write(live.join("b.txt"), "new").unwrap();
+        let mut index2 = repo.index().unwrap();
+        index2.add_path(std::path::Path::new("b.txt")).unwrap();
+        index2.write().unwrap();
+        let new_index = fs::read(live.join(".git").join("index")).unwrap();
+        let new_index_hash = sha256_bytes(&new_index);
+
+        // 模拟第一次 rollback 已执行：把 index 恢复成 original（== snapshot.index）。
+        fs::write(live.join(".git").join("index"), &original_index).unwrap();
+
+        let snapshot = GitMetadataSnapshot {
+            head: RefSnapshot::Symbolic {
+                target: "refs/heads/main".to_string(),
+            },
+            refs: std::collections::BTreeMap::new(),
+            index: IndexSnapshot::Bytes(original_index),
+            repo_existed: true,
+        };
+        let plan = GitFinalizePlan {
+            repo_create: false,
+            new_index_sha256: Some(new_index_hash),
+            ref_plans: Vec::new(),
+            repo_create_owner: None,
+        };
+
+        // 第二次 rollback：current index == original (== snapshot.index)。
+        // 预期：no-op，返回 Ok(Reverted)。
+        // 当前：index CAS miss（current != new），返回 Err。
+        let result = rollback_git_finalize(&live, &snapshot, &plan);
+        assert!(
+            result.is_ok(),
+            "rollback should be idempotent when index already reverted to snapshot; \
+             current code returns Err (index CAS miss because current == old is not \
+             recognized as AlreadyReverted), permanently stucking the transaction"
+        );
+    }
+
+    /// #644 评论 5483239422 问题2（ref 部分）：ref rollback 不幂等。
+    ///
+    /// 复现策略：构造 live repo，ref 已被第一次 rollback 反向 CAS 回 old_oid，
+    /// plan 记录 old_oid -> new_oid。第二次调用 `rollback_git_finalize` 应 no-op
+    /// （current == old → no-op）。
+    /// - 当前行为：`old_oid=Some` 时只接受 `current == new_oid`，current == old_oid
+    ///   走 else 分支返回 Err（ref CAS miss），事务永久卡死。
+    /// - 预期行为：current == old → no-op，返回 Ok(Reverted)。
+    ///
+    /// 此测试断言预期行为（第二次 rollback 应成功），当前代码下断言失败。
+    #[test]
+    fn rollback_should_be_idempotent_when_ref_already_reverted() {
+        crate::storage::git_runtime::ensure_initialized().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let live = tmp.path().join("live");
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("a.txt"), "hello").unwrap();
+
+        let repo = git2::Repository::init(&live).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("test", "test@example.com").unwrap();
+        let old_oid = repo
+            .commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        repo.reference_symbolic("HEAD", "refs/heads/main", true, "test: set HEAD")
+            .unwrap();
+
+        // 创建第二个 commit（new_oid），模拟 finalize 写入。
+        fs::write(live.join("b.txt"), "world").unwrap();
+        let mut index2 = repo.index().unwrap();
+        index2.add_path(std::path::Path::new("b.txt")).unwrap();
+        index2.write().unwrap();
+        let tree2_oid = index2.write_tree().unwrap();
+        let tree2 = repo.find_tree(tree2_oid).unwrap();
+        let old_commit = repo.find_commit(old_oid).unwrap();
+        let new_oid = repo
+            .commit(
+                Some("refs/heads/main"),
+                &sig,
+                &sig,
+                "second",
+                &tree2,
+                &[&old_commit],
+            )
+            .unwrap();
+
+        // 模拟第一次 rollback 已执行：把 ref 反向 CAS 回 old_oid。
+        repo.reference_matching(
+            "refs/heads/main",
+            old_oid,
+            true,
+            new_oid,
+            "simulate first rollback",
+        )
+        .unwrap();
+
+        let snapshot = GitMetadataSnapshot {
+            head: RefSnapshot::Symbolic {
+                target: "refs/heads/main".to_string(),
+            },
+            refs: std::collections::BTreeMap::from([(
+                "refs/heads/main".to_string(),
+                RefSnapshot::Existed {
+                    oid: old_oid.to_string(),
+                },
+            )]),
+            index: IndexSnapshot::Missing,
+            repo_existed: true,
+        };
+        let plan = GitFinalizePlan {
+            repo_create: false,
+            new_index_sha256: None,
+            ref_plans: vec![(
+                "refs/heads/main".to_string(),
+                Some(old_oid.to_string()),
+                new_oid.to_string(),
+            )],
+            repo_create_owner: None,
+        };
+
+        // 第二次 rollback：current ref == old_oid (== snapshot ref)。
+        // 预期：no-op，返回 Ok(Reverted)。
+        // 当前：ref CAS miss（current == old != new），返回 Err。
+        let result = rollback_git_finalize(&live, &snapshot, &plan);
+        assert!(
+            result.is_ok(),
+            "rollback should be idempotent when ref already reverted to old_oid; \
+             current code returns Err (ref CAS miss because current == old is not \
+             recognized as no-op), permanently stucking the transaction"
+        );
+    }
+
+    /// #644 评论 5483239422 问题3：rollback index 误删外部 Git 进程的 index.lock。
+    ///
+    /// 复现策略：构造 live index == plan.new（本轮 install 成功），另一个正常 Git
+    /// 进程创建自己的 `.git/index.lock`。调用 `rollback_git_finalize`：
+    /// - 当前行为：`index_is_ours = true`，恢复 snapshot.index，然后
+    ///   `if lock_path.exists() { let _ = fs::remove_file(&lock_path); }` 删 lock，
+    ///   破坏外部 git add/checkout/merge。
+    /// - 预期行为：不应删别人的 lock。应走真正的 lockfile 反向提交边界：用
+    ///   `create_new(true)` 自己获取锁，lock 已存在则返回 ConcurrentChanged。
+    ///
+    /// 此测试断言预期行为（lock 应仍存在），当前代码下断言失败。
+    #[test]
+    fn rollback_should_not_delete_external_index_lock() {
+        crate::storage::git_runtime::ensure_initialized().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let live = tmp.path().join("live");
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("a.txt"), "hello").unwrap();
+
+        let repo = git2::Repository::init(&live).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("test", "test@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+
+        // original index bytes（snapshot.index）
+        let original_index = fs::read(live.join(".git").join("index")).unwrap();
+
+        // 修改 index 得到 new_index（模拟本轮 install 成功，index == plan.new）
+        fs::write(live.join("b.txt"), "new").unwrap();
+        let mut index2 = repo.index().unwrap();
+        index2.add_path(std::path::Path::new("b.txt")).unwrap();
+        index2.write().unwrap();
+        let new_index = fs::read(live.join(".git").join("index")).unwrap();
+        let new_index_hash = sha256_bytes(&new_index);
+
+        // 另一个正常 Git 进程创建自己的 index.lock（不属于本轮）。
+        let lock_path = live.join(".git").join("index.lock");
+        fs::write(&lock_path, b"external-git-process-lock-marker").unwrap();
+
+        let snapshot = GitMetadataSnapshot {
+            head: RefSnapshot::Symbolic {
+                target: "refs/heads/main".to_string(),
+            },
+            refs: std::collections::BTreeMap::new(),
+            index: IndexSnapshot::Bytes(original_index),
+            repo_existed: true,
+        };
+        let plan = GitFinalizePlan {
+            repo_create: false,
+            new_index_sha256: Some(new_index_hash),
+            ref_plans: Vec::new(),
+            repo_create_owner: None,
+        };
+
+        // rollback：current index == new_index，index_is_ours = true。
+        // 当前：恢复 original，然后删 lock（危险）。
+        // 预期：不应删别人的 lock。
+        let _ = rollback_git_finalize(&live, &snapshot, &plan);
+
+        assert!(
+            lock_path.exists(),
+            "rollback must NOT delete index.lock belonging to another Git process; \
+             current code removes it via `let _ = fs::remove_file(&lock_path)` after \
+             restoring index, breaking external git add/checkout/merge"
+        );
     }
 }

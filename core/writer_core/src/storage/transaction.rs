@@ -255,26 +255,36 @@ impl SaveTransaction {
         }
         // 清理备份目录。
         let _ = fs::remove_dir_all(&backup_dir);
-        // #644 评论 5475805198 第1节：更新 manifest phase 为 RolledBack 并清理。
+        // #644 评论 5475805198 第1节 + #644 评论 5483239422 问题1：
+        // 更新 manifest phase 为 RolledBack。不吞错——phase 持久化失败时返回 Err，
+        // 不设 finished、不 cleanup，保留 tx_dir 给下次恢复重试。
         let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
-        let _ = self.write_manifest_phase(&manifest_path, TransactionPhase::RolledBack);
+        self.write_manifest_phase(&manifest_path, TransactionPhase::RolledBack)?;
         self.finished = true;
         self.cleanup();
         Ok(())
     }
 
-    /// #644 评论 5475413230 第1节 + #644 评论 5475805198 第1节：
+    /// #644 评论 5475413230 第1节 + #644 评论 5475805198 第1节 +
+    /// #644 评论 5483239422 问题1：
     /// Git finalize 成功后调用，更新 manifest phase 为 Finished 并清理事务目录。
     ///
     /// `backup_mode` 时 `commit()` 不再自动 cleanup；调用方必须在 Git finalize
     /// 完成后显式调用 `finish()`。非 backup_mode 时 `commit()` 已 cleanup，
     /// `finish()` 是空操作。
-    pub fn finish(&mut self) {
-        // #644 评论 5475805198 第1节：更新 manifest phase 为 Finished。
+    ///
+    /// #644 评论 5483239422 问题1：返回 `Result<()>`，`write_manifest_phase(Finished)`
+    /// 失败时返回 Err，**不**设 finished、**不**调 cleanup，保留 tx_dir 给下次恢复。
+    /// 调用方（sync_ops）只有 finish 成功后才允许清 owner marker。
+    pub fn finish(&mut self) -> Result<()> {
+        // #644 评论 5475805198 第1节 + #644 评论 5483239422 问题1：
+        // 更新 manifest phase 为 Finished。用 `?` 传播错误，不吞错。
         let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
-        let _ = self.write_manifest_phase(&manifest_path, TransactionPhase::Finished);
+        self.write_manifest_phase(&manifest_path, TransactionPhase::Finished)?;
+        // Finished 已持久化成功，才设 finished 并 cleanup。
         self.finished = true;
         self.cleanup();
+        Ok(())
     }
 
     #[allow(
@@ -386,23 +396,26 @@ impl SaveTransaction {
     /// #644 评论 5475805198 第1节：更新 manifest 中的 phase 字段。
     ///
     /// 读取现有 manifest（若存在），更新 phase 和 backup_entries，原子写回。
-    /// manifest 不存在时（理论上不应发生）创建最小 manifest。
+    /// manifest 不存在时（首次写入）创建最小 manifest。
+    ///
+    /// #644 评论 5483239422 问题1：manifest 存在但反序列化失败时返回 Err，
+    /// **不**自动重建最小 manifest——重建会丢掉 backup_entries/git_finalize/plan
+    /// 崩溃恢复材料。调用方收到 Err 应保留 tx_dir 给下次恢复或显式修复。
     ///
     /// #644 评论 5476546134 第2节：同时写入 git_finalize recovery record。
     fn write_manifest_phase(&self, manifest_path: &Path, phase: TransactionPhase) -> Result<()> {
         let mut manifest = if manifest_path.exists() {
             let content = fs::read_to_string(manifest_path)?;
-            serde_json::from_str::<TransactionManifest>(&content).unwrap_or_else(|_| {
-                TransactionManifest {
-                    transaction_id: self.transaction_id.clone(),
-                    created_at_ms: chrono::Utc::now().timestamp_millis(),
-                    entries: self.entries.clone(),
-                    phase: TransactionPhase::Prepared,
-                    backup_entries: Vec::new(),
-                    git_finalize: None,
-                }
-            })
+            serde_json::from_str::<TransactionManifest>(&content).map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "write_manifest_phase: manifest at {} is corrupted (deserialize failed: {}); \
+                     refusing to rebuild minimal manifest to preserve backup_entries/git_finalize/plan",
+                    manifest_path.display(),
+                    e
+                )))
+            })?
         } else {
+            // manifest 不存在：首次写入，创建最小 manifest。
             TransactionManifest {
                 transaction_id: self.transaction_id.clone(),
                 created_at_ms: chrono::Utc::now().timestamp_millis(),
@@ -422,8 +435,20 @@ impl SaveTransaction {
         Ok(())
     }
 
+    /// #644 评论 5483239422 问题1：cleanup 不完全吞错。
+    ///
+    /// 调用方（finish/rollback/commit）已确保 phase 持久化成功，cleanup 只是尽力
+    /// 删除 tx_dir。删除失败时 log::warn，不影响业务正确性——下次启动
+    /// `recover_pending_transactions` 看到 Finished/RolledBack phase 会再删一次。
     fn cleanup(&self) {
-        let _ = fs::remove_dir_all(&self.tx_dir);
+        if let Err(e) = fs::remove_dir_all(&self.tx_dir) {
+            log::warn!(
+                "[transaction] cleanup: failed to remove tx_dir {}: {} \
+                 (phase already persisted, next recover will retry)",
+                self.tx_dir.display(),
+                e
+            );
+        }
     }
 }
 
@@ -618,13 +643,30 @@ pub fn recover_pending_transactions(
             let manifest: TransactionManifest = match fs::read_to_string(&manifest_path) {
                 Ok(s) => match serde_json::from_str(&s) {
                     Ok(m) => m,
-                    Err(_) => {
-                        let _ = fs::remove_dir_all(&tx_dir);
+                    Err(e) => {
+                        // #644 评论 5483239422 问题4：manifest 解析失败时保留 tx_dir。
+                        // transaction 目录含 backup_entries + GitMetadataSnapshot +
+                        // GitFinalizePlan 崩溃恢复材料，删除即销毁恢复证据。
+                        // 记录错误，等下次启动重试或显式修复入口。
+                        log::warn!(
+                            "[transaction] recover: manifest parse failed for tx_dir={}: {} \
+                             — preserving tx_dir (contains backup_entries/git_finalize/plan \
+                             recovery material), will retry next startup",
+                            tx_dir.display(),
+                            e
+                        );
                         continue;
                     }
                 },
-                Err(_) => {
-                    let _ = fs::remove_dir_all(&tx_dir);
+                Err(e) => {
+                    // #644 评论 5483239422 问题4：manifest 读取失败时保留 tx_dir。
+                    log::warn!(
+                        "[transaction] recover: manifest read failed for tx_dir={}: {} \
+                         — preserving tx_dir (contains backup_entries/git_finalize/plan \
+                         recovery material), will retry next startup",
+                        tx_dir.display(),
+                        e
+                    );
                     continue;
                 }
             };
@@ -716,16 +758,27 @@ pub fn recover_pending_transactions(
         }
 
         // Prepared 阶段恢复：重放 rename。
+        // #644 评论 5483239422 问题4：重读 manifest 失败时保留 tx_dir，不删恢复证据。
         let manifest: TransactionManifest = match fs::read_to_string(&manifest_path) {
             Ok(s) => match serde_json::from_str(&s) {
                 Ok(m) => m,
-                Err(_) => {
-                    let _ = fs::remove_dir_all(&tx_dir);
+                Err(e) => {
+                    log::warn!(
+                        "[transaction] recover: manifest re-read parse failed for tx_dir={}: {} \
+                         — preserving tx_dir, will retry next startup",
+                        tx_dir.display(),
+                        e
+                    );
                     continue;
                 }
             },
-            Err(_) => {
-                let _ = fs::remove_dir_all(&tx_dir);
+            Err(e) => {
+                log::warn!(
+                    "[transaction] recover: manifest re-read failed for tx_dir={}: {} \
+                     — preserving tx_dir, will retry next startup",
+                    tx_dir.display(),
+                    e
+                );
                 continue;
             }
         };
@@ -970,6 +1023,94 @@ mod tests {
         assert_eq!(
             fs::read_to_string(ws.join("sub/to_keep.txt")).unwrap(),
             "will be kept"
+        );
+    }
+
+    /// #644 评论 5483239422 问题1：`SaveTransaction::finish()` 吞掉
+    /// `write_manifest_phase(Finished)` 的错误，随后仍调用 `cleanup()` 删除 tx_dir。
+    ///
+    /// 复现策略：构造 backup_mode 事务 commit 成功（phase=FilesCommittedPendingGit），
+    /// 然后使 manifest 读取失败（把 manifest 文件替换为同名目录，使
+    /// `fs::read_to_string` 返回 Err）。此时调用 `finish()`：
+    /// - 当前行为：`let _ = write_manifest_phase(...)` 吞错，`finished=true`，
+    ///   `cleanup()` 执行 `remove_dir_all(tx_dir)`，tx_dir 被删，恢复证据丢失。
+    ///   调用方（sync_ops）完全不知道 Finished 没写成功，仍会删 owner marker。
+    /// - 预期行为：`finish()` 应返回 `Err`，不调用 `cleanup()`，tx_dir 保留，
+    ///   manifest 仍停在 FilesCommittedPendingGit，下次恢复可重试。
+    ///
+    /// 此测试断言预期行为（tx_dir 应保留），当前代码下断言失败。
+    #[test]
+    fn finish_should_preserve_tx_dir_when_manifest_write_fails() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path();
+
+        let mut tx = SaveTransaction::new(ws);
+        tx.enable_backup_mode();
+        tx.add_file("a.txt", "hello").unwrap();
+        tx.commit().unwrap();
+        // 此时 phase = FilesCommittedPendingGit，tx_dir 存在，manifest 存在。
+
+        // 使 manifest 读取失败：删除 manifest 文件，创建同名目录。
+        // fs::read_to_string(目录) 会返回 Err，write_manifest_phase 返回 Err。
+        let manifest_path = tx.tx_dir.join(MANIFEST_FILENAME);
+        fs::remove_file(&manifest_path).unwrap();
+        fs::create_dir(&manifest_path).unwrap();
+
+        // 当前：finish() 返回 ()，吞错，cleanup() 删 tx_dir。
+        // 预期：finish() 应返回 Err，不 cleanup，tx_dir 保留。
+        let finish_result = tx.finish();
+        assert!(
+            finish_result.is_err(),
+            "finish() should return Err when write_manifest_phase(Finished) fails; \
+             current code swallows the error via `let _ = ...` and returns ()"
+        );
+
+        // 预期：tx_dir 应保留（manifest 写失败，不应 cleanup）。
+        assert!(
+            tx.tx_dir.exists(),
+            "finish() should NOT cleanup tx_dir when write_manifest_phase(Finished) fails; \
+             current code swallows the error via `let _ = ...` and deletes tx_dir, \
+             losing recovery evidence while sync_ops still removes owner marker"
+        );
+    }
+
+    /// #644 评论 5483239422 问题4：`recover_pending_transactions()` 在 manifest
+    /// 读/解析失败时直接 `remove_dir_all(tx_dir)`，销毁崩溃恢复材料。
+    ///
+    /// 复现策略：构造 tx_dir 含损坏 manifest（无效 JSON）+ backup 恢复材料
+    /// （backup_entries + staging 文件），调用 `recover_pending_transactions`。
+    /// - 当前行为：manifest 解析失败，`remove_dir_all(tx_dir)`，恢复证据被销毁。
+    /// - 预期行为：记录错误并保留 tx_dir，不继续改 live，不删除 backup，
+    ///   等下次启动重试或显式修复入口。
+    ///
+    /// 此测试断言预期行为（tx_dir 应保留），当前代码下断言失败。
+    #[test]
+    fn recover_should_preserve_tx_dir_when_manifest_corrupted() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path();
+
+        let tx_dir = ws.join(TRANSACTIONS_DIR).join("corrupted-tx-644");
+        fs::create_dir_all(&tx_dir).unwrap();
+
+        // 写入损坏的 manifest（无效 JSON）。
+        fs::write(tx_dir.join(MANIFEST_FILENAME), "{ this is not valid json").unwrap();
+
+        // 放入 full-sync 崩溃恢复材料：backup + staging。
+        let backup_dir = tx_dir.join("backup");
+        fs::create_dir_all(&backup_dir).unwrap();
+        fs::write(backup_dir.join("backup_0"), "old file content").unwrap();
+        fs::write(tx_dir.join("file_0"), "staged content").unwrap();
+
+        // 当前：manifest 解析失败 → remove_dir_all(tx_dir) 销毁恢复证据。
+        // 预期：保留 tx_dir，等下次启动重试。
+        let _ = recover_pending_transactions(ws);
+
+        assert!(
+            tx_dir.exists(),
+            "recover must NOT delete tx_dir when manifest is corrupted; \
+             tx_dir contains backup_entries + GitMetadataSnapshot + GitFinalizePlan \
+             recovery material; current code remove_dir_all(tx_dir), destroying \
+             last recovery evidence"
         );
     }
 }
