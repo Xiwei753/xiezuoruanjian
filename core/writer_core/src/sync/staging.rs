@@ -126,6 +126,78 @@ impl StagingRun {
         Ok(())
     }
 
+    /// #644 评论 5473551127 第2节：Git 后端的隔离 staging — 保留仓库身份。
+    ///
+    /// 如果 live 已是 Git repo，用 `git clone --local` 创建 staging 副本，
+    /// 保留 HEAD、index、remote、历史（`--local` 让 clone 共享对象数据库，零拷贝优化）。
+    /// 如果 live 本来不是 repo，先 `git init`，再 seed 业务文件。
+    ///
+    /// 与 `seed_from_live` 的区别：不跳过 `.git/`，让 staging 成为完整 Git repo，
+    /// `SyncService::perform_sync` 在 staging 里能正确判断 `has_repo=true`。
+    pub fn seed_from_live_as_git_repo(&self, live_root: &Path) -> Result<()> {
+        let staging_root = self.staging_root();
+        let has_git = live_root.join(".git").exists();
+
+        if has_git {
+            // live 已是 Git repo：clone --local 保留仓库身份。
+            // git clone --local 会创建硬链接共享对象数据库（同文件系统时），
+            // 比完整复制快且节省空间。
+            let status = std::process::Command::new("git")
+                .args([
+                    "clone",
+                    "--local",
+                    "--no-checkout",
+                    live_root.to_str().unwrap_or(""),
+                    staging_root.to_str().unwrap_or(""),
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            match status {
+                Ok(s) if s.success() => {
+                    // checkout HEAD 到 worktree（--no-checkout 只克隆了 .git）
+                    let checkout_status = std::process::Command::new("git")
+                        .args(["checkout", "HEAD", "--", "."])
+                        .current_dir(&staging_root)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                    if let Ok(s) = checkout_status {
+                        if !s.success() {
+                            // checkout 失败（可能 unborn HEAD），回退到文件级 seed
+                            log::warn!(
+                                "git checkout HEAD failed in staging, falling back to file seed"
+                            );
+                            self.seed_from_live(live_root)?;
+                        }
+                    }
+                }
+                _ => {
+                    // clone 失败，回退到文件级 seed + git init
+                    log::warn!("git clone --local failed, falling back to git init + file seed");
+                    self.seed_from_live(live_root)?;
+                    // 在 staging 里初始化 git repo，让 has_repo 检测通过
+                    let _ = std::process::Command::new("git")
+                        .args(["init"])
+                        .current_dir(&staging_root)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                }
+            }
+        } else {
+            // live 不是 repo：先 seed 文件，再 git init
+            self.seed_from_live(live_root)?;
+            let _ = std::process::Command::new("git")
+                .args(["init"])
+                .current_dir(&staging_root)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+        Ok(())
+    }
+
     /// 三方比较生成 commit plan。
     ///
     /// #644 评论 5473105049 第2节：按 `base ∪ staging` 的路径全集做真正的三方比较，
@@ -235,23 +307,37 @@ impl StagingRun {
 /// #644 评论 5473401065 第1/2节：在**无 Core 锁**状态下创建并 seed 所有 staging runs。
 ///
 /// 纯函数，不依赖 `WriterCore`，可在无锁状态下调用。
-/// 对每个 target 创建 `StagingRun`，然后调 `seed_from_live` 从 live 初始化
-/// base snapshot + staging clone。
+/// 对每个 target 创建 `StagingRun`，然后根据 backend 类型选择对应准备方式：
+/// - `GithubApi`：调 `seed_from_live`（文件级复制，跳过 `.git/`）；
+/// - `Git`：调 `seed_from_live_as_git_repo`（`git clone --local`，保留仓库身份）。
 ///
 /// #644 评论 5473401065 第2节：seed 失败**不再**被 `log::warn!` 吞掉。
 /// 任何一个 target 的 seed 失败都意味着该 target 的 staging 是半成品，
 /// 不能拿来做三方比较。seed 失败直接返回 Err，让调用方终止本次 full sync。
 ///
+/// #644 评论 5473551127 第2节：Git 后端不能共用"复制业务文件但删掉 .git"的 staging，
+/// 否则 `SyncService::perform_sync` 在 staging 里判断 `has_repo=false`，
+/// 把已有仓库历史/HEAD/remote 语义全部丢掉。
+///
 /// 成功后 `plan.targets[*].staging_root` 被填充为对应 staging 目录。
 pub fn prepare_staging_runs(
     plan: &mut crate::sync::full_sync::FullSyncPlan,
+    backend_type: &crate::sync::types::BackendType,
 ) -> crate::error::Result<Vec<StagingRun>> {
     let mut staging_runs: Vec<StagingRun> = Vec::new();
 
     for planned in &mut plan.targets {
         let run = StagingRun::create(&plan.app_data_root, planned.target_live_root.clone())?;
         // #644 评论 5473401065 第2节：seed 失败必须传播，不能继续拿半成品 staging。
-        run.seed_from_live(&planned.target_live_root)?;
+        // #644 评论 5473551127 第2节：按 backend 类型选择对应 seed 方式。
+        match backend_type {
+            crate::sync::types::BackendType::Git => {
+                run.seed_from_live_as_git_repo(&planned.target_live_root)?;
+            }
+            crate::sync::types::BackendType::GithubApi => {
+                run.seed_from_live(&planned.target_live_root)?;
+            }
+        }
         planned.staging_root = Some(run.staging_root());
         staging_runs.push(run);
     }

@@ -236,7 +236,34 @@ impl WriterCoreApi {
         // Phase 2: Seed staging（不持锁）— 磁盘扫描/复制，创建隔离 staging 目录。
         // #644 评论 5473401065 第2节：seed 失败直接终止本次同步，不继续拿半成品。
         // prepare_staging_runs 是纯函数，不依赖 WriterCore，无需持锁。
-        let staging_runs = crate::sync::staging::prepare_staging_runs(&mut plan)?;
+        //
+        // #644 评论 5473551127 第1节：seed 失败时必须把 FullSyncState 从 Syncing
+        // 改为失败终态，否则下次启动/同步会永久看到上一次遗留的 Syncing。
+        //
+        // #644 评论 5473551127 第2节：按 backend 类型选择对应 staging 方式，
+        // Git 后端需要保留仓库身份（.git/HEAD/remote），不能共用 GithubApi 的文件复制。
+        let resolved_backend_type = crate::sync::resolved_backend_type(&sync_config);
+        let staging_runs =
+            match crate::sync::staging::prepare_staging_runs(&mut plan, &resolved_backend_type) {
+                Ok(runs) => runs,
+                Err(err) => {
+                    let status = crate::sync::full_sync::error_to_persist_status(&err);
+                    let status_str = match &status {
+                        crate::sync::SyncStatus::FatalError(_) => "fatal_error".to_string(),
+                        crate::sync::SyncStatus::RecoverableError(_) => {
+                            "recoverable_error".to_string()
+                        }
+                        _ => "fatal_error".to_string(),
+                    };
+                    // record_full_sync_preflight_failure 是 pub API，
+                    // persist_full_sync_early_failure 是 pub(super) 不可从 api 层调用。
+                    let _ = self.record_full_sync_preflight_failure(
+                        status_str,
+                        "staging_seed".to_string(),
+                    );
+                    return Err(err.into());
+                }
+            };
 
         // Phase 3: Transfer（不持锁）— 网络 + 本地文件读写。
         let transfer_result = crate::sync::full_sync::run_transfer(backend.as_ref(), &plan);

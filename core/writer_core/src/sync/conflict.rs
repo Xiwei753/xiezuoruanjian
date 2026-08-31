@@ -196,6 +196,64 @@ pub(crate) fn build_conflict_summary(
     }
 }
 
+/// #644 评论 5473551127 第3节：staging 三方冲突 → `SyncConflict` 映射 + 持久化。
+///
+/// 复用 [`SyncService::record_sync_conflict`] 写 `conflicts.json` + 备份本地冲突副本，
+/// 同时更新 `SyncState.conflicts` / `conflicted_files`。
+///
+/// 返回映射后的 `Vec<SyncConflict>`，供调用方填入 `SyncResult.conflicts`。
+/// 持久化失败必须返回 Err（不能只打日志），让对应 target 进入错误状态。
+pub fn record_staging_conflicts(
+    sync_root: &Path,
+    remote_prefix: &str,
+    staging_conflicts: &[crate::sync::staging::StagingConflict],
+) -> crate::Result<Vec<SyncConflict>> {
+    if staging_conflicts.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let now_ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0);
+
+    let mut state = crate::sync::SyncService::load_sync_state(sync_root)?;
+    let mut result = Vec::with_capacity(staging_conflicts.len());
+
+    for sc in staging_conflicts {
+        let rel_str = sc.rel_path.to_string_lossy().to_string();
+        let rel_unix = rel_str.replace('\\', "/");
+        let sync_conflict = SyncConflict {
+            local_path: rel_str.clone(),
+            remote_path: format!("{}/{}", remote_prefix, rel_unix),
+            local_hash: sc.local_hash.clone(),
+            remote_hash: sc.incoming_hash.clone(),
+            base_hash: sc.base_hash.clone(),
+            created_at: now_ts,
+            description: format!(
+                "three-way conflict: both local and remote changed {}",
+                sc.rel_path.display()
+            ),
+        };
+
+        // 复用 record_sync_conflict：写 conflicts.json + 备份本地冲突副本
+        crate::sync::SyncService::record_sync_conflict(
+            sync_root,
+            sync_conflict.clone(),
+            None, // staging 冲突不备份本地内容（内容在 staging commit plan 里）
+        )?;
+
+        // 更新 SyncState
+        state.conflicted_files.insert(rel_str);
+        state.conflicts.push(sync_conflict.clone());
+
+        result.push(sync_conflict);
+    }
+
+    crate::sync::SyncService::save_sync_state(sync_root, &state)?;
+    Ok(result)
+}
+
 impl crate::sync::SyncService {
     /// Remove conflict records for `path` from the `conflicts.json` file.
     /// This keeps the on-disk conflict list in sync with `state.conflicts`.

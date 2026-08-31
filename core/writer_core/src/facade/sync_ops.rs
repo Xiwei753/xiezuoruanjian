@@ -306,61 +306,32 @@ impl super::WriterCore {
             }
         }
 
-        // #644 评论 5473401065 第4节：三方冲突按 target 映射成 SyncConflict，
-        // 写入对应 target 的 SyncResult.conflicts + SyncState。
+        // #644 评论 5473401065 第4节 + #644 评论 5473551127 第3节：
+        // 三方冲突按 target 映射成 SyncConflict，复用 conflict.rs 的
+        // record_staging_conflicts() 统一写 conflicts.json + SyncState。
+        // 持久化失败必须传播到对应 target 的错误状态，不能只打日志。
         for (idx, target_conflicts) in commit_outcome.target_conflicts.iter().enumerate() {
             if target_conflicts.is_empty() {
                 continue;
             }
             if let Some(target) = targets.get_mut(idx) {
-                let now_ts = now_epoch_seconds();
-                for sc in target_conflicts {
-                    let sync_conflict = crate::sync::types::SyncConflict {
-                        local_path: sc.rel_path.to_string_lossy().to_string(),
-                        remote_path: format!(
-                            "{}{}",
-                            target.remote_prefix,
-                            sc.rel_path.to_string_lossy()
-                        ),
-                        local_hash: sc.local_hash.clone(),
-                        remote_hash: sc.incoming_hash.clone(),
-                        base_hash: sc.base_hash.clone(),
-                        created_at: now_ts,
-                        description: format!(
-                            "three-way conflict: both local and remote changed {}",
-                            sc.rel_path.display()
-                        ),
-                    };
-                    target.result.conflicts.push(sync_conflict);
-                }
-                // target 有冲突时状态改为 Conflict
-                target.result.status = crate::sync::SyncStatus::Conflict;
-
-                // 持久化到该 target live root 的 SyncState
-                let live_root = &staging_runs[idx].target_live_root();
-                if let Ok(mut state) = crate::sync::SyncService::load_sync_state(live_root) {
-                    for sc in target_conflicts {
-                        let rel_str = sc.rel_path.to_string_lossy().to_string();
-                        state.conflicted_files.insert(rel_str.clone());
-                        state.conflicts.push(crate::sync::types::SyncConflict {
-                            local_path: rel_str.clone(),
-                            remote_path: format!(
-                                "{}{}",
-                                target.remote_prefix,
-                                sc.rel_path.to_string_lossy()
-                            ),
-                            local_hash: sc.local_hash.clone(),
-                            remote_hash: sc.incoming_hash.clone(),
-                            base_hash: sc.base_hash.clone(),
-                            created_at: now_ts,
-                            description: format!(
-                                "three-way conflict: both local and remote changed {}",
-                                sc.rel_path.display()
-                            ),
-                        });
+                let live_root = staging_runs[idx].target_live_root();
+                match crate::sync::conflict::record_staging_conflicts(
+                    live_root,
+                    &target.remote_prefix,
+                    target_conflicts,
+                ) {
+                    Ok(sync_conflicts) => {
+                        target.result.conflicts = sync_conflicts;
+                        target.result.status = crate::sync::SyncStatus::Conflict;
                     }
-                    if let Err(e) = crate::sync::SyncService::save_sync_state(live_root, &state) {
-                        log::warn!("Failed to persist staging conflicts to SyncState: {e}");
+                    Err(e) => {
+                        // 持久化失败：target 进入 RecoverableError，下次同步可重试
+                        target.result.status = crate::sync::SyncStatus::RecoverableError(
+                            format!("staging_conflict_persist_failed: {}", e),
+                        );
+                        target.result.error =
+                            Some(format!("failed to persist staging conflicts: {}", e));
                     }
                 }
             }
