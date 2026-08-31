@@ -180,7 +180,10 @@ impl super::WriterCore {
         config: &crate::sync::SyncConfig,
         force_sync: bool,
         secrets: crate::sync::SyncSecrets,
-    ) -> crate::error::Result<(crate::sync::full_sync::FullSyncPlan, Vec<crate::sync::staging::StagingRun>)> {
+    ) -> crate::error::Result<(
+        crate::sync::full_sync::FullSyncPlan,
+        Vec<crate::sync::staging::StagingRun>,
+    )> {
         use crate::sync::full_sync::{FullSyncPlan, PlannedTarget};
         use crate::sync::staging::StagingRun;
 
@@ -204,6 +207,11 @@ impl super::WriterCore {
         // App target
         let app_target = crate::sync::types::SyncTarget::app();
         let app_staging = StagingRun::create(&self.app_data_root, self.app_data_root.clone())?;
+        // #644 评论 5473105049 第1节：Prepare 时从 live 完整初始化 staging，
+        // 包括 base snapshot + staging clone + sync state/manifest 复制。
+        if let Err(e) = app_staging.seed_from_live(&self.app_data_root) {
+            log::warn!("Staging seed_from_live failed for app target: {}", e);
+        }
         targets.push(PlannedTarget {
             target: app_target,
             local_root: self.app_data_root.clone(),
@@ -217,7 +225,15 @@ impl super::WriterCore {
         for project in &projects {
             let target = crate::sync::types::SyncTarget::project(&project.id);
             let project_local_root = self.project_root(&project.id);
-            let project_staging = StagingRun::create(&self.app_data_root, project_local_root.clone())?;
+            let project_staging =
+                StagingRun::create(&self.app_data_root, project_local_root.clone())?;
+            if let Err(e) = project_staging.seed_from_live(&project_local_root) {
+                log::warn!(
+                    "Staging seed_from_live failed for project {}: {}",
+                    project.id,
+                    e
+                );
+            }
             targets.push(PlannedTarget {
                 target,
                 local_root: project_local_root.clone(),
@@ -228,12 +244,15 @@ impl super::WriterCore {
             staging_runs.push(project_staging);
         }
 
-        Ok((FullSyncPlan {
-            secrets,
-            config: config.clone(),
-            force_sync,
-            targets,
-        }, staging_runs))
+        Ok((
+            FullSyncPlan {
+                secrets,
+                config: config.clone(),
+                force_sync,
+                targets,
+            },
+            staging_runs,
+        ))
     }
 
     /// #644 评论 5467821839 第7节：三段式全量同步 — 创建 backend（Prepare 阶段、写锁内）。
@@ -271,27 +290,51 @@ impl super::WriterCore {
     /// 原子写终态 `FullSyncState`，成功类重建搜索索引。
     ///
     /// #644 评论 5472584126 第1节：staging run 的三方 commit 逻辑正式接入。
-    /// 对每个 staging run 调 `compute_commit_plan(live_root)`，把 Apply 变更通过
-    /// `SaveTransaction::add_bytes()` + `commit()` 写回 live，记录冲突。
+    /// #644 评论 5473105049 第3节：逐 target 判断 — 只有该 target 的 Transfer 结果
+    /// 属于允许提交的终态，才计算/应用它的 commit plan；失败 target 直接丢弃 staging。
     ///
-    /// `staging_runs` 来自 Prepare 阶段；commit 完成后显式 cleanup（`Drop` 也会兜底）。
+    /// `staging_runs` 来自 Prepare 阶段，与 `transfer_result.targets` 按索引对应；
+    /// commit 完成后显式 cleanup（`Drop` 也会兜底）。
+    #[allow(clippy::excessive_nesting)]
     pub fn commit_full_sync(
         &self,
         transfer_result: crate::sync::full_sync::FullSyncTransferResult,
         staging_runs: Vec<crate::sync::staging::StagingRun>,
     ) -> crate::sync::types::FullSyncResult {
-        let staging_conflicts = apply_staging_commits(&staging_runs);
+        // #644 评论 5473105049 第3/4节：逐 target 判断 transfer 结果，
+        // 只对成功终态的 target 做 staging commit；commit IO 失败向上传播。
+        let commit_outcome =
+            apply_staging_commits_for_targets(&staging_runs, &transfer_result.targets);
 
-        let mut result = crate::sync::full_sync::aggregate_full_sync_result(transfer_result.targets);
+        // #644 评论 5473105049 第4节：commit 失败的 target 需要把失败信息
+        // 注入到对应的 TargetSyncResult 中，让聚合逻辑产生 Recoverable/Fatal 状态。
+        let mut targets = transfer_result.targets;
+        for (idx, commit_result) in commit_outcome.target_results.iter().enumerate() {
+            if let TargetCommitResult::Failed(msg) = commit_result {
+                if let Some(target) = targets.get_mut(idx) {
+                    // commit 失败视为 RecoverableError（下次同步可重试）
+                    target.result.status = crate::sync::SyncStatus::RecoverableError(format!(
+                        "staging_commit_failed: {}",
+                        msg
+                    ));
+                    target.result.error = Some(format!("staging commit failed: {}", msg));
+                }
+            }
+        }
+
+        let mut result = crate::sync::full_sync::aggregate_full_sync_result(targets);
 
         // 三方冲突追加到结果中。
-        if !staging_conflicts.is_empty() {
+        if !commit_outcome.conflicts.is_empty() {
             log::warn!(
                 "Staging commit: {} three-way conflict(s): {:?}",
-                staging_conflicts.len(),
-                staging_conflicts
+                commit_outcome.conflicts.len(),
+                commit_outcome.conflicts
             );
-            if !matches!(result.overall_status, crate::sync::SyncStatus::FatalError(_)) {
+            if !matches!(
+                result.overall_status,
+                crate::sync::SyncStatus::FatalError(_)
+            ) {
                 result.overall_status = crate::sync::SyncStatus::PartialConflict;
             }
         }
@@ -605,53 +648,124 @@ impl super::WriterCore {
     }
 }
 
-/// #644 评论 5472584126 第1节：对每个 staging run 计算三方 commit plan 并应用变更到 live。
+/// #644 评论 5473105049 第3/4节：逐 target 判断 transfer 结果，只对成功终态的 target
+/// 做 staging commit；失败 target 直接丢弃 staging，绝不能写 live。
 ///
-/// 返回三方冲突的路径列表。Apply 变更通过 `SaveTransaction` 原子写回 live root。
-fn apply_staging_commits(staging_runs: &[crate::sync::staging::StagingRun]) -> Vec<String> {
+/// #644 评论 5473105049 第4节：commit IO 失败通过 `TargetCommitResult` 向上传播，
+/// 不能只 `log::warn!` 吞掉。
+///
+/// `staging_runs` 与 `transfer_targets` 按索引对应。
+/// 返回每个 target 的 commit 结果 + 全局冲突列表。
+fn apply_staging_commits_for_targets(
+    staging_runs: &[crate::sync::staging::StagingRun],
+    transfer_targets: &[crate::sync::types::TargetSyncResult],
+) -> StagingCommitOutcome {
     let mut conflicts: Vec<String> = Vec::new();
-    for run in staging_runs {
+    let mut target_results: Vec<TargetCommitResult> = Vec::new();
+
+    for (idx, run) in staging_runs.iter().enumerate() {
+        // 检查对应 target 的 transfer 结果是否为允许提交的终态
+        let should_commit = if let Some(target) = transfer_targets.get(idx) {
+            is_committable_transfer_status(&target.result.status)
+        } else {
+            false
+        };
+
+        if !should_commit {
+            log::warn!(
+                "Staging commit: skipping target {} (run_id={}) — transfer not in committable state",
+                idx,
+                run.run_id()
+            );
+            target_results.push(TargetCommitResult::Skipped);
+            run.cleanup();
+            continue;
+        }
+
         let live_root = run.target_live_root();
         let plan = match run.compute_commit_plan(live_root) {
             Ok(plan) => plan,
             Err(e) => {
-                log::warn!(
-                    "Staging commit: compute_commit_plan failed for {}: {}",
-                    run.run_id(),
-                    e
-                );
+                let msg = format!("compute_commit_plan failed: {}", e);
+                log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                target_results.push(TargetCommitResult::Failed(msg));
                 run.cleanup();
                 continue;
             }
         };
-        apply_commit_plan_to_live(live_root, &plan.apply);
+        if let Err(e) = apply_commit_plan_to_live(live_root, &plan.apply) {
+            let msg = format!("apply_commit_plan_to_live failed: {}", e);
+            log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+            target_results.push(TargetCommitResult::Failed(msg));
+            run.cleanup();
+            continue;
+        }
         for conflict_path in &plan.conflict {
             conflicts.push(conflict_path.to_string_lossy().to_string());
         }
+        target_results.push(TargetCommitResult::Ok);
         run.cleanup();
     }
-    conflicts
+
+    StagingCommitOutcome {
+        target_results,
+        conflicts,
+    }
 }
 
-/// 把 commit plan 中的 Apply 变更通过 SaveTransaction 写回 live root。
+/// 单个 target 的 staging commit 结果。
+enum TargetCommitResult {
+    /// commit 成功。
+    Ok,
+    /// transfer 失败，跳过 commit。
+    Skipped,
+    /// commit 过程中 IO 失败。
+    Failed(String),
+}
+
+/// staging commit 阶段的汇总结果。
+struct StagingCommitOutcome {
+    target_results: Vec<TargetCommitResult>,
+    conflicts: Vec<String>,
+}
+
+/// 判断 transfer 结果状态是否允许提交 staging 到 live。
+///
+/// 只有成功类终态（Success、NoChanges、LatestWinsApplied、BranchMissingRecovered）
+/// 允许提交。Fatal/Error/Recoverable/Dirty/Conflict 等失败状态直接丢弃 staging。
+fn is_committable_transfer_status(status: &crate::sync::SyncStatus) -> bool {
+    matches!(
+        status,
+        crate::sync::SyncStatus::Success
+            | crate::sync::SyncStatus::NoChanges
+            | crate::sync::SyncStatus::LatestWinsApplied
+            | crate::sync::SyncStatus::BranchMissingRecovered
+    )
+}
+
+/// #644 评论 5473105049 第4节：把 commit plan 中的 Apply/Delete 变更通过 SaveTransaction
+/// 写回 live root。返回 `Result<()>`，任何 IO 失败都向上传播。
 fn apply_commit_plan_to_live(
     live_root: &std::path::Path,
     actions: &[crate::sync::staging::CommitAction],
-) {
+) -> crate::error::Result<()> {
     if actions.is_empty() {
-        return;
+        return Ok(());
     }
     let mut tx = crate::storage::transaction::SaveTransaction::new(live_root);
     for action in actions {
-        let crate::sync::staging::CommitAction::Apply { rel_path, content } = action;
-        let rel_str = rel_path.to_string_lossy();
-        if let Err(e) = tx.add_bytes(&rel_str, content) {
-            log::warn!("Staging commit: failed to add_bytes for {}: {}", rel_str, e);
+        match action {
+            crate::sync::staging::CommitAction::Apply { rel_path, content } => {
+                let rel_str = rel_path.to_string_lossy();
+                tx.add_bytes(&rel_str, content)?;
+            }
+            crate::sync::staging::CommitAction::Delete { rel_path } => {
+                let rel_str = rel_path.to_string_lossy();
+                tx.add_delete(&rel_str);
+            }
         }
     }
-    if let Err(e) = tx.commit() {
-        log::warn!("Staging commit: transaction commit failed: {}", e);
-    }
+    tx.commit()
 }
 
 /// 当前 Unix 秒 — 全量同步持久状态统一时间源。

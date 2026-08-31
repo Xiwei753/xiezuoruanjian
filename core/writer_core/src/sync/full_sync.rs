@@ -71,7 +71,10 @@ pub fn run_transfer(backend: &dyn SyncBackend, plan: &FullSyncPlan) -> FullSyncT
     let mut targets = Vec::with_capacity(plan.targets.len());
     for planned in &plan.targets {
         // 三段式 staging：staging_root 有值时写隔离目录，否则回退 local_root。
-        let sync_root = planned.staging_root.as_deref().unwrap_or(&planned.local_root);
+        let sync_root = planned
+            .staging_root
+            .as_deref()
+            .unwrap_or(&planned.local_root);
         let result = run_single_target(
             backend,
             sync_root,

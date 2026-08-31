@@ -34,15 +34,15 @@ mod manifest;
 mod transfer;
 
 // #644 评论 5462823517 第3节：从 lww.rs 抽出的子模块，保持 pub/pub(crate) 接口不变。
-// re-export 保持原 lww.rs 的 pub(crate) 接口；classify_content_path/ContentClass
-// 当前 crate 内仅 is_document_content_path 间接用，但保留 re-export 维持接口稳定。
+// re-export 保持原 lww.rs 的 pub(crate) 接口。
 #[allow(unused_imports)]
 pub(crate) use compare::{classify_content_path, is_document_content_path, ContentClass};
-use compare::{three_way_resolve, ThreeWayResult};
-use manifest::{lww_record_time, SYNC_MANIFEST_PATH};
+use compare::{resolve_path_decision, PathDecision};
+use manifest::{build_local_records, build_remote_records, lww_record_time, SYNC_MANIFEST_PATH};
 use transfer::{
-    delete_remote_files, download_pending_take_remote, download_remote_files, fetch_remote_manifest,
-    fetch_remote_tree, move_to_trash, save_conflict_copy, upload_local_files, upload_manifest,
+    delete_remote_files, download_pending_take_remote, download_remote_files,
+    fetch_remote_manifest, fetch_remote_tree, move_to_trash, save_conflict_copy,
+    upload_local_files, upload_manifest,
 };
 
 /// 执行 LWW 同步 — 入口函数。
@@ -237,141 +237,22 @@ fn execute_lww_sync_attempt(
         fetch_remote_tree(transport, api_base, token, &config.branch, remote_prefix)?;
 
     let remote_manifest_path = format!("{}/{}", remote_prefix, SYNC_MANIFEST_PATH);
-    let remote_manifest =
-        fetch_remote_manifest(transport, api_base, token, &config.branch, remote_prefix, &remote_tree_files)?;
+    let remote_manifest = fetch_remote_manifest(
+        transport,
+        api_base,
+        token,
+        &config.branch,
+        remote_prefix,
+        &remote_tree_files,
+    )?;
 
     log::debug!("[sync] github_api step=正在比较本地和远端");
     let local_entries = scan_for_sync(sync_root, scope)?;
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let mut local_records = std::collections::HashMap::new();
 
-    // ── 构建本地文件记录 ──
-    // updated_at_ms 的确定策略：
-    //   1. 已知文件且哈希未变 → 使用上次同步记录的时间戳（避免文件系统 mtime 精度丢失）
-    //   2. 已知文件但哈希已变 → 使用文件系统 mtime（反映实际修改时间）
-    //   3. 新文件（不在 known_files 中）→ 使用文件系统 mtime
-    //   4. mtime 读取失败 → 退回 now_ms（保守取当前时间，确保不被远端旧版本覆盖）
-    for entry in &local_entries {
-        if entry.sync_kind == SyncKind::Upload && entry.relative_path != SYNC_MANIFEST_PATH {
-            let path = entry.relative_path.clone();
-            let local_hash = entry.file_hash.clone();
-
-            let updated_at_ms;
-            let op = "upsert".to_string();
-
-            if let Some(known_hash) = state.known_files.get(&path) {
-                if *known_hash == local_hash {
-                    // 哈希未变，沿用已知时间戳
-                    updated_at_ms = state
-                        .known_files_updated_at
-                        .get(&path)
-                        .cloned()
-                        .unwrap_or(0);
-                } else {
-                    // 哈希已变，取文件系统修改时间
-                    let modified_ms = std::fs::metadata(sync_root.join(&path))
-                        .and_then(|m| m.modified())
-                        .and_then(|t| {
-                            t.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                                .map_err(std::io::Error::other)
-                        })
-                        .map(|d| d.as_millis() as i64)
-                        .unwrap_or(now_ms);
-                    updated_at_ms = modified_ms;
-                }
-            } else {
-                // 新文件，取文件系统修改时间
-                let modified_ms = std::fs::metadata(sync_root.join(&path))
-                    .and_then(|m| m.modified())
-                    .and_then(|t| {
-                        t.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                            .map_err(std::io::Error::other)
-                    })
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(now_ms);
-                updated_at_ms = modified_ms;
-            }
-
-            local_records.insert(
-                path.clone(),
-                ManifestFileRecord {
-                    path,
-                    content_hash: local_hash,
-                    updated_at_ms,
-                    deleted_at_ms: None,
-                    device_id: state.device_id.clone(),
-                    op,
-                    schema_version: 1,
-                },
-            );
-        }
-    }
-
-    // ── 构建本地删除墓碑记录 ──
-    // known_files 中存在但本地文件已不存在的路径，生成 delete 墓碑。
-    // 墓碑的 updated_at_ms 优先取 tombstone 记录的 deleted_at（秒级→毫秒级），
-    // 否则使用当前时间。content_hash 为空，因为文件已不存在。
-    for path in state.known_files.keys() {
-        if !local_records.contains_key(path) {
-            if !SyncService::is_whitelisted_path(path, scope)
-                || SyncService::is_blacklisted_path(path, scope)
-            {
-                continue;
-            }
-            if !sync_root.join(path).exists() {
-                let mut updated_at_ms = now_ms;
-                if let Some(tombstone) = state.tombstones.iter().find(|t| t.original_path == *path)
-                {
-                    updated_at_ms = tombstone.deleted_at * 1000;
-                }
-
-                local_records.insert(
-                    path.clone(),
-                    ManifestFileRecord {
-                        path: path.clone(),
-                        content_hash: String::new(),
-                        updated_at_ms,
-                        deleted_at_ms: Some(updated_at_ms),
-                        device_id: state.device_id.clone(),
-                        op: "delete".to_string(),
-                        schema_version: 1,
-                    },
-                );
-            }
-        }
-    }
-
-    let mut remote_records = std::collections::HashMap::new();
-    for rec in remote_manifest.files {
-        if rec.path != SYNC_MANIFEST_PATH {
-            remote_records.insert(rec.path.clone(), rec);
-        }
-    }
-
-    // 远端 tree 中存在但 manifest 中无记录的文件（首次同步或 manifest 损失），
-    // 用 tree SHA 作为 content_hash 补充记录，时间戳设为 0（最旧），
-    // device_id 设为 "remote" 以避免与本地 device_id 冲突。
-    for (path, sha) in &remote_tree_files {
-        if path != SYNC_MANIFEST_PATH && !remote_records.contains_key(path) {
-            if !SyncService::is_whitelisted_path(path, scope)
-                || SyncService::is_blacklisted_path(path, scope)
-            {
-                continue;
-            }
-            remote_records.insert(
-                path.clone(),
-                ManifestFileRecord {
-                    path: path.clone(),
-                    content_hash: sha.clone(),
-                    updated_at_ms: 0,
-                    deleted_at_ms: None,
-                    device_id: "remote".to_string(),
-                    op: "upsert".to_string(),
-                    schema_version: 1,
-                },
-            );
-        }
-    }
+    // #644 评论 5473105049 第5节：local/remote record 构造委托给 manifest.rs。
+    let local_records = build_local_records(sync_root, &local_entries, state, scope, now_ms);
+    let remote_records = build_remote_records(remote_manifest, &remote_tree_files, scope);
 
     // Build a quick-lookup set of unresolved conflict paths from the persisted state.
     // While a path remains in this set, the sync engine must not auto-upload,
@@ -512,67 +393,92 @@ fn execute_lww_sync_attempt(
                 }
             }
             (Some(local_rec), Some(remote_rec)) => {
-                if is_document_content_path(&path) {
-                    let base_hash = state
-                        .known_files
-                        .get(&path)
-                        .map(|s| s.as_str())
-                        .unwrap_or("");
-                    let local_hash = &local_rec.content_hash;
-                    let remote_hash = &remote_rec.content_hash;
+                // #644 评论 5473105049 第5节：三方/LWW 决策委托给 compare.rs。
+                let base_hash = state
+                    .known_files
+                    .get(&path)
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                let is_document = is_document_content_path(&path);
+                let (decision, overwritten) =
+                    resolve_path_decision(local_rec, remote_rec, base_hash, is_document);
 
-                    match three_way_resolve(base_hash, local_hash, remote_hash) {
-                        ThreeWayResult::NoConflict => {
-                            merged_manifest_files.insert(path.clone(), local_rec.clone());
-                            result.ignored_files.push(path);
-                        }
-                        ThreeWayResult::LocalChanged => {
-                            merged_manifest_files.insert(path.clone(), local_rec.clone());
-                            to_upload.push(path);
-                        }
-                        ThreeWayResult::RemoteChanged => {
-                            merged_manifest_files.insert(path.clone(), remote_rec.clone());
-                            if remote_rec.op == "upsert" {
-                                to_download.push(path);
-                            } else if remote_rec.op == "delete" {
-                                to_delete_local.push(path.clone());
-                                remote_deletes_count.push(path);
-                            }
-                        }
-                        ThreeWayResult::BothChanged => {
-                            log::warn!(
-                                "[sync] document_conflict path={} local_hash={} remote_hash={} base_hash={}",
-                                path, local_hash, remote_hash, base_hash
-                            );
+                if overwritten {
+                    overwritten_files.push(path.clone());
+                }
 
-                            let conflict = if remote_rec.op == "upsert" {
-                                let remote_path = format!("{}/{}", remote_prefix, path);
-                                if let Some((remote_content, _)) = github_get_content(
-                                    transport,
-                                    api_base,
-                                    token,
-                                    &config.branch,
-                                    &remote_path,
-                                )? {
-                                    let conflict_filename =
-                                        save_conflict_copy(sync_root, &path, &remote_content)?;
+                match decision {
+                    PathDecision::NoOp => {
+                        merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        result.ignored_files.push(path);
+                    }
+                    PathDecision::UploadLocal => {
+                        merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        to_upload.push(path);
+                    }
+                    PathDecision::DownloadRemote => {
+                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                        to_download.push(path);
+                    }
+                    PathDecision::DeleteLocal => {
+                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                        to_delete_local.push(path.clone());
+                        remote_deletes_count.push(path);
+                    }
+                    PathDecision::LwwRemoteWinsDownload => {
+                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                        to_download.push(path);
+                    }
+                    PathDecision::LwwRemoteWinsDelete => {
+                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                        to_delete_local.push(path.clone());
+                        remote_deletes_count.push(path);
+                    }
+                    PathDecision::LwwLocalWinsUpload => {
+                        merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        to_upload.push(path);
+                    }
+                    PathDecision::LwwLocalWinsDeleteRecord => {
+                        merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        local_deletes_count.push(path);
+                    }
+                    PathDecision::DocumentConflictRemoteDeleted => {
+                        let local_hash = &local_rec.content_hash;
+                        let conflict = SyncConflict {
+                            local_path: path.clone(),
+                            remote_path: path.clone(),
+                            local_hash: local_hash.clone(),
+                            remote_hash: remote_rec.content_hash.clone(),
+                            base_hash: base_hash.to_string(),
+                            created_at: chrono::Utc::now().timestamp(),
+                            description: "正文文件冲突：本地已修改，远端已删除。保留本地文件。"
+                                .to_string(),
+                        };
+                        doc_conflicts.push(conflict.clone());
+                        state.conflicted_files.insert(path.clone());
+                        state.conflicts.push(conflict);
+                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                    }
+                    PathDecision::DocumentConflictBothChanged => {
+                        let local_hash = &local_rec.content_hash;
+                        let remote_hash = &remote_rec.content_hash;
+                        log::warn!(
+                            "[sync] document_conflict path={} local_hash={} remote_hash={} base_hash={}",
+                            path, local_hash, remote_hash, base_hash
+                        );
 
-                                    Some(SyncConflict {
-                                        local_path: path.clone(),
-                                        remote_path: path.clone(),
-                                        local_hash: local_hash.clone(),
-                                        remote_hash: remote_hash.clone(),
-                                        base_hash: base_hash.to_string(),
-                                        created_at: chrono::Utc::now().timestamp(),
-                                        description: format!(
-                                            "正文文件双端修改冲突。本地修改和远端修改均保留。远端副本: {}",
-                                            conflict_filename
-                                        ),
-                                    })
-                                } else {
-                                    None
-                                }
-                            } else if remote_rec.op == "delete" {
+                        let conflict = {
+                            let remote_path = format!("{}/{}", remote_prefix, path);
+                            if let Some((remote_content, _)) = github_get_content(
+                                transport,
+                                api_base,
+                                token,
+                                &config.branch,
+                                &remote_path,
+                            )? {
+                                let conflict_filename =
+                                    save_conflict_copy(sync_root, &path, &remote_content)?;
+
                                 Some(SyncConflict {
                                     local_path: path.clone(),
                                     remote_path: path.clone(),
@@ -580,94 +486,22 @@ fn execute_lww_sync_attempt(
                                     remote_hash: remote_hash.clone(),
                                     base_hash: base_hash.to_string(),
                                     created_at: chrono::Utc::now().timestamp(),
-                                    description:
-                                        "正文文件冲突：本地已修改，远端已删除。保留本地文件。"
-                                            .to_string(),
+                                    description: format!(
+                                        "正文文件双端修改冲突。本地修改和远端修改均保留。远端副本: {}",
+                                        conflict_filename
+                                    ),
                                 })
                             } else {
                                 None
-                            };
-
-                            if let Some(conflict) = &conflict {
-                                doc_conflicts.push(conflict.clone());
-                                // Record the path as having an unresolved conflict so that
-                                // subsequent syncs skip it until the user explicitly resolves.
-                                state.conflicted_files.insert(path.clone());
-                                // Also persist the conflict record in state.conflicts so that
-                                // resolve_conflict_keep_local / take_remote / mark_merged can
-                                // look up the remote_hash without needing a separate query.
-                                state.conflicts.push(conflict.clone());
                             }
-                            // Keep remote_rec in manifest so the remote side stays consistent.
-                            // Do NOT update known_files[path] — it must remain at base_hash
-                            // so that three-way comparison on the next sync still sees
-                            // base=base, local≠base, remote≠base → BothChanged (or the
-                            // unresolved_conflict_paths guard catches it first).
-                            merged_manifest_files.insert(path.clone(), remote_rec.clone());
-                        }
-                    }
-                } else {
-                    // ── LWW 时间戳决胜（Metadata/GeneratedCache） ──
-                    // 时间戳较大者获胜。时间戳相同时：
-                    //   - 哈希和操作均相同 → 无实际冲突，忽略
-                    //   - 否则按 device_id 字典序决胜（确定性，无需用户干预）
-                    //
-                    // 不变量：LWW 决胜仅适用于 Metadata 和 GeneratedCache，
-                    // UserTextDocument 必须走三路比较，不得静默覆盖。
-                    let local_time = lww_record_time(local_rec);
-                    let remote_time = lww_record_time(remote_rec);
-                    let mut remote_wins = false;
-                    if remote_time > local_time {
-                        remote_wins = true;
-                    } else if remote_time == local_time {
-                        if remote_rec.content_hash == local_rec.content_hash
-                            && remote_rec.op == local_rec.op
-                        {
-                            merged_manifest_files.insert(path.clone(), local_rec.clone());
-                            result.ignored_files.push(path);
-                            continue;
-                        }
-                        remote_wins = remote_rec.device_id > local_rec.device_id;
-                        log::debug!(
-                            "[sync] lww_tie_breaker path={} winner={} local_device={} remote_device={}",
-                            path,
-                            if remote_wins { "remote" } else { "local" },
-                            local_rec.device_id,
-                            remote_rec.device_id
-                        );
-                    }
+                        };
 
-                    if remote_wins {
+                        if let Some(conflict) = &conflict {
+                            doc_conflicts.push(conflict.clone());
+                            state.conflicted_files.insert(path.clone());
+                            state.conflicts.push(conflict.clone());
+                        }
                         merged_manifest_files.insert(path.clone(), remote_rec.clone());
-                        if remote_rec.op == "upsert" {
-                            if local_rec.op == "delete"
-                                || local_rec.content_hash != remote_rec.content_hash
-                            {
-                                overwritten_files.push(path.clone());
-                                to_download.push(path);
-                            }
-                        } else if remote_rec.op == "delete" {
-                            if local_rec.op == "upsert" {
-                                overwritten_files.push(path.clone());
-                            }
-                            to_delete_local.push(path.clone());
-                            remote_deletes_count.push(path);
-                        }
-                    } else {
-                        merged_manifest_files.insert(path.clone(), local_rec.clone());
-                        if local_rec.op == "upsert" {
-                            if remote_rec.op == "delete"
-                                || remote_rec.content_hash != local_rec.content_hash
-                            {
-                                overwritten_files.push(path.clone());
-                                to_upload.push(path);
-                            }
-                        } else if local_rec.op == "delete" {
-                            if remote_rec.op == "upsert" {
-                                overwritten_files.push(path.clone());
-                            }
-                            local_deletes_count.push(path);
-                        }
                     }
                 }
             }

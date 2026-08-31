@@ -127,8 +127,7 @@ pub(super) fn fetch_remote_tree(
             let prefix_with_slash = format!("{}/", remote_prefix);
             for item in tree {
                 if item["type"].as_str() == Some("blob") {
-                    if let (Some(path), Some(sha)) = (item["path"].as_str(), item["sha"].as_str())
-                    {
+                    if let (Some(path), Some(sha)) = (item["path"].as_str(), item["sha"].as_str()) {
                         // 只保留以 remote_prefix/ 开头的远端路径，剥掉前缀后作为本地 relative path。
                         if let Some(local_path) = path.strip_prefix(&prefix_with_slash) {
                             remote_tree_files.insert(local_path.to_string(), sha.to_string());
@@ -246,13 +245,9 @@ pub(super) fn fetch_remote_manifest(
     let remote_manifest_path = format!("{}/{}", remote_prefix, sync_manifest_path);
     let mut remote_manifest = SyncManifest::default();
     if remote_tree_files.contains_key(sync_manifest_path) {
-        if let Some((content_bytes, _)) = github_get_content(
-            transport,
-            api_base,
-            token,
-            branch,
-            &remote_manifest_path,
-        )? {
+        if let Some((content_bytes, _)) =
+            github_get_content(transport, api_base, token, branch, &remote_manifest_path)?
+        {
             remote_manifest =
                 serde_json::from_slice::<SyncManifest>(&content_bytes).map_err(|e| {
                     crate::Error::SyncGithubApiError {
@@ -285,13 +280,7 @@ pub(super) fn download_pending_take_remote(
             .par_iter()
             .map(|path| {
                 let remote_path = format!("{}/{}", remote_prefix, path);
-                let remote = github_get_content(
-                    transport,
-                    api_base,
-                    token,
-                    branch,
-                    &remote_path,
-                )?;
+                let remote = github_get_content(transport, api_base, token, branch, &remote_path)?;
                 let Some((content, _sha)) = remote else {
                     return Ok((path.clone(), None));
                 };
@@ -305,8 +294,7 @@ pub(super) fn download_pending_take_remote(
                         )))
                     })?;
                 }
-                let tmp_path =
-                    full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
+                let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
                 std::fs::write(&tmp_path, &content).map_err(|e| {
                     crate::Error::Io(std::io::Error::other(format!(
                         "write pending_take_remote {}: {}",
@@ -391,12 +379,10 @@ pub(super) fn download_remote_files(
                 })?;
             }
             let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
-            std::fs::write(&tmp_path, content).map_err(|e| {
-                crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e)))
-            })?;
-            std::fs::rename(tmp_path, &full_path).map_err(|e| {
-                crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e)))
-            })?;
+            std::fs::write(&tmp_path, content)
+                .map_err(|e| crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e))))?;
+            std::fs::rename(tmp_path, &full_path)
+                .map_err(|e| crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e))))?;
             Ok(())
         })
     });

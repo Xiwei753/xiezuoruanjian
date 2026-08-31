@@ -47,6 +47,11 @@ pub struct TransactionManifest {
 pub struct TransactionEntry {
     pub staging_filename: String,
     pub target_relative: String,
+    /// #644 评论 5473105049 第2节：支持 delete 操作。
+    /// `true` 表示 commit 时应删除 `target_relative`（staging_filename 忽略）。
+    /// 旧 manifest 中无此字段时反序列化为 `false`（向后兼容）。
+    #[serde(default)]
+    pub is_delete: bool,
 }
 
 /// 多文件保存事务。
@@ -94,12 +99,23 @@ impl SaveTransaction {
         self.entries.push(TransactionEntry {
             staging_filename,
             target_relative: target_relative.to_string(),
+            is_delete: false,
         });
         Ok(())
     }
 
     pub fn add_file(&mut self, target_relative: &str, content: &str) -> Result<()> {
         self.add_bytes(target_relative, content.as_bytes())
+    }
+
+    /// #644 评论 5473105049 第2节：记录一条删除操作。
+    /// commit 时会删除 `target_relative` 对应的文件；崩溃恢复时也会重放删除。
+    pub fn add_delete(&mut self, target_relative: &str) {
+        self.entries.push(TransactionEntry {
+            staging_filename: String::new(),
+            target_relative: target_relative.to_string(),
+            is_delete: true,
+        });
     }
 
     #[allow(
@@ -125,20 +141,25 @@ impl SaveTransaction {
         let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
         crate::storage::atomic_write_string(&manifest_path, &manifest_json)?;
 
-        // 逐个 rename 暂存文件到最终目标路径。
+        // 逐个 rename 暂存文件到最终目标路径（write）或删除目标文件（delete）。
         // rename 在同一文件系统上是原子的，但跨 N 个文件不保证原子性；
         // committed 标记在全部 rename 完成后才写入，恢复时据此判断。
         let mut created_dirs = std::collections::HashSet::new();
         for entry in &self.entries {
-            let staging_path = self.tx_dir.join(&entry.staging_filename);
             let target_path = self.target_root.join(&entry.target_relative);
-            if let Some(parent) = target_path.parent() {
-                if !created_dirs.contains(parent) {
-                    fs::create_dir_all(parent)?;
-                    created_dirs.insert(parent.to_path_buf());
+            if entry.is_delete {
+                // 删除操作：直接删除目标文件（不存在时忽略）
+                let _ = fs::remove_file(&target_path);
+            } else {
+                let staging_path = self.tx_dir.join(&entry.staging_filename);
+                if let Some(parent) = target_path.parent() {
+                    if !created_dirs.contains(parent) {
+                        fs::create_dir_all(parent)?;
+                        created_dirs.insert(parent.to_path_buf());
+                    }
                 }
+                fs::rename(&staging_path, &target_path)?;
             }
-            fs::rename(&staging_path, &target_path)?;
         }
 
         // committed 标记是事务完成的唯一判据：存在即表示所有 rename 已成功
@@ -237,28 +258,35 @@ pub fn recover_pending_transactions(target_root: &Path) -> Vec<TransactionRecove
         let mut created_dirs = std::collections::HashSet::new();
 
         for tx_entry in &manifest.entries {
-            let staging_path = tx_dir.join(&tx_entry.staging_filename);
-            if staging_path.exists() {
+            if tx_entry.is_delete {
+                // 恢复删除操作：直接删除目标文件
                 let target_path = target_root.join(&tx_entry.target_relative);
-                if let Some(parent) = target_path.parent() {
-                    if !created_dirs.contains(parent) && fs::create_dir_all(parent).is_ok() {
-                        created_dirs.insert(parent.to_path_buf());
-                    }
-                }
-                match fs::rename(&staging_path, &target_path) {
-                    Ok(()) => recovered_files.push(tx_entry.target_relative.clone()),
-                    Err(e) => {
-                        log::warn!(
-                            "[transaction] recovery rename failed: {} -> {}: {}",
-                            tx_entry.staging_filename,
-                            tx_entry.target_relative,
-                            e
-                        );
-                        missing_files.push(tx_entry.target_relative.clone());
-                    }
-                }
+                let _ = fs::remove_file(&target_path);
+                recovered_files.push(tx_entry.target_relative.clone());
             } else {
-                missing_files.push(tx_entry.target_relative.clone());
+                let staging_path = tx_dir.join(&tx_entry.staging_filename);
+                if staging_path.exists() {
+                    let target_path = target_root.join(&tx_entry.target_relative);
+                    if let Some(parent) = target_path.parent() {
+                        if !created_dirs.contains(parent) && fs::create_dir_all(parent).is_ok() {
+                            created_dirs.insert(parent.to_path_buf());
+                        }
+                    }
+                    match fs::rename(&staging_path, &target_path) {
+                        Ok(()) => recovered_files.push(tx_entry.target_relative.clone()),
+                        Err(e) => {
+                            log::warn!(
+                                "[transaction] recovery rename failed: {} -> {}: {}",
+                                tx_entry.staging_filename,
+                                tx_entry.target_relative,
+                                e
+                            );
+                            missing_files.push(tx_entry.target_relative.clone());
+                        }
+                    }
+                } else {
+                    missing_files.push(tx_entry.target_relative.clone());
+                }
             }
         }
 
@@ -382,6 +410,7 @@ mod tests {
             entries: vec![TransactionEntry {
                 staging_filename: "file_0".to_string(),
                 target_relative: "projects/p1/volumes/v1/chapters/c1/chapter.md".to_string(),
+                is_delete: false,
             }],
         };
         let manifest_json = serde_json::to_string_pretty(&manifest).unwrap();
@@ -402,5 +431,34 @@ mod tests {
         tx.commit().unwrap();
 
         assert!(tx.entries.is_empty());
+    }
+
+    #[test]
+    fn test_transaction_commit_with_delete() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path();
+
+        // 先创建一个文件
+        fs::create_dir_all(ws.join("sub")).unwrap();
+        fs::write(ws.join("sub/to_delete.txt"), "will be deleted").unwrap();
+        fs::write(ws.join("sub/to_keep.txt"), "will be kept").unwrap();
+
+        let mut tx = SaveTransaction::new(ws);
+        tx.add_file("sub/new_file.txt", "new content").unwrap();
+        tx.add_delete("sub/to_delete.txt");
+        tx.commit().unwrap();
+
+        // new_file.txt 应该存在
+        assert_eq!(
+            fs::read_to_string(ws.join("sub/new_file.txt")).unwrap(),
+            "new content"
+        );
+        // to_delete.txt 应该被删除
+        assert!(!ws.join("sub/to_delete.txt").exists());
+        // to_keep.txt 应该保留
+        assert_eq!(
+            fs::read_to_string(ws.join("sub/to_keep.txt")).unwrap(),
+            "will be kept"
+        );
     }
 }
