@@ -253,11 +253,11 @@ impl SaveTransaction {
                 }
             }
         }
-        // 清理备份目录。
-        let _ = fs::remove_dir_all(&backup_dir);
-        // #644 评论 5475805198 第1节 + #644 评论 5483239422 问题1：
-        // 更新 manifest phase 为 RolledBack。不吞错——phase 持久化失败时返回 Err，
-        // 不设 finished、不 cleanup，保留 tx_dir 给下次恢复重试。
+        // #644 评论 5475805198 第1节 + #644 评论 5483239422 问题1 +
+        // #644 评论 5483920624 问题1：不在 phase 落盘前单独删 backup_dir。
+        // 正确顺序：1.Git rollback → 2.live 文件恢复 → 3.原子写 RolledBack phase
+        // → 4.phase 成功后 cleanup 整个 tx_dir（含 backup）。
+        // 若 phase 写盘失败，backup 仍在，下次启动重试 rollback 可用。
         let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
         self.write_manifest_phase(&manifest_path, TransactionPhase::RolledBack)?;
         self.finished = true;
@@ -558,14 +558,16 @@ fn rollback_full_sync_transaction(
         }
     }
 
-    // 3. 清理备份目录。
-    let _ = fs::remove_dir_all(&backup_dir);
+    // #644 评论 5483920624 问题1：不在 phase 落盘前单独删 backup_dir。
+    // 正确顺序：1.Git rollback → 2.live 文件恢复 → 3.原子写 RolledBack phase
+    // → 4.phase 成功后 cleanup 整个 tx_dir（含 backup）。
+    // 若 phase 写盘失败，backup 仍在，下次启动重试 rollback 可用。
 
-    // 4. 标记 RolledBack。
+    // 3. 标记 RolledBack。
     let manifest_path = tx_dir.join(MANIFEST_FILENAME);
     write_manifest_phase_static(&manifest_path, TransactionPhase::RolledBack, manifest)?;
 
-    // 5. 清理事务目录。
+    // 4. 清理事务目录（含 backup）。
     fs::remove_dir_all(tx_dir)?;
 
     Ok(())

@@ -74,6 +74,7 @@ const GIT_REPO_TMP_SUBDIR: &str = "git-repo";
 /// - live 是 Git repo 但 `git2` clone 失败 → 直接返回 `Err`，**不回退**到
 ///   `file seed + git init`（那会丢掉历史/remote/HEAD）；
 /// - 把 `.git/` 从临时目录移到 staging 失败 → 返回 `Err`。
+#[allow(clippy::too_many_lines)]
 pub fn seed_from_live_as_git_repo(run: &StagingRun, live_root: &Path) -> Result<GitSeedState> {
     // 1. 先把 live 当前工作区复制进 base/ 和 staging/。这才是同步基线。
     run.seed_from_live(live_root)?;
@@ -89,13 +90,20 @@ pub fn seed_from_live_as_git_repo(run: &StagingRun, live_root: &Path) -> Result<
             "failed to open live git repo: {e}"
         )))
     })?;
-    // #644 评论 5475413230 第3节：从 HEAD 读真实目标，不猜 main。
-    // unborn 的 HEAD 仍然是 symbolic ref，可能指向 main、master 或其它分支。
+    // #644 评论 5475413230 第3节 + #644 评论 5483920624 问题4：
+    // 从 HEAD 读真实目标，不猜 main。unborn 的 HEAD 仍然是 symbolic ref，
+    // 可能指向 main、master 或其它分支。
     //
     // 注意：git2 的 HEAD 在首次 commit 后可能变成 direct reference
     // （symbolic_target() == None），但仍然是分支 HEAD（is_branch() == true），
     // 不是 detached HEAD。只有 is_branch() == false 且有 target OID 时才是真正的
     // detached HEAD。
+    //
+    // #644 评论 5483920624 问题4：不吞错——
+    // - shorthand 取不到 → Err（HEAD 读取失败是真实错误）。
+    // - HEAD 存在但既无 symbolic 也无 direct target → Err（不伪造 unborn main）。
+    // - head() 返回 Err：只有 libgit2 明确的 UnbornBranch 语义才走 Unborn，
+    //   且 head_ref 必须从 .git/HEAD 文件真实解析出来；其它错误返回 Err。
     let seed_state = match live_repo.head() {
         Ok(head) => {
             if let Some(sym_target) = head.symbolic_target() {
@@ -112,7 +120,14 @@ pub fn seed_from_live_as_git_repo(run: &StagingRun, live_root: &Path) -> Result<
                 // #644 评论 5475413230 第3节：HEAD 是 direct reference 但是分支
                 // （git2 在 commit 后可能把 symbolic ref 变成 direct ref）。
                 // 用 shorthand() 获取分支名，构造完整 ref 名。
-                let shorthand = head.shorthand().unwrap_or("main");
+                // #644 评论 5483920624 问题4：shorthand 取不到 → Err，不 fallback main。
+                let shorthand = head.shorthand().ok_or_else(|| {
+                    crate::Error::Io(std::io::Error::other(
+                        "seed_from_live_as_git_repo: HEAD is branch but shorthand() \
+                         returned None — cannot determine branch name, refusing to \
+                         guess",
+                    ))
+                })?;
                 let ref_name = format!("refs/heads/{}", shorthand);
                 match head.target() {
                     Some(oid) => GitSeedState::Existing {
@@ -126,28 +141,43 @@ pub fn seed_from_live_as_git_repo(run: &StagingRun, live_root: &Path) -> Result<
                 // 不是分支，直接指向一个 commit OID。不能伪造分支名。
                 GitSeedState::Detached { head_oid: oid }
             } else {
-                // HEAD 存在但既无 symbolic target 也无 direct target — 视为 unborn。
-                GitSeedState::Unborn {
-                    head_ref: "refs/heads/main".to_string(),
-                }
+                // #644 评论 5483920624 问题4：HEAD 存在但既无 symbolic 也无
+                // direct target — 不伪造 unborn main，返回 Err。
+                return Err(crate::Error::Io(std::io::Error::other(
+                    "seed_from_live_as_git_repo: HEAD exists but has neither symbolic \
+                     target nor direct target — refusing to guess unborn main",
+                )));
             }
         }
-        Err(_) => {
-            // HEAD 不存在或无法解析 — 视为 unborn。
-            // 尝试读取 .git/HEAD 文件获取真实目标。
+        Err(e) if e.code() == git2::ErrorCode::UnbornBranch => {
+            // #644 评论 5483920624 问题4：只有 libgit2 明确的 UnbornBranch 语义
+            // 才走 Unborn，且 head_ref 必须从 .git/HEAD 文件真实解析出来。
             let head_file = live_root.join(".git").join("HEAD");
-            let head_ref = if let Ok(content) = fs::read_to_string(&head_file) {
-                // 格式: "ref: refs/heads/master\n"
-                let trimmed = content.trim();
-                if let Some(rest) = trimmed.strip_prefix("ref: ") {
-                    rest.to_string()
-                } else {
-                    "refs/heads/main".to_string()
-                }
-            } else {
-                "refs/heads/main".to_string()
-            };
+            let content = fs::read_to_string(&head_file).map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "seed_from_live_as_git_repo: UnbornBranch but failed to read \
+                     .git/HEAD: {e}"
+                )))
+            })?;
+            let trimmed = content.trim();
+            let head_ref = trimmed
+                .strip_prefix("ref: ")
+                .map(|s| s.to_string())
+                .ok_or_else(|| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "seed_from_live_as_git_repo: UnbornBranch but .git/HEAD content \
+                     is not 'ref: ...' format (got {:?}) — refusing to guess unborn main",
+                        trimmed
+                    )))
+                })?;
             GitSeedState::Unborn { head_ref }
+        }
+        Err(e) => {
+            // #644 评论 5483920624 问题4：其它 head() 错误（NotFound、IO 等）
+            // 不伪造 unborn main，返回 Err。
+            return Err(crate::Error::Io(std::io::Error::other(format!(
+                "seed_from_live_as_git_repo: failed to read HEAD: {e}"
+            ))));
         }
     };
 

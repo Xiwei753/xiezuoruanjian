@@ -456,11 +456,16 @@ fn build_staging_plan(staging_root: &Path) -> Result<StagingPlan> {
         ))
     })?;
 
-    let branch_name = if let Some(name) = staging_head.shorthand() {
-        name.to_string()
-    } else {
-        "main".to_string()
-    };
+    // #644 评论 5483920624 问题4：shorthand 取不到 → Err，不 fallback main。
+    let branch_name = staging_head
+        .shorthand()
+        .ok_or_else(|| {
+            crate::Error::Io(std::io::Error::other(
+                "build_staging_plan: staging HEAD shorthand() returned None — \
+                 cannot determine branch name, refusing to guess main",
+            ))
+        })?
+        .to_string();
 
     // #644 评论 5480360027：在 staging .git 目录下生成临时 index 文件，算 SHA-256。
     // 临时文件用 RAII 守卫保证清理。
@@ -896,7 +901,9 @@ pub fn rollback_git_finalize(
             // 1. create_new(true) 自己获取 .git/index.lock；lock 已存在 → Err，绝不删。
             // 2. 拿到锁后重新读 index 确认仍 == new。
             // 3. 把 snapshot.index 旧字节写进自己持有的 lock，fsync，rename(index.lock -> index)。
-            rollback_index_via_lockfile(&index_path, &lock_path, &snapshot.index)?;
+            // #644 评论 5483920624 问题2：把 expected_new_sha256 传进去，
+            // 让函数在拿锁后复验 live index hash 仍等于 expected new。
+            rollback_index_via_lockfile(&index_path, &lock_path, expected_hash, &snapshot.index)?;
         }
     }
 
@@ -1190,11 +1197,16 @@ fn finalize_git_repo_metadata_inner(
         crate::Error::Io(std::io::Error::other(format!("finalize: staging odb: {e}")))
     })?;
 
-    let branch_name = if let Some(name) = staging_head.shorthand() {
-        name.to_string()
-    } else {
-        "main".to_string()
-    };
+    // #644 评论 5483920624 问题4：shorthand 取不到 → Err，不 fallback main。
+    let branch_name = staging_head
+        .shorthand()
+        .ok_or_else(|| {
+            crate::Error::Io(std::io::Error::other(
+                "finalize: staging HEAD shorthand() returned None — \
+                 cannot determine branch name, refusing to guess main",
+            ))
+        })?
+        .to_string();
 
     match seed_state {
         GitSeedState::NotGitRepo => finalize_not_git_repo(
@@ -1713,21 +1725,26 @@ fn install_index_with_lock(
     Ok(())
 }
 
-/// #644 评论 5483239422 问题3：rollback index 的 lockfile 反向提交边界。
+/// #644 评论 5483239422 问题3 + #644 评论 5483920624 问题2/3：
+/// rollback index 的 lockfile 反向提交边界。
 ///
 /// 与 forward `install_index_with_lock` 同语义，但方向相反：把 snapshot.index 的
 /// 旧字节写回 live index。关键安全约束：
 /// 1. 用 `create_new(true)` 自己获取 `.git/index.lock`。lock 已存在 → 返回 Err，
 ///    **绝不删别人的 lock**（外部 Git 进程可能正在用）。
-/// 2. 拿到锁后重新读 index 确认仍等于 new（调用方已确认 current==new，但拿锁期间
-///    可能被并发改掉，需复验）。
+/// 2. 拿到锁后重新读 index 确认仍等于 `expected_new_sha256`（调用方已确认
+///    current==new，但拿锁期间可能被并发改掉，需复验）。不等则删除自己刚创建的
+///    lock 并返回 Err（并发变化，保留 transaction）。
 /// 3. 把 snapshot.index 旧字节写进自己持有的 lock，fsync，rename(index.lock -> index)。
-/// 4. snapshot.index == Missing 时：拿到锁后确认 index 仍存在，删除 index 文件。
+///    只有 rename 成功才 disarm RAII guard；任何写/flush/fsync/复验失败自动删自己的 lock。
+/// 4. snapshot.index == Missing 时：持锁 → 验证 hash → 删除 index → fsync → drop lock
+///    （由 guard 清理）。**不**先释放锁再删 index。
 ///
 /// 调用方已保证进入此函数前 `current_index == new`（plan.new_index_sha256 命中）。
 fn rollback_index_via_lockfile(
     index_path: &Path,
     lock_path: &Path,
+    expected_new_sha256: [u8; 32],
     snapshot_index: &IndexSnapshot,
 ) -> Result<()> {
     use std::io::Write;
@@ -1749,12 +1766,40 @@ fn rollback_index_via_lockfile(
         Err(e) => return Err(crate::Error::Io(e)),
     };
 
-    // 2. 拿到锁后重新读 index，确认仍存在（调用方已确认 == new，拿锁期间未被并发删掉）。
-    //    若被并发删掉，清理自己的 lock 后返回 Err。
-    if !index_path.exists() {
-        let _ = fs::remove_file(lock_path);
+    // #644 评论 5483920624 问题3：RAII guard 只清理本轮自己创建的 lock。
+    // 只有 rename(lock -> index) 成功才 disarm()。任何写/flush/fsync/复验失败
+    // 自动删自己的 lock，不留陈旧 lock 卡住下次 Git 操作。
+    struct LockGuard<'a>(&'a Path, bool);
+    impl<'a> LockGuard<'a> {
+        fn disarm(&mut self) {
+            self.1 = true;
+        }
+    }
+    impl<'a> Drop for LockGuard<'a> {
+        fn drop(&mut self) {
+            if !self.1 {
+                let _ = fs::remove_file(self.0);
+            }
+        }
+    }
+    let mut lock_guard = LockGuard(lock_path, false);
+
+    // 2. 拿到锁后重新读 live index，计算 SHA-256，确认仍等于 expected_new_sha256。
+    //    若被并发改掉（current != expected_new），删除自己刚创建的 lock 后返回 Err
+    //    （guard 自动清理）。
+    let current_index = if index_path.exists() {
+        let bytes = fs::read(index_path)?;
+        IndexSnapshot::Bytes(bytes)
+    } else {
+        IndexSnapshot::Missing
+    };
+    let current_is_new = match &current_index {
+        IndexSnapshot::Bytes(b) => sha256_bytes(b) == expected_new_sha256,
+        IndexSnapshot::Missing => false,
+    };
+    if !current_is_new {
         return Err(crate::Error::Io(std::io::Error::other(
-            "rollback_git_finalize: index disappeared after acquiring lock (concurrent \
+            "rollback_git_finalize: index hash changed after acquiring lock (concurrent \
              modification) — cleaned our lock, preserving transaction for next recovery",
         )));
     }
@@ -1768,22 +1813,24 @@ fn rollback_index_via_lockfile(
             lock_file.flush().map_err(crate::Error::Io)?;
             lock_file.sync_all().map_err(crate::Error::Io)?;
             drop(lock_file);
-            // rename lock → index（原子提交 + 释放锁）。
+            // rename lock → index（原子提交 + 释放锁）。成功才 disarm guard。
             if let Err(e) = fs::rename(lock_path, index_path) {
-                let _ = fs::remove_file(lock_path);
                 return Err(crate::Error::Io(e));
             }
+            lock_guard.disarm();
         }
         IndexSnapshot::Missing => {
-            // snapshot.index 不存在：finalize 前无 index，rollback 应删除 live index。
+            // #644 评论 5483920624 问题3：Missing 路径必须在持有自己 lock 期间完成：
+            // 重新验证 current==expected new（上方已完成）→ 删除 index → fsync .git
+            // → 最后删除自己的 lock（由 guard 清理）。
+            // **不**先 drop(lock_file) 再 remove_file(lock_path) 再 remove_file(index_path)。
             drop(lock_file);
-            // 先删自己的 lock，再删 index（index 不存在是终态，无需 rename）。
-            let _ = fs::remove_file(lock_path);
             fs::remove_file(index_path).map_err(|e| {
                 crate::Error::Io(std::io::Error::other(format!(
                     "rollback_git_finalize: failed to remove index after acquiring lock: {e}"
                 )))
             })?;
+            // guard 在函数返回时 drop，清理自己的 lock。
         }
     }
 
