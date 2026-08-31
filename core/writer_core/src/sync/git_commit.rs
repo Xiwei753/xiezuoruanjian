@@ -121,6 +121,12 @@ pub struct GitFinalizePlan {
     /// key = ref 名，value = (old_oid_or_none, new_oid)。
     /// old_oid_or_none = None 表示 ref 原本不存在（DidNotExist），finalize 会新建。
     pub ref_plans: Vec<(String, Option<String>, String)>,
+    /// #644 评论 5481496190 问题3：NotGitRepo 路径的 owner marker（uuid）。
+    /// 在 prepare 阶段生成，finalize_not_git_repo 写入 tmp_git/.sujian-sync-owner，
+    /// rename 后进入 live .git。rollback 只有 marker 匹配才删除 live .git，
+    /// 避免误删外部后来创建的仓库。正常 finalize 完成后删除 marker。
+    #[serde(default)]
+    pub repo_create_owner: Option<String>,
 }
 
 /// #644 评论 5478237852 问题2：旧 mutation journal 字段，保留向后兼容。
@@ -242,47 +248,9 @@ impl Drop for TmpFileGuard {
     }
 }
 
-/// #644 评论 5480360027：RAII 守卫，持有 `.git/index.lock` 独占锁。
-///
-/// 通过 `create_new` 创建 lock 文件获取锁（Git 原生 index lock 约定路径）。
-/// 文件已存在时返回 `ConcurrentMetadataChanged`，不覆盖。
-/// drop 时删除 lock 文件释放锁。
-struct IndexLockGuard {
-    lock_path: PathBuf,
-    disarmed: bool,
-}
-
-impl IndexLockGuard {
-    /// 尝试获取 `.git/index.lock`。文件已存在返回 `ConcurrentMetadataChanged`。
-    fn acquire(live_root: &Path) -> std::result::Result<Self, GitFinalizeError> {
-        let lock_path = live_root.join(".git").join("index.lock");
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)
-        {
-            Ok(_file) => Ok(Self {
-                lock_path,
-                disarmed: false,
-            }),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                Err(GitFinalizeError::ConcurrentMetadataChanged {
-                    reason: "index.lock exists: concurrent git process is writing index"
-                        .to_string(),
-                })
-            }
-            Err(e) => Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e))),
-        }
-    }
-}
-
-impl Drop for IndexLockGuard {
-    fn drop(&mut self) {
-        if !self.disarmed {
-            let _ = fs::remove_file(&self.lock_path);
-        }
-    }
-}
+// #644 评论 5481496190 问题2：IndexLockGuard 已删除。
+// install_index_with_lock 改用 lockfile rename 模型（把内容直接写入 lock 文件，
+// rename lock → index 作为提交和解锁），不再需要独立的 RAII lock 守卫。
 
 // ── 公共 API ──
 
@@ -558,6 +526,7 @@ fn build_finalize_plan(
             repo_create: matches!(seed_state, GitSeedState::NotGitRepo),
             new_index_sha256: None,
             ref_plans: Vec::new(),
+            repo_create_owner: new_repo_create_owner(seed_state),
         });
     };
 
@@ -638,7 +607,18 @@ fn build_finalize_plan(
         repo_create: matches!(seed_state, GitSeedState::NotGitRepo),
         new_index_sha256: staging_plan.new_index_sha256,
         ref_plans,
+        repo_create_owner: new_repo_create_owner(seed_state),
     })
+}
+
+/// #644 评论 5481496190 问题3：NotGitRepo 路径生成 owner marker uuid。
+/// 非 NotGitRepo 路径返回 None。
+fn new_repo_create_owner(seed_state: &GitSeedState) -> Option<String> {
+    if matches!(seed_state, GitSeedState::NotGitRepo) {
+        Some(uuid::Uuid::new_v4().to_string())
+    } else {
+        None
+    }
 }
 
 /// 从 git2 Reference 构造 RefSnapshot。
@@ -773,40 +753,89 @@ pub fn rollback_git_finalize(
     crate::storage::git_runtime::ensure_initialized()?;
 
     // 1. Rollback index — only if plan says we would write it.
-    // CAS: only restore if current index still matches what we planned to write.
+    //    CAS: only restore if current index still matches what we planned to write.
+    //    #644 评论 5481496190 问题2：同时处理可能残留的 .git/index.lock。
+    //    install_index_with_lock 用 lockfile rename 模型，崩溃窗口是：
+    //    - lock 写完但 rename 未完成 → lock 拋留，index 未变（仍是旧内容）。
+    //    - rename 完成 → lock 已消失，index 是新内容。
+    //    rollback 恢复 index 时：
+    //    - index 是新内容（CAS 命中）→ 本轮 install 已完成 rename，恢复 snapshot.index。
+    //    - index 不是新内容但 lock 存在 → 本轮 install 的崩溃窗口（lock 写完 rename 未完成），
+    //      清理残留 lock（lock 是本轮创建的，index 未变无需恢复）。
+    //    - index 不是新内容且 lock 不存在 → 别的进程改了 index，跳过。
     if let Some(expected_hash) = plan.new_index_sha256 {
         let index_path = live_root.join(".git").join("index");
-        if index_path.exists() {
+        let lock_path = live_root.join(".git").join("index.lock");
+
+        let index_is_ours = if index_path.exists() {
             let current_bytes = fs::read(&index_path)?;
-            let current_hash = sha256_bytes(&current_bytes);
-            if current_hash == expected_hash {
-                // Index hasn't been touched since we wrote it — safe to restore.
-                match &snapshot.index {
-                    IndexSnapshot::Bytes(original_bytes) => {
-                        crate::storage::atomic_write_bytes(&index_path, original_bytes)?;
-                    }
-                    IndexSnapshot::Missing => {
+            sha256_bytes(&current_bytes) == expected_hash
+        } else {
+            false
+        };
+
+        if index_is_ours {
+            // 本轮 install 已完成 rename（index 是新内容），恢复 snapshot.index。
+            match &snapshot.index {
+                IndexSnapshot::Bytes(original_bytes) => {
+                    crate::storage::atomic_write_bytes(&index_path, original_bytes)?;
+                }
+                IndexSnapshot::Missing => {
+                    if index_path.exists() {
                         fs::remove_file(&index_path)?;
                     }
                 }
-            } else {
-                log::warn!(
-                    "rollback_git_finalize: index changed since we wrote it (CAS miss), \
-                     skipping index rollback to avoid overwriting concurrent changes"
-                );
             }
+            // 恢复后清理可能残留的 lock（本轮崩溃窗口的 lock，index 已恢复）。
+            if lock_path.exists() {
+                let _ = fs::remove_file(&lock_path);
+            }
+        } else if lock_path.exists() {
+            // index 不是新内容但 lock 存在 → 本轮 install 的崩溃窗口
+            // （lock 写完但 rename 未完成，index 仍是旧内容）。
+            // 清理残留 lock（lock 是本轮创建的，index 未变无需恢复）。
+            // 注意：如果 index 也不是旧内容（snapshot.index），说明有并发修改，
+            // 但 lock 是我们 create_new 的，别人无法同时创建，所以 lock 一定是我们的。
+            let _ = fs::remove_file(&lock_path);
+            log::warn!(
+                "rollback_git_finalize: cleaned stale index.lock left by crashed install \
+                 (index unchanged, lock was ours)"
+            );
+        } else {
+            log::warn!(
+                "rollback_git_finalize: index changed since we wrote it (CAS miss), \
+                 skipping index rollback to avoid overwriting concurrent changes"
+            );
         }
     }
 
     // 2. Rollback repo creation — only if plan says we would create it.
+    //    #644 评论 5481496190 问题3：只有 owner marker 匹配才删除 live .git。
+    //    marker 不存在或不匹配 → 外部创建的仓库，不能删。
+    //    场景：manifest 落盘（repo_create=true）→ 进程在 rename 前崩溃
+    //    → 用户/别的进程 git init → recovery 看到 repo_create=true + .git exists。
+    //    此时 .git 没有 owner marker（或 marker 不匹配），是外部创建的，不能删。
     if plan.repo_create {
         let live_git = live_root.join(".git");
-        if live_git.exists() {
-            // We created this .git; since we're the creator, it's safe to remove
-            // (concurrent processes wouldn't have had time to establish their own .git
-            // since we just created it in this finalize round).
-            fs::remove_dir_all(&live_git)?;
+        if !live_git.exists() {
+            return Ok(());
         }
+        let marker_path = live_git.join(".sujian-sync-owner");
+        let marker_matches = match (&plan.repo_create_owner, marker_path.exists()) {
+            (Some(expected), true) => match fs::read_to_string(&marker_path) {
+                Ok(content) => content == *expected,
+                Err(_) => false,
+            },
+            _ => false,
+        };
+        if !marker_matches {
+            log::warn!(
+                "rollback_git_finalize: repo_create=true but live .git owner marker \
+                 missing or mismatched — treating as externally created, NOT removing"
+            );
+            return Ok(());
+        }
+        fs::remove_dir_all(&live_git)?;
         return Ok(());
     }
 
@@ -1064,6 +1093,7 @@ fn finalize_git_repo_metadata_inner(
             &staging_odb,
             new_oid,
             &branch_name,
+            plan,
         ),
         GitSeedState::Unborn { head_ref } => finalize_unborn(
             live_root,
@@ -1092,8 +1122,7 @@ fn finalize_git_repo_metadata_inner(
             *head_oid,
             snapshot,
             plan,
-        )
-        .map_err(GitFinalizeError::FinalizeFailed),
+        ),
     }
 }
 
@@ -1112,6 +1141,7 @@ fn finalize_not_git_repo(
     staging_odb: &git2::Odb,
     new_oid: git2::Oid,
     branch_name: &str,
+    plan: &GitFinalizePlan,
 ) -> std::result::Result<(), GitFinalizeError> {
     let staging_git = staging_root.join(".git");
     let live_git = live_root.join(".git");
@@ -1159,6 +1189,16 @@ fn finalize_not_git_repo(
     // 不需要 index lock（live 还没有 .git）。
     update_live_index(&tmp_repo, staging_repo, new_oid)?;
 
+    // #644 评论 5481496190 问题3：在 rename 前写入 owner marker 到 tmp_git。
+    // rename 后 marker 跟着进入 live .git。rollback 只有 marker 匹配才删除 live .git。
+    // marker 文件名 .sujian-sync-owner，内容是 plan.repo_create_owner（uuid）。
+    if let Some(owner) = &plan.repo_create_owner {
+        let marker_path = _guard.path().join(".sujian-sync-owner");
+        fs::write(&marker_path, owner).map_err(|e| {
+            GitFinalizeError::FinalizeFailed(crate::Error::Io(e))
+        })?;
+    }
+
     // #644 评论 5478237852 问题1：live .git 在 rename 前已出现，返回 ConcurrentMetadataChanged，
     // 不能进入 metadata rollback（否则会删除别人刚创建的 .git）。
     if live_git.exists() {
@@ -1183,6 +1223,14 @@ fn finalize_not_git_repo(
                 "finalize_not_git_repo: rename tmp -> .git failed: {e}"
             )),
         )));
+    }
+
+    // #644 评论 5481496190 问题3：rename 成功后删除 owner marker。
+    // 如果删除前崩溃，marker 拋留，下次恢复时 rollback 会看到 marker 匹配并删除 .git
+    //（这是对的，因为本轮 finalize 没完成）。下次正常 finalize 会重新生成 marker 覆盖。
+    if plan.repo_create_owner.is_some() {
+        let marker_path = live_git.join(".sujian-sync-owner");
+        let _ = fs::remove_file(&marker_path);
     }
 
     Ok(())
@@ -1357,11 +1405,15 @@ fn finalize_existing(
         }
     }
 
+    // #644 评论 5481496190 问题1：force=true 让 libgit2 能更新已存在的 ref。
+    // current_id=base_oid 提供 CAS 保护，current != base_oid 时返回 EMODIFIED，
+    // 只有当前值 == base_oid 才写 new_oid。force=false 对已存在 ref 直接返回
+    // GIT_EEXISTS，current_id 的 CAS 检查不会被执行。
     live_repo
         .reference_matching(
             head_ref,
             new_oid,
-            false,
+            true,
             base_oid,
             "sync: finalize git repo metadata after full sync",
         )
@@ -1378,9 +1430,15 @@ fn finalize_existing(
 /// finalize 路径 4：live 是 detached HEAD。
 ///
 /// #644 评论 5475805198 第3节：使用 `reference_matching("HEAD", ...)` 做真正的 CAS。
-/// 当前代码用 `reference("HEAD", new_oid, true, ...)` 会强制覆盖并发变化。
 ///
-/// #644 评论 5480360027：接收 `plan`，不再维护 mutation_log。
+/// #644 评论 5481496190 问题4：返回 `GitFinalizeError` 而非 `crate::Error`，
+/// 使 `ConcurrentMetadataChanged`（来自 verify_git_metadata_unchanged 或
+/// install_index_with_lock）能原样向上传播到 `commit_git_finalize`，
+/// 由其决定不 rollback。旧代码把 ConcurrentMetadataChanged 降级成 Io → FinalizeFailed，
+/// 触发不该发生的 rollback，撤销并发方的 detached HEAD 更新。
+///
+/// #644 评论 5481496190 问题1：reference_matching 用 force=true 让 libgit2 能更新
+/// 已存在的 HEAD，current_id=base_oid 提供 CAS 保护。
 fn finalize_detached(
     live_root: &Path,
     staging_repo: &git2::Repository,
@@ -1389,7 +1447,7 @@ fn finalize_detached(
     base_oid: git2::Oid,
     snapshot: &GitMetadataSnapshot,
     _plan: &GitFinalizePlan,
-) -> Result<()> {
+) -> std::result::Result<(), GitFinalizeError> {
     let live_repo = git2::Repository::open(live_root).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "finalize_detached: open live repo: {e}"
@@ -1404,47 +1462,30 @@ fn finalize_detached(
     import_missing_objects(staging_odb, &live_odb)?;
 
     if !live_odb.exists(new_oid) {
-        return Err(crate::Error::Io(std::io::Error::other(format!(
-            "finalize_detached: new_oid {} not found in live after import",
-            new_oid
-        ))));
+        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+            std::io::Error::other(format!(
+                "finalize_detached: new_oid {} not found in live after import",
+                new_oid
+            )),
+        )));
     }
 
     // #644 评论 5478237852 问题2：preflight verify before writing.
-    verify_git_metadata_unchanged(live_root, snapshot, "HEAD").map_err(|e| match e {
-        GitFinalizeError::FinalizeFailed(inner) => inner,
-        GitFinalizeError::ConcurrentMetadataChanged { reason } => {
-            crate::Error::Io(std::io::Error::other(reason))
-        }
-        GitFinalizeError::RollbackFailed { finalize, rollback } => {
-            crate::Error::Io(std::io::Error::other(format!(
-                "rollback failed: {rollback} (finalize: {finalize})"
-            )))
-        }
-    })?;
+    // #644 评论 5481496190 问题4：ConcurrentMetadataChanged 原样向上传播，不降级。
+    verify_git_metadata_unchanged(live_root, snapshot, "HEAD")?;
 
     // #644 评论 5480360027 修复点 3：index 原生锁边界。
-    install_index_with_lock(live_root, &live_repo, staging_repo, new_oid, snapshot).map_err(
-        |e| match e {
-            GitFinalizeError::FinalizeFailed(inner) => inner,
-            GitFinalizeError::ConcurrentMetadataChanged { reason } => {
-                crate::Error::Io(std::io::Error::other(reason))
-            }
-            GitFinalizeError::RollbackFailed { finalize, rollback } => {
-                crate::Error::Io(std::io::Error::other(format!(
-                    "rollback failed: {rollback} (finalize: {finalize})"
-                )))
-            }
-        },
-    )?;
+    // #644 评论 5481496190 问题4：ConcurrentMetadataChanged 原样向上传播，不降级。
+    install_index_with_lock(live_root, &live_repo, staging_repo, new_oid, snapshot)?;
 
     // #644 评论 5475805198 第3节：使用 reference_matching 做真正的 CAS。
-    // current OID 不一致会返回 modified，而不是覆盖。
+    // #644 评论 5481496190 问题1：force=true 让 libgit2 能更新已存在的 HEAD，
+    // current_id=base_oid 提供 CAS 保护，current != base_oid 时返回 EMODIFIED。
     live_repo
         .reference_matching(
             "HEAD",
             new_oid,
-            false,
+            true,
             base_oid,
             "sync: finalize detached HEAD after full sync",
         )
@@ -1460,16 +1501,22 @@ fn finalize_detached(
 
 // ── 内部辅助函数（从 git_staging.rs 移入） ──
 
-/// #644 评论 5480360027 修复点 3：index 原生锁边界。
+/// #644 评论 5480360027 修复点 3 + #644 评论 5481496190 问题2：index 原生锁边界。
 ///
-/// 流程：
+/// 流程（lockfile rename 模型，单一写入链）：
 /// 1. 在 staging repo 的 .git 目录下生成目标 index 字节（对应 staging HEAD 的 tree）。
 /// 2. 获取 live `.git/index.lock` 独占锁（Git 原生 index lock 约定路径）。
 /// 3. 拿到锁后重新读取 live index，确认仍等于 snapshot.index。
-/// 4. 仍一致才把目标 index 原子安装成 `.git/index`。
+/// 4. 仍一致才把目标 index 字节直接写入 lock 文件，fsync 后 rename lock → index。
+///    rename 成功即提交并释放锁（lock 不再存在，index 是新内容）。
 /// 5. 不一致直接返回 `ConcurrentMetadataChanged`，不允许覆盖。
 ///
-/// 这样把"检查旧 index → 写新 index"变成一个真正不可被外部 Git 写入插队的区间。
+/// #644 评论 5481496190 问题2：不再用 IndexLockGuard（空 lock 文件）+
+/// atomic_write_bytes(index) 双写入链。旧模型崩溃窗口在 atomic_write 完成后、
+/// Drop 删除 lock 前，新 index 已写入但空 .git/index.lock 永久残留。新模型
+/// 把内容直接写进 lock 文件，rename lock → index 作为提交和解锁，消除崩溃窗口：
+/// - rename 前 crash：lock 拋留但 index 未变，rollback 清理 lock 即可。
+/// - rename 后 crash：lock 已消失，index 已更新，无需清理。
 fn install_index_with_lock(
     live_root: &Path,
     _live_repo: &git2::Repository,
@@ -1477,11 +1524,27 @@ fn install_index_with_lock(
     new_oid: git2::Oid,
     snapshot: &GitMetadataSnapshot,
 ) -> std::result::Result<(), GitFinalizeError> {
+    use std::io::Write;
+
     // 1. 在 staging .git 目录下生成目标 index 字节。
     let target_index_bytes = generate_target_index_bytes(staging_repo, new_oid)?;
 
-    // 2. 获取 live .git/index.lock 独占锁。
-    let _lock_guard = IndexLockGuard::acquire(live_root)?;
+    // 2. 获取 live .git/index.lock 独占锁（create_new，文件已存在返回并发错误）。
+    let lock_path = live_root.join(".git").join("index.lock");
+    let mut lock_file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(GitFinalizeError::ConcurrentMetadataChanged {
+                reason: "index.lock exists: concurrent git process is writing index"
+                    .to_string(),
+            });
+        }
+        Err(e) => return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e))),
+    };
 
     // 3. 拿到锁后重新读取 live index，确认仍等于 snapshot.index。
     let index_path = live_root.join(".git").join("index");
@@ -1493,17 +1556,45 @@ fn install_index_with_lock(
         IndexSnapshot::Missing
     };
     if !index_snapshot_eq(&current_index, &snapshot.index) {
+        // CAS 失败：清理我们创建的 lock 并返回 ConcurrentMetadataChanged。
+        let _ = fs::remove_file(&lock_path);
         return Err(GitFinalizeError::ConcurrentMetadataChanged {
             reason: "index changed between verify and acquire of index.lock".to_string(),
         });
     }
 
-    // 4. 仍一致才把目标 index 原子安装成 .git/index。
-    // 用 atomic_write_bytes 写入（临时文件 + rename），不经过 git2::Index::write()
-    //（它内部会自己创建 index.lock，我们已持有锁会冲突）。
-    crate::storage::atomic_write_bytes(&index_path, &target_index_bytes)?;
+    // 4. 把目标 index 字节直接写入 lock 文件，fsync 后 rename lock → index。
+    //    写入或 rename 失败时清理 lock，不留半写入状态。
+    if let Err(e) = lock_file.write_all(&target_index_bytes) {
+        let _ = fs::remove_file(&lock_path);
+        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e)));
+    }
+    if let Err(e) = lock_file.flush() {
+        let _ = fs::remove_file(&lock_path);
+        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e)));
+    }
+    if let Err(e) = lock_file.sync_all() {
+        let _ = fs::remove_file(&lock_path);
+        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e)));
+    }
+    drop(lock_file);
 
-    // 5. lock_guard drop 时释放锁。
+    // rename lock → index（原子提交 + 释放锁）。
+    if let Err(e) = fs::rename(&lock_path, &index_path) {
+        let _ = fs::remove_file(&lock_path);
+        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e)));
+    }
+
+    // fsync 父目录持久化目录项（Unix）。
+    #[cfg(unix)]
+    {
+        let git_dir = live_root.join(".git");
+        let dir = std::fs::File::open(&git_dir)
+            .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+        dir.sync_all()
+            .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+    }
+
     Ok(())
 }
 
@@ -1768,11 +1859,13 @@ fn sync_remote_refs(
                         name
                     )))
                 })?;
+                // #644 评论 5481496190 问题1：force=true 让 libgit2 能更新已存在的 ref。
+                // current_id=old_oid 提供 CAS 保护，current != old_oid 时返回 EMODIFIED。
                 live_repo
                     .reference_matching(
                         name,
                         target,
-                        false,
+                        true,
                         old_oid,
                         "sync: update remote-tracking ref from staging",
                     )
@@ -1987,6 +2080,7 @@ mod tests {
                 &fs::read(live.join(".git").join("index")).unwrap(),
             )),
             ref_plans: Vec::new(),
+            repo_create_owner: None,
         };
         rollback_git_finalize(&live, &snapshot, &plan).unwrap();
         let restored_index = fs::read(live.join(".git").join("index")).unwrap();
@@ -2080,8 +2174,18 @@ mod tests {
         let lock_path = live.join(".git").join("index.lock");
         fs::write(&lock_path, b"concurrent").unwrap();
 
-        // 尝试获取锁应失败。
-        let result = IndexLockGuard::acquire(&live);
+        // install_index_with_lock 应检测到 lock 已存在，返回 ConcurrentMetadataChanged。
+        let snapshot = GitMetadataSnapshot {
+            head: RefSnapshot::Symbolic {
+                target: "refs/heads/main".to_string(),
+            },
+            refs: std::collections::BTreeMap::new(),
+            index: IndexSnapshot::Missing,
+            repo_existed: true,
+        };
+        let staging_head = staging_repo.head().unwrap();
+        let new_oid = staging_head.target().unwrap();
+        let result = install_index_with_lock(&live, &repo, &staging_repo, new_oid, &snapshot);
         assert!(matches!(
             result,
             Err(GitFinalizeError::ConcurrentMetadataChanged { .. })
@@ -2157,6 +2261,7 @@ mod tests {
                 Some(old_oid.to_string()),
                 new_oid.to_string(),
             )],
+            repo_create_owner: None,
         };
 
         // rollback 应成功（current == new_oid，反向 CAS 回 old_oid）。
