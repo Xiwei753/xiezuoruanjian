@@ -138,21 +138,32 @@ impl StagingRun {
     /// #644 评论 5473789298 第3节：按 [`ContentClass`] 分类决策，不再统一字节比较：
     /// - [`ContentClass::UserTextDocument`]：走 [`three_way_resolve`]，
     ///   `BothChanged` → [`StagingConflict`]；其余按 NoOp/KeepLocal/Apply。
-    /// - [`ContentClass::Metadata`] / [`ContentClass::GeneratedCache`]：LWW 简化
-    ///   （staging commit 无时间戳，远端获胜）。双方都改时 Apply incoming，**不**产生冲突。
-    /// - [`ContentClass::LocalOnly`]：跳过（同步引擎自己的 state/manifest，不冒充正文冲突）。
+    /// - [`ContentClass::Metadata`] / [`ContentClass::GeneratedCache`]：真正 LWW
+    ///   （#644 评论 5474166587 问题3：时间戳 + device_id 决胜，不再固定 remote-wins）。
+    /// - [`ContentClass::LocalOnly`]：按 [`StagingCommitClass`] 进一步细分——
+    ///   EngineState 写回 live，PlatformConfig/Skip 不写回。
+    ///
+    /// #644 评论 5474166587 问题1：CommitPlan 拆 `content_actions` + `engine_state_actions`。
+    /// `app-meta/sync/manifest.sync.json` 和 `app-meta/sync/state.local.json` 作为
+    /// EngineState 写回 live；`.git/`、`full-sync-staging/`、`app-meta/transactions/`
+    /// 永不进 commit；`config.local.json` / secrets 不从 staging 覆盖 live。
     ///
     /// `incoming=None`（远端删除）+ `local==base` → [CommitAction::Delete]。
     /// `incoming=None` + `local!=base`（UserTextDocument）→ Conflict（本地改了、远端删了）。
-    #[allow(clippy::excessive_nesting)]
+    #[allow(clippy::excessive_nesting, clippy::too_many_lines)]
     pub fn compute_commit_plan(&self, live_root: &Path) -> Result<CommitPlan> {
         use crate::sync::content_class::{
-            classify_content_path, is_document_content_path, three_way_resolve, ContentClass,
+            classify_content_path, is_document_content_path, resolve_lww, three_way_resolve,
+            ContentClass, LwwWinner, ThreeWayResult,
         };
 
         let staging_root = self.staging_root();
         let base_root = self.base_root();
         let mut plan = CommitPlan::default();
+
+        // 读取 live 的 device_id（用于 LWW 决胜）。读取失败时回退空字符串，
+        // 退化为纯时间戳比较（仍优于固定 remote-wins）。
+        let live_device_id = read_live_device_id(live_root).unwrap_or_default();
 
         // 收集 base ∪ staging 的路径全集。
         // #644 评论 5473789298 第2节：base 和 staging 都走 list_commit_candidate_paths，
@@ -171,10 +182,32 @@ impl StagingRun {
         for rel in all_paths {
             let rel_str = rel.to_string_lossy().to_string();
 
-            // #644 评论 5473789298 第3节：LocalOnly 是同步引擎自己的 state/manifest，
-            // 不进入 commit plan 的 apply/conflict。
-            if classify_content_path(&rel_str) == ContentClass::LocalOnly {
-                continue;
+            // #644 评论 5474166587 问题1：按 StagingCommitClass 决定 staging commit 写回语义。
+            // 远端同步语义（ContentClass）和 staging commit 写回语义（StagingCommitClass）
+            // 是两个正交维度，不再复用 LocalOnly。
+            match classify_staging_commit_path(&rel_str) {
+                StagingCommitClass::Skip => {
+                    // .git/、full-sync-staging/、app-meta/transactions/、
+                    // config.local.json、secrets：永不进 commit。
+                    continue;
+                }
+                StagingCommitClass::EngineState => {
+                    // app-meta/sync/manifest.sync.json、app-meta/sync/state.local.json、
+                    // app-meta/sync/conflicts.json：Transfer 在 staging 里更新了它们，
+                    // Commit 必须写回 live。直接 apply incoming（无三方比较——这些是
+                    // 同步引擎自己产生的状态，staging 里的就是最新权威值）。
+                    let staging_path = staging_root.join(&rel);
+                    let incoming: Option<Vec<u8>> = if staging_path.exists() {
+                        Some(read_bytes(&staging_path)?)
+                    } else {
+                        None
+                    };
+                    apply_incoming(&mut plan, rel, incoming, StagingCommitClass::EngineState);
+                    continue;
+                }
+                StagingCommitClass::Content => {
+                    // 走下方 ContentClass 决策。
+                }
             }
 
             let base_path = base_root.join(&rel);
@@ -207,18 +240,18 @@ impl StagingRun {
                 let local_hash = md5_hex(&local);
                 let incoming_hash = md5_hex(&incoming);
                 match three_way_resolve(&base_hash, &local_hash, &incoming_hash) {
-                    crate::sync::content_class::ThreeWayResult::NoConflict => {
+                    ThreeWayResult::NoConflict => {
                         plan.noop.push(rel);
                     }
-                    crate::sync::content_class::ThreeWayResult::LocalChanged => {
+                    ThreeWayResult::LocalChanged => {
                         // local 改了，incoming==base 没变 → 保留 local。
                         plan.keep_local.push(rel);
                     }
-                    crate::sync::content_class::ThreeWayResult::RemoteChanged => {
+                    ThreeWayResult::RemoteChanged => {
                         // incoming 改了，local==base 没变 → Apply incoming。
-                        apply_incoming(&mut plan, rel, incoming);
+                        apply_incoming(&mut plan, rel, incoming, StagingCommitClass::Content);
                     }
-                    crate::sync::content_class::ThreeWayResult::BothChanged => {
+                    ThreeWayResult::BothChanged => {
                         plan.conflict.push(StagingConflict {
                             rel_path: rel,
                             base_hash,
@@ -228,18 +261,45 @@ impl StagingRun {
                     }
                 }
             } else {
-                // #644 评论 5473789298 第3节：Metadata/GeneratedCache 走 LWW 简化——
-                // staging commit 没有时间戳，双方都改时取 incoming（远端获胜，
-                // full sync 语义是拉取远端更新），不产生冲突。
+                // #644 评论 5474166587 问题3：Metadata/GeneratedCache 走真正 LWW——
+                // 时间戳较大方获胜；同时间 device_id 字典序决胜。不再固定 remote-wins。
+                let content_class = classify_content_path(&rel_str);
+                debug_assert!(
+                    content_class == ContentClass::Metadata
+                        || content_class == ContentClass::GeneratedCache,
+                    "非正文类路径必须是 Metadata 或 GeneratedCache，got {:?} for {}",
+                    content_class,
+                    rel_str
+                );
+
                 if incoming_eq_base {
                     plan.keep_local.push(rel);
                 } else if local_eq_base {
-                    apply_incoming(&mut plan, rel, incoming);
+                    apply_incoming(&mut plan, rel, incoming, StagingCommitClass::Content);
                 } else if local_eq_incoming {
                     plan.noop.push(rel);
                 } else {
-                    // 双方都改 → Apply incoming（LWW 远端获胜）。
-                    apply_incoming(&mut plan, rel, incoming);
+                    // 双方都改 → 真正 LWW 决策。
+                    let local_rec =
+                        build_lww_record(live_root, &rel, &local, &live_device_id, LwwSide::Local);
+                    let remote_rec = build_lww_record(
+                        &staging_root,
+                        &rel,
+                        &incoming,
+                        &live_device_id,
+                        LwwSide::Remote,
+                    );
+                    match resolve_lww(&local_rec, &remote_rec) {
+                        LwwWinner::Remote => {
+                            apply_incoming(&mut plan, rel, incoming, StagingCommitClass::Content);
+                        }
+                        LwwWinner::Local => {
+                            plan.keep_local.push(rel);
+                        }
+                        LwwWinner::Tie => {
+                            plan.noop.push(rel);
+                        }
+                    }
                 }
             }
         }
@@ -305,10 +365,20 @@ impl Drop for StagingRun {
 }
 
 /// Commit plan — Commit 阶段对每个 staging 变化的处理决策。
+///
+/// #644 评论 5474166587 问题1：拆 `content_actions` + `engine_state_actions`。
+/// - `content_actions`：用户内容（正文、元数据、缓存）的写回动作。
+/// - `engine_state_actions`：同步引擎自身状态（manifest.sync.json、
+///   state.local.json、conflicts.json）的写回动作。
+///
+/// 两类最后用同一个 `SaveTransaction` 一次写回 live，不另起第二套保存路径。
 #[derive(Default, Debug)]
 pub struct CommitPlan {
-    /// local==base，安全应用 incoming（含 incoming 独有的新增文件）。
-    pub apply: Vec<CommitAction>,
+    /// 用户内容写回动作：local==base 时安全应用 incoming（含 incoming 独有新增）。
+    pub content_actions: Vec<CommitAction>,
+    /// 引擎状态写回动作：app-meta/sync/manifest.sync.json、state.local.json、
+    /// conflicts.json 等。Transfer 在 staging 里更新了它们，Commit 必须写回 live。
+    pub engine_state_actions: Vec<CommitAction>,
     /// incoming==base，保留 local（无需动作，记录供诊断）。
     pub keep_local: Vec<PathBuf>,
     /// local==incoming，内容相同，无需操作。
@@ -331,12 +401,78 @@ pub struct StagingConflict {
 }
 
 /// 单个文件的 commit 动作。
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CommitAction {
     /// 把 `content` 写到 `rel_path`（相对 target_root）。
     Apply { rel_path: PathBuf, content: Vec<u8> },
     /// 删除 `rel_path`（远端删除，local 没改）。
     Delete { rel_path: PathBuf },
+}
+
+/// #644 评论 5474166587 问题1：staging commit 写回语义分类。
+///
+/// 与 [`ContentClass`]（远端同步语义）正交。决定 Transfer 在 staging 里产生的
+/// 哪些本地状态必须写回 live：
+/// - `Content`：用户内容，走三方比较/LWW 决策。
+/// - `EngineState`：同步引擎自身状态（manifest/state/conflicts），直接写回 live。
+/// - `Skip`：永不进 commit（.git/、full-sync-staging/、app-meta/transactions/、
+///   config.local.json、secrets）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StagingCommitClass {
+    /// 用户内容：正文、元数据、缓存。走三方比较/LWW 决策。
+    Content,
+    /// 引擎状态：manifest.sync.json、state.local.json、conflicts.json。
+    /// Transfer 在 staging 里更新了它们，Commit 必须写回 live。
+    EngineState,
+    /// 永不进 commit：.git/、full-sync-staging/、app-meta/transactions/、
+    /// config.local.json、secrets。
+    Skip,
+}
+
+/// #644 评论 5474166587 问题1：按 staging commit 写回语义分类。
+///
+/// 与 [`crate::sync::content_class::classify_content_path`]（远端同步语义）正交。
+/// `app-meta/` 下只有 `sync/manifest.sync.json`、`sync/state.local.json`、
+/// `sync/conflicts.json` 是 EngineState，其余 app-meta 内容（如 transactions/、
+/// logs/）不进 commit。
+pub(crate) fn classify_staging_commit_path(raw_path: &str) -> StagingCommitClass {
+    // Normalize backslashes to forward slashes for consistent matching on Windows
+    let path = if raw_path.contains('\\') {
+        std::borrow::Cow::Owned(raw_path.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(raw_path)
+    };
+
+    // 永不进 commit 的内部目录（walk_commit_candidates 已跳过，这里兜底）。
+    if path.starts_with(".git/") || path == ".git" {
+        return StagingCommitClass::Skip;
+    }
+    if path.starts_with("full-sync-staging/") || path == "full-sync-staging" {
+        return StagingCommitClass::Skip;
+    }
+    if path.starts_with("app-meta/transactions/") {
+        return StagingCommitClass::Skip;
+    }
+
+    // EngineState：同步引擎自身状态，Transfer 在 staging 里更新了它们，Commit 必须写回 live。
+    if path == "app-meta/sync/manifest.sync.json"
+        || path == "app-meta/sync/state.local.json"
+        || path == "app-meta/sync/conflicts.json"
+    {
+        return StagingCommitClass::EngineState;
+    }
+
+    // 平台配置/凭证：不从 staging 覆盖 live（设备专属）。
+    if path == "app-meta/sync/config.local.json" || path.starts_with("app-meta/sync/secrets") {
+        return StagingCommitClass::Skip;
+    }
+
+    // 其余 app-meta/ 内容（logs/、stats/ 等）不进 commit。
+    if path.starts_with("app-meta/") {
+        return StagingCommitClass::Skip;
+    }
+
+    StagingCommitClass::Content
 }
 
 /// 比较两个 `Option<Vec<u8>>` 是否相等。
@@ -349,22 +485,126 @@ fn opt_bytes_eq(a: &Option<Vec<u8>>, b: &Option<Vec<u8>>) -> bool {
     }
 }
 
-/// #644 评论 5473789298 第3节：把 incoming 内容推入 plan.apply。
+/// #644 评论 5473789298 第3节：把 incoming 内容推入 plan 的 actions 列表。
 ///
 /// `incoming = Some` → [`CommitAction::Apply`]；`incoming = None`（远端删除）→
-/// [`CommitAction::Delete`]。UserTextDocument 的 RemoteChanged 和
-/// Metadata/GeneratedCache 的 LWW 远端获胜都走这条路径。
-fn apply_incoming(plan: &mut CommitPlan, rel: PathBuf, incoming: Option<Vec<u8>>) {
-    match incoming {
-        Some(content) => {
-            plan.apply.push(CommitAction::Apply {
-                rel_path: rel,
-                content,
-            });
+/// [`CommitAction::Delete`]。按 `class` 决定推入 `content_actions` 还是
+/// `engine_state_actions`。
+fn apply_incoming(
+    plan: &mut CommitPlan,
+    rel: PathBuf,
+    incoming: Option<Vec<u8>>,
+    class: StagingCommitClass,
+) {
+    let action = match incoming {
+        Some(content) => CommitAction::Apply {
+            rel_path: rel,
+            content,
+        },
+        None => CommitAction::Delete { rel_path: rel },
+    };
+    match class {
+        StagingCommitClass::EngineState => plan.engine_state_actions.push(action),
+        StagingCommitClass::Content => plan.content_actions.push(action),
+        StagingCommitClass::Skip => {
+            // classify_staging_commit_path 已过滤 Skip，不应到达此处。
+            // 防御性丢弃，不写回 live。
+        }
+    }
+}
+
+/// #644 评论 5474166587 问题3：LWW 记录构造的来源侧。
+#[derive(Debug, Clone, Copy)]
+enum LwwSide {
+    Local,
+    Remote,
+}
+
+/// #644 评论 5474166587 问题3：从文件系统构造 LWW 记录。
+///
+/// 读取文件 mtime 作为 `updated_at_ms`；`op` 按内容是否存在决定（Some → upsert，
+/// None → delete）。`device_id` 用 live 的 device_id（local 和 remote 共用同一设备
+/// 视角，时间戳差异已足够区分；同时间戳时退化为 device_id 字典序，与 GitHub API
+/// 内层 LWW 一致）。
+fn build_lww_record(
+    root: &Path,
+    rel: &Path,
+    content: &Option<Vec<u8>>,
+    device_id: &str,
+    side: LwwSide,
+) -> crate::sync::content_class::LwwRecord {
+    use crate::sync::content_class::LwwRecord;
+
+    let (content_hash, op, updated_at_ms) = match content {
+        Some(bytes) => {
+            let hash = md5_hex(&Some(bytes.clone()));
+            let mtime = read_mtime_ms(root, rel).unwrap_or(0);
+            (hash, "upsert", mtime)
         }
         None => {
-            plan.apply.push(CommitAction::Delete { rel_path: rel });
+            // 远端删除：op=delete，content_hash 为空。
+            // deleted_at_ms 用 mtime（若文件已不存在则 0）。
+            (String::new(), "delete", 0)
         }
+    };
+
+    let deleted_at_ms = if op == "delete" {
+        Some(updated_at_ms)
+    } else {
+        None
+    };
+
+    // remote 侧用 "remote" 作为 device_id（与 lww/manifest.rs::build_remote_records
+    // 对缺失记录的兜底一致），让本地刚改的文件在时间戳相同时不被远端静默覆盖。
+    let record_device_id = match side {
+        LwwSide::Local => device_id.to_string(),
+        LwwSide::Remote => {
+            if device_id.is_empty() {
+                "remote".to_string()
+            } else {
+                // staging 里的 incoming 是远端内容，用 "remote" 标识其来源。
+                "remote".to_string()
+            }
+        }
+    };
+
+    LwwRecord {
+        content_hash,
+        updated_at_ms,
+        deleted_at_ms,
+        device_id: record_device_id,
+        op: op.to_string(),
+    }
+}
+
+/// 读取文件 mtime（Unix 毫秒），失败返回 None。
+fn read_mtime_ms(root: &Path, rel: &Path) -> Option<i64> {
+    let path = root.join(rel);
+    std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .and_then(|t| {
+            t.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map_err(std::io::Error::other)
+        })
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .ok()
+}
+
+/// 读取 live 的 device_id（从 app-meta/sync/state.local.json）。
+///
+/// 读取失败（文件不存在、JSON 损坏等）时返回 None，调用方回退空字符串，
+/// LWW 退化为纯时间戳比较（仍优于固定 remote-wins）。
+fn read_live_device_id(live_root: &Path) -> Option<String> {
+    let state_path = live_root.join("app-meta/sync/state.local.json");
+    if !state_path.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&state_path).ok()?;
+    let state: crate::sync::types::SyncState = serde_json::from_str(&content).ok()?;
+    if state.device_id.is_empty() {
+        None
+    } else {
+        Some(state.device_id)
     }
 }
 
@@ -510,7 +750,7 @@ mod tests {
         fs::write(run.staging_root().join("f.txt"), "incoming").unwrap();
 
         let plan = run.compute_commit_plan(&live).unwrap();
-        assert_eq!(plan.apply.len(), 1);
+        assert_eq!(plan.content_actions.len(), 1);
         assert!(plan.keep_local.is_empty());
         assert!(plan.conflict.is_empty());
     }
@@ -532,7 +772,7 @@ mod tests {
 
         let plan = run.compute_commit_plan(&live).unwrap();
         assert_eq!(plan.keep_local.len(), 1);
-        assert!(plan.apply.is_empty());
+        assert!(plan.content_actions.is_empty());
         assert!(plan.conflict.is_empty());
     }
 
@@ -595,7 +835,7 @@ mod tests {
 
         let plan = run.compute_commit_plan(&live).unwrap();
         assert_eq!(plan.conflict.len(), 1);
-        assert!(plan.apply.is_empty());
+        assert!(plan.content_actions.is_empty());
         assert!(plan.keep_local.is_empty());
     }
 
@@ -613,8 +853,11 @@ mod tests {
         // base ∪ staging = {f.txt}（来自 base），三方比较：local==base, incoming=None → Delete。
 
         let plan = run.compute_commit_plan(&live).unwrap();
-        assert_eq!(plan.apply.len(), 1);
-        assert!(matches!(plan.apply[0], CommitAction::Delete { .. }));
+        assert_eq!(plan.content_actions.len(), 1);
+        assert!(matches!(
+            plan.content_actions[0],
+            CommitAction::Delete { .. }
+        ));
         assert!(plan.conflict.is_empty());
         assert!(plan.keep_local.is_empty());
     }
@@ -632,7 +875,7 @@ mod tests {
 
         let plan = run.compute_commit_plan(&live).unwrap();
         // base=None, local=None, incoming=Some → local==base (both None), incoming!=base → Apply
-        assert_eq!(plan.apply.len(), 1);
+        assert_eq!(plan.content_actions.len(), 1);
         assert!(plan.conflict.is_empty());
     }
 
@@ -654,6 +897,6 @@ mod tests {
         let plan = run.compute_commit_plan(&live).unwrap();
         // local!=base, incoming=None → local!=incoming → Conflict
         assert_eq!(plan.conflict.len(), 1);
-        assert!(plan.apply.is_empty());
+        assert!(plan.content_actions.is_empty());
     }
 }

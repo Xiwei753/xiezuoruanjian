@@ -7,6 +7,8 @@
 //! 分类和哈希比较：
 //! - [`ContentClass`] / [`classify_content_path`] / [`is_document_content_path`]
 //! - [`three_way_resolve`] / [`ThreeWayResult`]
+//! - [`LwwRecord`] / [`LwwWinner`] / [`resolve_lww`] / [`lww_record_time`]
+//!   （#644 评论 5474166587 问题3：纯 LWW 决策提升到始终可用的模块）
 //!
 //! 依赖 `ManifestFileRecord` 的 `PathDecision` / `resolve_path_decision` 仍留在
 //! `lww/compare.rs`（在 `github-api` feature gate 下）。
@@ -144,6 +146,87 @@ pub(crate) enum ThreeWayResult {
     BothChanged,
 }
 
+// ── 纯 LWW 决策（#644 评论 5474166587 问题3） ──
+
+/// 轻量 LWW 比较记录 — 不依赖 `ManifestFileRecord`，始终可用。
+///
+/// `lww/compare.rs::resolve_lww_path` 有真正 LWW（时间戳 + device_id 决胜），
+/// 但依赖 `ManifestFileRecord` 且在 `github-api` feature gate 下。staging commit
+/// （无 feature gate）拿不到。本结构体提供纯 LWW 决策所需的最小字段集，
+/// 让 staging commit 能做真正 LWW 而非固定 remote-wins。
+///
+/// 字段语义与 `ManifestFileRecord` 对应字段一致：
+/// - `content_hash`：MD5 hex 摘要
+/// - `updated_at_ms`：upsert 的 LWW 时间戳
+/// - `deleted_at_ms`：delete 的精确删除时间（优先于 `updated_at_ms`）
+/// - `device_id`：时间戳相同时字典序决胜
+/// - `op`：`"upsert"` 或 `"delete"`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LwwRecord {
+    pub content_hash: String,
+    pub updated_at_ms: i64,
+    pub deleted_at_ms: Option<i64>,
+    pub device_id: String,
+    pub op: String,
+}
+
+/// LWW 决胜结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LwwWinner {
+    /// 本地获胜（保留 local，不应用 incoming）。
+    Local,
+    /// 远端获胜（应用 incoming）。
+    Remote,
+    /// 双方内容相同且操作相同，无需动作。
+    Tie,
+}
+
+/// 获取 LWW 比较时间戳。
+///
+/// 对于 delete 操作，优先使用 `deleted_at_ms`（精确的删除时间），
+/// 回退到 `updated_at_ms`（删除操作记录的更新时间）。
+/// 对于 upsert 操作，直接使用 `updated_at_ms`。
+///
+/// 与 `lww/manifest.rs::lww_record_time` 语义完全一致，提升为始终可用。
+pub(crate) fn lww_record_time(record: &LwwRecord) -> i64 {
+    if record.op == "delete" {
+        record.deleted_at_ms.unwrap_or(record.updated_at_ms)
+    } else {
+        record.updated_at_ms
+    }
+}
+
+/// 纯 LWW 决策 — 时间戳较大方获胜；同时间 device_id 字典序决胜。
+///
+/// 与 `lww/compare.rs::resolve_lww_path` 的决策规则完全一致，但不依赖
+/// `ManifestFileRecord`，让 staging commit（无 `github-api` feature gate）
+/// 也能做真正 LWW。
+///
+/// 不变量：
+/// - 时间戳较大方获胜
+/// - 时间戳相同时：内容相同且操作相同 → `Tie`；否则字典序较大的 device_id 获胜
+/// - 决策结果与 `resolve_lww_path` 一致，保证 GitHub API 内层和 staging 外层
+///   不会出现两套相反的 Metadata 语义
+pub(crate) fn resolve_lww(local: &LwwRecord, remote: &LwwRecord) -> LwwWinner {
+    let local_time = lww_record_time(local);
+    let remote_time = lww_record_time(remote);
+
+    if remote_time > local_time {
+        LwwWinner::Remote
+    } else if remote_time < local_time {
+        LwwWinner::Local
+    } else {
+        // 时间戳相同
+        if remote.content_hash == local.content_hash && remote.op == local.op {
+            LwwWinner::Tie
+        } else if remote.device_id > local.device_id {
+            LwwWinner::Remote
+        } else {
+            LwwWinner::Local
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +285,65 @@ mod tests {
             three_way_resolve("h1", "h2", "h3"),
             ThreeWayResult::BothChanged
         );
+    }
+
+    // ── 纯 LWW 决策测试（#644 评论 5474166587 问题3） ──
+
+    fn lww_rec(hash: &str, time: i64, device: &str, op: &str) -> LwwRecord {
+        LwwRecord {
+            content_hash: hash.to_string(),
+            updated_at_ms: time,
+            deleted_at_ms: None,
+            device_id: device.to_string(),
+            op: op.to_string(),
+        }
+    }
+
+    #[test]
+    fn lww_remote_newer_wins() {
+        let local = lww_rec("h1", 1000, "dev1", "upsert");
+        let remote = lww_rec("h2", 2000, "dev2", "upsert");
+        assert_eq!(resolve_lww(&local, &remote), LwwWinner::Remote);
+    }
+
+    #[test]
+    fn lww_local_newer_wins() {
+        let local = lww_rec("h1", 2000, "dev1", "upsert");
+        let remote = lww_rec("h2", 1000, "dev2", "upsert");
+        assert_eq!(resolve_lww(&local, &remote), LwwWinner::Local);
+    }
+
+    #[test]
+    fn lww_tie_same_content_and_op() {
+        let local = lww_rec("h1", 1000, "dev1", "upsert");
+        let remote = lww_rec("h1", 1000, "dev2", "upsert");
+        assert_eq!(resolve_lww(&local, &remote), LwwWinner::Tie);
+    }
+
+    #[test]
+    fn lww_tie_breaker_device_id_wins() {
+        // 时间戳相同、内容不同 → device_id 字典序较大者获胜
+        let local = lww_rec("h1", 1000, "dev1", "upsert");
+        let remote = lww_rec("h2", 1000, "dev2", "upsert");
+        assert_eq!(resolve_lww(&local, &remote), LwwWinner::Remote);
+    }
+
+    #[test]
+    fn lww_tie_breaker_local_device_id_wins() {
+        let local = lww_rec("h1", 1000, "dev9", "upsert");
+        let remote = lww_rec("h2", 1000, "dev1", "upsert");
+        assert_eq!(resolve_lww(&local, &remote), LwwWinner::Local);
+    }
+
+    #[test]
+    fn lww_record_time_delete_prefers_deleted_at() {
+        let rec = LwwRecord {
+            content_hash: "h".to_string(),
+            updated_at_ms: 1000,
+            deleted_at_ms: Some(2000),
+            device_id: "d".to_string(),
+            op: "delete".to_string(),
+        };
+        assert_eq!(lww_record_time(&rec), 2000);
     }
 }

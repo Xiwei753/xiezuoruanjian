@@ -652,6 +652,11 @@ impl super::WriterCore {
 /// #644 评论 5473105049 第3/4节：逐 target 判断 transfer 结果，只对成功终态的 target
 /// 做 staging commit；失败 target 直接丢弃 staging，绝不能写 live。
 ///
+/// #644 评论 5474166587 问题2：引入 `TargetCommitMode`，Conflict/PartialConflict
+/// 不再整体丢弃 staging，而是 `ConflictMetadataOnly`——把冲突元数据
+/// （state.local.json 的 conflicted_files/conflicts、conflicts.json、冲突副本）
+/// 落到 live，PartialConflict 中已安全完成的非冲突文件也继续提交。
+///
 /// #644 评论 5473105049 第4节：commit IO 失败通过 `TargetCommitResult` 向上传播，
 /// 不能只 `log::warn!` 吞掉。
 ///
@@ -660,6 +665,7 @@ impl super::WriterCore {
 ///
 /// `staging_runs` 与 `transfer_targets` 按索引对应。
 /// 返回每个 target 的 commit 结果 + 每个 target 的冲突列表。
+#[allow(clippy::excessive_nesting, clippy::too_many_lines)]
 fn apply_staging_commits_for_targets(
     staging_runs: &[crate::sync::staging::StagingRun],
     transfer_targets: &[crate::sync::types::TargetSyncResult],
@@ -668,48 +674,123 @@ fn apply_staging_commits_for_targets(
     let mut target_results: Vec<TargetCommitResult> = Vec::new();
 
     for (idx, run) in staging_runs.iter().enumerate() {
-        // 检查对应 target 的 transfer 结果是否为允许提交的终态
-        let should_commit = if let Some(target) = transfer_targets.get(idx) {
-            is_committable_transfer_status(&target.result.status)
+        // 检查对应 target 的 transfer 结果，决定 commit 模式。
+        let mode = if let Some(target) = transfer_targets.get(idx) {
+            target_commit_mode(&target.result.status)
         } else {
-            false
+            TargetCommitMode::Skip
         };
 
-        if !should_commit {
-            log::warn!(
-                "Staging commit: skipping target {} (run_id={}) — transfer not in committable state",
-                idx,
-                run.run_id()
-            );
-            target_results.push(TargetCommitResult::Skipped);
-            target_conflicts.push(Vec::new());
-            run.cleanup();
-            continue;
-        }
-
-        let live_root = run.target_live_root();
-        let plan = match run.compute_commit_plan(live_root) {
-            Ok(plan) => plan,
-            Err(e) => {
-                let msg = format!("compute_commit_plan failed: {}", e);
-                log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-                target_results.push(TargetCommitResult::Failed(msg));
+        match mode {
+            TargetCommitMode::Skip => {
+                log::warn!(
+                    "Staging commit: skipping target {} (run_id={}) — transfer not in committable state",
+                    idx,
+                    run.run_id()
+                );
+                target_results.push(TargetCommitResult::Skipped);
                 target_conflicts.push(Vec::new());
                 run.cleanup();
                 continue;
             }
-        };
-        if let Err(e) = apply_commit_plan_to_live(live_root, &plan.apply) {
-            let msg = format!("apply_commit_plan_to_live failed: {}", e);
-            log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-            target_results.push(TargetCommitResult::Failed(msg));
-            target_conflicts.push(Vec::new());
-            run.cleanup();
-            continue;
+            TargetCommitMode::Full => {
+                let live_root = run.target_live_root();
+                let plan = match run.compute_commit_plan(live_root) {
+                    Ok(plan) => plan,
+                    Err(e) => {
+                        let msg = format!("compute_commit_plan failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                        continue;
+                    }
+                };
+                // Full 模式：content + engine_state 一起写回 live。
+                if let Err(e) = apply_commit_plan_to_live(
+                    live_root,
+                    &plan.content_actions,
+                    &plan.engine_state_actions,
+                ) {
+                    let msg = format!("apply_commit_plan_to_live failed: {}", e);
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    target_results.push(TargetCommitResult::Failed(msg));
+                    target_conflicts.push(Vec::new());
+                    run.cleanup();
+                    continue;
+                }
+                target_conflicts.push(plan.conflict);
+                target_results.push(TargetCommitResult::Ok);
+                run.cleanup();
+            }
+            TargetCommitMode::ConflictMetadataOnly => {
+                let live_root = run.target_live_root();
+                let plan = match run.compute_commit_plan(live_root) {
+                    Ok(plan) => plan,
+                    Err(e) => {
+                        let msg = format!("compute_commit_plan failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                        continue;
+                    }
+                };
+
+                // #644 评论 5474166587 问题2：ConflictMetadataOnly 必须把冲突元数据
+                // 落到 live。engine_state_actions 包含 state.local.json、conflicts.json
+                // （若 staging 里写了），必须写回。
+                // PartialConflict 中已安全完成的非冲突文件可继续提交，但
+                // target.result.conflicts 里的路径必须从 content commit 排除。
+                let transfer_conflict_paths: std::collections::HashSet<String> = transfer_targets
+                    .get(idx)
+                    .map(|t| {
+                        t.result
+                            .conflicts
+                            .iter()
+                            .map(|c| c.local_path.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let safe_content_actions: Vec<_> = plan
+                    .content_actions
+                    .iter()
+                    .filter(|action| {
+                        let rel = match action {
+                            crate::sync::staging::CommitAction::Apply { rel_path, .. } => {
+                                rel_path.to_string_lossy().to_string()
+                            }
+                            crate::sync::staging::CommitAction::Delete { rel_path } => {
+                                rel_path.to_string_lossy().to_string()
+                            }
+                        };
+                        !transfer_conflict_paths.contains(&rel)
+                    })
+                    .cloned()
+                    .collect();
+
+                if let Err(e) = apply_commit_plan_to_live(
+                    live_root,
+                    &safe_content_actions,
+                    &plan.engine_state_actions,
+                ) {
+                    let msg = format!("apply_commit_plan_to_live failed: {}", e);
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    target_results.push(TargetCommitResult::Failed(msg));
+                    target_conflicts.push(Vec::new());
+                    run.cleanup();
+                    continue;
+                }
+                // 两种冲突（Transfer 判定的 + 外层 StagingConflict）汇入同一份
+                // live conflict state。外层 StagingConflict 通过 plan.conflict 返回，
+                // 由 commit_full_sync 的 record_staging_conflicts 写入；
+                // Transfer 判定的冲突已在 target.result.conflicts 里，由聚合逻辑保留。
+                target_conflicts.push(plan.conflict);
+                target_results.push(TargetCommitResult::Ok);
+                run.cleanup();
+            }
         }
-        target_conflicts.push(plan.conflict);
-        target_results.push(TargetCommitResult::Ok);
-        run.cleanup();
     }
 
     StagingCommitOutcome {
@@ -735,31 +816,72 @@ struct StagingCommitOutcome {
     target_conflicts: Vec<Vec<crate::sync::staging::StagingConflict>>,
 }
 
-/// 判断 transfer 结果状态是否允许提交 staging 到 live。
+/// #644 评论 5474166587 问题2：单个 target 的 staging commit 模式。
 ///
-/// 只有成功类终态（Success、NoChanges、LatestWinsApplied、BranchMissingRecovered）
-/// 允许提交。Fatal/Error/Recoverable/Dirty/Conflict 等失败状态直接丢弃 staging。
-fn is_committable_transfer_status(status: &crate::sync::SyncStatus) -> bool {
-    matches!(
-        status,
-        crate::sync::SyncStatus::Success
-            | crate::sync::SyncStatus::NoChanges
-            | crate::sync::SyncStatus::LatestWinsApplied
-            | crate::sync::SyncStatus::BranchMissingRecovered
-    )
+/// - `Full`：成功类终态，content + engine_state 全部写回 live。
+/// - `ConflictMetadataOnly`：Conflict/PartialConflict，冲突元数据 + 已安全完成的
+///   非冲突文件写回 live，冲突路径本身不写回。
+/// - `Skip`：Fatal/Recoverable/Dirty/Error，整体丢弃 staging。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetCommitMode {
+    /// 成功类终态：content + engine_state 全部写回 live。
+    Full,
+    /// Conflict/PartialConflict：冲突元数据 + 已安全完成的非冲突文件写回 live。
+    ConflictMetadataOnly,
+    /// Fatal/Recoverable/Dirty/Error：整体丢弃 staging。
+    Skip,
+}
+
+/// #644 评论 5474166587 问题2：根据 transfer 结果状态决定 staging commit 模式。
+///
+/// 规则：
+/// - 成功类终态（Success、NoChanges、LatestWinsApplied、BranchMissingRecovered）→ `Full`
+/// - Conflict/PartialConflict → `ConflictMetadataOnly`
+/// - Fatal/Error/Recoverable/Dirty → `Skip`
+fn target_commit_mode(status: &crate::sync::SyncStatus) -> TargetCommitMode {
+    use crate::sync::SyncStatus;
+    match status {
+        SyncStatus::Success
+        | SyncStatus::NoChanges
+        | SyncStatus::LatestWinsApplied
+        | SyncStatus::BranchMissingRecovered => TargetCommitMode::Full,
+        SyncStatus::Conflict | SyncStatus::PartialConflict => {
+            TargetCommitMode::ConflictMetadataOnly
+        }
+        // 其余（FatalError/Error/RecoverableError/DirtyRepoBlocked/Syncing/Idle/ConfiguredNotTested）
+        // 全部 Skip。
+        _ => TargetCommitMode::Skip,
+    }
 }
 
 /// #644 评论 5473105049 第4节：把 commit plan 中的 Apply/Delete 变更通过 SaveTransaction
 /// 写回 live root。返回 `Result<()>`，任何 IO 失败都向上传播。
+///
+/// #644 评论 5474166587 问题1：content_actions + engine_state_actions 用同一个
+/// `SaveTransaction` 一次写回，不另起第二套保存路径。
 fn apply_commit_plan_to_live(
     live_root: &std::path::Path,
-    actions: &[crate::sync::staging::CommitAction],
+    content_actions: &[crate::sync::staging::CommitAction],
+    engine_state_actions: &[crate::sync::staging::CommitAction],
 ) -> crate::error::Result<()> {
-    if actions.is_empty() {
+    if content_actions.is_empty() && engine_state_actions.is_empty() {
         return Ok(());
     }
     let mut tx = crate::storage::transaction::SaveTransaction::new(live_root);
-    for action in actions {
+    // engine_state 先入事务（state/manifest 先就绪，再写用户内容）。
+    for action in engine_state_actions {
+        match action {
+            crate::sync::staging::CommitAction::Apply { rel_path, content } => {
+                let rel_str = rel_path.to_string_lossy();
+                tx.add_bytes(&rel_str, content)?;
+            }
+            crate::sync::staging::CommitAction::Delete { rel_path } => {
+                let rel_str = rel_path.to_string_lossy();
+                tx.add_delete(&rel_str);
+            }
+        }
+    }
+    for action in content_actions {
         match action {
             crate::sync::staging::CommitAction::Apply { rel_path, content } => {
                 let rel_str = rel_path.to_string_lossy();
