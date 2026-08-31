@@ -462,7 +462,7 @@ fn rollback_full_sync_transaction(
                 e
             )))
         })?;
-        crate::sync::git_commit::rollback_git_finalize(target_root, &git_rec.metadata_snapshot)?;
+        crate::sync::git_commit::rollback_git_finalize(target_root, &git_rec.metadata_snapshot, &git_rec.mutation_log)?;
     }
 
     // 2. 回滚 live 文件（用 backup_entries）。

@@ -767,6 +767,7 @@ fn apply_staging_commits_for_targets(
                                     seed_state,
                                 ),
                             metadata_snapshot: snap.clone(),
+                            mutation_log: crate::sync::git_commit::GitFinalizeMutationLog::default(),
                         })
                     } else {
                         None
@@ -799,7 +800,7 @@ fn apply_staging_commits_for_targets(
                     run.git_seed_state(),
                     git_snapshot.as_ref(),
                 ) {
-                    Ok(()) => {
+                    Ok(_mutation_log) => {
                         // Git finalize 成功，清理事务目录。
                         tx.finish();
                         target_conflicts.push(plan.conflict);
