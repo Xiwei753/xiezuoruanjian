@@ -81,19 +81,52 @@ pub struct GitMetadataSnapshot {
 ///
 /// 写入 `TransactionManifest.git_finalize`，使重启后能独立从 live + transaction 目录
 /// 完成恢复，不依赖可能残缺的 staging run。
+///
+/// #644 评论 5480360027：`plan` 是 write-ahead plan，在 `prepare_git_finalize` 时
+/// 一次完整生成，随 manifest 原子落盘。finalize 不再依赖只存在内存里的 mutation_log；
+/// 成功就 finish，失败/崩溃恢复都只依赖磁盘上的 plan。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitFinalizeRecoveryRecord {
     /// seed 时记录的 live Git 仓库状态（序列化友好版本）。
     pub seed_state: SerializableGitSeedState,
     /// finalize 前的 Git metadata 快照。
     pub metadata_snapshot: GitMetadataSnapshot,
-    /// #644 评论 5478237852 问题2：mutation journal，记录本轮实际写入的内容。
+    /// #644 评论 5480360027：write-ahead plan，在写 live Git metadata 前完整落盘。
+    /// 旧 manifest 中无此字段时反序列化为 `GitFinalizePlan::default()`（向后兼容）。
+    #[serde(default)]
+    pub plan: GitFinalizePlan,
+    /// #644 评论 5478237852 问题2：旧 mutation journal 字段，保留向后兼容。
+    /// 新代码使用 `plan`，不再读写此字段。
+    #[serde(default)]
     pub mutation_log: GitFinalizeMutationLog,
 }
 
-/// #644 评论 5478237852 问题2：mutation journal，记录 finalize 本轮实际写入的内容。
-/// rollback 只撤销本 journal 记录的写入，用 CAS 保护并发写入不被覆盖。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// #644 评论 5480360027：write-ahead plan，在 `prepare_git_finalize` 时完整生成。
+///
+/// 与 `GitFinalizeMutationLog` 的根本区别：plan 在写任何 live Git metadata **之前**
+/// 就能完整落盘到 manifest，不依赖 finalize 过程中的内存状态。崩溃恢复时只依赖
+/// 磁盘上的 plan，根据当前 live 值判断某一步是否真的发生：
+/// - current == new_oid → 这一步已执行，反向 CAS 回 old_oid；
+/// - current == old_oid → 这一步没执行，无需 rollback；
+/// - 两者都不是 → 有并发新状态，不能覆盖。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GitFinalizePlan {
+    /// 是否会创建 repo（NotGitRepo 路径）。
+    pub repo_create: bool,
+    /// 计划写入的 index 的 SHA-256。
+    /// `None` 表示不会写 index（staging 无 .git 或无 HEAD）。
+    /// rollback 时只有当前 index hash 等于此值才恢复 snapshot.index。
+    pub new_index_sha256: Option<[u8; 32]>,
+    /// 本轮会修改的 ref 变更计划，按计划写入顺序。
+    /// key = ref 名，value = (old_oid_or_none, new_oid)。
+    /// old_oid_or_none = None 表示 ref 原本不存在（DidNotExist），finalize 会新建。
+    pub ref_plans: Vec<(String, Option<String>, String)>,
+}
+
+/// #644 评论 5478237852 问题2：旧 mutation journal 字段，保留向后兼容。
+///
+/// 新代码使用 `GitFinalizePlan`。此结构仅用于反序列化旧 manifest。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GitFinalizeMutationLog {
     /// 本轮 finalize 是否真的把 .git 安装进了 live（仅 NotGitRepo 路径）。
     pub created_repo_by_us: bool,
@@ -105,17 +138,6 @@ pub struct GitFinalizeMutationLog {
     pub index_written: bool,
     /// 写入前 index 的 SHA-256（用于 CAS rollback：只有当前 index 仍等于我们写的那份才恢复）。
     pub written_index_sha256: Option<[u8; 32]>,
-}
-
-impl Default for GitFinalizeMutationLog {
-    fn default() -> Self {
-        Self {
-            created_repo_by_us: false,
-            ref_mutations: Vec::new(),
-            index_written: false,
-            written_index_sha256: None,
-        }
-    }
 }
 
 /// #644 评论 5476546134 第2节：`GitSeedState` 的序列化友好版本。
@@ -205,12 +227,72 @@ impl Drop for TmpDirGuard {
     }
 }
 
+/// #644 评论 5480360027：RAII 守卫，保证临时文件在 drop 时删除。
+struct TmpFileGuard(PathBuf);
+
+impl TmpFileGuard {
+    fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+}
+
+impl Drop for TmpFileGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+/// #644 评论 5480360027：RAII 守卫，持有 `.git/index.lock` 独占锁。
+///
+/// 通过 `create_new` 创建 lock 文件获取锁（Git 原生 index lock 约定路径）。
+/// 文件已存在时返回 `ConcurrentMetadataChanged`，不覆盖。
+/// drop 时删除 lock 文件释放锁。
+struct IndexLockGuard {
+    lock_path: PathBuf,
+    disarmed: bool,
+}
+
+impl IndexLockGuard {
+    /// 尝试获取 `.git/index.lock`。文件已存在返回 `ConcurrentMetadataChanged`。
+    fn acquire(live_root: &Path) -> std::result::Result<Self, GitFinalizeError> {
+        let lock_path = live_root.join(".git").join("index.lock");
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(_file) => Ok(Self {
+                lock_path,
+                disarmed: false,
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(GitFinalizeError::ConcurrentMetadataChanged {
+                    reason: "index.lock exists: concurrent git process is writing index"
+                        .to_string(),
+                })
+            }
+            Err(e) => Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e))),
+        }
+    }
+}
+
+impl Drop for IndexLockGuard {
+    fn drop(&mut self) {
+        if !self.disarmed {
+            let _ = fs::remove_file(&self.lock_path);
+        }
+    }
+}
+
 // ── 公共 API ──
 
-/// #644 评论 5475805198 第2节 + #644 评论 5476546134 第4节：
-/// 捕获 finalize 前的 Git metadata 快照。
+/// #644 评论 5475805198 第2节 + #644 评论 5476546134 第4节 +
+/// #644 评论 5480360027：
+/// 捕获 finalize 前的 Git metadata 快照，并一次生成完整的 write-ahead plan。
 ///
-/// 在 `SaveTransaction.commit()` 之前调用，快照写入 manifest 供崩溃恢复。
+/// 在 `SaveTransaction.commit()` 之前调用，`(snapshot, plan)` 随 manifest 原子落盘，
+/// 供崩溃恢复使用。plan 在写任何 live Git metadata **之前**就完整持久化，
+/// 不依赖 finalize 过程中的内存状态。
 ///
 /// #644 评论 5476546134 第4节：重写快照模型——
 /// - `head`：只对应 HEAD 引用本身（symbolic / detached）。
@@ -218,20 +300,27 @@ impl Drop for TmpDirGuard {
 ///   `refs/remotes/*`（live 不存在的显式记录 `DidNotExist`）。
 /// - `index`：`IndexSnapshot::Missing` 或 `IndexSnapshot::Bytes`。
 /// - `repo_existed`：finalize 前 live 是否已是 Git repo。
-#[allow(clippy::excessive_nesting)]
+#[allow(clippy::excessive_nesting, clippy::too_many_lines)]
 pub fn prepare_git_finalize(
     live_root: &Path,
     seed_state: &GitSeedState,
     staging_root: &Path,
-) -> Result<GitMetadataSnapshot> {
-    // NotGitRepo 时返回最小快照，不尝试打开 repo。
+) -> Result<(GitMetadataSnapshot, GitFinalizePlan)> {
+    // #644 评论 5480360027：先尝试生成 plan 中与 live 无关的部分（staging HEAD、
+    // 目标 index hash、ref_plans 的 new_oid），这样 NotGitRepo 路径也能拿到完整 plan。
+    let staging_plan = build_staging_plan(staging_root)?;
+
+    // NotGitRepo 时返回最小快照 + plan，不尝试打开 live repo。
     if matches!(seed_state, GitSeedState::NotGitRepo) {
-        return Ok(GitMetadataSnapshot {
+        let snapshot = GitMetadataSnapshot {
             head: RefSnapshot::DidNotExist,
             refs: std::collections::BTreeMap::new(),
             index: IndexSnapshot::Missing,
             repo_existed: false,
-        });
+        };
+        // #644 评论 5480360027：NotGitRepo 路径的 plan 在 build_finalize_plan 中构造。
+        let plan = build_finalize_plan(seed_state, &snapshot.refs, &staging_plan, staging_root)?;
+        return Ok((snapshot, plan));
     }
 
     crate::storage::git_runtime::ensure_initialized()?;
@@ -340,11 +429,215 @@ pub fn prepare_git_finalize(
         }
     }
 
-    Ok(GitMetadataSnapshot {
-        head,
-        refs,
-        index,
-        repo_existed: true,
+    // #644 评论 5480360027：根据 snapshot + seed_state + staging_plan 构造完整 plan。
+    let plan = build_finalize_plan(seed_state, &refs, &staging_plan, staging_root)?;
+
+    Ok((
+        GitMetadataSnapshot {
+            head,
+            refs,
+            index,
+            repo_existed: true,
+        },
+        plan,
+    ))
+}
+
+/// #644 评论 5480360027：staging 侧 plan 中间结构，只依赖 staging repo + seed_state。
+///
+/// 在 `prepare_git_finalize` 开头生成，包含目标 index hash 和 ref_plans 的 new_oid 部分。
+/// 最终 plan 的 old_oid 由 `build_finalize_plan` 结合 snapshot 补全。
+struct StagingPlan {
+    /// 计划写入的 index 的 SHA-256（staging HEAD 对应的 tree 生成的 index 字节）。
+    /// None 表示 staging 无 .git 或无 HEAD，finalize 不会写 index。
+    new_index_sha256: Option<[u8; 32]>,
+    /// staging HEAD 的 target OID（hex），用于 ref_plans 的 new_oid。
+    /// None 表示 staging 无 .git 或无 HEAD。
+    staging_head_oid: Option<String>,
+    /// staging HEAD 的 shorthand（branch 名），用于 NotGitRepo 路径的 ref_plans。
+    staging_branch_name: String,
+}
+
+/// #644 评论 5480360027：从 staging repo 读取 HEAD、生成目标 index 字节并算 SHA-256。
+///
+/// 只读 staging，不改 live。staging 无 .git 或无 HEAD 时返回 None 字段。
+fn build_staging_plan(staging_root: &Path) -> Result<StagingPlan> {
+    let staging_git_dir = staging_root.join(".git");
+    if !staging_git_dir.exists() {
+        return Ok(StagingPlan {
+            new_index_sha256: None,
+            staging_head_oid: None,
+            staging_branch_name: String::new(),
+        });
+    }
+
+    let staging_repo = git2::Repository::open(staging_root).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "build_staging_plan: open staging repo: {e}"
+        )))
+    })?;
+
+    let staging_head = staging_repo.head().map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "build_staging_plan: staging HEAD missing: {e}"
+        )))
+    })?;
+    let new_oid = staging_head.target().ok_or_else(|| {
+        crate::Error::Io(std::io::Error::other(
+            "build_staging_plan: staging HEAD is unborn (no target OID)",
+        ))
+    })?;
+
+    let branch_name = if let Some(name) = staging_head.shorthand() {
+        name.to_string()
+    } else {
+        "main".to_string()
+    };
+
+    // #644 评论 5480360027：在 staging .git 目录下生成临时 index 文件，算 SHA-256。
+    // 临时文件用 RAII 守卫保证清理。
+    let tmp_id = uuid::Uuid::new_v4().to_string();
+    let tmp_index_path = staging_git_dir.join(format!("index.sujian-tmp-{}", tmp_id));
+    let tmp_index_guard = TmpFileGuard::new(tmp_index_path.clone());
+
+    // 用 Index::open 打开临时路径（libgit2 会创建空 index 并关联 path）。
+    let mut index = git2::Index::open(&tmp_index_path).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "build_staging_plan: open tmp index: {e}"
+        )))
+    })?;
+
+    let new_commit = staging_repo.find_commit(new_oid).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "build_staging_plan: find commit: {e}"
+        )))
+    })?;
+    let new_tree = new_commit.tree().map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "build_staging_plan: find tree: {e}"
+        )))
+    })?;
+    index.read_tree(&new_tree).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "build_staging_plan: read_tree: {e}"
+        )))
+    })?;
+    index.write().map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "build_staging_plan: write tmp index: {e}"
+        )))
+    })?;
+
+    let index_bytes = fs::read(&tmp_index_path)?;
+    let index_hash = sha256_bytes(&index_bytes);
+    drop(tmp_index_guard);
+
+    Ok(StagingPlan {
+        new_index_sha256: Some(index_hash),
+        staging_head_oid: Some(new_oid.to_string()),
+        staging_branch_name: branch_name,
+    })
+}
+
+/// #644 评论 5480360027：结合 snapshot + seed_state + staging_plan + staging_root
+/// 构造完整 plan。
+///
+/// plan 的 old_oid 来自 snapshot（live 当前状态），new_oid 来自 staging_plan。
+/// remote-tracking ref 的 new_oid 从 staging repo 读取。
+#[allow(clippy::excessive_nesting)]
+fn build_finalize_plan(
+    seed_state: &GitSeedState,
+    snapshot_refs: &std::collections::BTreeMap<String, RefSnapshot>,
+    staging_plan: &StagingPlan,
+    staging_root: &Path,
+) -> Result<GitFinalizePlan> {
+    let Some(ref new_oid_str) = staging_plan.staging_head_oid else {
+        // staging 无 HEAD → finalize 不会做任何 Git metadata 变更，
+        // 但 NotGitRepo 路径仍会创建 repo（copy .git from staging）。
+        return Ok(GitFinalizePlan {
+            repo_create: matches!(seed_state, GitSeedState::NotGitRepo),
+            new_index_sha256: None,
+            ref_plans: Vec::new(),
+        });
+    };
+
+    let mut ref_plans: Vec<(String, Option<String>, String)> = Vec::new();
+
+    match seed_state {
+        GitSeedState::NotGitRepo => {
+            // NotGitRepo 路径：创建 refs/heads/<branch>。
+            let branch_name = if staging_plan.staging_branch_name.is_empty() {
+                "main"
+            } else {
+                &staging_plan.staging_branch_name
+            };
+            let ref_name = format!("refs/heads/{}", branch_name);
+            ref_plans.push((ref_name, None, new_oid_str.clone()));
+        }
+        GitSeedState::Unborn { head_ref } => {
+            // Unborn 路径：创建 head_ref（old=None）。
+            ref_plans.push((head_ref.clone(), None, new_oid_str.clone()));
+        }
+        GitSeedState::Existing { head_ref, head_oid } => {
+            // Existing 路径：更新 head_ref（old=head_oid, new=staging HEAD）。
+            ref_plans.push((
+                head_ref.clone(),
+                Some(head_oid.to_string()),
+                new_oid_str.clone(),
+            ));
+        }
+        GitSeedState::Detached { head_oid } => {
+            // Detached 路径：更新 HEAD（old=head_oid, new=staging HEAD）。
+            ref_plans.push((
+                "HEAD".to_string(),
+                Some(head_oid.to_string()),
+                new_oid_str.clone(),
+            ));
+        }
+    }
+
+    // remote-tracking refs：从 snapshot 收集所有 refs/remotes/*，old_oid 来自 snapshot，
+    // new_oid 从 staging repo 读取。staging 没有的 remote ref 不在 plan 中
+    //（finalize 不会改它）。
+    let staging_git_dir = staging_root.join(".git");
+    if staging_git_dir.exists() {
+        let staging_repo = git2::Repository::open(staging_root).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "build_finalize_plan: open staging repo: {e}"
+            )))
+        })?;
+        let staging_refs = staging_repo.references().map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "build_finalize_plan: iterate staging references: {e}"
+            )))
+        })?;
+        for reference in staging_refs {
+            let reference = reference.map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "build_finalize_plan: staging reference iterator error: {e}"
+                )))
+            })?;
+            let Some(name) = reference.name() else {
+                continue;
+            };
+            if !name.starts_with("refs/remotes/") {
+                continue;
+            }
+            let Some(target) = reference.target() else {
+                continue;
+            };
+            let old_oid = match snapshot_refs.get(name) {
+                Some(RefSnapshot::Existed { oid }) => Some(oid.clone()),
+                _ => None,
+            };
+            ref_plans.push((name.to_string(), old_oid, target.to_string()));
+        }
+    }
+
+    Ok(GitFinalizePlan {
+        repo_create: matches!(seed_state, GitSeedState::NotGitRepo),
+        new_index_sha256: staging_plan.new_index_sha256,
+        ref_plans,
     })
 }
 
@@ -366,7 +659,10 @@ fn snapshot_ref_from_repo_ref(reference: &git2::Reference<'_>) -> RefSnapshot {
 /// 按 ref 名在 repo 中查找并构造快照。
 /// #644 评论 5478237852 问题3：只有 git2::ErrorCode::NotFound 可以映射为 DidNotExist，
 /// 其它错误（IO 损坏、锁错误、backend 错误）全部向上传。
-fn snapshot_ref(repo: &git2::Repository, ref_name: &str) -> std::result::Result<RefSnapshot, crate::Error> {
+fn snapshot_ref(
+    repo: &git2::Repository,
+    ref_name: &str,
+) -> std::result::Result<RefSnapshot, crate::Error> {
     match repo.find_reference(ref_name) {
         Ok(reference) => Ok(snapshot_ref_from_repo_ref(&reference)),
         Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(RefSnapshot::DidNotExist),
@@ -412,15 +708,19 @@ pub enum GitFinalizeError {
 /// Git metadata 的并发校验失败）**不调用 rollback_git_finalize**，避免把并发
 /// Git 操作刚写的新状态覆盖成 Transfer 开始前的旧 snapshot。只对 `FinalizeFailed`
 /// （本轮已修改后失败）才 rollback。
+///
+/// #644 评论 5480360027：接收 `plan`（write-ahead plan），不再维护内存 mutation_log。
+/// finalize 成功就 finish，失败/崩溃恢复都只依赖磁盘上的 plan。
 pub fn commit_git_finalize(
     live_root: &Path,
     staging_root: &Path,
     seed_state: &GitSeedState,
     snapshot: &GitMetadataSnapshot,
-) -> std::result::Result<GitFinalizeMutationLog, GitFinalizeError> {
-    let mut mutation_log = GitFinalizeMutationLog::default();
+    plan: &GitFinalizePlan,
+) -> std::result::Result<(), GitFinalizeError> {
     // 调用内部 finalize，失败时按错误类型决定是否 rollback Git metadata。
-    if let Err(e) = finalize_git_repo_metadata_inner(live_root, staging_root, seed_state, snapshot, &mut mutation_log)
+    if let Err(e) =
+        finalize_git_repo_metadata_inner(live_root, staging_root, seed_state, snapshot, plan)
     {
         match &e {
             GitFinalizeError::ConcurrentMetadataChanged { .. } => {
@@ -436,7 +736,7 @@ pub fn commit_git_finalize(
                     "commit_git_finalize: finalize failed ({}), rolling back Git metadata",
                     e
                 );
-                if let Err(rb_err) = rollback_git_finalize(live_root, snapshot, &mutation_log) {
+                if let Err(rb_err) = rollback_git_finalize(live_root, snapshot, plan) {
                     let rb_msg = rb_err.to_string();
                     log::warn!(
                         "commit_git_finalize: rollback also failed: {} (original error: {})",
@@ -452,58 +752,54 @@ pub fn commit_git_finalize(
             }
         }
     }
-    Ok(mutation_log)
+    Ok(())
 }
 
-/// #644 评论 5478237852 问题2：CAS-based rollback，只撤销 mutation_log 记录的写入。
+/// #644 评论 5480360027：CAS-based rollback，根据 plan 的 old_oid/new_oid 做反向 CAS。
 ///
-/// 用 CAS 保护并发写入不被覆盖：只有当前值仍等于我们写入的值时才恢复。
+/// 恢复时根据当前值判断某一步是否真的发生：
+/// - current == new_oid → 这一步已执行，反向 CAS 回 old_oid；
+/// - current == old_oid → 这一步没执行，无需 rollback；
+/// - 两者都不是 → 有并发新状态，不能覆盖。
+///
+/// #644 评论 5480360027 修复点 4：更新型 ref rollback 用 `reference_matching`
+/// 反向 CAS，不再用 `force=true` 的 `reference()`。
 #[allow(clippy::too_many_lines, clippy::excessive_nesting)]
-pub fn rollback_git_finalize(live_root: &Path, snapshot: &GitMetadataSnapshot, mutation_log: &GitFinalizeMutationLog) -> Result<()> {
+pub fn rollback_git_finalize(
+    live_root: &Path,
+    snapshot: &GitMetadataSnapshot,
+    plan: &GitFinalizePlan,
+) -> Result<()> {
     crate::storage::git_runtime::ensure_initialized()?;
 
-    // 1. Rollback index — only if we actually wrote it.
-    // CAS: only restore if current index still matches what we wrote.
-    if mutation_log.index_written {
+    // 1. Rollback index — only if plan says we would write it.
+    // CAS: only restore if current index still matches what we planned to write.
+    if let Some(expected_hash) = plan.new_index_sha256 {
         let index_path = live_root.join(".git").join("index");
-        match (&snapshot.index, &mutation_log.written_index_sha256) {
-            (IndexSnapshot::Bytes(original_bytes), Some(expected_hash)) => {
-                if index_path.exists() {
-                    let current_bytes = fs::read(&index_path)?;
-                    let current_hash = sha256_bytes(&current_bytes);
-                    if current_hash == *expected_hash {
-                        // Index hasn't been touched since we wrote it — safe to restore.
+        if index_path.exists() {
+            let current_bytes = fs::read(&index_path)?;
+            let current_hash = sha256_bytes(&current_bytes);
+            if current_hash == expected_hash {
+                // Index hasn't been touched since we wrote it — safe to restore.
+                match &snapshot.index {
+                    IndexSnapshot::Bytes(original_bytes) => {
                         crate::storage::atomic_write_bytes(&index_path, original_bytes)?;
-                    } else {
-                        log::warn!(
-                            "rollback_git_finalize: index changed since we wrote it (CAS miss), \
-                             skipping index rollback to avoid overwriting concurrent changes"
-                        );
                     }
-                }
-            }
-            (IndexSnapshot::Missing, Some(expected_hash)) => {
-                if index_path.exists() {
-                    let current_bytes = fs::read(&index_path)?;
-                    let current_hash = sha256_bytes(&current_bytes);
-                    if current_hash == *expected_hash {
+                    IndexSnapshot::Missing => {
                         fs::remove_file(&index_path)?;
-                    } else {
-                        log::warn!(
-                            "rollback_git_finalize: index changed since we wrote it (CAS miss), \
-                             skipping index removal"
-                        );
                     }
                 }
-            }
-            _ => {
-                // No hash recorded — shouldn't happen if index_written=true, skip.
+            } else {
+                log::warn!(
+                    "rollback_git_finalize: index changed since we wrote it (CAS miss), \
+                     skipping index rollback to avoid overwriting concurrent changes"
+                );
             }
         }
     }
 
-    // 2. Rollback repo creation — only if we created it AND nothing else touched it.
-    if mutation_log.created_repo_by_us {
+    // 2. Rollback repo creation — only if plan says we would create it.
+    if plan.repo_create {
         let live_git = live_root.join(".git");
         if live_git.exists() {
             // We created this .git; since we're the creator, it's safe to remove
@@ -515,7 +811,7 @@ pub fn rollback_git_finalize(live_root: &Path, snapshot: &GitMetadataSnapshot, m
     }
 
     // 3. Rollback refs — CAS-based: only restore if current value == what we wrote.
-    if mutation_log.ref_mutations.is_empty() {
+    if plan.ref_plans.is_empty() {
         return Ok(());
     }
 
@@ -525,10 +821,10 @@ pub fn rollback_git_finalize(live_root: &Path, snapshot: &GitMetadataSnapshot, m
         )))
     })?;
 
-    for (ref_name, old_oid_str, written_oid_str) in &mutation_log.ref_mutations {
-        let written_oid = git2::Oid::from_str(written_oid_str).map_err(|e| {
+    for (ref_name, old_oid_str, new_oid_str) in &plan.ref_plans {
+        let new_oid = git2::Oid::from_str(new_oid_str).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
-                "rollback_git_finalize: invalid written_oid for {}: {e}",
+                "rollback_git_finalize: invalid new_oid for {}: {e}",
                 ref_name
             )))
         })?;
@@ -537,10 +833,11 @@ pub fn rollback_git_finalize(live_root: &Path, snapshot: &GitMetadataSnapshot, m
         let current = live_repo.find_reference(ref_name);
 
         match (&old_oid_str, current) {
-            // Ref was created by us (DidNotExist -> written_oid).
+            // Ref was created by us (DidNotExist -> new_oid).
             // Only delete if it still equals what we wrote.
+            // Reference::delete() 本身会在 "lookup 后 ref 又变化" 时报错，可以继续用。
             (None, Ok(current_ref)) => {
-                if current_ref.target() == Some(written_oid) {
+                if current_ref.target() == Some(new_oid) {
                     // Still our value — safe to delete.
                     let mut r = current_ref;
                     r.delete().map_err(|e| {
@@ -567,22 +864,37 @@ pub fn rollback_git_finalize(live_root: &Path, snapshot: &GitMetadataSnapshot, m
                 ))));
             }
 
-            // Ref was updated by us (old_oid -> written_oid).
-            // Only restore old_oid if current == written_oid.
+            // Ref was updated by us (old_oid -> new_oid).
+            // #644 评论 5480360027 修复点 4：用反向 CAS `reference_matching`，
+            // current != new_oid 时 git2 返回 Modified，绝不 force 覆盖。
+            //
+            // 注意：libgit2 的 `reference_path_available` 在 force=false 时对已存在
+            // ref 直接返回 EEXISTS，current_id 的 CAS 检查不会被执行。因此必须用
+            // force=true 让 libgit2 能更新已存在的 ref，current_id 参数提供 CAS 保护：
+            // 当前值 != new_oid 时返回 EMODIFIED，只有当前值 == new_oid 才写 old_oid。
             (Some(old_oid_str), Ok(current_ref)) => {
-                if current_ref.target() == Some(written_oid) {
+                if current_ref.target() == Some(new_oid) {
                     let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
                         crate::Error::Io(std::io::Error::other(format!(
                             "rollback_git_finalize: invalid old_oid for {}: {e}",
                             ref_name
                         )))
                     })?;
+                    // 反向 CAS：只有 current == new_oid 时才写 old_oid。
+                    // force=true 让 libgit2 能更新已存在的 ref；
+                    // current_id=new_oid 提供 CAS 保护，current != new_oid 时返回 EMODIFIED。
                     live_repo
-                        .reference(ref_name, old_oid, true, "rollback: CAS restore ref")
+                        .reference_matching(
+                            ref_name,
+                            old_oid,
+                            true,
+                            new_oid,
+                            "rollback: CAS restore ref",
+                        )
                         .map_err(|e| {
                             crate::Error::Io(std::io::Error::other(format!(
-                                "rollback_git_finalize: restore {}: {e}",
-                                ref_name
+                                "rollback_git_finalize: CAS restore {} failed (expected current={} new={}): {}",
+                                ref_name, new_oid, old_oid, e
                             )))
                         })?;
                 } else {
@@ -624,18 +936,20 @@ pub fn rollback_git_finalize(live_root: &Path, snapshot: &GitMetadataSnapshot, m
 ///
 /// #644 评论 5477439446 问题2：对 `ConcurrentMetadataChanged` 不调用 rollback，
 /// 因为本轮尚未修改 live Git metadata。
+///
+/// #644 评论 5480360027：接收 `plan`，不再维护内存 mutation_log。
 pub fn recover_git_finalize(
     live_root: &Path,
     staging_root: &Path,
     seed_state: &GitSeedState,
     snapshot: &GitMetadataSnapshot,
-) -> std::result::Result<GitFinalizeMutationLog, GitFinalizeError> {
-    let mut mutation_log = GitFinalizeMutationLog::default();
+    plan: &GitFinalizePlan,
+) -> std::result::Result<(), GitFinalizeError> {
     // 尝试完成 Git finalize。
-    match finalize_git_repo_metadata_inner(live_root, staging_root, seed_state, snapshot, &mut mutation_log) {
+    match finalize_git_repo_metadata_inner(live_root, staging_root, seed_state, snapshot, plan) {
         Ok(()) => {
             log::info!("recover_git_finalize: successfully completed pending Git finalize");
-            Ok(mutation_log)
+            Ok(())
         }
         Err(e) => match &e {
             GitFinalizeError::ConcurrentMetadataChanged { .. } => {
@@ -650,7 +964,7 @@ pub fn recover_git_finalize(
                     "recover_git_finalize: finalize failed ({}), rolling back Git metadata",
                     e
                 );
-                rollback_git_finalize(live_root, snapshot, &mutation_log).map_err(|rb_err| {
+                rollback_git_finalize(live_root, snapshot, plan).map_err(|rb_err| {
                     GitFinalizeError::RollbackFailed {
                         finalize: e.to_string(),
                         rollback: rb_err.to_string(),
@@ -666,21 +980,29 @@ pub fn recover_git_finalize(
 ///
 /// #644 评论 5476546134 第4节：返回 `GitFinalizeError`，上层遇到 `RollbackFailed`
 /// 时必须保留 transaction 目录。
+///
+/// #644 评论 5480360027：接收 `plan`，不再返回 mutation_log。
 pub fn try_commit_git_finalize(
     live_root: &Path,
     staging_root: &Path,
     seed_state: Option<&GitSeedState>,
     snapshot: Option<&GitMetadataSnapshot>,
-) -> std::result::Result<GitFinalizeMutationLog, GitFinalizeError> {
+    plan: Option<&GitFinalizePlan>,
+) -> std::result::Result<(), GitFinalizeError> {
     let Some(state) = seed_state else {
-        return Ok(GitFinalizeMutationLog::default());
+        return Ok(());
     };
     let Some(snap) = snapshot else {
         return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
             std::io::Error::other("missing GitMetadataSnapshot for Git backend"),
         )));
     };
-    commit_git_finalize(live_root, staging_root, state, snap)
+    let Some(plan) = plan else {
+        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+            std::io::Error::other("missing GitFinalizePlan for Git backend"),
+        )));
+    };
+    commit_git_finalize(live_root, staging_root, state, snap, plan)
 }
 
 // ── 内部 finalize 实现 ──
@@ -690,13 +1012,15 @@ pub fn try_commit_git_finalize(
 /// #644 评论 5477439446 问题2：返回 `GitFinalizeError`，使 `ConcurrentMetadataChanged`
 /// 能向上传播到 `commit_git_finalize`，由其决定是否 rollback。
 /// 接收 `snapshot` 用于 finalize_unborn/finalize_existing 的并发校验。
+///
+/// #644 评论 5480360027：接收 `plan`（write-ahead plan），不再维护内存 mutation_log。
 #[allow(clippy::too_many_lines)]
 fn finalize_git_repo_metadata_inner(
     live_root: &Path,
     staging_root: &Path,
     seed_state: &GitSeedState,
     snapshot: &GitMetadataSnapshot,
-    mutation_log: &mut GitFinalizeMutationLog,
+    plan: &GitFinalizePlan,
 ) -> std::result::Result<(), GitFinalizeError> {
     crate::storage::git_runtime::ensure_initialized()?;
 
@@ -740,7 +1064,6 @@ fn finalize_git_repo_metadata_inner(
             &staging_odb,
             new_oid,
             &branch_name,
-            mutation_log,
         ),
         GitSeedState::Unborn { head_ref } => finalize_unborn(
             live_root,
@@ -749,7 +1072,7 @@ fn finalize_git_repo_metadata_inner(
             new_oid,
             head_ref,
             snapshot,
-            mutation_log,
+            plan,
         ),
         GitSeedState::Existing { head_ref, head_oid } => finalize_existing(
             live_root,
@@ -759,12 +1082,18 @@ fn finalize_git_repo_metadata_inner(
             head_ref,
             *head_oid,
             snapshot,
-            mutation_log,
+            plan,
         ),
-        GitSeedState::Detached { head_oid } => {
-            finalize_detached(live_root, &staging_repo, &staging_odb, new_oid, *head_oid, snapshot, mutation_log)
-                .map_err(GitFinalizeError::FinalizeFailed)
-        }
+        GitSeedState::Detached { head_oid } => finalize_detached(
+            live_root,
+            &staging_repo,
+            &staging_odb,
+            new_oid,
+            *head_oid,
+            snapshot,
+            plan,
+        )
+        .map_err(GitFinalizeError::FinalizeFailed),
     }
 }
 
@@ -774,6 +1103,8 @@ fn finalize_git_repo_metadata_inner(
 /// #644 评论 5475805198 第4节：RAII 守卫保证临时目录清理。
 /// #644 评论 5478237852 问题1：返回 `GitFinalizeError` 而非 `crate::Error`，
 /// 使 `ConcurrentMetadataChanged` 能向上传播，避免 rollback 删除别人刚创建的 `.git`。
+///
+/// #644 评论 5480360027：不再接收 mutation_log。plan 已在 prepare 阶段落盘。
 fn finalize_not_git_repo(
     live_root: &Path,
     staging_root: &Path,
@@ -781,7 +1112,6 @@ fn finalize_not_git_repo(
     staging_odb: &git2::Odb,
     new_oid: git2::Oid,
     branch_name: &str,
-    mutation_log: &mut GitFinalizeMutationLog,
 ) -> std::result::Result<(), GitFinalizeError> {
     let staging_git = staging_root.join(".git");
     let live_git = live_root.join(".git");
@@ -825,6 +1155,8 @@ fn finalize_not_git_repo(
             )))
         })?;
 
+    // NotGitRepo 路径：index 在 tmp repo 中写入，rename 后整体安装到 live。
+    // 不需要 index lock（live 还没有 .git）。
     update_live_index(&tmp_repo, staging_repo, new_oid)?;
 
     // #644 评论 5478237852 问题1：live .git 在 rename 前已出现，返回 ConcurrentMetadataChanged，
@@ -847,12 +1179,11 @@ fn finalize_not_git_repo(
             });
         }
         return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-            std::io::Error::other(format!("finalize_not_git_repo: rename tmp -> .git failed: {e}")),
+            std::io::Error::other(format!(
+                "finalize_not_git_repo: rename tmp -> .git failed: {e}"
+            )),
         )));
     }
-
-    // #644 评论 5478237852 问题2：记录本轮创建了 .git。
-    mutation_log.created_repo_by_us = true;
 
     Ok(())
 }
@@ -864,6 +1195,10 @@ fn finalize_not_git_repo(
 ///
 /// #644 评论 5477439446 问题2：在第一次改 live Git metadata 之前做并发校验，
 /// 校验失败返回 `ConcurrentMetadataChanged`（不触发 rollback）。
+///
+/// #644 评论 5480360027：接收 `plan`，不再维护 mutation_log。
+/// index 写入改为：先在临时目录生成目标 index，获取 `.git/index.lock`，
+/// 拿到锁后重新读取 live index 确认仍等于 snapshot，一致才原子安装。
 fn finalize_unborn(
     live_root: &Path,
     staging_repo: &git2::Repository,
@@ -871,7 +1206,7 @@ fn finalize_unborn(
     new_oid: git2::Oid,
     head_ref: &str,
     snapshot: &GitMetadataSnapshot,
-    mutation_log: &mut GitFinalizeMutationLog,
+    _plan: &GitFinalizePlan,
 ) -> std::result::Result<(), GitFinalizeError> {
     let live_repo = git2::Repository::open(live_root).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
@@ -899,14 +1234,13 @@ fn finalize_unborn(
     // 校验失败返回 ConcurrentMetadataChanged，不触发 rollback。
     verify_git_metadata_unchanged(live_root, snapshot, head_ref)?;
 
-    update_live_index(&live_repo, staging_repo, new_oid)?;
-    // #644 评论 5478237852 问题2：记录 index 写入。
-    mutation_log.index_written = true;
-    mutation_log.written_index_sha256 = Some(sha256_bytes(&fs::read(live_root.join(".git").join("index")).map_err(|e| {
-        GitFinalizeError::FinalizeFailed(crate::Error::Io(e))
-    })?));
+    // #644 评论 5480360027 修复点 3：index 原生锁边界。
+    // 先在临时目录生成目标 index，获取 .git/index.lock，
+    // 拿到锁后重新读取 live index 确认仍等于 snapshot，一致才原子安装。
+    install_index_with_lock(live_root, &live_repo, staging_repo, new_oid, snapshot)?;
 
-    sync_remote_refs(&live_repo, staging_repo, &snapshot.refs, mutation_log)?;
+    // #644 评论 5480360027 修复点 5：sync_remote_refs 严格错误传播。
+    sync_remote_refs(&live_repo, staging_repo, &snapshot.refs)?;
 
     // #644 评论 5475805198 第3节：使用 find_reference("HEAD") 读取未 resolve 的 HEAD。
     // head() 会 resolve symbolic ref，unborn 时返回 UnbornBranch 错误，
@@ -954,9 +1288,6 @@ fn finalize_unborn(
             )))
         })?;
 
-    // #644 评论 5478237852 问题2：记录 branch ref 创建。
-    mutation_log.ref_mutations.push((head_ref.to_string(), None, new_oid.to_string()));
-
     Ok(())
 }
 
@@ -966,6 +1297,9 @@ fn finalize_unborn(
 ///
 /// #644 评论 5477439446 问题2：在第一次改 live Git metadata 之前做并发校验，
 /// 校验失败返回 `ConcurrentMetadataChanged`（不触发 rollback）。
+///
+/// #644 评论 5480360027：接收 `plan`，不再维护 mutation_log。
+#[allow(clippy::too_many_arguments)]
 fn finalize_existing(
     live_root: &Path,
     staging_repo: &git2::Repository,
@@ -974,7 +1308,7 @@ fn finalize_existing(
     head_ref: &str,
     base_oid: git2::Oid,
     snapshot: &GitMetadataSnapshot,
-    mutation_log: &mut GitFinalizeMutationLog,
+    _plan: &GitFinalizePlan,
 ) -> std::result::Result<(), GitFinalizeError> {
     let live_repo = git2::Repository::open(live_root).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
@@ -1002,14 +1336,11 @@ fn finalize_existing(
     // 校验失败返回 ConcurrentMetadataChanged，不触发 rollback。
     verify_git_metadata_unchanged(live_root, snapshot, head_ref)?;
 
-    update_live_index(&live_repo, staging_repo, new_oid)?;
-    // #644 评论 5478237852 问题2：记录 index 写入。
-    mutation_log.index_written = true;
-    mutation_log.written_index_sha256 = Some(sha256_bytes(&fs::read(live_root.join(".git").join("index")).map_err(|e| {
-        GitFinalizeError::FinalizeFailed(crate::Error::Io(e))
-    })?));
+    // #644 评论 5480360027 修复点 3：index 原生锁边界。
+    install_index_with_lock(live_root, &live_repo, staging_repo, new_oid, snapshot)?;
 
-    sync_remote_refs(&live_repo, staging_repo, &snapshot.refs, mutation_log)?;
+    // #644 评论 5480360027 修复点 5：sync_remote_refs 严格错误传播。
+    sync_remote_refs(&live_repo, staging_repo, &snapshot.refs)?;
 
     // #644 评论 5475805198 第3节：确认 HEAD 仍指向 seed 时同一个 branch。
     // 防止用户切换到别的 branch 后还偷偷更新旧 branch。
@@ -1041,9 +1372,6 @@ fn finalize_existing(
             )))
         })?;
 
-    // #644 评论 5478237852 问题2：记录 branch ref 更新。
-    mutation_log.ref_mutations.push((head_ref.to_string(), Some(base_oid.to_string()), new_oid.to_string()));
-
     Ok(())
 }
 
@@ -1051,6 +1379,8 @@ fn finalize_existing(
 ///
 /// #644 评论 5475805198 第3节：使用 `reference_matching("HEAD", ...)` 做真正的 CAS。
 /// 当前代码用 `reference("HEAD", new_oid, true, ...)` 会强制覆盖并发变化。
+///
+/// #644 评论 5480360027：接收 `plan`，不再维护 mutation_log。
 fn finalize_detached(
     live_root: &Path,
     staging_repo: &git2::Repository,
@@ -1058,7 +1388,7 @@ fn finalize_detached(
     new_oid: git2::Oid,
     base_oid: git2::Oid,
     snapshot: &GitMetadataSnapshot,
-    mutation_log: &mut GitFinalizeMutationLog,
+    _plan: &GitFinalizePlan,
 ) -> Result<()> {
     let live_repo = git2::Repository::open(live_root).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
@@ -1093,10 +1423,20 @@ fn finalize_detached(
         }
     })?;
 
-    update_live_index(&live_repo, staging_repo, new_oid)?;
-    // #644 评论 5478237852 问题2：记录 index 写入。
-    mutation_log.index_written = true;
-    mutation_log.written_index_sha256 = Some(sha256_bytes(&fs::read(live_root.join(".git").join("index"))?));
+    // #644 评论 5480360027 修复点 3：index 原生锁边界。
+    install_index_with_lock(live_root, &live_repo, staging_repo, new_oid, snapshot).map_err(
+        |e| match e {
+            GitFinalizeError::FinalizeFailed(inner) => inner,
+            GitFinalizeError::ConcurrentMetadataChanged { reason } => {
+                crate::Error::Io(std::io::Error::other(reason))
+            }
+            GitFinalizeError::RollbackFailed { finalize, rollback } => {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "rollback failed: {rollback} (finalize: {finalize})"
+                )))
+            }
+        },
+    )?;
 
     // #644 评论 5475805198 第3节：使用 reference_matching 做真正的 CAS。
     // current OID 不一致会返回 modified，而不是覆盖。
@@ -1115,13 +1455,105 @@ fn finalize_detached(
             )))
         })?;
 
-    // #644 评论 5478237852 问题2：记录 HEAD 更新。
-    mutation_log.ref_mutations.push(("HEAD".to_string(), Some(base_oid.to_string()), new_oid.to_string()));
-
     Ok(())
 }
 
 // ── 内部辅助函数（从 git_staging.rs 移入） ──
+
+/// #644 评论 5480360027 修复点 3：index 原生锁边界。
+///
+/// 流程：
+/// 1. 在 staging repo 的 .git 目录下生成目标 index 字节（对应 staging HEAD 的 tree）。
+/// 2. 获取 live `.git/index.lock` 独占锁（Git 原生 index lock 约定路径）。
+/// 3. 拿到锁后重新读取 live index，确认仍等于 snapshot.index。
+/// 4. 仍一致才把目标 index 原子安装成 `.git/index`。
+/// 5. 不一致直接返回 `ConcurrentMetadataChanged`，不允许覆盖。
+///
+/// 这样把"检查旧 index → 写新 index"变成一个真正不可被外部 Git 写入插队的区间。
+fn install_index_with_lock(
+    live_root: &Path,
+    _live_repo: &git2::Repository,
+    staging_repo: &git2::Repository,
+    new_oid: git2::Oid,
+    snapshot: &GitMetadataSnapshot,
+) -> std::result::Result<(), GitFinalizeError> {
+    // 1. 在 staging .git 目录下生成目标 index 字节。
+    let target_index_bytes = generate_target_index_bytes(staging_repo, new_oid)?;
+
+    // 2. 获取 live .git/index.lock 独占锁。
+    let _lock_guard = IndexLockGuard::acquire(live_root)?;
+
+    // 3. 拿到锁后重新读取 live index，确认仍等于 snapshot.index。
+    let index_path = live_root.join(".git").join("index");
+    let current_index = if index_path.exists() {
+        let bytes = fs::read(&index_path)
+            .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+        IndexSnapshot::Bytes(bytes)
+    } else {
+        IndexSnapshot::Missing
+    };
+    if !index_snapshot_eq(&current_index, &snapshot.index) {
+        return Err(GitFinalizeError::ConcurrentMetadataChanged {
+            reason: "index changed between verify and acquire of index.lock".to_string(),
+        });
+    }
+
+    // 4. 仍一致才把目标 index 原子安装成 .git/index。
+    // 用 atomic_write_bytes 写入（临时文件 + rename），不经过 git2::Index::write()
+    //（它内部会自己创建 index.lock，我们已持有锁会冲突）。
+    crate::storage::atomic_write_bytes(&index_path, &target_index_bytes)?;
+
+    // 5. lock_guard drop 时释放锁。
+    Ok(())
+}
+
+/// #644 评论 5480360027：在 staging repo 中生成目标 index 字节（对应 staging HEAD 的 tree）。
+///
+/// 在 staging .git 目录下创建临时 index 文件，用 `Index::open` + `read_tree` + `write`
+/// 生成字节，读取后删除临时文件。
+fn generate_target_index_bytes(
+    staging_repo: &git2::Repository,
+    new_oid: git2::Oid,
+) -> std::result::Result<Vec<u8>, GitFinalizeError> {
+    let new_commit = staging_repo.find_commit(new_oid).map_err(|e| {
+        GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
+            "generate_target_index_bytes: find commit: {e}"
+        ))))
+    })?;
+    let new_tree = new_commit.tree().map_err(|e| {
+        GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
+            "generate_target_index_bytes: find tree: {e}"
+        ))))
+    })?;
+
+    // 在 staging .git 目录下创建临时 index 文件。
+    let staging_git_dir = staging_repo.path().to_path_buf();
+    let tmp_id = uuid::Uuid::new_v4().to_string();
+    let tmp_index_path = staging_git_dir.join(format!("index.sujian-tmp-{}", tmp_id));
+    let tmp_index_guard = TmpFileGuard::new(tmp_index_path.clone());
+
+    let mut index = git2::Index::open(&tmp_index_path).map_err(|e| {
+        GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
+            "generate_target_index_bytes: open tmp index: {e}"
+        ))))
+    })?;
+    index.read_tree(&new_tree).map_err(|e| {
+        GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
+            "generate_target_index_bytes: read_tree: {e}"
+        ))))
+    })?;
+    index.write().map_err(|e| {
+        GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
+            "generate_target_index_bytes: write tmp index: {e}"
+        ))))
+    })?;
+
+    let bytes = fs::read(&tmp_index_path)
+        .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+    drop(tmp_index_guard);
+
+    Ok(bytes)
+}
 
 /// 从 staging ODB 导入 live ODB 缺失的对象。
 fn import_missing_objects(staging_odb: &git2::Odb, live_odb: &git2::Odb) -> Result<()> {
@@ -1239,7 +1671,10 @@ fn verify_git_metadata_unchanged(
 
 /// 读取 ref 的当前快照。
 /// #644 评论 5478237852 问题3：返回 Result，只有 NotFound 映射为 DidNotExist。
-fn read_ref_snapshot(repo: &git2::Repository, ref_name: &str) -> std::result::Result<RefSnapshot, crate::Error> {
+fn read_ref_snapshot(
+    repo: &git2::Repository,
+    ref_name: &str,
+) -> std::result::Result<RefSnapshot, crate::Error> {
     match repo.find_reference(ref_name) {
         Ok(r) => Ok(snapshot_ref_from_repo_ref(&r)),
         Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(RefSnapshot::DidNotExist),
@@ -1275,75 +1710,82 @@ fn index_snapshot_eq(a: &IndexSnapshot, b: &IndexSnapshot) -> bool {
 /// - `DidNotExist`：用 `force=false` 创建，已存在则失败（CAS）。
 /// - `Existed { oid }`：用 `reference_matching` CAS，当前 OID 不匹配则失败。
 /// - `Symbolic`：remote ref 不应是 symbolic，跳过。
+///
+/// #644 评论 5480360027 修复点 5：严格错误传播。
+/// `references()?` 而非 `if let Ok(...)`，循环里 `reference?` 而非 `flatten()`。
+/// 任何错误都向上传播，进入本轮 finalize 失败/rollback，不能静默跳过。
 #[allow(clippy::excessive_nesting)]
 fn sync_remote_refs(
     live_repo: &git2::Repository,
     staging_repo: &git2::Repository,
     snapshot_refs: &std::collections::BTreeMap<String, RefSnapshot>,
-    mutation_log: &mut GitFinalizeMutationLog,
 ) -> Result<()> {
-    if let Ok(staging_refs) = staging_repo.references() {
-        for reference in staging_refs.flatten() {
-            let Some(name) = reference.name() else {
-                continue;
-            };
-            if !name.starts_with("refs/remotes/") {
-                continue;
-            }
-            let Some(target) = reference.target() else {
-                continue;
-            };
-            let old_snapshot = snapshot_refs
-                .get(name)
-                .cloned()
-                .unwrap_or(RefSnapshot::DidNotExist);
-            match &old_snapshot {
-                RefSnapshot::DidNotExist => {
-                    // ref 原本不存在，用 force=false 创建（已存在则失败，CAS 语义）。
-                    live_repo
-                        .reference(
-                            name,
-                            target,
-                            false,
-                            "sync: create remote-tracking ref from staging",
-                        )
-                        .map_err(|e| {
-                            crate::Error::Io(std::io::Error::other(format!(
-                                "sync_remote_refs: create {} failed (CAS expected absent): {}",
-                                name, e
-                            )))
-                        })?;
-                    // #644 评论 5478237852 问题2：记录 ref 创建。
-                    mutation_log.ref_mutations.push((name.to_string(), None, target.to_string()));
-                }
-                RefSnapshot::Existed { oid } => {
-                    let old_oid = git2::Oid::from_str(oid).map_err(|e| {
+    let staging_refs = staging_repo.references().map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "sync_remote_refs: failed to iterate staging references: {e}"
+        )))
+    })?;
+    for reference in staging_refs {
+        let reference = reference.map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "sync_remote_refs: staging reference iterator error: {e}"
+            )))
+        })?;
+        let Some(name) = reference.name() else {
+            continue;
+        };
+        if !name.starts_with("refs/remotes/") {
+            continue;
+        }
+        let Some(target) = reference.target() else {
+            continue;
+        };
+        let old_snapshot = snapshot_refs
+            .get(name)
+            .cloned()
+            .unwrap_or(RefSnapshot::DidNotExist);
+        match &old_snapshot {
+            RefSnapshot::DidNotExist => {
+                // ref 原本不存在，用 force=false 创建（已存在则失败，CAS 语义）。
+                live_repo
+                    .reference(
+                        name,
+                        target,
+                        false,
+                        "sync: create remote-tracking ref from staging",
+                    )
+                    .map_err(|e| {
                         crate::Error::Io(std::io::Error::other(format!(
-                            "sync_remote_refs: invalid old oid for {}: {e}",
-                            name
+                            "sync_remote_refs: create {} failed (CAS expected absent): {}",
+                            name, e
                         )))
                     })?;
-                    live_repo
-                        .reference_matching(
-                            name,
-                            target,
-                            false,
-                            old_oid,
-                            "sync: update remote-tracking ref from staging",
-                        )
-                        .map_err(|e| {
-                            crate::Error::Io(std::io::Error::other(format!(
-                                "sync_remote_refs: CAS update {} failed (old={} new={}): {}",
-                                name, old_oid, target, e
-                            )))
-                        })?;
-                    // #644 评论 5478237852 问题2：记录 ref 更新。
-                    mutation_log.ref_mutations.push((name.to_string(), Some(oid.clone()), target.to_string()));
-                }
-                RefSnapshot::Symbolic { .. } => {
-                    // remote ref 不应是 symbolic，跳过（不覆盖）。
-                    continue;
-                }
+            }
+            RefSnapshot::Existed { oid } => {
+                let old_oid = git2::Oid::from_str(oid).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "sync_remote_refs: invalid old oid for {}: {e}",
+                        name
+                    )))
+                })?;
+                live_repo
+                    .reference_matching(
+                        name,
+                        target,
+                        false,
+                        old_oid,
+                        "sync: update remote-tracking ref from staging",
+                    )
+                    .map_err(|e| {
+                        crate::Error::Io(std::io::Error::other(format!(
+                            "sync_remote_refs: CAS update {} failed (old={} new={}): {}",
+                            name, old_oid, target, e
+                        )))
+                    })?;
+            }
+            RefSnapshot::Symbolic { .. } => {
+                // remote ref 不应是 symbolic，跳过（不覆盖）。
+                continue;
             }
         }
     }
@@ -1424,11 +1866,17 @@ mod tests {
         let staging = tmp.path().join("staging");
         fs::create_dir_all(&staging).unwrap();
 
-        let snapshot = prepare_git_finalize(&live, &GitSeedState::NotGitRepo, &staging).unwrap();
+        let (snapshot, plan) =
+            prepare_git_finalize(&live, &GitSeedState::NotGitRepo, &staging).unwrap();
         assert!(matches!(snapshot.head, RefSnapshot::DidNotExist));
         assert!(snapshot.refs.is_empty());
         assert!(matches!(snapshot.index, IndexSnapshot::Missing));
         assert!(!snapshot.repo_existed);
+        // #644 评论 5480360027：NotGitRepo 路径 plan.repo_create == true。
+        assert!(plan.repo_create);
+        // staging 无 .git → 无目标 index hash。
+        assert!(plan.new_index_sha256.is_none());
+        assert!(plan.ref_plans.is_empty());
     }
 
     #[test]
@@ -1445,10 +1893,15 @@ mod tests {
         let seed = GitSeedState::Unborn {
             head_ref: "refs/heads/main".to_string(),
         };
-        let snapshot = prepare_git_finalize(&live, &seed, &staging).unwrap();
+        let (snapshot, plan) = prepare_git_finalize(&live, &seed, &staging).unwrap();
         assert!(matches!(snapshot.head, RefSnapshot::Symbolic { .. }));
         assert!(snapshot.refs.contains_key("refs/heads/main"));
         assert!(snapshot.repo_existed);
+        // #644 评论 5480360027：Unborn 路径 plan.repo_create == false。
+        assert!(!plan.repo_create);
+        // staging 无 .git → 无目标 index hash，无 ref_plans。
+        assert!(plan.new_index_sha256.is_none());
+        assert!(plan.ref_plans.is_empty());
     }
 
     #[test]
@@ -1477,11 +1930,16 @@ mod tests {
             head_ref: "refs/heads/main".to_string(),
             head_oid: commit_oid,
         };
-        let snapshot = prepare_git_finalize(&live, &seed, &staging).unwrap();
+        let (snapshot, plan) = prepare_git_finalize(&live, &seed, &staging).unwrap();
         assert!(matches!(snapshot.head, RefSnapshot::Symbolic { .. }));
         assert!(matches!(snapshot.index, IndexSnapshot::Bytes(_)));
         assert!(snapshot.refs.contains_key("refs/heads/main"));
         assert!(snapshot.repo_existed);
+        // #644 评论 5480360027：Existing 路径 plan.repo_create == false。
+        assert!(!plan.repo_create);
+        // staging 无 .git → 无目标 index hash，无 ref_plans。
+        assert!(plan.new_index_sha256.is_none());
+        assert!(plan.ref_plans.is_empty());
     }
 
     #[test]
@@ -1509,7 +1967,7 @@ mod tests {
             head_ref: "refs/heads/main".to_string(),
             head_oid: git2::Oid::zero(),
         };
-        let snapshot = prepare_git_finalize(&live, &seed, &staging).unwrap();
+        let (snapshot, _plan) = prepare_git_finalize(&live, &seed, &staging).unwrap();
         let original_index = match &snapshot.index {
             IndexSnapshot::Bytes(b) => b.clone(),
             _ => panic!("expected IndexSnapshot::Bytes"),
@@ -1522,14 +1980,233 @@ mod tests {
         index.write().unwrap();
 
         // Rollback 应恢复原始 index。
-        // #644 评论 5478237852 问题2：CAS-based rollback 需要 mutation_log。
-        let mutation_log = GitFinalizeMutationLog {
-            index_written: true,
-            written_index_sha256: Some(sha256_bytes(&fs::read(live.join(".git").join("index")).unwrap())),
-            ..Default::default()
+        // #644 评论 5480360027：CAS-based rollback 使用 write-ahead plan。
+        let plan = GitFinalizePlan {
+            repo_create: false,
+            new_index_sha256: Some(sha256_bytes(
+                &fs::read(live.join(".git").join("index")).unwrap(),
+            )),
+            ref_plans: Vec::new(),
         };
-        rollback_git_finalize(&live, &snapshot, &mutation_log).unwrap();
+        rollback_git_finalize(&live, &snapshot, &plan).unwrap();
         let restored_index = fs::read(live.join(".git").join("index")).unwrap();
         assert_eq!(restored_index, original_index);
+    }
+
+    /// #644 评论 5480360027：验证 write-ahead plan 在 prepare 阶段完整生成。
+    /// staging 有 .git + HEAD 时，plan.new_index_sha256 和 ref_plans 应非空。
+    #[test]
+    fn prepare_generates_complete_plan_with_staging() {
+        crate::storage::git_runtime::ensure_initialized().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let live = tmp.path().join("live");
+        fs::create_dir_all(&live).unwrap();
+        let _live_repo = git2::Repository::init(&live).unwrap();
+
+        // staging 有 .git + HEAD + 一个 commit。
+        let staging = tmp.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("a.txt"), "hello").unwrap();
+        let staging_repo = git2::Repository::init(&staging).unwrap();
+        let mut index = staging_repo.index().unwrap();
+        index.add_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = staging_repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("test", "test@example.com").unwrap();
+        // 显式用 refs/heads/main branch。
+        let commit_oid = staging_repo
+            .commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        staging_repo
+            .reference_symbolic("HEAD", "refs/heads/main", true, "test: set HEAD")
+            .unwrap();
+
+        let seed = GitSeedState::Unborn {
+            head_ref: "refs/heads/main".to_string(),
+        };
+        let (snapshot, plan) = prepare_git_finalize(&live, &seed, &staging).unwrap();
+        // plan 应有目标 index hash。
+        assert!(
+            plan.new_index_sha256.is_some(),
+            "plan should have new_index_sha256 when staging has HEAD"
+        );
+        // plan 应有 ref_plans（创建 refs/heads/main）。
+        assert_eq!(plan.ref_plans.len(), 1);
+        assert_eq!(plan.ref_plans[0].0, "refs/heads/main");
+        assert!(plan.ref_plans[0].1.is_none()); // old_oid = None (unborn)
+        assert_eq!(plan.ref_plans[0].2, commit_oid.to_string()); // new_oid
+                                                                 // snapshot 仍正确。
+        assert!(matches!(snapshot.head, RefSnapshot::Symbolic { .. }));
+        assert!(snapshot.repo_existed);
+    }
+
+    /// #644 评论 5480360027 修复点 3：验证 index lock 边界。
+    /// 如果 .git/index.lock 已存在，install_index_with_lock 应返回
+    /// ConcurrentMetadataChanged，不覆盖。
+    #[test]
+    fn index_lock_prevents_concurrent_write() {
+        crate::storage::git_runtime::ensure_initialized().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let live = tmp.path().join("live");
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("a.txt"), "hello").unwrap();
+
+        let repo = git2::Repository::init(&live).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("test", "test@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+
+        // staging 有 .git + HEAD。
+        let staging = tmp.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("a.txt"), "hello").unwrap();
+        let staging_repo = git2::Repository::init(&staging).unwrap();
+        let mut s_index = staging_repo.index().unwrap();
+        s_index.add_path(std::path::Path::new("a.txt")).unwrap();
+        s_index.write().unwrap();
+        let s_tree_oid = s_index.write_tree().unwrap();
+        let s_tree = staging_repo.find_tree(s_tree_oid).unwrap();
+        staging_repo
+            .commit(Some("HEAD"), &sig, &sig, "init", &s_tree, &[])
+            .unwrap();
+
+        // 模拟并发：创建 .git/index.lock。
+        let lock_path = live.join(".git").join("index.lock");
+        fs::write(&lock_path, b"concurrent").unwrap();
+
+        // 尝试获取锁应失败。
+        let result = IndexLockGuard::acquire(&live);
+        assert!(matches!(
+            result,
+            Err(GitFinalizeError::ConcurrentMetadataChanged { .. })
+        ));
+
+        // 清理 lock 文件。
+        let _ = fs::remove_file(&lock_path);
+    }
+
+    /// #644 评论 5480360027 修复点 4：验证 ref 反向 CAS rollback。
+    /// 更新型 ref rollback 用 reference_matching，不 force 覆盖并发修改。
+    #[test]
+    fn rollback_ref_uses_reverse_cas() {
+        crate::storage::git_runtime::ensure_initialized().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let live = tmp.path().join("live");
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("a.txt"), "hello").unwrap();
+
+        let repo = git2::Repository::init(&live).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("test", "test@example.com").unwrap();
+        // 创建第一个 commit（old_oid）。
+        let old_oid = repo
+            .commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        repo.reference_symbolic("HEAD", "refs/heads/main", true, "test: set HEAD")
+            .unwrap();
+
+        // 创建第二个 commit（new_oid），模拟 finalize 写入。
+        fs::write(live.join("b.txt"), "world").unwrap();
+        let mut index2 = repo.index().unwrap();
+        index2.add_path(std::path::Path::new("b.txt")).unwrap();
+        index2.write().unwrap();
+        let tree2_oid = index2.write_tree().unwrap();
+        let tree2 = repo.find_tree(tree2_oid).unwrap();
+        let old_commit = repo.find_commit(old_oid).unwrap();
+        let new_oid = repo
+            .commit(
+                Some("refs/heads/main"),
+                &sig,
+                &sig,
+                "second",
+                &tree2,
+                &[&old_commit],
+            )
+            .unwrap();
+
+        let snapshot = GitMetadataSnapshot {
+            head: RefSnapshot::Symbolic {
+                target: "refs/heads/main".to_string(),
+            },
+            refs: std::collections::BTreeMap::from([(
+                "refs/heads/main".to_string(),
+                RefSnapshot::Existed {
+                    oid: old_oid.to_string(),
+                },
+            )]),
+            index: IndexSnapshot::Missing,
+            repo_existed: true,
+        };
+
+        // plan 记录 old_oid -> new_oid。
+        let plan = GitFinalizePlan {
+            repo_create: false,
+            new_index_sha256: None,
+            ref_plans: vec![(
+                "refs/heads/main".to_string(),
+                Some(old_oid.to_string()),
+                new_oid.to_string(),
+            )],
+        };
+
+        // rollback 应成功（current == new_oid，反向 CAS 回 old_oid）。
+        rollback_git_finalize(&live, &snapshot, &plan).unwrap();
+
+        // 验证 ref 已恢复到 old_oid（反向 CAS 成功）。
+        let repo2 = git2::Repository::open(&live).unwrap();
+        let ref_head = repo2.find_reference("refs/heads/main").unwrap();
+        assert_eq!(ref_head.target(), Some(old_oid));
+    }
+
+    /// #644 评论 5480360027 修复点 2：验证 plan 在写 live 前完整落盘。
+    /// prepare_git_finalize 返回的 plan 不依赖 finalize 过程中的内存状态。
+    #[test]
+    fn plan_is_complete_before_writing_live() {
+        crate::storage::git_runtime::ensure_initialized().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let live = tmp.path().join("live");
+        fs::create_dir_all(&live).unwrap();
+
+        let staging = tmp.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("a.txt"), "hello").unwrap();
+        let staging_repo = git2::Repository::init(&staging).unwrap();
+        let mut index = staging_repo.index().unwrap();
+        index.add_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = staging_repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("test", "test@example.com").unwrap();
+        // 显式用 refs/heads/main branch。
+        let commit_oid = staging_repo
+            .commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        // 设置 HEAD 指向 refs/heads/main。
+        staging_repo
+            .reference_symbolic("HEAD", "refs/heads/main", true, "test: set HEAD")
+            .unwrap();
+
+        // NotGitRepo 路径：plan 应完整（repo_create=true, new_index_sha256=Some, ref_plans 非空）。
+        let (snapshot, plan) =
+            prepare_git_finalize(&live, &GitSeedState::NotGitRepo, &staging).unwrap();
+        assert!(plan.repo_create);
+        assert!(plan.new_index_sha256.is_some());
+        assert_eq!(plan.ref_plans.len(), 1);
+        assert_eq!(plan.ref_plans[0].0, "refs/heads/main");
+        assert!(plan.ref_plans[0].1.is_none()); // NotGitRepo → old=None
+        assert_eq!(plan.ref_plans[0].2, commit_oid.to_string());
+        // snapshot 是最小快照。
+        assert!(!snapshot.repo_existed);
+        assert!(matches!(snapshot.index, IndexSnapshot::Missing));
     }
 }

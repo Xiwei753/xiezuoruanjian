@@ -726,7 +726,7 @@ fn apply_staging_commits_for_targets(
                 // #644 评论 5476546134 第1节：prepare_git_finalize 必须在
                 // apply_commit_plan_to_live 之前。snapshot 准备失败时，
                 // live 一字节都不能改。
-                let git_snapshot = if needs_git_finalize {
+                let (git_snapshot, git_plan) = if needs_git_finalize {
                     let seed_state = match run.git_seed_state() {
                         Some(s) => s,
                         None => {
@@ -743,7 +743,7 @@ fn apply_staging_commits_for_targets(
                         seed_state,
                         &run.staging_root(),
                     ) {
-                        Ok(snap) => Some(snap),
+                        Ok((snap, plan)) => (snap, plan),
                         Err(e) => {
                             let msg = format!("prepare_git_finalize failed: {}", e);
                             log::warn!("Staging commit: {} for run {}", msg, run.run_id());
@@ -754,24 +754,36 @@ fn apply_staging_commits_for_targets(
                         }
                     }
                 } else {
-                    None
+                    (
+                        crate::sync::git_commit::GitMetadataSnapshot {
+                            head: crate::sync::git_commit::RefSnapshot::DidNotExist,
+                            refs: std::collections::BTreeMap::new(),
+                            index: crate::sync::git_commit::IndexSnapshot::Missing,
+                            repo_existed: false,
+                        },
+                        crate::sync::git_commit::GitFinalizePlan::default(),
+                    )
                 };
 
                 // #644 评论 5476546134 第1节：在 apply_commit_plan_to_live 之前
                 // 构造 recovery record，传入后与 manifest 一起原子写入。
-                let git_finalize_recovery =
-                    if let (Some(snap), Some(seed_state)) = (&git_snapshot, run.git_seed_state()) {
-                        Some(crate::sync::git_commit::GitFinalizeRecoveryRecord {
-                            seed_state:
-                                crate::sync::git_commit::SerializableGitSeedState::from_seed_state(
-                                    seed_state,
-                                ),
-                            metadata_snapshot: snap.clone(),
-                            mutation_log: crate::sync::git_commit::GitFinalizeMutationLog::default(),
-                        })
-                    } else {
-                        None
-                    };
+                // #644 评论 5480360027：recovery record 持久化 write-ahead plan，
+                // 不再放空 mutation_log。plan 在写 live 前完整落盘。
+                let git_finalize_recovery = if let (Some(snap), Some(seed_state), Some(plan)) =
+                    (Some(&git_snapshot), run.git_seed_state(), Some(&git_plan))
+                {
+                    Some(crate::sync::git_commit::GitFinalizeRecoveryRecord {
+                        seed_state:
+                            crate::sync::git_commit::SerializableGitSeedState::from_seed_state(
+                                seed_state,
+                            ),
+                        metadata_snapshot: snap.clone(),
+                        plan: plan.clone(),
+                        mutation_log: crate::sync::git_commit::GitFinalizeMutationLog::default(),
+                    })
+                } else {
+                    None
+                };
 
                 let mut tx = match apply_commit_plan_to_live(
                     live_root,
@@ -793,14 +805,22 @@ fn apply_staging_commits_for_targets(
 
                 // #644 评论 5475805198 第2节：Git finalize 使用 git_commit 模块。
                 // 失败时自动 rollback Git metadata + SaveTransaction rollback。
+                // #644 评论 5480360027：传入 plan，finalize 成功后 tx.finish()，
+                // 不再依赖返回的 mutation_log。
                 use crate::sync::git_commit::GitFinalizeError;
+                let git_plan_ref = if needs_git_finalize {
+                    Some(&git_plan)
+                } else {
+                    None
+                };
                 match crate::sync::git_commit::try_commit_git_finalize(
                     live_root,
                     &run.staging_root(),
                     run.git_seed_state(),
-                    git_snapshot.as_ref(),
+                    Some(&git_snapshot),
+                    git_plan_ref,
                 ) {
-                    Ok(_mutation_log) => {
+                    Ok(()) => {
                         // Git finalize 成功，清理事务目录。
                         tx.finish();
                         target_conflicts.push(plan.conflict);

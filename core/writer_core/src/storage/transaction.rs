@@ -456,13 +456,19 @@ fn rollback_full_sync_transaction(
     if let Some(ref git_rec) = manifest.git_finalize {
         // #644 评论 5476546134 第3节：删除 NotGitRepo 特判，
         // 统一调用 rollback_git_finalize，让 repo_existed 决定恢复还是删除。
+        // #644 评论 5480360027：使用 write-ahead plan 做 rollback，
+        // 不再依赖 mutation_log（旧 manifest 反序列化时 plan 为 default，rollback 是 no-op）。
         let _seed_state = git_rec.seed_state.to_seed_state().map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
                 "rollback_full_sync_transaction: invalid seed state: {}",
                 e
             )))
         })?;
-        crate::sync::git_commit::rollback_git_finalize(target_root, &git_rec.metadata_snapshot, &git_rec.mutation_log)?;
+        crate::sync::git_commit::rollback_git_finalize(
+            target_root,
+            &git_rec.metadata_snapshot,
+            &git_rec.plan,
+        )?;
     }
 
     // 2. 回滚 live 文件（用 backup_entries）。
