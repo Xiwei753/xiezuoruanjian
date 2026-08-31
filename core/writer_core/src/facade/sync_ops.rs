@@ -759,17 +759,18 @@ fn apply_staging_commits_for_targets(
 
                 // #644 评论 5476546134 第1节：在 apply_commit_plan_to_live 之前
                 // 构造 recovery record，传入后与 manifest 一起原子写入。
-                let git_finalize_recovery = if let (Some(snap), Some(seed_state)) = (&git_snapshot, run.git_seed_state()) {
-                    Some(crate::sync::git_commit::GitFinalizeRecoveryRecord {
-                        seed_state:
-                            crate::sync::git_commit::SerializableGitSeedState::from_seed_state(
-                                seed_state,
-                            ),
-                        metadata_snapshot: snap.clone(),
-                    })
-                } else {
-                    None
-                };
+                let git_finalize_recovery =
+                    if let (Some(snap), Some(seed_state)) = (&git_snapshot, run.git_seed_state()) {
+                        Some(crate::sync::git_commit::GitFinalizeRecoveryRecord {
+                            seed_state:
+                                crate::sync::git_commit::SerializableGitSeedState::from_seed_state(
+                                    seed_state,
+                                ),
+                            metadata_snapshot: snap.clone(),
+                        })
+                    } else {
+                        None
+                    };
 
                 let mut tx = match apply_commit_plan_to_live(
                     live_root,
@@ -815,6 +816,31 @@ fn apply_staging_commits_for_targets(
                             );
                         }
                         let msg = format!("git repo-metadata finalize failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                    }
+                    Err(GitFinalizeError::ConcurrentMetadataChanged { reason }) => {
+                        // #644 评论 5477439446 问题2：并发校验失败，本轮 finalize
+                        // 尚未修改 live Git metadata，不触发 Git metadata rollback。
+                        // 但 SaveTransaction.commit() 可能已改 live 文件，仍需
+                        // tx.rollback() 恢复文件到同步前状态。
+                        log::warn!(
+                            "Staging commit: concurrent git metadata changed before finalize wrote anything: {}",
+                            reason
+                        );
+                        if let Err(rb_err) = tx.rollback() {
+                            log::warn!(
+                                "Staging commit: concurrent metadata changed AND tx rollback failed: {} / {}",
+                                reason,
+                                rb_err
+                            );
+                        }
+                        let msg = format!(
+                            "git repo-metadata finalize aborted: concurrent metadata changed: {}",
+                            reason
+                        );
                         log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                         target_results.push(TargetCommitResult::Failed(msg));
                         target_conflicts.push(Vec::new());
@@ -988,7 +1014,19 @@ fn apply_commit_plan_to_live(
     backup_mode: bool,
     git_finalize_recovery: Option<crate::sync::git_commit::GitFinalizeRecoveryRecord>,
 ) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
-    if content_actions.is_empty() && engine_state_actions.is_empty() {
+    // #644 评论 5477439446 问题1：纯 Git metadata 变化时（actions 为空但
+    // backup_mode/git_finalize_recovery 存在），不能早退。Git backend 完全可能
+    // 出现工作区字节没变、.git 要推进的正常情况（远端 empty commit、branch/ref
+    // 前进但 tree 相同）。此时仍需走 enable_backup_mode() +
+    // set_git_finalize_recovery() + commit() 路径，创建 metadata-only
+    // transaction barrier，使 finalize 中途崩溃后启动恢复有持久化 snapshot。
+    // 保持非 Git backend（backup_mode == false 且无 git_finalize_recovery）的
+    // 原有早退语义。
+    if content_actions.is_empty()
+        && engine_state_actions.is_empty()
+        && !backup_mode
+        && git_finalize_recovery.is_none()
+    {
         return Ok(crate::storage::transaction::SaveTransaction::new(live_root));
     }
     let mut tx = crate::storage::transaction::SaveTransaction::new(live_root);

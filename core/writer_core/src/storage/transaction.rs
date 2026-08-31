@@ -285,7 +285,12 @@ impl SaveTransaction {
         clippy::type_complexity
     )]
     pub fn commit(&mut self) -> Result<()> {
-        if self.entries.is_empty() {
+        // #644 评论 5477439446 问题1：纯 Git metadata 变化时（entries 为空但
+        // git_finalize_recovery 存在），仍需创建 metadata-only transaction barrier。
+        // 让 manifest 落盘（Prepared -> FilesCommittedPendingGit），保留事务到
+        // finish()，不在这里 cleanup。这样 finalize 中途崩溃后启动恢复有持久化
+        // snapshot 可用。
+        if self.entries.is_empty() && self.git_finalize_recovery.is_none() {
             self.cleanup();
             return Ok(());
         }
@@ -457,13 +462,13 @@ fn rollback_full_sync_transaction(
                 e
             )))
         })?;
-        crate::sync::git_commit::rollback_git_finalize(
-            target_root,
-            &git_rec.metadata_snapshot,
-        )?;
+        crate::sync::git_commit::rollback_git_finalize(target_root, &git_rec.metadata_snapshot)?;
     }
 
     // 2. 回滚 live 文件（用 backup_entries）。
+    // #644 评论 5477439446 问题3：manifest 要求 RestoreFile 但 backup 文件不存在时，
+    // 视为恢复失败并返回 Err。只要任意一个 BackupEntry 没有完成恢复，就保留整份
+    // transaction，不能写 RolledBack，不能删除 backup/manifest/tx_dir。
     let backup_dir = tx_dir.join("backup");
     for entry in &manifest.backup_entries {
         match entry {
@@ -473,12 +478,19 @@ fn rollback_full_sync_transaction(
             } => {
                 let target_path = target_root.join(target_relative);
                 let backup_path = backup_dir.join(backup_filename);
-                if backup_path.exists() {
-                    if let Some(parent) = target_path.parent() {
-                        fs::create_dir_all(parent)?;
-                    }
-                    fs::copy(&backup_path, &target_path)?;
+                if !backup_path.exists() {
+                    // manifest 要求 RestoreFile 但 backup 文件缺失 → 恢复失败。
+                    // 返回 Err，保留整份 transaction 给下次恢复机会。
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "rollback_full_sync_transaction: backup file missing for RestoreFile {}: {}",
+                        target_relative,
+                        backup_path.display()
+                    ))));
                 }
+                if let Some(parent) = target_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&backup_path, &target_path)?;
             }
             BackupEntry::RemoveCreated { target_relative } => {
                 let target_path = target_root.join(target_relative);
@@ -604,11 +616,9 @@ pub fn recover_pending_transactions(
                             manifest.transaction_id
                         );
                         // #644 评论 5476546134 第3/4节：统一回滚入口，不吞错。
-                        if let Err(e) = rollback_full_sync_transaction(
-                            &tx_dir,
-                            target_root,
-                            &manifest,
-                        ) {
+                        if let Err(e) =
+                            rollback_full_sync_transaction(&tx_dir, target_root, &manifest)
+                        {
                             log::warn!(
                                 "[transaction] rollback_full_sync_transaction failed for tx={}: {}",
                                 manifest.transaction_id,
@@ -645,11 +655,9 @@ pub fn recover_pending_transactions(
                             manifest.transaction_id
                         );
                         // #644 评论 5476546134 第3/4节：统一回滚入口，不吞错。
-                        if let Err(e) = rollback_full_sync_transaction(
-                            &tx_dir,
-                            target_root,
-                            &manifest,
-                        ) {
+                        if let Err(e) =
+                            rollback_full_sync_transaction(&tx_dir, target_root, &manifest)
+                        {
                             log::warn!(
                                 "[transaction] rollback_full_sync_transaction failed for tx={}: {}",
                                 manifest.transaction_id,

@@ -319,18 +319,26 @@ fn snapshot_ref(repo: &git2::Repository, ref_name: &str) -> RefSnapshot {
 
 // ── Git finalize 错误类型 ──
 
-/// #644 评论 5476546134 第4节：Git finalize 错误类型，区分 finalize 失败和 rollback 失败。
+/// #644 评论 5476546134 第4节 + #644 评论 5477439446 问题2：
+/// Git finalize 错误类型，区分 finalize 失败和 rollback 失败。
 ///
 /// 上层遇到 `RollbackFailed` 时不能把 transaction 清掉，必须保留给下次恢复。
+///
+/// #644 评论 5477439446 问题2：`ConcurrentMetadataChanged` 表示在改 live Git
+/// metadata 之前检测到并发修改（index/HEAD/branch/remote refs 与 snapshot 不一致）。
+/// 此时本轮 finalize 还没改过 live Git metadata，**不能调用 rollback_git_finalize**，
+/// 否则会把别人刚写的新状态覆盖成 Transfer 开始前的旧 snapshot。上层对这类错误
+/// 应直接返回失败，不触发 Git metadata rollback（文件 rollback 仍可由调用方决定）。
 #[derive(Debug, thiserror::Error)]
 pub enum GitFinalizeError {
     #[error("finalize failed: {0}")]
     FinalizeFailed(#[from] crate::Error),
     #[error("finalize failed ({finalize}), rollback also failed: {rollback}")]
-    RollbackFailed {
-        finalize: String,
-        rollback: String,
-    },
+    RollbackFailed { finalize: String, rollback: String },
+    /// #644 评论 5477439446 问题2：并发校验失败，本轮尚未修改 live Git metadata。
+    /// 不触发 Git metadata rollback。`reason` 描述哪个 metadata 不一致。
+    #[error("concurrent git metadata changed before finalize wrote anything: {reason}")]
+    ConcurrentMetadataChanged { reason: String },
 }
 
 /// #644 评论 5475805198 第2节：应用 Git metadata 变更到 live。
@@ -340,31 +348,49 @@ pub enum GitFinalizeError {
 ///
 /// #644 评论 5476546134 第4节：返回 `GitFinalizeError`，区分 finalize 失败和 rollback 失败。
 /// 上层遇到 `RollbackFailed` 时必须保留 transaction 目录。
+///
+/// #644 评论 5477439446 问题2：对 `ConcurrentMetadataChanged`（本轮尚未修改 live
+/// Git metadata 的并发校验失败）**不调用 rollback_git_finalize**，避免把并发
+/// Git 操作刚写的新状态覆盖成 Transfer 开始前的旧 snapshot。只对 `FinalizeFailed`
+/// （本轮已修改后失败）才 rollback。
 pub fn commit_git_finalize(
     live_root: &Path,
     staging_root: &Path,
     seed_state: &GitSeedState,
     snapshot: &GitMetadataSnapshot,
 ) -> std::result::Result<(), GitFinalizeError> {
-    // 调用内部 finalize，失败时 rollback Git metadata。
-    if let Err(e) = finalize_git_repo_metadata_inner(live_root, staging_root, seed_state) {
-        log::warn!(
-            "commit_git_finalize: finalize failed ({}), rolling back Git metadata",
-            e
-        );
-        if let Err(rb_err) = rollback_git_finalize(live_root, snapshot) {
-            let rb_msg = rb_err.to_string();
-            log::warn!(
-                "commit_git_finalize: rollback also failed: {} (original error: {})",
-                rb_msg,
-                e
-            );
-            return Err(GitFinalizeError::RollbackFailed {
-                finalize: e.to_string(),
-                rollback: rb_msg,
-            });
+    // 调用内部 finalize，失败时按错误类型决定是否 rollback Git metadata。
+    if let Err(e) = finalize_git_repo_metadata_inner(live_root, staging_root, seed_state, snapshot)
+    {
+        match &e {
+            GitFinalizeError::ConcurrentMetadataChanged { .. } => {
+                // 本轮尚未修改 live Git metadata，不能 rollback，否则会覆盖并发写入。
+                log::warn!(
+                    "commit_git_finalize: {} (not rolling back Git metadata: nothing written this round)",
+                    e
+                );
+                return Err(e);
+            }
+            GitFinalizeError::FinalizeFailed(_) | GitFinalizeError::RollbackFailed { .. } => {
+                log::warn!(
+                    "commit_git_finalize: finalize failed ({}), rolling back Git metadata",
+                    e
+                );
+                if let Err(rb_err) = rollback_git_finalize(live_root, snapshot) {
+                    let rb_msg = rb_err.to_string();
+                    log::warn!(
+                        "commit_git_finalize: rollback also failed: {} (original error: {})",
+                        rb_msg,
+                        e
+                    );
+                    return Err(GitFinalizeError::RollbackFailed {
+                        finalize: e.to_string(),
+                        rollback: rb_msg,
+                    });
+                }
+                return Err(e);
+            }
         }
-        return Err(GitFinalizeError::FinalizeFailed(e));
     }
     Ok(())
 }
@@ -498,26 +524,43 @@ pub fn rollback_git_finalize(live_root: &Path, snapshot: &GitMetadataSnapshot) -
 ///
 /// 成功：清理事务目录。
 /// 失败：回滚文件（由调用方处理 SaveTransaction rollback）。
+///
+/// #644 评论 5477439446 问题2：对 `ConcurrentMetadataChanged` 不调用 rollback，
+/// 因为本轮尚未修改 live Git metadata。
 pub fn recover_git_finalize(
     live_root: &Path,
     staging_root: &Path,
     seed_state: &GitSeedState,
     snapshot: &GitMetadataSnapshot,
-) -> Result<()> {
+) -> std::result::Result<(), GitFinalizeError> {
     // 尝试完成 Git finalize。
-    match finalize_git_repo_metadata_inner(live_root, staging_root, seed_state) {
+    match finalize_git_repo_metadata_inner(live_root, staging_root, seed_state, snapshot) {
         Ok(()) => {
             log::info!("recover_git_finalize: successfully completed pending Git finalize");
             Ok(())
         }
-        Err(e) => {
-            log::warn!(
-                "recover_git_finalize: finalize failed ({}), rolling back Git metadata",
-                e
-            );
-            rollback_git_finalize(live_root, snapshot)?;
-            Err(e)
-        }
+        Err(e) => match &e {
+            GitFinalizeError::ConcurrentMetadataChanged { .. } => {
+                log::warn!(
+                    "recover_git_finalize: {} (not rolling back Git metadata: nothing written this round)",
+                    e
+                );
+                Err(e)
+            }
+            _ => {
+                log::warn!(
+                    "recover_git_finalize: finalize failed ({}), rolling back Git metadata",
+                    e
+                );
+                rollback_git_finalize(live_root, snapshot).map_err(|rb_err| {
+                    GitFinalizeError::RollbackFailed {
+                        finalize: e.to_string(),
+                        rollback: rb_err.to_string(),
+                    }
+                })?;
+                Err(e)
+            }
+        },
     }
 }
 
@@ -535,11 +578,9 @@ pub fn try_commit_git_finalize(
         return Ok(());
     };
     let Some(snap) = snapshot else {
-        return Err(GitFinalizeError::FinalizeFailed(
-            crate::Error::Io(std::io::Error::other(
-                "missing GitMetadataSnapshot for Git backend",
-            )),
-        ));
+        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+            std::io::Error::other("missing GitMetadataSnapshot for Git backend"),
+        )));
     };
     commit_git_finalize(live_root, staging_root, state, snap)
 }
@@ -547,12 +588,17 @@ pub fn try_commit_git_finalize(
 // ── 内部 finalize 实现 ──
 
 /// 内部 finalize 实现，不含 rollback（由调用方处理）。
+///
+/// #644 评论 5477439446 问题2：返回 `GitFinalizeError`，使 `ConcurrentMetadataChanged`
+/// 能向上传播到 `commit_git_finalize`，由其决定是否 rollback。
+/// 接收 `snapshot` 用于 finalize_unborn/finalize_existing 的并发校验。
 #[allow(clippy::too_many_lines)]
 fn finalize_git_repo_metadata_inner(
     live_root: &Path,
     staging_root: &Path,
     seed_state: &GitSeedState,
-) -> Result<()> {
+    snapshot: &GitMetadataSnapshot,
+) -> std::result::Result<(), GitFinalizeError> {
     crate::storage::git_runtime::ensure_initialized()?;
 
     let staging_git_dir = staging_root.join(".git");
@@ -595,10 +641,16 @@ fn finalize_git_repo_metadata_inner(
             &staging_odb,
             new_oid,
             &branch_name,
+        )
+        .map_err(GitFinalizeError::FinalizeFailed),
+        GitSeedState::Unborn { head_ref } => finalize_unborn(
+            live_root,
+            &staging_repo,
+            &staging_odb,
+            new_oid,
+            head_ref,
+            snapshot,
         ),
-        GitSeedState::Unborn { head_ref } => {
-            finalize_unborn(live_root, &staging_repo, &staging_odb, new_oid, head_ref)
-        }
         GitSeedState::Existing { head_ref, head_oid } => finalize_existing(
             live_root,
             &staging_repo,
@@ -606,9 +658,11 @@ fn finalize_git_repo_metadata_inner(
             new_oid,
             head_ref,
             *head_oid,
+            snapshot,
         ),
         GitSeedState::Detached { head_oid } => {
             finalize_detached(live_root, &staging_repo, &staging_odb, new_oid, *head_oid)
+                .map_err(GitFinalizeError::FinalizeFailed)
         }
     }
 }
@@ -690,13 +744,17 @@ fn finalize_not_git_repo(
 ///
 /// #644 评论 5475805198 第3节：使用 `find_reference("HEAD")` 读取未 resolve 的 HEAD，
 /// 确认 `symbolic_target() == seed head_ref` 且目标 branch ref 仍不存在。
+///
+/// #644 评论 5477439446 问题2：在第一次改 live Git metadata 之前做并发校验，
+/// 校验失败返回 `ConcurrentMetadataChanged`（不触发 rollback）。
 fn finalize_unborn(
     live_root: &Path,
     staging_repo: &git2::Repository,
     staging_odb: &git2::Odb,
     new_oid: git2::Oid,
     head_ref: &str,
-) -> Result<()> {
+    snapshot: &GitMetadataSnapshot,
+) -> std::result::Result<(), GitFinalizeError> {
     let live_repo = git2::Repository::open(live_root).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "finalize_unborn: open live repo: {e}"
@@ -711,14 +769,20 @@ fn finalize_unborn(
     import_missing_objects(staging_odb, &live_odb)?;
 
     if !live_odb.exists(new_oid) {
-        return Err(crate::Error::Io(std::io::Error::other(format!(
-            "finalize_unborn: new_oid {} not found in live after import",
-            new_oid
-        ))));
+        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+            std::io::Error::other(format!(
+                "finalize_unborn: new_oid {} not found in live after import",
+                new_oid
+            )),
+        )));
     }
 
+    // #644 评论 5477439446 问题2：在第一次改 live Git metadata 之前做并发校验。
+    // 校验失败返回 ConcurrentMetadataChanged，不触发 rollback。
+    verify_git_metadata_unchanged(live_root, snapshot, head_ref)?;
+
     update_live_index(&live_repo, staging_repo, new_oid)?;
-    sync_remote_refs(&live_repo, staging_repo)?;
+    sync_remote_refs(&live_repo, staging_repo, &snapshot.refs)?;
 
     // #644 评论 5475805198 第3节：使用 find_reference("HEAD") 读取未 resolve 的 HEAD。
     // head() 会 resolve symbolic ref，unborn 时返回 UnbornBranch 错误，
@@ -732,23 +796,29 @@ fn finalize_unborn(
     // 确认 HEAD 仍是 symbolic 且指向 seed 时的同一个 branch。
     if let Some(sym_target) = raw_head.symbolic_target() {
         if sym_target != head_ref {
-            return Err(crate::Error::Io(std::io::Error::other(format!(
-                "finalize_unborn: HEAD changed from {} to {} during finalize",
-                head_ref, sym_target
-            ))));
+            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                std::io::Error::other(format!(
+                    "finalize_unborn: HEAD changed from {} to {} during finalize",
+                    head_ref, sym_target
+                )),
+            )));
         }
     } else {
-        return Err(crate::Error::Io(std::io::Error::other(
-            "finalize_unborn: HEAD is no longer symbolic (concurrent modification)",
+        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+            std::io::Error::other(
+                "finalize_unborn: HEAD is no longer symbolic (concurrent modification)",
+            ),
         )));
     }
 
     // 确认目标 branch ref 仍不存在（unborn 状态未变）。
     if live_repo.find_reference(head_ref).is_ok() {
-        return Err(crate::Error::Io(std::io::Error::other(format!(
-            "finalize_unborn: branch ref {} already exists (concurrent modification)",
-            head_ref
-        ))));
+        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+            std::io::Error::other(format!(
+                "finalize_unborn: branch ref {} already exists (concurrent modification)",
+                head_ref
+            )),
+        )));
     }
 
     live_repo
@@ -766,6 +836,9 @@ fn finalize_unborn(
 /// finalize 路径 3：live 已有提交的 repo。
 ///
 /// #644 评论 5475805198 第3节：除 head_ref CAS 外，确认 HEAD 仍指向同一 branch。
+///
+/// #644 评论 5477439446 问题2：在第一次改 live Git metadata 之前做并发校验，
+/// 校验失败返回 `ConcurrentMetadataChanged`（不触发 rollback）。
 fn finalize_existing(
     live_root: &Path,
     staging_repo: &git2::Repository,
@@ -773,7 +846,8 @@ fn finalize_existing(
     new_oid: git2::Oid,
     head_ref: &str,
     base_oid: git2::Oid,
-) -> Result<()> {
+    snapshot: &GitMetadataSnapshot,
+) -> std::result::Result<(), GitFinalizeError> {
     let live_repo = git2::Repository::open(live_root).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "finalize_existing: open live repo: {e}"
@@ -788,24 +862,32 @@ fn finalize_existing(
     import_missing_objects(staging_odb, &live_odb)?;
 
     if !live_odb.exists(new_oid) {
-        return Err(crate::Error::Io(std::io::Error::other(format!(
-            "finalize_existing: new_oid {} not found in live after import",
-            new_oid
-        ))));
+        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+            std::io::Error::other(format!(
+                "finalize_existing: new_oid {} not found in live after import",
+                new_oid
+            )),
+        )));
     }
 
+    // #644 评论 5477439446 问题2：在第一次改 live Git metadata 之前做并发校验。
+    // 校验失败返回 ConcurrentMetadataChanged，不触发 rollback。
+    verify_git_metadata_unchanged(live_root, snapshot, head_ref)?;
+
     update_live_index(&live_repo, staging_repo, new_oid)?;
-    sync_remote_refs(&live_repo, staging_repo)?;
+    sync_remote_refs(&live_repo, staging_repo, &snapshot.refs)?;
 
     // #644 评论 5475805198 第3节：确认 HEAD 仍指向 seed 时同一个 branch。
     // 防止用户切换到别的 branch 后还偷偷更新旧 branch。
     if let Ok(raw_head) = live_repo.find_reference("HEAD") {
         if let Some(sym_target) = raw_head.symbolic_target() {
             if sym_target != head_ref {
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "finalize_existing: HEAD now points to {} but seed was {}",
-                    sym_target, head_ref
-                ))));
+                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                    std::io::Error::other(format!(
+                        "finalize_existing: HEAD now points to {} but seed was {}",
+                        sym_target, head_ref
+                    )),
+                )));
             }
         }
     }
@@ -917,8 +999,126 @@ fn import_missing_objects(staging_odb: &git2::Odb, live_odb: &git2::Odb) -> Resu
     Ok(())
 }
 
+/// #644 评论 5477439446 问题2：在第一次改 live Git metadata 之前，校验
+/// HEAD、目标 branch、index、本轮会修改的 remote refs 是否仍等于 snapshot。
+/// 校验失败返回 `GitFinalizeError::ConcurrentMetadataChanged`，不触发 rollback。
+///
+/// `import_missing_objects` 已在调用前完成，它只追加 ODB object（append-only），
+/// 不覆盖任何现有 Git metadata，因此不影响本校验。
+fn verify_git_metadata_unchanged(
+    live_root: &Path,
+    snapshot: &GitMetadataSnapshot,
+    head_ref: &str,
+) -> std::result::Result<(), GitFinalizeError> {
+    let live_repo = git2::Repository::open(live_root).map_err(|e| {
+        GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
+            "verify_git_metadata_unchanged: open live repo: {e}"
+        ))))
+    })?;
+
+    // 1. 校验 HEAD。
+    let current_head = read_ref_snapshot(&live_repo, "HEAD");
+    if !ref_snapshot_eq(&current_head, &snapshot.head) {
+        return Err(GitFinalizeError::ConcurrentMetadataChanged {
+            reason: format!(
+                "HEAD changed: snapshot={:?} current={:?}",
+                snapshot.head, current_head
+            ),
+        });
+    }
+
+    // 2. 校验目标 branch ref。
+    if !head_ref.is_empty() && head_ref != "HEAD" {
+        let current_branch = read_ref_snapshot(&live_repo, head_ref);
+        let snapshot_branch = snapshot
+            .refs
+            .get(head_ref)
+            .cloned()
+            .unwrap_or(RefSnapshot::DidNotExist);
+        if !ref_snapshot_eq(&current_branch, &snapshot_branch) {
+            return Err(GitFinalizeError::ConcurrentMetadataChanged {
+                reason: format!(
+                    "branch {} changed: snapshot={:?} current={:?}",
+                    head_ref, snapshot_branch, current_branch
+                ),
+            });
+        }
+    }
+
+    // 3. 校验 index。
+    let index_path = live_root.join(".git").join("index");
+    let current_index = if index_path.exists() {
+        let bytes = fs::read(&index_path)
+            .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+        IndexSnapshot::Bytes(bytes)
+    } else {
+        IndexSnapshot::Missing
+    };
+    if !index_snapshot_eq(&current_index, &snapshot.index) {
+        return Err(GitFinalizeError::ConcurrentMetadataChanged {
+            reason: "index changed before finalize wrote anything".to_string(),
+        });
+    }
+
+    // 4. 校验所有本轮会修改的 remote refs。
+    for (ref_name, ref_snapshot) in &snapshot.refs {
+        if !ref_name.starts_with("refs/remotes/") {
+            continue;
+        }
+        let current = read_ref_snapshot(&live_repo, ref_name);
+        if !ref_snapshot_eq(&current, ref_snapshot) {
+            return Err(GitFinalizeError::ConcurrentMetadataChanged {
+                reason: format!(
+                    "remote ref {} changed: snapshot={:?} current={:?}",
+                    ref_name, ref_snapshot, current
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// 读取 ref 的当前快照。
+fn read_ref_snapshot(repo: &git2::Repository, ref_name: &str) -> RefSnapshot {
+    match repo.find_reference(ref_name) {
+        Ok(r) => snapshot_ref_from_repo_ref(&r),
+        Err(_) => RefSnapshot::DidNotExist,
+    }
+}
+
+/// 比较两个 `RefSnapshot` 是否相等。
+fn ref_snapshot_eq(a: &RefSnapshot, b: &RefSnapshot) -> bool {
+    match (a, b) {
+        (RefSnapshot::DidNotExist, RefSnapshot::DidNotExist) => true,
+        (RefSnapshot::Existed { oid: a }, RefSnapshot::Existed { oid: b }) => a == b,
+        (RefSnapshot::Symbolic { target: a }, RefSnapshot::Symbolic { target: b }) => a == b,
+        _ => false,
+    }
+}
+
+/// 比较两个 `IndexSnapshot` 是否相等。
+fn index_snapshot_eq(a: &IndexSnapshot, b: &IndexSnapshot) -> bool {
+    match (a, b) {
+        (IndexSnapshot::Missing, IndexSnapshot::Missing) => true,
+        (IndexSnapshot::Bytes(a), IndexSnapshot::Bytes(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// 同步 staging 的 remote-tracking refs 到 live。
-fn sync_remote_refs(live_repo: &git2::Repository, staging_repo: &git2::Repository) -> Result<()> {
+///
+/// #644 评论 5477439446 问题2：用 CAS 语义更新 remote refs，不再无条件覆盖。
+/// 对每个 remote ref，从 snapshot 取旧值：
+/// - `DidNotExist`：用 `force=false` 创建，已存在则失败（CAS）。
+/// - `Existed { oid }`：用 `reference_matching` CAS，当前 OID 不匹配则失败。
+/// - `Symbolic`：remote ref 不应是 symbolic，跳过。
+#[allow(clippy::excessive_nesting)]
+fn sync_remote_refs(
+    live_repo: &git2::Repository,
+    staging_repo: &git2::Repository,
+    snapshot_refs: &std::collections::BTreeMap<String, RefSnapshot>,
+) -> Result<()> {
     if let Ok(staging_refs) = staging_repo.references() {
         for reference in staging_refs.flatten() {
             let Some(name) = reference.name() else {
@@ -930,19 +1130,54 @@ fn sync_remote_refs(live_repo: &git2::Repository, staging_repo: &git2::Repositor
             let Some(target) = reference.target() else {
                 continue;
             };
-            live_repo
-                .reference(
-                    name,
-                    target,
-                    true,
-                    "sync: update remote-tracking ref from staging",
-                )
-                .map_err(|e| {
-                    crate::Error::Io(std::io::Error::other(format!(
-                        "sync_remote_refs: update {} failed: {}",
-                        name, e
-                    )))
-                })?;
+            let old_snapshot = snapshot_refs
+                .get(name)
+                .cloned()
+                .unwrap_or(RefSnapshot::DidNotExist);
+            match &old_snapshot {
+                RefSnapshot::DidNotExist => {
+                    // ref 原本不存在，用 force=false 创建（已存在则失败，CAS 语义）。
+                    live_repo
+                        .reference(
+                            name,
+                            target,
+                            false,
+                            "sync: create remote-tracking ref from staging",
+                        )
+                        .map_err(|e| {
+                            crate::Error::Io(std::io::Error::other(format!(
+                                "sync_remote_refs: create {} failed (CAS expected absent): {}",
+                                name, e
+                            )))
+                        })?;
+                }
+                RefSnapshot::Existed { oid } => {
+                    let old_oid = git2::Oid::from_str(oid).map_err(|e| {
+                        crate::Error::Io(std::io::Error::other(format!(
+                            "sync_remote_refs: invalid old oid for {}: {e}",
+                            name
+                        )))
+                    })?;
+                    live_repo
+                        .reference_matching(
+                            name,
+                            target,
+                            false,
+                            old_oid,
+                            "sync: update remote-tracking ref from staging",
+                        )
+                        .map_err(|e| {
+                            crate::Error::Io(std::io::Error::other(format!(
+                                "sync_remote_refs: CAS update {} failed (old={} new={}): {}",
+                                name, old_oid, target, e
+                            )))
+                        })?;
+                }
+                RefSnapshot::Symbolic { .. } => {
+                    // remote ref 不应是 symbolic，跳过（不覆盖）。
+                    continue;
+                }
+            }
         }
     }
     Ok(())
