@@ -310,19 +310,28 @@ impl super::WriterCore {
         // 三方冲突按 target 映射成 SyncConflict，复用 conflict.rs 的
         // record_staging_conflicts() 统一写 conflicts.json + SyncState。
         // 持久化失败必须传播到对应 target 的错误状态，不能只打日志。
+        //
+        // #644 评论 5474772497 第3节：不再用 `=` 覆盖 target.result.conflicts，
+        // 而是把 Transfer 阶段已有的冲突（如 GitHub LWW 发现的正文冲突）
+        // 传给 record_staging_conflicts 做合并，保留两层冲突。
         for (idx, target_conflicts) in commit_outcome.target_conflicts.iter().enumerate() {
             if target_conflicts.is_empty() {
                 continue;
             }
             if let Some(target) = targets.get_mut(idx) {
                 let live_root = staging_runs[idx].target_live_root();
+                // 保留 Transfer 阶段已有的冲突（如 GitHub LWW 发现的正文冲突）。
+                let existing_conflicts = target.result.conflicts.clone();
                 match crate::sync::conflict::record_staging_conflicts(
                     live_root,
                     &target.remote_prefix,
                     target_conflicts,
+                    &existing_conflicts,
                 ) {
-                    Ok(sync_conflicts) => {
-                        target.result.conflicts = sync_conflicts;
+                    Ok(merged_conflicts) => {
+                        // #644 评论 5474772497 第3节：合并后的完整冲突列表
+                        // （Transfer + staging），不再覆盖。
+                        target.result.conflicts = merged_conflicts;
                         target.result.status = crate::sync::SyncStatus::Conflict;
                     }
                     Err(e) => {
@@ -713,6 +722,21 @@ fn apply_staging_commits_for_targets(
                     &plan.engine_state_actions,
                 ) {
                     let msg = format!("apply_commit_plan_to_live failed: {}", e);
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    target_results.push(TargetCommitResult::Failed(msg));
+                    target_conflicts.push(Vec::new());
+                    run.cleanup();
+                    continue;
+                }
+                // #644 评论 5474772497 第1节：Git 专属 finalize —
+                // 把 staging 的 HEAD/refs/objects/index 同步回 live。
+                // 仅 Full 模式（成功类终态）调用；Conflict 不推进 live ref。
+                if let Err(e) = crate::sync::git_staging::try_finalize_git_repo_metadata(
+                    live_root,
+                    &run.staging_root(),
+                    run.base_head_oid(),
+                ) {
+                    let msg = format!("git repo-metadata finalize failed: {}", e);
                     log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                     target_results.push(TargetCommitResult::Failed(msg));
                     target_conflicts.push(Vec::new());

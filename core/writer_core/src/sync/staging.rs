@@ -34,6 +34,10 @@ pub struct StagingRun {
     /// Commit 阶段需要知道这个 staging run 对应的 live root，
     /// 才能调 `compute_commit_plan(live_root)` 做三方比较并把变更写回 live。
     target_live_root: PathBuf,
+    /// #644 评论 5474772497 第1节：seed 时记录 live 的 HEAD OID，
+    /// 供 Git repo-metadata finalize 做 compare-and-swap 更新 live ref。
+    /// 仅 Git backend 有值；GithubApi backend 保持 None。
+    base_head_oid: Option<String>,
 }
 
 impl StagingRun {
@@ -48,6 +52,7 @@ impl StagingRun {
             run_root,
             run_id,
             target_live_root,
+            base_head_oid: None,
         })
     }
 
@@ -62,6 +67,17 @@ impl StagingRun {
     /// Commit 阶段要写回的 live root。
     pub fn target_live_root(&self) -> &Path {
         &self.target_live_root
+    }
+
+    /// #644 评论 5474772497 第1节：seed 时记录的 live HEAD OID。
+    /// 仅 Git backend 有值；GithubApi backend 保持 None。
+    pub fn base_head_oid(&self) -> Option<&str> {
+        self.base_head_oid.as_deref()
+    }
+
+    /// #644 评论 5474772497 第1节：设置 seed 时记录的 live HEAD OID。
+    pub fn set_base_head_oid(&mut self, oid: String) {
+        self.base_head_oid = Some(oid);
     }
 
     /// staging 子目录（Transfer 阶段写入远端内容的目标）。
@@ -164,6 +180,12 @@ impl StagingRun {
         // 读取 live 的 device_id（用于 LWW 决胜）。读取失败时回退空字符串，
         // 退化为纯时间戳比较（仍优于固定 remote-wins）。
         let live_device_id = read_live_device_id(live_root).unwrap_or_default();
+
+        // #644 评论 5474772497 第2节：读取 staging 的 manifest.sync.json，
+        // 获取远端文件的真实 LWW 元数据（updated_at_ms、device_id、op）。
+        // GithubApi backend 的 Transfer 阶段会写入 manifest；
+        // Git backend 不产生 manifest，此映射为空，回退到 mtime-based LWW。
+        let staging_manifest = read_staging_manifest(&staging_root);
 
         // 收集 base ∪ staging 的路径全集。
         // #644 评论 5473789298 第2节：base 和 staging 都走 list_commit_candidate_paths，
@@ -280,15 +302,19 @@ impl StagingRun {
                     plan.noop.push(rel);
                 } else {
                     // 双方都改 → 真正 LWW 决策。
+                    // #644 评论 5474772497 第2节：本地侧用 live 文件 hash + mtime + device_id；
+                    // 远端侧优先从 staging manifest 读取真实 LWW 元数据
+                    // （updated_at_ms、device_id、op），回退到 mtime-based。
                     let local_rec =
-                        build_lww_record(live_root, &rel, &local, &live_device_id, LwwSide::Local);
-                    let remote_rec = build_lww_record(
-                        &staging_root,
-                        &rel,
-                        &incoming,
-                        &live_device_id,
-                        LwwSide::Remote,
-                    );
+                        build_local_lww_record(live_root, &rel, &local, &live_device_id);
+                    let rel_str = rel.to_string_lossy().to_string();
+                    let remote_rec = if let Some(manifest_rec) = staging_manifest.get(&rel_str) {
+                        build_remote_lww_record_from_manifest(manifest_rec, &incoming)
+                    } else {
+                        // manifest 中无此路径（Git backend 或 manifest 缺失），
+                        // 回退到 mtime-based LWW。
+                        build_local_lww_record(&staging_root, &rel, &incoming, "remote")
+                    };
                     match resolve_lww(&local_rec, &remote_rec) {
                         LwwWinner::Remote => {
                             apply_incoming(&mut plan, rel, incoming, StagingCommitClass::Content);
@@ -335,16 +361,21 @@ pub fn prepare_staging_runs(
     let mut staging_runs: Vec<StagingRun> = Vec::new();
 
     for planned in &mut plan.targets {
-        let run = StagingRun::create(&plan.app_data_root, planned.target_live_root.clone())?;
+        let mut run = StagingRun::create(&plan.app_data_root, planned.target_live_root.clone())?;
         // #644 评论 5473401065 第2节：seed 失败必须传播，不能继续拿半成品 staging。
         // #644 评论 5473551127 第2节：按 backend 类型选择对应 seed 方式。
         match backend_type {
             crate::sync::types::BackendType::Git => {
                 // #644 评论 5473789298 第1节：Git 专属 staging 移到 git_staging.rs。
-                crate::sync::git_staging::seed_from_live_as_git_repo(
+                // #644 评论 5474772497 第1节：seed 返回 live 的 base HEAD OID，
+                // 供 finalize 做 compare-and-swap 更新 live ref。
+                let base_head_oid = crate::sync::git_staging::seed_from_live_as_git_repo(
                     &run,
                     &planned.target_live_root,
                 )?;
+                if let Some(oid) = base_head_oid {
+                    run.set_base_head_oid(oid);
+                }
             }
             crate::sync::types::BackendType::GithubApi => {
                 run.seed_from_live(&planned.target_live_root)?;
@@ -513,25 +544,15 @@ fn apply_incoming(
     }
 }
 
-/// #644 评论 5474166587 问题3：LWW 记录构造的来源侧。
-#[derive(Debug, Clone, Copy)]
-enum LwwSide {
-    Local,
-    Remote,
-}
-
-/// #644 评论 5474166587 问题3：从文件系统构造 LWW 记录。
+/// #644 评论 5474166587 问题3：从文件系统构造本地侧 LWW 记录。
 ///
 /// 读取文件 mtime 作为 `updated_at_ms`；`op` 按内容是否存在决定（Some → upsert，
-/// None → delete）。`device_id` 用 live 的 device_id（local 和 remote 共用同一设备
-/// 视角，时间戳差异已足够区分；同时间戳时退化为 device_id 字典序，与 GitHub API
-/// 内层 LWW 一致）。
-fn build_lww_record(
+/// None → delete）。`device_id` 用 live 的 device_id。
+fn build_local_lww_record(
     root: &Path,
     rel: &Path,
     content: &Option<Vec<u8>>,
     device_id: &str,
-    side: LwwSide,
 ) -> crate::sync::content_class::LwwRecord {
     use crate::sync::content_class::LwwRecord;
 
@@ -541,11 +562,7 @@ fn build_lww_record(
             let mtime = read_mtime_ms(root, rel).unwrap_or(0);
             (hash, "upsert", mtime)
         }
-        None => {
-            // 远端删除：op=delete，content_hash 为空。
-            // deleted_at_ms 用 mtime（若文件已不存在则 0）。
-            (String::new(), "delete", 0)
-        }
+        None => (String::new(), "delete", 0),
     };
 
     let deleted_at_ms = if op == "delete" {
@@ -554,26 +571,78 @@ fn build_lww_record(
         None
     };
 
-    // remote 侧用 "remote" 作为 device_id（与 lww/manifest.rs::build_remote_records
-    // 对缺失记录的兜底一致），让本地刚改的文件在时间戳相同时不被远端静默覆盖。
-    let record_device_id = match side {
-        LwwSide::Local => device_id.to_string(),
-        LwwSide::Remote => {
-            if device_id.is_empty() {
-                "remote".to_string()
-            } else {
-                // staging 里的 incoming 是远端内容，用 "remote" 标识其来源。
-                "remote".to_string()
-            }
-        }
-    };
-
     LwwRecord {
         content_hash,
         updated_at_ms,
         deleted_at_ms,
-        device_id: record_device_id,
+        device_id: device_id.to_string(),
         op: op.to_string(),
+    }
+}
+
+/// #644 评论 5474772497 第2节：staging manifest 中的文件记录（JSON 反序列化用）。
+///
+/// 与 `types::ManifestFileRecord` 字段一致，但不依赖 `github-api` feature gate。
+/// 仅用于从 staging 的 `manifest.sync.json` 读取远端 LWW 元数据。
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ManifestRecord {
+    path: String,
+    #[serde(rename = "content_hash")]
+    _content_hash: String,
+    updated_at_ms: i64,
+    #[serde(default)]
+    deleted_at_ms: Option<i64>,
+    device_id: String,
+    op: String,
+}
+
+/// #644 评论 5474772497 第2节：从 staging 的 manifest.sync.json 读取远端 LWW 记录。
+///
+/// 返回 `path → ManifestRecord` 映射。manifest 不存在或解析失败时返回空映射
+/// （Git backend 不会产生 manifest，此时回退到 mtime-based LWW）。
+fn read_staging_manifest(staging_root: &Path) -> std::collections::HashMap<String, ManifestRecord> {
+    let manifest_path = staging_root.join("app-meta/sync/manifest.sync.json");
+    if !manifest_path.exists() {
+        return std::collections::HashMap::new();
+    }
+    let Ok(content) = std::fs::read_to_string(&manifest_path) else {
+        return std::collections::HashMap::new();
+    };
+    #[derive(serde::Deserialize)]
+    struct ManifestContainer {
+        files: Vec<ManifestRecord>,
+    }
+    let Ok(container) = serde_json::from_str::<ManifestContainer>(&content) else {
+        return std::collections::HashMap::new();
+    };
+    container
+        .files
+        .into_iter()
+        .map(|r| (r.path.clone(), r))
+        .collect()
+}
+
+/// #644 评论 5474772497 第2节：从 manifest 记录构造远端侧 LWW 记录。
+///
+/// 使用 manifest 中的真实 `updated_at_ms`、`device_id`、`op`，
+/// 而非文件系统 mtime 和固定 "remote" 字符串。
+fn build_remote_lww_record_from_manifest(
+    manifest_record: &ManifestRecord,
+    incoming_content: &Option<Vec<u8>>,
+) -> crate::sync::content_class::LwwRecord {
+    use crate::sync::content_class::LwwRecord;
+
+    let content_hash = match incoming_content {
+        Some(bytes) => md5_hex(&Some(bytes.clone())),
+        None => String::new(),
+    };
+
+    LwwRecord {
+        content_hash,
+        updated_at_ms: manifest_record.updated_at_ms,
+        deleted_at_ms: manifest_record.deleted_at_ms,
+        device_id: manifest_record.device_id.clone(),
+        op: manifest_record.op.clone(),
     }
 }
 

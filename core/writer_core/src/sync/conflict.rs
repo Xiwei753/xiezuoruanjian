@@ -258,6 +258,31 @@ fn upsert_conflict(
     }
 }
 
+/// #644 评论 5474772497 第3节：合并两批冲突，按 `local_path` 去重。
+///
+/// `incoming` 中的记录覆盖 `existing` 中同路径的旧记录（外层同路径覆盖旧记录即可）。
+/// 返回合并后的完整列表。
+pub fn merge_sync_conflicts(
+    existing: &[SyncConflict],
+    incoming: &[SyncConflict],
+) -> Vec<SyncConflict> {
+    if incoming.is_empty() {
+        return existing.to_vec();
+    }
+    if existing.is_empty() {
+        return incoming.to_vec();
+    }
+    let mut merged: Vec<SyncConflict> = existing.to_vec();
+    for inc in incoming {
+        if let Some(pos) = merged.iter().position(|c| c.local_path == inc.local_path) {
+            merged[pos] = inc.clone();
+        } else {
+            merged.push(inc.clone());
+        }
+    }
+    merged
+}
+
 /// #644 评论 5473551127 第3节：staging 三方冲突 → `SyncConflict` 映射 + 持久化。
 ///
 /// #644 评论 5473789298 第4节：改成完整事务——先在内存里构造新的 `SyncState` 和
@@ -266,14 +291,19 @@ fn upsert_conflict(
 /// 不再循环调用 `record_sync_conflict` 一条一条落盘，中间写失败不会留下不一致。
 /// 同一路径重复写入时按 `local_path` 去重/替换。
 ///
-/// 返回映射后的 `Vec<SyncConflict>`，供调用方填入 `SyncResult.conflicts`。
+/// #644 评论 5474772497 第3节：`existing_conflicts` 参数接收 Transfer 阶段已有的
+/// 冲突（如 GitHub LWW 发现的正文冲突），与新 staging 冲突合并后一起持久化。
+/// 返回合并后的完整 `Vec<SyncConflict>`（Transfer + staging），供调用方填入
+/// `SyncResult.conflicts`。
+///
 /// 持久化失败必须返回 Err（不能只打日志），让对应 target 进入错误状态。
 pub fn record_staging_conflicts(
     sync_root: &Path,
     remote_prefix: &str,
     staging_conflicts: &[crate::sync::staging::StagingConflict],
+    existing_conflicts: &[SyncConflict],
 ) -> crate::Result<Vec<SyncConflict>> {
-    if staging_conflicts.is_empty() {
+    if staging_conflicts.is_empty() && existing_conflicts.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -285,8 +315,19 @@ pub fn record_staging_conflicts(
     // 先在内存里构造完整的新状态。
     let mut state = crate::sync::SyncService::load_sync_state(sync_root)?;
     let mut conflicts_json = load_conflicts_json(sync_root)?;
-    let mut result = Vec::with_capacity(staging_conflicts.len());
 
+    // #644 评论 5474772497 第3节：先把 existing_conflicts（Transfer 冲突）合并进来，
+    // 确保持久化状态包含两层冲突。
+    for ec in existing_conflicts {
+        upsert_conflict(
+            &mut conflicts_json,
+            &mut state.conflicts,
+            &mut state.conflicted_files,
+            ec.clone(),
+        );
+    }
+
+    let mut new_staging_conflicts = Vec::with_capacity(staging_conflicts.len());
     for sc in staging_conflicts {
         let rel_str = sc.rel_path.to_string_lossy().to_string();
         let rel_unix = rel_str.replace('\\', "/");
@@ -309,12 +350,17 @@ pub fn record_staging_conflicts(
             &mut state.conflicted_files,
             sync_conflict.clone(),
         );
-        result.push(sync_conflict);
+        new_staging_conflicts.push(sync_conflict);
     }
 
     // 一次事务写 state + conflicts.json。
     persist_conflict_state(sync_root, &state, &conflicts_json)?;
-    Ok(result)
+
+    // #644 评论 5474772497 第3节：返回合并后的完整冲突列表（existing + new staging）。
+    Ok(merge_sync_conflicts(
+        existing_conflicts,
+        &new_staging_conflicts,
+    ))
 }
 
 impl crate::sync::SyncService {
