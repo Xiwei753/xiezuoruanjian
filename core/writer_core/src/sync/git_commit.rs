@@ -928,17 +928,22 @@ pub fn rollback_git_finalize(
 ) -> Result<GitRollbackOutcome> {
     crate::storage::git_runtime::ensure_initialized()?;
 
-    // 1. #644 评论 5482310913 问题2：repo_create=true 时先判 ownership，再碰 index/refs。
+    // 1. #644 评论 5482310913 问题2 + #644 评论 5487751293 问题1：
+    //    repo_create=true 时先判 ownership，再碰 index/refs。
     //    外部仓库的 index/lock/refs 一字节都不能碰。
     if plan.repo_create {
         let live_git = live_root.join(".git");
         if !live_git.exists() {
             // 本轮 repo install 没发生（rename 前崩溃）。清理本轮对应的 tmp_git
             //（基于 repo_create_owner 命名，无需扫猜）。然后回滚文件。
+            // #644 评论 5487751293 问题1：durable cleanup — remove_dir_all 失败时
+            // 返回 Err 保留 transaction，不能 terminalize 后把没人再知道 owner 的
+            // tmp repo 留在磁盘上。
             if let Some(owner) = &plan.repo_create_owner {
                 let tmp_git = live_root.join(format!(".git.sujian-tmp-{}", owner));
                 if tmp_git.exists() {
-                    let _ = fs::remove_dir_all(&tmp_git);
+                    fs::remove_dir_all(&tmp_git)?;
+                    crate::storage::sync_parent(&tmp_git)?;
                 }
             }
             return Ok(GitRollbackOutcome::Reverted);
@@ -961,12 +966,23 @@ pub fn rollback_git_finalize(
             );
             return Ok(GitRollbackOutcome::ConcurrentChanged);
         }
-        // marker 匹配 → 本轮创建的 .git，删除它回到 finalize 前状态。
-        fs::remove_dir_all(&live_git)?;
-        // #644 评论 5485518160 修改点 3：remove_dir_all 后必须 fsync live_root
-        //（.git 的父目录），持久化 .git 目录项删除，之后才能返回 Reverted。
-        crate::storage::sync_parent(&live_git)?;
-        return Ok(GitRollbackOutcome::Reverted);
+        // #644 评论 5487751293 问题1：marker 匹配说明 rename 已发生（.git 已是 live）。
+        // owner marker 只能证明"这个 repo 最初是本轮装进去的"，不能证明 rename 以后
+        // 没人改过它。真实场景：rename 成功 → 进程死在 tx.finish() 前 → 用户/别的
+        // Git 进程做了一次 commit/建分支/改 config → 恢复看到 marker 仍匹配。
+        // 此时不能 remove_dir_all(.git)，否则会把后来的 Git 操作一起删掉。
+        // 直接返回 RepoInstallCommitted，让上层按 commit-point 逻辑收尾
+        //（写 Finished，不恢复旧业务文件）。
+        //
+        // 清理 rename 前可能残留的 tmp repo（crash 在 rename 前的其它 owner 的 tmp）。
+        if let Some(owner) = &plan.repo_create_owner {
+            let tmp_git = live_root.join(format!(".git.sujian-tmp-{}", owner));
+            if tmp_git.exists() {
+                fs::remove_dir_all(&tmp_git)?;
+                crate::storage::sync_parent(&tmp_git)?;
+            }
+        }
+        return Ok(GitRollbackOutcome::RepoInstallCommitted);
     }
 
     // 2. repo_create=false：index + refs rollback。
@@ -1008,8 +1024,9 @@ pub fn rollback_git_finalize(
             // 保留事务（不能留永久 lock）。
             if let Some(owner) = &plan.index_lock_owner {
                 match lock_dir_belongs_to_owner(&lock_path, owner) {
-                    LockOwner::Ours => {
-                        // lock 目录属于本轮：清理 lock 目录，fsync .git。
+                    LockOwner::Ours | LockOwner::IncompleteSujianLock => {
+                        // lock 目录属于本轮（owner 匹配或 owner 未完成写入）：
+                        // 清理 lock 目录，fsync .git。
                         if remove_lock_dir_if_exists(&lock_path, &live_root.join(".git")) {
                             // remove_lock_dir_if_exists 已 sync_dir。
                         }
@@ -1019,6 +1036,16 @@ pub fn rollback_git_finalize(
                         //（regular file 外部 Git lock 或目录锁但 owner 不匹配）。
                         // 返回 ConcurrentChanged，保留 transaction 不继续 rollback refs。
                         return Ok(GitRollbackOutcome::ConcurrentChanged);
+                    }
+                    LockOwner::Unknown => {
+                        // #644 评论 5487751293 问题4：owner 文件读取失败（EIO 等）。
+                        // 不能降级成"owner 为空 = ours"，返回 Err 保留事务。
+                        return Err(crate::Error::Io(std::io::Error::other(
+                            "rollback_git_finalize: index.lock directory exists but \
+                             owner file read failed (IO error) — cannot determine lock \
+                             ownership, refusing to delete, preserving transaction for \
+                             next recovery",
+                        )));
                     }
                     LockOwner::Absent => {
                         // lock 不存在：no-op，无需清理。
@@ -1050,6 +1077,13 @@ pub fn rollback_git_finalize(
                      current matches neither snapshot.index nor plan.new_index_sha256) — \
                      refusing to continue rollback to preserve transaction for next recovery",
                 )));
+            }
+            // #644 评论 5487751293 问题2：current == new → 需要反向恢复到 snapshot.index。
+            // 在修改 index 之前，先验证所有 ref 都处于可回滚状态（old、new 或 absent）。
+            // 如果任何 ref 处于第三状态（外部并发修改），提前返回 Err，不碰 index。
+            // 这避免了"先改 index，再检查 ref 才发现第三状态"的半回滚窗口。
+            if !plan.ref_plans.is_empty() {
+                verify_refs_rollbackable(live_root, plan)?;
             }
             // current == new(plan) → 需要反向恢复到 snapshot.index。
             // 走 OwnedIndexLock 反向提交边界（与 forward install_indexE_with_lock 同语义）：
@@ -1602,69 +1636,89 @@ fn finalize_unborn(
     // #644 评论 5480360027 修复点 5：sync_remote_refs 严格错误传播。
     sync_remote_refs(&live_repo, staging_repo, &snapshot.refs)?;
 
-    // #644 评论 5475805198 第3节：使用 find_reference("HEAD") 读取未 resolve 的 HEAD。
-    // head() 会 resolve symbolic ref，unborn 时返回 UnbornBranch 错误，
-    // 导致 if let Ok(...) 跳过校验。
-    let raw_head = live_repo.find_reference("HEAD").map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "finalize_unborn: HEAD reference not found: {e}"
-        )))
-    })?;
-
-    // 确认 HEAD 仍是 symbolic 且指向 seed 时的同一个 branch。
-    if let Some(sym_target) = raw_head.symbolic_target() {
-        if sym_target != head_ref {
-            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-                std::io::Error::other(format!(
-                    "finalize_unborn: HEAD changed from {} to {} during finalize",
-                    head_ref, sym_target
-                )),
-            )));
-        }
-    } else {
-        return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-            std::io::Error::other(
-                "finalize_unborn: HEAD is no longer symbolic (concurrent modification)",
-            ),
-        )));
-    }
-
-    // 确认目标 branch ref 仍不存在（unborn 状态未变）。
-    // #644 评论 5484539222 缺陷3b：严格 match find_reference 返回。
-    // - Ok(_)：branch 已存在（concurrent modification），按 "already exists" 逻辑处理。
-    // - Err(NotFound)：只有这里才表示 ref 不存在，继续创建。
-    // - 其它 Err：直接返回 finalize failure，不继续。
-    match live_repo.find_reference(head_ref) {
-        Ok(_) => {
-            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-                std::io::Error::other(format!(
-                    "finalize_unborn: branch ref {} already exists (concurrent modification)",
-                    head_ref
-                )),
-            )));
-        }
-        Err(e) if e.code() == git2::ErrorCode::NotFound => {
-            // branch 不存在，继续创建。
-        }
-        Err(e) => {
-            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-                std::io::Error::other(format!(
-                    "finalize_unborn: find_reference({}) failed with non-NotFound error: {} \
-                     — refusing to create ref on possibly corrupted refdb",
-                    head_ref, e
-                )),
-            )));
-        }
-    }
-
-    live_repo
-        .reference(head_ref, new_oid, false, "sync: create branch from staging")
-        .map_err(|e| {
+    // #644 评论 5475805198 第3节 + #644 评论 5487751293 问题3：
+    // 使用 Transaction 锁定 HEAD，防止在验证和创建 branch 之间 HEAD 被切换。
+    // 流程：
+    // 1. lock HEAD via Transaction（exclusive lock，阻止并发 HEAD 写操作）
+    // 2. 锁内读取 HEAD，确认仍是 symbolic 且指向 head_ref
+    // 3. 锁内确认 branch ref 仍不存在
+    // 4. 创建 branch（lock head_ref 是独立的，不与 HEAD lock 冲突）
+    // 5. Transaction drop 释放 HEAD lock
+    //
+    // 这样 HEAD switch 和 branch write 在同一个 writer exclusion 边界内，
+    // 不需要继续叠 check → write → post-check 的窗口。
+    {
+        let mut tx = live_repo.transaction().map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
-                "finalize_unborn: create-ref {} failed: {}",
-                head_ref, e
+                "finalize_unborn: create transaction: {e}"
             )))
         })?;
+        tx.lock_ref("HEAD").map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "finalize_unborn: lock HEAD: {e}"
+            )))
+        })?;
+
+        // 锁内读取 HEAD，确认仍是 symbolic 且指向 head_ref。
+        let raw_head = live_repo.find_reference("HEAD").map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "finalize_unborn: HEAD reference not found: {e}"
+            )))
+        })?;
+        if let Some(sym_target) = raw_head.symbolic_target() {
+            if sym_target != head_ref {
+                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                    std::io::Error::other(format!(
+                        "finalize_unborn: HEAD changed from {} to {} during finalize",
+                        head_ref, sym_target
+                    )),
+                )));
+            }
+        } else {
+            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                std::io::Error::other(
+                    "finalize_unborn: HEAD is no longer symbolic (concurrent modification)",
+                ),
+            )));
+        }
+
+        // 锁内确认目标 branch ref 仍不存在（unborn 状态未变）。
+        match live_repo.find_reference(head_ref) {
+            Ok(_) => {
+                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                    std::io::Error::other(format!(
+                        "finalize_unborn: branch ref {} already exists (concurrent modification)",
+                        head_ref
+                    )),
+                )));
+            }
+            Err(e) if e.code() == git2::ErrorCode::NotFound => {
+                // branch 不存在，继续创建。
+            }
+            Err(e) => {
+                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                    std::io::Error::other(format!(
+                        "finalize_unborn: find_reference({}) failed with non-NotFound error: {} \
+                         — refusing to create ref on possibly corrupted refdb",
+                        head_ref, e
+                    )),
+                )));
+            }
+        }
+
+        // 在 HEAD lock 保护下创建 branch。
+        // repo.reference() 锁定 head_ref（独立于 HEAD lock），创建后释放。
+        live_repo
+            .reference(head_ref, new_oid, false, "sync: create branch from staging")
+            .map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "finalize_unborn: create-ref {} failed: {}",
+                    head_ref, e
+                )))
+            })?;
+
+        // Transaction drop 释放 HEAD lock。
+    }
 
     Ok(())
 }
@@ -2114,31 +2168,46 @@ pub fn lock_belongs_to_owner(lock_bytes: &[u8], owner: &str) -> bool {
     lines.next() == Some(&expected)
 }
 
-/// #644 评论 5486852142 问题1：目录锁模型的归属判断。
+/// #644 评论 5486852142 问题1 + #644 评论 5487751293 问题4：
+/// 目录锁模型的归属判断。
 ///
 /// 返回值语义：
-/// - `LockOwner::Ours`：lock_path 是目录，且 owner 文件不存在/为空（本轮未完成写入）
-///   或 owner 文件内容匹配本轮 owner。可以安全清理（Sujian lock 不可能是外部 Git 的）。
+/// - `LockOwner::Ours`：lock_path 是目录，且 owner 文件内容匹配本轮 owner。
+///   可以安全清理。
+/// - `LockOwner::IncompleteSujianLock`：lock_path 是目录，但 owner 文件不存在或为空
+///   （crash 在 create_dir 和 write owner 之间）。Sujian 目录锁不可能是外部 Git 的，
+///   可安全清理。
 /// - `LockOwner::External`：lock_path 是 regular file（外部 Git 进程的 lock），
 ///   或 lock_path 是目录但 owner 文件内容不匹配（不同事务的 lock）。绝不碰。
+/// - `LockOwner::Unknown`：lock_path 是目录但 owner 文件读取失败（EIO、权限异常等）。
+///   不能降级成"owner 为空 = ours"，绝不删。
 /// - `LockOwner::Absent`：lock_path 不存在。
 pub enum LockOwner {
     /// lock_path 不存在。
     Absent,
-    /// lock_path 是目录且归属本轮（owner 匹配或 owner 文件不存在/为空）。
+    /// lock_path 是目录且 owner 文件内容匹配本轮 owner。
     Ours,
+    /// lock_path 是目录但 owner 文件不存在或为空（crash 在 create_dir 和 write owner 之间）。
+    /// Sujian 目录锁不可能是外部 Git 的，可安全清理。
+    IncompleteSujianLock,
     /// lock_path 是 regular file（外部 Git）或是目录但 owner 不匹配（不同事务）。
     External,
+    /// #644 评论 5487751293 问题4：lock_path 是目录但 owner 文件读取失败。
+    /// 不能降级成"owner 为空 = ours"，绝不删。
+    Unknown,
 }
 
-/// #644 评论 5486852142 问题1：判断 lock_path 的归属。
+/// #644 评论 5486852142 问题1 + #644 评论 5487751293 问题4：
+/// 判断 lock_path 的归属。
 ///
 /// - `lock_path` 不存在 → `Absent`。
 /// - `lock_path` 是目录 → Sujian lock。读 `lock_path/owner` 文件：
-///   - owner 文件不存在/为空 → `Ours`（crash 在 create_dir 和 write owner 之间，
-///     可安全清理，因为是 Sujian 目录锁不可能是外部 Git 的）。
+///   - owner 文件 `NotFound` → `IncompleteSujianLock`（crash 在 create_dir 和 write
+///     owner 之间，可安全清理，因为是 Sujian 目录锁不可能是外部 Git 的）。
+///   - owner 文件存在且为空 → `IncompleteSujianLock`（同上）。
 ///   - owner 文件存在且内容匹配 → `Ours`。
 ///   - owner 文件存在但不匹配 → `External`（不同事务的 lock）。
+///   - 其它读取错误（EIO、权限异常等）→ `Unknown`，绝不删。
 /// - `lock_path` 是 regular file → `External`（外部 Git 进程的 lock）。
 pub fn lock_dir_belongs_to_owner(lock_path: &Path, owner: &str) -> LockOwner {
     if !lock_path.exists() {
@@ -2150,15 +2219,28 @@ pub fn lock_dir_belongs_to_owner(lock_path: &Path, owner: &str) -> LockOwner {
     }
     // lock_path 是目录 → Sujian lock。读 owner 文件判断归属。
     let owner_file = lock_path.join("owner");
-    let owner_bytes = fs::read(&owner_file).unwrap_or_default();
-    if owner_bytes.is_empty() {
-        // owner 文件不存在/为空 → Sujian lock 但未完成写入，可安全清理。
-        return LockOwner::Ours;
-    }
-    if lock_belongs_to_owner(&owner_bytes, owner) {
-        LockOwner::Ours
-    } else {
-        LockOwner::External
+    match fs::read(&owner_file) {
+        Ok(owner_bytes) if owner_bytes.is_empty() => {
+            // owner 文件存在但为空 → Sujian lock 但未完成写入，可安全清理。
+            LockOwner::IncompleteSujianLock
+        }
+        Ok(owner_bytes) => {
+            if lock_belongs_to_owner(&owner_bytes, owner) {
+                LockOwner::Ours
+            } else {
+                LockOwner::External
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // owner 文件不存在 → crash 在 create_dir 和 write owner 之间。
+            // Sujian 目录锁不可能是外部 Git 的，可安全清理。
+            LockOwner::IncompleteSujianLock
+        }
+        Err(_) => {
+            // #644 评论 5487751293 问题4：其它读取错误（EIO、权限异常等）。
+            // 不能降级成"owner 为空 = ours"，返回 Unknown 绝不删。
+            LockOwner::Unknown
+        }
     }
 }
 
@@ -2218,6 +2300,7 @@ impl OwnedIndexLock {
     /// 关键安全属性：`create_dir` 成功就是原子的 ownership 证明。即使 crash 在 create_dir 后、
     /// write owner 前，恢复时看到目录就知道是 Sujian lock（不可能是外部 Git 的），可以安全清理。
     /// 不再有"空/半截 lock 被当成外部 Git lock"的窗口。
+    #[allow(clippy::too_many_lines)]
     pub fn acquire(
         git_dir: &Path,
         owner: &str,
@@ -2258,9 +2341,10 @@ impl OwnedIndexLock {
                 // 可能是另一方向的已提交状态（forward commit 后崩溃，现在 rollback）。
                 // fall through 到 Phase 2 重新 acquire。
             }
-            LockOwner::Ours => {
-                // State 1：上次已拿锁但还没 commit。lock 目录是本事务自己的。
-                // 删除 lock 目录，fsync .git，fall through 到 Phase 2 重新 acquire。
+            LockOwner::Ours | LockOwner::IncompleteSujianLock => {
+                // State 1：上次已拿锁但还没 commit（owner 匹配或 owner 未完成写入）。
+                // lock 目录是本事务自己的。删除 lock 目录，fsync .git，
+                // fall through 到 Phase 2 重新 acquire。
                 fs::remove_dir_all(&lock_path)
                     .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
                 crate::storage::sync_dir(git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
@@ -2273,6 +2357,15 @@ impl OwnedIndexLock {
                     reason: "index.lock exists but does not belong to us: \
                              concurrent git process (regular file lock) or different \
                              transaction (directory lock with mismatched owner) is writing index"
+                        .to_string(),
+                });
+            }
+            LockOwner::Unknown => {
+                // #644 评论 5487751293 问题4：owner 文件读取失败（EIO 等）。
+                // 不能降级成"owner 为空 = ours"，返回 ConcurrentMetadataChanged。
+                return Err(GitFinalizeError::ConcurrentMetadataChanged {
+                    reason: "index.lock directory exists but owner file read failed \
+                             (IO error) — cannot determine lock ownership"
                         .to_string(),
                 });
             }
@@ -2658,6 +2751,109 @@ fn import_missing_objects(staging_odb: &git2::Odb, live_odb: &git2::Odb) -> Resu
                 oid, e
             )))
         })?;
+    }
+
+    Ok(())
+}
+
+/// #644 评论 5487751293 问题2：在修改 index 之前，验证所有 ref 都处于可回滚状态。
+///
+/// 遍历 `plan.ref_plans`，对每个 ref 检查当前值：
+/// - current == old（或 absent 且 old=None）→ 可回滚（AlreadyReverted 或未执行）
+/// - current == new → 可回滚（需反向 CAS）
+/// - 其它 → 第三状态（外部并发修改），返回 Err
+///
+/// 任何 ref 处于第三状态时，提前返回 Err，不碰 index。
+/// 这避免了"先改 index，再检查 ref 才发现第三状态"的半回滚窗口。
+fn verify_refs_rollbackable(live_root: &Path, plan: &GitFinalizePlan) -> Result<()> {
+    crate::storage::git_runtime::ensure_initialized()?;
+
+    let live_repo = git2::Repository::open(live_root).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "verify_refs_rollbackable: open live repo: {e}"
+        )))
+    })?;
+
+    for (ref_name, old_oid_str, new_oid_str) in &plan.ref_plans {
+        let new_oid = git2::Oid::from_str(new_oid_str).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "verify_refs_rollbackable: invalid new_oid for {}: {e}",
+                ref_name
+            )))
+        })?;
+
+        let current = live_repo.find_reference(ref_name);
+
+        match (&old_oid_str, current) {
+            // ref(old=None): finalize 会新建 ref。
+            // - current absent → 可回滚（AlreadyReverted 或从未创建）
+            // - current == new → 可回滚（需删除）
+            // - current == 其它 → 第三状态
+            (None, Ok(current_ref)) => {
+                if current_ref.target() != Some(new_oid) {
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "verify_refs_rollbackable: ref {} has third-party value \
+                         (expected absent or new_oid {}) — concurrent modification, \
+                         refusing to continue rollback before index is modified",
+                        ref_name, new_oid
+                    ))));
+                }
+            }
+            (None, Err(e)) if e.code() == git2::ErrorCode::NotFound => {
+                // 可回滚。
+            }
+            (None, Err(e)) => {
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "verify_refs_rollbackable: lookup {}: {e}",
+                    ref_name
+                ))));
+            }
+
+            // ref(old=Some): finalize 会更新 ref old_oid -> new_oid。
+            // - current == old → 可回滚（AlreadyReverted 或未执行）
+            // - current == new → 可回滚（需反向 CAS）
+            // - current == 其它 / NotFound → 第三状态
+            (Some(old_oid_str), Ok(current_ref)) => {
+                let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "verify_refs_rollbackable: invalid old_oid for {}: {e}",
+                        ref_name
+                    )))
+                })?;
+                if current_ref.target() == Some(old_oid) {
+                    // 可回滚（AlreadyReverted）。
+                } else if current_ref.target() == Some(new_oid) {
+                    // 可回滚（需反向 CAS）。
+                } else {
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "verify_refs_rollbackable: ref {} has third-party value \
+                         (expected old_oid {} or new_oid {}) — concurrent modification, \
+                         refusing to continue rollback before index is modified",
+                        ref_name, old_oid, new_oid
+                    ))));
+                }
+            }
+            (Some(old_oid_str), Err(e)) if e.code() == git2::ErrorCode::NotFound => {
+                let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "verify_refs_rollbackable: invalid old_oid for {}: {e}",
+                        ref_name
+                    )))
+                })?;
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "verify_refs_rollbackable: ref {} was deleted by concurrent process \
+                     (expected old_oid {} or new_oid {}) — refusing to continue rollback \
+                     before index is modified",
+                    ref_name, old_oid, new_oid
+                ))));
+            }
+            (Some(_), Err(e)) => {
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "verify_refs_rollbackable: lookup {}: {e}",
+                    ref_name
+                ))));
+            }
+        }
     }
 
     Ok(())
