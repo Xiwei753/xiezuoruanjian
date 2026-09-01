@@ -230,6 +230,34 @@ impl SaveTransaction {
             return Ok(());
         }
         let backup_dir = self.tx_dir.join("backup");
+
+        // #644 评论 5488655439 问题2：在第一笔 durable_copy_file/remove_file 前先检查完
+        // self.backed_up_files，不能恢复到一半才发现后面的 backup 缺失。
+        for entry in &self.backed_up_files {
+            if let BackupEntry::RestoreFile {
+                target_relative,
+                backup_filename,
+            } = entry
+            {
+                let backup_path = backup_dir.join(backup_filename);
+                if !backup_path.exists() {
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "rollback: backup file missing for RestoreFile {}: {}",
+                        target_relative,
+                        backup_path.display()
+                    ))));
+                }
+                if let Err(e) = backup_path.metadata() {
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "rollback: backup file unreadable for RestoreFile {}: {}: {}",
+                        target_relative,
+                        backup_path.display(),
+                        e
+                    ))));
+                }
+            }
+        }
+
         for entry in &self.backed_up_files {
             match entry {
                 BackupEntry::RestoreFile {
@@ -488,6 +516,47 @@ impl Drop for SaveTransaction {
     }
 }
 
+/// #644 评论 5488655439 问题2：在真正进入 rollback 路径之前，
+/// 先检查所有 BackupEntry::RestoreFile 是否都存在。
+///
+/// 必须在任何 Git/index/live 文件修改之前调用。
+/// 一个不满足就不能碰 Git/index/live。
+///
+/// NotGitRepo 的 `RepoInstallCommitted` 是 commit-point，不需要 backup，
+/// 所以不在本函数中做粗暴的无条件检查——由调用方根据 outcome 决定是否需要 preflight。
+fn preflight_backup_entries(
+    tx_dir: &Path,
+    manifest: &TransactionManifest,
+) -> Result<()> {
+    let backup_dir = tx_dir.join("backup");
+    for entry in &manifest.backup_entries {
+        if let BackupEntry::RestoreFile {
+            target_relative,
+            backup_filename,
+        } = entry
+        {
+            let backup_path = backup_dir.join(backup_filename);
+            if !backup_path.exists() {
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "preflight_backup_entries: backup file missing for RestoreFile {}: {}",
+                    target_relative,
+                    backup_path.display()
+                ))));
+            }
+            // 检查是否可读（metadata 失败也算不可读）。
+            if let Err(e) = backup_path.metadata() {
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "preflight_backup_entries: backup file unreadable for RestoreFile {}: {}: {}",
+                    target_relative,
+                    backup_path.display(),
+                    e
+                ))));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// #644 评论 5476546134 第3节：统一回滚 full-sync 事务入口。
 ///
 /// 满足：
@@ -580,7 +649,11 @@ fn rollback_full_sync_transaction(
         )?;
         match outcome {
             crate::sync::git_commit::GitRollbackOutcome::Reverted => {
-                // Git metadata 已回滚，继续恢复文件 backup（下方逻辑）。
+                // Git metadata 已回滚，需要恢复文件 backup。
+                // #644 评论 5488655439 问题2：在真正改 Git 之后、恢复文件之前，
+                // 先 preflight 所有 backup entries。如果 backup 缺失，现在就报错，
+                // 不进入"Git 已回滚但正文无法回滚"的半截状态。
+                preflight_backup_entries(tx_dir, manifest)?;
             }
             crate::sync::git_commit::GitRollbackOutcome::ConcurrentChanged => {
                 // #644 评论 5482310913 问题3：检测到并发变更，保留 transaction，
@@ -596,6 +669,8 @@ fn rollback_full_sync_transaction(
                 // #644 评论 5482310913 问题2：NotGitRepo 已完成 owner-matched .git rename。
                 // 按 commit-point 逻辑收尾：不回滚文件（文件已是新版），标记 Finished
                 // 并清理 transaction 目录。
+                // #644 评论 5488655439 问题2：RepoInstallCommitted 是 commit-point，
+                // 不需要 backup（文件已是新版），不需要 preflight。
                 let manifest_path = tx_dir.join(MANIFEST_FILENAME);
                 write_manifest_phase_static(&manifest_path, TransactionPhase::Finished, manifest)?;
                 fs::remove_dir_all(tx_dir)?;
@@ -608,6 +683,8 @@ fn rollback_full_sync_transaction(
     // #644 评论 5477439446 问题3：manifest 要求 RestoreFile 但 backup 文件不存在时，
     // 视为恢复失败并返回 Err。只要任意一个 BackupEntry 没有完成恢复，就保留整份
     // transaction，不能写 RolledBack，不能删除 backup/manifest/tx_dir。
+    // #644 评论 5488655439 问题2：此处不再做 preflight（已在 Git rollback 之后 preflight），
+    // 这里只做恢复操作。
     let backup_dir = tx_dir.join("backup");
     for entry in &manifest.backup_entries {
         match entry {
