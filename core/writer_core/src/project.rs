@@ -60,6 +60,11 @@ pub fn list_projects_with_layout(
 
 /// `list_projects_with_layout` 的核心逻辑，接受引用形式的 `layout_fn`，
 /// 便于 `create_project_with_layout_factory` 等内部调用方在不 clone `Box` 的前提下复用。
+///
+/// #644 评论 5493295108 问题1：本函数恢复为**纯读取项目元数据**，
+/// 不再调用 `ensure_project_repo_with_layout` / `ensure_project_repo`。
+/// 冷启动/同步不能把 Core 卡住——列表/摘要不能顺手迁移所有旧作品。
+/// 迁移职责移到 `sync::staging::prepare_staging_runs`（已释放 Core 写锁之后）。
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
@@ -69,7 +74,7 @@ pub fn list_projects_with_layout(
 )]
 fn list_projects_with_layout_inner(
     projects_root: &Path,
-    git_layout_fn: Option<&dyn Fn(&str) -> crate::storage::git_repo_layout::GitRepoLayout>,
+    _git_layout_fn: Option<&dyn Fn(&str) -> crate::storage::git_repo_layout::GitRepoLayout>,
 ) -> Result<Vec<Project>> {
     let projects_dir = projects_root;
     if !projects_dir.exists() {
@@ -86,16 +91,9 @@ fn list_projects_with_layout_inner(
             match fs::read_to_string(&meta_path) {
                 Ok(content) => {
                     if let Ok(project) = serde_json::from_str::<Project>(&content) {
-                        // 旧作品（无 .git/）在读取到有效 project.json 后永久迁移为 Git 仓库，
-                        // 不等到第一次同步才初始化（Issue #600）。
-                        // #644 评论 5491531984 问题1：通过 layout 确定 Git 物理位置，
-                        // 不再让 project.rs 自己决定。
-                        if let Some(layout_fn) = git_layout_fn {
-                            let layout = layout_fn(&project.id);
-                            crate::storage::project_git::ensure_project_repo_with_layout(&layout)?;
-                        } else {
-                            crate::storage::project_git::ensure_project_repo(&entry.path())?;
-                        }
+                        // #644 评论 5493295108 问题1：纯读取，不触发迁移。
+                        // 旧作品（无 .git/）的 Git 迁移由 `sync::staging::prepare_staging_runs`
+                        // 在已释放 Core 写锁之后执行，不堵住冷启动卷章读取。
                         projects.push(project);
                     }
                 }
@@ -373,20 +371,77 @@ pub fn rename_project_with_layout(
 }
 
 pub fn delete_project(projects_root: &Path, project_id: &str, app_data_root: &Path) -> Result<()> {
+    delete_project_with_layout(projects_root, project_id, app_data_root, None)
+}
+
+/// #644 评论 5493295108 问题4：带 layout 的作品删除。
+///
+/// `git_layout` 指定要删除的 private git_dir 位置。`None` 时只删共享 worktree
+/// （退化为 `delete_project` 的旧行为）。
+///
+/// 既然现有删除语义是"移到 trash"而不是直接粉碎，private metadata 也不要单独硬删：
+/// 在 private 根下建对应 `trash/<delete-token>/`，把 `git_dir` 同文件系统 rename 进去。
+/// worktree trash 和 private Git trash 用同一个 delete token/manifest 关联，
+/// 之后跟同一份删除生命周期清理。
+///
+/// 这样删除/恢复不会出现"正文已经删了，Git 历史还挂在原 project id 下"的分裂状态。
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+pub fn delete_project_with_layout(
+    projects_root: &Path,
+    project_id: &str,
+    app_data_root: &Path,
+    git_layout: Option<&crate::storage::git_repo_layout::GitRepoLayout>,
+) -> Result<()> {
     let project_id = crate::delete_guard::validate_id_segment(project_id)?;
     let project_dir = projects_root.join(project_id);
     let target_canon =
         crate::delete_guard::validate_delete_target(projects_root, &project_dir, "project.json")?;
 
-    let trash_dir = app_data_root.join("sync/trash");
-    let _ = fs::create_dir_all(&trash_dir);
-    let trash_path = trash_dir.join(format!(
+    // 生成统一的 delete token，关联 worktree trash 和 private Git trash。
+    let delete_token = format!(
         "{}_{}_{}",
         chrono::Utc::now().timestamp_millis(),
         uuid::Uuid::new_v4(),
         project_id
-    ));
+    );
+
+    // 1. 把共享 worktree 移进 trash。
+    let trash_dir = app_data_root.join("sync/trash");
+    let _ = fs::create_dir_all(&trash_dir);
+    let trash_path = trash_dir.join(&delete_token);
     fs::rename(&target_canon, &trash_path)?;
+
+    // 2. #644 评论 5493295108 问题4：把 private git_dir 也移进 trash。
+    //    在 private 根下建对应 `trash/<delete-token>/`，把 `git_dir` 同文件系统 rename 进去。
+    //    worktree trash 和 private Git trash 用同一个 delete token 关联。
+    if let Some(layout) = git_layout {
+        let private_git_dir = &layout.git_dir;
+        if private_git_dir.exists() {
+            // private git_dir 的父目录是 git_metadata_root（如 filesDir/sujian-git/）。
+            // 在其下建 trash/<delete-token>/，把 git_dir rename 进去。
+            if let Some(private_root) = private_git_dir.parent() {
+                let private_trash_dir = private_root.join("trash");
+                let _ = fs::create_dir_all(&private_trash_dir);
+                let private_trash_path = private_trash_dir.join(&delete_token);
+                // 同文件系统 rename。如果失败（极端情况），不阻塞 worktree 删除，
+                // 但记录 warn 让上层知道 private git_dir 没被清理。
+                if let Err(e) = fs::rename(private_git_dir, &private_trash_path) {
+                    log::warn!(
+                        "[delete_project_with_layout] failed to move private git_dir {} -> {}: {}",
+                        private_git_dir.display(),
+                        private_trash_path.display(),
+                        e,
+                    );
+                }
+            }
+        }
+    }
 
     // Also update tombstone — load/save sync state from trash_path (where the
     // project now lives after the rename), not from project_dir (which no longer

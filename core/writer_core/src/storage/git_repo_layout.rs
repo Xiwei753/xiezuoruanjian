@@ -118,14 +118,11 @@ pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<
     //    #644 评论 5491531984 问题3：如果 target 和 embedded .git 同时存在，
     //    不能直接 return Ok(())。先确认 private 是本次迁移出来的同一仓库，
     //    再完成删除 embedded .git。
+    //    #644 评论 5493295108 问题3：改用 journal 状态机，恢复时只删 claimed_source，
+    //    绝不能删除后来重新出现在 worktree/.git 的别人的仓库。
     if git2::Repository::open(&layout.git_dir).is_ok() {
-        // #644 评论 5492740265 问题5：双仓库并存恢复状态机。
-        //   不能再用"能打开 target 就删 source"——能打开的 repo 不等于可以据此
-        //   删除另一份 repo。改用 durable migration marker 判断 ownership：
-        //   只有 marker 存在且 worktree/source canonical path 匹配时才删 embedded .git。
-        //   任一步 I/O 失败返回 Err 保留 marker，下一次继续；不吞掉错误假装迁移完成。
         if default_git_dir.exists() && is_external {
-            complete_migration_with_marker(
+            complete_migration_with_journal(
                 &layout.git_dir,
                 &default_git_dir,
                 &layout.worktree_root,
@@ -254,27 +251,41 @@ fn migrate_copy_dir_recursive(src: &Path, dst: &Path) -> crate::Result<()> {
     Ok(())
 }
 
-/// #644 评论 5492740265 问题5：迁移 marker 文件名。
+/// #644 评论 5493295108 问题3：迁移 journal 文件名。
 ///
 /// 写在 private git_dir 内部，作为"这个 private repo 是由某个 embedded .git
 /// 迁移而来"的 durable ownership fact。迁移完全成功后才删除；中途 I/O 失败
-/// 保留 marker，下次重启看到 marker 并尝试继续清理。
-const LAYOUT_MIGRATION_MARKER_NAME: &str = ".sujian-layout-migration";
+/// 保留 journal，下次重启看到 journal 并尝试继续清理。
+///
+/// 关键改进：journal 记录 `claimed_source`（迁移时已取得所有权的 source 路径，
+/// 通常形如 `worktree/.git.sujian-migrate-source-<owner>`）。恢复时只能删除
+/// `claimed_source`，绝不能删除后来重新出现在 `worktree/.git` 的别人的仓库。
+const LAYOUT_MIGRATION_JOURNAL_NAME: &str = ".sujian-layout-migration";
 
-/// #644 评论 5492740265 问题5：迁移 marker 内容。
+/// #644 评论 5493295108 问题3：迁移 journal 内容。
 ///
 /// 写在 private git_dir 内的 `.sujian-layout-migration` 文件中，用
 /// `crate::storage::atomic_write_bytes`（含 fsync 文件 + fsync 父目录）保证 durable。
-/// 重启恢复时读 marker 验证 worktree/source canonical path 匹配后才删 embedded .git，
-/// 不用"能打开 repo"当 ownership。
+///
+/// journal 至少保存：owner, original_source, claimed_source, worktree_root,
+/// target_git_dir, phase。恢复时只能删除 claimed_source，绝不能删除后来重新
+/// 出现在 worktree/.git 的别人的仓库。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct LayoutMigrationMarker {
+struct LayoutMigrationJournal {
     /// 本次迁移的唯一标识。
     migration_uuid: String,
     /// 迁移时 worktree_root 的规范路径。
     worktree_canonical: String,
-    /// 迁移时 embedded .git 的规范路径。
-    source_git_canonical: String,
+    /// 迁移时 embedded .git 的原始路径（`worktree/.git`）。
+    original_source: String,
+    /// #644 评论 5493295108 问题3：迁移时已取得所有权的 source 路径。
+    /// 通常形如 `worktree/.git.sujian-migrate-source-<owner>`。
+    /// 恢复时只能删除这个路径，绝不能删除后来重新出现在 original_source 的仓库。
+    claimed_source: String,
+    /// 迁移的目标 private git_dir 路径。
+    target_git_dir: String,
+    /// 迁移当前阶段（"copied" / "finalized"）。
+    phase: String,
 }
 
 /// #644 评论 5492740265 问题5：获取路径的规范形式。
@@ -287,81 +298,86 @@ fn canonicalize_or_lossy(path: &Path) -> String {
         .unwrap_or_else(|_| path.to_string_lossy().into_owned())
 }
 
-/// #644 评论 5492740265 问题5：写迁移 marker 到 git_dir 内。
+/// #644 评论 5493295108 问题3：写迁移 journal 到 git_dir 内。
 ///
 /// 用 `crate::storage::atomic_write_bytes`（fsync 文件 + fsync 父目录）保证 durable。
-fn write_migration_marker(git_dir: &Path, marker: &LayoutMigrationMarker) -> crate::Result<()> {
-    let marker_path = git_dir.join(LAYOUT_MIGRATION_MARKER_NAME);
-    let content = serde_json::to_vec(marker).map_err(|e| {
+fn write_migration_journal(git_dir: &Path, journal: &LayoutMigrationJournal) -> crate::Result<()> {
+    let journal_path = git_dir.join(LAYOUT_MIGRATION_JOURNAL_NAME);
+    let content = serde_json::to_vec(journal).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
-            "write_migration_marker: serialize: {e}"
+            "write_migration_journal: serialize: {e}"
         )))
     })?;
-    crate::storage::atomic_write_bytes(&marker_path, &content)
+    crate::storage::atomic_write_bytes(&journal_path, &content)
 }
 
-/// #644 评论 5492740265 问题5：读迁移 marker。
+/// #644 评论 5493295108 问题3：读迁移 journal。
 ///
-/// 返回 `Ok(None)` 表示 marker 不存在；`Ok(Some)` 表示读取并解析成功；
+/// 返回 `Ok(None)` 表示 journal 不存在；`Ok(Some)` 表示读取并解析成功；
 /// `Err` 表示 IO 错误（非 NotFound）或 JSON 解析错误——调用方应返回 Err，
 /// 不假装迁移完成。
-fn read_migration_marker(git_dir: &Path) -> crate::Result<Option<LayoutMigrationMarker>> {
-    let marker_path = git_dir.join(LAYOUT_MIGRATION_MARKER_NAME);
-    match std::fs::read(&marker_path) {
+fn read_migration_journal(git_dir: &Path) -> crate::Result<Option<LayoutMigrationJournal>> {
+    let journal_path = git_dir.join(LAYOUT_MIGRATION_JOURNAL_NAME);
+    match std::fs::read(&journal_path) {
         Ok(content) => {
-            let marker: LayoutMigrationMarker = serde_json::from_slice(&content).map_err(|e| {
-                crate::Error::Io(std::io::Error::other(format!(
-                    "read_migration_marker: parse {}: {e}",
-                    marker_path.display(),
-                )))
-            })?;
-            Ok(Some(marker))
+            let journal: LayoutMigrationJournal =
+                serde_json::from_slice(&content).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "read_migration_journal: parse {}: {e}",
+                        journal_path.display(),
+                    )))
+                })?;
+            Ok(Some(journal))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(crate::Error::Io(e)),
     }
 }
 
-/// #644 评论 5492740265 问题5：删除迁移 marker + fsync git_dir。
+/// #644 评论 5493295108 问题3：删除迁移 journal + fsync git_dir。
 ///
-/// 迁移完全成功后才调用。fsync git_dir 持久化 marker 删除的目录项。
-/// 失败时返回 Err（marker 残留，下次重启继续）。
-fn remove_migration_marker(git_dir: &Path) -> crate::Result<()> {
-    let marker_path = git_dir.join(LAYOUT_MIGRATION_MARKER_NAME);
-    std::fs::remove_file(&marker_path).map_err(|e| {
+/// 迁移完全成功后才调用。fsync git_dir 持久化 journal 删除的目录项。
+/// 失败时返回 Err（journal 拟留，下次重启继续）。
+fn remove_migration_journal(git_dir: &Path) -> crate::Result<()> {
+    let journal_path = git_dir.join(LAYOUT_MIGRATION_JOURNAL_NAME);
+    std::fs::remove_file(&journal_path).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
-            "remove_migration_marker: remove {}: {e}",
-            marker_path.display(),
+            "remove_migration_journal: remove {}: {e}",
+            journal_path.display(),
         )))
     })?;
-    // fsync git_dir 持久化 marker 删除的目录项。
+    // fsync git_dir 持久化 journal 删除的目录项。
     crate::storage::sync_dir(git_dir)
 }
 
-/// #644 评论 5492740265 问题5：双仓库并存时的迁移恢复状态机。
+/// #644 评论 5493295108 问题3：双仓库并存时的迁移恢复状态机（journal 版）。
 ///
 /// 当 final git_dir 能 open + embedded .git 同时存在时调用：
-/// 1. 读 final git_dir 中的 migration marker
-/// 2. marker 不存在 → 无法证明 private repo 是由这个 embedded .git 迁移来的，
+/// 1. 读 final git_dir 中的 migration journal
+/// 2. journal 不存在 → 无法证明 private repo 是由这个 embedded .git 迁移来的，
 ///    不删除 embedded .git，返回 Ok(())（保留两份，让用户/上层决定）
-/// 3. marker 存在 → 验证 marker 中 worktree_canonical / source_git_canonical
-///    与当前 worktree_root / embedded_git_dir 的规范路径匹配
-/// 4. 匹配 → 删除 embedded .git + fsync worktree（错误返回 Err 保留 marker），
-///    成功后删除 marker + fsync private git_dir（错误返回 Err 保留 marker）
-/// 5. 不匹配 → 不删除 embedded .git，返回 Ok(())（可能是不同 worktree 的迁移残留）
-/// 6. marker 读取失败（IO 错误）→ 返回 Err，不假装迁移完成
-fn complete_migration_with_marker(
+/// 3. journal 存在 → 验证 journal 中 worktree_canonical 与当前 worktree_root 匹配，
+///    且 `claimed_source` 仍存在（这是迁移时已取得所有权的 source）。
+/// 4. `claimed_source` 存在 → 删除 `claimed_source` + fsync worktree（错误返回 Err 保留 journal），
+///    成功后删除 journal + fsync private git_dir（错误返回 Err 保留 journal）
+/// 5. `claimed_source` 不存在但 `original_source`（worktree/.git）存在 →
+///    这是别人后来新建的仓库，**不删除**，只清理 journal（terminal cleanup）。
+/// 6. journal 读取失败（IO 错误）→ 返回 Err，不假装迁移完成
+///
+/// 关键改进：恢复时只能删除 `claimed_source`，绝不能删除后来重新出现在
+/// `original_source`（worktree/.git）的别人的仓库。
+fn complete_migration_with_journal(
     private_git_dir: &Path,
     embedded_git_dir: &Path,
     worktree_root: &Path,
 ) -> crate::Result<()> {
-    let marker = match read_migration_marker(private_git_dir) {
-        Ok(Some(m)) => m,
+    let journal = match read_migration_journal(private_git_dir) {
+        Ok(Some(j)) => j,
         Ok(None) => {
-            // marker 不存在 → 无法证明 private repo 是由这个 embedded .git 迁移来的。
+            // journal 不存在 → 无法证明 private repo 是由这个 embedded .git 迁移来的。
             // 不删除 embedded .git，保留两份，让用户/上层决定。
             log::warn!(
-                "[git_repo_layout] dual repo coexist but no migration marker in private {}; \
+                "[git_repo_layout] dual repo coexist but no migration journal in private {}; \
                  keeping embedded .git at {}",
                 private_git_dir.display(),
                 embedded_git_dir.display(),
@@ -369,89 +385,127 @@ fn complete_migration_with_marker(
             return Ok(());
         }
         Err(e) => {
-            // marker 读取失败（IO 错误）→ 不假装迁移完成，返回 Err。
+            // journal 读取失败（IO 错误）→ 不假装迁移完成，返回 Err。
             return Err(crate::Error::Io(std::io::Error::other(format!(
-                "complete_migration_with_marker: read marker from {}: {}",
+                "complete_migration_with_journal: read journal from {}: {}",
                 private_git_dir.display(),
                 e,
             ))));
         }
     };
 
-    // 验证 marker 中的 canonical path 与当前路径匹配。
+    // 验证 journal 中的 worktree canonical path 与当前路径匹配。
     let current_worktree_canonical = canonicalize_or_lossy(worktree_root);
-    let current_source_canonical = canonicalize_or_lossy(embedded_git_dir);
-    if marker.worktree_canonical != current_worktree_canonical
-        || marker.source_git_canonical != current_source_canonical
-    {
+    if journal.worktree_canonical != current_worktree_canonical {
         // 不匹配 → 可能是不同 worktree 的迁移残留，不删除 embedded .git。
         log::warn!(
-            "[git_repo_layout] migration marker path mismatch: \
-             marker(worktree={}, source={}) vs current(worktree={}, source={}); \
-             keeping embedded .git at {}",
-            marker.worktree_canonical,
-            marker.source_git_canonical,
+            "[git_repo_layout] migration journal worktree mismatch: \
+             journal(worktree={}, original_source={}, claimed_source={}) vs \
+             current(worktree={}); keeping embedded .git at {}",
+            journal.worktree_canonical,
+            journal.original_source,
+            journal.claimed_source,
             current_worktree_canonical,
-            current_source_canonical,
             embedded_git_dir.display(),
         );
         return Ok(());
     }
 
-    // 匹配 → 继续完成迁移：删除 embedded .git + fsync worktree。
-    // 错误返回 Err 保留 marker，下次重启继续。
-    std::fs::remove_dir_all(embedded_git_dir).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "complete_migration_with_marker: remove embedded .git {}: {e}",
+    // #644 评论 5493295108 问题3：恢复时只能删除 claimed_source，
+    // 绝不能删除后来重新出现在 original_source（worktree/.git）的别人的仓库。
+    let claimed_source_path = PathBuf::from(&journal.claimed_source);
+    if claimed_source_path.exists() {
+        // claimed_source 仍存在 → 删除它 + fsync worktree。
+        // 错误返回 Err 保留 journal，下次重启继续。
+        std::fs::remove_dir_all(&claimed_source_path).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "complete_migration_with_journal: remove claimed_source {}: {e}",
+                claimed_source_path.display(),
+            )))
+        })?;
+        if let Some(parent) = worktree_root.parent() {
+            crate::storage::sync_dir(parent)?;
+        }
+        crate::storage::sync_dir(worktree_root)?;
+    } else {
+        // claimed_source 不存在 → 迁移时已删除或崩溃后已清理。
+        // 此时 embedded_git_dir（original_source）存在的是别人后来新建的仓库，
+        // **不删除**，只清理 journal（terminal cleanup）。
+        log::info!(
+            "[git_repo_layout] migration journal terminal cleanup: claimed_source {} \
+             already removed; keeping current embedded .git at {} (may be a later-created repo)",
+            journal.claimed_source,
             embedded_git_dir.display(),
-        )))
-    })?;
-    if let Some(parent) = worktree_root.parent() {
-        crate::storage::sync_dir(parent)?;
+        );
     }
-    crate::storage::sync_dir(worktree_root)?;
 
-    // 删除 embedded .git 成功 → 删除 marker + fsync private git_dir。
-    // 错误返回 Err 保留 marker，下次重启继续。
-    remove_migration_marker(private_git_dir)?;
+    // 删除 journal + fsync private git_dir。
+    // 错误返回 Err 保留 journal，下次重启继续。
+    remove_migration_journal(private_git_dir)?;
 
     Ok(())
 }
 
-/// #644 评论 5490799656 问题2：跨文件系统安全的 .git 迁移。
+/// #644 评论 5493295108 问题3：跨文件系统安全的 .git 迁移（journal 状态机版）。
 ///
 /// Android 共享存储 → 应用私有 `filesDir` 属于不同 mount/filesystem，
 /// `std::fs::rename` 跨文件系统会返回 `InvalidCrossDeviceLink`。
 ///
-/// 正确流程：
-/// 1. 在目标文件系统（`git_dir` 的父目录）建 tmp 目录；
-/// 2. 递归复制旧 `.git` 到 tmp（每个文件 fsync + 目录 fsync）；
-/// 3. 打开 tmp repo 确认 HEAD/refs/index 可读；
-/// 4. 写 `.sujian-layout-migration` marker 到 tmp（含 migration uuid + canonical path）；
-/// 5. 在同一文件系统内原子 rename tmp → final git_dir（marker 跟着进入 final git_dir）；
-/// 6. 设置正确 workdir；
-/// 7. 清理旧 `.git` + fsync worktree；
-/// 8. 迁移完全成功后删除 marker + fsync private git_dir。
+/// #644 评论 5493295108 问题3 关键改进：先取得 source 的所有权，再复制。
+/// 流程：
+/// 1. 在 worktree 同文件系统原子 rename `worktree/.git` →
+///    `worktree/.git.sujian-migrate-source-<owner>`（取得 source 所有权）；
+/// 2. fsync worktree（持久化 rename）；
+/// 3. 在目标文件系统（`git_dir` 的父目录）建 tmp 目录；
+/// 4. 递归复制 owned source 到 tmp（每个文件 fsync + 目录 fsync）；
+/// 5. 打开 tmp repo 确认 HEAD/refs/index 可读；
+/// 6. 写 `.sujian-layout-migration` journal 到 tmp（含 claimed_source 等完整信息）；
+/// 7. 在同一文件系统内原子 rename tmp → final git_dir（journal 跟着进入 final git_dir）；
+/// 8. 设置正确 workdir；
+/// 9. 删除 owned source（`claimed_source`）+ fsync worktree；
+/// 10. 迁移完全成功后删除 journal + fsync private git_dir。
+///
+/// 恢复时（`complete_migration_with_journal`）只能删除 `claimed_source`，
+/// 绝不能删除后来重新出现在 `worktree/.git` 的别人的仓库。
 fn migrate_embedded_git(
     default_git_dir: &Path,
     target_git_dir: &Path,
     worktree_root: &Path,
 ) -> crate::Result<()> {
-    // 1. 在目标文件系统上建 tmp 目录（与 target_git_dir 同一文件系统）。
-    let tmp_id = uuid::Uuid::new_v4().to_string();
+    let migration_uuid = uuid::Uuid::new_v4().to_string();
+
+    // 1. 先取得 source 的所有权：原子 rename worktree/.git → owned source。
+    //    同文件系统 rename 是原子的，要么成功要么失败，不会半完成。
+    let owned_source_name = format!(".git.sujian-migrate-source-{}", migration_uuid);
+    let owned_source_path = worktree_root.join(&owned_source_name);
+    std::fs::rename(default_git_dir, &owned_source_path).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "migrate_embedded_git: rename source {} -> {}: {}",
+            default_git_dir.display(),
+            owned_source_path.display(),
+            e,
+        )))
+    })?;
+    // 2. fsync worktree（持久化 source rename 的目录项）。
+    if let Some(parent) = worktree_root.parent() {
+        crate::storage::sync_dir(parent)?;
+    }
+    crate::storage::sync_dir(worktree_root)?;
+
+    // 3. 在目标文件系统上建 tmp 目录（与 target_git_dir 同一文件系统）。
     let target_parent = target_git_dir.parent().ok_or_else(|| {
         crate::Error::Io(std::io::Error::other(format!(
             "migrate_embedded_git: target_git_dir has no parent: {}",
             target_git_dir.display(),
         )))
     })?;
-    let tmp_git = target_parent.join(format!(".git.sujian-migrate-{}", tmp_id));
+    let tmp_git = target_parent.join(format!(".git.sujian-migrate-{}", migration_uuid));
     let mut guard = MigrateTmpDirGuard::new(tmp_git);
 
-    // 2. 递归复制旧 .git 到 tmp（含 fsync）。
-    migrate_copy_dir_recursive(default_git_dir, guard.path())?;
+    // 4. 递归复制 owned source 到 tmp（含 fsync）。
+    migrate_copy_dir_recursive(&owned_source_path, guard.path())?;
 
-    // 3. 打开 tmp repo 确认可读。
+    // 5. 打开 tmp repo 确认可读。
     {
         let tmp_repo = git2::Repository::open(guard.path()).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
@@ -463,19 +517,22 @@ fn migrate_embedded_git(
         let _ = tmp_repo.find_reference("HEAD");
     }
 
-    // 3.5 #644 评论 5492740265 问题5：在 rename 前写迁移 marker 到 tmp。
-    //     marker 含 migration uuid + canonical worktree/source path，
-    //     用 atomic_write_bytes（fsync 文件 + fsync 父目录）保证 durable。
-    //     rename 后 marker 跟着进入 final git_dir，作为 private repo 的 ownership fact。
-    //     迁移完全成功后才删除 marker；中途 I/O 失败保留 marker，下次重启继续清理。
-    let marker = LayoutMigrationMarker {
-        migration_uuid: tmp_id.clone(),
+    // 6. 在 rename 前写迁移 journal 到 tmp。
+    //    journal 含完整信息：owner, original_source, claimed_source, worktree_root,
+    //    target_git_dir, phase。用 atomic_write_bytes（fsync 文件 + fsync 父目录）保证 durable。
+    //    rename 后 journal 跟着进入 final git_dir，作为 private repo 的 ownership fact。
+    //    迁移完全成功后才删除 journal；中途 I/O 失败保留 journal，下次重启继续清理。
+    let journal = LayoutMigrationJournal {
+        migration_uuid: migration_uuid.clone(),
         worktree_canonical: canonicalize_or_lossy(worktree_root),
-        source_git_canonical: canonicalize_or_lossy(default_git_dir),
+        original_source: default_git_dir.to_string_lossy().into_owned(),
+        claimed_source: owned_source_path.to_string_lossy().into_owned(),
+        target_git_dir: target_git_dir.to_string_lossy().into_owned(),
+        phase: "copied".to_string(),
     };
-    write_migration_marker(guard.path(), &marker)?;
+    write_migration_journal(guard.path(), &journal)?;
 
-    // 4. 在同一文件系统内原子 rename tmp → final git_dir。
+    // 7. 在同一文件系统内原子 rename tmp → final git_dir。
     if let Some(parent) = target_git_dir.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -489,13 +546,12 @@ fn migrate_embedded_git(
             e,
         )))
     })?;
-    // #644 评论 5491531984 问题3：rename 后先 fsync target_parent（目录项），
-    // 再打开 final + 设置 workdir + 校验 refs/index，最后才删旧 .git。
+    // rename 后先 fsync target_parent（目录项），再打开 final + 设置 workdir + 校验 refs/index。
     if let Some(parent) = target_git_dir.parent() {
         crate::storage::sync_dir(parent)?;
     }
 
-    // 5. 设置 workdir 并验证仓库完整性。
+    // 8. 设置 workdir 并验证仓库完整性。
     let repo = git2::Repository::open(target_git_dir).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "migrate_embedded_git: open migrated repo: {e}"
@@ -512,23 +568,83 @@ fn migrate_embedded_git(
         let _ = index.read(true);
     }
 
-    // 6. 清理旧 .git 并 fsync worktree parent。
-    std::fs::remove_dir_all(default_git_dir).map_err(|e| {
+    // 9. 删除 owned source（claimed_source）并 fsync worktree parent。
+    //    这是恢复时唯一允许删除的 source 路径。
+    std::fs::remove_dir_all(&owned_source_path).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
-            "migrate_embedded_git: remove old .git: {e}"
+            "migrate_embedded_git: remove owned source {}: {e}",
+            owned_source_path.display(),
         )))
     })?;
-    // fsync worktree_root 的父目录（持久化 .git 删除的目录项）。
+    // fsync worktree_root 的父目录（持久化 owned source 删除的目录项）。
     if let Some(parent) = worktree_root.parent() {
         crate::storage::sync_dir(parent)?;
     }
     crate::storage::sync_dir(worktree_root)?;
 
-    // 6.5 #644 评论 5492740265 问题5：迁移完全成功后删除 marker + fsync private git_dir。
-    //     如果这步失败，返回 Err（marker 残留，下次重启看到 marker 并尝试继续清理）。
-    remove_migration_marker(target_git_dir)?;
+    // 10. 迁移完全成功后删除 journal + fsync private git_dir。
+    //     如果这步失败，返回 Err（journal 拟留，下次重启看到 journal 并尝试继续清理）。
+    remove_migration_journal(target_git_dir)?;
 
     Ok(())
+}
+
+/// #644 评论 5493295108 问题2：只处理"已有仓库位置"的 resolve/migrate 入口。
+///
+/// App target 用这个，不要"没有就 init"。语义定死：
+/// - private git_dir 已有 repo → Ready
+/// - private 没有 + worktree/.git 有 repo → 迁移后 Ready
+/// - 两边都没有 → NotGitRepo
+///
+/// Project target 如果产品契约要求作品必有 Git，再在 resolve 后单独 init missing repo
+/// （调 `ensure_project_repo_with_layout`）。
+#[derive(Debug, Clone)]
+pub enum ExistingRepoLayoutState {
+    /// private git_dir 和 worktree/.git 都没有 repo。
+    NotGitRepo,
+    /// private git_dir 已有 repo（或已从 worktree/.git 迁移过来），可正常打开。
+    Ready(GitRepoLayout),
+}
+
+/// #644 评论 5493295108 问题2：解析/迁移已有仓库到 layout 指定的 git_dir。
+///
+/// 语义：
+/// - private git_dir 已有 repo → 返回 `Ready(layout)`
+/// - private 没有 + worktree/.git 有 repo → 迁移后返回 `Ready(layout)`
+/// - 两边都没有 → 返回 `NotGitRepo`
+///
+/// 与 `ensure_project_repo_with_layout` 的区别：本函数不 init 新仓库，
+/// 只处理"已有仓库位置"。App target 用这个，避免在 App data root 下
+/// 误 init 一个新仓库。
+pub fn resolve_existing_repo_layout(
+    layout: &GitRepoLayout,
+) -> crate::Result<ExistingRepoLayoutState> {
+    crate::storage::git_runtime::ensure_initialized()?;
+
+    let default_git_dir = layout.worktree_root.join(".git");
+    let is_external = layout.git_dir != default_git_dir;
+
+    // 1. private git_dir 已有仓库 → 幂等返回 Ready。
+    if git2::Repository::open(&layout.git_dir).is_ok() {
+        // 如果 embedded .git 同时存在，尝试完成迁移清理。
+        if default_git_dir.exists() && is_external {
+            complete_migration_with_journal(
+                &layout.git_dir,
+                &default_git_dir,
+                &layout.worktree_root,
+            )?;
+        }
+        return Ok(ExistingRepoLayoutState::Ready(layout.clone()));
+    }
+
+    // 2. worktree_root 有内嵌 .git → 迁移到外部 git_dir，返回 Ready。
+    if default_git_dir.exists() && is_external {
+        migrate_embedded_git(&default_git_dir, &layout.git_dir, &layout.worktree_root)?;
+        return Ok(ExistingRepoLayoutState::Ready(layout.clone()));
+    }
+
+    // 3. 两边都没有 → NotGitRepo。
+    Ok(ExistingRepoLayoutState::NotGitRepo)
 }
 
 /// 打开仓库（从 layout 获取 git2::Repository，设置正确的 workdir）。
@@ -543,13 +659,13 @@ pub fn open_repo(layout: &GitRepoLayout) -> std::result::Result<git2::Repository
 mod tests {
     use super::*;
 
-    fn marker_path(git_dir: &Path) -> PathBuf {
-        git_dir.join(LAYOUT_MIGRATION_MARKER_NAME)
+    fn journal_path(git_dir: &Path) -> PathBuf {
+        git_dir.join(LAYOUT_MIGRATION_JOURNAL_NAME)
     }
 
-    /// 正常迁移：迁移完成后 embedded .git 不存在、private repo 存在、marker 已清理。
+    /// 正常迁移：迁移完成后 embedded .git 不存在、private repo 存在、journal 已清理。
     #[test]
-    fn migrate_writes_and_clears_marker() {
+    fn migrate_writes_and_clears_journal() {
         crate::storage::git_runtime::ensure_initialized().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let worktree_root = tmp.path().join("worktree");
@@ -570,14 +686,14 @@ mod tests {
         assert!(!embedded_git.exists(), "embedded .git should be removed");
         assert!(git_dir.exists(), "private git_dir should exist");
         assert!(
-            !marker_path(&git_dir).exists(),
-            "migration marker should be cleaned after success"
+            !journal_path(&git_dir).exists(),
+            "migration journal should be cleaned after success"
         );
     }
 
-    /// 双仓库并存但无 marker：无法证明 ownership，保留 embedded .git，返回 Ok(())。
+    /// 双仓库并存但无 journal：无法证明 ownership，保留 embedded .git，返回 Ok(())。
     #[test]
-    fn dual_repo_no_marker_keeps_embedded() {
+    fn dual_repo_no_journal_keeps_embedded() {
         crate::storage::git_runtime::ensure_initialized().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let worktree_root = tmp.path().join("worktree");
@@ -588,7 +704,7 @@ mod tests {
         git2::Repository::init(&worktree_root).unwrap();
         let embedded_git = worktree_root.join(".git");
 
-        // private git_dir 是独立仓库，不是迁移来的（无 marker）。
+        // private git_dir 是独立仓库，不是迁移来的（无 journal）。
         let git_dir = private_root.join("repo.git");
         git2::Repository::init_bare(&git_dir).unwrap();
 
@@ -597,18 +713,19 @@ mod tests {
 
         assert!(
             result.is_ok(),
-            "no marker should keep embedded .git and return Ok"
+            "no journal should keep embedded .git and return Ok"
         );
         assert!(
             embedded_git.exists(),
-            "embedded .git must be preserved without marker"
+            "embedded .git must be preserved without journal"
         );
         assert!(git_dir.exists(), "private git_dir should still exist");
     }
 
-    /// 双仓库并存 + marker 路径匹配：完成迁移，删除 embedded .git + marker。
+    /// #644 评论 5493295108 问题3：journal 拟留 + claimed_source 已删 + 后来新建 worktree/.git：
+    /// 恢复时不应删除后来新建的 .git，只清理 journal（terminal cleanup）。
     #[test]
-    fn dual_repo_marker_match_cleans_embedded() {
+    fn dual_repo_journal_claimed_source_removed_keeps_later_git() {
         crate::storage::git_runtime::ensure_initialized().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let worktree_root = tmp.path().join("worktree");
@@ -616,79 +733,50 @@ mod tests {
         std::fs::create_dir_all(&worktree_root).unwrap();
         std::fs::create_dir_all(&private_root).unwrap();
 
-        git2::Repository::init(&worktree_root).unwrap();
-        let embedded_git = worktree_root.join(".git");
-
+        // private git_dir 是已迁移好的仓库。
         let git_dir = private_root.join("repo.git");
         git2::Repository::init_bare(&git_dir).unwrap();
 
-        // 写 marker，路径与当前 worktree/embedded 匹配。
-        let marker = LayoutMigrationMarker {
+        // 后来在 worktree 下新建 .git（别人的仓库）。
+        git2::Repository::init(&worktree_root).unwrap();
+        let embedded_git = worktree_root.join(".git");
+
+        // 写 journal：claimed_source 指向一个已不存在的路径（迁移时已删），
+        // original_source 指向 worktree/.git（现在存在的是别人后来新建的）。
+        let journal = LayoutMigrationJournal {
             migration_uuid: uuid::Uuid::new_v4().to_string(),
             worktree_canonical: canonicalize_or_lossy(&worktree_root),
-            source_git_canonical: canonicalize_or_lossy(&embedded_git),
+            original_source: embedded_git.to_string_lossy().into_owned(),
+            claimed_source: worktree_root
+                .join(".git.sujian-migrate-source-dead")
+                .to_string_lossy()
+                .into_owned(),
+            target_git_dir: git_dir.to_string_lossy().into_owned(),
+            phase: "copied".to_string(),
         };
-        write_migration_marker(&git_dir, &marker).unwrap();
-        assert!(marker_path(&git_dir).exists());
-
-        let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
-        ensure_project_repo_with_layout(&layout).unwrap();
-
-        assert!(
-            !embedded_git.exists(),
-            "embedded .git should be removed when marker matches"
-        );
-        assert!(
-            !marker_path(&git_dir).exists(),
-            "marker should be cleaned after completing migration"
-        );
-        assert!(git_dir.exists(), "private git_dir should still exist");
-    }
-
-    /// 双仓库并存 + marker 路径不匹配：保留 embedded .git，返回 Ok(())。
-    #[test]
-    fn dual_repo_marker_mismatch_keeps_embedded() {
-        crate::storage::git_runtime::ensure_initialized().unwrap();
-        let tmp = tempfile::tempdir().unwrap();
-        let worktree_root = tmp.path().join("worktree");
-        let private_root = tmp.path().join("private");
-        std::fs::create_dir_all(&worktree_root).unwrap();
-        std::fs::create_dir_all(&private_root).unwrap();
-
-        git2::Repository::init(&worktree_root).unwrap();
-        let embedded_git = worktree_root.join(".git");
-
-        let git_dir = private_root.join("repo.git");
-        git2::Repository::init_bare(&git_dir).unwrap();
-
-        // 写 marker，路径不匹配（指向不同的 worktree/source）。
-        let marker = LayoutMigrationMarker {
-            migration_uuid: uuid::Uuid::new_v4().to_string(),
-            worktree_canonical: "/nonexistent/worktree".to_string(),
-            source_git_canonical: "/nonexistent/source.git".to_string(),
-        };
-        write_migration_marker(&git_dir, &marker).unwrap();
+        write_migration_journal(&git_dir, &journal).unwrap();
 
         let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
         let result = ensure_project_repo_with_layout(&layout);
 
         assert!(
             result.is_ok(),
-            "mismatch should keep embedded .git and return Ok"
+            "claimed_source removed should keep later-created .git and return Ok"
         );
         assert!(
             embedded_git.exists(),
-            "embedded .git must be preserved on path mismatch"
+            "later-created embedded .git must be preserved (not the claimed source)"
         );
         assert!(
-            marker_path(&git_dir).exists(),
-            "marker should be preserved on path mismatch"
+            !journal_path(&git_dir).exists(),
+            "journal should be cleaned after terminal cleanup"
         );
+        assert!(git_dir.exists(), "private git_dir should still exist");
     }
 
-    /// 双仓库并存 + marker 损坏（无效 JSON）：返回 Err，保留 embedded .git。
+    /// 双仓库并存 + journal worktree 不匹配：保留 embedded .git，返回 Ok(())。
     #[test]
-    fn dual_repo_corrupt_marker_returns_err() {
+    fn dual_repo_journal_worktree_mismatch_keeps_embedded() {
         crate::storage::git_runtime::ensure_initialized().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let worktree_root = tmp.path().join("worktree");
@@ -702,24 +790,65 @@ mod tests {
         let git_dir = private_root.join("repo.git");
         git2::Repository::init_bare(&git_dir).unwrap();
 
-        // 写损坏的 marker。
-        std::fs::write(marker_path(&git_dir), b"not valid json").unwrap();
+        // 写 journal，worktree 不匹配（指向不同的 worktree）。
+        let journal = LayoutMigrationJournal {
+            migration_uuid: uuid::Uuid::new_v4().to_string(),
+            worktree_canonical: "/nonexistent/worktree".to_string(),
+            original_source: "/nonexistent/source.git".to_string(),
+            claimed_source: "/nonexistent/claimed".to_string(),
+            target_git_dir: git_dir.to_string_lossy().into_owned(),
+            phase: "copied".to_string(),
+        };
+        write_migration_journal(&git_dir, &journal).unwrap();
 
         let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
         let result = ensure_project_repo_with_layout(&layout);
 
-        assert!(result.is_err(), "corrupt marker should return Err");
+        assert!(
+            result.is_ok(),
+            "worktree mismatch should keep embedded .git and return Ok"
+        );
         assert!(
             embedded_git.exists(),
-            "embedded .git must be preserved on corrupt marker"
+            "embedded .git must be preserved on worktree mismatch"
+        );
+        assert!(
+            journal_path(&git_dir).exists(),
+            "journal should be preserved on worktree mismatch"
         );
     }
 
-    /// 双仓库并存 + marker 匹配但删除 embedded .git 后 marker 仍在（模拟步骤 6 成功但 6.5 未执行）：
-    /// 下次重启看到 marker + 无 embedded .git → 不应报错（marker 读取成功，路径匹配，
-    /// 但 embedded 已不存在，remove_dir_all 对不存在路径返回 NotFound 错误）。
-    /// 实际上 complete_migration_with_marker 会先检查 embedded.exists()（由调用方检查），
-    /// 这里验证：embedded 不存在时 ensure 不进入双仓库分支。
+    /// 双仓库并存 + journal 损坏（无效 JSON）：返回 Err，保留 embedded .git。
+    #[test]
+    fn dual_repo_corrupt_journal_returns_err() {
+        crate::storage::git_runtime::ensure_initialized().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let worktree_root = tmp.path().join("worktree");
+        let private_root = tmp.path().join("private");
+        std::fs::create_dir_all(&worktree_root).unwrap();
+        std::fs::create_dir_all(&private_root).unwrap();
+
+        git2::Repository::init(&worktree_root).unwrap();
+        let embedded_git = worktree_root.join(".git");
+
+        let git_dir = private_root.join("repo.git");
+        git2::Repository::init_bare(&git_dir).unwrap();
+
+        // 写损坏的 journal。
+        std::fs::write(journal_path(&git_dir), b"not valid json").unwrap();
+
+        let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
+        let result = ensure_project_repo_with_layout(&layout);
+
+        assert!(result.is_err(), "corrupt journal should return Err");
+        assert!(
+            embedded_git.exists(),
+            "embedded .git must be preserved on corrupt journal"
+        );
+    }
+
+    /// #644 评论 5493295108 问题3：迁移完全成功后 journal 已删除；
+    /// 无 embedded .git 时 ensure 不进入双仓库分支，幂等 Ok。
     #[test]
     fn no_embedded_after_migration_idempotent() {
         crate::storage::git_runtime::ensure_initialized().unwrap();
@@ -737,5 +866,65 @@ mod tests {
         // 无 embedded .git → 不进入双仓库分支，直接 Ok(())。
         let result = ensure_project_repo_with_layout(&layout);
         assert!(result.is_ok(), "no embedded .git should be idempotent Ok");
+    }
+
+    /// #644 评论 5493295108 问题2：resolve_existing_repo_layout 语义测试。
+    #[test]
+    fn resolve_existing_repo_layout_private_ready() {
+        crate::storage::git_runtime::ensure_initialized().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let worktree_root = tmp.path().join("worktree");
+        let private_root = tmp.path().join("private");
+        std::fs::create_dir_all(&worktree_root).unwrap();
+        std::fs::create_dir_all(&private_root).unwrap();
+
+        // private git_dir 已有 repo → Ready。
+        let git_dir = private_root.join("repo.git");
+        git2::Repository::init_bare(&git_dir).unwrap();
+
+        let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
+        let state = resolve_existing_repo_layout(&layout).unwrap();
+        assert!(matches!(state, ExistingRepoLayoutState::Ready(_)));
+    }
+
+    /// #644 评论 5493295108 问题2：private 没有 + worktree/.git 有 → 迁移后 Ready。
+    #[test]
+    fn resolve_existing_repo_layout_migrates_embedded() {
+        crate::storage::git_runtime::ensure_initialized().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let worktree_root = tmp.path().join("worktree");
+        let private_root = tmp.path().join("private");
+        std::fs::create_dir_all(&worktree_root).unwrap();
+        std::fs::create_dir_all(&private_root).unwrap();
+
+        // worktree 下有 embedded .git，private 没有。
+        git2::Repository::init(&worktree_root).unwrap();
+        let embedded_git = worktree_root.join(".git");
+        assert!(embedded_git.exists());
+
+        let git_dir = private_root.join("repo.git");
+        let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
+        let state = resolve_existing_repo_layout(&layout).unwrap();
+        assert!(matches!(state, ExistingRepoLayoutState::Ready(_)));
+        assert!(!embedded_git.exists(), "embedded should be migrated away");
+        assert!(git_dir.exists(), "private git_dir should exist");
+    }
+
+    /// #644 评论 5493295108 问题2：两边都没有 → NotGitRepo。
+    #[test]
+    fn resolve_existing_repo_layout_neither_is_not_git_repo() {
+        crate::storage::git_runtime::ensure_initialized().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let worktree_root = tmp.path().join("worktree");
+        let private_root = tmp.path().join("private");
+        std::fs::create_dir_all(&worktree_root).unwrap();
+        std::fs::create_dir_all(&private_root).unwrap();
+
+        let git_dir = private_root.join("repo.git");
+        let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
+        let state = resolve_existing_repo_layout(&layout).unwrap();
+        assert!(matches!(state, ExistingRepoLayoutState::NotGitRepo));
+        // 不应 init 新仓库。
+        assert!(!git_dir.exists(), "resolve should not init new repo");
     }
 }

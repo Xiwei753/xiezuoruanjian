@@ -87,10 +87,22 @@ pub fn seed_from_live_as_git_repo(
     // 1. 先把 live 当前工作区复制进 base/ 和 staging/。这才是同步基线。
     run.seed_from_live(live_root)?;
 
-    // 2. #644 评论 5491531984 问题1：用 layout 判断 live 是否是 Git repo。
-    // 有 layout 时检查 layout.git_dir；无 layout 时检查 live_root.join(".git")。
+    // 2. #644 评论 5493295108 问题2：用 resolve_existing_repo_layout 判断 live 是否是 Git repo。
+    // 语义：
+    // - private git_dir 已有 repo → Ready
+    // - private 没有 + worktree/.git 有 repo → 迁移后 Ready
+    // - 两边都没有 → NotGitRepo
+    // App target 用这个，不要"没有就 init"。
+    // 注意：prepare_staging_runs 已在 seed 前调过 resolve_existing_repo_layout /
+    // ensure_project_repo_with_layout，这里再检查一次是为了直接调用本.0
+    // seed_from_live_as_git_repo 的测试和旧路径。检查 layout.git_dir 是否已有 repo
+    //（prepare-后必然已有），或 worktree/.git 是否仍有 repo（未迁移的旧路径）。
     let live_git_exists = match git_layout {
-        Some(layout) => layout.git_dir.exists(),
+        Some(layout) => {
+            layout.git_dir.exists()
+                || git2::Repository::open(&layout.git_dir).is_ok()
+                || layout.worktree_root.join(".git").exists()
+        }
         None => live_root.join(".git").exists(),
     };
     if !live_git_exists {
