@@ -453,6 +453,7 @@ impl SaveTransaction {
     /// 在 `sync_ops.rs` 中，调用 `try_commit_git_finalize()` 之前调用本方法，
     /// 确保 backup material 完好，然后才进入 Git finalize。
     /// 如果 finalize 失败需要 rollback，backup 已确认可用。
+    #[allow(clippy::excessive_nesting)]
     pub fn preflight_rollback_material(&self) -> Result<()> {
         if !self.backup_mode {
             return Ok(());
@@ -567,10 +568,7 @@ impl Drop for SaveTransaction {
 ///
 /// NotGitRepo 的 `RepoInstallCommitted` 是 commit-point，不需要 backup，
 /// 所以不在本函数中做粗暴的无条件检查——由调用方根据 outcome 决定是否需要 preflight。
-fn preflight_backup_entries(
-    tx_dir: &Path,
-    manifest: &TransactionManifest,
-) -> Result<()> {
+fn preflight_backup_entries(tx_dir: &Path, manifest: &TransactionManifest) -> Result<()> {
     let backup_dir = tx_dir.join("backup");
     for entry in &manifest.backup_entries {
         if let BackupEntry::RestoreFile {

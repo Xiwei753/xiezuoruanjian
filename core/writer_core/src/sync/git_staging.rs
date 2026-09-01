@@ -101,12 +101,13 @@ pub fn seed_from_live_as_git_repo(
     // #644 评论 5491531984 问题1：用 open_repo_with_layout 打开仓库，
     // 不再硬编码 git2::Repository::open(live_root)。
     let live_repo = match git_layout {
-        Some(layout) => crate::storage::git_repo_layout::open_repo_with_layout(layout)
-            .map_err(|e| {
+        Some(layout) => {
+            crate::storage::git_repo_layout::open_repo_with_layout(layout).map_err(|e| {
                 crate::Error::Io(std::io::Error::other(format!(
                     "failed to open live git repo with layout: {e}"
                 )))
-            })?,
+            })?
+        }
         None => git2::Repository::open(live_root).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
                 "failed to open live git repo: {e}"
@@ -210,10 +211,17 @@ pub fn seed_from_live_as_git_repo(
     };
 
     // 4. 用 git2 把仓库元数据克隆到临时目录。
-    let live_root_str = live_root.to_str().ok_or_else(|| {
+    // #644 评论 5492740265 问题1：clone 源改用 live_repo.path()（真实 git dir）。
+    // Android 新布局的共享 worktree 没有 .git/gitlink，把共享 live_root 当 clone 源，
+    // libgit2 发现不了实际位于 filesDir/sujian-git/... 的仓库。
+    // 前面已打开 live_repo（layout 或 fallback），其 path() 返回真实 git dir，
+    // 标准布局（live_root/.git）和外部 git_dir 都走这一套。
+    // git2::Repository::clone() 对本地 git dir 走 libgit2 local clone 优化
+    //（hardlink 对象，跨文件系统回退完整复制）。
+    let live_git_dir_str = live_repo.path().to_str().ok_or_else(|| {
         crate::Error::Other(format!(
-            "live_root path is not valid UTF-8: {}",
-            live_root.display()
+            "live repo git_dir path is not valid UTF-8: {}",
+            live_repo.path().display()
         ))
     })?;
 
@@ -228,7 +236,7 @@ pub fn seed_from_live_as_git_repo(
     // git2 本地 clone：libgit2 对本地路径自动用 local clone 优化（hardlink 对象），
     // 跨文件系统时回退到完整复制。clone 会 checkout HEAD 到 temp_clone_dir，
     // 但我们只取 .git/，worktree 会被丢弃。
-    let _cloned_repo = git2::Repository::clone(live_root_str, &temp_clone_dir).map_err(|e| {
+    let _cloned_repo = git2::Repository::clone(live_git_dir_str, &temp_clone_dir).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "git2 clone staging failed: {e}"
         )))

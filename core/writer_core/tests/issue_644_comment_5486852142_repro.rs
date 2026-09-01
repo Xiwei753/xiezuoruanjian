@@ -212,8 +212,7 @@ fn problem3_fixed_head_recheck_after_branch_cas() {
 
     // 验证通过 RefTransaction 执行 branch CAS
     assert!(
-        finalize_body.contains("ref_tx.set_target(")
-            && finalize_body.contains("head_ref,"),
+        finalize_body.contains("ref_tx.set_target(") && finalize_body.contains("head_ref,"),
         "problem3: finalize_existing must use ref_tx.set_target for branch CAS"
     );
 

@@ -593,7 +593,8 @@ fn migration_no_lock_current_is_old_returns_already_reverted() {
         index_lock_owner: None,
         ref_tx_owner: None,
 
-            ref_lock_names: Vec::new(),    };
+        ref_lock_names: Vec::new(),
+    };
 
     let result = check_index_lock_owner_migration(&live, &snapshot, &plan, None).unwrap();
     assert!(
@@ -637,7 +638,8 @@ fn migration_no_lock_current_is_new_returns_migrate_to_new_owner() {
         index_lock_owner: None,
         ref_tx_owner: None,
 
-            ref_lock_names: Vec::new(),    };
+        ref_lock_names: Vec::new(),
+    };
 
     let result = check_index_lock_owner_migration(&live, &snapshot, &plan, None).unwrap();
     match result {
@@ -685,7 +687,8 @@ fn migration_lock_exists_returns_lock_exists() {
         index_lock_owner: None,
         ref_tx_owner: None,
 
-            ref_lock_names: Vec::new(),    };
+        ref_lock_names: Vec::new(),
+    };
 
     let result = check_index_lock_owner_migration(&live, &snapshot, &plan, None).unwrap();
     assert!(
@@ -729,7 +732,8 @@ fn migration_current_neither_old_nor_new_returns_concurrent_modification() {
         index_lock_owner: None,
         ref_tx_owner: None,
 
-            ref_lock_names: Vec::new(),    };
+        ref_lock_names: Vec::new(),
+    };
 
     let result = check_index_lock_owner_migration(&live, &snapshot, &plan, None).unwrap();
     assert!(
@@ -829,7 +833,8 @@ fn finalize_existing_detached_head_after_preflight_returns_finalize_failed() {
         index_lock_owner: Some(uuid::Uuid::new_v4().to_string()),
         ref_tx_owner: Some(uuid::Uuid::new_v4().to_string()),
 
-            ref_lock_names: Vec::new(),    };
+        ref_lock_names: Vec::new(),
+    };
 
     // 调用 commit_git_finalize
     use writer_core::sync::git_commit::commit_git_finalize;

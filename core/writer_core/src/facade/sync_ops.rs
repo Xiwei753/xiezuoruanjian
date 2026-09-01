@@ -849,32 +849,31 @@ fn apply_staging_commits_for_targets(
                     git_plan_ref,
                     run.git_layout().map(|l| l.git_dir.as_path()),
                 ) {
-                    Ok(()) => {
-                        match tx.finish() {
-                            Ok(()) => {
-                                if let Some(plan) = git_plan_ref {
-                                    crate::sync::git_commit::cleanup_repo_create_owner_marker(
-                                        live_root, plan,
-                                        run.git_layout().map(|l| l.git_dir.as_path()),
-                                    );
-                                }
-                                target_conflicts.push(plan.conflict);
-                                target_results.push(TargetCommitResult::Ok);
-                                run.cleanup();
+                    Ok(()) => match tx.finish() {
+                        Ok(()) => {
+                            if let Some(plan) = git_plan_ref {
+                                crate::sync::git_commit::cleanup_repo_create_owner_marker(
+                                    live_root,
+                                    plan,
+                                    run.git_layout().map(|l| l.git_dir.as_path()),
+                                );
                             }
-                            Err(e) => {
-                                let msg = format!(
-                                    "git finalize succeeded but tx.finish() failed to persist \
+                            target_conflicts.push(plan.conflict);
+                            target_results.push(TargetCommitResult::Ok);
+                            run.cleanup();
+                        }
+                        Err(e) => {
+                            let msg = format!(
+                                "git finalize succeeded but tx.finish() failed to persist \
                                      Finished phase: {} — preserving tx_dir and owner marker \
                                      for next recovery",
-                                    e
-                                );
-                                log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-                                target_results.push(TargetCommitResult::Failed(msg));
-                                target_conflicts.push(Vec::new());
-                            }
+                                e
+                            );
+                            log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                            target_results.push(TargetCommitResult::Failed(msg));
+                            target_conflicts.push(Vec::new());
                         }
-                    }
+                    },
                     Err(GitFinalizeError::FinalizeFailed(e)) => {
                         // #644 评论 5488871385 问题1：commit_git_finalize 不再内部 rollback。
                         // 由本处统一协调：inspect → Git rollback → file rollback。
@@ -901,7 +900,8 @@ fn apply_staging_commits_for_targets(
                         if let Err(rb_err) = rollback_err {
                             log::warn!(
                                 "Staging commit: rollback also failed: {} (original: {})",
-                                rb_err, e
+                                rb_err,
+                                e
                             );
                         }
                         let msg = format!("git repo-metadata finalize failed: {}", e);
@@ -1166,14 +1166,20 @@ fn coordinate_rollback_after_finalize_failure(
 ) -> crate::error::Result<()> {
     // inspect 确认 rollback 状态（只读）。
     let inspect_state = crate::sync::git_commit::inspect_git_rollback_state(
-        live_root, snapshot, plan, explicit_git_dir,
+        live_root,
+        snapshot,
+        plan,
+        explicit_git_dir,
     )?;
 
     match inspect_state {
         crate::sync::git_commit::GitRollbackState::NeedsRollback => {
             // Git rollback。
             let outcome = crate::sync::git_commit::rollback_git_finalize(
-                live_root, snapshot, plan, explicit_git_dir,
+                live_root,
+                snapshot,
+                plan,
+                explicit_git_dir,
             )?;
             match outcome {
                 crate::sync::git_commit::GitRollbackOutcome::Reverted => {

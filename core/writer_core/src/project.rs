@@ -26,6 +26,12 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
+/// #644 评论 5492740265 问题4：GitRepoLayout factory 类型别名。
+///
+/// 接受 `project_id` 返回该作品的 `GitRepoLayout`。`None` 时使用标准布局。
+/// 用类型别名收口，避免 clippy `type_complexity` 在每个签名/绑定处重复告警。
+pub type GitLayoutFn = Box<dyn Fn(&str) -> crate::storage::git_repo_layout::GitRepoLayout>;
+
 /// 项目元数据结构体。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Project {
@@ -37,15 +43,8 @@ pub struct Project {
     pub order: i32,
 }
 
-#[allow(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    clippy::excessive_nesting,
-    clippy::too_many_arguments,
-    clippy::type_complexity
-)]
 pub fn list_projects(projects_root: &Path) -> Result<Vec<Project>> {
-    list_projects_with_layout(projects_root, None::<Box<dyn Fn(&str) -> crate::storage::git_repo_layout::GitRepoLayout>>)
+    list_projects_with_layout(projects_root, None::<GitLayoutFn>)
 }
 
 /// #644 评论 5491531984 问题1：带 layout 的作品列表。
@@ -54,7 +53,23 @@ pub fn list_projects(projects_root: &Path) -> Result<Vec<Project>> {
 /// `None` 时使用标准布局。
 pub fn list_projects_with_layout(
     projects_root: &Path,
-    git_layout_fn: Option<Box<dyn Fn(&str) -> crate::storage::git_repo_layout::GitRepoLayout>>,
+    git_layout_fn: Option<GitLayoutFn>,
+) -> Result<Vec<Project>> {
+    list_projects_with_layout_inner(projects_root, git_layout_fn.as_deref())
+}
+
+/// `list_projects_with_layout` 的核心逻辑，接受引用形式的 `layout_fn`，
+/// 便于 `create_project_with_layout_factory` 等内部调用方在不 clone `Box` 的前提下复用。
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+fn list_projects_with_layout_inner(
+    projects_root: &Path,
+    git_layout_fn: Option<&dyn Fn(&str) -> crate::storage::git_repo_layout::GitRepoLayout>,
 ) -> Result<Vec<Project>> {
     let projects_dir = projects_root;
     if !projects_dir.exists() {
@@ -75,7 +90,7 @@ pub fn list_projects_with_layout(
                         // 不等到第一次同步才初始化（Issue #600）。
                         // #644 评论 5491531984 问题1：通过 layout 确定 Git 物理位置，
                         // 不再让 project.rs 自己决定。
-                        if let Some(ref layout_fn) = git_layout_fn {
+                        if let Some(layout_fn) = git_layout_fn {
                             let layout = layout_fn(&project.id);
                             crate::storage::project_git::ensure_project_repo_with_layout(&layout)?;
                         } else {
@@ -190,7 +205,19 @@ pub fn get_project_stats(project_root: &Path) -> Result<ProjectStats> {
 ///
 /// 错误处理：磁盘/IO 错误显式向上传播，不用 unwrap/expect。
 pub fn list_project_summaries(projects_root: &Path) -> Result<Vec<ProjectSummary>> {
-    let projects = list_projects(projects_root)?;
+    list_project_summaries_with_layout(projects_root, None::<GitLayoutFn>)
+}
+
+/// #644 评论 5492740265 问题4：带 layout 的作品摘要列表。
+///
+/// 复用 `list_projects_with_layout`（而非 `list_projects`），确保 `git_metadata_root=Some`
+/// 时摘要路径也走 `ensure_project_repo_with_layout`，不会在共享存储重新制造 `.git`。
+/// `None` 时退化为标准布局，行为与 `list_project_summaries` 一致。
+pub fn list_project_summaries_with_layout(
+    projects_root: &Path,
+    git_layout_fn: Option<GitLayoutFn>,
+) -> Result<Vec<ProjectSummary>> {
+    let projects = list_projects_with_layout_inner(projects_root, git_layout_fn.as_deref())?;
     let mut summaries = Vec::with_capacity(projects.len());
     for project in projects {
         let project_dir = projects_root.join(&project.id);
@@ -213,19 +240,50 @@ pub fn list_project_summaries(projects_root: &Path) -> Result<Vec<ProjectSummary
 /// `order` 字段取现有项目最大 order + 1，保证新项目排在最后。
 /// 自动调用 `volume::create_volume` 创建默认卷，保持产品一致性。
 pub fn create_project(projects_root: &Path, title: &str) -> Result<Project> {
-    create_project_with_layout(projects_root, title, None)
+    create_project_with_layout_factory(projects_root, title, None::<GitLayoutFn>)
 }
 
 /// #644 评论 5491531984 问题1：带 layout 的作品创建。
 ///
 /// `git_layout` 指定新建作品的 Git 仓库物理位置。
 /// `None` 时使用标准布局（`project_root.join(".git")`）。
+///
+/// 注意：该签名接受一个固定 `GitRepoLayout`，但调用方在进入函数前不知道内部即将生成的
+/// project id，无法构造正确的 layout（worktree_root/git_dir 都依赖 project id）。
+/// 新代码应优先使用 `create_project_with_layout_factory`。本函数保留为向后兼容的薄包装：
+/// 当传入固定 layout 时，构造一个忽略 project id 的常量闭包委托给 factory。
 pub fn create_project_with_layout(
     projects_root: &Path,
     title: &str,
     git_layout: Option<crate::storage::git_repo_layout::GitRepoLayout>,
 ) -> Result<Project> {
-    let projects = list_projects(projects_root)?;
+    match git_layout {
+        Some(layout) => {
+            let layout_fn: GitLayoutFn = Box::new(move |_project_id: &str| layout.clone());
+            create_project_with_layout_factory(projects_root, title, Some(layout_fn))
+        }
+        None => create_project_with_layout_factory(projects_root, title, None::<GitLayoutFn>),
+    }
+}
+
+/// #644 评论 5492740265 问题4：带 layout factory 的作品创建。
+///
+/// `git_layout_fn` 是一个闭包，接受 project_id 返回该作品的 GitRepoLayout。
+/// 函数内部先生成 project id（`Uuid::new_v4()`），再用这个 id 调 `git_layout_fn(&id)`
+/// 构造 `GitRepoLayout`，然后调 `ensure_project_repo_with_layout`。这样新作品从出生开始
+/// 就直接使用最终 layout，不会先在共享存储建 `.git` 再等下一次列表/同步搬家。
+///
+/// `None` 时使用标准布局。
+///
+/// 内部 list 已有项目算 order 时也走 layout（用 `list_projects_with_layout_inner`），
+/// 否则 list 过程中又会在共享存储建 `.git`。由于此时新 project 还没创建，list 的是已有
+/// 项目，用同一个 `git_layout_fn` 是正确的。
+pub fn create_project_with_layout_factory(
+    projects_root: &Path,
+    title: &str,
+    git_layout_fn: Option<GitLayoutFn>,
+) -> Result<Project> {
+    let projects = list_projects_with_layout_inner(projects_root, git_layout_fn.as_deref())?;
     let order = projects
         .iter()
         .map(|p| p.order)
@@ -246,8 +304,10 @@ pub fn create_project_with_layout(
     let project_dir = projects_root.join(&id);
     fs::create_dir_all(&project_dir)?;
     // 每个作品目录自身就是 Git 仓库（Issue #600）：先初始化仓库，再写 project.json。
-    // #644 评论 5491531984 问题1：通过 layout 确定 Git 物理位置。
-    if let Some(layout) = git_layout {
+    // #644 评论 5492740265 问题4：通过 layout factory 确定 Git 物理位置，
+    // 新作品从出生开始就直接使用最终 layout。
+    if let Some(ref layout_fn) = git_layout_fn {
+        let layout = layout_fn(&id);
         crate::storage::project_git::ensure_project_repo_with_layout(&layout)?;
     } else {
         crate::storage::project_git::ensure_project_repo(&project_dir)?;
@@ -270,7 +330,20 @@ pub fn create_project_with_layout(
 /// 同一作品根下不允许重名（title 唯一性检查）。
 /// 如果新标题已被其他项目使用，返回 `Error::Other`。
 pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -> Result<()> {
-    let projects = list_projects(projects_root)?;
+    rename_project_with_layout(projects_root, project_id, new_title, None::<GitLayoutFn>)
+}
+
+/// #644 评论 5492740265 问题4：带 layout 的作品重命名。
+///
+/// 内部 list 已有项目做重名检查时走 `list_projects_with_layout_inner`，
+/// 确保 `git_metadata_root=Some` 时不会在共享存储重新制造 `.git`。
+pub fn rename_project_with_layout(
+    projects_root: &Path,
+    project_id: &str,
+    new_title: &str,
+    git_layout_fn: Option<GitLayoutFn>,
+) -> Result<()> {
+    let projects = list_projects_with_layout_inner(projects_root, git_layout_fn.as_deref())?;
     if projects
         .iter()
         .any(|p| p.title == new_title && p.id != project_id)
@@ -408,7 +481,20 @@ pub fn get_project_updated_at_aggregated(project_root: &Path) -> Result<String> 
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn reorder_projects(projects_root: &Path, ordered_ids: &[String]) -> Result<()> {
-    let mut projects = list_projects(projects_root)?;
+    reorder_projects_with_layout(projects_root, ordered_ids, None::<GitLayoutFn>)
+}
+
+/// #644 评论 5492740265 问题4：带 layout 的作品重排。
+///
+/// 内部 list 已有项目时走 `list_projects_with_layout_inner`，
+/// 确保 `git_metadata_root=Some` 时不会在共享存储重新制造 `.git`。
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+pub fn reorder_projects_with_layout(
+    projects_root: &Path,
+    ordered_ids: &[String],
+    git_layout_fn: Option<GitLayoutFn>,
+) -> Result<()> {
+    let mut projects = list_projects_with_layout_inner(projects_root, git_layout_fn.as_deref())?;
     let mut projects_map = std::collections::HashMap::new();
     for p in projects.drain(..) {
         projects_map.insert(p.id.clone(), p);

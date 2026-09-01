@@ -342,25 +342,9 @@ pub fn prepare_git_finalize(
 
     crate::storage::git_runtime::ensure_initialized()?;
 
-    // #644 评论 5491531984 问题4：使用 explicit_git_dir 打开 live repo，
-    // 不再硬编码 live_root.join(".git")。
-    let effective_git_dir = explicit_git_dir
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| live_root.join(".git"));
-
-    let live_repo = git2::Repository::open(&effective_git_dir).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "prepare_git_finalize: open live repo: {e}"
-        )))
-    })?;
-    // #644 评论 5491531984 问题2：外部 git_dir 需要设置 workdir 指向 worktree_root。
-    if explicit_git_dir.is_some() {
-        live_repo.set_workdir(live_root, false).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "prepare_git_finalize: set_workdir: {e}"
-            )))
-        })?;
-    }
+    // #644 评论 5492740265 问题3：用 open_live_repo 统一入口打开 live repo。
+    // 外部 git_dir 布局下 worktree 没有 .git，Repository::open(live_root) 会失败。
+    let live_repo = open_live_repo(live_root, explicit_git_dir)?;
 
     // 捕获 HEAD 快照。
     // #644 评论 5478237852 问题3：只有 NotFound 映射为 DidNotExist，其它错误向上传。
@@ -580,7 +564,7 @@ fn build_staging_plan(staging_root: &Path) -> Result<StagingPlan> {
 ///
 /// plan 的 old_oid 来自 snapshot（live 当前状态），new_oid 来自 staging_plan。
 /// remote-tracking ref 的 new_oid 从 staging repo 读取。
-#[allow(clippy::excessive_nesting)]
+#[allow(clippy::excessive_nesting, clippy::too_many_lines)]
 fn build_finalize_plan(
     seed_state: &GitSeedState,
     snapshot_refs: &std::collections::BTreeMap<String, RefSnapshot>,
@@ -706,8 +690,7 @@ fn build_finalize_plan(
             // 但 rollback 仍可能锁 HEAD + branch + remote refs。
             // ref_lock_names 为空即可，因为 NotGitRepo 的 forward 不经过 RefTransaction。
         }
-        GitSeedState::Unborn { head_ref }
-        | GitSeedState::Existing { head_ref, .. } => {
+        GitSeedState::Unborn { head_ref } | GitSeedState::Existing { head_ref, .. } => {
             ref_lock_names.push("HEAD".to_string());
             ref_lock_names.push(head_ref.clone());
         }
@@ -840,6 +823,65 @@ pub enum GitRollbackState {
     ConcurrentChanged,
 }
 
+/// #644 评论 5492740265 问题3：打开 live Git 仓库的唯一入口。
+///
+/// 统一构造 `GitRepoLayout`（标准布局或外部 git_dir），调用
+/// `crate::storage::git_repo_layout::open_repo_with_layout()`。
+///
+/// 外部 git_dir 布局下共享 worktree 没有 `.git`，`Repository::open(live_root)` 会失败
+///（worktree 没有 .git/gitlink）。本函数始终从真实 git_dir 打开仓库并设置正确的
+/// workdir，标准布局和外部 git_dir 都走这一套。
+///
+/// - `explicit_git_dir = Some(p)`：外部 git_dir 布局，从 `p` 打开，workdir 指向 `live_root`。
+/// - `explicit_git_dir = None`：标准布局，等效于 `Repository::open(live_root)`。
+fn open_live_repo(live_root: &Path, explicit_git_dir: Option<&Path>) -> Result<git2::Repository> {
+    let layout = match explicit_git_dir {
+        Some(git_dir) => crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
+            live_root.to_path_buf(),
+            git_dir.to_path_buf(),
+        ),
+        None => crate::storage::git_repo_layout::GitRepoLayout::new(live_root.to_path_buf()),
+    };
+    crate::storage::git_repo_layout::open_repo_with_layout(&layout).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "open_live_repo: failed to open live repo (live_root={}, git_dir={}): {e}",
+            live_root.display(),
+            layout.git_dir.display(),
+        )))
+    })
+}
+
+/// #644 评论 5492740265 问题2：repo install tmp 路径的统一计算。
+///
+/// tmp 永远建在**最终 live_git 的父目录**，保证 `tmp -> live_git` 是同一文件系统的
+/// 原子 rename。Android 上 live_root（共享 worktree）和 live_git（私有 git_dir）
+/// 在不同文件系统，把 tmp 建在 live_root 会导致 rename 跨 mount 失败。
+///
+/// - `explicit_git_dir = Some(p)`：tmp 建在 `p.parent().join(".git.sujian-tmp-{owner}")`。
+/// - `explicit_git_dir = None`：tmp 建在 `live_root.join(".git.sujian-tmp-{owner}")`
+///   （标准布局，live_git = live_root/.git，父目录就是 live_root）。
+///
+/// forward（`finalize_not_git_repo`）和 recovery（`rollback_git_finalize`）必须对同一
+/// owner 算出同一物理 tmp 路径，否则崩溃后找不到自己留下的 repo。
+fn repo_install_tmp_path(
+    live_root: &Path,
+    explicit_git_dir: Option<&Path>,
+    owner: &str,
+) -> Result<PathBuf> {
+    match explicit_git_dir {
+        Some(git_dir) => {
+            let parent = git_dir.parent().ok_or_else(|| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "repo_install_tmp_path: explicit_git_dir has no parent: {}",
+                    git_dir.display(),
+                )))
+            })?;
+            Ok(parent.join(format!(".git.sujian-tmp-{}", owner)))
+        }
+        None => Ok(live_root.join(format!(".git.sujian-tmp-{}", owner))),
+    }
+}
+
 /// #644 评论 5488871385 问题1 + 评论 5489750244 问题4：纯只读检查 Git rollback 状态。
 ///
 /// 不修改任何 Git/live 文件（不删 lock、不删 marker）。调用方根据返回的
@@ -950,7 +992,10 @@ pub fn inspect_git_rollback_state(
     let ref_lock_check_names: Vec<String> = if !plan.ref_lock_names.is_empty() {
         plan.ref_lock_names.clone()
     } else {
-        plan.ref_plans.iter().map(|(name, _, _)| name.clone()).collect()
+        plan.ref_plans
+            .iter()
+            .map(|(name, _, _)| name.clone())
+            .collect()
     };
     if !ref_lock_check_names.is_empty() {
         let git_dir_ref = effective_git_dir.clone();
@@ -989,11 +1034,9 @@ pub fn inspect_git_rollback_state(
             }
         }
 
-        let repo = git2::Repository::open(live_root).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "inspect_git_rollback_state: open live repo: {e}"
-            )))
-        })?;
+        // #644 评论 5492740265 问题3：用 open_live_repo 统一入口，
+        // 外部 git_dir 布局下 Repository::open(live_root) 会失败。
+        let repo = open_live_repo(live_root, explicit_git_dir)?;
 
         for (ref_name, old_oid_str, new_oid_str) in &plan.ref_plans {
             let new_oid = git2::Oid::from_str(new_oid_str).map_err(|e| {
@@ -1168,9 +1211,7 @@ fn classify_locked_ref_rollback(
                         "classify_locked_ref_rollback: ref {} has unexpected value \
                          (expected old_oid {} or new_oid {}) under Transaction lock — \
                          concurrent modification detected, preserving transaction",
-                        ref_name,
-                        old_oid,
-                        new_oid
+                        ref_name, old_oid, new_oid
                     ))));
                 }
             }
@@ -1185,9 +1226,7 @@ fn classify_locked_ref_rollback(
                     "classify_locked_ref_rollback: ref {} not found under Transaction lock \
                      (expected old_oid {} or new_oid {}) — concurrent modification detected, \
                      preserving transaction",
-                    ref_name,
-                    old_oid,
-                    new_oid
+                    ref_name, old_oid, new_oid
                 ))));
             }
             (Some(_), Err(e)) => {
@@ -1228,7 +1267,14 @@ pub fn commit_git_finalize(
 ) -> std::result::Result<(), GitFinalizeError> {
     // 调用内部 finalize。失败时直接返回错误，不内部 rollback。
     // 调用方（sync_ops.rs）负责 inspect → preflight → rollback → file rollback。
-    finalize_git_repo_metadata_inner(live_root, staging_root, seed_state, snapshot, plan, explicit_git_dir)
+    finalize_git_repo_metadata_inner(
+        live_root,
+        staging_root,
+        seed_state,
+        snapshot,
+        plan,
+        explicit_git_dir,
+    )
 }
 
 /// #644 评论 5485518160 修改点 2：`index_lock_owner=None` 旧 manifest 迁移判定结果。
@@ -1361,11 +1407,9 @@ pub fn check_ref_tx_owner_migration(
 
     crate::storage::git_runtime::ensure_initialized()?;
 
-    let repo = git2::Repository::open(live_root).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "check_ref_tx_owner_migration: open live repo: {e}"
-        )))
-    })?;
+    // #644 评论 5492740265 问题3：用 open_live_repo 统一入口，
+    // 外部 git_dir 布局下 Repository::open(live_root) 会失败。
+    let repo = open_live_repo(live_root, explicit_git_dir)?;
 
     // #644 评论 5490206957 问题3：用 plan.ref_lock_names（完整的 forward lock 集合）
     // 而不是 plan.ref_plans（只包含 head_ref + remote refs，不含 HEAD）。
@@ -1373,7 +1417,10 @@ pub fn check_ref_tx_owner_migration(
     let ref_lock_check_names: Vec<String> = if !plan.ref_lock_names.is_empty() {
         plan.ref_lock_names.clone()
     } else {
-        plan.ref_plans.iter().map(|(name, _, _)| name.clone()).collect()
+        plan.ref_plans
+            .iter()
+            .map(|(name, _, _)| name.clone())
+            .collect()
     };
     for ref_name in &ref_lock_check_names {
         // 1. 检查 canonical ref lock 是否存在。
@@ -1417,9 +1464,7 @@ pub fn check_ref_tx_owner_migration(
                         ref_name
                     )))
                 })?;
-                if current_ref.target() != Some(old_oid)
-                    && current_ref.target() != Some(new_oid)
-                {
+                if current_ref.target() != Some(old_oid) && current_ref.target() != Some(new_oid) {
                     return Ok(RefTxOwnerMigration::ConcurrentModification);
                 }
                 // current == old (no-op) or current == new (rollback) → allowed.
@@ -1484,7 +1529,9 @@ pub fn rollback_git_finalize(
             // 返回 Err 保留 transaction，不能 terminalize 后把没人再知道 owner 的
             // tmp repo 留在磁盘上。
             if let Some(owner) = &plan.repo_create_owner {
-                let tmp_git = live_root.join(format!(".git.sujian-tmp-{}", owner));
+                // #644 评论 5492740265 问题2：tmp 建在 live_git 父目录，
+                // 保证 tmp -> live_git 同一文件系统原子 rename。
+                let tmp_git = repo_install_tmp_path(live_root, explicit_git_dir, owner)?;
                 if tmp_git.exists() {
                     fs::remove_dir_all(&tmp_git)?;
                     crate::storage::sync_parent(&tmp_git)?;
@@ -1562,21 +1609,25 @@ pub fn rollback_git_finalize(
     let ref_names: Vec<String> = if !plan.ref_lock_names.is_empty() {
         plan.ref_lock_names.clone()
     } else {
-        plan.ref_plans.iter().map(|(name, _, _)| name.clone()).collect()
+        plan.ref_plans
+            .iter()
+            .map(|(name, _, _)| name.clone())
+            .collect()
     };
 
     // repo 需要定义在 ref_tx 之前，且生命周期要覆盖 ref_tx。
     let repo: Option<git2::Repository> = if !ref_names.is_empty() {
-        Some(git2::Repository::open(live_root).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "rollback_git_finalize: open live repo for ref transaction: {e}"
-            )))
-        })?)
+        // #644 评论 5492740265 问题3：用 open_live_repo 统一入口，
+        // 外部 git_dir 布局下 Repository::open(live_root) 会失败。
+        Some(open_live_repo(live_root, explicit_git_dir)?)
     } else {
         None
     };
 
-    let git_dir = repo.as_ref().map(|r| r.path().to_path_buf()).unwrap_or_else(|| effective_git_dir.clone());
+    let git_dir = repo
+        .as_ref()
+        .map(|r| r.path().to_path_buf())
+        .unwrap_or_else(|| effective_git_dir.clone());
 
     let mut ref_tx: Option<RefTransaction<'_>> = None;
     if let Some(repo) = &repo {
@@ -1772,7 +1823,11 @@ pub fn rollback_git_finalize(
                     // current == new → 反向恢复到 old_oid。
                     // 通过 git2::Transaction::set_target（libgit2 refdb），
                     // 正确处理 loose ref 和 packed refs。
-                    tx.set_target(ref_name, *old_oid, "sync: rollback ref after finalize failure")?;
+                    tx.set_target(
+                        ref_name,
+                        *old_oid,
+                        "sync: rollback ref after finalize failure",
+                    )?;
                 }
                 LockedRollbackRefAction::Remove { ref_name } => {
                     // current == new → 删除 ref（反向恢复）。
@@ -1810,7 +1865,14 @@ pub fn recover_git_finalize(
     explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
     // 尝试完成 Git finalize。
-    match finalize_git_repo_metadata_inner(live_root, staging_root, seed_state, snapshot, plan, explicit_git_dir) {
+    match finalize_git_repo_metadata_inner(
+        live_root,
+        staging_root,
+        seed_state,
+        snapshot,
+        plan,
+        explicit_git_dir,
+    ) {
         Ok(()) => {
             log::info!("recover_git_finalize: successfully completed pending Git finalize");
             Ok(())
@@ -1901,7 +1963,11 @@ pub fn try_commit_git_finalize(
 ///
 /// `plan.repo_create_owner` 为 `None` 时是 no-op（非 NotGitRepo 路径）。
 /// marker 不存在时也是 no-op（已清理或从未创建）。
-pub fn cleanup_repo_create_owner_marker(live_root: &Path, plan: &GitFinalizePlan, explicit_git_dir: Option<&Path>) {
+pub fn cleanup_repo_create_owner_marker(
+    live_root: &Path,
+    plan: &GitFinalizePlan,
+    explicit_git_dir: Option<&Path>,
+) {
     if plan.repo_create_owner.is_some() {
         let default_git_dir = live_root.join(".git");
         let git_dir_ref = explicit_git_dir.unwrap_or(&default_git_dir);
@@ -2020,6 +2086,7 @@ fn finalize_git_repo_metadata_inner(
 /// 使 `ConcurrentMetadataChanged` 能向上传播，避免 rollback 删除别人刚创建的 `.git`。
 ///
 /// #644 评论 5480360027：不再接收 mutation_log。plan 已在 prepare 阶段落盘。
+#[allow(clippy::too_many_arguments)]
 fn finalize_not_git_repo(
     live_root: &Path,
     staging_root: &Path,
@@ -2031,7 +2098,9 @@ fn finalize_not_git_repo(
     explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
     let staging_git = staging_root.join(".git");
-    let live_git = explicit_git_dir.map(|p| p.to_path_buf()).unwrap_or_else(|| live_root.join(".git"));
+    let live_git = explicit_git_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| live_root.join(".git"));
 
     // #644 评论 5482310913 问题2：tmp_git 目录名基于 repo_create_owner，
     // 使恢复时能精准清理本轮 tmp repo，不用扫猜。
@@ -2040,7 +2109,12 @@ fn finalize_not_git_repo(
         .repo_create_owner
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let tmp_git = live_root.join(format!(".git.sujian-tmp-{}", tmp_id));
+    // #644 评论 5492740265 问题2：tmp 建在 live_git 父目录，
+    // 保证 tmp -> live_git 同一文件系统原子 rename。
+    // Android 上 live_root（共享 worktree）和 live_git（私有 git_dir）在不同文件系统，
+    // 把 tmp 建在 live_root 会导致 rename 跨 mount 失败。
+    let tmp_git = repo_install_tmp_path(live_root, explicit_git_dir, &tmp_id)
+        .map_err(GitFinalizeError::FinalizeFailed)?;
     let mut _guard = TmpDirGuard::new(tmp_git.clone());
 
     copy_dir_recursive(&staging_git, _guard.path())?;
@@ -2143,6 +2217,7 @@ fn finalize_not_git_repo(
 /// #644 评论 5480360027：接收 `plan`，不再维护 mutation_log。
 /// index 写入改为：先在临时目录生成目标 index，获取 `.git/index.lock`，
 /// 拿到锁后重新读取 live index 确认仍等于 snapshot，一致才原子安装。
+#[allow(clippy::too_many_arguments)]
 fn finalize_unborn(
     live_root: &Path,
     staging_repo: &git2::Repository,
@@ -2153,21 +2228,10 @@ fn finalize_unborn(
     plan: &GitFinalizePlan,
     explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
-    let effective_git_dir = explicit_git_dir
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| live_root.join(".git"));
-    let live_repo = git2::Repository::open(&effective_git_dir).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "finalize_unborn: open live repo: {e}"
-        )))
-    })?;
-    if explicit_git_dir.is_some() {
-        live_repo.set_workdir(live_root, false).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "finalize_unborn: set_workdir: {e}"
-            )))
-        })?;
-    }
+    // #644 评论 5492740265 问题3：用 open_live_repo 统一入口，
+    // 外部 git_dir 布局下 Repository::open(live_root) 会失败。
+    let live_repo =
+        open_live_repo(live_root, explicit_git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
     let live_odb = live_repo.odb().map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "finalize_unborn: live odb: {e}"
@@ -2222,9 +2286,8 @@ fn finalize_unborn(
         // 用 plan.ref_lock_names（完整的 forward lock 集合）做 acquire。
         let ref_names = &plan.ref_lock_names;
 
-        let mut ref_tx =
-            RefTransaction::acquire_all_refs(&live_repo, ref_names, ref_tx_owner)
-                .map_err(GitFinalizeError::FinalizeFailed)?;
+        let mut ref_tx = RefTransaction::acquire_all_refs(&live_repo, ref_names, ref_tx_owner)
+            .map_err(GitFinalizeError::FinalizeFailed)?;
 
         // 锁内读取 HEAD，确认仍是 symbolic 且指向 head_ref。
         let raw_head = ref_tx.find_reference("HEAD").map_err(|e| {
@@ -2274,11 +2337,7 @@ fn finalize_unborn(
         }
 
         // 创建 branch ref（Unborn 的 ref_plans 中 head_ref 的 old=None）。
-        ref_tx.set_target(
-            head_ref,
-            new_oid,
-            "sync: create branch from staging",
-        )?;
+        ref_tx.set_target(head_ref, new_oid, "sync: create branch from staging")?;
 
         // #644 评论 5490799656 问题4：按 plan 执行剩余 refs（remote refs 等）。
         // Unborn 的 ref_plans 中 head_ref 已在上面处理，这里跳过它。
@@ -2311,21 +2370,10 @@ fn finalize_existing(
     plan: &GitFinalizePlan,
     explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
-    let effective_git_dir = explicit_git_dir
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| live_root.join(".git"));
-    let live_repo = git2::Repository::open(&effective_git_dir).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "finalize_existing: open live repo: {e}"
-        )))
-    })?;
-    if explicit_git_dir.is_some() {
-        live_repo.set_workdir(live_root, false).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "finalize_existing: set_workdir: {e}"
-            )))
-        })?;
-    }
+    // #644 评论 5492740265 问题3：用 open_live_repo 统一入口，
+    // 外部 git_dir 布局下 Repository::open(live_root) 会失败。
+    let live_repo =
+        open_live_repo(live_root, explicit_git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
     let live_odb = live_repo.odb().map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "finalize_existing: live odb: {e}"
@@ -2378,15 +2426,14 @@ fn finalize_existing(
         // 用 plan.ref_lock_names（完整的 forward lock 集合）做 acquire。
         let ref_names = &plan.ref_lock_names;
 
-        let mut ref_tx =
-            RefTransaction::acquire_all_refs(&live_repo, ref_names, ref_tx_owner)
-                .map_err(GitFinalizeError::FinalizeFailed)?;
+        let mut ref_tx = RefTransaction::acquire_all_refs(&live_repo, ref_names, ref_tx_owner)
+            .map_err(GitFinalizeError::FinalizeFailed)?;
 
         // 锁内 verify：HEAD 仍指向 head_ref（用户未切 branch/detach）。
         let raw_head = ref_tx.find_reference("HEAD").map_err(|e| {
-            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
-                format!("finalize_existing: HEAD reference not found: {e}"),
-            )))
+            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
+                "finalize_existing: HEAD reference not found: {e}"
+            ))))
         })?;
         match raw_head.symbolic_target() {
             Some(sym_target) if sym_target == head_ref => {
@@ -2414,9 +2461,10 @@ fn finalize_existing(
 
         // 锁内 verify branch ref 仍等于 base_oid（CAS 条件）。
         let branch_ref = ref_tx.find_reference(head_ref).map_err(|e| {
-            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
-                format!("finalize_existing: branch ref {} not found: {e}", head_ref),
-            )))
+            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
+                "finalize_existing: branch ref {} not found: {e}",
+                head_ref
+            ))))
         })?;
         let current_branch_oid = branch_ref.target().ok_or_else(|| {
             GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
@@ -2464,6 +2512,7 @@ fn finalize_existing(
 ///
 /// #644 评论 5481496190 问题1：reference_matching 用 force=true 让 libgit2 能更新
 /// 已存在的 HEAD，current_id=base_oid 提供 CAS 保护。
+#[allow(clippy::too_many_arguments)]
 fn finalize_detached(
     live_root: &Path,
     staging_repo: &git2::Repository,
@@ -2474,21 +2523,10 @@ fn finalize_detached(
     plan: &GitFinalizePlan,
     explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
-    let effective_git_dir = explicit_git_dir
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| live_root.join(".git"));
-    let live_repo = git2::Repository::open(&effective_git_dir).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "finalize_detached: open live repo: {e}"
-        )))
-    })?;
-    if explicit_git_dir.is_some() {
-        live_repo.set_workdir(live_root, false).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "finalize_detached: set_workdir: {e}"
-            )))
-        })?;
-    }
+    // #644 评论 5492740265 问题3：用 open_live_repo 统一入口，
+    // 外部 git_dir 布局下 Repository::open(live_root) 会失败。
+    let live_repo =
+        open_live_repo(live_root, explicit_git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
     let live_odb = live_repo.odb().map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "finalize_detached: live odb: {e}"
@@ -2542,15 +2580,14 @@ fn finalize_detached(
         // 用 plan.ref_lock_names（完整的 forward lock 集合）做 acquire。
         let ref_names = &plan.ref_lock_names;
 
-        let mut ref_tx =
-            RefTransaction::acquire_all_refs(&live_repo, ref_names, ref_tx_owner)
-                .map_err(GitFinalizeError::FinalizeFailed)?;
+        let mut ref_tx = RefTransaction::acquire_all_refs(&live_repo, ref_names, ref_tx_owner)
+            .map_err(GitFinalizeError::FinalizeFailed)?;
 
         // 锁内 verify HEAD 仍 detached（未 resolve 的 HEAD 的 target 是 raw OID）。
         let raw_head = ref_tx.find_reference("HEAD").map_err(|e| {
-            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
-                format!("finalize_detached: HEAD reference not found: {e}"),
-            )))
+            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
+                "finalize_detached: HEAD reference not found: {e}"
+            ))))
         })?;
         if raw_head.symbolic_target().is_some() {
             return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
@@ -2997,7 +3034,9 @@ fn install_index_with_lock(
     // 1. 在 staging .git 目录下生成目标 index 字节。
     let target_index_bytes = generate_target_index_bytes(staging_repo, new_oid)?;
 
-    let git_dir = explicit_git_dir.map(|p| p.to_path_buf()).unwrap_or_else(|| live_root.join(".git"));
+    let git_dir = explicit_git_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| live_root.join(".git"));
     let index_path = git_dir.join("index");
 
     // 2. OwnedIndexLock::acquire：O_EXCL 创建 lock + 写 owner metadata + 写 prepared file。
@@ -3245,21 +3284,10 @@ fn verify_git_metadata_unchanged(
     head_ref: &str,
     explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
-    let effective_git_dir = explicit_git_dir
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| live_root.join(".git"));
-    let live_repo = git2::Repository::open(&effective_git_dir).map_err(|e| {
-        GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
-            "verify_git_metadata_unchanged: open live repo: {e}"
-        ))))
-    })?;
-    if explicit_git_dir.is_some() {
-        live_repo.set_workdir(live_root, false).map_err(|e| {
-            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
-                "verify_git_metadata_unchanged: set_workdir: {e}"
-            ))))
-        })?;
-    }
+    // #644 评论 5492740265 问题3：用 open_live_repo 统一入口，
+    // 外部 git_dir 布局下 Repository::open(live_root) 会失败。
+    let live_repo =
+        open_live_repo(live_root, explicit_git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
 
     // 1. 校验 HEAD。
     let current_head = read_ref_snapshot(&live_repo, "HEAD")?;

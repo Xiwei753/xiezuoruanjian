@@ -42,7 +42,10 @@ pub fn open_app_service_with_init(
     crate::storage::git_runtime::ensure_initialized()?;
     // #644 评论 5491531984 问题5：git_metadata_root 不在 PlatformInit 中，
     // 从 PlatformInitDto 直接提取后传给 WriterCoreApi。
-    let git_metadata_root = init.git_metadata_root.as_ref().map(|s| std::path::PathBuf::from(s));
+    let git_metadata_root = init
+        .git_metadata_root
+        .as_ref()
+        .map(std::path::PathBuf::from);
     let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
 
@@ -85,7 +88,10 @@ pub fn open_app_service_with_secure_storage(
     crate::storage::git_runtime::ensure_initialized()?;
     // #644 评论 5491531984 问题5：git_metadata_root 不在 PlatformInit 中，
     // 从 PlatformInitDto 直接提取后传给 WriterCoreApi。
-    let git_metadata_root = init.git_metadata_root.as_ref().map(|s| std::path::PathBuf::from(s));
+    let git_metadata_root = init
+        .git_metadata_root
+        .as_ref()
+        .map(std::path::PathBuf::from);
     let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
 

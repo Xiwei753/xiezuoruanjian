@@ -10,13 +10,12 @@ impl super::WriterCore {
             Some(root) => {
                 let root = root.clone();
                 let projects_root = self.projects_root.clone();
-                let layout_fn: Box<dyn Fn(&str) -> crate::storage::git_repo_layout::GitRepoLayout> =
-                    Box::new(move |project_id: &str| {
-                        crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
-                            projects_root.join(project_id),
-                            root.join(project_id),
-                        )
-                    });
+                let layout_fn: project::GitLayoutFn = Box::new(move |project_id: &str| {
+                    crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
+                        projects_root.join(project_id),
+                        root.join(project_id),
+                    )
+                });
                 project::list_projects_with_layout(&self.projects_root, Some(layout_fn))
             }
             None => project::list_projects(&self.projects_root),
@@ -24,16 +23,48 @@ impl super::WriterCore {
     }
 
     /// #625 第二段：批量返回项目摘要（元数据 + 统计）。
+    /// #644 评论 5492740265 问题4：`git_metadata_root=Some` 时走 layout factory，
+    /// 不会在共享存储重新制造 `.git`。
     pub fn list_project_summaries(&self) -> Result<Vec<ProjectSummary>> {
-        project::list_project_summaries(&self.projects_root)
+        match &self.git_metadata_root {
+            Some(root) => {
+                let root = root.clone();
+                let projects_root = self.projects_root.clone();
+                let layout_fn: project::GitLayoutFn = Box::new(move |project_id: &str| {
+                    crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
+                        projects_root.join(project_id),
+                        root.join(project_id),
+                    )
+                });
+                project::list_project_summaries_with_layout(&self.projects_root, Some(layout_fn))
+            }
+            None => project::list_project_summaries(&self.projects_root),
+        }
     }
 
-    /// #644 评论 5491531984 问题1：创建作品时使用标准 Git 初始化。
-    /// project_id 未知时无法构造 layout，使用标准布局初始化。
-    /// 私有 git_dir 在后续 prepare_full_sync / list_projects 时通过
-    /// ensure_project_repo_with_layout 自动迁移。
+    /// #644 评论 5492740265 问题4：创建作品时走 layout factory。
+    ///
+    /// `git_metadata_root=Some` 时，新作品从出生开始就直接使用外部 git_dir，
+    /// 不会先在共享存储建 `.git` 再等下一次列表/同步搬家。
     pub fn create_project(&self, title: &str) -> Result<Project> {
-        project::create_project(&self.projects_root, title)
+        match &self.git_metadata_root {
+            Some(root) => {
+                let root = root.clone();
+                let projects_root = self.projects_root.clone();
+                let layout_fn: project::GitLayoutFn = Box::new(move |project_id: &str| {
+                    crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
+                        projects_root.join(project_id),
+                        root.join(project_id),
+                    )
+                });
+                project::create_project_with_layout_factory(
+                    &self.projects_root,
+                    title,
+                    Some(layout_fn),
+                )
+            }
+            None => project::create_project(&self.projects_root, title),
+        }
     }
 
     pub fn list_volumes(&self, project_id: &str) -> Result<Vec<Volume>> {
@@ -172,16 +203,53 @@ impl super::WriterCore {
         chapter::update_chapter_note(&project_root, volume_id, chapter_id, note)
     }
 
+    /// #644 评论 5492740265 问题4：重命名作品时走 layout factory。
     pub fn rename_project(&self, project_id: &str, new_title: &str) -> crate::error::Result<()> {
-        crate::project::rename_project(&self.projects_root, project_id, new_title)
+        match &self.git_metadata_root {
+            Some(root) => {
+                let root = root.clone();
+                let projects_root = self.projects_root.clone();
+                let layout_fn: project::GitLayoutFn = Box::new(move |project_id: &str| {
+                    crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
+                        projects_root.join(project_id),
+                        root.join(project_id),
+                    )
+                });
+                crate::project::rename_project_with_layout(
+                    &self.projects_root,
+                    project_id,
+                    new_title,
+                    Some(layout_fn),
+                )
+            }
+            None => crate::project::rename_project(&self.projects_root, project_id, new_title),
+        }
     }
 
     pub fn delete_project(&self, project_id: &str) -> crate::error::Result<()> {
         crate::project::delete_project(&self.projects_root, project_id, &self.app_data_root)
     }
 
+    /// #644 评论 5492740265 问题4：重排作品时走 layout factory。
     pub fn reorder_projects(&self, ordered_ids: &[String]) -> crate::error::Result<()> {
-        crate::project::reorder_projects(&self.projects_root, ordered_ids)
+        match &self.git_metadata_root {
+            Some(root) => {
+                let root = root.clone();
+                let projects_root = self.projects_root.clone();
+                let layout_fn: project::GitLayoutFn = Box::new(move |project_id: &str| {
+                    crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
+                        projects_root.join(project_id),
+                        root.join(project_id),
+                    )
+                });
+                crate::project::reorder_projects_with_layout(
+                    &self.projects_root,
+                    ordered_ids,
+                    Some(layout_fn),
+                )
+            }
+            None => crate::project::reorder_projects(&self.projects_root, ordered_ids),
+        }
     }
 
     pub fn rename_volume(

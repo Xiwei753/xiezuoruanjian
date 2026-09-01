@@ -904,8 +904,13 @@ mod tests {
     fn staging_run_create_and_cleanup() {
         let tmp = TempDir::new().unwrap();
         let live = tmp.path().join("live");
-        let run = StagingRun::create(tmp.path(), live, crate::sync::types::BackendType::GithubApi, None)
-            .unwrap();
+        let run = StagingRun::create(
+            tmp.path(),
+            live,
+            crate::sync::types::BackendType::GithubApi,
+            None,
+        )
+        .unwrap();
         assert!(run.base_root().exists());
         assert!(run.staging_root().exists());
         run.cleanup();

@@ -121,7 +121,10 @@ impl WriterCore {
     /// Android 端 `git_metadata_root` 为 `Some(root)` 时，`git_dir` 放在
     /// `root/<project_id>/`（应用私有 `filesDir/sujian-git/<project-id>/`）。
     /// 其他平台或 Android 未配置时使用标准布局（`project_root.join(".git")`）。
-    pub(crate) fn project_git_layout(&self, project_id: &str) -> crate::storage::git_repo_layout::GitRepoLayout {
+    pub(crate) fn project_git_layout(
+        &self,
+        project_id: &str,
+    ) -> crate::storage::git_repo_layout::GitRepoLayout {
         let project_root = self.project_root(project_id);
         match &self.git_metadata_root {
             Some(root) => crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
