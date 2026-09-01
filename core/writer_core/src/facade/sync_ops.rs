@@ -803,16 +803,35 @@ fn apply_staging_commits_for_targets(
                     }
                 };
 
-                // #644 评论 5475805198 第2节：Git finalize 使用 git_commit 模块。
-                // 失败时自动 rollback Git metadata + SaveTransaction rollback。
-                // #644 评论 5480360027：传入 plan，finalize 成功后 tx.finish()，
-                // 不再依赖返回的 mutation_log。
+                // #644 评论 5488871385 问题1：统一 rollback coordinator。
+                // 1. preflight_rollback_material() — 确认 backup 可读（在 Git finalize 之前）。
+                // 2. try_commit_git_finalize() — 尝试 finalize。
+                // 3. 失败时：inspect → preflight → Git rollback → file rollback。
+                //    commit_git_finalize() 不再内部 rollback，由本处统一协调。
                 use crate::sync::git_commit::GitFinalizeError;
                 let git_plan_ref = if needs_git_finalize {
                     Some(&git_plan)
                 } else {
                     None
                 };
+
+                // #644 评论 5488871385 问题1：在 try_commit_git_finalize 之前
+                // 先 preflight backup material。如果 backup 不可读，现在就报错，
+                // 不进入 Git finalize（避免 finalize 失败后发现 backup 也缺失）。
+                if needs_git_finalize {
+                    if let Err(e) = tx.preflight_rollback_material() {
+                        let msg = format!(
+                            "preflight_rollback_material failed before git finalize: {}",
+                            e
+                        );
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                        continue;
+                    }
+                }
+
                 match crate::sync::git_commit::try_commit_git_finalize(
                     live_root,
                     &run.staging_root(),
@@ -821,15 +840,6 @@ fn apply_staging_commits_for_targets(
                     git_plan_ref,
                 ) {
                     Ok(()) => {
-                        // #644 评论 5482310913 问题1 + #644 评论 5483239422 问题1：
-                        // 先 tx.finish() 把文件+Git 事务正式收口。只有 finish 成功
-                        // （Finished phase 已持久化）后才清理 owner marker。
-                        // finish 失败时保留 tx_dir + marker，记为 Failed，下次恢复重试。
-                        // 崩溃窗口分析：
-                        // - crash 在 tx.finish() 前：marker 还在，恢复知道这个 repo
-                        //   是本轮创建的。
-                        // - crash 在 tx.finish() 后、marker 删除前：事务已成功，
-                        //   只会留下一个无害 marker，下次顺手清理即可。
                         match tx.finish() {
                             Ok(()) => {
                                 if let Some(plan) = git_plan_ref {
@@ -842,9 +852,6 @@ fn apply_staging_commits_for_targets(
                                 run.cleanup();
                             }
                             Err(e) => {
-                                // #644 评论 5483239422 问题1：finish 失败——Finished
-                                // phase 未持久化。不删 owner marker，不 cleanup tx_dir，
-                                // 保留事务给下次恢复重试。
                                 let msg = format!(
                                     "git finalize succeeded but tx.finish() failed to persist \
                                      Finished phase: {} — preserving tx_dir and owner marker \
@@ -854,17 +861,35 @@ fn apply_staging_commits_for_targets(
                                 log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                                 target_results.push(TargetCommitResult::Failed(msg));
                                 target_conflicts.push(Vec::new());
-                                // 不调用 run.cleanup()，保留 staging + tx_dir 给恢复流程。
                             }
                         }
                     }
                     Err(GitFinalizeError::FinalizeFailed(e)) => {
-                        // Git finalize 失败但 rollback 成功 → 回滚文件。
-                        if let Err(rb_err) = tx.rollback() {
+                        // #644 评论 5488871385 问题1：commit_git_finalize 不再内部 rollback。
+                        // 由本处统一协调：inspect → Git rollback → file rollback。
+                        // preflight 已在 try_commit_git_finalize 之前完成。
+                        log::warn!(
+                            "Staging commit: git finalize failed: {}, coordinating rollback",
+                            e
+                        );
+                        let rollback_err = if let (Some(seed_state), Some(plan)) =
+                            (run.git_seed_state(), git_plan_ref)
+                        {
+                            coordinate_rollback_after_finalize_failure(
+                                live_root,
+                                &git_snapshot,
+                                plan,
+                                seed_state,
+                                &mut tx,
+                            )
+                        } else {
+                            // 无 seed_state/plan，只做 file rollback。
+                            tx.rollback()
+                        };
+                        if let Err(rb_err) = rollback_err {
                             log::warn!(
-                                "Staging commit: git finalize failed AND tx rollback failed: {} / {}",
-                                e,
-                                rb_err
+                                "Staging commit: rollback also failed: {} (original: {})",
+                                rb_err, e
                             );
                         }
                         let msg = format!("git repo-metadata finalize failed: {}", e);
@@ -874,19 +899,16 @@ fn apply_staging_commits_for_targets(
                         run.cleanup();
                     }
                     Err(GitFinalizeError::ConcurrentMetadataChanged { reason }) => {
-                        // #644 评论 5477439446 问题2：并发校验失败，本轮 finalize
-                        // 尚未修改 live Git metadata，不触发 Git metadata rollback。
-                        // 但 SaveTransaction.commit() 可能已改 live 文件，仍需
-                        // tx.rollback() 恢复文件到同步前状态。
+                        // 并发校验失败，本轮 finalize 尚未修改 live Git metadata，
+                        // 不触发 Git metadata rollback。只做 file rollback。
                         log::warn!(
-                            "Staging commit: concurrent git metadata changed before finalize wrote anything: {}",
+                            "Staging commit: concurrent git metadata changed before finalize: {}",
                             reason
                         );
                         if let Err(rb_err) = tx.rollback() {
                             log::warn!(
                                 "Staging commit: concurrent metadata changed AND tx rollback failed: {} / {}",
-                                reason,
-                                rb_err
+                                reason, rb_err
                             );
                         }
                         let msg = format!(
@@ -899,8 +921,6 @@ fn apply_staging_commits_for_targets(
                         run.cleanup();
                     }
                     Err(GitFinalizeError::RollbackFailed { finalize, rollback }) => {
-                        // Git finalize 失败且 rollback 也失败 → 保留事务目录给下次恢复。
-                        // #644 评论 5476546134 第4节：不清理 tx，保留给下次恢复。
                         let msg = format!(
                             "git repo-metadata finalize failed AND rollback failed: finalize={} rollback={}",
                             finalize, rollback
@@ -908,8 +928,6 @@ fn apply_staging_commits_for_targets(
                         log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                         target_results.push(TargetCommitResult::Failed(msg));
                         target_conflicts.push(Vec::new());
-                        // 不调用 tx.rollback() 和 run.cleanup()，保留事务目录。
-                        // Drop 会清理 staging，但 tx_dir 保留给恢复流程。
                     }
                 }
             }
@@ -1117,6 +1135,58 @@ fn apply_commit_plan_to_live(
     }
     tx.commit()?;
     Ok(tx)
+}
+
+/// #644 评论 5488871385 问题1：统一 rollback coordinator。
+///
+/// `commit_git_finalize()` 失败后调用。按 inspect → Git rollback → file rollback 顺序执行。
+/// preflight backup 已在 `try_commit_git_finalize()` 之前完成。
+///
+/// - `ConcurrentMetadataChanged`：本轮未修改 Git metadata，只做 file rollback。
+/// - 其它错误：inspect 确认状态 → Git rollback → file rollback。
+fn coordinate_rollback_after_finalize_failure(
+    live_root: &std::path::Path,
+    snapshot: &crate::sync::git_commit::GitMetadataSnapshot,
+    plan: &crate::sync::git_commit::GitFinalizePlan,
+    _seed_state: &crate::sync::git_staging::GitSeedState,
+    tx: &mut crate::storage::transaction::SaveTransaction,
+) -> crate::error::Result<()> {
+    // inspect 确认 rollback 状态（只读）。
+    let inspect_state = crate::sync::git_commit::inspect_git_rollback_state(
+        live_root, snapshot, plan,
+    )?;
+
+    match inspect_state {
+        crate::sync::git_commit::GitRollbackState::NeedsRollback => {
+            // Git rollback。
+            let outcome = crate::sync::git_commit::rollback_git_finalize(
+                live_root, snapshot, plan,
+            )?;
+            match outcome {
+                crate::sync::git_commit::GitRollbackOutcome::Reverted => {
+                    // Git 已回滚，恢复文件。
+                    tx.rollback()
+                }
+                crate::sync::git_commit::GitRollbackOutcome::ConcurrentChanged => {
+                    Err(crate::Error::Io(std::io::Error::other(
+                        "coordinate_rollback: rollback detected concurrent change",
+                    )))
+                }
+                crate::sync::git_commit::GitRollbackOutcome::RepoInstallCommitted => {
+                    // 不回滚文件。
+                    Ok(())
+                }
+            }
+        }
+        crate::sync::git_commit::GitRollbackState::RepoInstallCommitted => {
+            // 不回滚文件。
+            Ok(())
+        }
+        crate::sync::git_commit::GitRollbackState::ConcurrentChanged => {
+            // 只做 file rollback（Git 未修改）。
+            tx.rollback()
+        }
+    }
 }
 
 /// 当前 Unix 秒 — 全量同步持久状态统一时间源。

@@ -231,8 +231,10 @@ impl SaveTransaction {
         }
         let backup_dir = self.tx_dir.join("backup");
 
-        // #644 评论 5488655439 问题2：在第一笔 durable_copy_file/remove_file 前先检查完
-        // self.backed_up_files，不能恢复到一半才发现后面的 backup 缺失。
+        // #644 评论 5488655439 问题2 + #644 评论 5488871385 问题1：
+        // 在第一笔 durable_copy_file/remove_file 前先检查完 self.backed_up_files，
+        // 不能恢复到一半才发现后面的 backup 缺失。
+        // 用 File::open() 确认真正可读，不用 metadata() 冒充。
         for entry in &self.backed_up_files {
             if let BackupEntry::RestoreFile {
                 target_relative,
@@ -240,20 +242,18 @@ impl SaveTransaction {
             } = entry
             {
                 let backup_path = backup_dir.join(backup_filename);
-                if !backup_path.exists() {
-                    return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "rollback: backup file missing for RestoreFile {}: {}",
-                        target_relative,
-                        backup_path.display()
-                    ))));
-                }
-                if let Err(e) = backup_path.metadata() {
-                    return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "rollback: backup file unreadable for RestoreFile {}: {}: {}",
-                        target_relative,
-                        backup_path.display(),
-                        e
-                    ))));
+                match std::fs::File::open(&backup_path) {
+                    Ok(file) => {
+                        drop(file);
+                    }
+                    Err(e) => {
+                        return Err(crate::Error::Io(std::io::Error::other(format!(
+                            "rollback: backup file not readable for RestoreFile {}: {}: {}",
+                            target_relative,
+                            backup_path.display(),
+                            e
+                        ))));
+                    }
                 }
             }
         }
@@ -444,6 +444,47 @@ impl SaveTransaction {
         Ok(())
     }
 
+    /// #644 评论 5488871385 问题1：rollback 前的 material preflight。
+    ///
+    /// 在真正进入 rollback 路径之前调用。对每个 `RestoreFile` 做 `File::open()`
+    /// 确认可读（不用 `metadata()` 冒充"可读"）。
+    /// 一个不满足就不能碰 Git/index/live。
+    ///
+    /// 在 `sync_ops.rs` 中，调用 `try_commit_git_finalize()` 之前调用本方法，
+    /// 确保 backup material 完好，然后才进入 Git finalize。
+    /// 如果 finalize 失败需要 rollback，backup 已确认可用。
+    pub fn preflight_rollback_material(&self) -> Result<()> {
+        if !self.backup_mode {
+            return Ok(());
+        }
+        let backup_dir = self.tx_dir.join("backup");
+        for entry in &self.backed_up_files {
+            if let BackupEntry::RestoreFile {
+                target_relative,
+                backup_filename,
+            } = entry
+            {
+                let backup_path = backup_dir.join(backup_filename);
+                // 用 File::open() 确认真正可读，不用 metadata() 冒充。
+                match std::fs::File::open(&backup_path) {
+                    Ok(file) => {
+                        drop(file);
+                    }
+                    Err(e) => {
+                        return Err(crate::Error::Io(std::io::Error::other(format!(
+                            "preflight_rollback_material: backup file not readable \
+                             for RestoreFile {}: {}: {}",
+                            target_relative,
+                            backup_path.display(),
+                            e
+                        ))));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// #644 评论 5475805198 第1节：更新 manifest 中的 phase 字段。
     ///
     /// 读取现有 manifest（若存在），更新 phase 和 backup_entries，原子写回。
@@ -516,11 +557,13 @@ impl Drop for SaveTransaction {
     }
 }
 
-/// #644 评论 5488655439 问题2：在真正进入 rollback 路径之前，
-/// 先检查所有 BackupEntry::RestoreFile 是否都存在。
+/// #644 评论 5488655439 问题2 + #644 评论 5488871385 问题1：
+/// 在真正进入 rollback 路径之前，先检查所有 BackupEntry::RestoreFile 是否可读。
 ///
 /// 必须在任何 Git/index/live 文件修改之前调用。
 /// 一个不满足就不能碰 Git/index/live。
+///
+/// #644 评论 5488871385 问题1：用 `File::open()` 确认真正可读，不用 `metadata()` 冒充。
 ///
 /// NotGitRepo 的 `RepoInstallCommitted` 是 commit-point，不需要 backup，
 /// 所以不在本函数中做粗暴的无条件检查——由调用方根据 outcome 决定是否需要 preflight。
@@ -536,21 +579,20 @@ fn preflight_backup_entries(
         } = entry
         {
             let backup_path = backup_dir.join(backup_filename);
-            if !backup_path.exists() {
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "preflight_backup_entries: backup file missing for RestoreFile {}: {}",
-                    target_relative,
-                    backup_path.display()
-                ))));
-            }
-            // 检查是否可读（metadata 失败也算不可读）。
-            if let Err(e) = backup_path.metadata() {
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "preflight_backup_entries: backup file unreadable for RestoreFile {}: {}: {}",
-                    target_relative,
-                    backup_path.display(),
-                    e
-                ))));
+            // 用 File::open() 确认真正可读，不用 metadata() 冒充。
+            match std::fs::File::open(&backup_path) {
+                Ok(file) => {
+                    drop(file);
+                }
+                Err(e) => {
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "preflight_backup_entries: backup file not readable \
+                         for RestoreFile {}: {}: {}",
+                        target_relative,
+                        backup_path.display(),
+                        e
+                    ))));
+                }
             }
         }
     }
@@ -571,13 +613,9 @@ fn rollback_full_sync_transaction(
     manifest: &TransactionManifest,
 ) -> Result<()> {
     // 1. 回滚 Git metadata（如果有 recovery record）。
+    //    #644 评论 5488871385 问题1：inspect-first 流程——
+    //    先只读检查状态，再 preflight backup，最后才修改 Git/live。
     if let Some(ref git_rec) = manifest.git_finalize {
-        // #644 评论 5476546134 第3节：删除 NotGitRepo 特判，
-        // 统一调用 rollback_git_finalize，让 repo_existed 决定恢复还是删除。
-        // #644 评论 5480360027：使用 write-ahead plan 做 rollback，
-        // 不再依赖 mutation_log（旧 manifest 反序列化时 plan 为 default，rollback 是 no-op）。
-        // #644 评论 5482310913 问题3：rollback_git_finalize 返回 GitRollbackOutcome，
-        // 区分 Reverted / ConcurrentChanged / RepoInstallCommitted。
         let _seed_state = git_rec.seed_state.to_seed_state().map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
                 "rollback_full_sync_transaction: invalid seed state: {}",
@@ -586,9 +624,6 @@ fn rollback_full_sync_transaction(
         })?;
 
         // #644 评论 5485518160 修改点 2：index_lock_owner=None 旧 manifest 迁移。
-        // 在调用 rollback_git_finalize 之前，当 new_index_sha256.is_some() 且
-        // index_lock_owner.is_none() 时，做迁移判定（读 live .git/index、.git/index.lock）。
-        // 迁移入口先把新事实持久化到 manifest，再进入反向 rollback。
         let migrated_plan: Option<crate::sync::git_commit::GitFinalizePlan> =
             if git_rec.plan.new_index_sha256.is_some() && git_rec.plan.index_lock_owner.is_none() {
                 let migration = crate::sync::git_commit::check_index_lock_owner_migration(
@@ -598,7 +633,6 @@ fn rollback_full_sync_transaction(
                 )?;
                 match migration {
                     crate::sync::git_commit::IndexLockOwnerMigration::LockExists => {
-                        // canonical index.lock 已存在：不知道是谁的，不能 terminalize。
                         return Err(crate::Error::Io(std::io::Error::other(
                             "rollback_full_sync_transaction: index.lock exists but \
                              plan.index_lock_owner is None — cannot determine lock \
@@ -606,18 +640,12 @@ fn rollback_full_sync_transaction(
                         )));
                     }
                     crate::sync::git_commit::IndexLockOwnerMigration::AlreadyReverted => {
-                        // current == old，index 这一步没发生，安全继续。
-                        // 用原 plan（owner=None），rollback_git_finalize 走 current==old 分支。
                         None
                     }
                     crate::sync::git_commit::IndexLockOwnerMigration::MigrateToNewOwner(owner) => {
-                        // current == new，生成新 owner，先原子写回 manifest 并 fsync，
-                        // 再进入反向 rollback（plan.index_lock_owner 已是 Some）。
                         let mut new_plan = git_rec.plan.clone();
                         new_plan.index_lock_owner = Some(owner);
                         let mut new_manifest = manifest.clone();
-                        // manifest.clone() 保留了 git_finalize = Some(...)（外层
-                        // if let Some(ref git_rec) = manifest.git_finalize 已保证）。
                         if let Some(git_finalize) = new_manifest.git_finalize.as_mut() {
                             git_finalize.plan = new_plan.clone();
                         }
@@ -627,12 +655,10 @@ fn rollback_full_sync_transaction(
                         Some(new_plan)
                     }
                     crate::sync::git_commit::IndexLockOwnerMigration::ConcurrentModification => {
-                        // current 既不是 old 也不是 new → 并发修改。
                         return Err(crate::Error::Io(std::io::Error::other(
                             "rollback_full_sync_transaction: index CAS miss during \
-                             index_lock_owner migration (current matches neither \
-                             snapshot.index nor plan.new_index_sha256) — concurrent \
-                             modification, preserving transaction for next recovery",
+                             index_lock_owner migration — concurrent modification, \
+                             preserving transaction for next recovery",
                         )));
                     }
                 }
@@ -642,39 +668,57 @@ fn rollback_full_sync_transaction(
         let plan_for_rollback: &crate::sync::git_commit::GitFinalizePlan =
             migrated_plan.as_ref().unwrap_or(&git_rec.plan);
 
-        let outcome = crate::sync::git_commit::rollback_git_finalize(
+        // #644 评论 5488871385 问题1：先只读 inspect，再 preflight，最后 rollback。
+        let inspect_state = crate::sync::git_commit::inspect_git_rollback_state(
             target_root,
             &git_rec.metadata_snapshot,
             plan_for_rollback,
         )?;
-        match outcome {
-            crate::sync::git_commit::GitRollbackOutcome::Reverted => {
-                // Git metadata 已回滚，需要恢复文件 backup。
-                // #644 评论 5488655439 问题2：在真正改 Git 之后、恢复文件之前，
-                // 先 preflight 所有 backup entries。如果 backup 缺失，现在就报错，
-                // 不进入"Git 已回滚但正文无法回滚"的半截状态。
+
+        match inspect_state {
+            crate::sync::git_commit::GitRollbackState::NeedsRollback => {
+                // 先 preflight backup（在任何 Git 修改之前）。
                 preflight_backup_entries(tx_dir, manifest)?;
+                // 再执行 Git rollback。
+                let outcome = crate::sync::git_commit::rollback_git_finalize(
+                    target_root,
+                    &git_rec.metadata_snapshot,
+                    plan_for_rollback,
+                )?;
+                match outcome {
+                    crate::sync::git_commit::GitRollbackOutcome::Reverted => {
+                        // Git metadata 已回滚，继续恢复文件 backup。
+                    }
+                    crate::sync::git_commit::GitRollbackOutcome::ConcurrentChanged => {
+                        return Err(crate::Error::Io(std::io::Error::other(
+                            "rollback_full_sync_transaction: git rollback detected \
+                             concurrent change, preserving transaction for next recovery",
+                        )));
+                    }
+                    crate::sync::git_commit::GitRollbackOutcome::RepoInstallCommitted => {
+                        // inspect 已判 NeedsRollback 但 rollback 返回 RepoInstallCommitted
+                        // （状态不一致），保留事务。
+                        return Err(crate::Error::Io(std::io::Error::other(
+                            "rollback_full_sync_transaction: inspect said NeedsRollback \
+                             but rollback returned RepoInstallCommitted — state inconsistent, \
+                             preserving transaction for next recovery",
+                        )));
+                    }
+                }
             }
-            crate::sync::git_commit::GitRollbackOutcome::ConcurrentChanged => {
-                // #644 评论 5482310913 问题3：检测到并发变更，保留 transaction，
-                // 不恢复文件 backup，不删除 transaction 目录，返回 Err 让上层
-                // `recover_pending_transactions` 保留事务给下次恢复。
-                return Err(crate::Error::Io(std::io::Error::other(
-                    "rollback_full_sync_transaction: git rollback detected concurrent \
-                     change (ownership mismatch or external repo), preserving transaction \
-                     for next recovery",
-                )));
-            }
-            crate::sync::git_commit::GitRollbackOutcome::RepoInstallCommitted => {
-                // #644 评论 5482310913 问题2：NotGitRepo 已完成 owner-matched .git rename。
-                // 按 commit-point 逻辑收尾：不回滚文件（文件已是新版），标记 Finished
-                // 并清理 transaction 目录。
-                // #644 评论 5488655439 问题2：RepoInstallCommitted 是 commit-point，
-                // 不需要 backup（文件已是新版），不需要 preflight。
+            crate::sync::git_commit::GitRollbackState::RepoInstallCommitted => {
+                // NotGitRepo 已完成 owner-matched .git rename。
+                // 按 commit-point 逻辑收尾：不回滚文件，标记 Finished 并清理。
                 let manifest_path = tx_dir.join(MANIFEST_FILENAME);
                 write_manifest_phase_static(&manifest_path, TransactionPhase::Finished, manifest)?;
                 fs::remove_dir_all(tx_dir)?;
                 return Ok(());
+            }
+            crate::sync::git_commit::GitRollbackState::ConcurrentChanged => {
+                return Err(crate::Error::Io(std::io::Error::other(
+                    "rollback_full_sync_transaction: inspect detected concurrent change \
+                     (ownership mismatch or external repo), preserving transaction for next recovery",
+                )));
             }
         }
     }

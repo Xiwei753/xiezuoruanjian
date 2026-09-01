@@ -20,7 +20,7 @@ use std::path::Path;
 use tempfile::TempDir;
 use writer_core::sync::git_commit::{
     commit_git_finalize, rollback_git_finalize, GitFinalizeError, GitFinalizePlan,
-    GitMetadataSnapshot, IndexSnapshot, RefSnapshot,
+    GitMetadataSnapshot, GitRollbackOutcome, IndexSnapshot, RefSnapshot,
 };
 use writer_core::sync::git_staging::GitSeedState;
 
@@ -452,7 +452,10 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
         );
     }
 
-    // ── 场景 D：marker 匹配 → .git 删除（我们创建的仓库，正确 rollback） ──
+    // ── 场景 D：marker 匹配 → RepoInstallCommitted（不删 .git） ──
+    // #644 评论 5487751293 问题1：marker 匹配说明 rename 已发生（.git 已是 live）。
+    // 不能 remove_dir_all(.git)，因为 rename 后用户/外部 Git 可能已做了 commit。
+    // 返回 RepoInstallCommitted，让上层按 commit-point 逻辑收尾。
     {
         let owner = uuid::Uuid::new_v4().to_string();
         fs::write(live.join(".git").join(".sujian-sync-owner"), &owner).unwrap();
@@ -471,13 +474,18 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
             index_lock_owner: None,
         };
 
-        rollback_git_finalize(&live, &snapshot, &plan).unwrap();
+        let outcome = rollback_git_finalize(&live, &snapshot, &plan).unwrap();
+
+        assert_eq!(
+            outcome,
+            GitRollbackOutcome::RepoInstallCommitted,
+            "marker matching should return RepoInstallCommitted"
+        );
 
         let live_git = live.join(".git");
         assert!(
-            !live_git.exists(),
-            "FIX VERIFIED: rollback_git_finalize with matching owner marker \
-             correctly removed .git (our own repo, proper rollback)"
+            live_git.exists(),
+            "RepoInstallCommitted: .git should NOT be removed (user may have made commits after install)"
         );
     }
 
