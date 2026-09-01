@@ -1183,8 +1183,24 @@ fn coordinate_rollback_after_finalize_failure(
             Ok(())
         }
         crate::sync::git_commit::GitRollbackState::ConcurrentChanged => {
-            // 只做 file rollback（Git 未修改）。
-            tx.rollback()
+            // #644 评论 5489192105 问题4：ConcurrentChanged 只代表"无法安全证明/继续
+            // Git rollback"（ownership 不匹配、外部 lock 等），不代表"Git 一定没改过"。
+            // 本函数只在 `GitFinalizeError::FinalizeFailed` 后进入，此时 finalize 可能
+            // 已经写过 index/ref（例如 finalize_unborn 中 install_index_with_lock 在
+            // lock HEAD 之前执行）。对已部分写入 Git metadata 的情况做 file rollback
+            // 会造成 Git metadata（新）与业务文件（旧）不一致，破坏同步原子性。
+            //
+            // 改成返回 Err 不碰文件，保留 transaction 给下次恢复。只有外层直接收到
+            // `GitFinalizeError::ConcurrentMetadataChanged` 的那条路径（见上方
+            // `Err(GitFinalizeError::ConcurrentMetadataChanged { reason })` 分支），
+            // 才可以依据该错误类型的契约认定"本轮尚未写 Git metadata"，然后只做
+            // `tx.rollback()`。
+            Err(crate::Error::Io(std::io::Error::other(
+                "coordinate_rollback: inspect_git_rollback_state returned \
+                 ConcurrentChanged — cannot safely prove Git metadata unchanged \
+                 (finalize may have partially written index/refs), refusing to \
+                 file-rollback, preserving transaction for next recovery",
+            )))
         }
     }
 }

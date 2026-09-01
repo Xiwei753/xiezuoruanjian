@@ -45,6 +45,8 @@ pub mod github_backend;
 pub mod legacy_migration;
 #[cfg(feature = "github-api")]
 pub mod lww;
+/// #644 评论 5489192105：统一的 ref transaction（持久 ownership + libgit2 refdb）。
+pub mod ref_transaction;
 pub mod scanner;
 pub mod service;
 pub mod staging;

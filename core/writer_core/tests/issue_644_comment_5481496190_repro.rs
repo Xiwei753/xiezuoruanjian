@@ -252,6 +252,7 @@ fn verify_problem2_lockfile_rename_recovers_stale_lock() {
             ref_plans: vec![],
             repo_create_owner: None,
             index_lock_owner: None,
+        ref_tx_owner: None,
         };
 
         // #644 评论 5485518160 修改点 2：未知 stale lock 应该保留 transaction
@@ -300,6 +301,7 @@ fn verify_problem2_lockfile_rename_recovers_stale_lock() {
             ref_plans: vec![],
             repo_create_owner: None,
             index_lock_owner: Some(uuid::Uuid::new_v4().to_string()),
+        ref_tx_owner: None,
         };
 
         rollback_git_finalize(&live, &snapshot, &plan).unwrap();
@@ -380,6 +382,7 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
             ref_plans: vec![],
             repo_create_owner: None, // 无 owner marker → 外部仓库
             index_lock_owner: None,
+        ref_tx_owner: None,
         };
 
         rollback_git_finalize(&live, &snapshot, &plan).unwrap();
@@ -406,6 +409,7 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
             ref_plans: vec![],
             repo_create_owner: Some(uuid::Uuid::new_v4().to_string()),
             index_lock_owner: None,
+        ref_tx_owner: None,
         };
         // live .git 没有 .sujian-sync-owner marker（外部创建的）。
 
@@ -440,6 +444,7 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
             ref_plans: vec![],
             repo_create_owner: Some(uuid::Uuid::new_v4().to_string()), // 不同的 uuid
             index_lock_owner: None,
+        ref_tx_owner: None,
         };
 
         rollback_git_finalize(&live, &snapshot, &plan).unwrap();
@@ -472,6 +477,7 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
             ref_plans: vec![],
             repo_create_owner: Some(owner), // 匹配的 uuid
             index_lock_owner: None,
+        ref_tx_owner: None,
         };
 
         let outcome = rollback_git_finalize(&live, &snapshot, &plan).unwrap();
@@ -553,6 +559,7 @@ fn verify_problem4_concurrent_metadata_changed_no_rollback() {
         )],
         repo_create_owner: None,
         index_lock_owner: None,
+        ref_tx_owner: Some(uuid::Uuid::new_v4().to_string()),
     };
 
     // 模拟并发：在调用 commit_git_finalize 前，把 detached HEAD 从 old_oid 推到 new_oid。

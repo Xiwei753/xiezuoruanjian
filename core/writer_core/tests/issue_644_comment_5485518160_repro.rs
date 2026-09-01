@@ -591,6 +591,7 @@ fn migration_no_lock_current_is_old_returns_already_reverted() {
         ref_plans: vec![],
         repo_create_owner: None,
         index_lock_owner: None,
+        ref_tx_owner: None,
     };
 
     let result = check_index_lock_owner_migration(&live, &snapshot, &plan).unwrap();
@@ -633,6 +634,7 @@ fn migration_no_lock_current_is_new_returns_migrate_to_new_owner() {
         ref_plans: vec![],
         repo_create_owner: None,
         index_lock_owner: None,
+        ref_tx_owner: None,
     };
 
     let result = check_index_lock_owner_migration(&live, &snapshot, &plan).unwrap();
@@ -679,6 +681,7 @@ fn migration_lock_exists_returns_lock_exists() {
         ref_plans: vec![],
         repo_create_owner: None,
         index_lock_owner: None,
+        ref_tx_owner: None,
     };
 
     let result = check_index_lock_owner_migration(&live, &snapshot, &plan).unwrap();
@@ -721,6 +724,7 @@ fn migration_current_neither_old_nor_new_returns_concurrent_modification() {
         ref_plans: vec![],
         repo_create_owner: None,
         index_lock_owner: None,
+        ref_tx_owner: None,
     };
 
     let result = check_index_lock_owner_migration(&live, &snapshot, &plan).unwrap();
@@ -819,6 +823,7 @@ fn finalize_existing_detached_head_after_preflight_returns_finalize_failed() {
         )],
         repo_create_owner: None,
         index_lock_owner: Some(uuid::Uuid::new_v4().to_string()),
+        ref_tx_owner: None,
     };
 
     // 调用 commit_git_finalize

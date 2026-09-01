@@ -137,6 +137,20 @@ pub struct GitFinalizePlan {
     /// 恢复时可通过目录类型 + owner 文件判断归属。
     #[serde(default)]
     pub index_lock_owner: Option<String>,
+    /// #644 评论 5489192105 问题2：ref transaction 持久 ownership 的 owner uuid。
+    /// 在 prepare 阶段生成（当 `ref_plans` 非空时），随 manifest 落盘。
+    /// finalize/rollback 用 `RefTransaction` 锁住本轮全部 refs，
+    /// 每个 ref 旁边写 `<ref>.sujian-ref-lock` owner marker 文件。
+    /// 恢复时检查 `<ref>.lock` + `<ref>.sujian-ref-lock` 判断 ownership：
+    /// - lock 不存在 → 无 lock，清理 orphan owner marker。
+    /// - lock 存在 + owner marker 匹配 → 本事务 stale lock，可清理。
+    /// - lock 存在 + owner marker 不匹配 → 别的素笺事务 lock，不碰。
+    /// - lock 存在 + 无 owner marker → 外部 Git regular lock，不碰。
+    ///
+    /// 即使进程被 SIGKILL，Drop 不执行，磁盘上 lock file + owner marker 仍在，
+    /// 恢复时可通过 owner marker 判断归属。
+    #[serde(default)]
+    pub ref_tx_owner: Option<String>,
 }
 
 /// #644 评论 5478237852 问题2：旧 mutation journal 字段，保留向后兼容。
@@ -543,6 +557,7 @@ fn build_finalize_plan(
             ref_plans: Vec::new(),
             repo_create_owner: new_repo_create_owner(seed_state),
             index_lock_owner: None,
+            ref_tx_owner: None,
         });
     };
 
@@ -632,12 +647,21 @@ fn build_finalize_plan(
         }
     }
 
+    // #644 评论 5489192105 问题2：ref_plans 非空时生成 ref_tx_owner uuid，
+    // 供 RefTransaction 做持久 ownership。空 ref_plans 时为 None。
+    let ref_tx_owner = if !ref_plans.is_empty() {
+        Some(uuid::Uuid::new_v4().to_string())
+    } else {
+        None
+    };
+
     Ok(GitFinalizePlan {
         repo_create: matches!(seed_state, GitSeedState::NotGitRepo),
         new_index_sha256: staging_plan.new_index_sha256,
         ref_plans,
         repo_create_owner: new_repo_create_owner(seed_state),
         index_lock_owner,
+        ref_tx_owner,
     })
 }
 
@@ -754,6 +778,7 @@ pub enum GitRollbackState {
 ///   再恢复文件 backup。
 /// - `RepoInstallCommitted`：直接 Finished。
 /// - `ConcurrentChanged`：保留事务。
+#[allow(clippy::too_many_lines, clippy::excessive_nesting)]
 pub fn inspect_git_rollback_state(
     live_root: &Path,
     snapshot: &GitMetadataSnapshot,
@@ -842,6 +867,49 @@ pub fn inspect_git_rollback_state(
 
     // 2b. refs 状态（只读）。
     if !plan.ref_plans.is_empty() {
+        let git_dir = live_root.join(".git");
+
+        // #644 评论 5489192105 问题2：检查 ref lock 归属。
+        // 如果 ref lock 拋留（SIGKILL 后），find_reference 可能失败（LOCKED）。
+        // 先检查每个 ref 的 lock 归属：
+        // - 本事务 stale lock → 清理后继续检查 ref 值。
+        // - 外部 Git / 别的素笺事务 lock → 返回 ConcurrentChanged。
+        // - orphan owner marker（lock 不存在）→ 清理。
+        if let Some(owner) = &plan.ref_tx_owner {
+            use crate::sync::ref_transaction::{
+                clean_orphan_owner_marker, clean_stale_ref_lock, inspect_ref_lock_owner,
+                RefLockOwner,
+            };
+            for (ref_name, _, _) in &plan.ref_plans {
+                match inspect_ref_lock_owner(&git_dir, ref_name, owner) {
+                    RefLockOwner::Ours => {
+                        // 本事务的 stale lock：清理后继续检查 ref 值。
+                        clean_stale_ref_lock(&git_dir, ref_name)?;
+                    }
+                    RefLockOwner::Absent => {
+                        // lock 不存在，清理 orphan owner marker。
+                        clean_orphan_owner_marker(&git_dir, ref_name)?;
+                    }
+                    RefLockOwner::OtherSujian => {
+                        // 别的素笺事务的 lock：不碰，返回 ConcurrentChanged。
+                        return Ok(GitRollbackState::ConcurrentChanged);
+                    }
+                    RefLockOwner::External => {
+                        // 外部 Git 的 lock：不碰，返回 ConcurrentChanged。
+                        return Ok(GitRollbackState::ConcurrentChanged);
+                    }
+                    RefLockOwner::Unknown => {
+                        // owner marker 读取失败：不碰，返回 Err 保留事务。
+                        return Err(crate::Error::Io(std::io::Error::other(format!(
+                            "inspect_git_rollback_state: ref {} lock owner marker read \
+                             failed (IO error) — cannot determine lock ownership",
+                            ref_name
+                        ))));
+                    }
+                }
+            }
+        }
+
         let repo = git2::Repository::open(live_root).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
                 "inspect_git_rollback_state: open live repo: {e}"
@@ -1248,40 +1316,115 @@ pub fn rollback_git_finalize(
     // 2. repo_create=false：index + refs rollback。
     //    #644 评论 5483239422 问题2/3 + #644 评论 5484539222 缺陷1：
     //    三态幂等 + lockfile 反向提交边界 + 持久 ownership。
-    //    #644 评论 5488100307 问题1：refs 验证 + 分类在锁保护下完成。
-    //    #644 评论 5488871385 问题2：refs 用 OwnedRefLock（目录锁模型）做持久 ownership，
-    //    替代 git2::Transaction（进程被 SIGKILL 后 Drop 不执行，lock 文件无法归属）。
+    //    #644 评论 5489192105 问题1+2+3：用 RefTransaction 统一 ref transaction：
+    //    - 问题1：先 acquire 全部 refs 的 writer exclusion，锁内 classify，再改。
+    //      消除 read→lock TOCTOU。
+    //    - 问题2：owner marker 文件做持久 ownership，区分本事务 stale lock、
+    //      别的素笺事务 lock、外部 Git regular lock。
+    //    - 问题3：set/delete 通过 git2::Transaction（libgit2 refdb），
+    //      不直接碰 loose ref 文件，正确处理 packed refs。
     //
     //    流程：
-    //    A. 验证所有 refs 并分类回滚动作（只读，不持锁）。
-    //    B. index rollback（current==old 清 stale lock / current==new 反向恢复）。
-    //    C. 用 OwnedRefLock 逐个锁住需要修改的 ref，锁内执行更新，然后 commit 释放。
-    //
-    //    OwnedRefLock 用目录锁模型：`<ref>.lock` 是目录（不是 regular file），
-    //    目录本身就是 Sujian ownership 证明。即使 SIGKILL，恢复时看到目录就知道归属。
-    //    标准 Git 创建 regular lock file 会因路径已存在（是目录）而失败。
+    //    A. acquire 全部 refs 的 lock（RefTransaction，先写 owner marker，再 lock_ref）。
+    //    B. 锁内 classify（读取每个 ref 的当前值，与 plan 的 old/new 比较）。
+    //       任一第三值 → 释放全部锁，返回 ConcurrentChanged（index 一字节不动）。
+    //    C. index rollback（在 ref lock 保护下执行）。
+    //    D. ref update（用 tx.set_target / tx.remove，通过 libgit2 refdb）。
+    //    E. commit（释放全部 ref lock）。
 
-    // A. 验证所有 refs 并分类回滚动作（只读）。
-    //    #644 评论 5488871385 问题2：不再用 git2::Transaction 做 writer exclusion。
-    //    验证是只读的，不需要持锁。实际修改在 C 步用 OwnedRefLock 逐个完成。
-    let tx_repo = if !plan.ref_plans.is_empty() {
+    use crate::sync::ref_transaction::{
+        clean_orphan_owner_marker, clean_stale_ref_lock, inspect_ref_lock_owner, RefLockOwner,
+        RefTransaction,
+    };
+
+    let git_dir = live_root.join(".git");
+
+    // A. acquire 全部 refs 的 lock（如果 ref_plans 非空）。
+    //    #644 评论 5489192105 问题1：先拿齐 writer exclusion，再判断，再改。
+    //    #644 评论 5489192105 问题2：用 owner marker 做持久 ownership。
+    let ref_names: Vec<String> = plan
+        .ref_plans
+        .iter()
+        .map(|(name, _, _)| name.clone())
+        .collect();
+
+    // repo 需要定义在 ref_tx 之前，且生命周期要覆盖 ref_tx。
+    let repo: Option<git2::Repository> = if !ref_names.is_empty() {
         Some(git2::Repository::open(live_root).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
-                "rollback_git_finalize: open live repo for ref classification: {e}"
+                "rollback_git_finalize: open live repo for ref transaction: {e}"
             )))
         })?)
     } else {
         None
     };
 
-    let ref_actions: Vec<LockedRollbackRefAction>;
-    if let Some(repo) = &tx_repo {
-        ref_actions = classify_locked_ref_rollback(repo, plan)?;
-    } else {
-        ref_actions = Vec::new();
+    let mut ref_tx: Option<RefTransaction<'_>> = None;
+    if let Some(repo) = &repo {
+        let owner = plan.ref_tx_owner.as_deref().ok_or_else(|| {
+            crate::Error::Io(std::io::Error::other(
+                "rollback_git_finalize: plan.ref_tx_owner is None but ref_plans is non-empty \
+                 — cannot acquire RefTransaction without owner (plan was generated by older \
+                 code without persistent ref transaction ownership)",
+            ))
+        })?;
+
+        // 先清理可能残留的 stale lock / orphan owner marker（本事务的）。
+        // #644 评论 5489192105 问题2：崩溃恢复时区分 lock 归属。
+        for ref_name in &ref_names {
+            match inspect_ref_lock_owner(&git_dir, ref_name, owner) {
+                RefLockOwner::Ours => {
+                    // 本事务的 stale lock（SIGKILL 后残留）：清理后继续 acquire。
+                    clean_stale_ref_lock(&git_dir, ref_name)?;
+                }
+                RefLockOwner::Absent => {
+                    // lock 不存在，清理可能残留的 orphan owner marker。
+                    clean_orphan_owner_marker(&git_dir, ref_name)?;
+                }
+                RefLockOwner::OtherSujian => {
+                    // 别的素笺事务的 lock：不碰，返回 ConcurrentChanged。
+                    log::warn!(
+                        "rollback_git_finalize: ref {} lock belongs to another Sujian \
+                         transaction — preserving transaction for next recovery",
+                        ref_name
+                    );
+                    return Ok(GitRollbackOutcome::ConcurrentChanged);
+                }
+                RefLockOwner::External => {
+                    // 外部 Git 的 lock：不碰，返回 ConcurrentChanged。
+                    log::warn!(
+                        "rollback_git_finalize: ref {} lock is external Git regular lock \
+                         — preserving transaction for next recovery",
+                        ref_name
+                    );
+                    return Ok(GitRollbackOutcome::ConcurrentChanged);
+                }
+                RefLockOwner::Unknown => {
+                    // owner marker 读取失败（EIO 等）：不碰，返回 Err 保留事务。
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "rollback_git_finalize: ref {} lock owner marker read failed \
+                         (IO error) — cannot determine lock ownership, refusing to delete, \
+                         preserving transaction for next recovery",
+                        ref_name
+                    ))));
+                }
+            }
+        }
+
+        ref_tx = Some(RefTransaction::acquire_all_refs(repo, &ref_names, owner)?);
     }
 
-    // B. index rollback（在 ref 验证之后）。
+    // B. 锁内 classify（在 ref lock 保护下读取并分类）。
+    //    #644 评论 5489192105 问题1：classify 在锁保护下完成，消除 read→lock TOCTOU。
+    let ref_actions: Vec<LockedRollbackRefAction> = if let Some(tx) = &ref_tx {
+        classify_locked_ref_rollback(tx.repo(), plan)?
+    } else {
+        Vec::new()
+    };
+
+    // C. index rollback（在 ref lock 保护下执行）。
+    //    #644 评论 5489192105 问题1：index rollback 在 ref lock 保护下执行，
+    //    消除 "verify → index write → ref update" 之间的并发窗口。
     if let Some(expected_hash) = plan.new_index_sha256 {
         let index_path = live_root.join(".git").join("index");
         let lock_path = live_root.join(".git").join("index.lock");
@@ -1367,9 +1510,9 @@ pub fn rollback_git_finalize(
                      refusing to continue rollback to preserve transaction for next recovery",
                 )));
             }
-            // #644 评论 5488100307 问题1：不再调用 verify_refs_rollbackable()。
-            // refs 已通过 Transaction 锁住（writer exclusion），在锁保护下不可能被
-            // 并发修改。index rollback 在 ref lock 保护下执行，消除了
+            // #644 评论 5489192105 问题1：refs 已通过 RefTransaction 锁住
+            //（writer exclusion），在锁保护下不可能被并发修改。
+            // index rollback 在 ref lock 保护下执行，消除了
             // "verify → index write → ref update" 之间的并发窗口。
             //
             // current == new(plan) → 需要反向恢复到 snapshot.index。
@@ -1396,37 +1539,32 @@ pub fn rollback_git_finalize(
         }
     }
 
-    // C. 用 OwnedRefLock 逐个锁住需要修改的 ref，锁内执行更新，然后 commit 释放。
-    //    #644 评论 5488871385 问题2：替代 git2::Transaction，用目录锁模型做持久 ownership。
-    //    每个 ref 独立获取锁、执行更新、释放锁。崩溃后恢复时可通过目录类型判断归属。
-    //    更新是幂等的（old/new 状态机），崩溃后重试仍安全。
-    if let Some(_repo) = &tx_repo {
-        let git_dir = live_root.join(".git");
+    // D. ref update（用 tx.set_target / tx.remove，通过 libgit2 refdb）。
+    //    #644 评论 5489192105 问题3：set/delete 通过 git2::Transaction，
+    //    不直接碰 loose ref 文件，正确处理 packed refs。
+    //    #644 评论 5489192105 问题2：forward 和 rollback 共用同一套 ref transaction。
+    if let Some(mut tx) = ref_tx {
         for action in &ref_actions {
             match action {
                 LockedRollbackRefAction::Noop => {
                     // current == old → AlreadyReverted，无需操作。
                 }
                 LockedRollbackRefAction::SetTarget { ref_name, old_oid } => {
-                    // current == new → 用 OwnedRefLock 反向恢复到 old_oid。
-                    let prepared_content = format!("{}\n", old_oid);
-                    let mut lock =
-                        OwnedRefLock::acquire(&git_dir, ref_name, &prepared_content)?;
-                    let ref_path = git_dir.join(ref_name);
-                    lock.commit_set_target(&ref_path)?;
+                    // current == new → 反向恢复到 old_oid。
+                    // 通过 git2::Transaction::set_target（libgit2 refdb），
+                    // 正确处理 loose ref 和 packed refs。
+                    tx.set_target(ref_name, *old_oid, "sync: rollback ref after finalize failure")?;
                 }
                 LockedRollbackRefAction::Remove { ref_name } => {
-                    // current == new → 用 OwnedRefLock 删除 ref（反向恢复）。
-                    let mut lock = OwnedRefLock::acquire(
-                        &git_dir,
-                        ref_name,
-                        REF_LOCK_PREPARED_DELETE,
-                    )?;
-                    let ref_path = git_dir.join(ref_name);
-                    lock.commit_remove(&ref_path)?;
+                    // current == new → 删除 ref（反向恢复）。
+                    // 通过 git2::Transaction::remove（libgit2 refdb），
+                    // 正确处理 loose ref 和 packed refs。
+                    tx.remove(ref_name)?;
                 }
             }
         }
+        // E. commit（提交所有 set/remove 操作，释放全部 ref lock）。
+        tx.commit()?;
     }
 
     Ok(GitRollbackOutcome::Reverted)
@@ -1831,31 +1969,35 @@ fn finalize_unborn(
     // #644 评论 5480360027 修复点 5：sync_remote_refs 严格错误传播。
     sync_remote_refs(&live_repo, staging_repo, &snapshot.refs)?;
 
-    // #644 评论 5475805198 第3节 + #644 评论 5487751293 问题3：
-    // 使用 Transaction 锁定 HEAD，防止在验证和创建 branch 之间 HEAD 被切换。
-    // 流程：
-    // 1. lock HEAD via Transaction（exclusive lock，阻止并发 HEAD 写操作）
-    // 2. 锁内读取 HEAD，确认仍是 symbolic 且指向 head_ref
-    // 3. 锁内确认 branch ref 仍不存在
-    // 4. 创建 branch（lock head_ref 是独立的，不与 HEAD lock 冲突）
-    // 5. Transaction drop 释放 HEAD lock
+    // #644 评论 5489192105 问题2：forward 和 rollback 共用同一套 ref transaction。
+    // 用 RefTransaction 替代 git2::Transaction::lock_ref("HEAD")：
+    // - 持久 ownership：owner marker 文件做崩溃归属判断。
+    // - 正确处理 packed refs：set/delete 通过 git2::Transaction（libgit2 refdb）。
+    // - 统一机制：forward（finalize_unborn）和 rollback（rollback_git_finalize）用同一套。
     //
-    // 这样 HEAD switch 和 branch write 在同一个 writer exclusion 边界内，
-    // 不需要继续叠 check → write → post-check 的窗口。
+    // 流程：
+    // 1. acquire_all_refs(["HEAD", head_ref])：先写 owner marker，再 lock_ref 全部。
+    // 2. 锁内读取 HEAD，确认仍是 symbolic 且指向 head_ref。
+    // 3. 锁内确认 branch ref 仍不存在。
+    // 4. set_target(head_ref, new_oid)：通过 git2::Transaction 创建 branch。
+    // 5. commit：提交 set_target，释放全部 lock + 删 owner marker。
     {
-        let mut tx = live_repo.transaction().map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "finalize_unborn: create transaction: {e}"
-            )))
-        })?;
-        tx.lock_ref("HEAD").map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "finalize_unborn: lock HEAD: {e}"
+        use crate::sync::ref_transaction::RefTransaction;
+
+        let ref_tx_owner = plan.ref_tx_owner.as_deref().ok_or_else(|| {
+            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
+                "finalize_unborn: plan.ref_tx_owner is None but ref_plans is non-empty",
             )))
         })?;
 
+        // 锁住 HEAD + head_ref（sorted 去重，避免死锁）。
+        let ref_names = vec!["HEAD".to_string(), head_ref.to_string()];
+        let mut ref_tx =
+            RefTransaction::acquire_all_refs(&live_repo, &ref_names, ref_tx_owner)
+                .map_err(GitFinalizeError::FinalizeFailed)?;
+
         // 锁内读取 HEAD，确认仍是 symbolic 且指向 head_ref。
-        let raw_head = live_repo.find_reference("HEAD").map_err(|e| {
+        let raw_head = ref_tx.find_reference("HEAD").map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
                 "finalize_unborn: HEAD reference not found: {e}"
             )))
@@ -1878,7 +2020,7 @@ fn finalize_unborn(
         }
 
         // 锁内确认目标 branch ref 仍不存在（unborn 状态未变）。
-        match live_repo.find_reference(head_ref) {
+        match ref_tx.find_reference(head_ref) {
             Ok(_) => {
                 return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
                     std::io::Error::other(format!(
@@ -1901,18 +2043,17 @@ fn finalize_unborn(
             }
         }
 
-        // 在 HEAD lock 保护下创建 branch。
-        // repo.reference() 锁定 head_ref（独立于 HEAD lock），创建后释放。
-        live_repo
-            .reference(head_ref, new_oid, false, "sync: create branch from staging")
-            .map_err(|e| {
-                crate::Error::Io(std::io::Error::other(format!(
-                    "finalize_unborn: create-ref {} failed: {}",
-                    head_ref, e
-                )))
-            })?;
+        // 在 HEAD + head_ref lock 保护下创建 branch。
+        // #644 评论 5489192105 问题3：通过 git2::Transaction::set_target（libgit2 refdb），
+        // 不直接碰 loose ref 文件，正确处理 packed refs。
+        ref_tx.set_target(
+            head_ref,
+            new_oid,
+            "sync: create branch from staging",
+        )?;
 
-        // Transaction drop 释放 HEAD lock。
+        // commit：提交 set_target，释放全部 lock + 删 owner marker。
+        ref_tx.commit().map_err(GitFinalizeError::FinalizeFailed)?;
     }
 
     Ok(())
@@ -2657,121 +2798,14 @@ impl Drop for OwnedIndexLock {
     }
 }
 
-/// #644 评论 5488871385 问题2：持久 ownership 的 ref lock（目录锁模型）。
-///
-/// 与 `OwnedIndexLock` 同思路：canonical lock 使用 `<ref>.lock` 目录（不是 regular file）。
-/// 标准 Git 只会创建 regular lock file，所以目录本身就是可跨重启识别的 Sujian ownership。
-///
-/// 目录内放 `prepared` 文件：
-/// - SetTarget：`<oid>\n`
-/// - Remove：`delete\n`
-///
-/// commit 时：
-/// - SetTarget：rename `prepared` → loose ref 文件 + fsync 父目录。
-/// - Remove：删除 loose ref 文件 + fsync 父目录。
-/// 最后删除 `<ref>.lock` 目录 + fsync。
-///
-/// 恢复时只允许清理 owner 匹配或"目录刚创建、owner 尚未落盘"的 Sujian 目录锁。
-/// regular `.lock` 一律视为外部 Git，绝不能删。
-pub struct OwnedRefLock {
-    /// `<ref>.lock` 目录路径。
-    lock_dir: PathBuf,
-    /// `lock_dir/prepared` 文件路径。
-    prepared_file: PathBuf,
-    /// `true` 表示已成功 commit，`drop` 无操作。
-    disarmed: bool,
-}
-
-/// #644 评论 5488871385 问题2：ref lock 的 prepared 文件内容标记。
-const REF_LOCK_PREPARED_DELETE: &str = "delete";
-
-impl OwnedRefLock {
-    /// 获取单个 ref 的目录锁。
-    ///
-    /// `git_dir` = `.git` 目录。`ref_name` = 如 `refs/heads/main`。
-    /// `action` = "set_target" 或 "remove"，写入 prepared 文件供恢复时判断。
-    ///
-    /// 返回 `Err` 如果 lock 目录已存在（Sujian 或外部 Git）。
-    fn acquire(
-        git_dir: &Path,
-        ref_name: &str,
-        prepared_content: &str,
-    ) -> Result<Self> {
-        // ref_name like "refs/heads/main" → lock path ".git/refs/heads/main.lock"
-        let lock_dir = git_dir.join(format!("{}.lock", ref_name));
-        let prepared_file = lock_dir.join("prepared");
-
-        // 目录已存在 → 不管是 Sujian 还是外部 Git，都不能覆盖。
-        if lock_dir.exists() {
-            return Err(crate::Error::Io(std::io::Error::other(format!(
-                "OwnedRefLock: ref lock {} already exists — \
-                 refusing to overwrite (may be Sujian or external Git)",
-                lock_dir.display()
-            ))));
-        }
-
-        // 创建父目录（refs/heads/ 等）。
-        if let Some(parent) = lock_dir.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        // create_dir 原子创建 lock 目录（已存在则失败）。
-        fs::create_dir(&lock_dir).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "OwnedRefLock: create_dir {}: {e}",
-                lock_dir.display()
-            )))
-        })?;
-
-        // 写 prepared 文件（原子写入）。
-        if let Err(e) = crate::storage::atomic_write_bytes(
-            &prepared_file,
-            prepared_content.as_bytes(),
-        ) {
-            let _ = fs::remove_dir_all(&lock_dir);
-            return Err(e);
-        }
-
-        Ok(Self {
-            lock_dir,
-            prepared_file,
-            disarmed: false,
-        })
-    }
-
-    /// SetTarget commit：rename prepared → loose ref + fsync 父目录 + 删 lock 目录。
-    fn commit_set_target(&mut self, ref_path: &Path) -> Result<()> {
-        // rename prepared → loose ref（覆盖式 rename，原子提交）。
-        fs::rename(&self.prepared_file, ref_path)?;
-        crate::storage::sync_parent(ref_path)?;
-        // 删 lock 目录，fsync 父目录。
-        fs::remove_dir_all(&self.lock_dir)?;
-        crate::storage::sync_parent(&self.lock_dir)?;
-        self.disarmed = true;
-        Ok(())
-    }
-
-    /// Remove commit：删 loose ref + fsync 父目录 + 删 lock 目录。
-    fn commit_remove(&mut self, ref_path: &Path) -> Result<()> {
-        if ref_path.exists() {
-            fs::remove_file(ref_path)?;
-            crate::storage::sync_parent(ref_path)?;
-        }
-        // 删 lock 目录。
-        fs::remove_dir_all(&self.lock_dir)?;
-        crate::storage::sync_parent(&self.lock_dir)?;
-        self.disarmed = true;
-        Ok(())
-    }
-}
-
-impl Drop for OwnedRefLock {
-    fn drop(&mut self) {
-        if !self.disarmed {
-            let _ = fs::remove_dir_all(&self.lock_dir);
-        }
-    }
-}
+// #644 评论 5489192105 问题2：OwnedRefLock 已废弃，改用 RefTransaction
+//（core/writer_core/src/sync/ref_transaction.rs）。
+// OwnedRefLock 的缺陷：
+// - 没有持久 ownership（无 owner 文件，SIGKILL 后无法归属判断）。
+// - commit_set_target / commit_remove 直接操作 loose ref 文件，
+//   不处理 packed refs（问题3）。
+// RefTransaction 通过 git2::Transaction（libgit2 refdb）做 set/delete，
+// 正确处理 packed refs，并用 owner marker 文件做持久 ownership。
 
 /// #644 评论 5480360027 修复点 3 + #644 评论 5481496190 问题2 +
 /// #644 评论 5486167472 问题1 + #644 评论 5486852142 问题1：index 原生锁边界 + 持久 ownership。
@@ -3464,6 +3498,7 @@ mod tests {
             ref_plans: Vec::new(),
             repo_create_owner: None,
             index_lock_owner: Some(uuid::Uuid::new_v4().to_string()),
+            ref_tx_owner: None,
         };
         rollback_git_finalize(&live, &snapshot, &plan).unwrap();
         let restored_index = fs::read(live.join(".git").join("index")).unwrap();
@@ -3653,6 +3688,7 @@ mod tests {
             )],
             repo_create_owner: None,
             index_lock_owner: None,
+            ref_tx_owner: Some(uuid::Uuid::new_v4().to_string()),
         };
 
         // rollback 应成功（current == new_oid，反向 CAS 回 old_oid）。
@@ -3762,6 +3798,7 @@ mod tests {
             ref_plans: Vec::new(),
             repo_create_owner: None,
             index_lock_owner: None,
+            ref_tx_owner: None,
         };
 
         // 第二次 rollback：current index == original (== snapshot.index)。
@@ -3859,6 +3896,7 @@ mod tests {
             )],
             repo_create_owner: None,
             index_lock_owner: None,
+            ref_tx_owner: Some(uuid::Uuid::new_v4().to_string()),
         };
 
         // 第二次 rollback：current ref == old_oid (== snapshot ref)。
@@ -3933,6 +3971,7 @@ mod tests {
             // #644 评论 5484539222 缺陷1：反向恢复路径需要 owner 做 OwnedIndexLock。
             // acquire 时检测到外部 lock 已存在 → ConcurrentMetadataChanged，不删外部 lock。
             index_lock_owner: Some(uuid::Uuid::new_v4().to_string()),
+            ref_tx_owner: None,
         };
 
         // rollback：current index == new_index，index_is_ours = true。

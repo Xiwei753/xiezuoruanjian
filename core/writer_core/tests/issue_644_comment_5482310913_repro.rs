@@ -103,6 +103,7 @@ fn verify_problem1_marker_must_survive_finalize_until_tx_finish() {
         ref_plans: vec![],
         repo_create_owner: Some(owner.clone()),
         index_lock_owner: None,
+        ref_tx_owner: None,
     };
 
     // 调用 commit_git_finalize（NotGitRepo 路径）。
@@ -215,6 +216,7 @@ fn verify_problem2_rollback_must_check_ownership_before_touching_index() {
         ref_plans: vec![],
         repo_create_owner: Some(uuid::Uuid::new_v4().to_string()),
         index_lock_owner: None,
+        ref_tx_owner: None,
     };
 
     rollback_git_finalize(&live, &snapshot, &plan)
@@ -347,6 +349,7 @@ fn verify_problem3_ref_cas_miss_must_return_err_not_ok() {
         )],
         repo_create_owner: None,
         index_lock_owner: None,
+        ref_tx_owner: Some(uuid::Uuid::new_v4().to_string()),
     };
 
     let result = rollback_git_finalize(&live, &snapshot, &plan);
@@ -433,6 +436,7 @@ fn verify_problem3_index_cas_miss_must_return_err_not_ok() {
         ref_plans: vec![],
         repo_create_owner: None,
         index_lock_owner: None,
+        ref_tx_owner: None,
     };
 
     let result = rollback_git_finalize(&live, &snapshot, &plan);
@@ -488,6 +492,7 @@ fn verify_problem1_invariant_marker_present_after_successful_finalize() {
         ref_plans: vec![],
         repo_create_owner: Some(owner),
         index_lock_owner: None,
+        ref_tx_owner: None,
     };
 
     let result = commit_git_finalize(&live, &staging, &GitSeedState::NotGitRepo, &snapshot, &plan);
