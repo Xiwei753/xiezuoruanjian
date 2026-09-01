@@ -503,9 +503,11 @@ fn remove_migration_journal(target_git_dir: &Path, owner: &str) -> crate::Result
         )))
     })?;
     // fsync migrations dir 持久化 journal 删除的目录项。
+    // #644 评论 5497655880：不再吞 sync_dir 错误，fsync 失败必须返回 Err
+    // 以便下次重启继续看到 journal 残留并重试清理，避免静默丢失持久化保证。
     if let Some(dir) = migrations_dir(target_git_dir) {
         if dir.exists() {
-            let _ = crate::storage::sync_dir(&dir);
+            crate::storage::sync_dir(&dir)?;
         }
     }
     Ok(())
@@ -584,8 +586,11 @@ fn migrate_legacy_journal(
     write_migration_journal(target_git_dir, &journal)?;
     // 删除旧 journal
     std::fs::remove_file(&legacy_path)?;
+    // #644 评论 5497655880：不再吞 sync_dir 错误，fsync 失败必须返回 Err
+    // 以保证旧 journal 删除的目录项被持久化（否则下次重启可能看到旧 journal
+    // 拟留并误判迁移状态）。
     if let Some(parent) = legacy_path.parent() {
-        let _ = crate::storage::sync_dir(parent);
+        crate::storage::sync_dir(parent)?;
     }
     Ok(Some(journal))
 }
@@ -826,8 +831,39 @@ fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<()> {
                             write_migration_journal(&target_path, &current_journal)?;
                             continue; // 继续处理下一个阶段
                         }
+                        // #644 评论 5497655880：(_, _, Corrupt(e)) → target 路径存在但
+                        // 仓库损坏/权限错误，不能吞成普通状态，返回 Err。
+                        // 放在 (true, true, _) 之前，优先匹配任何 original/claimed 组合下的
+                        // target Corrupt。
+                        (_, _, RepoOpenResult::Corrupt(e)) => {
+                            return Err(crate::Error::Io(std::io::Error::other(format!(
+                                "resume_layout_migration: Prepared phase but target_git_dir \
+                                 exists but is corrupt: {}: {}",
+                                target_path.display(),
+                                e,
+                            ))));
+                        }
+                        // #644 评论 5497655880：(_, _, Valid) → final target 已是有效仓库。
+                        // Prepared 阶段 final target 第一次出现只能发生在 TargetPrepared 的
+                        // rename(target_tmp, target_git_dir) 之后。若此刻 final 已 Valid，
+                        // 它很可能是后来/并发出现的另一套仓库（不是本次 journal 安装出来的）。
+                        // 绝不能认领这个 foreign repo 推进到 TargetInstalled，否则随后会
+                        // 删除 claimed_source，原历史就真的被删掉了。直接返回 Err，
+                        // 保留 journal 和 source，让上层/用户决定。
+                        // 放在 (true, true, _) 之前，优先匹配任何 original/claimed 组合下的
+                        // target Valid。
+                        (_, _, RepoOpenResult::Valid) => {
+                            return Err(crate::Error::Io(std::io::Error::other(format!(
+                                "resume_layout_migration: Prepared phase but target_git_dir \
+                                 already exists as valid repo; cannot claim foreign repo: {}",
+                                target_path.display(),
+                            ))));
+                        }
                         // (true, true, _) → original 和 claimed 同时存在，
                         // ownership 状态不明确，直接 Err。
+                        // #644 评论 5497655880：到此分支时 target 只能是 Missing
+                        //（Valid/Corrupt 已被前面的通配分支处理），(true, true, Missing)
+                        // 仍然是 ambiguous ownership，返回 Err。
                         (true, true, _) => {
                             return Err(crate::Error::Io(std::io::Error::other(format!(
                                 "resume_layout_migration: Prepared phase ambiguous ownership: \
@@ -845,44 +881,6 @@ fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<()> {
                                 claimed_source_path.display(),
                             ))));
                         }
-                        // (_, _, Corrupt(e)) → target 路径存在但仓库损坏/权限错误，
-                        // 不能吞成普通状态，返回 Err。
-                        (_, _, RepoOpenResult::Corrupt(e)) => {
-                            return Err(crate::Error::Io(std::io::Error::other(format!(
-                                "resume_layout_migration: Prepared phase but target_git_dir \
-                                 exists but is corrupt: {}: {}",
-                                target_path.display(),
-                                e,
-                            ))));
-                        }
-                        // (_, _, Valid) → final 已是有效仓库，
-                        // 根据 journal/claimed 状态推进到 TargetInstalled。
-                        // 不伪装成 SourceClaimed 再绕一圈。
-                        (_, _, RepoOpenResult::Valid) => {
-                            // 打开 final repo 设置 workdir 并验证
-                            let repo = git2::Repository::open(&target_path).map_err(|e| {
-                                crate::Error::Io(std::io::Error::other(format!(
-                                    "resume_layout_migration: Prepared phase open valid target: {e}"
-                                )))
-                            })?;
-                            repo.set_workdir(&layout.worktree_root, false)
-                                .map_err(|e| {
-                                    crate::Error::Io(std::io::Error::other(format!(
-                                        "resume_layout_migration: Prepared phase set_workdir: {e}"
-                                    )))
-                                })?;
-                            let _ = repo.head();
-                            if let Ok(mut index) = repo.index() {
-                                let _ = index.read(true);
-                            }
-                            // 更新 phase 为 TargetInstalled
-                            current_journal = LayoutMigrationJournal {
-                                phase: MigrationPhase::TargetInstalled,
-                                ..current_journal
-                            };
-                            write_migration_journal(&target_path, &current_journal)?;
-                            continue; // 继续处理下一个阶段
-                        }
                     }
                 }
                 MigrationPhase::SourceClaimed => {
@@ -891,6 +889,30 @@ fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<()> {
                     // 如果恢复过程 copy 一半再次崩溃，target_tmp 变成半截仓库，
                     // 下次清理残留再 copy；final target_git_dir 不受污染。
                     let target_tmp_path = PathBuf::from(&current_journal.target_tmp);
+                    // #644 评论 5497655880：SourceClaimed 阶段 target 也必须 Missing。
+                    // final target 第一次出现只能在 TargetPrepared 的 rename(target_tmp, target_git_dir) 之后。
+                    // 若此刻 final 已 Valid/Corrupt，它很可能是后来/并发出现的另一套仓库，
+                    // 绝不能认领。直接返回 Err，保留 journal 和 claimed_source。
+                    match &target_open {
+                        RepoOpenResult::Valid => {
+                            return Err(crate::Error::Io(std::io::Error::other(format!(
+                                "resume_layout_migration: SourceClaimed phase but target_git_dir \
+                                 already exists as valid repo; cannot claim foreign repo: {}",
+                                target_path.display(),
+                            ))));
+                        }
+                        RepoOpenResult::Corrupt(e) => {
+                            return Err(crate::Error::Io(std::io::Error::other(format!(
+                                "resume_layout_migration: SourceClaimed phase but target_git_dir \
+                                 exists but is corrupt: {}: {}",
+                                target_path.display(),
+                                e,
+                            ))));
+                        }
+                        RepoOpenResult::Missing => {
+                            // target 不存在，可以继续 copy
+                        }
+                    }
                     if claimed_exists {
                         // 如果旧 tmp 拘留（target_tmp 已存在），先清理残留再 copy。
                         if target_tmp_path.exists() {
@@ -939,89 +961,118 @@ fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<()> {
                     // #644 评论 5495945801 问题1：TargetPrepared 恢复执行
                     // rename(target_tmp, target_git_dir) + fsync target parent + 设置 workdir。
                     // 删除"TargetPrepared 阶段 target 已经在 final 位置"的兼容逻辑。
+                    //
+                    // #644 评论 5497655880：按 (target_open, target_tmp_exists) 状态表收紧
+                    // ownership 判断。final target 第一次出现只能发生在本 phase 的
+                    // rename(target_tmp, target_git_dir) 之后。
+                    //   - target Missing + target_tmp 存在    → 执行 rename
+                    //   - target Valid   + target_tmp 不存在  → 合法崩溃窗口（rename 已成功，
+                    //     phase 还没落盘），set_workdir 后推进 TargetInstalled
+                    //   - target Valid   + target_tmp 仍存在  → ownership 歧义，final 很可能是
+                    //     别的进程/别的现场创建的仓库，直接 Err
+                    //   - target Missing + target_tmp 不存在  → Err
+                    //   - target Corrupt → Err
                     let target_tmp_path = PathBuf::from(&current_journal.target_tmp);
+                    let target_tmp_exists = target_tmp_path.exists();
 
-                    // 如果 target_git_dir 已存在且可打开，说明 rename 已完成（崩溃在写 journal 之前）。
-                    // 直接设置 workdir 并推进 phase。
-                    if matches!(target_open, RepoOpenResult::Valid) {
-                        // 打开仓库设置 workdir
-                        let repo = git2::Repository::open(&target_path).map_err(|e| {
-                            crate::Error::Io(std::io::Error::other(format!(
-                                "resume_layout_migration: TargetPrepared phase open repo: {e}"
-                            )))
-                        })?;
-                        repo.set_workdir(&layout.worktree_root, false)
-                            .map_err(|e| {
+                    match (&target_open, target_tmp_exists) {
+                        // target Valid + target_tmp 不存在 → 合法崩溃窗口：
+                        // rename(target_tmp, target_git_dir) 已成功，但 phase=TargetInstalled
+                        // 还没落盘。可以 set_workdir 后推进 TargetInstalled。
+                        (RepoOpenResult::Valid, false) => {
+                            let repo = git2::Repository::open(&target_path).map_err(|e| {
                                 crate::Error::Io(std::io::Error::other(format!(
-                                "resume_layout_migration: TargetPrepared phase set_workdir: {e}"
-                            )))
+                                    "resume_layout_migration: TargetPrepared phase open repo: {e}"
+                                )))
                             })?;
-                        // 验证 refs/index
-                        let _ = repo.head();
-                        if let Ok(mut index) = repo.index() {
-                            let _ = index.read(true);
+                            repo.set_workdir(&layout.worktree_root, false)
+                                .map_err(|e| {
+                                    crate::Error::Io(std::io::Error::other(format!(
+                                        "resume_layout_migration: TargetPrepared phase set_workdir: {e}"
+                                    )))
+                                })?;
+                            let _ = repo.head();
+                            if let Ok(mut index) = repo.index() {
+                                let _ = index.read(true);
+                            }
+                            current_journal = LayoutMigrationJournal {
+                                phase: MigrationPhase::TargetInstalled,
+                                ..current_journal
+                            };
+                            write_migration_journal(&target_path, &current_journal)?;
+                            continue; // 继续处理下一个阶段
                         }
-                        // 更新 phase 为 TargetInstalled
-                        current_journal = LayoutMigrationJournal {
-                            phase: MigrationPhase::TargetInstalled,
-                            ..current_journal
-                        };
-                        write_migration_journal(&target_path, &current_journal)?;
-                        continue; // 继续处理下一个阶段
+                        // target Valid + target_tmp 仍存在 → ownership 歧义。
+                        // final target 是有效仓库但 target_tmp 还在，说明 final 很可能是
+                        // 别的进程/别的现场创建的仓库，不是本次 rename 出来的。直接 Err。
+                        (RepoOpenResult::Valid, true) => {
+                            return Err(crate::Error::Io(std::io::Error::other(format!(
+                                "resume_layout_migration: TargetPrepared phase ownership ambiguity: \
+                                 target_git_dir ({}) is valid but target_tmp ({}) still exists; \
+                                 final repo may be created by another process",
+                                target_path.display(), target_tmp_path.display(),
+                            ))));
+                        }
+                        // target Corrupt → Err
+                        (RepoOpenResult::Corrupt(e), _) => {
+                            return Err(crate::Error::Io(std::io::Error::other(format!(
+                                "resume_layout_migration: TargetPrepared phase but target_git_dir \
+                                 exists but is corrupt: {}: {}",
+                                target_path.display(),
+                                e,
+                            ))));
+                        }
+                        // target Missing + target_tmp 存在 → 执行 rename
+                        (RepoOpenResult::Missing, true) => {
+                            // 确保 target_git_dir 父目录存在
+                            if let Some(parent) = target_path.parent() {
+                                std::fs::create_dir_all(parent)?;
+                            }
+                            // 同文件系统原子 rename target_tmp -> target_git_dir
+                            std::fs::rename(&target_tmp_path, &target_path).map_err(|e| {
+                                crate::Error::Io(std::io::Error::other(format!(
+                                    "resume_layout_migration: TargetPrepared phase rename {} -> {}: {}",
+                                    target_tmp_path.display(), target_path.display(), e,
+                                )))
+                            })?;
+                            // fsync target_parent（持久化 rename 的目录项）
+                            if let Some(parent) = target_path.parent() {
+                                crate::storage::sync_dir(parent)?;
+                            }
+                            // 打开 final repo 设置 workdir 并验证
+                            let repo = git2::Repository::open(&target_path).map_err(|e| {
+                                crate::Error::Io(std::io::Error::other(format!(
+                                    "resume_layout_migration: TargetPrepared phase open final repo: {e}"
+                                )))
+                            })?;
+                            repo.set_workdir(&layout.worktree_root, false)
+                                .map_err(|e| {
+                                    crate::Error::Io(std::io::Error::other(format!(
+                                        "resume_layout_migration: TargetPrepared phase set_workdir: {e}"
+                                    )))
+                                })?;
+                            let _ = repo.head();
+                            if let Ok(mut index) = repo.index() {
+                                let _ = index.read(true);
+                            }
+                            // 更新 phase 为 TargetInstalled
+                            current_journal = LayoutMigrationJournal {
+                                phase: MigrationPhase::TargetInstalled,
+                                ..current_journal
+                            };
+                            write_migration_journal(&target_path, &current_journal)?;
+                            continue; // 继续处理下一个阶段
+                        }
+                        // target Missing + target_tmp 不存在 → Err
+                        (RepoOpenResult::Missing, false) => {
+                            return Err(crate::Error::Io(std::io::Error::other(format!(
+                                "resume_layout_migration: TargetPrepared phase but both \
+                                 target_git_dir ({}) and target_tmp ({}) missing",
+                                target_path.display(),
+                                target_tmp_path.display(),
+                            ))));
+                        }
                     }
-
-                    // target_git_dir 不存在，需要从 target_tmp rename 过来。
-                    if !target_tmp_path.exists() {
-                        return Err(crate::Error::Io(std::io::Error::other(format!(
-                            "resume_layout_migration: TargetPrepared phase but target_tmp missing: {}",
-                            target_tmp_path.display(),
-                        ))));
-                    }
-
-                    // 确保 target_git_dir 父目录存在
-                    if let Some(parent) = target_path.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-
-                    // 同文件系统原子 rename target_tmp -> target_git_dir
-                    std::fs::rename(&target_tmp_path, &target_path).map_err(|e| {
-                        crate::Error::Io(std::io::Error::other(format!(
-                            "resume_layout_migration: TargetPrepared phase rename {} -> {}: {}",
-                            target_tmp_path.display(),
-                            target_path.display(),
-                            e,
-                        )))
-                    })?;
-
-                    // fsync target_parent（持久化 rename 的目录项）
-                    if let Some(parent) = target_path.parent() {
-                        crate::storage::sync_dir(parent)?;
-                    }
-
-                    // 打开 final repo 设置 workdir 并验证
-                    let repo = git2::Repository::open(&target_path).map_err(|e| {
-                        crate::Error::Io(std::io::Error::other(format!(
-                            "resume_layout_migration: TargetPrepared phase open final repo: {e}"
-                        )))
-                    })?;
-                    repo.set_workdir(&layout.worktree_root, false)
-                        .map_err(|e| {
-                            crate::Error::Io(std::io::Error::other(format!(
-                                "resume_layout_migration: TargetPrepared phase set_workdir: {e}"
-                            )))
-                        })?;
-                    let _ = repo.head();
-                    if let Ok(mut index) = repo.index() {
-                        let _ = index.read(true);
-                    }
-
-                    // 更新 phase 为 TargetInstalled
-                    current_journal = LayoutMigrationJournal {
-                        phase: MigrationPhase::TargetInstalled,
-                        ..current_journal
-                    };
-                    write_migration_journal(&target_path, &current_journal)?;
-                    continue; // 继续处理下一个阶段
                 }
                 MigrationPhase::TargetInstalled => {
                     // Target 已安装，claimed_source 尚未删除。
