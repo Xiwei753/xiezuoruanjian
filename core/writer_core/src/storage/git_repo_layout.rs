@@ -144,11 +144,11 @@ fn try_open_repo(path: &Path) -> crate::Result<RepoOpenResult> {
 pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<()> {
     crate::storage::git_runtime::ensure_initialized()?;
 
-    eprintln!("[ensure] calling resume_layout_migration, git_dir={}", layout.git_dir.display());
+    
     // #644 评论 5494387963 问题1：先尝试恢复任何 pending 迁移
     // 必须在任何 "private 不存在 / .git 不存在 / 要 init" 判断之前调用。
     resume_layout_migration(layout)?;
-    eprintln!("[ensure] resume_layout_migration returned Ok");
+    
 
     let default_git_dir = layout.worktree_root.join(".git");
     let is_external = layout.git_dir != default_git_dir;
@@ -804,7 +804,7 @@ fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<()> {
                             write_migration_journal(&target_path, &current_journal)?;
                             continue; // 继续处理下一个阶段
                         } else {
-                            eprintln!("[git_repo_layout] resume: Prepared phase, original_source does not exist");
+                            
                             // source 不存在，清理 journal
                             remove_migration_journal(&layout.git_dir, &current_journal.owner)?;
                             break; // 完成，退出循环
@@ -822,17 +822,17 @@ fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<()> {
                     // Source 已 rename，copy 尚未执行。
                     // 继续执行 copy。
                     if let RepoOpenResult::Missing = target_open {
-                        eprintln!("[git_repo_layout] resume: SourceClaimed phase, target is Missing");
+                        
                         // target 不存在，继续 copy
                         if claimed_exists {
-                            eprintln!("[git_repo_layout] resume: SourceClaimed phase, claimed_source exists, starting copy");
+                            
                             // 创建 target 父目录
                             if let Some(parent) = target_path.parent() {
                                 std::fs::create_dir_all(parent)?;
                             }
                             // copy claimed_source 到 target
                             migrate_copy_dir_recursive(&claimed_source_path, &target_path)?;
-                            eprintln!("[git_repo_layout] resume: SourceClaimed phase, copy succeeded");
+                            
                             // 验证 repo
                             {
                                 let tmp_repo = git2::Repository::open(&target_path).map_err(|e| {
@@ -867,13 +867,13 @@ fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<()> {
                     }
                 }
                 MigrationPhase::TargetPrepared => {
-                    eprintln!("[git_repo_layout] resume: TargetPrepared phase, target_open={:?}", target_open);
+                    
                     // Target tmp 已 copy 并验证，rename 尚未执行。
                     // 继续执行 rename（如果 target 已是 final 位置则跳过）。
                     // 注意：TargetPrepared 阶段 target 已经在 final 位置（旧代码的 tmp 就是 final），
                     // 所以这里只需要设置 workdir 和更新 phase。
                     if matches!(target_open, RepoOpenResult::Valid) {
-                        eprintln!("[git_repo_layout] resume: TargetPrepared phase, target is Valid");
+                        
                         // 打开仓库设置 workdir
                         let repo = git2::Repository::open(&target_path).map_err(|e| {
                             crate::Error::Io(std::io::Error::other(format!(
@@ -897,18 +897,18 @@ fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<()> {
                             ..current_journal
                         };
                         write_migration_journal(&target_path, &current_journal)?;
-                        eprintln!("[git_repo_layout] resume: TargetPrepared phase, updated to TargetInstalled");
+                        
                         continue; // 继续处理下一个阶段
                     } else {
-                        eprintln!("[git_repo_layout] resume: TargetPrepared phase, target is NOT Valid");
+                        
                     }
                 }
                 MigrationPhase::TargetInstalled => {
-                    eprintln!("[git_repo_layout] resume: TargetInstalled phase, claimed_exists={}", claimed_exists);
+                    
                     // Target 已安装，claimed_source 尚未删除。
                     // 继续删除 claimed_source。
                     if claimed_exists {
-                        eprintln!("[git_repo_layout] resume: TargetInstalled phase, removing claimed_source");
+                        
                         std::fs::remove_dir_all(&claimed_source_path).map_err(|e| {
                             crate::Error::Io(std::io::Error::other(format!(
                                 "resume_layout_migration: TargetInstalled phase remove claimed_source {}: {e}",
@@ -919,7 +919,7 @@ fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<()> {
                             crate::storage::sync_dir(parent)?;
                         }
                         crate::storage::sync_dir(&layout.worktree_root)?;
-                        eprintln!("[git_repo_layout] resume: TargetInstalled phase, claimed_source removed");
+                        
                     }
                     // 更新 phase 为 SourceCleaned
                     current_journal = LayoutMigrationJournal {
@@ -927,7 +927,7 @@ fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<()> {
                         ..current_journal
                     };
                     write_migration_journal(&target_path, &current_journal)?;
-                    eprintln!("[git_repo_layout] resume: TargetInstalled phase, updated to SourceCleaned");
+                    
                     continue; // 继续处理下一个阶段
                 }
                 MigrationPhase::SourceCleaned => {
