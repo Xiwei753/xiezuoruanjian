@@ -616,7 +616,7 @@ fn rollback_full_sync_transaction(
     //    #644 评论 5488871385 问题1：inspect-first 流程——
     //    先只读检查状态，再 preflight backup，最后才修改 Git/live。
     if let Some(ref git_rec) = manifest.git_finalize {
-        let _seed_state = git_rec.seed_state.to_seed_state().map_err(|e| {
+        let seed_state = git_rec.seed_state.to_seed_state().map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
                 "rollback_full_sync_transaction: invalid seed state: {}",
                 e
@@ -628,6 +628,38 @@ fn rollback_full_sync_transaction(
         // Option<plan>。
         let mut effective_plan = git_rec.plan.clone();
         let mut plan_changed = false;
+
+        // #644 评论 5490799656 问题3：ref_lock_names schema 迁移。
+        // 旧 manifest 无 ref_lock_names 时（serde(default) 为空），从 seed_state
+        // + ref_plans 重建完整的 forward lock 集合。必须在 owner migration 之前，
+        // 因为 check_ref_tx_owner_migration 使用 plan.ref_lock_names 确定检查哪些 ref
+        // 的 lock 状态。如果 ref_lock_names 为空，HEAD.lock 不会被检查、不会被清理。
+        if effective_plan.ref_lock_names.is_empty() && !effective_plan.ref_plans.is_empty() {
+            let mut rebuilt: Vec<String> = Vec::new();
+            match &seed_state {
+                crate::sync::git_staging::GitSeedState::NotGitRepo => {
+                    // NotGitRepo：forward 不锁 live refs（live 还没有 .git），
+                    // ref_lock_names 只包含 ref_plans 中的名称。
+                }
+                crate::sync::git_staging::GitSeedState::Unborn { head_ref }
+                | crate::sync::git_staging::GitSeedState::Existing { head_ref, .. } => {
+                    rebuilt.push("HEAD".to_string());
+                    rebuilt.push(head_ref.clone());
+                }
+                crate::sync::git_staging::GitSeedState::Detached { .. } => {
+                    rebuilt.push("HEAD".to_string());
+                }
+            }
+            for (name, _, _) in &effective_plan.ref_plans {
+                if !rebuilt.contains(name) {
+                    rebuilt.push(name.clone());
+                }
+            }
+            rebuilt.sort();
+            rebuilt.dedup();
+            effective_plan.ref_lock_names = rebuilt;
+            plan_changed = true;
+        }
 
         // index_lock_owner=None 旧 manifest 迁移。
         if effective_plan.new_index_sha256.is_some() && effective_plan.index_lock_owner.is_none() {

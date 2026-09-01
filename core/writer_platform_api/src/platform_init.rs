@@ -69,6 +69,17 @@ pub struct PlatformInit {
     pub app_version: String,
     pub locale: String,
     pub timezone: String,
+    /// #644 评论 5490799656 问题1：Android 私有 Git metadata 根目录。
+    ///
+    /// 位于 `context.filesDir/sujian-git/`，所有项目的可写 Git metadata
+    ///（`.git/`）的根目录。`None` 表示使用标准 Git 布局
+    ///（`project_root.join(".git")`）。
+    ///
+    /// Android 共享存储不适合放可写 Git metadata，因为 sidecar 文件与真正的
+    /// `.lock` 不是原子事实，无法可靠证明 ownership。Git metadata 放在应用
+    /// 私有 `filesDir`，共享存储只保留用户可见的 worktree。
+    #[serde(default)]
+    pub git_metadata_root: Option<PathBuf>,
 }
 
 impl PlatformInit {

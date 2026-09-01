@@ -453,6 +453,7 @@ dictionary PlatformInitDto {
     boolean is_metered;
     string? proxy_host;
     u16? proxy_port;
+    string? git_metadata_root;
 };
 
 dictionary DateRangeDto {

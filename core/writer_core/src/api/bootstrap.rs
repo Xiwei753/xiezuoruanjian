@@ -42,6 +42,9 @@ pub fn open_app_service_with_init(
     crate::storage::git_runtime::ensure_initialized()?;
     let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
+    // #644 评论 5490799656 问题1：在 platform_init 被 move 到 PlatformServices 之前
+    // 提取 git_metadata_root，避免 borrow-after-move。
+    let git_metadata_root = platform_init.git_metadata_root.clone();
 
     let services = if let Some(resolver) = get_platform_services_resolver() {
         resolver.resolve(&platform_init, &network_state)
@@ -63,6 +66,7 @@ pub fn open_app_service_with_init(
         app_data_root,
         projects_root,
         services,
+        git_metadata_root,
     ));
     if let Err(e) = service.rebuild_search_index(None) {
         log::warn!("Failed to rebuild search index on open_app_service_with_init: {e}");
@@ -81,6 +85,9 @@ pub fn open_app_service_with_secure_storage(
     crate::storage::git_runtime::ensure_initialized()?;
     let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
+    // #644 评论 5490799656 问题1：在 platform_init 被 move 到 PlatformServices 之前
+    // 提取 git_metadata_root，避免 borrow-after-move。
+    let git_metadata_root = platform_init.git_metadata_root.clone();
 
     let secure_storage_impl: Option<Box<dyn SecureStorage>> =
         secure_storage.map(wrap_secure_storage);
@@ -109,6 +116,7 @@ pub fn open_app_service_with_secure_storage(
         app_data_root,
         projects_root,
         services,
+        git_metadata_root,
     ));
     if let Err(e) = service.rebuild_search_index(None) {
         log::warn!("Failed to rebuild search index on open_app_service_with_secure_storage: {e}");

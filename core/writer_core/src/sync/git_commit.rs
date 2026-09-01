@@ -2134,19 +2134,9 @@ fn finalize_unborn(
         index_lock_owner,
     )?;
 
-    // 评论 5489750244 问题3：收集 remote ref actions，与 HEAD + head_ref 一起
-    // 通过统一的 RefTransaction 执行所有 ref 写入。
-    let remote_actions = collect_remote_ref_actions(staging_repo, &snapshot.refs)?;
-
-    // 评论 5489750244 问题3：统一使用 RefTransaction 修改所有 refs。
-    // 所有 ref 修改通过同一个 writer exclusion：acquire → lock → verify → write → commit。
-    // 替代之前 sync_remote_refs 直接写（无 lock）+ RefTransaction 只锁 HEAD + head_ref 的
-    // 分离方案，消除 sync_remote_refs 直接写与其他 ref 操作之间的 TOCTOU 窗口。
-    // 1. acquire_all_refs(["HEAD", head_ref] + remote refs)：先写 owner marker，再 lock_ref 全部。
-    // 2. 锁内读取 HEAD，确认仍是 symbolic 且指向 head_ref。
-    // 3. 锁内确认 branch ref 仍不存在。
-    // 4. set_target(head_ref, new_oid) + set_target(remote refs)。
-    // 5. commit：提交所有 set_target，释放全部 lock + 删 owner marker。
+    // #644 评论 5490799656 问题4：统一使用 plan 作为唯一事实。
+    // 不再调用 collect_remote_ref_actions 从 staging 重算第二份执行计划。
+    // 直接用 plan.ref_lock_names 做 acquire，plan.ref_plans 做 CAS classify + 执行。
     {
         use crate::sync::ref_transaction::RefTransaction;
 
@@ -2156,16 +2146,11 @@ fn finalize_unborn(
             )))
         })?;
 
-        // 锁住 HEAD + head_ref + remote refs（sorted 去重，避免死锁）。
-        let mut ref_names = vec!["HEAD".to_string(), head_ref.to_string()];
-        for (name, _) in &remote_actions {
-            if !ref_names.contains(name) {
-                ref_names.push(name.clone());
-            }
-        }
+        // 用 plan.ref_lock_names（完整的 forward lock 集合）做 acquire。
+        let ref_names = &plan.ref_lock_names;
 
         let mut ref_tx =
-            RefTransaction::acquire_all_refs(&live_repo, &ref_names, ref_tx_owner)
+            RefTransaction::acquire_all_refs(&live_repo, ref_names, ref_tx_owner)
                 .map_err(GitFinalizeError::FinalizeFailed)?;
 
         // 锁内读取 HEAD，确认仍是 symbolic 且指向 head_ref。
@@ -2215,16 +2200,16 @@ fn finalize_unborn(
             }
         }
 
-        // 在所有 ref lock 保护下创建 branch + 更新 remote refs。
+        // 创建 branch ref（Unborn 的 ref_plans 中 head_ref 的 old=None）。
         ref_tx.set_target(
             head_ref,
             new_oid,
             "sync: create branch from staging",
         )?;
 
-        for (name, target) in &remote_actions {
-            ref_tx.set_target(name, *target, "sync: update remote-tracking ref")?;
-        }
+        // #644 评论 5490799656 问题4：按 plan 执行剩余 refs（remote refs 等）。
+        // Unborn 的 ref_plans 中 head_ref 已在上面处理，这里跳过它。
+        execute_plan_refs_under_lock(&mut ref_tx, plan, Some(head_ref))?;
 
         // commit：提交所有 set_target，释放全部 lock + 删 owner marker。
         ref_tx.commit().map_err(GitFinalizeError::FinalizeFailed)?;
@@ -2293,15 +2278,9 @@ fn finalize_existing(
         index_lock_owner,
     )?;
 
-    // #644 评论 5480360027 修复点 5：sync_remote_refs 严格错误传播。
-    // 评论 5489750244 问题3：不再直接写 live repo，改为收集 remote ref actions，
-    // 与 HEAD + head_ref 一起通过统一的 RefTransaction 执行。
-    let remote_actions = collect_remote_ref_actions(staging_repo, &snapshot.refs)?;
-
-    // 评论 5489750244 问题3：统一使用 RefTransaction 修改所有 refs。
-    // 所有 ref 修改通过同一个 writer exclusion：acquire → lock → verify → write → commit。
-    // 消除了之前 sync_remote_refs 直接写 → HEAD check → branch CAS →
-    // post-CAS re-check 之间的多个 TOCTOU 窗口（评论 5489750244 问题3）。
+    // #644 评论 5490799656 问题4：统一使用 plan 作为唯一事实。
+    // 不再调用 collect_remote_ref_actions 从 staging 重算第二份执行计划。
+    // 直接用 plan.ref_lock_names 做 acquire，plan.ref_plans 做 CAS classify + 执行。
     {
         use crate::sync::ref_transaction::RefTransaction;
 
@@ -2311,16 +2290,11 @@ fn finalize_existing(
             )))
         })?;
 
-        // 收集所有 refs：head_ref + HEAD + remote refs。
-        let mut ref_names: Vec<String> = vec![head_ref.to_string(), "HEAD".to_string()];
-        for (name, _) in &remote_actions {
-            if !ref_names.contains(name) {
-                ref_names.push(name.clone());
-            }
-        }
+        // 用 plan.ref_lock_names（完整的 forward lock 集合）做 acquire。
+        let ref_names = &plan.ref_lock_names;
 
         let mut ref_tx =
-            RefTransaction::acquire_all_refs(&live_repo, &ref_names, ref_tx_owner)
+            RefTransaction::acquire_all_refs(&live_repo, ref_names, ref_tx_owner)
                 .map_err(GitFinalizeError::FinalizeFailed)?;
 
         // 锁内 verify：HEAD 仍指向 head_ref（用户未切 branch/detach）。
@@ -2375,17 +2349,16 @@ fn finalize_existing(
         }
         drop(branch_ref);
 
-        // 锁内更新 branch ref。
+        // 锁内更新 branch ref（head_ref 的 CAS）。
         ref_tx.set_target(
             head_ref,
             new_oid,
             "sync: finalize git repo metadata after full sync",
         )?;
 
-        // 锁内更新 remote refs。
-        for (name, target) in &remote_actions {
-            ref_tx.set_target(name, *target, "sync: update remote-tracking ref")?;
-        }
+        // #644 评论 5490799656 问题4：按 plan 执行剩余 refs（remote refs 等）。
+        // head_ref 已在上面处理，这里跳过它。
+        execute_plan_refs_under_lock(&mut ref_tx, plan, Some(head_ref))?;
 
         // commit：提交所有 set_target，释放全部 lock + 删 owner marker。
         ref_tx.commit().map_err(GitFinalizeError::FinalizeFailed)?;
@@ -2457,8 +2430,9 @@ fn finalize_detached(
         index_lock_owner,
     )?;
 
-    // 评论 5489750244 问题3：统一使用 RefTransaction 修改 HEAD + remote refs。
-    // 所有 ref 修改通过同一个 writer exclusion：acquire → lock → verify → write → commit。
+    // #644 评论 5490799656 问题4：统一使用 plan 作为唯一事实。
+    // 不再调用 collect_remote_ref_actions 从 staging 重算第二份执行计划。
+    // 直接用 plan.ref_lock_names 做 acquire，plan.ref_plans 做 CAS classify + 执行。
     {
         use crate::sync::ref_transaction::RefTransaction;
 
@@ -2468,17 +2442,11 @@ fn finalize_detached(
             )))
         })?;
 
-        // 收集所有 refs：HEAD + remote refs。
-        let mut ref_names: Vec<String> = vec!["HEAD".to_string()];
-        let remote_actions = collect_remote_ref_actions(staging_repo, &snapshot.refs)?;
-        for (name, _) in &remote_actions {
-            if !ref_names.contains(name) {
-                ref_names.push(name.clone());
-            }
-        }
+        // 用 plan.ref_lock_names（完整的 forward lock 集合）做 acquire。
+        let ref_names = &plan.ref_lock_names;
 
         let mut ref_tx =
-            RefTransaction::acquire_all_refs(&live_repo, &ref_names, ref_tx_owner)
+            RefTransaction::acquire_all_refs(&live_repo, ref_names, ref_tx_owner)
                 .map_err(GitFinalizeError::FinalizeFailed)?;
 
         // 锁内 verify HEAD 仍 detached（未 resolve 的 HEAD 的 target 是 raw OID）。
@@ -2512,10 +2480,9 @@ fn finalize_detached(
         // 锁内更新 HEAD（CAS：current==base_oid）。
         ref_tx.set_target("HEAD", new_oid, "sync: finalize detached HEAD")?;
 
-        // 锁内更新 remote refs。
-        for (name, target) in &remote_actions {
-            ref_tx.set_target(name, *target, "sync: update remote-tracking ref")?;
-        }
+        // #644 评论 5490799656 问题4：按 plan 执行剩余 refs（remote refs 等）。
+        // Detached 的 ref_plans 中 HEAD 已在上面处理，这里跳过它。
+        execute_plan_refs_under_lock(&mut ref_tx, plan, Some("HEAD"))?;
 
         ref_tx.commit().map_err(GitFinalizeError::FinalizeFailed)?;
     }
@@ -3282,62 +3249,6 @@ fn index_snapshot_eq(a: &IndexSnapshot, b: &IndexSnapshot) -> bool {
     }
 }
 
-/// 同步 staging 的 remote-tracking refs 到 live。
-///
-/// #644 评论 5477439446 问题2：用 CAS 语义更新 remote refs，不再无条件覆盖。
-/// 对每个 remote ref，从 snapshot 取旧值：
-/// - `DidNotExist`：用 `force=false` 创建，已存在则失败（CAS）。
-/// - `Existed { oid }`：用 `reference_matching` CAS，当前 OID 不匹配则失败。
-/// #644 评论 5480360027 修复点 5：严格错误传播。
-/// `references()?` 而非 `if let Ok(...)`，循环里 `reference?` 而非 `flatten()`。
-/// 任何错误都向上传播，进入本轮 finalize 失败/rollback，不能静默跳过。
-///
-/// 评论 5489750244 问题3：不再直接写 live repo，改为返回 ref action 列表。
-/// 调用方通过统一的 RefTransaction 执行所有 ref 写入（acquire → lock → write → commit），
-/// 保证 forward 路径的所有 ref 修改都在同一个 writer exclusion 下完成。
-#[allow(clippy::excessive_nesting)]
-fn collect_remote_ref_actions(
-    staging_repo: &git2::Repository,
-    snapshot_refs: &std::collections::BTreeMap<String, RefSnapshot>,
-) -> Result<Vec<(String, git2::Oid)>> {
-    let mut actions = Vec::new();
-    let staging_refs = staging_repo.references().map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "collect_remote_ref_actions: failed to iterate staging references: {e}"
-        )))
-    })?;
-    for reference in staging_refs {
-        let reference = reference.map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "collect_remote_ref_actions: staging reference iterator error: {e}"
-            )))
-        })?;
-        let Some(name) = reference.name() else {
-            continue;
-        };
-        if !name.starts_with("refs/remotes/") {
-            continue;
-        }
-        let Some(target) = reference.target() else {
-            continue;
-        };
-        let old_snapshot = snapshot_refs
-            .get(name)
-            .cloned()
-            .unwrap_or(RefSnapshot::DidNotExist);
-        match &old_snapshot {
-            RefSnapshot::DidNotExist | RefSnapshot::Existed { .. } => {
-                actions.push((name.to_string(), target));
-            }
-            RefSnapshot::Symbolic { .. } => {
-                // remote ref 不应是 symbolic，跳过（不覆盖）。
-                continue;
-            }
-        }
-    }
-    Ok(actions)
-}
-
 /// 更新 live 的 index 为 staging HEAD 对应的 tree（不 checkout 工作区）。
 ///
 /// #644 评论 5486167472 问题3：libgit2 的 `GIT_OPT_ENABLE_FSYNC_GITDIR` 已通过
@@ -3391,7 +3302,122 @@ fn update_live_index(
     Ok(())
 }
 
-/// 计算字节切片的 SHA-256。
+/// #644 评论 5490799656 问题4：在 RefTransaction 锁保护下，按 write-ahead plan
+/// 执行所有 ref 写入。
+///
+/// 不再从 staging 重算第二份执行计划（`collect_remote_ref_actions`）。
+/// plan 是唯一事实：锁内读取所有 `plan.ref_plans`，每个 ref 只能是
+/// old / new 两种本事务允许状态：
+/// - 第三状态 → 立即退出，不写 index/ref（返回 `ConcurrentMetadataChanged`）；
+/// - old → old→new action（set_target 或 create）；
+/// - 已经是 new → replay no-op。
+///
+/// `exclude_ref` 用于排除已经在上层单独处理的 ref（如 finalize_existing 中的
+/// head_ref CAS 已经在 classify 阶段处理）。
+fn execute_plan_refs_under_lock(
+    ref_tx: &mut crate::sync::ref_transaction::RefTransaction<'_>,
+    plan: &GitFinalizePlan,
+    exclude_ref: Option<&str>,
+) -> std::result::Result<(), GitFinalizeError> {
+    for (ref_name, old_oid_str, new_oid_str) in &plan.ref_plans {
+        // 跳过已在上层处理的 ref。
+        if Some(ref_name.as_str()) == exclude_ref {
+            continue;
+        }
+
+        let new_oid = git2::Oid::from_str(new_oid_str).map_err(|e| {
+            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
+                "execute_plan_refs_under_lock: invalid new_oid for {}: {e}",
+                ref_name
+            ))))
+        })?;
+
+        let current = ref_tx.find_reference(ref_name);
+
+        match (old_oid_str, current) {
+            // ref(old=None): 本事务新建 ref。
+            // - Absent → create (set_target with force=true)
+            // - current == new → replay no-op
+            // - current == 其它 → third state, exit
+            (None, Ok(current_ref)) => {
+                if current_ref.target() == Some(new_oid) {
+                    // replay no-op
+                } else {
+                    return Err(GitFinalizeError::ConcurrentMetadataChanged {
+                        reason: format!(
+                            "execute_plan_refs_under_lock: ref {} has unexpected value \
+                             (expected absent or new_oid {}) — concurrent modification",
+                            ref_name, new_oid
+                        ),
+                    });
+                }
+            }
+            (None, Err(e)) if e.code() == git2::ErrorCode::NotFound => {
+                // Absent → create
+                ref_tx.set_target(ref_name, new_oid, "sync: finalize plan ref (create)")?;
+            }
+            (None, Err(e)) => {
+                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                    std::io::Error::other(format!(
+                        "execute_plan_refs_under_lock: lookup {}: {e}",
+                        ref_name
+                    )),
+                )));
+            }
+
+            // ref(old=Some): 本事务更新 ref。
+            // - current == old → CAS: set_target to new
+            // - current == new → replay no-op
+            // - current == 其它 → third state, exit
+            (Some(old_oid_str), Ok(current_ref)) => {
+                let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
+                    GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
+                        format!(
+                            "execute_plan_refs_under_lock: invalid old_oid for {}: {e}",
+                            ref_name
+                        ),
+                    )))
+                })?;
+                if current_ref.target() == Some(old_oid) {
+                    // CAS: old → new
+                    ref_tx.set_target(ref_name, new_oid, "sync: finalize plan ref (update)")?;
+                } else if current_ref.target() == Some(new_oid) {
+                    // replay no-op
+                } else {
+                    return Err(GitFinalizeError::ConcurrentMetadataChanged {
+                        reason: format!(
+                            "execute_plan_refs_under_lock: ref {} changed from {} to unexpected \
+                             value (expected old_oid {} or new_oid {})",
+                            ref_name,
+                            current_ref
+                                .target()
+                                .map_or_else(|| "none".to_string(), |o| o.to_string()),
+                            old_oid,
+                            new_oid
+                        ),
+                    });
+                }
+            }
+            (Some(_), Err(e)) if e.code() == git2::ErrorCode::NotFound => {
+                return Err(GitFinalizeError::ConcurrentMetadataChanged {
+                    reason: format!(
+                        "execute_plan_refs_under_lock: ref {} not found (expected old or new)",
+                        ref_name
+                    ),
+                });
+            }
+            (Some(_), Err(e)) => {
+                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                    std::io::Error::other(format!(
+                        "execute_plan_refs_under_lock: lookup {}: {e}",
+                        ref_name
+                    )),
+                )));
+            }
+        }
+    }
+    Ok(())
+}
 fn sha256_bytes(data: &[u8]) -> [u8; 32] {
     use sha2::Digest;
     let mut hasher = sha2::Sha256::new();

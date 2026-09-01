@@ -40,6 +40,9 @@ class MainActivity : ComponentActivity() {
         // （/素笺/ → /Sujian/），再建立新目录；迁移幂等且不覆盖新数据。
         AndroidDataRoot.migrateLegacyChineseDataRoot()
         AndroidDataRoot.ensureDirectories()
+        // #644 评论 5490799656 问题1：创建 Git metadata 私有目录（filesDir/sujian-git/）。
+        // 此目录位于应用私有存储，不需要共享存储权限。
+        AndroidDataRoot.ensureGitMetadataDirectories(this)
         val initialDestination = intent?.getStringExtra("navigateTo")
         setContent {
             SujianApp(initialDestination = initialDestination)

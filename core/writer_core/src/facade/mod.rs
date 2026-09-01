@@ -68,6 +68,14 @@ pub struct WriterCore {
     /// 避免两份状态漂移。
     pub(crate) search_service: std::sync::Mutex<SearchIndexService>,
     pub(crate) starmap_stores: std::sync::Mutex<HashMap<String, StarMapStore>>,
+    /// #644 评论 5490799656 问题1：Android 私有 Git metadata 根目录。
+    ///
+    /// 位于 `context.filesDir/sujian-git/`，所有项目的可写 Git metadata
+    ///（`.git/`）的根目录。`None` 表示使用标准 Git 布局。
+    /// 构造 `GitRepoLayout` 时：`Some(root)` →
+    ///   `GitRepoLayout::with_external_git_dir(project_root, root.join(project_id))`
+    /// `None` → `GitRepoLayout::new(project_root)`。
+    pub(crate) git_metadata_root: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -86,6 +94,7 @@ impl WriterCore {
             secure_storage: None,
             search_service: std::sync::Mutex::new(SearchIndexService::new()),
             starmap_stores: std::sync::Mutex::new(HashMap::new()),
+            git_metadata_root: None,
         }
     }
 
@@ -105,6 +114,22 @@ impl WriterCore {
     /// 计算指定作品的根目录路径。
     pub(crate) fn project_root(&self, project_id: &str) -> PathBuf {
         self.projects_root.join(project_id)
+    }
+
+    /// #644 评论 5490799656 问题1：为指定作品构造 `GitRepoLayout`。
+    ///
+    /// Android 端 `git_metadata_root` 为 `Some(root)` 时，`git_dir` 放在
+    /// `root/<project_id>/`（应用私有 `filesDir/sujian-git/<project-id>/`）。
+    /// 其他平台或 Android 未配置时使用标准布局（`project_root.join(".git")`）。
+    pub(crate) fn project_git_layout(&self, project_id: &str) -> crate::storage::git_repo_layout::GitRepoLayout {
+        let project_root = self.project_root(project_id);
+        match &self.git_metadata_root {
+            Some(root) => crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
+                project_root,
+                root.join(project_id),
+            ),
+            None => crate::storage::git_repo_layout::GitRepoLayout::new(project_root),
+        }
     }
 }
 
