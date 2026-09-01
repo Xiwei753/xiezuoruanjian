@@ -85,6 +85,10 @@ pub struct GitMetadataSnapshot {
 /// #644 评论 5480360027：`plan` 是 write-ahead plan，在 `prepare_git_finalize` 时
 /// 一次完整生成，随 manifest 原子落盘。finalize 不再依赖只存在内存里的 mutation_log；
 /// 成功就 finish，失败/崩溃恢复都只依赖磁盘上的 plan。
+///
+/// #644 评论 5491531984 问题4：新增 `git_dir` 和 `worktree_root` 字段，
+/// 使崩溃恢复知道私有 git_dir 在哪里，不再硬编码 `target_root/.git`。
+/// 旧 manifest 中无此字段时反序列化为 None，解释为 legacy `target_root/.git`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitFinalizeRecoveryRecord {
     /// seed 时记录的 live Git 仓库状态（序列化友好版本）。
@@ -99,6 +103,16 @@ pub struct GitFinalizeRecoveryRecord {
     /// 新代码使用 `plan`，不再读写此字段。
     #[serde(default)]
     pub mutation_log: GitFinalizeMutationLog,
+    /// #644 评论 5491531984 问题4：可写 Git metadata 的根目录。
+    /// `None` 表示 legacy manifest，使用 `target_root/.git`。
+    /// `Some(path)` 表示私有 git_dir（如 `filesDir/sujian-git/<project-id>/`）。
+    #[serde(default)]
+    pub git_dir: Option<std::path::PathBuf>,
+    /// #644 评论 5491531984 问题4：用户可见文件的根目录（worktree）。
+    /// `None` 表示 legacy manifest，使用 `target_root`。
+    /// `Some(path)` 表示显式记录的 worktree root。
+    #[serde(default)]
+    pub worktree_root: Option<std::path::PathBuf>,
 }
 
 /// #644 评论 5480360027：write-ahead plan，在 `prepare_git_finalize` 时完整生成。
@@ -307,6 +321,7 @@ pub fn prepare_git_finalize(
     live_root: &Path,
     seed_state: &GitSeedState,
     staging_root: &Path,
+    explicit_git_dir: Option<&Path>,
 ) -> Result<(GitMetadataSnapshot, GitFinalizePlan)> {
     // #644 评论 5480360027：先尝试生成 plan 中与 live 无关的部分（staging HEAD、
     // 目标 index hash、ref_plans 的 new_oid），这样 NotGitRepo 路径也能拿到完整 plan。
@@ -327,11 +342,25 @@ pub fn prepare_git_finalize(
 
     crate::storage::git_runtime::ensure_initialized()?;
 
-    let live_repo = git2::Repository::open(live_root).map_err(|e| {
+    // #644 评论 5491531984 问题4：使用 explicit_git_dir 打开 live repo，
+    // 不再硬编码 live_root.join(".git")。
+    let effective_git_dir = explicit_git_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| live_root.join(".git"));
+
+    let live_repo = git2::Repository::open(&effective_git_dir).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "prepare_git_finalize: open live repo: {e}"
         )))
     })?;
+    // #644 评论 5491531984 问题2：外部 git_dir 需要设置 workdir 指向 worktree_root。
+    if explicit_git_dir.is_some() {
+        live_repo.set_workdir(live_root, false).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "prepare_git_finalize: set_workdir: {e}"
+            )))
+        })?;
+    }
 
     // 捕获 HEAD 快照。
     // #644 评论 5478237852 问题3：只有 NotFound 映射为 DidNotExist，其它错误向上传。
@@ -825,12 +854,19 @@ pub fn inspect_git_rollback_state(
     live_root: &Path,
     snapshot: &GitMetadataSnapshot,
     plan: &GitFinalizePlan,
+    explicit_git_dir: Option<&Path>,
 ) -> Result<GitRollbackState> {
     crate::storage::git_runtime::ensure_initialized()?;
 
+    // #644 评论 5491531984 问题4：使用 recovery record 中的 git_dir，
+    // 不再硬编码 live_root.join(".git")。
+    let effective_git_dir = explicit_git_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| live_root.join(".git"));
+
     // 1. repo_create=true 时判 ownership。
     if plan.repo_create {
-        let live_git = live_root.join(".git");
+        let live_git = effective_git_dir.clone();
         if !live_git.exists() {
             // repo install 没发生。需要 rollback（清理 tmp repo + 恢复文件）。
             return Ok(GitRollbackState::NeedsRollback);
@@ -855,8 +891,8 @@ pub fn inspect_git_rollback_state(
 
     // 2a. index 状态。
     if let Some(expected_hash) = plan.new_index_sha256 {
-        let index_path = live_root.join(".git").join("index");
-        let lock_path = live_root.join(".git").join("index.lock");
+        let index_path = effective_git_dir.join("index");
+        let lock_path = effective_git_dir.join("index.lock");
 
         // 检查 stale lock。
         if let Some(owner) = &plan.index_lock_owner {
@@ -917,7 +953,7 @@ pub fn inspect_git_rollback_state(
         plan.ref_plans.iter().map(|(name, _, _)| name.clone()).collect()
     };
     if !ref_lock_check_names.is_empty() {
-        let git_dir = live_root.join(".git");
+        let git_dir_ref = effective_git_dir.clone();
 
         // 评论 5489750244 问题4：inspect_git_rollback_state 恢复成纯只读函数。
         // 不再执行 clean_stale_ref_lock / clean_orphan_owner_marker，只做分类。
@@ -927,7 +963,7 @@ pub fn inspect_git_rollback_state(
         if let Some(owner) = &plan.ref_tx_owner {
             use crate::sync::ref_transaction::{inspect_ref_lock_owner, RefLockOwner};
             for ref_name in &ref_lock_check_names {
-                match inspect_ref_lock_owner(&git_dir, ref_name, owner) {
+                match inspect_ref_lock_owner(&git_dir_ref, ref_name, owner) {
                     RefLockOwner::Ours => {
                         // 本事务的 stale lock：classify 为 NeedsRollback，
                         // 真正的清理在 rollback_git_finalize 中。
@@ -1188,10 +1224,11 @@ pub fn commit_git_finalize(
     seed_state: &GitSeedState,
     snapshot: &GitMetadataSnapshot,
     plan: &GitFinalizePlan,
+    explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
     // 调用内部 finalize。失败时直接返回错误，不内部 rollback。
     // 调用方（sync_ops.rs）负责 inspect → preflight → rollback → file rollback。
-    finalize_git_repo_metadata_inner(live_root, staging_root, seed_state, snapshot, plan)
+    finalize_git_repo_metadata_inner(live_root, staging_root, seed_state, snapshot, plan, explicit_git_dir)
 }
 
 /// #644 评论 5485518160 修改点 2：`index_lock_owner=None` 旧 manifest 迁移判定结果。
@@ -1235,10 +1272,14 @@ pub fn check_index_lock_owner_migration(
     live_root: &Path,
     snapshot: &GitMetadataSnapshot,
     plan: &GitFinalizePlan,
+    explicit_git_dir: Option<&Path>,
 ) -> Result<IndexLockOwnerMigration> {
-    let git_dir = live_root.join(".git");
-    let lock_path = git_dir.join("index.lock");
-    let index_path = git_dir.join("index");
+    // #644 评论 5491531984 问题4：使用 recovery record 中的 git_dir。
+    let effective_git_dir = explicit_git_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| live_root.join(".git"));
+    let lock_path = effective_git_dir.join("index.lock");
+    let index_path = effective_git_dir.join("index");
 
     // canonical index.lock 已存在：不知道是谁的，不能 terminalize。
     if lock_path.exists() {
@@ -1310,9 +1351,13 @@ pub fn check_ref_tx_owner_migration(
     live_root: &Path,
     snapshot: &GitMetadataSnapshot,
     plan: &GitFinalizePlan,
+    explicit_git_dir: Option<&Path>,
 ) -> Result<RefTxOwnerMigration> {
     let _ = snapshot;
-    let git_dir = live_root.join(".git");
+    // #644 评论 5491531984 问题4：使用 recovery record 中的 git_dir。
+    let effective_git_dir = explicit_git_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| live_root.join(".git"));
 
     crate::storage::git_runtime::ensure_initialized()?;
 
@@ -1332,7 +1377,7 @@ pub fn check_ref_tx_owner_migration(
     };
     for ref_name in &ref_lock_check_names {
         // 1. 检查 canonical ref lock 是否存在。
-        let lock_path = git_dir.join(format!("{}.lock", ref_name));
+        let lock_path = effective_git_dir.join(format!("{}.lock", ref_name));
         if lock_path.exists() {
             return Ok(RefTxOwnerMigration::LockExists);
         }
@@ -1418,14 +1463,20 @@ pub fn rollback_git_finalize(
     live_root: &Path,
     snapshot: &GitMetadataSnapshot,
     plan: &GitFinalizePlan,
+    explicit_git_dir: Option<&Path>,
 ) -> Result<GitRollbackOutcome> {
     crate::storage::git_runtime::ensure_initialized()?;
+
+    // #644 评论 5491531984 问题4：使用 recovery record 中的 git_dir。
+    let effective_git_dir = explicit_git_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| live_root.join(".git"));
 
     // 1. #644 评论 5482310913 问题2 + #644 评论 5487751293 问题1：
     //    repo_create=true 时先判 ownership，再碰 index/refs。
     //    外部仓库的 index/lock/refs 一字节都不能碰。
     if plan.repo_create {
-        let live_git = live_root.join(".git");
+        let live_git = effective_git_dir.clone();
         if !live_git.exists() {
             // 本轮 repo install 没发生（rename 前崩溃）。清理本轮对应的 tmp_git
             //（基于 repo_create_owner 命名，无需扫猜）。然后回滚文件。
@@ -1525,7 +1576,7 @@ pub fn rollback_git_finalize(
         None
     };
 
-    let git_dir = repo.as_ref().map(|r| r.path().to_path_buf()).unwrap_or_else(|| live_root.join(".git"));
+    let git_dir = repo.as_ref().map(|r| r.path().to_path_buf()).unwrap_or_else(|| effective_git_dir.clone());
 
     let mut ref_tx: Option<RefTransaction<'_>> = None;
     if let Some(repo) = &repo {
@@ -1756,9 +1807,10 @@ pub fn recover_git_finalize(
     seed_state: &GitSeedState,
     snapshot: &GitMetadataSnapshot,
     plan: &GitFinalizePlan,
+    explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
     // 尝试完成 Git finalize。
-    match finalize_git_repo_metadata_inner(live_root, staging_root, seed_state, snapshot, plan) {
+    match finalize_git_repo_metadata_inner(live_root, staging_root, seed_state, snapshot, plan, explicit_git_dir) {
         Ok(()) => {
             log::info!("recover_git_finalize: successfully completed pending Git finalize");
             Ok(())
@@ -1776,7 +1828,7 @@ pub fn recover_git_finalize(
                     "recover_git_finalize: finalize failed ({}), rolling back Git metadata",
                     e
                 );
-                match rollback_git_finalize(live_root, snapshot, plan) {
+                match rollback_git_finalize(live_root, snapshot, plan, None) {
                     Ok(GitRollbackOutcome::Reverted) => {
                         // Git metadata 已回滚，上层可继续回滚文件。
                         Err(e)
@@ -1821,6 +1873,7 @@ pub fn try_commit_git_finalize(
     seed_state: Option<&GitSeedState>,
     snapshot: Option<&GitMetadataSnapshot>,
     plan: Option<&GitFinalizePlan>,
+    explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
     let Some(state) = seed_state else {
         return Ok(());
@@ -1835,7 +1888,7 @@ pub fn try_commit_git_finalize(
             std::io::Error::other("missing GitFinalizePlan for Git backend"),
         )));
     };
-    commit_git_finalize(live_root, staging_root, state, snap, plan)
+    commit_git_finalize(live_root, staging_root, state, snap, plan, explicit_git_dir)
 }
 
 /// #644 评论 5482310913 问题1：成功收尾时清理 owner marker。
@@ -1848,9 +1901,11 @@ pub fn try_commit_git_finalize(
 ///
 /// `plan.repo_create_owner` 为 `None` 时是 no-op（非 NotGitRepo 路径）。
 /// marker 不存在时也是 no-op（已清理或从未创建）。
-pub fn cleanup_repo_create_owner_marker(live_root: &Path, plan: &GitFinalizePlan) {
+pub fn cleanup_repo_create_owner_marker(live_root: &Path, plan: &GitFinalizePlan, explicit_git_dir: Option<&Path>) {
     if plan.repo_create_owner.is_some() {
-        let marker_path = live_root.join(".git").join(".sujian-sync-owner");
+        let default_git_dir = live_root.join(".git");
+        let git_dir_ref = explicit_git_dir.unwrap_or(&default_git_dir);
+        let marker_path = git_dir_ref.join(".sujian-sync-owner");
         let _ = fs::remove_file(&marker_path);
     }
 }
@@ -1871,6 +1926,7 @@ fn finalize_git_repo_metadata_inner(
     seed_state: &GitSeedState,
     snapshot: &GitMetadataSnapshot,
     plan: &GitFinalizePlan,
+    explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
     crate::storage::git_runtime::ensure_initialized()?;
 
@@ -1920,6 +1976,7 @@ fn finalize_git_repo_metadata_inner(
             new_oid,
             &branch_name,
             plan,
+            explicit_git_dir,
         ),
         GitSeedState::Unborn { head_ref } => finalize_unborn(
             live_root,
@@ -1929,6 +1986,7 @@ fn finalize_git_repo_metadata_inner(
             head_ref,
             snapshot,
             plan,
+            explicit_git_dir,
         ),
         GitSeedState::Existing { head_ref, head_oid } => finalize_existing(
             live_root,
@@ -1939,6 +1997,7 @@ fn finalize_git_repo_metadata_inner(
             *head_oid,
             snapshot,
             plan,
+            explicit_git_dir,
         ),
         GitSeedState::Detached { head_oid } => finalize_detached(
             live_root,
@@ -1948,6 +2007,7 @@ fn finalize_git_repo_metadata_inner(
             *head_oid,
             snapshot,
             plan,
+            explicit_git_dir,
         ),
     }
 }
@@ -1968,9 +2028,10 @@ fn finalize_not_git_repo(
     new_oid: git2::Oid,
     branch_name: &str,
     plan: &GitFinalizePlan,
+    explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
     let staging_git = staging_root.join(".git");
-    let live_git = live_root.join(".git");
+    let live_git = explicit_git_dir.map(|p| p.to_path_buf()).unwrap_or_else(|| live_root.join(".git"));
 
     // #644 评论 5482310913 问题2：tmp_git 目录名基于 repo_create_owner，
     // 使恢复时能精准清理本轮 tmp repo，不用扫猜。
@@ -2090,12 +2151,23 @@ fn finalize_unborn(
     head_ref: &str,
     snapshot: &GitMetadataSnapshot,
     plan: &GitFinalizePlan,
+    explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
-    let live_repo = git2::Repository::open(live_root).map_err(|e| {
+    let effective_git_dir = explicit_git_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| live_root.join(".git"));
+    let live_repo = git2::Repository::open(&effective_git_dir).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "finalize_unborn: open live repo: {e}"
         )))
     })?;
+    if explicit_git_dir.is_some() {
+        live_repo.set_workdir(live_root, false).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "finalize_unborn: set_workdir: {e}"
+            )))
+        })?;
+    }
     let live_odb = live_repo.odb().map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "finalize_unborn: live odb: {e}"
@@ -2115,7 +2187,7 @@ fn finalize_unborn(
 
     // #644 评论 5477439446 问题2：在第一次改 live Git metadata 之前做并发校验。
     // 校验失败返回 ConcurrentMetadataChanged，不触发 rollback。
-    verify_git_metadata_unchanged(live_root, snapshot, head_ref)?;
+    verify_git_metadata_unchanged(live_root, snapshot, head_ref, explicit_git_dir)?;
 
     // #644 评论 5480360027 修复点 3 + #644 评论 5484539222 缺陷1：index 原生锁边界 + 持久 ownership。
     // 先在临时目录生成目标 index，获取 .git/index.lock（OwnedIndexLock hard_link），
@@ -2132,6 +2204,7 @@ fn finalize_unborn(
         new_oid,
         snapshot,
         index_lock_owner,
+        explicit_git_dir,
     )?;
 
     // #644 评论 5490799656 问题4：统一使用 plan 作为唯一事实。
@@ -2236,12 +2309,23 @@ fn finalize_existing(
     base_oid: git2::Oid,
     snapshot: &GitMetadataSnapshot,
     plan: &GitFinalizePlan,
+    explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
-    let live_repo = git2::Repository::open(live_root).map_err(|e| {
+    let effective_git_dir = explicit_git_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| live_root.join(".git"));
+    let live_repo = git2::Repository::open(&effective_git_dir).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "finalize_existing: open live repo: {e}"
         )))
     })?;
+    if explicit_git_dir.is_some() {
+        live_repo.set_workdir(live_root, false).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "finalize_existing: set_workdir: {e}"
+            )))
+        })?;
+    }
     let live_odb = live_repo.odb().map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "finalize_existing: live odb: {e}"
@@ -2261,7 +2345,7 @@ fn finalize_existing(
 
     // #644 评论 5477439446 问题2：在第一次改 live Git metadata 之前做并发校验。
     // 校验失败返回 ConcurrentMetadataChanged，不触发 rollback。
-    verify_git_metadata_unchanged(live_root, snapshot, head_ref)?;
+    verify_git_metadata_unchanged(live_root, snapshot, head_ref, explicit_git_dir)?;
 
     // #644 评论 5480360027 修复点 3 + #644 评论 5484539222 缺陷1：index 原生锁边界 + 持久 ownership。
     let index_lock_owner = plan.index_lock_owner.as_deref().ok_or_else(|| {
@@ -2276,6 +2360,7 @@ fn finalize_existing(
         new_oid,
         snapshot,
         index_lock_owner,
+        explicit_git_dir,
     )?;
 
     // #644 评论 5490799656 问题4：统一使用 plan 作为唯一事实。
@@ -2387,12 +2472,23 @@ fn finalize_detached(
     base_oid: git2::Oid,
     snapshot: &GitMetadataSnapshot,
     plan: &GitFinalizePlan,
+    explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
-    let live_repo = git2::Repository::open(live_root).map_err(|e| {
+    let effective_git_dir = explicit_git_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| live_root.join(".git"));
+    let live_repo = git2::Repository::open(&effective_git_dir).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "finalize_detached: open live repo: {e}"
         )))
     })?;
+    if explicit_git_dir.is_some() {
+        live_repo.set_workdir(live_root, false).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "finalize_detached: set_workdir: {e}"
+            )))
+        })?;
+    }
     let live_odb = live_repo.odb().map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "finalize_detached: live odb: {e}"
@@ -2412,7 +2508,7 @@ fn finalize_detached(
 
     // #644 评论 5478237852 问题2：preflight verify before writing.
     // #644 评论 5481496190 问题4：ConcurrentMetadataChanged 原样向上传播，不降级。
-    verify_git_metadata_unchanged(live_root, snapshot, "HEAD")?;
+    verify_git_metadata_unchanged(live_root, snapshot, "HEAD", explicit_git_dir)?;
 
     // #644 评论 5480360027 修复点 3 + #644 评论 5484539222 缺陷1：index 原生锁边界 + 持久 ownership。
     // #644 评论 5481496190 问题4：ConcurrentMetadataChanged 原样向上传播，不降级。
@@ -2428,6 +2524,7 @@ fn finalize_detached(
         new_oid,
         snapshot,
         index_lock_owner,
+        explicit_git_dir,
     )?;
 
     // #644 评论 5490799656 问题4：统一使用 plan 作为唯一事实。
@@ -2895,11 +2992,12 @@ fn install_index_with_lock(
     new_oid: git2::Oid,
     snapshot: &GitMetadataSnapshot,
     owner: &str,
+    explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
     // 1. 在 staging .git 目录下生成目标 index 字节。
     let target_index_bytes = generate_target_index_bytes(staging_repo, new_oid)?;
 
-    let git_dir = live_root.join(".git");
+    let git_dir = explicit_git_dir.map(|p| p.to_path_buf()).unwrap_or_else(|| live_root.join(".git"));
     let index_path = git_dir.join("index");
 
     // 2. OwnedIndexLock::acquire：O_EXCL 创建 lock + 写 owner metadata + 写 prepared file。
@@ -3145,12 +3243,23 @@ fn verify_git_metadata_unchanged(
     live_root: &Path,
     snapshot: &GitMetadataSnapshot,
     head_ref: &str,
+    explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
-    let live_repo = git2::Repository::open(live_root).map_err(|e| {
+    let effective_git_dir = explicit_git_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| live_root.join(".git"));
+    let live_repo = git2::Repository::open(&effective_git_dir).map_err(|e| {
         GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
             "verify_git_metadata_unchanged: open live repo: {e}"
         ))))
     })?;
+    if explicit_git_dir.is_some() {
+        live_repo.set_workdir(live_root, false).map_err(|e| {
+            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
+                "verify_git_metadata_unchanged: set_workdir: {e}"
+            ))))
+        })?;
+    }
 
     // 1. 校验 HEAD。
     let current_head = read_ref_snapshot(&live_repo, "HEAD")?;
@@ -3464,7 +3573,7 @@ mod tests {
         fs::create_dir_all(&staging).unwrap();
 
         let (snapshot, plan) =
-            prepare_git_finalize(&live, &GitSeedState::NotGitRepo, &staging).unwrap();
+            prepare_git_finalize(&live, &GitSeedState::NotGitRepo, &staging, None).unwrap();
         assert!(matches!(snapshot.head, RefSnapshot::DidNotExist));
         assert!(snapshot.refs.is_empty());
         assert!(matches!(snapshot.index, IndexSnapshot::Missing));
@@ -3490,7 +3599,7 @@ mod tests {
         let seed = GitSeedState::Unborn {
             head_ref: "refs/heads/main".to_string(),
         };
-        let (snapshot, plan) = prepare_git_finalize(&live, &seed, &staging).unwrap();
+        let (snapshot, plan) = prepare_git_finalize(&live, &seed, &staging, None).unwrap();
         assert!(matches!(snapshot.head, RefSnapshot::Symbolic { .. }));
         assert!(snapshot.refs.contains_key("refs/heads/main"));
         assert!(snapshot.repo_existed);
@@ -3527,7 +3636,7 @@ mod tests {
             head_ref: "refs/heads/main".to_string(),
             head_oid: commit_oid,
         };
-        let (snapshot, plan) = prepare_git_finalize(&live, &seed, &staging).unwrap();
+        let (snapshot, plan) = prepare_git_finalize(&live, &seed, &staging, None).unwrap();
         assert!(matches!(snapshot.head, RefSnapshot::Symbolic { .. }));
         assert!(matches!(snapshot.index, IndexSnapshot::Bytes(_)));
         assert!(snapshot.refs.contains_key("refs/heads/main"));
@@ -3564,7 +3673,7 @@ mod tests {
             head_ref: "refs/heads/main".to_string(),
             head_oid: git2::Oid::zero(),
         };
-        let (snapshot, _plan) = prepare_git_finalize(&live, &seed, &staging).unwrap();
+        let (snapshot, _plan) = prepare_git_finalize(&live, &seed, &staging, None).unwrap();
         let original_index = match &snapshot.index {
             IndexSnapshot::Bytes(b) => b.clone(),
             _ => panic!("expected IndexSnapshot::Bytes"),
@@ -3590,7 +3699,7 @@ mod tests {
             ref_tx_owner: None,
             ref_lock_names: Vec::new(),
         };
-        rollback_git_finalize(&live, &snapshot, &plan).unwrap();
+        rollback_git_finalize(&live, &snapshot, &plan, None).unwrap();
         let restored_index = fs::read(live.join(".git").join("index")).unwrap();
         assert_eq!(restored_index, original_index);
     }
@@ -3627,7 +3736,7 @@ mod tests {
         let seed = GitSeedState::Unborn {
             head_ref: "refs/heads/main".to_string(),
         };
-        let (snapshot, plan) = prepare_git_finalize(&live, &seed, &staging).unwrap();
+        let (snapshot, plan) = prepare_git_finalize(&live, &seed, &staging, None).unwrap();
         // plan 应有目标 index hash。
         assert!(
             plan.new_index_sha256.is_some(),
@@ -3700,6 +3809,7 @@ mod tests {
             new_oid,
             &snapshot,
             "test-owner",
+            None,
         );
         assert!(matches!(
             result,
@@ -3783,7 +3893,7 @@ mod tests {
         };
 
         // rollback 应成功（current == new_oid，反向 CAS 回 old_oid）。
-        rollback_git_finalize(&live, &snapshot, &plan).unwrap();
+        rollback_git_finalize(&live, &snapshot, &plan, None).unwrap();
 
         // 验证 ref 已恢复到 old_oid（反向 CAS 成功）。
         let repo2 = git2::Repository::open(&live).unwrap();
@@ -3821,7 +3931,7 @@ mod tests {
 
         // NotGitRepo 路径：plan 应完整（repo_create=true, new_index_sha256=Some, ref_plans 非空）。
         let (snapshot, plan) =
-            prepare_git_finalize(&live, &GitSeedState::NotGitRepo, &staging).unwrap();
+            prepare_git_finalize(&live, &GitSeedState::NotGitRepo, &staging, None).unwrap();
         assert!(plan.repo_create);
         assert!(plan.new_index_sha256.is_some());
         assert_eq!(plan.ref_plans.len(), 1);
@@ -3896,7 +4006,7 @@ mod tests {
         // 第二次 rollback：current index == original (== snapshot.index)。
         // 预期：no-op，返回 Ok(Reverted)。
         // 当前：index CAS miss（current != new），返回 Err。
-        let result = rollback_git_finalize(&live, &snapshot, &plan);
+        let result = rollback_git_finalize(&live, &snapshot, &plan, None);
         assert!(
             result.is_ok(),
             "rollback should be idempotent when index already reverted to snapshot; \
@@ -3995,7 +4105,7 @@ mod tests {
         // 第二次 rollback：current ref == old_oid (== snapshot ref)。
         // 预期：no-op，返回 Ok(Reverted)。
         // 当前：ref CAS miss（current == old != new），返回 Err。
-        let result = rollback_git_finalize(&live, &snapshot, &plan);
+        let result = rollback_git_finalize(&live, &snapshot, &plan, None);
         assert!(
             result.is_ok(),
             "rollback should be idempotent when ref already reverted to old_oid; \
@@ -4071,7 +4181,7 @@ mod tests {
         // rollback：current index == new_index，index_is_ours = true。
         // 当前：恢复 original，然后删 lock（危险）。
         // 预期：不应删别人的 lock。
-        let _ = rollback_git_finalize(&live, &snapshot, &plan);
+        let _ = rollback_git_finalize(&live, &snapshot, &plan, None);
 
         assert!(
             lock_path.exists(),

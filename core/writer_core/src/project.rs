@@ -45,6 +45,17 @@ pub struct Project {
     clippy::type_complexity
 )]
 pub fn list_projects(projects_root: &Path) -> Result<Vec<Project>> {
+    list_projects_with_layout(projects_root, None::<Box<dyn Fn(&str) -> crate::storage::git_repo_layout::GitRepoLayout>>)
+}
+
+/// #644 评论 5491531984 问题1：带 layout 的作品列表。
+///
+/// `git_layout_fn` 是一个闭包，接受 project_id 返回该作品的 GitRepoLayout。
+/// `None` 时使用标准布局。
+pub fn list_projects_with_layout(
+    projects_root: &Path,
+    git_layout_fn: Option<Box<dyn Fn(&str) -> crate::storage::git_repo_layout::GitRepoLayout>>,
+) -> Result<Vec<Project>> {
     let projects_dir = projects_root;
     if !projects_dir.exists() {
         return Ok(Vec::new());
@@ -62,7 +73,14 @@ pub fn list_projects(projects_root: &Path) -> Result<Vec<Project>> {
                     if let Ok(project) = serde_json::from_str::<Project>(&content) {
                         // 旧作品（无 .git/）在读取到有效 project.json 后永久迁移为 Git 仓库，
                         // 不等到第一次同步才初始化（Issue #600）。
-                        crate::storage::project_git::ensure_project_repo(&entry.path())?;
+                        // #644 评论 5491531984 问题1：通过 layout 确定 Git 物理位置，
+                        // 不再让 project.rs 自己决定。
+                        if let Some(ref layout_fn) = git_layout_fn {
+                            let layout = layout_fn(&project.id);
+                            crate::storage::project_git::ensure_project_repo_with_layout(&layout)?;
+                        } else {
+                            crate::storage::project_git::ensure_project_repo(&entry.path())?;
+                        }
                         projects.push(project);
                     }
                 }
@@ -195,6 +213,18 @@ pub fn list_project_summaries(projects_root: &Path) -> Result<Vec<ProjectSummary
 /// `order` 字段取现有项目最大 order + 1，保证新项目排在最后。
 /// 自动调用 `volume::create_volume` 创建默认卷，保持产品一致性。
 pub fn create_project(projects_root: &Path, title: &str) -> Result<Project> {
+    create_project_with_layout(projects_root, title, None)
+}
+
+/// #644 评论 5491531984 问题1：带 layout 的作品创建。
+///
+/// `git_layout` 指定新建作品的 Git 仓库物理位置。
+/// `None` 时使用标准布局（`project_root.join(".git")`）。
+pub fn create_project_with_layout(
+    projects_root: &Path,
+    title: &str,
+    git_layout: Option<crate::storage::git_repo_layout::GitRepoLayout>,
+) -> Result<Project> {
     let projects = list_projects(projects_root)?;
     let order = projects
         .iter()
@@ -216,7 +246,12 @@ pub fn create_project(projects_root: &Path, title: &str) -> Result<Project> {
     let project_dir = projects_root.join(&id);
     fs::create_dir_all(&project_dir)?;
     // 每个作品目录自身就是 Git 仓库（Issue #600）：先初始化仓库，再写 project.json。
-    crate::storage::project_git::ensure_project_repo(&project_dir)?;
+    // #644 评论 5491531984 问题1：通过 layout 确定 Git 物理位置。
+    if let Some(layout) = git_layout {
+        crate::storage::project_git::ensure_project_repo_with_layout(&layout)?;
+    } else {
+        crate::storage::project_git::ensure_project_repo(&project_dir)?;
+    }
     fs::create_dir_all(project_dir.join("volumes"))?;
     fs::create_dir_all(project_dir.join("characters"))?;
 

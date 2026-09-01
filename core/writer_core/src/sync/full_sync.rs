@@ -56,6 +56,11 @@ pub struct PlannedTarget {
     /// #644 评论 5473401065 第1节：target 对应的 live root，
     /// 供 `prepare_staging_runs` 在无锁状态下创建 staging 时使用。
     pub target_live_root: PathBuf,
+    /// #644 评论 5491531984 问题1：target 的 Git 仓库布局。
+    /// `None` 表示标准 Git 布局（`live_root/.git`）。
+    /// `Some(layout)` 时 Seed/Transfer/Commit 使用 layout 指定的 git_dir，
+    /// 不再从 `live_root` 猜路径。
+    pub git_layout: Option<crate::storage::git_repo_layout::GitRepoLayout>,
 }
 
 /// Transfer 阶段产出 — 各 target 的 `SyncResult`，待 Commit 聚合。

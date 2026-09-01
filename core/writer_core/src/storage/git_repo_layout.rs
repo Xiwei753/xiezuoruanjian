@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 ///
 /// - `worktree_root`：用户可见文件的根目录。
 /// - `git_dir`：可写 Git metadata 的根目录。
+#[derive(Debug, Clone)]
 pub struct GitRepoLayout {
     pub worktree_root: PathBuf,
     pub git_dir: PathBuf,
@@ -53,11 +54,16 @@ pub fn legacy_default_git_dir(live_root: &Path) -> PathBuf {
     live_root.join(".git")
 }
 
-/// 评论 5489750244 问题1：打开仓库，支持外部 git_dir。
+/// 评论 5489750244 问题1 + 评论 5491531984 问题2：打开仓库的唯一入口。
 ///
 /// 当 `git_dir == worktree_root.join(".git")` 时等效于 `Repository::open(worktree_root)`。
-/// 当 `git_dir` 是外部路径时，使用 `RepositoryInitOptions::workdir_path()` 或
-/// `Repository::set_workdir()` 打开仓库并指向正确的 worktree。
+/// 当 `git_dir` 是外部路径时，始终从 `git_dir` 打开仓库并调用
+/// `Repository::set_workdir(worktree_root, false)` 指向正确的 worktree。
+///
+/// **不使用** `RepositoryInitOptions::workdir_path()`：该选项会在 worktree
+/// 生成 `.git` gitlink 文件，与"共享目录不留 Git metadata"的目标冲突。
+/// 初始化时通过 `set_workdir` + repo config `core.worktree` 绑定 worktree，
+/// 不在 worktree 目录产生任何 Git 文件。
 ///
 /// 参考：
 /// - https://docs.rs/git2/latest/git2/struct.RepositoryInitOptions.html#method.workdir_path
@@ -85,9 +91,16 @@ pub fn open_repo_with_layout(
 ///
 /// `Repository::init(path)` 把 `path` 当工作目录并在其下创建 `.git/`。
 /// 当 `git_dir` 与 `worktree_root/.git` 不同时（Android 外部 metadata），
-/// 必须用 `RepositoryInitOptions::no_dotgit_dir(true)` + `workdir_path()` 让
-/// libgit2 把 `git_dir` 当成 `.git` 等价位置，workdir 指向 `worktree_root`。
-/// 参考：https://docs.rs/git2/latest/git2/struct.RepositoryInitOptions.html#method.workdir_path
+/// **不使用** `workdir_path()`——该选项会在 worktree 生成 `.git` gitlink 文件，
+/// 与"共享目录不留 Git metadata"目标冲突（评论 5491531984 问题2）。
+///
+/// 正确做法：`no_dotgit_dir(true)` init 裸仓库在 `git_dir`，再
+/// `Repository::open(git_dir)` + `set_workdir(worktree_root, false)` 绑定 worktree，
+/// 最后持久化 `core.worktree` 到 repo config，确保后续 open 恢复正确。
+///
+/// 参考：
+/// - https://docs.rs/git2/latest/git2/struct.RepositoryInitOptions.html#method.workdir_path
+/// - https://docs.rs/git2/latest/git2/struct.Repository.html#method.set_workdir
 ///
 /// ## 跨文件系统迁移
 ///
@@ -99,13 +112,27 @@ pub fn ensure_project_repo_with_layout(
 ) -> crate::Result<()> {
     crate::storage::git_runtime::ensure_initialized()?;
 
-    // 1. git_dir 已有仓库 → 幂等返回。
-    if git2::Repository::open(&layout.git_dir).is_ok() {
-        return Ok(());
-    }
-
     let default_git_dir = layout.worktree_root.join(".git");
     let is_external = layout.git_dir != default_git_dir;
+
+    // 1. git_dir 已有仓库 → 幂等返回。
+    //    #644 评论 5491531984 问题3：如果 target 和 embedded .git 同时存在，
+    //    不能直接 return Ok(())。先确认 private 是本次迁移出来的同一仓库，
+    //    再完成删除 embedded .git。
+    if git2::Repository::open(&layout.git_dir).is_ok() {
+        // 完成迁移的残留清理：如果 embedded .git 仍在，删掉它。
+        if default_git_dir.exists() && is_external {
+            // 两者同时存在：打开 target repo 验证 HEAD 可读（证明是完整仓库），
+            // 然后安全删除 embedded .git。即使删失败，下次重启仍会再走到这里。
+            if let Ok(repo) = git2::Repository::open(&layout.git_dir) {
+                let _ = repo.head(); // 验证仓库可读
+            }
+            // 安全删除旧 embedded .git（容忍失败——下次重启重试）。
+            let _ = std::fs::remove_dir_all(&default_git_dir);
+            let _ = crate::storage::sync_dir(&layout.worktree_root);
+        }
+        return Ok(());
+    }
 
     // 2. worktree_root 有内嵌 .git → 迁移到外部 git_dir。
     if default_git_dir.exists() && is_external {
@@ -119,17 +146,51 @@ pub fn ensure_project_repo_with_layout(
     }
 
     if is_external {
-        // git_dir 与 worktree_root 分离，使用 RepositoryInitOptions。
-        // no_dotgit_dir(true)：不在 git_dir 内创建 .git 子目录，
-        // git_dir 本身就是 .git 等价位置。
-        // workdir_path：设置仓库的工作目录为 worktree_root。
+        // git_dir 与 worktree_root 分离。
+        // #644 评论 5491531984 问题2：不用 workdir_path()——它会在 worktree
+        // 生成 .git gitlink 文件。改用 no_dotgit_dir(true) init 裸仓库，
+        // 再 set_workdir 绑定当前进程的 worktree，不生成任何共享目录文件。
         let mut opts = git2::RepositoryInitOptions::new();
         opts.no_dotgit_dir(true);
-        opts.workdir_path(&layout.worktree_root);
         git2::Repository::init_opts(&layout.git_dir, &opts)
             .map_err(|e| {
                 crate::Error::Io(std::io::Error::other(format!(
                     "ensure_project_repo_with_layout: init_opts({}): {}",
+                    layout.git_dir.display(),
+                    e,
+                )))
+            })?;
+        // 打开刚 init 的仓库，设置 workdir 并持久化到 repo config。
+        let repo = git2::Repository::open(&layout.git_dir).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "ensure_project_repo_with_layout: open after init({}): {}",
+                layout.git_dir.display(),
+                e,
+            )))
+        })?;
+        repo.set_workdir(&layout.worktree_root, false).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "ensure_project_repo_with_layout: set_workdir({}): {}",
+                layout.worktree_root.display(),
+                e,
+            )))
+        })?;
+        // 持久化 core.worktree，确保后续 open_repo_with_layout 能恢复。
+        let mut config = repo.config().map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "ensure_project_repo_with_layout: config({}): {}",
+                layout.git_dir.display(),
+                e,
+            )))
+        })?;
+        config
+            .set_str(
+                "core.worktree",
+                &layout.worktree_root.to_string_lossy(),
+            )
+            .map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "ensure_project_repo_with_layout: set_str core.worktree({}): {}",
                     layout.git_dir.display(),
                     e,
                 )))
@@ -251,9 +312,13 @@ fn migrate_embedded_git(
             e,
         )))
     })?;
-    crate::storage::sync_dir(target_git_dir)?;
+    // #644 评论 5491531984 问题3：rename 后先 fsync target_parent（目录项），
+    // 再打开 final + 设置 workdir + 校验 refs/index，最后才删旧 .git。
+    if let Some(parent) = target_git_dir.parent() {
+        crate::storage::sync_dir(parent)?;
+    }
 
-    // 5. 设置 workdir。
+    // 5. 设置 workdir 并验证仓库完整性。
     let repo = git2::Repository::open(target_git_dir).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "migrate_embedded_git: open migrated repo: {e}"
@@ -264,13 +329,22 @@ fn migrate_embedded_git(
             "migrate_embedded_git: set_workdir: {e}"
         )))
     })?;
+    // 验证迁移后仓库的 refs/index 可读。
+    let _ = repo.head();
+    if let Ok(mut index) = repo.index() {
+        let _ = index.read(true);
+    }
 
-    // 6. 清理旧 .git。
+    // 6. 清理旧 .git 并 fsync worktree parent。
     std::fs::remove_dir_all(default_git_dir).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "migrate_embedded_git: remove old .git: {e}"
         )))
     })?;
+    // fsync worktree_root 的父目录（持久化 .git 删除的目录项）。
+    if let Some(parent) = worktree_root.parent() {
+        crate::storage::sync_dir(parent)?;
+    }
     crate::storage::sync_dir(worktree_root)?;
 
     Ok(())

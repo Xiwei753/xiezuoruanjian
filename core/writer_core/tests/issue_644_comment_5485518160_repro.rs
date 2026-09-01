@@ -595,7 +595,7 @@ fn migration_no_lock_current_is_old_returns_already_reverted() {
 
             ref_lock_names: Vec::new(),    };
 
-    let result = check_index_lock_owner_migration(&live, &snapshot, &plan).unwrap();
+    let result = check_index_lock_owner_migration(&live, &snapshot, &plan, None).unwrap();
     assert!(
         matches!(result, IndexLockOwnerMigration::AlreadyReverted),
         "no lock + current == old → AlreadyReverted, got: {:?}",
@@ -639,7 +639,7 @@ fn migration_no_lock_current_is_new_returns_migrate_to_new_owner() {
 
             ref_lock_names: Vec::new(),    };
 
-    let result = check_index_lock_owner_migration(&live, &snapshot, &plan).unwrap();
+    let result = check_index_lock_owner_migration(&live, &snapshot, &plan, None).unwrap();
     match result {
         IndexLockOwnerMigration::MigrateToNewOwner(owner) => {
             // 验证生成了非空 owner UUID
@@ -687,7 +687,7 @@ fn migration_lock_exists_returns_lock_exists() {
 
             ref_lock_names: Vec::new(),    };
 
-    let result = check_index_lock_owner_migration(&live, &snapshot, &plan).unwrap();
+    let result = check_index_lock_owner_migration(&live, &snapshot, &plan, None).unwrap();
     assert!(
         matches!(result, IndexLockOwnerMigration::LockExists),
         "lock exists → LockExists, got: {:?}",
@@ -731,7 +731,7 @@ fn migration_current_neither_old_nor_new_returns_concurrent_modification() {
 
             ref_lock_names: Vec::new(),    };
 
-    let result = check_index_lock_owner_migration(&live, &snapshot, &plan).unwrap();
+    let result = check_index_lock_owner_migration(&live, &snapshot, &plan, None).unwrap();
     assert!(
         matches!(result, IndexLockOwnerMigration::ConcurrentModification),
         "current neither old nor new → ConcurrentModification, got: {:?}",
@@ -843,6 +843,7 @@ fn finalize_existing_detached_head_after_preflight_returns_finalize_failed() {
         },
         &snapshot,
         &plan,
+        None,
     );
 
     // 验证：应返回 FinalizeFailed 或 RollbackFailed（不是 ConcurrentMetadataChanged）

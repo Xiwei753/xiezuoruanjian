@@ -55,12 +55,16 @@ pub enum GitSeedState {
 /// 临时 clone 目录名（位于 `run_root` 下，与 `base/`、`staging/` 同级）。
 const GIT_REPO_TMP_SUBDIR: &str = "git-repo";
 
-/// #644 评论 5473789298 第1节：Git 后端的隔离 staging — 保留仓库身份。
+use crate::storage::git_repo_layout::GitRepoLayout;
+
+/// #644 评论 5473789298 第1节 + 评论 5491531984 问题1：Git 后端的隔离 staging — 保留仓库身份。
 ///
 /// 见模块文档的流程说明。本函数是 [`StagingRun`] 的伴随操作，通过其公开方法
 /// （[`StagingRun::seed_from_live`] / [`StagingRun::staging_root`] /
 /// [`StagingRun::run_root`]）访问隔离 run 的目录，不在 `staging.rs` 里塞
 /// Git 专属逻辑。
+///
+/// `git_layout` 指定 Git 仓库的物理位置。`None` 时使用标准布局（`live_root/.git`）。
 ///
 /// # 返回
 ///
@@ -75,21 +79,40 @@ const GIT_REPO_TMP_SUBDIR: &str = "git-repo";
 ///   `file seed + git init`（那会丢掉历史/remote/HEAD）；
 /// - 把 `.git/` 从临时目录移到 staging 失败 → 返回 `Err`。
 #[allow(clippy::too_many_lines)]
-pub fn seed_from_live_as_git_repo(run: &StagingRun, live_root: &Path) -> Result<GitSeedState> {
+pub fn seed_from_live_as_git_repo(
+    run: &StagingRun,
+    live_root: &Path,
+    git_layout: Option<&GitRepoLayout>,
+) -> Result<GitSeedState> {
     // 1. 先把 live 当前工作区复制进 base/ 和 staging/。这才是同步基线。
     run.seed_from_live(live_root)?;
 
-    // 2. live 不是 Git repo 时，保持 staging 非 repo，不伪造 git init。
-    if !live_root.join(".git").exists() {
+    // 2. #644 评论 5491531984 问题1：用 layout 判断 live 是否是 Git repo。
+    // 有 layout 时检查 layout.git_dir；无 layout 时检查 live_root.join(".git")。
+    let live_git_exists = match git_layout {
+        Some(layout) => layout.git_dir.exists(),
+        None => live_root.join(".git").exists(),
+    };
+    if !live_git_exists {
         return Ok(GitSeedState::NotGitRepo);
     }
 
     // 3. live 是 Git repo：记录 seed 时的 HEAD 状态，供 finalize 决定路径。
-    let live_repo = git2::Repository::open(live_root).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "failed to open live git repo: {e}"
-        )))
-    })?;
+    // #644 评论 5491531984 问题1：用 open_repo_with_layout 打开仓库，
+    // 不再硬编码 git2::Repository::open(live_root)。
+    let live_repo = match git_layout {
+        Some(layout) => crate::storage::git_repo_layout::open_repo_with_layout(layout)
+            .map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "failed to open live git repo with layout: {e}"
+                )))
+            })?,
+        None => git2::Repository::open(live_root).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "failed to open live git repo: {e}"
+            )))
+        })?,
+    };
     // #644 评论 5475413230 第3节 + #644 评论 5483920624 问题4：
     // 从 HEAD 读真实目标，不猜 main。unborn 的 HEAD 仍然是 symbolic ref，
     // 可能指向 main、master 或其它分支。
@@ -151,8 +174,13 @@ pub fn seed_from_live_as_git_repo(run: &StagingRun, live_root: &Path) -> Result<
         }
         Err(e) if e.code() == git2::ErrorCode::UnbornBranch => {
             // #644 评论 5483920624 问题4：只有 libgit2 明确的 UnbornBranch 语义
-            // 才走 Unborn，且 head_ref 必须从 .git/HEAD 文件真实解析出来。
-            let head_file = live_root.join(".git").join("HEAD");
+            // 才走 Unborn，且 head_ref 必须从 git_dir/HEAD 文件真实解析出来。
+            // #644 评论 5491531984 问题1：使用 layout 的 git_dir 而非硬编码 live_root.join(".git")。
+            let git_dir = match git_layout {
+                Some(layout) => layout.git_dir.clone(),
+                None => live_root.join(".git"),
+            };
+            let head_file = git_dir.join("HEAD");
             let content = fs::read_to_string(&head_file).map_err(|e| {
                 crate::Error::Io(std::io::Error::other(format!(
                     "seed_from_live_as_git_repo: UnbornBranch but failed to read \
@@ -258,9 +286,10 @@ mod tests {
             tmp.path(),
             live.clone(),
             crate::sync::types::BackendType::Git,
+            None,
         )
         .unwrap();
-        let result = seed_from_live_as_git_repo(&run, &live).unwrap();
+        let result = seed_from_live_as_git_repo(&run, &live, None).unwrap();
         // 非 repo → 返回 NotGitRepo
         assert!(matches!(result, GitSeedState::NotGitRepo));
 
@@ -305,9 +334,10 @@ mod tests {
             tmp.path(),
             live.clone(),
             crate::sync::types::BackendType::Git,
+            None,
         )
         .unwrap();
-        let seed_state = seed_from_live_as_git_repo(&run, &live).unwrap();
+        let seed_state = seed_from_live_as_git_repo(&run, &live, None).unwrap();
         // repo → 返回 Existing
         assert!(matches!(seed_state, GitSeedState::Existing { .. }));
 
@@ -342,9 +372,10 @@ mod tests {
             tmp.path(),
             live.clone(),
             crate::sync::types::BackendType::Git,
+            None,
         )
         .unwrap();
-        let seed_state = seed_from_live_as_git_repo(&run, &live).unwrap();
+        let seed_state = seed_from_live_as_git_repo(&run, &live, None).unwrap();
         // unborn → 返回 Unborn
         assert!(matches!(seed_state, GitSeedState::Unborn { .. }));
 

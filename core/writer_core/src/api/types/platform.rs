@@ -55,7 +55,6 @@ impl From<PlatformInitDto> for writer_platform_api::PlatformInit {
             app_version: dto.app_version,
             locale: dto.locale,
             timezone: dto.timezone,
-            git_metadata_root: dto.git_metadata_root.map(Into::into),
         }
     }
 }

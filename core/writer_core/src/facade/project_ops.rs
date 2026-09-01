@@ -4,8 +4,23 @@ use crate::project::{self, Project, ProjectSummary};
 use crate::volume::{self, Volume};
 
 impl super::WriterCore {
+    /// #644 评论 5491531984 问题1：通过 layout 确定 Git 物理位置。
     pub fn list_projects(&self) -> Result<Vec<Project>> {
-        project::list_projects(&self.projects_root)
+        match &self.git_metadata_root {
+            Some(root) => {
+                let root = root.clone();
+                let projects_root = self.projects_root.clone();
+                let layout_fn: Box<dyn Fn(&str) -> crate::storage::git_repo_layout::GitRepoLayout> =
+                    Box::new(move |project_id: &str| {
+                        crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
+                            projects_root.join(project_id),
+                            root.join(project_id),
+                        )
+                    });
+                project::list_projects_with_layout(&self.projects_root, Some(layout_fn))
+            }
+            None => project::list_projects(&self.projects_root),
+        }
     }
 
     /// #625 第二段：批量返回项目摘要（元数据 + 统计）。
@@ -13,6 +28,10 @@ impl super::WriterCore {
         project::list_project_summaries(&self.projects_root)
     }
 
+    /// #644 评论 5491531984 问题1：创建作品时使用标准 Git 初始化。
+    /// project_id 未知时无法构造 layout，使用标准布局初始化。
+    /// 私有 git_dir 在后续 prepare_full_sync / list_projects 时通过
+    /// ensure_project_repo_with_layout 自动迁移。
     pub fn create_project(&self, title: &str) -> Result<Project> {
         project::create_project(&self.projects_root, title)
     }

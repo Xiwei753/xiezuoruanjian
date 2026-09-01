@@ -103,6 +103,7 @@ pub(crate) fn create_core_api(app_data_root: &str, projects_root: &str) -> Write
             projects_root,
             sync_transport,
             secure_storage,
+            None, // Linux 不使用私有 git_metadata_root
         )
     } else {
         WriterCoreApi::new(app_data_root, projects_root)

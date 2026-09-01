@@ -258,7 +258,7 @@ fn verify_problem2_lockfile_rename_recovers_stale_lock() {
 
         // #644 评论 5485518160 修改点 2：未知 stale lock 应该保留 transaction
         //（rollback 返回 Err），而不是 rollback 成功但留下 lock。
-        let result = rollback_git_finalize(&live, &snapshot, &plan);
+        let result = rollback_git_finalize(&live, &snapshot, &plan, None);
         assert!(
             result.is_err(),
             "FIX VERIFIED (#644 评论 5485518160 修改点 2): rollback_git_finalize with \
@@ -306,7 +306,7 @@ fn verify_problem2_lockfile_rename_recovers_stale_lock() {
 
             ref_lock_names: Vec::new(),        };
 
-        rollback_git_finalize(&live, &snapshot, &plan).unwrap();
+        rollback_git_finalize(&live, &snapshot, &plan, None).unwrap();
 
         // 修复后正确行为：index 恢复到旧内容。
         let restored_index = fs::read(&index_path).unwrap();
@@ -388,7 +388,7 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
 
             ref_lock_names: Vec::new(),        };
 
-        rollback_git_finalize(&live, &snapshot, &plan).unwrap();
+        rollback_git_finalize(&live, &snapshot, &plan, None).unwrap();
 
         let live_git = live.join(".git");
         assert!(
@@ -417,7 +417,7 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
             ref_lock_names: Vec::new(),        };
         // live .git 没有 .sujian-sync-owner marker（外部创建的）。
 
-        rollback_git_finalize(&live, &snapshot, &plan).unwrap();
+        rollback_git_finalize(&live, &snapshot, &plan, None).unwrap();
 
         let live_git = live.join(".git");
         assert!(
@@ -452,7 +452,7 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
 
             ref_lock_names: Vec::new(),        };
 
-        rollback_git_finalize(&live, &snapshot, &plan).unwrap();
+        rollback_git_finalize(&live, &snapshot, &plan, None).unwrap();
 
         let live_git = live.join(".git");
         assert!(
@@ -486,7 +486,7 @@ fn verify_problem3_owner_marker_prevents_deleting_external_repo() {
 
             ref_lock_names: Vec::new(),        };
 
-        let outcome = rollback_git_finalize(&live, &snapshot, &plan).unwrap();
+        let outcome = rollback_git_finalize(&live, &snapshot, &plan, None).unwrap();
 
         assert_eq!(
             outcome,
@@ -582,6 +582,7 @@ fn verify_problem4_concurrent_metadata_changed_no_rollback() {
         &GitSeedState::Detached { head_oid: old_oid },
         &snapshot,
         &plan,
+        None,
     );
 
     // 验证错误类型是 ConcurrentMetadataChanged（原样传播，不降级）。

@@ -42,15 +42,20 @@ pub struct StagingRun {
     /// #644 评论 5476546134 第5节：resolved backend type，
     /// 不再靠 `git_seed_state.is_some()` 间接猜 backend。
     backend_type: crate::sync::types::BackendType,
+    /// #644 评论 5491531984 问题1：target 的 Git 仓库布局。
+    /// Seed/Commit 使用 layout 指定的 git_dir 而非从 target_live_root 猜路径。
+    git_layout: Option<crate::storage::git_repo_layout::GitRepoLayout>,
 }
 
 impl StagingRun {
     /// 创建隔离 run 目录。`parent` 通常在 app-data 下（不进 live project root），
     /// 避免被 scanner 当成作品文件。`target_live_root` 记录 Commit 阶段要写回的 live 根。
+    /// `git_layout` 记录 target 的 Git 仓库布局（可选）。
     pub fn create(
         parent: &Path,
         target_live_root: PathBuf,
         backend_type: crate::sync::types::BackendType,
+        git_layout: Option<crate::storage::git_repo_layout::GitRepoLayout>,
     ) -> Result<Self> {
         let run_id = Uuid::new_v4().to_string();
         let run_root = parent.join("full-sync-staging").join(&run_id);
@@ -62,6 +67,7 @@ impl StagingRun {
             target_live_root,
             git_seed_state: None,
             backend_type,
+            git_layout,
         })
     }
 
@@ -89,6 +95,11 @@ impl StagingRun {
     /// 设置 seed 时记录的 live Git 仓库状态。
     pub fn set_git_seed_state(&mut self, state: crate::sync::git_staging::GitSeedState) {
         self.git_seed_state = Some(state);
+    }
+
+    /// #644 评论 5491531984 问题1：target 的 Git 仓库布局。
+    pub fn git_layout(&self) -> Option<&crate::storage::git_repo_layout::GitRepoLayout> {
+        self.git_layout.as_ref()
     }
 
     /// staging 子目录（Transfer 阶段写入远端内容的目标）。
@@ -450,6 +461,7 @@ pub fn prepare_staging_runs(
             &plan.app_data_root,
             planned.target_live_root.clone(),
             backend_type.clone(),
+            planned.git_layout.clone(),
         )?;
         // #644 评论 5473401065 第2节：seed 失败必须传播，不能继续拿半成品 staging。
         // #644 评论 5473551127 第2节：按 backend 类型选择对应 seed 方式。
@@ -458,9 +470,11 @@ pub fn prepare_staging_runs(
                 // #644 评论 5473789298 第1节：Git 专属 staging 移到 git_staging.rs。
                 // #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
                 // seed 返回 live 的 GitSeedState，供 finalize 决定路径。
+                // #644 评论 5491531984 问题1：传入 git_layout 用于正确打开仓库。
                 let seed_state = crate::sync::git_staging::seed_from_live_as_git_repo(
                     &run,
                     &planned.target_live_root,
+                    planned.git_layout.as_ref(),
                 )?;
                 run.set_git_seed_state(seed_state);
             }
@@ -843,7 +857,8 @@ fn list_commit_candidate_paths(root: &Path) -> Result<Vec<PathBuf>> {
 /// 递归遍历 `dir`，跳过同步引擎内部目录，把文件相对 `root` 的路径推入 `out`。
 ///
 /// 跳过规则（与 live 扫描、commit candidate 共用同一套）：
-/// - `.git/`：Git 仓库元数据，不是用户内容；
+/// - `.git/`（目录）：Git 仓库元数据，不是用户内容；
+/// - `.git`（文件）：评论 5491531984 问题2 — gitlink file，同样不是用户内容；
 /// - `full-sync-staging/`：staging run 自身，避免递归；
 /// - `app-meta/transactions/`：事务暂存目录，commit 中间态。
 #[allow(clippy::excessive_nesting)]
@@ -851,19 +866,18 @@ fn walk_commit_candidates(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Re
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
-            if let Ok(rel) = path.strip_prefix(root) {
-                let rel_str = rel.to_string_lossy();
-                // 跳过内部目录
-                if rel_str == ".git"
-                    || rel_str == "full-sync-staging"
-                    || rel_str.starts_with("app-meta/transactions")
-                    // #644 评论 5475805198 第4节：跳过 finalize_not_git_repo 的临时目录。
-                    || rel_str.starts_with(".git.sujian-tmp-")
-                {
-                    continue;
-                }
+        if let Ok(rel) = path.strip_prefix(root) {
+            let rel_str = rel.to_string_lossy();
+            // #644 评论 5491531984 问题2：防御性地对名字等于 .git 的文件/目录都跳过。
+            if rel_str == ".git"
+                || rel_str == "full-sync-staging"
+                || rel_str.starts_with("app-meta/transactions")
+                || rel_str.starts_with(".git.sujian-tmp-")
+            {
+                continue;
             }
+        }
+        if path.is_dir() {
             walk_commit_candidates(root, &path, out)?;
         } else {
             if let Ok(rel) = path.strip_prefix(root) {
@@ -890,7 +904,7 @@ mod tests {
     fn staging_run_create_and_cleanup() {
         let tmp = TempDir::new().unwrap();
         let live = tmp.path().join("live");
-        let run = StagingRun::create(tmp.path(), live, crate::sync::types::BackendType::GithubApi)
+        let run = StagingRun::create(tmp.path(), live, crate::sync::types::BackendType::GithubApi, None)
             .unwrap();
         assert!(run.base_root().exists());
         assert!(run.staging_root().exists());
@@ -911,6 +925,7 @@ mod tests {
             tmp.path(),
             live.clone(),
             crate::sync::types::BackendType::GithubApi,
+            None,
         )
         .unwrap();
         run.build_base_snapshot_from_live(
@@ -945,6 +960,7 @@ mod tests {
             tmp.path(),
             live.clone(),
             crate::sync::types::BackendType::Git,
+            None,
         )
         .unwrap();
         run.build_base_snapshot_from_live(&live, &[PathBuf::from("f.txt")])
@@ -969,6 +985,7 @@ mod tests {
             tmp.path(),
             live.clone(),
             crate::sync::types::BackendType::Git,
+            None,
         )
         .unwrap();
         run.build_base_snapshot_from_live(&live, &[PathBuf::from("f.txt")])
@@ -1001,6 +1018,7 @@ mod tests {
             tmp.path(),
             live.clone(),
             crate::sync::types::BackendType::GithubApi,
+            None,
         )
         .unwrap();
         run.seed_from_live(&live).unwrap();
@@ -1043,6 +1061,7 @@ mod tests {
             tmp.path(),
             live.clone(),
             crate::sync::types::BackendType::Git,
+            None,
         )
         .unwrap();
         run.build_base_snapshot_from_live(&live, &[PathBuf::from("note.md")])
@@ -1068,6 +1087,7 @@ mod tests {
             tmp.path(),
             live.clone(),
             crate::sync::types::BackendType::Git,
+            None,
         )
         .unwrap();
         run.build_base_snapshot_from_live(&live, &[PathBuf::from("f.txt")])
@@ -1096,6 +1116,7 @@ mod tests {
             tmp.path(),
             live.clone(),
             crate::sync::types::BackendType::Git,
+            None,
         )
         .unwrap();
         // base 为空（没有 build_base_snapshot）
@@ -1120,6 +1141,7 @@ mod tests {
             tmp.path(),
             live.clone(),
             crate::sync::types::BackendType::Git,
+            None,
         )
         .unwrap();
         run.build_base_snapshot_from_live(&live, &[PathBuf::from("note.md")])

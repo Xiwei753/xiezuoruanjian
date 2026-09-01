@@ -100,6 +100,7 @@ fn adv_p1_manifest_sync_json_goes_to_engine_state_actions() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(manifest)])
@@ -142,6 +143,7 @@ fn adv_p1_state_local_json_goes_to_engine_state_actions() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(state)])
@@ -173,6 +175,7 @@ fn adv_p1_config_local_json_never_in_any_actions() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(config_local)])
@@ -221,6 +224,7 @@ fn adv_p1_secrets_never_in_any_actions() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(secrets)])
@@ -248,6 +252,7 @@ fn adv_p1_transactions_never_in_any_actions() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(tx_file)])
@@ -275,6 +280,7 @@ fn adv_p1_git_metadata_never_in_any_actions() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(git_head)])
@@ -302,6 +308,7 @@ fn adv_p1_full_sync_staging_never_in_any_actions() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(staging_file)])
@@ -329,6 +336,7 @@ fn adv_p1_engine_state_writes_incoming_content_not_base() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(manifest)])
@@ -374,6 +382,7 @@ fn adv_p2_partial_conflict_commits_non_conflict_files_and_conflict_metadata() {
         &app_data,
         project_live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&project_live, &[PathBuf::from(project_json)])
@@ -424,6 +433,7 @@ fn adv_p2_fatal_error_skips_staging_commit() {
         &app_data,
         project_live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&project_live, &[PathBuf::from(project_json)])
@@ -469,6 +479,7 @@ fn adv_p2_recoverable_error_skips_staging_commit() {
         &app_data,
         project_live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&project_live, &[PathBuf::from(project_json)])
@@ -516,6 +527,7 @@ fn adv_p2_success_full_commit_writes_both_content_and_engine_state() {
         &app_data,
         project_live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(
@@ -565,6 +577,7 @@ fn adv_p2_partial_conflict_excludes_conflict_paths_from_content_actions() {
         &app_data,
         project_live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(
@@ -633,6 +646,7 @@ fn adv_p3_metadata_local_newer_wins() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(project_json)])
@@ -672,6 +686,7 @@ fn adv_p3_metadata_incoming_newer_wins() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(project_json)])
@@ -737,6 +752,7 @@ fn adv_p3_metadata_tie_local_device_id_greater_wins() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(
@@ -790,6 +806,7 @@ fn adv_p3_metadata_tie_remote_device_id_greater_wins() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(
@@ -851,6 +868,7 @@ fn adv_p3_metadata_tie_no_state_local_falls_back_to_empty_device_id() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(project_json)])
@@ -886,6 +904,7 @@ fn adv_p3_generated_cache_both_changed_uses_lww_not_conflict() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(cache_file)])

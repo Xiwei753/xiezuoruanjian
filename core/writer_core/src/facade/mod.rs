@@ -131,6 +131,21 @@ impl WriterCore {
             None => crate::storage::git_repo_layout::GitRepoLayout::new(project_root),
         }
     }
+
+    /// #644 评论 5491531984 问题1：为 App target 构造 `GitRepoLayout`。
+    ///
+    /// Android 端 `git_metadata_root` 为 `Some(root)` 时，`git_dir` 放在
+    /// `root/app/`（应用私有 `filesDir/sujian-git/app/`）。
+    /// 其他平台或 Android 未配置时使用标准布局（`app_data_root.join(".git")`）。
+    pub(crate) fn app_git_layout(&self) -> crate::storage::git_repo_layout::GitRepoLayout {
+        match &self.git_metadata_root {
+            Some(root) => crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
+                self.app_data_root.clone(),
+                root.join("app"),
+            ),
+            None => crate::storage::git_repo_layout::GitRepoLayout::new(self.app_data_root.clone()),
+        }
+    }
 }
 
 impl Drop for WriterCore {

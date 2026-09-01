@@ -200,8 +200,11 @@ impl super::WriterCore {
 
         let mut targets = Vec::new();
 
-        // App target — 只生成 plan，不创建 staging
+        // App target — 只生成 plan，不创建 staging。
+        // #644 评论 5491531984 问题1：App target 也必须有私有 Git metadata 位置，
+        // 例如 `sujian-git/app/`。
         let app_target = crate::sync::types::SyncTarget::app();
+        let app_git_layout = self.app_git_layout();
         targets.push(PlannedTarget {
             target: app_target,
             local_root: self.app_data_root.clone(),
@@ -209,12 +212,14 @@ impl super::WriterCore {
             target_kind: "app".to_string(),
             project_id: None,
             target_live_root: self.app_data_root.clone(),
+            git_layout: Some(app_git_layout),
         });
 
         // Project targets — 只生成 plan，不创建 staging
         for project in &projects {
             let target = crate::sync::types::SyncTarget::project(&project.id);
             let project_local_root = self.project_root(&project.id);
+            let project_git_layout = self.project_git_layout(&project.id);
             targets.push(PlannedTarget {
                 target,
                 local_root: project_local_root.clone(),
@@ -222,6 +227,7 @@ impl super::WriterCore {
                 target_kind: "project".to_string(),
                 project_id: Some(project.id.clone()),
                 target_live_root: project_local_root,
+                git_layout: Some(project_git_layout),
             });
         }
 
@@ -742,6 +748,7 @@ fn apply_staging_commits_for_targets(
                         live_root,
                         seed_state,
                         &run.staging_root(),
+                        run.git_layout().map(|l| l.git_dir.as_path()),
                     ) {
                         Ok((snap, plan)) => (snap, plan),
                         Err(e) => {
@@ -780,6 +787,8 @@ fn apply_staging_commits_for_targets(
                         metadata_snapshot: snap.clone(),
                         plan: plan.clone(),
                         mutation_log: crate::sync::git_commit::GitFinalizeMutationLog::default(),
+                        git_dir: run.git_layout().map(|l| l.git_dir.clone()),
+                        worktree_root: run.git_layout().map(|l| l.worktree_root.clone()),
                     })
                 } else {
                     None
@@ -838,6 +847,7 @@ fn apply_staging_commits_for_targets(
                     run.git_seed_state(),
                     Some(&git_snapshot),
                     git_plan_ref,
+                    run.git_layout().map(|l| l.git_dir.as_path()),
                 ) {
                     Ok(()) => {
                         match tx.finish() {
@@ -845,6 +855,7 @@ fn apply_staging_commits_for_targets(
                                 if let Some(plan) = git_plan_ref {
                                     crate::sync::git_commit::cleanup_repo_create_owner_marker(
                                         live_root, plan,
+                                        run.git_layout().map(|l| l.git_dir.as_path()),
                                     );
                                 }
                                 target_conflicts.push(plan.conflict);
@@ -881,6 +892,7 @@ fn apply_staging_commits_for_targets(
                                 plan,
                                 seed_state,
                                 &mut tx,
+                                run.git_layout().map(|l| l.git_dir.as_path()),
                             )
                         } else {
                             // 无 seed_state/plan，只做 file rollback。
@@ -1150,17 +1162,18 @@ fn coordinate_rollback_after_finalize_failure(
     plan: &crate::sync::git_commit::GitFinalizePlan,
     _seed_state: &crate::sync::git_staging::GitSeedState,
     tx: &mut crate::storage::transaction::SaveTransaction,
+    explicit_git_dir: Option<&std::path::Path>,
 ) -> crate::error::Result<()> {
     // inspect 确认 rollback 状态（只读）。
     let inspect_state = crate::sync::git_commit::inspect_git_rollback_state(
-        live_root, snapshot, plan,
+        live_root, snapshot, plan, explicit_git_dir,
     )?;
 
     match inspect_state {
         crate::sync::git_commit::GitRollbackState::NeedsRollback => {
             // Git rollback。
             let outcome = crate::sync::git_commit::rollback_git_finalize(
-                live_root, snapshot, plan,
+                live_root, snapshot, plan, explicit_git_dir,
             )?;
             match outcome {
                 crate::sync::git_commit::GitRollbackOutcome::Reverted => {

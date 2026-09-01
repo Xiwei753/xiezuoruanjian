@@ -123,6 +123,7 @@ fn repro_issue644_p1_app_meta_engine_state_expected_to_be_committed() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(manifest), PathBuf::from(state)])
@@ -161,6 +162,7 @@ fn repro_issue644_p1_app_meta_engine_state_now_committed() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(manifest), PathBuf::from(state)])
@@ -216,6 +218,7 @@ fn repro_issue644_p2_partial_conflict_expected_to_commit_non_conflict_files() {
         &app_data,
         project_live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&project_live, &[PathBuf::from(project_json)])
@@ -269,6 +272,7 @@ fn repro_issue644_p2_partial_conflict_now_commits_non_conflict_files() {
         &app_data,
         project_live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&project_live, &[PathBuf::from(project_json)])
@@ -320,6 +324,7 @@ fn repro_issue644_p3_metadata_both_changed_now_true_lww() {
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(project_json)])
@@ -360,6 +365,7 @@ fn repro_issue644_p3_metadata_both_changed_expected_true_lww_not_fixed_remote_wi
         tmp.path(),
         live.clone(),
         writer_core::sync::BackendType::Git,
+        None,
     )
     .unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(project_json)])

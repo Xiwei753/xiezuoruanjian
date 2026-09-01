@@ -612,6 +612,14 @@ fn rollback_full_sync_transaction(
     target_root: &Path,
     manifest: &TransactionManifest,
 ) -> Result<()> {
+    // #644 评论 5491531984 问题4：从 recovery record 解析 layout。
+    // 旧 manifest 无 git_dir/worktree_root 时，使用 legacy target_root。
+    let recovery_live_root = manifest
+        .git_finalize
+        .as_ref()
+        .and_then(|g| g.worktree_root.as_deref())
+        .unwrap_or(target_root);
+
     // 1. 回滚 Git metadata（如果有 recovery record）。
     //    #644 评论 5488871385 问题1：inspect-first 流程——
     //    先只读检查状态，再 preflight backup，最后才修改 Git/live。
@@ -622,6 +630,9 @@ fn rollback_full_sync_transaction(
                 e
             )))
         })?;
+
+        // #644 评论 5491531984 问题4：从 recovery record 解析 git_dir。
+        let recovery_git_dir = git_rec.git_dir.as_deref();
 
         // #644 评论 5490206957 问题4：index_lock_owner + ref_tx_owner 迁移必须能在
         // 同一次恢复里顺序叠加，而不是二选一。用一个可变 effective plan 替代互斥的
@@ -664,9 +675,10 @@ fn rollback_full_sync_transaction(
         // index_lock_owner=None 旧 manifest 迁移。
         if effective_plan.new_index_sha256.is_some() && effective_plan.index_lock_owner.is_none() {
             let migration = crate::sync::git_commit::check_index_lock_owner_migration(
-                target_root,
+                recovery_live_root,
                 &git_rec.metadata_snapshot,
                 &effective_plan,
+                recovery_git_dir,
             )?;
             match migration {
                 crate::sync::git_commit::IndexLockOwnerMigration::LockExists => {
@@ -695,9 +707,10 @@ fn rollback_full_sync_transaction(
         // 与 index 迁移顺序叠加，不是互斥。
         if !effective_plan.ref_plans.is_empty() && effective_plan.ref_tx_owner.is_none() {
             let ref_migration = crate::sync::git_commit::check_ref_tx_owner_migration(
-                target_root,
+                recovery_live_root,
                 &git_rec.metadata_snapshot,
                 &effective_plan,
+                recovery_git_dir,
             )?;
             match ref_migration {
                 crate::sync::git_commit::RefTxOwnerMigration::LockExists => {
@@ -736,9 +749,10 @@ fn rollback_full_sync_transaction(
 
         // #644 评论 5488871385 问题1：先只读 inspect，再 preflight，最后 rollback。
         let inspect_state = crate::sync::git_commit::inspect_git_rollback_state(
-            target_root,
+            recovery_live_root,
             &git_rec.metadata_snapshot,
             plan_for_rollback,
+            recovery_git_dir,
         )?;
 
         match inspect_state {
@@ -747,9 +761,10 @@ fn rollback_full_sync_transaction(
                 preflight_backup_entries(tx_dir, manifest)?;
                 // 再执行 Git rollback。
                 let outcome = crate::sync::git_commit::rollback_git_finalize(
-                    target_root,
+                    recovery_live_root,
                     &git_rec.metadata_snapshot,
                     plan_for_rollback,
+                    recovery_git_dir,
                 )?;
                 match outcome {
                     crate::sync::git_commit::GitRollbackOutcome::Reverted => {
@@ -790,11 +805,7 @@ fn rollback_full_sync_transaction(
     }
 
     // 2. 回滚 live 文件（用 backup_entries）。
-    // #644 评论 5477439446 问题3：manifest 要求 RestoreFile 但 backup 文件不存在时，
-    // 视为恢复失败并返回 Err。只要任意一个 BackupEntry 没有完成恢复，就保留整份
-    // transaction，不能写 RolledBack，不能删除 backup/manifest/tx_dir。
-    // #644 评论 5488655439 问题2：此处不再做 preflight（已在 Git rollback 之后 preflight），
-    // 这里只做恢复操作。
+    //    #644 评论 5491531984 问题4：使用 recovery_live_root（可能与 target_root 不同）。
     let backup_dir = tx_dir.join("backup");
     for entry in &manifest.backup_entries {
         match entry {
@@ -802,7 +813,7 @@ fn rollback_full_sync_transaction(
                 target_relative,
                 backup_filename,
             } => {
-                let target_path = target_root.join(target_relative);
+                let target_path = recovery_live_root.join(target_relative);
                 let backup_path = backup_dir.join(backup_filename);
                 if !backup_path.exists() {
                     // manifest 要求 RestoreFile 但 backup 文件缺失 → 恢复失败。

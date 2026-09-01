@@ -109,7 +109,7 @@ fn verify_problem1_marker_must_survive_finalize_until_tx_finish() {
 
     // 调用 commit_git_finalize（NotGitRepo 路径）。
     // 成功后 live/.git 应已安装，但 marker 必须保留到 tx.finish()。
-    commit_git_finalize(&live, &staging, &GitSeedState::NotGitRepo, &snapshot, &plan)
+    commit_git_finalize(&live, &staging, &GitSeedState::NotGitRepo, &snapshot, &plan, None)
         .expect("commit_git_finalize NotGitRepo must succeed (baseline)");
 
     let live_git = live.join(".git");
@@ -221,7 +221,7 @@ fn verify_problem2_rollback_must_check_ownership_before_touching_index() {
 
             ref_lock_names: Vec::new(),    };
 
-    rollback_git_finalize(&live, &snapshot, &plan)
+    rollback_git_finalize(&live, &snapshot, &plan, None)
         .expect("rollback_git_finalize must return Ok (ownership mismatch → no-op)");
 
     // 修复后正确行为：index.lock 不应被删（ownership 不匹配，应直接返回不碰任何东西）。
@@ -355,7 +355,7 @@ fn verify_problem3_ref_cas_miss_must_return_err_not_ok() {
 
             ref_lock_names: Vec::new(),    };
 
-    let result = rollback_git_finalize(&live, &snapshot, &plan);
+    let result = rollback_git_finalize(&live, &snapshot, &plan, None);
 
     // 修复后正确行为：CAS miss 必须返回 Err，使上层 rollback_full_sync_transaction
     // 不会继续恢复 backup 文件并删除 transaction。
@@ -443,7 +443,7 @@ fn verify_problem3_index_cas_miss_must_return_err_not_ok() {
 
             ref_lock_names: Vec::new(),    };
 
-    let result = rollback_git_finalize(&live, &snapshot, &plan);
+    let result = rollback_git_finalize(&live, &snapshot, &plan, None);
 
     assert!(
         result.is_err(),
@@ -500,7 +500,7 @@ fn verify_problem1_invariant_marker_present_after_successful_finalize() {
 
             ref_lock_names: Vec::new(),    };
 
-    let result = commit_git_finalize(&live, &staging, &GitSeedState::NotGitRepo, &snapshot, &plan);
+    let result = commit_git_finalize(&live, &staging, &GitSeedState::NotGitRepo, &snapshot, &plan, None);
 
     // finalize 必须成功（baseline）。
     match &result {
