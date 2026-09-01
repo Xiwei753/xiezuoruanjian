@@ -1255,7 +1255,11 @@ mod tests {
         fs::write(root.join("normal/file.txt"), "normal").unwrap();
         // .git.sujian-migrate-source-* 目录应被跳过
         fs::create_dir_all(root.join(".git.sujian-migrate-source-abc/objects")).unwrap();
-        fs::write(root.join(".git.sujian-migrate-source-abc/HEAD"), "ref: main").unwrap();
+        fs::write(
+            root.join(".git.sujian-migrate-source-abc/HEAD"),
+            "ref: main",
+        )
+        .unwrap();
         fs::write(root.join(".git.sujian-migrate-source-abc/config"), "[core]").unwrap();
         // .git.sujian-tmp-* 目录也应被跳过
         fs::create_dir_all(root.join(".git.sujian-tmp-tmp123")).unwrap();
@@ -1302,7 +1306,10 @@ mod tests {
         );
 
         // .git 也应被分类为 Skip
-        assert_eq!(classify_staging_commit_path(".git"), StagingCommitClass::Skip);
+        assert_eq!(
+            classify_staging_commit_path(".git"),
+            StagingCommitClass::Skip
+        );
         assert_eq!(
             classify_staging_commit_path(".git/objects/HEAD"),
             StagingCommitClass::Skip

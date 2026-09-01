@@ -83,6 +83,10 @@ pub struct ProjectDeleteJournal {
     pub git_dir_from: Option<String>,
     /// private git_dir trash 路径（可选）。
     pub git_dir_trash: Option<String>,
+    /// #644 评论 5495945801 问题3：projects_root，用于 strip_prefix 算 rel_project_dir。
+    pub projects_root: String,
+    /// #644 评论 5495945801 问题3：app_data_root，用于 strip_prefix 算 rel_trash_path。
+    pub app_data_root: String,
     /// 当前删除阶段。
     pub phase: ProjectDeletePhase,
 }
@@ -94,20 +98,25 @@ pub struct ProjectDeleteJournal {
 pub struct ProjectDeleteTransaction {
     journal: ProjectDeleteJournal,
     journal_path: PathBuf,
-    app_data_root: PathBuf,
     completed: bool,
 }
 
 impl ProjectDeleteTransaction {
     /// 创建新的删除事务。
     ///
-    /// 生成统一的 delete token，关联 worktree trash 和 private Git trash。
+    /// #644 评论 5495945801 问题2：接收 trash **根目录**而非最终 trash 路径。
+    /// 在内部生成一次 token 后统一得到：
+    /// - `worktree_trash = worktree_trash_root.join(&token)`
+    /// - `git_dir_trash = git_dir_trash_root.map(|root| root.join(&token))`
+    ///
+    /// journal 里记录的 worktree_trash / git_dir_trash 就是这两个最终路径。
     pub fn new(
         project_id: &str,
         worktree_from: &Path,
-        worktree_trash: &Path,
+        worktree_trash_root: &Path,
         git_dir_from: Option<&Path>,
-        git_dir_trash: Option<&Path>,
+        git_dir_trash_root: Option<&Path>,
+        projects_root: &Path,
         app_data_root: &Path,
     ) -> Self {
         let token = format!(
@@ -117,13 +126,21 @@ impl ProjectDeleteTransaction {
             project_id
         );
 
+        // #644 评论 5495945801 问题2：用 token 统一拼 trash 路径，不用 project_id。
+        let worktree_trash = worktree_trash_root.join(&token);
+        let git_dir_trash = git_dir_trash_root.map(|root| root.join(&token));
+
         let journal = ProjectDeleteJournal {
             token: token.clone(),
             project_id: project_id.to_string(),
             worktree_from: worktree_from.to_string_lossy().into_owned(),
             worktree_trash: worktree_trash.to_string_lossy().into_owned(),
             git_dir_from: git_dir_from.map(|p| p.to_string_lossy().into_owned()),
-            git_dir_trash: git_dir_trash.map(|p| p.to_string_lossy().into_owned()),
+            git_dir_trash: git_dir_trash
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            projects_root: projects_root.to_string_lossy().into_owned(),
+            app_data_root: app_data_root.to_string_lossy().into_owned(),
             phase: ProjectDeletePhase::Prepared,
         };
 
@@ -134,7 +151,6 @@ impl ProjectDeleteTransaction {
         Self {
             journal,
             journal_path,
-            app_data_root: app_data_root.to_path_buf(),
             completed: false,
         }
     }
@@ -210,7 +226,12 @@ impl ProjectDeleteTransaction {
         };
 
         let git_dir_from = PathBuf::from(git_dir_from);
-        let git_dir_trash = PathBuf::from(self.journal.git_dir_trash.as_ref().unwrap());
+        let git_dir_trash_str = self.journal.git_dir_trash.as_ref().ok_or_else(|| {
+            crate::error::Error::Io(std::io::Error::other(
+                "ProjectDeleteTransaction::move_git: git_dir_trash missing while git_dir_from present",
+            ))
+        })?;
+        let git_dir_trash = PathBuf::from(git_dir_trash_str);
 
         // 如果 git_dir 已经不存在（之前已移动），直接推进 phase。
         if !git_dir_from.exists() {
@@ -235,9 +256,52 @@ impl ProjectDeleteTransaction {
         Ok(())
     }
 
-    /// 完成删除：生成 tombstone 并推进 phase 到 Completed。
+    /// #644 评论 5495945801 问题3：生成 tombstone 并保存 sync state。
     ///
-    /// tombstone 仍从 worktree trash 生成，但 journal 要保留到 tombstone/两边 trash 都完成以后。
+    /// 正常删除和崩溃恢复共用这一份。load/save_sync_state 的错误直接返回，不吞。
+    ///
+    /// 调用时机：`move_git` 成功（phase == GitMoved）之后、`complete` 之前。
+    /// 失败时返回 Err，journal 保留下次恢复继续。
+    pub fn write_tombstone(&self) -> Result<()> {
+        let worktree_trash = PathBuf::from(&self.journal.worktree_trash);
+        let projects_root = PathBuf::from(&self.journal.projects_root);
+        let app_data_root = PathBuf::from(&self.journal.app_data_root);
+        let project_dir = PathBuf::from(&self.journal.worktree_from);
+
+        // load_sync_state 错误直接返回，不吞。
+        // 保持与原 project.rs 一致的传参：sync_root = worktree_trash。
+        let mut state = crate::sync::SyncService::load_sync_state(&worktree_trash)?;
+
+        let rel_project_dir = project_dir
+            .strip_prefix(&projects_root)
+            .unwrap_or(&project_dir)
+            .to_string_lossy()
+            .replace("\\", "/");
+
+        let rel_trash_path = match worktree_trash.strip_prefix(&app_data_root) {
+            Ok(p) => p,
+            Err(_) => &worktree_trash,
+        }
+        .to_string_lossy()
+        .replace("\\", "/");
+
+        crate::trash::generate_tombstones(
+            &mut state,
+            &worktree_trash,
+            &rel_project_dir,
+            &rel_trash_path,
+        );
+
+        // save_sync_state 错误直接返回，不吞。
+        crate::sync::SyncService::save_sync_state(&worktree_trash, &state)?;
+
+        Ok(())
+    }
+
+    /// 完成删除：推进 phase 到 Completed。
+    ///
+    /// tombstone 由 `write_tombstone` 独立处理，调用方应在 `write_tombstone` 成功后
+    /// 再调用 `complete`。journal 要保留到 tombstone/两边 trash 都完成以后。
     pub fn complete(&mut self) -> Result<()> {
         self.advance_phase(ProjectDeletePhase::Completed)?;
         self.completed = true;
@@ -326,7 +390,7 @@ pub fn recover_pending_delete_transactions(app_data_root: &Path) -> Result<usize
 ///
 /// 返回 `Ok(true)` 表示 journal 已可以清理（Completed 或已无事可做），
 /// `Ok(false)` 表示 journal 仍保留（恢复未完成）。
-fn recover_single_journal(app_data_root: &Path, journal_path: &Path) -> Result<bool> {
+fn recover_single_journal(_app_data_root: &Path, journal_path: &Path) -> Result<bool> {
     let content = fs::read(journal_path)?;
     let journal: ProjectDeleteJournal = serde_json::from_slice(&content).map_err(|e| {
         crate::error::Error::Io(std::io::Error::other(format!(
@@ -346,14 +410,14 @@ fn recover_single_journal(app_data_root: &Path, journal_path: &Path) -> Result<b
                 let mut tx = ProjectDeleteTransaction {
                     journal,
                     journal_path: journal_path.to_path_buf(),
-                    app_data_root: app_data_root.to_path_buf(),
                     completed: false,
                 };
                 tx.move_worktree()?;
                 // worktree 已移动，继续处理 git。
                 tx.move_git()?;
                 if tx.journal.phase == ProjectDeletePhase::GitMoved {
-                    // git 已移动，推进到 Completed。
+                    // #644 评论 5495945801 问题3：git 已移动，生成 tombstone 后推进到 Completed。
+                    tx.write_tombstone()?;
                     tx.complete()?;
                     tx.cleanup_journal()?;
                     return Ok(true);
@@ -366,14 +430,14 @@ fn recover_single_journal(app_data_root: &Path, journal_path: &Path) -> Result<b
             let mut tx = ProjectDeleteTransaction {
                 journal,
                 journal_path: journal_path.to_path_buf(),
-                app_data_root: app_data_root.to_path_buf(),
                 completed: false,
             };
             tx.advance_phase(ProjectDeletePhase::WorktreeMoved)?;
             // 继续处理 git。
             tx.move_git()?;
             if tx.journal.phase == ProjectDeletePhase::GitMoved {
-                // git 已移动，推进到 Completed。
+                // #644 评论 5495945801 问题3：git 已移动，生成 tombstone 后推进到 Completed。
+                tx.write_tombstone()?;
                 tx.complete()?;
                 tx.cleanup_journal()?;
                 return Ok(true);
@@ -386,11 +450,12 @@ fn recover_single_journal(app_data_root: &Path, journal_path: &Path) -> Result<b
             let mut tx = ProjectDeleteTransaction {
                 journal,
                 journal_path: journal_path.to_path_buf(),
-                app_data_root: app_data_root.to_path_buf(),
                 completed: false,
             };
             tx.move_git()?;
             if tx.journal.phase == ProjectDeletePhase::GitMoved {
+                // #644 评论 5495945801 问题3：git 已移动，生成 tombstone 后推进到 Completed。
+                tx.write_tombstone()?;
                 tx.complete()?;
                 tx.cleanup_journal()?;
                 return Ok(true);
@@ -399,13 +464,15 @@ fn recover_single_journal(app_data_root: &Path, journal_path: &Path) -> Result<b
         }
         ProjectDeletePhase::GitMoved => {
             // 两边都已移到 trash，等待 tombstone 生成。
-            // 直接推进到 Completed，清理 journal。
+            // #644 评论 5495945801 问题3：必须重新生成 tombstone，不能直接跳到 Completed。
+            // 如果进程死在"两边 rename 完成、tombstone 尚未保存"之间，
+            // 重启后必须在这里补上 tombstone，否则永久漏掉。
             let mut tx = ProjectDeleteTransaction {
                 journal,
                 journal_path: journal_path.to_path_buf(),
-                app_data_root: app_data_root.to_path_buf(),
                 completed: false,
             };
+            tx.write_tombstone()?;
             tx.complete()?;
             tx.cleanup_journal()?;
             Ok(true)
@@ -433,6 +500,8 @@ mod tests {
             worktree_trash: "/trash/test_token".to_string(),
             git_dir_from: Some("/private/git/test".to_string()),
             git_dir_trash: Some("/trash/test_token.git".to_string()),
+            projects_root: "/projects".to_string(),
+            app_data_root: "/app".to_string(),
             phase: ProjectDeletePhase::Prepared,
         };
 
@@ -443,7 +512,7 @@ mod tests {
         assert_eq!(parsed.phase, ProjectDeletePhase::Prepared);
     }
 
-    /// 验证完整删除流程：prepare → move_worktree → move_git → complete → cleanup。
+    /// 验证完整删除流程：prepare → move_worktree → move_git → write_tombstone → complete → cleanup。
     #[test]
     fn test_full_delete_flow() {
         let temp_dir = tempdir().unwrap();
@@ -463,22 +532,23 @@ mod tests {
         fs::create_dir_all(&git_dir_from).unwrap();
         fs::write(git_dir_from.join("HEAD"), "ref: refs/heads/main\n").unwrap();
 
-        // 创建事务。
-        let worktree_trash = app_data_root
-            .join("sync/trash")
-            .join("test_token");
-        let git_dir_trash = app_data_root
-            .join("private/trash")
-            .join("test_token");
+        // #644 评论 5495945801 问题2：传 trash root，token 在 new() 内部生成。
+        let worktree_trash_root = app_data_root.join("sync/trash");
+        let git_dir_trash_root = app_data_root.join("private/trash");
 
         let mut tx = ProjectDeleteTransaction::new(
             project_id,
             &worktree_from,
-            &worktree_trash,
+            &worktree_trash_root,
             Some(&git_dir_from),
-            Some(&git_dir_trash),
+            Some(&git_dir_trash_root),
+            &projects_root,
             app_data_root,
         );
+
+        // 获取事务实际使用的 trash 路径（token 拼出来的）。
+        let worktree_trash = tx.worktree_trash_path().to_path_buf();
+        let git_dir_trash = tx.git_dir_trash_path().unwrap().to_path_buf();
 
         // prepare。
         tx.prepare().unwrap();
@@ -496,6 +566,9 @@ mod tests {
         assert_eq!(tx.journal.phase, ProjectDeletePhase::GitMoved);
         assert!(!git_dir_from.exists());
         assert!(git_dir_trash.exists());
+
+        // write_tombstone。
+        tx.write_tombstone().unwrap();
 
         // complete。
         tx.complete().unwrap();
@@ -527,15 +600,15 @@ mod tests {
         fs::write(git_dir_from.join("HEAD"), "ref: refs/heads/main\n").unwrap();
 
         // 模拟 Prepared 阶段崩溃：journal 已写，但还没移动。
-        // 注意：事务会生成自己的 token，所以需要使用事务内部的路径。
         let trash_parent = app_data_root.join("sync/trash");
         let git_trash_parent = app_data_root.join("private/trash");
         let mut tx = ProjectDeleteTransaction::new(
             project_id,
             &worktree_from,
-            &trash_parent.join("dummy"), // 临时路径，prepare 后会被忽略
+            &trash_parent,
             Some(&git_dir_from),
-            Some(&git_trash_parent.join("dummy")),
+            Some(&git_trash_parent),
+            &projects_root,
             app_data_root,
         );
         tx.prepare().unwrap();
@@ -578,9 +651,10 @@ mod tests {
         let mut tx = ProjectDeleteTransaction::new(
             project_id,
             &worktree_from,
-            &trash_parent.join("dummy"),
+            &trash_parent,
             Some(&git_dir_from),
-            Some(&git_trash_parent.join("dummy")),
+            Some(&git_trash_parent),
+            &projects_root,
             app_data_root,
         );
         tx.prepare().unwrap();
@@ -596,7 +670,7 @@ mod tests {
         assert!(git_dir_trash.exists());
     }
 
-    /// 验证崩溃恢复：GitMoved 阶段崩溃，重启后推进到 Completed 并清理 journal。
+    /// 验证崩溃恢复：GitMoved 阶段崩溃，重启后生成 tombstone、推进到 Completed 并清理 journal。
     #[test]
     fn test_recovery_from_git_moved() {
         let temp_dir = tempdir().unwrap();
@@ -621,9 +695,10 @@ mod tests {
         let mut tx = ProjectDeleteTransaction::new(
             project_id,
             &worktree_from,
-            &trash_parent.join("dummy"),
+            &trash_parent,
             Some(&git_dir_from),
-            Some(&git_trash_parent.join("dummy")),
+            Some(&git_trash_parent),
+            &projects_root,
             app_data_root,
         );
         tx.prepare().unwrap();
@@ -654,15 +729,17 @@ mod tests {
         let mut tx = ProjectDeleteTransaction::new(
             project_id,
             &worktree_from,
-            &trash_parent.join("dummy"),
+            &trash_parent,
             None,
             None,
+            &projects_root,
             app_data_root,
         );
 
         tx.prepare().unwrap();
         tx.move_worktree().unwrap();
         tx.move_git().unwrap(); // 无 private git，应直接推进到 GitMoved。
+        tx.write_tombstone().unwrap();
         tx.complete().unwrap();
 
         let worktree_trash = tx.worktree_trash_path().to_path_buf();
