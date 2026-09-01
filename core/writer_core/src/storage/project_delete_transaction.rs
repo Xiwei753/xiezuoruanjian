@@ -478,8 +478,16 @@ fn recover_single_journal(_app_data_root: &Path, journal_path: &Path) -> Result<
             Ok(true)
         }
         ProjectDeletePhase::Completed => {
-            // 已完成，清理 journal。
-            let _ = fs::remove_file(journal_path);
+            // #644 评论 5496728184 缺陷2修复：Completed 必须用 durable cleanup 范式
+            // （与 cleanup_journal 第314-327行一致），不能吞删除错误。
+            // 删除失败时返回 Err，不能声称"已恢复完成"。
+            if journal_path.exists() {
+                fs::remove_file(journal_path)?;
+                // fsync journal 父目录，持久化删除的目录项。
+                if let Some(parent) = journal_path.parent() {
+                    crate::storage::sync_dir(parent)?;
+                }
+            }
             Ok(true)
         }
     }
