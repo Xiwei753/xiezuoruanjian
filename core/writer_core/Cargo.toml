@@ -31,6 +31,13 @@ tempfile = "3.8"
 aho-corasick = "1.1.4"
 once_cell = { version = "1.19", optional = true }
 git2 = { version = "0.20.4", default-features = false, features = ["vendored-libgit2"] }
+# #644 评论 5486167472 问题3：直接依赖 libgit2-sys，与 git2 0.20.4 对齐
+#（Cargo.lock 解析到 0.18.5+1.9.4）。启用 `vendored` feature 让 Cargo 复用 git2
+# 已经 vendored 的同一套 libgit2 源码，不引入第二个 libgit2 版本。
+# 通过此直接依赖暴露 `git_libgit2_opts` / `GIT_OPT_ENABLE_FSYNC_GITDIR` FFI，
+# 让 `storage::git_runtime::configure()` 能统一开启 fsync-gitdir，
+# 保证 libgit2 写 objects/refs 有 durable barrier。
+libgit2-sys = { version = "0.18", default-features = false, features = ["vendored"] }
 base64 = "0.22.1"
 rayon = "1.12.0"
 log = "0.4"

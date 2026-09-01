@@ -16,6 +16,13 @@ import java.io.File
  * 界面显示名（“素笺 / 作品 / 日志 / 导出 / 备份”）一律走 `strings.xml`，
  * 禁止从真实目录名反推显示文字。
  *
+ * ## 存储契约约束（#644 评论 5486167472 问题1）
+ * 此目录位于 Android 共享/模拟存储（`/storage/emulated/0/...`），由 AOSP FUSE
+ * MediaProvider 挂载。**不支持 POSIX hardlink**（`link()` 会失败），`rename` 的
+ * 带 flag 版本也不是可依赖的 no-replace CAS。Core 的 `IndexLockProtocol`
+ *（`sync::git_commit::OwnedIndexLock`）不能假定 POSIX hardlink 存在，只能依赖
+ * `O_EXCL`（`create_new`）原子创建、`rename`（覆盖式）、`fsync`、读写文件内容。
+ *
  * ## 架构定位
  * - 全局单例，只负责目录路径获取与创建，不实现任何业务规则。
  * - 业务规则（保存、同步、格式）全部由 Rust Core 负责。
