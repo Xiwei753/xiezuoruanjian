@@ -868,8 +868,8 @@ fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<()> {
                             repo.set_workdir(&layout.worktree_root, false)
                                 .map_err(|e| {
                                     crate::Error::Io(std::io::Error::other(format!(
-                                    "resume_layout_migration: Prepared phase set_workdir: {e}"
-                                )))
+                                        "resume_layout_migration: Prepared phase set_workdir: {e}"
+                                    )))
                                 })?;
                             let _ = repo.head();
                             if let Ok(mut index) = repo.index() {

@@ -95,7 +95,14 @@ fn defect1_prepared_phase_recovers_renamed_source() {
     let tree = repo.find_tree(tree_oid).unwrap();
     let sig = git2::Signature::now("test", "test@example.com").unwrap();
     let original_commit = repo
-        .commit(Some("HEAD"), &sig, &sig, "init commit (历史标记)", &tree, &[])
+        .commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "init commit (历史标记)",
+            &tree,
+            &[],
+        )
         .unwrap();
     drop(tree);
     drop(index);
@@ -134,9 +141,18 @@ fn defect1_prepared_phase_recovers_renamed_source() {
     fs::write(&journal_path, serde_json::to_string(&journal_json).unwrap()).unwrap();
 
     // 磁盘状态确认（缺陷1触发条件）：
-    assert!(journal_path.exists(), "setup: journal 应存在 (phase=Prepared)");
-    assert!(!original_source.exists(), "setup: original_source 应不存在 (rename 已成功)");
-    assert!(claimed_source.exists(), "setup: claimed_source 应存在 (含 Git 历史)");
+    assert!(
+        journal_path.exists(),
+        "setup: journal 应存在 (phase=Prepared)"
+    );
+    assert!(
+        !original_source.exists(),
+        "setup: original_source 应不存在 (rename 已成功)"
+    );
+    assert!(
+        claimed_source.exists(),
+        "setup: claimed_source 应存在 (含 Git 历史)"
+    );
     assert!(!git_dir.exists(), "setup: target git_dir 应不存在");
 
     eprintln!(
@@ -162,7 +178,10 @@ fn defect1_prepared_phase_recovers_renamed_source() {
     // target 是否含原 commit（正确行为应迁移 claimed_source 内容，含原 commit）
     let target_has_original_commit = match git2::Repository::open(&git_dir) {
         Ok(r) => match r.head() {
-            Ok(h) => h.target().map(|oid| oid == original_commit).unwrap_or(false),
+            Ok(h) => h
+                .target()
+                .map(|oid| oid == original_commit)
+                .unwrap_or(false),
             Err(_) => false, // UnbornBranch 或无 commit → 空仓库
         },
         Err(_) => false, // target 不可打开
@@ -280,7 +299,10 @@ fn defect2_completed_phase_durable_cleanup_returns_err() {
         phase: ProjectDeletePhase::Completed,
     };
     fs::write(&journal_path, serde_json::to_string(&journal).unwrap()).unwrap();
-    assert!(journal_path.exists(), "setup: journal 应存在 (phase=Completed)");
+    assert!(
+        journal_path.exists(),
+        "setup: journal 应存在 (phase=Completed)"
+    );
 
     // 步骤2：检测是否以 root 运行（root 绕过权限检查，权限方法不生效）。
     let probe = tmp.path().join("probe_root");
