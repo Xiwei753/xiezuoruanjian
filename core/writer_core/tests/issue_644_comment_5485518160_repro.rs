@@ -1,18 +1,18 @@
 //! Issue #644 评论 5485518160 — 4 个修改点的白盒测试。
 //!
 //! 本测试文件针对评论 5485518160 描述的 4 个修改点，用白盒方式验证修复行为：
-//! 1. `OwnedIndexLock::acquire` 改用 `O_EXCL` + owner metadata + 崩溃恢复状态机：
-//!    - State 1：lock 存在 + lock 内容是本轮 owner metadata → 恢复 + 重新 acquire
+//! 1. `OwnedIndexLock::acquire` 改用目录锁模型 + owner metadata + 崩溃恢复状态机：
+//!    - State 1：lock 目录存在 + owner 文件归属本轮 → 恢复 + 重新 acquire
 //!    - State 2：lock 不存在 + live index hash == prepared_bytes hash → AlreadyCommitted
-//!    - State 3：lock 不存在 + live index hash != prepared_bytes hash → 删除残留 + 重新 acquire
-//!    - State 4：lock 存在但 lock 内容不是本轮 owner metadata → ConcurrentMetadataChanged
+//!    - State 3：lock 不存在 + live index hash != prepared_bytes hash → 重新 acquire
+//!    - State 4：lock 是 regular file 或目录但 owner 不匹配 → ConcurrentMetadataChanged
 //! 2. `index_lock_owner=None` 旧 manifest 迁移（`check_index_lock_owner_migration`）
 //! 3. NotGitRepo `.git` durable fsync + `copy_dir_recursive` durable copy
 //! 4. `finalize_existing` 收紧 detached HEAD post-check
 //!
-//! #644 评论 5486167472 问题1+问题2：协议从 hardlink+inode 改为 O_EXCL+owner metadata+hash 校验。
-//! 白盒测试通过直接在 `.git` 下构造 owner_file/index.lock/index 的状态
-//!（用 `owner_metadata` 写 lock 内容，用 `rename` 模拟"已 commit"）
+//! #644 评论 5486167472 问题1+问题2 + #644 评论 5486852142 问题1：
+//! 协议从 O_EXCL+regular file 改为 create_dir+目录锁模型+owner metadata+hash 校验。
+//! 白盒测试通过直接在 `.git` 下构造 lock 目录/owner/prepared/index 的状态
 //! 来模拟崩溃状态，然后调用 `OwnedIndexLock::acquire` 验证恢复行为。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -47,8 +47,8 @@ fn make_bare_git_dir(live: &Path) -> std::path::PathBuf {
 
 // ══ 修改点 1：OwnedIndexLock::acquire 崩溃恢复状态机 ══
 
-/// State 1：lock 存在 + lock 内容是本轮 owner metadata。
-/// 说明上次已拿锁但还没 commit。acquire 应删除 lock + owner，fsync .git，
+/// State 1：lock 目录存在 + owner 文件归属本轮。
+/// 说明上次已拿锁但还没 commit。acquire 应删除 lock 目录，fsync .git，
 /// 重新 acquire（返回 NewlyAcquired）。
 #[test]
 fn acquire_state1_acquired_not_renamed_recovers_and_reacquires() {
@@ -59,24 +59,25 @@ fn acquire_state1_acquired_not_renamed_recovers_and_reacquires() {
     let git_dir = make_bare_git_dir(&live);
 
     let owner = "test-owner-state1";
-    let owner_file = git_dir.join(format!("index.sujian-{}", owner));
     let lock_path = git_dir.join("index.lock");
     let index_path = git_dir.join("index");
 
-    // 构造 State 1（新协议）：
-    // 1. 写 owner_file（prepared content）
+    // 构造 State 1（目录锁模型）：
+    // 1. 创建 lock 目录（Sujian lock）
+    fs::create_dir(&lock_path).unwrap();
+    // 2. 在 lock 目录内写 owner 文件（本轮 owner metadata）
+    fs::write(lock_path.join("owner"), owner_metadata(owner)).unwrap();
+    // 3. 在 lock 目录内写 prepared 文件（prepared content）
     let prepared_bytes = b"new index content";
-    fs::write(&owner_file, prepared_bytes).unwrap();
-    // 2. 写 lock_path，内容是本轮 owner metadata（模拟已拿锁）
-    fs::write(&lock_path, owner_metadata(owner)).unwrap();
-    // 3. 写不同的 index 内容（说明 commit 未发生）
+    fs::write(lock_path.join("prepared"), prepared_bytes).unwrap();
+    // 4. 写不同的 index 内容（说明 commit 未发生）
     fs::write(&index_path, b"old index content").unwrap();
 
     // 确认初始状态
     assert!(lock_path.exists());
-    assert!(owner_file.exists());
+    assert!(lock_path.is_dir());
 
-    // 调用 acquire：应检测到 State 1，删除 lock + owner，重新 acquire。
+    // 调用 acquire：应检测到 State 1，删除 lock 目录，重新 acquire。
     let result = OwnedIndexLock::acquire(&git_dir, owner, prepared_bytes);
     match &result {
         Ok(AcquireOutcome::NewlyAcquired(_)) => {
@@ -91,33 +92,38 @@ fn acquire_state1_acquired_not_renamed_recovers_and_reacquires() {
         Err(e) => {
             panic!(
                 "DEFECT: acquire failed for State 1 (acquired but not committed): {} — \
-                 should recover (delete lock + owner) and re-acquire",
+                 should recover (delete lock dir) and re-acquire",
                 e
             );
         }
     }
 
-    // 验证：lock 存在（重新 acquire 后 O_EXCL 创建了新 lock，含 owner metadata）
+    // 验证：lock 目录存在（重新 acquire 后 create_dir 创建了新 lock 目录）
     assert!(
         lock_path.exists(),
-        "after State 1 recovery + re-acquire, index.lock should exist (newly created)"
+        "after State 1 recovery + re-acquire, index.lock should exist (newly created dir)"
     );
-    // owner_file 存在（重新 acquire 创建了新 owner_file）
+    assert!(
+        lock_path.is_dir(),
+        "after re-acquire, index.lock should be a directory"
+    );
+    // owner 文件存在（重新 acquire 创建了新 owner 文件）
+    let owner_file = lock_path.join("owner");
     assert!(
         owner_file.exists(),
-        "after State 1 recovery + re-acquire, owner_file should exist (newly created)"
+        "after State 1 recovery + re-acquire, owner file should exist (newly created)"
     );
-    // lock 内容是本轮 owner metadata
-    let lock_content = fs::read(&lock_path).unwrap();
+    // owner 文件内容是本轮 owner metadata
+    let owner_content = fs::read(&owner_file).unwrap();
     assert!(
-        lock_belongs_to_owner(&lock_content, owner),
-        "after re-acquire, lock content should be our owner metadata"
+        lock_belongs_to_owner(&owner_content, owner),
+        "after re-acquire, owner file content should be our owner metadata"
     );
 }
 
 /// State 2：lock 不存在 + live index hash == prepared_bytes hash。
-/// 说明上次 commit_rename 已完成且方向匹配。acquire 应删除残留 owner_file，
-/// fsync .git，返回 AlreadyCommitted（绝不打开/truncate index）。
+/// 说明上次 commit_rename 已完成且方向匹配。acquire 应返回 AlreadyCommitted
+///（绝不打开/truncate index）。
 ///
 /// #644 评论 5486167472 问题2：AlreadyCommitted 只有在 live index hash == prepared_bytes hash
 /// 时才成立。如果 hash 不匹配（另一方向的已提交状态），应 fall through 重新 acquire。
@@ -130,17 +136,14 @@ fn acquire_state2_already_committed_returns_already_committed() {
     let git_dir = make_bare_git_dir(&live);
 
     let owner = "test-owner-state2";
-    let owner_file = git_dir.join(format!("index.sujian-{}", owner));
     let lock_path = git_dir.join("index.lock");
     let index_path = git_dir.join("index");
 
-    // 构造 State 2（新协议）：
-    // 1. 写 owner_file（残留的 prepared file，commit_rename 后应被删但 Drop 没跑）
+    // 构造 State 2（目录锁模型）：
+    // 1. 写 index，内容 == committed_index_bytes（模拟上次 commit_rename 完成）
     let committed_index_bytes = b"committed index content";
-    fs::write(&owner_file, committed_index_bytes).unwrap();
-    // 2. 写 index，内容 == committed_index_bytes（模拟上次 commit_rename 完成）
     fs::write(&index_path, committed_index_bytes).unwrap();
-    // 3. index.lock 不存在（commit 已完成，lock 已删）
+    // 2. index.lock 不存在（commit 已完成，lock 目录已删）
     assert!(!lock_path.exists());
 
     // 保存 index 内容，验证 acquire 不会 truncate 它
@@ -173,11 +176,6 @@ fn acquire_state2_already_committed_returns_already_committed() {
         index_content_after, index_content_before,
         "acquire must NOT truncate/modify live index for State 2 (already committed)"
     );
-    // owner_file 已被删除（清理残留）
-    assert!(
-        !owner_file.exists(),
-        "acquire should delete owner_file for State 2 (cleanup residual prepared file)"
-    );
     // index.lock 仍不存在
     assert!(
         !lock_path.exists(),
@@ -187,7 +185,7 @@ fn acquire_state2_already_committed_returns_already_committed() {
 
 /// #644 评论 5486167472 问题2：State 2 方向不匹配时应 fall through 重新 acquire。
 /// 构造 forward commit 已完成（index == new），但当前调用准备的是 rollback 的 old。
-/// acquire 应检测到 hash 不匹配 → 清理残留 owner_file → fall through 重新 acquire。
+/// acquire 应检测到 hash 不匹配 → fall through 重新 acquire。
 #[test]
 fn acquire_state2_direction_mismatch_falls_through_to_reacquire() {
     writer_core::storage::git_runtime::ensure_initialized().unwrap();
@@ -197,7 +195,6 @@ fn acquire_state2_direction_mismatch_falls_through_to_reacquire() {
     let git_dir = make_bare_git_dir(&live);
 
     let owner = "test-owner-state2-mismatch";
-    let owner_file = git_dir.join(format!("index.sujian-{}", owner));
     let lock_path = git_dir.join("index.lock");
     let index_path = git_dir.join("index");
 
@@ -205,8 +202,6 @@ fn acquire_state2_direction_mismatch_falls_through_to_reacquire() {
     // index 内容是 forward 的 new（上一阶段已提交）
     let forward_new_index = b"forward new index content";
     fs::write(&index_path, forward_new_index).unwrap();
-    // 残的 owner_file（forward 阶段的 prepared file，Drop 没跑）
-    fs::write(&owner_file, forward_new_index).unwrap();
     // lock 不存在
     assert!(!lock_path.exists());
 
@@ -240,19 +235,21 @@ fn acquire_state2_direction_mismatch_falls_through_to_reacquire() {
         }
     }
 
-    // 验证：lock 存在（重新 acquire 创建了新 lock）
+    // 验证：lock 目录存在（重新 acquire 创建了新 lock 目录）
     assert!(lock_path.exists());
-    // owner_file 存在（重新 acquire 创建了新 owner_file，内容是 rollback old）
-    assert!(owner_file.exists());
-    let owner_content = fs::read(&owner_file).unwrap();
+    assert!(lock_path.is_dir());
+    // prepared 文件存在（重新 acquire 创建了新 prepared 文件，内容是 rollback old）
+    let prepared_file = lock_path.join("prepared");
+    assert!(prepared_file.exists());
+    let prepared_content = fs::read(&prepared_file).unwrap();
     assert_eq!(
-        owner_content, rollback_old_bytes,
-        "owner_file should contain rollback old bytes after re-acquire"
+        prepared_content, rollback_old_bytes,
+        "prepared file should contain rollback old bytes after re-acquire"
     );
 }
 
-/// State 3：owner_file 单独存在且不与 index 同 inode，index.lock 不存在。
-/// 孤立 prepared file，acquire 应删除 owner，fsync .git，重新 acquire。
+/// State 3：lock 不存在，index 内容与 prepared_bytes hash 不匹配。
+/// acquire 应 fall through 重新 acquire（目录锁模型下无残留文件需清理）。
 #[test]
 fn acquire_state3_orphan_prepared_file_recovers_and_reacquires() {
     writer_core::storage::git_runtime::ensure_initialized().unwrap();
@@ -262,53 +259,55 @@ fn acquire_state3_orphan_prepared_file_recovers_and_reacquires() {
     let git_dir = make_bare_git_dir(&live);
 
     let owner = "test-owner-state3";
-    let owner_file = git_dir.join(format!("index.sujian-{}", owner));
     let lock_path = git_dir.join("index.lock");
     let index_path = git_dir.join("index");
 
-    // 构造 State 3：
-    // 1. 写 owner_file（孤立的 prepared file）
-    fs::write(&owner_file, b"orphan prepared content").unwrap();
-    // 2. index.lock 不存在
+    // 构造 State 3（目录锁模型）：
+    // 1. index.lock 不存在
     assert!(!lock_path.exists());
-    // 3. index 存在但内容不同（不同 inode）
+    // 2. index 存在但内容与 prepared_bytes hash 不匹配
     fs::write(&index_path, b"existing index content").unwrap();
 
-    // 调用 acquire：应检测到 State 3，删除 owner，重新 acquire。
+    // 调用 acquire：应检测到 State 3，重新 acquire。
     let result = OwnedIndexLock::acquire(&git_dir, owner, b"new prepared bytes");
     match &result {
         Ok(AcquireOutcome::NewlyAcquired(_)) => {
-            // 预期：恢复后重新 acquire 成功
+            // 预期：重新 acquire 成功
         }
         Ok(AcquireOutcome::AlreadyCommitted) => {
             panic!(
-                "DEFECT: acquire returned AlreadyCommitted for State 3 (orphan prepared \
-                 file) — should return NewlyAcquired after recovery"
+                "DEFECT: acquire returned AlreadyCommitted for State 3 (index hash \
+                 mismatch) — should return NewlyAcquired after re-acquire"
             );
         }
         Err(e) => {
             panic!(
-                "DEFECT: acquire failed for State 3 (orphan prepared file): {} — should \
-                 recover (delete owner) and re-acquire",
+                "DEFECT: acquire failed for State 3 (index hash mismatch): {} — should \
+                 re-acquire",
                 e
             );
         }
     }
 
-    // 验证：lock 存在（重新 acquire 后 hard_link 创建了新 lock）
+    // 验证：lock 目录存在（重新 acquire 后 create_dir 创建了新 lock 目录）
     assert!(
         lock_path.exists(),
-        "after State 3 recovery + re-acquire, index.lock should exist"
+        "after State 3 re-acquire, index.lock should exist"
     );
-    // owner_file 存在（重新 acquire 创建了新 owner_file）
     assert!(
-        owner_file.exists(),
-        "after State 3 recovery + re-acquire, owner_file should exist"
+        lock_path.is_dir(),
+        "after re-acquire, index.lock should be a directory"
+    );
+    // prepared 文件存在（重新 acquire 创建了新 prepared 文件）
+    let prepared_file = lock_path.join("prepared");
+    assert!(
+        prepared_file.exists(),
+        "after State 3 re-acquire, prepared file should exist"
     );
 }
 
-/// State 4：index.lock 存在但 owner_file 不存在。
-/// 归属未知/外部 Git，acquire 应返回 ConcurrentMetadataChanged，绝不碰 lock。
+/// State 4：index.lock 存在为 regular file（外部 Git 进程的 lock）。
+/// acquire 应返回 ConcurrentMetadataChanged，绝不碰 lock。
 #[test]
 fn acquire_state4_external_lock_no_owner_returns_concurrent_changed() {
     writer_core::storage::git_runtime::ensure_initialized().unwrap();
@@ -318,13 +317,10 @@ fn acquire_state4_external_lock_no_owner_returns_concurrent_changed() {
     let git_dir = make_bare_git_dir(&live);
 
     let owner = "test-owner-state4";
-    let owner_file = git_dir.join(format!("index.sujian-{}", owner));
     let lock_path = git_dir.join("index.lock");
 
-    // 构造 State 4：
-    // 1. owner_file 不存在
-    assert!(!owner_file.exists());
-    // 2. index.lock 存在（外部 Git 进程创建的）
+    // 构造 State 4（目录锁模型）：
+    // index.lock 存在为 regular file（外部 Git 进程创建的）
     let external_lock_content = b"external git process lock";
     fs::write(&lock_path, external_lock_content).unwrap();
 
@@ -336,14 +332,14 @@ fn acquire_state4_external_lock_no_owner_returns_concurrent_changed() {
         }
         Ok(AcquireOutcome::NewlyAcquired(_)) => {
             panic!(
-                "DEFECT: acquire returned NewlyAcquired for State 4 (external lock, no \
-                 owner) — should return ConcurrentMetadataChanged"
+                "DEFECT: acquire returned NewlyAcquired for State 4 (external regular \
+                 file lock) — should return ConcurrentMetadataChanged"
             );
         }
         Ok(AcquireOutcome::AlreadyCommitted) => {
             panic!(
-                "DEFECT: acquire returned AlreadyCommitted for State 4 (external lock, no \
-                 owner) — should return ConcurrentMetadataChanged"
+                "DEFECT: acquire returned AlreadyCommitted for State 4 (external regular \
+                 file lock) — should return ConcurrentMetadataChanged"
             );
         }
         Err(e) => {
@@ -367,8 +363,8 @@ fn acquire_state4_external_lock_no_owner_returns_concurrent_changed() {
     );
 }
 
-/// State 4 变体：owner_file 存在，index.lock 存在，但 inode 不匹配。
-/// 归属未知/外部 Git，acquire 应返回 ConcurrentMetadataChanged，绝不碰 lock。
+/// State 4 变体：lock 目录存在但 owner 文件不匹配（不同事务的 lock）。
+/// acquire 应返回 ConcurrentMetadataChanged，绝不碰 lock。
 #[test]
 fn acquire_state4_inode_mismatch_returns_concurrent_changed() {
     writer_core::storage::git_runtime::ensure_initialized().unwrap();
@@ -378,17 +374,19 @@ fn acquire_state4_inode_mismatch_returns_concurrent_changed() {
     let git_dir = make_bare_git_dir(&live);
 
     let owner = "test-owner-state4b";
-    let owner_file = git_dir.join(format!("index.sujian-{}", owner));
     let lock_path = git_dir.join("index.lock");
 
-    // 构造 State 4 变体：
-    // 1. owner_file 存在
-    fs::write(&owner_file, b"our prepared content").unwrap();
-    // 2. index.lock 存在但内容不同（不同 inode）
-    let external_lock_content = b"external git process lock different content";
-    fs::write(&lock_path, external_lock_content).unwrap();
+    // 构造 State 4 变体（目录锁模型）：
+    // 1. 创建 lock 目录（Sujian lock）
+    fs::create_dir(&lock_path).unwrap();
+    // 2. 在 lock 目录内写 owner 文件，但 owner 是不同事务的
+    fs::write(
+        lock_path.join("owner"),
+        owner_metadata("different-transaction-owner"),
+    )
+    .unwrap();
 
-    // 调用 acquire：应返回 ConcurrentMetadataChanged（inode 不匹配）。
+    // 调用 acquire：应返回 ConcurrentMetadataChanged（owner 不匹配）。
     let result = OwnedIndexLock::acquire(&git_dir, owner, b"prepared bytes");
     match &result {
         Err(GitFinalizeError::ConcurrentMetadataChanged { .. }) => {
@@ -397,23 +395,23 @@ fn acquire_state4_inode_mismatch_returns_concurrent_changed() {
         _ => {
             panic!(
                 "DEFECT: acquire should return ConcurrentMetadataChanged for State 4 \
-                 (inode mismatch), got: {:?}",
+                 (directory lock with mismatched owner), got: {:?}",
                 result.as_ref().err()
             );
         }
     }
 
-    // 验证：lock 未被修改/删除
+    // 验证：lock 目录未被修改/删除
     assert!(lock_path.exists());
-    let lock_content_after = fs::read(&lock_path).unwrap();
+    let owner_content_after = fs::read(lock_path.join("owner")).unwrap();
     assert_eq!(
-        lock_content_after, external_lock_content,
-        "acquire must NOT modify external index.lock when inode does not match"
+        owner_content_after,
+        owner_metadata("different-transaction-owner"),
+        "acquire must NOT modify external lock directory owner file when owner does not match"
     );
 }
 
-/// 验证 acquire 用 create_new（不是 File::create）：
-/// 如果 owner_file 已存在，acquire 在 Phase 1 处理后 Phase 2 用 create_new 创建。
+/// 验证 acquire 用 create_dir 创建 lock 目录，prepared 文件内容正确：
 /// 关键：不会 truncate 已存在的 live index（State 2 的核心安全属性）。
 #[test]
 fn acquire_uses_create_new_never_truncates_existing_owner() {
@@ -424,7 +422,6 @@ fn acquire_uses_create_new_never_truncates_existing_owner() {
     let git_dir = make_bare_git_dir(&live);
 
     let owner = "test-owner-create-new";
-    let owner_file = git_dir.join(format!("index.sujian-{}", owner));
     let lock_path = git_dir.join("index.lock");
 
     // 无任何残留状态：正常 acquire
@@ -435,24 +432,26 @@ fn acquire_uses_create_new_never_truncates_existing_owner() {
         "fresh acquire should succeed"
     );
 
-    // owner_file 内容应正好是 prepared_bytes（create_new 创建，不是 truncate）
-    let owner_content = fs::read(&owner_file).unwrap();
-    assert_eq!(
-        owner_content, prepared,
-        "owner_file content should match prepared_bytes exactly"
-    );
-
-    // lock 存在（hard_link 创建）
+    // lock 目录存在（create_dir 创建）
     assert!(lock_path.exists());
+    assert!(lock_path.is_dir());
+
+    // prepared 文件内容应正好是 prepared_bytes（create_new 创建，不是 truncate）
+    let prepared_file = lock_path.join("prepared");
+    let prepared_content = fs::read(&prepared_file).unwrap();
+    assert_eq!(
+        prepared_content, prepared,
+        "prepared file content should match prepared_bytes exactly"
+    );
 
     // 清理（drop lock）
     drop(result.unwrap());
 }
 
-/// 验证"commit_rename 成功、owner 还没删就 SIGKILL"的崩溃恢复。
-/// 模拟：acquire → commit_rename 成功 → 进程死在 Drop 删除 owner_file 前。
-/// 新协议下 commit_rename 把 owner_file rename 成 index（owner_file 不存在了），
-/// 然后删 lock。磁盘状态：index 存在（内容 == prepared_bytes），index.lock 不存在。
+/// 验证"commit_rename 成功、drop 还没删 lock 目录就 SIGKILL"的崩溃恢复。
+/// 模拟：acquire → commit_rename 成功 → 进程死在 Drop 删除 lock 目录前。
+/// 目录锁模型下 commit_rename 把 prepared_file rename 成 index，然后删 lock 目录。
+/// 磁盘状态：index 存在（内容 == prepared_bytes），index.lock 不存在。
 /// 恢复时 acquire 用相同 prepared_bytes 调用应返回 AlreadyCommitted（hash 匹配）。
 #[test]
 fn crash_after_rename_before_drop_owner_recovers_as_already_committed() {
@@ -463,7 +462,6 @@ fn crash_after_rename_before_drop_owner_recovers_as_already_committed() {
     let git_dir = make_bare_git_dir(&live);
 
     let owner = "test-crash-after-rename";
-    let owner_file = git_dir.join(format!("index.sujian-{}", owner));
     let index_path = git_dir.join("index");
 
     // 1. 正常 acquire
@@ -473,19 +471,14 @@ fn crash_after_rename_before_drop_owner_recovers_as_already_committed() {
         AcquireOutcome::AlreadyCommitted => panic!("should be newly acquired"),
     };
 
-    // 2. commit_rename 成功（owner_file rename 成 index，然后删 lock）
+    // 2. commit_rename 成功（prepared_file rename 成 index，然后删 lock 目录）
     lock.commit_rename(&index_path).unwrap();
 
     // 3. 模拟 SIGKILL：用 ManuallyDrop 阻止 Drop 运行。
-    //    新协议下 commit_rename 后 owner_file 已 rename 走（不存在），index 存在，
-    //    index.lock 不存在。
+    //    目录锁模型下 commit_rename 后 lock 目录已删，index 存在。
     let _leaked_lock = std::mem::ManuallyDrop::new(lock);
 
     // 验证崩溃状态
-    assert!(
-        !owner_file.exists(),
-        "owner_file should not exist (commit_rename moved it to index)"
-    );
     assert!(index_path.exists(), "index should exist (rename completed)");
     assert!(
         !git_dir.join("index.lock").exists(),
@@ -511,8 +504,8 @@ fn crash_after_rename_before_drop_owner_recovers_as_already_committed() {
 
 /// 验证"reverse acquire 成功、commit 前 SIGKILL"的崩溃恢复。
 /// 模拟：rollback acquire → 进程死在 commit_rename 前。
-/// 磁盘状态：owner_file 与 index.lock 同 inode，index 是 new（不同 inode）。
-/// 恢复时 acquire 应检测到 State 1，删除 lock + owner，重新 acquire。
+/// 磁盘状态：lock 目录存在（含 owner + prepared），index 是 new（不同内容）。
+/// 恢复时 acquire 应检测到 State 1，删除 lock 目录，重新 acquire。
 #[test]
 fn crash_after_reverse_acquire_before_commit_recovers_and_reacquires() {
     writer_core::storage::git_runtime::ensure_initialized().unwrap();
@@ -522,7 +515,6 @@ fn crash_after_reverse_acquire_before_commit_recovers_and_reacquires() {
     let git_dir = make_bare_git_dir(&live);
 
     let owner = "test-crash-reverse-acquire";
-    let owner_file = git_dir.join(format!("index.sujian-{}", owner));
     let lock_path = git_dir.join("index.lock");
     let index_path = git_dir.join("index");
 
@@ -538,12 +530,14 @@ fn crash_after_reverse_acquire_before_commit_recovers_and_reacquires() {
     };
 
     // 3. 模拟 SIGKILL：用 ManuallyDrop 阻止 Drop 运行，不 commit。
-    //    磁盘状态：owner_file 与 index.lock 同 inode，index 是 new（不同 inode）。
+    //    磁盘状态：lock 目录存在（含 owner + prepared），index 是 new。
     let _leaked_lock = std::mem::ManuallyDrop::new(lock);
 
     // 验证崩溃状态
-    assert!(owner_file.exists());
     assert!(lock_path.exists());
+    assert!(lock_path.is_dir());
+    let prepared_file = lock_path.join("prepared");
+    assert!(prepared_file.exists());
     assert!(index_path.exists());
 
     // 4. 恢复：再次 acquire 应检测到 State 1，恢复 + 重新 acquire

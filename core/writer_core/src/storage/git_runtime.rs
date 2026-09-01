@@ -63,23 +63,28 @@ fn enable_fsync_gitdir() -> Result<(), String> {
     }
 }
 
-#[cfg(target_os = "android")]
+/// #644 评论 5486852142 问题4：统一 configure 入口。
+///
+/// 所有 target 先通过 git2-rs 公开入口 `set_verify_owner_validation` 触发 libgit2
+/// crate 初始化（`git_libgit2_init`），再调 `enable_fsync_gitdir` 的 raw
+/// `git_libgit2_opts`。libgit2 要求 `git_libgit2_init` 必须在任何其它 libgit2
+/// 函数前调用；旧的非 Android configure 直接调 raw opts 而未先触发 init，违反此契约。
+///
+/// Android 关闭 owner validation（emulated/shared storage 无桌面 POSIX owner 语义）；
+/// 非 Android 保持默认（开启 owner validation）。
 fn configure() -> Result<(), String> {
-    // Android emulated/shared storage 不提供可用于 libgit2 owner 校验的桌面 POSIX
-    // 所有权语义。关闭 owner validation 让应用管理的共享存储目录合法。
-    //
+    #[cfg(target_os = "android")]
+    let verify_owner = false;
+    #[cfg(not(target_os = "android"))]
+    let verify_owner = true;
+
     // SAFETY: `set_verify_owner_validation` 设置 libgit2 全局选项，只在单线程初始化
     // 期通过 `OnceLock` 调用一次。调用发生在任何 Repository 操作之前。
-    unsafe { git2::opts::set_verify_owner_validation(false) }.map_err(|e| e.to_string())?;
+    // 此调用同时触发 git2-rs 的 crate 初始化（`git_libgit2_init`）。
+    unsafe { git2::opts::set_verify_owner_validation(verify_owner) }.map_err(|e| e.to_string())?;
 
-    // #644 评论 5486167472 问题3：Android 同样需要 fsync-gitdir。
-    enable_fsync_gitdir()
-}
-
-#[cfg(not(target_os = "android"))]
-fn configure() -> Result<(), String> {
-    // #644 评论 5486167472 问题3：非 Android target 也需要 fsync-gitdir，
-    // libgit2 默认 disabled 不分平台，objects/refs 丢盘风险不分平台。
+    // 现在可以安全调用 raw git_libgit2_opts，因为 git2-rs 已完成初始化。
+    // #644 评论 5486167472 问题3：所有 target 启用 fsync-gitdir。
     enable_fsync_gitdir()
 }
 

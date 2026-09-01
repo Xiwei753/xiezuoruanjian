@@ -127,13 +127,14 @@ pub struct GitFinalizePlan {
     /// 避免误删外部后来创建的仓库。正常 finalize 完成后删除 marker。
     #[serde(default)]
     pub repo_create_owner: Option<String>,
-    /// #644 评论 5484539222 缺陷1：index.lock 持久 ownership 的 owner uuid。
+    /// #644 评论 5484539222 缺陷1 + #644 评论 5486852142 问题1：index.lock 持久 ownership 的 owner uuid。
     /// 在 prepare 阶段生成（当 `new_index_sha256.is_some()` 时），随 manifest 落盘。
-    /// finalize/rollback 用 `OwnedIndexLock` 在 `.git/index.sujian-<owner>` 生成 prepared file，
-    /// `hard_link` 到 `.git/index.lock` 获取 canonical Git lock（同一 inode）。
-    /// 恢复时比较 lock 与 owner_file 的 inode 判断 ownership：属于本轮才清理，
-    /// 不属于本轮（并发 Git 进程）绝不碰。即使进程被 SIGKILL，Drop 不执行，
-    /// 磁盘上 owner_file + lock 仍在，恢复时可通过 inode 比较判断归属。
+    /// finalize/rollback 用 `OwnedIndexLock` 把 `.git/index.lock` 创建为**目录**，
+    /// 目录内 `owner` 文件写 owner metadata，`prepared` 文件写目标 index 字节。
+    /// 恢复时检查 lock_path 是否是目录 + owner 文件内容判断 ownership：
+    /// 属于本轮才清理，不属于本轮（外部 Git regular file lock 或不同事务的目录锁）
+    /// 绝不碰。即使进程被 SIGKILL，Drop 不执行，磁盘上 lock 目录仍在，
+    /// 恢复时可通过目录类型 + owner 文件判断归属。
     #[serde(default)]
     pub index_lock_owner: Option<String>,
 }
@@ -991,42 +992,37 @@ pub fn rollback_git_finalize(
         // 三态判断：先判 old（AlreadyReverted），再判 new（需反向恢复），其它并发失败。
         if index_snapshot_eq(&current_index, &snapshot.index) {
             // current == old(snapshot.index) → 第一次 rollback 已恢复，no-op。
-            // #644 评论 5486167472 问题1：检测并清理本轮的 stale lock。
+            // #644 评论 5486167472 问题1 + #644 评论 5486852142 问题1+问题2：
+            // 目录锁模型下检测并清理本轮的 stale lock。
             // forward install 中途被 SIGKILL（acquire 后、commit_rename 前）会残留
-            // .git/index.lock（含本轮 owner metadata）+ .git/index.sujian-<owner>。
-            // 若 lock 属于本轮（lock 内容是本轮 owner metadata）→ 清理 lock + owner_file；
-            // 若 lock 不属于本轮（外部 Git 进程或不同事务）→ 不碰，保留 no-op。
+            // .git/index.lock 目录（含 owner + prepared 文件）。
+            // - lock_path 是目录且归属本轮（owner 匹配或 owner 文件不存在/为空）
+            //   → 清理 lock 目录，继续 no-op。
+            // - lock_path 是 regular file（外部 Git 进程的 lock）
+            //   → #644 评论 5486852142 问题2：返回 ConcurrentChanged，保留 transaction。
+            // - lock_path 是目录但 owner 不匹配（不同事务的 lock）
+            //   → #644 评论 5486852142 问题2：返回 ConcurrentChanged，保留 transaction。
             // #644 评论 5485518160 修改点 2：迁移入口已保证进入 rollback_git_finalize 时
             // 若 new_index_sha256.is_some() 则 owner 必为 Some（除非 current==old 且无
             // lock 的安全 no-op 路径）。owner=None 且有 stale lock → 未知归属，返回 Err
             // 保留事务（不能留永久 lock）。
-            let mut cleaned_stale_lock = false;
             if let Some(owner) = &plan.index_lock_owner {
-                let owner_file = live_root
-                    .join(".git")
-                    .join(format!("index.sujian-{}", owner));
-                if lock_path.exists() {
-                    // 读 lock 内容判断归属（不再用 inode 比较）。
-                    let lock_bytes = fs::read(&lock_path)?;
-                    if lock_belongs_to_owner(&lock_bytes, owner) {
-                        // lock 属于本轮：清理 lock + owner_file。
-                        let _ = fs::remove_file(&lock_path);
-                        if owner_file.exists() {
-                            let _ = fs::remove_file(&owner_file);
-                        }
-                        cleaned_stale_lock = true;
-                    } else {
-                        // lock 不属于本轮（外部 Git 或不同事务）：绝不碰。
-                        // 但若有孤立的 owner_file，清理它。
-                        if owner_file.exists() {
-                            let _ = fs::remove_file(&owner_file);
-                            cleaned_stale_lock = true;
+                match lock_dir_belongs_to_owner(&lock_path, owner) {
+                    LockOwner::Ours => {
+                        // lock 目录属于本轮：清理 lock 目录，fsync .git。
+                        if remove_lock_dir_if_exists(&lock_path, &live_root.join(".git")) {
+                            // remove_lock_dir_if_exists 已 sync_dir。
                         }
                     }
-                } else if owner_file.exists() {
-                    // lock 不存在但 owner_file 存在：清理孤立的 owner_file。
-                    let _ = fs::remove_file(&owner_file);
-                    cleaned_stale_lock = true;
+                    LockOwner::External => {
+                        // #644 评论 5486852142 问题2：lock 不属于本轮
+                        //（regular file 外部 Git lock 或目录锁但 owner 不匹配）。
+                        // 返回 ConcurrentChanged，保留 transaction 不继续 rollback refs。
+                        return Ok(GitRollbackOutcome::ConcurrentChanged);
+                    }
+                    LockOwner::Absent => {
+                        // lock 不存在：no-op，无需清理。
+                    }
                 }
             } else if lock_path.exists() {
                 // #644 评论 5485518160 修改点 2：owner=None 但 stale lock 存在。
@@ -1040,12 +1036,6 @@ pub fn rollback_git_finalize(
                      lock or leave permanent lock, preserving transaction for next \
                      recovery",
                 )));
-            }
-            // #644 评论 5485518160 修改点 3：清理 stale lock/owner 后必须 sync_dir(.git)，
-            // 持久化目录项删除，之后才能让 transaction 进入 terminal phase。
-            if cleaned_stale_lock {
-                let git_dir = live_root.join(".git");
-                crate::storage::sync_dir(&git_dir)?;
             }
         } else {
             // current != old，检查是否 == new（plan.new_index_sha256）。
@@ -1062,11 +1052,11 @@ pub fn rollback_git_finalize(
                 )));
             }
             // current == new(plan) → 需要反向恢复到 snapshot.index。
-            // 走 OwnedIndexLock 反向提交边界（与 forward install_index_with_lock 同语义）：
-            // 1. acquire（O_EXCL + owner metadata）自己获取 .git/index.lock；
+            // 走 OwnedIndexLock 反向提交边界（与 forward install_indexE_with_lock 同语义）：
+            // 1. acquire（create_dir + owner metadata）自己获取 .git/index.lock 目录；
             //    lock 已存在且不属于本轮 → Err，绝不删。
             // 2. 拿到锁后重新读 index 确认仍 == new。
-            // 3. Bytes 路径 commit_rename（rename owner_file → index）；Missing 路径 commit_delete。
+            // 3. Bytes 路径 commit_rename（rename prepared_file → index）；Missing 路径 commit_delete。
             // #644 评论 5486167472 问题1：用 plan.index_lock_owner 做持久 ownership。
             let owner = plan.index_lock_owner.as_deref().ok_or_else(|| {
                 crate::Error::Io(std::io::Error::other(
@@ -1820,6 +1810,144 @@ fn finalize_existing(
             )))
         })?;
 
+    // #644 评论 5486852142 问题3：branch CAS 成功后再次校验 HEAD。
+    // HEAD post-check（上方 match live_repo.find_reference("HEAD")）到 branch CAS 之间
+    // 有窗口，用户可在此窗口切 branch（HEAD 仍 symbolic 指向别的 branch），目标 branch
+    // 仍是 base_oid，branch CAS 成功，full sync 推进用户已离开的 branch。
+    // branch CAS 成功后再次读取 HEAD：
+    // - HEAD 仍 symbolic 且 target == head_ref → 成功。
+    // - HEAD symbolic 但 target != head_ref / HEAD detached / HEAD NotFound / 其它 Err
+    //   → 反向 CAS head_ref: new_oid -> base_oid，返回 FinalizeFailed
+    //   （让现有 index/remote rollback 收尾）。
+    verify_head_after_branch_cas(&live_repo, head_ref, new_oid, base_oid)?;
+
+    Ok(())
+}
+
+/// #644 评论 5486852142 问题3：finalize_existing branch CAS 成功后再次校验 HEAD。
+///
+/// branch CAS 成功后再次读取 HEAD：
+/// - HEAD 仍 symbolic 且 target == head_ref → Ok(())。
+/// - HEAD symbolic 但 target != head_ref / HEAD detached / HEAD NotFound / 其它 Err
+///   → 反向 CAS head_ref: new_oid -> base_oid，返回 FinalizeFailed
+///   （让现有 index/remote rollback 收尾）。
+#[allow(clippy::too_many_lines, clippy::excessive_nesting)]
+fn verify_head_after_branch_cas(
+    live_repo: &git2::Repository,
+    head_ref: &str,
+    new_oid: git2::Oid,
+    base_oid: git2::Oid,
+) -> std::result::Result<(), GitFinalizeError> {
+    match live_repo.find_reference("HEAD") {
+        Ok(post_head) => {
+            if let Some(post_sym_target) = post_head.symbolic_target() {
+                if post_sym_target != head_ref {
+                    // HEAD 在 branch CAS 后切到了别的 branch。
+                    // 反向 CAS head_ref: new_oid -> base_oid，撤销本轮 branch 推进。
+                    live_repo
+                        .reference_matching(
+                            head_ref,
+                            base_oid,
+                            true,
+                            new_oid,
+                            "sync: rollback head_ref after HEAD changed post branch CAS",
+                        )
+                        .map_err(|e| {
+                            crate::Error::Io(std::io::Error::other(format!(
+                                "finalize_existing: post-CAS HEAD switched to {} (expected {}), \
+                                 reverse CAS head_ref {} failed (new={} old={}): {}",
+                                post_sym_target, head_ref, head_ref, new_oid, base_oid, e
+                            )))
+                        })?;
+                    return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                        std::io::Error::other(format!(
+                            "finalize_existing: HEAD switched from {} to {} after branch CAS \
+                             succeeded — reversed branch CAS ({}: {} -> {}), must rollback \
+                             (refusing to advance head_ref on a branch the user has left)",
+                            head_ref, post_sym_target, head_ref, new_oid, base_oid
+                        )),
+                    )));
+                }
+                // HEAD 仍 symbolic 且 target == head_ref → 成功。
+            } else {
+                // HEAD detached after branch CAS。反向 CAS 撤销本轮 branch 推进。
+                live_repo
+                    .reference_matching(
+                        head_ref,
+                        base_oid,
+                        true,
+                        new_oid,
+                        "sync: rollback head_ref after HEAD detached post branch CAS",
+                    )
+                    .map_err(|e| {
+                        crate::Error::Io(std::io::Error::other(format!(
+                            "finalize_existing: post-CAS HEAD detached, reverse CAS head_ref \
+                             {} failed (new={} old={}): {}",
+                            head_ref, new_oid, base_oid, e
+                        )))
+                    })?;
+                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                    std::io::Error::other(
+                        "finalize_existing: HEAD detached after branch CAS succeeded — \
+                         reversed branch CAS, must rollback (refusing to advance head_ref \
+                         on a branch the user has left via detach)",
+                    ),
+                )));
+            }
+        }
+        Err(e) if e.code() == git2::ErrorCode::NotFound => {
+            // HEAD NotFound after branch CAS。反向 CAS 撤销本轮 branch 推进。
+            live_repo
+                .reference_matching(
+                    head_ref,
+                    base_oid,
+                    true,
+                    new_oid,
+                    "sync: rollback head_ref after HEAD NotFound post branch CAS",
+                )
+                .map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "finalize_existing: post-CAS HEAD NotFound, reverse CAS head_ref \
+                         {} failed (new={} old={}): {}",
+                        head_ref, new_oid, base_oid, e
+                    )))
+                })?;
+            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                std::io::Error::other(format!(
+                    "finalize_existing: HEAD reference not found after branch CAS succeeded \
+                     (unborn or deleted): {} — reversed branch CAS, refusing to finalize on \
+                     repo without HEAD",
+                    e
+                )),
+            )));
+        }
+        Err(e) => {
+            // 其它 Err：尝试反向 CAS，返回 FinalizeFailed。
+            live_repo
+                .reference_matching(
+                    head_ref,
+                    base_oid,
+                    true,
+                    new_oid,
+                    "sync: rollback head_ref after HEAD read error post branch CAS",
+                )
+                .map_err(|e2| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "finalize_existing: post-CAS find_reference(\"HEAD\") failed: {}, \
+                         reverse CAS head_ref {} also failed (new={} old={}): {}",
+                        e, head_ref, new_oid, base_oid, e2
+                    )))
+                })?;
+            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                std::io::Error::other(format!(
+                    "finalize_existing: find_reference(\"HEAD\") failed with non-NotFound \
+                     error after branch CAS succeeded: {} — reversed branch CAS, refusing \
+                     to finalize on possibly corrupted refdb",
+                    e
+                )),
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -1909,48 +2037,57 @@ fn finalize_detached(
 
 // ── 内部辅助函数（从 git_staging.rs 移入） ──
 
-/// #644 评论 5486167472 问题1+问题2：持久 ownership 的 index lock。
+/// #644 评论 5486167472 问题1+问题2 + #644 评论 5486852142 问题1：持久 ownership 的 index lock。
 ///
-/// ## IndexLockProtocol（Android shared-storage 可落地）
+/// ## IndexLockProtocol（目录锁模型，Android shared-storage 可落地）
 ///
 /// Android 共享存储（AOSP FUSE）不提供 hardlink，`rename` 的带 flag 版本也不是
 /// 可依赖的 no-replace CAS。本协议只用 Android shared-storage 能提供的原语：
-/// `O_EXCL`（`create_new`）原子创建、`rename`（覆盖式）、`fsync`、读写文件内容。
+/// `create_dir`（原子创建目录，已存在则失败）、`rename`（覆盖式）、`fsync`、读写文件内容。
 ///
-/// - **canonical lock** = `.git/index.lock`，用 `OpenOptions::new().write(true).create_new(true)`
-///   原子创建（O_EXCL，标准 Git 锁协议）。lock 已存在 → `ConcurrentMetadataChanged`。
-/// - **ownership** 通过在 lock 文件内写入 owner metadata 证明，而不是 hardlink 的同一 inode。
-///   owner metadata 格式：`sujian-index-lock-v1\nowner=<uuid>\n`。恢复时读 lock 内容，
-///   能解析为本轮 owner → 本轮 lock；不能解析或 owner 不匹配 → 外部 Git 进程的 lock，
-///   `ConcurrentMetadataChanged`，绝不删。
-/// - **prepared index 字节**写到独立的 prepared file（`.git/index.sujian-<owner>`），fsync。
-/// - **commit_rename**：把 prepared file rename 成 index（覆盖），然后删除 lock，每步 fsync 父目录。
-/// - **commit_delete**（Missing 路径）：删 index → 删 lock，每步 fsync 父目录。
+/// - **canonical lock** = `.git/index.lock` 作为**目录**（不是 regular file）。
+///   `fs::create_dir(&lock_path)` 原子创建目录，已存在则失败。标准 Git 创建 regular
+///   `index.lock` 会因路径已存在（是目录）而失败，目录类型本身就是 Sujian 协议事实。
+///   `create_dir` 成功就是原子的 ownership 证明，**不再有** O_EXCL create-to-write 窗口。
+/// - 目录内放：
+///   - `owner` 文件：写 owner metadata（`INDEX_LOCK_MARKER` + `owner=<owner>`），fsync。
+///   - `prepared` 文件：写 prepared bytes（目标 index 内容），fsync。
+/// - **ownership** 通过目录存在性 + 目录内 `owner` 文件内容证明。恢复时：
+///   - `lock_path` 是 regular file → 外部 Git 进程的 lock（标准 Git 创建 regular file）。
+///   - `lock_path` 是目录 → Sujian lock（不可能是外部 Git 的）。读 `owner` 文件判断归属：
+///     - `owner` 文件不存在/为空 → Sujian lock 但未完成写入（crash 在 create_dir 和 write
+///       owner 之间），可安全清理。
+///     - `owner` 文件存在且内容匹配 → 本轮 lock。
+///     - `owner` 文件存在但不匹配 → 不同事务的 lock。
+/// - **commit_rename**：rename `prepared` → index（覆盖），然后删除 lock 目录，每步 fsync 父目录。
+/// - **commit_delete**（Missing 路径）：删 index → 删 prepared → 删 lock 目录，每步 fsync 父目录。
 ///
-/// 关键不变量：ownership 是磁盘事实（lock 文件内的 owner metadata + prepared file 名），
-/// 不依赖 `Drop` 有没有机会执行。即使进程被 SIGKILL，Drop 不执行，磁盘上 lock +
-/// prepared file 仍在，恢复时通过解析 lock 内容判断归属。
+/// 关键不变量：`create_dir` 成功就是原子的 ownership 证明。即使 crash 在 create_dir 后、
+/// write owner 前，恢复时看到目录就知道是 Sujian lock（不可能是外部 Git 的），可以安全清理。
+/// 不再有"空/半截 lock 被当成外部 Git lock"的窗口。
 ///
 /// #644 评论 5486167472 问题2：State 2（已 commit）带方向事实。
 /// `AlreadyCommitted` 只有在 live index 的内容 hash **等于本次 `prepared_bytes` 的 hash**
 /// 时才成立。如果 owner/index 内容是 forward 的 new，而当前调用准备的是 rollback 的 old，
-/// 就只能认定"上一阶段 forward commit 已完成"，先清 prepared file，再 fall through
+/// 就只能认定"上一阶段 forward commit 已完成"，先清 lock 目录，再 fall through
 /// 重新 acquire（写本次 prepared_bytes 并获取 lock），不能直接返回 `AlreadyCommitted`。
 /// Missing 路径：`prepared_bytes` 为空切片时，`AlreadyCommitted` 要求 live index 也不存在
 ///（Missing == Missing）。
 pub struct OwnedIndexLock {
+    /// `.git/index.lock`（现在是目录，不是 regular file）。
     lock_path: PathBuf,
-    owner_file: PathBuf,
-    /// `true` 表示已成功 commit（lock 已删走），`drop` 只清理 owner_file。
-    /// `false` 表示未 commit（出错路径），`drop` 清理 lock + owner_file。
+    /// `lock_path/prepared`：写 prepared bytes（目标 index 内容）。
+    prepared_file: PathBuf,
+    /// `true` 表示已成功 commit（lock 目录已删走），`drop` 无操作。
+    /// `false` 表示未 commit（出错路径），`drop` 清理 lock 目录。
     disarmed: bool,
 }
 
 /// #644 评论 5486167472 问题1：owner metadata 格式常量。
 ///
-/// 写入 `.git/index.lock` 的 owner metadata，用于区分本轮 lock 和外部 Git 进程的 lock。
-/// 外部 Git 创建的 `index.lock` 是空文件或含 index 内容，开头不是此 marker，
-/// 恢复时解析失败 → 视为外部 Git 的 lock → `ConcurrentMetadataChanged`，绝不删。
+/// 写入 `.git/index.lock/owner` 的 owner metadata，用于区分本轮 lock 和不同事务的 lock。
+/// 外部 Git 创建的 `index.lock` 是 regular file（不是目录），恢复时看到 regular file
+/// 就知道是外部 Git 的 lock → `ConcurrentMetadataChanged`，绝不删。
 pub const INDEX_LOCK_MARKER: &str = "sujian-index-lock-v1";
 
 /// #644 评论 5486167472 问题1：构造 owner metadata 字节串。
@@ -1958,10 +2095,13 @@ pub fn owner_metadata(owner: &str) -> Vec<u8> {
     format!("{INDEX_LOCK_MARKER}\nowner={owner}\n").into_bytes()
 }
 
-/// #644 评论 5486167472 问题1：解析 lock 文件内容，判断是否是本轮 owner。
+/// #644 评论 5486167472 问题1：解析 owner 文件内容，判断是否是本轮 owner。
 ///
-/// 返回 `true` 表示 lock 内容是本轮 owner metadata（格式匹配 + owner 匹配）。
-/// 返回 `false` 表示无法解析（外部 Git 的 lock）或 owner 不匹配（不同事务的 lock）。
+/// 返回 `true` 表示 owner 文件内容是本轮 owner metadata（格式匹配 + owner 匹配）。
+/// 返回 `false` 表示无法解析（损坏的 owner 文件）或 owner 不匹配（不同事务的 lock）。
+///
+/// 注意：此函数只解析 owner metadata 字节串。目录锁模型的归属判断用
+/// `lock_dir_belongs_to_owner`，它先检查 lock_path 是否是目录，再读 owner 文件。
 pub fn lock_belongs_to_owner(lock_bytes: &[u8], owner: &str) -> bool {
     let Ok(text) = std::str::from_utf8(lock_bytes) else {
         return false;
@@ -1974,12 +2114,60 @@ pub fn lock_belongs_to_owner(lock_bytes: &[u8], owner: &str) -> bool {
     lines.next() == Some(&expected)
 }
 
-/// #644 评论 5486167472 问题1：删除 owner_file（如果存在）并 fsync `.git`。
+/// #644 评论 5486852142 问题1：目录锁模型的归属判断。
+///
+/// 返回值语义：
+/// - `LockOwner::Ours`：lock_path 是目录，且 owner 文件不存在/为空（本轮未完成写入）
+///   或 owner 文件内容匹配本轮 owner。可以安全清理（Sujian lock 不可能是外部 Git 的）。
+/// - `LockOwner::External`：lock_path 是 regular file（外部 Git 进程的 lock），
+///   或 lock_path 是目录但 owner 文件内容不匹配（不同事务的 lock）。绝不碰。
+/// - `LockOwner::Absent`：lock_path 不存在。
+pub enum LockOwner {
+    /// lock_path 不存在。
+    Absent,
+    /// lock_path 是目录且归属本轮（owner 匹配或 owner 文件不存在/为空）。
+    Ours,
+    /// lock_path 是 regular file（外部 Git）或是目录但 owner 不匹配（不同事务）。
+    External,
+}
+
+/// #644 评论 5486852142 问题1：判断 lock_path 的归属。
+///
+/// - `lock_path` 不存在 → `Absent`。
+/// - `lock_path` 是目录 → Sujian lock。读 `lock_path/owner` 文件：
+///   - owner 文件不存在/为空 → `Ours`（crash 在 create_dir 和 write owner 之间，
+///     可安全清理，因为是 Sujian 目录锁不可能是外部 Git 的）。
+///   - owner 文件存在且内容匹配 → `Ours`。
+///   - owner 文件存在但不匹配 → `External`（不同事务的 lock）。
+/// - `lock_path` 是 regular file → `External`（外部 Git 进程的 lock）。
+pub fn lock_dir_belongs_to_owner(lock_path: &Path, owner: &str) -> LockOwner {
+    if !lock_path.exists() {
+        return LockOwner::Absent;
+    }
+    if !lock_path.is_dir() {
+        // regular file → 外部 Git 进程的 lock。
+        return LockOwner::External;
+    }
+    // lock_path 是目录 → Sujian lock。读 owner 文件判断归属。
+    let owner_file = lock_path.join("owner");
+    let owner_bytes = fs::read(&owner_file).unwrap_or_default();
+    if owner_bytes.is_empty() {
+        // owner 文件不存在/为空 → Sujian lock 但未完成写入，可安全清理。
+        return LockOwner::Ours;
+    }
+    if lock_belongs_to_owner(&owner_bytes, owner) {
+        LockOwner::Ours
+    } else {
+        LockOwner::External
+    }
+}
+
+/// #644 评论 5486852142 问题1：删除 lock 目录（如果存在且是目录）并 fsync 父目录。
 ///
 /// 提取为辅助函数以减少 `acquire` 的嵌套深度。返回 `bool` 表示是否真的删了
 ///（调用方据此决定是否需要 sync_dir）。
-fn remove_owner_if_exists(owner_file: &Path, git_dir: &Path) -> bool {
-    if owner_file.exists() && fs::remove_file(owner_file).is_ok() {
+fn remove_lock_dir_if_exists(lock_path: &Path, git_dir: &Path) -> bool {
+    if lock_path.is_dir() && fs::remove_dir_all(lock_path).is_ok() {
         let _ = crate::storage::sync_dir(git_dir);
         return true;
     }
@@ -2000,34 +2188,36 @@ pub enum AcquireOutcome {
 }
 
 impl OwnedIndexLock {
-    /// #644 评论 5486167472 问题1+问题2：恢复已有 ownership → 再创建新 ownership 的两段状态机。
+    /// #644 评论 5486167472 问题1+问题2 + #644 评论 5486852142 问题1：恢复已有 ownership → 再创建新 ownership 的两段状态机。
     ///
     /// ## Phase 1：检查磁盘崩溃状态
     ///
-    /// owner_file = `.git/index.sujian-<owner>`，lock_path = `.git/index.lock`，
-    /// index_path = `.git/index`。根据 lock 内容 + index hash 判断上一次 acquire/commit
-    /// 死在哪一步：
+    /// lock_path = `.git/index.lock`（目录），index_path = `.git/index`。
+    /// 根据 lock_path 类型 + index hash 判断上一次 acquire/commit 死在哪一步：
     ///
-    /// - **State 1（已拿锁未 commit）**：lock 存在 + lock 内容是本轮 owner metadata。
-    ///   说明上次 acquire 已成功但 commit 未执行。删除 lock + owner_file，fsync `.git`，
-    ///   fall through 到 Phase 2 重新 acquire。
-    /// - **State 2（已 commit，且方向匹配）**：lock 不存在 + live index hash == 本次
+    /// - **State 1（已拿锁未 commit）**：lock_path 是目录 + owner 文件不存在/为空或
+    ///   owner 匹配本轮。说明上次 acquire 已成功但 commit 未执行。删除 lock 目录，
+    ///   fsync `.git`，fall through 到 Phase 2 重新 acquire。
+    /// - **State 2（已 commit，且方向匹配）**：lock_path 不存在 + live index hash == 本次
     ///   `prepared_bytes` hash（Missing == Missing 也算）。说明上次 `commit_rename`/`commit_delete`
-    ///   已完成且内容方向匹配。删除残留的 owner_file，fsync `.git`，返回 `AlreadyCommitted`。
-    /// - **State 3（已 commit，但方向不匹配 / 孤立 prepared file）**：lock 不存在 +
-    ///   live index hash != 本次 `prepared_bytes` hash。说明是另一方向的已提交状态
-    ///   （forward commit 后崩溃，现在进入 rollback）。删除残留的 owner_file，fsync `.git`，
-    ///   fall through 到 Phase 2 重新 acquire（写本次 prepared_bytes 并获取 lock）。
-    /// - **State 4（归属未知/外部 Git）**：lock 存在但 lock 内容不是本轮 owner metadata
-    ///   （无法解析或 owner 不匹配）。返回 `ConcurrentMetadataChanged`，保留事务，绝不碰 lock。
+    ///   已完成且内容方向匹配。返回 `AlreadyCommitted`。
+    /// - **State 3（已 commit，但方向不匹配）**：lock_path 不存在 + live index hash != 本次
+    ///   `prepared_bytes` hash。说明是另一方向的已提交状态（forward commit 后崩溃，现在
+    ///   进入 rollback）。fall through 到 Phase 2 重新 acquire（写本次 prepared_bytes 并获取 lock）。
+    /// - **State 4（归属未知/外部 Git）**：lock_path 是 regular file（外部 Git 进程的 lock），
+    ///   或 lock_path 是目录但 owner 文件内容不匹配本轮（不同事务的 lock）。返回
+    ///   `ConcurrentMetadataChanged`，保留事务，绝不碰 lock。
     ///
-    /// ## Phase 2：新建 ownership
+    /// ## Phase 2：新建 ownership（目录锁模型）
     ///
-    /// 1. 用 `OpenOptions::new().write(true).create_new(true)` 原子创建 lock（O_EXCL）。
-    ///    lock 已存在 → `ConcurrentMetadataChanged`，绝不碰已存在的 lock。
-    /// 2. 写 owner metadata 到 lock，fsync lock + `.git`。
-    /// 3. 用 `create_new(true)` 创建 owner_file（prepared file），写入 `prepared_bytes`，
-    ///    fsync owner_file + `.git`。
+    /// 1. `fs::create_dir(&lock_path)` 原子创建 lock 目录（已存在则失败）。
+    ///    这一步本身就是原子的 ownership 证明。
+    /// 2. 在 `lock_path/owner` 写 owner metadata，fsync。如果失败，清理目录并返回 Err。
+    /// 3. 在 `lock_path/prepared` 写 `prepared_bytes`，fsync。如果失败，清理目录并返回 Err。
+    ///
+    /// 关键安全属性：`create_dir` 成功就是原子的 ownership 证明。即使 crash 在 create_dir 后、
+    /// write owner 前，恢复时看到目录就知道是 Sujian lock（不可能是外部 Git 的），可以安全清理。
+    /// 不再有"空/半截 lock 被当成外部 Git lock"的窗口。
     pub fn acquire(
         git_dir: &Path,
         owner: &str,
@@ -2035,131 +2225,150 @@ impl OwnedIndexLock {
     ) -> std::result::Result<AcquireOutcome, GitFinalizeError> {
         use std::io::Write;
 
-        let owner_file = git_dir.join(format!("index.sujian-{}", owner));
         let lock_path = git_dir.join("index.lock");
+        let owner_file = lock_path.join("owner");
+        let prepared_file = lock_path.join("prepared");
         let index_path = git_dir.join("index");
 
         let metadata = owner_metadata(owner);
 
         // ── Phase 1：检查磁盘崩溃状态 ──
-        if lock_path.exists() {
-            // lock 存在：读内容判断归属。
-            let lock_bytes = fs::read(&lock_path)
-                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-            if lock_belongs_to_owner(&lock_bytes, owner) {
-                // State 1：上次已拿锁但还没 commit。lock 是本事务自己的。
-                // 删除 lock + owner_file，fsync .git，fall through 到 Phase 2 重新 acquire。
-                fs::remove_file(&lock_path)
+        match lock_dir_belongs_to_owner(&lock_path, owner) {
+            LockOwner::Absent => {
+                // lock 不存在：检查 index hash 判断是否已 commit（State 2 / State 3）。
+                let current_index_hash = if index_path.exists() {
+                    let bytes = fs::read(&index_path)
+                        .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+                    Some(sha256_bytes(&bytes))
+                } else {
+                    None
+                };
+                let prepared_hash = sha256_bytes(prepared_bytes);
+                // Missing == Missing 也算 AlreadyCommitted（prepared_bytes 为空 + index 不存在）。
+                let index_matches_prepared = match &current_index_hash {
+                    Some(h) => *h == prepared_hash,
+                    None => prepared_bytes.is_empty(),
+                };
+
+                if index_matches_prepared {
+                    // State 2：上次 commit 已完成且方向匹配。返回 AlreadyCommitted。
+                    return Ok(AcquireOutcome::AlreadyCommitted);
+                }
+                // State 3：lock 不存在但 index hash != prepared_bytes hash。
+                // 可能是另一方向的已提交状态（forward commit 后崩溃，现在 rollback）。
+                // fall through 到 Phase 2 重新 acquire。
+            }
+            LockOwner::Ours => {
+                // State 1：上次已拿锁但还没 commit。lock 目录是本事务自己的。
+                // 删除 lock 目录，fsync .git，fall through 到 Phase 2 重新 acquire。
+                fs::remove_dir_all(&lock_path)
                     .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-                remove_owner_if_exists(&owner_file, git_dir);
                 crate::storage::sync_dir(git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
-            } else {
-                // State 4：lock 存在但不属于本轮（外部 Git 进程或不同事务的 lock）。
+            }
+            LockOwner::External => {
+                // State 4：lock_path 是 regular file（外部 Git 进程的 lock），
+                // 或 lock_path 是目录但 owner 不匹配（不同事务的 lock）。
                 // 绝不碰 lock，返回 ConcurrentMetadataChanged。
                 return Err(GitFinalizeError::ConcurrentMetadataChanged {
-                    reason: "index.lock exists but does not contain our owner metadata: \
-                             concurrent git process or different transaction is writing index"
+                    reason: "index.lock exists but does not belong to us: \
+                             concurrent git process (regular file lock) or different \
+                             transaction (directory lock with mismatched owner) is writing index"
                         .to_string(),
                 });
             }
-        } else {
-            // lock 不存在：检查 index hash 判断是否已 commit（State 2 / State 3）。
-            let current_index_hash = if index_path.exists() {
-                let bytes = fs::read(&index_path)
-                    .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-                Some(sha256_bytes(&bytes))
-            } else {
-                None
-            };
-            let prepared_hash = sha256_bytes(prepared_bytes);
-            // Missing == Missing 也算 AlreadyCommitted（prepared_bytes 为空 + index 不存在）。
-            let index_matches_prepared = match &current_index_hash {
-                Some(h) => *h == prepared_hash,
-                None => prepared_bytes.is_empty(),
-            };
-
-            if index_matches_prepared {
-                // State 2：上次 commit 已完成且方向匹配。
-                // 删除残留的 owner_file（如果有），fsync .git，返回 AlreadyCommitted。
-                remove_owner_if_exists(&owner_file, git_dir);
-                return Ok(AcquireOutcome::AlreadyCommitted);
-            }
-            // State 3：lock 不存在但 index hash != prepared_bytes hash。
-            // 可能是另一方向的已提交状态（forward commit 后崩溃，现在 rollback），
-            // 或孤立的 prepared file。删除残留 owner_file，fsync .git，
-            // fall through 到 Phase 2 重新 acquire。
-            remove_owner_if_exists(&owner_file, git_dir);
         }
 
-        // ── Phase 2：新建 ownership ──
-        // 1. O_EXCL 创建 lock，写 owner metadata，fsync。
+        // ── Phase 2：新建 ownership（目录锁模型） ──
+        // 1. create_dir 原子创建 lock 目录（已存在则失败）。
+        //    这一步本身就是原子的 ownership 证明。
+        fs::create_dir(&lock_path)
+            .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+        crate::storage::sync_dir(git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
+
+        // 2. 在 lock 目录内创建 owner 文件，写 owner metadata，fsync。
+        //    如果失败，清理目录并返回 Err。
         {
-            let mut lock = std::fs::OpenOptions::new()
+            let mut owner_f = match std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .open(&lock_path)
+                .open(&owner_file)
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = fs::remove_dir_all(&lock_path);
+                    let _ = crate::storage::sync_dir(git_dir);
+                    return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e)));
+                }
+            };
+            owner_f
+                .write_all(&metadata)
                 .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-            lock.write_all(&metadata)
+            owner_f
+                .flush()
                 .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-            lock.flush()
+            owner_f
+                .sync_all()
                 .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-            lock.sync_all()
-                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+            drop(owner_f);
+            crate::storage::sync_parent(&owner_file).map_err(GitFinalizeError::FinalizeFailed)?;
         }
-        crate::storage::sync_parent(&lock_path).map_err(GitFinalizeError::FinalizeFailed)?;
 
-        // 2. create_new 创建 owner_file（prepared file），写 prepared_bytes，fsync。
-        //    owner_file 已存在说明 Phase 1 清理不彻底（异常），删 lock 后返回 Err。
-        let owner_create_result = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&owner_file);
-        let mut owner_f = match owner_create_result {
-            Ok(f) => f,
-            Err(e) => {
-                let _ = fs::remove_file(&lock_path);
-                let _ = crate::storage::sync_dir(git_dir);
-                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e)));
-            }
-        };
-        owner_f
-            .write_all(prepared_bytes)
-            .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-        owner_f
-            .flush()
-            .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-        owner_f
-            .sync_all()
-            .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-        drop(owner_f);
-        crate::storage::sync_parent(&owner_file).map_err(GitFinalizeError::FinalizeFailed)?;
+        // 3. 在 lock 目录内创建 prepared 文件，写 prepared_bytes，fsync。
+        //    如果失败，清理目录并返回 Err。
+        {
+            let mut prepared_f = match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&prepared_file)
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = fs::remove_dir_all(&lock_path);
+                    let _ = crate::storage::sync_dir(git_dir);
+                    return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e)));
+                }
+            };
+            prepared_f
+                .write_all(prepared_bytes)
+                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+            prepared_f
+                .flush()
+                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+            prepared_f
+                .sync_all()
+                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
+            drop(prepared_f);
+            crate::storage::sync_parent(&prepared_file)
+                .map_err(GitFinalizeError::FinalizeFailed)?;
+        }
 
         Ok(AcquireOutcome::NewlyAcquired(Self {
             lock_path,
-            owner_file,
+            prepared_file,
             disarmed: false,
         }))
     }
 
-    /// 提交（Bytes 路径）：`rename owner_file → index`（原子提交），然后删 lock。
-    /// 每步 fsync 父目录。成功后 `disarm`，`drop` 只清理 owner_file（已 rename 走）。
+    /// 提交（Bytes 路径）：`rename prepared_file → index`（原子提交），然后删 lock 目录。
+    /// 每步 fsync 父目录。成功后 `disarm`，`drop` 无操作。
     pub fn commit_rename(
         &mut self,
         index_path: &Path,
     ) -> std::result::Result<(), GitFinalizeError> {
-        // rename owner_file → index（覆盖式 rename，原子提交）。
-        fs::rename(&self.owner_file, index_path)
+        // rename prepared_file → index（覆盖式 rename，原子提交）。
+        fs::rename(&self.prepared_file, index_path)
             .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
         crate::storage::sync_parent(index_path).map_err(GitFinalizeError::FinalizeFailed)?;
-        // 删 lock，fsync .git。
-        fs::remove_file(&self.lock_path)
+        // 删 lock 目录，fsync .git。
+        fs::remove_dir_all(&self.lock_path)
             .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
         crate::storage::sync_parent(&self.lock_path).map_err(GitFinalizeError::FinalizeFailed)?;
         self.disarmed = true;
         Ok(())
     }
 
-    /// 提交（Missing 路径）：删除 index，然后删除 owner_file，然后删除 lock，每步 fsync 父目录。
+    /// 提交（Missing 路径）：删除 index，然后删除 prepared_file，然后删除 lock 目录，
+    /// 每步 fsync 父目录。
     pub fn commit_delete(
         &mut self,
         index_path: &Path,
@@ -2167,10 +2376,11 @@ impl OwnedIndexLock {
         fs::remove_file(index_path)
             .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
         crate::storage::sync_parent(index_path).map_err(GitFinalizeError::FinalizeFailed)?;
-        fs::remove_file(&self.owner_file)
+        fs::remove_file(&self.prepared_file)
             .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-        crate::storage::sync_parent(&self.owner_file).map_err(GitFinalizeError::FinalizeFailed)?;
-        fs::remove_file(&self.lock_path)
+        crate::storage::sync_parent(&self.prepared_file)
+            .map_err(GitFinalizeError::FinalizeFailed)?;
+        fs::remove_dir_all(&self.lock_path)
             .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
         crate::storage::sync_parent(&self.lock_path).map_err(GitFinalizeError::FinalizeFailed)?;
         self.disarmed = true;
@@ -2181,30 +2391,31 @@ impl OwnedIndexLock {
 impl Drop for OwnedIndexLock {
     fn drop(&mut self) {
         if !self.disarmed {
-            // 未 commit（出错路径）：清理 lock（如果还在）。
-            let _ = fs::remove_file(&self.lock_path);
+            // 未 commit（出错路径）：清理 lock 目录（如果还在）。
+            // remove_dir_all 会递归删除 owner_file 和 prepared_file。
+            let _ = fs::remove_dir_all(&self.lock_path);
         }
-        // 始终清理 owner_file（commit 成功后 owner_file 已 rename 走或删掉；
-        // 未 commit 时 owner_file 也应清理不留垃圾）。
-        let _ = fs::remove_file(&self.owner_file);
+        // commit 成功后 lock 目录已被 remove_dir_all 删走；
+        // 未 commit 时上面的 remove_dir_all 已清理。无需额外操作。
     }
 }
 
 /// #644 评论 5480360027 修复点 3 + #644 评论 5481496190 问题2 +
-/// #644 评论 5486167472 问题1：index 原生锁边界 + 持久 ownership。
+/// #644 评论 5486167472 问题1 + #644 评论 5486852142 问题1：index 原生锁边界 + 持久 ownership。
 ///
-/// 流程（OwnedIndexLock O_EXCL + owner metadata 模型）：
+/// 流程（OwnedIndexLock 目录锁模型）：
 /// 1. 在 staging repo 的 .git 目录下生成目标 index 字节（对应 staging HEAD 的 tree）。
-/// 2. 用 `OwnedIndexLock::acquire` 在 `.git/index.lock`（O_EXCL 创建 + owner metadata）
-///    获取 canonical Git lock，在 `.git/index.sujian-<owner>` 写入目标 index 字节（fsync）。
-///    lock 已存在 → `ConcurrentMetadataChanged`，绝不碰别人的 lock。
+/// 2. 用 `OwnedIndexLock::acquire` 把 `.git/index.lock` 创建为**目录**，
+///    目录内 `owner` 文件写 owner metadata，`prepared` 文件写目标 index 字节（fsync）。
+///    lock 已存在（目录或 regular file）→ `ConcurrentMetadataChanged`，绝不碰别人的 lock。
 /// 3. 拿到锁后重新读取 live index，确认仍等于 snapshot.index。
-/// 4. 仍一致才 `commit_rename`（rename owner_file → index，然后删 lock，原子提交 + 释放锁）。
+/// 4. 仍一致才 `commit_rename`（rename prepared_file → index，然后删 lock 目录，原子提交 + 释放锁）。
 /// 5. 不一致直接返回 `ConcurrentMetadataChanged`，不允许覆盖。
 ///
-/// #644 评论 5486167472 问题1：ownership 是磁盘事实（lock 文件内的 owner metadata +
-/// prepared file 名），即使进程被 SIGKILL，Drop 不执行，恢复时也能通过解析 lock
-/// 内容判断 lock 归属。不依赖 hardlink/inode 比较，Android shared-storage（AOSP FUSE）可落地。
+/// #644 评论 5486852142 问题1：ownership 是磁盘事实（lock 目录存在性 + owner 文件内容），
+/// 即使进程被 SIGKILL，Drop 不执行，恢复时也能通过目录类型 + owner 文件判断 lock 归属。
+/// `create_dir` 成功就是原子的 ownership 证明，不再有 create-to-write 窗口。
+/// 不依赖 hardlink/inode 比较，Android shared-storage（AOSP FUSE）可落地。
 fn install_index_with_lock(
     live_root: &Path,
     _live_repo: &git2::Repository,
@@ -2255,20 +2466,22 @@ fn install_index_with_lock(
 }
 
 /// #644 评论 5483239422 问题3 + #644 评论 5483920624 问题2/3 +
-/// #644 评论 5486167472 问题1：rollback index 的 lockfile 反向提交边界 + 持久 ownership。
+/// #644 评论 5486167472 问题1 + #644 评论 5486852142 问题1：rollback index 的 lockfile 反向提交边界 + 持久 ownership。
 ///
 /// 与 forward `install_index_with_lock` 同语义（共用 `OwnedIndexLock`），但方向相反：
 /// 把 snapshot.index 的旧字节写回 live index。关键安全约束：
-/// 1. 用 `OwnedIndexLock::acquire` 在 `.git/index.lock`（O_EXCL + owner metadata）获取
-///    canonical Git lock，在 `.git/index.sujian-<owner>` 写入 snapshot.index 旧字节。
-///    lock 已存在 → `ConcurrentMetadataChanged`，绝不删别人的 lock（外部 Git 进程可能正在用）。
+/// 1. 用 `OwnedIndexLock::acquire` 把 `.git/index.lock` 创建为**目录**，
+///    目录内 `owner` 文件写 owner metadata，`prepared` 文件写 snapshot.index 旧字节。
+///    lock 已存在（目录或 regular file）→ `ConcurrentMetadataChanged`，绝不删别人的 lock
+///    （外部 Git 进程可能正在用）。
 /// 2. 拿到锁后重新读 index 确认仍等于 `expected_new_sha256`（调用方已确认
 ///    current==new，但拿锁期间可能被并发改掉，需复验）。不等则返回 Err
 ///    （并发变化，保留 transaction；lock 由 OwnedIndexLock::drop 清理）。
-/// 3. Bytes 路径：`commit_rename`（rename owner_file → index，然后删 lock，原子恢复 + 释放锁）。
-///    Missing 路径：`commit_delete`（删 index → 删 owner_file → 删 lock，每步 fsync 父目录）。
-/// 4. ownership 是磁盘事实（lock 文件内的 owner metadata + prepared file 名），即使 SIGKILL
-///    后 Drop 不执行，恢复时也能通过解析 lock 内容判断 lock 归属。不依赖 hardlink/inode 比较。
+/// 3. Bytes 路径：`commit_rename`（rename prepared_file → index，然后删 lock 目录，原子恢复 + 释放锁）。
+///    Missing 路径：`commit_delete`（删 index → 删 prepared_file → 删 lock 目录，每步 fsync 父目录）。
+/// 4. ownership 是磁盘事实（lock 目录存在性 + owner 文件内容），即使 SIGKILL
+///    后 Drop 不执行，恢复时也能通过目录类型 + owner 文件判断 lock 归属。
+///    `create_dir` 成功就是原子的 ownership 证明，不再有 create-to-write 窗口。
 ///
 /// 调用方已保证进入此函数前 `current_index == new`（plan.new_index_sha256 命中）。
 fn rollback_index_via_lockfile(
