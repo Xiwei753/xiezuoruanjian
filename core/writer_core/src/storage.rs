@@ -11,6 +11,7 @@
 
 pub mod git_repo_layout;
 pub mod git_runtime;
+pub mod project_delete_transaction;
 pub mod project_git;
 pub mod transaction;
 

@@ -611,6 +611,39 @@ pub(crate) enum StagingCommitClass {
     Skip,
 }
 
+/// 判断路径是否为内部 Git 工件（不应被当成用户内容同步）。
+///
+/// 统一过滤以下模式：
+/// - `.git`（精确匹配）：Git 仓库元数据目录或 gitlink 文件；
+/// - `.git/`（前缀匹配）：Git 仓库元数据子目录；
+/// - `.git.sujian-tmp-*`：迁移/恢复过程中的临时目录；
+/// - `.git.sujian-migrate-source-*`：迁移崩溃后残留的源仓库快照。
+fn is_internal_git_artifact(path: &str) -> bool {
+    // Normalize backslashes to forward slashes for consistent matching on Windows
+    let normalized = if path.contains('\\') {
+        path.replace('\\', "/")
+    } else {
+        path.to_string()
+    };
+
+    // .git (exact) or .git/* (subdirectory)
+    if normalized == ".git" || normalized.starts_with(".git/") {
+        return true;
+    }
+
+    // .git.sujian-tmp-* (migration temp directory)
+    if normalized.starts_with(".git.sujian-tmp-") {
+        return true;
+    }
+
+    // .git.sujian-migrate-source-* (migration crash residual)
+    if normalized.starts_with(".git.sujian-migrate-source-") {
+        return true;
+    }
+
+    false
+}
+
 /// #644 评论 5474166587 问题1：按 staging commit 写回语义分类。
 ///
 /// 与 [`crate::sync::content_class::classify_content_path`]（远端同步语义）正交。
@@ -626,7 +659,8 @@ pub(crate) fn classify_staging_commit_path(raw_path: &str) -> StagingCommitClass
     };
 
     // 永不进 commit 的内部目录（walk_commit_candidates 已跳过，这里兜底）。
-    if path.starts_with(".git/") || path == ".git" {
+    // 使用统一过滤函数判断 Git 工件。
+    if is_internal_git_artifact(&path) {
         return StagingCommitClass::Skip;
     }
     if path.starts_with("full-sync-staging/") || path == "full-sync-staging" {
@@ -909,6 +943,8 @@ fn list_commit_candidate_paths(root: &Path) -> Result<Vec<PathBuf>> {
 /// 跳过规则（与 live 扫描、commit candidate 共用同一套）：
 /// - `.git/`（目录）：Git 仓库元数据，不是用户内容；
 /// - `.git`（文件）：评论 5491531984 问题2 — gitlink file，同样不是用户内容；
+/// - `.git.sujian-tmp-*`：迁移/恢复过程中的临时目录；
+/// - `.git.sujian-migrate-source-*`：迁移崩溃后残留的源仓库快照；
 /// - `full-sync-staging/`：staging run 自身，避免递归；
 /// - `app-meta/transactions/`：事务暂存目录，commit 中间态。
 #[allow(clippy::excessive_nesting)]
@@ -918,11 +954,10 @@ fn walk_commit_candidates(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Re
         let path = entry.path();
         if let Ok(rel) = path.strip_prefix(root) {
             let rel_str = rel.to_string_lossy();
-            // #644 评论 5491531984 问题2：防御性地对名字等于 .git 的文件/目录都跳过。
-            if rel_str == ".git"
+            // 使用统一过滤函数判断 Git 工件和内部目录
+            if is_internal_git_artifact(&rel_str)
                 || rel_str == "full-sync-staging"
                 || rel_str.starts_with("app-meta/transactions")
-                || rel_str.starts_with(".git.sujian-tmp-")
             {
                 continue;
             }
@@ -1208,5 +1243,75 @@ mod tests {
         // local!=base, incoming=None → local!=incoming → Conflict
         assert_eq!(plan.conflict.len(), 1);
         assert!(plan.content_actions.is_empty());
+        assert!(plan.keep_local.is_empty());
+    }
+
+    #[test]
+    fn walk_commit_candidates_skips_git_sujian_migrate_source() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // 创建测试目录结构
+        fs::create_dir_all(root.join("normal")).unwrap();
+        fs::write(root.join("normal/file.txt"), "normal").unwrap();
+        // .git.sujian-migrate-source-* 目录应被跳过
+        fs::create_dir_all(root.join(".git.sujian-migrate-source-abc/objects")).unwrap();
+        fs::write(root.join(".git.sujian-migrate-source-abc/HEAD"), "ref: main").unwrap();
+        fs::write(root.join(".git.sujian-migrate-source-abc/config"), "[core]").unwrap();
+        // .git.sujian-tmp-* 目录也应被跳过
+        fs::create_dir_all(root.join(".git.sujian-tmp-tmp123")).unwrap();
+        fs::write(root.join(".git.sujian-tmp-tmp123/tmp"), "tmp").unwrap();
+        // .git 目录也应被跳过
+        fs::create_dir_all(root.join(".git/objects")).unwrap();
+        fs::write(root.join(".git/HEAD"), "ref: main").unwrap();
+
+        let mut out = Vec::new();
+        walk_commit_candidates(root, root, &mut out).unwrap();
+
+        // 只应看到 normal/file.txt
+        assert_eq!(out.len(), 1);
+        assert!(out.contains(&PathBuf::from("normal/file.txt")));
+        // 不应包含任何内部 Git 工件
+        assert!(!out.iter().any(|p| p.to_string_lossy().contains(".git")));
+    }
+
+    #[test]
+    fn classify_staging_commit_path_skips_git_sujian_migrate_source() {
+        // .git.sujian-migrate-source-* 应被分类为 Skip
+        assert_eq!(
+            classify_staging_commit_path(".git.sujian-migrate-source-abc"),
+            StagingCommitClass::Skip
+        );
+        assert_eq!(
+            classify_staging_commit_path(".git.sujian-migrate-source-abc/objects/HEAD"),
+            StagingCommitClass::Skip
+        );
+        // Windows 路径格式也应正确处理
+        assert_eq!(
+            classify_staging_commit_path(".git.sujian-migrate-source-abc\\objects\\HEAD"),
+            StagingCommitClass::Skip
+        );
+
+        // .git.sujian-tmp-* 也应被分类为 Skip
+        assert_eq!(
+            classify_staging_commit_path(".git.sujian-tmp-tmp123"),
+            StagingCommitClass::Skip
+        );
+        assert_eq!(
+            classify_staging_commit_path(".git.sujian-tmp-tmp123/tmp"),
+            StagingCommitClass::Skip
+        );
+
+        // .git 也应被分类为 Skip
+        assert_eq!(classify_staging_commit_path(".git"), StagingCommitClass::Skip);
+        assert_eq!(
+            classify_staging_commit_path(".git/objects/HEAD"),
+            StagingCommitClass::Skip
+        );
+
+        // 普通内容应被分类为 Content
+        assert_eq!(
+            classify_staging_commit_path("normal/file.txt"),
+            StagingCommitClass::Content
+        );
     }
 }

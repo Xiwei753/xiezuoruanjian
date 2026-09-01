@@ -379,10 +379,11 @@ pub fn delete_project(projects_root: &Path, project_id: &str, app_data_root: &Pa
 /// `git_layout` 指定要删除的 private git_dir 位置。`None` 时只删共享 worktree
 /// （退化为 `delete_project` 的旧行为）。
 ///
-/// 既然现有删除语义是"移到 trash"而不是直接粉碎，private metadata 也不要单独硬删：
-/// 在 private 根下建对应 `trash/<delete-token>/`，把 `git_dir` 同文件系统 rename 进去。
-/// worktree trash 和 private Git trash 用同一个 delete token/manifest 关联，
-/// 之后跟同一份删除生命周期清理。
+/// 使用 durable delete transaction 解决"正文删了，private Git 还活着"的分裂状态：
+/// 1. 在第一次 rename 前先写 `ProjectDeleteJournal`（含 from/trash 路径 + phase）
+/// 2. 每次 rename 后 fsync 对应父目录并推进 phase
+/// 3. private rename/create_dir 的错误直接返回，不能 warn 后当删除成功
+/// 4. tombstone 仍从 worktree trash 生成，但 journal 保留到 tombstone/两边 trash 都完成以后
 ///
 /// 这样删除/恢复不会出现"正文已经删了，Git 历史还挂在原 project id 下"的分裂状态。
 #[allow(
@@ -399,73 +400,87 @@ pub fn delete_project_with_layout(
     git_layout: Option<&crate::storage::git_repo_layout::GitRepoLayout>,
 ) -> Result<()> {
     let project_id = crate::delete_guard::validate_id_segment(project_id)?;
-    let project_dir = projects_root.join(project_id);
+    let project_dir = projects_root.join(project_id.clone());
     let target_canon =
         crate::delete_guard::validate_delete_target(projects_root, &project_dir, "project.json")?;
 
-    // 生成统一的 delete token，关联 worktree trash 和 private Git trash。
-    let delete_token = format!(
-        "{}_{}_{}",
-        chrono::Utc::now().timestamp_millis(),
-        uuid::Uuid::new_v4(),
-        project_id
-    );
-
-    // 1. 把共享 worktree 移进 trash。
+    // 计算 trash 路径。
     let trash_dir = app_data_root.join("sync/trash");
-    let _ = fs::create_dir_all(&trash_dir);
-    let trash_path = trash_dir.join(&delete_token);
-    fs::rename(&target_canon, &trash_path)?;
+    let worktree_trash = trash_dir.join(&project_id); // 临时名，prepare 时会用 token
 
-    // 2. #644 评论 5493295108 问题4：把 private git_dir 也移进 trash。
-    //    在 private 根下建对应 `trash/<delete-token>/`，把 `git_dir` 同文件系统 rename 进去。
-    //    worktree trash 和 private Git trash 用同一个 delete token 关联。
-    if let Some(layout) = git_layout {
+    // 计算 private git_dir trash 路径（可选）。
+    let (git_dir_from, git_dir_trash) = if let Some(layout) = git_layout {
         let private_git_dir = &layout.git_dir;
         if private_git_dir.exists() {
-            // private git_dir 的父目录是 git_metadata_root（如 filesDir/sujian-git/）。
-            // 在其下建 trash/<delete-token>/，把 git_dir rename 进去。
             if let Some(private_root) = private_git_dir.parent() {
                 let private_trash_dir = private_root.join("trash");
-                let _ = fs::create_dir_all(&private_trash_dir);
-                let private_trash_path = private_trash_dir.join(&delete_token);
-                // 同文件系统 rename。如果失败（极端情况），不阻塞 worktree 删除，
-                // 但记录 warn 让上层知道 private git_dir 没被清理。
-                if let Err(e) = fs::rename(private_git_dir, &private_trash_path) {
-                    log::warn!(
-                        "[delete_project_with_layout] failed to move private git_dir {} -> {}: {}",
-                        private_git_dir.display(),
-                        private_trash_path.display(),
-                        e,
-                    );
-                }
+                (
+                    Some(private_git_dir.to_path_buf()),
+                    Some(private_trash_dir.join(&project_id)),
+                )
+            } else {
+                (None, None)
             }
+        } else {
+            (None, None)
         }
-    }
+    } else {
+        (None, None)
+    };
 
-    // Also update tombstone — load/save sync state from trash_path (where the
-    // project now lives after the rename), not from project_dir (which no longer
-    // exists; save_sync_state would recreate it, breaking the delete).
-    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(&trash_path) {
+    // 创建 durable delete transaction。
+    let mut tx = crate::storage::project_delete_transaction::ProjectDeleteTransaction::new(
+        &project_id,
+        &target_canon,
+        &worktree_trash,
+        git_dir_from.as_deref(),
+        git_dir_trash.as_deref(),
+        app_data_root,
+    );
+
+    // 1. 准备阶段：写 journal 到 app_meta/delete-journals/。
+    //    在第一次 rename 前先写 journal，确保崩溃恢复能看到待删除状态。
+    tx.prepare()?;
+
+    // 2. 移动 worktree 到 trash。
+    tx.move_worktree()?;
+
+    // 3. 移动 private git_dir 到 trash（如果存在）。
+    //    失败时返回 Err，journal 保留，下次恢复。
+    tx.move_git()?;
+
+    // 4. 生成 tombstone（从 worktree trash 中）。
+    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(tx.worktree_trash_path()) {
         let rel_project_dir = project_dir
             .strip_prefix(projects_root)
             .unwrap_or(&project_dir)
             .to_string_lossy()
             .replace("\\", "/");
-        let rel_trash_path = trash_path
+        let rel_trash_path = match tx
+            .worktree_trash_path()
             .strip_prefix(app_data_root)
-            .unwrap_or(&trash_path)
-            .to_string_lossy()
-            .replace("\\", "/");
+        {
+            Ok(p) => p,
+            Err(_) => tx.worktree_trash_path(),
+        }
+        .to_string_lossy()
+        .replace("\\", "/");
 
         crate::trash::generate_tombstones(
             &mut state,
-            &trash_path,
+            tx.worktree_trash_path(),
             &rel_project_dir,
             &rel_trash_path,
         );
-        let _ = crate::sync::SyncService::save_sync_state(&trash_path, &state);
+        let _ = crate::sync::SyncService::save_sync_state(tx.worktree_trash_path(), &state);
     }
+
+    // 5. 完成删除：推进 phase 到 Completed。
+    tx.complete()?;
+
+    // 6. 清理 journal。
+    tx.cleanup_journal()?;
+
     Ok(())
 }
 
