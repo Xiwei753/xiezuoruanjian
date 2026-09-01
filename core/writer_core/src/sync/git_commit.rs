@@ -988,11 +988,65 @@ pub fn rollback_git_finalize(
     // 2. repo_create=false：index + refs rollback。
     //    #644 评论 5483239422 问题2/3 + #644 评论 5484539222 缺陷1：
     //    三态幂等 + lockfile 反向提交边界 + 持久 ownership。
-    //    - current == old(snapshot.index) → AlreadyReverted / no-op，但需清理本轮 stale lock
-    //    - current == new(plan.new_index_sha256) → 反向恢复（lockfile 反向提交）
-    //    - 其它 → ConcurrentChanged (Err)
-    //    反向恢复用 OwnedIndexLock（hard_link），lock 已存在且不属于本轮 → Err，
-    //    绝不删别人的 lock（与 forward install_index_with_lock 同语义）。
+    //    #644 评论 5488100307 问题1：refs 用 Transaction 做 writer exclusion，
+    //    消除 verify→write 之间的并发窗口。
+    //
+    //    流程：
+    //    A. 如果有 ref_plans，先通过 Transaction 锁住所有 refs（writer exclusion）。
+    //    B. index rollback（current==old 清 stale lock / current==new 反向恢复）。
+    //    C. 在 Transaction 锁保护下，通过 Transaction 方法更新 refs。
+    //    D. Transaction::commit() 释放所有 ref locks。
+    //
+    //    Transaction 锁住 loose ref 文件，阻止并发 Git 写操作修改这些 refs。
+    //    index.lock 是独立的目录锁，不与 ref locks 冲突。
+    //    Transaction::commit() 逐项执行，失败时前面已成功的不会自动回滚，
+    //    所以 old/new 幂等状态机仍然保留，用于崩溃后重试。
+    //
+    //    注意：Transaction<'a> 借用 Repository（lifetime 'a），两者不能放入
+    //    同一个容器（自引用结构）。因此 tx_repo 和 tx 都在本作用域声明，
+    //    保证 tx 存活期间 tx_repo 不被释放。
+
+    // A. 如果有 ref_plans，先通过 Transaction 锁住所有 refs。
+    //    tx_repo 在此声明以保证生命周期覆盖整个 rollback 流程。
+    let tx_repo = if !plan.ref_plans.is_empty() {
+        Some(git2::Repository::open(live_root).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "rollback_git_finalize: open live repo for ref transaction: {e}"
+            )))
+        })?)
+    } else {
+        None
+    };
+
+    // 创建 Transaction 并锁住所有 refs。
+    // tx 的生命周期绑定到 tx_repo（同一作用域），不会出现悬垂引用。
+    let mut tx: Option<git2::Transaction<'_>> = None;
+    if let Some(repo) = &tx_repo {
+        let mut t = repo.transaction().map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "rollback_git_finalize: create ref transaction: {e}"
+            )))
+        })?;
+        // 收集所有需要锁的 ref 名，排序去重。
+        let mut ref_names: Vec<&str> = plan
+            .ref_plans
+            .iter()
+            .map(|(name, _, _)| name.as_str())
+            .collect();
+        ref_names.sort();
+        ref_names.dedup();
+        for ref_name in &ref_names {
+            t.lock_ref(ref_name).map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "rollback_git_finalize: lock ref {}: {e}",
+                    ref_name
+                )))
+            })?;
+        }
+        tx = Some(t);
+    }
+
+    // B. index rollback（在 ref lock 保护下）。
     if let Some(expected_hash) = plan.new_index_sha256 {
         let index_path = live_root.join(".git").join("index");
         let lock_path = live_root.join(".git").join("index.lock");
@@ -1025,11 +1079,11 @@ pub fn rollback_git_finalize(
             if let Some(owner) = &plan.index_lock_owner {
                 match lock_dir_belongs_to_owner(&lock_path, owner) {
                     LockOwner::Ours | LockOwner::IncompleteSujianLock => {
-                        // lock 目录属于本轮（owner 匹配或 owner 未完成写入）：
-                        // 清理 lock 目录，fsync .git。
-                        if remove_lock_dir_if_exists(&lock_path, &live_root.join(".git")) {
-                            // remove_lock_dir_if_exists 已 sync_dir。
-                        }
+                        // #644 评论 5488100307 问题2：lock 目录属于本轮（owner 匹配或
+                        // owner 未完成写入）：清理 lock 目录，fsync .git。
+                        // remove_dir_all 或 sync_dir 失败时返回 Err 保留 transaction，
+                        // 不能吞错后返回 Reverted（磁盘可能留着没人负责的 index.lock）。
+                        remove_lock_dir_if_exists(&lock_path, &live_root.join(".git"))?;
                     }
                     LockOwner::External => {
                         // #644 评论 5486852142 问题2：lock 不属于本轮
@@ -1078,15 +1132,13 @@ pub fn rollback_git_finalize(
                      refusing to continue rollback to preserve transaction for next recovery",
                 )));
             }
-            // #644 评论 5487751293 问题2：current == new → 需要反向恢复到 snapshot.index。
-            // 在修改 index 之前，先验证所有 ref 都处于可回滚状态（old、new 或 absent）。
-            // 如果任何 ref 处于第三状态（外部并发修改），提前返回 Err，不碰 index。
-            // 这避免了"先改 index，再检查 ref 才发现第三状态"的半回滚窗口。
-            if !plan.ref_plans.is_empty() {
-                verify_refs_rollbackable(live_root, plan)?;
-            }
+            // #644 评论 5488100307 问题1：不再调用 verify_refs_rollbackable()。
+            // refs 已通过 Transaction 锁住（writer exclusion），在锁保护下不可能被
+            // 并发修改。index rollback 在 ref lock 保护下执行，消除了
+            // "verify → index write → ref update" 之间的并发窗口。
+            //
             // current == new(plan) → 需要反向恢复到 snapshot.index。
-            // 走 OwnedIndexLock 反向提交边界（与 forward install_indexE_with_lock 同语义）：
+            // 走 OwnedIndexLock 反向提交边界（与 forward install_index_with_lock 同语义）：
             // 1. acquire（create_dir + owner metadata）自己获取 .git/index.lock 目录；
             //    lock 已存在且不属于本轮 → Err，绝不删。
             // 2. 拿到锁后重新读 index 确认仍 == new。
@@ -1109,129 +1161,143 @@ pub fn rollback_git_finalize(
         }
     }
 
-    // 3. Rollback refs — CAS-based: only restore if current value == what we wrote.
-    if plan.ref_plans.is_empty() {
-        return Ok(GitRollbackOutcome::Reverted);
-    }
-
-    let live_repo = git2::Repository::open(live_root).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "rollback_git_finalize: open live repo: {e}"
-        )))
-    })?;
-
-    for (ref_name, old_oid_str, new_oid_str) in &plan.ref_plans {
-        let new_oid = git2::Oid::from_str(new_oid_str).map_err(|e| {
+    // C. 在 Transaction 锁保护下，通过 Transaction 方法更新 refs。
+    //    #644 评论 5488100307 问题1：refs 已被 Transaction 锁住，
+    //    不可能被并发修改。使用 Transaction::set_target() / remove() 更新 refs，
+    //    然后 commit() 释放所有锁。
+    //    Transaction::commit() 逐项执行，失败时前面已成功的不会自动回滚，
+    //    所以 old/new 幂等状态机仍然保留（崩溃后重试时 current==old → no-op）。
+    if let (Some(repo), Some(mut tx)) = (tx_repo.as_ref(), tx) {
+        let rollback_sig = git2::Signature::now("sujian", "sujian@localhost").map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
-                "rollback_git_finalize: invalid new_oid for {}: {e}",
-                ref_name
+                "rollback_git_finalize: create rollback signature: {e}"
             )))
         })?;
 
-        // Check current value.
-        let current = live_repo.find_reference(ref_name);
+        for (ref_name, old_oid_str, new_oid_str) in &plan.ref_plans {
+            let new_oid = git2::Oid::from_str(new_oid_str).map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "rollback_git_finalize: invalid new_oid for {}: {e}",
+                    ref_name
+                )))
+            })?;
 
-        match (&old_oid_str, current) {
-            // ref(old=None): finalize 会新建 ref。
-            // - current absent → no-op（AlreadyReverted 或从未创建）
-            // - current == new → delete（反向）
-            // - current == 其它 → ConcurrentChanged (Err)
-            (None, Ok(current_ref)) => {
-                if current_ref.target() == Some(new_oid) {
-                    // Still our value — safe to delete.
-                    let mut r = current_ref;
-                    r.delete().map_err(|e| {
+            // 在 Transaction 锁保护下读取当前 ref 状态。
+            // 锁保证并发进程无法修改此 ref。
+            let current = repo.find_reference(ref_name);
+
+            match (&old_oid_str, current) {
+                // ref(old=None): finalize 新建了 ref。
+                // - current absent → no-op（AlreadyReverted 或从未创建）
+                // - current == new → remove（反向删除）
+                // - current == 其它 → 不应发生（已锁 + 已验证），但保守返回 Err
+                (None, Ok(current_ref)) => {
+                    if current_ref.target() == Some(new_oid) {
+                        // current == new → 删除 ref（反向恢复）。
+                        tx.remove(ref_name).map_err(|e| {
+                            crate::Error::Io(std::io::Error::other(format!(
+                                "rollback_git_finalize: Transaction::remove {}: {e}",
+                                ref_name
+                            )))
+                        })?;
+                    } else {
+                        // Transaction 锁保护下不应出现第三状态。
+                        return Err(crate::Error::Io(std::io::Error::other(format!(
+                            "rollback_git_finalize: ref {} has unexpected value {} \
+                             (expected absent or new_oid {}) under Transaction lock — \
+                             this should not happen, preserving transaction",
+                            ref_name,
+                            current_ref
+                                .target()
+                                .map_or_else(|| "none".to_string(), |o| o.to_string()),
+                            new_oid
+                        ))));
+                    }
+                }
+                (None, Err(e)) if e.code() == git2::ErrorCode::NotFound => {
+                    // Already gone — nothing to undo.
+                }
+                (None, Err(e)) => {
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "rollback_git_finalize: lookup {}: {e}",
+                        ref_name
+                    ))));
+                }
+
+                // ref(old=Some): finalize 更新了 ref old_oid -> new_oid。
+                // #644 评论 5483239422 问题2：三态幂等。
+                // - current == old → no-op（AlreadyReverted 或本轮 finalize 未执行）
+                // - current == new → set_target(old_oid)（反向恢复）
+                // - current == 其它 / NotFound → 不应发生（已锁），但保守返回 Err
+                (Some(old_oid_str), Ok(current_ref)) => {
+                    let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
                         crate::Error::Io(std::io::Error::other(format!(
-                            "rollback_git_finalize: delete {}: {e}",
+                            "rollback_git_finalize: invalid old_oid for {}: {e}",
                             ref_name
                         )))
                     })?;
-                } else {
-                    // #644 评论 5482310913 问题3 + #644 评论 5483239422 问题2：
-                    // ref CAS miss → 真正并发新状态。
-                    return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "rollback_git_finalize: ref {} CAS miss (current != new_oid {}) — \
-                         concurrent modification, refusing to continue rollback to preserve \
-                         transaction",
-                        ref_name, new_oid
-                    ))));
-                }
-            }
-            (None, Err(e)) if e.code() == git2::ErrorCode::NotFound => {
-                // Already gone — nothing to undo.
-            }
-            (None, Err(e)) => {
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "rollback_git_finalize: lookup {}: {e}",
-                    ref_name
-                ))));
-            }
-
-            // ref(old=Some): finalize 会更新 ref old_oid -> new_oid。
-            // #644 评论 5483239422 问题2：三态幂等。
-            // - current == old → no-op（第一次 rollback 已反向 CAS 回 old，或本轮 finalize 未执行）
-            // - current == new → 反向 CAS 回 old（reference_matching expected=new, write=old）
-            // - current == 其它 / NotFound → ConcurrentChanged (Err)
-            (Some(old_oid_str), Ok(current_ref)) => {
-                let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
-                    crate::Error::Io(std::io::Error::other(format!(
-                        "rollback_git_finalize: invalid old_oid for {}: {e}",
-                        ref_name
-                    )))
-                })?;
-                if current_ref.target() == Some(old_oid) {
-                    // current == old → no-op（AlreadyReverted 或本轮 finalize 未执行）。
-                } else if current_ref.target() == Some(new_oid) {
-                    // current == new → 反向 CAS：只有 current == new_oid 时才写 old_oid。
-                    live_repo
-                        .reference_matching(
+                    if current_ref.target() == Some(old_oid) {
+                        // current == old → no-op（AlreadyReverted 或本轮 finalize 未执行）。
+                    } else if current_ref.target() == Some(new_oid) {
+                        // current == new → 通过 Transaction 反向恢复到 old_oid。
+                        // set_target 在 Transaction 锁保护下执行，不存在并发窗口。
+                        tx.set_target(
                             ref_name,
                             old_oid,
-                            true,
-                            new_oid,
-                            "rollback: CAS restore ref",
+                            Some(&rollback_sig),
+                            "rollback: restore ref to pre-finalize state",
                         )
                         .map_err(|e| {
                             crate::Error::Io(std::io::Error::other(format!(
-                                "rollback_git_finalize: CAS restore {} failed (expected current={} new={}): {}",
-                                ref_name, new_oid, old_oid, e
+                                "rollback_git_finalize: Transaction::set_target {} \
+                                 to old_oid {} failed: {}",
+                                ref_name, old_oid, e
                             )))
                         })?;
-                } else {
-                    // current 既不是 old 也不是 new → 真正并发新状态。
+                    } else {
+                        // Transaction 锁保护下不应出现第三状态。
+                        return Err(crate::Error::Io(std::io::Error::other(format!(
+                            "rollback_git_finalize: ref {} has unexpected value \
+                             (expected old_oid {} or new_oid {}) under Transaction lock — \
+                             this should not happen, preserving transaction",
+                            ref_name, old_oid, new_oid
+                        ))));
+                    }
+                }
+                (Some(old_oid_str), Err(e)) if e.code() == git2::ErrorCode::NotFound => {
+                    // ref(old=Some) 但当前 NotFound。
+                    // Transaction 锁保护下不应出现（锁住时 ref 应存在）。
+                    let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
+                        crate::Error::Io(std::io::Error::other(format!(
+                            "rollback_git_finalize: invalid old_oid for {}: {e}",
+                            ref_name
+                        )))
+                    })?;
                     return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "rollback_git_finalize: ref {} CAS miss (current matches neither \
-                         old_oid {} nor new_oid {}) — concurrent modification, refusing to \
-                         continue rollback to preserve transaction",
+                        "rollback_git_finalize: ref {} not found under Transaction lock \
+                         (expected old_oid {} or new_oid {}) — this should not happen \
+                         with ref lock held, preserving transaction",
                         ref_name, old_oid, new_oid
                     ))));
                 }
-            }
-            (Some(old_oid_str), Err(e)) if e.code() == git2::ErrorCode::NotFound => {
-                // #644 评论 5483239422 问题2：ref(old=Some) 但当前 NotFound。
-                // old 存在过，finalize 应把它从 old 改到 new，现在 ref 消失了，
-                // 说明被并发进程删除——不能重建（重建会覆盖并发的删除意图）。
-                // 返回 Err 让上层保留 transaction。
-                let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
-                    crate::Error::Io(std::io::Error::other(format!(
-                        "rollback_git_finalize: invalid old_oid for {}: {e}",
+                (Some(_), Err(e)) => {
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "rollback_git_finalize: lookup {}: {e}",
                         ref_name
-                    )))
-                })?;
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "rollback_git_finalize: ref {} was deleted by concurrent process \
-                     (expected old_oid {} or new_oid {}) — refusing to recreate to preserve \
-                     concurrent deletion, transaction retained for next recovery",
-                    ref_name, old_oid, new_oid
-                ))));
-            }
-            (Some(_), Err(e)) => {
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "rollback_git_finalize: lookup {}: {e}",
-                    ref_name
-                ))));
+                    ))));
+                }
             }
         }
+
+        // D. Transaction::commit() 释放所有 ref locks。
+        //    commit() 逐项执行，失败时前面已成功的不会自动回滚。
+        //    但我们的更新是幂等的（old/new 状态机），崩溃后重试仍安全。
+        tx.commit().map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "rollback_git_finalize: Transaction::commit failed: {e} — \
+                 some ref updates may have been applied, idempotent retry is safe"
+            )))
+        })?;
     }
 
     Ok(GitRollbackOutcome::Reverted)
@@ -2244,16 +2310,23 @@ pub fn lock_dir_belongs_to_owner(lock_path: &Path, owner: &str) -> LockOwner {
     }
 }
 
-/// #644 评论 5486852142 问题1：删除 lock 目录（如果存在且是目录）并 fsync 父目录。
+/// #644 评论 5486852142 问题1 + #644 评论 5488100307 问题2：
+/// 删除 lock 目录（如果存在且是目录）并 fsync 父目录。
 ///
-/// 提取为辅助函数以减少 `acquire` 的嵌套深度。返回 `bool` 表示是否真的删了
-///（调用方据此决定是否需要 sync_dir）。
-fn remove_lock_dir_if_exists(lock_path: &Path, git_dir: &Path) -> bool {
-    if lock_path.is_dir() && fs::remove_dir_all(lock_path).is_ok() {
-        let _ = crate::storage::sync_dir(git_dir);
-        return true;
+/// 提取为辅助函数以减少 `acquire` 的嵌套深度。
+/// - lock_path 不存在或不是目录 → Ok(())（no-op）。
+/// - remove_dir_all 失败 → Err（调用方必须保留 transaction，不能返回 Reverted）。
+/// - sync_dir 失败 → Err（同上）。
+fn remove_lock_dir_if_exists(lock_path: &Path, git_dir: &Path) -> Result<()> {
+    if !lock_path.exists() {
+        return Ok(());
     }
-    false
+    if !lock_path.is_dir() {
+        return Ok(());
+    }
+    fs::remove_dir_all(lock_path)?;
+    crate::storage::sync_dir(git_dir)?;
+    Ok(())
 }
 
 /// #644 评论 5485518160 修改点 1：`OwnedIndexLock::acquire` 的返回类型。
@@ -2306,8 +2379,6 @@ impl OwnedIndexLock {
         owner: &str,
         prepared_bytes: &[u8],
     ) -> std::result::Result<AcquireOutcome, GitFinalizeError> {
-        use std::io::Write;
-
         let lock_path = git_dir.join("index.lock");
         let owner_file = lock_path.join("owner");
         let prepared_file = lock_path.join("prepared");
@@ -2378,61 +2449,25 @@ impl OwnedIndexLock {
             .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
         crate::storage::sync_dir(git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
 
-        // 2. 在 lock 目录内创建 owner 文件，写 owner metadata，fsync。
-        //    如果失败，清理目录并返回 Err。
-        {
-            let mut owner_f = match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&owner_file)
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    let _ = fs::remove_dir_all(&lock_path);
-                    let _ = crate::storage::sync_dir(git_dir);
-                    return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e)));
-                }
-            };
-            owner_f
-                .write_all(&metadata)
-                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-            owner_f
-                .flush()
-                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-            owner_f
-                .sync_all()
-                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-            drop(owner_f);
-            crate::storage::sync_parent(&owner_file).map_err(GitFinalizeError::FinalizeFailed)?;
+        // #644 评论 5488100307 问题3：owner 和 prepared 文件用原子写入（tmp + fsync + rename），
+        // 避免 write_all 中途失败留下半截非空 owner 文件。
+        // 半截非空 owner 会被 lock_dir_belongs_to_owner 判成 External（不匹配），
+        // 导致 recovery 永远不敢删它，transaction 永远无法继续。
+        // atomic_write_bytes 内部：create tmp → write_all → flush → sync_all → rename → sync_parent。
+        // 任何一步失败时清理 lock 目录并返回 Err。
+        //
+        // 2. 在 lock 目录内原子写入 owner 文件。
+        if let Err(e) = crate::storage::atomic_write_bytes(&owner_file, &metadata) {
+            let _ = fs::remove_dir_all(&lock_path);
+            let _ = crate::storage::sync_dir(git_dir);
+            return Err(GitFinalizeError::FinalizeFailed(e));
         }
 
-        // 3. 在 lock 目录内创建 prepared 文件，写 prepared_bytes，fsync。
-        //    如果失败，清理目录并返回 Err。
-        {
-            let mut prepared_f = match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&prepared_file)
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    let _ = fs::remove_dir_all(&lock_path);
-                    let _ = crate::storage::sync_dir(git_dir);
-                    return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(e)));
-                }
-            };
-            prepared_f
-                .write_all(prepared_bytes)
-                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-            prepared_f
-                .flush()
-                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-            prepared_f
-                .sync_all()
-                .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
-            drop(prepared_f);
-            crate::storage::sync_parent(&prepared_file)
-                .map_err(GitFinalizeError::FinalizeFailed)?;
+        // 3. 在 lock 目录内原子写入 prepared 文件。
+        if let Err(e) = crate::storage::atomic_write_bytes(&prepared_file, prepared_bytes) {
+            let _ = fs::remove_dir_all(&lock_path);
+            let _ = crate::storage::sync_dir(git_dir);
+            return Err(GitFinalizeError::FinalizeFailed(e));
         }
 
         Ok(AcquireOutcome::NewlyAcquired(Self {
@@ -2751,109 +2786,6 @@ fn import_missing_objects(staging_odb: &git2::Odb, live_odb: &git2::Odb) -> Resu
                 oid, e
             )))
         })?;
-    }
-
-    Ok(())
-}
-
-/// #644 评论 5487751293 问题2：在修改 index 之前，验证所有 ref 都处于可回滚状态。
-///
-/// 遍历 `plan.ref_plans`，对每个 ref 检查当前值：
-/// - current == old（或 absent 且 old=None）→ 可回滚（AlreadyReverted 或未执行）
-/// - current == new → 可回滚（需反向 CAS）
-/// - 其它 → 第三状态（外部并发修改），返回 Err
-///
-/// 任何 ref 处于第三状态时，提前返回 Err，不碰 index。
-/// 这避免了"先改 index，再检查 ref 才发现第三状态"的半回滚窗口。
-fn verify_refs_rollbackable(live_root: &Path, plan: &GitFinalizePlan) -> Result<()> {
-    crate::storage::git_runtime::ensure_initialized()?;
-
-    let live_repo = git2::Repository::open(live_root).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "verify_refs_rollbackable: open live repo: {e}"
-        )))
-    })?;
-
-    for (ref_name, old_oid_str, new_oid_str) in &plan.ref_plans {
-        let new_oid = git2::Oid::from_str(new_oid_str).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "verify_refs_rollbackable: invalid new_oid for {}: {e}",
-                ref_name
-            )))
-        })?;
-
-        let current = live_repo.find_reference(ref_name);
-
-        match (&old_oid_str, current) {
-            // ref(old=None): finalize 会新建 ref。
-            // - current absent → 可回滚（AlreadyReverted 或从未创建）
-            // - current == new → 可回滚（需删除）
-            // - current == 其它 → 第三状态
-            (None, Ok(current_ref)) => {
-                if current_ref.target() != Some(new_oid) {
-                    return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "verify_refs_rollbackable: ref {} has third-party value \
-                         (expected absent or new_oid {}) — concurrent modification, \
-                         refusing to continue rollback before index is modified",
-                        ref_name, new_oid
-                    ))));
-                }
-            }
-            (None, Err(e)) if e.code() == git2::ErrorCode::NotFound => {
-                // 可回滚。
-            }
-            (None, Err(e)) => {
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "verify_refs_rollbackable: lookup {}: {e}",
-                    ref_name
-                ))));
-            }
-
-            // ref(old=Some): finalize 会更新 ref old_oid -> new_oid。
-            // - current == old → 可回滚（AlreadyReverted 或未执行）
-            // - current == new → 可回滚（需反向 CAS）
-            // - current == 其它 / NotFound → 第三状态
-            (Some(old_oid_str), Ok(current_ref)) => {
-                let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
-                    crate::Error::Io(std::io::Error::other(format!(
-                        "verify_refs_rollbackable: invalid old_oid for {}: {e}",
-                        ref_name
-                    )))
-                })?;
-                if current_ref.target() == Some(old_oid) {
-                    // 可回滚（AlreadyReverted）。
-                } else if current_ref.target() == Some(new_oid) {
-                    // 可回滚（需反向 CAS）。
-                } else {
-                    return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "verify_refs_rollbackable: ref {} has third-party value \
-                         (expected old_oid {} or new_oid {}) — concurrent modification, \
-                         refusing to continue rollback before index is modified",
-                        ref_name, old_oid, new_oid
-                    ))));
-                }
-            }
-            (Some(old_oid_str), Err(e)) if e.code() == git2::ErrorCode::NotFound => {
-                let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
-                    crate::Error::Io(std::io::Error::other(format!(
-                        "verify_refs_rollbackable: invalid old_oid for {}: {e}",
-                        ref_name
-                    )))
-                })?;
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "verify_refs_rollbackable: ref {} was deleted by concurrent process \
-                     (expected old_oid {} or new_oid {}) — refusing to continue rollback \
-                     before index is modified",
-                    ref_name, old_oid, new_oid
-                ))));
-            }
-            (Some(_), Err(e)) => {
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "verify_refs_rollbackable: lookup {}: {e}",
-                    ref_name
-                ))));
-            }
-        }
     }
 
     Ok(())
