@@ -823,7 +823,7 @@ fn finalize_existing_detached_head_after_preflight_returns_finalize_failed() {
         )],
         repo_create_owner: None,
         index_lock_owner: Some(uuid::Uuid::new_v4().to_string()),
-        ref_tx_owner: None,
+        ref_tx_owner: Some(uuid::Uuid::new_v4().to_string()),
     };
 
     // 调用 commit_git_finalize

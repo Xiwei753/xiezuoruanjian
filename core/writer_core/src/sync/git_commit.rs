@@ -31,6 +31,67 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::sync::git_staging::GitSeedState;
 
+// ── Git repo layout ──
+
+/// 评论 5489750244 问题1：明确的 Git 布局模型。
+///
+/// Android 共享存储（`/storage/emulated/0/...`）不适合放可写 Git metadata，
+/// 因为 sidecar 文件（`<ref>.sujian-ref-lock`）与真正的 `<ref>.lock` 不是原子事实，
+/// 无法可靠证明 ownership。本结构体将 worktree（用户可见文件）与 git_dir（可写 metadata）
+/// 分离，允许 git_dir 放在应用私有目录。
+///
+/// - `worktree_root`：用户可见文件的根目录（正文、元数据等），如
+///   `/storage/emulated/0/Sujian/projects/<id>`。
+/// - `git_dir`：可写 Git metadata（`.git/`）的根目录，如
+///   `filesDir/sujian-git/<project-id>`。
+pub struct GitRepoLayout {
+    pub worktree_root: PathBuf,
+    pub git_dir: PathBuf,
+}
+
+impl GitRepoLayout {
+    /// 创建 layout。`git_dir` 默认为 `worktree_root.join(".git")`（标准 Git 布局）。
+    pub fn new(worktree_root: PathBuf) -> Self {
+        let git_dir = worktree_root.join(".git");
+        Self {
+            worktree_root,
+            git_dir,
+        }
+    }
+
+    /// 创建 layout，指定外部 git_dir。
+    pub fn with_external_git_dir(worktree_root: PathBuf, git_dir: PathBuf) -> Self {
+        Self {
+            worktree_root,
+            git_dir,
+        }
+    }
+
+    /// 从 live_root 获取默认 git_dir（标准 Git 布局：`live_root/.git`）。
+    ///
+    /// 供现有函数在未重构为接受 `GitRepoLayout` 之前使用。
+    /// 后续应逐步改为接受 `GitRepoLayout` 参数。
+    pub fn default_git_dir(live_root: &Path) -> PathBuf {
+        live_root.join(".git")
+    }
+}
+
+/// 评论 5489750244 问题1：打开仓库，支持外部 git_dir。
+///
+/// 当 `git_dir == worktree_root.join(".git")` 时等效于 `Repository::open(worktree_root)`。
+/// 当 `git_dir` 是外部路径时，先打开 git_dir 中的 git repo，再设置 workdir 为 worktree_root。
+fn open_repo_with_layout(layout: &GitRepoLayout) -> std::result::Result<git2::Repository, git2::Error> {
+    let default_git_dir = layout.worktree_root.join(".git");
+    if layout.git_dir == default_git_dir {
+        git2::Repository::open(&layout.worktree_root)
+    } else {
+        #[allow(unused_mut)]
+        let mut repo = git2::Repository::open(&layout.git_dir)?;
+        repo.set_workdir(&layout.worktree_root, false)?;
+        Ok(repo)
+    }
+}
+
 // ── 快照类型 ──
 
 /// #644 评论 5475805198 第2节 + #644 评论 5476546134 第4节：
@@ -771,10 +832,12 @@ pub enum GitRollbackState {
     ConcurrentChanged,
 }
 
-/// #644 评论 5488871385 问题1：只读检查 Git rollback 状态。
+/// #644 评论 5488871385 问题1 + 评论 5489750244 问题4：纯只读检查 Git rollback 状态。
 ///
-/// 不修改任何 Git/live 文件。调用方根据返回的 `GitRollbackState` 决定：
-/// - `NeedsRollback`：先 `preflight_backup_entries()`，再 `rollback_git_finalize()`，
+/// 不修改任何 Git/live 文件（不删 lock、不删 marker）。调用方根据返回的
+/// `GitRollbackState` 决定：
+/// - `NeedsRollback`：先 `preflight_backup_entries()`，再 `rollback_git_finalize()`
+///   （stale lock / orphan marker 清理在 rollback_git_finalize 中），
 ///   再恢复文件 backup。
 /// - `RepoInstallCommitted`：直接 Finished。
 /// - `ConcurrentChanged`：保留事务。
@@ -865,30 +928,27 @@ pub fn inspect_git_rollback_state(
         }
     }
 
-    // 2b. refs 状态（只读）。
+    // 2b. refs 状态（只读，不修改任何文件）。
     if !plan.ref_plans.is_empty() {
         let git_dir = live_root.join(".git");
 
-        // #644 评论 5489192105 问题2：检查 ref lock 归属。
-        // 如果 ref lock 拋留（SIGKILL 后），find_reference 可能失败（LOCKED）。
-        // 先检查每个 ref 的 lock 归属：
-        // - 本事务 stale lock → 清理后继续检查 ref 值。
-        // - 外部 Git / 别的素笺事务 lock → 返回 ConcurrentChanged。
-        // - orphan owner marker（lock 不存在）→ 清理。
+        // 评论 5489750244 问题4：inspect_git_rollback_state 恢复成纯只读函数。
+        // 不再执行 clean_stale_ref_lock / clean_orphan_owner_marker，只做分类。
+        // stale lock / orphan marker 的清理移到 rollback_git_finalize 中，
+        // 在 backup preflight 成功后才执行，保证 inspect → backup preflight → rollback
+        // 的严格顺序不被破坏。
         if let Some(owner) = &plan.ref_tx_owner {
-            use crate::sync::ref_transaction::{
-                clean_orphan_owner_marker, clean_stale_ref_lock, inspect_ref_lock_owner,
-                RefLockOwner,
-            };
+            use crate::sync::ref_transaction::{inspect_ref_lock_owner, RefLockOwner};
             for (ref_name, _, _) in &plan.ref_plans {
                 match inspect_ref_lock_owner(&git_dir, ref_name, owner) {
                     RefLockOwner::Ours => {
-                        // 本事务的 stale lock：清理后继续检查 ref 值。
-                        clean_stale_ref_lock(&git_dir, ref_name)?;
+                        // 本事务的 stale lock：classify 为 NeedsRollback，
+                        // 真正的清理在 rollback_git_finalize 中。
+                        return Ok(GitRollbackState::NeedsRollback);
                     }
                     RefLockOwner::Absent => {
-                        // lock 不存在，清理 orphan owner marker。
-                        clean_orphan_owner_marker(&git_dir, ref_name)?;
+                        // lock 不存在，可能有 orphan owner marker。只读 inspect 不清理，
+                        // 但无 lock → ref 值不受阻塞，继续检查 ref 值。
                     }
                     RefLockOwner::OtherSujian => {
                         // 别的素笺事务的 lock：不碰，返回 ConcurrentChanged。
@@ -899,12 +959,8 @@ pub fn inspect_git_rollback_state(
                         return Ok(GitRollbackState::ConcurrentChanged);
                     }
                     RefLockOwner::Unknown => {
-                        // owner marker 读取失败：不碰，返回 Err 保留事务。
-                        return Err(crate::Error::Io(std::io::Error::other(format!(
-                            "inspect_git_rollback_state: ref {} lock owner marker read \
-                             failed (IO error) — cannot determine lock ownership",
-                            ref_name
-                        ))));
+                        // owner marker 读取失败：不碰，返回 ConcurrentChanged。
+                        return Ok(GitRollbackState::ConcurrentChanged);
                     }
                 }
             }
@@ -1231,6 +1287,118 @@ pub fn check_index_lock_owner_migration(
 
     // current 既不是 old 也不是 new → 并发修改。
     Ok(IndexLockOwnerMigration::ConcurrentModification)
+}
+
+/// 评论 5489750244 问题5：`ref_tx_owner=None` 旧 manifest 迁移判定结果。
+///
+/// 当 `plan.ref_plans` 非空且 `plan.ref_tx_owner` 是 None 时（旧 manifest 升级到新代码），
+/// 恢复入口在调用 `rollback_git_finalize` 之前用 `check_ref_tx_owner_migration`
+/// 判断磁盘状态，决定如何处理。
+pub enum RefTxOwnerMigration {
+    /// plan 中任一 ref 存在 canonical lock file。不知道归属，不能 terminalize。
+    LockExists,
+    /// 任一 ref 的当前值既不是 old 也不是 new（CAS miss）。并发修改。
+    ConcurrentModification,
+    /// 无 canonical lock 且所有 ref 的当前值均匹配 old/new/absent（三态允许）。
+    /// 生成新的 owner UUID，调用方应先原子写回 manifest.git_finalize.plan.ref_tx_owner
+    /// 并 fsync，再进入 rollback 路径。
+    MigrateToNewOwner(String),
+}
+
+impl std::fmt::Debug for RefTxOwnerMigration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LockExists => write!(f, "LockExists"),
+            Self::ConcurrentModification => write!(f, "ConcurrentModification"),
+            Self::MigrateToNewOwner(_) => write!(f, "MigrateToNewOwner(<uuid>)"),
+        }
+    }
+}
+
+/// 评论 5489750244 问题5：检查 `ref_tx_owner=None` 旧 manifest 的迁移判定。
+///
+/// 读 live `.git` 下每个 ref_plan 的 lock file 状态和 ref 值，返回迁移决策。
+/// 调用方（`rollback_full_sync_transaction`）负责持久化新 owner 到 manifest。
+pub fn check_ref_tx_owner_migration(
+    live_root: &Path,
+    snapshot: &GitMetadataSnapshot,
+    plan: &GitFinalizePlan,
+) -> Result<RefTxOwnerMigration> {
+    let _ = snapshot;
+    let git_dir = live_root.join(".git");
+
+    crate::storage::git_runtime::ensure_initialized()?;
+
+    let repo = git2::Repository::open(live_root).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "check_ref_tx_owner_migration: open live repo: {e}"
+        )))
+    })?;
+
+    for (ref_name, old_oid_str, new_oid_str) in &plan.ref_plans {
+        // 1. 检查 canonical ref lock 是否存在。
+        let lock_path = git_dir.join(format!("{}.lock", ref_name));
+        if lock_path.exists() {
+            return Ok(RefTxOwnerMigration::LockExists);
+        }
+
+        // 2. 检查 ref 值是否在三态允许范围内。
+        let new_oid = git2::Oid::from_str(new_oid_str).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "check_ref_tx_owner_migration: invalid new_oid for {}: {e}",
+                ref_name
+            )))
+        })?;
+
+        let current_ref_result = repo.find_reference(ref_name);
+
+        match (old_oid_str, current_ref_result) {
+            (None, Ok(current_ref)) => {
+                if current_ref.target() != Some(new_oid) {
+                    return Ok(RefTxOwnerMigration::ConcurrentModification);
+                }
+                // current == new → allowed, will need rollback.
+            }
+            (None, Err(e)) if e.code() == git2::ErrorCode::NotFound => {
+                // Absent → allowed, no-op for this ref.
+            }
+            (None, Err(e)) => {
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "check_ref_tx_owner_migration: lookup {}: {e}",
+                    ref_name
+                ))));
+            }
+            (Some(old_oid_str), Ok(current_ref)) => {
+                let old_oid = git2::Oid::from_str(old_oid_str).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "check_ref_tx_owner_migration: invalid old_oid for {}: {e}",
+                        ref_name
+                    )))
+                })?;
+                if current_ref.target() != Some(old_oid)
+                    && current_ref.target() != Some(new_oid)
+                {
+                    return Ok(RefTxOwnerMigration::ConcurrentModification);
+                }
+                // current == old (no-op) or current == new (rollback) → allowed.
+            }
+            (Some(_old_oid_str), Err(e)) if e.code() == git2::ErrorCode::NotFound => {
+                // ref 不存在但 old_oid 是 Some → unexpected, concurrent modification.
+                return Ok(RefTxOwnerMigration::ConcurrentModification);
+            }
+            (Some(_), Err(e)) => {
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "check_ref_tx_owner_migration: lookup {}: {e}",
+                    ref_name
+                ))));
+            }
+        }
+    }
+
+    // 所有 ref 都在三态允许范围内，无 canonical lock → 可迁移。
+    Ok(RefTxOwnerMigration::MigrateToNewOwner(
+        uuid::Uuid::new_v4().to_string(),
+    ))
 }
 
 /// #644 评论 5480360027：CAS-based rollback，根据 plan 的 old_oid/new_oid 做反向 CAS。
@@ -1966,21 +2134,19 @@ fn finalize_unborn(
         index_lock_owner,
     )?;
 
-    // #644 评论 5480360027 修复点 5：sync_remote_refs 严格错误传播。
-    sync_remote_refs(&live_repo, staging_repo, &snapshot.refs)?;
+    // 评论 5489750244 问题3：收集 remote ref actions，与 HEAD + head_ref 一起
+    // 通过统一的 RefTransaction 执行所有 ref 写入。
+    let remote_actions = collect_remote_ref_actions(staging_repo, &snapshot.refs)?;
 
-    // #644 评论 5489192105 问题2：forward 和 rollback 共用同一套 ref transaction。
-    // 用 RefTransaction 替代 git2::Transaction::lock_ref("HEAD")：
-    // - 持久 ownership：owner marker 文件做崩溃归属判断。
-    // - 正确处理 packed refs：set/delete 通过 git2::Transaction（libgit2 refdb）。
-    // - 统一机制：forward（finalize_unborn）和 rollback（rollback_git_finalize）用同一套。
-    //
-    // 流程：
-    // 1. acquire_all_refs(["HEAD", head_ref])：先写 owner marker，再 lock_ref 全部。
+    // 评论 5489750244 问题3：统一使用 RefTransaction 修改所有 refs。
+    // 所有 ref 修改通过同一个 writer exclusion：acquire → lock → verify → write → commit。
+    // 替代之前 sync_remote_refs 直接写（无 lock）+ RefTransaction 只锁 HEAD + head_ref 的
+    // 分离方案，消除 sync_remote_refs 直接写与其他 ref 操作之间的 TOCTOU 窗口。
+    // 1. acquire_all_refs(["HEAD", head_ref] + remote refs)：先写 owner marker，再 lock_ref 全部。
     // 2. 锁内读取 HEAD，确认仍是 symbolic 且指向 head_ref。
     // 3. 锁内确认 branch ref 仍不存在。
-    // 4. set_target(head_ref, new_oid)：通过 git2::Transaction 创建 branch。
-    // 5. commit：提交 set_target，释放全部 lock + 删 owner marker。
+    // 4. set_target(head_ref, new_oid) + set_target(remote refs)。
+    // 5. commit：提交所有 set_target，释放全部 lock + 删 owner marker。
     {
         use crate::sync::ref_transaction::RefTransaction;
 
@@ -1990,8 +2156,14 @@ fn finalize_unborn(
             )))
         })?;
 
-        // 锁住 HEAD + head_ref（sorted 去重，避免死锁）。
-        let ref_names = vec!["HEAD".to_string(), head_ref.to_string()];
+        // 锁住 HEAD + head_ref + remote refs（sorted 去重，避免死锁）。
+        let mut ref_names = vec!["HEAD".to_string(), head_ref.to_string()];
+        for (name, _) in &remote_actions {
+            if !ref_names.contains(name) {
+                ref_names.push(name.clone());
+            }
+        }
+
         let mut ref_tx =
             RefTransaction::acquire_all_refs(&live_repo, &ref_names, ref_tx_owner)
                 .map_err(GitFinalizeError::FinalizeFailed)?;
@@ -2043,16 +2215,18 @@ fn finalize_unborn(
             }
         }
 
-        // 在 HEAD + head_ref lock 保护下创建 branch。
-        // #644 评论 5489192105 问题3：通过 git2::Transaction::set_target（libgit2 refdb），
-        // 不直接碰 loose ref 文件，正确处理 packed refs。
+        // 在所有 ref lock 保护下创建 branch + 更新 remote refs。
         ref_tx.set_target(
             head_ref,
             new_oid,
             "sync: create branch from staging",
         )?;
 
-        // commit：提交 set_target，释放全部 lock + 删 owner marker。
+        for (name, target) in &remote_actions {
+            ref_tx.set_target(name, *target, "sync: update remote-tracking ref")?;
+        }
+
+        // commit：提交所有 set_target，释放全部 lock + 删 owner marker。
         ref_tx.commit().map_err(GitFinalizeError::FinalizeFailed)?;
     }
 
@@ -2120,38 +2294,54 @@ fn finalize_existing(
     )?;
 
     // #644 评论 5480360027 修复点 5：sync_remote_refs 严格错误传播。
-    sync_remote_refs(&live_repo, staging_repo, &snapshot.refs)?;
+    // 评论 5489750244 问题3：不再直接写 live repo，改为收集 remote ref actions，
+    // 与 HEAD + head_ref 一起通过统一的 RefTransaction 执行。
+    let remote_actions = collect_remote_ref_actions(staging_repo, &snapshot.refs)?;
 
-    // #644 评论 5475805198 第3节 + #644 评论 5484539222 缺陷3a：确认 HEAD 仍指向 seed 时同一个 branch。
-    // 防止用户切换到别的 branch 后还偷偷更新旧 branch。
-    // 严格 match find_reference("HEAD") 返回：
-    // - Ok(raw_head)：按当前真实状态处理（校验 sym_target == head_ref）。
-    // - Err(NotFound)：HEAD 不存在（unborn 或被并发删），返回 finalize failure，
-    //   绝不静默跳过（旧代码 if let Ok 把 IO/refdb 损坏错误跳过）。
-    // - 其它 Err：直接返回 finalize failure，进入已经存在的 rollback 路径。
-    match live_repo.find_reference("HEAD") {
-        Ok(raw_head) => {
-            if let Some(sym_target) = raw_head.symbolic_target() {
-                if sym_target != head_ref {
-                    return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-                        std::io::Error::other(format!(
-                            "finalize_existing: HEAD now points to {} but seed was {}",
-                            sym_target, head_ref
-                        )),
-                    )));
-                }
-                // HEAD 仍是 symbolic 且 target == head_ref：允许继续。
-            } else {
-                // #644 评论 5485518160 修改点 4：HEAD detached（无 sym_target）必须返回
-                // FinalizeFailed（**不是** ConcurrentMetadataChanged，因为本轮已经可能
-                // 写过 index/remote refs，需要走现有 rollback，不能标成"nothing written"）。
-                // verify_git_metadata_unchanged 是在 index/remote refs 写入之前做的，
-                // 用户/外部 Git 可在 preflight 后把 HEAD detach。此时 index 已换、remote
-                // refs 已改，post-check 看到 detached 也接受的话，只要旧 branch 仍是
-                // base_oid，reference_matching(head_ref, ...) 仍会成功，full sync 偷偷
-                // 推进用户已离开的 branch。收紧为 detached → FinalizeFailed，理由说明
-                // "HEAD detached after preflight: index/refs may already be written,
-                // must rollback"。
+    // 评论 5489750244 问题3：统一使用 RefTransaction 修改所有 refs。
+    // 所有 ref 修改通过同一个 writer exclusion：acquire → lock → verify → write → commit。
+    // 消除了之前 sync_remote_refs 直接写 → HEAD check → branch CAS →
+    // post-CAS re-check 之间的多个 TOCTOU 窗口（评论 5489750244 问题3）。
+    {
+        use crate::sync::ref_transaction::RefTransaction;
+
+        let ref_tx_owner = plan.ref_tx_owner.as_deref().ok_or_else(|| {
+            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
+                "finalize_existing: plan.ref_tx_owner is None but ref_plans is non-empty",
+            )))
+        })?;
+
+        // 收集所有 refs：head_ref + HEAD + remote refs。
+        let mut ref_names: Vec<String> = vec![head_ref.to_string(), "HEAD".to_string()];
+        for (name, _) in &remote_actions {
+            if !ref_names.contains(name) {
+                ref_names.push(name.clone());
+            }
+        }
+
+        let mut ref_tx =
+            RefTransaction::acquire_all_refs(&live_repo, &ref_names, ref_tx_owner)
+                .map_err(GitFinalizeError::FinalizeFailed)?;
+
+        // 锁内 verify：HEAD 仍指向 head_ref（用户未切 branch/detach）。
+        let raw_head = ref_tx.find_reference("HEAD").map_err(|e| {
+            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
+                format!("finalize_existing: HEAD reference not found: {e}"),
+            )))
+        })?;
+        match raw_head.symbolic_target() {
+            Some(sym_target) if sym_target == head_ref => {
+                // HEAD 仍 symbolic 且 target == head_ref：允许继续。
+            }
+            Some(other) => {
+                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                    std::io::Error::other(format!(
+                        "finalize_existing: HEAD now points to {} but seed was {}",
+                        other, head_ref
+                    )),
+                )));
+            }
+            None => {
                 return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
                     std::io::Error::other(
                         "finalize_existing: HEAD detached after preflight: index/refs \
@@ -2161,183 +2351,46 @@ fn finalize_existing(
                 )));
             }
         }
-        Err(e) if e.code() == git2::ErrorCode::NotFound => {
-            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-                std::io::Error::other(format!(
-                    "finalize_existing: HEAD reference not found (unborn or deleted): {} \
-                     — refusing to finalize on repo without HEAD",
-                    e
-                )),
-            )));
-        }
-        Err(e) => {
-            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-                std::io::Error::other(format!(
-                    "finalize_existing: find_reference(\"HEAD\") failed with non-NotFound \
-                     error: {} — refusing to finalize on possibly corrupted refdb",
-                    e
-                )),
-            )));
-        }
-    }
+        drop(raw_head);
 
-    // #644 评论 5481496190 问题1：force=true 让 libgit2 能更新已存在的 ref。
-    // current_id=base_oid 提供 CAS 保护，current != base_oid 时返回 EMODIFIED，
-    // 只有当前值 == base_oid 才写 new_oid。force=false 对已存在 ref 直接返回
-    // GIT_EEXISTS，current_id 的 CAS 检查不会被执行。
-    live_repo
-        .reference_matching(
-            head_ref,
-            new_oid,
-            true,
-            base_oid,
-            "sync: finalize git repo metadata after full sync",
-        )
-        .map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "finalize_existing: update-ref {} failed (CAS old={} new={}): {}",
-                head_ref, base_oid, new_oid, e
+        // 锁内 verify branch ref 仍等于 base_oid（CAS 条件）。
+        let branch_ref = ref_tx.find_reference(head_ref).map_err(|e| {
+            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
+                format!("finalize_existing: branch ref {} not found: {e}", head_ref),
             )))
         })?;
-
-    // #644 评论 5486852142 问题3：branch CAS 成功后再次校验 HEAD。
-    // HEAD post-check（上方 match live_repo.find_reference("HEAD")）到 branch CAS 之间
-    // 有窗口，用户可在此窗口切 branch（HEAD 仍 symbolic 指向别的 branch），目标 branch
-    // 仍是 base_oid，branch CAS 成功，full sync 推进用户已离开的 branch。
-    // branch CAS 成功后再次读取 HEAD：
-    // - HEAD 仍 symbolic 且 target == head_ref → 成功。
-    // - HEAD symbolic 但 target != head_ref / HEAD detached / HEAD NotFound / 其它 Err
-    //   → 反向 CAS head_ref: new_oid -> base_oid，返回 FinalizeFailed
-    //   （让现有 index/remote rollback 收尾）。
-    verify_head_after_branch_cas(&live_repo, head_ref, new_oid, base_oid)?;
-
-    Ok(())
-}
-
-/// #644 评论 5486852142 问题3：finalize_existing branch CAS 成功后再次校验 HEAD。
-///
-/// branch CAS 成功后再次读取 HEAD：
-/// - HEAD 仍 symbolic 且 target == head_ref → Ok(())。
-/// - HEAD symbolic 但 target != head_ref / HEAD detached / HEAD NotFound / 其它 Err
-///   → 反向 CAS head_ref: new_oid -> base_oid，返回 FinalizeFailed
-///   （让现有 index/remote rollback 收尾）。
-#[allow(clippy::too_many_lines, clippy::excessive_nesting)]
-fn verify_head_after_branch_cas(
-    live_repo: &git2::Repository,
-    head_ref: &str,
-    new_oid: git2::Oid,
-    base_oid: git2::Oid,
-) -> std::result::Result<(), GitFinalizeError> {
-    match live_repo.find_reference("HEAD") {
-        Ok(post_head) => {
-            if let Some(post_sym_target) = post_head.symbolic_target() {
-                if post_sym_target != head_ref {
-                    // HEAD 在 branch CAS 后切到了别的 branch。
-                    // 反向 CAS head_ref: new_oid -> base_oid，撤销本轮 branch 推进。
-                    live_repo
-                        .reference_matching(
-                            head_ref,
-                            base_oid,
-                            true,
-                            new_oid,
-                            "sync: rollback head_ref after HEAD changed post branch CAS",
-                        )
-                        .map_err(|e| {
-                            crate::Error::Io(std::io::Error::other(format!(
-                                "finalize_existing: post-CAS HEAD switched to {} (expected {}), \
-                                 reverse CAS head_ref {} failed (new={} old={}): {}",
-                                post_sym_target, head_ref, head_ref, new_oid, base_oid, e
-                            )))
-                        })?;
-                    return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-                        std::io::Error::other(format!(
-                            "finalize_existing: HEAD switched from {} to {} after branch CAS \
-                             succeeded — reversed branch CAS ({}: {} -> {}), must rollback \
-                             (refusing to advance head_ref on a branch the user has left)",
-                            head_ref, post_sym_target, head_ref, new_oid, base_oid
-                        )),
-                    )));
-                }
-                // HEAD 仍 symbolic 且 target == head_ref → 成功。
-            } else {
-                // HEAD detached after branch CAS。反向 CAS 撤销本轮 branch 推进。
-                live_repo
-                    .reference_matching(
-                        head_ref,
-                        base_oid,
-                        true,
-                        new_oid,
-                        "sync: rollback head_ref after HEAD detached post branch CAS",
-                    )
-                    .map_err(|e| {
-                        crate::Error::Io(std::io::Error::other(format!(
-                            "finalize_existing: post-CAS HEAD detached, reverse CAS head_ref \
-                             {} failed (new={} old={}): {}",
-                            head_ref, new_oid, base_oid, e
-                        )))
-                    })?;
-                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-                    std::io::Error::other(
-                        "finalize_existing: HEAD detached after branch CAS succeeded — \
-                         reversed branch CAS, must rollback (refusing to advance head_ref \
-                         on a branch the user has left via detach)",
-                    ),
-                )));
-            }
-        }
-        Err(e) if e.code() == git2::ErrorCode::NotFound => {
-            // HEAD NotFound after branch CAS。反向 CAS 撤销本轮 branch 推进。
-            live_repo
-                .reference_matching(
-                    head_ref,
-                    base_oid,
-                    true,
-                    new_oid,
-                    "sync: rollback head_ref after HEAD NotFound post branch CAS",
-                )
-                .map_err(|e| {
-                    crate::Error::Io(std::io::Error::other(format!(
-                        "finalize_existing: post-CAS HEAD NotFound, reverse CAS head_ref \
-                         {} failed (new={} old={}): {}",
-                        head_ref, new_oid, base_oid, e
-                    )))
-                })?;
+        let current_branch_oid = branch_ref.target().ok_or_else(|| {
+            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
+                "finalize_existing: branch ref {} has no target",
+                head_ref
+            ))))
+        })?;
+        if current_branch_oid != base_oid {
             return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
                 std::io::Error::other(format!(
-                    "finalize_existing: HEAD reference not found after branch CAS succeeded \
-                     (unborn or deleted): {} — reversed branch CAS, refusing to finalize on \
-                     repo without HEAD",
-                    e
+                    "finalize_existing: branch {} changed from {} to {} (concurrent modification)",
+                    head_ref, base_oid, current_branch_oid
                 )),
             )));
         }
-        Err(e) => {
-            // 其它 Err：尝试反向 CAS，返回 FinalizeFailed。
-            live_repo
-                .reference_matching(
-                    head_ref,
-                    base_oid,
-                    true,
-                    new_oid,
-                    "sync: rollback head_ref after HEAD read error post branch CAS",
-                )
-                .map_err(|e2| {
-                    crate::Error::Io(std::io::Error::other(format!(
-                        "finalize_existing: post-CAS find_reference(\"HEAD\") failed: {}, \
-                         reverse CAS head_ref {} also failed (new={} old={}): {}",
-                        e, head_ref, new_oid, base_oid, e2
-                    )))
-                })?;
-            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-                std::io::Error::other(format!(
-                    "finalize_existing: find_reference(\"HEAD\") failed with non-NotFound \
-                     error after branch CAS succeeded: {} — reversed branch CAS, refusing \
-                     to finalize on possibly corrupted refdb",
-                    e
-                )),
-            )));
+        drop(branch_ref);
+
+        // 锁内更新 branch ref。
+        ref_tx.set_target(
+            head_ref,
+            new_oid,
+            "sync: finalize git repo metadata after full sync",
+        )?;
+
+        // 锁内更新 remote refs。
+        for (name, target) in &remote_actions {
+            ref_tx.set_target(name, *target, "sync: update remote-tracking ref")?;
         }
+
+        // commit：提交所有 set_target，释放全部 lock + 删 owner marker。
+        ref_tx.commit().map_err(GitFinalizeError::FinalizeFailed)?;
     }
+
     Ok(())
 }
 
@@ -2404,23 +2457,88 @@ fn finalize_detached(
         index_lock_owner,
     )?;
 
-    // #644 评论 5475805198 第3节：使用 reference_matching 做真正的 CAS。
-    // #644 评论 5481496190 问题1：force=true 让 libgit2 能更新已存在的 HEAD，
-    // current_id=base_oid 提供 CAS 保护，current != base_oid 时返回 EMODIFIED。
-    live_repo
-        .reference_matching(
-            "HEAD",
-            new_oid,
-            true,
-            base_oid,
-            "sync: finalize detached HEAD after full sync",
-        )
-        .map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "finalize_detached: update HEAD failed (CAS old={} new={}): {}",
-                base_oid, new_oid, e
+    // 评论 5489750244 问题3：统一使用 RefTransaction 修改 HEAD + remote refs。
+    // 所有 ref 修改通过同一个 writer exclusion：acquire → lock → verify → write → commit。
+    {
+        use crate::sync::ref_transaction::RefTransaction;
+
+        let ref_tx_owner = plan.ref_tx_owner.as_deref().ok_or_else(|| {
+            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
+                "finalize_detached: plan.ref_tx_owner is None but ref_plans is non-empty",
             )))
         })?;
+
+        // 收集所有 refs：HEAD + remote refs。
+        let mut ref_names: Vec<String> = vec!["HEAD".to_string()];
+        let remote_actions = collect_remote_ref_actions(staging_repo, &snapshot.refs)?;
+        for (name, _) in &remote_actions {
+            if !ref_names.contains(name) {
+                ref_names.push(name.clone());
+            }
+        }
+
+        if ref_names.len() > 1 {
+            let mut ref_tx =
+                RefTransaction::acquire_all_refs(&live_repo, &ref_names, ref_tx_owner)
+                    .map_err(GitFinalizeError::FinalizeFailed)?;
+
+            // 锁内 verify HEAD 仍 detached（未 resolve 的 HEAD 的 target 是 raw OID）。
+            let raw_head = ref_tx.find_reference("HEAD").map_err(|e| {
+                GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
+                    format!("finalize_detached: HEAD reference not found: {e}"),
+                )))
+            })?;
+            if raw_head.symbolic_target().is_some() {
+                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                    std::io::Error::other(
+                        "finalize_detached: HEAD is now symbolic (concurrent modification)",
+                    ),
+                )));
+            }
+            let current_head_oid = raw_head.target().ok_or_else(|| {
+                GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
+                    "finalize_detached: HEAD has no target",
+                )))
+            })?;
+            if current_head_oid != base_oid {
+                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                    std::io::Error::other(format!(
+                        "finalize_detached: HEAD changed from {} to {} (concurrent modification)",
+                        base_oid, current_head_oid
+                    )),
+                )));
+            }
+            drop(raw_head);
+
+            // 锁内更新 HEAD（CAS：current==base_oid）。
+            ref_tx.set_target("HEAD", new_oid, "sync: finalize detached HEAD")?;
+
+            // 锁内更新 remote refs。
+            for (name, target) in &remote_actions {
+                ref_tx.set_target(name, *target, "sync: update remote-tracking ref")?;
+            }
+
+            ref_tx.commit().map_err(GitFinalizeError::FinalizeFailed)?;
+        } else {
+            // 只有 HEAD，无 remote refs：更新 HEAD（无需 transaction 开销）。
+            live_repo
+                .reference_matching(
+                    "HEAD",
+                    new_oid,
+                    true,
+                    base_oid,
+                    "sync: finalize detached HEAD after full sync",
+                )
+                .map_err(|e| {
+                    GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                        std::io::Error::other(format!(
+                            "finalize_detached: update HEAD failed (CAS old={} new={}): {}",
+                            base_oid, new_oid, e
+                        )),
+                    ))
+                })?;
+        }
+    }
 
     Ok(())
 }
@@ -3190,26 +3308,28 @@ fn index_snapshot_eq(a: &IndexSnapshot, b: &IndexSnapshot) -> bool {
 /// 对每个 remote ref，从 snapshot 取旧值：
 /// - `DidNotExist`：用 `force=false` 创建，已存在则失败（CAS）。
 /// - `Existed { oid }`：用 `reference_matching` CAS，当前 OID 不匹配则失败。
-/// - `Symbolic`：remote ref 不应是 symbolic，跳过。
-///
 /// #644 评论 5480360027 修复点 5：严格错误传播。
 /// `references()?` 而非 `if let Ok(...)`，循环里 `reference?` 而非 `flatten()`。
 /// 任何错误都向上传播，进入本轮 finalize 失败/rollback，不能静默跳过。
+///
+/// 评论 5489750244 问题3：不再直接写 live repo，改为返回 ref action 列表。
+/// 调用方通过统一的 RefTransaction 执行所有 ref 写入（acquire → lock → write → commit），
+/// 保证 forward 路径的所有 ref 修改都在同一个 writer exclusion 下完成。
 #[allow(clippy::excessive_nesting)]
-fn sync_remote_refs(
-    live_repo: &git2::Repository,
+fn collect_remote_ref_actions(
     staging_repo: &git2::Repository,
     snapshot_refs: &std::collections::BTreeMap<String, RefSnapshot>,
-) -> Result<()> {
+) -> Result<Vec<(String, git2::Oid)>> {
+    let mut actions = Vec::new();
     let staging_refs = staging_repo.references().map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
-            "sync_remote_refs: failed to iterate staging references: {e}"
+            "collect_remote_ref_actions: failed to iterate staging references: {e}"
         )))
     })?;
     for reference in staging_refs {
         let reference = reference.map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
-                "sync_remote_refs: staging reference iterator error: {e}"
+                "collect_remote_ref_actions: staging reference iterator error: {e}"
             )))
         })?;
         let Some(name) = reference.name() else {
@@ -3226,45 +3346,8 @@ fn sync_remote_refs(
             .cloned()
             .unwrap_or(RefSnapshot::DidNotExist);
         match &old_snapshot {
-            RefSnapshot::DidNotExist => {
-                // ref 原本不存在，用 force=false 创建（已存在则失败，CAS 语义）。
-                live_repo
-                    .reference(
-                        name,
-                        target,
-                        false,
-                        "sync: create remote-tracking ref from staging",
-                    )
-                    .map_err(|e| {
-                        crate::Error::Io(std::io::Error::other(format!(
-                            "sync_remote_refs: create {} failed (CAS expected absent): {}",
-                            name, e
-                        )))
-                    })?;
-            }
-            RefSnapshot::Existed { oid } => {
-                let old_oid = git2::Oid::from_str(oid).map_err(|e| {
-                    crate::Error::Io(std::io::Error::other(format!(
-                        "sync_remote_refs: invalid old oid for {}: {e}",
-                        name
-                    )))
-                })?;
-                // #644 评论 5481496190 问题1：force=true 让 libgit2 能更新已存在的 ref。
-                // current_id=old_oid 提供 CAS 保护，current != old_oid 时返回 EMODIFIED。
-                live_repo
-                    .reference_matching(
-                        name,
-                        target,
-                        true,
-                        old_oid,
-                        "sync: update remote-tracking ref from staging",
-                    )
-                    .map_err(|e| {
-                        crate::Error::Io(std::io::Error::other(format!(
-                            "sync_remote_refs: CAS update {} failed (old={} new={}): {}",
-                            name, old_oid, target, e
-                        )))
-                    })?;
+            RefSnapshot::DidNotExist | RefSnapshot::Existed { .. } => {
+                actions.push((name.to_string(), target));
             }
             RefSnapshot::Symbolic { .. } => {
                 // remote ref 不应是 symbolic，跳过（不覆盖）。
@@ -3272,7 +3355,7 @@ fn sync_remote_refs(
             }
         }
     }
-    Ok(())
+    Ok(actions)
 }
 
 /// 更新 live 的 index 为 staging HEAD 对应的 tree（不 checkout 工作区）。

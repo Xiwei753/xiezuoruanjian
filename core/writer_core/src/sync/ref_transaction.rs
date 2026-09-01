@@ -183,7 +183,9 @@ pub fn clean_orphan_owner_marker(git_dir: &Path, ref_name: &str) -> Result<()> {
 /// 2. 锁内 `find_reference` 读取并分类 ref 状态。
 /// 3. `set_target` / `remove` 通过 `git2::Transaction`（libgit2 refdb，正确处理 packed refs）。
 /// 4. `commit(self)`：`tx.commit()` 提交所有操作 + 删全部 owner marker。
-/// 5. `drop`（未 commit 路径）：清理 owner marker，`git2::Transaction::drop` 释放 lock。
+/// 5. `drop`（未 commit 路径）：评论 5489750244 问题2 — 先 drop tx 释放 canonical ref locks，
+///    再删 owner marker。crash 窗口只能是"lock 已释放、marker 可能多留"（可恢复），不能是
+///    "marker 已删、lock 未释放"（lock 被误认为 External，事务永久卡住）。
 pub struct RefTransaction<'repo> {
     repo: &'repo git2::Repository,
     /// `Option` 以支持 `commit` 时 take 出来消耗。
@@ -255,7 +257,10 @@ impl<'repo> RefTransaction<'repo> {
 
         for ref_name in &sorted_refs {
             if let Err(e) = tx.lock_ref(ref_name) {
-                // 清理已写的 owner marker。
+                // 评论 5489750244 问题2：lock_ref 失败时，先 drop tx 释放已获取的 canonical
+                // ref locks，再清理已写的 owner marker。正确析构顺序：先释 canonical lock，
+                // 再清辅助状态。
+                drop(tx);
                 for m in &written_markers {
                     let _ = fs::remove_file(m);
                 }
@@ -413,9 +418,13 @@ impl<'repo> RefTransaction<'repo> {
 impl<'repo> Drop for RefTransaction<'repo> {
     fn drop(&mut self) {
         if !self.disarmed {
-            // 未 commit（出错路径）：清理 owner marker。
-            // tx 仍存在（Option<Some>），drop 时 git2::Transaction::drop 会释放 lock。
-            // tx 是 None 表示 commit 中途失败（take 后 err），lock 已由 tx.commit 内部处理。
+            // 评论 5489750244 问题2：正确的析构顺序。
+            // 先释放 canonical ref locks（drop tx），再删 owner marker。
+            // 这样 crash 窗口是 "lock 已释放、marker 可能多留"（可恢复），
+            // 而不是 "marker 已删、lock 未释放"（lock 被误认为 External，事务永久卡住）。
+            if let Some(tx) = self.tx.take() {
+                drop(tx);
+            }
             for marker in &self.owner_markers {
                 let _ = fs::remove_file(marker);
             }

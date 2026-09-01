@@ -179,70 +179,59 @@ fn problem2_fixed_external_lock_returns_concurrent_changed() {
     );
 }
 
-/// 问题3修复验证：finalize_existing branch CAS 后再次校验 HEAD。
+/// 问题3修复验证：finalize_existing 使用统一 RefTransaction 修改所有 refs。
 ///
 /// 修复证据：core/writer_core/src/sync/git_commit.rs
-/// - branch CAS（reference_matching(head_ref, new_oid, true, base_oid, ...)）后有
-///   再次 find_reference("HEAD") re-check
-/// - HEAD 不匹配时反向 CAS head_ref: new_oid -> base_oid，返回 FinalizeFailed
+/// - finalize_existing 使用 RefTransaction 一次性锁住 HEAD + head_ref + remote refs
+/// - 锁内验证 HEAD 仍指向 head_ref（消除 TOCTOU 窗口）
+/// - 锁内验证 branch ref 仍等于 base_oid（CAS 条件）
+/// - 锁内执行 branch CAS + remote ref 更新
+/// - commit 释放所有锁（不再需要 verify_head_after_branch_cas 反向 CAS 补丁）
 #[test]
 fn problem3_fixed_head_recheck_after_branch_cas() {
     let src = read_src_file("src/sync/git_commit.rs");
     let finalize_body = extract_fn_body(&src, "finalize_existing");
 
-    // HEAD post-check（branch CAS 前）
-    let head_check = "match live_repo.find_reference(\"HEAD\")";
-    let head_pos = finalize_body.find(head_check).expect("HEAD post-check");
+    // 验证 finalize_existing 使用 RefTransaction
     assert!(
-        finalize_body[head_pos..].contains("sym_target != head_ref"),
-        "problem3: HEAD sym_target != head_ref check not found"
+        finalize_body.contains("RefTransaction::acquire_all_refs"),
+        "problem3: finalize_existing must use RefTransaction::acquire_all_refs for unified locking"
     );
 
-    // branch CAS: reference_matching(head_ref, new_oid, true, base_oid, ...)
-    let cas_marker = ".reference_matching(";
-    let cas_rel = finalize_body[head_pos..]
-        .find(cas_marker)
-        .expect("branch CAS");
-    let cas_abs = head_pos + cas_rel;
-    let cas_window = &finalize_body[cas_abs..cas_abs + 200];
+    // 验证锁内验证 HEAD（通过 ref_tx.find_reference("HEAD")）
     assert!(
-        cas_window.contains("head_ref")
-            && cas_window.contains("new_oid")
-            && cas_window.contains("base_oid"),
-        "problem3: branch CAS must use head_ref, new_oid, base_oid"
+        finalize_body.contains("ref_tx.find_reference(\"HEAD\")"),
+        "problem3: finalize_existing must verify HEAD under RefTransaction lock"
     );
 
-    // 修复证据：branch CAS 后有再次 find_reference("HEAD") re-check
-    // after_cas = 从 branch CAS 结束到函数结束
-    let after_cas_start = cas_abs + cas_window.len();
-    let after_cas = &finalize_body[after_cas_start..];
-
-    // HEAD re-check 提取到 verify_head_after_branch_cas 辅助函数中。
-    // 验证 finalize_existing 在 branch CAS 后调用 verify_head_after_branch_cas。
+    // 验证锁内验证 branch ref（通过 ref_tx.find_reference(head_ref)）
     assert!(
-        after_cas.contains("verify_head_after_branch_cas"),
-        "problem3: finalize_existing must call verify_head_after_branch_cas after branch CAS"
+        finalize_body.contains("ref_tx.find_reference(head_ref)"),
+        "problem3: finalize_existing must verify branch ref under RefTransaction lock"
     );
 
-    // 验证 verify_head_after_branch_cas 函数存在且包含 HEAD re-check + 反向 CAS。
-    let verify_body = extract_fn_body(&src, "verify_head_after_branch_cas");
+    // 验证通过 RefTransaction 执行 branch CAS
     assert!(
-        verify_body.contains("find_reference(\"HEAD\")"),
-        "problem3: verify_head_after_branch_cas must re-check HEAD (find_reference(\"HEAD\"))"
+        finalize_body.contains("ref_tx.set_target(")
+            && finalize_body.contains("head_ref,"),
+        "problem3: finalize_existing must use ref_tx.set_target for branch CAS"
     );
+
+    // 验证通过 RefTransaction commit 释放所有锁
     assert!(
-        verify_body.contains("reference_matching("),
-        "problem3: verify_head_after_branch_cas must contain reverse CAS (reference_matching) \
-         for HEAD changed rollback"
+        finalize_body.contains("ref_tx.commit()"),
+        "problem3: finalize_existing must commit RefTransaction to release all locks"
     );
+
+    // 验证不再有旧的 verify_head_after_branch_cas 调用
+    // （已被统一 RefTransaction 方案替代）
     assert!(
-        verify_body.contains("rollback head_ref after HEAD"),
-        "problem3: verify_head_after_branch_cas must contain reverse CAS log message \
-         'rollback head_ref after HEAD'"
+        !finalize_body.contains("verify_head_after_branch_cas"),
+        "problem3: verify_head_after_branch_cas should be removed — replaced by unified RefTransaction"
     );
 
     eprintln!(
-        "problem3 FIXED: finalize_existing re-checks HEAD after branch CAS, reverses CAS on mismatch"
+        "problem3 FIXED: finalize_existing uses unified RefTransaction — no more verify_head_after_branch_cas TOCTOU"
     );
 }
 
