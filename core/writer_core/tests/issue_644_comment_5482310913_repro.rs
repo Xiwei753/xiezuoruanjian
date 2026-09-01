@@ -104,7 +104,8 @@ fn verify_problem1_marker_must_survive_finalize_until_tx_finish() {
         repo_create_owner: Some(owner.clone()),
         index_lock_owner: None,
         ref_tx_owner: None,
-    };
+
+            ref_lock_names: Vec::new(),    };
 
     // 调用 commit_git_finalize（NotGitRepo 路径）。
     // 成功后 live/.git 应已安装，但 marker 必须保留到 tx.finish()。
@@ -217,7 +218,8 @@ fn verify_problem2_rollback_must_check_ownership_before_touching_index() {
         repo_create_owner: Some(uuid::Uuid::new_v4().to_string()),
         index_lock_owner: None,
         ref_tx_owner: None,
-    };
+
+            ref_lock_names: Vec::new(),    };
 
     rollback_git_finalize(&live, &snapshot, &plan)
         .expect("rollback_git_finalize must return Ok (ownership mismatch → no-op)");
@@ -350,7 +352,8 @@ fn verify_problem3_ref_cas_miss_must_return_err_not_ok() {
         repo_create_owner: None,
         index_lock_owner: None,
         ref_tx_owner: Some(uuid::Uuid::new_v4().to_string()),
-    };
+
+            ref_lock_names: Vec::new(),    };
 
     let result = rollback_git_finalize(&live, &snapshot, &plan);
 
@@ -437,7 +440,8 @@ fn verify_problem3_index_cas_miss_must_return_err_not_ok() {
         repo_create_owner: None,
         index_lock_owner: None,
         ref_tx_owner: None,
-    };
+
+            ref_lock_names: Vec::new(),    };
 
     let result = rollback_git_finalize(&live, &snapshot, &plan);
 
@@ -493,7 +497,8 @@ fn verify_problem1_invariant_marker_present_after_successful_finalize() {
         repo_create_owner: Some(owner),
         index_lock_owner: None,
         ref_tx_owner: None,
-    };
+
+            ref_lock_names: Vec::new(),    };
 
     let result = commit_git_finalize(&live, &staging, &GitSeedState::NotGitRepo, &snapshot, &plan);
 

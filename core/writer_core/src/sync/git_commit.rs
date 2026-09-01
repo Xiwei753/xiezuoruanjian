@@ -31,67 +31,6 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::sync::git_staging::GitSeedState;
 
-// ── Git repo layout ──
-
-/// 评论 5489750244 问题1：明确的 Git 布局模型。
-///
-/// Android 共享存储（`/storage/emulated/0/...`）不适合放可写 Git metadata，
-/// 因为 sidecar 文件（`<ref>.sujian-ref-lock`）与真正的 `<ref>.lock` 不是原子事实，
-/// 无法可靠证明 ownership。本结构体将 worktree（用户可见文件）与 git_dir（可写 metadata）
-/// 分离，允许 git_dir 放在应用私有目录。
-///
-/// - `worktree_root`：用户可见文件的根目录（正文、元数据等），如
-///   `/storage/emulated/0/Sujian/projects/<id>`。
-/// - `git_dir`：可写 Git metadata（`.git/`）的根目录，如
-///   `filesDir/sujian-git/<project-id>`。
-pub struct GitRepoLayout {
-    pub worktree_root: PathBuf,
-    pub git_dir: PathBuf,
-}
-
-impl GitRepoLayout {
-    /// 创建 layout。`git_dir` 默认为 `worktree_root.join(".git")`（标准 Git 布局）。
-    pub fn new(worktree_root: PathBuf) -> Self {
-        let git_dir = worktree_root.join(".git");
-        Self {
-            worktree_root,
-            git_dir,
-        }
-    }
-
-    /// 创建 layout，指定外部 git_dir。
-    pub fn with_external_git_dir(worktree_root: PathBuf, git_dir: PathBuf) -> Self {
-        Self {
-            worktree_root,
-            git_dir,
-        }
-    }
-
-    /// 从 live_root 获取默认 git_dir（标准 Git 布局：`live_root/.git`）。
-    ///
-    /// 供现有函数在未重构为接受 `GitRepoLayout` 之前使用。
-    /// 后续应逐步改为接受 `GitRepoLayout` 参数。
-    pub fn default_git_dir(live_root: &Path) -> PathBuf {
-        live_root.join(".git")
-    }
-}
-
-/// 评论 5489750244 问题1：打开仓库，支持外部 git_dir。
-///
-/// 当 `git_dir == worktree_root.join(".git")` 时等效于 `Repository::open(worktree_root)`。
-/// 当 `git_dir` 是外部路径时，先打开 git_dir 中的 git repo，再设置 workdir 为 worktree_root。
-fn open_repo_with_layout(layout: &GitRepoLayout) -> std::result::Result<git2::Repository, git2::Error> {
-    let default_git_dir = layout.worktree_root.join(".git");
-    if layout.git_dir == default_git_dir {
-        git2::Repository::open(&layout.worktree_root)
-    } else {
-        #[allow(unused_mut)]
-        let mut repo = git2::Repository::open(&layout.git_dir)?;
-        repo.set_workdir(&layout.worktree_root, false)?;
-        Ok(repo)
-    }
-}
-
 // ── 快照类型 ──
 
 /// #644 评论 5475805198 第2节 + #644 评论 5476546134 第4节：
@@ -212,6 +151,16 @@ pub struct GitFinalizePlan {
     /// 恢复时可通过 owner marker 判断归属。
     #[serde(default)]
     pub ref_tx_owner: Option<String>,
+    /// #644 评论 5490206957 问题3：forward transaction 的完整 ref lock 集合。
+    ///
+    /// 不要从"会写哪些 refs"（`ref_plans`）反推"会锁哪些 refs"——Unborn/Existing
+    /// 的 `ref_plans` 只有 head_ref，但 forward 实际还锁了 HEAD + remote refs。
+    /// 本字段在 `build_finalize_plan` / forward finalize 时**一次写全**：
+    /// HEAD + head_ref + remote refs，按实际 forward transaction 的完整锁集合保存。
+    ///
+    /// forward acquire、rollback stale-lock cleanup、owner migration 全部只读这一个集合。
+    #[serde(default)]
+    pub ref_lock_names: Vec<String>,
 }
 
 /// #644 评论 5478237852 问题2：旧 mutation journal 字段，保留向后兼容。
@@ -409,7 +358,7 @@ pub fn prepare_git_finalize(
     };
 
     // 捕获 index 快照。
-    let index_path = live_root.join(".git").join("index");
+    let index_path = live_repo.path().join("index");
     let index = if index_path.exists() {
         // #644 评论 5476546134 第4节：读取失败不能伪造"空 index"，
         // 直接 ? 返回错误。snapshot 本身就是回滚事实，不能降级。
@@ -619,6 +568,7 @@ fn build_finalize_plan(
             repo_create_owner: new_repo_create_owner(seed_state),
             index_lock_owner: None,
             ref_tx_owner: None,
+            ref_lock_names: Vec::new(),
         });
     };
 
@@ -716,6 +666,34 @@ fn build_finalize_plan(
         None
     };
 
+    // #644 评论 5490206957 问题3：构建完整的 ref_lock_names 集合。
+    // 不要从 ref_plans 反推会锁哪些 refs——Unborn/Existing 的 ref_plans 只有
+    // head_ref，但 forward 实际还锁了 HEAD + remote refs。
+    // 这里一次写全：HEAD + head_ref + remote refs。
+    let mut ref_lock_names: Vec<String> = Vec::new();
+    match seed_state {
+        GitSeedState::NotGitRepo => {
+            // NotGitRepo：forward 不锁 live refs（live 还没有 .git），
+            // 但 rollback 仍可能锁 HEAD + branch + remote refs。
+            // ref_lock_names 为空即可，因为 NotGitRepo 的 forward 不经过 RefTransaction。
+        }
+        GitSeedState::Unborn { head_ref }
+        | GitSeedState::Existing { head_ref, .. } => {
+            ref_lock_names.push("HEAD".to_string());
+            ref_lock_names.push(head_ref.clone());
+        }
+        GitSeedState::Detached { .. } => {
+            ref_lock_names.push("HEAD".to_string());
+        }
+    }
+    for (name, _, _) in &ref_plans {
+        if !ref_lock_names.contains(name) {
+            ref_lock_names.push(name.clone());
+        }
+    }
+    ref_lock_names.sort();
+    ref_lock_names.dedup();
+
     Ok(GitFinalizePlan {
         repo_create: matches!(seed_state, GitSeedState::NotGitRepo),
         new_index_sha256: staging_plan.new_index_sha256,
@@ -723,6 +701,7 @@ fn build_finalize_plan(
         repo_create_owner: new_repo_create_owner(seed_state),
         index_lock_owner,
         ref_tx_owner,
+        ref_lock_names,
     })
 }
 
@@ -929,7 +908,15 @@ pub fn inspect_git_rollback_state(
     }
 
     // 2b. refs 状态（只读，不修改任何文件）。
-    if !plan.ref_plans.is_empty() {
+    // #644 评论 5490206957 问题3：用 plan.ref_lock_names（完整的 forward lock 集合）
+    // 而不是 plan.ref_plans（只包含 head_ref + remote refs，不含 HEAD）来检查 lock 状态。
+    // 向后兼容：旧 manifest 无 ref_lock_names 时从 ref_plans 取名称。
+    let ref_lock_check_names: Vec<String> = if !plan.ref_lock_names.is_empty() {
+        plan.ref_lock_names.clone()
+    } else {
+        plan.ref_plans.iter().map(|(name, _, _)| name.clone()).collect()
+    };
+    if !ref_lock_check_names.is_empty() {
         let git_dir = live_root.join(".git");
 
         // 评论 5489750244 问题4：inspect_git_rollback_state 恢复成纯只读函数。
@@ -939,7 +926,7 @@ pub fn inspect_git_rollback_state(
         // 的严格顺序不被破坏。
         if let Some(owner) = &plan.ref_tx_owner {
             use crate::sync::ref_transaction::{inspect_ref_lock_owner, RefLockOwner};
-            for (ref_name, _, _) in &plan.ref_plans {
+            for ref_name in &ref_lock_check_names {
                 match inspect_ref_lock_owner(&git_dir, ref_name, owner) {
                     RefLockOwner::Ours => {
                         // 本事务的 stale lock：classify 为 NeedsRollback，
@@ -1335,14 +1322,24 @@ pub fn check_ref_tx_owner_migration(
         )))
     })?;
 
-    for (ref_name, old_oid_str, new_oid_str) in &plan.ref_plans {
+    // #644 评论 5490206957 问题3：用 plan.ref_lock_names（完整的 forward lock 集合）
+    // 而不是 plan.ref_plans（只包含 head_ref + remote refs，不含 HEAD）。
+    // 向后兼容：旧 manifest 无 ref_lock_names 时从 ref_plans 取名称。
+    let ref_lock_check_names: Vec<String> = if !plan.ref_lock_names.is_empty() {
+        plan.ref_lock_names.clone()
+    } else {
+        plan.ref_plans.iter().map(|(name, _, _)| name.clone()).collect()
+    };
+    for ref_name in &ref_lock_check_names {
         // 1. 检查 canonical ref lock 是否存在。
         let lock_path = git_dir.join(format!("{}.lock", ref_name));
         if lock_path.exists() {
             return Ok(RefTxOwnerMigration::LockExists);
         }
+    }
 
-        // 2. 检查 ref 值是否在三态允许范围内。
+    // 2. 检查每个 ref_plan 的 ref 值是否在三态允许范围内。
+    for (ref_name, old_oid_str, new_oid_str) in &plan.ref_plans {
         let new_oid = git2::Oid::from_str(new_oid_str).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
                 "check_ref_tx_owner_migration: invalid new_oid for {}: {e}",
@@ -1505,16 +1502,17 @@ pub fn rollback_git_finalize(
         RefTransaction,
     };
 
-    let git_dir = live_root.join(".git");
-
-    // A. acquire 全部 refs 的 lock（如果 ref_plans 非空）。
+    // A. acquire 全部 refs 的 lock（如果 ref_lock_names 非空）。
+    //    #644 评论 5490206957 问题3：使用 plan.ref_lock_names（完整的 forward lock 集合）
+    //    而不是 plan.ref_plans（只包含 head_ref + remote refs，不含 HEAD）。
     //    #644 评论 5489192105 问题1：先拿齐 writer exclusion，再判断，再改。
     //    #644 评论 5489192105 问题2：用 owner marker 做持久 ownership。
-    let ref_names: Vec<String> = plan
-        .ref_plans
-        .iter()
-        .map(|(name, _, _)| name.clone())
-        .collect();
+    //    向后兼容：旧 manifest 无 ref_lock_names 时从 ref_plans 取名称。
+    let ref_names: Vec<String> = if !plan.ref_lock_names.is_empty() {
+        plan.ref_lock_names.clone()
+    } else {
+        plan.ref_plans.iter().map(|(name, _, _)| name.clone()).collect()
+    };
 
     // repo 需要定义在 ref_tx 之前，且生命周期要覆盖 ref_tx。
     let repo: Option<git2::Repository> = if !ref_names.is_empty() {
@@ -1526,6 +1524,8 @@ pub fn rollback_git_finalize(
     } else {
         None
     };
+
+    let git_dir = repo.as_ref().map(|r| r.path().to_path_buf()).unwrap_or_else(|| live_root.join(".git"));
 
     let mut ref_tx: Option<RefTransaction<'_>> = None;
     if let Some(repo) = &repo {
@@ -1594,8 +1594,8 @@ pub fn rollback_git_finalize(
     //    #644 评论 5489192105 问题1：index rollback 在 ref lock 保护下执行，
     //    消除 "verify → index write → ref update" 之间的并发窗口。
     if let Some(expected_hash) = plan.new_index_sha256 {
-        let index_path = live_root.join(".git").join("index");
-        let lock_path = live_root.join(".git").join("index.lock");
+        let index_path = git_dir.join("index");
+        let lock_path = git_dir.join("index.lock");
 
         // 读取当前 index 字节（不存在视为 Missing）。
         let current_index = if index_path.exists() {
@@ -1629,7 +1629,7 @@ pub fn rollback_git_finalize(
                         // owner 未完成写入）：清理 lock 目录，fsync .git。
                         // remove_dir_all 或 sync_dir 失败时返回 Err 保留 transaction，
                         // 不能吞错后返回 Reverted（磁盘可能留着没人负责的 index.lock）。
-                        remove_lock_dir_if_exists(&lock_path, &live_root.join(".git"))?;
+                        remove_lock_dir_if_exists(&lock_path, &git_dir)?;
                     }
                     LockOwner::External => {
                         // #644 评论 5486852142 问题2：lock 不属于本轮
@@ -2477,67 +2477,47 @@ fn finalize_detached(
             }
         }
 
-        if ref_names.len() > 1 {
-            let mut ref_tx =
-                RefTransaction::acquire_all_refs(&live_repo, &ref_names, ref_tx_owner)
-                    .map_err(GitFinalizeError::FinalizeFailed)?;
+        let mut ref_tx =
+            RefTransaction::acquire_all_refs(&live_repo, &ref_names, ref_tx_owner)
+                .map_err(GitFinalizeError::FinalizeFailed)?;
 
-            // 锁内 verify HEAD 仍 detached（未 resolve 的 HEAD 的 target 是 raw OID）。
-            let raw_head = ref_tx.find_reference("HEAD").map_err(|e| {
-                GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
-                    format!("finalize_detached: HEAD reference not found: {e}"),
-                )))
-            })?;
-            if raw_head.symbolic_target().is_some() {
-                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-                    std::io::Error::other(
-                        "finalize_detached: HEAD is now symbolic (concurrent modification)",
-                    ),
-                )));
-            }
-            let current_head_oid = raw_head.target().ok_or_else(|| {
-                GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
-                    "finalize_detached: HEAD has no target",
-                )))
-            })?;
-            if current_head_oid != base_oid {
-                return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-                    std::io::Error::other(format!(
-                        "finalize_detached: HEAD changed from {} to {} (concurrent modification)",
-                        base_oid, current_head_oid
-                    )),
-                )));
-            }
-            drop(raw_head);
-
-            // 锁内更新 HEAD（CAS：current==base_oid）。
-            ref_tx.set_target("HEAD", new_oid, "sync: finalize detached HEAD")?;
-
-            // 锁内更新 remote refs。
-            for (name, target) in &remote_actions {
-                ref_tx.set_target(name, *target, "sync: update remote-tracking ref")?;
-            }
-
-            ref_tx.commit().map_err(GitFinalizeError::FinalizeFailed)?;
-        } else {
-            // 只有 HEAD，无 remote refs：更新 HEAD（无需 transaction 开销）。
-            live_repo
-                .reference_matching(
-                    "HEAD",
-                    new_oid,
-                    true,
-                    base_oid,
-                    "sync: finalize detached HEAD after full sync",
-                )
-                .map_err(|e| {
-                    GitFinalizeError::FinalizeFailed(crate::Error::Io(
-                        std::io::Error::other(format!(
-                            "finalize_detached: update HEAD failed (CAS old={} new={}): {}",
-                            base_oid, new_oid, e
-                        )),
-                    ))
-                })?;
+        // 锁内 verify HEAD 仍 detached（未 resolve 的 HEAD 的 target 是 raw OID）。
+        let raw_head = ref_tx.find_reference("HEAD").map_err(|e| {
+            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
+                format!("finalize_detached: HEAD reference not found: {e}"),
+            )))
+        })?;
+        if raw_head.symbolic_target().is_some() {
+            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                std::io::Error::other(
+                    "finalize_detached: HEAD is now symbolic (concurrent modification)",
+                ),
+            )));
         }
+        let current_head_oid = raw_head.target().ok_or_else(|| {
+            GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(
+                "finalize_detached: HEAD has no target",
+            )))
+        })?;
+        if current_head_oid != base_oid {
+            return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
+                std::io::Error::other(format!(
+                    "finalize_detached: HEAD changed from {} to {} (concurrent modification)",
+                    base_oid, current_head_oid
+                )),
+            )));
+        }
+        drop(raw_head);
+
+        // 锁内更新 HEAD（CAS：current==base_oid）。
+        ref_tx.set_target("HEAD", new_oid, "sync: finalize detached HEAD")?;
+
+        // 锁内更新 remote refs。
+        for (name, target) in &remote_actions {
+            ref_tx.set_target(name, *target, "sync: update remote-tracking ref")?;
+        }
+
+        ref_tx.commit().map_err(GitFinalizeError::FinalizeFailed)?;
     }
 
     Ok(())
@@ -3235,7 +3215,7 @@ fn verify_git_metadata_unchanged(
     }
 
     // 3. 校验 index。
-    let index_path = live_root.join(".git").join("index");
+    let index_path = live_repo.path().join("index");
     let current_index = if index_path.exists() {
         let bytes = fs::read(&index_path)
             .map_err(|e| GitFinalizeError::FinalizeFailed(crate::Error::Io(e)))?;
@@ -3582,6 +3562,7 @@ mod tests {
             repo_create_owner: None,
             index_lock_owner: Some(uuid::Uuid::new_v4().to_string()),
             ref_tx_owner: None,
+            ref_lock_names: Vec::new(),
         };
         rollback_git_finalize(&live, &snapshot, &plan).unwrap();
         let restored_index = fs::read(live.join(".git").join("index")).unwrap();
@@ -3772,6 +3753,7 @@ mod tests {
             repo_create_owner: None,
             index_lock_owner: None,
             ref_tx_owner: Some(uuid::Uuid::new_v4().to_string()),
+            ref_lock_names: vec!["HEAD".to_string(), "refs/heads/main".to_string()],
         };
 
         // rollback 应成功（current == new_oid，反向 CAS 回 old_oid）。
@@ -3882,6 +3864,7 @@ mod tests {
             repo_create_owner: None,
             index_lock_owner: None,
             ref_tx_owner: None,
+            ref_lock_names: Vec::new(),
         };
 
         // 第二次 rollback：current index == original (== snapshot.index)。
@@ -3980,6 +3963,7 @@ mod tests {
             repo_create_owner: None,
             index_lock_owner: None,
             ref_tx_owner: Some(uuid::Uuid::new_v4().to_string()),
+            ref_lock_names: vec!["HEAD".to_string(), "refs/heads/main".to_string()],
         };
 
         // 第二次 rollback：current ref == old_oid (== snapshot ref)。
@@ -4055,6 +4039,7 @@ mod tests {
             // acquire 时检测到外部 lock 已存在 → ConcurrentMetadataChanged，不删外部 lock。
             index_lock_owner: Some(uuid::Uuid::new_v4().to_string()),
             ref_tx_owner: None,
+            ref_lock_names: Vec::new(),
         };
 
         // rollback：current index == new_index，index_is_ours = true。

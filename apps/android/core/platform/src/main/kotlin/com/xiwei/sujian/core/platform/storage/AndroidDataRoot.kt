@@ -1,5 +1,6 @@
 package com.xiwei.sujian.core.platform.storage
 
+import android.content.Context
 import android.os.Environment
 import java.io.File
 
@@ -13,7 +14,18 @@ import java.io.File
  * - `Sujian/exports/`   — 导出产物
  * - `Sujian/backups/`   — 备份
  *
- * 界面显示名（“素笺 / 作品 / 日志 / 导出 / 备份”）一律走 `strings.xml`，
+ * ## Git metadata 私有目录（#644 评论 5490206957）
+ *
+ * 共享存储（`/storage/emulated/0/...`）不适合放可写 Git metadata（`.git/`），
+ * 因为 sidecar 文件与真正的 `.lock` 不是原子事实，无法可靠证明 ownership。
+ * Git metadata 放在应用私有 `filesDir`，共享存储只保留用户可见的 worktree。
+ *
+ * - `gitMetadataDir(context, projectId)` → `filesDir/sujian-git/<project-id>/`
+ *   每个项目的可写 Git metadata（`.git/`）的根目录。
+ * - `gitMetadataBaseDir(context)` → `filesDir/sujian-git/`
+ *   所有项目的 Git metadata 基目录，启动时一次性创建。
+ *
+ * 界面显示名（”素笺 / 作品 / 日志 / 导出 / 备份”）一律走 `strings.xml`，
  * 禁止从真实目录名反推显示文字。
  *
  * ## 存储契约约束（#644 评论 5486167472 问题1）
@@ -71,6 +83,37 @@ object AndroidDataRoot {
         logsDir().mkdirs()
         exportsDir().mkdirs()
         backupsDir().mkdirs()
+    }
+
+    /** #644 评论 5490206957：所有项目的 Git metadata 基目录（应用私有 filesDir）。 */
+    private const val GIT_METADATA_DIR_NAME = "sujian-git"
+
+    /**
+     * #644 评论 5490206957：Git metadata 私有基目录。
+     *
+     * 位于 `context.filesDir/sujian-git/`，所有项目的可写 Git metadata
+     *（`.git/`）的根目录。共享存储的 `Sujian/projects/<id>/` 只保留
+     * 用户可见 worktree（正文、元数据等）。
+     */
+    fun gitMetadataBaseDir(context: Context): File =
+        File(context.filesDir, GIT_METADATA_DIR_NAME)
+
+    /**
+     * #644 评论 5490206957：单个项目的 Git metadata 目录。
+     *
+     * 位于 `context.filesDir/sujian-git/<projectId>/`，是该项目的
+     * `GitRepoLayout.git_dir` 的值。Core 初始化时通过 JNI 传入此路径。
+     */
+    fun gitMetadataDir(context: Context, projectId: String): File =
+        File(gitMetadataBaseDir(context), projectId)
+
+    /**
+     * #644 评论 5490206957：创建 Git metadata 私有目录（幂等）。
+     *
+     * 在应用启动时、初始化 Core 前调用。确保 `filesDir/sujian-git/` 目录存在。
+     */
+    fun ensureGitMetadataDirectories(context: Context) {
+        gitMetadataBaseDir(context).mkdirs()
     }
 
     /**

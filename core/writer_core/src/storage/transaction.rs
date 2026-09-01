@@ -623,58 +623,49 @@ fn rollback_full_sync_transaction(
             )))
         })?;
 
-        // #644 评论 5485518160 修改点 2：index_lock_owner=None 旧 manifest 迁移。
-        let migrated_plan: Option<crate::sync::git_commit::GitFinalizePlan> =
-            if git_rec.plan.new_index_sha256.is_some() && git_rec.plan.index_lock_owner.is_none() {
-                let migration = crate::sync::git_commit::check_index_lock_owner_migration(
-                    target_root,
-                    &git_rec.metadata_snapshot,
-                    &git_rec.plan,
-                )?;
-                match migration {
-                    crate::sync::git_commit::IndexLockOwnerMigration::LockExists => {
-                        return Err(crate::Error::Io(std::io::Error::other(
-                            "rollback_full_sync_transaction: index.lock exists but \
-                             plan.index_lock_owner is None — cannot determine lock \
-                             ownership, preserving transaction for next recovery",
-                        )));
-                    }
-                    crate::sync::git_commit::IndexLockOwnerMigration::AlreadyReverted => {
-                        None
-                    }
-                    crate::sync::git_commit::IndexLockOwnerMigration::MigrateToNewOwner(owner) => {
-                        let mut new_plan = git_rec.plan.clone();
-                        new_plan.index_lock_owner = Some(owner);
-                        let mut new_manifest = manifest.clone();
-                        if let Some(git_finalize) = new_manifest.git_finalize.as_mut() {
-                            git_finalize.plan = new_plan.clone();
-                        }
-                        let manifest_path = tx_dir.join(MANIFEST_FILENAME);
-                        let json = serde_json::to_string_pretty(&new_manifest)?;
-                        crate::storage::atomic_write_string(&manifest_path, &json)?;
-                        Some(new_plan)
-                    }
-                    crate::sync::git_commit::IndexLockOwnerMigration::ConcurrentModification => {
-                        return Err(crate::Error::Io(std::io::Error::other(
-                            "rollback_full_sync_transaction: index CAS miss during \
-                             index_lock_owner migration — concurrent modification, \
-                             preserving transaction for next recovery",
-                        )));
-                    }
+        // #644 评论 5490206957 问题4：index_lock_owner + ref_tx_owner 迁移必须能在
+        // 同一次恢复里顺序叠加，而不是二选一。用一个可变 effective plan 替代互斥的
+        // Option<plan>。
+        let mut effective_plan = git_rec.plan.clone();
+        let mut plan_changed = false;
+
+        // index_lock_owner=None 旧 manifest 迁移。
+        if effective_plan.new_index_sha256.is_some() && effective_plan.index_lock_owner.is_none() {
+            let migration = crate::sync::git_commit::check_index_lock_owner_migration(
+                target_root,
+                &git_rec.metadata_snapshot,
+                &effective_plan,
+            )?;
+            match migration {
+                crate::sync::git_commit::IndexLockOwnerMigration::LockExists => {
+                    return Err(crate::Error::Io(std::io::Error::other(
+                        "rollback_full_sync_transaction: index.lock exists but \
+                         plan.index_lock_owner is None — cannot determine lock \
+                         ownership, preserving transaction for next recovery",
+                    )));
                 }
-            } else {
-                None
-            };
+                crate::sync::git_commit::IndexLockOwnerMigration::AlreadyReverted => {}
+                crate::sync::git_commit::IndexLockOwnerMigration::MigrateToNewOwner(owner) => {
+                    effective_plan.index_lock_owner = Some(owner);
+                    plan_changed = true;
+                }
+                crate::sync::git_commit::IndexLockOwnerMigration::ConcurrentModification => {
+                    return Err(crate::Error::Io(std::io::Error::other(
+                        "rollback_full_sync_transaction: index CAS miss during \
+                         index_lock_owner migration — concurrent modification, \
+                         preserving transaction for next recovery",
+                    )));
+                }
+            }
+        }
 
         // 评论 5489750244 问题5：ref_tx_owner=None 旧 manifest 迁移。
-        let mut migrated_plan_inner = migrated_plan;
-        if migrated_plan_inner.is_none() && !git_rec.plan.ref_plans.is_empty()
-            && git_rec.plan.ref_tx_owner.is_none()
-        {
+        // 与 index 迁移顺序叠加，不是互斥。
+        if !effective_plan.ref_plans.is_empty() && effective_plan.ref_tx_owner.is_none() {
             let ref_migration = crate::sync::git_commit::check_ref_tx_owner_migration(
                 target_root,
                 &git_rec.metadata_snapshot,
-                &git_rec.plan,
+                &effective_plan,
             )?;
             match ref_migration {
                 crate::sync::git_commit::RefTxOwnerMigration::LockExists => {
@@ -692,24 +683,24 @@ fn rollback_full_sync_transaction(
                     )));
                 }
                 crate::sync::git_commit::RefTxOwnerMigration::MigrateToNewOwner(owner) => {
-                    // 取出之前可能已迁移的 plan（index_lock_owner），叠加 ref_tx_owner。
-                    let base_plan = migrated_plan_inner.take().unwrap_or_else(|| git_rec.plan.clone());
-                    let mut new_plan = base_plan;
-                    new_plan.ref_tx_owner = Some(owner);
-                    let mut new_manifest = manifest.clone();
-                    if let Some(git_finalize) = new_manifest.git_finalize.as_mut() {
-                        git_finalize.plan = new_plan.clone();
-                    }
-                    let manifest_path = tx_dir.join(MANIFEST_FILENAME);
-                    let json = serde_json::to_string_pretty(&new_manifest)?;
-                    crate::storage::atomic_write_string(&manifest_path, &json)?;
-                    migrated_plan_inner = Some(new_plan);
+                    effective_plan.ref_tx_owner = Some(owner);
+                    plan_changed = true;
                 }
             }
         }
 
-        let plan_for_rollback: &crate::sync::git_commit::GitFinalizePlan =
-            migrated_plan_inner.as_ref().unwrap_or(&git_rec.plan);
+        // 一次原子写回完整 effective_plan（index + ref 可能在同一次恢复里都迁移了）。
+        if plan_changed {
+            let mut new_manifest = manifest.clone();
+            if let Some(git_finalize) = new_manifest.git_finalize.as_mut() {
+                git_finalize.plan = effective_plan.clone();
+            }
+            let manifest_path = tx_dir.join(MANIFEST_FILENAME);
+            let json = serde_json::to_string_pretty(&new_manifest)?;
+            crate::storage::atomic_write_string(&manifest_path, &json)?;
+        }
+
+        let plan_for_rollback: &crate::sync::git_commit::GitFinalizePlan = &effective_plan;
 
         // #644 评论 5488871385 问题1：先只读 inspect，再 preflight，最后 rollback。
         let inspect_state = crate::sync::git_commit::inspect_git_rollback_state(
