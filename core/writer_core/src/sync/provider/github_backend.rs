@@ -116,7 +116,9 @@ impl Default for GitHubApiBackend {
 #[cfg(not(feature = "github-api"))]
 impl Default for GitHubApiBackend {
     fn default() -> Self {
-        Self { _marker: std::marker::PhantomData }
+        Self {
+            _marker: std::marker::PhantomData,
+        }
     }
 }
 

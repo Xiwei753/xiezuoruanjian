@@ -6,6 +6,12 @@
 
 mod migration;
 
+#[cfg(test)]
+pub(crate) use migration::{
+    canonicalize_or_lossy, journal_path, migrate_copy_dir_recursive, write_migration_journal,
+    LayoutMigrationJournal, MigrationPhase, LAYOUT_MIGRATIONS_DIR, LAYOUT_MIGRATION_JOURNAL_NAME,
+};
+
 use std::path::{Path, PathBuf};
 
 /// 评论 5489750244 问题1：明确的 Git 布局模型。
@@ -18,11 +24,17 @@ pub struct GitRepoLayout {
 impl GitRepoLayout {
     pub fn new(worktree_root: PathBuf) -> Self {
         let git_dir = worktree_root.join(".git");
-        Self { worktree_root, git_dir }
+        Self {
+            worktree_root,
+            git_dir,
+        }
     }
 
     pub fn with_external_git_dir(worktree_root: PathBuf, git_dir: PathBuf) -> Self {
-        Self { worktree_root, git_dir }
+        Self {
+            worktree_root,
+            git_dir,
+        }
     }
 }
 
@@ -71,7 +83,9 @@ pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<
         RepoOpenResult::Valid => {
             if default_git_dir.exists() && is_external {
                 migration::complete_migration_with_journal(
-                    &layout.git_dir, &default_git_dir, &layout.worktree_root,
+                    &layout.git_dir,
+                    &default_git_dir,
+                    &layout.worktree_root,
                 )?;
             }
             return Ok(());
@@ -79,7 +93,8 @@ pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<
         RepoOpenResult::Corrupt(e) => {
             return Err(crate::Error::Io(std::io::Error::other(format!(
                 "ensure_project_repo_with_layout: git_dir exists but is corrupt: {}: {}",
-                layout.git_dir.display(), e,
+                layout.git_dir.display(),
+                e,
             ))));
         }
         RepoOpenResult::Missing => {}
@@ -90,7 +105,9 @@ pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<
             RepoOpenResult::Valid => {
                 if is_external {
                     migration::migrate_embedded_git(
-                        &default_git_dir, &layout.git_dir, &layout.worktree_root,
+                        &default_git_dir,
+                        &layout.git_dir,
+                        &layout.worktree_root,
                     )?;
                     return Ok(());
                 }
@@ -98,7 +115,8 @@ pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<
             }
             RepoOpenResult::Corrupt(e) => {
                 return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "ensure_project_repo_with_layout: embedded .git exists but is corrupt: {}", e,
+                    "ensure_project_repo_with_layout: embedded .git exists but is corrupt: {}",
+                    e,
                 ))));
             }
             RepoOpenResult::Missing => {}
@@ -115,38 +133,47 @@ pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<
         git2::Repository::init_opts(&layout.git_dir, &opts).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
                 "ensure_project_repo_with_layout: init_opts({}): {}",
-                layout.git_dir.display(), e,
+                layout.git_dir.display(),
+                e,
             )))
         })?;
         let repo = git2::Repository::open(&layout.git_dir).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
                 "ensure_project_repo_with_layout: open after init({}): {}",
-                layout.git_dir.display(), e,
+                layout.git_dir.display(),
+                e,
             )))
         })?;
-        repo.set_workdir(&layout.worktree_root, false).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "ensure_project_repo_with_layout: set_workdir({}): {}",
-                layout.worktree_root.display(), e,
-            )))
-        })?;
+        repo.set_workdir(&layout.worktree_root, false)
+            .map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "ensure_project_repo_with_layout: set_workdir({}): {}",
+                    layout.worktree_root.display(),
+                    e,
+                )))
+            })?;
         let mut config = repo.config().map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
                 "ensure_project_repo_with_layout: config({}): {}",
-                layout.git_dir.display(), e,
+                layout.git_dir.display(),
+                e,
             )))
         })?;
-        config.set_str("core.worktree", &layout.worktree_root.to_string_lossy()).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "ensure_project_repo_with_layout: set_str core.worktree({}): {}",
-                layout.git_dir.display(), e,
-            )))
-        })?;
+        config
+            .set_str("core.worktree", &layout.worktree_root.to_string_lossy())
+            .map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "ensure_project_repo_with_layout: set_str core.worktree({}): {}",
+                    layout.git_dir.display(),
+                    e,
+                )))
+            })?;
     } else {
         git2::Repository::init(&layout.worktree_root).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
                 "ensure_project_repo_with_layout: init({}): {}",
-                layout.worktree_root.display(), e,
+                layout.worktree_root.display(),
+                e,
             )))
         })?;
     }
@@ -173,7 +200,9 @@ pub fn resolve_existing_repo_layout(
         RepoOpenResult::Valid => {
             if default_git_dir.exists() && is_external {
                 migration::complete_migration_with_journal(
-                    &layout.git_dir, &default_git_dir, &layout.worktree_root,
+                    &layout.git_dir,
+                    &default_git_dir,
+                    &layout.worktree_root,
                 )?;
             }
             return Ok(ExistingRepoLayoutState::Ready(layout.clone()));
@@ -181,7 +210,8 @@ pub fn resolve_existing_repo_layout(
         RepoOpenResult::Corrupt(e) => {
             return Err(crate::Error::Io(std::io::Error::other(format!(
                 "resolve_existing_repo_layout: git_dir exists but is corrupt: {}: {}",
-                layout.git_dir.display(), e,
+                layout.git_dir.display(),
+                e,
             ))));
         }
         RepoOpenResult::Missing => {}
@@ -192,7 +222,9 @@ pub fn resolve_existing_repo_layout(
             RepoOpenResult::Valid => {
                 if is_external {
                     migration::migrate_embedded_git(
-                        &default_git_dir, &layout.git_dir, &layout.worktree_root,
+                        &default_git_dir,
+                        &layout.git_dir,
+                        &layout.worktree_root,
                     )?;
                     return Ok(ExistingRepoLayoutState::Ready(layout.clone()));
                 }
@@ -200,7 +232,8 @@ pub fn resolve_existing_repo_layout(
             }
             RepoOpenResult::Corrupt(e) => {
                 return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "resolve_existing_repo_layout: embedded .git exists but is corrupt: {}", e,
+                    "resolve_existing_repo_layout: embedded .git exists but is corrupt: {}",
+                    e,
                 ))));
             }
             RepoOpenResult::Missing => {}

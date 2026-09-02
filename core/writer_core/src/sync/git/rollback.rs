@@ -3,9 +3,9 @@ use std::path::Path;
 
 use crate::error::Result;
 
-use super::model::*;
 use super::finalize::*;
 use super::locks::*;
+use super::model::*;
 
 /// #644 评论 5488871385 问题1 + 评论 5489750244 问题4：纯只读检查 Git rollback 状态。
 ///

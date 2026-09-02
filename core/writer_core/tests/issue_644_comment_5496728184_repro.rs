@@ -225,7 +225,7 @@ fn defect1_prepared_phase_recovers_renamed_source() {
 
     // ── 缺陷1修复后源码结构断言 ──
     // 确认缺陷代码已移除：Prepared 分支不再含 "source 不存在，清理 journal" 注释。
-    let src = read_src_file("src/storage/git_repo_layout.rs");
+    let src = read_src_file("src/storage/git_repo_layout/migration.rs");
     let resume_body = extract_fn_body(&src, "resume_layout_migration");
     assert!(
         !resume_body.contains("source 不存在，清理 journal"),

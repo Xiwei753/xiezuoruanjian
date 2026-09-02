@@ -363,6 +363,6 @@ pub(crate) fn github_delete_content_serial(
     ))
 }
 
-
 #[cfg(test)]
+#[path = "github_api_client_tests.rs"]
 mod github_api_client_tests;

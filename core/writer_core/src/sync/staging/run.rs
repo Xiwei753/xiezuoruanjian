@@ -572,7 +572,11 @@ fn list_commit_candidate_paths(root: &Path) -> Result<Vec<PathBuf>> {
 /// - `full-sync-staging/`：staging run 自身，避免递归；
 /// - `app-meta/transactions/`：事务暂存目录，commit 中间态。
 #[allow(clippy::excessive_nesting)]
-pub(crate) fn walk_commit_candidates(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+pub(crate) fn walk_commit_candidates(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();

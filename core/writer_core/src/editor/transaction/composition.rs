@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use super::visual_classification::{common_prefix_byte_len, common_suffix_byte_len};
 use super::visual::{build_virtual_text, CursorRect, DecorationSlice};
+use super::visual_classification::{common_prefix_byte_len, common_suffix_byte_len};
 use crate::editor::strong_types::{
     EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
 };

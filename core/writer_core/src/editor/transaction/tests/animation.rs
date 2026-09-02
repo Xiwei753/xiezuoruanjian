@@ -6,6 +6,10 @@ use crate::editor::transaction::platform::*;
 use crate::editor::transaction::rebase::*;
 use crate::editor::transaction::types::*;
 use crate::editor::transaction::visual::*;
+use crate::editor::transaction::{
+    choose_animation_mode, classify_visual_diff, count_grapheme_clusters, split_text_into_clusters,
+    split_text_into_runs,
+};
 
 #[allow(deprecated)]
 #[test]

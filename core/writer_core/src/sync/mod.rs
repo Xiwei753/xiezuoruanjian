@@ -26,6 +26,7 @@
 
 #![allow(clippy::module_inception)]
 
+pub(crate) mod commit_helpers;
 pub mod config_store;
 pub mod conflict;
 /// #644 评论 5473789298 第3节：纯内容分类/三方比较（始终可用，不依赖 feature gate）。
@@ -34,7 +35,6 @@ pub mod diagnostics;
 pub mod full_sync;
 pub mod full_sync_state;
 pub(crate) mod full_sync_utils;
-pub(crate) mod commit_helpers;
 pub mod git;
 #[cfg(feature = "github-api")]
 pub mod lww;

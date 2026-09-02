@@ -27,8 +27,12 @@ fn build_crossfade_pair_index(
         .enumerate()
     {
         match *role {
-            CrossfadeOld => { old_by_range.entry(range).or_insert(idx); }
-            CrossfadeNew => { new_by_range.entry(range).or_insert(idx); }
+            CrossfadeOld => {
+                old_by_range.entry(range).or_insert(idx);
+            }
+            CrossfadeNew => {
+                new_by_range.entry(range).or_insert(idx);
+            }
             _ => {}
         }
     }
@@ -134,9 +138,12 @@ pub fn compute_rebase_slice_mappings(input: SliceMatchInput) -> Vec<RebaseSliceM
         }
         if matched.is_none() {
             matched = try_match_slice(
-                *old_role, (old_start, old_end),
-                input.new_slice_roles, input.new_slice_byte_ranges,
-                &used_new, input.offset_map,
+                *old_role,
+                (old_start, old_end),
+                input.new_slice_roles,
+                input.new_slice_byte_ranges,
+                &used_new,
+                input.offset_map,
             );
         }
         if let Some((new_idx, reason)) = matched {

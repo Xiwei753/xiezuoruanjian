@@ -21,13 +21,11 @@ fn test_transaction_commit_all_files() {
     .unwrap();
     tx.commit().unwrap();
 
-    let md =
-        fs::read_to_string(ws.join("projects/p1/volumes/v1/chapters/c1/chapter.md")).unwrap();
+    let md = fs::read_to_string(ws.join("projects/p1/volumes/v1/chapters/c1/chapter.md")).unwrap();
     assert_eq!(md, "hello world");
 
-    let meta =
-        fs::read_to_string(ws.join("projects/p1/volumes/v1/chapters/c1/chapter.meta.json"))
-            .unwrap();
+    let meta = fs::read_to_string(ws.join("projects/p1/volumes/v1/chapters/c1/chapter.meta.json"))
+        .unwrap();
     assert_eq!(meta, r#"{"word_count":2}"#);
 
     let tx_base = ws.join(TRANSACTIONS_DIR);

@@ -295,8 +295,10 @@ impl super::WriterCore {
     ) -> crate::sync::types::FullSyncResult {
         // #644 评论 5473105049 第3/4节：逐 target 判断 transfer 结果，
         // 只对成功终态的 target 做 staging commit；commit IO 失败向上传播。
-        let commit_outcome =
-            crate::sync::commit_helpers::apply_staging_commits_for_targets(&staging_runs, &transfer_result.targets);
+        let commit_outcome = crate::sync::commit_helpers::apply_staging_commits_for_targets(
+            &staging_runs,
+            &transfer_result.targets,
+        );
 
         // #644 评论 5473105049 第4节：commit 失败的 target 需要把失败信息
         // 注入到对应的 TargetSyncResult 中，让聚合逻辑产生 Recoverable/Fatal 状态。

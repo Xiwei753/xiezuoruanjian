@@ -18,8 +18,8 @@ pub(crate) mod commit_plan;
 pub(crate) mod resolve;
 pub(crate) mod run;
 
-pub use run::*;
 pub use commit_plan::*;
+pub use run::*;
 
 #[cfg(test)]
 mod tests;

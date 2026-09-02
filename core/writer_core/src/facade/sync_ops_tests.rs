@@ -311,7 +311,7 @@ fn test_run_full_sync_target_converts_err_to_error_result() {
     let config = test_config();
     let secrets = SyncSecrets::default();
     let target = SyncTarget::app();
-    let result = crate::facade::sync_ops::run_full_sync_target(
+    let result = crate::sync::full_sync_utils::run_full_sync_target(
         &backend,
         Path::new("/tmp/nonexistent"),
         &config,
@@ -341,7 +341,7 @@ fn test_run_full_sync_target_passes_through_ok() {
     let config = test_config();
     let secrets = SyncSecrets::default();
     let target = SyncTarget::app();
-    let result = crate::facade::sync_ops::run_full_sync_target(
+    let result = crate::sync::full_sync_utils::run_full_sync_target(
         &backend,
         Path::new("/tmp/nonexistent"),
         &config,
@@ -359,7 +359,7 @@ fn test_run_full_sync_target_auth_err_maps_category() {
     let config = test_config();
     let secrets = SyncSecrets::default();
     let target = SyncTarget::app();
-    let result = crate::facade::sync_ops::run_full_sync_target(
+    let result = crate::sync::full_sync_utils::run_full_sync_target(
         &backend,
         Path::new("/tmp/nonexistent"),
         &config,

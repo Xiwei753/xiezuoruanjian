@@ -22,7 +22,7 @@ use std::fs;
 use std::path::Path;
 
 use tempfile::TempDir;
-use writer_core::sync::git_commit::{
+use writer_core::sync::git::{
     check_index_lock_owner_migration, lock_belongs_to_owner, owner_metadata, AcquireOutcome,
     GitFinalizeError, GitFinalizePlan, GitMetadataSnapshot, IndexLockOwnerMigration, IndexSnapshot,
     OwnedIndexLock, RefSnapshot,
@@ -837,7 +837,7 @@ fn finalize_existing_detached_head_after_preflight_returns_finalize_failed() {
     };
 
     // 调用 commit_git_finalize
-    use writer_core::sync::git_commit::commit_git_finalize;
+    use writer_core::sync::git::commit_git_finalize;
     use writer_core::sync::git::seed::GitSeedState;
     let result = commit_git_finalize(
         &live,

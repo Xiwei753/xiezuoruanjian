@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 pub(crate) const TRANSACTIONS_DIR: &str = "app-meta/transactions";
 pub(crate) const MANIFEST_FILENAME: &str = "manifest.json";
+#[cfg(test)]
 pub(crate) const COMMIT_MARKER: &str = "committed";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

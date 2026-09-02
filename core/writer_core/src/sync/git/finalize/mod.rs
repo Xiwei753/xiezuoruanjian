@@ -1,8 +1,10 @@
-pub(crate) mod temp;
-pub(crate) mod prepare;
-pub(crate) mod index_ops;
 pub(crate) mod apply;
+pub(crate) mod index_ops;
+pub(crate) mod prepare;
+pub(crate) mod temp;
 
-pub use prepare::*;
 pub use apply::*;
-pub use temp::*;
+#[cfg(test)]
+pub(crate) use index_ops::*;
+pub use prepare::*;
+pub(crate) use temp::*;

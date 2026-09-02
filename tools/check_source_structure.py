@@ -118,10 +118,6 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
     (Path("core/writer_core/src/api/service/starmap_ops.rs"), "god-file"):
         "星图 API 操作聚合：节点/边/布局操作共享同一图快照上下文，"
         "已按操作类型拆分函数",
-    (Path("core/writer_core/src/sync/lww/mod.rs"), "god-file"):
-        "LWW 同合算法实现：元素/字段/集合三层数据结构共享同一时钟比较内核，"
-        "已拆分为 compare/manifest/transfer 子模块；"
-        "TODO(#648) 后续按子模块进一步拆分",
     (Path("core/writer_core/src/sync/service.rs"), "god-file"):
         "同步服务编排层：Git/LWW 双策略/诊断/路径过滤共享同一 SyncService 入口与配置上下文，"
         "拆分会破坏同步原子性；已按策略拆分内部函数；"
@@ -173,8 +169,6 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "既有应用配置测试，验证加载/迁移契约；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/editor/strong_types.rs"), "production-test-bloat"):
         "既有强类型测试，验证 newtype 不变量与边界检查；待拆分到独立 _tests.rs",
-    (Path("core/writer_core/src/sync/provider/github_api_client.rs"), "production-test-bloat"):
-        "既有 GitHub API 客户端测试，验证请求/响应映射；#648 已拆分到独立 github_api_client_tests.rs",
     (Path("core/writer_core/src/writing_stats/aggregate.rs"), "production-test-bloat"):
         "既有写作统计聚合测试，验证时间窗口计算；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/writing_stats/store.rs"), "production-test-bloat"):

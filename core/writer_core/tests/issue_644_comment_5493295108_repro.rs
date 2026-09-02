@@ -405,7 +405,11 @@ fn problem5_git_backend_classifies_unborn_branch_only() {
 fn problem_all_five_issues_fixed_on_current_branch() {
     let project_src = read_src_file("src/project.rs");
     let staging_src = read_src_file("src/sync/staging/run.rs");
-    let git_repo_layout_src = read_src_file("src/storage/git_repo_layout.rs");
+    let git_repo_layout_src = format!(
+        "{}\n{}",
+        read_src_file("src/storage/git_repo_layout/mod.rs"),
+        read_src_file("src/storage/git_repo_layout/migration.rs")
+    );
     let project_ops_src = read_src_file("src/facade/project_ops.rs");
     let git_backend_src = read_src_file("src/sync/provider/git_backend.rs");
 

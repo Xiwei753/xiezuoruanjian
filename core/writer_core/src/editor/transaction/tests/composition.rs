@@ -7,6 +7,7 @@ use crate::editor::transaction::engine::*;
 use crate::editor::transaction::rebase::*;
 use crate::editor::transaction::types::*;
 use crate::editor::transaction::visual::*;
+use crate::editor::transaction::{classify_composition_visual, CompositionOperationKind};
 
 #[allow(deprecated)]
 #[test]

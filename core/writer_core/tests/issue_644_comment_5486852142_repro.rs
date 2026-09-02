@@ -107,7 +107,7 @@ fn problem1_fixed_acquire_uses_directory_lock_model() {
     );
 
     // 验证 lock_belongs_to_owner 对空内容仍返回 false（纯函数行为不变）
-    use writer_core::sync::git_commit::lock_belongs_to_owner;
+    use writer_core::sync::git::lock_belongs_to_owner;
     assert!(
         !lock_belongs_to_owner(b"", "any-owner"),
         "problem1: empty owner file content must return false (owner metadata parse fails)"
@@ -181,7 +181,7 @@ fn problem2_fixed_external_lock_returns_concurrent_changed() {
 
 /// 问题3修复验证：finalize_existing 使用统一 RefTransaction 修改所有 refs。
 ///
-/// 修复证据：core/writer_core/src/sync/git/finalize.rs
+/// 修复证据：core/writer_core/src/sync/git/finalize/apply.rs
 /// - finalize_existing 使用 RefTransaction 一次性锁住 HEAD + head_ref + remote refs
 /// - 锁内验证 HEAD 仍指向 head_ref（消除 TOCTOU 窗口）
 /// - 锁内验证 branch ref 仍等于 base_oid（CAS 条件）
@@ -189,7 +189,7 @@ fn problem2_fixed_external_lock_returns_concurrent_changed() {
 /// - commit 释放所有锁（不再需要 verify_head_after_branch_cas 反向 CAS 补丁）
 #[test]
 fn problem3_fixed_head_recheck_after_branch_cas() {
-    let src = read_src_file("src/sync/git/finalize.rs");
+    let src = read_src_file("src/sync/git/finalize/apply.rs");
     let finalize_body = extract_fn_body(&src, "finalize_existing");
 
     // 验证 finalize_existing 使用 RefTransaction

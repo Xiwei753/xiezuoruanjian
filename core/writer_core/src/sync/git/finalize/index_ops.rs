@@ -1,9 +1,9 @@
 use std::fs;
 use std::path::Path;
 
-use crate::error::Result;
 use super::super::model::*;
 use super::temp::*;
+use crate::error::Result;
 
 /// #644 评论 5480360027 修复点 3 + #644 评论 5481496190 问题2 +
 /// #644 评论 5486167472 问题1 + #644 评论 5486852142 问题1：index 原生锁边界 + 持久 ownership。
@@ -23,12 +23,13 @@ pub(crate) fn install_index_with_lock(
         .unwrap_or_else(|| live_root.join(".git"));
     let index_path = git_dir.join("index");
 
-    let mut lock = match super::super::locks::OwnedIndexLock::acquire(&git_dir, owner, &target_index_bytes)? {
-        super::super::locks::AcquireOutcome::NewlyAcquired(lock) => lock,
-        super::super::locks::AcquireOutcome::AlreadyCommitted => {
-            return Ok(());
-        }
-    };
+    let mut lock =
+        match super::super::locks::OwnedIndexLock::acquire(&git_dir, owner, &target_index_bytes)? {
+            super::super::locks::AcquireOutcome::NewlyAcquired(lock) => lock,
+            super::super::locks::AcquireOutcome::AlreadyCommitted => {
+                return Ok(());
+            }
+        };
 
     let current_index = if index_path.exists() {
         let bytes = fs::read(&index_path)
@@ -130,8 +131,8 @@ pub(crate) fn verify_git_metadata_unchanged(
     head_ref: &str,
     explicit_git_dir: Option<&Path>,
 ) -> std::result::Result<(), GitFinalizeError> {
-    let live_repo =
-        super::prepare::open_live_repo(live_root, explicit_git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
+    let live_repo = super::prepare::open_live_repo(live_root, explicit_git_dir)
+        .map_err(GitFinalizeError::FinalizeFailed)?;
 
     let current_head = read_ref_snapshot(&live_repo, "HEAD")?;
     if !ref_snapshot_eq(&current_head, &snapshot.head) {

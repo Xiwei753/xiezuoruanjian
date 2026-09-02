@@ -5,7 +5,7 @@
 //! 这些测试不依赖 acquire() 的状态机，直接探针 lock_belongs_to_owner / owner_metadata
 //! 的纯函数行为，覆盖：空输入、非 UTF-8、错误 marker、错误 owner、round-trip。
 
-use writer_core::sync::git_commit::{lock_belongs_to_owner, owner_metadata, INDEX_LOCK_MARKER};
+use writer_core::sync::git::{lock_belongs_to_owner, owner_metadata, INDEX_LOCK_MARKER};
 
 /// Probe 1: owner_metadata → lock_belongs_to_owner round-trip 必须成立。
 /// 这是对新协议核心不变量的直接验证。

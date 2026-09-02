@@ -6,11 +6,12 @@ use super::types::{
 use super::visual::EditorAnimationEvent;
 use super::visual::{EditorVisualTransaction, HiddenVisualRange, VisualCoordinateMode};
 use super::visual_classification::{
-    choose_animation_mode, classify_visual_diff, common_prefix_byte_len, common_suffix_byte_len,
-    count_grapheme_clusters, diff_plain_text, should_animate_changes, split_text_into_clusters,
-    split_text_into_runs, text_contains_complex_grapheme,
+    choose_animation_mode, count_grapheme_clusters, diff_plain_text, should_animate_changes,
+    split_text_into_clusters, split_text_into_runs, text_contains_complex_grapheme,
 };
-use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange};
+#[cfg(test)]
+use crate::editor::strong_types::Utf8ByteOffset;
+use crate::editor::strong_types::Utf8ByteRange;
 
 /// 编辑引擎 — 创建 EditorTransaction 和 EditorVisualTransaction 的工厂。
 #[derive(Debug, Clone)]
@@ -60,7 +61,13 @@ impl EditorEngine {
         let changes = diff_plain_text(&old_text, &new_text);
         let should_animate = should_animate_changes(&changes, cause, self.max_animated_chars);
         EditorTransaction {
-            old_text, new_text, changes, old_selection, new_selection, cause, should_animate,
+            old_text,
+            new_text,
+            changes,
+            old_selection,
+            new_selection,
+            cause,
+            should_animate,
         }
     }
 
@@ -153,21 +160,31 @@ impl EditorEngine {
         let is_loading = transaction.cause == EditorTransactionCause::Load;
         let is_applying_format = transaction.cause == EditorTransactionCause::Format;
         let animation_mode = choose_animation_mode(
-            cluster_count, contains_newline, contains_complex_grapheme,
-            false, is_loading, is_applying_format, false, true,
+            cluster_count,
+            contains_newline,
+            contains_complex_grapheme,
+            false,
+            is_loading,
+            is_applying_format,
+            false,
+            true,
         );
         let (cluster_rects, cluster_runs) = match change {
-            EditorChange::Insert { index, text: _ } => {
-                (Some(split_text_into_clusters(text, index.value())),
-                 Some(split_text_into_runs(text, index.value())))
-            }
+            EditorChange::Insert { index, text: _ } => (
+                Some(split_text_into_clusters(text, index.value())),
+                Some(split_text_into_runs(text, index.value())),
+            ),
             EditorChange::Delete { .. } => (None, None),
         };
         let hidden_visual_ranges = match inserted_range {
             Some(range) => vec![HiddenVisualRange {
                 id: self.take_animation_id(),
-                kind: animation_mode, range, old_rect: None, new_rect: None,
-                line_index: 0, payload_ref: None,
+                kind: animation_mode,
+                range,
+                old_rect: None,
+                new_rect: None,
+                line_index: 0,
+                payload_ref: None,
             }],
             None => Vec::new(),
         };

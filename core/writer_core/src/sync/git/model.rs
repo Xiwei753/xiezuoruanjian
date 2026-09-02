@@ -194,9 +194,7 @@ impl SerializableGitSeedState {
     }
 
     /// 还原为 `GitSeedState`。
-    pub fn to_seed_state(
-        &self,
-    ) -> std::result::Result<super::seed::GitSeedState, String> {
+    pub fn to_seed_state(&self) -> std::result::Result<super::seed::GitSeedState, String> {
         use super::seed::GitSeedState;
         match self {
             Self::NotGitRepo => Ok(GitSeedState::NotGitRepo),

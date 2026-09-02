@@ -1,5 +1,5 @@
-use super::*;
 use super::seed::GitSeedState;
+use super::*;
 use std::fs;
 use tempfile::TempDir;
 

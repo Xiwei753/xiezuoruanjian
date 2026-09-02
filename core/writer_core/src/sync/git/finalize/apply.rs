@@ -1,10 +1,10 @@
 use std::fs;
 use std::path::Path;
 
-use super::super::seed::GitSeedState;
 use super::super::model::*;
-use super::prepare::open_live_repo;
+use super::super::seed::GitSeedState;
 use super::index_ops::*;
+use super::prepare::open_live_repo;
 
 // ── 公共 API ──
 
@@ -57,8 +57,12 @@ pub fn recover_git_finalize(
                 Err(e)
             }
             _ => {
-                log::warn!("recover_git_finalize: finalize failed ({}), rolling back", e);
-                match super::super::rollback::rollback_git_finalize(live_root, snapshot, plan, None) {
+                log::warn!(
+                    "recover_git_finalize: finalize failed ({}), rolling back",
+                    e
+                );
+                match super::super::rollback::rollback_git_finalize(live_root, snapshot, plan, None)
+                {
                     Ok(GitRollbackOutcome::Reverted) => Err(e),
                     Ok(GitRollbackOutcome::ConcurrentChanged) => {
                         Err(GitFinalizeError::ConcurrentMetadataChanged {
@@ -174,20 +178,45 @@ fn finalize_git_repo_metadata_inner(
 
     match seed_state {
         GitSeedState::NotGitRepo => finalize_not_git_repo(
-            live_root, staging_root, &staging_repo, &staging_odb,
-            new_oid, &branch_name, plan, explicit_git_dir,
+            live_root,
+            staging_root,
+            &staging_repo,
+            &staging_odb,
+            new_oid,
+            &branch_name,
+            plan,
+            explicit_git_dir,
         ),
         GitSeedState::Unborn { head_ref } => finalize_unborn(
-            live_root, &staging_repo, &staging_odb, new_oid,
-            head_ref, snapshot, plan, explicit_git_dir,
+            live_root,
+            &staging_repo,
+            &staging_odb,
+            new_oid,
+            head_ref,
+            snapshot,
+            plan,
+            explicit_git_dir,
         ),
         GitSeedState::Existing { head_ref, head_oid } => finalize_existing(
-            live_root, &staging_repo, &staging_odb, new_oid,
-            head_ref, *head_oid, snapshot, plan, explicit_git_dir,
+            live_root,
+            &staging_repo,
+            &staging_odb,
+            new_oid,
+            head_ref,
+            *head_oid,
+            snapshot,
+            plan,
+            explicit_git_dir,
         ),
         GitSeedState::Detached { head_oid } => finalize_detached(
-            live_root, &staging_repo, &staging_odb, new_oid,
-            *head_oid, snapshot, plan, explicit_git_dir,
+            live_root,
+            &staging_repo,
+            &staging_odb,
+            new_oid,
+            *head_oid,
+            snapshot,
+            plan,
+            explicit_git_dir,
         ),
     }
 }
@@ -299,7 +328,9 @@ fn finalize_unborn(
     let live_repo =
         open_live_repo(live_root, explicit_git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
     let live_odb = live_repo.odb().map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!("finalize_unborn: live odb: {e}")))
+        crate::Error::Io(std::io::Error::other(format!(
+            "finalize_unborn: live odb: {e}"
+        )))
     })?;
 
     import_missing_objects(staging_odb, &live_odb)?;
@@ -321,8 +352,13 @@ fn finalize_unborn(
         )))
     })?;
     install_index_with_lock(
-        live_root, &live_repo, staging_repo, new_oid,
-        snapshot, index_lock_owner, explicit_git_dir,
+        live_root,
+        &live_repo,
+        staging_repo,
+        new_oid,
+        snapshot,
+        index_lock_owner,
+        explicit_git_dir,
     )?;
 
     {
@@ -347,7 +383,8 @@ fn finalize_unborn(
             if sym_target != head_ref {
                 return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
                     std::io::Error::other(format!(
-                        "finalize_unborn: HEAD changed from {} to {}", head_ref, sym_target
+                        "finalize_unborn: HEAD changed from {} to {}",
+                        head_ref, sym_target
                     )),
                 )));
             }
@@ -361,7 +398,8 @@ fn finalize_unborn(
             Ok(_) => {
                 return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
                     std::io::Error::other(format!(
-                        "finalize_unborn: branch ref {} already exists", head_ref
+                        "finalize_unborn: branch ref {} already exists",
+                        head_ref
                     )),
                 )));
             }
@@ -369,7 +407,8 @@ fn finalize_unborn(
             Err(e) => {
                 return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
                     std::io::Error::other(format!(
-                        "finalize_unborn: find_reference({}) failed: {}", head_ref, e
+                        "finalize_unborn: find_reference({}) failed: {}",
+                        head_ref, e
                     )),
                 )));
             }
@@ -398,7 +437,9 @@ fn finalize_existing(
     let live_repo =
         open_live_repo(live_root, explicit_git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
     let live_odb = live_repo.odb().map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!("finalize_existing: live odb: {e}")))
+        crate::Error::Io(std::io::Error::other(format!(
+            "finalize_existing: live odb: {e}"
+        )))
     })?;
 
     import_missing_objects(staging_odb, &live_odb)?;
@@ -406,7 +447,8 @@ fn finalize_existing(
     if !live_odb.exists(new_oid) {
         return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
             std::io::Error::other(format!(
-                "finalize_existing: new_oid {} not found in live", new_oid
+                "finalize_existing: new_oid {} not found in live",
+                new_oid
             )),
         )));
     }
@@ -419,8 +461,13 @@ fn finalize_existing(
         )))
     })?;
     install_index_with_lock(
-        live_root, &live_repo, staging_repo, new_oid,
-        snapshot, index_lock_owner, explicit_git_dir,
+        live_root,
+        &live_repo,
+        staging_repo,
+        new_oid,
+        snapshot,
+        index_lock_owner,
+        explicit_git_dir,
     )?;
 
     {
@@ -446,15 +493,14 @@ fn finalize_existing(
             Some(other) => {
                 return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
                     std::io::Error::other(format!(
-                        "finalize_existing: HEAD now points to {} but seed was {}", other, head_ref
+                        "finalize_existing: HEAD now points to {} but seed was {}",
+                        other, head_ref
                     )),
                 )));
             }
             None => {
                 return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
-                    std::io::Error::other(
-                        "finalize_existing: HEAD detached after preflight",
-                    ),
+                    std::io::Error::other("finalize_existing: HEAD detached after preflight"),
                 )));
             }
         }
@@ -462,12 +508,14 @@ fn finalize_existing(
 
         let branch_ref = ref_tx.find_reference(head_ref).map_err(|e| {
             GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
-                "finalize_existing: branch ref {} not found: {e}", head_ref
+                "finalize_existing: branch ref {} not found: {e}",
+                head_ref
             ))))
         })?;
         let current_branch_oid = branch_ref.target().ok_or_else(|| {
             GitFinalizeError::FinalizeFailed(crate::Error::Io(std::io::Error::other(format!(
-                "finalize_existing: branch ref {} has no target", head_ref
+                "finalize_existing: branch ref {} has no target",
+                head_ref
             ))))
         })?;
         if current_branch_oid != base_oid {
@@ -502,7 +550,9 @@ fn finalize_detached(
     let live_repo =
         open_live_repo(live_root, explicit_git_dir).map_err(GitFinalizeError::FinalizeFailed)?;
     let live_odb = live_repo.odb().map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!("finalize_detached: live odb: {e}")))
+        crate::Error::Io(std::io::Error::other(format!(
+            "finalize_detached: live odb: {e}"
+        )))
     })?;
 
     import_missing_objects(staging_odb, &live_odb)?;
@@ -510,7 +560,8 @@ fn finalize_detached(
     if !live_odb.exists(new_oid) {
         return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
             std::io::Error::other(format!(
-                "finalize_detached: new_oid {} not found in live", new_oid
+                "finalize_detached: new_oid {} not found in live",
+                new_oid
             )),
         )));
     }
@@ -523,8 +574,13 @@ fn finalize_detached(
         )))
     })?;
     install_index_with_lock(
-        live_root, &live_repo, staging_repo, new_oid,
-        snapshot, index_lock_owner, explicit_git_dir,
+        live_root,
+        &live_repo,
+        staging_repo,
+        new_oid,
+        snapshot,
+        index_lock_owner,
+        explicit_git_dir,
     )?;
 
     {
@@ -558,7 +614,8 @@ fn finalize_detached(
         if current_head_oid != base_oid {
             return Err(GitFinalizeError::FinalizeFailed(crate::Error::Io(
                 std::io::Error::other(format!(
-                    "finalize_detached: HEAD changed from {} to {}", base_oid, current_head_oid
+                    "finalize_detached: HEAD changed from {} to {}",
+                    base_oid, current_head_oid
                 )),
             )));
         }

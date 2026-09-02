@@ -22,11 +22,11 @@ use std::fs;
 use std::path::Path;
 
 use tempfile::TempDir;
-use writer_core::sync::git_commit::{
+use writer_core::sync::git::seed::GitSeedState;
+use writer_core::sync::git::{
     commit_git_finalize, rollback_git_finalize, GitFinalizeError, GitFinalizePlan,
     GitMetadataSnapshot, IndexSnapshot, RefSnapshot,
 };
-use writer_core::sync::git::seed::GitSeedState;
 
 // ── helpers ──
 

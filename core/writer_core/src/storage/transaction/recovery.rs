@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::Path;
 
-use crate::error::Result;
 use super::model::*;
+use crate::error::Result;
 
 /// #644 评论 5488655439 问题2 + #644 评论 5488871385 问题1：
 /// 在真正进入 rollback 路径之前，先检查所有 BackupEntry::RestoreFile 是否可读。
@@ -14,6 +14,7 @@ use super::model::*;
 ///
 /// NotGitRepo 的 `RepoInstallCommitted` 是 commit-point，不需要 backup，
 /// 所以不在本函数中做粗暴的无条件检查——由调用方根据 outcome 决定是否需要 preflight。
+#[cfg(test)]
 fn preflight_backup_entries(tx_dir: &Path, manifest: &TransactionManifest) -> Result<()> {
     let backup_dir = tx_dir.join("backup");
     for entry in &manifest.backup_entries {
@@ -50,6 +51,7 @@ fn preflight_backup_entries(tx_dir: &Path, manifest: &TransactionManifest) -> Re
 /// - 任意一步失败 → 返回 Err → 保留 manifest + backup + transaction 目录
 ///
 /// 不吞错，给下次恢复留机会。
+#[cfg(test)]
 #[allow(clippy::too_many_lines, clippy::excessive_nesting)]
 fn rollback_full_sync_transaction(
     tx_dir: &Path,
@@ -305,6 +307,7 @@ fn rollback_full_sync_transaction(
 /// #644 评论 5476546134 第2节：静态版本的 manifest phase 更新，供恢复流程使用。
 ///
 /// 恢复时没有 `SaveTransaction` 实例，需要直接操作 manifest 文件。
+#[cfg(test)]
 fn write_manifest_phase_static(
     manifest_path: &Path,
     phase: TransactionPhase,
@@ -330,6 +333,7 @@ fn write_manifest_phase_static(
 ///
 /// 返回 `(常规恢复列表, 待 Git finalize 的恢复列表)`。
 // TODO(#597): 既有代码可读性技术债，待后续重构拆分
+#[cfg(test)]
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,

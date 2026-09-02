@@ -2,6 +2,7 @@ use crate::editor::transaction::composition::OffsetMap;
 use crate::editor::transaction::engine::*;
 use crate::editor::transaction::rebase::*;
 use crate::editor::transaction::visual::*;
+use crate::editor::transaction::{compute_rebase_slice_mappings, SliceMatchInput};
 
 #[allow(deprecated)]
 #[test]

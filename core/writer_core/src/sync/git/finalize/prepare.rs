@@ -1,10 +1,10 @@
 use std::fs;
 use std::path::Path;
 
-use crate::error::Result;
-use super::super::seed::GitSeedState;
 use super::super::model::*;
+use super::super::seed::GitSeedState;
 use super::temp::*;
+use crate::error::Result;
 
 // ── 公共 API ──
 
@@ -477,7 +477,10 @@ pub(crate) fn snapshot_ref(
 ///
 /// - `explicit_git_dir = Some(p)`：外部 git_dir 布局，从 `p` 打开，workdir 指向 `live_root`。
 /// - `explicit_git_dir = None`：标准布局，等效于 `Repository::open(live_root)`。
-pub(crate) fn open_live_repo(live_root: &Path, explicit_git_dir: Option<&Path>) -> Result<git2::Repository> {
+pub(crate) fn open_live_repo(
+    live_root: &Path,
+    explicit_git_dir: Option<&Path>,
+) -> Result<git2::Repository> {
     let layout = match explicit_git_dir {
         Some(git_dir) => crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
             live_root.to_path_buf(),

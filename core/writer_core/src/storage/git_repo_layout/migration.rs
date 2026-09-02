@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use super::{GitRepoLayout, RepoOpenResult, try_open_repo};
+use super::{try_open_repo, GitRepoLayout, RepoOpenResult};
 
 /// RAII 守卫，保证临时目录在 drop 时删除。
 struct MigrateTmpDirGuard(Option<PathBuf>);
@@ -32,7 +32,7 @@ impl Drop for MigrateTmpDirGuard {
 }
 
 /// 递归复制目录（durable copy）。
-fn migrate_copy_dir_recursive(src: &Path, dst: &Path) -> crate::Result<()> {
+pub(crate) fn migrate_copy_dir_recursive(src: &Path, dst: &Path) -> crate::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
@@ -59,22 +59,22 @@ pub(crate) enum MigrationPhase {
     SourceCleaned,
 }
 
-const LAYOUT_MIGRATIONS_DIR: &str = ".layout-migrations";
-const LAYOUT_MIGRATION_JOURNAL_NAME: &str = ".sujian-layout-migration";
+pub(crate) const LAYOUT_MIGRATIONS_DIR: &str = ".layout-migrations";
+pub(crate) const LAYOUT_MIGRATION_JOURNAL_NAME: &str = ".sujian-layout-migration";
 
 /// 迁移 journal 内容。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct LayoutMigrationJournal {
-    owner: String,
-    worktree_canonical: String,
-    original_source: String,
-    claimed_source: String,
-    target_tmp: String,
-    target_git_dir: String,
-    phase: MigrationPhase,
+pub(crate) struct LayoutMigrationJournal {
+    pub(crate) owner: String,
+    pub(crate) worktree_canonical: String,
+    pub(crate) original_source: String,
+    pub(crate) claimed_source: String,
+    pub(crate) target_tmp: String,
+    pub(crate) target_git_dir: String,
+    pub(crate) phase: MigrationPhase,
 }
 
-fn canonicalize_or_lossy(path: &Path) -> String {
+pub(crate) fn canonicalize_or_lossy(path: &Path) -> String {
     std::fs::canonicalize(path)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| path.to_string_lossy().into_owned())
@@ -86,7 +86,7 @@ fn migrations_dir(target_git_dir: &Path) -> Option<PathBuf> {
         .map(|p| p.join(LAYOUT_MIGRATIONS_DIR))
 }
 
-fn journal_path(target_git_dir: &Path, owner: &str) -> Option<PathBuf> {
+pub(crate) fn journal_path(target_git_dir: &Path, owner: &str) -> Option<PathBuf> {
     migrations_dir(target_git_dir).map(|dir| dir.join(format!("{owner}.json")))
 }
 
@@ -94,7 +94,7 @@ fn legacy_journal_path(target_git_dir: &Path) -> PathBuf {
     target_git_dir.join(LAYOUT_MIGRATION_JOURNAL_NAME)
 }
 
-fn write_migration_journal(
+pub(crate) fn write_migration_journal(
     target_git_dir: &Path,
     journal: &LayoutMigrationJournal,
 ) -> crate::Result<()> {
@@ -131,7 +131,8 @@ fn scan_migration_journals(target_git_dir: &Path) -> crate::Result<Vec<LayoutMig
                     Err(e) => {
                         return Err(crate::Error::Io(std::io::Error::other(format!(
                             "scan_migration_journals: corrupted journal {}: {}",
-                            path.display(), e,
+                            path.display(),
+                            e,
                         ))));
                     }
                 },
@@ -292,12 +293,18 @@ pub(crate) fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<(
     let journals = match migrate_legacy_journal(&layout.git_dir, &layout.worktree_root) {
         Ok(Some(j)) => {
             let owner_tag: &str = &j.owner;
-            log::debug!("[git_repo_layout] resume: migrated legacy journal, owner_tag={}", owner_tag);
+            log::debug!(
+                "[git_repo_layout] resume: migrated legacy journal, owner_tag={}",
+                owner_tag
+            );
             vec![j]
         }
         Ok(None) => {
             let scanned = scan_migration_journals(&layout.git_dir)?;
-            log::debug!("[git_repo_layout] resume: scanned {} journals", scanned.len());
+            log::debug!(
+                "[git_repo_layout] resume: scanned {} journals",
+                scanned.len()
+            );
             scanned
         }
         Err(e) => {
@@ -328,21 +335,29 @@ pub(crate) fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<(
                     let original_exists = original_source.exists();
                     match (original_exists, claimed_exists, &target_open) {
                         (true, false, RepoOpenResult::Missing) => {
-                            std::fs::rename(&original_source, &claimed_source_path).map_err(|e| {
-                                crate::Error::Io(std::io::Error::other(format!(
-                                    "resume_layout_migration: Prepared phase rename: {e}",
-                                )))
-                            })?;
+                            std::fs::rename(&original_source, &claimed_source_path).map_err(
+                                |e| {
+                                    crate::Error::Io(std::io::Error::other(format!(
+                                        "resume_layout_migration: Prepared phase rename: {e}",
+                                    )))
+                                },
+                            )?;
                             if let Some(parent) = layout.worktree_root.parent() {
                                 crate::storage::sync_dir(parent)?;
                             }
                             crate::storage::sync_dir(&layout.worktree_root)?;
-                            current_journal = LayoutMigrationJournal { phase: MigrationPhase::SourceClaimed, ..current_journal };
+                            current_journal = LayoutMigrationJournal {
+                                phase: MigrationPhase::SourceClaimed,
+                                ..current_journal
+                            };
                             write_migration_journal(&target_path, &current_journal)?;
                             continue;
                         }
                         (false, true, RepoOpenResult::Missing) => {
-                            current_journal = LayoutMigrationJournal { phase: MigrationPhase::SourceClaimed, ..current_journal };
+                            current_journal = LayoutMigrationJournal {
+                                phase: MigrationPhase::SourceClaimed,
+                                ..current_journal
+                            };
                             write_migration_journal(&target_path, &current_journal)?;
                             continue;
                         }
@@ -352,19 +367,19 @@ pub(crate) fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<(
                             ))));
                         }
                         (_, _, RepoOpenResult::Valid) => {
-                            return Err(crate::Error::Io(std::io::Error::other(format!(
+                            return Err(crate::Error::Io(std::io::Error::other(
                                 "resume_layout_migration: Prepared phase but target already valid",
-                            ))));
+                            )));
                         }
                         (true, true, _) => {
-                            return Err(crate::Error::Io(std::io::Error::other(format!(
+                            return Err(crate::Error::Io(std::io::Error::other(
                                 "resume_layout_migration: Prepared phase ambiguous ownership",
-                            ))));
+                            )));
                         }
                         (false, false, RepoOpenResult::Missing) => {
-                            return Err(crate::Error::Io(std::io::Error::other(format!(
+                            return Err(crate::Error::Io(std::io::Error::other(
                                 "resume_layout_migration: Prepared phase but both sources missing",
-                            ))));
+                            )));
                         }
                     }
                 }
@@ -372,9 +387,9 @@ pub(crate) fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<(
                     let target_tmp_path = PathBuf::from(&current_journal.target_tmp);
                     match &target_open {
                         RepoOpenResult::Valid => {
-                            return Err(crate::Error::Io(std::io::Error::other(format!(
+                            return Err(crate::Error::Io(std::io::Error::other(
                                 "resume_layout_migration: SourceClaimed phase but target already valid",
-                            ))));
+                            )));
                         }
                         RepoOpenResult::Corrupt(e) => {
                             return Err(crate::Error::Io(std::io::Error::other(format!(
@@ -395,14 +410,26 @@ pub(crate) fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<(
                             std::fs::create_dir_all(parent)?;
                         }
                         migrate_copy_dir_recursive(&claimed_source_path, &target_tmp_path)?;
-                        { let tmp_repo = git2::Repository::open(&target_tmp_path).map_err(|e| { crate::Error::Io(std::io::Error::other(format!("resume_layout_migration: open copied repo: {e}"))) })?; let _ = tmp_repo.head(); let _ = tmp_repo.find_reference("HEAD"); }
-                        current_journal = LayoutMigrationJournal { phase: MigrationPhase::TargetPrepared, ..current_journal };
+                        {
+                            let tmp_repo =
+                                git2::Repository::open(&target_tmp_path).map_err(|e| {
+                                    crate::Error::Io(std::io::Error::other(format!(
+                                        "resume_layout_migration: open copied repo: {e}"
+                                    )))
+                                })?;
+                            let _ = tmp_repo.head();
+                            let _ = tmp_repo.find_reference("HEAD");
+                        }
+                        current_journal = LayoutMigrationJournal {
+                            phase: MigrationPhase::TargetPrepared,
+                            ..current_journal
+                        };
                         write_migration_journal(&target_path, &current_journal)?;
                         continue;
                     } else {
-                        return Err(crate::Error::Io(std::io::Error::other(format!(
+                        return Err(crate::Error::Io(std::io::Error::other(
                             "resume_layout_migration: SourceClaimed phase but claimed_source missing",
-                        ))));
+                        )));
                     }
                 }
                 MigrationPhase::TargetPrepared => {
@@ -410,18 +437,32 @@ pub(crate) fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<(
                     let target_tmp_exists = target_tmp_path.exists();
                     match (&target_open, target_tmp_exists) {
                         (RepoOpenResult::Valid, false) => {
-                            let repo = git2::Repository::open(&target_path).map_err(|e| { crate::Error::Io(std::io::Error::other(format!("resume_layout_migration: TargetPrepared phase open repo: {e}"))) })?;
-                            repo.set_workdir(&layout.worktree_root, false).map_err(|e| { crate::Error::Io(std::io::Error::other(format!("resume_layout_migration: set_workdir: {e}"))) })?;
+                            let repo = git2::Repository::open(&target_path).map_err(|e| {
+                                crate::Error::Io(std::io::Error::other(format!(
+                                    "resume_layout_migration: TargetPrepared phase open repo: {e}"
+                                )))
+                            })?;
+                            repo.set_workdir(&layout.worktree_root, false)
+                                .map_err(|e| {
+                                    crate::Error::Io(std::io::Error::other(format!(
+                                        "resume_layout_migration: set_workdir: {e}"
+                                    )))
+                                })?;
                             let _ = repo.head();
-                            if let Ok(mut index) = repo.index() { let _ = index.read(true); }
-                            current_journal = LayoutMigrationJournal { phase: MigrationPhase::TargetInstalled, ..current_journal };
+                            if let Ok(mut index) = repo.index() {
+                                let _ = index.read(true);
+                            }
+                            current_journal = LayoutMigrationJournal {
+                                phase: MigrationPhase::TargetInstalled,
+                                ..current_journal
+                            };
                             write_migration_journal(&target_path, &current_journal)?;
                             continue;
                         }
                         (RepoOpenResult::Valid, true) => {
-                            return Err(crate::Error::Io(std::io::Error::other(format!(
+                            return Err(crate::Error::Io(std::io::Error::other(
                                 "resume_layout_migration: TargetPrepared phase ownership ambiguity",
-                            ))));
+                            )));
                         }
                         (RepoOpenResult::Corrupt(e), _) => {
                             return Err(crate::Error::Io(std::io::Error::other(format!(
@@ -429,21 +470,43 @@ pub(crate) fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<(
                             ))));
                         }
                         (RepoOpenResult::Missing, true) => {
-                            if let Some(parent) = target_path.parent() { std::fs::create_dir_all(parent)?; }
-                            std::fs::rename(&target_tmp_path, &target_path).map_err(|e| { crate::Error::Io(std::io::Error::other(format!("resume_layout_migration: rename target_tmp: {e}"))) })?;
-                            if let Some(parent) = target_path.parent() { crate::storage::sync_dir(parent)?; }
-                            let repo = git2::Repository::open(&target_path).map_err(|e| { crate::Error::Io(std::io::Error::other(format!("resume_layout_migration: open final repo: {e}"))) })?;
-                            repo.set_workdir(&layout.worktree_root, false).map_err(|e| { crate::Error::Io(std::io::Error::other(format!("resume_layout_migration: set_workdir: {e}"))) })?;
+                            if let Some(parent) = target_path.parent() {
+                                std::fs::create_dir_all(parent)?;
+                            }
+                            std::fs::rename(&target_tmp_path, &target_path).map_err(|e| {
+                                crate::Error::Io(std::io::Error::other(format!(
+                                    "resume_layout_migration: rename target_tmp: {e}"
+                                )))
+                            })?;
+                            if let Some(parent) = target_path.parent() {
+                                crate::storage::sync_dir(parent)?;
+                            }
+                            let repo = git2::Repository::open(&target_path).map_err(|e| {
+                                crate::Error::Io(std::io::Error::other(format!(
+                                    "resume_layout_migration: open final repo: {e}"
+                                )))
+                            })?;
+                            repo.set_workdir(&layout.worktree_root, false)
+                                .map_err(|e| {
+                                    crate::Error::Io(std::io::Error::other(format!(
+                                        "resume_layout_migration: set_workdir: {e}"
+                                    )))
+                                })?;
                             let _ = repo.head();
-                            if let Ok(mut index) = repo.index() { let _ = index.read(true); }
-                            current_journal = LayoutMigrationJournal { phase: MigrationPhase::TargetInstalled, ..current_journal };
+                            if let Ok(mut index) = repo.index() {
+                                let _ = index.read(true);
+                            }
+                            current_journal = LayoutMigrationJournal {
+                                phase: MigrationPhase::TargetInstalled,
+                                ..current_journal
+                            };
                             write_migration_journal(&target_path, &current_journal)?;
                             continue;
                         }
                         (RepoOpenResult::Missing, false) => {
-                            return Err(crate::Error::Io(std::io::Error::other(format!(
+                            return Err(crate::Error::Io(std::io::Error::other(
                                 "resume_layout_migration: TargetPrepared phase but both target and tmp missing",
-                            ))));
+                            )));
                         }
                     }
                 }
@@ -454,10 +517,15 @@ pub(crate) fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<(
                                 "resume_layout_migration: TargetInstalled phase remove claimed_source: {e}",
                             )))
                         })?;
-                        if let Some(parent) = layout.worktree_root.parent() { crate::storage::sync_dir(parent)?; }
+                        if let Some(parent) = layout.worktree_root.parent() {
+                            crate::storage::sync_dir(parent)?;
+                        }
                         crate::storage::sync_dir(&layout.worktree_root)?;
                     }
-                    current_journal = LayoutMigrationJournal { phase: MigrationPhase::SourceCleaned, ..current_journal };
+                    current_journal = LayoutMigrationJournal {
+                        phase: MigrationPhase::SourceCleaned,
+                        ..current_journal
+                    };
                     write_migration_journal(&target_path, &current_journal)?;
                     continue;
                 }
@@ -505,42 +573,84 @@ pub(crate) fn migrate_embedded_git(
             "migrate_embedded_git: rename source: {e}",
         )))
     })?;
-    if let Some(parent) = worktree_root.parent() { crate::storage::sync_dir(parent)?; }
+    if let Some(parent) = worktree_root.parent() {
+        crate::storage::sync_dir(parent)?;
+    }
     crate::storage::sync_dir(worktree_root)?;
 
-    let journal = LayoutMigrationJournal { phase: MigrationPhase::SourceClaimed, ..journal };
+    let journal = LayoutMigrationJournal {
+        phase: MigrationPhase::SourceClaimed,
+        ..journal
+    };
     write_migration_journal(target_git_dir, &journal)?;
 
     let mut guard = MigrateTmpDirGuard::new(tmp_git);
     migrate_copy_dir_recursive(&owned_source_path, guard.path())?;
-    { let tmp_repo = git2::Repository::open(guard.path()).map_err(|e| { crate::Error::Io(std::io::Error::other(format!("migrate_embedded_git: open tmp repo: {e}"))) })?; let _ = tmp_repo.head(); let _ = tmp_repo.find_reference("HEAD"); }
+    {
+        let tmp_repo = git2::Repository::open(guard.path()).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "migrate_embedded_git: open tmp repo: {e}"
+            )))
+        })?;
+        let _ = tmp_repo.head();
+        let _ = tmp_repo.find_reference("HEAD");
+    }
 
-    let journal = LayoutMigrationJournal { phase: MigrationPhase::TargetPrepared, ..journal };
+    let journal = LayoutMigrationJournal {
+        phase: MigrationPhase::TargetPrepared,
+        ..journal
+    };
     write_migration_journal(target_git_dir, &journal)?;
 
-    if let Some(parent) = target_git_dir.parent() { std::fs::create_dir_all(parent)?; }
+    if let Some(parent) = target_git_dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let guard_path = guard.disarm();
     std::fs::rename(&guard_path, target_git_dir).map_err(|e| {
         let _ = std::fs::remove_dir_all(&guard_path);
-        crate::Error::Io(std::io::Error::other(format!("migrate_embedded_git: rename: {e}")))
+        crate::Error::Io(std::io::Error::other(format!(
+            "migrate_embedded_git: rename: {e}"
+        )))
     })?;
-    if let Some(parent) = target_git_dir.parent() { crate::storage::sync_dir(parent)?; }
+    if let Some(parent) = target_git_dir.parent() {
+        crate::storage::sync_dir(parent)?;
+    }
 
-    let repo = git2::Repository::open(target_git_dir).map_err(|e| { crate::Error::Io(std::io::Error::other(format!("migrate_embedded_git: open migrated repo: {e}"))) })?;
-    repo.set_workdir(worktree_root, false).map_err(|e| { crate::Error::Io(std::io::Error::other(format!("migrate_embedded_git: set_workdir: {e}"))) })?;
+    let repo = git2::Repository::open(target_git_dir).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "migrate_embedded_git: open migrated repo: {e}"
+        )))
+    })?;
+    repo.set_workdir(worktree_root, false).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "migrate_embedded_git: set_workdir: {e}"
+        )))
+    })?;
     let _ = repo.head();
-    if let Ok(mut index) = repo.index() { let _ = index.read(true); }
+    if let Ok(mut index) = repo.index() {
+        let _ = index.read(true);
+    }
 
-    let journal = LayoutMigrationJournal { phase: MigrationPhase::TargetInstalled, ..journal };
+    let journal = LayoutMigrationJournal {
+        phase: MigrationPhase::TargetInstalled,
+        ..journal
+    };
     write_migration_journal(target_git_dir, &journal)?;
 
     std::fs::remove_dir_all(&owned_source_path).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!("migrate_embedded_git: remove owned source: {e}")))
+        crate::Error::Io(std::io::Error::other(format!(
+            "migrate_embedded_git: remove owned source: {e}"
+        )))
     })?;
-    if let Some(parent) = worktree_root.parent() { crate::storage::sync_dir(parent)?; }
+    if let Some(parent) = worktree_root.parent() {
+        crate::storage::sync_dir(parent)?;
+    }
     crate::storage::sync_dir(worktree_root)?;
 
-    let journal = LayoutMigrationJournal { phase: MigrationPhase::SourceCleaned, ..journal };
+    let journal = LayoutMigrationJournal {
+        phase: MigrationPhase::SourceCleaned,
+        ..journal
+    };
     write_migration_journal(target_git_dir, &journal)?;
 
     remove_migration_journal(target_git_dir, &owner)?;

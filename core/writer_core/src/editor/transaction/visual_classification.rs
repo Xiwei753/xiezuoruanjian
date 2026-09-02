@@ -1,7 +1,5 @@
-use super::composition::OffsetMap;
-use super::rebase::{RebaseContinuation, RebaseFrameSnapshot, RebaseReason, RebaseSliceMapping};
 use super::types::{AnimationMode, EditorChange, EditorTransactionCause};
-use super::visual::{AnimatedSliceRole, ClusterRect, ClusterRun, VisualClassKind};
+use super::visual::{ClusterRect, ClusterRun, VisualClassKind};
 use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange};
 
 /// #606: Composition 操作类型
@@ -36,11 +34,19 @@ pub fn classify_composition_visual(
     let is_visual_same = visual_class_kinds.is_empty();
 
     let (old_affected, new_affected) = compute_composition_affected_ranges(
-        old_visual_text, new_visual_text, replace_start, replace_end_exclusive, operation_kind,
+        old_visual_text,
+        new_visual_text,
+        replace_start,
+        replace_end_exclusive,
+        operation_kind,
     );
 
     let animation_mode = compute_composition_animation_mode(
-        old_visual_text, new_visual_text, operation_kind, animation_enabled, &old_affected,
+        old_visual_text,
+        new_visual_text,
+        operation_kind,
+        animation_enabled,
+        &old_affected,
     );
 
     CompositionVisualClassification {
@@ -64,12 +70,18 @@ fn compute_composition_affected_ranges(
             let old_affected = if old_visual_text.is_empty() {
                 Vec::new()
             } else {
-                vec![Utf8ByteRange::from_start_len(replace_start, old_visual_text.len())]
+                vec![Utf8ByteRange::from_start_len(
+                    replace_start,
+                    old_visual_text.len(),
+                )]
             };
             let new_affected = if new_visual_text.is_empty() {
                 Vec::new()
             } else {
-                vec![Utf8ByteRange::from_start_len(replace_start, new_visual_text.len())]
+                vec![Utf8ByteRange::from_start_len(
+                    replace_start,
+                    new_visual_text.len(),
+                )]
             };
             (old_affected, new_affected)
         }
@@ -77,15 +89,24 @@ fn compute_composition_affected_ranges(
             let range = if new_visual_text.is_empty() {
                 Vec::new()
             } else {
-                vec![Utf8ByteRange::from_start_len(replace_start, new_visual_text.len())]
+                vec![Utf8ByteRange::from_start_len(
+                    replace_start,
+                    new_visual_text.len(),
+                )]
             };
             (range.clone(), range)
         }
         CompositionOperationKind::Cancel => {
             let old_affected = if !old_visual_text.is_empty() {
-                vec![Utf8ByteRange::from_start_len(replace_start, old_visual_text.len())]
+                vec![Utf8ByteRange::from_start_len(
+                    replace_start,
+                    old_visual_text.len(),
+                )]
             } else if replace_start != replace_end_exclusive {
-                vec![Utf8ByteRange::from_ordered(replace_start, replace_end_exclusive)]
+                vec![Utf8ByteRange::from_ordered(
+                    replace_start,
+                    replace_end_exclusive,
+                )]
             } else {
                 Vec::new()
             };
@@ -115,7 +136,16 @@ fn compute_composition_animation_mode(
     let cluster_count = count_grapheme_clusters(changed_text);
     let contains_newline = changed_text.contains("\n");
     let contains_complex = text_contains_complex_grapheme(changed_text);
-    choose_animation_mode(cluster_count, contains_newline, contains_complex, false, false, false, false, animation_enabled)
+    choose_animation_mode(
+        cluster_count,
+        contains_newline,
+        contains_complex,
+        false,
+        false,
+        false,
+        false,
+        animation_enabled,
+    )
 }
 
 /// #516: 视觉对象分类器
@@ -170,7 +200,12 @@ pub fn choose_animation_mode(
     is_applying_settings: bool,
     animation_enabled: bool,
 ) -> AnimationMode {
-    if !animation_enabled || is_scrolling || is_loading || is_applying_format || is_applying_settings {
+    if !animation_enabled
+        || is_scrolling
+        || is_loading
+        || is_applying_format
+        || is_applying_settings
+    {
         return AnimationMode::SystemSuppressed;
     }
     if cluster_count == 0 {
@@ -198,24 +233,53 @@ pub fn count_grapheme_clusters(text: &str) -> usize {
 /// 检测文本是否包含复杂 grapheme
 pub fn text_contains_complex_grapheme(text: &str) -> bool {
     use unicode_segmentation::UnicodeSegmentation;
-    text.graphemes(true).any(|g| g.chars().any(|ch| is_complex_grapheme_code_point(ch as u32)))
+    text.graphemes(true).any(|g| {
+        g.chars()
+            .any(|ch| is_complex_grapheme_code_point(ch as u32))
+    })
 }
 
 /// 检测单个 code point 是否属于复杂 grapheme
 pub fn is_complex_grapheme_code_point(cp: u32) -> bool {
-    if cp > 0xFFFF { return true; }
-    if cp == 0x200D { return true; }
-    if (0xFE00..=0xFE0F).contains(&cp) || (0xE0100..=0xE01EF).contains(&cp) { return true; }
-    if (0x0300..=0x036F).contains(&cp) { return true; }
-    if (0x1AB0..=0x1AFF).contains(&cp) { return true; }
-    if (0x1DC0..=0x1DFF).contains(&cp) { return true; }
-    if (0x20D0..=0x20FF).contains(&cp) { return true; }
-    if (0xFE20..=0xFE2F).contains(&cp) { return true; }
-    if (0x1F600..=0x1F64F).contains(&cp) { return true; }
-    if (0x1F300..=0x1F5FF).contains(&cp) { return true; }
-    if (0x1F680..=0x1F6FF).contains(&cp) { return true; }
-    if (0x1F900..=0x1F9FF).contains(&cp) { return true; }
-    if (0x1F1E6..=0x1F1FF).contains(&cp) { return true; }
+    if cp > 0xFFFF {
+        return true;
+    }
+    if cp == 0x200D {
+        return true;
+    }
+    if (0xFE00..=0xFE0F).contains(&cp) || (0xE0100..=0xE01EF).contains(&cp) {
+        return true;
+    }
+    if (0x0300..=0x036F).contains(&cp) {
+        return true;
+    }
+    if (0x1AB0..=0x1AFF).contains(&cp) {
+        return true;
+    }
+    if (0x1DC0..=0x1DFF).contains(&cp) {
+        return true;
+    }
+    if (0x20D0..=0x20FF).contains(&cp) {
+        return true;
+    }
+    if (0xFE20..=0xFE2F).contains(&cp) {
+        return true;
+    }
+    if (0x1F600..=0x1F64F).contains(&cp) {
+        return true;
+    }
+    if (0x1F300..=0x1F5FF).contains(&cp) {
+        return true;
+    }
+    if (0x1F680..=0x1F6FF).contains(&cp) {
+        return true;
+    }
+    if (0x1F900..=0x1F9FF).contains(&cp) {
+        return true;
+    }
+    if (0x1F1E6..=0x1F1FF).contains(&cp) {
+        return true;
+    }
     false
 }
 
@@ -323,7 +387,9 @@ pub fn split_text_into_clusters(text: &str, base_offset: usize) -> Vec<ClusterRe
     for grapheme in text.graphemes(true) {
         let byte_start = base_offset + (grapheme.as_ptr() as usize - text.as_ptr() as usize);
         let byte_end = byte_start + grapheme.len();
-        let is_complex = grapheme.chars().any(|ch| is_complex_grapheme_code_point(ch as u32));
+        let is_complex = grapheme
+            .chars()
+            .any(|ch| is_complex_grapheme_code_point(ch as u32));
         clusters.push(ClusterRect {
             byte_start: Utf8ByteOffset::unchecked(byte_start),
             byte_end: Utf8ByteOffset::unchecked(byte_end),
@@ -385,7 +451,9 @@ pub fn diff_plain_text(old_text: &str, new_text: &str) -> Vec<EditorChange> {
 
 pub fn common_prefix_byte_len(old_text: &str, new_text: &str) -> usize {
     let mut prefix = 0;
-    for ((old_index, old_char), (_, new_char)) in old_text.char_indices().zip(new_text.char_indices()) {
+    for ((old_index, old_char), (_, new_char)) in
+        old_text.char_indices().zip(new_text.char_indices())
+    {
         if old_char != new_char {
             break;
         }
@@ -398,7 +466,11 @@ pub fn common_suffix_byte_len(old_text: &str, new_text: &str, prefix: usize) -> 
     let old_tail = &old_text[prefix..];
     let new_tail = &new_text[prefix..];
     let mut suffix = 0;
-    for ((_, old_char), (_, new_char)) in old_tail.char_indices().rev().zip(new_tail.char_indices().rev()) {
+    for ((_, old_char), (_, new_char)) in old_tail
+        .char_indices()
+        .rev()
+        .zip(new_tail.char_indices().rev())
+    {
         if old_char != new_char {
             break;
         }
