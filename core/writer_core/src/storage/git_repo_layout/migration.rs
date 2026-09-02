@@ -292,10 +292,9 @@ pub(crate) fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<(
     }
     let journals = match migrate_legacy_journal(&layout.git_dir, &layout.worktree_root) {
         Ok(Some(j)) => {
-            let owner_tag: &str = &j.owner;
+            // 只记录迁移数量，不记录 owner_tag/migration_uuid（随机 UUID，非密钥）。
             log::debug!(
-                "[git_repo_layout] resume: migrated legacy journal, owner_tag={}",
-                owner_tag
+                "[git_repo_layout] resume: migrated legacy journal",
             );
             vec![j]
         }
