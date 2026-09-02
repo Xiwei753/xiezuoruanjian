@@ -284,7 +284,7 @@ pub fn seed_from_live_as_git_repo(
     Ok(seed_state)
 }
 
-// #644 评论 5475805198 第2节：finalize 逻辑已移至 git_commit.rs。
+// #644 评论 5475805198 第2节：finalize 逻辑位于 `git/finalize.rs`。
 // 本模块只保留 seed / GitSeedState。
 
 #[cfg(test)]

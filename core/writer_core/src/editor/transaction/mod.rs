@@ -2,6 +2,8 @@ mod composition;
 mod engine;
 mod platform;
 mod rebase;
+mod rebase_mapping;
+mod visual_classification;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -33,10 +35,13 @@ pub use rebase::{
 
 pub use platform::PlatformVisualTransaction;
 
-pub use engine::{
-    choose_animation_mode, classify_composition_visual, classify_visual_diff, compute_rebase,
-    compute_rebase_slice_mappings, count_grapheme_clusters, diff_plain_text, is_cjk_code_point,
-    is_combining_code_point, is_complex_grapheme_code_point, split_text_into_clusters,
-    split_text_into_runs, text_contains_complex_grapheme, transactions_overlap,
-    CompositionOperationKind, CompositionVisualClassification, EditorEngine, SliceMatchInput,
+pub use engine::{compute_rebase, transactions_overlap, EditorEngine};
+
+pub use rebase_mapping::{compute_rebase_slice_mappings, SliceMatchInput};
+
+pub use visual_classification::{
+    choose_animation_mode, classify_composition_visual, classify_visual_diff, count_grapheme_clusters,
+    diff_plain_text, is_cjk_code_point, is_combining_code_point, is_complex_grapheme_code_point,
+    split_text_into_clusters, split_text_into_runs, text_contains_complex_grapheme,
+    CompositionOperationKind, CompositionVisualClassification,
 };

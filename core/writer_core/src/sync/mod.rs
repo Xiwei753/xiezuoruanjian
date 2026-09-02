@@ -33,9 +33,9 @@ pub mod content_class;
 pub mod diagnostics;
 pub mod full_sync;
 pub mod full_sync_state;
+pub(crate) mod full_sync_utils;
+pub(crate) mod commit_helpers;
 pub mod git;
-/// Git metadata finalize 的兼容 re-export；新代码请直接用 `crate::sync::git::*`。
-pub mod git_commit;
 #[cfg(feature = "github-api")]
 pub mod lww;
 pub mod provider;

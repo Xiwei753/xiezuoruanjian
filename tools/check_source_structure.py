@@ -122,16 +122,6 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "LWW 同合算法实现：元素/字段/集合三层数据结构共享同一时钟比较内核，"
         "已拆分为 compare/manifest/transfer 子模块；"
         "TODO(#648) 后续按子模块进一步拆分",
-    (Path("core/writer_core/src/facade/sync_ops.rs"), "god-file"):
-        "同步操作聚合层：Git/LWW 双策略 commit/rollback 共享同一 SyncOps 上下文；"
-        "TODO(#648) 后续按策略拆分",
-    (Path("core/writer_core/src/storage/git_repo_layout.rs"), "god-file"):
-        "Git 仓库布局模型：worktree/git_dir 分离 + 迁移逻辑共享同一布局上下文；"
-        "TODO(#648) 后续拆分迁移逻辑",
-    (Path("core/writer_core/src/sync/git/finalize.rs"), "god-file"):
-        "Git metadata finalize：prepare/commit/recover/rollback 辅助共享同一 finalize 上下文，"
-        "rollback 和 finalize 存在双向依赖；已从3590行拆分为4个子模块；"
-        "TODO(#648) 后续按 prepare/commit/recover 进一步拆分",
     (Path("core/writer_core/src/sync/service.rs"), "god-file"):
         "同步服务编排层：Git/LWW 双策略/诊断/路径过滤共享同一 SyncService 入口与配置上下文，"
         "拆分会破坏同步原子性；已按策略拆分内部函数；"
@@ -162,9 +152,6 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
     (Path("core/writer_core/src/editor/kernel/apply.rs"), "god-file"):
         "编辑器内核命令分派：所有 EditorCommand 分支共享同一匹配上下文与修订校验，"
         "按命令类型拆分会破坏匹配完备性；TODO(#597) 后续按命令族提取子模块",
-    (Path("core/writer_core/src/editor/transaction/engine.rs"), "god-file"):
-        "编辑器事务引擎：redo/undo 栈与 command dispatch 共享同一事务上下文；"
-        "TODO(#648) 后续按操作类型拆分",
     (Path("apps/Linux_qt/src/sujian_editor_item/editing.rs"), "god-file"):
         "Qt 编辑器项编辑逻辑：文本输入/删除/选区操作共享同一编辑上下文，"
         "拆分会破坏编辑原子性；TODO(#597) 后续按操作类型提取子模块",

@@ -22,7 +22,7 @@ pub struct TransactionManifest {
     /// 仅 backup_mode 且需要 Git finalize 时有值。
     /// 旧 manifest 中无此字段时反序列化为 None（向后兼容）。
     #[serde(default)]
-    pub git_finalize: Option<crate::sync::git_commit::GitFinalizeRecoveryRecord>,
+    pub git_finalize: Option<crate::sync::git::GitFinalizeRecoveryRecord>,
 }
 
 fn default_phase() -> TransactionPhase {
