@@ -137,20 +137,17 @@ mod tests {
         }
     }
 
-    /// 返回 `LegacyMigrationOutcome` 的变体描述，**不打印 secrets 值**。
+    /// 返回 `LegacyMigrationOutcome` 的变体描述，**完全不碰 secrets**。
     ///
     /// 测试断言失败时用于 panic 诊断：只暴露变体名与非敏感的 config/reason，
-    /// `SyncSecrets.token` / `ssh_private_key` 用长度/存在性替代，
+    /// 不读取 `SyncSecrets.token` / `ssh_private_key` 的任何派生信息，
     /// 避免 cleartext-logging（Issue #648）。
     fn outcome_kind_redacted(outcome: &LegacyMigrationOutcome) -> String {
         match outcome {
             LegacyMigrationOutcome::NotNeeded => "NotNeeded".to_string(),
-            LegacyMigrationOutcome::Migrated { config, secrets } => format!(
-                "Migrated {{ remote_url: {}, branch: {}, token_len: {}, has_ssh_key: {} }}",
-                config.remote_url,
-                config.branch,
-                secrets.token.as_deref().map(|t| t.len()).unwrap_or(0),
-                secrets.ssh_private_key.is_some(),
+            LegacyMigrationOutcome::Migrated { config, .. } => format!(
+                "Migrated {{ remote_url: {}, branch: {} }}",
+                config.remote_url, config.branch,
             ),
             LegacyMigrationOutcome::NeedsReconfigure { reason } => {
                 format!("NeedsReconfigure {{ reason: {} }}", reason)
