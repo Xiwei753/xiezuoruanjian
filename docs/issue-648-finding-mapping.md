@@ -4,14 +4,14 @@
 
 本文档分为两张独立的表：
 
-- **表 A**：原 GitHub Security & Quality / Code Quality 页面的 22 条 Standard findings
-- **表 B**：GitHub Code Scanning alerts（30 条）
+- **表 A**：原 GitHub Security & Quality / Code Quality 页面的 22 条 Standard findings（**真实明细无法取得**，详见 A.0）
+- **表 B**：GitHub Code Scanning alerts（30 条，可通过 API 逐条验证）
 
-这两张表是独立的数据源，不能用表 B 的 30 条代替表 A 的 22 条。
+这两张表是独立的数据源，不能用表 B 的 30 条代替表 A 的 22 条。本轮调查确认：原 22 条 Standard findings 的真实明细无法取得，且没有直接证据证明 #648 正文中的"22 个问题"等同于 Code Scanning 的 22 个未 dismissed alert（详见 A.0 时间线分析）。因此表 A 保持"数据不可取得"，不填入 Code Scanning 数据；表 B 的 30 条独立如实记录。
 
 ---
 
-## 表 A：原 Security & Quality 22 条 Finding 逐条映射
+## 表 A：原 Security & Quality 22 条 Standard Finding 映射
 
 ### A.0 数据来源调查
 
@@ -21,53 +21,35 @@
 2. **历史 PR 中 `github-code-quality[bot]` 评论**：用 Search API（`is:pull-request` / `is:issue` + `comment-author:github-code-quality[bot]`）检索，**total_count = 0**——该 bot 从未在本仓库留下 Code Quality 结果评论。
 3. **Code Scanning default setup**：`GET /code-scanning/default-setup` 返回 `state=configured`、`query_suite=default`、`languages=[actions,c-cpp,csharp,javascript-typescript,python,rust]`、`schedule=weekly`、`updated_at=2026-07-20`。仓库使用 GitHub Code Scanning 默认 CodeQL 分析，仓库内无独立 CodeQL workflow 文件。
 
-**可验证的 Security & Quality 数据**：Code Scanning alerts API（`GET /code-scanning/alerts`）返回 30 条 alert = 15 open + 7 fixed + 8 dismissed。8 条 dismissed 全部是 `rust/access-invalid-pointer`，dismissal reason = `false positive`，dismissed_at = 2026-09-02T05:27（Issue #648 创建于 2026-09-02T04:42，dismiss 发生在 Issue 创建后约 45 分钟）。
+**调查结论：原 22 条 Standard findings 的真实明细无法取得。** 三个数据源均未取得独立 Code Quality Standard findings 的逐条明细（API 404、无 bot 历史评论）。当前唯一能逐条取得的真实 Security & Quality 数据是 Code Scanning alerts（表 B，30 条）。
 
-**22 条映射依据**：在独立 Code Quality Standard findings 无法取得（API 404、无 bot 评论）的情况下，当前可逐条审查的真实 Security & Quality 数据是 Code Scanning alerts。30 条 alert 中 8 条已被 GitHub 确认为 `false positive` 并 dismiss，剩余 **22 条（15 open + 7 fixed）是当前需要实际审查的安全/质量问题**，与 #648 正文"22 个问题"数量一致。下表逐条映射这 22 条，每行使用 alert API 返回的真实 `rule.id` / `rule.severity` / `location.path` / `message.text`，不猜测、不凑数。若后续能取得独立 Code Quality Standard findings 明细，可再校正本表。
+#### A.0.1 时间线分析：#648 的"22 个问题"不等于 Code Scanning 的 22 个未 dismissed alert
 
-### A.1 逐条映射（22 行）
+#648 正文写明"GitHub Security & Quality 中存在 22 个问题"。一个自然疑问是：这 22 个问题是否就是 Code Scanning 中 30 条 alert 去掉 8 条 dismissed 后的 22 条（30 − 8 = 22）？**答案是不能，仅凭数量相等无法建立等同关系，且时间线恰恰相反：**
 
-| 序号 | finding/rule | severity | 原文件路径 | 当前文件路径 | 处理方式 | 对应提交 | 当前结论 |
-|------|-------------|----------|-----------|-------------|----------|---------|---------|
-| 1 | actions/missing-workflow-permissions | warning | .github/workflows/android_debug_build.yml | .github/workflows/android_debug_build.yml（同路径） | 已添加 `permissions:` 声明限制 GITHUB_TOKEN | 早期 CI 提交（2026-06 前） | GitHub 判定 Fixed（2026-06-08） |
-| 2 | actions/missing-workflow-permissions | warning | .github/workflows/linux_build.yml | .github/workflows/linux_build.yml（同路径） | 同序号 1：已添加 `permissions:` 声明 | 早期 CI 提交（2026-06 前） | GitHub 判定 Fixed（2026-06-02） |
-| 3 | actions/missing-workflow-permissions | warning | .github/workflows/linux_build.yml | .github/workflows/linux_build.yml（同路径） | 同序号 1：已添加 `permissions:` 声明 | 早期 CI 提交（2026-06 前） | GitHub 判定 Fixed（2026-06-02） |
-| 4 | actions/missing-workflow-permissions | warning | .github/workflows/android_debug_build.yml | .github/workflows/android_debug_build.yml（同路径） | 同序号 1：已添加 `permissions:` 声明 | 早期 CI 提交（2026-06 前） | GitHub 判定 Fixed（2026-06-08） |
-| 5 | actions/missing-workflow-permissions | warning | .github/workflows/linux_build.yml | .github/workflows/linux_build.yml（同路径） | 同序号 1：已添加 `permissions:` 声明 | 早期 CI 提交（2026-06 前） | GitHub 判定 Fixed（2026-06-02） |
-| 6 | actions/missing-workflow-permissions | warning | .github/workflows/linux_build.yml | .github/workflows/linux_build.yml（同路径） | 同序号 1：已添加 `permissions:` 声明 | 早期 CI 提交（2026-06 前） | GitHub 判定 Fixed（2026-06-02） |
-| 7 | actions/missing-workflow-permissions | warning | .github/workflows/linux_build.yml | .github/workflows/linux_build.yml（同路径） | 同序号 1：已添加 `permissions:` 声明 | 早期 CI 提交（2026-06 前） | GitHub 判定 Fixed（2026-06-08） |
-| 8 | py/redos | error | tools/check_harmony_native_bridge.py | tools/check_harmony_native_bridge.py（同路径） | 已改为分步匹配（`no_mangle_re`/`skip_re`/`export_re` 三个独立正则）替代嵌套量词单正则，消除指数回溯 | c06c8ad4 | 代码已修改，待默认分支重新分析 |
-| 9 | rust/cleartext-logging | warning | core/writer_core/src/sync/legacy_migration/legacy_migration_tests.rs | core/writer_core/src/storage/migration/legacy_migration/legacy_migration_tests.rs | `outcome_kind_redacted()` 改为 `Migrated { config, .. }`，只读 config.remote_url/branch，不读 secrets（alert #18, line 159）；原路径随重构删除 | f62c063b（代码）+ c06c8ad4（路径迁移） | 代码已修改，待默认分支重新分析 |
-| 10 | rust/cleartext-logging | warning | core/writer_core/src/sync/legacy_migration/legacy_migration_tests.rs | core/writer_core/src/storage/migration/legacy_migration/legacy_migration_tests.rs | 同序号 9（alert #19, line 185） | f62c063b + c06c8ad4 | 代码已修改，待默认分支重新分析 |
-| 11 | rust/cleartext-logging | warning | core/writer_core/src/sync/legacy_migration/legacy_migration_tests.rs | core/writer_core/src/storage/migration/legacy_migration/legacy_migration_tests.rs | 同序号 9（alert #20, line 226） | f62c063b + c06c8ad4 | 代码已修改，待默认分支重新分析 |
-| 12 | rust/cleartext-logging | warning | core/writer_core/src/sync/legacy_migration/legacy_migration_tests.rs | core/writer_core/src/storage/migration/legacy_migration/legacy_migration_tests.rs | 同序号 9（alert #21, line 263） | f62c063b + c06c8ad4 | 代码已修改，待默认分支重新分析 |
-| 13 | rust/cleartext-logging | warning | core/writer_core/src/sync/legacy_migration/legacy_migration_tests.rs | core/writer_core/src/storage/migration/legacy_migration/legacy_migration_tests.rs | 同序号 9（alert #22, line 336） | f62c063b + c06c8ad4 | 代码已修改，待默认分支重新分析 |
-| 14 | rust/cleartext-logging | warning | core/writer_core/src/sync/legacy_migration/legacy_migration_tests.rs | core/writer_core/src/storage/migration/legacy_migration/legacy_migration_tests.rs | 同序号 9（alert #23, line 473） | f62c063b + c06c8ad4 | 代码已修改，待默认分支重新分析 |
-| 15 | rust/cleartext-logging | warning | core/writer_core/src/sync/legacy_migration/legacy_migration_tests.rs | core/writer_core/src/storage/migration/legacy_migration/legacy_migration_tests.rs | 同序号 9（alert #24, line 504） | f62c063b + c06c8ad4 | 代码已修改，待默认分支重新分析 |
-| 16 | rust/cleartext-logging | warning | core/writer_core/src/sync/legacy_migration/legacy_migration_tests.rs | core/writer_core/src/storage/migration/legacy_migration/legacy_migration_tests.rs | 同序号 9（alert #25, line 536） | f62c063b + c06c8ad4 | 代码已修改，待默认分支重新分析 |
-| 17 | rust/cleartext-logging | warning | core/writer_core/src/sync/legacy_migration/legacy_migration_tests.rs | core/writer_core/src/storage/migration/legacy_migration/legacy_migration_tests.rs | 同序号 9（alert #26, line 561） | f62c063b + c06c8ad4 | 代码已修改，待默认分支重新分析 |
-| 18 | rust/cleartext-logging | warning | core/writer_core/src/sync/legacy_migration/legacy_migration_tests.rs | core/writer_core/src/storage/migration/legacy_migration/legacy_migration_tests.rs | 同序号 9（alert #27, line 587） | f62c063b + c06c8ad4 | 代码已修改，待默认分支重新分析 |
-| 19 | rust/cleartext-logging | warning | core/writer_core/src/sync/legacy_migration/legacy_migration_tests.rs | core/writer_core/src/storage/migration/legacy_migration/legacy_migration_tests.rs | 同序号 9（alert #28, line 609） | f62c063b + c06c8ad4 | 代码已修改，待默认分支重新分析 |
-| 20 | rust/cleartext-logging | warning | core/writer_core/src/sync/legacy_migration/legacy_migration_tests.rs | core/writer_core/src/storage/migration/legacy_migration/legacy_migration_tests.rs | 同序号 9（alert #29, line 637） | f62c063b + c06c8ad4 | 代码已修改，待默认分支重新分析 |
-| 21 | rust/cleartext-logging | warning | core/writer_core/src/sync/legacy_migration/legacy_migration_io.rs | core/writer_core/src/storage/migration/legacy_migration/legacy_migration_io.rs | `delete_secret_or_warn()` 只记 `"delete_secret failed: {e}"`，不写 key 名；`describe_conflict()` 只写 `"credentials differ"`，不含 token_len（alert #30, line 54）；原路径随重构删除 | f62c063b + c06c8ad4 | 代码已修改，待默认分支重新分析 |
-| 22 | rust/cleartext-logging | warning | core/writer_core/src/storage/git_repo_layout.rs | core/writer_core/src/storage/git_repo_layout/migration.rs | 移除 `migration_uuid` 日志，只记 `"migrated legacy journal"`（alert #31, line 728-729）；原文件拆分为 `git_repo_layout/` 目录 | f62c063b + d6ed45ca | 代码已修改，待默认分支重新分析 |
+| 事件 | 时间 | Code Scanning 状态 |
+|------|------|-------------------|
+| Issue #648 创建 | 2026-09-02T04:42:01Z | 23 open + 7 fixed = 30 条，**全部未 dismissed** |
+| 8 条 `rust/access-invalid-pointer` 被 dismiss | 2026-09-02T05:27:45Z | 15 open + 7 fixed + 8 dismissed = 30 条，未 dismissed = 22 |
 
-### A.2 代码修改详情
+- Issue 创建时（04:42），8 条 dismiss **尚未发生**（dismiss 在 05:27，即 Issue 创建后约 45 分钟）。
+- 因此 Issue 创建时 Code Scanning 的"未 dismissed alert"数量是 **30**，不是 22。
+- "30 − 8 = 22"这个等式只有在 dismiss 之后才成立；而 #648 正文在 dismiss 之前就已写定"22 个问题"。
+- 若 #648 作者在创建 Issue 时看到的是 22，则该数字不可能来自"Code Scanning 未 dismissed alert"（当时为 30），更可能来自 Security & Quality / Code Quality 页面上一个独立于 Code Scanning 的 Standard findings 视图。
 
-1. **序号 8（py/redos）**：`tools/check_harmony_native_bridge.py` 第 420-433 行，原单正则 `#[no_mangle]\s*(?:(?:#\[[^\]]*\]|//[^\n]*\n\s*)\s*)*pub\s+...` 中嵌套量词 `(?:(?:...)\s*)*` 在 `#[no_mangle]//\n` 后跟多个 `//\n` 时指数回溯。改为 `no_mangle_re`/`skip_re`/`export_re` 三个独立正则分步匹配：第一步定位 `#[no_mangle]`，第二步顺序跳过空白/属性宏/行注释，第三步匹配 `pub unsafe extern "C" fn`。
+**结论：没有直接证据证明 #648 正文中的"22 个问题"原本就是 Code Scanning 的 22 个未 dismissed alert。** 仅凭 `30 − 8 = 22` 的数量巧合不能做此推断，时间线反而表明两者大概率不是同一数据源。
 
-2. **序号 9-20（cleartext-logging, tests）**：`legacy_migration_tests.rs::outcome_kind_redacted()` 改为 `LegacyMigrationOutcome::Migrated { config, .. } => format!("Migrated {{ remote_url: {}, branch: {} }}", config.remote_url, config.branch)`，完全不读取 `secrets.token` / `ssh_private_key`。测试 panic 信息只暴露变体名与非敏感的 config/reason。原路径 `sync/legacy_migration/` 随 #648 重构迁移到 `storage/migration/legacy_migration/`，原路径已删除。
+### A.1 逐条映射
 
-3. **序号 21（cleartext-logging, io）**：`legacy_migration_io.rs::delete_secret_or_warn()` 日志改为 `log::warn!("legacy migration: delete_secret failed: {}", e)`，不再把 `storage_key_name` 送进日志。`describe_conflict()` 改为只输出 `"source={}, remote_url={}, branch={}, credentials differ"`，删除 `token_len` 等凭据派生信息。原路径随重构迁移，原路径已删除。
+**数据不可取得，无法逐条映射。**
 
-4. **序号 22（cleartext-logging, git_repo_layout）**：`git_repo_layout/migration.rs` 第 295-296 行，日志改为 `log::debug!("[git_repo_layout] resume: migrated legacy journal")`，移除 `migration_uuid`（随机 UUID，非密钥但 CodeQL 仍报 cleartext-logging）。原文件 `storage/git_repo_layout.rs` 拆分为 `git_repo_layout/` 目录（mod.rs + migration.rs）。
+按评论 5512186429 要求，表 A 不填入 Code Scanning 的 22 条数据。原因：
 
-### A.3 因重构自然消失的 finding 说明
+1. 原 22 条 Standard findings 的真实 `rule / severity / path / finding` 明细无法取得（A.0 调查结论）。
+2. 没有直接证据证明 #648 的"22 个问题"等同于 Code Scanning 的 22 个未 dismissed alert（A.0.1 时间线分析）。在缺乏直接证据的情况下，不能把 #648 这部分的定义改成 Code Scanning。
+3. 用"Code Scanning 30 条排除 8 条 dismissed 后的 22 条"填入表 A，实质是用另一套数据替代原问题，违反"两张表独立、不能互相替代"的原则。
 
-- **序号 9-21 的原路径** `core/writer_core/src/sync/legacy_migration/` 已随 #648 重构整体迁移到 `core/writer_core/src/storage/migration/legacy_migration/`。原路径文件已删除（`git mv`），不存在于当前工作树。finding 关注的日志数据流已在迁移后的新路径中修改，不再依赖 secret 数据流。
-- **序号 22 的原路径** `core/writer_core/src/storage/git_repo_layout.rs` 已拆分为 `core/writer_core/src/storage/git_repo_layout/` 目录（mod.rs + migration.rs）。原单文件已删除。finding 关注的 `migration_uuid` 日志在拆分后的 `migration.rs` 中已移除。
-- **序号 1-7 的原路径** `.github/workflows/*.yml` 未变，已添加 `permissions:` 声明，GitHub 已判定 Fixed。
-- **序号 8 的原路径** `tools/check_harmony_native_bridge.py` 未变，已改为分步匹配。
+若后续能取得独立 Code Quality Standard findings 的真实明细，或找到直接证据证明 #648 的 22 个问题对应 Code Scanning 的某 22 条 alert，可再校正本表。在此之前，表 A 保持"数据不可取得"。
 
 ---
 
@@ -256,12 +238,13 @@ GitHub Code Scanning alerts 真实数据（通过 GitHub API 取得），与表 
 
 ## 结论
 
-1. **表 A（22 条 finding 逐条映射）**：本轮按评论 5511808047 要求，逐一尝试三个数据源取得原 22 条明细：Code Quality API 返回 404、`github-code-quality[bot]` 无历史评论、Code Scanning default setup 确认仓库使用默认 CodeQL 分析。在独立 Code Quality Standard findings 无法取得的情况下，用当前可验证的 Code Scanning alerts 数据（30 条 − 8 条已确认 false-positive dismissed = 22 条需实际审查）逐条填成 22 行，每行有真实 `rule.id`/`severity`/`path`/`message`，不猜测、不凑数。22 条中：7 条 `actions/missing-workflow-permissions` 已由 GitHub 判定 Fixed；1 条 `py/redos` 已改分步匹配；14 条 `rust/cleartext-logging` 已修改代码使诊断字符串不再依赖 secret 数据流。仍 open 的 15 条因修改尚未合并到默认分支，状态为"代码已修改，待默认分支重新分析"。
+1. **表 A（原 22 条 Standard findings）**：真实明细无法取得。三个数据源（Code Quality API、`github-code-quality[bot]` 历史评论、Code Scanning default setup）均未取得独立 Code Quality Standard findings 逐条明细。时间线分析进一步表明 #648 正文"22 个问题"不等于 Code Scanning 的 22 个未 dismissed alert（Issue 创建时 dismiss 尚未发生，未 dismissed alert 为 30 而非 22）。按评论 5512186429 要求，表 A 保持"数据不可取得"，不填入 Code Scanning 数据。
 
-2. **表 B.1 Open（15 条）**：本轮已在工作树中修改代码，使 Alert 31、30、18-29 的诊断字符串不再依赖 secret 数据流，Alert 9 使用分步匹配替代单正则。但修改尚未合并到默认分支，**当前状态为"已修改代码，待默认分支重新分析"**，不记为"已完成"。
+2. **表 B（Code Scanning 30 条，独立数据源）**：
+   - **B.1 Open（15 条）**：本轮已在工作树中修改代码，使 Alert 31、30、18-29 的诊断字符串不再依赖 secret 数据流，Alert 9 使用分步匹配替代单正则。修改尚未合并到默认分支，**当前状态如实记为"已修改代码，待默认分支重新分析"**，不记为"已完成"。
+   - **B.2 Fixed（7 条）**：GitHub Actions workflow 权限问题，已由 GitHub Code Scanning 判定为 Fixed。
+   - **B.3 Dismissed（8 条）**：8 条 `rust/access-invalid-pointer` 告警均为 qmetaobject FFI 边界代码，逐条分析确认不会悬空/越界，GitHub dismissal reason 均为 `false positive`。
 
-3. **表 B.2 Fixed（7 条）**：GitHub Actions workflow 权限问题，已由 GitHub Code Scanning 判定为 Fixed。
+3. **已实施的代码修改**（对应表 B 的 Code Scanning alerts，不归属表 A）：cleartext-logging 数据流依赖已消除（`outcome_kind_redacted()` 不再读 secrets、`delete_secret_or_warn()` 不再记录 key 名、`describe_conflict()` 不含 token_len、`migration_uuid` 日志移除）；`py/redos` 改为分步匹配；随 #648 重构，相关文件路径已迁移（`sync/legacy_migration/` → `storage/migration/legacy_migration/`，`storage/git_repo_layout.rs` → `git_repo_layout/` 目录）。这些修改是针对 Code Scanning alerts 做的，与表 A 的 22 条 Standard findings 是否对应无关。
 
-4. **表 B.3 Dismissed（8 条）**：8 条 `rust/access-invalid-pointer` 告警均为 qmetaobject FFI 边界代码，涉及 `Rc<RefCell<AppBackend>>` 安全借用、`QPointer` 弱引用跨线程回调和 `QObjectPinned` 注册。逐条分析确认：指针由 `Rc`/`QObjectBox` 持有，生命周期由引用计数和 `RefCell` 借用检查保证，不会悬空/越界。GitHub 上 dismissal reason 均为 `false positive`。这 8 条不在表 A 的 22 条内（已被 GitHub dismiss）。
-
-**关于关闭 #648**：表 A 的 22 条已逐条映射到当前代码并填写处理方式与对应提交，表 B 的 30 条 Code Scanning alerts 已独立整理。15 条 Open alert 的代码修改已在工作树中完成，但需默认分支重新分析后才能确认关闭。按评论 5511808047 结论，**暂时不关闭 #648**，待默认分支重新分析确认 Open alert 关闭后再评估。
+**关于关闭 #648**：Core 的同步/存储结构重构已基本完成，cleartext-logging 等代码修改已在工作树中完成。剩余阻塞是 finding 数据来源：表 A 的原 22 条 Standard findings 真实明细无法取得，且无直接证据将其等同于 Code Scanning 的 22 个未 dismissed alert。按评论 5512186429 结论，**暂时不关闭 #648**。待后续取得表 A 真实明细或直接证据，且默认分支重新分析确认 Open alert 关闭后，再评估关闭。
