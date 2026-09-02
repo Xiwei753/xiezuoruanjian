@@ -19,7 +19,7 @@
 //! - 远端删除的文件移至 `app-meta/sync/trash/` 而非直接删除，防止同步异常导致数据丢失。
 //! - 下载使用 atomic rename（先写 .tmp 再 rename），保证中断不会留下半写入文件。
 
-use crate::sync::github_api_client::github_get_content;
+use crate::sync::provider::github_api_client::github_get_content;
 use crate::sync::scanner::scan_for_sync;
 use crate::sync::types::{
     FirstSyncMode, ManifestFileRecord, SyncConfig, SyncConflict, SyncKind, SyncManifest,

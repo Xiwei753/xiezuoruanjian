@@ -1,25 +1,12 @@
-//! #644 评论 5462823517 第2/4节：full sync staging run。
-//!
-//! 只负责 staging：创建 run 目录、从 live 建 base snapshot、比较 base/live/staging、
-//! 生成 commit plan、清理 run。能 hard-link 就 hard-link，失败回退 copy。
-//!
-//! 三段式 full sync 里：
-//! - **Prepare**：调 [StagingRun::create] 建隔离 run 目录，再调
-//!   [StagingRun::build_base_snapshot_from_live] 把每个 live 文件 hard-link/copy 进
-//!   `base/` 子目录，记录 base hash。
-//! - **Transfer**：网络阶段把远端内容写进 `staging/` 子目录（不碰 live）。
-//! - **Commit**：调 [StagingRun::compute_commit_plan] 做三方判断
-//!   （base=Prepare 时 live、local=现在 live、incoming=Transfer 后 staging），
-//!   生成 [CommitPlan]，再用 [crate::storage::transaction::SaveTransaction] 提交。
-//!
-//! 本模块不持 Core 锁、不做网络、不写 live 文件（commit 由调用方用 SaveTransaction 落盘）。
-
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use uuid::Uuid;
+
+use super::commit_plan::*;
+use super::resolve::*;
 
 const BASE_SUBDIR: &str = "base";
 const STAGING_SUBDIR: &str = "staging";
@@ -38,7 +25,7 @@ pub struct StagingRun {
     /// seed 时记录的 live Git 仓库状态。
     /// 仅 Git backend 有值；GithubApi backend 保持 None。
     /// `None` 只表示本 target 根本不是 Git backend。
-    git_seed_state: Option<crate::sync::git_staging::GitSeedState>,
+    git_seed_state: Option<crate::sync::git::seed::GitSeedState>,
     /// #644 评论 5476546134 第5节：resolved backend type，
     /// 不再靠 `git_seed_state.is_some()` 间接猜 backend。
     backend_type: crate::sync::types::BackendType,
@@ -87,13 +74,13 @@ impl StagingRun {
     /// #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
     /// seed 时记录的 live Git 仓库状态。
     /// 仅 Git backend 有值；GithubApi backend 保持 None。
-    pub fn git_seed_state(&self) -> Option<&crate::sync::git_staging::GitSeedState> {
+    pub fn git_seed_state(&self) -> Option<&crate::sync::git::seed::GitSeedState> {
         self.git_seed_state.as_ref()
     }
 
     /// #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
     /// 设置 seed 时记录的 live Git 仓库状态。
-    pub fn set_git_seed_state(&mut self, state: crate::sync::git_staging::GitSeedState) {
+    pub fn set_git_seed_state(&mut self, state: crate::sync::git::seed::GitSeedState) {
         self.git_seed_state = Some(state);
     }
 
@@ -483,7 +470,7 @@ pub fn prepare_staging_runs(
                 // #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
                 // seed 返回 live 的 GitSeedState，供 finalize 决定路径。
                 // #644 评论 5491531984 问题1：传入 git_layout 用于正确打开仓库。
-                let seed_state = crate::sync::git_staging::seed_from_live_as_git_repo(
+                let seed_state = crate::sync::git::seed::seed_from_live_as_git_repo(
                     &run,
                     &planned.target_live_root,
                     planned.git_layout.as_ref(),
@@ -546,369 +533,6 @@ impl Drop for StagingRun {
     }
 }
 
-/// Commit plan — Commit 阶段对每个 staging 变化的处理决策。
-///
-/// #644 评论 5474166587 问题1：拆 `content_actions` + `engine_state_actions`。
-/// - `content_actions`：用户内容（正文、元数据、缓存）的写回动作。
-/// - `engine_state_actions`：同步引擎自身状态（manifest.sync.json、
-///   state.local.json、conflicts.json）的写回动作。
-///
-/// 两类最后用同一个 `SaveTransaction` 一次写回 live，不另起第二套保存路径。
-#[derive(Default, Debug)]
-pub struct CommitPlan {
-    /// 用户内容写回动作：local==base 时安全应用 incoming（含 incoming 独有新增）。
-    pub content_actions: Vec<CommitAction>,
-    /// 引擎状态写回动作：app-meta/sync/manifest.sync.json、state.local.json、
-    /// conflicts.json 等。Transfer 在 staging 里更新了它们，Commit 必须写回 live。
-    pub engine_state_actions: Vec<CommitAction>,
-    /// incoming==base，保留 local（无需动作，记录供诊断）。
-    pub keep_local: Vec<PathBuf>,
-    /// local==incoming，内容相同，无需操作。
-    pub noop: Vec<PathBuf>,
-    /// 两边都改，三方冲突（正文走三方合并语义，metadata 走 LWW，由调用方决定）。
-    /// #644 评论 5473401065 第4节：用 `StagingConflict` 替代 `PathBuf`，
-    /// 保留 base/local/incoming 哈希，让 Commit 阶段能映射成 `SyncConflict` 并持久化。
-    pub conflict: Vec<StagingConflict>,
-}
-
-/// #644 评论 5473401065 第4节：三方冲突的完整信息。
-///
-/// 保留 `rel_path` + 三方哈希，Commit 阶段映射成 `SyncConflict` 时不再丢失信息。
-#[derive(Debug, Clone)]
-pub struct StagingConflict {
-    pub rel_path: PathBuf,
-    pub base_hash: String,
-    pub local_hash: String,
-    pub incoming_hash: String,
-}
-
-/// 单个文件的 commit 动作。
-#[derive(Debug, Clone)]
-pub enum CommitAction {
-    /// 把 `content` 写到 `rel_path`（相对 target_root）。
-    Apply { rel_path: PathBuf, content: Vec<u8> },
-    /// 删除 `rel_path`（远端删除，local 没改）。
-    Delete { rel_path: PathBuf },
-}
-
-/// #644 评论 5474166587 问题1：staging commit 写回语义分类。
-///
-/// 与 [`ContentClass`]（远端同步语义）正交。决定 Transfer 在 staging 里产生的
-/// 哪些本地状态必须写回 live：
-/// - `Content`：用户内容，走三方比较/LWW 决策。
-/// - `EngineState`：同步引擎自身状态（manifest/state/conflicts），直接写回 live。
-/// - `Skip`：永不进 commit（.git/、full-sync-staging/、app-meta/transactions/、
-///   config.local.json、secrets）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StagingCommitClass {
-    /// 用户内容：正文、元数据、缓存。走三方比较/LWW 决策。
-    Content,
-    /// 引擎状态：manifest.sync.json、state.local.json、conflicts.json。
-    /// Transfer 在 staging 里更新了它们，Commit 必须写回 live。
-    EngineState,
-    /// 永不进 commit：.git/、full-sync-staging/、app-meta/transactions/、
-    /// config.local.json、secrets。
-    Skip,
-}
-
-/// 判断路径是否为内部 Git 工件（不应被当成用户内容同步）。
-///
-/// 统一过滤以下模式：
-/// - `.git`（精确匹配）：Git 仓库元数据目录或 gitlink 文件；
-/// - `.git/`（前缀匹配）：Git 仓库元数据子目录；
-/// - `.git.sujian-tmp-*`：迁移/恢复过程中的临时目录；
-/// - `.git.sujian-migrate-source-*`：迁移崩溃后残留的源仓库快照。
-fn is_internal_git_artifact(path: &str) -> bool {
-    // Normalize backslashes to forward slashes for consistent matching on Windows
-    let normalized = if path.contains('\\') {
-        path.replace('\\', "/")
-    } else {
-        path.to_string()
-    };
-
-    // .git (exact) or .git/* (subdirectory)
-    if normalized == ".git" || normalized.starts_with(".git/") {
-        return true;
-    }
-
-    // .git.sujian-tmp-* (migration temp directory)
-    if normalized.starts_with(".git.sujian-tmp-") {
-        return true;
-    }
-
-    // .git.sujian-migrate-source-* (migration crash residual)
-    if normalized.starts_with(".git.sujian-migrate-source-") {
-        return true;
-    }
-
-    false
-}
-
-/// #644 评论 5474166587 问题1：按 staging commit 写回语义分类。
-///
-/// 与 [`crate::sync::content_class::classify_content_path`]（远端同步语义）正交。
-/// `app-meta/` 下只有 `sync/manifest.sync.json`、`sync/state.local.json`、
-/// `sync/conflicts.json` 是 EngineState，其余 app-meta 内容（如 transactions/、
-/// logs/）不进 commit。
-pub(crate) fn classify_staging_commit_path(raw_path: &str) -> StagingCommitClass {
-    // Normalize backslashes to forward slashes for consistent matching on Windows
-    let path = if raw_path.contains('\\') {
-        std::borrow::Cow::Owned(raw_path.replace('\\', "/"))
-    } else {
-        std::borrow::Cow::Borrowed(raw_path)
-    };
-
-    // 永不进 commit 的内部目录（walk_commit_candidates 已跳过，这里兜底）。
-    // 使用统一过滤函数判断 Git 工件。
-    if is_internal_git_artifact(&path) {
-        return StagingCommitClass::Skip;
-    }
-    if path.starts_with("full-sync-staging/") || path == "full-sync-staging" {
-        return StagingCommitClass::Skip;
-    }
-    if path.starts_with("app-meta/transactions/") {
-        return StagingCommitClass::Skip;
-    }
-
-    // EngineState：同步引擎自身状态，Transfer 在 staging 里更新了它们，Commit 必须写回 live。
-    if path == "app-meta/sync/manifest.sync.json"
-        || path == "app-meta/sync/state.local.json"
-        || path == "app-meta/sync/conflicts.json"
-    {
-        return StagingCommitClass::EngineState;
-    }
-
-    // 平台配置/凭证：不从 staging 覆盖 live（设备专属）。
-    if path == "app-meta/sync/config.local.json" || path.starts_with("app-meta/sync/secrets") {
-        return StagingCommitClass::Skip;
-    }
-
-    // 其余 app-meta/ 内容（logs/、stats/ 等）不进 commit。
-    if path.starts_with("app-meta/") {
-        return StagingCommitClass::Skip;
-    }
-
-    StagingCommitClass::Content
-}
-
-/// 比较两个 `Option<Vec<u8>>` 是否相等。
-/// `None == None` → true，`None == Some(_)` → false。
-fn opt_bytes_eq(a: &Option<Vec<u8>>, b: &Option<Vec<u8>>) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => a == b,
-        (None, None) => true,
-        _ => false,
-    }
-}
-
-/// #644 评论 5473789298 第3节：把 incoming 内容推入 plan 的 actions 列表。
-///
-/// `incoming = Some` → [`CommitAction::Apply`]；`incoming = None`（远端删除）→
-/// [`CommitAction::Delete`]。按 `class` 决定推入 `content_actions` 还是
-/// `engine_state_actions`。
-fn apply_incoming(
-    plan: &mut CommitPlan,
-    rel: PathBuf,
-    incoming: Option<Vec<u8>>,
-    class: StagingCommitClass,
-) {
-    let action = match incoming {
-        Some(content) => CommitAction::Apply {
-            rel_path: rel,
-            content,
-        },
-        None => CommitAction::Delete { rel_path: rel },
-    };
-    match class {
-        StagingCommitClass::EngineState => plan.engine_state_actions.push(action),
-        StagingCommitClass::Content => plan.content_actions.push(action),
-        StagingCommitClass::Skip => {
-            // classify_staging_commit_path 已过滤 Skip，不应到达此处。
-            // 防御性丢弃，不写回 live。
-        }
-    }
-}
-
-/// #644 评论 5474166587 问题3：从文件系统构造本地侧 LWW 记录。
-///
-/// 读取文件 mtime 作为 `updated_at_ms`；`op` 按内容是否存在决定（Some → upsert，
-/// None → delete）。`device_id` 用 live 的 device_id。
-///
-/// #644 评论 5475110422 第4节：delete 时从 `tombstones` 查找 `deleted_at`，
-/// 不再固定写 0。若 tombstones 中无记录，返回 `None`（调用方应报错或补 tombstone）。
-fn build_local_lww_record(
-    root: &Path,
-    rel: &Path,
-    content: &Option<Vec<u8>>,
-    device_id: &str,
-    tombstones: &[crate::sync::types::Tombstone],
-) -> Option<crate::sync::content_class::LwwRecord> {
-    use crate::sync::content_class::LwwRecord;
-
-    let rel_str = rel.to_string_lossy().to_string();
-
-    let (content_hash, op, updated_at_ms, deleted_at_ms) = match content {
-        Some(bytes) => {
-            let hash = md5_hex(&Some(bytes.clone()));
-            let mtime = read_mtime_ms(root, rel).unwrap_or(0);
-            (hash, "upsert", mtime, None)
-        }
-        None => {
-            // #644 评论 5475110422 第4节：从 tombstones 查找删除时间。
-            // 没有 tombstone 记录 → 无法确定删除时间，返回 None。
-            let ts = tombstones.iter().find(|t| t.original_path == rel_str)?;
-            let deleted_at = ts.deleted_at * 1000; // tombstone.deleted_at 是秒，LWW 用毫秒
-            (String::new(), "delete", deleted_at, Some(deleted_at))
-        }
-    };
-
-    Some(LwwRecord {
-        content_hash,
-        updated_at_ms,
-        deleted_at_ms,
-        device_id: device_id.to_string(),
-        op: op.to_string(),
-    })
-}
-
-/// #644 评论 5474772497 第2节：staging manifest 中的文件记录（JSON 反序列化用）。
-///
-/// 与 `types::ManifestFileRecord` 字段一致，但不依赖 `github-api` feature gate。
-/// 仅用于从 staging 的 `manifest.sync.json` 读取远端 LWW 元数据。
-#[derive(Debug, Clone, serde::Deserialize)]
-struct ManifestRecord {
-    path: String,
-    #[serde(rename = "content_hash")]
-    _content_hash: String,
-    updated_at_ms: i64,
-    #[serde(default)]
-    deleted_at_ms: Option<i64>,
-    device_id: String,
-    op: String,
-}
-
-/// #644 评论 5474772497 第2节：从 staging 的 manifest.sync.json 读取远端 LWW 记录。
-///
-/// #644 评论 5475805198 第4节：改为 `Result<Option<...>>`。
-/// - manifest 不存在 → `Ok(None)`（Git backend 不产生 manifest，mtime fallback）。
-/// - manifest 存在且解析成功 → `Ok(Some(map))`。
-/// - manifest 存在但读/解析失败 → `Err`（GithubApi backend 的 manifest 是事实来源，
-///   解析失败不能静默切成另一套决策规则）。
-///
-/// 调用方根据 `is_github_api` 决定是否允许 `None`（mtime fallback）。
-fn read_staging_manifest(
-    staging_root: &Path,
-) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
-    let manifest_path = staging_root.join("app-meta/sync/manifest.sync.json");
-    if !manifest_path.exists() {
-        return Ok(None);
-    }
-    let content = std::fs::read_to_string(&manifest_path).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "read_staging_manifest: failed to read manifest.sync.json: {}",
-            e
-        )))
-    })?;
-    #[derive(serde::Deserialize)]
-    struct ManifestContainer {
-        files: Vec<ManifestRecord>,
-    }
-    let container: ManifestContainer = serde_json::from_str(&content).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "read_staging_manifest: manifest.sync.json parse error: {}",
-            e
-        )))
-    })?;
-    Ok(Some(
-        container
-            .files
-            .into_iter()
-            .map(|r| (r.path.clone(), r))
-            .collect(),
-    ))
-}
-
-/// #644 评论 5474772497 第2节：从 manifest 记录构造远端侧 LWW 记录。
-///
-/// 使用 manifest 中的真实 `updated_at_ms`、`device_id`、`op`，
-/// 而非文件系统 mtime 和固定 "remote" 字符串。
-fn build_remote_lww_record_from_manifest(
-    manifest_record: &ManifestRecord,
-    incoming_content: &Option<Vec<u8>>,
-) -> crate::sync::content_class::LwwRecord {
-    use crate::sync::content_class::LwwRecord;
-
-    let content_hash = match incoming_content {
-        Some(bytes) => md5_hex(&Some(bytes.clone())),
-        None => String::new(),
-    };
-
-    LwwRecord {
-        content_hash,
-        updated_at_ms: manifest_record.updated_at_ms,
-        deleted_at_ms: manifest_record.deleted_at_ms,
-        device_id: manifest_record.device_id.clone(),
-        op: manifest_record.op.clone(),
-    }
-}
-
-/// 读取文件 mtime（Unix 毫秒），失败返回 None。
-fn read_mtime_ms(root: &Path, rel: &Path) -> Option<i64> {
-    let path = root.join(rel);
-    std::fs::metadata(&path)
-        .and_then(|m| m.modified())
-        .and_then(|t| {
-            t.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map_err(std::io::Error::other)
-        })
-        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-        .ok()
-}
-
-/// 读取 live 的 device_id（从 app-meta/sync/state.local.json）。
-///
-/// 读取失败（文件不存在、JSON 损坏等）时返回 None，调用方回退空字符串，
-/// LWW 退化为纯时间戳比较（仍优于固定 remote-wins）。
-fn read_live_device_id(live_root: &Path) -> Option<String> {
-    let state_path = live_root.join("app-meta/sync/state.local.json");
-    if !state_path.exists() {
-        return None;
-    }
-    let content = std::fs::read_to_string(&state_path).ok()?;
-    let state: crate::sync::types::SyncState = serde_json::from_str(&content).ok()?;
-    if state.device_id.is_empty() {
-        None
-    } else {
-        Some(state.device_id)
-    }
-}
-
-/// #644 评论 5475110422 第4节：读取 live 的完整 SyncState。
-///
-/// 用于获取 tombstones（delete 的 deleted_at 时间戳）。
-/// 读取失败时返回 None。
-fn read_live_sync_state(live_root: &Path) -> Option<crate::sync::types::SyncState> {
-    let state_path = live_root.join("app-meta/sync/state.local.json");
-    if !state_path.exists() {
-        return None;
-    }
-    let content = std::fs::read_to_string(&state_path).ok()?;
-    serde_json::from_str(&content).ok()
-}
-
-/// 计算字节内容的 MD5 hex 摘要。`None`（文件不存在）返回空字符串。
-fn md5_hex(content: &Option<Vec<u8>>) -> String {
-    match content {
-        Some(bytes) => {
-            use std::io::Write;
-            let mut hasher = md5::Context::new();
-            hasher.write_all(bytes).ok();
-            format!("{:x}", hasher.compute())
-        }
-        None => String::new(),
-    }
-}
-
 /// 递归列出 live root 下所有需要参与同步的文件相对路径。
 ///
 /// 跳过 `.git/`、`full-sync-staging/`（避免递归复制 staging 自身）、
@@ -948,7 +572,7 @@ fn list_commit_candidate_paths(root: &Path) -> Result<Vec<PathBuf>> {
 /// - `full-sync-staging/`：staging run 自身，避免递归；
 /// - `app-meta/transactions/`：事务暂存目录，commit 中间态。
 #[allow(clippy::excessive_nesting)]
-fn walk_commit_candidates(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+pub(crate) fn walk_commit_candidates(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -979,6 +603,3 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>> {
     file.read_to_end(&mut buf)?;
     Ok(buf)
 }
-
-#[cfg(test)]
-mod tests;

@@ -217,7 +217,7 @@ _ASSERT_UNWIND_SAFE_WHITELIST_ENTRIES = {
     (Path("apps/Linux_qt/src/editor/input/platform_ime.rs"), "sujian_ime_preedit_attrs"),
     (Path("apps/Linux_qt/src/editor/input/platform_ime.rs"), "sujian_ime_cancel"),
     (Path("apps/Linux_qt/src/editor/input/platform_ime.rs"), "sujian_request_repaint"),
-    (Path("core/writer_core/src/sync/github_backend.rs"), "sync"),
+    (Path("core/writer_core/src/sync/provider/github_backend.rs"), "sync"),
 }
 
 

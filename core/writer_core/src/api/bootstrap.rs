@@ -26,7 +26,7 @@ use crate::app_service::WriterAppService;
 /// 在创建 `WriterAppService` 之前调用，确保崩溃前的删除事务被完成。
 /// 恢复失败返回 Err（用 `?` 严格返回），让调用方决定。
 fn recover_storage_transactions(app_data_root: &Path) -> std::result::Result<(), WriterError> {
-    crate::storage::project_delete_transaction::recover_pending_delete_transactions(app_data_root)?;
+    crate::storage::journal::project_delete::recover_pending_delete_transactions(app_data_root)?;
     Ok(())
 }
 

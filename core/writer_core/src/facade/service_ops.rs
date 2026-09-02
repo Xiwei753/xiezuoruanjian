@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::storage::project_delete_transaction;
+use crate::storage::journal::project_delete as project_delete_transaction;
 use crate::trash;
 
 impl super::WriterCore {

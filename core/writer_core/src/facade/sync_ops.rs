@@ -1160,7 +1160,7 @@ fn coordinate_rollback_after_finalize_failure(
     live_root: &std::path::Path,
     snapshot: &crate::sync::git_commit::GitMetadataSnapshot,
     plan: &crate::sync::git_commit::GitFinalizePlan,
-    _seed_state: &crate::sync::git_staging::GitSeedState,
+    _seed_state: &crate::sync::git::seed::GitSeedState,
     tx: &mut crate::storage::transaction::SaveTransaction,
     explicit_git_dir: Option<&std::path::Path>,
 ) -> crate::error::Result<()> {

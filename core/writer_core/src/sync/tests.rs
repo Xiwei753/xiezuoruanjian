@@ -2,7 +2,7 @@
 #[allow(clippy::module_inception)]
 mod tests {
     #[cfg(feature = "github-api")]
-    use crate::sync::provider::backends::SyncBackend;
+    use crate::sync::provider::SyncBackend;
     #[cfg(feature = "git-https")]
     use crate::sync::provider::git_backend::Git2Backend;
     #[cfg(feature = "git-https")]
@@ -3663,7 +3663,7 @@ mod tests {
     fn test_github_api_error_404_not_found_not_used() {
         // After the fix, github_api_error should no longer produce the generic "not_found" category.
         // All 404s should be classified as repo_not_found_or_no_permission or file_not_found.
-        let source = include_str!("github_api_client.rs");
+        let source = include_str!("provider/github_api_client.rs");
         // Check that the old `404 => "not_found"` pattern is gone.
         // We look for the exact match arm that would produce the generic category.
         assert!(

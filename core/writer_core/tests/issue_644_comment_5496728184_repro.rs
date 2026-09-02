@@ -275,7 +275,7 @@ fn defect1_prepared_phase_recovers_renamed_source() {
 /// 删除失败时返回 Err（而非 Ok(1) 吞掉错误）。
 #[test]
 fn defect2_completed_phase_durable_cleanup_returns_err() {
-    use writer_core::storage::project_delete_transaction::{
+    use writer_core::storage::journal::project_delete::{
         recover_pending_delete_transactions, ProjectDeleteJournal, ProjectDeletePhase,
     };
 
@@ -370,7 +370,7 @@ fn defect2_completed_phase_durable_cleanup_returns_err() {
     }
 
     // ── 缺陷2修复后源码结构断言（无论是否 root 都验证）──
-    let src = read_src_file("src/storage/project_delete_transaction.rs");
+    let src = read_src_file("src/storage/journal/project_delete.rs");
     let recover_body = extract_fn_body(&src, "recover_single_journal");
     // 确认 Completed 分支不再用 `let _ =` 吞掉删除错误
     assert!(

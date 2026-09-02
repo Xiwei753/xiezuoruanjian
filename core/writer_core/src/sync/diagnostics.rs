@@ -6,7 +6,7 @@
 //! SSH 传输方式当前跳过诊断（`ssh_not_recommended`），因为 LWW 后端仅支持 HTTPS。
 
 #[cfg(feature = "github-api")]
-use crate::sync::provider::backends::SyncBackend;
+use crate::sync::provider::backend::SyncBackend;
 use crate::sync::types::BackendType;
 use crate::sync::types::SyncConfig;
 use crate::sync::types::SyncDiagnosticsResult;

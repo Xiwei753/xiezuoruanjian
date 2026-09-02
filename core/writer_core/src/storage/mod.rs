@@ -8,12 +8,11 @@ pub mod journal;
 
 pub mod git_repo_layout;
 pub mod git_runtime;
-pub mod project_delete_transaction;
 pub mod project_git;
 
 pub use transaction::*;
 pub use migration::*;
+pub use journal::*;
 pub use git_repo_layout::*;
-pub use project_delete_transaction::*;
 pub use git_runtime::*;
 pub use project_git::*;

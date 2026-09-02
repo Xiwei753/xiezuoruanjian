@@ -74,7 +74,7 @@ fn problem1_list_projects_no_longer_migrates_in_core_write_lock() {
     );
 
     // 验证 staging::prepare_staging_runs 已接入 prepare_target_git_layout
-    let staging_src = read_src_file("src/sync/staging.rs");
+    let staging_src = read_src_file("src/sync/staging/run.rs");
     let prepare_body = extract_fn_body(&staging_src, "prepare_staging_runs");
     assert!(
         prepare_body.contains("prepare_target_git_layout"),
@@ -373,7 +373,7 @@ fn problem4_delete_project_cleans_private_git_dir() {
 /// 改为只允许 `UnbornBranch` 进入 unborn 分支。
 #[test]
 fn problem5_git_backend_classifies_unborn_branch_only() {
-    let git_backend_src = read_src_file("src/sync/git_backend.rs");
+    let git_backend_src = read_src_file("src/sync/provider/git_backend.rs");
 
     // 修复后：不再用 `let is_unborn = repo.head().is_err();`
     assert!(
@@ -404,10 +404,10 @@ fn problem5_git_backend_classifies_unborn_branch_only() {
 #[test]
 fn problem_all_five_issues_fixed_on_current_branch() {
     let project_src = read_src_file("src/project.rs");
-    let staging_src = read_src_file("src/sync/staging.rs");
+    let staging_src = read_src_file("src/sync/staging/run.rs");
     let git_repo_layout_src = read_src_file("src/storage/git_repo_layout.rs");
     let project_ops_src = read_src_file("src/facade/project_ops.rs");
-    let git_backend_src = read_src_file("src/sync/git_backend.rs");
+    let git_backend_src = read_src_file("src/sync/provider/git_backend.rs");
 
     // 问题1：list_projects_with_layout_inner 不再调 ensure_project_repo_with_layout
     let list_inner_body = extract_fn_body(&project_src, "list_projects_with_layout_inner");

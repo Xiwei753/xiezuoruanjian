@@ -306,7 +306,7 @@ pub fn create_project_with_layout_factory(
     // 新作品从出生开始就直接使用最终 layout。
     if let Some(ref layout_fn) = git_layout_fn {
         let layout = layout_fn(&id);
-        crate::storage::project_git::ensure_project_repo_with_layout(&layout)?;
+        crate::storage::git_repo_layout::ensure_project_repo_with_layout(&layout)?;
     } else {
         crate::storage::project_git::ensure_project_repo(&project_dir)?;
     }
@@ -429,7 +429,7 @@ pub fn delete_project_with_layout(
     };
 
     // 创建 durable delete transaction。
-    let mut tx = crate::storage::project_delete_transaction::ProjectDeleteTransaction::new(
+    let mut tx = crate::storage::journal::project_delete::ProjectDeleteTransaction::new(
         project_id,
         &target_canon,
         &worktree_trash_root,

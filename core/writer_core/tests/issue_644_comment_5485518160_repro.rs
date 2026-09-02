@@ -838,7 +838,7 @@ fn finalize_existing_detached_head_after_preflight_returns_finalize_failed() {
 
     // 调用 commit_git_finalize
     use writer_core::sync::git_commit::commit_git_finalize;
-    use writer_core::sync::git_staging::GitSeedState;
+    use writer_core::sync::git::seed::GitSeedState;
     let result = commit_git_finalize(
         &live,
         &staging,

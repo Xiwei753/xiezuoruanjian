@@ -33,18 +33,12 @@ pub mod content_class;
 pub mod diagnostics;
 pub mod full_sync;
 pub mod full_sync_state;
-#[cfg(feature = "git-https")]
-pub mod git_backend;
-/// #644 评论 5475805198 第2节：Git metadata finalize 的原子提交边界。
+pub mod git;
+/// Git metadata finalize 的兼容 re-export；新代码请直接用 `crate::sync::git::*`。
 pub mod git_commit;
-/// #644 评论 5473789298 第1节：Git 专属 staging（用 git2，默认依赖，不需要 feature gate）。
-pub mod git_staging;
 #[cfg(feature = "github-api")]
-pub mod github_api_client;
-#[cfg(feature = "github-api")]
-pub mod github_backend;
+pub mod lww;
 pub mod provider;
-pub mod ref_transaction;
 pub mod scanner;
 pub mod service;
 pub mod staging;

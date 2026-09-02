@@ -3,7 +3,7 @@
 //! 从 mod.rs 抽出的传输相关函数：远端 tree/manifest 拉取、并行下载、串行上传/删除、
 //! trash 移动、冲突副本保存。
 
-use crate::sync::github_api_client::{
+use crate::sync::provider::github_api_client::{
     github_delete_content_serial, github_get_content, github_put_content_serial,
 };
 use crate::sync::types::SyncManifest;
@@ -220,7 +220,7 @@ pub(super) fn fetch_remote_tree(
             });
         }
     } else {
-        return Err(crate::sync::github_api_client::github_api_error(
+        return Err(crate::sync::provider::github_api_client::github_api_error(
             "get recursive tree",
             tree_status,
             tree_body,

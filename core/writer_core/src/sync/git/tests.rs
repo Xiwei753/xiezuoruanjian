@@ -1,4 +1,6 @@
 use super::*;
+use super::seed::GitSeedState;
+use std::fs;
 use tempfile::TempDir;
 
 #[test]

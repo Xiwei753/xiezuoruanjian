@@ -18,11 +18,3 @@ pub fn ensure_project_repo(project_root: &Path) -> crate::Result<()> {
     let layout = GitRepoLayout::new(project_root.to_path_buf());
     crate::storage::git_repo_layout::ensure_project_repo_with_layout(&layout)
 }
-
-/// 确保仓库使用指定的 `layout` 初始化（支持外部 git_dir）。
-///
-/// 当 `git_dir` 与 `worktree_root/.git` 不同时，使用 libgit2 的独立 workdir
-/// 能力初始化/打开仓库。
-pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<()> {
-    crate::storage::git_repo_layout::ensure_project_repo_with_layout(layout)
-}

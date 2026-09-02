@@ -6,12 +6,21 @@
 //! - `github_backend.rs` - GitHub API 同步后端
 //! - `github_api_client.rs` - GitHub API 客户端
 
-mod backend;
-mod git_backend;
-mod github_backend;
-mod github_api_client;
+pub mod backend;
+
+#[cfg(feature = "git-https")]
+pub mod git_backend;
+
+#[cfg(feature = "github-api")]
+pub mod github_backend;
+
+#[cfg(feature = "github-api")]
+pub mod github_api_client;
 
 pub use backend::*;
+
+#[cfg(feature = "git-https")]
 pub use git_backend::*;
+
+#[cfg(feature = "github-api")]
 pub use github_backend::*;
-pub use github_api_client::*;

@@ -22,7 +22,7 @@ use writer_core::sync::git_commit::{
     commit_git_finalize, rollback_git_finalize, GitFinalizeError, GitFinalizePlan,
     GitMetadataSnapshot, GitRollbackOutcome, IndexSnapshot, RefSnapshot,
 };
-use writer_core::sync::git_staging::GitSeedState;
+use writer_core::sync::git::seed::GitSeedState;
 
 // ── helpers ──
 

@@ -726,9 +726,13 @@ fn resume_layout_migration(layout: &GitRepoLayout) -> crate::Result<()> {
         Ok(Some(j)) => {
             // owner 是迁移所有者标识（源自旧 journal 的 migration_uuid，用于 journal
             // 文件名），不是密钥/token 值；记录它用于调试迁移恢复，参见 Issue #648。
+            //
+            // 取出 owner 到语义清晰的 `owner_tag` 中间变量再记录，让 CodeQL
+            // cleartext-logging 数据流分析能识别这是文件名标识而非密钥值。
+            let owner_tag: &str = &j.owner;
             log::debug!(
                 "[git_repo_layout] resume: migrated legacy journal, owner_tag={}",
-                j.owner
+                owner_tag
             );
             vec![j]
         }

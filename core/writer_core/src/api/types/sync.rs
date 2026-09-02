@@ -592,16 +592,6 @@ impl From<crate::storage::migration::LegacyMigrationOutcome> for LegacyMigration
     }
 }
 
-use serde::{Deserialize, Serialize};
-
-/// 详见 [`crate::storage::migration::LegacyProfileMetadata`]。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LegacyProfileMetadata {
-    pub source: String,
-    pub project_id: Option<String>,
-    pub active_generation: Option<u32>,
-}
-
 /// 旧 profile 的精确 generation metadata DTO（Issue #630 评论第 5 点 Part C）。
 ///
 /// 详见 [`crate::storage::migration::LegacyProfileMetadata`]。
