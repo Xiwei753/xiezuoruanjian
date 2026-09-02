@@ -24,7 +24,8 @@
 //! - 团队协作时的数据共享
 //! - 版本控制与历史追踪
 
-pub mod backends;
+#![allow(clippy::module_inception)]
+
 pub mod config_store;
 pub mod conflict;
 /// #644 评论 5473789298 第3节：纯内容分类/三方比较（始终可用，不依赖 feature gate）。
@@ -42,10 +43,7 @@ pub mod git_staging;
 pub mod github_api_client;
 #[cfg(feature = "github-api")]
 pub mod github_backend;
-pub mod legacy_migration;
-#[cfg(feature = "github-api")]
-pub mod lww;
-/// #644 评论 5489192105：统一的 ref transaction（持久 ownership + libgit2 refdb）。
+pub mod provider;
 pub mod ref_transaction;
 pub mod scanner;
 pub mod service;
@@ -55,11 +53,7 @@ pub mod types;
 pub mod url;
 pub mod utils;
 
-pub use backends::*;
-#[cfg(feature = "git-https")]
-pub use git_backend::*;
-#[cfg(feature = "github-api")]
-pub use github_backend::*;
+pub use provider::*;
 pub use service::*;
 pub use types::*;
 pub use url::*;

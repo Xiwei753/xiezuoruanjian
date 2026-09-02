@@ -9,7 +9,7 @@ use super::types::*;
 impl WriterCoreApi {
     /// 旧→新同步 profile 一次性迁移（Issue #630 评论第 4 点 / D）。
     ///
-    /// 详见 `crate::sync::legacy_migration`。失败时返回 `WriterError`；
+    /// 详见 `crate::storage::migration`。失败时返回 `WriterError`；
     /// 冲突时返回 `NeedsReconfigure`（非 Err），由 UI 引导用户重选全局仓库。
     pub fn migrate_legacy_sync_profile(&self) -> ApiResult<LegacyMigrationOutcomeDto> {
         self.core_write()
@@ -20,7 +20,7 @@ impl WriterCoreApi {
 
     /// 旧→新同步 profile 一次性迁移，接受精确 generation metadata（Issue #630 评论第 5 点 Part C）。
     ///
-    /// 详见 `crate::sync::legacy_migration::LegacySyncProfileMigrator::migrate_with_metadata`。
+    /// 详见 `crate::storage::migration::LegacySyncProfileMigrator::migrate_with_metadata`。
     /// 当 metadata 中某 source 有 `active_generation = Some(n)` 时，精确读取
     /// `sync_token_<base>_g{n}`；当 `active_generation = None` 时回退 base key / 文件。
     pub fn migrate_legacy_sync_profile_with_metadata(

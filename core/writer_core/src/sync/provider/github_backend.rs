@@ -1,51 +1,43 @@
 //! GitHub REST API 同步后端 — 基于 LWW（Last Writer Wins）的文件级同步。
 //!
-//! 与 `GitSyncBackend`（基于 Git 协议的三路合并）不同，此后端使用 GitHub Contents API
-//! 逐文件上传/下载，通过 manifest 文件记录每条路径的最新修改时间和设备，
-//! 冲突时以最新修改为准（LWW）。
-//!
-//! ## 依赖方向
-//!
-//! 本后端通过 `writer_platform_api::SyncTransport` trait 消费 HTTP 能力。
-//! 平台端注入具体的 HTTP 客户端实现（如基于 reqwest 的实现），
-//! Core 不直接依赖 reqwest 类型。
-//!
-//! ```text
-//! 平台适配层 → 注入 SyncTransport → GitHubApiBackend → writer_core 同步引擎
-//! ```
-//!
-//! ## 同步流程
-//!
-//! 1. `diagnose`：探测网络、认证、仓库和分支可用性
-//! 2. `sync`/`pull`/`push`：委托 `SyncService::perform_lww_sync` 执行 LWW 同步
-//!
-//! ## 错误边界
-//!
-//! `sync` 方法使用 `catch_unwind` 捕获 panic 并转为 `SyncResult::Error`，
-//! 防止同步过程中的意外 panic 传播到平台端。这是仓库中少数使用 `AssertUnwindSafe`
-//! 的位置——SAFETY 说明见方法内注释。
+//! 本模块仅在 `github-api` feature 启用时可用。
 
-use crate::sync::backends::SyncBackend;
+#[cfg(feature = "github-api")]
+use crate::sync::provider::backend::SyncBackend;
+#[cfg(feature = "github-api")]
 use crate::sync::service::SyncService;
+#[cfg(feature = "github-api")]
 use crate::sync::types::FirstSyncMode;
+#[cfg(feature = "github-api")]
 use crate::sync::types::SyncConfig;
+#[cfg(feature = "github-api")]
 use crate::sync::types::SyncDiagnosticsResult;
+#[cfg(feature = "github-api")]
 use crate::sync::types::SyncResult;
+#[cfg(feature = "github-api")]
 use crate::sync::types::SyncSecrets;
+#[cfg(feature = "github-api")]
 use crate::sync::types::SyncStatus;
+#[cfg(feature = "github-api")]
 use crate::sync::url::mask_token_in_url;
+#[cfg(feature = "github-api")]
 use crate::sync::url::sanitize_remote_url;
+#[cfg(feature = "github-api")]
 use std::path::Path;
+#[cfg(feature = "github-api")]
 use writer_platform_api::{HttpRequest, HttpResponse, SyncTransport, TransportError};
 
-/// GitHub REST API 同步后端。
-///
-/// 通过 `SyncTransport` trait 消费 HTTP 能力，不直接依赖 reqwest。
-/// 平台端通过 `with_transport` 注入具体实现。
+#[cfg(feature = "github-api")]
 pub struct GitHubApiBackend {
     transport: Option<Box<dyn SyncTransport>>,
 }
 
+#[cfg(not(feature = "github-api"))]
+pub struct GitHubApiBackend {
+    _marker: std::marker::PhantomData<()>,
+}
+
+#[cfg(feature = "github-api")]
 impl GitHubApiBackend {
     pub fn new() -> Self {
         Self { transport: None }
@@ -114,12 +106,21 @@ impl GitHubApiBackend {
     }
 }
 
+#[cfg(feature = "github-api")]
 impl Default for GitHubApiBackend {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(not(feature = "github-api"))]
+impl Default for GitHubApiBackend {
+    fn default() -> Self {
+        Self { _marker: std::marker::PhantomData }
+    }
+}
+
+#[cfg(feature = "github-api")]
 impl SyncBackend for GitHubApiBackend {
     // TODO(#597): 既有代码可读性技术债，待后续重构拆分
     #[allow(

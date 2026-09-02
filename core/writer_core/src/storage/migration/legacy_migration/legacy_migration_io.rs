@@ -51,7 +51,13 @@ pub(crate) fn read_token_from_secrets_file(path: &Path) -> Option<String> {
 /// 删除安全存储 key，失败时记日志（不阻塞迁移成功）。
 pub(crate) fn delete_secret_or_warn(storage: &dyn writer_platform_api::SecureStorage, key: &str) {
     if let Err(e) = storage.delete_secret(key) {
-        log::warn!("legacy migration: delete_secret({}) failed: {}", key, e);
+        // key 是安全存储的键名（如 "sync_token_app"），不是密钥值本身；
+        // 记录键名用于调试迁移清理失败，参见 Issue #648。
+        log::warn!(
+            "legacy migration: delete_secret storage_key={} failed: {}",
+            key,
+            e
+        );
     }
 }
 

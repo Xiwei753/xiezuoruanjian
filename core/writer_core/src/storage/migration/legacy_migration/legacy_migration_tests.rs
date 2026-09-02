@@ -137,6 +137,28 @@ mod tests {
         }
     }
 
+    /// 返回 `LegacyMigrationOutcome` 的变体描述，**不打印 secrets 值**。
+    ///
+    /// 测试断言失败时用于 panic 诊断：只暴露变体名与非敏感的 config/reason，
+    /// `SyncSecrets.token` / `ssh_private_key` 用长度/存在性替代，
+    /// 避免 cleartext-logging（Issue #648）。
+    fn outcome_kind_redacted(outcome: &LegacyMigrationOutcome) -> String {
+        match outcome {
+            LegacyMigrationOutcome::NotNeeded => "NotNeeded".to_string(),
+            LegacyMigrationOutcome::Migrated { config, secrets } => format!(
+                "Migrated {{ remote_url: {}, branch: {}, token_len: {}, has_ssh_key: {} }}",
+                config.remote_url,
+                config.branch,
+                secrets.token.as_deref().map(|t| t.len()).unwrap_or(0),
+                secrets.ssh_private_key.is_some(),
+            ),
+            LegacyMigrationOutcome::NeedsReconfigure { reason } => {
+                format!("NeedsReconfigure {{ reason: {} }}", reason)
+            }
+            LegacyMigrationOutcome::NoLegacyConfig => "NoLegacyConfig".to_string(),
+        }
+    }
+
     /// 1. 旧 app token（base key）：新全局不存在；旧 `sync_token_app` 有值 + app 配置 → 迁移成功。
     #[test]
     fn test_legacy_app_token_migration() {
@@ -156,7 +178,7 @@ mod tests {
                 assert_eq!(c.remote_url, "https://github.com/test/repo.git");
                 assert_eq!(s.token.as_deref(), Some("legacy_app_token"));
             }
-            other => panic!("expected Migrated, got {:?}", other),
+            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
 
         assert!(env.storage.contains_key("sync_token_global"));
@@ -182,7 +204,7 @@ mod tests {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.token.as_deref(), Some("gen3_token"));
             }
-            other => panic!("expected Migrated, got {:?}", other),
+            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
         assert!(env.storage.contains_key("sync_token_global"));
         assert!(!env.storage.contains_key("sync_token_app_g3"));
@@ -223,7 +245,7 @@ mod tests {
                 assert_eq!(c.remote_url, "https://github.com/test/proj1.git");
                 assert_eq!(s.token.as_deref(), Some("proj1_token"));
             }
-            other => panic!("expected Migrated, got {:?}", other),
+            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
         assert!(env.storage.contains_key("sync_token_global"));
         assert!(!env.storage.contains_key("sync_token_proj1"));
@@ -260,7 +282,7 @@ mod tests {
                 assert_eq!(c.remote_url, "https://github.com/test/shared.git");
                 assert_eq!(s.token.as_deref(), Some("shared_token"));
             }
-            other => panic!("expected Migrated, got {:?}", other),
+            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
         assert!(env.storage.contains_key("sync_token_global"));
         assert!(!env.storage.contains_key("sync_token_proj1"));
@@ -333,7 +355,10 @@ mod tests {
                 assert!(reason.contains("project:proj1"));
                 assert!(reason.contains("project:proj2"));
             }
-            other => panic!("expected NeedsReconfigure, got {:?}", other),
+            other => panic!(
+                "expected NeedsReconfigure, got {}",
+                outcome_kind_redacted(&other)
+            ),
         }
         assert!(env.storage.contains_key("sync_token_proj1"));
         assert!(env.storage.contains_key("sync_token_proj2"));
@@ -470,7 +495,7 @@ mod tests {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.token.as_deref(), Some("file_token"));
             }
-            other => panic!("expected Migrated, got {:?}", other),
+            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
         assert!(!secrets_path.exists());
     }
@@ -501,7 +526,10 @@ mod tests {
                 assert_eq!(c.remote_url, "https://github.com/app/repo.git");
                 assert_eq!(s.token.as_deref(), Some("app_token"));
             }
-            other => panic!("expected Migrated (app priority), got {:?}", other),
+            other => panic!(
+                "expected Migrated (app priority), got {}",
+                outcome_kind_redacted(&other)
+            ),
         }
         assert!(!env.storage.contains_key("sync_token_app"));
         assert!(env.storage.contains_key("sync_token_proj1"));
@@ -533,7 +561,10 @@ mod tests {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.token.as_deref(), Some("app_gen7_token"));
             }
-            other => panic!("expected Migrated (app priority), got {:?}", other),
+            other => panic!(
+                "expected Migrated (app priority), got {}",
+                outcome_kind_redacted(&other)
+            ),
         }
         assert!(!env.storage.contains_key("sync_token_app_g7"));
         assert!(env.storage.contains_key("sync_token_proj1"));
@@ -558,7 +589,7 @@ mod tests {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.token.as_deref(), Some("gen15_token"));
             }
-            other => panic!("expected Migrated, got {:?}", other),
+            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
         assert!(env.storage.contains_key("sync_token_global"));
         assert!(!env.storage.contains_key("sync_token_app_g15"));
@@ -584,7 +615,7 @@ mod tests {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.token.as_deref(), Some("gen20_token"));
             }
-            other => panic!("expected Migrated, got {:?}", other),
+            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
         assert!(env.storage.contains_key("sync_token_global"));
         assert!(!env.storage.contains_key("sync_token_proj1_g20"));
@@ -606,7 +637,7 @@ mod tests {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.token.as_deref(), Some("proj1_token"));
             }
-            other => panic!("expected Migrated, got {:?}", other),
+            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
         assert!(env.storage.contains_key("sync_token_global"));
         assert!(!env.storage.contains_key("sync_token_proj1"));
@@ -634,7 +665,7 @@ mod tests {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.token.as_deref(), Some("base_token"));
             }
-            other => panic!("expected Migrated, got {:?}", other),
+            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
         assert!(!env.storage.contains_key("sync_token_app"));
         assert!(env.storage.contains_key("sync_token_app_g5"));

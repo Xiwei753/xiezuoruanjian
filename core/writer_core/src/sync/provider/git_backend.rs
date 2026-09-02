@@ -1,14 +1,28 @@
+//! Git 同步后端 — libgit2 实现。
+//!
+//! 本模块仅在 `git-https` feature 启用时可用。
+
+#[cfg(feature = "git-https")]
 use crate::sync::conflict::build_conflict_summary;
+#[cfg(feature = "git-https")]
 use crate::sync::conflict::collect_index_conflicts;
 use crate::sync::service::SyncService;
 use crate::sync::types::SyncConflictSummary;
 use std::path::Path;
 
+#[cfg(feature = "git-https")]
 pub enum GitAuth {
     HttpsToken { username: String, token: String },
     SshDeployKey,
 }
 
+#[cfg(not(feature = "git-https"))]
+pub enum GitAuth {
+    HttpsToken { username: String, token: String },
+    SshDeployKey,
+}
+
+#[cfg(feature = "git-https")]
 pub trait GitBackend {
     fn init_repo(&self, local_repo_path: &Path) -> crate::Result<()>;
     fn ensure_remote(&self, local_repo_path: &Path, remote_url: &str) -> crate::Result<()>;
@@ -46,11 +60,57 @@ pub trait GitBackend {
         &self,
         local_repo_path: &Path,
         scope: crate::sync::types::SyncScope,
-    ) -> crate::Result<Vec<String>>; // Returns changed files
+    ) -> crate::Result<Vec<String>>;
 }
 
+#[cfg(not(feature = "git-https"))]
+pub trait GitBackend {
+    fn init_repo(&self, local_repo_path: &Path) -> crate::Result<()>;
+    fn ensure_remote(&self, local_repo_path: &Path, remote_url: &str) -> crate::Result<()>;
+    fn has_repo(&self, local_repo_path: &Path) -> bool;
+    fn is_worktree_empty_or_git_only(&self, local_repo_path: &Path) -> crate::Result<bool>;
+    fn clone_repo(
+        &self,
+        remote_url: &str,
+        local_repo_path: &Path,
+        auth: Option<&GitAuth>,
+    ) -> crate::Result<()>;
+    fn open_repo(&self, local_repo_path: &Path) -> crate::Result<()>;
+    fn pull(
+        &self,
+        local_repo_path: &Path,
+        branch: &str,
+        auth: Option<&GitAuth>,
+        scope: crate::sync::types::SyncScope,
+    ) -> crate::Result<()>;
+    fn stage_paths(
+        &self,
+        local_repo_path: &Path,
+        paths: &[&str],
+        scope: crate::sync::types::SyncScope,
+    ) -> crate::Result<()>;
+    fn commit(&self, local_repo_path: &Path, message: &str) -> crate::Result<Option<String>>;
+    fn push(
+        &self,
+        local_repo_path: &Path,
+        branch: &str,
+        auth: Option<&GitAuth>,
+    ) -> crate::Result<()>;
+    fn current_head(&self, local_repo_path: &Path) -> crate::Result<Option<String>>;
+    fn status(
+        &self,
+        local_repo_path: &Path,
+        scope: crate::sync::types::SyncScope,
+    ) -> crate::Result<Vec<String>>;
+}
+
+#[cfg(feature = "git-https")]
 pub struct Git2Backend;
 
+#[cfg(not(feature = "git-https"))]
+pub struct Git2Backend;
+
+#[cfg(feature = "git-https")]
 impl Git2Backend {
     fn ensure_runtime() -> crate::Result<()> {
         crate::storage::git_runtime::ensure_initialized()
@@ -76,6 +136,7 @@ impl Git2Backend {
     }
 }
 
+#[cfg(feature = "git-https")]
 impl GitBackend for Git2Backend {
     fn init_repo(&self, local_repo_path: &Path) -> crate::Result<()> {
         Self::ensure_runtime()?;

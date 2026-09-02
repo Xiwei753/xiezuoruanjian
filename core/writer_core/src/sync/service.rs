@@ -15,9 +15,9 @@
 use crate::sync::conflict::collect_git_status_summary;
 
 #[cfg(feature = "git-https")]
-use crate::sync::git_backend::GitAuth;
+use crate::sync::provider::git_backend::GitAuth;
 #[cfg(feature = "git-https")]
-use crate::sync::git_backend::GitBackend;
+use crate::sync::provider::git_backend::GitBackend;
 #[cfg(feature = "github-api")]
 use crate::sync::lww;
 use crate::sync::scanner;

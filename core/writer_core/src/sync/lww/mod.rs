@@ -146,7 +146,7 @@ pub(crate) fn perform_lww_sync(
         }
     }
 
-    let api_base = crate::sync::github_backend::GitHubApiBackend::api_base_url(&config.remote_url);
+    let api_base = crate::sync::provider::github_backend::GitHubApiBackend::api_base_url(&config.remote_url);
 
     let max_retries = 2;
     let mut attempt = 0;

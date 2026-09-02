@@ -2,15 +2,15 @@
 #[allow(clippy::module_inception)]
 mod tests {
     #[cfg(feature = "github-api")]
-    use crate::sync::backends::SyncBackend;
+    use crate::sync::provider::backends::SyncBackend;
     #[cfg(feature = "git-https")]
-    use crate::sync::git_backend::Git2Backend;
+    use crate::sync::provider::git_backend::Git2Backend;
     #[cfg(feature = "git-https")]
-    use crate::sync::git_backend::GitAuth;
+    use crate::sync::provider::git_backend::GitAuth;
     #[cfg(feature = "git-https")]
-    use crate::sync::git_backend::GitBackend;
+    use crate::sync::provider::git_backend::GitBackend;
     #[cfg(feature = "github-api")]
-    use crate::sync::github_backend::GitHubApiBackend;
+    use crate::sync::provider::github_backend::GitHubApiBackend;
     use crate::sync::service::SyncService;
     use crate::sync::types::BackendType;
     #[cfg(feature = "git-https")]

@@ -27,7 +27,7 @@
 //! 未启用 feature 时对应后端返回不可用错误，编译通过且运行时行为明确。
 
 #[cfg(feature = "github-api")]
-use crate::sync::github_backend::GitHubApiBackend;
+use crate::sync::provider::github_backend::GitHubApiBackend;
 #[cfg(feature = "git-https")]
 use crate::sync::service::SyncService;
 use crate::sync::types::BackendType;
@@ -153,7 +153,7 @@ impl SyncBackend for GitSyncBackend {
         target: &crate::sync::types::SyncTarget,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
-        use crate::sync::git_backend::Git2Backend;
+        use crate::sync::provider::git_backend::Git2Backend;
         let backend = Git2Backend;
         SyncService::perform_sync(sync_root, config, secrets, target.scope, &backend)
     }
@@ -165,7 +165,7 @@ impl SyncBackend for GitSyncBackend {
         target: &crate::sync::types::SyncTarget,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
-        use crate::sync::git_backend::Git2Backend;
+        use crate::sync::provider::git_backend::Git2Backend;
         let backend = Git2Backend;
         SyncService::perform_sync(sync_root, config, secrets, target.scope, &backend)
     }
@@ -177,7 +177,7 @@ impl SyncBackend for GitSyncBackend {
         target: &crate::sync::types::SyncTarget,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
-        use crate::sync::git_backend::Git2Backend;
+        use crate::sync::provider::git_backend::Git2Backend;
         let backend = Git2Backend;
         SyncService::perform_sync(sync_root, config, secrets, target.scope, &backend)
     }

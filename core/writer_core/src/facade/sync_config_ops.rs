@@ -14,8 +14,8 @@ impl super::WriterCore {
     /// 旧凭据；失败/冲突时不删旧凭据。
     pub fn migrate_legacy_sync_profile(
         &self,
-    ) -> crate::error::Result<crate::sync::legacy_migration::LegacyMigrationOutcome> {
-        let migrator = crate::sync::legacy_migration::LegacySyncProfileMigrator::new(
+    ) -> crate::error::Result<crate::storage::migration::LegacyMigrationOutcome> {
+        let migrator = crate::storage::migration::LegacySyncProfileMigrator::new(
             &self.app_data_root,
             &self.projects_root,
             self.secure_storage.as_deref(),
@@ -23,16 +23,12 @@ impl super::WriterCore {
         migrator.migrate()
     }
 
-    /// 旧→新同步 profile 一次性迁移，接受精确 generation metadata（Issue #630 评论第 5 点 Part C）。
-    ///
-    /// 详见 `crate::sync::legacy_migration::LegacySyncProfileMigrator::migrate_with_metadata`。
-    /// metadata 中每个项描述一个旧 profile 的 source 和 committed generation，
-    /// 使 Core 精确读取 `sync_token_<base>_g<N>` 而不猜测枚举上限。
+    /// 详见 `crate::storage::migration::LegacySyncProfileMigrator::migrate_with_metadata`。
     pub fn migrate_legacy_sync_profile_with_metadata(
         &self,
-        metadata: &[crate::sync::legacy_migration::LegacyProfileMetadata],
-    ) -> crate::error::Result<crate::sync::legacy_migration::LegacyMigrationOutcome> {
-        let migrator = crate::sync::legacy_migration::LegacySyncProfileMigrator::new(
+        metadata: &[crate::storage::migration::LegacyProfileMetadata],
+    ) -> crate::error::Result<crate::storage::migration::LegacyMigrationOutcome> {
+        let migrator = crate::storage::migration::LegacySyncProfileMigrator::new(
             &self.app_data_root,
             &self.projects_root,
             self.secure_storage.as_deref(),

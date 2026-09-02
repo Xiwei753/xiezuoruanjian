@@ -410,13 +410,29 @@ def check_c_header_vs_rust_ffi(harmony_root: str, core_root: str) -> List[Tuple[
             ffi_dir = writer_core_ffi
     rust_funcs = set()
     if os.path.isdir(ffi_dir):
+        # 提取 #[no_mangle] ... pub unsafe extern "C" fn writer_core_XXX。
+        # 分步匹配以避免嵌套量词导致的指数回溯 (CodeQL py/redos)：
+        # 旧的单正则 `#[no_mangle]\s*(?:(?:#\[[^\]]*\]|//[^\n]*\n\s*)\s*)*pub\s+...`
+        # 中 `(?:(?:...)\s*)*` 是嵌套量词，在 `#[no_mangle]//\n` 后跟多个 ` //\n`
+        # 重复时可能触发指数回溯。
+        # 第一步定位 #[no_mangle]；第二步顺序跳过空白/属性宏 #[...]/行注释 //...\n；
+        # 第三步匹配 pub unsafe extern "C" fn writer_core_XXX。三个正则均无嵌套量词。
+        no_mangle_re = re.compile(r"#\[no_mangle\]")
+        skip_re = re.compile(r"\s+|#\[[^\]]*\]|//[^\n]*\n")
+        export_re = re.compile(r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+(writer_core_\w+)')
         for rs_file in Path(ffi_dir).rglob("*.rs"):
             rs_content = rs_file.read_text(encoding="utf-8", errors="replace")
-            for m in re.finditer(
-                r"#\[no_mangle\]\s*(?:(?:#\[[^\]]*\]|//[^\n]*\n\s*)\s*)*pub\s+unsafe\s+extern\s+\"C\"\s+fn\s+(writer_core_\w+)",
-                rs_content,
-            ):
-                rust_funcs.add(m.group(1))
+            for nm in no_mangle_re.finditer(rs_content):
+                pos = nm.end()
+                # 顺序跳过连续的空白/属性宏/行注释（每个子模式独立，无嵌套量词）
+                while True:
+                    sm = skip_re.match(rs_content, pos)
+                    if sm is None:
+                        break
+                    pos = sm.end()
+                em = export_re.match(rs_content, pos)
+                if em is not None:
+                    rust_funcs.add(em.group(1))
     else:
         results.append((False, f"Rust ffi 目录不存在: {ffi_dir}"))
         return results

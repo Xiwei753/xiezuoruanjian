@@ -557,16 +557,16 @@ pub struct LegacyMigrationOutcomeDto {
     pub reason: Option<String>,
 }
 
-impl From<crate::sync::legacy_migration::LegacyMigrationOutcome> for LegacyMigrationOutcomeDto {
-    fn from(o: crate::sync::legacy_migration::LegacyMigrationOutcome) -> Self {
+impl From<crate::storage::migration::LegacyMigrationOutcome> for LegacyMigrationOutcomeDto {
+    fn from(o: crate::storage::migration::LegacyMigrationOutcome) -> Self {
         match o {
-            crate::sync::legacy_migration::LegacyMigrationOutcome::NotNeeded => Self {
+            crate::storage::migration::LegacyMigrationOutcome::NotNeeded => Self {
                 outcome_kind: "not_needed".to_string(),
                 config: None,
                 secrets: None,
                 reason: None,
             },
-            crate::sync::legacy_migration::LegacyMigrationOutcome::Migrated { config, secrets } => {
+            crate::storage::migration::LegacyMigrationOutcome::Migrated { config, secrets } => {
                 Self {
                     outcome_kind: "migrated".to_string(),
                     config: Some(config.into()),
@@ -574,7 +574,7 @@ impl From<crate::sync::legacy_migration::LegacyMigrationOutcome> for LegacyMigra
                     reason: None,
                 }
             }
-            crate::sync::legacy_migration::LegacyMigrationOutcome::NeedsReconfigure { reason } => {
+            crate::storage::migration::LegacyMigrationOutcome::NeedsReconfigure { reason } => {
                 Self {
                     outcome_kind: "needs_reconfigure".to_string(),
                     config: None,
@@ -582,7 +582,7 @@ impl From<crate::sync::legacy_migration::LegacyMigrationOutcome> for LegacyMigra
                     reason: Some(reason),
                 }
             }
-            crate::sync::legacy_migration::LegacyMigrationOutcome::NoLegacyConfig => Self {
+            crate::storage::migration::LegacyMigrationOutcome::NoLegacyConfig => Self {
                 outcome_kind: "no_legacy_config".to_string(),
                 config: None,
                 secrets: None,
@@ -592,9 +592,19 @@ impl From<crate::sync::legacy_migration::LegacyMigrationOutcome> for LegacyMigra
     }
 }
 
+use serde::{Deserialize, Serialize};
+
+/// 详见 [`crate::storage::migration::LegacyProfileMetadata`]。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LegacyProfileMetadata {
+    pub source: String,
+    pub project_id: Option<String>,
+    pub active_generation: Option<u32>,
+}
+
 /// 旧 profile 的精确 generation metadata DTO（Issue #630 评论第 5 点 Part C）。
 ///
-/// 详见 [`crate::sync::legacy_migration::LegacyProfileMetadata`]。
+/// 详见 [`crate::storage::migration::LegacyProfileMetadata`]。
 /// 调用方（平台层 DataStore）通过此结构精确告诉 Core 应该读取哪个
 /// `sync_token_<base>_g<N>` key，避免 Core 猜测枚举上限。
 ///
@@ -609,7 +619,7 @@ pub struct LegacyProfileMetadataDto {
     pub active_generation: Option<u32>,
 }
 
-impl From<LegacyProfileMetadataDto> for crate::sync::legacy_migration::LegacyProfileMetadata {
+impl From<LegacyProfileMetadataDto> for crate::storage::migration::LegacyProfileMetadata {
     fn from(d: LegacyProfileMetadataDto) -> Self {
         Self {
             source: d.source,
@@ -619,8 +629,8 @@ impl From<LegacyProfileMetadataDto> for crate::sync::legacy_migration::LegacyPro
     }
 }
 
-impl From<crate::sync::legacy_migration::LegacyProfileMetadata> for LegacyProfileMetadataDto {
-    fn from(m: crate::sync::legacy_migration::LegacyProfileMetadata) -> Self {
+impl From<crate::storage::migration::LegacyProfileMetadata> for LegacyProfileMetadataDto {
+    fn from(m: crate::storage::migration::LegacyProfileMetadata) -> Self {
         Self {
             source: m.source,
             project_id: m.project_id,
