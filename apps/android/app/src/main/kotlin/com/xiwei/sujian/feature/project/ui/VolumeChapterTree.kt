@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -231,7 +232,11 @@ internal fun ChapterTreeContent(
                 )
             }
 
-            if (flatItems.isEmpty() && !uiState.isLoading) {
+            if (uiState.isLoading && flatItems.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            } else if (flatItems.isEmpty()) {
                 // #617 评论九：首次加载失败且没有卷时显示 loadError，不要落进空态 —
                 // 把"读取失败"伪装成"暂无卷"会让用户误以为作品真的是空的。
                 val loadError = uiState.loadError

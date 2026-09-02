@@ -1,9 +1,21 @@
 use crate::error::Result;
+use crate::storage::project_delete_transaction;
 use crate::trash;
 
 impl super::WriterCore {
     pub fn move_chapter_to_trash(&self, chapter_id: &str) -> Result<()> {
         trash::move_chapter_to_trash(&self.projects_root, chapter_id, &self.app_data_root)
+    }
+
+    /// 恢复所有待处理的删除事务。
+    ///
+    /// 启动时调用，遍历 app_meta/delete-journals/ 下所有 journal，
+    /// 根据 phase 和 from/trash 路径实际存在状态决定下一步。
+    /// 已经完成两边后再清 journal。
+    ///
+    /// 返回恢复的事务数量。
+    pub fn recover_pending_delete_transactions(&self) -> Result<usize> {
+        project_delete_transaction::recover_pending_delete_transactions(&self.app_data_root)
     }
 
     pub fn ai_available(&self) -> bool {

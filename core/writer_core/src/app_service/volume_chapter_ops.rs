@@ -1,10 +1,19 @@
 use crate::api::{
-    ChapterContentDto, ChapterMetaDto, ChapterSaveReceiptDto, VolumeDto, WriterError,
+    ChapterContentDto, ChapterMetaDto, ChapterSaveReceiptDto, ProjectWorkspaceSnapshotDto,
+    VolumeDto, WriterError,
 };
 
 impl super::WriterAppService {
     pub fn list_volumes(&self, project_id: String) -> Result<Vec<VolumeDto>, WriterError> {
         self.api.list_volumes(&project_id)
+    }
+
+    /// #644 评论 5467821839 第7节：一次返回作品的全部卷 + 章节 + 统计快照。
+    pub fn get_project_workspace_snapshot(
+        &self,
+        project_id: String,
+    ) -> Result<ProjectWorkspaceSnapshotDto, WriterError> {
+        self.api.get_project_workspace_snapshot(&project_id)
     }
 
     pub fn create_volume(

@@ -2,7 +2,6 @@ package com.xiwei.sujian.core.interop.project
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
-import com.xiwei.sujian.core.interop.common.toModel
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.ChapterOpenResult
 import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt

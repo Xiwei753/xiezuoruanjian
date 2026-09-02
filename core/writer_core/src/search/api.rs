@@ -1106,7 +1106,7 @@ mod tests {
             updated_at: 0,
         };
         let rev1 = api
-            .core()
+            .core_write()
             .get_starmap_store_package_revision(&meta.starmap_id);
         api.import_or_replace_starmap_package(&meta.starmap_id, &new_graph, rev1)
             .unwrap();
@@ -1496,7 +1496,7 @@ mod tests {
             updated_at: 0,
         };
         let rev1 = api
-            .core()
+            .core_write()
             .get_starmap_store_package_revision(&meta.starmap_id);
         api.import_or_replace_starmap_package(&meta.starmap_id, &new_graph, rev1)
             .unwrap();
@@ -1630,7 +1630,7 @@ mod tests {
             "node project_id must be None after project deletion"
         );
 
-        let meta_after = api.core().get_starmap(&meta.starmap_id).unwrap();
+        let meta_after = api.core_write().get_starmap(&meta.starmap_id).unwrap();
         assert!(
             meta_after.project_id.is_none(),
             "starmap meta project_id must be cleared on disk after project deletion"
@@ -2001,7 +2001,7 @@ mod tests {
             Some(project_a.id.as_str())
         );
 
-        api.core()
+        api.core_write()
             .unbind_starmap_from_project(&meta.starmap_id)
             .unwrap();
 
@@ -2237,7 +2237,7 @@ mod tests {
             updated_at: 0,
         };
         let rev1 = api
-            .core()
+            .core_write()
             .get_starmap_store_package_revision(&meta.starmap_id);
         api.import_or_replace_starmap_package(&meta.starmap_id, &new_graph, rev1)
             .unwrap();

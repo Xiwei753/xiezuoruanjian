@@ -8,6 +8,7 @@ package com.xiwei.sujian.feature.editor.session
 // ! #624 评论17 问题4：resetPersistentSession/commitResetSnapshot 带 SessionResetPrecondition CAS。
 
 import android.util.Log
+import com.xiwei.sujian.feature.editor.projection.SessionCloseReason
 import com.xiwei.sujian.feature.editor.window.EditingState
 
 fun EditorSessionCoordinator.prepareTargetSessionForCommit(

@@ -29,19 +29,24 @@
 
 impl super::WriterCore {
     /// 全量同步诊断 — 只测一次仓库、分支、token。
+    ///
+    /// `secrets` 由调用方传入（API 层已 snapshot override），不再内部加载。
     pub fn perform_full_sync_diagnostics(
         &self,
         config: &crate::sync::SyncConfig,
+        secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<crate::sync::types::FullSyncDiagnosticsResult> {
-        let secrets = self.load_sync_secrets().unwrap_or_default();
-        let diagnostics = self.run_sync_diagnostics(config, &secrets)?;
+        let diagnostics = self.run_sync_diagnostics(config, secrets)?;
         Ok(crate::sync::types::FullSyncDiagnosticsResult { diagnostics })
     }
 
     /// 全量同步 dry-run — 枚举 App target + 所有 Project target，构建每个 target 的计划。
+    ///
+    /// `secrets` 由调用方传入（API 层已 snapshot override），不再内部加载。
     pub fn perform_full_sync_dry_run(
         &self,
         config: &crate::sync::SyncConfig,
+        _secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<crate::sync::types::FullSyncDryRunResult> {
         use crate::sync::types::{FullSyncDryRunResult, SyncTarget, TargetSyncPlan};
 
@@ -156,6 +161,220 @@ impl super::WriterCore {
         };
 
         self.perform_full_sync_with_backend(backend.as_ref(), config, &secrets, force_sync)
+    }
+
+    /// #644 评论 5467821839 第7节：三段式全量同步 — Prepare 阶段（短写锁内调用）。
+    ///
+    /// 写 `Syncing` 状态、枚举 targets、算出每个 target 的 `local_root`，
+    /// 产出 [`crate::sync::full_sync::FullSyncPlan`]（owned，不依赖 core）。
+    ///
+    /// #644 评论 5473401065 第1节：**不在**写锁内创建或 seed `StagingRun`。
+    /// seed 涉及磁盘扫描/复制，会把"短写锁"变成"磁盘长锁"，阻塞冷启动卷章读取。
+    /// staging 的创建和 seed 移到 `prepare_staging_runs`，在无锁状态下执行。
+    ///
+    /// `secrets` 由调用方传入（API 层已 snapshot override），不再内部加载。
+    ///
+    /// transport 初始化失败时返回 Err（已持久化失败状态）。
+    /// `list_projects` 失败时返回 Err（已持久化失败状态）。
+    pub fn prepare_full_sync(
+        &self,
+        config: &crate::sync::SyncConfig,
+        force_sync: bool,
+        secrets: crate::sync::SyncSecrets,
+    ) -> crate::error::Result<crate::sync::full_sync::FullSyncPlan> {
+        use crate::sync::full_sync::{FullSyncPlan, PlannedTarget};
+
+        self.persist_full_sync_started();
+
+        let projects = match self.list_projects() {
+            Ok(projects) => projects,
+            Err(err) => {
+                let msg = err.to_string();
+                self.persist_full_sync_early_failure(
+                    crate::sync::SyncStatus::RecoverableError(msg),
+                    "global",
+                );
+                return Err(err);
+            }
+        };
+
+        let mut targets = Vec::new();
+
+        // App target — 只生成 plan，不创建 staging。
+        // #644 评论 5491531984 问题1：App target 也必须有私有 Git metadata 位置，
+        // 例如 `sujian-git/app/`。
+        let app_target = crate::sync::types::SyncTarget::app();
+        let app_git_layout = self.app_git_layout();
+        targets.push(PlannedTarget {
+            target: app_target,
+            local_root: self.app_data_root.clone(),
+            staging_root: None, // prepare_staging_runs 会填充
+            target_kind: "app".to_string(),
+            project_id: None,
+            target_live_root: self.app_data_root.clone(),
+            git_layout: Some(app_git_layout),
+        });
+
+        // Project targets — 只生成 plan，不创建 staging
+        for project in &projects {
+            let target = crate::sync::types::SyncTarget::project(&project.id);
+            let project_local_root = self.project_root(&project.id);
+            let project_git_layout = self.project_git_layout(&project.id);
+            targets.push(PlannedTarget {
+                target,
+                local_root: project_local_root.clone(),
+                staging_root: None, // prepare_staging_runs 会填充
+                target_kind: "project".to_string(),
+                project_id: Some(project.id.clone()),
+                target_live_root: project_local_root,
+                git_layout: Some(project_git_layout),
+            });
+        }
+
+        Ok(FullSyncPlan {
+            secrets,
+            config: config.clone(),
+            force_sync,
+            targets,
+            app_data_root: self.app_data_root.clone(),
+        })
+    }
+
+    /// #644 评论 5467821839 第7节：三段式全量同步 — 创建 backend（Prepare 阶段、写锁内）。
+    ///
+    /// transport 初始化失败时返回 Err（已持久化失败状态）。
+    pub fn create_sync_backend_for_plan(
+        &self,
+        config: &crate::sync::SyncConfig,
+    ) -> crate::error::Result<Box<dyn crate::sync::SyncBackend>> {
+        let backend_type = crate::sync::resolved_backend_type(config);
+        if let Some(transport) = self.sync_transport.as_ref() {
+            match transport() {
+                Ok(t) => Ok(crate::sync::create_sync_backend_with_transport(
+                    &backend_type,
+                    t,
+                )),
+                Err(e) => {
+                    let err = crate::sync::full_sync::transport_init_failure_error(
+                        &e.category,
+                        &e.message,
+                    );
+                    let status = crate::sync::full_sync::error_to_persist_status(&err);
+                    self.persist_full_sync_early_failure(status, "preflight");
+                    Err(err)
+                }
+            }
+        } else {
+            Ok(crate::sync::create_sync_backend(&backend_type))
+        }
+    }
+
+    /// #644 评论 5467821839 第7节：三段式全量同步 — Commit 阶段（短写锁内调用）。
+    ///
+    /// 聚合 [`crate::sync::full_sync::FullSyncTransferResult`] → `FullSyncResult`，
+    /// 原子写终态 `FullSyncState`，成功类重建搜索索引。
+    ///
+    /// #644 评论 5472584126 第1节：staging run 的三方 commit 逻辑正式接入。
+    /// #644 评论 5473105049 第3节：逐 target 判断 — 只有该 target 的 Transfer 结果
+    /// 属于允许提交的终态，才计算/应用它的 commit plan；失败 target 直接丢弃 staging。
+    ///
+    /// #644 评论 5473401065 第4节：三方冲突不再只改 overall_status。
+    /// 冲突按 target 保留完整元数据（rel_path + base/local/incoming hash），
+    /// 映射成 `SyncConflict` 写入对应 target 的 `SyncResult.conflicts`，
+    /// 同时持久化到该 target live root 的 `SyncState.conflicts/conflicted_files`。
+    ///
+    /// `staging_runs` 来自 Prepare 阶段，与 `transfer_result.targets` 按索引对应；
+    /// commit 完成后显式 cleanup（`Drop` 也会兜底）。
+    #[allow(clippy::excessive_nesting)]
+    pub fn commit_full_sync(
+        &self,
+        transfer_result: crate::sync::full_sync::FullSyncTransferResult,
+        staging_runs: Vec<crate::sync::staging::StagingRun>,
+    ) -> crate::sync::types::FullSyncResult {
+        // #644 评论 5473105049 第3/4节：逐 target 判断 transfer 结果，
+        // 只对成功终态的 target 做 staging commit；commit IO 失败向上传播。
+        let commit_outcome =
+            apply_staging_commits_for_targets(&staging_runs, &transfer_result.targets);
+
+        // #644 评论 5473105049 第4节：commit 失败的 target 需要把失败信息
+        // 注入到对应的 TargetSyncResult 中，让聚合逻辑产生 Recoverable/Fatal 状态。
+        let mut targets = transfer_result.targets;
+        for (idx, commit_result) in commit_outcome.target_results.iter().enumerate() {
+            if let TargetCommitResult::Failed(msg) = commit_result {
+                if let Some(target) = targets.get_mut(idx) {
+                    // commit 失败视为 RecoverableError（下次同步可重试）
+                    target.result.status = crate::sync::SyncStatus::RecoverableError(format!(
+                        "staging_commit_failed: {}",
+                        msg
+                    ));
+                    target.result.error = Some(format!("staging commit failed: {}", msg));
+                }
+            }
+        }
+
+        // #644 评论 5473401065 第4节 + #644 评论 5473551127 第3节：
+        // 三方冲突按 target 映射成 SyncConflict，复用 conflict.rs 的
+        // record_staging_conflicts() 统一写 conflicts.json + SyncState。
+        // 持久化失败必须传播到对应 target 的错误状态，不能只打日志。
+        //
+        // #644 评论 5474772497 第3节：不再用 `=` 覆盖 target.result.conflicts，
+        // 而是把 Transfer 阶段已有的冲突（如 GitHub LWW 发现的正文冲突）
+        // 传给 record_staging_conflicts 做合并，保留两层冲突。
+        for (idx, target_conflicts) in commit_outcome.target_conflicts.iter().enumerate() {
+            if target_conflicts.is_empty() {
+                continue;
+            }
+            if let Some(target) = targets.get_mut(idx) {
+                let live_root = staging_runs[idx].target_live_root();
+                // 保留 Transfer 阶段已有的冲突（如 GitHub LWW 发现的正文冲突）。
+                let existing_conflicts = target.result.conflicts.clone();
+                match crate::sync::conflict::record_staging_conflicts(
+                    live_root,
+                    &target.remote_prefix,
+                    target_conflicts,
+                    &existing_conflicts,
+                ) {
+                    Ok(merged_conflicts) => {
+                        // #644 评论 5474772497 第3节：合并后的完整冲突列表
+                        // （Transfer + staging），不再覆盖。
+                        target.result.conflicts = merged_conflicts;
+                        target.result.status = crate::sync::SyncStatus::Conflict;
+                    }
+                    Err(e) => {
+                        // 持久化失败：target 进入 RecoverableError，下次同步可重试
+                        target.result.status = crate::sync::SyncStatus::RecoverableError(format!(
+                            "staging_conflict_persist_failed: {}",
+                            e
+                        ));
+                        target.result.error =
+                            Some(format!("failed to persist staging conflicts: {}", e));
+                    }
+                }
+            }
+        }
+
+        let result = crate::sync::full_sync::aggregate_full_sync_result(targets);
+
+        let previous_state = self.load_full_sync_state().unwrap_or(None);
+        let new_state = crate::sync::full_sync_state::FullSyncState::from_result_and_previous(
+            &result,
+            previous_state.as_ref(),
+            now_epoch_seconds(),
+        );
+        if let Err(e) = self.save_full_sync_state(&new_state) {
+            log::warn!("Failed to persist full sync state: {e}");
+        }
+
+        if matches!(
+            result.overall_status,
+            crate::sync::SyncStatus::Success | crate::sync::SyncStatus::LatestWinsApplied
+        ) {
+            if let Err(e) = self.rebuild_search_index(None) {
+                log::warn!("Failed to rebuild search index after full sync: {e}");
+            }
+        }
+
+        result
     }
 
     /// 内部：用给定 backend 执行全量同步。
@@ -442,6 +661,566 @@ impl super::WriterCore {
             crate::sync::create_sync_backend(&backend_type)
         };
         backend.diagnose(config, secrets)
+    }
+}
+
+/// #644 评论 5473105049 第3/4节：逐 target 判断 transfer 结果，只对成功终态的 target
+/// 做 staging commit；失败 target 直接丢弃 staging，绝不能写 live。
+///
+/// #644 评论 5474166587 问题2：引入 `TargetCommitMode`，Conflict/PartialConflict
+/// 不再整体丢弃 staging，而是 `ConflictMetadataOnly`——把冲突元数据
+/// （state.local.json 的 conflicted_files/conflicts、conflicts.json、冲突副本）
+/// 落到 live，PartialConflict 中已安全完成的非冲突文件也继续提交。
+///
+/// #644 评论 5473105049 第4节：commit IO 失败通过 `TargetCommitResult` 向上传播，
+/// 不能只 `log::warn!` 吞掉。
+///
+/// #644 评论 5473401065 第4节：冲突按 target 保留 `StagingConflict`（含三方哈希），
+/// 不再只做全局路径列表。
+///
+/// `staging_runs` 与 `transfer_targets` 按索引对应。
+/// 返回每个 target 的 commit 结果 + 每个 target 的冲突列表。
+#[allow(
+    clippy::excessive_nesting,
+    clippy::too_many_lines,
+    clippy::cognitive_complexity
+)]
+fn apply_staging_commits_for_targets(
+    staging_runs: &[crate::sync::staging::StagingRun],
+    transfer_targets: &[crate::sync::types::TargetSyncResult],
+) -> StagingCommitOutcome {
+    let mut target_conflicts: Vec<Vec<crate::sync::staging::StagingConflict>> = Vec::new();
+    let mut target_results: Vec<TargetCommitResult> = Vec::new();
+
+    for (idx, run) in staging_runs.iter().enumerate() {
+        // 检查对应 target 的 transfer 结果，决定 commit 模式。
+        let mode = if let Some(target) = transfer_targets.get(idx) {
+            target_commit_mode(&target.result.status)
+        } else {
+            TargetCommitMode::Skip
+        };
+
+        match mode {
+            TargetCommitMode::Skip => {
+                log::warn!(
+                    "Staging commit: skipping target {} (run_id={}) — transfer not in committable state",
+                    idx,
+                    run.run_id()
+                );
+                target_results.push(TargetCommitResult::Skipped);
+                target_conflicts.push(Vec::new());
+                run.cleanup();
+                continue;
+            }
+            TargetCommitMode::Full => {
+                let live_root = run.target_live_root();
+                let plan = match run.compute_commit_plan(live_root) {
+                    Ok(plan) => plan,
+                    Err(e) => {
+                        let msg = format!("compute_commit_plan failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                        continue;
+                    }
+                };
+                // #644 评论 5475110422 第3节：Git backend 时启用 backup_mode，
+                // 使 SaveTransaction commit 后能在 Git finalize 失败时 rollback。
+                let needs_git_finalize = run.git_seed_state().is_some();
+
+                // #644 评论 5476546134 第1节：prepare_git_finalize 必须在
+                // apply_commit_plan_to_live 之前。snapshot 准备失败时，
+                // live 一字节都不能改。
+                let (git_snapshot, git_plan) = if needs_git_finalize {
+                    let seed_state = match run.git_seed_state() {
+                        Some(s) => s,
+                        None => {
+                            let msg = "git_seed_state missing despite needs_git_finalize=true";
+                            log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                            target_results.push(TargetCommitResult::Failed(msg.to_string()));
+                            target_conflicts.push(Vec::new());
+                            run.cleanup();
+                            continue;
+                        }
+                    };
+                    match crate::sync::git_commit::prepare_git_finalize(
+                        live_root,
+                        seed_state,
+                        &run.staging_root(),
+                        run.git_layout().map(|l| l.git_dir.as_path()),
+                    ) {
+                        Ok((snap, plan)) => (snap, plan),
+                        Err(e) => {
+                            let msg = format!("prepare_git_finalize failed: {}", e);
+                            log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                            target_results.push(TargetCommitResult::Failed(msg));
+                            target_conflicts.push(Vec::new());
+                            run.cleanup();
+                            continue;
+                        }
+                    }
+                } else {
+                    (
+                        crate::sync::git_commit::GitMetadataSnapshot {
+                            head: crate::sync::git_commit::RefSnapshot::DidNotExist,
+                            refs: std::collections::BTreeMap::new(),
+                            index: crate::sync::git_commit::IndexSnapshot::Missing,
+                            repo_existed: false,
+                        },
+                        crate::sync::git_commit::GitFinalizePlan::default(),
+                    )
+                };
+
+                // #644 评论 5476546134 第1节：在 apply_commit_plan_to_live 之前
+                // 构造 recovery record，传入后与 manifest 一起原子写入。
+                // #644 评论 5480360027：recovery record 持久化 write-ahead plan，
+                // 不再放空 mutation_log。plan 在写 live 前完整落盘。
+                let git_finalize_recovery = if let (Some(snap), Some(seed_state), Some(plan)) =
+                    (Some(&git_snapshot), run.git_seed_state(), Some(&git_plan))
+                {
+                    Some(crate::sync::git_commit::GitFinalizeRecoveryRecord {
+                        seed_state:
+                            crate::sync::git_commit::SerializableGitSeedState::from_seed_state(
+                                seed_state,
+                            ),
+                        metadata_snapshot: snap.clone(),
+                        plan: plan.clone(),
+                        mutation_log: crate::sync::git_commit::GitFinalizeMutationLog::default(),
+                        git_dir: run.git_layout().map(|l| l.git_dir.clone()),
+                        worktree_root: run.git_layout().map(|l| l.worktree_root.clone()),
+                    })
+                } else {
+                    None
+                };
+
+                let mut tx = match apply_commit_plan_to_live(
+                    live_root,
+                    &plan.content_actions,
+                    &plan.engine_state_actions,
+                    needs_git_finalize,
+                    git_finalize_recovery,
+                ) {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        let msg = format!("apply_commit_plan_to_live failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                        continue;
+                    }
+                };
+
+                // #644 评论 5488871385 问题1：统一 rollback coordinator。
+                // 1. preflight_rollback_material() — 确认 backup 可读（在 Git finalize 之前）。
+                // 2. try_commit_git_finalize() — 尝试 finalize。
+                // 3. 失败时：inspect → preflight → Git rollback → file rollback。
+                //    commit_git_finalize() 不再内部 rollback，由本处统一协调。
+                use crate::sync::git_commit::GitFinalizeError;
+                let git_plan_ref = if needs_git_finalize {
+                    Some(&git_plan)
+                } else {
+                    None
+                };
+
+                // #644 评论 5488871385 问题1：在 try_commit_git_finalize 之前
+                // 先 preflight backup material。如果 backup 不可读，现在就报错，
+                // 不进入 Git finalize（避免 finalize 失败后发现 backup 也缺失）。
+                if needs_git_finalize {
+                    if let Err(e) = tx.preflight_rollback_material() {
+                        let msg = format!(
+                            "preflight_rollback_material failed before git finalize: {}",
+                            e
+                        );
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                        continue;
+                    }
+                }
+
+                match crate::sync::git_commit::try_commit_git_finalize(
+                    live_root,
+                    &run.staging_root(),
+                    run.git_seed_state(),
+                    Some(&git_snapshot),
+                    git_plan_ref,
+                    run.git_layout().map(|l| l.git_dir.as_path()),
+                ) {
+                    Ok(()) => match tx.finish() {
+                        Ok(()) => {
+                            if let Some(plan) = git_plan_ref {
+                                crate::sync::git_commit::cleanup_repo_create_owner_marker(
+                                    live_root,
+                                    plan,
+                                    run.git_layout().map(|l| l.git_dir.as_path()),
+                                );
+                            }
+                            target_conflicts.push(plan.conflict);
+                            target_results.push(TargetCommitResult::Ok);
+                            run.cleanup();
+                        }
+                        Err(e) => {
+                            let msg = format!(
+                                "git finalize succeeded but tx.finish() failed to persist \
+                                     Finished phase: {} — preserving tx_dir and owner marker \
+                                     for next recovery",
+                                e
+                            );
+                            log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                            target_results.push(TargetCommitResult::Failed(msg));
+                            target_conflicts.push(Vec::new());
+                        }
+                    },
+                    Err(GitFinalizeError::FinalizeFailed(e)) => {
+                        // #644 评论 5488871385 问题1：commit_git_finalize 不再内部 rollback。
+                        // 由本处统一协调：inspect → Git rollback → file rollback。
+                        // preflight 已在 try_commit_git_finalize 之前完成。
+                        log::warn!(
+                            "Staging commit: git finalize failed: {}, coordinating rollback",
+                            e
+                        );
+                        let rollback_err = if let (Some(seed_state), Some(plan)) =
+                            (run.git_seed_state(), git_plan_ref)
+                        {
+                            coordinate_rollback_after_finalize_failure(
+                                live_root,
+                                &git_snapshot,
+                                plan,
+                                seed_state,
+                                &mut tx,
+                                run.git_layout().map(|l| l.git_dir.as_path()),
+                            )
+                        } else {
+                            // 无 seed_state/plan，只做 file rollback。
+                            tx.rollback()
+                        };
+                        if let Err(rb_err) = rollback_err {
+                            log::warn!(
+                                "Staging commit: rollback also failed: {} (original: {})",
+                                rb_err,
+                                e
+                            );
+                        }
+                        let msg = format!("git repo-metadata finalize failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                    }
+                    Err(GitFinalizeError::ConcurrentMetadataChanged { reason }) => {
+                        // 并发校验失败，本轮 finalize 尚未修改 live Git metadata，
+                        // 不触发 Git metadata rollback。只做 file rollback。
+                        log::warn!(
+                            "Staging commit: concurrent git metadata changed before finalize: {}",
+                            reason
+                        );
+                        if let Err(rb_err) = tx.rollback() {
+                            log::warn!(
+                                "Staging commit: concurrent metadata changed AND tx rollback failed: {} / {}",
+                                reason, rb_err
+                            );
+                        }
+                        let msg = format!(
+                            "git repo-metadata finalize aborted: concurrent metadata changed: {}",
+                            reason
+                        );
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                    }
+                    Err(GitFinalizeError::RollbackFailed { finalize, rollback }) => {
+                        let msg = format!(
+                            "git repo-metadata finalize failed AND rollback failed: finalize={} rollback={}",
+                            finalize, rollback
+                        );
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                    }
+                }
+            }
+            TargetCommitMode::ConflictMetadataOnly => {
+                let live_root = run.target_live_root();
+                let plan = match run.compute_commit_plan(live_root) {
+                    Ok(plan) => plan,
+                    Err(e) => {
+                        let msg = format!("compute_commit_plan failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                        continue;
+                    }
+                };
+
+                // #644 评论 5474166587 问题2：ConflictMetadataOnly 必须把冲突元数据
+                // 落到 live。engine_state_actions 包含 state.local.json、conflicts.json
+                // （若 staging 里写了），必须写回。
+                // PartialConflict 中已安全完成的非冲突文件可继续提交，但
+                // target.result.conflicts 里的路径必须从 content commit 排除。
+                let transfer_conflict_paths: std::collections::HashSet<String> = transfer_targets
+                    .get(idx)
+                    .map(|t| {
+                        t.result
+                            .conflicts
+                            .iter()
+                            .map(|c| c.local_path.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let safe_content_actions: Vec<_> = plan
+                    .content_actions
+                    .iter()
+                    .filter(|action| {
+                        let rel = match action {
+                            crate::sync::staging::CommitAction::Apply { rel_path, .. } => {
+                                rel_path.to_string_lossy().to_string()
+                            }
+                            crate::sync::staging::CommitAction::Delete { rel_path } => {
+                                rel_path.to_string_lossy().to_string()
+                            }
+                        };
+                        !transfer_conflict_paths.contains(&rel)
+                    })
+                    .cloned()
+                    .collect();
+
+                if let Err(e) = apply_commit_plan_to_live(
+                    live_root,
+                    &safe_content_actions,
+                    &plan.engine_state_actions,
+                    false,
+                    None,
+                )
+                .map(|_tx| ())
+                {
+                    let msg = format!("apply_commit_plan_to_live failed: {}", e);
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    target_results.push(TargetCommitResult::Failed(msg));
+                    target_conflicts.push(Vec::new());
+                    run.cleanup();
+                    continue;
+                }
+                // 两种冲突（Transfer 判定的 + 外层 StagingConflict）汇入同一份
+                // live conflict state。外层 StagingConflict 通过 plan.conflict 返回，
+                // 由 commit_full_sync 的 record_staging_conflicts 写入；
+                // Transfer 判定的冲突已在 target.result.conflicts 里，由聚合逻辑保留。
+                target_conflicts.push(plan.conflict);
+                target_results.push(TargetCommitResult::Ok);
+                run.cleanup();
+            }
+        }
+    }
+
+    StagingCommitOutcome {
+        target_results,
+        target_conflicts,
+    }
+}
+
+/// 单个 target 的 staging commit 结果。
+enum TargetCommitResult {
+    /// commit 成功。
+    Ok,
+    /// transfer 失败，跳过 commit。
+    Skipped,
+    /// commit 过程中 IO 失败。
+    Failed(String),
+}
+
+/// staging commit 阶段的汇总结果。
+struct StagingCommitOutcome {
+    target_results: Vec<TargetCommitResult>,
+    /// #644 评论 5473401065 第4节：冲突按 target 保留，不再只做全局路径列表。
+    target_conflicts: Vec<Vec<crate::sync::staging::StagingConflict>>,
+}
+
+/// #644 评论 5474166587 问题2：单个 target 的 staging commit 模式。
+///
+/// - `Full`：成功类终态，content + engine_state 全部写回 live。
+/// - `ConflictMetadataOnly`：Conflict/PartialConflict，冲突元数据 + 已安全完成的
+///   非冲突文件写回 live，冲突路径本身不写回。
+/// - `Skip`：Fatal/Recoverable/Dirty/Error，整体丢弃 staging。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetCommitMode {
+    /// 成功类终态：content + engine_state 全部写回 live。
+    Full,
+    /// Conflict/PartialConflict：冲突元数据 + 已安全完成的非冲突文件写回 live。
+    ConflictMetadataOnly,
+    /// Fatal/Recoverable/Dirty/Error：整体丢弃 staging。
+    Skip,
+}
+
+/// #644 评论 5474166587 问题2：根据 transfer 结果状态决定 staging commit 模式。
+///
+/// 规则：
+/// - 成功类终态（Success、NoChanges、LatestWinsApplied、BranchMissingRecovered）→ `Full`
+/// - Conflict/PartialConflict → `ConflictMetadataOnly`
+/// - Fatal/Error/Recoverable/Dirty → `Skip`
+fn target_commit_mode(status: &crate::sync::SyncStatus) -> TargetCommitMode {
+    use crate::sync::SyncStatus;
+    match status {
+        SyncStatus::Success
+        | SyncStatus::NoChanges
+        | SyncStatus::LatestWinsApplied
+        | SyncStatus::BranchMissingRecovered => TargetCommitMode::Full,
+        SyncStatus::Conflict | SyncStatus::PartialConflict => {
+            TargetCommitMode::ConflictMetadataOnly
+        }
+        // 其余（FatalError/Error/RecoverableError/DirtyRepoBlocked/Syncing/Idle/ConfiguredNotTested）
+        // 全部 Skip。
+        _ => TargetCommitMode::Skip,
+    }
+}
+
+/// #644 评论 5473105049 第4节：把 commit plan 中的 Apply/Delete 变更通过 SaveTransaction
+/// 写回 live root。返回 `Result<()>`，任何 IO 失败都向上传播。
+///
+/// #644 评论 5474166587 问题1：content_actions + engine_state_actions 用同一个
+/// `SaveTransaction` 一次写回，不另起第二套保存路径。
+///
+/// #644 评论 5475110422 第3节：`backup_mode` 为 true 时，SaveTransaction 在 commit 前
+/// 备份被覆盖/删除的旧文件，使调用方能在 Git finalize 失败时 rollback。
+///
+/// #644 评论 5476546134 第1节：`git_finalize_recovery` 必须在 `commit()` 之前传入，
+/// 使 recovery record 与 manifest 一起原子写入。
+fn apply_commit_plan_to_live(
+    live_root: &std::path::Path,
+    content_actions: &[crate::sync::staging::CommitAction],
+    engine_state_actions: &[crate::sync::staging::CommitAction],
+    backup_mode: bool,
+    git_finalize_recovery: Option<crate::sync::git_commit::GitFinalizeRecoveryRecord>,
+) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
+    // #644 评论 5477439446 问题1：纯 Git metadata 变化时（actions 为空但
+    // backup_mode/git_finalize_recovery 存在），不能早退。Git backend 完全可能
+    // 出现工作区字节没变、.git 要推进的正常情况（远端 empty commit、branch/ref
+    // 前进但 tree 相同）。此时仍需走 enable_backup_mode() +
+    // set_git_finalize_recovery() + commit() 路径，创建 metadata-only
+    // transaction barrier，使 finalize 中途崩溃后启动恢复有持久化 snapshot。
+    // 保持非 Git backend（backup_mode == false 且无 git_finalize_recovery）的
+    // 原有早退语义。
+    if content_actions.is_empty()
+        && engine_state_actions.is_empty()
+        && !backup_mode
+        && git_finalize_recovery.is_none()
+    {
+        return Ok(crate::storage::transaction::SaveTransaction::new(live_root));
+    }
+    let mut tx = crate::storage::transaction::SaveTransaction::new(live_root);
+    if backup_mode {
+        tx.enable_backup_mode();
+    }
+    // #644 评论 5476546134 第1节：在 commit() 之前设置 recovery record，
+    // 使 manifest 原子写入包含 git_finalize 字段。
+    if let Some(record) = git_finalize_recovery {
+        tx.set_git_finalize_recovery(record);
+    }
+    // engine_state 先入事务（state/manifest 先就绪，再写用户内容）。
+    for action in engine_state_actions {
+        match action {
+            crate::sync::staging::CommitAction::Apply { rel_path, content } => {
+                let rel_str = rel_path.to_string_lossy();
+                tx.add_bytes(&rel_str, content)?;
+            }
+            crate::sync::staging::CommitAction::Delete { rel_path } => {
+                let rel_str = rel_path.to_string_lossy();
+                tx.add_delete(&rel_str);
+            }
+        }
+    }
+    for action in content_actions {
+        match action {
+            crate::sync::staging::CommitAction::Apply { rel_path, content } => {
+                let rel_str = rel_path.to_string_lossy();
+                tx.add_bytes(&rel_str, content)?;
+            }
+            crate::sync::staging::CommitAction::Delete { rel_path } => {
+                let rel_str = rel_path.to_string_lossy();
+                tx.add_delete(&rel_str);
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(tx)
+}
+
+/// #644 评论 5488871385 问题1：统一 rollback coordinator。
+///
+/// `commit_git_finalize()` 失败后调用。按 inspect → Git rollback → file rollback 顺序执行。
+/// preflight backup 已在 `try_commit_git_finalize()` 之前完成。
+///
+/// - `ConcurrentMetadataChanged`：本轮未修改 Git metadata，只做 file rollback。
+/// - 其它错误：inspect 确认状态 → Git rollback → file rollback。
+fn coordinate_rollback_after_finalize_failure(
+    live_root: &std::path::Path,
+    snapshot: &crate::sync::git_commit::GitMetadataSnapshot,
+    plan: &crate::sync::git_commit::GitFinalizePlan,
+    _seed_state: &crate::sync::git_staging::GitSeedState,
+    tx: &mut crate::storage::transaction::SaveTransaction,
+    explicit_git_dir: Option<&std::path::Path>,
+) -> crate::error::Result<()> {
+    // inspect 确认 rollback 状态（只读）。
+    let inspect_state = crate::sync::git_commit::inspect_git_rollback_state(
+        live_root,
+        snapshot,
+        plan,
+        explicit_git_dir,
+    )?;
+
+    match inspect_state {
+        crate::sync::git_commit::GitRollbackState::NeedsRollback => {
+            // Git rollback。
+            let outcome = crate::sync::git_commit::rollback_git_finalize(
+                live_root,
+                snapshot,
+                plan,
+                explicit_git_dir,
+            )?;
+            match outcome {
+                crate::sync::git_commit::GitRollbackOutcome::Reverted => {
+                    // Git 已回滚，恢复文件。
+                    tx.rollback()
+                }
+                crate::sync::git_commit::GitRollbackOutcome::ConcurrentChanged => {
+                    Err(crate::Error::Io(std::io::Error::other(
+                        "coordinate_rollback: rollback detected concurrent change",
+                    )))
+                }
+                crate::sync::git_commit::GitRollbackOutcome::RepoInstallCommitted => {
+                    // 不回滚文件。
+                    Ok(())
+                }
+            }
+        }
+        crate::sync::git_commit::GitRollbackState::RepoInstallCommitted => {
+            // 不回滚文件。
+            Ok(())
+        }
+        crate::sync::git_commit::GitRollbackState::ConcurrentChanged => {
+            // #644 评论 5489192105 问题4：ConcurrentChanged 只代表"无法安全证明/继续
+            // Git rollback"（ownership 不匹配、外部 lock 等），不代表"Git 一定没改过"。
+            // 本函数只在 `GitFinalizeError::FinalizeFailed` 后进入，此时 finalize 可能
+            // 已经写过 index/ref（例如 finalize_unborn 中 install_index_with_lock 在
+            // lock HEAD 之前执行）。对已部分写入 Git metadata 的情况做 file rollback
+            // 会造成 Git metadata（新）与业务文件（旧）不一致，破坏同步原子性。
+            //
+            // 改成返回 Err 不碰文件，保留 transaction 给下次恢复。只有外层直接收到
+            // `GitFinalizeError::ConcurrentMetadataChanged` 的那条路径（见上方
+            // `Err(GitFinalizeError::ConcurrentMetadataChanged { reason })` 分支），
+            // 才可以依据该错误类型的契约认定"本轮尚未写 Git metadata"，然后只做
+            // `tx.rollback()`。
+            Err(crate::Error::Io(std::io::Error::other(
+                "coordinate_rollback: inspect_git_rollback_state returned \
+                 ConcurrentChanged — cannot safely prove Git metadata unchanged \
+                 (finalize may have partially written index/refs), refusing to \
+                 file-rollback, preserving transaction for next recovery",
+            )))
+        }
     }
 }
 

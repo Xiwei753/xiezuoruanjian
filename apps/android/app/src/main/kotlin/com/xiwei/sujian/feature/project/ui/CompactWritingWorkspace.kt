@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.project.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -22,6 +23,9 @@ import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
  *
  * 顶栏用 Material3 [SujianTopAppBar]：返回按钮 + 章节标题 + 搜索/同步/设置图标。
  * 同步/搜索/设置回调由调用方注入（窄屏暂用空实现占位，真实导航由上层 workspaceNavState 接管）。
+ *
+ * #644 评论 5462826712 第7节：窄屏正文高度改成 Column 的剩余空间。
+ * 顶栏占自己的高度，正文只拿剩余高度。IME 改窗口可用高度时只重算这一块。
  */
 @Composable
 @Suppress("LongParameterList") // #641 评论 问题6：写作顶栏回调 + 编辑器参数，函数级 suppress（既有先例）
@@ -54,7 +58,10 @@ internal fun CompactWritingWorkspace(
                 volumeId = volumeId,
                 chapterId = chapterId,
                 chapterTitle = chapterTitle,
-                modifier = Modifier.fillMaxSize(),
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
                 onChapterSwitchFailed = onChapterSwitchFailed,
             )
         }

@@ -4,6 +4,8 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.feature.editor.interop.TextEditSessionBridge
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import com.xiwei.sujian.feature.editor.projection.ChapterPreviewState
+import com.xiwei.sujian.feature.editor.projection.ProjectionSnapshot
+import com.xiwei.sujian.feature.editor.projection.SessionCloseReason
 import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
 import com.xiwei.sujian.feature.editor.window.EditingState
@@ -205,16 +207,15 @@ class EditorSessionHost(
 
     /**
      * #592 二：开始编辑 — 预准备 Rust session，不附带 View 绑定。
+     *
+     * #644 评论 5462826712 第5节：删除 saveActiveTargetProjection(currentActiveId)
+     * 这次 viewportAnchor=null 写入。真实 viewport 已由 Compose surface 在 dispose 时保存。
      */
     fun beginEdit(
         targetId: String,
         initialSelection: Int? = null,
         windowId: String,
     ): Boolean {
-        val currentActiveId = sessionCoordinator.activeTargetId
-        if (currentActiveId != null && currentActiveId != targetId) {
-            saveActiveTargetProjection(currentActiveId)
-        }
         val bindInfo =
             sessionCoordinator.prepareSessionForEdit(
                 targetId,
@@ -265,10 +266,11 @@ class EditorSessionHost(
         sessionCoordinator.saveProjectionSnapshot(targetId, snapshot)
     }
 
-    private fun saveActiveTargetProjection(targetId: String) {
-        sessionCoordinator.saveProjectionSnapshot(
-            targetId,
-            ProjectionSnapshot(viewportAnchor = null),
-        )
-    }
+    /**
+     * #644 评论 5462826712 第1节：Compose Surface 附着 — 薄委托给 [EditorSessionCoordinator.attachSurface]。
+     */
+    fun attachSurface(
+        windowId: String,
+        targetId: String,
+    ): EditorInputLease? = sessionCoordinator.attachSurface(windowId, targetId)
 }

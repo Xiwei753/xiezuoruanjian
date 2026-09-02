@@ -196,6 +196,173 @@ pub(crate) fn build_conflict_summary(
     }
 }
 
+/// #644 评论 5473789298 第4节：读取 `app-meta/sync/conflicts.json`。
+///
+/// 文件不存在或内容损坏（半写/无效 JSON）时回退为空列表——丢失冲突记录比
+/// 阻塞后续同步更可接受，与 [`crate::sync::SyncService::remove_conflict_from_json`]
+/// 的容错策略一致。
+fn load_conflicts_json(sync_root: &Path) -> crate::Result<Vec<SyncConflict>> {
+    let conflicts_path = sync_root.join("app-meta/sync/conflicts.json");
+    if !conflicts_path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(&conflicts_path)?;
+    let conflicts: Vec<SyncConflict> = serde_json::from_str(&content).unwrap_or_default();
+    Ok(conflicts)
+}
+
+/// #644 评论 5473789298 第4节：一次事务写入 `state.local.json` + `conflicts.json`。
+///
+/// 用 [`crate::storage::transaction::SaveTransaction`] 保证两个文件原子提交，
+/// 不会出现"state 写了但 conflicts.json 没写"的中间不一致状态。
+/// `record_staging_conflicts` 和 [`crate::sync::SyncService::record_sync_conflict`]
+/// 共用本函数，不要两套写法。
+fn persist_conflict_state(
+    sync_root: &Path,
+    state: &crate::sync::types::SyncState,
+    conflicts: &[SyncConflict],
+) -> crate::Result<()> {
+    let state_json = serde_json::to_string_pretty(state)
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+    let conflicts_json = serde_json::to_string_pretty(conflicts)
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+
+    let mut tx = crate::storage::transaction::SaveTransaction::new(sync_root);
+    tx.add_bytes("app-meta/sync/state.local.json", state_json.as_bytes())?;
+    tx.add_bytes("app-meta/sync/conflicts.json", conflicts_json.as_bytes())?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// #644 评论 5473789298 第4节：按 `local_path` 去重/替换加入冲突。
+///
+/// 同一路径重复写入时替换已有记录，不无限 append。`state_conflicts` 和
+/// `conflicts_json` 都做同样的去重，保持两者一致。
+fn upsert_conflict(
+    conflicts_json: &mut Vec<SyncConflict>,
+    state_conflicts: &mut Vec<SyncConflict>,
+    conflicted_files: &mut std::collections::HashSet<String>,
+    conflict: SyncConflict,
+) {
+    let path = conflict.local_path.clone();
+    conflicted_files.insert(path.clone());
+    if let Some(existing) = conflicts_json.iter_mut().find(|c| c.local_path == path) {
+        *existing = conflict.clone();
+    } else {
+        conflicts_json.push(conflict.clone());
+    }
+    if let Some(existing) = state_conflicts.iter_mut().find(|c| c.local_path == path) {
+        *existing = conflict.clone();
+    } else {
+        state_conflicts.push(conflict);
+    }
+}
+
+/// #644 评论 5474772497 第3节：合并两批冲突，按 `local_path` 去重。
+///
+/// `incoming` 中的记录覆盖 `existing` 中同路径的旧记录（外层同路径覆盖旧记录即可）。
+/// 返回合并后的完整列表。
+pub fn merge_sync_conflicts(
+    existing: &[SyncConflict],
+    incoming: &[SyncConflict],
+) -> Vec<SyncConflict> {
+    if incoming.is_empty() {
+        return existing.to_vec();
+    }
+    if existing.is_empty() {
+        return incoming.to_vec();
+    }
+    let mut merged: Vec<SyncConflict> = existing.to_vec();
+    for inc in incoming {
+        if let Some(pos) = merged.iter().position(|c| c.local_path == inc.local_path) {
+            merged[pos] = inc.clone();
+        } else {
+            merged.push(inc.clone());
+        }
+    }
+    merged
+}
+
+/// #644 评论 5473551127 第3节：staging 三方冲突 → `SyncConflict` 映射 + 持久化。
+///
+/// #644 评论 5473789298 第4节：改成完整事务——先在内存里构造新的 `SyncState` 和
+/// 完整 `Vec<SyncConflict>`，用 [`persist_conflict_state`] 一次提交
+/// `app-meta/sync/state.local.json` + `app-meta/sync/conflicts.json`。
+/// 不再循环调用 `record_sync_conflict` 一条一条落盘，中间写失败不会留下不一致。
+/// 同一路径重复写入时按 `local_path` 去重/替换。
+///
+/// #644 评论 5474772497 第3节：`existing_conflicts` 参数接收 Transfer 阶段已有的
+/// 冲突（如 GitHub LWW 发现的正文冲突），与新 staging 冲突合并后一起持久化。
+/// 返回合并后的完整 `Vec<SyncConflict>`（Transfer + staging），供调用方填入
+/// `SyncResult.conflicts`。
+///
+/// 持久化失败必须返回 Err（不能只打日志），让对应 target 进入错误状态。
+pub fn record_staging_conflicts(
+    sync_root: &Path,
+    remote_prefix: &str,
+    staging_conflicts: &[crate::sync::staging::StagingConflict],
+    existing_conflicts: &[SyncConflict],
+) -> crate::Result<Vec<SyncConflict>> {
+    if staging_conflicts.is_empty() && existing_conflicts.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let now_ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0);
+
+    // 先在内存里构造完整的新状态。
+    let mut state = crate::sync::SyncService::load_sync_state(sync_root)?;
+    let mut conflicts_json = load_conflicts_json(sync_root)?;
+
+    // #644 评论 5474772497 第3节：先把 existing_conflicts（Transfer 冲突）合并进来，
+    // 确保持久化状态包含两层冲突。
+    for ec in existing_conflicts {
+        upsert_conflict(
+            &mut conflicts_json,
+            &mut state.conflicts,
+            &mut state.conflicted_files,
+            ec.clone(),
+        );
+    }
+
+    let mut new_staging_conflicts = Vec::with_capacity(staging_conflicts.len());
+    for sc in staging_conflicts {
+        let rel_str = sc.rel_path.to_string_lossy().to_string();
+        let rel_unix = rel_str.replace('\\', "/");
+        let sync_conflict = SyncConflict {
+            local_path: rel_str.clone(),
+            remote_path: format!("{}/{}", remote_prefix, rel_unix),
+            local_hash: sc.local_hash.clone(),
+            remote_hash: sc.incoming_hash.clone(),
+            base_hash: sc.base_hash.clone(),
+            created_at: now_ts,
+            description: format!(
+                "three-way conflict: both local and remote changed {}",
+                sc.rel_path.display()
+            ),
+        };
+
+        upsert_conflict(
+            &mut conflicts_json,
+            &mut state.conflicts,
+            &mut state.conflicted_files,
+            sync_conflict.clone(),
+        );
+        new_staging_conflicts.push(sync_conflict);
+    }
+
+    // 一次事务写 state + conflicts.json。
+    persist_conflict_state(sync_root, &state, &conflicts_json)?;
+
+    // #644 评论 5474772497 第3节：返回合并后的完整冲突列表（existing + new staging）。
+    Ok(merge_sync_conflicts(
+        existing_conflicts,
+        &new_staging_conflicts,
+    ))
+}
+
 impl crate::sync::SyncService {
     /// Remove conflict records for `path` from the `conflicts.json` file.
     /// This keeps the on-disk conflict list in sync with `state.conflicts`.
@@ -233,15 +400,20 @@ impl crate::sync::SyncService {
     /// 记录同步冲突——将冲突元数据追加到 `app-meta/sync/conflicts.json`，
     /// 并将本地内容备份为 `{path}.conflict.{timestamp}` 文件。
     ///
-    /// 不变量：调用此方法前，路径必须已加入 `SyncState.conflicted_files`；
-    /// 调用后 `conflicts.json` 与 `state.conflicts` 保持一致。
-    /// 备份文件仅用于用户手动对比，不参与自动合并或同步逻辑。
-    /// 写入使用 atomic rename（先写 .tmp 再 rename），避免半写状态。
+    /// #644 评论 5473789298 第4节：改成完整事务——先在内存里构造新的 `SyncState`
+    /// 和完整 `Vec<SyncConflict>`，用 [`persist_conflict_state`] 一次提交
+    /// `state.local.json` + `conflicts.json`。同时更新 `conflicted_files` 和
+    /// `state.conflicts`，修复原来"调用前路径已加入 conflicted_files"的注释违反。
+    /// 同一路径重复写入时按 `local_path` 去重/替换，不无限 append。
+    ///
+    /// 备份文件（`{path}.conflict.{timestamp}`）是辅助文件，不进事务（事务只保证
+    /// state + conflicts.json 一致，备份文件丢失不影响同步语义）。
     pub fn record_sync_conflict(
         sync_root: &Path,
         conflict: SyncConflict,
         local_content: Option<&str>,
     ) -> crate::Result<()> {
+        // 备份本地内容（事务外，辅助文件）。
         if let Some(content) = local_content {
             let conflict_file_path = sync_root.join(format!(
                 "{}.conflict.{}",
@@ -253,27 +425,19 @@ impl crate::sync::SyncService {
             std::fs::write(&conflict_file_path, content)?;
         }
 
-        let conflicts_path = sync_root.join("app-meta/sync/conflicts.json");
-        if let Some(parent) = conflicts_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        // 先在内存里构造完整的新状态。
+        let mut state = Self::load_sync_state(sync_root)?;
+        let mut conflicts_json = load_conflicts_json(sync_root)?;
 
-        let mut conflicts: Vec<SyncConflict> = if conflicts_path.exists() {
-            let content = std::fs::read_to_string(&conflicts_path)?;
-            serde_json::from_str(&content).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        upsert_conflict(
+            &mut conflicts_json,
+            &mut state.conflicts,
+            &mut state.conflicted_files,
+            conflict,
+        );
 
-        conflicts.push(conflict);
-
-        let content = serde_json::to_string_pretty(&conflicts)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-
-        let tmp_path = conflicts_path.with_extension("tmp");
-        std::fs::write(&tmp_path, content)?;
-        std::fs::rename(tmp_path, conflicts_path)?;
-
+        // 一次事务写 state + conflicts.json。
+        persist_conflict_state(sync_root, &state, &conflicts_json)?;
         Ok(())
     }
 

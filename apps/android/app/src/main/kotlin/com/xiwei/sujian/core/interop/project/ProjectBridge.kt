@@ -1,10 +1,10 @@
 package com.xiwei.sujian.core.interop.project
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
-import com.xiwei.sujian.core.interop.common.toModel
 import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.ProjectStats
 import com.xiwei.sujian.feature.project.data.model.ProjectSummary
+import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
 import com.xiwei.sujian.feature.project.data.model.Volume
 
 /**
@@ -37,6 +37,17 @@ class ProjectBridge internal constructor(private val holder: WriterAppServiceHol
     fun getProjectStats(projectId: String): BridgeResult<ProjectStats> =
         holder.wrapResult {
             holder.service.getProjectStats(projectId).toModel()
+        }
+
+    /**
+     * #644 评论 5467821839 第7节：一次返回作品的全部卷 + 章节 + 统计快照。
+     *
+     * Android `ProjectViewModel` 不再逐卷调 `listChapters`，
+     * 而是一次拿到完整快照，减少 FFI 调用次数和中间状态不一致窗口。
+     */
+    fun getProjectWorkspaceSnapshot(projectId: String): BridgeResult<ProjectWorkspaceSnapshot> =
+        holder.wrapResult {
+            holder.service.getProjectWorkspaceSnapshot(projectId).toModel()
         }
 
     fun renameProject(

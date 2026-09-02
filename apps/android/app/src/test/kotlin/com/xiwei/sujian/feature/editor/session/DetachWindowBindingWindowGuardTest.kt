@@ -64,7 +64,7 @@ class DetachWindowBindingWindowGuardTest {
     @Test
     fun detachWindowBinding_withMatchingWindowId_transitionsToDetached() {
         val coordinator = createCoordinator()
-        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
+        val target = EditableTextTarget("t1", isPersistent = true)
         coordinator.registerTarget(target)
         coordinator.store.put(
             EditorSessionRecord(targetId = "t1", sessionId = 42UL, persistent = true),
@@ -85,7 +85,7 @@ class DetachWindowBindingWindowGuardTest {
     @Test
     fun detachWindowBinding_withDifferentWindowId_isIgnored() {
         val coordinator = createCoordinator()
-        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
+        val target = EditableTextTarget("t1", isPersistent = true)
         coordinator.registerTarget(target)
         coordinator.store.put(
             EditorSessionRecord(targetId = "t1", sessionId = 42UL, persistent = true),
@@ -105,7 +105,7 @@ class DetachWindowBindingWindowGuardTest {
     @Test
     fun detachWindowBinding_withDifferentTargetId_isIgnored() {
         val coordinator = createCoordinator()
-        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
+        val target = EditableTextTarget("t1", isPersistent = true)
         coordinator.registerTarget(target)
         coordinator.store.put(
             EditorSessionRecord(targetId = "t1", sessionId = 42UL, persistent = true),
@@ -125,7 +125,7 @@ class DetachWindowBindingWindowGuardTest {
     @Test
     fun detachWindowBinding_fromAttaching_withDifferentWindowId_isIgnored() {
         val coordinator = createCoordinator()
-        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
+        val target = EditableTextTarget("t1", isPersistent = true)
         coordinator.registerTarget(target)
         coordinator.store.put(
             EditorSessionRecord(targetId = "t1", sessionId = 42UL, persistent = true),
@@ -145,7 +145,7 @@ class DetachWindowBindingWindowGuardTest {
     @Test
     fun detachWindowBinding_withDifferentWindowId_doesNotInvalidateInputLease() {
         val coordinator = createCoordinator()
-        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
+        val target = EditableTextTarget("t1", isPersistent = true)
         coordinator.registerTarget(target)
         coordinator.store.put(
             EditorSessionRecord(targetId = "t1", sessionId = 42UL, persistent = true),
@@ -166,7 +166,7 @@ class DetachWindowBindingWindowGuardTest {
     @Test
     fun detachWindowBinding_withDifferentTargetId_doesNotInvalidateInputLease() {
         val coordinator = createCoordinator()
-        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
+        val target = EditableTextTarget("t1", isPersistent = true)
         coordinator.registerTarget(target)
         coordinator.store.put(
             EditorSessionRecord(targetId = "t1", sessionId = 42UL, persistent = true),
@@ -186,7 +186,7 @@ class DetachWindowBindingWindowGuardTest {
     @Test
     fun detachWindowBinding_withMatchingWindowId_invalidatesInputLease() {
         val coordinator = createCoordinator()
-        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
+        val target = EditableTextTarget("t1", isPersistent = true)
         coordinator.registerTarget(target)
         coordinator.store.put(
             EditorSessionRecord(targetId = "t1", sessionId = 42UL, persistent = true),
@@ -205,7 +205,7 @@ class DetachWindowBindingWindowGuardTest {
     @Test
     fun detachWindowBinding_fromDetached_withSameTargetId_isIdempotentAndDoesNotInvalidateLease() {
         val coordinator = createCoordinator()
-        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
+        val target = EditableTextTarget("t1", isPersistent = true)
         coordinator.registerTarget(target)
         coordinator.store.put(
             EditorSessionRecord(targetId = "t1", sessionId = 42UL, persistent = true),
@@ -231,7 +231,7 @@ class DetachWindowBindingWindowGuardTest {
     @Test
     fun detachWindowBinding_fromDetached_withDifferentTargetId_continuesDraftCleanup() {
         val coordinator = createCoordinator()
-        val target = EditableTextTarget("t1", isPersistent = true).apply { updateText("hello") }
+        val target = EditableTextTarget("t1", isPersistent = true)
         coordinator.registerTarget(target)
         coordinator.store.put(
             EditorSessionRecord(targetId = "t1", sessionId = 42UL, persistent = true),

@@ -6,15 +6,15 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import com.xiwei.sujian.feature.editor.motion.TargetMotionConstraint
 import com.xiwei.sujian.feature.editor.projection.ChapterPreviewState
+import com.xiwei.sujian.feature.editor.projection.SessionCloseReason
 import com.xiwei.sujian.feature.editor.session.AnimationPolicy
 import com.xiwei.sujian.feature.editor.session.AuthoritativeEditorSnapshot
 import com.xiwei.sujian.feature.editor.session.ChapterSavedSignal
+import com.xiwei.sujian.feature.editor.session.EditorInputLease
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.EditorSessionHost
 import com.xiwei.sujian.feature.editor.session.EditorSessionState
 import com.xiwei.sujian.feature.editor.session.ExternalResetResult
-import com.xiwei.sujian.feature.editor.session.ProjectionSnapshot
-import com.xiwei.sujian.feature.editor.session.SessionCloseReason
 import com.xiwei.sujian.feature.editor.session.SessionCommandPort
 import com.xiwei.sujian.feature.editor.session.SessionResetSource
 import com.xiwei.sujian.feature.editor.session.TargetCommand
@@ -163,20 +163,25 @@ class EditorWindowHost(
 
     /**
      * #592 二：窗口销毁时完整释放，但保留 Rust 会话。
+     *
+     * #644 评论 5462826712 第5节：删除 ProjectionSnapshot(viewportAnchor = null) 写入。
+     * release 只负责 detach；真实 viewport 已由 Compose surface 在 dispose 时保存。
      */
     fun releaseWindow() {
         val activeId = activeTargetId
         if (activeId != null) {
-            sessionHost.saveProjectionSnapshot(
-                activeId,
-                ProjectionSnapshot(viewportAnchor = null),
-            )
             sessionHost.detachWindowBinding(windowId, activeId)
         }
     }
 
     /** Activity 永久结束 — 释放窗口和全部会话。 */
     fun releaseHost() = sessionHost.releaseHost()
+
+    /**
+     * #644 评论 5462826712 第1节：Compose Surface 附着 —
+     * 窗口层用自己的 windowId 完成 binding；UI 不知道 sessionId。
+     */
+    fun attachSurface(targetId: String): EditorInputLease? = sessionHost.attachSurface(windowId, targetId)
 
     companion object {
         private const val TAG = "EditorWindowHost"

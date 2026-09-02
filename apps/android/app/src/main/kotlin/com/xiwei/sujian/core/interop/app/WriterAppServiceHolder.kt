@@ -109,6 +109,7 @@ class WriterAppServiceHolder(
                     isMetered = isMetered,
                     proxyHost = null,
                     proxyPort = null,
+                    gitMetadataRoot = AndroidDataRoot.gitMetadataBaseDir(context).absolutePath,
                 )
             val secureStorage =
                 try {

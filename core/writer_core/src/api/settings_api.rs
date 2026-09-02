@@ -3,14 +3,15 @@ use super::types::*;
 
 impl WriterCoreApi {
     pub fn load_local_settings(&self) -> ApiResult<LocalSettingsDto> {
-        self.core()
+        self.core_read()
             .load_local_settings()
             .map(Into::into)
             .map_err(Into::into)
     }
 
     pub fn save_local_settings(&self, settings: LocalSettingsDto) -> ApiResult<bool> {
-        self.core().save_local_settings(&settings.clone().into())?;
+        self.core_write()
+            .save_local_settings(&settings.clone().into())?;
         let body = serde_json::to_string(&settings).unwrap_or_default();
         let entry = crate::search::extractor::extract_setting_entry("local", &body);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
@@ -25,14 +26,14 @@ impl WriterCoreApi {
     }
 
     pub fn load_syncable_settings(&self) -> ApiResult<SyncableSettingsDto> {
-        self.core()
+        self.core_read()
             .load_syncable_settings()
             .map(Into::into)
             .map_err(Into::into)
     }
 
     pub fn save_syncable_settings(&self, settings: SyncableSettingsDto) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .save_syncable_settings(&settings.clone().into())?;
         let body = serde_json::to_string(&settings).unwrap_or_default();
         let entry = crate::search::extractor::extract_setting_entry("syncable", &body);
@@ -48,7 +49,7 @@ impl WriterCoreApi {
     }
 
     pub fn ensure_device_info(&self, platform: &str, device_class: &str) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .ensure_device_info(platform, device_class, None)
             .map(|_| true)
             .map_err(Into::into)

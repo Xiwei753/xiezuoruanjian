@@ -3,6 +3,10 @@ use std::os::raw::c_char;
 use super::{c_str_to_rust, err_json, ok_json, with_core};
 
 #[no_mangle]
+/// # Safety
+///
+/// This function does not take any pointer arguments, so there are no additional
+/// safety requirements beyond those inherent to FFI boundary calls.
 pub unsafe extern "C" fn writer_core_list_starmaps() -> *mut c_char {
     match with_core(|core| {
         let starmaps = core.list_starmaps().map_err(|e| format!("{}", e))?;
@@ -30,6 +34,10 @@ pub unsafe extern "C" fn writer_core_list_starmaps() -> *mut c_char {
 }
 
 #[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `project_id` points to a valid, null-terminated C string.
+/// Passing a null pointer or an invalid pointer is undefined behavior.
 pub unsafe extern "C" fn writer_core_list_starmaps_for_project(
     project_id: *const c_char,
 ) -> *mut c_char {
@@ -70,6 +78,10 @@ pub unsafe extern "C" fn writer_core_list_starmaps_for_project(
 }
 
 #[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `starmap_id` points to a valid, null-terminated C string.
+/// Passing a null pointer or an invalid pointer is undefined behavior.
 pub unsafe extern "C" fn writer_core_get_starmap(starmap_id: *const c_char) -> *mut c_char {
     let sid = match c_str_to_rust(starmap_id) {
         Ok(s) => s,
@@ -100,6 +112,10 @@ pub unsafe extern "C" fn writer_core_get_starmap(starmap_id: *const c_char) -> *
 }
 
 #[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `starmap_id` points to a valid, null-terminated C string.
+/// Passing a null pointer or an invalid pointer is undefined behavior.
 pub unsafe extern "C" fn writer_core_get_starmap_graph(starmap_id: *const c_char) -> *mut c_char {
     let sid = match c_str_to_rust(starmap_id) {
         Ok(s) => s,
@@ -120,6 +136,10 @@ pub unsafe extern "C" fn writer_core_get_starmap_graph(starmap_id: *const c_char
 }
 
 #[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `title` and `description` point to valid, null-terminated C strings.
+/// Passing null pointers or invalid pointers is undefined behavior.
 pub unsafe extern "C" fn writer_core_create_starmap(
     title: *const c_char,
     description: *const c_char,
@@ -159,6 +179,10 @@ pub unsafe extern "C" fn writer_core_create_starmap(
 }
 
 #[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `starmap_id` points to a valid, null-terminated C string.
+/// Passing a null pointer or an invalid pointer is undefined behavior.
 pub unsafe extern "C" fn writer_core_delete_starmap(starmap_id: *const c_char) -> *mut c_char {
     let sid = match c_str_to_rust(starmap_id) {
         Ok(s) => s,
@@ -179,6 +203,10 @@ pub unsafe extern "C" fn writer_core_delete_starmap(starmap_id: *const c_char) -
 }
 
 #[no_mangle]
+/// # Safety
+///
+/// The caller must ensure both `starmap_id` and `new_title` point to valid,
+/// null-terminated C strings. Passing null pointers or invalid pointers is undefined behavior.
 pub unsafe extern "C" fn writer_core_rename_starmap(
     starmap_id: *const c_char,
     new_title: *const c_char,
@@ -440,6 +468,10 @@ pub unsafe extern "C" fn writer_core_compute_starmap_edge_renders(
 }
 
 #[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `starmap_id_ptr` points to a valid, null-terminated C string.
+/// Passing a null pointer or an invalid pointer is undefined behavior.
 pub unsafe extern "C" fn writer_core_flush_starmap_store(
     starmap_id_ptr: *const c_char,
 ) -> *mut c_char {
@@ -463,6 +495,10 @@ pub unsafe extern "C" fn writer_core_flush_starmap_store(
 }
 
 #[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `starmap_id_ptr` points to a valid, null-terminated C string.
+/// Passing a null pointer or an invalid pointer is undefined behavior.
 pub unsafe extern "C" fn writer_core_close_starmap_store(
     starmap_id_ptr: *const c_char,
 ) -> *mut c_char {
@@ -486,6 +522,10 @@ pub unsafe extern "C" fn writer_core_close_starmap_store(
 }
 
 #[no_mangle]
+/// # Safety
+///
+/// This function does not take any pointer arguments, so there are no additional
+/// safety requirements beyond those inherent to FFI boundary calls.
 pub unsafe extern "C" fn writer_core_flush_all_starmap_stores() -> *mut c_char {
     match with_core(|core| {
         core.flush_all_starmap_stores()

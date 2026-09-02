@@ -8,7 +8,7 @@ fn get_chapter_title(
     volume_id: &str,
     chapter_id: &str,
 ) -> String {
-    api.core()
+    api.core_write()
         .list_chapters(project_id, volume_id)
         .ok()
         .and_then(|chapters| chapters.into_iter().find(|c| c.id == chapter_id))
@@ -28,7 +28,7 @@ impl WriterCoreApi {
         project_id: &str,
         volume_id: &str,
     ) -> ApiResult<Vec<ChapterMetaDto>> {
-        self.core()
+        self.core_read()
             .list_chapters(project_id, volume_id)
             .map(|v| v.into_iter().map(Into::into).collect())
             .map_err(Into::into)
@@ -42,7 +42,7 @@ impl WriterCoreApi {
         title: &str,
     ) -> ApiResult<ChapterMetaDto> {
         let chapter: ChapterMetaDto = self
-            .core()
+            .core_write()
             .create_chapter(project_id, volume_id, title)
             .map(Into::into)
             .map_err(WriterError::from)?;
@@ -87,7 +87,7 @@ impl WriterCoreApi {
         chapter_id: &str,
         new_title: &str,
     ) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .rename_chapter(project_id, volume_id, chapter_id, new_title)?;
         let title_entry = crate::search::extractor::extract_chapter_title_entry(
             project_id, volume_id, chapter_id, new_title,
@@ -100,7 +100,9 @@ impl WriterCoreApi {
             body: title_entry.body.clone(),
             target: Some(title_entry.target.clone()),
         });
-        let chapter_result = self.core().open_chapter(project_id, volume_id, chapter_id);
+        let chapter_result = self
+            .core_write()
+            .open_chapter(project_id, volume_id, chapter_id);
         if let Ok(content) = chapter_result {
             if !content.content.is_empty() {
                 let body_entry = crate::search::extractor::extract_chapter_body_entry(
@@ -121,7 +123,7 @@ impl WriterCoreApi {
             }
         }
         let ch_note = self
-            .core()
+            .core_write()
             .list_chapters(project_id, volume_id)
             .ok()
             .and_then(|chapters| chapters.into_iter().find(|c| c.id == chapter_id))
@@ -151,7 +153,7 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .delete_chapter(project_id, volume_id, chapter_id)?;
         for prefix in &[
             format!("chapter_title:{}:{}:{}", project_id, volume_id, chapter_id),
@@ -177,7 +179,7 @@ impl WriterCoreApi {
         volume_id: &str,
         ordered_chapter_ids: &[String],
     ) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .reorder_chapters(project_id, volume_id, ordered_chapter_ids)
             .map(|_| true)
             .map_err(Into::into)
@@ -190,7 +192,7 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<ChapterContentDto> {
-        self.core()
+        self.core_read()
             .open_chapter(project_id, volume_id, chapter_id)
             .map(Into::into)
             .map_err(Into::into)
@@ -205,7 +207,7 @@ impl WriterCoreApi {
         content: &str,
     ) -> ApiResult<ChapterSaveReceiptDto> {
         let receipt: ChapterSaveReceiptDto = self
-            .core()
+            .core_write()
             .write_chapter_verified(project_id, volume_id, chapter_id, content)
             .map(Into::into)?;
         let ch_title = get_chapter_title(self, project_id, volume_id, chapter_id);
@@ -233,7 +235,7 @@ impl WriterCoreApi {
         allow_empty_overwrite: bool,
     ) -> ApiResult<ChapterSaveReceiptDto> {
         let receipt: ChapterSaveReceiptDto = self
-            .core()
+            .core_write()
             .write_chapter_verified_with_allow_empty_overwrite(
                 project_id,
                 volume_id,
@@ -265,7 +267,7 @@ impl WriterCoreApi {
         chapter_id: &str,
     ) -> ApiResult<ChapterSaveReceiptDto> {
         let receipt: ChapterSaveReceiptDto = self
-            .core()
+            .core_write()
             .clear_chapter_content_verified(project_id, volume_id, chapter_id)
             .map(Into::into)?;
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
@@ -287,7 +289,7 @@ impl WriterCoreApi {
         chapter_id: &str,
         note: &str,
     ) -> ApiResult<bool> {
-        self.core()
+        self.core_write()
             .update_chapter_note(project_id, volume_id, chapter_id, note)?;
         let ch_title = get_chapter_title(self, project_id, volume_id, chapter_id);
         let entry = crate::search::extractor::extract_chapter_note_entry(

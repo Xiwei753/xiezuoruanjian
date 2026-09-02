@@ -27,10 +27,17 @@
 pub mod backends;
 pub mod config_store;
 pub mod conflict;
+/// #644 评论 5473789298 第3节：纯内容分类/三方比较（始终可用，不依赖 feature gate）。
+pub mod content_class;
 pub mod diagnostics;
+pub mod full_sync;
 pub mod full_sync_state;
 #[cfg(feature = "git-https")]
 pub mod git_backend;
+/// #644 评论 5475805198 第2节：Git metadata finalize 的原子提交边界。
+pub mod git_commit;
+/// #644 评论 5473789298 第1节：Git 专属 staging（用 git2，默认依赖，不需要 feature gate）。
+pub mod git_staging;
 #[cfg(feature = "github-api")]
 pub mod github_api_client;
 #[cfg(feature = "github-api")]
@@ -38,8 +45,11 @@ pub mod github_backend;
 pub mod legacy_migration;
 #[cfg(feature = "github-api")]
 pub mod lww;
+/// #644 评论 5489192105：统一的 ref transaction（持久 ownership + libgit2 refdb）。
+pub mod ref_transaction;
 pub mod scanner;
 pub mod service;
+pub mod staging;
 pub mod tests;
 pub mod types;
 pub mod url;

@@ -23,29 +23,30 @@ impl super::WriterAppService {
     }
 
     /**
-     * #592 六：secrets override 只在该进程尚未显式设置时从磁盘填充。
+     * #592 六 / #644 评论 5462823517 第1节：secrets override 只在该进程尚未显式设置时从磁盘填充。
      * 同步启动前 Android 层会把 snapshot 的凭据显式写入 override，
      * 使整个操作只使用同一份 snapshot，不再从磁盘二次读取。
+     *
+     * 新架构：override 唯一存在于 API 层 Mutex。refresh 调用
+     * [crate::api::service::WriterCoreApi::secrets_override_snapshot] 取当前应使用的凭据，
+     * 若 override 未显式设置则把 snapshot 写入 API override，后续 sync 全程复用。
      */
     fn refresh_secrets_override(&self) {
-        if self.api.secure_storage.is_some() {
-            let mut core = self.api.core();
-            if !core.has_secrets_override() {
-                let secrets = core.load_sync_secrets().unwrap_or_default();
-                core.set_secrets_override(Some(secrets));
-            }
+        if !self.api.has_secrets_override() {
+            let snapshot = self.api.secrets_override_snapshot();
+            self.api.set_secrets_override(snapshot);
         }
     }
 
-    /** #592 六：显式设置进程级 secrets override（同步启动前由平台层调用）。 */
+    /** #592 六 / #644 评论 5462823517 第1节：显式设置进程级 secrets override（同步启动前由平台层调用）。 */
     pub fn set_sync_secrets_override(&self, secrets: SyncSecretsDto) -> Result<(), WriterError> {
-        self.api.core().set_secrets_override(Some(secrets.into()));
+        self.api.set_secrets_override(Some(secrets.into()));
         Ok(())
     }
 
-    /** #595 十：清除进程级 secrets override（同步操作结束后由平台层调用）。 */
+    /** #595 十 / #644 评论 5462823517 第1节：清除进程级 secrets override（同步操作结束后由平台层调用）。 */
     pub fn clear_sync_secrets_override(&self) -> Result<(), WriterError> {
-        self.api.core().set_secrets_override(None);
+        self.api.set_secrets_override(None);
         Ok(())
     }
 
@@ -156,19 +157,19 @@ impl super::WriterAppService {
     }
 
     pub fn load_sync_secrets_with_secure_storage(&self) -> SyncSecrets {
-        self.api.core().load_sync_secrets().unwrap_or_default()
+        self.api.core_read().load_sync_secrets().unwrap_or_default()
     }
 
     pub fn load_sync_config_core(&self) -> Result<SyncConfig, WriterError> {
         self.api
-            .core()
+            .core_read()
             .load_sync_config()
             .map_err(WriterError::from)
     }
 
     pub fn save_sync_config_core(&self, config: &SyncConfig) -> Result<(), WriterError> {
         self.api
-            .core()
+            .core_write()
             .save_sync_config(config)
             .map_err(WriterError::from)
     }
@@ -178,7 +179,7 @@ impl super::WriterAppService {
         secrets: &SyncSecrets,
     ) -> Result<(), WriterError> {
         self.api
-            .core()
+            .core_write()
             .save_sync_secrets(secrets)
             .map_err(WriterError::from)
     }

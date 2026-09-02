@@ -69,10 +69,16 @@ fn test_list_projects_migrates_legacy_project_to_git_repo() {
     .unwrap();
     assert!(!legacy_dir.join(".git").exists());
 
-    // 读取到有效 project.json 后应把旧作品永久迁移为 Git 仓库。
+    // #644 评论 5493295108 问题1：list_projects 不再触发迁移，
+    // 只纯读取项目元数据。迁移职责移到 sync::staging::prepare_staging_runs。
     let projects = list_projects(&projects_root).unwrap();
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0].id, legacy_id);
+    // list 不应触发迁移，.git 仍不应存在。
+    assert!(!legacy_dir.join(".git").exists());
+
+    // 显式调 ensure_project_repo 才迁移为 Git 仓库。
+    crate::storage::project_git::ensure_project_repo(&legacy_dir).unwrap();
     assert!(legacy_dir.join(".git").exists());
     assert!(git2::Repository::open(&legacy_dir).is_ok());
 }

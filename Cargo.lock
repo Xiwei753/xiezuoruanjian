@@ -4058,6 +4058,7 @@ dependencies = [
  "criterion",
  "crop",
  "git2",
+ "libgit2-sys",
  "log",
  "md5",
  "once_cell",

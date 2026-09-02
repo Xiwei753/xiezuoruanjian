@@ -164,10 +164,21 @@ impl GitBackend for Git2Backend {
         let repo = git2::Repository::open(local_repo_path)
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
-        // Record transaction anchors
-        let is_unborn = repo.head().is_err();
-        let original_head_ref_name = repo.head().ok().and_then(|r| r.name().map(String::from));
-        let original_head_oid = repo.head().ok().and_then(|r| r.target());
+        // #644 评论 5493295108 问题5：只读一次 HEAD，并且只允许
+        // `git2::ErrorCode::UnbornBranch` 进入 unborn 分支；其它错误（IO 错误、
+        // refdb 损坏、权限问题）原样返回，不再 `.is_err()` / `.ok()` 吞掉错误。
+        let head_ref = match repo.head() {
+            Ok(r) => Some(r),
+            Err(e) if e.code() == git2::ErrorCode::UnbornBranch => None,
+            Err(e) => {
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "pull: failed to read HEAD (not UnbornBranch): {e}"
+                ))));
+            }
+        };
+        let is_unborn = head_ref.is_none();
+        let original_head_ref_name = head_ref.as_ref().and_then(|r| r.name().map(String::from));
+        let original_head_oid = head_ref.as_ref().and_then(|r| r.target());
         let original_index_bytes = std::fs::read(repo.path().join("index")).ok();
 
         let rollback = |repo: &git2::Repository| {
@@ -218,7 +229,9 @@ impl GitBackend for Git2Backend {
                 })?;
 
         // Handle unborn local repository
-        if repo.head().is_err() {
+        // #644 评论 5493295108 问题5：只允许 UnbornBranch 进入 unborn 分支；
+        // 其它 head() 错误已在前面返回 Err，这里 is_unborn 真实表示 UnbornBranch。
+        if is_unborn {
             let commit_obj = match repo.find_commit(fetch_commit.id()) {
                 Ok(c) => c,
                 Err(e) => {

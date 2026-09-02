@@ -71,3 +71,23 @@ data class RecentEdit(
     val chapterId: String,
     val timestamp: String,
 )
+
+/**
+ * #644 评论 5467821839 第7节：卷及其章节 — 一次跨 FFI 返回的卷 + 章节列表。
+ */
+data class VolumeWithChapters(
+    val volume: Volume,
+    val chapters: List<ChapterMeta>,
+)
+
+/**
+ * #644 评论 5467821839 第7节：作品工作区快照 — 一次跨 FFI 返回全部卷 + 章节 + 统计。
+ *
+ * Android `ProjectViewModel` 不再逐卷调 `listChapters`，而是一次拿到完整快照，
+ * 减少 FFI 调用次数和中间状态不一致窗口。
+ */
+data class ProjectWorkspaceSnapshot(
+    val project: Project,
+    val stats: ProjectStats,
+    val volumes: List<VolumeWithChapters>,
+)

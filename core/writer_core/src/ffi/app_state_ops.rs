@@ -54,6 +54,10 @@ pub unsafe extern "C" fn writer_core_list_app_summaries() -> *mut c_char {
 ///
 /// 此函数替换全局 `CORE` 单例。替换期间持有 Mutex 锁，保证与 `with_core` 互斥。
 /// 替换后旧 Core 被 drop，所有未保存状态丢失。
+/// # Safety
+///
+/// The caller must ensure `path` points to a valid, null-terminated C string.
+/// Passing a null pointer or an invalid pointer is undefined behavior.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_open_data_root(path: *const c_char) -> *mut c_char {
     let path_str = match c_str_to_rust(path) {

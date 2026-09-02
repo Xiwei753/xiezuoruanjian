@@ -453,6 +453,10 @@ pub unsafe extern "C" fn writer_core_delete_palette_record(
 }
 
 #[no_mangle]
+/// # Safety
+///
+/// This function does not take any pointer arguments, so there are no additional
+/// safety requirements beyond those inherent to FFI boundary calls.
 pub unsafe extern "C" fn writer_core_list_builtin_themes() -> *mut c_char {
     match with_core(|core| {
         let themes = core.list_builtin_themes();

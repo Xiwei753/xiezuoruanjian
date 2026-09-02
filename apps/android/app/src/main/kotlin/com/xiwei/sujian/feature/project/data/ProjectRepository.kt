@@ -9,6 +9,7 @@ import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.ProjectStats
 import com.xiwei.sujian.feature.project.data.model.ProjectSummary
+import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
 import com.xiwei.sujian.feature.project.data.model.Volume
 import com.xiwei.sujian.feature.sync.data.SyncFailureKind
 
@@ -93,6 +94,24 @@ open class ProjectRepository(private val context: Context, private val appBridge
 
     open fun getProjectStats(projectId: String): ProjectStats {
         return when (val result = statsBridge.getProjectStats(projectId)) {
+            is BridgeResult.Success -> result.data
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_get_project_stats_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
+        }
+    }
+
+    /**
+     * #644 评论 5467821839 第7节：一次返回作品的全部卷 + 章节 + 统计快照。
+     *
+     * 不再逐卷调 [getChapters]，减少 FFI 调用次数和中间状态不一致窗口。
+     */
+    open fun getProjectWorkspaceSnapshot(projectId: String): ProjectWorkspaceSnapshot {
+        return when (val result = projectBridge.getProjectWorkspaceSnapshot(projectId)) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> throw RepositoryException(
                 context.getString(R.string.repo_get_project_stats_failed, result.localizedMessage()),

@@ -1,6 +1,5 @@
 package com.xiwei.sujian.feature.editor.window
 
-import android.graphics.Rect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -19,6 +18,10 @@ import com.xiwei.sujian.feature.editor.session.TextEditorProfile
  * [isPersistent] determines the session lifecycle: persistent targets (chapter body)
  * keep their session across edits; draft targets (project title) close on every commit.
  * [commitPolicy] controls when the coordinator commits text to the domain model.
+ *
+ * #644 评论 5467821839 第5节：删除 currentGeometry/currentTransform/currentText/
+ * updateGeometry/updateTransform/updateText/onTextChanged/Transform2D。
+ * 正文持久化由 state-based BasicTextField + TextFieldState 接管，不再由 target 持有第三份正文。
  */
 class EditableTextTarget(
     val targetId: String,
@@ -30,8 +33,9 @@ class EditableTextTarget(
     var profile: TextEditorProfile by mutableStateOf(profile)
         private set
     var isPersistent: Boolean by mutableStateOf(isPersistent)
+        private set
     var commitPolicy: CommitPolicy by mutableStateOf(commitPolicy)
-    var onTextChanged: ((String) -> Unit)? = null
+        private set
     var onCommit: ((String) -> Unit)? = null
     var onCancel: (() -> Unit)? = null
     var onEditingStateChanged: ((EditingState) -> Unit)? = null
@@ -43,25 +47,6 @@ class EditableTextTarget(
      */
     var onEditorApplied: ((com.xiwei.sujian.feature.editor.session.EditorAppliedEvent) -> Unit)? = null
 
-    var currentGeometry: Rect by mutableStateOf(Rect())
-        private set
-    var currentTransform: Transform2D by mutableStateOf(Transform2D.IDENTITY)
-        private set
-    var currentText: String by mutableStateOf("")
-        private set
-
-    fun updateGeometry(rect: Rect) {
-        currentGeometry = rect
-    }
-
-    fun updateTransform(transform: Transform2D) {
-        currentTransform = transform
-    }
-
-    fun updateText(text: String) {
-        currentText = text
-    }
-
     fun updateProfile(newProfile: TextEditorProfile) {
         profile = newProfile
     }
@@ -72,17 +57,6 @@ class EditableTextTarget(
 
     fun updateCommitPolicy(newCommitPolicy: CommitPolicy) {
         commitPolicy = newCommitPolicy
-    }
-}
-
-data class Transform2D(
-    val translateX: Float = 0f,
-    val translateY: Float = 0f,
-    val scaleX: Float = 1f,
-    val scaleY: Float = 1f,
-) {
-    companion object {
-        val IDENTITY = Transform2D()
     }
 }
 

@@ -4,7 +4,7 @@ impl WriterCoreApi {
     pub fn list_registered_actions(
         &self,
     ) -> ApiResult<Vec<crate::api::types::ActionDescriptorDto>> {
-        self.core()
+        self.core_write()
             .list_registered_actions()
             .map(|list| list.into_iter().map(Into::into).collect())
             .map_err(Into::into)
@@ -16,14 +16,14 @@ impl WriterCoreApi {
         args_json: &str,
         context_json: &str,
     ) -> ApiResult<crate::api::types::ActionResultDto> {
-        self.core()
+        self.core_write()
             .execute_action(action_id, args_json, context_json)
             .map(Into::into)
             .map_err(Into::into)
     }
 
     pub fn ai_available(&self) -> bool {
-        self.core().ai_available()
+        self.core_write().ai_available()
     }
 
     pub fn list_registered_actions_json(&self) -> String {

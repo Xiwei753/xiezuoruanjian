@@ -65,3 +65,22 @@ impl From<crate::project::ProjectSummary> for ProjectSummaryDto {
         }
     }
 }
+
+/// #644 评论 5467821839 第7节：作品首次卷章快照 — 一次跨 FFI 返回全部卷 + 章节 + 统计。
+///
+/// Android `ProjectViewModel` 不再逐卷调 `list_chapters`，而是一次拿到完整快照。
+/// 每个 `VolumeWithChaptersDto` 包含卷元数据和该卷下所有章节元数据。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeWithChaptersDto {
+    pub volume: super::VolumeDto,
+    pub chapters: Vec<super::ChapterMetaDto>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectWorkspaceSnapshotDto {
+    pub project: ProjectDto,
+    pub stats: ProjectStatsDto,
+    pub volumes: Vec<VolumeWithChaptersDto>,
+}

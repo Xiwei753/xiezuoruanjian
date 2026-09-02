@@ -8,6 +8,7 @@
 //! 这些函数是平台客户端打开 Core 的统一入口，UniFFI 通过 `#[::uniffi::export]`
 //! 暴露给各平台绑定层。
 
+use std::path::Path;
 use std::sync::Arc;
 
 use writer_platform_api::{
@@ -20,12 +21,23 @@ use crate::api::error::WriterError;
 use crate::api::types::PlatformInitDto;
 use crate::app_service::WriterAppService;
 
+/// #644 评论 5495945801 问题4：启动时恢复待处理的删除事务。
+///
+/// 在创建 `WriterAppService` 之前调用，确保崩溃前的删除事务被完成。
+/// 恢复失败返回 Err（用 `?` 严格返回），让调用方决定。
+fn recover_storage_transactions(app_data_root: &Path) -> std::result::Result<(), WriterError> {
+    crate::storage::project_delete_transaction::recover_pending_delete_transactions(app_data_root)?;
+    Ok(())
+}
+
 /// 仅凭根目录打开服务，不注入平台能力。
 pub fn open_app_service(
     app_data_root: String,
     projects_root: String,
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
     crate::storage::git_runtime::ensure_initialized()?;
+    // #644 评论 5495945801 问题4：在创建服务之前先恢复待处理的删除事务。
+    recover_storage_transactions(Path::new(&app_data_root))?;
     let service = Arc::new(WriterAppService::new(app_data_root, projects_root));
     if let Err(e) = service.rebuild_search_index(None) {
         log::warn!("Failed to rebuild search index on open_app_service: {e}");
@@ -40,6 +52,14 @@ pub fn open_app_service_with_init(
     init: PlatformInitDto,
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
     crate::storage::git_runtime::ensure_initialized()?;
+    // #644 评论 5495945801 问题4：在创建服务之前先恢复待处理的删除事务。
+    recover_storage_transactions(Path::new(&app_data_root))?;
+    // #644 评论 5491531984 问题5：git_metadata_root 不在 PlatformInit 中，
+    // 从 PlatformInitDto 直接提取后传给 WriterCoreApi。
+    let git_metadata_root = init
+        .git_metadata_root
+        .as_ref()
+        .map(std::path::PathBuf::from);
     let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
 
@@ -63,6 +83,7 @@ pub fn open_app_service_with_init(
         app_data_root,
         projects_root,
         services,
+        git_metadata_root,
     ));
     if let Err(e) = service.rebuild_search_index(None) {
         log::warn!("Failed to rebuild search index on open_app_service_with_init: {e}");
@@ -79,6 +100,14 @@ pub fn open_app_service_with_secure_storage(
     secure_storage: Option<Box<dyn SecureStorageProvider>>,
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
     crate::storage::git_runtime::ensure_initialized()?;
+    // #644 评论 5495945801 问题4：在创建服务之前先恢复待处理的删除事务。
+    recover_storage_transactions(Path::new(&app_data_root))?;
+    // #644 评论 5491531984 问题5：git_metadata_root 不在 PlatformInit 中，
+    // 从 PlatformInitDto 直接提取后传给 WriterCoreApi。
+    let git_metadata_root = init
+        .git_metadata_root
+        .as_ref()
+        .map(std::path::PathBuf::from);
     let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
 
@@ -109,6 +138,7 @@ pub fn open_app_service_with_secure_storage(
         app_data_root,
         projects_root,
         services,
+        git_metadata_root,
     ));
     if let Err(e) = service.rebuild_search_index(None) {
         log::warn!("Failed to rebuild search index on open_app_service_with_secure_storage: {e}");
