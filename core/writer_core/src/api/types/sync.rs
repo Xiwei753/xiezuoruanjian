@@ -198,9 +198,6 @@ impl From<SyncSecretsDto> for crate::sync::SyncSecrets {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncStateDto {
     pub status: String,
-    pub remote_url: Option<String>,
-    pub backend_type: Option<String>,
-    pub transport: Option<String>,
     pub last_synced_commit: Option<String>,
     pub last_sync_time: Option<i64>,
     pub last_error: Option<String>,
@@ -236,9 +233,6 @@ impl From<crate::sync::SyncState> for SyncStateDto {
     fn from(s: crate::sync::SyncState) -> Self {
         Self {
             status: "idle".to_string(),
-            remote_url: s.remote_url,
-            backend_type: None,
-            transport: s.transport.map(sync_transport_to_wire),
             last_synced_commit: s.last_synced_commit,
             last_sync_time: s.last_sync_time,
             last_error: s.last_error,
@@ -264,8 +258,9 @@ impl From<SyncConflictDto> for crate::sync::SyncConflict {
 impl From<SyncStateDto> for crate::sync::SyncState {
     fn from(s: SyncStateDto) -> Self {
         crate::sync::SyncState {
-            remote_url: s.remote_url,
-            transport: s.transport.map(sync_transport_from_wire_owned),
+            // remote_url/transport 从 provider_config 推导，不再从 DTO 读取
+            remote_url: None,
+            transport: None,
             last_synced_commit: s.last_synced_commit,
             last_sync_time: s.last_sync_time,
             last_error: s.last_error,
@@ -432,6 +427,8 @@ impl From<crate::sync::SyncResult> for SyncResultDto {
     }
 }
 
+/// `SyncProtocol` → 线格式字符串。
+/// 保留供 UniFFI/JNI 层或其他 DTO 转换使用。
 fn sync_transport_to_wire(transport: crate::sync::SyncProtocol) -> String {
     match transport {
         crate::sync::SyncProtocol::HttpsToken => "https_token".to_string(),
@@ -439,15 +436,12 @@ fn sync_transport_to_wire(transport: crate::sync::SyncProtocol) -> String {
     }
 }
 
+/// 线格式字符串 → `SyncProtocol`。
 fn sync_transport_from_wire(s: &str) -> crate::sync::SyncProtocol {
     match s {
         "ssh" | "ssh_deploy_key" => crate::sync::SyncProtocol::SshDeployKey,
         _ => crate::sync::SyncProtocol::HttpsToken,
     }
-}
-
-fn sync_transport_from_wire_owned(s: String) -> crate::sync::SyncProtocol {
-    sync_transport_from_wire(&s)
 }
 
 /// `SyncProtocol` → 线格式字符串（与 `sync_transport_to_wire` 同映射，命名更直观）。

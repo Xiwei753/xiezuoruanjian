@@ -18,7 +18,7 @@ use crate::sync::url::detect_transport;
 use crate::sync::url::sanitize_remote_url;
 
 impl crate::sync::SyncService {
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, unused_variables)]
     pub fn perform_sync_diagnostics(
         config: &SyncConfig,
         secrets: &SyncSecrets,
@@ -45,12 +45,16 @@ impl crate::sync::SyncService {
         }
 
         // 从 provider_config 读取 GitHub remote_url（若为 GitHub provider）。
+        #[allow(unused_variables)]
         let (remote_url, transport_opt): (String, Option<SyncProtocol>) =
             match &config.provider_config {
                 #[cfg(feature = "github-api")]
                 Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => {
                     (gh.remote_url.clone(), Some(gh.transport.clone()))
                 }
+                #[cfg(feature = "github-api")]
+                None => (String::new(), None),
+                #[cfg(not(feature = "github-api"))]
                 _ => (String::new(), None),
             };
 

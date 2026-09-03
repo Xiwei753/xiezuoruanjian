@@ -255,9 +255,6 @@ dictionary SyncConflictDto {
 
 dictionary SyncStateDto {
     string status;
-    string? remote_url;
-    string? backend_type;
-    string? transport;
     string? last_synced_commit;
     i64? last_sync_time;
     string? last_error;

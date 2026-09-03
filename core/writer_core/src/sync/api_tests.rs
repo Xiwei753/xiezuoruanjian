@@ -112,7 +112,6 @@ fn test_load_save_app_sync_state_roundtrip() {
     let mut state = initial.clone();
     state.last_sync_time = Some(1_700_000_000);
     state.last_synced_commit = Some("abc123".to_string());
-    state.remote_url = Some("https://github.com/test/app-sync".to_string());
     api.save_app_sync_state(state.clone()).unwrap();
 
     // 验证写入了正确路径：<app_data_root>/app-meta/sync/state.local.json
@@ -135,10 +134,6 @@ fn test_load_save_app_sync_state_roundtrip() {
     let loaded = api.load_app_sync_state().unwrap();
     assert_eq!(loaded.last_sync_time, Some(1_700_000_000));
     assert_eq!(loaded.last_synced_commit.as_deref(), Some("abc123"));
-    assert_eq!(
-        loaded.remote_url.as_deref(),
-        Some("https://github.com/test/app-sync")
-    );
 
     // 验证不与作品级 state 冲突：作品级 state 在 project_root 下。
     let project = api.create_project("State Isolation Test").unwrap();

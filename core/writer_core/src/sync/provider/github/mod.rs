@@ -145,9 +145,11 @@ impl SyncProvider for GitHubProvider {
         // 根据前置条件决定传给 GitHub PUT 的 SHA。
         //
         // - IfMatch(v)：严格使用调用方给的版本，不查远端；409 直接返回 PreconditionFailed。
+        //   绝不在此分支"刷新 SHA"——冲突就是冲突，由 LWW engine 按乐观并发语义处理。
         // - CreateNew：不查旧 SHA，直接以 None 创建；对象已存在时 GitHub 返回 409/422。
         // - Unconditional：Provider 自己先读取当前远端 SHA，存在则用当前 SHA 覆盖，
         //   不存在则传 None 创建。这是唯一允许"刷新 SHA"的分支。
+        //   注意：读取 SHA 后到写入之间的竞态是允许的（LWW 引擎会在下次同步时检测冲突）。
         let remote_sha = match &precondition {
             WritePrecondition::IfMatch(v) => Some(v.0.clone()),
             WritePrecondition::CreateNew => None,
@@ -156,13 +158,21 @@ impl SyncProvider for GitHubProvider {
             }
         };
 
-        let (status, body) = client::put_content_serial(
+        let (status, body, new_sha) = client::put_content_serial(
             transport, api_base, token, branch, path, content, remote_sha,
         )?;
 
         if is_success_status(status) {
-            let new_sha = client::get_content_sha(transport, api_base, token, branch, path)?;
-            return Ok(RemoteVersion(new_sha.unwrap_or_default()));
+            // 新 SHA 从 PUT 响应中解析，避免写入后重新读取的竞态条件。
+            // 若响应中未包含 SHA（异常情况），回退到重新读取。
+            let sha = if let Some(sha) = new_sha {
+                sha
+            } else {
+                // 回退：响应中无 SHA 时重新读取（理论上不应发生）
+                client::get_content_sha(transport, api_base, token, branch, path)?
+                    .unwrap_or_default()
+            };
+            return Ok(RemoteVersion(sha));
         }
 
         match status {
@@ -208,8 +218,10 @@ impl SyncProvider for GitHubProvider {
         // 根据前置条件决定传给 GitHub DELETE 的 SHA。
         //
         // - IfMatch(v)：严格使用调用方给的版本，不查远端；409 直接返回 PreconditionFailed。
+        //   绝不在此分支"刷新 SHA"——冲突就是冲突，由 LWW engine 按乐观并发语义处理。
         // - Unconditional：Provider 自己先读取当前远端 SHA，存在则用当前 SHA 删除，
         //   不存在则直接成功（无需删除）。这是唯一允许"刷新 SHA"的分支。
+        //   注意：读取 SHA 后到删除之间的竞态是允许的（LWW 引擎会在下次同步时检测冲突）。
         let remote_sha = match &precondition {
             DeletePrecondition::IfMatch(v) => Some(v.0.clone()),
             DeletePrecondition::Unconditional => {

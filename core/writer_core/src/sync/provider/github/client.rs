@@ -139,7 +139,16 @@ pub(crate) fn get_content_sha(
 /// 上传或更新远程文件（单次尝试）。
 ///
 /// `sha = Some(...)` 时为更新已有文件，`sha = None` 时为创建新文件。
-/// 返回 HTTP 状态码和响应体，由调用方决定是否重试。
+/// 返回 HTTP 状态码、响应体和新文件的 SHA（从响应中解析）。
+///
+/// GitHub PUT API 响应格式：
+/// ```json
+/// {
+///   "content": { "sha": "new_blob_sha", ... },
+///   "commit": { "sha": "commit_sha", ... }
+/// }
+/// ```
+/// 新 SHA 从 `content.sha` 提取，用于避免写入后重新读取的竞态条件。
 pub(crate) fn put_content_once(
     transport: &dyn SyncTransport,
     api_base: &str,
@@ -148,7 +157,7 @@ pub(crate) fn put_content_once(
     path: &str,
     content: &[u8],
     sha: Option<&str>,
-) -> Result<(u16, String), ProviderError> {
+) -> Result<(u16, String, Option<String>), ProviderError> {
     let url = format!("{}/contents/{}", api_base, path);
     let mut payload = serde_json::json!({
         "message": format!("WriterApp sync {}", path),
@@ -160,12 +169,21 @@ pub(crate) fn put_content_once(
     }
     let resp = execute_json(transport, "PUT", &url, token, &payload)?;
     let body = String::from_utf8(resp.body).unwrap_or_default();
-    Ok((resp.status, body))
+    // 从响应中解析新 SHA，避免写入后重新读取的竞态条件
+    let new_sha = if is_success_status(resp.status) {
+        serde_json::from_str(&body)
+            .ok()
+            .and_then(|json: serde_json::Value| json["content"]["sha"].as_str().map(|s| s.to_string()))
+    } else {
+        None
+    };
+    Ok((resp.status, body, new_sha))
 }
 
-/// 上传文件，返回原始 HTTP 状态码和响应体。
+/// 上传文件，返回原始 HTTP 状态码、响应体和新文件的 SHA。
 ///
 /// 调用方根据状态码和 [`WritePrecondition`] 语义决定如何处理冲突（409）。
+/// 新 SHA 从 PUT 响应中解析，避免写入后重新读取的竞态条件。
 /// Provider 层不再在此处刷新 SHA 自动重试，由 LWW engine 按乐观并发语义处理。
 pub(crate) fn put_content_serial(
     transport: &dyn SyncTransport,
@@ -175,7 +193,7 @@ pub(crate) fn put_content_serial(
     path: &str,
     content: &[u8],
     remote_sha: Option<String>,
-) -> Result<(u16, String), ProviderError> {
+) -> Result<(u16, String, Option<String>), ProviderError> {
     put_content_once(
         transport,
         api_base,
