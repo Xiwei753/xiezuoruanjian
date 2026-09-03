@@ -51,6 +51,7 @@ impl From<SyncConfigDto> for crate::sync::SyncConfig {
     fn from(c: SyncConfigDto) -> Self {
         crate::sync::SyncConfig {
             enabled: c.enabled,
+            active_provider: c.backend_type.clone(),
             backend_type: match c.backend_type.as_str() {
                 "git" => crate::sync::BackendType::Git,
                 "github_api" => crate::sync::BackendType::GithubApi,

@@ -94,25 +94,25 @@ impl ProviderError {
 /// - `AuthFailed` / `PermissionDenied` → `SyncAuthFailed`
 /// - `Network` / `TemporaryUnavailable` → `SyncNetworkUnavailable`
 /// - `RateLimited` → `SyncRateLimited`
-/// - `NotFound` → `SyncGithubApiError { category: "file_not_found" }`
-/// - `PreconditionFailed` → `SyncGithubApiError { category: "remote_sha_conflict" }`
+/// - `NotFound` → `SyncRemoteApiError { category: "file_not_found" }`
+/// - `PreconditionFailed` → `SyncRemoteApiError { category: "remote_sha_conflict" }`
 /// - `Other` → `Other`
 ///
-/// `SyncGithubApiError` 在 Phase 6 后仍保留作为通用远端 API 错误载体，
+/// `SyncRemoteApiError` 在 Phase 6 后仍保留作为通用远端 API 错误载体，
 /// 其 `category` 字段是稳定 API 契约，不随 Provider 实现变化。
 impl From<ProviderError> for crate::Error {
     fn from(err: ProviderError) -> Self {
         match err {
             ProviderError::AuthFailed { reason } => crate::Error::SyncAuthFailed { reason },
             ProviderError::PermissionDenied { reason } => crate::Error::SyncAuthFailed { reason },
-            ProviderError::NotFound { path } => crate::Error::SyncGithubApiError {
+            ProviderError::NotFound { path } => crate::Error::SyncRemoteApiError {
                 category: "file_not_found".to_string(),
                 context: "read".to_string(),
                 status: 404,
                 body_preview: path,
             },
             ProviderError::PreconditionFailed { path, reason } => {
-                crate::Error::SyncGithubApiError {
+                crate::Error::SyncRemoteApiError {
                     category: "remote_sha_conflict".to_string(),
                     context: "conditional_write".to_string(),
                     status: 409,
@@ -182,6 +182,6 @@ mod tests {
         assert_eq!(e.code(), "SYNC_NETWORK_UNAVAILABLE");
 
         let e = crate::Error::from(ProviderError::NotFound { path: "a/b".into() });
-        assert_eq!(e.code(), "SYNC_GITHUB_API_ERROR");
+        assert_eq!(e.code(), "SYNC_REMOTE_API_ERROR");
     }
 }

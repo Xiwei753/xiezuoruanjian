@@ -159,10 +159,10 @@ pub(crate) fn put_content_once(
     Ok((resp.status, body))
 }
 
-/// 串行上传文件，自动处理 SHA 冲突（HTTP 409）。
+/// 上传文件，返回原始 HTTP 状态码和响应体。
 ///
-/// 首次 PUT 失败且为 409 时，刷新远程 SHA 后重试一次。
-/// 重试仍失败则返回错误。
+/// 调用方根据状态码和 [`WritePrecondition`] 语义决定如何处理冲突（409）。
+/// Provider 层不再在此处刷新 SHA 自动重试，由 LWW engine 按乐观并发语义处理。
 pub(crate) fn put_content_serial(
     transport: &dyn SyncTransport,
     api_base: &str,
@@ -171,8 +171,8 @@ pub(crate) fn put_content_serial(
     path: &str,
     content: &[u8],
     remote_sha: Option<String>,
-) -> Result<(), ProviderError> {
-    let (status, body) = put_content_once(
+) -> Result<(u16, String), ProviderError> {
+    put_content_once(
         transport,
         api_base,
         token,
@@ -180,35 +180,7 @@ pub(crate) fn put_content_serial(
         path,
         content,
         remote_sha.as_deref(),
-    )?;
-    if is_success_status(status) {
-        return Ok(());
-    }
-    if status == 409 {
-        let refreshed_sha = get_content_sha(transport, api_base, token, branch, path)?;
-        let (retry_status, retry_body) = put_content_once(
-            transport,
-            api_base,
-            token,
-            branch,
-            path,
-            content,
-            refreshed_sha.as_deref(),
-        )?;
-        if is_success_status(retry_status) {
-            return Ok(());
-        }
-        return Err(map_http_error(
-            &format!("put contents {} after sha refresh", path),
-            retry_status,
-            retry_body,
-        ));
-    }
-    Err(map_http_error(
-        &format!("put contents {}", path),
-        status,
-        body,
-    ))
+    )
 }
 
 /// 删除远程文件（单次尝试）。需要提供文件的当前 SHA。
@@ -233,11 +205,12 @@ pub(crate) fn delete_content_once(
     Ok((resp.status, body))
 }
 
-/// 串行删除远程文件，自动处理 SHA 冲突（HTTP 409）。
+/// 删除远程文件，返回原始 HTTP 状态码和响应体。
 ///
-/// 若 `remote_sha` 为 None 则跳过删除（文件在远程不存在）。
-/// 首次 DELETE 失败且为 409 时，刷新远程 SHA 后重试一次。
-/// 404 视为成功（文件已不存在），重试仍失败则返回错误。
+/// 若 `remote_sha` 为 None 则跳过删除（文件在远程不存在），返回成功。
+/// 404 视为成功（文件已不存在）。
+/// 调用方根据状态码和 [`DeletePrecondition`] 语义决定如何处理冲突（409）。
+/// Provider 层不再在此处刷新 SHA 自动重试，由 LWW engine 按乐观并发语义处理。
 pub(crate) fn delete_content_serial(
     transport: &dyn SyncTransport,
     api_base: &str,
@@ -245,35 +218,11 @@ pub(crate) fn delete_content_serial(
     branch: &str,
     path: &str,
     remote_sha: Option<String>,
-) -> Result<(), ProviderError> {
-    let Some(mut sha) = remote_sha else {
-        return Ok(());
+) -> Result<(u16, String), ProviderError> {
+    let Some(sha) = remote_sha else {
+        return Ok((200, String::new()));
     };
-    let (status, body) = delete_content_once(transport, api_base, token, branch, path, &sha)?;
-    if is_success_status(status) || status == 404 {
-        return Ok(());
-    }
-    if status == 409 {
-        if let Some(refreshed_sha) = get_content_sha(transport, api_base, token, branch, path)? {
-            sha = refreshed_sha;
-            let (retry_status, retry_body) =
-                delete_content_once(transport, api_base, token, branch, path, &sha)?;
-            if is_success_status(retry_status) || retry_status == 404 {
-                return Ok(());
-            }
-            return Err(map_http_error(
-                &format!("delete contents {} after sha refresh", path),
-                retry_status,
-                retry_body,
-            ));
-        }
-        return Ok(());
-    }
-    Err(map_http_error(
-        &format!("delete contents {}", path),
-        status,
-        body,
-    ))
+    delete_content_once(transport, api_base, token, branch, path, &sha)
 }
 
 /// 查询远端 Git tree（recursive），返回原始 HTTP 响应。

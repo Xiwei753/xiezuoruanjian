@@ -253,7 +253,7 @@ impl From<crate::error::Error> for WriterError {
             Error::SyncRemoteBranchNotFound { detail } => {
                 WriterError::Protocol(format!("remote_branch_not_found: {}", detail))
             }
-            Error::SyncGithubApiError {
+            Error::SyncRemoteApiError {
                 category,
                 context,
                 status,
@@ -268,7 +268,7 @@ impl From<crate::error::Error> for WriterError {
                     | crate::sync::types::SyncErrorCategory::TokenPermissionDenied
                     | crate::sync::types::SyncErrorCategory::AuthError => {
                         WriterError::Authentication(format!(
-                            "github_api_error: category={} context={} status={}",
+                            "remote_api_error: category={} context={} status={}",
                             category, context, status
                         ))
                     }
@@ -278,12 +278,12 @@ impl From<crate::error::Error> for WriterError {
                     | crate::sync::types::SyncErrorCategory::NetworkProbeFailed
                     | crate::sync::types::SyncErrorCategory::ApiRateLimited => {
                         WriterError::RetryableNetwork(format!(
-                            "github_api_error: category={} context={} status={}",
+                            "remote_api_error: category={} context={} status={}",
                             category, context, status
                         ))
                     }
                     _ => WriterError::Fatal(format!(
-                        "github_api_error: category={} context={} status={} body={}",
+                        "remote_api_error: category={} context={} status={} body={}",
                         category, context, status, body_preview
                     )),
                 }
@@ -408,14 +408,14 @@ mod tests {
             missing_files: vec!["f".into()],
         });
         assert!(matches!(incomplete, WriterError::Protocol(_)));
-        let github_auth = WriterError::from(Error::SyncGithubApiError {
+        let github_auth = WriterError::from(Error::SyncRemoteApiError {
             category: "token_invalid".into(),
             context: "c".into(),
             status: 401,
             body_preview: "b".into(),
         });
         assert!(matches!(github_auth, WriterError::Authentication(_)));
-        let github_net = WriterError::from(Error::SyncGithubApiError {
+        let github_net = WriterError::from(Error::SyncRemoteApiError {
             category: "dns_failed".into(),
             context: "c".into(),
             status: 0,

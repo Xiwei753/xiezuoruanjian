@@ -134,45 +134,90 @@ impl SyncProvider for GitHubProvider {
         precondition: WritePrecondition,
     ) -> Result<RemoteVersion, ProviderError> {
         let transport = self.transport();
-        let remote_sha = match precondition {
-            WritePrecondition::IfMatch(v) => Some(v.0),
+        let api_base = &self.config.api_base_url;
+        let token = &self.config.token;
+        let branch = &self.config.branch;
+
+        let remote_sha = match &precondition {
+            WritePrecondition::IfMatch(v) => Some(v.0.clone()),
             WritePrecondition::CreateNew => None,
             WritePrecondition::Unconditional => None,
         };
-        client::put_content_serial(
-            transport,
-            &self.config.api_base_url,
-            &self.config.token,
-            &self.config.branch,
-            path,
-            content,
-            remote_sha,
+
+        let (status, body) = client::put_content_serial(
+            transport, api_base, token, branch, path, content, remote_sha,
         )?;
-        // PUT 成功后重新拉取 sha 作为新版本标识。
-        let new_sha = client::get_content_sha(
-            transport,
-            &self.config.api_base_url,
-            &self.config.token,
-            &self.config.branch,
-            path,
-        )?;
-        Ok(RemoteVersion(new_sha.unwrap_or_default()))
+
+        if is_success_status(status) {
+            let new_sha = client::get_content_sha(transport, api_base, token, branch, path)?;
+            return Ok(RemoteVersion(new_sha.unwrap_or_default()));
+        }
+
+        match status {
+            409 => Err(ProviderError::PreconditionFailed {
+                path: path.to_string(),
+                reason: match precondition {
+                    WritePrecondition::IfMatch(_) => {
+                        format!("remote version changed: {}", truncate(&body, 200))
+                    }
+                    WritePrecondition::CreateNew => {
+                        format!("object already exists: {}", truncate(&body, 200))
+                    }
+                    WritePrecondition::Unconditional => {
+                        format!(
+                            "conditional write required by server: {}",
+                            truncate(&body, 200)
+                        )
+                    }
+                },
+            }),
+            _ => Err(map_http_error(
+                &format!("put contents {}", path),
+                status,
+                body,
+            )),
+        }
     }
 
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
         let transport = self.transport();
-        let remote_sha = match precondition {
-            DeletePrecondition::IfMatch(v) => Some(v.0),
+        let api_base = &self.config.api_base_url;
+        let token = &self.config.token;
+        let branch = &self.config.branch;
+
+        let remote_sha = match &precondition {
+            DeletePrecondition::IfMatch(v) => Some(v.0.clone()),
             DeletePrecondition::Unconditional => None,
         };
-        client::delete_content_serial(
-            transport,
-            &self.config.api_base_url,
-            &self.config.token,
-            &self.config.branch,
-            path,
-            remote_sha,
-        )
+
+        let (status, body) =
+            client::delete_content_serial(transport, api_base, token, branch, path, remote_sha)?;
+
+        if is_success_status(status) || status == 404 {
+            return Ok(());
+        }
+
+        match status {
+            409 => Err(ProviderError::PreconditionFailed {
+                path: path.to_string(),
+                reason: match precondition {
+                    DeletePrecondition::IfMatch(_) => {
+                        format!("remote version changed: {}", truncate(&body, 200))
+                    }
+                    DeletePrecondition::Unconditional => {
+                        format!(
+                            "conditional delete required by server: {}",
+                            truncate(&body, 200)
+                        )
+                    }
+                },
+            }),
+            _ => Err(map_http_error(
+                &format!("delete contents {}", path),
+                status,
+                body,
+            )),
+        }
     }
 }
 
@@ -303,4 +348,12 @@ fn diagnose_tree_404(
         ref_status,
         String::from_utf8(ref_resp.body).unwrap_or_default(),
     ))
+}
+
+fn is_success_status(status: u16) -> bool {
+    (200..300).contains(&status)
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
 }

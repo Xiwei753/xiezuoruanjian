@@ -8,24 +8,9 @@ pub(crate) fn now_epoch_seconds() -> i64 {
         .unwrap_or(0)
 }
 
-/// transport 初始化失败的类型化 Error 转换。
+/// transport 初始化失败的类型化 Error 转换（从 `full_sync::transport_init_failure_error` 转发）。
 pub(crate) fn transport_init_failure_error(category: &str, message: &str) -> crate::Error {
-    let reason = format!("Transport init failed: {} - {}", category, message);
-    match SyncErrorCategory::from_code(category, "") {
-        SyncErrorCategory::TokenMissing
-        | SyncErrorCategory::TokenInvalid
-        | SyncErrorCategory::TokenPermissionDenied
-        | SyncErrorCategory::AuthError
-        | SyncErrorCategory::RepoNotFoundOrNoPermission => crate::Error::SyncAuthFailed { reason },
-        SyncErrorCategory::NetworkFailed
-        | SyncErrorCategory::DnsFailed
-        | SyncErrorCategory::TlsFailed
-        | SyncErrorCategory::NetworkProbeFailed => crate::Error::SyncNetworkUnavailable { reason },
-        SyncErrorCategory::ApiRateLimited => crate::Error::SyncRateLimited {
-            retry_after_secs: 0,
-        },
-        _ => crate::Error::SyncAuthFailed { reason },
-    }
+    crate::sync::full_sync::transport_init_failure_error(category, message)
 }
 
 /// 判断 target 状态是否为协议错误。
@@ -117,7 +102,6 @@ pub(crate) fn full_sync_status_priority(status: &crate::sync::SyncStatus) -> u8 
 }
 
 /// 执行单个 target 的同步，把 `Err` 转为该 target 的 `SyncResult::error(...)`。
-#[cfg(feature = "github-api")]
 pub(crate) fn run_full_sync_target(
     provider: &dyn crate::sync::provider::SyncProvider,
     local_root: &std::path::Path,

@@ -80,7 +80,7 @@ fn classify_error(e: &crate::Error) -> SyncStatus {
         crate::Error::SyncRemoteBranchNotFound { .. } => {
             SyncStatus::RecoverableError(e.to_string())
         }
-        crate::Error::SyncGithubApiError { category, .. } => {
+        crate::Error::SyncRemoteApiError { category, .. } => {
             let cat = crate::sync::types::SyncErrorCategory::from_code(category, "");
             match cat {
                 crate::sync::types::SyncErrorCategory::AuthError

@@ -15,7 +15,7 @@ use crate::sync::provider::model::{DeletePrecondition, RemoteVersion, WritePreco
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::SyncManifest;
 
-/// 并行下载最大线程数。4 线程在 GitHub API 速率限制和本地磁盘 I/O 之间取得平衡。
+/// 并行下载最大线程数。4 线程在远端 API 速率限制和本地磁盘 I/O 之间取得平衡。
 pub(super) const MAX_PARALLEL_DOWNLOADS: usize = 4;
 
 /// 创建并行下载线程池。线程数取 `task_count` 和 `MAX_PARALLEL_DOWNLOADS` 的较小值，
@@ -101,7 +101,7 @@ pub(super) fn fetch_remote_manifest(
         if let Some(obj) = provider.read(&remote_manifest_path)? {
             remote_manifest =
                 serde_json::from_slice::<SyncManifest>(&obj.content).map_err(|e| {
-                    crate::Error::SyncGithubApiError {
+                    crate::Error::SyncRemoteApiError {
                         category: "api_error".to_string(),
                         context: format!("invalid remote manifest: {}", e),
                         status: 0,
@@ -211,7 +211,7 @@ pub(super) fn download_remote_files(
         to_download.par_iter().try_for_each(|path| {
             let remote_path = format!("{}/{}", remote_prefix, path);
             let Some(obj) = provider.read(&remote_path)? else {
-                return Err(crate::Error::SyncGithubApiError {
+                return Err(crate::Error::SyncRemoteApiError {
                     category: "api_error".to_string(),
                     context: format!("remote file missing while downloading {}", path),
                     status: 0,
@@ -238,9 +238,9 @@ pub(super) fn download_remote_files(
 
 /// 串行上传本地较新文件到远端。
 ///
-/// 通过 `provider.write` 实现幂等的 create-or-update：
-/// - 远端已存在（remote_tree_files 有 sha）→ `WritePrecondition::IfMatch(RemoteVersion(sha))`
-/// - 远端不存在 → `WritePrecondition::CreateNew`
+/// 通过 `provider.write` 实现 create-or-update：
+/// - `conditional_write = true`：使用乐观并发前置条件（IfMatch / CreateNew）。
+/// - `conditional_write = false`：使用 Unconditional 写入，由 engine 在写前读取远端版本。
 pub(super) fn upload_local_files(
     sync_root: &Path,
     provider: &dyn SyncProvider,
@@ -248,6 +248,7 @@ pub(super) fn upload_local_files(
     to_upload: &[String],
     remote_tree_files: &HashMap<String, String>,
 ) -> crate::Result<()> {
+    let caps = provider.capabilities();
     for path in to_upload {
         let full_path = sync_root.join(path);
         if !full_path.exists() {
@@ -257,9 +258,13 @@ pub(super) fn upload_local_files(
             crate::Error::Io(std::io::Error::other(format!("read {}: {}", path, e)))
         })?;
         let remote_path = format!("{}/{}", remote_prefix, path);
-        let precondition = match remote_tree_files.get(path.as_str()) {
-            Some(sha) => WritePrecondition::IfMatch(RemoteVersion(sha.clone())),
-            None => WritePrecondition::CreateNew,
+        let precondition = if caps.conditional_write {
+            match remote_tree_files.get(path.as_str()) {
+                Some(sha) => WritePrecondition::IfMatch(RemoteVersion(sha.clone())),
+                None => WritePrecondition::CreateNew,
+            }
+        } else {
+            WritePrecondition::Unconditional
         };
         provider.write(&remote_path, &content, precondition)?;
     }
@@ -267,17 +272,25 @@ pub(super) fn upload_local_files(
 }
 
 /// 串行删除远端文件。
+///
+/// - `conditional_write = true`：使用 IfMatch 前置条件（乐观并发）。
+/// - `conditional_write = false`：使用 Unconditional 删除。
 pub(super) fn delete_remote_files(
     provider: &dyn SyncProvider,
     remote_prefix: &str,
     paths: &[String],
     remote_tree_files: &HashMap<String, String>,
 ) -> crate::Result<()> {
+    let caps = provider.capabilities();
     for path in paths {
         let remote_path = format!("{}/{}", remote_prefix, path);
-        let precondition = match remote_tree_files.get(path.as_str()) {
-            Some(sha) => DeletePrecondition::IfMatch(RemoteVersion(sha.clone())),
-            None => DeletePrecondition::Unconditional,
+        let precondition = if caps.conditional_write {
+            match remote_tree_files.get(path.as_str()) {
+                Some(sha) => DeletePrecondition::IfMatch(RemoteVersion(sha.clone())),
+                None => DeletePrecondition::Unconditional,
+            }
+        } else {
+            DeletePrecondition::Unconditional
         };
         provider.delete(&remote_path, precondition)?;
     }
@@ -285,6 +298,9 @@ pub(super) fn delete_remote_files(
 }
 
 /// 上传合并后的 manifest 到远端。
+///
+/// - `conditional_write = true`：使用乐观并发前置条件。
+/// - `conditional_write = false`：使用 Unconditional 写入。
 pub(super) fn upload_manifest(
     provider: &dyn SyncProvider,
     remote_manifest_path: &str,
@@ -292,9 +308,14 @@ pub(super) fn upload_manifest(
     remote_tree_files: &HashMap<String, String>,
 ) -> crate::Result<()> {
     let sync_manifest_path = super::manifest::SYNC_MANIFEST_PATH;
-    let precondition = match remote_tree_files.get(sync_manifest_path) {
-        Some(sha) => WritePrecondition::IfMatch(RemoteVersion(sha.clone())),
-        None => WritePrecondition::CreateNew,
+    let caps = provider.capabilities();
+    let precondition = if caps.conditional_write {
+        match remote_tree_files.get(sync_manifest_path) {
+            Some(sha) => WritePrecondition::IfMatch(RemoteVersion(sha.clone())),
+            None => WritePrecondition::CreateNew,
+        }
+    } else {
+        WritePrecondition::Unconditional
     };
     provider.write(remote_manifest_path, manifest_json.as_bytes(), precondition)?;
     Ok(())

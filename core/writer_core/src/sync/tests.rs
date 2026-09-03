@@ -141,6 +141,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: "https://github.com/user/repo.git".to_string(),
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -335,6 +336,7 @@ mod tests {
 
         let dir = tempdir().unwrap();
         let config = SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncProtocol::HttpsToken,
@@ -392,6 +394,7 @@ mod tests {
         std::fs::write(dir.path().join("some_file.txt"), "hello").unwrap();
 
         let config = SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: true,
             remote_url: "https://github.com/test/test.git".to_string(),
             transport: SyncProtocol::HttpsToken,
@@ -515,6 +518,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_sync_config_state_no_token() {
         let config = SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: true,
             remote_url: "url".to_string(),
             transport: SyncProtocol::HttpsToken,
@@ -754,6 +758,7 @@ mod tests {
     #[test]
     fn test_sync_config_no_token() {
         let config = SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncProtocol::HttpsToken,
@@ -879,6 +884,7 @@ mod tests {
     fn test_sync_dry_run_disabled_config() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: false,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncProtocol::HttpsToken,
@@ -901,6 +907,7 @@ mod tests {
     fn test_sync_dry_run_enabled_config_scans() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncProtocol::HttpsToken,
@@ -936,6 +943,7 @@ mod tests {
     fn test_perform_sync_empty_remote_url() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: true,
             remote_url: "".to_string(),
             transport: SyncProtocol::HttpsToken,
@@ -974,6 +982,7 @@ mod tests {
     fn test_perform_sync_non_empty_remote() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncProtocol::HttpsToken,
@@ -1068,6 +1077,7 @@ mod tests {
         std::fs::write(state_dir.join("state.local.json"), "{}").unwrap();
 
         let config = SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncProtocol::HttpsToken,
@@ -1159,6 +1169,7 @@ mod tests {
     fn test_first_sync_mode_clone_into_empty_project() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncProtocol::HttpsToken,
@@ -1247,6 +1258,7 @@ mod tests {
     fn test_first_sync_mode_init_existing_project() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncProtocol::HttpsToken,
@@ -1335,6 +1347,7 @@ mod tests {
     fn test_first_sync_mode_already_git_repo() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncProtocol::HttpsToken,
@@ -1477,6 +1490,7 @@ mod tests {
         .unwrap();
 
         let config = SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: true,
             remote_url: "https://github.com/test/empty-repo.git".to_string(),
             transport: SyncProtocol::HttpsToken,
@@ -1935,6 +1949,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -2007,6 +2022,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -2079,6 +2095,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -2172,6 +2189,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -2244,6 +2262,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -2349,6 +2368,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -2441,6 +2461,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -2538,6 +2559,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -2610,6 +2632,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -2687,6 +2710,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -2774,6 +2798,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -2831,6 +2856,7 @@ mod tests {
         let config2 = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url2,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -3094,6 +3120,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -3132,6 +3159,7 @@ mod tests {
         let config2 = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url2,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -3190,6 +3218,7 @@ mod tests {
         let config3 = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url3,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -3286,6 +3315,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -3331,6 +3361,7 @@ mod tests {
         let config3 = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url3,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -3389,6 +3420,7 @@ mod tests {
         let config4 = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url4,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -3477,6 +3509,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -3589,6 +3622,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: mock_url,
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -3663,6 +3697,7 @@ mod tests {
     fn test_git_backend_diagnostics_not_assumed_ok() {
         // Git 后端诊断不再假成功，应返回明确的"不支持"状态
         let config = SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: true,
             backend_type: BackendType::Git,
             remote_url: "https://github.com/user/repo.git".to_string(),
@@ -3708,6 +3743,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: "https://github.com/test/debounce-test.git".to_string(),
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -3745,6 +3781,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: "https://github.com/test/force-sync-test.git".to_string(),
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -3793,6 +3830,7 @@ mod tests {
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: "https://github.com/test/pending-take-remote-test.git".to_string(),
             transport: SyncProtocol::HttpsToken,
             branch: "main".to_string(),
@@ -3890,6 +3928,7 @@ mod tests {
     #[cfg(all(not(windows), feature = "git-https"))]
     fn make_sync_config(remote_url: &str) -> SyncConfig {
         SyncConfig {
+            active_provider: "github_api".to_string(),
             enabled: true,
             remote_url: remote_url.to_string(),
             transport: SyncProtocol::HttpsToken,

@@ -103,9 +103,10 @@ pub enum Error {
     #[error("Sync remote branch not found: {detail}")]
     SyncRemoteBranchNotFound { detail: String },
 
-    /// GitHub API 错误——包含 HTTP 状态码和分类，便于平台端做错误映射。
-    #[error("GitHub API error [{category}]: {context} failed with HTTP {status}: {body_preview}")]
-    SyncGithubApiError {
+    /// 远端 API 错误——包含 HTTP 状态码和分类，便于平台端做错误映射。
+    /// Provider-neutral：GitHub/WebDAV/CloudKit 等远端实现共用此变体。
+    #[error("Remote API error [{category}]: {context} failed with HTTP {status}: {body_preview}")]
+    SyncRemoteApiError {
         category: String,
         context: String,
         status: u16,
@@ -157,7 +158,7 @@ impl Error {
             Error::SyncNonFastForward { .. } => "SYNC_NON_FAST_FORWARD",
             Error::SyncUnrelatedHistories { .. } => "SYNC_UNRELATED_HISTORIES",
             Error::SyncRemoteBranchNotFound { .. } => "SYNC_REMOTE_BRANCH_NOT_FOUND",
-            Error::SyncGithubApiError { .. } => "SYNC_GITHUB_API_ERROR",
+            Error::SyncRemoteApiError { .. } => "SYNC_REMOTE_API_ERROR",
             Error::DiskFull { .. } => "DISK_FULL",
             Error::StorageTransactionIncomplete { .. } => "STORAGE_TRANSACTION_INCOMPLETE",
             Error::SaveQueueFlushIncomplete { .. } => "SAVE_QUEUE_FLUSH_INCOMPLETE",
@@ -189,7 +190,7 @@ impl Error {
             Error::SyncNonFastForward { .. } => false,
             Error::SyncUnrelatedHistories { .. } => false,
             Error::SyncRemoteBranchNotFound { .. } => true,
-            Error::SyncGithubApiError { .. } => true,
+            Error::SyncRemoteApiError { .. } => true,
             Error::DiskFull { .. } => false,
             Error::StorageTransactionIncomplete { .. } => true,
             Error::SaveQueueFlushIncomplete { .. } => true,
@@ -251,7 +252,7 @@ impl Error {
             Error::SyncRemoteBranchNotFound { detail } => {
                 m.insert("detail".into(), detail.clone());
             }
-            Error::SyncGithubApiError {
+            Error::SyncRemoteApiError {
                 category,
                 context,
                 status,
@@ -292,14 +293,14 @@ impl Error {
 
     /// 同步错误分类键，供 SyncErrorCategory::from_code 直接使用。
     ///
-    /// 对于 SyncGithubApiError，返回结构化的 category 字段；
+    /// 对于 SyncRemoteApiError，返回结构化的 category 字段；
     /// 对于其他同步错误，返回与 code() 相同的值。
     /// 对于非同步错误，返回空字符串。
     pub fn sync_category(&self) -> &str {
         match self {
-            Error::SyncGithubApiError { category, .. } => category,
+            Error::SyncRemoteApiError { category, .. } => category,
             Error::SyncAuthFailed { .. } => "auth_error",
-            Error::SyncNetworkUnavailable { .. } => "github_network_failed",
+            Error::SyncNetworkUnavailable { .. } => "network_failed",
             Error::SyncRateLimited { .. } => "api_rate_limited",
             Error::SyncDocumentConflict { .. } => "conflict",
             Error::SyncIncompleteTransaction { .. } => "local_io_error",

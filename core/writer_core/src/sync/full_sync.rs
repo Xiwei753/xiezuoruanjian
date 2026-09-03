@@ -78,7 +78,6 @@ pub struct FullSyncTransferResult {
 ///
 /// 本函数是纯函数 — 不接触 `WriterCore`、不持锁、不写 `FullSyncState`。
 /// 调用方（API 层）在释放 core 写锁后调用。
-#[cfg(feature = "github-api")]
 pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyncTransferResult {
     let mut targets = Vec::with_capacity(plan.targets.len());
     for planned in &plan.targets {
@@ -108,7 +107,6 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
 ///
 /// `Err` 的 `recoverable()` 决定 `SyncStatus::RecoverableError` / `FatalError`，
 /// `sync_category()` 决定 `error_category`（空字符串视为无分类）。
-#[cfg(feature = "github-api")]
 fn run_single_target(
     provider: &dyn SyncProvider,
     local_root: &Path,

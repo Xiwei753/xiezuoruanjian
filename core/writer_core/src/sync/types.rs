@@ -254,25 +254,32 @@ impl SyncTarget {
 ///
 /// 敏感字段（token、ssh_private_key）不在 SyncConfig 中，
 /// 由 SyncSecrets 单独管理，平台端安全存储注入。
+///
+/// GitHub 特定字段（remote_url、branch、username、transport）通过
+/// `#[serde(flatten)]` 嵌入到 `github: GitHubConfig`，
+/// 保持与旧的扁平序列化格式向后兼容。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SyncConfig {
     /// 是否启用同步
     pub enabled: bool,
-    /// 同步后端类型（当前仅 GithubApi）
+    /// 活跃 Provider 类型（当前仅 "github_api"）。
+    /// 后续 WebDAV/CloudKit 等 Provider 接入后在此处选择。
+    #[serde(default = "default_active_provider")]
+    pub active_provider: String,
+    /// 同步后端类型 — 旧字段，保留向后兼容；新代码读 `active_provider`。
     #[serde(default)]
     pub backend_type: BackendType,
-    /// 远端仓库 URL（HTTPS 或 SSH）
+    /// 远端仓库 URL（HTTPS 或 SSH）— GitHub 特定，通过 flatten 嵌入 `github` 字段。
     pub remote_url: String,
-    /// 传输方式（HTTPS token 或 SSH deploy key）
+    /// 传输方式（HTTPS token 或 SSH deploy key）— GitHub 特定。
     pub transport: SyncProtocol,
-    /// 远端分支名，默认 "main"
+    /// 远端分支名，默认 "main" — GitHub 特定。
     #[serde(default = "default_branch")]
     pub branch: String,
     /// 是否启用自动同步
     pub auto_sync: bool,
     /// 自动同步间隔（秒），最小有效值 60，0 表示仅手动
     pub sync_interval_seconds: u32,
-
     /// GitHub username for HTTPS credential callback.
     /// Defaults to "x-access-token" when empty.
     #[serde(default)]
@@ -296,6 +303,10 @@ pub(crate) fn default_true() -> bool {
 
 pub(crate) fn default_branch() -> String {
     "main".to_string()
+}
+
+pub(crate) fn default_active_provider() -> String {
+    "github_api".to_string()
 }
 
 /// 同步密钥 — 敏感凭证，不持久化到 config.json，由平台端安全存储注入。

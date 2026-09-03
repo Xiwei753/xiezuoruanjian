@@ -36,7 +36,6 @@ pub mod full_sync;
 pub mod full_sync_state;
 pub(crate) mod full_sync_utils;
 pub mod git;
-#[cfg(feature = "github-api")]
 pub mod lww;
 pub mod provider;
 pub mod scanner;

@@ -5,9 +5,13 @@
 //! - MemoryProvider：支持原子批量、原子移动、目录语义，但无远端历史。
 //!
 //! engine 通过 `capabilities()` 查询后决定：
-//! - `conditional_write` 为真时使用 `IfMatch` 前置条件，否则降级为 `Unconditional`。
-//! - `batch` 为真时批量上传，否则逐个上传。
-//! - `server_timestamp` 为真时用远端时间戳做 LWW 比较，否则用本地时钟。
+//! - `conditional_write` 为真时使用 `IfMatch`/`CreateNew` 前置条件，
+//!   为假时降级为 `Unconditional` 写入。
+//!
+//! 当前实际使用的字段：`conditional_write`。
+//! 以下字段为后续 Provider（WebDAV、CloudKit 等）预留，当前 engine 暂未使用：
+//! `atomic_write`、`atomic_move`、`batch`、`server_timestamp`、
+//! `directory_semantics`、`remote_history`。
 
 /// Provider 能力集合 — 由各 Provider 实现静态返回。
 ///

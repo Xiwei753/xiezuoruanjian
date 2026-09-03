@@ -59,6 +59,7 @@ mod tests {
         SyncConfig {
             enabled: true,
             backend_type: crate::sync::BackendType::GithubApi,
+            active_provider: "github_api".to_string(),
             remote_url: remote_url.to_string(),
             transport: crate::sync::SyncProtocol::HttpsToken,
             branch: branch.to_string(),

@@ -133,7 +133,6 @@ impl super::WriterCore {
     /// `targets`，继续下一 target。只有无法建立 target 列表（`list_projects`
     /// 失败）或全局配置无法解析/transport 初始化失败这类无法开始事务的错误才让
     /// 整个 `perform_full_sync` 返回 `Err`。
-    #[cfg(feature = "github-api")]
     pub fn perform_full_sync(
         &self,
         config: &crate::sync::SyncConfig,
@@ -148,16 +147,6 @@ impl super::WriterCore {
         let provider = self.create_sync_provider_for_plan(config, &secrets)?;
         let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
         self.perform_full_sync_with_provider(provider.as_ref(), &sync_policy, force_sync)
-    }
-
-    /// `perform_full_sync` 的非 github-api fallback — 无 LWW engine 可用。
-    #[cfg(not(feature = "github-api"))]
-    pub fn perform_full_sync(
-        &self,
-        _config: &crate::sync::SyncConfig,
-        _force_sync: bool,
-    ) -> crate::error::Result<crate::sync::types::FullSyncResult> {
-        Err(crate::Error::NotImplemented)
     }
 
     /// #644 评论 5467821839 第7节：三段式全量同步 — Prepare 阶段（短写锁内调用）。
@@ -239,23 +228,22 @@ impl super::WriterCore {
     /// #644 评论 5467821839 第7节：三段式全量同步 — 创建 provider（Prepare 阶段、写锁内）。
     ///
     /// transport 初始化失败时返回 Err（已持久化失败状态）。
-    /// 仅支持 `BackendType::GithubApi`；`BackendType::Git` 走旧 git2 路径，不通过 SyncProvider。
+    /// 根据 `config.active_provider` 选择对应的 Provider 实现。
     pub fn create_sync_provider_for_plan(
         &self,
         config: &crate::sync::SyncConfig,
-        secrets: &crate::sync::SyncSecrets,
+        _secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<Box<dyn crate::sync::provider::SyncProvider>> {
-        let backend_type = crate::sync::resolved_backend_type(config);
-        match backend_type {
+        match config.active_provider.as_str() {
             #[cfg(feature = "github-api")]
-            crate::sync::types::BackendType::GithubApi => {
+            "github_api" => {
                 let transport = self.init_sync_transport().inspect_err(|err| {
                     let status = crate::sync::full_sync::error_to_persist_status(err);
                     self.persist_full_sync_early_failure(status, "preflight");
                 })?;
                 let provider_config =
                     crate::sync::provider::github::config::GitHubProviderConfig::from_sync_config(
-                        config, secrets,
+                        config, _secrets,
                     )
                     .map_err(crate::Error::from)?;
                 Ok(Box::new(
@@ -263,11 +251,10 @@ impl super::WriterCore {
                 ))
             }
             #[cfg(not(feature = "github-api"))]
-            crate::sync::types::BackendType::GithubApi => Err(crate::Error::NotImplemented),
-            crate::sync::types::BackendType::Git => {
-                // Git backend 走旧 git2 路径，不通过 SyncProvider。
-                Err(crate::Error::NotImplemented)
-            }
+            "github_api" => Err(crate::Error::NotImplemented),
+            // Git backend 走旧 git2 路径，不通过 SyncProvider。
+            "git" => Err(crate::Error::NotImplemented),
+            _ => Err(crate::Error::NotImplemented),
         }
     }
 
@@ -386,7 +373,6 @@ impl super::WriterCore {
     /// `perform_full_sync` 创建 provider 后委托到此方法；测试通过此方法注入 mock provider。
     /// 语义与 `perform_full_sync` 一致：单个 target 的 `Err` 转为该 target 的
     /// `SyncResult::error(...)` 后继续，只有 `list_projects` 失败才整体 `Err`。
-    #[cfg(feature = "github-api")]
     pub(crate) fn perform_full_sync_with_provider(
         &self,
         provider: &dyn crate::sync::provider::SyncProvider,
@@ -646,16 +632,15 @@ impl super::WriterCore {
     fn run_sync_diagnostics(
         &self,
         config: &crate::sync::SyncConfig,
-        secrets: &crate::sync::SyncSecrets,
+        _secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<crate::sync::SyncDiagnosticsResult> {
-        let backend_type = crate::sync::resolved_backend_type(config);
-        match backend_type {
+        match config.active_provider.as_str() {
             #[cfg(feature = "github-api")]
-            crate::sync::types::BackendType::GithubApi => {
+            "github_api" => {
                 let transport = self.init_sync_transport()?;
                 let provider_config =
                     crate::sync::provider::github::config::GitHubProviderConfig::from_sync_config(
-                        config, secrets,
+                        config, _secrets,
                     )
                     .map_err(crate::Error::from)?;
                 let provider =
@@ -663,9 +648,9 @@ impl super::WriterCore {
                 provider.diagnose().map_err(crate::Error::from)
             }
             #[cfg(not(feature = "github-api"))]
-            crate::sync::types::BackendType::GithubApi => Err(crate::Error::NotImplemented),
-            crate::sync::types::BackendType::Git => {
-                // Git backend 诊断走旧路径，Phase 7 后保留 legacy 不支持。
+            "github_api" => Err(crate::Error::NotImplemented),
+            _ => {
+                // Git backend 或其他未知 provider — 走旧路径或不支持。
                 Err(crate::Error::NotImplemented)
             }
         }

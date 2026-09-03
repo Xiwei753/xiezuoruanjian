@@ -164,6 +164,7 @@ fn test_config() -> SyncConfig {
     SyncConfig {
         enabled: true,
         backend_type: crate::sync::BackendType::GithubApi,
+        active_provider: "github_api".to_string(),
         remote_url: "https://github.com/test/repo.git".to_string(),
         transport: crate::sync::SyncProtocol::HttpsToken,
         branch: "main".to_string(),

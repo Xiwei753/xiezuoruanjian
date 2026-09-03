@@ -271,6 +271,7 @@ fn default_sync_config() -> crate::sync::SyncConfig {
     crate::sync::SyncConfig {
         enabled: false,
         backend_type: crate::sync::BackendType::GithubApi,
+        active_provider: "github_api".to_string(),
         remote_url: String::new(),
         transport: crate::sync::SyncProtocol::HttpsToken,
         branch: "main".to_string(),
