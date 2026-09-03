@@ -4379,4 +4379,149 @@ mod tests {
             result.downloaded_files
         );
     }
+
+    // ===== Issue #645 评论 5504296097：MemoryProvider + LWW engine 集成测试 =====
+    //
+    // 这组测试用 MemoryProvider 直接调用 SyncService::perform_lww_sync，
+    // 证明 LWW engine 通过 &dyn SyncProvider trait 与具体后端解耦：
+    // 新增 Provider 不需要复制 LWW engine，只需实现 SyncProvider trait。
+    //
+    // 与现有 GitHubProvider + mock server 测试不同，这里不需要 mock HTTP server，
+    // 也不需要 SyncSecrets/SyncTransport。MemoryProvider 是进程内 HashMap，
+    // 所有操作在锁内同步完成。
+    //
+    // 注意：perform_lww_sync 目前在 #[cfg(feature = "github-api")] 门后，
+    // 所以这组测试也标 github-api。它们不依赖 GitHubProvider 或 mock server，
+    // 只依赖 LWW engine + MemoryProvider。
+
+    #[cfg(feature = "github-api")]
+    fn lww_sync_with_memory(
+        sync_root: &Path,
+        provider: &dyn crate::sync::provider::SyncProvider,
+        force_sync: bool,
+    ) -> crate::Result<crate::sync::SyncResult> {
+        let target = crate::sync::types::SyncTarget::project("test");
+        let sync_policy = crate::sync::types::SyncPolicy {
+            enabled: true,
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            has_network_permission: true,
+        };
+        SyncService::perform_lww_sync(sync_root, provider, &sync_policy, &target, force_sync)
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
+    fn test_lww_sync_with_memory_provider_downloads_remote() {
+        // 场景：远端有文件、本地空 → engine 下载到本地。
+        // MemoryProvider 初始条目用完整远端路径（含 remote_prefix）。
+        // 远端无 manifest 条目时，engine 用空 manifest，build_remote_records
+        // 从 tree 补充 upsert 记录，触发下载。
+        let dir = tempdir().unwrap();
+        let provider = crate::sync::provider::MemoryProvider::with_entries([(
+            "projects/test/project.json".to_string(),
+            b"remote content".to_vec(),
+        )]);
+
+        let res = lww_sync_with_memory(dir.path(), &provider, true).unwrap();
+
+        // project.json 应被下载到本地。
+        assert!(res.downloaded_files.contains(&"project.json".to_string()));
+        // manifest 不计入 downloaded_files（它由 upload_manifest 单独上传）。
+        assert!(!res
+            .downloaded_files
+            .contains(&"app-meta/sync/manifest.sync.json".to_string()));
+        assert!(res.uploaded_files.is_empty());
+        assert!(res.local_deletes.is_empty());
+        assert!(res.remote_deletes.is_empty());
+
+        let local_file_path = dir.path().join("project.json");
+        assert!(local_file_path.exists());
+        let local_content = std::fs::read_to_string(local_file_path).unwrap();
+        assert_eq!(local_content, "remote content");
+        // engine 同步后会写本地 manifest。
+        assert!(dir.path().join("app-meta/sync/manifest.sync.json").exists());
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
+    fn test_lww_sync_with_memory_provider_uploads_local() {
+        // 场景：本地有文件、远端空 → engine 上传到远端。
+        // 本地 sync state 为默认（known_files 空），project.json 被视为新文件上传。
+        let dir = tempdir().unwrap();
+        let local_path = dir.path().join("project.json");
+        std::fs::create_dir_all(local_path.parent().unwrap()).unwrap();
+        std::fs::write(&local_path, "local content").unwrap();
+
+        let provider = crate::sync::provider::MemoryProvider::new();
+        let res = lww_sync_with_memory(dir.path(), &provider, true).unwrap();
+
+        assert!(res.uploaded_files.contains(&"project.json".to_string()));
+        assert!(res.downloaded_files.is_empty());
+        assert!(res.local_deletes.is_empty());
+        assert!(res.remote_deletes.is_empty());
+
+        // 远端 MemoryProvider 现在应有该文件，内容与本地一致。
+        use crate::sync::provider::SyncProvider;
+        let obj = provider.read("projects/test/project.json").unwrap();
+        assert!(obj.is_some());
+        assert_eq!(obj.unwrap().content, b"local content");
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
+    fn test_lww_sync_with_memory_provider_local_delete_propagates() {
+        // 场景：本地删除文件 → 远端删除。
+        // 本地 sync state 记录 known_files["project.json"]，但本地文件已删，
+        // build_local_records 生成 delete 墓碑。远端 manifest 记录 upsert
+        // （updated_at_ms 较小），LWW 本地 delete 时间戳获胜 →
+        // LwwLocalWinsDeleteRecord → delete_remote_files 删除远端文件。
+        let dir = tempdir().unwrap();
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert("project.json".to_string(), "old_hash".to_string());
+        state
+            .known_files_updated_at
+            .insert("project.json".to_string(), 1000);
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let remote_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: "project.json".to_string(),
+                content_hash: format!("{:x}", md5::compute(b"remote content")),
+                updated_at_ms: 900,
+                deleted_at_ms: None,
+                device_id: "device_remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+        let manifest_json = serde_json::to_string(&remote_manifest).unwrap();
+        let provider = crate::sync::provider::MemoryProvider::with_entries([
+            (
+                "projects/test/project.json".to_string(),
+                b"remote content".to_vec(),
+            ),
+            (
+                "projects/test/app-meta/sync/manifest.sync.json".to_string(),
+                manifest_json.into_bytes(),
+            ),
+        ]);
+
+        let res = lww_sync_with_memory(dir.path(), &provider, true).unwrap();
+
+        // 本地删除传播到远端：local_deletes 记录本地主动删除的路径。
+        assert!(res.local_deletes.contains(&"project.json".to_string()));
+
+        // 远端文件应被删除。
+        use crate::sync::provider::SyncProvider;
+        let obj = provider.read("projects/test/project.json").unwrap();
+        assert!(obj.is_none(), "remote file should be deleted after sync");
+    }
 }
