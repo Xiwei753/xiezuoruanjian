@@ -40,6 +40,11 @@ pub struct FullSyncPlan {
     /// #644 评论 5473401065 第1节：app_data_root 供 API 层在无锁状态下
     /// 调用 `prepare_staging_runs` 时传给 `StagingRun::create`。
     pub app_data_root: PathBuf,
+    /// #645 评论第 3 点：workspace 级别的 Git 仓库布局。
+    ///
+    /// 所有 target（app + projects）共享此 layout，不再在 `PlannedTarget` 上
+    /// 携带独立的 `git_layout`。`None` 表示标准 Git 布局（`projects_root/.git`）。
+    pub workspace_git_layout: Option<crate::storage::git_repo_layout::GitRepoLayout>,
 }
 
 /// 单个 target 的执行计划 — target 元数据 + 本地根 + 分类标签。
@@ -56,11 +61,6 @@ pub struct PlannedTarget {
     /// #644 评论 5473401065 第1节：target 对应的 live root，
     /// 供 `prepare_staging_runs` 在无锁状态下创建 staging 时使用。
     pub target_live_root: PathBuf,
-    /// #644 评论 5491531984 问题1：target 的 Git 仓库布局。
-    /// `None` 表示标准 Git 布局（`live_root/.git`）。
-    /// `Some(layout)` 时 Seed/Transfer/Commit 使用 layout 指定的 git_dir，
-    /// 不再从 `live_root` 猜路径。
-    pub git_layout: Option<crate::storage::git_repo_layout::GitRepoLayout>,
 }
 
 /// Transfer 阶段产出 — 各 target 的 `SyncResult`，待 Commit 聚合。
@@ -263,16 +263,13 @@ pub fn transport_init_failure_error(category: &str, message: &str) -> crate::Err
     use crate::sync::types::SyncErrorCategory;
     let reason = format!("Transport init failed: {} - {}", category, message);
     match SyncErrorCategory::from_code(category, "") {
-        SyncErrorCategory::TokenMissing
-        | SyncErrorCategory::TokenInvalid
-        | SyncErrorCategory::TokenPermissionDenied
-        | SyncErrorCategory::AuthError
-        | SyncErrorCategory::RepoNotFoundOrNoPermission => crate::Error::SyncAuthFailed { reason },
-        SyncErrorCategory::NetworkFailed
-        | SyncErrorCategory::DnsFailed
-        | SyncErrorCategory::TlsFailed
-        | SyncErrorCategory::NetworkProbeFailed => crate::Error::SyncNetworkUnavailable { reason },
-        SyncErrorCategory::ApiRateLimited => crate::Error::SyncRateLimited {
+        SyncErrorCategory::AuthFailed
+        | SyncErrorCategory::PermissionDenied
+        | SyncErrorCategory::NotFound => crate::Error::SyncAuthFailed { reason },
+        SyncErrorCategory::Network | SyncErrorCategory::TemporaryUnavailable => {
+            crate::Error::SyncNetworkUnavailable { reason }
+        }
+        SyncErrorCategory::RateLimited => crate::Error::SyncRateLimited {
             retry_after_secs: 0,
         },
         // 其它未知项保守起视为不可恢复，不落 Io 后自动变可重试

@@ -169,7 +169,7 @@ fn test_config() -> SyncConfig {
                 remote_url: "https://github.com/test/repo.git".to_string(),
                 branch: "main".to_string(),
                 username: String::new(),
-                transport: crate::sync::types::SyncProtocol::HttpsToken,
+                transport: crate::sync::provider::github::config::GitHubTransport::HttpsToken,
             },
         )),
         auto_sync: false,

@@ -2,22 +2,18 @@
 //!
 //! 本模块包含所有同步后端的实现：
 //! - `model.rs` / `capabilities.rs` / `error.rs` / `memory.rs` - provider-neutral 契约层（Issue #645）
-//! - `git_backend.rs` - Git 同步后端（libgit2 实现）
 //! - `github/` - GitHub API Provider 实现（Issue #645）
 //!
 //! ## SyncProvider trait
 //!
 //! [`SyncProvider`] 是 provider-neutral 的远端同步契约，只描述远端对象的
 //! list/read/write/delete 四个原语，不涉及 SyncConfig/SyncSecrets/SyncTransport。
-//! LWW engine 通过此 trait 与具体后端解耦，GitHub/Git/Memory 各自实现。
+//! LWW engine 通过此 trait 与具体后端解耦，GitHub/Memory 各自实现。
 
 pub mod capabilities;
 pub mod error;
 pub mod memory;
 pub mod model;
-
-#[cfg(feature = "git-https")]
-pub mod git_backend;
 
 #[cfg(feature = "github-api")]
 pub mod github;
@@ -109,9 +105,6 @@ pub use capabilities::*;
 pub use error::*;
 pub use memory::*;
 pub use model::*;
-
-#[cfg(feature = "git-https")]
-pub use git_backend::*;
 
 #[cfg(feature = "github-api")]
 pub use github::*;

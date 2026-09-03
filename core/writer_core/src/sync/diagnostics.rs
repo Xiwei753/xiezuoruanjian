@@ -10,9 +10,10 @@
 
 #[cfg(feature = "github-api")]
 use crate::sync::provider::github::config::GitHubProviderConfig;
+#[cfg(feature = "github-api")]
+use crate::sync::provider::github::config::GitHubTransport;
 use crate::sync::types::SyncConfig;
 use crate::sync::types::SyncDiagnosticsResult;
-use crate::sync::types::SyncProtocol;
 use crate::sync::types::SyncSecrets;
 #[cfg(feature = "github-api")]
 use crate::sync::url::detect_transport;
@@ -47,18 +48,16 @@ impl crate::sync::SyncService {
         }
 
         // 从 provider_config 读取 GitHub remote_url（若为 GitHub provider）。
-        #[allow(unused_variables)]
-        let (remote_url, transport_opt): (String, Option<SyncProtocol>) =
+        #[cfg(feature = "github-api")]
+        let (remote_url, transport_opt): (String, Option<GitHubTransport>) =
             match &config.provider_config {
-                #[cfg(feature = "github-api")]
                 Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => {
                     (gh.remote_url.clone(), Some(gh.transport.clone()))
                 }
-                #[cfg(feature = "github-api")]
                 None => (String::new(), None),
-                #[cfg(not(feature = "github-api"))]
-                _ => (String::new(), None),
             };
+        #[cfg(not(feature = "github-api"))]
+        let (remote_url, transport_opt): (String, Option<()>) = (String::new(), None);
 
         match config.active_provider.as_str() {
             #[cfg(feature = "github-api")]
@@ -69,11 +68,11 @@ impl crate::sync::SyncService {
 
                 let transport = transport_opt.unwrap_or_else(|| detect_transport(&sanitized_url));
                 result.transport = match transport {
-                    SyncProtocol::HttpsToken => "https".to_string(),
-                    SyncProtocol::SshDeployKey => "ssh".to_string(),
+                    GitHubTransport::HttpsToken => "https".to_string(),
+                    GitHubTransport::SshDeployKey => "ssh".to_string(),
                 };
 
-                if transport == SyncProtocol::SshDeployKey {
+                if transport == GitHubTransport::SshDeployKey {
                     result.error_category = "ssh_not_recommended".to_string();
                     result.network_status = "skipped_ssh".to_string();
                     result.auth_status = "skipped".to_string();

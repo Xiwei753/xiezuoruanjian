@@ -228,25 +228,11 @@ impl super::WriterCore {
 
     /// #644 评论 5493295108 问题4：删除作品时同时清理 private git_dir。
     ///
-    /// `git_metadata_root=Some` 时，把 private git_dir 也移进 trash
-    /// （在 private 根下建 `trash/<delete-token>/`，同文件系统 rename）。
-    /// worktree trash 和 private Git trash 用同一个 delete token 关联，
-    /// 之后跟同一份删除生命周期清理。
+    /// #645 评论第 3 点：改用 workspace 级别的 Git layout 后，git_dir 是所有
+    /// target 共享的（`root/workspace/`），删除单个作品不应移动共享 git_dir。
+    /// 因此 `delete_project` 直接走无 layout 路径，只删作品目录。
     pub fn delete_project(&self, project_id: &str) -> crate::error::Result<()> {
-        match &self.git_metadata_root {
-            Some(_root) => {
-                let layout = self.project_git_layout(project_id);
-                crate::project::delete_project_with_layout(
-                    &self.projects_root,
-                    project_id,
-                    &self.app_data_root,
-                    Some(&layout),
-                )
-            }
-            None => {
-                crate::project::delete_project(&self.projects_root, project_id, &self.app_data_root)
-            }
-        }
+        crate::project::delete_project(&self.projects_root, project_id, &self.app_data_root)
     }
 
     /// #644 评论 5492740265 问题4：重排作品时走 layout factory。

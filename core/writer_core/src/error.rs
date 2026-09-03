@@ -105,8 +105,8 @@ pub enum Error {
 
     /// 远端 Provider 错误——包含分类和上下文，便于平台端做错误映射。
     /// Provider-neutral：GitHub/WebDAV/CloudKit 等远端实现共用此变体。
-    /// `category` 为 provider-neutral 的错误分类字符串（如 "file_not_found"、
-    /// "remote_sha_conflict"、"api_error"），不包含 "github_" 前缀。
+    /// `category` 为 provider-neutral 的错误分类字符串（如 "precondition_failed"、
+    /// "not_found"、"api_error"），不包含 "github_" 前缀。
     #[error(
         "Remote provider error [{category}]: {context} failed with status {status}: {body_preview}"
     )]
@@ -195,12 +195,12 @@ impl Error {
             Error::SyncUnrelatedHistories { .. } => false,
             Error::SyncRemoteBranchNotFound { .. } => true,
             // SyncRemoteError 按 category 结构化判断可恢复性：
-            // - remote_sha_conflict：乐观并发冲突（IfMatch 不匹配或 CreateNew 时对象已存在），
+            // - precondition_failed：乐观并发冲突（IfMatch 不匹配或 CreateNew 时对象已存在），
             //   不可重试，需上层拉取远端最新版本后重新决策或上报冲突让用户处理。
-            // - file_not_found：远端对象不存在，重试也不会出现，不可重试。
+            // - not_found：远端对象不存在，重试也不会出现，不可重试。
             // - 其他 category（如 api_error、network 类临时错误）：保守视为可恢复，允许重试。
             Error::SyncRemoteError { category, .. } => {
-                !matches!(category.as_str(), "remote_sha_conflict" | "file_not_found")
+                !matches!(category.as_str(), "precondition_failed" | "not_found")
             }
             Error::DiskFull { .. } => false,
             Error::StorageTransactionIncomplete { .. } => true,
@@ -307,19 +307,22 @@ impl Error {
     /// 对于 SyncRemoteError，返回结构化的 category 字段；
     /// 对于其他同步错误，返回与 code() 相同的值。
     /// 对于非同步错误，返回空字符串。
+    ///
+    /// Issue #645 评论 5504296097 第1点：返回值与新的 provider-neutral
+    /// `SyncErrorCategory` 通用 code 对齐。
     pub fn sync_category(&self) -> &str {
         match self {
             Error::SyncRemoteError { category, .. } => category,
-            Error::SyncAuthFailed { .. } => "auth_error",
-            Error::SyncNetworkUnavailable { .. } => "network_failed",
-            Error::SyncRateLimited { .. } => "api_rate_limited",
+            Error::SyncAuthFailed { .. } => "auth_failed",
+            Error::SyncNetworkUnavailable { .. } => "network",
+            Error::SyncRateLimited { .. } => "rate_limited",
             Error::SyncDocumentConflict { .. } => "conflict",
-            Error::SyncIncompleteTransaction { .. } => "local_io_error",
-            Error::SyncCheckoutConflict { .. } => "checkout_conflict",
+            Error::SyncIncompleteTransaction { .. } => "local_io",
+            Error::SyncCheckoutConflict { .. } => "precondition_failed",
             Error::SyncConflictDetected => "conflict",
-            Error::SyncNonFastForward { .. } => "non_fast_forward",
-            Error::SyncUnrelatedHistories { .. } => "unrelated_histories",
-            Error::SyncRemoteBranchNotFound { .. } => "branch_missing",
+            Error::SyncNonFastForward { .. } => "conflict",
+            Error::SyncUnrelatedHistories { .. } => "conflict",
+            Error::SyncRemoteBranchNotFound { .. } => "not_found",
             _ => "",
         }
     }
@@ -371,18 +374,18 @@ mod tests {
 
     #[test]
     fn test_recoverable_sync_remote_error_by_category() {
-        // remote_sha_conflict：乐观并发冲突，不可重试
+        // precondition_failed：乐观并发冲突，不可重试
         let conflict = Error::SyncRemoteError {
-            category: "remote_sha_conflict".into(),
+            category: "precondition_failed".into(),
             context: "conditional_write".into(),
             status: 409,
             body_preview: "sha mismatch".into(),
         };
         assert!(!conflict.recoverable());
 
-        // file_not_found：远端对象不存在，不可重试
+        // not_found：远端对象不存在，不可重试
         let not_found = Error::SyncRemoteError {
-            category: "file_not_found".into(),
+            category: "not_found".into(),
             context: "read".into(),
             status: 404,
             body_preview: "missing".into(),

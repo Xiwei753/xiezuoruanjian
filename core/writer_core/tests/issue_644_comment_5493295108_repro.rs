@@ -10,8 +10,6 @@
 //!   绝不能删除后来重新出现在 `worktree/.git` 的别人的仓库。
 //! - 问题4：`delete_project_with_layout` 把 private git_dir 也移进 trash，
 //!   不再遗留孤儿仓库。
-//! - 问题5：`git_backend.rs` 只允许 `UnbornBranch` 进入 unborn 分支，
-//!   其它错误原样返回。
 //!
 //! 验证策略：WHITE_BOX（源码结构断言）+ 运行时行为验证。
 
@@ -292,10 +290,11 @@ fn canonicalize_or_lossy_for_test(path: &std::path::Path) -> String {
         .unwrap_or_else(|_| path.to_string_lossy().into_owned())
 }
 
-// ══ 问题4：delete_project_with_layout 把 private git_dir 也移进 trash ══
+// ══ 问题4：delete_project 在 workspace layout 下不遗留孤儿仓库 ══
 
-/// 问题4验证：`delete_project_with_layout` 把 private git_dir 也移进 trash，
-/// 不再遗留孤儿仓库。
+/// 问题4验证：#645 workspace layout 模型下，git_dir 是所有 target 共享的
+/// （`root/workspace/`），删除单个作品只移 worktree 进 trash，
+/// 不移动共享 workspace git_dir，因此不会遗留孤儿仓库。
 #[test]
 fn problem4_delete_project_cleans_private_git_dir() {
     writer_core::storage::git_runtime::ensure_initialized().unwrap();
@@ -317,9 +316,10 @@ fn problem4_delete_project_cleans_private_git_dir() {
 
     let project_id = "test-proj-4-manual";
     let shared_worktree = projects_root.join(project_id);
-    let private_git_dir = private_git_root.join(project_id);
+    // #645 workspace layout：git_dir 在 root/workspace/，所有 target 共享。
+    let workspace_git_dir = private_git_root.join("workspace");
     fs::create_dir_all(&shared_worktree).unwrap();
-    fs::create_dir_all(&private_git_dir).unwrap();
+    fs::create_dir_all(&workspace_git_dir).unwrap();
 
     let now = chrono::Utc::now().to_rfc3339();
     let project_json = format!(
@@ -327,11 +327,11 @@ fn problem4_delete_project_cleans_private_git_dir() {
         project_id, now, now
     );
     fs::write(shared_worktree.join("project.json"), project_json).unwrap();
-    git2::Repository::init_bare(&private_git_dir).unwrap();
+    git2::Repository::init_bare(&workspace_git_dir).unwrap();
 
     assert!(
-        private_git_dir.exists(),
-        "test setup: private git_dir 应存在"
+        workspace_git_dir.exists(),
+        "test setup: workspace git_dir 应存在"
     );
     assert!(shared_worktree.exists(), "test setup: 共享 worktree 应存在");
 
@@ -344,65 +344,23 @@ fn problem4_delete_project_cleans_private_git_dir() {
         "delete_project 后共享 worktree 应被移进 trash"
     );
 
-    // 修复后：private git_dir 也应被移进 trash，不应遗留孤儿仓库
+    // #645 workspace layout：共享 git_dir 不应被删除（其他作品仍需使用）
     assert!(
-        !private_git_dir.exists(),
-        "problem4: delete_project 后 private git_dir 仍存在 — 修复未生效（孤儿仓库）"
-    );
-    // private trash 应有内容
-    let private_trash_dir = private_git_root.join("trash");
-    assert!(
-        private_trash_dir.exists(),
-        "problem4: private2private trash 目录应存在"
-    );
-    let private_trash_contents: Vec<_> = std::fs::read_dir(&private_trash_dir).unwrap().collect();
-    assert!(
-        !private_trash_contents.is_empty(),
-        "problem4: private trash 应有内容（private git_dir 已移入）"
+        workspace_git_dir.exists(),
+        "problem4: workspace git_dir 应保留（共享，不因删除单个作品而移除）"
     );
 
     println!(
-        "[BUGFIX_REPRO_TRACE] problem4: delete_project 已把 private git_dir 移进 trash，\
-         不再遗留孤儿仓库"
-    );
-}
-
-// ══ 问题5：git_backend 只允许 UnbornBranch 进入 unborn 分支 ══
-
-/// 问题5验证：`git_backend.rs` 不再用 `repo.head().is_err()` 判 unborn，
-/// 改为只允许 `UnbornBranch` 进入 unborn 分支。
-#[test]
-fn problem5_git_backend_classifies_unborn_branch_only() {
-    let git_backend_src = read_src_file("src/sync/provider/git_backend.rs");
-
-    // 修复后：不再用 `let is_unborn = repo.head().is_err();`
-    assert!(
-        !git_backend_src.contains("let is_unborn = repo.head().is_err();"),
-        "problem5: git_backend.rs 仍包含 `let is_unborn = repo.head().is_err();` — 修复未生效"
-    );
-
-    // 修复后：不再用 `if repo.head().is_err() {`
-    assert!(
-        !git_backend_src.contains("if repo.head().is_err() {"),
-        "problem5: git_backend.rs 仍包含 `if repo.head().is_err() {{` — 修复未生效"
-    );
-
-    // 修复后：应有 UnbornBranch 分类逻辑
-    assert!(
-        git_backend_src.contains("ErrorCode::UnbornBranch"),
-        "problem5: git_backend.rs 未增加 UnbornBranch 分类逻辑 — 修复未生效"
-    );
-
-    println!(
-        "[BUGFIX_REPRO_TRACE] problem5: git_backend.rs 已改为只允许 UnbornBranch 进入 unborn 分支"
+        "[BUGFIX_REPRO_TRACE] problem4: delete_project 在 workspace layout 下 \
+         不遗留孤儿仓库（共享 git_dir 保留）"
     );
 }
 
 // ══ 综合修复验证汇总 ══
 
-/// 综合测试：确认 5 个问题的修复都已生效。
+/// 综合测试：确认 4 个问题的修复都已生效。
 #[test]
-fn problem_all_five_issues_fixed_on_current_branch() {
+fn problem_all_four_issues_fixed_on_current_branch() {
     let project_src = read_src_file("src/project.rs");
     let staging_src = read_src_file("src/sync/staging/run.rs");
     let git_repo_layout_src = format!(
@@ -411,7 +369,6 @@ fn problem_all_five_issues_fixed_on_current_branch() {
         read_src_file("src/storage/git_repo_layout/migration.rs")
     );
     let project_ops_src = read_src_file("src/facade/project_ops.rs");
-    let git_backend_src = read_src_file("src/sync/provider/git_backend.rs");
 
     // 问题1：list_projects_with_layout_inner 不再调 ensure_project_repo_with_layout
     let list_inner_body = extract_fn_body(&project_src, "list_projects_with_layout_inner");
@@ -432,9 +389,5 @@ fn problem_all_five_issues_fixed_on_current_branch() {
     let delete_body = extract_fn_body(&project_ops_src, "delete_project");
     assert!(delete_body.contains("delete_project_with_layout"));
 
-    // 问题5：git_backend 不再用 repo.head().is_err() 判 unborn
-    assert!(!git_backend_src.contains("let is_unborn = repo.head().is_err();"));
-    assert!(git_backend_src.contains("ErrorCode::UnbornBranch"));
-
-    println!("[BUGFIX_REPRO_TRACE] problem_all: 5 个问题的修复全部生效于当前分支 HEAD");
+    println!("[BUGFIX_REPRO_TRACE] problem_all: 4 个问题的修复全部生效于当前分支 HEAD");
 }

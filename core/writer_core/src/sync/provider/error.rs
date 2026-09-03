@@ -75,16 +75,17 @@ impl ProviderError {
     /// 映射到通用同步错误分类 [`SyncErrorCategory`]。
     ///
     /// 该映射让现有 UI/状态机继续工作，同时把 GitHub 特定错误名隔离在 Provider 实现内。
-    /// Phase 6 会精简 `SyncErrorCategory`（移除 `Github*` 变体），届时本映射同步更新。
+    /// Issue #645 评论 5504296097 第1点：`SyncErrorCategory` 已收成 provider-neutral
+    /// 分类，本映射直接对应到新通用变体。
     pub fn to_sync_error_category(&self) -> SyncErrorCategory {
         match self {
-            ProviderError::AuthFailed { .. } => SyncErrorCategory::AuthError,
-            ProviderError::PermissionDenied { .. } => SyncErrorCategory::TokenPermissionDenied,
-            ProviderError::NotFound { .. } => SyncErrorCategory::FileNotFound,
-            ProviderError::PreconditionFailed { .. } => SyncErrorCategory::Conflict,
-            ProviderError::RateLimited { .. } => SyncErrorCategory::ApiRateLimited,
+            ProviderError::AuthFailed { .. } => SyncErrorCategory::AuthFailed,
+            ProviderError::PermissionDenied { .. } => SyncErrorCategory::PermissionDenied,
+            ProviderError::NotFound { .. } => SyncErrorCategory::NotFound,
+            ProviderError::PreconditionFailed { .. } => SyncErrorCategory::PreconditionFailed,
+            ProviderError::RateLimited { .. } => SyncErrorCategory::RateLimited,
             ProviderError::Network { .. } | ProviderError::TemporaryUnavailable { .. } => {
-                SyncErrorCategory::NetworkFailed
+                SyncErrorCategory::Network
             }
             ProviderError::Other { .. } => SyncErrorCategory::Other,
         }
@@ -93,12 +94,12 @@ impl ProviderError {
 
 /// 将 [`ProviderError`] 转为 Core 统一 [`crate::Error`]。
 ///
-/// 映射规则（见 Issue #645 评论 5504296097）：
+/// 映射规则（见 Issue #645 评论 5504296097 第1点）：
 /// - `AuthFailed` / `PermissionDenied` → `SyncAuthFailed`
 /// - `Network` / `TemporaryUnavailable` → `SyncNetworkUnavailable`
 /// - `RateLimited` → `SyncRateLimited`
-/// - `NotFound` → `SyncRemoteError { category: "file_not_found" }`
-/// - `PreconditionFailed` → `SyncRemoteError { category: "remote_sha_conflict" }`
+/// - `NotFound` → `SyncRemoteError { category: "not_found" }`
+/// - `PreconditionFailed` → `SyncRemoteError { category: "precondition_failed" }`
 /// - `Other` → `Other`
 ///
 /// `SyncRemoteError` 是 provider-neutral 的远端错误载体，
@@ -109,13 +110,13 @@ impl From<ProviderError> for crate::Error {
             ProviderError::AuthFailed { reason } => crate::Error::SyncAuthFailed { reason },
             ProviderError::PermissionDenied { reason } => crate::Error::SyncAuthFailed { reason },
             ProviderError::NotFound { path } => crate::Error::SyncRemoteError {
-                category: "file_not_found".to_string(),
+                category: "not_found".to_string(),
                 context: "read".to_string(),
                 status: 404,
                 body_preview: path,
             },
             ProviderError::PreconditionFailed { path, reason } => crate::Error::SyncRemoteError {
-                category: "remote_sha_conflict".to_string(),
+                category: "precondition_failed".to_string(),
                 context: "conditional_write".to_string(),
                 status: 409,
                 body_preview: format!("path={path}, reason={reason}"),

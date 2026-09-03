@@ -1,76 +1,65 @@
 use serde::{Deserialize, Serialize};
 
-/// 同步错误分类 — 纯枚举，不携带可变文案。
+/// 同步错误分类 — provider-neutral 纯枚举，不携带可变文案，不含 GitHub/Git 特定语义。
+///
+/// Issue #645 评论 5504296097 第1点：通用 core 只保留 provider-neutral 分类，
+/// GitHub/Git 特定变体（TokenMissing/TokenInvalid/RepoNotFoundOrNoPermission/
+/// BranchMissing/RemoteBranchMissing/NetworkProbeFailed/DnsFailed/TlsFailed/
+/// NonFastForward/CheckoutConflict/LocalBlockingFile/UnrelatedHistories/
+/// ApiRateLimited/ApiError/DirtyRepo/FileNotFound 等）已删除，
+/// GitHub 401/403/404/409/422 在 `sync/provider/github/error.rs` 转成
+/// 通用 `ProviderError` 变体（AuthFailed/PermissionDenied/NotFound/PreconditionFailed）。
 ///
 /// 平台端通过 `to_ui_status()` 和 `to_message_key()` 做错误分类和 i18n 映射，
-/// 不得依赖错误文案的包含关系作为主判断（见 AGENTS.md）。
-/// `from_code()` 将字符串反序列化回枚举，未知 code 统一映射为 `Other`。
+/// 不得依赖错误文案的包含范围作为主判断（见 AGENTS.md）。
+/// `from_code()` 将字符串反序列化回枚举，未知 code 统一映射为 `Other`；
+/// `from_code` 保留对旧 GitHub/Git code 字符串的识别（映射到新通用变体），
+/// 保证旧持久化数据可加载。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum SyncErrorCategory {
     #[default]
     None,
-    TokenMissing,
-    TokenInvalid,
-    TokenPermissionDenied,
-    AuthError,
-    RepoNotFoundOrNoPermission,
-    EmptyUrl,
-    MissingPermission,
-    NetworkProbeFailed,
-    NetworkFailed,
-    DnsFailed,
-    TlsFailed,
-    BranchMissing,
-    RemoteBranchMissing,
+    /// 认证失败（token 无效/过期/缺失）。不可重试，需用户干预。
+    AuthFailed,
+    /// 权限不足（token 有效但无对应资源写/读权限）。不可重试，需用户干预。
+    PermissionDenied,
+    /// 远端对象不存在。不可重试。
     NotFound,
-    FileNotFound,
-    NonFastForward,
+    /// 前置条件失败（乐观并发冲突）。不可重试，需上层拉取远端最新后重新决策或上报冲突。
+    PreconditionFailed,
+    /// 速率限制。可重试，等待 retry_after 后重试。
+    RateLimited,
+    /// 网络错误（DNS/TLS/连接失败/超时）。可重试。
+    Network,
+    /// 远端临时不可用（5xx 但非网络层错误）。可重试。
+    TemporaryUnavailable,
+    /// 本地 I/O 错误。可恢复（磁盘临时不可用等）。
+    LocalIo,
+    /// 冲突（双端修改、checkout 冲突等）。不可重试，需用户介入解决。
     Conflict,
-    CheckoutConflict,
-    LocalBlockingFile,
-    UnrelatedHistories,
-    LocalIoError,
-    ApiRateLimited,
-    ApiError,
-    DirtyRepo,
+    /// 兜底分类。保守视为可恢复，允许 engine 退避重试。
     Other,
 }
 
 impl SyncErrorCategory {
     /// 映射为 UI 状态字符串——供平台端决定同步状态图标和提示文案。
-    /// 返回值是 API 契约，不可随意更改。
+    /// 返回值是 API 契约，不可随意更改。旧 UI status 字符串（如 "token_missing"/
+    /// "auth_failed"/"network_failed" 等）继续从新变体返回，保证平台端兼容。
     pub fn to_ui_status(&self) -> &'static str {
         match self {
             SyncErrorCategory::None => "error",
-            SyncErrorCategory::TokenMissing => "token_missing",
-            SyncErrorCategory::TokenInvalid => "token_invalid",
-            SyncErrorCategory::TokenPermissionDenied => "token_permission_denied",
-            SyncErrorCategory::AuthError => "auth_failed",
-            SyncErrorCategory::RepoNotFoundOrNoPermission => "repo_not_found_or_no_permission",
-            SyncErrorCategory::EmptyUrl => "not_configured",
-            SyncErrorCategory::MissingPermission => "permission_missing",
-            SyncErrorCategory::NetworkProbeFailed
-            | SyncErrorCategory::NetworkFailed
-            | SyncErrorCategory::DnsFailed
-            | SyncErrorCategory::TlsFailed => "network_failed",
-            SyncErrorCategory::BranchMissing | SyncErrorCategory::RemoteBranchMissing => {
-                "branch_missing"
+            SyncErrorCategory::AuthFailed => "auth_failed",
+            SyncErrorCategory::PermissionDenied => "token_permission_denied",
+            SyncErrorCategory::NotFound => "not_found",
+            SyncErrorCategory::PreconditionFailed => "conflict",
+            SyncErrorCategory::RateLimited => "error",
+            SyncErrorCategory::Network | SyncErrorCategory::TemporaryUnavailable => {
+                "network_failed"
             }
-            SyncErrorCategory::NotFound | SyncErrorCategory::FileNotFound => "auth_failed",
-            // NotFound/FileNotFound 映射到 auth_failed 而非 not_found，因为 GitHub API
-            // 对无权限访问的仓库也返回 404（不区分"不存在"和"无权限"），
-            // 所以 404 在同步语境下等同于认证/权限问题。
-            SyncErrorCategory::NonFastForward => "non_fast_forward",
-            SyncErrorCategory::Conflict
-            | SyncErrorCategory::CheckoutConflict
-            | SyncErrorCategory::LocalBlockingFile => "conflict",
-            SyncErrorCategory::UnrelatedHistories => "unrelated_histories",
-            SyncErrorCategory::LocalIoError => "error",
-            SyncErrorCategory::ApiRateLimited => "error",
-            SyncErrorCategory::ApiError => "error",
-            SyncErrorCategory::DirtyRepo => "dirty_repo",
+            SyncErrorCategory::LocalIo => "error",
+            SyncErrorCategory::Conflict => "conflict",
             SyncErrorCategory::Other => "error",
         }
     }
@@ -79,84 +68,64 @@ impl SyncErrorCategory {
     pub fn to_message_key(&self) -> &'static str {
         match self {
             SyncErrorCategory::None => "sync.result.generic_error",
-            SyncErrorCategory::TokenMissing => "sync.result.token_missing",
-            SyncErrorCategory::TokenInvalid => "sync.result.token_invalid",
-            SyncErrorCategory::TokenPermissionDenied => "sync.result.token_permission_denied",
-            SyncErrorCategory::AuthError => "sync.result.auth_failed",
-            SyncErrorCategory::RepoNotFoundOrNoPermission => {
-                "sync.result.repo_not_found_or_no_permission"
+            SyncErrorCategory::AuthFailed => "sync.result.auth_failed",
+            SyncErrorCategory::PermissionDenied => "sync.result.token_permission_denied",
+            SyncErrorCategory::NotFound => "sync.result.auth_failed",
+            SyncErrorCategory::PreconditionFailed => "sync.result.conflict_summary",
+            SyncErrorCategory::RateLimited => "sync.result.generic_error",
+            SyncErrorCategory::Network | SyncErrorCategory::TemporaryUnavailable => {
+                "sync.result.network_failed"
             }
-            SyncErrorCategory::EmptyUrl => "sync.result.configured_not_tested",
-            SyncErrorCategory::MissingPermission => "sync.result.permission_missing",
-            SyncErrorCategory::NetworkProbeFailed
-            | SyncErrorCategory::NetworkFailed
-            | SyncErrorCategory::DnsFailed
-            | SyncErrorCategory::TlsFailed => "sync.result.network_failed",
-            SyncErrorCategory::BranchMissing | SyncErrorCategory::RemoteBranchMissing => {
-                "sync.result.branch_recovered_summary"
-            }
-            SyncErrorCategory::NotFound | SyncErrorCategory::FileNotFound => {
-                "sync.result.auth_failed"
-            }
-            SyncErrorCategory::NonFastForward => "sync.result.non_fast_forward",
-            SyncErrorCategory::Conflict
-            | SyncErrorCategory::CheckoutConflict
-            | SyncErrorCategory::LocalBlockingFile => "sync.result.conflict_summary",
-            SyncErrorCategory::UnrelatedHistories => "sync.result.unrelated_histories",
-            SyncErrorCategory::LocalIoError => "sync.result.generic_error",
-            SyncErrorCategory::ApiRateLimited => "sync.result.generic_error",
-            SyncErrorCategory::ApiError => "sync.result.generic_error",
-            SyncErrorCategory::DirtyRepo => "sync.result.dirty_repo_blocked",
+            SyncErrorCategory::LocalIo => "sync.result.generic_error",
+            SyncErrorCategory::Conflict => "sync.result.conflict_summary",
             SyncErrorCategory::Other => "sync.result.generic_error",
         }
     }
 
     /// 从线格式 code 字符串反序列化。未知 code 映射为 `Other`。
+    ///
+    /// 保留对旧 GitHub/Git code 字符串的识别（映射到新通用变体），
+    /// 保证旧持久化数据可加载（`SyncState.last_error` 等可能含旧 code）。
     pub fn from_code(code: &str, _fallback_msg: &str) -> Self {
         match code {
             "none" | "" => SyncErrorCategory::Other,
-            "token_missing" => SyncErrorCategory::TokenMissing,
-            "token_invalid" => SyncErrorCategory::TokenInvalid,
-            "token_permission_denied" => SyncErrorCategory::TokenPermissionDenied,
-            "auth_error" => SyncErrorCategory::AuthError,
-            "repo_not_found_or_no_permission" => SyncErrorCategory::RepoNotFoundOrNoPermission,
-            "github_unauthorized" => SyncErrorCategory::AuthError,
-            "github_forbidden" => SyncErrorCategory::AuthError,
-            "empty_url" => SyncErrorCategory::EmptyUrl,
-            "missing_permission" => SyncErrorCategory::MissingPermission,
-            "network_probe_failed" => SyncErrorCategory::NetworkProbeFailed,
-            "github_network_failed" => SyncErrorCategory::NetworkFailed,
-            "network_error" => SyncErrorCategory::NetworkFailed,
-            "network_failed" => SyncErrorCategory::NetworkFailed,
-            "dns_failed" => SyncErrorCategory::DnsFailed,
-            "tls_failed" => SyncErrorCategory::TlsFailed,
-            "branch_missing" => SyncErrorCategory::BranchMissing,
-            "remote_branch_missing" => SyncErrorCategory::RemoteBranchMissing,
-            "not_found" => SyncErrorCategory::NotFound,
-            "file_not_found" => SyncErrorCategory::FileNotFound,
-            "non_fast_forward" => SyncErrorCategory::NonFastForward,
-            "conflict" => SyncErrorCategory::Conflict,
-            "checkout_conflict" => SyncErrorCategory::CheckoutConflict,
-            "local_blocking_file" => SyncErrorCategory::LocalBlockingFile,
-            "unrelated_histories" => SyncErrorCategory::UnrelatedHistories,
-            "local_io_error" => SyncErrorCategory::LocalIoError,
-            "api_rate_limited" => SyncErrorCategory::ApiRateLimited,
-            "api_error" => SyncErrorCategory::ApiError,
-            "dirty_repo" => SyncErrorCategory::DirtyRepo,
+            // 新通用 code
+            "auth_failed"
+            | "auth_error"
+            | "token_missing"
+            | "token_invalid"
+            | "github_unauthorized"
+            | "github_forbidden" => SyncErrorCategory::AuthFailed,
+            "permission_denied"
+            | "token_permission_denied"
+            | "missing_permission"
+            | "repo_not_found_or_no_permission" => SyncErrorCategory::PermissionDenied,
+            "not_found" | "file_not_found" => SyncErrorCategory::NotFound,
+            "precondition_failed"
+            | "remote_sha_conflict"
+            | "conflict"
+            | "checkout_conflict"
+            | "local_blocking_file" => SyncErrorCategory::PreconditionFailed,
+            "rate_limited" | "api_rate_limited" => SyncErrorCategory::RateLimited,
+            "network"
+            | "network_failed"
+            | "network_error"
+            | "network_probe_failed"
+            | "github_network_failed"
+            | "dns_failed"
+            | "tls_failed" => SyncErrorCategory::Network,
+            "temporary_unavailable" | "api_error" => SyncErrorCategory::TemporaryUnavailable,
+            "local_io" | "local_io_error" => SyncErrorCategory::LocalIo,
+            // 旧 GitHub/Git 特定 code 统一映射到通用分类
+            "empty_url" => SyncErrorCategory::AuthFailed,
+            "branch_missing"
+            | "remote_branch_missing"
+            | "non_fast_forward"
+            | "unrelated_histories"
+            | "dirty_repo" => SyncErrorCategory::Other,
             _ => SyncErrorCategory::Other,
         }
     }
-}
-
-/// 同步协议方式 — HTTPS token 或 SSH deploy key。
-///
-/// 命名为 `SyncProtocol` 以区别于 `writer_platform_api::SyncTransport` trait。
-/// `SyncProtocol` 描述用户选择的同步认证方式，`SyncTransport` trait 描述 HTTP 执行能力。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum SyncProtocol {
-    HttpsToken,
-    SshDeployKey,
 }
 
 /// 首次同步模式 — 记录项目与远端仓库的初始关系。
@@ -323,7 +292,7 @@ impl SyncConfig {
         remote_url: String,
         branch: String,
         username: String,
-        transport: crate::sync::types::SyncProtocol,
+        transport: crate::sync::provider::github::config::GitHubTransport,
     ) {
         self.provider_config = Some(crate::sync::provider::ProviderConfig::GitHub(
             crate::sync::provider::github::config::GitHubProviderConfig {
@@ -344,7 +313,7 @@ impl SyncConfig {
         _remote_url: String,
         _branch: String,
         _username: String,
-        _transport: crate::sync::types::SyncProtocol,
+        _transport: (),
     ) {
         // github-api feature 未启用时无 GitHub provider 可设置。
     }
@@ -812,7 +781,12 @@ pub struct Tombstone {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncState {
     pub remote_url: Option<String>,
-    pub transport: Option<SyncProtocol>,
+    /// 上次同步使用的传输方式线格式字符串（如 "https_token"/"ssh_deploy_key"）。
+    /// Issue #645 评论 5504296097 第1点：`SyncProtocol` 已移到
+    /// `sync/provider/github/config.rs::GitHubTransport`，通用 core 不再认识
+    /// SSH deploy key。这里保留为 `Option<String>` 以维持旧持久化数据兼容。
+    #[serde(default)]
+    pub transport: Option<String>,
     pub last_synced_commit: Option<String>,
     pub last_sync_time: Option<i64>,
     pub last_error: Option<String>,

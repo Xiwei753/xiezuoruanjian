@@ -9,7 +9,6 @@
 //! `redact_secrets_from_message` 是当前主链，`mask_token` 是遗留别名。
 
 use crate::sync::types::SyncConfig;
-use crate::sync::types::SyncProtocol;
 
 /// URL 解析结果 — 剥离 userinfo 后的 URL 和提取的凭证。
 pub struct ParsedRemoteUrl {
@@ -97,12 +96,19 @@ fn url_decode(s: String) -> String {
 /// 根据远程 URL 的协议前缀检测传输方式。
 ///
 /// `git@` 或 `ssh://` 开头返回 `SshDeployKey`，其余返回 `HttpsToken`。
-pub fn detect_transport(remote_url: &str) -> SyncProtocol {
+///
+/// Issue #645 评论 5504296097 第1点：`SyncProtocol` 已移到
+/// `sync/provider/github/config.rs::GitHubTransport`，本函数返回 GitHub 特定枚举。
+#[cfg(feature = "github-api")]
+pub fn detect_transport(
+    remote_url: &str,
+) -> crate::sync::provider::github::config::GitHubTransport {
+    use crate::sync::provider::github::config::GitHubTransport;
     let lower = remote_url.to_lowercase();
     if lower.starts_with("git@") || lower.starts_with("ssh://") {
-        SyncProtocol::SshDeployKey
+        GitHubTransport::SshDeployKey
     } else {
-        SyncProtocol::HttpsToken
+        GitHubTransport::HttpsToken
     }
 }
 

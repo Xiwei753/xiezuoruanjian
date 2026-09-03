@@ -64,7 +64,7 @@ mod tests {
                     remote_url: remote_url.to_string(),
                     branch: branch.to_string(),
                     username: String::new(),
-                    transport: crate::sync::types::SyncProtocol::HttpsToken,
+                    transport: crate::sync::provider::github::config::GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,

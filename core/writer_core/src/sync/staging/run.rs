@@ -451,10 +451,14 @@ pub fn prepare_staging_runs(
 ) -> crate::error::Result<Vec<StagingRun>> {
     let mut staging_runs: Vec<StagingRun> = Vec::new();
 
+    // #645 评论第 3 点：workspace 级别的 Git layout 放在 plan 上，
+    // 所有 target 共享。
+    let workspace_git_layout = plan.workspace_git_layout.clone();
+
     for planned in &mut plan.targets {
         // #644 评论 5493295108 问题1/2：在 seed 前先解析/迁移 Git layout。
         // 这一步在已释放 Core 写锁之后执行，不会堵住冷启动卷章读取。
-        if let Some(layout) = &planned.git_layout {
+        if let Some(layout) = &workspace_git_layout {
             prepare_target_git_layout(planned, active_provider, layout)?;
         }
 
@@ -462,20 +466,20 @@ pub fn prepare_staging_runs(
             &plan.app_data_root,
             planned.target_live_root.clone(),
             active_provider.to_string(),
-            planned.git_layout.clone(),
+            workspace_git_layout.clone(),
         )?;
         // #644 评论 5473401065 第2节：seed 失败必须传播，不能继续拿半成品 staging。
         // #644 评论 5473551127 第2节：按 backend 类型选择对应 seed 方式。
         match active_provider {
             "git" => {
-                // #644 评论 5473789298 第1节：Git 专属 staging 移到 git_staging.rs。
+                // #644 评论 5473789298 第1节：Git 专属 staging 积到 git_staging.rs。
                 // #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
                 // seed 返回 live 的 GitSeedState，供 finalize 决定路径。
                 // #644 评论 5491531984 问题1：传入 git_layout 用于正确打开仓库。
                 let seed_state = crate::sync::git::seed::seed_from_live_as_git_repo(
                     &run,
                     &planned.target_live_root,
-                    planned.git_layout.as_ref(),
+                    workspace_git_layout.as_ref(),
                 )?;
                 run.set_git_seed_state(seed_state);
             }

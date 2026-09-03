@@ -9,8 +9,19 @@
 
 use crate::sync::provider::error::ProviderError;
 use crate::sync::provider::ProviderSecrets;
-use crate::sync::types::SyncProtocol;
 use crate::sync::url::sanitize_remote_url;
+
+/// GitHub 传输方式 — HTTPS token 或 SSH deploy key（Issue #645 评论 5504296097 第1点）。
+///
+/// Issue #645 评论 5504296097 第1点：`SyncProtocol` 已从通用 `sync/types.rs` 移到
+/// `sync/provider/github/config.rs`，重命名为 `GitHubTransport`。通用 core 不再认识
+/// SSH deploy key，GitHub 特定认证方式只在 GitHub provider 配置中存在。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum GitHubTransport {
+    HttpsToken,
+    SshDeployKey,
+}
 
 /// GitHub Provider 持久化配置 — 存储在 `SyncConfig.provider_config` 中。
 ///
@@ -25,7 +36,7 @@ pub struct GitHubProviderConfig {
     /// GitHub username（HTTPS credential callback 用，默认 `x-access-token`）。
     pub username: String,
     /// 传输方式（HTTPS token 或 SSH deploy key）。
-    pub transport: SyncProtocol,
+    pub transport: GitHubTransport,
 }
 
 impl GitHubProviderConfig {
@@ -35,7 +46,7 @@ impl GitHubProviderConfig {
             remote_url: String::new(),
             branch: "main".to_string(),
             username: "x-access-token".to_string(),
-            transport: SyncProtocol::HttpsToken,
+            transport: GitHubTransport::HttpsToken,
         }
     }
 
@@ -49,7 +60,7 @@ impl GitHubProviderConfig {
         remote_url: Option<String>,
         branch: Option<String>,
         username: Option<String>,
-        transport: Option<SyncProtocol>,
+        transport: Option<GitHubTransport>,
     ) -> Self {
         Self {
             remote_url: remote_url.unwrap_or_default(),
@@ -59,7 +70,7 @@ impl GitHubProviderConfig {
             username: username
                 .filter(|u| !u.is_empty())
                 .unwrap_or_else(|| "x-access-token".to_string()),
-            transport: transport.unwrap_or(SyncProtocol::HttpsToken),
+            transport: transport.unwrap_or(GitHubTransport::HttpsToken),
         }
     }
 }
@@ -169,7 +180,7 @@ mod tests {
         let cfg = GitHubProviderConfig::from_legacy_fields(None, None, None, None);
         assert_eq!(cfg.branch, "main");
         assert_eq!(cfg.username, "x-access-token");
-        assert_eq!(cfg.transport, SyncProtocol::HttpsToken);
+        assert_eq!(cfg.transport, GitHubTransport::HttpsToken);
         assert!(cfg.remote_url.is_empty());
     }
 
@@ -179,12 +190,12 @@ mod tests {
             Some("https://github.com/o/r.git".to_string()),
             Some("dev".to_string()),
             Some("alice".to_string()),
-            Some(SyncProtocol::SshDeployKey),
+            Some(GitHubTransport::SshDeployKey),
         );
         assert_eq!(cfg.remote_url, "https://github.com/o/r.git");
         assert_eq!(cfg.branch, "dev");
         assert_eq!(cfg.username, "alice");
-        assert_eq!(cfg.transport, SyncProtocol::SshDeployKey);
+        assert_eq!(cfg.transport, GitHubTransport::SshDeployKey);
     }
 
     #[test]
@@ -200,7 +211,7 @@ mod tests {
             remote_url: "https://github.com/owner/repo.git".to_string(),
             branch: "main".to_string(),
             username: "x-access-token".to_string(),
-            transport: SyncProtocol::HttpsToken,
+            transport: GitHubTransport::HttpsToken,
         };
         let secrets = ProviderSecrets::GitHub {
             token: "tok".to_string(),

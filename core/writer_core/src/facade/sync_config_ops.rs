@@ -364,8 +364,12 @@ fn migrate_legacy_sync_config(
         .and_then(|o| o.get("transport"))
         .and_then(|v| v.as_str())
         .and_then(|s| match s {
-            "https_token" => Some(crate::sync::types::SyncProtocol::HttpsToken),
-            "ssh" | "ssh_deploy_key" => Some(crate::sync::types::SyncProtocol::SshDeployKey),
+            "https_token" => {
+                Some(crate::sync::provider::github::config::GitHubTransport::HttpsToken)
+            }
+            "ssh" | "ssh_deploy_key" => {
+                Some(crate::sync::provider::github::config::GitHubTransport::SshDeployKey)
+            }
             _ => None,
         });
     let backend_type = obj
@@ -433,7 +437,10 @@ mod tests {
         assert_eq!(gh.remote_url, "https://github.com/o/r.git");
         assert_eq!(gh.branch, "main");
         assert_eq!(gh.username, "alice");
-        assert_eq!(gh.transport, crate::sync::types::SyncProtocol::HttpsToken);
+        assert_eq!(
+            gh.transport,
+            crate::sync::provider::github::config::GitHubTransport::HttpsToken
+        );
         assert_eq!(config.active_provider, "github_api");
     }
 

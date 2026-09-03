@@ -261,22 +261,21 @@ impl From<crate::error::Error> for WriterError {
             } => {
                 // #592 七：远端 Provider 错误按类别映射为类型化失败；
                 // 只有明确网络/认证类别进入对应类型，其余默认 Fatal。
+                //
+                // Issue #645 评论 5504296097 第1点：`SyncErrorCategory` 已收成
+                // provider-neutral 分类，这里使用新变体。
                 let cat = crate::sync::types::SyncErrorCategory::from_code(&category, "");
                 match cat {
-                    crate::sync::types::SyncErrorCategory::TokenMissing
-                    | crate::sync::types::SyncErrorCategory::TokenInvalid
-                    | crate::sync::types::SyncErrorCategory::TokenPermissionDenied
-                    | crate::sync::types::SyncErrorCategory::AuthError => {
+                    crate::sync::types::SyncErrorCategory::AuthFailed
+                    | crate::sync::types::SyncErrorCategory::PermissionDenied => {
                         WriterError::Authentication(format!(
                             "remote_api_error: category={} context={} status={}",
                             category, context, status
                         ))
                     }
-                    crate::sync::types::SyncErrorCategory::NetworkFailed
-                    | crate::sync::types::SyncErrorCategory::DnsFailed
-                    | crate::sync::types::SyncErrorCategory::TlsFailed
-                    | crate::sync::types::SyncErrorCategory::NetworkProbeFailed
-                    | crate::sync::types::SyncErrorCategory::ApiRateLimited => {
+                    crate::sync::types::SyncErrorCategory::Network
+                    | crate::sync::types::SyncErrorCategory::TemporaryUnavailable
+                    | crate::sync::types::SyncErrorCategory::RateLimited => {
                         WriterError::RetryableNetwork(format!(
                             "remote_api_error: category={} context={} status={}",
                             category, context, status

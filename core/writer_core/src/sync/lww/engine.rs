@@ -22,11 +22,13 @@ use super::attempt::execute_lww_sync_attempt;
 /// 重试策略：最多重试 2 次，间隔 500ms。仅对可恢复错误（网络/限流）重试；
 /// 认证/权限等不可恢复错误直接返回，不重试。
 ///
-/// 错误分类（`SyncErrorCategory`）：
-/// - `LocalIoError` → Error（不可恢复）
-/// - `TokenMissing/TokenInvalid/TokenPermissionDenied/AuthError` → Error（不可恢复）
-/// - `ApiRateLimited` → RecoverableError（可恢复，下次同步自动重试）
-/// - `GithubNetworkFailed/DnsFailed/TlsFailed/NetworkProbeFailed` → RecoverableError
+/// 错误分类（`SyncErrorCategory`，Issue #645 评论 5504296097 第1点起 provider-neutral）：
+/// - `LocalIo` → Error（不可恢复）
+/// - `AuthFailed` / `PermissionDenied` → Error（不可恢复）
+/// - `NotFound` → Error("not_found")（不可恢复）
+/// - `PreconditionFailed` → Conflict（不可恢复，需用户决策或拉取远端最新后重试）
+/// - `RateLimited` → RecoverableError（可恢复，下次同步自动重试）
+/// - `Network` / `TemporaryUnavailable` → RecoverableError
 /// - 其他 → RecoverableError（保守处理，避免误报不可恢复）
 #[allow(
     clippy::too_many_lines,
@@ -102,7 +104,7 @@ pub(crate) fn perform_lww_sync(
                 // 不可恢复错误（认证/权限/precondition conflict/file_not_found 等）
                 // 直接分类返回，不 sleep 不重试——重试也不会成功，反而拖延用户感知。
                 // 可恢复性判断依赖 Error::recoverable() 的结构化实现：
-                // SyncRemoteError 按 category 区分（remote_sha_conflict/file_not_found 不可恢复），
+                // SyncRemoteError 按 category 区分（precondition_failed/file_not_found 不可恢复），
                 // 其他变体（SyncAuthFailed 不可恢复、SyncNetworkUnavailable/SyncRateLimited 可恢复等）。
                 if !e.recoverable() {
                     let err = e.to_string();
@@ -129,32 +131,33 @@ pub(crate) fn perform_lww_sync(
 /// 供 [`perform_lww_sync`] 重试循环在不可恢复错误或达到最大重试次数时复用，
 /// 避免错误分类逻辑在两个分支重复。
 ///
-/// 分类规则与 `SyncErrorCategory::from_code` 一致：
-/// - `LocalIoError` → `Error("local_io_error")`
-/// - 认证类（TokenMissing/TokenInvalid/TokenPermissionDenied/AuthError）→ `Error(to_ui_status)`
-/// - `ApiRateLimited` → `RecoverableError("api_rate_limited")`
-/// - 网络类（NetworkFailed/DnsFailed/TlsFailed/NetworkProbeFailed）→ `RecoverableError("network_error")`
+/// Issue #645 评论 5504296097 第1点：分类规则与新的 provider-neutral
+/// `SyncErrorCategory` 对齐：
+/// - `LocalIo` → `Error("local_io")`
+/// - `AuthFailed` / `PermissionDenied` → `Error(to_ui_status)`（不可恢复）
+/// - `NotFound` → `Error("not_found")`（不可恢复）
+/// - `PreconditionFailed` → `Conflict`（不可恢复，需用户决策或拉取远端最新后重试）
+/// - `RateLimited` → `RecoverableError("rate_limited")`
+/// - `Network` / `TemporaryUnavailable` → `RecoverableError("network")`
 /// - 其他 → `RecoverableError("api_error")`（保守处理，避免误报不可恢复）
 fn classify_sync_error(e: &crate::Error) -> SyncStatus {
     let category = crate::sync::types::SyncErrorCategory::from_code(e.sync_category(), "");
     match category {
-        crate::sync::types::SyncErrorCategory::LocalIoError => {
-            SyncStatus::Error("local_io_error".to_string())
-        }
-        crate::sync::types::SyncErrorCategory::TokenMissing
-        | crate::sync::types::SyncErrorCategory::TokenInvalid
-        | crate::sync::types::SyncErrorCategory::TokenPermissionDenied
-        | crate::sync::types::SyncErrorCategory::AuthError => {
+        crate::sync::types::SyncErrorCategory::LocalIo => SyncStatus::Error("local_io".to_string()),
+        crate::sync::types::SyncErrorCategory::AuthFailed
+        | crate::sync::types::SyncErrorCategory::PermissionDenied => {
             SyncStatus::Error(category.to_ui_status().to_string())
         }
-        crate::sync::types::SyncErrorCategory::ApiRateLimited => {
-            SyncStatus::RecoverableError("api_rate_limited".to_string())
+        crate::sync::types::SyncErrorCategory::NotFound => {
+            SyncStatus::Error("not_found".to_string())
         }
-        crate::sync::types::SyncErrorCategory::NetworkFailed
-        | crate::sync::types::SyncErrorCategory::DnsFailed
-        | crate::sync::types::SyncErrorCategory::TlsFailed
-        | crate::sync::types::SyncErrorCategory::NetworkProbeFailed => {
-            SyncStatus::RecoverableError("network_error".to_string())
+        crate::sync::types::SyncErrorCategory::PreconditionFailed => SyncStatus::Conflict,
+        crate::sync::types::SyncErrorCategory::RateLimited => {
+            SyncStatus::RecoverableError("rate_limited".to_string())
+        }
+        crate::sync::types::SyncErrorCategory::Network
+        | crate::sync::types::SyncErrorCategory::TemporaryUnavailable => {
+            SyncStatus::RecoverableError("network".to_string())
         }
         _ => SyncStatus::RecoverableError("api_error".to_string()),
     }

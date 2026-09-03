@@ -1,15 +1,9 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
-    #[cfg(feature = "git-https")]
-    use crate::sync::provider::git_backend::Git2Backend;
-    #[cfg(feature = "git-https")]
-    use crate::sync::provider::git_backend::GitAuth;
-    #[cfg(feature = "git-https")]
-    use crate::sync::provider::git_backend::GitBackend;
+    #[cfg(feature = "github-api")]
+    use crate::sync::provider::github::config::GitHubTransport;
     use crate::sync::service::SyncService;
-    #[cfg(feature = "git-https")]
-    use crate::sync::types::FirstSyncMode;
     #[cfg(feature = "github-api")]
     use crate::sync::types::ManifestFileRecord;
     #[cfg(feature = "github-api")]
@@ -19,18 +13,16 @@ mod tests {
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncManifest;
     #[cfg(feature = "github-api")]
-    use crate::sync::types::SyncProtocol;
-    #[cfg(feature = "github-api")]
     use crate::sync::types::SyncScope;
-    #[cfg(any(feature = "github-api", feature = "git-https"))]
+    #[cfg(feature = "github-api")]
     use crate::sync::types::SyncSecrets;
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncState;
-    #[cfg(any(feature = "github-api", feature = "git-https"))]
+    #[cfg(feature = "github-api")]
     use crate::sync::types::SyncStatus;
     #[cfg(feature = "github-api")]
     use base64::Engine;
-    #[cfg(any(feature = "git-https", feature = "github-api"))]
+    #[cfg(feature = "github-api")]
     use std::path::Path;
     use tempfile::tempdir;
 
@@ -153,7 +145,7 @@ mod tests {
                     remote_url: "https://github.com/user/repo.git".to_string(),
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -282,101 +274,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "git-https")]
-    fn test_first_sync_mode_unrelated_histories() {
-        // Test logic added via GitBackend trait mock
-        struct MockUnrelatedBackend;
-        impl GitBackend for MockUnrelatedBackend {
-            fn init_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
-                Ok(())
-            }
-            fn has_repo(&self, _: &Path) -> bool {
-                true
-            }
-            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
-                Ok(false)
-            }
-            fn open_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Err(crate::Error::SyncUnrelatedHistories {
-                    detail: "refusing to merge unrelated histories".to_string(),
-                })
-            }
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn stage_paths(
-                &self,
-                _: &Path,
-                _: &[&str],
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Ok(())
-            }
-            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
-                Ok(Some("hash".to_string()))
-            }
-            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
-                Ok(Some("hash".to_string()))
-            }
-            fn status(
-                &self,
-                _: &Path,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<Vec<String>> {
-                Ok(vec![])
-            }
-        }
-
-        let dir = tempdir().unwrap();
-        let config = SyncConfig {
-            enabled: true,
-            active_provider: "github_api".to_string(),
-            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
-                crate::sync::provider::github::config::GitHubProviderConfig {
-                    remote_url: "https://example.com/repo.git".to_string(),
-                    branch: "main".to_string(),
-                    username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
-                },
-            )),
-            auto_sync: false,
-            sync_interval_seconds: 300,
-            has_network_permission: true,
-            has_network_state_permission: true,
-        };
-        let secrets = SyncSecrets {
-            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
-                token: "dummy_token".to_string(),
-            }),
-        };
-
-        let result = SyncService::perform_sync(
-            dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &MockUnrelatedBackend,
-        )
-        .unwrap();
-        assert_eq!(result.first_sync_mode, FirstSyncMode::UnrelatedHistories);
-    }
-
-    #[test]
     fn test_record_sync_conflict_error_handling() {
         // Provide an invalid path to force an IO error
         let conflict = crate::sync::types::SyncConflict {
@@ -396,101 +293,6 @@ mod tests {
             None,
         );
         assert!(res.is_err());
-    }
-
-    #[test]
-    #[cfg(feature = "git-https")]
-    fn test_perform_sync_non_empty_no_git_init() {
-        // Just a mock test to verify the logic inside perform_sync
-        let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("some_file.txt"), "hello").unwrap();
-
-        let config = SyncConfig {
-            enabled: true,
-            active_provider: "github_api".to_string(),
-            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
-                crate::sync::provider::github::config::GitHubProviderConfig {
-                    remote_url: "https://github.com/test/test.git".to_string(),
-                    branch: "main".to_string(),
-                    username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
-                },
-            )),
-            auto_sync: false,
-            sync_interval_seconds: 0,
-            has_network_permission: true,
-            has_network_state_permission: true,
-        };
-        let secrets = SyncSecrets {
-            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
-                token: "dummy".to_string(),
-            }),
-        };
-
-        struct MockBackend;
-        impl GitBackend for MockBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn open_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Ok(())
-            }
-            fn stage_paths(
-                &self,
-                _: &Path,
-                _: &[&str],
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Ok(())
-            }
-            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
-                Ok(None)
-            }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
-                Ok(None)
-            }
-            fn status(
-                &self,
-                _: &Path,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<Vec<String>> {
-                Ok(vec![])
-            }
-            fn init_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
-                Ok(())
-            }
-            fn has_repo(&self, _: &Path) -> bool {
-                false
-            }
-            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
-                Ok(false)
-            }
-        }
-
-        let res = SyncService::perform_sync(
-            dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &MockBackend,
-        )
-        .unwrap();
-        assert_eq!(res.status, SyncStatus::Success);
     }
 
     #[test]
@@ -541,7 +343,7 @@ mod tests {
                     remote_url: "url".to_string(),
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -551,7 +353,7 @@ mod tests {
         };
         let state = SyncState {
             remote_url: Some("url".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
+            transport: Some("https_token".to_string()),
             last_sync_time: Some(0),
             last_synced_commit: None,
             last_error: None,
@@ -785,7 +587,7 @@ mod tests {
                     remote_url: "https://example.com/repo.git".to_string(),
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -848,7 +650,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let state = SyncState {
             remote_url: Some("https://example.com/repo.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
+            transport: Some("https_token".to_string()),
             last_synced_commit: None,
             last_sync_time: None,
             last_error: None,
@@ -871,39 +673,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn test_stage_blacklisted_files() {
-        let dir = tempdir().unwrap();
-
-        // Initialize git repo manually or use SyncService
-        let repo = git2::Repository::init(dir.path()).unwrap();
-
-        // 作品仓库内的本地同步状态不得被 stage（黑名单）；
-        // 同时验证白名单外的文件（如作品外的应用级路径）也不会被 stage。
-        let file_path = dir.path().join("app-meta/sync/state.local.json");
-        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
-        std::fs::write(&file_path, "state_content").unwrap();
-        let outside_path = dir.path().join("projects/p1/project.json");
-        std::fs::create_dir_all(outside_path.parent().unwrap()).unwrap();
-        std::fs::write(&outside_path, "{}").unwrap();
-
-        let backend = Git2Backend;
-        let paths = vec!["app-meta/sync/state.local.json", "projects/p1/project.json"];
-        backend
-            .stage_paths(dir.path(), &paths, crate::sync::types::SyncScope::Project)
-            .unwrap();
-
-        // Ensure neither is staged
-        let index = repo.index().unwrap();
-        assert!(index
-            .get_path(std::path::Path::new("app-meta/sync/state.local.json"), 0)
-            .is_none());
-        assert!(index
-            .get_path(std::path::Path::new("projects/p1/project.json"), 0)
-            .is_none());
-    }
-
-    #[test]
     #[cfg(feature = "github-api")]
     fn test_sync_dry_run_disabled_config() {
         let dir = tempdir().unwrap();
@@ -915,7 +684,7 @@ mod tests {
                     remote_url: "https://example.com/repo.git".to_string(),
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -942,7 +711,7 @@ mod tests {
                     remote_url: "https://example.com/repo.git".to_string(),
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -967,522 +736,6 @@ mod tests {
         assert!(plan
             .ignored_files
             .contains(&"volumes/v1/volume.json.tmp".to_string()));
-    }
-
-    #[test]
-    #[cfg(feature = "git-https")]
-    fn test_perform_sync_empty_remote_url() {
-        let dir = tempdir().unwrap();
-        let config = SyncConfig {
-            enabled: true,
-            active_provider: "github_api".to_string(),
-            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
-                crate::sync::provider::github::config::GitHubProviderConfig {
-                    remote_url: "".to_string(),
-                    branch: "main".to_string(),
-                    username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
-                },
-            )),
-            auto_sync: false,
-            sync_interval_seconds: 300,
-            has_network_permission: true,
-            has_network_state_permission: true,
-        };
-
-        let secrets = SyncSecrets {
-            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
-                token: "secret_token".to_string(),
-            }),
-        };
-
-        // For this test we can use Git2Backend as it won't be called due to early return
-        let backend = Git2Backend;
-        let result = SyncService::perform_sync(
-            dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &backend,
-        )
-        .unwrap();
-        assert_eq!(
-            result.status,
-            SyncStatus::Error("Remote URL is empty".to_string())
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "git-https")]
-    fn test_perform_sync_non_empty_remote() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = SyncConfig {
-            enabled: true,
-            active_provider: "github_api".to_string(),
-            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
-                crate::sync::provider::github::config::GitHubProviderConfig {
-                    remote_url: "https://example.com/repo.git".to_string(),
-                    branch: "main".to_string(),
-                    username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
-                },
-            )),
-            auto_sync: false,
-            sync_interval_seconds: 300,
-            has_network_permission: true,
-            has_network_state_permission: true,
-        };
-        let secrets = SyncSecrets {
-            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
-                token: "dummy".to_string(),
-            }),
-        };
-
-        struct MockInitNonEmptyBackend;
-        impl GitBackend for MockInitNonEmptyBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn open_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Err(crate::Error::SyncUnrelatedHistories {
-                    detail: "unable to merge unrelated histories".to_string(),
-                })
-            }
-            fn stage_paths(
-                &self,
-                _: &Path,
-                _: &[&str],
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Ok(())
-            }
-            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
-                Ok(None)
-            }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
-                Ok(None)
-            }
-            fn status(
-                &self,
-                _: &Path,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<Vec<String>> {
-                Ok(vec![])
-            }
-            fn init_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
-                Ok(())
-            }
-            fn has_repo(&self, _: &Path) -> bool {
-                false
-            }
-            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
-                Ok(false)
-            }
-        }
-
-        let res = SyncService::perform_sync(
-            dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &MockInitNonEmptyBackend,
-        )
-        .unwrap();
-        assert_eq!(res.first_sync_mode, FirstSyncMode::UnrelatedHistories);
-    }
-
-    #[test]
-    #[cfg(feature = "github-api")]
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn test_save_sync_state_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let state_dir = dir.path().join("app-meta/sync");
-        std::fs::create_dir_all(&state_dir).unwrap();
-        std::fs::write(state_dir.join("state.local.json"), "{}").unwrap();
-
-        let config = SyncConfig {
-            enabled: true,
-            active_provider: "github_api".to_string(),
-            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
-                crate::sync::provider::github::config::GitHubProviderConfig {
-                    remote_url: "https://example.com/repo.git".to_string(),
-                    branch: "main".to_string(),
-                    username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
-                },
-            )),
-            auto_sync: false,
-            sync_interval_seconds: 300,
-            has_network_permission: true,
-            has_network_state_permission: true,
-        };
-        let secrets = SyncSecrets {
-            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
-                token: "dummy".to_string(),
-            }),
-        };
-
-        struct MockBackendOk;
-        impl GitBackend for MockBackendOk {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn open_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Ok(())
-            }
-            fn stage_paths(
-                &self,
-                _: &Path,
-                _: &[&str],
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Ok(())
-            }
-            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
-                Ok(None)
-            }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
-                Ok(None)
-            }
-            fn status(
-                &self,
-                _: &Path,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<Vec<String>> {
-                Ok(vec![])
-            }
-            fn init_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
-                Ok(())
-            }
-            fn has_repo(&self, _: &Path) -> bool {
-                true
-            }
-            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
-                Ok(false)
-            }
-        }
-
-        std::fs::remove_file(state_dir.join("state.local.json")).unwrap();
-        std::fs::create_dir(state_dir.join("state.local.json")).unwrap();
-
-        let res = SyncService::perform_sync(
-            dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &MockBackendOk,
-        )
-        .unwrap();
-        assert!(matches!(res.status, SyncStatus::FatalError(_)));
-    }
-
-    #[test]
-    #[cfg(feature = "github-api")]
-    #[cfg(feature = "git-https")]
-    fn test_first_sync_mode_clone_into_empty_project() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = SyncConfig {
-            enabled: true,
-            active_provider: "github_api".to_string(),
-            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
-                crate::sync::provider::github::config::GitHubProviderConfig {
-                    remote_url: "https://example.com/repo.git".to_string(),
-                    branch: "main".to_string(),
-                    username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
-                },
-            )),
-            auto_sync: false,
-            sync_interval_seconds: 300,
-            has_network_permission: true,
-            has_network_state_permission: true,
-        };
-        let secrets = SyncSecrets {
-            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
-                token: "dummy".to_string(),
-            }),
-        };
-
-        struct MockBackend;
-        impl GitBackend for MockBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn open_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Ok(())
-            }
-            fn stage_paths(
-                &self,
-                _: &Path,
-                _: &[&str],
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Ok(())
-            }
-            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
-                Ok(None)
-            }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
-                Ok(None)
-            }
-            fn status(
-                &self,
-                _: &Path,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<Vec<String>> {
-                Ok(vec![])
-            }
-            fn init_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
-                Ok(())
-            }
-            fn has_repo(&self, _: &Path) -> bool {
-                false
-            }
-            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
-                Ok(true)
-            }
-        }
-
-        let res = SyncService::perform_sync(
-            dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &MockBackend,
-        )
-        .unwrap();
-        assert_eq!(res.first_sync_mode, FirstSyncMode::CloneIntoEmptyProject);
-    }
-
-    #[test]
-    #[cfg(feature = "github-api")]
-    #[cfg(feature = "git-https")]
-    fn test_first_sync_mode_init_existing_project() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = SyncConfig {
-            enabled: true,
-            active_provider: "github_api".to_string(),
-            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
-                crate::sync::provider::github::config::GitHubProviderConfig {
-                    remote_url: "https://example.com/repo.git".to_string(),
-                    branch: "main".to_string(),
-                    username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
-                },
-            )),
-            auto_sync: false,
-            sync_interval_seconds: 300,
-            has_network_permission: true,
-            has_network_state_permission: true,
-        };
-        let secrets = SyncSecrets {
-            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
-                token: "dummy".to_string(),
-            }),
-        };
-
-        struct MockBackend;
-        impl GitBackend for MockBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn open_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Ok(())
-            }
-            fn stage_paths(
-                &self,
-                _: &Path,
-                _: &[&str],
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Ok(())
-            }
-            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
-                Ok(None)
-            }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
-                Ok(None)
-            }
-            fn status(
-                &self,
-                _: &Path,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<Vec<String>> {
-                Ok(vec![])
-            }
-            fn init_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
-                Ok(())
-            }
-            fn has_repo(&self, _: &Path) -> bool {
-                false
-            }
-            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
-                Ok(false)
-            }
-        }
-
-        let res = SyncService::perform_sync(
-            dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &MockBackend,
-        )
-        .unwrap();
-        assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingProject);
-    }
-
-    #[test]
-    #[cfg(feature = "github-api")]
-    #[cfg(feature = "git-https")]
-    fn test_first_sync_mode_already_git_repo() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = SyncConfig {
-            enabled: true,
-            active_provider: "github_api".to_string(),
-            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
-                crate::sync::provider::github::config::GitHubProviderConfig {
-                    remote_url: "https://example.com/repo.git".to_string(),
-                    branch: "main".to_string(),
-                    username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
-                },
-            )),
-            auto_sync: false,
-            sync_interval_seconds: 300,
-            has_network_permission: true,
-            has_network_state_permission: true,
-        };
-        let secrets = SyncSecrets {
-            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
-                token: "dummy".to_string(),
-            }),
-        };
-
-        struct MockBackend;
-        impl GitBackend for MockBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn open_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Ok(())
-            }
-            fn stage_paths(
-                &self,
-                _: &Path,
-                _: &[&str],
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Ok(())
-            }
-            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
-                Ok(None)
-            }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
-                Ok(None)
-            }
-            fn status(
-                &self,
-                _: &Path,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<Vec<String>> {
-                Ok(vec![])
-            }
-            fn init_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
-                Ok(())
-            }
-            fn has_repo(&self, _: &Path) -> bool {
-                true
-            }
-            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
-                Ok(false)
-            }
-        }
-
-        let res = SyncService::perform_sync(
-            dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &MockBackend,
-        )
-        .unwrap();
-        assert_eq!(res.first_sync_mode, FirstSyncMode::AlreadyGitRepo);
     }
 
     #[test]
@@ -1530,165 +783,6 @@ mod tests {
                 .any(|s| s.contains("sync_secrets.local.json")),
             "Secrets should be explicitly ignored"
         );
-    }
-
-    #[test]
-    #[cfg(feature = "github-api")]
-    #[cfg(feature = "git-https")]
-    fn test_first_sync_empty_remote_branch_not_found() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("app-meta/settings")).unwrap();
-        std::fs::write(
-            dir.path().join("app-meta/settings/settings.sync.json"),
-            "{}",
-        )
-        .unwrap();
-
-        let config = SyncConfig {
-            enabled: true,
-            active_provider: "github_api".to_string(),
-            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
-                crate::sync::provider::github::config::GitHubProviderConfig {
-                    remote_url: "https://github.com/test/empty-repo.git".to_string(),
-                    branch: "main".to_string(),
-                    username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
-                },
-            )),
-            auto_sync: false,
-            sync_interval_seconds: 300,
-            has_network_permission: true,
-            has_network_state_permission: true,
-        };
-        let secrets = SyncSecrets {
-            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
-                token: "dummy".to_string(),
-            }),
-        };
-
-        struct MockEmptyRemoteBackend;
-        impl GitBackend for MockEmptyRemoteBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn open_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Err(crate::Error::SyncRemoteBranchNotFound {
-                    detail: "ref not found: refs/heads/main".to_string(),
-                })
-            }
-            fn stage_paths(
-                &self,
-                _: &Path,
-                _: &[&str],
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<()> {
-                Ok(())
-            }
-            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
-                Ok(Some("commit_hash".to_string()))
-            }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
-                Ok(())
-            }
-            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
-                Ok(None)
-            }
-            fn status(
-                &self,
-                _: &Path,
-                _: crate::sync::types::SyncScope,
-            ) -> crate::Result<Vec<String>> {
-                Ok(vec!["project.json".to_string()])
-            }
-            fn init_repo(&self, _: &Path) -> crate::Result<()> {
-                Ok(())
-            }
-            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
-                Ok(())
-            }
-            fn has_repo(&self, _: &Path) -> bool {
-                false
-            }
-            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
-                Ok(false)
-            }
-        }
-
-        let res = SyncService::perform_sync(
-            dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &MockEmptyRemoteBackend,
-        )
-        .unwrap();
-        assert_eq!(res.status, SyncStatus::Success);
-        assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingProject);
-    }
-
-    #[test]
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn test_push_preflight_unborn_head() {
-        let dir = tempfile::tempdir().unwrap();
-        // Repository is initialized but has no commits (unborn HEAD)
-        let _repo = git2::Repository::init(dir.path()).unwrap();
-
-        let backend = Git2Backend;
-        let res = backend.push(dir.path(), "main", None);
-        assert!(res.is_err());
-        let err_msg = res.unwrap_err().to_string();
-        assert!(err_msg.contains("recoverable_error") || err_msg.contains("unborn"));
-    }
-
-    #[test]
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn test_push_preflight_missing_branch_ref_recovered() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = git2::Repository::init(dir.path()).unwrap();
-
-        // Create a commit
-        let signature = git2::Signature::now("Test User", "test@test.com").unwrap();
-        let mut index = repo.index().unwrap();
-        let file_path = dir.path().join("app-meta/settings/settings.sync.json");
-        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
-        std::fs::write(&file_path, "{}").unwrap();
-        index
-            .add_path(Path::new("app-meta/settings/settings.sync.json"))
-            .unwrap();
-        index.write().unwrap();
-        let oid = index.write_tree().unwrap();
-        let tree = repo.find_tree(oid).unwrap();
-        let commit_oid = repo
-            .commit(
-                Some("refs/heads/main"),
-                &signature,
-                &signature,
-                "Initial commit",
-                &tree,
-                &[],
-            )
-            .unwrap();
-
-        // Delete the branch reference, keeping HEAD detached pointing to the commit
-        repo.set_head_detached(commit_oid).unwrap();
-        let mut branch_ref = repo.find_reference("refs/heads/main").unwrap();
-        branch_ref.delete().unwrap();
-
-        // Now branch reference refs/heads/main does not exist, but HEAD points to a commit.
-        // We verify that calling Git2Backend::push reconstructs the branch ref successfully!
-        let backend = Git2Backend;
-        let _res = backend.push(dir.path(), "main", None);
-        // Verify branch ref has been reconstructed!
-        assert!(repo.find_reference("refs/heads/main").is_ok());
     }
 
     #[cfg(feature = "github-api")]
@@ -2013,7 +1107,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -2089,7 +1183,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -2165,7 +1259,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -2262,7 +1356,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -2338,7 +1432,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -2447,7 +1541,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -2543,7 +1637,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -2644,7 +1738,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -2720,7 +1814,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -2801,7 +1895,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -2892,7 +1986,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -2954,7 +2048,7 @@ mod tests {
                     remote_url: mock_url2,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -3221,7 +2315,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -3264,7 +2358,7 @@ mod tests {
                     remote_url: mock_url2,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -3326,7 +2420,7 @@ mod tests {
                     remote_url: mock_url3,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -3426,7 +2520,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -3476,7 +2570,7 @@ mod tests {
                     remote_url: mock_url3,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -3538,7 +2632,7 @@ mod tests {
                     remote_url: mock_url4,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -3630,7 +2724,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -3747,7 +2841,7 @@ mod tests {
                     remote_url: mock_url,
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -3811,8 +2905,8 @@ mod tests {
             "tree 404 handler must produce an error when branch is absent"
         );
         assert!(
-            source.contains("repo_not_found_or_no_permission"),
-            "tree 404 handler must produce repo_not_found_or_no_permission error when repo is inaccessible"
+            source.contains("get_repo"),
+            "tree 404 handler must call get_repo to distinguish repo/branch issues"
         );
     }
 
@@ -3869,7 +2963,7 @@ mod tests {
                     remote_url: "https://github.com/test/debounce-test.git".to_string(),
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -3911,7 +3005,7 @@ mod tests {
                     remote_url: "https://github.com/test/force-sync-test.git".to_string(),
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -3964,7 +3058,7 @@ mod tests {
                     remote_url: "https://github.com/test/pending-take-remote-test.git".to_string(),
                     branch: "main".to_string(),
                     username: String::new(),
-                    transport: SyncProtocol::HttpsToken,
+                    transport: GitHubTransport::HttpsToken,
                 },
             )),
             auto_sync: false,
@@ -3998,387 +3092,7 @@ mod tests {
     }
     // ── Issue #600 评论 #7: tree diff 填充 downloaded_files/remote_deletes 的测试 ──
 
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn git_test_signature() -> git2::Signature<'static> {
-        git2::Signature::now("Test User", "test@test.com").unwrap()
-    }
-
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn commit_file_to_repo(repo: &git2::Repository, path: &str, content: &str, msg: &str) {
-        let full_path = repo.workdir().unwrap().join(path);
-        if let Some(parent) = full_path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(&full_path, content).unwrap();
-
-        let mut index = repo.index().unwrap();
-        index.add_path(std::path::Path::new(path)).unwrap();
-        index.write().unwrap();
-        let oid = index.write_tree().unwrap();
-        let tree = repo.find_tree(oid).unwrap();
-
-        let sig = git_test_signature();
-        let parents: Vec<git2::Commit> = match repo.head() {
-            Ok(head) => head
-                .peel_to_commit()
-                .ok()
-                .map(|c| vec![c])
-                .unwrap_or_default(),
-            Err(_) => vec![],
-        };
-        let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
-
-        repo.commit(
-            Some("refs/heads/main"),
-            &sig,
-            &sig,
-            msg,
-            &tree,
-            &parent_refs,
-        )
-        .unwrap();
-        repo.set_head("refs/heads/main").unwrap();
-    }
-
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn delete_file_from_repo(repo: &git2::Repository, path: &str, msg: &str) {
-        let full_path = repo.workdir().unwrap().join(path);
-        std::fs::remove_file(&full_path).unwrap();
-
-        let mut index = repo.index().unwrap();
-        index.remove_path(std::path::Path::new(path)).unwrap();
-        index.write().unwrap();
-        let oid = index.write_tree().unwrap();
-        let tree = repo.find_tree(oid).unwrap();
-
-        let sig = git_test_signature();
-        let head = repo.head().unwrap().peel_to_commit().unwrap();
-
-        repo.commit(Some("refs/heads/main"), &sig, &sig, msg, &tree, &[&head])
-            .unwrap();
-    }
-
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn make_sync_config(remote_url: &str) -> SyncConfig {
-        SyncConfig {
-            enabled: true,
-            active_provider: "github_api".to_string(),
-            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
-                crate::sync::provider::github::config::GitHubProviderConfig {
-                    remote_url: remote_url.to_string(),
-                    branch: "main".to_string(),
-                    username: String::new(),
-                    transport: crate::sync::types::SyncProtocol::HttpsToken,
-                },
-            )),
-            auto_sync: false,
-            sync_interval_seconds: 0,
-            has_network_permission: true,
-            has_network_state_permission: true,
-        }
-    }
-
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn make_sync_secrets() -> SyncSecrets {
-        SyncSecrets {
-            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
-                token: "dummy".to_string(),
-            }),
-        }
-    }
-
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn hard_reset_to(repo: &git2::Repository, oid: git2::Oid) {
-        let obj = repo.find_object(oid, None).unwrap();
-        let mut cb = git2::build::CheckoutBuilder::default();
-        cb.force();
-        repo.reset(&obj, git2::ResetType::Hard, Some(&mut cb))
-            .unwrap();
-        let mut ref_main = repo.find_reference("refs/heads/main").unwrap();
-        ref_main.set_target(oid, "reset").unwrap();
-    }
-
-    #[test]
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn test_pull_tree_diff_downloaded_files() {
-        // 正面测试：远端修改 whitelisted 文件，pull 后 downloaded_files 应包含该文件。
-        let remote_dir = tempfile::tempdir().unwrap();
-        let _bare_repo = git2::Repository::init_bare(remote_dir.path()).unwrap();
-        let remote_url = format!("file://{}", remote_dir.path().to_string_lossy());
-
-        let local_dir = tempfile::tempdir().unwrap();
-        let repo = git2::Repository::init(local_dir.path()).unwrap();
-
-        // 本地创建初始 commit A 并 push 到远端
-        commit_file_to_repo(&repo, "project.json", r#"{"version":1}"#, "initial");
-        repo.remote("origin", &remote_url).unwrap();
-        let backend = Git2Backend;
-        backend.push(local_dir.path(), "main", None).unwrap();
-
-        // 在本地创建新 commit B 修改 project.json，push 到远端
-        let oid_a = repo.head().unwrap().target().unwrap();
-        commit_file_to_repo(&repo, "project.json", r#"{"version":2}"#, "modify");
-        backend.push(local_dir.path(), "main", None).unwrap();
-
-        // 重置本地 repo 到 commit A（模拟本地落后于远端）
-        hard_reset_to(&repo, oid_a);
-
-        // 调用 perform_sync
-        let config = make_sync_config(&remote_url);
-        let secrets = make_sync_secrets();
-        let result = SyncService::perform_sync(
-            local_dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &backend,
-        )
-        .unwrap();
-
-        assert_eq!(result.status, SyncStatus::Success);
-        assert!(
-            result
-                .downloaded_files
-                .contains(&"project.json".to_string()),
-            "downloaded_files should contain project.json, got: {:?}",
-            result.downloaded_files
-        );
-    }
-
-    #[test]
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn test_pull_tree_diff_blacklisted_not_in_downloaded() {
-        // 反面测试：远端修改黑名单文件，pull 后 downloaded_files 不应包含该文件。
-        let remote_dir = tempfile::tempdir().unwrap();
-        let _bare_repo = git2::Repository::init_bare(remote_dir.path()).unwrap();
-        let remote_url = format!("file://{}", remote_dir.path().to_string_lossy());
-
-        let local_dir = tempfile::tempdir().unwrap();
-        let repo = git2::Repository::init(local_dir.path()).unwrap();
-
-        // 本地创建初始 commit A（包含 whitelisted 文件）并 push 到远端
-        commit_file_to_repo(&repo, "project.json", r#"{"version":1}"#, "initial");
-        repo.remote("origin", &remote_url).unwrap();
-        let backend = Git2Backend;
-        backend.push(local_dir.path(), "main", None).unwrap();
-
-        // 在本地创建新 commit B 添加黑名单文件，push 到远端
-        let oid_a = repo.head().unwrap().target().unwrap();
-        commit_file_to_repo(
-            &repo,
-            "app-meta/sync/config.local.json",
-            r#"{"key":"val"}"#,
-            "add blacklisted",
-        );
-        backend.push(local_dir.path(), "main", None).unwrap();
-
-        // 重置本地 repo 到 commit A（模拟本地落后于远端）
-        hard_reset_to(&repo, oid_a);
-
-        // 调用 perform_sync
-        let config = make_sync_config(&remote_url);
-        let secrets = make_sync_secrets();
-        let result = SyncService::perform_sync(
-            local_dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &backend,
-        )
-        .unwrap();
-
-        assert_eq!(result.status, SyncStatus::Success);
-        assert!(
-            !result
-                .downloaded_files
-                .contains(&"app-meta/sync/config.local.json".to_string()),
-            "downloaded_files should NOT contain blacklisted file, got: {:?}",
-            result.downloaded_files
-        );
-    }
-
-    #[test]
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn test_pull_tree_diff_remote_deletes() {
-        // 删除测试：远端删除 whitelisted 文件，pull 后 remote_deletes 应包含该文件。
-        let remote_dir = tempfile::tempdir().unwrap();
-        let _bare_repo = git2::Repository::init_bare(remote_dir.path()).unwrap();
-        let remote_url = format!("file://{}", remote_dir.path().to_string_lossy());
-
-        let local_dir = tempfile::tempdir().unwrap();
-        let repo = git2::Repository::init(local_dir.path()).unwrap();
-
-        // 本地创建初始 commit A（包含 whitelisted 文件）并 push 到远端
-        commit_file_to_repo(&repo, "project.json", r#"{"version":1}"#, "initial");
-        repo.remote("origin", &remote_url).unwrap();
-        let backend = Git2Backend;
-        backend.push(local_dir.path(), "main", None).unwrap();
-
-        // 在本地创建新 commit B 删除 project.json，push 到远端
-        let oid_a = repo.head().unwrap().target().unwrap();
-        delete_file_from_repo(&repo, "project.json", "delete project.json");
-        backend.push(local_dir.path(), "main", None).unwrap();
-
-        // 重置本地 repo 到 commit A（模拟本地落后于远端）
-        hard_reset_to(&repo, oid_a);
-
-        // 调用 perform_sync
-        let config = make_sync_config(&remote_url);
-        let secrets = make_sync_secrets();
-        let result = SyncService::perform_sync(
-            local_dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &backend,
-        )
-        .unwrap();
-
-        assert_eq!(result.status, SyncStatus::Success);
-        assert!(
-            result.remote_deletes.contains(&"project.json".to_string()),
-            "remote_deletes should contain project.json, got: {:?}",
-            result.remote_deletes
-        );
-    }
-
     // ── Issue #600 评论 #9: 首次同步边界（CloneIntoEmptyProject / unborn repo）──
-
-    #[test]
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn test_clone_into_empty_downloaded_files() {
-        // 正面：空目录 clone 远端，clone 下来的 whitelisted 文件应进 downloaded_files。
-        let remote_dir = tempfile::tempdir().unwrap();
-        let _bare_repo = git2::Repository::init_bare(remote_dir.path()).unwrap();
-        let remote_url = format!("file://{}", remote_dir.path().to_string_lossy());
-
-        // 先用一个临时 repo 往远端 push 内容
-        let seed_dir = tempfile::tempdir().unwrap();
-        let seed_repo = git2::Repository::init(seed_dir.path()).unwrap();
-        commit_file_to_repo(&seed_repo, "project.json", r#"{"version":1}"#, "initial");
-        seed_repo.remote("origin", &remote_url).unwrap();
-        let backend = Git2Backend;
-        backend.push(seed_dir.path(), "main", None).unwrap();
-
-        // 本地是空目录，perform_sync 会走 CloneIntoEmptyProject
-        let local_dir = tempfile::tempdir().unwrap();
-        let config = make_sync_config(&remote_url);
-        let secrets = make_sync_secrets();
-        let result = SyncService::perform_sync(
-            local_dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &backend,
-        )
-        .unwrap();
-
-        assert_eq!(result.status, SyncStatus::Success);
-        assert_eq!(result.first_sync_mode, FirstSyncMode::CloneIntoEmptyProject);
-        assert!(
-            result
-                .downloaded_files
-                .contains(&"project.json".to_string()),
-            "downloaded_files should contain project.json after clone, got: {:?}",
-            result.downloaded_files
-        );
-    }
-
-    #[test]
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn test_clone_into_empty_blacklisted_not_in_downloaded() {
-        // 反面：clone 下来的黑名单文件不应进 downloaded_files。
-        let remote_dir = tempfile::tempdir().unwrap();
-        let _bare_repo = git2::Repository::init_bare(remote_dir.path()).unwrap();
-        let remote_url = format!("file://{}", remote_dir.path().to_string_lossy());
-
-        let seed_dir = tempfile::tempdir().unwrap();
-        let seed_repo = git2::Repository::init(seed_dir.path()).unwrap();
-        commit_file_to_repo(
-            &seed_repo,
-            "project.json",
-            r#"{"version":1}"#,
-            "whitelisted",
-        );
-        commit_file_to_repo(
-            &seed_repo,
-            "app-meta/sync/config.local.json",
-            r#"{"key":"val"}"#,
-            "blacklisted",
-        );
-        seed_repo.remote("origin", &remote_url).unwrap();
-        let backend = Git2Backend;
-        backend.push(seed_dir.path(), "main", None).unwrap();
-
-        let local_dir = tempfile::tempdir().unwrap();
-        let config = make_sync_config(&remote_url);
-        let secrets = make_sync_secrets();
-        let result = SyncService::perform_sync(
-            local_dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &backend,
-        )
-        .unwrap();
-
-        assert_eq!(result.status, SyncStatus::Success);
-        assert!(
-            !result
-                .downloaded_files
-                .contains(&"app-meta/sync/config.local.json".to_string()),
-            "downloaded_files should NOT contain blacklisted file, got: {:?}",
-            result.downloaded_files
-        );
-        assert!(
-            result
-                .downloaded_files
-                .contains(&"project.json".to_string()),
-            "downloaded_files should still contain whitelisted file, got: {:?}",
-            result.downloaded_files
-        );
-    }
-
-    #[test]
-    #[cfg(all(not(windows), feature = "git-https"))]
-    fn test_unborn_repo_pull_downloaded_files() {
-        // 正面：本地 init 但无 commit（HEAD unborn），pull 远端后远端文件应进 downloaded_files。
-        let remote_dir = tempfile::tempdir().unwrap();
-        let _bare_repo = git2::Repository::init_bare(remote_dir.path()).unwrap();
-        let remote_url = format!("file://{}", remote_dir.path().to_string_lossy());
-
-        let seed_dir = tempfile::tempdir().unwrap();
-        let seed_repo = git2::Repository::init(seed_dir.path()).unwrap();
-        commit_file_to_repo(&seed_repo, "project.json", r#"{"version":1}"#, "initial");
-        seed_repo.remote("origin", &remote_url).unwrap();
-        let backend = Git2Backend;
-        backend.push(seed_dir.path(), "main", None).unwrap();
-
-        // 本地 init 但不 commit，设置 remote → HEAD unborn
-        let local_dir = tempfile::tempdir().unwrap();
-        let local_repo = git2::Repository::init(local_dir.path()).unwrap();
-        local_repo.remote("origin", &remote_url).unwrap();
-
-        let config = make_sync_config(&remote_url);
-        let secrets = make_sync_secrets();
-        let result = SyncService::perform_sync(
-            local_dir.path(),
-            &config,
-            &secrets,
-            crate::sync::types::SyncScope::Project,
-            &backend,
-        )
-        .unwrap();
-
-        assert_eq!(result.status, SyncStatus::Success);
-        assert!(
-            result
-                .downloaded_files
-                .contains(&"project.json".to_string()),
-            "downloaded_files should contain project.json after unborn pull, got: {:?}",
-            result.downloaded_files
-        );
-    }
 
     // ===== Issue #645 评论 5504296097：MemoryProvider + LWW engine 集成测试 =====
     //

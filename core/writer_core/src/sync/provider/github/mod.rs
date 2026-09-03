@@ -296,11 +296,7 @@ impl GitHubProvider {
             Err(e) => {
                 let err_str = e.to_string();
                 result.raw_error = Some(err_str.clone());
-                if err_str.contains("dns") || err_str.contains("connect") {
-                    result.error_category = "dns_failed".to_string();
-                } else {
-                    result.error_category = "github_network_failed".to_string();
-                }
+                result.error_category = "network".to_string();
                 result.network_ok = false;
                 result.network_status = "failed".to_string();
             }
@@ -333,10 +329,13 @@ fn apply_diagnose_status(result: &mut SyncDiagnosticsResult, status: u16, body: 
         result.network_status = "ok".to_string();
         result.auth_ok = false;
         result.auth_status = "failed".to_string();
+        // Issue #645 评论 5504296097 第1点：GitHub 401/403 在 provider 层转成通用
+        // AuthFailed/PermissionDenied code（from_code 仍兼容旧 token_invalid/
+        // token_permission_denied 字符串）。
         let category = if status == 401 {
-            "token_invalid"
+            "auth_failed"
         } else {
-            "token_permission_denied"
+            "permission_denied"
         };
         result.error_category = category.to_string();
     } else if status == 404 {
@@ -346,11 +345,11 @@ fn apply_diagnose_status(result: &mut SyncDiagnosticsResult, status: u16, body: 
         result.auth_status = "ok".to_string();
         result.repo_ok = false;
         result.repo_status = "failed".to_string();
-        result.error_category = "repo_not_found_or_no_permission".to_string();
+        result.error_category = "not_found".to_string();
     } else {
         result.network_ok = false;
         result.network_status = "failed".to_string();
-        result.error_category = "github_network_failed".to_string();
+        result.error_category = "network".to_string();
     }
 }
 

@@ -187,10 +187,7 @@ impl super::WriterCore {
         let mut targets = Vec::new();
 
         // App target — 只生成 plan，不创建 staging。
-        // #644 评论 5491531984 问题1：App target 也必须有私有 Git metadata 位置，
-        // 例如 `sujian-git/app/`。
         let app_target = crate::sync::types::SyncTarget::app();
-        let app_git_layout = self.app_git_layout();
         targets.push(PlannedTarget {
             target: app_target,
             local_root: self.app_data_root.clone(),
@@ -198,14 +195,12 @@ impl super::WriterCore {
             target_kind: "app".to_string(),
             project_id: None,
             target_live_root: self.app_data_root.clone(),
-            git_layout: Some(app_git_layout),
         });
 
         // Project targets — 只生成 plan，不创建 staging
         for project in &projects {
             let target = crate::sync::types::SyncTarget::project(&project.id);
             let project_local_root = self.project_root(&project.id);
-            let project_git_layout = self.project_git_layout(&project.id);
             targets.push(PlannedTarget {
                 target,
                 local_root: project_local_root.clone(),
@@ -213,15 +208,19 @@ impl super::WriterCore {
                 target_kind: "project".to_string(),
                 project_id: Some(project.id.clone()),
                 target_live_root: project_local_root,
-                git_layout: Some(project_git_layout),
             });
         }
+
+        // #645 评论第 3 点：workspace 级别的 Git layout 放在 plan 上，
+        // 所有 target 共享，不再为每个 target 单独构造 layout。
+        let workspace_git_layout = self.workspace_git_layout();
 
         Ok(FullSyncPlan {
             sync_policy: crate::sync::types::SyncPolicy::from_config(config),
             force_sync,
             targets,
             app_data_root: self.app_data_root.clone(),
+            workspace_git_layout: Some(workspace_git_layout),
         })
     }
 

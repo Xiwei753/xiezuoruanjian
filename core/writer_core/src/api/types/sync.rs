@@ -427,30 +427,47 @@ impl From<crate::sync::SyncResult> for SyncResultDto {
     }
 }
 
-/// `SyncProtocol` → 线格式字符串。
+/// `GitHubTransport` → 线格式字符串。
 /// 保留供 UniFFI/JNI 层或其他 DTO 转换使用。
-fn sync_transport_to_wire(transport: crate::sync::SyncProtocol) -> String {
+///
+/// Issue #645 评论 5504296097 第1点：`SyncProtocol` 已移到
+/// `sync/provider/github/config.rs::GitHubTransport`。
+#[cfg(feature = "github-api")]
+fn sync_transport_to_wire(
+    transport: crate::sync::provider::github::config::GitHubTransport,
+) -> String {
     match transport {
-        crate::sync::SyncProtocol::HttpsToken => "https_token".to_string(),
-        crate::sync::SyncProtocol::SshDeployKey => "ssh_deploy_key".to_string(),
+        crate::sync::provider::github::config::GitHubTransport::HttpsToken => {
+            "https_token".to_string()
+        }
+        crate::sync::provider::github::config::GitHubTransport::SshDeployKey => {
+            "ssh_deploy_key".to_string()
+        }
     }
 }
 
-/// 线格式字符串 → `SyncProtocol`。
-fn sync_transport_from_wire(s: &str) -> crate::sync::SyncProtocol {
+/// 线格式字符串 → `GitHubTransport`。
+#[cfg(feature = "github-api")]
+fn sync_transport_from_wire(s: &str) -> crate::sync::provider::github::config::GitHubTransport {
     match s {
-        "ssh" | "ssh_deploy_key" => crate::sync::SyncProtocol::SshDeployKey,
-        _ => crate::sync::SyncProtocol::HttpsToken,
+        "ssh" | "ssh_deploy_key" => {
+            crate::sync::provider::github::config::GitHubTransport::SshDeployKey
+        }
+        _ => crate::sync::provider::github::config::GitHubTransport::HttpsToken,
     }
 }
 
-/// `SyncProtocol` → 线格式字符串（与 `sync_transport_to_wire` 同映射，命名更直观）。
-fn sync_protocol_to_wire(transport: &crate::sync::SyncProtocol) -> String {
+/// `GitHubTransport` → 线格式字符串（与 `sync_transport_to_wire` 同映射，命名更直观）。
+#[cfg(feature = "github-api")]
+fn sync_protocol_to_wire(
+    transport: &crate::sync::provider::github::config::GitHubTransport,
+) -> String {
     sync_transport_to_wire(transport.clone())
 }
 
-/// 线格式字符串 → `SyncProtocol`（与 `sync_transport_from_wire` 同映射）。
-fn sync_protocol_from_wire(s: &str) -> crate::sync::SyncProtocol {
+/// 线格式字符串 → `GitHubTransport`（与 `sync_transport_from_wire` 同映射）。
+#[cfg(feature = "github-api")]
+fn sync_protocol_from_wire(s: &str) -> crate::sync::provider::github::config::GitHubTransport {
     sync_transport_from_wire(s)
 }
 
