@@ -26,8 +26,8 @@ pub unsafe extern "C" fn writer_core_load_sync_config() -> *mut c_char {
         Ok(serde_json::json!({
             "enabled": config.enabled,
             "provider": format!("{:?}", config.backend_type).to_lowercase(),
-            "remoteUrl": config.remote_url,
-            "branch": config.branch,
+            "remoteUrl": config.remote_url.unwrap_or_default(),
+            "branch": config.branch.unwrap_or_default(),
             "autoSync": config.auto_sync,
             "conflictStrategy": "manual"
         }))
@@ -59,10 +59,10 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
             config.enabled = v;
         }
         if let Some(v) = val.get("remoteUrl").and_then(|v| v.as_str()) {
-            config.remote_url = v.to_string();
+            config.remote_url = Some(v.to_string());
         }
         if let Some(v) = val.get("branch").and_then(|v| v.as_str()) {
-            config.branch = v.to_string();
+            config.branch = Some(v.to_string());
         }
         if let Some(v) = val.get("autoSync").and_then(|v| v.as_bool()) {
             config.auto_sync = v;

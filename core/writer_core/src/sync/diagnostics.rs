@@ -44,7 +44,8 @@ impl crate::sync::SyncService {
             result.network_state = "permission_granted".to_string();
         }
 
-        let parsed = sanitize_remote_url(&config.remote_url);
+        let remote_url = config.remote_url.clone().unwrap_or_default();
+        let parsed = sanitize_remote_url(&remote_url);
         let sanitized_url = parsed.sanitized_url;
         result.remote_url_sanitized = sanitized_url.clone();
 

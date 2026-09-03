@@ -56,6 +56,7 @@ pub(crate) use legacy_migration_io::{
 
 /// 旧→新同步 profile 迁移结果。
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum LegacyMigrationOutcome {
     /// 新全局已存在，无需迁移。
     NotNeeded,
@@ -203,7 +204,7 @@ impl<'a> LegacySyncProfileMigrator<'a> {
             Some(c) => c,
             None => return false,
         };
-        if config.remote_url.is_empty() {
+        if config.remote_url.as_deref().unwrap_or("").is_empty() {
             return false;
         }
         self.read_global_token().is_some()
@@ -239,7 +240,7 @@ impl<'a> LegacySyncProfileMigrator<'a> {
             Some(c) => c,
             None => return Ok(None),
         };
-        if config.remote_url.is_empty() {
+        if config.remote_url.as_deref().unwrap_or("").is_empty() {
             return Ok(None);
         }
         let precise_gen = metadata.and_then(|m| m.active_generation);
@@ -296,7 +297,7 @@ impl<'a> LegacySyncProfileMigrator<'a> {
             Some(c) => c,
             None => return Ok(None),
         };
-        if config.remote_url.is_empty() {
+        if config.remote_url.as_deref().unwrap_or("").is_empty() {
             return Ok(None);
         }
         let base_key = format!("{}{}", LEGACY_PROJECT_TOKEN_KEY_PREFIX, project_id);

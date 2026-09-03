@@ -52,7 +52,10 @@ impl super::WriterCore {
             .as_object()
             .map(|obj| !obj.contains_key("backend_type"))
             .unwrap_or(false);
-        let should_migrate = crate::sync::is_github_https_remote(&config.remote_url)
+        let should_migrate = config
+            .remote_url
+            .as_deref()
+            .is_some_and(crate::sync::is_github_https_remote)
             && (backend_missing || config.backend_type == crate::sync::BackendType::Git);
         if should_migrate {
             config.backend_type = crate::sync::BackendType::GithubApi;
@@ -71,7 +74,7 @@ impl super::WriterCore {
         &self,
         config: &crate::sync::SyncConfig,
     ) -> crate::error::Result<bool> {
-        if config.enabled && config.remote_url.is_empty() {
+        if config.enabled && config.remote_url.as_deref().unwrap_or("").is_empty() {
             return Ok(false);
         }
         Ok(true)
@@ -272,13 +275,14 @@ fn default_sync_config() -> crate::sync::SyncConfig {
         enabled: false,
         backend_type: crate::sync::BackendType::GithubApi,
         active_provider: "github_api".to_string(),
-        remote_url: String::new(),
-        transport: crate::sync::SyncProtocol::HttpsToken,
-        branch: "main".to_string(),
+        remote_url: None,
+        transport: None,
+        branch: None,
         auto_sync: false,
         sync_interval_seconds: 300,
-        username: String::new(),
+        username: None,
         has_network_permission: true,
         has_network_state_permission: true,
+        github: None,
     }
 }

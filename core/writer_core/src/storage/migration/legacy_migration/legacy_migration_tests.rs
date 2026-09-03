@@ -60,14 +60,15 @@ mod tests {
             enabled: true,
             backend_type: crate::sync::BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: remote_url.to_string(),
-            transport: crate::sync::SyncProtocol::HttpsToken,
-            branch: branch.to_string(),
+            remote_url: Some(remote_url.to_string()),
+            transport: Some(crate::sync::SyncProtocol::HttpsToken),
+            branch: Some(branch.to_string()),
             auto_sync: false,
             sync_interval_seconds: 300,
-            username: String::new(),
+            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
+            github: None,
         }
     }
 
@@ -148,7 +149,8 @@ mod tests {
             LegacyMigrationOutcome::NotNeeded => "NotNeeded".to_string(),
             LegacyMigrationOutcome::Migrated { config, .. } => format!(
                 "Migrated {{ remote_url: {}, branch: {} }}",
-                config.remote_url, config.branch,
+                config.remote_url.as_deref().unwrap_or(""),
+                config.branch.as_deref().unwrap_or("main"),
             ),
             LegacyMigrationOutcome::NeedsReconfigure { reason } => {
                 format!("NeedsReconfigure {{ reason: {} }}", reason)
@@ -173,7 +175,10 @@ mod tests {
                 config: c,
                 secrets: s,
             } => {
-                assert_eq!(c.remote_url, "https://github.com/test/repo.git");
+                assert_eq!(
+                    c.remote_url.as_deref(),
+                    Some("https://github.com/test/repo.git")
+                );
                 assert_eq!(s.token.as_deref(), Some("legacy_app_token"));
             }
             other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
@@ -240,7 +245,10 @@ mod tests {
                 config: c,
                 secrets: s,
             } => {
-                assert_eq!(c.remote_url, "https://github.com/test/proj1.git");
+                assert_eq!(
+                    c.remote_url.as_deref(),
+                    Some("https://github.com/test/proj1.git")
+                );
                 assert_eq!(s.token.as_deref(), Some("proj1_token"));
             }
             other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
@@ -277,7 +285,10 @@ mod tests {
                 config: c,
                 secrets: s,
             } => {
-                assert_eq!(c.remote_url, "https://github.com/test/shared.git");
+                assert_eq!(
+                    c.remote_url.as_deref(),
+                    Some("https://github.com/test/shared.git")
+                );
                 assert_eq!(s.token.as_deref(), Some("shared_token"));
             }
             other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
@@ -521,7 +532,10 @@ mod tests {
                 config: c,
                 secrets: s,
             } => {
-                assert_eq!(c.remote_url, "https://github.com/app/repo.git");
+                assert_eq!(
+                    c.remote_url.as_deref(),
+                    Some("https://github.com/app/repo.git")
+                );
                 assert_eq!(s.token.as_deref(), Some("app_token"));
             }
             other => panic!(

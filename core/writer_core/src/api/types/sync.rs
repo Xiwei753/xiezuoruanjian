@@ -32,15 +32,18 @@ impl From<crate::sync::SyncConfig> for SyncConfigDto {
                 crate::sync::BackendType::Git => "git".to_string(),
                 crate::sync::BackendType::GithubApi => "github_api".to_string(),
             },
-            remote_url: c.remote_url,
-            transport: match c.transport {
-                crate::sync::SyncProtocol::HttpsToken => "https_token".to_string(),
-                crate::sync::SyncProtocol::SshDeployKey => "ssh_deploy_key".to_string(),
-            },
-            branch: c.branch,
+            remote_url: c.resolve_remote_url().unwrap_or_default(),
+            transport: c
+                .resolve_transport()
+                .map(|t| match t {
+                    crate::sync::SyncProtocol::HttpsToken => "https_token".to_string(),
+                    crate::sync::SyncProtocol::SshDeployKey => "ssh_deploy_key".to_string(),
+                })
+                .unwrap_or_else(|| "https_token".to_string()),
+            branch: c.resolve_branch(),
             auto_sync: c.auto_sync,
             sync_interval_seconds: c.sync_interval_seconds,
-            username: c.username,
+            username: c.resolve_username().unwrap_or_default(),
             has_network_permission: c.has_network_permission,
             has_network_state_permission: c.has_network_state_permission,
         }
@@ -57,18 +60,19 @@ impl From<SyncConfigDto> for crate::sync::SyncConfig {
                 "github_api" => crate::sync::BackendType::GithubApi,
                 _ => crate::sync::BackendType::GithubApi,
             },
-            remote_url: c.remote_url,
-            transport: match c.transport.as_str() {
+            remote_url: Some(c.remote_url),
+            transport: Some(match c.transport.as_str() {
                 "https_token" => crate::sync::SyncProtocol::HttpsToken,
                 "ssh" | "ssh_deploy_key" => crate::sync::SyncProtocol::SshDeployKey,
                 _ => crate::sync::SyncProtocol::HttpsToken,
-            },
-            branch: c.branch,
+            }),
+            branch: Some(c.branch),
             auto_sync: c.auto_sync,
             sync_interval_seconds: c.sync_interval_seconds,
-            username: c.username,
+            username: Some(c.username),
             has_network_state_permission: c.has_network_state_permission,
             has_network_permission: c.has_network_permission,
+            github: None,
         }
     }
 }

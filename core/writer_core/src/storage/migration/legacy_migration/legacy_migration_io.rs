@@ -87,7 +87,9 @@ pub(crate) fn describe_conflict(profiles: &[LegacyProfile]) -> String {
     for p in profiles {
         summary.push(format!(
             "source={}, remote_url={}, branch={}, credentials differ",
-            p.source, p.config.remote_url, p.config.branch,
+            p.source,
+            p.config.remote_url.as_deref().unwrap_or(""),
+            p.config.branch.as_deref().unwrap_or("main"),
         ));
     }
     format!(

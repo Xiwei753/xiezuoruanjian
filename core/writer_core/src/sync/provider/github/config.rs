@@ -36,6 +36,9 @@ impl GitHubProviderConfig {
     /// - remote_url 经 `sanitize_remote_url` 脱敏后推导 api_base_url。
     /// - branch 为空时回退到 `"main"`。
     /// - username 为空时回退到 `"x-access-token"`。
+    ///
+    /// 从 `SyncConfig::resolve_*()` 方法读取 GitHub 特定参数，
+    /// 优先使用 `github` 嵌套配置，回退到顶层旧字段（向后兼容）。
     pub fn from_sync_config(
         config: &SyncConfig,
         secrets: &SyncSecrets,
@@ -46,22 +49,17 @@ impl GitHubProviderConfig {
                 reason: "token is missing".to_string(),
             });
         }
-        let branch = if config.branch.is_empty() {
-            "main".to_string()
-        } else {
-            config.branch.clone()
-        };
-        let username = if config.username.is_empty() {
-            "x-access-token".to_string()
-        } else {
-            config.username.clone()
-        };
-        let api_base_url = api_base_url_from_remote(&config.remote_url);
+        let branch = config.resolve_branch();
+        let username = config
+            .resolve_username()
+            .unwrap_or_else(|| "x-access-token".to_string());
+        let remote_url = config.resolve_remote_url().unwrap_or_default();
+        let api_base_url = api_base_url_from_remote(&remote_url);
         Ok(Self {
             api_base_url,
             token,
             branch,
-            remote_url: config.remote_url.clone(),
+            remote_url,
             username,
         })
     }

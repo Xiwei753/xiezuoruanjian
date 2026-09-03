@@ -80,7 +80,7 @@ fn classify_error(e: &crate::Error) -> SyncStatus {
         crate::Error::SyncRemoteBranchNotFound { .. } => {
             SyncStatus::RecoverableError(e.to_string())
         }
-        crate::Error::SyncRemoteApiError { category, .. } => {
+        crate::Error::SyncRemoteError { category, .. } => {
             let cat = crate::sync::types::SyncErrorCategory::from_code(category, "");
             match cat {
                 crate::sync::types::SyncErrorCategory::AuthError
@@ -522,7 +522,7 @@ impl SyncService {
             return Ok(result);
         }
 
-        if config.remote_url.is_empty() {
+        if config.remote_url.as_deref().unwrap_or("").is_empty() {
             return Ok(SyncResult::error(
                 SyncStatus::Error("Remote URL is empty".to_string()),
                 FirstSyncMode::NotAttempted,
@@ -531,7 +531,8 @@ impl SyncService {
             ));
         }
 
-        let parsed = sanitize_remote_url(&config.remote_url);
+        let remote_url = config.remote_url.clone().unwrap_or_default();
+        let parsed = sanitize_remote_url(&remote_url);
         let sanitized_url = parsed.sanitized_url;
 
         let token_from_parsed = parsed.extracted_token;
@@ -549,15 +550,19 @@ impl SyncService {
             ));
         }
 
-        let username_for_cred = if !config.username.is_empty() {
-            config.username.clone()
+        let username_for_cred = if config.username.as_deref().is_some_and(|u| !u.is_empty()) {
+            config.username.clone().unwrap_or_default()
         } else if let Some(ref extracted_user) = parsed.extracted_username {
             extracted_user.clone()
         } else {
             "x-access-token".to_string()
         };
 
-        let auth = match &config.transport {
+        let auth = match config
+            .transport
+            .as_ref()
+            .unwrap_or(&SyncProtocol::HttpsToken)
+        {
             SyncProtocol::HttpsToken => Some(GitAuth::HttpsToken {
                 username: username_for_cred.clone(),
                 token: token.clone(),
@@ -627,15 +632,16 @@ impl SyncService {
         }
 
         let mut branch_recovered = false;
+        let branch = config.branch.as_deref().unwrap_or("main");
         if let Ok(repo) = Self::open_git_repo(sync_root) {
-            let branch_ref_name = format!("refs/heads/{}", config.branch);
+            let branch_ref_name = format!("refs/heads/{}", branch);
             let branch_exists = repo.find_reference(&branch_ref_name).is_ok();
             let head_commit = repo.head().ok().and_then(|r| r.peel_to_commit().ok());
             if !branch_exists && head_commit.is_some() {
                 branch_recovered = true;
             }
 
-            if let Err(e) = Self::ensure_local_branch_exists(&repo, &config.branch) {
+            if let Err(e) = Self::ensure_local_branch_exists(&repo, branch) {
                 return Ok(SyncResult::error(
                     classify_error(&e),
                     result.first_sync_mode,
@@ -705,7 +711,7 @@ impl SyncService {
         };
 
         let pull_failed = backend
-            .pull(sync_root, &config.branch, auth.as_ref(), scope)
+            .pull(sync_root, branch, auth.as_ref(), scope)
             .map_err(map_git_error)
             .err();
         let pull_succeeded = pull_failed.is_none();
@@ -750,7 +756,7 @@ impl SyncService {
             );
             let mut succeeded: std::collections::HashSet<String> = std::collections::HashSet::new();
             if let Ok(repo) = Self::open_git_repo(sync_root) {
-                let remote_branch_ref = format!("refs/remotes/origin/{}", config.branch);
+                let remote_branch_ref = format!("refs/remotes/origin/{}", branch);
                 if let Ok(remote_commit) = repo
                     .find_reference(&remote_branch_ref)
                     .and_then(|r| r.peel_to_commit())
@@ -876,7 +882,7 @@ impl SyncService {
             }
 
             if let Err(e) = backend
-                .push(sync_root, &config.branch, auth.as_ref())
+                .push(sync_root, branch, auth.as_ref())
                 .map_err(map_git_error)
             {
                 return Ok(SyncResult::error(
@@ -889,8 +895,8 @@ impl SyncService {
         }
 
         let mut state = Self::load_sync_state(sync_root).unwrap_or_default();
-        state.remote_url = Some(config.remote_url.clone());
-        state.transport = Some(config.transport.clone());
+        state.remote_url = config.remote_url.clone();
+        state.transport = config.transport.clone();
         state.last_sync_time = Some({
             #[allow(clippy::cast_possible_wrap)]
             let ts = std::time::SystemTime::now()

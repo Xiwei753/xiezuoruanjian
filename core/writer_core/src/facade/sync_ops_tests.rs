@@ -165,14 +165,15 @@ fn test_config() -> SyncConfig {
         enabled: true,
         backend_type: crate::sync::BackendType::GithubApi,
         active_provider: "github_api".to_string(),
-        remote_url: "https://github.com/test/repo.git".to_string(),
-        transport: crate::sync::SyncProtocol::HttpsToken,
-        branch: "main".to_string(),
+        remote_url: Some("https://github.com/test/repo.git".to_string()),
+        transport: Some(crate::sync::SyncProtocol::HttpsToken),
+        branch: Some("main".to_string()),
         auto_sync: false,
         sync_interval_seconds: 300,
-        username: String::new(),
+        username: Some(String::new()),
         has_network_permission: true,
         has_network_state_permission: true,
+        github: None,
     }
 }
 

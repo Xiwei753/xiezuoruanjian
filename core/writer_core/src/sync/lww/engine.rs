@@ -6,6 +6,8 @@
 //! 通过 [`crate::sync::provider::SyncProvider`] trait 与具体后端解耦，
 //! 不直接依赖 `SyncConfig`/`SyncSecrets`/`SyncTransport`。
 //! 认证/URL/分支解析在创建 Provider 时完成，engine 只接收 [`SyncPolicy`]。
+//! Provider 能力（`SyncCapabilities`）影响传输策略：`conditional_write` 决定
+//! 前置条件类型，`max_parallel_downloads` 控制并行下载线程数。
 
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::{SyncPolicy, SyncResult, SyncStatus};

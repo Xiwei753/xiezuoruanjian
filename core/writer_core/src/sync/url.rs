@@ -118,7 +118,12 @@ pub fn is_github_https_remote(remote_url: &str) -> bool {
 /// GitHub HTTPS 远程仓库使用 REST API 更高效（无需 clone 整个仓库），
 /// 因此当 `config.backend_type == Git` 且 URL 为 `https://github.com/` 时自动升级。
 pub fn resolved_backend_type(config: &SyncConfig) -> BackendType {
-    if config.backend_type == BackendType::Git && is_github_https_remote(&config.remote_url) {
+    if config.backend_type == BackendType::Git
+        && config
+            .remote_url
+            .as_deref()
+            .is_some_and(is_github_https_remote)
+    {
         BackendType::GithubApi
     } else {
         config.backend_type.clone()

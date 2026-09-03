@@ -253,13 +253,13 @@ impl From<crate::error::Error> for WriterError {
             Error::SyncRemoteBranchNotFound { detail } => {
                 WriterError::Protocol(format!("remote_branch_not_found: {}", detail))
             }
-            Error::SyncRemoteApiError {
+            Error::SyncRemoteError {
                 category,
                 context,
                 status,
                 body_preview,
             } => {
-                // #592 七：GitHub API 错误按类别映射为类型化失败；
+                // #592 七：远端 Provider 错误按类别映射为类型化失败；
                 // 只有明确网络/认证类别进入对应类型，其余默认 Fatal。
                 let cat = crate::sync::types::SyncErrorCategory::from_code(&category, "");
                 match cat {
@@ -408,19 +408,19 @@ mod tests {
             missing_files: vec!["f".into()],
         });
         assert!(matches!(incomplete, WriterError::Protocol(_)));
-        let github_auth = WriterError::from(Error::SyncRemoteApiError {
+        let remote_auth = WriterError::from(Error::SyncRemoteError {
             category: "token_invalid".into(),
             context: "c".into(),
             status: 401,
             body_preview: "b".into(),
         });
-        assert!(matches!(github_auth, WriterError::Authentication(_)));
-        let github_net = WriterError::from(Error::SyncRemoteApiError {
+        assert!(matches!(remote_auth, WriterError::Authentication(_)));
+        let remote_net = WriterError::from(Error::SyncRemoteError {
             category: "dns_failed".into(),
             context: "c".into(),
             status: 0,
             body_preview: "b".into(),
         });
-        assert!(matches!(github_net, WriterError::RetryableNetwork(_)));
+        assert!(matches!(remote_net, WriterError::RetryableNetwork(_)));
     }
 }

@@ -292,12 +292,15 @@ mod tests {
 
         let mut new_config = config.clone();
         new_config.enabled = true;
-        new_config.remote_url = "https://example.com/repo.git".to_string();
+        new_config.remote_url = Some("https://example.com/repo.git".to_string());
         core.save_sync_config(&new_config).unwrap();
 
         let loaded = core.load_sync_config().unwrap();
         assert!(loaded.enabled);
-        assert_eq!(loaded.remote_url, "https://example.com/repo.git");
+        assert_eq!(
+            loaded.remote_url.as_deref(),
+            Some("https://example.com/repo.git")
+        );
 
         let mut secrets = core.load_sync_secrets().unwrap();
         secrets.token = Some("my_super_secret_token".to_string());
@@ -312,7 +315,7 @@ mod tests {
         assert!(core.validate_sync_config(&loaded).unwrap());
 
         let mut bad_config = loaded.clone();
-        bad_config.remote_url = "".to_string();
+        bad_config.remote_url = Some("".to_string());
         assert!(!core.validate_sync_config(&bad_config).unwrap());
     }
 
@@ -468,13 +471,16 @@ mod tests {
         // 修改全局配置
         let mut config = config0.clone();
         config.enabled = true;
-        config.remote_url = "https://example.com/a.git".to_string();
+        config.remote_url = Some("https://example.com/a.git".to_string());
         core.save_sync_config(&config).unwrap();
 
         // 再次加载仍是同一份
         let loaded = core.load_sync_config().unwrap();
         assert!(loaded.enabled);
-        assert_eq!(loaded.remote_url, "https://example.com/a.git");
+        assert_eq!(
+            loaded.remote_url.as_deref(),
+            Some("https://example.com/a.git")
+        );
     }
 
     /// Issue #630：全局同步凭据唯一，所有作品共享同一份 secrets。
@@ -595,11 +601,14 @@ mod tests {
         // 全局配置即唯一配置
         let mut config = core.load_sync_config().unwrap();
         config.enabled = true;
-        config.remote_url = "https://example.com/global.git".to_string();
+        config.remote_url = Some("https://example.com/global.git".to_string());
         core.save_sync_config(&config).unwrap();
 
         let loaded = core.load_sync_config().unwrap();
-        assert_eq!(loaded.remote_url, "https://example.com/global.git");
+        assert_eq!(
+            loaded.remote_url.as_deref(),
+            Some("https://example.com/global.git")
+        );
         assert!(loaded.enabled);
     }
 }

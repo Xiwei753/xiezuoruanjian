@@ -7,8 +7,10 @@
 //! engine 通过 `capabilities()` 查询后决定：
 //! - `conditional_write` 为真时使用 `IfMatch`/`CreateNew` 前置条件，
 //!   为假时降级为 `Unconditional` 写入。
+//! - `max_parallel_downloads` 用于控制并行下载线程数，
+//!   低于 `MAX_PARALLEL_DOWNLOADS` 上限时按此值取较小值。
 //!
-//! 当前实际使用的字段：`conditional_write`。
+//! 当前实际使用的字段：`conditional_write`、`max_parallel_downloads`。
 //! 以下字段为后续 Provider（WebDAV、CloudKit 等）预留，当前 engine 暂未使用：
 //! `atomic_write`、`atomic_move`、`batch`、`server_timestamp`、
 //! `directory_semantics`、`remote_history`。
@@ -33,6 +35,8 @@ pub struct SyncCapabilities {
     pub directory_semantics: bool,
     /// 是否支持查询远端历史（版本历史/提交日志）。
     pub remote_history: bool,
+    /// 并行下载最大线程数。engine 取 `min(max_parallel_downloads, MAX_PARALLEL_DOWNLOADS)`。
+    pub max_parallel_downloads: usize,
 }
 
 impl SyncCapabilities {
@@ -50,6 +54,7 @@ impl SyncCapabilities {
             server_timestamp: true,
             directory_semantics: false,
             remote_history: true,
+            max_parallel_downloads: 4,
         }
     }
 
@@ -66,6 +71,7 @@ impl SyncCapabilities {
             server_timestamp: false,
             directory_semantics: true,
             remote_history: false,
+            max_parallel_downloads: 4,
         }
     }
 }

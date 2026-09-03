@@ -15,14 +15,20 @@ use crate::sync::provider::model::{DeletePrecondition, RemoteVersion, WritePreco
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::SyncManifest;
 
-/// 并行下载最大线程数。4 线程在远端 API 速率限制和本地磁盘 I/O 之间取得平衡。
+/// 并行下载最大线程数上限。实际线程数由 `SyncCapabilities::max_parallel_downloads`
+/// 和 `MAX_PARALLEL_DOWNLOADS` 的较小值决定。
 pub(super) const MAX_PARALLEL_DOWNLOADS: usize = 4;
 
-/// 创建并行下载线程池。线程数取 `task_count` 和 `MAX_PARALLEL_DOWNLOADS` 的较小值，
-/// 至少 1 线程。使用 rayon 的 work-stealing 调度器。
-pub(super) fn sync_download_pool(task_count: usize) -> crate::Result<rayon::ThreadPool> {
+/// 创建并行下载线程池。线程数取 `task_count`、`max_threads` 和
+/// `MAX_PARALLEL_DOWNLOADS` 的较小值，至少 1 线程。
+/// 使用 rayon 的 work-stealing 调度器。
+pub(super) fn sync_download_pool(
+    task_count: usize,
+    max_threads: usize,
+) -> crate::Result<rayon::ThreadPool> {
+    let effective = task_count.clamp(1, max_threads.min(MAX_PARALLEL_DOWNLOADS));
     rayon::ThreadPoolBuilder::new()
-        .num_threads(task_count.clamp(1, MAX_PARALLEL_DOWNLOADS))
+        .num_threads(effective)
         .build()
         .map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
@@ -101,7 +107,7 @@ pub(super) fn fetch_remote_manifest(
         if let Some(obj) = provider.read(&remote_manifest_path)? {
             remote_manifest =
                 serde_json::from_slice::<SyncManifest>(&obj.content).map_err(|e| {
-                    crate::Error::SyncRemoteApiError {
+                    crate::Error::SyncRemoteError {
                         category: "api_error".to_string(),
                         context: format!("invalid remote manifest: {}", e),
                         status: 0,
@@ -123,7 +129,8 @@ pub(super) fn download_pending_take_remote(
     remote_prefix: &str,
     pending_paths: &[String],
 ) -> crate::Result<Vec<(String, Option<Vec<u8>>)>> {
-    let download_pool = sync_download_pool(pending_paths.len())?;
+    let caps = provider.capabilities();
+    let download_pool = sync_download_pool(pending_paths.len(), caps.max_parallel_downloads)?;
     download_pool.install(|| {
         pending_paths
             .par_iter()
@@ -206,12 +213,13 @@ pub(super) fn download_remote_files(
     if to_download.is_empty() {
         return Ok(());
     }
-    let download_pool = sync_download_pool(to_download.len())?;
+    let caps = provider.capabilities();
+    let download_pool = sync_download_pool(to_download.len(), caps.max_parallel_downloads)?;
     let download_result: crate::Result<()> = download_pool.install(|| {
         to_download.par_iter().try_for_each(|path| {
             let remote_path = format!("{}/{}", remote_prefix, path);
             let Some(obj) = provider.read(&remote_path)? else {
-                return Err(crate::Error::SyncRemoteApiError {
+                return Err(crate::Error::SyncRemoteError {
                     category: "api_error".to_string(),
                     context: format!("remote file missing while downloading {}", path),
                     status: 0,

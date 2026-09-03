@@ -94,31 +94,29 @@ impl ProviderError {
 /// - `AuthFailed` / `PermissionDenied` → `SyncAuthFailed`
 /// - `Network` / `TemporaryUnavailable` → `SyncNetworkUnavailable`
 /// - `RateLimited` → `SyncRateLimited`
-/// - `NotFound` → `SyncRemoteApiError { category: "file_not_found" }`
-/// - `PreconditionFailed` → `SyncRemoteApiError { category: "remote_sha_conflict" }`
+/// - `NotFound` → `SyncRemoteError { category: "file_not_found" }`
+/// - `PreconditionFailed` → `SyncRemoteError { category: "remote_sha_conflict" }`
 /// - `Other` → `Other`
 ///
-/// `SyncRemoteApiError` 在 Phase 6 后仍保留作为通用远端 API 错误载体，
+/// `SyncRemoteError` 是 provider-neutral 的远端错误载体，
 /// 其 `category` 字段是稳定 API 契约，不随 Provider 实现变化。
 impl From<ProviderError> for crate::Error {
     fn from(err: ProviderError) -> Self {
         match err {
             ProviderError::AuthFailed { reason } => crate::Error::SyncAuthFailed { reason },
             ProviderError::PermissionDenied { reason } => crate::Error::SyncAuthFailed { reason },
-            ProviderError::NotFound { path } => crate::Error::SyncRemoteApiError {
+            ProviderError::NotFound { path } => crate::Error::SyncRemoteError {
                 category: "file_not_found".to_string(),
                 context: "read".to_string(),
                 status: 404,
                 body_preview: path,
             },
-            ProviderError::PreconditionFailed { path, reason } => {
-                crate::Error::SyncRemoteApiError {
-                    category: "remote_sha_conflict".to_string(),
-                    context: "conditional_write".to_string(),
-                    status: 409,
-                    body_preview: format!("path={path}, reason={reason}"),
-                }
-            }
+            ProviderError::PreconditionFailed { path, reason } => crate::Error::SyncRemoteError {
+                category: "remote_sha_conflict".to_string(),
+                context: "conditional_write".to_string(),
+                status: 409,
+                body_preview: format!("path={path}, reason={reason}"),
+            },
             ProviderError::RateLimited { retry_after_secs } => {
                 crate::Error::SyncRateLimited { retry_after_secs }
             }

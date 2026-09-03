@@ -255,9 +255,15 @@ impl SyncTarget {
 /// 敏感字段（token、ssh_private_key）不在 SyncConfig 中，
 /// 由 SyncSecrets 单独管理，平台端安全存储注入。
 ///
-/// GitHub 特定字段（remote_url、branch、username、transport）通过
-/// `#[serde(flatten)]` 嵌入到 `github: GitHubConfig`，
-/// 保持与旧的扁平序列化格式向后兼容。
+/// ## 通用字段 vs Provider 特定字段（Issue #645）
+///
+/// `enabled / auto_sync / sync_interval_seconds / active_provider` 为通用字段，
+/// 所有 Provider 共用。`remote_url / branch / username / transport / backend_type`
+/// 为 GitHub 特定字段，仅供 GitHub Provider 使用。
+///
+/// 为保持与旧 JSON 序列化格式的向后兼容，Provider 特定字段在 `SyncConfig`
+/// 中标记为 `Option` + `#[serde(default)]`；新格式使用 `github` 嵌套对象。
+/// `facade/sync_ops.rs` 在构造 Provider 时读取对应配置。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SyncConfig {
     /// 是否启用同步
@@ -269,13 +275,17 @@ pub struct SyncConfig {
     /// 同步后端类型 — 旧字段，保留向后兼容；新代码读 `active_provider`。
     #[serde(default)]
     pub backend_type: BackendType,
-    /// 远端仓库 URL（HTTPS 或 SSH）— GitHub 特定，通过 flatten 嵌入 `github` 字段。
-    pub remote_url: String,
+    /// GitHub 远端仓库 URL（HTTPS 或 SSH）。
+    /// 旧格式中为顶层必选字段；新格式中应放在 `github` 子对象内。
+    /// 标记 `Option` + `default` 以同时兼容新旧格式。
+    #[serde(default)]
+    pub remote_url: Option<String>,
     /// 传输方式（HTTPS token 或 SSH deploy key）— GitHub 特定。
-    pub transport: SyncProtocol,
+    #[serde(default)]
+    pub transport: Option<SyncProtocol>,
     /// 远端分支名，默认 "main" — GitHub 特定。
-    #[serde(default = "default_branch")]
-    pub branch: String,
+    #[serde(default)]
+    pub branch: Option<String>,
     /// 是否启用自动同步
     pub auto_sync: bool,
     /// 自动同步间隔（秒），最小有效值 60，0 表示仅手动
@@ -283,7 +293,7 @@ pub struct SyncConfig {
     /// GitHub username for HTTPS credential callback.
     /// Defaults to "x-access-token" when empty.
     #[serde(default)]
-    pub username: String,
+    pub username: Option<String>,
     /// Whether the platform grants network access permission.
     /// Android sets this based on INTERNET permission; desktop platforms always true.
     #[serde(default = "default_true", alias = "android_has_internet_permission")]
@@ -295,18 +305,83 @@ pub struct SyncConfig {
         alias = "android_has_access_network_state_permission"
     )]
     pub has_network_state_permission: bool,
+    /// GitHub Provider 的嵌套配置（新格式）。
+    /// 旧格式中此字段不存在，serde 默认为 None。
+    /// `facade/sync_ops.rs` 构造 Provider 时优先读此字段。
+    #[serde(default)]
+    pub github: Option<GitHubInlineConfig>,
+}
+
+impl SyncConfig {
+    /// 解析 GitHub 特定的远端仓库 URL。
+    ///
+    /// 优先使用 `github` 嵌套配置中的值，回退到顶层旧字段。
+    pub fn resolve_remote_url(&self) -> Option<String> {
+        self.github
+            .as_ref()
+            .and_then(|g| g.remote_url.clone())
+            .or_else(|| self.remote_url.clone())
+    }
+
+    /// 解析 GitHub 特定的分支名。
+    ///
+    /// 优先使用 `github` 嵌套配置中的值，回退到顶层旧字段，
+    /// 最终默认 "main"。
+    pub fn resolve_branch(&self) -> String {
+        self.github
+            .as_ref()
+            .and_then(|g| g.branch.clone())
+            .or_else(|| self.branch.clone())
+            .unwrap_or_else(|| "main".to_string())
+    }
+
+    /// 解析 GitHub 特定的传输方式。
+    ///
+    /// 优先使用 `github` 嵌套配置中的值，回退到顶层旧字段。
+    pub fn resolve_transport(&self) -> Option<SyncProtocol> {
+        self.github
+            .as_ref()
+            .and_then(|g| g.transport.clone())
+            .or_else(|| self.transport.clone())
+    }
+
+    /// 解析 GitHub 特定的用户名。
+    ///
+    /// 优先使用 `github` 嵌套配置中的值，回退到顶层旧字段。
+    pub fn resolve_username(&self) -> Option<String> {
+        self.github
+            .as_ref()
+            .and_then(|g| g.username.clone())
+            .or_else(|| self.username.clone())
+    }
 }
 
 pub(crate) fn default_true() -> bool {
     true
 }
 
-pub(crate) fn default_branch() -> String {
-    "main".to_string()
-}
-
 pub(crate) fn default_active_provider() -> String {
     "github_api".to_string()
+}
+
+/// GitHub Provider 嵌套配置 — 新格式中放在 `SyncConfig.github` 下。
+///
+/// 旧格式（扁平序列化）中 GitHub 参数直接在 `SyncConfig` 顶层，
+/// 通过 `facade/sync_ops.rs` 的 fallback 逻辑兼容。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GitHubInlineConfig {
+    /// GitHub 远端仓库 URL（HTTPS 或 SSH）。
+    #[serde(default)]
+    pub remote_url: Option<String>,
+    /// 传输方式（HTTPS token 或 SSH deploy key）。
+    #[serde(default)]
+    pub transport: Option<SyncProtocol>,
+    /// 远端分支名。
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// GitHub username（HTTPS credential callback 用）。
+    #[serde(default)]
+    pub username: Option<String>,
 }
 
 /// 同步密钥 — 敏感凭证，不持久化到 config.json，由平台端安全存储注入。
