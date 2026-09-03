@@ -6,7 +6,7 @@
 //! SSH 传输方式当前跳过诊断（`ssh_not_recommended`），因为 LWW 后端仅支持 HTTPS。
 
 #[cfg(feature = "github-api")]
-use crate::sync::provider::backend::SyncBackend;
+use crate::sync::provider::github::config::GitHubProviderConfig;
 use crate::sync::types::BackendType;
 use crate::sync::types::SyncConfig;
 use crate::sync::types::SyncDiagnosticsResult;
@@ -82,9 +82,21 @@ impl crate::sync::SyncService {
         match config.backend_type {
             #[cfg(feature = "github-api")]
             BackendType::GithubApi => {
-                let backend = crate::sync::provider::github_backend::GitHubApiBackend::new();
-                match backend.diagnose(config, secrets) {
-                    Ok(diag_result) => Ok(diag_result),
+                // perform_sync_diagnostics 是静态方法，不持有 SyncTransport。
+                // 真正的网络探测由 facade 的 run_sync_diagnostics（持有 transport）完成。
+                // 此处仅做 config 级校验：GitHubProviderConfig::from_sync_config 验证 token/URL，
+                // 通过后返回 network_probe_failed（与旧 GitHubApiBackend::new() 无 transport 行为一致）。
+                match GitHubProviderConfig::from_sync_config(config, secrets) {
+                    Ok(_provider_config) => {
+                        result.error_category = "network_probe_failed".to_string();
+                        result.raw_error = Some(
+                            "No SyncTransport — call run_sync_diagnostics via AppService for network probe"
+                                .to_string(),
+                        );
+                        result.network_ok = false;
+                        result.network_status = "failed".to_string();
+                        Ok(result)
+                    }
                     Err(e) => {
                         result.error_category = "backend_error".to_string();
                         result.network_status = format!("error: {}", e);

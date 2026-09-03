@@ -213,6 +213,7 @@ impl WriterCoreApi {
     ///
     /// #644 评论 5473401065 第1节：staging seed（磁盘扫描/复制）也移出写锁，
     /// 避免冷启动读取卷章被同步 Prepare 卡住。
+    #[cfg(feature = "github-api")]
     pub fn perform_full_sync(
         &self,
         config: SyncConfigDto,
@@ -223,13 +224,13 @@ impl WriterCoreApi {
         // Snapshot secrets before acquiring core_write（避免持锁期间回调 override）。
         let secrets = self.secrets_override_snapshot().unwrap_or_default();
 
-        // Phase 1: Prepare（短写锁）— 写 Syncing、枚举 targets、创建 backend。
+        // Phase 1: Prepare（短写锁）— 写 Syncing、枚举 targets、创建 provider。
         // 不创建/seed staging runs（#644 评论 5473401065 第1节）。
-        let (mut plan, backend) = {
+        let (mut plan, provider) = {
             let core = self.core_write();
-            let plan = core.prepare_full_sync(&sync_config, force_sync, secrets)?;
-            let backend = core.create_sync_backend_for_plan(&sync_config)?;
-            (plan, backend)
+            let plan = core.prepare_full_sync(&sync_config, force_sync, secrets.clone())?;
+            let provider = core.create_sync_provider_for_plan(&sync_config, &secrets)?;
+            (plan, provider)
         };
         // 写锁已释放。
 
@@ -264,7 +265,7 @@ impl WriterCoreApi {
             };
 
         // Phase 3: Transfer（不持锁）— 网络 + 本地文件读写。
-        let transfer_result = crate::sync::full_sync::run_transfer(backend.as_ref(), &plan);
+        let transfer_result = crate::sync::full_sync::run_transfer(provider.as_ref(), &plan);
 
         // Phase 4: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引、清理 staging。
         let result = {
@@ -273,6 +274,16 @@ impl WriterCoreApi {
         };
 
         Ok(result.into())
+    }
+
+    /// `perform_full_sync` 的非 github-api fallback — 无 LWW engine 可用。
+    #[cfg(not(feature = "github-api"))]
+    pub fn perform_full_sync(
+        &self,
+        _config: SyncConfigDto,
+        _force_sync: bool,
+    ) -> ApiResult<FullSyncResultDto> {
+        Err(crate::Error::NotImplemented.into())
     }
 
     /// 冲突解决：保留本地版本。

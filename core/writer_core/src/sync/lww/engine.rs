@@ -2,10 +2,14 @@
 //!
 //! 本文件只负责同步生命周期编排（前置检查 → debounce → 重试 → 错误分类），
 //! 一次完整同步尝试的编排见 [`super::attempt::execute_lww_sync_attempt`]。
+//!
+//! 通过 [`crate::sync::provider::SyncProvider`] trait 与具体后端解耦，
+//! 不直接依赖 `SyncConfig`/`SyncSecrets`/`SyncTransport`。
+//! 认证/URL/分支解析在创建 Provider 时完成，engine 只接收 [`SyncPolicy`]。
 
-use crate::sync::types::{FirstSyncMode, SyncConfig, SyncResult, SyncSecrets, SyncStatus};
+use crate::sync::provider::SyncProvider;
+use crate::sync::types::{SyncPolicy, SyncResult, SyncStatus};
 use std::path::Path;
-use writer_platform_api::SyncTransport;
 
 use super::attempt::execute_lww_sync_attempt;
 
@@ -31,43 +35,23 @@ use super::attempt::execute_lww_sync_attempt;
 )]
 pub(crate) fn perform_lww_sync(
     sync_root: &Path,
-    config: &SyncConfig,
-    secrets: &SyncSecrets,
+    provider: &dyn SyncProvider,
+    sync_policy: &SyncPolicy,
     target: &crate::sync::types::SyncTarget,
     force_sync: bool,
-    transport: &dyn SyncTransport,
 ) -> crate::Result<SyncResult> {
     let remote_prefix = &target.remote_prefix;
     log::debug!(
-        "[sync] backend_type=github_api sync_mode=lww_manifest entry=perform_lww_sync sync_root={} remote_prefix={}",
+        "[sync] sync_mode=lww_manifest entry=perform_lww_sync sync_root={} remote_prefix={}",
         sync_root.display(),
         remote_prefix
     );
     let mut result = SyncResult::success();
     result.status = SyncStatus::Idle;
 
-    if !config.enabled {
+    if !sync_policy.enabled {
         result.status = SyncStatus::Success;
         return Ok(result);
-    }
-
-    if config.remote_url.is_empty() {
-        return Ok(SyncResult::error(
-            SyncStatus::Error("Remote URL is empty".to_string()),
-            FirstSyncMode::NotAttempted,
-            "Remote URL is empty".to_string(),
-            Some("empty_url".to_string()),
-        ));
-    }
-
-    let token = secrets.token.clone().unwrap_or_default();
-    if token.is_empty() {
-        return Ok(SyncResult::error(
-            SyncStatus::Error("No token provided".to_string()),
-            FirstSyncMode::NotAttempted,
-            "No token provided".to_string(),
-            Some("token_missing".to_string()),
-        ));
     }
 
     let mut state = crate::sync::SyncService::load_sync_state(sync_root)?;
@@ -82,7 +66,7 @@ pub(crate) fn perform_lww_sync(
     // However, force_sync=true bypasses this debounce for manual sync,
     // conflict resolution, and first configuration.
     if !force_sync {
-        let min_interval = i64::from(config.sync_interval_seconds.max(60));
+        let min_interval = i64::from(sync_policy.sync_interval_seconds.max(60));
         if let Some(last_sync) = state.last_sync_time {
             let now = chrono::Utc::now().timestamp();
             let elapsed = now - last_sync;
@@ -107,22 +91,10 @@ pub(crate) fn perform_lww_sync(
         }
     }
 
-    let api_base =
-        crate::sync::provider::github_backend::GitHubApiBackend::api_base_url(&config.remote_url);
-
     let max_retries = 2;
     let mut attempt = 0;
     loop {
-        match execute_lww_sync_attempt(
-            sync_root,
-            config,
-            &token,
-            &api_base,
-            target,
-            transport,
-            &mut state,
-            &mut result,
-        ) {
+        match execute_lww_sync_attempt(sync_root, provider, target, &mut state, &mut result) {
             Ok(res) => return Ok(res),
             Err(e) => {
                 attempt += 1;
@@ -143,7 +115,7 @@ pub(crate) fn perform_lww_sync(
                         crate::sync::types::SyncErrorCategory::ApiRateLimited => {
                             SyncStatus::RecoverableError("api_rate_limited".to_string())
                         }
-                        crate::sync::types::SyncErrorCategory::GithubNetworkFailed
+                        crate::sync::types::SyncErrorCategory::NetworkFailed
                         | crate::sync::types::SyncErrorCategory::DnsFailed
                         | crate::sync::types::SyncErrorCategory::TlsFailed
                         | crate::sync::types::SyncErrorCategory::NetworkProbeFailed => {

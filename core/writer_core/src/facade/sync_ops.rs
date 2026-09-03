@@ -133,6 +133,7 @@ impl super::WriterCore {
     /// `targets`，继续下一 target。只有无法建立 target 列表（`list_projects`
     /// 失败）或全局配置无法解析/transport 初始化失败这类无法开始事务的错误才让
     /// 整个 `perform_full_sync` 返回 `Err`。
+    #[cfg(feature = "github-api")]
     pub fn perform_full_sync(
         &self,
         config: &crate::sync::SyncConfig,
@@ -144,25 +145,19 @@ impl super::WriterCore {
         self.persist_full_sync_started();
 
         let secrets = self.load_sync_secrets().unwrap_or_default();
-        let backend_type = crate::sync::resolved_backend_type(config);
-        let backend = if let Some(transport) = self.sync_transport.as_ref() {
-            match transport() {
-                Ok(t) => crate::sync::create_sync_backend_with_transport(&backend_type, t),
-                Err(e) => {
-                    // transport 初始化失败：用唯一的类型化转换生成 Error，
-                    // 同一个 Error 同时用于持久化状态和返回（Issue #630 评论 5308439467 Part 2）。
-                    // 避免"磁盘写 FatalError 但返回 Io → Android 视为 Retryable"的错位。
-                    let err = transport_init_failure_error(&e.category, &e.message);
-                    let status = error_to_persist_status(&err);
-                    self.persist_full_sync_early_failure(status, "preflight");
-                    return Err(err);
-                }
-            }
-        } else {
-            crate::sync::create_sync_backend(&backend_type)
-        };
+        let provider = self.create_sync_provider_for_plan(config, &secrets)?;
+        let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
+        self.perform_full_sync_with_provider(provider.as_ref(), &sync_policy, force_sync)
+    }
 
-        self.perform_full_sync_with_backend(backend.as_ref(), config, &secrets, force_sync)
+    /// `perform_full_sync` 的非 github-api fallback — 无 LWW engine 可用。
+    #[cfg(not(feature = "github-api"))]
+    pub fn perform_full_sync(
+        &self,
+        _config: &crate::sync::SyncConfig,
+        _force_sync: bool,
+    ) -> crate::error::Result<crate::sync::types::FullSyncResult> {
+        Err(crate::Error::NotImplemented)
     }
 
     /// #644 评论 5467821839 第7节：三段式全量同步 — Prepare 阶段（短写锁内调用）。
@@ -182,7 +177,7 @@ impl super::WriterCore {
         &self,
         config: &crate::sync::SyncConfig,
         force_sync: bool,
-        secrets: crate::sync::SyncSecrets,
+        _secrets: crate::sync::SyncSecrets,
     ) -> crate::error::Result<crate::sync::full_sync::FullSyncPlan> {
         use crate::sync::full_sync::{FullSyncPlan, PlannedTarget};
 
@@ -234,40 +229,45 @@ impl super::WriterCore {
         }
 
         Ok(FullSyncPlan {
-            secrets,
-            config: config.clone(),
+            sync_policy: crate::sync::types::SyncPolicy::from_config(config),
             force_sync,
             targets,
             app_data_root: self.app_data_root.clone(),
         })
     }
 
-    /// #644 评论 5467821839 第7节：三段式全量同步 — 创建 backend（Prepare 阶段、写锁内）。
+    /// #644 评论 5467821839 第7节：三段式全量同步 — 创建 provider（Prepare 阶段、写锁内）。
     ///
     /// transport 初始化失败时返回 Err（已持久化失败状态）。
-    pub fn create_sync_backend_for_plan(
+    /// 仅支持 `BackendType::GithubApi`；`BackendType::Git` 走旧 git2 路径，不通过 SyncProvider。
+    pub fn create_sync_provider_for_plan(
         &self,
         config: &crate::sync::SyncConfig,
-    ) -> crate::error::Result<Box<dyn crate::sync::SyncBackend>> {
+        secrets: &crate::sync::SyncSecrets,
+    ) -> crate::error::Result<Box<dyn crate::sync::provider::SyncProvider>> {
         let backend_type = crate::sync::resolved_backend_type(config);
-        if let Some(transport) = self.sync_transport.as_ref() {
-            match transport() {
-                Ok(t) => Ok(crate::sync::create_sync_backend_with_transport(
-                    &backend_type,
-                    t,
-                )),
-                Err(e) => {
-                    let err = crate::sync::full_sync::transport_init_failure_error(
-                        &e.category,
-                        &e.message,
-                    );
-                    let status = crate::sync::full_sync::error_to_persist_status(&err);
+        match backend_type {
+            #[cfg(feature = "github-api")]
+            crate::sync::types::BackendType::GithubApi => {
+                let transport = self.init_sync_transport().inspect_err(|err| {
+                    let status = crate::sync::full_sync::error_to_persist_status(err);
                     self.persist_full_sync_early_failure(status, "preflight");
-                    Err(err)
-                }
+                })?;
+                let provider_config =
+                    crate::sync::provider::github::config::GitHubProviderConfig::from_sync_config(
+                        config, secrets,
+                    )
+                    .map_err(crate::Error::from)?;
+                Ok(Box::new(
+                    crate::sync::provider::github::GitHubProvider::new(provider_config, transport),
+                ))
             }
-        } else {
-            Ok(crate::sync::create_sync_backend(&backend_type))
+            #[cfg(not(feature = "github-api"))]
+            crate::sync::types::BackendType::GithubApi => Err(crate::Error::NotImplemented),
+            crate::sync::types::BackendType::Git => {
+                // Git backend 走旧 git2 路径，不通过 SyncProvider。
+                Err(crate::Error::NotImplemented)
+            }
         }
     }
 
@@ -381,23 +381,22 @@ impl super::WriterCore {
         result
     }
 
-    /// 内部：用给定 backend 执行全量同步。
+    /// 内部：用给定 provider 执行全量同步。
     ///
-    /// `perform_full_sync` 创建 backend 后委托到此方法；测试通过此方法注入 mock backend。
+    /// `perform_full_sync` 创建 provider 后委托到此方法；测试通过此方法注入 mock provider。
     /// 语义与 `perform_full_sync` 一致：单个 target 的 `Err` 转为该 target 的
     /// `SyncResult::error(...)` 后继续，只有 `list_projects` 失败才整体 `Err`。
-    pub(crate) fn perform_full_sync_with_backend(
+    #[cfg(feature = "github-api")]
+    pub(crate) fn perform_full_sync_with_provider(
         &self,
-        backend: &dyn crate::sync::SyncBackend,
-        config: &crate::sync::SyncConfig,
-        secrets: &crate::sync::SyncSecrets,
+        provider: &dyn crate::sync::provider::SyncProvider,
+        sync_policy: &crate::sync::types::SyncPolicy,
         force_sync: bool,
     ) -> crate::error::Result<crate::sync::types::FullSyncResult> {
         use crate::sync::types::{SyncTarget, TargetSyncResult};
 
         // 无法建立 target 列表才整体 Err —— 此时连 App target 都无法有序执行。
         // #630 评论 5308040939 Part 1：list_projects 失败也要先持久化提前失败状态
-        // （failed_target="global"）再返回 Err，不能留下上一次绿灯。
         let projects = match self.list_projects() {
             Ok(projects) => projects,
             Err(err) => {
@@ -415,10 +414,9 @@ impl super::WriterCore {
         // App target
         let app_target = SyncTarget::app();
         let app_result = run_full_sync_target(
-            backend,
+            provider,
             &self.app_data_root,
-            config,
-            secrets,
+            sync_policy,
             &app_target,
             force_sync,
         );
@@ -433,10 +431,9 @@ impl super::WriterCore {
         for project in &projects {
             let target = SyncTarget::project(&project.id);
             let result = run_full_sync_target(
-                backend,
+                provider,
                 &self.project_root(&project.id),
-                config,
-                secrets,
+                sync_policy,
                 &target,
                 force_sync,
             );
@@ -652,18 +649,43 @@ impl super::WriterCore {
         secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<crate::sync::SyncDiagnosticsResult> {
         let backend_type = crate::sync::resolved_backend_type(config);
-        let backend = if let Some(transport) = self.sync_transport.as_ref() {
-            match transport() {
-                Ok(t) => crate::sync::create_sync_backend_with_transport(&backend_type, t),
-                Err(e) => {
-                    // 同 perform_full_sync：用类型化 Error，避免 Io → Retryable 错位
-                    // （Issue #630 评论 5308439467 Part 2）。
-                    return Err(transport_init_failure_error(&e.category, &e.message));
-                }
+        match backend_type {
+            #[cfg(feature = "github-api")]
+            crate::sync::types::BackendType::GithubApi => {
+                let transport = self.init_sync_transport()?;
+                let provider_config =
+                    crate::sync::provider::github::config::GitHubProviderConfig::from_sync_config(
+                        config, secrets,
+                    )
+                    .map_err(crate::Error::from)?;
+                let provider =
+                    crate::sync::provider::github::GitHubProvider::new(provider_config, transport);
+                provider.diagnose().map_err(crate::Error::from)
             }
-        } else {
-            crate::sync::create_sync_backend(&backend_type)
-        };
-        backend.diagnose(config, secrets)
+            #[cfg(not(feature = "github-api"))]
+            crate::sync::types::BackendType::GithubApi => Err(crate::Error::NotImplemented),
+            crate::sync::types::BackendType::Git => {
+                // Git backend 诊断走旧路径，Phase 7 后保留 legacy 不支持。
+                Err(crate::Error::NotImplemented)
+            }
+        }
+    }
+
+    /// 初始化同步传输 — 从平台注入的 factory 构造 `Arc<dyn SyncTransport>`。
+    ///
+    /// transport 初始化失败返回类型化 `Error`；调用方决定是否持久化失败状态。
+    /// 把 `match backend` → `if let Some(factory)` → `match factory()` 三层嵌套收成一个方法。
+    fn init_sync_transport(
+        &self,
+    ) -> crate::error::Result<std::sync::Arc<dyn writer_platform_api::SyncTransport>> {
+        match self.sync_transport.as_ref() {
+            Some(transport_fn) => match transport_fn() {
+                Ok(t) => Ok(std::sync::Arc::from(t)),
+                Err(e) => Err(transport_init_failure_error(&e.category, &e.message)),
+            },
+            None => Err(crate::Error::SyncNetworkUnavailable {
+                reason: "no SyncTransport configured".to_string(),
+            }),
+        }
     }
 }

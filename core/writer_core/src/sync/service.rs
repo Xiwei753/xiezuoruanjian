@@ -34,7 +34,7 @@ use crate::sync::types::SyncProtocol;
 #[cfg(any(feature = "git-https", feature = "github-api"))]
 use crate::sync::types::SyncResult;
 use crate::sync::types::SyncScope;
-#[cfg(any(feature = "git-https", feature = "github-api"))]
+#[cfg(feature = "git-https")]
 use crate::sync::types::SyncSecrets;
 use crate::sync::types::SyncStatus;
 #[cfg(feature = "git-https")]
@@ -87,7 +87,7 @@ fn classify_error(e: &crate::Error) -> SyncStatus {
                 | crate::sync::types::SyncErrorCategory::TokenMissing
                 | crate::sync::types::SyncErrorCategory::TokenInvalid
                 | crate::sync::types::SyncErrorCategory::TokenPermissionDenied
-                | crate::sync::types::SyncErrorCategory::GithubNetworkFailed
+                | crate::sync::types::SyncErrorCategory::NetworkFailed
                 | crate::sync::types::SyncErrorCategory::DnsFailed
                 | crate::sync::types::SyncErrorCategory::TlsFailed
                 | crate::sync::types::SyncErrorCategory::NetworkProbeFailed
@@ -184,19 +184,21 @@ impl SyncService {
 }
 
 impl SyncService {
-    #[cfg(feature = "github-api")]
     /// LWW 同步主入口——基于 Last-Writer-Wins 策略执行文件级同步。
-    /// `force_sync=true` 跳过脏仓库保护等安全检查。
-    /// `transport` 提供平台 HTTP 客户端实现，Core 不直接依赖 reqwest。
+    ///
+    /// 通过 `SyncProvider` trait 与具体后端解耦：调用方传入已构造的 provider,
+    /// engine 不直接依赖 `SyncConfig`/`SyncSecrets`/`SyncTransport`。
+    /// `sync_policy` 携带 engine 决策所需的通用字段（enabled/interval 等）。
+    /// `force_sync=true` 跳过 debounce。
+    #[cfg(feature = "github-api")]
     pub fn perform_lww_sync(
         sync_root: &Path,
-        config: &SyncConfig,
-        secrets: &SyncSecrets,
+        provider: &dyn crate::sync::provider::SyncProvider,
+        sync_policy: &crate::sync::types::SyncPolicy,
         target: &crate::sync::types::SyncTarget,
         force_sync: bool,
-        transport: &dyn writer_platform_api::SyncTransport,
     ) -> crate::Result<SyncResult> {
-        lww::perform_lww_sync(sync_root, config, secrets, target, force_sync, transport)
+        lww::perform_lww_sync(sync_root, provider, sync_policy, target, force_sync)
     }
 }
 

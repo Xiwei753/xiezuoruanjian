@@ -22,19 +22,19 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::sync::types::{FullSyncResult, SyncResult, SyncTarget, TargetSyncResult};
-use crate::sync::{SyncBackend, SyncConfig, SyncSecrets, SyncStatus};
+use crate::sync::provider::SyncProvider;
+use crate::sync::types::{FullSyncResult, SyncPolicy, SyncResult, SyncTarget, TargetSyncResult};
+use crate::sync::SyncStatus;
 
 // ── Plan / Transfer 结果 ──
 
 /// Prepare 阶段产出 — Transfer 阶段需要的全部数据（owned，不依赖 core 锁）。
 ///
-/// 包含 secrets 快照、config、force_sync 标志和已枚举的 target 列表（含每个 target
+/// 包含 sync_policy、force_sync 标志和已枚举的 target 列表（含每个 target
 /// 的 `local_root`）。Transfer 阶段只读这份 plan，不再回 core 取数据。
 #[derive(Debug, Clone)]
 pub struct FullSyncPlan {
-    pub secrets: SyncSecrets,
-    pub config: SyncConfig,
+    pub sync_policy: SyncPolicy,
     pub force_sync: bool,
     pub targets: Vec<PlannedTarget>,
     /// #644 评论 5473401065 第1节：app_data_root 供 API 层在无锁状态下
@@ -71,14 +71,15 @@ pub struct FullSyncTransferResult {
 
 // ── Transfer ──
 
-/// 执行 Transfer 阶段：对 plan 中每个 target 调 `backend.sync()`，收集结果。
+/// 执行 Transfer 阶段：对 plan 中每个 target 调 `perform_lww_sync`，收集结果。
 ///
-/// 单个 target 的 `Err`（本地 root IO 错、transport 调用失败等）不提前打断：
+/// 单个 target 的 `Err`（本地 root IO 错、provider 调用失败等）不提前打断：
 /// 转为该 target 的 `SyncResult::error(...)` 后 push，继续下一 target。
 ///
 /// 本函数是纯函数 — 不接触 `WriterCore`、不持锁、不写 `FullSyncState`。
 /// 调用方（API 层）在释放 core 写锁后调用。
-pub fn run_transfer(backend: &dyn SyncBackend, plan: &FullSyncPlan) -> FullSyncTransferResult {
+#[cfg(feature = "github-api")]
+pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyncTransferResult {
     let mut targets = Vec::with_capacity(plan.targets.len());
     for planned in &plan.targets {
         // 三段式 staging：staging_root 有值时写隔离目录，否则回退 local_root。
@@ -87,10 +88,9 @@ pub fn run_transfer(backend: &dyn SyncBackend, plan: &FullSyncPlan) -> FullSyncT
             .as_deref()
             .unwrap_or(&planned.local_root);
         let result = run_single_target(
-            backend,
+            provider,
             sync_root,
-            &plan.config,
-            &plan.secrets,
+            &plan.sync_policy,
             &planned.target,
             plan.force_sync,
         );
@@ -108,15 +108,16 @@ pub fn run_transfer(backend: &dyn SyncBackend, plan: &FullSyncPlan) -> FullSyncT
 ///
 /// `Err` 的 `recoverable()` 决定 `SyncStatus::RecoverableError` / `FatalError`，
 /// `sync_category()` 决定 `error_category`（空字符串视为无分类）。
+#[cfg(feature = "github-api")]
 fn run_single_target(
-    backend: &dyn SyncBackend,
+    provider: &dyn SyncProvider,
     local_root: &Path,
-    config: &SyncConfig,
-    secrets: &SyncSecrets,
+    sync_policy: &SyncPolicy,
     target: &SyncTarget,
     force_sync: bool,
 ) -> SyncResult {
-    match backend.sync(local_root, config, secrets, target, force_sync) {
+    match crate::sync::lww::perform_lww_sync(local_root, provider, sync_policy, target, force_sync)
+    {
         Ok(result) => result,
         Err(err) => {
             let msg = err.to_string();
@@ -268,10 +269,8 @@ pub fn transport_init_failure_error(category: &str, message: &str) -> crate::Err
         | SyncErrorCategory::TokenInvalid
         | SyncErrorCategory::TokenPermissionDenied
         | SyncErrorCategory::AuthError
-        | SyncErrorCategory::GithubUnauthorized
-        | SyncErrorCategory::GithubForbidden
         | SyncErrorCategory::RepoNotFoundOrNoPermission => crate::Error::SyncAuthFailed { reason },
-        SyncErrorCategory::GithubNetworkFailed
+        SyncErrorCategory::NetworkFailed
         | SyncErrorCategory::DnsFailed
         | SyncErrorCategory::TlsFailed
         | SyncErrorCategory::NetworkProbeFailed => crate::Error::SyncNetworkUnavailable { reason },

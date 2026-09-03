@@ -266,15 +266,13 @@ impl From<crate::error::Error> for WriterError {
                     crate::sync::types::SyncErrorCategory::TokenMissing
                     | crate::sync::types::SyncErrorCategory::TokenInvalid
                     | crate::sync::types::SyncErrorCategory::TokenPermissionDenied
-                    | crate::sync::types::SyncErrorCategory::AuthError
-                    | crate::sync::types::SyncErrorCategory::GithubUnauthorized
-                    | crate::sync::types::SyncErrorCategory::GithubForbidden => {
+                    | crate::sync::types::SyncErrorCategory::AuthError => {
                         WriterError::Authentication(format!(
                             "github_api_error: category={} context={} status={}",
                             category, context, status
                         ))
                     }
-                    crate::sync::types::SyncErrorCategory::GithubNetworkFailed
+                    crate::sync::types::SyncErrorCategory::NetworkFailed
                     | crate::sync::types::SyncErrorCategory::DnsFailed
                     | crate::sync::types::SyncErrorCategory::TlsFailed
                     | crate::sync::types::SyncErrorCategory::NetworkProbeFailed

@@ -5,15 +5,14 @@
 //! 写 manifest 与 sync state。重试与错误分类由 [`super::engine::perform_lww_sync`] 负责。
 
 use crate::sync::content_class::is_document_content_path;
-use crate::sync::provider::github_api_client::github_get_content;
+use crate::sync::provider::SyncProvider;
 use crate::sync::scanner::scan_for_sync;
 use crate::sync::types::{
-    FirstSyncMode, ManifestFileRecord, SyncConfig, SyncConflict, SyncKind, SyncManifest,
-    SyncResult, SyncState, SyncStatus,
+    FirstSyncMode, ManifestFileRecord, SyncConflict, SyncKind, SyncManifest, SyncResult, SyncState,
+    SyncStatus,
 };
 use crate::sync::SyncService;
 use std::path::Path;
-use writer_platform_api::SyncTransport;
 
 use super::compare::{resolve_path_decision, PathDecision};
 use super::manifest::{
@@ -49,34 +48,23 @@ use super::transfer::{
 )]
 pub(crate) fn execute_lww_sync_attempt(
     sync_root: &Path,
-    config: &SyncConfig,
-    token: &str,
-    api_base: &str,
+    provider: &dyn SyncProvider,
     target: &crate::sync::types::SyncTarget,
-    transport: &dyn SyncTransport,
     state: &mut SyncState,
     result: &mut SyncResult,
 ) -> crate::Result<SyncResult> {
     let remote_prefix = &target.remote_prefix;
     let scope = target.scope;
     log::debug!(
-        "[sync] github_api step=正在拉取远端清单 remote_prefix={}",
+        "[sync] lww step=正在拉取远端清单 remote_prefix={}",
         remote_prefix
     );
-    let remote_tree_files =
-        fetch_remote_tree(transport, api_base, token, &config.branch, remote_prefix)?;
+    let remote_tree_files = fetch_remote_tree(provider, remote_prefix)?;
 
     let remote_manifest_path = format!("{}/{}", remote_prefix, SYNC_MANIFEST_PATH);
-    let remote_manifest = fetch_remote_manifest(
-        transport,
-        api_base,
-        token,
-        &config.branch,
-        remote_prefix,
-        &remote_tree_files,
-    )?;
+    let remote_manifest = fetch_remote_manifest(provider, remote_prefix, &remote_tree_files)?;
 
-    log::debug!("[sync] github_api step=正在比较本地和远端");
+    log::debug!("[sync] lww step=正在比较本地和远端");
     let local_entries = scan_for_sync(sync_root, scope)?;
     let now_ms = chrono::Utc::now().timestamp_millis();
 
@@ -110,15 +98,8 @@ pub(crate) fn execute_lww_sync_attempt(
             state.pending_take_remote.len()
         );
         let pending_paths: Vec<String> = state.pending_take_remote.iter().cloned().collect();
-        let pending_results = download_pending_take_remote(
-            sync_root,
-            transport,
-            api_base,
-            token,
-            &config.branch,
-            remote_prefix,
-            &pending_paths,
-        )?;
+        let pending_results =
+            download_pending_take_remote(sync_root, provider, remote_prefix, &pending_paths)?;
 
         for (path, content) in pending_results {
             if let Some(content) = content {
@@ -299,13 +280,8 @@ pub(crate) fn execute_lww_sync_attempt(
 
                         let conflict = {
                             let remote_path = format!("{}/{}", remote_prefix, path);
-                            if let Some((remote_content, _)) = github_get_content(
-                                transport,
-                                api_base,
-                                token,
-                                &config.branch,
-                                &remote_path,
-                            )? {
+                            if let Some(remote_obj) = provider.read(&remote_path)? {
+                                let remote_content = remote_obj.content;
                                 let conflict_filename =
                                     save_conflict_copy(sync_root, &path, &remote_content)?;
 
@@ -346,16 +322,8 @@ pub(crate) fn execute_lww_sync_attempt(
     // 或 LWW 远端获胜）时执行。冲突路径不会进入 to_delete_local。
     move_to_trash(sync_root, &to_delete_local);
 
-    log::debug!("[sync] github_api step=download newer remote files");
-    download_remote_files(
-        sync_root,
-        transport,
-        api_base,
-        token,
-        &config.branch,
-        remote_prefix,
-        &to_download,
-    )?;
+    log::debug!("[sync] lww step=download newer remote files");
+    download_remote_files(sync_root, provider, remote_prefix, &to_download)?;
 
     // 清除超过 30 天的 delete 墓碑记录，避免 manifest 无限膨胀。
     // 墓碑保留 30 天是为了让远端设备有足够时间拉取删除信息。
@@ -378,33 +346,24 @@ pub(crate) fn execute_lww_sync_attempt(
     std::fs::write(&full_manifest_path, &manifest_json)
         .map_err(|e| crate::Error::Io(std::io::Error::other(format!("write manifest: {}", e))))?;
 
-    log::debug!("[sync] github_api step=正在上传本地较新文件");
+    log::debug!("[sync] lww step=正在上传本地较新文件");
     upload_local_files(
         sync_root,
-        transport,
-        api_base,
-        token,
-        &config.branch,
+        provider,
         remote_prefix,
         &to_upload,
         &remote_tree_files,
     )?;
 
     delete_remote_files(
-        transport,
-        api_base,
-        token,
-        &config.branch,
+        provider,
         remote_prefix,
         &local_deletes_count,
         &remote_tree_files,
     )?;
 
     upload_manifest(
-        transport,
-        api_base,
-        token,
-        &config.branch,
+        provider,
         &remote_manifest_path,
         &manifest_json,
         &remote_tree_files,
@@ -528,6 +487,6 @@ pub(crate) fn execute_lww_sync_attempt(
     result.commit_hash = None;
     result.first_sync_mode = FirstSyncMode::AlreadyGitRepo;
 
-    log::debug!("[sync] github_api step=同步完成");
+    log::debug!("[sync] lww step=同步完成");
     Ok(result.clone())
 }

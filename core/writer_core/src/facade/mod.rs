@@ -36,7 +36,7 @@ mod sync_ops;
 mod sync_state_ops;
 mod writing_stats_ops;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "github-api"))]
 mod sync_ops_tests;
 
 use std::collections::HashMap;

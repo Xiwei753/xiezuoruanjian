@@ -16,12 +16,10 @@ pub enum SyncErrorCategory {
     TokenPermissionDenied,
     AuthError,
     RepoNotFoundOrNoPermission,
-    GithubUnauthorized,
-    GithubForbidden,
     EmptyUrl,
     MissingPermission,
     NetworkProbeFailed,
-    GithubNetworkFailed,
+    NetworkFailed,
     DnsFailed,
     TlsFailed,
     BranchMissing,
@@ -49,14 +47,12 @@ impl SyncErrorCategory {
             SyncErrorCategory::TokenMissing => "token_missing",
             SyncErrorCategory::TokenInvalid => "token_invalid",
             SyncErrorCategory::TokenPermissionDenied => "token_permission_denied",
-            SyncErrorCategory::AuthError
-            | SyncErrorCategory::GithubUnauthorized
-            | SyncErrorCategory::GithubForbidden => "auth_failed",
+            SyncErrorCategory::AuthError => "auth_failed",
             SyncErrorCategory::RepoNotFoundOrNoPermission => "repo_not_found_or_no_permission",
             SyncErrorCategory::EmptyUrl => "not_configured",
             SyncErrorCategory::MissingPermission => "permission_missing",
             SyncErrorCategory::NetworkProbeFailed
-            | SyncErrorCategory::GithubNetworkFailed
+            | SyncErrorCategory::NetworkFailed
             | SyncErrorCategory::DnsFailed
             | SyncErrorCategory::TlsFailed => "network_failed",
             SyncErrorCategory::BranchMissing | SyncErrorCategory::RemoteBranchMissing => {
@@ -90,13 +86,10 @@ impl SyncErrorCategory {
             SyncErrorCategory::RepoNotFoundOrNoPermission => {
                 "sync.result.repo_not_found_or_no_permission"
             }
-            SyncErrorCategory::GithubUnauthorized | SyncErrorCategory::GithubForbidden => {
-                "sync.result.auth_failed"
-            }
             SyncErrorCategory::EmptyUrl => "sync.result.configured_not_tested",
             SyncErrorCategory::MissingPermission => "sync.result.permission_missing",
             SyncErrorCategory::NetworkProbeFailed
-            | SyncErrorCategory::GithubNetworkFailed
+            | SyncErrorCategory::NetworkFailed
             | SyncErrorCategory::DnsFailed
             | SyncErrorCategory::TlsFailed => "sync.result.network_failed",
             SyncErrorCategory::BranchMissing | SyncErrorCategory::RemoteBranchMissing => {
@@ -127,12 +120,14 @@ impl SyncErrorCategory {
             "token_permission_denied" => SyncErrorCategory::TokenPermissionDenied,
             "auth_error" => SyncErrorCategory::AuthError,
             "repo_not_found_or_no_permission" => SyncErrorCategory::RepoNotFoundOrNoPermission,
-            "github_unauthorized" => SyncErrorCategory::GithubUnauthorized,
-            "github_forbidden" => SyncErrorCategory::GithubForbidden,
+            "github_unauthorized" => SyncErrorCategory::AuthError,
+            "github_forbidden" => SyncErrorCategory::AuthError,
             "empty_url" => SyncErrorCategory::EmptyUrl,
             "missing_permission" => SyncErrorCategory::MissingPermission,
             "network_probe_failed" => SyncErrorCategory::NetworkProbeFailed,
-            "github_network_failed" => SyncErrorCategory::GithubNetworkFailed,
+            "github_network_failed" => SyncErrorCategory::NetworkFailed,
+            "network_error" => SyncErrorCategory::NetworkFailed,
+            "network_failed" => SyncErrorCategory::NetworkFailed,
             "dns_failed" => SyncErrorCategory::DnsFailed,
             "tls_failed" => SyncErrorCategory::TlsFailed,
             "branch_missing" => SyncErrorCategory::BranchMissing,
@@ -147,7 +142,6 @@ impl SyncErrorCategory {
             "local_io_error" => SyncErrorCategory::LocalIoError,
             "api_rate_limited" => SyncErrorCategory::ApiRateLimited,
             "api_error" => SyncErrorCategory::ApiError,
-            "network_error" => SyncErrorCategory::GithubNetworkFailed,
             "dirty_repo" => SyncErrorCategory::DirtyRepo,
             _ => SyncErrorCategory::Other,
         }
@@ -312,6 +306,45 @@ pub(crate) fn default_branch() -> String {
 pub struct SyncSecrets {
     pub token: Option<String>,
     pub ssh_private_key: Option<String>,
+}
+
+/// 通用同步策略 — LWW engine 所需的 provider-neutral 配置（Issue #645）。
+///
+/// 从 [`SyncConfig`] 转换而来，只携带 engine 决策需要的通用字段，
+/// 不含任何 GitHub 特定参数（token/api_base_url 等在创建 Provider 时解析）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncPolicy {
+    /// 是否启用同步。
+    pub enabled: bool,
+    /// 是否启用自动同步。
+    pub auto_sync: bool,
+    /// 自动同步间隔（秒），最小有效值 60，0 表示仅手动。
+    pub sync_interval_seconds: u32,
+    /// 平台是否授予网络访问权限。
+    pub has_network_permission: bool,
+}
+
+impl SyncPolicy {
+    /// 从 `SyncConfig` 转换为通用同步策略。
+    pub fn from_config(config: &SyncConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+            auto_sync: config.auto_sync,
+            sync_interval_seconds: config.sync_interval_seconds,
+            has_network_permission: config.has_network_permission,
+        }
+    }
+}
+
+impl Default for SyncPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            auto_sync: false,
+            sync_interval_seconds: 60,
+            has_network_permission: true,
+        }
+    }
 }
 
 /// 同步状态 — UI 展示和引擎内部共用的终端状态枚举。

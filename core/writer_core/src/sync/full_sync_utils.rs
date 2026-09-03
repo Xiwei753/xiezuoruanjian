@@ -16,10 +16,8 @@ pub(crate) fn transport_init_failure_error(category: &str, message: &str) -> cra
         | SyncErrorCategory::TokenInvalid
         | SyncErrorCategory::TokenPermissionDenied
         | SyncErrorCategory::AuthError
-        | SyncErrorCategory::GithubUnauthorized
-        | SyncErrorCategory::GithubForbidden
         | SyncErrorCategory::RepoNotFoundOrNoPermission => crate::Error::SyncAuthFailed { reason },
-        SyncErrorCategory::GithubNetworkFailed
+        SyncErrorCategory::NetworkFailed
         | SyncErrorCategory::DnsFailed
         | SyncErrorCategory::TlsFailed
         | SyncErrorCategory::NetworkProbeFailed => crate::Error::SyncNetworkUnavailable { reason },
@@ -27,16 +25,6 @@ pub(crate) fn transport_init_failure_error(category: &str, message: &str) -> cra
             retry_after_secs: 0,
         },
         _ => crate::Error::SyncAuthFailed { reason },
-    }
-}
-
-/// 把 Error 转为持久化用的 SyncStatus。
-pub(crate) fn error_to_persist_status(err: &crate::Error) -> crate::sync::SyncStatus {
-    let msg = err.to_string();
-    if err.recoverable() {
-        crate::sync::SyncStatus::RecoverableError(msg)
-    } else {
-        crate::sync::SyncStatus::FatalError(msg)
     }
 }
 
@@ -129,15 +117,16 @@ pub(crate) fn full_sync_status_priority(status: &crate::sync::SyncStatus) -> u8 
 }
 
 /// 执行单个 target 的同步，把 `Err` 转为该 target 的 `SyncResult::error(...)`。
+#[cfg(feature = "github-api")]
 pub(crate) fn run_full_sync_target(
-    backend: &dyn crate::sync::SyncBackend,
+    provider: &dyn crate::sync::provider::SyncProvider,
     local_root: &std::path::Path,
-    config: &crate::sync::SyncConfig,
-    secrets: &crate::sync::SyncSecrets,
+    sync_policy: &crate::sync::types::SyncPolicy,
     target: &crate::sync::types::SyncTarget,
     force_sync: bool,
 ) -> crate::sync::types::SyncResult {
-    match backend.sync(local_root, config, secrets, target, force_sync) {
+    match crate::sync::lww::perform_lww_sync(local_root, provider, sync_policy, target, force_sync)
+    {
         Ok(result) => result,
         Err(err) => {
             let msg = err.to_string();

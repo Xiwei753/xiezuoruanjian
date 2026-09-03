@@ -7,10 +7,6 @@ mod tests {
     use crate::sync::provider::git_backend::GitAuth;
     #[cfg(feature = "git-https")]
     use crate::sync::provider::git_backend::GitBackend;
-    #[cfg(feature = "github-api")]
-    use crate::sync::provider::github_backend::GitHubApiBackend;
-    #[cfg(feature = "github-api")]
-    use crate::sync::provider::SyncBackend;
     use crate::sync::service::SyncService;
     use crate::sync::types::BackendType;
     #[cfg(feature = "git-https")]
@@ -127,7 +123,17 @@ mod tests {
         let transport = TestHttpTransport::new()
             .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.message })?;
         let target = crate::sync::types::SyncTarget::project("test");
-        SyncService::perform_lww_sync(sync_root, config, secrets, &target, force_sync, &transport)
+        let provider_config =
+            crate::sync::provider::github::config::GitHubProviderConfig::from_sync_config(
+                config, secrets,
+            )
+            .map_err(crate::Error::from)?;
+        let provider = crate::sync::provider::github::GitHubProvider::new(
+            provider_config,
+            std::sync::Arc::new(transport),
+        );
+        let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
+        SyncService::perform_lww_sync(sync_root, &provider, &sync_policy, &target, force_sync)
     }
     #[test]
     #[cfg(feature = "github-api")]
@@ -150,7 +156,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let result = GitHubApiBackend::new().diagnose(&config, &secrets).unwrap();
+        let result = SyncService::perform_sync_diagnostics(&config, &secrets).unwrap();
         assert_eq!(result.backend_type, "github_api");
         assert_eq!(result.error_category, "token_missing");
     }
@@ -3631,53 +3637,24 @@ mod tests {
 
     #[test]
     fn test_tree_404_must_not_be_silently_treated_as_empty() {
-        // Verify that the lww source code does NOT silently treat tree 404 as empty remote.
-        // After the fix, tree 404 should trigger a ref check before deciding.
-        // #644 评论 5462823517 第3节：lww.rs 已拆成 lww/ 目录，编排逻辑在 lww/mod.rs。
-        // #644 评论 5472584126：transport 实现已移入 lww/transfer.rs。
-        let source = include_str!("lww/transfer.rs");
-        // The old code had: `else if tree_status.as_u16() != 404 { return Err(...) }`
-        // which silently let 404 fall through to empty remote_tree_files.
-        // The new code should have a `tree_status.as_u16() == 404` branch that
-        // calls /git/ref/heads/{branch} to diagnose.
+        // Verify that the GitHub provider does NOT silently treat tree 404 as empty remote.
+        // After the refactor, tree 404 handling moved from lww/transfer.rs to provider/github/mod.rs.
+        let source = include_str!("provider/github/mod.rs");
         assert!(
-            source.contains("tree_status == 404") || source.contains("tree_status.as_u16() == 404"),
-            "lww/transfer.rs must have an explicit tree 404 branch that diagnoses the cause"
+            source.contains("status == 404"),
+            "provider/github/mod.rs must have an explicit tree 404 branch that diagnoses the cause"
         );
         assert!(
-            source.contains("ref_url") && source.contains("git/ref/heads/"),
+            source.contains("git/ref/heads/"),
             "tree 404 handler must call /git/ref/heads/ to distinguish repo/branch issues"
         );
         assert!(
-            source.contains("SyncRemoteBranchNotFound"),
-            "tree 404 handler must produce SyncRemoteBranchNotFound error when branch is absent"
+            source.contains("remote branch not found"),
+            "tree 404 handler must produce an error when branch is absent"
         );
         assert!(
             source.contains("repo_not_found_or_no_permission"),
             "tree 404 handler must produce repo_not_found_or_no_permission error when repo is inaccessible"
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "github-api")]
-    fn test_github_api_error_404_not_found_not_used() {
-        // After the fix, github_api_error should no longer produce the generic "not_found" category.
-        // All 404s should be classified as repo_not_found_or_no_permission or file_not_found.
-        let source = include_str!("provider/github_api_client.rs");
-        // Check that the old `404 => "not_found"` pattern is gone.
-        // We look for the exact match arm that would produce the generic category.
-        assert!(
-            !source.contains("404 => \"not_found\""),
-            "github_api_error must not have '404 => \"not_found\"' pattern — should use context-aware classification"
-        );
-        // Check that context-aware 404 classification exists
-        assert!(
-            source.contains("\"file_not_found\""),
-            "github_api_error must classify get contents 404 as file_not_found"
-        );
-        assert!(
-            source.contains("\"repo_not_found_or_no_permission\""),
-            "github_api_error must classify get ref/tree/put/delete 404 as repo_not_found_or_no_permission"
         );
     }
 
