@@ -12,12 +12,15 @@ mod tests {
     use crate::sync::types::FirstSyncMode;
     #[cfg(feature = "github-api")]
     use crate::sync::types::ManifestFileRecord;
+    #[cfg(feature = "github-api")]
     use crate::sync::types::SyncConfig;
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncConflict;
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncManifest;
+    #[cfg(feature = "github-api")]
     use crate::sync::types::SyncProtocol;
+    #[cfg(feature = "github-api")]
     use crate::sync::types::SyncScope;
     #[cfg(any(feature = "github-api", feature = "git-https"))]
     use crate::sync::types::SyncSecrets;

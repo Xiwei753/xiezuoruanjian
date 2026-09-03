@@ -372,7 +372,9 @@ impl WriterCoreApi {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "github-api")]
     use super::*;
+    #[cfg(feature = "github-api")]
     use tempfile::tempdir;
 
     #[test]
