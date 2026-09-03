@@ -8,7 +8,6 @@
 //! 安全约束：脱敏函数必须保证 token 不出现在日志、错误消息和 UI 展示中。
 //! `redact_secrets_from_message` 是当前主链，`mask_token` 是遗留别名。
 
-use crate::sync::types::BackendType;
 use crate::sync::types::SyncConfig;
 use crate::sync::types::SyncProtocol;
 
@@ -113,21 +112,22 @@ pub fn is_github_https_remote(remote_url: &str) -> bool {
     lower.starts_with("https://github.com/") || lower.starts_with("http://github.com/")
 }
 
-/// 解析最终使用的后端类型 — 若配置为 Git 但 URL 为 GitHub HTTPS，自动切换为 GithubApi。
+/// 解析最终使用的 active_provider 字符串 — 若配置为 "git" 但 GitHub Provider 的
+/// remote_url 为 GitHub HTTPS，自动切换为 "github_api"（Issue #645 评论第 2 点）。
 ///
 /// GitHub HTTPS 远程仓库使用 REST API 更高效（无需 clone 整个仓库），
-/// 因此当 `config.backend_type == Git` 且 URL 为 `https://github.com/` 时自动升级。
-pub fn resolved_backend_type(config: &SyncConfig) -> BackendType {
-    if config.backend_type == BackendType::Git
-        && config
-            .remote_url
-            .as_deref()
-            .is_some_and(is_github_https_remote)
-    {
-        BackendType::GithubApi
-    } else {
-        config.backend_type.clone()
+/// 因此当 `active_provider == "git"` 且 GitHub `remote_url` 为 `https://github.com/`
+/// 时自动升级。无 GitHub provider_config 时返回原 `active_provider`。
+pub fn resolved_active_provider(config: &SyncConfig) -> String {
+    if config.active_provider == "git" {
+        #[cfg(feature = "github-api")]
+        if let Some(crate::sync::provider::ProviderConfig::GitHub(gh)) = &config.provider_config {
+            if is_github_https_remote(&gh.remote_url) {
+                return "github_api".to_string();
+            }
+        }
     }
+    config.active_provider.clone()
 }
 
 /// 将 URL 中的 userinfo 部分替换为 `***`，用于日志和 UI 展示。

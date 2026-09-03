@@ -56,6 +56,29 @@ impl super::WriterAppService {
         let message_args = std::collections::HashMap::new();
         let mut can_run = true;
 
+        // 从 provider_config 读 remote_url（Issue #645 评论第 2 点）。
+        let remote_url = config
+            .provider_config
+            .as_ref()
+            .map(|pc| match pc {
+                #[cfg(feature = "github-api")]
+                crate::api::ProviderConfigDto::GitHub { remote_url, .. } => remote_url.clone(),
+                #[cfg(not(feature = "github-api"))]
+                _ => String::new(),
+            })
+            .unwrap_or_default();
+        // 从 provider_secrets 读 token。
+        let token = secrets
+            .provider_secrets
+            .as_ref()
+            .map(|ps| match ps {
+                #[cfg(feature = "github-api")]
+                crate::api::ProviderSecretsDto::GitHub { token } => token.clone(),
+                #[cfg(not(feature = "github-api"))]
+                _ => String::new(),
+            })
+            .unwrap_or_default();
+
         if !config.enabled {
             can_run = false;
             block_reason_code = Some("DISABLED".to_string());
@@ -64,11 +87,11 @@ impl super::WriterAppService {
             can_run = false;
             block_reason_code = Some("SECURE_STORAGE_UNAVAILABLE".to_string());
             block_message_key = Some("sync.block.secure_storage_unavailable".to_string());
-        } else if config.remote_url.is_empty() {
+        } else if remote_url.is_empty() {
             can_run = false;
             block_reason_code = Some("REMOTE_URL_MISSING".to_string());
             block_message_key = Some("sync.block.remote_url_missing".to_string());
-        } else if secrets.token.as_ref().is_none_or(|t| t.is_empty()) {
+        } else if token.is_empty() {
             can_run = false;
             block_reason_code = Some("TOKEN_MISSING".to_string());
             block_message_key = Some("sync.block.token_missing".to_string());

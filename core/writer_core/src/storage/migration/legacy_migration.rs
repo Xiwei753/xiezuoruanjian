@@ -46,6 +46,7 @@ use crate::sync::{SyncConfig, SyncSecrets};
 mod legacy_migration_io;
 
 #[cfg(test)]
+#[cfg(feature = "github-api")]
 mod legacy_migration_tests;
 
 pub(crate) use legacy_migration_io::{
@@ -196,7 +197,7 @@ impl<'a> LegacySyncProfileMigrator<'a> {
 
     /// 新全局 profile 是否已存在（无需迁移）。
     ///
-    /// 判据：app config 文件存在且 `remote_url` 非空，**且**
+    /// 判据：app config 文件存在且 GitHub `remote_url` 非空，**且**
     /// `sync_token_global` 安全存储有非空值（或 fallback 文件有非空 token）。
     fn new_global_profile_exists(&self) -> bool {
         let config_path = self.app_data_root.join("app-meta/sync/config.local.json");
@@ -204,7 +205,7 @@ impl<'a> LegacySyncProfileMigrator<'a> {
             Some(c) => c,
             None => return false,
         };
-        if config.remote_url.as_deref().unwrap_or("").is_empty() {
+        if github_remote_url_from_config(&config).is_empty() {
             return false;
         }
         self.read_global_token().is_some()
@@ -240,7 +241,7 @@ impl<'a> LegacySyncProfileMigrator<'a> {
             Some(c) => c,
             None => return Ok(None),
         };
-        if config.remote_url.as_deref().unwrap_or("").is_empty() {
+        if github_remote_url_from_config(&config).is_empty() {
             return Ok(None);
         }
         let precise_gen = metadata.and_then(|m| m.active_generation);
@@ -297,7 +298,7 @@ impl<'a> LegacySyncProfileMigrator<'a> {
             Some(c) => c,
             None => return Ok(None),
         };
-        if config.remote_url.as_deref().unwrap_or("").is_empty() {
+        if github_remote_url_from_config(&config).is_empty() {
             return Ok(None);
         }
         let base_key = format!("{}{}", LEGACY_PROJECT_TOKEN_KEY_PREFIX, project_id);
@@ -405,10 +406,7 @@ impl<'a> LegacySyncProfileMigrator<'a> {
 
         Ok(LegacyMigrationOutcome::Migrated {
             config: chosen.config.clone(),
-            secrets: SyncSecrets {
-                token: Some(chosen.token.clone()),
-                ssh_private_key: None,
-            },
+            secrets: SyncSecrets::from_github_token(chosen.token.clone()),
         })
     }
 
@@ -428,10 +426,7 @@ impl<'a> LegacySyncProfileMigrator<'a> {
         } else {
             // fallback: 写文件
             let secrets_path = self.app_data_root.join("app-meta/sync/secrets.local.json");
-            let secrets = SyncSecrets {
-                token: Some(profile.token.clone()),
-                ssh_private_key: None,
-            };
+            let secrets = SyncSecrets::from_github_token(profile.token.clone());
             write_secrets_atomic(&secrets_path, &secrets, "sync_secrets")?;
         }
 
@@ -451,5 +446,17 @@ impl<'a> LegacySyncProfileMigrator<'a> {
         for file in &profile.files_to_cleanup {
             remove_file_or_warn(file);
         }
+    }
+}
+
+/// 从 `SyncConfig` 读取 GitHub `remote_url`（若为 GitHub provider）；否则空字符串。
+///
+/// Issue #645 评论第 2 点：`remote_url` 不再在 `SyncConfig` 顶层，
+/// 从 `provider_config: ProviderConfig::GitHub` 读取。
+fn github_remote_url_from_config(config: &SyncConfig) -> String {
+    match &config.provider_config {
+        #[cfg(feature = "github-api")]
+        Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => gh.remote_url.clone(),
+        _ => String::new(),
     }
 }

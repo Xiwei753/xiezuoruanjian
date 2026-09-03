@@ -7,19 +7,71 @@
 //! - `_to_wire` 后缀函数将 Rust 枚举转换为线格式字符串
 //! - `From<Dto>` / `From<Internal>` 实现双向转换
 //!
-//! 注意：`SyncSecretsDto` → `SyncSecrets` 转换时 `ssh_private_key` 始终设为 None，
-//! 因为 SSH 密钥不通过 JSON DTO 传输，由平台端安全存储直接注入。
+//! Issue #645 评论第 2 点：`SyncConfigDto`/`SyncSecretsDto` 改成 provider-neutral，
+//! GitHub 特定字段只在 `ProviderConfigDto::GitHub` / `ProviderSecretsDto::GitHub` 中。
+
+/// Provider 配置 DTO — provider-neutral 强类型枚举（Issue #645 评论第 2 点）。
+///
+/// 与 `crate::sync::provider::ProviderConfig` 一一对应，线格式使用 internally tagged enum。
+/// UniFFI `[Enum] interface` 生成带命名字段的 Rust 枚举变体。
+///
+/// 注意：DTO 层 GitHub 变体不门控 `#[cfg(feature = "github-api")]`，因为
+/// UniFFI UDL 生成的代码要求该变体在所有 feature 下都存在。仅与内部
+/// `ProviderConfig` 的双向转换 impl 在 github-api feature 下提供。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProviderConfigDto {
+    #[serde(rename = "github")]
+    GitHub {
+        remote_url: String,
+        branch: String,
+        username: String,
+        transport: String,
+    },
+}
+
+#[cfg(feature = "github-api")]
+impl From<crate::sync::provider::ProviderConfig> for ProviderConfigDto {
+    fn from(c: crate::sync::provider::ProviderConfig) -> Self {
+        match c {
+            crate::sync::provider::ProviderConfig::GitHub(gh) => ProviderConfigDto::GitHub {
+                remote_url: gh.remote_url,
+                branch: gh.branch,
+                username: gh.username,
+                transport: sync_protocol_to_wire(&gh.transport),
+            },
+        }
+    }
+}
+
+#[cfg(feature = "github-api")]
+impl From<ProviderConfigDto> for Option<crate::sync::provider::ProviderConfig> {
+    fn from(c: ProviderConfigDto) -> Self {
+        match c {
+            ProviderConfigDto::GitHub {
+                remote_url,
+                branch,
+                username,
+                transport,
+            } => Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url,
+                    branch,
+                    username,
+                    transport: sync_protocol_from_wire(&transport),
+                },
+            )),
+        }
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncConfigDto {
     pub enabled: bool,
-    pub backend_type: String,
-    pub remote_url: String,
-    pub transport: String,
-    pub branch: String,
+    pub active_provider: String,
+    pub provider_config: Option<ProviderConfigDto>,
     pub auto_sync: bool,
     pub sync_interval_seconds: u32,
-    pub username: String,
     pub has_network_permission: bool,
     pub has_network_state_permission: bool,
 }
@@ -28,22 +80,20 @@ impl From<crate::sync::SyncConfig> for SyncConfigDto {
     fn from(c: crate::sync::SyncConfig) -> Self {
         Self {
             enabled: c.enabled,
-            backend_type: match c.backend_type {
-                crate::sync::BackendType::Git => "git".to_string(),
-                crate::sync::BackendType::GithubApi => "github_api".to_string(),
+            active_provider: c.active_provider,
+            provider_config: {
+                #[cfg(feature = "github-api")]
+                {
+                    c.provider_config.map(Into::into)
+                }
+                #[cfg(not(feature = "github-api"))]
+                {
+                    let _ = c.provider_config;
+                    None
+                }
             },
-            remote_url: c.resolve_remote_url().unwrap_or_default(),
-            transport: c
-                .resolve_transport()
-                .map(|t| match t {
-                    crate::sync::SyncProtocol::HttpsToken => "https_token".to_string(),
-                    crate::sync::SyncProtocol::SshDeployKey => "ssh_deploy_key".to_string(),
-                })
-                .unwrap_or_else(|| "https_token".to_string()),
-            branch: c.resolve_branch(),
             auto_sync: c.auto_sync,
             sync_interval_seconds: c.sync_interval_seconds,
-            username: c.resolve_username().unwrap_or_default(),
             has_network_permission: c.has_network_permission,
             has_network_state_permission: c.has_network_state_permission,
         }
@@ -54,45 +104,93 @@ impl From<SyncConfigDto> for crate::sync::SyncConfig {
     fn from(c: SyncConfigDto) -> Self {
         crate::sync::SyncConfig {
             enabled: c.enabled,
-            active_provider: c.backend_type.clone(),
-            backend_type: match c.backend_type.as_str() {
-                "git" => crate::sync::BackendType::Git,
-                "github_api" => crate::sync::BackendType::GithubApi,
-                _ => crate::sync::BackendType::GithubApi,
+            active_provider: c.active_provider,
+            provider_config: {
+                #[cfg(feature = "github-api")]
+                {
+                    c.provider_config.and_then(Into::into)
+                }
+                #[cfg(not(feature = "github-api"))]
+                {
+                    let _ = c.provider_config;
+                    None
+                }
             },
-            remote_url: Some(c.remote_url),
-            transport: Some(match c.transport.as_str() {
-                "https_token" => crate::sync::SyncProtocol::HttpsToken,
-                "ssh" | "ssh_deploy_key" => crate::sync::SyncProtocol::SshDeployKey,
-                _ => crate::sync::SyncProtocol::HttpsToken,
-            }),
-            branch: Some(c.branch),
             auto_sync: c.auto_sync,
             sync_interval_seconds: c.sync_interval_seconds,
-            username: Some(c.username),
-            has_network_state_permission: c.has_network_state_permission,
             has_network_permission: c.has_network_permission,
-            github: None,
+            has_network_state_permission: c.has_network_state_permission,
         }
     }
 }
 
+/// Provider 密钥 DTO — provider-neutral 强类型枚举（Issue #645 评论第 2 点）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProviderSecretsDto {
+    #[serde(rename = "github")]
+    GitHub { token: String },
+}
+
+#[cfg(feature = "github-api")]
+impl From<crate::sync::provider::ProviderSecrets> for ProviderSecretsDto {
+    fn from(s: crate::sync::provider::ProviderSecrets) -> Self {
+        match s {
+            crate::sync::provider::ProviderSecrets::GitHub { token } => {
+                ProviderSecretsDto::GitHub { token }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "github-api")]
+impl From<ProviderSecretsDto> for crate::sync::provider::ProviderSecrets {
+    fn from(s: ProviderSecretsDto) -> Self {
+        match s {
+            ProviderSecretsDto::GitHub { token } => {
+                crate::sync::provider::ProviderSecrets::GitHub { token }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
 pub struct SyncSecretsDto {
-    pub token: Option<String>,
+    pub provider_secrets: Option<ProviderSecretsDto>,
 }
 
 impl From<crate::sync::SyncSecrets> for SyncSecretsDto {
     fn from(s: crate::sync::SyncSecrets) -> Self {
-        Self { token: s.token }
+        Self {
+            provider_secrets: {
+                #[cfg(feature = "github-api")]
+                {
+                    s.provider_secrets.map(Into::into)
+                }
+                #[cfg(not(feature = "github-api"))]
+                {
+                    let _ = s.provider_secrets;
+                    None
+                }
+            },
+        }
     }
 }
 
 impl From<SyncSecretsDto> for crate::sync::SyncSecrets {
     fn from(s: SyncSecretsDto) -> Self {
         crate::sync::SyncSecrets {
-            token: s.token,
-            ssh_private_key: None,
+            provider_secrets: {
+                #[cfg(feature = "github-api")]
+                {
+                    s.provider_secrets.map(Into::into)
+                }
+                #[cfg(not(feature = "github-api"))]
+                {
+                    let _ = s.provider_secrets;
+                    None
+                }
+            },
         }
     }
 }
@@ -350,6 +448,16 @@ fn sync_transport_from_wire(s: &str) -> crate::sync::SyncProtocol {
 
 fn sync_transport_from_wire_owned(s: String) -> crate::sync::SyncProtocol {
     sync_transport_from_wire(&s)
+}
+
+/// `SyncProtocol` → 线格式字符串（与 `sync_transport_to_wire` 同映射，命名更直观）。
+fn sync_protocol_to_wire(transport: &crate::sync::SyncProtocol) -> String {
+    sync_transport_to_wire(transport.clone())
+}
+
+/// 线格式字符串 → `SyncProtocol`（与 `sync_transport_from_wire` 同映射）。
+fn sync_protocol_from_wire(s: &str) -> crate::sync::SyncProtocol {
+    sync_transport_from_wire(s)
 }
 
 /// 将 `SyncStatus` 枚举转换为线格式字符串。

@@ -57,18 +57,20 @@ mod tests {
 
     fn sample_config(remote_url: &str, branch: &str) -> SyncConfig {
         SyncConfig {
-            enabled: true,
-            backend_type: crate::sync::BackendType::GithubApi,
+            enabled: false,
             active_provider: "github_api".to_string(),
-            remote_url: Some(remote_url.to_string()),
-            transport: Some(crate::sync::SyncProtocol::HttpsToken),
-            branch: Some(branch.to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: remote_url.to_string(),
+                    branch: branch.to_string(),
+                    username: String::new(),
+                    transport: crate::sync::types::SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
-            sync_interval_seconds: 300,
-            username: Some(String::new()),
+            sync_interval_seconds: 0,
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         }
     }
 
@@ -149,8 +151,8 @@ mod tests {
             LegacyMigrationOutcome::NotNeeded => "NotNeeded".to_string(),
             LegacyMigrationOutcome::Migrated { config, .. } => format!(
                 "Migrated {{ remote_url: {}, branch: {} }}",
-                config.remote_url.as_deref().unwrap_or(""),
-                config.branch.as_deref().unwrap_or("main"),
+                config.github_remote_url(),
+                config.github_branch(),
             ),
             LegacyMigrationOutcome::NeedsReconfigure { reason } => {
                 format!("NeedsReconfigure {{ reason: {} }}", reason)
@@ -176,10 +178,10 @@ mod tests {
                 secrets: s,
             } => {
                 assert_eq!(
-                    c.remote_url.as_deref(),
-                    Some("https://github.com/test/repo.git")
+                    c.github_remote_url().as_str(),
+                    "https://github.com/test/repo.git"
                 );
-                assert_eq!(s.token.as_deref(), Some("legacy_app_token"));
+                assert_eq!(s.github_token().as_deref(), Some("legacy_app_token"));
             }
             other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
@@ -205,7 +207,7 @@ mod tests {
             .expect("migrate");
         match outcome {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
-                assert_eq!(s.token.as_deref(), Some("gen3_token"));
+                assert_eq!(s.github_token().as_deref(), Some("gen3_token"));
             }
             other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
@@ -246,10 +248,10 @@ mod tests {
                 secrets: s,
             } => {
                 assert_eq!(
-                    c.remote_url.as_deref(),
-                    Some("https://github.com/test/proj1.git")
+                    c.github_remote_url().as_str(),
+                    "https://github.com/test/proj1.git"
                 );
-                assert_eq!(s.token.as_deref(), Some("proj1_token"));
+                assert_eq!(s.github_token().as_deref(), Some("proj1_token"));
             }
             other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
@@ -286,10 +288,10 @@ mod tests {
                 secrets: s,
             } => {
                 assert_eq!(
-                    c.remote_url.as_deref(),
-                    Some("https://github.com/test/shared.git")
+                    c.github_remote_url().as_str(),
+                    "https://github.com/test/shared.git"
                 );
-                assert_eq!(s.token.as_deref(), Some("shared_token"));
+                assert_eq!(s.github_token().as_deref(), Some("shared_token"));
             }
             other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
@@ -502,7 +504,7 @@ mod tests {
         let outcome = env.migrator().migrate().expect("migrate");
         match outcome {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
-                assert_eq!(s.token.as_deref(), Some("file_token"));
+                assert_eq!(s.github_token().as_deref(), Some("file_token"));
             }
             other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
@@ -533,10 +535,10 @@ mod tests {
                 secrets: s,
             } => {
                 assert_eq!(
-                    c.remote_url.as_deref(),
-                    Some("https://github.com/app/repo.git")
+                    c.github_remote_url().as_str(),
+                    "https://github.com/app/repo.git"
                 );
-                assert_eq!(s.token.as_deref(), Some("app_token"));
+                assert_eq!(s.github_token().as_deref(), Some("app_token"));
             }
             other => panic!(
                 "expected Migrated (app priority), got {}",
@@ -571,7 +573,7 @@ mod tests {
             .expect("migrate");
         match outcome {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
-                assert_eq!(s.token.as_deref(), Some("app_gen7_token"));
+                assert_eq!(s.github_token().as_deref(), Some("app_gen7_token"));
             }
             other => panic!(
                 "expected Migrated (app priority), got {}",
@@ -599,7 +601,7 @@ mod tests {
             .expect("migrate");
         match outcome {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
-                assert_eq!(s.token.as_deref(), Some("gen15_token"));
+                assert_eq!(s.github_token().as_deref(), Some("gen15_token"));
             }
             other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
@@ -625,7 +627,7 @@ mod tests {
             .expect("migrate");
         match outcome {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
-                assert_eq!(s.token.as_deref(), Some("gen20_token"));
+                assert_eq!(s.github_token().as_deref(), Some("gen20_token"));
             }
             other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
@@ -647,7 +649,7 @@ mod tests {
         let outcome = env.migrator().migrate().expect("migrate");
         match outcome {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
-                assert_eq!(s.token.as_deref(), Some("proj1_token"));
+                assert_eq!(s.github_token().as_deref(), Some("proj1_token"));
             }
             other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }
@@ -675,7 +677,7 @@ mod tests {
             .expect("migrate");
         match outcome {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
-                assert_eq!(s.token.as_deref(), Some("base_token"));
+                assert_eq!(s.github_token().as_deref(), Some("base_token"));
             }
             other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
         }

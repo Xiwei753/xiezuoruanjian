@@ -439,7 +439,9 @@ mod tests {
             dir.path().join("projects").to_string_lossy().to_string(),
         );
         let secrets = crate::api::SyncSecretsDto {
-            token: Some("token-a".to_string()),
+            provider_secrets: Some(crate::api::ProviderSecretsDto::GitHub {
+                token: "token-a".to_string(),
+            }),
         };
         svc.set_sync_secrets_override(secrets)
             .expect("set override");

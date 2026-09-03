@@ -522,7 +522,19 @@ impl SyncService {
             return Ok(result);
         }
 
-        if config.remote_url.as_deref().unwrap_or("").is_empty() {
+        // Issue #645 评论第 2 点：GitHub remote_url/branch/username/transport 从
+        // provider_config 读取，不再从顶层字段。
+        let (remote_url, username_opt, transport_opt) = match &config.provider_config {
+            #[cfg(feature = "github-api")]
+            Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => (
+                gh.remote_url.clone(),
+                Some(gh.username.clone()),
+                Some(gh.transport.clone()),
+            ),
+            _ => (String::new(), None, None),
+        };
+
+        if remote_url.is_empty() {
             return Ok(SyncResult::error(
                 SyncStatus::Error("Remote URL is empty".to_string()),
                 FirstSyncMode::NotAttempted,
@@ -531,14 +543,12 @@ impl SyncService {
             ));
         }
 
-        let remote_url = config.remote_url.clone().unwrap_or_default();
         let parsed = sanitize_remote_url(&remote_url);
         let sanitized_url = parsed.sanitized_url;
 
         let token_from_parsed = parsed.extracted_token;
         let token = secrets
-            .token
-            .clone()
+            .github_token()
             .or(token_from_parsed)
             .unwrap_or_default();
         if token.is_empty() {
@@ -550,19 +560,15 @@ impl SyncService {
             ));
         }
 
-        let username_for_cred = if config.username.as_deref().is_some_and(|u| !u.is_empty()) {
-            config.username.clone().unwrap_or_default()
+        let username_for_cred = if username_opt.as_deref().is_some_and(|u| !u.is_empty()) {
+            username_opt.clone().unwrap_or_default()
         } else if let Some(ref extracted_user) = parsed.extracted_username {
             extracted_user.clone()
         } else {
             "x-access-token".to_string()
         };
 
-        let auth = match config
-            .transport
-            .as_ref()
-            .unwrap_or(&SyncProtocol::HttpsToken)
-        {
+        let auth = match transport_opt.unwrap_or(SyncProtocol::HttpsToken) {
             SyncProtocol::HttpsToken => Some(GitAuth::HttpsToken {
                 username: username_for_cred.clone(),
                 token: token.clone(),
@@ -632,7 +638,12 @@ impl SyncService {
         }
 
         let mut branch_recovered = false;
-        let branch = config.branch.as_deref().unwrap_or("main");
+        let branch = match &config.provider_config {
+            #[cfg(feature = "github-api")]
+            Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => gh.branch.clone(),
+            _ => "main".to_string(),
+        };
+        let branch = branch.as_str();
         if let Ok(repo) = Self::open_git_repo(sync_root) {
             let branch_ref_name = format!("refs/heads/{}", branch);
             let branch_exists = repo.find_reference(&branch_ref_name).is_ok();
@@ -895,8 +906,19 @@ impl SyncService {
         }
 
         let mut state = Self::load_sync_state(sync_root).unwrap_or_default();
-        state.remote_url = config.remote_url.clone();
-        state.transport = config.transport.clone();
+        // Issue #645 评论第 2 点：state.remote_url/transport 记录上次同步的远端信息，
+        // 从 provider_config 读取。
+        match &config.provider_config {
+            #[cfg(feature = "github-api")]
+            Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => {
+                state.remote_url = Some(gh.remote_url.clone());
+                state.transport = Some(gh.transport.clone());
+            }
+            _ => {
+                state.remote_url = None;
+                state.transport = None;
+            }
+        }
         state.last_sync_time = Some({
             #[allow(clippy::cast_possible_wrap)]
             let ts = std::time::SystemTime::now()

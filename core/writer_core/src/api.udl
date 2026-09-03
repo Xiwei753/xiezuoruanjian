@@ -217,21 +217,30 @@ dictionary DeviceInfoDto {
     string platform;
 };
 
+// Issue #645 评论第 2 点：SyncConfigDto/SyncSecretsDto 改成 provider-neutral，
+// GitHub 特定字段只在 ProviderConfigDto::GitHub / ProviderSecretsDto::GitHub 中。
+[Enum]
+interface ProviderConfigDto {
+    GitHub(string remote_url, string branch, string username, string transport);
+};
+
+[Enum]
+interface ProviderSecretsDto {
+    GitHub(string token);
+};
+
 dictionary SyncConfigDto {
     boolean enabled;
-    string backend_type;
-    string remote_url;
-    string transport;
-    string branch;
+    string active_provider;
+    ProviderConfigDto? provider_config;
     boolean auto_sync;
     u32 sync_interval_seconds;
-    string username;
     boolean has_network_permission;
     boolean has_network_state_permission;
 };
 
 dictionary SyncSecretsDto {
-    string? token;
+    ProviderSecretsDto? provider_secrets;
 };
 
 dictionary SyncConflictDto {

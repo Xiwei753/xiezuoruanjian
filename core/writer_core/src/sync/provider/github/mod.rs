@@ -2,16 +2,20 @@
 //!
 //! 本模块仅在 `github-api` feature 启用时编译。
 //!
-//! [`GitHubProvider`] 持有 [`GitHubProviderConfig`] + `SyncTransport`，
+//! [`GitHubProvider`] 持有 [`GitHubRuntimeConfig`] + `SyncTransport`，
 //! 实现 [`SyncProvider`] 的 list/read/write/delete 四个原语。
 //! 所有 GitHub 特定逻辑（HTTP 状态映射、Contents API、Git tree API）封闭在此模块内，
 //! 通用 LWW engine 只依赖 [`crate::sync::provider::SyncProvider`] trait。
+//!
+//! 持久化配置 [`GitHubProviderConfig`]（不含 token）存在 `SyncConfig.provider_config`，
+//! 运行时配置 [`GitHubRuntimeConfig`]（含 token + 推导的 api_base_url）由
+//! `GitHubRuntimeConfig::from_persisted` 在构造 Provider 时从持久化配置 + secrets 推导。
 
 use std::sync::Arc;
 
 use writer_platform_api::SyncTransport;
 
-use self::config::GitHubProviderConfig;
+use self::config::GitHubRuntimeConfig;
 use self::error::map_http_error;
 use crate::sync::provider::capabilities::SyncCapabilities;
 use crate::sync::provider::error::ProviderError;
@@ -28,21 +32,21 @@ pub mod error;
 
 /// GitHub Provider — 基于 GitHub REST API 的同步后端。
 ///
-/// 由 `GitHubProviderConfig` + `SyncTransport` 构造，实现 `SyncProvider` trait。
+/// 由 `GitHubRuntimeConfig` + `SyncTransport` 构造，实现 `SyncProvider` trait。
 /// 所有远端路径都是完整远端路径（含 remote_prefix），Provider 内部直接拼 GitHub Contents API URL。
 ///
 /// transport 用 `Arc` 存储以支持从共享引用克隆（旧 `GitHubApiBackend` 持有 `&self` 无法 move）。
 pub struct GitHubProvider {
-    config: GitHubProviderConfig,
+    config: GitHubRuntimeConfig,
     transport: Arc<dyn SyncTransport>,
 }
 
 impl GitHubProvider {
     /// 创建 GitHub Provider。
     ///
-    /// `config` 携带 API base URL/token/branch 等信息，
+    /// `config` 携带 API base URL/token/branch 等运行时信息（含 token，不持久化），
     /// `transport` 为平台注入的 HTTP 客户端实现（用 `Arc` 共享所有权）。
-    pub fn new(config: GitHubProviderConfig, transport: Arc<dyn SyncTransport>) -> Self {
+    pub fn new(config: GitHubRuntimeConfig, transport: Arc<dyn SyncTransport>) -> Self {
         Self { config, transport }
     }
 
@@ -138,10 +142,18 @@ impl SyncProvider for GitHubProvider {
         let token = &self.config.token;
         let branch = &self.config.branch;
 
+        // 根据前置条件决定传给 GitHub PUT 的 SHA。
+        //
+        // - IfMatch(v)：严格使用调用方给的版本，不查远端；409 直接返回 PreconditionFailed。
+        // - CreateNew：不查旧 SHA，直接以 None 创建；对象已存在时 GitHub 返回 409/422。
+        // - Unconditional：Provider 自己先读取当前远端 SHA，存在则用当前 SHA 覆盖，
+        //   不存在则传 None 创建。这是唯一允许"刷新 SHA"的分支。
         let remote_sha = match &precondition {
             WritePrecondition::IfMatch(v) => Some(v.0.clone()),
             WritePrecondition::CreateNew => None,
-            WritePrecondition::Unconditional => None,
+            WritePrecondition::Unconditional => {
+                client::get_content_sha(transport, api_base, token, branch, path)?
+            }
         };
 
         let (status, body) = client::put_content_serial(
@@ -171,6 +183,14 @@ impl SyncProvider for GitHubProvider {
                     }
                 },
             }),
+            // CreateNew 时 GitHub 对已存在文件 PUT 不带 SHA 会返回 422（validation failed），
+            // 映射为 PreconditionFailed，语义与 409 一致。
+            422 if matches!(precondition, WritePrecondition::CreateNew) => {
+                Err(ProviderError::PreconditionFailed {
+                    path: path.to_string(),
+                    reason: format!("object already exists: {}", truncate(&body, 200)),
+                })
+            }
             _ => Err(map_http_error(
                 &format!("put contents {}", path),
                 status,
@@ -185,13 +205,27 @@ impl SyncProvider for GitHubProvider {
         let token = &self.config.token;
         let branch = &self.config.branch;
 
+        // 根据前置条件决定传给 GitHub DELETE 的 SHA。
+        //
+        // - IfMatch(v)：严格使用调用方给的版本，不查远端；409 直接返回 PreconditionFailed。
+        // - Unconditional：Provider 自己先读取当前远端 SHA，存在则用当前 SHA 删除，
+        //   不存在则直接成功（无需删除）。这是唯一允许"刷新 SHA"的分支。
         let remote_sha = match &precondition {
             DeletePrecondition::IfMatch(v) => Some(v.0.clone()),
-            DeletePrecondition::Unconditional => None,
+            DeletePrecondition::Unconditional => {
+                client::get_content_sha(transport, api_base, token, branch, path)?
+            }
+        };
+
+        // 远端文件不存在（remote_sha 为 None）时直接成功。
+        // 这只可能出现在 Unconditional 分支（IfMatch 拿到 None 不会走到这里，因为
+        // IfMatch 总是 Some）；语义为"无条件删除一个不存在的对象 = 已达成目标"。
+        let Some(sha) = remote_sha else {
+            return Ok(());
         };
 
         let (status, body) =
-            client::delete_content_serial(transport, api_base, token, branch, path, remote_sha)?;
+            client::delete_content_once(transport, api_base, token, branch, path, &sha)?;
 
         if is_success_status(status) || status == 404 {
             return Ok(());

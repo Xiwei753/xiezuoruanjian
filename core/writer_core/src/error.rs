@@ -194,7 +194,14 @@ impl Error {
             Error::SyncNonFastForward { .. } => false,
             Error::SyncUnrelatedHistories { .. } => false,
             Error::SyncRemoteBranchNotFound { .. } => true,
-            Error::SyncRemoteError { .. } => true,
+            // SyncRemoteError 按 category 结构化判断可恢复性：
+            // - remote_sha_conflict：乐观并发冲突（IfMatch 不匹配或 CreateNew 时对象已存在），
+            //   不可重试，需上层拉取远端最新版本后重新决策或上报冲突让用户处理。
+            // - file_not_found：远端对象不存在，重试也不会出现，不可重试。
+            // - 其他 category（如 api_error、network 类临时错误）：保守视为可恢复，允许重试。
+            Error::SyncRemoteError { category, .. } => {
+                !matches!(category.as_str(), "remote_sha_conflict" | "file_not_found")
+            }
             Error::DiskFull { .. } => false,
             Error::StorageTransactionIncomplete { .. } => true,
             Error::SaveQueueFlushIncomplete { .. } => true,
@@ -360,6 +367,45 @@ mod tests {
             reason: "bad token".into()
         }
         .recoverable());
+    }
+
+    #[test]
+    fn test_recoverable_sync_remote_error_by_category() {
+        // remote_sha_conflict：乐观并发冲突，不可重试
+        let conflict = Error::SyncRemoteError {
+            category: "remote_sha_conflict".into(),
+            context: "conditional_write".into(),
+            status: 409,
+            body_preview: "sha mismatch".into(),
+        };
+        assert!(!conflict.recoverable());
+
+        // file_not_found：远端对象不存在，不可重试
+        let not_found = Error::SyncRemoteError {
+            category: "file_not_found".into(),
+            context: "read".into(),
+            status: 404,
+            body_preview: "missing".into(),
+        };
+        assert!(!not_found.recoverable());
+
+        // 其他 category（如 api_error）：保守视为可恢复，允许重试
+        let api_error = Error::SyncRemoteError {
+            category: "api_error".into(),
+            context: "upload".into(),
+            status: 500,
+            body_preview: "server error".into(),
+        };
+        assert!(api_error.recoverable());
+
+        // 未知 category 也视为可恢复（保守处理，避免误判不可恢复导致用户卡死）
+        let unknown = Error::SyncRemoteError {
+            category: "something_unexpected".into(),
+            context: "read".into(),
+            status: 503,
+            body_preview: "tmp".into(),
+        };
+        assert!(unknown.recoverable());
     }
 
     #[test]

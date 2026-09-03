@@ -22,7 +22,12 @@ fn test_get_sync_capability_scenarios() {
     // 场景 2: 启用但安全存储不可用（WriterCoreApi::new 无 secure_storage）
     let mut config = api.load_sync_config().unwrap();
     config.enabled = true;
-    config.remote_url = "https://github.com/test/repo".to_string();
+    config.provider_config = Some(crate::api::ProviderConfigDto::GitHub {
+        remote_url: "https://github.com/test/repo".to_string(),
+        branch: "main".to_string(),
+        username: String::new(),
+        transport: "https_token".to_string(),
+    });
     api.save_sync_config(config).unwrap();
 
     let cap = api.get_sync_capability().unwrap();
@@ -39,11 +44,16 @@ fn test_get_sync_capability_scenarios() {
     //- 场景 3: 有 URL 但未配置 Token
     let mut config = api.load_sync_config().unwrap();
     config.enabled = true;
-    config.remote_url = "https://github.com/test/repo".to_string();
+    config.provider_config = Some(crate::api::ProviderConfigDto::GitHub {
+        remote_url: "https://github.com/test/repo".to_string(),
+        branch: "main".to_string(),
+        username: String::new(),
+        transport: "https_token".to_string(),
+    });
     api.save_sync_config(config).unwrap();
 
     let mut secrets = api.load_sync_secrets().unwrap();
-    secrets.token = None;
+    secrets.provider_secrets = None;
     api.save_sync_secrets(secrets).unwrap();
 
     let cap = api.get_sync_capability().unwrap();
@@ -69,7 +79,12 @@ fn test_get_sync_capability_remote_url_missing() {
     let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
     let mut config = api.load_sync_config().unwrap();
     config.enabled = true;
-    config.remote_url = "".to_string();
+    config.provider_config = Some(crate::api::ProviderConfigDto::GitHub {
+        remote_url: "".to_string(),
+        branch: "main".to_string(),
+        username: String::new(),
+        transport: "https_token".to_string(),
+    });
     api.save_sync_config(config).unwrap();
 
     let cap = api.get_sync_capability().unwrap();

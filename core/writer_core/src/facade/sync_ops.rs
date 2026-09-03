@@ -232,7 +232,7 @@ impl super::WriterCore {
     pub fn create_sync_provider_for_plan(
         &self,
         config: &crate::sync::SyncConfig,
-        _secrets: &crate::sync::SyncSecrets,
+        secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<Box<dyn crate::sync::provider::SyncProvider>> {
         match config.active_provider.as_str() {
             #[cfg(feature = "github-api")]
@@ -241,13 +241,21 @@ impl super::WriterCore {
                     let status = crate::sync::full_sync::error_to_persist_status(err);
                     self.persist_full_sync_early_failure(status, "preflight");
                 })?;
-                let provider_config =
-                    crate::sync::provider::github::config::GitHubProviderConfig::from_sync_config(
-                        config, _secrets,
+                let github_config = config
+                    .provider_config
+                    .as_ref()
+                    .map(|pc| match pc {
+                        crate::sync::provider::ProviderConfig::GitHub(c) => c,
+                    })
+                    .ok_or_else(|| crate::Error::Other("missing github provider config".into()))?;
+                let runtime =
+                    crate::sync::provider::github::config::GitHubRuntimeConfig::from_persisted(
+                        github_config,
+                        secrets.provider_secrets.as_ref(),
                     )
                     .map_err(crate::Error::from)?;
                 Ok(Box::new(
-                    crate::sync::provider::github::GitHubProvider::new(provider_config, transport),
+                    crate::sync::provider::github::GitHubProvider::new(runtime, transport),
                 ))
             }
             #[cfg(not(feature = "github-api"))]
@@ -632,19 +640,27 @@ impl super::WriterCore {
     fn run_sync_diagnostics(
         &self,
         config: &crate::sync::SyncConfig,
-        _secrets: &crate::sync::SyncSecrets,
+        secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<crate::sync::SyncDiagnosticsResult> {
         match config.active_provider.as_str() {
             #[cfg(feature = "github-api")]
             "github_api" => {
                 let transport = self.init_sync_transport()?;
-                let provider_config =
-                    crate::sync::provider::github::config::GitHubProviderConfig::from_sync_config(
-                        config, _secrets,
+                let github_config = config
+                    .provider_config
+                    .as_ref()
+                    .map(|pc| match pc {
+                        crate::sync::provider::ProviderConfig::GitHub(c) => c,
+                    })
+                    .ok_or_else(|| crate::Error::Other("missing github provider config".into()))?;
+                let runtime =
+                    crate::sync::provider::github::config::GitHubRuntimeConfig::from_persisted(
+                        github_config,
+                        secrets.provider_secrets.as_ref(),
                     )
                     .map_err(crate::Error::from)?;
                 let provider =
-                    crate::sync::provider::github::GitHubProvider::new(provider_config, transport);
+                    crate::sync::provider::github::GitHubProvider::new(runtime, transport);
                 provider.diagnose().map_err(crate::Error::from)
             }
             #[cfg(not(feature = "github-api"))]

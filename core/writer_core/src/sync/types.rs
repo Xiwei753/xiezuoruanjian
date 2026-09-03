@@ -148,16 +148,6 @@ impl SyncErrorCategory {
     }
 }
 
-/// 同步后端类型 — 当前仅支持 GitHub API，Git SSH 为预留。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-#[derive(Default)]
-pub enum BackendType {
-    Git,
-    #[default]
-    GithubApi,
-}
-
 /// 同步协议方式 — HTTPS token 或 SSH deploy key。
 ///
 /// 命名为 `SyncProtocol` 以区别于 `writer_platform_api::SyncTransport` trait。
@@ -252,48 +242,35 @@ impl SyncTarget {
 /// 非线程安全：只在主线程读写，同步引擎在同步期间持有快照。
 /// `sync_interval_seconds` 最小有效值为 60（引擎侧 clamp），0 表示仅手动同步。
 ///
-/// 敏感字段（token、ssh_private_key）不在 SyncConfig 中，
-/// 由 SyncSecrets 单独管理，平台端安全存储注入。
+/// 敏感字段（token）不在 SyncConfig 中，由 [`SyncSecrets`] 单独管理，
+/// 平台端安全存储注入。
 ///
-/// ## 通用字段 vs Provider 特定字段（Issue #645）
+/// ## 通用字段 vs Provider 特定字段（Issue #645 评论第 2 点）
 ///
-/// `enabled / auto_sync / sync_interval_seconds / active_provider` 为通用字段，
-/// 所有 Provider 共用。`remote_url / branch / username / transport / backend_type`
-/// 为 GitHub 特定字段，仅供 GitHub Provider 使用。
+/// `enabled / auto_sync / sync_interval_seconds / active_provider / provider_config`
+/// 为通用字段，所有 Provider 共用。GitHub 特定字段（remote_url / branch / username /
+/// transport）只存在 `sync/provider/github/config.rs` 的 [`GitHubProviderConfig`] 中，
+/// 通过 `provider_config: Option<ProviderConfig>` 容纳。
 ///
-/// 为保持与旧 JSON 序列化格式的向后兼容，Provider 特定字段在 `SyncConfig`
-/// 中标记为 `Option` + `#[serde(default)]`；新格式使用 `github` 嵌套对象。
-/// `facade/sync_ops.rs` 在构造 Provider 时读取对应配置。
+/// 旧 JSON 在 `facade/sync_config_ops.rs::load_sync_config` 边界一次性迁移：
+/// 顶层 `remote_url`/`branch`/`username`/`transport`/`backend_type` 转换为
+/// `provider_config = ProviderConfig::GitHub(...)`，保存新格式后旧字段不再出现。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SyncConfig {
     /// 是否启用同步
     pub enabled: bool,
-    /// 活跃 Provider 类型（当前仅 "github_api"）。
+    /// 活跃 Provider 类型（当前仅 "github_api"；"git" 为预留）。
     /// 后续 WebDAV/CloudKit 等 Provider 接入后在此处选择。
     #[serde(default = "default_active_provider")]
     pub active_provider: String,
-    /// 同步后端类型 — 旧字段，保留向后兼容；新代码读 `active_provider`。
+    /// Provider 特定持久化配置 — provider-neutral 强类型枚举。
+    /// `None` 表示尚未配置具体 Provider（如刚启用同步但未填 GitHub URL）。
     #[serde(default)]
-    pub backend_type: BackendType,
-    /// GitHub 远端仓库 URL（HTTPS 或 SSH）。
-    /// 旧格式中为顶层必选字段；新格式中应放在 `github` 子对象内。
-    /// 标记 `Option` + `default` 以同时兼容新旧格式。
-    #[serde(default)]
-    pub remote_url: Option<String>,
-    /// 传输方式（HTTPS token 或 SSH deploy key）— GitHub 特定。
-    #[serde(default)]
-    pub transport: Option<SyncProtocol>,
-    /// 远端分支名，默认 "main" — GitHub 特定。
-    #[serde(default)]
-    pub branch: Option<String>,
+    pub provider_config: Option<crate::sync::provider::ProviderConfig>,
     /// 是否启用自动同步
     pub auto_sync: bool,
     /// 自动同步间隔（秒），最小有效值 60，0 表示仅手动
     pub sync_interval_seconds: u32,
-    /// GitHub username for HTTPS credential callback.
-    /// Defaults to "x-access-token" when empty.
-    #[serde(default)]
-    pub username: Option<String>,
     /// Whether the platform grants network access permission.
     /// Android sets this based on INTERNET permission; desktop platforms always true.
     #[serde(default = "default_true", alias = "android_has_internet_permission")]
@@ -305,54 +282,71 @@ pub struct SyncConfig {
         alias = "android_has_access_network_state_permission"
     )]
     pub has_network_state_permission: bool,
-    /// GitHub Provider 的嵌套配置（新格式）。
-    /// 旧格式中此字段不存在，serde 默认为 None。
-    /// `facade/sync_ops.rs` 构造 Provider 时优先读此字段。
-    #[serde(default)]
-    pub github: Option<GitHubInlineConfig>,
 }
 
 impl SyncConfig {
-    /// 解析 GitHub 特定的远端仓库 URL。
-    ///
-    /// 优先使用 `github` 嵌套配置中的值，回退到顶层旧字段。
-    pub fn resolve_remote_url(&self) -> Option<String> {
-        self.github
-            .as_ref()
-            .and_then(|g| g.remote_url.clone())
-            .or_else(|| self.remote_url.clone())
+    /// 返回 GitHub remote_url（若 `provider_config` 为 GitHub 变体）；否则空字符串。
+    #[cfg(feature = "github-api")]
+    pub fn github_remote_url(&self) -> String {
+        match &self.provider_config {
+            Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => gh.remote_url.clone(),
+            None => String::new(),
+        }
     }
 
-    /// 解析 GitHub 特定的分支名。
-    ///
-    /// 优先使用 `github` 嵌套配置中的值，回退到顶层旧字段，
-    /// 最终默认 "main"。
-    pub fn resolve_branch(&self) -> String {
-        self.github
-            .as_ref()
-            .and_then(|g| g.branch.clone())
-            .or_else(|| self.branch.clone())
-            .unwrap_or_else(|| "main".to_string())
+    /// 非 github-api feature 下无 GitHub provider，统一返回空字符串。
+    #[cfg(not(feature = "github-api"))]
+    pub fn github_remote_url(&self) -> String {
+        String::new()
     }
 
-    /// 解析 GitHub 特定的传输方式。
-    ///
-    /// 优先使用 `github` 嵌套配置中的值，回退到顶层旧字段。
-    pub fn resolve_transport(&self) -> Option<SyncProtocol> {
-        self.github
-            .as_ref()
-            .and_then(|g| g.transport.clone())
-            .or_else(|| self.transport.clone())
+    /// 返回 GitHub branch（若 `provider_config` 为 GitHub 变体）；否则空字符串。
+    #[cfg(feature = "github-api")]
+    pub fn github_branch(&self) -> String {
+        match &self.provider_config {
+            Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => gh.branch.clone(),
+            None => String::new(),
+        }
     }
 
-    /// 解析 GitHub 特定的用户名。
-    ///
-    /// 优先使用 `github` 嵌套配置中的值，回退到顶层旧字段。
-    pub fn resolve_username(&self) -> Option<String> {
-        self.github
-            .as_ref()
-            .and_then(|g| g.username.clone())
-            .or_else(|| self.username.clone())
+    /// 非 github-api feature 下无 GitHub provider，统一返回 "main"。
+    #[cfg(not(feature = "github-api"))]
+    pub fn github_branch(&self) -> String {
+        "main".to_string()
+    }
+
+    /// 设置 GitHub provider_config 字段（测试辅助）。
+    #[cfg(test)]
+    #[cfg(feature = "github-api")]
+    pub fn set_github_config(
+        &mut self,
+        remote_url: String,
+        branch: String,
+        username: String,
+        transport: crate::sync::types::SyncProtocol,
+    ) {
+        self.provider_config = Some(crate::sync::provider::ProviderConfig::GitHub(
+            crate::sync::provider::github::config::GitHubProviderConfig {
+                remote_url,
+                branch,
+                username,
+                transport,
+            },
+        ));
+        self.active_provider = "github_api".to_string();
+    }
+
+    /// 非 github-api feature 下无 GitHub provider，`set_github_config` 为空操作。
+    #[cfg(test)]
+    #[cfg(not(feature = "github-api"))]
+    pub fn set_github_config(
+        &mut self,
+        _remote_url: String,
+        _branch: String,
+        _username: String,
+        _transport: crate::sync::types::SyncProtocol,
+    ) {
+        // github-api feature 未启用时无 GitHub provider 可设置。
     }
 }
 
@@ -364,34 +358,49 @@ pub(crate) fn default_active_provider() -> String {
     "github_api".to_string()
 }
 
-/// GitHub Provider 嵌套配置 — 新格式中放在 `SyncConfig.github` 下。
+/// 同步密钥 — 敏感凭证，不持久化到 config.json，由平台端安全存储注入（Issue #645 评论第 2 点）。
 ///
-/// 旧格式（扁平序列化）中 GitHub 参数直接在 `SyncConfig` 顶层，
-/// 通过 `facade/sync_ops.rs` 的 fallback 逻辑兼容。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct GitHubInlineConfig {
-    /// GitHub 远端仓库 URL（HTTPS 或 SSH）。
-    #[serde(default)]
-    pub remote_url: Option<String>,
-    /// 传输方式（HTTPS token 或 SSH deploy key）。
-    #[serde(default)]
-    pub transport: Option<SyncProtocol>,
-    /// 远端分支名。
-    #[serde(default)]
-    pub branch: Option<String>,
-    /// GitHub username（HTTPS credential callback 用）。
-    #[serde(default)]
-    pub username: Option<String>,
-}
-
-/// 同步密钥 — 敏感凭证，不持久化到 config.json，由平台端安全存储注入。
-///
-/// `token`：GitHub personal access token（HTTPS 模式）。
-/// `ssh_private_key`：SSH deploy key（SSH 模式，当前未使用）。
+/// `provider_secrets` 为 provider-neutral 强类型枚举，当前仅 GitHub { token }。
+/// 旧 `token`/`ssh_private_key` 顶层字段已删除，由 `ProviderSecrets::GitHub { token }` 容纳。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SyncSecrets {
-    pub token: Option<String>,
-    pub ssh_private_key: Option<String>,
+    #[serde(default)]
+    pub provider_secrets: Option<crate::sync::provider::ProviderSecrets>,
+}
+
+impl SyncSecrets {
+    /// 返回 GitHub token（若 `provider_secrets` 为 GitHub 变体）；否则 None。
+    #[cfg(feature = "github-api")]
+    pub fn github_token(&self) -> Option<String> {
+        self.provider_secrets
+            .as_ref()
+            .and_then(|s| s.github_token().map(|t| t.to_string()))
+    }
+
+    /// 非 github-api feature 下无 GitHub provider，统一返回 None。
+    #[cfg(not(feature = "github-api"))]
+    pub fn github_token(&self) -> Option<String> {
+        None
+    }
+
+    /// 从 GitHub token 构造 `SyncSecrets`（github-api feature 下）。
+    #[cfg(feature = "github-api")]
+    pub fn from_github_token(token: String) -> Self {
+        SyncSecrets {
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub { token }),
+        }
+    }
+
+    /// 非 github-api feature 下无 GitHub provider，token 被丢弃，返回空 secrets。
+    #[cfg(not(feature = "github-api"))]
+    pub fn from_github_token(_token: String) -> Self {
+        SyncSecrets::default()
+    }
+
+    /// 是否为空（无任何 Provider 密钥）。
+    pub fn is_empty(&self) -> bool {
+        self.provider_secrets.is_none()
+    }
 }
 
 /// 通用同步策略 — LWW engine 所需的 provider-neutral 配置（Issue #645）。

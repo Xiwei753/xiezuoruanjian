@@ -39,13 +39,30 @@ pub(crate) fn read_nonempty_secret(
 }
 
 /// 从 secrets 文件读非空 token（文件不存在或解析失败返回 None）。
+///
+/// Issue #645 评论第 2 点：先尝试新格式（`provider_secrets`），失败则尝试旧格式
+/// （顶层 `token`/`ssh_private_key`）。
 pub(crate) fn read_token_from_secrets_file(path: &Path) -> Option<String> {
     if !path.exists() {
         return None;
     }
     let content = std::fs::read_to_string(path).ok()?;
-    let secrets: SyncSecrets = serde_json::from_str(&content).ok()?;
-    secrets.token.filter(|t| !t.is_empty())
+    // 新格式优先
+    if let Ok(secrets) = serde_json::from_str::<SyncSecrets>(&content) {
+        if let Some(token) = secrets.github_token() {
+            if !token.is_empty() {
+                return Some(token);
+            }
+        }
+    }
+    // 旧格式 fallback
+    #[derive(serde::Deserialize)]
+    struct LegacySecrets {
+        #[serde(default)]
+        token: Option<String>,
+    }
+    let legacy: LegacySecrets = serde_json::from_str(&content).ok()?;
+    legacy.token.filter(|t| !t.is_empty())
 }
 
 /// 删除安全存储 key，失败时记日志（不阻塞迁移成功）。
@@ -75,9 +92,11 @@ pub(crate) fn remove_file_or_warn(file: &Path) {
 }
 
 /// 两个旧 profile 是否完全一致（仓库 + branch + token）。
+///
+/// Issue #645 评论第 2 点：`remote_url`/`branch` 从 `provider_config` 读取。
 pub(crate) fn profiles_equivalent(a: &LegacyProfile, b: &LegacyProfile) -> bool {
-    a.config.remote_url == b.config.remote_url
-        && a.config.branch == b.config.branch
+    github_remote_url_from_config(&a.config) == github_remote_url_from_config(&b.config)
+        && github_branch_from_config(&a.config) == github_branch_from_config(&b.config)
         && a.token == b.token
 }
 
@@ -88,14 +107,32 @@ pub(crate) fn describe_conflict(profiles: &[LegacyProfile]) -> String {
         summary.push(format!(
             "source={}, remote_url={}, branch={}, credentials differ",
             p.source,
-            p.config.remote_url.as_deref().unwrap_or(""),
-            p.config.branch.as_deref().unwrap_or("main"),
+            github_remote_url_from_config(&p.config),
+            github_branch_from_config(&p.config),
         ));
     }
     format!(
         "multiple legacy sync profiles with conflicting repo/branch/credentials: [{}]",
         summary.join("; ")
     )
+}
+
+/// 从 `SyncConfig` 读取 GitHub `remote_url`（若为 GitHub provider）；否则空字符串。
+fn github_remote_url_from_config(config: &SyncConfig) -> String {
+    match &config.provider_config {
+        #[cfg(feature = "github-api")]
+        Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => gh.remote_url.clone(),
+        _ => String::new(),
+    }
+}
+
+/// 从 `SyncConfig` 读取 GitHub `branch`（若为 GitHub provider）；否则 "main"。
+fn github_branch_from_config(config: &SyncConfig) -> String {
+    match &config.provider_config {
+        #[cfg(feature = "github-api")]
+        Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => gh.branch.clone(),
+        _ => "main".to_string(),
+    }
 }
 
 /// 从指定路径加载 SyncConfig（文件不存在或解析失败返回 None）。

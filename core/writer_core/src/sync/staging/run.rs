@@ -26,9 +26,10 @@ pub struct StagingRun {
     /// 仅 Git backend 有值；GithubApi backend 保持 None。
     /// `None` 只表示本 target 根本不是 Git backend。
     git_seed_state: Option<crate::sync::git::seed::GitSeedState>,
-    /// #644 评论 5476546134 第5节：resolved backend type，
+    /// #644 评论 5476546134 第5节：resolved active_provider 字符串，
     /// 不再靠 `git_seed_state.is_some()` 间接猜 backend。
-    backend_type: crate::sync::types::BackendType,
+    /// `"git"` → Git backend；`"github_api"` → GitHub API backend。
+    active_provider: String,
     /// #644 评论 5491531984 问题1：target 的 Git 仓库布局。
     /// Seed/Commit 使用 layout 指定的 git_dir 而非从 target_live_root 猜路径。
     git_layout: Option<crate::storage::git_repo_layout::GitRepoLayout>,
@@ -38,10 +39,11 @@ impl StagingRun {
     /// 创建隔离 run 目录。`parent` 通常在 app-data 下（不进 live project root），
     /// 避免被 scanner 当成作品文件。`target_live_root` 记录 Commit 阶段要写回的 live 根。
     /// `git_layout` 记录 target 的 Git 仓库布局（可选）。
+    /// `active_provider` 为 resolved provider 字符串（`"git"`/`"github_api"`）。
     pub fn create(
         parent: &Path,
         target_live_root: PathBuf,
-        backend_type: crate::sync::types::BackendType,
+        active_provider: String,
         git_layout: Option<crate::storage::git_repo_layout::GitRepoLayout>,
     ) -> Result<Self> {
         let run_id = Uuid::new_v4().to_string();
@@ -53,7 +55,7 @@ impl StagingRun {
             run_id,
             target_live_root,
             git_seed_state: None,
-            backend_type,
+            active_provider,
             git_layout,
         })
     }
@@ -211,7 +213,7 @@ impl StagingRun {
         // - Git backend：manifest 不存在 → mtime fallback；解析失败 → warn + mtime fallback。
         // - GithubApi backend：manifest 不存在 → Err；解析失败 → Err。
         //   manifest 是 GithubApi 的事实来源，坏了就应该让 target 失败。
-        let is_git_backend = matches!(self.backend_type, crate::sync::types::BackendType::Git);
+        let is_git_backend = self.active_provider == "git";
         let staging_manifest = match read_staging_manifest(&staging_root) {
             Ok(Some(map)) => map,
             Ok(None) => {
@@ -445,7 +447,7 @@ impl StagingRun {
 /// 成功后 `plan.targets[*].staging_root` 被填充为对应 staging 目录。
 pub fn prepare_staging_runs(
     plan: &mut crate::sync::full_sync::FullSyncPlan,
-    backend_type: &crate::sync::types::BackendType,
+    active_provider: &str,
 ) -> crate::error::Result<Vec<StagingRun>> {
     let mut staging_runs: Vec<StagingRun> = Vec::new();
 
@@ -453,19 +455,19 @@ pub fn prepare_staging_runs(
         // #644 评论 5493295108 问题1/2：在 seed 前先解析/迁移 Git layout。
         // 这一步在已释放 Core 写锁之后执行，不会堵住冷启动卷章读取。
         if let Some(layout) = &planned.git_layout {
-            prepare_target_git_layout(planned, backend_type, layout)?;
+            prepare_target_git_layout(planned, active_provider, layout)?;
         }
 
         let mut run = StagingRun::create(
             &plan.app_data_root,
             planned.target_live_root.clone(),
-            backend_type.clone(),
+            active_provider.to_string(),
             planned.git_layout.clone(),
         )?;
         // #644 评论 5473401065 第2节：seed 失败必须传播，不能继续拿半成品 staging。
         // #644 评论 5473551127 第2节：按 backend 类型选择对应 seed 方式。
-        match backend_type {
-            crate::sync::types::BackendType::Git => {
+        match active_provider {
+            "git" => {
                 // #644 评论 5473789298 第1节：Git 专属 staging 移到 git_staging.rs。
                 // #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
                 // seed 返回 live 的 GitSeedState，供 finalize 决定路径。
@@ -477,7 +479,10 @@ pub fn prepare_staging_runs(
                 )?;
                 run.set_git_seed_state(seed_state);
             }
-            crate::sync::types::BackendType::GithubApi => {
+            "github_api" => {
+                run.seed_from_live(&planned.target_live_root)?;
+            }
+            _ => {
                 run.seed_from_live(&planned.target_live_root)?;
             }
         }
@@ -500,11 +505,11 @@ pub fn prepare_staging_runs(
 #[allow(clippy::excessive_nesting)]
 fn prepare_target_git_layout(
     planned: &crate::sync::full_sync::PlannedTarget,
-    backend_type: &crate::sync::types::BackendType,
+    active_provider: &str,
     layout: &crate::storage::git_repo_layout::GitRepoLayout,
 ) -> crate::error::Result<()> {
     // GithubApi backend 不需要 Git layout 迁移。
-    if !matches!(backend_type, crate::sync::types::BackendType::Git) {
+    if active_provider != "git" {
         return Ok(());
     }
 

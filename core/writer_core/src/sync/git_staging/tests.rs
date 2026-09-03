@@ -14,7 +14,7 @@ fn git_staging_non_repo_keeps_staging_non_repo() {
     let run = StagingRun::create(
         tmp.path(),
         live.clone(),
-        crate::sync::types::BackendType::Git,
+        "git".to_string(),
         None,
     )
     .unwrap();
@@ -62,7 +62,7 @@ fn git_staging_repo_clones_git_metadata_only() {
     let run = StagingRun::create(
         tmp.path(),
         live.clone(),
-        crate::sync::types::BackendType::Git,
+        "git".to_string(),
         None,
     )
     .unwrap();
@@ -100,7 +100,7 @@ fn git_staging_unborn_repo_returns_unborn() {
     let run = StagingRun::create(
         tmp.path(),
         live.clone(),
-        crate::sync::types::BackendType::Git,
+        "git".to_string(),
         None,
     )
     .unwrap();

@@ -22,6 +22,43 @@ pub mod git_backend;
 #[cfg(feature = "github-api")]
 pub mod github;
 
+/// Provider 配置选择 — provider-neutral 的强类型枚举（Issue #645 评论第 2 点）。
+///
+/// 每个 Provider 的持久化配置定义在各自模块，通过此枚举统一容纳。
+/// 序列化使用 internally tagged enum（`#[serde(tag = "type")]`），
+/// 线格式示例：`{"type":"github","remote_url":"...","branch":"main",...}`。
+///
+/// 新增 Provider 时在此枚举追加变体，无需改动 `SyncConfig`/`SyncConfigDto` 通用字段。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProviderConfig {
+    #[cfg(feature = "github-api")]
+    #[serde(rename = "github")]
+    GitHub(github::config::GitHubProviderConfig),
+}
+
+/// Provider 密钥选择 — provider-neutral 的强类型枚举（Issue #645 评论第 2 点）。
+///
+/// 敏感凭证不进 `ProviderConfig`（持久化到 config.json 不安全），
+/// 由 `SyncSecrets.provider_secrets` 携带，构造 Provider 时注入。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProviderSecrets {
+    #[cfg(feature = "github-api")]
+    #[serde(rename = "github")]
+    GitHub { token: String },
+}
+
+impl ProviderSecrets {
+    /// 返回 GitHub token（若为 GitHub 变体）；其他 Provider 返回 None。
+    #[cfg(feature = "github-api")]
+    pub fn github_token(&self) -> Option<&str> {
+        match self {
+            ProviderSecrets::GitHub { token } => Some(token.as_str()),
+        }
+    }
+}
+
 /// Provider-neutral 远端同步契约 — 所有同步后端必须满足此接口。
 ///
 /// trait 只描述远端对象的 CRUD 原语，不携带 SyncConfig/SyncSecrets/SyncTransport，

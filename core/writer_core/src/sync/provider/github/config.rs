@@ -1,22 +1,84 @@
-//! GitHub Provider 配置 — 从通用 `SyncConfig` + `SyncSecrets` 解析 GitHub 特定参数。
+//! GitHub Provider 配置 — 持久化配置 + 运行时配置（Issue #645 评论第 2 点）。
 //!
-//! [`GitHubProviderConfig`] 持有 GitHub REST API 调用所需的全部信息：
-//! API base URL、token、分支、原始 remote_url（用于诊断脱敏）、username。
+//! 持久化配置 [`GitHubProviderConfig`] 只含可安全写入 config.json 的字段
+//! （remote_url / branch / username / transport），不含 token。
+//! 运行时配置 [`GitHubRuntimeConfig`] 在构造 Provider 时由持久化配置 + secrets 推导，
+//! 含 token 和从 remote_url 推导的 api_base_url。
 //!
-//! `from_sync_config` 把 token/URL/branch 解析集中在此处，
-//! LWW engine 和 diagnose 都不再直接读 `SyncConfig`/`SyncSecrets`。
+//! `GitHubProvider::new` 接收 `GitHubRuntimeConfig` + `Arc<dyn SyncTransport>`。
 
 use crate::sync::provider::error::ProviderError;
-use crate::sync::types::SyncConfig;
-use crate::sync::types::SyncSecrets;
+use crate::sync::provider::ProviderSecrets;
+use crate::sync::types::SyncProtocol;
 use crate::sync::url::sanitize_remote_url;
 
-/// GitHub Provider 配置 — GitHub REST API 调用所需的全部参数。
+/// GitHub Provider 持久化配置 — 存储在 `SyncConfig.provider_config` 中。
 ///
-/// 由 `from_sync_config` 从通用 `SyncConfig` + `SyncSecrets` 解析而来，
-/// `GitHubProvider::new` 消费此结构体构造 Provider 实例。
-#[derive(Debug, Clone)]
+/// 不含 token（token 由 `SyncSecrets.provider_secrets` 注入）。
+/// 可安全序列化到 `<app_data_root>/app-meta/sync/config.local.json`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GitHubProviderConfig {
+    /// GitHub 远端仓库 URL（HTTPS 或 SSH），未脱敏。
+    pub remote_url: String,
+    /// 远端分支名。
+    pub branch: String,
+    /// GitHub username（HTTPS credential callback 用，默认 `x-access-token`）。
+    pub username: String,
+    /// 传输方式（HTTPS token 或 SSH deploy key）。
+    pub transport: SyncProtocol,
+}
+
+impl GitHubProviderConfig {
+    /// 默认值 — 空 URL、`main` 分支、`x-access-token` 用户、HTTPS token。
+    pub fn defaults() -> Self {
+        Self {
+            remote_url: String::new(),
+            branch: "main".to_string(),
+            username: "x-access-token".to_string(),
+            transport: SyncProtocol::HttpsToken,
+        }
+    }
+
+    /// 从旧 `SyncConfig` 顶层 GitHub 字段迁移（用于 load 时旧 JSON 一次性转换）。
+    ///
+    /// 旧格式中 `remote_url`/`branch`/`username`/`transport` 在 `SyncConfig` 顶层，
+    /// 新格式统一收进 `ProviderConfig::GitHub(...)`。本方法把旧顶层字段聚合成持久化配置。
+    /// 空字段回退到默认值：branch → "main"，username → "x-access-token"，
+    /// transport → HttpsToken。
+    pub fn from_legacy_fields(
+        remote_url: Option<String>,
+        branch: Option<String>,
+        username: Option<String>,
+        transport: Option<SyncProtocol>,
+    ) -> Self {
+        Self {
+            remote_url: remote_url.unwrap_or_default(),
+            branch: branch
+                .filter(|b| !b.is_empty())
+                .unwrap_or_else(|| "main".to_string()),
+            username: username
+                .filter(|u| !u.is_empty())
+                .unwrap_or_else(|| "x-access-token".to_string()),
+            transport: transport.unwrap_or(SyncProtocol::HttpsToken),
+        }
+    }
+}
+
+impl Default for GitHubProviderConfig {
+    fn default() -> Self {
+        Self::defaults()
+    }
+}
+
+/// GitHub Provider 运行时配置 — 构造 `GitHubProvider` 时使用。
+///
+/// 由 `GitHubRuntimeConfig::from_persisted` 从持久化配置 + secrets 推导：
+/// - `api_base_url` 从 `remote_url` 推导（剥离 `.git`、转 API 路径）。
+/// - `token` 从 `ProviderSecrets::GitHub { token }` 注入。
+///
+/// 不实现 `Serialize`/`Deserialize` — 含 token，不持久化。
+#[derive(Debug, Clone)]
+pub struct GitHubRuntimeConfig {
     /// GitHub REST API base URL，如 `https://api.github.com/repos/owner/repo`。
     pub api_base_url: String,
     /// GitHub personal access token。
@@ -25,42 +87,36 @@ pub struct GitHubProviderConfig {
     pub branch: String,
     /// 原始 remote_url（未脱敏），用于诊断展示时走 `sanitize_remote_url` 脱敏。
     pub remote_url: String,
-    /// GitHub username（HTTPS credential callback 用，默认 `x-access-token`）。
+    /// GitHub username（HTTPS credential callback 用）。
     pub username: String,
 }
 
-impl GitHubProviderConfig {
-    /// 从通用同步配置和密钥解析 GitHub Provider 配置。
+impl GitHubRuntimeConfig {
+    /// 从持久化配置 + secrets 构造运行时配置。
     ///
-    /// - token 为空 → `ProviderError::AuthFailed`（调用方在创建 Provider 前就能拿到明确错误）。
-    /// - remote_url 经 `sanitize_remote_url` 脱敏后推导 api_base_url。
-    /// - branch 为空时回退到 `"main"`。
-    /// - username 为空时回退到 `"x-access-token"`。
-    ///
-    /// 从 `SyncConfig::resolve_*()` 方法读取 GitHub 特定参数，
-    /// 优先使用 `github` 嵌套配置，回退到顶层旧字段（向后兼容）。
-    pub fn from_sync_config(
-        config: &SyncConfig,
-        secrets: &SyncSecrets,
+    /// - `provider_secrets` 为 None 或非 GitHub 变体 → `ProviderError::AuthFailed`（token 缺失）。
+    /// - token 为空 → `ProviderError::AuthFailed`。
+    /// - `api_base_url` 从 `remote_url` 经 `sanitize_remote_url` 脱敏后推导。
+    pub fn from_persisted(
+        config: &GitHubProviderConfig,
+        secrets: Option<&ProviderSecrets>,
     ) -> Result<Self, ProviderError> {
-        let token = secrets.token.clone().unwrap_or_default();
+        let token = secrets
+            .and_then(|s| s.github_token())
+            .unwrap_or_default()
+            .to_string();
         if token.is_empty() {
             return Err(ProviderError::AuthFailed {
                 reason: "token is missing".to_string(),
             });
         }
-        let branch = config.resolve_branch();
-        let username = config
-            .resolve_username()
-            .unwrap_or_else(|| "x-access-token".to_string());
-        let remote_url = config.resolve_remote_url().unwrap_or_default();
-        let api_base_url = api_base_url_from_remote(&remote_url);
+        let api_base_url = api_base_url_from_remote(&config.remote_url);
         Ok(Self {
             api_base_url,
             token,
-            branch,
-            remote_url,
-            username,
+            branch: config.branch.clone(),
+            remote_url: config.remote_url.clone(),
+            username: config.username.clone(),
         })
     }
 }
@@ -106,5 +162,56 @@ mod tests {
             api_base_url_from_remote("https://ghe.example.com/api/v3/repos/owner/repo"),
             "https://ghe.example.com/api/v3/repos/owner/repo"
         );
+    }
+
+    #[test]
+    fn from_legacy_fields_applies_defaults_for_empty() {
+        let cfg = GitHubProviderConfig::from_legacy_fields(None, None, None, None);
+        assert_eq!(cfg.branch, "main");
+        assert_eq!(cfg.username, "x-access-token");
+        assert_eq!(cfg.transport, SyncProtocol::HttpsToken);
+        assert!(cfg.remote_url.is_empty());
+    }
+
+    #[test]
+    fn from_legacy_fields_preserves_non_empty() {
+        let cfg = GitHubProviderConfig::from_legacy_fields(
+            Some("https://github.com/o/r.git".to_string()),
+            Some("dev".to_string()),
+            Some("alice".to_string()),
+            Some(SyncProtocol::SshDeployKey),
+        );
+        assert_eq!(cfg.remote_url, "https://github.com/o/r.git");
+        assert_eq!(cfg.branch, "dev");
+        assert_eq!(cfg.username, "alice");
+        assert_eq!(cfg.transport, SyncProtocol::SshDeployKey);
+    }
+
+    #[test]
+    fn from_persisted_missing_token_yields_auth_failed() {
+        let cfg = GitHubProviderConfig::defaults();
+        let err = GitHubRuntimeConfig::from_persisted(&cfg, None).expect_err("missing token");
+        assert!(matches!(err, ProviderError::AuthFailed { .. }));
+    }
+
+    #[test]
+    fn from_persisted_with_token_succeeds() {
+        let cfg = GitHubProviderConfig {
+            remote_url: "https://github.com/owner/repo.git".to_string(),
+            branch: "main".to_string(),
+            username: "x-access-token".to_string(),
+            transport: SyncProtocol::HttpsToken,
+        };
+        let secrets = ProviderSecrets::GitHub {
+            token: "tok".to_string(),
+        };
+        let runtime = GitHubRuntimeConfig::from_persisted(&cfg, Some(&secrets))
+            .expect("valid config + token");
+        assert_eq!(
+            runtime.api_base_url,
+            "https://api.github.com/repos/owner/repo"
+        );
+        assert_eq!(runtime.token, "tok");
+        assert_eq!(runtime.branch, "main");
     }
 }

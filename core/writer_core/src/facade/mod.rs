@@ -281,6 +281,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_facade_sync_config_flow() {
         let temp_dir = tempdir().unwrap();
         let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
@@ -288,38 +289,48 @@ mod tests {
 
         let config = core.load_sync_config().unwrap();
         assert!(!config.enabled);
-        assert_eq!(config.backend_type, crate::sync::BackendType::GithubApi);
+        assert_eq!(config.active_provider, "github_api");
 
         let mut new_config = config.clone();
         new_config.enabled = true;
-        new_config.remote_url = Some("https://example.com/repo.git".to_string());
+        new_config.set_github_config(
+            "https://example.com/repo.git".to_string(),
+            "main".to_string(),
+            String::new(),
+            crate::sync::types::SyncProtocol::HttpsToken,
+        );
         core.save_sync_config(&new_config).unwrap();
 
         let loaded = core.load_sync_config().unwrap();
         assert!(loaded.enabled);
-        assert_eq!(
-            loaded.remote_url.as_deref(),
-            Some("https://example.com/repo.git")
-        );
+        assert_eq!(loaded.github_remote_url(), "https://example.com/repo.git");
 
         let mut secrets = core.load_sync_secrets().unwrap();
-        secrets.token = Some("my_super_secret_token".to_string());
+        secrets.provider_secrets = Some(crate::sync::provider::ProviderSecrets::GitHub {
+            token: "my_super_secret_token".to_string(),
+        });
         core.save_sync_secrets(&secrets).unwrap();
 
         let loaded_secrets = core.load_sync_secrets().unwrap();
         assert_eq!(
-            loaded_secrets.token.as_ref().unwrap(),
+            loaded_secrets.github_token().as_deref().unwrap(),
             "my_super_secret_token"
         );
 
         assert!(core.validate_sync_config(&loaded).unwrap());
 
         let mut bad_config = loaded.clone();
-        bad_config.remote_url = Some("".to_string());
+        bad_config.set_github_config(
+            String::new(),
+            "main".to_string(),
+            String::new(),
+            crate::sync::types::SyncProtocol::HttpsToken,
+        );
         assert!(!core.validate_sync_config(&bad_config).unwrap());
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_facade_generation_secrets_save_load_delete() {
         // #595 五：generation 凭据生命周期 — save → load → delete。
         let temp_dir = tempdir().unwrap();
@@ -327,8 +338,9 @@ mod tests {
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let secrets = crate::sync::SyncSecrets {
-            token: Some("generation_token_7".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "generation_token_7".to_string(),
+            }),
         };
         core.save_sync_secrets_for_generation(7, &secrets).unwrap();
 
@@ -336,7 +348,10 @@ mod tests {
             .load_sync_secrets_for_generation(7)
             .unwrap()
             .expect("generation 7 secrets must exist after save");
-        assert_eq!(loaded.token.as_ref().unwrap(), "generation_token_7");
+        assert_eq!(
+            loaded.github_token().as_deref().unwrap(),
+            "generation_token_7"
+        );
 
         // 未保存的 generation 读取为 None。
         assert!(core.load_sync_secrets_for_generation(99).unwrap().is_none());
@@ -353,6 +368,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_load_sync_config_migrates_git_backend_for_github_https_remote() {
         let temp_dir = tempdir().unwrap();
         let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
@@ -376,10 +392,10 @@ mod tests {
         .unwrap();
 
         let loaded = core.load_sync_config().unwrap();
-        assert_eq!(loaded.backend_type, crate::sync::BackendType::GithubApi);
+        assert_eq!(loaded.active_provider, "github_api");
 
         let persisted = core.load_sync_config().unwrap();
-        assert_eq!(persisted.backend_type, crate::sync::BackendType::GithubApi);
+        assert_eq!(persisted.active_provider, "github_api");
     }
 
     #[test]
@@ -456,6 +472,7 @@ mod tests {
 
     /// Issue #630：全局同步配置唯一，所有作品共享同一份 config。
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_sync_config_isolated_per_project() {
         let temp_dir = tempdir().unwrap();
         let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
@@ -471,20 +488,23 @@ mod tests {
         // 修改全局配置
         let mut config = config0.clone();
         config.enabled = true;
-        config.remote_url = Some("https://example.com/a.git".to_string());
+        config.set_github_config(
+            "https://example.com/a.git".to_string(),
+            "main".to_string(),
+            String::new(),
+            crate::sync::types::SyncProtocol::HttpsToken,
+        );
         core.save_sync_config(&config).unwrap();
 
         // 再次加载仍是同一份
         let loaded = core.load_sync_config().unwrap();
         assert!(loaded.enabled);
-        assert_eq!(
-            loaded.remote_url.as_deref(),
-            Some("https://example.com/a.git")
-        );
+        assert_eq!(loaded.github_remote_url(), "https://example.com/a.git");
     }
 
     /// Issue #630：全局同步凭据唯一，所有作品共享同一份 secrets。
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_sync_secrets_isolated_per_project() {
         let temp_dir = tempdir().unwrap();
         let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
@@ -495,25 +515,27 @@ mod tests {
 
         // 保存全局凭据
         let secrets = crate::sync::SyncSecrets {
-            token: Some("token_global_123".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "token_global_123".to_string(),
+            }),
         };
         core.save_sync_secrets(&secrets).unwrap();
 
         let loaded = core.load_sync_secrets().unwrap();
-        assert_eq!(loaded.token.as_deref(), Some("token_global_123"));
+        assert_eq!(loaded.github_token().as_deref(), Some("token_global_123"));
 
         // generation 凭据也全局唯一
         let gen_secrets = crate::sync::SyncSecrets {
-            token: Some("gen_token_global".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "gen_token_global".to_string(),
+            }),
         };
         core.save_sync_secrets_for_generation(1, &gen_secrets)
             .unwrap();
 
         let loaded_gen = core.load_sync_secrets_for_generation(1).unwrap();
         assert_eq!(
-            loaded_gen.unwrap().token.as_deref(),
+            loaded_gen.unwrap().github_token().as_deref(),
             Some("gen_token_global")
         );
     }
@@ -591,6 +613,7 @@ mod tests {
 
     /// Issue #630：全局同步配置唯一，不再有"应用级 vs 作品级"两套配置。
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_app_sync_config_independent_from_project() {
         let temp_dir = tempdir().unwrap();
         let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
@@ -601,14 +624,16 @@ mod tests {
         // 全局配置即唯一配置
         let mut config = core.load_sync_config().unwrap();
         config.enabled = true;
-        config.remote_url = Some("https://example.com/global.git".to_string());
+        config.set_github_config(
+            "https://example.com/global.git".to_string(),
+            "main".to_string(),
+            String::new(),
+            crate::sync::types::SyncProtocol::HttpsToken,
+        );
         core.save_sync_config(&config).unwrap();
 
         let loaded = core.load_sync_config().unwrap();
-        assert_eq!(
-            loaded.remote_url.as_deref(),
-            Some("https://example.com/global.git")
-        );
+        assert_eq!(loaded.github_remote_url(), "https://example.com/global.git");
         assert!(loaded.enabled);
     }
 }

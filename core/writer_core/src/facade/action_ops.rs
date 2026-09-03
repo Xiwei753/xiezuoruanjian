@@ -172,12 +172,12 @@ impl super::WriterCore {
                 let secrets = self.load_sync_secrets()?;
                 let mut diagnostics_config = config.clone();
                 diagnostics_config.enabled = true;
-                let token = secrets.token.clone().unwrap_or_default();
-                let mut secrets_for_diag = secrets.clone();
-                secrets_for_diag.token = Some(token);
+                // Issue #645 评论第 2 点：secrets.token 改为 provider_secrets。
+                // diagnostics 已接受 secrets 引用，无需手动补 token — 此处保留原语义：
+                // 若 secrets 为空（无 provider_secrets），用空 token 触发 token_missing 诊断。
                 let result = crate::sync::SyncService::perform_sync_diagnostics(
                     &diagnostics_config,
-                    &secrets_for_diag,
+                    &secrets,
                 );
                 match result {
                     Ok(diag) => Ok(ActionResult {

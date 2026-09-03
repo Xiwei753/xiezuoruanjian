@@ -8,7 +8,6 @@ mod tests {
     #[cfg(feature = "git-https")]
     use crate::sync::provider::git_backend::GitBackend;
     use crate::sync::service::SyncService;
-    use crate::sync::types::BackendType;
     #[cfg(feature = "git-https")]
     use crate::sync::types::FirstSyncMode;
     #[cfg(feature = "github-api")]
@@ -123,11 +122,16 @@ mod tests {
         let transport = TestHttpTransport::new()
             .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.message })?;
         let target = crate::sync::types::SyncTarget::project("test");
-        let provider_config =
-            crate::sync::provider::github::config::GitHubProviderConfig::from_sync_config(
-                config, secrets,
-            )
-            .map_err(crate::Error::from)?;
+        let provider_config = match &config.provider_config {
+            Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => {
+                crate::sync::provider::github::config::GitHubRuntimeConfig::from_persisted(
+                    gh,
+                    secrets.provider_secrets.as_ref(),
+                )
+                .map_err(crate::Error::from)?
+            }
+            None => return Err(crate::Error::Other("no provider_config".to_string())),
+        };
         let provider = crate::sync::provider::github::GitHubProvider::new(
             provider_config,
             std::sync::Arc::new(transport),
@@ -140,22 +144,22 @@ mod tests {
     fn test_github_api_diagnostics_reports_backend_type_without_token() {
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some("https://github.com/user/repo.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://github.com/user/repo.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: None,
-            ssh_private_key: None,
+            provider_secrets: None,
         };
 
         let result = SyncService::perform_sync_diagnostics(&config, &secrets).unwrap();
@@ -337,22 +341,25 @@ mod tests {
 
         let dir = tempdir().unwrap();
         let config = SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: true,
-            remote_url: Some("https://example.com/repo.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://example.com/repo.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 300,
-            backend_type: BackendType::Git,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let result = SyncService::perform_sync(
@@ -396,22 +403,25 @@ mod tests {
         std::fs::write(dir.path().join("some_file.txt"), "hello").unwrap();
 
         let config = SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: true,
-            remote_url: Some("https://github.com/test/test.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://github.com/test/test.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-            backend_type: BackendType::Git,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy".to_string(),
+            }),
         };
 
         struct MockBackend;
@@ -521,18 +531,20 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_sync_config_state_no_token() {
         let config = SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: true,
-            remote_url: Some("url".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "url".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-            backend_type: BackendType::Git,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let state = SyncState {
             remote_url: Some("url".to_string()),
@@ -760,20 +772,23 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_sync_config_no_token() {
         let config = SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: true,
-            remote_url: Some("https://example.com/repo.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://example.com/repo.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 300,
-            backend_type: BackendType::Git,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let content = serde_json::to_string(&config).unwrap();
         // token might be there if some other struct is serialized, but we want to ensure
@@ -886,21 +901,24 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_sync_dry_run_disabled_config() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: false,
-            remote_url: Some("https://example.com/repo.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://example.com/repo.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 300,
-            backend_type: BackendType::Git,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
 
         let plan =
@@ -910,21 +928,24 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_sync_dry_run_enabled_config_scans() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: true,
-            remote_url: Some("https://example.com/repo.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://example.com/repo.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 300,
-            backend_type: BackendType::Git,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
 
         // Create some whitelisted and blacklisted files（per-project：同步根是作品目录）
@@ -950,23 +971,26 @@ mod tests {
     fn test_perform_sync_empty_remote_url() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: true,
-            remote_url: Some("".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 300,
-            backend_type: BackendType::Git,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
 
         let secrets = SyncSecrets {
-            token: Some("secret_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "secret_token".to_string(),
+            }),
         };
 
         // For this test we can use Git2Backend as it won't be called due to early return
@@ -990,22 +1014,25 @@ mod tests {
     fn test_perform_sync_non_empty_remote() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: true,
-            remote_url: Some("https://example.com/repo.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://example.com/repo.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 300,
-            backend_type: BackendType::Git,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy".to_string(),
+            }),
         };
 
         struct MockInitNonEmptyBackend;
@@ -1086,22 +1113,25 @@ mod tests {
         std::fs::write(state_dir.join("state.local.json"), "{}").unwrap();
 
         let config = SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: true,
-            remote_url: Some("https://example.com/repo.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://example.com/repo.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 300,
-            backend_type: BackendType::Git,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy".to_string(),
+            }),
         };
 
         struct MockBackendOk;
@@ -1179,22 +1209,25 @@ mod tests {
     fn test_first_sync_mode_clone_into_empty_project() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: true,
-            remote_url: Some("https://example.com/repo.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://example.com/repo.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 300,
-            backend_type: BackendType::Git,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy".to_string(),
+            }),
         };
 
         struct MockBackend;
@@ -1269,22 +1302,25 @@ mod tests {
     fn test_first_sync_mode_init_existing_project() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: true,
-            remote_url: Some("https://example.com/repo.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://example.com/repo.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 300,
-            backend_type: BackendType::Git,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy".to_string(),
+            }),
         };
 
         struct MockBackend;
@@ -1359,22 +1395,25 @@ mod tests {
     fn test_first_sync_mode_already_git_repo() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: true,
-            remote_url: Some("https://example.com/repo.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://example.com/repo.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 300,
-            backend_type: BackendType::Git,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy".to_string(),
+            }),
         };
 
         struct MockBackend;
@@ -1503,22 +1542,25 @@ mod tests {
         .unwrap();
 
         let config = SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: true,
-            remote_url: Some("https://github.com/test/empty-repo.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://github.com/test/empty-repo.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 300,
-            backend_type: BackendType::Git,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy".to_string(),
+            }),
         };
 
         struct MockEmptyRemoteBackend;
@@ -1962,23 +2004,25 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
 
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -2036,22 +2080,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -2110,22 +2156,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -2205,23 +2253,25 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
 
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -2279,22 +2329,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -2386,22 +2438,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -2480,22 +2534,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -2579,22 +2635,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -2653,22 +2711,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -2732,22 +2792,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -2821,21 +2883,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res1 = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -2880,17 +2945,19 @@ mod tests {
 
         let config2 = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url2),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url2,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
 
         let res2 = lww_sync(dir.path(), &config2, &secrets, false).unwrap();
@@ -3145,21 +3212,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res1 = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -3185,17 +3255,19 @@ mod tests {
 
         let config2 = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url2),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url2,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
 
         let res2 = lww_sync(dir.path(), &config2, &secrets, false).unwrap();
@@ -3245,17 +3317,19 @@ mod tests {
 
         let config3 = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url3),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url3,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
 
         let res3 = lww_sync(dir.path(), &config3, &secrets, false).unwrap();
@@ -3343,21 +3417,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res1 = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -3390,17 +3467,19 @@ mod tests {
 
         let config3 = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url3),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url3,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
 
         let res3 = lww_sync(dir.path(), &config3, &secrets, false).unwrap();
@@ -3450,17 +3529,19 @@ mod tests {
 
         let config4 = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url4),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url4,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
 
         let res4 = lww_sync(dir.path(), &config4, &secrets, false).unwrap();
@@ -3540,21 +3621,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -3654,21 +3738,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some(mock_url),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: mock_url,
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("dummy_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy_token".to_string(),
+            }),
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
@@ -3731,22 +3818,18 @@ mod tests {
     fn test_git_backend_diagnostics_not_assumed_ok() {
         // Git 后端诊断不再假成功，应返回明确的"不支持"状态
         let config = SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: true,
-            backend_type: BackendType::Git,
-            remote_url: Some("https://github.com/user/repo.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "git".to_string(),
+            provider_config: None,
             auto_sync: false,
             sync_interval_seconds: 0,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("test_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "test_token".to_string(),
+            }),
         };
 
         let result = SyncService::perform_sync_diagnostics(&config, &secrets).unwrap();
@@ -3777,21 +3860,24 @@ mod tests {
         // 先执行一次同步（force_sync=true 绕过 debounce）
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some("https://github.com/test/debounce-test.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://github.com/test/debounce-test.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
-            sync_interval_seconds: 300, // 5 分钟
-            username: Some(String::new()),
+            sync_interval_seconds: 300,
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("test_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "test_token".to_string(),
+            }),
         };
 
         // 第一次同步（force_sync=true）应该尝试执行（虽然会因网络失败，但不会被 debounce 跳过）
@@ -3816,21 +3902,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some("https://github.com/test/force-sync-test.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://github.com/test/force-sync-test.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 300,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("test_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "test_token".to_string(),
+            }),
         };
 
         // 先设置 last_sync_time 为当前时间（模拟刚同步过）
@@ -3866,21 +3955,24 @@ mod tests {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::GithubApi,
             active_provider: "github_api".to_string(),
-            remote_url: Some("https://github.com/test/pending-take-remote-test.git".to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: "https://github.com/test/pending-take-remote-test.git".to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 300,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         };
         let secrets = SyncSecrets {
-            token: Some("test_token".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "test_token".to_string(),
+            }),
         };
 
         // 设置 last_sync_time 为当前时间（模拟刚同步过）
@@ -3966,26 +4058,29 @@ mod tests {
     #[cfg(all(not(windows), feature = "git-https"))]
     fn make_sync_config(remote_url: &str) -> SyncConfig {
         SyncConfig {
-            active_provider: "github_api".to_string(),
             enabled: true,
-            remote_url: Some(remote_url.to_string()),
-            transport: Some(SyncProtocol::HttpsToken),
-            branch: Some("main".to_string()),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::sync::provider::ProviderConfig::GitHub(
+                crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: remote_url.to_string(),
+                    branch: "main".to_string(),
+                    username: String::new(),
+                    transport: crate::sync::types::SyncProtocol::HttpsToken,
+                },
+            )),
             auto_sync: false,
             sync_interval_seconds: 0,
-            backend_type: BackendType::Git,
-            username: Some(String::new()),
             has_network_permission: true,
             has_network_state_permission: true,
-            github: None,
         }
     }
 
     #[cfg(all(not(windows), feature = "git-https"))]
     fn make_sync_secrets() -> SyncSecrets {
         SyncSecrets {
-            token: Some("dummy".to_string()),
-            ssh_private_key: None,
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHub {
+                token: "dummy".to_string(),
+            }),
         }
     }
 

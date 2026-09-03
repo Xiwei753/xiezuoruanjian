@@ -44,7 +44,8 @@ pub enum ProviderError {
     #[error("temporary unavailable: {reason}")]
     TemporaryUnavailable { reason: String },
 
-    /// 其他未分类错误。engine 按不可重试处理（除非上下文明确可重试）。
+    /// 其他未分类错误。与 Core `Error::Other` 对齐：兜底视为可恢复，
+    /// 允许 engine 退避重试（最多 max_retries 次），避免未知错误直接卡死用户。
     #[error("provider error: {reason}")]
     Other { reason: String },
 }
@@ -52,20 +53,22 @@ pub enum ProviderError {
 impl ProviderError {
     /// 是否可重试。
     ///
-    /// - `Network` / `RateLimited` / `TemporaryUnavailable` → 可重试。
-    /// - `AuthFailed` / `PermissionDenied` / `NotFound` / `PreconditionFailed` / `Other` → 不可重试。
+    /// - `Network` / `RateLimited` / `TemporaryUnavailable` / `Other` → 可重试。
+    /// - `AuthFailed` / `PermissionDenied` / `NotFound` / `PreconditionFailed` → 不可重试。
     ///
-    /// engine 据此决定是否进入退避重试循环，还是直接上报给用户。
+    /// `Other` 归为可重试是为了与 Core `Error::Other`（`recoverable() = true`）对齐，
+    /// 保证 `ProviderError::is_retryable()` 与 `crate::Error::from(err).recoverable()`
+    /// 对每个变体都返回相同值，engine 据此决定是否进入退避重试循环。
     pub fn is_retryable(&self) -> bool {
         match self {
             ProviderError::Network { .. }
             | ProviderError::RateLimited { .. }
-            | ProviderError::TemporaryUnavailable { .. } => true,
+            | ProviderError::TemporaryUnavailable { .. }
+            | ProviderError::Other { .. } => true,
             ProviderError::AuthFailed { .. }
             | ProviderError::PermissionDenied { .. }
             | ProviderError::NotFound { .. }
-            | ProviderError::PreconditionFailed { .. }
-            | ProviderError::Other { .. } => false,
+            | ProviderError::PreconditionFailed { .. } => false,
         }
     }
 
@@ -161,7 +164,7 @@ mod tests {
             reason: "5xx".into()
         }
         .is_retryable());
-        assert!(!ProviderError::Other { reason: "x".into() }.is_retryable());
+        assert!(ProviderError::Other { reason: "x".into() }.is_retryable());
     }
 
     #[test]
@@ -181,5 +184,73 @@ mod tests {
 
         let e = crate::Error::from(ProviderError::NotFound { path: "a/b".into() });
         assert_eq!(e.code(), "SYNC_REMOTE_API_ERROR");
+    }
+
+    /// 验证 ProviderError::is_retryable() 与 crate::Error::from(err).recoverable()
+    /// 对每个变体都返回相同值——provider 层与 core 层可恢复性语义必须一致，
+    /// engine 才能放心用 e.recoverable() 决定是否重试。
+    #[test]
+    fn retryable_matches_core_recoverable() {
+        let cases: Vec<(ProviderError, bool)> = vec![
+            (
+                ProviderError::AuthFailed {
+                    reason: "bad token".into(),
+                },
+                false,
+            ),
+            (
+                ProviderError::PermissionDenied {
+                    reason: "no write".into(),
+                },
+                false,
+            ),
+            (ProviderError::NotFound { path: "a/b".into() }, false),
+            (
+                ProviderError::PreconditionFailed {
+                    path: "a/b".into(),
+                    reason: "sha mismatch".into(),
+                },
+                false,
+            ),
+            (
+                ProviderError::RateLimited {
+                    retry_after_secs: 30,
+                },
+                true,
+            ),
+            (
+                ProviderError::Network {
+                    reason: "dns".into(),
+                },
+                true,
+            ),
+            (
+                ProviderError::TemporaryUnavailable {
+                    reason: "5xx".into(),
+                },
+                true,
+            ),
+            (ProviderError::Other { reason: "x".into() }, true),
+        ];
+
+        for (provider_err, expected) in cases {
+            assert_eq!(
+                provider_err.is_retryable(),
+                expected,
+                "ProviderError is_retryable mismatch: {provider_err:?}"
+            );
+            let core_err = crate::Error::from(provider_err.clone());
+            assert_eq!(
+                core_err.recoverable(),
+                expected,
+                "core Error recoverable mismatch for {core_err:?}"
+            );
+            // 两层语义必须一致
+            assert_eq!(
+                provider_err.is_retryable(),
+                core_err.recoverable(),
+                "provider/core retryable semantic mismatch"
+            );
+        }
     }
 }

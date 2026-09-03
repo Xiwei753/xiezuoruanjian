@@ -100,7 +100,7 @@ impl WriterCoreApi {
             return Some(s);
         }
         let core = self.core_read();
-        core.load_sync_secrets().ok().filter(|s| s.token.is_some())
+        core.load_sync_secrets().ok().filter(|s| !s.is_empty())
     }
 
     /// #644 评论 5462823517 第1节：API 层是否已显式设置 override。
@@ -779,13 +779,15 @@ mod tests {
         let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
         let config = crate::api::types::SyncConfigDto {
             enabled: true,
-            backend_type: "github_api".to_string(),
-            remote_url: "https://github.com/test/repo.git".to_string(),
-            transport: "https_token".to_string(),
-            branch: "main".to_string(),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(crate::api::types::ProviderConfigDto::GitHub {
+                remote_url: "https://github.com/test/repo.git".to_string(),
+                branch: "main".to_string(),
+                username: "".to_string(),
+                transport: "https_token".to_string(),
+            }),
             auto_sync: false,
             sync_interval_seconds: 300,
-            username: "".to_string(),
             has_network_permission: true,
             has_network_state_permission: true,
         };

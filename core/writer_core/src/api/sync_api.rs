@@ -243,26 +243,26 @@ impl WriterCoreApi {
         //
         // #644 评论 5473551127 第2节：按 backend 类型选择对应 staging 方式，
         // Git 后端需要保留仓库身份（.git/HEAD/remote），不能共用 GithubApi 的文件复制。
-        let resolved_backend_type = crate::sync::resolved_backend_type(&sync_config);
-        let staging_runs =
-            match crate::sync::staging::prepare_staging_runs(&mut plan, &resolved_backend_type) {
-                Ok(runs) => runs,
-                Err(err) => {
-                    let status = crate::sync::full_sync::error_to_persist_status(&err);
-                    let status_str = match &status {
-                        crate::sync::SyncStatus::FatalError(_) => "fatal_error".to_string(),
-                        crate::sync::SyncStatus::RecoverableError(_) => {
-                            "recoverable_error".to_string()
-                        }
-                        _ => "fatal_error".to_string(),
-                    };
-                    // record_full_sync_preflight_failure 是 pub API，
-                    // persist_full_sync_early_failure 是 pub(super) 不可从 api 层调用。
-                    let _ = self
-                        .record_full_sync_preflight_failure(status_str, "staging_seed".to_string());
-                    return Err(err.into());
-                }
-            };
+        let resolved_active_provider = crate::sync::url::resolved_active_provider(&sync_config);
+        let staging_runs = match crate::sync::staging::prepare_staging_runs(
+            &mut plan,
+            &resolved_active_provider,
+        ) {
+            Ok(runs) => runs,
+            Err(err) => {
+                let status = crate::sync::full_sync::error_to_persist_status(&err);
+                let status_str = match &status {
+                    crate::sync::SyncStatus::FatalError(_) => "fatal_error".to_string(),
+                    crate::sync::SyncStatus::RecoverableError(_) => "recoverable_error".to_string(),
+                    _ => "fatal_error".to_string(),
+                };
+                // record_full_sync_preflight_failure 是 pub API，
+                // persist_full_sync_early_failure 是 pub(super) 不可从 api 层调用。
+                let _ =
+                    self.record_full_sync_preflight_failure(status_str, "staging_seed".to_string());
+                return Err(err.into());
+            }
+        };
 
         // Phase 3: Transfer（不持锁）— 网络 + 本地文件读写。
         let transfer_result = crate::sync::full_sync::run_transfer(provider.as_ref(), &plan);
@@ -311,7 +311,6 @@ impl WriterCoreApi {
     }
 
     /// 检查同步能力——综合 config 和 secrets 判断是否可执行全量同步。
-    #[allow(clippy::unwrap_used)]
     pub fn get_sync_capability(&self) -> ApiResult<SyncCapabilityDto> {
         let config = self.load_sync_config()?;
         let secrets = self.load_sync_secrets()?;
@@ -321,6 +320,29 @@ impl WriterCoreApi {
         let message_args = std::collections::HashMap::new();
         let mut can_run = true;
 
+        // 从 provider_config 读 remote_url（Issue #645 评论第 2 点）。
+        let remote_url = config
+            .provider_config
+            .as_ref()
+            .map(|pc| match pc {
+                #[cfg(feature = "github-api")]
+                crate::api::ProviderConfigDto::GitHub { remote_url, .. } => remote_url.clone(),
+                #[cfg(not(feature = "github-api"))]
+                _ => String::new(),
+            })
+            .unwrap_or_default();
+        // 从 provider_secrets 读 token。
+        let token = secrets
+            .provider_secrets
+            .as_ref()
+            .map(|ps| match ps {
+                #[cfg(feature = "github-api")]
+                crate::api::ProviderSecretsDto::GitHub { token } => token.clone(),
+                #[cfg(not(feature = "github-api"))]
+                _ => String::new(),
+            })
+            .unwrap_or_default();
+
         if !config.enabled {
             can_run = false;
             block_reason_code = Some("DISABLED".to_string());
@@ -329,11 +351,11 @@ impl WriterCoreApi {
             can_run = false;
             block_reason_code = Some("SECURE_STORAGE_UNAVAILABLE".to_string());
             block_message_key = Some("sync.block.secure_storage_unavailable".to_string());
-        } else if config.remote_url.is_empty() {
+        } else if remote_url.is_empty() {
             can_run = false;
             block_reason_code = Some("REMOTE_URL_MISSING".to_string());
             block_message_key = Some("sync.block.remote_url_missing".to_string());
-        } else if secrets.token.is_none() || secrets.token.as_ref().unwrap().is_empty() {
+        } else if token.is_empty() {
             can_run = false;
             block_reason_code = Some("TOKEN_MISSING".to_string());
             block_message_key = Some("sync.block.token_missing".to_string());
@@ -354,6 +376,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_load_sync_secrets_global() {
         let temp_dir = tempdir().unwrap();
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
@@ -361,20 +384,26 @@ mod tests {
 
         // Test loading when no secrets exist (should return default/empty struct)
         let loaded_empty = api.load_sync_secrets().unwrap();
-        assert_eq!(loaded_empty.token, None);
+        assert!(loaded_empty.provider_secrets.is_none());
 
         // Save some dummy secrets
         let dummy_secrets = SyncSecretsDto {
-            token: Some("ghp_dummy123".to_string()),
+            provider_secrets: Some(ProviderSecretsDto::GitHub {
+                token: "ghp_dummy123".to_string(),
+            }),
         };
         api.save_sync_secrets(dummy_secrets.clone()).unwrap();
 
         // Test loading the saved secrets
         let loaded_secrets = api.load_sync_secrets().unwrap();
-        assert_eq!(loaded_secrets.token, dummy_secrets.token);
+        assert_eq!(
+            loaded_secrets.provider_secrets,
+            dummy_secrets.provider_secrets
+        );
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn save_sync_config_returns_true_on_success() {
         let temp_dir = tempdir().unwrap();
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
@@ -382,13 +411,15 @@ mod tests {
 
         let config = SyncConfigDto {
             enabled: true,
-            backend_type: "github_api".to_string(),
-            remote_url: "https://github.com/test/repo.git".to_string(),
-            transport: "https_token".to_string(),
-            branch: "main".to_string(),
+            active_provider: "github_api".to_string(),
+            provider_config: Some(ProviderConfigDto::GitHub {
+                remote_url: "https://github.com/test/repo.git".to_string(),
+                branch: "main".to_string(),
+                username: "".to_string(),
+                transport: "https_token".to_string(),
+            }),
             auto_sync: false,
             sync_interval_seconds: 300,
-            username: "".to_string(),
             has_network_permission: true,
             has_network_state_permission: true,
         };

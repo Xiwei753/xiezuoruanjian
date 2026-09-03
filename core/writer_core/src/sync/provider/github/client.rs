@@ -3,10 +3,14 @@
 //! 本模块是 GitHub API 交互的最底层，负责：
 //! - HTTP 请求构造和响应解析
 //! - HTTP 状态码到 [`ProviderError`] 的映射（`super::error::map_http_error`）
-//! - SHA 冲突自动重试（`put_content_serial` / `delete_content_serial`）
+//! - 单次 PUT/DELETE 原语（`put_content_serial` / `delete_content_once`）
 //!
 //! 与旧 `github_api_client.rs` 的区别：返回 `ProviderError` 而非 `crate::Error`，
 //! 让通用层不依赖 GitHub 特定错误名。调用方通过 `From<ProviderError> for crate::Error` 转换。
+//!
+//! SHA 冲突不再在此层自动刷新重试：Provider 层根据 [`WritePrecondition`] / [`DeletePrecondition`]
+//! 语义决定是否在调用前读取远端 SHA（仅 `Unconditional` 分支会读），`IfMatch` 严格使用调用方
+//! 给定版本，409 直接上报 `PreconditionFailed`，由 LWW engine 按乐观并发语义处理。
 
 use base64::Engine;
 use writer_platform_api::{HttpRequest, HttpResponse, SyncTransport, TransportError};
@@ -186,6 +190,10 @@ pub(crate) fn put_content_serial(
 /// 删除远程文件（单次尝试）。需要提供文件的当前 SHA。
 ///
 /// 返回 HTTP 状态码和响应体。404 视为成功（文件已不存在）。
+///
+/// SHA 的获取由 Provider 层（`GitHubProvider::delete`）按 [`DeletePrecondition`] 语义决定：
+/// `IfMatch` 严格使用调用方给定版本，`Unconditional` 先读远端 SHA。
+/// 本函数不做任何 SHA 刷新或重试。
 pub(crate) fn delete_content_once(
     transport: &dyn SyncTransport,
     api_base: &str,
@@ -203,26 +211,6 @@ pub(crate) fn delete_content_once(
     let resp = execute_json(transport, "DELETE", &url, token, &payload)?;
     let body = String::from_utf8(resp.body).unwrap_or_default();
     Ok((resp.status, body))
-}
-
-/// 删除远程文件，返回原始 HTTP 状态码和响应体。
-///
-/// 若 `remote_sha` 为 None 则跳过删除（文件在远程不存在），返回成功。
-/// 404 视为成功（文件已不存在）。
-/// 调用方根据状态码和 [`DeletePrecondition`] 语义决定如何处理冲突（409）。
-/// Provider 层不再在此处刷新 SHA 自动重试，由 LWW engine 按乐观并发语义处理。
-pub(crate) fn delete_content_serial(
-    transport: &dyn SyncTransport,
-    api_base: &str,
-    token: &str,
-    branch: &str,
-    path: &str,
-    remote_sha: Option<String>,
-) -> Result<(u16, String), ProviderError> {
-    let Some(sha) = remote_sha else {
-        return Ok((200, String::new()));
-    };
-    delete_content_once(transport, api_base, token, branch, path, &sha)
 }
 
 /// 查询远端 Git tree（recursive），返回原始 HTTP 响应。

@@ -23,11 +23,26 @@ use super::{c_str_to_rust, err_json, ok_json, with_core};
 pub unsafe extern "C" fn writer_core_load_sync_config() -> *mut c_char {
     match with_core(|core| {
         let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+        // Issue #645 评论第 2 点：FFI 暴露的旧字段从 provider_config 读取，
+        // 保持 C ABI 兼容（旧调用方仍读 remoteUrl/branch/provider）。
+        let (remote_url, branch, provider) = match &config.provider_config {
+            #[cfg(feature = "github-api")]
+            Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => (
+                gh.remote_url.clone(),
+                gh.branch.clone(),
+                "github_api".to_string(),
+            ),
+            _ => (
+                String::new(),
+                "main".to_string(),
+                config.active_provider.clone(),
+            ),
+        };
         Ok(serde_json::json!({
             "enabled": config.enabled,
-            "provider": format!("{:?}", config.backend_type).to_lowercase(),
-            "remoteUrl": config.remote_url.unwrap_or_default(),
-            "branch": config.branch.unwrap_or_default(),
+            "provider": provider,
+            "remoteUrl": remote_url,
+            "branch": branch,
             "autoSync": config.auto_sync,
             "conflictStrategy": "manual"
         }))
@@ -58,11 +73,46 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
         if let Some(v) = val.get("enabled").and_then(|v| v.as_bool()) {
             config.enabled = v;
         }
-        if let Some(v) = val.get("remoteUrl").and_then(|v| v.as_str()) {
-            config.remote_url = Some(v.to_string());
-        }
-        if let Some(v) = val.get("branch").and_then(|v| v.as_str()) {
-            config.branch = Some(v.to_string());
+        // Issue #645 评论第 2 点：FFI 仍接受旧字段 remoteUrl/branch，
+        // 写入 provider_config: ProviderConfig::GitHub。
+        let remote_url = val
+            .get("remoteUrl")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let branch = val
+            .get("branch")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        if remote_url.is_some() || branch.is_some() {
+            let existing_gh = match &config.provider_config {
+                #[cfg(feature = "github-api")]
+                Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => Some(gh.clone()),
+                _ => None,
+            };
+            let defaults = crate::sync::provider::github::config::GitHubProviderConfig::defaults();
+            let gh = crate::sync::provider::github::config::GitHubProviderConfig {
+                remote_url: remote_url.unwrap_or_else(|| {
+                    existing_gh
+                        .as_ref()
+                        .map(|g| g.remote_url.clone())
+                        .unwrap_or(defaults.remote_url)
+                }),
+                branch: branch.unwrap_or_else(|| {
+                    existing_gh
+                        .as_ref()
+                        .map(|g| g.branch.clone())
+                        .unwrap_or(defaults.branch)
+                }),
+                username: existing_gh
+                    .as_ref()
+                    .map(|g| g.username.clone())
+                    .unwrap_or(defaults.username),
+                transport: existing_gh
+                    .as_ref()
+                    .map(|g| g.transport.clone())
+                    .unwrap_or(defaults.transport),
+            };
+            config.provider_config = Some(crate::sync::provider::ProviderConfig::GitHub(gh));
         }
         if let Some(v) = val.get("autoSync").and_then(|v| v.as_bool()) {
             config.auto_sync = v;
