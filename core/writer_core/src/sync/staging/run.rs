@@ -15,37 +15,23 @@ const STAGING_SUBDIR: &str = "staging";
 ///
 /// `run_root` = `<parent>/<run_id>`，下含 `base/`（Prepare 时 live 快照）与
 /// `staging/`（Transfer 后远端内容）。run 结束调 [StagingRun::cleanup] 整体删除。
+///
+/// #645 评论 5504296097 第2点：`StagingRun` 不再携带 `active_provider` /
+/// `git_seed_state` / `git_layout` 字段。staging 统一走文件级 `seed_from_live`，
+/// 不再按 Git/GithubApi backend 走不同 seed 路径。workspace 级别的 Git layout
+/// 迁移由 `prepare_staging_runs` 内部完成，不作为某个 remote provider 的 staging 模式。
 pub struct StagingRun {
     run_root: PathBuf,
     run_id: String,
     /// Commit 阶段需要知道这个 staging run 对应的 live root，
     /// 才能调 `compute_commit_plan(live_root)` 做三方比较并把变更写回 live。
     target_live_root: PathBuf,
-    /// #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
-    /// seed 时记录的 live Git 仓库状态。
-    /// 仅 Git backend 有值；GithubApi backend 保持 None。
-    /// `None` 只表示本 target 根本不是 Git backend。
-    git_seed_state: Option<crate::sync::git::seed::GitSeedState>,
-    /// #644 评论 5476546134 第5节：resolved active_provider 字符串，
-    /// 不再靠 `git_seed_state.is_some()` 间接猜 backend。
-    /// `"git"` → Git backend；`"github_api"` → GitHub API backend。
-    active_provider: String,
-    /// #644 评论 5491531984 问题1：target 的 Git 仓库布局。
-    /// Seed/Commit 使用 layout 指定的 git_dir 而非从 target_live_root 猜路径。
-    git_layout: Option<crate::storage::git_repo_layout::GitRepoLayout>,
 }
 
 impl StagingRun {
     /// 创建隔离 run 目录。`parent` 通常在 app-data 下（不进 live project root），
     /// 避免被 scanner 当成作品文件。`target_live_root` 记录 Commit 阶段要写回的 live 根。
-    /// `git_layout` 记录 target 的 Git 仓库布局（可选）。
-    /// `active_provider` 为 resolved provider 字符串（`"git"`/`"github_api"`）。
-    pub fn create(
-        parent: &Path,
-        target_live_root: PathBuf,
-        active_provider: String,
-        git_layout: Option<crate::storage::git_repo_layout::GitRepoLayout>,
-    ) -> Result<Self> {
+    pub fn create(parent: &Path, target_live_root: PathBuf) -> Result<Self> {
         let run_id = Uuid::new_v4().to_string();
         let run_root = parent.join("full-sync-staging").join(&run_id);
         fs::create_dir_all(run_root.join(BASE_SUBDIR))?;
@@ -54,9 +40,6 @@ impl StagingRun {
             run_root,
             run_id,
             target_live_root,
-            git_seed_state: None,
-            active_provider,
-            git_layout,
         })
     }
 
@@ -71,24 +54,6 @@ impl StagingRun {
     /// Commit 阶段要写回的 live root。
     pub fn target_live_root(&self) -> &Path {
         &self.target_live_root
-    }
-
-    /// #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
-    /// seed 时记录的 live Git 仓库状态。
-    /// 仅 Git backend 有值；GithubApi backend 保持 None。
-    pub fn git_seed_state(&self) -> Option<&crate::sync::git::seed::GitSeedState> {
-        self.git_seed_state.as_ref()
-    }
-
-    /// #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
-    /// 设置 seed 时记录的 live Git 仓库状态。
-    pub fn set_git_seed_state(&mut self, state: crate::sync::git::seed::GitSeedState) {
-        self.git_seed_state = Some(state);
-    }
-
-    /// #644 评论 5491531984 问题1：target 的 Git 仓库布局。
-    pub fn git_layout(&self) -> Option<&crate::storage::git_repo_layout::GitRepoLayout> {
-        self.git_layout.as_ref()
     }
 
     /// staging 子目录（Transfer 阶段写入远端内容的目标）。
@@ -206,44 +171,26 @@ impl StagingRun {
 
         // #644 评论 5474772497 第2节：读取 staging 的 manifest.sync.json，
         // 获取远端文件的真实 LWW 元数据（updated_at_ms、device_id、op）。
-        // GithubApi backend 的 Transfer 阶段会写入 manifest；
-        // Git backend 不产生 manifest，此映射为空，回退到 mtime-based LWW。
+        // Transfer 阶段会写入 manifest；manifest 不存在或解析失败时回退到
+        // mtime-based LWW（空 HashMap），不再区分 Git/GithubApi backend 的不同错误处理。
         //
-        // #644 评论 5475805198 第4节 + #644 评论 5476546134 第5节：
-        // - Git backend：manifest 不存在 → mtime fallback；解析失败 → warn + mtime fallback。
-        // - GithubApi backend：manifest 不存在 → Err；解析失败 → Err。
-        //   manifest 是 GithubApi 的事实来源，坏了就应该让 target 失败。
-        let is_git_backend = self.active_provider == "git";
+        // #645 评论 5504296097 第2点：staging 不再按 active_provider 分支。
+        // 通用 Provider 的 manifest 是 LWW 决策依据但不是硬性事实来源——
+        // 缺失或损坏时回退到 mtime-based LWW，让同步继续而不是直接失败。
         let staging_manifest = match read_staging_manifest(&staging_root) {
             Ok(Some(map)) => map,
             Ok(None) => {
-                if is_git_backend {
-                    // Git backend：manifest 不是决策依据，mtime fallback。
-                    std::collections::HashMap::new()
-                } else {
-                    // GithubApi backend：manifest 不存在是错误。
-                    return Err(crate::Error::Io(std::io::Error::other(
-                        "compute_commit_plan: GithubApi backend but no manifest.sync.json, \
-                         cannot proceed without LWW metadata",
-                    )));
-                }
+                // manifest 不存在 → mtime fallback（空 HashMap）。
+                std::collections::HashMap::new()
             }
             Err(e) => {
-                if is_git_backend {
-                    // Git backend：manifest 不是决策依据，警告 + mtime fallback。
-                    log::warn!(
-                        "compute_commit_plan: manifest parse failed ({}), \
-                         Git backend falling back to mtime-based LWW",
-                        e
-                    );
-                    std::collections::HashMap::new()
-                } else {
-                    // GithubApi backend：manifest 是事实来源，解析失败直接 Err。
-                    return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "compute_commit_plan: GithubApi manifest parse failed: {}",
-                        e
-                    ))));
-                }
+                // manifest 解析失败 → warn + mtime fallback（空 HashMap）。
+                log::warn!(
+                    "compute_commit_plan: manifest parse failed ({}), \
+                     falling back to mtime-based LWW",
+                    e
+                );
+                std::collections::HashMap::new()
             }
         };
 
@@ -426,17 +373,11 @@ impl StagingRun {
 /// #644 评论 5473401065 第1/2节：在**无 Core 锁**状态下创建并 seed 所有 staging runs。
 ///
 /// 纯函数，不依赖 `WriterCore`，可在无锁状态下调用。
-/// 对每个 target 创建 `StagingRun`，然后根据 backend 类型选择对应准备方式：
-/// - `GithubApi`：调 `seed_from_live`（文件级复制，跳过 `.git/`）；
-/// - `Git`：调 `seed_from_live_as_git_repo`（`git clone --local`，保留仓库身份）。
+/// 对每个 target 创建 `StagingRun`，统一调 `seed_from_live`（文件级复制，跳过 `.git/`）。
 ///
 /// #644 评论 5473401065 第2节：seed 失败**不再**被 `log::warn!` 吞掉。
 /// 任何一个 target 的 seed 失败都意味着该 target 的 staging 是半成品，
 /// 不能拿来做三方比较。seed 失败直接返回 Err，让调用方终止本次 full sync。
-///
-/// #644 评论 5473551127 第2节：Git 后端不能共用"复制业务文件但删掉 .git"的 staging，
-/// 否则 `SyncService::perform_sync` 在 staging 里判断 `has_repo=false`，
-/// 把已有仓库历史/HEAD/remote 语义全部丢掉。
 ///
 /// #644 评论 5493295108 问题1/2：在 seed 前先解析/迁移每个 target 的 Git layout。
 /// - App target：调 `resolve_existing_repo_layout`（只处理已有仓库位置，不 init 新仓库）。
@@ -444,10 +385,13 @@ impl StagingRun {
 ///
 /// 这样迁移发生在已释放 Core 写锁之后，不会堵住冷启动卷章读取。
 ///
+/// #645 评论 5504296097 第2点：不再按 `active_provider` 分 Git/GithubApi 走不同
+/// seed 路径。workspace 级别的 Git layout 迁移仍在此完成，但不作为某个 remote
+/// provider 的 staging 模式。
+///
 /// 成功后 `plan.targets[*].staging_root` 被填充为对应 staging 目录。
 pub fn prepare_staging_runs(
     plan: &mut crate::sync::full_sync::FullSyncPlan,
-    active_provider: &str,
 ) -> crate::error::Result<Vec<StagingRun>> {
     let mut staging_runs: Vec<StagingRun> = Vec::new();
 
@@ -459,37 +403,13 @@ pub fn prepare_staging_runs(
         // #644 评论 5493295108 问题1/2：在 seed 前先解析/迁移 Git layout。
         // 这一步在已释放 Core 写锁之后执行，不会堵住冷启动卷章读取。
         if let Some(layout) = &workspace_git_layout {
-            prepare_target_git_layout(planned, active_provider, layout)?;
+            prepare_target_git_layout(planned, layout)?;
         }
 
-        let mut run = StagingRun::create(
-            &plan.app_data_root,
-            planned.target_live_root.clone(),
-            active_provider.to_string(),
-            workspace_git_layout.clone(),
-        )?;
+        let run = StagingRun::create(&plan.app_data_root, planned.target_live_root.clone())?;
         // #644 评论 5473401065 第2节：seed 失败必须传播，不能继续拿半成品 staging。
-        // #644 评论 5473551127 第2节：按 backend 类型选择对应 seed 方式。
-        match active_provider {
-            "git" => {
-                // #644 评论 5473789298 第1节：Git 专属 staging 积到 git_staging.rs。
-                // #644 评论 5474772497 第1节 + #644 评论 5475110422 第1节：
-                // seed 返回 live 的 GitSeedState，供 finalize 决定路径。
-                // #644 评论 5491531984 问题1：传入 git_layout 用于正确打开仓库。
-                let seed_state = crate::sync::git::seed::seed_from_live_as_git_repo(
-                    &run,
-                    &planned.target_live_root,
-                    workspace_git_layout.as_ref(),
-                )?;
-                run.set_git_seed_state(seed_state);
-            }
-            "github_api" => {
-                run.seed_from_live(&planned.target_live_root)?;
-            }
-            _ => {
-                run.seed_from_live(&planned.target_live_root)?;
-            }
-        }
+        // #645 评论 5504296097 第2点：统一调 seed_from_live，不再按 backend 分支。
+        run.seed_from_live(&planned.target_live_root)?;
         planned.staging_root = Some(run.staging_root());
         staging_runs.push(run);
     }
@@ -506,17 +426,15 @@ pub fn prepare_staging_runs(
 ///
 /// 这一步在已释放 Core 写锁之后执行（由 `prepare_staging_runs` 调用），
 /// 不会堵住冷启动卷章读取。
+///
+/// #645 评论 5504296097 第2点：不再按 `active_provider` 早返回——workspace 级别
+/// 的 Git layout 迁移对所有 Provider 统一执行，不作为某个 remote provider 的
+/// staging 模式。
 #[allow(clippy::excessive_nesting)]
 fn prepare_target_git_layout(
     planned: &crate::sync::full_sync::PlannedTarget,
-    active_provider: &str,
     layout: &crate::storage::git_repo_layout::GitRepoLayout,
 ) -> crate::error::Result<()> {
-    // GithubApi backend 不需要 Git layout 迁移。
-    if active_provider != "git" {
-        return Ok(());
-    }
-
     match planned.project_id {
         Some(_) => {
             // Project target：产品契约要求作品必有 Git。

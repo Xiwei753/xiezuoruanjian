@@ -84,40 +84,46 @@ impl SyncErrorCategory {
 
     /// 从线格式 code 字符串反序列化。未知 code 映射为 `Other`。
     ///
-    /// 保留对旧 GitHub/Git code 字符串的识别（映射到新通用变体），
-    /// 保证旧持久化数据可加载（`SyncState.last_error` 等可能含旧 code）。
+    /// #645 评论 5504296097 第2点：保留对旧 GitHub/Git code 字符串的识别
+    /// （映射到新通用变体），保证旧持久化数据可加载
+    /// （`SyncState.last_error` 等可能含旧 code）。
+    ///
+    /// 旧 GitHub 特定字符串（`token_missing` / `token_invalid` / `github_unauthorized` /
+    /// `github_forbidden` / `repo_not_found_or_no_permission` / `github_network_failed` /
+    /// `branch_*` / `non_fast_forward` / `unrelated_histories` / `dirty_repo` 等）的
+    /// 兼容映射保留在此处，标注 `// legacy compat`。后续可迁移到 API/migration 边界，
+    /// 但这不是本轮最大的阻塞——保留兼容映射保证旧持久化数据可加载。
     pub fn from_code(code: &str, _fallback_msg: &str) -> Self {
         match code {
             "none" | "" => SyncErrorCategory::Other,
             // 新通用 code
-            "auth_failed"
-            | "auth_error"
-            | "token_missing"
+            "auth_failed" | "auth_error" => SyncErrorCategory::AuthFailed,
+            "permission_denied" | "token_permission_denied" | "missing_permission" => {
+                SyncErrorCategory::PermissionDenied
+            }
+            "not_found" => SyncErrorCategory::NotFound,
+            "precondition_failed" | "remote_sha_conflict" | "conflict" => {
+                SyncErrorCategory::PreconditionFailed
+            }
+            "rate_limited" => SyncErrorCategory::RateLimited,
+            "network" | "network_failed" | "network_error" => SyncErrorCategory::Network,
+            "temporary_unavailable" => SyncErrorCategory::TemporaryUnavailable,
+            "local_io" | "local_io_error" => SyncErrorCategory::LocalIo,
+            // legacy compat — 旧 GitHub/Git 特定 code 映射到新通用分类。
+            // 后续可迁移到 API/migration 边界，但保留在此保证旧持久化数据可加载。
+            "token_missing"
             | "token_invalid"
             | "github_unauthorized"
-            | "github_forbidden" => SyncErrorCategory::AuthFailed,
-            "permission_denied"
-            | "token_permission_denied"
-            | "missing_permission"
-            | "repo_not_found_or_no_permission" => SyncErrorCategory::PermissionDenied,
-            "not_found" | "file_not_found" => SyncErrorCategory::NotFound,
-            "precondition_failed"
-            | "remote_sha_conflict"
-            | "conflict"
-            | "checkout_conflict"
-            | "local_blocking_file" => SyncErrorCategory::PreconditionFailed,
-            "rate_limited" | "api_rate_limited" => SyncErrorCategory::RateLimited,
-            "network"
-            | "network_failed"
-            | "network_error"
-            | "network_probe_failed"
-            | "github_network_failed"
-            | "dns_failed"
-            | "tls_failed" => SyncErrorCategory::Network,
-            "temporary_unavailable" | "api_error" => SyncErrorCategory::TemporaryUnavailable,
-            "local_io" | "local_io_error" => SyncErrorCategory::LocalIo,
-            // 旧 GitHub/Git 特定 code 统一映射到通用分类
-            "empty_url" => SyncErrorCategory::AuthFailed,
+            | "github_forbidden"
+            | "empty_url" => SyncErrorCategory::AuthFailed,
+            "repo_not_found_or_no_permission" => SyncErrorCategory::PermissionDenied,
+            "file_not_found" => SyncErrorCategory::NotFound,
+            "checkout_conflict" | "local_blocking_file" => SyncErrorCategory::PreconditionFailed,
+            "api_rate_limited" => SyncErrorCategory::RateLimited,
+            "network_probe_failed" | "github_network_failed" | "dns_failed" | "tls_failed" => {
+                SyncErrorCategory::Network
+            }
+            "api_error" => SyncErrorCategory::TemporaryUnavailable,
             "branch_missing"
             | "remote_branch_missing"
             | "non_fast_forward"

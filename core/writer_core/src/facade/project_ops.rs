@@ -4,67 +4,22 @@ use crate::project::{self, Project, ProjectSummary};
 use crate::volume::{self, Volume};
 
 impl super::WriterCore {
-    /// #644 评论 5491531984 问题1：通过 layout 确定 Git 物理位置。
+    /// #645 评论第 1 点：一个工作区一个 Git 仓库。list 直接读 `project.json`，
+    /// 不再按 project_id 构造 layout_fn / git_dir。
     pub fn list_projects(&self) -> Result<Vec<Project>> {
-        match &self.git_metadata_root {
-            Some(root) => {
-                let root = root.clone();
-                let projects_root = self.projects_root.clone();
-                let layout_fn: project::GitLayoutFn = Box::new(move |project_id: &str| {
-                    crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
-                        projects_root.join(project_id),
-                        root.join(project_id),
-                    )
-                });
-                project::list_projects_with_layout(&self.projects_root, Some(layout_fn))
-            }
-            None => project::list_projects(&self.projects_root),
-        }
+        project::list_projects(&self.projects_root)
     }
 
     /// #625 第二段：批量返回项目摘要（元数据 + 统计）。
-    /// #644 评论 5492740265 问题4：`git_metadata_root=Some` 时走 layout factory，
-    /// 不会在共享存储重新制造 `.git`。
+    /// #645 评论第 1 点：直接走 `project::list_project_summaries`，不再构造 layout_fn。
     pub fn list_project_summaries(&self) -> Result<Vec<ProjectSummary>> {
-        match &self.git_metadata_root {
-            Some(root) => {
-                let root = root.clone();
-                let projects_root = self.projects_root.clone();
-                let layout_fn: project::GitLayoutFn = Box::new(move |project_id: &str| {
-                    crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
-                        projects_root.join(project_id),
-                        root.join(project_id),
-                    )
-                });
-                project::list_project_summaries_with_layout(&self.projects_root, Some(layout_fn))
-            }
-            None => project::list_project_summaries(&self.projects_root),
-        }
+        project::list_project_summaries(&self.projects_root)
     }
 
-    /// #644 评论 5492740265 问题4：创建作品时走 layout factory。
-    ///
-    /// `git_metadata_root=Some` 时，新作品从出生开始就直接使用外部 git_dir，
-    /// 不会先在共享存储建 `.git` 再等下一次列表/同步搬家。
+    /// #645 评论第 1 点：一个工作区一个 Git 仓库。create_project 只创建作品目录、
+    /// `project.json`、`volumes/`、`characters/` 和默认卷，不再初始化作品级 `.git/`。
     pub fn create_project(&self, title: &str) -> Result<Project> {
-        match &self.git_metadata_root {
-            Some(root) => {
-                let root = root.clone();
-                let projects_root = self.projects_root.clone();
-                let layout_fn: project::GitLayoutFn = Box::new(move |project_id: &str| {
-                    crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
-                        projects_root.join(project_id),
-                        root.join(project_id),
-                    )
-                });
-                project::create_project_with_layout_factory(
-                    &self.projects_root,
-                    title,
-                    Some(layout_fn),
-                )
-            }
-            None => project::create_project(&self.projects_root, title),
-        }
+        project::create_project(&self.projects_root, title)
     }
 
     pub fn list_volumes(&self, project_id: &str) -> Result<Vec<Volume>> {
@@ -203,27 +158,9 @@ impl super::WriterCore {
         chapter::update_chapter_note(&project_root, volume_id, chapter_id, note)
     }
 
-    /// #644 评论 5492740265 问题4：重命名作品时走 layout factory。
+    /// #645 评论第 1 点：重命名只改 `project.json`，不再构造 layout_fn。
     pub fn rename_project(&self, project_id: &str, new_title: &str) -> crate::error::Result<()> {
-        match &self.git_metadata_root {
-            Some(root) => {
-                let root = root.clone();
-                let projects_root = self.projects_root.clone();
-                let layout_fn: project::GitLayoutFn = Box::new(move |project_id: &str| {
-                    crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
-                        projects_root.join(project_id),
-                        root.join(project_id),
-                    )
-                });
-                crate::project::rename_project_with_layout(
-                    &self.projects_root,
-                    project_id,
-                    new_title,
-                    Some(layout_fn),
-                )
-            }
-            None => crate::project::rename_project(&self.projects_root, project_id, new_title),
-        }
+        crate::project::rename_project(&self.projects_root, project_id, new_title)
     }
 
     /// #644 评论 5493295108 问题4：删除作品时同时清理 private git_dir。
@@ -235,26 +172,9 @@ impl super::WriterCore {
         crate::project::delete_project(&self.projects_root, project_id, &self.app_data_root)
     }
 
-    /// #644 评论 5492740265 问题4：重排作品时走 layout factory。
+    /// #645 评论第 1 点：重排只改各 `project.json` 的 `order` 字段，不再构造 layout_fn。
     pub fn reorder_projects(&self, ordered_ids: &[String]) -> crate::error::Result<()> {
-        match &self.git_metadata_root {
-            Some(root) => {
-                let root = root.clone();
-                let projects_root = self.projects_root.clone();
-                let layout_fn: project::GitLayoutFn = Box::new(move |project_id: &str| {
-                    crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
-                        projects_root.join(project_id),
-                        root.join(project_id),
-                    )
-                });
-                crate::project::reorder_projects_with_layout(
-                    &self.projects_root,
-                    ordered_ids,
-                    Some(layout_fn),
-                )
-            }
-            None => crate::project::reorder_projects(&self.projects_root, ordered_ids),
-        }
+        crate::project::reorder_projects(&self.projects_root, ordered_ids)
     }
 
     pub fn rename_volume(

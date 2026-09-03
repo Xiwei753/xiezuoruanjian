@@ -3104,13 +3104,13 @@ mod tests {
     // 也不需要 SyncSecrets/SyncTransport。MemoryProvider 是进程内 HashMap，
     // 所有操作在锁内同步完成。
     //
-    // 注意：perform_lww_sync 目前在 #[cfg(feature = "github-api")] 门后，
-    // 所以这组测试也标 github-api。它们不依赖 GitHubProvider 或 mock server，
-    // 只依赖 LWW engine + MemoryProvider。
+    // #645 评论 5504296097 第2点：去掉 `#[cfg(feature = "github-api")]` 门控。
+    // 这组测试只依赖 LWW engine + MemoryProvider，不需要 GitHub feature。
+    // 类型引用走 fully-qualified path，避免与顶部 `#[cfg(feature = "github-api")]`
+    // imports 在 all-features 下产生重复 import 冲突。
 
-    #[cfg(feature = "github-api")]
     fn lww_sync_with_memory(
-        sync_root: &Path,
+        sync_root: &std::path::Path,
         provider: &dyn crate::sync::provider::SyncProvider,
         force_sync: bool,
     ) -> crate::Result<crate::sync::SyncResult> {
@@ -3126,7 +3126,6 @@ mod tests {
 
     #[test]
     #[cfg(not(windows))]
-    #[cfg(feature = "github-api")]
     fn test_lww_sync_with_memory_provider_downloads_remote() {
         // 场景：远端有文件、本地空 → engine 下载到本地。
         // MemoryProvider 初始条目用完整远端路径（含 remote_prefix）。
@@ -3160,7 +3159,6 @@ mod tests {
 
     #[test]
     #[cfg(not(windows))]
-    #[cfg(feature = "github-api")]
     fn test_lww_sync_with_memory_provider_uploads_local() {
         // 场景：本地有文件、远端空 → engine 上传到远端。
         // 本地 sync state 为默认（known_files 空），project.json 被视为新文件上传。
@@ -3186,7 +3184,6 @@ mod tests {
 
     #[test]
     #[cfg(not(windows))]
-    #[cfg(feature = "github-api")]
     fn test_lww_sync_with_memory_provider_local_delete_propagates() {
         // 场景：本地删除文件 → 远端删除。
         // 本地 sync state 记录 known_files["project.json"]，但本地文件已删，
@@ -3195,7 +3192,7 @@ mod tests {
         // LwwLocalWinsDeleteRecord → delete_remote_files 删除远端文件。
         let dir = tempdir().unwrap();
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state
             .known_files
@@ -3205,8 +3202,8 @@ mod tests {
             .insert("project.json".to_string(), 1000);
         SyncService::save_sync_state(dir.path(), &state).unwrap();
 
-        let remote_manifest = SyncManifest {
-            files: vec![ManifestFileRecord {
+        let remote_manifest = crate::sync::types::SyncManifest {
+            files: vec![crate::sync::types::ManifestFileRecord {
                 path: "project.json".to_string(),
                 content_hash: format!("{:x}", md5::compute(b"remote content")),
                 updated_at_ms: 900,

@@ -119,7 +119,7 @@ fn repro_issue644_p1_app_meta_engine_state_expected_to_be_committed() {
     write_rel(&live, manifest, "base-manifest");
     write_rel(&live, state, "base-state");
 
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(manifest), PathBuf::from(state)])
         .unwrap();
 
@@ -152,7 +152,7 @@ fn repro_issue644_p1_app_meta_engine_state_now_committed() {
     write_rel(&live, manifest, "base-manifest");
     write_rel(&live, state, "base-state");
 
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(manifest), PathBuf::from(state)])
         .unwrap();
 
@@ -202,7 +202,7 @@ fn repro_issue644_p2_partial_conflict_expected_to_commit_non_conflict_files() {
     write_rel(&project_live, project_json, "base-content");
 
     // 创建 staging run，base 快照从 live 建
-    let run = StagingRun::create(&app_data, project_live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(&app_data, project_live.clone()).unwrap();
     run.build_base_snapshot_from_live(&project_live, &[PathBuf::from(project_json)])
         .unwrap();
 
@@ -250,7 +250,7 @@ fn repro_issue644_p2_partial_conflict_now_commits_non_conflict_files() {
     let project_json = "project.json";
     write_rel(&project_live, project_json, "base-content");
 
-    let run = StagingRun::create(&app_data, project_live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(&app_data, project_live.clone()).unwrap();
     run.build_base_snapshot_from_live(&project_live, &[PathBuf::from(project_json)])
         .unwrap();
     write_rel(&run.staging_root(), project_json, "incoming-updated");
@@ -296,7 +296,7 @@ fn repro_issue644_p3_metadata_both_changed_now_true_lww() {
 
     // base = "base"
     write_rel(&live, project_json, "base");
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(project_json)])
         .unwrap();
 
@@ -331,7 +331,7 @@ fn repro_issue644_p3_metadata_both_changed_expected_true_lww_not_fixed_remote_wi
     let project_json = "project.json";
 
     write_rel(&live, project_json, "base");
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(project_json)])
         .unwrap();
 

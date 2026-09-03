@@ -11,7 +11,7 @@ fn git_staging_non_repo_keeps_staging_non_repo() {
     fs::write(live.join("a.txt"), "hello").unwrap();
     fs::write(live.join("sub/b.md"), "world").unwrap();
 
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     let result = seed_from_live_as_git_repo(&run, &live, None).unwrap();
     // 非 repo → 返回 NotGitRepo
     assert!(matches!(result, GitSeedState::NotGitRepo));
@@ -53,7 +53,7 @@ fn git_staging_repo_clones_git_metadata_only() {
     fs::write(live.join("a.txt"), "working-dirty").unwrap();
     fs::write(live.join("untracked.md"), "untracked").unwrap();
 
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     let seed_state = seed_from_live_as_git_repo(&run, &live, None).unwrap();
     // repo → 返回 Existing
     assert!(matches!(seed_state, GitSeedState::Existing { .. }));
@@ -85,7 +85,7 @@ fn git_staging_unborn_repo_returns_unborn() {
     // 在 live 里建 git repo 但不提交（unborn）
     let _repo = git2::Repository::init(&live).unwrap();
 
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     let seed_state = seed_from_live_as_git_repo(&run, &live, None).unwrap();
     // unborn → 返回 Unborn
     assert!(matches!(seed_state, GitSeedState::Unborn { .. }));

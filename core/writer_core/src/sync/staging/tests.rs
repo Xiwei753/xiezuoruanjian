@@ -7,7 +7,7 @@ use tempfile::TempDir;
 fn staging_run_create_and_cleanup() {
     let tmp = TempDir::new().unwrap();
     let live = tmp.path().join("live");
-    let run = StagingRun::create(tmp.path(), live, "github_api".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live).unwrap();
     assert!(run.base_root().exists());
     assert!(run.staging_root().exists());
     run.cleanup();
@@ -23,7 +23,7 @@ fn base_snapshot_hardlink_or_copy() {
     fs::create_dir_all(live.join("sub")).unwrap();
     fs::write(live.join("sub/b.txt"), "world").unwrap();
 
-    let run = StagingRun::create(tmp.path(), live.clone(), "github_api".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(
         &live,
         &[
@@ -52,7 +52,7 @@ fn commit_plan_local_eq_base_applies_incoming() {
     fs::create_dir_all(&live).unwrap();
     fs::write(live.join("f.txt"), "base").unwrap();
 
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from("f.txt")])
         .unwrap();
     // local 仍是 base（没动），incoming 改了。
@@ -71,7 +71,7 @@ fn commit_plan_incoming_eq_base_keeps_local() {
     fs::create_dir_all(&live).unwrap();
     fs::write(live.join("f.txt"), "base").unwrap();
 
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from("f.txt")])
         .unwrap();
     // local 改了（走 atomic_write rename 替换，hard-link 的 base 保留旧 inode），
@@ -98,7 +98,7 @@ fn seed_from_live_copies_all_files_to_base_and_staging() {
     fs::create_dir_all(live.join("app-meta/transactions/tx1")).unwrap();
     fs::write(live.join("app-meta/transactions/tx1/staged"), "tmp").unwrap();
 
-    let run = StagingRun::create(tmp.path(), live.clone(), "github_api".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.seed_from_live(&live).unwrap();
 
     // base 有业务文件
@@ -135,7 +135,7 @@ fn commit_plan_both_changed_is_conflict() {
     // 用 note.md（正文类）而非 .txt（GeneratedCache 走 LWW 不冲突）。
     fs::write(live.join("note.md"), "base").unwrap();
 
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from("note.md")])
         .unwrap();
     // local 改了（atomic_write rename 替换，base 保留旧 inode）。
@@ -155,7 +155,7 @@ fn commit_plan_remote_delete_local_unchanged_produces_delete() {
     fs::create_dir_all(&live).unwrap();
     fs::write(live.join("f.txt"), "base").unwrap();
 
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from("f.txt")])
         .unwrap();
     // 远端删除：staging 中没有 f.txt（incoming=None），local 没改。
@@ -178,7 +178,7 @@ fn commit_plan_remote_new_local_none_applies() {
     fs::create_dir_all(&live).unwrap();
     // live 没有 f.txt（local=None），base 也没有（base=None）。
     // staging 有 f.txt（incoming=Some）。
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     // base 为空（没有 build_base_snapshot）
     fs::write(run.staging_root().join("f.txt"), "new-from-remote").unwrap();
 
@@ -197,7 +197,7 @@ fn commit_plan_local_changed_remote_deleted_is_conflict() {
     // 用 note.md（正文类）而非 .txt（GeneratedCache 走 LWW：Apply Delete 不冲突）。
     fs::write(live.join("note.md"), "base").unwrap();
 
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from("note.md")])
         .unwrap();
     // local 改了，远端删除（staging 没有 note.md）。

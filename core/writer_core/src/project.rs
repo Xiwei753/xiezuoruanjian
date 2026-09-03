@@ -13,11 +13,13 @@
 //! ```text
 //! projects/
 //!   {project_id}/
-//!     .git/                 # 作品自己的 Git 仓库（同步与版本管理）
 //!     project.json          # 项目元数据（id、title、order、时间戳）
 //!     volumes/              # 所有卷
 //!     characters/           # 角色数据（预留）
 //! ```
+//!
+//! #645 评论第 1 点：一个工作区一个 Git 仓库。作品目录不再各自初始化 `.git/`，
+//! Git 仓库由 workspace 级别统一管理（见 `sync::staging`）。
 
 use crate::error::Result;
 use chrono::Utc;
@@ -25,12 +27,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
-
-/// #644 评论 5492740265 问题4：GitRepoLayout factory 类型别名。
-///
-/// 接受 `project_id` 返回该作品的 `GitRepoLayout`。`None` 时使用标准布局。
-/// 用类型别名收口，避免 clippy `type_complexity` 在每个签名/绑定处重复告警。
-pub type GitLayoutFn = Box<dyn Fn(&str) -> crate::storage::git_repo_layout::GitRepoLayout>;
 
 /// 项目元数据结构体。
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -44,27 +40,14 @@ pub struct Project {
 }
 
 pub fn list_projects(projects_root: &Path) -> Result<Vec<Project>> {
-    list_projects_with_layout(projects_root, None::<GitLayoutFn>)
+    list_projects_inner(projects_root)
 }
 
-/// #644 评论 5491531984 问题1：带 layout 的作品列表。
+/// 纯读取项目元数据，不调用 `ensure_project_repo_with_layout` / `ensure_project_repo`。
 ///
-/// `git_layout_fn` 是一个闭包，接受 project_id 返回该作品的 GitRepoLayout。
-/// `None` 时使用标准布局。
-pub fn list_projects_with_layout(
-    projects_root: &Path,
-    git_layout_fn: Option<GitLayoutFn>,
-) -> Result<Vec<Project>> {
-    list_projects_with_layout_inner(projects_root, git_layout_fn.as_deref())
-}
-
-/// `list_projects_with_layout` 的核心逻辑，接受引用形式的 `layout_fn`，
-/// 便于 `create_project_with_layout_factory` 等内部调用方在不 clone `Box` 的前提下复用。
-///
-/// #644 评论 5493295108 问题1：本函数恢复为**纯读取项目元数据**，
-/// 不再调用 `ensure_project_repo_with_layout` / `ensure_project_repo`。
-/// 冷启动/同步不能把 Core 卡住——列表/摘要不能顺手迁移所有旧作品。
-/// 迁移职责移到 `sync::staging::prepare_staging_runs`（已释放 Core 写锁之后）。
+/// #644 评论 5493295108 问题1：冷启动/同步不能把 Core 卡住——列表/摘要不能顺手迁移
+/// 所有旧作品。迁移职责移到 `sync::staging::prepare_staging_runs`（已释放 Core 写锁之后）。
+/// #645 评论第 1 点：作品目录不再各自养 Git 仓库，list 永远只读 `project.json`。
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
@@ -72,10 +55,7 @@ pub fn list_projects_with_layout(
     clippy::too_many_arguments,
     clippy::type_complexity
 )]
-fn list_projects_with_layout_inner(
-    projects_root: &Path,
-    _git_layout_fn: Option<&dyn Fn(&str) -> crate::storage::git_repo_layout::GitRepoLayout>,
-) -> Result<Vec<Project>> {
+fn list_projects_inner(projects_root: &Path) -> Result<Vec<Project>> {
     let projects_dir = projects_root;
     if !projects_dir.exists() {
         return Ok(Vec::new());
@@ -94,6 +74,7 @@ fn list_projects_with_layout_inner(
                         // #644 评论 5493295108 问题1：纯读取，不触发迁移。
                         // 旧作品（无 .git/）的 Git 迁移由 `sync::staging::prepare_staging_runs`
                         // 在已释放 Core 写锁之后执行，不堵住冷启动卷章读取。
+                        // #645 评论第 1 点：作品不再各自养 Git 仓库，list 永远只读元数据。
                         projects.push(project);
                     }
                 }
@@ -197,25 +178,15 @@ pub fn get_project_stats(project_root: &Path) -> Result<ProjectStats> {
 
 /// 列出所有项目摘要（元数据 + 统计），#625 第二段新增批量 API。
 ///
-/// 复用 `list_projects`（继承排序、旧作品 Git 迁移）和 `get_project_stats`（字数累加），
+/// 复用 `list_projects_inner`（纯读取元数据 + 排序）和 `get_project_stats`（字数累加），
 /// 一次遍历返回带 `total_word_count`/`volume_count`/`chapter_count` 的列表。
 /// 不破坏现有 `list_projects` 4 字段契约。
 ///
 /// 错误处理：磁盘/IO 错误显式向上传播，不用 unwrap/expect。
-pub fn list_project_summaries(projects_root: &Path) -> Result<Vec<ProjectSummary>> {
-    list_project_summaries_with_layout(projects_root, None::<GitLayoutFn>)
-}
-
-/// #644 评论 5492740265 问题4：带 layout 的作品摘要列表。
 ///
-/// 复用 `list_projects_with_layout`（而非 `list_projects`），确保 `git_metadata_root=Some`
-/// 时摘要路径也走 `ensure_project_repo_with_layout`，不会在共享存储重新制造 `.git`。
-/// `None` 时退化为标准布局，行为与 `list_project_summaries` 一致。
-pub fn list_project_summaries_with_layout(
-    projects_root: &Path,
-    git_layout_fn: Option<GitLayoutFn>,
-) -> Result<Vec<ProjectSummary>> {
-    let projects = list_projects_with_layout_inner(projects_root, git_layout_fn.as_deref())?;
+/// #645 评论第 1 点：作品不再各自养 Git 仓库，摘要路径只读 `project.json` + 统计。
+pub fn list_project_summaries(projects_root: &Path) -> Result<Vec<ProjectSummary>> {
+    let projects = list_projects_inner(projects_root)?;
     let mut summaries = Vec::with_capacity(projects.len());
     for project in projects {
         let project_dir = projects_root.join(&project.id);
@@ -237,51 +208,12 @@ pub fn list_project_summaries_with_layout(
 ///
 /// `order` 字段取现有项目最大 order + 1，保证新项目排在最后。
 /// 自动调用 `volume::create_volume` 创建默认卷，保持产品一致性。
+///
+/// #645 评论第 1 点：一个工作区一个 Git 仓库。`create_project` 只创建作品目录、
+/// `project.json`、`volumes/`、`characters/` 和默认卷，**不再初始化作品级 `.git/`**。
+/// Git 仓库由 workspace 级别统一管理（见 `sync::staging`）。
 pub fn create_project(projects_root: &Path, title: &str) -> Result<Project> {
-    create_project_with_layout_factory(projects_root, title, None::<GitLayoutFn>)
-}
-
-/// #644 评论 5491531984 问题1：带 layout 的作品创建。
-///
-/// `git_layout` 指定新建作品的 Git 仓库物理位置。
-/// `None` 时使用标准布局（`project_root.join(".git")`）。
-///
-/// 注意：该签名接受一个固定 `GitRepoLayout`，但调用方在进入函数前不知道内部即将生成的
-/// project id，无法构造正确的 layout（worktree_root/git_dir 都依赖 project id）。
-/// 新代码应优先使用 `create_project_with_layout_factory`。本函数保留为向后兼容的薄包装：
-/// 当传入固定 layout 时，构造一个忽略 project id 的常量闭包委托给 factory。
-pub fn create_project_with_layout(
-    projects_root: &Path,
-    title: &str,
-    git_layout: Option<crate::storage::git_repo_layout::GitRepoLayout>,
-) -> Result<Project> {
-    match git_layout {
-        Some(layout) => {
-            let layout_fn: GitLayoutFn = Box::new(move |_project_id: &str| layout.clone());
-            create_project_with_layout_factory(projects_root, title, Some(layout_fn))
-        }
-        None => create_project_with_layout_factory(projects_root, title, None::<GitLayoutFn>),
-    }
-}
-
-/// #644 评论 5492740265 问题4：带 layout factory 的作品创建。
-///
-/// `git_layout_fn` 是一个闭包，接受 project_id 返回该作品的 GitRepoLayout。
-/// 函数内部先生成 project id（`Uuid::new_v4()`），再用这个 id 调 `git_layout_fn(&id)`
-/// 构造 `GitRepoLayout`，然后调 `ensure_project_repo_with_layout`。这样新作品从出生开始
-/// 就直接使用最终 layout，不会先在共享存储建 `.git` 再等下一次列表/同步搬家。
-///
-/// `None` 时使用标准布局。
-///
-/// 内部 list 已有项目算 order 时也走 layout（用 `list_projects_with_layout_inner`），
-/// 否则 list 过程中又会在共享存储建 `.git`。由于此时新 project 还没创建，list 的是已有
-/// 项目，用同一个 `git_layout_fn` 是正确的。
-pub fn create_project_with_layout_factory(
-    projects_root: &Path,
-    title: &str,
-    git_layout_fn: Option<GitLayoutFn>,
-) -> Result<Project> {
-    let projects = list_projects_with_layout_inner(projects_root, git_layout_fn.as_deref())?;
+    let projects = list_projects_inner(projects_root)?;
     let order = projects
         .iter()
         .map(|p| p.order)
@@ -301,15 +233,8 @@ pub fn create_project_with_layout_factory(
 
     let project_dir = projects_root.join(&id);
     fs::create_dir_all(&project_dir)?;
-    // 每个作品目录自身就是 Git 仓库（Issue #600）：先初始化仓库，再写 project.json。
-    // #644 评论 5492740265 问题4：通过 layout factory 确定 Git 物理位置，
-    // 新作品从出生开始就直接使用最终 layout。
-    if let Some(ref layout_fn) = git_layout_fn {
-        let layout = layout_fn(&id);
-        crate::storage::git_repo_layout::ensure_project_repo_with_layout(&layout)?;
-    } else {
-        crate::storage::project_git::ensure_project_repo(&project_dir)?;
-    }
+    // #645 评论第 1 点：一个工作区一个 Git 仓库。作品目录不再各自初始化 `.git/`，
+    // Git 仓库由 workspace 级别统一管理（见 `sync::staging`）。
     fs::create_dir_all(project_dir.join("volumes"))?;
     fs::create_dir_all(project_dir.join("characters"))?;
 
@@ -327,21 +252,10 @@ pub fn create_project_with_layout_factory(
 ///
 /// 同一作品根下不允许重名（title 唯一性检查）。
 /// 如果新标题已被其他项目使用，返回 `Error::Other`。
-pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -> Result<()> {
-    rename_project_with_layout(projects_root, project_id, new_title, None::<GitLayoutFn>)
-}
-
-/// #644 评论 5492740265 问题4：带 layout 的作品重命名。
 ///
-/// 内部 list 已有项目做重名检查时走 `list_projects_with_layout_inner`，
-/// 确保 `git_metadata_root=Some` 时不会在共享存储重新制造 `.git`。
-pub fn rename_project_with_layout(
-    projects_root: &Path,
-    project_id: &str,
-    new_title: &str,
-    git_layout_fn: Option<GitLayoutFn>,
-) -> Result<()> {
-    let projects = list_projects_with_layout_inner(projects_root, git_layout_fn.as_deref())?;
+/// #645 评论第 1 点：重命名只改 `project.json`，不涉及 Git 仓库。
+pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -> Result<()> {
+    let projects = list_projects_inner(projects_root)?;
     if projects
         .iter()
         .any(|p| p.title == new_title && p.id != project_id)
@@ -370,23 +284,17 @@ pub fn rename_project_with_layout(
     Ok(())
 }
 
-pub fn delete_project(projects_root: &Path, project_id: &str, app_data_root: &Path) -> Result<()> {
-    delete_project_with_layout(projects_root, project_id, app_data_root, None)
-}
-
-/// #644 评论 5493295108 问题4：带 layout 的作品删除。
-///
-/// `git_layout` 指定要删除的 private git_dir 位置。`None` 时只删共享 worktree
-/// （退化为 `delete_project` 的旧行为）。
+/// 删除作品。
 ///
 /// 使用 durable delete transaction 解决"正文删了，private Git 还活着"的分裂状态：
 /// 1. 在第一次 rename 前先写 `ProjectDeleteJournal`（含 from/trash 路径 + phase）
 /// 2. 每次 rename 后 fsync 对应父目录并推进 phase
-/// 3. private rename/create_dir 的错误直接返回，不能 warn 后当删除成功
-/// 4. #644 评论 5495945801 问题3：tombstone 收进事务（`tx.write_tombstone`），
-///    错误直接返回不吞；journal 保留到 tombstone/两边 trash 都完成以后
+/// 3. #644 评论 5495945801 问题3：tombstone 收进事务（`tx.write_tombstone`），
+///    错误直接返回不吞；journal 保留到 tombstone/worktree trash 都完成以后
 ///
-/// 这样删除/恢复不会出现"正文已经删了，Git 历史还挂在原 project id 下"的分裂状态。
+/// #645 评论第 1 点：一个工作区一个 Git 仓库。Git 仓库是 workspace 级别共享的，
+/// 删除单个作品只移 worktree 进 trash，**不移动共享 git_dir**。因此不再传
+/// `git_dir_from`/`git_dir_trash_root`（传 None），也不再调 `tx.move_git()`。
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
@@ -394,12 +302,7 @@ pub fn delete_project(projects_root: &Path, project_id: &str, app_data_root: &Pa
     clippy::too_many_arguments,
     clippy::type_complexity
 )]
-pub fn delete_project_with_layout(
-    projects_root: &Path,
-    project_id: &str,
-    app_data_root: &Path,
-    git_layout: Option<&crate::storage::git_repo_layout::GitRepoLayout>,
-) -> Result<()> {
+pub fn delete_project(projects_root: &Path, project_id: &str, app_data_root: &Path) -> Result<()> {
     let project_id = crate::delete_guard::validate_id_segment(project_id)?;
     let project_dir = projects_root.join(project_id);
     let target_canon =
@@ -408,33 +311,14 @@ pub fn delete_project_with_layout(
     // #644 评论 5495945801 问题2：只传 trash root，token 在事务内部生成。
     let worktree_trash_root = app_data_root.join("sync/trash");
 
-    // 计算 private git_dir trash root（可选）。
-    let (git_dir_from, git_dir_trash_root) = if let Some(layout) = git_layout {
-        let private_git_dir = &layout.git_dir;
-        if private_git_dir.exists() {
-            if let Some(private_root) = private_git_dir.parent() {
-                let private_trash_root = private_root.join("trash");
-                (
-                    Some(private_git_dir.to_path_buf()),
-                    Some(private_trash_root),
-                )
-            } else {
-                (None, None)
-            }
-        } else {
-            (None, None)
-        }
-    } else {
-        (None, None)
-    };
-
-    // 创建 durable delete transaction。
+    // #645 评论第 1 点：workspace 共享 git_dir 不因删除单个作品而移动。
+    // 创建 durable delete transaction，不传 private git_dir。
     let mut tx = crate::storage::journal::project_delete::ProjectDeleteTransaction::new(
         project_id,
         &target_canon,
         &worktree_trash_root,
-        git_dir_from.as_deref(),
-        git_dir_trash_root.as_deref(),
+        None,
+        None,
         projects_root,
         app_data_root,
     );
@@ -446,18 +330,14 @@ pub fn delete_project_with_layout(
     // 2. 移动 worktree 到 trash。
     tx.move_worktree()?;
 
-    // 3. 移动 private git_dir 到 trash（如果存在）。
-    //    失败时返回 Err，journal 保留，下次恢复。
-    tx.move_git()?;
-
-    // 4. #644 评论 5495945801 问题3：生成 tombstone（收进事务，错误直接返回不吞）。
+    // 3. #644 评论 5495945801 问题3：生成 tombstone（收进事务，错误直接返回不吞）。
     //    删除原来的 if let Ok / let _ = tombstone 代码块。
     tx.write_tombstone()?;
 
-    // 5. 完成删除：推进 phase 到 Completed。
+    // 4. 完成删除：推进 phase 到 Completed。
     tx.complete()?;
 
-    // 6. 清理 journal。
+    // 5. 清理 journal。
     tx.cleanup_journal()?;
 
     Ok(())
@@ -528,22 +408,10 @@ pub fn get_project_updated_at_aggregated(project_root: &Path) -> Result<String> 
     Ok(Utc::now().to_rfc3339())
 }
 
+/// #645 评论第 1 点：重排只改各 `project.json` 的 `order` 字段，不涉及 Git 仓库。
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn reorder_projects(projects_root: &Path, ordered_ids: &[String]) -> Result<()> {
-    reorder_projects_with_layout(projects_root, ordered_ids, None::<GitLayoutFn>)
-}
-
-/// #644 评论 5492740265 问题4：带 layout 的作品重排。
-///
-/// 内部 list 已有项目时走 `list_projects_with_layout_inner`，
-/// 确保 `git_metadata_root=Some` 时不会在共享存储重新制造 `.git`。
-#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-pub fn reorder_projects_with_layout(
-    projects_root: &Path,
-    ordered_ids: &[String],
-    git_layout_fn: Option<GitLayoutFn>,
-) -> Result<()> {
-    let mut projects = list_projects_with_layout_inner(projects_root, git_layout_fn.as_deref())?;
+    let mut projects = list_projects_inner(projects_root)?;
     let mut projects_map = std::collections::HashMap::new();
     for p in projects.drain(..) {
         projects_map.insert(p.id.clone(), p);

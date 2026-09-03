@@ -24,7 +24,7 @@ fn test_create_and_list_project() {
 }
 
 #[test]
-fn test_create_project_initializes_git_repo() {
+fn test_create_project_does_not_initialize_per_project_git_repo() {
     let dir = tempdir().unwrap();
     let data_root = dir.path();
     std::fs::create_dir_all(data_root.join("projects")).unwrap();
@@ -32,16 +32,17 @@ fn test_create_project_initializes_git_repo() {
     let project = create_project(&data_root.join("projects"), "Test Git Repo").unwrap();
     let project_dir = data_root.join("projects").join(&project.id);
 
-    // 新建作品必须自带 .git/，Git 是作品存储基础（Issue #600），
-    // 不能等第一次同步才初始化。
-    assert!(project_dir.join(".git").exists());
+    // #645 评论第 1 点：一个工作区一个 Git 仓库。作品目录不再各自初始化 `.git/`，
+    // Git 仓库由 workspace 级别统一管理。create_project 后作品目录不应含 `.git/`。
     assert!(
-        git2::Repository::open(&project_dir).is_ok(),
-        "project dir must be an openable Git repository"
+        !project_dir.join(".git").exists(),
+        "create_project 后作品目录不应含 .git/ — workspace 单一 Git 仓库模型"
     );
-
-    // 重复初始化幂等：再次 ensure 不应报错。
-    crate::storage::project_git::ensure_project_repo(&project_dir).unwrap();
+    // 作品目录也不是一个可打开的 Git 仓库。
+    assert!(
+        git2::Repository::open(&project_dir).is_err(),
+        "作品目录不应是可打开的 Git 仓库 — Git 仓库由 workspace 级别管理"
+    );
 }
 
 #[test]

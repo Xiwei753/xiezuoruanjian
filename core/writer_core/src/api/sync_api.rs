@@ -213,7 +213,10 @@ impl WriterCoreApi {
     ///
     /// #644 评论 5473401065 第1节：staging seed（磁盘扫描/复制）也移出写锁，
     /// 避免冷启动读取卷章被同步 Prepare 卡住。
-    #[cfg(feature = "github-api")]
+    ///
+    /// #645 评论 5504296097 第2点：通用 full-sync 入口不再 `#[cfg(feature = "github-api")]`
+    /// 门控。具体 Provider 能否创建由 [`crate::facade::WriterCore::create_sync_provider_for_plan`]
+    /// 决定（未启用 github-api feature 时 `github_api` 分支返回 `NotImplemented`）。
     pub fn perform_full_sync(
         &self,
         config: SyncConfigDto,
@@ -241,13 +244,11 @@ impl WriterCoreApi {
         // #644 评论 5473551127 第1节：seed 失败时必须把 FullSyncState 从 Syncing
         // 改为失败终态，否则下次启动/同步会永久看到上一次遗留的 Syncing。
         //
-        // #644 评论 5473551127 第2节：按 backend 类型选择对应 staging 方式，
-        // Git 后端需要保留仓库身份（.git/HEAD/remote），不能共用 GithubApi 的文件复制。
-        let resolved_active_provider = crate::sync::url::resolved_active_provider(&sync_config);
-        let staging_runs = match crate::sync::staging::prepare_staging_runs(
-            &mut plan,
-            &resolved_active_provider,
-        ) {
+        // #645 评论 5504296097 第2点：staging 不再按 active_provider 分 Git/GithubApi
+        // backend 走不同 seed 路径；统一调 `seed_from_live`（文件级复制）。
+        // workspace 级别的 Git layout 迁移仍由 `prepare_staging_runs` 内部完成，
+        // 但不作为某个 remote provider 的 staging 模式。
+        let staging_runs = match crate::sync::staging::prepare_staging_runs(&mut plan) {
             Ok(runs) => runs,
             Err(err) => {
                 let status = crate::sync::full_sync::error_to_persist_status(&err);
@@ -274,16 +275,6 @@ impl WriterCoreApi {
         };
 
         Ok(result.into())
-    }
-
-    /// `perform_full_sync` 的非 github-api fallback — 无 LWW engine 可用。
-    #[cfg(not(feature = "github-api"))]
-    pub fn perform_full_sync(
-        &self,
-        _config: SyncConfigDto,
-        _force_sync: bool,
-    ) -> ApiResult<FullSyncResultDto> {
-        Err(crate::Error::NotImplemented.into())
     }
 
     /// 冲突解决：保留本地版本。

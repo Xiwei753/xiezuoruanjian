@@ -96,7 +96,7 @@ fn adv_p1_manifest_sync_json_goes_to_engine_state_actions() {
     let manifest = "app-meta/sync/manifest.sync.json";
 
     write_rel(&live, manifest, "base-manifest");
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(manifest)])
         .unwrap();
     // Transfer 在 staging 写入新 manifest（incoming 改了）
@@ -133,7 +133,7 @@ fn adv_p1_state_local_json_goes_to_engine_state_actions() {
     let state = "app-meta/sync/state.local.json";
 
     write_rel(&live, state, "base-state");
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(state)])
         .unwrap();
     write_rel(&run.staging_root(), state, "incoming-state-v2");
@@ -159,7 +159,7 @@ fn adv_p1_config_local_json_never_in_any_actions() {
 
     // live 有设备专属 config.local.json
     write_rel(&live, config_local, "live-device-config");
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(config_local)])
         .unwrap();
     // staging 里也有一个不同的 config.local.json（远端来的，但这是设备专属的，不应覆盖 live）
@@ -202,7 +202,7 @@ fn adv_p1_secrets_never_in_any_actions() {
     let secrets = "app-meta/sync/secrets/github.json";
 
     write_rel(&live, secrets, "live-secrets");
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(secrets)])
         .unwrap();
     write_rel(&run.staging_root(), secrets, "remote-secrets-different");
@@ -224,7 +224,7 @@ fn adv_p1_transactions_never_in_any_actions() {
     let tx_file = "app-meta/transactions/tx1/staged";
 
     write_rel(&live, tx_file, "tmp-staged");
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(tx_file)])
         .unwrap();
     write_rel(&run.staging_root(), tx_file, "tmp-staged-v2");
@@ -246,7 +246,7 @@ fn adv_p1_git_metadata_never_in_any_actions() {
     let git_head = ".git/HEAD";
 
     write_rel(&live, git_head, "ref: refs/heads/main");
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(git_head)])
         .unwrap();
     write_rel(&run.staging_root(), git_head, "ref: refs/heads/feature");
@@ -268,7 +268,7 @@ fn adv_p1_full_sync_staging_never_in_any_actions() {
     let staging_file = "full-sync-staging/run1/staged.txt";
 
     write_rel(&live, staging_file, "staging-tmp");
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(staging_file)])
         .unwrap();
     write_rel(&run.staging_root(), staging_file, "staging-tmp-v2");
@@ -290,7 +290,7 @@ fn adv_p1_engine_state_writes_incoming_content_not_base() {
     let manifest = "app-meta/sync/manifest.sync.json";
 
     write_rel(&live, manifest, "base-manifest");
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(manifest)])
         .unwrap();
     write_rel(&run.staging_root(), manifest, "incoming-authoritative");
@@ -330,7 +330,7 @@ fn adv_p2_partial_conflict_commits_non_conflict_files_and_conflict_metadata() {
 
     // live = base
     write_rel(&project_live, project_json, "base-content");
-    let run = StagingRun::create(&app_data, project_live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(&app_data, project_live.clone()).unwrap();
     run.build_base_snapshot_from_live(&project_live, &[PathBuf::from(project_json)])
         .unwrap();
     // Transfer 在 staging 写入 project.json 远端更新（非冲突文件，已安全下载）
@@ -375,7 +375,7 @@ fn adv_p2_fatal_error_skips_staging_commit() {
 
     let project_json = "project.json";
     write_rel(&project_live, project_json, "live-original");
-    let run = StagingRun::create(&app_data, project_live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(&app_data, project_live.clone()).unwrap();
     run.build_base_snapshot_from_live(&project_live, &[PathBuf::from(project_json)])
         .unwrap();
     write_rel(
@@ -415,7 +415,7 @@ fn adv_p2_recoverable_error_skips_staging_commit() {
 
     let project_json = "project.json";
     write_rel(&project_live, project_json, "live-original");
-    let run = StagingRun::create(&app_data, project_live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(&app_data, project_live.clone()).unwrap();
     run.build_base_snapshot_from_live(&project_live, &[PathBuf::from(project_json)])
         .unwrap();
     write_rel(
@@ -457,7 +457,7 @@ fn adv_p2_success_full_commit_writes_both_content_and_engine_state() {
 
     write_rel(&project_live, project_json, "base-content");
     write_rel(&project_live, manifest, "base-manifest");
-    let run = StagingRun::create(&app_data, project_live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(&app_data, project_live.clone()).unwrap();
     run.build_base_snapshot_from_live(
         &project_live,
         &[PathBuf::from(project_json), PathBuf::from(manifest)],
@@ -501,7 +501,7 @@ fn adv_p2_partial_conflict_excludes_conflict_paths_from_content_actions() {
     // live = base
     write_rel(&project_live, conflict_file, "base-chapter");
     write_rel(&project_live, safe_file, "base-project");
-    let run = StagingRun::create(&app_data, project_live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(&app_data, project_live.clone()).unwrap();
     run.build_base_snapshot_from_live(
         &project_live,
         &[PathBuf::from(conflict_file), PathBuf::from(safe_file)],
@@ -564,7 +564,7 @@ fn adv_p3_metadata_local_newer_wins() {
     let project_json = "project.json";
 
     write_rel(&live, project_json, "base");
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(project_json)])
         .unwrap();
 
@@ -598,7 +598,7 @@ fn adv_p3_metadata_incoming_newer_wins() {
 
     // local 先写（旧）
     write_rel(&live, project_json, "base");
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(project_json)])
         .unwrap();
 
@@ -658,7 +658,7 @@ fn adv_p3_metadata_tie_local_device_id_greater_wins() {
         r#"{"remote_url":null,"transport":null,"last_synced_commit":null,"last_sync_time":null,"last_error":null,"known_files":{},"conflicts":[],"device_id":"zzz-top-device","conflicted_files":[]}"#,
     );
 
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(
         &live,
         &[PathBuf::from(project_json), PathBuf::from(state_local)],
@@ -706,7 +706,7 @@ fn adv_p3_metadata_tie_remote_device_id_greater_wins() {
         r#"{"remote_url":null,"transport":null,"last_synced_commit":null,"last_sync_time":null,"last_error":null,"known_files":{},"conflicts":[],"device_id":"aaa-low-device","conflicted_files":[]}"#,
     );
 
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(
         &live,
         &[PathBuf::from(project_json), PathBuf::from(state_local)],
@@ -762,7 +762,7 @@ fn adv_p3_metadata_tie_no_state_local_falls_back_to_empty_device_id() {
 
     // live 没有 state.local.json
     write_rel(&live, project_json, "base");
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(project_json)])
         .unwrap();
 
@@ -792,7 +792,7 @@ fn adv_p3_generated_cache_both_changed_uses_lww_not_conflict() {
     let cache_file = "some-cache.txt"; // .txt → GeneratedCache
 
     write_rel(&live, cache_file, "base");
-    let run = StagingRun::create(tmp.path(), live.clone(), "git".to_string(), None).unwrap();
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(cache_file)])
         .unwrap();
 

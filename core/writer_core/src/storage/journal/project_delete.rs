@@ -4,9 +4,12 @@
 //!
 //! ## 问题背景
 //!
-//! 旧 `delete_project_with_layout()` 先移动 worktree trash，再移动 private git_dir。
+//! 旧 `delete_project()` 先移动 worktree trash，再移动 private git_dir。
 //! 如果进程死在两次 rename 中间，或 private trash 创建失败被 `let _ = ...` 吞掉，
 //! 会出现 worktree 已删除但 git_dir 仍在原活动位置的分裂状态。
+//!
+//! #645 评论第 1 点：一个工作区一个 Git 仓库后，删除单个作品不再移动共享 git_dir，
+//! 事务只覆盖 worktree 移动 + tombstone 生成。
 //!
 //! ## 解决方案
 //!

@@ -2,13 +2,13 @@
 //!
 //! 本测试文件针对评论 5493295108 描述的 5 个问题，验证修复后的行为：
 //!
-//! - 问题1：`list_projects_with_layout_inner` 不再调 `ensure_project_repo_with_layout`，
+//! - 问题1：`list_projects_inner` 不再调 `ensure_project_repo_with_layout`，
 //!   迁移职责移到 `sync::staging::prepare_staging_runs`（已释放 Core 写锁之后）。
 //! - 问题2：`seed_from_live_as_git_repo` 识别旧 `app_data_root/.git` 并迁移，
 //!   不再只检查 `layout.git_dir.exists()`。
 //! - 问题3：迁移改为 journal 状态机，先取所有权再复制。恢复时只删 `claimed_source`，
 //!   绝不能删除后来重新出现在 `worktree/.git` 的别人的仓库。
-//! - 问题4：`delete_project_with_layout` 把 private git_dir 也移进 trash，
+//! - 问题4：`delete_project` 在 workspace layout 下不移动共享 git_dir，
 //!   不再遗留孤儿仓库。
 //!
 //! 验证策略：WHITE_BOX（源码结构断言）+ 运行时行为验证。
@@ -53,22 +53,22 @@ fn extract_fn_body(src: &str, fn_name: &str) -> String {
     src[start..end].to_string()
 }
 
-// ══ 问题1：list_projects() 不再在 Core 写锁里搬整个 .git �6══
+// ══ 问题1：list_projects() 不再在 Core 写锁里搬整个 .git ══
 
-/// 问题1验证：`list_projects_with_layout_inner` 不再调 `ensure_project_repo_with_layout`，
+/// 问题1验证：`list_projects_inner` 不再调 `ensure_project_repo_with_layout`，
 /// 迁移职责移到 `sync::staging::prepare_staging_runs`（已释放 Core 写锁之后）。
 #[test]
 fn problem1_list_projects_no_longer_migrates_in_core_write_lock() {
     let project_src = read_src_file("src/project.rs");
-    let list_inner_body = extract_fn_body(&project_src, "list_projects_with_layout_inner");
-    // 修复后：list_projects_with_layout_inner 不再调 ensure_project_repo_with_layout
+    let list_inner_body = extract_fn_body(&project_src, "list_projects_inner");
+    // 修复后：list_projects_inner 不再调 ensure_project_repo_with_layout
     assert!(
         !list_inner_body.contains("ensure_project_repo_with_layout"),
-        "problem1: list_projects_with_layout_inner 仍调 ensure_project_repo_with_layout — 修复未生效"
+        "problem1: list_projects_inner 仍调 ensure_project_repo_with_layout — 修复未生效"
     );
     assert!(
         !list_inner_body.contains("ensure_project_repo("),
-        "problem1: list_projects_with_layout_inner 仍调 ensure_project_repo — 修复未生效"
+        "problem1: list_projects_inner 仍调 ensure_project_repo — 修复未生效"
     );
 
     // 验证 staging::prepare_staging_runs 已接入 prepare_target_git_layout
@@ -91,7 +91,7 @@ fn problem1_list_projects_no_longer_migrates_in_core_write_lock() {
     );
 
     println!(
-        "[BUGFIX_REPRO_TRACE] problem1: list_projects_with_layout_inner 已改为纯读取，\
+        "[BUGFIX_REPRO_TRACE] problem1: list_projects_inner 已改为纯读取，\
          迁移职责移到 prepare_staging_runs（无 Core 锁）"
     );
 }
@@ -370,8 +370,8 @@ fn problem_all_four_issues_fixed_on_current_branch() {
     );
     let project_ops_src = read_src_file("src/facade/project_ops.rs");
 
-    // 问题1：list_projects_with_layout_inner 不再调 ensure_project_repo_with_layout
-    let list_inner_body = extract_fn_body(&project_src, "list_projects_with_layout_inner");
+    // 问题1：list_projects_inner 不再调 ensure_project_repo_with_layout
+    let list_inner_body = extract_fn_body(&project_src, "list_projects_inner");
     assert!(!list_inner_body.contains("ensure_project_repo_with_layout"));
     assert!(staging_src.contains("prepare_target_git_layout"));
 
@@ -384,10 +384,11 @@ fn problem_all_four_issues_fixed_on_current_branch() {
     assert!(git_repo_layout_src.contains("claimed_source"));
     assert!(git_repo_layout_src.contains("complete_migration_with_journal"));
 
-    // 问题4：delete_project_with_layout 已新增，facade 已接入
-    assert!(project_src.contains("delete_project_with_layout"));
+    // 问题4：delete_project 已合并（不再有 delete_project_with_layout），
+    // facade delete_project 直接调 project::delete_project。
+    assert!(project_src.contains("fn delete_project("));
     let delete_body = extract_fn_body(&project_ops_src, "delete_project");
-    assert!(delete_body.contains("delete_project_with_layout"));
+    assert!(delete_body.contains("project::delete_project"));
 
     println!("[BUGFIX_REPRO_TRACE] problem_all: 4 个问题的修复全部生效于当前分支 HEAD");
 }
