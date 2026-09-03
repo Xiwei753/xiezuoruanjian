@@ -575,7 +575,7 @@ impl AppBackend {
                 config.has_network_permission = net.is_connected;
                 config.has_network_state_permission = true;
 
-                let backend_label = config.backend_type.clone();
+                let backend_label = config.active_provider.clone();
                 debug_log_static(
                     "sync",
                     "perform_sync_backend",

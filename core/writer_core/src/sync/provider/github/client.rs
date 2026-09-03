@@ -173,7 +173,9 @@ pub(crate) fn put_content_once(
     let new_sha = if is_success_status(resp.status) {
         serde_json::from_str(&body)
             .ok()
-            .and_then(|json: serde_json::Value| json["content"]["sha"].as_str().map(|s| s.to_string()))
+            .and_then(|json: serde_json::Value| {
+                json["content"]["sha"].as_str().map(|s| s.to_string())
+            })
     } else {
         None
     };

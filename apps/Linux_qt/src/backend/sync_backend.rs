@@ -660,19 +660,36 @@ impl AppBackend {
         };
         if let Some(api) = self.core_api() {
             let config_opt = api.load_sync_config().ok();
-            let token_opt = api.load_sync_secrets().ok().and_then(|s| s.token);
+            // Issue #645：token 从 provider_secrets → ProviderSecretsDto::GitHub 提取。
+            let token_opt = api
+                .load_sync_secrets()
+                .ok()
+                .and_then(|s| s.provider_secrets)
+                .and_then(|ps| match ps {
+                    writer_core::api::types::ProviderSecretsDto::GitHub { token } => Some(token),
+                });
             if let Some(config) = config_opt {
                 self.current_sync_enabled = config.enabled;
-                self.current_sync_backend_type = config.backend_type.clone();
-                self.current_sync_remote_url = config.remote_url.clone();
-                self.current_sync_branch = if config.branch.is_empty() {
+                self.current_sync_backend_type = config.active_provider.clone();
+                // Issue #645：GitHub 字段从 provider_config → ProviderConfigDto::GitHub 提取。
+                let (gh_remote_url, gh_branch, gh_username) = match &config.provider_config {
+                    Some(writer_core::api::types::ProviderConfigDto::GitHub {
+                        remote_url,
+                        branch,
+                        username,
+                        ..
+                    }) => (remote_url.clone(), branch.clone(), username.clone()),
+                    None => (String::new(), String::new(), String::new()),
+                };
+                self.current_sync_remote_url = gh_remote_url;
+                self.current_sync_branch = if gh_branch.is_empty() {
                     "main".to_string()
                 } else {
-                    config.branch.clone()
+                    gh_branch
                 };
                 self.current_sync_auto_sync = config.auto_sync;
                 self.current_sync_interval = config.sync_interval_seconds;
-                self.current_sync_username = config.username.clone();
+                self.current_sync_username = gh_username;
             } else {
                 self.current_sync_enabled = false;
                 self.current_sync_remote_url = "".to_string();
@@ -740,17 +757,21 @@ impl AppBackend {
         };
         if let Some(api) = self.core_api() {
             let net = crate::backend::app_backend::current_network_state();
+            // Issue #645：SyncConfigDto 改为 provider-neutral 结构，
+            // GitHub 字段通过 provider_config: Option<ProviderConfigDto::GitHub> 携带。
             let mut c = api
                 .load_sync_config()
                 .unwrap_or(writer_core::api::types::SyncConfigDto {
                     enabled: false,
-                    backend_type: "github_api".to_string(),
-                    remote_url: "".to_string(),
-                    transport: "https_token".to_string(),
-                    branch: "main".to_string(),
+                    active_provider: "github_api".to_string(),
+                    provider_config: Some(writer_core::api::types::ProviderConfigDto::GitHub {
+                        remote_url: "".to_string(),
+                        branch: "main".to_string(),
+                        username: "".to_string(),
+                        transport: "https_token".to_string(),
+                    }),
                     auto_sync: false,
                     sync_interval_seconds: 300,
-                    username: "".to_string(),
                     has_network_permission: net.is_connected,
                     has_network_state_permission: true,
                 });
@@ -759,38 +780,48 @@ impl AppBackend {
             let parsed = writer_core::sync::sanitize_remote_url(&raw_url);
 
             c.enabled = self.current_sync_enabled;
-            c.backend_type = match self.current_sync_backend_type.as_str() {
+            c.active_provider = match self.current_sync_backend_type.as_str() {
                 "webdav" | "s3" | "local_folder" | "git" | "github_api" => {
                     self.current_sync_backend_type.clone()
                 }
                 _ => "github_api".to_string(),
             };
-            c.remote_url = parsed.sanitized_url.clone();
-            c.branch = if self.current_sync_branch.is_empty() {
+            let new_branch = if self.current_sync_branch.is_empty() {
                 "main".to_string()
             } else {
                 self.current_sync_branch.clone()
             };
-            c.auto_sync = self.current_sync_auto_sync;
-            c.sync_interval_seconds = self.current_sync_interval;
-            c.username = self.current_sync_username.clone();
-
+            let mut new_username = self.current_sync_username.clone();
             if let Some(ref extracted_user) = parsed.extracted_username {
-                if c.username.is_empty() {
-                    c.username = extracted_user.clone();
+                if new_username.is_empty() {
+                    new_username = extracted_user.clone();
                 }
             }
+            // GitHub 字段统一写入 provider_config（线格式 transport 为 "https_token"）。
+            c.provider_config = Some(writer_core::api::types::ProviderConfigDto::GitHub {
+                remote_url: parsed.sanitized_url.clone(),
+                branch: new_branch,
+                username: new_username,
+                transport: "https_token".to_string(),
+            });
+            c.auto_sync = self.current_sync_auto_sync;
+            c.sync_interval_seconds = self.current_sync_interval;
 
-            let mut s = api
-                .load_sync_secrets()
-                .unwrap_or(writer_core::api::types::SyncSecretsDto { token: None });
-            if let Some(ref extracted_token) = parsed.extracted_token {
-                s.token = Some(extracted_token.clone());
+            // Issue #645：SyncSecretsDto 改为 provider_secrets → ProviderSecretsDto::GitHub { token }。
+            let mut s =
+                api.load_sync_secrets()
+                    .unwrap_or(writer_core::api::types::SyncSecretsDto {
+                        provider_secrets: None,
+                    });
+            let new_token = if let Some(ref extracted_token) = parsed.extracted_token {
+                Some(extracted_token.clone())
             } else if self.current_sync_token.is_empty() {
-                s.token = None;
+                None
             } else {
-                s.token = Some(self.current_sync_token.clone());
-            }
+                Some(self.current_sync_token.clone())
+            };
+            s.provider_secrets = new_token
+                .map(|token| writer_core::api::types::ProviderSecretsDto::GitHub { token });
 
             let config_result = api.save_sync_config(c);
             let config_envelope = match config_result {

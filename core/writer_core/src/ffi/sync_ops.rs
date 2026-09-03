@@ -75,44 +75,37 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
         }
         // Issue #645 评论第 2 点：FFI 仍接受旧字段 remoteUrl/branch，
         // 写入 provider_config: ProviderConfig::GitHub。
-        let remote_url = val
-            .get("remoteUrl")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let branch = val
-            .get("branch")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        if remote_url.is_some() || branch.is_some() {
-            let existing_gh = match &config.provider_config {
-                #[cfg(feature = "github-api")]
-                Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => Some(gh.clone()),
-                _ => None,
-            };
-            let defaults = crate::sync::provider::github::config::GitHubProviderConfig::defaults();
-            let gh = crate::sync::provider::github::config::GitHubProviderConfig {
-                remote_url: remote_url.unwrap_or_else(|| {
-                    existing_gh
-                        .as_ref()
-                        .map(|g| g.remote_url.clone())
-                        .unwrap_or(defaults.remote_url)
-                }),
-                branch: branch.unwrap_or_else(|| {
-                    existing_gh
-                        .as_ref()
-                        .map(|g| g.branch.clone())
-                        .unwrap_or(defaults.branch)
-                }),
-                username: existing_gh
-                    .as_ref()
-                    .map(|g| g.username.clone())
-                    .unwrap_or(defaults.username),
-                transport: existing_gh
-                    .as_ref()
-                    .map(|g| g.transport.clone())
-                    .unwrap_or(defaults.transport),
-            };
-            config.provider_config = Some(crate::sync::provider::ProviderConfig::GitHub(gh));
+        // provider::github 模块仅在 github-api feature 下编译，整段逻辑需门控；
+        // 无 github-api 时该 block 不编译，FFI 仍保存 enabled/autoSync 等通用字段。
+        #[cfg(feature = "github-api")]
+        {
+            let remote_url = val
+                .get("remoteUrl")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let branch = val
+                .get("branch")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            if remote_url.is_some() || branch.is_some() {
+                let existing_gh = match &config.provider_config {
+                    Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => Some(gh.clone()),
+                    _ => None,
+                };
+                let defaults =
+                    crate::sync::provider::github::config::GitHubProviderConfig::defaults();
+                let prev_remote = existing_gh.as_ref().map(|g| g.remote_url.clone());
+                let prev_branch = existing_gh.as_ref().map(|g| g.branch.clone());
+                let prev_username = existing_gh.as_ref().map(|g| g.username.clone());
+                let prev_transport = existing_gh.as_ref().map(|g| g.transport.clone());
+                let gh = crate::sync::provider::github::config::GitHubProviderConfig {
+                    remote_url: remote_url.or(prev_remote).unwrap_or(defaults.remote_url),
+                    branch: branch.or(prev_branch).unwrap_or(defaults.branch),
+                    username: prev_username.unwrap_or(defaults.username),
+                    transport: prev_transport.unwrap_or(defaults.transport),
+                };
+                config.provider_config = Some(crate::sync::provider::ProviderConfig::GitHub(gh));
+            }
         }
         if let Some(v) = val.get("autoSync").and_then(|v| v.as_bool()) {
             config.auto_sync = v;

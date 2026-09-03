@@ -14,7 +14,9 @@ use crate::sync::types::SyncConfig;
 use crate::sync::types::SyncDiagnosticsResult;
 use crate::sync::types::SyncProtocol;
 use crate::sync::types::SyncSecrets;
+#[cfg(feature = "github-api")]
 use crate::sync::url::detect_transport;
+#[cfg(feature = "github-api")]
 use crate::sync::url::sanitize_remote_url;
 
 impl crate::sync::SyncService {

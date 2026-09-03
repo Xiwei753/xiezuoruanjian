@@ -234,6 +234,9 @@ impl super::WriterCore {
         config: &crate::sync::SyncConfig,
         secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<Box<dyn crate::sync::provider::SyncProvider>> {
+        // secrets 仅在 github-api feature 下使用；非 github-api 时消费以避免 unused。
+        #[cfg(not(feature = "github-api"))]
+        let _ = secrets;
         match config.active_provider.as_str() {
             #[cfg(feature = "github-api")]
             "github_api" => {
@@ -642,6 +645,9 @@ impl super::WriterCore {
         config: &crate::sync::SyncConfig,
         secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<crate::sync::SyncDiagnosticsResult> {
+        // secrets 仅在 github-api feature 下使用；非 github-api 时消费以避免 unused。
+        #[cfg(not(feature = "github-api"))]
+        let _ = secrets;
         match config.active_provider.as_str() {
             #[cfg(feature = "github-api")]
             "github_api" => {
