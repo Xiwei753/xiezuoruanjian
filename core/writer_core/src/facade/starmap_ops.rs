@@ -34,6 +34,24 @@ impl super::WriterCore {
         crate::starmap::create_starmap(&self.app_data_root, title, description, accent_color)
     }
 
+    /// #645 评论 5504296097 问题3：create_starmap 的变更集版本。
+    pub fn create_starmap_with_changes(
+        &self,
+        title: &str,
+        description: &str,
+        accent_color: Option<&str>,
+    ) -> Result<(
+        crate::starmap::StarMapMeta,
+        crate::storage::workspace_git::WorkspaceChangeSet,
+    )> {
+        crate::starmap::create_starmap_with_changes(
+            &self.app_data_root,
+            title,
+            description,
+            accent_color,
+        )
+    }
+
     pub fn create_child_starmap(
         &self,
         parent_id: &str,
@@ -50,12 +68,44 @@ impl super::WriterCore {
         )
     }
 
+    /// #645 评论 5504296097 问题3：create_child_starmap 的变更集版本。
+    pub fn create_child_starmap_with_changes(
+        &self,
+        parent_id: &str,
+        title: &str,
+        description: &str,
+        accent_color: Option<&str>,
+    ) -> Result<(
+        crate::starmap::StarMapMeta,
+        crate::storage::workspace_git::WorkspaceChangeSet,
+    )> {
+        crate::starmap::create_child_starmap_with_changes(
+            &self.app_data_root,
+            parent_id,
+            title,
+            description,
+            accent_color,
+        )
+    }
+
     pub fn rename_starmap(
         &self,
         starmap_id: &str,
         new_title: &str,
     ) -> Result<crate::starmap::StarMapMeta> {
         crate::starmap::rename_starmap(&self.app_data_root, starmap_id, new_title)
+    }
+
+    /// #645 评论 5504296097 问题3：rename_starmap 的变更集版本。
+    pub fn rename_starmap_with_changes(
+        &self,
+        starmap_id: &str,
+        new_title: &str,
+    ) -> Result<(
+        crate::starmap::StarMapMeta,
+        crate::storage::workspace_git::WorkspaceChangeSet,
+    )> {
+        crate::starmap::rename_starmap_with_changes(&self.app_data_root, starmap_id, new_title)
     }
 
     #[allow(
@@ -87,12 +137,72 @@ impl super::WriterCore {
         crate::starmap::delete_starmap(&self.app_data_root, starmap_id)
     }
 
+    /// #645 评论 5504296097 问题3：delete_starmap 的变更集版本。
+    pub fn delete_starmap_with_changes(
+        &self,
+        starmap_id: &str,
+    ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+        // 先 flush store（与 delete_starmap 同样的前置逻辑），再移除缓存并落盘删除。
+        self.flush_starmap_store_if_dirty(starmap_id)?;
+        self.remove_starmap_store(starmap_id);
+        crate::starmap::delete_starmap_with_changes(&self.app_data_root, starmap_id)
+    }
+
+    /// Flush 指定 starmap store 的脏数据（内部 helper，降低调用方嵌套深度）。
+    fn flush_starmap_store_if_dirty(&self, starmap_id: &str) -> Result<()> {
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(store) = stores.get_mut(starmap_id) {
+            if store.is_dirty() || store.has_pending_deletes() {
+                store.flush()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 从缓存中移除指定 starmap store（内部 helper）。
+    fn remove_starmap_store(&self, starmap_id: &str) {
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        stores.remove(starmap_id);
+    }
+
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> Result<()> {
         crate::starmap::bind_starmap_to_project(&self.app_data_root, starmap_id, project_id)
     }
 
+    /// #645 评论 5504296097 问题3：bind_starmap_to_project 的变更集版本。
+    pub fn bind_starmap_to_project_with_changes(
+        &self,
+        starmap_id: &str,
+        project_id: &str,
+    ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+        crate::starmap::bind_starmap_to_project_with_changes(
+            &self.app_data_root,
+            starmap_id,
+            project_id,
+        )
+    }
+
     pub fn set_main_starmap_for_project(&self, starmap_id: &str, project_id: &str) -> Result<()> {
         crate::starmap::set_main_starmap_for_project(&self.app_data_root, starmap_id, project_id)
+    }
+
+    /// #645 评论 5504296097 问题3：set_main_starmap_for_project 的变更集版本。
+    pub fn set_main_starmap_for_project_with_changes(
+        &self,
+        starmap_id: &str,
+        project_id: &str,
+    ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+        crate::starmap::set_main_starmap_for_project_with_changes(
+            &self.app_data_root,
+            starmap_id,
+            project_id,
+        )
     }
 
     pub fn get_main_starmap_for_project(
@@ -104,6 +214,14 @@ impl super::WriterCore {
 
     pub fn unbind_starmap_from_project(&self, starmap_id: &str) -> Result<()> {
         crate::starmap::unbind_starmap_from_project(&self.app_data_root, starmap_id)
+    }
+
+    /// #645 评论 5504296097 问题3：unbind_starmap_from_project 的变更集版本。
+    pub fn unbind_starmap_from_project_with_changes(
+        &self,
+        starmap_id: &str,
+    ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+        crate::starmap::unbind_starmap_from_project_with_changes(&self.app_data_root, starmap_id)
     }
 
     pub fn get_starmap_graph(

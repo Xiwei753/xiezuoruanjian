@@ -339,10 +339,11 @@ impl WriterCoreApi {
         desc: &str,
         template_id: Option<&str>,
     ) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        let result: crate::api::types::StarMapMetaDto = self
+        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集，
+        // 调 record_workspace_change_set_history 记录本地历史。
+        let (result, change_set) = self
             .core_write()
-            .create_starmap(title, desc, template_id)
-            .map(Into::into)
+            .create_starmap_with_changes(title, desc, template_id)
             .map_err(WriterError::from)?;
         let project_id = result.project_id.as_deref();
         let entry = crate::search::extractor::extract_starmap_title_entry(
@@ -358,7 +359,9 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        Ok(result)
+        let result_dto: crate::api::types::StarMapMetaDto = result.into();
+        self.record_workspace_change_set_history(&change_set, "create_starmap");
+        Ok(result_dto)
     }
 
     pub fn add_starmap_node(
@@ -401,7 +404,7 @@ impl WriterCoreApi {
             .core_write()
             .save_starmap_layout(starmap_id, &layout.clone().into())
             .map_err(crate::api::error::WriterError::from)?;
-        self.record_workspace_history(&changed_paths, "save_starmap_layout");
+        self.record_workspace_paths_history(&changed_paths, "save_starmap_layout");
         Ok(true)
     }
 
@@ -424,7 +427,7 @@ impl WriterCoreApi {
             .core_write()
             .save_starmap_viewport(starmap_id, &viewport.into())
             .map_err(crate::api::error::WriterError::from)?;
-        self.record_workspace_history(&changed_paths, "save_starmap_viewport");
+        self.record_workspace_paths_history(&changed_paths, "save_starmap_viewport");
         Ok(true)
     }
 
@@ -483,9 +486,10 @@ impl WriterCoreApi {
         starmap_id: &str,
         new_title: &str,
     ) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        let result = self
+        // #645 评论 5504296097 问题3：用 _with_changes 版本记录本地历史。
+        let (result, change_set) = self
             .core_write()
-            .rename_starmap(starmap_id, new_title)
+            .rename_starmap_with_changes(starmap_id, new_title)
             .map_err(WriterError::from)?;
         let project_id = get_starmap_project_id(self, starmap_id);
         let entry = crate::search::extractor::extract_starmap_title_entry(
@@ -501,11 +505,14 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        Ok(result.into())
+        let result_dto: crate::api::types::StarMapMetaDto = result.into();
+        self.record_workspace_change_set_history(&change_set, "rename_starmap");
+        Ok(result_dto)
     }
 
     pub fn delete_starmap(&self, starmap_id: &str) -> ApiResult<bool> {
-        self.core_write().delete_starmap(starmap_id)?;
+        // #645 评论 5504296097 问题3：用 _with_changes 版本记录本地历史。
+        let change_set = self.core_write().delete_starmap_with_changes(starmap_id)?;
         for prefix in &[
             format!("starmap:{}", starmap_id),
             format!("starmap_node:{}:", starmap_id),
@@ -516,6 +523,7 @@ impl WriterCoreApi {
         ] {
             self.remove_search_index_by_prefix(prefix);
         }
+        self.record_workspace_change_set_history(&change_set, "delete_starmap");
         Ok(true)
     }
 
@@ -528,8 +536,10 @@ impl WriterCoreApi {
         clippy::type_complexity
     )]
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> ApiResult<bool> {
-        self.core_write()
-            .bind_starmap_to_project(starmap_id, project_id)?;
+        // #645 评论 5504296097 问题3：用 _with_changes 版本记录本地历史。
+        let change_set = self
+            .core_write()
+            .bind_starmap_to_project_with_changes(starmap_id, project_id)?;
         let meta = self
             .core_write()
             .get_starmap(starmap_id)
@@ -644,6 +654,7 @@ impl WriterCoreApi {
                 });
             }
         }
+        self.record_workspace_change_set_history(&change_set, "bind_starmap_to_project");
         Ok(true)
     }
 
@@ -656,7 +667,10 @@ impl WriterCoreApi {
         clippy::type_complexity
     )]
     pub fn unbind_starmap_from_project(&self, starmap_id: &str) -> ApiResult<bool> {
-        self.core_write().unbind_starmap_from_project(starmap_id)?;
+        // #645 评论 5504296097 问题3：用 _with_changes 版本记录本地历史。
+        let change_set = self
+            .core_write()
+            .unbind_starmap_from_project_with_changes(starmap_id)?;
         let meta = self
             .core_write()
             .get_starmap(starmap_id)
@@ -765,6 +779,7 @@ impl WriterCoreApi {
                 });
             }
         }
+        self.record_workspace_change_set_history(&change_set, "unbind_starmap_from_project");
         Ok(true)
     }
 
@@ -773,10 +788,12 @@ impl WriterCoreApi {
         starmap_id: &str,
         project_id: &str,
     ) -> ApiResult<bool> {
-        self.core_write()
-            .set_main_starmap_for_project(starmap_id, project_id)
-            .map(|_| true)
+        // #645 评论 5504296097 问题3：用 _with_changes 版本记录本地历史。
+        let change_set = self
+            .core_write()
+            .set_main_starmap_for_project_with_changes(starmap_id, project_id)
             .map_err(crate::api::error::WriterError::from)?;
+        self.record_workspace_change_set_history(&change_set, "set_main_starmap_for_project");
         Ok(true)
     }
 
@@ -797,10 +814,10 @@ impl WriterCoreApi {
         desc: &str,
         accent_color: Option<&str>,
     ) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        let result: crate::api::types::StarMapMetaDto = self
+        // #645 评论 5504296097 问题3：用 _with_changes 版本记录本地历史。
+        let (result, change_set) = self
             .core_write()
-            .create_child_starmap(parent_id, title, desc, accent_color)
-            .map(Into::into)
+            .create_child_starmap_with_changes(parent_id, title, desc, accent_color)
             .map_err(WriterError::from)?;
         let project_id = result.project_id.as_deref();
         let entry = crate::search::extractor::extract_starmap_title_entry(
@@ -816,7 +833,9 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        Ok(result)
+        let result_dto: crate::api::types::StarMapMetaDto = result.into();
+        self.record_workspace_change_set_history(&change_set, "create_child_starmap");
+        Ok(result_dto)
     }
 
     pub fn update_starmap_node(
@@ -979,7 +998,7 @@ impl WriterCoreApi {
             base_package_revision,
         )?;
         drop(core);
-        self.record_workspace_history(&changed_paths, "import_or_replace_starmap_package");
+        self.record_workspace_paths_history(&changed_paths, "import_or_replace_starmap_package");
 
         let project_id = get_starmap_project_id(self, starmap_id);
 
@@ -1159,7 +1178,7 @@ impl WriterCoreApi {
             .core_write()
             .flush_starmap_store(starmap_id)
             .map_err(WriterError::from)?;
-        self.record_workspace_history(&changed_paths, "flush_starmap_store");
+        self.record_workspace_paths_history(&changed_paths, "flush_starmap_store");
         Ok(true)
     }
 
@@ -1168,7 +1187,7 @@ impl WriterCoreApi {
             .core_write()
             .close_starmap_store(starmap_id)
             .map_err(WriterError::from)?;
-        self.record_workspace_history(&changed_paths, "close_starmap_store");
+        self.record_workspace_paths_history(&changed_paths, "close_starmap_store");
         Ok(true)
     }
 
@@ -1177,7 +1196,7 @@ impl WriterCoreApi {
             .core_write()
             .flush_all_starmap_stores()
             .map_err(WriterError::from)?;
-        self.record_workspace_history(&changed_paths, "flush_all_starmap_stores");
+        self.record_workspace_paths_history(&changed_paths, "flush_all_starmap_stores");
         Ok(true)
     }
 

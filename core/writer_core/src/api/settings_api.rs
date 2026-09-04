@@ -24,7 +24,7 @@ impl WriterCoreApi {
         });
         // #645 评论 5504296097 Blocker 2：local settings 持久化在
         // <app_data_root>/settings.local.json。
-        self.record_workspace_history(
+        self.record_workspace_paths_history(
             &[std::path::PathBuf::from("settings.local.json")],
             "save_local_settings",
         );
@@ -53,7 +53,7 @@ impl WriterCoreApi {
         });
         // #645 评论 5504296097 Blocker 2：syncable settings 持久化在
         // <app_data_root>/settings.sync.json。
-        self.record_workspace_history(
+        self.record_workspace_paths_history(
             &[std::path::PathBuf::from("settings.sync.json")],
             "save_syncable_settings",
         );

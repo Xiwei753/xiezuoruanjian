@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::storage::git_repo_layout::GitRepoLayout;
-use crate::storage::workspace_git::model::WorkspaceCommitResult;
+use crate::storage::workspace_git::model::{WorkspaceChangeSet, WorkspaceCommitResult};
 use crate::storage::workspace_paths::is_workspace_history_path;
 use crate::Result;
 
@@ -18,6 +18,34 @@ fn index_remove_path(index: &mut git2::Index, path: &Path) -> Result<()> {
     }
 }
 
+/// #645 评论 5504296097 问题2(b/c)：按目录前缀从 index 移除所有 tracked entries。
+///
+/// 遍历 index entries，对路径以前缀开头的条目调 `index.remove_path`。
+/// 不重新扫描整个 workspace。前缀可以是目录（`projects/{pid}`）或
+/// 带尾斜杠的形式（`projects/{pid}/`），内部统一按字符串前缀匹配。
+fn index_remove_tree(index: &mut git2::Index, prefix: &Path) -> Result<()> {
+    let prefix_str = prefix.to_string_lossy().to_string();
+    let prefix_with_slash = format!("{}/", prefix_str);
+    // 收集要删除的路径（不在遍历中 mutate index）。
+    let to_remove: Vec<PathBuf> = index
+        .iter()
+        .filter_map(|e| {
+            let p = std::str::from_utf8(&e.path).unwrap_or("");
+            if p.is_empty() {
+                None
+            } else if p == prefix_str || p.starts_with(&prefix_with_slash) {
+                Some(PathBuf::from(p))
+            } else {
+                None
+            }
+        })
+        .collect();
+    for rel in to_remove {
+        index_remove_path(index, &rel)?;
+    }
+    Ok(())
+}
+
 /// #645 评论 5504296097 问题2(d)：应用自己的稳定签名。
 ///
 /// 不依赖系统 Git 配置（Android/普通用户环境可能没有全局 Git identity）。
@@ -28,56 +56,134 @@ fn app_signature() -> Result<git2::Signature<'static>> {
     git2::Signature::now("Sujian", "local@sujian.invalid").map_err(map_git2_err)
 }
 
-/// 在 workspace 中记录变更（本地 commit）。
+/// #645 评论 5504296097 问题1：在 workspace 中记录**显式 paths** 的变更（本地 commit）。
 ///
-/// `paths` 为 workspace-relative paths（为空时 stage 所有变更）。
-/// `message` 为 commit message。
+/// `paths` 为 workspace-relative paths。**空 paths 直接返回空结果，
+/// 绝不触发全量扫描**——这是与 [`record_all_workspace_changes`] 的关键区别。
 /// 返回 [`WorkspaceCommitResult`]，`oid == None` 表示没有变更需要提交。
 ///
-/// #645 评论 5504296097 问题2：
-/// - (a) 删除文件用 `index.remove_path`，不再无脑 `add_path`；
-/// - (b) 比较新 tree 和 HEAD tree，无变化返回 `oid=None`，不造空 commit；
-/// - (c) 显式 paths 也走 [`is_workspace_history_path`] 过滤，被排除的 path 直接跳过；
-/// - (d) 用 [`app_signature`] 稳定签名，不依赖系统 Git identity。
+/// 每个 path 先走 [`is_workspace_history_path`] 过滤，被排除的 path 直接跳过。
+/// 按 worktree 状态决定 `add_path`（文件仍存在）还是 `remove_path`（已删除）。
 ///
-/// Stage 排除：secrets、cache、log、runtime、`full-sync-staging/`、
-/// `app-meta/transactions/` 等本地内部文件（统一在
-/// [`crate::storage::workspace_paths`]）。
-pub fn record_workspace_changes(
+/// 生产写入、StarMap flush、full-sync commit 全部只走本函数。
+/// 真正需要"全量建立/修复本地历史快照"的地方显式调
+/// [`record_all_workspace_changes`]，不要再用 `&[]` 做隐藏开关。
+pub fn record_workspace_paths(
     layout: &GitRepoLayout,
     paths: &[PathBuf],
     message: &str,
 ) -> Result<WorkspaceCommitResult> {
-    let repo = crate::storage::git_repo_layout::open_repo(layout)?;
-
-    let mut index = repo.index().map_err(map_git2_err)?;
-
-    // #645 评论 5504296097 问题2(c)：所有 path，无论来自显式参数还是全量扫描，
-    // 都必须先走同一份 is_workspace_history_path()。被排除的 path 直接跳过。
+    // #645 评论 5504296097 问题1：空 paths 直接返回空结果，绝不触发全量扫描。
     if paths.is_empty() {
-        stage_all_with_excludes(&repo, &mut index)?;
-    } else {
-        let workdir = repo
-            .workdir()
-            .ok_or_else(|| crate::Error::Other("repo has no workdir".into()))?
-            .to_path_buf();
-        for p in paths {
-            if !is_workspace_history_path(p) {
-                continue;
+        return Ok(WorkspaceCommitResult {
+            oid: None,
+            staged_count: 0,
+        });
+    }
+    let repo = crate::storage::git_repo_layout::open_repo(layout)?;
+    let mut index = repo.index().map_err(map_git2_err)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| crate::Error::Other("repo has no workdir".into()))?
+        .to_path_buf();
+    let mut staged_count = 0usize;
+    for p in paths {
+        if !is_workspace_history_path(p) {
+            continue;
+        }
+        let abs = workdir.join(p);
+        if abs.exists() {
+            index.add_path(p).map_err(map_git2_err)?;
+        } else {
+            index_remove_path(&mut index, p)?;
+        }
+        staged_count += 1;
+    }
+    finalize_commit(&repo, &mut index, message, staged_count)
+}
+
+/// #645 评论 5504296097 问题2：在 workspace 中记录 [`WorkspaceChangeSet`] 的变更。
+///
+/// 按 change 类型分别处理：
+/// - `Upsert(path)`：stage 文件（`add_path`）；
+/// - `Delete(path)`：`remove_path`；
+/// - `DeleteTree(prefix)`：按 prefix `remove_path` 所有 tracked entries。
+///
+/// 每个 path 先走 [`is_workspace_history_path`] 过滤，被排除的 path 直接跳过。
+/// 空变更集直接返回空结果，绝不触发全量扫描。
+pub fn record_workspace_change_set(
+    layout: &GitRepoLayout,
+    change_set: &WorkspaceChangeSet,
+    message: &str,
+) -> Result<WorkspaceCommitResult> {
+    if change_set.is_empty() {
+        return Ok(WorkspaceCommitResult {
+            oid: None,
+            staged_count: 0,
+        });
+    }
+    let repo = crate::storage::git_repo_layout::open_repo(layout)?;
+    let mut index = repo.index().map_err(map_git2_err)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| crate::Error::Other("repo has no workdir".into()))?
+        .to_path_buf();
+    let mut staged_count = 0usize;
+    for change in &change_set.changes {
+        match change {
+            crate::storage::workspace_git::model::WorkspaceHistoryChange::Upsert(p) => {
+                if !is_workspace_history_path(p) {
+                    continue;
+                }
+                let abs = workdir.join(p);
+                if abs.exists() {
+                    index.add_path(p).map_err(map_git2_err)?;
+                    staged_count += 1;
+                }
             }
-            // #645 评论 5504296097 问题2(a)：按 worktree 状态决定 add 还是 remove。
-            // 文件仍存在 → add_path（新增/修改）；文件已删除 → remove_path（从 index 移除）。
-            let abs = workdir.join(p);
-            if abs.exists() {
-                index.add_path(p).map_err(map_git2_err)?;
-            } else {
-                // remove_path 在 path 不在 index 中时返回 ENOTFOUND，
-                // 这是良性情况（显式传了一个从未 tracked 的已删除路径），忽略。
+            crate::storage::workspace_git::model::WorkspaceHistoryChange::Delete(p) => {
+                if !is_workspace_history_path(p) {
+                    continue;
+                }
                 index_remove_path(&mut index, p)?;
+                staged_count += 1;
+            }
+            crate::storage::workspace_git::model::WorkspaceHistoryChange::DeleteTree(prefix) => {
+                // #645 评论 5504296097 问题2(b/c)：按 prefix 删除所有 tracked entries。
+                // prefix 本身不经过 is_workspace_history_path 过滤——子文件可能
+                // 已被该函数排除（如 secrets），但 tracked 的用户内容子文件应被移除。
+                // 这里按 prefix 删 index entries，由 index_remove_tree 内部遍历。
+                index_remove_tree(&mut index, prefix)?;
+                staged_count += 1;
             }
         }
     }
+    finalize_commit(&repo, &mut index, message, staged_count)
+}
 
+/// #645 评论 5504296097 问题1：在 workspace 中记录**全量**变更（本地 commit）。
+///
+/// 显式全量扫描 worktree，stage 所有非内部文件并移除已删除的 tracked 文件。
+/// 只有真正需要"全量建立/修复本地历史快照"的地方（如 bootstrap/recovery/rollback）
+/// 才能调用本函数，不要用 `&[]` 做隐藏开关。
+pub fn record_all_workspace_changes(
+    layout: &GitRepoLayout,
+    message: &str,
+) -> Result<WorkspaceCommitResult> {
+    let repo = crate::storage::git_repo_layout::open_repo(layout)?;
+    let mut index = repo.index().map_err(map_git2_err)?;
+    stage_all_with_excludes(&repo, &mut index)?;
+    let staged_count = index.iter().count();
+    finalize_commit(&repo, &mut index, message, staged_count)
+}
+
+/// 写 index、比较 tree、创建 commit 的共用尾段。
+fn finalize_commit(
+    repo: &git2::Repository,
+    index: &mut git2::Index,
+    message: &str,
+    staged_count: usize,
+) -> Result<WorkspaceCommitResult> {
     index.write().map_err(map_git2_err)?;
 
     let new_tree_oid = index.write_tree().map_err(map_git2_err)?;
@@ -92,7 +198,6 @@ pub fn record_workspace_changes(
         .map(|t| t.id());
 
     if head_tree_oid == Some(new_tree_oid) {
-        // 无变化：不创建 commit，返回 oid=None。
         return Ok(WorkspaceCommitResult {
             oid: None,
             staged_count: 0,
@@ -113,7 +218,6 @@ pub fn record_workspace_changes(
     };
 
     let tree_ref: &git2::Tree = &tree;
-    // #645 评论 5504296097 问题2(d)：用应用自己的稳定签名。
     let author = app_signature()?;
     let committer = author.clone();
 
@@ -128,19 +232,30 @@ pub fn record_workspace_changes(
         )
         .map_err(map_git2_err)?;
 
-    let staged_count = if paths.is_empty() {
-        index.iter().count()
-    } else {
-        paths
-            .iter()
-            .filter(|p| is_workspace_history_path(p))
-            .count()
-    };
-
     Ok(WorkspaceCommitResult {
         oid: Some(new_oid),
         staged_count,
     })
+}
+
+/// #645 评论 5504296097 问题1：向后兼容的旧入口。
+///
+/// 保留给 recovery/rollback 测试和旧代码用。**新代码不应再调用本函数**——
+/// 显式 paths 请用 [`record_workspace_paths`]，全量请用
+/// [`record_all_workspace_changes`]，变更集请用 [`record_workspace_change_set`]。
+///
+/// 语义：`paths.is_empty()` → 全量扫描（与旧行为一致，避免破坏 recovery/rollback）；
+/// 非空 → 显式 paths。
+pub fn record_workspace_changes(
+    layout: &GitRepoLayout,
+    paths: &[PathBuf],
+    message: &str,
+) -> Result<WorkspaceCommitResult> {
+    if paths.is_empty() {
+        record_all_workspace_changes(layout, message)
+    } else {
+        record_workspace_paths(layout, paths, message)
+    }
 }
 
 /// 查看 workspace 未提交的变更 diff。

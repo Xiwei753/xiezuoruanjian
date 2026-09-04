@@ -79,7 +79,7 @@ impl WriterCoreApi {
         if let Some(vid) = default_vol_id {
             paths.push(volume_json_rel_path(&project.id, &vid));
         }
-        self.record_workspace_history(&paths, "create_project");
+        self.record_workspace_paths_history(&paths, "create_project");
         Ok(project)
     }
 
@@ -147,7 +147,7 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         // #645 评论 5504296097 Blocker 2：rename 只改 project.json。
-        self.record_workspace_history(&[project_json_rel_path(project_id)], "rename_project");
+        self.record_workspace_paths_history(&[project_json_rel_path(project_id)], "rename_project");
         Ok(true)
     }
 
@@ -169,10 +169,12 @@ impl WriterCoreApi {
         for sm in &bound_starmaps {
             let _ = self.unbind_starmap_from_project(&sm.starmap_id);
         }
-        // #645 评论 5504296097 Blocker 2：删除作品移除整个 project 目录，
-        // 传 project.json 路径，record_workspace_history 会用 remove_path
-        // 从 index 移除已删除文件。
-        self.record_workspace_history(&[project_json_rel_path(project_id)], "delete_project");
+        // #645 评论 5504296097 问题2(b)：删除作品移除整个 projects/{pid}/ 目录。
+        // 用 DeleteTree 在 Git index 层按 prefix 删除所有 tracked entries，
+        // 不再只传 project.json 导致子文件残留。
+        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_delete_tree(std::path::PathBuf::from("projects").join(project_id));
+        self.record_workspace_change_set_history(&change_set, "delete_project");
         Ok(true)
     }
 
@@ -186,7 +188,7 @@ impl WriterCoreApi {
             .iter()
             .map(|id| project_json_rel_path(id))
             .collect();
-        self.record_workspace_history(&changed_paths, "reorder_projects");
+        self.record_workspace_paths_history(&changed_paths, "reorder_projects");
         Ok(true)
     }
 
@@ -214,7 +216,7 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         // #645 评论 5504296097 Blocker 2：create_volume 写 volume.json。
-        self.record_workspace_history(
+        self.record_workspace_paths_history(
             &[volume_json_rel_path(project_id, &volume.id)],
             "create_volume",
         );
@@ -240,7 +242,7 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         // #645 评论 5504296097 Blocker 2：rename_volume 只改 volume.json。
-        self.record_workspace_history(
+        self.record_workspace_paths_history(
             &[volume_json_rel_path(project_id, volume_id)],
             "rename_volume",
         );
@@ -257,12 +259,16 @@ impl WriterCoreApi {
         ] {
             self.remove_search_index_by_prefix(prefix);
         }
-        // #645 评论 5504296097 Blocker 2：删除卷移除整个 volume 目录，
-        // 传 volume.json 路径，record_workspace_history 用 remove_path 移除。
-        self.record_workspace_history(
-            &[volume_json_rel_path(project_id, volume_id)],
-            "delete_volume",
+        // #645 评论 5504296097 问题2(c)：删除卷移除整个 volumes/{vid}/ 目录。
+        // 用 DeleteTree 在 Git index 层按 prefix 删除所有 tracked entries，
+        // 不再只传 volume.json 导致卷下章节残留。
+        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new().add_delete_tree(
+            std::path::PathBuf::from("projects")
+                .join(project_id)
+                .join("volumes")
+                .join(volume_id),
         );
+        self.record_workspace_change_set_history(&change_set, "delete_volume");
         Ok(true)
     }
 
@@ -280,7 +286,7 @@ impl WriterCoreApi {
             .iter()
             .map(|vid| volume_json_rel_path(project_id, vid))
             .collect();
-        self.record_workspace_history(&changed_paths, "reorder_volumes");
+        self.record_workspace_paths_history(&changed_paths, "reorder_volumes");
         Ok(true)
     }
 }

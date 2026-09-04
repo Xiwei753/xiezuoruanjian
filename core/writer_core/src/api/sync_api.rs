@@ -49,13 +49,10 @@ impl WriterCoreApi {
             .save_sync_config(&config.into())
             .map(|_| true)
             .map_err(crate::api::error::WriterError::from)?;
-        // #645 评论 5504296097 Blocker 2：精确传实际落盘路径，
-        // 替代全量 &[] 扫描。sync config 持久化在
-        // <app_data_root>/app-meta/sync/config.local.json。
-        self.record_workspace_history(
-            &[std::path::PathBuf::from("app-meta/sync/config.local.json")],
-            "save_sync_config",
-        );
+        // #645 评论 5504296097 问题4：sync config 是同步引擎运行状态
+        // （app-meta/sync/config.local.json），不进入本地用户版本历史。
+        // is_workspace_history_path 已把 SyncEngineState 排除，这里不再调
+        // record_workspace_history。
         Ok(true)
     }
 
@@ -149,13 +146,10 @@ impl WriterCoreApi {
         self.core_write()
             .save_app_sync_state(&state.into())
             .map_err(crate::api::error::WriterError::from)?;
-        // #645 评论 5504296097 Blocker 2：精确传实际落盘路径。
-        // App target 同步状态持久化在
-        // <app_data_root>/app-meta/sync/state.local.json。
-        self.record_workspace_history(
-            &[std::path::PathBuf::from("app-meta/sync/state.local.json")],
-            "save_app_sync_state",
-        );
+        // #645 评论 5504296097 问题4：App target 同步状态是同步引擎运行状态
+        // （app-meta/sync/state.local.json），不进入本地用户版本历史。
+        // is_workspace_history_path 已把 SyncEngineState 排除，这里不再调
+        // record_workspace_history。
         Ok(())
     }
 
@@ -297,7 +291,9 @@ impl WriterCoreApi {
 
         // #645 评论 5504296097 Blocker 2：用 commit 阶段返回的 committed_paths
         // 精确 stage，替代全量 &[] 扫描。committed_paths 是 workspace-relative paths。
-        self.record_workspace_history(&committed_paths, "full_sync_commit");
+        // 问题1：空 committed_paths 不触发全量扫描（record_workspace_paths_history
+        // 空 paths 直接返回空结果）。
+        self.record_workspace_paths_history(&committed_paths, "full_sync_commit");
 
         Ok(result.into())
     }

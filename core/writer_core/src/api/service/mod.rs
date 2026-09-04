@@ -114,25 +114,24 @@ impl WriterCoreApi {
         }
     }
 
-    /// #645 评论 5504296097 问题3：在写事务完成后记录本地历史。
+    /// #645 评论 5504296097 问题1：在写事务完成后记录本地历史（显式 paths）。
     ///
-    /// `paths` 为 workspace-relative paths；传 `&[]` 走全量扫描模式。
-    /// 失败时 `log::warn` 但不阻断主操作——本地历史是 best-effort，
-    /// 不应让用户写正文因为 Git 失败而失败。
-    pub(crate) fn record_workspace_history(&self, paths: &[PathBuf], message: &str) {
+    /// `paths` 为 workspace-relative paths。**空 paths 直接返回空结果，
+    /// 绝不触发全量扫描**。失败时 `log::warn` 但不阻断主操作——本地历史是
+    /// best-effort，不应让用户写正文因为 Git 失败而失败。
+    pub(crate) fn record_workspace_paths_history(&self, paths: &[PathBuf], message: &str) {
         let layout_guard = match self.workspace_git_layout.read() {
             Ok(g) => g,
             Err(_) => {
-                log::warn!("record_workspace_history: layout lock poisoned, skipping");
+                log::warn!("record_workspace_paths_history: layout lock poisoned, skipping");
                 return;
             }
         };
-        match crate::storage::workspace_git::record_workspace_changes(&layout_guard, paths, message)
-        {
+        match crate::storage::workspace_git::record_workspace_paths(&layout_guard, paths, message) {
             Ok(result) => {
                 if result.oid.is_some() {
                     log::debug!(
-                        "record_workspace_history: committed {} files ({} staged)",
+                        "record_workspace_paths_history: committed {} ({} staged)",
                         message,
                         result.staged_count
                     );
@@ -140,7 +139,48 @@ impl WriterCoreApi {
             }
             Err(e) => {
                 log::warn!(
-                    "record_workspace_history: failed to record ({}): {} — \
+                    "record_workspace_paths_history: failed to record ({}): {} — \
+                     local history is best-effort, main operation unaffected",
+                    message,
+                    e
+                );
+            }
+        }
+    }
+
+    /// #645 评论 5504296097 问题2：在写事务完成后记录本地历史（变更集）。
+    ///
+    /// 按 [`WorkspaceChangeSet`] 中的 change 类型分别处理 Upsert/Delete/DeleteTree。
+    /// 空变更集直接返回，绝不触发全量扫描。
+    pub(crate) fn record_workspace_change_set_history(
+        &self,
+        change_set: &crate::storage::workspace_git::WorkspaceChangeSet,
+        message: &str,
+    ) {
+        let layout_guard = match self.workspace_git_layout.read() {
+            Ok(g) => g,
+            Err(_) => {
+                log::warn!("record_workspace_change_set_history: layout lock poisoned, skipping");
+                return;
+            }
+        };
+        match crate::storage::workspace_git::record_workspace_change_set(
+            &layout_guard,
+            change_set,
+            message,
+        ) {
+            Ok(result) => {
+                if result.oid.is_some() {
+                    log::debug!(
+                        "record_workspace_change_set_history: committed {} ({} staged)",
+                        message,
+                        result.staged_count
+                    );
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "record_workspace_change_set_history: failed to record ({}): {} — \
                      local history is best-effort, main operation unaffected",
                     message,
                     e

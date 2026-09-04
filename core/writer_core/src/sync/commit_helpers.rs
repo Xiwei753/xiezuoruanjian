@@ -188,6 +188,10 @@ pub(crate) fn apply_staging_commits_for_targets(
                     Ok(()) => {
                         // #645 评论 5504296097 Blocker 2：收集本 target 真正
                         // Apply/Delete 的 rel_path，转成 workspace-relative。
+                        // #645 评论 5504296097 问题4：committed_paths 只收集
+                        // content_actions，不收集 engine_state_actions——
+                        // sync engine state（manifest.sync.json/state.local.json/
+                        // conflicts.json 等）不进入本地 Git history。
                         let (kind, pid) = transfer_targets
                             .get(idx)
                             .map(|t| (t.target_kind.as_str(), t.project_id.as_deref()))
@@ -196,12 +200,6 @@ pub(crate) fn apply_staging_commits_for_targets(
                             kind,
                             pid,
                             &plan.content_actions,
-                            &mut committed_paths,
-                        );
-                        collect_action_paths(
-                            kind,
-                            pid,
-                            &plan.engine_state_actions,
                             &mut committed_paths,
                         );
                         target_conflicts.push(plan.conflict);
@@ -272,12 +270,13 @@ pub(crate) fn apply_staging_commits_for_targets(
                 }
                 // #645 评论 5504296097 Blocker 2：ConflictMetadataOnly 也落盘了
                 // safe_content_actions + engine_state_actions，收集它们的 rel_path。
+                // #645 评论 5504296097 问题4：committed_paths 只收集
+                // safe_content_actions，不收集 engine_state_actions。
                 let (kind, pid) = transfer_targets
                     .get(idx)
                     .map(|t| (t.target_kind.as_str(), t.project_id.as_deref()))
                     .unwrap_or(("", None));
                 collect_action_paths(kind, pid, &safe_content_actions, &mut committed_paths);
-                collect_action_paths(kind, pid, &plan.engine_state_actions, &mut committed_paths);
                 target_conflicts.push(plan.conflict);
                 target_results.push(TargetCommitResult::Ok);
                 run.cleanup();

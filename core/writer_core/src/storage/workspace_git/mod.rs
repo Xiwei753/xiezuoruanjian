@@ -22,7 +22,10 @@ pub mod recovery;
 pub mod repo;
 pub mod rollback;
 
-pub use history::{diff_workspace, list_workspace_history, record_workspace_changes};
+pub use history::{
+    diff_workspace, list_workspace_history, record_all_workspace_changes,
+    record_workspace_change_set, record_workspace_changes, record_workspace_paths,
+};
 pub use model::*;
 pub use recovery::{recover_workspace_crash, WorkspaceRecoveryResult};
 pub use repo::{ensure_workspace_repo, open_workspace_repo};

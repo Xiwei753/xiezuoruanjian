@@ -85,8 +85,13 @@ impl WriterCoreApi {
             body: title_entry.body.clone(),
             target: Some(title_entry.target.clone()),
         });
-        self.record_workspace_history(
-            &[chapter_meta_rel_path(project_id, volume_id, &chapter.id)],
+        // #645 评论 5504296097 问题2(a)：create_chapter 底层同时创建
+        // chapter.meta.json 和 chapter.md，两者都要进本地 Git history。
+        self.record_workspace_paths_history(
+            &[
+                chapter_meta_rel_path(project_id, volume_id, &chapter.id),
+                chapter_md_rel_path(project_id, volume_id, &chapter.id),
+            ],
             "create_chapter",
         );
         Ok(chapter)
@@ -172,7 +177,7 @@ impl WriterCoreApi {
                 });
             }
         }
-        self.record_workspace_history(
+        self.record_workspace_paths_history(
             &[chapter_meta_rel_path(project_id, volume_id, chapter_id)],
             "rename_chapter",
         );
@@ -203,9 +208,9 @@ impl WriterCoreApi {
             });
         }
         // #645 评论 5504296097 Blocker 2：删除章节会移除整个 chapter 目录，
-        // 传 chapter.meta.json + chapter.md 路径，record_workspace_history
+        // 传 chapter.meta.json + chapter.md 路径，record_workspace_paths_history
         // 会用 remove_path 从 index 移除已删除文件。
-        self.record_workspace_history(
+        self.record_workspace_paths_history(
             &[
                 chapter_meta_rel_path(project_id, volume_id, chapter_id),
                 chapter_md_rel_path(project_id, volume_id, chapter_id),
@@ -232,7 +237,7 @@ impl WriterCoreApi {
             .iter()
             .map(|cid| chapter_meta_rel_path(project_id, volume_id, cid))
             .collect();
-        self.record_workspace_history(&changed_paths, "reorder_chapters");
+        self.record_workspace_paths_history(&changed_paths, "reorder_chapters");
         Ok(true)
     }
 
@@ -275,7 +280,7 @@ impl WriterCoreApi {
         });
         // #645 评论 5504296097 Blocker 2：正文保存同时写 chapter.md 和
         // chapter.meta.json（word_count/hash/updated_at），传这两个路径。
-        self.record_workspace_history(
+        self.record_workspace_paths_history(
             &[
                 chapter_md_rel_path(project_id, volume_id, chapter_id),
                 chapter_meta_rel_path(project_id, volume_id, chapter_id),
@@ -318,7 +323,7 @@ impl WriterCoreApi {
         });
         // #645 评论 5504296097 Blocker 2：同 save_chapter_content，写 chapter.md +
         // chapter.meta.json。
-        self.record_workspace_history(
+        self.record_workspace_paths_history(
             &[
                 chapter_md_rel_path(project_id, volume_id, chapter_id),
                 chapter_meta_rel_path(project_id, volume_id, chapter_id),
@@ -348,7 +353,7 @@ impl WriterCoreApi {
             target: None,
         });
         // #645 评论 5504296097 Blocker 2：清空正文写 chapter.md（空）+ chapter.meta.json。
-        self.record_workspace_history(
+        self.record_workspace_paths_history(
             &[
                 chapter_md_rel_path(project_id, volume_id, chapter_id),
                 chapter_meta_rel_path(project_id, volume_id, chapter_id),
@@ -382,7 +387,7 @@ impl WriterCoreApi {
         });
         // #645 评论 5504296097 Blocker 2：note 字段存在 chapter.meta.json，
         // 只改 meta。
-        self.record_workspace_history(
+        self.record_workspace_paths_history(
             &[chapter_meta_rel_path(project_id, volume_id, chapter_id)],
             "update_chapter_note",
         );

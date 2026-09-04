@@ -95,6 +95,30 @@ fn starmap_meta_path(app_data_root: &Path, starmap_id: &str) -> std::path::PathB
     starmaps_dir(app_data_root).join(format!("{}.meta.json", starmap_id))
 }
 
+/// #645 评论 5504296097 问题3：starmap meta 的 workspace-relative 路径。
+fn starmap_meta_rel_path(starmap_id: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from("starmaps").join(format!("{}.meta.json", starmap_id))
+}
+
+/// #645 评论 5504296097 问题3：starmaps/index.json 的 workspace-relative 路径。
+fn starmaps_index_rel_path() -> std::path::PathBuf {
+    std::path::PathBuf::from("starmaps").join("index.json")
+}
+
+/// #645 评论 5504296097 问题3：starmaps/{id}/ 目录的 workspace-relative 路径。
+fn starmap_dir_rel_path(starmap_id: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from("starmaps").join(starmap_id)
+}
+
+/// #645 评论 5504296097 问题3：构造单个 starmap meta + index 的变更集。
+fn change_set_for_meta_and_index(
+    starmap_id: &str,
+) -> crate::storage::workspace_git::WorkspaceChangeSet {
+    crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_upsert(starmap_meta_rel_path(starmap_id))
+        .add_upsert(starmaps_index_rel_path())
+}
+
 fn load_index(app_data_root: &Path) -> Result<StarMapIndex> {
     let path = index_path(app_data_root);
     if !path.exists() {
@@ -210,6 +234,24 @@ pub fn create_starmap(
     Ok(meta)
 }
 
+/// #645 评论 5504296097 问题3：create_starmap 的变更集版本。
+///
+/// 返回 `(StarMapMeta, WorkspaceChangeSet)`，变更集包含
+/// `Upsert(starmaps/{id}.meta.json) + Upsert(starmaps/index.json)`。
+pub fn create_starmap_with_changes(
+    app_data_root: &Path,
+    title: &str,
+    description: &str,
+    accent_color: Option<&str>,
+) -> Result<(
+    StarMapMeta,
+    crate::storage::workspace_git::WorkspaceChangeSet,
+)> {
+    let meta = create_starmap(app_data_root, title, description, accent_color)?;
+    let change_set = change_set_for_meta_and_index(&meta.starmap_id);
+    Ok((meta, change_set))
+}
+
 pub fn create_child_starmap(
     app_data_root: &Path,
     parent_id: &str,
@@ -250,6 +292,28 @@ pub fn create_child_starmap(
     Ok(meta)
 }
 
+/// #645 评论 5504296097 问题3：create_child_starmap 的变更集版本。
+///
+/// 返回 `(StarMapMeta, WorkspaceChangeSet)`，变更集包含
+/// `Upsert(child meta) + Upsert(parent meta) + Upsert(index.json)`。
+pub fn create_child_starmap_with_changes(
+    app_data_root: &Path,
+    parent_id: &str,
+    title: &str,
+    description: &str,
+    accent_color: Option<&str>,
+) -> Result<(
+    StarMapMeta,
+    crate::storage::workspace_git::WorkspaceChangeSet,
+)> {
+    let meta = create_child_starmap(app_data_root, parent_id, title, description, accent_color)?;
+    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_upsert(starmap_meta_rel_path(&meta.starmap_id))
+        .add_upsert(starmap_meta_rel_path(parent_id))
+        .add_upsert(starmaps_index_rel_path());
+    Ok((meta, change_set))
+}
+
 pub fn rename_starmap(
     app_data_root: &Path,
     starmap_id: &str,
@@ -268,6 +332,21 @@ pub fn rename_starmap(
     idx.updated_at = meta.updated_at;
     save_index(app_data_root, &idx)?;
     Ok(meta)
+}
+
+/// #645 评论 5504296097 问题3：rename_starmap 的变更集版本。
+///
+/// 变更集：`Upsert(starmaps/{id}.meta.json) + Upsert(starmaps/index.json)`。
+pub fn rename_starmap_with_changes(
+    app_data_root: &Path,
+    starmap_id: &str,
+    new_title: &str,
+) -> Result<(
+    StarMapMeta,
+    crate::storage::workspace_git::WorkspaceChangeSet,
+)> {
+    let meta = rename_starmap(app_data_root, starmap_id, new_title)?;
+    Ok((meta, change_set_for_meta_and_index(starmap_id)))
 }
 
 /// 删除星图。
@@ -317,6 +396,29 @@ pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// #645 评论 5504296097 问题3：delete_starmap 的变更集版本。
+///
+/// 变更集：`Delete(starmaps/{id}.meta.json) + DeleteTree(starmaps/{id}) +
+/// Upsert(starmaps/index.json) + 可选 Upsert(parent meta)`。
+pub fn delete_starmap_with_changes(
+    app_data_root: &Path,
+    starmap_id: &str,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    // 先读取 parent_id（删除前），用于构造变更集。
+    let meta = load_starmap_meta(app_data_root, starmap_id).ok();
+    delete_starmap(app_data_root, starmap_id)?;
+    let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_delete(starmap_meta_rel_path(starmap_id))
+        .add_delete_tree(starmap_dir_rel_path(starmap_id))
+        .add_upsert(starmaps_index_rel_path());
+    if let Some(m) = meta {
+        if let Some(ref parent_id) = m.parent_starmap_id {
+            change_set = change_set.add_upsert(starmap_meta_rel_path(parent_id));
+        }
+    }
+    Ok(change_set)
+}
+
 pub fn bind_starmap_to_project(
     app_data_root: &Path,
     starmap_id: &str,
@@ -335,6 +437,18 @@ pub fn bind_starmap_to_project(
     idx.updated_at = meta.updated_at;
     save_index(app_data_root, &idx)?;
     Ok(())
+}
+
+/// #645 评论 5504296097 问题3：bind_starmap_to_project 的变更集版本。
+///
+/// 变更集：`Upsert(starmaps/{id}.meta.json) + Upsert(starmaps/index.json)`。
+pub fn bind_starmap_to_project_with_changes(
+    app_data_root: &Path,
+    starmap_id: &str,
+    project_id: &str,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    bind_starmap_to_project(app_data_root, starmap_id, project_id)?;
+    Ok(change_set_for_meta_and_index(starmap_id))
 }
 
 /// 设置项目的主星图。
@@ -376,6 +490,40 @@ pub fn set_main_starmap_for_project(
     Ok(())
 }
 
+/// #645 评论 5504296097 问题3：set_main_starmap_for_project 的变更集版本。
+///
+/// 变更集：所有本次实际改过的 meta + `Upsert(starmaps/index.json)`。
+/// 包含被清除 main 标记的旧主星图 meta、新主星图 meta、index.json。
+pub fn set_main_starmap_for_project_with_changes(
+    app_data_root: &Path,
+    starmap_id: &str,
+    project_id: &str,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    // 先收集本次会被改的 meta：当前 project 下所有 is_main 的 + 目标 starmap。
+    let idx = load_index(app_data_root)?;
+    let mut changed_metas: Vec<String> = idx
+        .starmaps
+        .iter()
+        .filter(|m| {
+            (m.project_id.as_deref() == Some(project_id) && m.is_main_for_project)
+                || m.starmap_id == starmap_id
+        })
+        .map(|m| m.starmap_id.clone())
+        .collect();
+    // 去重（目标 starmap 可能本身就是旧 main）。
+    changed_metas.sort();
+    changed_metas.dedup();
+
+    set_main_starmap_for_project(app_data_root, starmap_id, project_id)?;
+
+    let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_upsert(starmaps_index_rel_path());
+    for id in &changed_metas {
+        change_set = change_set.add_upsert(starmap_meta_rel_path(id));
+    }
+    Ok(change_set)
+}
+
 pub fn get_main_starmap_for_project(
     app_data_root: &Path,
     project_id: &str,
@@ -405,6 +553,17 @@ pub fn unbind_starmap_from_project(app_data_root: &Path, starmap_id: &str) -> Re
     idx.updated_at = meta.updated_at;
     save_index(app_data_root, &idx)?;
     Ok(())
+}
+
+/// #645 评论 5504296097 问题3：unbind_starmap_from_project 的变更集版本。
+///
+/// 变更集：`Upsert(starmaps/{id}.meta.json) + Upsert(starmaps/index.json)`。
+pub fn unbind_starmap_from_project_with_changes(
+    app_data_root: &Path,
+    starmap_id: &str,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    unbind_starmap_from_project(app_data_root, starmap_id)?;
+    Ok(change_set_for_meta_and_index(starmap_id))
 }
 
 pub fn get_motion_policy(
