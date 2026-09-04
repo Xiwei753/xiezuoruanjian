@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// 平台端通过 `to_ui_status()` 和 `to_message_key()` 做错误分类和 i18n 映射，
 /// 不得依赖错误文案的包含范围作为主判断（见 AGENTS.md）。
-/// `from_code()` 将字符串反序列化回枚举，未知 code 统一映射为 `Other`；
-/// `from_code` 保留对旧 GitHub/Git code 字符串的识别（映射到新通用变体），
-/// 保证旧持久化数据可加载。
+/// `from_code()` 将字符串反序列化回枚举，只认识 provider-neutral code，未知 code
+/// 统一映射为 `Other`；旧 GitHub/Git legacy code 兼容由 [`legacy_category_compat`]
+/// 在 migration 边界显式处理。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -84,19 +84,17 @@ impl SyncErrorCategory {
 
     /// 从线格式 code 字符串反序列化。未知 code 映射为 `Other`。
     ///
-    /// #645 评论 5504296097 第2点：保留对旧 GitHub/Git code 字符串的识别
-    /// （映射到新通用变体），保证旧持久化数据可加载
-    /// （`SyncState.last_error` 等可能含旧 code）。
-    ///
-    /// 旧 GitHub 特定字符串（`token_missing` / `token_invalid` / `github_unauthorized` /
-    /// `github_forbidden` / `repo_not_found_or_no_permission` / `github_network_failed` /
-    /// `branch_*` / `non_fast_forward` / `unrelated_histories` / `dirty_repo` 等）的
-    /// 兼容映射保留在此处，标注 `// legacy compat`。后续可迁移到 API/migration 边界，
-    /// 但这不是本轮最大的阻塞——保留兼容映射保证旧持久化数据可加载。
+    /// #645 评论 5504296097 第2点：`from_code` 只认识 provider-neutral code
+    /// （`auth_failed`/`auth_error`/`permission_denied`/`token_permission_denied`/
+    /// `missing_permission`/`not_found`/`precondition_failed`/`remote_sha_conflict`/
+    /// `conflict`/`rate_limited`/`network`/`network_failed`/`network_error`/
+    /// `temporary_unavailable`/`local_io`/`local_io_error`），不再识别旧
+    /// GitHub/Git 特定 code。旧持久化数据中的 legacy code 由
+    /// [`legacy_category_compat`] 在 migration 边界显式处理。
     pub fn from_code(code: &str, _fallback_msg: &str) -> Self {
         match code {
             "none" | "" => SyncErrorCategory::Other,
-            // 新通用 code
+            // provider-neutral code
             "auth_failed" | "auth_error" => SyncErrorCategory::AuthFailed,
             "permission_denied" | "token_permission_denied" | "missing_permission" => {
                 SyncErrorCategory::PermissionDenied
@@ -109,48 +107,37 @@ impl SyncErrorCategory {
             "network" | "network_failed" | "network_error" => SyncErrorCategory::Network,
             "temporary_unavailable" => SyncErrorCategory::TemporaryUnavailable,
             "local_io" | "local_io_error" => SyncErrorCategory::LocalIo,
-            // legacy compat — 旧 GitHub/Git 特定 code 映射到新通用分类。
-            // 后续可迁移到 API/migration 边界，但保留在此保证旧持久化数据可加载。
-            "token_missing"
-            | "token_invalid"
-            | "github_unauthorized"
-            | "github_forbidden"
-            | "empty_url" => SyncErrorCategory::AuthFailed,
-            "repo_not_found_or_no_permission" => SyncErrorCategory::PermissionDenied,
-            "file_not_found" => SyncErrorCategory::NotFound,
-            "checkout_conflict" | "local_blocking_file" => SyncErrorCategory::PreconditionFailed,
-            "api_rate_limited" => SyncErrorCategory::RateLimited,
-            "network_probe_failed" | "github_network_failed" | "dns_failed" | "tls_failed" => {
-                SyncErrorCategory::Network
-            }
-            "api_error" => SyncErrorCategory::TemporaryUnavailable,
-            "branch_missing"
-            | "remote_branch_missing"
-            | "non_fast_forward"
-            | "unrelated_histories"
-            | "dirty_repo" => SyncErrorCategory::Other,
             _ => SyncErrorCategory::Other,
         }
     }
 }
 
-/// 首次同步模式 — 记录项目与远端仓库的初始关系。
+/// 旧 GitHub/Git 特定 code → 新通用 `SyncErrorCategory` 的兼容映射（#645 评论 5504296097 第2点）。
 ///
-/// - CloneIntoEmptyProject：远端有内容，本地为空，直接 clone。
-/// - InitExistingProject：本地已有内容，远端为空，push 本地内容。
-/// - AlreadyGitRepo：本地已是 git 仓库，直接 fetch+merge。
-/// - BlockedNonEmptyRemote：双方都有内容且无共同祖先，需用户决策。
-/// - UnrelatedHistories：git merge 时遇到 unrelated histories。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum FirstSyncMode {
-    #[default]
-    NotAttempted,
-    CloneIntoEmptyProject,
-    InitExistingProject,
-    AlreadyGitRepo,
-    BlockedNonEmptyRemote,
-    UnrelatedHistories,
+/// `from_code` 只认识 provider-neutral code；本函数显式处理旧 GitHub/Git code
+/// 字符串（`token_missing`/`token_invalid`/`github_unauthorized`/`github_forbidden`/
+/// `empty_url`/`repo_not_found_or_no_permission`/`file_not_found`/`checkout_conflict`/
+/// `local_blocking_file`/`api_rate_limited`/`network_probe_failed`/`github_network_failed`/
+/// `dns_failed`/`tls_failed`/`api_error`/`branch_missing`/`remote_branch_missing`/
+/// `non_fast_forward`/`unrelated_histories`/`dirty_repo`），供 migration 边界
+/// （如加载旧 `SyncState.last_error` / 旧 diagnostics JSON）显式调用。
+/// 不识别的 code 返回 `None`（调用方应回退到 `from_code` 或 `Other`）。
+pub fn legacy_category_compat(code: &str) -> Option<SyncErrorCategory> {
+    match code {
+        "token_missing" | "token_invalid" | "github_unauthorized" | "github_forbidden"
+        | "empty_url" => Some(SyncErrorCategory::AuthFailed),
+        "repo_not_found_or_no_permission" => Some(SyncErrorCategory::PermissionDenied),
+        "file_not_found" => Some(SyncErrorCategory::NotFound),
+        "checkout_conflict" | "local_blocking_file" => Some(SyncErrorCategory::PreconditionFailed),
+        "api_rate_limited" => Some(SyncErrorCategory::RateLimited),
+        "network_probe_failed" | "github_network_failed" | "dns_failed" | "tls_failed" => {
+            Some(SyncErrorCategory::Network)
+        }
+        "api_error" => Some(SyncErrorCategory::TemporaryUnavailable),
+        "branch_missing" | "remote_branch_missing" | "non_fast_forward"
+        | "unrelated_histories" | "dirty_repo" => Some(SyncErrorCategory::Other),
+        _ => None,
+    }
 }
 
 /// 同步范围 — 内部路径过滤语义，不再携带产品配置含义（Issue #630）。
@@ -433,8 +420,6 @@ pub enum SyncStatus {
     PartialConflict,
     RecoverableError(String),
     FatalError(String),
-    DirtyRepoBlocked,
-    BranchMissingRecovered,
     Error(String),
     NoChanges,
     LatestWinsApplied,
@@ -481,40 +466,39 @@ pub struct SyncConflict {
     pub description: String,
 }
 
-/// 同步诊断结果 — 逐步检查网络、认证、仓库、分支的可达性。
+/// 同步诊断结果 — provider-neutral，逐步检查网络、认证、远端可达性。
 ///
-/// 每一步的 `*_ok` 布尔值和 `*_status` 字符串独立记录，
-/// UI 可按步骤展示诊断链路。`remote_url_sanitized` 已去除凭证信息，可安全展示。
+/// #645 评论 5504296097 第2点：删除旧 Git/GitHub 远端假设字段
+/// （`backend_type`/`repo_ok`/`branch_ok`/`repo_status`/`branch_status`/
+/// `remote_url_sanitized`/`transport`），改为 provider-neutral 结构。
+/// `provider_type` 标识 Provider 类型（"github_api"/"webdav"/"cloudkit" 等），
+/// `remote_ok` 合并远端可达性，`provider_details` 由各 Provider 自行填充特定诊断详情。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncDiagnosticsResult {
     pub success: bool,
-    /// Backend type: git/github_api
-    pub backend_type: String,
+    /// Provider 类型（"github_api"/"webdav"/"cloudkit" 等），替代旧 backend_type。
+    pub provider_type: String,
     /// Whether the platform grants network access permission.
-    #[serde(alias = "android_has_internet_permission")]
+    #[serde(default, alias = "android_has_internet_permission")]
     pub has_network_permission: bool,
     /// Whether the platform grants network state query permission.
-    #[serde(alias = "android_has_access_network_state_permission")]
+    #[serde(default, alias = "android_has_access_network_state_permission")]
     pub has_network_state_permission: bool,
     /// Current network connectivity state reported by the platform.
-    #[serde(alias = "android_network_state")]
+    #[serde(default, alias = "android_network_state")]
     pub network_state: String,
     pub network_ok: bool,
     pub auth_ok: bool,
-    pub repo_ok: bool,
-    pub branch_ok: bool,
+    /// 远端可达性（替代旧 repo_ok+branch_ok）。
+    pub remote_ok: bool,
     pub network_status: String,
     pub auth_status: String,
-    pub repo_status: String,
-    pub branch_status: String,
-    /// Sanitized remote URL (no credentials)
-    pub remote_url_sanitized: String,
-    /// Transport type: https/ssh/unknown
-    pub transport: String,
-
     /// Error category for sync failures
     pub error_category: String,
     pub raw_error: Option<String>,
+    /// Provider 特定诊断详情（JSON 字符串或人类可读摘要），由各 Provider 自行填充。
+    #[serde(default)]
+    pub provider_details: Option<String>,
 }
 
 impl Default for SyncDiagnosticsResult {
@@ -528,22 +512,18 @@ impl SyncDiagnosticsResult {
     pub fn new() -> Self {
         Self {
             success: false,
-            backend_type: "git".to_string(),
+            provider_type: "unknown".to_string(),
             has_network_permission: true,
             has_network_state_permission: true,
             network_state: "unchecked".to_string(),
             network_ok: false,
             auth_ok: false,
-            repo_ok: false,
-            branch_ok: false,
+            remote_ok: false,
             network_status: "unchecked".to_string(),
             auth_status: "unchecked".to_string(),
-            repo_status: "unchecked".to_string(),
-            branch_status: "unchecked".to_string(),
-            remote_url_sanitized: "".to_string(),
-            transport: "unknown".to_string(),
             error_category: "none".to_string(),
             raw_error: None,
+            provider_details: None,
         }
     }
 }
@@ -569,6 +549,9 @@ pub struct SyncConflictSummary {
 /// `uploaded_files` / `downloaded_files` / `ignored_files` 仅在 Success 时有意义。
 /// `conflicts` 仅在 Conflict/PartialConflict 时非空。
 /// `overwritten_files` 记录 LWW 决胜中被覆盖的一方（仅 Metadata/GeneratedCache）。
+///
+/// #645 评论 5504296097 第2点：删除 `commit_hash` / `first_sync_mode` —
+/// 这两个字段假设远端是 Git 仓库，通用 core 不再携带 Git 同步语义。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncResult {
     pub status: SyncStatus,
@@ -576,12 +559,10 @@ pub struct SyncResult {
     pub downloaded_files: Vec<String>,
     pub ignored_files: Vec<String>,
     pub conflicts: Vec<SyncConflict>,
-    pub commit_hash: Option<String>,
     pub error: Option<String>,
     pub error_category: Option<String>,
     pub message_key: Option<String>,
     pub conflict_summary: Option<SyncConflictSummary>,
-    pub first_sync_mode: FirstSyncMode,
     #[serde(default)]
     pub local_deletes: Vec<String>,
     #[serde(default)]
@@ -601,12 +582,10 @@ impl SyncResult {
             downloaded_files: Vec::new(),
             ignored_files: Vec::new(),
             conflicts: Vec::new(),
-            commit_hash: None,
             error: None,
             error_category: None,
             message_key: None,
             conflict_summary: None,
-            first_sync_mode: FirstSyncMode::NotAttempted,
             local_deletes: Vec::new(),
             remote_deletes: Vec::new(),
             overwritten_files: Vec::new(),
@@ -617,7 +596,6 @@ impl SyncResult {
     /// 创建错误结果——status 应为 Error/Conflict 等终端状态，error_category 可选。
     pub fn error(
         status: SyncStatus,
-        first_sync_mode: FirstSyncMode,
         error: String,
         error_category: Option<String>,
     ) -> Self {
@@ -630,12 +608,10 @@ impl SyncResult {
             downloaded_files: Vec::new(),
             ignored_files: Vec::new(),
             conflicts: Vec::new(),
-            commit_hash: None,
             error: Some(error),
             error_category: error_category.clone(),
             message_key,
             conflict_summary: None,
-            first_sync_mode,
             local_deletes: Vec::new(),
             remote_deletes: Vec::new(),
             overwritten_files: Vec::new(),
@@ -655,14 +631,12 @@ impl SyncResult {
             downloaded_files: Vec::new(),
             ignored_files: Vec::new(),
             conflicts,
-            commit_hash: None,
             error: Some(error),
             error_category: error_category.clone(),
             message_key: error_category
                 .as_deref()
                 .map(sync_error_category_to_message_key),
             conflict_summary: None,
-            first_sync_mode: FirstSyncMode::NotAttempted,
             local_deletes: Vec::new(),
             remote_deletes: Vec::new(),
             overwritten_files: Vec::new(),
@@ -784,21 +758,20 @@ pub struct Tombstone {
 ///
 /// 同步完成后 known_files 会被 post-sync scan 重建，但冲突路径的 base_hash 会被保留，
 /// 以确保下次同步仍能检测到 BothChanged。
+///
+/// #645 评论 5504296097 第2点：删除 `remote_url` / `transport` / `last_synced_commit` —
+/// 这三个字段假设远端是 Git 仓库，通用 core 不再携带 Git 同步语义。
+/// 远端 URL/transport 由 `SyncConfig.provider_config` 推导，commit hash 概念不适用于
+/// LWW/Contents API 同步。旧持久化 JSON 中的这些字段靠 serde 默认忽略未知字段丢弃。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncState {
-    pub remote_url: Option<String>,
-    /// 上次同步使用的传输方式线格式字符串（如 "https_token"/"ssh_deploy_key"）。
-    /// Issue #645 评论 5504296097 第1点：`SyncProtocol` 已移到
-    /// `sync/provider/github/config.rs::GitHubTransport`，通用 core 不再认识
-    /// SSH deploy key。这里保留为 `Option<String>` 以维持旧持久化数据兼容。
-    #[serde(default)]
-    pub transport: Option<String>,
-    pub last_synced_commit: Option<String>,
     pub last_sync_time: Option<i64>,
     pub last_error: Option<String>,
     /// 三路比较基准：path → 上次同步后的共识哈希（MD5 hex）。
+    #[serde(default)]
     pub known_files: std::collections::HashMap<String, String>,
     /// 已记录的冲突详情，供 resolve_conflict_* 查找 remote_hash
+    #[serde(default)]
     pub conflicts: Vec<SyncConflict>,
     /// 已删除文件的墓碑记录，用于同步时生成本地 delete 操作。
     /// purge_after 过期后由同步引擎清理。
@@ -833,9 +806,6 @@ pub struct SyncState {
 impl Default for SyncState {
     fn default() -> Self {
         Self {
-            remote_url: None,
-            transport: None,
-            last_synced_commit: None,
             last_sync_time: None,
             last_error: None,
             known_files: std::collections::HashMap::new(),

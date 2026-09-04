@@ -130,12 +130,7 @@ fn run_single_target(
             } else {
                 SyncStatus::FatalError(msg.clone())
             };
-            SyncResult::error(
-                status,
-                crate::sync::types::FirstSyncMode::NotAttempted,
-                msg,
-                error_category,
-            )
+            SyncResult::error(status, msg, error_category)
         }
     }
 }
@@ -210,8 +205,7 @@ pub fn aggregate_full_sync_result(targets: Vec<TargetSyncResult>) -> FullSyncRes
         .unwrap_or(0);
     let overall_status = match overall_priority {
         4 => SyncStatus::FatalError("one_or_more_targets_failed".to_string()),
-        3 => SyncStatus::DirtyRepoBlocked,
-        2 => SyncStatus::PartialConflict,
+        3 => SyncStatus::PartialConflict,
         1 => SyncStatus::RecoverableError("one_or_more_targets_temporarily_failed".to_string()),
         _ => aggregate_success_status(&targets),
     };
@@ -260,9 +254,11 @@ pub fn aggregate_full_sync_result(targets: Vec<TargetSyncResult>) -> FullSyncRes
 /// - rate limit → `Error::SyncRateLimited`（可恢复）
 /// - 其它未知项 → `Error::SyncAuthFailed`（保守起视为不可恢复，不落 Io 后自动变可重试）
 pub fn transport_init_failure_error(category: &str, message: &str) -> crate::Error {
-    use crate::sync::types::SyncErrorCategory;
+    use crate::sync::types::{legacy_category_compat, SyncErrorCategory};
     let reason = format!("Transport init failed: {} - {}", category, message);
-    match SyncErrorCategory::from_code(category, "") {
+    let resolved = legacy_category_compat(category)
+        .unwrap_or_else(|| SyncErrorCategory::from_code(category, ""));
+    match resolved {
         SyncErrorCategory::AuthFailed
         | SyncErrorCategory::PermissionDenied
         | SyncErrorCategory::NotFound => crate::Error::SyncAuthFailed { reason },
@@ -337,7 +333,6 @@ fn sync_error_category_to_message_key_string(code: &str) -> String {
 /// 聚合成功类终态（Issue #630 评论 5311102143）。
 ///
 /// 失败优先级为 0 时调用。用语义判断而非数字优先级：
-/// - `BranchMissingRecovered` 存在 → `BranchMissingRecovered`（最高）
 /// - `LatestWinsApplied` 存在 → `LatestWinsApplied`
 /// - 全部 `NoChanges` → `NoChanges`
 /// - 其余情况 → `Success`
@@ -345,12 +340,6 @@ fn sync_error_category_to_message_key_string(code: &str) -> String {
 /// 关键语义：`Success + NoChanges → Success`（有 target 实际上传/下载了）。
 /// 协议错误状态不应到达此处（已由 `build_protocol_error_fields` 拦截）。
 fn aggregate_success_status(targets: &[TargetSyncResult]) -> SyncStatus {
-    if targets
-        .iter()
-        .any(|t| matches!(t.result.status, SyncStatus::BranchMissingRecovered))
-    {
-        return SyncStatus::BranchMissingRecovered;
-    }
     if targets
         .iter()
         .any(|t| matches!(t.result.status, SyncStatus::LatestWinsApplied))
@@ -368,12 +357,11 @@ fn aggregate_success_status(targets: &[TargetSyncResult]) -> SyncStatus {
 }
 
 /// 单个 target 状态在聚合中的优先级（数字越大越需要用户处理）：
-/// 4=Fatal/Error，3=Dirty，2=Conflict/PartialConflict，1=Recoverable，0=其余（成功类）。
+/// 4=Fatal/Error，3=Conflict/PartialConflict，1=Recoverable，0=其余（成功类）。
 fn full_sync_status_priority(status: &SyncStatus) -> u8 {
     match status {
         SyncStatus::FatalError(_) | SyncStatus::Error(_) => 4,
-        SyncStatus::DirtyRepoBlocked => 3,
-        SyncStatus::Conflict | SyncStatus::PartialConflict => 2,
+        SyncStatus::Conflict | SyncStatus::PartialConflict => 3,
         SyncStatus::RecoverableError(_) => 1,
         _ => 0,
     }

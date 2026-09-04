@@ -70,12 +70,6 @@ pub(crate) fn aggregate_success_status(
 
     if targets
         .iter()
-        .any(|t| matches!(t.result.status, SyncStatus::BranchMissingRecovered))
-    {
-        return SyncStatus::BranchMissingRecovered;
-    }
-    if targets
-        .iter()
         .any(|t| matches!(t.result.status, SyncStatus::LatestWinsApplied))
     {
         return SyncStatus::LatestWinsApplied;
@@ -90,12 +84,12 @@ pub(crate) fn aggregate_success_status(
     SyncStatus::Success
 }
 
-/// 单个 target 状态在聚合中的优先级。
+/// 单个 target 状态在聚合中的优先级：
+/// 4=Fatal/Error，3=Conflict/PartialConflict，1=Recoverable，0=其余（成功类）。
 pub(crate) fn full_sync_status_priority(status: &crate::sync::SyncStatus) -> u8 {
     match status {
         crate::sync::SyncStatus::FatalError(_) | crate::sync::SyncStatus::Error(_) => 4,
-        crate::sync::SyncStatus::DirtyRepoBlocked => 3,
-        crate::sync::SyncStatus::Conflict | crate::sync::SyncStatus::PartialConflict => 2,
+        crate::sync::SyncStatus::Conflict | crate::sync::SyncStatus::PartialConflict => 3,
         crate::sync::SyncStatus::RecoverableError(_) => 1,
         _ => 0,
     }
@@ -125,12 +119,7 @@ pub(crate) fn run_full_sync_target(
             } else {
                 crate::sync::SyncStatus::FatalError(msg.clone())
             };
-            crate::sync::types::SyncResult::error(
-                status,
-                crate::sync::types::FirstSyncMode::NotAttempted,
-                msg,
-                error_category,
-            )
+            crate::sync::types::SyncResult::error(status, msg, error_category)
         }
     }
 }

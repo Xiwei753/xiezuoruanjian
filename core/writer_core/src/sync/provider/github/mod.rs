@@ -275,11 +275,11 @@ impl GitHubProvider {
     /// 供 UI 按步骤展示诊断链路。
     pub fn diagnose(&self) -> Result<SyncDiagnosticsResult, ProviderError> {
         let mut result = SyncDiagnosticsResult::new();
-        result.backend_type = "github_api".to_string();
-        result.remote_url_sanitized = sanitize_remote_url(&self.config.remote_url)
+        result.provider_type = "github_api".to_string();
+        let sanitized_url = sanitize_remote_url(&self.config.remote_url)
             .sanitized_url
             .clone();
-        result.transport = "https".to_string();
+        result.provider_details = Some(format!("remote_url: {}", sanitized_url));
 
         let transport = self.transport();
         let api_base = &self.config.api_base_url;
@@ -316,10 +316,7 @@ fn apply_diagnose_status(result: &mut SyncDiagnosticsResult, status: u16, body: 
         result.network_status = "ok".to_string();
         result.auth_ok = true;
         result.auth_status = "ok".to_string();
-        result.repo_ok = true;
-        result.repo_status = "ok".to_string();
-        result.branch_ok = true;
-        result.branch_status = "ok".to_string();
+        result.remote_ok = true;
         return;
     }
     let truncated = body.chars().take(200).collect::<String>();
@@ -343,8 +340,7 @@ fn apply_diagnose_status(result: &mut SyncDiagnosticsResult, status: u16, body: 
         result.network_status = "ok".to_string();
         result.auth_ok = true;
         result.auth_status = "ok".to_string();
-        result.repo_ok = false;
-        result.repo_status = "failed".to_string();
+        result.remote_ok = false;
         result.error_category = "not_found".to_string();
     } else {
         result.network_ok = false;

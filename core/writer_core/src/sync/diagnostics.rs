@@ -1,11 +1,13 @@
-//! 同步诊断 — 探测网络、认证、仓库和分支可用性。
+//! 同步诊断 — 探测网络、认证、远端可达性。
 //!
-//! 诊断流程按层级递进：权限 → URL 格式 → 网络连通 → 认证 → 仓库 → 分支。
+//! 诊断流程按层级递进：权限 → URL 格式 → 网络连通 → 认证 → 远端可达性。
 //! 任一层失败则跳过后续层级，返回对应 `error_category` 供平台端 i18n 映射。
 //!
 //! SSH 传输方式当前跳过诊断（`ssh_not_recommended`），因为 LWW 后端仅支持 HTTPS。
 //!
-//! Issue #645 评论第 2 点：`config.backend_type` 改为 `config.active_provider` 字符串判断，
+//! Issue #645 评论 5504296097 第2点：`SyncDiagnosticsResult` 重构为 provider-neutral，
+//! `provider_type` 替代旧 `backend_type`，`remote_ok` 合并远端可达性，
+//! `provider_details` 由各 Provider 自行填充特定诊断详情。
 //! GitHub `remote_url`/`transport` 从 `provider_config: ProviderConfig::GitHub` 读取。
 
 #[cfg(feature = "github-api")]
@@ -27,7 +29,7 @@ impl crate::sync::SyncService {
         secrets: &SyncSecrets,
     ) -> crate::Result<SyncDiagnosticsResult> {
         let mut result = SyncDiagnosticsResult::new();
-        result.backend_type = config.active_provider.clone();
+        result.provider_type = config.active_provider.clone();
 
         result.has_network_permission = config.has_network_permission;
         result.has_network_state_permission = config.has_network_state_permission;
@@ -35,8 +37,6 @@ impl crate::sync::SyncService {
         if !config.has_network_permission {
             result.network_status = "failed_no_internet_permission".to_string();
             result.auth_status = "skipped".to_string();
-            result.repo_status = "skipped".to_string();
-            result.branch_status = "skipped".to_string();
             result.error_category = "missing_permission".to_string();
             return Ok(result);
         }
@@ -64,20 +64,14 @@ impl crate::sync::SyncService {
             "github_api" => {
                 let parsed = sanitize_remote_url(&remote_url);
                 let sanitized_url = parsed.sanitized_url;
-                result.remote_url_sanitized = sanitized_url.clone();
+                result.provider_details = Some(format!("remote_url: {}", sanitized_url));
 
                 let transport = transport_opt.unwrap_or_else(|| detect_transport(&sanitized_url));
-                result.transport = match transport {
-                    GitHubTransport::HttpsToken => "https".to_string(),
-                    GitHubTransport::SshDeployKey => "ssh".to_string(),
-                };
 
                 if transport == GitHubTransport::SshDeployKey {
                     result.error_category = "ssh_not_recommended".to_string();
                     result.network_status = "skipped_ssh".to_string();
                     result.auth_status = "skipped".to_string();
-                    result.repo_status = "skipped".to_string();
-                    result.branch_status = "skipped".to_string();
                     return Ok(result);
                 }
 
@@ -142,10 +136,7 @@ impl crate::sync::SyncService {
                 result.network_status = "unsupported_git_backend".to_string();
                 result.auth_ok = false;
                 result.auth_status = "not_checked_git_backend".to_string();
-                result.repo_ok = false;
-                result.repo_status = "not_checked_git_backend".to_string();
-                result.branch_ok = false;
-                result.branch_status = "not_checked_git_backend".to_string();
+                result.remote_ok = false;
                 result.success = false;
                 Ok(result)
             }

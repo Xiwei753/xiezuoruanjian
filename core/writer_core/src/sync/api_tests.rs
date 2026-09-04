@@ -106,12 +106,10 @@ fn test_load_save_app_sync_state_roundtrip() {
     // 初始状态：文件不存在，返回默认 state（含自动生成的 device_id）。
     let initial = api.load_app_sync_state().unwrap();
     assert!(initial.last_sync_time.is_none());
-    assert!(initial.last_synced_commit.is_none());
 
     // 保存一个非默认 state。
     let mut state = initial.clone();
     state.last_sync_time = Some(1_700_000_000);
-    state.last_synced_commit = Some("abc123".to_string());
     api.save_app_sync_state(state.clone()).unwrap();
 
     // 验证写入了正确路径：<app_data_root>/app-meta/sync/state.local.json
@@ -125,15 +123,10 @@ fn test_load_save_app_sync_state_roundtrip() {
         content.contains("1700000000"),
         "saved state should contain last_sync_time"
     );
-    assert!(
-        content.contains("abc123"),
-        "saved state should contain last_synced_commit"
-    );
 
     // 读回验证 roundtrip。
     let loaded = api.load_app_sync_state().unwrap();
     assert_eq!(loaded.last_sync_time, Some(1_700_000_000));
-    assert_eq!(loaded.last_synced_commit.as_deref(), Some("abc123"));
 
     // 验证不与作品级 state 冲突：作品级 state 在 project_root 下。
     let project = api.create_project("State Isolation Test").unwrap();
@@ -170,7 +163,6 @@ fn test_app_sync_state_independent_from_project_sync_state() {
     // 写入作品级 state。
     let mut proj_state = api.load_sync_state(pid).unwrap();
     proj_state.last_sync_time = Some(1_111_111_111);
-    proj_state.last_synced_commit = Some("proj-commit".to_string());
     // load_sync_state 返回 DTO，但 save 不在 API 层暴露——通过 core 直接保存。
     api.core_write()
         .save_sync_state(pid, &proj_state.clone().into())
@@ -179,7 +171,6 @@ fn test_app_sync_state_independent_from_project_sync_state() {
     // 写入应用级 state。
     let mut app_state = api.load_app_sync_state().unwrap();
     app_state.last_sync_time = Some(2_222_222_222);
-    app_state.last_synced_commit = Some("app-commit".to_string());
     api.save_app_sync_state(app_state.clone()).unwrap();
 
     // 两者互不影响。
@@ -187,11 +178,6 @@ fn test_app_sync_state_independent_from_project_sync_state() {
     let app_loaded = api.load_app_sync_state().unwrap();
     assert_eq!(proj_loaded.last_sync_time, Some(1_111_111_111));
     assert_eq!(app_loaded.last_sync_time, Some(2_222_222_222));
-    assert_eq!(
-        proj_loaded.last_synced_commit.as_deref(),
-        Some("proj-commit")
-    );
-    assert_eq!(app_loaded.last_synced_commit.as_deref(), Some("app-commit"));
 }
 
 /// #630 评论 5308040939 Part 1：平台预处理失败窄接口 — 线格式状态码映射与

@@ -255,7 +255,6 @@ dictionary SyncConflictDto {
 
 dictionary SyncStateDto {
     string status;
-    string? last_synced_commit;
     i64? last_sync_time;
     string? last_error;
     sequence<SyncConflictDto>? conflicts;
@@ -263,22 +262,18 @@ dictionary SyncStateDto {
 
 dictionary SyncDiagnosticsResultDto {
     boolean success;
-    string backend_type;
+    string provider_type;
     boolean has_network_permission;
     boolean has_network_state_permission;
     string network_state;
     boolean network_ok;
     boolean auth_ok;
-    boolean repo_ok;
-    boolean branch_ok;
+    boolean remote_ok;
     string network_status;
     string auth_status;
-    string repo_status;
-    string branch_status;
-    string remote_url_sanitized;
-    string transport;
     string error_category;
     string? raw_error;
+    string? provider_details;
 };
 
 dictionary SyncCapabilityDto {
@@ -327,11 +322,9 @@ dictionary SyncResultDto {
     sequence<string> overwritten_files;
     sequence<string> ignored_files;
     sequence<SyncConflictDto> conflicts;
-    string? commit_hash;
     string? error;
     string? error_category;
     string? message_key;
-    string first_sync_mode;
     string? search_index_rebuild_error;
 };
 

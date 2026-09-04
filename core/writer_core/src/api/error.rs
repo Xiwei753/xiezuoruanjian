@@ -263,8 +263,10 @@ impl From<crate::error::Error> for WriterError {
                 // 只有明确网络/认证类别进入对应类型，其余默认 Fatal。
                 //
                 // Issue #645 评论 5504296097 第1点：`SyncErrorCategory` 已收成
-                // provider-neutral 分类，这里使用新变体。
-                let cat = crate::sync::types::SyncErrorCategory::from_code(&category, "");
+                // provider-neutral 分类，这里使用新变体。先查旧 GitHub/Git code
+                // 兼容映射（legacy_category_compat），再回退 provider-neutral from_code。
+                let cat = crate::sync::types::legacy_category_compat(&category)
+                    .unwrap_or_else(|| crate::sync::types::SyncErrorCategory::from_code(&category, ""));
                 match cat {
                     crate::sync::types::SyncErrorCategory::AuthFailed
                     | crate::sync::types::SyncErrorCategory::PermissionDenied => {

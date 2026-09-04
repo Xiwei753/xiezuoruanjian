@@ -198,7 +198,6 @@ impl From<SyncSecretsDto> for crate::sync::SyncSecrets {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncStateDto {
     pub status: String,
-    pub last_synced_commit: Option<String>,
     pub last_sync_time: Option<i64>,
     pub last_error: Option<String>,
     pub conflicts: Option<Vec<SyncConflictDto>>,
@@ -233,7 +232,6 @@ impl From<crate::sync::SyncState> for SyncStateDto {
     fn from(s: crate::sync::SyncState) -> Self {
         Self {
             status: "idle".to_string(),
-            last_synced_commit: s.last_synced_commit,
             last_sync_time: s.last_sync_time,
             last_error: s.last_error,
             conflicts: Some(s.conflicts.into_iter().map(Into::into).collect()),
@@ -258,10 +256,6 @@ impl From<SyncConflictDto> for crate::sync::SyncConflict {
 impl From<SyncStateDto> for crate::sync::SyncState {
     fn from(s: SyncStateDto) -> Self {
         crate::sync::SyncState {
-            // remote_url/transport 从 provider_config 推导，不再从 DTO 读取
-            remote_url: None,
-            transport: None,
-            last_synced_commit: s.last_synced_commit,
             last_sync_time: s.last_sync_time,
             last_error: s.last_error,
             conflicts: s
@@ -278,44 +272,36 @@ impl From<SyncStateDto> for crate::sync::SyncState {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncDiagnosticsResultDto {
     pub success: bool,
-    pub backend_type: String,
+    pub provider_type: String,
     pub has_network_permission: bool,
     pub has_network_state_permission: bool,
     pub network_state: String,
     pub network_ok: bool,
     pub auth_ok: bool,
-    pub repo_ok: bool,
-    pub branch_ok: bool,
+    pub remote_ok: bool,
     pub network_status: String,
     pub auth_status: String,
-    pub repo_status: String,
-    pub branch_status: String,
-    pub remote_url_sanitized: String,
-    pub transport: String,
     pub error_category: String,
     pub raw_error: Option<String>,
+    pub provider_details: Option<String>,
 }
 
 impl From<crate::sync::SyncDiagnosticsResult> for SyncDiagnosticsResultDto {
     fn from(d: crate::sync::SyncDiagnosticsResult) -> Self {
         Self {
             success: d.success,
-            backend_type: d.backend_type,
+            provider_type: d.provider_type,
             has_network_permission: d.has_network_permission,
             has_network_state_permission: d.has_network_state_permission,
             network_state: d.network_state,
             network_ok: d.network_ok,
             auth_ok: d.auth_ok,
-            repo_ok: d.repo_ok,
-            branch_ok: d.branch_ok,
+            remote_ok: d.remote_ok,
             network_status: d.network_status,
             auth_status: d.auth_status,
-            repo_status: d.repo_status,
-            branch_status: d.branch_status,
-            remote_url_sanitized: d.remote_url_sanitized,
-            transport: d.transport,
             error_category: d.error_category,
             raw_error: d.raw_error,
+            provider_details: d.provider_details,
         }
     }
 }
@@ -398,11 +384,9 @@ pub struct SyncResultDto {
     pub overwritten_files: Vec<String>,
     pub ignored_files: Vec<String>,
     pub conflicts: Vec<SyncConflictDto>,
-    pub commit_hash: Option<String>,
     pub error: Option<String>,
     pub error_category: Option<String>,
     pub message_key: Option<String>,
-    pub first_sync_mode: String,
     pub search_index_rebuild_error: Option<String>,
 }
 
@@ -417,11 +401,9 @@ impl From<crate::sync::SyncResult> for SyncResultDto {
             overwritten_files: r.overwritten_files,
             ignored_files: r.ignored_files,
             conflicts: r.conflicts.into_iter().map(Into::into).collect(),
-            commit_hash: r.commit_hash,
             error: r.error,
             error_category: r.error_category,
             message_key: r.message_key,
-            first_sync_mode: first_sync_mode_to_wire(&r.first_sync_mode),
             search_index_rebuild_error: r.search_index_rebuild_error,
         }
     }
@@ -484,8 +466,6 @@ fn sync_status_to_wire(status: &crate::sync::SyncStatus) -> String {
         crate::sync::SyncStatus::PartialConflict => "partial_conflict",
         crate::sync::SyncStatus::RecoverableError(_) => "recoverable_error",
         crate::sync::SyncStatus::FatalError(_) => "fatal_error",
-        crate::sync::SyncStatus::DirtyRepoBlocked => "dirty_repo_blocked",
-        crate::sync::SyncStatus::BranchMissingRecovered => "branch_missing_recovered",
         crate::sync::SyncStatus::Error(_) => "error",
         crate::sync::SyncStatus::NoChanges => "no_changes",
         crate::sync::SyncStatus::LatestWinsApplied => "latest_wins_applied",
@@ -497,6 +477,10 @@ fn sync_status_to_wire(status: &crate::sync::SyncStatus) -> String {
 ///
 /// 与 `sync_status_to_wire` 同一映射。未知 code 映射为 `FatalError`：平台预处理
 /// 失败宁可落在终态（需要用户处理），不给"可自动重试"的错觉。
+///
+/// #645 评论 5504296097 第2点：删除 `dirty_repo_blocked` / `branch_missing_recovered`
+/// 映射——这两个变体已从 `SyncStatus` 删除。旧持久化数据中的这两个 code 会落到
+/// 兜底 `FatalError("preflight")`，调用方可在 migration 边界显式处理。
 pub(crate) fn sync_status_from_wire(s: &str) -> crate::sync::SyncStatus {
     match s {
         "idle" => crate::sync::SyncStatus::Idle,
@@ -507,24 +491,10 @@ pub(crate) fn sync_status_from_wire(s: &str) -> crate::sync::SyncStatus {
         "partial_conflict" => crate::sync::SyncStatus::PartialConflict,
         "recoverable_error" => crate::sync::SyncStatus::RecoverableError("preflight".to_string()),
         "fatal_error" => crate::sync::SyncStatus::FatalError("preflight".to_string()),
-        "dirty_repo_blocked" => crate::sync::SyncStatus::DirtyRepoBlocked,
-        "branch_missing_recovered" => crate::sync::SyncStatus::BranchMissingRecovered,
         "no_changes" => crate::sync::SyncStatus::NoChanges,
         "latest_wins_applied" => crate::sync::SyncStatus::LatestWinsApplied,
         _ => crate::sync::SyncStatus::FatalError("preflight".to_string()),
     }
-}
-
-fn first_sync_mode_to_wire(mode: &crate::sync::FirstSyncMode) -> String {
-    match mode {
-        crate::sync::FirstSyncMode::NotAttempted => "not_attempted",
-        crate::sync::FirstSyncMode::CloneIntoEmptyProject => "clone_into_empty_project",
-        crate::sync::FirstSyncMode::InitExistingProject => "init_existing_project",
-        crate::sync::FirstSyncMode::AlreadyGitRepo => "already_git_repo",
-        crate::sync::FirstSyncMode::BlockedNonEmptyRemote => "blocked_non_empty_remote",
-        crate::sync::FirstSyncMode::UnrelatedHistories => "unrelated_histories",
-    }
-    .to_string()
 }
 
 /// 单个 target 的同步结果 DTO。

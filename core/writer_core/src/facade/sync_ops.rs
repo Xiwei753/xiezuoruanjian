@@ -599,8 +599,7 @@ impl super::WriterCore {
             .unwrap_or(0);
         let overall_status = match overall_priority {
             4 => SyncStatus::FatalError("one_or_more_targets_failed".to_string()),
-            3 => SyncStatus::DirtyRepoBlocked,
-            2 => SyncStatus::PartialConflict,
+            3 => SyncStatus::PartialConflict,
             1 => SyncStatus::RecoverableError("one_or_more_targets_temporarily_failed".to_string()),
             _ => aggregate_success_status(&targets),
         };

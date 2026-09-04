@@ -379,9 +379,12 @@ impl StagingRun {
 /// 任何一个 target 的 seed 失败都意味着该 target 的 staging 是半成品，
 /// 不能拿来做三方比较。seed 失败直接返回 Err，让调用方终止本次 full sync。
 ///
-/// #644 评论 5493295108 问题1/2：在 seed 前先解析/迁移每个 target 的 Git layout。
-/// - App target：调 `resolve_existing_repo_layout`（只处理已有仓库位置，不 init 新仓库）。
-/// - Project target：调 `ensure_project_repo_with_layout`（产品契约要求作品必有 Git）。
+/// #644 评论 5493295108 问题1/2：在 seed 前先准备 workspace Git layout。
+/// #645 评论 5504296097 第1点：workspace Git 只准备一次（plan 级），
+/// 不再在 target loop 里对每个 target 调 `prepare_target_git_layout`。
+/// 统一对 `plan.workspace_git_layout` 调 `ensure_project_repo_with_layout`：
+/// workspace repo 是本地版本历史，worktree_root=app_data_root，应确保存在
+/// （init if missing）。所有 target 共享此 workspace repo。
 ///
 /// 这样迁移发生在已释放 Core 写锁之后，不会堵住冷启动卷章读取。
 ///
@@ -395,17 +398,15 @@ pub fn prepare_staging_runs(
 ) -> crate::error::Result<Vec<StagingRun>> {
     let mut staging_runs: Vec<StagingRun> = Vec::new();
 
-    // #645 评论第 3 点：workspace 级别的 Git layout 放在 plan 上，
-    // 所有 target 共享。
-    let workspace_git_layout = plan.workspace_git_layout.clone();
+    // #645 评论 5504296097 第1点：workspace Git 只准备一次（plan 级），
+    // 所有 target 共享同一 workspace repo。统一调 ensure_project_repo_with_layout：
+    // workspace repo 是本地版本历史，worktree_root=app_data_root，应确保存在
+    // （init if missing）。
+    if let Some(layout) = &plan.workspace_git_layout {
+        crate::storage::git_repo_layout::ensure_project_repo_with_layout(layout)?;
+    }
 
     for planned in &mut plan.targets {
-        // #644 评论 5493295108 问题1/2：在 seed 前先解析/迁移 Git layout。
-        // 这一步在已释放 Core 写锁之后执行，不会堵住冷启动卷章读取。
-        if let Some(layout) = &workspace_git_layout {
-            prepare_target_git_layout(planned, layout)?;
-        }
-
         let run = StagingRun::create(&plan.app_data_root, planned.target_live_root.clone())?;
         // #644 评论 5473401065 第2节：seed 失败必须传播，不能继续拿半成品 staging。
         // #645 评论 5504296097 第2点：统一调 seed_from_live，不再按 backend 分支。
@@ -415,42 +416,6 @@ pub fn prepare_staging_runs(
     }
 
     Ok(staging_runs)
-}
-
-/// #644 评论 5493295108 问题1/2：在 seed 前解析/迁移 target 的 Git layout。
-///
-/// - App target（`project_id == None`）：调 `resolve_existing_repo_layout`，
-///   只处理已有仓库位置，不 init 新仓库。App data root 不应被误 init 成 Git repo。
-/// - Project target（`project_id == Some`）：调 `ensure_project_repo_with_layout`，
-///   产品契约要求作品必有 Git，missing repo 会被 init。
-///
-/// 这一步在已释放 Core 写锁之后执行（由 `prepare_staging_runs` 调用），
-/// 不会堵住冷启动卷章读取。
-///
-/// #645 评论 5504296097 第2点：不再按 `active_provider` 早返回——workspace 级别
-/// 的 Git layout 迁移对所有 Provider 统一执行，不作为某个 remote provider 的
-/// staging 模式。
-#[allow(clippy::excessive_nesting)]
-fn prepare_target_git_layout(
-    planned: &crate::sync::full_sync::PlannedTarget,
-    layout: &crate::storage::git_repo_layout::GitRepoLayout,
-) -> crate::error::Result<()> {
-    match planned.project_id {
-        Some(_) => {
-            // Project target：产品契约要求作品必有 Git。
-            // ensure_project_repo_with_layout 会 init missing repo。
-            crate::storage::git_repo_layout::ensure_project_repo_with_layout(layout)?;
-        }
-        None => {
-            // App target：只处理已有仓库位置，不 init 新仓库。
-            // resolve_existing_repo_layout 语义：
-            // - private git_dir 已有 repo → Ready
-            // - private 没有 + worktree/.git 有 repo → 迁移后 Ready
-            // - 两边都没有 → NotGitRepo（不 init）
-            let _ = crate::storage::git_repo_layout::resolve_existing_repo_layout(layout)?;
-        }
-    }
-    Ok(())
 }
 
 impl Drop for StagingRun {

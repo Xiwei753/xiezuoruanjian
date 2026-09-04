@@ -9,9 +9,7 @@ use crate::sync::provider::model::{
     DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion, WritePrecondition,
 };
 use crate::sync::provider::SyncProvider;
-use crate::sync::types::{
-    FirstSyncMode, SyncConfig, SyncPolicy, SyncResult, SyncStatus, SyncTarget,
-};
+use crate::sync::types::{SyncConfig, SyncPolicy, SyncResult, SyncStatus, SyncTarget};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -118,13 +116,11 @@ fn mock_outcome_to_sync_result(outcome: &MockOutcome) -> SyncResult {
         MockOutcome::Ok(r) => (**r).clone(),
         MockOutcome::ErrOther(msg) => SyncResult::error(
             SyncStatus::RecoverableError(format!("Other error: {}", msg)),
-            FirstSyncMode::NotAttempted,
             format!("Other error: {}", msg),
             None,
         ),
         MockOutcome::ErrSyncAuth(msg) => SyncResult::error(
             SyncStatus::FatalError(format!("Sync auth failed: {}", msg)),
-            FirstSyncMode::NotAttempted,
             format!("Sync auth failed: {}", msg),
             Some("auth_error".to_string()),
         ),
@@ -889,38 +885,6 @@ fn aggregate_recoverable_only_overall_is_recoverable() {
     );
 }
 
-/// Dirty > Recoverable：一个 DirtyRepoBlocked target 压过所有可重试错误。
-#[test]
-fn aggregate_dirty_beats_recoverable() {
-    let (_temp_dir, core) = new_core_with_projects();
-    let p1 = core.create_project("Project 1").expect("create project 1");
-
-    let result = aggregate_with_outcomes(
-        &core,
-        &[
-            (
-                "app",
-                MockOutcome::ErrOther("app network hiccup".to_string()),
-            ),
-            (
-                &format!("projects/{}", p1.id),
-                MockOutcome::ok(SyncResult::error(
-                    SyncStatus::DirtyRepoBlocked,
-                    FirstSyncMode::NotAttempted,
-                    "remote repo is dirty".to_string(),
-                    Some("dirty_repo".to_string()),
-                )),
-            ),
-        ],
-    );
-
-    assert_eq!(
-        result.overall_status,
-        SyncStatus::DirtyRepoBlocked,
-        "Dirty must beat Recoverable"
-    );
-    assert_eq!(result.error.as_deref(), Some("remote repo is dirty"));
-}
 
 /// Conflict > Recoverable：冲突 target 压过可重试错误，总体 PartialConflict。
 #[test]
@@ -939,7 +903,6 @@ fn aggregate_conflict_beats_recoverable() {
                 &format!("projects/{}", p1.id),
                 MockOutcome::ok(SyncResult::error(
                     SyncStatus::Conflict,
-                    FirstSyncMode::NotAttempted,
                     "both changed".to_string(),
                     Some("conflict".to_string()),
                 )),
@@ -969,7 +932,6 @@ fn aggregate_fatal_beats_conflict() {
                 &format!("projects/{}", p1.id),
                 MockOutcome::ok(SyncResult::error(
                     SyncStatus::Conflict,
-                    FirstSyncMode::NotAttempted,
                     "both changed".to_string(),
                     Some("conflict".to_string()),
                 )),
@@ -1001,7 +963,6 @@ fn aggregate_error_status_target_makes_overall_fatal() {
             "app",
             MockOutcome::ok(SyncResult::error(
                 SyncStatus::Error("repo exploded".to_string()),
-                FirstSyncMode::NotAttempted,
                 "repo exploded".to_string(),
                 Some("api_error".to_string()),
             )),
@@ -1176,12 +1137,10 @@ fn sync_result_with_status(status: SyncStatus) -> SyncResult {
         downloaded_files: Vec::new(),
         ignored_files: Vec::new(),
         conflicts: Vec::new(),
-        commit_hash: None,
         error: None,
         error_category: None,
         message_key: None,
         conflict_summary: None,
-        first_sync_mode: FirstSyncMode::NotAttempted,
         local_deletes: Vec::new(),
         remote_deletes: Vec::new(),
         overwritten_files: Vec::new(),
@@ -1294,58 +1253,6 @@ fn aggregate_success_plus_latest_wins_applied_is_latest_wins_applied() {
     );
 }
 
-/// `Success + BranchMissingRecovered -> BranchMissingRecovered`：有 target 回退分支丢失恢复。
-/// （Issue #630 评论 5311102143：`Success + BranchMissingRecovered -> BranchMissingRecovered`）
-#[test]
-fn aggregate_success_plus_branch_missing_recovered_is_branch_missing_recovered() {
-    let (_temp_dir, core) = new_core_with_projects();
-    let p1 = core.create_project("Project 1").expect("create project 1");
-
-    let result = aggregate_with_outcomes(
-        &core,
-        &[
-            ("app", MockOutcome::ok(SyncResult::success())),
-            (
-                &format!("projects/{}", p1.id),
-                MockOutcome::ok(sync_result_with_status(SyncStatus::BranchMissingRecovered)),
-            ),
-        ],
-    );
-
-    assert_eq!(
-        result.overall_status,
-        SyncStatus::BranchMissingRecovered,
-        "Success + BranchMissingRecovered must aggregate to BranchMissingRecovered; got {:?}",
-        result.overall_status
-    );
-}
-
-/// 任一 `BranchMissingRecovered` + 其余 `Success` → overall `BranchMissingRecovered`。
-/// （Issue #630 评论 5311102143：`Success + BranchMissingRecovered -> BranchMissingRecovered`）
-#[test]
-fn aggregate_branch_missing_recovered_beats_success() {
-    let (_temp_dir, core) = new_core_with_projects();
-    let p1 = core.create_project("Project 1").expect("create project 1");
-
-    let result = aggregate_with_outcomes(
-        &core,
-        &[
-            ("app", MockOutcome::ok(SyncResult::success())),
-            (
-                &format!("projects/{}", p1.id),
-                MockOutcome::ok(sync_result_with_status(SyncStatus::BranchMissingRecovered)),
-            ),
-        ],
-    );
-
-    assert_eq!(
-        result.overall_status,
-        SyncStatus::BranchMissingRecovered,
-        "BranchMissingRecovered must be preserved over Success, got {:?}",
-        result.overall_status
-    );
-}
-
 /// 任一 `LatestWinsApplied` + 其余 `NoChanges` → overall `LatestWinsApplied`。
 #[test]
 fn aggregate_latest_wins_applied_beats_no_changes() {
@@ -1369,34 +1276,6 @@ fn aggregate_latest_wins_applied_beats_no_changes() {
         result.overall_status,
         SyncStatus::LatestWinsApplied,
         "LatestWinsApplied must be preserved over NoChanges, got {:?}",
-        result.overall_status
-    );
-}
-
-/// `BranchMissingRecovered` 优先于 `LatestWinsApplied`（数字越大越优先保留）。
-#[test]
-fn aggregate_branch_missing_recovered_beats_latest_wins_applied() {
-    let (_temp_dir, core) = new_core_with_projects();
-    let p1 = core.create_project("Project 1").expect("create project 1");
-
-    let result = aggregate_with_outcomes(
-        &core,
-        &[
-            (
-                "app",
-                MockOutcome::ok(sync_result_with_status(SyncStatus::LatestWinsApplied)),
-            ),
-            (
-                &format!("projects/{}", p1.id),
-                MockOutcome::ok(sync_result_with_status(SyncStatus::BranchMissingRecovered)),
-            ),
-        ],
-    );
-
-    assert_eq!(
-        result.overall_status,
-        SyncStatus::BranchMissingRecovered,
-        "BranchMissingRecovered must beat LatestWinsApplied, got {:?}",
         result.overall_status
     );
 }

@@ -43,7 +43,6 @@ mod tests {
                     remote_prefix: "projects/p1".to_string(),
                     result: crate::sync::types::SyncResult::error(
                         SyncStatus::FatalError("boom".to_string()),
-                        crate::sync::types::FirstSyncMode::NotAttempted,
                         "boom".to_string(),
                         None,
                     ),
@@ -107,14 +106,6 @@ mod tests {
         result.overall_status = SyncStatus::NoChanges;
         let state = FullSyncState::from_result_and_previous(&result, None, 2000);
         assert_eq!(state.last_success_time, Some(2000));
-    }
-
-    #[test]
-    fn branch_missing_recovered_is_overall_success() {
-        let mut result = success_result();
-        result.overall_status = SyncStatus::BranchMissingRecovered;
-        let state = FullSyncState::from_result_and_previous(&result, None, 3000);
-        assert_eq!(state.last_success_time, Some(3000));
     }
 
     #[test]

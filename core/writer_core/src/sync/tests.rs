@@ -136,7 +136,7 @@ mod tests {
     }
     #[test]
     #[cfg(feature = "github-api")]
-    fn test_github_api_diagnostics_reports_backend_type_without_token() {
+    fn test_github_api_diagnostics_reports_provider_type_without_token() {
         let config = SyncConfig {
             enabled: true,
             active_provider: "github_api".to_string(),
@@ -158,7 +158,7 @@ mod tests {
         };
 
         let result = SyncService::perform_sync_diagnostics(&config, &secrets).unwrap();
-        assert_eq!(result.backend_type, "github_api");
+        assert_eq!(result.provider_type, "github_api");
         assert_eq!(result.error_category, "token_missing");
     }
 
@@ -352,10 +352,7 @@ mod tests {
             has_network_state_permission: true,
         };
         let state = SyncState {
-            remote_url: Some("url".to_string()),
-            transport: Some("https_token".to_string()),
             last_sync_time: Some(0),
-            last_synced_commit: None,
             last_error: None,
             known_files: std::collections::HashMap::new(),
             conflicts: vec![],
@@ -492,8 +489,7 @@ mod tests {
     #[test]
     fn test_sync_local_config_blacklisted_project() {
         // 作品级：本地同步配置、冲突记录、凭证必须被黑名单，
-        // 否则 perform_sync 跑 backend.status() 时这些文件既不在黑名单也不在白名单，
-        // 返回 DirtyRepoBlocked，同步被自己的配置文件拦死（Issue #600 评论 #4 问题 1）。
+        // 否则 perform_sync 跑 provider 时这些文件会被当作待同步内容。
         assert!(SyncService::is_blacklisted_path(
             "app-meta/sync/config.local.json",
             crate::sync::types::SyncScope::Project
@@ -648,12 +644,11 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_sync_state_does_not_leak_tokens() {
         let dir = tempdir().unwrap();
+        // #645 评论 5504296097 第2点：SyncState 不再携带 remote_url/transport，
+        // 用 last_error 携带 URL 字符串来验证 state 序列化不含 token 的核心回归意图。
         let state = SyncState {
-            remote_url: Some("https://example.com/repo.git".to_string()),
-            transport: Some("https_token".to_string()),
-            last_synced_commit: None,
             last_sync_time: None,
-            last_error: None,
+            last_error: Some("sync failed for https://example.com/repo.git".to_string()),
             known_files: std::collections::HashMap::new(),
             conflicts: vec![],
             tombstones: Vec::new(),
@@ -1447,7 +1442,13 @@ mod tests {
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
-        assert_ne!(res.status, SyncStatus::DirtyRepoBlocked);
+        // #645 评论 5504296097 第2点：DirtyRepoBlocked 变体已删除，
+        // 同步不再因 dirty repo 返回专用阻塞状态。断言同步未落入 FatalError
+        // 保留"同步不被自身配置文件拦死"的核心回归意图。
+        assert!(
+            !matches!(res.status, SyncStatus::FatalError(_)),
+            "sync should not be blocked by dirty repo config file"
+        );
 
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = server_thread.join();
@@ -2937,12 +2938,9 @@ mod tests {
         );
         assert!(!result.network_ok, "Git backend network_ok should be false");
         assert!(!result.auth_ok, "Git backend auth_ok should be false");
-        assert!(!result.repo_ok, "Git backend repo_ok should be false");
-        assert!(!result.branch_ok, "Git backend branch_ok should be false");
+        assert!(!result.remote_ok, "Git backend remote_ok should be false");
         assert_eq!(result.network_status, "unsupported_git_backend");
         assert_eq!(result.auth_status, "not_checked_git_backend");
-        assert_eq!(result.repo_status, "not_checked_git_backend");
-        assert_eq!(result.branch_status, "not_checked_git_backend");
     }
 
     // ── force_sync debounce 测试 ──

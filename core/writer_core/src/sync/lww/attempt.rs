@@ -8,8 +8,7 @@ use crate::sync::content_class::is_document_content_path;
 use crate::sync::provider::SyncProvider;
 use crate::sync::scanner::scan_for_sync;
 use crate::sync::types::{
-    FirstSyncMode, ManifestFileRecord, SyncConflict, SyncKind, SyncManifest, SyncResult, SyncState,
-    SyncStatus,
+    ManifestFileRecord, SyncConflict, SyncKind, SyncManifest, SyncResult, SyncState, SyncStatus,
 };
 use crate::sync::SyncService;
 use std::path::Path;
@@ -374,7 +373,6 @@ pub(crate) fn execute_lww_sync_attempt(
     }
 
     state.last_sync_time = Some(chrono::Utc::now().timestamp());
-    state.last_synced_commit = None;
     state.last_error = None;
 
     let post_local_entries = scan_for_sync(sync_root, scope)?;
@@ -484,8 +482,6 @@ pub(crate) fn execute_lww_sync_attempt(
     result.local_deletes = local_deletes_count;
     result.remote_deletes = remote_deletes_count;
     result.overwritten_files = overwritten_files;
-    result.commit_hash = None;
-    result.first_sync_mode = FirstSyncMode::AlreadyGitRepo;
 
     log::debug!("[sync] lww step=同步完成");
     Ok(result.clone())

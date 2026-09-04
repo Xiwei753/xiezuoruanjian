@@ -20,7 +20,7 @@ use super::types::{FullSyncResult, SyncStatus};
 use serde::{Deserialize, Serialize};
 /// 全量同步持久状态 — 一次全量同步事务的总体结果。
 ///
-/// - `overall_status`：总体状态（Success/NoChanges/LatestWinsApplied/BranchMissingRecovered
+/// - `overall_status`：总体状态（Success/NoChanges/LatestWinsApplied
 ///   视为整体成功；Error/PartialConflict/RecoverableError 等为失败）。
 /// - `last_attempt_time`：上次全量同步尝试时间（Unix 秒），每次尝试都更新。
 /// - `last_success_time`：上次全量同步整体成功时间（Unix 秒），仅当 `overall_status`
@@ -39,10 +39,7 @@ impl FullSyncState {
     pub fn is_overall_success(status: &SyncStatus) -> bool {
         matches!(
             status,
-            SyncStatus::Success
-                | SyncStatus::NoChanges
-                | SyncStatus::LatestWinsApplied
-                | SyncStatus::BranchMissingRecovered
+            SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
         )
     }
     /// 正式事务开始时的状态（Issue #630 评论 5308040939 Part 1）。
@@ -120,7 +117,6 @@ impl FullSyncState {
                     SyncStatus::FatalError(_)
                         | SyncStatus::Error(_)
                         | SyncStatus::RecoverableError(_)
-                        | SyncStatus::DirtyRepoBlocked
                         | SyncStatus::Conflict
                         | SyncStatus::PartialConflict
                 )

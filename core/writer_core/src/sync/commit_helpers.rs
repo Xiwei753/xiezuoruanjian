@@ -67,10 +67,9 @@ pub(crate) enum TargetCommitMode {
 pub(crate) fn target_commit_mode(status: &crate::sync::SyncStatus) -> TargetCommitMode {
     use crate::sync::SyncStatus;
     match status {
-        SyncStatus::Success
-        | SyncStatus::NoChanges
-        | SyncStatus::LatestWinsApplied
-        | SyncStatus::BranchMissingRecovered => TargetCommitMode::Full,
+        SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied => {
+            TargetCommitMode::Full
+        }
         SyncStatus::Conflict | SyncStatus::PartialConflict => {
             TargetCommitMode::ConflictMetadataOnly
         }

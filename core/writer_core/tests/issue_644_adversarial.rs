@@ -22,7 +22,7 @@ use tempfile::TempDir;
 use writer_core::facade::WriterCore;
 use writer_core::sync::full_sync::FullSyncTransferResult;
 use writer_core::sync::staging::{CommitAction, StagingRun};
-use writer_core::sync::types::{FirstSyncMode, SyncResult, SyncStatus, TargetSyncResult};
+use writer_core::sync::types::{SyncResult, SyncStatus, TargetSyncResult};
 
 // ── helpers ──
 
@@ -41,12 +41,10 @@ fn sync_result_with_status(status: SyncStatus) -> SyncResult {
         downloaded_files: Vec::new(),
         ignored_files: Vec::new(),
         conflicts: Vec::new(),
-        commit_hash: None,
         error: None,
         error_category: None,
         message_key: None,
         conflict_summary: None,
-        first_sync_mode: FirstSyncMode::NotAttempted,
         local_deletes: Vec::new(),
         remote_deletes: Vec::new(),
         overwritten_files: Vec::new(),
@@ -655,7 +653,7 @@ fn adv_p3_metadata_tie_local_device_id_greater_wins() {
     write_rel(
         &live,
         state_local,
-        r#"{"remote_url":null,"transport":null,"last_synced_commit":null,"last_sync_time":null,"last_error":null,"known_files":{},"conflicts":[],"device_id":"zzz-top-device","conflicted_files":[]}"#,
+        r#"{"last_sync_time":null,"last_error":null,"known_files":{},"conflicts":[],"device_id":"zzz-top-device","conflicted_files":[]}"#,
     );
 
     let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
@@ -703,7 +701,7 @@ fn adv_p3_metadata_tie_remote_device_id_greater_wins() {
     write_rel(
         &live,
         state_local,
-        r#"{"remote_url":null,"transport":null,"last_synced_commit":null,"last_sync_time":null,"last_error":null,"known_files":{},"conflicts":[],"device_id":"aaa-low-device","conflicted_files":[]}"#,
+        r#"{"last_sync_time":null,"last_error":null,"known_files":{},"conflicts":[],"device_id":"aaa-low-device","conflicted_files":[]}"#,
     );
 
     let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
