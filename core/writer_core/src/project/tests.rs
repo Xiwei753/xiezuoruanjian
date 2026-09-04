@@ -46,7 +46,7 @@ fn test_create_project_does_not_initialize_per_project_git_repo() {
 }
 
 #[test]
-fn test_list_projects_migrates_legacy_project_to_git_repo() {
+fn test_list_projects_never_creates_per_project_git_repo() {
     let dir = tempdir().unwrap();
     let data_root = dir.path();
     let projects_root = data_root.join("projects");
@@ -70,18 +70,21 @@ fn test_list_projects_migrates_legacy_project_to_git_repo() {
     .unwrap();
     assert!(!legacy_dir.join(".git").exists());
 
-    // #644 评论 5493295108 问题1：list_projects 不再触发迁移，
-    // 只纯读取项目元数据。迁移职责移到 sync::staging::prepare_staging_runs。
+    // list_projects 只纯读取项目元数据，不触发迁移。
     let projects = list_projects(&projects_root).unwrap();
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0].id, legacy_id);
     // list 不应触发迁移，.git 仍不应存在。
     assert!(!legacy_dir.join(".git").exists());
 
-    // 显式调 ensure_project_repo 才迁移为 Git 仓库。
-    crate::storage::project_git::ensure_project_repo(&legacy_dir).unwrap();
-    assert!(legacy_dir.join(".git").exists());
-    assert!(git2::Repository::open(&legacy_dir).is_ok());
+    // create_project 也不应创建 per-project .git。
+    let new_project =
+        create_project(&projects_root, "New Project").unwrap();
+    let new_dir = projects_root.join(&new_project.id);
+    assert!(
+        !new_dir.join(".git").exists(),
+        "create_project 不应创建 per-project .git — Git 仓库由 workspace 级别管理"
+    );
 }
 
 #[test]

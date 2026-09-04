@@ -94,16 +94,16 @@ fn rollback_full_sync_transaction(
         if effective_plan.ref_lock_names.is_empty() && !effective_plan.ref_plans.is_empty() {
             let mut rebuilt: Vec<String> = Vec::new();
             match &seed_state {
-                crate::sync::git::seed::GitSeedState::NotGitRepo => {
+                crate::storage::workspace_git::seed::GitSeedState::NotGitRepo => {
                     // NotGitRepo：forward 不锁 live refs（live 还没有 .git），
                     // ref_lock_names 只包含 ref_plans 中的名称。
                 }
-                crate::sync::git::seed::GitSeedState::Unborn { head_ref }
-                | crate::sync::git::seed::GitSeedState::Existing { head_ref, .. } => {
+                crate::storage::workspace_git::seed::GitSeedState::Unborn { head_ref }
+                | crate::storage::workspace_git::seed::GitSeedState::Existing { head_ref, .. } => {
                     rebuilt.push("HEAD".to_string());
                     rebuilt.push(head_ref.clone());
                 }
-                crate::sync::git::seed::GitSeedState::Detached { .. } => {
+                crate::storage::workspace_git::seed::GitSeedState::Detached { .. } => {
                     rebuilt.push("HEAD".to_string());
                 }
             }
@@ -120,26 +120,26 @@ fn rollback_full_sync_transaction(
 
         // index_lock_owner=None 旧 manifest 迁移。
         if effective_plan.new_index_sha256.is_some() && effective_plan.index_lock_owner.is_none() {
-            let migration = crate::sync::git::check_index_lock_owner_migration(
+            let migration = crate::storage::workspace_git::check_index_lock_owner_migration(
                 recovery_live_root,
                 &git_rec.metadata_snapshot,
                 &effective_plan,
                 recovery_git_dir,
             )?;
             match migration {
-                crate::sync::git::IndexLockOwnerMigration::LockExists => {
+                crate::storage::workspace_git::IndexLockOwnerMigration::LockExists => {
                     return Err(crate::Error::Io(std::io::Error::other(
                         "rollback_full_sync_transaction: index.lock exists but \
                          plan.index_lock_owner is None — cannot determine lock \
                          ownership, preserving transaction for next recovery",
                     )));
                 }
-                crate::sync::git::IndexLockOwnerMigration::AlreadyReverted => {}
-                crate::sync::git::IndexLockOwnerMigration::MigrateToNewOwner(owner) => {
+                crate::storage::workspace_git::IndexLockOwnerMigration::AlreadyReverted => {}
+                crate::storage::workspace_git::IndexLockOwnerMigration::MigrateToNewOwner(owner) => {
                     effective_plan.index_lock_owner = Some(owner);
                     plan_changed = true;
                 }
-                crate::sync::git::IndexLockOwnerMigration::ConcurrentModification => {
+                crate::storage::workspace_git::IndexLockOwnerMigration::ConcurrentModification => {
                     return Err(crate::Error::Io(std::io::Error::other(
                         "rollback_full_sync_transaction: index CAS miss during \
                          index_lock_owner migration — concurrent modification, \
@@ -152,28 +152,28 @@ fn rollback_full_sync_transaction(
         // 评论 5489750244 问题5：ref_tx_owner=None 旧 manifest 迁移。
         // 与 index 迁移顺序叠加，不是互斥。
         if !effective_plan.ref_plans.is_empty() && effective_plan.ref_tx_owner.is_none() {
-            let ref_migration = crate::sync::git::check_ref_tx_owner_migration(
+            let ref_migration = crate::storage::workspace_git::check_ref_tx_owner_migration(
                 recovery_live_root,
                 &git_rec.metadata_snapshot,
                 &effective_plan,
                 recovery_git_dir,
             )?;
             match ref_migration {
-                crate::sync::git::RefTxOwnerMigration::LockExists => {
+                crate::storage::workspace_git::RefTxOwnerMigration::LockExists => {
                     return Err(crate::Error::Io(std::io::Error::other(
                         "rollback_full_sync_transaction: ref lock exists but \
                          plan.ref_tx_owner is None — cannot determine lock \
                          ownership, preserving transaction for next recovery",
                     )));
                 }
-                crate::sync::git::RefTxOwnerMigration::ConcurrentModification => {
+                crate::storage::workspace_git::RefTxOwnerMigration::ConcurrentModification => {
                     return Err(crate::Error::Io(std::io::Error::other(
                         "rollback_full_sync_transaction: ref CAS miss during \
                          ref_tx_owner migration — concurrent modification, \
                          preserving transaction for next recovery",
                     )));
                 }
-                crate::sync::git::RefTxOwnerMigration::MigrateToNewOwner(owner) => {
+                crate::storage::workspace_git::RefTxOwnerMigration::MigrateToNewOwner(owner) => {
                     effective_plan.ref_tx_owner = Some(owner);
                     plan_changed = true;
                 }
@@ -191,10 +191,10 @@ fn rollback_full_sync_transaction(
             crate::storage::atomic_write_string(&manifest_path, &json)?;
         }
 
-        let plan_for_rollback: &crate::sync::git::GitFinalizePlan = &effective_plan;
+        let plan_for_rollback: &crate::storage::workspace_git::GitFinalizePlan = &effective_plan;
 
         // #644 评论 5488871385 问题1：先只读 inspect，再 preflight，最后 rollback。
-        let inspect_state = crate::sync::git::inspect_git_rollback_state(
+        let inspect_state = crate::storage::workspace_git::inspect_git_rollback_state(
             recovery_live_root,
             &git_rec.metadata_snapshot,
             plan_for_rollback,
@@ -202,27 +202,27 @@ fn rollback_full_sync_transaction(
         )?;
 
         match inspect_state {
-            crate::sync::git::GitRollbackState::NeedsRollback => {
+            crate::storage::workspace_git::GitRollbackState::NeedsRollback => {
                 // 先 preflight backup（在任何 Git 修改之前）。
                 preflight_backup_entries(tx_dir, manifest)?;
                 // 再执行 Git rollback。
-                let outcome = crate::sync::git::rollback_git_finalize(
+                let outcome = crate::storage::workspace_git::rollback_git_finalize(
                     recovery_live_root,
                     &git_rec.metadata_snapshot,
                     plan_for_rollback,
                     recovery_git_dir,
                 )?;
                 match outcome {
-                    crate::sync::git::GitRollbackOutcome::Reverted => {
+                    crate::storage::workspace_git::GitRollbackOutcome::Reverted => {
                         // Git metadata 已回滚，继续恢复文件 backup。
                     }
-                    crate::sync::git::GitRollbackOutcome::ConcurrentChanged => {
+                    crate::storage::workspace_git::GitRollbackOutcome::ConcurrentChanged => {
                         return Err(crate::Error::Io(std::io::Error::other(
                             "rollback_full_sync_transaction: git rollback detected \
                              concurrent change, preserving transaction for next recovery",
                         )));
                     }
-                    crate::sync::git::GitRollbackOutcome::RepoInstallCommitted => {
+                    crate::storage::workspace_git::GitRollbackOutcome::RepoInstallCommitted => {
                         // inspect 已判 NeedsRollback 但 rollback 返回 RepoInstallCommitted
                         // （状态不一致），保留事务。
                         return Err(crate::Error::Io(std::io::Error::other(
@@ -233,7 +233,7 @@ fn rollback_full_sync_transaction(
                     }
                 }
             }
-            crate::sync::git::GitRollbackState::RepoInstallCommitted => {
+            crate::storage::workspace_git::GitRollbackState::RepoInstallCommitted => {
                 // NotGitRepo 已完成 owner-matched .git rename。
                 // 按 commit-point 逻辑收尾：不回滚文件，标记 Finished 并清理。
                 let manifest_path = tx_dir.join(MANIFEST_FILENAME);
@@ -241,7 +241,7 @@ fn rollback_full_sync_transaction(
                 fs::remove_dir_all(tx_dir)?;
                 return Ok(());
             }
-            crate::sync::git::GitRollbackState::ConcurrentChanged => {
+            crate::storage::workspace_git::GitRollbackState::ConcurrentChanged => {
                 return Err(crate::Error::Io(std::io::Error::other(
                     "rollback_full_sync_transaction: inspect detected concurrent change \
                      (ownership mismatch or external repo), preserving transaction for next recovery",

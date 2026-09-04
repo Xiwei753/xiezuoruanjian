@@ -46,7 +46,7 @@ fn extract_fn_body(src: &str, fn_name: &str) -> String {
 
 /// 问题1修复验证：OwnedIndexLock::acquire 改为目录锁模型。
 ///
-/// 修复证据：core/writer_core/src/sync/git/locks.rs 中 acquire()
+/// 修复证据：core/writer_core/src/storage/workspace_git/locks.rs 中 acquire()
 /// - Phase 2 用 `fs::create_dir(&lock_path)` 原子创建目录（不再是 create_new regular file）
 /// - owner metadata 写到 `lock_path/owner` 文件（不是 lock 文件本身）
 /// - prepared bytes 写到 `lock_path/prepared` 文件
@@ -54,7 +54,7 @@ fn extract_fn_body(src: &str, fn_name: &str) -> String {
 /// - `create_dir` 成功就是原子的 ownership 证明，不再有 create-to-write 窗口
 #[test]
 fn problem1_fixed_acquire_uses_directory_lock_model() {
-    let src = read_src_file("src/sync/git/locks.rs");
+    let src = read_src_file("src/storage/workspace_git/locks.rs");
     let acquire_body = extract_fn_body(&src, "acquire");
 
     // Phase 2 标记
@@ -107,7 +107,7 @@ fn problem1_fixed_acquire_uses_directory_lock_model() {
     );
 
     // 验证 lock_belongs_to_owner 对空内容仍返回 false（纯函数行为不变）
-    use writer_core::sync::git::lock_belongs_to_owner;
+    use writer_core::storage::workspace_git::lock_belongs_to_owner;
     assert!(
         !lock_belongs_to_owner(b"", "any-owner"),
         "problem1: empty owner file content must return false (owner metadata parse fails)"
@@ -122,13 +122,13 @@ fn problem1_fixed_acquire_uses_directory_lock_model() {
 
 /// 问题2修复验证：rollback_git_finalize current==old 且 lock 不属于本轮时返回 ConcurrentChanged。
 ///
-/// 修复证据：core/writer_core/src/sync/git/rollback.rs
+/// 修复证据：core/writer_core/src/storage/workspace_git/rollback.rs
 /// - current==old 分支用 lock_dir_belongs_to_owner 判断归属
 /// - LockOwner::External 时返回 Ok(GitRollbackOutcome::ConcurrentChanged)
 /// - 不再 fall through 到 rollback refs + Reverted
 #[test]
 fn problem2_fixed_external_lock_returns_concurrent_changed() {
-    let src = read_src_file("src/sync/git/rollback.rs");
+    let src = read_src_file("src/storage/workspace_git/rollback.rs");
     let rollback_body = extract_fn_body(&src, "rollback_git_finalize");
 
     // current == old 分支
@@ -181,7 +181,7 @@ fn problem2_fixed_external_lock_returns_concurrent_changed() {
 
 /// 问题3修复验证：finalize_existing 使用统一 RefTransaction 修改所有 refs。
 ///
-/// 修复证据：core/writer_core/src/sync/git/finalize/apply.rs
+/// 修复证据：core/writer_core/src/storage/workspace_git/finalize/apply.rs
 /// - finalize_existing 使用 RefTransaction 一次性锁住 HEAD + head_ref + remote refs
 /// - 锁内验证 HEAD 仍指向 head_ref（消除 TOCTOU 窗口）
 /// - 锁内验证 branch ref 仍等于 base_oid（CAS 条件）
@@ -189,7 +189,7 @@ fn problem2_fixed_external_lock_returns_concurrent_changed() {
 /// - commit 释放所有锁（不再需要 verify_head_after_branch_cas 反向 CAS 补丁）
 #[test]
 fn problem3_fixed_head_recheck_after_branch_cas() {
-    let src = read_src_file("src/sync/git/finalize/apply.rs");
+    let src = read_src_file("src/storage/workspace_git/finalize/apply.rs");
     let finalize_body = extract_fn_body(&src, "finalize_existing");
 
     // 验证 finalize_existing 使用 RefTransaction

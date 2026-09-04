@@ -1,28 +1,30 @@
 //! # 同步服务模块 (Sync Service)
 //!
-//! 本模块是写作软件的核心同步服务实现，负责处理作品目录（同步根）与远程仓库之间的数据同步。
+//! 本模块是写作软件的同步服务实现，通过 `SyncProvider` trait 抽象远端存储后端，
+//! 提供 provider-neutral 的同步算法。
 //!
 //! ## 主要功能
 //!
-//! - **同步后端**: 当前仅暴露 Git 和 GitHub API；其它后端不在运行期配置枚举中
-//! - **Git 操作封装**: 基于 git2 库实现完整的 Git 操作，包括 clone、pull、push、commit 等
+//! - **远端同步**: 通过 `SyncProvider` trait 抽象 GitHub / 其它远端存储后端
+//! - **LWW 冲突解决**: Last-Writer-Wins 引擎处理设置和元数据同步
+//! - **Full Sync**: provider-neutral 的完整同步算法（prepare / transfer / commit）
 //! - **同步配置管理**: 管理远程 URL、认证信息、代理设置、分支等配置
 //! - **冲突检测与解决**: 提供文件冲突检测、设置冲突语义合并等功能
-//! - **同步诊断**: 提供网络探测、认证检查、仓库状态检查等诊断功能
+//! - **同步诊断**: 提供 provider 诊断信息（network_ok / auth_ok / remote_ok 等）
 //! - **安全处理**: URL 凭证脱敏、敏感信息保护
 //!
-//! ## 依赖关系
+//! ## 边界
 //!
-//! - `git2`: Git 操作核心库
-//! - `serde` / `serde_json`: 序列化/反序列化
-//! - `base64`: URL 编码解码
+//! ```text
+//! storage/workspace_git/*
+//!     = 本地版本历史 / diff / rollback，唯一 workspace repo
 //!
-//! ## 使用场景
+//! sync/provider/*
+//!     = 远端存储 Provider
 //!
-//! - 作品数据备份与恢复
-//! - 多设备间数据同步
-//! - 团队协作时的数据共享
-//! - 版本控制与历史追踪
+//! sync/lww + full_sync + staging
+//!     = provider-neutral 同步算法
+//! ```
 
 #![allow(clippy::module_inception)]
 
@@ -35,7 +37,6 @@ pub mod diagnostics;
 pub mod full_sync;
 pub mod full_sync_state;
 pub(crate) mod full_sync_utils;
-pub mod git;
 pub mod lww;
 pub mod provider;
 pub mod scanner;

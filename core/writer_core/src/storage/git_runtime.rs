@@ -12,7 +12,7 @@
 //! `git_libgit2_opts` / `GIT_OPT_ENABLE_FSYNC_GITDIR` FFI，本模块在 `configure()`
 //! 的唯一初始化入口对所有 target 统一调用 `git_libgit2_opts(GIT_OPT_ENABLE_FSYNC_GITDIR, 1)`。
 //! 这必须在所有 target 启用（libgit2 默认 disabled 不分平台，objects/refs 丢盘风险
-//! 不分平台）。`sync::git::update_live_index` 在 `live_index.write()` 后的显式
+//! 不分平台）。workspace git finalize 在 `live_index.write()` 后的显式
 //! fsync index + 父目录保留为事务自身的边界，但 libgit2 自己写 ODB/ref 的 durability
 //! 由这里统一打开。NotGitRepo 路径的 `copy_dir_recursive` 也已是 durable recursive copy
 //!（copy 后 fsync 文件 + 父目录，每层目录 bottom-up fsync）。

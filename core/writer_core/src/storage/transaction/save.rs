@@ -31,7 +31,7 @@ pub struct SaveTransaction {
     finished: bool,
     /// #644 评论 5476546134 第2节：Git finalize 崩溃恢复记录。
     /// 写入 manifest 供重启后独立恢复。
-    git_finalize_recovery: Option<crate::sync::git::GitFinalizeRecoveryRecord>,
+    git_finalize_recovery: Option<crate::storage::workspace_git::GitFinalizeRecoveryRecord>,
 }
 
 impl SaveTransaction {
@@ -102,7 +102,7 @@ impl SaveTransaction {
     /// 写入 manifest 供重启后独立恢复。
     pub fn set_git_finalize_recovery(
         &mut self,
-        record: crate::sync::git::GitFinalizeRecoveryRecord,
+        record: crate::storage::workspace_git::GitFinalizeRecoveryRecord,
     ) {
         self.git_finalize_recovery = Some(record);
     }

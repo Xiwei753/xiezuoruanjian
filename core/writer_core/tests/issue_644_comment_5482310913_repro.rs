@@ -22,8 +22,8 @@ use std::fs;
 use std::path::Path;
 
 use tempfile::TempDir;
-use writer_core::sync::git::seed::GitSeedState;
-use writer_core::sync::git::{
+use writer_core::storage::workspace_git::seed::GitSeedState;
+use writer_core::storage::workspace_git::{
     commit_git_finalize, rollback_git_finalize, GitFinalizeError, GitFinalizePlan,
     GitMetadataSnapshot, IndexSnapshot, RefSnapshot,
 };
