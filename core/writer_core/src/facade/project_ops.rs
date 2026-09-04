@@ -1,6 +1,7 @@
 use crate::chapter::{self, Chapter, ChapterContent, ChapterSaveReceipt};
 use crate::error::Result;
 use crate::project::{self, Project, ProjectSummary};
+use crate::storage::workspace_git::WorkspaceChangeSet;
 use crate::volume::{self, Volume};
 
 impl super::WriterCore {
@@ -129,6 +130,24 @@ impl super::WriterCore {
         chapter::save_chapter_verified(&project_root, volume_id, chapter_id, content)
     }
 
+    /// #645 评论 5504296097 问题2：保存章节正文并返回变更集。
+    pub fn write_chapter_verified_with_changes(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+    ) -> Result<(ChapterSaveReceipt, WorkspaceChangeSet)> {
+        let project_root = self.project_root(project_id);
+        chapter::save_chapter_verified_with_changes(
+            &project_root,
+            volume_id,
+            chapter_id,
+            content,
+            &self.app_data_root,
+        )
+    }
+
     pub fn write_chapter_verified_with_allow_empty_overwrite(
         &self,
         project_id: &str,
@@ -175,6 +194,160 @@ impl super::WriterCore {
     /// #645 评论第 1 点：重排只改各 `project.json` 的 `order` 字段，不再构造 layout_fn。
     pub fn reorder_projects(&self, ordered_ids: &[String]) -> crate::error::Result<()> {
         crate::project::reorder_projects(&self.projects_root, ordered_ids)
+    }
+
+    // #645 评论 5504296097 问题2：*_with_changes 版本，返回 WorkspaceChangeSet 供 API 层记录本地历史。
+
+    /// 创建作品并返回变更集。
+    pub fn create_project_with_changes(
+        &self,
+        title: &str,
+    ) -> Result<(Project, WorkspaceChangeSet)> {
+        crate::project::create_project_with_changes(&self.projects_root, title)
+    }
+
+    /// 重命名作品并返回变更集。
+    pub fn rename_project_with_changes(
+        &self,
+        project_id: &str,
+        new_title: &str,
+    ) -> Result<(Project, WorkspaceChangeSet)> {
+        crate::project::rename_project_with_changes(&self.projects_root, project_id, new_title)
+    }
+
+    /// 删除作品并返回变更集。
+    pub fn delete_project_with_changes(&self, project_id: &str) -> Result<WorkspaceChangeSet> {
+        crate::project::delete_project_with_changes(
+            &self.projects_root,
+            project_id,
+            &self.app_data_root,
+        )
+    }
+
+    /// 重排作品并返回变更集。
+    pub fn reorder_projects_with_changes(
+        &self,
+        ordered_ids: &[String],
+    ) -> Result<WorkspaceChangeSet> {
+        crate::project::reorder_projects_with_changes(&self.projects_root, ordered_ids)
+    }
+
+    /// 创建章节并返回变更集。
+    pub fn create_chapter_with_changes(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        title: &str,
+    ) -> Result<(Chapter, WorkspaceChangeSet)> {
+        let project_root = self.project_root(project_id);
+        chapter::create_chapter_with_changes(&project_root, volume_id, title, &self.app_data_root)
+    }
+
+    /// 保存章节正文并返回变更集。
+    pub fn save_chapter_verified_with_changes(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+    ) -> Result<(ChapterSaveReceipt, WorkspaceChangeSet)> {
+        let project_root = self.project_root(project_id);
+        chapter::save_chapter_verified_with_changes(
+            &project_root,
+            volume_id,
+            chapter_id,
+            content,
+            &self.app_data_root,
+        )
+    }
+
+    /// 保存章节正文并返回变更集（带空覆盖控制）。
+    pub fn save_chapter_verified_with_changes_with_options(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+        allow_empty_overwrite: bool,
+    ) -> Result<(ChapterSaveReceipt, WorkspaceChangeSet)> {
+        let project_root = self.project_root(project_id);
+        chapter::save_chapter_verified_with_changes_with_options(
+            &project_root,
+            volume_id,
+            chapter_id,
+            content,
+            allow_empty_overwrite,
+            &self.app_data_root,
+        )
+    }
+
+    /// 重命名章节并返回变更集。
+    pub fn rename_chapter_with_changes(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        new_title: &str,
+    ) -> Result<(Chapter, WorkspaceChangeSet)> {
+        let project_root = self.project_root(project_id);
+        chapter::rename_chapter_with_changes(
+            &project_root,
+            volume_id,
+            chapter_id,
+            new_title,
+            &self.app_data_root,
+        )
+    }
+
+    /// 删除章节并返回变更集。
+    pub fn delete_chapter_with_changes(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+    ) -> Result<WorkspaceChangeSet> {
+        let project_root = self.project_root(project_id);
+        chapter::delete_chapter_with_changes(
+            &project_root,
+            volume_id,
+            chapter_id,
+            &self.app_data_root,
+            &self.app_data_root,
+        )
+    }
+
+    /// 重排章节并返回变更集。
+    pub fn reorder_chapters_with_changes(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        ordered_ids: &[String],
+    ) -> Result<WorkspaceChangeSet> {
+        let project_root = self.project_root(project_id);
+        chapter::reorder_chapters_with_changes(
+            &project_root,
+            volume_id,
+            ordered_ids,
+            &self.app_data_root,
+        )
+    }
+
+    /// 更新章节备注并返回变更集。
+    pub fn update_chapter_note_with_changes(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        note: &str,
+    ) -> Result<(Chapter, WorkspaceChangeSet)> {
+        let project_root = self.project_root(project_id);
+        chapter::update_chapter_note_with_changes(
+            &project_root,
+            volume_id,
+            chapter_id,
+            note,
+            &self.app_data_root,
+        )
     }
 
     pub fn rename_volume(

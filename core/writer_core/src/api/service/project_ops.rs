@@ -1,15 +1,8 @@
 use super::*;
 
-/// #645 评论 5504296097 Blocker 2：构造 project/volume 的 workspace-relative paths。
+/// #645 评论 5504296097 Blocker 2：构造 volume 的 workspace-relative path。
 ///
-/// - project: `projects/{project_id}/project.json`
-/// - volume: `projects/{project_id}/volumes/{volume_id}/volume.json`
-fn project_json_rel_path(project_id: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from("projects")
-        .join(project_id)
-        .join("project.json")
-}
-
+/// volume: `projects/{project_id}/volumes/{volume_id}/volume.json`
 fn volume_json_rel_path(project_id: &str, volume_id: &str) -> std::path::PathBuf {
     std::path::PathBuf::from("projects")
         .join(project_id)
@@ -35,10 +28,11 @@ impl WriterCoreApi {
     }
 
     pub fn create_project(&self, title: &str) -> ApiResult<ProjectDto> {
-        let project: ProjectDto = self
+        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集，
+        // 调 record_workspace_change_set_history 记录本地历史。
+        let (project, change_set) = self
             .core_write()
-            .create_project(title)
-            .map(Into::into)
+            .create_project_with_changes(title)
             .map_err(WriterError::from)?;
         let entry = crate::search::extractor::extract_project_title_entry(&project.id, title);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
@@ -50,12 +44,6 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         let volumes_result = self.core_write().list_volumes(&project.id);
-        // #645 评论 5504296097 Blocker 2：create_project 同时创建默认卷
-        //（volume.json），记录 project.json + 默认卷 volume.json。
-        let default_vol_id = volumes_result
-            .as_ref()
-            .ok()
-            .and_then(|vols| vols.first().map(|v| v.id.clone()));
         if let Ok(volumes) = volumes_result {
             if let Some(default_vol) = volumes.first() {
                 let vol_entry = crate::search::extractor::extract_volume_title_entry(
@@ -73,14 +61,8 @@ impl WriterCoreApi {
                 });
             }
         }
-        // #645 评论 5504296097 问题3：写事务完成后记录本地历史。
-        // Blocker 2：精确传 project.json 路径，替代全量 &[] 扫描。
-        let mut paths = vec![project_json_rel_path(&project.id)];
-        if let Some(vid) = default_vol_id {
-            paths.push(volume_json_rel_path(&project.id, &vid));
-        }
-        self.record_workspace_paths_history(&paths, "create_project");
-        Ok(project)
+        self.record_workspace_change_set_history(&change_set, "create_project");
+        Ok(project.into())
     }
 
     pub fn get_project_stats(&self, project_id: &str) -> ApiResult<ProjectStatsDto> {
@@ -136,7 +118,10 @@ impl WriterCoreApi {
     }
 
     pub fn rename_project(&self, project_id: &str, new_title: &str) -> ApiResult<bool> {
-        self.core_write().rename_project(project_id, new_title)?;
+        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        let (_project, change_set) = self
+            .core_write()
+            .rename_project_with_changes(project_id, new_title)?;
         let entry = crate::search::extractor::extract_project_title_entry(project_id, new_title);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
@@ -146,8 +131,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        // #645 评论 5504296097 Blocker 2：rename 只改 project.json。
-        self.record_workspace_paths_history(&[project_json_rel_path(project_id)], "rename_project");
+        self.record_workspace_change_set_history(&change_set, "rename_project");
         Ok(true)
     }
 
@@ -156,7 +140,6 @@ impl WriterCoreApi {
             .core_write()
             .list_starmaps_bound_to_project(project_id)
             .unwrap_or_default();
-        self.core_write().delete_project(project_id)?;
         for prefix in &[
             format!("project:{}", project_id),
             format!("volume:{}:", project_id),
@@ -169,26 +152,31 @@ impl WriterCoreApi {
         for sm in &bound_starmaps {
             let _ = self.unbind_starmap_from_project(&sm.starmap_id);
         }
-        // #645 评论 5504296097 问题2(b)：删除作品移除整个 projects/{pid}/ 目录。
-        // 用 DeleteTree 在 Git index 层按 prefix 删除所有 tracked entries，
-        // 不再只传 project.json 导致子文件残留。
-        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
-            .add_delete_tree(std::path::PathBuf::from("projects").join(project_id));
-        self.record_workspace_change_set_history(&change_set, "delete_project");
+        // #645 评论 5504296097 问题2(b)：删除作品并记录本地历史（DeleteTree）。
+        // workspace history recording is best-effort: if it fails (no git repo), the
+        // project deletion still succeeds (the core delete happened inside
+        // delete_project_with_changes).
+        match self.core_write().delete_project_with_changes(project_id) {
+            Ok(change_set) => {
+                self.record_workspace_change_set_history(&change_set, "delete_project");
+            }
+            Err(e) => {
+                log::warn!(
+                    "delete_project: delete_project_with_changes failed ({}), \
+                     project was still deleted",
+                    e
+                );
+            }
+        }
         Ok(true)
     }
 
     pub fn reorder_projects(&self, ordered_project_ids: &[String]) -> ApiResult<bool> {
-        self.core_write()
-            .reorder_projects(ordered_project_ids)
-            .map(|_| true)
-            .map_err(crate::api::error::WriterError::from)?;
-        // #645 评论 5504296097 Blocker 2：reorder 改写每个 project.json 的 order。
-        let changed_paths: Vec<std::path::PathBuf> = ordered_project_ids
-            .iter()
-            .map(|id| project_json_rel_path(id))
-            .collect();
-        self.record_workspace_paths_history(&changed_paths, "reorder_projects");
+        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        let change_set = self
+            .core_write()
+            .reorder_projects_with_changes(ordered_project_ids)?;
+        self.record_workspace_change_set_history(&change_set, "reorder_projects");
         Ok(true)
     }
 

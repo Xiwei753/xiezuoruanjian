@@ -25,7 +25,7 @@ use crate::error::Result;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// 项目元数据结构体。
@@ -446,6 +446,118 @@ pub fn reorder_projects(projects_root: &Path, ordered_ids: &[String]) -> Result<
         }
     }
     Ok(())
+}
+
+/// #645 评论 5504296097 问题2：create_project 的变更集版本。
+///
+/// 返回 `(Project, WorkspaceChangeSet)`，变更集包含
+/// `Upsert(projects/{project_id}/project.json) + Upsert(projects/{project_id}/volumes/{volume_id}/volume.json)`。
+pub fn create_project_with_changes(
+    projects_root: &Path,
+    title: &str,
+) -> Result<(Project, crate::storage::workspace_git::WorkspaceChangeSet)> {
+    let project = create_project(projects_root, title)?;
+    let project_id = project.id.clone();
+
+    // 构造 project.json 的路径
+    let project_json_path = PathBuf::from("projects")
+        .join(&project_id)
+        .join("project.json");
+
+    // 获取默认卷的路径
+    let volumes = crate::volume::list_volumes(&projects_root.join(&project_id))?;
+    let mut change_set =
+        crate::storage::workspace_git::WorkspaceChangeSet::new().add_upsert(project_json_path);
+
+    // 添加默认卷的 volume.json 到变更集
+    if let Some(volume) = volumes.first() {
+        let volume_json_path = PathBuf::from("projects")
+            .join(&project_id)
+            .join("volumes")
+            .join(&volume.id)
+            .join("volume.json");
+        change_set = change_set.add_upsert(volume_json_path);
+    }
+
+    Ok((project, change_set))
+}
+
+/// #645 评论 5504296097 问题2：rename_project 的变更集版本。
+///
+/// 返回 `(Project, WorkspaceChangeSet)`，变更集包含
+/// `Upsert(projects/{project_id}/project.json)`。
+pub fn rename_project_with_changes(
+    projects_root: &Path,
+    project_id: &str,
+    new_title: &str,
+) -> Result<(Project, crate::storage::workspace_git::WorkspaceChangeSet)> {
+    rename_project(projects_root, project_id, new_title)?;
+
+    // 重新读取项目以获取最新的元数据
+    let projects = list_projects_inner(projects_root)?;
+    let project = projects
+        .into_iter()
+        .find(|p| p.id == project_id)
+        .ok_or(crate::error::Error::ProjectNotFound)?;
+
+    let project_json_path = PathBuf::from("projects")
+        .join(project_id)
+        .join("project.json");
+    let change_set =
+        crate::storage::workspace_git::WorkspaceChangeSet::new().add_upsert(project_json_path);
+
+    Ok((project, change_set))
+}
+
+/// #645 评论 5504296097 问题2：delete_project 的变更集版本。
+///
+/// 返回 `WorkspaceChangeSet`，变更集包含 `DeleteTree(projects/{project_id})`。
+/// 使用 DeleteTree 而不是 Delete，因为要移除整个作品目录。
+pub fn delete_project_with_changes(
+    projects_root: &Path,
+    project_id: &str,
+    app_data_root: &Path,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    delete_project(projects_root, project_id, app_data_root)?;
+
+    let project_tree_path = PathBuf::from("projects").join(project_id);
+    let change_set =
+        crate::storage::workspace_git::WorkspaceChangeSet::new().add_delete_tree(project_tree_path);
+
+    Ok(change_set)
+}
+
+/// #645 评论 5504296097 问题2：reorder_projects 的变更集版本。
+///
+/// 返回 `WorkspaceChangeSet`，变更集包含所有被改 order 的 project.json 的 Upsert 路径。
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+pub fn reorder_projects_with_changes(
+    projects_root: &Path,
+    ordered_ids: &[String],
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    // 先获取当前所有项目的 order，用于判断哪些被修改了
+    let projects_before = list_projects_inner(projects_root)?;
+    let mut orders_before = std::collections::HashMap::new();
+    for p in &projects_before {
+        orders_before.insert(p.id.clone(), p.order);
+    }
+
+    // 执行重排
+    reorder_projects(projects_root, ordered_ids)?;
+
+    // 构造变更集：只包含 order 实际发生变化的 project.json
+    let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new();
+    for (index, id) in ordered_ids.iter().enumerate() {
+        let new_order = index as i32;
+        if let Some(&old_order) = orders_before.get(id) {
+            if old_order != new_order {
+                let project_json_path = PathBuf::from("projects").join(id).join("project.json");
+                change_set = change_set.add_upsert(project_json_path);
+            }
+        }
+    }
+
+    Ok(change_set)
 }
 
 #[cfg(test)]

@@ -93,6 +93,14 @@ fn problem2a_create_chapter_records_chapter_md() {
         .create_chapter(&project.id, &volume_id, "第一章")
         .unwrap();
 
+    // 验证 create_chapter 已产生 commit
+    let hist = list_workspace_history(&layout, 10).unwrap();
+    assert!(
+        hist.len() >= 2,
+        "create_chapter 应产生至少 2 条 commit（create_project + create_chapter），实际 {}",
+        hist.len()
+    );
+
     let chapter_md_rel = PathBuf::from("projects")
         .join(&project.id)
         .join("volumes")

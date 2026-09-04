@@ -1,7 +1,6 @@
 use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
 use crate::api::error::WriterError;
-use std::path::PathBuf;
 
 fn get_chapter_title(
     api: &WriterCoreApi,
@@ -15,30 +14,6 @@ fn get_chapter_title(
         .and_then(|chapters| chapters.into_iter().find(|c| c.id == chapter_id))
         .map(|c| c.title)
         .unwrap_or_default()
-}
-
-/// #645 评论 5504296097 Blocker 2：构造章节的 workspace-relative paths。
-///
-/// 章节目录布局：`projects/{project_id}/volumes/{volume_id}/chapters/{chapter_id}/`，
-/// 内含 `chapter.meta.json`（元数据）和 `chapter.md`（正文）。
-fn chapter_meta_rel_path(project_id: &str, volume_id: &str, chapter_id: &str) -> PathBuf {
-    PathBuf::from("projects")
-        .join(project_id)
-        .join("volumes")
-        .join(volume_id)
-        .join("chapters")
-        .join(chapter_id)
-        .join("chapter.meta.json")
-}
-
-fn chapter_md_rel_path(project_id: &str, volume_id: &str, chapter_id: &str) -> PathBuf {
-    PathBuf::from("projects")
-        .join(project_id)
-        .join("volumes")
-        .join(volume_id)
-        .join("chapters")
-        .join(chapter_id)
-        .join("chapter.md")
 }
 
 /// 章节 API — 跨平台章节 CRUD 契约。
@@ -66,10 +41,10 @@ impl WriterCoreApi {
         volume_id: &str,
         title: &str,
     ) -> ApiResult<ChapterMetaDto> {
-        let chapter: ChapterMetaDto = self
+        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        let (chapter, change_set) = self
             .core_write()
-            .create_chapter(project_id, volume_id, title)
-            .map(Into::into)
+            .create_chapter_with_changes(project_id, volume_id, title)
             .map_err(WriterError::from)?;
         let title_entry = crate::search::extractor::extract_chapter_title_entry(
             project_id,
@@ -85,16 +60,8 @@ impl WriterCoreApi {
             body: title_entry.body.clone(),
             target: Some(title_entry.target.clone()),
         });
-        // #645 评论 5504296097 问题2(a)：create_chapter 底层同时创建
-        // chapter.meta.json 和 chapter.md，两者都要进本地 Git history。
-        self.record_workspace_paths_history(
-            &[
-                chapter_meta_rel_path(project_id, volume_id, &chapter.id),
-                chapter_md_rel_path(project_id, volume_id, &chapter.id),
-            ],
-            "create_chapter",
-        );
-        Ok(chapter)
+        self.record_workspace_change_set_history(&change_set, "create_chapter");
+        Ok(chapter.into())
     }
 
     /// 在项目中创建章节——若项目无卷则自动创建"第一卷"。
@@ -121,8 +88,10 @@ impl WriterCoreApi {
         chapter_id: &str,
         new_title: &str,
     ) -> ApiResult<bool> {
-        self.core_write()
-            .rename_chapter(project_id, volume_id, chapter_id, new_title)?;
+        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        let (chapter, change_set) = self
+            .core_write()
+            .rename_chapter_with_changes(project_id, volume_id, chapter_id, new_title)?;
         let title_entry = crate::search::extractor::extract_chapter_title_entry(
             project_id, volume_id, chapter_id, new_title,
         );
@@ -156,12 +125,7 @@ impl WriterCoreApi {
                 });
             }
         }
-        let ch_note = self
-            .core_write()
-            .list_chapters(project_id, volume_id)
-            .ok()
-            .and_then(|chapters| chapters.into_iter().find(|c| c.id == chapter_id))
-            .and_then(|c| c.note);
+        let ch_note = chapter.note;
         if let Some(ref note) = ch_note {
             if !note.is_empty() {
                 let note_entry = crate::search::extractor::extract_chapter_note_entry(
@@ -177,10 +141,7 @@ impl WriterCoreApi {
                 });
             }
         }
-        self.record_workspace_paths_history(
-            &[chapter_meta_rel_path(project_id, volume_id, chapter_id)],
-            "rename_chapter",
-        );
+        self.record_workspace_change_set_history(&change_set, "rename_chapter");
         Ok(true)
     }
 
@@ -191,8 +152,8 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<bool> {
-        self.core_write()
-            .delete_chapter(project_id, volume_id, chapter_id)?;
+        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        // 不再先调 delete_chapter，由 delete_chapter_with_changes 统一处理删除和变更集。
         for prefix in &[
             format!("chapter_title:{}:{}:{}", project_id, volume_id, chapter_id),
             format!("chapter_body:{}:{}:{}", project_id, volume_id, chapter_id),
@@ -207,16 +168,10 @@ impl WriterCoreApi {
                 target: None,
             });
         }
-        // #645 评论 5504296097 Blocker 2：删除章节会移除整个 chapter 目录，
-        // 传 chapter.meta.json + chapter.md 路径，record_workspace_paths_history
-        // 会用 remove_path 从 index 移除已删除文件。
-        self.record_workspace_paths_history(
-            &[
-                chapter_meta_rel_path(project_id, volume_id, chapter_id),
-                chapter_md_rel_path(project_id, volume_id, chapter_id),
-            ],
-            "delete_chapter",
-        );
+        let change_set = self
+            .core_write()
+            .delete_chapter_with_changes(project_id, volume_id, chapter_id)?;
+        self.record_workspace_change_set_history(&change_set, "delete_chapter");
         Ok(true)
     }
 
@@ -227,17 +182,13 @@ impl WriterCoreApi {
         volume_id: &str,
         ordered_chapter_ids: &[String],
     ) -> ApiResult<bool> {
-        self.core_write()
-            .reorder_chapters(project_id, volume_id, ordered_chapter_ids)
-            .map(|_| true)
-            .map_err(crate::api::error::WriterError::from)?;
-        // #645 评论 5504296097 Blocker 2：reorder 改写每个章节的 chapter.meta.json
-        //（order 字段），收集所有被改 meta 的章节路径。
-        let changed_paths: Vec<PathBuf> = ordered_chapter_ids
-            .iter()
-            .map(|cid| chapter_meta_rel_path(project_id, volume_id, cid))
-            .collect();
-        self.record_workspace_paths_history(&changed_paths, "reorder_chapters");
+        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        let change_set = self.core_write().reorder_chapters_with_changes(
+            project_id,
+            volume_id,
+            ordered_chapter_ids,
+        )?;
+        self.record_workspace_change_set_history(&change_set, "reorder_chapters");
         Ok(true)
     }
 
@@ -262,10 +213,11 @@ impl WriterCoreApi {
         chapter_id: &str,
         content: &str,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        let receipt: ChapterSaveReceiptDto = self
+        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        let (receipt, change_set) = self
             .core_write()
-            .write_chapter_verified(project_id, volume_id, chapter_id, content)
-            .map(Into::into)?;
+            .write_chapter_verified_with_changes(project_id, volume_id, chapter_id, content)
+            .map_err(WriterError::from)?;
         let ch_title = get_chapter_title(self, project_id, volume_id, chapter_id);
         let entry = crate::search::extractor::extract_chapter_body_entry(
             project_id, volume_id, chapter_id, &ch_title, content,
@@ -278,16 +230,8 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        // #645 评论 5504296097 Blocker 2：正文保存同时写 chapter.md 和
-        // chapter.meta.json（word_count/hash/updated_at），传这两个路径。
-        self.record_workspace_paths_history(
-            &[
-                chapter_md_rel_path(project_id, volume_id, chapter_id),
-                chapter_meta_rel_path(project_id, volume_id, chapter_id),
-            ],
-            "save_chapter_content",
-        );
-        Ok(receipt)
+        self.record_workspace_change_set_history(&change_set, "save_chapter_content");
+        Ok(receipt.into())
     }
 
     /// 保存章节正文（带空覆盖控制）。`allow_empty_overwrite=true` 绕过安全拦截。
@@ -299,16 +243,17 @@ impl WriterCoreApi {
         content: &str,
         allow_empty_overwrite: bool,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        let receipt: ChapterSaveReceiptDto = self
+        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        let (receipt, change_set) = self
             .core_write()
-            .write_chapter_verified_with_allow_empty_overwrite(
+            .save_chapter_verified_with_changes_with_options(
                 project_id,
                 volume_id,
                 chapter_id,
                 content,
                 allow_empty_overwrite,
             )
-            .map(Into::into)?;
+            .map_err(WriterError::from)?;
         let ch_title = get_chapter_title(self, project_id, volume_id, chapter_id);
         let entry = crate::search::extractor::extract_chapter_body_entry(
             project_id, volume_id, chapter_id, &ch_title, content,
@@ -321,16 +266,8 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        // #645 评论 5504296097 Blocker 2：同 save_chapter_content，写 chapter.md +
-        // chapter.meta.json。
-        self.record_workspace_paths_history(
-            &[
-                chapter_md_rel_path(project_id, volume_id, chapter_id),
-                chapter_meta_rel_path(project_id, volume_id, chapter_id),
-            ],
-            "save_chapter_content",
-        );
-        Ok(receipt)
+        self.record_workspace_change_set_history(&change_set, "save_chapter_content");
+        Ok(receipt.into())
     }
 
     /// 清空章节正文（等价于 `save_chapter_content_with_options(..., true)`）。
@@ -340,10 +277,14 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        let receipt: ChapterSaveReceiptDto = self
+        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        // 清空正文需要 allow_empty_overwrite=true。
+        let (receipt, change_set) = self
             .core_write()
-            .clear_chapter_content_verified(project_id, volume_id, chapter_id)
-            .map(Into::into)?;
+            .save_chapter_verified_with_changes_with_options(
+                project_id, volume_id, chapter_id, "", true,
+            )
+            .map_err(WriterError::from)?;
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
             object_id: format!("chapter_body:{}:{}:{}", project_id, volume_id, chapter_id),
@@ -352,15 +293,8 @@ impl WriterCoreApi {
             body: String::new(),
             target: None,
         });
-        // #645 评论 5504296097 Blocker 2：清空正文写 chapter.md（空）+ chapter.meta.json。
-        self.record_workspace_paths_history(
-            &[
-                chapter_md_rel_path(project_id, volume_id, chapter_id),
-                chapter_meta_rel_path(project_id, volume_id, chapter_id),
-            ],
-            "clear_chapter_content",
-        );
-        Ok(receipt)
+        self.record_workspace_change_set_history(&change_set, "clear_chapter_content");
+        Ok(receipt.into())
     }
 
     /// 更新章节备注（note 字段，独立于正文）。
@@ -371,9 +305,11 @@ impl WriterCoreApi {
         chapter_id: &str,
         note: &str,
     ) -> ApiResult<bool> {
-        self.core_write()
-            .update_chapter_note(project_id, volume_id, chapter_id, note)?;
-        let ch_title = get_chapter_title(self, project_id, volume_id, chapter_id);
+        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        let (chapter, change_set) = self
+            .core_write()
+            .update_chapter_note_with_changes(project_id, volume_id, chapter_id, note)?;
+        let ch_title = chapter.title;
         let entry = crate::search::extractor::extract_chapter_note_entry(
             project_id, volume_id, chapter_id, &ch_title, note,
         );
@@ -385,12 +321,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        // #645 评论 5504296097 Blocker 2：note 字段存在 chapter.meta.json，
-        // 只改 meta。
-        self.record_workspace_paths_history(
-            &[chapter_meta_rel_path(project_id, volume_id, chapter_id)],
-            "update_chapter_note",
-        );
+        self.record_workspace_change_set_history(&change_set, "update_chapter_note");
         Ok(true)
     }
 }
