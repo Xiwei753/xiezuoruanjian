@@ -535,6 +535,41 @@ pub fn save_syncable_settings(config_dir: &Path, settings: &SyncableSettings) ->
     crate::storage::atomic_write_string(&path, &content)
 }
 
+// ── #645 评论 5504296097 问题3：settings 的 *_with_changes 入口 ──
+//
+// settings 文件直接写在 `config_dir`（= `app_data_root`）下，
+// 所以 workspace-relative 路径就是文件名本身。
+// palette 文件写在 `config_dir/themes/palettes/<device_id>/<fingerprint>.json`，
+// workspace-relative 是 `themes/palettes/<device_id>/<fingerprint>.json`。
+// 这些路径在 `classify_workspace_path_str` 中归为 UserSetting/UserContent，
+// `is_workspace_history_path` 返回 true，会进入本地 Git history。
+
+/// #645 评论 5504296097 问题3：save_local_settings 的变更集版本。
+///
+/// 返回 `WorkspaceChangeSet`，变更集包含 `Upsert(settings.local.json)`。
+pub fn save_local_settings_with_changes(
+    config_dir: &Path,
+    settings: &LocalSettings,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    save_local_settings(config_dir, settings)?;
+    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_upsert(std::path::PathBuf::from("settings.local.json"));
+    Ok(change_set)
+}
+
+/// #645 评论 5504296097 问题3：save_syncable_settings 的变更集版本。
+///
+/// 返回 `WorkspaceChangeSet`，变更集包含 `Upsert(settings.sync.json)`。
+pub fn save_syncable_settings_with_changes(
+    config_dir: &Path,
+    settings: &SyncableSettings,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    save_syncable_settings(config_dir, settings)?;
+    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_upsert(std::path::PathBuf::from("settings.sync.json"));
+    Ok(change_set)
+}
+
 /// 粗粒度设备信息，用于同步和统计。
 /// 不包含详细硬件型号、序列号、用户名、系统账户路径等隐私信息。
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -673,6 +708,24 @@ pub fn save_palette_record(config_dir: &Path, record: &ThemePaletteRecord) -> Re
     crate::storage::atomic_write_string(&path, &content)
 }
 
+/// #645 评论 5504296097 问题3：save_palette_record 的变更集版本。
+///
+/// 返回 `WorkspaceChangeSet`，变更集包含
+/// `Upsert(themes/palettes/<device_id>/<fingerprint>.json)`。
+/// palette 属于用户设置（UserSetting/UserContent），应进入本地 history。
+pub fn save_palette_record_with_changes(
+    config_dir: &Path,
+    record: &ThemePaletteRecord,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    save_palette_record(config_dir, record)?;
+    let rel = std::path::PathBuf::from("themes")
+        .join("palettes")
+        .join(&record.source_device_id)
+        .join(format!("{}.json", record.palette_fingerprint));
+    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new().add_upsert(rel);
+    Ok(change_set)
+}
+
 /// Load a specific palette record by device_id and fingerprint.
 pub fn load_palette_record(
     config_dir: &Path,
@@ -732,6 +785,24 @@ pub fn delete_palette_record(config_dir: &Path, device_id: &str, fingerprint: &s
         fs::remove_file(path)?;
     }
     Ok(())
+}
+
+/// #645 评论 5504296097 问题3：delete_palette_record 的变更集版本。
+///
+/// 返回 `WorkspaceChangeSet`，变更集包含
+/// `Delete(themes/palettes/<device_id>/<fingerprint>.json)`。
+pub fn delete_palette_record_with_changes(
+    config_dir: &Path,
+    device_id: &str,
+    fingerprint: &str,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    delete_palette_record(config_dir, device_id, fingerprint)?;
+    let rel = std::path::PathBuf::from("themes")
+        .join("palettes")
+        .join(device_id)
+        .join(format!("{}.json", fingerprint));
+    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new().add_delete(rel);
+    Ok(change_set)
 }
 
 /// Convert legacy ThemePalette to ThemePaletteRecord for migration.

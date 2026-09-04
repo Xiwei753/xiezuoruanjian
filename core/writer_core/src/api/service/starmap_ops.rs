@@ -93,9 +93,12 @@ impl WriterCoreApi {
     }
 
     pub fn create_starmap_json(&self, title: &str, desc: &str) -> ApiResult<String> {
-        let value = self
+        // #645 评论 5504296097 问题1：走 _with_changes 入口，记录本地 history。
+        // 之前调用 create_starmap(title, desc, None) 没有走 change set，
+        // 导致 create_starmap_json 写的 meta/index 文件不进本地 Git history。
+        let (value, change_set) = self
             .core_write()
-            .create_starmap(title, desc, None)
+            .create_starmap_with_changes(title, desc, None)
             .map_err(WriterError::from)?;
         let starmap_id = value.starmap_id.clone();
         let project_id = value.project_id.as_deref().map(|s| s.to_string());
@@ -112,6 +115,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.record_workspace_change_set_history(&change_set, "create_starmap");
         Self::json_string(&value)
     }
 

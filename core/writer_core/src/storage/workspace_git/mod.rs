@@ -24,8 +24,12 @@ pub mod rollback;
 
 pub use history::{
     diff_workspace, list_workspace_history, record_all_workspace_changes,
-    record_workspace_change_set, record_workspace_changes, record_workspace_paths,
+    record_workspace_change_set, record_workspace_paths,
 };
+// #645 评论 5504296097 问题4(b)：`record_workspace_changes` 不再对外公开。
+// 它仍以 `pub(crate)` 存在于 `history` 模块内，供 recovery/rollback 使用。
+// 外部调用方应改用 `record_workspace_paths` / `record_workspace_change_set` /
+// `record_all_workspace_changes` 三个明确入口。
 pub use model::*;
 pub use recovery::{recover_workspace_crash, WorkspaceRecoveryResult};
 pub use repo::{ensure_workspace_repo, open_workspace_repo};

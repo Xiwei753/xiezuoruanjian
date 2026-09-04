@@ -24,7 +24,10 @@ fn index_remove_path(index: &mut git2::Index, path: &Path) -> Result<()> {
 /// 不重新扫描整个 workspace。前缀可以是目录（`projects/{pid}`）或
 /// 带尾斜杠的形式（`projects/{pid}/`），内部统一按字符串前缀匹配。
 fn index_remove_tree(index: &mut git2::Index, prefix: &Path) -> Result<()> {
-    let prefix_str = prefix.to_string_lossy().to_string();
+    // #645 评论 5504296097 问题4(c)：统一用 '/' 分隔，避免 Windows 下
+    // prefix 'projects\pid' 与 Git index 里的 'projects/pid/...' 匹配不上。
+    // Git index 始终用正斜杠存储路径（POSIX 形式），无论平台。
+    let prefix_str = prefix.to_string_lossy().replace('\\', "/");
     let prefix_with_slash = format!("{}/", prefix_str);
     // 收集要删除的路径（不在遍历中 mutate index）。
     let to_remove: Vec<PathBuf> = index
@@ -42,6 +45,32 @@ fn index_remove_tree(index: &mut git2::Index, prefix: &Path) -> Result<()> {
         .collect();
     for rel in to_remove {
         index_remove_path(index, &rel)?;
+    }
+    Ok(())
+}
+
+/// #645 评论 5504296097 问题4(a)：清理 index 中不属于 history 的旧 tracked 条目。
+///
+/// 旧版本可能已经把 secrets/sync engine state stage 进 index。新版本规则升级后，
+/// 这些文件不应出现在本地 Git history 的 tree 里。本函数遍历当前 index entries，
+/// 对不属于 [`is_workspace_history_path`] 的条目调 [`index_remove_path`]，
+/// 保证每次新 commit 的 tree 自动清除旧版本误跟踪的内部文件。不扫描 worktree。
+fn purge_non_history_index_entries(index: &mut git2::Index) -> Result<()> {
+    let tracked: Vec<PathBuf> = index
+        .iter()
+        .filter_map(|e| {
+            let p = std::str::from_utf8(&e.path).unwrap_or("");
+            if p.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(p))
+            }
+        })
+        .collect();
+    for path in tracked {
+        if !is_workspace_history_path(&path) {
+            index_remove_path(index, &path)?;
+        }
     }
     Ok(())
 }
@@ -99,6 +128,10 @@ pub fn record_workspace_paths(
         }
         staged_count += 1;
     }
+    // #645 评论 5504296097 问题4(a)：显式 paths 路径处理完后，清理 index 中
+    // 旧版本误跟踪的内部文件（secrets/sync engine state），保证新 commit 的
+    // tree 不再包含这些不应进入本地 history 的条目。不扫描 worktree。
+    purge_non_history_index_entries(&mut index)?;
     finalize_commit(&repo, &mut index, message, staged_count)
 }
 
@@ -158,6 +191,10 @@ pub fn record_workspace_change_set(
             }
         }
     }
+    // #645 评论 5504296097 问题4(a)：change_set 处理完后，清理 index 中
+    // 旧版本误跟踪的内部文件（secrets/sync engine state），保证新 commit 的
+    // tree 不再包含这些不应进入本地 history 的条目。不扫描 worktree。
+    purge_non_history_index_entries(&mut index)?;
     finalize_commit(&repo, &mut index, message, staged_count)
 }
 
@@ -246,7 +283,16 @@ fn finalize_commit(
 ///
 /// 语义：`paths.is_empty()` → 全量扫描（与旧行为一致，避免破坏 recovery/rollback）；
 /// 非空 → 显式 paths。
-pub fn record_workspace_changes(
+///
+/// #645 评论 5504296097 问题4(b)：降级为 `pub(crate)`，不再对外公开。
+/// 外部调用方应改用三个明确入口（`record_workspace_paths` /
+/// `record_workspace_change_set` / `record_all_workspace_changes`）。
+///
+/// 当前所有调用点都在 `#[cfg(test)]` 模块内（history/recovery/rollback 的测试），
+/// 因此标记为 `#[cfg(test)]`。若将来生产代码需要复用其"空 paths → 全量"语义，
+/// 去掉 `#[cfg(test)]` 并改调三个明确入口之一即可。
+#[cfg(test)]
+pub(crate) fn record_workspace_changes(
     layout: &GitRepoLayout,
     paths: &[PathBuf],
     message: &str,

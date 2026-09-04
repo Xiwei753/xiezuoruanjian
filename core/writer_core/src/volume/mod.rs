@@ -216,5 +216,115 @@ pub fn reorder_volumes(project_root: &Path, ordered_ids: &[String]) -> Result<()
     Ok(())
 }
 
+// ── #645 评论 5504296097 问题3：volume 的 *_with_changes 入口 ──
+//
+// 模式参考 `chapter::save_chapter_verified_with_changes` 和
+// `project::create_project_with_changes`：先调原函数落盘，再根据真实写入的
+// 文件构造 `WorkspaceChangeSet`。volume 的磁盘路径是
+// `projects/{project_id}/volumes/{volume_id}/volume.json`，底层函数接收
+// `project_root`（绝对路径），用 `strip_prefix(app_data_root)` 转成
+// workspace-relative。
+
+/// 把绝对路径转成 workspace-relative 的正斜杠字符串。
+fn workspace_rel(path: &Path, workspace_root: &Path) -> String {
+    path.strip_prefix(workspace_root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+/// #645 评论 5504296097 问题3：create_volume 的变更集版本。
+///
+/// 返回 `(Volume, WorkspaceChangeSet)`，变更集包含
+/// `Upsert(projects/{project_id}/volumes/{volume_id}/volume.json)`。
+pub fn create_volume_with_changes(
+    project_root: &Path,
+    title: &str,
+    app_data_root: &Path,
+) -> Result<(Volume, crate::storage::workspace_git::WorkspaceChangeSet)> {
+    let volume = create_volume(project_root, title)?;
+    let meta_path = project_root
+        .join("volumes")
+        .join(&volume.id)
+        .join("volume.json");
+    let rel = workspace_rel(&meta_path, app_data_root);
+    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_upsert(std::path::PathBuf::from(rel));
+    Ok((volume, change_set))
+}
+
+/// #645 评论 5504296097 问题3：rename_volume 的变更集版本。
+///
+/// 返回 `WorkspaceChangeSet`，变更集包含
+/// `Upsert(projects/{project_id}/volumes/{volume_id}/volume.json)`。
+pub fn rename_volume_with_changes(
+    project_root: &Path,
+    volume_id: &str,
+    new_title: &str,
+    app_data_root: &Path,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    rename_volume(project_root, volume_id, new_title)?;
+    let meta_path = project_root
+        .join("volumes")
+        .join(volume_id)
+        .join("volume.json");
+    let rel = workspace_rel(&meta_path, app_data_root);
+    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_upsert(std::path::PathBuf::from(rel));
+    Ok(change_set)
+}
+
+/// #645 评论 5504296097 问题3：delete_volume 的变更集版本。
+///
+/// 返回 `WorkspaceChangeSet`，变更集包含
+/// `DeleteTree(projects/{project_id}/volumes/{volume_id})`。
+/// 用 DeleteTree 在 Git index 层按 prefix 删除所有 tracked entries，
+/// 不再只传 volume.json 导致卷下章节残留。
+pub fn delete_volume_with_changes(
+    project_root: &Path,
+    volume_id: &str,
+    app_data_root: &Path,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    delete_volume(project_root, volume_id, app_data_root)?;
+    let volume_dir = project_root.join("volumes").join(volume_id);
+    let rel = workspace_rel(&volume_dir, app_data_root);
+    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_delete_tree(std::path::PathBuf::from(rel));
+    Ok(change_set)
+}
+
+/// #645 评论 5504296097 问题3：reorder_volumes 的变更集版本。
+///
+/// 返回 `WorkspaceChangeSet`，变更集包含所有被改 order 的 volume.json 的 Upsert 路径。
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+pub fn reorder_volumes_with_changes(
+    project_root: &Path,
+    ordered_ids: &[String],
+    app_data_root: &Path,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    // 先获取当前 order，用于判断哪些被修改了。
+    let volumes = list_volumes(project_root)?;
+    let mut orders_before = std::collections::HashMap::new();
+    for v in &volumes {
+        orders_before.insert(v.id.clone(), v.order);
+    }
+
+    reorder_volumes(project_root, ordered_ids)?;
+
+    // 构造变更集：只包含 order 实际发生变化的 volume.json。
+    let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new();
+    for (index, id) in ordered_ids.iter().enumerate() {
+        let new_order = index as i32;
+        if let Some(&old_order) = orders_before.get(id) {
+            if old_order != new_order {
+                let meta_path = project_root.join("volumes").join(id).join("volume.json");
+                let rel = workspace_rel(&meta_path, app_data_root);
+                change_set = change_set.add_upsert(std::path::PathBuf::from(rel));
+            }
+        }
+    }
+    Ok(change_set)
+}
+
 #[cfg(test)]
 mod tests;

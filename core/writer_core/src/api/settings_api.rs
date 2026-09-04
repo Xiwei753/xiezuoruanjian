@@ -10,8 +10,11 @@ impl WriterCoreApi {
     }
 
     pub fn save_local_settings(&self, settings: LocalSettingsDto) -> ApiResult<bool> {
-        self.core_write()
-            .save_local_settings(&settings.clone().into())?;
+        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集，
+        // 调 record_workspace_change_set_history 记录本地历史。
+        let change_set = self
+            .core_write()
+            .save_local_settings_with_changes(&settings.clone().into())?;
         let body = serde_json::to_string(&settings).unwrap_or_default();
         let entry = crate::search::extractor::extract_setting_entry("local", &body);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
@@ -22,12 +25,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        // #645 评论 5504296097 Blocker 2：local settings 持久化在
-        // <app_data_root>/settings.local.json。
-        self.record_workspace_paths_history(
-            &[std::path::PathBuf::from("settings.local.json")],
-            "save_local_settings",
-        );
+        self.record_workspace_change_set_history(&change_set, "save_local_settings");
         Ok(true)
     }
 
@@ -39,8 +37,10 @@ impl WriterCoreApi {
     }
 
     pub fn save_syncable_settings(&self, settings: SyncableSettingsDto) -> ApiResult<bool> {
-        self.core_write()
-            .save_syncable_settings(&settings.clone().into())?;
+        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集。
+        let change_set = self
+            .core_write()
+            .save_syncable_settings_with_changes(&settings.clone().into())?;
         let body = serde_json::to_string(&settings).unwrap_or_default();
         let entry = crate::search::extractor::extract_setting_entry("syncable", &body);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
@@ -51,12 +51,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        // #645 评论 5504296097 Blocker 2：syncable settings 持久化在
-        // <app_data_root>/settings.sync.json。
-        self.record_workspace_paths_history(
-            &[std::path::PathBuf::from("settings.sync.json")],
-            "save_syncable_settings",
-        );
+        self.record_workspace_change_set_history(&change_set, "save_syncable_settings");
         Ok(true)
     }
 
@@ -74,10 +69,15 @@ impl WriterCoreApi {
     }
 
     pub fn save_palette_record(&self, record: ThemePaletteRecordDto) -> ApiResult<bool> {
+        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集，
+        // 调 record_workspace_change_set_history 记录本地历史。
         let r: crate::settings::ThemePaletteRecord = record.into();
-        crate::settings::save_palette_record(&self.app_data_root, &r)
-            .map(|_| true)
-            .map_err(Into::into)
+        let change_set = self
+            .core_write()
+            .save_palette_record_with_changes(&r)
+            .map_err(crate::api::error::WriterError::from)?;
+        self.record_workspace_change_set_history(&change_set, "save_palette_record");
+        Ok(true)
     }
 
     pub fn load_palette_record(
@@ -97,9 +97,13 @@ impl WriterCoreApi {
     }
 
     pub fn delete_palette_record(&self, device_id: &str, fingerprint: &str) -> ApiResult<bool> {
-        crate::settings::delete_palette_record(&self.app_data_root, device_id, fingerprint)
-            .map(|_| true)
-            .map_err(Into::into)
+        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集。
+        let change_set = self
+            .core_write()
+            .delete_palette_record_with_changes(device_id, fingerprint)
+            .map_err(crate::api::error::WriterError::from)?;
+        self.record_workspace_change_set_history(&change_set, "delete_palette_record");
+        Ok(true)
     }
 
     pub fn migrate_legacy_theme_palette(&self) -> ApiResult<bool> {

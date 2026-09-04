@@ -26,8 +26,10 @@ pub struct WriterCoreApi {
     /// #645 评论 5504296097 问题3：本地 workspace Git 布局。
     ///
     /// 持有本地 `GitRepoLayout`，让写事务完成后能调
-    /// [`crate::storage::workspace_git::record_workspace_changes`] 记录本地历史。
-    /// 它只属于本地存储层，不进入 `FullSyncPlan`。
+    /// [`crate::storage::workspace_git::record_workspace_paths`] /
+    /// [`crate::storage::workspace_git::record_workspace_change_set`] /
+    /// [`crate::storage::workspace_git::record_all_workspace_changes`]
+    /// 记录本地历史。它只属于本地存储层，不进入 `FullSyncPlan`。
     ///
     /// 用 `RwLock` 而非直接字段：`WriterCoreApi` 各构造函数只接收
     /// `app_data_root`/`projects_root`，无法在构造时知道 Android 外置 git_dir。

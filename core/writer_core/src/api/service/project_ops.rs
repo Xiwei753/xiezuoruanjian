@@ -1,16 +1,5 @@
 use super::*;
 
-/// #645 评论 5504296097 Blocker 2：构造 volume 的 workspace-relative path。
-///
-/// volume: `projects/{project_id}/volumes/{volume_id}/volume.json`
-fn volume_json_rel_path(project_id: &str, volume_id: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from("projects")
-        .join(project_id)
-        .join("volumes")
-        .join(volume_id)
-        .join("volume.json")
-}
-
 impl WriterCoreApi {
     pub fn list_projects(&self) -> ApiResult<Vec<ProjectDto>> {
         self.core_read()
@@ -136,10 +125,27 @@ impl WriterCoreApi {
     }
 
     pub fn delete_project(&self, project_id: &str) -> ApiResult<bool> {
+        // 先解除 StarMap 绑定（best-effort，不阻断删除）。
         let bound_starmaps = self
             .core_write()
             .list_starmaps_bound_to_project(project_id)
             .unwrap_or_default();
+        for sm in &bound_starmaps {
+            if let Err(e) = self.unbind_starmap_from_project(&sm.starmap_id) {
+                log::warn!(
+                    "delete_project: unbind starmap {} failed ({}), continuing with delete",
+                    sm.starmap_id,
+                    e
+                );
+            }
+        }
+        // #645 评论 5504296097 问题2：删除失败必须返回失败，不再吞 Err。
+        // 之前的实现把 delete_project_with_changes 的 Err 只 log::warn 然后
+        // 返回 Ok(true)，导致目标不存在/journal 写失败/move_worktree 失败/
+        // tombstone 写失败/IO 错误都被吞掉，是功能回归。
+        let change_set = self.core_write().delete_project_with_changes(project_id)?;
+        // 删除成功后才清搜索索引。搜索索引清理放在删除成功之后，避免
+        // project 没删掉但搜索索引已清空的不一致状态。
         for prefix in &[
             format!("project:{}", project_id),
             format!("volume:{}:", project_id),
@@ -149,25 +155,9 @@ impl WriterCoreApi {
         ] {
             self.remove_search_index_by_prefix(prefix);
         }
-        for sm in &bound_starmaps {
-            let _ = self.unbind_starmap_from_project(&sm.starmap_id);
-        }
-        // #645 评论 5504296097 问题2(b)：删除作品并记录本地历史（DeleteTree）。
-        // workspace history recording is best-effort: if it fails (no git repo), the
-        // project deletion still succeeds (the core delete happened inside
-        // delete_project_with_changes).
-        match self.core_write().delete_project_with_changes(project_id) {
-            Ok(change_set) => {
-                self.record_workspace_change_set_history(&change_set, "delete_project");
-            }
-            Err(e) => {
-                log::warn!(
-                    "delete_project: delete_project_with_changes failed ({}), \
-                     project was still deleted",
-                    e
-                );
-            }
-        }
+        // history 记录是 best-effort：record_workspace_change_set_history
+        // 内部已用 log::warn 吞掉 git 错误，不会把 history 失败当成删除失败。
+        self.record_workspace_change_set_history(&change_set, "delete_project");
         Ok(true)
     }
 
@@ -188,11 +178,13 @@ impl WriterCoreApi {
     }
 
     pub fn create_volume(&self, project_id: &str, title: &str) -> ApiResult<VolumeDto> {
-        let volume: VolumeDto = self
+        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集，
+        // 调 record_workspace_change_set_history 记录本地历史。
+        let (volume, change_set) = self
             .core_write()
-            .create_volume(project_id, title)
-            .map(Into::into)
+            .create_volume_with_changes(project_id, title)
             .map_err(WriterError::from)?;
+        let volume: VolumeDto = volume.into();
         let entry =
             crate::search::extractor::extract_volume_title_entry(project_id, &volume.id, title);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
@@ -203,11 +195,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        // #645 评论 5504296097 Blocker 2：create_volume 写 volume.json。
-        self.record_workspace_paths_history(
-            &[volume_json_rel_path(project_id, &volume.id)],
-            "create_volume",
-        );
+        self.record_workspace_change_set_history(&change_set, "create_volume");
         Ok(volume)
     }
 
@@ -217,8 +205,10 @@ impl WriterCoreApi {
         volume_id: &str,
         new_title: &str,
     ) -> ApiResult<bool> {
-        self.core_write()
-            .rename_volume(project_id, volume_id, new_title)?;
+        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集。
+        let change_set = self
+            .core_write()
+            .rename_volume_with_changes(project_id, volume_id, new_title)?;
         let entry =
             crate::search::extractor::extract_volume_title_entry(project_id, volume_id, new_title);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
@@ -229,16 +219,17 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        // #645 评论 5504296097 Blocker 2：rename_volume 只改 volume.json。
-        self.record_workspace_paths_history(
-            &[volume_json_rel_path(project_id, volume_id)],
-            "rename_volume",
-        );
+        self.record_workspace_change_set_history(&change_set, "rename_volume");
         Ok(true)
     }
 
     pub fn delete_volume(&self, project_id: &str, volume_id: &str) -> ApiResult<bool> {
-        self.core_write().delete_volume(project_id, volume_id)?;
+        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集。
+        // change_set 由底层 delete_volume_with_changes 返回，包含
+        // DeleteTree(projects/{pid}/volumes/{vid})，不再手拼路径。
+        let change_set = self
+            .core_write()
+            .delete_volume_with_changes(project_id, volume_id)?;
         for prefix in &[
             format!("volume:{}:{}", project_id, volume_id),
             format!("chapter_title:{}:{}:", project_id, volume_id),
@@ -247,15 +238,6 @@ impl WriterCoreApi {
         ] {
             self.remove_search_index_by_prefix(prefix);
         }
-        // #645 评论 5504296097 问题2(c)：删除卷移除整个 volumes/{vid}/ 目录。
-        // 用 DeleteTree 在 Git index 层按 prefix 删除所有 tracked entries，
-        // 不再只传 volume.json 导致卷下章节残留。
-        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new().add_delete_tree(
-            std::path::PathBuf::from("projects")
-                .join(project_id)
-                .join("volumes")
-                .join(volume_id),
-        );
         self.record_workspace_change_set_history(&change_set, "delete_volume");
         Ok(true)
     }
@@ -265,16 +247,11 @@ impl WriterCoreApi {
         project_id: &str,
         ordered_volume_ids: &[String],
     ) -> ApiResult<bool> {
-        self.core_write()
-            .reorder_volumes(project_id, ordered_volume_ids)
-            .map(|_| true)
-            .map_err(crate::api::error::WriterError::from)?;
-        // #645 评论 5504296097 Blocker 2：reorder 改写每个 volume.json 的 order。
-        let changed_paths: Vec<std::path::PathBuf> = ordered_volume_ids
-            .iter()
-            .map(|vid| volume_json_rel_path(project_id, vid))
-            .collect();
-        self.record_workspace_paths_history(&changed_paths, "reorder_volumes");
+        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集。
+        let change_set = self
+            .core_write()
+            .reorder_volumes_with_changes(project_id, ordered_volume_ids)?;
+        self.record_workspace_change_set_history(&change_set, "reorder_volumes");
         Ok(true)
     }
 }

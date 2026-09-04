@@ -374,6 +374,55 @@ impl super::WriterCore {
         crate::volume::reorder_volumes(&project_root, ordered_ids)
     }
 
+    // #645 评论 5504296097 问题3：volume 的 *_with_changes 转发，
+    // 返回 WorkspaceChangeSet 供 API 层记录本地历史。
+
+    /// 创建卷并返回变更集。
+    pub fn create_volume_with_changes(
+        &self,
+        project_id: &str,
+        title: &str,
+    ) -> Result<(Volume, WorkspaceChangeSet)> {
+        let project_root = self.project_root(project_id);
+        crate::volume::create_volume_with_changes(&project_root, title, &self.app_data_root)
+    }
+
+    /// 重命名卷并返回变更集。
+    pub fn rename_volume_with_changes(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        new_title: &str,
+    ) -> Result<WorkspaceChangeSet> {
+        let project_root = self.project_root(project_id);
+        crate::volume::rename_volume_with_changes(
+            &project_root,
+            volume_id,
+            new_title,
+            &self.app_data_root,
+        )
+    }
+
+    /// 删除卷并返回变更集。
+    pub fn delete_volume_with_changes(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+    ) -> Result<WorkspaceChangeSet> {
+        let project_root = self.project_root(project_id);
+        crate::volume::delete_volume_with_changes(&project_root, volume_id, &self.app_data_root)
+    }
+
+    /// 重排卷并返回变更集。
+    pub fn reorder_volumes_with_changes(
+        &self,
+        project_id: &str,
+        ordered_ids: &[String],
+    ) -> Result<WorkspaceChangeSet> {
+        let project_root = self.project_root(project_id);
+        crate::volume::reorder_volumes_with_changes(&project_root, ordered_ids, &self.app_data_root)
+    }
+
     pub fn rename_chapter(
         &self,
         project_id: &str,
