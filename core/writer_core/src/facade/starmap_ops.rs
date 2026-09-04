@@ -126,7 +126,7 @@ impl super::WriterCore {
         starmap_id: &str,
         graph: &crate::starmap::types::StarMapGraph,
         base_package_revision: u64,
-    ) -> Result<()> {
+    ) -> Result<Vec<std::path::PathBuf>> {
         validation::validate_graph(&self.app_data_root, graph)?;
 
         let mut stores = self
@@ -227,9 +227,7 @@ impl super::WriterCore {
         store.enqueue_save(SaveQueueEntry::DeleteLink);
         store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush_save_queue()?;
-
-        Ok(())
+        store.flush_save_queue()
     }
 
     pub fn get_starmap_store_package_revision(&self, starmap_id: &str) -> u64 {
@@ -383,7 +381,7 @@ impl super::WriterCore {
         &self,
         starmap_id: &str,
         layout: &crate::starmap::types::StarMapLayout,
-    ) -> Result<()> {
+    ) -> Result<Vec<std::path::PathBuf>> {
         validation::validate_layout(layout)?;
 
         let mut stores = self
@@ -397,8 +395,7 @@ impl super::WriterCore {
         store.set_layout(layout.clone());
         store.enqueue_save(SaveQueueEntry::Layout);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush_save_queue()?;
-        Ok(())
+        store.flush_save_queue()
     }
 
     pub fn get_starmap_viewport(
@@ -420,7 +417,7 @@ impl super::WriterCore {
         &self,
         starmap_id: &str,
         viewport: &crate::starmap::types::StarMapViewport,
-    ) -> Result<()> {
+    ) -> Result<Vec<std::path::PathBuf>> {
         validation::validate_viewport(viewport)?;
 
         let mut stores = self
@@ -432,8 +429,7 @@ impl super::WriterCore {
             .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         store.set_viewport(viewport.clone());
-        store.flush_viewport()?;
-        Ok(())
+        store.flush_viewport()
     }
 
     pub fn add_starmap_embed(
@@ -663,43 +659,45 @@ impl super::WriterCore {
         crate::starmap::get_motion_policy(&self.app_data_root)
     }
 
-    pub fn close_starmap_store(&self, starmap_id: &str) -> Result<()> {
+    pub fn close_starmap_store(&self, starmap_id: &str) -> Result<Vec<std::path::PathBuf>> {
         let mut stores = self
             .starmap_stores
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(store) = stores.get_mut(starmap_id) {
             if store.is_dirty() || store.has_pending_deletes() || store.save_queue_len() > 0 {
-                store.flush()?;
+                return store.flush();
             }
         }
         stores.remove(starmap_id);
-        Ok(())
+        Ok(Vec::new())
     }
 
-    pub fn flush_starmap_store(&self, starmap_id: &str) -> Result<()> {
+    pub fn flush_starmap_store(&self, starmap_id: &str) -> Result<Vec<std::path::PathBuf>> {
         let mut stores = self
             .starmap_stores
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(store) = stores.get_mut(starmap_id) {
             if store.is_dirty() || store.has_pending_deletes() || store.save_queue_len() > 0 {
-                store.flush_save_queue()?;
+                return store.flush_save_queue();
             }
         }
-        Ok(())
+        Ok(Vec::new())
     }
 
-    pub fn flush_all_starmap_stores(&self) -> Result<()> {
+    pub fn flush_all_starmap_stores(&self) -> Result<Vec<std::path::PathBuf>> {
         let mut stores = self
             .starmap_stores
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        let mut all_changed: Vec<std::path::PathBuf> = Vec::new();
         for store in stores.values_mut() {
             if store.is_dirty() || store.has_pending_deletes() || store.save_queue_len() > 0 {
-                store.flush_save_queue()?;
+                let paths = store.flush_save_queue()?;
+                all_changed.extend(paths);
             }
         }
-        Ok(())
+        Ok(all_changed)
     }
 }

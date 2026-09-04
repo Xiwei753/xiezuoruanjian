@@ -14,6 +14,11 @@ pub(crate) fn starmap_pkg_dir(app_data_root: &Path, starmap_id: &str) -> PathBuf
     app_data_root.join("starmaps").join(starmap_id)
 }
 
+/// 星图包目录相对于 `app_data_root` 的路径：`starmaps/{starmap_id}`。
+fn starmap_pkg_rel_dir(starmap_id: &str) -> PathBuf {
+    PathBuf::from("starmaps").join(starmap_id)
+}
+
 pub(crate) fn bucket_for_id(id: &str) -> &str {
     let bytes = id.as_bytes();
     if bytes.is_empty() {
@@ -122,49 +127,87 @@ fn viewport_path(app_data_root: &Path, starmap_id: &str) -> PathBuf {
     session_dir(app_data_root, starmap_id).join("viewport.json")
 }
 
-pub fn save_node(app_data_root: &Path, starmap_id: &str, node: &StarMapNode) -> Result<()> {
+pub fn save_node(app_data_root: &Path, starmap_id: &str, node: &StarMapNode) -> Result<PathBuf> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
     fs::create_dir_all(dir.join("nodes").join(bucket_for_id(&node.id)))?;
     let json = serde_json::to_string_pretty(node)?;
     atomic_write_string(&node_path(&dir, &node.id), &json)?;
-    Ok(())
+    Ok(starmap_pkg_rel_dir(starmap_id)
+        .join("nodes")
+        .join(bucket_for_id(&node.id))
+        .join(format!("{}.json", node.id)))
 }
 
-pub fn delete_node_file(app_data_root: &Path, starmap_id: &str, node_id: &str) -> Result<()> {
+pub fn delete_node_file(
+    app_data_root: &Path,
+    starmap_id: &str,
+    node_id: &str,
+) -> Result<Vec<PathBuf>> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
+    let mut changed: Vec<PathBuf> = Vec::new();
     let path = node_path(&dir, node_id);
     if path.exists() {
         fs::remove_file(&path)?;
+        changed.push(
+            starmap_pkg_rel_dir(starmap_id)
+                .join("nodes")
+                .join(bucket_for_id(node_id))
+                .join(format!("{}.json", node_id)),
+        );
     }
     let flat = flat_node_path(&dir, node_id);
     if flat.exists() {
         let _ = fs::remove_file(&flat);
+        changed.push(
+            starmap_pkg_rel_dir(starmap_id)
+                .join("nodes")
+                .join(format!("{}.json", node_id)),
+        );
     }
-    Ok(())
+    Ok(changed)
 }
 
-pub fn save_edge(app_data_root: &Path, starmap_id: &str, edge: &StarMapEdge) -> Result<()> {
+pub fn save_edge(app_data_root: &Path, starmap_id: &str, edge: &StarMapEdge) -> Result<PathBuf> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
     fs::create_dir_all(dir.join("edges").join(bucket_for_id(&edge.id)))?;
     let json = serde_json::to_string_pretty(edge)?;
     atomic_write_string(&edge_path(&dir, &edge.id), &json)?;
-    Ok(())
+    Ok(starmap_pkg_rel_dir(starmap_id)
+        .join("edges")
+        .join(bucket_for_id(&edge.id))
+        .join(format!("{}.json", edge.id)))
 }
 
-pub fn delete_edge_file(app_data_root: &Path, starmap_id: &str, edge_id: &str) -> Result<()> {
+pub fn delete_edge_file(
+    app_data_root: &Path,
+    starmap_id: &str,
+    edge_id: &str,
+) -> Result<Vec<PathBuf>> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
+    let mut changed: Vec<PathBuf> = Vec::new();
     let path = edge_path(&dir, edge_id);
     if path.exists() {
         fs::remove_file(&path)?;
+        changed.push(
+            starmap_pkg_rel_dir(starmap_id)
+                .join("edges")
+                .join(bucket_for_id(edge_id))
+                .join(format!("{}.json", edge_id)),
+        );
     }
     let flat = flat_edge_path(&dir, edge_id);
     if flat.exists() {
         let _ = fs::remove_file(&flat);
+        changed.push(
+            starmap_pkg_rel_dir(starmap_id)
+                .join("edges")
+                .join(format!("{}.json", edge_id)),
+        );
     }
-    Ok(())
+    Ok(changed)
 }
 
-pub fn save_embed(app_data_root: &Path, starmap_id: &str, embed: &StarMapEmbed) -> Result<()> {
+pub fn save_embed(app_data_root: &Path, starmap_id: &str, embed: &StarMapEmbed) -> Result<PathBuf> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
     fs::create_dir_all(
         dir.join("child_starmaps")
@@ -172,79 +215,145 @@ pub fn save_embed(app_data_root: &Path, starmap_id: &str, embed: &StarMapEmbed) 
     )?;
     let json = serde_json::to_string_pretty(embed)?;
     atomic_write_string(&child_starmap_path(&dir, &embed.instance_id), &json)?;
-    Ok(())
+    Ok(starmap_pkg_rel_dir(starmap_id)
+        .join("child_starmaps")
+        .join(bucket_for_id(&embed.instance_id))
+        .join(format!("{}.json", embed.instance_id)))
 }
 
-pub fn delete_embed_file(app_data_root: &Path, starmap_id: &str, instance_id: &str) -> Result<()> {
+pub fn delete_embed_file(
+    app_data_root: &Path,
+    starmap_id: &str,
+    instance_id: &str,
+) -> Result<Vec<PathBuf>> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
+    let mut changed: Vec<PathBuf> = Vec::new();
     let path = child_starmap_path(&dir, instance_id);
     if path.exists() {
         fs::remove_file(&path)?;
+        changed.push(
+            starmap_pkg_rel_dir(starmap_id)
+                .join("child_starmaps")
+                .join(bucket_for_id(instance_id))
+                .join(format!("{}.json", instance_id)),
+        );
     }
     let flat = flat_child_starmap_path(&dir, instance_id);
     if flat.exists() {
         let _ = fs::remove_file(&flat);
+        changed.push(
+            starmap_pkg_rel_dir(starmap_id)
+                .join("child_starmaps")
+                .join(format!("{}.json", instance_id)),
+        );
     }
-    Ok(())
+    Ok(changed)
 }
 
-pub fn save_link(app_data_root: &Path, starmap_id: &str, link: &StarMapLink) -> Result<()> {
+pub fn save_link(app_data_root: &Path, starmap_id: &str, link: &StarMapLink) -> Result<PathBuf> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
     fs::create_dir_all(dir.join("links").join(bucket_for_id(&link.link_id)))?;
     let json = serde_json::to_string_pretty(link)?;
     atomic_write_string(&link_path(&dir, &link.link_id), &json)?;
-    Ok(())
+    Ok(starmap_pkg_rel_dir(starmap_id)
+        .join("links")
+        .join(bucket_for_id(&link.link_id))
+        .join(format!("{}.json", link.link_id)))
 }
 
-pub fn delete_link_file(app_data_root: &Path, starmap_id: &str, link_id: &str) -> Result<()> {
+pub fn delete_link_file(
+    app_data_root: &Path,
+    starmap_id: &str,
+    link_id: &str,
+) -> Result<Vec<PathBuf>> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
+    let mut changed: Vec<PathBuf> = Vec::new();
     let path = link_path(&dir, link_id);
     if path.exists() {
         fs::remove_file(&path)?;
+        changed.push(
+            starmap_pkg_rel_dir(starmap_id)
+                .join("links")
+                .join(bucket_for_id(link_id))
+                .join(format!("{}.json", link_id)),
+        );
     }
     let flat = flat_link_path(&dir, link_id);
     if flat.exists() {
         let _ = fs::remove_file(&flat);
+        changed.push(
+            starmap_pkg_rel_dir(starmap_id)
+                .join("links")
+                .join(format!("{}.json", link_id)),
+        );
     }
-    Ok(())
+    Ok(changed)
 }
 
-pub fn save_hyperlink(app_data_root: &Path, starmap_id: &str, hl: &StarMapHyperlink) -> Result<()> {
+pub fn save_hyperlink(
+    app_data_root: &Path,
+    starmap_id: &str,
+    hl: &StarMapHyperlink,
+) -> Result<PathBuf> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
     fs::create_dir_all(dir.join("hyperlinks").join(bucket_for_id(&hl.hyperlink_id)))?;
     let json = serde_json::to_string_pretty(hl)?;
     atomic_write_string(&hyperlink_path(&dir, &hl.hyperlink_id), &json)?;
-    Ok(())
+    Ok(starmap_pkg_rel_dir(starmap_id)
+        .join("hyperlinks")
+        .join(bucket_for_id(&hl.hyperlink_id))
+        .join(format!("{}.json", hl.hyperlink_id)))
 }
 
 pub fn delete_hyperlink_file(
     app_data_root: &Path,
     starmap_id: &str,
     hyperlink_id: &str,
-) -> Result<()> {
+) -> Result<Vec<PathBuf>> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
+    let mut changed: Vec<PathBuf> = Vec::new();
     let path = hyperlink_path(&dir, hyperlink_id);
     if path.exists() {
         fs::remove_file(&path)?;
+        changed.push(
+            starmap_pkg_rel_dir(starmap_id)
+                .join("hyperlinks")
+                .join(bucket_for_id(hyperlink_id))
+                .join(format!("{}.json", hyperlink_id)),
+        );
     }
     let flat = flat_hyperlink_path(&dir, hyperlink_id);
     if flat.exists() {
         let _ = fs::remove_file(&flat);
+        changed.push(
+            starmap_pkg_rel_dir(starmap_id)
+                .join("hyperlinks")
+                .join(format!("{}.json", hyperlink_id)),
+        );
     }
-    Ok(())
+    Ok(changed)
 }
 
-pub fn save_layout(app_data_root: &Path, starmap_id: &str, layout: &StarMapLayout) -> Result<()> {
+pub fn save_layout(
+    app_data_root: &Path,
+    starmap_id: &str,
+    layout: &StarMapLayout,
+) -> Result<Vec<PathBuf>> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
-    save_layout_sharded(&dir, layout)
+    let rel_paths = save_layout_sharded(&dir, layout)?;
+    let pkg_rel = starmap_pkg_rel_dir(starmap_id);
+    Ok(rel_paths.into_iter().map(|p| pkg_rel.join(p)).collect())
 }
 
-pub(crate) fn save_layout_sharded(dir: &Path, layout: &StarMapLayout) -> Result<()> {
+pub(crate) fn save_layout_sharded(dir: &Path, layout: &StarMapLayout) -> Result<Vec<PathBuf>> {
     let ld = layout_dir(dir);
     fs::create_dir_all(ld.join("nodes"))?;
 
+    let mut changed: Vec<PathBuf> = Vec::new();
+
     let kind_json = serde_json::to_string_pretty(&layout.kind)?;
     atomic_write_string(&layout_kind_path(dir), &kind_json)?;
+    changed.push(PathBuf::from("layouts").join("default").join("kind.json"));
 
     let mut buckets: HashMap<&str, Vec<&StarMapLayoutNode>> = HashMap::new();
     for node in &layout.nodes {
@@ -254,6 +363,12 @@ pub(crate) fn save_layout_sharded(dir: &Path, layout: &StarMapLayout) -> Result<
     for (bucket, nodes) in &buckets {
         let json = serde_json::to_string_pretty(nodes)?;
         atomic_write_string(&layout_nodes_shard_path(dir, bucket), &json)?;
+        changed.push(
+            PathBuf::from("layouts")
+                .join("default")
+                .join("nodes")
+                .join(format!("{}.json", bucket)),
+        );
     }
 
     let all_buckets = [
@@ -265,11 +380,17 @@ pub(crate) fn save_layout_sharded(dir: &Path, layout: &StarMapLayout) -> Result<
             let path = layout_nodes_shard_path(dir, b);
             if path.exists() {
                 let _ = fs::remove_file(&path);
+                changed.push(
+                    PathBuf::from("layouts")
+                        .join("default")
+                        .join("nodes")
+                        .join(format!("{}.json", b)),
+                );
             }
         }
     }
 
-    Ok(())
+    Ok(changed)
 }
 
 #[allow(
@@ -321,12 +442,15 @@ pub fn save_viewport(
     app_data_root: &Path,
     starmap_id: &str,
     viewport: &StarMapViewport,
-) -> Result<()> {
+) -> Result<PathBuf> {
     let dir = session_dir(app_data_root, starmap_id);
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(viewport)?;
     atomic_write_string(&viewport_path(app_data_root, starmap_id), &json)?;
-    Ok(())
+    Ok(PathBuf::from("session")
+        .join("starmaps")
+        .join(starmap_id)
+        .join("viewport.json"))
 }
 
 pub fn load_viewport(app_data_root: &Path, starmap_id: &str) -> Option<StarMapViewport> {

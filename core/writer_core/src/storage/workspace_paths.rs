@@ -56,6 +56,33 @@ pub fn is_internal_git_artifact(path: &str) -> bool {
     false
 }
 
+/// 将路径分隔符统一为 `/`，便于跨平台比较。
+fn normalize_workspace_path(path: &str) -> String {
+    if path.contains('\\') {
+        path.replace('\\', "/")
+    } else {
+        path.to_string()
+    }
+}
+
+/// 判断路径是否为 workspace 内部凭据文件。
+///
+/// #645 评论 5504296097 Blocker 1：真实凭据文件名是
+/// `secrets.local.json` / `secrets_g1.local.json` / `secrets_g2.local.json`，
+/// 路径段是 `secrets.local.json` 而非 `secrets`，原段名匹配 `seg == "secrets"`
+/// 会漏判，导致凭据被写进本地 Git 历史。
+///
+/// 规则只针对真正的内部凭据路径，不用 `contains("secret")` 误伤
+/// 用户自己的 `my-secrets-book` 目录。同时覆盖旧版凭据文件名
+/// `sync_secrets.local.json`（迁移残留）。
+fn is_workspace_secret_path(path: &str) -> bool {
+    let path = normalize_workspace_path(path);
+    path == "app-meta/sync/secrets.local.json"
+        || path.starts_with("app-meta/sync/secrets_g")
+        || path.starts_with("app-meta/sync/secrets.")
+        || path.ends_with("sync_secrets.local.json")
+}
+
 /// 判断路径是否为 workspace 内部路径（不应被当成用户内容）。
 ///
 /// 统一过滤以下模式：
@@ -63,7 +90,7 @@ pub fn is_internal_git_artifact(path: &str) -> bool {
 /// - `full-sync-staging`（含子目录）：staging run 自身，避免递归；
 /// - `app-meta/transactions`（含子目录）：事务暂存目录，commit 中间态；
 /// - `app-meta/logs`（含子目录）：本地日志；
-/// - 路径中包含 `secrets`：凭证/密钥，永不进历史；
+/// - 真实内部凭据路径（委托 [`is_workspace_secret_path`]）：永不进历史；
 /// - 路径中包含 `cache`：缓存目录；
 /// - `.tmp` 后缀：临时文件；
 /// - `.lock` 后缀：锁文件。
@@ -103,10 +130,17 @@ pub fn is_workspace_internal_path_str(path: &str) -> bool {
         return true;
     }
 
-    // secrets / cache：路径中包含这些段时视为内部。
-    // 用 split('/') 段级匹配，避免误判名为 "my-secrets-book" 的用户目录。
+    // secrets：真实内部凭据路径（app-meta/sync/secrets*.local.json 等）。
+    // #645 评论 5504296097 Blocker 1：原段名匹配 seg == "secrets" 漏判
+    // secrets.local.json，改成精确路径匹配。
+    if is_workspace_secret_path(&normalized) {
+        return true;
+    }
+
+    // cache：路径中包含该段时视为内部。
+    // 用 split('/') 段级匹配，避免误判名为 "my-cache-book" 的用户目录。
     for seg in normalized.split('/') {
-        if seg == "secrets" || seg == "cache" {
+        if seg == "cache" {
             return true;
         }
     }
@@ -167,7 +201,7 @@ mod tests {
             "app-meta/logs/sync.log"
         )));
         assert!(is_workspace_internal_path(&PathBuf::from(
-            "app-meta/secrets/token.json"
+            "app-meta/sync/secrets.local.json"
         )));
         assert!(is_workspace_internal_path(&PathBuf::from(
             "cache/index.bin"
@@ -198,6 +232,39 @@ mod tests {
         assert!(!is_workspace_internal_path(&PathBuf::from(
             "projects/p1/cache-recovery.md"
         )));
+    }
+
+    /// #645 评论 5504296097 Blocker 1：真实凭据文件必须被识别为内部路径。
+    #[test]
+    fn secret_paths_are_internal() {
+        assert!(is_workspace_internal_path_str(
+            "app-meta/sync/secrets.local.json"
+        ));
+        assert!(is_workspace_internal_path_str(
+            "app-meta/sync/secrets_g1.local.json"
+        ));
+        assert!(is_workspace_internal_path_str(
+            "app-meta/sync/secrets_g2.local.json"
+        ));
+        assert!(is_workspace_internal_path_str(
+            "app-meta/sync/sync_secrets.local.json"
+        ));
+        // 旧版凭据可能出现在 settings 目录下。
+        assert!(is_workspace_internal_path_str(
+            "settings/sync_secrets.local.json"
+        ));
+        // Windows 风格路径也要识别。
+        assert!(is_workspace_internal_path_str(
+            "app-meta\\sync\\secrets.local.json"
+        ));
+        // 用户命名的 my-secrets-book 不应被误判。
+        assert!(!is_workspace_internal_path_str(
+            "projects/my-secrets-book/ch1.md"
+        ));
+        // 同步 manifest 仍允许进历史。
+        assert!(is_workspace_history_path_str(
+            "app-meta/sync/manifest.sync.json"
+        ));
     }
 
     #[test]

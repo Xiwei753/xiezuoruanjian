@@ -280,12 +280,16 @@ impl super::WriterCore {
     ///
     /// `staging_runs` 来自 Prepare 阶段，与 `transfer_result.targets` 按索引对应；
     /// commit 完成后显式 cleanup（`Drop` 也会兜底）。
+    ///
+    /// #645 评论 5504296097 Blocker 2：返回 `(FullSyncResult, committed_paths)`，
+    /// `committed_paths` 是本次 commit 真正落盘的 workspace-relative paths，
+    /// 供 API 层调 `record_workspace_history` 精确 stage，替代全量 `&[]` 扫描。
     #[allow(clippy::excessive_nesting)]
     pub fn commit_full_sync(
         &self,
         transfer_result: crate::sync::full_sync::FullSyncTransferResult,
         staging_runs: Vec<crate::sync::staging::StagingRun>,
-    ) -> crate::sync::types::FullSyncResult {
+    ) -> (crate::sync::types::FullSyncResult, Vec<std::path::PathBuf>) {
         // #644 评论 5473105049 第3/4节：逐 target 判断 transfer 结果，
         // 只对成功终态的 target 做 staging commit；commit IO 失败向上传播。
         let commit_outcome = crate::sync::commit_helpers::apply_staging_commits_for_targets(
@@ -371,7 +375,7 @@ impl super::WriterCore {
             }
         }
 
-        result
+        (result, commit_outcome.committed_paths)
     }
 
     /// 内部：用给定 provider 执行全量同步。

@@ -25,13 +25,16 @@ impl StarMapStore {
         }
     }
 
-    pub(super) fn flush_recovery_to_disk(&self) -> Result<()> {
+    pub(super) fn flush_recovery_to_disk(&self) -> Result<PathBuf> {
         let dir = self.metadata_dir();
         std::fs::create_dir_all(&dir)?;
         let json = serde_json::to_string_pretty(&self.recovery_log)?;
         let path = dir.join("recovery.json");
         atomic_write_string(&path, &json)?;
-        Ok(())
+        Ok(PathBuf::from("starmaps")
+            .join(&self.starmap_id)
+            .join("metadata")
+            .join("recovery.json"))
     }
 
     pub(super) fn metadata_dir(&self) -> PathBuf {

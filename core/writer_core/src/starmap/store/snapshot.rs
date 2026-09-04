@@ -202,7 +202,7 @@ impl StarMapStore {
         })
     }
 
-    pub(super) fn update_graph_meta_file(&mut self) -> Result<u64> {
+    pub(super) fn update_graph_meta_file(&mut self) -> Result<(u64, std::path::PathBuf)> {
         if self.graph_meta.is_none() {
             self.reload_graph_meta_if_stale();
         }
@@ -261,7 +261,10 @@ impl StarMapStore {
         let path = self.starmap_dir().join("graph.json");
         crate::storage::atomic_write_string(&path, &json)?;
 
-        Ok(next_revision)
+        let rel_path = std::path::PathBuf::from("starmaps")
+            .join(&self.starmap_id)
+            .join("graph.json");
+        Ok((next_revision, rel_path))
     }
 
     #[allow(

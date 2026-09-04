@@ -1,5 +1,23 @@
 use super::*;
 
+/// #645 评论 5504296097 Blocker 2：构造 project/volume 的 workspace-relative paths。
+///
+/// - project: `projects/{project_id}/project.json`
+/// - volume: `projects/{project_id}/volumes/{volume_id}/volume.json`
+fn project_json_rel_path(project_id: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from("projects")
+        .join(project_id)
+        .join("project.json")
+}
+
+fn volume_json_rel_path(project_id: &str, volume_id: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from("projects")
+        .join(project_id)
+        .join("volumes")
+        .join(volume_id)
+        .join("volume.json")
+}
+
 impl WriterCoreApi {
     pub fn list_projects(&self) -> ApiResult<Vec<ProjectDto>> {
         self.core_read()
@@ -32,6 +50,12 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         let volumes_result = self.core_write().list_volumes(&project.id);
+        // #645 评论 5504296097 Blocker 2：create_project 同时创建默认卷
+        //（volume.json），记录 project.json + 默认卷 volume.json。
+        let default_vol_id = volumes_result
+            .as_ref()
+            .ok()
+            .and_then(|vols| vols.first().map(|v| v.id.clone()));
         if let Ok(volumes) = volumes_result {
             if let Some(default_vol) = volumes.first() {
                 let vol_entry = crate::search::extractor::extract_volume_title_entry(
@@ -50,7 +74,12 @@ impl WriterCoreApi {
             }
         }
         // #645 评论 5504296097 问题3：写事务完成后记录本地历史。
-        self.record_workspace_history(&[], "create_project");
+        // Blocker 2：精确传 project.json 路径，替代全量 &[] 扫描。
+        let mut paths = vec![project_json_rel_path(&project.id)];
+        if let Some(vid) = default_vol_id {
+            paths.push(volume_json_rel_path(&project.id, &vid));
+        }
+        self.record_workspace_history(&paths, "create_project");
         Ok(project)
     }
 
@@ -117,7 +146,8 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "rename_project");
+        // #645 评论 5504296097 Blocker 2：rename 只改 project.json。
+        self.record_workspace_history(&[project_json_rel_path(project_id)], "rename_project");
         Ok(true)
     }
 
@@ -139,7 +169,10 @@ impl WriterCoreApi {
         for sm in &bound_starmaps {
             let _ = self.unbind_starmap_from_project(&sm.starmap_id);
         }
-        self.record_workspace_history(&[], "delete_project");
+        // #645 评论 5504296097 Blocker 2：删除作品移除整个 project 目录，
+        // 传 project.json 路径，record_workspace_history 会用 remove_path
+        // 从 index 移除已删除文件。
+        self.record_workspace_history(&[project_json_rel_path(project_id)], "delete_project");
         Ok(true)
     }
 
@@ -148,7 +181,12 @@ impl WriterCoreApi {
             .reorder_projects(ordered_project_ids)
             .map(|_| true)
             .map_err(crate::api::error::WriterError::from)?;
-        self.record_workspace_history(&[], "reorder_projects");
+        // #645 评论 5504296097 Blocker 2：reorder 改写每个 project.json 的 order。
+        let changed_paths: Vec<std::path::PathBuf> = ordered_project_ids
+            .iter()
+            .map(|id| project_json_rel_path(id))
+            .collect();
+        self.record_workspace_history(&changed_paths, "reorder_projects");
         Ok(true)
     }
 
@@ -175,7 +213,11 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "create_volume");
+        // #645 评论 5504296097 Blocker 2：create_volume 写 volume.json。
+        self.record_workspace_history(
+            &[volume_json_rel_path(project_id, &volume.id)],
+            "create_volume",
+        );
         Ok(volume)
     }
 
@@ -197,7 +239,11 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "rename_volume");
+        // #645 评论 5504296097 Blocker 2：rename_volume 只改 volume.json。
+        self.record_workspace_history(
+            &[volume_json_rel_path(project_id, volume_id)],
+            "rename_volume",
+        );
         Ok(true)
     }
 
@@ -211,7 +257,12 @@ impl WriterCoreApi {
         ] {
             self.remove_search_index_by_prefix(prefix);
         }
-        self.record_workspace_history(&[], "delete_volume");
+        // #645 评论 5504296097 Blocker 2：删除卷移除整个 volume 目录，
+        // 传 volume.json 路径，record_workspace_history 用 remove_path 移除。
+        self.record_workspace_history(
+            &[volume_json_rel_path(project_id, volume_id)],
+            "delete_volume",
+        );
         Ok(true)
     }
 
@@ -224,7 +275,12 @@ impl WriterCoreApi {
             .reorder_volumes(project_id, ordered_volume_ids)
             .map(|_| true)
             .map_err(crate::api::error::WriterError::from)?;
-        self.record_workspace_history(&[], "reorder_volumes");
+        // #645 评论 5504296097 Blocker 2：reorder 改写每个 volume.json 的 order。
+        let changed_paths: Vec<std::path::PathBuf> = ordered_volume_ids
+            .iter()
+            .map(|vid| volume_json_rel_path(project_id, vid))
+            .collect();
+        self.record_workspace_history(&changed_paths, "reorder_volumes");
         Ok(true)
     }
 }

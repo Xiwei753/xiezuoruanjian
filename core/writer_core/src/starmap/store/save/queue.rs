@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::path::PathBuf;
 
 use crate::error::Result;
 use crate::starmap::package_storage;
@@ -32,10 +33,11 @@ impl StarMapStore {
         clippy::too_many_arguments,
         clippy::type_complexity
     )]
-    pub fn flush_save_queue(&mut self) -> Result<()> {
+    pub fn flush_save_queue(&mut self) -> Result<Vec<PathBuf>> {
         let mut remaining: VecDeque<SaveQueueEntry> = VecDeque::new();
         let mut any_processed = false;
         let mut failed_types: Vec<String> = Vec::new();
+        let mut changed_paths: Vec<PathBuf> = Vec::new();
         while let Some(entry) = self.save_queue.pop_front() {
             let mut succeeded = true;
             any_processed = true;
@@ -44,15 +46,16 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_nodes.iter().cloned().collect();
                     for node_id in &ids {
                         if let Some(node) = self.nodes.get(node_id) {
-                            if package_storage::save_node(
+                            match package_storage::save_node(
                                 &self.app_data_root,
                                 &self.starmap_id,
                                 node,
-                            )
-                            .is_err()
-                            {
-                                succeeded = false;
-                                break;
+                            ) {
+                                Ok(rel_path) => changed_paths.push(rel_path),
+                                Err(_) => {
+                                    succeeded = false;
+                                    break;
+                                }
                             }
                         }
                         self.dirty_nodes.remove(node_id);
@@ -62,15 +65,16 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_edges.iter().cloned().collect();
                     for edge_id in &ids {
                         if let Some(edge) = self.edges.get(edge_id) {
-                            if package_storage::save_edge(
+                            match package_storage::save_edge(
                                 &self.app_data_root,
                                 &self.starmap_id,
                                 edge,
-                            )
-                            .is_err()
-                            {
-                                succeeded = false;
-                                break;
+                            ) {
+                                Ok(rel_path) => changed_paths.push(rel_path),
+                                Err(_) => {
+                                    succeeded = false;
+                                    break;
+                                }
                             }
                         }
                         self.dirty_edges.remove(edge_id);
@@ -80,15 +84,16 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_embeds.iter().cloned().collect();
                     for instance_id in &ids {
                         if let Some(embed) = self.embeds.get(instance_id) {
-                            if package_storage::save_embed(
+                            match package_storage::save_embed(
                                 &self.app_data_root,
                                 &self.starmap_id,
                                 embed,
-                            )
-                            .is_err()
-                            {
-                                succeeded = false;
-                                break;
+                            ) {
+                                Ok(rel_path) => changed_paths.push(rel_path),
+                                Err(_) => {
+                                    succeeded = false;
+                                    break;
+                                }
                             }
                         }
                         self.dirty_embeds.remove(instance_id);
@@ -98,15 +103,16 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_links.iter().cloned().collect();
                     for link_id in &ids {
                         if let Some(link) = self.links.get(link_id) {
-                            if package_storage::save_link(
+                            match package_storage::save_link(
                                 &self.app_data_root,
                                 &self.starmap_id,
                                 link,
-                            )
-                            .is_err()
-                            {
-                                succeeded = false;
-                                break;
+                            ) {
+                                Ok(rel_path) => changed_paths.push(rel_path),
+                                Err(_) => {
+                                    succeeded = false;
+                                    break;
+                                }
                             }
                         }
                         self.dirty_links.remove(link_id);
@@ -116,15 +122,16 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_hyperlinks.iter().cloned().collect();
                     for hl_id in &ids {
                         if let Some(hl) = self.hyperlinks.get(hl_id) {
-                            if package_storage::save_hyperlink(
+                            match package_storage::save_hyperlink(
                                 &self.app_data_root,
                                 &self.starmap_id,
                                 hl,
-                            )
-                            .is_err()
-                            {
-                                succeeded = false;
-                                break;
+                            ) {
+                                Ok(rel_path) => changed_paths.push(rel_path),
+                                Err(_) => {
+                                    succeeded = false;
+                                    break;
+                                }
                             }
                         }
                         self.dirty_hyperlinks.remove(hl_id);
@@ -133,14 +140,15 @@ impl StarMapStore {
                 SaveQueueEntry::Layout => {
                     if self.dirty_layout {
                         if let Some(ref layout) = self.layout {
-                            if package_storage::save_layout(
+                            match package_storage::save_layout(
                                 &self.app_data_root,
                                 &self.starmap_id,
                                 layout,
-                            )
-                            .is_err()
-                            {
-                                succeeded = false;
+                            ) {
+                                Ok(paths) => changed_paths.extend(paths),
+                                Err(_) => {
+                                    succeeded = false;
+                                }
                             }
                         }
                         if succeeded {
@@ -152,9 +160,10 @@ impl StarMapStore {
                     if self.dirty_graph_meta {
                         self.reload_graph_meta_if_stale();
                         match self.update_graph_meta_file() {
-                            Ok(written_revision) => {
+                            Ok((written_revision, rel_path)) => {
                                 self.dirty_graph_meta = false;
                                 self.package_revision = written_revision;
+                                changed_paths.push(rel_path);
                             }
                             Err(_) => {
                                 succeeded = false;
@@ -170,7 +179,8 @@ impl StarMapStore {
                             &self.starmap_id,
                             node_id,
                         ) {
-                            Ok(()) => {
+                            Ok(paths) => {
+                                changed_paths.extend(paths);
                                 self.deleted_node_ids.remove(node_id);
                             }
                             Err(e) => {
@@ -189,7 +199,8 @@ impl StarMapStore {
                             &self.starmap_id,
                             edge_id,
                         ) {
-                            Ok(()) => {
+                            Ok(paths) => {
+                                changed_paths.extend(paths);
                                 self.deleted_edge_ids.remove(edge_id);
                             }
                             Err(e) => {
@@ -208,7 +219,8 @@ impl StarMapStore {
                             &self.starmap_id,
                             instance_id,
                         ) {
-                            Ok(()) => {
+                            Ok(paths) => {
+                                changed_paths.extend(paths);
                                 self.deleted_embed_ids.remove(instance_id);
                             }
                             Err(e) => {
@@ -227,7 +239,8 @@ impl StarMapStore {
                             &self.starmap_id,
                             link_id,
                         ) {
-                            Ok(()) => {
+                            Ok(paths) => {
+                                changed_paths.extend(paths);
                                 self.deleted_link_ids.remove(link_id);
                             }
                             Err(e) => {
@@ -246,7 +259,8 @@ impl StarMapStore {
                             &self.starmap_id,
                             hl_id,
                         ) {
-                            Ok(()) => {
+                            Ok(paths) => {
+                                changed_paths.extend(paths);
                                 self.deleted_hyperlink_ids.remove(hl_id);
                             }
                             Err(e) => {
@@ -268,7 +282,8 @@ impl StarMapStore {
         let all_flushed = !self.is_dirty() && !self.dirty_graph_meta && !self.has_pending_deletes();
 
         if self.has_pending_deletes() || self.has_pending_writes() {
-            self.flush_recovery_to_disk()?;
+            let recovery_path = self.flush_recovery_to_disk()?;
+            changed_paths.push(recovery_path);
         }
 
         if any_processed && all_flushed {
@@ -287,13 +302,14 @@ impl StarMapStore {
                 .as_ref()
                 .map(|m| *m.node_kind_counts.get("Chapter").unwrap_or(&0))
                 .unwrap_or(0u32);
-            crate::starmap::update_starmap_stats(
+            let stats_paths = crate::starmap::update_starmap_stats(
                 &self.app_data_root,
                 &self.starmap_id,
                 node_count,
                 edge_count,
                 linked_chapters,
             )?;
+            changed_paths.extend(stats_paths);
         }
 
         if !failed_types.is_empty() {
@@ -303,7 +319,7 @@ impl StarMapStore {
             });
         }
 
-        Ok(())
+        Ok(changed_paths)
     }
 
     pub(in crate::starmap::store) fn record_delete_failure(
@@ -339,40 +355,54 @@ impl StarMapStore {
         clippy::too_many_arguments,
         clippy::type_complexity
     )]
-    pub fn flush(&mut self) -> Result<()> {
+    pub fn flush(&mut self) -> Result<Vec<PathBuf>> {
+        let mut changed_paths: Vec<PathBuf> = Vec::new();
+
         for node_id in &self.dirty_nodes {
             if let Some(node) = self.nodes.get(node_id) {
-                package_storage::save_node(&self.app_data_root, &self.starmap_id, node)?;
+                let rel_path =
+                    package_storage::save_node(&self.app_data_root, &self.starmap_id, node)?;
+                changed_paths.push(rel_path);
             }
         }
 
         for edge_id in &self.dirty_edges {
             if let Some(edge) = self.edges.get(edge_id) {
-                package_storage::save_edge(&self.app_data_root, &self.starmap_id, edge)?;
+                let rel_path =
+                    package_storage::save_edge(&self.app_data_root, &self.starmap_id, edge)?;
+                changed_paths.push(rel_path);
             }
         }
 
         for instance_id in &self.dirty_embeds {
             if let Some(embed) = self.embeds.get(instance_id) {
-                package_storage::save_embed(&self.app_data_root, &self.starmap_id, embed)?;
+                let rel_path =
+                    package_storage::save_embed(&self.app_data_root, &self.starmap_id, embed)?;
+                changed_paths.push(rel_path);
             }
         }
 
         for link_id in &self.dirty_links {
             if let Some(link) = self.links.get(link_id) {
-                package_storage::save_link(&self.app_data_root, &self.starmap_id, link)?;
+                let rel_path =
+                    package_storage::save_link(&self.app_data_root, &self.starmap_id, link)?;
+                changed_paths.push(rel_path);
             }
         }
 
         for hl_id in &self.dirty_hyperlinks {
             if let Some(hl) = self.hyperlinks.get(hl_id) {
-                package_storage::save_hyperlink(&self.app_data_root, &self.starmap_id, hl)?;
+                let rel_path =
+                    package_storage::save_hyperlink(&self.app_data_root, &self.starmap_id, hl)?;
+                changed_paths.push(rel_path);
             }
         }
 
         if self.dirty_layout {
             if let Some(ref layout) = self.layout {
-                package_storage::save_layout(&self.app_data_root, &self.starmap_id, layout)?;
+                let paths =
+                    package_storage::save_layout(&self.app_data_root, &self.starmap_id, layout)?;
+                changed_paths.extend(paths);
             }
         }
 
@@ -380,12 +410,14 @@ impl StarMapStore {
         for node_id in &node_ids_to_delete {
             match package_storage::delete_node_file(&self.app_data_root, &self.starmap_id, node_id)
             {
-                Ok(()) => {
+                Ok(paths) => {
+                    changed_paths.extend(paths);
                     self.deleted_node_ids.remove(node_id);
                 }
                 Err(e) => {
                     self.record_delete_failure("node", node_id, &e);
-                    self.flush_recovery_to_disk()?;
+                    let recovery_path = self.flush_recovery_to_disk()?;
+                    changed_paths.push(recovery_path);
                     return Err(e);
                 }
             }
@@ -395,12 +427,14 @@ impl StarMapStore {
         for edge_id in &edge_ids_to_delete {
             match package_storage::delete_edge_file(&self.app_data_root, &self.starmap_id, edge_id)
             {
-                Ok(()) => {
+                Ok(paths) => {
+                    changed_paths.extend(paths);
                     self.deleted_edge_ids.remove(edge_id);
                 }
                 Err(e) => {
                     self.record_delete_failure("edge", edge_id, &e);
-                    self.flush_recovery_to_disk()?;
+                    let recovery_path = self.flush_recovery_to_disk()?;
+                    changed_paths.push(recovery_path);
                     return Err(e);
                 }
             }
@@ -413,12 +447,14 @@ impl StarMapStore {
                 &self.starmap_id,
                 instance_id,
             ) {
-                Ok(()) => {
+                Ok(paths) => {
+                    changed_paths.extend(paths);
                     self.deleted_embed_ids.remove(instance_id);
                 }
                 Err(e) => {
                     self.record_delete_failure("embed", instance_id, &e);
-                    self.flush_recovery_to_disk()?;
+                    let recovery_path = self.flush_recovery_to_disk()?;
+                    changed_paths.push(recovery_path);
                     return Err(e);
                 }
             }
@@ -428,12 +464,14 @@ impl StarMapStore {
         for link_id in &link_ids_to_delete {
             match package_storage::delete_link_file(&self.app_data_root, &self.starmap_id, link_id)
             {
-                Ok(()) => {
+                Ok(paths) => {
+                    changed_paths.extend(paths);
                     self.deleted_link_ids.remove(link_id);
                 }
                 Err(e) => {
                     self.record_delete_failure("link", link_id, &e);
-                    self.flush_recovery_to_disk()?;
+                    let recovery_path = self.flush_recovery_to_disk()?;
+                    changed_paths.push(recovery_path);
                     return Err(e);
                 }
             }
@@ -446,19 +484,22 @@ impl StarMapStore {
                 &self.starmap_id,
                 hl_id,
             ) {
-                Ok(()) => {
+                Ok(paths) => {
+                    changed_paths.extend(paths);
                     self.deleted_hyperlink_ids.remove(hl_id);
                 }
                 Err(e) => {
                     self.record_delete_failure("hyperlink", hl_id, &e);
-                    self.flush_recovery_to_disk()?;
+                    let recovery_path = self.flush_recovery_to_disk()?;
+                    changed_paths.push(recovery_path);
                     return Err(e);
                 }
             }
         }
 
-        let written_revision = self.update_graph_meta_file()?;
+        let (written_revision, graph_meta_path) = self.update_graph_meta_file()?;
         self.package_revision = written_revision;
+        changed_paths.push(graph_meta_path);
 
         let node_count: u32 = self
             .graph_meta
@@ -475,13 +516,14 @@ impl StarMapStore {
             .as_ref()
             .map(|m| *m.node_kind_counts.get("Chapter").unwrap_or(&0))
             .unwrap_or(0u32);
-        crate::starmap::update_starmap_stats(
+        let stats_paths = crate::starmap::update_starmap_stats(
             &self.app_data_root,
             &self.starmap_id,
             node_count,
             edge_count,
             linked_chapters,
         )?;
+        changed_paths.extend(stats_paths);
 
         self.dirty_nodes.clear();
         self.dirty_edges.clear();
@@ -491,15 +533,19 @@ impl StarMapStore {
         self.dirty_layout = false;
         self.dirty_graph_meta = false;
 
-        self.flush_recovery_to_disk()?;
+        let recovery_path = self.flush_recovery_to_disk()?;
+        changed_paths.push(recovery_path);
 
-        Ok(())
+        Ok(changed_paths)
     }
 
-    pub fn flush_viewport(&self) -> Result<()> {
+    pub fn flush_viewport(&self) -> Result<Vec<PathBuf>> {
+        let mut changed_paths: Vec<PathBuf> = Vec::new();
         if let Some(ref viewport) = self.viewport {
-            package_storage::save_viewport(&self.app_data_root, &self.starmap_id, viewport)?;
+            let rel_path =
+                package_storage::save_viewport(&self.app_data_root, &self.starmap_id, viewport)?;
+            changed_paths.push(rel_path);
         }
-        Ok(())
+        Ok(changed_paths)
     }
 }

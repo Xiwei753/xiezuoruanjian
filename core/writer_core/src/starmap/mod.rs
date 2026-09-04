@@ -419,7 +419,7 @@ pub fn update_starmap_stats(
     node_count: u32,
     edge_count: u32,
     linked_chapter_count: u32,
-) -> Result<()> {
+) -> Result<Vec<std::path::PathBuf>> {
     let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
     meta.node_count = node_count;
     meta.edge_count = edge_count;
@@ -436,7 +436,11 @@ pub fn update_starmap_stats(
     }
     idx.updated_at = meta.updated_at;
     save_index(app_data_root, &idx)?;
-    Ok(())
+
+    Ok(vec![
+        std::path::PathBuf::from("starmaps").join(format!("{}.meta.json", starmap_id)),
+        std::path::PathBuf::from("starmaps").join("index.json"),
+    ])
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

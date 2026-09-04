@@ -175,7 +175,6 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "update_starmap_embed");
         Ok(result.into())
     }
 
@@ -190,7 +189,6 @@ impl WriterCoreApi {
             body: String::new(),
             target: None,
         });
-        self.record_workspace_history(&[], "delete_starmap_embed");
         Ok(true)
     }
 
@@ -219,7 +217,6 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "add_starmap_link");
         Ok(result.into())
     }
 
@@ -249,7 +246,6 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "update_starmap_link");
         Ok(result.into())
     }
 
@@ -263,7 +259,6 @@ impl WriterCoreApi {
             body: String::new(),
             target: None,
         });
-        self.record_workspace_history(&[], "delete_starmap_link");
         Ok(true)
     }
 
@@ -363,7 +358,6 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "create_starmap");
         Ok(result)
     }
 
@@ -403,11 +397,11 @@ impl WriterCoreApi {
         starmap_id: &str,
         layout: &crate::api::types::StarMapLayoutDto,
     ) -> ApiResult<bool> {
-        self.core_write()
+        let changed_paths = self
+            .core_write()
             .save_starmap_layout(starmap_id, &layout.clone().into())
-            .map(|_| true)
             .map_err(crate::api::error::WriterError::from)?;
-        self.record_workspace_history(&[], "save_starmap_layout");
+        self.record_workspace_history(&changed_paths, "save_starmap_layout");
         Ok(true)
     }
 
@@ -426,11 +420,11 @@ impl WriterCoreApi {
         starmap_id: &str,
         viewport: crate::api::types::StarMapViewportDto,
     ) -> ApiResult<bool> {
-        self.core_write()
+        let changed_paths = self
+            .core_write()
             .save_starmap_viewport(starmap_id, &viewport.into())
-            .map(|_| true)
             .map_err(crate::api::error::WriterError::from)?;
-        self.record_workspace_history(&[], "save_starmap_viewport");
+        self.record_workspace_history(&changed_paths, "save_starmap_viewport");
         Ok(true)
     }
 
@@ -507,7 +501,6 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "rename_starmap");
         Ok(result.into())
     }
 
@@ -523,7 +516,6 @@ impl WriterCoreApi {
         ] {
             self.remove_search_index_by_prefix(prefix);
         }
-        self.record_workspace_history(&[], "delete_starmap");
         Ok(true)
     }
 
@@ -652,7 +644,6 @@ impl WriterCoreApi {
                 });
             }
         }
-        self.record_workspace_history(&[], "bind_starmap_to_project");
         Ok(true)
     }
 
@@ -774,7 +765,6 @@ impl WriterCoreApi {
                 });
             }
         }
-        self.record_workspace_history(&[], "unbind_starmap_from_project");
         Ok(true)
     }
 
@@ -787,7 +777,6 @@ impl WriterCoreApi {
             .set_main_starmap_for_project(starmap_id, project_id)
             .map(|_| true)
             .map_err(crate::api::error::WriterError::from)?;
-        self.record_workspace_history(&[], "set_main_starmap_for_project");
         Ok(true)
     }
 
@@ -827,7 +816,6 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "create_child_starmap");
         Ok(result)
     }
 
@@ -858,7 +846,6 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "update_starmap_node");
         Ok(result.into())
     }
 
@@ -872,7 +859,6 @@ impl WriterCoreApi {
             body: String::new(),
             target: None,
         });
-        self.record_workspace_history(&[], "delete_starmap_node");
         Ok(true)
     }
 
@@ -901,7 +887,6 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "add_starmap_edge");
         Ok(result.into())
     }
 
@@ -931,7 +916,6 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "update_starmap_edge");
         Ok(result.into())
     }
 
@@ -945,7 +929,6 @@ impl WriterCoreApi {
             body: String::new(),
             target: None,
         });
-        self.record_workspace_history(&[], "delete_starmap_edge");
         Ok(true)
     }
 
@@ -990,12 +973,13 @@ impl WriterCoreApi {
             .unwrap_or_default();
 
         let core = self.core_write();
-        core.import_or_replace_starmap_package(
+        let changed_paths = core.import_or_replace_starmap_package(
             starmap_id,
             &graph.clone().into(),
             base_package_revision,
         )?;
         drop(core);
+        self.record_workspace_history(&changed_paths, "import_or_replace_starmap_package");
 
         let project_id = get_starmap_project_id(self, starmap_id);
 
@@ -1171,24 +1155,30 @@ impl WriterCoreApi {
     }
 
     pub fn flush_starmap_store(&self, starmap_id: &str) -> ApiResult<bool> {
-        self.core_write()
+        let changed_paths = self
+            .core_write()
             .flush_starmap_store(starmap_id)
-            .map(|_| true)
-            .map_err(Into::into)
+            .map_err(WriterError::from)?;
+        self.record_workspace_history(&changed_paths, "flush_starmap_store");
+        Ok(true)
     }
 
     pub fn close_starmap_store(&self, starmap_id: &str) -> ApiResult<bool> {
-        self.core_write()
+        let changed_paths = self
+            .core_write()
             .close_starmap_store(starmap_id)
-            .map(|_| true)
-            .map_err(Into::into)
+            .map_err(WriterError::from)?;
+        self.record_workspace_history(&changed_paths, "close_starmap_store");
+        Ok(true)
     }
 
     pub fn flush_all_starmap_stores(&self) -> ApiResult<bool> {
-        self.core_write()
+        let changed_paths = self
+            .core_write()
             .flush_all_starmap_stores()
-            .map(|_| true)
-            .map_err(Into::into)
+            .map_err(WriterError::from)?;
+        self.record_workspace_history(&changed_paths, "flush_all_starmap_stores");
+        Ok(true)
     }
 
     pub fn list_starmap_links(
@@ -1259,7 +1249,6 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "update_starmap_hyperlink");
         Ok(result.into())
     }
 
@@ -1278,7 +1267,6 @@ impl WriterCoreApi {
             body: String::new(),
             target: None,
         });
-        self.record_workspace_history(&[], "delete_starmap_hyperlink");
         Ok(true)
     }
 

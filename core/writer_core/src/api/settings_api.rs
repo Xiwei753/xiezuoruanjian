@@ -22,7 +22,12 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "save_local_settings");
+        // #645 评论 5504296097 Blocker 2：local settings 持久化在
+        // <app_data_root>/settings.local.json。
+        self.record_workspace_history(
+            &[std::path::PathBuf::from("settings.local.json")],
+            "save_local_settings",
+        );
         Ok(true)
     }
 
@@ -46,7 +51,12 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "save_syncable_settings");
+        // #645 评论 5504296097 Blocker 2：syncable settings 持久化在
+        // <app_data_root>/settings.sync.json。
+        self.record_workspace_history(
+            &[std::path::PathBuf::from("settings.sync.json")],
+            "save_syncable_settings",
+        );
         Ok(true)
     }
 

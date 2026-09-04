@@ -1,6 +1,7 @@
 use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
 use crate::api::error::WriterError;
+use std::path::PathBuf;
 
 fn get_chapter_title(
     api: &WriterCoreApi,
@@ -14,6 +15,30 @@ fn get_chapter_title(
         .and_then(|chapters| chapters.into_iter().find(|c| c.id == chapter_id))
         .map(|c| c.title)
         .unwrap_or_default()
+}
+
+/// #645 评论 5504296097 Blocker 2：构造章节的 workspace-relative paths。
+///
+/// 章节目录布局：`projects/{project_id}/volumes/{volume_id}/chapters/{chapter_id}/`，
+/// 内含 `chapter.meta.json`（元数据）和 `chapter.md`（正文）。
+fn chapter_meta_rel_path(project_id: &str, volume_id: &str, chapter_id: &str) -> PathBuf {
+    PathBuf::from("projects")
+        .join(project_id)
+        .join("volumes")
+        .join(volume_id)
+        .join("chapters")
+        .join(chapter_id)
+        .join("chapter.meta.json")
+}
+
+fn chapter_md_rel_path(project_id: &str, volume_id: &str, chapter_id: &str) -> PathBuf {
+    PathBuf::from("projects")
+        .join(project_id)
+        .join("volumes")
+        .join(volume_id)
+        .join("chapters")
+        .join(chapter_id)
+        .join("chapter.md")
 }
 
 /// 章节 API — 跨平台章节 CRUD 契约。
@@ -60,7 +85,10 @@ impl WriterCoreApi {
             body: title_entry.body.clone(),
             target: Some(title_entry.target.clone()),
         });
-        self.record_workspace_history(&[], "create_chapter");
+        self.record_workspace_history(
+            &[chapter_meta_rel_path(project_id, volume_id, &chapter.id)],
+            "create_chapter",
+        );
         Ok(chapter)
     }
 
@@ -144,7 +172,10 @@ impl WriterCoreApi {
                 });
             }
         }
-        self.record_workspace_history(&[], "rename_chapter");
+        self.record_workspace_history(
+            &[chapter_meta_rel_path(project_id, volume_id, chapter_id)],
+            "rename_chapter",
+        );
         Ok(true)
     }
 
@@ -171,7 +202,16 @@ impl WriterCoreApi {
                 target: None,
             });
         }
-        self.record_workspace_history(&[], "delete_chapter");
+        // #645 评论 5504296097 Blocker 2：删除章节会移除整个 chapter 目录，
+        // 传 chapter.meta.json + chapter.md 路径，record_workspace_history
+        // 会用 remove_path 从 index 移除已删除文件。
+        self.record_workspace_history(
+            &[
+                chapter_meta_rel_path(project_id, volume_id, chapter_id),
+                chapter_md_rel_path(project_id, volume_id, chapter_id),
+            ],
+            "delete_chapter",
+        );
         Ok(true)
     }
 
@@ -186,7 +226,13 @@ impl WriterCoreApi {
             .reorder_chapters(project_id, volume_id, ordered_chapter_ids)
             .map(|_| true)
             .map_err(crate::api::error::WriterError::from)?;
-        self.record_workspace_history(&[], "reorder_chapters");
+        // #645 评论 5504296097 Blocker 2：reorder 改写每个章节的 chapter.meta.json
+        //（order 字段），收集所有被改 meta 的章节路径。
+        let changed_paths: Vec<PathBuf> = ordered_chapter_ids
+            .iter()
+            .map(|cid| chapter_meta_rel_path(project_id, volume_id, cid))
+            .collect();
+        self.record_workspace_history(&changed_paths, "reorder_chapters");
         Ok(true)
     }
 
@@ -227,7 +273,15 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "save_chapter_content");
+        // #645 评论 5504296097 Blocker 2：正文保存同时写 chapter.md 和
+        // chapter.meta.json（word_count/hash/updated_at），传这两个路径。
+        self.record_workspace_history(
+            &[
+                chapter_md_rel_path(project_id, volume_id, chapter_id),
+                chapter_meta_rel_path(project_id, volume_id, chapter_id),
+            ],
+            "save_chapter_content",
+        );
         Ok(receipt)
     }
 
@@ -262,7 +316,15 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "save_chapter_content");
+        // #645 评论 5504296097 Blocker 2：同 save_chapter_content，写 chapter.md +
+        // chapter.meta.json。
+        self.record_workspace_history(
+            &[
+                chapter_md_rel_path(project_id, volume_id, chapter_id),
+                chapter_meta_rel_path(project_id, volume_id, chapter_id),
+            ],
+            "save_chapter_content",
+        );
         Ok(receipt)
     }
 
@@ -285,7 +347,14 @@ impl WriterCoreApi {
             body: String::new(),
             target: None,
         });
-        self.record_workspace_history(&[], "clear_chapter_content");
+        // #645 评论 5504296097 Blocker 2：清空正文写 chapter.md（空）+ chapter.meta.json。
+        self.record_workspace_history(
+            &[
+                chapter_md_rel_path(project_id, volume_id, chapter_id),
+                chapter_meta_rel_path(project_id, volume_id, chapter_id),
+            ],
+            "clear_chapter_content",
+        );
         Ok(receipt)
     }
 
@@ -311,7 +380,12 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_history(&[], "update_chapter_note");
+        // #645 评论 5504296097 Blocker 2：note 字段存在 chapter.meta.json，
+        // 只改 meta。
+        self.record_workspace_history(
+            &[chapter_meta_rel_path(project_id, volume_id, chapter_id)],
+            "update_chapter_note",
+        );
         Ok(true)
     }
 }

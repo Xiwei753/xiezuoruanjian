@@ -49,7 +49,13 @@ impl WriterCoreApi {
             .save_sync_config(&config.into())
             .map(|_| true)
             .map_err(crate::api::error::WriterError::from)?;
-        self.record_workspace_history(&[], "save_sync_config");
+        // #645 评论 5504296097 Blocker 2：精确传实际落盘路径，
+        // 替代全量 &[] 扫描。sync config 持久化在
+        // <app_data_root>/app-meta/sync/config.local.json。
+        self.record_workspace_history(
+            &[std::path::PathBuf::from("app-meta/sync/config.local.json")],
+            "save_sync_config",
+        );
         Ok(true)
     }
 
@@ -67,13 +73,16 @@ impl WriterCoreApi {
     }
 
     /// 保存全局同步密钥。成功返回 true。
+    ///
+    /// #645 评论 5504296097 Blocker 1：凭据写入根本不是历史内容，
+    /// 不调用 `record_workspace_history`。凭据路径由
+    /// [`crate::storage::workspace_paths::is_workspace_secret_path`]
+    /// 在底层统一排除，永不进入 history change set。
     pub fn save_sync_secrets(&self, secrets: SyncSecretsDto) -> ApiResult<bool> {
         self.core_write()
             .save_sync_secrets(&secrets.into())
             .map(|_| true)
-            .map_err(crate::api::error::WriterError::from)?;
-        self.record_workspace_history(&[], "save_sync_secrets");
-        Ok(true)
+            .map_err(crate::api::error::WriterError::from)
     }
 
     /// #592 五 / #644 评论 5462823517 第1节：设置进程级 secrets override。
@@ -140,7 +149,13 @@ impl WriterCoreApi {
         self.core_write()
             .save_app_sync_state(&state.into())
             .map_err(crate::api::error::WriterError::from)?;
-        self.record_workspace_history(&[], "save_app_sync_state");
+        // #645 评论 5504296097 Blocker 2：精确传实际落盘路径。
+        // App target 同步状态持久化在
+        // <app_data_root>/app-meta/sync/state.local.json。
+        self.record_workspace_history(
+            &[std::path::PathBuf::from("app-meta/sync/state.local.json")],
+            "save_app_sync_state",
+        );
         Ok(())
     }
 
@@ -275,14 +290,14 @@ impl WriterCoreApi {
         let transfer_result = crate::sync::full_sync::run_transfer(provider.as_ref(), &plan);
 
         // Phase 4: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引、清理 staging。
-        let result = {
+        let (result, committed_paths) = {
             let core = self.core_write();
             core.commit_full_sync(transfer_result, staging_runs)
         };
 
-        // #645 评论 5504296097 问题3：同步 Commit 阶段完成后记录本地历史。
-        // 全量同步可能写回多个 target 的文件，用全量扫描模式（&[]）。
-        self.record_workspace_history(&[], "full_sync_commit");
+        // #645 评论 5504296097 Blocker 2：用 commit 阶段返回的 committed_paths
+        // 精确 stage，替代全量 &[] 扫描。committed_paths 是 workspace-relative paths。
+        self.record_workspace_history(&committed_paths, "full_sync_commit");
 
         Ok(result.into())
     }

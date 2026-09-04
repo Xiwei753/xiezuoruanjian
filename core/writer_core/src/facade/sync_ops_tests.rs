@@ -150,10 +150,13 @@ fn aggregate_with_outcomes(
             }
         })
         .collect();
+    // #645 评论 5504296097 Blocker 2：commit_full_sync 现在返回
+    // (FullSyncResult, committed_paths)，聚合测试只关心 FullSyncResult。
     core.commit_full_sync(
         crate::sync::full_sync::FullSyncTransferResult { targets },
         Vec::new(),
     )
+    .0
 }
 
 fn test_config() -> SyncConfig {

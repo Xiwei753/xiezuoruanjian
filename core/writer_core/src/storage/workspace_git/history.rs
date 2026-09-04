@@ -255,7 +255,11 @@ fn stage_all_with_excludes(repo: &git2::Repository, index: &mut git2::Index) -> 
         .collect();
     for rel in tracked_paths {
         if !is_workspace_history_path(&rel) {
-            // 内部路径不参与历史，跳过（也不需要 remove）。
+            // #645 评论 5504296097 Blocker 1：规则升级后，旧版本误跟踪的
+            // 内部文件（如 secrets.local.json）从新 HEAD tree 里移除。
+            // 不能只跳过——跳过会让旧 tracked 条目留在 index 里，凭据继续
+            // 出现在后续 commit 的 tree 中。
+            index_remove_path(index, &rel)?;
             continue;
         }
         let abs = workdir.join(&rel);

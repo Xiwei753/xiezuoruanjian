@@ -1,4 +1,38 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// #645 评论 5504296097 Blocker 2：把 target-relative `rel_path` 转成
+/// workspace-relative path，供 `record_workspace_history` 精确 stage。
+///
+/// - App target：`live_root = app_data_root`，`rel_path` 已是 workspace-relative。
+/// - Project target：`live_root = projects_root/<project_id>`，
+///   workspace-relative = `projects/<project_id>/<rel_path>`。
+///
+/// `target_kind` / `project_id` 来自 `TargetSyncResult`，与 staging_runs
+/// 按索引对应。未知 target_kind 时退化为直接返回 `rel_path`（保守不丢路径）。
+fn to_workspace_rel_path(target_kind: &str, project_id: Option<&str>, rel_path: &Path) -> PathBuf {
+    if target_kind == "project" {
+        if let Some(pid) = project_id {
+            return PathBuf::from("projects").join(pid).join(rel_path);
+        }
+    }
+    PathBuf::from(rel_path)
+}
+
+/// 收集一批 `CommitAction` 的 rel_path，转成 workspace-relative 后追加到 `out`。
+fn collect_action_paths(
+    target_kind: &str,
+    project_id: Option<&str>,
+    actions: &[crate::sync::staging::CommitAction],
+    out: &mut Vec<PathBuf>,
+) {
+    for action in actions {
+        let rel = match action {
+            crate::sync::staging::CommitAction::Apply { rel_path, .. } => rel_path,
+            crate::sync::staging::CommitAction::Delete { rel_path } => rel_path,
+        };
+        out.push(to_workspace_rel_path(target_kind, project_id, rel));
+    }
+}
 
 /// 将 commit plan 中的 Apply/Delete 变更通过 SaveTransaction 写回 live root。
 ///
@@ -56,6 +90,10 @@ pub(crate) enum TargetCommitResult {
 pub(crate) struct StagingCommitOutcome {
     pub(crate) target_results: Vec<TargetCommitResult>,
     pub(crate) target_conflicts: Vec<Vec<crate::sync::staging::StagingConflict>>,
+    /// #645 评论 5504296097 Blocker 2：本次 commit 真正落盘（Apply/Delete）的
+    /// workspace-relative paths。供 `record_workspace_history` 精确 stage，
+    /// 替代全量 `&[]` 扫描。
+    pub(crate) committed_paths: Vec<PathBuf>,
 }
 
 pub(crate) enum TargetCommitMode {
@@ -94,6 +132,7 @@ pub(crate) fn apply_staging_commits_for_targets(
 ) -> StagingCommitOutcome {
     let mut target_conflicts: Vec<Vec<crate::sync::staging::StagingConflict>> = Vec::new();
     let mut target_results: Vec<TargetCommitResult> = Vec::new();
+    let mut committed_paths: Vec<PathBuf> = Vec::new();
 
     for (idx, run) in staging_runs.iter().enumerate() {
         let mode = if let Some(target) = transfer_targets.get(idx) {
@@ -147,6 +186,24 @@ pub(crate) fn apply_staging_commits_for_targets(
 
                 match tx.finish() {
                     Ok(()) => {
+                        // #645 评论 5504296097 Blocker 2：收集本 target 真正
+                        // Apply/Delete 的 rel_path，转成 workspace-relative。
+                        let (kind, pid) = transfer_targets
+                            .get(idx)
+                            .map(|t| (t.target_kind.as_str(), t.project_id.as_deref()))
+                            .unwrap_or(("", None));
+                        collect_action_paths(
+                            kind,
+                            pid,
+                            &plan.content_actions,
+                            &mut committed_paths,
+                        );
+                        collect_action_paths(
+                            kind,
+                            pid,
+                            &plan.engine_state_actions,
+                            &mut committed_paths,
+                        );
                         target_conflicts.push(plan.conflict);
                         target_results.push(TargetCommitResult::Ok);
                         run.cleanup();
@@ -213,6 +270,14 @@ pub(crate) fn apply_staging_commits_for_targets(
                     run.cleanup();
                     continue;
                 }
+                // #645 评论 5504296097 Blocker 2：ConflictMetadataOnly 也落盘了
+                // safe_content_actions + engine_state_actions，收集它们的 rel_path。
+                let (kind, pid) = transfer_targets
+                    .get(idx)
+                    .map(|t| (t.target_kind.as_str(), t.project_id.as_deref()))
+                    .unwrap_or(("", None));
+                collect_action_paths(kind, pid, &safe_content_actions, &mut committed_paths);
+                collect_action_paths(kind, pid, &plan.engine_state_actions, &mut committed_paths);
                 target_conflicts.push(plan.conflict);
                 target_results.push(TargetCommitResult::Ok);
                 run.cleanup();
@@ -223,5 +288,6 @@ pub(crate) fn apply_staging_commits_for_targets(
     StagingCommitOutcome {
         target_results,
         target_conflicts,
+        committed_paths,
     }
 }
