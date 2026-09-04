@@ -22,6 +22,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.record_workspace_history(&[], "save_local_settings");
         Ok(true)
     }
 
@@ -45,6 +46,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.record_workspace_history(&[], "save_syncable_settings");
         Ok(true)
     }
 

@@ -9,6 +9,7 @@ pub mod transaction;
 pub mod git_repo_layout;
 pub mod git_runtime;
 pub mod workspace_git;
+pub mod workspace_paths;
 
 pub use git_repo_layout::*;
 pub use git_runtime::*;
@@ -16,3 +17,4 @@ pub use journal::*;
 pub use migration::*;
 pub use transaction::*;
 pub use workspace_git::*;
+pub use workspace_paths::*;

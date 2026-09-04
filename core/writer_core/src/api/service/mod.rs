@@ -23,18 +23,33 @@ pub struct WriterCoreApi {
     /// 会修改本地文件或 Core 运行状态的操作用 [Self::core_write]。
     /// 全量同步三段式（Prepare/Transfer/Commit）在 Transfer 阶段完全不持锁。
     core_instance: std::sync::RwLock<WriterCore>,
+    /// #645 评论 5504296097 问题3：本地 workspace Git 布局。
+    ///
+    /// 持有本地 `GitRepoLayout`，让写事务完成后能调
+    /// [`crate::storage::workspace_git::record_workspace_changes`] 记录本地历史。
+    /// 它只属于本地存储层，不进入 `FullSyncPlan`。
+    ///
+    /// 用 `RwLock` 而非直接字段：`WriterCoreApi` 各构造函数只接收
+    /// `app_data_root`/`projects_root`，无法在构造时知道 Android 外置 git_dir。
+    /// `bootstrap.rs` 在 `ensure_workspace_git` 后用
+    /// [`Self::set_workspace_git_layout`] 注入正确布局，覆盖默认标准布局。
+    workspace_git_layout: std::sync::RwLock<crate::storage::git_repo_layout::GitRepoLayout>,
 }
 
 impl WriterCoreApi {
     pub fn new<P1: AsRef<Path>, P2: AsRef<Path>>(app_data_root: P1, projects_root: P2) -> Self {
+        let app_data_root_buf = app_data_root.as_ref().to_path_buf();
         let core = WriterCore::new(&app_data_root, &projects_root);
         Self {
-            app_data_root: app_data_root.as_ref().to_path_buf(),
+            app_data_root: app_data_root_buf.clone(),
             projects_root: projects_root.as_ref().to_path_buf(),
             sync_transport: None,
             secure_storage: None,
             secrets_override: std::sync::Mutex::new(None),
             core_instance: std::sync::RwLock::new(core),
+            workspace_git_layout: std::sync::RwLock::new(
+                crate::storage::git_repo_layout::GitRepoLayout::new(app_data_root_buf),
+            ),
         }
     }
 
@@ -43,15 +58,19 @@ impl WriterCoreApi {
         projects_root: P2,
         transport_factory: writer_platform_api::SyncTransportFactory,
     ) -> Self {
+        let app_data_root_buf = app_data_root.as_ref().to_path_buf();
         let mut core = WriterCore::new(&app_data_root, &projects_root);
         core.sync_transport = Some(transport_factory.clone());
         Self {
-            app_data_root: app_data_root.as_ref().to_path_buf(),
+            app_data_root: app_data_root_buf.clone(),
             projects_root: projects_root.as_ref().to_path_buf(),
             sync_transport: Some(transport_factory),
             secure_storage: None,
             secrets_override: std::sync::Mutex::new(None),
             core_instance: std::sync::RwLock::new(core),
+            workspace_git_layout: std::sync::RwLock::new(
+                crate::storage::git_repo_layout::GitRepoLayout::new(app_data_root_buf),
+            ),
         }
     }
 
@@ -61,6 +80,7 @@ impl WriterCoreApi {
         sync_transport_factory: Option<writer_platform_api::SyncTransportFactory>,
         secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
     ) -> Self {
+        let app_data_root_buf = app_data_root.as_ref().to_path_buf();
         let mut core = WriterCore::new(&app_data_root, &projects_root);
         core.sync_transport = sync_transport_factory.clone();
         // #592 五：secure storage 必须注入 facade，load/save_sync_secrets 与
@@ -68,12 +88,64 @@ impl WriterCoreApi {
         // WriterCoreApi 上，facade 侧永远走文件路径。
         core.secure_storage = secure_storage.clone();
         Self {
-            app_data_root: app_data_root.as_ref().to_path_buf(),
+            app_data_root: app_data_root_buf.clone(),
             projects_root: projects_root.as_ref().to_path_buf(),
             sync_transport: sync_transport_factory,
             secure_storage,
             secrets_override: std::sync::Mutex::new(None),
             core_instance: std::sync::RwLock::new(core),
+            workspace_git_layout: std::sync::RwLock::new(
+                crate::storage::git_repo_layout::GitRepoLayout::new(app_data_root_buf),
+            ),
+        }
+    }
+
+    /// #645 评论 5504296097 问题3：注入 workspace Git 布局。
+    ///
+    /// `bootstrap.rs` 在 `ensure_workspace_git` 后调用本方法，把 Android 外置
+    /// git_dir 或标准布局注入 API 层。默认构造时已用标准布局，本方法仅用于
+    /// 覆盖成 Android 外置布局。
+    pub(crate) fn set_workspace_git_layout(
+        &self,
+        layout: crate::storage::git_repo_layout::GitRepoLayout,
+    ) {
+        if let Ok(mut guard) = self.workspace_git_layout.write() {
+            *guard = layout;
+        }
+    }
+
+    /// #645 评论 5504296097 问题3：在写事务完成后记录本地历史。
+    ///
+    /// `paths` 为 workspace-relative paths；传 `&[]` 走全量扫描模式。
+    /// 失败时 `log::warn` 但不阻断主操作——本地历史是 best-effort，
+    /// 不应让用户写正文因为 Git 失败而失败。
+    pub(crate) fn record_workspace_history(&self, paths: &[PathBuf], message: &str) {
+        let layout_guard = match self.workspace_git_layout.read() {
+            Ok(g) => g,
+            Err(_) => {
+                log::warn!("record_workspace_history: layout lock poisoned, skipping");
+                return;
+            }
+        };
+        match crate::storage::workspace_git::record_workspace_changes(&layout_guard, paths, message)
+        {
+            Ok(result) => {
+                if result.oid.is_some() {
+                    log::debug!(
+                        "record_workspace_history: committed {} files ({} staged)",
+                        message,
+                        result.staged_count
+                    );
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "record_workspace_history: failed to record ({}): {} — \
+                     local history is best-effort, main operation unaffected",
+                    message,
+                    e
+                );
+            }
         }
     }
 

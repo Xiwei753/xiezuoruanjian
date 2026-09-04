@@ -60,6 +60,7 @@ impl WriterCoreApi {
             body: title_entry.body.clone(),
             target: Some(title_entry.target.clone()),
         });
+        self.record_workspace_history(&[], "create_chapter");
         Ok(chapter)
     }
 
@@ -143,6 +144,7 @@ impl WriterCoreApi {
                 });
             }
         }
+        self.record_workspace_history(&[], "rename_chapter");
         Ok(true)
     }
 
@@ -169,6 +171,7 @@ impl WriterCoreApi {
                 target: None,
             });
         }
+        self.record_workspace_history(&[], "delete_chapter");
         Ok(true)
     }
 
@@ -182,7 +185,9 @@ impl WriterCoreApi {
         self.core_write()
             .reorder_chapters(project_id, volume_id, ordered_chapter_ids)
             .map(|_| true)
-            .map_err(Into::into)
+            .map_err(crate::api::error::WriterError::from)?;
+        self.record_workspace_history(&[], "reorder_chapters");
+        Ok(true)
     }
 
     /// 打开章节，返回正文内容和元数据。
@@ -222,6 +227,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.record_workspace_history(&[], "save_chapter_content");
         Ok(receipt)
     }
 
@@ -256,6 +262,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.record_workspace_history(&[], "save_chapter_content");
         Ok(receipt)
     }
 
@@ -278,6 +285,7 @@ impl WriterCoreApi {
             body: String::new(),
             target: None,
         });
+        self.record_workspace_history(&[], "clear_chapter_content");
         Ok(receipt)
     }
 
@@ -303,6 +311,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.record_workspace_history(&[], "update_chapter_note");
         Ok(true)
     }
 }

@@ -2,115 +2,22 @@ use std::fs;
 use std::path::Path;
 
 use super::model::*;
-use crate::error::Result;
-
-/// 在真正进入 rollback 路径之前，先检查所有 BackupEntry::RestoreFile 是否可读。
-///
-/// 必须在任何 live 文件修改之前调用。一个不满足就不能碰 live。
-#[cfg(test)]
-fn preflight_backup_entries(tx_dir: &Path, manifest: &TransactionManifest) -> Result<()> {
-    let backup_dir = tx_dir.join("backup");
-    for entry in &manifest.backup_entries {
-        if let BackupEntry::RestoreFile {
-            target_relative,
-            backup_filename,
-        } = entry
-        {
-            let backup_path = backup_dir.join(backup_filename);
-            match std::fs::File::open(&backup_path) {
-                Ok(file) => {
-                    drop(file);
-                }
-                Err(e) => {
-                    return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "preflight_backup_entries: backup file not readable \
-                         for RestoreFile {}: {}: {}",
-                        target_relative,
-                        backup_path.display(),
-                        e
-                    ))));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// 回滚文件事务 — 恢复 backup 文件到目标路径。
-///
-/// 满足：
-/// - 文件 rollback 成功 → phase=RolledBack → cleanup
-/// - 任意一步失败 → 返回 Err → 保留 manifest + backup + transaction 目录
-#[cfg(test)]
-#[allow(clippy::too_many_lines, clippy::excessive_nesting)]
-fn rollback_file_transaction(
-    tx_dir: &Path,
-    target_root: &Path,
-    manifest: &TransactionManifest,
-) -> Result<()> {
-    preflight_backup_entries(tx_dir, manifest)?;
-
-    let backup_dir = tx_dir.join("backup");
-    for entry in &manifest.backup_entries {
-        match entry {
-            BackupEntry::RestoreFile {
-                target_relative,
-                backup_filename,
-            } => {
-                let target_path = target_root.join(target_relative);
-                let backup_path = backup_dir.join(backup_filename);
-                if !backup_path.exists() {
-                    return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "rollback_file_transaction: backup file missing for RestoreFile {}: {}",
-                        target_relative,
-                        backup_path.display()
-                    ))));
-                }
-                if let Some(parent) = target_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                crate::storage::durable_copy_file(&backup_path, &target_path)?;
-            }
-            BackupEntry::RemoveCreated { target_relative } => {
-                let target_path = target_root.join(target_relative);
-                if target_path.exists() {
-                    fs::remove_file(&target_path)?;
-                    crate::storage::sync_parent(&target_path)?;
-                }
-            }
-        }
-    }
-
-    let manifest_path = tx_dir.join(MANIFEST_FILENAME);
-    write_manifest_phase_static(&manifest_path, TransactionPhase::RolledBack, manifest)?;
-
-    fs::remove_dir_all(tx_dir)?;
-
-    Ok(())
-}
-
-/// 静态版本的 manifest phase 更新，供恢复流程使用。
-#[cfg(test)]
-fn write_manifest_phase_static(
-    manifest_path: &Path,
-    phase: TransactionPhase,
-    existing: &TransactionManifest,
-) -> Result<()> {
-    let mut manifest = existing.clone();
-    manifest.phase = phase;
-    let json = serde_json::to_string_pretty(&manifest)?;
-    crate::storage::atomic_write_string(manifest_path, &json)?;
-    Ok(())
-}
 
 /// 扫描事务目录，恢复未完成的事务。
 ///
 /// 判定逻辑：
 /// - manifest 存在且 phase 为 `FilesCommitted`/`Finished`/`RolledBack` → 清理目录
-/// - manifest 存在且 phase 为 `FilesCommittedPendingGit` → 旧遗留，直接回滚
 /// - manifest 存在且 phase 为 `Prepared` → 尝试将暂存文件 rename 到目标
 /// - 旧格式：`committed` 标记存在 → 清理目录（向后兼容）
 /// - 两者都不存在 → 无效目录，清理
+///
+/// #645 评论 5504296097 问题5(b)：`FilesCommittedPendingGit` 变体已移除。
+/// 旧 manifest 中 `"files_committed_pending_git"` 在反序列化时映射到
+/// `FilesCommitted`，因此会走 `FilesCommitted` 分支（清理目录）。
+/// 这与之前"直接 rollback"不同，但新代码不再产生 `FilesCommittedPendingGit`，
+/// 旧遗留事务的文件已 rename 完成（phase=FilesCommittedPendingGit 表示
+/// 文件已 commit 但 Git finalize 未完成），清理目录是安全的行为——
+/// 文件已在 live，无需 rollback。
 // TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[cfg(test)]
 #[allow(
@@ -179,23 +86,6 @@ pub fn recover_pending_transactions(target_root: &Path) -> Vec<TransactionRecove
                 | TransactionPhase::Finished
                 | TransactionPhase::RolledBack => {
                     let _ = fs::remove_dir_all(&tx_dir);
-                    continue;
-                }
-                TransactionPhase::FilesCommittedPendingGit => {
-                    // #645 评论 5504296097 第4点：旧遗留阶段，新代码不再产生。
-                    // 直接 rollback — 文件已 rename，需要恢复到事务前状态。
-                    log::warn!(
-                        "[transaction] found legacy FilesCommittedPendingGit tx={}, rolling back",
-                        manifest.transaction_id
-                    );
-                    if let Err(e) = rollback_file_transaction(&tx_dir, target_root, &manifest) {
-                        log::warn!(
-                            "[transaction] rollback_file_transaction failed for tx={}: {}",
-                            manifest.transaction_id,
-                            e
-                        );
-                        continue;
-                    }
                     continue;
                 }
                 TransactionPhase::Prepared => {

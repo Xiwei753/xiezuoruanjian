@@ -78,7 +78,7 @@ pub(crate) fn try_open_repo(path: &Path) -> crate::Result<RepoOpenResult> {
 ///
 /// #645 评论 5504296097 第2点：公开入口统一走 `workspace_git::ensure_workspace_repo()`，
 /// 本函数是内部实现，由 `workspace_git::repo` 委托调用。
-pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<()> {
+pub(crate) fn ensure_repo_layout_initialized(layout: &GitRepoLayout) -> crate::Result<()> {
     crate::storage::git_runtime::ensure_initialized()?;
 
     migration::resume_layout_migration(layout)?;
@@ -99,7 +99,7 @@ pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<
         }
         RepoOpenResult::Corrupt(e) => {
             return Err(crate::Error::Io(std::io::Error::other(format!(
-                "ensure_project_repo_with_layout: git_dir exists but is corrupt: {}: {}",
+                "ensure_repo_layout_initialized: git_dir exists but is corrupt: {}: {}",
                 layout.git_dir.display(),
                 e,
             ))));
@@ -122,7 +122,7 @@ pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<
             }
             RepoOpenResult::Corrupt(e) => {
                 return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "ensure_project_repo_with_layout: embedded .git exists but is corrupt: {}",
+                    "ensure_repo_layout_initialized: embedded .git exists but is corrupt: {}",
                     e,
                 ))));
             }
@@ -139,14 +139,14 @@ pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<
         opts.no_dotgit_dir(true);
         git2::Repository::init_opts(&layout.git_dir, &opts).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
-                "ensure_project_repo_with_layout: init_opts({}): {}",
+                "ensure_repo_layout_initialized: init_opts({}): {}",
                 layout.git_dir.display(),
                 e,
             )))
         })?;
         let repo = git2::Repository::open(&layout.git_dir).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
-                "ensure_project_repo_with_layout: open after init({}): {}",
+                "ensure_repo_layout_initialized: open after init({}): {}",
                 layout.git_dir.display(),
                 e,
             )))
@@ -154,14 +154,14 @@ pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<
         repo.set_workdir(&layout.worktree_root, false)
             .map_err(|e| {
                 crate::Error::Io(std::io::Error::other(format!(
-                    "ensure_project_repo_with_layout: set_workdir({}): {}",
+                    "ensure_repo_layout_initialized: set_workdir({}): {}",
                     layout.worktree_root.display(),
                     e,
                 )))
             })?;
         let mut config = repo.config().map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
-                "ensure_project_repo_with_layout: config({}): {}",
+                "ensure_repo_layout_initialized: config({}): {}",
                 layout.git_dir.display(),
                 e,
             )))
@@ -170,7 +170,7 @@ pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<
             .set_str("core.worktree", &layout.worktree_root.to_string_lossy())
             .map_err(|e| {
                 crate::Error::Io(std::io::Error::other(format!(
-                    "ensure_project_repo_with_layout: set_str core.worktree({}): {}",
+                    "ensure_repo_layout_initialized: set_str core.worktree({}): {}",
                     layout.git_dir.display(),
                     e,
                 )))
@@ -178,7 +178,7 @@ pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<
     } else {
         git2::Repository::init(&layout.worktree_root).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
-                "ensure_project_repo_with_layout: init({}): {}",
+                "ensure_repo_layout_initialized: init({}): {}",
                 layout.worktree_root.display(),
                 e,
             )))

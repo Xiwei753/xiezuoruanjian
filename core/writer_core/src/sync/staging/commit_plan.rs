@@ -67,35 +67,12 @@ pub(crate) enum StagingCommitClass {
 
 /// 判断路径是否为内部 Git 工件（不应被当成用户内容同步）。
 ///
-/// 统一过滤以下模式：
-/// - `.git`（精确匹配）：Git 仓库元数据目录或 gitlink 文件；
-/// - `.git/`（前缀匹配）：Git 仓库元数据子目录；
-/// - `.git.sujian-tmp-*`：迁移/恢复过程中的临时目录；
-/// - `.git.sujian-migrate-source-*`：迁移崩溃后残留的源仓库快照。
+/// #645 评论 5504296097 问题1：规则统一到
+/// [`crate::storage::workspace_paths::is_internal_git_artifact`]，
+/// 本函数保留为薄包装（sync 内部仍在用），不再持有规则副本，
+/// 消除 `storage/workspace_git -> sync/staging` 反向依赖。
 pub(crate) fn is_internal_git_artifact(path: &str) -> bool {
-    // Normalize backslashes to forward slashes for consistent matching on Windows
-    let normalized = if path.contains('\\') {
-        path.replace('\\', "/")
-    } else {
-        path.to_string()
-    };
-
-    // .git (exact) or .git/* (subdirectory)
-    if normalized == ".git" || normalized.starts_with(".git/") {
-        return true;
-    }
-
-    // .git.sujian-tmp-* (migration temp directory)
-    if normalized.starts_with(".git.sujian-tmp-") {
-        return true;
-    }
-
-    // .git.sujian-migrate-source-* (migration crash residual)
-    if normalized.starts_with(".git.sujian-migrate-source-") {
-        return true;
-    }
-
-    false
+    crate::storage::workspace_paths::is_internal_git_artifact(path)
 }
 
 /// #644 评论 5474166587 问题1：按 staging commit 写回语义分类。

@@ -93,7 +93,7 @@ fn adversarial_prepared_true_true_missing_returns_err() {
         worktree_root.clone(),
         git_dir.clone(),
     );
-    let result = writer_core::storage::git_repo_layout::ensure_project_repo_with_layout(&layout);
+    let result = writer_core::storage::workspace_git::ensure_workspace_repo(&layout);
 
     eprintln!(
         "[ADV-TTM] (true,true,Missing) result: {:?}",
@@ -150,7 +150,7 @@ fn adversarial_prepared_false_false_missing_returns_err() {
         worktree_root.clone(),
         git_dir.clone(),
     );
-    let result = writer_core::storage::git_repo_layout::ensure_project_repo_with_layout(&layout);
+    let result = writer_core::storage::workspace_git::ensure_workspace_repo(&layout);
 
     eprintln!(
         "[ADV-FFM] (false,false,Missing) result: {:?}",
@@ -214,7 +214,7 @@ fn adversarial_prepared_corrupt_target_returns_err() {
         worktree_root.clone(),
         git_dir.clone(),
     );
-    let result = writer_core::storage::git_repo_layout::ensure_project_repo_with_layout(&layout);
+    let result = writer_core::storage::workspace_git::ensure_workspace_repo(&layout);
 
     eprintln!(
         "[ADV-CORR] (_,_,Corrupt) result: {:?}",

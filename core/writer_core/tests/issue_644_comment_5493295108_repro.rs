@@ -216,7 +216,7 @@ fn problem3_journal_state_machine_preserves_later_created_git() {
         worktree_root.clone(),
         private_git_dir.clone(),
     );
-    writer_core::storage::git_repo_layout::ensure_project_repo_with_layout(&layout).unwrap();
+    writer_core::storage::workspace_git::ensure_workspace_repo(&layout).unwrap();
 
     // 迁移完成后：embedded .git 应被删除，private git_dir 应存在
     assert!(
@@ -268,7 +268,7 @@ fn problem3_journal_state_machine_preserves_later_created_git() {
     );
 
     // 步骤5：再次调 ensure_project_repo_with_layout（模拟下次启动恢复）
-    let result = writer_core::storage::git_repo_layout::ensure_project_repo_with_layout(&layout);
+    let result = writer_core::storage::workspace_git::ensure_workspace_repo(&layout);
     assert!(result.is_ok(), "problem3: 恢复应返回 Ok");
 
     // 修复后：后来新建的 .git 不应被误删

@@ -446,22 +446,21 @@ fn list_commit_candidate_paths(root: &Path) -> Result<Vec<PathBuf>> {
 /// - `.git.sujian-migrate-source-*`：迁移崩溃后残留的源仓库快照；
 /// - `full-sync-staging/`：staging run 自身，避免递归；
 /// - `app-meta/transactions/`：事务暂存目录，commit 中间态。
+///
+/// #645 评论 5504296097 问题1：底层规则统一到
+/// [`crate::storage::workspace_paths`]，本函数不再持有规则副本。
 #[allow(clippy::excessive_nesting)]
 pub(crate) fn walk_commit_candidates(
     root: &Path,
     dir: &Path,
     out: &mut Vec<PathBuf>,
 ) -> Result<()> {
+    use crate::storage::workspace_paths::is_workspace_internal_path;
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         if let Ok(rel) = path.strip_prefix(root) {
-            let rel_str = rel.to_string_lossy();
-            // 使用统一过滤函数判断 Git 工件和内部目录
-            if is_internal_git_artifact(&rel_str)
-                || rel_str == "full-sync-staging"
-                || rel_str.starts_with("app-meta/transactions")
-            {
+            if is_workspace_internal_path(rel) {
                 continue;
             }
         }

@@ -28,7 +28,7 @@ fn migrate_writes_and_clears_journal() {
     let git_dir = private_root.join("repo.git");
     let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
 
-    ensure_project_repo_with_layout(&layout).unwrap();
+    ensure_repo_layout_initialized(&layout).unwrap();
 
     assert!(!embedded_git.exists(), "embedded .git should be removed");
     assert!(git_dir.exists(), "private git_dir should exist");
@@ -62,7 +62,7 @@ fn dual_repo_no_journal_keeps_embedded() {
     git2::Repository::init_bare(&git_dir).unwrap();
 
     let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
-    let result = ensure_project_repo_with_layout(&layout);
+    let result = ensure_repo_layout_initialized(&layout);
 
     assert!(
         result.is_ok(),
@@ -117,7 +117,7 @@ fn dual_repo_journal_claimed_source_removed_keeps_later_git() {
     write_migration_journal(&git_dir, &journal).unwrap();
 
     let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
-    let result = ensure_project_repo_with_layout(&layout);
+    let result = ensure_repo_layout_initialized(&layout);
 
     assert!(
         result.is_ok(),
@@ -170,7 +170,7 @@ fn dual_repo_journal_worktree_mismatch_keeps_embedded() {
     write_migration_journal(&git_dir, &journal).unwrap();
 
     let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
-    let result = ensure_project_repo_with_layout(&layout);
+    let result = ensure_repo_layout_initialized(&layout);
 
     assert!(
         result.is_ok(),
@@ -209,7 +209,7 @@ fn dual_repo_corrupt_journal_returns_err() {
     std::fs::write(migrations_dir.join("corrupt.json"), b"not valid json").unwrap();
 
     let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
-    let result = ensure_project_repo_with_layout(&layout);
+    let result = ensure_repo_layout_initialized(&layout);
 
     assert!(result.is_err(), "corrupt journal should return Err");
     assert!(
@@ -235,7 +235,7 @@ fn no_embedded_after_migration_idempotent() {
 
     let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
     // 无 embedded .git → 不进入双仓库分支，直接 Ok(())。
-    let result = ensure_project_repo_with_layout(&layout);
+    let result = ensure_repo_layout_initialized(&layout);
     assert!(result.is_ok(), "no embedded .git should be idempotent Ok");
 }
 
@@ -272,7 +272,7 @@ fn legacy_journal_migrated_to_new_format() {
 
     let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
     // 这会触发旧 journal 迁移并完成整个恢复流程
-    let result = ensure_project_repo_with_layout(&layout);
+    let result = ensure_repo_layout_initialized(&layout);
 
     assert!(result.is_ok(), "legacy journal migration should succeed");
     // 旧 journal 应该被删除
@@ -329,7 +329,7 @@ fn resume_from_prepared_phase() {
 
     // 恢复：应该继续 rename 并完成整个迁移
     let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
-    ensure_project_repo_with_layout(&layout).unwrap();
+    ensure_repo_layout_initialized(&layout).unwrap();
 
     // 验证：embedded .git 应该被 rename 到 claimed_source，然后被删除
     assert!(!embedded_git.exists(), "embedded .git should be renamed");
@@ -386,7 +386,7 @@ fn resume_from_source_claimed_phase() {
 
     // 恢复：应该继续 copy
     let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
-    ensure_project_repo_with_layout(&layout).unwrap();
+    ensure_repo_layout_initialized(&layout).unwrap();
 
     // 验证：git_dir 应该存在
     assert!(git_dir.exists(), "private git_dir should exist");
@@ -440,7 +440,7 @@ fn resume_from_target_installed_phase() {
 
     // 恢复：应该继续删除 claimed_source
     let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
-    ensure_project_repo_with_layout(&layout).unwrap();
+    ensure_repo_layout_initialized(&layout).unwrap();
 
     // 验证：claimed_source 应该被删除
     assert!(!claimed_source.exists(), "claimed_source should be removed");
@@ -467,7 +467,7 @@ fn corrupt_git_dir_returns_err() {
     std::fs::create_dir_all(&git_dir).unwrap();
 
     let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
-    let result = ensure_project_repo_with_layout(&layout);
+    let result = ensure_repo_layout_initialized(&layout);
 
     assert!(result.is_err(), "corrupt git_dir should return Err");
 }
@@ -489,7 +489,7 @@ fn corrupt_embedded_git_returns_err() {
 
     let git_dir = private_root.join("repo.git");
     let layout = GitRepoLayout::with_external_git_dir(worktree_root.clone(), git_dir.clone());
-    let result = ensure_project_repo_with_layout(&layout);
+    let result = ensure_repo_layout_initialized(&layout);
 
     assert!(result.is_err(), "corrupt embedded .git should return Err");
 }

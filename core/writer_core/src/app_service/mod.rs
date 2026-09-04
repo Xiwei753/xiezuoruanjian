@@ -144,6 +144,17 @@ impl WriterAppService {
         self.platform_init = Some(init);
     }
 
+    /// #645 评论 5504296097 问题3：注入 workspace Git 布局。
+    ///
+    /// `bootstrap.rs` 在 `ensure_workspace_git` 后调用，把 Android 外置 git_dir
+    /// 或标准布局注入 API 层，让写事务完成后能记录本地历史。
+    pub(crate) fn set_workspace_git_layout(
+        &self,
+        layout: crate::storage::git_repo_layout::GitRepoLayout,
+    ) {
+        self.api.set_workspace_git_layout(layout);
+    }
+
     pub fn set_sync_transport_factory(
         &mut self,
         factory: writer_platform_api::SyncTransportFactory,

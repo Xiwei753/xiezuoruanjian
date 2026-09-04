@@ -49,6 +49,8 @@ impl WriterCoreApi {
                 });
             }
         }
+        // #645 评论 5504296097 问题3：写事务完成后记录本地历史。
+        self.record_workspace_history(&[], "create_project");
         Ok(project)
     }
 
@@ -115,6 +117,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.record_workspace_history(&[], "rename_project");
         Ok(true)
     }
 
@@ -136,6 +139,7 @@ impl WriterCoreApi {
         for sm in &bound_starmaps {
             let _ = self.unbind_starmap_from_project(&sm.starmap_id);
         }
+        self.record_workspace_history(&[], "delete_project");
         Ok(true)
     }
 
@@ -143,7 +147,9 @@ impl WriterCoreApi {
         self.core_write()
             .reorder_projects(ordered_project_ids)
             .map(|_| true)
-            .map_err(Into::into)
+            .map_err(crate::api::error::WriterError::from)?;
+        self.record_workspace_history(&[], "reorder_projects");
+        Ok(true)
     }
 
     pub fn list_volumes(&self, project_id: &str) -> ApiResult<Vec<VolumeDto>> {
@@ -169,6 +175,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.record_workspace_history(&[], "create_volume");
         Ok(volume)
     }
 
@@ -190,6 +197,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.record_workspace_history(&[], "rename_volume");
         Ok(true)
     }
 
@@ -203,6 +211,7 @@ impl WriterCoreApi {
         ] {
             self.remove_search_index_by_prefix(prefix);
         }
+        self.record_workspace_history(&[], "delete_volume");
         Ok(true)
     }
 
@@ -214,6 +223,8 @@ impl WriterCoreApi {
         self.core_write()
             .reorder_volumes(project_id, ordered_volume_ids)
             .map(|_| true)
-            .map_err(Into::into)
+            .map_err(crate::api::error::WriterError::from)?;
+        self.record_workspace_history(&[], "reorder_volumes");
+        Ok(true)
     }
 }

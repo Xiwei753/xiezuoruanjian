@@ -48,7 +48,9 @@ impl WriterCoreApi {
         self.core_write()
             .save_sync_config(&config.into())
             .map(|_| true)
-            .map_err(Into::into)
+            .map_err(crate::api::error::WriterError::from)?;
+        self.record_workspace_history(&[], "save_sync_config");
+        Ok(true)
     }
 
     /// 加载全局同步密钥（token 等）。
@@ -69,7 +71,9 @@ impl WriterCoreApi {
         self.core_write()
             .save_sync_secrets(&secrets.into())
             .map(|_| true)
-            .map_err(Into::into)
+            .map_err(crate::api::error::WriterError::from)?;
+        self.record_workspace_history(&[], "save_sync_secrets");
+        Ok(true)
     }
 
     /// #592 五 / #644 评论 5462823517 第1节：设置进程级 secrets override。
@@ -135,7 +139,9 @@ impl WriterCoreApi {
     pub fn save_app_sync_state(&self, state: SyncStateDto) -> ApiResult<()> {
         self.core_write()
             .save_app_sync_state(&state.into())
-            .map_err(Into::into)
+            .map_err(crate::api::error::WriterError::from)?;
+        self.record_workspace_history(&[], "save_app_sync_state");
+        Ok(())
     }
 
     /// 全量同步持久状态（Issue #630 评论 5307423953 Part B）。
@@ -273,6 +279,10 @@ impl WriterCoreApi {
             let core = self.core_write();
             core.commit_full_sync(transfer_result, staging_runs)
         };
+
+        // #645 评论 5504296097 问题3：同步 Commit 阶段完成后记录本地历史。
+        // 全量同步可能写回多个 target 的文件，用全量扫描模式（&[]）。
+        self.record_workspace_history(&[], "full_sync_commit");
 
         Ok(result.into())
     }

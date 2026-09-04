@@ -164,7 +164,7 @@ fn defect1_prepared_phase_recovers_renamed_source() {
         worktree_root.clone(),
         git_dir.clone(),
     );
-    let result = writer_core::storage::git_repo_layout::ensure_project_repo_with_layout(&layout);
+    let result = writer_core::storage::workspace_git::ensure_workspace_repo(&layout);
 
     // 步骤5：观察修复后的正确行为。
     // 修复后：Prepared 识别 (false, true, Missing) → 补推进 SourceClaimed →
