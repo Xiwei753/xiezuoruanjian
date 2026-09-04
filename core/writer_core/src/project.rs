@@ -43,7 +43,7 @@ pub fn list_projects(projects_root: &Path) -> Result<Vec<Project>> {
     list_projects_inner(projects_root)
 }
 
-/// 纯读取项目元数据，不调用 `ensure_project_repo_with_layout` / `ensure_project_repo`。
+/// 纯读取项目元数据，不调用 `workspace_git::ensure_workspace_repo`。
 ///
 /// #644 评论 5493295108 问题1：冷启动/同步不能把 Core 卡住——列表/摘要不能顺手迁移
 /// 所有旧作品。迁移职责移到 `sync::staging::prepare_staging_runs`（已释放 Core 写锁之后）。

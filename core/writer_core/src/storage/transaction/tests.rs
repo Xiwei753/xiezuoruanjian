@@ -149,14 +149,14 @@ fn test_transaction_commit_with_delete() {
 /// #644 评论 5483239422 问题1：`SaveTransaction::finish()` 吞掉
 /// `write_manifest_phase(Finished)` 的错误，随后仍调用 `cleanup()` 删除 tx_dir。
 ///
-/// 复现策略：构造 backup_mode 事务 commit 成功（phase=FilesCommittedPendingGit），
+/// 复现策略：构造 backup_mode 事务 commit 成功（phase=FilesCommitted），
 /// 然后使 manifest 读取失败（把 manifest 文件替换为同名目录，使
 /// `fs::read_to_string` 返回 Err）。此时调用 `finish()`：
 /// - 当前行为：`let _ = write_manifest_phase(...)` 吞错，`finished=true`，
 ///   `cleanup()` 执行 `remove_dir_all(tx_dir)`，tx_dir 被删，恢复证据丢失。
 ///   调用方（sync_ops）完全不知道 Finished 没写成功，仍会删 owner marker。
 /// - 预期行为：`finish()` 应返回 `Err`，不调用 `cleanup()`，tx_dir 保留，
-///   manifest 仍停在 FilesCommittedPendingGit，下次恢复可重试。
+///   manifest 仍停在 FilesCommitted，下次恢复可重试。
 ///
 /// 此测试断言预期行为（tx_dir 应保留），当前代码下断言失败。
 #[test]
@@ -168,7 +168,7 @@ fn finish_should_preserve_tx_dir_when_manifest_write_fails() {
     tx.enable_backup_mode();
     tx.add_file("a.txt", "hello").unwrap();
     tx.commit().unwrap();
-    // 此时 phase = FilesCommittedPendingGit，tx_dir 存在，manifest 存在。
+    // 此时 phase = FilesCommitted，tx_dir 存在，manifest 存在。
 
     // 使 manifest 读取失败：删除 manifest 文件，创建同名目录。
     // fs::read_to_string(目录) 会返回 Err，write_manifest_phase 返回 Err。

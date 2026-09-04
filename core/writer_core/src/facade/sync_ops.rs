@@ -211,16 +211,14 @@ impl super::WriterCore {
             });
         }
 
-        // #645 评论第 3 点：workspace 级别的 Git layout 放在 plan 上，
-        // 所有 target 共享，不再为每个 target 单独构造 layout。
-        let workspace_git_layout = self.workspace_git_layout();
+        // #645 评论 5504296097 第2点：不再携带 workspace_git_layout。
+        // 本地 Git 仓库由 bootstrap 阶段初始化，同步计划不负责 Git 生命周期。
 
         Ok(FullSyncPlan {
             sync_policy: crate::sync::types::SyncPolicy::from_config(config),
             force_sync,
             targets,
             app_data_root: self.app_data_root.clone(),
-            workspace_git_layout: Some(workspace_git_layout),
         })
     }
 

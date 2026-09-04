@@ -14,5 +14,5 @@ pub use git_repo_layout::*;
 pub use git_runtime::*;
 pub use journal::*;
 pub use migration::*;
-pub use workspace_git::*;
 pub use transaction::*;
+pub use workspace_git::*;

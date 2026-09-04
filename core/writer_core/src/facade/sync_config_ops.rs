@@ -56,7 +56,20 @@ impl super::WriterCore {
             .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
         // 新格式：直接反序列化（provider_config 字段已存在或为 None）。
-        if let Ok(config) = serde_json::from_str::<crate::sync::SyncConfig>(&content) {
+        if let Ok(mut config) = serde_json::from_str::<crate::sync::SyncConfig>(&content) {
+            // #645 评论 5504296097 第3点：如果已持久化的配置里 active_provider == "git"，
+            // 这是旧版本迁移遗留的死配置。修正为 github_api 并禁用同步。
+            if config.active_provider == "git" {
+                log::warn!(
+                    "load_sync_config: found legacy active_provider=\"git\", \
+                     resetting to github_api and disabling sync"
+                );
+                config.active_provider = "github_api".to_string();
+                config.enabled = false;
+                config.provider_config = None;
+                self.save_sync_config(&config)?;
+                return Ok(config);
+            }
             if !has_legacy_top_level_github_fields(&raw) {
                 return Ok(config);
             }
@@ -342,6 +355,8 @@ fn has_legacy_top_level_github_fields(raw: &serde_json::Value) -> bool {
 /// 顶层，新格式统一收进 `provider_config = ProviderConfig::GitHub(...)`。
 /// `backend_type == "git"` 且 `remote_url` 为 GitHub HTTPS 时自动升级为 `github_api`
 /// （复刻旧 `resolved_backend_type` 逻辑）。
+/// `backend_type == "git"` 且 remote_url 不是已支持的 Provider 时，
+/// 禁用同步并清空 provider_config，要求用户重新配置（不写死 `"git"` active_provider）。
 #[cfg(feature = "github-api")]
 fn migrate_legacy_sync_config(
     raw: &serde_json::Value,
@@ -377,7 +392,9 @@ fn migrate_legacy_sync_config(
         .and_then(|v| v.as_str())
         .unwrap_or("github_api");
 
-    // backend_type == "git" 且 remote_url 为 GitHub HTTPS → 自动升级为 github_api。
+    // #645 评论 5504296097 第3点：旧 Git 配置不写回 `active_provider = "git"`。
+    // - GitHub HTTPS → 升级为 github_api
+    // - 其他 backend_type（非 github_api）→ 禁用同步，要求用户重新配置
     let is_git = backend_type == "git";
     let is_github_https = remote_url
         .as_deref()
@@ -385,7 +402,12 @@ fn migrate_legacy_sync_config(
     if is_git && is_github_https {
         config.active_provider = "github_api".to_string();
     } else if is_git {
-        config.active_provider = "git".to_string();
+        // 旧 Git 配置不是 GitHub HTTPS → 禁用同步，要求重新配置。
+        // 不写 `"git"` 到 active_provider，避免死配置。
+        config.active_provider = "github_api".to_string();
+        config.enabled = false;
+        config.provider_config = None;
+        return config;
     } else {
         config.active_provider = "github_api".to_string();
     }
@@ -456,6 +478,27 @@ mod tests {
         });
         let config = migrate_legacy_sync_config(&raw, default_sync_config());
         assert_eq!(config.active_provider, "github_api");
+    }
+
+    /// #645 评论 5504296097 第3点：旧 Git backend 不是 GitHub HTTPS 时，
+    /// 禁用同步并要求重新配置，不写 `"git"` 到 active_provider。
+    #[test]
+    #[cfg(feature = "github-api")]
+    fn migrate_legacy_non_github_git_disables_sync() {
+        let raw: serde_json::Value = serde_json::json!({
+            "enabled": true,
+            "backend_type": "git",
+            "remote_url": "https://gitlab.com/test/repo.git",
+            "transport": "https_token",
+            "branch": "main"
+        });
+        let config = migrate_legacy_sync_config(&raw, default_sync_config());
+        assert_eq!(config.active_provider, "github_api");
+        assert!(!config.enabled, "non-GitHub Git should disable sync");
+        assert!(
+            config.provider_config.is_none(),
+            "non-GitHub Git should have no provider config"
+        );
     }
 
     #[test]

@@ -16,6 +16,14 @@
 //!     = provider-neutral 同步算法
 //! ```
 
+pub mod history;
 pub mod model;
+pub mod recovery;
+pub mod repo;
+pub mod rollback;
 
+pub use history::{diff_workspace, list_workspace_history, record_workspace_changes};
 pub use model::*;
+pub use recovery::{recover_workspace_crash, WorkspaceRecoveryResult};
+pub use repo::{ensure_workspace_repo, open_workspace_repo};
+pub use rollback::{rollback_file_to_head, rollback_to_commit, rollback_to_head};

@@ -125,9 +125,7 @@ fn write_manifest_phase_static(
     clippy::cast_lossless,
     deprecated
 )]
-pub fn recover_pending_transactions(
-    target_root: &Path,
-) -> Vec<TransactionRecovery> {
+pub fn recover_pending_transactions(target_root: &Path) -> Vec<TransactionRecovery> {
     let tx_base = target_root.join(TRANSACTIONS_DIR);
     if !tx_base.exists() {
         return Vec::new();
@@ -184,13 +182,13 @@ pub fn recover_pending_transactions(
                     continue;
                 }
                 TransactionPhase::FilesCommittedPendingGit => {
+                    // #645 评论 5504296097 第4点：旧遗留阶段，新代码不再产生。
+                    // 直接 rollback — 文件已 rename，需要恢复到事务前状态。
                     log::warn!(
                         "[transaction] found legacy FilesCommittedPendingGit tx={}, rolling back",
                         manifest.transaction_id
                     );
-                    if let Err(e) =
-                        rollback_file_transaction(&tx_dir, target_root, &manifest)
-                    {
+                    if let Err(e) = rollback_file_transaction(&tx_dir, target_root, &manifest) {
                         log::warn!(
                             "[transaction] rollback_file_transaction failed for tx={}: {}",
                             manifest.transaction_id,

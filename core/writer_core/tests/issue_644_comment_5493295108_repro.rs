@@ -71,8 +71,8 @@ fn problem1_list_projects_no_longer_migrates_in_core_write_lock() {
         "problem1: list_projects_inner 仍调 ensure_project_repo — 修复未生效"
     );
 
-    // #645 评论 5504296097 第1点：prepare_staging_runs 在 plan 级一次准备 workspace Git，
-    // 不再在 target loop 里调 prepare_target_git_layout。
+    // #645 评论 5504296097 第2点：workspace Git 初始化已移到 bootstrap，
+    // prepare_staging_runs 不再调 ensure_project_repo_with_layout。
     let staging_src = read_src_file("src/sync/staging/run.rs");
     let prepare_body = extract_fn_body(&staging_src, "prepare_staging_runs");
     assert!(
@@ -80,13 +80,19 @@ fn problem1_list_projects_no_longer_migrates_in_core_write_lock() {
         "problem1: prepare_staging_runs 仍调 prepare_target_git_layout — 修复未生效"
     );
     assert!(
-        prepare_body.contains("ensure_project_repo_with_layout"),
-        "problem1: prepare_staging_runs 未在 plan 级调 ensure_project_repo_with_layout — 修复未生效"
+        !prepare_body.contains("ensure_project_repo_with_layout"),
+        "problem1: prepare_staging_runs 仍调 ensure_project_repo_with_layout — 应已移到 bootstrap"
     );
     // prepare_target_git_layout 函数应已删除（workspace Git 准备收成 plan 级一次）
     assert!(
         !staging_src.contains("fn prepare_target_git_layout("),
         "problem1: prepare_target_git_layout 函数应已删除 — 修复未生效"
+    );
+    // #645 评论 5504296097 第2点：bootstrap 应包含 workspace Git 初始化
+    let bootstrap_src = read_src_file("src/api/bootstrap.rs");
+    assert!(
+        bootstrap_src.contains("ensure_workspace_git"),
+        "problem1: bootstrap 应包含 ensure_workspace_git — workspace Git 应在 bootstrap 初始化"
     );
 
     println!(
@@ -310,7 +316,6 @@ fn problem4_delete_project_cleans_private_git_dir() {
         &projects_root,
         None,
         None,
-        Some(private_git_root.clone()),
     );
 
     let project_id = "test-proj-4-manual";
@@ -372,10 +377,11 @@ fn problem_all_four_issues_fixed_on_current_branch() {
     // 问题1：list_projects_inner 不再调 ensure_project_repo_with_layout
     let list_inner_body = extract_fn_body(&project_src, "list_projects_inner");
     assert!(!list_inner_body.contains("ensure_project_repo_with_layout"));
-    // #645 评论 5504296097 第1点：prepare_staging_runs 在 plan 级一次准备 workspace Git，
-    // 不再按 target 调 prepare_target_git_layout。
-    assert!(staging_src.contains("ensure_project_repo_with_layout"));
+    // #645 评论 5504296097 第2点：workspace Git 初始化已移到 bootstrap，
+    // prepare_staging_runs 不再调 ensure_project_repo_with_layout。
     assert!(!staging_src.contains("fn prepare_target_git_layout("));
+    let bootstrap_src = read_src_file("src/api/bootstrap.rs");
+    assert!(bootstrap_src.contains("ensure_workspace_git"));
 
     // 问题2：resolve_existing_repo_layout 已新增
     assert!(git_repo_layout_src.contains("resolve_existing_repo_layout"));

@@ -90,7 +90,6 @@ impl WriterAppService {
         app_data_root: String,
         projects_root: String,
         services: writer_platform_api::PlatformServices,
-        git_metadata_root: Option<std::path::PathBuf>,
     ) -> Self {
         let secure_storage_arc: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>> =
             services.secure_storage.map(std::sync::Arc::from);
@@ -99,7 +98,6 @@ impl WriterAppService {
             &projects_root,
             services.sync_transport_factory,
             secure_storage_arc,
-            git_metadata_root,
         );
 
         if let Some(config_store) = services.config_store {

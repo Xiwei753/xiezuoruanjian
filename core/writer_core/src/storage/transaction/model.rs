@@ -42,13 +42,17 @@ pub struct TransactionEntry {
 /// - `FilesCommitted`：所有 rename 完成。
 /// - `Finished`：事务成功完成，可以清理。
 /// - `RolledBack`：rollback 已执行，可以清理。
+///
+/// #645 评论 5504296097 第4点：`FilesCommittedPendingGit` 是旧遗留阶段。
+/// 新代码不再产生此变体；恢复时直接走 rollback 路径。
+/// 保留此变体仅供 legacy manifest DTO 反序列化。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionPhase {
     Prepared,
     FilesCommitted,
-    /// 旧 manifest 兼容：历史事务可能停在此阶段。
-    /// 恢复时按 FilesCommitted + 可选 rollback 处理。
+    /// 旧遗留：历史事务可能停在此阶段。新代码不再产生此变体。
+    /// 恢复时按 `FilesCommitted` + rollback 处理。
     #[serde(rename = "files_committed_pending_git")]
     FilesCommittedPendingGit,
     Finished,
@@ -79,4 +83,3 @@ pub struct TransactionRecovery {
     pub recovered_files: Vec<String>,
     pub missing_files: Vec<String>,
 }
-

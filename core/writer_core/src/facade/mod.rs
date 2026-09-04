@@ -68,14 +68,6 @@ pub struct WriterCore {
     /// 避免两份状态漂移。
     pub(crate) search_service: std::sync::Mutex<SearchIndexService>,
     pub(crate) starmap_stores: std::sync::Mutex<HashMap<String, StarMapStore>>,
-    /// #644 评论 5490799656 问题1：Android 私有 Git metadata 根目录。
-    ///
-    /// 位于 `context.filesDir/sujian-git/`，workspace 级可写 Git metadata
-    ///（`.git/`）的根目录。`None` 表示使用标准 Git 布局。
-    /// 构造 workspace `GitRepoLayout` 时：`Some(root)` →
-    ///   `GitRepoLayout::with_external_git_dir(app_data_root, root.join("workspace"))`
-    /// `None` → `GitRepoLayout::new(app_data_root)`。
-    pub(crate) git_metadata_root: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -94,7 +86,6 @@ impl WriterCore {
             secure_storage: None,
             search_service: std::sync::Mutex::new(SearchIndexService::new()),
             starmap_stores: std::sync::Mutex::new(HashMap::new()),
-            git_metadata_root: None,
         }
     }
 
@@ -114,30 +105,6 @@ impl WriterCore {
     /// 计算指定作品的根目录路径。
     pub(crate) fn project_root(&self, project_id: &str) -> PathBuf {
         self.projects_root.join(project_id)
-    }
-
-    /// #645 评论 5504296097 第1点：为整个 workspace 构造单一 `GitRepoLayout`。
-    ///
-    /// worktree_root = `app_data_root`（整个 App 数据根，覆盖作品、设置、
-    /// 全局星图、主题等所有 App 数据），不再用 `projects_root`（只覆盖作品目录）。
-    ///
-    /// 布局：
-    /// - worktree_root = `app_data_root`
-    /// - projects = `app_data_root/projects`
-    /// - app data = `app_data_root/app-meta/...`
-    /// - git_dir = `app_data_root/.git`（标准布局）
-    ///   或 Android 外置 `filesDir/sujian-git/workspace/`（`git_metadata_root = Some`）
-    ///
-    /// 所有 target（app + projects）共享同一 workspace 级别的 Git layout，
-    /// 不再为每个 target 单独构造 layout。
-    pub(crate) fn workspace_git_layout(&self) -> crate::storage::git_repo_layout::GitRepoLayout {
-        match &self.git_metadata_root {
-            Some(root) => crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
-                self.app_data_root.clone(),
-                root.join("workspace"),
-            ),
-            None => crate::storage::git_repo_layout::GitRepoLayout::new(self.app_data_root.clone()),
-        }
     }
 }
 

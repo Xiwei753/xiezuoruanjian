@@ -60,7 +60,6 @@ impl WriterCoreApi {
         projects_root: P2,
         sync_transport_factory: Option<writer_platform_api::SyncTransportFactory>,
         secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
-        git_metadata_root: Option<PathBuf>,
     ) -> Self {
         let mut core = WriterCore::new(&app_data_root, &projects_root);
         core.sync_transport = sync_transport_factory.clone();
@@ -68,7 +67,6 @@ impl WriterCoreApi {
         // 按 generation 保存的凭据才能真正写入平台 Keystore；此前只挂在
         // WriterCoreApi 上，facade 侧永远走文件路径。
         core.secure_storage = secure_storage.clone();
-        core.git_metadata_root = git_metadata_root;
         Self {
             app_data_root: app_data_root.as_ref().to_path_buf(),
             projects_root: projects_root.as_ref().to_path_buf(),

@@ -18,8 +18,8 @@ const STAGING_SUBDIR: &str = "staging";
 ///
 /// #645 评论 5504296097 第2点：`StagingRun` 不再携带 `active_provider` /
 /// `git_seed_state` / `git_layout` 字段。staging 统一走文件级 `seed_from_live`，
-/// 不再按 Git/GithubApi backend 走不同 seed 路径。workspace 级别的 Git layout
-/// 迁移由 `prepare_staging_runs` 内部完成，不作为某个 remote provider 的 staging 模式。
+/// 不再按 Git/GithubApi backend 走不同 seed 路径。workspace Git 由 bootstrap 阶段
+/// 初始化，staging 不负责 Git 生命周期。
 pub struct StagingRun {
     run_root: PathBuf,
     run_id: String,
@@ -332,7 +332,7 @@ impl StagingRun {
                     let remote_rec = if let Some(manifest_rec) = staging_manifest.get(&rel_str) {
                         build_remote_lww_record_from_manifest(manifest_rec, &incoming)
                     } else {
-                        // manifest 中无此路径（Git backend 或 manifest 缺失），
+                        // manifest 中无此路径（manifest 缺失），
                         // 回退到 mtime-based LWW。远端侧不需要 tombstones。
                         build_local_lww_record(&staging_root, &rel, &incoming, "remote", &[])
                             .unwrap_or_else(|| {
@@ -379,32 +379,15 @@ impl StagingRun {
 /// 任何一个 target 的 seed 失败都意味着该 target 的 staging 是半成品，
 /// 不能拿来做三方比较。seed 失败直接返回 Err，让调用方终止本次 full sync。
 ///
-/// #644 评论 5493295108 问题1/2：在 seed 前先准备 workspace Git layout。
-/// #645 评论 5504296097 第1点：workspace Git 只准备一次（plan 级），
-/// 不再在 target loop 里对每个 target 调 `prepare_target_git_layout`。
-/// 统一对 `plan.workspace_git_layout` 调 `ensure_project_repo_with_layout`：
-/// workspace repo 是本地版本历史，worktree_root=app_data_root，应确保存在
-/// （init if missing）。所有 target 共享此 workspace repo。
-///
-/// 这样迁移发生在已释放 Core 写锁之后，不会堵住冷启动卷章读取。
-///
-/// #645 评论 5504296097 第2点：不再按 `active_provider` 分 Git/GithubApi 走不同
-/// seed 路径。workspace 级别的 Git layout 迁移仍在此完成，但不作为某个 remote
-/// provider 的 staging 模式。
+/// #645 评论 5504296097 第2点：不再在此函数中初始化 workspace Git。
+/// 本地 Git 仓库由 bootstrap 阶段初始化，staging 只负责文件级快照。
+/// 不再按 `active_provider` 分 Git/GithubApi 走不同 seed 路径。
 ///
 /// 成功后 `plan.targets[*].staging_root` 被填充为对应 staging 目录。
 pub fn prepare_staging_runs(
     plan: &mut crate::sync::full_sync::FullSyncPlan,
 ) -> crate::error::Result<Vec<StagingRun>> {
     let mut staging_runs: Vec<StagingRun> = Vec::new();
-
-    // #645 评论 5504296097 第1点：workspace Git 只准备一次（plan 级），
-    // 所有 target 共享同一 workspace repo。统一调 ensure_project_repo_with_layout：
-    // workspace repo 是本地版本历史，worktree_root=app_data_root，应确保存在
-    // （init if missing）。
-    if let Some(layout) = &plan.workspace_git_layout {
-        crate::storage::git_repo_layout::ensure_project_repo_with_layout(layout)?;
-    }
 
     for planned in &mut plan.targets {
         let run = StagingRun::create(&plan.app_data_root, planned.target_live_root.clone())?;

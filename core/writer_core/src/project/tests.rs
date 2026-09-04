@@ -78,8 +78,7 @@ fn test_list_projects_never_creates_per_project_git_repo() {
     assert!(!legacy_dir.join(".git").exists());
 
     // create_project 也不应创建 per-project .git。
-    let new_project =
-        create_project(&projects_root, "New Project").unwrap();
+    let new_project = create_project(&projects_root, "New Project").unwrap();
     let new_dir = projects_root.join(&new_project.id);
     assert!(
         !new_dir.join(".git").exists(),

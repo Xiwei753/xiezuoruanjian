@@ -124,7 +124,10 @@ impl SyncErrorCategory {
 /// 不识别的 code 返回 `None`（调用方应回退到 `from_code` 或 `Other`）。
 pub fn legacy_category_compat(code: &str) -> Option<SyncErrorCategory> {
     match code {
-        "token_missing" | "token_invalid" | "github_unauthorized" | "github_forbidden"
+        "token_missing"
+        | "token_invalid"
+        | "github_unauthorized"
+        | "github_forbidden"
         | "empty_url" => Some(SyncErrorCategory::AuthFailed),
         "repo_not_found_or_no_permission" => Some(SyncErrorCategory::PermissionDenied),
         "file_not_found" => Some(SyncErrorCategory::NotFound),
@@ -134,8 +137,11 @@ pub fn legacy_category_compat(code: &str) -> Option<SyncErrorCategory> {
             Some(SyncErrorCategory::Network)
         }
         "api_error" => Some(SyncErrorCategory::TemporaryUnavailable),
-        "branch_missing" | "remote_branch_missing" | "non_fast_forward"
-        | "unrelated_histories" | "dirty_repo" => Some(SyncErrorCategory::Other),
+        "branch_missing"
+        | "remote_branch_missing"
+        | "non_fast_forward"
+        | "unrelated_histories"
+        | "dirty_repo" => Some(SyncErrorCategory::Other),
         _ => None,
     }
 }
@@ -591,11 +597,7 @@ impl SyncResult {
     }
 
     /// 创建错误结果——status 应为 Error/Conflict 等终端状态，error_category 可选。
-    pub fn error(
-        status: SyncStatus,
-        error: String,
-        error_category: Option<String>,
-    ) -> Self {
+    pub fn error(status: SyncStatus, error: String, error_category: Option<String>) -> Self {
         let message_key = error_category
             .as_deref()
             .map(sync_error_category_to_message_key);

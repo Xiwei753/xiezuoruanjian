@@ -32,6 +32,9 @@ use crate::sync::SyncStatus;
 ///
 /// 包含 sync_policy、force_sync 标志和已枚举的 target 列表（含每个 target
 /// 的 `local_root`）。Transfer 阶段只读这份 plan，不再回 core 取数据。
+///
+/// #645 评论 5504296097 第2点：不再携带 `workspace_git_layout`。
+/// 本地 Git 仓库由 bootstrap 阶段初始化，同步计划不负责 Git 生命周期。
 #[derive(Debug, Clone)]
 pub struct FullSyncPlan {
     pub sync_policy: SyncPolicy,
@@ -40,11 +43,6 @@ pub struct FullSyncPlan {
     /// #644 评论 5473401065 第1节：app_data_root 供 API 层在无锁状态下
     /// 调用 `prepare_staging_runs` 时传给 `StagingRun::create`。
     pub app_data_root: PathBuf,
-    /// #645 评论第 3 点：workspace 级别的 Git 仓库布局。
-    ///
-    /// 所有 target（app + projects）共享此 layout，不再在 `PlannedTarget` 上
-    /// 携带独立的 `git_layout`。`None` 表示标准 Git 布局（`projects_root/.git`）。
-    pub workspace_git_layout: Option<crate::storage::git_repo_layout::GitRepoLayout>,
 }
 
 /// 单个 target 的执行计划 — target 元数据 + 本地根 + 分类标签。

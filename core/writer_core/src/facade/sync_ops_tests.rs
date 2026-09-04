@@ -885,7 +885,6 @@ fn aggregate_recoverable_only_overall_is_recoverable() {
     );
 }
 
-
 /// Conflict > Recoverable：冲突 target 压过可重试错误，总体 PartialConflict。
 #[test]
 fn aggregate_conflict_beats_recoverable() {

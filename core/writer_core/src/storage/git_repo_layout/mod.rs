@@ -3,6 +3,9 @@
 //! 将 worktree（用户可见文件）与 git_dir（可写 metadata）分离。
 //! Android 共享存储不适合放可写 Git metadata，因为 sidecar 文件与真正的 `.lock`
 //! 不是原子事实，无法可靠证明 ownership。本模块允许 git_dir 放在应用私有目录。
+//!
+//! #645 评论 5504296097 第2点：本模块只保留布局模型和迁移工具。
+//! 初始化入口统一走 `workspace_git::ensure_workspace_repo()`。
 
 mod migration;
 
@@ -71,6 +74,10 @@ pub(crate) fn try_open_repo(path: &Path) -> crate::Result<RepoOpenResult> {
     }
 }
 
+/// 确保 Git 仓库存在（init if missing）并处理布局迁移。
+///
+/// #645 评论 5504296097 第2点：公开入口统一走 `workspace_git::ensure_workspace_repo()`，
+/// 本函数是内部实现，由 `workspace_git::repo` 委托调用。
 pub fn ensure_project_repo_with_layout(layout: &GitRepoLayout) -> crate::Result<()> {
     crate::storage::git_runtime::ensure_initialized()?;
 
