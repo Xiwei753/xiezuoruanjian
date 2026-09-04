@@ -11,11 +11,14 @@
 //! #645 评论第 1 点：一个工作区一个 Git 仓库后，删除单个作品不再移动共享 git_dir，
 //! 事务只覆盖 worktree 移动 + tombstone 生成。
 //!
+//! #645 评论 5504296097 问题2：StarMap 解绑也收进本事务，避免
+//! "解绑成功但作品删除失败" 或 "解绑失败但作品删除成功" 的半状态。
+//!
 //! ## 解决方案
 //!
-//! 在第一次 rename 前先写 `ProjectDeleteJournal`（含 from/trash 路径 + phase），
-//! 每次 rename 后 fsync 对应父目录并推进 phase。private rename/create_dir 的错误
-//! 直接返回，不能 warn 后当删除成功。
+//! 在第一次 rename 前先写 `ProjectDeleteJournal`（含 from/trash 路径 + phase +
+//! 待解绑 starmap_ids），每次 rename 后 fsync 对应父目录并推进 phase。
+//! private rename/create_dir 的错误直接返回，不能 warn 后当删除成功。
 //!
 //! 启动时恢复入口看到 journal 后，根据 from/trash 的 old/new 状态继续完成删除；
 //! 已经完成两边后再清 journal。
@@ -23,14 +26,15 @@
 //! ## 状态机
 //!
 //! ```text
-//! Prepared → WorktreeMoved → GitMoved → Completed
-//!                (可以恢复)    (可以恢复)
+//! Prepared → WorktreeMoved → GitMoved → StarMapsUnbound → Completed
+//!                (可以恢复)    (可以恢复)      (可以恢复)
 //! ```
 //!
 //! - `Prepared`: journal 已落盘，尚未移动任何内容
 //! - `WorktreeMoved`: worktree 已移入 trash，private git_dir 尚未移动
 //! - `GitMoved`: 两边都已移入 trash，等待 tombstone 生成
-//! - `Completed`: tombstone 已生成，可以清理 journal
+//! - `StarMapsUnbound`: tombstone 已生成，starmap 解绑已完成
+//! - `Completed`: 可以清理 journal
 //!
 //! ## 崩溃恢复
 //!
@@ -58,13 +62,19 @@ const DELETE_JOURNALS_DIR: &str = "app-meta/delete-journals";
 /// - `Prepared`: journal 已落盘，尚未移动任何内容
 /// - `WorktreeMoved`: worktree 已移入 trash，private git_dir 尚未移动
 /// - `GitMoved`: 两边都已移入 trash，等待 tombstone 生成
-/// - `Completed`: tombstone 已生成，可以清理 journal
+/// - `StarMapsUnbound`: tombstone 已生成，starmap 解绑已完成
+/// - `Completed`: 可以清理 journal
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectDeletePhase {
     Prepared,
     WorktreeMoved,
     GitMoved,
+    /// #645 评论 5504296097 问题2：starmap 解绑已完成。
+    ///
+    /// 在 `GitMoved` 之后、`Completed` 之前。把 unbind 收进事务，
+    /// 避免"解绑成功但作品删除失败"或"解绑失败但作品删除成功"的半状态。
+    StarMapsUnbound,
     Completed,
 }
 
@@ -90,13 +100,22 @@ pub struct ProjectDeleteJournal {
     pub projects_root: String,
     /// #644 评论 5495945801 问题3：app_data_root，用于 strip_prefix 算 rel_trash_path。
     pub app_data_root: String,
+    /// #645 评论 5504296097 问题2：本次需要解绑的 starmap ids。
+    ///
+    /// 在 `StarMapsUnbound` phase 逐个执行幂等 unbind。
+    /// `#[serde(default)]` 保持向后兼容：旧 journal 文件没有这个字段，
+    /// 反序列化时得到空 Vec，恢复时跳过 unbind（旧 journal 的 starmap
+    /// 已在旧 API 层 best-effort loop 里解绑过）。
+    #[serde(default)]
+    pub starmap_ids: Vec<String>,
     /// 当前删除阶段。
     pub phase: ProjectDeletePhase,
 }
 
 /// 项目删除事务。
 ///
-/// 生命周期：`new` → `prepare` → `move_worktree` → `move_git` → `complete` → `cleanup_journal`。
+/// 生命周期：`new` → `prepare` → `move_worktree` → `move_git` → `write_tombstone`
+/// → `unbind_starmaps` → `complete` → `cleanup_journal`。
 /// 未完成的 journal 留给 `recover_pending_delete_transactions` 处理。
 pub struct ProjectDeleteTransaction {
     journal: ProjectDeleteJournal,
@@ -113,6 +132,10 @@ impl ProjectDeleteTransaction {
     /// - `git_dir_trash = git_dir_trash_root.map(|root| root.join(&token))`
     ///
     /// journal 里记录的 worktree_trash / git_dir_trash 就是这两个最终路径。
+    ///
+    /// #645 评论 5504296097 问题2：接收 `starmap_ids`，在 `StarMapsUnbound` phase
+    /// 逐个执行幂等 unbind。把 unbind 收进事务，避免半状态。
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         project_id: &str,
         worktree_from: &Path,
@@ -121,6 +144,7 @@ impl ProjectDeleteTransaction {
         git_dir_trash_root: Option<&Path>,
         projects_root: &Path,
         app_data_root: &Path,
+        starmap_ids: Vec<String>,
     ) -> Self {
         let token = format!(
             "{}_{}_{}",
@@ -144,6 +168,7 @@ impl ProjectDeleteTransaction {
                 .map(|p| p.to_string_lossy().into_owned()),
             projects_root: projects_root.to_string_lossy().into_owned(),
             app_data_root: app_data_root.to_string_lossy().into_owned(),
+            starmap_ids,
             phase: ProjectDeletePhase::Prepared,
         };
 
@@ -311,6 +336,35 @@ impl ProjectDeleteTransaction {
         Ok(())
     }
 
+    /// #645 评论 5504296097 问题2：解除本次删除作品的所有 StarMap 绑定。
+    ///
+    /// 在 `write_tombstone` 成功（phase == GitMoved）之后、`complete` 之前调用。
+    /// 逐个执行幂等 unbind（`unbind_starmap_from_project` 已是幂等的：
+    /// 把 `project_id` 设为 None，如果已经是 None 则无变化）。
+    /// 失败时返回 Err，journal 保留下次恢复继续。
+    ///
+    /// 把 unbind 收进事务，避免 API 层 best-effort unbind loop 产生的半状态：
+    /// - 情况 A：解绑成功，作品删除失败 → starmap 已解绑但 project 还在
+    /// - 情况 B：某个解绑失败，作品删除成功 → 悬空引用
+    pub fn unbind_starmaps(&mut self) -> Result<()> {
+        let app_data_root = PathBuf::from(&self.journal.app_data_root);
+        for sm_id in &self.journal.starmap_ids {
+            // 幂等 unbind：如果 starmap 已解绑则跳过。
+            // unbind 错误直接返回，不吞——半状态比保留 journal 下次恢复更糟。
+            crate::starmap::unbind_starmap_from_project(&app_data_root, sm_id)?;
+        }
+        self.advance_phase(ProjectDeletePhase::StarMapsUnbound)?;
+        Ok(())
+    }
+
+    /// #645 评论 5504296097 问题2：获取本次需要解绑的 starmap ids。
+    ///
+    /// 供调用方构造 change_set：每个被解绑的 starmap 都会产生
+    /// `Upsert(starmaps/{id}.meta.json) + Upsert(starmaps/index.json)`。
+    pub fn starmap_ids(&self) -> &[String] {
+        &self.journal.starmap_ids
+    }
+
     /// 清理 journal（删除 journal 文件 + fsync 父目录）。
     ///
     /// 仅在 completed == true 时调用。
@@ -419,8 +473,10 @@ fn recover_single_journal(_app_data_root: &Path, journal_path: &Path) -> Result<
                 // worktree 已移动，继续处理 git。
                 tx.move_git()?;
                 if tx.journal.phase == ProjectDeletePhase::GitMoved {
-                    // #644 评论 5495945801 问题3：git 已移动，生成 tombstone 后推进到 Completed。
+                    // #644 评论 5495945801 问题3：git 已移动，生成 tombstone。
+                    // #645 评论 5504296097 问题2：tombstone 后解绑 starmap，再推进到 Completed。
                     tx.write_tombstone()?;
+                    tx.unbind_starmaps()?;
                     tx.complete()?;
                     tx.cleanup_journal()?;
                     return Ok(true);
@@ -439,8 +495,10 @@ fn recover_single_journal(_app_data_root: &Path, journal_path: &Path) -> Result<
             // 继续处理 git。
             tx.move_git()?;
             if tx.journal.phase == ProjectDeletePhase::GitMoved {
-                // #644 评论 5495945801 问题3：git 已移动，生成 tombstone 后推进到 Completed。
+                // #644 评论 5495945801 问题3：git 已移动，生成 tombstone。
+                // #645 评论 5504296097 问题2：tombstone 后解绑 starmap，再推进到 Completed。
                 tx.write_tombstone()?;
+                tx.unbind_starmaps()?;
                 tx.complete()?;
                 tx.cleanup_journal()?;
                 return Ok(true);
@@ -457,8 +515,10 @@ fn recover_single_journal(_app_data_root: &Path, journal_path: &Path) -> Result<
             };
             tx.move_git()?;
             if tx.journal.phase == ProjectDeletePhase::GitMoved {
-                // #644 评论 5495945801 问题3：git 已移动，生成 tombstone 后推进到 Completed。
+                // #644 评论 5495945801 问题3：git 已移动，生成 tombstone。
+                // #645 评论 5504296097 问题2：tombstone 后解绑 starmap，再推进到 Completed。
                 tx.write_tombstone()?;
+                tx.unbind_starmaps()?;
                 tx.complete()?;
                 tx.cleanup_journal()?;
                 return Ok(true);
@@ -470,12 +530,27 @@ fn recover_single_journal(_app_data_root: &Path, journal_path: &Path) -> Result<
             // #644 评论 5495945801 问题3：必须重新生成 tombstone，不能直接跳到 Completed。
             // 如果进程死在"两边 rename 完成、tombstone 尚未保存"之间，
             // 重启后必须在这里补上 tombstone，否则永久漏掉。
+            // #645 评论 5504296097 问题2：tombstone 后还要解绑 starmap。
             let mut tx = ProjectDeleteTransaction {
                 journal,
                 journal_path: journal_path.to_path_buf(),
                 completed: false,
             };
             tx.write_tombstone()?;
+            tx.unbind_starmaps()?;
+            tx.complete()?;
+            tx.cleanup_journal()?;
+            Ok(true)
+        }
+        ProjectDeletePhase::StarMapsUnbound => {
+            // #645 评论 5504296097 问题2：tombstone 已生成、starmap 已解绑，
+            // 但 complete 还没推进（崩溃在 unbind_starmaps 和 complete 之间）。
+            // 直接推进到 Completed 并清理 journal。
+            let mut tx = ProjectDeleteTransaction {
+                journal,
+                journal_path: journal_path.to_path_buf(),
+                completed: false,
+            };
             tx.complete()?;
             tx.cleanup_journal()?;
             Ok(true)

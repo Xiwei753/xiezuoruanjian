@@ -125,25 +125,26 @@ impl WriterCoreApi {
     }
 
     pub fn delete_project(&self, project_id: &str) -> ApiResult<bool> {
-        // 先解除 StarMap 绑定（best-effort，不阻断删除）。
-        let bound_starmaps = self
+        // #645 评论 5504296097 问题2：删除 best-effort unbind loop。
+        // starmap 解绑已收进 `delete_project_with_changes` 的 durable delete transaction
+        // （新增 `StarMapsUnbound` phase），解绑和删除原子化，避免半状态：
+        // - 情况 A：解绑成功，作品删除失败 → starmap 已解绑但 project 还在
+        // - 情况 B：某个解绑失败，作品删除成功 → 悬空引用
+        // 现在只调用一次 `delete_project_with_changes`，成功后再统一清搜索索引、
+        // 记录一次本地 history。
+
+        // 在删除前获取绑定的 starmap ids，供删除成功后更新搜索索引。
+        // 注意：不在此时解绑——解绑收进事务，避免半状态。
+        let bound_starmap_ids: Vec<String> = self
             .core_write()
             .list_starmaps_bound_to_project(project_id)
-            .unwrap_or_default();
-        for sm in &bound_starmaps {
-            if let Err(e) = self.unbind_starmap_from_project(&sm.starmap_id) {
-                log::warn!(
-                    "delete_project: unbind starmap {} failed ({}), continuing with delete",
-                    sm.starmap_id,
-                    e
-                );
-            }
-        }
-        // #645 评论 5504296097 问题2：删除失败必须返回失败，不再吞 Err。
-        // 之前的实现把 delete_project_with_changes 的 Err 只 log::warn 然后
-        // 返回 Ok(true)，导致目标不存在/journal 写失败/move_worktree 失败/
-        // tombstone 写失败/IO 错误都被吞掉，是功能回归。
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| m.starmap_id)
+            .collect();
+
         let change_set = self.core_write().delete_project_with_changes(project_id)?;
+
         // 删除成功后才清搜索索引。搜索索引清理放在删除成功之后，避免
         // project 没删掉但搜索索引已清空的不一致状态。
         for prefix in &[
@@ -155,6 +156,14 @@ impl WriterCoreApi {
         ] {
             self.remove_search_index_by_prefix(prefix);
         }
+
+        // #645 评论 5504296097 问题2：删除成功后更新被解绑 starmap 的搜索索引。
+        // core 层 `unbind_starmaps` 只改 starmap meta/index 文件，不更新搜索索引。
+        // API 层负责把 starmap meta 的变化同步到搜索索引。
+        for sm_id in &bound_starmap_ids {
+            self.refresh_starmap_search_index(sm_id);
+        }
+
         // history 记录是 best-effort：record_workspace_change_set_history
         // 内部已用 log::warn 吞掉 git 错误，不会把 history 失败当成删除失败。
         self.record_workspace_change_set_history(&change_set, "delete_project");

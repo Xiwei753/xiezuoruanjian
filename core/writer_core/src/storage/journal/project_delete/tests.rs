@@ -13,6 +13,7 @@ fn test_journal_serde() {
         git_dir_trash: Some("/trash/test_token.git".to_string()),
         projects_root: "/projects".to_string(),
         app_data_root: "/app".to_string(),
+        starmap_ids: Vec::new(),
         phase: ProjectDeletePhase::Prepared,
     };
 
@@ -55,6 +56,7 @@ fn test_full_delete_flow() {
         Some(&git_dir_trash_root),
         &projects_root,
         app_data_root,
+        Vec::new(),
     );
 
     // 获取事务实际使用的 trash 路径（token 拼出来的）。
@@ -80,6 +82,10 @@ fn test_full_delete_flow() {
 
     // write_tombstone。
     tx.write_tombstone().unwrap();
+
+    // #645 评论 5504296097 问题2：unbind_starmaps（空 starmap_ids，应直接推进 phase）。
+    tx.unbind_starmaps().unwrap();
+    assert_eq!(tx.journal.phase, ProjectDeletePhase::StarMapsUnbound);
 
     // complete。
     tx.complete().unwrap();
@@ -121,6 +127,7 @@ fn test_recovery_from_prepared() {
         Some(&git_trash_parent),
         &projects_root,
         app_data_root,
+        Vec::new(),
     );
     tx.prepare().unwrap();
 
@@ -167,6 +174,7 @@ fn test_recovery_from_worktree_moved() {
         Some(&git_trash_parent),
         &projects_root,
         app_data_root,
+        Vec::new(),
     );
     tx.prepare().unwrap();
     tx.move_worktree().unwrap();
@@ -211,6 +219,7 @@ fn test_recovery_from_git_moved() {
         Some(&git_trash_parent),
         &projects_root,
         app_data_root,
+        Vec::new(),
     );
     tx.prepare().unwrap();
     tx.move_worktree().unwrap();
@@ -245,12 +254,15 @@ fn test_delete_without_private_git() {
         None,
         &projects_root,
         app_data_root,
+        Vec::new(),
     );
 
     tx.prepare().unwrap();
     tx.move_worktree().unwrap();
     tx.move_git().unwrap(); // 无 private git，应直接推进到 GitMoved。
     tx.write_tombstone().unwrap();
+    // #645 评论 5504296097 问题2：unbind_starmaps（空 starmap_ids）。
+    tx.unbind_starmaps().unwrap();
     tx.complete().unwrap();
 
     let worktree_trash = tx.worktree_trash_path().to_path_buf();

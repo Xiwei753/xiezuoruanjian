@@ -296,6 +296,7 @@ fn defect2_completed_phase_durable_cleanup_returns_err() {
         git_dir_trash: None,
         projects_root: "/tmp/nonexistent_sujian/projects".to_string(),
         app_data_root: app_data_root.to_string_lossy().into_owned(),
+        starmap_ids: Vec::new(),
         phase: ProjectDeletePhase::Completed,
     };
     fs::write(&journal_path, serde_json::to_string(&journal).unwrap()).unwrap();

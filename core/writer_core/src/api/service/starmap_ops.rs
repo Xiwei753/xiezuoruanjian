@@ -787,6 +787,124 @@ impl WriterCoreApi {
         Ok(true)
     }
 
+    /// #645 评论 5504296097 问题2：刷新单个 starmap 在搜索索引中的条目。
+    ///
+    /// 只更新搜索索引，不调用 core 层 unbind，不记录 history。
+    /// 供 `delete_project` 在 core 层 `unbind_starmaps` 成功后刷新搜索索引使用。
+    /// 读取最新的 starmap meta + graph，把 title/node/edge/link/embed/hyperlink
+    /// 条目重新 upsert 到搜索索引（project_id 已被 core 层清成 None）。
+    #[allow(clippy::too_many_lines, clippy::excessive_nesting)]
+    pub(crate) fn refresh_starmap_search_index(&self, starmap_id: &str) {
+        let meta = match self.core_write().get_starmap(starmap_id) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        let entry =
+            crate::search::extractor::extract_starmap_title_entry(starmap_id, None, &meta.title);
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
+        });
+        let graph_result = self.core_write().get_starmap_graph(starmap_id);
+        if let Ok(graph) = graph_result {
+            for node in &graph.nodes {
+                let node_content = extract_node_search_body(&node.content, &node.tags);
+                let entry = crate::search::extractor::extract_starmap_node_entry(
+                    starmap_id,
+                    &node.id,
+                    None,
+                    &node.title,
+                    &node_content,
+                );
+                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    action: crate::search::SearchIndexAction::Upsert,
+                    object_id: entry.object_id.clone(),
+                    scope: entry.scope,
+                    title: entry.title.clone(),
+                    body: entry.body.clone(),
+                    target: Some(entry.target.clone()),
+                });
+            }
+            for edge in &graph.edges {
+                let label = edge.label.as_deref().unwrap_or("");
+                if !label.is_empty() {
+                    let entry = crate::search::extractor::extract_starmap_edge_entry(
+                        starmap_id, &edge.id, None, label,
+                    );
+                    self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                        action: crate::search::SearchIndexAction::Upsert,
+                        object_id: entry.object_id.clone(),
+                        scope: entry.scope,
+                        title: entry.title.clone(),
+                        body: entry.body.clone(),
+                        target: Some(entry.target.clone()),
+                    });
+                }
+            }
+            for link in &graph.links {
+                let label = link.label.as_deref().unwrap_or("");
+                if !label.is_empty() {
+                    let entry = crate::search::extractor::extract_starmap_link_entry(
+                        starmap_id,
+                        &link.link_id,
+                        None,
+                        label,
+                    );
+                    self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                        action: crate::search::SearchIndexAction::Upsert,
+                        object_id: entry.object_id.clone(),
+                        scope: entry.scope,
+                        title: entry.title.clone(),
+                        body: entry.body.clone(),
+                        target: Some(entry.target.clone()),
+                    });
+                }
+            }
+            for embed in &graph.embeds {
+                let label = embed.label.as_deref().unwrap_or("");
+                let entry = crate::search::extractor::extract_starmap_embed_entry(
+                    starmap_id,
+                    &embed.instance_id,
+                    None,
+                    label,
+                );
+                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    action: crate::search::SearchIndexAction::Upsert,
+                    object_id: entry.object_id.clone(),
+                    scope: entry.scope,
+                    title: entry.title.clone(),
+                    body: entry.body.clone(),
+                    target: Some(entry.target.clone()),
+                });
+            }
+        }
+        let hl_result = self.core_write().list_starmap_hyperlinks(starmap_id);
+        if let Ok(result) = hl_result {
+            for hl in &result.items {
+                let hl_title = hl.label.as_deref().unwrap_or("");
+                let entry = crate::search::extractor::extract_starmap_hyperlink_entry(
+                    starmap_id,
+                    &hl.hyperlink_id,
+                    None,
+                    hl_title,
+                    &hl.target_uri,
+                );
+                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    action: crate::search::SearchIndexAction::Upsert,
+                    object_id: entry.object_id.clone(),
+                    scope: entry.scope,
+                    title: entry.title.clone(),
+                    body: entry.body.clone(),
+                    target: Some(entry.target.clone()),
+                });
+            }
+        }
+    }
+
     pub fn set_main_starmap_for_project(
         &self,
         starmap_id: &str,

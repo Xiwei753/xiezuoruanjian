@@ -183,37 +183,15 @@ pub fn delete_volume(project_root: &Path, volume_id: &str, app_data_root: &Path)
 ///
 /// `ordered_ids` 必须是当前项目所有卷 ID 的精确排列（集合完全一致，无遗漏无多余），
 /// 否则返回错误。每个卷的 `order` 字段被设置为该 ID 在列表中的索引。
+///
+/// #645 评论 5504296097 问题1：本函数是 `reorder_volumes_with_changes` 的薄包装。
+/// 真正的写循环在 `reorder_volumes_with_changes` 里——只对 order 实际变化的卷
+/// 重写 `volume.json`，避免磁盘事实（N 个文件变了）和 change_set（M < N 个）漂移。
+/// 旧接口不返回 change_set，`app_data_root` 用 `project_root` 作占位
+/// （`workspace_rel` 会 `strip_prefix`，结果不影响旧接口正确性）。
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn reorder_volumes(project_root: &Path, ordered_ids: &[String]) -> Result<()> {
-    let volumes = list_volumes(project_root)?;
-    let existing_ids: std::collections::HashSet<_> = volumes.iter().map(|v| v.id.clone()).collect();
-    let new_ids: std::collections::HashSet<_> = ordered_ids.iter().cloned().collect();
-
-    if existing_ids.len() != new_ids.len()
-        || existing_ids != new_ids
-        || ordered_ids.len() != new_ids.len()
-    {
-        return Err(crate::error::Error::Other(
-            "Invalid ordered_ids for reorder".to_string(),
-        ));
-    }
-
-    for (index, id) in ordered_ids.iter().enumerate() {
-        let volume_dir = project_root.join("volumes").join(id);
-        let meta_path = volume_dir.join("volume.json");
-
-        if meta_path.exists() {
-            let meta_str = fs::read_to_string(&meta_path)?;
-            let mut meta = serde_json::from_str::<Volume>(&meta_str)?;
-            meta.order = index as i32;
-            meta.updated_at = Utc::now().to_rfc3339();
-            let updated_meta_str = serde_json::to_string_pretty(&meta)?;
-            crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
-        } else {
-            return Err(crate::error::Error::VolumeNotFound);
-        }
-    }
-    Ok(())
+    reorder_volumes_with_changes(project_root, ordered_ids, project_root).map(|_| ())
 }
 
 // ── #645 评论 5504296097 问题3：volume 的 *_with_changes 入口 ──
@@ -296,34 +274,51 @@ pub fn delete_volume_with_changes(
 /// #645 评论 5504296097 问题3：reorder_volumes 的变更集版本。
 ///
 /// 返回 `WorkspaceChangeSet`，变更集包含所有被改 order 的 volume.json 的 Upsert 路径。
+///
+/// #645 评论 5504296097 问题1：把真正的写循环收进本函数，只对 order 实际变化的卷
+/// 重写 `volume.json`。这样"实际写了什么"和"history 记录什么"来自同一个循环，
+/// 不会再出现磁盘改了 N 个 volume.json 但 change_set 只有 M 个 (M < N) 的漂移。
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn reorder_volumes_with_changes(
     project_root: &Path,
     ordered_ids: &[String],
     app_data_root: &Path,
 ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-    // 先获取当前 order，用于判断哪些被修改了。
+    // 校验 ordered_ids 是当前所有卷 ID 的精确排列。
     let volumes = list_volumes(project_root)?;
-    let mut orders_before = std::collections::HashMap::new();
-    for v in &volumes {
-        orders_before.insert(v.id.clone(), v.order);
+    let existing_ids: std::collections::HashSet<_> = volumes.iter().map(|v| v.id.clone()).collect();
+    let new_ids: std::collections::HashSet<_> = ordered_ids.iter().cloned().collect();
+    if existing_ids.len() != new_ids.len()
+        || existing_ids != new_ids
+        || ordered_ids.len() != new_ids.len()
+    {
+        return Err(crate::error::Error::Other(
+            "Invalid ordered_ids for reorder".to_string(),
+        ));
     }
 
-    reorder_volumes(project_root, ordered_ids)?;
-
-    // 构造变更集：只包含 order 实际发生变化的 volume.json。
-    let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new();
+    let mut changes = crate::storage::workspace_git::WorkspaceChangeSet::new();
     for (index, id) in ordered_ids.iter().enumerate() {
-        let new_order = index as i32;
-        if let Some(&old_order) = orders_before.get(id) {
-            if old_order != new_order {
-                let meta_path = project_root.join("volumes").join(id).join("volume.json");
-                let rel = workspace_rel(&meta_path, app_data_root);
-                change_set = change_set.add_upsert(std::path::PathBuf::from(rel));
-            }
+        let volume_dir = project_root.join("volumes").join(id);
+        let meta_path = volume_dir.join("volume.json");
+        if !meta_path.exists() {
+            return Err(crate::error::Error::VolumeNotFound);
         }
+        let meta_str = fs::read_to_string(&meta_path)?;
+        let mut meta = serde_json::from_str::<Volume>(&meta_str)?;
+        let new_order = index as i32;
+        if meta.order == new_order {
+            // 不变则不写——磁盘事实和 change_set 一致。
+            continue;
+        }
+        meta.order = new_order;
+        meta.updated_at = Utc::now().to_rfc3339();
+        let updated_meta_str = serde_json::to_string_pretty(&meta)?;
+        crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
+        let rel = workspace_rel(&meta_path, app_data_root);
+        changes = changes.add_upsert(std::path::PathBuf::from(rel));
     }
-    Ok(change_set)
+    Ok(changes)
 }
 
 #[cfg(test)]

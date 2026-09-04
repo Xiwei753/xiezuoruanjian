@@ -18,7 +18,10 @@
 //!   `full-sync-staging`、`app-meta/transactions`、`secrets`、`app-meta/logs`、
 //!   `cache`、`.tmp`、`.lock`；
 //! - `sync/staging/run.rs::walk_commit_candidates` 跳过规则：
-//!   `.git*`、`full-sync-staging`、`app-meta/transactions`。
+//!   `.git*`、`full-sync-staging`、`app-meta/transactions`；
+//! - #645 评论 5504296097 问题3：`sync/trash`（删除回收站）和
+//!   `app-meta/delete-journals`（删除事务 journal）也归 `InternalRuntime`，
+//!   staging/history 都不进。
 
 use std::path::Path;
 
@@ -40,8 +43,8 @@ pub enum WorkspacePathClass {
     Secret,
     /// 缓存（cache/、.tmp、.lock）。staging/history 都不进。
     Cache,
-    /// 内部运行时（.git、full-sync-staging、app-meta/transactions、app-meta/logs）。
-    /// staging/history 都不进。
+    /// 内部运行时（.git、full-sync-staging、app-meta/transactions、app-meta/logs、
+    /// sync/trash、app-meta/delete-journals）。staging/history 都不进。
     InternalRuntime,
 }
 
@@ -139,6 +142,8 @@ fn is_sync_engine_state_path_p(path: &Path) -> bool {
 /// - `full-sync-staging`（含子目录）：staging run 自身，避免递归；
 /// - `app-meta/transactions`（含子目录）：事务暂存目录，commit 中间态；
 /// - `app-meta/logs`（含子目录）：本地日志；
+/// - `sync/trash`（含子目录）：删除回收站，运行时数据；
+/// - `app-meta/delete-journals`（含子目录）：删除事务 journal，崩溃恢复数据；
 /// - 真实内部凭据路径（委托 [`is_workspace_secret_path`]）：永不进历史；
 /// - 路径中包含 `cache`：缓存目录；
 /// - `.tmp` 后缀：临时文件；
@@ -176,6 +181,18 @@ pub fn is_workspace_internal_path_str(path: &str) -> bool {
 
     // app-meta/logs/（本地日志）
     if normalized == "app-meta/logs" || normalized.starts_with("app-meta/logs/") {
+        return true;
+    }
+
+    // #645 评论 5504296097 问题3：sync/trash/（删除回收站，运行时数据）
+    if normalized == "sync/trash" || normalized.starts_with("sync/trash/") {
+        return true;
+    }
+
+    // #645 评论 5504296097 问题3：app-meta/delete-journals/（删除事务 journal，崩溃恢复数据）
+    if normalized == "app-meta/delete-journals"
+        || normalized.starts_with("app-meta/delete-journals/")
+    {
         return true;
     }
 
@@ -236,9 +253,9 @@ pub fn is_sync_staging_path_str(path: &str) -> bool {
 /// #645 评论 5504296097 问题4：把路径分类成 [`WorkspacePathClass`]。
 ///
 /// 分类顺序：先判 InternalRuntime（Git 工件/full-sync-staging/transactions/logs/
-/// .tmp/.lock），再判 Secret（凭据），再判 Cache，再判 SyncEngineState
-/// （sync engine state 文件），剩余按是否在已知用户设置路径下判 UserSetting，
-/// 其余为 UserContent。
+/// sync/trash/app-meta/delete-journals/.tmp/.lock），再判 Secret（凭据），
+/// 再判 Cache，再判 SyncEngineState（sync engine state 文件），
+/// 剩余按是否在已知用户设置路径下判 UserSetting，其余为 UserContent。
 pub fn classify_workspace_path(path: &Path) -> WorkspacePathClass {
     let rel_str = path.to_string_lossy();
     classify_workspace_path_str(&rel_str)
@@ -248,7 +265,8 @@ pub fn classify_workspace_path(path: &Path) -> WorkspacePathClass {
 pub fn classify_workspace_path_str(path: &str) -> WorkspacePathClass {
     let normalized = normalize_workspace_path(path);
 
-    // InternalRuntime：Git 工件、full-sync-staging、transactions、logs、.tmp、.lock
+    // InternalRuntime：Git 工件、full-sync-staging、transactions、logs、
+    // #645 评论 5504296097 问题3：sync/trash、app-meta/delete-journals、.tmp、.lock
     if is_internal_git_artifact(&normalized)
         || normalized == "full-sync-staging"
         || normalized.starts_with("full-sync-staging/")
@@ -256,6 +274,10 @@ pub fn classify_workspace_path_str(path: &str) -> WorkspacePathClass {
         || normalized.starts_with("app-meta/transactions/")
         || normalized == "app-meta/logs"
         || normalized.starts_with("app-meta/logs/")
+        || normalized == "sync/trash"
+        || normalized.starts_with("sync/trash/")
+        || normalized == "app-meta/delete-journals"
+        || normalized.starts_with("app-meta/delete-journals/")
         || normalized.ends_with(".tmp")
         || normalized.ends_with(".lock")
     {
@@ -479,6 +501,38 @@ mod tests {
             classify_workspace_path(&PathBuf::from("scratch.tmp")),
             InternalRuntime
         );
+        // #645 评论 5504296097 问题3：sync/trash 和 app-meta/delete-journals
+        // 归 InternalRuntime，staging/history 都不进。
+        assert_eq!(
+            classify_workspace_path(&PathBuf::from("sync/trash")),
+            InternalRuntime
+        );
+        assert_eq!(
+            classify_workspace_path(&PathBuf::from("sync/trash/deleted-volume")),
+            InternalRuntime
+        );
+        assert_eq!(
+            classify_workspace_path(&PathBuf::from("app-meta/delete-journals")),
+            InternalRuntime
+        );
+        assert_eq!(
+            classify_workspace_path(&PathBuf::from(
+                "app-meta/delete-journals/.sujian-delete-journal-xxx"
+            )),
+            InternalRuntime
+        );
+        assert!(is_workspace_internal_path(&PathBuf::from(
+            "sync/trash/anything"
+        )));
+        assert!(is_workspace_internal_path(&PathBuf::from(
+            "app-meta/delete-journals/anything"
+        )));
+        assert!(!is_workspace_history_path(&PathBuf::from(
+            "sync/trash/anything"
+        )));
+        assert!(!is_workspace_history_path(&PathBuf::from(
+            "app-meta/delete-journals/anything"
+        )));
     }
 
     /// #645 评论 5504296097 问题4：is_sync_staging_path 与 is_workspace_history_path

@@ -291,6 +291,8 @@ pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -
 /// 2. 每次 rename 后 fsync 对应父目录并推进 phase
 /// 3. #644 评论 5495945801 问题3：tombstone 收进事务（`tx.write_tombstone`），
 ///    错误直接返回不吞；journal 保留到 tombstone/worktree trash 都完成以后
+/// 4. #645 评论 5504296097 问题2：starmap 解绑收进事务（`tx.unbind_starmaps`），
+///    避免 API 层 best-effort unbind loop 产生的半状态
 ///
 /// #645 评论第 1 点：一个工作区一个 Git 仓库。Git 仓库是 workspace 级别共享的，
 /// 删除单个作品只移 worktree 进 trash，**不移动共享 git_dir**。因此不再传
@@ -303,44 +305,7 @@ pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -
     clippy::type_complexity
 )]
 pub fn delete_project(projects_root: &Path, project_id: &str, app_data_root: &Path) -> Result<()> {
-    let project_id = crate::delete_guard::validate_id_segment(project_id)?;
-    let project_dir = projects_root.join(project_id);
-    let target_canon =
-        crate::delete_guard::validate_delete_target(projects_root, &project_dir, "project.json")?;
-
-    // #644 评论 5495945801 问题2：只传 trash root，token 在事务内部生成。
-    let worktree_trash_root = app_data_root.join("sync/trash");
-
-    // #645 评论第 1 点：workspace 共享 git_dir 不因删除单个作品而移动。
-    // 创建 durable delete transaction，不传 private git_dir。
-    let mut tx = crate::storage::journal::project_delete::ProjectDeleteTransaction::new(
-        project_id,
-        &target_canon,
-        &worktree_trash_root,
-        None,
-        None,
-        projects_root,
-        app_data_root,
-    );
-
-    // 1. 准备阶段：写 journal 到 app_meta/delete-journals/。
-    //    在第一次 rename 前先写 journal，确保崩溃恢复能看到待删除状态。
-    tx.prepare()?;
-
-    // 2. 移动 worktree 到 trash。
-    tx.move_worktree()?;
-
-    // 3. #644 评论 5495945801 问题3：生成 tombstone（收进事务，错误直接返回不吞）。
-    //    删除原来的 if let Ok / let _ = tombstone 代码块。
-    tx.write_tombstone()?;
-
-    // 4. 完成删除：推进 phase 到 Completed。
-    tx.complete()?;
-
-    // 5. 清理 journal。
-    tx.cleanup_journal()?;
-
-    Ok(())
+    delete_project_with_changes(projects_root, project_id, app_data_root).map(|_| ())
 }
 
 /// 从子章节聚合获取 volume 的最近更新时间。
@@ -511,18 +476,91 @@ pub fn rename_project_with_changes(
 
 /// #645 评论 5504296097 问题2：delete_project 的变更集版本。
 ///
-/// 返回 `WorkspaceChangeSet`，变更集包含 `DeleteTree(projects/{project_id})`。
+/// 返回 `WorkspaceChangeSet`，变更集包含：
+/// - `DeleteTree(projects/{project_id})`：被删除的作品目录
+/// - `Upsert(starmaps/{id}.meta.json)` + `Upsert(starmaps/index.json)`：
+///   每个被解绑的 starmap（#645 评论 5504296097 问题2）
+///
 /// 使用 DeleteTree 而不是 Delete，因为要移除整个作品目录。
+///
+/// #645 评论 5504296097 问题2：把 starmap 解绑收进 durable delete transaction，
+/// 执行顺序：prepare → move_worktree → write_tombstone → unbind_starmaps
+/// → complete → cleanup_journal。解绑和删除原子化，避免半状态。
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub fn delete_project_with_changes(
     projects_root: &Path,
     project_id: &str,
     app_data_root: &Path,
 ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-    delete_project(projects_root, project_id, app_data_root)?;
+    let project_id = crate::delete_guard::validate_id_segment(project_id)?;
+    let project_dir = projects_root.join(project_id);
+    let target_canon =
+        crate::delete_guard::validate_delete_target(projects_root, &project_dir, "project.json")?;
 
+    // #645 评论 5504296097 问题2：在 prepare 之前先获取需要解绑的 starmap ids。
+    // 把 unbind 收进事务，避免 API 层 best-effort unbind loop 产生的半状态。
+    let bound_starmaps = crate::starmap::list_starmaps_bound_to_project(app_data_root, project_id)
+        .unwrap_or_default();
+    let starmap_ids: Vec<String> = bound_starmaps
+        .iter()
+        .map(|m| m.starmap_id.clone())
+        .collect();
+
+    // #644 评论 5495945801 问题2：只传 trash root，token 在事务内部生成。
+    let worktree_trash_root = app_data_root.join("sync/trash");
+
+    // #645 评论第 1 点：workspace 共享 git_dir 不因删除单个作品而移动。
+    // 创建 durable delete transaction，不传 private git_dir。
+    let mut tx = crate::storage::journal::project_delete::ProjectDeleteTransaction::new(
+        project_id,
+        &target_canon,
+        &worktree_trash_root,
+        None,
+        None,
+        projects_root,
+        app_data_root,
+        starmap_ids,
+    );
+
+    // 1. 准备阶段：写 journal 到 app_meta/delete-journals/。
+    tx.prepare()?;
+
+    // 2. 移动 worktree 到 trash。
+    tx.move_worktree()?;
+
+    // 3. #644 评论 5495945801 问题3：生成 tombstone（收进事务，错误直接返回不吞）。
+    tx.write_tombstone()?;
+
+    // 4. #645 评论 5504296097 问题2：解除该作品所有 StarMap 绑定（收进事务）。
+    tx.unbind_starmaps()?;
+
+    // 在 cleanup_journal（消耗 tx）之前把 starmap_ids clone 出来，供构造 change_set。
+    let unbound_starmap_ids: Vec<String> = tx.starmap_ids().to_vec();
+
+    // 5. 完成删除：推进 phase 到 Completed。
+    tx.complete()?;
+
+    // 6. 清理 journal。
+    tx.cleanup_journal()?;
+
+    // 构造合并后的 change_set：
+    // DeleteTree(projects/{project_id}) + 每个被解绑 starmap 的 meta + index.json
     let project_tree_path = PathBuf::from("projects").join(project_id);
-    let change_set =
+    let mut change_set =
         crate::storage::workspace_git::WorkspaceChangeSet::new().add_delete_tree(project_tree_path);
+    for sm_id in &unbound_starmap_ids {
+        let meta_rel = PathBuf::from("starmaps").join(format!("{}.meta.json", sm_id));
+        change_set = change_set.add_upsert(meta_rel);
+    }
+    if !unbound_starmap_ids.is_empty() {
+        change_set = change_set.add_upsert(PathBuf::from("starmaps").join("index.json"));
+    }
 
     Ok(change_set)
 }
