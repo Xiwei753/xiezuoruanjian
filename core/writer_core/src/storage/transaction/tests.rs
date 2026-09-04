@@ -55,7 +55,6 @@ fn test_transaction_recovery_staging_exists() {
         entries: tx.entries.clone(),
         phase: TransactionPhase::Prepared,
         backup_entries: Vec::new(),
-        git_finalize: None,
     };
     let manifest_json = serde_json::to_string_pretty(&manifest).unwrap();
     fs::write(tx_dir.join(MANIFEST_FILENAME), &manifest_json).unwrap();
@@ -73,11 +72,10 @@ fn test_transaction_recovery_staging_exists() {
         .unwrap();
     }
 
-    let (recovered, pending) = recover_pending_transactions(ws);
+    let recovered = recover_pending_transactions(ws);
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].recovered_files.len(), 2);
     assert!(recovered[0].missing_files.is_empty());
-    assert!(pending.is_empty());
 }
 
 #[test]
@@ -98,16 +96,14 @@ fn test_transaction_recovery_staging_lost() {
         }],
         phase: TransactionPhase::Prepared,
         backup_entries: Vec::new(),
-        git_finalize: None,
     };
     let manifest_json = serde_json::to_string_pretty(&manifest).unwrap();
     fs::write(tx_dir.join(MANIFEST_FILENAME), &manifest_json).unwrap();
 
-    let (recovered, pending) = recover_pending_transactions(ws);
+    let recovered = recover_pending_transactions(ws);
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].recovered_files.len(), 0);
     assert_eq!(recovered[0].missing_files.len(), 1);
-    assert!(pending.is_empty());
 }
 
 #[test]
@@ -232,9 +228,8 @@ fn recover_should_preserve_tx_dir_when_manifest_corrupted() {
     assert!(
         tx_dir.exists(),
         "recover must NOT delete tx_dir when manifest is corrupted; \
-         tx_dir contains backup_entries + GitMetadataSnapshot + GitFinalizePlan \
-         recovery material; current code remove_dir_all(tx_dir), destroying \
-         last recovery evidence"
+         tx_dir contains backup_entries recovery material; current code \
+         remove_dir_all(tx_dir), destroying last recovery evidence"
     );
 }
 

@@ -262,8 +262,6 @@ impl super::WriterCore {
             }
             #[cfg(not(feature = "github-api"))]
             "github_api" => Err(crate::Error::NotImplemented),
-            // Git backend 走旧 git2 路径，不通过 SyncProvider。
-            "git" => Err(crate::Error::NotImplemented),
             _ => Err(crate::Error::NotImplemented),
         }
     }
@@ -669,10 +667,7 @@ impl super::WriterCore {
             }
             #[cfg(not(feature = "github-api"))]
             "github_api" => Err(crate::Error::NotImplemented),
-            _ => {
-                // Git backend 或其他未知 provider — 走旧路径或不支持。
-                Err(crate::Error::NotImplemented)
-            }
+            _ => Err(crate::Error::NotImplemented),
         }
     }
 

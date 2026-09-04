@@ -221,7 +221,7 @@ impl SyncTarget {
 pub struct SyncConfig {
     /// 是否启用同步
     pub enabled: bool,
-    /// 活跃 Provider 类型（当前仅 "github_api"；"git" 为预留）。
+    /// 活跃 Provider 类型（"github_api" 等）。
     /// 后续 WebDAV/CloudKit 等 Provider 接入后在此处选择。
     #[serde(default = "default_active_provider")]
     pub active_provider: String,
@@ -549,9 +549,6 @@ pub struct SyncConflictSummary {
 /// `uploaded_files` / `downloaded_files` / `ignored_files` 仅在 Success 时有意义。
 /// `conflicts` 仅在 Conflict/PartialConflict 时非空。
 /// `overwritten_files` 记录 LWW 决胜中被覆盖的一方（仅 Metadata/GeneratedCache）。
-///
-/// #645 评论 5504296097 第2点：删除 `commit_hash` / `first_sync_mode` —
-/// 这两个字段假设远端是 Git 仓库，通用 core 不再携带 Git 同步语义。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncResult {
     pub status: SyncStatus,
@@ -740,29 +737,6 @@ pub struct Tombstone {
 }
 
 /// 同步持久状态，保存为 `app-meta/sync/state.json`。
-///
-/// 非线程安全：只在同步引擎主路径读写，同步期间持有独占可变引用。
-///
-/// 字段关系：
-/// - `known_files` + `known_files_updated_at` 是一对伴生映射，
-///   同一个 path 在两个映射中必须同时存在或同时不存在。
-///   `known_files[path]` 存储上次同步后的共识哈希（base_hash），
-///   `known_files_updated_at[path]` 存储该条目的更新时间戳（毫秒），
-///   两者共同构成 LWW 比较的基准。
-/// - `conflicted_files` 中的路径在同步时被跳过，不参与三路/LWW 比较，
-///   直到用户通过 resolve_conflict_* 显式解决。
-/// - `pending_take_remote` 记录用户选择"采用远端"但远端内容尚未下载的路径，
-///   下次 perform_sync 时强制下载这些路径后再进入正常比较流程。
-/// - `tombstones` 记录本地已删除文件的墓碑，用于下次同步时向远端发送 delete 操作，
-///   `purge_after` 过期后由同步引擎清理。
-///
-/// 同步完成后 known_files 会被 post-sync scan 重建，但冲突路径的 base_hash 会被保留，
-/// 以确保下次同步仍能检测到 BothChanged。
-///
-/// #645 评论 5504296097 第2点：删除 `remote_url` / `transport` / `last_synced_commit` —
-/// 这三个字段假设远端是 Git 仓库，通用 core 不再携带 Git 同步语义。
-/// 远端 URL/transport 由 `SyncConfig.provider_config` 推导，commit hash 概念不适用于
-/// LWW/Contents API 同步。旧持久化 JSON 中的这些字段靠 serde 默认忽略未知字段丢弃。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncState {
     pub last_sync_time: Option<i64>,

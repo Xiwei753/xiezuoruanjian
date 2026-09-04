@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 pub(crate) const TRANSACTIONS_DIR: &str = "app-meta/transactions";
 pub(crate) const MANIFEST_FILENAME: &str = "manifest.json";
@@ -19,11 +18,6 @@ pub struct TransactionManifest {
     /// 旧 manifest 中无此字段时反序列化为空 Vec（向后兼容）。
     #[serde(default)]
     pub backup_entries: Vec<BackupEntry>,
-    /// #644 评论 5476546134 第2节：Git finalize 崩溃恢复记录。
-    /// 仅 backup_mode 且需要 Git finalize 时有值。
-    /// 旧 manifest 中无此字段时反序列化为 None（向后兼容）。
-    #[serde(default)]
-    pub git_finalize: Option<crate::storage::workspace_git::GitFinalizeRecoveryRecord>,
 }
 
 fn default_phase() -> TransactionPhase {
@@ -41,19 +35,21 @@ pub struct TransactionEntry {
     pub is_delete: bool,
 }
 
-/// #644 评论 5475805198 第1节：事务生命周期阶段。
+/// 事务生命周期阶段。
 ///
 /// 写入 manifest，供崩溃恢复判断事务进度：
 /// - `Prepared`：manifest 已写入，文件尚未 rename。
-/// - `FilesCommitted`：所有 rename 完成，无需 Git finalize（非 backup_mode）。
-/// - `FilesCommittedPendingGit`：rename 完成，等待 Git metadata finalize。
-/// - `Finished`：Git finalize 成功，可以清理。
+/// - `FilesCommitted`：所有 rename 完成。
+/// - `Finished`：事务成功完成，可以清理。
 /// - `RolledBack`：rollback 已执行，可以清理。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionPhase {
     Prepared,
     FilesCommitted,
+    /// 旧 manifest 兼容：历史事务可能停在此阶段。
+    /// 恢复时按 FilesCommitted + 可选 rollback 处理。
+    #[serde(rename = "files_committed_pending_git")]
     FilesCommittedPendingGit,
     Finished,
     RolledBack,
@@ -84,13 +80,3 @@ pub struct TransactionRecovery {
     pub missing_files: Vec<String>,
 }
 
-/// #644 评论 5475805198 第1节：FilesCommittedPendingGit 状态的事务恢复信息。
-///
-/// 文件已 commit 到 live，但 Git metadata finalize 尚未完成。
-/// 调用方需要决定：完成 Git finalize 或回滚文件。
-pub struct PendingGitTransactionRecovery {
-    pub transaction_id: String,
-    pub manifest: TransactionManifest,
-    pub target_root: PathBuf,
-    pub tx_dir: PathBuf,
-}

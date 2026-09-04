@@ -27,11 +27,8 @@ pub struct SaveTransaction {
     /// commit 时备份的旧文件列表。用 `BackupEntry` 枚举替代空字符串哨兵。
     backed_up_files: Vec<BackupEntry>,
     /// #644 评论 5475413230 第1节：backup_mode 时 commit 不再 cleanup，
-    /// 必须等 Git finalize 完成后由调用方显式调用 `finish()` 清理。
+    /// 必须等事务完成后由调用方显式调用 `finish()` 清理。
     finished: bool,
-    /// #644 评论 5476546134 第2节：Git finalize 崩溃恢复记录。
-    /// 写入 manifest 供重启后独立恢复。
-    git_finalize_recovery: Option<crate::storage::workspace_git::GitFinalizeRecoveryRecord>,
 }
 
 impl SaveTransaction {
@@ -47,7 +44,6 @@ impl SaveTransaction {
             backup_mode: false,
             backed_up_files: Vec::new(),
             finished: false,
-            git_finalize_recovery: None,
         }
     }
 
@@ -86,25 +82,12 @@ impl SaveTransaction {
         });
     }
 
-    /// #644 评论 5475110422 第3节：启用备份模式。
+    /// 启用备份模式。
     ///
     /// commit 前先把被覆盖/删除的旧文件备份到事务目录下的 `backup/` 子目录，
     /// 使 `rollback()` 能恢复到 commit 前的状态。
-    /// 用于 Git finalize 原子性：先提交 SaveTransaction，再更新 Git ref/index；
-    /// 若 Git finalize 失败，rollback 恢复文件到旧版本。
     pub fn enable_backup_mode(&mut self) {
         self.backup_mode = true;
-    }
-
-    /// #644 评论 5476546134 第2节：设置 Git finalize 崩溃恢复记录。
-    ///
-    /// 必须在 `commit()` 之前调用，使 recovery record 与 manifest 一起原子写入。
-    /// 写入 manifest 供重启后独立恢复。
-    pub fn set_git_finalize_recovery(
-        &mut self,
-        record: crate::storage::workspace_git::GitFinalizeRecoveryRecord,
-    ) {
-        self.git_finalize_recovery = Some(record);
     }
 
     /// #644 评论 5475110422 第3节 + #644 评论 5475413230 第1节 +
@@ -195,17 +178,14 @@ impl SaveTransaction {
         Ok(())
     }
 
-    /// #644 评论 5475413230 第1节 + #644 评论 5475805198 第1节 +
-    /// #644 评论 5483239422 问题1：
-    /// Git finalize 成功后调用，更新 manifest phase 为 Finished 并清理事务目录。
+    /// 事务完成后调用，更新 manifest phase 为 Finished 并清理事务目录。
     ///
-    /// `backup_mode` 时 `commit()` 不再自动 cleanup；调用方必须在 Git finalize
+    /// `backup_mode` 时 `commit()` 不再自动 cleanup；调用方必须在事务提交
     /// 完成后显式调用 `finish()`。非 backup_mode 时 `commit()` 已 cleanup，
     /// `finish()` 是空操作。
     ///
-    /// #644 评论 5483239422 问题1：返回 `Result<()>`，`write_manifest_phase(Finished)`
-    /// 失败时返回 Err，**不**设 finished、**不**调 cleanup，保留 tx_dir 给下次恢复。
-    /// 调用方（sync_ops）只有 finish 成功后才允许清 owner marker。
+    /// `write_manifest_phase(Finished)` 失败时返回 Err，**不**设 finished、
+    /// **不**调 cleanup，保留 tx_dir 给下次恢复。
     pub fn finish(&mut self) -> Result<()> {
         // #644 评论 5475805198 第1节 + #644 评论 5483239422 问题1：
         // 更新 manifest phase 为 Finished。用 `?` 传播错误，不吞错。
@@ -225,18 +205,13 @@ impl SaveTransaction {
         clippy::type_complexity
     )]
     pub fn commit(&mut self) -> Result<()> {
-        // #644 评论 5477439446 问题1：纯 Git metadata 变化时（entries 为空但
-        // git_finalize_recovery 存在），仍需创建 metadata-only transaction barrier。
-        // 让 manifest 落盘（Prepared -> FilesCommittedPendingGit），保留事务到
-        // finish()，不在这里 cleanup。这样 finalize 中途崩溃后启动恢复有持久化
-        // snapshot 可用。
-        if self.entries.is_empty() && self.git_finalize_recovery.is_none() {
+        if self.entries.is_empty() {
             self.cleanup();
             return Ok(());
         }
 
-        // #644 评论 5476546134 第3节：backup_mode 时先完成全部备份，不改 live。
-        // 备份信息 + git_finalize recovery record 一次原子写入 manifest。
+        // backup_mode 时先完成全部备份，不改 live。
+        // 备份信息一次原子写入 manifest。
         // manifest 持久化成功后，才开始 rename/delete live 文件。
         if self.backup_mode {
             let backup_dir = self.tx_dir.join("backup");
@@ -267,7 +242,7 @@ impl SaveTransaction {
             // 持久化 backup 目录项，再允许写 Prepared phase。
             crate::storage::sync_dir(&backup_dir)?;
 
-            // 原子写入 Prepared + backup_entries + git_finalize recovery record。
+            // 原子写入 Prepared + backup_entries。
             let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
             self.write_manifest_phase(&manifest_path, TransactionPhase::Prepared)?;
 
@@ -300,7 +275,7 @@ impl SaveTransaction {
             }
 
             // rename 全部完成后更新 phase。
-            self.write_manifest_phase(&manifest_path, TransactionPhase::FilesCommittedPendingGit)?;
+            self.write_manifest_phase(&manifest_path, TransactionPhase::FilesCommitted)?;
             self.committed = true;
             // backup_mode 时不在 commit 内 cleanup。
             return Ok(());
@@ -342,15 +317,10 @@ impl SaveTransaction {
         Ok(())
     }
 
-    /// #644 评论 5488871385 问题1：rollback 前的 material preflight。
+    /// rollback 前的 material preflight。
     ///
     /// 在真正进入 rollback 路径之前调用。对每个 `RestoreFile` 做 `File::open()`
-    /// 确认可读（不用 `metadata()` 冒充"可读"）。
-    /// 一个不满足就不能碰 Git/index/live。
-    ///
-    /// 在 `sync_ops.rs` 中，调用 `try_commit_git_finalize()` 之前调用本方法，
-    /// 确保 backup material 完好，然后才进入 Git finalize。
-    /// 如果 finalize 失败需要 rollback，backup 已确认可用。
+    /// 确认可读。一个不满足就不能碰 live 文件。
     #[allow(clippy::excessive_nesting)]
     pub fn preflight_rollback_material(&self) -> Result<()> {
         if !self.backup_mode {
@@ -390,17 +360,15 @@ impl SaveTransaction {
     /// manifest 不存在时（首次写入）创建最小 manifest。
     ///
     /// #644 评论 5483239422 问题1：manifest 存在但反序列化失败时返回 Err，
-    /// **不**自动重建最小 manifest——重建会丢掉 backup_entries/git_finalize/plan
-    /// 崩溃恢复材料。调用方收到 Err 应保留 tx_dir 给下次恢复或显式修复。
-    ///
-    /// #644 评论 5476546134 第2节：同时写入 git_finalize recovery record。
+    /// **不**自动重建最小 manifest——重建会丢掉 backup_entries 崩溃恢复材料。
+    /// 调用方收到 Err 应保留 tx_dir 给下次恢复或显式修复。
     fn write_manifest_phase(&self, manifest_path: &Path, phase: TransactionPhase) -> Result<()> {
         let mut manifest = if manifest_path.exists() {
             let content = fs::read_to_string(manifest_path)?;
             serde_json::from_str::<TransactionManifest>(&content).map_err(|e| {
                 crate::Error::Io(std::io::Error::other(format!(
                     "write_manifest_phase: manifest at {} is corrupted (deserialize failed: {}); \
-                     refusing to rebuild minimal manifest to preserve backup_entries/git_finalize/plan",
+                     refusing to rebuild minimal manifest to preserve backup_entries",
                     manifest_path.display(),
                     e
                 )))
@@ -413,14 +381,10 @@ impl SaveTransaction {
                 entries: self.entries.clone(),
                 phase: TransactionPhase::Prepared,
                 backup_entries: Vec::new(),
-                git_finalize: None,
             }
         };
         manifest.phase = phase;
         manifest.backup_entries = self.backed_up_files.clone();
-        if self.git_finalize_recovery.is_some() {
-            manifest.git_finalize = self.git_finalize_recovery.clone();
-        }
         let json = serde_json::to_string_pretty(&manifest)?;
         crate::storage::atomic_write_string(manifest_path, &json)?;
         Ok(())
