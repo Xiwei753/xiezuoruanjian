@@ -137,7 +137,7 @@ fn test_recovery_from_prepared() {
 
     // 重启恢复。
     let recovered = recover_pending_delete_transactions(app_data_root).unwrap();
-    assert_eq!(recovered, 1);
+    assert_eq!(recovered.len(), 1);
     assert!(!worktree_from.exists());
     assert!(worktree_trash.exists());
     assert!(!git_dir_from.exists());
@@ -184,7 +184,7 @@ fn test_recovery_from_worktree_moved() {
 
     // 重启恢复。
     let recovered = recover_pending_delete_transactions(app_data_root).unwrap();
-    assert_eq!(recovered, 1);
+    assert_eq!(recovered.len(), 1);
     assert!(!git_dir_from.exists());
     assert!(git_dir_trash.exists());
 }
@@ -228,8 +228,13 @@ fn test_recovery_from_git_moved() {
     // 重启恢复。
     let journal_path = tx.journal_path.clone();
     let recovered = recover_pending_delete_transactions(app_data_root).unwrap();
-    assert_eq!(recovered, 1);
-    assert!(!journal_path.exists());
+    assert_eq!(recovered.len(), 1);
+    // #645 评论 5504296097 缺口2修复：recover 不 complete/cleanup，journal 保留。
+    // 调用方（bootstrap）需 ack 后才清理。这里验证 journal 仍存在。
+    assert!(
+        journal_path.exists(),
+        "缺口2修复：recover 后 journal 应保留在 StarMapsUnbound，由调用方 ack 后清理"
+    );
 }
 
 /// 验证无 private git 时的删除流程。

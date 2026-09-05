@@ -215,8 +215,15 @@ impl super::WriterCore {
         crate::project::rename_project_with_changes(&self.projects_root, project_id, new_title)
     }
 
-    /// 删除作品并返回变更集。
-    pub fn delete_project_with_changes(&self, project_id: &str) -> Result<WorkspaceChangeSet> {
+    /// 删除作品并返回业务结果（变更集 + 解绑 starmap ids + journal token）。
+    ///
+    /// #645 评论 5504296097 缺口1/缺口2修复：返回 `ProjectDeleteOutcome`，
+    /// journal 保留在 `StarMapsUnbound`，由 API 层记 history 后调
+    /// `ack_project_delete_history` 推进并清 journal。
+    pub fn delete_project_with_changes(
+        &self,
+        project_id: &str,
+    ) -> Result<crate::project::ProjectDeleteOutcome> {
         crate::project::delete_project_with_changes(
             &self.projects_root,
             project_id,

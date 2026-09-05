@@ -25,8 +25,56 @@ use crate::app_service::WriterAppService;
 ///
 /// 在创建 `WriterAppService` 之前调用，确保崩溃前的删除事务被完成。
 /// 恢复失败返回 Err（用 `?` 严格返回），让调用方决定。
-fn recover_storage_transactions(app_data_root: &Path) -> std::result::Result<(), WriterError> {
-    crate::storage::journal::project_delete::recover_pending_delete_transactions(app_data_root)?;
+///
+/// #645 评论 5504296097 缺口2修复：recover 返回 `Vec<RecoveredProjectDelete>`，
+/// 每个含待补 history 的 change-set。bootstrap 用 layout 调
+/// `record_workspace_change_set` 写本地 history，成功后调
+/// `ack_project_delete_history` 推进 journal 到 `HistoryRecorded` → `Completed`
+/// 并清 journal。history 失败时 log::warn 并保留 journal，下次启动 recover 补记。
+fn recover_storage_transactions(
+    app_data_root: &Path,
+    layout: &crate::storage::git_repo_layout::GitRepoLayout,
+) -> std::result::Result<(), WriterError> {
+    let recovered_list =
+        crate::storage::journal::project_delete::recover_pending_delete_transactions(
+            app_data_root,
+        )?;
+    for rec in &recovered_list {
+        match crate::storage::workspace_git::record_workspace_change_set(
+            layout,
+            &rec.changes,
+            "recover_project_delete",
+        ) {
+            Ok(result) => {
+                if result.oid.is_some() {
+                    log::debug!(
+                        "recover_storage_transactions: history committed for {} ({} staged)",
+                        rec.journal_token,
+                        result.staged_count
+                    );
+                }
+                // history 成功，ack 推进 journal。
+                if let Err(e) = crate::storage::journal::project_delete::ack_project_delete_history(
+                    app_data_root,
+                    &rec.journal_token,
+                ) {
+                    log::warn!(
+                        "recover_storage_transactions: ack failed for {}: {} — journal retained",
+                        rec.journal_token,
+                        e
+                    );
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "recover_storage_transactions: record_workspace_change_set failed for {}: {} \
+                     — journal retained, history will be补 on next startup",
+                    rec.journal_token,
+                    e
+                );
+            }
+        }
+    }
     Ok(())
 }
 
@@ -81,7 +129,8 @@ pub fn open_app_service(
     // #645 评论 5504296097 第2点：应用打开时初始化 workspace Git。
     let layout = ensure_workspace_git(Path::new(&app_data_root), None)?;
     // #644 评论 5495945801 问题4：在创建服务之前先恢复待处理的删除事务。
-    recover_storage_transactions(Path::new(&app_data_root))?;
+    // #645 评论 5504296097 缺口2修复：传 layout，recover 后用 layout 写 history。
+    recover_storage_transactions(Path::new(&app_data_root), &layout)?;
     let service = Arc::new(WriterAppService::new(app_data_root, projects_root));
     // #645 评论 5504296097 问题3：注入 bootstrap 计算的 layout 到 API 层。
     service.set_workspace_git_layout(layout);
@@ -107,7 +156,8 @@ pub fn open_app_service_with_init(
     // #645 评论 5504296097 第2点：应用打开时初始化 workspace Git。
     let layout = ensure_workspace_git(Path::new(&app_data_root), git_metadata_root.as_deref())?;
     // #644 评论 5495945801 问题4：在创建服务之前先恢复待处理的删除事务。
-    recover_storage_transactions(Path::new(&app_data_root))?;
+    // #645 评论 5504296097 缺口2修复：传 layout，recover 后用 layout 写 history。
+    recover_storage_transactions(Path::new(&app_data_root), &layout)?;
     let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
 
@@ -158,7 +208,8 @@ pub fn open_app_service_with_secure_storage(
     // #645 评论 5504296097 第2点：应用打开时初始化 workspace Git。
     let layout = ensure_workspace_git(Path::new(&app_data_root), git_metadata_root.as_deref())?;
     // #644 评论 5495945801 问题4：在创建服务之前先恢复待处理的删除事务。
-    recover_storage_transactions(Path::new(&app_data_root))?;
+    // #645 评论 5504296097 缺口2修复：传 layout，recover 后用 layout 写 history。
+    recover_storage_transactions(Path::new(&app_data_root), &layout)?;
     let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
 

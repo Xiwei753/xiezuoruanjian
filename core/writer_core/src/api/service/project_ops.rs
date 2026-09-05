@@ -125,25 +125,15 @@ impl WriterCoreApi {
     }
 
     pub fn delete_project(&self, project_id: &str) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题2：删除 best-effort unbind loop。
-        // starmap 解绑已收进 `delete_project_with_changes` 的 durable delete transaction
-        // （新增 `StarMapsUnbound` phase），解绑和删除原子化，避免半状态：
-        // - 情况 A：解绑成功，作品删除失败 → starmap 已解绑但 project 还在
-        // - 情况 B：某个解绑失败，作品删除成功 → 悬空引用
-        // 现在只调用一次 `delete_project_with_changes`，成功后再统一清搜索索引、
-        // 记录一次本地 history。
+        // #645 评论 5504296097 缺口1/缺口2修复：
+        // - core 层不再吞 list_starmaps_bound_to_project 错误，index.json 损坏时删除返回 Err。
+        // - 不再二次枚举绑定 starmap——用 outcome.unbound_starmap_ids（journal 里记录的
+        //   唯一事实来源）刷搜索索引。
+        // - 不再在 core 内 complete/cleanup journal——记 history 成功后调
+        //   ack_project_delete_history 推进到 HistoryRecorded → Completed 并清 journal。
+        //   history 失败时 journal 保留在 StarMapsUnbound，下次启动 recover 补记。
 
-        // 在删除前获取绑定的 starmap ids，供删除成功后更新搜索索引。
-        // 注意：不在此时解绑——解绑收进事务，避免半状态。
-        let bound_starmap_ids: Vec<String> = self
-            .core_write()
-            .list_starmaps_bound_to_project(project_id)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|m| m.starmap_id)
-            .collect();
-
-        let change_set = self.core_write().delete_project_with_changes(project_id)?;
+        let outcome = self.core_write().delete_project_with_changes(project_id)?;
 
         // 删除成功后才清搜索索引。搜索索引清理放在删除成功之后，避免
         // project 没删掉但搜索索引已清空的不一致状态。
@@ -157,16 +147,58 @@ impl WriterCoreApi {
             self.remove_search_index_by_prefix(prefix);
         }
 
-        // #645 评论 5504296097 问题2：删除成功后更新被解绑 starmap 的搜索索引。
-        // core 层 `unbind_starmaps` 只改 starmap meta/index 文件，不更新搜索索引。
-        // API 层负责把 starmap meta 的变化同步到搜索索引。
-        for sm_id in &bound_starmap_ids {
+        // #645 评论 5504296097 缺口1修复：用 outcome.unbound_starmap_ids 刷搜索索引，
+        // 不再二次枚举 list_starmaps_bound_to_project（避免与 core 层结果不一致）。
+        for sm_id in &outcome.unbound_starmap_ids {
             self.refresh_starmap_search_index(sm_id);
         }
 
-        // history 记录是 best-effort：record_workspace_change_set_history
-        // 内部已用 log::warn 吞掉 git 错误，不会把 history 失败当成删除失败。
-        self.record_workspace_change_set_history(&change_set, "delete_project");
+        // #645 评论 5504296097 缺口2修复：用 outcome.changes 记本地 history，
+        // 成功后 ack 推进 journal。history 失败时 log::warn 并保留 journal，
+        // 下次启动 recover 补记——不让 history 失败把删除变成失败（项目已删）。
+        let layout_guard = match self.workspace_git_layout.read() {
+            Ok(g) => g,
+            Err(_) => {
+                log::warn!(
+                    "delete_project: layout lock poisoned, skipping history + ack; \
+                     journal retained for recovery"
+                );
+                return Ok(true);
+            }
+        };
+        match crate::storage::workspace_git::record_workspace_change_set(
+            &layout_guard,
+            &outcome.changes,
+            "delete_project",
+        ) {
+            Ok(result) => {
+                if result.oid.is_some() {
+                    log::debug!(
+                        "delete_project: history committed ({} staged)",
+                        result.staged_count
+                    );
+                }
+                // history 成功，ack 推进 journal 到 HistoryRecorded → Completed 并清 journal。
+                if let Err(e) = crate::storage::journal::project_delete::ack_project_delete_history(
+                    &self.app_data_root,
+                    &outcome.journal_token,
+                ) {
+                    log::warn!(
+                        "delete_project: ack_project_delete_history failed: {} — \
+                         journal retained for recovery",
+                        e
+                    );
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "delete_project: record_workspace_change_set failed: {} — \
+                     journal retained for recovery, history will be补 on next startup",
+                    e
+                );
+            }
+        }
+
         Ok(true)
     }
 

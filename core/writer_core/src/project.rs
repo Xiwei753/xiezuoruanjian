@@ -284,6 +284,27 @@ pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -
     Ok(())
 }
 
+/// #645 评论 5504296097 缺口1/缺口2修复：删除作品的业务结果。
+///
+/// `delete_project_with_changes` 返回此结构，把删除产生的变更集、被解绑的
+/// starmap ids 和 journal token 显式交给调用方：
+/// - `changes`：供 API 层调 `record_workspace_change_set` 记本地 history。
+/// - `unbound_starmap_ids`：供 API 层刷搜索索引（不再二次枚举）。
+/// - `journal_token`：供 API 层调 `ack_project_delete_history` 推进 journal
+///   到 `HistoryRecorded` → `Completed` 并清 journal。
+///
+/// journal 保留在 `StarMapsUnbound` phase，**不**在 core 内 complete/cleanup——
+/// 让 history 失败时 journal 保留，下次启动 recover 补记。
+#[derive(Debug, Clone)]
+pub struct ProjectDeleteOutcome {
+    /// 删除产生的 workspace 变更集（DeleteTree + 解绑 starmap 的 Upsert）。
+    pub changes: crate::storage::workspace_git::WorkspaceChangeSet,
+    /// 本次被解绑的 starmap ids（journal 里记录的唯一事实来源）。
+    pub unbound_starmap_ids: Vec<String>,
+    /// 本次删除的 journal token（用于 ack 推进 journal）。
+    pub journal_token: String,
+}
+
 /// 删除作品。
 ///
 /// 使用 durable delete transaction 解决"正文删了，private Git 还活着"的分裂状态：
@@ -293,6 +314,13 @@ pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -
 ///    错误直接返回不吞；journal 保留到 tombstone/worktree trash 都完成以后
 /// 4. #645 评论 5504296097 问题2：starmap 解绑收进事务（`tx.unbind_starmaps`），
 ///    避免 API 层 best-effort unbind loop 产生的半状态
+///
+/// #645 评论 5504296097 缺口1修复：不再用 `unwrap_or_default()` 吞掉
+/// `list_starmaps_bound_to_project` 的错误——index.json 损坏等情况下删除返回 Err。
+///
+/// #645 评论 5504296097 缺口2修复：core 内不 complete/cleanup journal，
+/// 保留在 `StarMapsUnbound`，由 `delete_project`（core 简化入口）直接 ack，
+/// 或由 API 层 `delete_project` 记 history 后 ack。
 ///
 /// #645 评论第 1 点：一个工作区一个 Git 仓库。Git 仓库是 workspace 级别共享的，
 /// 删除单个作品只移 worktree 进 trash，**不移动共享 git_dir**。因此不再传
@@ -305,7 +333,14 @@ pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -
     clippy::type_complexity
 )]
 pub fn delete_project(projects_root: &Path, project_id: &str, app_data_root: &Path) -> Result<()> {
-    delete_project_with_changes(projects_root, project_id, app_data_root).map(|_| ())
+    // core 简化入口：删除后直接 ack（complete + cleanup），不记 history。
+    // 与旧版本等价（旧版本在 core 内 complete+cleanup，不记 history）。
+    let outcome = delete_project_with_changes(projects_root, project_id, app_data_root)?;
+    crate::storage::journal::project_delete::ack_project_delete_history(
+        app_data_root,
+        &outcome.journal_token,
+    )?;
+    Ok(())
 }
 
 /// 从子章节聚合获取 volume 的最近更新时间。
@@ -476,16 +511,22 @@ pub fn rename_project_with_changes(
 
 /// #645 评论 5504296097 问题2：delete_project 的变更集版本。
 ///
-/// 返回 `WorkspaceChangeSet`，变更集包含：
-/// - `DeleteTree(projects/{project_id})`：被删除的作品目录
-/// - `Upsert(starmaps/{id}.meta.json)` + `Upsert(starmaps/index.json)`：
-///   每个被解绑的 starmap（#645 评论 5504296097 问题2）
+/// 返回 [`ProjectDeleteOutcome`]，包含：
+/// - `changes`：`DeleteTree(projects/{project_id})` + 每个被解绑 starmap 的
+///   `Upsert(starmaps/{id}.meta.json)` + `Upsert(starmaps/index.json)`
+/// - `unbound_starmap_ids`：被解绑的 starmap ids（journal 里记录的唯一事实来源）
+/// - `journal_token`：用于 ack 推进 journal
 ///
 /// 使用 DeleteTree 而不是 Delete，因为要移除整个作品目录。
 ///
 /// #645 评论 5504296097 问题2：把 starmap 解绑收进 durable delete transaction，
-/// 执行顺序：prepare → move_worktree → write_tombstone → unbind_starmaps
-/// → complete → cleanup_journal。解绑和删除原子化，避免半状态。
+/// 执行顺序：prepare → move_worktree → write_tombstone → unbind_starmaps。
+/// journal 保留在 `StarMapsUnbound`，由调用方记 history 后调
+/// `ack_project_delete_history` 推进到 `HistoryRecorded` → `Completed` 并清 journal。
+///
+/// #645 评论 5504296097 缺口1修复：不再用 `unwrap_or_default()` 吞掉
+/// `list_starmaps_bound_to_project` 的错误——index.json 损坏等情况下删除返回 Err，
+/// 绑定的 starmap 不会被悄悄漏解绑。
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
@@ -497,16 +538,17 @@ pub fn delete_project_with_changes(
     projects_root: &Path,
     project_id: &str,
     app_data_root: &Path,
-) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+) -> Result<ProjectDeleteOutcome> {
     let project_id = crate::delete_guard::validate_id_segment(project_id)?;
     let project_dir = projects_root.join(project_id);
     let target_canon =
         crate::delete_guard::validate_delete_target(projects_root, &project_dir, "project.json")?;
 
-    // #645 评论 5504296097 问题2：在 prepare 之前先获取需要解绑的 starmap ids。
-    // 把 unbind 收进事务，避免 API 层 best-effort unbind loop 产生的半状态。
-    let bound_starmaps = crate::starmap::list_starmaps_bound_to_project(app_data_root, project_id)
-        .unwrap_or_default();
+    // #645 评论 5504296097 缺口1修复：不再用 unwrap_or_default() 吞掉枚举错误。
+    // index.json 损坏等情况下 list_starmaps_bound_to_project 返回 Err，
+    // 删除直接返回 Err，避免绑定的 starmap 被悄悄漏解绑。
+    // journal 里记录的 starmap_ids 是唯一事实来源，API 层不再二次枚举。
+    let bound_starmaps = crate::starmap::list_starmaps_bound_to_project(app_data_root, project_id)?;
     let starmap_ids: Vec<String> = bound_starmaps
         .iter()
         .map(|m| m.starmap_id.clone())
@@ -535,34 +577,29 @@ pub fn delete_project_with_changes(
     tx.move_worktree()?;
 
     // 3. #644 评论 5495945801 问题3：生成 tombstone（收进事务，错误直接返回不吞）。
+    //    #645 评论 5504296097 缺口3：write_tombstone 成功后推进到 TombstoneWritten。
     tx.write_tombstone()?;
 
     // 4. #645 评论 5504296097 问题2：解除该作品所有 StarMap 绑定（收进事务）。
     tx.unbind_starmaps()?;
 
-    // 在 cleanup_journal（消耗 tx）之前把 starmap_ids clone 出来，供构造 change_set。
+    // #645 评论 5504296097 缺口2修复：不在 core 内 complete/cleanup journal。
+    // journal 保留在 StarMapsUnbound，由调用方记 history 后调
+    // ack_project_delete_history 推进到 HistoryRecorded → Completed 并清 journal。
     let unbound_starmap_ids: Vec<String> = tx.starmap_ids().to_vec();
+    let journal_token: String = tx.token().to_string();
 
-    // 5. 完成删除：推进 phase 到 Completed。
-    tx.complete()?;
+    // 构造 change-set（与 recover 路径共用 build_project_delete_change_set）。
+    let changes = crate::storage::journal::project_delete::build_project_delete_change_set(
+        project_id,
+        &unbound_starmap_ids,
+    );
 
-    // 6. 清理 journal。
-    tx.cleanup_journal()?;
-
-    // 构造合并后的 change_set：
-    // DeleteTree(projects/{project_id}) + 每个被解绑 starmap 的 meta + index.json
-    let project_tree_path = PathBuf::from("projects").join(project_id);
-    let mut change_set =
-        crate::storage::workspace_git::WorkspaceChangeSet::new().add_delete_tree(project_tree_path);
-    for sm_id in &unbound_starmap_ids {
-        let meta_rel = PathBuf::from("starmaps").join(format!("{}.meta.json", sm_id));
-        change_set = change_set.add_upsert(meta_rel);
-    }
-    if !unbound_starmap_ids.is_empty() {
-        change_set = change_set.add_upsert(PathBuf::from("starmaps").join("index.json"));
-    }
-
-    Ok(change_set)
+    Ok(ProjectDeleteOutcome {
+        changes,
+        unbound_starmap_ids,
+        journal_token,
+    })
 }
 
 /// #645 评论 5504296097 问题2：reorder_projects 的变更集版本。

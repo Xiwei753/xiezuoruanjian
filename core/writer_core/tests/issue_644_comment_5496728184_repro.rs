@@ -349,7 +349,8 @@ fn defect2_completed_phase_durable_cleanup_returns_err() {
         );
         let recovered = result.unwrap();
         assert_eq!(
-            recovered, 0,
+            recovered.len(),
+            0,
             "缺陷2修复: 应报告 recovered=0 — 删除失败（父目录只读）时 \
              recover_single_journal 返回 Err，不被计入 recovered。 \
              原缺陷行为是 Ok(1)（吞错误误声称完成），修复后正确不计入。"

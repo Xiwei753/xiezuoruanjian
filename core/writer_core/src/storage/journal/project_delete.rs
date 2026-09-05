@@ -26,14 +26,16 @@
 //! ## 状态机
 //!
 //! ```text
-//! Prepared → WorktreeMoved → GitMoved → StarMapsUnbound → Completed
-//!                (可以恢复)    (可以恢复)      (可以恢复)
+//! Prepared → WorktreeMoved → GitMoved → TombstoneWritten → StarMapsUnbound → HistoryRecorded → Completed
+//!                (可以恢复)    (可以恢复)      (可以恢复)          (可以恢复)        (可以恢复)
 //! ```
 //!
 //! - `Prepared`: journal 已落盘，尚未移动任何内容
 //! - `WorktreeMoved`: worktree 已移入 trash，private git_dir 尚未移动
 //! - `GitMoved`: 两边都已移入 trash，等待 tombstone 生成
-//! - `StarMapsUnbound`: tombstone 已生成，starmap 解绑已完成
+//! - `TombstoneWritten`: tombstone 已生成并持久化（#645 评论 5504296097 缺口3）
+//! - `StarMapsUnbound`: starmap 解绑已完成
+//! - `HistoryRecorded`: workspace Git history 已记录（#645 评论 5504296097 缺口2）
 //! - `Completed`: 可以清理 journal
 //!
 //! ## 崩溃恢复
@@ -41,7 +43,10 @@
 //! 启动时调用 `recover_pending_delete_transactions`：
 //! - 遍历 app_meta/delete-journals/ 下所有 journal
 //! - 根据 phase 和 from/trash 路径实际存在状态决定下一步
-//! - 已经完成两边后再清 journal
+//! - 推进到 `StarMapsUnbound` 后**不** complete/cleanup，返回 `RecoveredProjectDelete`
+//!   （含 change-set）供 bootstrap 写 workspace Git history
+//! - bootstrap 记 history 成功后调 `ack_project_delete_history` 推进到
+//!   `HistoryRecorded` → `Completed` 并清 journal
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -62,7 +67,9 @@ const DELETE_JOURNALS_DIR: &str = "app-meta/delete-journals";
 /// - `Prepared`: journal 已落盘，尚未移动任何内容
 /// - `WorktreeMoved`: worktree 已移入 trash，private git_dir 尚未移动
 /// - `GitMoved`: 两边都已移入 trash，等待 tombstone 生成
-/// - `StarMapsUnbound`: tombstone 已生成，starmap 解绑已完成
+/// - `TombstoneWritten`: tombstone 已生成并持久化（#645 评论 5504296097 缺口3）
+/// - `StarMapsUnbound`: starmap 解绑已完成
+/// - `HistoryRecorded`: workspace Git history 已记录（#645 评论 5504296097 缺口2）
 /// - `Completed`: 可以清理 journal
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -70,11 +77,24 @@ pub enum ProjectDeletePhase {
     Prepared,
     WorktreeMoved,
     GitMoved,
+    /// #645 评论 5504296097 缺口3：tombstone 已生成并持久化。
+    ///
+    /// 在 `GitMoved` 之后、`StarMapsUnbound` 之前。`write_tombstone` 成功后
+    /// 立刻推进到此 phase，使重放幂等——即使死在"tombstone 已写、phase 尚未
+    /// 持久化"的窗口，重放也只追加不重复（配合 `generate_tombstones` 的 upsert/skip）。
+    TombstoneWritten,
     /// #645 评论 5504296097 问题2：starmap 解绑已完成。
     ///
-    /// 在 `GitMoved` 之后、`Completed` 之前。把 unbind 收进事务，
+    /// 在 `TombstoneWritten` 之后、`HistoryRecorded` 之前。把 unbind 收进事务，
     /// 避免"解绑成功但作品删除失败"或"解绑失败但作品删除成功"的半状态。
     StarMapsUnbound,
+    /// #645 评论 5504296097 缺口2：workspace Git history 已记录。
+    ///
+    /// 在 `StarMapsUnbound` 之后、`Completed` 之前。API/bootstrap 调
+    /// `record_workspace_change_set` 成功后通过 `ack_project_delete_history`
+    /// 推进到此 phase，再推进到 `Completed` 并清 journal。history 失败时
+    /// journal 保留在 `StarMapsUnbound`，下次启动 recover 补记。
+    HistoryRecorded,
     Completed,
 }
 
@@ -288,9 +308,13 @@ impl ProjectDeleteTransaction {
     ///
     /// 正常删除和崩溃恢复共用这一份。load/save_sync_state 的错误直接返回，不吞。
     ///
-    /// 调用时机：`move_git` 成功（phase == GitMoved）之后、`complete` 之前。
+    /// 调用时机：`move_git` 成功（phase == GitMoved）之后、`unbind_starmaps` 之前。
     /// 失败时返回 Err，journal 保留下次恢复继续。
-    pub fn write_tombstone(&self) -> Result<()> {
+    ///
+    /// #645 评论 5504296097 缺口3修复：成功后推进 phase 到 `TombstoneWritten`，
+    /// 使重放幂等——重放时 `generate_tombstones` 的 upsert/skip 保证不重复追加，
+    /// phase 推进保证下次重放从 `TombstoneWritten` 继续。
+    pub fn write_tombstone(&mut self) -> Result<()> {
         let worktree_trash = PathBuf::from(&self.journal.worktree_trash);
         let projects_root = PathBuf::from(&self.journal.projects_root);
         let app_data_root = PathBuf::from(&self.journal.app_data_root);
@@ -322,6 +346,9 @@ impl ProjectDeleteTransaction {
 
         // save_sync_state 错误直接返回，不吞。
         crate::sync::SyncService::save_sync_state(&worktree_trash, &state)?;
+
+        // #645 评论 5504296097 缺口3：tombstone 已写盘，推进 phase 到 TombstoneWritten。
+        self.advance_phase(ProjectDeletePhase::TombstoneWritten)?;
 
         Ok(())
     }
@@ -396,19 +423,66 @@ impl ProjectDeleteTransaction {
     }
 }
 
+/// #645 评论 5504296097 缺口2修复：崩溃恢复后待补 history 的删除结果。
+///
+/// `recover_pending_delete_transactions` 返回 `Vec<RecoveredProjectDelete>`，
+/// 每个元素对应一个推进到 `StarMapsUnbound` 但未记 history 的删除事务。
+/// bootstrap 用 `changes` 调 `record_workspace_change_set` 写本地 history，
+/// 成功后调 `ack_project_delete_history` 推进 journal 到 `HistoryRecorded` →
+/// `Completed` 并清 journal。
+#[derive(Debug, Clone)]
+pub struct RecoveredProjectDelete {
+    /// 本次删除的 journal token（用于 ack 推进 journal）。
+    pub journal_token: String,
+    /// 待补记到 workspace Git history 的变更集。
+    pub changes: crate::storage::workspace_git::WorkspaceChangeSet,
+    /// 本次被解绑的 starmap ids（供调用方刷搜索索引等）。
+    pub unbound_starmap_ids: Vec<String>,
+}
+
+/// #645 评论 5504296097 缺口2修复：构造项目删除的 workspace 变更集。
+///
+/// `DeleteTree(projects/{project_id})` + 每个被解绑 starmap 的 meta +
+/// `index.json`（若有解绑）。正常删除和崩溃恢复共用此 helper，保证两条
+/// 路径产生的 change-set 一致。
+pub(crate) fn build_project_delete_change_set(
+    project_id: &str,
+    unbound_starmap_ids: &[String],
+) -> crate::storage::workspace_git::WorkspaceChangeSet {
+    let project_tree_path = PathBuf::from("projects").join(project_id);
+    let mut change_set =
+        crate::storage::workspace_git::WorkspaceChangeSet::new().add_delete_tree(project_tree_path);
+    for sm_id in unbound_starmap_ids {
+        let meta_rel = PathBuf::from("starmaps").join(format!("{}.meta.json", sm_id));
+        change_set = change_set.add_upsert(meta_rel);
+    }
+    if !unbound_starmap_ids.is_empty() {
+        change_set = change_set.add_upsert(PathBuf::from("starmaps").join("index.json"));
+    }
+    change_set
+}
+
 /// 恢复所有待处理的删除事务。
 ///
 /// 启动时调用，遍历 app_meta/delete-journals/ 下所有 journal，
 /// 根据 phase 和 from/trash 路径实际存在状态决定下一步。
 ///
-/// 返回完成的事务数量。
-pub fn recover_pending_delete_transactions(app_data_root: &Path) -> Result<usize> {
+/// #645 评论 5504296097 缺口2修复：返回 `Vec<RecoveredProjectDelete>`，
+/// 每个元素含待补 history 的 change-set。恢复时推进到 `StarMapsUnbound`
+/// 但**不** complete/cleanup——把 change-set 返回给 bootstrap，由 bootstrap
+/// 调 `record_workspace_change_set` 写 history 后再调 `ack_project_delete_history`
+/// 推进 journal 到 `HistoryRecorded` → `Completed` 并清 journal。
+///
+/// `HistoryRecorded` / `Completed` phase 的 journal 直接清理（history 已记）。
+pub fn recover_pending_delete_transactions(
+    app_data_root: &Path,
+) -> Result<Vec<RecoveredProjectDelete>> {
     let journals_dir = app_data_root.join(DELETE_JOURNALS_DIR);
     if !journals_dir.exists() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
 
-    let mut recovered = 0;
+    let mut recovered_list = Vec::new();
     for entry in fs::read_dir(&journals_dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -423,12 +497,12 @@ pub fn recover_pending_delete_transactions(app_data_root: &Path) -> Result<usize
             continue;
         }
 
-        match recover_single_journal(app_data_root, &path) {
-            Ok(true) => {
-                recovered += 1;
+        match recover_single_journal(&path) {
+            Ok(Some(recovered)) => {
+                recovered_list.push(recovered);
             }
-            Ok(false) => {
-                // 恢复未完成，journal 保留。
+            Ok(None) => {
+                // 无需补 history（已 HistoryRecorded/Completed，已清理）。
             }
             Err(e) => {
                 // 恢复失败，保留 journal，下次重启继续。
@@ -440,14 +514,49 @@ pub fn recover_pending_delete_transactions(app_data_root: &Path) -> Result<usize
             }
         }
     }
-    Ok(recovered)
+    Ok(recovered_list)
+}
+
+/// #645 评论 5504296097 缺口2修复：API/bootstrap 记 history 成功后推进 journal。
+///
+/// 读取 journal、推进 phase 到 `HistoryRecorded` → `Completed`、清 journal。
+/// journal 文件名是 `.sujian-delete-journal-{token}`，在 `app-meta/delete-journals/` 下。
+///
+/// 幂等：journal 已不存在（已清理）时返回 `Ok(())`。
+pub fn ack_project_delete_history(app_data_root: &Path, journal_token: &str) -> Result<()> {
+    let journal_path = app_data_root
+        .join(DELETE_JOURNALS_DIR)
+        .join(format!("{}{}", DELETE_JOURNAL_PREFIX, journal_token));
+    if !journal_path.exists() {
+        // journal 已清理（可能 recover 已处理或已 ack），幂等返回 Ok。
+        return Ok(());
+    }
+    let content = fs::read(&journal_path)?;
+    let journal: ProjectDeleteJournal = serde_json::from_slice(&content).map_err(|e| {
+        crate::error::Error::Io(std::io::Error::other(format!(
+            "ack_project_delete_history: parse {}: {e}",
+            journal_path.display()
+        )))
+    })?;
+
+    let mut tx = ProjectDeleteTransaction {
+        journal,
+        journal_path,
+        completed: false,
+    };
+    // 推进到 HistoryRecorded → Completed → cleanup。
+    tx.advance_phase(ProjectDeletePhase::HistoryRecorded)?;
+    tx.complete()?;
+    tx.cleanup_journal()?;
+    Ok(())
 }
 
 /// 恢复单个 journal。
 ///
-/// 返回 `Ok(true)` 表示 journal 已可以清理（Completed 或已无事可做），
-/// `Ok(false)` 表示 journal 仍保留（恢复未完成）。
-fn recover_single_journal(_app_data_root: &Path, journal_path: &Path) -> Result<bool> {
+/// 返回 `Ok(Some(recovered))` 表示 journal 已推进到 `StarMapsUnbound`，
+/// 调用方需用 `recovered.changes` 补记 history 后调 `ack_project_delete_history`。
+/// 返回 `Ok(None)` 表示 journal 已清理（`HistoryRecorded`/`Completed`），无需补 history。
+fn recover_single_journal(journal_path: &Path) -> Result<Option<RecoveredProjectDelete>> {
     let content = fs::read(journal_path)?;
     let journal: ProjectDeleteJournal = serde_json::from_slice(&content).map_err(|e| {
         crate::error::Error::Io(std::io::Error::other(format!(
@@ -457,107 +566,60 @@ fn recover_single_journal(_app_data_root: &Path, journal_path: &Path) -> Result<
     })?;
 
     let worktree_from = PathBuf::from(&journal.worktree_from);
+    let mut tx = ProjectDeleteTransaction {
+        journal,
+        journal_path: journal_path.to_path_buf(),
+        completed: false,
+    };
 
-    match journal.phase {
+    match tx.journal.phase {
         ProjectDeletePhase::Prepared => {
             // journal 刚写盘，还没开始移动。
-            // 检查 worktree_from 是否存在，存在则继续移动。
             if worktree_from.exists() {
-                // 继续移动 worktree。
-                let mut tx = ProjectDeleteTransaction {
-                    journal,
-                    journal_path: journal_path.to_path_buf(),
-                    completed: false,
-                };
                 tx.move_worktree()?;
-                // worktree 已移动，继续处理 git。
-                tx.move_git()?;
-                if tx.journal.phase == ProjectDeletePhase::GitMoved {
-                    // #644 评论 5495945801 问题3：git 已移动，生成 tombstone。
-                    // #645 评论 5504296097 问题2：tombstone 后解绑 starmap，再推进到 Completed。
-                    tx.write_tombstone()?;
-                    tx.unbind_starmaps()?;
-                    tx.complete()?;
-                    tx.cleanup_journal()?;
-                    return Ok(true);
-                }
-                // git 移动失败或不存在，保留 journal 下次恢复。
-                return Ok(false);
+            } else {
+                // worktree 不存在，说明已经移到 trash。
+                tx.advance_phase(ProjectDeletePhase::WorktreeMoved)?;
             }
-            // worktree 不存在，说明已经移到 trash（可能是崩溃在 move_worktree 之前但 rename 已成功）。
-            // 推进 phase 到 WorktreeMoved，继续处理 git。
-            let mut tx = ProjectDeleteTransaction {
-                journal,
-                journal_path: journal_path.to_path_buf(),
-                completed: false,
-            };
-            tx.advance_phase(ProjectDeletePhase::WorktreeMoved)?;
-            // 继续处理 git。
             tx.move_git()?;
-            if tx.journal.phase == ProjectDeletePhase::GitMoved {
-                // #644 评论 5495945801 问题3：git 已移动，生成 tombstone。
-                // #645 评论 5504296097 问题2：tombstone 后解绑 starmap，再推进到 Completed。
-                tx.write_tombstone()?;
-                tx.unbind_starmaps()?;
-                tx.complete()?;
-                tx.cleanup_journal()?;
-                return Ok(true);
-            }
-            Ok(false)
+            tx.write_tombstone()?;
+            tx.unbind_starmaps()?;
+            Ok(Some(make_recovered(&tx)))
         }
         ProjectDeletePhase::WorktreeMoved => {
-            // worktree 已移到 trash，private git_dir 尚未移动。
-            // 继续移动 git。
-            let mut tx = ProjectDeleteTransaction {
-                journal,
-                journal_path: journal_path.to_path_buf(),
-                completed: false,
-            };
+            // worktree 已移到 trash，继续移动 git、写 tombstone、解绑 starmap。
             tx.move_git()?;
-            if tx.journal.phase == ProjectDeletePhase::GitMoved {
-                // #644 评论 5495945801 问题3：git 已移动，生成 tombstone。
-                // #645 评论 5504296097 问题2：tombstone 后解绑 starmap，再推进到 Completed。
-                tx.write_tombstone()?;
-                tx.unbind_starmaps()?;
-                tx.complete()?;
-                tx.cleanup_journal()?;
-                return Ok(true);
-            }
-            Ok(false)
+            tx.write_tombstone()?;
+            tx.unbind_starmaps()?;
+            Ok(Some(make_recovered(&tx)))
         }
         ProjectDeletePhase::GitMoved => {
             // 两边都已移到 trash，等待 tombstone 生成。
-            // #644 评论 5495945801 问题3：必须重新生成 tombstone，不能直接跳到 Completed。
-            // 如果进程死在"两边 rename 完成、tombstone 尚未保存"之间，
-            // 重启后必须在这里补上 tombstone，否则永久漏掉。
-            // #645 评论 5504296097 问题2：tombstone 后还要解绑 starmap。
-            let mut tx = ProjectDeleteTransaction {
-                journal,
-                journal_path: journal_path.to_path_buf(),
-                completed: false,
-            };
+            // #645 评论 5504296097 缺口3：write_tombstone 幂等，重放不重复追加。
             tx.write_tombstone()?;
             tx.unbind_starmaps()?;
-            tx.complete()?;
-            tx.cleanup_journal()?;
-            Ok(true)
+            Ok(Some(make_recovered(&tx)))
+        }
+        ProjectDeletePhase::TombstoneWritten => {
+            // #645 评论 5504296097 缺口3：tombstone 已写，继续解绑 starmap。
+            // write_tombstone 已推进到 TombstoneWritten，unbind_starmaps 幂等。
+            tx.unbind_starmaps()?;
+            Ok(Some(make_recovered(&tx)))
         }
         ProjectDeletePhase::StarMapsUnbound => {
-            // #645 评论 5504296097 问题2：tombstone 已生成、starmap 已解绑，
-            // 但 complete 还没推进（崩溃在 unbind_starmaps 和 complete 之间）。
-            // 直接推进到 Completed 并清理 journal。
-            let mut tx = ProjectDeleteTransaction {
-                journal,
-                journal_path: journal_path.to_path_buf(),
-                completed: false,
-            };
+            // #645 评论 5504296097 缺口2：tombstone 已生成、starmap 已解绑，
+            // 但 history 还没记。返回 change-set 供 bootstrap 补记。
+            Ok(Some(make_recovered(&tx)))
+        }
+        ProjectDeletePhase::HistoryRecorded => {
+            // history 已记，推进到 Completed 并清理 journal。
             tx.complete()?;
             tx.cleanup_journal()?;
-            Ok(true)
+            Ok(None)
         }
         ProjectDeletePhase::Completed => {
             // #644 评论 5496728184 缺陷2修复：Completed 必须用 durable cleanup 范式
-            // （与 cleanup_journal 第314-327行一致），不能吞删除错误。
+            // （与 cleanup_journal 一致），不能吞删除错误。
             // 删除失败时返回 Err，不能声称"已恢复完成"。
             if journal_path.exists() {
                 fs::remove_file(journal_path)?;
@@ -566,8 +628,19 @@ fn recover_single_journal(_app_data_root: &Path, journal_path: &Path) -> Result<
                     crate::storage::sync_dir(parent)?;
                 }
             }
-            Ok(true)
+            Ok(None)
         }
+    }
+}
+
+/// 从已推进到 `StarMapsUnbound` 的事务构造 `RecoveredProjectDelete`。
+fn make_recovered(tx: &ProjectDeleteTransaction) -> RecoveredProjectDelete {
+    let unbound_starmap_ids = tx.journal.starmap_ids.clone();
+    let changes = build_project_delete_change_set(&tx.journal.project_id, &unbound_starmap_ids);
+    RecoveredProjectDelete {
+        journal_token: tx.journal.token.clone(),
+        changes,
+        unbound_starmap_ids,
     }
 }
 
