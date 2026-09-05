@@ -66,6 +66,9 @@ pub fn load_remote_catalog(
 /// #645 评论 5504296097 问题3：返回 `RemoteTargetCatalogSnapshot`（实际持久化后的完整
 /// catalog + version），调用方必须用返回值更新本地 catalog 和 version，避免
 /// "version 是新的、内容还是旧的"非法组合。
+///
+/// 保留给非 lifecycle 决策的批量 catalog 写入（如初始化）。lifecycle 原子决策
+/// 用 [`write_catalog_once`] + [`apply_lifecycle_record`]，不在内部吞 CAS 冲突。
 pub fn write_remote_catalog(
     provider: &dyn SyncProvider,
     snapshot: &RemoteTargetCatalogSnapshot,
@@ -123,6 +126,42 @@ pub fn write_remote_catalog(
     ))))
 }
 
+/// #645 评论 5504296097 问题3：单次 CAS 原语 — 只做一次 CreateNew/IfMatch 写入。
+///
+/// 与 [`write_remote_catalog`] 的关键区别：`PreconditionFailed` **原样返回**，
+/// 不在内部重读/merge/重试。调用方（[`apply_lifecycle_record`]）负责在 CAS 冲突后
+/// 重新加载最新 snapshot、重新做 target-level LWW 决策、决定是否再次 CAS。
+///
+/// 这样外层能看到真实的 CAS 冲突，不会把"远端已有更新记录"误判为"我方 Applied"。
+///
+/// `snapshot.version` 为 `__nonexistent__` 时使用 `CreateNew`（首次写入）。
+/// 成功返回持久化后的完整 snapshot；序列化失败或非 CAS 的 provider.write 失败 → `Err`。
+pub fn write_catalog_once(
+    provider: &dyn SyncProvider,
+    snapshot: &RemoteTargetCatalogSnapshot,
+) -> crate::error::Result<RemoteTargetCatalogSnapshot> {
+    let content = serde_json::to_vec(&snapshot.catalog).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "write_catalog_once: serialize: {e}"
+        )))
+    })?;
+
+    let precondition = if snapshot.version.as_str() == "__nonexistent__" {
+        WritePrecondition::CreateNew
+    } else {
+        WritePrecondition::IfMatch(snapshot.version.clone())
+    };
+
+    let new_version = provider
+        .write(TARGET_CATALOG_REMOTE_PATH, &content, precondition)
+        .map_err(crate::Error::from)?;
+    log::debug!("[sync] write_catalog_once: succeeded");
+    Ok(RemoteTargetCatalogSnapshot {
+        catalog: snapshot.catalog.clone(),
+        version: new_version,
+    })
+}
+
 /// #645 评论 5504296097 问题2：provider-neutral 原子决策接口。
 ///
 /// 把一条 candidate lifecycle record 通过 CAS 写入远端 catalog。每次 CAS 冲突后：
@@ -133,6 +172,10 @@ pub fn write_remote_catalog(
 ///
 /// `Applied` 才允许继续执行后续操作（delete/upload）；`LostToRemote` 改走
 /// `RestoreProject / DeleteLocalProject`；`Retry` 不删。
+///
+/// #645 评论 5504296097 问题3：用 [`write_catalog_once`] 单次 CAS 原语，
+/// 不再用 [`write_remote_catalog`] 的内部 retry（会把 PreconditionFailed 吞成 Ok，
+/// 外层看不到冲突误判 Applied）。CAS 冲突由本函数重读 snapshot + 重新判定 winner 处理。
 #[allow(clippy::excessive_nesting)]
 pub fn apply_lifecycle_record(
     provider: &dyn SyncProvider,
@@ -167,7 +210,7 @@ pub fn apply_lifecycle_record(
             return TargetLifecycleApplyResult::LostToRemote(current_snapshot.clone());
         }
 
-        // 2. candidate 仍赢 → merge → IfMatch 写。
+        // 2. candidate 仍赢 → merge → write_catalog_once 单次 CAS。
         let mut merged_catalog = current_snapshot.catalog.clone();
         upsert_record(&mut merged_catalog, current_candidate.clone());
         let write_snapshot = RemoteTargetCatalogSnapshot {
@@ -175,14 +218,32 @@ pub fn apply_lifecycle_record(
             version: current_snapshot.version.clone(),
         };
 
-        match write_remote_catalog(provider, &write_snapshot) {
+        match write_catalog_once(provider, &write_snapshot) {
             Ok(persisted) => {
-                log::debug!(
-                    "[sync] apply_lifecycle_record: Applied (attempt={}) target={}",
-                    attempt + 1,
+                // #645 评论 5504296097 问题3：验证持久化后的该 target_id record
+                // 确实就是 candidate winner，不能只是"写请求成功"。
+                let persisted_rec = find_record(&persisted.catalog, &current_candidate.target_id);
+                let candidate_persisted = persisted_rec
+                    .map(|rec| {
+                        rec.op == current_candidate.op
+                            && record_lww_time(rec) == record_lww_time(&current_candidate)
+                    })
+                    .unwrap_or(false);
+                if candidate_persisted {
+                    log::debug!(
+                        "[sync] apply_lifecycle_record: Applied (attempt={}) target={}",
+                        attempt + 1,
+                        current_candidate.target_id
+                    );
+                    return TargetLifecycleApplyResult::Applied(persisted);
+                }
+                // 持久化后该 target_id record 不是 candidate winner → 远端已有更新。
+                log::info!(
+                    "[sync] apply_lifecycle_record: LostToRemote after CAS target={} \
+                     — persisted record differs from candidate",
                     current_candidate.target_id
                 );
-                return TargetLifecycleApplyResult::Applied(persisted);
+                return TargetLifecycleApplyResult::LostToRemote(persisted);
             }
             Err(crate::Error::SyncRemoteError { category, .. })
                 if category == "precondition_failed" =>

@@ -242,29 +242,29 @@ impl WriterCoreApi {
         // Snapshot secrets before acquiring core_write（避免持锁期间回调 override）。
         let secrets = self.secrets_override_snapshot().unwrap_or_default();
 
-        // Phase 1: Prepare（短写锁）— 写 Syncing、枚举 targets、创建 provider。
-        // 不创建/seed staging runs（#644 评论 5473401065 第1节）。
-        // #645 评论 5504296097 问题1：先创建 provider，读 remote catalog，
-        // 再调 prepare_full_sync 传 catalog 做 target-level LWW 决策。
-        let (mut plan, provider) = {
+        // Phase 1: Prepare — 拆成三段短锁，网络 IO 不持 core 写锁。
+        // #645 评论 5504296097 问题6：load_remote_catalog 是网络 IO，必须在
+        // core_write() 作用域外执行，不阻塞正文/作品读取（#644 拆锁路线）。
+        //
+        // 1a. 短锁 A：创建 provider（transport 初始化可能涉及本地 IO）。
+        let provider = {
             let core = self.core_write();
-            let provider = core.create_sync_provider_for_plan(&sync_config, &secrets)?;
-            // #645 评论 5504296097 问题1：读 remote catalog（网络 IO，但只读一个文件）。
-            // 读失败 → 传空 catalog，planner 按"远端无记录"决策（保守删除/正常同步）。
-            let remote_catalog =
-                crate::sync::target_lifecycle::load_remote_catalog(provider.as_ref())
-                    .map(|snapshot| snapshot.catalog)
-                    .unwrap_or_else(|e| {
-                        log::warn!(
-                            "[sync] prepare: load_remote_catalog failed: {e} — using empty catalog"
-                        );
-                        crate::sync::types::TargetLifecycleCatalog::default()
-                    });
-            let plan =
-                core.prepare_full_sync(&sync_config, force_sync, secrets.clone(), &remote_catalog)?;
-            (plan, provider)
+            core.create_sync_provider_for_plan(&sync_config, &secrets)?
         };
         // 写锁已释放。
+        // 1b. 无锁：读 remote catalog（网络 IO，只读一个文件）。
+        // 读失败 → 传空 catalog，planner 按"远端无记录"决策（保守删除/正常同步）。
+        let remote_catalog = crate::sync::target_lifecycle::load_remote_catalog(provider.as_ref())
+            .map(|snapshot| snapshot.catalog)
+            .unwrap_or_else(|e| {
+                log::warn!("[sync] prepare: load_remote_catalog failed: {e} — using empty catalog");
+                crate::sync::types::TargetLifecycleCatalog::default()
+            });
+        // 1c. 短锁 B：snapshot local projects + pending + device_id，build plan。
+        let mut plan = {
+            let core = self.core_write();
+            core.prepare_full_sync(&sync_config, force_sync, secrets.clone(), &remote_catalog)?
+        };
 
         // Phase 2: Seed staging（不持锁）— 磁盘扫描/复制，创建隔离 staging 目录。
         // #644 评论 5473401065 第2节：seed 失败直接终止本次同步，不继续拿半成品。
